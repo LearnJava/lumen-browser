@@ -154,6 +154,34 @@ promise-rejection half; this slice closes the "report the exception" (HTML LS
   checks exactly this). Both are now implemented.
 - 9 new tests (`dom.rs::tests::v8_core::bug591_*`, `v8_runtime.rs::tests::eval_and_report_*`).
 
+**Exceptions from `addEventListener`/`on<type>` DOM event listeners are now
+also reported (P1, 2026-08-22)** — HTML LS's "event listener invoke" step
+calls "report the exception" for these too; the bare `catch(e){}` sites around
+every listener-invocation loop now call `_lumen_report_exception(e)`:
+- `_lumen_dispatch`, `_lumen_dispatch_bubble`, `_lumen_dispatch_rich` (native
+  element/document listener paths reached from Rust-driven input and from
+  `Element.prototype.dispatchEvent`/`ShadowRoot.dispatchEvent`, both of which
+  delegate to `_lumen_dispatch`).
+- `document.dispatchEvent`'s own listener loop (a separate implementation
+  from the "document-level" branch inside `_lumen_dispatch_bubble`/`_lumen_dispatch_rich`).
+- `EventTarget.prototype.dispatchEvent` (the pure-JS base class many Web API
+  shims `extend`) — through a new `_lumen_et_report(e)` wrapper instead of
+  calling `_lumen_report_exception` directly, because this shim is also
+  spliced into `WorkerGlobalScope` (`worker_exposed_shim`), which does not
+  carry the page-only `_lumen_report_exception` native; the wrapper
+  `typeof`-guards the call so a worker-scope `EventTarget` still swallows the
+  exception (matching pre-fix behaviour there) instead of throwing a new
+  `ReferenceError`.
+- `window.dispatchEvent`'s `'load'` branch and its generic `on<type>`/explicit-listener
+  branch for every other event type.
+- **Deliberately excluded:** `window.dispatchEvent`'s `'error'` branch itself
+  stays a bare `catch(e){}` — it is what `_lumen_report_exception` calls into,
+  so routing it back through the same function would let a self-rethrowing
+  `window.onerror`/`'error'` listener recurse forever. Covered by a regression
+  test (`bug591_window_error_listener_exception_does_not_recurse`).
+- 6 new tests (`dom.rs::tests::v8_core::bug591_*` ×5,
+  `worker.rs::tests_v8::v8_worker_event_target_listener_exception_does_not_reference_error`).
+
 **Not in scope of this slice — still open:**
 - The Worker parent-side mechanism described above (`run_worker_thread_v8`'s
   `eprintln!`-only error arms).
@@ -163,10 +191,6 @@ promise-rejection half; this slice closes the "report the exception" (HTML LS
   spec wants the latter to *also* go through "report the exception" while the
   element still gets `load`; left alone this slice to avoid misfiring a page
   `'error'` on an ordinary 404).
-- Exceptions thrown by an `addEventListener`/`on<type>` DOM event listener —
-  HTML LS's own "event listener invoke" step calls "report the exception" for
-  these too; today they still end at a bare `catch(e){}` in `_lumen_dispatch`
-  and friends.
 - `<body onerror>` forwarding to the special 5-arg form on a `Document`/child
   element (`onerroreventhandler.html`'s `check1`/`check3`) — untestable here
   regardless, it needs a cross-frame `<iframe>`, which this engine does not
@@ -174,3 +198,8 @@ promise-rejection half; this slice closes the "report the exception" (HTML LS
 - Cross-origin "muted errors" (HTML LS's script-error-reporting redaction for
   a script fetched without CORS from another origin) — not implemented; every
   error reports its real message/location regardless of origin.
+- `_sw_make_event_target`'s service-worker-registration event target
+  (`crates/js/src/dom.rs`, `dispatchEvent: function(evt) { ... }` with no
+  `try/catch` at all) and `MediaQueryList.prototype.dispatchEvent`/
+  `MessagePort.prototype.dispatchEvent` were left untouched — narrower,
+  lower-traffic mechanisms not named by any WPT cluster in this bug's scope.

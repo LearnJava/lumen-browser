@@ -1068,6 +1068,32 @@ mod tests_v8 {
         assert_eq!(encoded, lumen_core::JsValue::String("aGVsbG8=".into()));
     }
 
+    /// [BUG-591] `EventTarget.prototype.dispatchEvent`'s catch arms now call
+    /// `_lumen_report_exception` for a throwing listener, but that native is
+    /// only installed in the *page* shim (`WEB_API_SHIM_MID`), not in
+    /// `worker_exposed_shim`. Guards that the `typeof` check added alongside
+    /// it (`_lumen_et_report`) keeps a worker-scope `EventTarget` instance
+    /// swallowing the exception instead of throwing a `ReferenceError` for
+    /// the missing native — the pre-fix behaviour, just without the new gap.
+    #[test]
+    fn v8_worker_event_target_listener_exception_does_not_reference_error() {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), make_store()).unwrap();
+        let result = rt
+            .eval(
+                "var et = new EventTarget(); \
+                 et.addEventListener('ping', function() { throw new Error('boom'); }); \
+                 et.dispatchEvent({ type: 'ping' }); \
+                 'survived'",
+            )
+            .unwrap();
+        assert_eq!(
+            result,
+            lumen_core::JsValue::String("survived".to_string())
+        );
+    }
+
     #[test]
     fn v8_atob_throws_on_invalid_input() {
         let rt = V8JsRuntime::new().unwrap();

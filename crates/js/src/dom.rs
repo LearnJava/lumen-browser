@@ -433,6 +433,13 @@ pub(crate) const EVENT_TARGET_SHIM: &str = "
 function EventTarget() {
     Object.defineProperty(this, '_listeners', { value: Object.create(null), writable: true });
 }
+// This shim is also spliced into a WorkerGlobalScope (`worker_exposed_shim`),
+// which does not carry `_lumen_report_exception` (defined in the page-only
+// `WEB_API_SHIM_MID`) — `typeof` on a name absent from scope is safe, a direct
+// reference would throw ReferenceError instead.
+function _lumen_et_report(e) {
+    if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e);
+}
 EventTarget.prototype.addEventListener = function(type, callback, options) {
     if (!callback) return;
     type = String(type);
@@ -465,14 +472,14 @@ EventTarget.prototype.dispatchEvent = function(event) {
             try {
                 if (typeof entry.callback === 'function') entry.callback.call(this, event);
                 else if (entry.callback && typeof entry.callback.handleEvent === 'function') entry.callback.handleEvent(event);
-            } catch (e) {}
+            } catch (e) { _lumen_et_report(e); }
             if (entry.once) this.removeEventListener(type, entry.callback, entry.capture);
             if (event._stopImmediate) break;
         }
     }
     var onprop = 'on' + type;
     if (typeof this[onprop] === 'function') {
-        try { this[onprop].call(this, event); } catch (e) {}
+        try { this[onprop].call(this, event); } catch (e) { _lumen_et_report(e); }
     }
     event.currentTarget = null;
     return !event.defaultPrevented;
@@ -1083,7 +1090,7 @@ function _lumen_dispatch(nid, event) {
     if (arr && arr.length > 0) {
         var copy = arr.slice(); // snapshot in case a handler mutates the list
         for (var i = 0; i < copy.length; i++) {
-            try { copy[i].call(null, event); } catch(e) {}
+            try { copy[i].call(null, event); } catch(e) { _lumen_report_exception(e); }
             if (event._stopImmediate) break;
         }
     }
@@ -1091,7 +1098,7 @@ function _lumen_dispatch(nid, event) {
     // after explicit listeners, same ordering as EventTarget.prototype.dispatchEvent.
     if (!event._stopImmediate) {
         var onFn = _lumen_get_on_handler(nid, 'on' + event.type);
-        if (onFn) { try { onFn.call(_lumen_make_element(nid), event); } catch(e) {} }
+        if (onFn) { try { onFn.call(_lumen_make_element(nid), event); } catch(e) { _lumen_report_exception(e); } }
     }
     return !event.defaultPrevented;
 }
@@ -1116,13 +1123,13 @@ function _lumen_dispatch_bubble(start_nid, type) {
                 var copy = arr.slice();
                 for (var i = 0; i < copy.length; i++) {
                     if (evt.cancelBubble) break;
-                    try { copy[i].call(el, evt); } catch(e) {}
+                    try { copy[i].call(el, evt); } catch(e) { _lumen_report_exception(e); }
                     if (evt._stopImmediate) break;
                 }
             }
             // BUG-360: on<type> fires after explicit listeners at this target.
             if (onFn && !evt.cancelBubble && !evt._stopImmediate) {
-                try { onFn.call(el, evt); } catch(e) {}
+                try { onFn.call(el, evt); } catch(e) { _lumen_report_exception(e); }
             }
         }
         if (evt.cancelBubble) break;
@@ -1136,7 +1143,7 @@ function _lumen_dispatch_bubble(start_nid, type) {
             var dcopy = darr.slice();
             for (var i = 0; i < dcopy.length; i++) {
                 if (evt.cancelBubble) break;
-                try { dcopy[i].call(document, evt); } catch(e) {}
+                try { dcopy[i].call(document, evt); } catch(e) { _lumen_report_exception(e); }
                 if (evt._stopImmediate) break;
             }
         }
@@ -1160,13 +1167,13 @@ function _lumen_dispatch_rich(start_nid, event) {
                 var copy = arr.slice();
                 for (var i = 0; i < copy.length; i++) {
                     if (event.cancelBubble) break;
-                    try { copy[i].call(el, event); } catch(e) {}
+                    try { copy[i].call(el, event); } catch(e) { _lumen_report_exception(e); }
                     if (event._stopImmediate) break;
                 }
             }
             // BUG-360: on<type> fires after explicit listeners at this target.
             if (onFn && !event.cancelBubble && !event._stopImmediate) {
-                try { onFn.call(el, event); } catch(e) {}
+                try { onFn.call(el, event); } catch(e) { _lumen_report_exception(e); }
             }
         }
         if (event.cancelBubble || !event.bubbles) break;
@@ -1180,7 +1187,7 @@ function _lumen_dispatch_rich(start_nid, event) {
             var dcopy = darr.slice();
             for (var i = 0; i < dcopy.length; i++) {
                 if (event.cancelBubble) break;
-                try { dcopy[i].call(document, event); } catch(e) {}
+                try { dcopy[i].call(document, event); } catch(e) { _lumen_report_exception(e); }
                 if (event._stopImmediate) break;
             }
         }
@@ -6245,7 +6252,7 @@ var document = {
         if (arr) {
             var copy = arr.slice();
             for (var i = 0; i < copy.length; i++) {
-                try { copy[i].call(document, evt); } catch(e) {}
+                try { copy[i].call(document, evt); } catch(e) { _lumen_report_exception(e); }
             }
         }
         return !evt.defaultPrevented;
@@ -10818,12 +10825,16 @@ var window = {
         if (evt.type === 'load') {
             arr = _load_listeners.slice();
             for (var i = 0; i < arr.length; i++) {
-                try { arr[i].call(window, evt); } catch(e) {}
+                try { arr[i].call(window, evt); } catch(e) { _lumen_report_exception(e); }
             }
             if (typeof window.onload === 'function') {
-                try { window.onload.call(window, evt); } catch(e) {}
+                try { window.onload.call(window, evt); } catch(e) { _lumen_report_exception(e); }
             }
         } else if (evt.type === 'error') {
+            // Deliberately NOT routed through `_lumen_report_exception` here: this
+            // branch runs *inside* that function's own dispatch (`_lumen_report_exception`
+            // -> `window.dispatchEvent(new ErrorEvent(...))` -> here), so reporting
+            // an exception thrown by an 'error' listener itself would recurse.
             arr = _error_listeners.slice();
             for (var i = 0; i < arr.length; i++) { try { arr[i].call(window, evt); } catch(e) {} }
             if (typeof window.onerror === 'function') {
@@ -10850,7 +10861,7 @@ var window = {
             arr = _other_win_listeners[evt.type];
             if (arr) {
                 arr = arr.slice();
-                for (var i = 0; i < arr.length; i++) { try { arr[i].call(window, evt); } catch(e) {} }
+                for (var i = 0; i < arr.length; i++) { try { arr[i].call(window, evt); } catch(e) { _lumen_report_exception(e); } }
             }
             // BUG-392: the `on<type>` IDL attribute fires after the explicit
             // listeners, same ordering as the 'load'/'error' branches above and
@@ -10862,7 +10873,7 @@ var window = {
             // own delivery of `hashchange`/`popstate`/`message` calls the
             // handler directly instead of going through `dispatchEvent`.
             var onFn = window['on' + evt.type];
-            if (typeof onFn === 'function') { try { onFn.call(window, evt); } catch(e) {} }
+            if (typeof onFn === 'function') { try { onFn.call(window, evt); } catch(e) { _lumen_report_exception(e); } }
         }
         return !evt.defaultPrevented;
     },
@@ -22784,6 +22795,110 @@ mod tests {
             );
             let lineno = rt.eval("seen && seen.lineno").unwrap();
             assert_eq!(lineno, lumen_core::JsValue::Number(1.0));
+        }
+
+        // ── BUG-591 (continued): exceptions from addEventListener/on<type> DOM
+        // event listeners now also go through "report the exception" (HTML LS
+        // §8.1.3.6), via `_lumen_dispatch`/`_lumen_dispatch_bubble` (native
+        // element/document listeners) and `EventTarget.prototype.dispatchEvent`
+        // (pure-JS EventTarget subclasses). Previously these ended at a bare
+        // `catch(e){}` with no way for the page to observe the failure.
+
+        /// `_lumen_dispatch_bubble` is the path native input (click, keydown)
+        /// takes; mirrors WPT's `event-handler-processing-algorithm-error/*`
+        /// files for a plain `addEventListener` callback (not `onerror`).
+        #[test]
+        fn bug591_add_event_listener_callback_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var caught = null; \
+                 window.addEventListener('error', function(e) { caught = e.message; }); \
+                 document.getElementById('main').addEventListener('click', function() { throw new Error('listener-boom'); }); \
+                 _lumen_dispatch_bubble(document.getElementById('main').__nid__, 'click');",
+            )
+            .unwrap();
+            let result = rt.eval("caught").unwrap();
+            assert_eq!(
+                result,
+                lumen_core::JsValue::String("listener-boom".to_string())
+            );
+        }
+
+        /// Same as above but for the `on<type>` IDL/content-attribute form,
+        /// which `_lumen_dispatch_bubble` invokes in a separate branch from
+        /// `addEventListener` listeners.
+        #[test]
+        fn bug591_onclick_handler_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var caught = null; \
+                 window.addEventListener('error', function(e) { caught = e.message; }); \
+                 document.getElementById('main').onclick = function() { throw new Error('onclick-boom'); }; \
+                 _lumen_dispatch_bubble(document.getElementById('main').__nid__, 'click');",
+            )
+            .unwrap();
+            let result = rt.eval("caught").unwrap();
+            assert_eq!(
+                result,
+                lumen_core::JsValue::String("onclick-boom".to_string())
+            );
+        }
+
+        /// `document.addEventListener` listeners go through `document`'s own
+        /// `dispatchEvent` (not `_lumen_dispatch_bubble`'s document-level
+        /// branch) when the event is dispatched directly on `document`.
+        #[test]
+        fn bug591_document_dispatch_event_listener_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var caught = null; \
+                 window.addEventListener('error', function(e) { caught = e.message; }); \
+                 document.addEventListener('readystatechange', function() { throw new Error('doc-boom'); }); \
+                 document.dispatchEvent(new Event('readystatechange'));",
+            )
+            .unwrap();
+            let result = rt.eval("caught").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("doc-boom".to_string()));
+        }
+
+        /// A pure-JS `EventTarget` subclass (the base many Web API shims
+        /// `extend`) dispatches through `EventTarget.prototype.dispatchEvent`,
+        /// a separate implementation from the native element/document paths
+        /// exercised above.
+        #[test]
+        fn bug591_event_target_subclass_listener_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var caught = null; \
+                 window.addEventListener('error', function(e) { caught = e.message; }); \
+                 var et = new EventTarget(); \
+                 et.addEventListener('ping', function() { throw new Error('et-boom'); }); \
+                 et.dispatchEvent(new Event('ping'));",
+            )
+            .unwrap();
+            let result = rt.eval("caught").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("et-boom".to_string()));
+        }
+
+        /// Guards the deliberate exception to the rule above: a `window`
+        /// `'error'` listener that itself throws must NOT be routed back
+        /// through `_lumen_report_exception` (it already runs inside that
+        /// function's own dispatch), or a self-rethrowing handler would
+        /// recurse into `window.dispatchEvent` forever.
+        #[test]
+        fn bug591_window_error_listener_exception_does_not_recurse() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let outcome = rt.eval(
+                "var calls = 0; \
+                 window.addEventListener('error', function() { calls++; throw new Error('error-listener-boom'); }); \
+                 document.getElementById('main').addEventListener('click', function() { throw new Error('original-boom'); }); \
+                 _lumen_dispatch_bubble(document.getElementById('main').__nid__, 'click'); \
+                 calls",
+            );
+            // A recursive implementation would blow the stack (Err) or loop
+            // forever (test hang); the fix runs the 'error' listener exactly
+            // once, for the original click-listener exception.
+            assert_eq!(outcome.unwrap(), lumen_core::JsValue::Number(1.0));
         }
     }
     /// V8 port of the "classList / CSSStyleDeclaration", "Element event dispatch +
