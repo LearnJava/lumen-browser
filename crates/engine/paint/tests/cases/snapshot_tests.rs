@@ -130,7 +130,10 @@ fn img_replaced_element() {
 #[test]
 fn img_with_background_and_border() {
     // Painter's order: FillRect (background) → DrawBorder → DrawImage.
-    // Размер коробки 50+2×2=54 в обе стороны из-за border-2px.
+    // Размер коробки 50+2×2=54 в обе стороны из-за border-2px; фон и рамка
+    // красятся в border-box (54×54 от нуля), а САМА картинка — в content-box
+    // (50×50 от (2,2)), см. BUG-431: object-fit/object-position у замещённого
+    // элемента отсчитываются от content-box, не от border-box.
     let actual = build(
         r#"<img src="x.png" width="50" height="50">"#,
         "img { background: navy; border: 2px solid red; }",
