@@ -2605,27 +2605,25 @@ function _lumen_build_detached_document(proto, contentType) {
         });
         return hit !== null ? _lumen_make_element(hit) : null;
     };
-    doc.getElementsByTagName = function(tag) {
+    // DOM 4.5 getElementsByTagName / getElementsByTagNameNS. Walked rather than
+    // queried for the same reason `getElementById` above is, and matched by the
+    // shared predicates (BUG-416) — which also keeps a `'*'` ask off the text
+    // and comment children `_detached_walk` visits.
+    function _detached_by_predicate(pred) {
         var root = _detached_root_nid();
         if (root === null) { return []; }
-        var want = String(tag);
-        var all = want === '*';
-        // DOM 4.5: for an HTML document an HTML-namespace element also matches
-        // the ASCII-lowercased name; everything else matches the qualified name
-        // exactly.
-        var lower = want.toLowerCase();
-        function _match(n) {
-            if (all) { return true; }
-            var qname = _lumen_qualified_tag_name(n);
-            if (qname === want) { return true; }
-            return _lumen_is_html_element_nid(n) && qname.toLowerCase() === lower;
-        }
-        var out = _match(root) ? [root] : [];
+        var out = pred(root) ? [root] : [];
         _detached_walk(root, function(n) {
-            if (_match(n)) { out.push(n); }
+            if (pred(n)) { out.push(n); }
             return false;
         });
         return out.map(_lumen_make_element);
+    }
+    doc.getElementsByTagName = function(qualifiedName) {
+        return _detached_by_predicate(_lumen_tag_name_predicate(qualifiedName));
+    };
+    doc.getElementsByTagNameNS = function(namespace, localName) {
+        return _detached_by_predicate(_lumen_tag_ns_predicate(namespace, localName));
     };
     doc.getElementsByClassName = function(names) {
         var root = _detached_root_nid();
@@ -3680,6 +3678,72 @@ function _lumen_is_html_element_nid(n) {
     return _lumen_u2n(_lumen_get_namespace_uri(n)) === _LUMEN_HTML_NS;
 }
 
+// ── getElementsByTagName(NS) matching (DOM LS §4.5) ──────────────────────────
+// BUG-416. The name-matching half, shared by the document, the element and the
+// detached-document accessors below. Deliberately NOT routed through the
+// selector engine the way `getElementsByClassName` is: a tag name is arbitrary
+// text rather than a CSS type selector, and a type selector here is matched by
+// exact string equality against the local name (`style.rs::matches_simple`), so
+// delegating got BOTH halves of the case rule wrong — `getElementsByTagName('DIV')`
+// found nothing instead of every HTML `<div>`, and a name that is not a valid
+// identifier (`'a b'`, `'1'`) parsed as some other selector or as none at all.
+//
+// Returns a predicate over a raw node id. A null local name is what the native
+// side answers for every non-element node, so it doubles as the element check.
+function _lumen_tag_name_predicate(qualifiedName) {
+    var want  = String(qualifiedName);
+    var lower = want.toLowerCase();
+    var all   = want === '*';
+    return function(n) {
+        var local = _lumen_u2n(_lumen_get_local_name(n));
+        if (local === null) return false;
+        if (all) return true;
+        // An HTML-namespace element in an HTML document matches the ASCII
+        // lower-cased ask; everything else — SVG, MathML, no namespace — has to
+        // match its qualified name exactly. That distinction is the whole point
+        // of `Element.getElementsByTagName-foreign-0*.html`: an SVG
+        // `<linearGradient>` must be missed by `getElementsByTagName('lineargradient')`
+        // and hit by the exactly-spelled one, while an HTML `<div>` answers to
+        // any casing.
+        return _lumen_u2n(_lumen_get_namespace_uri(n)) === _LUMEN_HTML_NS
+            ? local.toLowerCase() === lower
+            : local === want;
+    };
+}
+
+// DOM LS §4.5 «getElementsByTagNameNS». `namespace` is matched against the
+// element's namespace URI — null and '' both mean «no namespace» per «validate
+// and extract», so `createElementNS(null, 'x')` is found by a null ask — and
+// `localName` against the local name, case-sensitively in both positions; '*'
+// matches anything. Note BUG-830: a namespace URI outside the six the DOM enum
+// knows collapses into the HTML one at creation time, so such an element can
+// only be found under the namespace it collapsed to, not the one it was asked
+// for. That is a limitation of the enum, not of this matcher.
+function _lumen_tag_ns_predicate(namespace, localName) {
+    var wantNs = (namespace === null || namespace === undefined || namespace === '')
+        ? null : String(namespace);
+    var wantLocal = String(localName);
+    var anyNs     = wantNs === '*';
+    var anyLocal  = wantLocal === '*';
+    return function(n) {
+        var local = _lumen_u2n(_lumen_get_local_name(n));
+        if (local === null) return false;
+        if (!anyNs && _lumen_u2n(_lumen_get_namespace_uri(n)) !== wantNs) return false;
+        return anyLocal || local === wantLocal;
+    };
+}
+
+// Filters a tree-ordered list of raw node ids by `pred` and wraps the survivors.
+// Static array, not a live HTMLCollection — the same simplification
+// `querySelectorAll`/`getElementsByClassName` already make.
+function _lumen_collect_matching(nids, pred) {
+    var out = [];
+    for (var i = 0; i < nids.length; i++) {
+        if (pred(nids[i])) out.push(_lumen_make_element(nids[i]));
+    }
+    return out;
+}
+
 // Mimics assigning to an object that carries no such accessor: the own accessor
 // installed by the wrapper literal is shadowed by a plain data property, so the
 // write neither reaches the DOM nor silently vanishes.
@@ -4543,6 +4607,23 @@ function _lumen_build_element(nid) {
             var sel = _lumen_class_selector(names);
             if (sel === null) return [];
             return _lumen_query_selector_all_scoped(nid, sel).map(_lumen_make_element);
+        },
+        // DOM LS §4.5: getElementsByTagName(qualifiedName) /
+        // getElementsByTagNameNS(namespace, localName), scoped to this element's
+        // descendants (BUG-416 — both were missing from the element wrapper
+        // entirely, so `el.getElementsByTagName is not a function`). The
+        // universal selector is used only to enumerate the subtree in tree order
+        // through the native walker; the name matching itself is spec-shaped and
+        // lives in the predicates above.
+        getElementsByTagName: function(qualifiedName) {
+            return _lumen_collect_matching(
+                _lumen_query_selector_all_scoped(nid, '*'),
+                _lumen_tag_name_predicate(qualifiedName));
+        },
+        getElementsByTagNameNS: function(namespace, localName) {
+            return _lumen_collect_matching(
+                _lumen_query_selector_all_scoped(nid, '*'),
+                _lumen_tag_ns_predicate(namespace, localName));
         },
         matches: function(sel) {
             return _lumen_node_matches_selector(nid, _lumen_sel(sel));
@@ -5934,16 +6015,26 @@ var document = {
     querySelectorAll:  function(sel) {
         return _lumen_query_selector_all(_lumen_sel(sel)).map(_lumen_make_element);
     },
-    // DOM LS §4.2.6: getElementsByTagName(tag) — a bare tag name is already a
-    // valid CSS type selector (and '*' a valid universal selector), so this
-    // delegates straight to the same native query the CSS engine already
-    // handles for `_lumen_ce_upgrade_all` (custom-element tag matching).
-    // Returns a static array, not a live HTMLCollection — same simplification
-    // `querySelectorAll` above already makes. Found missing (broke
-    // `testharness.js`'s own `test_timeout()`/`get_script_url()`, which call
-    // it unconditionally) while implementing P2-wpt S4.
-    getElementsByTagName: function(tag) {
-        return _lumen_query_selector_all(String(tag)).map(_lumen_make_element);
+    // DOM LS §4.5: getElementsByTagName(qualifiedName) — a static array, not a
+    // live HTMLCollection (same simplification `querySelectorAll` above makes).
+    // Found missing (broke `testharness.js`'s own `test_timeout()`/
+    // `get_script_url()`, which call it unconditionally) while implementing
+    // P2-wpt S4; BUG-416 then replaced the original «hand the tag to the
+    // selector engine as a type selector» body, which matched the local name by
+    // exact string equality and so answered nothing at all for
+    // `getElementsByTagName('DIV')` and mis-parsed a non-identifier name.
+    getElementsByTagName: function(qualifiedName) {
+        return _lumen_collect_matching(
+            _lumen_query_selector_all('*'),
+            _lumen_tag_name_predicate(qualifiedName));
+    },
+    // DOM LS §4.5: getElementsByTagNameNS(namespace, localName) — the
+    // namespace-aware sibling, missing from the document as well as the element
+    // until BUG-416.
+    getElementsByTagNameNS: function(namespace, localName) {
+        return _lumen_collect_matching(
+            _lumen_query_selector_all('*'),
+            _lumen_tag_ns_predicate(namespace, localName));
     },
     // DOM LS §4.5: getElementsByClassName(names) — document-global variant.
     // Static array, not a live HTMLCollection (same simplification as above).
@@ -20831,6 +20922,121 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(none, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn get_elements_by_tag_name_scoped_element() {
+            // BUG-416: `Element.prototype.getElementsByTagName` was missing
+            // entirely (`el.getElementsByTagName is not a function`), even
+            // though the element already carried `getElementsByClassName` and
+            // `querySelectorAll`. DOM LS §4.5: scoped to the element's
+            // descendants, the element itself excluded.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var wrap = document.getElementById('main'); \
+                     typeof wrap.getElementsByTagName === 'function' && \
+                     wrap.getElementsByTagName('span').length === 1 && \
+                     wrap.getElementsByTagName('span')[0].className === 'highlight' && \
+                     wrap.getElementsByTagName('div').length === 0 && \
+                     document.body.getElementsByTagName('div').length === 1",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn get_elements_by_tag_name_is_case_insensitive_for_html() {
+            // BUG-416: the old document-side body handed the name to the
+            // selector engine, which compares a type selector to the local name
+            // by exact string equality — so an upper-cased ask found nothing at
+            // all. DOM LS §4.5 folds the ask for HTML-namespace elements.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "document.getElementsByTagName('div').length === 1 && \
+                     document.getElementsByTagName('DIV').length === 1 && \
+                     document.getElementsByTagName('DiV').length === 1 && \
+                     document.getElementById('main').parentNode\
+                        .getElementsByTagName('SPAN').length === 1",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn get_elements_by_tag_name_is_case_sensitive_for_foreign_content() {
+            // BUG-416 / WPT `html/syntax/parsing/Element.getElementsByTagName-foreign-0*`:
+            // an element outside the HTML namespace matches its qualified name
+            // exactly — an SVG <linearGradient> answers only to the exact
+            // spelling, never to the folded one.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var SVG = 'http://www.w3.org/2000/svg'; \
+                     var svg = document.createElementNS(SVG, 'svg'); \
+                     var grad = document.createElementNS(SVG, 'linearGradient'); \
+                     svg.appendChild(grad); document.body.appendChild(svg); \
+                     document.getElementsByTagName('linearGradient').length === 1 && \
+                     document.getElementsByTagName('lineargradient').length === 0 && \
+                     document.getElementsByTagName('LINEARGRADIENT').length === 0 && \
+                     svg.getElementsByTagName('linearGradient').length === 1 && \
+                     svg.getElementsByTagName('lineargradient').length === 0",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn get_elements_by_tag_name_star_matches_elements_only() {
+            // BUG-416: '*' is «every descendant ELEMENT», in tree order — the
+            // two text nodes of the fixture must not show up.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var all = document.getElementsByTagName('*'); \
+                     all.length === 6 && \
+                     all.map(function(e) { return e.tagName; }).join(',') === \
+                        'HTML,HEAD,TITLE,BODY,DIV,SPAN' && \
+                     document.getElementById('main').getElementsByTagName('*').length === 1",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn get_elements_by_tag_name_ns_on_document_and_element() {
+            // BUG-416: `getElementsByTagNameNS` was missing from BOTH the
+            // document and the element. DOM LS §4.5: '*' is a wildcard in
+            // either position, null and '' both mean «no namespace», and the
+            // local name is compared case-sensitively whatever the namespace.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var SVG = 'http://www.w3.org/2000/svg'; \
+                     var HTML = 'http://www.w3.org/1999/xhtml'; \
+                     var svg = document.createElementNS(SVG, 'svg'); \
+                     var grad = document.createElementNS(SVG, 'linearGradient'); \
+                     svg.appendChild(grad); document.body.appendChild(svg); \
+                     var bare = document.createElementNS(null, 'bare'); \
+                     document.body.appendChild(bare); \
+                     typeof document.getElementsByTagNameNS === 'function' && \
+                     typeof document.body.getElementsByTagNameNS === 'function' && \
+                     document.getElementsByTagNameNS(SVG, '*').length === 2 && \
+                     document.getElementsByTagNameNS(SVG, 'linearGradient').length === 1 && \
+                     document.getElementsByTagNameNS(SVG, 'lineargradient').length === 0 && \
+                     document.getElementsByTagNameNS(SVG, 'div').length === 0 && \
+                     document.getElementsByTagNameNS(HTML, 'div').length === 1 && \
+                     document.getElementsByTagNameNS(HTML, 'DIV').length === 0 && \
+                     document.getElementsByTagNameNS('*', 'linearGradient').length === 1 && \
+                     document.getElementsByTagNameNS(null, 'bare').length === 1 && \
+                     document.getElementsByTagNameNS('', 'bare').length === 1 && \
+                     document.getElementsByTagNameNS(HTML, 'bare').length === 0 && \
+                     svg.getElementsByTagNameNS(SVG, '*').length === 1 && \
+                     svg.getElementsByTagNameNS(SVG, '*')[0] === grad",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 
         #[test]

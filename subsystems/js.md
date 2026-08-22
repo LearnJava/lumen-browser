@@ -483,7 +483,30 @@ the time — read dates.
   `TypeError`. Delegates to the existing `_lumen_query_selector_all` bridge, same pattern as
   `querySelectorAll` (a bare tag name / `*` is already a valid CSS type/universal selector).
   Returns a static array, not a live `HTMLCollection` (same simplification `querySelectorAll`
-  already makes). `Element.prototype.getElementsByTagName` is still missing (out of scope).
+  already makes). `Element.prototype.getElementsByTagName` is still missing (out of scope)
+  — closed later by BUG-416 below, **which also replaced the delegation described here**.
+- **`getElementsByTagName`/`getElementsByTagNameNS` on `Element` + `…NS` on `document`
+  (BUG-416 fix, [P3] 2026-08-22).** The element had neither method and the document had no
+  `…NS`; fixing that also had to undo the delegation the BUG-279 entry above describes,
+  because a CSS type selector is the wrong matcher for a tag name: `matches_simple`
+  (`style.rs:9602`) compares it to the local name by **exact string equality** and
+  `parse_ident` does not fold case, so `document.getElementsByTagName('DIV')` answered `[]`
+  instead of every `<div>`, and a non-identifier name (`'a b'`) parsed as some other selector.
+  Name matching now lives in the shim as three shared helpers —
+  `_lumen_tag_name_predicate` / `_lumen_tag_ns_predicate` / `_lumen_collect_matching` — and
+  the selector engine is used only as the tree-order subtree walker (`'*'`). DOM LS §4.5
+  verbatim: an HTML-namespace element folds ASCII case, anything else (SVG/MathML/no
+  namespace) matches its qualified name exactly, `…NS` treats `null` and `''` alike as "no
+  namespace" with `'*'` a wildcard in either position and a case-sensitive local name.
+  A `null` local name is what the native side answers for every non-element node, so it
+  doubles as the element check — that is what keeps a `'*'` ask off text nodes. All three
+  consumers share the predicates: live document, live element wrapper (descendants only) and
+  the detached document ([BUG-415](../bugs/BUG-415-FIXED.md)), whose own `'*'` branch used to
+  return text nodes because `_detached_walk` visits every child. Two things the fix cannot
+  reach: markup-parsed foreign content is still HTML-namespaced ([BUG-685](../bugs/BUG-685-OPEN.md)),
+  so the case rule is only observable on `createElementNS`-built subtrees; and
+  `'getElementsByTagName' in Element.prototype` stays `false` like every other member of this
+  wrapper factory ([BUG-747](../bugs/BUG-747-OPEN.md)).
 - **`getElementsByClassName(names)` on `document` + `Element` (BUG-302 fix, [P3] 2026-07-19).**
   Was missing from the main `WEB_API_SHIM` (only `dom_parser.rs`'s `VElement`/`VDocument` had it)
   — `news.ycombinator.com` scripts died wholesale on `el.getElementsByClassName is not a function`.
