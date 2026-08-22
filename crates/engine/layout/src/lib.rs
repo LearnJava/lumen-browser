@@ -1229,6 +1229,9 @@ fn content_height(b: &LayoutBox) -> f32 {
 /// Used by the shell to populate the JS-runtime computed-style cache after each
 /// relayout so that `window.getComputedStyle()` can answer without a
 /// round-trip to the layout engine.
+///
+/// Text nodes are in the map too, but with a much smaller entry — see
+/// [`INLINE_SEGMENT_PROPERTIES`] for which properties and why.
 pub fn collect_computed_styles(
     root: &LayoutBox,
 ) -> std::collections::HashMap<u32, std::collections::HashMap<String, String>> {
@@ -1236,6 +1239,23 @@ pub fn collect_computed_styles(
     collect_computed_styles_rec(root, &mut out);
     out
 }
+
+/// The properties published for a text node that ended up inside an inline run.
+///
+/// An inline element owns no [`LayoutBox`] — its content is flattened into the
+/// enclosing `InlineRun`'s segments — so `<b>`, `<span>` and friends have no
+/// entry in this map at all, and neither does anything inside a `display: none`
+/// subtree. That makes the *text node* the only place where «this text was laid
+/// out, with this style» can be observed, which is exactly what
+/// `HTMLElement.innerText` needs ([BUG-413](../../../bugs/BUG-413-FIXED.md)):
+/// the presence of the entry answers «is it rendered» and the three properties
+/// are the ones the HTML LS §3.2.7 collection steps consult.
+///
+/// Deliberately not the full [`computed_style_to_map`] set: a text-heavy page
+/// has as many text nodes as boxes, and republishing ~55 serialised properties
+/// for each of them after every relayout would roughly double the cost of a
+/// snapshot that is already rebuilt on the layout path.
+pub const INLINE_SEGMENT_PROPERTIES: [&str; 3] = ["visibility", "white-space", "text-transform"];
 
 fn collect_computed_styles_rec(
     b: &LayoutBox,
@@ -1245,6 +1265,17 @@ fn collect_computed_styles_rec(
     // several boxes can carry the same `NodeId`.
     out.entry(b.node.index() as u32)
         .or_insert_with(|| computed_style_to_map(&b.style));
+    if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
+        for seg in segments {
+            // `NodeId(0)` is the document root, which `InlineSegment::source_node`
+            // uses for generated content with no DOM origin.
+            if seg.source_node.index() == 0 {
+                continue;
+            }
+            out.entry(seg.source_node.index() as u32)
+                .or_insert_with(|| selector_query::inline_segment_style_map(&seg.style));
+        }
+    }
     for child in &b.children {
         collect_computed_styles_rec(child, out);
     }

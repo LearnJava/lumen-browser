@@ -3443,6 +3443,240 @@ function _lumen_merge_with_next_text(pid, nodeNid) {
     _lumen_remove_child(pid, next);
 }
 
+// ── HTML LS §3.2.7 `innerText` / `outerText` getters (BUG-413, slice 2) ──────
+// «Rendered text», not `textContent`: a `display:none` subtree and a
+// `visibility:hidden` box drop out, a collapsible whitespace run folds to one
+// space, `text-transform` applies, and a block boundary or `<br>` becomes a
+// line feed.
+//
+// The layout bridge read here is the computed-style snapshot that already backs
+// `getComputedStyle`, republished by the shell after every relayout. Two of its
+// properties decide everything:
+//
+//   * an entry EXISTS ⟺ the engine laid the node out. `display: none` produces
+//     no box and no segment, so it produces no entry either — that is the whole
+//     `innerText`-vs-`textContent` difference, read straight off the engine.
+//   * an INLINE element has no entry, because it owns no box: its content is
+//     flattened into the enclosing block's inline run. The style that governs
+//     that content is published on the *text node* instead
+//     (`lumen_layout::INLINE_SEGMENT_PROPERTIES`), which is why every style
+//     lookup below is made against the text node and never against its parent.
+//
+// So an entry-less *element* is not «hidden» — it is a transparent inline
+// wrapper, and the code recurses through it while contributing nothing of its
+// own. Whether its text survives is decided one level down, by whether the text
+// node itself has an entry.
+//
+// What the bridge does NOT carry is the per-line-box text, so step 4 of the
+// collection steps («for each CSS text box produced by node …») is reproduced
+// from the computed `white-space`/`text-transform` values instead of read off
+// the boxes. The difference is confined to soft wraps: a line the engine broke
+// mid-paragraph contributes no line feed here. A wrap inserts no character in
+// `textContent` either, and the spec's own modified rules already collapse an
+// end-of-line space, so the two agree except on a trailing space a soft wrap
+// keeps alive.
+//
+// Three more deviations worth naming. `<select>`/`<optgroup>`/`<option>` are
+// not given the synthetic boxes step 3's exception list prescribes. A node the
+// engine has not laid out yet — a fresh document, a subtree appended since the
+// last relayout, anything read from a parser-time script ([BUG-443]) — reads as
+// «not being rendered», so the getter answers `textContent` for it. And a
+// `<br>`, which owns no box either way, contributes its line feed even when it
+// is itself `display: none` or `visibility: hidden`; nothing distinguishes those
+// from an ordinary one at this layer.
+
+// A node is «being rendered» when the engine published a computed style for it.
+function _lumen_rt_is_rendered(n) {
+    return _lumen_get_computed_style(n, 'visibility') !== '';
+}
+
+// Step 8 of the collection steps: a box that starts and ends a line. `table-row`
+// and the row groups are not block-level in CSS-DISPLAY terms, but they do break
+// the line in every engine — and a table whose rows ran together would make the
+// tab of step 6 meaningless. `table-cell` is deliberately absent: it gets the
+// tab, not a line feed.
+var _LUMEN_RT_BLOCK_LEVEL = {
+    'block': 1, 'flow-root': 1, 'list-item': 1, 'table': 1, 'table-caption': 1,
+    'table-row': 1, 'table-row-group': 1, 'table-header-group': 1,
+    'table-footer-group': 1, 'flex': 1, 'grid': 1,
+};
+
+// `text-transform` over a whole text-node string. `capitalize` is approximated
+// on ASCII word starts: the real rule is per typographic unit and spans text
+// nodes, which this getter's per-node view cannot see.
+function _lumen_rt_transform(s, tt) {
+    if (tt === 'uppercase') { return s.toUpperCase(); }
+    if (tt === 'lowercase') { return s.toLowerCase(); }
+    if (tt === 'capitalize') {
+        return s.replace(/(^|[^A-Za-z0-9])([a-z])/g, function(_m, sep, ch) {
+            return sep + ch.toUpperCase();
+        });
+    }
+    return s;
+}
+
+// Step 4: the text of the boxes `n` produces, after `white-space` collapsing and
+// `text-transform`. Returns an item for `_lumen_rt_concat`; `pre` marks a string
+// whose spaces survive contact with its neighbours.
+function _lumen_rt_text_item(n) {
+    var raw = _lumen_get_text_content(n).replace(/\\r\\n?/g, '\\n');
+    var ws  = _lumen_get_computed_style(n, 'white-space');
+    var preserveSpaces = (ws === 'pre' || ws === 'pre-wrap' || ws === 'break-spaces');
+    var s;
+    if (preserveSpaces) {
+        s = raw;
+    } else if (ws === 'pre-line') {
+        // Spaces and tabs collapse, segment breaks survive — and a space that
+        // ends up touching one of those breaks is removed, as at a line end.
+        s = raw.replace(/[ \\t\\f]+/g, ' ').replace(/ *\\n */g, '\\n');
+    } else {
+        s = raw.replace(/[ \\t\\n\\f]+/g, ' ');
+    }
+    return {
+        s: _lumen_rt_transform(s, _lumen_get_computed_style(n, 'text-transform')),
+        pre: preserveSpaces,
+    };
+}
+
+// HTML LS §3.2.7 «rendered text collection steps». Returns a flat list whose
+// items are numbers (a required line break count) or `{s, pre}` objects. The
+// line feed a `<br>` contributes is one of those objects, not a break count: the
+// spec appends it as a plain string, so it neither merges with an adjacent count
+// nor gets stripped at either end of the result.
+function _lumen_rt_collect(n) {
+    var items = [];
+    var isText = _lumen_is_text_node(n);
+    // Step 1 runs before the node itself is judged, so a box-less
+    // `display: contents` element still passes its children through.
+    if (!isText) {
+        var kids = _lumen_get_children(n);
+        for (var _rci = 0; _rci < kids.length; _rci++) {
+            var sub = _lumen_rt_collect(kids[_rci]);
+            for (var _rcj = 0; _rcj < sub.length; _rcj++) { items.push(sub[_rcj]); }
+        }
+    }
+    var vis = _lumen_get_computed_style(n, 'visibility');
+    if (isText) {
+        // Steps 2 and 3 for a text node: no entry means the engine produced no
+        // segment for it — `display: none` somewhere above — and a non-visible
+        // one means the segment was laid out but not painted. Either way the
+        // text contributes nothing, and a text node has no children to pass on.
+        return vis === 'visible' ? [_lumen_rt_text_item(n)] : items;
+    }
+    // Steps 5 and 7 key off an HTML element name; step 6 and step 8 key off the
+    // used `display` and so apply to foreign content too.
+    var isHtml = _lumen_is_html_element_nid(n);
+    var tag = isHtml ? _lumen_get_tag_name(n) : '';
+    // Step 5 goes first because a `<br>` is empty: it produces no box and no
+    // segment, so it has no entry, and judging it by the entry-less rule below
+    // would silently drop every line feed the spec's most literal case makes.
+    if (tag === 'BR') { items.push({ s: '\\n', pre: true }); return items; }
+
+    // Step 2 — note the spec returns the CHILDREN's items here rather than
+    // nothing, because a descendant may set `visibility: visible` again.
+    if (vis !== '' && vis !== 'visible') { return items; }
+    // An entry-less element owns no box: an inline wrapper whose content is
+    // already accounted for by the text nodes below it. Its children's items
+    // pass through — which is also step 3's behaviour for `display: contents` —
+    // but it contributes no line break of its own, so a `display: none` block
+    // adds nothing at all.
+    if (vis === '') { return items; }
+
+    var display = _lumen_get_computed_style(n, 'display');
+    if (display === 'table-cell') {                                        // step 6
+        var pid = _lumen_u2n(_lumen_get_parent(n));
+        if (pid !== null) {
+            var sibs = _lumen_get_children(pid);
+            var seen = false;
+            var last = true;
+            for (var _rck = 0; _rck < sibs.length; _rck++) {
+                if (sibs[_rck] === n) { seen = true; continue; }
+                if (seen && _lumen_get_computed_style(sibs[_rck], 'display') === 'table-cell') {
+                    last = false;
+                    break;
+                }
+            }
+            if (!last) { items.push({ s: '\\t', pre: true }); }
+        }
+    }
+
+    if (tag === 'P') { items.unshift(2); items.push(2); }                  // step 7
+    else if (_LUMEN_RT_BLOCK_LEVEL[display] === 1) {                       // step 8
+        items.unshift(1);
+        items.push(1);
+    }
+    return items;
+}
+
+// Steps 3-7 of the getter: drop empty strings, strip the leading and trailing
+// runs of required line break counts, turn every remaining run into as many line
+// feeds as its largest member, and concatenate.
+//
+// The concatenation is where the cross-node part of whitespace collapsing
+// happens — the part a per-text-node `replace` cannot do. A collapsible space is
+// held back as `pending` and only committed once a character follows it, so two
+// inline siblings that both touch a space contribute one, and a space that ends
+// up against a line break or against either end of the result disappears.
+function _lumen_rt_concat(items) {
+    var kept = [];
+    for (var _rti = 0; _rti < items.length; _rti++) {
+        var it = items[_rti];
+        if (typeof it === 'number') { kept.push(it); continue; }
+        if (it.s !== '') { kept.push(it); }
+    }
+    var from = 0;
+    var to = kept.length;
+    while (from < to && typeof kept[from] === 'number') { from++; }
+    while (to > from && typeof kept[to - 1] === 'number') { to--; }
+
+    var out = '';
+    var pending = false;
+    var run = 0;
+    for (var _rtj = from; _rtj < to; _rtj++) {
+        var item = kept[_rtj];
+        if (typeof item === 'number') {
+            if (item > run) { run = item; }
+            continue;
+        }
+        if (run > 0) {
+            pending = false;
+            for (var _rtk = 0; _rtk < run; _rtk++) { out += '\\n'; }
+            run = 0;
+        }
+        if (item.pre) {
+            if (pending) { out += ' '; pending = false; }
+            out += item.s;
+            continue;
+        }
+        for (var _rtl = 0; _rtl < item.s.length; _rtl++) {
+            var ch = item.s.charAt(_rtl);
+            if (ch === ' ') {
+                // A collapsible space at the very start of the result, or right
+                // after a line break, is at a line edge and never renders.
+                if (out !== '' && out.charAt(out.length - 1) !== '\\n') { pending = true; }
+                continue;
+            }
+            if (ch === '\\n') { pending = false; out += '\\n'; continue; }
+            if (pending) { out += ' '; pending = false; }
+            out += ch;
+        }
+    }
+    return out;
+}
+
+// Shared by both getters — HTML LS gives `outerText` the same getter steps as
+// `innerText`; only their setters differ.
+function _lumen_rendered_text(nid) {
+    var text = _lumen_rt_concat(_lumen_rt_collect(nid));
+    if (_lumen_rt_is_rendered(nid) || text !== '') { return text; }
+    // Step 1: `this` is not being rendered → `textContent`. Reached when the
+    // element owns no box AND nothing below it was laid out, which is what
+    // separates a `display: none` subtree (or a detached one, or a document with
+    // no layout yet) from an ordinary inline wrapper — the wrapper's own text
+    // nodes carry entries and have just produced a non-empty result above.
+    return _lumen_get_text_content(nid);
+}
+
 function _lumen_build_element(nid) {
     var _classList = _lumen_make_class_list(nid);
     var _style     = _lumen_make_style(nid);
@@ -3534,11 +3768,20 @@ function _lumen_build_element(nid) {
             for (var _ohi = 0; _ohi < newIds.length; _ohi++) { wrapped.push(_lumen_make_element(newIds[_ohi])); }
             this.replaceWith.apply(this, wrapped);
         },
-        // HTML LS §3.2.7 (BUG-413). Setters only — the `innerText` getter has to
-        // report *rendered* text, which needs the layout boxes, and is a separate
-        // slice; reading either property still yields `undefined`, exactly as it
-        // did before. `[LegacyNullToEmptyString]` is why `null` becomes '' here
-        // while `undefined` stringifies to 'undefined'.
+        // HTML LS §3.2.7 (BUG-413). Both getters run the same steps — the spec
+        // gives `outerText` no getter of its own — over the layout snapshots;
+        // see `_lumen_rendered_text` above for what that reads and where it
+        // approximates. `undefined` outside the HTML namespace, because both are
+        // `HTMLElement` members and this factory also wraps SVG/MathML elements
+        // and Text/Comment nodes.
+        get innerText() {
+            return _lumen_is_html_element_nid(nid) ? _lumen_rendered_text(nid) : undefined;
+        },
+        get outerText() {
+            return _lumen_is_html_element_nid(nid) ? _lumen_rendered_text(nid) : undefined;
+        },
+        // `[LegacyNullToEmptyString]` is why `null` becomes '' here while
+        // `undefined` stringifies to 'undefined'.
         set innerText(v) {
             if (!_lumen_is_html_element_nid(nid)) {
                 _lumen_assign_as_expando(this, 'innerText', v);
@@ -20313,6 +20556,294 @@ mod tests {
                 r,
                 lumen_core::JsValue::String("<br><br><br>/3/NoModificationAllowedError".into())
             );
+        }
+
+        /// UA `display` for the handful of tags the `innerText` getter tests use.
+        /// Everything unlisted is `inline`, which is what an unstyled `<span>` /
+        /// `<b>` / `<br>` computes to.
+        fn ua_display(tag: &str) -> &'static str {
+            match tag {
+                "html" | "body" | "head" | "div" | "p" | "section" | "pre" | "h1" | "h2"
+                | "ul" | "ol" => "block",
+                "li" => "list-item",
+                "table" => "table",
+                "tbody" | "thead" | "tfoot" => "table-row-group",
+                "tr" => "table-row",
+                "td" | "th" => "table-cell",
+                "caption" => "table-caption",
+                _ => "inline",
+            }
+        }
+
+        /// Publishes the computed-style snapshot the `innerText` getter reads
+        /// (BUG-413, slice 2), mimicking what `collect_computed_styles` produces.
+        ///
+        /// Three properties of the real snapshot are what the getter is built on,
+        /// so the stand-in has to reproduce all three or it would test something
+        /// else: an element that owns a box gets an entry; an **inline** element
+        /// does not, because its content is flattened into the enclosing block's
+        /// inline run; and the style governing that content is published on the
+        /// **text node** instead (`lumen_layout::INLINE_SEGMENT_PROPERTIES`),
+        /// with the inherited values resolved.
+        ///
+        /// `overrides` re-styles elements by `id`. A `display: none` override
+        /// drops the element *and its whole subtree*, text nodes included, rather
+        /// than recording `"none"` — that is what a real snapshot looks like: no
+        /// box, no segment, no entry.
+        fn publish_render_snapshot(
+            rt: &V8JsRuntime,
+            doc: &Arc<Mutex<Document>>,
+            overrides: &[(&str, &[(&str, &str)])],
+        ) {
+            /// The three inherited values in flight down the walk, in the order
+            /// of `INLINE_SEGMENT_PROPERTIES`.
+            type Inherited = [String; 3];
+
+            fn walk(
+                doc: &Document,
+                id: lumen_dom::NodeId,
+                inherited: &Inherited,
+                overrides: &[(&str, &[(&str, &str)])],
+                rects: &mut std::collections::HashMap<u32, [f32; 4]>,
+                styles: &mut std::collections::HashMap<
+                    u32,
+                    std::collections::HashMap<String, String>,
+                >,
+            ) {
+                let node = doc.get(id);
+                let mut inherited = inherited.clone();
+                if let Some(name) = node.element_name() {
+                    let mut display = ua_display(&name.local).to_string();
+                    if let Some(elem_id) = node.get_attr("id") {
+                        for (want, props) in overrides {
+                            if *want != elem_id {
+                                continue;
+                            }
+                            for (k, v) in *props {
+                                match *k {
+                                    "display" => display = (*v).to_string(),
+                                    "visibility" => inherited[0] = (*v).to_string(),
+                                    "white-space" => inherited[1] = (*v).to_string(),
+                                    "text-transform" => inherited[2] = (*v).to_string(),
+                                    other => panic!("unhandled override {other}"),
+                                }
+                            }
+                        }
+                    }
+                    if display == "none" {
+                        return;
+                    }
+                    if display != "inline" {
+                        let mut m = std::collections::HashMap::new();
+                        m.insert("display".to_string(), display);
+                        for (prop, value) in
+                            lumen_layout::INLINE_SEGMENT_PROPERTIES.iter().zip(&inherited)
+                        {
+                            m.insert((*prop).to_string(), value.clone());
+                        }
+                        let idx = id.index() as u32;
+                        rects.insert(idx, [0.0, 0.0, 10.0, 10.0]);
+                        styles.insert(idx, m);
+                    }
+                } else if matches!(node.data, NodeData::Text(_)) {
+                    // Only a text node becomes an inline segment, and only a
+                    // segment carries the inherited three.
+                    let m = lumen_layout::INLINE_SEGMENT_PROPERTIES
+                        .iter()
+                        .zip(&inherited)
+                        .map(|(p, v)| ((*p).to_string(), v.clone()))
+                        .collect();
+                    styles.insert(id.index() as u32, m);
+                }
+                for &child in &node.children {
+                    walk(doc, child, &inherited, overrides, rects, styles);
+                }
+            }
+
+            let mut rects = std::collections::HashMap::new();
+            let mut styles = std::collections::HashMap::new();
+            let initial: Inherited = [
+                "visible".to_string(),
+                "normal".to_string(),
+                "none".to_string(),
+            ];
+            {
+                let guard = doc.lock().unwrap();
+                walk(&guard, guard.root(), &initial, overrides, &mut rects, &mut styles);
+            }
+            rt.update_layout_rects(rects);
+            rt.update_computed_styles(styles);
+        }
+
+        #[test]
+        fn inner_text_getter_reports_rendered_text_with_block_breaks() {
+            // BUG-413 slice 2: HTML LS §3.2.7 — the getter answers *rendered*
+            // text, so a `<p>` contributes a required line break count of 2 at
+            // both ends (steps 7 and 5-6 of the getter), the counts at the very
+            // start and end are stripped, and the run between the two paragraphs
+            // becomes exactly two line feeds. `textContent` would run it all
+            // together instead.
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval(
+                "var c = document.getElementById('main'); \
+                 c.innerHTML = '<p>hello <b>world</b></p><p>second</p>';",
+            )
+            .unwrap();
+            publish_render_snapshot(&rt, &doc, &[]);
+            let r = rt.eval("document.getElementById('main').innerText").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("hello world\n\nsecond".into()));
+            // The spec gives `outerText` no getter of its own — same steps.
+            let o = rt.eval("document.getElementById('main').outerText").unwrap();
+            assert_eq!(o, lumen_core::JsValue::String("hello world\n\nsecond".into()));
+        }
+
+        #[test]
+        fn inner_text_getter_skips_display_none_and_hidden_subtrees() {
+            // BUG-413 slice 2: step 2 drops a `visibility: hidden` box and step 3
+            // drops a box-less (`display: none`) one. This is the whole reason
+            // the property cannot be served from the DOM alone — `textContent`
+            // here would be "AXYB".
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval(
+                "var c = document.getElementById('main'); \
+                 c.innerHTML = 'A<span id=\"gone\">X</span><span id=\"ghost\">Y</span>B';",
+            )
+            .unwrap();
+            publish_render_snapshot(
+                &rt,
+                &doc,
+                &[
+                    ("gone", &[("display", "none")]),
+                    ("ghost", &[("visibility", "hidden")]),
+                ],
+            );
+            let r = rt.eval("document.getElementById('main').innerText").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("AB".into()));
+            let tc = rt.eval("document.getElementById('main').textContent").unwrap();
+            assert_eq!(tc, lumen_core::JsValue::String("AXYB".into()));
+        }
+
+        #[test]
+        fn inner_text_getter_collapses_whitespace_across_inline_boundaries() {
+            // BUG-413 slice 2: collapsing is not per-text-node — two inline
+            // siblings that both touch a space contribute one, and a space at
+            // either end of the result or next to a line break renders as
+            // nothing at all.
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval(
+                "var c = document.getElementById('main'); \
+                 c.innerHTML = '  a  <span>  b  </span>\\n  c  ';",
+            )
+            .unwrap();
+            publish_render_snapshot(&rt, &doc, &[]);
+            let r = rt.eval("document.getElementById('main').innerText").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("a b c".into()));
+        }
+
+        #[test]
+        fn inner_text_getter_line_feeds_from_br_and_block_children() {
+            // BUG-413 slice 2: step 5 appends the `<br>` line feed as a plain
+            // string, so it survives the stripping the break counts undergo,
+            // while the `<div>` around "c" contributes a count of 1.
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval(
+                "var c = document.getElementById('main'); \
+                 c.innerHTML = 'a<br>b <div>c</div>';",
+            )
+            .unwrap();
+            publish_render_snapshot(&rt, &doc, &[]);
+            let r = rt.eval("document.getElementById('main').innerText").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("a\nb\nc".into()));
+        }
+
+        #[test]
+        fn inner_text_getter_honours_white_space_and_text_transform() {
+            // BUG-413 slice 2: step 4 is «the text of the boxes», i.e. after the
+            // `white-space` and `text-transform` the element was laid out with —
+            // `pre` keeps every space, and `uppercase` reaches text the element
+            // only inherits down to.
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval(
+                "var c = document.getElementById('main'); \
+                 c.innerHTML = '<pre id=\"raw\">  x  y  </pre><div id=\"shout\">go</div>';",
+            )
+            .unwrap();
+            publish_render_snapshot(
+                &rt,
+                &doc,
+                &[
+                    ("raw", &[("white-space", "pre")]),
+                    ("shout", &[("text-transform", "uppercase")]),
+                ],
+            );
+            let r = rt.eval("document.getElementById('main').innerText").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("  x  y  \nGO".into()));
+        }
+
+        #[test]
+        fn inner_text_getter_tabs_between_table_cells() {
+            // BUG-413 slice 2: step 6 puts a tab after every table cell but the
+            // last of its row, and the rows themselves break the line.
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval(
+                "var c = document.getElementById('main'); \
+                 c.innerHTML = '<table><tbody><tr><td>a</td><td>b</td></tr>' + \
+                               '<tr><td>c</td></tr></tbody></table>';",
+            )
+            .unwrap();
+            publish_render_snapshot(&rt, &doc, &[]);
+            let r = rt.eval("document.getElementById('main').innerText").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("a\tb\nc".into()));
+        }
+
+        #[test]
+        fn inner_text_getter_falls_back_to_text_content_when_not_rendered() {
+            // BUG-413 slice 2: step 1 of the getter — a node with no box answers
+            // `textContent`, whitespace and hidden subtrees included. That covers
+            // a detached element and, deliberately, a document the engine has not
+            // laid out yet.
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval(
+                "var d = document.createElement('div'); \
+                 d.innerHTML = '  a  <span>b</span>';",
+            )
+            .unwrap();
+            publish_render_snapshot(&rt, &doc, &[]);
+            // Asserted against `textContent` rather than a literal: what the
+            // fragment parser keeps of the leading whitespace is beside the
+            // point, and the claim is «these two are the same string», which the
+            // rendered path would break by collapsing the double space.
+            let r = rt
+                .eval("d.innerText === d.textContent && d.innerText.indexOf('a  b') >= 0")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn inner_text_and_outer_text_getters_absent_outside_html_namespace() {
+            // BUG-413 slice 2: both are `HTMLElement` members, so an SVG element
+            // — which shares this wrapper factory — must read as `undefined`
+            // rather than as its rendered text.
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval(
+                "var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); \
+                 svg.textContent = 'abc'; \
+                 document.getElementById('main').appendChild(svg);",
+            )
+            .unwrap();
+            publish_render_snapshot(&rt, &doc, &[]);
+            let r = rt
+                .eval("svg.innerText === undefined && svg.outerText === undefined")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 
         #[test]

@@ -1682,7 +1682,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/store.rs:107` **fn** `unindex_semantic` — Remove a history entry's embedding from the semantic index, if present
 `crates/knowledge/src/store.rs:118` **fn** `search_semantic` — Semantic (embedding-similarity) search over history entries indexed
 
-## lumen-layout  (752 symbols)
+## lumen-layout  (753 symbols)
 
 `crates/engine/layout/src/anchor.rs:47` **enum** `AnchorSide` — Which edge or point of an anchor element the `anchor()` function references
 `crates/engine/layout/src/anchor.rs:76` **enum** `InsetAreaKeyword` — Single-axis `inset-area` keyword, as defined in §5.2 of the spec
@@ -1912,15 +1912,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/lib.rs:1096` **struct** `ScrollContainer` — A scrollable overflow container collected from the layout tree
 `crates/engine/layout/src/lib.rs:1128` **fn** `collect_scroll_containers` — Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree
 `crates/engine/layout/src/lib.rs:1184` **fn** `overscroll_should_propagate` — CSS Overscroll Behavior L1 §3 — decide whether a scroll delta a container
-`crates/engine/layout/src/lib.rs:1232` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
-`crates/engine/layout/src/lib.rs:1275` **fn** `collect_custom_properties` — Walks the layout tree and returns a map of `NodeId index → resolved custom
-`crates/engine/layout/src/lib.rs:1338` **fn** `collect_layout_rects` — Walks the layout tree and returns a map of `NodeId index → [x, y, width, height]`
-`crates/engine/layout/src/lib.rs:1372` **fn** `find_box_by_node` — Update the scroll position of a node in the layout tree
-`crates/engine/layout/src/lib.rs:1379` **fn** `set_scroll_position`
-`crates/engine/layout/src/lib.rs:1412` **fn** `collect_view_transition_names` — Find the innermost scroll container whose `clip_rect` contains `(x, y)`
-`crates/engine/layout/src/lib.rs:1449` **fn** `collect_view_transition_groups`
-`crates/engine/layout/src/lib.rs:1475` **fn** `find_scroll_container_at` — `x` and `y` are in CSS px, document-relative (same coordinate space as
-`crates/engine/layout/src/lib.rs:1498` **fn** `find_scroll_container_for_node` — Find the nearest scrolling ancestor of `node` (inclusive of `node` itself),
+`crates/engine/layout/src/lib.rs:1235` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
+`crates/engine/layout/src/lib.rs:1306` **fn** `collect_custom_properties` — Walks the layout tree and returns a map of `NodeId index → resolved custom
+`crates/engine/layout/src/lib.rs:1369` **fn** `collect_layout_rects` — Walks the layout tree and returns a map of `NodeId index → [x, y, width, height]`
+`crates/engine/layout/src/lib.rs:1403` **fn** `find_box_by_node` — Update the scroll position of a node in the layout tree
+`crates/engine/layout/src/lib.rs:1410` **fn** `set_scroll_position`
+`crates/engine/layout/src/lib.rs:1443` **fn** `collect_view_transition_names` — Find the innermost scroll container whose `clip_rect` contains `(x, y)`
+`crates/engine/layout/src/lib.rs:1480` **fn** `collect_view_transition_groups`
+`crates/engine/layout/src/lib.rs:1506` **fn** `find_scroll_container_at` — `x` and `y` are in CSS px, document-relative (same coordinate space as
+`crates/engine/layout/src/lib.rs:1529` **fn** `find_scroll_container_for_node` — Find the nearest scrolling ancestor of `node` (inclusive of `node` itself),
 `crates/engine/layout/src/line_break.rs:30` **fn** `break_opportunities` — Byte offsets inside `text` at which a soft wrap is allowed
 `crates/engine/layout/src/masonry.rs:33` **fn** `lay_out_masonry` — Greedy waterfall masonry placement algorithm (CSS Grid L3 §14)
 `crates/engine/layout/src/masonry.rs:64` **fn** `min_track_idx` — Returns the index of the track with the minimum running height
@@ -2068,11 +2068,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/selector_query.rs:389` **fn** `query_all_within` — Returns all [`NodeId`]s among `start`'s descendants (excluding `start`
 `crates/engine/layout/src/selector_query.rs:428` **fn** `query_all_scoped` — Returns all descendant [`NodeId`]s of `scope` (excluding `scope` itself)
 `crates/engine/layout/src/selector_query.rs:452` **fn** `matches_selector` — Returns `true` if `node` matches **any** selector in `sel`
-`crates/engine/layout/src/selector_query.rs:626` **fn** `computed_style_to_map` — Serialises a [`ComputedStyle`] to a CSS property → resolved-value map
-`crates/engine/layout/src/selector_query.rs:977` **fn** `computed_style_json` — Serialises a [`ComputedStyle`] into a deterministic JSON object string
-`crates/engine/layout/src/selector_query.rs:999` **fn** `computed_style_json_by_selector` — Like [`computed_style_by_selector`] but returns the full computed-style JSON
-`crates/engine/layout/src/selector_query.rs:1014` **struct** `MatchedRule` — One CSS rule that matched a specific DOM node
-`crates/engine/layout/src/selector_query.rs:1034` **fn** `matched_rules_for_node` — Return all CSS rules from `sheet` whose selectors match `node` in `doc`
+`crates/engine/layout/src/selector_query.rs:626` **fn** `inline_segment_style_map` — Serialises the three properties [`crate::INLINE_SEGMENT_PROPERTIES`] names,
+`crates/engine/layout/src/selector_query.rs:657` **fn** `computed_style_to_map` — Serialises a [`ComputedStyle`] to a CSS property → resolved-value map
+`crates/engine/layout/src/selector_query.rs:1008` **fn** `computed_style_json` — Serialises a [`ComputedStyle`] into a deterministic JSON object string
+`crates/engine/layout/src/selector_query.rs:1030` **fn** `computed_style_json_by_selector` — Like [`computed_style_by_selector`] but returns the full computed-style JSON
+`crates/engine/layout/src/selector_query.rs:1045` **struct** `MatchedRule` — One CSS rule that matched a specific DOM node
+`crates/engine/layout/src/selector_query.rs:1065` **fn** `matched_rules_for_node` — Return all CSS rules from `sheet` whose selectors match `node` in `doc`
 `crates/engine/layout/src/snapshot.rs:65` **fn** `serialize_layout_tree` — Корневой entry-point: рекурсивно сериализует всё дерево
 `crates/engine/layout/src/stacking.rs:34` **struct** `StackingContextId` — Идентификатор stacking context-а. Монотонно растёт от 0; 0 = root
 `crates/engine/layout/src/stacking.rs:40` **fn** `raw`
@@ -5629,4 +5630,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:228` **fn** `count`
 
 ---
-*Total: 5552 symbols in 24 crates*
+*Total: 5553 symbols in 24 crates*
