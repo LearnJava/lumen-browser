@@ -107,17 +107,20 @@ class Mechanism:
         #: (`.focus(` is everywhere; `.focus(` *and* a `load` handler is the
         #: BUG-794 shape).
         self.mode = mode
-        #: Optional callable over the joined source text, used instead of
+        #: Optional callable `(joined source text, test id)` used instead of
         #: `patterns` when a line-at-a-time regex cannot express the marker.
+        #: The id is what tells an XML document from an HTML one (the file
+        #: extension is what `wptserve` derives the content type from), and is
+        #: `None` when the mechanism is matched against browser output.
         #: BUG-804 needs it: `createElement('style')` alone is not evidence —
         #: `resources/check-layout-th.js` mints one to highlight failures and
         #: never waits on it — so the wait has to be tied to the *same*
         #: variable, which is a two-step match across lines.
         self.predicate = predicate
 
-    def matches(self, lines):
+    def matches(self, lines, test_id=None):
         if self.predicate is not None:
-            return self.predicate("\n".join(lines))
+            return self.predicate("\n".join(lines), test_id)
         hits = 0
         for pat in self.patterns:
             if any(pat.search(line) for line in lines):
@@ -333,7 +336,7 @@ def _waits_on_var(text, var):
         text) is not None
 
 
-def _resource_event_marker(text):
+def _resource_event_marker(text, test_id=None):
     """BUG-804 marker: the test waits for a `load`/`error` the engine never fires.
 
     Two shapes, both verified live (WPT-RUN-6 slice 12). The attribute shape is
@@ -358,7 +361,7 @@ _CREATE_AUDIO_RE = re.compile(
     r"document\.createElement\(['\"]audio['\"]\))", re.IGNORECASE)
 
 
-def _audio_src_marker(text):
+def _audio_src_marker(text, test_id=None):
     """BUG-799 marker: the page gives an `<audio>` element a `src`.
 
     That single act freezes the page — `AudioPlaybackProvider::load` deadlocks
@@ -382,14 +385,84 @@ def _audio_src_marker(text):
                for var in _CREATE_AUDIO_RE.findall(text))
 
 
+#: Extensions `wptserve` hands out as a real XML content type
+#: (`application/xhtml+xml`, `image/svg+xml`, `text/xml`). Everything else is
+#: parsed as HTML by a conforming browser too, so the same markup in a `.html`
+#: file is not evidence of anything.
+_XML_EXTENSIONS = (".xhtml", ".xht", ".svg", ".xml")
+
+#: `<h:script src="...">` — a namespace-prefixed element. Only an XML parser
+#: resolves the prefix; the HTML tree builder takes `h:script` for an unknown
+#: element name, so the script is never a script.
+_PREFIXED_SCRIPT_RE = re.compile(r"<\w+:script\b", re.IGNORECASE)
+
+#: `<script src="..."/>` — self-closing, which XML honours and HTML does not:
+#: everything up to the next `</script>` becomes this element's text, so the
+#: rest of the document (including the remaining `<script src>` tags) is
+#: swallowed.
+_SELFCLOSED_SCRIPT_RE = re.compile(r"<script\b[^>]*/\s*>", re.IGNORECASE)
+
+#: `<script><![CDATA[ ... ]]></script>` — in HTML the marker is not markup but
+#: the first characters of the script text, i.e. a syntax error.
+_CDATA_SCRIPT_RE = re.compile(r"<script\b[^>]*>\s*(?://[^\n]*\n\s*)?<!\[CDATA\[",
+                              re.IGNORECASE)
+
+
+def _xml_document_script_marker(text, test_id=None):
+    """BUG-786 marker: an XML document whose scripts HTML parsing loses.
+
+    Navigation has no XML path at all — `crates/shell/src/main.rs:5365` runs
+    `lumen_html_parser::parse` on every response and only stamps
+    `document.contentType` from the header afterwards. BUG-786 measured the
+    `<style><![CDATA[` half of the damage; the script half is what makes the
+    test TIMEOUT rather than merely render wrong, and it comes in three shapes,
+    each measured separately by `tests/wpt/verify_document_and_record_gaps.py`
+    (WPT-RUN-6 slice 16):
+
+    * prefixed `<h:script src>` — never becomes a script element, so the file's
+      `testharness.js` is not even *requested* (the corpus log of every
+      `dom/nodes/Element-*-svg.svg` shows the document parsed and painted with
+      no GET for the harness);
+    * self-closing `<script src="..."/>` — the first one swallows the rest of
+      the document as its own text (`css/cssom/MediaList2.xhtml` loads
+      `testharness.js` and then neither `testharnessreport.js` nor the test
+      body exists);
+    * `<![CDATA[` at the head of an inline script — `script error: JS runtime
+      error: Unexpected token '<'`, which BUG-591 then swallows.
+
+    The same markup inside a `.html` file is not evidence: there a conforming
+    browser parses as HTML too, so the test would not be written this way.
+    Hence the extension check — it is what `wptserve` derives the content type
+    from — and hence `None` (an output-stage call) never matches.
+    """
+    if not test_id:
+        return False
+    if not test_id.split("?")[0].lower().endswith(_XML_EXTENSIONS):
+        return False
+    return bool(_PREFIXED_SCRIPT_RE.search(text)
+                or _SELFCLOSED_SCRIPT_RE.search(text)
+                or _CDATA_SCRIPT_RE.search(text))
+
+
 SOURCE_MARKERS = [
     # First on purpose: see `_audio_src_marker` — the page stops dead at the
-    # `src` assignment, before anything else it was going to do.
+    # `src` assignment, before anything else it was going to do. It sorts above
+    # the XML marker too: the media load is driven by the parser, so it happens
+    # whether or not the document's scripts survived parsing.
     Mechanism(
         "audio-src-deadlock", "BUG-799", [],
         "giving an `<audio>` a `src` never returns (deadlock in the audio "
         "provider), so the whole page freezes on the spot",
         predicate=_audio_src_marker,
+    ),
+    # Second: when the harness itself never arrives, nothing else the file
+    # contains can be what the test is waiting for.
+    Mechanism(
+        "xml-document-scripts-lost", "BUG-786", [],
+        "an XML document is parsed by the HTML tree builder, which loses "
+        "prefixed / self-closed / CDATA-wrapped scripts — the harness or the "
+        "test body never runs",
+        predicate=_xml_document_script_marker,
     ),
     Mechanism(
         "fonts-ready", "BUG-564", [r"document\.fonts\.ready"],
@@ -489,6 +562,61 @@ SOURCE_MARKERS = [
         "`beginEvent`/`endEvent`/`repeatEvent` a test waits for never fire",
     ),
     Mechanism(
+        # Probed live in slice 17 (`verify_layout_shift_and_peer_gaps.py`): the
+        # API is *advertised* — `supportedEntryTypes` lists `layout-shift` and
+        # `observe()` accepts it — and never delivers, because the Rust trigger
+        # `deliver_layout_shift` (`crates/shell/src/main.rs:2925`) is
+        # `#[allow(dead_code)]` with no call site in layout/reflow at all. The
+        # advertisement is what turns these into TIMEOUTs rather than FAILs:
+        # WPT's own `ScoreWatcher` (`layout-instability/resources/util.js`)
+        # throws unless the type is listed, so an honest "unsupported" would
+        # end the test at once instead of hanging it on `watcher.promise`.
+        "layout-shift-never-delivered", "BUG-809",
+        [r"['\"]layout-shift['\"]|\bScoreWatcher\b|\bLayoutShift\b"],
+        "no `layout-shift` entry is ever delivered (the shell-side trigger has "
+        "no call site), while `supportedEntryTypes` advertises the type — so a "
+        "CLS test observes, shifts and waits forever",
+    ),
+    Mechanism(
+        # Slice 17, same probe: offer/answer complete locally, but the two
+        # `RTCPeerConnection`s are never connected to each other —
+        # `ondatachannel` never fires on the remote side, `connectionState`
+        # is a getter hardcoded to `new`, and a data channel stays
+        # `connecting`. Every canonical WPT shape (`RTCPeerConnection-helper.js`
+        # `exchangeOfferAnswer` + wait on the remote peer) therefore hangs
+        # before its own assertions start.
+        "webrtc-no-remote-peer", "BUG-727",
+        [r"new RTCPeerConnection\(|createDataChannel\(|\bRTCDataChannel\b|"
+         r"RTCPeerConnection-helper"],
+        "the `RTCPeerConnection` stub never connects two peers — no "
+        "`ondatachannel`, no connection-state change, a data channel never "
+        "opens",
+    ),
+    Mechanism(
+        # Slice 17, confirmed live by instrumenting `_handle_action`: the
+        # action really does reach the executor, which answers
+        # `failure: action 'action_sequence' not implemented by Lumen's
+        # minimal WPT executor`; the page-side rejection is then swallowed
+        # (BUG-716) and the test hangs instead of failing. Element-targeted
+        # actions do not even get that far — `testdriver-extra.js`'s
+        # `get_context` throws on the missing `document.defaultView`
+        # (BUG-622) — but the observable outcome is the same silent TIMEOUT.
+        # `click`/`generate_test_report` are excluded: those two are
+        # implemented.
+        "testdriver-action-unimplemented", "BUG-810",
+        [r"test_driver\.Actions\(|test_driver\.action_sequence\(|"
+         r"test_driver\.send_keys\(|test_driver\.bless\(|"
+         r"test_driver\.set_permission\(|test_driver\.delete_all_cookies\(|"
+         r"test_driver\.get_computed_(?:role|label)\(|"
+         r"test_driver\.(?:add|remove)_virtual_authenticator\(|"
+         r"test_driver\.set_window_rect\(|test_driver\.minimize_window\(|"
+         r"test_driver\.freeze\(|test_driver\.send_report\("],
+        "every `test_driver.*` action but `click`/`generate_test_report` is "
+        "rejected by `executorlumen.py::_handle_action`, and the rejection is "
+        "invisible to the page — so the test waits on an action that will "
+        "never complete",
+    ),
+    Mechanism(
         # Deliberately after the two above and after every wait-shaped marker:
         # plenty of tests build an observer *and* an iframe, and the iframe is
         # the older, better-understood cause.
@@ -572,13 +700,30 @@ def source_path(test_id, root=WPT_ROOT):
     return os.path.join(root, path)
 
 
+def _decode_source(path):
+    """Text of a test/helper file, or None if it cannot be read.
+
+    The BOM sniff is not cosmetic: `html/infrastructure/urls/resolving-urls/
+    query-encoding/utf-16{le,be}.html` and their kin are stored as UTF-16, and
+    decoding those bytes as UTF-8 leaves every character separated by a
+    replacement byte, so not one marker regex can ever match. All 20 UTF-16
+    ids of the WPT-RUN-5 residual were invisible to this stage for that reason
+    alone (WPT-RUN-6 slice 16).
+    """
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except OSError:
+        return None
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16", "replace")
+    return raw.decode("utf-8", "replace")
+
+
 def _read_source(path, cache):
     if path not in cache:
-        try:
-            with open(path, encoding="utf-8", errors="replace") as handle:
-                cache[path] = handle.read().splitlines()
-        except OSError:
-            cache[path] = None
+        text = _decode_source(path)
+        cache[path] = None if text is None else text.splitlines()
     return cache[path]
 
 
@@ -639,16 +784,18 @@ def helper_paths(test_id, root):
     (WPT-RUN-6 slice 13).
     """
     src = source_path(test_id, root)
-    try:
-        with open(src, encoding="utf-8", errors="replace") as handle:
-            text = handle.read()
-    except OSError:
+    text = _decode_source(src)
+    if text is None:
         return []
     out = []
     for ref in (_SCRIPT_SRC_RE.findall(text) + _META_SCRIPT_RE.findall(text)
                 + _ES_IMPORT_RE.findall(text)):
         ref = ref.split("#")[0].split("?")[0]
-        if not ref or ref in _NOT_A_HELPER or not ref.endswith(".js"):
+        # `.mjs` as well as `.js`: an ES-module helper is how the whole
+        # `browsing-the-web` family builds its `<iframe>` (`helpers.mjs`), and
+        # dropping the extension made 22 of its residual ids unattributable
+        # (WPT-RUN-6 slice 16).
+        if not ref or ref in _NOT_A_HELPER or not ref.endswith((".js", ".mjs")):
             continue
         if ref.startswith("/"):
             path = os.path.join(root, ref.lstrip("/"))
@@ -658,6 +805,34 @@ def helper_paths(test_id, root):
             path = os.path.normpath(os.path.join(os.path.dirname(src), ref))
         if os.path.isfile(path):
             out.append(path)
+    return out
+
+
+#: `subsetTestByKey('history', async_test, ...)` — `common/subset-tests-by-key.js`.
+#: A test file using it is really N test files: the manifest expands it into one
+#: id per `?include=<key>` variant, and a variant runs only its own blocks.
+_SUBSET_KEY_RE = re.compile(r"subsetTestByKey\(\s*['\"]([^'\"]+)['\"]")
+
+
+def _restrict_to_subset(lines, key):
+    """Drop the blocks belonging to keys other than `key`.
+
+    Without this, all ten `?include=` variants of `query-encoding/utf-16le.html`
+    read the same 600-line helper and all ten got the first marker any block of
+    it matched — `iframe-no-nested-context`, from the `submit` block, even for
+    `?include=xhr`, whose whole body is one `XMLHttpRequest` (WPT-RUN-6 slice
+    16). Blocks are sequential in every user of this helper, so "skip from a
+    foreign key's call until the next call" is enough; the preamble before the
+    first call is always kept, because it is what the selected block runs
+    inside.
+    """
+    out, skipping = [], False
+    for line in lines:
+        match = _SUBSET_KEY_RE.search(line)
+        if match:
+            skipping = match.group(1) != key
+        if not skipping:
+            out.append(line)
     return out
 
 
@@ -680,8 +855,11 @@ def classify_source(test_id, root, cache, follow_helpers=True):
                 lines += helper_lines
     if not lines:
         return None
+    subset = re.search(r"[?&]include=([^&]+)", test_id or "")
+    if subset and any(_SUBSET_KEY_RE.search(line) for line in lines):
+        lines = _restrict_to_subset(lines, subset.group(1))
     for mech in SOURCE_MARKERS:
-        if mech.matches(lines):
+        if mech.matches(lines, test_id):
             return mech.key
     return None
 
@@ -1303,6 +1481,163 @@ def selftest():
                          "assert_equals(getComputedStyle(el).animationName, 'fade');</script>")
         check(classify_source("/a/anim-plain.html", tmp, {}) is None,
               "a test that only reads animation style must not be claimed")
+
+        # Stage 2, slice 16. An XML document loses three kinds of script to the
+        # HTML tree builder; each shape was measured on its own page by
+        # `verify_document_and_record_gaps.py` before the marker was written.
+        with open(os.path.join(tmp, "a", "prefixed.svg"), "w", encoding="utf-8") as handle:
+            handle.write('<?xml version="1.0"?>\n'
+                         '<svg xmlns="http://www.w3.org/2000/svg" '
+                         'xmlns:h="http://www.w3.org/1999/xhtml">\n'
+                         '<h:script src="/resources/testharness.js"/></svg>')
+        check(classify_source("/a/prefixed.svg", tmp, {}) == "xml-document-scripts-lost",
+              "a prefixed <h:script> in an SVG document was not claimed")
+        with open(os.path.join(tmp, "a", "selfclosed.xhtml"), "w", encoding="utf-8") as handle:
+            handle.write('<html xmlns="http://www.w3.org/1999/xhtml"><head>\n'
+                         '<script src="/resources/testharness.js"/>\n'
+                         "</head><body><script>test(() => {});</script></body></html>")
+        check(classify_source("/a/selfclosed.xhtml", tmp, {}) == "xml-document-scripts-lost",
+              "a self-closing <script src/> in an XHTML document was not claimed")
+        with open(os.path.join(tmp, "a", "cdata.xht"), "w", encoding="utf-8") as handle:
+            handle.write('<html xmlns="http://www.w3.org/1999/xhtml"><body>\n'
+                         "<script><![CDATA[\ntest(() => {});\n]]></script>\n"
+                         "</body></html>")
+        check(classify_source("/a/cdata.xht", tmp, {}) == "xml-document-scripts-lost",
+              "a CDATA-wrapped inline script was not claimed")
+        # The extension is the evidence: `wptserve` types a `.html` file as
+        # `text/html`, where a conforming browser parses exactly the way Lumen
+        # does — the same bytes are then not a defect at all.
+        with open(os.path.join(tmp, "a", "cdata.html"), "w", encoding="utf-8") as handle:
+            handle.write("<body>\n<script><![CDATA[\ntest(() => {});\n]]></script>\n</body>")
+        check(classify_source("/a/cdata.html", tmp, {}) is None,
+              "the same markup in an HTML file must not be claimed")
+        # An XML document whose scripts survive HTML parsing is not this
+        # mechanism — `/a/smil.svg` above is exactly that shape and must keep
+        # its own marker.
+        check(classify_source("/a/smil.svg", tmp, {}) == "smil-animation",
+              "a plain <script> in an SVG document must not be claimed as lost")
+        # Ordering: the harness never arriving outranks whatever the file also
+        # waits for — but not the audio deadlock, which the parser triggers
+        # whether or not any script survived.
+        with open(os.path.join(tmp, "a", "xml-frame.svg"), "w", encoding="utf-8") as handle:
+            handle.write('<svg xmlns="http://www.w3.org/2000/svg" '
+                         'xmlns:h="http://www.w3.org/1999/xhtml">\n'
+                         '<h:script src="/resources/testharness.js"/>\n'
+                         "<h:script>document.fonts.ready.then(() => t.done());"
+                         "</h:script></svg>")
+        check(classify_source("/a/xml-frame.svg", tmp, {}) == "xml-document-scripts-lost",
+              "a lost harness must outrank the wait the file never reaches")
+        with open(os.path.join(tmp, "a", "xml-audio.xhtml"), "w", encoding="utf-8") as handle:
+            handle.write('<html xmlns="http://www.w3.org/1999/xhtml"><body>\n'
+                         '<audio src="/media/sine440.mp3"/>\n'
+                         '<script src="/resources/testharness.js"/>\n'
+                         "</body></html>")
+        check(classify_source("/a/xml-audio.xhtml", tmp, {}) == "audio-src-deadlock",
+              "the parser-driven audio deadlock must still sort first")
+
+        # Stage 2, slice 16: a UTF-16 test file. Decoded as UTF-8 its markers
+        # are separated by replacement bytes and nothing can ever match.
+        with open(os.path.join(tmp, "a", "utf16.html"), "wb") as handle:
+            handle.write("<script>document.fonts.ready.then(() => done());</script>"
+                         .encode("utf-16"))
+        check(classify_source("/a/utf16.html", tmp, {}) == "fonts-ready",
+              "a UTF-16 source was not decoded")
+
+        # Stage 2, slice 16: an ES-module helper with the `.mjs` extension.
+        with open(os.path.join(tmp, "a", "mjs.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script type="module">\n'
+                         'import {createIframe} from "./helpers.mjs";\n'
+                         "promise_test(async t => { await createIframe(t); });\n"
+                         "</script>")
+        with open(os.path.join(tmp, "a", "helpers.mjs"), "w", encoding="utf-8") as handle:
+            handle.write("export function createIframe(t) {\n"
+                         "  const iframe = document.createElement('iframe');\n"
+                         "  iframe.onload = () => {};\n}")
+        check(classify_source("/a/mjs.html", tmp, {}) == "iframe-no-nested-context",
+              "an .mjs helper was not followed")
+
+        # Stage 2, slice 16: `?include=` selects the blocks that actually run,
+        # so a marker from a sibling block must not be attributed to it.
+        with open(os.path.join(tmp, "a", "subset.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script src="subset-helper.js"></script>')
+        with open(os.path.join(tmp, "a", "subset-helper.js"), "w", encoding="utf-8") as handle:
+            handle.write("subsetTestByKey('frames', async_test, function() {\n"
+                         "  const iframe = document.createElement('iframe');\n"
+                         "  iframe.onload = this.step_func_done(function() {});\n"
+                         "});\n"
+                         "subsetTestByKey('fonts', async_test, function() {\n"
+                         "  document.fonts.ready.then(() => this.done());\n"
+                         "});")
+        check(classify_source("/a/subset.html?include=fonts", tmp, {}) == "fonts-ready",
+              "the variant's own block was not the one read")
+        # The load-bearing one: `fonts-ready` outranks the frame marker, so
+        # reading the whole file would answer `fonts-ready` here too.
+        check(classify_source("/a/subset.html?include=frames", tmp, {})
+              == "iframe-no-nested-context",
+              "a sibling block's marker was attributed to this variant")
+        check(classify_source("/a/subset.html", tmp, {}) == "fonts-ready",
+              "a file with no ?include= must still be read whole")
+
+        # Stage 2, slice 17. Three more silent waits, each measured live
+        # before the marker was written (`verify_layout_shift_and_peer_gaps.py`
+        # for the first two, an instrumented `_handle_action` for the third).
+        with open(os.path.join(tmp, "a", "cls.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>new PerformanceObserver(l => t.done())\n"
+                         "  .observe({entryTypes: ['layout-shift']});\n"
+                         "shifter.style.top = '160px';</script>")
+        check(classify_source("/a/cls.html", tmp, {}) == "layout-shift-never-delivered",
+              "an observe-and-shift layout-instability test was not claimed")
+        # The category's own helper is the marker for the tests that never
+        # name the entry type themselves.
+        with open(os.path.join(tmp, "a", "cls-watcher.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script src="util.js"></script>\n'
+                         "<script>const watcher = new ScoreWatcher;\n"
+                         "promise_test(async () => { await watcher.promise; });</script>")
+        check(classify_source("/a/cls-watcher.html", tmp, {})
+              == "layout-shift-never-delivered",
+              "a ScoreWatcher test was not claimed")
+        # A `PerformanceObserver` on a type the engine *does* deliver is not
+        # this mechanism — the marker must key on the entry type, not on the
+        # observer.
+        with open(os.path.join(tmp, "a", "perf-paint.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>new PerformanceObserver(l => t.done())\n"
+                         "  .observe({entryTypes: ['paint']});</script>")
+        check(classify_source("/a/perf-paint.html", tmp, {}) is None,
+              "an observer on a delivered entry type must not be claimed")
+        with open(os.path.join(tmp, "a", "rtc.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>const pc1 = new RTCPeerConnection();\n"
+                         "pc2.ondatachannel = t.step_func_done(() => {});\n"
+                         "pc1.createDataChannel('x');</script>")
+        check(classify_source("/a/rtc.html", tmp, {}) == "webrtc-no-remote-peer",
+              "a two-peer RTCPeerConnection test was not claimed")
+        with open(os.path.join(tmp, "a", "actions.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script src="/resources/testdriver.js"></script>\n'
+                         "<script>promise_test(async () => {\n"
+                         "  await new test_driver.Actions().scroll(0, 0, 0, 50).send();\n"
+                         "});</script>")
+        check(classify_source("/a/actions.html", tmp, {})
+              == "testdriver-action-unimplemented",
+              "a test_driver.Actions() wait was not claimed")
+        # `click()` is implemented by the executor, so a test using only that
+        # one is not blocked by this gap.
+        with open(os.path.join(tmp, "a", "click.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script src="/resources/testdriver.js"></script>\n'
+                         "<script>promise_test(async () => {\n"
+                         "  await test_driver.click(document.getElementById('b'));\n"
+                         "});</script>")
+        check(classify_source("/a/click.html", tmp, {}) is None,
+              "the implemented click action must not be blamed on BUG-810")
+        # Ordering: the frame that is never loaded is the older, better
+        # understood cause and keeps its tests (the shape of every
+        # `pointerevents/*-in-iframe.html`).
+        with open(os.path.join(tmp, "a", "actions-frame.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script src="/resources/testdriver.js"></script>\n'
+                         "<iframe src=child.html></iframe>\n"
+                         "<script>iframe.onload = () => {};\n"
+                         "new test_driver.Actions().scroll(0, 0, 0, 50).send();</script>")
+        check(classify_source("/a/actions-frame.html", tmp, {})
+              == "iframe-no-nested-context",
+              "an unimplemented action must not outrank the frame the test waits on")
 
     for msg in failures:
         print("FAIL:", msg)
