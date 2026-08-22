@@ -58,7 +58,7 @@ via it) and any category touching page metadata will hit the same throw.
 дерева — первый `<head>` в порядке документа) и геттер `document.head` в
 живом объекте `document` (`crates/js/src/dom.rs`); заодно `head`/`body`
 появились у отсоединённых документов (частично закрывает
-[BUG-415](BUG-415-OPEN.md)).
+[BUG-415](BUG-415-FIXED.md)).
 
 Найдено заново на живой странице `https://www.tbank.ru/`: загрузчик чанков
 webpack заканчивается на `document.head.appendChild(script)`, поэтому на

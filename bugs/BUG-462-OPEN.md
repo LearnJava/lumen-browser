@@ -39,7 +39,7 @@ detached-документ). `element.ownerDocument.contains` не определ
 
 ## Почему это не дубликат уже заведённых багов
 
-- [BUG-415](BUG-415-OPEN.md) фиксирует отсутствие `contains`/`removeChild`/… на
+- [BUG-415](BUG-415-FIXED.md) фиксирует отсутствие `contains`/`removeChild`/… на
   **отсоединённом** документе (`createHTMLDocument`/`new Document()`) — другой
   строитель (`_lumen_build_detached_document`), другой объект.
 - [BUG-367](BUG-367-FIXED.md) документирует, что `Node.prototype` в живом дереве несёт

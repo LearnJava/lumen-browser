@@ -68,7 +68,7 @@
 схлопываются — `../../../../html/resources/common.js` → HTTP 404,
 `newHTMLDocument is not defined`), [BUG-574](BUG-574-OPEN.md)
 (`elementDocument.contains is not a function`, ломает `test_driver.click()`
-в 52 хитах), [BUG-415](BUG-415-OPEN.md) (отсоединённый документ
+в 52 хитах), [BUG-415](BUG-415-FIXED.md) (отсоединённый документ
 `createHTMLDocument()` без Node-методов — `document.createNodeIterator`/
 `importNode` "not a function" на нём же), [BUG-464](BUG-464-OPEN.md)/
 [BUG-477](BUG-477-OPEN.md) (`document.elementFromPoint`/`elementsFromPoint`

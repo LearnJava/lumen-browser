@@ -93,7 +93,7 @@ Top error classes from the run log (`sanitizer-basic-filtering.html`,
   defined on ordinary `Element` instances (`dom.rs:3003`), so these calls are
   landing on some other object shape (a `Document.parseHTML(...).body`
   result, or a node from a detached document per
-  [BUG-415](../bugs/BUG-415-OPEN.md)) — plausible but not confirmed; leave
+  [BUG-415](../bugs/BUG-415-FIXED.md)) — plausible but not confirmed; leave
   for a follow-up pass once item 1 exists to actually construct the objects
   these tests exercise.
 - `fetch: network error for sethtml-tree-construction.sub.dat` /

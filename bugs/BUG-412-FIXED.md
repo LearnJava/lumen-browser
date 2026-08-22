@@ -118,6 +118,6 @@ HTML LS §3.1.5 «DOM tree accessors»: `document.getElementsByName(elementName)
   этом баге не осталось.
 
 Вне скоупа (заведено отдельно): именованный доступ `window.<name>` — [BUG-384](BUG-384-FIXED.md);
-tree-accessor'ы отсоединённого документа — [BUG-415](BUG-415-OPEN.md);
+tree-accessor'ы отсоединённого документа — [BUG-415](BUG-415-FIXED.md);
 `Element.prototype.getElementsByName` спекой не предусмотрен (метод только на `Document`).
 
