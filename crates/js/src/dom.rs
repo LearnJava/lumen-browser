@@ -676,10 +676,11 @@ ErrorEvent.prototype.constructor = ErrorEvent;
 // PromiseRejectionEvent — HTML LS §8.1.7.5, carried by `unhandledrejection` /
 // `rejectionhandled`.
 //
-// BUG-702: the interface exists here for construction and feature detection; Lumen
-// does not yet *fire* the two events (that needs V8's promise-reject callback at
-// isolate level — see BUG-716). Defining it is nevertheless load-bearing, not
-// cosmetic: core-js's `promise-constructor-detection` treats a browser without
+// BUG-702 added the interface for construction and feature detection; BUG-716
+// wired the actual dispatch via V8's isolate-level promise-reject callback
+// (`v8_runtime.rs`) calling `_lumen_dispatch_unhandled_rejection` below. Defining
+// the interface is not merely cosmetic on its own, though: core-js's
+// `promise-constructor-detection` treats a browser without
 // `PromiseRejectionEvent` as one whose native Promise cannot be trusted, and
 // replaces `globalThis.Promise` with its own polyfill on every site that ships
 // core-js. On `tbank.ru/auth/login/` that swap ended in an endless storm of
@@ -10258,7 +10259,7 @@ var window = {
     onload: null,
     // BUG-702: present so `'onunhandledrejection' in window` is true, which is the
     // other half of the feature test libraries run for promise-rejection support.
-    // Nothing dispatches to them yet — see BUG-716.
+    // Dispatched via `_lumen_dispatch_unhandled_rejection` — see BUG-716.
     onunhandledrejection: null,
     onrejectionhandled: null,
     // `location` is deliberately absent here: it is defined directly on
@@ -10431,6 +10432,25 @@ var window = {
         }, 0);
     },
 };
+
+// _lumen_dispatch_unhandled_rejection (BUG-716) — Rust→JS bridge for
+// `v8::Isolate::set_promise_reject_callback` (`v8_runtime.rs`). Called
+// directly with the *live* `promise`/`reason` values, never through
+// `eval`/JSON — an `Error` reason must keep its class and `.stack`, and
+// `PromiseRejectionEvent.promise` must be the actual settled promise per
+// HTML LS §8.1.7.5. `type` is 'unhandledrejection' (cancelable — its default
+// action is a console report, which the Rust side suppresses when this
+// returns `true`) or 'rejectionhandled' (not cancelable, no default action).
+function _lumen_dispatch_unhandled_rejection(type, promise, reason) {
+    var evt = new PromiseRejectionEvent(type, {
+        promise: promise,
+        reason: reason,
+        cancelable: type === 'unhandledrejection',
+        bubbles: false,
+    });
+    window.dispatchEvent(evt);
+    return !!evt.defaultPrevented;
+}
 
 // ── queueMicrotask (HTML LS §8.1.4.4) ────────────────────────────────────────
 // Schedules `fn` as a microtask; implemented via a resolved Promise chain, which

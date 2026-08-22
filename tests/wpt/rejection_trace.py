@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """Make an unhandled promise rejection visible in a WPT run (WPT-RUN-6 slice 10).
 
-Lumen never dispatches `unhandledrejection` ([BUG-716](../../bugs/BUG-716-OPEN.md)):
-there is no `v8::Isolate::set_promise_reject_callback` anywhere in the
-workspace, so a promise that rejects with nobody chained onto it produces no
-event, no console line and no stderr output. `testharness.js` reports a test
-that fails inside a promise chain *through* that event
-(`addEventListener("unhandledrejection", ...)` → `error_handler`), so in Lumen
-such a test does not FAIL — it goes quiet and is killed by the harness timeout.
-The verdict is TIMEOUT, the browser log is clean, and `timeout_audit.py` files
-it under `unclassified`.
+At the time this script was written, Lumen never dispatched
+`unhandledrejection` ([BUG-716](../../bugs/BUG-716-FIXED.md), fixed
+2026-08-22: `v8::Isolate::set_promise_reject_callback` in `v8_runtime.rs`),
+so a promise that rejects with nobody chained onto it produced no event, no
+console line and no stderr output. `testharness.js` reports a test that fails
+inside a promise chain *through* that event
+(`addEventListener("unhandledrejection", ...)` → `error_handler`), so before
+the fix such a test did not FAIL — it went quiet and was killed by the
+harness timeout. The verdict was TIMEOUT, the browser log was clean, and
+`timeout_audit.py` filed it under `unclassified`. With BUG-716 fixed, this
+specific TIMEOUT class should now surface as an ordinary FAIL on its own —
+this tracer remains useful as an independent, finer-grained trace of
+rejection activity regardless (pending re-measurement of how much of the
+`unclassified` bucket it now explains).
 
 This script instruments a run so that class becomes measurable: it appends a
 tracker to Lumen's own `tests/wpt/resources/testharnessreport.js` (loaded by

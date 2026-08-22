@@ -1,6 +1,6 @@
 # BUG-716: `unhandledrejection`/`rejectionhandled` никогда не диспатчатся
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-22 (P1)
 **Компонент:** js (`crates/js/src/v8_runtime.rs` — уровень изолята; интерфейс события живёт в `crates/js/src/dom.rs`, `WEB_API_SHIM`)
 **Найден:** P3, при закрытии [BUG-702](BUG-702-FIXED.md), 2026-08-09
 
@@ -121,3 +121,62 @@ JS-реализация трекинга из HTML LS §8.1.7.5 поверх н�
 `throw` печатает `script error: …` в stderr, но `addEventListener('error', …)`
 на window не срабатывает, поэтому и синхронный провал вне `test()` тоже
 деградирует до TIMEOUT.
+
+## Исправлено (P1, 2026-08-22)
+
+Реализован ровно план из раздела «Что нужно сделать» выше, тремя пунктами
+(1)–(4), с одним отличием от диагностического сниппета: доставка события
+отложена, а не синхронная.
+
+* **`v8::Isolate::set_promise_reject_callback`** (`v8_runtime.rs::install_promise_reject_hook`,
+  зовётся из `v8_thread_main` рядом с `install_dynamic_import_hook`) регистрирует
+  `lumen_promise_reject_callback` — голый `extern "C" fn` без замыкания, как и
+  предупреждал сам баг: `V8Inner`/`Global<Context>` ему недоступны, контекст
+  восстанавливается только из `v8::callback_scope!(unsafe scope, &msg)` (тот же
+  приём, что в диагностическом сниппете).
+* **Список «about-to-be-notified»** — три `thread_local!` (`PENDING_UNHANDLED`,
+  `NOTIFIED_UNHANDLED`, `PENDING_HANDLED`), ключ — identity hash промиса
+  (`Promise::get_identity_hash`). `PromiseRejectWithNoHandler` кладёт промис
+  (и причину, снятую **сразу** через `msg.get_value()` — на флаше её взять
+  уже неоткуда) в `PENDING_UNHANDLED`. `PromiseHandlerAddedAfterReject` либо
+  вычёркивает из `PENDING_UNHANDLED` (обработчик успел до флаша — событий нет
+  вовсе, по спеке), либо, если промис уже был выдан как `unhandledrejection`
+  (лежит в `NOTIFIED_UNHANDLED`), переносит его в `PENDING_HANDLED` для
+  `rejectionhandled`.
+* **Оповещение в конце микрозадачного чекпоинта** — не через явный V8-хук
+  (`MicrotasksCompletedCallback` в `rusty_v8` 150.1.0 не открыт с этой
+  сигнатурой), а тем же приёмом, что использует эмбеддинг Node.js/Deno для
+  этого же колбэка: `scope.enqueue_microtask(flush_fn)`. Это ровно даёт нужное
+  свойство спеки шаг 3 — `.catch()`, добавленный в тот же синхронный тик
+  (`Promise.reject(x).catch(...)` двумя соседними строками — самый частый
+  паттерн), гасит уведомление, потому что `PromiseHandlerAddedAfterReject`
+  успевает выполниться раньше, чем поставленная в очередь микрозадача.
+* **Мост в JS** — новая `_lumen_dispatch_unhandled_rejection(type, promise, reason)`
+  в `WEB_API_SHIM` (`dom.rs`, рядом с `PromiseRejectionEvent`) строит событие и
+  зовёт `window.dispatchEvent`, возвращая `defaultPrevented`. Flush-функция
+  (`v8_runtime.rs::flush_promise_rejections_callback`) находит её через
+  `ctx.global(scope).get(...)` и вызывает `Function::call` с **живыми**
+  `Local<Value>` — `promise`/`reason` передаются как есть, не через
+  `eval`/JSON. Это было не просто удобнее: единственный существовавший в
+  кодовой базе приём «вызвать JS-функцию по имени из Rust» — это
+  `eval(&format!("_lumen_fn('{arg}')"))` со строковой интерполяцией
+  (`_lumen_apply_ready_state` и др.) — не смог бы пронести `Error`-объект без
+  потери класса и `.stack`, а промис как аргумент вообще не сериализуется.
+
+`preventDefault()` на `unhandledrejection` (`cancelable: true`, `rejectionhandled`
+— нет) подавляет строку `[unhandled-rejection] <reason>` на stderr, которую
+иначе печатает Rust — тот самый диагностический вывод, чья ценность показана
+разбором BUG-703 выше.
+
+**Не входит в объём этого фикса:** воркерные глобальные области —
+`_lumen_dispatch_unhandled_rejection` определена только в `WEB_API_SHIM`
+страницы, `install_promise_reject_hook` регистрируется в `v8_thread_main`
+(общей точке создания изолята для любого рантайма, включая воркерный), так
+что колбэк там срабатывает, но лукап моста в JS молча промахивается — не
+регрессия, просто вне заявленного компонента. Более широкий пробел из
+[BUG-591](BUG-591-OPEN.md) — `window.onerror`/синхронный `throw` — им не
+затронут и остаётся открытым.
+
+**Проверено:** `cargo check -p lumen-js --features v8-backend` и
+`cargo clippy -p lumen-js --features v8-backend --all-targets -- -D warnings`
+— чисто.

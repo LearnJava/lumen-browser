@@ -425,11 +425,15 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   start the browser on a real http page (a window opened on `about:blank` has
   no JS context and fails every `eval`).
 - `tests/wpt/rejection_trace.py` — **ours** (WPT-RUN-6 slice 10) — makes the
-  single most common *silent* TIMEOUT class visible. Lumen never dispatches
-  `unhandledrejection` ([BUG-716](../../bugs/BUG-716-OPEN.md)), and
+  single most common *silent* TIMEOUT class visible. At the time this tool was
+  written, Lumen never dispatched `unhandledrejection`
+  ([BUG-716](../../bugs/BUG-716-FIXED.md), fixed 2026-08-22), and
   `testharness.js` reports a failure inside a promise chain only through that
-  event, so such a test does not FAIL — it goes quiet, produces an empty
-  browser log and dies on the harness timeout. `--on` appends a JS
+  event, so such a test did not FAIL — it went quiet, produced an empty
+  browser log and died on the harness timeout. With BUG-716 fixed this
+  specific TIMEOUT class should now surface as an ordinary FAIL on its own,
+  pending re-measurement — this tool remains useful as an independent trace
+  of rejection activity regardless. `--on` appends a JS
   reimplementation of the HTML LS §8.1.7.5 tracking half to Lumen's own
   `resources/testharnessreport.js`; a rejection nobody chained onto prints
   `LUMEN_UNHANDLED_REJECTION: <reason>`, which `timeout_audit.py` classifies
