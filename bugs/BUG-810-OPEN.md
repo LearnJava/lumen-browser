@@ -30,11 +30,14 @@ await actions.send();          // ← промис отклоняется, но 
 
 То есть экшен действительно доходит до исполнителя, тот отвечает
 `failure: action 'action_sequence' not implemented by Lumen's minimal WPT
-executor` — и на этом всё: `testdriver-extra.js` отклоняет промис страницы,
-а отклонённый промис в Lumen не порождает ни `unhandledrejection`, ни
-строки на stderr ([BUG-716](BUG-716-OPEN.md)), поэтому `testharness.js`
-провала не видит. TIMEOUT вместо FAIL — обычная связка BUG-716/
-[BUG-591](BUG-591-OPEN.md), здесь с обвязкой в роли источника.
+executor` — и на этом всё: `testdriver-extra.js` отклоняет промис страницы, и
+на момент этого замера отклонённый промис в Lumen не порождал ни
+`unhandledrejection`, ни строки на stderr ([BUG-716](BUG-716-FIXED.md),
+исправлен 2026-08-22), поэтому `testharness.js` провала не видел. TIMEOUT
+вместо FAIL была обычная связка BUG-716/[BUG-591](BUG-591-OPEN.md), здесь с
+обвязкой в роли источника — с фиксом BUG-716 этот конкретный случай должен
+теперь доходить до `testharness.js` как FAIL с осмысленным сообщением, но
+переизмерение прогоном за P2, не за этой заявкой.
 
 Второй тест того же прогона
 (`pointerevent_element_haspointercapture.html?mouse`) не дал даже этой
