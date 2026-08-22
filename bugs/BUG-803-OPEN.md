@@ -100,3 +100,17 @@ timeout 30 lumen --dump-layout tests/wpt/css/css-transforms/2d-rotate-notref.htm
 layout-тестами): `FAIL_ME(30)`, `translate3d(1px,2px,3px)`, `rotate(30)`,
 `rotate(30),`, `""`, `,`, `none` — все должны вернуть управление, валидные
 значения при этом разобраться.
+
+## Уточнение WPT-RUN-6 срезом 23 (2026-08-22)
+
+Механизм получил измеренный список id: **1** тест остатка снимка WPT-RUN-5
+(`svg-transform-loop`, `/css/css-transforms/2d-rotate-notref.html`, таблица
+`MEASURED` в `tests/wpt/verify_layout_hangs.py`) — и это по-прежнему худший
+зависший процесс снимка: 133 чужих TIMEOUT-а.
+
+Обе грани перезамерены на нынешней сборке и закреплены в `REPROS` пробы
+(`verify_layout_hangs.py --repros`): `svg-transform-underscore`
+(`transform="foo_bar(30)"`) и `svg-transform-bare-number` (`transform="1"`)
+виснут, `svg-transform-comma` (`transform=","`) падает с
+`index out of bounds: the len is 1 but the index is 1` на
+`box_tree.rs:1359` (rc=101), контроль `svg-transform-valid` — 0,01 с.

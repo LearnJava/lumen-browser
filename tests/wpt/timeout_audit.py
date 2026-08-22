@@ -33,16 +33,21 @@ importance — a test whose `testharness.js` was truncated by the TLS defect
 later, and reporting it as "missing harness global" would be reporting the
 symptom. Network-layer causes therefore sort above JS-level ones.
 
-**Three stages, in order of how much the evidence says.** `MECHANISMS` reads
+**Four stages, in order of how much the evidence says.** `MECHANISMS` reads
 what the browser printed while the test ran and matches the error text that
-names a cause. What survives that goes to `SOURCE_MARKERS`, which greps the
-test (and its helpers) for a wait that cannot finish — the silent mechanisms,
-which by construction print nothing. Only then does `WEAK_MECHANISMS` claim
-the rest of the *noisy* ones: a page that threw an exception the engine
-printed but no listener ever saw. That last stage sorts below the source
-markers on purpose — "something threw" is true of a `document.fonts.ready`
-page too, and reporting it that way would bury a mechanism that has a name
-(WPT-RUN-6 slice 14).
+names a cause. What survives that goes to `MEASURED_HANGS` — the ids that were
+*run standalone* under `--dump-layout` and did not finish (`verify_layout_hangs.py`,
+WPT-RUN-6 slice 23); executing the page is stronger evidence than reading it,
+and for these mechanisms no regex over the source could decide the question
+anyway (whether a grid item reaches past the last explicit line depends on the
+resolved track count, which `repeat(auto-fill, ...)` makes a function of the
+container width). Then `SOURCE_MARKERS`, which greps the test (and its helpers)
+for a wait that cannot finish — the silent mechanisms, which by construction
+print nothing. Only then does `WEAK_MECHANISMS` claim the rest of the *noisy*
+ones: a page that threw an exception the engine printed but no listener ever
+saw. That last stage sorts below the source markers on purpose — "something
+threw" is true of a `document.fonts.ready` page too, and reporting it that way
+would bury a mechanism that has a name (WPT-RUN-6 slice 14).
 
 **Collateral damage.** A hung browser is not restarted between the tests of a
 shard, so every test still queued for that process times out too — printing
@@ -60,6 +65,7 @@ Usage (from repo root, venv per tests/wpt/README.md):
 
     <venv>/python tests/wpt/timeout_audit.py [--out-dir .tmp/wpt-corpus]
         [--category PREFIX] [--top N] [--examples K] [--json OUT]
+        [--no-measured] [--no-source]
     <venv>/python tests/wpt/timeout_audit.py --selftest
 
 Safe to run against a live run's `--out-dir`: it only reads. A shard still
@@ -71,6 +77,7 @@ import ast
 import bisect
 import collections
 import glob
+import importlib.util
 import json
 import os
 import re
@@ -1718,6 +1725,61 @@ def _restrict_to_subset(lines, key):
     return out
 
 
+#: Bug owning each mechanism the standalone probe measured. Kept here and not
+#: in the probe so the audit still names an owner when the probe file is gone.
+MEASURED_REFS = {
+    "grid-implicit-track-loop": "BUG-801",
+    "svg-transform-loop": "BUG-803",
+    "nested-flex-exponential": "BUG-802",
+    "dom-wrapper-oom": "BUG-849",
+    "unclamped-blur": "BUG-850",
+}
+
+
+def _load_measured_hangs():
+    """`test id -> mechanism key` for the pages measured to hang standalone.
+
+    The table lives in `verify_layout_hangs.py` (the probe that produced it, by
+    running every residual id under `--dump-layout` with a timeout) and is read
+    from there rather than copied, so a re-measurement updates both users at
+    once. Loaded by path, not by `import`, because the audit is run from the
+    repo root as often as from `tests/wpt`. A missing or broken probe file
+    disables the stage instead of failing the run — the audit's other three
+    stages do not depend on it.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "verify_layout_hangs.py")
+    try:
+        spec = importlib.util.spec_from_file_location("verify_layout_hangs", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        measured = module.MEASURED
+    except (OSError, AttributeError, ImportError, SyntaxError):
+        return {}
+    return {test_id: mech for mech, ids in measured.items() for test_id in ids}
+
+
+#: Filled at import; see `_load_measured_hangs`.
+MEASURED_HANGS = _load_measured_hangs()
+
+
+def classify_measured(test_id):
+    """Key for a test measured to hang/die standalone, or None.
+
+    The strongest evidence the audit has, and therefore the first stage to run
+    on what the output stage could not claim: the page was executed on its own,
+    outside wptrunner and outside `testharness.js`, and did not finish. A regex over the source
+    cannot replace it — whether a grid item reaches past the last explicit line
+    depends on the *resolved* track count, which `repeat(auto-fill, ...)` makes
+    a function of the container width (BUG-801), and a cost curve (BUG-802) has
+    no textual marker at all.
+    """
+    if not test_id:
+        return None
+    return (MEASURED_HANGS.get(test_id)
+            or MEASURED_HANGS.get(test_id.split("?")[0]))
+
+
 def classify_source(test_id, root, cache, follow_helpers=True):
     """Second-stage key for a test the output stage could not claim, or None.
 
@@ -1848,11 +1910,12 @@ def classify(lines, mechanisms=None):
 
 
 def audit(out_dir, category=None, root=WPT_ROOT, use_source=True,
-          follow_helpers=True):
+          follow_helpers=True, use_measured=True):
     """Classify every TIMEOUT in a run directory.
 
     `category` filters by manifest-id prefix (`html`, `html/canvas`, ...);
-    `use_source` enables the second, source-marker stage (`SOURCE_MARKERS`);
+    `use_measured` enables the measured-hang stage (`MEASURED_HANGS`);
+    `use_source` enables the source-marker stage (`SOURCE_MARKERS`);
     `follow_helpers` lets that stage read the test's `<script src>` helpers as
     well as the test file itself (`helper_paths`).
     """
@@ -1906,11 +1969,17 @@ def audit(out_dir, category=None, root=WPT_ROOT, use_source=True,
             if lines:
                 culprit[pid] = test
             key = classify(lines)
-            if use_source and key in (NO_OUTPUT, UNCLASSIFIED):
-                from_source = classify_source(test, root, source_cache,
-                                              follow_helpers=follow_helpers)
-                if from_source:
-                    key = from_source
+            if key in (NO_OUTPUT, UNCLASSIFIED):
+                # Measured first: a page proven to hang standalone outranks
+                # anything its source merely suggests.
+                measured = classify_measured(test) if use_measured else None
+                if measured:
+                    key = measured
+                elif use_source:
+                    from_source = classify_source(test, root, source_cache,
+                                                  follow_helpers=follow_helpers)
+                    if from_source:
+                        key = from_source
             if key == UNCLASSIFIED:
                 weak = classify(lines, WEAK_MECHANISMS)
                 if weak != UNCLASSIFIED:
@@ -1964,6 +2033,8 @@ def print_report(result, top=25, examples=3):
     refs.update({m.key: m.ref + " (worker-source marker)"
                  for m in WORKER_SOURCE_MARKERS})
     refs.update({m.key: m.ref for m in WEAK_MECHANISMS})
+    refs.update({key: ref + " (measured standalone)"
+                 for key, ref in MEASURED_REFS.items()})
     refs[HUNG_BROWSER] = "collateral — see the culprit list below"
     print(f"{'mechanism':28} {'tests':>7} {'share':>7}  owner")
     for key, count in sorted(result["mechanisms"].items(), key=lambda kv: -kv[1]):
@@ -2115,6 +2186,14 @@ def _write_selftest_shard(path):
                      "of undefined (reading 'then')")
     end("TestRunnerManager-2", 2200, "/a/fonts-throw.html", "TIMEOUT", 503)
 
+    # 13. a page measured to hang standalone (BUG-803's `2d-rotate-notref`).
+    #     It prints an ordinary parse line and nothing an error table can use,
+    #     so only the measured stage can name it.
+    start("TestRunnerManager-2", 2300, "/css/css-transforms/2d-rotate-notref.html")
+    out("504", 2310, "Распарсено: 12 DOM-узлов, 3 CSS-правил")
+    end("TestRunnerManager-2", 2400, "/css/css-transforms/2d-rotate-notref.html",
+        "TIMEOUT", 504)
+
     with open(path, "w", encoding="utf-8") as handle:
         for event in events:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
@@ -2135,8 +2214,8 @@ def selftest():
         result = audit(tmp, use_source=False)
 
         mech = result["mechanisms"]
-        check(result["timeouts"] == 12,
-              f"expected 12 TIMEOUTs (the OK test excluded), got {result['timeouts']}")
+        check(result["timeouts"] == 13,
+              f"expected 13 TIMEOUTs (the OK test excluded), got {result['timeouts']}")
         check(result["statuses"].get("OK") == 1, "the OK test must still be counted")
         check(mech.get("https-body-truncated") == 1,
               f"TLS truncation must win over the missing global: {mech}")
@@ -3240,6 +3319,36 @@ def selftest():
         check(classify_source("/fm/fetch.html", tmp, {}) is None,
               "a fetch-induced request must stay unclassified")
 
+        # Stage 1b (WPT-RUN-6 slice 23): the ids measured to hang standalone.
+        # The table is the probe's, so the first two checks guard the join
+        # rather than the audit — a mechanism renamed in one file and not the
+        # other would otherwise silently report an unowned key.
+        check(MEASURED_HANGS, "the measured-hang table is empty — probe missing?")
+        check(set(MEASURED_HANGS.values()) == set(MEASURED_REFS),
+              f"probe mechanisms and MEASURED_REFS disagree: "
+              f"{sorted(set(MEASURED_HANGS.values()) ^ set(MEASURED_REFS))}")
+        check(all(test_id.startswith("/") for test_id in MEASURED_HANGS),
+              "a measured id is not a manifest id (must start with '/')")
+        check(classify_measured("/css/css-transforms/2d-rotate-notref.html")
+              == "svg-transform-loop",
+              "a measured id was not claimed")
+        check(classify_measured("/css/css-transforms/2d-rotate-notref.html?x=1")
+              == "svg-transform-loop",
+              "a measured id with a query string was not matched on its path")
+        check(classify_measured("/a/clean.html") is None,
+              "an unmeasured id must not be claimed")
+        check(classify_measured(None) is None, "a missing id must not be claimed")
+        # End to end, both ways round: the stage must claim the test in the
+        # synthetic shard, and `--no-measured` must hand it back to the residual.
+        check(mech.get("svg-transform-loop") == 1,
+              f"the measured stage did not claim its test: {mech}")
+        unmeasured = audit(tmp, use_source=False, use_measured=False)
+        check(unmeasured["mechanisms"].get("svg-transform-loop") is None,
+              "--no-measured must not classify the measured test")
+        check(unmeasured["mechanisms"].get(UNCLASSIFIED) == 2,
+              f"--no-measured must leave the measured test unclassified: "
+              f"{unmeasured['mechanisms']}")
+
     for msg in failures:
         print("FAIL:", msg)
     print("selftest:", "ok" if not failures else f"{len(failures)} failure(s)")
@@ -3262,6 +3371,9 @@ def main():
                         help="in the source-marker stage read only the test "
                              "file, not the <script src> helpers it includes "
                              "(the pre-WPT-RUN-6-slice-10 behaviour)")
+    parser.add_argument("--no-measured", action="store_true",
+                        help="skip the measured-hang stage (the ids "
+                             "verify_layout_hangs.py ran standalone)")
     parser.add_argument("--no-source", action="store_true",
                         help="skip the source-marker stage (output evidence only)")
     parser.add_argument("--selftest", action="store_true",
@@ -3278,7 +3390,8 @@ def main():
 
     result = audit(args.out_dir, category=args.category,
                    use_source=not args.no_source,
-                   follow_helpers=not args.no_helpers)
+                   follow_helpers=not args.no_helpers,
+                   use_measured=not args.no_measured)
     print_report(result, top=args.top, examples=args.examples)
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as handle:

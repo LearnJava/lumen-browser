@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-22",
  "counts": {
-  "open": 363,
+  "open": 365,
   "fixed": 443,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 806,
+ "total_bugs": 808,
  "phases": [
   {
    "id": "P0",
@@ -10996,6 +10996,20 @@
    "component": "layout (`crates/engine/layout/src/box_tree.rs:2262` — `collect_requests_inner` матчит только `name.local == \"img\"`) + shell (`crates/shell/src/main.rs:6858` — `SubresourceHintFound` без потребителя, см. BUG-826)",
    "date": null,
    "debtor": false
+  },
+  "BUG-849": {
+   "status": "open",
+   "title": "`document.createElement` стоит ~142 мкс и навсегда удерживает JS-обёртку: 20 000 элементов — 2 847 мс, 40 000 — куча 1,4 ГБ и `Fatal JavaScript out of memory`,…",
+   "component": "js (`crates/js/src/dom.rs:3507` `_lumen_make_element` — интернирование в `_lumen_element_wrappers`; `:4091` `_lumen_build_element` ~1480 строк и 26 `defineProperty` на элемент; `:16524` `_lumen_gc_collect` чистит только освобождённые арены nid)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-850": {
+   "status": "open",
+   "title": "Радиус blur не клэмпится размером пиксмапа: `backdrop-filter: blur(100000px)` рисуется 16 с на одном `--screenshot` (r ≈ 50 000 при слое 1024 px, выборки за кра…",
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs:1261` — `radius` не ограничен размером слоя; `:1293`/`:1315` — прайминг аккумулятора `for i in -r..=r`, O(r) на строку)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11289,6 +11303,9 @@
   ],
   "js (`crates/js/src/dom.rs:3441-3460` -- `MouseEvent` constructor)": [
    "BUG-558"
+  ],
+  "js (`crates/js/src/dom.rs:3507` `_lumen_make_element` — интернирование в `_lumen_element_wrappers`; `:4091` `_lumen_build_element` ~1480 строк и 26 `defineProperty` на элемент; `:16524` `_lumen_gc_collect` чистит только освобождённые арены nid)": [
+   "BUG-849"
   ],
   "js (`crates/js/src/dom.rs:4257`, `_lumen_serialize_style`)": [
    "BUG-497"
@@ -11964,6 +11981,9 @@
   ],
   "paint (`background-blend-mode` в CPU-растре tiny-skia; тест `crates/driver/tests/cases/snapshot_cpu.rs::cpu_snapshots_match_references`, эталон `graphic_tests/snapshots/cpu/49-background-blend-mode.png`)": [
    "BUG-784"
+  ],
+  "paint (`crates/engine/paint/src/cpu_raster.rs:1261` — `radius` не ограничен размером слоя; `:1293`/`:1315` — прайминг аккумулятора `for i in -r..=r`, O(r) на строку)": [
+   "BUG-850"
   ],
   "paint (`crates/engine/paint/src/renderer.rs` — пре-резолв face-ов `DrawText`)": [
    "BUG-771"

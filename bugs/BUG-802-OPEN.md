@@ -131,3 +131,17 @@ timeout 30 lumen --dump-layout tests/wpt/css/css-flexbox/flexbox-justify-content
 flex (счётчик, а не настенное время — `docs/perf-method.md`), рядом с
 существующими flex-тестами `crates/engine/layout/src/box_tree.rs`
 (`flex_column_item_margin_top_applied_once` и соседи).
+
+## Уточнение WPT-RUN-6 срезом 23 (2026-08-22)
+
+Механизм получил измеренный список id: **5** тестов остатка снимка WPT-RUN-5
+(`nested-flex-exponential`, таблица `MEASURED` в
+`tests/wpt/verify_layout_hangs.py`), все пять — виновники `hung-browser`,
+вместе 318 чужих TIMEOUT-ов.
+
+Перезамер кривой на нынешней сборке (`verify_layout_hangs.py --nesting`,
+dev-release, Linux, коммит `3ae02b208`): глубина 8 → 0,01 с, 12 → 0,03 с,
+14 → 0,08 с, 16 → 0,27 с, 18 → 1,21 с, 20 → 4,91 с — отношение соседних
+уровней ≈ 2,0, то есть степенной рост никуда не делся. Строка
+`flex-nesting-20` в `--repros` фиксирует это как ожидание `slow`; после фикса
+она должна стать `ok` (порог пробы — 3 с).
