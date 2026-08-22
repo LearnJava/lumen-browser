@@ -153,3 +153,36 @@ function _lumen_resource_track(nid, local) {
   другой код; общего фикса с ними нет.
 - [BUG-459](bugs/BUG-459-OPEN.md) — URL внешнего `<script type=module>`;
   ортогонально, событий не касается.
+
+## Перезамер 2026-08-22 (WPT-RUN-6, срез 20): третья форма маркера
+
+Слепое пятно строгого маркера — ожидание, которое живёт **не в тексте
+теста**. Всё семейство `html/dom/render-blocking` ждёт `load` элемента через
+свой хелпер (`support/test-render-blocking.js`: `new LoadObserver(el)` →
+`target.addEventListener('load', …)` → `promise_test(() =>
+loadObserver.load)`), поэтому слова `load` в самом файле нет вообще и
+маркер его не видел.
+
+Обе половины перемерены живьём
+(`tests/wpt/verify_preload_script_audio_gaps.py`, коммит `79f7df91a`).
+Ресурс на пробном сервере намеренно держится секунду, так что слушатель
+заведомо повешен до прихода ответа:
+
+| проба | получено |
+|---|---|
+| `script-parsed-load-listener` | `found-parsed-script=yes`, `slow-script-ran=number` — скрипт **выполнился**, но ни `addEventListener('load')`, ни `onload` не сработали |
+| `link-parsed-stylesheet-load` | `found-parsed-link=yes`; лист загружен (сервер видел запрос), событий нет ни в одной форме |
+| `style-element-load` | `style-appended sheet=no`, `style-sheet-later=no` — `load` нет никогда, и `style.sheet` остаётся `null` (CSSOM, [BUG-471](BUG-471-OPEN.md)) |
+| `script-dynamic-load` / `script-dynamic-404` (контроль) | `script-load` и `script-error` — созданный скриптом элемент событие даёт |
+
+Маркер расширен третьей формой: `LoadObserver`/`test_render_blocking` плюс
+хотя бы один молчащий элемент под наблюдением (парсерный `<script src>` /
+`<link rel=stylesheet>` / `<style>`, либо созданный `<style>`). Даёт **+6 id**
+остатка снимка WPT-RUN-5 (27 → 33 по маркеру; остальные три файла того же
+каталога висят раньше, на [BUG-827](BUG-827-OPEN.md), и разобраны там).
+
+Четвёртая, отдельно измеренная грань того же дефекта: `<script src="">`
+(пустой URL) не даёт `error` вовсе — проба `script-src-empty` не напечатала
+ничего, тогда как HTML LS §4.12.1 требует поставить `error` в очередь
+задач. Это ломает `fetch-src/empty.html` и `empty-with-base.html`, которые
+на этом событии и завершаются.
