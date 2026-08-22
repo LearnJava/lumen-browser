@@ -158,6 +158,10 @@ impl RenderBackend for WgpuBackend {
             .map_err(surface_error_to_render_error)
     }
 
+    fn set_content_epoch(&mut self, epoch: u64) {
+        self.renderer.set_content_epoch(epoch);
+    }
+
     fn resize(&mut self, width: u32, height: u32) {
         self.renderer.resize(width, height);
     }

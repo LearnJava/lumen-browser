@@ -993,6 +993,7 @@ fn run_window_mode(
 
     let mut app = Lumen {
         display_list: Vec::new(),
+        display_list_epoch: 1,
         tile_grid: lumen_paint::TileGrid::default_size(),
         display_list_cache: lumen_paint::DisplayListCache::new(),
         title: None,
@@ -7597,8 +7598,26 @@ struct PendingWait {
     reply_tx: std::sync::mpsc::Sender<AutomationReply>,
 }
 
+/// Следующая версия display list-а; `0` пропускается — он зарезервирован за
+/// «версия неизвестна» (BUG-405 срез 39).
+fn next_dl_epoch(cur: u64) -> u64 {
+    match cur.wrapping_add(1) {
+        0 => 1,
+        n => n,
+    }
+}
+
 struct Lumen {
     display_list: DisplayList,
+    /// Версия [`Self::display_list`] для рендерера (BUG-405 срез 39).
+    ///
+    /// Меняется при КАЖДОМ изменении списка — и замене целиком, и правке на
+    /// месте, — поэтому список меняют только через [`Self::set_display_list`]
+    /// и [`Self::display_list_mut`], а не присваиванием полю. Пока версия та
+    /// же, рендерер переиспользует свёртку content-части кадровых хэшей вместо
+    /// обхода всего списка; пропущенный бамп показал бы устаревшие пиксели.
+    /// Никогда не `0`: ноль зарезервирован за «версия неизвестна».
+    display_list_epoch: u64,
     /// Tile-based dirty-rect tracker. Updated on every display-list change via
     /// [`lumen_paint::TileGrid::update_from_diff`]. Dirty tiles are re-rendered
     /// on the next frame; clean tiles reuse the previous output (Phase 2).
@@ -8860,6 +8879,26 @@ enum PendingIntercepted {
 }
 
 impl Lumen {
+    /// Заменяет display list страницы, бампая его версию (BUG-405 срез 39).
+    ///
+    /// Единственный способ присвоить [`Self::display_list`]: рендерер решает по
+    /// версии, можно ли переиспользовать свёртку кадровых хэшей, поэтому запись
+    /// мимо этого метода показала бы устаревшие пиксели.
+    fn set_display_list(&mut self, dl: DisplayList) {
+        self.display_list = dl;
+        self.bump_display_list_epoch();
+    }
+
+    /// Бампает версию [`Self::display_list`] (BUG-405 срез 39).
+    ///
+    /// Отдельно от [`Self::set_display_list`] для трёх мест, где заимствования
+    /// не дают взять `&mut self` целиком: правка списка на месте и два места,
+    /// где `self.layout_source`/`self.layout_box` уже заняты — там поле пишется
+    /// напрямую, а версия бампается этим вызовом рядом.
+    fn bump_display_list_epoch(&mut self) {
+        self.display_list_epoch = next_dl_epoch(self.display_list_epoch);
+    }
+
     /// Finds a layout box with a resize grip at position (x, y) in the layout tree.
     /// Returns `(node_id, allow_width, allow_height)` — the latter two are the box's
     /// `resize` value resolved to physical axes (CC-CSS-4: `Resize::allowed_axes`,
@@ -10807,7 +10846,10 @@ impl Lumen {
         // Cache display list directly (avoid &mut self while layout_source is borrowed).
         let _dl_hash = lumen_paint::hash_commands(&new_dl);
         self.display_list_cache.insert(lb.node.index() as u32, new_dl.clone(), _dl_hash, None);
+        // Поля пишутся напрямую (не через `set_display_list`): `layout_source`
+        // здесь заимствован, `&mut self` целиком взять нельзя.
         self.display_list = new_dl;
+        self.display_list_epoch = next_dl_epoch(self.display_list_epoch);
         // Sync transitions: compare prev styles with new layout before replacing.
         let now_s = self.epoch.elapsed().as_secs_f32();
         let mut new_styles = HashMap::new();
@@ -11646,7 +11688,7 @@ impl Lumen {
                 self.content_width = content_width_of(&page.display_list);
                 // On full page load, mark all tiles dirty — content has changed completely.
                 self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
-                self.display_list = page.display_list;
+                self.set_display_list(page.display_list);
                 self.animation_scheduler.clear();
                 self.transition_scheduler = TransitionScheduler::new();
                 self.starting_style_tracker = StartingStyleTracker::new();
@@ -12012,7 +12054,7 @@ impl Lumen {
 
         self.content_height = content_height_of(&dl);
         self.content_width = content_width_of(&dl);
-        self.display_list = dl;
+        self.set_display_list(dl);
         // BUG-341 S7: streaming layout is a separate incremental mechanism
         // (`layout_streaming_incremental`, no `CounterMap`) — invalidate the
         // restyle cache so it isn't diffed against this tree by mistake.
@@ -12242,7 +12284,7 @@ impl Lumen {
         self.content_width = content_width_of(&page.display_list);
         // Full page load: force all tiles dirty.
         self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
-        self.display_list = page.display_list;
+        self.set_display_list(page.display_list);
         self.animation_scheduler.clear();
         self.transition_scheduler = TransitionScheduler::new();
         self.starting_style_tracker = StartingStyleTracker::new();
@@ -14213,7 +14255,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // Cache directly — lb mutably borrows self.layout_box; only self.display_list_cache is touched here.
                     let dl_hash = lumen_paint::hash_commands(&new_dl);
                     self.display_list_cache.insert(root_id, new_dl.clone(), dl_hash, None);
+                    // Прямая запись полей: `layout_box` здесь заимствован
+                    // мутабельно, `&mut self` целиком взять нельзя.
                     self.display_list = new_dl;
+                    self.display_list_epoch = next_dl_epoch(self.display_list_epoch);
                     // Sync JS cache so scrollTop/scrollLeft reads are accurate, then fire
                     // non-bubbling scroll events on each scrolled container.
                     let states: HashMap<u32, [f32; 4]> = collect_scroll_containers(lb)
@@ -17411,11 +17456,22 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // берётся ветка ниже, и она копирует весь display list каждый
                 // кадр. Без этой отсечки цена копии сидела бы в невязке.
                 let mut wrap_ms = 0.0_f64;
+                // BUG-405 срез 39: версия списка для рендерера. Ненулевая ровно
+                // тогда, когда в рендерер уходит retained-список страницы — у
+                // производных списков (анимационная патч-копия `anim_dl`,
+                // подсветка поиска `page_buf`, split-view, обёрнутая копия
+                // фолбэка) версии нет, и мемоизация свёртки для них выключена.
+                let retained_epoch = if anim_dl.is_none() && page_buf.is_none() {
+                    self.display_list_epoch
+                } else {
+                    0
+                };
                 if let Some(r) = self.renderer.as_mut() {
                     r.set_canvas_background(canvas_bg);
                     if let Some(combined) = split_combined {
                         // Split-view mode: combined DL with baked scroll; renderer gets 0,0.
                         r.set_page_offset(0.0, 0.0);
+                        r.set_content_epoch(0);
                         if let Err(err) = r.render(&combined, &overlay_buf, 0.0, 0.0) {
                             eprintln!("Ошибка рендера (split): {err:?}");
                         }
@@ -17444,6 +17500,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             && !page_offset_fast_disabled()
                         {
                             r.set_page_offset(page_x_offset, page_y_offset);
+                            // Фаст-пас отдаёт `base` по ссылке — это и есть тот
+                            // список, к которому относится версия.
+                            r.set_content_epoch(retained_epoch);
                             let ranges: &[std::ops::Range<usize>] =
                                 if anim_dl.is_some() { &anim_ranges } else { &[] };
                             if let Err(err) = r.render_with_anim(
@@ -17462,6 +17521,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             // (static/animated split скролл-композитора wgpu-пути)
                             // прокидываются через render_with_anim.
                             r.set_page_offset(0.0, 0.0);
+                            // Фолбэк собирает НОВЫЙ список каждый кадр —
+                            // версии у него нет (BUG-405 срез 39).
+                            r.set_content_epoch(0);
                             let t_wrap = frame_log_t0.map(|t0| t0.elapsed());
                             let mut shifted: lumen_paint::DisplayList =
                                 Vec::with_capacity(base.len() + 2);
@@ -22656,6 +22718,10 @@ impl Lumen {
             // paint_ordered на каждый тик колеса не нужна (см.
             // lumen_paint::patch_scroll_layer; эквивалентность пересборке
             // закреплена тестами patch_scroll_layer_* в display_list.rs).
+            // Список правится НА МЕСТЕ — версию бампаем заранее: замыкание ниже
+            // захватывает только поле `display_list` (`layout_box` занят
+            // соседним заимствованием), поэтому `&mut self` внутри него нет.
+            self.bump_display_list_epoch();
             let patched = lumen_layout::find_box_by_node(
                 self.layout_box.as_ref().unwrap(),
                 target,
@@ -22670,7 +22736,7 @@ impl Lumen {
                 // Fallback: полная пересборка при любой нестандартной структуре DL.
                 let new_dl = paint_ordered(self.layout_box.as_ref().unwrap());
                 self.tile_grid.update_from_diff(&self.display_list, &new_dl);
-                self.display_list = new_dl;
+                self.set_display_list(new_dl);
             }
             self.update_scroll_containers();
             let states: std::collections::HashMap<_, _> = self.scroll_containers.iter()
@@ -23762,7 +23828,7 @@ impl Lumen {
         lumen_layout::set_cv_scroll(0.0, 0.0);
 
         // Install into the active slot.
-        self.display_list = display_list;
+        self.set_display_list(display_list);
         self.title = Some(data.title);
         self.layout_source = Some(layout_source);
         // BUG-341 S7: hibernate restore bypasses the restyle-aware path.
@@ -23926,6 +23992,9 @@ impl Lumen {
     /// Called before switching to a different tab so the current page state can
     /// be frozen while the new tab becomes active.
     fn save_page_snapshot(&mut self) -> PageSnapshot {
+        // Список уезжает в снапшот, активный слот остаётся пустым — версия
+        // обязана смениться так же, как при обычной замене (BUG-405 срез 39).
+        self.bump_display_list_epoch();
         let snap = PageSnapshot {
             display_list: std::mem::take(&mut self.display_list),
             title: self.title.take(),
@@ -24021,7 +24090,7 @@ impl Lumen {
     /// Called after a tab switch to make a previously-frozen tab active again.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn restore_page_snapshot(&mut self, snap: PageSnapshot) {
-        self.display_list = snap.display_list;
+        self.set_display_list(snap.display_list);
         self.title = snap.title;
         self.pending_images = snap.pending_images;
         self.page_font_registry = snap.page_font_registry;
@@ -24118,7 +24187,7 @@ impl Lumen {
     /// before loading a URL or showing an empty page.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn reset_to_blank_tab(&mut self) {
-        self.display_list = Vec::new();
+        self.set_display_list(Vec::new());
         self.title = None;
         self.pending_images = Vec::new();
         self.source = PageSource::Empty;
