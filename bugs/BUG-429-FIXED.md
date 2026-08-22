@@ -1,7 +1,7 @@
 # BUG-429 — the CPU-snapshot gate renders pages without running their scripts and without any images
 
 **Статус:** FIXED 2026-07-29 (P3, ветка `p3-bug-429`) — скрипты страницы исполняются, canvas-битмапы
-доезжают до растеризатора. Декодированные `<img>` — отдельный дефект, вынесен в [BUG-430](BUG-430-OPEN.md).
+доезжают до растеризатора. Декодированные `<img>` — отдельный дефект, вынесен в [BUG-430](BUG-430-FIXED.md).
 **Компонент:** driver (`crates/driver/src/session.rs::run_pipeline` / `screenshot_cpu_rgba`)
 **Найден:** P3, 2026-07-29, while fixing [BUG-428](BUG-428-FIXED.md) — BUG-428's «Масштаб»
 section assumed the deterministic CPU snapshots share the shell's headless render path.
@@ -81,7 +81,8 @@ Canvas 2D (fillRect, arc, path-треугольник, strokeRect + radius) вм
 
 ## Остаток
 
-Декодированные `<img>` по-прежнему рисуются серой заглушкой: у `InProcessSession` нет загрузки
-подресурсов, а выбор источника (`srcset`/`<picture>`) живёт в шелле. Это отдельный дефект —
-[BUG-430](BUG-430-OPEN.md); страницы `18-images`/`19-object-fit` остаются гейтом геометрии,
-а не пикселей.
+Декодированные `<img>` на момент этого фикса рисовались серой заглушкой: у `InProcessSession`
+не было загрузки подресурсов. Это отдельный дефект — [BUG-430](BUG-430-FIXED.md), закрыт
+2026-08-22 (picker оказался уже общим — `lumen_layout::collect_image_requests`; сессия грузит
+локальные `file://`-источники), после чего `18-images`/`19-object-fit` стали гейтом пикселей,
+а не только геометрии.

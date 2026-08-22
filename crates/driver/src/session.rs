@@ -119,6 +119,20 @@ pub struct InProcessSession {
     /// navigation.
     #[cfg(feature = "v8")]
     canvas_images: Mutex<std::collections::HashMap<u32, Arc<lumen_image::Image>>>,
+    /// Декодированные подресурсы-картинки текущей страницы, ключ — ровно та
+    /// строка, которую эмиттер кладёт в `DisplayCommand::DrawImage.src`
+    /// (BUG-430).
+    ///
+    /// Заполняется в `run_pipeline` (`<img>`, до layout — чтобы intrinsic-размеры
+    /// успели попасть в DOM) и в `layout_and_commit` (`background-image`,
+    /// `list-style-image`, `content: url()` — их URL известны только по готовому
+    /// дереву). Только локальные (`file://`-относительные) источники: офлайн-гейт
+    /// не ходит в сеть, сетевые URL пропускаются с сообщением, как внешние
+    /// `<script src>` (BUG-429). Очищается на навигации.
+    subresource_images: Mutex<std::collections::HashMap<String, Arc<lumen_image::Image>>>,
+    /// Директория, относительно которой резолвятся подресурсы текущей страницы;
+    /// `None` для страницы без локальной базы (http(s), `navigate_html`).
+    page_base_dir: Option<std::path::PathBuf>,
 }
 
 impl InProcessSession {
@@ -139,6 +153,8 @@ impl InProcessSession {
             js_runtime: None,
             #[cfg(feature = "v8")]
             canvas_images: Mutex::new(std::collections::HashMap::new()),
+            subresource_images: Mutex::new(std::collections::HashMap::new()),
+            page_base_dir: None,
         }
     }
 
@@ -159,6 +175,8 @@ impl InProcessSession {
             js_runtime: None,
             #[cfg(feature = "v8")]
             canvas_images: Mutex::new(std::collections::HashMap::new()),
+            subresource_images: Mutex::new(std::collections::HashMap::new()),
+            page_base_dir: None,
         }
     }
 
@@ -195,6 +213,8 @@ impl InProcessSession {
             js_runtime: None,
             #[cfg(feature = "v8")]
             canvas_images: Mutex::new(std::collections::HashMap::new()),
+            subresource_images: Mutex::new(std::collections::HashMap::new()),
+            page_base_dir: None,
         }
     }
 
@@ -327,6 +347,15 @@ impl InProcessSession {
         let sheet = Arc::new(lumen_css_parser::parse(&css));
         drop(doc_guard);
 
+        // BUG-430: fetch + decode the page's local `<img>` subresources BEFORE
+        // layout — the shell does the same (`fetch_and_decode_images` runs inside
+        // `parse_and_layout`, ahead of the layout call), and an image's intrinsic
+        // size is a layout input: `apply_intrinsic_size` writes the missing
+        // `width`/`height` presentational attributes, so a box whose author left
+        // a dimension `auto` gets its real geometry instead of collapsing.
+        self.page_base_dir = local_base_dir(&url);
+        self.load_subresource_images(&doc)?;
+
         let (layout_root, flat_tree) = self.layout_and_commit(&doc, &sheet)?;
 
         self.current_url = url;
@@ -355,6 +384,13 @@ impl InProcessSession {
         let layout_root = lumen_layout::layout_measured(&doc_guard, sheet, self.viewport, &measurer);
         let flat_tree = lumen_dom::build_flat_tree(&doc_guard);
         drop(doc_guard);
+
+        // BUG-430: background/marker/`content: url()` images are known only from
+        // the finished tree (they are style values, not DOM elements), and they
+        // do not feed back into geometry — so unlike `<img>` they are fetched
+        // here, after layout, and only need to be in the map before the raster
+        // resolves the display list's `src` keys.
+        self.load_background_images(&layout_root);
 
         self.commit_layout(&layout_root);
 
@@ -496,6 +532,166 @@ impl InProcessSession {
             .collect()
     }
 
+    /// Fetch + decode the page's **local** `<img>` subresources into
+    /// [`Self::subresource_images`] and report their intrinsic sizes back to the
+    /// DOM (BUG-430).
+    ///
+    /// URLs come from `lumen_layout::collect_image_requests` — the same picker
+    /// (`<picture>` / `srcset` / `sizes`) layout itself runs when it builds
+    /// `BoxKind::Image { src }`, so the map key is exactly the `src` the display
+    /// list will carry and the rasterizer will look up. Each distinct URL is read
+    /// and decoded once even when several `<img>` share it; the intrinsic size is
+    /// applied per element, and only where the author left a dimension unset
+    /// (BUG-269 — `apply_intrinsic_size` fills the missing slot from the aspect
+    /// ratio).
+    ///
+    /// Policy: this pipeline is a deterministic offline one, so it never goes to
+    /// the network. An `http(s)`/`data:`/`blob:` source — or any relative source
+    /// on a page that has no local base (`navigate_html`, an http page) — is
+    /// skipped, counted and reported on stderr, the way `run_page_scripts` reports
+    /// external `<script src>` (BUG-429). Such a box keeps painting the grey
+    /// placeholder.
+    ///
+    /// `loading="lazy"` is **not** honoured here: there is no scrolling and no
+    /// second pass in this pipeline, so deferring would mean the image never
+    /// loads at all — precisely the blind spot BUG-430 is about.
+    fn load_subresource_images(&mut self, doc: &Arc<Mutex<Document>>) -> Result<()> {
+        if let Ok(mut map) = self.subresource_images.lock() {
+            map.clear();
+        }
+        let requests = {
+            let guard = Self::lock_arc_doc(doc)?;
+            lumen_layout::collect_image_requests(&guard, self.viewport)
+        };
+        if requests.is_empty() {
+            return Ok(());
+        }
+
+        let mut skipped_remote = 0usize;
+        let mut guard = Self::lock_arc_doc(doc)?;
+        for req in requests {
+            let image = self.decode_local_image(&req.url, &mut skipped_remote);
+            // BUG-269: intrinsic size goes in whenever AT LEAST one dimension
+            // was left unset — a fixed width with `height: auto` derives its
+            // height from the intrinsic ratio.
+            if let Some(image) = image
+                && !(req.has_explicit_width && req.has_explicit_height)
+            {
+                lumen_layout::apply_intrinsic_size(
+                    &mut guard,
+                    req.node_id,
+                    image.width,
+                    image.height,
+                );
+            }
+        }
+        drop(guard);
+
+        if skipped_remote > 0 {
+            eprintln!(
+                "InProcessSession: пропущено {skipped_remote} нелокальных <img src> \
+                 (офлайн-путь читает только file://-источники)"
+            );
+        }
+        Ok(())
+    }
+
+    /// Fetch + decode the **local** images a completed layout tree asks for that
+    /// no `<img>` element carries: `background-image` (including the resolved
+    /// `image-set()`/`cross-fade()` candidates), `list-style-image` markers and
+    /// `content: url()` segments (BUG-430).
+    ///
+    /// Runs after layout because that is when the URLs are known — the keys come
+    /// from `lumen_layout::collect_background_image_requests` at DPR 1.0, matching
+    /// `build_display_list_ordered`'s own default, so a resolved `image-set()`
+    /// candidate is fetched under exactly the key the emitter will put in
+    /// `DrawBackgroundImage.src`. An unregistered background key paints *nothing*
+    /// at all (unlike `<img>`, which falls back to the grey placeholder), so
+    /// before this pass a page whose visual content is a background image
+    /// snapshot-tested as an empty frame.
+    fn load_background_images(&mut self, layout_root: &LayoutBox) {
+        let urls = lumen_layout::collect_background_image_requests(layout_root, 1.0);
+        let mut skipped_remote = 0usize;
+        for url in urls {
+            self.decode_local_image(&url, &mut skipped_remote);
+        }
+        if skipped_remote > 0 {
+            eprintln!(
+                "InProcessSession: пропущено {skipped_remote} нелокальных background-image \
+                 (офлайн-путь читает только file://-источники)"
+            );
+        }
+    }
+
+    /// Decode one subresource image into [`Self::subresource_images`] and return
+    /// it, reusing an already-decoded entry for a repeated URL (BUG-430).
+    ///
+    /// A source the offline pipeline may not read (network, `data:`, or relative
+    /// on a page with no local base) increments `skipped_remote` and returns
+    /// `None`; a read/decode failure is reported on stderr. Both leave the key
+    /// unregistered, so the box paints the placeholder rather than stale pixels.
+    fn decode_local_image(
+        &self,
+        url: &str,
+        skipped_remote: &mut usize,
+    ) -> Option<Arc<lumen_image::Image>> {
+        if let Ok(map) = self.subresource_images.lock()
+            && let Some(image) = map.get(url)
+        {
+            return Some(Arc::clone(image));
+        }
+        let path = match local_subresource_path(url, self.page_base_dir.as_deref()) {
+            Some(path) => path,
+            None => {
+                *skipped_remote += 1;
+                return None;
+            }
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!(
+                    "InProcessSession: пропуск картинки {url}: {} {e}",
+                    path.display()
+                );
+                return None;
+            }
+        };
+        let image = match lumen_image::decode(&bytes) {
+            Ok(image) => Arc::new(image),
+            Err(e) => {
+                eprintln!("InProcessSession: не декодируется {url}: {e}");
+                return None;
+            }
+        };
+        if let Ok(mut map) = self.subresource_images.lock() {
+            map.insert(url.to_owned(), Arc::clone(&image));
+        }
+        Some(image)
+    }
+
+    /// Decoded page subresources as the renderer's image set, keyed the way the
+    /// display list refers to them (BUG-430).
+    fn subresource_image_set(&self) -> Vec<(String, Arc<lumen_image::Image>)> {
+        let Ok(map) = self.subresource_images.lock() else {
+            return Vec::new();
+        };
+        map.iter().map(|(src, image)| (src.clone(), Arc::clone(image))).collect()
+    }
+
+    /// Every image the rasterizer should be able to resolve: decoded page
+    /// subresources (BUG-430) plus the canvas bitmaps the page's scripts drew
+    /// (BUG-429).
+    fn renderer_image_set(&self) -> Vec<(String, Arc<lumen_image::Image>)> {
+        let mut images = self.subresource_image_set();
+        #[cfg(feature = "v8")]
+        {
+            self.drain_canvas_updates();
+            images.extend(self.canvas_image_set());
+        }
+        images
+    }
+
     /// Synthesize `mousedown` → `mouseup` → `click` on `node` at CSS viewport
     /// coordinates `(x, y)` via the persistent V8 runtime (DEVX-5 slice 2).
     ///
@@ -586,9 +782,10 @@ impl InProcessSession {
     ///
     /// Текущий CPU-растеризатор покрывает геометрические примитивы
     /// (`FillRect`/`FillRoundedRect`/`DrawBorder`/`DrawOutline`), линейные,
-    /// радиальные и конические градиенты, тесселированные SVG-пути, серый
-    /// placeholder `<img>` (`DrawImage` — без зарегистрированных пикселей
-    /// рисуется заглушка, как в GPU-fallback) и текст (`DrawText` — глифы
+    /// радиальные и конические градиенты, тесселированные SVG-пути, картинки
+    /// (`DrawImage`/`DrawBackgroundImage` — декодированные локальные подресурсы
+    /// страницы, BUG-430; источник, который офлайн-путь читать не вправе, даёт
+    /// серую заглушку, как в GPU-fallback) и текст (`DrawText` — глифы
     /// bundled-шрифта Inter Regular растеризуются через `lumen_font::Rasterizer`
     /// и композитятся через coverage-маску).
     ///
@@ -603,18 +800,13 @@ impl InProcessSession {
         let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order).0;
         let width = self.viewport.width as u32;
         let height = self.viewport.height as u32;
-        // BUG-429: pick up anything the page's scripts have drawn since the last
-        // screenshot (`eval`/`click` can redraw a canvas after navigation), then
-        // hand the accumulated bitmaps to the rasterizer — without them every
-        // `DrawImage { src: "canvas:{nid}" }` resolves to an unregistered key and
-        // paints nothing.
-        #[cfg(feature = "v8")]
-        let images = {
-            self.drain_canvas_updates();
-            self.canvas_image_set()
-        };
-        #[cfg(not(feature = "v8"))]
-        let images: Vec<(String, Arc<lumen_image::Image>)> = Vec::new();
+        // The rasterizer resolves `DrawImage`/`DrawBackgroundImage` against this
+        // set alone: an unregistered key paints the grey placeholder (`<img>`) or
+        // nothing at all (background). It carries the page's decoded subresources
+        // (BUG-430) plus, via `drain_canvas_updates`, anything the page's scripts
+        // have drawn since the last screenshot — `eval`/`click` can redraw a
+        // canvas after navigation (BUG-429).
+        let images = self.renderer_image_set();
         lumen_paint::Renderer::render_to_image_cpu(width, height, &display_list, &images, 0.0, 0.0)
             .map_err(|e| Error::Other(format!("CPU rasterization: {e}")))
     }
@@ -682,6 +874,14 @@ impl BrowserSession for InProcessSession {
         let height = self.viewport.height as u32;
         let mut renderer = lumen_paint::Renderer::new_headless(INTER_FONT.to_vec(), width, height, lumen_core::ColorSpace::Srgb)
             .map_err(|e| Error::Other(format!("headless renderer: {e}")))?;
+
+        // BUG-430: same image set the CPU path gets — without it every `DrawImage`
+        // resolves to an unregistered key and falls back to the grey placeholder.
+        for (src, image) in self.renderer_image_set() {
+            if let Err(e) = renderer.register_image(src.clone(), &image) {
+                eprintln!("InProcessSession: не регистрируется картинка {src}: {e}");
+            }
+        }
 
         // Render to image (RGBA8).
         let image = renderer.render_to_image(&display_list, 0.0, 0.0)
@@ -1581,6 +1781,59 @@ fn is_classic_script_type(t: Option<&str>) -> bool {
             )
         }
     }
+}
+
+/// Filesystem path of a `file://` URL, or `None` for any other scheme.
+///
+/// Mirrors `InProcessSession::navigate`, which accepts both a `file://`-prefixed
+/// URL and a bare path; a Windows URL can arrive either as `file://D:/page.html`
+/// (what `navigate` itself builds) or as the spec-shaped `file:///D:/page.html`,
+/// so a leading slash in front of a drive letter is dropped. The query and
+/// fragment are cut off before the path is used — `file://…/a.png?v=2` names the
+/// file `a.png` (BUG-440 is the same trap on the shell side).
+fn file_url_to_path(url: &str) -> Option<std::path::PathBuf> {
+    let rest = url.strip_prefix("file://")?;
+    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+    // `/D:/x` → `D:/x`; a real POSIX absolute path (`/tmp/x`) keeps its slash.
+    let bytes = rest.as_bytes();
+    let trimmed = if bytes.first() == Some(&b'/')
+        && bytes.get(2) == Some(&b':')
+        && bytes.get(1).is_some_and(u8::is_ascii_alphabetic)
+    {
+        &rest[1..]
+    } else {
+        rest
+    };
+    Some(std::path::PathBuf::from(trimmed))
+}
+
+/// Directory a relative subresource of `page_url` resolves against, or `None`
+/// when the page has no local base (an http(s) page, `about:blank`, a page fed
+/// straight to `navigate_html`).
+fn local_base_dir(page_url: &str) -> Option<std::path::PathBuf> {
+    let path = file_url_to_path(page_url)?;
+    path.parent().map(std::path::Path::to_path_buf)
+}
+
+/// Filesystem path a subresource `src` resolves to, or `None` when it is not a
+/// local file the offline pipeline may read (BUG-430).
+///
+/// `None` covers both halves of the policy: a network/`data:`/`blob:` source is
+/// never fetched here, and a relative source cannot be resolved at all without a
+/// local `base`.
+fn local_subresource_path(src: &str, base: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+    if src.starts_with("file://") {
+        return file_url_to_path(src);
+    }
+    // Scheme-relative (`//host/x`) and any absolute URL are network sources.
+    if src.starts_with("//") || src.contains("://") || src.starts_with("data:") || src.starts_with("blob:") {
+        return None;
+    }
+    let relative = src.split(['?', '#']).next().unwrap_or(src);
+    if relative.is_empty() {
+        return None;
+    }
+    Some(base?.join(relative))
 }
 
 /// Извлечь содержимое всех `<style>` блоков из документа (рекурсивный обход).

@@ -14,9 +14,11 @@
 //! `DrawConicGradient`, all including repeating), tessellated SVG paths
 //! (`DrawSvgPath`), rectangular clipping (`PushClipRect` / `PopClip` +
 //! `PushScrollLayer` / `PopScrollLayer`, i.e. `overflow: hidden/scroll/auto`),
-//! the `<img>` grey placeholder quad (`DrawImage` — the headless CPU path
-//! fetches no subresources, so every image box paints the solid placeholder,
-//! matching the GPU renderer's fallback; BUG-430), Canvas 2D bitmaps
+//! decoded images (`DrawImage`/`DrawBackgroundImage` — since BUG-430 the session
+//! fetches and decodes the page's *local* `<img>` and `background-image` sources
+//! and hands them to the rasterizer; a source it may not read offline — network,
+//! `data:`, `blob:` — still paints the solid grey placeholder quad, matching the
+//! GPU renderer's fallback), Canvas 2D bitmaps
 //! (`DrawImage { src: "canvas:{nid}" }` — since BUG-429 the session runs the
 //! page's inline scripts before layout and hands the drained canvas buffers to
 //! the rasterizer, so `57-canvas-2d` captures real `fillRect`/`arc`/path output
@@ -69,9 +71,11 @@ use std::path::{Path, PathBuf};
 /// is wired for gradient masks: `emit_push_mask` bakes `luminance(rgb)·alpha` into
 /// each stop's alpha, so the `mask-mode: luminance` cell's left (black, luma 0)
 /// half is hidden and the right (white, luma 1) half is shown.
-/// `18-images` is included because all its `<img>` boxes carry empty `alt`
-/// and explicit `width`/`height`, so the grey placeholder fully reproduces the
-/// (text-free) GPU headless output. `55-text-rendering` exercises the `DrawText`
+/// `18-images` is included because all its `<img>` boxes carry empty `alt` and
+/// explicit `width`/`height`, so the page is text-free; since BUG-430 its
+/// reference captures the decoded PNG/JPEG/WebP pixels, the `srcset` candidates
+/// and the `<picture>` pick, i.e. the gate now covers decoding and source
+/// selection rather than box geometry alone. `55-text-rendering` exercises the `DrawText`
 /// primitive (bundled Inter glyphs); it is a snapshot-only page, not registered
 /// in `run.py`, because glyph anti-aliasing always diverges from Edge.
 /// Layout correctness pages added in б-17: `37-float-clear` (float:left/right +
@@ -82,8 +86,9 @@ use std::path::{Path, PathBuf};
 /// double — cpu_raster renders all styles as solid quads, producing a stable
 /// geometry snapshot independent of per-style rendering), `33-multi-column`
 /// (column-count/column-rule), `31-clip-path` (inset/circle/ellipse clipped via
-/// `PushClipRect`), `19-object-fit` (grey image placeholders + repeating gradient
-/// backgrounds), `32-list-markers` (disc/circle/square/decimal ::marker geometry),
+/// `PushClipRect`), `19-object-fit` (decoded images cropped per
+/// `contain`/`cover`/`fill`/`none`/`scale-down`, over repeating gradient
+/// backgrounds — BUG-430), `32-list-markers` (disc/circle/square/decimal ::marker geometry),
 /// `48-line-clamp` (-webkit-line-clamp: transparent text, coloured box geometry
 /// captures clamp heights), `27-direction-rtl` (LTR/RTL bar alignment via
 /// `DrawLinearGradient`). Layout correctness pages added in б-18: `34-forms`
@@ -97,11 +102,10 @@ use std::path::{Path, PathBuf};
 /// Layout correctness pages added in б-19: `24-vertical-align` (vertical-align
 /// top/middle/bottom/baseline — coloured inline boxes at different baseline offsets,
 /// all primitives FillRect+DrawText already in cpu_raster), `53-background-origin`
-/// (background-origin border-box/padding-box/content-box — the
-/// `DrawBackgroundImage` commands are no-op on the CPU path since no image decoder
-/// is registered, mirroring the GPU renderer's skip for unregistered URLs; the
-/// coloured box geometry + DrawBorder + DrawText still captures the layout
-/// structure).
+/// (background-origin border-box/padding-box/content-box — since BUG-430 the
+/// local background image is decoded and registered, so the reference shows the
+/// three different anchor points the page exists to demonstrate; an unregistered
+/// URL is still skipped silently, mirroring the GPU renderer).
 /// SVG path stroke page added in б-20: `54-svg-path-stroke` (open/closed SVG
 /// `<path>` elements with `fill="none"` + `stroke`, and paths with both fill and
 /// stroke — the stroke tessellator (`tessellate_stroke`) emits triangles as
