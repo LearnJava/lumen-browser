@@ -170,6 +170,19 @@ impl RenderBackend for WgpuBackend {
         self.renderer.set_canvas_background(color);
     }
 
+    /// BUG-405 срез 38: фаст-пас ADR-016 M0.4 включается по этой паре методов,
+    /// а до среза их отвечал только femtovg — на штатном (с миграции
+    /// wgpu-default) бэкенде шелл каждый кадр копировал весь display list ради
+    /// одного `PushTransform`. Теперь смещение накладывает рендерер, а список
+    /// рисуется по ссылке.
+    fn set_page_offset(&mut self, x: f32, y: f32) {
+        self.renderer.set_page_offset(x, y);
+    }
+
+    fn supports_page_offset(&self) -> bool {
+        true
+    }
+
     fn register_image(&mut self, src: String, image: Arc<Image>) -> Result<(), String> {
         // BUG-272 срез 17: the wgpu `Renderer` only keeps a CPU copy under the
         // `LUMEN_NO_IMAGE_MIPS` kill-switch (default mip path reads the GPU

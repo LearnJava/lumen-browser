@@ -137,7 +137,9 @@ pub trait RenderBackend: Send {
     /// `true` — shell может рисовать display-list по ссылке (быстрый путь без
     /// per-frame клона). `false` (дефолт) — shell обязан по-прежнему оборачивать
     /// контент в `PushTransform(translate(offset))`, иначе страница нарисуется
-    /// поверх tab bar-а. Femtovg (Phase 2 default) возвращает `true`.
+    /// поверх tab bar-а. `true` возвращают femtovg и — с BUG-405 среза 38 —
+    /// wgpu, то есть штатный бэкенд с миграции wgpu-default; до среза фаст-пас
+    /// не срабатывал на нём никогда, и клон списка платился каждый кадр.
     ///
     /// [`set_page_offset`]: RenderBackend::set_page_offset
     fn supports_page_offset(&self) -> bool {
