@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-22",
  "counts": {
-  "open": 344,
+  "open": 349,
   "fixed": 435,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 779,
+ "total_bugs": 784,
  "phases": [
   {
    "id": "P0",
@@ -10825,6 +10825,41 @@
    "component": "js (`crates/js/src/worker.rs:364-397` — заглушки таймеров, `worker.rs:377` `setInterval = setTimeout`, `worker.rs:834` — единственный вызов `_lumen_flush_timers`; то же в `shared_worker.rs:207,512,523`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-816": {
+   "status": "open",
+   "title": "Программный скролл страницы **двигает** её (`window.scrollY` после `scrollTo(0,300)` равен 300), но события `scroll` не диспатчит: `fire_window_scroll` имеет ро…",
+   "component": "shell (`crates/shell/src/main.rs:16085` — единственный вызов `fire_window_scroll`, ветка колеса мыши; `main.rs:14222` — слив программных скроллов; `main.rs:16218` — синк `scrollY`), js (`crates/js/src/dom.rs:4213` — `scrollIntoView` без фоллбэка на страницу)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-817": {
+   "status": "open",
+   "title": "Событие `scrollend` не диспатчится ниоткуда: функции для него нет в принципе (грep по воркспейсу — ноль совпадений), поэтому ни один путь скролла его не даёт; `…",
+   "component": "js (`crates/js/src/dom.rs:15881-15892` — есть `_lumen_fire_scroll_on_element`/`_lumen_fire_window_scroll_event`, парного `scrollend` нет), shell (`crates/shell/src/main.rs:3496-3510`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-818": {
+   "status": "open",
+   "title": "Streams разрешают промисы только на счастливом пути: `writer.closed` не оседает никогда, `controller.error()` доходит лишь до уже стоящих `read`-запросов, проми…",
+   "component": "js (`crates/js/src/dom.rs:7303-7620` — шим Streams; `:7331` `controller.error`, `:7353` конструктор игнорирует возврат `start()`, `:7406` `pipeTo`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-819": {
+   "status": "open",
+   "title": "Четыре отсутствующие поверхности Streams: `tee()` закрывает исходный поток, оставляет `locked=false` и раздаёт только уже лежавшие в очереди чанки (всё, что заэ…",
+   "component": "js (`crates/js/src/dom.rs:7391` `tee`, `:7374` `getReader` игнорирует аргумент, `:7353` конструктор игнорирует `type:'bytes'`, `TextDecoderStream` там же)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-820": {
+   "status": "open",
+   "title": "`<video>` — заглушка тоньше `<audio>`: изменение `volume`/`muted` не даёт `volumechange` ни через свойство, ни через `addEventListener` (у `<audio>` обе формы р…",
+   "component": "js (`crates/js/src/dom.rs` — шим медиа-элементов, пути `<audio>` и `<video>` разные), shell (`crates/shell/src/video_bindings.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11089,6 +11124,9 @@
   "js (`crates/js/src/dom.rs:15412-15556` — WAAPI `Animation` шим)": [
    "BUG-530"
   ],
+  "js (`crates/js/src/dom.rs:15881-15892` — есть `_lumen_fire_scroll_on_element`/`_lumen_fire_window_scroll_event`, парного `scrollend` нет), shell (`crates/shell/src/main.rs:3496-3510`)": [
+   "BUG-817"
+  ],
   "js (`crates/js/src/dom.rs:3441-3460` -- `MouseEvent` constructor)": [
    "BUG-558"
   ],
@@ -11130,6 +11168,12 @@
   ],
   "js (`crates/js/src/dom.rs:7217-7276` -- `_lumen_deliver_intersection_observers`)": [
    "BUG-627"
+  ],
+  "js (`crates/js/src/dom.rs:7303-7620` — шим Streams; `:7331` `controller.error`, `:7353` конструктор игнорирует возврат `start()`, `:7406` `pipeTo`)": [
+   "BUG-818"
+  ],
+  "js (`crates/js/src/dom.rs:7391` `tee`, `:7374` `getReader` игнорирует аргумент, `:7353` конструктор игнорирует `type:'bytes'`, `TextDecoderStream` там же)": [
+   "BUG-819"
   ],
   "js (`crates/js/src/dom.rs:7463` — `_lumen_ce_upgrade_element`)": [
    "BUG-543"
@@ -11226,6 +11270,9 @@
   ],
   "js (`crates/js/src/dom.rs` — фрагментный парсер `innerHTML`)": [
    "BUG-744"
+  ],
+  "js (`crates/js/src/dom.rs` — шим медиа-элементов, пути `<audio>` и `<video>` разные), shell (`crates/shell/src/video_bindings.rs`)": [
+   "BUG-820"
   ],
   "js (`crates/js/src/dom.rs` — шим), shell (исполнение скриптов), layout (`style.rs`)": [
    "BUG-703"
@@ -11825,6 +11872,9 @@
   ],
   "shell (`crates/shell/src/main.rs:1177` — `A11yPrefs::open_in_memory()`), automation (нет CLI-флага/переменной/BiDi-ручки), tooling (`tools/wptrunner/wptrunner/browsers/lumen.py`)": [
    "BUG-755"
+  ],
+  "shell (`crates/shell/src/main.rs:16085` — единственный вызов `fire_window_scroll`, ветка колеса мыши; `main.rs:14222` — слив программных скроллов; `main.rs:16218` — синк `scrollY`), js (`crates/js/src/dom.rs:4213` — `scrollIntoView` без фоллбэка на страницу)": [
+   "BUG-816"
   ],
   "shell (`crates/shell/src/main.rs:2925` — объявление `deliver_layout_shift` под `#[allow(dead_code)]`, реализация `main.rs:3359`; JS-хук `crates/js/src/dom.rs:11035`; список типов `dom.rs:10907`)": [
    "BUG-809"
