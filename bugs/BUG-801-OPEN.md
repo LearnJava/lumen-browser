@@ -130,3 +130,23 @@ timeout 30 lumen --dump-layout /tmp/g.html          # должен вернут�
 `crates/engine/layout/src/lib.rs` (`grid_explicit_placement`,
 `grid_three_column_auto_placement`) — сейчас ни один из них не ставит
 элемент за край явной сетки, поэтому дефект и дожил до корпусного прогона.
+
+## Уточнение WPT-RUN-6 срезом 23 (2026-08-22)
+
+Механизм получил **измеренный** список id: 22 теста остатка снимка WPT-RUN-5
+(`grid-implicit-track-loop`, таблица `MEASURED` в
+`tests/wpt/verify_layout_hangs.py`, читается `tests/wpt/timeout_audit.py`).
+Правило по исходнику здесь невозможно в принципе: выходит ли элемент за
+последнюю явную линию, зависит от **разрешённого** числа дорожек, а
+`repeat(auto-fill, …)` делает его функцией ширины контейнера — поэтому список
+получен прогоном каждой страницы под `--dump-layout` с таймаутом, а не грепом.
+Из 22 — 10 виновники `hung-browser` с 244 чужими TIMEOUT-ами.
+
+Строки после мержей сместились: `fits` сегодня — `box_tree.rs:11901` (row-flow)
+и `:11948` (column-flow).
+
+Минимальные репро живут в `REPROS` пробы и проверяются одной командой
+(`verify_layout_hangs.py --repros`): `grid-line-past-explicit`,
+`grid-span-past-explicit`, `grid-subgrid-nested` — виснут (обрыв на 15 с);
+контроли `grid-inside-explicit` и `grid-single-track` — 0,01 с. После фикса
+все пять строк должны показать `ok`.
