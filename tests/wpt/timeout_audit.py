@@ -458,6 +458,45 @@ def _xml_document_script_marker(text, test_id=None):
                 or _CDATA_SCRIPT_RE.search(text))
 
 
+#: A window-level `error` / `unhandledrejection` wait: `window.onerror = fn`,
+#: `window.addEventListener('error', ...)`, or either rejection event. Element
+#: handlers (`script.onerror`, `img.onerror`) are deliberately not here — those
+#: are BUG-630/BUG-804 and are claimed by markers above.
+_WINDOW_ERROR_WAIT_RE = re.compile(
+    r"window\.onerror\s*=|window\.onunhandledrejection\s*="
+    r"|(?:window|self)\.addEventListener\(\s*['\"](?:error|unhandledrejection"
+    r"|rejectionhandled)['\"]"
+    r"|\bunhandledrejection\b|\brejectionhandled\b")
+
+#: `window.onerror = t.unreached_func(...)` — the same syntax used as an
+#: *assertion* rather than as the test's completion condition.
+_UNREACHED_RE = re.compile(r"unreached_func|assert_unreached")
+
+
+def _window_error_wait_marker(text, test_id=None):
+    """True iff the test's completion depends on a window-level error event.
+
+    BUG-716/BUG-591: neither a top-level `throw` nor a rejected promise reaches
+    a `window` listener — measured again in slice 19
+    (`verify_stream_scroll_message_gaps.py --variant window-error-events`: all
+    four registrations, both handler shapes, print nothing at all). A test
+    whose `done()` hangs off one of those events can therefore only TIMEOUT.
+
+    The `unreached_func` guard is why this is a predicate rather than two
+    patterns: `html/semantics/scripting-1/the-script-element/fetch-src/
+    empty.html` sets `window.onerror = this.unreached_func(...)` as an
+    *assertion* and finishes from `script.onerror`, so matching the line would
+    attribute it to the one mechanism it is explicitly asserting against.
+    """
+    for line in text if isinstance(text, list) else text.splitlines():
+        if not _WINDOW_ERROR_WAIT_RE.search(line):
+            continue
+        if _UNREACHED_RE.search(line):
+            continue
+        return True
+    return False
+
+
 SOURCE_MARKERS = [
     # First on purpose: see `_audio_src_marker` — the page stops dead at the
     # `src` assignment, before anything else it was going to do. It sorts above
@@ -683,6 +722,77 @@ SOURCE_MARKERS = [
         "page: `error` is dispatched at the `Worker` object only when the "
         "script fetch itself failed",
         mode="all",
+    ),
+    # The three scroll/stream markers of slice 19 sort here, below everything
+    # older, for the same reason the two above do: a scroll test that also
+    # builds an `<iframe>` or waits on a font is claimed by that cause first.
+    Mechanism(
+        # `scrollend` is not dispatched anywhere in the workspace — there is no
+        # `_lumen_fire_scrollend` to match the `_lumen_fire_window_scroll_event`
+        # / `_lumen_fire_scroll_on_element` pair, and `'onscrollend' in window`
+        # is false. Measured live by `verify_stream_scroll_message_gaps.py`
+        # (WPT-RUN-6 slice 19): a page and an element that both *do* scroll and
+        # both *do* fire `scroll` never hear `scrollend`. Placed above the
+        # page-scroll marker on purpose — an element scroll fires `scroll`
+        # correctly, so for a test that waits on `scrollend` the missing event
+        # is the whole cause whichever scroller it used.
+        "scrollend-never-fired", "BUG-822",
+        [r"scrollend"],
+        "the test waits for a `scrollend` event, which no scroll path in the "
+        "engine dispatches (and `onscrollend` is not on `window` either)",
+    ),
+    Mechanism(
+        # A programmatic page scroll works — `window.scrollTo(0, 300)` really
+        # moves the page and `window.scrollY` reports 300 afterwards (measured;
+        # the earlier reading of 0 was a probe page whose spacer painted
+        # nothing, so `content_height` was 0) — but it dispatches no `scroll`
+        # event: `fire_window_scroll` (`crates/shell/src/main.rs:3505`) has
+        # exactly one caller, the mouse-wheel branch at `main.rs:16085`. The
+        # element path is fine (`fire_element_scroll` runs for `scrollTo` and
+        # `scrollTop=` alike), which is why both halves are required below:
+        # the wait must be on a *page-level* `scroll`.
+        "page-scroll-no-scroll-event", "BUG-821",
+        [r"window\.scroll(?:To|By)\s*\(|document\.scrollingElement"
+         r"|\bscrollIntoView\s*\(",
+         r"window\.addEventListener\(\s*['\"]scroll['\"]"
+         r"|document\.addEventListener\(\s*['\"]scroll['\"]"
+         r"|window\.onscroll\s*=|(?<![.\w])onscroll\s*="],
+        "the test scrolls the page from script and waits for the `scroll` "
+        "event, which only a mouse-wheel scroll dispatches",
+        mode="all",
+    ),
+    Mechanism(
+        # The Streams shim (`crates/js/src/dom.rs:7303-7600`) settles promises
+        # on the happy path only: `writer.closed` never settles at all,
+        # `controller.error()` reaches no pending promise, a `start()` that
+        # returns a rejected promise or a thenable is ignored, the sink's
+        # `abort()` is never called, `tee()` closes its source and drops every
+        # chunk enqueued after the call, `getReader({mode:'byob'})` hands back
+        # a default reader, and there is no `Symbol.asyncIterator`. Measured
+        # two ways in slice 19: the probe variants of
+        # `verify_stream_scroll_message_gaps.py`, and a per-file sweep that ran
+        # each residual `streams/*` test with `add_result_callback` logging —
+        # 35 of the 36 runnable ones stop mid-file, always on a subtest of one
+        # of those shapes (BUG-823 for the unsettled promises, BUG-824 for the
+        # missing surfaces). Both halves are required so that a test merely
+        # *mentioning* a stream is not claimed.
+        "streams-promise-unsettled", "BUG-823/BUG-824",
+        [r"new\s+(?:Readable|Writable|Transform)Stream\s*\("
+         r"|TextDecoderStream|TextEncoderStream",
+         r"\.closed\b|\.abort\s*\(|\.tee\s*\("
+         r"|mode:\s*['\"]byob['\"]|controller\.error\s*\("
+         r"|\.pipeTo\s*\(|\.getWriter\s*\("],
+        "the test drives a stream through an error/close/cancel path, where "
+        "the shim leaves the promise pending forever",
+        mode="all",
+    ),
+    # Truly last: "the test listens for an error" is the weakest of these
+    # claims, so anything with a named cause above must take the test first.
+    Mechanism(
+        "window-error-event-never-fired", "BUG-716/BUG-591", [],
+        "the test completes from a window-level `error` / `unhandledrejection` "
+        "event, and the engine dispatches neither",
+        predicate=_window_error_wait_marker,
     ),
 ]
 
@@ -1897,6 +2007,121 @@ def selftest():
         check(classify_source("/workers/err-only.htm", tmp, {})
               != "worker-no-error-event",
               "an error listener without a Worker must not be claimed")
+
+        # ── slice 19 ───────────────────────────────────────────────────────
+        # A programmatic page scroll moves the page but dispatches no `scroll`
+        # event: both halves are required, because the wait alone is every
+        # scroll test and the scroll alone is half of `css-scroll-*`.
+        os.makedirs(os.path.join(tmp, "css", "css-scroll-anchoring"), exist_ok=True)
+        anchoring = os.path.join(tmp, "css", "css-scroll-anchoring")
+        with open(os.path.join(anchoring, "page.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>promise_test(async t => {\n"
+                         "  window.scrollTo(0, 300);\n"
+                         "  await new Promise(r => window.addEventListener('scroll', r));\n"
+                         "});</script>")
+        check(classify_source("/css/css-scroll-anchoring/page.html", tmp, {})
+              == "page-scroll-no-scroll-event",
+              "a page scroll followed by a scroll-event wait was not claimed")
+        with open(os.path.join(anchoring, "bare-onscroll.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>const t = async_test('x');\n"
+                         "onscroll = t.step_func_done(() => {});\n"
+                         "window.scrollBy(0, -200);</script>")
+        check(classify_source("/css/css-scroll-anchoring/bare-onscroll.html", tmp, {})
+              == "page-scroll-no-scroll-event",
+              "the bare `onscroll =` shape was not claimed")
+        # An element scroll DOES fire `scroll` (`fire_element_scroll` runs for
+        # `scrollTo` and `scrollTop=` alike), so an element-only test must not
+        # be claimed by the page marker.
+        with open(os.path.join(anchoring, "element.html"), "w", encoding="utf-8") as handle:
+            handle.write("<div id=s></div><script>promise_test(async t => {\n"
+                         "  s.addEventListener('scroll', () => {});\n"
+                         "  s.scrollTo(0, 250);\n"
+                         "});</script>")
+        check(classify_source("/css/css-scroll-anchoring/element.html", tmp, {})
+              != "page-scroll-no-scroll-event",
+              "an element scroll must not be blamed on the page-scroll gap")
+        # ...and a page scroll with no wait at all is not this mechanism.
+        with open(os.path.join(anchoring, "no-wait.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>promise_test(async t => {\n"
+                         "  window.scrollTo(0, 150);\n"
+                         "  assert_equals(window.scrollY, 150);\n"
+                         "});</script>")
+        check(classify_source("/css/css-scroll-anchoring/no-wait.html", tmp, {}) is None,
+              "a page scroll without an event wait must stay unclassified")
+        # `scrollend` is dispatched by nothing at all, so the mention alone is
+        # the marker — and it outranks the page-scroll one, because an element
+        # scroll that fires `scroll` correctly still never fires `scrollend`.
+        with open(os.path.join(anchoring, "scrollend.html"), "w", encoding="utf-8") as handle:
+            handle.write("<div id=s></div><script>promise_test(async t => {\n"
+                         "  const p = new Promise(r => s.addEventListener('scrollend', r));\n"
+                         "  s.scrollTo(0, 250);\n"
+                         "  await p;\n"
+                         "});</script>")
+        check(classify_source("/css/css-scroll-anchoring/scrollend.html", tmp, {})
+              == "scrollend-never-fired",
+              "a scrollend wait was not claimed")
+        with open(os.path.join(anchoring, "both.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>promise_test(async t => {\n"
+                         "  window.addEventListener('scroll', () => {});\n"
+                         "  const p = new Promise(r => window.addEventListener('scrollend', r));\n"
+                         "  window.scrollTo(0, 300);\n"
+                         "  await p;\n"
+                         "});</script>")
+        check(classify_source("/css/css-scroll-anchoring/both.html", tmp, {})
+              == "scrollend-never-fired",
+              "scrollend must outrank the page-scroll marker")
+        # Streams: both halves again — a construction plus one of the measured
+        # error/close/cancel paths.
+        os.makedirs(os.path.join(tmp, "streams"), exist_ok=True)
+        with open(os.path.join(tmp, "streams", "closed.any.js"), "w", encoding="utf-8") as handle:
+            handle.write("promise_test(t => {\n"
+                         "  const ws = new WritableStream({ close() { throw 1; } });\n"
+                         "  const writer = ws.getWriter();\n"
+                         "  return promise_rejects_exactly(t, 1, writer.closed);\n"
+                         "});\n")
+        check(classify_source("/streams/closed.any.html", tmp, {})
+              == "streams-promise-unsettled",
+              "a writer.closed wait was not claimed")
+        # A test that merely *builds* a stream and reads it on the happy path
+        # is not this mechanism — the happy path works (measured).
+        with open(os.path.join(tmp, "streams", "happy.any.js"), "w", encoding="utf-8") as handle:
+            handle.write("promise_test(async () => {\n"
+                         "  const rs = new ReadableStream({ start(c) { c.enqueue(1); c.close(); } });\n"
+                         "  const reader = rs.getReader();\n"
+                         "  assert_equals((await reader.read()).value, 1);\n"
+                         "});\n")
+        check(classify_source("/streams/happy.any.html", tmp, {}) is None,
+              "a happy-path stream test must stay unclassified")
+        # A window-level error/rejection wait, and the `unreached_func` guard
+        # that must not be read as one.
+        os.makedirs(os.path.join(tmp, "webappapis"), exist_ok=True)
+        with open(os.path.join(tmp, "webappapis", "rejection.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(t => {\n"
+                         "  window.addEventListener('unhandledrejection', t.step_func_done(e => {}));\n"
+                         "  Promise.reject(new Error('x'));\n"
+                         "});</script>")
+        check(classify_source("/webappapis/rejection.html", tmp, {})
+              == "window-error-event-never-fired",
+              "an unhandledrejection wait was not claimed")
+        with open(os.path.join(tmp, "webappapis", "guard.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function () {\n"
+                         "  window.onerror = this.unreached_func('no error expected');\n"
+                         "  const s = document.createElement('script');\n"
+                         "  s.onerror = this.step_func_done(() => {});\n"
+                         "  document.head.appendChild(s);\n"
+                         "});</script>")
+        check(classify_source("/webappapis/guard.html", tmp, {})
+              != "window-error-event-never-fired",
+              "an unreached_func guard must not be read as the test's wait")
+        # Ordering: the window-error marker is last, so a named cause above it
+        # keeps the test even when the page also listens for `error`.
+        with open(os.path.join(tmp, "webappapis", "with-font.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(t => {\n"
+                         "  window.addEventListener('error', t.step_func(e => {}));\n"
+                         "  document.fonts.ready.then(t.step_func_done(() => {}));\n"
+                         "});</script>")
+        check(classify_source("/webappapis/with-font.html", tmp, {}) == "fonts-ready",
+              "an older named cause must outrank the window-error marker")
 
     for msg in failures:
         print("FAIL:", msg)
