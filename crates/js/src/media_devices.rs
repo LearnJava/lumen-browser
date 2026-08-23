@@ -74,7 +74,7 @@ const MEDIA_DEVICES_SHIM: &str = r#"(function() {
   };
   MediaStreamTrack.prototype.dispatchEvent = function(evt) {
     var fns = this._listeners[evt.type] || [];
-    fns.forEach(function(f) { try { f(evt); } catch(e) {} });
+    fns.forEach(function(f) { try { f(evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } });
     return true;
   };
   globalThis.MediaStreamTrack = MediaStreamTrack;
@@ -135,7 +135,7 @@ const MEDIA_DEVICES_SHIM: &str = r#"(function() {
   };
   MediaStream.prototype.dispatchEvent = function(evt) {
     var fns = this._listeners[evt.type] || [];
-    fns.forEach(function(f) { try { f(evt); } catch(e) {} });
+    fns.forEach(function(f) { try { f(evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } });
     return true;
   };
   globalThis.MediaStream = MediaStream;
@@ -396,7 +396,7 @@ const MEDIA_DEVICES_SHIM: &str = r#"(function() {
     },
     dispatchEvent: function(evt) {
       var fns = _md_listeners[evt.type] || [];
-      fns.forEach(function(f) { try { f(evt); } catch(e) {} });
+      fns.forEach(function(f) { try { f(evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } });
       return true;
     },
 

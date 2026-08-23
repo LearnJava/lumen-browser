@@ -66,7 +66,7 @@ worker-side support script (not guessed from the log alone):
 **Not re-filed — already on record:** the `onerror`/`Worker_ErrorEvent_*`
 cluster (7 files under `interfaces/WorkerGlobalScope/onerror/` plus 6
 `Worker_ErrorEvent_*.htm`) reconfirms the already-open
-[BUG-591](../../bugs/BUG-591-OPEN.md) (an exception thrown *inside* an
+[BUG-591](../../bugs/BUG-591-FIXED.md) (an exception thrown *inside* an
 already-started worker never reaches the parent's `error` handler) — read
 each failing test's onerror-handling code before attributing it here,
 per the project's "don't describe a failure mode from intuition" rule.
@@ -92,4 +92,4 @@ per the project's "don't describe a failure mode from intuition" rule.
 `close()`/`fetch()`/`XMLHttpRequest`, плюс `importScripts()` у SharedWorker
 безусловно бросает, тогда как у dedicated-воркера работает). Кластер
 `onerror/*`/`Worker_ErrorEvent_*` — уже задокументированный
-[BUG-591](../bugs/BUG-591-OPEN.md), новым не заведён.
+[BUG-591](../bugs/BUG-591-FIXED.md), новым не заведён.

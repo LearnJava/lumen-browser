@@ -66,10 +66,10 @@ const SCHEDULER_SHIM: &str = r#"(function() {
     this._priority = newPriority;
     var evt = { type: 'prioritychange', previousPriority: prev };
     if (typeof this.onprioritychange === 'function') {
-      try { this.onprioritychange(evt); } catch(e) {}
+      try { this.onprioritychange(evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
     }
     var ls = this._pcListeners.slice();
-    for (var i = 0; i < ls.length; i++) { try { ls[i](evt); } catch(e) {} }
+    for (var i = 0; i < ls.length; i++) { try { ls[i](evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
   };
 
   TaskSignal.prototype._abort = function(reason) {
@@ -80,7 +80,7 @@ const SCHEDULER_SHIM: &str = r#"(function() {
       : new DOMException('TaskSignal aborted', 'AbortError');
     var evt = { type: 'abort' };
     var ls = this._abortListeners.slice();
-    for (var i = 0; i < ls.length; i++) { try { ls[i](evt); } catch(e) {} }
+    for (var i = 0; i < ls.length; i++) { try { ls[i](evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
   };
 
   globalThis.TaskSignal = TaskSignal;

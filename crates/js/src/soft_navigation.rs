@@ -79,7 +79,7 @@ const SOFT_NAVIGATION_SHIM: &str = r#"(function() {
       for (var i = 0; i < observers.length; i++) {
         var obs = observers[i];
         if (!obs._types || obs._types.indexOf('soft-navigation') >= 0) {
-          try { obs._callback([entry]); } catch(e) {}
+          try { obs._callback([entry]); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
         }
       }
     }

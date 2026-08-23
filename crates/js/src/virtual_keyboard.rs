@@ -92,7 +92,7 @@ const VIRTUAL_KEYBOARD_SHIM: &str = r#"
     }
     var listeners = this._listeners[type] || [];
     for (var i = 0; i < listeners.length; i++) {
-      try { listeners[i](event); } catch (_) {}
+      try { listeners[i](event); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); }
     }
     return !event.defaultPrevented;
   };

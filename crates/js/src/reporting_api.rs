@@ -69,7 +69,7 @@ const REPORTING_API_SHIM: &str = r#"
       });
       if (self._queue.length > 0) {
         var records = self._queue.splice(0);
-        try { self._callback(records, self); } catch (_) {}
+        try { self._callback(records, self); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); }
       }
     }
   };
@@ -109,7 +109,7 @@ const REPORTING_API_SHIM: &str = r#"
       if (!obs._accepts(report)) return;
       obs._queue.push(report);
       var records = obs._queue.splice(0);
-      try { obs._callback(records, obs); } catch (_) {}
+      try { obs._callback(records, obs); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); }
     });
   }
 

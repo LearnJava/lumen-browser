@@ -363,9 +363,9 @@ const VIDEO_SHIM: &str = r#"(function() {
 
   function fireTrackCueChange(track) {
     var ev = { type: 'cuechange', target: track };
-    if (typeof track.oncuechange === 'function') { try { track.oncuechange(ev); } catch(e) {} }
+    if (typeof track.oncuechange === 'function') { try { track.oncuechange(ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
     for (var i = 0; i < track._listeners.length; i++) {
-      try { track._listeners[i].call(track, ev); } catch(e) {}
+      try { track._listeners[i].call(track, ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
     }
   }
 

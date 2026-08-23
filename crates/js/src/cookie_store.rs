@@ -171,11 +171,11 @@ const COOKIE_STORE_SHIM: &str = r#"(function() {
     if (!changed.length && !deleted.length) return;
     var evt = new CookieChangeEvent('change', { changed: changed, deleted: deleted });
     if (typeof this.onchange === 'function') {
-      try { this.onchange(evt); } catch(e) {}
+      try { this.onchange(evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
     }
     var ls = this._listeners.slice();
     for (var i = 0; i < ls.length; i++) {
-      try { ls[i](evt); } catch(e) {}
+      try { ls[i](evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
     }
   };
 

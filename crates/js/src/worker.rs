@@ -898,9 +898,9 @@ const WORKER_SHIM: &str = r#"(function() {
           filename: u, lineno: 0, colno: 0,
           bubbles: false, cancelable: true,
         });
-        if (typeof self._onerror === 'function') { try { self._onerror(ev); } catch(e) {} }
+        if (typeof self._onerror === 'function') { try { self._onerror(ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
         for (var i = 0; i < self._errorListeners.length; i++) {
-          try { self._errorListeners[i](ev); } catch(e) {}
+          try { self._errorListeners[i](ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
         }
       }, 0);
       return;
@@ -968,9 +968,9 @@ const WORKER_SHIM: &str = r#"(function() {
     try { data = JSON.parse(json); } catch(e) { data = json; }
     var ev = { data: data, type: 'message', target: this,
                bubbles: false, cancelable: false };
-    if (this._onmessage) { try { this._onmessage(ev); } catch(e) {} }
+    if (this._onmessage) { try { this._onmessage(ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
     for (var i = 0; i < this._listeners.length; i++) {
-      try { this._listeners[i](ev); } catch(e) {}
+      try { this._listeners[i](ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
     }
   };
 
@@ -987,9 +987,9 @@ const WORKER_SHIM: &str = r#"(function() {
       colno: (info && info.colno) | 0,
       bubbles: false, cancelable: true,
     });
-    if (typeof this._onerror === 'function') { try { this._onerror(ev); } catch(e) {} }
+    if (typeof this._onerror === 'function') { try { this._onerror(ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
     for (var i = 0; i < this._errorListeners.length; i++) {
-      try { this._errorListeners[i](ev); } catch(e) {}
+      try { this._errorListeners[i](ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
     }
   };
 

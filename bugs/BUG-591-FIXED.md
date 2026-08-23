@@ -1,6 +1,6 @@
 # BUG-591: global uncaught-exception / unhandled-rejection reporting pipeline is entirely unwired
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-23
 **Компонент:** js/V8 host layer (`crates/js/src/v8_runtime.rs` -- `TryCatch` is used locally around each `eval`/module-eval call, `grep -c "TryCatch" v8_runtime.rs` finds no scope that reports back to page script; `crates/js/src/dom.rs` -- `window.onerror`/`window.onunhandledrejection` are never assigned by any engine hook, `reportError()` at `dom.rs:12864` exists but is only invoked *manually* by page script, never from the V8 host on a real uncaught exception; `PromiseRejectionEvent`/`'unhandledrejection'` do not exist anywhere -- `grep -n "unhandledrejection\|PromiseRejectionEvent" crates/js/src/*.rs` is empty)
 **Найден:** P2, WPT-VENDOR-html-webappapis, 2026-08-04
 
@@ -422,15 +422,38 @@ ric-checked
 (колбэк получает два аргумента вместо трёх, `resource` не доставляется) к
 этому багу отношения не имеет.
 
-**Что осталось у BUG-591 после этого среза:** отдельные шимы вне `dom.rs` —
-`worker.rs`, `shared_worker.rs`, `web_audio.rs` (`oncomplete`, названный
-[BUG-828](BUG-828-OPEN.md) как причина немоты `webaudio/*`), `xhr.rs`,
-`video_bindings.rs`, `wake_lock.rs`, `speech.rs`, `media_stream_recording.rs`,
-`notifications_bindings.rs`, `reporting_api.rs`, `screen_orientation.rs`,
-`scheduler.rs`, `soft_navigation.rs`, `presentation_api.rs`,
-`close_watcher.rs`, `launch_handler.rs`, `virtual_keyboard.rs`,
-`media_session.rs`, `cookie_store.rs`, `broadcast_channel.rs` — ~38 мест той
-же формы (граница шимов, урок BUG-780: фикс в `WEB_API_SHIM` до отдельного
-`rt.eval` не доходит). Плюс прежние два, снятые по объёму: `<body onerror>`
-для чужого документа (нужен `<iframe>`) и редакция «muted errors» для
-cross-origin.
+**Отдельные шимы вне `dom.rs` — тем же срезом (P1, 2026-08-23).** Граница
+шимов (урок [BUG-780](BUG-780-FIXED.md): фикс внутри `WEB_API_SHIM` до
+отдельного `rt.eval` не доходит) означала, что развилка `dom.rs` — только
+половина работы: ещё **50** мест той же формы жили в 21 файле собственных
+шимов. Все закрыты: `worker.rs` (клиентский класс `Worker`: `onmessage`,
+`onerror`, слушатели), `shared_worker.rs` (то же для `SharedWorker`),
+`web_audio.rs` (`onstatechange`; `oncomplete` — именно его
+[BUG-828](BUG-828-OPEN.md) называет причиной немоты `webaudio/*`), `xhr.rs`
+(общая развилка `on<type>` + `onreadystatechange`), `video_bindings.rs`
+(`oncuechange` дорожек), `broadcast_channel.rs`, `cookie_store.rs`,
+`media_devices.rs`, `media_stream_recording.rs`, `media_session.rs`,
+`notifications_bindings.rs`, `presentation_api.rs`, `reporting_api.rs`,
+`scheduler.rs`, `screen_orientation.rs`, `soft_navigation.rs`, `speech.rs`,
+`virtual_keyboard.rs`, `wake_lock.rs`, `close_watcher.rs`,
+`launch_handler.rs`.
+
+В этих файлах вызов **typeof-гардовый**, в отличие от `dom.rs`, и это не
+перестраховка: `rt_with_web_audio` в юнит-тестах — рантайм вообще без
+страничного DOM, а такие конфигурации реальны и в проде (`--dump-*`,
+растеризация SVG). Прямой вызов бросил бы `ReferenceError` из самого `catch`
+и унёс бы остаток цикла доставки — хуже, чем глотание, которое он заменяет.
+Два теста в `web_audio.rs` фиксируют обе половины гарда
+(`bug591_offline_context_oncomplete_exception_is_reported`,
+`…_without_reporter_is_contained`).
+
+Не тронуто и здесь: `_observer.disconnect()` в `cookie_banner.rs`,
+`JSON.parse` в `launch_handler.rs`, `el.dispatchEvent(...)` в
+`audio_element.rs` и `permissions.rs` (там доставку слушателям ведёт
+`dispatchEvent`, который репортит сам).
+
+**Что осталось у BUG-591:** только два механизма, оба вне досягаемости этого
+движка и оба названы «вне объёма» ещё двумя срезами раньше — `<body onerror>`
+для чужого документа (нужен `<iframe>`, которого нет:
+[BUG-480](BUG-480-OPEN.md)) и редакция «muted errors» для cross-origin
+скриптов ([BUG-900](BUG-900-OPEN.md), заведён при закрытии этого бага).

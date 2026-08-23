@@ -209,13 +209,13 @@ const NOTIFICATIONS_SHIM: &str = r#"(function() {
     var ev = eventArg || new Event(type);
     var handler = this['on' + type];
     if (typeof handler === 'function') {
-      try { handler.call(this, ev); } catch(e) {}
+      try { handler.call(this, ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
     }
     var lst = this._listeners[type];
     if (lst) {
       var copy = lst.slice();
       for (var i = 0; i < copy.length; i++) {
-        try { copy[i].call(this, ev); } catch(e) {}
+        try { copy[i].call(this, ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
       }
     }
   };
@@ -268,7 +268,7 @@ const NOTIFICATIONS_SHIM: &str = r#"(function() {
         try { _lumen_permission_state_changed('notifications'); } catch(e) {}
       }
       if (typeof callback === 'function') {
-        try { callback(result); } catch(e) {}
+        try { callback(result); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
       }
       resolve(result);
     });

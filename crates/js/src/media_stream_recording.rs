@@ -83,10 +83,10 @@ const MEDIA_STREAM_RECORDING_SHIM: &str = r#"(function() {
   MediaRecorder.prototype._dispatch = function(evt) {
     var type = evt.type;
     var handler = this['on' + type];
-    if (typeof handler === 'function') { try { handler.call(this, evt); } catch(e) {} }
+    if (typeof handler === 'function') { try { handler.call(this, evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
     var listeners = this._listeners[type];
     if (listeners) {
-      listeners.forEach(function(l) { try { l(evt); } catch(e) {} });
+      listeners.forEach(function(l) { try { l(evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } });
     }
   };
 
