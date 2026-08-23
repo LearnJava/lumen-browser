@@ -48,3 +48,39 @@ fragment rects from layout, which the box tree already has — see the
 Committed `.ini` under `tests/wpt/metadata/css/cssom-view/` for files whose
 dominant/sole cause is this gap, `expected: FAIL`/`TIMEOUT` per the actual
 run.
+
+
+## Замер 2026-08-23 (WPT-RUN-6, срез 25): это блокирует `test_driver.click`, а с ним весь кластер `focus-visible-*`
+
+`tests/wpt/verify_focus_mutation_animation_gaps.py --variant testdriver-click-path`
+дословно повторяет то, что `resources/testdriver.js::click` делает **в
+странице** до того, как дело дойдёт до исполнителя, и печатает первый
+отказавший шаг (dev-release, Linux, `main` = `530d0a444`):
+
+```
+tdc-api getClientRects=undefined elementsFromPoint=false elementFromPoint=false
+        defaultView=undefined contains=true scrollIntoView=function
+tdc-throws TypeError: el.getClientRects is not a function
+```
+
+`click(element)` начинается с `inView(element)` →
+`getPointerInteractablePaintTree(element)` → `element.getClientRects()`
+(`resources/testdriver.js:52`). То есть вызов бросает **синхронно**, promise
+не создаётся вовсе, `.then(() => done())` теста не выполняется, и в снимке
+WPT-RUN-5 (до фикса BUG-591/716) исключение никуда не долетало — файл уходил
+в TIMEOUT с пустым логом.
+
+Важная поправка к готче в `CLAUDE.md`: элемент-адресованный `test_driver`-экшен
+падает **не** на `document.defaultView` ([BUG-622](BUG-622-OPEN.md), это
+следующий по порядку отказ, `testdriver-extra.js::get_context`), а раньше — на
+этом баге. `elementsFromPoint`/`elementFromPoint` ([BUG-464](BUG-464-OPEN.md),
+[BUG-477](BUG-477-OPEN.md)) — третье звено той же цепочки: даже с
+`getClientRects` дерево не построится.
+
+**Масштаб этой грани:** механизм `testdriver-click-preconditions` в
+`tests/wpt/timeout_audit.py` — 14 id остатка снимка WPT-RUN-5, из них 12 это
+весь кластер `css/selectors/focus-visible-*`, плюс `focus/scroll-matches-focus.html`
+и `html/semantics/forms/the-label-element/forward-focus-to-associated-element.html`.
+
+Дубликаты этого же дефекта, заведённые независимо: [BUG-551](BUG-551-OPEN.md),
+[BUG-580](BUG-580-OPEN.md) — чинить одним коммитом, закрывать все три.

@@ -56,3 +56,22 @@ re-verification once fixed. Likely fix: at the top of
 `HTMLElement.prototype.focus`, if `this.tagName === 'LABEL'` and
 `this.control` is non-null, recurse into `this.control.focus(options)`
 instead of operating on `this`.
+
+
+## Перезамер 2026-08-23 (WPT-RUN-6, срез 25)
+
+`tests/wpt/verify_focus_mutation_animation_gaps.py --variant focus-label`
+(dev-release, Linux, `main` = `530d0a444`): обе формы связи проверены,
+результат один и тот же — фокус не двигается **вообще**, ни на контрол, ни
+на сам `<label>`:
+
+| действие | ожидалось | получено |
+|---|---|---|
+| `label[for=c1].focus()` | `focus` на `c1`, `activeElement === c1` | `activeElement=BODY`, событий нет |
+| `label`-обёртка `.focus()` | `focus` на вложенном `c2` | `activeElement=BODY`, событий нет |
+
+Раньше баг был измерен только на форме `for=`; форма с вложенным контролом
+ведёт себя идентично. Даёт 1 id остатка снимка WPT-RUN-5
+(`html/semantics/forms/the-label-element/forward-focus-to-associated-element.html`,
+три зависших подтеста), но добраться до него тест сможет только после
+[BUG-478](BUG-478-OPEN.md) — он стартует с `test_driver.click`.

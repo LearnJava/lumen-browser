@@ -111,3 +111,25 @@ TIMEOUT, а не FAIL. Это бьёт КАЖДЫЙ файл, инстанции
 растёт минимум на 307 — `editing/` не входил в срезы 1-2. `css-grid/alignment`
 не добавляется отдельно — он уже внутри 384/452 по идиоме `fonts.ready`,
 посчитанной по всему корпусу в срезе 1.
+
+
+## Замер 2026-08-23 (WPT-RUN-6, срез 25): `defaultView` действительно отсутствует, но падает не он первым
+
+`tests/wpt/verify_focus_mutation_animation_gaps.py --variant testdriver-click-path`
+(dev-release, Linux, `main` = `530d0a444`) подтверждает `typeof
+document.defaultView === 'undefined'` — баг открыт и актуален. Но тот же
+замер показывает, что элемент-адресованный `test_driver`-экшен до
+`testdriver-extra.js::get_context` **не доходит**: `resources/testdriver.js::click`
+раньше зовёт `element.getClientRects()`, которого нет
+([BUG-478](BUG-478-OPEN.md)/[BUG-551](BUG-551-OPEN.md)/[BUG-580](BUG-580-OPEN.md)),
+и бросает синхронно:
+
+```
+tdc-api getClientRects=undefined elementsFromPoint=false elementFromPoint=false
+        defaultView=undefined contains=true
+tdc-throws TypeError: el.getClientRects is not a function
+```
+
+Практический вывод: починка одного `defaultView` не разблокирует ни одного
+`test_driver.click`-теста — нужны все три звена цепочки
+(`getClientRects` → `elementsFromPoint` → `defaultView`).
