@@ -308,3 +308,36 @@ window, ни `window.onerror`, ни строки на stderr браузера. �
 не заворачивает флоаты (`CSS-SPECS.md` #43), первый же `assert_not_equals`
 бросает, `done()` не достигается, исключение проглатывается — вместо FAIL
 получается NOTRUN и TIMEOUT.
+
+## Срез 2026-08-23 (P1) — путь window `load`/`DOMContentLoaded`/`visibilitychange` подключён
+
+Все четыре голых `catch(e) {}`, найденных срезом 24 выше, теперь зовут
+`_lumen_report_exception(e)` — тот же путь, которым уже репортируются
+таймеры/rAF/queueMicrotask/DOM-слушатели/воркеры: `_lumen_apply_ready_state`
+(`crates/js/src/dom.rs`, цикл по `_domcontentloaded_win_listeners`, цикл по
+`_load_listeners`, вызов `window.onload`) и `_lumen_apply_visibility` (цикл по
+`_visibilitychange_listeners`). `<body onload>` покрывается тем же местом —
+он и раньше форвардился в `window.onload` (`_LUMEN_BODY_FORWARDED_TO_WINDOW`,
+`dom.rs:991`), только само присвоенное значение вызывалось без репорта.
+`document.dispatchEvent` для `readystatechange`/`DOMContentLoaded` на
+document (а не на window) уже был подключён раньше — репортится не этот
+путь, а отдельный ручной цикл по window-слушателям, который
+`_lumen_apply_ready_state` держит параллельно ради порядка «document
+(bubbles), затем window» (HTML LS §8.5).
+
+Не тронуто (внутренний, не пользовательский код): `try { afEl.focus(); }
+catch(e) {}` в том же `_lumen_apply_ready_state` вокруг autofocus-фокусировки
+(BUG-381) — это вызов движка, а не пользовательский обработчик.
+
+4 новых теста (`dom.rs::tests::v8_core`):
+`bug591_window_load_listener_exception_fires_window_error`,
+`bug591_window_onload_exception_fires_window_error`,
+`bug591_window_domcontentloaded_listener_exception_fires_window_error`,
+`bug591_window_visibilitychange_listener_exception_fires_window_error`.
+
+С этим срезом весь ранее известный список путей, кроме двух специально
+исключённых из объёма (`<body onerror>` для чужого документа — нужен
+`<iframe>`, которого нет; редакция «muted errors» для cross-origin), закрыт.
+Остаются вне scope нижнего приоритета: `dispatchEvent` у
+service-worker-registration/`MediaQueryList`/`MessagePort` (см. «Не в объёме
+этого среза» выше) — узкие, не названные ни одним WPT-кластером механизмы.
