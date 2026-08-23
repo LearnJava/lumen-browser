@@ -43,7 +43,7 @@ sq-session wrote=20000 ms=67 err=none length=20000
 ## Масштаб
 
 4 id остатка снимка WPT-RUN-5 — ровно те, которые
-[BUG-836](BUG-836-OPEN.md) в своей заметке отложил как «4 квотных теста»:
+[BUG-836](BUG-836-FIXED.md) в своей заметке отложил как «4 квотных теста»:
 `webstorage/storage_local_setitem_quotaexceedederr.window.html`,
 `storage_session_setitem_quotaexceedederr.window.html`,
 `storage_local_quota_independent_from_session.window.html`,
