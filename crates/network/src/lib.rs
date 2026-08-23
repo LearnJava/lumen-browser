@@ -947,13 +947,10 @@ fn read_response(conn: &mut Connection) -> Result<Response> {
     } else {
         // Ни chunked, ни Content-Length — читаем до EOF (RFC 7230 §3.3.3 п.7),
         // независимо от того, прислал ли сервер явный `Connection: close`.
-        let mut buf = Vec::new();
-        if let Err(e) = conn.reader.read_to_end(&mut buf) {
-            conn.closed = true;
-            return Err(Error::Network(format!("read body: {e}")));
-        }
+        let res = read_body_to_eof(&mut conn.reader);
+        // EOF-фреймирование исчерпывает соединение при любом исходе чтения.
         conn.closed = true;
-        buf
+        res?
     };
 
     if server_wants_close {
@@ -1171,11 +1168,24 @@ impl<R: BufRead> Read for BodyReader<'_, R> {
                 Ok(n)
             }
             BodyFraming::Eof => {
-                let n = self.reader.read(buf)?;
-                if n == 0 {
-                    self.done = true;
+                match self.reader.read(buf) {
+                    Ok(n) => {
+                        if n == 0 {
+                            self.done = true;
+                        }
+                        Ok(n)
+                    }
+                    // Обрыв TLS-соединения без close_notify на
+                    // EOF-фреймировании — штатный конец тела (BUG-792):
+                    // длина неизвестна, усечение неотличимо от нормы, всё
+                    // выданное ранее уже у caller-а. Length/chunked ниже
+                    // обрыв не прощают — там недобор доказуем.
+                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                        self.done = true;
+                        Ok(0)
+                    }
+                    Err(e) => Err(e),
                 }
-                Ok(n)
             }
             BodyFraming::Chunked => {
                 if self.remaining == 0 {
@@ -1241,6 +1251,30 @@ impl<R: Read> Read for TeeReader<'_, R> {
     }
 }
 
+/// Прочитать EOF-фреймированное тело: цикл `read` с накоплением, где
+/// `UnexpectedEof` от TLS-слоя завершает тело УСПЕШНО, а не ошибкой.
+///
+/// `rustls` различает корректное завершение (`close_notify` → `Ok(0)`) и обрыв
+/// соединения (`UnexpectedEof` — защита от truncation-атаки). На
+/// EOF-фреймировании длина тела неизвестна в принципе, поэтому усечение
+/// неотличимо от нормы, и байты, прочитанные до обрыва, — это и есть тело;
+/// выбрасывать их из-за способа закрытия соединения нельзя (BUG-792: wptserve
+/// отдаёт close-delimited ответы без `close_notify`, из-за чего весь
+/// `.https.`-корпус WPT приходил в движок как сетевая ошибка). На Length и
+/// chunked послабление не действует: недобор байт там доказуемое усечение.
+fn read_body_to_eof<R: BufRead>(reader: &mut R) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; STREAM_BODY_READ];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => return Ok(buf),
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(buf),
+            Err(e) => return Err(Error::Network(format!("read body: {e}"))),
+        }
+    }
+}
+
 /// Прочитать framed-тело целиком (без content-encoding decode). Эквивалент
 /// body-секции `read_response`, параметризованный уже определённым `framing`.
 fn read_framed_buffered<R: BufRead>(reader: &mut R, framing: BodyFraming) -> Result<Vec<u8>> {
@@ -1253,13 +1287,7 @@ fn read_framed_buffered<R: BufRead>(reader: &mut R, framing: BodyFraming) -> Res
                 .map_err(|e| Error::Network(format!("read body: {e}")))?;
             Ok(buf)
         }
-        BodyFraming::Eof => {
-            let mut buf = Vec::new();
-            reader
-                .read_to_end(&mut buf)
-                .map_err(|e| Error::Network(format!("read body: {e}")))?;
-            Ok(buf)
-        }
+        BodyFraming::Eof => read_body_to_eof(reader),
     }
 }
 
@@ -5778,6 +5806,95 @@ mod tests {
         // Первый read отдаёт 3 байта, второй упирается в EOF до Content-Length.
         assert_eq!(br.read(&mut buf).unwrap(), 3);
         assert!(br.read(&mut buf).is_err());
+    }
+
+    // ── BUG-792: обрыв TLS без close_notify на EOF-фреймировании ────────────
+
+    /// Читатель, отдающий данные порциями по 3 байта (провоцирует partial-read),
+    /// а после исчерпания — `UnexpectedEof`: имитация rustls на соединении,
+    /// закрытом сервером без TLS-shutdown (то, что делает wptserve).
+    struct AbruptTlsClose<'a> {
+        data: &'a [u8],
+        pos: usize,
+    }
+
+    impl<'a> AbruptTlsClose<'a> {
+        fn new(data: &'a [u8]) -> Self {
+            Self { data, pos: 0 }
+        }
+    }
+
+    impl Read for AbruptTlsClose<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.pos >= self.data.len() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "peer closed connection without sending TLS close_notify",
+                ));
+            }
+            let n = buf.len().min(3).min(self.data.len() - self.pos);
+            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn eof_body_keeps_bytes_on_abrupt_tls_close() {
+        let mut reader = BufReader::new(AbruptTlsClose::new(b"truncated-but-complete"));
+        assert_eq!(read_body_to_eof(&mut reader).unwrap(), b"truncated-but-complete");
+    }
+
+    #[test]
+    fn eof_body_empty_on_immediate_abrupt_close() {
+        let mut reader = BufReader::new(AbruptTlsClose::new(b""));
+        assert!(read_body_to_eof(&mut reader).unwrap().is_empty());
+    }
+
+    #[test]
+    fn eof_body_real_io_error_still_errors() {
+        // Не-обрывная ошибка чтения остаётся ошибкой: послабление только для
+        // UnexpectedEof.
+        struct Broken;
+        impl Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "boom"))
+            }
+        }
+        let mut reader = BufReader::new(Broken);
+        assert!(read_body_to_eof(&mut reader).is_err());
+    }
+
+    #[test]
+    fn framed_buffered_eof_keeps_bytes_on_abrupt_tls_close() {
+        let mut reader = BufReader::new(AbruptTlsClose::new(b"close-delimited-body"));
+        let body = read_framed_buffered(&mut reader, BodyFraming::Eof).unwrap();
+        assert_eq!(body, b"close-delimited-body");
+    }
+
+    #[test]
+    fn body_reader_eof_treats_abrupt_tls_close_as_end() {
+        // Streaming-путь: цикл read поверх BodyReader должен получить всё тело
+        // и чистый Ok(0) вместо ошибки.
+        let mut reader = BufReader::new(AbruptTlsClose::new(b"streamed-truncated"));
+        let mut br = BodyReader::new(&mut reader, BodyFraming::Eof);
+        assert_eq!(read_all_small(&mut br), b"streamed-truncated");
+    }
+
+    #[test]
+    fn length_framing_still_errors_on_abrupt_tls_close() {
+        // Послабление касается только EOF-фреймирования: недобор до
+        // Content-Length — доказуемое усечение и остаётся ошибкой.
+        let mut reader = BufReader::new(AbruptTlsClose::new(b"short"));
+        assert!(read_framed_buffered(&mut reader, BodyFraming::Length(10)).is_err());
+    }
+
+    #[test]
+    fn chunked_framing_still_errors_on_abrupt_tls_close() {
+        // Обрыв внутри chunked-тела (нет ни CRLF chunk-а, ни last-chunk) —
+        // тоже доказуемое усечение.
+        let mut reader = BufReader::new(AbruptTlsClose::new(b"a\r\nabc"));
+        assert!(read_framed_buffered(&mut reader, BodyFraming::Chunked).is_err());
     }
 
     #[test]
