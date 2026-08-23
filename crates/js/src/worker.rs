@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -81,6 +82,16 @@ pub type WorkerBlobStore = Arc<Mutex<HashMap<String, String>>>;
 /// embedded directly (not re-stringified) the same way [`WorkerMessageQueue`]
 /// entries are — see [`crate::build_worker_messages_json`].
 pub type WorkerErrorQueue = Arc<Mutex<Vec<(u32, String)>>>;
+
+/// Set by `self.close()` inside a running worker thread (BUG-778, dedicated
+/// and shared alike). `run_worker_thread_v8`/`run_shared_worker_thread_v8`'s
+/// message loop polls this after every dispatched task and stops without
+/// servicing any further one — HTML LS §10.2.3/§10.2.4 "close a worker":
+/// discard any tasks already queued for the worker, and prevent any further
+/// tasks from being queued. Not removed from the parent's registry — a
+/// `postMessage` sent after close is simply dropped once the channel's
+/// receiver is gone, same as any other dead worker.
+pub(crate) type WorkerCloseFlag = Arc<AtomicBool>;
 
 // ─── public API ───────────────────────────────────────────────────────────────
 
@@ -242,11 +253,21 @@ fn percent_decode(s: &str) -> String {
 /// Supported schemes:
 /// - `data:[type][;base64],<content>` — decoded inline; no network required.
 /// - `blob:lumen/<id>` — looked up in `blob_store`.
-///
-/// Returns `None` for any other scheme (external HTTP/HTTPS URLs require async
-/// network access which is not available inside a synchronous worker thread).
+/// - anything else — a synchronous GET via `fetch_provider` (BUG-778's
+///   WPT-RUN-6 extension: `importScripts()` previously only worked for
+///   `data:`/`blob:lumen/`, but the wrapper wptrunner builds for every
+///   `.worker.html`/`.any.worker.html`/`.any.sharedworker.html` test opens
+///   with `importScripts("/resources/testharness.js")`). `url` is expected
+///   pre-resolved to absolute by the calling JS shim (`_lumen_worker_base_url`
+///   — this function has no worker/document base URL of its own); reuses the
+///   same bridge [`fetch_worker_script`] uses for the worker's own classic
+///   script, not new machinery.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-fn resolve_import_url(url: &str, blob_store: &WorkerBlobStore) -> Option<String> {
+pub(crate) fn resolve_import_url(
+    url: &str,
+    blob_store: &WorkerBlobStore,
+    fetch_provider: Option<&dyn lumen_core::ext::JsFetchProvider>,
+) -> Option<String> {
     if let Some(rest) = url.strip_prefix("data:") {
         let comma = rest.find(',').unwrap_or(rest.len());
         let meta = &rest[..comma];
@@ -261,7 +282,7 @@ fn resolve_import_url(url: &str, blob_store: &WorkerBlobStore) -> Option<String>
     } else if url.starts_with("blob:lumen/") {
         blob_store.lock().unwrap().get(url).cloned()
     } else {
-        None
+        fetch_worker_script(fetch_provider, url)
     }
 }
 
@@ -414,15 +435,23 @@ fn worker_global_shim(worker_id: u32) -> String {
   }};
 
   // importScripts(url1[, url2, …]) — WHATWG Web Workers §4.2.3.
-  // Synchronously loads and evaluates one or more scripts.
-  // Supported: data: URLs (base64 or percent-encoded) and blob:lumen/ URLs.
-  // External http(s): URLs throw NetworkError (no sync fetch in worker threads).
+  // Synchronously loads and evaluates one or more scripts. `data:`/
+  // `blob:lumen/` resolve locally; anything else is resolved against the
+  // worker's own script URL (`_lumen_worker_base_url`, set at worker
+  // creation — empty for a blob:/data: worker) and fetched over the network
+  // (BUG-778 — previously only data:/blob: worked at all, and an http(s) URL
+  // always threw NetworkError even when absolute).
   globalThis.importScripts = function() {{
     for (var i = 0; i < arguments.length; i++) {{
       var u = String(arguments[i]);
-      var script = _lumen_import_scripts_resolve(u);
+      var resolved = u;
+      if (u.indexOf('://') === -1 && u.slice(0, 5) !== 'data:' && u.slice(0, 5) !== 'blob:'
+          && typeof _lumen_worker_base_url === 'string' && _lumen_worker_base_url) {{
+        try {{ resolved = new URL(u, _lumen_worker_base_url).href; }} catch (e) {{ resolved = u; }}
+      }}
+      var script = _lumen_import_scripts_resolve(resolved);
       if (script === null || script === undefined) {{
-        throw new Error('importScripts: cannot load script: ' + u);
+        throw new Error('importScripts: cannot load script: ' + resolved);
       }}
       (1, eval)(script);
     }}
@@ -457,9 +486,263 @@ fn worker_global_shim(worker_id: u32) -> String {
     }}
   }};
 
+  // Exposed so the shared net shim (WORKER_NET_SHIM, evaluated as a
+  // separate IIFE right after this one) can route a throwing fetch/XHR
+  // listener through the same reporting path (BUG-591 shape, BUG-778 scope).
+  globalThis._lumen_worker_exception_reporter = _lumen_report_worker_exception;
+
+  // close() — HTML LS §10.2.3 "close a worker" (BUG-778): discard further
+  // queued tasks. `_lumen_worker_self_close` flips a shared flag that
+  // `run_worker_thread_v8`'s message loop polls after every dispatched task
+  // and stops on, without servicing any more.
+  globalThis.close = function() {{ _lumen_worker_self_close(); }};
+
 }})({worker_id});"#
     )
 }
+
+/// Shared `fetch()`/`XMLHttpRequest`/`Headers`/`Response` surface for a
+/// `WorkerGlobalScope` (BUG-778): minimal but spec-shaped, synchronous over
+/// the same `_lumen_worker_net_fetch` bridge both dedicated
+/// ([`install_worker_globals_v8`]) and shared
+/// (`shared_worker.rs::install_shared_worker_globals_v8`) worker scopes
+/// register. Evaluated as its own IIFE right after the flavour-specific
+/// globals shim, so it only depends on globals that shim already defined:
+/// `_lumen_worker_net_fetch` (native), `_lumen_worker_base_url` (native-set
+/// global, used for relative-URL resolution), and — if present —
+/// `globalThis._lumen_worker_exception_reporter` for routing a throwing
+/// listener the same way BUG-591 does elsewhere.
+///
+/// Base64 codecs are self-contained (`_lumenB64ToBin`/`_lumenUtf8ToBin`/
+/// `_lumenBinToB64`) rather than relying on `atob`/`btoa`: the dedicated
+/// worker scope has them (`install_worker_globals_v8`'s scoped natives), but
+/// the shared-worker scope does not — see the module doc.
+#[cfg(feature = "v8-backend")]
+pub(crate) const WORKER_NET_SHIM: &str = r#"(function() {
+  function _lumenReportException(e) {
+    var r = globalThis._lumen_worker_exception_reporter;
+    if (typeof r === 'function') { try { r(e); } catch (_e) {} }
+  }
+
+  function _lumenB64ToBin(s) {
+    var CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    var out = '', buf = 0, bits = 0;
+    for (var i = 0; i < s.length; i++) {
+      var v = CHARS.indexOf(s.charAt(i));
+      if (v < 0) continue;
+      buf = (buf << 6) | v; bits += 6;
+      if (bits >= 8) { bits -= 8; out += String.fromCharCode((buf >> bits) & 0xFF); }
+    }
+    return out;
+  }
+  function _lumenBinToUtf8(b) {
+    var out = '', i = 0;
+    while (i < b.length) {
+      var c = b.charCodeAt(i++) & 0xFF, cp;
+      if (c < 0x80) cp = c;
+      else if (c < 0xE0) cp = ((c & 0x1F) << 6) | (b.charCodeAt(i++) & 0x3F);
+      else if (c < 0xF0) cp = ((c & 0x0F) << 12) | ((b.charCodeAt(i++) & 0x3F) << 6)
+                            | (b.charCodeAt(i++) & 0x3F);
+      else cp = ((c & 0x07) << 18) | ((b.charCodeAt(i++) & 0x3F) << 12)
+              | ((b.charCodeAt(i++) & 0x3F) << 6) | (b.charCodeAt(i++) & 0x3F);
+      out += String.fromCodePoint(cp);
+    }
+    return out;
+  }
+  function _lumenUtf8ToBin(str) {
+    var out = '';
+    for (var i = 0; i < str.length; i++) {
+      var cp = str.codePointAt(i);
+      if (cp > 0xFFFF) i++;
+      if (cp < 0x80) { out += String.fromCharCode(cp); }
+      else if (cp < 0x800) {
+        out += String.fromCharCode(0xC0 | (cp >> 6), 0x80 | (cp & 0x3F));
+      } else if (cp < 0x10000) {
+        out += String.fromCharCode(0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F));
+      } else {
+        out += String.fromCharCode(
+          0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F),
+          0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F));
+      }
+    }
+    return out;
+  }
+  function _lumenBinToB64(bin) {
+    var CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    var out = '';
+    for (var i = 0; i < bin.length; i += 3) {
+      var b0 = bin.charCodeAt(i) & 0xFF;
+      var b1 = i + 1 < bin.length ? bin.charCodeAt(i + 1) & 0xFF : 0;
+      var b2 = i + 2 < bin.length ? bin.charCodeAt(i + 2) & 0xFF : 0;
+      var n = (b0 << 16) | (b1 << 8) | b2;
+      out += CHARS.charAt((n >> 18) & 0x3F);
+      out += CHARS.charAt((n >> 12) & 0x3F);
+      out += (i + 1 < bin.length) ? CHARS.charAt((n >> 6) & 0x3F) : '=';
+      out += (i + 2 < bin.length) ? CHARS.charAt(n & 0x3F) : '=';
+    }
+    return out;
+  }
+
+  function _lumenResolve(url) {
+    if (url.indexOf('://') !== -1) return url;
+    var base = (typeof _lumen_worker_base_url === 'string' && _lumen_worker_base_url)
+      ? _lumen_worker_base_url
+      : (typeof location !== 'undefined' ? location.href : '');
+    if (!base) return url;
+    try { return new URL(url, base).href; } catch (e) { return url; }
+  }
+
+  // Minimal Headers (Fetch §3).
+  function Headers(init) {
+    this._h = {};
+    if (init) {
+      if (init instanceof Headers) { for (var k in init._h) this._h[k] = init._h[k]; }
+      else { for (var k2 in init) this._h[String(k2).toLowerCase()] = String(init[k2]); }
+    }
+  }
+  Headers.prototype.get = function(n) { var v = this._h[String(n).toLowerCase()]; return v === undefined ? null : v; };
+  Headers.prototype.set = function(n, v) { this._h[String(n).toLowerCase()] = String(v); };
+  Headers.prototype.has = function(n) { return String(n).toLowerCase() in this._h; };
+  Headers.prototype.append = function(n, v) {
+    var k = String(n).toLowerCase();
+    this._h[k] = (k in this._h) ? this._h[k] + ', ' + String(v) : String(v);
+  };
+  Headers.prototype['delete'] = function(n) { delete this._h[String(n).toLowerCase()]; };
+  Headers.prototype.forEach = function(fn, thisArg) {
+    for (var k in this._h) fn.call(thisArg, this._h[k], k, this);
+  };
+  globalThis.Headers = Headers;
+
+  // Minimal Response (Fetch §5.7) — body arrives as a "binary string"
+  // (one char = one byte) already decoded from the wire's base64 transport.
+  function Response(bodyBin, init) {
+    this._bin = bodyBin || '';
+    init = init || {};
+    this.status = init.status || 200;
+    this.statusText = init.statusText || '';
+    this.ok = this.status >= 200 && this.status < 300;
+    this.headers = (init.headers instanceof Headers) ? init.headers : new Headers(init.headers);
+    this.url = init.url || '';
+    this.bodyUsed = false;
+  }
+  Response.prototype.text = function() {
+    this.bodyUsed = true;
+    return Promise.resolve(_lumenBinToUtf8(this._bin));
+  };
+  Response.prototype.json = function() {
+    return this.text().then(function(t) { return JSON.parse(t); });
+  };
+  Response.prototype.arrayBuffer = function() {
+    this.bodyUsed = true;
+    var b = this._bin;
+    var buf = new ArrayBuffer(b.length);
+    var view = new Uint8Array(buf);
+    for (var i = 0; i < b.length; i++) view[i] = b.charCodeAt(i) & 0xFF;
+    return Promise.resolve(buf);
+  };
+  globalThis.Response = Response;
+
+  // fetch(resource[, init]) — WHATWG Fetch, synchronous network via the
+  // `_lumen_worker_net_fetch` bridge (BUG-778: previously undefined inside
+  // any worker, so a worker script could only receive/post messages).
+  globalThis.fetch = function(resource, init) {
+    var url = (typeof resource === 'string') ? resource : (resource && resource.url) || '';
+    init = init || {};
+    var method = String(init.method || (resource && resource.method) || 'GET').toUpperCase();
+    var abs = _lumenResolve(url);
+    var reqHeaders = new Headers(init.headers);
+    var flat = [];
+    reqHeaders.forEach(function(v, k) { flat.push(k); flat.push(v); });
+    var bodyB64 = (init.body !== undefined && init.body !== null)
+      ? _lumenBinToB64(_lumenUtf8ToBin(String(init.body))) : null;
+    var raw;
+    try { raw = _lumen_worker_net_fetch(abs, method, flat, bodyB64); }
+    catch (e) { return Promise.reject(new TypeError('fetch: ' + e)); }
+    if (!raw) return Promise.reject(new TypeError('fetch: network error for ' + abs));
+    var res = JSON.parse(raw);
+    return Promise.resolve(new Response(_lumenB64ToBin(res.body), {
+      status: res.status, statusText: res.statusText, headers: res.headers, url: abs,
+    }));
+  };
+
+  // XMLHttpRequest — minimal synchronous port over the same bridge
+  // (BUG-778). `send()` performs the request immediately and fires all
+  // readystatechange/load/error transitions on the same turn: a worker
+  // thread here has no real async event loop to defer them onto.
+  function XMLHttpRequest() {
+    this.readyState = 0;
+    this.status = 0;
+    this.statusText = '';
+    this.response = '';
+    this.responseText = '';
+    this._listeners = {};
+    this._method = 'GET';
+    this._url = '';
+    this._headers = [];
+  }
+  XMLHttpRequest.UNSENT = 0;
+  XMLHttpRequest.OPENED = 1;
+  XMLHttpRequest.HEADERS_RECEIVED = 2;
+  XMLHttpRequest.LOADING = 3;
+  XMLHttpRequest.DONE = 4;
+  XMLHttpRequest.prototype.open = function(method, url) {
+    this._method = String(method || 'GET').toUpperCase();
+    this._url = String(url || '');
+    this.readyState = 1;
+  };
+  XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
+    this._headers.push(String(name)); this._headers.push(String(value));
+  };
+  XMLHttpRequest.prototype.addEventListener = function(type, fn) {
+    if (typeof fn !== 'function') return;
+    (this._listeners[type] || (this._listeners[type] = [])).push(fn);
+  };
+  XMLHttpRequest.prototype.removeEventListener = function(type, fn) {
+    var l = this._listeners[type];
+    if (!l) return;
+    var i = l.indexOf(fn);
+    if (i !== -1) l.splice(i, 1);
+  };
+  XMLHttpRequest.prototype._fire = function(type) {
+    var ev = { type: type, target: this };
+    var onProp = this['on' + type];
+    if (typeof onProp === 'function') { try { onProp.call(this, ev); } catch (e) { _lumenReportException(e); } }
+    var l = this._listeners[type] || [];
+    for (var i = 0; i < l.length; i++) { try { l[i].call(this, ev); } catch (e) { _lumenReportException(e); } }
+  };
+  XMLHttpRequest.prototype.send = function(body) {
+    var abs = _lumenResolve(this._url);
+    var bodyB64 = (body !== undefined && body !== null)
+      ? _lumenBinToB64(_lumenUtf8ToBin(String(body))) : null;
+    var raw;
+    try { raw = _lumen_worker_net_fetch(abs, this._method, this._headers.slice(), bodyB64); }
+    catch (e) { raw = null; }
+    if (!raw) {
+      this.readyState = 4;
+      this._fire('readystatechange');
+      this._fire('error');
+      this._fire('loadend');
+      return;
+    }
+    var res = JSON.parse(raw);
+    this.status = res.status;
+    this.statusText = res.statusText;
+    this.responseText = _lumenBinToUtf8(_lumenB64ToBin(res.body));
+    this.response = this.responseText;
+    this.readyState = 2;
+    this._fire('readystatechange');
+    this.readyState = 3;
+    this._fire('readystatechange');
+    this.readyState = 4;
+    this._fire('readystatechange');
+    this._fire('load');
+    this._fire('loadend');
+  };
+  XMLHttpRequest.prototype.getAllResponseHeaders = function() { return ''; };
+  XMLHttpRequest.prototype.getResponseHeader = function() { return null; };
+  globalThis.XMLHttpRequest = XMLHttpRequest;
+})();
+"#;
 
 // ─── Worker JS class (evaluated in the main-thread JS context) ───────────────
 
@@ -554,6 +837,10 @@ const WORKER_SHIM: &str = r#"(function() {
   function Worker(url) {
     var script;
     var u = String(url || '');
+    // Base URL for this worker's own scope (BUG-778): used Rust-side to
+    // resolve relative/path-absolute importScripts()/fetch()/XHR targets.
+    // Empty for a blob:/data: worker — those have no meaningful origin.
+    var base = '';
 
     if (u.startsWith('blob:lumen/')) {
       // Blob URL created via URL.createObjectURL(blob).
@@ -590,6 +877,7 @@ const WORKER_SHIM: &str = r#"(function() {
       var abs = _url_resolve(u, _lumen_document_base_url());
       var fetched = _lumen_worker_fetch_script(abs);
       script = (typeof fetched === 'string') ? fetched : null;
+      base = abs;
     }
 
     this._onmessage = null;
@@ -618,7 +906,7 @@ const WORKER_SHIM: &str = r#"(function() {
       return;
     }
 
-    this._id = _lumen_create_worker(script);
+    this._id = _lumen_create_worker(script, base);
     _workerRegistry[this._id] = this;
   }
 
@@ -762,17 +1050,24 @@ pub(crate) fn install_worker_bindings_v8(
     blob_store: &WorkerBlobStore,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) -> JsResult<()> {
-    // _lumen_create_worker(script: String) → u32
+    // _lumen_create_worker(script: String, base_url: String) → u32
+    //
+    // `base_url` (BUG-778) is the worker's own resolved script URL (empty for
+    // a blob:/data: worker) — threaded down to the worker thread so its
+    // `importScripts()`/`fetch()`/`XMLHttpRequest` can resolve a relative or
+    // path-absolute target the way `.worker.html`'s wptrunner-built wrapper
+    // needs (`importScripts("/resources/testharness.js")`).
     {
         let reg = Arc::clone(registry);
         let q = Arc::clone(queue);
         let errs = Arc::clone(errors);
         let nid = Arc::clone(next_id);
         let bs = Arc::clone(blob_store);
+        let fp = fetch_provider.clone();
         rt.register_native(
             "_lumen_create_worker",
-            into_v8_fn1(move |script: String| -> u32 {
-                spawn_worker_v8(&reg, &q, &errs, &nid, &bs, script)
+            into_v8_fn2(move |script: String, base_url: String| -> u32 {
+                spawn_worker_v8(&reg, &q, &errs, &nid, &bs, script, base_url, fp.clone())
             }),
         )?;
     }
@@ -838,13 +1133,69 @@ pub(crate) fn install_worker_bindings_v8(
 /// response status is not 2xx — the caller (`_lumen_worker_fetch_script`)
 /// surfaces that as `undefined` to JS, which fires `error` on the `Worker`
 /// instead of running an empty script.
-#[cfg(feature = "v8-backend")]
 pub(crate) fn fetch_worker_script(provider: Option<&dyn lumen_core::ext::JsFetchProvider>, url: &str) -> Option<String> {
     let resp = provider?.fetch_sync(url, "GET").ok()?;
     if !(200..300).contains(&resp.status) {
         return None;
     }
     Some(String::from_utf8_lossy(&resp.body).into_owned())
+}
+
+/// Perform one synchronous network request for a worker's `fetch()`/
+/// `XMLHttpRequest` (BUG-778), returning
+/// `{"status":…,"statusText":…,"headers":{…},"body":"<base64>"}` on success,
+/// `None` on any network error or when `provider` is absent.
+///
+/// Shared by dedicated ([`install_worker_globals_v8`]) and shared
+/// (`shared_worker.rs::install_shared_worker_globals_v8`) worker scopes —
+/// mirrors `sw_worker.rs`'s `_lumen_sw_net_fetch`, but through the plain
+/// `fetch_request`/`fetch_sync` path rather than `fetch_bypassing_sw`: a
+/// dedicated/shared worker has no `FetchInterceptor` routing requests back
+/// to itself the way a service worker's own scope does, so there is nothing
+/// to bypass.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn worker_net_fetch_json(
+    provider: Option<&dyn lumen_core::ext::JsFetchProvider>,
+    url: &str,
+    method: &str,
+    headers_flat: &[String],
+    body_b64: Option<&str>,
+) -> Option<String> {
+    let provider = provider?;
+    let headers: Vec<(String, String)> = headers_flat
+        .chunks_exact(2)
+        .map(|pair| (pair[0].clone(), pair[1].clone()))
+        .collect();
+    let body_bytes = body_b64.and_then(b64_decode);
+    let req = lumen_core::ext::JsFetchRequest {
+        url,
+        method,
+        headers: &headers,
+        body: body_bytes.as_ref().map(|bytes| lumen_core::ext::JsFetchBody {
+            content_type: "text/plain;charset=UTF-8",
+            bytes,
+        }),
+        token: None,
+    };
+    let resp = match provider.fetch_request(&req) {
+        Ok(resp) => resp,
+        Err(e) => {
+            eprintln!("[worker] fetch: {url}: {e}");
+            return None;
+        }
+    };
+    let headers: serde_json::Map<String, serde_json::Value> = resp
+        .headers
+        .into_iter()
+        .map(|(k, v)| (k, serde_json::Value::String(v)))
+        .collect();
+    serde_json::to_string(&serde_json::json!({
+        "status": resp.status,
+        "statusText": resp.status_text,
+        "headers": headers,
+        "body": b64_encode(&resp.body),
+    }))
+    .ok()
 }
 
 /// Spawn a new worker thread backed by its own [`V8JsRuntime`] that evaluates
@@ -855,6 +1206,7 @@ pub(crate) fn fetch_worker_script(provider: Option<&dyn lumen_core::ext::JsFetch
 #[cfg(feature = "v8-backend")]
 #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::too_many_arguments)]  // spawn-time state for the worker thread, BUG-778 added base_url/fetch_provider
 fn spawn_worker_v8(
     registry: &WorkerRegistry,
     queue: &WorkerMessageQueue,
@@ -862,6 +1214,8 @@ fn spawn_worker_v8(
     next_id: &Arc<Mutex<u32>>,
     blob_store: &WorkerBlobStore,
     script: String,
+    base_url: String,
+    fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) -> u32 {
     let id = {
         let mut n = next_id.lock().unwrap();
@@ -877,7 +1231,9 @@ fn spawn_worker_v8(
 
     let handle = thread::Builder::new()
         .name(format!("lumen-worker-v8-{id}"))
-        .spawn(move || run_worker_thread_v8(id, script, rx, reply, err_reply, store))
+        .spawn(move || {
+            run_worker_thread_v8(id, script, base_url, rx, reply, err_reply, store, fetch_provider)
+        })
         .expect("failed to spawn Web Worker thread (v8)");
 
     registry
@@ -901,13 +1257,16 @@ fn spawn_worker_v8(
 /// _lumen_offscreen_canvas_from_image_data !== 'undefined'` and degrades to
 /// passing the raw (un-deserialized) data through.
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::too_many_arguments)]  // worker-thread setup, BUG-778 added base_url/fetch_provider
 fn run_worker_thread_v8(
     id: u32,
     script: String,
+    base_url: String,
     rx: Receiver<WorkerInMsg>,
     reply: Arc<Mutex<Vec<(u32, String)>>>,
     errors: WorkerErrorQueue,
     blob_store: WorkerBlobStore,
+    fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) {
     let rt = match V8JsRuntime::new() {
         Ok(r) => r,
@@ -917,12 +1276,20 @@ fn run_worker_thread_v8(
         }
     };
 
+    // BUG-778: flipped by `self.close()` — polled below after the initial
+    // script eval and after every dispatched message, so the worker stops
+    // servicing further tasks (HTML LS §10.2.3 "close a worker").
+    let close_flag: WorkerCloseFlag = Arc::new(AtomicBool::new(false));
+
     if let Err(e) = install_worker_globals_v8(
         &rt,
         id,
         Arc::clone(&reply),
         Arc::clone(&errors),
         Arc::clone(&blob_store),
+        fetch_provider,
+        &base_url,
+        Arc::clone(&close_flag),
     ) {
         eprintln!("[worker-{id}] v8 globals install failed: {e:?}");
         return;
@@ -945,8 +1312,13 @@ fn run_worker_thread_v8(
         // Continue: worker may still receive messages if the error was partial.
     }
 
-    // Message loop: continue for Post; Terminate or channel-close exits.
-    while let Ok(WorkerInMsg::Post(json)) = rx.recv() {
+    // Message loop: continue for Post; Terminate, channel-close, or a
+    // BUG-778 `self.close()` (checked both before the top-level script had a
+    // chance to call it synchronously, and after every dispatched message —
+    // "discard any tasks queued for the worker, and prevent any further
+    // tasks from being queued", HTML LS §10.2.3) exits.
+    while !close_flag.load(Ordering::Relaxed) {
+        let Ok(WorkerInMsg::Post(json)) = rx.recv() else { break };
         if rt.set_global("_lw_msg__", lumen_core::JsValue::String(json)).is_ok() {
             let _ = rt.eval(
                 "if(typeof _lumen_worker_dispatch_message==='function')\
@@ -961,8 +1333,10 @@ fn run_worker_thread_v8(
 
 /// Install the Worker global environment into a V8 runtime. Registers the
 /// natives `_lumen_worker_post_reply`, `_lumen_worker_console_log`,
-/// `_lumen_import_scripts_resolve`, `atob`, `btoa` and evaluates
-/// [`worker_global_shim`].
+/// `_lumen_import_scripts_resolve`, `_lumen_worker_self_close`,
+/// `_lumen_worker_net_fetch` (BUG-778), `atob`, `btoa`, sets the
+/// `_lumen_worker_base_url` global, and evaluates [`worker_global_shim`]
+/// followed by [`WORKER_NET_SHIM`].
 ///
 /// `atob`/`btoa` go through [`crate::v8_compat::V8NativeFnScoped`] (raw scope
 /// access) rather than the plain `into_v8_fnN` path, because they must throw
@@ -971,12 +1345,16 @@ fn run_worker_thread_v8(
 /// reasoning as `wasm_compile_native_v8` in S9).
 #[cfg(feature = "v8-backend")]
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::too_many_arguments)]  // per-flavour worker install, same shape as sw_worker.rs's twin
 fn install_worker_globals_v8(
     rt: &V8JsRuntime,
     worker_id: u32,
     reply: Arc<Mutex<Vec<(u32, String)>>>,
     errors: WorkerErrorQueue,
     blob_store: WorkerBlobStore,
+    fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    base_url: &str,
+    close_flag: WorkerCloseFlag,
 ) -> JsResult<()> {
     rt.register_native(
         "_lumen_worker_post_reply",
@@ -1010,10 +1388,43 @@ fn install_worker_globals_v8(
         }),
     )?;
 
-    rt.register_native(
-        "_lumen_import_scripts_resolve",
-        into_v8_fn1(move |url: String| -> Option<String> { resolve_import_url(&url, &blob_store) }),
-    )?;
+    // _lumen_worker_self_close() — BUG-778 `self.close()`: flips the flag
+    // `run_worker_thread_v8`'s message loop polls to stop servicing tasks.
+    {
+        let flag = Arc::clone(&close_flag);
+        rt.register_native(
+            "_lumen_worker_self_close",
+            into_v8_fn0(move || {
+                flag.store(true, Ordering::Relaxed);
+            }),
+        )?;
+    }
+
+    // _lumen_worker_net_fetch(url, method, headers_flat, body_b64) → String | undefined
+    // BUG-778: backs `fetch()`/`XMLHttpRequest` inside the worker scope
+    // (WORKER_NET_SHIM) over the same synchronous `JsFetchProvider` bridge
+    // the classic-script fetch already uses — see [`worker_net_fetch_json`].
+    {
+        let fp = fetch_provider.clone();
+        rt.register_native(
+            "_lumen_worker_net_fetch",
+            into_v8_fn4(
+                move |url: String, method: String, headers_flat: Vec<String>, body_b64: Option<String>| -> Option<String> {
+                    worker_net_fetch_json(fp.as_deref(), &url, &method, &headers_flat, body_b64.as_deref())
+                },
+            ),
+        )?;
+    }
+
+    {
+        let fp = fetch_provider;
+        rt.register_native(
+            "_lumen_import_scripts_resolve",
+            into_v8_fn1(move |url: String| -> Option<String> {
+                resolve_import_url(&url, &blob_store, fp.as_deref())
+            }),
+        )?;
+    }
 
     rt.register_native_scoped("atob", Box::new(atob_native_v8))?;
     rt.register_native_scoped("btoa", Box::new(btoa_native_v8))?;
@@ -1023,7 +1434,13 @@ fn install_worker_globals_v8(
     // this point — the creation of this global scope, per HR Time L3 §4.2.
     install_worker_scope_globals_v8(rt)?;
 
+    // BUG-778: read by both `worker_global_shim`'s `importScripts` and
+    // `WORKER_NET_SHIM`'s `fetch`/`XMLHttpRequest` to resolve a relative
+    // target — set before either is evaluated so it is never read as `undefined`.
+    rt.set_global("_lumen_worker_base_url", lumen_core::JsValue::String(base_url.to_string()))?;
+
     rt.eval(&worker_global_shim(worker_id))?;
+    rt.eval(WORKER_NET_SHIM)?;
     Ok(())
 }
 
@@ -1144,7 +1561,7 @@ mod tests {
         let store = make_store();
         let script = "postMessage(42);";
         let url = format!("data:text/javascript,{}", script);
-        assert_eq!(resolve_import_url(&url, &store).unwrap(), script);
+        assert_eq!(resolve_import_url(&url, &store, None).unwrap(), script);
     }
 
     #[test]
@@ -1152,20 +1569,20 @@ mod tests {
         let store = make_store();
         // base64("postMessage('hi');") = cG9zdE1lc3NhZ2UoJ2hpJyk7
         let url = "data:text/javascript;base64,cG9zdE1lc3NhZ2UoJ2hpJyk7";
-        assert_eq!(resolve_import_url(url, &store).unwrap(), "postMessage('hi');");
+        assert_eq!(resolve_import_url(url, &store, None).unwrap(), "postMessage('hi');");
     }
 
     #[test]
     fn resolve_blob_url_from_store() {
         let store = make_store();
         store.lock().unwrap().insert("blob:lumen/42".to_string(), "var x = 1;".to_string());
-        assert_eq!(resolve_import_url("blob:lumen/42", &store).unwrap(), "var x = 1;");
+        assert_eq!(resolve_import_url("blob:lumen/42", &store, None).unwrap(), "var x = 1;");
     }
 
     #[test]
     fn resolve_external_url_returns_none() {
         let store = make_store();
-        assert!(resolve_import_url("https://example.com/lib.js", &store).is_none());
+        assert!(resolve_import_url("https://example.com/lib.js", &store, None).is_none());
     }
 }
 
@@ -1201,7 +1618,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store()).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", Arc::new(AtomicBool::new(false))).unwrap();
 
         let decoded = rt.eval("atob('aGVsbG8=')").unwrap();
         assert_eq!(decoded, lumen_core::JsValue::String("hello".into()));
@@ -1221,7 +1638,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store()).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", Arc::new(AtomicBool::new(false))).unwrap();
         let result = rt
             .eval(
                 "var et = new EventTarget(); \
@@ -1241,7 +1658,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store()).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", Arc::new(AtomicBool::new(false))).unwrap();
 
         let ok = rt
             .eval("(function(){try{atob('!!!');return false;}catch(e){return e instanceof TypeError;}})()")
@@ -1261,7 +1678,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store()).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", Arc::new(AtomicBool::new(false))).unwrap();
 
         for expr in [
             "typeof performance === 'object'",
@@ -1300,7 +1717,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store()).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", Arc::new(AtomicBool::new(false))).unwrap();
         let after = epoch_ms();
 
         let origin = match rt.eval("performance.timeOrigin").unwrap() {
@@ -1330,7 +1747,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store()).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", Arc::new(AtomicBool::new(false))).unwrap();
 
         assert_eq!(
             rt.eval("typeof _perf_observer_notify").unwrap(),
@@ -1367,7 +1784,7 @@ mod tests_v8 {
                         postMessage(performance.now() >= t0 && performance.timeOrigin > 0);\
                       };"
             .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), None);
 
         post_to_worker(&reg, worker_id, "0".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -1390,7 +1807,7 @@ mod tests_v8 {
 
         // Worker echoes its received message doubled.
         let script = "onmessage = function(e) { postMessage(e.data * 2); };".to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), None);
 
         post_to_worker(&reg, worker_id, "21".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -1420,7 +1837,7 @@ mod tests_v8 {
             "');onmessage = function(e) { postMessage(add(e.data, 8)); };",
         )
         .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), None);
 
         post_to_worker(&reg, worker_id, "34".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -1452,7 +1869,7 @@ mod tests_v8 {
              onmessage = function(e) { postMessage(mul(e.data, 3)); };"
                 .to_string();
 
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), None);
         post_to_worker(&reg, worker_id, "7".to_string());
         std::thread::sleep(Duration::from_millis(300));
 
@@ -1474,7 +1891,7 @@ mod tests_v8 {
 
         // Worker posts a reply to every message.
         let script = "onmessage = function(e) { postMessage('got:' + e.data); };".to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), None);
 
         // Terminate immediately before any postMessage.
         terminate_worker(&reg, worker_id);
@@ -1498,7 +1915,7 @@ mod tests_v8 {
         );
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store, None, "", Arc::new(AtomicBool::new(false))).unwrap();
 
         rt.eval(
             "importScripts(\
@@ -1518,7 +1935,7 @@ mod tests_v8 {
         let store = make_store();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store, None, "", Arc::new(AtomicBool::new(false))).unwrap();
 
         let result = rt.eval("importScripts('https://external.example/lib.js')");
         assert!(result.is_err(), "importScripts with http URL should throw");
@@ -1573,5 +1990,164 @@ mod tests_v8 {
         assert_eq!(v["canvas"]["w"].as_u64().unwrap(), 2);
         assert_eq!(v["canvas"]["h"].as_u64().unwrap(), 2);
         assert!(!v["canvas"]["p"].as_str().unwrap().is_empty(), "pixel data should be present");
+    }
+
+    // ── BUG-778: close() / fetch() / XMLHttpRequest / importScripts(http) ──────
+
+    /// Minimal `JsFetchProvider` double: answers by exact URL, 404 otherwise.
+    /// Mirrors `sw_worker.rs::tests_v8::SwNet` but only needs `fetch_sync` —
+    /// `worker_net_fetch_json` calls `fetch_request`, whose default impl
+    /// dispatches a body-less, token-less request to `fetch_sync`.
+    struct TestNet {
+        bodies: HashMap<String, String>,
+    }
+    impl TestNet {
+        fn new(bodies: &[(&str, &str)]) -> Arc<Self> {
+            Arc::new(Self {
+                bodies: bodies.iter().map(|(u, b)| ((*u).to_string(), (*b).to_string())).collect(),
+            })
+        }
+    }
+    impl lumen_core::ext::JsFetchProvider for TestNet {
+        fn fetch_sync(&self, url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            match self.bodies.get(url) {
+                Some(body) => Ok(lumen_core::ext::JsFetchResult {
+                    status: 200,
+                    status_text: "OK".into(),
+                    headers: vec![],
+                    body: body.clone().into_bytes(),
+                }),
+                None => Ok(lumen_core::ext::JsFetchResult {
+                    status: 404,
+                    status_text: "Not Found".into(),
+                    headers: vec![],
+                    body: Vec::new(),
+                }),
+            }
+        }
+    }
+
+    /// `self.close()` — HTML LS §10.2.3 "close a worker": a message sent
+    /// after the worker closes itself gets no reply, even though the
+    /// registry entry (and hence `postMessage`) is still nominally live.
+    #[test]
+    fn v8_worker_self_close_stops_further_messages() {
+        use std::time::Duration;
+        let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        let store = make_store();
+        let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let nid = Arc::new(Mutex::new(0u32));
+
+        // First message replies then closes; a second message must produce
+        // no further reply.
+        let script = "onmessage = function(e) { postMessage('got:' + e.data); self.close(); };".to_string();
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), None);
+
+        post_to_worker(&reg, worker_id, "1".to_string());
+        std::thread::sleep(Duration::from_millis(200));
+        post_to_worker(&reg, worker_id, "2".to_string());
+        std::thread::sleep(Duration::from_millis(200));
+
+        let msgs = drain_messages(&queue);
+        assert_eq!(msgs.len(), 1, "expected exactly one reply before close: {msgs:?}");
+        assert_eq!(msgs[0].1, "\"got:1\"");
+    }
+
+    /// `typeof fetch/XMLHttpRequest === 'function'` inside a plain (no
+    /// network provider) worker scope — the surface must exist even when the
+    /// browser has nothing to fetch with (headless dump modes, BUG-778
+    /// mirrors the page-level `fetch_provider = None` gotcha).
+    #[test]
+    fn v8_worker_globals_have_fetch_and_xhr() {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", Arc::new(AtomicBool::new(false))).unwrap();
+        for expr in ["typeof fetch", "typeof XMLHttpRequest", "typeof close", "typeof Headers", "typeof Response"] {
+            assert_eq!(rt.eval(expr).unwrap(), lumen_core::JsValue::String("function".into()), "{expr}");
+        }
+    }
+
+    /// End-to-end `fetch()` inside a worker thread, real network bridge via
+    /// [`TestNet`] — proves `_lumen_worker_net_fetch` reaches the provider
+    /// and the JS `Response` wrapper decodes the body back to text.
+    #[test]
+    fn v8_worker_fetch_reaches_provider_and_decodes_body() {
+        use std::time::Duration;
+        let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        let store = make_store();
+        let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let nid = Arc::new(Mutex::new(0u32));
+        let net = TestNet::new(&[("https://example.test/data", "hello from network")]);
+
+        let script = "onmessage = function(e) {\
+            fetch('https://example.test/data').then(function(r) { return r.text(); })\
+              .then(function(t) { postMessage(t); });\
+        };"
+            .to_string();
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), Some(net));
+
+        post_to_worker(&reg, worker_id, "0".to_string());
+        std::thread::sleep(Duration::from_millis(300));
+
+        let msgs = drain_messages(&queue);
+        assert_eq!(msgs.len(), 1, "expected one fetch()-derived reply: {msgs:?}");
+        assert_eq!(msgs[0].1, "\"hello from network\"");
+
+        terminate_worker(&reg, worker_id);
+    }
+
+    /// Synchronous `XMLHttpRequest` inside a worker thread over the same
+    /// bridge, including the `readyState`/`status` surface a WPT
+    /// `semantics/xhr/*` test reads.
+    #[test]
+    fn v8_worker_xhr_send_reaches_provider() {
+        use std::time::Duration;
+        let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        let store = make_store();
+        let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let nid = Arc::new(Mutex::new(0u32));
+        let net = TestNet::new(&[("https://example.test/xhr", "xhr body")]);
+
+        let script = "onmessage = function(e) {\
+            var x = new XMLHttpRequest();\
+            x.open('GET', 'https://example.test/xhr');\
+            x.onload = function() { postMessage(x.status + ':' + x.responseText); };\
+            x.send();\
+        };"
+            .to_string();
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), Some(net));
+
+        post_to_worker(&reg, worker_id, "0".to_string());
+        std::thread::sleep(Duration::from_millis(300));
+
+        let msgs = drain_messages(&queue);
+        assert_eq!(msgs.len(), 1, "expected one XHR-derived reply: {msgs:?}");
+        assert_eq!(msgs[0].1, "\"200:xhr body\"");
+
+        terminate_worker(&reg, worker_id);
+    }
+
+    /// BUG-778's WPT-RUN-6 extension: `importScripts()` with a path-absolute
+    /// URL, resolved against the worker's own `base_url` and fetched over
+    /// the network — the exact shape wptrunner's `.worker.html` wrapper
+    /// opens with (`importScripts("/resources/testharness.js")`).
+    #[test]
+    fn v8_import_scripts_path_absolute_resolves_against_base_url_and_fetches() {
+        let rt = V8JsRuntime::new().unwrap();
+        let store = make_store();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        let net = TestNet::new(&[("https://example.test/resources/testharness.js", "globalThis._ms3 = 30;")]);
+        install_worker_globals_v8(
+            &rt, 0, Arc::clone(&queue), Arc::clone(&errors), store,
+            Some(net), "https://example.test/worker.js", Arc::new(AtomicBool::new(false)),
+        ).unwrap();
+
+        rt.eval("importScripts('/resources/testharness.js')").unwrap();
+        assert_eq!(rt.eval("_ms3").unwrap(), lumen_core::JsValue::Number(30.0));
     }
 }

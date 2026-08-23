@@ -62,7 +62,7 @@ WPT-RUN-5 (`workers/WorkerGlobalScope_setTimeout.htm`,
 `workers/interfaces/WorkerUtils/WindowTimers/001` и `003`). Как и у
 [BUG-813](BUG-813-OPEN.md)/[BUG-776](BUG-776-OPEN.md), это оценка снизу:
 каталог `workers/` в снимке в основном не дошёл до своих таймеров, отвалившись
-на `importScripts` ([BUG-778](BUG-778-OPEN.md)).
+на `importScripts` ([BUG-778](BUG-778-FIXED.md)).
 
 Цена вне WPT больше, чем 5 id: воркер — типовое место для периодической
 фоновой работы, и на Lumen любой такой цикл на `setInterval`

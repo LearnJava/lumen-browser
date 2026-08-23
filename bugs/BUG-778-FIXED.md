@@ -1,8 +1,63 @@
 # BUG-778 — dedicated/shared-воркеры без `self.close()`, `fetch()`, `XMLHttpRequest`; `importScripts()` у shared-воркера безусловно бросает
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-23
 **Компонент:** js (`crates/js/src/worker.rs:264-390` — `worker_global_shim`; `crates/js/src/shared_worker.rs:99-212` — `SHARED_WORKER_GLOBAL_SHIM`, `importScripts` на строке 188-190)
 **Найден:** P2, WPT-VENDOR-workers, 2026-08-18 — `run_report.py --all --root workers --recursive`
+
+## Исправление (2026-08-23, P1)
+
+Все четыре гэпа закрыты в обоих видах воркера (dedicated `worker.rs`,
+shared `shared_worker.rs`):
+
+- **`self.close()`** — новый нативный биндинг `_lumen_worker_self_close`
+  выставляет разделяемый `WorkerCloseFlag` (`Arc<AtomicBool>`); цикл
+  сообщений в `run_worker_thread_v8`/`run_shared_worker_thread_v8`
+  проверяет флаг перед каждым `rx.recv()` и останавливается без обработки
+  дальнейших задач (HTML LS §10.2.3/§10.2.4 «close a worker»).
+- **`fetch()`/`XMLHttpRequest`** — новый нативный биндинг
+  `_lumen_worker_net_fetch(url, method, headers, body_b64)` (общая функция
+  `worker_net_fetch_json` в `worker.rs`, переиспользуемая обоими видами
+  воркера) синхронно ходит в сеть через тот же `JsFetchProvider`, что уже
+  использовал фетч классического скрипта воркера. Новый общий JS-шим
+  `WORKER_NET_SHIM` (`worker.rs`) даёт минимальные `Headers`/`Response`/
+  `fetch`/`XMLHttpRequest` обоим видам воркера — с собственными base64/UTF-8
+  кодеками, не завязанными на `atob`/`btoa` (у shared-воркера их не было
+  вовсе).
+- **`importScripts()` у SharedWorker** — безусловный `throw` заменён на ту
+  же логику, что и у dedicated-воркера: `data:`/`blob:lumen/` разрешаются
+  локально, остальное уходит в сеть тем же `_lumen_worker_net_fetch`-мостом.
+  `blob:lumen/` для SharedWorker по-прежнему не работает — у него нет
+  зеркалирования блобов со страницы, которое есть у dedicated-воркера
+  (`WorkerBlobStore`); это не регрессия — оно и раньше не работало,
+  безусловный `throw` ловил всё.
+- **Расширение WPT-RUN-6 (относительный/path-absolute `importScripts`)** —
+  `importScripts()` у ОБОИХ видов воркера теперь разрешает
+  относительный/path-absolute URL (`importScripts("/resources/testharness.js")`,
+  ровно то, что генерирует обёртка wptrunner для `.worker.html`/
+  `.any.worker.html`/`.any.sharedworker.html`) против собственного URL
+  воркера — новый глобал `_lumen_worker_base_url`, выставляемый Rust-стороной
+  перед вычислением шима. Для dedicated-воркера это резолвленный URL,
+  который уже вычисляла его собственная страничная обёртка `Worker()`
+  (`_url_resolve(u, _lumen_document_base_url())`) — просто раньше никуда не
+  передавался дальше самого фетча скрипта; теперь передаётся вторым
+  аргументом в `_lumen_create_worker(script, base_url)`. Для SharedWorker —
+  аналогично, третий аргумент `_lumen_sw_connect(key, script, base_url)`.
+  Для blob:/data: воркеров `base_url` — пустая строка (нет осмысленного origin).
+
+**Не покрыто:** `importScripts('blob:lumen/…')` внутри `SharedWorker` (см.
+выше — отдельная, самостоятельная задача блоб-зеркалирования, не в скоупе
+этого бага); `fetch()`/XHR внутри самого service worker'а (у него уже был
+собственный, отдельный путь, `sw_worker.rs`, не тронут).
+
+Юнит-тесты: `worker::tests_v8::v8_worker_self_close_stops_further_messages`,
+`v8_worker_globals_have_fetch_and_xhr`,
+`v8_worker_fetch_reaches_provider_and_decodes_body`,
+`v8_worker_xhr_send_reaches_provider`,
+`v8_import_scripts_path_absolute_resolves_against_base_url_and_fetches`;
+`shared_worker::tests_v8::v8_shared_worker_close_stops_further_messages`,
+`v8_shared_worker_global_scope_has_fetch_xhr_close`,
+`v8_shared_worker_fetch_reaches_provider`, `v8_shared_worker_xhr_reaches_provider`,
+`v8_shared_worker_import_scripts_path_absolute_resolves_against_base_url`.
 
 ## Симптом
 

@@ -107,7 +107,7 @@ for that mechanism.
 Runtime("importScripts is not supported")` — the exact stderr line this
 section describes, at the exact moment `.any.worker.html`/`.worker.html`/
 `.any.sharedworker.html`'s wptrunner-generated bootstrap fails on its first
-statement (see [BUG-778](bugs/BUG-778-OPEN.md) for the importScripts gap
+statement (see [BUG-778](bugs/BUG-778-FIXED.md) for the importScripts gap
 itself). Because nothing reaches the parent, `fetch_tests_from_worker()`
 just waits out its ~10s per-file timeout: 1210 of 6205 TIMEOUT ids in that
 run (19.5%) are this exact mechanism, the single largest TIMEOUT cluster
