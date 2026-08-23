@@ -66,6 +66,7 @@ pub(crate) fn restore_js_context(
     doc: Document,
     event_sink: Arc<dyn EventSink>,
     ls_storage: &mut HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
+    ss_storage: &mut HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
     idb_dir: Option<&std::path::Path>,
     sw_backend: &Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
     cookie_banner_dismiss: bool,
@@ -89,6 +90,11 @@ pub(crate) fn restore_js_context(
 
     // Per-origin persistence + network providers, identical to a fresh load.
     let ls_store = crate::ls_store_for_base(&base, ls_storage);
+    // BUG-836: session storage of the restoring tab, so the re-run scripts and
+    // every document loaded afterwards share one store. T3 hibernation persists
+    // only the page bytes, so the map itself does not cross a hibernation — the
+    // same limitation `ls_storage` already has.
+    let ss_store = crate::ss_store_for_base(&base, ss_storage);
     let idb = crate::idb_store_for_base(&base, idb_dir);
     let sw = crate::sw_store_for_base(&base, sw_backend);
     let (fetch_provider, ws_provider, sse_provider) = match &base {
@@ -116,6 +122,7 @@ pub(crate) fn restore_js_context(
         ws_provider,
         sse_provider,
         ls_store,
+        ss_store,
         idb,
         sw,
         None, // sw_worker_store: SW re-registers on script re-run after restore

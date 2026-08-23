@@ -1105,6 +1105,7 @@ fn run_window_mode(
         date_picker_month: 0,
         select_dropdown_node: None,
         ls_storage: HashMap::new(),
+        ss_storage: HashMap::new(),
         idb_dir: lumen_idb_dir(),
         sw_backend: Arc::new(std::sync::Mutex::new(lumen_storage::store::InMemoryStorage::new())),
         sw_worker_store: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
@@ -1526,9 +1527,10 @@ fn render_source_to_png(
         &event_sink,
         vp,
         &mut std::collections::HashSet::new(),
-        None,
-        None,
-        None,
+        None, // ls_store
+        None, // ss_store: a headless one-shot render is its own browsing context
+        None, // idb_backend
+        None, // sw_backend
         &NullHyphenationProvider,
         // BUG-428: this slot is `cookie_banner_dismiss`, not a JS gate — the
         // former "headless: no interactive JS" label was wrong. Page scripts DO
@@ -1777,9 +1779,10 @@ fn do_print_to_pdf(
         &event_sink,
         vp,
         &mut std::collections::HashSet::new(),
-        None,
-        None,
-        None,
+        None, // ls_store
+        None, // ss_store: a headless one-shot render is its own browsing context
+        None, // idb_backend
+        None, // sw_backend
         &NullHyphenationProvider,
         false, // headless PDF mode: no interactive JS needed
         deterministic::DetConfig::default(), // deterministic: not needed for PDF rendering
@@ -1865,9 +1868,10 @@ fn do_print_to_pdf_with_opts(
         &event_sink,
         vp,
         &mut std::collections::HashSet::new(),
-        None,
-        None,
-        None,
+        None, // ls_store
+        None, // ss_store: a headless one-shot render is its own browsing context
+        None, // idb_backend
+        None, // sw_backend
         &NullHyphenationProvider,
         false, // cookie_banner_dismiss
         deterministic::DetConfig::default(), // deterministic: not needed for PDF rendering
@@ -2083,13 +2087,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = dump_vp;
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, lumen_core::ColorSpace::Srgb, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, lumen_core::ColorSpace::Srgb, false)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = dump_vp;
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, lumen_core::ColorSpace::Srgb, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, lumen_core::ColorSpace::Srgb, false)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -3795,6 +3799,7 @@ impl PageSource {
         sink: Arc<dyn EventSink>,
         viewport: Size,
         ls_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
+        ss_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
         idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
         sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
         hp: &dyn HyphenationProvider,
@@ -3805,7 +3810,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone(), None)?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -5310,6 +5315,10 @@ struct PageSnapshot {
     /// NodeId of the `<select>` whose dropdown is open in this tab snapshot.
     select_dropdown_node: Option<NodeId>,
     ls_storage: HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
+    /// Mirrors [`Lumen::ss_storage`] — travels with the tab so `sessionStorage`
+    /// written by one of its documents is there for the next one, and for no
+    /// other tab (BUG-836).
+    ss_storage: HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
     /// Directory for per-origin IndexedDB SQLite files. Cloned from the active
     /// tab's `idb_dir` when saving a snapshot; restored on tab switch-back.
     idb_dir: Option<std::path::PathBuf>,
@@ -5363,6 +5372,7 @@ fn parse_and_layout(
     viewport: Size,
     preload_seen: &mut std::collections::HashSet<String>,
     ls_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
+    ss_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     hp: &dyn HyphenationProvider,
@@ -5449,7 +5459,8 @@ fn parse_and_layout(
     // основные уходят в run_scripts_with_dom по значению.
     let (frame_fp, frame_wp, frame_sp) =
         (fetch_provider.clone(), ws_provider.clone(), sse_provider.clone());
-    let (frame_ls, frame_idb) = (ls_store.clone(), idb_backend.clone());
+    let (frame_ls, frame_ss, frame_idb) =
+        (ls_store.clone(), ss_store.clone(), idb_backend.clone());
     let (frame_sw, frame_sww, frame_cache) =
         (sw_backend.clone(), sw_worker_store.clone(), cache_backend.clone());
     let frame_cookie_jar = cookie_jar.clone();
@@ -5461,6 +5472,7 @@ fn parse_and_layout(
         ws_provider,
         sse_provider,
         ls_store,
+        ss_store,
         idb_backend,
         sw_backend,
         sw_worker_store,
@@ -5516,6 +5528,7 @@ fn parse_and_layout(
             frame_wp,
             frame_sp,
             frame_ls,
+            frame_ss,
             frame_idb,
             frame_sw,
             frame_sww,
@@ -6702,18 +6715,39 @@ fn ls_store_for_base(
     base: &ResourceBase,
     ls_storage: &mut HashMap<String, Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
 ) -> Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>> {
-    let origin = match base {
-        ResourceBase::Url(u) => {
-            lumen_core::url::Url::parse(u).ok().map(|parsed| {
-                let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
-                format!("{}://{}{}", parsed.scheme(), parsed.host(), port)
-            })?
-        }
-        ResourceBase::File(_) => return None,
-    };
+    let origin = storage_origin_for_base(base)?;
     Some(Arc::clone(ls_storage.entry(origin).or_insert_with(|| {
         Arc::new(std::sync::Mutex::new(lumen_core::WebStorage::default()))
     })))
+}
+
+/// The `sessionStorage` partition for `base` (BUG-836).
+///
+/// Same origin keying as [`ls_store_for_base`]; the difference is the map it
+/// draws from — `ss_storage` is per *tab* (cleared when a tab is opened, carried
+/// in the tab snapshot), so the store survives navigation within the tab and
+/// nothing else, as HTML LS §12.2 requires.
+fn ss_store_for_base(
+    base: &ResourceBase,
+    ss_storage: &mut HashMap<String, Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
+) -> Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>> {
+    let origin = storage_origin_for_base(base)?;
+    Some(Arc::clone(ss_storage.entry(origin).or_insert_with(|| {
+        Arc::new(std::sync::Mutex::new(lumen_core::WebStorage::default()))
+    })))
+}
+
+/// Origin key (`scheme://host[:port]`) used to partition Web Storage.
+///
+/// `None` for a `file:` base — an opaque origin gets no storage at all.
+fn storage_origin_for_base(base: &ResourceBase) -> Option<String> {
+    match base {
+        ResourceBase::Url(u) => lumen_core::url::Url::parse(u).ok().map(|parsed| {
+            let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
+            format!("{}://{}{}", parsed.scheme(), parsed.host(), port)
+        }),
+        ResourceBase::File(_) => None,
+    }
 }
 
 /// Build the per-origin IndexedDB persistence handle for the given `ResourceBase`.
@@ -6791,6 +6825,7 @@ fn render_bytes(
     viewport: Size,
     preload_seen: &mut std::collections::HashSet<String>,
     ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
+    ss_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     hp: &dyn HyphenationProvider,
@@ -6804,7 +6839,7 @@ fn render_bytes(
     target: lumen_core::ColorSpace,
     cache_control_no_store: bool,
 ) -> Result<RenderedPage, Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target, false)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target, false)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -7463,6 +7498,7 @@ fn load_frame_sub_documents(
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
     sse_provider: Option<Arc<dyn lumen_core::ext::JsSseProvider>>,
     ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
+    ss_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
@@ -7533,6 +7569,7 @@ fn load_frame_sub_documents(
             ws_provider.clone(),
             sse_provider.clone(),
             ls_store.clone().filter(|_| !opaque),
+            ss_store.clone().filter(|_| !opaque),
             idb_backend.clone().filter(|_| !opaque),
             sw_backend.clone().filter(|_| !opaque),
             sw_worker_store.clone().filter(|_| !opaque),
@@ -7576,6 +7613,7 @@ fn load_frame_sub_documents(
                     ws_provider.clone(),
                     sse_provider.clone(),
                     ls_store.clone().filter(|_| !opaque),
+                    ss_store.clone().filter(|_| !opaque),
                     idb_backend.clone().filter(|_| !opaque),
                     sw_backend.clone().filter(|_| !opaque),
                     sw_worker_store.clone().filter(|_| !opaque),
@@ -7613,6 +7651,8 @@ fn load_frame_sub_documents(
 /// `ws_provider` пробрасывается в `new WebSocket(url)`.
 /// `sse_provider` пробрасывается в `new EventSource(url)`.
 /// `ls_store` — localStorage partition для текущего origin (persists across reloads).
+/// `ss_store` — sessionStorage partition вкладки для того же origin (BUG-836):
+/// живёт, пока жива вкладка, и переживает смену документа.
 /// `None` = no network (sandboxed context или отключён v8 feature).
 /// `scripts` / `module_scripts` — уже разрешённые тела classic / module скриптов
 /// в порядке документа, включая дозагруженные внешние `<script src>` (BUG-164);
@@ -7627,6 +7667,7 @@ fn run_scripts_with_dom(
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
     sse_provider: Option<Arc<dyn lumen_core::ext::JsSseProvider>>,
     ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
+    ss_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
@@ -7675,6 +7716,10 @@ fn run_scripts_with_dom(
                 }
                 if let Some(store) = sw_worker_store {
                     rt = rt.with_sw_worker_store(store);
+                }
+                // BUG-836: the tab owns sessionStorage, not the document.
+                if let Some(store) = ss_store {
+                    rt = rt.with_session_storage(store);
                 }
                 if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, cache_backend, None, cross_origin_isolated) {
                     eprintln!("JS DOM init failed: {e}");
@@ -8482,6 +8527,14 @@ struct Lumen {
     /// Each entry survives page reloads within the same session.
     /// Partitioned by origin to enforce Same-Origin Policy for storage access.
     ls_storage: HashMap<String, Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
+    /// `sessionStorage` partitions of the *active tab*, keyed by the same origin
+    /// string as [`Self::ls_storage`] (BUG-836).
+    ///
+    /// HTML LS §12.2 binds session storage to the browsing context: it must
+    /// survive every navigation of this tab and never reach another one, so the
+    /// map travels in the tab snapshot and is emptied for a newly opened tab —
+    /// unlike `ls_storage`, nothing here is ever persisted.
+    ss_storage: HashMap<String, Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
     /// Directory for per-origin IndexedDB SQLite files (`{sha256(eTLD+1)[:16]}.db`).
     /// `None` → ephemeral in-memory store per page (headless / tests).
     /// `Some(dir)` → each origin gets its own SQLite file in `dir`; data persists
@@ -11980,6 +12033,13 @@ impl Lumen {
                     Arc::new(std::sync::Mutex::new(lumen_core::WebStorage::default()))
                 }))
             });
+            // BUG-836: same origin key, tab-scoped map — the entry outlives this
+            // document, so the next one loaded here reads what this one wrote.
+            let ss_store = self.source.origin_str().map(|o| {
+                Arc::clone(self.ss_storage.entry(o).or_insert_with(|| {
+                    Arc::new(std::sync::Mutex::new(lumen_core::WebStorage::default()))
+                }))
+            });
             let idb_backend = self
                 .source
                 .url_str()
@@ -11988,7 +12048,7 @@ impl Lumen {
                 Arc::new(lumen_storage::SwStore::new(Arc::clone(&self.sw_backend), o))
                     as Arc<dyn lumen_core::ext::SwBackend>
             });
-            self.source.load(self.event_sink.clone(), viewport, ls_store, idb_backend, sw_backend, &*self.hyp_provider, self.cookie_banner_dismiss)
+            self.source.load(self.event_sink.clone(), viewport, ls_store, ss_store, idb_backend, sw_backend, &*self.hyp_provider, self.cookie_banner_dismiss)
         };
 
         match load_result {
@@ -13326,6 +13386,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Storage-хэндлы требуют `&mut self` (ls_storage) — берём их на
                 // UI-потоке, дальше это `Arc`-и (Send), уезжающие в рендер-поток.
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
+                // BUG-836: this is the main navigation path — the entry lives in
+                // the tab's map, so the store outlives the document being built.
+                let ss_store = ss_store_for_base(&raw.base, &mut self.ss_storage);
                 let idb_backend = idb_store_for_base(&raw.base, self.idb_dir.as_deref());
                 let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend);
                 // BUG-171 этап 2: тяжёлый финальный pipeline (fetch скриптов →
@@ -13358,6 +13421,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         viewport,
                         &mut preload_dispatched,
                         ls_store,
+                        ss_store,
                         idb_backend,
                         sw_backend,
                         &*hp,
@@ -20391,7 +20455,7 @@ impl Lumen {
         #[cfg(feature = "v8")]
         {
             match lumen_js::v8_runtime::V8JsRuntime::new() {
-                Ok(rt) => {
+                Ok(mut rt) => {
                     // BUG-548 (S12b-G6): cookie-banner dismiss now wired for V8.
                     rt.set_cookie_banner_dismiss(self.cookie_banner_dismiss);
                     if self.deterministic.enabled {
@@ -20401,6 +20465,16 @@ impl Lumen {
                         .source
                         .origin_str()
                         .and_then(|o| self.ls_storage.get(&o).cloned());
+                    // BUG-836: a page thawed out of the bfcache is a document of
+                    // this tab like any other — it must see the tab's store.
+                    let ss_store = self.source.origin_str().map(|o| {
+                        Arc::clone(self.ss_storage.entry(o).or_insert_with(|| {
+                            Arc::new(std::sync::Mutex::new(lumen_core::WebStorage::default()))
+                        }))
+                    });
+                    if let Some(store) = ss_store {
+                        rt = rt.with_session_storage(store);
+                    }
                     let idb_backend = self.idb_dir.as_deref().and_then(|d| idb_store_for_url(url, Some(d)));
                     let fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> = None;
                     let ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>> = None;
@@ -24307,6 +24381,7 @@ impl Lumen {
             doc,
             event_sink,
             &mut self.ls_storage,
+            &mut self.ss_storage,
             self.idb_dir.as_deref(),
             &self.sw_backend,
             cookie_banner_dismiss,
@@ -24570,6 +24645,7 @@ impl Lumen {
             date_picker_node: self.date_picker_node.take(),
             select_dropdown_node: self.select_dropdown_node.take(),
             ls_storage: std::mem::take(&mut self.ls_storage),
+            ss_storage: std::mem::take(&mut self.ss_storage),
             idb_dir: self.idb_dir.clone(),
             sw_backend: std::mem::replace(
                 &mut self.sw_backend,
@@ -24658,6 +24734,7 @@ impl Lumen {
         self.date_picker_node = snap.date_picker_node;
         self.select_dropdown_node = snap.select_dropdown_node;
         self.ls_storage = snap.ls_storage;
+        self.ss_storage = snap.ss_storage;
         self.idb_dir = snap.idb_dir;
         self.sw_backend = snap.sw_backend;
         self.set_js_ctx(snap.js_ctx);
@@ -24758,6 +24835,9 @@ impl Lumen {
         self.date_picker_month = 0;
         self.select_dropdown_node = None;
         self.ls_storage = HashMap::new();
+        // BUG-836: a new tab is a new browsing context, so it starts with empty
+        // session storage — this reset is the *only* place it may be cleared.
+        self.ss_storage = HashMap::new();
         // idb_dir is session-level — intentionally not reset here.
         self.sw_backend = Arc::new(std::sync::Mutex::new(
             lumen_storage::store::InMemoryStorage::new(),

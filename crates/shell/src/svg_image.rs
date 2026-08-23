@@ -151,9 +151,10 @@ pub(crate) fn rasterize_svg(
         sink,
         viewport,
         &mut std::collections::HashSet::new(),
-        None,
-        None,
-        None,
+        None, // ls_store
+        None, // ss_store: rasterizing an <img src=*.svg> is not a browsing context
+        None, // idb_backend
+        None, // sw_backend
         &NullHyphenationProvider,
         false, // cookie_banner_dismiss
         crate::deterministic::DetConfig { enabled: true, ..Default::default() }, // deterministic

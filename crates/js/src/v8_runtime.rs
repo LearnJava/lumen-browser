@@ -718,6 +718,12 @@ pub struct V8JsRuntime {
     deterministic_clock_ms: Arc<AtomicU64>,
     /// Live SW execution threads keyed by `(origin, scope)`.
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
+    /// `sessionStorage` partition of the browsing context this runtime serves
+    /// (BUG-836). Session storage is scoped to the *tab*, not the document, so
+    /// the owner of the tab hands the same `Arc` to every document's runtime
+    /// via [`Self::with_session_storage`]; `None` (tests, headless) means a
+    /// fresh, document-local store — which is what every document used to get.
+    ss_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
     /// `BroadcastChannel` instances created on this page (WHATWG HTML §9.5).
     /// Mirrors [`crate::QuickJsRuntime`]'s field of the same name.
     broadcast_channels: crate::broadcast_channel::BroadcastRegistry,
@@ -930,6 +936,7 @@ impl V8JsRuntime {
             deterministic_monotonic: AtomicBool::new(false),
             deterministic_clock_ms: Arc::new(AtomicU64::new(0)),
             sw_worker_store: None,
+            ss_store: None,
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
             workers: Arc::new(Mutex::new(HashMap::new())),
@@ -1093,6 +1100,19 @@ impl V8JsRuntime {
     /// [`crate::QuickJsRuntime::with_sw_worker_store`]).
     pub fn with_sw_worker_store(mut self, store: lumen_core::ext::SwWorkerStore) -> Self {
         self.sw_worker_store = Some(store);
+        self
+    }
+
+    /// Attach the browsing context's `sessionStorage` partition (BUG-836).
+    ///
+    /// HTML LS §12.2 binds session storage to the browsing context, so the tab —
+    /// not the document — owns the store and hands the same `Arc` to every
+    /// document it loads. Without this the runtime builds its own empty store in
+    /// `install_dom`, and everything written by the previous document is lost on
+    /// navigation. Must be called before `install_dom` to take effect (mirrors
+    /// [`Self::with_sw_worker_store`]).
+    pub fn with_session_storage(mut self, store: Arc<Mutex<lumen_core::WebStorage>>) -> Self {
+        self.ss_store = Some(store);
         self
     }
 
@@ -1574,8 +1594,13 @@ impl V8JsRuntime {
     ) -> JsResult<()> {
         let ls_store =
             ls_store.unwrap_or_else(|| Arc::new(Mutex::new(lumen_core::WebStorage::default())));
-        let ss_store: Arc<Mutex<lumen_core::WebStorage>> =
-            Arc::new(Mutex::new(lumen_core::WebStorage::default()));
+        // BUG-836: the tab's store when the owner attached one via
+        // `with_session_storage`, so `sessionStorage` survives navigation the way
+        // HTML LS §12.2 requires; a fresh (document-local) store otherwise.
+        let ss_store: Arc<Mutex<lumen_core::WebStorage>> = self
+            .ss_store
+            .clone()
+            .unwrap_or_else(|| Arc::new(Mutex::new(lumen_core::WebStorage::default())));
         // PH3-20: an explicit `sw_worker_store` argument takes precedence over a
         // store set earlier via a builder (mirrors `QuickJsRuntime::install_dom`).
         let sw_worker_store = sw_worker_store.or_else(|| self.sw_worker_store.clone());
