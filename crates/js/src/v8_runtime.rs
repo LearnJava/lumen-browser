@@ -951,7 +951,7 @@ impl V8JsRuntime {
             shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
             shared_worker_errors: Arc::new(Mutex::new(Vec::new())),
             cookie_banner_dismiss: AtomicBool::new(true),
-            frame_docs: Arc::new(Mutex::new(Vec::new())),
+            frame_docs: Arc::new(Mutex::new(crate::frame_bridge::FrameDocSlots::default())),
         })
     }
 
@@ -1386,7 +1386,7 @@ impl V8JsRuntime {
         });
     }
 
-    /// BUG-480 срез 2: зарегистрировать под-документ `<iframe>` для доступа из
+    /// BUG-480 срез 3: зарегистрировать загруженный под-документ `<iframe>` для доступа из
     /// JS родителя через `contentWindow`/`contentDocument`
     /// ([`crate::frame_bridge`]).
     ///
@@ -1400,20 +1400,95 @@ impl V8JsRuntime {
         host_nid: u32,
         doc: Arc<Mutex<lumen_dom::Document>>,
         url: String,
+        name: Option<String>,
+        accessible: bool,
+    ) {
+        let registry = Arc::clone(&self.frame_docs);
+        let idx = self.run(move |_inner| {
+            let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
+            reg.frames.push(crate::frame_bridge::FrameDocBinding {
+                host_nid,
+                doc,
+                url,
+                name,
+                accessible,
+            });
+            reg.frames.len() - 1
+        });
+        // Срез 3: индексный (`window[idx]`) + именованный (`window[имя]`)
+        // доступники окна фрейма. Порядок регистрации = порядок документа,
+        // поэтому idx совпадает со спечным tree order. Ошибки не фатальны:
+        // контекст без window (минимальный тестовый изолят) просто пропустит
+        // установку внутри шима.
+        if let Err(e) =
+            self.eval(&format!("typeof _lumen_frame_install_index === 'function' && _lumen_frame_install_index({idx})"))
+        {
+            eprintln!("v8: _lumen_frame_install_index({idx}) failed: {e}");
+        }
+    }
+
+    /// BUG-480 срез 3: зарегистрировать документ **родителя** в JS-контексте
+    /// фрейма — после этого `window.parent`/`window.top`/`window.frameElement`
+    /// внутри фрейма видят фасады предков ([`crate::frame_bridge`]).
+    ///
+    /// `host_nid` — nid хоста в дереве родителя (для `frameElement`);
+    /// `accessible=false` (cross-origin / opaque sandbox) оставляет окно
+    /// предка доступным, но скрывает `.document` и содержимое.
+    pub fn register_parent_document(
+        &self,
+        host_nid: u32,
+        doc: Arc<Mutex<lumen_dom::Document>>,
+        url: String,
         accessible: bool,
     ) {
         let registry = Arc::clone(&self.frame_docs);
         self.run(move |_inner| {
-            registry
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(crate::frame_bridge::FrameDocBinding {
+            registry.lock().unwrap_or_else(|e| e.into_inner()).parent =
+                Some(crate::frame_bridge::FrameDocBinding {
                     host_nid,
                     doc,
                     url,
+                    name: None,
                     accessible,
                 });
         });
+        // Срез 3: включить геттеры window.parent/top/frameElement/name. Ошибки
+        // не фатальны (контекст без window просто пропустит установку).
+        if let Err(e) = self.eval(
+            "typeof _lumen_frame_install_hierarchy === 'function' && _lumen_frame_install_hierarchy()",
+        ) {
+            eprintln!("v8: _lumen_frame_install_hierarchy failed: {e}");
+        }
+    }
+
+    /// BUG-480 срез 3: зарегистрировать документ **верха** в JS-контексте
+    /// фрейма глубины ≥ 2 — `window.top` должен вести в корень, а не в
+    /// непосредственного родителя. У фрейма первого уровня не вызывается:
+    /// там top разрешается через слот родителя.
+    pub fn register_top_document(
+        &self,
+        doc: Arc<Mutex<lumen_dom::Document>>,
+        url: String,
+        accessible: bool,
+    ) {
+        let registry = Arc::clone(&self.frame_docs);
+        self.run(move |_inner| {
+            registry.lock().unwrap_or_else(|e| e.into_inner()).top =
+                Some(crate::frame_bridge::FrameDocBinding {
+                    host_nid: 0,
+                    doc,
+                    url,
+                    name: None,
+                    accessible,
+                });
+        });
+        // Слот top ставится только у фреймов глубины ≥ 2, у которых parent
+        // уже включил иерархию; повторный вызов идемпотентен.
+        if let Err(e) = self.eval(
+            "typeof _lumen_frame_install_hierarchy === 'function' && _lumen_frame_install_hierarchy()",
+        ) {
+            eprintln!("v8: _lumen_frame_install_hierarchy failed: {e}");
+        }
     }
 
     /// V8 isolate heap statistics: `(total_heap_size, used_heap_size)` in bytes.

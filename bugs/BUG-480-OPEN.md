@@ -247,3 +247,55 @@ X-Frame-Options/CSP `frame-ancestors`, bfcache фреймов.
 правила доступа); `dump_golden.py` 12/12; смоук `--dump-layout`: srcdoc-фрейм —
 `win=true doc=true p=hi frame identity=true defaultView=true parent=true
 top=true frameElement=true body=BODY url=about:srcdoc`.
+
+## Срез 3 (P3, 2026-08-23) — иерархия окон: parent/top у ребёнка, length/[i]/[name] у родителя
+
+Срез 28 перезамерял три живых разрыва: `window.parent === window` у ребёнка,
+`length = 0` и слепые `frames` в родителе. Срез 3 закрывает их поверх того же
+реестра биндингов (`crates/js/src/frame_bridge.rs`).
+
+Реестр получил слоты предков (`parent`/`top`) с псевдо-bid'ами `u32::MAX` /
+`u32::MAX-1`: всё семейство нативов `_lumen_f_*` прозрачно работает и с
+документом предка, отдельного семейства функций не появилось. Shell при
+загрузке фрейма регистрирует ребёнку родителя (`PersistentJs::register_parent_document`,
+всегда) и верх (`register_top_document`, только глубина ≥ 2 — у первого уровня
+top разрешается через слот родителя, чем сохраняется identity `parent === top`).
+Доступность считается отдельно для каждого направления тем же
+`frame_access_allowed`.
+
+Геттеры ставятся на `window` ЛЕНИВО, первой регистрацией, а не при установке
+шима: инсталлтайм-акцессор на `parent`/`top`/`length` ломает топ-левел
+`var parent = …` страниц (V8 не подменяет существующий акцессор var-биндингом
+— на этом словилось 11 тестов dom.rs до переноса). Пока слотов нет, действуют
+прежние константы WEB_API_SHIM; попытка переопределить неконфигурируемый
+var-биндинг пользователя молча пропускается try/catch.
+
+Что теперь работает:
+
+* у ребёнка — `window.parent` (фасад документа родителя), `window.top`
+  (корень для глубины 2), `window.frameElement` (фасад хоста из дерева
+  родителя), `window.name` из атрибута хоста (сеттер хранит собственное
+  значение до замены документа);
+* у родителя — живой `window.length` (все дочерние контексты независимо от
+  origin, как по спеке), индексный доступ `window[0]…` и именованный
+  `window[имя]` к окну фрейма (ставятся при регистрации биндинга, порядок =
+  tree order); `iframe.contentWindow === window[0] === window[name]`;
+* фасады предков сами себе `parent`/`top`; cross-origin/opaque предки отдают
+  окно без `.document`, `frameElement` — null.
+
+Не входит (очередь): вызов функций между изолятами (`parent.foo()`, где `foo`
+объявлена скриптом родителя, не работает — читать свойства документов можно),
+динамически созданные фреймы ([BUG-885](BUG-885-OPEN.md)), мутации и события
+через границу, layout/paint/rAF фреймов, навигация/замена/удаление фрейма,
+`postMessage`, X-Frame-Options/CSP `frame-ancestors`, bfcache фреймов;
+`length`/индексные доступники у ФАСАДОВ остаются нулём (счётчик чужого
+изолята недоступен, живой length есть только у настоящего window контекста).
+
+Проверка: clippy `-p lumen-js` / `-p lumen-shell -p lumen-driver` -D warnings;
+тесты js 2980 (+16: fallback констант, фасад родителя и его интернирование,
+top для глубины 2, cross-origin без документов, frameElement/name из дерева
+родителя, length+индексные+именованные доступники), shell 1586+2 ok, scoped
+по обратным зависимостям (ai/bench/bidi/driver/knowledge/mcp/network/paint/
+storage) — 28 ok без FAILED; `dump_golden.py` 12/12; смоук `--dump-layout`
+(srcdoc-фрейм): `len0=1 idx0=same named=same` у родителя и
+`P=object NE1 TOP1 DOCBODY FEobj` у ребёнка.
