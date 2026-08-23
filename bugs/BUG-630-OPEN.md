@@ -111,3 +111,30 @@ but its completion is still signalled the same missing way), the remaining
 every file awaits `img.onload` or reads `img.complete`/`naturalWidth`, same
 single root cause across the whole category, not two separate gaps. No new
 `BUG-NNN` filed.
+
+## Перезамер 2026-08-23 (WPT-RUN-6, срез 27): молчат обе формы, включая атрибут
+
+`tests/wpt/verify_callback_import_preload_gaps.py --variant img-onload-attr`
+на `main` = `34cbefd25`. На одной странице четыре формы ожидания сразу:
+`onload=`-атрибут на `<img>`, написанном парсером; `addEventListener('load')`
+на нём же; `onload`-атрибут, выставленный через `setAttribute` на созданном
+скриптом `<img>`; и слушатель на нём. Сервер пробы отдаёт обе картинки:
+
+```
+ioa-parser-onload=function complete=undefined
+ioa-script-appended
+ioa-checked
+[server saw: GET /vcip-pixel.png, GET /vcip-pixel.png?script-made]
+```
+
+Ни один из четырёх маркеров загрузки не напечатан. То есть форма ожидания ни
+на что не влияет — событие не диспатчится вовсе, и картинка, созданная
+скриптом, ведёт себя ровно как написанная парсером (это уточняет прежнюю
+формулировку, где различались вставленные парсером и скриптом узлы).
+Побочно: `img.complete` — `undefined`, то есть синхронный обходной путь
+(`if (img.complete) …`), которым пользуется часть тестов, тоже не работает.
+
+Цена по остатку WPT-RUN-5, сверх прежней: `import-maps/no-referencing-script-integrity.html`
+и `…-valid.html` — оба запускают `import()` из `onload`-атрибута
+парсерного `<img src="/images/green.png">`, то есть до самой карты импортов
+дело не доходит.

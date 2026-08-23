@@ -82,6 +82,17 @@ way. The same slice filled three holes in `_GENERATED_SUFFIXES`
 (`.any.{shared,service}worker-module.html`, `.any.window-module.html`), which
 had been silently hiding 20 ids from the source stage.
 
+Slice 27 (2026-08-23) added twelve mechanisms off
+`verify_callback_import_preload_gaps.py` — engine-driven callbacks, `on<type>`
+IDL attributes, event propagation, shadow trees, import maps and `Link`-header
+preloads — and widened two existing rules. The lesson of slice 25 repeated
+itself twice while they were written: `initiator type for` claims
+`initiator-type/{video,link}.html`, where the element never loads in the first
+place (BUG-795 / BUG-826), and a bare `window.visualViewport` claims the
+iframe-bound file of that directory, which needs BUG-480 first. Both are
+narrowed to the exact subtest text measured, with a selftest case per
+*negative* as well as per positive.
+
 **The residual keeps its subtest evidence.** For every id still unexplained,
 `residual_hung_subtests` in `--json` carries the names of the subtests that
 never finished — the work list the next slice picks its target from, and the
@@ -905,7 +916,17 @@ def _resource_timing_marker(text, test_id=None):
     if not re.search(r"/(?:resource-timing|performance-timeline|"
                      r"largest-contentful-paint|longtask-timing)/", test_id or ""):
         return False
-    return bool(re.search(r"""getEntriesBy\w+\s*\(|buffered\s*:\s*true""", body))
+    # Slice 27 measured the same emptiness from three more angles at once
+    # (`verify_callback_import_preload_gaps.py --variant resource-timing`):
+    # after an `<img>`, a `fetch()`, an `XMLHttpRequest` and an `EventSource`
+    # the probe's server did serve, `getEntriesByType('resource')` still
+    # answers 0 — and `performance.onresourcetimingbufferfull` does not exist,
+    # so a test waiting for the buffer-full event waits forever. Hence the two
+    # extra shapes: the `observe_entry()` helper (`resource-timing/resources/
+    # observe-entry.js`, which never mentions the entry type in the test file
+    # itself) and the buffer-full event.
+    return bool(re.search(r"""getEntriesBy\w+\s*\(|buffered\s*:\s*true|"""
+                          r"""observe_entry\s*\(|resourcetimingbufferfull""", body))
 
 
 #: A `DecompressionStream`/`CompressionStream` read.
@@ -2191,7 +2212,16 @@ SUBTEST_MARKERS = [
         "resource-timing-entry-never-delivered", "BUG-839",
         name=r"'resource' entries should be observable|"
              r"buffered flag|ResourceTiming entry|RT entry|"
-             r"resource timing entry|getEntriesBy",
+             r"resource timing entry|getEntriesBy|"
+             # slice 27: the buffer is empty for every initiator, not just
+             # for the observer — `<img>`/`fetch`/XHR/`EventSource` all
+             # produce no entry (`--variant resource-timing`).
+             # Narrow on purpose: `initiator-type/{link,video}.html` name
+             # their element in the same phrase, and there the earlier cause
+             # is that the element never loads at all (BUG-826 / BUG-795),
+             # not that the entry is missing.
+             r"initiator type for (?:for )?(?:fetch\(\)|new EventSource\(\))|"
+             r"Finite resource timing entries buffer size",
         test=r"/(?:resource-timing|performance-timeline|"
              r"largest-contentful-paint|longtask-timing)/",
         note="no Resource Timing entry is ever created, through the observer "
@@ -2279,6 +2309,138 @@ SUBTEST_MARKERS = [
         note="the worker global has no interface objects at all, so WPT's "
              "`'X' in self && self instanceof X` idiom takes neither branch "
              "and the worker silently does nothing",
+    ),
+
+    # ── slice 27 ───────────────────────────────────────────────────────────
+    # Every entry below was measured against a live browser by
+    # `verify_callback_import_preload_gaps.py` (2026-08-23) — the subtest name
+    # says which wait hung, the probe says why it can never finish.
+
+    # BUG-591's last known engine-driven callback. The `requestAnimationFrame`
+    # half of the same pair of files was fixed on 2026-08-22 (`--variant
+    # cbx-report` now prints `error="rafBoom"`, `e.error` included); the
+    # `requestIdleCallback` one still reports nowhere although the callback
+    # itself runs (`--variant cbx-ric`). Both ids are claimed here because the
+    # snapshot predates that fix.
+    SubtestMarker(
+        "callback-exception-swallowed", "BUG-591",
+        name=r"request(?:AnimationFrame|IdleCallback) callback exceptions are "
+             r"reported to error handler",
+        note="an exception thrown from an engine-driven callback reaches no "
+             "`error` listener, so a test asserting `e.error.message` waits "
+             "forever (the rAF half was fixed 2026-08-22, the rIdle one is open)",
+    ),
+    # `document.on<type> = fn` sticks as a property and is never called:
+    # `document.dispatchEvent` reads only `_lumen_listeners`, and the engine's
+    # own `readystatechange` delivery goes through that same method
+    # (`--variant handler-idl`).
+    SubtestMarker(
+        "document-handler-prop-never-called", "BUG-874",
+        name=r"document\.onresize should set the document\.onresize handler|"
+             r"readystatechange event is fired each time document\.readyState changes",
+        note="an `on<type>` property on `document` is settable but never "
+             "invoked, although `addEventListener` on the same event works",
+    ),
+    # An event dispatched from script reaches only the node it was dispatched
+    # on — no capture, no bubble, no `window` (`--variant bubble-detail`). The
+    # two `frameset-*` siblings of this file say "synthetic ErrorEvent" and
+    # hang earlier, in BUG-480: they need a document inside an `<iframe>`.
+    SubtestMarker(
+        "dispatch-no-propagation", "BUG-873",
+        name=r"with a synthetic Event$",
+        test=r"/event-handler-processing-algorithm-error/",
+        note="the event is dispatched on `document.body` and awaited on "
+             "`window`, but `dispatchEvent` propagates to no ancestor at all",
+    ),
+    SubtestMarker(
+        "visual-viewport-missing", "BUG-875",
+        # Narrow on purpose: `viewport-scrollbars-cause-resize-in-iframe.html`
+        # names `window.visualViewport` too and hangs one step earlier, in
+        # BUG-480 — it needs a document inside an `<iframe>` first.
+        name=r"Resize event not fired at window\.visualViewport",
+        note="`window.visualViewport` does not exist, so the test throws on "
+             "its first line and its `async_test` is never resolved",
+    ),
+    # `assignedNodes()` is empty even for a light-DOM child that carries the
+    # matching `slot=` attribute, and nothing in the workspace dispatches
+    # `slotchange` (`--variant slot-detail2`).
+    SubtestMarker(
+        "slot-assignment-never-happens", "BUG-876",
+        name=r"slotchange",
+        note="no slottable is ever assigned to a slot and `slotchange` is "
+             "dispatched nowhere, so a test awaiting the event cannot finish",
+    ),
+    # A `<script src>` appended into a shadow root is not even fetched — the
+    # probe's own server never sees the request (`--variant currentscript`).
+    SubtestMarker(
+        "shadow-script-never-runs", "BUG-878",
+        name=r"document\.currentScript must (?:not )?be set to a script element",
+        note="a `<script src>` inserted into a shadow root is never requested "
+             "or run, so the `load` these subtests wait for never comes",
+    ),
+    # Deliberately the `setTimeout` subtest only: the file's four other
+    # evaluators do import successfully (the probe's server records
+    # `?label=eval`, `?label=Function`, `?label=reflected`, `?label=clicked`
+    # and not `?label=setTimeout`), and `promise_test`s run in sequence, so
+    # this one is what stops the file.
+    SubtestMarker(
+        "timer-string-handler", "BUG-831",
+        name=r"^setTimeout should successfully import$",
+        test=r"/dynamic-import/string-compilation",
+        note="the first `promise_test` compiles its `import()` through a "
+             "string `setTimeout` handler, which is never compiled at all",
+    ),
+    SubtestMarker(
+        "script-retype-never-runs", "BUG-882",
+        name=r"Already Started flag is set when a non-empty <script> tag is connected",
+        test=r"/import-maps/",
+        note="a `<script>` once connected as `type=importmap` never runs "
+             "again after being retyped and re-inserted, so the `done()` it "
+             "carries is never reached — the import map itself is not reached "
+             "either",
+    ),
+    # These two start their `import()` from an `onload=` attribute on a
+    # parser-written `<img>`; slice 27 measured that no form of the load event
+    # arrives, for a parser image or a script-made one, although the server
+    # serves both (`--variant img-onload-attr`).
+    SubtestMarker(
+        "img-no-load-event", "BUG-630",
+        name=r"integrity check (?:passed|failed)",
+        test=r"/import-maps/no-referencing-script-integrity",
+        note="the `import()` under test is started from an `onload=` "
+             "attribute on an `<img>`, and no `load` event is ever dispatched",
+    ),
+    # The `navigate` event is dispatched only from an explicit
+    # `navigation.navigate()`; these tests trigger the navigation with
+    # `location.href = "#1"` and install the handler as `navigation.onnavigate`
+    # — neither works (`--variant navigation-onprops`).
+    SubtestMarker(
+        "navigation-event-not-dispatched", "BUG-881",
+        name=r"event\.intercept\(\)|event\.deferPageSwap\(\)|"
+             r"NavigationCurrentEntryChangeEvent's properties",
+        test=r"^/navigation-api/",
+        note="a same-document navigation started by `location.href = '#x'` "
+             "fires no `navigate`/`currententrychange`, and `navigation` has "
+             "no `on<type>` properties to install the handler on",
+    ),
+    # The `Link:` response-header form of the hint is as unimplemented as the
+    # element form: neither the document's header nor a subresource's produces
+    # a request (`--variant link-header`, proved on the probe's server).
+    SubtestMarker(
+        "preload-hint-never-fetched", "BUG-826",
+        name=r"Link headers? on (?:a )?(?:cross-origin )?subresource|"
+             r"Link headers preload|Preconnect should not fire",
+        test=r"/preload/",
+        note="a `Link: <...>; rel=preload` response header produces no "
+             "request at all, and the `<link rel=preload>` element fires "
+             "neither `load` nor `error`",
+    ),
+    SubtestMarker(
+        "createimagebitmap-source", "BUG-880",
+        name=r"createImageBitmap (?:from|on) a bitmaprenderer canvas|"
+             r"Transfer ImageBitmap created in worker",
+        note="`createImageBitmap(canvas)` rejects with `unsupported source "
+             "type` and there is no `ImageBitmap` interface object",
     ),
 ]
 
@@ -2959,6 +3121,41 @@ def selftest():
             handle.write("document.fonts.ready.then(() => {});")
         check(classify_source("/a/stub.html", tmp, {}) == "iframe-no-nested-context",
               "testharness.js was followed as if it were a test helper")
+
+
+        # Stage 2, slice 27: the `observe_entry()` helper shape. A file like
+        # `resource-timing/ping-rt-entries.html` never names the entry type
+        # itself — it awaits the helper, which is what the extended predicate
+        # now recognizes (inside the four resource-timing-ish directories
+        # only, same as the rest of the rule).
+        os.makedirs(os.path.join(tmp, "resource-timing"), exist_ok=True)
+        os.makedirs(os.path.join(tmp, "resource-timing", "resources"), exist_ok=True)
+        with open(os.path.join(tmp, "resource-timing", "resources",
+                               "observe-entry.js"), "w", encoding="utf-8") as handle:
+            handle.write("function observe_entry(name) {\n"
+                         "  return new Promise(r => new PerformanceObserver(r));\n"
+                         "}")
+        with open(os.path.join(tmp, "resource-timing", "ping.html"), "w",
+                  encoding="utf-8") as handle:
+            handle.write('<script src="/resources/testharness.js"></script>\n'
+                         '<script src="resources/observe-entry.js"></script>\n'
+                         '<script>promise_test(async t => {\n'
+                         '  const entry = await observe_entry(ping);\n'
+                         '  assert_equals(entry.initiatorType, "ping");\n'
+                         '}, "ping entry");</script>')
+        check(classify_source("/resource-timing/ping.html", tmp, {})
+              == "resource-timing-entry-never-delivered",
+              "an `observe_entry()` wait was not claimed")
+        # Outside those directories the same call means nothing — the rule is
+        # about the entry type, not about the helper's name.
+        os.makedirs(os.path.join(tmp, "elsewhere"), exist_ok=True)
+        with open(os.path.join(tmp, "elsewhere", "ping.html"), "w",
+                  encoding="utf-8") as handle:
+            handle.write('<script>const e = await observe_entry(x);\n'
+                         'new PerformanceObserver(() => {});</script>')
+        check(classify_source("/elsewhere/ping.html", tmp, {}) is None,
+              "`observe_entry()` outside the resource-timing directories must "
+              "not be claimed")
 
         # Stage 2, BUG-804 (slice 12). An event-handler attribute on a
         # parser-written resource element is the marker on its own — that
@@ -4260,6 +4457,132 @@ def selftest():
                                   "worker type.", "TIMEOUT")]) is None,
               "the module-type subtest must not be claimed here — the file "
               "that hangs on it breaks earlier, on the default worker")
+
+
+        # ── slice 27 ────────────────────────────────────────────────────────
+        check(classify_subtests("/html/webappapis/animation-frames/callback-exception.html",
+                                [("requestAnimationFrame callback exceptions are "
+                                  "reported to error handler", "TIMEOUT")])
+              == "callback-exception-swallowed",
+              "the rAF callback-exception wait was not claimed")
+        check(classify_subtests("/requestidlecallback/callback-exception.html",
+                                [("requestIdleCallback callback exceptions are "
+                                  "reported to error handler", "TIMEOUT")])
+              == "callback-exception-swallowed",
+              "the rIdle callback-exception wait was not claimed")
+        check(classify_subtests("/html/webappapis/scripting/events/event-handler-onresize.html",
+                                [("document.onresize should set the "
+                                  "document.onresize handler", "TIMEOUT")])
+              == "document-handler-prop-never-called",
+              "the document.onresize wait was not claimed")
+        check(classify_subtests("/html/dom/documents/resource-metadata-management/"
+                                "document-readyState.html",
+                                [("readystatechange event is fired each time "
+                                  "document.readyState changes", "TIMEOUT")])
+              == "document-handler-prop-never-called",
+              "the document.onreadystatechange wait was not claimed")
+        check(classify_subtests("/html/webappapis/scripting/events/"
+                                "event-handler-processing-algorithm-error/"
+                                "body-element-synthetic-event.html",
+                                [("error event is normal (return true does not "
+                                  "cancel; one arg) on Window, with a synthetic "
+                                  "Event", "TIMEOUT")])
+              == "dispatch-no-propagation",
+              "the body->window bubbling wait was not claimed")
+        # The `frameset-*` siblings say "synthetic ErrorEvent" and hang one
+        # step earlier (they need a document inside an `<iframe>`, BUG-480),
+        # so the marker must not take them.
+        check(classify_subtests("/html/webappapis/scripting/events/"
+                                "event-handler-processing-algorithm-error/"
+                                "frameset-element-synthetic-errorevent.html",
+                                [("error event is weird (return true cancels; "
+                                  "many args) on Window, with a synthetic "
+                                  "ErrorEvent", "TIMEOUT")]) is None,
+              "the ErrorEvent/frameset variant must be left to BUG-480")
+        check(classify_subtests("/visual-viewport/viewport-no-resize-event-on-"
+                                "overflow-recalc.html",
+                                [("Resize event not fired at "
+                                  "window.visualViewport when content is added",
+                                  "TIMEOUT")])
+              == "visual-viewport-missing",
+              "the visualViewport wait was not claimed")
+        # Same object, one step later: this file needs an `<iframe>` first.
+        check(classify_subtests("/visual-viewport/viewport-scrollbars-cause-"
+                                "resize-in-iframe.html",
+                                [("Scrollbars cause resize event at "
+                                  "window.visualViewport", "TIMEOUT")]) is None,
+              "the iframe-bound visualViewport file must stay with BUG-480")
+        check(classify_subtests("/shadow-dom/slotchange.html",
+                                [("slotchange event: Append a child to a host "
+                                  "(onslotchange).", "TIMEOUT")])
+              == "slot-assignment-never-happens",
+              "the slotchange wait was not claimed")
+        check(classify_subtests("/shadow-dom/Document-prototype-currentScript.html",
+                                [("document.currentScript must not be set to a "
+                                  "script element that loads an external script "
+                                  "in an open shadow tree", "TIMEOUT")])
+              == "shadow-script-never-runs",
+              "the shadow-tree script wait was not claimed")
+        # Deliberately the `setTimeout` evaluator only: the other four do
+        # import (the probe's server records their labels), and claiming them
+        # would hand the file to a cause that is not what stopped it.
+        check(classify_subtests("/html/semantics/scripting-1/the-script-element/"
+                                "module/dynamic-import/"
+                                "string-compilation-base-url-inline-classic.html",
+                                [("setTimeout should successfully import", "TIMEOUT"),
+                                 ("eval should successfully import", "NOTRUN")])
+              == "timer-string-handler",
+              "the string-setTimeout import wait was not claimed")
+        check(classify_subtests("/html/semantics/scripting-1/the-script-element/"
+                                "module/dynamic-import/x.html",
+                                [("eval should successfully import", "TIMEOUT")])
+              is None,
+              "the eval evaluator must not be claimed — it works")
+        check(classify_subtests("/import-maps/dynamic-module-map-key.html",
+                                [("The Already Started flag is set when a "
+                                  "non-empty <script> tag is connected.",
+                                  "TIMEOUT")])
+              == "script-retype-never-runs",
+              "the retyped-script wait was not claimed")
+        check(classify_subtests("/import-maps/no-referencing-script-integrity.html",
+                                [("Script was not loaded as its integrity check "
+                                  "failed", "TIMEOUT")])
+              == "img-no-load-event",
+              "the `<img onload>`-started import wait was not claimed")
+        check(classify_subtests("/navigation-api/navigate-event/intercept-resolve.html",
+                                [("event.intercept() should proceed if the given "
+                                  "promise resolves", "TIMEOUT")])
+              == "navigation-event-not-dispatched",
+              "the navigate-event wait was not claimed")
+        check(classify_subtests("/preload/link-header-on-subresource.html",
+                                [("Makes sure that Link headers on subresources "
+                                  "preload resources", "TIMEOUT")])
+              == "preload-hint-never-fetched",
+              "the Link-header preload wait was not claimed")
+        check(classify_subtests("/imagebitmap-renderingcontext/"
+                                "bitmaprenderer-as-imagesource.html",
+                                [("Test that createImageBitmap from a "
+                                  "bitmaprenderer canvas produces correct result",
+                                  "TIMEOUT")])
+              == "createimagebitmap-source",
+              "the createImageBitmap wait was not claimed")
+        check(classify_subtests("/resource-timing/initiator-type/misc.html",
+                                [("The initiator type for for fetch() must be "
+                                  "'fetch'", "TIMEOUT")])
+              == "resource-timing-entry-never-delivered",
+              "the fetch initiator-type wait was not claimed")
+        check(classify_subtests("/resource-timing/buffer-full-eventually.html",
+                                [("Finite resource timing entries buffer size",
+                                  "TIMEOUT")])
+              == "resource-timing-entry-never-delivered",
+              "the buffer-full wait was not claimed")
+        # The narrowness that keeps BUG-795/BUG-826 from losing their files:
+        # `initiator-type/{video,link}.html` phrase their subtests the same
+        # way, but there the element never loads in the first place.
+        check(classify_subtests("/resource-timing/initiator-type/video.html",
+                                [("The initiator type for video must be 'video'",
+                                  "TIMEOUT")]) is None,
+              "the video initiator-type file must stay with BUG-795")
 
         # Source stage, slice 26.
         with open(os.path.join(tmp, "a", "quota.window.js"), "w",

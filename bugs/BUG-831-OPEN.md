@@ -79,3 +79,25 @@ import-inline-handler`) и положить его в очередь тайме�
    `string-interval-ran`.
 2. WPT: `run_report.py --all --root html/semantics/scripting-1/the-script-element/module/dynamic-import --recursive`
    — семейство `string-compilation-*` должно перестать быть TIMEOUT.
+
+## Перезамер 2026-08-23 (WPT-RUN-6, срез 27): цена в id, доказанная сервером
+
+`tests/wpt/verify_callback_import_preload_gaps.py --variant string-import-labels`
+на `main` = `34cbefd25` повторяет ровно то, что делает
+`html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-base-url-inline-*.html`:
+пять «вычислителей» компилируют строку с `import()`, каждый со своей меткой в
+запросе, так что видно, кто из них отработал:
+
+```
+[server saw: GET /vcip-imports-a.js?label=Function,
+             GET /vcip-imports-a.js?label=clicked,
+             GET /vcip-imports-a.js?label=eval,
+             GET /vcip-imports-a.js?label=reflected]
+```
+
+`?label=setTimeout` отсутствует: строковый обработчик таймера не
+компилируется, промис первого `promise_test` не оседает никогда, а
+`promise_test`-ы идут последовательно — поэтому оба файла (`-inline-classic`
+и `-inline-module`) уходят в TIMEOUT целиком, хотя четыре из пяти их
+сабтестов движку по силам. Это самое частое имя зависшего сабтеста во всём
+остатке WPT-RUN-5.

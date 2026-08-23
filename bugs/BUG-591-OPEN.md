@@ -341,3 +341,29 @@ catch(e) {}` в том же `_lumen_apply_ready_state` вокруг autofocus-ф
 Остаются вне scope нижнего приоритета: `dispatchEvent` у
 service-worker-registration/`MediaQueryList`/`MessagePort` (см. «Не в объёме
 этого среза» выше) — узкие, не названные ни одним WPT-кластером механизмы.
+
+## Перезамер 2026-08-23 (WPT-RUN-6, срез 27): остался `requestIdleCallback`
+
+`tests/wpt/verify_callback_import_preload_gaps.py --variant cbx-ric` на
+`main` = `34cbefd25`, то есть уже после всех починок 2026-08-22/23. Колбэк
+`requestIdleCallback` исполняется (`deadline.timeRemaining` — функция), но
+брошенное из него исключение не доходит никуда:
+
+```
+ric-ran deadline=function
+ric-second-ran
+ric-error microBoom      ← queueMicrotask: починен
+ric-checked
+```
+
+`ric-error ricBoom` нет. Соседний путь — `requestAnimationFrame` — теперь
+работает полностью, включая `e.error.message` (вариант `cbx-report`:
+`cbx-event type=error message="rafBoom" error="rafBoom"`), то есть
+`animation-frames/callback-exception.html` починен, а
+`requestidlecallback/callback-exception.html` (та же страница, тот же
+ассерт) — нет. Это последний известный движковый колбэк вне починки; список
+остальных остатков — в разделе выше.
+
+Побочно тем же вариантом: `'onerror' in window === false`
+([BUG-874](BUG-874-OPEN.md)) — детект «есть ли обработчик» в WPT идёт именно
+этой идиомой.

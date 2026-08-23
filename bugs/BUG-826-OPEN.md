@@ -115,3 +115,30 @@ WPT-RUN-5 (крупнейший механизм среза 20), а по все�
    `link-load …` (и `link-error 404` для несуществующего).
 2. WPT: `run_report.py --all --root preload --recursive` и
    `--root connection-allowlist` — семейства перестают висеть.
+
+## Перезамер 2026-08-23 (WPT-RUN-6, срез 27): форма заголовка ответа
+
+Раньше замерялся только элемент `<link rel=preload>`. Заголовок ответа
+`Link:` — вторая форма того же хинта (HTML LS §4.6.6, «Link headers») и
+работает не лучше: `tests/wpt/verify_callback_import_preload_gaps.py
+--variant link-header` отдаёт `Link: <…>; rel=preload; as=script` и на самом
+документе, и на подключённом им `.css`, а сервер пробы не видит запроса ни
+за одним из двух указанных файлов:
+
+```
+[server saw: GET /vcip-linked.css]     ← только сама таблица стилей
+lh-rt-entries []
+lh-checked
+```
+
+Элементная форма на той же странице подтверждает старый замер: `<link
+rel=preload as=script>` не даёт ни запроса, ни `load`, ни `error`.
+Поведение `rel=preconnect` при этом случайно правильное — событий он не
+шлёт, чего спека и требует, но по той же причине (хинты не обрабатываются
+вовсе).
+
+Цена по остатку WPT-RUN-5: `preload/link-header-on-subresource.html`,
+`preload/cross-origin-link-header-on-subresource.sub.html`,
+`preload/link-header-preload-imagesrcset.html` (заголовочная форма) и
+`preload/preconnect-onerror-event.html` (элементная — тест ждёт `load` от
+`rel=preload`, чтобы отличить его от `rel=preconnect`).
