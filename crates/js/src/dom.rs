@@ -15371,8 +15371,15 @@ function _lumen_run_activation_behavior(nid, el) {
         return;
     }
     if (tag === 'A' || tag === 'AREA') {
+        // HTML LS §7.4.2 picks «navigate to a fragment» or «load a document» by
+        // comparing URLs, not by how the navigation was started, so activating a
+        // hyperlink takes exactly the same entry point as `location.href =`.
+        // This used to call `_lumen_navigate` unconditionally (BUG-833), so a
+        // click on a fragment-only link reloaded the whole document: no
+        // `hashchange`, `location` back without the fragment, and a page that
+        // clicks such a link from script looping through reloads forever.
         var href = el.href;
-        if (href) _lumen_navigate(String(href), false);
+        if (href) _lumen_navigate_or_fragment(String(href), false);
         return;
     }
     if (tag === 'SUMMARY') {

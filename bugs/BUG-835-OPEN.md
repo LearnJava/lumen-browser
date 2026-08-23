@@ -52,7 +52,7 @@ JS-сторона доводит вызов до шелла: `history.back()` �
 `overlapping-navigations-and-traversals/anchor-fragment-history-back-on-click.html`
 гоняют обход через `<iframe>` или через клик по якорю и уже
 атрибутированы более ранним причинам ([BUG-480](BUG-480-OPEN.md),
-[BUG-833](BUG-833-OPEN.md)).
+[BUG-833](BUG-833-FIXED.md)).
 
 Отдельно стоит зафиксировать: заморозка касается **всего документа**, а не
 только обхода. То есть один `history.back()` в шарде WPT — кандидат в
