@@ -43,6 +43,7 @@ use lumen_core::ext::{
 use lumen_core::url::Url;
 
 mod auth;
+mod bad_port;
 mod brotli;
 mod flate;
 pub mod coop;
@@ -289,6 +290,17 @@ fn require_http_scheme(url: &Url) -> Result<(String, u16, bool)> {
     let port = url
         .effective_port()
         .ok_or_else(|| Error::Network(format!("no port for URL: {}", url.as_str())))?;
+    // BUG-772, Fetch §3.9 «port blocking» — проверка ДО DNS-резолва и до
+    // открытия сокета: сам факт подключения к чужой службе и есть атака,
+    // от которой список защищает. Здесь, а не в `fetch_with_redirect`,
+    // потому что валидация формы запроса общая для fetch и EventSource,
+    // и класс отказа тот же, что у bad scheme (событий не эмитим — байт
+    // не улетал, ср. комментарий про `require_http_scheme` в
+    // `fetch_with_redirect`). Проверяется на каждом redirect-hop: hop
+    // проходит через ту же функцию.
+    if bad_port::is_bad_port(port) {
+        return Err(Error::Network(format!("blocked port: {port}")));
+    }
     Ok((host, port, is_tls))
 }
 
@@ -6392,6 +6404,115 @@ mod tests {
             other => panic!("expected RequestCompleted(404), got {other:?}"),
         }
 
+        server.join().unwrap();
+    }
+
+    /// Занять один из заблокированных портов реальным слушателем.
+    ///
+    /// Возвращает `None`, если ни один кандидат не свободен (порт занят чужим
+    /// процессом или запрещён ОС) — тогда «сокет не открывался» доказать
+    /// нечем и тест сводится к проверке текста ошибки. Кандидаты выбраны
+    /// непривилегированными: 1–1023 на Linux требуют root.
+    fn bind_blocked_port() -> Option<(std::net::TcpListener, u16)> {
+        for port in [10080u16, 6667, 6666, 4190, 6566] {
+            if let Ok(l) = std::net::TcpListener::bind(("127.0.0.1", port)) {
+                return Some((l, port));
+            }
+        }
+        None
+    }
+
+    /// BUG-772: Fetch §3.9 — запрос на «bad port» отвергается ДО открытия
+    /// сокета. Слушатель на том же порту не должен увидеть ни одного
+    /// подключения: сам факт подключения к чужой службе и есть та
+    /// cross-protocol-атака, от которой список защищает.
+    #[test]
+    fn fetch_blocked_port_never_opens_socket() {
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new().with_sink(sink.clone());
+
+        let (listener, port) = match bind_blocked_port() {
+            Some(v) => v,
+            // Ни один кандидат не свободен — проверяем хотя бы отказ.
+            None => {
+                let url = Url::parse("http://127.0.0.1:6667/").unwrap();
+                let err = client.fetch(&url).unwrap_err().to_string();
+                assert!(err.contains("blocked port"), "неожиданная ошибка: {err}");
+                return;
+            }
+        };
+        listener
+            .set_nonblocking(true)
+            .expect("set_nonblocking on listener");
+
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let err = client.fetch(&url).unwrap_err().to_string();
+        assert!(
+            err.contains("blocked port") && err.contains(&port.to_string()),
+            "ошибка должна называть заблокированный порт, получено: {err}"
+        );
+        assert!(
+            matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+            "к заблокированному порту {port} было открыто TCP-соединение"
+        );
+        // Тот же класс отказа, что и bad scheme: форма запроса невалидна,
+        // байт не улетал — Started/Completed/Blocked не эмитим.
+        assert!(sink.events().is_empty());
+    }
+
+    /// BUG-772: то же для `WebSocket` — конструктор обязан отказать
+    /// синхронно, не дожидаясь ОС-таймаута соединения (92 порта подряд по
+    /// ~2.5 с рвали внешний таймаут `wptrunner`).
+    #[test]
+    fn ws_connect_blocked_port_never_opens_socket() {
+        // `Box<dyn JsWebSocketSession>` не Debug, поэтому не `unwrap_err`.
+        fn ws_error(client: &HttpClient, url: &str) -> String {
+            match <HttpClient as JsWebSocketProvider>::connect(client, url, &[]) {
+                Ok(_) => panic!("подключение к заблокированному порту удалось: {url}"),
+                Err(e) => e.to_string(),
+            }
+        }
+
+        let client = HttpClient::new();
+        let (listener, port) = match bind_blocked_port() {
+            Some(v) => v,
+            None => {
+                let err = ws_error(&client, "ws://127.0.0.1:6667/");
+                assert!(err.contains("blocked port"), "неожиданная ошибка: {err}");
+                return;
+            }
+        };
+        listener
+            .set_nonblocking(true)
+            .expect("set_nonblocking on listener");
+
+        let started = std::time::Instant::now();
+        let err = ws_error(&client, &format!("ws://127.0.0.1:{port}/"));
+        assert!(
+            err.contains("blocked port") && err.contains(&port.to_string()),
+            "ошибка должна называть заблокированный порт, получено: {err}"
+        );
+        assert!(
+            matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+            "к заблокированному порту {port} было открыто TCP-соединение"
+        );
+        // Ключевое свойство для WPT: отказ не стоит сетевого таймаута.
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "отказ занял {:?} — проверка идёт после попытки соединения",
+            started.elapsed()
+        );
+    }
+
+    /// Обычный порт по-прежнему ходит в сеть — проверка не «блокирует всё».
+    #[test]
+    fn fetch_ordinary_port_is_not_blocked() {
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(client.fetch(&url).expect("fetch"), b"ok");
         server.join().unwrap();
     }
 
