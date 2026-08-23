@@ -5601,6 +5601,7 @@ function _lumen_get_fonts() {
     }
     var fontSet = {
         _faces: faces,
+        ready: Promise.resolve(),
         get length() { return this._faces.length; },
         item: function(index) {
             return this._faces[index] || null;
@@ -25116,6 +25117,19 @@ mod tests {
             rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
             let r = rt
                 .eval("window.onbeforeunload = function() {}; _lumen_bfcache_blocked()")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-564: `document.fonts.ready` used to be `undefined`, so any script
+        // awaiting font loading (`document.fonts.ready.then(...)`) threw
+        // synchronously instead of getting a Promise.
+        #[test]
+        fn document_fonts_ready_is_a_thenable_promise() {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+            let r = rt
+                .eval("document.fonts.ready instanceof Promise && typeof document.fonts.ready.then === 'function'")
                 .unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
