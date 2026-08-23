@@ -84,7 +84,7 @@ originating-элемента (`color: blue` внутри `color: blue`), нео�
 
 ### Отпочковано
 
-- [BUG-432](BUG-432-OPEN.md) — фон `::first-line` не красится вовсе
+- [BUG-432](BUG-432-FIXED.md) — фон `::first-line` не красился вовсе (FIXED 2026-08-23)
   (`BoxKind::InlineRun` не имеет собственной покраски бокса), хотя
   doc-комментарий `split_first_line_boxes` это обещает.
 

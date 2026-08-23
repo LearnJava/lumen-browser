@@ -2601,8 +2601,9 @@ pub enum PseudoKind {
     Before,
     /// `::after` generated content (`BoxRole::Pseudo` tag only, see `Before`).
     After,
-    /// `::first-line` styled fragment (`BoxRole::Pseudo` tag only — applied by
+    /// `::first-line` styled box (`BoxRole::Pseudo` tag only — applied by
     /// `split_first_line_boxes`, which works on whole boxes, not segments).
+    /// Paint keys the pseudo-element's own background off this role.
     FirstLine,
     /// `::marker` list-marker content (`BoxRole::Pseudo` tag only — markers are
     /// `BoxKind::Marker` boxes, tagged `BoxRole::ListMarker` instead; this
@@ -3384,8 +3385,11 @@ fn split_segments_at_first_line(
 /// so the split gives the first line its correct (possibly larger) line box
 /// height with no paint-side changes. Single-line runs are restyled in place.
 /// Idempotent: `first_line_style` is cleared on every produced box.
-/// The box receives the full `::first-line` `ComputedStyle`, so background,
-/// text-decoration, color and font all take effect at paint time.
+/// The box receives the full `::first-line` `ComputedStyle` and the
+/// `BoxRole::Pseudo(PseudoKind::FirstLine)` role, so background,
+/// text-decoration, color and font all take effect at paint time — the role is
+/// what lets `emit_inline_run` tell this box from an anonymous inline run,
+/// whose `anon_style` has no background of its own (BUG-432).
 pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
     for child in &mut b.children {
         split_first_line_boxes(child);
@@ -3405,6 +3409,7 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
             // The whole run is the first formatted line: restyle the box in place
             // so paint uses the ::first-line font metrics for its single line box.
             child.style = Arc::new(*fls);
+            child.origin.role = BoxRole::Pseudo(PseudoKind::FirstLine);
             i += 1;
             continue;
         }
@@ -3444,6 +3449,11 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
             lines: vec![line0],
             first_line_style: None,
         };
+        // BUG-432: tag the box so paint can tell it from an ordinary anonymous
+        // inline run and draw the pseudo-element's own background. Every other
+        // `InlineRun` is built through `anon_style`, which clears
+        // `background_color`; this one carries the full ::first-line style.
+        child.origin.role = BoxRole::Pseudo(PseudoKind::FirstLine);
         b.children.insert(i + 1, box2);
         i += 2;
     }
