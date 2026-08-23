@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 mod indexed_db;
+mod link_activation;
 mod no_automation_markers;
 mod speech_api;
 mod v8_eval;

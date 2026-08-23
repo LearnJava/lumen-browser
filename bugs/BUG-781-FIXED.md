@@ -1,6 +1,6 @@
 # BUG-781: `DOMParser.parseFromString` игнорирует XML MIME-типы — всегда гоняет HTML-токенизатор и заворачивает корень в синтетический `<html>`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-23 (P1)
 
 **Компонент:** js (`crates/js/src/dom_parser.rs:526-567`, `_vBuildDocument`; `DOMParser.prototype.parseFromString`, `dom_parser.rs:850-861`)
 
@@ -106,3 +106,89 @@ wptrunner-ом, 3/7 harness OK, 4/190 сабтестов). Остальные 5 
 падает `ERROR` на уже задокументированном TLS-гэпе (BUG-438/BUG-657-класс:
 «navigate reported success but the document was never replaced»), тоже не
 новый номер.
+
+## Фикс (2026-08-23, P1)
+
+Выбран вариант (а) из «Suspected fix direction» — XML-режим в существующем
+токенизаторе, а не делегирование в арену. Причина: `DOMParser` строит
+**отсоединённый** документ на JS-объектах (`VNode`/`VElement`/`VDocument`,
+весь `dom_parser.rs` — самостоятельный мирок), а `_lumen_create_element_ns`
+живёт в арене живого документа; путь (б) означал бы либо второй тип
+документа в возвращаемом значении `parseFromString`, либо перенос всего
+`VNode`-дерева на арену — это не фикс бага, а переписывание подсистемы.
+
+Что сделано (всё в `crates/js/src/dom_parser.rs`):
+
+- `_vParseHTML(html, doc, isXML)` получил XML-режим. Он меняет ровно четыре
+  места, где XML расходится с HTML: имена не приводятся к нижнему регистру
+  (XML 1.0 §2.3), закрывающий тег обязан совпасть с внутренним открытым
+  элементом посимвольно, void-элементов нет (самозакрывается только `<x/>`,
+  поэтому `<a><br/></a>` — валидный документ с потомком `br`, а не с
+  пустым), и у `<script>`/`<style>` нет raw-text-режима. Нарушение
+  well-formedness бросает помеченную ошибку (`__vXmlWF`).
+- `_vBuildXMLDocument(xml, mime)` — новая ветка `_vBuildDocument` для четырёх
+  XML MIME. Нормализует CRLF и одиночный CR в LF **до** разбора (XML 1.0
+  §2.11), валидирует `VersionNum` пролога как `'1.' [0-9]+` (§2.8), берёт
+  единственный top-level элемент как `documentElement` без синтеза
+  `html`/`head`/`body`; `doc.head`/`doc.body` остаются `null`.
+- Фатальная ошибка даёт документ с корнем `<parsererror>` в mozilla-namespace
+  (DOM Parsing §8.2), а не исключение — так же, как в остальных движках:
+  «два корня», «текст вне корня», «пустой ввод», несовпадение тегов,
+  недозакрытый элемент, плохая версия пролога.
+- Регистрозависимость протянута через все аксессоры, а не только через
+  конструктор: `_vAttrKey` (атрибуты), `cloneNode`, `_vSerializeElement`
+  (сериализация круглым ходом отдаёт квалифицированное имя), `_vMatchSimple`
+  и `_vGetByTag`. Квалифицированное имя разбирается на `prefix`/`localName`,
+  `tagName`/`nodeName` хранят его целиком.
+
+HTML-путь не тронут: `_vParseHTML` без третьего аргумента ведёт себя как
+раньше, что закреплено тестом `html_path_still_wraps_and_lowercases`.
+
+Тесты (`crates/js/src/dom_parser.rs`, модуль `tests_v8`, 7 новых):
+`xml_document_element_is_the_real_root`, `xml_names_keep_their_case`,
+`xml_qualified_name_splits_and_round_trips`, `xml_eol_normalization`,
+`xml_prolog_version_is_validated`, `xml_ill_formed_input_yields_parsererror`,
+`html_path_still_wraps_and_lowercases`. Оба живых воспроизведения из раздела
+«Симптом» покрыты дословно.
+
+### Цифра прогона категории после фикса (2026-08-23)
+
+`run_report.py --all --root xml --recursive` на `dev-release` с фиксом:
+**5/10 harness OK, 13/190 сабтестов** против **3/7 harness OK, 4/190** до него.
+
+Знаменатель harness вырос с 7 до 10 не от этого фикса: `run_report.py` с тех
+пор стал отбирать и рефтесты (`encoding-single-chunk`, `large-cdata`, `sort`),
+а три `xslt/*.window.html` перешли `TIMEOUT` → `ERROR` благодаря фиксу BUG-591
+(непойманный `ReferenceError: XSLTProcessor is not defined` теперь всплывает
+вместо того, чтобы висеть). Сравнивать надо по сабтестам: знаменатель 190
+общий, и все 13 прошедших — это **обе не-XSLT страницы целиком**:
+
+- `eol-normalization.html` — было 0/3, стало 3/3;
+- `xml-prolog-accepted-versions.html` — было номинально 4/10 (все четыре —
+  ложноположительные, см. «Симптом»), стало 10/10, причём шесть
+  «accepted»-сабтестов проходят впервые, а четыре «rejected» теперь верны по
+  существу (`tagName === 'parsererror'`, а не `'HTML'`).
+
+Оставшиеся 177 сабтестов — целиком `xslt/`, упираются в отсутствующий
+`XSLTProcessor`; потолок категории без XSLT достигнут.
+
+Ожидания WPT сужены (`--update-expected`): два `.ini` с девятью
+`expected: FAIL` удалены как ставшие лишними. Гейт `--check` при этом остаётся
+красным, но по причинам вне этого бага и вне категории: он сообщает `MISSING`
+для десяти id, которые глоб отбирает, а wptrunner никогда не исполняет
+(`*-ref.html`, `crashtests/*`, `*-crash.html`), — а контрольный прогон
+`--check` на нетронутой категории `webrtc-svc` тоже красный (4 регрессии
+`OK` → `ERROR`). То есть baseline TEST-3 просрочен по корпусу в целом;
+это территория P2 (`tests/wpt/expectations.py`), отдельной заявки здесь не
+заводится.
+
+### Что осталось за скобками
+
+- `namespaceURI` не резолвится из объявлений `xmlns` в области видимости —
+  `prefix`/`localName` отделяются, но URI не сопоставляется. Отдельная
+  работа: за неё отвечает namespace-aware сериализация, которая шапкой файла
+  и так помечена как Phase 1.
+- Необъявленная сущность (`&foo;`) остаётся в тексте как есть вместо
+  фатальной ошибки — разбора DTD в парсере нет вовсе.
+- XSLT (5 из 7 исполнявшихся id категории) этим фиксом не затронут:
+  `XSLTProcessor` отсутствует целиком и нигде не запланирован.
