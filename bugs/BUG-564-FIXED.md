@@ -70,7 +70,7 @@ those 660 ids that were actually executed in the Windows run (the rest fell
 in shards budget-killed before reaching them or in categories the harness
 never started), **384 timed out — 85.0%**, against a 15.2% baseline TIMEOUT
 rate across the whole run (6205/40850). This is the single largest identified
-TIMEOUT mechanism outside the Worker family (see [BUG-778](BUG-778-OPEN.md)),
+TIMEOUT mechanism outside the Worker family (see [BUG-778](BUG-778-FIXED.md)),
 spans dozens of categories (`css-grid`, `css-flexbox`, `css-align`,
 `css-anchor-position`, `css-display`, and more — not isolated to
 `css-anchor-position` as originally found), and per the "Причина" section

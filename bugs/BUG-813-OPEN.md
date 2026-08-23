@@ -66,7 +66,7 @@ WPT-RUN-5 (`workers/modules` 4, `content-security-policy/inside-worker` 2,
 `workers/SharedWorker-script-error.html` — по 1). Счёт консервативен:
 маркер требует обеих половин (`new Worker(` **и** слушатель `error`), а
 большая часть каталога `workers/` в снимке отработала по более ранней
-причине — `worker-importscripts` ([BUG-778](BUG-778-OPEN.md), 2 946 id),
+причине — `worker-importscripts` ([BUG-778](BUG-778-FIXED.md), 2 946 id),
 потому что `testharness.js` внутри воркера подключается через
 `importScripts`.
 

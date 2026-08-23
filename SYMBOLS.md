@@ -1605,16 +1605,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/wasm/value.rs:128` **fn** `val_type` — The value type of this runtime value
 `crates/js/src/wasm/value.rs:143` **struct** `FuncType` — A function signature: parameter types followed by result types
 `crates/js/src/wasm/value.rs:155` **struct** `Limits` — Min/max limits shared by memories and tables (in pages for memory, in
-`crates/js/src/worker.rs:37` **enum** `WorkerInMsg` — Message sent from the main JS thread to a worker thread
-`crates/js/src/worker.rs:47` **struct** `WorkerHandle` — Live handle to a spawned worker thread
-`crates/js/src/worker.rs:59` **type** `WorkerRegistry` — All live Worker instances for the current page, keyed by worker ID
-`crates/js/src/worker.rs:65` **type** `WorkerMessageQueue` — Outbound message queue: messages posted by worker threads to the main thread
-`crates/js/src/worker.rs:72` **type** `WorkerBlobStore` — Shared blob store: blob URL → decoded script text
-`crates/js/src/worker.rs:83` **type** `WorkerErrorQueue` — Outbound error-report queue: uncaught exceptions from an already-started
-`crates/js/src/worker.rs:91` **fn** `post_to_worker` — Send a JSON-serialized message to a live worker thread
-`crates/js/src/worker.rs:102` **fn** `terminate_worker` — Terminate a worker and remove it from the registry
-`crates/js/src/worker.rs:112` **fn** `drain_messages` — Drain all pending messages sent from worker threads to the main thread
-`crates/js/src/worker.rs:117` **fn** `drain_errors` — Drain all pending worker error reports, analogous to [`drain_messages`]
+`crates/js/src/worker.rs:38` **enum** `WorkerInMsg` — Message sent from the main JS thread to a worker thread
+`crates/js/src/worker.rs:48` **struct** `WorkerHandle` — Live handle to a spawned worker thread
+`crates/js/src/worker.rs:60` **type** `WorkerRegistry` — All live Worker instances for the current page, keyed by worker ID
+`crates/js/src/worker.rs:66` **type** `WorkerMessageQueue` — Outbound message queue: messages posted by worker threads to the main thread
+`crates/js/src/worker.rs:73` **type** `WorkerBlobStore` — Shared blob store: blob URL → decoded script text
+`crates/js/src/worker.rs:84` **type** `WorkerErrorQueue` — Outbound error-report queue: uncaught exceptions from an already-started
+`crates/js/src/worker.rs:102` **fn** `post_to_worker` — Send a JSON-serialized message to a live worker thread
+`crates/js/src/worker.rs:113` **fn** `terminate_worker` — Terminate a worker and remove it from the registry
+`crates/js/src/worker.rs:123` **fn** `drain_messages` — Drain all pending messages sent from worker threads to the main thread
+`crates/js/src/worker.rs:128` **fn** `drain_errors` — Drain all pending worker error reports, analogous to [`drain_messages`]
 
 ## lumen-knowledge  (68 symbols)
 

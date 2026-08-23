@@ -52,7 +52,7 @@ worker-side support script (not guessed from the log alone):
   statement throws immediately. Direct cause of the entire `workers/
   modules/` directory (24 files) plus
   `SharedWorker-extendedLifetime-named-module.html`.
-- **[BUG-778](../../bugs/BUG-778-OPEN.md)** — three further
+- **[BUG-778](../../bugs/BUG-778-FIXED.md)** — three further
   `WorkerGlobalScope`/`WindowOrWorkerGlobalScope` members are missing from
   dedicated+shared workers: `close()` (`WorkerGlobalScope-close.html` +
   1 more), `fetch()`/`XMLHttpRequest` (all 6 files of `semantics/xhr/*`
@@ -88,7 +88,7 @@ per the project's "don't describe a failure mode from intuition" rule.
 (нет `self.location`/`self.navigator` в dedicated/shared-воркерах, 31 файл
 напрямую), [BUG-777](../bugs/BUG-777-OPEN.md) (конструкторы `Worker`/
 `SharedWorker` не читают `options` — модульных воркеров не существует, весь
-каталог `modules/`, 24 файла) и [BUG-778](../bugs/BUG-778-OPEN.md) (нет
+каталог `modules/`, 24 файла) и [BUG-778](../bugs/BUG-778-FIXED.md) (нет
 `close()`/`fetch()`/`XMLHttpRequest`, плюс `importScripts()` у SharedWorker
 безусловно бросает, тогда как у dedicated-воркера работает). Кластер
 `onerror/*`/`Worker_ErrorEvent_*` — уже задокументированный
