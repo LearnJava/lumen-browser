@@ -13798,7 +13798,7 @@ function _lumen_apply_ready_state(state) {
         document.dispatchEvent(dcl);
         var winArr = _domcontentloaded_win_listeners.slice();
         for (var i = 0; i < winArr.length; i++) {
-            try { winArr[i].call(window, dcl); } catch(e) {}
+            try { winArr[i].call(window, dcl); } catch(e) { _lumen_report_exception(e); }
         }
         // HTML LS §6.6.6 «flush autofocus candidates» (BUG-381): once parsing is
         // done, focus the first `[autofocus]` element in the document — unless a
@@ -13815,10 +13815,10 @@ function _lumen_apply_ready_state(state) {
         var loadEv = new Event('load', { bubbles: false, cancelable: false });
         var loadArr = _load_listeners.slice();
         for (var j = 0; j < loadArr.length; j++) {
-            try { loadArr[j].call(window, loadEv); } catch(e) {}
+            try { loadArr[j].call(window, loadEv); } catch(e) { _lumen_report_exception(e); }
         }
         if (typeof window.onload === 'function') {
-            try { window.onload.call(window, loadEv); } catch(e) {}
+            try { window.onload.call(window, loadEv); } catch(e) { _lumen_report_exception(e); }
         }
     }
 }
@@ -13834,7 +13834,7 @@ function _lumen_apply_visibility(hidden) {
     document.dispatchEvent(ev);
     var vcArr = _visibilitychange_listeners.slice();
     for (var i = 0; i < vcArr.length; i++) {
-        try { vcArr[i].call(window, ev); } catch(e) {}
+        try { vcArr[i].call(window, ev); } catch(e) { _lumen_report_exception(e); }
     }
 }
 
@@ -22878,6 +22878,72 @@ mod tests {
             .unwrap();
             let result = rt.eval("caught").unwrap();
             assert_eq!(result, lumen_core::JsValue::String("et-boom".to_string()));
+        }
+
+        /// Slice 2026-08-23: `_lumen_apply_ready_state`/`_lumen_apply_visibility`
+        /// drive the engine's own `load`/`DOMContentLoaded`/`visibilitychange`
+        /// dispatch by looping listeners directly instead of going through
+        /// `window.dispatchEvent` (unlike a script-initiated
+        /// `window.dispatchEvent(new Event('load'))`, already covered above) —
+        /// these three loops used to swallow a listener's exception in a bare
+        /// `catch(e) {}`, which is what turned WPT's `css/css-shapes/spec-examples`
+        /// FAILs into NOTRUN + TIMEOUT (WPT-RUN-6 slice 24).
+        #[test]
+        fn bug591_window_load_listener_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var caught = null; \
+                 window.addEventListener('error', function(e) { caught = e.message; }); \
+                 window.addEventListener('load', function() { throw new Error('load-boom'); });",
+            )
+            .unwrap();
+            rt.eval("_lumen_apply_ready_state('interactive'); _lumen_apply_ready_state('complete');")
+                .unwrap();
+            let result = rt.eval("caught").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("load-boom".to_string()));
+        }
+
+        #[test]
+        fn bug591_window_onload_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var caught = null; \
+                 window.addEventListener('error', function(e) { caught = e.message; }); \
+                 window.onload = function() { throw new Error('onload-boom'); };",
+            )
+            .unwrap();
+            rt.eval("_lumen_apply_ready_state('interactive'); _lumen_apply_ready_state('complete');")
+                .unwrap();
+            let result = rt.eval("caught").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("onload-boom".to_string()));
+        }
+
+        #[test]
+        fn bug591_window_domcontentloaded_listener_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var caught = null; \
+                 window.addEventListener('error', function(e) { caught = e.message; }); \
+                 window.addEventListener('DOMContentLoaded', function() { throw new Error('dcl-boom'); });",
+            )
+            .unwrap();
+            rt.eval("_lumen_apply_ready_state('interactive');").unwrap();
+            let result = rt.eval("caught").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("dcl-boom".to_string()));
+        }
+
+        #[test]
+        fn bug591_window_visibilitychange_listener_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var caught = null; \
+                 window.addEventListener('error', function(e) { caught = e.message; }); \
+                 window.addEventListener('visibilitychange', function() { throw new Error('vc-boom'); });",
+            )
+            .unwrap();
+            rt.eval("_lumen_apply_visibility(true);").unwrap();
+            let result = rt.eval("caught").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("vc-boom".to_string()));
         }
 
         /// Guards the deliberate exception to the rule above: a `window`
