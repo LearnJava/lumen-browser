@@ -93,6 +93,20 @@ iframe-bound file of that directory, which needs BUG-480 first. Both are
 narrowed to the exact subtest text measured, with a selftest case per
 *negative* as well as per positive.
 
+Slice 28 (2026-08-23) added seven mechanisms off
+`verify_window_history_jsurl_gaps.py` — auxiliary browsing contexts,
+`javascript:` URLs, same-document traversal and the `targetOrigin` spellings —
+and a **sixth source stage**, `LATE_SOURCE_MARKERS`, which exists for exactly
+one of them: "a script-built frame is never fetched" (BUG-885) is causally
+earlier than any wait the file expresses, but written as a source rule it also
+matches all 47 ids of `iframe-child-callback-never-runs`, whose evidence is
+stronger because that stage read the child document. Ordering by strength of
+evidence rather than by causality is the conservative choice, and the one the
+worker and subframe stages already make. The same slice re-pointed
+`window-open-stub`'s message-waiting half at BUG-883: the opener's event loop
+stops the moment `open()` is called, so BUG-797's missing channel is a barrier
+the test never reaches (286 → 153 ids, the difference in `open-freezes-opener`).
+
 **The residual keeps its subtest evidence.** For every id still unexplained,
 `residual_hung_subtests` in `--json` carries the names of the subtests that
 never finished — the work list the next slice picks its target from, and the
@@ -1075,6 +1089,63 @@ def _shared_worker_module_marker(text, test_id):
     return bool(test_id) and ".any.sharedworker-module.html" in test_id
 
 
+#: `pushState(state, title)` — the two-argument form — creates an entry whose
+#: traversal dispatches no `popstate` at all, while the same call with a third
+#: (URL) argument does, and so does an entry made by `location.hash =`
+#: (WPT-RUN-6 slice 28, `--variant hist-popstate-late` / `hist-pushstate-url`).
+#: The distinction cannot be written as a flat regex — it is the *arity* of the
+#: call that decides — so the marker walks each `history.pushState(` /
+#: `history.replaceState(` call to its matching parenthesis and counts the
+#: commas at depth zero. Two things this has to get right, both met in the
+#: residual: the `history.` prefix is required (`soft-navigation-helper.js`
+#: defines a *local* `pushState = url => …` and calls it with one argument,
+#: which a prefix-less rule reads as the URL-less form), and a nested call in
+#: the URL argument (`url.replace(a, b)`) must not be counted as a separator.
+_PUSHSTATE_CALL_RE = re.compile(r"\bhistory\s*\.\s*(?:push|replace)State\s*\(")
+_TRAVERSAL_CALL_RE = re.compile(r"\bhistory\s*\.\s*(?:back|forward|go)\s*\(")
+
+#: Closers for the three bracket kinds, used by `_top_level_commas`.
+_CLOSERS = {"(": ")", "[": "]", "{": "}"}
+
+
+def _top_level_commas(text, start):
+    """Commas at depth zero between `text[start]` (just past an opening `(`)
+    and its matching `)`, or `None` if the call is not closed in `text`.
+
+    Quotes and template literals are skipped whole — a comma inside a string
+    argument is not a separator, and WPT writes plenty of them.
+    """
+    depth, commas, i = 0, 0, start
+    while i < len(text):
+        ch = text[i]
+        if ch in "\"'`":
+            quote, i = ch, i + 1
+            while i < len(text) and text[i] != quote:
+                i += 2 if text[i] == "\\" else 1
+        elif ch in _CLOSERS:
+            depth += 1
+        elif ch in ")]}":
+            if ch == ")" and depth == 0:
+                return commas
+            depth -= 1
+        elif ch == "," and depth == 0:
+            commas += 1
+        i += 1
+    return None
+
+
+def _popstate_traversal_marker(text, test_id=None):
+    """True for a test that traverses back onto a URL-less `pushState` entry
+    and waits for `popstate`."""
+    if "popstate" not in text or not _TRAVERSAL_CALL_RE.search(text):
+        return False
+    for match in _PUSHSTATE_CALL_RE.finditer(text):
+        commas = _top_level_commas(text, match.end())
+        if commas is not None and commas <= 1:
+            return True
+    return False
+
+
 SOURCE_MARKERS = [
 
     # First on purpose: see `_audio_src_marker` — the page stops dead at the
@@ -1147,6 +1218,32 @@ SOURCE_MARKERS = [
         "`<embed>`/`<object>` have no resource-loading path at all, so neither "
         "`load` nor `error` ever fires on them",
         mode="all",
+    ),
+    # Sorts above `window-open-stub` on purpose: slice 28 measured that the
+    # *caller's* document stops executing the moment `open()` is called (five
+    # heartbeats before the call, none in the following eight seconds), so the
+    # missing channel of BUG-797 is a barrier the test never reaches. Both
+    # spellings count — these tests are written `const w = open(...)` — and
+    # `xhr.open(`/`indexedDB.open(` are excluded by requiring no `.` before
+    # the name.
+    Mechanism(
+        "open-freezes-opener", "BUG-883",
+        [r"(?:^|[^.\w])open\(['\"]|\bwindow\.open\(|"
+         r"\.target\s*=\s*['\"]_blank|target=['\"]_blank",
+         r"addEventListener\(['\"](?:message|storage)['\"]|"
+         r"\bonmessage\s*=|\bonstorage\s*="],
+        "`open()` (and a `target=_blank` activation) replaces the calling "
+        "document instead of creating an auxiliary context — the opener's "
+        "timers never run again, so the answer it is waiting for cannot be "
+        "heard",
+        mode="all",
+    ),
+    Mechanism(
+        "history-popstate-no-url", "BUG-886", [],
+        "traversing back onto an entry made by `pushState(state, title)` "
+        "dispatches no `popstate` at all (with a URL argument it does), so a "
+        "test that waits for the event after `history.back()` cannot finish",
+        predicate=_popstate_traversal_marker,
     ),
     Mechanism(
         "window-open-stub", "BUG-797",
@@ -1740,6 +1837,28 @@ SUBFRAME_SOURCE_MARKERS = [
 ]
 
 
+#: Sixth and last source stage (WPT-RUN-6 slice 28). A marker here is true of
+#: the file but says less than every stage above it, so it may only claim what
+#: they left. `script-created-iframe-never-loads` is the whole reason the stage
+#: exists: a script-built frame is never fetched at all (measured, BUG-885),
+#: which is *earlier* than any wait the file expresses — but stated as a source
+#: rule it also matches all 47 ids of `iframe-child-callback-never-runs`,
+#: whose evidence is stronger (that stage read the child document and found the
+#: callback). Ordering by strength of evidence rather than by causality is the
+#: conservative choice and the one the worker/subframe stages already make.
+LATE_SOURCE_MARKERS = [
+    Mechanism(
+        "script-created-iframe-never-loads", "BUG-885",
+        [r"createElement\(['\"]iframe['\"]\)",
+         r"setAttribute\(['\"]src['\"]|\.src\s*=",
+         r"appendChild|\.append\("],
+        "an `<iframe>` inserted by script is never fetched — no request, no "
+        "`load`, no child script — while the parser-written form works",
+        mode="all",
+    ),
+]
+
+
 #: `<iframe src=...>`, `frame.src = '...'` and `setAttribute('src', '...')` —
 #: the three shapes a WPT test uses to point a subframe at a document. All
 #: three occur in the residual, and `setAttribute` is not decoration: it is how
@@ -2093,8 +2212,14 @@ SUBTEST_MARKERS = [
     ),
     SubtestMarker(
         "iframe-no-nested-context", "BUG-480",
+        # `Change the frame heriarchy` (the file's own misspelling) is the
+        # slice-28 addition: that frame *does* load now — it is parser-written
+        # with a ready `src` — and the test still hangs, because the child's
+        # script reaches for `parent` and `window.parent === window` inside a
+        # loaded child (measured, `--variant frame-parser`).
         name=r"load nested browsing context <iframe\b|"
-             r"^(?:same|cross)-origin <iframe[ >]",
+             r"^(?:same|cross)-origin <iframe[ >]|"
+             r"^Change the frame heriarchy$",
         note="an `<iframe src>`'s sub-document is never fetched (Phase 0, "
              "`main.rs:5408`), so its `load` never fires — measured with the "
              "probe's server, which is never asked for the child",
@@ -2435,6 +2560,57 @@ SUBTEST_MARKERS = [
              "request at all, and the `<link rel=preload>` element fires "
              "neither `load` nor `error`",
     ),
+
+    # ── slice 28 ───────────────────────────────────────────────────────────
+    # Every entry below was measured against a live browser by
+    # `verify_window_history_jsurl_gaps.py` (WPT-RUN-6 slice 28).
+    SubtestMarker(
+        "jsurl-not-executed", "BUG-884",
+        name=r"javascript: URL in iframe src|"
+             r"<iframe src='javascript:|"
+             r"open\(\) - resolving URLs \(javascript:",
+        note="a `javascript:` URL is never executed — not in a parser-written "
+             "`<iframe src>`, not on assignment, not from a link, and "
+             "`open()` sends it to the network as `unsupported scheme`",
+    ),
+    SubtestMarker(
+        "frame-navigated-by-script", "BUG-885",
+        name=r"^Joint session history length does not include entries from a "
+             r"removed iframe\.$|"
+             r"^Do only fully active documents count for session history\?$|"
+             r"^location_reload$",
+        note="the frame is parser-written but its `src` is assigned from "
+             "script, and a script-driven frame navigation produces no "
+             "request and no `load` (proved on the probe's own server)",
+    ),
+    SubtestMarker(
+        "window-close-no-unload", "BUG-887",
+        name=r"beforeunload and unload events fire after window\.close\(\)",
+        note="`window.close()` is a no-op — the document stays alive and no "
+             "unload step runs, so neither event can arrive",
+    ),
+    # Narrow on purpose (`test=` restricted to the directory the names were
+    # measured in): "resolving url with stuff in host-specific" is a phrase a
+    # URL-parsing test elsewhere could plausibly reuse, and this mechanism is
+    # about `targetOrigin` matching, not about URL parsing.
+    SubtestMarker(
+        "postmessage-target-origin-form", "BUG-717",
+        name=r"^resolving url with stuff in host-specific$|"
+             r"^resolving a same origin targetOrigin with trailing slash$|"
+             r"^no targetOrigin$|^unknown parameter$",
+        test=r"^/webmessaging/",
+        note="`targetOrigin` is compared as a raw string: the exact origin "
+             "and `'*'` are delivered, a trailing slash, a doubled slash and "
+             "both dictionary forms are dropped without a word",
+    ),
+    SubtestMarker(
+        "document-open-missing", "BUG-888",
+        name=r"^document\.open and no singleton replacement$",
+        test=r"/dynamic-markup-insertion/",
+        note="`document.open()` and `document.close()` do not exist "
+             "(`TypeError` on the first line), while `document.write` does",
+    ),
+
     SubtestMarker(
         "createimagebitmap-source", "BUG-880",
         name=r"createImageBitmap (?:from|on) a bitmaprenderer canvas|"
@@ -2550,6 +2726,11 @@ def classify_source(test_id, root, cache, follow_helpers=True):
         for mech in SUBFRAME_SOURCE_MARKERS:
             if mech.matches(frame_lines, test_id):
                 return mech.key
+    # Sixth stage: markers that are true of the file but weaker than anything
+    # above — see `LATE_SOURCE_MARKERS`.
+    for mech in LATE_SOURCE_MARKERS:
+        if mech.matches(lines, test_id):
+            return mech.key
     return None
 
 
@@ -2762,6 +2943,7 @@ def print_report(result, top=25, examples=3):
     print()
     refs = {m.key: m.ref for m in MECHANISMS}
     refs.update({m.key: m.ref + " (subtest marker)" for m in SUBTEST_MARKERS})
+    refs.update({m.key: m.ref + " (source marker)" for m in LATE_SOURCE_MARKERS})
     refs.update({m.key: m.ref + " (source marker)" for m in SOURCE_MARKERS})
     refs.update({m.key: m.ref + " (worker-source marker)"
                  for m in WORKER_SOURCE_MARKERS})
@@ -4653,6 +4835,161 @@ def selftest():
               f"{nosub['mechanisms']}")
         check(not nosub["residual_hung_subtests"],
               "--no-subtests must not collect subtest evidence either")
+        # ── slice 28 ───────────────────────────────────────────────────────
+        # Subtest stage. Each mechanism gets its own case, and every marker
+        # that is scoped by `test=` gets a negative one as well: the lesson of
+        # slices 25/27 is that a loosely worded name inverts a precedence the
+        # source table already had right.
+        check(classify_subtests("/html/semantics/embedded-content/the-iframe-element/"
+                                "iframe_javascript_url_initial_insertion.html",
+                                [("javascript: URL in iframe src, initial "
+                                  "insertion check", "TIMEOUT")])
+              == "jsurl-not-executed",
+              "a javascript: iframe wait was not claimed")
+        # The XHR half of the same alternation needs its own case — the two
+        # spellings share no words, so a mutation of one is unobservable in
+        # the other's check.
+        check(classify_subtests("/xhr/open-url-javascript-window.htm",
+                                [("XMLHttpRequest: open() - resolving URLs "
+                                  "(javascript: <iframe>; 1)", "TIMEOUT")])
+              == "jsurl-not-executed",
+              "the XHR javascript:-frame wait was not claimed")
+        check(classify_subtests("/html/browsers/history/the-location-interface/"
+                                "location_reload.html",
+                                [("location_reload", "TIMEOUT")])
+              == "frame-navigated-by-script",
+              "a script-navigated frame wait was not claimed")
+        # Anchored on purpose: `location_reload` is a bare word, and an
+        # unanchored rule would take any subtest that merely mentions it.
+        check(classify_subtests("/html/browsers/history/x.html",
+                                [("location_reload after a redirect", "TIMEOUT")])
+              is None,
+              "the location_reload marker must be anchored")
+        check(classify_subtests("/html/browsers/history/joint-session-history/"
+                                "joint-session-history-remove-iframe.html",
+                                [("Joint session history length does not include "
+                                  "entries from a removed iframe.", "TIMEOUT")])
+              == "frame-navigated-by-script",
+              "a joint-session-history wait was not claimed")
+        check(classify_subtests("/html/browsers/browsing-the-web/unloading-documents/"
+                                "prompt-and-unload-script-closeable.html",
+                                [("beforeunload and unload events fire after "
+                                  "window.close() in script-closeable browsing "
+                                  "context", "TIMEOUT")])
+              == "window-close-no-unload",
+              "a window.close() unload wait was not claimed")
+        check(classify_subtests("/webmessaging/with-ports/006.html",
+                                [("resolving a same origin targetOrigin with "
+                                  "trailing slash", "TIMEOUT")])
+              == "postmessage-target-origin-form",
+              "a trailing-slash targetOrigin wait was not claimed")
+        check(classify_subtests("/webmessaging/with-options/no-target-origin.html",
+                                [("no targetOrigin", "TIMEOUT")])
+              == "postmessage-target-origin-form",
+              "a dictionary targetOrigin wait was not claimed")
+        # `resolving url with stuff in host-specific` is a phrase a URL-parsing
+        # test elsewhere could reuse; outside `webmessaging/` it is not this
+        # mechanism.
+        check(classify_subtests("/url/x.html",
+                                [("resolving url with stuff in host-specific",
+                                  "TIMEOUT")]) is None,
+              "the targetOrigin marker fired outside webmessaging/")
+        check(classify_subtests("/html/webappapis/dynamic-markup-insertion/"
+                                "opening-the-input-stream/document.open-03.html",
+                                [("document.open and no singleton replacement",
+                                  "TIMEOUT")]) == "document-open-missing",
+              "a document.open() wait was not claimed")
+        check(classify_subtests("/html/semantics/embedded-content/the-iframe-element/"
+                                "change_parentage.html",
+                                [("Change the frame heriarchy", "TIMEOUT")])
+              == "iframe-no-nested-context",
+              "the frame-hierarchy wait was not claimed by BUG-480")
+
+        # Source stage, `history-popstate-no-url`. Three cases, because the
+        # rule is about the *arity* of the call and each way of getting that
+        # wrong has to be observable on its own.
+        os.makedirs(os.path.join(tmp, "hist"), exist_ok=True)
+        with open(os.path.join(tmp, "hist", "noargs.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>history.pushState({x: 1}, '');\n"
+                         "addEventListener('popstate', () => t.done());\n"
+                         "history.back();</script>")
+        check(classify_source("/hist/noargs.html", tmp, {}) == "history-popstate-no-url",
+              "a URL-less pushState traversal wait was not claimed")
+        # With a URL argument the event does arrive, so the same file shape
+        # must not be claimed.
+        with open(os.path.join(tmp, "hist", "withurl.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>history.pushState({x: 1}, '', '?a');\n"
+                         "addEventListener('popstate', () => t.done());\n"
+                         "history.back();</script>")
+        check(classify_source("/hist/withurl.html", tmp, {}) is None,
+              "a pushState with a URL argument must not be claimed")
+        # A nested call in the URL argument must not read as a separator.
+        with open(os.path.join(tmp, "hist", "nested.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>history.pushState({}, '', url.replace(a, b));\n"
+                         "addEventListener('popstate', () => t.done());\n"
+                         "history.go(-1);</script>")
+        check(classify_source("/hist/nested.html", tmp, {}) is None,
+              "a nested call in the URL argument was counted as a separator")
+        # A comma inside the *state* argument is not a separator: with the
+        # depth tracking removed, this two-argument call reads as three.
+        with open(os.path.join(tmp, "hist", "state.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>history.pushState({a: 1, b: 2}, '');\n"
+                         "addEventListener('popstate', () => t.done());\n"
+                         "history.back();</script>")
+        check(classify_source("/hist/state.html", tmp, {}) == "history-popstate-no-url",
+              "a comma inside the state argument was counted as a separator")
+        # A *local* function called `pushState` is not `history.pushState` —
+        # `soft-navigation-helper.js` defines exactly that and calls it with
+        # one argument.
+        with open(os.path.join(tmp, "hist", "local.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>const pushState = u => history.pushState({}, '', u);\n"
+                         "pushState('/x');\n"
+                         "addEventListener('popstate', () => t.done());\n"
+                         "history.back();</script>")
+        check(classify_source("/hist/local.html", tmp, {}) is None,
+              "a local pushState() helper was read as the URL-less form")
+
+        # Source stage, `open-freezes-opener`.
+        os.makedirs(os.path.join(tmp, "win"), exist_ok=True)
+        with open(os.path.join(tmp, "win", "opened.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>const w = open('resources/child.html');\n"
+                         "addEventListener('message', t.step_func_done());</script>")
+        check(classify_source("/win/opened.html", tmp, {}) == "open-freezes-opener",
+              "an open()+message wait was not claimed")
+        # `xhr.open(` / `indexedDB.open(` must not read as an auxiliary
+        # context; the rule excludes a `.` before the name for that reason.
+        with open(os.path.join(tmp, "win", "xhr.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>const x = new XMLHttpRequest();\n"
+                         "x.open('GET', '/y');\n"
+                         "addEventListener('message', t.step_func_done());</script>")
+        check(classify_source("/win/xhr.html", tmp, {}) is None,
+              "xhr.open() was read as window.open()")
+        # An `open()` nobody waits on is not this mechanism either.
+        with open(os.path.join(tmp, "win", "nowait.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>open('resources/child.html');</script>")
+        check(classify_source("/win/nowait.html", tmp, {}) is None,
+              "an open() with no cross-window wait must not be claimed")
+
+        # Sixth stage, `script-created-iframe-never-loads`. The ordering case
+        # is the existing `setattr.html` check above: the same shape, but with
+        # a child that calls back, must stay with the subframe stage.
+        os.makedirs(os.path.join(tmp, "dyn"), exist_ok=True)
+        with open(os.path.join(tmp, "dyn", "made.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>var f = document.createElement('iframe');\n"
+                         "f.src = 'child.html';\n"
+                         "document.body.appendChild(f);</script>")
+        with open(os.path.join(tmp, "dyn", "child.html"), "w", encoding="utf-8") as handle:
+            handle.write("<p>quiet child</p>")
+        check(classify_source("/dyn/made.html", tmp, {})
+              == "script-created-iframe-never-loads",
+              "a script-created frame with a src was not claimed")
+        # Never inserted: nothing is waiting for a load.
+        with open(os.path.join(tmp, "dyn", "detached.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>var f = document.createElement('iframe');\n"
+                         "f.src = 'child.html';</script>")
+        check(classify_source("/dyn/detached.html", tmp, {}) is None,
+              "a frame nobody inserted must not be claimed")
+
         # A run whose wptreport is missing entirely disables the stage rather
         # than failing the audit.
         check(read_subtest_report(os.path.join(tmp, "nowhere")) == {},

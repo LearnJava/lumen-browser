@@ -97,3 +97,18 @@ URL записи, значит шелл должен отдавать его в�
    `after-push href=http://…/probe.html?psag-push search=?psag-push`,
    после `go(-1)` `search` возвращается к предыдущему.
 2. WPT: `run_report.py --all --root html/browsers/history --recursive`.
+
+## Уточнение (WPT-RUN-6, срез 28, 2026-08-23)
+
+Строка выше «работают при этом `history.length`, `history.state` сразу после
+`pushState` и доставка `popstate` обеими формами регистрации» верна только
+для `pushState` **с URL-аргументом** — так это и было измерено (`?x`). Для
+самой частой в WPT формы `history.pushState(state, "")` без третьего
+аргумента `popstate` при обходе не приходит вообще ни в одной форме
+регистрации, хотя `history.state` обновляется синхронно: отдельный дефект,
+заведён как [BUG-886](BUG-886-OPEN.md).
+
+Там же перепроверено и подтверждено ядро этого бага:
+`pushState({u:1}, "", "?a")` даёт `location.href` = `?a` при пустом
+`location.search`, а `pushState({h:1}, "", "#frag")` — `href` = `#frag` при
+пустом `location.hash`.
