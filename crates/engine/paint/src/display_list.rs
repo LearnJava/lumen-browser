@@ -25,7 +25,7 @@ use lumen_core::geom::{Rect, Size};
 use lumen_dom::InputType;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
-    transform_fns_to_matrix, BoxOrigin, CompositorAnimFrame, CompositorOverride,
+    transform_fns_to_matrix, BoxOrigin, BoxRole, PseudoKind, CompositorAnimFrame, CompositorOverride,
     Appearance, BackfaceVisibility,
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
@@ -4143,6 +4143,7 @@ fn emit_inline_run(
     b: &LayoutBox,
     lines: &[Vec<InlineFrag>],
     sel: Option<&SelectionHighlight>,
+    dpr: f32,
     out: &mut Vec<DisplayCommand>,
 ) {
     if b.style.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
@@ -4159,6 +4160,8 @@ fn emit_inline_run(
     };
     let wants_ellipsis = matches!(b.style.text_overflow, TextOverflow::Ellipsis)
         && overflow_clips(b.style.overflow_x);
+
+    emit_first_line_background(b, lines, line_h, dpr, out);
 
     for (line_idx, line) in lines.iter().enumerate() {
         let line_y = b.rect.y + line_idx as f32 * line_h;
@@ -4228,6 +4231,105 @@ fn emit_inline_run(
             emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, sel, out);
         }
     }
+}
+
+/// BUG-432 — background of the `::first-line` pseudo-element.
+///
+/// CSS Pseudo-elements L4 §4.1 lists all background properties among those that
+/// apply to `::first-line`, and `split_first_line_boxes` already puts the whole
+/// pseudo-element `ComputedStyle` on the box holding the first formatted line —
+/// but `emit_inline_run` only ever drew text, so the background was dropped.
+///
+/// §4.1 also makes the pseudo-element behave as a fictional inline tag wrapping
+/// the line's content, so the painted extent is the union of the line's
+/// fragments, **not** the full width of the containing block (`b.rect.width`,
+/// which is what the box itself carries). Box-model properties — margin,
+/// padding, border — do not apply to `::first-line` and are not painted here.
+///
+/// Keyed on the box role rather than on the style: every other `InlineRun` is
+/// built through `anon_style`, which clears `background_color`, so this is a
+/// guard against a future anonymous run that inherits one, not a filter that
+/// currently discriminates.
+fn emit_first_line_background(
+    b: &LayoutBox,
+    lines: &[Vec<InlineFrag>],
+    line_h: f32,
+    dpr: f32,
+    out: &mut Vec<DisplayCommand>,
+) {
+    if !matches!(b.origin.role, BoxRole::Pseudo(PseudoKind::FirstLine)) {
+        return;
+    }
+    if !matches!(b.style.visibility, Visibility::Visible) {
+        return;
+    }
+    let has_color = b.style.background_color.and_then(|c| c.to_color_opt()).is_some_and(|c| c.a > 0);
+    if !has_color && b.style.background_layers.is_empty() {
+        return;
+    }
+    // The pseudo-element covers the first formatted line only; the box produced
+    // by the split holds it as `lines[0]`.
+    let Some(line) = lines.first() else { return };
+    let Some(rect) = first_line_content_rect(b, line, line_h) else { return };
+
+    let radii = CornerRadii::from_style_and_box(&b.style, rect.width, rect.height);
+    if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+        && bg.a > 0
+    {
+        if radii.all_zero() {
+            out.push(DisplayCommand::FillRect { rect, color: bg });
+        } else {
+            out.push(DisplayCommand::FillRoundedRect { rect, color: bg, radii });
+        }
+    }
+    if !b.style.background_layers.is_empty() {
+        // `emit_background_image` derives every clip/origin box from `b.rect`,
+        // which here spans the whole containing block — hand it a copy narrowed
+        // to the line's own extent so a gradient covers the same area the solid
+        // colour does. Cheap: the copy is one line of fragments, no children.
+        let mut fl = b.clone();
+        fl.rect = rect;
+        emit_background_image(out, &fl, dpr);
+    }
+}
+
+/// Union of a line's visible fragments, as a painting rect for
+/// [`emit_first_line_background`]. `None` when the line contributes no extent.
+///
+/// Fragment padding/border are included only for real inline element boxes —
+/// for anonymous text fragments those style fields belong to the enclosing
+/// element and would widen the union by space the text does not occupy.
+fn first_line_content_rect(b: &LayoutBox, line: &[InlineFrag], line_h: f32) -> Option<Rect> {
+    let mut left = f32::MAX;
+    let mut right = f32::MIN;
+    for frag in line.iter() {
+        if !matches!(frag.style.visibility, Visibility::Visible) {
+            continue;
+        }
+        let (pad_l, pad_r, bl, br) = if frag.is_element_box {
+            (
+                frag.padding_left,
+                frag.padding_right,
+                frag.style.border_left_width,
+                frag.style.border_right_width,
+            )
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
+        let l = b.rect.x + frag.x - pad_l - bl;
+        let r = b.rect.x + frag.x + frag.width + pad_r + br;
+        if r <= l {
+            continue;
+        }
+        left = left.min(l);
+        right = right.max(r);
+    }
+    if right <= left {
+        return None;
+    }
+    // Same integer-pixel snapping `emit_inline_frag_box` applies, so an inline
+    // background and a ::first-line background under it share their edges.
+    Some(Rect::new(left.round(), b.rect.y.round(), (right - left).round(), line_h.round()))
 }
 
 /// Layer-ops одного бокса, разделённые на эффекты и overflow-клип.
@@ -7250,7 +7352,7 @@ fn emit_box_self(
             emit_outline(b, out);
         }
         BoxKind::InlineRun { lines, .. } => {
-            emit_inline_run(b, lines, sel, out);
+            emit_inline_run(b, lines, sel, dpr, out);
         }
         BoxKind::InlineBlockRow | BoxKind::InlineSpace | BoxKind::Contents => {}
         BoxKind::Marker { .. } => {
@@ -8165,7 +8267,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             emit_list_marker(b, out);
         }
         BoxKind::InlineRun { lines, .. } => {
-            emit_inline_run(b, lines, sel, out);
+            emit_inline_run(b, lines, sel, dpr, out);
         }
         BoxKind::Image { src, alt, is_lazy } => {
             // visibility:hidden на `<img>` пропускает всё (no children).
@@ -9295,7 +9397,7 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
         }
         BoxKind::InlineSpace => {}
         BoxKind::InlineRun { lines, .. } => {
-            emit_inline_run(b, lines, None, out);
+            emit_inline_run(b, lines, None, dpr, out);
         }
         // Image and other kinds: no compositor-offloadable properties, delegate to walk.
         _ => {
@@ -10533,6 +10635,50 @@ mod tests {
     fn no_wrap_single_draw_text() {
         let dl = build_wrapped("<p>hi</p>", "", 800.0);
         assert_eq!(texts(&dl), vec!["hi"]);
+    }
+
+    /// BUG-432: `::first-line { background }` рисуется под первой строкой.
+    /// CSS Pseudo-elements L4 §4.1 — background применяется к `::first-line`,
+    /// но `emit_inline_run` рисовал только текст.
+    #[test]
+    fn first_line_background_paints_under_first_line() {
+        // "hello world" = 11×8 = 88px, viewport 60px → перенос на 2 строки.
+        let dl = build_wrapped(
+            "<p>hello world</p>",
+            "p::first-line { background: #336699 }",
+            60.0,
+        );
+        let bg = Color { r: 0x33, g: 0x66, b: 0x99, a: 255 };
+        let rect = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::FillRect { rect, color } if *color == bg => Some(*rect),
+                _ => None,
+            })
+            .expect("::first-line background must emit a FillRect");
+        // §4.1: фиктивный inline-тег оборачивает содержимое строки, поэтому
+        // ширина = экстент первой строки ("hello" = 40px), а не всего блока.
+        assert!((rect.width - 40.0).abs() < 1.0, "width={} (line extent, not 60)", rect.width);
+        assert!(rect.height > 0.0, "height={}", rect.height);
+        // Фон — под текстом: FillRect идёт до первого DrawText.
+        let fill_at = dl.iter().position(|c| matches!(c, DisplayCommand::FillRect { color, .. } if *color == bg));
+        let text_at = dl.iter().position(|c| matches!(c, DisplayCommand::DrawText { .. }));
+        assert!(fill_at < text_at, "fill={fill_at:?} text={text_at:?}");
+    }
+
+    /// Обратная сторона BUG-432: обычный анонимный `InlineRun` фон не рисует.
+    /// Риск фикса был именно в этом — покраска всех inline-ранов подряд.
+    #[test]
+    fn inline_run_without_first_line_rule_paints_no_background() {
+        let dl = build_wrapped("<p>hello world</p>", "p { background: #336699 }", 60.0);
+        let bg = Color { r: 0x33, g: 0x66, b: 0x99, a: 255 };
+        // Ровно один FillRect этого цвета — собственный фон блока `<p>`,
+        // а не второй такой же от его анонимного inline-рана.
+        let n = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::FillRect { color, .. } if *color == bg))
+            .count();
+        assert_eq!(n, 1, "block background must not be repeated by its inline run");
     }
 
     // ── Тесты inline-flow ───────────────────────────────────────────────────
