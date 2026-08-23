@@ -92,7 +92,7 @@ let cell_free = fits && (try_c..try_ce_val)
 этому багу не принадлежат — они вешаются своими дефектами, найденными и
 измеренными отдельно: `css/css-transforms` — [BUG-803](BUG-803-OPEN.md)
 (вечный цикл в `parse_svg_transform`, одна страница `2d-rotate-notref.html`
-на 133 вердикта), `css/css-flexbox` — [BUG-802](BUG-802-OPEN.md)
+на 133 вердикта), `css/css-flexbox` — [BUG-802](BUG-802-FIXED.md)
 (экспоненциальный layout вложенного колоночного flex, пять `.xhtml`-страниц
 на 318 вердиктов). Строку выше читать вместе с этим абзацем.
 
