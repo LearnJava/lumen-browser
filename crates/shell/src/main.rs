@@ -1132,6 +1132,7 @@ fn run_window_mode(
         first_paint_delivered: false,
         first_contentful_paint_delivered: false,
         load_failed: false,
+        load_error_message: None,
         nav_start: None,
         history_fts: HistoryFts::open_in_memory().expect("history_fts init"),
         notes_store: lumen_knowledge::Notes::open_in_memory().expect("notes_store init"),
@@ -5238,6 +5239,8 @@ struct PageSnapshot {
     first_contentful_paint_delivered: bool,
     /// Per-tab settled-navigation-error flag (BUG-308); see the `Lumen` field.
     load_failed: bool,
+    /// Per-tab settled-navigation-error message (BUG-438); see the `Lumen` field.
+    load_error_message: Option<String>,
     /// Instant at which the current navigation began (set in `reload()`).
     /// Used to compute `duration` for the W3C Navigation Timing entry.
     nav_start: Option<std::time::Instant>,
@@ -8214,6 +8217,14 @@ struct Lumen {
     /// prior `layout_box` to fall back on (BUG-308). Reset to `false` at the
     /// start of every navigation; per-tab (saved/restored via `PageSnapshot`).
     load_failed: bool,
+    /// Human-readable reason for `load_failed` (BUG-438) — the `LoadError`
+    /// message or the final-render `Err`'s `Display`. Surfaced to
+    /// `AutomationCommand::Wait{DocumentReady|NetworkIdle}` callers (BiDi
+    /// `browsingContext.navigate`, MCP `wait`) as an `AutomationReply::Error`
+    /// instead of the settled-error `Ack` BUG-308 used to send — a failed
+    /// load must not be reported as a successful navigation. `None` whenever
+    /// `load_failed` is `false`; reset together with it.
+    load_error_message: Option<String>,
     /// Instant at which the current navigation began (set in `reload()`).
     /// Used to compute `duration` for the W3C Navigation Timing entry.
     nav_start: Option<std::time::Instant>,
@@ -11548,6 +11559,7 @@ impl Lumen {
         self.nav_start = Some(std::time::Instant::now());
         // A fresh navigation supersedes any prior settled error (BUG-308).
         self.load_failed = false;
+        self.load_error_message = None;
         click_log::log_load_start(&self.source.describe());
         println!("Reload: {}", self.source.describe());
 
@@ -12305,6 +12317,7 @@ impl Lumen {
         // A page was applied successfully — clear any prior settled-error flag
         // (BUG-308) so `document_ready` reflects this real load, not a stale one.
         self.load_failed = false;
+        self.load_error_message = None;
 
         // Индексировать страницу в history_fts для omnibox (@history) и записать
         // в history_store для панели истории (Ctrl+H).
@@ -12722,6 +12735,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         self.nav_start = Some(std::time::Instant::now());
         // A fresh navigation supersedes any prior settled error (BUG-308).
         self.load_failed = false;
+        self.load_error_message = None;
         self.load_generation = self.load_generation.wrapping_add(1);
 
         // BUG-274: `backend_factory::create_backend` below can take multiple
@@ -13027,6 +13041,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         // Settled navigation error — mark done so a
                         // `wait{document_ready}` resolves at once (BUG-308).
                         self.load_failed = true;
+                        self.load_error_message = Some(e.clone());
                         click_log::log_load_err(&self.source.describe(), &e);
                         health_log::log_load_error(&self.source.describe(), &e);
                         eprintln!("Ошибка финального render {}: {e}", self.source.describe());
@@ -13039,6 +13054,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Settled navigation error — mark done so a
                 // `wait{document_ready}` resolves at once (BUG-308).
                 self.load_failed = true;
+                self.load_error_message = Some(msg.clone());
                 click_log::log_load_err(&self.source.describe(), &msg);
                 health_log::log_load_error(&self.source.describe(), &msg);
                 eprintln!("Ошибка загрузки {}: {msg}", self.source.describe());
@@ -13821,7 +13837,25 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             let mut still_pending = Vec::with_capacity(drained.len());
             for pending in drained {
                 if self.check_wait_condition(&pending.cond) {
-                    let _ = pending.reply_tx.send(AutomationReply::Ack);
+                    // BUG-438: a `DocumentReady`/`NetworkIdle` wait can resolve
+                    // `true` because the navigation settled in a network/HTTP
+                    // error (BUG-308's `load_failed` early-out), not because a
+                    // document actually loaded. Reporting `Ack` there is
+                    // exactly the "navigate/wait both say success but the
+                    // previous document is still showing" bug — surface the
+                    // real failure instead, the same way a wait timeout does.
+                    let settled_error = matches!(
+                        pending.cond,
+                        WaitCondition::DocumentReady | WaitCondition::NetworkIdle
+                    ) && self.load_failed;
+                    if settled_error {
+                        let _ = pending.reply_tx.send(AutomationReply::Error(format!(
+                            "navigation failed: {}",
+                            self.load_error_message.as_deref().unwrap_or("load error")
+                        )));
+                    } else {
+                        let _ = pending.reply_tx.send(AutomationReply::Ack);
+                    }
                 } else if now >= pending.deadline {
                     let _ = pending.reply_tx.send(AutomationReply::Error(format!(
                         "wait timeout: {:?}",
@@ -23995,6 +24029,7 @@ impl Lumen {
             first_paint_delivered: self.first_paint_delivered,
             first_contentful_paint_delivered: self.first_contentful_paint_delivered,
             load_failed: self.load_failed,
+            load_error_message: self.load_error_message.take(),
             nav_start: self.nav_start.take(),
             animated_gifs: std::mem::take(&mut self.animated_gifs),
             gif_last_frame: std::mem::take(&mut self.gif_last_frame),
@@ -24076,6 +24111,7 @@ impl Lumen {
         self.first_paint_delivered = snap.first_paint_delivered;
         self.first_contentful_paint_delivered = snap.first_contentful_paint_delivered;
         self.load_failed = snap.load_failed;
+        self.load_error_message = snap.load_error_message;
         self.nav_start = snap.nav_start;
         self.animated_gifs = snap.animated_gifs;
         self.gif_last_frame = snap.gif_last_frame;
@@ -24176,6 +24212,7 @@ impl Lumen {
         self.first_paint_delivered = false;
         self.first_contentful_paint_delivered = false;
         self.load_failed = false;
+        self.load_error_message = None;
         self.nav_start = None;
         self.animated_gifs = HashMap::new();
         self.gif_last_frame = HashMap::new();

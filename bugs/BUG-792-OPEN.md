@@ -28,7 +28,7 @@ https-категориях: `WebCryptoAPI` — 710, `ai` — 721.
 Вторичные симптомы того же корня, если смотреть по статусам тестов, а не по
 логу: 302 `Timed out waiting for testharnessreport.js results` и 115
 `browsingContext.navigate reported success but the document was never replaced`
-(последнее — [BUG-438](BUG-438-OPEN.md) в роли усилителя: навигация на
+(последнее — [BUG-438](BUG-438-FIXED.md) в роли усилителя: навигация на
 незагрузившийся документ рапортует успех).
 
 ## Механизм

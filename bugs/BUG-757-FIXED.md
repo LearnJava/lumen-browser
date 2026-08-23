@@ -48,11 +48,11 @@ document.baseURI  https://www.tbank.ru/login/?redirectTo=/invest/portfolio/
 2. **SPA-роутеры читают не тот `pathname`.** Роут выбирается по
    `location.pathname`, а он до-редиректный.
 3. **Любая проверка «мы там, где хотели» по URL врёт** — это ровно та ловушка,
-   что уже записана в `CLAUDE.md` (готча к [BUG-438](BUG-438-OPEN.md)):
+   что уже записана в `CLAUDE.md` (готча к [BUG-438](BUG-438-FIXED.md)):
    «Assert on document identity, not on a URL comparison (a server redirect
    breaks that)». Здесь она получает конкретную причину.
 
-Отличать от [BUG-438](BUG-438-OPEN.md): там `navigate` рапортует успех о
+Отличать от [BUG-438](BUG-438-FIXED.md): там `navigate` рапортует успех о
 **незагрузившейся** странице и документ остаётся прежним. Здесь страница
 загрузилась правильно, ошибочен только её URL.
 
@@ -144,5 +144,5 @@ redirect`, `fetch_page_streaming_reports_final_url_after_redirect` (плюс
 
 * [BUG-756](BUG-756-FIXED.md) — второй дефект, найденный на той же цепочке
   (cookie default-path); именно он блокирует логин, этот — нет.
-* [BUG-438](BUG-438-OPEN.md) — успешный ответ `navigate` о несостоявшейся
+* [BUG-438](BUG-438-FIXED.md) — успешный ответ `navigate` о несостоявшейся
   загрузке; пересекается пунктом 4 «как чинить».

@@ -2335,6 +2335,30 @@ mod tests {
         LiveWindowSession::new(AutomationHandle::new(tx))
     }
 
+    /// Same as [`fake_live_session`] but `Wait` answers the way the real
+    /// shell does since BUG-438: the navigation settled in a network/HTTP
+    /// error (a `LoadEvent::LoadError`/final-render `Err` — unreachable
+    /// host, missing file, malformed URL), so `check_wait_condition`
+    /// resolved the `DocumentReady` wait immediately (BUG-308) but as a
+    /// failure, not a loaded document.
+    fn fake_live_session_load_settled_error() -> LiveWindowSession {
+        use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply};
+        let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+        std::thread::spawn(move || {
+            for (cmd, reply_tx) in rx {
+                let reply = match cmd {
+                    AutomationCommand::Navigate(_) => AutomationReply::Ack,
+                    AutomationCommand::Wait(_, _) => {
+                        AutomationReply::Error("navigation failed: connection refused".into())
+                    }
+                    _ => AutomationReply::Error("unsupported in fake_live_session".into()),
+                };
+                let _ = reply_tx.send(reply);
+            }
+        });
+        LiveWindowSession::new(AutomationHandle::new(tx))
+    }
+
     /// A fake "live window" that emulates V8's `awaitPromise` two-round-trip
     /// dance for BUG-319: the round-1 setup eval (`Promise.resolve(...).then`)
     /// is answered `"pending"`, and the round-2 read of
@@ -2483,6 +2507,31 @@ mod tests {
         let r = dispatch(&cmd, &mut state);
         let v = parse(&r.frames[0]);
         assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("unknown error"));
+    }
+
+    /// BUG-438: a navigation that settles in a network/HTTP error (closed
+    /// port, missing file, malformed URL) must not be reported as a
+    /// successful `browsingContext.navigate` — the previous document is
+    /// still showing, so `{navigation, url}` would be a lie about what the
+    /// context is displaying. Before the fix, `check_wait_condition`'s
+    /// BUG-308 early-out made `wait{document_ready}` resolve with `Ack` for
+    /// exactly this case; it must now resolve with an error instead, the
+    /// same way a wait timeout already does.
+    #[test]
+    fn navigate_with_live_window_errors_when_load_settles_in_error() {
+        let mut state = BidiState::with_live_session(fake_live_session_load_settled_error(), None);
+        let cid = new_session_ctx(&mut state);
+        let cmd = format!(
+            r#"{{"id":10,"method":"browsingContext.navigate","params":{{"context":"{cid}","url":"http://127.0.0.1:1/nope.html"}}}}"#
+        );
+        let r = dispatch(&cmd, &mut state);
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("unknown error"));
+        assert!(
+            v.get("message").and_then(|x| x.as_str()).is_some_and(|m| m.contains("navigation failed")),
+            "got: {}",
+            r.frames[0]
+        );
     }
 
     #[test]
