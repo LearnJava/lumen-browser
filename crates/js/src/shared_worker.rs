@@ -29,6 +29,21 @@
 //! scripts still resolve locally (identical to the dedicated-worker
 //! resolver). If the fetch fails, the worker never connects and `onerror`
 //! fires once instead of running an empty script.
+//!
+//! **Uncaught-exception reporting (BUG-591 SharedWorker parent-side
+//! reporting):** an uncaught exception anywhere in the shared worker's global
+//! scope (top-level script body, `onconnect`, a port's `onmessage`, a flushed
+//! timer callback) is HTML LS "report the exception" run on a scope that
+//! every connected client observes — unlike a dedicated [`crate::worker`],
+//! where exactly one client exists. So the error is broadcast to *every*
+//! currently-connected port's owning client, not routed by the port that
+//! happened to trigger it. `_lumen_sw_report_error` (registered per
+//! connecting client in [`install_shared_worker_globals_v8`]) pushes into
+//! every live port's [`crate::worker::WorkerErrorQueue`] entry tracked by
+//! `error_ports` inside [`run_shared_worker_thread_v8`]; each client's
+//! `V8JsRuntime::pump_shared_workers` drains its own queue and fires
+//! `ErrorEvent` `'error'` at the matching `SharedWorker` instance via
+//! `_lumen_deliver_shared_worker_errors`.
 
 use std::sync::{Arc, Mutex};
 
@@ -44,7 +59,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 #[cfg(feature = "v8-backend")]
-use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn3};
+use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4};
 #[cfg(feature = "v8-backend")]
 use crate::v8_runtime::V8JsRuntime;
 #[cfg(feature = "v8-backend")]
@@ -63,9 +78,16 @@ pub type SharedWorkerOutbox = Arc<Mutex<Vec<(u32, String)>>>;
 /// Message sent from a client (main JS thread) to a shared-worker thread.
 #[cfg(feature = "v8-backend")]
 enum SwInMsg {
-    /// A new client connected: register `port_id` → its `outbox`, then fire the
-    /// `connect` event in the worker with a worker-side port for `port_id`.
-    Connect { port_id: u32, outbox: SharedWorkerOutbox },
+    /// A new client connected: register `port_id` → its `outbox`/`errors`,
+    /// then fire the `connect` event in the worker with a worker-side port
+    /// for `port_id`. `errors` is the connecting client's own
+    /// [`crate::worker::WorkerErrorQueue`], registered so a later uncaught
+    /// exception in the worker can be broadcast to this client too (BUG-591).
+    Connect {
+        port_id: u32,
+        outbox: SharedWorkerOutbox,
+        errors: crate::worker::WorkerErrorQueue,
+    },
     /// JSON-serialised data from `port.postMessage(data)` on the client side.
     Post { port_id: u32, json: String },
     /// The client closed its port — drop the worker-side mapping.
@@ -104,6 +126,25 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
 
   globalThis.self = globalThis;
 
+  // Report an uncaught exception from onconnect/onmessage/a flushed timer to
+  // every connected client (BUG-591 SharedWorker parent-side reporting; HTML
+  // LS "report the exception" broadcasts to all owning `SharedWorker`
+  // objects, unlike a dedicated worker's single client). `filename`/`lineno`/
+  // `colno` are best-effort-parsed from `.stack`, same technique as the
+  // dedicated-worker twin (`worker.rs`'s `_lumen_report_worker_exception`).
+  function _lumen_sw_report_exception(err) {
+    var message = (err instanceof Error) ? String(err.message) : String(err);
+    var filename = '', lineno = 0, colno = 0;
+    if (err && typeof err.stack === 'string') {
+      var lines = err.stack.split('\n');
+      for (var i = 0; i < lines.length; i++) {
+        var m = /at (?:.*\()?([^\s()]+):(\d+):(\d+)\)?\s*$/.exec(lines[i]);
+        if (m) { filename = m[1]; lineno = +m[2]; colno = +m[3]; break; }
+      }
+    }
+    _lumen_sw_report_error(message, filename, lineno, colno);
+  }
+
   Object.defineProperty(globalThis, 'onconnect', {
     get: function() { return _onconnect; },
     set: function(fn) { _onconnect = typeof fn === 'function' ? fn : null; },
@@ -141,9 +182,9 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
       _deliver: function(data) {
         var ev = { data: data, type: 'message', target: this,
                    bubbles: false, cancelable: false, ports: [] };
-        if (this._onmessage) { try { this._onmessage(ev); } catch(e) {} }
+        if (this._onmessage) { try { this._onmessage(ev); } catch(e) { _lumen_sw_report_exception(e); } }
         for (var i = 0; i < this._listeners.length; i++) {
-          try { this._listeners[i](ev); } catch(e) {}
+          try { this._listeners[i](ev); } catch(e) { _lumen_sw_report_exception(e); }
         }
       },
     };
@@ -161,9 +202,9 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
     _ports[pid] = port;
     var ev = { type: 'connect', target: globalThis, source: port,
                ports: [port], bubbles: false, cancelable: false };
-    if (_onconnect) { try { _onconnect(ev); } catch(e) {} }
+    if (_onconnect) { try { _onconnect(ev); } catch(e) { _lumen_sw_report_exception(e); } }
     for (var i = 0; i < _connectListeners.length; i++) {
-      try { _connectListeners[i](ev); } catch(e) {}
+      try { _connectListeners[i](ev); } catch(e) { _lumen_sw_report_exception(e); }
     }
   };
 
@@ -207,7 +248,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   globalThis._lumen_flush_timers = function() {
     var pending = _timerQueue.splice(0);
     for (var i = 0; i < pending.length; i++) {
-      try { pending[i].fn(); } catch(e) {}
+      try { pending[i].fn(); } catch(e) { _lumen_sw_report_exception(e); }
     }
   };
 })();
@@ -220,7 +261,8 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
 /// core DOM shim for blob-/data-URL script resolution.
 #[cfg(feature = "v8-backend")]
 const SHARED_WORKER_SHIM: &str = r#"(function() {
-  var _clientPorts = {};   // port_id → client-side MessagePort
+  var _clientPorts = {};            // port_id → client-side MessagePort
+  var _sharedWorkerInstances = {};  // port_id → owning SharedWorker instance
 
   // Returns the script body as a String, or `null` when an external URL's
   // network fetch failed (BUG-364) — the caller must not spawn a worker
@@ -304,7 +346,8 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
     var nm = (name === undefined || name === null) ? '' : String(name);
     // Identity key: name when present, else the URL (single-origin process).
     var key = nm ? ('name:' + nm) : ('url:' + String(url || ''));
-    this.onerror = null;
+    this._onerror = null;
+    this._errorListeners = [];
     var script = _resolveScript(url);
     if (script === null) {
       // Script fetch failed (BUG-364): never connect, only fire `error`.
@@ -312,21 +355,54 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
       var self = this;
       var u = String(url || '');
       setTimeout(function() {
-        if (typeof self.onerror !== 'function') return;
-        try {
-          self.onerror(new ErrorEvent('error', {
-            message: 'SharedWorker script failed to load: ' + u,
-            filename: u, lineno: 0, colno: 0,
-            bubbles: false, cancelable: true,
-          }));
-        } catch(e) {}
+        self._deliverError({
+          message: 'SharedWorker script failed to load: ' + u,
+          filename: u, lineno: 0, colno: 0,
+        });
       }, 0);
       return;
     }
     var pid = _lumen_sw_connect(key, script);
     this.port = _makeClientPort(pid, key);
     _clientPorts[pid] = this.port;
+    _sharedWorkerInstances[pid] = this;
   }
+
+  Object.defineProperty(SharedWorker.prototype, 'onerror', {
+    get: function() { return this._onerror; },
+    set: function(fn) { this._onerror = typeof fn === 'function' ? fn : null; },
+    configurable: true,
+  });
+
+  SharedWorker.prototype.addEventListener = function(type, fn, _opts) {
+    if (type === 'error' && typeof fn === 'function') this._errorListeners.push(fn);
+  };
+
+  SharedWorker.prototype.removeEventListener = function(type, fn) {
+    if (type === 'error') {
+      var i = this._errorListeners.indexOf(fn);
+      if (i !== -1) this._errorListeners.splice(i, 1);
+    }
+  };
+
+  // Internal: fire `error` at this SharedWorker instance — used both for the
+  // script-fetch-failure case above and for a genuine uncaught exception in
+  // the worker's global scope (BUG-591), delivered via
+  // `_lumen_deliver_shared_worker_errors` below. `info` is a plain object
+  // ({message, filename, lineno, colno}), not yet an `ErrorEvent`.
+  SharedWorker.prototype._deliverError = function(info) {
+    var ev = new ErrorEvent('error', {
+      message: String((info && info.message) || ''),
+      filename: String((info && info.filename) || ''),
+      lineno: (info && info.lineno) | 0,
+      colno: (info && info.colno) | 0,
+      bubbles: false, cancelable: true,
+    });
+    if (typeof this._onerror === 'function') { try { this._onerror(ev); } catch(e) {} }
+    for (var i = 0; i < this._errorListeners.length; i++) {
+      try { this._errorListeners[i](ev); } catch(e) {}
+    }
+  };
 
   globalThis.SharedWorker = SharedWorker;
   if (typeof window !== 'undefined') window.SharedWorker = SharedWorker;
@@ -337,6 +413,18 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
       var m = msgs[i];
       var p = _clientPorts[m.id];
       if (p) p._deliver(m.json);
+    }
+  };
+
+  // Called by the page runtime's pump_shared_workers() with [{ id, json }, …]
+  // of uncaught-exception reports (BUG-591 SharedWorker parent-side
+  // reporting) — `json` is the `{message, filename, lineno, colno}` object
+  // literal `_lumen_sw_report_error` built on the worker side.
+  globalThis._lumen_deliver_shared_worker_errors = function(errs) {
+    for (var i = 0; i < errs.length; i++) {
+      var m = errs[i];
+      var w = _sharedWorkerInstances[m.id];
+      if (w) w._deliverError(m.json);
     }
   };
 })();
@@ -367,12 +455,20 @@ fn hub_v8() -> &'static Mutex<HashMap<String, SharedWorkerThread>> {
 /// Spawns the worker thread (evaluating `script`) on first connection; reuses
 /// the existing thread on later connections.  `outbox` is the connecting
 /// runtime's outbound queue: the worker pushes replies for this port into it.
+/// `errors` is the connecting runtime's uncaught-exception queue (BUG-591):
+/// registered the same way so a later worker-scope exception can be
+/// broadcast to this client too.
 ///
 /// Returns the freshly-allocated, process-unique port id.
 #[cfg(feature = "v8-backend")]
 #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-fn connect_shared_worker_v8(key: String, script: String, outbox: SharedWorkerOutbox) -> u32 {
+fn connect_shared_worker_v8(
+    key: String,
+    script: String,
+    outbox: SharedWorkerOutbox,
+    errors: crate::worker::WorkerErrorQueue,
+) -> u32 {
     let port_id = PORT_COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut map = hub_v8().lock().unwrap();
 
@@ -389,10 +485,10 @@ fn connect_shared_worker_v8(key: String, script: String, outbox: SharedWorkerOut
         .entry(key.clone())
         .or_insert_with(|| spawn(key.clone(), script.clone()));
 
-    let connect = SwInMsg::Connect { port_id, outbox: Arc::clone(&outbox) };
+    let connect = SwInMsg::Connect { port_id, outbox: Arc::clone(&outbox), errors: Arc::clone(&errors) };
     if entry.tx.send(connect).is_err() {
         let fresh = spawn(key.clone(), script);
-        let _ = fresh.tx.send(SwInMsg::Connect { port_id, outbox });
+        let _ = fresh.tx.send(SwInMsg::Connect { port_id, outbox, errors });
         *entry = fresh;
     }
     port_id
@@ -426,19 +522,23 @@ fn close_shared_worker_port_v8(key: &str, port_id: u32) {
 ///
 /// Must be called after the core DOM shim so that `TextDecoder`,
 /// `_object_url_store`, and `atob` are available for blob-/data-URL
-/// resolution in the constructor.  `outbox` is this runtime's outbound queue.
+/// resolution in the constructor.  `outbox` is this runtime's outbound queue;
+/// `errors` is this runtime's shared-worker uncaught-exception queue
+/// (BUG-591), drained by [`crate::v8_runtime::V8JsRuntime::pump_shared_workers`].
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_shared_worker_bindings_v8(
     rt: &V8JsRuntime,
     outbox: &SharedWorkerOutbox,
+    errors: &crate::worker::WorkerErrorQueue,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) -> JsResult<()> {
     {
         let out = Arc::clone(outbox);
+        let errs = Arc::clone(errors);
         rt.register_native(
             "_lumen_sw_connect",
             into_v8_fn2(move |key: String, script: String| -> u32 {
-                connect_shared_worker_v8(key, script, Arc::clone(&out))
+                connect_shared_worker_v8(key, script, Arc::clone(&out), Arc::clone(&errs))
             }),
         )?;
     }
@@ -491,21 +591,34 @@ fn run_shared_worker_thread_v8(script: String, rx: Receiver<SwInMsg>) {
     };
 
     let ports: Arc<Mutex<HashMap<u32, SharedWorkerOutbox>>> = Arc::new(Mutex::new(HashMap::new()));
+    // Broadcast target for uncaught exceptions (BUG-591): every currently
+    // connected client's own error queue, keyed the same way as `ports`.
+    let error_ports: Arc<Mutex<HashMap<u32, crate::worker::WorkerErrorQueue>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
-    if let Err(e) = install_shared_worker_globals_v8(&rt, Arc::clone(&ports)) {
+    if let Err(e) = install_shared_worker_globals_v8(&rt, Arc::clone(&ports), Arc::clone(&error_ports)) {
         eprintln!("[shared-worker] v8 globals install failed: {e:?}");
         return;
     }
 
     if let Err(e) = rt.eval(&script) {
         eprintln!("[shared-worker] v8 script error: {e:?}");
+        // BUG-591 SharedWorker parent-side reporting: broadcast the top-level
+        // failure to every already-connected client (there may be none yet —
+        // the first client's own Connect below still races this eval).
+        let message = match &e {
+            lumen_core::JsError::Parse(m) | lumen_core::JsError::Runtime(m) => m.clone(),
+            lumen_core::JsError::NotImplemented => "not implemented".to_string(),
+        };
+        broadcast_shared_worker_error(&error_ports, &message, "", 0, 0);
         // Continue: the worker may still service connections if the error was partial.
     }
 
     while let Ok(msg) = rx.recv() {
         match msg {
-            SwInMsg::Connect { port_id, outbox } => {
+            SwInMsg::Connect { port_id, outbox, errors } => {
                 ports.lock().unwrap().insert(port_id, outbox);
+                error_ports.lock().unwrap().insert(port_id, errors);
                 let _ = rt.eval(&format!(
                     "if(typeof _lumen_sw_dispatch_connect==='function')\
                      {{_lumen_sw_dispatch_connect({port_id});\
@@ -526,6 +639,7 @@ fn run_shared_worker_thread_v8(script: String, rx: Receiver<SwInMsg>) {
             }
             SwInMsg::Close { port_id } => {
                 ports.lock().unwrap().remove(&port_id);
+                error_ports.lock().unwrap().remove(&port_id);
                 let _ = rt.eval(&format!(
                     "if(typeof _lumen_sw_dispatch_port_close==='function')\
                      _lumen_sw_dispatch_port_close({port_id});"
@@ -536,19 +650,41 @@ fn run_shared_worker_thread_v8(script: String, rx: Receiver<SwInMsg>) {
     // `rt` drops here: `V8JsRuntime::drop` sends `Shutdown` and joins its thread.
 }
 
+/// Push an uncaught-exception report onto every currently-connected client's
+/// error queue (BUG-591 SharedWorker parent-side reporting — HTML LS "report
+/// the exception" fires `error` at *every* `SharedWorker` object owning a
+/// port into this worker, not just the one that triggered it).
+#[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+fn broadcast_shared_worker_error(
+    error_ports: &Mutex<HashMap<u32, crate::worker::WorkerErrorQueue>>,
+    message: &str,
+    filename: &str,
+    lineno: i32,
+    colno: i32,
+) {
+    let info = crate::worker::error_info_json(message, filename, lineno, colno);
+    for (port_id, errors) in error_ports.lock().unwrap().iter() {
+        errors.lock().unwrap().push((*port_id, info.clone()));
+    }
+}
+
 /// Install the shared-worker global scope (`SharedWorkerGlobalScope`-like).
 ///
 /// Registers `_lumen_sw_port_reply` / `_lumen_sw_console_log` (both plain
 /// String/u32 natives — no scoped mechanism needed, unlike `worker.rs`'s
-/// throwing `atob`/`btoa`) and evaluates [`SHARED_WORKER_GLOBAL_SHIM`], which
-/// provides `self`, `name`, `onconnect`, `addEventListener('connect', …)`, a
-/// worker-side `MessagePort` factory, the `_lumen_sw_dispatch_*` hooks the
-/// Rust loop calls, `console` (→ stderr), and a minimal `setTimeout` stub.
+/// throwing `atob`/`btoa`), `_lumen_sw_report_error` (BUG-591 — broadcasts an
+/// uncaught-exception report to every connected client via `error_ports`),
+/// and evaluates [`SHARED_WORKER_GLOBAL_SHIM`], which provides `self`,
+/// `name`, `onconnect`, `addEventListener('connect', …)`, a worker-side
+/// `MessagePort` factory, the `_lumen_sw_dispatch_*` hooks the Rust loop
+/// calls, `console` (→ stderr), and a minimal `setTimeout` stub.
 #[cfg(feature = "v8-backend")]
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn install_shared_worker_globals_v8(
     rt: &V8JsRuntime,
     ports: Arc<Mutex<HashMap<u32, SharedWorkerOutbox>>>,
+    error_ports: Arc<Mutex<HashMap<u32, crate::worker::WorkerErrorQueue>>>,
 ) -> JsResult<()> {
     rt.register_native(
         "_lumen_sw_port_reply",
@@ -564,6 +700,19 @@ fn install_shared_worker_globals_v8(
         into_v8_fn1(move |msg: String| {
             eprintln!("[shared-worker] {msg}");
         }),
+    )?;
+
+    // _lumen_sw_report_error(message, filename, lineno, colno) — called by
+    // `SHARED_WORKER_GLOBAL_SHIM`'s `_lumen_sw_report_exception` for an
+    // uncaught exception from `onconnect`, a port's `onmessage`, or a
+    // flushed timer callback (BUG-591 SharedWorker parent-side reporting).
+    rt.register_native(
+        "_lumen_sw_report_error",
+        into_v8_fn4(
+            move |message: String, filename: String, lineno: i32, colno: i32| {
+                broadcast_shared_worker_error(&error_ports, &message, &filename, lineno, colno);
+            },
+        ),
     )?;
 
     // `SharedWorkerGlobalScope` is a `WorkerGlobalScope` too, so it gets the
@@ -622,7 +771,8 @@ mod tests_v8 {
     fn shared_worker_global_scope_has_performance() {
         let rt = V8JsRuntime::new().unwrap();
         let ports = Arc::new(Mutex::new(HashMap::new()));
-        install_shared_worker_globals_v8(&rt, ports).unwrap();
+        let error_ports = Arc::new(Mutex::new(HashMap::new()));
+        install_shared_worker_globals_v8(&rt, ports, error_ports).unwrap();
         for expr in [
             "typeof performance.now === 'function'",
             "performance instanceof Performance",
@@ -635,7 +785,8 @@ mod tests_v8 {
     fn runtime_with_shared_worker() -> (V8JsRuntime, SharedWorkerOutbox) {
         let rt = V8JsRuntime::new().unwrap();
         let outbox: SharedWorkerOutbox = Arc::new(Mutex::new(Vec::new()));
-        install_shared_worker_bindings_v8(&rt, &outbox, None).unwrap();
+        let errors: crate::worker::WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        install_shared_worker_bindings_v8(&rt, &outbox, &errors, None).unwrap();
         (rt, outbox)
     }
 

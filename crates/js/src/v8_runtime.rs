@@ -745,6 +745,11 @@ pub struct V8JsRuntime {
     /// [`Self::pump_shared_workers`]. Mirrors [`crate::QuickJsRuntime`]'s
     /// `shared_worker_outbox` field.
     shared_worker_outbox: crate::shared_worker::SharedWorkerOutbox,
+    /// Outbound uncaught-exception report queue for this page's `SharedWorker`
+    /// instances, drained by [`Self::pump_shared_workers`] (BUG-591
+    /// SharedWorker parent-side reporting) — parallel to
+    /// `shared_worker_outbox` but for the `error` event rather than `message`.
+    shared_worker_errors: crate::worker::WorkerErrorQueue,
     /// Cookie-banner auto-dismiss (7C.3) enable flag (Ph3 V8 migration S12b-G6,
     /// BUG-548). Defaults to `true`. Shell sets this from the user's
     /// `cookie_banner_dismiss` preference via [`Self::set_cookie_banner_dismiss`].
@@ -933,6 +938,7 @@ impl V8JsRuntime {
             worker_next_id: Arc::new(Mutex::new(0)),
             worker_blob_store: Arc::new(Mutex::new(HashMap::new())),
             shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
+            shared_worker_errors: Arc::new(Mutex::new(Vec::new())),
             cookie_banner_dismiss: AtomicBool::new(true),
         })
     }
@@ -997,15 +1003,27 @@ impl V8JsRuntime {
     /// [`crate::QuickJsRuntime::pump_shared_workers`].
     pub fn pump_shared_workers(&self) {
         let messages = crate::shared_worker::drain_messages(&self.shared_worker_outbox);
-        if messages.is_empty() {
-            return;
+        if !messages.is_empty() {
+            let json = crate::build_worker_messages_json(&messages);
+            let script = format!(
+                "if(typeof _lumen_deliver_shared_worker_messages==='function')\
+                 _lumen_deliver_shared_worker_messages({json})"
+            );
+            let _ = self.eval(&script);
         }
-        let json = crate::build_worker_messages_json(&messages);
-        let script = format!(
-            "if(typeof _lumen_deliver_shared_worker_messages==='function')\
-             _lumen_deliver_shared_worker_messages({json})"
-        );
-        let _ = self.eval(&script);
+
+        // BUG-591 SharedWorker parent-side reporting: deliver uncaught-exception
+        // reports broadcast from the shared-worker thread as `SharedWorker`'s
+        // `error` event.
+        let errors = crate::worker::drain_errors(&self.shared_worker_errors);
+        if !errors.is_empty() {
+            let json = crate::build_worker_messages_json(&errors);
+            let script = format!(
+                "if(typeof _lumen_deliver_shared_worker_errors==='function')\
+                 _lumen_deliver_shared_worker_errors({json})"
+            );
+            let _ = self.eval(&script);
+        }
     }
 
     /// Shared handle to this runtime's pending-notifications queue, for the
@@ -5417,6 +5435,7 @@ impl V8JsRuntime {
         if let Err(e) = crate::shared_worker::install_shared_worker_bindings_v8(
             self,
             &self.shared_worker_outbox,
+            &self.shared_worker_errors,
             fp_shared_worker,
         ) {
             eprintln!("v8: shared_worker::install_shared_worker_bindings_v8 failed: {e}");

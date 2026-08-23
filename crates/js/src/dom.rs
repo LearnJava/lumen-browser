@@ -37974,5 +37974,79 @@ mod tests {
                 "errEvent.message.indexOf('https://example.com/missing-sw.js') !== -1"
             ));
         }
+
+        // ── BUG-591: SharedWorker parent-side reporting ─────────────────────────
+        // Unlike a dedicated Worker (one client), an uncaught exception in a
+        // SharedWorker's global scope must broadcast `error` to *every*
+        // currently-connected client's `SharedWorker` object, not just the one
+        // whose message/connect triggered it — see `shared_worker.rs`'s
+        // `broadcast_shared_worker_error`/`error_ports`.
+
+        #[test]
+        fn shared_worker_onconnect_exception_fires_client_onerror() {
+            use std::time::Duration;
+            let provider = Arc::new(FixedFetch {
+                status: 200,
+                body: "onconnect = function(e) { throw new Error('boom-connect'); };",
+            });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                "var sw = new SharedWorker('https://example.com/sw-onconnect.js'); \
+                 var errEvent = null; \
+                 sw.onerror = function(e){ errEvent = e; };",
+            )
+            .unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            rt.pump_shared_workers();
+            assert!(bool_eval(&rt, "errEvent !== null"));
+            assert!(bool_eval(&rt, "errEvent.type === 'error'"));
+            assert!(bool_eval(&rt, "errEvent.message === 'boom-connect'"));
+        }
+
+        #[test]
+        fn shared_worker_port_onmessage_exception_broadcasts_to_all_clients() {
+            use std::time::Duration;
+            let provider = Arc::new(FixedFetch {
+                status: 200,
+                body: "onconnect = function(e) { var p = e.ports[0]; \
+                       p.onmessage = function(ev) { throw new Error('boom-message'); }; };",
+            });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                "var swA = new SharedWorker('https://example.com/sw-broadcast.js', 'bcast'); \
+                 var swB = new SharedWorker('https://example.com/sw-broadcast.js', 'bcast'); \
+                 var errA = null, errB = null; \
+                 swA.onerror = function(e){ errA = e; }; \
+                 swB.onerror = function(e){ errB = e; }; \
+                 swA.port.postMessage('x');",
+            )
+            .unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            rt.pump_shared_workers();
+            assert!(bool_eval(&rt, "errA !== null"), "client A (sender) should see the broadcast");
+            assert!(bool_eval(&rt, "errB !== null"), "client B (bystander) should see the broadcast too");
+            assert!(bool_eval(&rt, "errA.message === 'boom-message'"));
+            assert!(bool_eval(&rt, "errB.message === 'boom-message'"));
+        }
+
+        #[test]
+        fn shared_worker_error_addeventlistener_also_fires() {
+            use std::time::Duration;
+            let provider = Arc::new(FixedFetch {
+                status: 200,
+                body: "onconnect = function(e) { throw new Error('boom-listener'); };",
+            });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                "var sw = new SharedWorker('https://example.com/sw-listener.js'); \
+                 var gotViaListener = null; \
+                 sw.addEventListener('error', function(e){ gotViaListener = e; });",
+            )
+            .unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            rt.pump_shared_workers();
+            assert!(bool_eval(&rt, "gotViaListener !== null"));
+            assert!(bool_eval(&rt, "gotViaListener.message === 'boom-listener'"));
+        }
     }
 }

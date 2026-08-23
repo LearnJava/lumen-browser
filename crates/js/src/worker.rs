@@ -141,8 +141,9 @@ fn json_escape(s: &str) -> String {
 /// Build the `{"message":…,"filename":…,"lineno":…,"colno":…}` object-literal
 /// text pushed into a [`WorkerErrorQueue`] — the parent's `Worker.prototype`
 /// `error` handler reads these four fields directly (`WORKER_SHIM`'s
-/// `_deliverError`).
-fn error_info_json(message: &str, filename: &str, lineno: i32, colno: i32) -> String {
+/// `_deliverError`). `pub(crate)` so `shared_worker.rs` can build the same
+/// shape for its own (broadcast) error queue instead of duplicating this.
+pub(crate) fn error_info_json(message: &str, filename: &str, lineno: i32, colno: i32) -> String {
     format!(
         "{{\"message\":\"{}\",\"filename\":\"{}\",\"lineno\":{lineno},\"colno\":{colno}}}",
         json_escape(message),
