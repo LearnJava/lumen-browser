@@ -682,9 +682,12 @@ ErrorEvent.prototype.constructor = ErrorEvent;
 
 // ── Uncaught exception reporting (HTML LS §8.1.3.6 \"report the exception\") ───
 // BUG-591: dispatches a window 'error' ErrorEvent for a genuinely uncaught
-// exception from a top-level classic script, a timer, a requestAnimationFrame
-// callback or a queueMicrotask callback -- the callback-boundary catch(e){}
-// sites this replaces used to swallow the error outright. `window.onerror`
+// exception from any callback the engine itself invokes -- a top-level classic
+// script, a timer, requestAnimationFrame/requestIdleCallback, queueMicrotask,
+// a DOM/window event listener, an observer callback (Mutation/Resize/
+// Intersection/Performance), a MessagePort or WebSocket handler, and the
+// window lifecycle handlers -- the callback-boundary catch(e){} sites this
+// replaces used to swallow the error outright. `window.onerror`
 // uses the special 5-argument OnErrorEventHandler calling convention (WebIDL)
 // rather than receiving the Event object; that distinction is implemented in
 // the 'error' branch of window.dispatchEvent (below), which every caller of
@@ -785,7 +788,7 @@ function DataTransferItem(kind, type, data) {
 DataTransferItem.prototype.getAsString = function(callback) {
     if (this.kind !== 'string' || typeof callback !== 'function') return;
     var d = this._data;
-    try { callback(d != null ? String(d) : ''); } catch(e) {}
+    try { callback(d != null ? String(d) : ''); } catch(e) { _lumen_report_exception(e); }
 };
 DataTransferItem.prototype.getAsFile = function() {
     return null; // Phase 0: no native file access
@@ -6284,7 +6287,7 @@ var document = {
     addEventListener: function(type, fn, opts) {
         if (type === 'DOMContentLoaded' && _doc_ready_state !== 'loading') {
             queueMicrotask(function() {
-                try { fn(new Event('DOMContentLoaded', { bubbles: true })); } catch(e) {}
+                try { fn(new Event('DOMContentLoaded', { bubbles: true })); } catch(e) { _lumen_report_exception(e); }
             });
             return;
         }
@@ -7098,13 +7101,13 @@ function _lumen_fire_hashchange(oldURL, newURL) {
         ev = { type: 'hashchange', oldURL: oldURL, newURL: newURL };
     }
     if (typeof window.onhashchange === 'function') {
-        try { window.onhashchange.call(window, ev); } catch (e) {}
+        try { window.onhashchange.call(window, ev); } catch (e) { _lumen_report_exception(e); }
     }
     var arr = _other_win_listeners['hashchange'];
     if (arr) {
         arr = arr.slice();
         for (var i = 0; i < arr.length; i++) {
-            try { arr[i].call(window, ev); } catch (e) {}
+            try { arr[i].call(window, ev); } catch (e) { _lumen_report_exception(e); }
         }
     }
 }
@@ -7635,10 +7638,10 @@ function _lumen_deliver_popstate(state_json, url) {
     try { s = JSON.parse(state_json); } catch(e) { s = null; }
     var ev = new PopStateEvent('popstate', { state: s, bubbles: true });
     if (typeof window.onpopstate === 'function') {
-        try { window.onpopstate(ev); } catch(e) {}
+        try { window.onpopstate(ev); } catch(e) { _lumen_report_exception(e); }
     }
     for (var i = 0; i < _popstate_listeners.length; i++) {
-        try { _popstate_listeners[i](ev); } catch(e) {}
+        try { _popstate_listeners[i](ev); } catch(e) { _lumen_report_exception(e); }
     }
     if (url && oldHash !== newHash) {
         _lumen_fire_hashchange(oldHref, newHref);
@@ -7919,11 +7922,11 @@ function _lumen_fire_page_lifecycle(type, persisted) {
     evt.persisted = !!persisted;
     var listeners = type === 'pageshow' ? _pageshow_listeners : _pagehide_listeners;
     for (var i = 0; i < listeners.length; i++) {
-        try { listeners[i](evt); } catch(e) {}
+        try { listeners[i](evt); } catch(e) { _lumen_report_exception(e); }
     }
     var handler = type === 'pageshow' ? window.onpageshow : window.onpagehide;
     if (typeof handler === 'function') {
-        try { handler(evt); } catch(e) {}
+        try { handler(evt); } catch(e) { _lumen_report_exception(e); }
     }
 }
 
@@ -7973,10 +7976,10 @@ function _lumen_abort_signal_fire(sig, reason) {
     sig.reason = reason !== undefined ? reason
                : new DOMException('signal is aborted without reason', 'AbortError');
     var evt = { type: 'abort', target: sig };
-    if (typeof sig.onabort === 'function') { try { sig.onabort(evt); } catch(e) {} }
+    if (typeof sig.onabort === 'function') { try { sig.onabort(evt); } catch(e) { _lumen_report_exception(e); } }
     var listeners = sig._listeners.slice();
     for (var i = 0; i < listeners.length; i++) {
-        try { listeners[i](evt); } catch(e) {}
+        try { listeners[i](evt); } catch(e) { _lumen_report_exception(e); }
     }
 }
 
@@ -9808,9 +9811,9 @@ MessageEvent.prototype.constructor = MessageEvent;
 function _lumen_ws_fire(ws, ev) {
     ev.target = ws;
     var prop = 'on' + ev.type;
-    if (typeof ws[prop] === 'function') { try { ws[prop](ev); } catch(e) {} }
+    if (typeof ws[prop] === 'function') { try { ws[prop](ev); } catch(e) { _lumen_report_exception(e); } }
     var arr = ws._listeners[ev.type];
-    if (arr) { for (var i = 0; i < arr.length; i++) { try { arr[i](ev); } catch(e) {} } }
+    if (arr) { for (var i = 0; i < arr.length; i++) { try { arr[i](ev); } catch(e) { _lumen_report_exception(e); } } }
 }
 
 function _lumen_ws_pump_one(ws) {
@@ -10070,7 +10073,7 @@ function _lumen_flush_mutation_observers() {
         if (o._records.length === 0) continue;
         var recs = o._records;
         o._records = [];
-        try { o._cb(recs, o); } catch(e) {}
+        try { o._cb(recs, o); } catch(e) { _lumen_report_exception(e); }
     }
 }
 
@@ -10237,7 +10240,7 @@ function _lumen_deliver_resize_observers() {
             });
         }
         if (entries.length > 0) {
-            try { obs._cb(entries, obs); } catch(e) {}
+            try { obs._cb(entries, obs); } catch(e) { _lumen_report_exception(e); }
         }
     }
 }
@@ -10375,7 +10378,7 @@ function _lumen_deliver_intersection_observers() {
             });
         }
         if (entries.length > 0) {
-            try { obs._cb(entries, obs); } catch(e) {}
+            try { obs._cb(entries, obs); } catch(e) { _lumen_report_exception(e); }
         }
     }
 }
@@ -10703,10 +10706,10 @@ MediaQueryList.prototype.removeEventListener = function(type, fn) {
 MediaQueryList.prototype.dispatchEvent = function(ev) {
     if (!ev || ev.type !== 'change') return true;
     for (var i = 0; i < this._listeners.length; i++) {
-        try { this._listeners[i].call(this, ev); } catch(e) {}
+        try { this._listeners[i].call(this, ev); } catch(e) { _lumen_report_exception(e); }
     }
     if (typeof this.onchange === 'function') {
-        try { this.onchange.call(this, ev); } catch(e) {}
+        try { this.onchange.call(this, ev); } catch(e) { _lumen_report_exception(e); }
     }
     return !ev.defaultPrevented;
 };
@@ -10829,7 +10832,7 @@ var window = {
             if (_doc_ready_state === 'complete') {
                 // already loaded — fire async per spec
                 queueMicrotask(function() {
-                    try { fn(new Event('load', { bubbles: false })); } catch(e) {}
+                    try { fn(new Event('load', { bubbles: false })); } catch(e) { _lumen_report_exception(e); }
                 });
             } else {
                 _load_listeners.push(fn);
@@ -10837,7 +10840,7 @@ var window = {
         } else if (type === 'DOMContentLoaded') {
             if (_doc_ready_state !== 'loading') {
                 queueMicrotask(function() {
-                    try { fn(new Event('DOMContentLoaded', { bubbles: true })); } catch(e) {}
+                    try { fn(new Event('DOMContentLoaded', { bubbles: true })); } catch(e) { _lumen_report_exception(e); }
                 });
             } else {
                 _domcontentloaded_win_listeners.push(fn);
@@ -10939,10 +10942,10 @@ var window = {
         // Spec §7.7.4 step 5: dispatch as a task (asynchronously).
         setTimeout(function() {
             if (typeof window.onmessage === 'function') {
-                try { window.onmessage(ev); } catch(e) {}
+                try { window.onmessage(ev); } catch(e) { _lumen_report_exception(e); }
             }
             for (var i = 0; i < _message_listeners.length; i++) {
-                try { _message_listeners[i](ev); } catch(e) {}
+                try { _message_listeners[i](ev); } catch(e) { _lumen_report_exception(e); }
             }
         }, 0);
     },
@@ -11775,7 +11778,7 @@ function _perf_deliver_to_observer(obs, entries) {
         getEntriesByName:  function(n, t) { return entries.filter(function(e) { return e.name === n && (!t || e.entryType === t); }); },
         getEntriesByType:  function(t) { return entries.filter(function(e) { return e.entryType === t; }); },
     };
-    try { obs._cb(list, obs); } catch(e) {}
+    try { obs._cb(list, obs); } catch(e) { _lumen_report_exception(e); }
 }
 
 // Called internally when new entries are created (mark/measure/paint).
@@ -11927,7 +11930,7 @@ function requestIdleCallback(cb, opts) {
         if (!fn) return;
         delete _idle_cbs[id];
         var deadline = { timeRemaining: function() { return 50; }, didTimeout: false };
-        try { fn(deadline); } catch(e) {}
+        try { fn(deadline); } catch(e) { _lumen_report_exception(e); }
     }, delay);
     return id;
 }
@@ -11962,6 +11965,16 @@ pub(crate) const MESSAGE_CHANNEL_SHIM: &str = "
 // see that boundary and spin forever in one synchronous V8 burst instead
 // (BUG-702). setTimeout(fn, 0) below feeds the same _lumen_timers/
 // _lumen_tick_timers task queue window.postMessage already uses correctly.
+//
+// BUG-591: a message handler's exception must be reported to the global error
+// handler, not swallowed. This shim is the one part of the page shim the
+// *service-worker* scope evaluates too (`sw_worker.rs`), and that scope has
+// neither `_lumen_report_exception` (page-only) nor `_lumen_et_report` (its
+// EVENT_TARGET_SHIM wrapper) — hence the local typeof-guarded forwarder rather
+// than a direct call.
+function _lumen_mc_report(e) {
+    if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e);
+}
 
 function MessagePort() {
     this._other          = null;
@@ -12008,10 +12021,10 @@ MessagePort.prototype.postMessage = function(message) {
 // Internal: deliver evt to onmessage + 'message' addEventListener listeners.
 MessagePort.prototype._deliver = function(evt) {
     if (typeof this._onmessage === 'function') {
-        try { this._onmessage.call(this, evt); } catch(e) {}
+        try { this._onmessage.call(this, evt); } catch(e) { _lumen_mc_report(e); }
     }
     for (var i = 0; i < this._listeners.length; i++) {
-        try { this._listeners[i].call(this, evt); } catch(e) {}
+        try { this._listeners[i].call(this, evt); } catch(e) { _lumen_mc_report(e); }
     }
 };
 
@@ -14097,12 +14110,12 @@ function _lumen_dispatch_focus_event(nid, type, bubbles, related) {
             var copy = arr.slice();
             for (var i = 0; i < copy.length; i++) {
                 if (ev.cancelBubble) break;
-                try { copy[i].call(el, ev); } catch (e) {}
+                try { copy[i].call(el, ev); } catch (e) { _lumen_report_exception(e); }
                 if (ev._stopImmediate) break;
             }
         }
         if (el && typeof el['on' + type] === 'function') {
-            try { el['on' + type].call(el, ev); } catch (e) {}
+            try { el['on' + type].call(el, ev); } catch (e) { _lumen_report_exception(e); }
         }
         if (!bubbles || ev.cancelBubble || ev._stopImmediate) break;
         cur = _lumen_u2n(_lumen_get_parent(cur));
@@ -14114,7 +14127,7 @@ function _lumen_dispatch_focus_event(nid, type, bubbles, related) {
             ev.currentTarget = document;
             for (var j = 0; j < dcopy.length; j++) {
                 if (ev.cancelBubble) break;
-                try { dcopy[j].call(document, ev); } catch (e) {}
+                try { dcopy[j].call(document, ev); } catch (e) { _lumen_report_exception(e); }
                 if (ev._stopImmediate) break;
             }
         }
@@ -15915,7 +15928,7 @@ function _lumen_fire_fullscreen_error(nid) {
         document.dispatchEvent(evt);
     }
     if (typeof document.onfullscreenerror === 'function') {
-        try { document.onfullscreenerror.call(document, evt); } catch (e) {}
+        try { document.onfullscreenerror.call(document, evt); } catch (e) { _lumen_report_exception(e); }
     }
 }
 
@@ -16286,7 +16299,7 @@ Animation.prototype.cancel = function() {
     this._cancelRaf();
     var idx = _wa_animations.indexOf(this);
     if (idx >= 0) _wa_animations.splice(idx, 1);
-    if (typeof this.oncancel === 'function') try { this.oncancel(new Event('cancel')); } catch(e) {}
+    if (typeof this.oncancel === 'function') try { this.oncancel(new Event('cancel')); } catch(e) { _lumen_report_exception(e); }
 };
 
 Animation.prototype.finish = function() {
@@ -16373,7 +16386,7 @@ Animation.prototype._clearStyles = function() {
 };
 
 Animation.prototype._onFinish = function() {
-    if (typeof this.onfinish === 'function') try { this.onfinish(new Event('finish')); } catch(e) {}
+    if (typeof this.onfinish === 'function') try { this.onfinish(new Event('finish')); } catch(e) { _lumen_report_exception(e); }
     if (typeof this._finishRes === 'function') { try { this._finishRes(this); } catch(e) {} this._finishRes = null; }
 };
 
@@ -16567,8 +16580,8 @@ function _wa_doc_get_animations() {
     if (this.released) return Promise.resolve();
     this.released = true;
     var ev = { type: 'release', target: this };
-    if (typeof this._onrelease === 'function') try { this._onrelease(ev); } catch(e) {}
-    for (var i = 0; i < this._listeners.length; i++) try { this._listeners[i](ev); } catch(e) {}
+    if (typeof this._onrelease === 'function') try { this._onrelease(ev); } catch(e) { _lumen_report_exception(e); }
+    for (var i = 0; i < this._listeners.length; i++) try { this._listeners[i](ev); } catch(e) { _lumen_report_exception(e); }
     return Promise.resolve();
   };
   Object.defineProperty(WakeLockSentinel.prototype, 'onrelease', {
@@ -23212,6 +23225,111 @@ mod tests {
             // forever (test hang); the fix runs the 'error' listener exactly
             // once, for the original click-listener exception.
             assert_eq!(outcome.unwrap(), lumen_core::JsValue::Number(1.0));
+        }
+
+        /// The residual WPT-RUN-6 slice 27 measured on 2026-08-23: the rIdle
+        /// callback ran, threw, and nothing anywhere heard about it, while the
+        /// neighbouring `requestAnimationFrame` path (same WPT page shape,
+        /// `animation-frames/callback-exception.html`) already reported.
+        ///
+        /// The deadlines are forced to 0 instead of slept through — rIC
+        /// schedules its callback 50 ms out, and a unit test must not depend
+        /// on the wall clock to observe it.
+        #[test]
+        fn bug591_request_idle_callback_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var caught = null; \
+                 window.addEventListener('error', function(e) { caught = e.message; }); \
+                 requestIdleCallback(function() { throw new Error('ric-boom'); });",
+            )
+            .unwrap();
+            rt.eval(
+                "for (var i = 0; i < _lumen_timers.length; i++) _lumen_timers[i].deadline = 0; \
+                 _lumen_tick_timers();",
+            )
+            .unwrap();
+            let result = rt.eval("caught").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("ric-boom".to_string()));
+        }
+
+        /// `MessagePort` delivery — one of the two paths this bug's own file
+        /// had listed as out of scope until now. Goes through
+        /// `_lumen_mc_report`, not `_lumen_report_exception` directly, because
+        /// `MESSAGE_CHANNEL_SHIM` is also evaluated in the service-worker
+        /// scope, which has no reporting function at all.
+        #[test]
+        fn bug591_message_port_handler_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var caught = null; \
+                 window.addEventListener('error', function(e) { caught = e.message; }); \
+                 var ch = new MessageChannel(); \
+                 ch.port1.onmessage = function() { throw new Error('port-boom'); }; \
+                 ch.port2.postMessage('ping');",
+            )
+            .unwrap();
+            rt.eval("_lumen_tick_timers();").unwrap();
+            let result = rt.eval("caught").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("port-boom".to_string()));
+        }
+
+        /// `MediaQueryList` — the other path the bug file had listed as out of
+        /// scope. It carries its own hand-rolled `dispatchEvent`, so neither
+        /// the `EventTarget` base class nor the native element dispatch
+        /// (both wired 2026-08-22) reached it.
+        #[test]
+        fn bug591_media_query_list_listener_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var caught = null; \
+                 window.addEventListener('error', function(e) { caught = e.message; }); \
+                 var mql = window.matchMedia('(min-width: 1px)'); \
+                 mql.addEventListener('change', function() { throw new Error('mql-boom'); }); \
+                 mql.dispatchEvent({ type: 'change', matches: true, media: mql.media });",
+            )
+            .unwrap();
+            let result = rt.eval("caught").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("mql-boom".to_string()));
+        }
+
+        /// The half of [BUG-840] that belongs to this bug: a
+        /// `PerformanceObserver` callback's exception was eaten by the shim
+        /// before any host-side path could see it, which is why the
+        /// `webaudio`/`performance-timeline` families went quiet instead of
+        /// failing.
+        #[test]
+        fn bug591_performance_observer_callback_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var caught = null; \
+                 window.addEventListener('error', function(e) { caught = e.message; }); \
+                 var po = new PerformanceObserver(function() { throw new Error('po-boom'); }); \
+                 po.observe({ entryTypes: ['mark'] }); \
+                 performance.mark('m1');",
+            )
+            .unwrap();
+            let result = rt.eval("caught").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("po-boom".to_string()));
+        }
+
+        /// `MutationObserver` stands for the whole observer family here
+        /// (Resize/Intersection deliver through the same shape, but only from
+        /// the relayout pipeline, which a unit test cannot drive).
+        #[test]
+        fn bug591_mutation_observer_callback_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var caught = null; \
+                 window.addEventListener('error', function(e) { caught = e.message; }); \
+                 var mo = new MutationObserver(function() { throw new Error('mo-boom'); }); \
+                 mo.observe(document.getElementById('main'), { childList: true }); \
+                 document.getElementById('main').appendChild(document.createElement('span'));",
+            )
+            .unwrap();
+            rt.eval("_lumen_flush_mutation_observers();").unwrap();
+            let result = rt.eval("caught").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("mo-boom".to_string()));
         }
     }
     /// V8 port of the "classList / CSSStyleDeclaration", "Element event dispatch +
