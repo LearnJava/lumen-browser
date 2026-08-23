@@ -65,6 +65,23 @@ cluster starts — throws in the page at `element.getClientRects()`
 `get_context`'s `document.defaultView` (BUG-622), the step it used to be
 attributed to.
 
+Slice 26 (2026-08-23) added eight mechanisms off
+`verify_worker_port_storage_gaps.py` — the worker/port/storage neighbourhood —
+and corrected two references. `mixed-content-blocked` was labelled BUG-796,
+which is an unrelated file: the blocked URLs are the run's own
+`www1.127.0.0.1` / `not-web-platform.test` aliases, so it is WPT-RUN-10's
+`browser_host` choice biting one step earlier than the unresolvable-name
+mechanism (an `http://127.0.0.1` page is a *potentially trustworthy* origin
+and its plain-hostname aliases are not, so the classifier blocks the
+subresource before DNS). And two `websockets/keeping-connection-open` ids
+turned out not to be a WebSocket mechanism at all: the runner allowed them
+60 s, the harness cut them at 10.2 s, because `<meta name=timeout
+content=long>` is read through `meta.content` and that reflection is shadowed
+(BUG-796) — 2 933 of the snapshot's 3 558 `timeout=long` TIMEOUTs are cut that
+way. The same slice filled three holes in `_GENERATED_SUFFIXES`
+(`.any.{shared,service}worker-module.html`, `.any.window-module.html`), which
+had been silently hiding 20 ids from the source stage.
+
 **The residual keeps its subtest evidence.** For every id still unexplained,
 `residual_hung_subtests` in `--json` carries the names of the subtests that
 never finished — the work list the next slice picks its target from, and the
@@ -214,11 +231,23 @@ MECHANISMS = [
         "it (editing/editor-test-utils.js, testdriver-extra.js) throw before "
         "any test() runs",
     ),
+    # The ref used to read BUG-796, which is the `meta.content` reflection bug
+    # — an unrelated file. Corrected in slice 26 after reading the blocked
+    # URLs: they are plain `http://www1.127.0.0.1:…` and
+    # `http://not-web-platform.test:…`, i.e. the same `browser_host` choice
+    # that WPT-RUN-10 owns, biting one step earlier than the unresolvable-name
+    # mechanism above. `http://127.0.0.1` is a loopback literal and therefore
+    # a *potentially trustworthy* origin (`origin.rs::is_potentially_trust\
+    # worthy`), while the `www1.`-prefixed alias is a plain hostname and is
+    # not — so the engine classifies every cross-origin subresource of a WPT
+    # page as mixed content and blocks it before DNS is ever consulted.
     Mechanism(
-        "mixed-content-blocked", "BUG-796",
+        "mixed-content-blocked", "WPT-RUN-10",
         [r"mixed-content: blockable"],
-        "the test's own subresource is blocked as mixed content because the "
-        "page was reached over https",
+        "the run pins `browser_host` to the loopback literal `127.0.0.1`, so "
+        "the page is a secure context while its `www1.`/`not-web-platform."
+        "test` aliases are not — the cross-origin subresource is blocked as "
+        "mixed content",
     ),
     Mechanism(
         "worker-unsupported-api", "BUG-591",
@@ -994,6 +1023,37 @@ def _beacon_request_marker(text, test_id=None):
     return "sendBeacon" in body
 
 
+def _storage_quota_marker(text, test_id):
+    """The webstorage quota tests: an unbounded loop only an exception ends.
+
+    Slice 26 measured that neither storage has any quota at all (20 MiB into
+    each in 74 ms, no throw), so `while (true) setItem(...)` never terminates:
+    the engine does not *fail* these four tests, it wedges the browser for the
+    rest of the shard. The three conditions together are what make the marker
+    safe — `assert_throws_quotaexceedederror` alone also appears in tests that
+    bound their own loop.
+    """
+    if "assert_throws_quotaexceedederror" not in text:
+        return False
+    if not re.search(r"while\s*\(\s*true\s*\)", text):
+        return False
+    return bool(re.search(r"\b(?:local|session)Storage\.setItem\b", text))
+
+
+def _shared_worker_module_marker(text, test_id):
+    """A `.any.sharedworker-module.html` variant of a module test.
+
+    `{type: 'module'}` is ignored (BUG-777, re-measured in slice 26 with a
+    script whose body is valid only as a module: `Cannot use import statement
+    outside a module`), so the shared worker runs the file as a classic
+    script, dies on the first `import`/`import.meta`, and the page waits for a
+    harness that never registers. Keyed off the id rather than the text
+    because the `.any.js` source is shared with the sibling variants that do
+    run — only the module ones are this mechanism.
+    """
+    return bool(test_id) and ".any.sharedworker-module.html" in test_id
+
+
 SOURCE_MARKERS = [
 
     # First on purpose: see `_audio_src_marker` — the page stops dead at the
@@ -1527,6 +1587,24 @@ SOURCE_MARKERS = [
         "event, and the engine dispatches neither",
         predicate=_window_error_wait_marker,
     ),
+    # ── slice 26 ───────────────────────────────────────────────────────
+    # Both sort last on purpose: neither claims a file any earlier marker
+    # wants, and both are narrow enough that precedence only decides ties
+    # which do not occur in this snapshot.
+    Mechanism(
+        "web-storage-no-quota", "BUG-870", [],
+        "neither storage enforces a quota, so `setItem` never throws "
+        "`QuotaExceededError` and the test's unbounded `while (true)` loop "
+        "wedges the page instead of failing it",
+        predicate=_storage_quota_marker,
+    ),
+    Mechanism(
+        "shared-worker-module-type", "BUG-777", [],
+        "`{type: \'module\'}` is ignored, so a module shared worker is run as "
+        "a classic script and dies on its first `import` before the harness "
+        "inside it registers anything",
+        predicate=_shared_worker_module_marker,
+    ),
 ]
 
 #: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched
@@ -1722,6 +1800,15 @@ WPT_ROOT = os.path.dirname(os.path.abspath(__file__))
 _GENERATED_SUFFIXES = [
     (".any.worker.html", ".any.js"),
     (".any.sharedworker.html", ".any.js"),
+    # The `-module` variants were missing until slice 26, and they fail
+    # *silently*: no suffix matches, the path is left as the generated id,
+    # nothing exists there, and the id reads to this stage as a file with no
+    # content — the same blind spot shape as the UTF-16 one above. 20 TIMEOUT
+    # ids of the WPT-RUN-5 snapshot were invisible for this reason, among them
+    # the three `.any.sharedworker-module.html` of BUG-777.
+    (".any.sharedworker-module.html", ".any.js"),
+    (".any.serviceworker-module.html", ".any.js"),
+    (".any.window-module.html", ".any.js"),
     (".any.serviceworker.html", ".any.js"),
     (".any.worker-module.html", ".any.js"),
     (".any.html", ".any.js"),
@@ -2123,6 +2210,75 @@ SUBTEST_MARKERS = [
              r"child of a button with \.click\(\)",
         note="activation behaviour is resolved on the clicked node rather "
              "than on the nearest activatable ancestor",
+    ),
+
+    # ── slice 26 ───────────────────────────────────────────────────────
+    # Measured by `verify_worker_port_storage_gaps.py`, 2026-08-23. Every one
+    # of these names a wait the probe reproduced against a live browser, so
+    # the marker records a measurement rather than a reading of the file.
+    SubtestMarker(
+        "shared-worker-identity", "BUG-866",
+        name=r"^getting name|name property of shared workers|"
+             r"SharedWorker - same name, different URL|"
+             r"URL encoding, shared worker|shared by document on SharedWorker",
+        note="a SharedWorker is keyed by name alone and `self.name` is never "
+             "set in the global, so the name reads back `undefined`, a "
+             "dictionary name coerces to `[object Object]` and a same-name / "
+             "different-URL construction connects instead of throwing "
+             "`URLMismatchError`",
+    ),
+    SubtestMarker(
+        "shared-worker-connect-event", "BUG-867",
+        name=r"connect event for a shared worker",
+        note="the object handed to `onconnect` is a bare literal: it is not a "
+             "`MessageEvent` and carries no `data`, so the two assertions the "
+             "test makes from inside `port.onmessage` can never hold — and "
+             "their exception is swallowed there (BUG-871), which is why this "
+             "is a TIMEOUT and not a FAIL",
+    ),
+    SubtestMarker(
+        "worker-port-transfer", "BUG-868",
+        name=r"messages (?:from|to) (?:a )?workers? (?:on|using) ports?|"
+             r"MessageChannel/MessagePort should not work|"
+             r"Entangled port is garbage collected|"
+             r"undelivered MessagePort messages",
+        note="a `MessagePort` never crosses the worker boundary in either "
+             "direction (`e.ports` arrives empty going in and `undefined` "
+             "coming back) and `MessageChannel` does not exist inside a "
+             "worker at all",
+    ),
+    SubtestMarker(
+        "websocket-send-backpressure", "BUG-869",
+        name=r"with backpressure applied should not hang",
+        note="`send()` writes to the socket synchronously from the JS thread, "
+             "so a receiver slower than the sender freezes the whole document "
+             "— measured at ~312 ms per 64 KiB send with `bufferedAmount` "
+             "stuck at 0 and no timer running",
+    ),
+    # Not a WebSocket mechanism although both its ids are in `websockets/`:
+    # the runner allowed these 60 s (`test_timeout: 60`) and the *harness*
+    # declared the timeout at 10.2 s, because `WindowTestEnvironment.prototype
+    # .test_timeout` reads `<meta name=timeout content=long>` through
+    # `meta.content`, which is `undefined` (BUG-796). A test that legitimately
+    # needs more than 10 s therefore cannot pass, whatever the engine does.
+    SubtestMarker(
+        "harness-long-timeout-ignored", "BUG-796",
+        name=r"\d+s inactivity after handshake|20 seconds",
+        note="the test declares `timeout=long` and needs more than the "
+             "harness's 10 s default, but `meta.content` reads `undefined` so "
+             "the 60 s budget is never granted",
+    ),
+    # Deliberately narrow: only the *default*-type subtest. The `classic` and
+    # `module` subtests of the same two files are NOTRUN behind it
+    # (`promise_test`s run in sequence), and attributing them to BUG-777 here
+    # would take the file away from the mechanism that actually stopped it —
+    # the file breaks on the very first, ordinary worker.
+    SubtestMarker(
+        "worker-global-no-interfaces", "BUG-872",
+        name=r"worker construction with the default worker type",
+        note="the worker global has no interface objects at all, so WPT's "
+             "`'X' in self && self instanceof X` idiom takes neither branch "
+             "and the worker silently does nothing",
     ),
 ]
 
@@ -4033,6 +4189,132 @@ def selftest():
         check(classify_subtests("/elsewhere/auto-001.html",
                                 [("contain-intrinsic-size: auto", "TIMEOUT")]) is None,
               "an id-scoped marker fired outside its directory")
+        # ── slice 26 ───────────────────────────────────────────────────────
+        # Subtest stage. Each pair is a claim plus the narrowness that keeps
+        # it from taking a neighbour's ids.
+        check(classify_subtests("/workers/interfaces/SharedWorkerGlobalScope/name/getting.html",
+                                [("getting name", "TIMEOUT")])
+              == "shared-worker-identity",
+              "a SharedWorker name wait was not claimed")
+        check(classify_subtests("/workers/constructors/SharedWorker/URLMismatchError.htm",
+                                [("Web Workers: SharedWorker - same name, "
+                                  "different URL", "TIMEOUT")])
+              == "shared-worker-identity",
+              "a same-name/different-URL wait was not claimed")
+        check(classify_subtests("/workers/constructors/SharedWorker/connect-event.html",
+                                [("Test connect event for a shared worker", "TIMEOUT")])
+              == "shared-worker-connect-event",
+              "a SharedWorker connect-event wait was not claimed")
+        check(classify_subtests("/workers/Worker-messageport.html",
+                                [("Test getting messages from a worker on a port.",
+                                  "TIMEOUT"),
+                                 ("Test sending many messages to workers using "
+                                  "ports.", "NOTRUN")])
+              == "worker-port-transfer",
+              "a worker MessagePort wait was not claimed")
+        # The "to ... using ports" half of the same alternation needs its own
+        # case: the previous check passes both names at once, so a mutation
+        # that drops one of them would be unobservable there.
+        check(classify_subtests("/workers/Worker-messageport.html",
+                                [("Test sending many messages to workers using "
+                                  "ports.", "TIMEOUT")])
+              == "worker-port-transfer",
+              "the outbound half of the port marker was not claimed")
+        check(classify_subtests("/webmessaging/message-channels/close-event/"
+                                "garbage-collected.tentative.any.html",
+                                [("Entangled port is garbage collected, and the "
+                                  "close event is fired.", "TIMEOUT")])
+              == "worker-port-transfer",
+              "a port close-event wait was not claimed")
+        check(classify_subtests("/websockets/send-many-64K-messages-with-"
+                                "backpressure.any.html?default",
+                                [("sending 50 messages of size 65536 with "
+                                  "backpressure applied should not hang",
+                                  "TIMEOUT")])
+              == "websocket-send-backpressure",
+              "a WebSocket backpressure wait was not claimed")
+        # Not `websocket-send-backpressure` and not an engine WebSocket
+        # mechanism at all: the harness cut this at its 10 s default because
+        # `meta.content` reads `undefined`, although the file declares
+        # `timeout=long` and the runner allowed 60 s.
+        check(classify_subtests("/websockets/keeping-connection-open/001.html?wss",
+                                [("WebSockets: 20s inactivity after handshake",
+                                  "TIMEOUT")])
+              == "harness-long-timeout-ignored",
+              "a long-timeout test cut by the harness was not claimed")
+        # The narrowness that keeps BUG-872 from losing its two files to
+        # BUG-777: only the *default*-type subtest is claimed, and the
+        # `classic`/`module` ones behind it are claimed by nobody, so the
+        # majority rule cannot hand the file to a later cause.
+        check(classify_subtests("/workers/modules/dedicated-worker-options-type.html",
+                                [("Test worker construction with the default "
+                                  "worker type.", "TIMEOUT"),
+                                 ("Test worker construction with the \"classic\" "
+                                  "worker type.", "NOTRUN"),
+                                 ("Test worker construction with the \"module\" "
+                                  "worker type.", "NOTRUN")])
+              == "worker-global-no-interfaces",
+              "the default-worker-type wait was not claimed")
+        check(classify_subtests("/workers/modules/x.html",
+                                [("Test worker construction with the \"module\" "
+                                  "worker type.", "TIMEOUT")]) is None,
+              "the module-type subtest must not be claimed here — the file "
+              "that hangs on it breaks earlier, on the default worker")
+
+        # Source stage, slice 26.
+        with open(os.path.join(tmp, "a", "quota.window.js"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("test(t => {\n"
+                         "  assert_throws_quotaexceedederror(() => {\n"
+                         "    while (true) { localStorage.setItem(k, v); }\n"
+                         "  }, null, null);\n"
+                         "}, 'Throws QuotaExceededError');")
+        check(classify_source("/a/quota.window.html", tmp, {}) == "web-storage-no-quota",
+              "an unbounded storage-quota loop was not claimed")
+        # All three conditions are load-bearing: a test that bounds its own
+        # loop is not this mechanism even though it names the same error.
+        with open(os.path.join(tmp, "a", "bounded.window.js"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("test(t => {\n"
+                         "  assert_throws_quotaexceedederror(() => {\n"
+                         "    for (var i = 0; i < 10; i++) "
+                         "localStorage.setItem(k, v);\n"
+                         "  }, null, null);\n"
+                         "});")
+        check(classify_source("/a/bounded.window.html", tmp, {}) is None,
+              "a bounded quota loop must not be claimed")
+        # The `setItem` condition is load-bearing too: an unbounded loop that
+        # names the same error without touching storage is somebody else's
+        # mechanism.
+        with open(os.path.join(tmp, "a", "notstorage.window.js"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("test(t => {\n"
+                         "  assert_throws_quotaexceedederror(() => {\n"
+                         "    while (true) { cache.put(k, v); }\n"
+                         "  }, null, null);\n"
+                         "});")
+        check(classify_source("/a/notstorage.window.html", tmp, {}) is None,
+              "a non-storage unbounded loop must not be claimed")
+        # The id decides, not the text: the same `.any.js` also generates
+        # variants that do run, and only the module shared worker is BUG-777.
+        with open(os.path.join(tmp, "a", "mod.any.js"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("import.meta.url;\n")
+        check(classify_source("/a/mod.any.sharedworker-module.html", tmp, {})
+              == "shared-worker-module-type",
+              "a module shared-worker variant was not claimed")
+        check(classify_source("/a/mod.any.html", tmp, {}) is None,
+              "a non-module variant of the same source must not be claimed")
+        # And the mapping that makes both of the above readable at all: the
+        # `-module` suffixes were absent until slice 26, so the id resolved to
+        # a path that does not exist and the stage saw an empty file.
+        for generated, expected in ((".any.sharedworker-module.html", "x.any.js"),
+                                    (".any.serviceworker-module.html", "x.any.js"),
+                                    (".any.window-module.html", "x.any.js")):
+            check(source_path("/a/x" + generated, tmp)
+                  == os.path.join(tmp, "a", expected),
+                  f"generated suffix {generated} was not mapped to its source")
+
         # The residual keeps the evidence that did not attribute it.
         check(result["residual_hung_subtests"].get("/a/clean.html")
               == ["an unattributed wait"],

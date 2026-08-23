@@ -93,3 +93,35 @@ Workers/Concurrency описывает только классический п�
 - `dedicated-worker-options-credentials.html`/`shared-worker-options-
   credentials.html` могут вскрыть отдельный дефект после того, как `type`
   начнёт читаться.
+
+## Перемер WPT-RUN-6, срез 26 (2026-08-23)
+
+`tests/wpt/verify_worker_port_storage_gaps.py --variant worker-type
+--variant worker-module-syntax --variant sw-name` на `main` = `c14b8068c`
+(dev-release, Linux) — диагноз подтверждён и уточнён тремя фактами,
+которых в исходной заявке не было:
+
+1. **`{type: 'module'}` действительно исполняется как классический скрипт**
+   — проверено скриптом, тело которого валидно только как модуль:
+   `wms-err-module Cannot use import statement outside a module`, и ровно
+   та же строка для контрольного запуска того же файла без опций.
+2. **Невалидный `type` не бросает `TypeError`.** `dedicated-worker-options-
+   type.html` проверяет это двумя `test()`: `new Worker(url, {type: ''})` и
+   `{type: 'unknown'}` обязаны бросить синхронно. Измерено:
+   `wt-built-empty`, `wt-built-unknown`, затем оба воркера отвечают
+   `wt-msg-empty echo:hello` / `wt-msg-unknown echo:hello` — конструирование
+   проходит, скрипт запускается.
+3. **Строковая и словарная формы имени `SharedWorker` расходятся по разным
+   глобалам** — не «имя потеряно», а раскол идентичности:
+   `String({name:'my name'})` даёт ключ `name:[object Object]`, поэтому два
+   клиента со словарём попали в один воркер, а третий с той же строкой —
+   в другой (счётчики подключений 1, 2 и снова 1). Эта часть вынесена
+   в [BUG-866](BUG-866-OPEN.md) вместе с двумя соседними дефектами
+   идентичности (`self.name` не задаётся, `URLMismatchError` не бросается),
+   потому что чинится в той же строке `shared_worker.rs:385`, но не
+   сводится к «options не читаются».
+
+Три id остатка снимка WPT-RUN-5 из этого механизма —
+`dedicated-worker-options-type.html`, `shared-worker-options-type.html` и
+`*.any.sharedworker-module.html` (`dynamic-import/blob-url`,
+`import-meta/import-meta-resolve`, `import-meta/import-meta-url`).

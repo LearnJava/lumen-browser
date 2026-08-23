@@ -158,3 +158,42 @@ id**. Восстановились **два**
    длительности TIMEOUT-ов уезжает с ~10 с на ~65 с (тесты те же, потолок
    правильный), а тесты, укладывающиеся между 10 и 60 с, перестают быть
    TIMEOUT.
+
+## Перемер WPT-RUN-6, срез 26 (2026-08-23)
+
+Подтверждён на `main` = `c14b8068c` живым замером
+(`tests/wpt/verify_worker_port_storage_gaps.py --variant harness-timeout-meta`,
+вариант повторяет цикл `WindowTestEnvironment.prototype.test_timeout`
+дословно). Дескрипторы, снятые с одного и того же элемента, показывают
+затенение прямее, чем прежняя проба:
+
+```
+htm-meta-1 ctor=HTMLMetaElement name="timeout" content=undefined
+           getAttr-name="timeout" getAttr-content="long"
+htm-verdict normal
+htm-desc own=accessor:function proto=accessor:function
+htm-via-proto "long"
+htm-template-control "[object Object]"
+```
+
+То есть прототипный геттер на этом же `<meta>` отдаёт `"long"`
+(`htm-via-proto`), а собственный — `undefined`; `<template>.content`
+при этом исправен, так что перенос геттера на
+`HTMLTemplateElement.prototype` ничего не ломает.
+
+**Уточнение масштаба по снимку WPT-RUN-5** (обе половины прогона, 15 592
+TIMEOUT с измеримой длительностью): из 3 558 TIMEOUT-id, чей исходник
+объявляет `<meta name=timeout content=long>`, **2 933 обрезаны примерно на
+10 с** и лишь 625 дожили до внешнего потолка. Разделение чистое и
+проверяемое: у всех 625 гарнесс не доложил ничего вовсе (`test_status`
+отсутствует, режет `wptrunner` на своих 60 + 5 с), а у обрезанных на 10 с
+стоит собственное гарнессовое `«Test timed out»` при `test_timeout: 60`
+в `extra` — то есть решение принято страницей, а не раннером.
+
+**Два id остатка теперь стоят прямо на этом баге** —
+`websockets/keeping-connection-open/001.html` (`?default`, `?wss`): тест
+объявлен `timeout=long` и по своей природе идёт 20 с, поэтому при
+10-секундном потолке он не может пройти ни при какой починке WebSocket-ов.
+Ранее [BUG-869](BUG-869-OPEN.md) числил их за собой; там это исправлено.
+В `tests/wpt/timeout_audit.py` механизм называется
+`harness-long-timeout-ignored`.
