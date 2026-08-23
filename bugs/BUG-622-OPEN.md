@@ -103,7 +103,7 @@ TIMEOUT, а не FAIL. Это бьёт КАЖДЫЙ файл, инстанции
 
 Отдельно в этом же срезе подтверждена **не новая** причина:
 `css/css-grid/alignment` (162 TIMEOUT, 74.7 %) — это целиком уже известный
-[BUG-564](BUG-564-OPEN.md) (`document.fonts.ready` не резолвится):
+[BUG-564](BUG-564-FIXED.md) (`document.fonts.ready` не резолвится):
 `<body onload="document.fonts.ready.then(() => { checkLayout('.grid'); })">`
 в каждом файле категории.
 

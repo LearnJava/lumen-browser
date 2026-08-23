@@ -1,6 +1,6 @@
 # BUG-564: `document.fonts.ready` is missing — `FontFaceSet` has no `ready` property at all
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-23 (P1)
 **Компонент:** js (`crates/js/src/dom.rs::_lumen_get_fonts` — the `fontSet` object
 literal returned for `document.fonts` has `length`/`item`/`entries`/`forEach`/
 `Symbol.iterator` but no `ready` property)
@@ -82,3 +82,21 @@ is higher once those categories are covered by a future run. Audit script
 (scratch, not committed): `.tmp/fonts_ready_overlap.py` in the `p2-wpt-run-6`
 session — grep the vendored corpus for the string, cross-reference against
 `test_end` status entries in `.tmp/wpt-corpus/*.json`/`*.raw.jsonl`.
+
+## Исправлено (P1, 2026-08-23)
+
+Ровно one-line fix из раздела «Причина»: `fontSet` object literal
+(`_lumen_get_fonts`, `crates/js/src/dom.rs`) получил `ready: Promise.resolve()`
+тем же паттерном, что уже использовался в двух соседних местах шима
+(`dom.rs:8805`/`dom.rs:15403`). Lumen не отслеживает висящие загрузки
+`@font-face` через этот шим, поэтому уже-resolved промис — корректный
+минимум (совпадает с поведением апстрим-движков, когда все шрифты документа
+уже устоялись к моменту обращения к `document.fonts`, а именно это состояние
+и снимает шим при вызове). Юнит-тест
+`dom::tests::v8_ws_sse::document_fonts_ready_is_a_thenable_promise`
+(`crates/js/src/dom.rs`) проверяет `document.fonts.ready instanceof Promise`
+и наличие `.then`.
+
+Масштаб фикса не переизмерялся (нужен новый прогон WPT-RUN); ожидаемый эффект
+— 384 замеренных TIMEOUT (WPT-RUN-6, раздел «Масштаб» выше) должны стать
+быстрыми PASS/FAIL вместо ~10с таймаута на файл.
