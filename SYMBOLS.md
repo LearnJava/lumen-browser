@@ -1369,7 +1369,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/ipc/src/lib.rs:268` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
 `crates/ipc/src/lib.rs:278` **fn** `request` — Send a request and block until the matching response arrives
 
-## lumen-js  (246 symbols)
+## lumen-js  (248 symbols)
 
 `crates/js/src/audio_element.rs:55` **fn** `set_audio_playback_provider` — Install the platform audio playback backend
 `crates/js/src/broadcast_channel.rs:60` **struct** `LocalChannel` — A channel instance owned by the current runtime: the receiver half plus its id
@@ -1543,14 +1543,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/v8_runtime.rs:1351` **fn** `take_pointer_capture` — Release the active pointer capture, returning the former capture target nid
 `crates/js/src/v8_runtime.rs:1368` **fn** `flush_canvas_updates` — Drain dirty `<canvas>` 2D buffers for GPU re-upload. Mirrors
 `crates/js/src/v8_runtime.rs:1380` **fn** `register_img_bitmaps` — Register decoded `<img>` bitmaps for canvas `drawImage`, keyed by node id
-`crates/js/src/v8_runtime.rs:1398` **fn** `register_frame_document` — BUG-480 срез 2: зарегистрировать под-документ `<iframe>` для доступа из
-`crates/js/src/v8_runtime.rs:1426` **fn** `debug_heap_stats` — V8 isolate heap statistics: `(total_heap_size, used_heap_size)` in bytes
-`crates/js/src/v8_runtime.rs:1439` **fn** `set_import_map` — Install the import map (HTML LS §8.1.6.2) used to resolve bare module
-`crates/js/src/v8_runtime.rs:1545` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
-`crates/js/src/v8_runtime.rs:1616` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
-`crates/js/src/v8_runtime.rs:6406` **fn** `eval_and_report` — Evaluate a classic top-level `<script>` body exactly like
-`crates/js/src/v8_runtime.rs:6513` **fn** `eval_module_and_report` — Evaluate `source` as the entry ES module of a top-level page load
-`crates/js/src/v8_runtime.rs:6537` **fn** `eval_module_at_and_report` — External-module counterpart of [`Self::eval_module_and_report`], for
+`crates/js/src/v8_runtime.rs:1398` **fn** `register_frame_document` — BUG-480 срез 3: зарегистрировать загруженный под-документ `<iframe>` для доступа из
+`crates/js/src/v8_runtime.rs:1437` **fn** `register_parent_document` — BUG-480 срез 3: зарегистрировать документ **родителя** в JS-контексте
+`crates/js/src/v8_runtime.rs:1468` **fn** `register_top_document` — BUG-480 срез 3: зарегистрировать документ **верха** в JS-контексте
+`crates/js/src/v8_runtime.rs:1501` **fn** `debug_heap_stats` — V8 isolate heap statistics: `(total_heap_size, used_heap_size)` in bytes
+`crates/js/src/v8_runtime.rs:1514` **fn** `set_import_map` — Install the import map (HTML LS §8.1.6.2) used to resolve bare module
+`crates/js/src/v8_runtime.rs:1620` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
+`crates/js/src/v8_runtime.rs:1691` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
+`crates/js/src/v8_runtime.rs:6481` **fn** `eval_and_report` — Evaluate a classic top-level `<script>` body exactly like
+`crates/js/src/v8_runtime.rs:6588` **fn** `eval_module_and_report` — Evaluate `source` as the entry ES module of a top-level page load
+`crates/js/src/v8_runtime.rs:6612` **fn** `eval_module_at_and_report` — External-module counterpart of [`Self::eval_module_and_report`], for
 `crates/js/src/video_gif_store.rs:36` **struct** `VideoPlaybackState` — Per-`<video>` playback timing, stored by the shell after a GIF is decoded
 `crates/js/src/video_gif_store.rs:57` **fn** `current_ms` — Playback position in ms at a given real-clock instant
 `crates/js/src/video_gif_store.rs:66` **fn** `is_ended` — Whether playback has naturally ended (finite loop count exhausted)
@@ -5642,4 +5644,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:228` **fn** `count`
 
 ---
-*Total: 5565 symbols in 24 crates*
+*Total: 5567 symbols in 24 crates*

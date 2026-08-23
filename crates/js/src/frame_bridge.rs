@@ -16,7 +16,25 @@
 //! хосте), биндинг ложится в реестр — геттеры из `iframe_element.rs` начинают
 //! видеть фасады сразу, патчить враппер хоста не нужно.
 //!
-//! Границы среза 2:
+//! BUG-480 срез 3 — иерархия окон поверх того же реестра:
+//! - у **ребёнка** слоты `parent`/`top` заполняются биндингами на документы
+//!   предков (`register_parent_document`/`register_top_document`) — шим
+//!   переопределяет `window.parent`/`window.top`/`window.frameElement`/
+//!   `window.name` геттерами с честным fallback на прежнее поведение, пока
+//!   слотов нет;
+//! - в **каждом** контексте `window.length` становится живым счётчиком
+//!   дочерних фреймов, а `register_frame_document` ставит на `window`
+//!   индексный (`window[0]`…) и именованный (`window[имя]`) доступники;
+//!   `window.frames === window` остаётся самоссылкой (спека), индексный
+//!   доступ идёт через неё.
+//!
+//! Границы среза 3:
+//! - фасады не пробрасывают вызов функций между изолятами: `parent.foo()`,
+//!   где `foo` объявлена скриптом родителя, не работает (читать свойства
+//!   документа родителя можно);
+//! - `length`/индексные доступники фасадов остаются нулём/пустыми: счёт
+//!   фреймов чужого изолята недоступен, динамический `length` есть только у
+//!   настоящего `window` контекста;
 //! - доступ только чтение; мутации из родителя и события — будущие срезы;
 //! - cross-origin / opaque-sandbox (`sandbox` без `allow-same-origin`)
 //!   биндинги регистрируются с `accessible: false`: `contentWindow` отдаёт
@@ -30,32 +48,74 @@
 #[cfg(feature = "v8-backend")]
 use std::sync::{Arc, Mutex};
 
+/// Псевдо-bid слота «окно родителя» в реестре ([`FrameDocSlots::parent`]).
+///
+/// Обычные биндинги адресуются индексом в `frames`; специальные значения
+/// сверху диапазона `u32` позволяют всему семейству нативов `_lumen_f_*`
+/// работать со документом предка без второго семейства функций.
+#[cfg(feature = "v8-backend")]
+pub(crate) const PARENT_BID: u32 = u32::MAX;
+
+/// Псевдо-bid слота «верхнее окно» в реестре ([`FrameDocSlots::top`]).
+/// Заполняется только для фреймов глубины ≥ 2: у фрейма первого уровня
+/// `parent === top`, и обе геттер-цепочки ведут через [`PARENT_BID`].
+#[cfg(feature = "v8-backend")]
+pub(crate) const TOP_BID: u32 = u32::MAX - 1;
+
 /// Один зарегистрированный под-документ `<iframe>` в реестре рантайма.
 ///
-/// Живёт в [`FrameDocRegistry`] столько же, сколько контекст страницы:
+/// Живёт в [`FrameDocSlots`] столько же, сколько контекст страницы:
 /// биндинги никогда не удаляются по одному — замена страницы уносит весь
 /// рантайм вместе с реестром (тот же lifecycle, что у [`crate::img_bitmap_store`]).
 #[cfg(feature = "v8-backend")]
 pub(crate) struct FrameDocBinding {
     /// `NodeId` элемента-хоста `<iframe>` в документе родителя.
+    ///
+    /// Для биндингов-предков ([`PARENT_BID`]) — nid хоста в документе родителя:
+    /// по нему ребёнок строит `window.frameElement`. У топового слота хоста
+    /// нет — поле заполнено условным значением и не читается.
     pub(crate) host_nid: u32,
     /// Под-документ. Отдельный `Arc` — его же держит shell (`FrameHandle.doc`)
     /// и JS-контекст самого ребёнка.
     pub(crate) doc: Arc<Mutex<lumen_dom::Document>>,
     /// Разрешённый адрес под-документа (`about:srcdoc`/`about:blank`/URL).
     pub(crate) url: String,
+    /// Значение атрибута `name` хоста, если задан — ключ именованного доступа
+    /// `window[name]` (срез 3).
+    pub(crate) name: Option<String>,
     /// `false` — cross-origin или opaque sandbox: нативы чтения отдают пустые
     /// результаты, `.document` фасада окна — `null`.
     pub(crate) accessible: bool,
 }
 
-/// Реестр биндингов «хост → под-документ» одного V8-изолята.
+/// Реестр биндингов одного V8-изолята: дочерние фреймы + ссылки на предков.
 ///
-/// Общий `Arc` между `V8JsRuntime`, нативами этого модуля и вызовом
-/// [`V8JsRuntime::register_frame_document`]; индекс в векторе — стабильный
-/// идентификатор биндинга (`bid`) для всех нативов `_lumen_f_*`.
+/// `frames` — под-документы этого контекста (индекс = стабильный `bid` для
+/// нативов `_lumen_f_*`, порядок регистрации = порядок документа).
+/// `parent`/`top` — документы предков для контекста самого фрейма (срез 3):
+/// заполняются shell-ом через `register_parent_document`/`register_top_document`.
 #[cfg(feature = "v8-backend")]
-pub(crate) type FrameDocRegistry = Arc<Mutex<Vec<FrameDocBinding>>>;
+#[derive(Default)]
+pub(crate) struct FrameDocSlots {
+    pub(crate) frames: Vec<FrameDocBinding>,
+    pub(crate) parent: Option<FrameDocBinding>,
+    pub(crate) top: Option<FrameDocBinding>,
+}
+
+/// Общий `Arc` между `V8JsRuntime`, нативами этого модуля и вызовами
+/// `register_*_document`.
+#[cfg(feature = "v8-backend")]
+pub(crate) type FrameDocRegistry = Arc<Mutex<FrameDocSlots>>;
+
+/// Разрешить `bid` (индекс или псевдо-bid предка) в слот реестра.
+#[cfg(feature = "v8-backend")]
+fn resolve_slot(slots: &FrameDocSlots, bid: u32) -> Option<&FrameDocBinding> {
+    match bid {
+        PARENT_BID => slots.parent.as_ref(),
+        TOP_BID => slots.top.as_ref(),
+        i => slots.frames.get(i as usize),
+    }
+}
 
 /// Захватить биндинг `bid` на чтение, если он существует и разрешён.
 ///
@@ -69,7 +129,7 @@ fn with_accessible_doc<R>(
     empty: R,
 ) -> R {
     let reg = registry.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(binding) = reg.get(bid as usize) else {
+    let Some(binding) = resolve_slot(&reg, bid) else {
         return empty;
     };
     if !binding.accessible {
@@ -138,7 +198,7 @@ pub(crate) fn install_frame_bridge_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
     registry: FrameDocRegistry,
 ) -> lumen_core::JsResult<()> {
-    use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn3};
+    use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3};
     use lumen_core::ext::JsRuntime as _;
 
     // bid → есть ли биндинг вообще (для contentWindow, который существует
@@ -149,9 +209,78 @@ pub(crate) fn install_frame_bridge_v8(
             "_lumen_frame_binding",
             into_v8_fn1(move |host_nid: u32| -> Option<u32> {
                 let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
-                reg.iter()
+                reg.frames
+                    .iter()
                     .position(|b| b.host_nid == host_nid)
                     .map(|i| i as u32)
+            }),
+        )?;
+    }
+    // Срез 3: bid слотов предков текущего контекста (или null, если контекст
+    // сам верхний). Геттеры window.parent/top/frameElement читают их лениво.
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_parent_binding",
+            into_v8_fn0(move || -> Option<u32> {
+                reg.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .parent
+                    .is_some()
+                    .then_some(PARENT_BID)
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_top_binding",
+            into_v8_fn0(move || -> Option<u32> {
+                reg.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .top
+                    .is_some()
+                    .then_some(TOP_BID)
+            }),
+        )?;
+    }
+    // Срез 3: число дочерних фреймов этого контекста (window.length) и доступ
+    // к биндингу по индексу регистрации (постановка индексных/именованных
+    // доступников на window после каждого register_frame_document).
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_frame_count",
+            into_v8_fn0(move || -> u32 {
+                reg.lock().unwrap_or_else(|e| e.into_inner()).frames.len() as u32
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_frame_host_at",
+            into_v8_fn1(move |idx: u32| -> Option<u32> {
+                reg.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .frames
+                    .get(idx as usize)
+                    .map(|b| b.host_nid)
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_frame_name_at",
+            into_v8_fn1(move |idx: u32| -> Option<String> {
+                reg.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .frames
+                    .get(idx as usize)?
+                    .name
+                    .clone()
+                    .filter(|n| !n.is_empty())
             }),
         )?;
     }
@@ -160,10 +289,8 @@ pub(crate) fn install_frame_bridge_v8(
         rt.register_native(
             "_lumen_f_accessible",
             into_v8_fn1(move |bid: u32| -> bool {
-                reg.lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .get(bid as usize)
-                    .is_some_and(|b| b.accessible)
+                let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
+                resolve_slot(&reg, bid).is_some_and(|b| b.accessible)
             }),
         )?;
     }
@@ -172,9 +299,8 @@ pub(crate) fn install_frame_bridge_v8(
         rt.register_native(
             "_lumen_f_host",
             into_v8_fn1(move |bid: u32| -> Option<u32> {
-                reg.lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .get(bid as usize)
+                let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
+                resolve_slot(&reg, bid)
                     .filter(|b| b.accessible)
                     .map(|b| b.host_nid)
             }),
@@ -185,7 +311,8 @@ pub(crate) fn install_frame_bridge_v8(
         rt.register_native(
             "_lumen_f_url",
             into_v8_fn1(move |bid: u32| -> String {
-                match reg.lock().unwrap_or_else(|e| e.into_inner()).get(bid as usize) {
+                let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
+                match resolve_slot(&reg, bid) {
                     Some(b) if b.accessible => b.url.clone(),
                     _ => String::new(),
                 }
@@ -427,9 +554,22 @@ pub(crate) fn install_frame_bridge_v8(
 ///
 /// Точка входа для геттеров `iframe_element.rs` — две глобальные функции,
 /// принимающие `__nid__` хоста; всё остальное спрятано в замыкании модуля.
+///
+/// Срез 3 добавляет: (1) переопределение `window.parent/top/frameElement/
+/// length` геттерами, которые читают слоты предков реестра и пока тех нет
+/// ведут себя как прежние константы из WEB_API_SHIM; (2) глобальный
+/// `_lumen_frame_install_index(idx)`, который `register_frame_document`
+/// вызывает после каждой регистрации — ставит на `window` индексный и
+/// именованный доступники к окну фрейма. Исполняется строго после
+/// WEB_API_SHIM (порядок в `install_dom`), поэтому `window` уже существует
+/// в проде; в минимальных тестовых изолятах блок пропускается через typeof.
 #[cfg(feature = "v8-backend")]
 const FRAME_BRIDGE_SHIM: &str = r#"(function() {
   'use strict';
+
+  // Псевдо-bid слотов предков (зеркало frame_bridge::PARENT_BID/TOP_BID).
+  var PARENT_BID = 0xFFFFFFFF;
+  var TOP_BID = 0xFFFFFFFE;
 
   // Интерны фасадов, ключ — bid (стабильный индекс биндинга). Живут столько
   // же, сколько контекст страницы: identity фасадов обязана быть постоянной.
@@ -441,6 +581,19 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     if (hostNid === null || hostNid === undefined) return null;
     var bid = _lumen_frame_binding(hostNid);
     return (bid === null || bid === undefined) ? null : bid;
+  }
+
+  function isAncestorBid(bid) { return bid === PARENT_BID || bid === TOP_BID; }
+
+  // Разрешение top-окна текущего КОНТЕКСТА (не фасада): отдельный слот top,
+  // иначе слот parent (фрейм 1-го уровня), иначе сам window.
+  function topOfContext() {
+    if (typeof window === 'undefined') return null;
+    var t = _lumen_top_binding();
+    if (t !== null && t !== undefined) return winFacade(t);
+    var p = _lumen_parent_binding();
+    if (p !== null && p !== undefined) return winFacade(p);
+    return window;
   }
 
   function frameElem(bid, nid) {
@@ -528,22 +681,36 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     w.window = w;
     w.self = w;
     w.frames = w;
-    // Бридж живёт в изоляте родителя, глубина фреймов <= MAX_FRAME_DEPTH(2):
-    // parent и top — настоящий window этого контекста. Читается лениво:
-    // шим исполняется до WEB_API_SHIM-определений? Нет — после, но тестовые
-    // изоляты без полного DOM могут не иметь window вовсе.
+    // parent/top зависят от того, ЧЕЙ фасад читают и откуда. Фасад предка
+    // (PARENT_BID/TOP_BID в изоляте ребёнка) сам себе parent/top: контекст,
+    // в котором он построен, — его потомок. Фасад дочернего фрейма, читаемый
+    // из родителя, отсылает к настоящему окну читающего контекста (срез 2).
     Object.defineProperty(w, 'parent', {
-      get: function() { return typeof window !== 'undefined' ? window : null; },
+      get: function() {
+        if (isAncestorBid(bid)) return w;
+        return typeof window !== 'undefined' ? window : null;
+      },
       configurable: true,
     });
     Object.defineProperty(w, 'top', {
-      get: function() { return typeof window !== 'undefined' ? window : null; },
+      get: function() {
+        if (isAncestorBid(bid)) return w;
+        return topOfContext();
+      },
       configurable: true,
     });
     Object.defineProperty(w, 'closed', { get: function() { return false; }, configurable: true });
+    // Счётчик фреймов чужого изолята недоступен — у фасадов честный ноль;
+    // живой length есть только у настоящего window (ниже).
     w.length = 0;
     Object.defineProperty(w, 'frameElement', {
       get: function() {
+        if (!_lumen_f_accessible(bid)) return null;
+        // Хост фрейма лежит в документе родителя; для фасада ПРЕДКА
+        // (читается из изолята ребёнка) элемент строится нативами бриджа
+        // над документом родителя, для обычного фасада — обычным враппером
+        // текущего документа (хост и читающий код живут в одном дереве).
+        if (isAncestorBid(bid)) return frameElem(bid, _lumen_f_host(bid));
         return (hostNid !== null && typeof _lumen_make_element === 'function')
           ? _lumen_make_element(hostNid)
           : null;
@@ -553,7 +720,10 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     Object.defineProperty(w, 'name', {
       get: function() {
         if (hostNid === null) return '';
-        var a = _lumen_get_attr(hostNid, 'name');
+        // Аналогично frameElement: атрибут хоста предка читаем через бридж.
+        var a = isAncestorBid(bid)
+          ? _lumen_f_attr(bid, hostNid, 'name')
+          : _lumen_get_attr(hostNid, 'name');
         return (a === null || a === undefined) ? '' : a;
       },
       configurable: true,
@@ -580,6 +750,112 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     if (bid === null) return null;
     return winFacade(bid);
   };
+
+  // ── Срез 3: иерархия окон настоящего window этого контекста ──────────────
+  // Установщики вызываются ЛЕНИВО из register_parent_document/
+  // register_frame_document: пока фреймов нет, глобальные свойства контекста
+  // остаются ровно теми, что поставил WEB_API_SHIM (`window.parent = window`,
+  // `length = 0`). Это критично: инсталлтайм-акцессор на parent/top/length
+  // ломает топ-левел `var parent = …` страниц и тестов (V8 не подменяет
+  // существующий акцессор var-объявлением). Первый же вызов регистрации
+  // меняет свойства; попытка поверх НЕконфигурируемого var-биндинга
+  // пользователя молча пропускается try/catch — деградация до прежнего
+  // значения.
+
+  var __hierarchyInstalled = false;
+  var __lengthInstalled = false;
+
+  function installLengthAccessor() {
+    if (__lengthInstalled) return;
+    __lengthInstalled = true;
+    try {
+      Object.defineProperty(window, 'length', {
+        get: function() { return _lumen_frame_count(); },
+        configurable: true,
+      });
+    } catch (e) {}
+  }
+
+  function installHierarchyAccessors() {
+    if (__hierarchyInstalled) return;
+    __hierarchyInstalled = true;
+    var __prevName = window.name;
+    try {
+      Object.defineProperty(window, 'parent', {
+        get: function() {
+          var p = _lumen_parent_binding();
+          return (p !== null && p !== undefined) ? winFacade(p) : window;
+        },
+        configurable: true,
+      });
+    } catch (e) {}
+    try {
+      Object.defineProperty(window, 'top', {
+        get: function() { return topOfContext(); },
+        configurable: true,
+      });
+    } catch (e) {}
+    try {
+      Object.defineProperty(window, 'frameElement', {
+        get: function() {
+          var p = _lumen_parent_binding();
+          return (p !== null && p !== undefined && _lumen_f_accessible(p))
+            ? winFacade(p).frameElement
+            : null;
+        },
+        configurable: true,
+      });
+    } catch (e) {}
+    // window.name фрейма — атрибут name хоста (HTML LS §7.2.3); явное
+    // присваивание перекрывает атрибут до замены документа.
+    var __customName = null;
+    try {
+      Object.defineProperty(window, 'name', {
+        get: function() {
+          if (__customName !== null) return __customName;
+          var p = _lumen_parent_binding();
+          if (p === null || p === undefined || !_lumen_f_accessible(p)) {
+            return __prevName === undefined ? '' : __prevName;
+          }
+          var host = _lumen_f_host(p);
+          if (host === null || host === undefined) return '';
+          var a = _lumen_f_attr(p, host, 'name');
+          return (a === null || a === undefined) ? '' : a;
+        },
+        set: function(v) { __customName = String(v == null ? '' : v); },
+        configurable: true,
+      });
+    } catch (e) {}
+  }
+
+  // Родитель зарегистрирован: включить parent/top/frameElement/name.
+  globalThis._lumen_frame_install_hierarchy = function() {
+    if (typeof window === 'undefined') return;
+    installHierarchyAccessors();
+  };
+
+  // Фрейм зарегистрирован: индексный (`window[idx]`) + именованный
+  // (`window[имя]`) доступники окна фрейма; живой length. Вызывается из
+  // V8JsRuntime::register_frame_document с индексом биндинга; порядок
+  // регистрации = порядок документа (спечный tree order). Именованный
+  // доступ покрывает ТОЛЬКО iframe (embed/form/img/object — не бриджевая
+  // территория).
+  globalThis._lumen_frame_install_index = function(idx) {
+    if (typeof window === 'undefined') return;
+    installLengthAccessor();
+    try {
+      var host = _lumen_frame_host_at(idx);
+      if (host === null || host === undefined) return;
+      var mk = function(h) {
+        return function() { return _lumen_frame_content_window(h); };
+      };
+      Object.defineProperty(window, String(idx), { get: mk(host), configurable: true });
+      var nm = _lumen_frame_name_at(idx);
+      if (nm) {
+        Object.defineProperty(window, nm, { get: mk(host), configurable: true });
+      }
+    } catch (e) {}
+  };
 })();
 "#;
 
@@ -599,18 +875,20 @@ mod tests {
     /// cross-origin/opaque-sandbox фрейм.
     fn with_frame(html: &str, accessible: bool, f: impl FnOnce(&V8JsRuntime)) {
         let rt = V8JsRuntime::new().unwrap();
-        let registry: FrameDocRegistry = Arc::new(Mutex::new(Vec::new()));
+        let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        // Прод-контекст всегда имеет window (WEB_API_SHIM исполняется раньше
+        // бриджа); тестовый изолят объявляет его ДО установки, чтобы блок
+        // переопределения window.parent/top/… в шиме отработал так же.
+        rt.eval("var window = globalThis;").unwrap();
         install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
         let doc = lumen_html_parser::parse(html);
-        registry.lock().unwrap().push(FrameDocBinding {
+        registry.lock().unwrap().frames.push(FrameDocBinding {
             host_nid: 7,
             doc: Arc::new(Mutex::new(doc)),
             url: "about:srcdoc".to_owned(),
+            name: None,
             accessible,
         });
-        // Прод-контекст всегда имеет window (WEB_API_SHIM); тестовый изолят —
-        // нет, а шим бриджа связывает w.parent/w.top с ним.
-        rt.eval("var window = globalThis;").unwrap();
         f(&rt);
     }
 
@@ -618,8 +896,57 @@ mod tests {
     /// загруженных фреймов.
     fn with_empty_registry(f: impl FnOnce(&V8JsRuntime)) {
         let rt = V8JsRuntime::new().unwrap();
-        let registry: FrameDocRegistry = Arc::new(Mutex::new(Vec::new()));
+        let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        rt.eval("var window = globalThis;").unwrap();
         install_frame_bridge_v8(&rt, registry).unwrap();
+        f(&rt);
+    }
+
+    /// Контекст фрейма: реестр со слотом родителя (и опционально верха),
+    /// моделирующий JS-изолят загруженного `<iframe>`.
+    ///
+    /// `parent_html` — документ родителя (читается ребёнком при доступном
+    /// мосте); `top_html` — отдельный документ верха для глубины 2. При
+    /// `top_html == None` слот top не заполняется: у фрейма первого уровня
+    /// `top === parent` разрешается через [`PARENT_BID`].
+    ///
+    /// После заполнения слотов вызывается `_lumen_frame_install_hierarchy` —
+    /// тот же шаг, что делает `register_parent_document` в проде (шим
+    /// ставит геттеры parent/top/frameElement/name лениво, см. шим).
+    fn with_child_context(
+        parent_html: &str,
+        top_html: Option<&str>,
+        host_nid: u32,
+        accessible: bool,
+        f: impl FnOnce(&V8JsRuntime),
+    ) {
+        let rt = V8JsRuntime::new().unwrap();
+        let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        rt.eval("var window = globalThis;").unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        {
+            let mut reg = registry.lock().unwrap();
+            reg.parent = Some(FrameDocBinding {
+                host_nid,
+                doc: Arc::new(Mutex::new(lumen_html_parser::parse(parent_html))),
+                url: "https://parent.example/".to_owned(),
+                name: Some("hostframe".to_owned()),
+                accessible,
+            });
+            if let Some(top) = top_html {
+                reg.top = Some(FrameDocBinding {
+                    host_nid: 0,
+                    doc: Arc::new(Mutex::new(lumen_html_parser::parse(top))),
+                    url: "https://top.example/".to_owned(),
+                    name: None,
+                    accessible,
+                });
+            }
+        }
+        rt.eval(
+            "typeof _lumen_frame_install_hierarchy === 'function' && _lumen_frame_install_hierarchy()",
+        )
+        .unwrap();
         f(&rt);
     }
 
@@ -744,5 +1071,158 @@ mod tests {
                  b.offsetWidth === 0 && b.getBoundingClientRect().width === 0"
             ));
         });
+    }
+
+    // ── Срез 3: иерархия окон ─────────────────────────────────────────────────
+
+    #[test]
+    fn top_level_context_keeps_self_parent_and_top() {
+        // Иерархия включена (как после первой регистрации в любом контексте),
+        // но слотов предков нет: геттеры обязаны воспроизводить прежние
+        // константы WEB_API_SHIM — parent/top = self, frameElement = null,
+        // length = число фреймов (0).
+        with_empty_registry(|rt| {
+            rt.eval(
+                "typeof _lumen_frame_install_hierarchy === 'function' && _lumen_frame_install_hierarchy()",
+            )
+            .unwrap();
+            assert!(eval_bool(rt, "typeof _lumen_frame_install_hierarchy === 'function'"));
+            assert!(eval_bool(rt, "window.parent === window"), "parent fallback");
+            assert!(eval_bool(rt, "window.top === window"), "top fallback");
+            assert!(eval_bool(rt, "window.frameElement === null"), "frameElement fallback");
+            // length ставит только регистрация фрейма (_lumen_frame_install_index):
+            // здесь фреймов нет — геттера ещё нет, в проде статический 0 из
+            // WEB_API_SHIM, в минимальном изоляте undefined.
+            assert!(eval_bool(rt, "window.length === undefined"), "length not yet installed");
+        });
+    }
+
+    #[test]
+    fn child_window_parent_reads_parent_document() {
+        with_child_context(
+            "<html><body><div id='p'>parent</div></body></html>",
+            None,
+            42,
+            true,
+            |rt| {
+                assert!(eval_bool(
+                    rt,
+                    "window.parent !== window \
+                     && window.top === window.parent \
+                     && window.parent.document !== null \
+                     && window.parent.document.getElementById('p').textContent === 'parent' \
+                     && window.parent.location.href === 'https://parent.example/'"
+                ));
+            },
+        );
+    }
+
+    #[test]
+    fn child_parent_facade_is_interned_and_self_referential() {
+        with_child_context("<html><body></body></html>", None, 42, true, |rt| {
+            assert!(eval_bool(
+                rt,
+                "var p1 = window.parent, p2 = window.parent; \
+                 p1 === p2 && p1.parent === p1 && p1.top === p1 \
+                 && p1.self === p1 && p1.window === p1"
+            ));
+        });
+    }
+
+    #[test]
+    fn grandchild_top_resolves_root_not_direct_parent() {
+        // Слот parent указывает на документ промежуточного фрейма, top — на
+        // корень: window.top должен вести в корень, отличаясь от parent.
+        with_child_context(
+            "<html><body><b>mid</b></body></html>",
+            Some("<html><body><i>root</i></body></html>"),
+            9,
+            true,
+            |rt| {
+                assert!(eval_bool(
+                    rt,
+                    "window.parent !== window && window.top !== window.parent \
+                     && window.top.document.querySelector('i').textContent === 'root' \
+                     && window.parent.document.querySelector('b').textContent === 'mid' \
+                     && window.top.parent === window.top"
+                ));
+            },
+        );
+    }
+
+    #[test]
+    fn cross_origin_child_gets_window_but_no_documents() {
+        with_child_context(
+            "<html><body><div>secret</div></body></html>",
+            None,
+            42,
+            false,
+            |rt| {
+                assert!(eval_bool(
+                    rt,
+                    "var p = window.parent; \
+                     p !== null && typeof p === 'object' \
+                     && p.document === null \
+                     && window.top.document === null \
+                     && window.frameElement === null \
+                     && window.name === ''"
+                ));
+            },
+        );
+    }
+
+    #[test]
+    fn child_frame_element_is_host_facade_from_parent_tree() {
+        // host_nid = 4 — индекс <iframe> в дереве родителя
+        // [root, html, head, body, iframe]; нативы читают nid без проверок.
+        with_child_context(
+            "<html><body><iframe id='host' name='hostframe'></iframe></body></html>",
+            None,
+            4,
+            true,
+            |rt| {
+                assert!(eval_bool(
+                    rt,
+                    "var fe = window.frameElement; \
+                     fe !== null && fe.localName === 'iframe' && fe.id === 'host' \
+                     && fe.getAttribute('name') === 'hostframe'"
+                ));
+                assert!(eval_bool(rt, "window.name === 'hostframe'"));
+            },
+        );
+    }
+
+    #[test]
+    fn frame_length_and_accessors_track_registrations() {
+        // Регистрация двух фреймов + постановка доступников тем же шагом,
+        // что делает register_frame_document в проде (push + install_index).
+        let rt = V8JsRuntime::new().unwrap();
+        let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        rt.eval("var window = globalThis;").unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        for (i, (nid, name)) in [(0u32, (11u32, None)), (1u32, (12u32, Some("second".to_owned())))] {
+            registry.lock().unwrap().frames.push(FrameDocBinding {
+                host_nid: nid,
+                doc: Arc::new(Mutex::new(lumen_html_parser::parse(
+                    "<html><body><p>x</p></body></html>",
+                ))),
+                url: "about:blank".to_owned(),
+                name,
+                accessible: true,
+            });
+            rt.eval(&format!("_lumen_frame_install_index({i})")).unwrap();
+        }
+        assert!(eval_bool(&rt, "window.length === 2"));
+        assert!(eval_bool(
+            &rt,
+            "window[0] !== null && window[0] !== window \
+             && window[0].document.body.tagName === 'BODY'"
+        ));
+        assert!(eval_bool(
+            &rt,
+            "window.second !== undefined && window.second === window[1] \
+             && window[0] === window[0]"
+        ));
+        assert!(eval_bool(&rt, "window[5] === undefined"));
     }
 }

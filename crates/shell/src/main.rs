@@ -2927,7 +2927,9 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// (`crates/js/src/frame_bridge.rs`).
     ///
     /// Вызывается из [`load_frame_sub_documents`] после исполнения скриптов
-    /// ребёнка и **до** диспатча trusted `load` на хосте. `accessible=false`
+    /// ребёнка и **до** диспатча trusted `load` на хосте. `name` — значение
+    /// атрибута `name` хоста (ключ именованного доступа `window[name]`,
+    /// срез 3). `accessible=false`
     /// (cross-origin / opaque sandbox) регистрирует биндинг без доступа к
     /// содержимому: `contentWindow` есть, `contentDocument` — `null`.
     /// Default no-op покрывает сборки без v8.
@@ -2936,9 +2938,31 @@ pub(crate) trait PersistentJs: Send + Sync {
         _host_nid: u32,
         _doc: Arc<Mutex<Document>>,
         _url: &str,
+        _name: Option<&str>,
         _accessible: bool,
     ) {
     }
+    /// BUG-480 срез 3: зарегистрировать документ родителя в JS-контексте
+    /// фрейма — внутри фрейма `window.parent`/`window.frameElement`/`window.name`
+    /// видят фасад родительской стороны (`crates/js/src/frame_bridge.rs`).
+    ///
+    /// Вызывается из [`load_frame_sub_documents`] сразу после создания
+    /// контекста ребёнка и до его DOMContentLoaded/load: обработчики ребёнка
+    /// читают предков из любого события. `host_nid` — nid хоста в дереве
+    /// родителя. Default no-op покрывает сборки без v8.
+    fn register_parent_document(
+        &self,
+        _host_nid: u32,
+        _doc: Arc<Mutex<Document>>,
+        _url: &str,
+        _accessible: bool,
+    ) {
+    }
+    /// BUG-480 срез 3: зарегистрировать документ верхнего окна в JS-контексте
+    /// фрейма глубины ≥ 2 (`window.top` ведёт в корень, а не в непосредственного
+    /// родителя). Для фрейма первого уровня не вызывается — там top разрешается
+    /// через [`PersistentJs::register_parent_document`]. Default no-op без v8.
+    fn register_top_document(&self, _doc: Arc<Mutex<Document>>, _url: &str, _accessible: bool) {}
     /// Deliver a PerformancePaintTiming entry to JS PerformanceObservers.
     ///
     /// `name` is `"first-paint"` or `"first-contentful-paint"`;
@@ -3385,10 +3409,29 @@ impl PersistentJs for V8PersistentJs {
         host_nid: u32,
         doc: Arc<Mutex<Document>>,
         url: &str,
+        name: Option<&str>,
+        accessible: bool,
+    ) {
+        self.rt.register_frame_document(
+            host_nid,
+            doc,
+            url.to_owned(),
+            name.map(str::to_owned),
+            accessible,
+        );
+    }
+    fn register_parent_document(
+        &self,
+        host_nid: u32,
+        doc: Arc<Mutex<Document>>,
+        url: &str,
         accessible: bool,
     ) {
         self.rt
-            .register_frame_document(host_nid, doc, url.to_owned(), accessible);
+            .register_parent_document(host_nid, doc, url.to_owned(), accessible);
+    }
+    fn register_top_document(&self, doc: Arc<Mutex<Document>>, url: &str, accessible: bool) {
+        self.rt.register_top_document(doc, url.to_owned(), accessible);
     }
     fn deliver_paint_timing(&self, name: &str, start_ms: f64) {
         self.eval_js(&format!(
@@ -5463,10 +5506,7 @@ fn parse_and_layout(
         ResourceBase::File(_) => (None, None, None),
     };
     // URL страницы для инициализации window.location в JS.
-    let page_url = match base {
-        ResourceBase::Url(u) => u.as_str().to_owned(),
-        ResourceBase::File(p) => format!("file://{}", p.display()),
-    };
+    let page_url = base_url_string(base);
     // Extension content scripts: collect JS sources that match the page URL.
     let ext_registry = extensions::ExtensionRegistry::load();
     let ext_scripts = ext_registry.content_scripts_for_url(&page_url);
@@ -5545,11 +5585,15 @@ fn parse_and_layout(
 
     // BUG-480 срез 1: загрузка sub-документов <iframe>. Локи внутри функции
     // короткие — скрипты детей и `load` хоста идут без удержания дерева.
+    // Срез 3: документ/база страницы передаются и как top — у фреймов
+    // первого уровня parent === top, глубже top всегда корень.
     let frames = {
         let _s = lumen_core::trace::span("fetch-iframes", "net");
         load_frame_sub_documents(
             &doc_arc,
             0,
+            base,
+            &doc_arc,
             base,
             sink,
             frame_cookie_jar,
@@ -7503,8 +7547,19 @@ fn url_origin_str(url: &str) -> Option<String> {
 /// у `file://` нет хоста, и строгая проверка сделала бы недоступным самый
 /// частый локальный сценарий; отклонение от спеки задокументировано в
 /// bugs/BUG-480-OPEN.md.
-fn frame_access_allowed(parent_base: &ResourceBase, child_url: &str, opaque_sandbox: bool) -> bool {
-    if opaque_sandbox {
+/// URL базы в строковой форме для фасадов `location`/`URL` (BUG-480 срез 3).
+///
+/// Единственное каноническое правило вывода адреса из [`ResourceBase`] — то
+/// же, что у `page_url` в `parse_and_layout`: сетевая база берётся как есть,
+/// файловая получает схему `file://`.
+fn base_url_string(base: &ResourceBase) -> String {
+    match base {
+        ResourceBase::Url(u) => u.clone(),
+        ResourceBase::File(p) => format!("file://{}", p.display()),
+    }
+}
+
+fn frame_access_allowed(parent_base: &ResourceBase, child_url: &str, opaque_sandbox: bool) -> bool {    if opaque_sandbox {
         return false;
     }
     if child_url.starts_with("about:") {
@@ -7550,6 +7605,12 @@ fn fire_iframe_load_event(parent_js: Option<&Arc<dyn PersistentJs>>, host: NodeI
 /// на элементе-хосте. `loading="lazy"` пропускается до появления
 /// viewport-прокси (отдельный срез).
 ///
+/// Срез 3 BUG-480: контексту ребёнка передаются документы предков
+/// (`window.parent`/`window.top`), а родителю — биндинг под-документа с именем
+/// хоста (`window[name]`). `top_doc`/`top_base` — документ и база ВЕРХНЕГО
+/// окна страницы; при первом вызове совпадают с `parent`/`base`, в рекурсии
+/// передаются без изменений.
+///
 /// Блокировки:
 /// - глубина рекурсии ограничена [`MAX_FRAME_DEPTH`];
 /// - `sandbox` без `allow-scripts` гейтится внутри `run_scripts_with_dom`;
@@ -7568,6 +7629,8 @@ fn load_frame_sub_documents(
     parent: &Arc<Mutex<Document>>,
     depth: usize,
     base: &ResourceBase,
+    top_doc: &Arc<Mutex<Document>>,
+    top_base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
@@ -7584,6 +7647,10 @@ fn load_frame_sub_documents(
     cross_origin_isolated: bool,
     parent_js: Option<&Arc<dyn PersistentJs>>,
 ) -> Vec<FrameHandle> {
+    // URL родителя и верха для фасадов location/URL у предков (срез 3):
+    // вычисляются один раз на уровень рекурсии.
+    let parent_url = base_url_string(base);
+    let top_url = base_url_string(top_base);
     // Короткий лок: собираем описания фреймов и отпускаем дерево — дальше
     // сеть/скрипты/события, которые вправе читать документ.
     let infos = {
@@ -7666,6 +7733,27 @@ fn load_frame_sub_documents(
             };
             eprintln!("iframe: навигация из под-документа ({child_url}) не поддерживается (BUG-480 срез 1), запрос '{target}' отклонён");
         }
+        // Срез 3 BUG-480: ссылки на предков в контексте ребёнка — до его
+        // DOMContentLoaded/load, чтобы обработчики (в т.ч. встроенный
+        // testharness на window load) читали window.parent/top/frameElement
+        // сразу. Инлайн-скрипты ребёнка к этому моменту уже исполнены и при
+        // чтении видели прежний fallback (parent === window) — известное
+        // ограничение среза.
+        if let Some(js) = &child_js {
+            let accessible_parent = frame_access_allowed(base, &child_url, opaque);
+            js.register_parent_document(
+                info.node.index() as u32,
+                Arc::clone(parent),
+                &parent_url,
+                accessible_parent,
+            );
+            // Ребёнок глубины ≥ 2 получает отдельный слот top: его верх —
+            // корень страницы, а не непосредственный родитель.
+            if depth >= 1 {
+                let accessible_top = frame_access_allowed(top_base, &child_url, opaque);
+                js.register_top_document(Arc::clone(top_doc), &top_url, accessible_top);
+            }
+        }
         // Lifecycle ребёнка: DOMContentLoaded сразу после parse+inline-скриптов
         // (тот же порядок, что у top-level в parse_and_layout); window load —
         // сразу следом: подресурсы фрейма (img/css) — отдельный срез, а
@@ -7683,6 +7771,8 @@ fn load_frame_sub_documents(
                     &child_doc_arc,
                     depth + 1,
                     &child_base,
+                    top_doc,
+                    top_base,
                     sink,
                     cookie_jar.clone(),
                     fetch_provider.clone(),
@@ -7703,13 +7793,15 @@ fn load_frame_sub_documents(
         }
         // BUG-480 срез 2: биндинг «хост → под-документ» для contentWindow/
         // contentDocument родителя — строго до trusted `load` на хосте,
-        // чтобы обработчики читали фасады сразу из обработчика.
+        // чтобы обработчики читали фасады сразу из обработчика. Срез 3:
+        // имя хоста едет вместе с биндингом (ключ window[name]).
         if let Some(js) = parent_js {
             let accessible = frame_access_allowed(base, &child_url, opaque);
             js.register_iframe_document(
                 info.node.index() as u32,
                 Arc::clone(&child_doc_arc),
                 &child_url,
+                info.name.as_deref(),
                 accessible,
             );
         }
