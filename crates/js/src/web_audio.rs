@@ -498,7 +498,7 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
     this._state = s;
     var evt = { type: 'statechange' };
     if (typeof this.onstatechange === 'function') {
-      try { this.onstatechange(evt); } catch(e) {}
+      try { this.onstatechange(evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
     }
     var ls = this._stateListeners.slice();
     for (var i = 0; i < ls.length; i++) { try { ls[i](evt); } catch(e) {} }
@@ -647,9 +647,9 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
     return new Promise(function(resolve) {
       self._setState('closed');
       var evt = { type: 'complete', renderedBuffer: buf };
-      if (typeof self.oncomplete === 'function') { try { self.oncomplete(evt); } catch(e) {} }
+      if (typeof self.oncomplete === 'function') { try { self.oncomplete(evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
       var ls = self._completeListeners.slice();
-      for (var i = 0; i < ls.length; i++) { try { ls[i](evt); } catch(e) {} }
+      for (var i = 0; i < ls.length; i++) { try { ls[i](evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
       resolve(buf);
     });
   };
@@ -883,6 +883,53 @@ mod tests_v8 {
                 var ac = new AudioContext();
                 var buf = new ArrayBuffer(16);
                 ac.decodeAudioData(buf) instanceof Promise
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
+    }
+
+    /// BUG-591: `oncomplete` used to run inside a bare `catch (e) {}`, which
+    /// is why every `webaudio/resources/audioparam-testing.js` comparison —
+    /// all of which run from that handler — died without a word (BUG-828
+    /// names this as the reason those files TIMEOUT instead of failing).
+    ///
+    /// The call is typeof-guarded, and this runtime is exactly why: it has no
+    /// page DOM at all, so `_lumen_report_exception` does not exist unless a
+    /// caller (here, the test) supplies one. An unguarded call would throw a
+    /// `ReferenceError` from inside the `catch` and take the rest of the
+    /// dispatch with it — worse than the swallow it replaces.
+    #[test]
+    fn bug591_offline_context_oncomplete_exception_is_reported() {
+        let rt = rt_with_web_audio();
+        let reported = rt
+            .eval(
+                r#"
+                var seen = null;
+                globalThis._lumen_report_exception = function(e) { seen = e.message; };
+                var oc = new OfflineAudioContext(1, 128, 44100);
+                oc.oncomplete = function() { throw new Error('oncomplete-boom'); };
+                oc.startRendering();
+                seen
+                "#,
+            )
+            .unwrap();
+        assert_eq!(reported, JsValue::String("oncomplete-boom".to_string()));
+    }
+
+    /// The other half of the guard: with no reporter installed the handler's
+    /// exception must still not escape the shim (the DOM-less runtime is a
+    /// real configuration — `--dump-*`, SVG rasterization, unit tests).
+    #[test]
+    fn bug591_offline_context_oncomplete_exception_without_reporter_is_contained() {
+        let rt = rt_with_web_audio();
+        let ok = rt
+            .eval(
+                r#"
+                var oc = new OfflineAudioContext(1, 128, 44100);
+                oc.oncomplete = function() { throw new Error('no-reporter-boom'); };
+                oc.startRendering();
+                true
                 "#,
             )
             .unwrap();

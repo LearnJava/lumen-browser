@@ -139,9 +139,9 @@ SpeechSynthesisUtterance.prototype._fire = function(type, extra) {
         for (var k in extra) ev[k] = extra[k];
     }
     var handler = this['on' + type];
-    if (typeof handler === 'function') { try { handler.call(this, ev); } catch(_) {} }
+    if (typeof handler === 'function') { try { handler.call(this, ev); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); } }
     var ls = this._listeners[type];
-    if (ls) ls.forEach(function(f) { try { f(ev); } catch(_) {} });
+    if (ls) ls.forEach(function(f) { try { f(ev); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); } });
 };
 
 // ── SpeechSynthesis (singleton) ───────────────────────────────────────────────
@@ -251,9 +251,9 @@ SpeechRecognition.prototype.removeEventListener = function(type, fn) {
 SpeechRecognition.prototype._fire = function(type, extra) {
     var ev = Object.assign({ type: type }, extra || {});
     var handler = this['on' + type];
-    if (typeof handler === 'function') { try { handler.call(this, ev); } catch(_) {} }
+    if (typeof handler === 'function') { try { handler.call(this, ev); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); } }
     var ls = this._listeners[type];
-    if (ls) ls.forEach(function(f) { try { f(ev); } catch(_) {} });
+    if (ls) ls.forEach(function(f) { try { f(ev); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); } });
 };
 SpeechRecognition.prototype.start = function() {
     var self = this;

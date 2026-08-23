@@ -128,11 +128,11 @@ const WAKE_LOCK_SHIM: &str = r#"(function() {
   WakeLockSentinel.prototype._fireRelease = function() {
     var evt = { type: 'release', target: this };
     if (typeof this.onrelease === 'function') {
-      try { this.onrelease(evt); } catch(e) {}
+      try { this.onrelease(evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
     }
     var listeners = (this._listeners['release'] || []).slice();
     for (var i = 0; i < listeners.length; i++) {
-      try { listeners[i](evt); } catch(e) {}
+      try { listeners[i](evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
     }
   };
 

@@ -158,7 +158,7 @@ const MEDIA_SESSION_SHIM: &str = r#"(function() {
   globalThis._lumen_fire_media_action = function(action, details) {
     var handler = _actionHandlers[action];
     if (typeof handler === 'function') {
-      try { handler(details || {}); } catch(_) {}
+      try { handler(details || {}); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); }
     }
   };
 

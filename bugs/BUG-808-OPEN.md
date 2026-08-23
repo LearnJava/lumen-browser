@@ -32,7 +32,7 @@ anim.addEventListener("finish", () => console.log("B"));     // TypeError
 `Object.create(EventTarget.prototype)` стоит). Поэтому вызов не просто молчит,
 а **бросает**: в логе пробы стоит
 `script error: JS runtime error: anim.addEventListener is not a function` — и
-дальше по [BUG-591](BUG-591-OPEN.md) исключение не доходит до `testharness.js`,
+дальше по [BUG-591](BUG-591-FIXED.md) исключение не доходит до `testharness.js`,
 так что тест не падает, а виснет. То же самое у `cancel` (`this.oncancel`) и у
 события `remove`, которого нет вовсе.
 

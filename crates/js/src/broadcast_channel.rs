@@ -266,10 +266,10 @@ const BROADCAST_CHANNEL_SHIM: &str = r#"(function() {
     ev.target = this;
     ev.currentTarget = this;
     var on = (ev.type === 'message') ? this._onmessage : this._onmessageerror;
-    if (typeof on === 'function') { try { on.call(this, ev); } catch (e) {} }
+    if (typeof on === 'function') { try { on.call(this, ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
     var arr = this._listeners[ev.type] || [];
     for (var i = 0; i < arr.length; i++) {
-      try { arr[i].call(this, ev); } catch (e) {}
+      try { arr[i].call(this, ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
     }
   };
 

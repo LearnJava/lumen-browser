@@ -111,10 +111,10 @@ const SCREEN_ORIENTATION_SHIM: &str = r#"(function() {
     evt.target = this;
 
     var fns = this._listeners['change'] || [];
-    fns.forEach(function(f) { try { f(evt); } catch(e) {} });
+    fns.forEach(function(f) { try { f(evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } });
 
     if (this.onchange) {
-      try { this.onchange(evt); } catch(e) {}
+      try { this.onchange(evt); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
     }
   };
 

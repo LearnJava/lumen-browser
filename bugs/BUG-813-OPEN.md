@@ -53,7 +53,7 @@ w.postMessage("boom");                       // ← дальше тишина, �
 * `WorkerGlobalScope.onerror` в шиме воркера
   (`worker_global_shim`, `worker.rs:270-397`) не определён ни разу.
 
-Это тот же класс, что [BUG-716](BUG-716-FIXED.md)/[BUG-591](BUG-591-OPEN.md)
+Это тот же класс, что [BUG-716](BUG-716-FIXED.md)/[BUG-591](BUG-591-FIXED.md)
 на главном потоке (исключение не становится событием), но отдельный дефект:
 там нет моста `TryCatch` → `error` на `window`, здесь — моста «контекст
 воркера → `ErrorEvent` на объекте `Worker`».

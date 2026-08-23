@@ -52,14 +52,14 @@ const LAUNCH_HANDLER_SHIM: &str = r#"
     // Drain any params that arrived before the consumer was set.
     var pending = this._pending.splice(0);
     for (var i = 0; i < pending.length; i++) {
-      try { consumer(pending[i]); } catch (_) {}
+      try { consumer(pending[i]); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); }
     }
   };
 
   // Internal: deliver a LaunchParams to the consumer (or enqueue if no consumer yet).
   LaunchQueue.prototype._deliver = function(params) {
     if (this._consumer) {
-      try { this._consumer(params); } catch (_) {}
+      try { this._consumer(params); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); }
     } else {
       this._pending.push(params);
     }

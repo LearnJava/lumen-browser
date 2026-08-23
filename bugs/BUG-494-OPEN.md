@@ -99,7 +99,7 @@ because WPT's shared numeric helper `css/support/numeric-testcommon.js` opens
 with `'use strict'` and resets the target element with `testEl.style = ""`
 (line 104, again at 167) *before* registering any test. The helper throws
 there, the test file's inline script dies with it, not a single `test()` is
-ever registered — and because [BUG-591](BUG-591-OPEN.md) never dispatches the
+ever registered — and because [BUG-591](BUG-591-FIXED.md) never dispatches the
 window `error` event, `testharness.js`'s `error_handler` (which would set the
 harness status to ERROR and call `done()`, `resources/testharness.js:5048`)
 never runs either. The file therefore reports **TIMEOUT**, not FAIL.

@@ -47,7 +47,7 @@ true scale: essentially the entire
 `dynamic-markup-insertion/opening-the-input-stream/` (~40 files) and
 `dynamic-markup-insertion/document-write/` (~15 files) subdirectories
 TIMEOUT or FAIL on this alone — the single largest failure cluster in that
-slice after [BUG-591](bugs/BUG-591-OPEN.md) (global error reporting).
+slice after [BUG-591](bugs/BUG-591-FIXED.md) (global error reporting).
 
 ## Перезамер 2026-08-22 (WPT-RUN-6, срез 20): что осталось после BUG-701
 

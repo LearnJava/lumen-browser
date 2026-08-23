@@ -80,11 +80,11 @@ _XhrEventTarget.prototype.removeEventListener = function(type, fn) {
 _XhrEventTarget.prototype.dispatchEvent = function(evt) {
     evt.target = this;
     var prop = 'on' + evt.type;
-    if (typeof this[prop] === 'function') { try { this[prop](evt); } catch(_) {} }
+    if (typeof this[prop] === 'function') { try { this[prop](evt); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); } }
     var arr = this._listeners[evt.type];
     if (arr) {
         var snap = arr.slice();
-        for (var i = 0; i < snap.length; i++) { try { snap[i](evt); } catch(_) {} }
+        for (var i = 0; i < snap.length; i++) { try { snap[i](evt); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); } }
     }
     return !evt.defaultPrevented;
 };
@@ -156,7 +156,7 @@ XMLHttpRequest.prototype._fireReadyStateChange = function() {
     var ev = new Event('readystatechange');
     ev.target = this;
     if (typeof this.onreadystatechange === 'function') {
-        try { this.onreadystatechange(ev); } catch(_) {}
+        try { this.onreadystatechange(ev); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); }
     }
 };
 

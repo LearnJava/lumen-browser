@@ -68,7 +68,7 @@ const PRESENTATION_API_SHIM: &str = r#"(function() {
     var evt = Object.assign({ type: type, target: this }, detail);
     var handlers = (this._listeners[type] || []).slice();
     for (var i = 0; i < handlers.length; i++) {
-      try { handlers[i](evt); } catch (_e) {}
+      try { handlers[i](evt); } catch (_e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_e); }
     }
   };
 

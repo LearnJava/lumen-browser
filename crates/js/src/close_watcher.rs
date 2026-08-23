@@ -151,7 +151,7 @@ const CLOSE_WATCHER_SHIM: &str = r#"
 
   function _dispatch(listeners, evt) {
     for (var i = 0; i < listeners.length; i++) {
-      try { listeners[i].call(null, evt); } catch (_) {}
+      try { listeners[i].call(null, evt); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); }
     }
   }
 

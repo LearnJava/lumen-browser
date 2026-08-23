@@ -58,11 +58,11 @@
  "generated": "2026-08-23",
  "counts": {
   "open": 401,
-  "fixed": 456,
+  "fixed": 457,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 857,
+ "total_bugs": 858,
  "phases": [
   {
    "id": "P0",
@@ -3983,7 +3983,7 @@
        "title": "WPT: вендорить + прогнать категорию `secure-contexts`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root secure-contexts --recursive`, ~1 мин 49 с, 21 файл, 8 отобранных id) — **0/8 harness OK, 0/12 сабтестов**. Три не-`.https.` теста (`basic-dedicated-worker.html`/`basic-popup-and-iframe-tests.html`/`basic-shared-worker.html`) TIMEOUT; их `.https.` пары ERROR `Got results from <insecure url>, expected <https url>` — реконфирмация BUG-380 (browsing context переиспользуется, executor не проверяет исход навигации). `shared-worker-{insecure,secure}-first.https.html` TIMEOUT напрямую (навигация прошла, testharnessreport не пришёл). Живая проба (`--mcp-live-port`) на воркерных сабтестах категории (все создают Worker/SharedWorker по внешнему `support/*.js` URL — блокируются [BUG-364](bugs/BUG-364-FIXED.md)) нашла и обогатила существующий [BUG-591](bugs/BUG-591-OPEN.md) новым конкретным механизмом: у `Worker`/`SharedWorker` на стороне родителя нет `onerror`-аксессора вовсе (`worker.rs:502-521` определяет только `onmessage`) и `addEventListener('error', …)` — молчаливый no-op (`worker.rs:510-514` фильтрует по `type === 'message'`), а `run_worker_thread_v8` (`worker.rs:699-702`) при ошибке top-level скрипта воркера только `eprintln!`-ит её в stderr хоста, ничего не отправляя обратно — воспроизведено живьём и `throw new Error(...)`, и голым `ReferenceError` (`postMessage(isSecureContext)`, буквальное выражение `w7`-сабтеста `basic-dedicated-worker.html`) — падающий воркер неотличим от родителя от зависшего. Новых номеров багов не заведено (обогащён BUG-591)",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root secure-contexts --recursive`, ~1 мин 49 с, 21 файл, 8 отобранных id) — **0/8 harness OK, 0/12 сабтестов**. Три не-`.https.` теста (`basic-dedicated-worker.html`/`basic-popup-and-iframe-tests.html`/`basic-shared-worker.html`) TIMEOUT; их `.https.` пары ERROR `Got results from <insecure url>, expected <https url>` — реконфирмация BUG-380 (browsing context переиспользуется, executor не проверяет исход навигации). `shared-worker-{insecure,secure}-first.https.html` TIMEOUT напрямую (навигация прошла, testharnessreport не пришёл). Живая проба (`--mcp-live-port`) на воркерных сабтестах категории (все создают Worker/SharedWorker по внешнему `support/*.js` URL — блокируются [BUG-364](bugs/BUG-364-FIXED.md)) нашла и обогатила существующий [BUG-591](bugs/BUG-591-FIXED.md) новым конкретным механизмом: у `Worker`/`SharedWorker` на стороне родителя нет `onerror`-аксессора вовсе (`worker.rs:502-521` определяет только `onmessage`) и `addEventListener('error', …)` — молчаливый no-op (`worker.rs:510-514` фильтрует по `type === 'message'`), а `run_worker_thread_v8` (`worker.rs:699-702`) при ошибке top-level скрипта воркера только `eprintln!`-ит её в stderr хоста, ничего не отправляя обратно — воспроизведено живьём и `throw new Error(...)`, и голым `ReferenceError` (`postMessage(isSecureContext)`, буквальное выражение `w7`-сабтеста `basic-dedicated-worker.html`) — падающий воркер неотличим от родителя от зависшего. Новых номеров багов не заведено (обогащён BUG-591)",
        "bugs": [
         "BUG-591"
        ]
@@ -4605,7 +4605,7 @@
        "title": "WPT: вендорить + прогнать категорию `workers`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (подтверждён — dedicated `Worker` и `SharedWorker` реальны, `crates/js/src/worker.rs`/`shared_worker.rs`). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root workers --recursive`, ~29 мин, 606 файлов, 287 id) — **94/249 harness OK, 153/877 сабтестов**. Ноль variant-фан-аута, 14 `.https.` файлов, 8 testdriver — дешёвая по всем предсказателям, но 144/155 неуспехов — TIMEOUT: воркерный глобал не даёт `location`/`navigator` ([BUG-776](bugs/BUG-776-OPEN.md), 31 файл), конструкторы `Worker`/`SharedWorker` не читают `options` — модульных воркеров не существует ([BUG-777](bugs/BUG-777-OPEN.md), 24 файла каталога `modules/`), и ещё три отдельных пробела в глобале — `close()`/`fetch()`/`XMLHttpRequest` отсутствуют, `importScripts()` у SharedWorker безусловно бросает ([BUG-778](bugs/BUG-778-FIXED.md), FIXED 2026-08-23). Кластер `onerror/*`/`Worker_ErrorEvent_*` — уже задокументированный [BUG-591](bugs/BUG-591-OPEN.md) (исключение внутри воркера не долетает до `error` родителя), новым не заведён",
+       "note": "Скоуп: ⬜ (подтверждён — dedicated `Worker` и `SharedWorker` реальны, `crates/js/src/worker.rs`/`shared_worker.rs`). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root workers --recursive`, ~29 мин, 606 файлов, 287 id) — **94/249 harness OK, 153/877 сабтестов**. Ноль variant-фан-аута, 14 `.https.` файлов, 8 testdriver — дешёвая по всем предсказателям, но 144/155 неуспехов — TIMEOUT: воркерный глобал не даёт `location`/`navigator` ([BUG-776](bugs/BUG-776-OPEN.md), 31 файл), конструкторы `Worker`/`SharedWorker` не читают `options` — модульных воркеров не существует ([BUG-777](bugs/BUG-777-OPEN.md), 24 файла каталога `modules/`), и ещё три отдельных пробела в глобале — `close()`/`fetch()`/`XMLHttpRequest` отсутствуют, `importScripts()` у SharedWorker безусловно бросает ([BUG-778](bugs/BUG-778-FIXED.md), FIXED 2026-08-23). Кластер `onerror/*`/`Worker_ErrorEvent_*` — уже задокументированный [BUG-591](bugs/BUG-591-FIXED.md) (исключение внутри воркера не долетает до `error` родителя), новым не заведён",
        "bugs": [
         "BUG-776",
         "BUG-777",
@@ -9296,10 +9296,10 @@
    "debtor": false
   },
   "BUG-591": {
-   "status": "open",
+   "status": "fixed",
    "title": "Global uncaught-exception/unhandled-rejection reporting pipeline entirely unwired -- `window.onerror`, `'error'` listeners, `<body onerror>`, and `window.onunha…",
    "component": "js/V8 host layer (`v8_runtime.rs` -- local `TryCatch` never bridges back to page script; `dom.rs` -- `reportError()` only callable manually, `PromiseRejectionEvent`/`'unhandledrejection'` don't exist at all)",
-   "date": null,
+   "date": "2026-08-23",
    "debtor": false
   },
   "BUG-592": {
@@ -11387,6 +11387,13 @@
    "component": "js (`crates/js/src/dom.rs:8366-8392` — `performance.mark`/`performance.measure` в `WEB_API_SHIM`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-900": {
+   "status": "open",
+   "title": "«muted errors» (HTML LS §8.1.3.6): исключение из cross-origin классического скрипта репортится странице целиком — настоящие `message`/`filename`/`lineno`/`colno…",
+   "component": "js (`crates/js/src/dom.rs` — `_lumen_report_exception`; `crates/js/src/v8_runtime.rs` — `eval_and_report`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11863,6 +11870,9 @@
   ],
   "js (`crates/js/src/dom.rs` — `_lumen_on_handlers` table + `_lumen_dispatch`/`_lumen_dispatch_bubble`/`_lumen_dispatch_rich`; `_lumen_build_element`; `setAttribute`/`removeAttribute`)": [
    "BUG-360"
+  ],
+  "js (`crates/js/src/dom.rs` — `_lumen_report_exception`; `crates/js/src/v8_runtime.rs` — `eval_and_report`)": [
+   "BUG-900"
   ],
   "js (`crates/js/src/dom.rs` — `_lumen_resource_track`, белый список `'script'\\": [
    "BUG-804"
