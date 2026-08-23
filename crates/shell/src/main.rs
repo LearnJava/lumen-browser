@@ -2917,6 +2917,24 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Returns `(node_id, url)` pairs for images that entered the lazy-load margin.
     #[allow(dead_code)]
     fn take_lazy_image_requests(&self) -> Vec<(u32, String)>;
+    /// BUG-480 срез 2: зарегистрировать загруженный под-документ `<iframe>` в
+    /// JS-контексте родителя — после этого `iframe.contentWindow`/
+    /// `contentDocument` из скриптов родителя видят фасады под-документа
+    /// (`crates/js/src/frame_bridge.rs`).
+    ///
+    /// Вызывается из [`load_frame_sub_documents`] после исполнения скриптов
+    /// ребёнка и **до** диспатча trusted `load` на хосте. `accessible=false`
+    /// (cross-origin / opaque sandbox) регистрирует биндинг без доступа к
+    /// содержимому: `contentWindow` есть, `contentDocument` — `null`.
+    /// Default no-op покрывает сборки без v8.
+    fn register_iframe_document(
+        &self,
+        _host_nid: u32,
+        _doc: Arc<Mutex<Document>>,
+        _url: &str,
+        _accessible: bool,
+    ) {
+    }
     /// Deliver a PerformancePaintTiming entry to JS PerformanceObservers.
     ///
     /// `name` is `"first-paint"` or `"first-contentful-paint"`;
@@ -3357,6 +3375,16 @@ impl PersistentJs for V8PersistentJs {
     }
     fn take_lazy_image_requests(&self) -> Vec<(u32, String)> {
         self.rt.take_lazy_image_requests()
+    }
+    fn register_iframe_document(
+        &self,
+        host_nid: u32,
+        doc: Arc<Mutex<Document>>,
+        url: &str,
+        accessible: bool,
+    ) {
+        self.rt
+            .register_frame_document(host_nid, doc, url.to_owned(), accessible);
     }
     fn deliver_paint_timing(&self, name: &str, start_ms: f64) {
         self.eval_js(&format!(
@@ -5100,10 +5128,11 @@ fn decode_image(
 /// [`Lumen::apply_loaded_page`] уносит все фреймы разом, отдельного
 /// lifecycle-менеджмента не нужно.
 ///
-/// Срез 1 не даёт JS родителя доступа к ребёнку (`contentDocument` всё ещё
-/// `null` — см. `iframe_element.rs`); хэндлы нужны для тикинга и как точка
-/// подключения следующих срезов (layout фреймов, `contentDocument`).
-#[allow(dead_code)] // host/url/doc читаются начиная с среза 2 (см. bugs/BUG-480-OPEN.md)
+/// Срез 2 дал JS родителя фасады под-документа через реестр биндингов
+/// `frame_bridge.rs` — регистрация идёт из локальных переменных этой функции,
+/// поэтому поля хэндла по-прежнему не читаются; читаться начнут со срезом
+/// навигации/замены фрейма.
+#[allow(dead_code)] // host/url/doc — до среза навигации/замены фрейма (см. bugs/BUG-480-OPEN.md)
 struct FrameHandle {
     /// `NodeId` `<iframe>`-элемента в документе-родителе.
     host: NodeId,
@@ -7411,6 +7440,53 @@ fn fetch_iframe_source(
     }
 }
 
+/// Origin-строка абсолютного URL (`scheme://host:port`, host в нижнем регистре).
+///
+/// Порты по умолчанию (http→80, https→443) опускаются — как в origin-алгоритме
+/// HTML LS §7.5.3. `None` — URL не распарсился или без хоста (opaque origin,
+/// как у `file://`).
+fn url_origin_str(url: &str) -> Option<String> {
+    let u = lumen_core::url::Url::parse(url).ok()?;
+    if u.host().is_empty() {
+        return None;
+    }
+    let scheme = u.scheme().to_ascii_lowercase();
+    let port = u
+        .port()
+        .filter(|p| !((scheme == "http" && *p == 80) || (scheme == "https" && *p == 443)))
+        .map(|p| format!(":{p}"))
+        .unwrap_or_default();
+    Some(format!("{scheme}://{}{}", u.host().to_ascii_lowercase(), port))
+}
+
+/// Правило доступа родителя к под-документу фрейма (BUG-480 срез 2).
+///
+/// HTML LS §7.3.1.2: `contentDocument` доступен только same-origin; opaque
+/// origin (`sandbox` без `allow-same-origin`) не совпадает ни с чем.
+/// `about:blank`/`about:srcdoc` наследуют origin родителя. Локальные файлы
+/// считаем взаимно доступными (упрощённая модель Firefox same-directory):
+/// у `file://` нет хоста, и строгая проверка сделала бы недоступным самый
+/// частый локальный сценарий; отклонение от спеки задокументировано в
+/// bugs/BUG-480-OPEN.md.
+fn frame_access_allowed(parent_base: &ResourceBase, child_url: &str, opaque_sandbox: bool) -> bool {
+    if opaque_sandbox {
+        return false;
+    }
+    if child_url.starts_with("about:") {
+        return true;
+    }
+    match parent_base {
+        ResourceBase::Url(parent) => match (url_origin_str(parent), url_origin_str(child_url)) {
+            (Some(p), Some(c)) => p == c,
+            // Хотя бы одна сторона opaque: взаимно доступны только два файла.
+            _ => parent.starts_with("file:") && child_url.starts_with("file:"),
+        },
+        // У родителя-файла origin opaque: доступен только ребёнок-файл
+        // (у сетевого ребёнка есть хост — он никогда не равен opaque).
+        ResourceBase::File(_) => child_url.starts_with("file:"),
+    }
+}
+
 /// Диспетчеризовать `load` на `<iframe>`-элементе через родительский JS-контекст.
 ///
 /// Событие не всплывает и не отменяется (HTML LS §4.8.5); `target` — сам
@@ -7586,6 +7662,18 @@ fn load_frame_sub_documents(
                     child_js.as_ref(),
                 );
             handles.extend(nested);
+        }
+        // BUG-480 срез 2: биндинг «хост → под-документ» для contentWindow/
+        // contentDocument родителя — строго до trusted `load` на хосте,
+        // чтобы обработчики читали фасады сразу из обработчика.
+        if let Some(js) = parent_js {
+            let accessible = frame_access_allowed(base, &child_url, opaque);
+            js.register_iframe_document(
+                info.node.index() as u32,
+                Arc::clone(&child_doc_arc),
+                &child_url,
+                accessible,
+            );
         }
         fire_iframe_load_event(parent_js, info.node);
         handles.push(FrameHandle {
@@ -31483,6 +31571,62 @@ mod tests {
             r#"<html><body><iframe srcdoc="<script>x=1;</script>"></iframe></body></html>"#,
         );
         assert_eq!(apply_iframe_sandbox_gates(&doc), 0);
+    }
+
+    // ── frame_access_allowed (BUG-480 срез 2) ────────────────────────────────
+
+    #[test]
+    fn frame_access_about_urls_inherit_parent_origin() {
+        let base = ResourceBase::Url("https://a.example/x/y.html".to_owned());
+        assert!(frame_access_allowed(&base, "about:srcdoc", false));
+        assert!(frame_access_allowed(&base, "about:blank", false));
+    }
+
+    #[test]
+    fn frame_access_opaque_sandbox_denies_everything() {
+        let base = ResourceBase::Url("https://a.example/".to_owned());
+        assert!(!frame_access_allowed(&base, "about:srcdoc", true));
+        assert!(!frame_access_allowed(&base, "https://a.example/child.html", true));
+    }
+
+    #[test]
+    fn frame_access_same_origin_allowed_cross_origin_denied() {
+        let a = ResourceBase::Url("https://a.example/x.html".to_owned());
+        assert!(frame_access_allowed(
+            &a,
+            "https://a.example/child.html",
+            false
+        ));
+        // Порт по умолчанию и регистр хоста не влияют на совпадение origin.
+        assert!(frame_access_allowed(
+            &a,
+            "HTTPS://A.EXAMPLE:443/other.html",
+            false
+        ));
+        assert!(!frame_access_allowed(
+            &a,
+            "https://b.example/child.html",
+            false
+        ));
+        assert!(!frame_access_allowed(
+            &a,
+            "http://a.example/child.html",
+            false
+        ));
+    }
+
+    #[test]
+    fn frame_access_file_parent_talks_only_to_files() {
+        let f = ResourceBase::File(std::path::PathBuf::from("D:/pages/index.html"));
+        assert!(frame_access_allowed(&f, "file://D:/pages/child.html", false));
+        assert!(!frame_access_allowed(&f, "https://a.example/", false));
+    }
+
+    #[test]
+    fn frame_access_url_parent_to_file_child_denied() {
+        // У file://-ребёнка opaque origin — сетевой родитель его не читает.
+        let u = ResourceBase::Url("https://a.example/".to_owned());
+        assert!(!frame_access_allowed(&u, "file://D:/x.html", false));
     }
 
     // ── PH1-2: Progressive streaming pipeline ──────────────────────────────────
