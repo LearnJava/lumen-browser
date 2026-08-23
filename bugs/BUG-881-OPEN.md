@@ -66,6 +66,6 @@ nop-checked hash=#1 entries=1 currentEntry=entry
 HTML LS «navigate event firing algorithm» требует диспатчить `navigate` на
 *каждой* навигации документа, включая same-document (фрагмент, `pushState`,
 traversal), а не только на программной через `navigation.navigate()`. Точка
-подключения — общий путь фрагментной навигации, тот же, в котором сидит
-[BUG-833](BUG-833-OPEN.md) (клик по `<a href="#x">` идёт мимо
-`_lumen_navigate_or_fragment`), поэтому чинить их разумно вместе.
+подключения — общий путь фрагментной навигации, тот самый, который чинился в
+[BUG-833](BUG-833-FIXED.md) (клик по `<a href="#x">` шёл мимо
+`_lumen_navigate_or_fragment`): диспатч `navigate` встаёт туда же.
