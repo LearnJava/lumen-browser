@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-23",
  "counts": {
-  "open": 373,
-  "fixed": 450,
+  "open": 372,
+  "fixed": 451,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -4647,7 +4647,7 @@
        "title": "WPT: вендорить + прогнать категорию `xml`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (подтверждён — реальные `DOMParser`/`XMLSerializer`, `crates/js/src/dom_parser.rs`; `xslt/` — 🚫, XSLT нигде не запланирован). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root xml --recursive`, 56.79 с, 37 файлов, 20 id по глобу / 7 фактически исполненных) — **3/7 harness OK, 4/190 сабтестов**. Найден [BUG-781](bugs/BUG-781-OPEN.md): `DOMParser.parseFromString` игнорирует XML MIME-типы, всегда гоняет HTML-токенизатор и заворачивает реальный корень в синтетический `<html>` — `documentElement.tagName` любого XML-документа всегда `\"HTML\"`. Остальное — `XSLTProcessor` отсутствует целиком (не запланирован, новых багов не заведено) и один уже известный TLS-гэп класса BUG-438/BUG-657. Новый номер: BUG-781",
+       "note": "Скоуп: ⬜ (подтверждён — реальные `DOMParser`/`XMLSerializer`, `crates/js/src/dom_parser.rs`; `xslt/` — 🚫, XSLT нигде не запланирован). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root xml --recursive`, 56.79 с, 37 файлов, 20 id по глобу / 7 фактически исполненных) — **3/7 harness OK, 4/190 сабтестов**. Найден [BUG-781](bugs/BUG-781-FIXED.md): `DOMParser.parseFromString` игнорирует XML MIME-типы, всегда гоняет HTML-токенизатор и заворачивает реальный корень в синтетический `<html>` — `documentElement.tagName` любого XML-документа всегда `\"HTML\"`. Остальное — `XSLTProcessor` отсутствует целиком (не запланирован, новых багов не заведено) и один уже известный TLS-гэп класса BUG-438/BUG-657. Новый номер: BUG-781",
        "bugs": [
         "BUG-781"
        ]
@@ -10598,10 +10598,10 @@
    "debtor": false
   },
   "BUG-781": {
-   "status": "open",
-   "title": "`DOMParser.parseFromString` игнорирует XML MIME-типы (`text/xml`/`application/xml`/`application/xhtml+xml`/`image/svg+xml`) — всегда гоняет HTML-токенизатор `_v…",
-   "component": "js (`crates/js/src/dom_parser.rs:526-567` — `_vBuildDocument`; `DOMParser.prototype.parseFromString`, `dom_parser.rs:850-861`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`DOMParser.parseFromString` игнорировал XML MIME-типы (`text/xml`/`application/xml`/`application/xhtml+xml`/`image/svg+xml`) — всегда гонял HTML-токенизатор `_v…",
+   "component": "js (`crates/js/src/dom_parser.rs` — `_vBuildDocument`/`_vParseHTML`; `DOMParser.prototype.parseFromString`)",
+   "date": "2026-08-23",
    "debtor": false
   },
   "BUG-782": {

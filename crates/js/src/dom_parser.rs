@@ -6,7 +6,11 @@
 //! JS objects, not Rust native nodes.
 //!
 //! Supported MIME types: `text/html`, `application/xml`, `text/xml`,
-//! `application/xhtml+xml`, `image/svg+xml`.
+//! `application/xhtml+xml`, `image/svg+xml`.  The four XML types take a distinct
+//! parse path (BUG-781): names keep their case, the first top-level element
+//! becomes `documentElement` with no `<html>`/`<head>`/`<body>` synthesis,
+//! CR/CRLF are normalized to LF before parsing (XML 1.0 §2.11), and a fatal
+//! well-formedness error yields a `<parsererror>` document rather than a throw.
 //!
 //! **XMLSerializer** (§2.4): `new XMLSerializer().serializeToString(node)`
 //! serializes a node to a string.  Handles two node types:
@@ -19,9 +23,11 @@
 //! Phase 1: namespace-aware XML output, `responseXML` integration in XHR.
 //!
 //! Not yet implemented:
-//! - Namespace-qualified serialization (`xmlns` attribute injection)
-//! - Entity resolution beyond the common ~30 HTML entities
-//! - XML error-document on parse failure for XML MIME types
+//! - Namespace-qualified serialization (`xmlns` attribute injection); `prefix`
+//!   and `localName` are split off the qualified name, but `namespaceURI` is not
+//!   resolved from the in-scope `xmlns` declarations
+//! - Entity resolution beyond the common ~30 HTML entities; an undeclared entity
+//!   is left verbatim instead of being a fatal XML error
 //! - `serializeToString` for `ProcessingInstruction` / `DocumentType` nodes
 
 /// Install DOMParser and XMLSerializer into a V8 runtime (Ph3 V8 migration
@@ -67,15 +73,32 @@ function VNode(nodeType, doc) {
 }
 
 // ── VElement ─────────────────────────────────────────────────────────────────
-function VElement(tagName, doc) {
+function VElement(tagName, doc, isXML) {
   VNode.call(this, ELEMENT_NODE, doc);
-  this.localName = tagName.toLowerCase();
-  this.tagName   = this.localName.toUpperCase();
-  this.nodeName  = this.tagName;
+  if (isXML) {
+    // XML names are case-sensitive (XML 1.0 §2.3) and may carry a prefix, so the
+    // qualified name is kept verbatim: `tagName`/`nodeName` are NOT upper-cased.
+    var qn = String(tagName);
+    var ci = qn.indexOf(':');
+    this._xml      = true;
+    this._qname    = qn;
+    this.prefix    = ci > 0 ? qn.slice(0, ci) : null;
+    this.localName = ci > 0 ? qn.slice(ci + 1) : qn;
+    this.tagName   = qn;
+    this.nodeName  = qn;
+  } else {
+    this.localName = tagName.toLowerCase();
+    this.tagName   = this.localName.toUpperCase();
+    this.nodeName  = this.tagName;
+  }
   this.nodeValue = null;
-  this._attrs    = Object.create(null); // name (lc) → value
+  this._attrs    = Object.create(null); // name (lc in HTML, verbatim in XML) → value
   this._attrOrd  = [];                  // insertion-ordered attr names
 }
+
+// Attribute names are ASCII-lower-cased in HTML documents and case-sensitive in
+// XML ones — every attribute accessor funnels its key through this.
+function _vAttrKey(el, n) { return el._xml ? String(n) : String(n).toLowerCase(); }
 VElement.prototype = Object.create(VNode.prototype);
 VElement.prototype.constructor = VElement;
 
@@ -145,17 +168,17 @@ Object.defineProperty(VElement.prototype, 'previousSibling', {
 });
 
 VElement.prototype.getAttribute    = function(n) {
-  var v = this._attrs[String(n).toLowerCase()];
+  var v = this._attrs[_vAttrKey(this, n)];
   return v !== undefined ? v : null;
 };
 VElement.prototype.setAttribute    = function(n, v) {
-  var lc = String(n).toLowerCase();
+  var lc = _vAttrKey(this, n);
   if (!(lc in this._attrs)) this._attrOrd.push(lc);
   this._attrs[lc] = String(v);
 };
-VElement.prototype.hasAttribute    = function(n) { return String(n).toLowerCase() in this._attrs; };
+VElement.prototype.hasAttribute    = function(n) { return _vAttrKey(this, n) in this._attrs; };
 VElement.prototype.removeAttribute = function(n) {
-  var lc = String(n).toLowerCase();
+  var lc = _vAttrKey(this, n);
   delete this._attrs[lc];
   var idx = this._attrOrd.indexOf(lc);
   if (idx !== -1) this._attrOrd.splice(idx, 1);
@@ -179,7 +202,7 @@ VElement.prototype.replaceChild = function(newChild, oldChild) {
   return oldChild;
 };
 VElement.prototype.cloneNode    = function(deep) {
-  var c = new VElement(this.localName, this.ownerDocument);
+  var c = new VElement(this._xml ? this._qname : this.localName, this.ownerDocument, this._xml);
   for (var i = 0; i < this._attrOrd.length; i++) {
     var k = this._attrOrd[i];
     c._attrs[k] = this._attrs[k];
@@ -253,6 +276,7 @@ function VDocument() {
   this.doctype         = null;
   this.URL             = 'about:blank';
   this.contentType     = 'text/html';
+  this._isXML          = false;
 }
 VDocument.prototype = Object.create(VNode.prototype);
 VDocument.prototype.constructor = VDocument;
@@ -270,7 +294,8 @@ Object.defineProperty(VDocument.prototype, 'innerHTML', {
   get: function() { return _vSerializeChildren(this, false); }
 });
 
-VDocument.prototype.createElement        = function(t) { return new VElement(t, this); };
+// DOM §4.5.1: `createElement` lower-cases the name only for HTML documents.
+VDocument.prototype.createElement        = function(t) { return new VElement(t, this, this._isXML); };
 VDocument.prototype.createTextNode       = function(d) { return new VText(String(d), this); };
 VDocument.prototype.createComment        = function(d) { return new VComment(String(d), this); };
 VDocument.prototype.createDocumentFragment = function() {
@@ -366,11 +391,23 @@ function _decEnt(str) {
   });
 }
 
-// ── HTML tokenizer / tree builder ────────────────────────────────────────────
-// State-machine that iterates over the HTML string character by character,
+// ── HTML / XML tokenizer / tree builder ──────────────────────────────────────
+// State-machine that iterates over the source string character by character,
 // building a VNode tree into `root`.
+//
+// `isXML` switches the four places where XML differs from HTML: names keep their
+// case, a closing tag must match the innermost open element exactly, there are
+// no void elements (only `<x/>` self-closes) and `<script>`/`<style>` have no
+// raw-text mode.  In XML mode a well-formedness violation throws a marked Error
+// that `_vBuildXMLDocument` turns into a `parsererror` document.
 
-function _vParseHTML(html, doc) {
+function _vXmlWFError(msg) {
+  var e = new Error(msg);
+  e.__vXmlWF = true;
+  return e;
+}
+
+function _vParseHTML(html, doc, isXML) {
   var root = new VNode(DOCUMENT_FRAGMENT_NODE, doc);
   root.childNodes = [];
   root.nodeName   = '#document-fragment';
@@ -437,7 +474,18 @@ function _vParseHTML(html, doc) {
     if (html.charCodeAt(pos+1) === 47) {
       var ge = html.indexOf('>', pos + 2);
       if (ge === -1) { addText('</'); pos += 2; continue; }
-      var clTag = html.slice(pos + 2, ge).trim().toLowerCase();
+      var clRaw = html.slice(pos + 2, ge).trim();
+      if (isXML) {
+        var top = stack[stack.length - 1];
+        if (!top || top.nodeType !== ELEMENT_NODE || top._qname !== clRaw) {
+          throw _vXmlWFError('Opening and ending tag mismatch: expected </' +
+            (top && top._qname ? top._qname : '') + '>, got </' + clRaw + '>');
+        }
+        stack.pop();
+        pos = ge + 1;
+        continue;
+      }
+      var clTag = clRaw.toLowerCase();
       for (var si = stack.length - 1; si > 0; si--) {
         var sn = stack[si];
         if (sn.nodeType === ELEMENT_NODE && sn.localName === clTag) {
@@ -452,19 +500,24 @@ function _vParseHTML(html, doc) {
     var ts = pos + 1;
     var p2 = ts;
     while (p2 < len && !/[\s\/>]/.test(html[p2])) p2++;
-    var tagN = html.slice(ts, p2).toLowerCase();
-    if (!tagN || !/^[a-z][a-z0-9\-:_.]*$/.test(tagN)) {
+    var tagRawN = html.slice(ts, p2);
+    var tagN = isXML ? tagRawN : tagRawN.toLowerCase();
+    var nameOk = isXML ? /^[A-Za-z_][A-Za-z0-9\-:_.]*$/.test(tagN)
+                       : /^[a-z][a-z0-9\-:_.]*$/.test(tagN);
+    if (!tagN || !nameOk) {
+      if (isXML) throw _vXmlWFError('StartTag: invalid element name');
       addText('<'); pos++; continue;
     }
 
-    var el = new VElement(tagN, doc);
+    var el = new VElement(tagN, doc, isXML);
     // Parse attributes
     while (p2 < len) {
       while (p2 < len && /\s/.test(html[p2])) p2++;
       if (p2 >= len || html[p2] === '>' || html[p2] === '/') break;
       var as = p2;
       while (p2 < len && !/[\s=\/>]/.test(html[p2])) p2++;
-      var aN = html.slice(as, p2).toLowerCase();
+      var aRawN = html.slice(as, p2);
+      var aN = isXML ? aRawN : aRawN.toLowerCase();
       if (!aN) { p2++; continue; }
       while (p2 < len && /\s/.test(html[p2])) p2++;
       var aV = '';
@@ -495,10 +548,11 @@ function _vParseHTML(html, doc) {
     el.parentNode = par;
     par.childNodes.push(el);
 
-    if (!selfC && !VOID_ELEMS[tagN]) {
+    if (!selfC && (isXML || !VOID_ELEMS[tagN])) {
       stack.push(el);
-      // Raw text mode: script / style — consume until closing tag verbatim
-      if (tagN === 'script' || tagN === 'style') {
+      // Raw text mode: script / style — consume until closing tag verbatim.
+      // XML has no raw-text elements: their content is ordinary markup there.
+      if (!isXML && (tagN === 'script' || tagN === 'style')) {
         var closeTag2 = '</' + tagN;
         var rawEnd = html.toLowerCase().indexOf(closeTag2, pos);
         var rawContent = '';
@@ -519,13 +573,95 @@ function _vParseHTML(html, doc) {
       }
     }
   }
+  if (isXML && stack.length > 1) {
+    throw _vXmlWFError('Premature end of data in tag ' + (stack[stack.length - 1]._qname || ''));
+  }
   return root;
 }
 
-// Build a full VDocument (html/head/body structure)
-function _vBuildDocument(html, mimeType) {
+// MIME types DOMParser must parse with the XML tokenizer rather than the HTML one.
+var XML_MIMES = {
+  'application/xml':1, 'text/xml':1, 'application/xhtml+xml':1, 'image/svg+xml':1
+};
+
+// XML 1.0 §2.8 — VersionNum is `'1.' [0-9]+`; anything else is a fatal error.
+// Returns an error message, or null when the prolog (if any) is acceptable.
+function _vCheckXMLProlog(src) {
+  var m = /^\s*<\?xml\s+version\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(src);
+  if (!m) return null;
+  var ver = m[1] !== undefined ? m[1] : m[2];
+  if (!/^1\.[0-9]+$/.test(ver)) return 'XML declaration: unsupported version "' + ver + '"';
+  return null;
+}
+
+// DOM Parsing §8.2 — a fatal XML error yields a document whose root is
+// `<parsererror>` in the Mozilla namespace, not an exception.
+function _vXMLErrorDocument(msg, mimeType) {
   var doc = new VDocument();
-  doc.contentType = mimeType || 'text/html';
+  doc.contentType = mimeType;
+  doc._isXML = true;
+  var el = new VElement('parsererror', doc, true);
+  el.setAttribute('xmlns', 'http://www.mozilla.org/newlayout/xml/parsererror.xml');
+  var t = new VText(String(msg), doc);
+  t.parentNode = el;
+  el.childNodes.push(t);
+  doc.appendChild(el);
+  doc.documentElement = el;
+  return doc;
+}
+
+// Build a VDocument for an XML MIME type: the real root element is the document
+// element — no `<html>`/`<head>`/`<body>` synthesis, and `doc.head`/`doc.body`
+// stay null as they must for a non-HTML document.
+function _vBuildXMLDocument(xml, mimeType) {
+  // XML 1.0 §2.11 — normalize CRLF and lone CR to LF before parsing.
+  var src = String(xml).replace(/\r\n?/g, '\n');
+
+  var prologErr = _vCheckXMLProlog(src);
+  if (prologErr) return _vXMLErrorDocument(prologErr, mimeType);
+
+  var doc = new VDocument();
+  doc.contentType = mimeType;
+  doc._isXML = true;
+
+  var root;
+  try {
+    root = _vParseHTML(src, doc, true);
+  } catch (e) {
+    if (e && e.__vXmlWF) return _vXMLErrorDocument(e.message, mimeType);
+    throw e;
+  }
+
+  var kids = root.childNodes.slice();
+  var docEl = null;
+  for (var i = 0; i < kids.length; i++) {
+    var n = kids[i];
+    if (n.nodeType === ELEMENT_NODE) {
+      if (docEl) return _vXMLErrorDocument('Extra content at the end of the document', mimeType);
+      docEl = n;
+    } else if (n.nodeType === TEXT_NODE && /\S/.test(n.nodeValue || '')) {
+      // Character data outside the root element is not well-formed.
+      return _vXMLErrorDocument('Extra content at the end of the document', mimeType);
+    }
+  }
+  if (!docEl) return _vXMLErrorDocument('Document is empty', mimeType);
+
+  // Keep the root and any comments around it; whitespace between them is Misc.
+  for (var k = 0; k < kids.length; k++) {
+    if (kids[k].nodeType === ELEMENT_NODE || kids[k].nodeType === COMMENT_NODE) {
+      doc.appendChild(kids[k]);
+    }
+  }
+  doc.documentElement = docEl;
+  return doc;
+}
+
+// Build a full VDocument (html/head/body structure for HTML, real root for XML)
+function _vBuildDocument(html, mimeType) {
+  var mt = mimeType || 'text/html';
+  if (XML_MIMES[mt]) return _vBuildXMLDocument(html, mt);
+  var doc = new VDocument();
+  doc.contentType = mt;
   var root = _vParseHTML(html, doc);
 
   // Find or synthesize html/head/body
@@ -598,7 +734,8 @@ function _vSerializeNode(node, isXML) {
   }
 }
 function _vSerializeElement(el, isXML) {
-  var tag = el.localName;
+  // An XML-parsed element round-trips under its qualified name, case intact.
+  var tag = el._xml ? el._qname : el.localName;
   var r = '<' + tag;
   for (var i = 0; i < el._attrOrd.length; i++) {
     var n = el._attrOrd[i];
@@ -780,7 +917,10 @@ function _vMatchSimple(node, sel) {
     } else { i++; }
   }
 
-  if (tag && tag !== '*' && node.localName !== tag.toLowerCase()) return false;
+  if (tag && tag !== '*') {
+    // XML tag names are case-sensitive and matched as qualified names.
+    if (node._xml ? node._qname !== tag : node.localName !== tag.toLowerCase()) return false;
+  }
   if (id !== null && node.getAttribute('id') !== id) return false;
   if (classes.length) {
     var nc = (node.getAttribute('class') || '').split(/\s+/);
@@ -819,10 +959,10 @@ function _vMatchSimple(node, sel) {
 }
 
 function _vGetByTag(root, tag) {
-  var r = [], lc = tag === '*' ? null : tag.toLowerCase();
+  var all = tag === '*', lc = all ? null : tag.toLowerCase(), r = [];
   function w(n) {
     if (n.nodeType === ELEMENT_NODE) {
-      if (!lc || n.localName === lc) r.push(n);
+      if (all || (n._xml ? n._qname === tag : n.localName === lc)) r.push(n);
     }
     for (var i = 0; i < n.childNodes.length; i++) w(n.childNodes[i]);
   }
@@ -1069,6 +1209,142 @@ mod tests_v8 {
             var doc = new DOMParser().parseFromString(
                 '<root><item>1</item></root>', 'application/xml');
             doc !== null && doc.nodeType === 9
+            "#,
+        );
+        assert!(ok);
+    }
+
+    /// BUG-781: an XML MIME type must produce the real root element, not the
+    /// synthetic `<html><head></head><body>…` wrapper the HTML path builds.
+    #[test]
+    fn xml_document_element_is_the_real_root() {
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d = new DOMParser().parseFromString(
+                '<?xml version="1.0"?>\n<a><b>x</b></a>', 'text/xml');
+            d.documentElement.tagName === 'a'
+              && d.documentElement.nodeName === 'a'
+              && d.head === null && d.body === null
+              && d.documentElement.firstChild.tagName === 'b'
+            "#,
+        );
+        assert!(ok);
+    }
+
+    /// XML 1.0 §2.3 — element and attribute names are case-sensitive.
+    #[test]
+    fn xml_names_keep_their_case() {
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d = new DOMParser().parseFromString(
+                '<Root fooBar="1"><Child/></Root>', 'application/xml');
+            var r = d.documentElement;
+            r.tagName === 'Root'
+              && r.localName === 'Root'
+              && r.getAttribute('fooBar') === '1'
+              && r.getAttribute('foobar') === null
+              && r.getElementsByTagName('Child').length === 1
+              && r.getElementsByTagName('child').length === 0
+            "#,
+        );
+        assert!(ok);
+    }
+
+    /// A prefixed name keeps the qualified form in `tagName` and splits into
+    /// `prefix` / `localName`; serialization round-trips the qualified name.
+    #[test]
+    fn xml_qualified_name_splits_and_round_trips() {
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d = new DOMParser().parseFromString(
+                '<h:root xmlns:h="urn:x"><h:kid/></h:root>', 'text/xml');
+            var r = d.documentElement;
+            r.tagName === 'h:root' && r.prefix === 'h' && r.localName === 'root'
+              && new XMLSerializer().serializeToString(r).indexOf('<h:root') === 0
+            "#,
+        );
+        assert!(ok);
+    }
+
+    /// XML 1.0 §2.11 — CRLF and a lone CR are normalized to LF before parsing.
+    #[test]
+    fn xml_eol_normalization() {
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            function first(x) {
+              return new DOMParser().parseFromString(x, 'text/xml')
+                .documentElement.firstChild.nodeValue;
+            }
+            first('<a>\r\n\t<b>x</b></a>') === '\n\t'
+              && first('<a>\r\t<b>x</b></a>') === '\n\t'
+              && first('<a>\r\r\n\n</a>') === '\n\n\n'
+            "#,
+        );
+        assert!(ok);
+    }
+
+    /// XML 1.0 §2.8 — `VersionNum` is `'1.' [0-9]+`; anything else is fatal and
+    /// yields a `parsererror` document instead of the requested tree.
+    #[test]
+    fn xml_prolog_version_is_validated() {
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            function root(v) {
+              return new DOMParser()
+                .parseFromString('<?xml version="' + v + '"?><x></x>', 'text/xml')
+                .documentElement.tagName;
+            }
+            ['1.0','1.1','1.2','1.7','1.1075','1.000'].every(function(v) { return root(v) === 'x'; })
+              && ['10.0','100','2.0','17.0'].every(function(v) { return root(v) === 'parsererror'; })
+            "#,
+        );
+        assert!(ok);
+    }
+
+    /// A well-formedness violation is reported as a `parsererror` document
+    /// (DOM Parsing §8.2), never as a thrown exception.
+    #[test]
+    fn xml_ill_formed_input_yields_parsererror() {
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            function root(x) {
+              return new DOMParser().parseFromString(x, 'text/xml').documentElement.tagName;
+            }
+            root('<a></b>') === 'parsererror'          // mismatched end tag
+              && root('<a><b></a>') === 'parsererror'  // unclosed child
+              && root('<a/>') === 'a'                  // self-closing is fine
+              && root('') === 'parsererror'            // no root element
+              && root('<a/><b/>') === 'parsererror'    // two roots
+              && root('<a><br/></a>') === 'a'          // no void elements in XML
+            "#,
+        );
+        assert!(ok);
+    }
+
+    /// The HTML path is untouched: `text/html` still wraps bare content and
+    /// still lower-cases names.
+    #[test]
+    fn html_path_still_wraps_and_lowercases() {
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d = new DOMParser().parseFromString('<A FooBar="1">x</A>', 'text/html');
+            d.documentElement.tagName === 'HTML'
+              && d.body.firstChild.tagName === 'A'
+              && d.body.firstChild.getAttribute('foobar') === '1'
             "#,
         );
         assert!(ok);
