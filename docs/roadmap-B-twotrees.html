@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-23",
  "counts": {
-  "open": 371,
+  "open": 374,
   "fixed": 449,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 820,
+ "total_bugs": 823,
  "phases": [
   {
    "id": "P0",
@@ -2259,7 +2259,7 @@
     {
      "id": "WPT-VENDOR",
      "title": "WPT-VENDOR: вендорить и прогнать остальные 276 категорий WPT",
-     "status": "active",
+     "status": "done",
      "note": "Дорожка вендоринга/прогона остальных категорий верхнеуровневого корпуса WPT (dom/nodes уже вендорена и прогнана, см. P2-wpt). Каждая дочерняя задача — одна категория из категорийного индекса docs/wpt-status.md: вендорить тестовое поддерево запиненного коммита (tests/wpt/VENDOR.md), прогнать через tests/wpt/run_report.py, синхронизировать docs/wpt-status.md. Провалы тестов не заводятся по одному — группируются в BUG-NNN по первопричине (методология в docs/wpt-status.md). Категории со скоупом 🚫 (вне архитектуры Lumen-читалки: медиа-конвейер, аппаратные API, ad-tech и т.п.) включены по прямому запросу пользователя 2026-07-21, несмотря на то что docs/wpt-status.md их помечает как вероятно вне скоупа — объём можно пересмотреть после первого прохода.",
      "tasks": [
       {
@@ -4745,9 +4745,14 @@
       {
        "id": "WPT-VENDOR-dom-rest",
        "title": "WPT-VENDOR-dom-rest: довендорить остаток категории `dom` после `dom/nodes/`",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "Единственная категория, вендоренная частично: `tests/wpt/dom/` содержит только `nodes/` (168 файлов, S5/S6-гейт), остальные подкаталоги апстримной категории (`events/`, `ranges/`, `traversal/`, …) на диске отсутствуют и ни одной открытой строкой бэклога не учтены — после закрытия всех 289 строк WPT-VENDOR это последняя дыра вендоринга, без неё «охватить все тесты WPT» невыполнимо по определению. Порядок и команды — [docs/tasks/p2-wpt-vendor-dom-rest.md](docs/tasks/p2-wpt-vendor-dom-rest.md); `tests/wpt/metadata/dom/nodes/` не трогать (ручной гейт `run_suite.py`). Исполнитель — P2 (указатель в STATUS-P2.md), заведено 2026-08-23 по запросу пользователя «охватить все тесты WPT»"
+       "note": "ЗАКРЫТ 2026-08-23 (ветка `p2-wpt-vendor-dom-rest`): остаток категории довендорен с того же пина `35be3b44` — `abort/`, `collections/`, `crashtests/`, `events/` (190 файлов), `lists/`, `observable/`, `ranges/`, `traversal/` и 15 корневых файлов, 361 файл / 4.2 МБ; `tests/wpt/dom/` теперь совпадает с апстримным деревом целиком (797 файлов), `dom/nodes/` перед копированием побайтово сверен с апстримом. Довендорены 6 внекатегорийных хелперов (`/common/{reftest-wait.js,blank.html,dummy.xhtml,dummy.xml,redirect.py}`, `/resources/blank.html`) — **`WPT-RUN-11` может вычесть `/common/reftest-wait.js` и `/common/blank.html` из своего списка**; два оставшихся 404 не вендорятся сознательно (`/common/canvas-frame.css` в апстриме на пине отсутствует — дефект самого теста; `/resources/WebIDLParser.js` — ложное срабатывание сканера, `serve.py` переписывает путь на вендоренный `webidl2.js`). Прогон `--all --root dom --recursive --processes=4`: 641 id отобрано, 608 дошло до результата (33 — `crashtest`/reftest, исполнителя нет), 462/608 harness OK, 2572/7152 сабтестов; довендоренная часть — 241/327 OK, 546/1579 сабтестов. Заведено 3 новые причины: BUG-863 (`document.createCDATASection` отсутствует — вызов в общем `setupRangeTests()` роняет `setup` и даёт ERROR на 31 id, крупнейшая единичная причина категории), BUG-864 (`lookupNamespaceURI`/`lookupPrefix`/`isDefaultNamespace`), BUG-865 (опция `passive` не разбирается). Переподтверждены BUG-590/577/478/482/746/533/689/480. `dom/observable/tentative` и `ranges/tentative/OpaqueRange` — WICG-предложения, багов не заводилось. `tests/wpt/metadata/dom/nodes/` не трогался. Отчёт — [docs/wpt-vendor-notes/dom.md](docs/wpt-vendor-notes/dom.md)",
+       "bugs": [
+        "[BUG-863](bugs/BUG-863-OPEN.md)",
+        "[BUG-864](bugs/BUG-864-OPEN.md)",
+        "[BUG-865](bugs/BUG-865-OPEN.md)"
+       ]
       }
      ]
     },
@@ -11141,6 +11146,27 @@
    "component": "js (`crates/js/src/dom.rs:9853`–`9881` — `_lumen_ws_bytelen` читает `data.byteLength` без проверки, `send` шлёт всё нестроковое как `new Uint8Array(data)`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-863": {
+   "status": "open",
+   "title": "`document.createCDATASection` отсутствует; вызов стоит в общем `setupRangeTests()` (`dom/common.js:60`), поэтому падает `setup` и 31 id `dom/ranges`+`dom/traver…",
+   "component": "js (`crates/js/src/dom.rs` — у `document` есть `createTextNode`/`createComment`/`createProcessingInstruction`, `createCDATASection` нет ни в шиме, ни в arena-DOM)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-864": {
+   "status": "open",
+   "title": "`Node.lookupNamespaceURI`/`lookupPrefix`/`isDefaultNamespace` отсутствуют целиком (DOM §4.4): 70 сабтестов `dom/nodes/Node-lookupNamespaceURI.html`, ни одного P…",
+   "component": "js (`crates/js/src/dom.rs`, `WEB_API_SHIM` — ноль совпадений по всем трём именам во всём воркспейсе)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-865": {
+   "status": "open",
+   "title": "Опция `passive` не разбирается вовсе: `preventDefault()` в пассивном слушателе не игнорируется и нет дефолта `passive:true` для `wheel`/`touch*` на window/docum…",
+   "component": "js (`crates/js/src/dom.rs:443`–`460` — `addEventListener` читает только `capture`/`once`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11447,6 +11473,9 @@
   "js (`crates/js/src/dom.rs:4264-4302`)": [
    "BUG-484"
   ],
+  "js (`crates/js/src/dom.rs:443`–`460` — `addEventListener` читает только `capture`/`once`)": [
+   "BUG-865"
+  ],
   "js (`crates/js/src/dom.rs:4780-4827` -- `_lumen_build_detached_document`)": [
    "BUG-552"
   ],
@@ -11621,6 +11650,9 @@
   "js (`crates/js/src/dom.rs` — секция `// ── performance (HR Timer …`, `Performance.prototype`)": [
    "BUG-767"
   ],
+  "js (`crates/js/src/dom.rs` — у `document` есть `createTextNode`/`createComment`/`createProcessingInstruction`, `createCDATASection` нет ни в шиме, ни в arena-DOM)": [
+   "BUG-863"
+  ],
   "js (`crates/js/src/dom.rs` — фрагментный парсер `innerHTML`)": [
    "BUG-744"
   ],
@@ -11640,6 +11672,9 @@
    "BUG-481",
    "BUG-482",
    "BUG-485"
+  ],
+  "js (`crates/js/src/dom.rs`, `WEB_API_SHIM` — ноль совпадений по всем трём именам во всём воркспейсе)": [
+   "BUG-864"
   ],
   "js (`crates/js/src/dom.rs`, `contentEditable`/`isContentEditable`)": [
    "BUG-344"

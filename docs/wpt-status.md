@@ -17,15 +17,16 @@
 содержит **277 категорий верхнего уровня** (после исключения служебных директорий вроде `tools/`,
 `resources/`, `common/` — они не тестовые категории, а инфраструктура самого WPT). На 2026-08-23
 **вендорены и прогнаны все 277**: дорожка `WPT-VENDOR` в [`ROADMAP.md`](../ROADMAP.md) закрыта
-целиком (291 строка, 290 `done`, единственная открытая — `WPT-VENDOR-dom-rest`), каталоги лежат
+целиком (291 строка, все `done` — последняя, `WPT-VENDOR-dom-rest`, закрыта 2026-08-23), каталоги лежат
 в `tests/wpt/<категория>/`, а категорийный индекс ниже даёт по каждой дату и headline-результат
 прогона.
 
 Три оговорки, чтобы «вендорено» не читалось как «покрыто»:
 
-- **Полнота вендоринга.** Единственная частично вендоренная категория — `dom`: на диске только
-  `dom/nodes/` (168 файлов, ручной гейт `run_suite.py`), остальные подкаталоги апстрима
-  (`events/`, `ranges/`, `traversal/`, …) ведёт открытая строка `WPT-VENDOR-dom-rest`.
+- **Полнота вендоринга.** Частично вендоренных категорий больше нет: последняя, `dom`, довендорена
+  целиком 2026-08-23 (`WPT-VENDOR-dom-rest` — `events/`, `ranges/`, `traversal/`, `observable/`,
+  `collections/`, `abort/`, `lists/`, `crashtests/` и корневые файлы, 797 файлов = всё дерево пина).
+  `dom/nodes/` внутри неё по-прежнему несёт свой ручной гейт `run_suite.py`.
 - **Полнота прогона.** Часть категорий прогнана выборочно: при нулевой дисперсии результата
   (вся выборка упирается в один и тот же уже задокументированный гэп) прогон останавливался
   вручную — так сделано для `css` (382 из 34607 id), `content-security-policy` (67 из 865 id) и
@@ -188,7 +189,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `direct-sockets` | 🚫 | ✅ |  |  | Вендорена целиком 2026-07-26 (коммит `35be3b44`, `tests/wpt/direct-sockets/`, 8 файлов: `META.yml`, `README.md`, `disabled-by-permissions-policy.https.sub.html`+`.headers`,… [Подробности](wpt-vendor-notes/direct-sockets.md). |
 | `document-picture-in-picture` | 🚫 | ✅ |  |  | Вендорена целиком 2026-07-26 (коммит `35be3b44`, `tests/wpt/document-picture-in-picture/`, 27 файлов: `META.yml`, `WEB_FEATURES.yml`, 24 `.https.html`/`.html` тестов, `support/focus-opener.js`,… [Подробности](wpt-vendor-notes/document-picture-in-picture.md). |
 | `document-policy` | ⬜ | ✅ |  |  | Вендорена целиком 2026-07-26 (коммит `35be3b44`, `tests/wpt/document-policy/`, 27 файлов: `META.yml`, `echo-policy.py`+`echo-policy-nested.html` — рекурсивная iframe-echo-фикстура,… [Подробности](wpt-vendor-notes/document-policy.md). |
-| `dom` | ⬜ | 🟡 (`dom/nodes/` только) |  | [BUG-324](../bugs/BUG-324-FIXED.md) | Единственная частично вендоренная категория: на диске только `dom/nodes/` (168 файлов, детальная таблица ниже, ручной гейт `run_suite.py`); остальные подкаталоги апстрима (`events/`, `ranges/`, `traversal/`, …) не вендорены — открытая строка `WPT-VENDOR-dom-rest` в [`ROADMAP.md`](../ROADMAP.md). |
+| `dom` | ⬜ | ✅ |  | [BUG-863](../bugs/BUG-863-OPEN.md), [BUG-864](../bugs/BUG-864-OPEN.md), [BUG-865](../bugs/BUG-865-OPEN.md), [BUG-324](../bugs/BUG-324-FIXED.md) | Довендорена целиком 2026-08-23 (`WPT-VENDOR-dom-rest`, коммит `35be3b44`): к вендоренному ранее `dom/nodes/` добавлены `abort/`, `collections/`, `crashtests/`, `events/` (190 файлов), `lists/`, `observable/`, `ranges/`, `traversal/` и 15 корневых файлов — 797 файлов, всё дерево пина. Прогон `--all --root dom --recursive` (641 id, 608 дошли до результата): **462/608 harness OK, 2572/7152 сабтестов**; в довендоренной части 241/327 OK при 546/1579 сабтестов. Головная находка — [BUG-863](../bugs/BUG-863-OPEN.md) (`document.createCDATASection` отсутствует; вызов стоит в общем `setupRangeTests()`, поэтому 31 id `ranges`/`traversal`/`nodes` даёт ERROR без единого сабтеста). `dom/nodes/` сохраняет собственную детальную таблицу ниже и ручной гейт `run_suite.py` — `tests/wpt/metadata/dom/nodes/` этой задачей не трогался.… [Подробности](wpt-vendor-notes/dom.md). |
 | `domparsing` | ⬜ | ✅ |  | [BUG-351](../bugs/BUG-351-OPEN.md) | Вендорена целиком 2026-07-26 (коммит `35be3b44`, `tests/wpt/domparsing/`, 71 файл: `META.yml`, `WEB_FEATURES.yml`, `DOMParser-*`/`XMLSerializer-*`/`innerhtml-*`/`outerhtml-*`/`insert*` root tests,… [Подробности](wpt-vendor-notes/domparsing.md). |
 | `domxpath` | ⬜ | ✅ |  |  | Вендорена целиком 2026-07-26 (коммит `35be3b44`, `tests/wpt/domxpath/`, 39 файлов: `META.yml`, `README.md`, `WEB_FEATURES.yml`, 34 корневых теста, `resources/` —… [Подробности](wpt-vendor-notes/domxpath.md). |
 | `dpub-aam` | ⬜ | ✅ |  |  | Вендорена целиком 2026-07-26 (коммит `35be3b44`, `tests/wpt/dpub-aam/`, 43 файла: `META.yml`, `role/roles.html`, `manual/` — 41 `doc-*-manual.html` фикстура + `META.yml` + `README.md`), в скоупе (⬜,… [Подробности](wpt-vendor-notes/dpub-aam.md). |
