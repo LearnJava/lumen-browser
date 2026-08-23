@@ -204,10 +204,11 @@ alongside the real message text. 2 new tests
 `worker_onmessage_handler_exception_fires_parent_onerror`).
 **Not addressed in this slice:** `SharedWorker`'s equivalent mechanism
 (`shared_worker.rs`, a separate module with its own thread/message-loop
-shape) and a worker's `setTimeout`/`queueMicrotask` callbacks specifically
-(the *flush loop* now reports, but a callback that itself schedules another
-timer before throwing is untested) — narrower gaps, not named by any WPT
-cluster measured for this bug so far.
+shape — see its own section below, wired 2026-08-23) and a worker's
+`setTimeout`/`queueMicrotask` callbacks specifically (the *flush loop* now
+reports, but a callback that itself schedules another timer before throwing
+is untested) — narrower gaps, not named by any WPT cluster measured for this
+bug so far.
 
 **Module-script top-level runtime errors are now wired too (P1, 2026-08-23)**
 — `crate::v8_esm::load_and_evaluate`/`evaluate_entry_module`/`evaluate_module_url`
@@ -226,6 +227,47 @@ plain trait `eval_module`/`eval_module_at`. 3 new tests
 (`v8_runtime.rs::tests::eval_module_and_report_runtime_error_fires_window_error`,
 `eval_module_and_report_load_error_does_not_fire_window_error`,
 `eval_module_at_and_report_runtime_error_fires_window_error`).
+
+**`SharedWorker`'s equivalent mechanism is now wired too (P1, 2026-08-23)** —
+unlike a dedicated `Worker` (exactly one client), an uncaught exception
+anywhere in a `SharedWorkerGlobalScope` (top-level script body, `onconnect`,
+a port's `onmessage`, a flushed timer callback) must, per HTML LS "report the
+exception", fire `error` at *every* connected client's `SharedWorker` object
+— not just the one whose message happened to trigger it. `shared_worker.rs`
+now tracks a second map alongside the existing per-port message-outbox map,
+`error_ports: HashMap<port_id, WorkerErrorQueue>`, populated/removed on the
+same `Connect`/`Close` messages; a new `broadcast_shared_worker_error` helper
+pushes one report into *every* entry of that map (reusing `worker.rs`'s
+`WorkerErrorQueue`/`error_info_json`, now `pub(crate)`, instead of a
+duplicate type). Four sites now call it: `run_shared_worker_thread_v8`'s
+top-level `rt.eval(&script)` failure arm, and three previously-bare
+`catch(e){}` sites in `SHARED_WORKER_GLOBAL_SHIM` (`onconnect`/its listeners,
+a worker-side port's `onmessage`/its listeners, the timer-flush loop) via a
+new `_lumen_sw_report_exception` helper mirroring the dedicated worker's
+`_lumen_report_worker_exception`. On the client side, `V8JsRuntime::pump_shared_workers`
+gained a second drain (a new `shared_worker_errors: WorkerErrorQueue` field,
+parallel to `shared_worker_outbox`) that calls a new
+`_lumen_deliver_shared_worker_errors`, which looks the port id up in a new
+`_sharedWorkerInstances` map and fires `ErrorEvent` `'error'` there. This
+also closed a pre-existing, unrelated gap while it was being touched: the
+client-side `SharedWorker` JS class had **no `addEventListener`/`removeEventListener`
+at all** (`AbstractWorker`/`EventTarget` requires them) — `onerror` was a
+bare plain property, not an accessor, and the BUG-364 script-fetch-failure
+path called it directly instead of through a shared delivery function; both
+are now `SharedWorker.prototype` methods mirroring `Worker.prototype`'s
+existing `_onerror`/`_errorListeners`/`_deliverError` shape. 3 new tests
+(`dom.rs::tests::v8_webworker::shared_worker_onconnect_exception_fires_client_onerror`,
+`shared_worker_port_onmessage_exception_broadcasts_to_all_clients` — two
+independently-connected clients, only one posts the triggering message, both
+observe the broadcast — `shared_worker_error_addeventlistener_also_fires`).
+**Not tested here** (spec-ambiguous edge case, not a regression): the very
+first client that causes a worker to spawn races its own `Connect` against
+that worker's top-level script evaluation — if the script throws
+synchronously before the first `connect` task runs, that first client's port
+is not yet "entangled" by HTML LS's own definition, so it is unclear whether
+even a spec-compliant engine would report to it; every test above instead
+throws from `onconnect`/a port handler, where the connecting client is
+already registered by construction.
 
 **Not in scope of this slice — still open:**
 - `<body onerror>` forwarding to the special 5-arg form on a `Document`/child
