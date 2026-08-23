@@ -755,6 +755,10 @@ pub struct V8JsRuntime {
     /// `cookie_banner_dismiss` preference via [`Self::set_cookie_banner_dismiss`].
     /// Mirrors [`crate::QuickJsRuntime`]'s field of the same name.
     cookie_banner_dismiss: AtomicBool,
+    /// BUG-480 срез 2: реестр под-документов `<iframe>` («хост → Document»),
+    /// общий с нативами [`crate::frame_bridge`]. Наполняется
+    /// [`Self::register_frame_document`] после загрузки каждого фрейма.
+    frame_docs: crate::frame_bridge::FrameDocRegistry,
 }
 
 /// Process-global `navigator.userAgent` override (WebDriver BiDi
@@ -940,6 +944,7 @@ impl V8JsRuntime {
             shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
             shared_worker_errors: Arc::new(Mutex::new(Vec::new())),
             cookie_banner_dismiss: AtomicBool::new(true),
+            frame_docs: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -1358,6 +1363,36 @@ impl V8JsRuntime {
             for (nid, image) in bitmaps {
                 crate::img_bitmap_store::set_img_bitmap(nid, image);
             }
+        });
+    }
+
+    /// BUG-480 срез 2: зарегистрировать под-документ `<iframe>` для доступа из
+    /// JS родителя через `contentWindow`/`contentDocument`
+    /// ([`crate::frame_bridge`]).
+    ///
+    /// Вызывается shell-ом после загрузки ребёнка и **до** диспатча trusted
+    /// `load` на хосте — обработчики родителя вправе прочитать фасады прямо из
+    /// обработчика. `accessible=false` (cross-origin / opaque sandbox)
+    /// регистрирует биндинг без доступа к содержимому: `contentWindow`
+    /// существует, `contentDocument` и все нативы чтения пусты.
+    pub fn register_frame_document(
+        &self,
+        host_nid: u32,
+        doc: Arc<Mutex<lumen_dom::Document>>,
+        url: String,
+        accessible: bool,
+    ) {
+        let registry = Arc::clone(&self.frame_docs);
+        self.run(move |_inner| {
+            registry
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(crate::frame_bridge::FrameDocBinding {
+                    host_nid,
+                    doc,
+                    url,
+                    accessible,
+                });
         });
     }
 
@@ -5323,6 +5358,16 @@ impl V8JsRuntime {
         }
         install_v8!(highlight_api::install_highlight_api_bindings_v8);
         install_v8!(idle_detection::install_idle_detection_bindings_v8);
+        // BUG-480 срез 2: бридж contentWindow/contentDocument получает реестр
+        // рантайма явным аргументом (как geolocation/pointer_capture ниже),
+        // а не через install_v8! — нативы `_lumen_f_*` читают тот же Arc,
+        // куда пишет register_frame_document. Ставится до iframe_element:
+        // его геттеры вызывают функции шима бриджа.
+        if let Err(e) =
+            crate::frame_bridge::install_frame_bridge_v8(self, Arc::clone(&self.frame_docs))
+        {
+            eprintln!("v8: frame_bridge::install_frame_bridge_v8 failed: {e}");
+        }
         install_v8!(iframe_element::install_iframe_element_bindings_v8);
         install_v8!(inert::install_inert_api_v8);
         install_v8!(intl_bindings::install_intl_bindings_v8);
