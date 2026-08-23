@@ -33,7 +33,7 @@ importance — a test whose `testharness.js` was truncated by the TLS defect
 later, and reporting it as "missing harness global" would be reporting the
 symptom. Network-layer causes therefore sort above JS-level ones.
 
-**Four stages, in order of how much the evidence says.** `MECHANISMS` reads
+**Five stages, in order of how much the evidence says.** `MECHANISMS` reads
 what the browser printed while the test ran and matches the error text that
 names a cause. What survives that goes to `MEASURED_HANGS` — the ids that were
 *run standalone* under `--dump-layout` and did not finish (`verify_layout_hangs.py`,
@@ -41,13 +41,26 @@ WPT-RUN-6 slice 23); executing the page is stronger evidence than reading it,
 and for these mechanisms no regex over the source could decide the question
 anyway (whether a grid item reaches past the last explicit line depends on the
 resolved track count, which `repeat(auto-fill, ...)` makes a function of the
-container width). Then `SOURCE_MARKERS`, which greps the test (and its helpers)
+container width). Third is `SUBTEST_MARKERS` (WPT-RUN-6 slice 24), which reads
+the run's *own* partial harness report — the subtests `wptrunner` collected
+before the timeout — and attributes the file to the mechanism claiming the most
+of its hung (`TIMEOUT`/`NOTRUN`) subtests. That is evidence the run produced,
+and it reaches what a grep cannot: `query-encoding/resources/resolve-url.js`
+builds `<frame>`, `<iframe>`, `<object>` and `<embed>` in one loop over
+`createElement(tag)`, so no source pattern names the element that hung, while
+the subtest name (`load nested browsing context <frame src>`) does. Then
+`SOURCE_MARKERS`, which greps the test (and its helpers)
 for a wait that cannot finish — the silent mechanisms, which by construction
 print nothing. Only then does `WEAK_MECHANISMS` claim the rest of the *noisy*
 ones: a page that threw an exception the engine printed but no listener ever
 saw. That last stage sorts below the source markers on purpose — "something
 threw" is true of a `document.fonts.ready` page too, and reporting it that way
 would bury a mechanism that has a name (WPT-RUN-6 slice 14).
+
+**The residual keeps its subtest evidence.** For every id still unexplained,
+`residual_hung_subtests` in `--json` carries the names of the subtests that
+never finished — the work list the next slice picks its target from, and the
+only part of the record that says *where inside the file* the run stopped.
 
 **Collateral damage.** A hung browser is not restarted between the tests of a
 shard, so every test still queued for that process times out too — printing
@@ -65,7 +78,7 @@ Usage (from repo root, venv per tests/wpt/README.md):
 
     <venv>/python tests/wpt/timeout_audit.py [--out-dir .tmp/wpt-corpus]
         [--category PREFIX] [--top N] [--examples K] [--json OUT]
-        [--no-measured] [--no-source]
+        [--no-measured] [--no-subtests] [--no-source]
     <venv>/python tests/wpt/timeout_audit.py --selftest
 
 Safe to run against a live run's `--out-dir`: it only reads. A shard still
@@ -907,7 +920,31 @@ def _element_subresource_marker(text, test_id=None):
     return bool(_SUBRESOURCE_ELEMENT_RE.search(body))
 
 
+def _single_test_load_handler_marker(text, test_id=None):
+    """`setup({single_test})` + a body that runs entirely from `load`.
+
+    The shape of `css/css-shapes/spec-examples/*`: the file declares itself a
+    single test, does its asserting inside a function called from
+    `<body onload>` and calls `done()` at the end. An assertion that fails
+    there *throws*, `done()` is never reached, and the exception is swallowed
+    by `_lumen_apply_ready_state`'s bare `catch (e) {}` around the window
+    `load` listeners and `window.onload` (`dom.rs:13816`/`:13819`) — measured
+    2026-08-22, `verify_frame_load_media_gaps.py --variant onload-throw`: no
+    `error` event, no `window.onerror`, not even a line on stderr. So the file
+    reports NOTRUN and times out where a spec-compliant engine reports FAIL.
+
+    Requires all three markers: `single_test` alone is common, and a page that
+    merely has an `onload` attribute usually reports through `async_test`.
+    """
+    if "single_test" not in text:
+        return False
+    if not re.search(r"<body[^>]*\bonload\s*=", text, re.I):
+        return False
+    return "done()" in text
+
+
 SOURCE_MARKERS = [
+
     # First on purpose: see `_audio_src_marker` — the page stops dead at the
     # `src` assignment, before anything else it was going to do. It sorts above
     # the XML marker too: the media load is driven by the parser, so it happens
@@ -1370,6 +1407,19 @@ SOURCE_MARKERS = [
     ),
     # Truly last: "the test listens for an error" is the weakest of these
     # claims, so anything with a named cause above must take the test first.
+    # Late on purpose: this marker says why a failure surfaced as a TIMEOUT
+    # rather than what failed, so every marker naming an actual engine gap
+    # must be tried first — `pointerevent_setpointercapture_*` is a
+    # `<body onload>` single-test page *and* a testdriver-action page, and
+    # BUG-810 is the finding worth having.
+    Mechanism(
+        "single-test-load-handler-throw", "BUG-591", [],
+        "the whole test body runs from `<body onload>` under "
+        "`setup({single_test: true})`: a failing assertion throws, `done()` is "
+        "never reached and the exception is swallowed by the window-load "
+        "dispatch path, so a FAIL surfaces as NOTRUN + TIMEOUT",
+        predicate=_single_test_load_handler_marker,
+    ),
     Mechanism(
         "window-error-event-never-fired", "BUG-716/BUG-591", [],
         "the test completes from a window-level `error` / `unhandledrejection` "
@@ -1780,6 +1830,176 @@ def classify_measured(test_id):
             or MEASURED_HANGS.get(test_id.split("?")[0]))
 
 
+class SubtestMarker:
+    """One mechanism recognized from the harness's *own* partial report.
+
+    `wptrunner` writes every subtest it managed to collect before the timeout
+    into the shard's `wptreport` json, so a file that hung inside one
+    `async_test` names that test — and the subtests that PASSed next to it
+    prove the page was alive and the harness loaded. That is evidence produced
+    by the run, not a guess read off the file, which is why this stage sorts
+    above `SOURCE_MARKERS`.
+
+    `name` is matched against the names of the *hung* subtests (`TIMEOUT` /
+    `NOTRUN`) only; `test` optionally restricts the marker to ids matching a
+    pattern. The winner is the marker matching the most hung subtests, not the
+    first one in the table: a file whose 24 subtests split 18/6 between two
+    mechanisms is attributed to the mechanism that actually stopped it, and
+    ties fall back to table order.
+    """
+
+    def __init__(self, key, ref, name=None, test=None, note=""):
+        self.key = key
+        self.ref = ref
+        self.name = re.compile(name) if name else None
+        self.test = re.compile(test) if test else None
+        self.note = note
+
+    def score(self, test_id, hung_names):
+        """How many hung subtests of this test the marker claims (0 = none)."""
+        if self.test is not None and not self.test.search(test_id or ""):
+            return 0
+        if self.name is None:
+            return len(hung_names)
+        return sum(1 for name in hung_names if self.name.search(name))
+
+
+#: Third stage, between `MEASURED_HANGS` and `SOURCE_MARKERS`. Every entry was
+#: measured against a live browser by `verify_frame_load_media_gaps.py`
+#: (WPT-RUN-6 slice 24) — the subtest name only says *which* wait hung, the
+#: probe says why it can never finish.
+SUBTEST_MARKERS = [
+    # `<frame src>`, `<object data>` and `<embed src>` request nothing at all
+    # (proved on the probe's own server) and fire no `load`; `<frame>` is not
+    # even an `HTMLFrameElement`. The `<iframe>` subtests of the same files are
+    # BUG-480 — the majority rule decides which of the two owns the file.
+    SubtestMarker(
+        "nbc-element-never-loads", "BUG-854 / BUG-798 (+BUG-480 для iframe)",
+        name=r"nested browsing context must be navigated|"
+             r"load nested browsing context <(?:frame|object|embed)\b|"
+             r"^(?:same|cross)-origin <(?:frame|object|embed)[ >]",
+        note="`<frame>`/`<object data>`/`<embed src>` never request their "
+             "resource and never fire `load`, so a test waiting for the "
+             "nested browsing context to appear cannot finish",
+    ),
+    SubtestMarker(
+        "iframe-no-nested-context", "BUG-480",
+        name=r"load nested browsing context <iframe\b|"
+             r"^(?:same|cross)-origin <iframe[ >]",
+        note="an `<iframe src>`'s sub-document is never fetched (Phase 0, "
+             "`main.rs:5408`), so its `load` never fires — measured with the "
+             "probe's server, which is never asked for the child",
+    ),
+    # `<details>`: the shim fires `toggle` from the summary-click path only,
+    # and that path toggles `open` twice (listener + activation behaviour), so
+    # every "adding open should fire a toggle event" subtest hangs.
+    SubtestMarker(
+        "details-toggle-not-fired", "BUG-851",
+        name=r"toggle event at the '?details|Setting open from the parser",
+        note="a script-driven `open` change fires no `toggle` at all — the "
+             "shim's only dispatch site is the summary-click handler",
+    ),
+    # `ResizeObserver` never delivers the initial observation, so a callback
+    # armed on a static element is never entered (BUG-661, re-measured).
+    SubtestMarker(
+        "resize-observer-no-initial", "BUG-661",
+        name=r"^contain-intrinsic-size: auto$",
+        test=r"/css/css-sizing/contain-intrinsic-size/",
+        note="the test's whole body runs from a `ResizeObserver` callback, "
+             "and no initial observation is ever delivered",
+    ),
+    SubtestMarker(
+        "content-visibility-state-event", "BUG-852",
+        name=r"ContentVisibilityAutoStateChange|content-visibility",
+        test=r"/css/css-contain/content-visibility/",
+        note="`contentvisibilityautostatechange` is never dispatched and "
+             "`content-visibility` is absent from computed style",
+    ),
+    # An incubating element (WICG/PEPC): `<usermedia>`/`<geolocation>`/
+    # `<install>` are `HTMLUnknownElement`, so `onvalidationstatuschange`
+    # never fires. Not an engine defect — an unimplemented proposal.
+    SubtestMarker(
+        "permission-element-unimplemented", "нет (PEPC, incubation)",
+        test=r"/html/semantics/permission-element/",
+        note="the `<permission>` family is not implemented; the tests wait "
+             "for `onvalidationstatuschange` on an `HTMLUnknownElement`",
+    ),
+    SubtestMarker(
+        "media-resource-selection", "BUG-825",
+        name=r"volumechange|playbackRate|resource selection|candidate|"
+             r"error event with load\(\)|currentSrc",
+        test=r"/html/semantics/embedded-content/(?:media-elements|the-video-element)/",
+        note="the media resource selection algorithm never runs: a `<source>` "
+             "candidate is never requested, `networkState`/`currentSrc`/"
+             "`playbackRate` are `undefined` and `load()` fires nothing",
+    ),
+    SubtestMarker(
+        "script-empty-src", "BUG-853",
+        name=r"Script src with an empty URL",
+        note="`<script src=\"\">` fires neither `load` nor `error`, so a "
+             "test waiting for the error event hangs",
+    ),
+    # The clicked node's own activation behaviour is looked up instead of the
+    # nearest activatable ancestor (BUG-837), so a click on an inline element
+    # inside a `<label>`/`<a>` does nothing.
+    SubtestMarker(
+        "click-on-inner-element", "BUG-837",
+        name=r"inline element inside a label|anchor with embedded inline element|"
+             r"child of a button with \.click\(\)",
+        note="activation behaviour is resolved on the clicked node rather "
+             "than on the nearest activatable ancestor",
+    ),
+]
+
+
+def read_subtest_report(out_dir):
+    """`test id -> [(subtest name, status)]` from a run's wptreport files.
+
+    `run_corpus.py` writes both a mozlog `<shard>.raw.jsonl` and a wptreport
+    `<shard>.json` per shard; the audit reads the first for browser output and
+    this one for what the harness itself managed to report. A shard whose json
+    is missing or truncated (a run killed mid-write) contributes nothing rather
+    than failing the audit.
+    """
+    report = {}
+    for path in sorted(glob.glob(os.path.join(out_dir, "*.json"))):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        for record in data.get("results") or ():
+            test = record.get("test")
+            if not test:
+                continue
+            report[test] = [(sub.get("name") or "", sub.get("status") or "")
+                            for sub in record.get("subtests") or ()]
+    return report
+
+
+def hung_subtests(subtests):
+    """The names of the subtests that never finished."""
+    return [name for name, status in subtests if status in ("TIMEOUT", "NOTRUN")]
+
+
+def classify_subtests(test_id, subtests):
+    """Key for a test whose partial harness report names the hung wait, or None.
+
+    Runs after `MEASURED_HANGS` (a page proven to hang standalone outranks
+    everything) and before `SOURCE_MARKERS` (a grep of the file is weaker than
+    the run's own record of which test hung).
+    """
+    hung = hung_subtests(subtests)
+    if not hung:
+        return None
+    best, best_score = None, 0
+    for marker in SUBTEST_MARKERS:
+        score = marker.score(test_id, hung)
+        if score > best_score:
+            best, best_score = marker, score
+    return best.key if best else None
+
+
 def classify_source(test_id, root, cache, follow_helpers=True):
     """Second-stage key for a test the output stage could not claim, or None.
 
@@ -1910,16 +2130,19 @@ def classify(lines, mechanisms=None):
 
 
 def audit(out_dir, category=None, root=WPT_ROOT, use_source=True,
-          follow_helpers=True, use_measured=True):
+          follow_helpers=True, use_measured=True, use_subtests=True):
     """Classify every TIMEOUT in a run directory.
 
     `category` filters by manifest-id prefix (`html`, `html/canvas`, ...);
     `use_measured` enables the measured-hang stage (`MEASURED_HANGS`);
-    `use_source` enables the source-marker stage (`SOURCE_MARKERS`);
-    `follow_helpers` lets that stage read the test's `<script src>` helpers as
-    well as the test file itself (`helper_paths`).
+    `use_subtests` enables the partial-harness-report stage
+    (`SUBTEST_MARKERS`); `use_source` enables the source-marker stage
+    (`SOURCE_MARKERS`); `follow_helpers` lets that stage read the test's
+    `<script src>` helpers as well as the test file itself (`helper_paths`).
     """
     source_cache = {}
+    subtest_report = read_subtest_report(out_dir) if use_subtests else {}
+    subtest_evidence = {}
     counts = collections.Counter()
     by_cat = collections.defaultdict(collections.Counter)
     residual_sigs = collections.Counter()
@@ -1973,8 +2196,16 @@ def audit(out_dir, category=None, root=WPT_ROOT, use_source=True,
                 # Measured first: a page proven to hang standalone outranks
                 # anything its source merely suggests.
                 measured = classify_measured(test) if use_measured else None
+                from_subtests = (classify_subtests(test, subtest_report.get(test, []))
+                                 if use_subtests else None)
                 if measured:
                     key = measured
+                elif from_subtests:
+                    # The harness's own partial report: it names the subtest
+                    # that never finished, which a grep of the file cannot —
+                    # `resolve-url.js` builds all four nested-context elements
+                    # in one loop over `createElement(tag)`.
+                    key = from_subtests
                 elif use_source:
                     from_source = classify_source(test, root, source_cache,
                                                   follow_helpers=follow_helpers)
@@ -1997,6 +2228,13 @@ def audit(out_dir, category=None, root=WPT_ROOT, use_source=True,
                 # The full residual list, not a sample: the next slice picks
                 # its target out of it, and 3k ids is small next to the run.
                 residual_ids.append(test)
+                # ...and, where the harness got that far, the names of the
+                # subtests that never finished. This is the work list the
+                # next slice reads: a name is a locator for the wait, which
+                # neither the browser output nor the file name gives.
+                hung = hung_subtests(subtest_report.get(test, []))
+                if hung:
+                    subtest_evidence[test] = hung
             if key == UNCLASSIFIED:
                 for sig in sorted({normalize(line) for line in lines}):
                     residual_sigs[sig] += 1
@@ -2012,6 +2250,7 @@ def audit(out_dir, category=None, root=WPT_ROOT, use_source=True,
         "hung_browsers": sorted(hangs.values(),
                                 key=lambda h: -h["collateral"]),
         "residual_ids": residual_ids,
+        "residual_hung_subtests": subtest_evidence,
         "swallowed_errors": dict(swallowed),
         "swallowed_examples": {k: v for k, v in swallowed_examples.items()},
         "examples": {k: v for k, v in examples.items()},
@@ -2029,6 +2268,7 @@ def print_report(result, top=25, examples=3):
           f"({100.0 * total / ran:.1f}%)" if ran else "no tests")
     print()
     refs = {m.key: m.ref for m in MECHANISMS}
+    refs.update({m.key: m.ref + " (subtest marker)" for m in SUBTEST_MARKERS})
     refs.update({m.key: m.ref + " (source marker)" for m in SOURCE_MARKERS})
     refs.update({m.key: m.ref + " (worker-source marker)"
                  for m in WORKER_SOURCE_MARKERS})
@@ -2070,6 +2310,21 @@ def print_report(result, top=25, examples=3):
             print(f"  {count:6d}  {sig}")
             for test in result.get("swallowed_examples", {}).get(sig, [])[:1]:
                 print(f"          e.g. {test}")
+    hung_names = collections.Counter()
+    for names in result.get("residual_hung_subtests", {}).values():
+        hung_names.update(names)
+    if hung_names:
+        print()
+        covered = len(result.get("residual_hung_subtests", {}))
+        print(f"residual ids whose harness still reported: {covered} of "
+              f"{len(result['residual_ids'])} — the subtests that never "
+              f"finished (top {top}):")
+        for name, count in hung_names.most_common(top):
+            print(f"  {count:6d}  {name[:110]}")
+            for test, names in result["residual_hung_subtests"].items():
+                if name in names:
+                    print(f"          e.g. {test}")
+                    break
     print()
     print(f"top signatures inside the residual (top {top}):")
     for sig, count in sorted(result["residual_signatures"].items(),
@@ -2194,10 +2449,57 @@ def _write_selftest_shard(path):
     end("TestRunnerManager-2", 2400, "/css/css-transforms/2d-rotate-notref.html",
         "TIMEOUT", 504)
 
+    # 14. two silent pages whose *harness* still reported: the run recorded
+    #     which subtests never finished. Neither prints anything an error
+    #     table can use and neither has a source file on disk, so only the
+    #     subtest stage can name them. `/d/nbc.html` splits 3/1 between two
+    #     markers and is the majority rule's guard.
+    start("TestRunnerManager-2", 2500, "/d/nbc.html")
+    out("504", 2510, "Распарсено: 12 DOM-узлов, 3 CSS-правил")
+    end("TestRunnerManager-2", 2600, "/d/nbc.html", "TIMEOUT", 504)
+
+    start("TestRunnerManager-2", 2700, "/html/semantics/permission-element/pepc.tentative.html")
+    out("504", 2710, "Распарсено: 5 DOM-узлов, 1 CSS-правил")
+    end("TestRunnerManager-2", 2800, "/html/semantics/permission-element/pepc.tentative.html", "TIMEOUT", 504)
+
     with open(path, "w", encoding="utf-8") as handle:
         for event in events:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
         handle.write('{"action": "test_end", "time": "1', )  # truncated tail
+
+
+def _write_selftest_report(path):
+    """Synthetic wptreport json — the partial subtest record of the same run.
+
+    Only the fields the audit reads are written. `/d/nbc.html` is the shape
+    that makes the majority rule matter: three of its four hung subtests are
+    `<frame>`/`<object>`/`<embed>` and one is `<iframe>`, so the file belongs
+    to the first marker even though the second also matches.
+    """
+    report = {"results": [
+        {"test": "/d/nbc.html", "status": "TIMEOUT", "subtests": [
+            {"name": "load nested browsing context <frame src>", "status": "TIMEOUT"},
+            {"name": "load nested browsing context <object data>", "status": "TIMEOUT"},
+            {"name": "load nested browsing context <embed src>", "status": "NOTRUN"},
+            {"name": "load nested browsing context <iframe src>", "status": "TIMEOUT"},
+            {"name": "resolving a relative url", "status": "PASS"},
+        ]},
+        {"test": "/html/semantics/permission-element/pepc.tentative.html", "status": "TIMEOUT", "subtests": [
+            {"name": "Usermedia element display style validation", "status": "TIMEOUT"},
+        ]},
+        # A test that finished: its subtests must never reach the stage, which
+        # only runs on TIMEOUTs the earlier stages could not claim.
+        {"test": "/a/ok.html", "status": "OK", "subtests": [
+            {"name": "load nested browsing context <frame src>", "status": "PASS"},
+        ]},
+        # The residual test, with a hung subtest no marker claims: it must stay
+        # unclassified and its subtest name must reach `residual_hung_subtests`.
+        {"test": "/a/clean.html", "status": "TIMEOUT", "subtests": [
+            {"name": "an unattributed wait", "status": "TIMEOUT"},
+        ]},
+    ]}
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(report, handle, ensure_ascii=False)
 
 
 def selftest():
@@ -2211,11 +2513,12 @@ def selftest():
 
     with tempfile.TemporaryDirectory() as tmp:
         _write_selftest_shard(os.path.join(tmp, "synthetic.raw.jsonl"))
+        _write_selftest_report(os.path.join(tmp, "synthetic.json"))
         result = audit(tmp, use_source=False)
 
         mech = result["mechanisms"]
-        check(result["timeouts"] == 13,
-              f"expected 13 TIMEOUTs (the OK test excluded), got {result['timeouts']}")
+        check(result["timeouts"] == 15,
+              f"expected 15 TIMEOUTs (the OK test excluded), got {result['timeouts']}")
         check(result["statuses"].get("OK") == 1, "the OK test must still be counted")
         check(mech.get("https-body-truncated") == 1,
               f"TLS truncation must win over the missing global: {mech}")
@@ -3349,6 +3652,89 @@ def selftest():
               f"--no-measured must leave the measured test unclassified: "
               f"{unmeasured['mechanisms']}")
 
+        # Stage 2, WPT-RUN-6 slice 24: a `setup({single_test})` page whose
+        # body runs from `<body onload>`. All three markers are required —
+        # the two negatives below are the reason.
+        with open(os.path.join(tmp, "a", "shape.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script src="/resources/testharness.js"></script>\n'
+                         '<script>setup({ single_test: true });\n'
+                         'function check() { assert_equals(1, 2); done(); }</script>\n'
+                         '<body onload="check();">x</body>')
+        check(classify_source("/a/shape.html", tmp, {}) == "single-test-load-handler-throw",
+              "the load-handler marker did not claim its page")
+        with open(os.path.join(tmp, "a", "shape-async.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script>setup({ single_test: true });\n'
+                         'window.addEventListener("load", () => done());</script>')
+        check(classify_source("/a/shape-async.html", tmp, {}) is None,
+              "a page without the `<body onload>` attribute must not match")
+        with open(os.path.join(tmp, "a", "shape-plain.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script>function check() { done(); }</script>\n'
+                         '<body onload="check();">x</body>')
+        check(classify_source("/a/shape-plain.html", tmp, {}) is None,
+              "an `onload` attribute + `done()` without `single_test` must not match")
+        with open(os.path.join(tmp, "a", "shape-nodone.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script>setup({ single_test: true });\n'
+                         'function check() { assert_equals(1, 2); }</script>\n'
+                         '<body onload="check();">x</body>')
+        check(classify_source("/a/shape-nodone.html", tmp, {}) is None,
+              "a single_test page that never calls done() is a different shape")
+
+        # Stage 1c (WPT-RUN-6 slice 24): the run's own partial harness report.
+        check(mech.get("nbc-element-never-loads") == 1,
+              f"the subtest stage did not claim the nested-context test: {mech}")
+        check(mech.get("permission-element-unimplemented") == 1,
+              f"the subtest stage did not claim the permission-element test: {mech}")
+        # The majority rule, not table order: the iframe marker matches the
+        # same file (one subtest) and must lose to the three-subtest one.
+        check(mech.get("iframe-no-nested-context") is None,
+              f"a minority marker won the file: {mech}")
+        check(classify_subtests("/d/nbc.html", [
+            ("load nested browsing context <iframe src>", "TIMEOUT"),
+            ("load nested browsing context <frame src>", "PASS"),
+        ]) == "iframe-no-nested-context",
+              "with only the iframe subtest hung, the iframe marker must win")
+        # Table order must not be able to stand in for the majority rule: here
+        # the marker that sorts *first* matches one hung subtest and the one
+        # that sorts second matches three.
+        check(classify_subtests("/d/nbc.html", [
+            ("load nested browsing context <frame src>", "TIMEOUT"),
+            ("load nested browsing context <iframe src>", "TIMEOUT"),
+            ("same-origin <iframe>", "TIMEOUT"),
+            ("cross-origin <iframe>", "NOTRUN"),
+        ]) == "iframe-no-nested-context",
+              "the majority of hung subtests must decide, not table order")
+        # A subtest that PASSed is not evidence of a wait, and a test with no
+        # hung subtest at all must fall through to the later stages.
+        check(classify_subtests("/d/nbc.html", [
+            ("load nested browsing context <frame src>", "PASS")]) is None,
+              "a passing subtest must not attribute anything")
+        check(classify_subtests("/d/nbc.html", []) is None,
+              "a test with no subtest record must fall through")
+        # The `test=` filter: the same subtest name outside its directory is
+        # not the same mechanism.
+        check(classify_subtests("/elsewhere/auto-001.html",
+                                [("contain-intrinsic-size: auto", "TIMEOUT")]) is None,
+              "an id-scoped marker fired outside its directory")
+        # The residual keeps the evidence that did not attribute it.
+        check(result["residual_hung_subtests"].get("/a/clean.html")
+              == ["an unattributed wait"],
+              f"residual subtest evidence not recorded: "
+              f"{result['residual_hung_subtests']}")
+        check("/a/ok.html" not in result["residual_hung_subtests"],
+              "a test that finished must not appear in the residual evidence")
+        nosub = audit(tmp, use_source=False, use_subtests=False)
+        check(nosub["mechanisms"].get("nbc-element-never-loads") is None,
+              "--no-subtests must not classify by the harness report")
+        check(nosub["mechanisms"].get(UNCLASSIFIED) == 3,
+              f"--no-subtests must hand both tests back to the residual: "
+              f"{nosub['mechanisms']}")
+        check(not nosub["residual_hung_subtests"],
+              "--no-subtests must not collect subtest evidence either")
+        # A run whose wptreport is missing entirely disables the stage rather
+        # than failing the audit.
+        check(read_subtest_report(os.path.join(tmp, "nowhere")) == {},
+              "a missing wptreport must read as no evidence")
+
     for msg in failures:
         print("FAIL:", msg)
     print("selftest:", "ok" if not failures else f"{len(failures)} failure(s)")
@@ -3374,6 +3760,9 @@ def main():
     parser.add_argument("--no-measured", action="store_true",
                         help="skip the measured-hang stage (the ids "
                              "verify_layout_hangs.py ran standalone)")
+    parser.add_argument("--no-subtests", action="store_true",
+                        help="skip the partial-harness-report stage (the "
+                             "hung subtest names wptrunner recorded)")
     parser.add_argument("--no-source", action="store_true",
                         help="skip the source-marker stage (output evidence only)")
     parser.add_argument("--selftest", action="store_true",
@@ -3391,7 +3780,8 @@ def main():
     result = audit(args.out_dir, category=args.category,
                    use_source=not args.no_source,
                    follow_helpers=not args.no_helpers,
-                   use_measured=not args.no_measured)
+                   use_measured=not args.no_measured,
+                   use_subtests=not args.no_subtests)
     print_report(result, top=args.top, examples=args.examples)
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as handle:
