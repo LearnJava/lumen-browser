@@ -1091,6 +1091,7 @@ fn run_window_mode(
         ime_composing: None,
         bfcache: BfCache::new(16),
         frozen_styles: HashMap::new(),
+        parked_pages: Vec::new(),
         nav_back: Vec::new(),
         nav_fwd: Vec::new(),
         nav_key_counter: 0,
@@ -5196,6 +5197,47 @@ struct LayoutSource {
     dynamic_css: Option<DynamicCssBase>,
 }
 
+/// A page kept *alive* for back/forward restoration (HTML LS §7.4.6, "salvageable
+/// document" / bfcache).
+///
+/// The frozen bfcache path ([`Lumen::bfcache_thaw`]) serializes the DOM and
+/// installs a **fresh** JS runtime over it, which loses every timer, closure and
+/// event listener the page had — the restored document is inert, and that is
+/// exactly what [BUG-835](../../../bugs/BUG-835-FIXED.md) measured: after
+/// `history.back()` no script of the restored page ever ran again. Since each
+/// `V8JsRuntime` owns its own OS thread and isolate,
+/// keeping the whole handle alive is both possible and cheap to reason about:
+/// nothing pumps a parked runtime (`route_task_js` only ever reaches the active
+/// `js_ctx`), so its timers and animation frames are paused for exactly as long
+/// as the page is in the back/forward cache — which is the spec's model.
+///
+/// Parked entries are capped at [`PARKED_PAGES_MAX`]; a page with no JS runtime
+/// at all is not parked here but frozen the old way, where a fresh runtime over
+/// the restored DOM loses nothing.
+struct ParkedPage {
+    /// The page's live JS runtime, unpumped while parked.
+    js: Arc<dyn PersistentJs>,
+    /// DOM shared with `js` — the same `Arc` the runtime holds.
+    document: Arc<Mutex<Document>>,
+    /// Stylesheet snapshot the page was laid out with.
+    stylesheet: Arc<lumen_css_parser::Stylesheet>,
+    /// Decoded HTML source, carried over so a later reload of the restored page
+    /// does not need the network.
+    html_source: Option<String>,
+    /// Scroll offset at the moment the page was parked.
+    scroll_x: f32,
+    /// Scroll offset at the moment the page was parked.
+    scroll_y: f32,
+    /// Window title at the moment the page was parked.
+    title: Option<String>,
+}
+
+/// How many live pages may sit in the back/forward cache at once.
+///
+/// Each entry pins a V8 isolate and its thread, so this is deliberately much
+/// smaller than the HTML-snapshot [`BfCache`] capacity.
+const PARKED_PAGES_MAX: usize = 2;
+
 /// Frozen state of a background tab — moved in/out of `Lumen` on tab switch.
 ///
 /// All per-page fields from `Lumen` live here while the tab is not active.
@@ -5255,6 +5297,9 @@ struct PageSnapshot {
     /// Parsed stylesheets of frozen bfcache pages, keyed by URL.
     /// Kept shell-side because `Stylesheet` is not serializable.
     frozen_styles: HashMap<String, lumen_css_parser::Stylesheet>,
+    /// Mirrors [`Lumen::parked_pages`] — travels with the tab so a parked page
+    /// can never be restored into a different tab.
+    parked_pages: Vec<(String, ParkedPage)>,
     nav_back: Vec<NavEntry>,
     nav_fwd: Vec<NavEntry>,
     form_state: forms::FormState,
@@ -8395,6 +8440,10 @@ struct Lumen {
     /// Kept shell-side because `Stylesheet` is not serializable.
     /// Pruned lazily against `bfcache.has_frozen`.
     frozen_styles: HashMap<String, lumen_css_parser::Stylesheet>,
+    /// Pages kept alive (JS runtime included) for back/forward restoration,
+    /// keyed by URL — see [`ParkedPage`]. Capped at [`PARKED_PAGES_MAX`];
+    /// a `Vec` rather than a map because eviction is oldest-first.
+    parked_pages: Vec<(String, ParkedPage)>,
     /// Navigation history stack — pages the user navigated away from.
     /// Top = most recent previous page.
     nav_back: Vec<NavEntry>,
@@ -20407,6 +20456,101 @@ impl Lumen {
         true
     }
 
+    /// Park the current page whole — JS runtime included — so a later
+    /// back/forward navigation can restore a *live* document (BUG-835).
+    ///
+    /// Only the handles are cloned: `js_ctx` and `layout_source` stay in place
+    /// until the incoming navigation replaces them, so nothing about the page
+    /// being navigated away from changes here. From the moment the shell swaps
+    /// in the next page's handle, the parked runtime stops being pumped —
+    /// `route_task_js`/`route_query_js` reach only the active one — which is
+    /// what pauses its timers and rAF callbacks for the duration of the park.
+    ///
+    /// Returns `false` (and parks nothing) for a page with no JS runtime or no
+    /// layout source; those go down the frozen-DOM path instead, where
+    /// reinstalling a fresh runtime loses nothing.
+    fn park_current_page(&mut self) -> bool {
+        let Some(url) = self.source.url_str().map(str::to_owned) else {
+            return false;
+        };
+        let Some(js) = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            Arc::clone,
+        ) else {
+            return false;
+        };
+        let Some(ls) = self.layout_source.as_ref() else {
+            return false;
+        };
+        let parked = ParkedPage {
+            js,
+            document: Arc::clone(&ls.document),
+            stylesheet: Arc::clone(&ls.stylesheet),
+            html_source: ls.html_source.clone(),
+            scroll_x: self.scroll_x,
+            scroll_y: self.scroll_y,
+            title: self.title.clone(),
+        };
+        // One entry per URL: re-parking the same page replaces the older copy.
+        self.parked_pages.retain(|(u, _)| *u != url);
+        self.parked_pages.push((url, parked));
+        while self.parked_pages.len() > PARKED_PAGES_MAX {
+            self.parked_pages.remove(0);
+        }
+        true
+    }
+
+    /// Whether a live page is parked for `url` — see [`Self::park_current_page`].
+    fn has_parked_page(&self, url: &str) -> bool {
+        self.parked_pages.iter().any(|(u, _)| u == url)
+    }
+
+    /// Restore a page parked by [`Self::park_current_page`]: put its DOM,
+    /// stylesheet and JS runtime back into the active slot, re-lay out and fire
+    /// `pageshow(persisted=true)`.
+    ///
+    /// Unlike [`Self::bfcache_thaw`] the runtime is the page's own, so its
+    /// timers, listeners and closures resume exactly where the park left them.
+    /// The caller must have set `self.source` to the page being restored first —
+    /// `relayout`/`commit_nav_state` read it.
+    fn restore_parked_page(&mut self, url: &str) -> bool {
+        let Some(pos) = self.parked_pages.iter().position(|(u, _)| u == url) else {
+            return false;
+        };
+        let (_, parked) = self.parked_pages.remove(pos);
+        // Same order as `apply_loaded_page`: drop the outgoing handle before the
+        // layout source it shares a `Document` with, then install the new pair.
+        self.set_js_ctx(None);
+        self.layout_source = Some(LayoutSource {
+            document: Arc::clone(&parked.document),
+            stylesheet: parked.stylesheet,
+            html_source: parked.html_source,
+            // Restored pages have no live response headers; treated as cacheable,
+            // exactly as `bfcache_thaw` does.
+            cache_control_no_store: false,
+            // BUG-743: the CSS parts the sheet was built from are not kept.
+            dynamic_css: None,
+        });
+        self.set_js_ctx(Some(parked.js));
+        self.sync_engine_js_state();
+        self.relayout();
+        self.scroll_x = parked.scroll_x;
+        self.scroll_y = parked.scroll_y;
+        self.title = parked.title.clone();
+        if let Some(w) = self.window.as_ref() {
+            w.set_title(&window_title(self.title.as_deref()));
+        }
+        route_eval_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            "_lumen_fire_page_lifecycle('pageshow', true)".to_string(),
+        );
+        self.request_redraw();
+        self.commit_nav_state();
+        true
+    }
+
     /// Сохранить текущую страницу в bfcache и стек навигации,
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
@@ -20455,11 +20599,18 @@ impl Lumen {
         // be attributed to it in the health journal.
         health_log::set_current_url(&source.describe());
         self.hint.close();
+        // BUG-835: a page that has a JS runtime is parked *whole* — the runtime
+        // goes into `parked_pages` alive, so back/forward restores a document
+        // whose timers, listeners and closures still exist. The frozen-DOM path
+        // below stays for pages without JS, where reinstalling a fresh runtime
+        // over the restored DOM loses nothing.
+        let bfcache_eligible = self.bfcache_eligible();
+        let mut persisted = bfcache_eligible && self.park_current_page();
         // Phase-3 freeze: serialize live DOM arena + shell-side stylesheet.
         // JS heap suspend is gated on 10C.2, so event handlers are NOT retained.
         // The thaw path reinstalls a fresh runtime over the restored DOM.
-        let mut persisted = false;
-        if self.bfcache_eligible()
+        if !persisted
+            && bfcache_eligible
             && let Some(ref ls) = self.layout_source
             && let Some(url) = self.source.url_str()
             && let Ok(guard) = ls.document.lock()
@@ -20679,6 +20830,25 @@ impl Lumen {
             same_doc_state_json: if cur_state != "null" { Some(cur_state) } else { None },
             nav_key: self.current_nav_key.clone(),
         });
+        // BUG-835: a live parked page wins over every frozen/snapshot payload —
+        // it is the only restore path that brings the document's JS state back.
+        if let Some(url) = prev.source.url_str().map(str::to_owned)
+            && self.has_parked_page(&url)
+        {
+            // Park the document being left as well, so Forward restores it alive
+            // too instead of reloading it from scratch.
+            if self.bfcache_eligible() {
+                self.park_current_page();
+            }
+            self.source = prev.source.clone();
+            self.current_nav_key = prev.nav_key.clone();
+            if self.restore_parked_page(&url) {
+                if let Some((state_json, display_url)) = post_reload_traversal.clone() {
+                    self.apply_post_reload_traversal(state_json, display_url);
+                }
+                return;
+            }
+        }
         // Try bfcache first: a Frozen payload thaws in place (no reload); an
         // HtmlSnapshot falls back to the existing re-parse path.
         let restored_scroll = if let Some(url) = prev.source.url_str() {
@@ -20818,6 +20988,22 @@ impl Lumen {
             same_doc_state_json: if cur_state != "null" { Some(cur_state) } else { None },
             nav_key: self.current_nav_key.clone(),
         });
+        // BUG-835: mirror of `navigate_back` — a live parked page wins.
+        if let Some(url) = next.source.url_str().map(str::to_owned)
+            && self.has_parked_page(&url)
+        {
+            if self.bfcache_eligible() {
+                self.park_current_page();
+            }
+            self.source = next.source.clone();
+            self.current_nav_key = next.nav_key.clone();
+            if self.restore_parked_page(&url) {
+                if let Some((state_json, display_url)) = post_reload_traversal.clone() {
+                    self.apply_post_reload_traversal(state_json, display_url);
+                }
+                return;
+            }
+        }
         // Try bfcache first: a Frozen payload thaws in place (no reload); an
         // HtmlSnapshot falls back to the existing re-parse path.
         let restored_scroll = if let Some(url) = next.source.url_str() {
@@ -24375,6 +24561,7 @@ impl Lumen {
             ime_composing: self.ime_composing.take(),
             bfcache: std::mem::replace(&mut self.bfcache, BfCache::new(16)),
             frozen_styles: std::mem::take(&mut self.frozen_styles),
+            parked_pages: std::mem::take(&mut self.parked_pages),
             nav_back: std::mem::take(&mut self.nav_back),
             nav_fwd: std::mem::take(&mut self.nav_fwd),
             form_state: std::mem::take(&mut self.form_state),
@@ -24462,6 +24649,7 @@ impl Lumen {
         self.ime_composing = snap.ime_composing;
         self.bfcache = snap.bfcache;
         self.frozen_styles = snap.frozen_styles;
+        self.parked_pages = snap.parked_pages;
         self.nav_back = snap.nav_back;
         self.nav_fwd = snap.nav_fwd;
         self.form_state = snap.form_state;
@@ -24559,6 +24747,7 @@ impl Lumen {
         self.ime_composing = None;
         self.bfcache = BfCache::new(16);
         self.frozen_styles = HashMap::new();
+        self.parked_pages = Vec::new();
         self.nav_back = Vec::new();
         self.nav_fwd = Vec::new();
         self.form_state = HashMap::new();

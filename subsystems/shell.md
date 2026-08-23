@@ -540,6 +540,28 @@
   V8. Full removal of `rquickjs`/`QuickJsRuntime`/`QuickPersistentJs` is a separate,
   larger follow-up slice (S12b, `docs/tasks/ph3-v8-migration.md`) — not done here.
 - **Done (V8 shell adapter — Ph3 `P3-v8` S4, 2026-07-13):** `#[cfg(feature = "v8")] struct V8PersistentJs` mirrors `QuickPersistentJs`, implementing every `PersistentJs` method. State-backed methods (`take_dom_dirty`, `take_navigate_request`, scroll/history/focus/fullscreen queues, etc.) delegate to new `V8JsRuntime` accessors added in `crates/js/src/v8_runtime.rs` (same field-per-accessor shape as `QuickJsRuntime`). Subsystems not yet ported to V8 (workers, canvas2d, view transitions, notifications — see `docs/tasks/ph3-v8-migration.md` slices S5–S11) use empty/no-op stubs and start returning real data once their slice lands. Both `Arc<dyn PersistentJs>` construction sites are mirrored: initial page load (`run_scripts_with_dom`) and bfcache thaw (`Lumen::thaw_from_bfcache`-equivalent branch). `quickjs` and `v8` features may both be compiled in (both native sets build), but the `quickjs` construction branch always returns/wins at each site — its `#[cfg]` guard is unconditional while the `v8` branch is gated `#[cfg(all(feature = "v8", not(feature = "quickjs")))]` — so exercising the V8 path requires `--no-default-features --features backend-femtovg,v8` (default already turns `quickjs` on). Side-fix: `backend_factory.rs`'s `create_wgpu` stub (compiled when `backend-wgpu` is off) was missing the `target_color_space` parameter the two call sites always pass — broke any `--no-default-features --features backend-femtovg,*` build regardless of JS engine; added the parameter (ignored) to match the real `create_wgpu` signature.
+- **Done (bfcache keeps the page's JS runtime alive — BUG-835, 2026-08-23):**
+  the back/forward cache no longer freezes a page that has JS. `ParkedPage`
+  (`js: Arc<dyn PersistentJs>` + the DOM/stylesheet/html-source it was laid out
+  with + scroll/title) is stored in `Lumen::parked_pages: Vec<(String, ParkedPage)>`
+  (cap `PARKED_PAGES_MAX = 2`, oldest-first eviction, keyed by URL and carried in
+  `PageSnapshot` so a parked page can never surface in another tab).
+  `park_current_page()` runs on navigate-away when `bfcache_eligible()`, and
+  clones *handles only* — `js_ctx` and `layout_source` stay in place until the
+  incoming navigation replaces them, so nothing about the outgoing page changes.
+  `navigate_back`/`navigate_forward` consult `has_parked_page()` **before** the
+  bfcache payload and, on a hit, park the outgoing document too and call
+  `restore_parked_page()`, which puts the pair back with `apply_loaded_page`'s
+  ordering (`set_js_ctx(None)` → `layout_source` → `set_js_ctx(Some(..))`),
+  re-lays out and fires `pageshow(persisted=true)`.
+  Why this is cheap rather than an isolate-suspend problem: every `V8JsRuntime`
+  owns its own OS thread and isolate, and `route_task_js`/`route_query_js` reach
+  only the **active** handle — so a parked runtime is simply never pumped and its
+  timers/rAF stop for exactly as long as the page sits in the cache, which is the
+  HTML LS model. The frozen-DOM path (`bfcache_thaw`) is now reached only by pages
+  with no JS runtime, where installing a fresh one loses nothing; that is what made
+  it a *bug* before — the restored document had no timer, listener or closure at all,
+  and the four symptoms of [BUG-835](../bugs/BUG-835-FIXED.md) were one cause.
 - **Done (Ph3 `P3-bfcache` level 1 closed — `no-store`, restore benchmark,
   T2→T3 degradation, 2026-07-13):** `RawPage`/`LayoutSource` gained
   `cache_control_no_store: bool` (mirrors the existing `cross_origin_isolated`
