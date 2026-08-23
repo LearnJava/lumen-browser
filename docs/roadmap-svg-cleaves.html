@@ -55,10 +55,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-23",
+ "generated": "2026-08-24",
  "counts": {
-  "open": 401,
-  "fixed": 457,
+  "open": 400,
+  "fixed": 458,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -3878,7 +3878,7 @@
        "title": "WPT: вендорить + прогнать категорию `resize-observer`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root resize-observer --recursive`, ~2 мин, 25 файлов, 15 исполнившихся id) — **3/15 harness OK, 13/32 сабтестов**. Заведён [BUG-661](bugs/BUG-661-OPEN.md) — `ResizeObserver` не спек-совместим по четырём независимо подтверждённым осям: (1) доставка целиком завязана на relayout-пайплайн, поэтому `observe()` без последующей мутации никогда не получает гарантированное спекой первое уведомление (живой `--mcp-live-port`-пробой — 3 с опроса без единой доставки, до первой несвязанной мутации), это и объясняет чистые TIMEOUT без единого сабтеста (`ordering.html`, `calculate-depth-for-node.html`); (2) `observe()` не валидирует аргумент — тихо no-op вместо `TypeError` на не-Element (`observe.html`); (3) `contentRect`/`borderBoxSize`/`contentBoxSize`/`devicePixelContentBoxSize` — один и тот же плоский rect без различия border/content/scrollbar (`scrollbars.html`, `scrollbars-2.html`); (4) reparenting (remove+appendChild) той же геометрии не сбрасывает `lastW`/`lastH` — уведомление не приходит (`notify.html`, test2). Второй, независимый [BUG-662](bugs/BUG-662-OPEN.md) (js/v8_runtime.rs, не специфичен для этой категории) — `rt.eval()`'s completion-value сериализация (`from_v8_bounded`) безусловно дёргает все геттеры возвращаемого объекта, даже когда значение никем не читается (`crates/shell/src/main.rs`'s классик-скрипт луп его отбрасывает); геттер, бросающий вне своего `this`-контекста (найдено на невендоренном апстримном `resizeTestHelper.js`), маскирует реальную (в данном случае — отсутствующую) ошибку скрипта под непонятный `get '<key>' failed`. `fragments.html` (multicol fragment-aware `contentBoxSize`/`borderBoxSize` массивы) и `svg-with-css-box-001.html`/`svg.html`/`zoom.html`/`eventloop.html`/`callback-cross-realm-report-exception.html` — не доисследованы в эту сессию (см. секцию «НЕ является причиной» в BUG-661), вероятно частично объясняются той же осью (1).",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root resize-observer --recursive`, ~2 мин, 25 файлов, 15 исполнившихся id) — **3/15 harness OK, 13/32 сабтестов**. Заведён [BUG-661](bugs/BUG-661-FIXED.md) — `ResizeObserver` не спек-совместим по четырём независимо подтверждённым осям: (1) доставка целиком завязана на relayout-пайплайн, поэтому `observe()` без последующей мутации никогда не получает гарантированное спекой первое уведомление (живой `--mcp-live-port`-пробой — 3 с опроса без единой доставки, до первой несвязанной мутации), это и объясняет чистые TIMEOUT без единого сабтеста (`ordering.html`, `calculate-depth-for-node.html`); (2) `observe()` не валидирует аргумент — тихо no-op вместо `TypeError` на не-Element (`observe.html`); (3) `contentRect`/`borderBoxSize`/`contentBoxSize`/`devicePixelContentBoxSize` — один и тот же плоский rect без различия border/content/scrollbar (`scrollbars.html`, `scrollbars-2.html`); (4) reparenting (remove+appendChild) той же геометрии не сбрасывает `lastW`/`lastH` — уведомление не приходит (`notify.html`, test2). Второй, независимый [BUG-662](bugs/BUG-662-OPEN.md) (js/v8_runtime.rs, не специфичен для этой категории) — `rt.eval()`'s completion-value сериализация (`from_v8_bounded`) безусловно дёргает все геттеры возвращаемого объекта, даже когда значение никем не читается (`crates/shell/src/main.rs`'s классик-скрипт луп его отбрасывает); геттер, бросающий вне своего `this`-контекста (найдено на невендоренном апстримном `resizeTestHelper.js`), маскирует реальную (в данном случае — отсутствующую) ошибку скрипта под непонятный `get '<key>' failed`. `fragments.html` (multicol fragment-aware `contentBoxSize`/`borderBoxSize` массивы) и `svg-with-css-box-001.html`/`svg.html`/`zoom.html`/`eventloop.html`/`callback-cross-realm-report-exception.html` — не доисследованы в эту сессию (см. секцию «НЕ является причиной» в BUG-661), вероятно частично объясняются той же осью (1).",
        "bugs": [
         "BUG-661",
         "BUG-662"
@@ -9779,10 +9779,10 @@
    "debtor": false
   },
   "BUG-661": {
-   "status": "open",
+   "status": "fixed",
    "title": "`ResizeObserver` delivery only runs inside the relayout pipeline, so `observe()` with no subsequent DOM/style mutation never gets its spec-guaranteed initial no…",
    "component": "js (`crates/js/src/dom.rs:7085`–`7138` — `ResizeObserver`), shell (`crates/shell/src/main.rs:10300` — relayout-gated delivery)",
-   "date": null,
+   "date": "2026-08-23",
    "debtor": false
   },
   "BUG-662": {
