@@ -25,7 +25,7 @@ process): **236/345 harness OK, 157/1244 subtests passed** — real signal,
 the vast majority of files actually execute (no HTTPS-port gap, no
 testdriver wall).
 
-### Dominant finding: [BUG-780](../../bugs/BUG-780-OPEN.md)
+### Dominant finding: [BUG-780](../../bugs/BUG-780-FIXED.md)
 
 `XMLHttpRequest.prototype.open` (`crates/js/src/xhr.rs:216-236`) takes the
 `url` argument completely literally (`this._url = String(url);`) — no
@@ -90,7 +90,7 @@ BUG-780 itself is fixed and the category is re-run.
 предикторам: 0 variant, 1 testdriver-файл, 0 `.https.`).
 
 `run_report.py --all --root xhr --recursive` — 14 мин 19 с, **236/345
-harness OK, 157/1244 сабтестов**. Найден [BUG-780](../bugs/BUG-780-OPEN.md):
+harness OK, 157/1244 сабтестов**. Найден [BUG-780](../bugs/BUG-780-FIXED.md):
 `XMLHttpRequest.open()` берёт `url` буквально (`this._url = String(url)`),
 без единого шага резолюции против document base — шестой независимый
 сайт семейства BUG-346/347/359/362/370, не унаследовавший фикс BUG-347

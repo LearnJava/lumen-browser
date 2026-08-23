@@ -4,7 +4,7 @@
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 25 — живой замер, маркер `beacon`)
 **Область:** `crates/js/src/dom.rs:7379`–`7397` (`navigator.sendBeacon` — цепочка `if` по типу тела: строка, `URLSearchParams`, `FormData`, `Blob`; ветки для `ArrayBuffer`/`ArrayBufferView` нет, поэтому `body` остаётся `''`), `crates/js/src/v8_runtime.rs:3449` (`_lumen_send_beacon` — URL уходит в `fetch_with_body_sync` как есть, без разрешения относительно документа)
 **Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.
-**Родственный:** [BUG-780](BUG-780-OPEN.md) — та же форма у `XMLHttpRequest.open` (URL сохраняется дословно и умирает в сетевом слое как `invalid url: missing scheme`).
+**Родственный:** [BUG-780](BUG-780-FIXED.md) — та же форма у `XMLHttpRequest.open` (URL сохраняется дословно и умирает в сетевом слое как `invalid url: missing scheme`).
 
 ## Симптом
 

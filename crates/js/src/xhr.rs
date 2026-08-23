@@ -228,7 +228,19 @@ XMLHttpRequest.prototype.open = function(method, url, async, user, password) {
         this._respHeadersRaw = '';
     }
     this._method          = String(method).toUpperCase();
-    this._url             = String(url);
+    // XHR §4.5.1 step 6 — the URL is parsed against the document base URL HERE,
+    // not in send(): `responseURL`, `abort()` and the CORS checks all read the
+    // already-resolved URL, and the base must be the one in force at open() time.
+    // BUG-780: this shim is a separate `rt.eval` from `WEB_API_SHIM`, so it never
+    // inherited the BUG-347 fix `fetch()` got — a relative URL reached the network
+    // layer verbatim and died there as `invalid url: missing scheme`.
+    // Both helpers are globals of `WEB_API_SHIM`, which installs before this shim;
+    // the `typeof` guard keeps a context without them (no DOM installed) working
+    // exactly as before instead of throwing.
+    this._url             = (typeof _url_resolve === 'function' &&
+                             typeof _lumen_document_base_url === 'function')
+                          ? _url_resolve(String(url), _lumen_document_base_url())
+                          : String(url);
     this._reqHeaders      = {};
     this._aborted         = false;
     this._sent            = false;
@@ -425,9 +437,27 @@ mod tests {
     }
 
     fn rt() -> V8JsRuntime {
+        rt_at("")
+    }
+
+    /// Same runtime, but with a real page URL so `_lumen_document_base_url()`
+    /// has something to resolve against (BUG-780 tests).
+    fn rt_at(page_url: &str) -> V8JsRuntime {
         let r = V8JsRuntime::new().unwrap();
-        r.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false)
-            .unwrap();
+        r.install_dom(
+            make_doc(),
+            page_url,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
         r
     }
 
@@ -491,6 +521,73 @@ mod tests {
                 "var x = new XMLHttpRequest(); \
                  x.open('POST', 'http://example.com/api'); \
                  x._method === 'POST' && x._url === 'http://example.com/api'"
+            )
+            .unwrap(),
+            bool_true()
+        );
+    }
+
+    // ── BUG-780: open() resolves the URL against the document base ────────────
+
+    #[test]
+    fn xhr_open_resolves_relative_url() {
+        let r = rt_at("http://example.com/dir/page.html");
+        assert_eq!(
+            r.eval(
+                "var x = new XMLHttpRequest(); \
+                 x.open('GET', 'resources/foo.json'); \
+                 x._url"
+            )
+            .unwrap(),
+            JsValue::String("http://example.com/dir/resources/foo.json".into())
+        );
+    }
+
+    #[test]
+    fn xhr_open_resolves_root_relative_url() {
+        let r = rt_at("http://example.com/dir/page.html");
+        assert_eq!(
+            r.eval(
+                "var x = new XMLHttpRequest(); \
+                 x.open('GET', '/common/blank.html?pipe=trickle(d1)'); \
+                 x._url"
+            )
+            .unwrap(),
+            JsValue::String("http://example.com/common/blank.html?pipe=trickle(d1)".into())
+        );
+    }
+
+    #[test]
+    fn xhr_open_leaves_absolute_url_untouched() {
+        let r = rt_at("http://example.com/dir/page.html");
+        assert_eq!(
+            r.eval(
+                "var x = new XMLHttpRequest(); \
+                 x.open('GET', 'https://other.example/api?q=1#frag'); \
+                 x._url"
+            )
+            .unwrap(),
+            JsValue::String("https://other.example/api?q=1#frag".into())
+        );
+    }
+
+    /// The base is read at `open()` time, so a `<base href>` added to the
+    /// document afterwards must not retro-actively move an already-open request
+    /// (XHR §4.5.1 step 6), while the next `open()` must honour it.
+    #[test]
+    fn xhr_open_uses_base_element_in_force_at_open_time() {
+        let r = rt_at("http://example.com/dir/page.html");
+        assert_eq!(
+            r.eval(
+                "var before = new XMLHttpRequest(); \
+                 before.open('GET', 'a.json'); \
+                 var b = document.createElement('base'); \
+                 b.setAttribute('href', 'http://cdn.example/base/'); \
+                 document.documentElement.appendChild(b); \
+                 var after = new XMLHttpRequest(); \
+                 after.open('GET', 'a.json'); \
+                 before._url === 'http://example.com/dir/a.json' && \
+                 after._url === 'http://cdn.example/base/a.json'"
             )
             .unwrap(),
             bool_true()

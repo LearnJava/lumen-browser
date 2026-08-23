@@ -1,6 +1,6 @@
 # BUG-812 — `XMLHttpRequest.open()` не разрешает относительный URL: запрос уходит в сеть строкой и умирает с `invalid url: missing scheme`
 
-**Статус:** DUPLICATE → [BUG-780](BUG-780-OPEN.md)
+**Статус:** DUPLICATE → [BUG-780](BUG-780-FIXED.md)
 **Слит:** 2026-08-22 — тот же дефект, та же строка (`xhr.rs`, `this._url = String(url)` в `open()`), тот же фикс (резолв против базы документа в `open()`). BUG-780 заведён раньше (2026-08-18, WPT-VENDOR-xhr) и потому выживает; **чинить и закрывать нужно его**. Уникальное из этого файла перенесено в BUG-780: живая проба `verify_csp_url_worker_gaps.py` (`--variant xhr-relative`/`xhr-root-relative` с контролями) и корпусной счёт механизма `relative-url-unresolved` (71 id остатка WPT-RUN-5). Файл оставлен целиком: на него ссылаются `timeout_audit.py`-отчёты и заметки среза 18.
 **Заведён:** 2026-08-21 (WPT-RUN-6, срез 18 — 71 TIMEOUT остатка, механизм `relative-url-unresolved`)
 **Область:** `crates/js/src/xhr.rs:231` (`this._url = String(url)` в `open()`), `crates/js/src/xhr.rs:312-314` (`send()` отдаёт `this._url` в `_lumen_fetch_sync_with_body`/`_lumen_fetch_sync` как есть)
