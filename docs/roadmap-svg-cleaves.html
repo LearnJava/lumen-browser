@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-23",
  "counts": {
-  "open": 402,
-  "fixed": 455,
+  "open": 401,
+  "fixed": 456,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -11032,10 +11032,10 @@
    "debtor": false
   },
   "BUG-849": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.createElement` стоит ~142 мкс и навсегда удерживает JS-обёртку: 20 000 элементов — 2 847 мс, 40 000 — куча 1,4 ГБ и `Fatal JavaScript out of memory`,…",
    "component": "js (`crates/js/src/dom.rs:3507` `_lumen_make_element` — интернирование в `_lumen_element_wrappers`; `:4091` `_lumen_build_element` ~1480 строк и 26 `defineProperty` на элемент; `:16524` `_lumen_gc_collect` чистит только освобождённые арены nid)",
-   "date": null,
+   "date": "2026-08-23",
    "debtor": false
   },
   "BUG-850": {

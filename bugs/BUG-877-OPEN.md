@@ -50,4 +50,4 @@ sd2-shadowRoot host.shadowRoot=object same=false stable=false
 Кэшировать обёртку по `sr_nid` (как это сделано для элементов через
 `_lumen_element_wrappers`) и отдавать её из обоих мест — геттера и
 `attachShadow`. Чистка кэша — тем же `_lumen_gc_collect`, что и у элементов
-(осторожно: [BUG-849](BUG-849-OPEN.md) — он чистит только освобождённые nid).
+(осторожно: [BUG-849](BUG-849-FIXED.md) — он чистит только освобождённые nid).

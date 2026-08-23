@@ -23,6 +23,34 @@ the time — read dates.
 
 ## Done
 
+- **The node wrapper's interface lives on a shared prototype, not on every node
+  ([BUG-849](../bugs/BUG-849-FIXED.md), P1, 2026-08-23).** `_lumen_build_element` used
+  to mint the whole DOM interface per node — **236 own properties** (the builder's object
+  literal, the `Object.defineProperty(_obj, …)` block after it, and a `get`/`set` pair for
+  each of the 84 `_LUMEN_EVENT_HANDLER_ATTRS` names), i.e. 251 accessor closures and ~83
+  method closures, costing ~142 µs per `createElement` and killing the process at 40 000
+  script-built nodes (1.4 GB, `Fatal JavaScript out of memory`). The members are now built
+  once into `_LUMEN_WRAPPER_MEMBERS` / `_LUMEN_WRAPPER_CD_MEMBERS` (Text/Comment `data`,
+  `nodeValue`) / `_LUMEN_WRAPPER_ON_MEMBERS` (`on<type>`, elements only) and installed by
+  `_lumen_wrapper_proto_for(iface, isCharacterData)` on one memoised object per interface
+  prototype; a node owns `__nid__` and nothing else, plus up to four lazy slots
+  (`classList`/`style`/`dataset`/`attributes`, previously closure variables the builder
+  created unconditionally). Measured: builder 129,6 → 3,1 µs, `createElement` 176,3 → 6,0 µs,
+  `el.id` read 2,5 → 0,3 µs. Three invariants the layout preserves deliberately — the shared
+  object sits one link *below* the interface prototype, so a member still shadows the
+  interface's own of the same name ([BUG-383](../bugs/BUG-383-FIXED.md)'s
+  `select.remove(index)`); the chain above it is untouched, so `instanceof`
+  ([BUG-322](../bugs/BUG-322-FIXED.md)) is unchanged; and interning
+  ([BUG-291](../bugs/BUG-291-FIXED.md)) is untouched, so `===` identity and expandos hold.
+  Two consequences worth knowing before editing the bundle: a member reads its node through
+  `this.__nid__`, so it may **not** be called with a foreign `this`, and a nested callback
+  inside a member must not repeat the `var nid = this.__nid__;` prologue (`this` is the global
+  object there). `Object.setPrototypeOf(el, Ctor.prototype)` on a live wrapper — what
+  `svg.rs` does for `createElementNS` — would now drop the whole interface, so that goes
+  through `_lumen_retarget_wrapper(el, iface)` instead. `'x' in Element.prototype` still
+  answers `false` for these members ([BUG-747](../bugs/BUG-747-OPEN.md)): the bundle is a
+  private object below the interface prototype, not the interface prototype itself. Observable
+  change, matching a real engine: `Object.keys(el)`/`for…in` no longer enumerate the interface.
 - **`permissions.query()` recognises names instead of saying yes to all of them
   (BUG-386, P3, 2026-08-10).** The Permissions API used to be 25 lines of
   `WEB_API_SHIM`: one `_perm_denied` array of 11 names and `granted` for
