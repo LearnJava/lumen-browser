@@ -903,8 +903,10 @@ const SVG_SHIM: &str = r#"
   // appendChild attaches it and layout/paint render it (BUG-243). For the SVG
   // namespace we additionally re-point the node's prototype at the matching typed
   // SVG*Element class so `instanceof SVGCircleElement` and getBBox()/getCTM() work.
-  // _lumen_make_element returns a plain object whose methods are OWN properties, so
-  // setPrototypeOf preserves every native method while adding the typed chain.
+  // Since BUG-849 the native methods live on a shared per-interface prototype, not
+  // on the instance, so a bare `setPrototypeOf(el, Ctor.prototype)` would drop every
+  // one of them — `_lumen_retarget_wrapper` re-points the wrapper at the shared
+  // prototype built for `Ctor.prototype` instead, which keeps both halves.
   if (typeof document !== 'undefined' && typeof document.createElementNS === 'function') {
     const _origCreateElementNS = document.createElementNS.bind(document);
     document.createElementNS = function(ns, qualifiedName) {
@@ -913,7 +915,11 @@ const SVG_SHIM: &str = r#"
         const Ctor = SVG_TAG_MAP[qualifiedName] || SVG_TAG_MAP[local] || SVG_TAG_MAP[local.toLowerCase()] || SVGElement;
         const el = _origCreateElementNS(ns, qualifiedName);
         try {
-          Object.setPrototypeOf(el, Ctor.prototype);
+          if (typeof _lumen_retarget_wrapper === 'function') {
+            _lumen_retarget_wrapper(el, Ctor.prototype);
+          } else {
+            Object.setPrototypeOf(el, Ctor.prototype);
+          }
         } catch (e) {
           // ignore prototype assignment failure
         }
