@@ -12398,6 +12398,17 @@ pub fn clear_cq_context() {
     CONTAINER_CQ.with(|c| c.set(None));
 }
 
+/// Whether a `cq*` resolution context is currently installed (BUG-802).
+///
+/// A `cq*` length resolves against this hidden thread-local rather than against
+/// anything in a box's own style, so two otherwise identical layouts of the same
+/// node can legitimately produce different sizes across a container re-layout
+/// pass. Anything that remembers a measured size across calls must refuse to do
+/// so while this is `true` — see `box_tree`'s column-probe height memo.
+pub fn cq_context_active() -> bool {
+    CONTAINER_CQ.with(|c| c.get()).is_some()
+}
+
 thread_local! {
     /// CSS Values L4 §5.1.1 — absolute px value of one `ch` and one `ex` unit for
     /// the box currently being laid out: `(char_width('0'), x_height)` measured at
