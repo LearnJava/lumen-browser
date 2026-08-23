@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-23",
  "counts": {
-  "open": 392,
+  "open": 403,
   "fixed": 454,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 846,
+ "total_bugs": 857,
  "phases": [
   {
    "id": "P0",
@@ -11328,6 +11328,83 @@
    "component": "js (`crates/js/src/dom.rs:6212-6240` — блок `document.write`/`writeln`, `open`/`close` в нём не определены)",
    "date": null,
    "debtor": false
+  },
+  "BUG-889": {
+   "status": "open",
+   "title": "SVG-элемент, написанный парсером, — это `HTMLUnknownElement`: `instanceof SVGElement` = `false`, `getBBox`/`getCTM` отсутствуют (у элемента из `createElementNS`…",
+   "component": "js (`crates/js/src/svg.rs:901-918` — типизированные классы навешиваются только патчем `createElementNS`; поля `x`/`width`/`viewBox` объявлены телами конструкторов, `:308-311`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-890": {
+   "status": "open",
+   "title": "Глобального конструктора `CustomElementRegistry` нет, поэтому нет и области видимости реестров: `new CustomElementRegistry()`, `createElement(tag, {customElemen…",
+   "component": "js (`crates/js/src/dom.rs:6716` — `var customElements = {`, класса за литералом нет; `grep -n \"CustomElementRegistry\" crates/` — ноль)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-891": {
+   "status": "open",
+   "title": "XPathEvaluator\\",
+   "component": "js (`grep -rn \"XSLTProcessor\\",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-892": {
+   "status": "open",
+   "title": "`document.forms`/`scripts`/`links` — `undefined` (при живом `document.images`, заведённом BUG-732): `document.forms.length` бросает `reading 'length'`, `namedIt…",
+   "component": "js (`crates/js/src/dom.rs:6125` — единственный геттер `get images()` в литерале `document`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-893": {
+   "status": "open",
+   "title": "valueAsDate\" crates/` — ноль совпадений)",
+   "component": "js (`grep -rn \"valueAsNumber\\",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-894": {
+   "status": "open",
+   "title": "`Element.insertBefore` не проверяет, что опорный узел — ребёнок этого узла: `NotFoundError` (DOM LS §4.2.3 «pre-insert», шаг 2) не бросается никогда, узел встав…",
+   "component": "js (`crates/js/src/dom.rs:5066` — `insertBefore` элемента; у `document`, `dom.rs:2526`, та же проверка есть)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-895": {
+   "status": "open",
+   "title": "У теневого корня нет `ParentNode`-примеси: `shadowRoot.append(...)` — `is not a function` (у элемента и `DocumentFragment` работает); у `document` нет `append`/…",
+   "component": "js (`crates/js/src/dom.rs:1577` — `_lumen_make_shadow_root` собирает объектный литерал без прототипа)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-896": {
+   "status": "open",
+   "title": "CSS-модули (`import sheet from \"./x.css\" with {type: \"css\"}`) не поддерживаются: атрибут отклоняется ПОСЛЕ загрузки файла (сервер пробы видит `GET`), сообщением…",
+   "component": "js (`crates/js/src/import_attributes.rs:44` — `ModuleType::from_attr` знает только `\"json\"`; `crates/js/src/v8_esm.rs:371`/`:403`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-897": {
+   "status": "open",
+   "title": "Записывающая половина CSSOM (читающая — [BUG-471](bugs/BUG-471-OPEN.md)/[BUG-746](bugs/BUG-746-OPEN.md)): `new CSSStyleSheet()` — `ReferenceError`, `document.ad…",
+   "component": "js (`crates/js/src/dom.rs` — ни `CSSStyleSheet`, ни аксессора `adoptedStyleSheets`; свойство создаётся самим присваиванием)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-898": {
+   "status": "open",
+   "title": "Декодер WebAssembly материализует объявленное число локальных переменных без всякой границы: 32-байтный модуль с числом локальных `0xffffffff` стоит **6,95 с**…",
+   "component": "js (`crates/js/src/wasm/parser.rs:653-661` — `parse_code_section`: `let n = r.u32()?` и следом `for _ in 0..n { locals.push(ty) }`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-899": {
+   "status": "open",
+   "title": "User Timing L3: словарная форма игнорируется — `mark(name, {detail})` теряет `detail` (при учтённом `startTime`), `measure(name, {start: 0, end: 10})` меряет от…",
+   "component": "js (`crates/js/src/dom.rs:8366-8392` — `performance.mark`/`performance.measure` в `WEB_API_SHIM`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11622,6 +11699,9 @@
   "js (`crates/js/src/dom.rs:15522` — единственный диспатч `toggle`, слушатель `click` на `document`; `:15377` — ветка `SUMMARY` в `_lumen_run_activation_behavior`, переключающая `open` второй раз)": [
    "BUG-851"
   ],
+  "js (`crates/js/src/dom.rs:1577` — `_lumen_make_shadow_root` собирает объектный литерал без прототипа)": [
+   "BUG-895"
+  ],
   "js (`crates/js/src/dom.rs:15881-15892` — есть `_lumen_fire_scroll_on_element`/`_lumen_fire_window_scroll_event`, парного `scrollend` нет), shell (`crates/shell/src/main.rs:3496-3510`)": [
    "BUG-822"
   ],
@@ -11652,6 +11732,9 @@
   "js (`crates/js/src/dom.rs:4999` -- `var navigator = {...}`)": [
    "BUG-624"
   ],
+  "js (`crates/js/src/dom.rs:5066` — `insertBefore` элемента; у `document`, `dom.rs:2526`, та же проверка есть)": [
+   "BUG-894"
+  ],
   "js (`crates/js/src/dom.rs:5086` — `assignedNodes`; `grep -rn \"'slotchange'\" crates/` — ни одной точки диспатча)": [
    "BUG-876"
   ],
@@ -11660,6 +11743,9 @@
   ],
   "js (`crates/js/src/dom.rs:5844`–`5849` — `_lumen_script_prepare` сводит «атрибута нет» и «атрибут пустой» в одно `''` и выходит по `return`)": [
    "BUG-838"
+  ],
+  "js (`crates/js/src/dom.rs:6125` — единственный геттер `get images()` в литерале `document`)": [
+   "BUG-892"
   ],
   "js (`crates/js/src/dom.rs:6190-6193`)": [
    "BUG-476"
@@ -11690,6 +11776,9 @@
   ],
   "js (`crates/js/src/dom.rs:6603-6608`)": [
    "BUG-463"
+  ],
+  "js (`crates/js/src/dom.rs:6716` — `var customElements = {`, класса за литералом нет; `grep -n \"CustomElementRegistry\" crates/` — ноль)": [
+   "BUG-890"
   ],
   "js (`crates/js/src/dom.rs:6770` — `_lumen_get_fonts()`)": [
    "BUG-467"
@@ -11723,6 +11812,9 @@
   ],
   "js (`crates/js/src/dom.rs:8215` `CompressionStream`, `:8232` `DecompressionStream` — `transform` только копит, `enqueue` только во `flush`; `:8197` — комментарий шима, описывающий эту модель)": [
    "BUG-846"
+  ],
+  "js (`crates/js/src/dom.rs:8366-8392` — `performance.mark`/`performance.measure` в `WEB_API_SHIM`)": [
+   "BUG-899"
   ],
   "js (`crates/js/src/dom.rs:8915-9017` — `MessagePort`/`MessageChannel`)": [
    "BUG-706"
@@ -11829,6 +11921,9 @@
   "js (`crates/js/src/dom.rs` — литерал обёртки элемента, `get content()` для `HTMLTemplateElement.content`, против таблицы `_lumen_install_reflection(HTMLMetaElement.prototype, …)`)": [
    "BUG-796"
   ],
+  "js (`crates/js/src/dom.rs` — ни `CSSStyleSheet`, ни аксессора `adoptedStyleSheets`; свойство создаётся самим присваиванием)": [
+   "BUG-897"
+  ],
   "js (`crates/js/src/dom.rs` — ни одного `DOMMatrix`/`DOMPoint`/`DOMRect`/`DOMQuad`-конструктора нигде)": [
    "BUG-522"
   ],
@@ -11897,6 +11992,9 @@
   "js (`crates/js/src/highlight_api.rs` — `HIGHLIGHT_API_SHIM`)": [
    "BUG-534"
   ],
+  "js (`crates/js/src/import_attributes.rs:44` — `ModuleType::from_attr` знает только `\"json\"`; `crates/js/src/v8_esm.rs:371`/`:403`)": [
+   "BUG-896"
+  ],
   "js (`crates/js/src/navigator_bindings.rs:213-225` -- `_screen` object literal)": [
    "BUG-559"
   ],
@@ -11911,6 +12009,9 @@
   ],
   "js (`crates/js/src/surface_api.rs` рядом с `navigator.doNotTrack`, строки 116-121) + network (`crates/network/src/http/headers.rs::build_request_headers`)": [
    "BUG-397"
+  ],
+  "js (`crates/js/src/svg.rs:901-918` — типизированные классы навешиваются только патчем `createElementNS`; поля `x`/`width`/`viewBox` объявлены телами конструкторов, `:308-311`)": [
+   "BUG-889"
   ],
   "js (`crates/js/src/sw_worker.rs` — шим глобального скоупа service worker)": [
    "BUG-748"
@@ -11935,6 +12036,9 @@
   ],
   "js (`crates/js/src/wasm/parser.rs:547-599` — `parse_element_section`)": [
    "BUG-700"
+  ],
+  "js (`crates/js/src/wasm/parser.rs:653-661` — `parse_code_section`: `let n = r.u32()?` и следом `for _ in 0..n { locals.push(ty) }`)": [
+   "BUG-898"
   ],
   "js (`crates/js/src/web_audio.rs:638` — `OfflineAudioContext.prototype.startRendering`, «Phase 0: immediately resolve with a silent buffer» + `try { self.oncomplete(evt) } catch(e) {}`; `:656` — `suspend`/`resume` как `Promise.resolve()`; там же узлы без события `ended` и `AudioParam` без расписания)": [
    "BUG-828"
@@ -11977,6 +12081,12 @@
   ],
   "js (`dom.rs` — элементный `dispatchEvent` в `_lumen_make_element`)": [
    "BUG-439"
+  ],
+  "js (`grep -rn \"XSLTProcessor\\": [
+   "BUG-891"
+  ],
+  "js (`grep -rn \"valueAsNumber\\": [
+   "BUG-893"
   ],
   "js (`grep -rn visualViewport crates/` — ноль совпадений)": [
    "BUG-875"

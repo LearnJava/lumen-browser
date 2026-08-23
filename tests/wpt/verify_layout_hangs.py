@@ -226,6 +226,15 @@ MEASURED = {
     "dom-wrapper-oom": [
         "/css/selectors/invalidation/has-complexity.html",
     ],
+    # WPT-RUN-6 slice 29. Not a loop: the page finishes, in 31.2 s and 15.9 s
+    # against the harness's 10 s. `WebAssembly.validate` costs 101 ms per call
+    # on this corpus because `parse_code_section` materializes the declared
+    # local count (BUG-898) — a 32-byte module is 6.95 s of it.
+    "wasm-locals-unbounded": [
+        "/wasm/core/binary.wast.js.html",
+        "/wasm/core/bulk-memory/memory_copy.wast.js.html",
+        "/wasm/core/memory64/memory_copy64.wast.js.html",
+    ],
     "unclamped-blur": [
         "/css/filter-effects/backdrop-filter-blur-large-value.html",
     ],
