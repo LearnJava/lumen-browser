@@ -110,3 +110,29 @@ Linux, коммит `bafa603d9`) поднимает http-сервер, кото�
 2. WPT: `run_report.py --all --root html/semantics/embedded-content/media-elements
    --recursive` — `event_volumechange.html` и `loading-the-media-resource/*`
    перестают висеть.
+
+## Срез 24 WPT-RUN-6 (2026-08-22) — сторона `<source>`, `load()` и `playbackRate`; маркер `media-resource-selection`
+
+Замер `tests/wpt/verify_frame_load_media_gaps.py --variant
+media-source-candidate --variant media-load-method --variant
+media-rate-volume` (dev-release, Linux, коммит `c583a90b4`, `--seconds 5`,
+страница жива — 9 тиков) добавляет к записи три факта:
+
+1. **Кандидат-`<source>` не запрашивается.** `<video><source src=…></video>`:
+   сервер пробы не получает запроса, `loadstart` не приходит, `error` не
+   приходит ни на `<source>`, ни на элементе, `currentSrc` и `networkState`
+   — `undefined`, `readyState === 4` до всякого источника. Тесты
+   `loading-the-media-resource/resource-selection-candidate-*` манипулируют
+   именно `<source>`, а не атрибутом `src`.
+2. **`load()` не делает ничего.** Ни `emptied`, ни `abort`, ни `error`,
+   ни повторного `loadstart`; `v.error` остаётся `undefined`.
+   `load-removes-queued-error-event.html` ждёт ровно этой последовательности.
+3. **`playbackRate` не существует как свойство.** `v.playbackRate` и
+   `v.defaultPlaybackRate` — `undefined`; присваивание создаёт обычное поле и
+   `ratechange` не диспатчится. `volume`/`muted` при этом настоящие, но
+   `volumechange` не приходит и на них (это уже было записано выше для
+   `<video>`; здесь подтверждено ещё раз).
+
+Маркер `media-resource-selection` в `tests/wpt/timeout_audit.py` — **7 id**
+остатка снимка WPT-RUN-5 (`event_volumechange.html`, `playbackRate.html`,
+четыре `resource-selection-*`, `load-removes-queued-error-event.html`).

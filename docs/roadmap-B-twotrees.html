@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-22",
+ "generated": "2026-08-23",
  "counts": {
-  "open": 365,
+  "open": 369,
   "fixed": 443,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 808,
+ "total_bugs": 812,
  "phases": [
   {
    "id": "P0",
@@ -11028,6 +11028,34 @@
    "component": "paint (`crates/engine/paint/src/cpu_raster.rs:1261` — `radius` не ограничен размером слоя; `:1293`/`:1315` — прайминг аккумулятора `for i in -r..=r`, O(r) на строку)",
    "date": null,
    "debtor": false
+  },
+  "BUG-851": {
+   "status": "open",
+   "title": "`<details>`: скриптовое изменение `open` (свойством, `setAttribute`, `removeAttribute`) не порождает `toggle` вовсе, а клик по `<summary>` переключает атрибут д…",
+   "component": "js (`crates/js/src/dom.rs:15522` — единственный диспатч `toggle`, слушатель `click` на `document`; `:15377` — ветка `SUMMARY` в `_lumen_run_activation_behavior`, переключающая `open` второй раз)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-852": {
+   "status": "open",
+   "title": "`content-visibility`/`contain-intrinsic-size` не видны в `getComputedStyle` (`getPropertyValue` даёт `\"\"` при рабочей раскладке и inline-стиле), `contentvisibil…",
+   "component": "layout (`crates/engine/layout/src/selector_query.rs:688` `computed_style_to_map` — 88 свойств, обоих нет) + shell (`crates/shell/src/main.rs:22950` `take_cv_events` — вызывающих нет)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-853": {
+   "status": "open",
+   "title": "`<script src=\"\">` не порождает ни `load`, ни `error`: присутствующий пустой `src` неотличим от отсутствующего, хотя HTML LS §4.12.1 шаг 30 требует немедленного…",
+   "component": "js (`crates/js/src/dom.rs:6533`–`6534` — `if (src !== '')`, пустой `src` уходит в ветку «источник — тело элемента»)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-854": {
+   "status": "open",
+   "title": "`<frame>` не существует как элемент: конструктор `HTMLElement`, ресурс из `src` не запрашивается (доказано записью запросов на сервере пробы), `load` не приходи…",
+   "component": "js (`crates/js/src/dom.rs` — `HTMLFrameElement` не определён, при живом `HTMLFrameSetElement`) + shell (вложенный browsing context не создаётся вовсе, ср. BUG-480/BUG-798)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11316,6 +11344,9 @@
   "js (`crates/js/src/dom.rs:15412-15556` — WAAPI `Animation` шим)": [
    "BUG-530"
   ],
+  "js (`crates/js/src/dom.rs:15522` — единственный диспатч `toggle`, слушатель `click` на `document`; `:15377` — ветка `SUMMARY` в `_lumen_run_activation_behavior`, переключающая `open` второй раз)": [
+   "BUG-851"
+  ],
   "js (`crates/js/src/dom.rs:15881-15892` — есть `_lumen_fire_scroll_on_element`/`_lumen_fire_window_scroll_event`, парного `scrollend` нет), shell (`crates/shell/src/main.rs:3496-3510`)": [
    "BUG-822"
   ],
@@ -11354,6 +11385,9 @@
   ],
   "js (`crates/js/src/dom.rs:6323` — `_lumen_set_location_hash` зовёт `_lumen_fire_hashchange` синхронно; `:6351` — то же в `_lumen_navigate_or_fragment`)": [
    "BUG-832"
+  ],
+  "js (`crates/js/src/dom.rs:6533`–`6534` — `if (src !== '')`, пустой `src` уходит в ветку «источник — тело элемента»)": [
+   "BUG-853"
   ],
   "js (`crates/js/src/dom.rs:6602` — `_lumen_make_element` element factory)": [
    "BUG-544"
@@ -11414,6 +11448,9 @@
   ],
   "js (`crates/js/src/dom.rs` — `Document` object literal, none of these seven accessors exist)": [
    "BUG-705"
+  ],
+  "js (`crates/js/src/dom.rs` — `HTMLFrameElement` не определён, при живом `HTMLFrameSetElement`) + shell (вложенный browsing context не создаётся вовсе, ср. BUG-480/BUG-798)": [
+   "BUG-854"
   ],
   "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim, ~line 8409-8460)": [
    "BUG-673"
@@ -11785,6 +11822,9 @@
   ],
   "layout (`crates/engine/layout/src/lib.rs::content_width`/`content_height`)": [
    "BUG-504"
+  ],
+  "layout (`crates/engine/layout/src/selector_query.rs:688` `computed_style_to_map` — 88 свойств, обоих нет) + shell (`crates/shell/src/main.rs:22950` `take_cv_events` — вызывающих нет)": [
+   "BUG-852"
   ],
   "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)": [
    "BUG-537"

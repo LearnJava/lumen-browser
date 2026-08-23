@@ -68,3 +68,27 @@ BUG-480, но **не тот же баг** — `<embed>`/`<object>` не имею
 1. `embed.onload`/`object.onload` срабатывает после `appendChild` с валидным `src`/`data`.
 2. `embed.onerror`/`object` fallback-содержимое — после невалидного `src`/`data`.
 3. WPT: обе категории — TIMEOUT-счётчик уходит к нулю (11 файлов).
+
+## Срез 24 WPT-RUN-6 (2026-08-22) — доказательство со стороны сервера и 7 id остатка
+
+Замер `tests/wpt/verify_frame_load_media_gaps.py --variant nbc-object
+--variant nbc-embed --variant nbc-parser` (dev-release, Linux, коммит
+`c583a90b4`, `--seconds 5`, страница жива — 9 тиков) добавляет к записи то,
+чего в ней не было: **ресурс не запрашивается вовсе**. Сервер пробы, который
+логирует каждый спрошенный путь, не получает ни `?object=1`, ни `?embed=1` —
+ни для элементов, созданных скриптом, ни для написанных парсером. Это отделяет
+«элемент не диспатчит событие» от «загрузки не было» без доверия к странице
+([BUG-438](BUG-438-OPEN.md)) и к логу браузера ([BUG-826](BUG-826-OPEN.md)).
+
+Прочее из того же замера: `object.constructor.name === "HTMLObjectElement"` и
+`embed.constructor.name === "HTMLEmbedElement"` (интерфейсы есть),
+`object.contentDocument === undefined`, `window['имя']` для `<embed>` —
+`undefined`, для `<object>` — объект.
+
+Маркер `nbc-element-never-loads` в `tests/wpt/timeout_audit.py` (стадия
+`SUBTEST_MARKERS`, введена этим срезом) — **7 id** остатка снимка WPT-RUN-5,
+общих с [BUG-854](BUG-854-OPEN.md): `object-handler.html` целиком здесь, а
+пять `query-encoding/*?include=nested-browsing` и
+`nested-browsing-contexts/name-attribute.window.html` делят подтесты между
+`<object>`/`<embed>`/`<frame>` (сюда) и `<iframe>`
+([BUG-480](BUG-480-OPEN.md)).

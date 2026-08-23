@@ -228,3 +228,29 @@ cluster measured for this bug so far.
   `try/catch` at all) and `MediaQueryList.prototype.dispatchEvent`/
   `MessagePort.prototype.dispatchEvent` were left untouched — narrower,
   lower-traffic mechanisms not named by any WPT cluster in this bug's scope.
+
+## Срез 24 WPT-RUN-6 (2026-08-22) — путь window `load` остался немым, и это уже стоит 9 id
+
+После правок 2026-08-22 (таймеры, rAF, `queueMicrotask`, классические
+`<script>`, DOM-слушатели, Worker) остался ещё один путь, и он не из
+перечисленных в «Что осталось»: **исключение из обработчика `load` окна**.
+
+Замер `tests/wpt/verify_frame_load_media_gaps.py --variant onload-throw`
+(dev-release, Linux, коммит `c583a90b4`, `--seconds 5`, страница жива — 9
+тиков): обработчик, добавленный через `addEventListener('load', …)`, и
+обработчик из атрибута `<body onload>` оба входят (`load-listener-entered`,
+`body-attr-entered`) и оба бросают. Не приходит ничего — ни `'error'` на
+window, ни `window.onerror`, ни строки на stderr браузера. Причина видна в
+коде: `_lumen_apply_ready_state` (`crates/js/src/dom.rs:13816` — цикл по
+`_load_listeners`, `:13819` — `window.onload`) вызывает каждый обработчик в
+`try { … } catch (e) {}`; там же голые `catch` вокруг window-слушателей
+`DOMContentLoaded` (`:13798`) и вокруг `visibilitychange`
+(`_lumen_apply_visibility`, `:13835`).
+
+Цена в остатке снимка WPT-RUN-5 — маркер `single-test-load-handler-throw`,
+**9 id** (`css/css-shapes/spec-examples/shape-outside-0**.html`): страница
+объявляет себя `setup({ single_test: true })`, делает все проверки в функции,
+вызванной из `<body onload>`, и зовёт `done()` в конце. `shape-outside` пока
+не заворачивает флоаты (`CSS-SPECS.md` #43), первый же `assert_not_equals`
+бросает, `done()` не достигается, исключение проглатывается — вместо FAIL
+получается NOTRUN и TIMEOUT.

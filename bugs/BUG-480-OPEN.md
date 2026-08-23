@@ -123,3 +123,32 @@ every file checked awaits `iframe.onload` or reads
 own comment (`"URL-based iframe: Phase 0 — sub-document is not loaded"`) is
 the operative mechanism, not just the JS-shim accessor gap. No new `BUG-NNN`
 filed — folds under this bug's umbrella per the pattern above.
+
+## Срез 24 WPT-RUN-6 (2026-08-22) — субдокумент не просто «не смоделирован в JS», его **никто не запрашивает**, и с тех пор отказ стал тихим
+
+Замер `tests/wpt/verify_frame_load_media_gaps.py --variant nbc-iframe
+--variant nbc-parser` (dev-release, Linux, коммит `c583a90b4`, `--seconds 5`,
+страница жива — 9 тиков) добавляет к этому багу две вещи, которых в нём не
+было.
+
+1. **Ни одного HTTP-запроса.** Сервер пробы записывает каждый путь, который у
+   него спросили; при `<iframe src="child.html">` — и созданном скриптом, и
+   написанном парсером — он не получает ничего, а в stderr браузера нет ни
+   строки про ребёнка. То есть речь не только о доступе из JS: документа не
+   существует, потому что за ним не ходили (`main.rs:5408` «Phase 0: iframe
+   sub-документы не загружаются»). Читать лог браузера как доказательство
+   запроса нельзя — он умеет печатать хинт о незапрошенном ресурсе
+   ([BUG-826](BUG-826-OPEN.md)); доказательство здесь только со стороны
+   сервера.
+2. **`contentWindow`/`contentDocument` теперь существуют.** Исходная запись
+   2026-08-02 фиксировала `grep` без единого совпадения и `undefined`/`null`
+   на чтении; сейчас оба отдают объект (`nbc-iframe-checked
+   contentWindow=object contentDocument=object`), а `window[name]` для
+   именованного фрейма — тоже объект. Для тестов это хуже, а не лучше: код
+   вида `if (iframe.contentDocument) { … }` проходит проверку и работает с
+   пустым документом, вместо того чтобы упасть с TypeError. Соответственно и
+   симптом сместился с «бросает исключение» на «молча ждёт вечно».
+
+Родственные элементы измерены тем же прогоном и разведены по своим багам:
+`<object data>`/`<embed src>` — [BUG-798](BUG-798-OPEN.md), `<frame>` —
+[BUG-854](BUG-854-OPEN.md).

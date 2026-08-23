@@ -113,3 +113,21 @@ input to the relayout scheduler. Findings 2–4 are small, independent, single-f
 distinct border/content/device-pixel geometries with scrollbar-gutter subtraction; resetting
 `lastW`/`lastH` to `-1` when a `MutationObserver`-visible detach is seen for an observed
 target) and can land independently of finding 1.
+
+## Срез 24 WPT-RUN-6 (2026-08-22) — finding 1 перезамерен и получил маркер
+
+`tests/wpt/verify_frame_load_media_gaps.py --variant ro-basic` (dev-release,
+Linux, коммит `c583a90b4`, `--seconds 5`, страница жива — 9 тиков): на
+статическом элементе `observe()` не приводит к вызову колбэка вовсе; первый и
+единственный `ro-callback n=1 h=120` приходит только после того, как проба
+сама меняет высоту (`ro-resized`). То есть «нет гарантированной первой
+доставки» — это не «доставка с задержкой», а её отсутствие: страница, которая
+ничего не меняет, не получает ни одного колбэка.
+
+Маркер `resize-observer-no-initial` в `tests/wpt/timeout_audit.py` — **4 id**
+остатка снимка WPT-RUN-5: `css/css-sizing/contain-intrinsic-size/auto-001`,
+`-002`, `-004`, `-005`. Все четыре построены одинаково — весь текст теста
+живёт внутри колбэка `ResizeObserver`, поставленного на неизменный элемент,
+поэтому подтест уходит в TIMEOUT, не выполнив ни одной проверки. Соседние id
+того же каталога висят на отсутствии `contentvisibilityautostatechange` —
+[BUG-852](BUG-852-OPEN.md).
