@@ -1744,66 +1744,66 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:74` **struct** `LayoutKeyCensus` — BUG-341 S30 census: how often a hypothetical (node, incoming-constraints)
 `crates/engine/layout/src/box_tree.rs:159` **fn** `set_layout_key_census` — Enables/disables the BUG-341 S30/S31/S35 layout-key census and clears its
 `crates/engine/layout/src/box_tree.rs:166` **fn** `take_layout_key_census` — Returns the accumulated [`LayoutKeyCensus`] and resets the tally
-`crates/engine/layout/src/box_tree.rs:333` **fn** `set_layout_result_cache` — Enables/disables the BUG-341 S36 layout-result cache and clears its
-`crates/engine/layout/src/box_tree.rs:341` **fn** `layout_result_cache_enabled` — Whether the BUG-341 S36 layout-result cache is currently enabled
-`crates/engine/layout/src/box_tree.rs:350` **struct** `LayoutResultCacheStats` — BUG-341 S36 — per-pass tally of what the cache-checked wrapper did,
-`crates/engine/layout/src/box_tree.rs:366` **fn** `take_layout_result_cache_stats` — Returns the accumulated [`LayoutResultCacheStats`] and resets the tally
-`crates/engine/layout/src/box_tree.rs:386` **fn** `set_incremental_box_build` — Enables/disables incremental box-build reuse for subsequent
-`crates/engine/layout/src/box_tree.rs:391` **fn** `incremental_box_build_enabled` — Whether incremental box-build reuse is currently enabled on this thread
-`crates/engine/layout/src/box_tree.rs:403` **struct** `BoxBuildStats` — BUG-341 S4/S15 — per-pass tally of what the box-build stage rebuilt versus
-`crates/engine/layout/src/box_tree.rs:482` **fn** `take_box_build_stats` — Returns the accumulated [`BoxBuildStats`] and resets the tally
-`crates/engine/layout/src/box_tree.rs:505` **fn** `set_box_build_diagnostics` — Enables/disables the BUG-341 S18 per-node build census, clearing the log
-`crates/engine/layout/src/box_tree.rs:514` **fn** `take_box_build_log` — Drains the BUG-341 S18 build census — the `NodeId` of every box really built
-`crates/engine/layout/src/box_tree.rs:547` **fn** `set_box_time_diagnostics` — Enables/disables the BUG-341 S20 per-box timing census, clearing the log
-`crates/engine/layout/src/box_tree.rs:555` **fn** `take_box_build_time_log` — Drains the BUG-341 S20 per-box timing census — see [`BOX_BUILD_TIME_LOG`]
-`crates/engine/layout/src/box_tree.rs:566` **struct** `BoxCopyStats` — BUG-341 S18/S19 census: what one incremental box-build pass spent on
-`crates/engine/layout/src/box_tree.rs:589` **fn** `take_box_copy_stats` — Drains the BUG-341 S18/S19 copy census — see [`BoxCopyStats`]
-`crates/engine/layout/src/box_tree.rs:629` **fn** `take_box_probe_ns` — Drains the BUG-341 S25 probe timers — see [`PROBE_NS`] / [`STYLE_MISS_NS`]
-`crates/engine/layout/src/box_tree.rs:821` **struct** `ViewBox` — SVG `viewBox="min-x min-y width height"` attribute. Maps SVG user-unit space
-`crates/engine/layout/src/box_tree.rs:836` **struct** `PreserveAspectRatio` — SVG `preserveAspectRatio` attribute for aspect-ratio preservation
-`crates/engine/layout/src/box_tree.rs:847` **enum** `SvgAlignX` — SVG preserveAspectRatio horizontal alignment
-`crates/engine/layout/src/box_tree.rs:858` **enum** `SvgAlignY` — SVG preserveAspectRatio vertical alignment
-`crates/engine/layout/src/box_tree.rs:869` **enum** `SvgMeetOrSlice` — SVG preserveAspectRatio meet-or-slice mode
-`crates/engine/layout/src/box_tree.rs:879` **enum** `SvgTextAnchor` — SVG `text-anchor` attribute for text horizontal alignment
-`crates/engine/layout/src/box_tree.rs:892` **enum** `SvgDominantBaseline` — SVG `dominant-baseline` attribute for text vertical alignment
-`crates/engine/layout/src/box_tree.rs:916` **enum** `SvgBaselineShift` — SVG 1.1 §10.9.2 / CSS Inline Layout L3 §5.2 — `baseline-shift`. Vertical shift
-`crates/engine/layout/src/box_tree.rs:933` **struct** `SvgTransform` — SVG transformation data from the `transform` presentation attribute
-`crates/engine/layout/src/box_tree.rs:941` **fn** `identity` — Creates an identity transform (no transformation)
-`crates/engine/layout/src/box_tree.rs:946` **fn** `translate` — Creates a translation transform
-`crates/engine/layout/src/box_tree.rs:951` **fn** `compose` — Multiplies this transform by another, composing them
-`crates/engine/layout/src/box_tree.rs:966` **fn** `transform_point` — Applies this transform to a point (x, y)
-`crates/engine/layout/src/box_tree.rs:975` **enum** `SvgShapeKind` — Geometric primitive for an SVG shape element in SVG user units (before viewBox scaling)
-`crates/engine/layout/src/box_tree.rs:992` **enum** `FormControlKind` — Вид form control — используется в `BoxKind::FormControl` для paint-специализаций
-`crates/engine/layout/src/box_tree.rs:1088` **fn** `collect_selectlist_label` — Collect the selected `<option>` label from a `<selectlist>` element
-`crates/engine/layout/src/box_tree.rs:1126` **fn** `is_selectlist` — Returns `true` when `node` is a `<selectlist>` element (Customizable Select)
-`crates/engine/layout/src/box_tree.rs:1218` **fn** `is_open_details` — Returns `true` when `id` is a `<details>` element with the `open` attribute set
-`crates/engine/layout/src/box_tree.rs:2149` **struct** `ImageRequest` — Запрос на предзагрузку изображения: URL после picking-а по
-`crates/engine/layout/src/box_tree.rs:2167` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
-`crates/engine/layout/src/box_tree.rs:2193` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
-`crates/engine/layout/src/box_tree.rs:2274` **fn** `apply_intrinsic_size` — Доставляет intrinsic-размеры декодированной картинки в layout, дописывая
-`crates/engine/layout/src/box_tree.rs:2432` **struct** `LayoutBox`
-`crates/engine/layout/src/box_tree.rs:2489` **struct** `BoxOrigin` — Where a layout box came from — the identity of a box for all
-`crates/engine/layout/src/box_tree.rs:2515` **enum** `BoxRole` — Disambiguates the many boxes one DOM node — or no node at all — can
-`crates/engine/layout/src/box_tree.rs:2543` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
-`crates/engine/layout/src/box_tree.rs:2589` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
-`crates/engine/layout/src/box_tree.rs:2622` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
-`crates/engine/layout/src/box_tree.rs:2661` **enum** `BoxKind`
-`crates/engine/layout/src/box_tree.rs:3513` **fn** `layout` — Lay out a document without a text measurer. For tests and headless dump modes
-`crates/engine/layout/src/box_tree.rs:3539` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
-`crates/engine/layout/src/box_tree.rs:3552` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
-`crates/engine/layout/src/box_tree.rs:3575` **fn** `layout_measured_hyp_with_counters` — Like [`layout_measured_hyp`], but also returns the [`CounterMap`] the cascade
-`crates/engine/layout/src/box_tree.rs:3642` **fn** `lay_out_incremental` — Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones
-`crates/engine/layout/src/box_tree.rs:3681` **fn** `layout_streaming_incremental` — Streaming incremental layout (PH1-2b)
-`crates/engine/layout/src/box_tree.rs:3728` **fn** `layout_mutation_incremental` — Incremental re-layout for JS DOM mutations (ADR-016 M4)
-`crates/engine/layout/src/box_tree.rs:3784` **fn** `layout_mutation_incremental_restyle` — BUG-341 S5: incremental re-layout for a pure interactive-state transition
-`crates/engine/layout/src/box_tree.rs:3967` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
-`crates/engine/layout/src/box_tree.rs:4042` **fn** `canvas_background_color` — CSS Backgrounds §3.11.1 — the canvas background color
-`crates/engine/layout/src/box_tree.rs:5427` **fn** `incremental_build_box` — BUG-341 S4 — incremental box-build entry point
-`crates/engine/layout/src/box_tree.rs:12387` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
-`crates/engine/layout/src/box_tree.rs:12570` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
-`crates/engine/layout/src/box_tree.rs:12589` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
-`crates/engine/layout/src/box_tree.rs:12619` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
-`crates/engine/layout/src/box_tree.rs:13922` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:372` **fn** `set_layout_result_cache` — Enables/disables the BUG-341 S36 layout-result cache and clears its
+`crates/engine/layout/src/box_tree.rs:380` **fn** `layout_result_cache_enabled` — Whether the BUG-341 S36 layout-result cache is currently enabled
+`crates/engine/layout/src/box_tree.rs:389` **struct** `LayoutResultCacheStats` — BUG-341 S36 — per-pass tally of what the cache-checked wrapper did,
+`crates/engine/layout/src/box_tree.rs:405` **fn** `take_layout_result_cache_stats` — Returns the accumulated [`LayoutResultCacheStats`] and resets the tally
+`crates/engine/layout/src/box_tree.rs:425` **fn** `set_incremental_box_build` — Enables/disables incremental box-build reuse for subsequent
+`crates/engine/layout/src/box_tree.rs:430` **fn** `incremental_box_build_enabled` — Whether incremental box-build reuse is currently enabled on this thread
+`crates/engine/layout/src/box_tree.rs:442` **struct** `BoxBuildStats` — BUG-341 S4/S15 — per-pass tally of what the box-build stage rebuilt versus
+`crates/engine/layout/src/box_tree.rs:521` **fn** `take_box_build_stats` — Returns the accumulated [`BoxBuildStats`] and resets the tally
+`crates/engine/layout/src/box_tree.rs:544` **fn** `set_box_build_diagnostics` — Enables/disables the BUG-341 S18 per-node build census, clearing the log
+`crates/engine/layout/src/box_tree.rs:553` **fn** `take_box_build_log` — Drains the BUG-341 S18 build census — the `NodeId` of every box really built
+`crates/engine/layout/src/box_tree.rs:586` **fn** `set_box_time_diagnostics` — Enables/disables the BUG-341 S20 per-box timing census, clearing the log
+`crates/engine/layout/src/box_tree.rs:594` **fn** `take_box_build_time_log` — Drains the BUG-341 S20 per-box timing census — see [`BOX_BUILD_TIME_LOG`]
+`crates/engine/layout/src/box_tree.rs:605` **struct** `BoxCopyStats` — BUG-341 S18/S19 census: what one incremental box-build pass spent on
+`crates/engine/layout/src/box_tree.rs:628` **fn** `take_box_copy_stats` — Drains the BUG-341 S18/S19 copy census — see [`BoxCopyStats`]
+`crates/engine/layout/src/box_tree.rs:668` **fn** `take_box_probe_ns` — Drains the BUG-341 S25 probe timers — see [`PROBE_NS`] / [`STYLE_MISS_NS`]
+`crates/engine/layout/src/box_tree.rs:860` **struct** `ViewBox` — SVG `viewBox="min-x min-y width height"` attribute. Maps SVG user-unit space
+`crates/engine/layout/src/box_tree.rs:875` **struct** `PreserveAspectRatio` — SVG `preserveAspectRatio` attribute for aspect-ratio preservation
+`crates/engine/layout/src/box_tree.rs:886` **enum** `SvgAlignX` — SVG preserveAspectRatio horizontal alignment
+`crates/engine/layout/src/box_tree.rs:897` **enum** `SvgAlignY` — SVG preserveAspectRatio vertical alignment
+`crates/engine/layout/src/box_tree.rs:908` **enum** `SvgMeetOrSlice` — SVG preserveAspectRatio meet-or-slice mode
+`crates/engine/layout/src/box_tree.rs:918` **enum** `SvgTextAnchor` — SVG `text-anchor` attribute for text horizontal alignment
+`crates/engine/layout/src/box_tree.rs:931` **enum** `SvgDominantBaseline` — SVG `dominant-baseline` attribute for text vertical alignment
+`crates/engine/layout/src/box_tree.rs:955` **enum** `SvgBaselineShift` — SVG 1.1 §10.9.2 / CSS Inline Layout L3 §5.2 — `baseline-shift`. Vertical shift
+`crates/engine/layout/src/box_tree.rs:972` **struct** `SvgTransform` — SVG transformation data from the `transform` presentation attribute
+`crates/engine/layout/src/box_tree.rs:980` **fn** `identity` — Creates an identity transform (no transformation)
+`crates/engine/layout/src/box_tree.rs:985` **fn** `translate` — Creates a translation transform
+`crates/engine/layout/src/box_tree.rs:990` **fn** `compose` — Multiplies this transform by another, composing them
+`crates/engine/layout/src/box_tree.rs:1005` **fn** `transform_point` — Applies this transform to a point (x, y)
+`crates/engine/layout/src/box_tree.rs:1014` **enum** `SvgShapeKind` — Geometric primitive for an SVG shape element in SVG user units (before viewBox scaling)
+`crates/engine/layout/src/box_tree.rs:1031` **enum** `FormControlKind` — Вид form control — используется в `BoxKind::FormControl` для paint-специализаций
+`crates/engine/layout/src/box_tree.rs:1127` **fn** `collect_selectlist_label` — Collect the selected `<option>` label from a `<selectlist>` element
+`crates/engine/layout/src/box_tree.rs:1165` **fn** `is_selectlist` — Returns `true` when `node` is a `<selectlist>` element (Customizable Select)
+`crates/engine/layout/src/box_tree.rs:1257` **fn** `is_open_details` — Returns `true` when `id` is a `<details>` element with the `open` attribute set
+`crates/engine/layout/src/box_tree.rs:2188` **struct** `ImageRequest` — Запрос на предзагрузку изображения: URL после picking-а по
+`crates/engine/layout/src/box_tree.rs:2206` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
+`crates/engine/layout/src/box_tree.rs:2232` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
+`crates/engine/layout/src/box_tree.rs:2313` **fn** `apply_intrinsic_size` — Доставляет intrinsic-размеры декодированной картинки в layout, дописывая
+`crates/engine/layout/src/box_tree.rs:2471` **struct** `LayoutBox`
+`crates/engine/layout/src/box_tree.rs:2528` **struct** `BoxOrigin` — Where a layout box came from — the identity of a box for all
+`crates/engine/layout/src/box_tree.rs:2554` **enum** `BoxRole` — Disambiguates the many boxes one DOM node — or no node at all — can
+`crates/engine/layout/src/box_tree.rs:2582` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
+`crates/engine/layout/src/box_tree.rs:2628` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
+`crates/engine/layout/src/box_tree.rs:2661` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
+`crates/engine/layout/src/box_tree.rs:2700` **enum** `BoxKind`
+`crates/engine/layout/src/box_tree.rs:3552` **fn** `layout` — Lay out a document without a text measurer. For tests and headless dump modes
+`crates/engine/layout/src/box_tree.rs:3578` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
+`crates/engine/layout/src/box_tree.rs:3591` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
+`crates/engine/layout/src/box_tree.rs:3614` **fn** `layout_measured_hyp_with_counters` — Like [`layout_measured_hyp`], but also returns the [`CounterMap`] the cascade
+`crates/engine/layout/src/box_tree.rs:3681` **fn** `lay_out_incremental` — Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones
+`crates/engine/layout/src/box_tree.rs:3720` **fn** `layout_streaming_incremental` — Streaming incremental layout (PH1-2b)
+`crates/engine/layout/src/box_tree.rs:3767` **fn** `layout_mutation_incremental` — Incremental re-layout for JS DOM mutations (ADR-016 M4)
+`crates/engine/layout/src/box_tree.rs:3823` **fn** `layout_mutation_incremental_restyle` — BUG-341 S5: incremental re-layout for a pure interactive-state transition
+`crates/engine/layout/src/box_tree.rs:4006` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
+`crates/engine/layout/src/box_tree.rs:4081` **fn** `canvas_background_color` — CSS Backgrounds §3.11.1 — the canvas background color
+`crates/engine/layout/src/box_tree.rs:5466` **fn** `incremental_build_box` — BUG-341 S4 — incremental box-build entry point
+`crates/engine/layout/src/box_tree.rs:12501` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
+`crates/engine/layout/src/box_tree.rs:12684` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
+`crates/engine/layout/src/box_tree.rs:12703` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
+`crates/engine/layout/src/box_tree.rs:12733` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
+`crates/engine/layout/src/box_tree.rs:14036` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/color_mix.rs:38` **enum** `MixColorSpace` — CSS Color L5 §10.2 — interpolation color space for `color-mix()`
 `crates/engine/layout/src/color_mix.rs:63` **fn** `from_css` — Parse a CSS `color-mix()` interpolation space identifier (case-insensitive)
 `crates/engine/layout/src/color_mix.rs:80` **fn** `is_polar` — Returns `true` if this space has a hue (polar) axis

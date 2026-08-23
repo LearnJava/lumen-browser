@@ -246,7 +246,7 @@ executor'а (TEST-4) даёт `PASS`.
 `.xhtml`/`.xht`-файлов, из них 39 — с 18 и более такими тегами.
 
 Само по себе это «всего лишь» неверное дерево, но в связке с
-[BUG-802](BUG-802-OPEN.md) (layout вложенного `flex-direction: column` стоит
+[BUG-802](BUG-802-FIXED.md) (layout вложенного `flex-direction: column` стоит
 O(2^глубины)) оно вешает браузер: пять файлов
 `css/css-flexbox/flexbox-justify-content-vert-*.xhtml` с 27 такими тегами
 подряд не раскладываются и за минуту, и в снимке WPT-RUN-5 стоили 318

@@ -281,6 +281,45 @@ thread_local! {
     static CV_AUTO_TOUCHED: Cell<bool> = const { Cell::new(false) };
 }
 
+// BUG-802 correctness guard for `lay_out_flex`'s column probe reuse, the same
+// shape as `CV_AUTO_TOUCHED` above. A probe lays the item out with
+// `available_height: None` (indefinite containing-block height); the final
+// placement pass hands it a *definite* one. The two results are identical
+// exactly when nothing in the subtree cared about that difference — and the
+// only way `lay_out_inner` ever consults `available_height` is by resolving a
+// block-axis length against it (`height`/`min-height`/`max-height`, plus the
+// aspect-ratio height read), which is what `resolve_block_size` below funnels.
+// Set when such a resolution returned `None` *because* the basis was
+// indefinite: with a definite one the same site could have produced a value,
+// so the probe's result may not be replayed. Also set unconditionally by the
+// two dispatch paths that consume `available_height` inside another module
+// (vertical writing modes, SVG roots) and are therefore not auditable here.
+//
+// Callers save (`replace(false)`), run the probe, then restore
+// `outer || touched_here`, so a nested probe neither poisons a sibling's reuse
+// nor hides the fact from an ancestor deciding about its own — the protocol
+// `CV_AUTO_TOUCHED`'s doc comment describes.
+thread_local! {
+    static INDEFINITE_HEIGHT_CONSULTED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Resolves a block-axis length against the containing block's content height,
+/// recording in [`INDEFINITE_HEIGHT_CONSULTED`] when an indefinite basis is
+/// what made the resolution fail. Every `lay_out_inner` read of its
+/// `available_height` parameter goes through here — see that flag's comment.
+fn resolve_block_size(
+    l: &Length,
+    em: f32,
+    available_height: Option<f32>,
+    viewport: Size,
+) -> Option<f32> {
+    let resolved = l.resolve(em, available_height, viewport);
+    if resolved.is_none() && available_height.is_none() {
+        INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
+    }
+    resolved
+}
+
 /// BUG-341 S36 — the layout-result cache S32 built and S33 removed
 /// (net-negative at the time, 8.3% hit rate), resurrected now that S34/S35
 /// established the precondition it needs (a flex item's `style` `Arc` stays
@@ -7906,6 +7945,9 @@ fn lay_out_inner(
     // from CSS width/height (or viewBox fallback), then SVG-coordinate shape positioning.
     if matches!(b.kind, BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } | BoxKind::SvgText { .. }) {
         let _prof = lumen_core::profile::scope_detail("lo_svg");
+        // BUG-802: this path reads `available_height` in another function, so
+        // the flag cannot be maintained per resolution site here.
+        INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
         lay_out_svg_root(b, start_x, start_y, available_width, available_height, viewport);
         return;
     }
@@ -7920,6 +7962,9 @@ fn lay_out_inner(
     if !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb)
         && matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
     {
+        // BUG-802: `available_height` is consumed inside `crate::vertical`,
+        // out of reach of `resolve_block_size`'s per-site bookkeeping.
+        INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
         crate::vertical::lay_out_vertical_block(
             b,
             start_x,
@@ -8037,7 +8082,7 @@ fn lay_out_inner(
             && ah > 0.0
             && s.width.is_none()
             && let Some(h_len) = &s.height
-            && let Some(h) = h_len.resolve(em, available_height, viewport)
+            && let Some(h) = resolve_block_size(h_len, em, available_height, viewport)
         {
             // BUG-734 / CSS 2.1 §10.6.2: `width: auto` + definite height +
             // известное соотношение → ширина выводится из высоты. Симметрично
@@ -8271,6 +8316,8 @@ fn lay_out_inner(
     if !matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb)
         && matches!(b.kind, BoxKind::InlineRun { .. })
     {
+        // BUG-802 — see the sibling `lay_out_vertical_block` dispatch above.
+        INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
         crate::vertical::lay_out_vertical_inline_run(
             b,
             start_x,
@@ -8450,7 +8497,7 @@ fn lay_out_inner(
                     FlexDirection::Column | FlexDirection::ColumnReverse
                 ) {
                     s.height.as_ref()
-                        .and_then(|h| h.resolve(em, available_height, viewport))
+                        .and_then(|h| resolve_block_size(h, em, available_height, viewport))
                         .map(|h| match s.box_sizing {
                             BoxSizing::ContentBox => h,
                             BoxSizing::BorderBox => (h - padding_top - padding_bottom
@@ -8470,7 +8517,7 @@ fn lay_out_inner(
                     FlexDirection::Column | FlexDirection::ColumnReverse
                 ) {
                     s.height.as_ref()
-                        .and_then(|h| h.resolve(em, available_height, viewport))
+                        .and_then(|h| resolve_block_size(h, em, available_height, viewport))
                         .map(|h| match s.box_sizing {
                             BoxSizing::ContentBox => h,
                             BoxSizing::BorderBox => (h - padding_top - padding_bottom
@@ -8485,7 +8532,7 @@ fn lay_out_inner(
                     flex_explicit_cross, flex_explicit_main, measurer, viewport, children_pcb, hp,
                 );
                 b.rect.height = if let Some(h_len) = &s.height
-                    && let Some(h) = h_len.resolve(em, available_height, viewport)
+                    && let Some(h) = resolve_block_size(h_len, em, available_height, viewport)
                 {
                     match s.box_sizing {
                         BoxSizing::ContentBox => {
@@ -8535,7 +8582,7 @@ fn lay_out_inner(
                 // container's *definite* content-box height (None when the height is
                 // content-derived — there is no free space to distribute then).
                 let grid_definite_height = s.height.as_ref()
-                    .and_then(|h| h.resolve(em, available_height, viewport))
+                    .and_then(|h| resolve_block_size(h, em, available_height, viewport))
                     .map(|h| match s.box_sizing {
                         BoxSizing::ContentBox => h,
                         BoxSizing::BorderBox => (h - padding_top - padding_bottom
@@ -8547,7 +8594,7 @@ fn lay_out_inner(
                     measurer, viewport, children_pcb, hp,
                 );
                 b.rect.height = if let Some(h_len) = &s.height
-                    && let Some(h) = h_len.resolve(em, available_height, viewport)
+                    && let Some(h) = resolve_block_size(h_len, em, available_height, viewport)
                 {
                     match s.box_sizing {
                         BoxSizing::ContentBox => {
@@ -8577,7 +8624,7 @@ fn lay_out_inner(
             // CSS 2.1 §10.5: definite content height for children's height percentage resolution.
             // Only available when this element itself has an explicit height.
             let children_available_height: Option<f32> = if let Some(h_len) = &s.height
-                && let Some(h) = h_len.resolve(em, available_height, viewport)
+                && let Some(h) = resolve_block_size(h_len, em, available_height, viewport)
             {
                 let content_h = match s.box_sizing {
                     BoxSizing::ContentBox => h,
@@ -9074,7 +9121,7 @@ fn lay_out_inner(
             // box-sizing работает симметрично width: content-box прибавляет
             // padding+border, border-box оставляет h как итоговую высоту.
             b.rect.height = if let Some(h_len) = &s.height {
-                if let Some(h) = h_len.resolve(em, available_height, viewport) {
+                if let Some(h) = resolve_block_size(h_len, em, available_height, viewport) {
                     let specified = match s.box_sizing {
                         BoxSizing::ContentBox => h
                             + padding_top + padding_bottom
@@ -9133,12 +9180,12 @@ fn lay_out_inner(
                 BoxSizing::BorderBox => v,
             };
             if let Some(max_len) = &s.max_height
-                && let Some(max_h) = max_len.resolve(em, available_height, viewport)
+                && let Some(max_h) = resolve_block_size(max_len, em, available_height, viewport)
             {
                 b.rect.height = b.rect.height.min(outer_vert(max_h).max(0.0));
             }
             if let Some(min_len) = &s.min_height
-                && let Some(min_h) = min_len.resolve(em, available_height, viewport)
+                && let Some(min_h) = resolve_block_size(min_len, em, available_height, viewport)
             {
                 b.rect.height = b.rect.height.max(outer_vert(min_h.max(0.0)));
             }
@@ -9305,7 +9352,7 @@ fn lay_out_inner(
                 b, content_x, content_y, content_width, None, None, 0.0, None, measurer, viewport, children_pcb, hp,
             );
             b.rect.height = if let Some(h_len) = &s.height
-                && let Some(h) = h_len.resolve(em, available_height, viewport)
+                && let Some(h) = resolve_block_size(h_len, em, available_height, viewport)
             {
                 match s.box_sizing {
                     BoxSizing::ContentBox => (h + padding_top + padding_bottom
@@ -9337,7 +9384,7 @@ fn lay_out_inner(
                 b, content_x, content_y, content_width, measurer, viewport, children_pcb, hp,
             );
             if let Some(h_len) = &s.height
-                && let Some(h) = h_len.resolve(em, available_height, viewport)
+                && let Some(h) = resolve_block_size(h_len, em, available_height, viewport)
             {
                 b.rect.height = match s.box_sizing {
                     BoxSizing::ContentBox => (h + padding_top + padding_bottom
@@ -10894,8 +10941,24 @@ fn lay_out_flex(
     // recursive re-layout of the item's whole subtree that nothing reads
     // (BUG-341: every flex item paid for two full recursive layouts instead
     // of one, compounding multiplicatively with flex-nesting depth).
+    //
+    // BUG-802: skipping the call was only half the story. In a *column*
+    // container `flex-basis: auto` — the default — makes the condition above a
+    // constant `true`, so every item still paid two full recursive layouts
+    // (this probe plus the final placement pass below), and those two multiply
+    // down the tree: a chain of nested `flex-direction: column` boxes cost
+    // ×2 per level (measured 0.27 s at depth 16, 1.21 s at 18, 4.91 s at 20 —
+    // a page with 22-24 levels never finishes). The probe's result is now
+    // stashed and replayed by the final pass whenever the two calls would
+    // compute the same thing, which collapses the exponent to one layout per
+    // level; see `column_probe` below for the three conditions.
     let cb = content_width;
-    for &i in &item_idxs {
+    // BUG-802 — per item (indexed like `item_idxs`): the border-box height the
+    // Step-1 probe produced, present only when that probe is replayable. `None`
+    // means "lay the item out again in the final pass", which is what every
+    // item did unconditionally before this.
+    let mut column_probe: Vec<Option<f32>> = vec![None; item_idxs.len()];
+    for (k, &i) in item_idxs.iter().enumerate() {
         let needs_prelayout = {
             let is = &children[i].style;
             if is_column {
@@ -10913,7 +10976,26 @@ fn lay_out_flex(
             }
         };
         if needs_prelayout {
-            lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb, hp, false);
+            if is_column {
+                // The two flags are the correctness guard the replay needs: the
+                // probe runs with an indefinite containing-block height and at a
+                // temporary main-axis position, so a subtree that consulted
+                // either (a percentage block size, `content-visibility: auto`'s
+                // position-dependent skip) must not be replayed — see
+                // `INDEFINITE_HEIGHT_CONSULTED` / `CV_AUTO_TOUCHED`.
+                let outer_cv = CV_AUTO_TOUCHED.with(|c| c.replace(false));
+                let outer_ih = INDEFINITE_HEIGHT_CONSULTED.with(|c| c.replace(false));
+                lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb, hp, false);
+                let cv_here = CV_AUTO_TOUCHED.with(|c| c.get());
+                let ih_here = INDEFINITE_HEIGHT_CONSULTED.with(|c| c.get());
+                CV_AUTO_TOUCHED.with(|c| c.set(outer_cv || cv_here));
+                INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(outer_ih || ih_here));
+                if !cv_here && !ih_here {
+                    column_probe[k] = Some(children[i].rect.height);
+                }
+            } else {
+                lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb, hp, false);
+            }
         }
     }
 
@@ -11288,29 +11370,61 @@ fn lay_out_flex(
                 // is used verbatim instead of having border+padding added on top of it
                 // for a content-box item (which double-counts the border). Mirrors the
                 // cross-axis stretch path below.
-                // BUG-294: pass the item's *margin-box* start (no margin pre-added).
-                // `lay_out_inner` unconditionally adds the box's own `margin_left`/
-                // `margin_top` to the `start_x`/`start_y` it receives, so pre-adding
-                // `m_l`/`m_t` here double-counts the margin. Every other call site in
-                // this file passes the bare margin-box origin and lets `lay_out_inner`
-                // apply the margin once.
-                lay_out_with_used_size(
-                    &mut children[i],
-                    content_x,
-                    content_y + main_cursor,
-                    used_cross,
-                    Some(inner_main),
-                    measurer,
-                    viewport,
-                    pcb,
-                    hp,
-                    false,
-                    UsedSizeOverride {
-                        height: Some(inner_main),
-                        box_sizing: Some(BoxSizing::BorderBox),
-                        ..Default::default()
-                    },
-                );
+                // BUG-802: the Step-1 probe above already laid this exact subtree
+                // out — at `content_y` instead of `content_y + main_cursor`, with
+                // an indefinite height instead of the resolved `inner_main`, and
+                // with `content_width` instead of `used_cross`. When the last two
+                // differences are *no* difference (the item neither grew nor
+                // shrank, and its cross size is the full content width — no auto
+                // margin, no `align-self` narrowing it to fit-content), and the
+                // probe was clean of the two position/height-sensitive markers,
+                // the final pass would recompute the identical subtree. Replay it
+                // and move it into place instead: this is what turns the ×2 per
+                // nesting level into ×1. Exact bit equality, not an epsilon — an
+                // approximate match would replay geometry that differs from what
+                // the second layout would have produced.
+                let replayable = column_probe[k].is_some_and(|probed| {
+                    probed.to_bits() == inner_main.to_bits()
+                        && used_cross.to_bits() == content_width.to_bits()
+                });
+                if replayable {
+                    // The shift is the difference between the two calls' *box*
+                    // origins, not the bare `main_cursor`: `lay_out_inner` lands
+                    // the box at `start_y + margin_top` (BUG-294), so subtracting
+                    // the probe's own origin from the final one reproduces its
+                    // arithmetic exactly instead of re-associating the sum. The
+                    // difference matters: adding `main_cursor` to an already
+                    // rounded `content_y + m_t` moved a box at y≈17000 by 0.01 px
+                    // against what the second layout would have produced
+                    // (`samples/heavy.html`, the one page of the whole
+                    // graphic-test corpus where an A/B of the dumps caught it).
+                    let dy = ((content_y + main_cursor) + m_t) - (content_y + m_t);
+                    shift_tree(&mut children[i], 0.0, dy);
+                } else {
+                    // BUG-294: pass the item's *margin-box* start (no margin pre-added).
+                    // `lay_out_inner` unconditionally adds the box's own `margin_left`/
+                    // `margin_top` to the `start_x`/`start_y` it receives, so pre-adding
+                    // `m_l`/`m_t` here double-counts the margin. Every other call site in
+                    // this file passes the bare margin-box origin and lets `lay_out_inner`
+                    // apply the margin once.
+                    lay_out_with_used_size(
+                        &mut children[i],
+                        content_x,
+                        content_y + main_cursor,
+                        used_cross,
+                        Some(inner_main),
+                        measurer,
+                        viewport,
+                        pcb,
+                        hp,
+                        false,
+                        UsedSizeOverride {
+                            height: Some(inner_main),
+                            box_sizing: Some(BoxSizing::BorderBox),
+                            ..Default::default()
+                        },
+                    );
+                }
                 // Свободное место поперечной оси достаётся auto-полям, а если
                 // их нет — выравниванию (CSS Flexbox §8.1: auto старше
                 // `align-self`).
@@ -19019,6 +19133,37 @@ mod tests {
         let b = find_by_id_all(&root, &doc, "b").expect("b");
         assert_eq!(a.rect.y, 0.0, "a.y {}", a.rect.y);
         assert_eq!(b.rect.y, 50.0, "b.y {} (expected 50 = 0 + 40 + 10)", b.rect.y);
+    }
+
+    #[test]
+    fn nested_column_flex_costs_one_layout_per_level() {
+        // BUG-802: `flex-basis: auto` (the default) made the Step-1 probe
+        // unconditional for column items, and the final placement pass laid the
+        // same item out a second time — two full recursive layouts per level,
+        // multiplying down the tree. A chain of nested `flex-direction: column`
+        // boxes therefore cost ×2 per level (4.91 s at depth 20, ~76 s at 24).
+        // Gated on the layout-call counter, not wall-clock: the exponent is what
+        // the fix removes, and a counter says so without a timing threshold that
+        // a slow machine would trip (`docs/perf-method.md`).
+        fn layout_calls_at_depth(n: usize) -> u32 {
+            let html = format!("{}{}", r#"<div class="f">"#.repeat(n), "</div>".repeat(n));
+            let css = "body{margin:0} div.f{height:200px;display:flex;flex-direction:column}";
+            let doc = lumen_html_parser::parse(&html);
+            let sheet = lumen_css_parser::parse(css);
+            super::set_layout_key_census(true);
+            let _root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+            let census = super::take_layout_key_census();
+            super::set_layout_key_census(false);
+            census.calls
+        }
+        let shallow = layout_calls_at_depth(4);
+        let deep = layout_calls_at_depth(12);
+        // Eight more levels are eight more boxes, so a linear pass adds a small
+        // constant per level; the pre-fix code multiplied by 2^8 = 256 instead.
+        assert!(
+            deep < shallow * 4,
+            "nested column flex is superlinear: depth 4 = {shallow} layout calls, depth 12 = {deep}"
+        );
     }
 
     #[test]
