@@ -95,7 +95,7 @@ confirmed by grepping every `TEST_END: ERROR` line for that exact phrase
 
 **17 harness TIMEOUTs.** Three (`Create-blocked-port.any.html`, all three
 variants) trace to one clear, filed, high-confidence engine gap:
-[BUG-772](../../bugs/BUG-772-OPEN.md) — `WebSocket` has no port-blocking
+[BUG-772](../../bugs/BUG-772-FIXED.md) — `WebSocket` has no port-blocking
 check (WHATWG Fetch §3.9's 92-port blocklist), so the test's 92
 `CreateWebSocketWithBlockedPort(N)` calls each attempt a real TCP connect
 (~2.4–2.9 s per refused port on this machine) instead of a synchronous
@@ -148,7 +148,7 @@ Lumen, а не WPT); починено одной строкой `"ws_doc_root": 
 TLS-рукопожатии `?wpt_flags=h2` (родственно BUG-438), 132/132 подтверждено
 грепом. Из 17 харнесс-TIMEOUT три (`Create-blocked-port.any.html`, все
 три варианта) объясняются одной чёткой находкой —
-[BUG-772](../bugs/BUG-772-OPEN.md): `WebSocket` не проверяет список
+[BUG-772](../bugs/BUG-772-FIXED.md): `WebSocket` не проверяет список
 заблокированных портов спеки Fetch (92 порта), поэтому конструктор реально
 пытается TCP-подключиться к каждому вместо синхронного `SecurityError`
 — ~230 с суммарно, харнесс роняет файл по внешнему таймауту. Остальные

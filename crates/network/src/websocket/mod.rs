@@ -38,6 +38,15 @@ fn require_ws_scheme(url: &Url) -> Result<(String, u16, bool, String)> {
     let port = url
         .effective_port()
         .ok_or_else(|| Error::Network(format!("ws: no port for URL: {}", url.as_str())))?;
+    // BUG-772, Fetch §3.9 «port blocking»: конструктор `WebSocket` обязан
+    // отвергнуть заблокированный порт синхронно, ДО попытки TCP-подключения —
+    // иначе страница получает возможность обратиться к произвольной локальной
+    // службе (telnet/smtp/irc/…), а каждый отказ ещё и стоит полного
+    // ОС-таймаута соединения. Здесь, а не в `connect`/`connect_deflate`,
+    // потому что обе точки входа проходят через эту функцию.
+    if crate::bad_port::is_bad_port(port) {
+        return Err(Error::Network(format!("ws: blocked port: {port}")));
+    }
     let path = url.path_and_query();
     Ok((host, port, is_tls, path))
 }
