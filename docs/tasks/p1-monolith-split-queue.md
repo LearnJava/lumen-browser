@@ -1,0 +1,155 @@
+# Очередь SPLIT — разрезание монолитных файлов (P1)
+
+**Developer:** P1 (батчи `crates/shell` может брать P2 — код механический)
+**Крейты:** `lumen-shell`, `lumen-layout`, `lumen-paint`, `lumen-network`, `lumen-css-parser`, `lumen-dom`
+**Родитель:** `SPLIT` в [`ROADMAP.md`](../../ROADMAP.md)
+**Ветки:** `p1-split-<id>` (например `p1-split-sh1`)
+**Заведена:** 2026-08-23, по итогам аудита здоровья кода
+
+Один батч = одна строка в `STATUS-P1.md` = одна сессия. Каждый батч — чисто
+механический перенос кода между модулями: ноль изменений поведения, ноль правок
+сигнатур. Это НЕ рефакторинг API — публичная поверхность каждого крейта не меняется.
+
+---
+
+## 1. Контекст
+
+Аудит 2026-08-23: workspace ≈ 545 тыс. строк, при этом 15 файлов >2000 строк,
+шесть из них >19 000. Монолиты тормозят ревью, мержи и работу агентных сессий
+(контекст не помещается). Цель дорожки: **ни одного файла >8000 строк**; гиганты
+свести к набору файлов ≤2000 строк. Поведенческие фиксы и новые фичи в эти файлы
+в этот период НЕ заводить — иначе разрез гонится за движущейся целью.
+
+### Перепись на 2026-08-23 (метод воспроизводим)
+
+Крупнейшие непрерывные регионы файла (границы по top-level item'ам):
+
+```powershell
+rg -n "^pub struct |^struct |^pub enum |^enum |^impl |^pub fn |^fn |^mod |^trait " <file>
+# затем найти максимальные зазоры между соседними item'ами (скрипт из отчёта аудита)
+```
+
+| Файл | Строк (физ.) | Статус |
+|---|---:|---|
+| `crates/engine/layout/src/style.rs` | ~38 000 | очередь |
+| `crates/shell/src/main.rs` | 29 823 | очередь |
+| `crates/engine/layout/src/box_tree.rs` | 22 551 | очередь |
+| `crates/engine/paint/src/renderer.rs` | 20 919 | очередь |
+| `crates/engine/paint/src/display_list.rs` | 19 698 | очередь |
+| `crates/engine/layout/src/lib.rs` | 19 115 | очередь |
+| `crates/network/src/lib.rs` | 9 799 | очередь |
+| `crates/engine/css-parser/src/parser.rs` | 9 192 | очередь |
+| `crates/engine/paint/src/backends/femtovg_backend.rs` | 7 955 | очередь |
+| `crates/engine/dom/src/lib.rs` | 6 934 | очередь |
+
+НЕ резать (табличные/когерентные, монолитность безвредна): `html-parser/entities.rs`,
+`layout/counters.rs`, `layout/incremental.rs`, `animation.rs`, `paint/svg_path.rs`.
+
+---
+
+## 2. Железные правила каждого батча
+
+1. **Только перенос.** Запрещено менять поведение, сигнатуры `pub`/`pub(crate)`
+   функций, имена типов и полей. Меняются только пути модулей; для внешних
+   потребителей крейта — `pub use` реэкспорт со старого пути.
+2. **Тесты едут вместе с кодом.** Счётчик `#[test]` крейта до и после батча —
+   в теле коммита. Тест-модуль разрешено перенести в файл рядом с кодом либо в
+   `tests/<name>.rs`; удалять тесты запрещено.
+3. **serde/bincode (ADR-008 hibernation-snapshots):** структуры с
+   `derive(Serialize, Deserialize)` переносить целиком, поля и атрибуты serde не
+   трогать. Переименование типа = запрет даже внутри крейта (snapshot-совместимость
+   и grep-аемость истории).
+4. **#[allow]-реестр.** Файловый `#![allow(missing_docs)]` при дроблении НЕ
+   копировать в новые файлы автоматически: если долг реально остаётся за
+   переносимым кодом — оставить allow в новом файле И обновить счётчик в
+   `docs/lint-policy.md §10` тем же коммитом. Точечные `#[allow]` переносятся
+   вместе с кодом как есть.
+5. **Пиксели не двигаются,** но snapshot/CPU-тесты (`graphic_tests/run.py`,
+   snapshot-наборы layout/paint) прогнать перед мержем — страховка от случайной
+   семантической правки при вырезке.
+6. **Размер батча:** один регион одного файла за сессию. Если регион >4000
+   перемещённых строк — резать на подбатчи по внутренним секциям, а не тащить
+   одним коммитом.
+7. Правило CLAUDE.md сохраняется: clippy `-D warnings` чист по каждому крейту
+   каждой ветки перед мержем.
+
+---
+
+## 3. Процедура батча (шаблон)
+
+```bash
+export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
+git worktree add .claude/worktrees/split-<id> -b p1-split-<id>
+cd .claude/worktrees/split-<id>
+```
+
+1. Замер ДО: `(Get-Content <file> | Measure-Object -Line).Lines`,
+   `rg -c "#\[test\]" <файлы>` — записать в черновик коммита.
+2. Создать целевой модуль (`src/<name>.rs` или каталог с `mod.rs`), добавить
+   `mod <name>;` туда, где жил код.
+3. Вырезать регион по анкерам из таблицы ниже (границы — top-level item'ы),
+   вставить как есть; поправить `use`-блоки обоих файлов. Внутрикрейтовые
+   вызыватели переводить на новый путь напрямую; `pub use` со старого пути —
+   только если путь используется другим крейтом.
+4. Прогнать: `cargo check -p <crate>` → `cargo test -p <crate>` →
+   `cargo clippy -p <crate> --all-targets -- -D warnings`. Для paint/layout —
+   плюс snapshot-прогон (правило §2.5).
+5. Коммит: `P1/SPLIT-<id>: <что перенесено> (<N> строк, тестов было X — стало X)`.
+   Merge `--no-ff` в main, удалить указатель батча из `STATUS-P1.md`, отметить
+   DONE в таблице этого файла тем же коммитом.
+
+---
+
+## 4. Очередь
+
+### Группа SH — `crates/shell/src/main.rs` (29 823 строки)
+
+Приоритет сверху вниз: сначала самодостаточные регионы, ядро (`impl Lumen`) — последним.
+
+| ID | Анкер (строки main.rs) | Регион | Цель |
+|---|---|---:|---|
+| SH-1 ✅ ready | `struct ViewTransitionState` (8797) … до `struct PipOsWindow` (12642) | ~3 850 | новый `src/view_transitions.rs` |
+| SH-2 | `struct PipOsWindow` (12642) … до `impl Lumen` (17667) | ~5 000 | новый `src/pip_window.rs` |
+| SH-3 | фрагменты 1351–8797: `run_dump_mode` (1351), `V8PersistentJs` (3247), `impl PageSource` (3561), `fetch_vtt_text` (5619) | ~5 400 | `src/dump_mode.rs`, `src/page_source.rs`, `src/vtt_fetch.rs` (по одному мини-батчу на файл: SH-3a/b/c) |
+| SH-4 | `mod navigate_by_tests` (31079) … конец файла | ~700+ | `src/navigate_by.rs`, `#[cfg(test)]` |
+| SH-5 | `fn winit_modifiers_state` (24884) … до `mod navigate_by_tests` (31079) | ~6 200 | существующий `src/input/` (обработчики winit/клавиатуры/мыши); при конфликте имён — `src/input/winit_events.rs` |
+| SH-6 | `impl Lumen` (17667) … до `winit_modifiers_state` (24884) | ~7 200 | САМЫЙ РИСКОВАННЫЙ. Только после SH-1…SH-5. Резать на подбатчи по методам: навигация/вкладки/команды IPC/session restore → каталог `src/lumen/` c `mod.rs`; `main.rs` должен стать bootstrap'ом ≤300 строк |
+
+### Группа ST — `crates/engine/layout/src/style.rs` (~38 000 строк)
+
+| ID | Что | Примечание |
+|---|---|---|
+| ST-0 ✅ ready | Перепись: карта всех top-level item'ов + максимальных регионов (метод §1), нарезка ST-1…ST-N в этот файл | одна сессия, ноль правок кода |
+| ST-1 | Тестовые модули (анкер `mod rule_index_regression`, 36541 … конец) → `tests/style/` | дешёвая вырезка, делать первой |
+| ST-2 | Логические свойства: `resolve_logical_property` (17906) и окрестность → `style/logical.rs` | |
+| ST-3+ | По итогам ST-0: группы свойств (`values/{typography,box,color_bg,flexgrid,position,effects}`), каскад (`cascade.rs`), матчинг (`matching.rs`) | план зафиксировать в этом файле |
+
+### Группы BT/PR/NW/CP/DM — второй эшелон
+
+| ID | Файл | Первый шаг |
+|---|---|---|
+| BT-0 | `layout/box_tree.rs` (22 551) | перепись → конструкторы по режимам `{block, inline, flex, grid, table, abspos, iframe}`; `build_iframe_document` (зависимость layout→html-parser) — кандидат на отдельный модуль |
+| PR-0 | `paint/renderer.rs` (20 919) | перепись → `{pipelines_wgsl, glyph_atlas, texture_pool, compute}`; WGSL-шейдеры в `.wgsl`-файлы с `include_str!` |
+| PR-1 | `paint/display_list.rs` (19 698) | перепись → `{commands, builder, serialize, hit_test, cache}` |
+| PR-2 | `paint/backends/femtovg_backend.rs` (7 955) | по командам: path/text/image/blend |
+| NW-0 | `network/lib.rs` (9 799) | HTTP/1.1-ядро → `http1/{request,response,chunked}.rs`; в lib.rs оставить сборку transport |
+| CP-1 | `css-parser/parser.rs` (9 192) | тестовый модуль (с ~5098) → `tests/`; затем `parser/{selectors,at_rules,declarations}` |
+| DM-1 | `dom/lib.rs` (6 934) | формы → `forms.rs`, selection/range → `selection.rs`, IME → `ime.rs`, FontFaceSet → `font_faces.rs`, PerformanceTimeline → `performance.rs` (образец — уже вынесенные `vtt.rs`, `contenteditable.rs`) |
+
+---
+
+## 5. Критерии готовности батча
+
+- [ ] `cargo test -p <crate>` зелёный, счётчик тестов не уменьшился
+- [ ] `cargo clippy -p <crate> --all-targets -- -D warnings` чист
+- [ ] Для layout/paint: графический/snapshot-прогон без пиксельных дельт
+- [ ] Ни один тип/поле с `Serialize/Deserialize` не переименован
+- [ ] `docs/lint-policy.md §10` обновлён, если дробился file-level allow
+- [ ] Указатель батча удалён из `STATUS-P1.md`, таблица §4 помечена DONE
+- [ ] Целевой файл(ы) ≤2000 строк; исходный уменьшился ровно на размер региона
+
+## 6. Критерии закрытия дорожки SPLIT
+
+Все батчи DONE; ни один .rs-файл workspace (кроме явно исключённых в §1) не
+превышает 8000 строк; строка `SPLIT` в ROADMAP.md → `done`, task-файл удалить
+после мержа последнего батча.
