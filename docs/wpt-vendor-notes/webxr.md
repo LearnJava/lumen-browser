@@ -34,7 +34,7 @@ below became the last successfully-loaded document, every subsequent
 browsingContext.navigate(...) reported success but the document was never
 replaced` instead of a raw harness TIMEOUT — this is the BUG-380 fix's
 detector correctly re-surfacing the underlying [BUG-438]
-(../../bugs/BUG-438-OPEN.md) defect (a failed load silently keeps the old
+(../../bugs/BUG-438-FIXED.md) defect (a failed load silently keeps the old
 document while `navigate` still reports success), not a new or category-
 specific hang.
 
@@ -78,7 +78,7 @@ XR в воркспейсе нет. Вендорена целиком 2026-08-18 
 единственной) успешной загрузки страницы все последующие навигации
 отчитывались уже починенным ([BUG-380](../bugs/BUG-380-FIXED.md)) детектором
 маркера как явный `ERROR` («document was never replaced») вместо голого
-TIMEOUT — это переподтверждение движкового [BUG-438](../bugs/BUG-438-OPEN.md)
+TIMEOUT — это переподтверждение движкового [BUG-438](../bugs/BUG-438-FIXED.md)
 (навигация молча не грузит и рапортует успех), не новый/специфичный для
 категории зависон. Два исполнившихся non-`.https.` теста: `historical.html`
 17/17 OK (тривиально — проверяет отсутствие устаревших WebVR-интерфейсов,

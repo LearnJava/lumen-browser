@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-23",
  "counts": {
-  "open": 368,
-  "fixed": 444,
+  "open": 367,
+  "fixed": 445,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -8212,10 +8212,10 @@
    "debtor": false
   },
   "BUG-438": {
-   "status": "open",
-   "title": "**`navigate` на `data:`-URL молча не загружает страницу.** `navigate` и последующий `wait document_ready` оба возвращают успех, но в окне остаётся предыдущий до…",
-   "component": "driver/MCP (`BrowserSession::navigate`, live-window) / шелл-навигация по `data:`",
-   "date": null,
+   "status": "fixed",
+   "title": "`navigate`+`wait{document_ready}` молча репортили успех для ЛЮБОЙ несостоявшейся загрузки (закрытый порт, несуществующий файл/`data:`, битый URL) — окно оставал…",
+   "component": "shell (`main.rs` — `about_to_wait`'s `pending_waits` drain, BUG-308's `load_failed`)",
+   "date": "2026-08-23",
    "debtor": false
   },
   "BUG-439": {
@@ -11174,9 +11174,6 @@
    "BUG-429",
    "BUG-430"
   ],
-  "driver/MCP (`BrowserSession::navigate`, live-window) / шелл-навигация по `data:`": [
-   "BUG-438"
-  ],
   "driver/shell (`WinitSession::scroll`, `InProcessSession::scroll`, `navigate_fragment`)": [
    "BUG-338"
   ],
@@ -12185,6 +12182,9 @@
   ],
   "shell (`main.rs` — `ResourceBase::resolve`/`resolve_str` для `ResourceBase::File`)": [
    "BUG-440"
+  ],
+  "shell (`main.rs` — `about_to_wait`'s `pending_waits` drain, BUG-308's `load_failed`)": [
+   "BUG-438"
   ],
   "shell (`main.rs` — дренаж `window.open()` popup-запросов + `location.href`)": [
    "BUG-293"
