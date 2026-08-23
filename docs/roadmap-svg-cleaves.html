@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-23",
  "counts": {
-  "open": 381,
-  "fixed": 449,
+  "open": 380,
+  "fixed": 450,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -4637,7 +4637,7 @@
        "title": "WPT: вендорить + прогнать категорию `xhr`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (подтверждён — реальный `XMLHttpRequest`, `crates/js/src/xhr.rs`, не заглушка). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root xhr --recursive`, 14 мин 19 с, 443 файла, 345 id) — **236/345 harness OK, 157/1244 сабтестов**. Найден [BUG-780](bugs/BUG-780-OPEN.md): `XMLHttpRequest.open()` никогда не резолвит относительный URL против document base — шестой независимый сайт семейства BUG-346/347/359/362/370, не унаследовавший фикс BUG-347 (`fetch()`, соседний, но отдельный шим). 739 строк `missing scheme` — доминирующий класс отказов. Остальное — уже известные гэпы (`data:`-схема вне сети, второй барьер BUG-359 у `window.open`, переиспользование browsing context класса BUG-380). Новый номер: BUG-780",
+       "note": "Скоуп: ⬜ (подтверждён — реальный `XMLHttpRequest`, `crates/js/src/xhr.rs`, не заглушка). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root xhr --recursive`, 14 мин 19 с, 443 файла, 345 id) — **236/345 harness OK, 157/1244 сабтестов**. Найден [BUG-780](bugs/BUG-780-FIXED.md): `XMLHttpRequest.open()` никогда не резолвит относительный URL против document base — шестой независимый сайт семейства BUG-346/347/359/362/370, не унаследовавший фикс BUG-347 (`fetch()`, соседний, но отдельный шим). 739 строк `missing scheme` — доминирующий класс отказов. Остальное — уже известные гэпы (`data:`-схема вне сети, второй барьер BUG-359 у `window.open`, переиспользование browsing context класса BUG-380). Новый номер: BUG-780",
        "bugs": [
         "BUG-780"
        ]
@@ -10591,10 +10591,10 @@
    "debtor": false
   },
   "BUG-780": {
-   "status": "open",
+   "status": "fixed",
    "title": "`XMLHttpRequest.open()` никогда не резолвит относительный URL против document base (`this._url = String(url)`, без `_url_resolve`) — шестой независимый сайт сем…",
    "component": "js (`crates/js/src/xhr.rs:216-236` — `XMLHttpRequest.prototype.open`)",
-   "date": null,
+   "date": "2026-08-23",
    "debtor": false
   },
   "BUG-781": {

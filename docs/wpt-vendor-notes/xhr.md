@@ -25,7 +25,17 @@ process): **236/345 harness OK, 157/1244 subtests passed** — real signal,
 the vast majority of files actually execute (no HTTPS-port gap, no
 testdriver wall).
 
-### Dominant finding: [BUG-780](../../bugs/BUG-780-OPEN.md)
+**Re-run 2026-08-23, after [BUG-780](../../bugs/BUG-780-FIXED.md) was fixed**
+(same script, same machine, 12 min 10 s): **251/345 harness OK, 425/1259
+subtests passed**, 44 unique TIMEOUT files (was 69), and **0 `missing scheme`
+lines (was 739)**. Subtests nearly tripled while harness OK moved only 15,
+because a file used to die whole at its first request and now runs to the end
+and fails on its own real gaps instead; the denominator grew (1244 → 1259) for
+the same reason — some subtests never registered at all. The remaining 17
+`unsupported scheme: data` lines are the separate, known network-layer gap,
+not this bug.
+
+### Dominant finding: [BUG-780](../../bugs/BUG-780-FIXED.md)
 
 `XMLHttpRequest.prototype.open` (`crates/js/src/xhr.rs:216-236`) takes the
 `url` argument completely literally (`this._url = String(url);`) — no
@@ -90,7 +100,7 @@ BUG-780 itself is fixed and the category is re-run.
 предикторам: 0 variant, 1 testdriver-файл, 0 `.https.`).
 
 `run_report.py --all --root xhr --recursive` — 14 мин 19 с, **236/345
-harness OK, 157/1244 сабтестов**. Найден [BUG-780](../bugs/BUG-780-OPEN.md):
+harness OK, 157/1244 сабтестов**. Найден [BUG-780](../bugs/BUG-780-FIXED.md):
 `XMLHttpRequest.open()` берёт `url` буквально (`this._url = String(url)`),
 без единого шага резолюции против document base — шестой независимый
 сайт семейства BUG-346/347/359/362/370, не унаследовавший фикс BUG-347

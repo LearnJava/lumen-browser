@@ -1,6 +1,6 @@
 # BUG-780: `XMLHttpRequest.open()` никогда не резолвит относительный URL против document base — шестой независимый сайт семейства BUG-346/347/359/362/370
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-23 (P1)
 
 **Компонент:** js (`crates/js/src/xhr.rs:216-236`, `XMLHttpRequest.prototype.open`)
 
@@ -122,3 +122,77 @@ _lumen_document_base_url())` перед записью в `this._url` (обе ф
 `opener`), `xmlhttprequest-timeout-reused.html` и соседи (переиспользуемый
 browsing context, класс BUG-380), `json.any.html` (частично `data:` URL, см.
 Impact выше).
+
+## Исправление (P1, 2026-08-23)
+
+`XMLHttpRequest.prototype.open` (`crates/js/src/xhr.rs`) резолвит URL ровно тем
+же приёмом, что и `fetch()` после BUG-347:
+
+```js
+this._url = (typeof _url_resolve === 'function' &&
+             typeof _lumen_document_base_url === 'function')
+          ? _url_resolve(String(url), _lumen_document_base_url())
+          : String(url);
+```
+
+Три решения, которые не сводятся к «дописать вызов»:
+
+- **Резолв в `open()`, а не в `send()`** — XHR §4.5.1 шаг 6. На уже разрешённый
+  URL смотрят `responseURL`, `abort()` и проверки CORS, а база должна быть той,
+  что действовала в момент `open()`. Тест
+  `xhr_open_uses_base_element_in_force_at_open_time` фиксирует обе половины:
+  `<base href>`, добавленный после `open()`, не сдвигает уже открытый запрос, а
+  следующий `open()` его уже видит. Резолв в `send()` прошёл бы прогон
+  категории так же и был бы неверен именно здесь.
+- **`typeof`-гард, а не прямой вызов.** `XHR_SHIM` — отдельный `rt.eval`, и оба
+  хелпера приходят из `WEB_API_SHIM`, который ставится раньше. Но `xhr.rs`
+  вычисляется и в контексте без DOM (свои юнит-тесты, воркерный путь до
+  BUG-778), где этих глобалей нет — без гарда шим падал бы на установке, а не
+  деградировал к прежнему поведению.
+- **Ни строки в `send()`.** Нативные биндинги уже получают `this._url`; менять
+  сетевой слой не потребовалось — дефект целиком в одной присваивающей строке.
+
+**Верификация**
+
+1. `cargo test -p lumen-js --features v8-backend xhr::` — 21/21, из них четыре
+   новых (относительный, корне-относительный, абсолютный не трогается, база на
+   момент `open()`).
+2. Живая проба BUG-812 (`tests/wpt/verify_csp_url_worker_gaps.py --variant
+   xhr-relative --variant xhr-root-relative --variant xhr-absolute --variant
+   fetch-relative`) — все четыре печатают `status=200`; до фикса первые две
+   давали `xhr-error status=0` при зелёных контролях:
+
+   | проба | до | после |
+   |---|---|---|
+   | `xhr-relative` | `xhr-error status=0` | `xhr-load status=200 text=probe-body` |
+   | `xhr-root-relative` | `xhr-error status=0` | `xhr-load status=200` |
+   | `xhr-absolute` (контроль) | `status=200` | `status=200` |
+   | `fetch-relative` (контроль) | `status=200` | `status=200` |
+
+3. **Прогон вендоренной категории после фикса** (`run_report.py --all --root
+   xhr --recursive`, тот же скрипт и та же машина, что и замер 2026-08-18):
+
+   | | до (2026-08-18) | после (2026-08-23) |
+   |---|---|---|
+   | строк `missing scheme` | **739** | **0** |
+   | harness OK | 236/345 | **251/345** |
+   | сабтестов PASS | 157/1244 | **425/1259** |
+   | уникальных TIMEOUT-файлов | 69 | **44** |
+   | время прогона | 14 мин 19 с | 12 мин 10 с |
+
+   Сабтесты выросли в 2.7 раза — цифра больше прироста harness OK, потому что
+   раньше файл чаще всего доходил до первого запроса и умирал целиком; теперь
+   он доходит до конца и падает уже на своих настоящих гэпах. Знаменатель
+   вырос (1244 → 1259) по той же причине: часть сабтестов вообще не
+   регистрировалась.
+
+   17 строк `unsupported scheme: data` остались — отдельный заведомый гэп
+   (`data:` URL не поддерживается сетевым слоем, `crates/network/src/lib.rs`),
+   не этот баг. Оставшиеся 44 TIMEOUT — уже известные классы из раздела
+   «Измеренный вес»: `window.open` без реального `opener` (BUG-359),
+   переиспользуемый browsing context (BUG-380), `<iframe>` (BUG-480).
+
+   Оговорка о чистоте замера: первые ~1.5 мин прогона машина делила CPU с
+   `clippy -p lumen-js` (21 с) и `cargo test -p lumen-js -j 2` (67 с). Это
+   работает против фикса (лишние TIMEOUT), а не за него, и не влияет на
+   счётчик `missing scheme`.
