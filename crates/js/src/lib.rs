@@ -126,6 +126,7 @@ pub mod shared_storage;
 pub mod idle_detection;
 pub mod topics_api;
 pub mod attribution_reporting;
+pub mod frame_bridge;
 pub mod pointer_capture;
 pub mod sw_worker;
 

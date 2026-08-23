@@ -327,7 +327,7 @@ MECHANISMS = [
         "script that called it",
     ),
     Mechanism(
-        "cssom-stylesheets-missing", "BUG-471 (+BUG-591)",
+        "cssom-stylesheets-missing", "BUG-471/BUG-746 (+BUG-591)",
         [r"reading 'cssRules'", r"reading 'rules'",
          r"styleSheets is not iterable",
          r"(?:insertRule|deleteRule) is not a function",
@@ -361,6 +361,55 @@ MECHANISMS = [
         "elementfrompoint-missing", "BUG-464 (+BUG-591)",
         [r"elements?FromPoint is not a function"],
         "there is no point→node hit test on the JS side at all",
+    ),
+    Mechanism(
+        "svg-dom-not-reflected", "BUG-889 (+BUG-591)",
+        [r"reading 'baseVal'", r"getBBox is not a function",
+         r"get(?:Screen)?CTM is not a function",
+         r"createSVGLength is not a function"],
+        "an SVG element written by the parser is an `HTMLUnknownElement`, and "
+        "the animated-attribute reflection (`x`/`width`/`viewBox`.baseVal) "
+        "exists on neither that path nor `createElementNS`",
+    ),
+    Mechanism(
+        "custom-element-registry-missing", "BUG-890 (+BUG-591)",
+        [r"CustomElementRegistry is not defined"],
+        "the single `customElements` object has no interface behind it, so a "
+        "scoped registry cannot be constructed or passed to "
+        "`createElement`/`importNode`",
+    ),
+    Mechanism(
+        "xslt-xpath-missing", "BUG-891 (+BUG-591)",
+        [r"XSLTProcessor is not defined",
+         r"XPath(?:Evaluator|Result|Expression|NSResolver) is not defined",
+         r"document\.evaluate is not a function"],
+        "XSLT and XPath are absent as globals (`DOMParser`/`XMLSerializer` "
+        "next to them work)",
+    ),
+    Mechanism(
+        "static-range-missing", "BUG-533 (+BUG-591)",
+        [r"StaticRange is not defined", r"AbstractRange is not defined"],
+        "`new StaticRange(...)` throws on the first line of every "
+        "`css-highlight-api` test (`Range` exists, `StaticRange` does not)",
+    ),
+    Mechanism(
+        "geometry-interfaces-missing", "BUG-522 (+BUG-591)",
+        [r"DOM(?:Rect|Point|Matrix|Quad)(?:ReadOnly)? is not defined",
+         r"WebKitCSSMatrix is not defined"],
+        "the Geometry Interfaces module has no constructors at all, and "
+        "`getBoundingClientRect()` returns a plain `Object` without `toJSON`",
+    ),
+    Mechanism(
+        "shadowroot-no-parentnode", "BUG-895 (+BUG-591)",
+        [r"shadowRoot\.(?:append|prepend|replaceChildren) is not a function"],
+        "the shadow-root wrapper is an object literal with no prototype "
+        "chain, so the `ParentNode` mixin never reaches it",
+    ),
+    Mechanism(
+        "module-type-unsupported", "BUG-896",
+        [r"unsupported import attribute type '(?:css|text)'"],
+        "a CSS/text module script is rejected after its file has been "
+        "fetched — only `json` is a known module type",
     ),
     Mechanism(
         # Not an engine gap in the API sense: the test ran and its assertion
@@ -1723,6 +1772,44 @@ SOURCE_MARKERS = [
         "inside it registers anything",
         predicate=_shared_worker_module_marker,
     ),
+    # WPT-RUN-6 slice 29. Four silent reads, all measured live
+    # (`verify_cssom_svg_interface_gaps.py`): the page asks the object model
+    # a question, gets `undefined`, and — since these tests compare rather
+    # than throw — never says anything at all. A source marker is the only
+    # stage that can reach them.
+    Mechanism(
+        # Same key as the noisy `cssom-stylesheets-missing` of the output
+        # stage — one mechanism, two kinds of evidence, as
+        # `iframe-no-nested-context` and `img-no-load-event` already are. The
+        # `ref` string must stay identical to that entry's: `print_report`
+        # builds its owner map by `.update()`ing the stages over one another,
+        # so two refs under one key would silently rename the row's owner
+        # (guarded by the selftest below).
+        "cssom-stylesheets-missing", "BUG-471/BUG-746 (+BUG-591)",
+        [r"document\.styleSheets|\.sheet\.cssRules|\bcssRules\b|"
+         r"new CSSStyleSheet\(|\badoptedStyleSheets\b"],
+        "the CSSOM stylesheet model is not wired to the shim: "
+        "`document.styleSheets` and `<style>.sheet` are `undefined`, there "
+        "are no rule classes, and `adoptedStyleSheets` is an inert expando",
+    ),
+    Mechanism(
+        "document-collections-missing", "BUG-892",
+        [r"document\.(?:forms|scripts|links|embeds|plugins|anchors)\b"],
+        "only `document.images` exists — the sibling collections of HTML LS "
+        "§3.1.5 are `undefined`, so `.length` on them throws",
+    ),
+    Mechanism(
+        "input-valueas-missing", "BUG-893",
+        [r"\.valueAs(?:Number|Date)\b"],
+        "`input.valueAsNumber`/`valueAsDate` do not exist, and assigning "
+        "them on a type that should reject throws nothing",
+    ),
+    Mechanism(
+        "insertbefore-no-validation", "BUG-894",
+        [r"pre-insertion-validation-hierarchy\.js"],
+        "the shared pre-insertion helper: `insertBefore` never throws "
+        "`NotFoundError` for a reference node that is not a child",
+    ),
 ]
 
 #: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched
@@ -2111,6 +2198,7 @@ MEASURED_REFS = {
     "nested-flex-exponential": "BUG-802",
     "dom-wrapper-oom": "BUG-849",
     "unclamped-blur": "BUG-850",
+    "wasm-locals-unbounded": "BUG-898",
 }
 
 
@@ -4989,6 +5077,117 @@ def selftest():
                          "f.src = 'child.html';</script>")
         check(classify_source("/dyn/detached.html", tmp, {}) is None,
               "a frame nobody inserted must not be claimed")
+
+        # Stage 1, slice 29: seven error texts that name the interface the
+        # page asked for. Each is checked against `classify()` directly — the
+        # table under test is the output one, and the shard fixture above is
+        # already at its useful size.
+        named = {
+            "svg-dom-not-reflected":
+                "script error: JS runtime error: Cannot read properties of "
+                "undefined (reading 'baseVal')",
+            "custom-element-registry-missing":
+                "script error: JS runtime error: CustomElementRegistry is not defined",
+            "xslt-xpath-missing":
+                "script error: JS runtime error: XSLTProcessor is not defined",
+            "static-range-missing":
+                "script error: JS runtime error: StaticRange is not defined",
+            "geometry-interfaces-missing":
+                "script error: JS runtime error: DOMRect is not defined",
+            "shadowroot-no-parentnode":
+                "script error: JS runtime error: div.shadowRoot.append is not a function",
+            "module-type-unsupported":
+                "module error: JS runtime error: module 'http://x/a.css': "
+                "unsupported import attribute type 'css'",
+        }
+        for key, line in named.items():
+            check(classify([line]) == key,
+                  f"{key}: the error text naming the interface was not claimed "
+                  f"(got {classify([line])})")
+            # ...and the generic bucket must not be what claims it: every one
+            # of these lines starts with `script error:`/`module error:`, which
+            # is exactly the weak pattern.
+            check(classify([line], WEAK_MECHANISMS) == "script-error-swallowed",
+                  f"{key}: fixture line no longer matches the weak stage, so "
+                  f"the precedence it guards is untested")
+        # Negative cases, one per rule that could over-reach. `getBBox` on a
+        # *defined* object, a JSON module (the supported type) and a `Range`
+        # that exists are all normal.
+        check(classify(["script error: JS runtime error: module 'x': "
+                        "unsupported import attribute type 'json'"]) == UNCLASSIFIED,
+              "the supported module type must not be read as the CSS-module gap")
+        check(classify(["script error: JS runtime error: Range is not defined"])
+              == UNCLASSIFIED,
+              "`Range` is not `StaticRange` — the marker must be exact")
+        check(classify(["script error: JS runtime error: Cannot read properties "
+                        "of undefined (reading 'animVal')"]) == UNCLASSIFIED,
+              "only the `baseVal` read was measured; `animVal` alone is not it")
+
+        # Stage 2, slice 29: four silent reads of the object model. Each test
+        # compares rather than throws, so nothing reaches the output stage and
+        # only a source marker can name them.
+        os.makedirs(os.path.join(tmp, "om"), exist_ok=True)
+        cases = {
+            "cssom.html": ("<script>const rules = document.styleSheets[0].cssRules;\n"
+                           "test(() => assert_equals(rules.length, 1));</script>",
+                           "cssom-stylesheets-missing"),
+            "collections.html": ("<script>test(() => assert_equals("
+                                 "document.forms.length, 1));</script>",
+                                 "document-collections-missing"),
+            "valueas.html": ("<script>test(() => assert_equals("
+                             "input.valueAsNumber, 3));</script>",
+                             "input-valueas-missing"),
+            "insert.html": ('<script src="pre-insertion-validation-hierarchy.js">'
+                            "</script>", "insertbefore-no-validation"),
+        }
+        for name, (body, key) in cases.items():
+            with open(os.path.join(tmp, "om", name), "w", encoding="utf-8") as handle:
+                handle.write(body)
+            check(classify_source(f"/om/{name}", tmp, {}) == key,
+                  f"{key}: the silent read was not claimed for {name}")
+        # Negative: `document.images` is the one collection that exists, and
+        # `getElementsByTagName` is not a collection accessor at all.
+        with open(os.path.join(tmp, "om", "images.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>test(() => assert_equals(document.images.length, 1));\n"
+                         "document.getElementsByTagName('form');</script>")
+        check(classify_source("/om/images.html", tmp, {}) is None,
+              "`document.images` works — it must not be claimed as a missing "
+              "collection")
+        # Negative: a page that merely mentions a stylesheet link is not
+        # reading the CSSOM.
+        with open(os.path.join(tmp, "om", "link.html"), "w", encoding="utf-8") as handle:
+            handle.write('<link rel=stylesheet href="a.css">'
+                         "<script>test(() => assert_true(true));</script>")
+        check(classify_source("/om/link.html", tmp, {}) is None,
+              "a plain <link rel=stylesheet> is not a CSSOM read")
+
+        # The measured stage, slice 29: the three `wasm/core/*.wast.js.html`
+        # ids do not hang — they finish in 16-31 s against the harness's 10 s
+        # (BUG-898), which no regex over the source could ever say. The table
+        # lives in `verify_layout_hangs.py`, so this also guards the loader.
+        check(classify_measured("/wasm/core/binary.wast.js.html")
+              == "wasm-locals-unbounded",
+              "the measured wasm-decode ids were not loaded from the probe")
+        check(MEASURED_REFS.get("wasm-locals-unbounded") == "BUG-898",
+              "the measured wasm mechanism has no owner")
+
+        # A key MAY be shared by two stages — one mechanism can have both a
+        # noisy and a silent form (`iframe-no-nested-context`,
+        # `img-no-load-event`, and since slice 29 `cssom-stylesheets-missing`).
+        # What it may not have is two different `ref`s: `print_report` builds
+        # its owner map by `.update()`ing the stages over one another, so the
+        # last table to define the key would silently rename the row's owner —
+        # the slice-26 "a wrong ref reads as owned" trap, arrived at from the
+        # other direction.
+        refs_by_key = collections.defaultdict(set)
+        for table in (MECHANISMS, SOURCE_MARKERS, LATE_SOURCE_MARKERS,
+                      WORKER_SOURCE_MARKERS, SUBFRAME_SOURCE_MARKERS,
+                      SUBTEST_MARKERS, WEAK_MECHANISMS):
+            for mech in table:
+                refs_by_key[mech.key].add(mech.ref)
+        check(all(len(r) == 1 for r in refs_by_key.values()),
+              f"one mechanism key, two owners: "
+              f"{ {k: v for k, v in refs_by_key.items() if len(v) > 1} }")
 
         # A run whose wptreport is missing entirely disables the stage rather
         # than failing the audit.

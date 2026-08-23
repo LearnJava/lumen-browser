@@ -202,3 +202,48 @@ srcdoc- и file-iframe исполняют скрипты детей в собс�
 
 Отдельно от очереди: фрейм, **вставленный скриптом**, не грузится вовсе —
 [BUG-885](BUG-885-OPEN.md).
+
+## Срез 2 (P3, 2026-08-23) — `contentWindow`/`contentDocument` из JS родителя
+
+Срез 1 дал живой под-документ, но из JS родителя он был недостижим (геттеры в
+`iframe_element.rs` возвращали `null`). Срез 2 строит мост. Каждый V8-контекст
+держит собственный isolate, поэтому прямой передачи объектов между окнами нет:
+в **родительском** рантайме живёт реестр биндингов «хост → под-документ»
+(`crates/js/src/frame_bridge.rs`, поле `V8JsRuntime::frame_docs`). Shell после
+исполнения скриптов ребёнка и строго ДО диспатча trusted `load` на хосте зовёт
+новый метод трейта `PersistentJs::register_iframe_document(host_nid, doc,
+url, accessible)` → `V8JsRuntime::register_frame_document`; биндинг ложится на
+JS-поток, и геттеры `contentWindow`/`contentDocument` (`iframe_element.rs`
+теперь читают `_lumen_frame_content_window/document(this.__nid__)`) начинают
+видеть фасады без перепатчивания враппера.
+
+Фасады строятся JS-шимом бриджа поверх нативов `_lumen_f_*` (чтение под
+`Arc<Mutex<Document>>` ребёнка) и интернируются: identity постоянна
+(`contentDocument === contentDocument`, `defaultView === contentWindow`,
+`frameElement === хост`). Window: `document/window/self/frames/parent/top/
+closed/length/frameElement/name/location/close`. Document: `body/head/
+documentElement/title/URL/documentURI/readyState/defaultView/getElementById/
+querySelector(All)`. Element (только чтение): tag/id/class/textContent/
+attr-доступ/children/parentElement/querySelector(All)-scoped; геометрия —
+честные нули (layout фрейма — будущий срез).
+
+Доступ (`shell::frame_access_allowed`, юнит-тесты): opaque sandbox (`sandbox`
+без `allow-same-origin`) отрицает всё; `about:` наследует origin родителя;
+иначе origin сравнивается с нормализацией портов по умолчанию (80/443);
+file↔file разрешён — задокументированное отклонение (упрощённая модель
+Firefox same-directory). Cross-origin/opaque получают фасад окна БЕЗ
+`.document`, `contentDocument` — `null` (спека: WindowProxy отдаётся всегда).
+Фреймы без загруженного под-документа (динамические `<iframe>`, неудавшийся
+fetch) биндинга не имеют — оба геттера `null`.
+
+Не входит (очередь): динамически созданные фреймы (для них по-прежнему
+`null` — а значит кластер `matchMedia.js` с `createElement('iframe')` пока не
+отвечает), мутации из родителя и события через границу, layout/paint/rAF
+фреймов, навигация/замена/удаление фрейма, `postMessage`, `window[name]`,
+X-Frame-Options/CSP `frame-ancestors`, bfcache фреймов.
+
+Проверка: clippy `-p lumen-js` / `-p lumen-shell` -D warnings; тесты крейтов
+(js 2964+70 ok, dom 277 ok, shell 1586+2 ok, из них 8 новых — 7 бридж + 5
+правила доступа); `dump_golden.py` 12/12; смоук `--dump-layout`: srcdoc-фрейм —
+`win=true doc=true p=hi frame identity=true defaultView=true parent=true
+top=true frameElement=true body=BODY url=about:srcdoc`.

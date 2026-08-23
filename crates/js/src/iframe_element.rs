@@ -1,9 +1,9 @@
-//! HTMLIFrameElement JS stubs (Phase 0).
+//! HTMLIFrameElement JS stubs.
 //!
 //! Installs `HTMLIFrameElement`-compatible properties and methods on `<iframe>`
 //! DOM elements so that pages can interact with them without JS errors.
 //!
-//! Phase 0 scope — no sub-document navigation:
+//! Scope:
 //! - `src` getter/setter (reflects `src` attribute)
 //! - `name` getter/setter (reflects `name` attribute)
 //! - `srcdoc` getter/setter (reflects `srcdoc` attribute)
@@ -13,8 +13,11 @@
 //! - `allow` getter/setter (reflects `allow` attribute)
 //! - `referrerPolicy` getter/setter (reflects `referrerpolicy` attribute)
 //! - `loading` getter/setter (reflects `loading` attribute)
-//! - `contentDocument` getter → `null` (no sub-document in Phase 0)
-//! - `contentWindow` getter → `null` (no sub-document in Phase 0)
+//! - `contentDocument` getter → фасад под-документа из [`crate::frame_bridge`]
+//!   (BUG-480 срез 2); `null` для фрейма без загруженного под-документа,
+//!   cross-origin и opaque-sandbox
+//! - `contentWindow` getter → фасад окна из [`crate::frame_bridge`]; `null`
+//!   только когда под-документ не загружен вовсе
 
 /// V8 port of the former rquickjs `install_iframe_element_bindings` (Ph3 V8 migration
 /// S5-S7, rquickjs side removed in S12b-B6): identical JS shim, evaluated via
@@ -23,8 +26,11 @@
 /// Patches existing `<iframe>` elements and intercepts `document.createElement('iframe')`
 /// so that pages can read/write iframe properties without throwing.
 ///
-/// `contentDocument` and `contentWindow` always return `null` (Phase 0 — no
-/// nested document navigation). This matches spec behaviour for cross-origin iframes.
+/// `contentDocument`/`contentWindow` делегируют в бридж под-документов
+/// ([`crate::frame_bridge`], BUG-480 срез 2): реестр биндингов наполняет shell
+/// после загрузки каждого фрейма, поэтому до регистрации (динамически созданный
+/// фрейм, неудавшийся fetch) оба геттера дают `null`. `typeof`-guard держит шим
+/// рабочим и без установленного бриджа (минимальные тестовые DOM).
 ///
 /// Must be called **after** `v8_runtime.rs::install_dom`.
 #[cfg(feature = "v8-backend")]
@@ -67,14 +73,25 @@ const IFRAME_ELEMENT_SHIM: &str = r#"(function() {
     reflectAttr('referrerPolicy', 'referrerpolicy');
     reflectAttr('loading',        'loading');
 
-    // Phase 0: no sub-document. contentDocument and contentWindow are null.
-    // Spec: cross-origin iframes may also expose null for security reasons.
+    // BUG-480 срез 2: доступ к под-документу через бридж (frame_bridge.rs).
+    // До регистрации биндинга (фрейм не загружен / cross-origin для
+    // contentDocument) — null, как и до среза 2.
     Object.defineProperty(el, 'contentDocument', {
-      get: function() { return null; },
+      get: function() {
+        var nid = this.__nid__;
+        return (typeof _lumen_frame_content_document === 'function' && nid !== undefined)
+          ? _lumen_frame_content_document(nid)
+          : null;
+      },
       configurable: true,
     });
     Object.defineProperty(el, 'contentWindow', {
-      get: function() { return null; },
+      get: function() {
+        var nid = this.__nid__;
+        return (typeof _lumen_frame_content_window === 'function' && nid !== undefined)
+          ? _lumen_frame_content_window(nid)
+          : null;
+      },
       configurable: true,
     });
 
@@ -180,7 +197,7 @@ el.contentDocument === null
 "#,
                 )
                 .unwrap();
-            assert_eq!(result, JsValue::Bool(true), "contentDocument should be null in Phase 0");
+            assert_eq!(result, JsValue::Bool(true), "contentDocument should be null without a registered frame binding");
         });
     }
 
@@ -195,7 +212,7 @@ el.contentWindow === null
 "#,
                 )
                 .unwrap();
-            assert_eq!(result, JsValue::Bool(true), "contentWindow should be null in Phase 0");
+            assert_eq!(result, JsValue::Bool(true), "contentWindow should be null without a registered frame binding");
         });
     }
 
