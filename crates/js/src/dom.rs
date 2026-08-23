@@ -26659,13 +26659,39 @@ mod tests {
         }
 
         #[test]
-        fn session_storage_fresh_per_runtime() {
-            // sessionStorage is NOT shared; each runtime gets a fresh instance.
+        fn session_storage_fresh_per_runtime_without_owner() {
+            // BUG-836: isolation is what a runtime with NO attached store gets —
+            // the case of two different browsing contexts. Two documents of the
+            // *same* tab share a store instead; see the test below.
             let rt1 = v8_runtime_with_storage(None);
             rt1.eval("sessionStorage.setItem('s', 'hello')").unwrap();
             let rt2 = v8_runtime_with_storage(None);
             let r = rt2.eval("sessionStorage.getItem('s')").unwrap();
             assert_eq!(r, lumen_core::JsValue::Null);
+        }
+
+        /// Same as [`v8_runtime_with_storage`] but attaches a tab-owned
+        /// `sessionStorage` partition (BUG-836), the way the shell does.
+        fn v8_runtime_with_session_storage(
+            ss: Arc<Mutex<lumen_core::WebStorage>>,
+        ) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap().with_session_storage(ss);
+            rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, None, None, None, None, false).unwrap();
+            rt
+        }
+
+        #[test]
+        fn session_storage_persists_across_documents_of_a_tab() {
+            // BUG-836: HTML LS §12.2 binds session storage to the browsing
+            // context, so the second document of the same tab must see it.
+            let tab = Arc::new(Mutex::new(lumen_core::WebStorage::default()));
+            {
+                let rt = v8_runtime_with_session_storage(Arc::clone(&tab));
+                rt.eval("sessionStorage.setItem('s', 'hello')").unwrap();
+            }
+            let rt2 = v8_runtime_with_session_storage(Arc::clone(&tab));
+            let r = rt2.eval("sessionStorage.getItem('s')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("hello".into()));
         }
 
         #[test]

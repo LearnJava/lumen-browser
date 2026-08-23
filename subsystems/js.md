@@ -741,7 +741,7 @@ the time — read dates.
   - 12 native `_lumen_ls_*` / `_lumen_ss_*` bindings (length, key, get, set, remove, clear for localStorage + sessionStorage).
   - `install_dom` now accepts `ls_store: Option<Arc<Mutex<WebStorage>>>` — `None` → fresh in-memory store.
   - `_lumen_make_storage` JS factory + `localStorage`/`sessionStorage` globals in shim. `length` property via `Object.defineProperty` with getter.
-  - `sessionStorage` — fresh `Arc::new(Mutex::new(WebStorage::default()))` per `install_dom` call (page-load isolation).
+  - `sessionStorage` — the browsing context's store, attached before `install_dom` by `V8JsRuntime::with_session_storage` (BUG-836, 2026-08-23); `install_dom` builds a fresh `Arc::new(Mutex::new(WebStorage::default()))` only when nobody attached one (unit tests, headless dumps). A builder, not an `install_dom` argument, so the 11-arg signature and its ~40 test call sites stayed put — same shape as `with_sw_worker_store`.
   - `localStorage` — shared `Arc<Mutex<WebStorage>>` from shell (SOP-partitioned, persists across reloads within session).
   - 8 new tests (getItem/setItem/removeItem/clear/key/length/overwrite/session-isolation). 140 JS tests total. All pass.
 - **URL / URLSearchParams / performance / queueMicrotask** (`crates/js/src/dom.rs`). 2026-05-25.
