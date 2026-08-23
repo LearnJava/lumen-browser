@@ -12286,15 +12286,25 @@ pub(crate) const IDB_SHIM: &str = "
 // In-memory implementation: databases live in this runtime's JS heap and do not
 // persist across reloads (Rust-backed persistence is a separate follow-up task).
 // Request 'success'/'error' events and transaction 'complete'/'abort' fire
-// asynchronously via a pending queue drained by _lumen_idb_flush(), which the
-// shell calls each event-loop tick (and tests call directly). This mirrors the
-// raf / MutationObserver delivery pattern already used in this shim.
+// asynchronously via a pending queue drained by _lumen_idb_flush(), scheduled as
+// a microtask (and called directly by tests and by the service-worker scope).
+// This mirrors the raf / MutationObserver delivery pattern already used in this
+// shim.
 
 var _idb_databases = {};          // name -> { name, version, stores }
 var _idb_active_txns = [];        // transactions with pending request dispatches
 var _idb_pending_opens = [];      // IDBOpenDBRequest dispatch entries
-var _idb_flush_scheduled = false;
+var _idb_flush_scheduled = false; // a flush is pending (microtask or task)
+var _idb_flushing = false;        // a flush is running right now
 var _idb_dirty = false;           // set by any mutation; drives persistence at flush end
+// Requests one flush dispatches before handing the remainder to the event loop.
+// Bounded work — a cursor walk, a batch of puts — still finishes inside the same
+// flush, which is what every caller of _lumen_idb_flush() expects; a request that
+// re-arms itself from its own onsuccess (WPT's keep_alive idiom) spends the
+// budget instead and yields, so the page's timers, rendering and remaining
+// scripts keep running (BUG-842: the drain was a plain while loop inside one
+// microtask, and 16.3 M spins in 6 s starved the document completely).
+var _IDB_FLUSH_BUDGET = 1024;
 
 // --- persistence (Rust-backed via _lumen_idb_load / _lumen_idb_persist) -------
 // The whole per-origin database set is one opaque JSON snapshot. Date keys/values
@@ -12652,15 +12662,55 @@ function _idb_schedule_txn(txn) {
 }
 
 function _idb_schedule_flush() {
-    if (_idb_flush_scheduled) return;
+    // While a flush is running, work queued by a handler must NOT chain another
+    // microtask: a microtask queued from a microtask never returns to the event
+    // loop, so the page would stay starved even with the per-flush budget below.
+    // _lumen_idb_flush() hands whatever is left to a task itself.
+    if (_idb_flush_scheduled || _idb_flushing) return;
     _idb_flush_scheduled = true;
     queueMicrotask(_lumen_idb_flush);
 }
 
-function _idb_flush_txn(txn) {
-    if (txn._finished) return;
-    while (txn._queue.length > 0 && !txn._aborted) {
+// True when this runtime owns the page's event-loop timer queue, i.e. when a
+// deferred IndexedDB turn can actually be handed to a task. The service-worker
+// scope, which evaluates this same shim, stubs setTimeout to run synchronously
+// and has no timer queue at all — there the drain stays unbounded, exactly as
+// before, since there is nothing to yield to.
+function _idb_has_task_queue() {
+    return typeof _lumen_timers !== 'undefined'
+        && typeof _lumen_request_wakeup === 'function'
+        && typeof _lumen_now_ms === 'function';
+}
+
+// Schedules the next IndexedDB turn as an event-loop TASK. The entry goes
+// straight into _lumen_timers with nesting 0 instead of through setTimeout, so
+// the HTML LS §8.6 4 ms clamp (BUG-271) cannot throttle a long cursor walk to
+// 250 steps/s; _lumen_request_wakeup makes the shell wake for it immediately.
+function _idb_defer_flush() {
+    if (_idb_flush_scheduled || !_idb_has_task_queue()) return;
+    _idb_flush_scheduled = true;
+    var deadline = _lumen_now_ms();
+    _lumen_timers.push({ id: _lumen_timer_seq++, fn: _lumen_idb_flush, deadline: deadline, interval: null, nesting: 0 });
+    _lumen_request_wakeup(deadline);
+}
+
+// Dispatches up to `budget` of the transaction's requests and returns what is
+// left of it. A transaction whose handlers queued more than the budget allows
+// stays unfinished and resumes in the next turn — that is what keeps it active
+// across turns the way keep_alive expects (Indexed DB §3.1.7 processes each
+// request as its own task).
+function _idb_flush_txn(txn, budget) {
+    if (txn._finished) return budget;
+    while (txn._queue.length > 0 && !txn._aborted && budget > 0) {
+        budget--;
         _idb_dispatch_request(txn._queue.shift());
+    }
+    if (!txn._aborted && txn._queue.length > 0) {
+        // Every enqueue path (_idb_make_request, cursor.continue/advance,
+        // _idb_open_cursor) already re-schedules the transaction, but say it
+        // here too so this function alone guarantees the resume.
+        _idb_schedule_txn(txn);
+        return 0;
     }
     txn._finished = true;
     if (txn._aborted) {
@@ -12671,6 +12721,7 @@ function _idb_flush_txn(txn) {
         if (txn.mode !== 'readonly') _idb_dirty = true;
         _idb_fire_txn(txn, 'complete');
     }
+    return budget;
 }
 
 // Creates a request whose `fn` (data read/write) runs at dispatch time, in the
@@ -13153,33 +13204,47 @@ function _idb_open_cursor(source, txn, store, buildList, withValue, direction) {
 
 // --- open / delete / flush (Indexed DB §3.1) ---------------------------------
 
-function _idb_process_open(entry) {
+// Runs one turn of an open/delete entry against `budget` and returns what is
+// left of it. The version change transaction is budgeted exactly like an
+// ordinary one (a keep_alive inside onupgradeneeded is what
+// upgrade-transaction-deactivation-timing does), except that the entry itself is
+// put back at the head of the pending queue: `success` may not fire before the
+// version change transaction has committed (Indexed DB §3.3.1).
+function _idb_process_open(entry, budget) {
     var req = entry.req;
-    if (req.error) { _idb_dispatch_request(req); return; }
+    if (req.error) { _idb_dispatch_request(req); return budget - 1; }
     // A version upgrade (store/index creation, version bump) or a database
     // deletion mutates the persisted snapshot.
     if (entry.upgrade || entry._delete) _idb_dirty = true;
     if (entry.upgrade) {
-        var data = entry.data, db = entry.db;
-        var txn = new IDBTransaction(db, Object.keys(data.stores), 'versionchange');
-        txn._isUpgrade = true;
-        db._upgradeTxn = txn;
-        data.version = entry.newVersion;
-        db.version = entry.newVersion;
-        req.transaction = txn;
-        req.readyState = 'done';
-        var ev = _idb_make_event('upgradeneeded', req, { oldVersion: entry.oldVersion, newVersion: entry.newVersion });
-        if (typeof req.onupgradeneeded === 'function') {
-            try { req.onupgradeneeded(ev); } catch(e) { _lumen_console_error('IDB onupgradeneeded: ' + e); }
+        var txn = entry._txn;
+        if (!txn) {
+            var data = entry.data, db = entry.db;
+            txn = new IDBTransaction(db, Object.keys(data.stores), 'versionchange');
+            txn._isUpgrade = true;
+            entry._txn = txn;
+            db._upgradeTxn = txn;
+            data.version = entry.newVersion;
+            db.version = entry.newVersion;
+            req.transaction = txn;
+            req.readyState = 'done';
+            var ev = _idb_make_event('upgradeneeded', req, { oldVersion: entry.oldVersion, newVersion: entry.newVersion });
+            if (typeof req.onupgradeneeded === 'function') {
+                try { req.onupgradeneeded(ev); } catch(e) { _lumen_console_error('IDB onupgradeneeded: ' + e); }
+            }
+            for (var i = 0; i < req._upgradeListeners.length; i++) {
+                try { req._upgradeListeners[i](ev); } catch(e) { _lumen_console_error('IDB upgrade listener: ' + e); }
+            }
         }
-        for (var i = 0; i < req._upgradeListeners.length; i++) {
-            try { req._upgradeListeners[i](ev); } catch(e) { _lumen_console_error('IDB upgrade listener: ' + e); }
+        while (txn._queue.length > 0 && !txn._aborted && budget > 0) {
+            budget--;
+            _idb_dispatch_request(txn._queue.shift());
         }
-        while (txn._queue.length > 0 && !txn._aborted) _idb_dispatch_request(txn._queue.shift());
+        if (!txn._aborted && txn._queue.length > 0) { _idb_pending_opens.unshift(entry); return 0; }
         txn._finished = true;
-        db._upgradeTxn = null;
+        entry.db._upgradeTxn = null;
         req.transaction = null;
-        if (txn._aborted) { _idb_fire_txn(txn, 'abort'); _idb_dispatch_request(req); return; }
+        if (txn._aborted) { _idb_fire_txn(txn, 'abort'); _idb_dispatch_request(req); return budget; }
         _idb_fire_txn(txn, 'complete');
     }
     req.readyState = 'done';
@@ -13191,19 +13256,30 @@ function _idb_process_open(entry) {
     for (var j = 0; j < req._successListeners.length; j++) {
         try { req._successListeners[j](ev2); } catch(e) { _lumen_console_error('IDB open success listener: ' + e); }
     }
+    return budget;
 }
 
-// Synchronously delivers all pending IndexedDB events. Idempotent and re-entrant
-// safe: handlers may enqueue further requests (cursor.continue) or transactions.
+// Delivers pending IndexedDB events, up to _IDB_FLUSH_BUDGET request dispatches
+// per call; whatever is left over continues in the next event-loop turn.
+// Idempotent: handlers may enqueue further requests (cursor.continue) or
+// transactions, and a nested call while a flush is running is a no-op.
 function _lumen_idb_flush() {
     _idb_flush_scheduled = false;
-    var guard = 0;
-    while ((_idb_pending_opens.length > 0 || _idb_active_txns.length > 0) && guard < 1000000) {
-        guard++;
-        if (_idb_pending_opens.length > 0) { _idb_process_open(_idb_pending_opens.shift()); continue; }
-        _idb_flush_txn(_idb_active_txns.shift());
+    if (_idb_flushing) return;
+    _idb_flushing = true;
+    // With no task queue to yield to there is nothing to gain from stopping
+    // early, so the drain keeps its original backstop instead of a budget.
+    var budget = _idb_has_task_queue() ? _IDB_FLUSH_BUDGET : 1000000;
+    try {
+        while (budget > 0 && (_idb_pending_opens.length > 0 || _idb_active_txns.length > 0)) {
+            if (_idb_pending_opens.length > 0) { budget = _idb_process_open(_idb_pending_opens.shift(), budget); continue; }
+            budget = _idb_flush_txn(_idb_active_txns.shift(), budget);
+        }
+        _idb_persist_if_dirty();
+    } finally {
+        _idb_flushing = false;
     }
-    _idb_persist_if_dirty();
+    if (_idb_pending_opens.length > 0 || _idb_active_txns.length > 0) _idb_defer_flush();
 }
 
 var indexedDB = {
@@ -31197,6 +31273,41 @@ mod tests {
                 out
             "#).unwrap();
             assert_eq!(r, lumen_core::JsValue::String("1:99,3:30".into()));
+        }
+
+        /// BUG-842: WPT's `keep_alive` idiom re-arms one request from its own
+        /// `onsuccess`. The drain used to run that inside a single microtask, so
+        /// the loop never returned and no timer, paint or later script of the
+        /// page ever ran again. A flush must now spend its budget, hand the rest
+        /// to the event loop, and leave the transaction alive meanwhile. The
+        /// `spins > 5000` brake exists only so that a regression fails on the
+        /// assertions (`alive` goes false, the transaction having run to
+        /// completion inside the single flush) instead of hanging the harness.
+        #[test]
+        fn idb_self_rearming_request_yields_between_turns() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var spins = 0, ticks = 0, done = '', stop = false;
+                var open = indexedDB.open('d', 1);
+                open.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                open.onsuccess = function(e) {
+                    var tx = e.target.result.transaction('s', 'readwrite');
+                    var st = tx.objectStore('s');
+                    st.add('v', 1);
+                    tx.oncomplete = function() { done = 'complete'; };
+                    (function spin() {
+                        if (stop || spins > 5000) return;
+                        spins++;
+                        st.get(1).onsuccess = spin;
+                    })();
+                    setTimeout(function() { ticks++; stop = true; }, 0);
+                };
+                _lumen_idb_flush();
+                var spun = spins > 0, alive = done === '';
+                _lumen_tick_timers();
+                [spun, alive, ticks, done].join(',')
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("true,true,1,complete".into()));
         }
 
         #[test]
