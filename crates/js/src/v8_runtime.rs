@@ -6014,7 +6014,7 @@ impl JsRuntime for V8JsRuntime {
             with_tc!(inner, |tc, _ctx| {
                 match crate::v8_esm::evaluate_entry_module(tc, &source) {
                     Ok(()) => Ok(()),
-                    Err(()) => match tc.exception() {
+                    Err(_failure) => match tc.exception() {
                         Some(exc) => Err(v8_err(tc, exc)),
                         // V8 returned an empty handle without throwing (OOM on a
                         // string allocation, termination): still an error, but
@@ -6041,7 +6041,7 @@ impl JsRuntime for V8JsRuntime {
             with_tc!(inner, |tc, _ctx| {
                 match crate::v8_esm::evaluate_module_url(tc, &url, &source) {
                     Ok(()) => Ok(()),
-                    Err(()) => match tc.exception() {
+                    Err(_failure) => match tc.exception() {
                         Some(exc) => Err(v8_err(tc, exc)),
                         None => Err(JsError::Runtime("module eval failed".into())),
                     },
@@ -6248,6 +6248,50 @@ impl JsRuntime for V8JsRuntime {
 
 // ── Top-level script execution with uncaught-exception reporting (BUG-591) ──
 
+/// Best-effort-extract a filename/line/column from `$tc`'s `v8::Message` and
+/// call the shim's `_lumen_report_exception($exc, filename, lineno, colno)` —
+/// the module-eval counterpart of the inline blocks in
+/// [`V8JsRuntime::eval_and_report`]. A free-standing macro rather than a
+/// function because the `TryCatch`/`HandleScope` type in `$tc` is
+/// lifetime-parameterized per call site (`with_tc!`'s expansion), same reason
+/// `eval_and_report` inlines its own copy twice instead of sharing one.
+macro_rules! report_module_exception {
+    ($tc:expr, $exc:expr) => {{
+        let message = $tc.message();
+        let (filename, lineno, colno) = message
+            .map(|m| {
+                let filename = m
+                    .get_script_resource_name($tc)
+                    .and_then(|v| v.to_string($tc))
+                    .map(|s| s.to_rust_string_lossy($tc))
+                    .unwrap_or_default();
+                let lineno = m.get_line_number($tc).unwrap_or(0) as i32;
+                let colno = m.get_start_column() as i32;
+                (filename, lineno, colno)
+            })
+            .unwrap_or_default();
+        {
+            v8::tc_scope!(rtc, $tc);
+            let ctx = rtc.get_current_context();
+            let global = ctx.global(rtc);
+            if let Some(key) = v8::String::new(rtc, "_lumen_report_exception")
+                && let Some(report_fn) = global
+                    .get(rtc, key.into())
+                    .and_then(|v| v8::Local::<v8::Function>::try_from(v).ok())
+                && let Some(filename_v) = v8::String::new(rtc, &filename)
+            {
+                let lineno_v = v8::Integer::new(rtc, lineno);
+                let colno_v = v8::Integer::new(rtc, colno);
+                let _ = report_fn.call(
+                    rtc,
+                    global.into(),
+                    &[$exc, filename_v.into(), lineno_v.into(), colno_v.into()],
+                );
+            }
+        }
+    }};
+}
+
 impl V8JsRuntime {
     /// Evaluate a classic top-level `<script>` body exactly like
     /// [`JsRuntime::eval`], except that an uncaught exception (compile *or*
@@ -6356,6 +6400,68 @@ impl V8JsRuntime {
                 match result {
                     Some(val) => from_v8(tc, val),
                     None => Err(JsError::Runtime("script returned no value".into())),
+                }
+            })
+        })
+    }
+
+    /// Evaluate `source` as the entry ES module of a top-level page load
+    /// ([`crate::v8_esm::evaluate_entry_module`]), additionally reporting a
+    /// **runtime** failure through the shim's window `error` pipeline — the
+    /// same "report the exception" step [`Self::eval_and_report`] performs for
+    /// classic scripts (BUG-591). A **load** failure (parse/link/import-not-
+    /// found — the module body never started evaluating) is deliberately NOT
+    /// reported here: per HTML LS that case belongs to the script element's
+    /// own `error` event, not `window.onerror`/`'error'`, and reporting it
+    /// through this path would misfire `window.onerror` on an ordinary 404 or
+    /// missing import.
+    ///
+    /// Only the genuine top-level page-script boundary
+    /// (`crates/shell/src/main.rs`'s module-script loop) should call this —
+    /// [`JsRuntime::eval_module`] stays the right choice everywhere else
+    /// (tests, internal helpers), whose caught error must not become a
+    /// page-visible event.
+    pub fn eval_module_and_report(&self, source: &str) -> JsResult<()> {
+        let source = crate::decorators::maybe_transform_decorators_v8(self, source)
+            .unwrap_or_else(|| source.to_owned());
+        self.run(|inner| {
+            with_tc!(inner, |tc, _ctx| {
+                match crate::v8_esm::evaluate_entry_module(tc, &source) {
+                    Ok(()) => Ok(()),
+                    Err(failure) => match tc.exception() {
+                        Some(exc) => {
+                            if failure == crate::v8_esm::ModuleFailure::Runtime {
+                                report_module_exception!(tc, exc);
+                            }
+                            Err(v8_err(tc, exc))
+                        }
+                        None => Err(JsError::Runtime("module eval failed".into())),
+                    },
+                }
+            })
+        })
+    }
+
+    /// External-module counterpart of [`Self::eval_module_and_report`], for
+    /// `<script type=module src=URL>` ([`crate::v8_esm::evaluate_module_url`]).
+    /// Same runtime-only reporting rule.
+    pub fn eval_module_at_and_report(&self, url: &str, source: &str) -> JsResult<()> {
+        let source = crate::decorators::maybe_transform_decorators_v8(self, source)
+            .unwrap_or_else(|| source.to_owned());
+        let url = url.to_owned();
+        self.run(move |inner| {
+            with_tc!(inner, |tc, _ctx| {
+                match crate::v8_esm::evaluate_module_url(tc, &url, &source) {
+                    Ok(()) => Ok(()),
+                    Err(failure) => match tc.exception() {
+                        Some(exc) => {
+                            if failure == crate::v8_esm::ModuleFailure::Runtime {
+                                report_module_exception!(tc, exc);
+                            }
+                            Err(v8_err(tc, exc))
+                        }
+                        None => Err(JsError::Runtime("module eval failed".into())),
+                    },
                 }
             })
         })
@@ -6888,6 +6994,65 @@ mod tests {
             rt().eval_and_report("function ("),
             Err(JsError::Runtime(_))
         ));
+    }
+
+    // ── eval_module_and_report / eval_module_at_and_report (BUG-591, module
+    // scripts) ────────────────────────────────────────────────────────────
+
+    /// A module's own top-level runtime error (evaluation starts and the
+    /// module reaches `ModuleStatus::Errored`) must reach
+    /// `window.onerror`/'error' the same way a classic script's does -- the
+    /// gap `eval_module_and_report` closes.
+    #[test]
+    fn eval_module_and_report_runtime_error_fires_window_error() {
+        let rt = runtime_with_dom(make_doc(), "");
+        rt.eval(
+            "var caught = null; \
+             window.addEventListener('error', function(e) { caught = e.message; });",
+        )
+        .unwrap();
+        let outcome = rt.eval_module_and_report("throw new Error('module-boom');");
+        assert!(matches!(outcome, Err(JsError::Runtime(_))));
+        let caught = rt.eval("caught").unwrap();
+        assert_eq!(caught, JsValue::String("module-boom".to_string()));
+    }
+
+    /// A module **load** failure (parse/link error -- the module body never
+    /// starts evaluating) must NOT reach `window.onerror`: per HTML LS that
+    /// belongs to the script element's own `error` event instead, and
+    /// reporting it here would misfire `window.onerror` on an ordinary
+    /// syntax error or missing import.
+    #[test]
+    fn eval_module_and_report_load_error_does_not_fire_window_error() {
+        let rt = runtime_with_dom(make_doc(), "");
+        rt.eval(
+            "var caught = null; \
+             window.addEventListener('error', function(e) { caught = e.message; });",
+        )
+        .unwrap();
+        let outcome = rt.eval_module_and_report("function (");
+        assert!(matches!(outcome, Err(JsError::Runtime(_))));
+        let caught = rt.eval("caught").unwrap();
+        assert_eq!(caught, JsValue::Null);
+    }
+
+    /// External-module counterpart (`<script type=module src=URL>`), same
+    /// runtime-error-only reporting rule.
+    #[test]
+    fn eval_module_at_and_report_runtime_error_fires_window_error() {
+        let rt = runtime_with_dom(make_doc(), "");
+        rt.eval(
+            "var caught = null; \
+             window.addEventListener('error', function(e) { caught = e.message; });",
+        )
+        .unwrap();
+        let outcome = rt.eval_module_at_and_report(
+            "https://example.test/mod.js",
+            "throw new Error('url-module-boom');",
+        );
+        assert!(matches!(outcome, Err(JsError::Runtime(_))));
+        let caught = rt.eval("caught").unwrap();
+        assert_eq!(caught, JsValue::String("url-module-boom".to_string()));
     }
 
     #[test]
