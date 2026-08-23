@@ -303,6 +303,76 @@ thread_local! {
     static INDEFINITE_HEIGHT_CONSULTED: Cell<bool> = const { Cell::new(false) };
 }
 
+/// BUG-802, second half — the per-pass memo of what a column item's Step-1
+/// probe measured: one `f32` per `(node, available width)`, never a subtree.
+///
+/// Replaying the probe (see `lay_out_flex`) only helps when the final pass
+/// would compute the identical thing. It cannot when flex grow/shrink changed
+/// the item's used main size — and a chain of definite-height containers whose
+/// items overflow them does exactly that at every level, so the ×2-per-level
+/// cost survived there: the item's probe is run once under its parent's own
+/// probe and a second time under its parent's final placement pass.
+///
+/// Those two runs are the same call with the same arguments (both pass
+/// `available_height: None`, and the parent's content width does not change
+/// between them), so the second one only ever needs the number the first one
+/// produced. Remembering the height alone — instead of the laid-out subtree —
+/// is what keeps this from being the general layout-result cache BUG-341
+/// S28-S33 measured as net-negative: nothing is cloned, and a miss costs one
+/// map lookup. The item is still laid out for real by the final placement
+/// pass, so its geometry (including anything positioned against a containing
+/// block that *did* move) is always computed fresh; only the hypothetical main
+/// size is served from here.
+type FlexProbeKey = (NodeId, u32);
+
+/// One [`FLEX_COLUMN_PROBE_HEIGHTS`] entry: the style the probe ran with (an
+/// `Arc` identity check, same convention as the S31 census and the S36 cache)
+/// and the border-box height it produced.
+type FlexProbeEntry = (Arc<ComputedStyle>, f32);
+
+thread_local! {
+    static FLEX_COLUMN_PROBE_HEIGHTS: RefCell<HashMap<FlexProbeKey, FlexProbeEntry>> =
+        RefCell::new(HashMap::new());
+    /// Recursion depth of [`lay_out_cache_checked`], so the memo above can be
+    /// emptied at the start and end of every layout pass without every entry
+    /// point having to remember to do it. A stale entry from an earlier pass
+    /// would be served against a box whose *contents* changed while its style
+    /// `Arc` stayed the same — the one thing the `ptr_eq` check cannot catch.
+    static LAYOUT_PASS_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// RAII marker for one layout pass — see [`LAYOUT_PASS_DEPTH`]. Clears the
+/// probe-height memo when the outermost call is entered and again when it
+/// returns, so nothing survives into the next pass (or past a panic).
+struct LayoutPassGuard;
+
+impl LayoutPassGuard {
+    fn enter() -> Self {
+        let depth = LAYOUT_PASS_DEPTH.with(|c| {
+            let d = c.get() + 1;
+            c.set(d);
+            d
+        });
+        if depth == 1 {
+            FLEX_COLUMN_PROBE_HEIGHTS.with(|m| m.borrow_mut().clear());
+        }
+        Self
+    }
+}
+
+impl Drop for LayoutPassGuard {
+    fn drop(&mut self) {
+        let depth = LAYOUT_PASS_DEPTH.with(|c| {
+            let d = c.get().saturating_sub(1);
+            c.set(d);
+            d
+        });
+        if depth == 0 {
+            FLEX_COLUMN_PROBE_HEIGHTS.with(|m| m.borrow_mut().clear());
+        }
+    }
+}
+
 /// Resolves a block-axis length against the containing block's content height,
 /// recording in [`INDEFINITE_HEIGHT_CONSULTED`] when an indefinite basis is
 /// what made the resolution fail. Every `lay_out_inner` read of its
@@ -7748,6 +7818,9 @@ fn lay_out_cache_checked(
     in_block_flow: bool,
     used_size_override: Option<UsedSizeOverride>,
 ) {
+    // BUG-802: this wrapper is the one entry point every layout pass starts
+    // from, so it is where a pass is delimited for the probe-height memo.
+    let _pass = LayoutPassGuard::enter();
     if layout_result_cache_enabled() && cacheable_for_layout_result_cache(b) {
         let key = LayoutResultKey {
             node: b.node,
@@ -10958,6 +11031,18 @@ fn lay_out_flex(
     // means "lay the item out again in the final pass", which is what every
     // item did unconditionally before this.
     let mut column_probe: Vec<Option<f32>> = vec![None; item_idxs.len()];
+    // BUG-802 — the height Step-1 measured for this item, whether it was probed
+    // now or served from [`FLEX_COLUMN_PROBE_HEIGHTS`]. `None` for items that
+    // were not probed at all (the row direction's usual case), where the
+    // hypothetical size comes from the item's style or from
+    // `flex_auto_base_main_width` instead.
+    let mut probed_main: Vec<Option<f32>> = vec![None; item_idxs.len()];
+    // The memo remembers a measurement across calls, so it must stand down
+    // wherever an identical call can legitimately measure differently: while a
+    // subgrid track context or a container-query basis is installed, neither of
+    // which is part of any box's style (the same exclusion
+    // `cacheable_for_layout_result_cache` makes for the subgrid half).
+    let memo_usable = is_column && !crate::style::cq_context_active();
     for (k, &i) in item_idxs.iter().enumerate() {
         let needs_prelayout = {
             let is = &children[i].style;
@@ -10976,7 +11061,24 @@ fn lay_out_flex(
             }
         };
         if needs_prelayout {
-            if is_column {
+            let memoized = if memo_usable && cacheable_for_layout_result_cache(&children[i]) {
+                let key: FlexProbeKey = (children[i].node, content_width.to_bits());
+                FLEX_COLUMN_PROBE_HEIGHTS.with(|m| {
+                    m.borrow().get(&key).and_then(|(style, h)| {
+                        Arc::ptr_eq(style, &children[i].style).then_some(*h)
+                    })
+                })
+            } else {
+                None
+            };
+            if let Some(h) = memoized {
+                // Nothing else between here and the final placement pass reads
+                // the probed *subtree* — `max_content_outer_width`,
+                // `min_content_outer_width` and `flex_item_max_main_outer` are
+                // all intrinsic (style plus contents, never `rect`) — so the
+                // remembered height is the whole of what this probe was for.
+                probed_main[k] = Some(h);
+            } else if is_column {
                 // The two flags are the correctness guard the replay needs: the
                 // probe runs with an indefinite containing-block height and at a
                 // temporary main-axis position, so a subtree that consulted
@@ -10990,8 +11092,24 @@ fn lay_out_flex(
                 let ih_here = INDEFINITE_HEIGHT_CONSULTED.with(|c| c.get());
                 CV_AUTO_TOUCHED.with(|c| c.set(outer_cv || cv_here));
                 INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(outer_ih || ih_here));
+                probed_main[k] = Some(children[i].rect.height);
                 if !cv_here && !ih_here {
                     column_probe[k] = Some(children[i].rect.height);
+                }
+                // `content-visibility: auto` decides whether to skip a subtree
+                // from the scroll offset and a cross-frame ratchet, so its
+                // measured height is not a property of the box alone and must
+                // not be remembered. The indefinite-height flag is *not* a
+                // reason to refuse here, unlike for the replay: both the stored
+                // probe and the one being served pass `available_height: None`,
+                // so whatever a percentage block size resolved to is the same
+                // for each.
+                if !cv_here && memo_usable && cacheable_for_layout_result_cache(&children[i]) {
+                    let key: FlexProbeKey = (children[i].node, content_width.to_bits());
+                    let entry = (Arc::clone(&children[i].style), children[i].rect.height);
+                    FLEX_COLUMN_PROBE_HEIGHTS.with(|m| {
+                        m.borrow_mut().insert(key, entry);
+                    });
                 }
             } else {
                 lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb, hp, false);
@@ -11002,8 +11120,13 @@ fn lay_out_flex(
     // Compute hypothetical main sizes for all items (outer = including margins).
     let all_hyp: Vec<f32> = item_idxs
         .iter()
-        .map(|&i| {
+        .enumerate()
+        .map(|(k, &i)| {
             let item = &children[i];
+            // BUG-802: the height Step-1 measured — from the probe just run, or
+            // remembered from the identical probe of an earlier pass over this
+            // same item. `unwrap_or` covers the items Step-1 never probed.
+            let probed_height = probed_main[k].unwrap_or(item.rect.height);
             let is = &item.style;
             let iem = is.font_size;
             let m_l = is.margin_left.resolve_or_zero(iem, cb, viewport);
@@ -11013,7 +11136,7 @@ fn lay_out_flex(
             match &is.flex_basis {
                 FlexBasis::Auto | FlexBasis::Content => {
                     if is_column {
-                        item.rect.height + m_t + m_b
+                        probed_height + m_t + m_b
                     } else {
                         // CSS Flexbox §9.2/§9.7: for `auto`/`content` flex-basis with no
                         // explicit width, the flex base size is the item's max-content
@@ -11053,7 +11176,7 @@ fn lay_out_flex(
                         let auto_min = if is.min_height.is_none()
                             && is.overflow_y == Overflow::Visible
                         {
-                            item.rect.height
+                            probed_height
                         } else {
                             0.0
                         };
@@ -19163,6 +19286,40 @@ mod tests {
         assert!(
             deep < shallow * 4,
             "nested column flex is superlinear: depth 4 = {shallow} layout calls, depth 12 = {deep}"
+        );
+    }
+
+    #[test]
+    fn nested_column_flex_that_shrinks_costs_one_probe_per_level() {
+        // BUG-802, second half: when the container has a definite height and its
+        // item overflows it, flex-shrink changes the item's used main size, so
+        // the final pass genuinely has to lay it out again and the probe cannot
+        // be replayed — the ×2 per level survived there (3.7 s at depth 20,
+        // still doubling). The probe-height memo removes it from the other side:
+        // an item's probe runs once per (node, width) instead of once under its
+        // parent's probe and again under its parent's final pass. Shape copied
+        // from `tests/wpt/verify_layout_hangs.py`'s `flex-nesting-20` repro:
+        // `height:200px` + a 1px border makes every level overflow by 2px.
+        fn layout_calls_at_depth(n: usize) -> u32 {
+            let open = r#"<div style="height:200px;display:flex;flex-direction:column;border:1px dotted black">"#;
+            let leaf = r#"<div style="width:10px;flex:0 10px;border:solid 1px purple;padding:2px">x</div>"#;
+            let html = format!("{}{leaf}{}", open.repeat(n), "</div>".repeat(n));
+            let doc = lumen_html_parser::parse(&html);
+            let sheet = lumen_css_parser::parse("body{margin:0}");
+            super::set_layout_key_census(true);
+            let _root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+            let census = super::take_layout_key_census();
+            super::set_layout_key_census(false);
+            census.calls
+        }
+        let shallow = layout_calls_at_depth(4);
+        let deep = layout_calls_at_depth(12);
+        // Polynomial, not exponential: the memo leaves each level's *final* pass
+        // recursing into the level below (the shrink is real work), so eight
+        // more levels cost ×5 here — against the ×2^8 = ×256 they cost before.
+        assert!(
+            deep < shallow * 16,
+            "shrinking nested column flex is exponential: depth 4 = {shallow} layout calls, depth 12 = {deep}"
         );
     }
 
