@@ -1143,6 +1143,7 @@ fn run_window_mode(
         gif_last_frame: HashMap::new(),
         video_gif_last_frame: HashMap::new(),
         video_gif_frames: HashMap::new(),
+        frames: Vec::new(),
         video_gif_store,
         text_track_store,
         image_cache: lumen_image::ImageDecodeCache::new(),
@@ -3984,6 +3985,9 @@ struct LoadedPage {
     js_navigate: Option<JsNavigateRequest>,
     /// P3-webvtt срез 3: WebVTT-cues по каждому `<video>` страницы.
     page_tracks: tracks::PageTracks,
+    /// BUG-480 срез 1: живые sub-документы `<iframe>` — держат JS-контексты
+    /// и DOM детей до замены страницы.
+    frames: Vec<FrameHandle>,
 }
 
 impl LoadedPage {
@@ -4010,6 +4014,7 @@ impl LoadedPage {
             pending_web_fonts: Vec::new(),
             js_navigate: None,
             page_tracks: tracks::PageTracks::default(),
+            frames: Vec::new(),
         }
     }
 }
@@ -5086,6 +5091,35 @@ fn decode_image(
 
 // ── Рендер ───────────────────────────────────────────────────────────────────
 
+/// Живой sub-документ одного `<iframe>` (BUG-480, срез 1).
+///
+/// Держит порождённый `Document` и его JS-контекст живыми на время жизни
+/// страницы: пока хэндл жив, тикают таймеры ребёнка и работают его
+/// обработчики. Падает вместе со страницей — замена страницы в
+/// [`Lumen::apply_loaded_page`] уносит все фреймы разом, отдельного
+/// lifecycle-менеджмента не нужно.
+///
+/// Срез 1 не даёт JS родителя доступа к ребёнку (`contentDocument` всё ещё
+/// `null` — см. `iframe_element.rs`); хэндлы нужны для тикинга и как точка
+/// подключения следующих срезов (layout фреймов, `contentDocument`).
+#[allow(dead_code)] // host/url/doc читаются начиная с среза 2 (см. bugs/BUG-480-OPEN.md)
+struct FrameHandle {
+    /// `NodeId` `<iframe>`-элемента в документе-родителе.
+    host: NodeId,
+    /// Адрес под-документа: разрешённый URL, путь файла или `about:blank` /
+    /// `about:srcdoc`. Диагностика и будущая навигация фрейма.
+    url: String,
+    /// Под-документ. Отдельный `Arc` — JS-замыкания ребёнка держат его же.
+    doc: Arc<Mutex<Document>>,
+    /// JS-контекст ребёнка (`None` — у фрейма не было скриптов или v8 выключен).
+    js: Option<Arc<dyn PersistentJs>>,
+}
+
+/// Максимальная глубина вложенности фреймов: страница (0) → iframe (1) →
+/// iframe в iframe (2) → глубже не загружаем. Защита от рекурсивных
+/// самовложений в недоверенном HTML; спека глубину не ограничивает.
+const MAX_FRAME_DEPTH: usize = 2;
+
 /// Результат фаз `decode → parse → layout` — общая часть для оконного и
 /// dump-режимов. Поля владеют своими данными — нет ссылок наружу.
 struct ParsedPage {
@@ -5129,6 +5163,8 @@ struct ParsedPage {
     /// BUG-743: неизменяемая часть CSS + отпечаток инлайновых `<style>`,
     /// чтобы поздняя вставка листа пересобрала каскад без сети.
     dynamic_css: DynamicCssBase,
+    /// BUG-480 срез 1: живые sub-документы `<iframe>` этой страницы.
+    frames: Vec<FrameHandle>,
 }
 
 /// Источник для повторного layout без повторной загрузки/парсинга.
@@ -5364,6 +5400,14 @@ fn parse_and_layout(
         )
     };
     let run_scripts_span = lumen_core::trace::span("run-scripts", "script");
+    // BUG-480 срез 1: клоны провайдеров/хранилищ для sub-документов <iframe> —
+    // основные уходят в run_scripts_with_dom по значению.
+    let (frame_fp, frame_wp, frame_sp) =
+        (fetch_provider.clone(), ws_provider.clone(), sse_provider.clone());
+    let (frame_ls, frame_idb) = (ls_store.clone(), idb_backend.clone());
+    let (frame_sw, frame_sww, frame_cache) =
+        (sw_backend.clone(), sw_worker_store.clone(), cache_backend.clone());
+    let frame_cookie_jar = cookie_jar.clone();
     let (doc_arc, js_nav, js_ctx) = run_scripts_with_dom(
         doc,
         lumen_core::SandboxFlags::empty(),
@@ -5412,6 +5456,31 @@ fn parse_and_layout(
         // к самому iframe-элементу, логируем ограничения для будущего Phase 1.
         apply_iframe_sandbox_gates(&d);
     }
+
+    // BUG-480 срез 1: загрузка sub-документов <iframe>. Локи внутри функции
+    // короткие — скрипты детей и `load` хоста идут без удержания дерева.
+    let frames = {
+        let _s = lumen_core::trace::span("fetch-iframes", "net");
+        load_frame_sub_documents(
+            &doc_arc,
+            0,
+            base,
+            sink,
+            frame_cookie_jar,
+            frame_fp,
+            frame_wp,
+            frame_sp,
+            frame_ls,
+            frame_idb,
+            frame_sw,
+            frame_sww,
+            frame_cache,
+            cookie_banner_dismiss,
+            deterministic,
+            cross_origin_isolated,
+            js_ctx.as_ref(),
+        )
+    };
 
     // Fetch + decode <img src>. Должно идти ДО layout, потому что intrinsic
     // dimensions из декодированного изображения проставляются как HTML
@@ -5611,6 +5680,7 @@ fn parse_and_layout(
         js_ctx,
         page_tracks,
         dynamic_css,
+        frames,
     })
 }
 
@@ -6719,6 +6789,7 @@ fn render_bytes(
             pending_web_fonts: parsed.pending_web_fonts,
             js_navigate: parsed.js_navigate,
             page_tracks: parsed.page_tracks,
+            frames: parsed.frames,
         },
         layout_source,
         parsed.js_ctx,
@@ -7233,6 +7304,253 @@ fn apply_iframe_sandbox_gates(doc: &Document) -> usize {
         }
     }
     blocked
+}
+
+// ── iframe sub-документы (BUG-480) ───────────────────────────────────────────
+
+/// Откуда брать HTML sub-документа фрейма.
+enum FrameSource {
+    /// Готовый HTML (атрибут `srcdoc` / пустой `about:blank`).
+    Inline(String),
+    /// Прочитанный файл.
+    File { html: String, path: std::path::PathBuf },
+    /// Тело ответа по сети.
+    Url { html: String, url: String },
+}
+
+/// Получить исходник под-документа для `src`-фрейма: разрешить относительно
+/// `base`, файл прочитать с диска, URL скачать через subresource-клиент с
+/// `RequestDestination::Document` (тот же mixed-content/SW-интерсептор, что у
+/// остальных подресурсов). `None` — источник получить нельзя (лог в stderr).
+fn fetch_iframe_source(
+    src: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+) -> Option<FrameSource> {
+    if src.trim().is_empty() {
+        return Some(FrameSource::Inline(String::new()));
+    }
+    let lowered = src.trim_start().to_ascii_lowercase();
+    if lowered.starts_with("javascript:") {
+        eprintln!("iframe: javascript:-URL не поддерживаются (BUG-480 срез 1), пропуск '{src}'");
+        return None;
+    }
+    if lowered.starts_with("data:") {
+        eprintln!("iframe: data:-URL не поддерживаются (BUG-480 срез 1), пропуск '{src}'");
+        return None;
+    }
+    match base.resolve(src) {
+        ResolvedResource::File(path) => {
+            let html = std::fs::read_to_string(&path)
+                .map_err(|e| eprintln!("iframe: файл {} не читается: {e}", path.display()))
+                .ok()?;
+            Some(FrameSource::File { html, path })
+        }
+        ResolvedResource::Url(url) => {
+            use lumen_core::url::Url as _Url;
+            use lumen_network::RequestDestination;
+            let sub_url = _Url::parse(&url)
+                .map_err(|e| eprintln!("iframe: битый URL '{url}': {e}"))
+                .ok()?;
+            let client = base.http_client_for_subresource(Arc::clone(sink), cookie_jar);
+            let bytes = client
+                .fetch_subresource(&sub_url, RequestDestination::Document)
+                .map_err(|e| eprintln!("iframe: загрузка '{url}' не удалась: {e}"))
+                .ok()?;
+            Some(FrameSource::Url {
+                html: String::from_utf8_lossy(&bytes).into_owned(),
+                url,
+            })
+        }
+    }
+}
+
+/// Диспетчеризовать `load` на `<iframe>`-элементе через родительский JS-контекст.
+///
+/// Событие не всплывает и не отменяется (HTML LS §4.8.5); `target` — сам
+/// элемент. Вызов синхронный: к этому моменту скрипты ребёнка уже выполнены и
+/// его DOMContentLoaded отправлен.
+#[allow(unused_variables)] // parent_js читается только под feature = "v8"
+fn fire_iframe_load_event(parent_js: Option<&Arc<dyn PersistentJs>>, host: NodeId) {
+    #[cfg(feature = "v8")]
+    if let Some(js) = parent_js {
+        js.eval_js(&format!(
+            "(function() {{ var e = new Event('load', {{bubbles:false, cancelable:false, isTrusted:true}}); \
+             e.target = _lumen_make_element({}); _lumen_dispatch({}, e); }})()",
+            host.index(),
+            host.index(),
+        ));
+    }
+}
+
+/// Загрузить sub-документы всех `<iframe>` документа и вернуть их хэндлы.
+///
+/// Срез 1 BUG-480: для каждого фрейма — собрать источник (`srcdoc` → inline,
+/// `src` → файл/сеть; отсутствие обоих = `about:blank`), распарсить в
+/// отдельный `Document`, выполнить его скрипты в собственном JS-контексте
+/// (`run_scripts_with_dom`: тот же набор провайдеров сети и хранилищ, что у
+/// страницы), отправить ребёнку DOMContentLoaded+load и диспектчнуть `load`
+/// на элементе-хосте. `loading="lazy"` пропускается до появления
+/// viewport-прокси (отдельный срез).
+///
+/// Блокировки:
+/// - глубина рекурсии ограничена [`MAX_FRAME_DEPTH`];
+/// - `sandbox` без `allow-scripts` гейтится внутри `run_scripts_with_dom`;
+/// - `sandbox` без `allow-same-origin` — opaque origin: ребёнку не выдаются
+///   персистентные хранилища (localStorage/IDB/SW/Cache);
+/// - навигационные запросы из скриптов ребёнка (`location.href=`) пока
+///   отклоняются с логом — навигация фреймов вне среза 1.
+///
+/// Вызывать можно с любым состоянием блокировок снаружи: лок родителя
+/// берётся коротко (только обход дерева); выполнение скриптов ребёнка и
+/// диспектч `load` на хосте идут БЕЗ удержанных лаков — обработчики вправе
+/// синхронно читать DOM обеих сторон.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[allow(clippy::unwrap_used)] // короткий лок дерева; poisoned mutex = паника потока загрузки, docs/lint-policy.md §10
+fn load_frame_sub_documents(
+    parent: &Arc<Mutex<Document>>,
+    depth: usize,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+    sse_provider: Option<Arc<dyn lumen_core::ext::JsSseProvider>>,
+    ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
+    idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
+    sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
+    sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
+    cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
+    cookie_banner_dismiss: bool,
+    deterministic: deterministic::DetConfig,
+    cross_origin_isolated: bool,
+    parent_js: Option<&Arc<dyn PersistentJs>>,
+) -> Vec<FrameHandle> {
+    // Короткий лок: собираем описания фреймов и отпускаем дерево — дальше
+    // сеть/скрипты/события, которые вправе читать документ.
+    let infos = {
+        let d = parent.lock().unwrap();
+        collect_iframes(&d)
+    };
+    if infos.is_empty() {
+        return Vec::new();
+    }
+    let mut handles = Vec::new();
+    for info in infos {
+        if info.loading_lazy {
+            continue;
+        }
+        // Источник HTML + база ребёнка для его относительных URL.
+        let (html, child_base, child_url): (String, ResourceBase, String) = match &info.srcdoc {
+            Some(srcdoc) => (srcdoc.clone(), base.clone(), "about:srcdoc".to_owned()),
+            None => match info.src.as_deref() {
+                Some(src) => match fetch_iframe_source(src, base, sink, cookie_jar.clone()) {
+                    Some(FrameSource::Inline(html)) => (html, base.clone(), "about:blank".to_owned()),
+                    Some(FrameSource::File { html, path }) => {
+                        let url = format!("file://{}", path.display());
+                        (html, ResourceBase::File(path), url)
+                    }
+                    Some(FrameSource::Url { html, url }) => {
+                        (html, ResourceBase::Url(url.clone()), url)
+                    }
+                    None => continue,
+                },
+                // Ни src, ни srcdoc — спека грузит about:blank немедленно.
+                None => (String::new(), base.clone(), "about:blank".to_owned()),
+            },
+        };
+
+        let child_doc = {
+            let _s = lumen_core::trace::span("parse-html-frame", "parse");
+            lumen_html_parser::parse(&html)
+        };
+        // Скрипты ребёнка собираются и (внешние) скачиваются ДО передачи
+        // документа в рантайм: run_scripts_with_dom принимает doc по значению.
+        let (classic_scripts, module_scripts) = {
+            let mut classic_items = Vec::new();
+            let mut module_items = Vec::new();
+            collect_scripts_ordered(&child_doc, child_doc.root(), &mut classic_items, &mut module_items);
+            (
+                resolve_script_sources(&classic_items, &child_base, sink, cookie_jar.clone()),
+                resolve_script_sources(&module_items, &child_base, sink, cookie_jar.clone()),
+            )
+        };
+        // Opaque origin (sandbox без allow-same-origin) — без персистентных
+        // хранилищ; провайдеры сети остаются: sandbox режет origin-доступ,
+        // а не сеть (скрипты целиком гейтятся флагом SCRIPTS отдельно).
+        let opaque = info.is_sandboxed && info.sandbox.contains(lumen_core::SandboxFlags::ORIGIN);
+        let (child_doc_arc, child_nav, child_js) = run_scripts_with_dom(
+            child_doc,
+            info.sandbox,
+            &child_url,
+            fetch_provider.clone(),
+            ws_provider.clone(),
+            sse_provider.clone(),
+            ls_store.clone().filter(|_| !opaque),
+            idb_backend.clone().filter(|_| !opaque),
+            sw_backend.clone().filter(|_| !opaque),
+            sw_worker_store.clone().filter(|_| !opaque),
+            cache_backend.clone().filter(|_| !opaque),
+            cookie_banner_dismiss,
+            deterministic,
+            cross_origin_isolated,
+            &[],
+            classic_scripts,
+            module_scripts,
+        );
+        // Навигация из скриптов ребёнка (location.href= и т.п.) вне среза 1:
+        // отклоняем с логом, не заваливая страницу.
+        if let Some(nav) = child_nav {
+            let target = match nav {
+                JsNavigateRequest::Push(url) | JsNavigateRequest::Replace(url) => url,
+                _ => "<reload/submit>".to_owned(),
+            };
+            eprintln!("iframe: навигация из под-документа ({child_url}) не поддерживается (BUG-480 срез 1), запрос '{target}' отклонён");
+        }
+        // Lifecycle ребёнка: DOMContentLoaded сразу после parse+inline-скриптов
+        // (тот же порядок, что у top-level в parse_and_layout); window load —
+        // сразу следом: подресурсы фрейма (img/css) — отдельный срез, а
+        // встроенный testharness ребёнка стартует именно на window load.
+        if let Some(js) = &child_js {
+            js.notify_dom_content_loaded();
+            js.notify_window_loaded();
+        }
+        // Вложенные фреймы ребёнка обрабатываем, пока известна его база.
+        // Хэндлы уплощаются в общий список страницы: время жизни всех
+        // под-документов привязано к странице целиком (замена/удаление
+        // отдельного фрейма — будущий срез).
+        if depth < MAX_FRAME_DEPTH {
+            let nested = load_frame_sub_documents(
+                    &child_doc_arc,
+                    depth + 1,
+                    &child_base,
+                    sink,
+                    cookie_jar.clone(),
+                    fetch_provider.clone(),
+                    ws_provider.clone(),
+                    sse_provider.clone(),
+                    ls_store.clone().filter(|_| !opaque),
+                    idb_backend.clone().filter(|_| !opaque),
+                    sw_backend.clone().filter(|_| !opaque),
+                    sw_worker_store.clone().filter(|_| !opaque),
+                    cache_backend.clone().filter(|_| !opaque),
+                    cookie_banner_dismiss,
+                    deterministic,
+                    cross_origin_isolated,
+                    child_js.as_ref(),
+                );
+            handles.extend(nested);
+        }
+        fire_iframe_load_event(parent_js, info.node);
+        handles.push(FrameHandle {
+            host: info.node,
+            url: child_url,
+            doc: Arc::clone(&child_doc_arc),
+            js: child_js,
+        });
+    }
+    handles
 }
 
 /// Выполнить inline `<script>` блоки с DOM-доступом (V8 + install_dom).
@@ -8259,6 +8577,11 @@ struct Lumen {
     /// Decoded animated GIF frames for `<video>` nodes (keyed by nid).
     /// Stored separately from `VideoGifStore` (which has no `lumen_image` dep).
     video_gif_frames: HashMap<u32, lumen_image::AnimatedGif>,
+    /// BUG-480 срез 1: живые sub-документы `<iframe>` текущей страницы.
+    /// Держат DOM+JS детей; заменяется целиком в [`Lumen::apply_loaded_page`].
+    /// В PageSnapshot не попадает — после bfcache-восстановления фреймы без
+    /// скриптов (известное ограничение среза 1, см. bugs/BUG-480-OPEN.md).
+    frames: Vec<FrameHandle>,
     /// Shared GIF-video store — same Arc used by JS native bindings (PH3-12).
     ///
     /// The shell owns the Arc; JS bindings hold clones captured at context
@@ -11830,6 +12153,9 @@ impl Lumen {
             pending_web_fonts: Vec::new(),
             js_navigate,
             page_tracks: tracks::PageTracks::default(),
+            // lumen-driver рендерит через свой headless-пайплайн без
+            // sub-документов — фреймов на этом пути нет.
+            frames: Vec::new(),
         })
     }
 
@@ -12238,6 +12564,9 @@ impl Lumen {
         collect_box_styles(&page.layout_box, &mut self.prev_styles);
         self.layout_box = Some(page.layout_box);
         self.page_tracks = page.page_tracks;
+        // BUG-480 срез 1: под-документы новой страницы заменяют старые целиком —
+        // прежние фреймы (и их JS-контексты) падают вместе со страницей.
+        self.frames = page.frames;
         self.sync_text_track_store();
         // content-visibility: auto (BB-4): новая страница — ratchet с нуля.
         self.cv_relevant.clear();
@@ -13187,6 +13516,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // deadline and the rAF-pump deadline (set below), so neither wakeup
         // source can starve the other.
         let mut next_wakeup: Option<std::time::Instant> = None;
+        // BUG-480 срез 1: памп sub-документов <iframe>. Хэндлы фреймов живут
+        // только на UI-стороне (в EngineJsState их нет), поэтому прямые вызовы
+        // без route_*: V8PersistentJs сам туннелирует на JS-поток (ADR-014).
+        // Вне гейта `js_present`: у фрейма может быть скрипт при странице без
+        // единого скрипта. rAF фреймов не тикается (срез 1 — см. баг-файл).
+        let frame_js_handles: Vec<Arc<dyn PersistentJs>> =
+            self.frames.iter().filter_map(|f| f.js.clone()).collect();
+        for fjs in &frame_js_handles {
+            fjs.tick_timers();
+            fjs.pump_websockets();
+            fjs.pump_sse();
+            fjs.pump_workers();
+            fjs.pump_broadcast_channels();
+            fjs.pump_shared_workers();
+            // Навигация из фрейма отклоняется (срез 1) — дреним, чтобы запрос
+            // не копился и не сработал позже из другого места.
+            let _ = fjs.take_navigate_request();
+        }
         // ADR-016 M2.2c-2d (20): gate on `self.js_present` instead of borrowing the
         // `Arc` directly (`if let Some(js) = &self.js_ctx`), so the block stays live
         // when the handle later moves engine-side under the flag. `js_present` is kept
@@ -13241,6 +13588,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let wakeup = std::time::Instant::now()
                     + std::time::Duration::from_millis(delay_ms as u64 + 1);
                 next_wakeup = Some(wakeup);
+            }
+        }
+        // BUG-480 срез 1: таймеры фреймов участвуют в WaitUntil наравне с
+        // таймерами страницы, иначе setTimeout ребёнка срабатывает с задержкой
+        // до следующего пробуждения по чужому источнику.
+        for fjs in &frame_js_handles {
+            if let Some(wakeup_epoch_ms) = fjs.take_timer_wakeup() {
+                let now_epoch_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0);
+                let delay_ms = (wakeup_epoch_ms - now_epoch_ms).max(0.0);
+                let wakeup = std::time::Instant::now()
+                    + std::time::Duration::from_millis(delay_ms as u64 + 1);
+                next_wakeup = Some(match next_wakeup {
+                    Some(cur) => cur.min(wakeup),
+                    None => wakeup,
+                });
             }
         }
 
