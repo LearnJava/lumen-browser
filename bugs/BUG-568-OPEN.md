@@ -77,3 +77,28 @@ document-write/script_00{1,3}`, `content-security-policy/nonce-hiding/*` 2,
 `document.write` и ждут его исполнения. Порядок починки, вероятно, обратный
 интуитивному: исполнение записанного скрипта затрагивает больше тестов, чем
 сам `document.open()`.
+
+
+## Замер 2026-08-23 (WPT-RUN-6, срез 25): `document.write` с тех пор появился, но скрипт из него не выполняется; `open`/`close` по-прежнему нет
+
+`tests/wpt/verify_focus_mutation_animation_gaps.py --variant docwrite-script`
+(dev-release, Linux, `main` = `530d0a444`, `--seconds 5`, страница жива):
+
+| шаг | ожидалось | получено |
+|---|---|---|
+| `document.write("<script>…</script>")` из инлайнового скрипта | скрипт выполняется до следующей строки | `dw-after-write ran=0` — **не выполнился**, но и не бросил |
+| та же запись из таймера | скрипт выполняется | `dw-late-written`, выполнения нет |
+| `document.createElement('script') + textContent` (контроль) | выполняется | ✔ `dw-textcontent-ran` |
+| `document.open()` | возвращает документ | `TypeError: document.open is not a function` |
+| `document.close()` | есть | не проверялось — `open` бросил раньше |
+
+То есть от исходной формулировки «не существует вся семья» осталось две
+трети: `write` вызывается без ошибки и молча не исполняет записанный
+`<script>`, `open`/`close` отсутствуют. Тихая половина хуже громкой — тест,
+ждущий выполнения записанного скрипта, виснет вместо `FAIL`.
+
+**Масштаб этой грани:** механизм `document-write-script-inert` в
+`tests/wpt/timeout_audit.py` — 3 id остатка снимка WPT-RUN-5
+(`content-security-policy/nonce-hiding/svgscript-nonces-hidden.html` и
+`…-hidden-meta.sub.html`, оба с зависшим подтестом `Document-written script
+executes.`, и `html/webappapis/dynamic-markup-insertion/opening-the-input-stream/document.open-03.html`).

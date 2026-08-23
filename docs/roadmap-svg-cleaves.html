@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-23",
  "counts": {
-  "open": 365,
+  "open": 373,
   "fixed": 447,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 812,
+ "total_bugs": 820,
  "phases": [
   {
    "id": "P0",
@@ -11053,6 +11053,62 @@
    "component": "js (`crates/js/src/dom.rs` — `HTMLFrameElement` не определён, при живом `HTMLFrameSetElement`) + shell (вложенный browsing context не создаётся вовсе, ср. BUG-480/BUG-798)",
    "date": null,
    "debtor": false
+  },
+  "BUG-855": {
+   "status": "open",
+   "title": "MutationObserver не видит половину **скриптовых** мутаций: `removeAttribute`/`removeAttributeNS` не порождают записи (перехвачен только путь установки атрибута)…",
+   "component": "js (`crates/js/src/dom.rs` — обвязка `_mo_notify`, `dom.rs:9965`; поля `nextSibling`/`previousSibling` записи, `dom.rs:10001`–`10002`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-856": {
+   "status": "open",
+   "title": "Конструктор `WebSocket` **блокирует весь документ** до конца хэндшейка: сервер, который принял TCP и молчит, замораживает страницу навсегда — 0 тиков `setInterv…",
+   "component": "js/network (`crates/js/src/v8_runtime.rs:3502`/`:3517` — «Phase 0 model: synchronous connect»; ниже `crates/network/src/websocket/mod.rs::connect_deflate`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-857": {
+   "status": "open",
+   "title": "Событие `selectionchange` не диспатчится нигде и никогда, `'onselectionchange' in input` — `false`, хотя соседнее `select` приходит, а `setSelectionRange`/`setR…",
+   "component": "js (`crates/js/src/dom.rs` — `grep -rn selectionchange crates/` даёт ноль совпадений)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-858": {
+   "status": "open",
+   "title": "`navigator.sendBeacon` возвращает `true` и не отправляет ничего, если URL относительный (доказано записью запросов на стороне сервера пробы), а для тела `ArrayB…",
+   "component": "js (`crates/js/src/dom.rs:7379`–`7397` — `navigator.sendBeacon`, нет ветки для `ArrayBuffer`/`ArrayBufferView`; `crates/js/src/v8_runtime.rs:3449` — URL не разрешается относительно документа)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-859": {
+   "status": "open",
+   "title": "**Ни один исходящий запрос не несёт `Referer` и `Origin`** — ни сабресурс (`<img>`, `<script src>`), ни `fetch()`, ни `sendBeacon`, включая POST того же происхо…",
+   "component": "network (`crates/network/src/lib.rs` — генерации `Referer`/`Origin` нет нигде; единственное упоминание `Referer` в крейте это комментарий `lib.rs:2427`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-860": {
+   "status": "open",
+   "title": "`Animation` не является `EventTarget`: `anim.addEventListener('finish', …)` — `TypeError`, хотя Web Animations §5.3 требует наследования от `EventTarget`. Вредн…",
+   "component": "js (`crates/js/src/dom.rs` — объект `element.animate()`: есть `onfinish`/`oncancel`/`onremove`, нет `addEventListener`/`removeEventListener`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-861": {
+   "status": "open",
+   "title": "Перемотка завершённой анимации назад одним лишь `currentTime = 0` не возвращает её в работу: `playState` остаётся `finished`, `finished`-промис не заменяется, в…",
+   "component": "js (`crates/js/src/dom.rs` — Web Animations shim, сеттер `currentTime` не выполняет «update the finished state», Web Animations §4.4.11)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-862": {
+   "status": "open",
+   "title": "`WebSocket.send()` бросает `TypeError: Cannot read properties of null (reading 'byteLength')` на `null`/`undefined`/числе/объекте/функции вместо приведения к `U…",
+   "component": "js (`crates/js/src/dom.rs:9853`–`9881` — `_lumen_ws_bytelen` читает `data.byteLength` без проверки, `send` шлёт всё нестроковое как `new Uint8Array(data)`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11410,6 +11466,9 @@
   "js (`crates/js/src/dom.rs:7345` `setTimeout`, `:7361` `setInterval` — `delay > 0 ? delay : 0` без верхней границы)": [
    "BUG-847"
   ],
+  "js (`crates/js/src/dom.rs:7379`–`7397` — `navigator.sendBeacon`, нет ветки для `ArrayBuffer`/`ArrayBufferView`; `crates/js/src/v8_runtime.rs:3449` — URL не разрешается относительно документа)": [
+   "BUG-858"
+  ],
   "js (`crates/js/src/dom.rs:7391` `tee`, `:7374` `getReader` игнорирует аргумент, `:7353` конструктор игнорирует `type:'bytes'`, `TextDecoderStream` там же)": [
    "BUG-824"
   ],
@@ -11428,6 +11487,9 @@
   "js (`crates/js/src/dom.rs:9555` — `IntersectionObserver.prototype.observe`; доставка `dom.rs:9586` вызывается только из `crates/shell/src/main.rs:3316` `deliver_layout_observers`)": [
    "BUG-807"
   ],
+  "js (`crates/js/src/dom.rs:9853`–`9881` — `_lumen_ws_bytelen` читает `data.byteLength` без проверки, `send` шлёт всё нестроковое как `new Uint8Array(data)`)": [
+   "BUG-862"
+  ],
   "js (`crates/js/src/dom.rs::WEB_API_SHIM` — 246 top-level `var`/`function _lumen_…`; регистрация нативов из Rust — `crates/js/src/v8_compat.rs::register_v8_native`/`_scoped`, 468 имён; плюс top-level объявления ~120 модульных шимов `crates/js/src/*.rs`)": [
    "BUG-753"
   ],
@@ -11439,6 +11501,9 @@
   ],
   "js (`crates/js/src/dom.rs` -- element wrapper factory)": [
    "BUG-551"
+  ],
+  "js (`crates/js/src/dom.rs` — Web Animations shim, сеттер `currentTime` не выполняет «update the finished state», Web Animations §4.4.11)": [
+   "BUG-861"
   ],
   "js (`crates/js/src/dom.rs` — `Document` object literal, none of these seven accessors exist)": [
    "BUG-705"
@@ -11497,6 +11562,9 @@
   "js (`crates/js/src/dom.rs` — `document` в `WEB_API_SHIM`)": [
    "BUG-701"
   ],
+  "js (`crates/js/src/dom.rs` — `grep -rn selectionchange crates/` даёт ноль совпадений)": [
+   "BUG-857"
+  ],
   "js (`crates/js/src/dom.rs` — `navigator.userActivation`; потребители: `_lumen_fs_request_error` там же, `crates/js/src/filesystem_access.rs:2601`, `crates/js/src/local_font_access.rs:151`)": [
    "BUG-758"
   ],
@@ -11511,6 +11579,12 @@
   ],
   "js (`crates/js/src/dom.rs` — ни одного `DOMMatrix`/`DOMPoint`/`DOMRect`/`DOMQuad`-конструктора нигде)": [
    "BUG-522"
+  ],
+  "js (`crates/js/src/dom.rs` — обвязка `_mo_notify`, `dom.rs:9965`; поля `nextSibling`/`previousSibling` записи, `dom.rs:10001`–`10002`)": [
+   "BUG-855"
+  ],
+  "js (`crates/js/src/dom.rs` — объект `element.animate()`: есть `onfinish`/`oncancel`/`onremove`, нет `addEventListener`/`removeEventListener`)": [
+   "BUG-860"
   ],
   "js (`crates/js/src/dom.rs` — секция `// ── performance (HR Timer …`, `Performance.prototype`)": [
    "BUG-767"
@@ -11651,6 +11725,9 @@
   ],
   "js/layout граница (`crates/js/src/v8_runtime.rs::_lumen_get_computed_style`, `crates/driver/src/session.rs:379`)": [
    "BUG-493"
+  ],
+  "js/network (`crates/js/src/v8_runtime.rs:3502`/`:3517` — «Phase 0 model: synchronous connect»; ниже `crates/network/src/websocket/mod.rs::connect_deflate`)": [
+   "BUG-856"
   ],
   "js/network граница (`crates/js/src/dom.rs:11353` — `_lumen_record_resource_timing`, ни одного вызова вне `dom.rs`)": [
    "BUG-520"
@@ -11937,6 +12014,9 @@
   ],
   "network (`crates/network/src/lib.rs::read_head`, `crates/network/src/h2/conn.rs`)": [
    "BUG-679"
+  ],
+  "network (`crates/network/src/lib.rs` — генерации `Referer`/`Origin` нет нигде; единственное упоминание `Referer` в крейте это комментарий `lib.rs:2427`)": [
+   "BUG-859"
   ],
   "network (`crates/network/src/sse.rs:393` — переподключение только по завершению чтения соединения) + js (`crates/js/src/dom.rs:7521`, `:7538` — ветки `open`/`close` в `_lumen_sse_pump_one`)": [
    "BUG-844"

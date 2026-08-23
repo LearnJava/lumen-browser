@@ -57,6 +57,14 @@ saw. That last stage sorts below the source markers on purpose — "something
 threw" is true of a `document.fonts.ready` page too, and reporting it that way
 would bury a mechanism that has a name (WPT-RUN-6 slice 14).
 
+Slice 25 (2026-08-23) added seven mechanisms to the third and fourth stages
+off `verify_focus_mutation_animation_gaps.py`, and corrected one attribution:
+`test_driver.click(element)` — how the whole `css/selectors/focus-visible-*`
+cluster starts — throws in the page at `element.getClientRects()`
+(BUG-478/551/580) *before* `elementsFromPoint` (BUG-464/477) and before
+`get_context`'s `document.defaultView` (BUG-622), the step it used to be
+attributed to.
+
 **The residual keeps its subtest evidence.** For every id still unexplained,
 `residual_hung_subtests` in `--json` carries the names of the subtests that
 never finished — the work list the next slice picks its target from, and the
@@ -856,7 +864,19 @@ def _resource_timing_marker(text, test_id=None):
     body = "\n".join(text) if isinstance(text, list) else text
     if "PerformanceObserver" not in body and "getEntriesByType" not in body:
         return False
-    return bool(_RT_OBSERVE_RE.search(body))
+    if _RT_OBSERVE_RE.search(body):
+        return True
+    # Slice 25 measured the other half: `performance.getEntriesByType(
+    # 'resource')` stays empty too, after an `<img>` and a `fetch()` the
+    # probe's server did serve (`verify_focus_mutation_animation_gaps.py
+    # --variant perf-resource`), while `mark`/`measure`/`navigation`/`paint`
+    # all read back. A plain buffer read is claimed only inside the four
+    # directories where the entry type is the subject — `getEntriesByType`
+    # appears all over the corpus for types that do work.
+    if not re.search(r"/(?:resource-timing|performance-timeline|"
+                     r"largest-contentful-paint|longtask-timing)/", test_id or ""):
+        return False
+    return bool(re.search(r"""getEntriesBy\w+\s*\(|buffered\s*:\s*true""", body))
 
 
 #: A `DecompressionStream`/`CompressionStream` read.
@@ -941,6 +961,37 @@ def _single_test_load_handler_marker(text, test_id=None):
     if not re.search(r"<body[^>]*\bonload\s*=", text, re.I):
         return False
     return "done()" in text
+
+
+def _mutation_record_marker(text, test_id=None):
+    """A `dom/nodes` test waiting for a mutation record the shim never queues.
+
+    BUG-855: `removeAttribute`, `insertBefore` and the inserting half of
+    `replaceChild` queue nothing (only `appendChild`/`removeChild`/`innerHTML`/
+    `textContent` and the attribute *set* path are wrapped), and every record's
+    `previousSibling`/`nextSibling` is `null`. Restricted to the directory whose
+    files are built entirely out of those primitives — `MutationObserver-*`,
+    `Node-insertBefore`, `ParentNode-append/prepend/replaceChildren` — so a test
+    that merely mentions an observer elsewhere is not claimed.
+    """
+    body = "\n".join(text) if isinstance(text, list) else text
+    if not re.search(r"/dom/nodes/(?:MutationObserver-|Node-insertBefore|"
+                     r"ParentNode-(?:append|prepend|replaceChildren))", test_id or ""):
+        return False
+    return bool(re.search(r"MutationObserver|runMutationTest|mutationobservers\.js", body))
+
+
+def _beacon_request_marker(text, test_id=None):
+    """A `beacon/headers/*` test reading a request header back off the server.
+
+    BUG-858 (a relative URL sends nothing; `ArrayBuffer`/view bodies arrive
+    empty with a wrong `Content-Type`) and BUG-859 (no `Referer`/`Origin` on
+    any request at all) — both measured on the probe's own server, slice 25.
+    """
+    body = "\n".join(text) if isinstance(text, list) else text
+    if "/beacon/" not in (test_id or ""):
+        return False
+    return "sendBeacon" in body
 
 
 SOURCE_MARKERS = [
@@ -1404,6 +1455,56 @@ SOURCE_MARKERS = [
         "request collector does not know (`poster`, `<input type=image>`, SVG "
         "`<image>`, `rel=icon`, media `src`) and waits for its `load`/`error`",
         predicate=_element_subresource_marker,
+    ),
+    # ── slice 25 ───────────────────────────────────────────────────────
+    # `test_driver.click(element)` cannot work at all: `testdriver.js::click`
+    # starts with `inView(element)` -> `getPointerInteractablePaintTree` ->
+    # `element.getClientRects()`, which does not exist (BUG-478/551/580), so
+    # the call throws *synchronously* — before `elementsFromPoint`
+    # (BUG-464/477) and before `get_context`'s `document.defaultView`
+    # (BUG-622), the step this was previously attributed to. Measured
+    # 2026-08-23, `verify_focus_mutation_animation_gaps.py --variant
+    # testdriver-click-path`.
+    Mechanism(
+        "testdriver-click-preconditions", "BUG-478 (+BUG-464/BUG-622 ниже по цепочке)",
+        [r"test_driver\.click\("],
+        "`test_driver.click()` throws in the page before reaching the "
+        "executor: `getClientRects`/`elementsFromPoint`/`defaultView` are all "
+        "missing, so the click never happens and the test's `.then()` never runs",
+    ),
+    Mechanism(
+        "mutation-record-missing", "BUG-855", [],
+        "the mutation the test makes queues no record: `removeAttribute`, "
+        "`insertBefore` and `replaceChild`'s insertion are not wrapped, and "
+        "record siblings are always null",
+        predicate=_mutation_record_marker,
+    ),
+    Mechanism(
+        "selectionchange-never-fired", "BUG-857",
+        [r"selectionchange"],
+        "`selectionchange` is dispatched nowhere in the engine, so a test "
+        "waiting for it cannot finish",
+    ),
+    Mechanism(
+        "beacon-request-gaps", "BUG-858/BUG-859", [],
+        "`navigator.sendBeacon` drops a relative URL, sends an empty body for "
+        "`ArrayBuffer`/views, and no request carries `Referer`/`Origin` — the "
+        "headers these tests read back off the server",
+        predicate=_beacon_request_marker,
+    ),
+    Mechanism(
+        "websocket-connect-blocks", "BUG-856",
+        [r"/sleep[_0-9]*|close\(\) when connecting"],
+        "`new WebSocket()` blocks the document until the handshake settles, so "
+        "a test against a server that stays silent freezes before its first "
+        "statement",
+    ),
+    Mechanism(
+        "websocket-send-non-string", "BUG-862",
+        [r"stuffToSend|sending non-strings"],
+        "`WebSocket.send()` throws `TypeError` on any value that is neither a "
+        "string nor a buffer instead of stringifying it, so the echo the test "
+        "waits for is never sent",
     ),
     # Truly last: "the test listens for an error" is the weakest of these
     # claims, so anything with a named cause above must take the test first.
@@ -1942,6 +2043,80 @@ SUBTEST_MARKERS = [
     # The clicked node's own activation behaviour is looked up instead of the
     # nearest activatable ancestor (BUG-837), so a click on an inline element
     # inside a `<label>`/`<a>` does nothing.
+    # ── slice 25 ───────────────────────────────────────────────────────
+    # Measured by `verify_focus_mutation_animation_gaps.py`, 2026-08-23.
+    SubtestMarker(
+        "mutation-record-missing", "BUG-855",
+        name=r"(?:attributes|childList|characterData) .*mutation|"
+             r"auto-enables attribute observation|"
+             r"Element\.removeAttribute(?:NS)?:|Node\.insertBefore:",
+        note="the mutation primitive the subtest names queues no record: "
+             "`removeAttribute`, `insertBefore` and `replaceChild`'s "
+             "insertion are not wrapped, and record siblings are always null",
+    ),
+    SubtestMarker(
+        "websocket-send-non-string", "BUG-862",
+        name=r"sending non-strings",
+        note="`send()` throws `TypeError` on any non-string, non-buffer "
+             "value instead of stringifying it, so the echo never comes back",
+    ),
+    SubtestMarker(
+        "websocket-connect-blocks", "BUG-856",
+        name=r"close\(\) when connecting",
+        note="the constructor blocks the document until the handshake "
+             "settles, so a test against a deliberately silent server freezes "
+             "before its first statement",
+    ),
+    SubtestMarker(
+        "animation-finished-state", "BUG-861",
+        name=r"finish event is fired again after seeking back|"
+             r"finished promise is replaced after replaying",
+        note="a bare `currentTime` seek does not run `update the finished "
+             "state`: `playState` stays `finished`, the promise is not "
+             "replaced and no second `finish` is fired",
+    ),
+    SubtestMarker(
+        "animation-replacement-missing", "BUG-704",
+        name=r"onremove event|persisted|Removed animations do not contribute|"
+             r"Persisted animations contribute",
+        note="`persist`/`commitStyles`/`replaceState` do not exist and "
+             "automatic replacement never happens, so `remove` never fires",
+    ),
+    # Deliberately narrower than the source marker of the same key: a subtest
+    # whose *name* merely mentions `document.open` is usually a
+    # `dynamic-markup-insertion` test operating on an `<iframe>`'s document,
+    # and the frame that never loads (BUG-480) is the earlier cause — the
+    # ordering the source stage already encodes. Attributing those here would
+    # invert it, because the subtest stage outranks the source one. Only the
+    # written-script wait, which slice 25 measured directly, is claimed.
+    SubtestMarker(
+        "document-write-script-inert", "BUG-568",
+        name=r"Document-written script executes",
+        note="`document.write` accepts a `<script>` and never executes it, "
+             "and `document.open` does not exist",
+    ),
+    SubtestMarker(
+        "selectionchange-never-fired", "BUG-857",
+        name=r"selectionchange|setRangeText fires a select event",
+        note="`selectionchange` is dispatched nowhere in the engine",
+    ),
+    SubtestMarker(
+        "resource-timing-entry-never-delivered", "BUG-839",
+        name=r"'resource' entries should be observable|"
+             r"buffered flag|ResourceTiming entry|RT entry|"
+             r"resource timing entry|getEntriesBy",
+        test=r"/(?:resource-timing|performance-timeline|"
+             r"largest-contentful-paint|longtask-timing)/",
+        note="no Resource Timing entry is ever created, through the observer "
+             "or through `getEntriesByType`",
+    ),
+    SubtestMarker(
+        "beacon-request-gaps", "BUG-858/BUG-859",
+        name=r"content-type header|origin header|referer header",
+        test=r"/beacon/",
+        note="a relative-URL beacon sends nothing, an `ArrayBuffer` body "
+             "arrives empty, and no request carries `Referer`/`Origin`",
+    ),
     SubtestMarker(
         "click-on-inner-element", "BUG-837",
         name=r"inline element inside a label|anchor with embedded inline element|"
@@ -2916,15 +3091,19 @@ def selftest():
         check(classify_source("/a/actions.html", tmp, {})
               == "testdriver-action-unimplemented",
               "a test_driver.Actions() wait was not claimed")
-        # `click()` is implemented by the executor, so a test using only that
-        # one is not blocked by this gap.
+        # `click()` is implemented by the executor, but slice 25 measured
+        # that it cannot run in the page: `testdriver.js::click` needs
+        # `getClientRects`/`elementsFromPoint`, neither of which exists, so
+        # the call throws before the executor is reached (BUG-478).
         with open(os.path.join(tmp, "a", "click.html"), "w", encoding="utf-8") as handle:
             handle.write('<script src="/resources/testdriver.js"></script>\n'
                          "<script>promise_test(async () => {\n"
                          "  await test_driver.click(document.getElementById('b'));\n"
                          "});</script>")
-        check(classify_source("/a/click.html", tmp, {}) is None,
-              "the implemented click action must not be blamed on BUG-810")
+        check(classify_source("/a/click.html", tmp, {})
+              == "testdriver-click-preconditions",
+              "a test_driver.click() wait must be claimed by the missing "
+              "getClientRects, not by BUG-810")
         # Ordering: the frame that is never loaded is the older, better
         # understood cause and keeps its tests (the shape of every
         # `pointerevents/*-in-iframe.html`).
@@ -3522,6 +3701,101 @@ def selftest():
         check(classify_source("/rt/dropped.html", tmp, {})
               == "resource-timing-entry-never-delivered",
               "a droppedEntriesCount read was not claimed")
+
+        # ── slice 25 ───────────────────────────────────────────────────────
+        # A plain buffer read counts only inside the directories where the
+        # entry type is the subject (slice 25 measured `getEntriesByType(
+        # 'resource')` empty as well, not just the observer stream).
+        os.makedirs(os.path.join(tmp, "resource-timing"), exist_ok=True)
+        with open(os.path.join(tmp, "resource-timing", "buf.html"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  step_timeout(function () {\n"
+                         "    assert_equals(performance.getEntriesByType('resource').length, 1);\n"
+                         "    t.done();\n"
+                         "  }, 100);\n"
+                         "});</script>")
+        check(classify_source("/resource-timing/buf.html", tmp, {})
+              == "resource-timing-entry-never-delivered",
+              "a resource buffer read was not claimed")
+        os.makedirs(os.path.join(tmp, "elsewhere"), exist_ok=True)
+        with open(os.path.join(tmp, "elsewhere", "buf.html"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("<script>test(function () {\n"
+                         "  assert_equals(performance.getEntriesByType('mark').length, 0);\n"
+                         "});</script>")
+        check(classify_source("/elsewhere/buf.html", tmp, {}) is None,
+              "a getEntriesByType read outside the Resource Timing "
+              "directories must not be claimed")
+        os.makedirs(os.path.join(tmp, "dom", "nodes"), exist_ok=True)
+        with open(os.path.join(tmp, "dom", "nodes", "MutationObserver-x.html"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  var m = new MutationObserver(t.step_func_done(function () {}));\n"
+                         "  m.observe(n, {attributes: true});\n"
+                         "  n.removeAttribute('x');\n"
+                         "});</script>")
+        check(classify_source("/dom/nodes/MutationObserver-x.html", tmp, {})
+              == "mutation-record-missing",
+              "a dom/nodes mutation-record wait was not claimed")
+        with open(os.path.join(tmp, "elsewhere", "mo.html"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("<script>new MutationObserver(function () {})"
+                         ".observe(document, {childList: true});</script>")
+        check(classify_source("/elsewhere/mo.html", tmp, {}) is None,
+              "an observer outside dom/nodes must not be claimed by BUG-855")
+        os.makedirs(os.path.join(tmp, "beacon", "headers"), exist_ok=True)
+        with open(os.path.join(tmp, "beacon", "headers", "ct.html"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  navigator.sendBeacon('/beacon/resources/beacon.py', 'x');\n"
+                         "});</script>")
+        check(classify_source("/beacon/headers/ct.html", tmp, {})
+              == "beacon-request-gaps",
+              "a beacon header test was not claimed")
+        with open(os.path.join(tmp, "beacon", "headers", "nobeacon.html"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("<script>test(function () { assert_true(true); });</script>")
+        check(classify_source("/beacon/headers/nobeacon.html", tmp, {}) is None,
+              "a beacon/ file that never calls sendBeacon must not be claimed")
+        with open(os.path.join(tmp, "a", "selchange.html"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  document.addEventListener('selectionchange',\n"
+                         "      t.step_func_done(function () {}));\n"
+                         "  input.select();\n"
+                         "});</script>")
+        check(classify_source("/a/selchange.html", tmp, {})
+              == "selectionchange-never-fired",
+              "a selectionchange wait was not claimed")
+        # The beacon marker is path-scoped: a page elsewhere may call
+        # `sendBeacon` for its own reasons and hang on something else.
+        with open(os.path.join(tmp, "a", "beacon-elsewhere.html"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  navigator.sendBeacon('/x', 'y');\n"
+                         "  window.onmessage = t.step_func_done(function () {});\n"
+                         "});</script>")
+        check(classify_source("/a/beacon-elsewhere.html", tmp, {}) is None,
+              "the beacon marker must not claim a page outside beacon/")
+        # The WebSocket markers also have to work from the source stage: the
+        # `?wss` variants of these files carry no partial subtest report.
+        with open(os.path.join(tmp, "a", "ws-send.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  var stuffToSend = [null, undefined, 1, {}];\n"
+                         "  ws.onmessage = t.step_func_done(function () {});\n"
+                         "});</script>")
+        check(classify_source("/a/ws-send.html", tmp, {})
+              == "websocket-send-non-string",
+              "a non-string send wait was not claimed from the source")
+        with open(os.path.join(tmp, "a", "ws-connect.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  var ws = new WebSocket(SCHEME_DOMAIN_PORT + '/sleep_10_v13');\n"
+                         "  ws.onclose = t.step_func_done(function () {});\n"
+                         "});</script>")
+        check(classify_source("/a/ws-connect.html", tmp, {})
+              == "websocket-connect-blocks",
+              "a handshake-blocked wait was not claimed from the source")
         # `mark`/`measure` are delivered, so an observer over them is not this
         # mechanism.
         with open(os.path.join(tmp, "rt", "marks.html"), "w", encoding="utf-8") as handle:
@@ -3710,6 +3984,50 @@ def selftest():
               "a passing subtest must not attribute anything")
         check(classify_subtests("/d/nbc.html", []) is None,
               "a test with no subtest record must fall through")
+
+        # ── slice 25 ───────────────────────────────────────────────────────
+        # Subtest stage: the names the residual itself carries.
+        check(classify_subtests("/dom/nodes/MutationObserver-attributes.html", [
+            ("attributes Element.removeAttribute: removal mutation", "TIMEOUT")])
+              == "mutation-record-missing",
+              "a removeAttribute mutation wait was not claimed")
+        # Second shape of the same marker, matched by a different alternative:
+        # the record kind is named without the method (`Range.deleteContents`
+        # is one of the primitives that queues nothing either).
+        check(classify_subtests("/dom/nodes/MutationObserver-characterData.html", [
+            ("characterData Range.deleteContents: child and data removal "
+             "mutation", "TIMEOUT")]) == "mutation-record-missing",
+              "a record-kind mutation wait was not claimed")
+        check(classify_subtests("/websockets/interfaces/WebSocket/send/010.html", [
+            ("WebSockets: sending non-strings (null)", "TIMEOUT"),
+            ("WebSockets: sending non-strings ([object Object])", "NOTRUN")])
+              == "websocket-send-non-string",
+              "a non-string send wait was not claimed")
+        check(classify_subtests("/websockets/interfaces/WebSocket/close/close-connecting.html", [
+            ("WebSockets: close() when connecting", "TIMEOUT")])
+              == "websocket-connect-blocks",
+              "a close()-while-connecting wait was not claimed")
+        check(classify_subtests("/web-animations/timing-model/animations/x.html", [
+            ("Animation finish event is fired again after seeking back to start",
+             "TIMEOUT")]) == "animation-finished-state",
+              "a finished-state seek wait was not claimed")
+        check(classify_subtests("/css/nonce/x.html", [
+            ("Document-written script executes.", "TIMEOUT")])
+              == "document-write-script-inert",
+              "a document-written script wait was not claimed")
+        check(classify_subtests("/html/webappapis/dynamic-markup-insertion/x.html", [
+            ("document.open() should return the same document", "TIMEOUT")]) is None,
+              "a bare document.open subtest name must stay with the source "
+              "stage, where the iframe it uses outranks it")
+        check(classify_subtests("/resource-timing/buffered-flag.any.html", [
+            ("PerformanceObserver with buffered flag sees previous resource "
+             "entries.", "TIMEOUT")]) == "resource-timing-entry-never-delivered",
+              "a buffered resource-entry wait was not claimed")
+        # The `test=` filter again: the same words outside `beacon/` are not
+        # this mechanism.
+        check(classify_subtests("/fetch/x.html", [
+            ("Test content-type header for a body string", "TIMEOUT")]) is None,
+              "the beacon marker fired outside beacon/")
         # The `test=` filter: the same subtest name outside its directory is
         # not the same mechanism.
         check(classify_subtests("/elsewhere/auto-001.html",
