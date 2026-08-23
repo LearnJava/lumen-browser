@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-23",
  "counts": {
-  "open": 378,
+  "open": 388,
   "fixed": 452,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 830,
+ "total_bugs": 840,
  "phases": [
   {
    "id": "P0",
@@ -11216,6 +11216,76 @@
    "component": "js (`crates/js/src/worker.rs:338`+ `worker_global_shim`, `crates/js/src/shared_worker.rs:121`+ `SHARED_WORKER_GLOBAL_SHIM` — вешают на `globalThis` только функции)",
    "date": null,
    "debtor": false
+  },
+  "BUG-873": {
+   "status": "open",
+   "title": "`dispatchEvent` не распространяет событие по дереву: событие с `bubbles: true`, отправленное на вложенный элемент, слышит только он сам — ни предок, ни `body`,…",
+   "component": "js (`crates/js/src/dom.rs:4696` — `dispatchEvent` элемента зовёт `_lumen_dispatch` для ОДНОГО узла; `:6249` — `document.dispatchEvent` только реестр документа; `:1112` `_lumen_dispatch_bubble` доходит до `document` и не знает про `window`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-874": {
+   "status": "open",
+   "title": "`document.on<type> = fn` присваивается (`typeof` после — `function`), но не вызывается никогда: ни на `document.dispatchEvent`, ни на движковом `readystatechang…",
+   "component": "js (`crates/js/src/dom.rs:6249` — `document.dispatchEvent` не заглядывает в `_lumen_on_handlers`; `:13795` — движковая доставка `readystatechange` идёт через него же)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-875": {
+   "status": "open",
+   "title": "`window.visualViewport` отсутствует целиком (`'visualViewport' in window === false`), интерфейса `VisualViewport` нет ни в каком виде — чтение падает `TypeError…",
+   "component": "js (`grep -rn visualViewport crates/` — ноль совпадений)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-876": {
+   "status": "open",
+   "title": "Распределение по слотам не происходит: `slot.assignedNodes()` пусто и при light-DOM-ребёнке с `slot=\"s1\"` в разметке, и после добавления такого ребёнка из скрип…",
+   "component": "js (`crates/js/src/dom.rs:5086` — `assignedNodes`; `grep -rn \"'slotchange'\" crates/` — ни одной точки диспатча)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-877": {
+   "status": "open",
+   "title": "`host.shadowRoot !== host.shadowRoot`: каждое чтение отдаёт новую обёртку, и возвращённое `attachShadow` значение тоже не совпадает с ней. Слушатель, повешенный…",
+   "component": "js (`crates/js/src/dom.rs:5190` — геттер `shadowRoot` каждый раз строит свежий `_lumen_make_shadow_root`; то же у `attachShadow`, `:4715`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-878": {
+   "status": "open",
+   "title": "`<script src>`, добавленный в shadow root через `root.appendChild`, не загружается и не исполняется — запроса нет вовсе (доказано записью запросов на стороне се…",
+   "component": "js (вставка узла в `ShadowRoot`, `crates/js/src/dom.rs:1310-1366`, не поднимает «prepare a script»; сбор подресурсов идёт по light-DOM, ср. [BUG-848](bugs/BUG-848-OPEN.md))",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-879": {
+   "status": "open",
+   "title": "Относительное значение import map не резолвится против базового URL карты: `{\"m\": \"./x.js\"}` + `import('m')` даёт `Error: module './x.js' not found` и ни одного…",
+   "component": "js (`crates/js/src/esm.rs:148-151` — ветка (4) `resolve_specifier_with` отдаёт значение карты наружу как есть, минуя резолвинг веток (3)/(3b))",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-880": {
+   "status": "open",
+   "title": "`createImageBitmap(canvas)` отклоняется `TypeError: unsupported source type`, хотя `<canvas>` — основной `ImageBitmapSource`; `window.ImageBitmap` — `undefined`…",
+   "component": "js (`crates/js/src/dom.rs` — `createImageBitmap`, сообщение `unsupported source type`; глобального `ImageBitmap` нет)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-881": {
+   "status": "open",
+   "title": "Navigation API диспатчит `navigate`/`currententrychange` только из явного `navigation.navigate()`: при `location.href = \"#1\"` адрес меняется (`entries().length…",
+   "component": "js (`crates/js/src/dom.rs` — объект `navigation`; путь фрагментной навигации о нём не знает)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-882": {
+   "status": "open",
+   "title": "`<script>`, однажды подключённый с не-JS `type` (`importmap`), после перетипизации в `text/javascript`, задания тела и повторной вставки не исполняется — ни в с…",
+   "component": "js (`crates/js/src/dom.rs:6530` — ветка не-JS `type`; флага «already started» в шиме нет, повторной подготовки при новом подключении тоже)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11531,11 +11601,20 @@
   "js (`crates/js/src/dom.rs:443`–`460` — `addEventListener` читает только `capture`/`once`)": [
    "BUG-865"
   ],
+  "js (`crates/js/src/dom.rs:4696` — `dispatchEvent` элемента зовёт `_lumen_dispatch` для ОДНОГО узла; `:6249` — `document.dispatchEvent` только реестр документа; `:1112` `_lumen_dispatch_bubble` доходит до `document` и не знает про `window`)": [
+   "BUG-873"
+  ],
   "js (`crates/js/src/dom.rs:4780-4827` -- `_lumen_build_detached_document`)": [
    "BUG-552"
   ],
   "js (`crates/js/src/dom.rs:4999` -- `var navigator = {...}`)": [
    "BUG-624"
+  ],
+  "js (`crates/js/src/dom.rs:5086` — `assignedNodes`; `grep -rn \"'slotchange'\" crates/` — ни одной точки диспатча)": [
+   "BUG-876"
+  ],
+  "js (`crates/js/src/dom.rs:5190` — геттер `shadowRoot` каждый раз строит свежий `_lumen_make_shadow_root`; то же у `attachShadow`, `:4715`)": [
+   "BUG-877"
   ],
   "js (`crates/js/src/dom.rs:5844`–`5849` — `_lumen_script_prepare` сводит «атрибута нет» и «атрибут пустой» в одно `''` и выходит по `return`)": [
    "BUG-838"
@@ -11549,8 +11628,14 @@
   "js (`crates/js/src/dom.rs:6206-6227`, `:11619-11632`)": [
    "BUG-479"
   ],
+  "js (`crates/js/src/dom.rs:6249` — `document.dispatchEvent` не заглядывает в `_lumen_on_handlers`; `:13795` — движковая доставка `readystatechange` идёт через него же)": [
+   "BUG-874"
+  ],
   "js (`crates/js/src/dom.rs:6323` — `_lumen_set_location_hash` зовёт `_lumen_fire_hashchange` синхронно; `:6351` — то же в `_lumen_navigate_or_fragment`)": [
    "BUG-832"
+  ],
+  "js (`crates/js/src/dom.rs:6530` — ветка не-JS `type`; флага «already started» в шиме нет, повторной подготовки при новом подключении тоже)": [
+   "BUG-882"
   ],
   "js (`crates/js/src/dom.rs:6533`–`6534` — `if (src !== '')`, пустой `src` уходит в ветку «источник — тело элемента»)": [
    "BUG-853"
@@ -11669,6 +11754,9 @@
   "js (`crates/js/src/dom.rs` — `_url_resolve` + `fetch`), network (провайдер `JsFetchProvider`)": [
    "BUG-723"
   ],
+  "js (`crates/js/src/dom.rs` — `createImageBitmap`, сообщение `unsupported source type`; глобального `ImageBitmap` нет)": [
+   "BUG-880"
+  ],
   "js (`crates/js/src/dom.rs` — `devicePixelRatio` никогда не проставляется на глобал вне `window_management.rs`)": [
    "BUG-515"
   ],
@@ -11701,6 +11789,9 @@
   ],
   "js (`crates/js/src/dom.rs` — объект `element.animate()`: есть `onfinish`/`oncancel`/`onremove`, нет `addEventListener`/`removeEventListener`)": [
    "BUG-860"
+  ],
+  "js (`crates/js/src/dom.rs` — объект `navigation`; путь фрагментной навигации о нём не знает)": [
+   "BUG-881"
   ],
   "js (`crates/js/src/dom.rs` — секция `// ── performance (HR Timer …`, `Performance.prototype`)": [
    "BUG-767"
@@ -11742,6 +11833,9 @@
   ],
   "js (`crates/js/src/dom.rs`, нет `dataset` нигде в `WEB_API_SHIM`)": [
    "BUG-496"
+  ],
+  "js (`crates/js/src/esm.rs:148-151` — ветка (4) `resolve_specifier_with` отдаёт значение карты наружу как есть, минуя резолвинг веток (3)/(3b))": [
+   "BUG-879"
   ],
   "js (`crates/js/src/eye_dropper.rs` — тело шима `open()`)": [
    "BUG-698"
@@ -11836,11 +11930,17 @@
   "js (`dom.rs` — элементный `dispatchEvent` в `_lumen_make_element`)": [
    "BUG-439"
   ],
+  "js (`grep -rn visualViewport crates/` — ноль совпадений)": [
+   "BUG-875"
+  ],
   "js (live DOM bindings)": [
    "BUG-279"
   ],
   "js (shell)": [
    "BUG-233"
+  ],
+  "js (вставка узла в `ShadowRoot`, `crates/js/src/dom.rs:1310-1366`, не поднимает «prepare a script»; сбор подресурсов идёт по light-DOM, ср. [BUG-848](bugs/BUG-848-OPEN.md))": [
+   "BUG-878"
   ],
   "js shim (`crates/js/src/dom.rs:5613`, `_lumen_make_style` Proxy `dom.rs:4264`)": [
    "BUG-494"

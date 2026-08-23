@@ -123,3 +123,31 @@ options)`, где `options.droppedEntriesCount` — число записей, �
 `tests/wpt/timeout_audit.py` — 20 id остатка снимка WPT-RUN-5
 (`resource-timing/*` 12, `performance-timeline/*` 5,
 `largest-contentful-paint/*` 2, `longtask-timing/supported-longtask-types.window.html`).
+
+## Перезамер 2026-08-23 (WPT-RUN-6, срез 27): буфер пуст для всех инициаторов
+
+`tests/wpt/verify_callback_import_preload_gaps.py --variant resource-timing`
+на `main` = `34cbefd25`. Страница делает четыре запроса разных видов —
+`<img>`, `fetch()`, `XMLHttpRequest`, `new EventSource()` — сервер пробы
+видит все четыре, а буфер Resource Timing остаётся пустым:
+
+```
+rt-api getEntriesByType=function setResourceTimingBufferSize=function
+       clearResourceTimings=function onresourcetimingbufferfull=false
+rt-fetch-done
+rt-xhr-done
+rt-es-created
+rt-entries n=0 []
+[server saw: GET /vcip-asset.js, GET /vcip-asset.js?xhr,
+             GET /vcip-pixel.png, GET /vcip-sse.py]
+```
+
+То есть дело не в `PerformanceObserver` и не в конкретном типе инициатора:
+записи не создаются вообще ни для чего. Побочно: у `performance` нет
+`onresourcetimingbufferfull` (`in` — `false`), хотя
+`setResourceTimingBufferSize`/`clearResourceTimings` есть.
+
+Цена по остатку WPT-RUN-5, сверх прежней: `resource-timing/initiator-type/misc.html`
+(ждёт `initiatorType === 'fetch'`), `resource-timing/buffer-full-eventually.html`
+(ждёт событие переполнения буфера), `resource-timing/ping-rt-entries.html`
+(`observe_entry` по записи типа `ping`).
