@@ -152,3 +152,32 @@ filed — folds under this bug's umbrella per the pattern above.
 Родственные элементы измерены тем же прогоном и разведены по своим багам:
 `<object data>`/`<embed src>` — [BUG-798](BUG-798-OPEN.md), `<frame>` —
 [BUG-854](BUG-854-OPEN.md).
+
+## Срез 1 (P3, 2026-08-23) — шелловый конвейер под-документов
+
+Срез 24 фиксировал «за URL фрейма никто не ходит» — срез 1 это закрывает.
+`parse_and_layout` после sandbox-гейтов вызывает `load_frame_sub_documents`
+(`crates/shell/src/main.rs`): для каждого `<iframe>` без `loading="lazy"`
+собирается источник (`srcdoc` → inline; `src` → файл или сеть через
+`fetch_subresource(RequestDestination::Document)`; нет ни того ни другого →
+пустой `about:blank`; `javascript:`/`data:` отклоняются с логом), HTML парсится
+в отдельный `Document`, скрипты ребёнка исполняются в собственном V8-контексте
+(`run_scripts_with_dom`: те же провайдеры сети и хранилищ, что у страницы;
+`sandbox` гейтится как у top-level; opaque origin — `sandbox` без
+`allow-same-origin` — не получает персистентных хранилищ). Ребёнку отправляются
+DOMContentLoaded + window load (последний — приближение: подресурсы фрейма ещё
+не грузятся); на элементе-хосте диспектчится trusted непузырящийся `load`.
+Вложенность ограничена `MAX_FRAME_DEPTH = 2`; хэндлы (`FrameHandle`: host/url/
+doc/js) живут в `Lumen::frames` до замены страницы и пампятся в `about_to_wait`
+(таймеры/WebSocket/SSE/workers — прямыми вызовами, хэндлы живут на UI-стороне).
+`IframeInfo` (lumen-dom) дополнен полями `node` и `name`.
+
+Не входит в срез 1 (очередь): `contentWindow`/`contentDocument` из JS родителя
+(по-прежнему `null`, `iframe_element.rs`), layout/paint содержимого фрейма,
+rAF фреймов, навигация/замена/удаление фрейма, `postMessage` между окнами,
+X-Frame-Options/CSP `frame-ancestors` на ответе ребёнка, `window[name]`,
+cross-origin ограничения доступа, bfcache не сохраняет фреймы.
+
+Проверка: clippy `-p lumen-dom` / `-p lumen-shell` -D warnings; тесты крейтов
+(dom 277 ok, shell iframe 7 ok); `dump_golden.py` 12/12 байт-в-байт; смоук —
+srcdoc- и file-iframe исполняют скрипты детей в собственных контекстах.

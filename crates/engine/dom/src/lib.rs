@@ -2738,6 +2738,9 @@ pub fn check_navigation_gate(doc: &Document, sandbox: SandboxFlags) -> usize {
 /// `is_sandboxed` — `true` если у элемента есть атрибут `sandbox` (даже пустой).
 /// `sandbox` содержит распарсенные флаги (пустые = нет ограничений, все = максимум).
 pub struct IframeInfo {
+    /// `NodeId` самого `<iframe>` элемента — адресат load/error-событий и
+    /// будущий ключ сопоставления «элемент ↔ browsing context» (BUG-480).
+    pub node: NodeId,
     /// Значение атрибута `src`, если задан.
     pub src: Option<String>,
     /// Inline HTML content from `srcdoc` attribute (HTML spec §4.8.5).
@@ -2754,6 +2757,9 @@ pub struct IframeInfo {
     /// `fetchpriority` (HTML LS §2.5.7): нормализованное `"high"`/`"low"`;
     /// `auto`, мусор и отсутствие атрибута → `None`.
     pub fetch_priority: Option<String>,
+    /// Значение атрибута `name`, если задан — будущий ключ `window[name]`
+    /// для именованного доступа к фреймам (BUG-480).
+    pub name: Option<String>,
 }
 
 /// Нормализует значение атрибута `fetchpriority` (HTML LS §2.5.7):
@@ -2781,7 +2787,8 @@ fn collect_iframes_inner(doc: &Document, id: NodeId, out: &mut Vec<IframeInfo>) 
             .get_attr("loading")
             .is_some_and(|v| v.eq_ignore_ascii_case("lazy"));
         let fetch_priority = normalize_fetch_priority(node.get_attr("fetchpriority"));
-        out.push(IframeInfo { src, srcdoc, sandbox, is_sandboxed, loading_lazy, fetch_priority });
+        let name = node.get_attr("name").filter(|s| !s.is_empty()).map(str::to_owned);
+        out.push(IframeInfo { node: id, src, srcdoc, sandbox, is_sandboxed, loading_lazy, fetch_priority, name });
     }
     for &child in &node.children.clone() {
         collect_iframes_inner(doc, child, out);
