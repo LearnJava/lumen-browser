@@ -696,7 +696,7 @@ fn dynamic_import_callback<'s>(
         Ok(namespace) => {
             resolver.resolve(tc, namespace);
         }
-        Err(()) => {
+        Err(_failure) => {
             let exc = tc
                 .exception()
                 .unwrap_or_else(|| v8::undefined(tc).into());
@@ -706,32 +706,49 @@ fn dynamic_import_callback<'s>(
     Some(promise)
 }
 
+/// Which phase of module loading an error came from — BUG-591: a page-load
+/// caller must fire the script element's `error` event for a [`Self::Load`]
+/// failure (the module or one of its dependencies never ran at all) but
+/// "report the exception" (window `error`/`onerror`) for a [`Self::Runtime`]
+/// one (the module's own top-level body threw). Conflating the two would
+/// misfire a page `'error'` on an ordinary 404/import-not-found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModuleFailure {
+    /// Compile, link or instantiate failed — the module body never started
+    /// evaluating.
+    Load,
+    /// Instantiation succeeded and evaluation began; the module (or a
+    /// dependency reached during evaluation) left `ModuleStatus::Errored`.
+    Runtime,
+}
+
 /// Compile → instantiate → evaluate `specifier`, returning its namespace object.
 ///
-/// `Err(())` means an exception is pending on `scope`.
+/// `Err` means an exception is pending on `scope`; the variant says which
+/// phase it came from (see [`ModuleFailure`]).
 fn load_and_evaluate<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     specifier: &str,
     ty: &DeclaredType,
-) -> Result<v8::Local<'s, v8::Value>, ()> {
-    let module = module_for(scope, specifier, ty).ok_or(())?;
+) -> Result<v8::Local<'s, v8::Value>, ModuleFailure> {
+    let module = module_for(scope, specifier, ty).ok_or(ModuleFailure::Load)?;
     // Весь граф — до инстанцирования: иначе резолв-колбэк пойдёт за каждым
     // импортом в сеть по очереди (см. [`prefetch_graph`]).
     prefetch_graph(scope, specifier, &cache_key(specifier, ty));
     if module.get_status() == v8::ModuleStatus::Uninstantiated
         && module.instantiate_module(scope, resolve_module_callback).is_none()
     {
-        return Err(());
+        return Err(ModuleFailure::Load);
     }
     if module.get_status() == v8::ModuleStatus::Instantiated
         && module.evaluate(scope).is_none()
     {
-        return Err(());
+        return Err(ModuleFailure::Runtime);
     }
     if module.get_status() == v8::ModuleStatus::Errored {
         let exc = module.get_exception();
         scope.throw_exception(exc);
-        return Err(());
+        return Err(ModuleFailure::Runtime);
     }
     Ok(module.get_module_namespace())
 }
@@ -751,13 +768,14 @@ pub(crate) fn install_dynamic_import_hook(isolate: &mut v8::Isolate) {
 /// The page URL (stored by [`set_page_url`]) becomes `import.meta.url` when
 /// known, matching `QuickJsRuntime::eval_module`.
 ///
-/// `Err(())` means an exception is pending — the caller owns the `TryCatch` and
+/// `Err` means an exception is pending — the caller owns the `TryCatch` and
 /// turns it into a [`JsError`], so the message matches every other V8 entry
-/// point instead of being re-derived here.
+/// point instead of being re-derived here. The variant says which phase it
+/// came from (see [`ModuleFailure`]).
 pub(crate) fn evaluate_entry_module(
     scope: &mut v8::PinScope<'_, '_>,
     source: &str,
-) -> Result<(), ()> {
+) -> Result<(), ModuleFailure> {
     let specifier = register_inline(source);
     // `import.meta.url` is the page URL for inline modules, which have no URL
     // of their own; fall back to the virtual specifier on a blank page.
@@ -770,20 +788,20 @@ pub(crate) fn evaluate_entry_module(
     });
     let text = transform_import_meta(source, &meta_url).unwrap_or_else(|| source.to_owned());
 
-    let module = compile(scope, &specifier, &specifier, &text).ok_or(())?;
+    let module = compile(scope, &specifier, &specifier, &text).ok_or(ModuleFailure::Load)?;
     // Граф inline-модуля забирается так же, как у внешнего: его импорты — это
     // и есть чанки приложения (см. [`prefetch_graph`]).
     prefetch_graph(scope, &specifier, &specifier);
     if module.instantiate_module(scope, resolve_module_callback).is_none() {
-        return Err(());
+        return Err(ModuleFailure::Load);
     }
     if module.evaluate(scope).is_none() {
-        return Err(());
+        return Err(ModuleFailure::Runtime);
     }
     if module.get_status() == v8::ModuleStatus::Errored {
         let exc = module.get_exception();
         scope.throw_exception(exc);
-        return Err(());
+        return Err(ModuleFailure::Runtime);
     }
     // Drain Promise continuations from dynamic import() / top-level await,
     // mirroring the `execute_pending_job` loop on the QuickJS path.
@@ -798,12 +816,13 @@ pub(crate) fn evaluate_entry_module(
 /// страницы: бандл с CDN (`https://cdn.example/app/index.js`) иначе уводит все
 /// свои чанки на хост документа и получает 404 вместо кода.
 ///
-/// `Err(())` — исключение висит на `scope`, как и у соседа.
+/// `Err` — исключение висит на `scope`, как и у соседа; вариант называет фазу
+/// (см. [`ModuleFailure`]).
 pub(crate) fn evaluate_module_url(
     scope: &mut v8::PinScope<'_, '_>,
     url: &str,
     source: &str,
-) -> Result<(), ()> {
+) -> Result<(), ModuleFailure> {
     register_source(url, source);
     load_and_evaluate(scope, url, &DeclaredType::Js)?;
     // Промисы динамических import() внутри модуля — как в `evaluate_entry_module`.

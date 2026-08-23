@@ -209,13 +209,25 @@ shape) and a worker's `setTimeout`/`queueMicrotask` callbacks specifically
 timer before throwing is untested) — narrower gaps, not named by any WPT
 cluster measured for this bug so far.
 
+**Module-script top-level runtime errors are now wired too (P1, 2026-08-23)**
+— `crate::v8_esm::load_and_evaluate`/`evaluate_entry_module`/`evaluate_module_url`
+now return a `ModuleFailure` (`Load` vs `Runtime`) instead of a bare `Err(())`,
+distinguishing "the module body never started evaluating" (compile/link/
+instantiate failure) from "the module's own top-level body threw"
+(`ModuleStatus::Errored` reached after `evaluate()`). Two new `V8JsRuntime`
+methods, `eval_module_and_report`/`eval_module_at_and_report`
+(`v8_runtime.rs`), call the shim's `_lumen_report_exception` — reusing the
+same `v8::Message` filename/lineno/colno extraction `eval_and_report` uses —
+only for the `Runtime` variant; a `Load` failure stays unreported here,
+matching this section's own "avoid misfiring on an ordinary 404/missing
+import" rule. The module-script execution loop (`crates/shell/src/main.rs`,
+the genuine top-level page-script boundary) now calls these instead of the
+plain trait `eval_module`/`eval_module_at`. 3 new tests
+(`v8_runtime.rs::tests::eval_module_and_report_runtime_error_fires_window_error`,
+`eval_module_and_report_load_error_does_not_fire_window_error`,
+`eval_module_at_and_report_runtime_error_fires_window_error`).
+
 **Not in scope of this slice — still open:**
-- Module-script top-level runtime errors (`_lumen_script_run_module`'s
-  `.catch` still only fires the *element* `error`/`load` event, which
-  conflates a module's own load failure with a runtime throw in its body —
-  spec wants the latter to *also* go through "report the exception" while the
-  element still gets `load`; left alone this slice to avoid misfiring a page
-  `'error'` on an ordinary 404).
 - `<body onerror>` forwarding to the special 5-arg form on a `Document`/child
   element (`onerroreventhandler.html`'s `check1`/`check3`) — untestable here
   regardless, it needs a cross-frame `<iframe>`, which this engine does not

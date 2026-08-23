@@ -7350,9 +7350,15 @@ fn run_scripts_with_dom(
                     // Внешний модуль исполняется под СВОИМ адресом: от него
                     // считаются его относительные импорты. У inline-модуля
                     // адреса нет — база остаётся адресом страницы.
+                    // eval_module_at_and_report/eval_module_and_report (not the
+                    // plain trait methods) — this is the top-level page-script
+                    // boundary, so a runtime error in the module body must also
+                    // reach window 'error'/onerror (BUG-591); a load/link
+                    // failure stays unreported here (belongs to the script
+                    // element's own 'error' event instead).
                     let outcome = match &item.url {
-                        Some(url) => rt.eval_module_at(url, src),
-                        None => rt.eval_module(src),
+                        Some(url) => rt.eval_module_at_and_report(url, src),
+                        None => rt.eval_module_and_report(src),
                     };
                     match outcome {
                         Ok(()) => {}
