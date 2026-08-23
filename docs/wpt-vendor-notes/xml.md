@@ -66,6 +66,27 @@ top-level element verbatim, preserve tag-name case — XML is case-sensitive,
 `parseFromString` calls to the same native path `createDocument` already
 uses.
 
+### Fixed 2026-08-23 (P1) — re-run: 5/10 harness OK, 13/190 subtests
+
+Both non-XSLT tests are now **100 %**: `eol-normalization.html` 0/3 → 3/3,
+`xml-prolog-accepted-versions.html` 4/10-by-accident → 10/10 for real. All 13
+passing subtests of the category are these two files; the remaining 177 are
+`xslt/` and need an `XSLTProcessor` that does not exist.
+
+The harness denominator moved 7 → 10 for reasons unrelated to the fix:
+`run_report.py` now also selects the three `xslt/` reftests, and three
+`xslt/*.window.html` went `TIMEOUT` → `ERROR` once BUG-591 made the uncaught
+`ReferenceError: XSLTProcessor is not defined` surface instead of hanging.
+Compare on subtests — the 190 denominator is stable.
+
+Chosen fix: an XML mode inside `_vParseHTML`/`_vBuildDocument` (option (a)
+below), not delegation to `_lumen_create_element_ns` — `DOMParser` builds a
+detached document out of this file's own `VNode`/`VElement`/`VDocument`
+objects, while `create_element_ns` lives in the live document's arena, so
+option (b) would have meant either a second document type coming out of
+`parseFromString` or moving the whole `VNode` tree onto the arena. Details in
+[BUG-781](../../bugs/BUG-781-FIXED.md).
+
 ### Everything else: `XSLTProcessor` — entirely absent, out of scope, no new bug
 
 The 5 remaining executed ids (`xslt/document-element.window.html`,
