@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-23",
  "counts": {
-  "open": 373,
+  "open": 380,
   "fixed": 450,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 823,
+ "total_bugs": 830,
  "phases": [
   {
    "id": "P0",
@@ -11149,6 +11149,55 @@
    "component": "js (`crates/js/src/dom.rs:443`–`460` — `addEventListener` читает только `capture`/`once`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-866": {
+   "status": "open",
+   "title": "Идентичность `SharedWorker` держится только на имени: `self.name` в `SharedWorkerGlobalScope` — `undefined` (у dedicated-воркера имя задаётся, `worker.rs:345`),…",
+   "component": "js (`crates/js/src/shared_worker.rs:382`–`386` — `key = nm ? 'name:'+nm : 'url:'+url`, `String(name)`; `SHARED_WORKER_GLOBAL_SHIM` не заводит `globalThis.name`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-867": {
+   "status": "open",
+   "title": "Событие `connect` у `SharedWorkerGlobalScope` не `MessageEvent` (конструктора нет в воркерной области) и не несёт `data === ''`; работает только `e.ports.length…",
+   "component": "js (`crates/js/src/shared_worker.rs`, `SHARED_WORKER_GLOBAL_SHIM` — объект для `onconnect` собирается литералом с одним полем `ports`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-868": {
+   "status": "open",
+   "title": "`MessagePort` не пересекает границу воркера ни в одну сторону: `worker.postMessage(msg, [port])` доходит с `e.ports.length === 0`, ответ воркера приходит с `e.p…",
+   "component": "js (`crates/js/src/worker.rs:918` — `_lumenSerializeWithTransfers` понимает только `OffscreenCanvas`; `worker.rs:366` — воркерный `postMessage(data)` объявлен без второго параметра и шлёт `JSON.stringify`; `MessageChannel` определён только в шиме страницы, `dom.rs:12019`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-869": {
+   "status": "open",
+   "title": "`WebSocket.send()` пишет в сокет синхронно и без очереди: получатель, читающий медленнее отправителя, замораживает весь документ. Замер `--variant ws-backpressu…",
+   "component": "js (`crates/js/src/v8_runtime.rs:3543`/`:3554` — `_lumen_ws_send*` зовут `send_text`/`send_binary` из потока JS под `registry.lock()`) + network (`crates/network/src/websocket/mod.rs:189` — `write_frame` в блокирующий `Write`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-870": {
+   "status": "open",
+   "title": "У `localStorage`/`sessionStorage` нет квоты: `setItem` не бросает `QuotaExceededError` никогда (замер `--variant storage-quota`: по 20 МиБ в каждое хранилище за…",
+   "component": "core (`crates/core/src/web_storage.rs:38`–`44` — `set_item` пишет в `HashMap` без проверки размера; слова `quota` в файле нет) + js (`crates/js/src/dom.rs:9921`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-871": {
+   "status": "open",
+   "title": "Исключение из слушателя `message` (порта, воркера, окна) не доходит ни до `window.onerror`, ни до `'error'`, ни до `worker.onerror`, ни на stderr — три пути дос…",
+   "component": "js (`crates/js/src/dom.rs:11965`/`:11968` — `MessagePort.prototype._deliver` зовёт слушателей в голом `catch(e) {}`; `:10896` — то же у `window.onmessage`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-872": {
+   "status": "open",
+   "title": "У воркерной глобальной области нет ни одного интерфейсного объекта: `WorkerGlobalScope`/`DedicatedWorkerGlobalScope`/`SharedWorkerGlobalScope`/`MessageEvent`/`M…",
+   "component": "js (`crates/js/src/worker.rs:338`+ `worker_global_shim`, `crates/js/src/shared_worker.rs:121`+ `SHARED_WORKER_GLOBAL_SHIM` — вешают на `globalThis` только функции)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11166,6 +11215,9 @@
   ],
   "chrome (`#sbTabs`/`.sb-tab`/`.sb-section-title`), layout (`box_tree.rs::lay_out_inner`)": [
    "BUG-425"
+  ],
+  "core (`crates/core/src/web_storage.rs:38`–`44` — `set_item` пишет в `HashMap` без проверки размера; слова `quota` в файле нет) + js (`crates/js/src/dom.rs:9921`)": [
+   "BUG-870"
   ],
   "css-parser": [
    "BUG-022",
@@ -11397,6 +11449,9 @@
   ],
   "js (`crates/js/src/dom.rs:11600` — `_lumen_record_resource_timing`, вызовы только из юнит-тестов шима `:18097`–`:18175`; `:11459` — `'resource'` в `_PERF_SUPPORTED_ENTRY_TYPES`; `:11539` — колбэк зовётся двумя аргументами)": [
    "BUG-839"
+  ],
+  "js (`crates/js/src/dom.rs:11965`/`:11968` — `MessagePort.prototype._deliver` зовёт слушателей в голом `catch(e) {}`; `:10896` — то же у `window.onmessage`)": [
+   "BUG-871"
   ],
   "js (`crates/js/src/dom.rs:12474` — `while (txn._queue.length > 0 …)` в `_idb_flush_txn`; `:12494` — `_idb_make_request` дополняет ту же очередь; `:12466` — весь флаш идёт одним микротаском)": [
    "BUG-842"
@@ -11688,6 +11743,12 @@
   "js (`crates/js/src/permissions_policy.rs:37-44` — `FeaturePolicy.prototype.allowsFeature`)": [
    "BUG-697"
   ],
+  "js (`crates/js/src/shared_worker.rs:382`–`386` — `key = nm ? 'name:'+nm : 'url:'+url`, `String(name)`; `SHARED_WORKER_GLOBAL_SHIM` не заводит `globalThis.name`)": [
+   "BUG-866"
+  ],
+  "js (`crates/js/src/shared_worker.rs`, `SHARED_WORKER_GLOBAL_SHIM` — объект для `onconnect` собирается литералом с одним полем `ports`)": [
+   "BUG-867"
+  ],
   "js (`crates/js/src/surface_api.rs` рядом с `navigator.doNotTrack`, строки 116-121) + network (`crates/network/src/http/headers.rs::build_request_headers`)": [
    "BUG-397"
   ],
@@ -11699,6 +11760,9 @@
   ],
   "js (`crates/js/src/v8_runtime.rs:1358` — `install_dom` создаёт `ss_store` как `WebStorage::default()` без входного параметра, в отличие от `ls_store` строкой выше)": [
    "BUG-836"
+  ],
+  "js (`crates/js/src/v8_runtime.rs:3543`/`:3554` — `_lumen_ws_send*` зовут `send_text`/`send_binary` из потока JS под `registry.lock()`) + network (`crates/network/src/websocket/mod.rs:189` — `write_frame` в блокирующий `Write`)": [
+   "BUG-869"
   ],
   "js (`crates/js/src/v8_runtime.rs:4809-4843` — блок `if let Some(seed) = deterministic_seed`; области `crates/js/src/worker.rs::run_worker_thread_v8`, `shared_worker.rs`, `sw_worker.rs`)": [
    "BUG-768"
@@ -11730,11 +11794,17 @@
   "js (`crates/js/src/worker.rs:227` — `worker_global_shim`)": [
    "BUG-766"
   ],
+  "js (`crates/js/src/worker.rs:338`+ `worker_global_shim`, `crates/js/src/shared_worker.rs:121`+ `SHARED_WORKER_GLOBAL_SHIM` — вешают на `globalThis` только функции)": [
+   "BUG-872"
+  ],
   "js (`crates/js/src/worker.rs:364-397` — заглушки таймеров, `worker.rs:377` `setInterval = setTimeout`, `worker.rs:834` — единственный вызов `_lumen_flush_timers`; то же в `shared_worker.rs:207,512,523`)": [
    "BUG-815"
   ],
   "js (`crates/js/src/worker.rs:533-552` — `_onerror`/`_errorListeners` читаются только из ветки `script === null`; `worker.rs:386-393` — `catch(e) {}` в `_lumen_flush_timers`)": [
    "BUG-813"
+  ],
+  "js (`crates/js/src/worker.rs:918` — `_lumenSerializeWithTransfers` понимает только `OffscreenCanvas`; `worker.rs:366` — воркерный `postMessage(data)` объявлен без второго параметра и шлёт `JSON.stringify`; `MessageChannel` определён только в шиме страницы, `dom.rs:12019`)": [
+   "BUG-868"
   ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"
