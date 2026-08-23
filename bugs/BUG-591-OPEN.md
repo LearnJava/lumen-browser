@@ -367,3 +367,70 @@ ric-checked
 Побочно тем же вариантом: `'onerror' in window === false`
 ([BUG-874](BUG-874-OPEN.md)) — детект «есть ли обработчик» в WPT идёт именно
 этой идиомой.
+
+## Срез 2026-08-23 (P1) — `requestIdleCallback` и вся остальная шимовая развилка `dom.rs`
+
+Перезамер среза 27 выше называл `requestIdleCallback` последним движковым
+колбэком вне починки. Это было верно только для того списка путей, который
+предыдущие срезы успели перечислить: `grep` по `dom.rs` на голый
+`catch(e) {}` дал **33** места, где шим зовёт пользовательский колбэк и
+глотает его исключение, и rIdle — лишь одно из них. Все 33 теперь зовут
+`_lumen_report_exception`:
+
+| Путь | Строки (до правки) |
+|---|---|
+| `requestIdleCallback` | 11930 |
+| `MessagePort` (`onmessage` + слушатели) | 12011, 12014 |
+| `MediaQueryList.dispatchEvent` | 10706, 10709 |
+| `MutationObserver` / `IntersectionObserver` / `ResizeObserver` | 10073, 10240, 10378 |
+| `PerformanceObserver` | 11778 |
+| `hashchange`, `popstate`, `pageshow`/`pagehide`, window `message` | 7101, 7107, 7638, 7641, 7922, 7926, 10942, 10945 |
+| `AbortSignal` `abort` | 7976, 7979 |
+| `WebSocket` (`on<type>` + слушатели) | 9811, 9813 |
+| фокусная развилка `_lumen_dispatch_focus_event` | 14100, 14105, 14117 |
+| поздняя подписка на `load`/`DOMContentLoaded` (микрозадача) | 6287, 10832, 10840 |
+| `Animation` `oncancel`/`onfinish`, `document.onfullscreenerror`, `WakeLockSentinel`, `DataTransferItem.getAsString` | 16289, 16376, 15918, 16570, 16571, 788 |
+
+Две из этих строк — `MessagePort` — раньше значились в этом файле как «вне
+объёма» вместе с `MediaQueryList`; обе закрыты. `MessagePort` — единственная,
+которая идёт не напрямую, а через новый `_lumen_mc_report`: `MESSAGE_CHANNEL_SHIM`
+— единственный кусок страничного шима, который отдельно вычисляет и область
+сервис-воркера (`sw_worker.rs:703`), а там нет ни `_lumen_report_exception`
+(страничная), ни `_lumen_et_report` (обёртка из `EVENT_TARGET_SHIM`, который
+сервис-воркер тоже не грузит). Прецедент — `_lumen_et_report` (срез 2026-08-22).
+
+Не тронуто сознательно (не пользовательские колбэки, а внутренние вызовы
+движка): `JSON.parse` снапшотов, `new RegExp(pattern)` валидации формы,
+`_rs_cancel_fn` и прочие потоковые пути (по спеке Streams ошибка уходит в
+возвращённый промис, а не в глобальный обработчик), autofocus-фокусировка,
+резолв `location`/`base`, `CLONERS` в `structuredClone`, ветка `'error'`
+внутри `window.dispatchEvent` (защита от самозацикливания, покрыта
+регрессионным тестом).
+
+Живая проба: `python tests/wpt/verify_callback_import_preload_gaps.py
+--variant cbx-ric --binary <абс.путь>/target/dev-release/lumen.exe` печатает
+`ric-error ricBoom` (раньше этой строки не было при живых `ric-ran` и
+`ric-second-ran`). 5 новых тестов в `dom.rs::tests::v8_core`:
+`bug591_request_idle_callback_exception_fires_window_error`,
+`bug591_message_port_handler_exception_fires_window_error`,
+`bug591_media_query_list_listener_exception_fires_window_error`,
+`bug591_performance_observer_callback_exception_fires_window_error`,
+`bug591_mutation_observer_callback_exception_fires_window_error`.
+
+Побочно закрыта половина [BUG-840](BUG-840-OPEN.md) (исключение колбэка
+`PerformanceObserver` съедалось шимом) — оставшаяся половина того бага
+(колбэк получает два аргумента вместо трёх, `resource` не доставляется) к
+этому багу отношения не имеет.
+
+**Что осталось у BUG-591 после этого среза:** отдельные шимы вне `dom.rs` —
+`worker.rs`, `shared_worker.rs`, `web_audio.rs` (`oncomplete`, названный
+[BUG-828](BUG-828-OPEN.md) как причина немоты `webaudio/*`), `xhr.rs`,
+`video_bindings.rs`, `wake_lock.rs`, `speech.rs`, `media_stream_recording.rs`,
+`notifications_bindings.rs`, `reporting_api.rs`, `screen_orientation.rs`,
+`scheduler.rs`, `soft_navigation.rs`, `presentation_api.rs`,
+`close_watcher.rs`, `launch_handler.rs`, `virtual_keyboard.rs`,
+`media_session.rs`, `cookie_store.rs`, `broadcast_channel.rs` — ~38 мест той
+же формы (граница шимов, урок BUG-780: фикс в `WEB_API_SHIM` до отдельного
+`rt.eval` не доходит). Плюс прежние два, снятые по объёму: `<body onerror>`
+для чужого документа (нужен `<iframe>`) и редакция «muted errors» для
+cross-origin.
