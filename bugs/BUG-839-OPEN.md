@@ -93,3 +93,33 @@ options)`, где `options.droppedEntriesCount` — число записей, �
    `po-subresource-buffer 3`, `po-args argc=3`.
 2. WPT: `run_report.py --all --root resource-timing --recursive` — семейство
    `buffered-flag`/`supported_resource_type` должно перестать быть TIMEOUT.
+
+
+## Замер 2026-08-23 (WPT-RUN-6, срез 25): пуст не только поток наблюдателя, но и сам буфер
+
+Срез 22 измерил, что `PerformanceObserver` с типом `resource` не получает
+записей. Срез 25 отделил вторую половину, которую тесты проверяют чаще:
+чтение буфера напрямую, без наблюдателя.
+`tests/wpt/verify_focus_mutation_animation_gaps.py --variant perf-resource`
+(dev-release, Linux, `main` = `530d0a444`, `--seconds 5`; на странице `<img>` и
+`fetch()`, оба запроса сервер пробы **видел**):
+
+| чтение | ожидалось | получено |
+|---|---|---|
+| `PerformanceObserver({type:'resource', buffered:true})` | 2 записи | колбэк не вызван ни разу |
+| `performance.getEntriesByType('resource')` через 400 мс | 2 | **0** |
+| то же через 1.4 с (после `rt-fetch-done`) | 2 | **0** |
+| `getEntriesByType('mark'/'measure'/'navigation'/'paint')` | 1/1/1/2 | 1/1/1/2 ✔ |
+| `'onresourcetimingbufferfull' in performance` | `true` | **false** |
+| `clearResourceTimings`/`setResourceTimingBufferSize` | функции | функции ✔ |
+
+Значит дело не в доставке наблюдателю: записи не создаются вообще, а
+управляющая обвязка буфера (методы очистки/размера) присутствует и
+обманчиво выглядит рабочей. `supportedEntryTypes` продолжает объявлять
+`resource` — из-за чего тесты, проверяющие поддержку через список, идут
+дальше и виснут вместо честного `FAIL`.
+
+**Масштаб уточнён:** механизм `resource-timing-entries-missing` в
+`tests/wpt/timeout_audit.py` — 20 id остатка снимка WPT-RUN-5
+(`resource-timing/*` 12, `performance-timeline/*` 5,
+`largest-contentful-paint/*` 2, `longtask-timing/supported-longtask-types.window.html`).

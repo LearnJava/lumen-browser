@@ -31,3 +31,34 @@ Not investigated: whether an interactive session (real winit event loop, `.focus
 ## Побочная находка (не баг)
 
 The file-level `expected: ERROR` in the committed `.ini` (from WPT-RUN-3 slice 30) is stale: the harness now completes fully (`status: OK`) — some unrelated engine fix between slice 30 (2026-08-03) and this re-run resolved whatever previously aborted the test before its first assertion. `.ini` updated to `expected: OK` with the 8 real `FAIL`/4 real `PASS` subtests from this bug.
+
+
+## Замер 2026-08-23 (WPT-RUN-6, срез 25): «не исследовано» из последнего абзаца закрыто — стиль и `matches()` расходятся
+
+`tests/wpt/verify_focus_mutation_animation_gaps.py --variant focus-script`
+(dev-release, Linux, `main` = `530d0a444`, живое окно, `--seconds 5`) проверяет
+`:focus` независимо, чего этому багу не хватало:
+
+| момент | `document.activeElement` | `getComputedStyle(t).backgroundColor` | `t.matches(':focus')` |
+|---|---|---|---|
+| до `t.focus()` | `BODY` | `rgba(0,0,0,0)` | `false` |
+| сразу после (тот же тик) | `t` | `rgba(0,0,0,0)` | `false` |
+| через 500 мс | `t` | **`rgb(0,255,0)`** | **`false`** |
+| после перевода фокуса на `<input>` | `i` | `rgba(0,0,0,0)` | `false` |
+
+То есть отложенность применения (сам BUG-560) подтверждена — стиль приезжает
+на следующем пампе, — но вскрылось разделение, которого баг не знал:
+**после пампа стиль `:focus` применён, а `Element.matches(':focus')` всё
+равно `false`**. Значит путь селектор-матчинга (`matches`/`querySelectorAll`)
+не разрешает динамические псевдоклассы вообще, а не «отстаёт на один памп»,
+как путь стиля. То же самое для `:focus-visible` и `:focus-within`
+(`--variant focus-visible-css`: `CSS.supports('selector(:focus-visible)')`
+даёт `true`, а `a.matches(':focus-visible')` после фокуса — `false`).
+
+События при этом исправны: `focus`/`focusin` у цели и `blur`/`focusout` у
+предыдущей приходят, порядок правильный.
+
+Побочный, но существенный для триажа факт того же замера: `label.focus()` не
+передаёт фокус связанному контролу и не фокусирует даже сам `<label>`
+(`activeElement` остаётся `BODY`) — это [BUG-621](BUG-621-OPEN.md),
+перезамеренный, а не новый.

@@ -61,3 +61,33 @@ Error` по applicability-правилам спеки) и `Animation.prototype.p
 (флаг `_persisted = true`, читаемый местом, где реализуется auto-removal —
 если такого места ещё нет в шиме, `replaceState` тоже придётся завести).
 Вне скоупа этой WPT-VENDOR-задачи (только вендоринг + прогон + живая проба).
+
+
+## Замер 2026-08-23 (WPT-RUN-6, срез 25): отсутствует не только `persist`/`commitStyles`, но и вся механика замены анимаций
+
+`tests/wpt/verify_focus_mutation_animation_gaps.py --variant wa-persist`
+(dev-release, Linux, `main` = `530d0a444`, `--seconds 5`, страница жива):
+
+```
+wp-api persist=undefined commitStyles=undefined replaceState=undefined
+       getAnimations=function
+wp-second-created count=2
+wp-after count=2 a.replaceState=undefined opacity=0.25
+wp-persist-throws TypeError: a.persist is not a function
+wp-commit-throws  TypeError: b.commitStyles is not a function
+```
+
+Новое по сравнению с исходной формулировкой бага:
+
+* `Animation.replaceState` не существует как свойство (не только методы);
+* **автоматическая замена не происходит вовсе** — вторая `fill: forwards`
+  анимация того же свойства не переводит первую в `removed`,
+  `getAnimations()` продолжает возвращать обе, `onremove` не приходит;
+* при этом сам эффект считается верно (`opacity=0.25` — выигрывает вторая).
+
+То есть закрыть баг добавлением двух методов не выйдет: нужна процедура
+«remove replaced animations» (Web Animations §5.4) целиком. Даёт 3 id
+остатка снимка WPT-RUN-5: `Animation/persist.html`, `Animation/onremove.html`,
+`keyframe-effects/effect-value-replaced-animations.html`. Соседние дыры того
+же объекта — [BUG-860](BUG-860-OPEN.md) (не `EventTarget`) и
+[BUG-861](BUG-861-OPEN.md) (перемотка завершённой анимации).
