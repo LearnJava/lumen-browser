@@ -75,3 +75,32 @@ Fix scope (для P3): (1) заменить `new MessageEvent(message)` на
 `with-ports`/`without-ports` в основном блокируются отдельно BUG-480/359
 (нет browsing context у iframe/window.open) и не разблокируются этим
 фиксом в одиночку.
+
+## Перезамер: какие именно формы `targetOrigin` теряют сообщение (WPT-RUN-6, срез 28, 2026-08-23)
+
+`tests/wpt/verify_window_history_jsurl_gaps.py --variant pm-target-origin`
+шлёт восемь само-сообщений подряд, различающихся только записью
+`targetOrigin`, и печатает по одному маркеру на доставленное. Доставлено
+**три из восьми**:
+
+| форма | `postMessage('', …)` | доставлено |
+|---|---|---|
+| литерал | `'*'` | да |
+| точный origin | `location.protocol + '//' + location.host` | да |
+| только слэш | `'/'` | да |
+| с хвостовым слэшем | `… + '/'` | **нет** |
+| с двойным слэшем | `… + '//'` | **нет** |
+| пустой словарь | `{}` | **нет** |
+| словарь с чужим ключом | `{someBogusParameterOnThisDictionary: 'food'}` | **нет** |
+| один аргумент | `postMessage('d:one-arg')` | **нет** |
+
+То есть `targetOrigin` сравнивается как сырая строка, а не парсится в origin:
+хвостовой слэш и `//` в host-specific части — валидные записи того же
+собственного origin, и оба обязаны совпасть. `e.origin` у доставленных верен
+(`http://127.0.0.1:<port>`), `e.ports` — пусто.
+
+Цена по остатку WPT-RUN-5 — 6 id: `webmessaging/with-ports/002.html`
+(двойной слэш) и `/006.html` (хвостовой слэш), их близнецы
+`webmessaging/without-ports/002.html` и `/006.html`,
+`webmessaging/with-options/no-target-origin.html` (`{}`) и
+`/unknown-parameter.html` (словарь с чужим ключом).

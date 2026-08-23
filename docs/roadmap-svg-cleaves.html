@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-23",
  "counts": {
-  "open": 387,
+  "open": 393,
   "fixed": 453,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 840,
+ "total_bugs": 846,
  "phases": [
   {
    "id": "P0",
@@ -11268,6 +11268,48 @@
    "component": "js (`crates/js/src/dom.rs:6530` — ветка не-JS `type`; флага «already started» в шиме нет, повторной подготовки при новом подключении тоже)",
    "date": null,
    "debtor": false
+  },
+  "BUG-883": {
+   "status": "open",
+   "title": "`window.open()` (и клик по `<a target=_blank>`) убивает документ-вызыватель: ни один его таймер больше не срабатывает — замер `win-open-freeze` даёт 5 биений по…",
+   "component": "shell (`crates/shell/src/main.rs` — дренаж popup-запросов `_lumen_window_open`/`open_new_tab()`), js (`crates/js/src/dom.rs:12190-12220` — заглушка возврата)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-884": {
+   "status": "open",
+   "title": "`javascript:`-URL не исполняется нигде: парсерный `<iframe src=\"javascript:…\">` (код не выполняется, `load` не диспатчится), присваивание `iframe.src`, клик по…",
+   "component": "shell (`crates/shell/src/main.rs` — `resolve_js_navigation`, `load_frame_sub_documents`), js (`crates/js/src/dom.rs` — `_lumen_navigate_or_fragment`, `window.open`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-885": {
+   "status": "open",
+   "title": "Фрейм, которым распоряжается скрипт, не грузится никогда: ни вставленный через `createElement`+`appendChild`, ни парсерный, которому `src` присвоили из JS (и с…",
+   "component": "shell (`crates/shell/src/main.rs:5464` — `load_frame_sub_documents` зовётся только из `parse_and_layout`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-886": {
+   "status": "open",
+   "title": "Обход истории не диспатчит `popstate`, если запись создана `pushState(state, \"\")` без третьего аргумента — ни `window.onpopstate`, ни `addEventListener`, ни `<b…",
+   "component": "shell (`crates/shell/src/main.rs:20618-20646` — ветка same-document в `nav_back`), js (`crates/js/src/dom.rs:6921` — `pushState`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-887": {
+   "status": "open",
+   "title": "`window.close()` — no-op (документ жив, 15 тиков после вызова, ни `beforeunload`, ни `unload`, ни `pagehide`), а `window.closed` и `window.name` — `undefined` в…",
+   "component": "js (`crates/js/src/dom.rs` — глобальный `window`; `:12210` определяет `closed`/`name` только у объекта-заглушки `open()`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-888": {
+   "status": "open",
+   "title": "`document.open()` и `document.close()` отсутствуют целиком (`TypeError: document.open is not a function`), при живых `document.write`/`writeln`. Поведение `writ…",
+   "component": "js (`crates/js/src/dom.rs:6212-6240` — блок `document.write`/`writeln`, `open`/`close` в нём не определены)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11610,6 +11652,9 @@
   "js (`crates/js/src/dom.rs:6206-6227`, `:11619-11632`)": [
    "BUG-479"
   ],
+  "js (`crates/js/src/dom.rs:6212-6240` — блок `document.write`/`writeln`, `open`/`close` в нём не определены)": [
+   "BUG-888"
+  ],
   "js (`crates/js/src/dom.rs:6249` — `document.dispatchEvent` не заглядывает в `_lumen_on_handlers`; `:13795` — движковая доставка `readystatechange` идёт через него же)": [
    "BUG-874"
   ],
@@ -11759,6 +11804,9 @@
   ],
   "js (`crates/js/src/dom.rs` — own-свойство `checked` в `_lumen_build_element`), shell (`forms.rs` — сбор формы и покраска читают атрибут)": [
    "BUG-444"
+  ],
+  "js (`crates/js/src/dom.rs` — глобальный `window`; `:12210` определяет `closed`/`name` только у объекта-заглушки `open()`)": [
+   "BUG-887"
   ],
   "js (`crates/js/src/dom.rs` — литерал обёртки элемента, `get content()` для `HTMLTemplateElement.content`, против таблицы `_lumen_install_reflection(HTMLMetaElement.prototype, …)`)": [
    "BUG-796"
@@ -12443,6 +12491,9 @@
   "shell (`crates/shell/src/main.rs:20216`–`20329` — `navigate_back`, путь полного документа: bfcache-оттайка либо `reload()`) + js (`crates/js/src/dom.rs:6941` — `history.go` → `_lumen_history_traverse`)": [
    "BUG-835"
   ],
+  "shell (`crates/shell/src/main.rs:20618-20646` — ветка same-document в `nav_back`), js (`crates/js/src/dom.rs:6921` — `pushState`)": [
+   "BUG-886"
+  ],
   "shell (`crates/shell/src/main.rs:285` — единственный потребитель `Event::SubresourceHintFound` печатает `⤷ preload …` в stderr; `main.rs:6807` `dispatch_preload_hints`, доккоммент «в Phase 0 sink логирует в stderr; в будущем запустит fetch»), html-parser (`crates/engine/html-parser/src/preload_scanner.rs:144` — `modulepreload`/`prefetch` не распознаются вовсе), js (`crates/js/src/dom.rs` — грузится только `rel=stylesheet`, есть тест-охранник `dynamic_preload_link_fires_nothing`)": [
    "BUG-826"
   ],
@@ -12451,6 +12502,9 @@
   ],
   "shell (`crates/shell/src/main.rs:525` — `let (_network_svc, _transport) = …`) / network (`crates/network/src/bin/network_service.rs`)": [
    "BUG-769"
+  ],
+  "shell (`crates/shell/src/main.rs:5464` — `load_frame_sub_documents` зовётся только из `parse_and_layout`)": [
+   "BUG-885"
   ],
   "shell (`crates/shell/src/main.rs::apply_loaded_page`), js (`crates/js/src/dom.rs:12769` `window.getComputedStyle`)": [
    "BUG-555"
@@ -12470,11 +12524,17 @@
   "shell (`crates/shell/src/main.rs` — `parse_and_layout`, `LayoutSource`, `Lumen::refresh_dynamic_css`)": [
    "BUG-743"
   ],
+  "shell (`crates/shell/src/main.rs` — `resolve_js_navigation`, `load_frame_sub_documents`), js (`crates/js/src/dom.rs` — `_lumen_navigate_or_fragment`, `window.open`)": [
+   "BUG-884"
+  ],
   "shell (`crates/shell/src/main.rs` — `spawn_image_requests` / арм `LoadEvent::ImageDecoded`)": [
    "BUG-735"
   ],
   "shell (`crates/shell/src/main.rs` — `spawn_stream_image_loads` / `apply_relayout_result`)": [
    "BUG-730"
+  ],
+  "shell (`crates/shell/src/main.rs` — дренаж popup-запросов `_lumen_window_open`/`open_new_tab()`), js (`crates/js/src/dom.rs:12190-12220` — заглушка возврата)": [
+   "BUG-883"
   ],
   "shell (`crates/shell/src/main.rs` — сидирование `ShieldsPanel::default_enabled`), tooling (`tools/wptrunner/wptrunner/browsers/lumen.py`)": [
    "BUG-800"
