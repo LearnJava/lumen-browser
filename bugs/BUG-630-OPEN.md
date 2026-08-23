@@ -138,3 +138,14 @@ ioa-checked
 и `…-valid.html` — оба запускают `import()` из `onload`-атрибута
 парсерного `<img src="/images/green.png">`, то есть до самой карты импортов
 дело не доходит.
+
+## Перезамер (WPT-RUN-6, срез 28, 2026-08-23)
+
+`verify_window_history_jsurl_gaps.py --variant canvas-misc`: `<img>`,
+созданный скриптом и указывающий на SVG-файл, который сервер пробы отдаёт,
+не диспатчит ни `load`, ни `error` за 8 секунд, `img.complete` —
+`undefined`. Это, а не сам canvas, и есть причина зависания
+canvas-семейства: `ctx` создаётся, `ctx.filter` читается (`"none"`) и
+пишется (`"blur(2px)"`), `OffscreenCanvas`,
+`canvas.transferControlToOffscreen` и `createImageBitmap` — все три
+существуют, а рисовать нечего, потому что картинка о своей загрузке молчит.

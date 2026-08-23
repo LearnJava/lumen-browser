@@ -76,3 +76,13 @@ document») допускает `persisted=true` только для докуме
    --variant nav-pagehide-unload` — ожидаются `pagehide persisted=false`,
    `unload`, `visibilitychange state=hidden`.
 2. WPT (после BUG-480): `run_report.py --all --root html/browsers/browsing-the-web/unloading-documents --recursive`.
+
+## Перезамер (WPT-RUN-6, срез 28, 2026-08-23)
+
+`verify_window_history_jsurl_gaps.py --variant unload-nav` (обычная
+навигация `location.href = …`) и `--variant win-close` (`window.close()`):
+`pagehide` приходит на навигации и не приходит на `close()`; `beforeunload`
+и `unload` не приходят ни там, ни там. То есть у этого бага две разные
+половины — событие, которого нет в принципе (`beforeunload`/`unload`), и
+путь выгрузки, который `close()` не запускает вовсе
+([BUG-887](BUG-887-OPEN.md)).
