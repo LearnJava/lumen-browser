@@ -57,7 +57,7 @@ content-visibility: auto` под распоркой в 2000 px:
 id** остатка снимка WPT-RUN-5
 (`css/css-contain/content-visibility/content-visibility-auto-state-changed-first-observation.html`,
 оба подтеста ждут события), рядом ещё два id того же каталога висят на
-`ResizeObserver` ([BUG-661](BUG-661-OPEN.md)). Отсутствие свойств в снимке
+`ResizeObserver` ([BUG-661](BUG-661-FIXED.md)). Отсутствие свойств в снимке
 шире: любой тест, читающий `getComputedStyle(el).contentVisibility`, получает
 `""` вместо `visible`.
 

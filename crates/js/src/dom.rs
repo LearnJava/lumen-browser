@@ -10193,20 +10193,56 @@ function MutationRecord() { throw new TypeError('Illegal constructor'); }
 // ── ResizeObserver (W3C Resize Observer §5) ───────────────────────────────────
 // Delivers size-change entries after layout; the shell calls
 // _lumen_deliver_resize_observers() after each relayout.
+//
+// BUG-661 §1: the relayout path is not the only trigger. Resize Observer §3.2
+// runs the observation loop as part of the update-the-rendering steps, so an
+// observation that has never been reported must reach its callback on the next
+// turn even when nothing in the document changed — the shell only relayouts on
+// a dirty DOM/style, so a page that calls observe() and then sits still used to
+// get no callback at all. _ro_schedule_initial() puts the pass on the event
+// loop itself (a task in _lumen_timers, the BUG-842 pattern) so «guaranteed
+// first delivery» no longer depends on someone else scheduling a reflow.
 
 var _ro_observers = [];
 
+// True while a first-delivery task is queued (the pass is idempotent, so one
+// queued task covers any number of observe() calls made before it runs).
+var _ro_initial_scheduled = false;
+// Turns spent waiting for the first layout snapshot; see _ro_initial_pass.
+var _ro_initial_attempts = 0;
+var _RO_INITIAL_MAX_ATTEMPTS = 120;
+
 function ResizeObserver(callback) {
+    if (typeof callback !== 'function') {
+        throw new TypeError('Failed to construct ResizeObserver: parameter 1 is not of type Function.');
+    }
     this._cb = callback;
     this._observations = [];
     _ro_observers.push(this);
 }
-ResizeObserver.prototype.observe = function(target) {
-    if (!target || target.__nid__ === undefined) return;
-    for (var i = 0; i < this._observations.length; i++) {
-        if (this._observations[i].target === target) return;
+ResizeObserver.prototype.observe = function(target, options) {
+    // Resize Observer §3.1: observe() takes an Element; anything else is a
+    // TypeError (BUG-661 §2 — this used to return silently, so the WPT
+    // «throw exception when observing non-element» assertion saw no throw).
+    if (!target || typeof target !== 'object' || target.__nid__ === undefined || target.nodeType !== 1) {
+        throw new TypeError('Failed to execute observe on ResizeObserver: parameter 1 is not of type Element.');
     }
-    this._observations.push({ target: target, lastW: -1, lastH: -1 });
+    var box = (options && options.box) ? String(options.box) : 'content-box';
+    for (var i = 0; i < this._observations.length; i++) {
+        if (this._observations[i].target === target) {
+            // §3.1 step 2: re-observing removes the existing observation and
+            // adds a fresh one, so the target is reported again.
+            this._observations[i].box = box;
+            this._observations[i].lastW = -1;
+            this._observations[i].lastH = -1;
+            _ro_initial_attempts = 0;
+            _ro_schedule_initial();
+            return;
+        }
+    }
+    this._observations.push({ target: target, box: box, lastW: -1, lastH: -1 });
+    _ro_initial_attempts = 0;
+    _ro_schedule_initial();
 };
 ResizeObserver.prototype.unobserve = function(target) {
     this._observations = this._observations.filter(function(o) { return o.target !== target; });
@@ -10217,8 +10253,135 @@ ResizeObserver.prototype.disconnect = function() {
     this._observations = [];
 };
 
+// Queue the first-delivery pass as an event-loop task. Written straight into
+// _lumen_timers with nesting 0 rather than through setTimeout so the §8.6 4 ms
+// clamp cannot delay it, and _lumen_request_wakeup makes the parked shell loop
+// wake for it immediately.
+function _ro_schedule_initial() {
+    if (_ro_initial_scheduled) return;
+    _ro_initial_scheduled = true;
+    var deadline = _lumen_now_ms();
+    _lumen_timers.push({ id: _lumen_timer_seq++, fn: _ro_initial_pass, deadline: deadline, interval: null, nesting: 0 });
+    _lumen_request_wakeup(deadline);
+}
+
+function _ro_has_pending_initial() {
+    for (var i = 0; i < _ro_observers.length; i++) {
+        var obs = _ro_observers[i];
+        for (var j = 0; j < obs._observations.length; j++) {
+            if (obs._observations[j].lastW < 0) return true;
+        }
+    }
+    return false;
+}
+
+// True once the shell has published a layout snapshot for this document. An
+// observe() from a parse-time script runs before the first push, when every
+// element reads back «no box» — reporting 0×0 then would be a wrong first
+// entry rather than a missing one, so the pass waits instead.
+function _ro_layout_published() {
+    try {
+        var root = document.documentElement;
+        return !!(root && _lumen_get_bounding_rect(root.__nid__));
+    } catch (e) {
+        return false;
+    }
+}
+
+function _ro_initial_pass() {
+    _ro_initial_scheduled = false;
+    if (!_ro_has_pending_initial()) return;
+    if (!_ro_layout_published() && _ro_initial_attempts < _RO_INITIAL_MAX_ATTEMPTS) {
+        _ro_initial_attempts++;
+        _ro_schedule_initial();
+        return;
+    }
+    _lumen_deliver_resize_observers();
+}
+
+// BUG-661 §4: detaching an observed element destroys its box, which is an
+// observable size change even when the element is put back at the same size on
+// the very same turn (the classic remove() + appendChild() pair no delivery
+// pass ever sees in between). Called from the _lumen_remove_child wrapper
+// installed below, while the child is still attached, so an observed
+// descendant can be found by walking parents.
+function _ro_invalidate_detached(childNid) {
+    if (_ro_observers.length === 0) return;
+    var touched = false;
+    for (var i = 0; i < _ro_observers.length; i++) {
+        var obs = _ro_observers[i];
+        for (var j = 0; j < obs._observations.length; j++) {
+            var o = obs._observations[j];
+            if (o.lastW < 0) continue;
+            var cur = o.target.__nid__;
+            while (cur !== null && cur !== undefined) {
+                if (cur === childNid) {
+                    o.lastW = -1; o.lastH = -1;
+                    touched = true;
+                    break;
+                }
+                cur = _lumen_u2n(_lumen_get_parent(cur));
+            }
+        }
+    }
+    if (touched) {
+        _ro_initial_attempts = 0;
+        _ro_schedule_initial();
+    }
+}
+
+// Wrap the native once, by assignment rather than by a hoisted function
+// declaration (which would overwrite the native before the alias is taken and
+// recurse). Every removal in the shim — including the implicit one inside a
+// reparenting appendChild/insertBefore — goes through this single binding.
+var _lumen_remove_child_native = (typeof _lumen_remove_child === 'function') ? _lumen_remove_child : null;
+if (_lumen_remove_child_native) {
+    _lumen_remove_child = function(parentNid, childNid) {
+        _ro_invalidate_detached(childNid);
+        return _lumen_remove_child_native(parentNid, childNid);
+    };
+}
+
+// BUG-661 §3: one length of a computed-style string in CSS px. Border widths
+// are always published in px; a padding keeps its specified unit, so px/em/rem
+// are resolved here and anything else (%, calc(), viewport units) falls back to
+// 0 — the pre-BUG-661 behaviour of not subtracting it at all.
+function _ro_len(value, fontPx, rootFontPx) {
+    if (!value) return 0;
+    var n = parseFloat(value);
+    if (!isFinite(n)) return 0;
+    if (value.slice(-3) === 'rem') return n * rootFontPx;
+    if (value.slice(-2) === 'em') return n * fontPx;
+    if (value.slice(-2) === 'px' || String(n) === value) return n;
+    return 0;
+}
+
+// Content-box geometry of a border box: {w, h} of the content area plus the
+// {x, y} offset of its top-left corner inside the border box, which is what
+// Resize Observer §5.1 calls the entry's contentRect.
+function _ro_content_geometry(nid, borderW, borderH) {
+    var fontPx = parseFloat(_lumen_get_computed_style(nid, 'font-size')) || 16;
+    var rootFontPx = 16;
+    try {
+        var root = document.documentElement;
+        if (root) rootFontPx = parseFloat(_lumen_get_computed_style(root.__nid__, 'font-size')) || 16;
+    } catch (e) { rootFontPx = 16; }
+    var bl = _ro_len(_lumen_get_computed_style(nid, 'border-left-width'), fontPx, rootFontPx);
+    var br = _ro_len(_lumen_get_computed_style(nid, 'border-right-width'), fontPx, rootFontPx);
+    var bt = _ro_len(_lumen_get_computed_style(nid, 'border-top-width'), fontPx, rootFontPx);
+    var bb = _ro_len(_lumen_get_computed_style(nid, 'border-bottom-width'), fontPx, rootFontPx);
+    var pl = _ro_len(_lumen_get_computed_style(nid, 'padding-left'), fontPx, rootFontPx);
+    var pr = _ro_len(_lumen_get_computed_style(nid, 'padding-right'), fontPx, rootFontPx);
+    var pt = _ro_len(_lumen_get_computed_style(nid, 'padding-top'), fontPx, rootFontPx);
+    var pb = _ro_len(_lumen_get_computed_style(nid, 'padding-bottom'), fontPx, rootFontPx);
+    var w = borderW - bl - br - pl - pr;
+    var h = borderH - bt - bb - pt - pb;
+    return { w: w > 0 ? w : 0, h: h > 0 ? h : 0, x: pl, y: pt };
+}
+
 function _lumen_deliver_resize_observers() {
     if (_ro_observers.length === 0) return;
+    var dpr = (typeof devicePixelRatio === 'number' && devicePixelRatio > 0) ? devicePixelRatio : 1;
     for (var oi = 0; oi < _ro_observers.length; oi++) {
         var obs = _ro_observers[oi];
         var entries = [];
@@ -10226,17 +10389,25 @@ function _lumen_deliver_resize_observers() {
             var o = obs._observations[ei];
             var nid = o.target.__nid__;
             var rect = _lumen_get_bounding_rect(nid);
-            if (!rect) continue;
-            var w = rect[2], h = rect[3];
-            if (Math.abs(w - o.lastW) < 0.5 && Math.abs(h - o.lastH) < 0.5) continue;
+            // An element with no box (display:none, detached) has a zero-sized
+            // box per §5.1 «calculate box size» — reported once, then it stops
+            // differing from lastW/lastH.
+            var bw = rect ? rect[2] : 0, bh = rect ? rect[3] : 0;
+            // The content geometry costs nine computed-style reads, so a
+            // border-box observation only pays for it once it has an entry.
+            var cg = o.box === 'border-box' ? null : _ro_content_geometry(nid, bw, bh);
+            var w = cg ? cg.w : bw;
+            var h = cg ? cg.h : bh;
+            if (o.lastW >= 0 && Math.abs(w - o.lastW) < 0.5 && Math.abs(h - o.lastH) < 0.5) continue;
+            if (!cg) cg = _ro_content_geometry(nid, bw, bh);
             o.lastW = w; o.lastH = h;
             entries.push({
                 target: o.target,
-                contentRect: { x: rect[0], y: rect[1], width: w, height: h,
-                               top: rect[1], left: rect[0], bottom: rect[1]+h, right: rect[0]+w },
-                borderBoxSize:  [{ inlineSize: w, blockSize: h }],
-                contentBoxSize: [{ inlineSize: w, blockSize: h }],
-                devicePixelContentBoxSize: [{ inlineSize: w, blockSize: h }],
+                contentRect: { x: cg.x, y: cg.y, width: cg.w, height: cg.h,
+                               top: cg.y, left: cg.x, bottom: cg.y + cg.h, right: cg.x + cg.w },
+                borderBoxSize:  [{ inlineSize: bw,   blockSize: bh }],
+                contentBoxSize: [{ inlineSize: cg.w, blockSize: cg.h }],
+                devicePixelContentBoxSize: [{ inlineSize: Math.round(cg.w * dpr), blockSize: Math.round(cg.h * dpr) }],
             });
         }
         if (entries.length > 0) {
@@ -28557,6 +28728,230 @@ mod tests {
             "#).unwrap();
             let cnt = rt.eval("_ro_un_cnt").unwrap();
             assert_eq!(cnt, lumen_core::JsValue::Number(0.0));
+        }
+
+        /// BUG-661 §2: `observe()` on anything that is not an `Element` is a
+        /// `TypeError` (Resize Observer §3.1), not a silent no-op.
+        #[test]
+        fn resize_observer_observe_throws_on_non_element() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"(function() {
+                        var ro = new ResizeObserver(function(){});
+                        var thrown = [];
+                        var probes = [undefined, null, {}, 'x', document, document.createTextNode('t')];
+                        for (var i = 0; i < probes.length; i++) {
+                            try { ro.observe(probes[i]); thrown.push('no-throw'); }
+                            catch (e) { thrown.push(e instanceof TypeError ? 'TypeError' : String(e)); }
+                        }
+                        return thrown.join(',');
+                    })()"#,
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "TypeError,TypeError,TypeError,TypeError,TypeError,TypeError".into()
+                )
+            );
+        }
+
+        /// BUG-661 §1: a newly observed target is reported on the next event-loop
+        /// turn even though nothing schedules a relayout — the delivery pass puts
+        /// itself on the timer queue instead of waiting for the shell.
+        #[test]
+        fn resize_observer_initial_delivery_without_relayout() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let doc_arc = make_doc();
+            let (html_nid, body_nid) = {
+                let doc = doc_arc.lock().unwrap();
+                (
+                    super::find_element_by_tag(&doc, "html").unwrap().index() as u32,
+                    super::find_element_by_tag(&doc, "body").unwrap().index() as u32,
+                )
+            };
+            rt.update_layout_rects(
+                [
+                    (html_nid, [0.0, 0.0, 1024.0, 720.0]),
+                    (body_nid, [0.0, 0.0, 200.0, 100.0]),
+                ]
+                .into_iter()
+                .collect(),
+            );
+            rt.eval(
+                r#"
+                var _ro_init_w = -1;
+                var _ro_init = new ResizeObserver(function(entries) { _ro_init_w = entries[0].contentRect.width; });
+                _ro_init.observe(document.body);
+            "#,
+            )
+            .unwrap();
+            // No relayout, no explicit delivery call — only the event loop turns.
+            assert_eq!(
+                rt.eval("_ro_init_w").unwrap(),
+                lumen_core::JsValue::Number(-1.0),
+                "observe() must not deliver synchronously"
+            );
+            rt.eval("_lumen_tick_timers()").unwrap();
+            assert_eq!(rt.eval("_ro_init_w").unwrap(), lumen_core::JsValue::Number(200.0));
+        }
+
+        /// BUG-661 §1: the pass waits for the first layout snapshot instead of
+        /// reporting a bogus 0×0 entry for a document that has not been laid out.
+        #[test]
+        fn resize_observer_initial_delivery_waits_for_layout() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                r#"
+                var _ro_wait_cnt = 0;
+                var _ro_wait = new ResizeObserver(function() { _ro_wait_cnt++; });
+                _ro_wait.observe(document.body);
+            "#,
+            )
+            .unwrap();
+            rt.eval("_lumen_tick_timers()").unwrap();
+            assert_eq!(
+                rt.eval("_ro_wait_cnt").unwrap(),
+                lumen_core::JsValue::Number(0.0),
+                "no layout snapshot yet → nothing to report"
+            );
+        }
+
+        /// BUG-661 §3: `contentBoxSize` and `contentRect` are the content box —
+        /// border box minus border widths and padding — not a copy of the border box.
+        #[test]
+        fn resize_observer_content_box_excludes_padding_and_border() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let doc_arc = make_doc();
+            let nid = {
+                let doc = doc_arc.lock().unwrap();
+                super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+            };
+            rt.update_layout_rects([(nid, [5.0, 7.0, 200.0, 100.0])].into_iter().collect());
+            let style: std::collections::HashMap<String, String> = [
+                ("border-left-width", "2px"),
+                ("border-right-width", "3px"),
+                ("border-top-width", "4px"),
+                ("border-bottom-width", "5px"),
+                ("padding-left", "10px"),
+                ("padding-right", "20px"),
+                ("padding-top", "6px"),
+                ("padding-bottom", "8px"),
+                ("font-size", "16px"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+            rt.update_computed_styles([(nid, style)].into_iter().collect());
+            rt.eval(
+                r#"
+                var _ro_cb_entry = null;
+                var _ro_cb = new ResizeObserver(function(entries) { _ro_cb_entry = entries[0]; });
+                _ro_cb.observe(document.body);
+                _lumen_deliver_resize_observers();
+            "#,
+            )
+            .unwrap();
+            // 200 - 2 - 3 - 10 - 20 = 165; 100 - 4 - 5 - 6 - 8 = 77.
+            assert_eq!(
+                rt.eval("_ro_cb_entry.contentBoxSize[0].inlineSize").unwrap(),
+                lumen_core::JsValue::Number(165.0)
+            );
+            assert_eq!(
+                rt.eval("_ro_cb_entry.contentBoxSize[0].blockSize").unwrap(),
+                lumen_core::JsValue::Number(77.0)
+            );
+            // borderBoxSize keeps the full border box.
+            assert_eq!(
+                rt.eval("_ro_cb_entry.borderBoxSize[0].inlineSize").unwrap(),
+                lumen_core::JsValue::Number(200.0)
+            );
+            // contentRect's origin is the padding offset inside the border box,
+            // not the element's viewport position.
+            assert_eq!(
+                rt.eval("_ro_cb_entry.contentRect.x").unwrap(),
+                lumen_core::JsValue::Number(10.0)
+            );
+            assert_eq!(
+                rt.eval("_ro_cb_entry.contentRect.y").unwrap(),
+                lumen_core::JsValue::Number(6.0)
+            );
+        }
+
+        /// BUG-661 §3: `box: 'border-box'` observes the border box, so padding
+        /// changes alone do not move the reported size.
+        #[test]
+        fn resize_observer_border_box_option() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let doc_arc = make_doc();
+            let nid = {
+                let doc = doc_arc.lock().unwrap();
+                super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+            };
+            rt.update_layout_rects([(nid, [0.0, 0.0, 200.0, 100.0])].into_iter().collect());
+            let style: std::collections::HashMap<String, String> =
+                [("padding-left", "10px"), ("padding-right", "20px")]
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect();
+            rt.update_computed_styles([(nid, style)].into_iter().collect());
+            rt.eval(
+                r#"
+                var _ro_bbo = null;
+                var _ro_bbo_obs = new ResizeObserver(function(entries) { _ro_bbo = entries[0]; });
+                _ro_bbo_obs.observe(document.body, { box: 'border-box' });
+                _lumen_deliver_resize_observers();
+            "#,
+            )
+            .unwrap();
+            assert_eq!(
+                rt.eval("_ro_bbo.borderBoxSize[0].inlineSize").unwrap(),
+                lumen_core::JsValue::Number(200.0)
+            );
+            // The entry still carries the true content box alongside it.
+            assert_eq!(
+                rt.eval("_ro_bbo.contentBoxSize[0].inlineSize").unwrap(),
+                lumen_core::JsValue::Number(170.0)
+            );
+        }
+
+        /// BUG-661 §4: detaching an observed element invalidates its last reported
+        /// size, so putting it back at the same size still notifies.
+        #[test]
+        fn resize_observer_reparent_redelivers_at_same_size() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let doc_arc = make_doc();
+            let nid = {
+                let doc = doc_arc.lock().unwrap();
+                super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+            };
+            rt.update_layout_rects([(nid, [0.0, 0.0, 200.0, 100.0])].into_iter().collect());
+            rt.eval(
+                r#"
+                var _ro_rp_cnt = 0;
+                var _ro_rp_target = document.body;
+                var _ro_rp = new ResizeObserver(function() { _ro_rp_cnt++; });
+                _ro_rp.observe(_ro_rp_target);
+                _lumen_deliver_resize_observers();
+            "#,
+            )
+            .unwrap();
+            assert_eq!(rt.eval("_ro_rp_cnt").unwrap(), lumen_core::JsValue::Number(1.0));
+            // Same size, no detach → no second delivery.
+            rt.eval("_lumen_deliver_resize_observers()").unwrap();
+            assert_eq!(rt.eval("_ro_rp_cnt").unwrap(), lumen_core::JsValue::Number(1.0));
+            // remove() + appendChild() at the same size → one more delivery.
+            rt.eval(
+                r#"
+                var _ro_rp_parent = _ro_rp_target.parentNode;
+                _ro_rp_parent.removeChild(_ro_rp_target);
+                _ro_rp_parent.appendChild(_ro_rp_target);
+                _lumen_deliver_resize_observers();
+            "#,
+            )
+            .unwrap();
+            assert_eq!(rt.eval("_ro_rp_cnt").unwrap(), lumen_core::JsValue::Number(2.0));
         }
 
         // ── IntersectionObserver tests ────────────────────────────────────────────
