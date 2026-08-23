@@ -24,7 +24,7 @@ glob ids, 7 actually run by wptrunner (rest are `support`/reftest/manual —
 several reftests `run_report.py`'s testharness-only glob doesn't select) —
 **3/7 harness OK, 4/190 subtests passed**.
 
-### Dominant finding: [BUG-781](../../bugs/BUG-781-OPEN.md)
+### Dominant finding: [BUG-781](../../bugs/BUG-781-FIXED.md)
 
 `DOMParser.prototype.parseFromString` (`crates/js/src/dom_parser.rs:850-861`)
 validates its `mimeType` argument against the 5 spec'd values but then always
@@ -92,7 +92,7 @@ BUG-438/BUG-657-class TLS-trust gap, not a new finding.
 variant, 0 testdriver, 1 `.https.`).
 
 `run_report.py --all --root xml --recursive` — 56.79 с, **3/7 harness OK,
-4/190 сабтестов**. Найден [BUG-781](../bugs/BUG-781-OPEN.md):
+4/190 сабтестов**. Найден [BUG-781](../bugs/BUG-781-FIXED.md):
 `DOMParser.parseFromString` игнорирует XML MIME-типы — всегда гоняет
 HTML-токенизатор и заворачивает реальный корень в синтетический `<html>`,
 поэтому `documentElement.tagName`/`.nodeName` для любого XML-документа
