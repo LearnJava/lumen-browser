@@ -1,9 +1,15 @@
+> **Дубль.** Тот же механизм двумя днями раньше описан в
+> [BUG-808](BUG-808-FIXED.md) (заведён 2026-08-21, WPT-RUN-6 срез 15):
+> прототип `Animation` не подключён к `EventTarget`. По конвенции выживает
+> первый по дате — этот файл оставлен только как след замера среза 25,
+> измерения и разбор починки перенесены в BUG-808. Починено 2026-08-24 (P1).
+
 # BUG-860 — `Animation` не EventTarget: `addEventListener`/`removeEventListener` у анимации отсутствуют, есть только `on*`-свойства
 
-**Статус:** OPEN
+**Статус:** DUPLICATE → [BUG-808](BUG-808-FIXED.md) (закрыт 2026-08-24)
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 25 — живой замер, маркер `wa-finish`)
 **Область:** `crates/js/src/dom.rs` — объект, возвращаемый `element.animate()` (Web Animations shim): есть `onfinish`/`oncancel`/`onremove`, `cancel`, `finish`, `reverse`, `timeline`, `ready`, `finished`, но нет `addEventListener`/`removeEventListener`/`dispatchEvent`
-**Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.
+**Владелец:** —. Заведён P2 в ходе WPT-задачи; чинился как BUG-808.
 **Родственный:** [BUG-704](BUG-704-OPEN.md) (`persist`/`commitStyles` отсутствуют) — тот же объект, соседняя дыра.
 
 ## Симптом

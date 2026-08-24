@@ -89,5 +89,5 @@ wp-commit-throws  TypeError: b.commitStyles is not a function
 «remove replaced animations» (Web Animations §5.4) целиком. Даёт 3 id
 остатка снимка WPT-RUN-5: `Animation/persist.html`, `Animation/onremove.html`,
 `keyframe-effects/effect-value-replaced-animations.html`. Соседние дыры того
-же объекта — [BUG-860](BUG-860-OPEN.md) (не `EventTarget`) и
+же объекта — [BUG-860](BUG-860-DUPLICATE.md) (не `EventTarget`) и
 [BUG-861](BUG-861-OPEN.md) (перемотка завершённой анимации).
