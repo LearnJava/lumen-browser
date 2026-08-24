@@ -44,9 +44,32 @@
 //!   неудавшийся fetch) биндинга не имеют — оба геттера дают `null`;
 //! - геометрия (`offsetWidth`, `getBoundingClientRect`) — честные нули:
 //!   layout содержимого фрейма — отдельный срез.
+//!
+//! BUG-480 срез 4 — `postMessage` через границу изолятов (HTML LS §9.2.9):
+//! - у каждого фасада окна есть `postMessage(message, targetOrigin)`; сообщение
+//!   уходит в глобальный исходящий ящик ([`FRAME_OUTBOX`], ключ адресата —
+//!   указатель его `Arc<Mutex<Document>>`, один и тот же инстанс у shell,
+//!   реестра родителя и JS-контекста ребёнка — см. срез 1);
+//! - получатель разбирает свой ящик в `_lumen_frame_pump_messages()`, которую
+//!   shell вызывает на каждом тике рядом с pump_websockets и т.д. (и для
+//!   страницы, и для хэндлов фреймов); доставка асинхронная, как task;
+//! - `targetOrigin`: `'*'` — всегда; `'/'` (и опущенный аргумент) — только
+//!   same-origin по уже вычисленному shell'ом флагу `accessible`; явная строка
+//!   — точное совпадение с нормализованным origin URL биндинга;
+//! - `event.source` — фасад окна отправителя в реестре получателя,
+//!   `event.origin` — origin отправителя (для `about:srcdoc`/`about:blank`
+//!   детей — origin родителя-получателя, как по спеке про наследование);
+//! - сериализация данных — JSON-круготрип: примитивы, массивы и plain object'ы
+//!   ходят честно; функции/символы бросают `DataCloneError` на отправке,
+//!   вложенные функции/узлы DOM деградируют до `null`/`{}` (подмножество
+//!   structured clone — отклонение задокументировано в баг-файле);
+//! - срез 4 покрывает рёбра «предок ↔ непосредственный потомок»: постинг
+//!   внком на `window.top` доставляется, но `event.source` у верха для внука
+//!   — `null` (внук не лежит в прямых слотах top), sibling↔sibling — будущий
+//!   срез.
 
 #[cfg(feature = "v8-backend")]
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Псевдо-bid слота «окно родителя» в реестре ([`FrameDocSlots::parent`]).
 ///
@@ -100,12 +123,76 @@ pub(crate) struct FrameDocSlots {
     pub(crate) frames: Vec<FrameDocBinding>,
     pub(crate) parent: Option<FrameDocBinding>,
     pub(crate) top: Option<FrameDocBinding>,
+    /// Срез 4: указатель `Arc` собственного документа этого контекста —
+    /// ключ получателя в [`FRAME_OUTBOX`]. Заполняется `install_dom`
+    /// (`Arc::as_ptr(&doc)`); у минимальных тестовых изолятов без
+    /// `install_dom` остаётся `None`, и `_lumen_frame_take_messages`
+    /// ничего не отдаёт.
+    pub(crate) self_key: Option<usize>,
+    /// Срез 4: нормализованный origin собственной страницы — им заменяется
+    /// origin `about:`-биндинга при вычислении `event.origin` (наследование
+    /// origin у srcdoc/about:blank детей).
+    pub(crate) self_origin: String,
 }
 
 /// Общий `Arc` между `V8JsRuntime`, нативами этого модуля и вызовами
 /// `register_*_document`.
 #[cfg(feature = "v8-backend")]
 pub(crate) type FrameDocRegistry = Arc<Mutex<FrameDocSlots>>;
+
+// ── Срез 4: исходящий ящик кросс-фреймовых postMessage ───────────────────────
+
+/// Отправитель сообщения в [`PendingFrameMessage`] — как получатель строит
+/// `event.source` из СВОЕГО реестра.
+#[cfg(feature = "v8-backend")]
+#[derive(Clone, Copy)]
+pub(crate) enum SourceKind {
+    /// Отправитель — родитель получателя: source = фасад слота parent.
+    Parent,
+    /// Отправитель — потомок; ключ — указатель `Arc` документа отправителя,
+    /// по которому получатель ищет свой слот `frames[j]`.
+    ChildDoc(usize),
+}
+
+/// Одно сообщение в [`FRAME_OUTBOX`] до разбора получателем.
+#[cfg(feature = "v8-backend")]
+pub(crate) struct PendingFrameMessage {
+    /// Клон `Arc<Mutex<Document>>` адресата. Держит документ живым и указатель
+    /// стабильным до доставки — сообщение не попадёт чужому контексту, занявшему
+    /// освобождённый адрес.
+    pub(crate) target_doc: Arc<Mutex<lumen_dom::Document>>,
+    /// Кто отправил ([`SourceKind`]).
+    pub(crate) source: SourceKind,
+    /// Данные сообщения, уже сериализованные отправителем (`JSON.stringify`).
+    pub(crate) data_json: String,
+}
+
+/// Глобальный ящик «кто-то вызвал `facade.postMessage(...)`».
+///
+/// Пишут нативы любого изолята, читает только `_lumen_frame_take_messages`
+/// на JS-потоке получателя. Ёмкость ограничена: переполнение молча теряет
+/// сообщение (отправка postMessage не имеет отчётности о доставке и по спеке),
+/// чтобы зомби-страница не растила память бесконечно.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn frame_outbox() -> &'static Mutex<Vec<PendingFrameMessage>> {
+    static OUTBOX: OnceLock<Mutex<Vec<PendingFrameMessage>>> = OnceLock::new();
+    OUTBOX.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Верхняя граница неотправленных сообщений во всём процессе.
+#[cfg(feature = "v8-backend")]
+const FRAME_OUTBOX_CAP: usize = 256;
+
+/// Нормализованный origin URL биндинга для `event.origin`/валидации
+/// `targetOrigin`. `about:*` наследует origin контекста-родителя — здесь это
+/// выражено тем, что вызывающая сторона подставляет `self_origin` получателя.
+#[cfg(feature = "v8-backend")]
+fn binding_origin(url: &str, fallback: &str) -> String {
+    if url.starts_with("about:") {
+        return fallback.to_owned();
+    }
+    crate::file_input::origin_for_url(url)
+}
 
 /// Разрешить `bid` (индекс или псевдо-bid предка) в слот реестра.
 #[cfg(feature = "v8-backend")]
@@ -316,6 +403,130 @@ pub(crate) fn install_frame_bridge_v8(
                     Some(b) if b.accessible => b.url.clone(),
                     _ => String::new(),
                 }
+            }),
+        )?;
+    }
+
+    // ── Срез 4: кросс-фреймовый postMessage ──────────────────────────────────
+    // Валидация targetOrigin + постановка в глобальный ящик. Выполняется на
+    // JS-потоке ОТПРАВИТЕЛЯ; получатель разбирает ящик у себя на тике
+    // (_lumen_frame_pump_messages), поэтому никаких перекрёстных вызовов
+    // между изолятами нет.
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_post_message",
+            into_v8_fn3(move |bid: u32, data_json: String, target_origin: String| -> bool {
+                let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(binding) = resolve_slot(&reg, bid) else {
+                    return false;
+                };
+                // HTML LS §9.2.9 шаг 3: '*' доставляет всегда, '/' — только
+                // same-origin (у нас это уже вычисленный shell'ом accessible),
+                // явная строка — совпадение с origin адресата.
+                let matches = match target_origin.as_str() {
+                    "*" => true,
+                    "/" | "" => binding.accessible,
+                    o => o.eq_ignore_ascii_case(&binding_origin(
+                        &binding.url,
+                        &reg.self_origin,
+                    )),
+                };
+                if !matches {
+                    return false;
+                }
+                // Кто отправитель для получателя: постинг в фасад потомка —
+                // сам отправитель его родитель; постинг в фасад предка
+                // (PARENT_BID/TOP_BID) — отправитель потомок со своим ключом.
+                // bid фасада отправителя разрешит получатель у себя (take):
+                // в момент постановки реестр получателя недоступен.
+                let source = match bid {
+                    PARENT_BID | TOP_BID => SourceKind::ChildDoc(reg.self_key.unwrap_or(0)),
+                    _ => SourceKind::Parent,
+                };
+                let target_doc = Arc::clone(&binding.doc);
+                let outbox = frame_outbox();
+                let mut outbox = outbox.lock().unwrap_or_else(|e| e.into_inner());
+                if outbox.len() >= FRAME_OUTBOX_CAP {
+                    return false;
+                }
+                outbox.push(PendingFrameMessage {
+                    target_doc,
+                    source,
+                    data_json,
+                });
+                true
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_frame_take_messages",
+            into_v8_fn0(move || -> String {
+                let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
+                let key = match reg.self_key {
+                    Some(k) => k,
+                    None => return String::new(),
+                };
+                let outbox = frame_outbox();
+                let mut outbox = outbox.lock().unwrap_or_else(|e| e.into_inner());
+                let mut taken = Vec::new();
+                let mut rest = Vec::new();
+                for msg in outbox.drain(..) {
+                    if Arc::as_ptr(&msg.target_doc) as usize == key {
+                        taken.push(msg);
+                    } else {
+                        rest.push(msg);
+                    }
+                }
+                *outbox = rest;
+                if taken.is_empty() {
+                    return String::new();
+                }
+                // event.origin и bid фасада отправителя считаются ЗДЕСЬ:
+                // только реестр получателя знает свои слоты (source) и чем
+                // наследуется origin about:-детей (srcdoc/about:blank →
+                // origin получателя-родителя).
+                let items: Vec<serde_json::Value> = taken
+                    .into_iter()
+                    .map(|m| {
+                        let (source_bid, origin) = match m.source {
+                            SourceKind::Parent => (
+                                reg.parent.as_ref().map(|_| PARENT_BID),
+                                reg.parent
+                                    .as_ref()
+                                    .map(|b| binding_origin(&b.url, &reg.self_origin))
+                                    .unwrap_or_default(),
+                            ),
+                            SourceKind::ChildDoc(doc_key) => {
+                                match reg
+                                    .frames
+                                    .iter()
+                                    .position(|b| Arc::as_ptr(&b.doc) as usize == doc_key)
+                                {
+                                    Some(j) => {
+                                        let b = &reg.frames[j];
+                                        (
+                                            Some(j as u32),
+                                            binding_origin(&b.url, &reg.self_origin),
+                                        )
+                                    }
+                                    // Отправителя нет в прямых слотах получателя
+                                    // (внук → top): source = null, origin пустой.
+                                    None => (None, String::new()),
+                                }
+                            }
+                        };
+                        serde_json::json!({
+                            "bid": source_bid,
+                            "origin": origin,
+                            "data": serde_json::from_str::<serde_json::Value>(&m.data_json)
+                                .unwrap_or(serde_json::Value::Null),
+                        })
+                    })
+                    .collect();
+                serde_json::to_string(&items).unwrap_or_else(|_| String::new())
             }),
         )?;
     }
@@ -736,6 +947,25 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       configurable: true,
     });
     w.close = function() {};
+    // Срез 4: postMessage на WindowProxy. Данные уходят JSON-круготрипом;
+    // функции/символы клонировать нельзя — DataCloneError (TypeError там,
+    // где DOMException ещё не установлен). Опущенный targetOrigin = '/'
+    // (спечный дефолт), т.е. доставка только same-origin.
+    w.postMessage = function(message, targetOrigin) {
+      if (typeof message === 'function' || typeof message === 'symbol') {
+        throw (typeof DOMException === 'function')
+          ? new DOMException('object could not be cloned', 'DataCloneError')
+          : new TypeError('object could not be cloned');
+      }
+      var json = (message === undefined) ? 'null' : JSON.stringify(message);
+      if (typeof json !== 'string') {
+        throw (typeof DOMException === 'function')
+          ? new DOMException('object could not be cloned', 'DataCloneError')
+          : new TypeError('object could not be cloned');
+      }
+      var to = (targetOrigin === undefined || targetOrigin === null) ? '/' : String(targetOrigin);
+      _lumen_f_post_message(bid, json, to);
+    };
     wins[bid] = w;
     return w;
   }
@@ -855,6 +1085,29 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
         Object.defineProperty(window, nm, { get: mk(host), configurable: true });
       }
     } catch (e) {}
+  };
+
+  // ── Срез 4: разбор ящика кросс-фреймовых postMessage ──────────────────────
+  // Shell вызывает на каждом тике (pump_frame_messages) и у страницы, и у
+  // каждого фрейма. Натив отдаёт JSON-массив сообщений, адресованных ЭТОМУ
+  // контексту; каждое разворачивается в MessageEvent и доставляется через
+  // хук из WEB_API_SHIM (window.onmessage + addEventListener('message')).
+  globalThis._lumen_frame_pump_messages = function() {
+    if (typeof window === 'undefined') return;
+    if (typeof _lumen_deliver_frame_message !== 'function') return;
+    var raw = _lumen_frame_take_messages();
+    if (!raw) return;
+    var msgs;
+    try { msgs = JSON.parse(raw); } catch (e) { return; }
+    if (!msgs || !msgs.length) return;
+    for (var i = 0; i < msgs.length; i++) {
+      var m = msgs[i];
+      var source = null;
+      if (m.bid !== null && m.bid !== undefined) {
+        source = winFacade(m.bid);
+      }
+      _lumen_deliver_frame_message(m.data, m.origin, source);
+    }
   };
 })();
 "#;
@@ -1224,5 +1477,201 @@ mod tests {
              && window[0] === window[0]"
         ));
         assert!(eval_bool(&rt, "window[5] === undefined"));
+    }
+
+    // ── Срез 4: кросс-фреймовый postMessage ───────────────────────────────────
+
+    /// Пара изолятов «родитель ↔ ребёнок» с общим документом — та же топология,
+    /// что строит shell (срезы 1–3): Arc документа ребёнка один и тот же в
+    /// реестре родителя и в self_key ребёнка, и наоборот для родителя.
+    ///
+    /// Вместо WEB_API_SHIM (в минимальном изоляте его нет) каждый контекст
+    /// получает мини-хук приёма, складывающий доставки в `__msgs`.
+    fn with_parent_child_pair(
+        parent_accessible_to_child: bool,
+        child_accessible_to_parent: bool,
+    ) -> (V8JsRuntime, V8JsRuntime) {
+        let parent_doc = Arc::new(Mutex::new(lumen_html_parser::parse(
+            "<html><body><div id='p'>parent</div></body></html>",
+        )));
+        let child_doc = Arc::new(Mutex::new(lumen_html_parser::parse(
+            "<html><body><b>child</b></body></html>",
+        )));
+
+        let rt_parent = V8JsRuntime::new().unwrap();
+        let reg_p: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        rt_parent.eval("var window = globalThis;").unwrap();
+        install_frame_bridge_v8(&rt_parent, Arc::clone(&reg_p)).unwrap();
+        {
+            let mut p = reg_p.lock().unwrap();
+            p.self_key = Some(Arc::as_ptr(&parent_doc) as usize);
+            p.self_origin = "https://parent.example".to_owned();
+            p.frames.push(FrameDocBinding {
+                host_nid: 7,
+                doc: Arc::clone(&child_doc),
+                url: "about:srcdoc".to_owned(),
+                name: None,
+                accessible: child_accessible_to_parent,
+            });
+        }
+        rt_parent
+            .eval("typeof _lumen_frame_install_hierarchy === 'function' && _lumen_frame_install_hierarchy()")
+            .unwrap();
+
+        let rt_child = V8JsRuntime::new().unwrap();
+        let reg_c: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        rt_child.eval("var window = globalThis;").unwrap();
+        install_frame_bridge_v8(&rt_child, Arc::clone(&reg_c)).unwrap();
+        {
+            let mut c = reg_c.lock().unwrap();
+            c.self_key = Some(Arc::as_ptr(&child_doc) as usize);
+            c.self_origin = "about:srcdoc".to_owned();
+            c.parent = Some(FrameDocBinding {
+                host_nid: 7,
+                doc: Arc::clone(&parent_doc),
+                url: "https://parent.example/".to_owned(),
+                name: Some("hostframe".to_owned()),
+                accessible: parent_accessible_to_child,
+            });
+        }
+        rt_child
+            .eval("typeof _lumen_frame_install_hierarchy === 'function' && _lumen_frame_install_hierarchy()")
+            .unwrap();
+
+        for rt in [&rt_parent, &rt_child] {
+            rt.eval(
+                "globalThis.__msgs = []; \
+                 globalThis._lumen_deliver_frame_message = function(d, o, s) { \
+                     __msgs.push({ d: d, o: o, s: s }); \
+                 };",
+            )
+            .unwrap();
+        }
+        (rt_parent, rt_child)
+    }
+
+    fn msg_count(rt: &V8JsRuntime) -> usize {
+        match rt.eval("__msgs.length") {
+            Ok(JsValue::Number(n)) => n as usize,
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn post_message_from_child_reaches_parent_with_inherited_origin() {
+        let (rt_parent, rt_child) = with_parent_child_pair(true, true);
+        // Ребёнок постит через настоящий фасад window.parent.
+        rt_child
+            .eval("window.parent.postMessage({a: 1, b: ['x', 2]}, '*')")
+            .unwrap();
+        assert_eq!(msg_count(&rt_parent), 0, "до пумпы ничего не доставлено");
+        rt_parent.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(msg_count(&rt_parent), 1);
+        // origin srcdoc-ребёнка наследуется от родителя-получателя;
+        // source — интернированный фасад окна ребёнка.
+        assert!(eval_bool(
+            &rt_parent,
+            "__msgs[0].d.a === 1 && __msgs[0].d.b.length === 2 && __msgs[0].d.b[1] === 2 \
+             && __msgs[0].o === 'https://parent.example' \
+             && __msgs[0].s !== null && __msgs[0].s === _lumen_frame_content_window(7)"
+        ));
+        // Повторная пумпа ничего не добавляет — ящик разобран.
+        rt_parent.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(msg_count(&rt_parent), 1);
+    }
+
+    #[test]
+    fn post_message_from_parent_reaches_child() {
+        let (rt_parent, rt_child) = with_parent_child_pair(true, true);
+        rt_parent
+            .eval("_lumen_frame_content_window(7).postMessage('hello', '*')")
+            .unwrap();
+        rt_child.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(msg_count(&rt_child), 1);
+        assert!(eval_bool(
+            &rt_child,
+            "__msgs[0].d === 'hello' \
+             && __msgs[0].o === 'https://parent.example' \
+             && __msgs[0].s === window.parent"
+        ));
+    }
+
+    #[test]
+    fn top_level_undefined_becomes_null_like_json() {
+        // Отклонение от structured clone, задокументированное в баг-файле:
+        // JSON не переносит верхнеуровневый undefined — уходит null.
+        let (rt_parent, rt_child) = with_parent_child_pair(true, true);
+        rt_parent
+            .eval("_lumen_frame_content_window(7).postMessage(undefined, '*')")
+            .unwrap();
+        rt_child.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(eval_bool(&rt_child, "__msgs[0].d === null"));
+    }
+
+    #[test]
+    fn explicit_origin_mismatch_is_silently_dropped() {
+        let (rt_parent, rt_child) = with_parent_child_pair(true, true);
+        rt_child
+            .eval("window.parent.postMessage('x', 'https://other.example')")
+            .unwrap();
+        rt_parent.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(msg_count(&rt_parent), 0);
+    }
+
+    #[test]
+    fn slash_target_origin_follows_accessibility_flag() {
+        // same-origin пара: '/' доставляет…
+        let (rt_parent, rt_child) = with_parent_child_pair(true, true);
+        rt_child
+            .eval("window.parent.postMessage('same', '/')")
+            .unwrap();
+        rt_parent.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(msg_count(&rt_parent), 1);
+        drop((rt_parent, rt_child));
+
+        // …cross-origin пара (accessible=false у слота родителя): '/' режется.
+        let (rt_parent2, rt_child2) = with_parent_child_pair(false, true);
+        rt_child2
+            .eval("window.parent.postMessage('cross', '/')")
+            .unwrap();
+        rt_parent2.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(msg_count(&rt_parent2), 0);
+    }
+
+    #[test]
+    fn unbound_bid_posts_nothing() {
+        let (_rt_parent, rt_child) = with_parent_child_pair(true, true);
+        assert!(eval_bool(
+            &rt_child,
+            "_lumen_f_post_message(99, '1', '*') === false"
+        ));
+    }
+
+    #[test]
+    fn functions_throw_data_clone_error() {
+        let (_rt_parent, rt_child) = with_parent_child_pair(true, true);
+        rt_child
+            .eval("globalThis.DOMException = function(m, n) { this.message = m; this.name = n; };")
+            .unwrap();
+        assert!(eval_bool(
+            &rt_child,
+            "(function() { \
+                 try { window.parent.postMessage(function(){}, '*'); return false; } \
+                 catch (e) { return e.name === 'DataCloneError'; } \
+             })()"
+        ));
+    }
+
+    #[test]
+    fn foreign_messages_survive_until_their_receiver_pumps() {
+        // Сообщение адресовано родителю: разбор ящика ребёнком его не трогает.
+        let (rt_parent, rt_child) = with_parent_child_pair(true, true);
+        rt_child
+            .eval("window.parent.postMessage('keep', '*')")
+            .unwrap();
+        rt_child.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(msg_count(&rt_child), 0);
+        rt_parent.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(eval_bool(&rt_parent, "__msgs[0].d === 'keep'"));
     }
 }

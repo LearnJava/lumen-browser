@@ -1813,6 +1813,19 @@ impl V8JsRuntime {
         // below, and never taken from a JS argument.
         let page_origin = crate::file_input::origin_for_url(page_url);
         let page_url = page_url.to_owned();
+        // BUG-480 срез 4: ключ этого контекста в исходящем ящике кросс-
+        // фреймовых postMessage — указатель Arc собственного документа. Тот
+        // же инстанс Arc уходит и в реестр родителя (register_iframe_document),
+        // поэтому адресата можно найти с обеих сторон. Ставится до run() —
+        // doc уезжает в замыкание по значению.
+        {
+            let mut reg = self
+                .frame_docs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            reg.self_key = Some(Arc::as_ptr(&doc) as usize);
+            reg.self_origin = page_origin.clone();
+        }
         // BUG-295: session-level `navigator.userAgent` override, if any.
         let ua_override = global_user_agent_override();
         // BUG-295: session-level `Intl`/`Date` timezone override, if any.
@@ -7397,6 +7410,43 @@ mod tests {
         rt.install_dom(doc, page_url, None, None, None, None, None, None, None, None, false)
             .unwrap();
         rt
+    }
+
+    /// BUG-480 срез 4: `install_dom` проставляет реестру ключ собственного
+    /// документа и origin страницы; postMessage в биндинг фрейма доходит через
+    /// `_lumen_frame_pump_messages`, а хук из WEB_API_SHIM строит полноценный
+    /// MessageEvent для window.onmessage.
+    #[test]
+    fn frame_post_message_self_delivery_through_install_dom() {
+        let doc = make_doc();
+        let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
+        // Биндинг «фрейма» с документом, совпадающим с собственным, — механика
+        // постановки в ящик та же, что у пары родитель↔ребёнок, но внутри
+        // одного изолята. Слот родителя с about:-URL даёт источнику события
+        // унаследованный origin (self_origin страницы).
+        rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+        rt.register_parent_document(1, doc, "about:srcdoc".to_owned(), true);
+        rt.eval("window.__got = null; window.onmessage = function(e) { window.__got = e; };")
+            .unwrap();
+        rt.eval("_lumen_frame_content_window(1).postMessage({n: 5}, '*')").unwrap();
+        // До пумпы доставки нет — postMessage асинхронен.
+        assert_eq!(
+            rt.eval("window.__got === null").unwrap(),
+            JsValue::Bool(true)
+        );
+        rt.eval("_lumen_frame_pump_messages()").unwrap();
+        // Хук WEB_API_SHIM доставил MessageEvent; origin about:-отправителя
+        // унаследован от self_origin страницы (install_dom), source — фасад
+        // слота родителя.
+        assert!(matches!(
+            rt.eval(
+                "window.__got !== null && window.__got.data.n === 5 \
+                 && window.__got.origin === 'https://parent.example' \
+                 && window.__got.source !== null"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        ));
     }
 
     /// Serializes the two `user_agent_override_*` tests below against each

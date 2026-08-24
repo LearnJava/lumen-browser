@@ -3058,6 +3058,13 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// when a shared worker replies (WHATWG HTML §10.2).
     #[allow(dead_code)]
     fn pump_shared_workers(&self);
+    /// BUG-480 срез 4: разобрать ящик кросс-фреймовых postMessage
+    /// (`crates/js/src/frame_bridge.rs`) и доставить адресованные этому
+    /// контексту сообщения как MessageEvent в window.onmessage /
+    /// addEventListener('message'). Вызывается на каждом тике рядом с
+    /// pump_broadcast_channels — и у страницы, и у хэндлов фреймов.
+    #[allow(dead_code)]
+    fn pump_frame_messages(&self) {}
     /// Drain OS notification requests queued by `new Notification(...)` in JS.
     ///
     /// Shell calls this in `about_to_wait` and forwards each entry to
@@ -3516,6 +3523,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn pump_broadcast_channels(&self) {
         self.rt.pump_broadcast_channels();
+    }
+    fn pump_frame_messages(&self) {
+        self.eval_js("if(typeof _lumen_frame_pump_messages==='function')_lumen_frame_pump_messages();");
     }
     fn take_notification_requests(&self) -> Vec<(String, String)> {
         self.rt
@@ -13862,6 +13872,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             fjs.pump_workers();
             fjs.pump_broadcast_channels();
             fjs.pump_shared_workers();
+            // BUG-480 срез 4: доставка кросс-фреймовых postMessage во фрейм.
+            fjs.pump_frame_messages();
             // Навигация из фрейма отклоняется (срез 1) — дреним, чтобы запрос
             // не копился и не сработал позже из другого места.
             let _ = fjs.take_navigate_request();
@@ -13893,6 +13905,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 j.pump_workers();
                 j.pump_broadcast_channels();
                 j.pump_shared_workers();
+                // BUG-480 срез 4: доставка кросс-фреймовых postMessage в страницу.
+                j.pump_frame_messages();
             });
             // ADR-016 M2.2c-2c (остаток): value-returning nav/timer чтения через
             // `route_query_js` (тот же паттерн, что `take_dom_dirty`/`take_raf_pending`
