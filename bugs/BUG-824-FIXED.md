@@ -1,9 +1,9 @@
 # BUG-824 — Streams: `tee()` закрывает исходный поток и теряет чанки, BYOB-ридер подменяется обычным, async-итерации нет, `TextDecoderStream` не закрывает свою читаемую сторону
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-25
 **Заведён:** 2026-08-21 (WPT-RUN-6, срез 19 — общий с [BUG-823](BUG-823-FIXED.md) маркер `streams-promise-unsettled`, 40 id)
 **Область:** `crates/js/src/dom.rs:7391-7405` (`ReadableStream.tee`), `:7374` (`getReader` — аргумент не читается), `:7353` (конструктор игнорирует `type: 'bytes'`), `:7603` (`TransformStream`), плюс `TextDecoderStream` в том же шиме
-**Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.
+**Владелец:** P1 (`lumen-js`). Заведён P2 в ходе WPT-задачи, починен P1 2026-08-25.
 
 ## Симптом
 
@@ -110,3 +110,58 @@ Streams ↔ Fetch: тело-поток до `Response` не доезжает. О
    --variant stream-textdecoder` — все четыре печатают ожидаемые маркеры.
 2. WPT: `run_report.py --all --root encoding/streams --recursive` и
    `--root streams/readable-byte-streams --recursive` перестают висеть.
+
+## Починка (2026-08-25, P1, ветка `p1-bug824-streams`)
+
+Правка целиком в JS-шиме (`crates/js/src/dom.rs`, `WEB_API_SHIM`).
+
+**Перезамер до правки** (юнит-проба в `v8_whatwg_streams`, после влитого
+BUG-823): `tee-locked=false | byob-ctor=ok | has-byob-reader=undefined |
+asynciter=undefined | tee0=early | tee1=early | tds0=hi done=false |
+resp-bytes=0 | tds1 done=true`. То есть **закрытие `TextDecoderStream`
+починилось само** — побочный эффект переписанной записываемой стороны в
+BUG-823 (сток `close` теперь доходит до `_ts_flush`, а тот закрывает
+читаемую сторону). Остальные четыре поверхности были на месте, включая
+нулевое тело `Response` из перезамера среза 22.
+
+1. **`tee()` — §3.2.6 целиком.** Источник берётся под общий ридер и остаётся
+   `readable` и `locked === true`; обе ветки тянут через один
+   `pullAlgorithm` с флагами `reading`/`readAgain`, так что конкурирующего
+   чтения не возникает. Отмена ветки не трогает источник: источник
+   отменяется только когда отменены **обе**, и с агрегированной причиной
+   `[reason1, reason2]` — то самое «canceling both branches should aggregate
+   the cancel reasons», на котором файл `readable-streams/tee.any.js` вставал
+   первым.
+2. **`Symbol.asyncIterator` + `ReadableStream.prototype.values`.** Обёртка
+   над `getReader()`; `return()` (выход из `for await` по `break`) отменяет
+   поток и снимает блокировку, иначе поток остался бы залоченным навсегда.
+3. **BYOB — §3.8/§3.10/§3.11.** Добавлены `ReadableByteStreamController`,
+   `ReadableStreamBYOBReader`, `ReadableStreamBYOBRequest`; конструктор
+   читает `type`/`autoAllocateChunkSize` и бросает `TypeError` на чужой
+   `type`, `getReader({mode:'byob'})` — на не-байтовый поток. Ридеры делят
+   `closed`/`cancel`/`releaseLock` через `_rs_install_reader_common`.
+   **Осознанное отступление:** спека *передаёт* (детачит) буфер вызывающего
+   и возвращает вид на перенесённую копию; `ArrayBuffer.prototype.transfer`
+   в движке не заведён, поэтому буфер переиспользуется — страница, сохранившая
+   ссылку на исходный вид, у нас всё ещё видит байты.
+4. **Тело-поток у `Response`/`Request`.** `extractBody` больше не подменяет
+   поток пустым телом: поток становится телом как есть (`resp.body === rs`),
+   `consume()` для такого тела вычитывает его через новый
+   `_rs_drain_to_bytes`, а `clone()` делает `tee()` — то есть каноничный
+   сценарий, ради которого `tee()` и нужен (прочитать тело дважды), теперь
+   работает целиком.
+
+**Замер после правки** (та же проба): `tee-locked=true |
+has-byob-reader=function | byob-reader=ReadableStreamBYOBReader |
+byob0=7,8 done=false | byob1=9 done=false | asynciter=function | aiter=a,b |
+resp-bytes=3`.
+
+**Тесты:** 10 новых в `dom.rs::tests::v8_whatwg_streams` (поздние чанки через
+`tee`, агрегация причин отмены, BYOB-чтение и `byobRequest`, отказ `byob` на
+не-байтовом потоке, async-итерация и её `break`, тело-поток у `Response` и
+его `clone()`, плюс сторож на закрытие `TextDecoderStream`). `cargo test -p
+lumen-js --features v8-backend` — 3116 пройдено, 0 упало; clippy чист.
+
+**Остаётся вне рамок:** `DecompressionStream` по-прежнему отдаёт всё разом
+только на `close()` ([BUG-846](BUG-846-OPEN.md)); передача (detach) буфера
+при BYOB-чтении — см. отступление выше.

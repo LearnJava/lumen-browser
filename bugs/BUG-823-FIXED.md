@@ -1,7 +1,7 @@
 # BUG-823 — Streams: промисы разрешаются только на счастливом пути, любая ошибка/закрытие/отмена оставляет промис висеть навсегда
 
 **Статус:** FIXED 2026-08-25 (P1, ветка `p1-bug823-streams`)
-**Заведён:** 2026-08-21 (WPT-RUN-6, срез 19 — 40 TIMEOUT остатка вместе с [BUG-824](BUG-824-OPEN.md), механизм `streams-promise-unsettled`)
+**Заведён:** 2026-08-21 (WPT-RUN-6, срез 19 — 40 TIMEOUT остатка вместе с [BUG-824](BUG-824-FIXED.md), механизм `streams-promise-unsettled`)
 **Область:** `crates/js/src/dom.rs:7303-7620` — весь шим `ReadableStream`/`WritableStream`/`TransformStream` (в частности `ReadableStreamDefaultController.error` `:7331`, `_rs_do_close` `:7342`, `ReadableStream.pipeTo` `:7406`, конструктор `ReadableStream` `:7353` — `start()` вызывается синхронно и его возвращаемое значение выбрасывается)
 **Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.
 
@@ -82,7 +82,7 @@ return Promise.all([
 ## Масштаб
 
 Механизм `streams-promise-unsettled` забирает **40 id** остатка снимка
-WPT-RUN-5 (вместе с [BUG-824](BUG-824-OPEN.md), маркер у них общий — по
+WPT-RUN-5 (вместе с [BUG-824](BUG-824-FIXED.md), маркер у них общий — по
 источнику эти две причины неразделимы): все 33 непонятых TIMEOUT `streams/*`,
 5 `encoding/streams` и 1 `fetch/api`, плюс один id переехал сюда из слабой
 стадии «что-то бросило».
@@ -164,7 +164,10 @@ boom`; `stream-write-throws` → `write-rejected boom, closed-rejected boom`;
 `pipeTo`, отмена, две стороны `TransformStream`), весь `lumen-js` — 3106
 пройдено, 0 упало.
 
-**Вне рамок** (остаётся [BUG-824](BUG-824-OPEN.md)): `tee()` по-прежнему
-клонирует снимок очереди вместо ветвления, нет BYOB, `Symbol.asyncIterator`
-и закрытия `TextDecoderStream`; поэлементная отдача `DecompressionStream` —
-[BUG-846](BUG-846-OPEN.md).
+**Вне рамок** (было отдано в [BUG-824](BUG-824-FIXED.md), закрыт 2026-08-25):
+`tee()` по-прежнему клонирует снимок очереди вместо ветвления, нет BYOB,
+`Symbol.asyncIterator` и закрытия `TextDecoderStream`. Из этих четырёх
+закрытие `TextDecoderStream` оказалось починено *здесь* как побочный эффект
+переписанной записываемой стороны — перезамер BUG-824 (2026-08-25) показал
+`tds0=hi done=false | tds1 done=true`; остальные три сделаны в BUG-824.
+Поэлементная отдача `DecompressionStream` — [BUG-846](BUG-846-OPEN.md).
