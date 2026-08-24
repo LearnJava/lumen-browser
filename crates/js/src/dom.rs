@@ -9962,21 +9962,162 @@ WebSocket.prototype.CLOSING = 2;    WebSocket.prototype.CLOSED = 3;
 // ── Web Storage (localStorage / sessionStorage) ───────────────────────────────
 // Spec: https://html.spec.whatwg.org/multipage/webstorage.html §8
 // Both objects share the same factory; backing native functions differ per type.
+//
+// BUG-773: `Storage` is a WebIDL *legacy platform object*. Its named-property
+// getter/setter/deleter make `storage.foo`, `storage['foo'] = x`,
+// `delete storage.foo`, `'foo' in storage` and `Object.keys(storage)` exact
+// synonyms of `getItem`/`setItem`/`removeItem`/enumerating the real keys — one
+// operation reachable through two syntaxes. This used to be a plain object with
+// five own methods, so a property-style write created an ordinary JS property
+// on the wrapper: invisible to `getItem`/`length`/`key()`, absent from the
+// persistent backend and therefore silently lost on the next page load — two
+// unconnected planes of data on one object. The interceptor is a `Proxy`; the
+// five operations and `length` live on a real, shared `Storage.prototype`,
+// which is also what makes them *shadow* a same-named storage key.
+
+function Storage() { throw new TypeError('Illegal constructor'); }
+
+// proxy → its native accessor set. A WeakMap and not a field on the object
+// itself: any own property would be page-visible and — worse — would shadow the
+// storage key of the same name (see the visibility rule in the factory below).
+var _lumen_storage_impl = new WeakMap();
+
+function _lumen_storage_of(o) {
+    var impl = _lumen_storage_impl.get(o);
+    if (impl === undefined) throw new TypeError('Illegal invocation');
+    return impl;
+}
+
+// WebIDL arity check: `localStorage.getItem()` must throw a TypeError rather
+// than read the key spelled `undefined` (`missing_arguments.window.js`).
+function _lumen_storage_arity(have, want, op) {
+    if (have < want) {
+        throw new TypeError('Storage.' + op + ': ' + want + ' argument' +
+                            (want === 1 ? '' : 's') + ' required, but only ' +
+                            have + ' present.');
+    }
+}
+
+// Operations and `length` are writable + enumerable + configurable on the
+// interface prototype, exactly as WebIDL prescribes — plain assignment already
+// gives that shape.
+Storage.prototype.key = function(n) {
+    _lumen_storage_arity(arguments.length, 1, 'key');
+    return _lumen_u2n(_lumen_storage_of(this).key(n >>> 0));
+};
+Storage.prototype.getItem = function(key) {
+    _lumen_storage_arity(arguments.length, 1, 'getItem');
+    return _lumen_u2n(_lumen_storage_of(this).get(String(key)));
+};
+Storage.prototype.setItem = function(key, value) {
+    _lumen_storage_arity(arguments.length, 2, 'setItem');
+    _lumen_storage_of(this).set(String(key), String(value));
+};
+Storage.prototype.removeItem = function(key) {
+    _lumen_storage_arity(arguments.length, 1, 'removeItem');
+    _lumen_storage_of(this).remove(String(key));
+};
+Storage.prototype.clear = function() { _lumen_storage_of(this).clear(); };
+Object.defineProperty(Storage.prototype, 'length', {
+    get: function() { return _lumen_storage_of(this).len(); },
+    enumerable: true,
+    configurable: true
+});
+if (typeof Symbol !== 'undefined' && Symbol.toStringTag) {
+    Object.defineProperty(Storage.prototype, Symbol.toStringTag, {
+        value: 'Storage', writable: false, enumerable: false, configurable: true
+    });
+}
 
 function _lumen_make_storage(getLen, getKey, getItem, setItem, removeItem, clear) {
-    var obj = {
-        key:        function(n) { return _lumen_u2n(getKey(n >>> 0)); },
-        getItem:    function(k) { return _lumen_u2n(getItem(String(k))); },
-        setItem:    function(k, v) { setItem(String(k), String(v)); },
-        removeItem: function(k) { removeItem(String(k)); },
-        clear:      function() { clear(); }
-    };
-    Object.defineProperty(obj, 'length', {
-        get: function() { return getLen(); },
-        enumerable: false,
-        configurable: false
+    // The object the Proxy wraps carries nothing but the prototype link and any
+    // symbol-keyed property a page defines on it — WebIDL routes only *string*
+    // names through the named-property hooks.
+    var target = Object.create(Storage.prototype);
+    var proxy;
+
+    // WebIDL «named property visibility»: `Storage` carries no
+    // [LegacyOverrideBuiltIns], so a name already answered by the object or
+    // anywhere on its prototype chain hides the storage key of the same name.
+    // That is what keeps `storage.length` and `storage.clear` meaning the
+    // interface members after `setItem('length', …)`
+    // (`storage_functions_not_overwritten.window.js`).
+    function visible(prop) {
+        return typeof prop === 'string'
+            && !Reflect.has(target, prop)
+            && getItem(prop) !== undefined;
+    }
+
+    proxy = new Proxy(target, {
+        get: function(t, prop, receiver) {
+            if (visible(prop)) return getItem(prop);
+            return Reflect.get(t, prop, receiver);
+        },
+        set: function(t, prop, value, receiver) {
+            // The named property *setter* runs for every string name, shadowed
+            // or not — only reads are shadowed. `set.window.js` asserts a
+            // same-named setter on the prototype is never invoked.
+            if (typeof prop === 'string' && receiver === proxy) {
+                setItem(prop, String(value));
+                return true;
+            }
+            return Reflect.set(t, prop, value, receiver);
+        },
+        has: function(t, prop) {
+            if (typeof prop === 'string' && getItem(prop) !== undefined) return true;
+            return Reflect.has(t, prop);
+        },
+        deleteProperty: function(t, prop) {
+            if (visible(prop)) { removeItem(prop); return true; }
+            return Reflect.deleteProperty(t, prop);
+        },
+        getOwnPropertyDescriptor: function(t, prop) {
+            if (visible(prop)) {
+                return { value: getItem(prop), writable: true,
+                         enumerable: true, configurable: true };
+            }
+            return Reflect.getOwnPropertyDescriptor(t, prop);
+        },
+        defineProperty: function(t, prop, desc) {
+            if (typeof prop === 'string') {
+                // WebIDL: a named setter accepts a data descriptor only, and
+                // routes it into `setItem`. A `configurable: false` request
+                // cannot be honoured through a Proxy (the invariant check
+                // rejects a non-configurable descriptor for a key that is not a
+                // real property of the target) — no spec text or WPT case asks
+                // for that combination on `Storage`.
+                if ('get' in desc || 'set' in desc) return false;
+                if (!('value' in desc) && !('writable' in desc)) return false;
+                setItem(prop, String(desc.value));
+                return true;
+            }
+            return Reflect.defineProperty(t, prop, desc);
+        },
+        ownKeys: function(t) {
+            var out = [], n = getLen();
+            for (var i = 0; i < n; i++) {
+                var k = getKey(i);
+                if (k !== undefined) out.push(k);
+            }
+            // Symbol-keyed own properties must stay in the list or the Proxy
+            // invariant check throws for any of them that is non-configurable.
+            var own = Reflect.ownKeys(t);
+            for (var j = 0; j < own.length; j++) {
+                if (out.indexOf(own[j]) === -1) out.push(own[j]);
+            }
+            return out;
+        },
+        // WebIDL: a legacy platform object stays extensible and its prototype is
+        // immutable.
+        preventExtensions: function() { return false; },
+        setPrototypeOf: function(t, proto) { return proto === Storage.prototype; }
     });
-    return obj;
+
+    _lumen_storage_impl.set(proxy, {
+        len: getLen, key: getKey, get: getItem,
+        set: setItem, remove: removeItem, clear: clear
+    });
+    return proxy;
 }
 
 var localStorage = _lumen_make_storage(
@@ -27228,6 +27369,228 @@ mod tests {
             rt.eval("window.localStorage.setItem('w', 'win')").unwrap();
             let r = rt.eval("localStorage.getItem('w')").unwrap();
             assert_eq!(r, lumen_core::JsValue::String("win".into()));
+        }
+
+        // ── BUG-773: `Storage` as a WebIDL legacy platform object ─────────────────
+
+        /// Evaluates `src` and asserts the completion value is the given string.
+        fn assert_storage_str(rt: &V8JsRuntime, src: &str, want: &str) {
+            let r = rt.eval(src).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String(want.into()), "{src}");
+        }
+
+        #[test]
+        fn storage_property_write_reaches_the_backend() {
+            // The defect itself: `storage.foo = 'x'` used to create a plain JS
+            // property on the wrapper — invisible to `getItem`/`length` and lost
+            // on the next page load.
+            let rt = v8_runtime_with_storage(None);
+            assert_storage_str(
+                &rt,
+                "localStorage.foo = 'bar'; localStorage['baz'] = 'quux'; \
+                 [localStorage.getItem('foo'), localStorage.getItem('baz'), localStorage.length].join(',')",
+                "bar,quux,2",
+            );
+        }
+
+        #[test]
+        fn storage_property_read_comes_from_the_backend() {
+            let rt = v8_runtime_with_storage(None);
+            assert_storage_str(
+                &rt,
+                "localStorage.setItem('k', 'v'); \
+                 [localStorage.k, localStorage['k'], localStorage.missing === undefined].join(',')",
+                "v,v,true",
+            );
+        }
+
+        #[test]
+        fn storage_enumeration_lists_only_keys() {
+            // `storage_enumerate.window.js`: method names used to leak into
+            // `Object.keys` while the real keys were absent from it.
+            let rt = v8_runtime_with_storage(None);
+            assert_storage_str(
+                &rt,
+                "localStorage.setItem('foo', 'bar'); localStorage.baz = 'quux'; \
+                 localStorage.setItem(0, 'alpha'); localStorage[42] = 'beta'; \
+                 Object.keys(localStorage).sort().join(',')",
+                "0,42,baz,foo",
+            );
+            assert_storage_str(&rt, "Object.values(localStorage).sort().join(',')", "alpha,bar,beta,quux");
+        }
+
+        #[test]
+        fn storage_named_property_descriptor_shape() {
+            // Same test: every enumerated key must be a configurable, enumerable,
+            // writable data property.
+            let rt = v8_runtime_with_storage(None);
+            assert_storage_str(
+                &rt,
+                "localStorage.setItem('k', 'v'); \
+                 var d = Object.getOwnPropertyDescriptor(localStorage, 'k'); \
+                 [d.value, d.writable, d.enumerable, d.configurable].join(',')",
+                "v,true,true,true",
+            );
+        }
+
+        #[test]
+        fn storage_in_operator_and_delete_route_to_the_backend() {
+            // `storage_in.window.js` / `storage_removeitem.window.js`.
+            let rt = v8_runtime_with_storage(None);
+            assert_storage_str(
+                &rt,
+                "var out = []; \
+                 out.push('name' in localStorage); \
+                 localStorage['name'] = 'user1'; \
+                 out.push('name' in localStorage); \
+                 out.push(delete localStorage['name']); \
+                 out.push(delete localStorage['unknown']); \
+                 out.push('name' in localStorage); \
+                 out.push(localStorage.getItem('name') === null); \
+                 out.join(',')",
+                "false,true,true,true,false,true",
+            );
+        }
+
+        #[test]
+        fn storage_builtins_are_not_hidden_by_same_named_keys() {
+            // `storage_functions_not_overwritten.window.js` — an item called
+            // `clear` must not make the object unusable, because a name the
+            // prototype already answers hides the named property (`Storage` has
+            // no [LegacyOverrideBuiltIns]).
+            let rt = v8_runtime_with_storage(None);
+            assert_storage_str(
+                &rt,
+                "['key', 'getItem', 'setItem', 'removeItem', 'clear', 'length'] \
+                     .forEach(function(b) { localStorage.setItem(b, b); }); \
+                 [typeof localStorage.getItem, typeof localStorage.clear, \
+                  localStorage.length, localStorage.getItem('length')].join(',')",
+                "function,function,6,length",
+            );
+        }
+
+        #[test]
+        fn storage_members_live_on_a_shared_prototype() {
+            // `symbol-props.window.js` and `storage_builtins.window.js` both
+            // reference `Storage.prototype` directly; it did not exist at all.
+            let rt = v8_runtime_with_storage(None);
+            assert_storage_str(
+                &rt,
+                "[typeof Storage, \
+                  localStorage.hasOwnProperty('getItem'), \
+                  Object.getPrototypeOf(localStorage) === Storage.prototype, \
+                  Object.getPrototypeOf(sessionStorage) === Storage.prototype, \
+                  localStorage.getItem === Storage.prototype.getItem].join(',')",
+                "function,false,true,true,true",
+            );
+        }
+
+        #[test]
+        fn storage_prototype_property_hides_the_named_property() {
+            // `set.window.js`: without [LegacyOverrideBuiltIns] a prototype data
+            // property wins the *read*, while the write still reaches the store.
+            let rt = v8_runtime_with_storage(None);
+            assert_storage_str(
+                &rt,
+                "Storage.prototype.x = 'proto'; localStorage.x = 'value'; \
+                 [localStorage.x, localStorage.getItem('x'), \
+                  Object.getOwnPropertyDescriptor(localStorage, 'x') === undefined].join(',')",
+                "proto,value,true",
+            );
+        }
+
+        #[test]
+        fn storage_stores_only_strings() {
+            // `storage_string_conversion.window.js`: the named setter is a
+            // WebIDL DOMString sink, so `null` is stored as the text `null`.
+            let rt = v8_runtime_with_storage(None);
+            assert_storage_str(
+                &rt,
+                "localStorage.a = null; \
+                 localStorage.b = { toString: function() { return 'obj'; } }; \
+                 [typeof localStorage.a, localStorage.a, localStorage.b].join(',')",
+                "string,null,obj",
+            );
+        }
+
+        #[test]
+        fn storage_define_property_routes_to_set_item() {
+            // `defineProperty.window.js` — a data descriptor is the named setter
+            // spelled a third way.
+            let rt = v8_runtime_with_storage(None);
+            assert_storage_str(
+                &rt,
+                "Object.defineProperty(localStorage, 'x', { value: 'value' }); \
+                 Object.defineProperty(localStorage, 9, \
+                     { value: { toString: function() { return 'nine'; } } }); \
+                 [localStorage.getItem('x'), localStorage.getItem('9'), localStorage.length].join(',')",
+                "value,nine,2",
+            );
+        }
+
+        #[test]
+        fn storage_missing_arguments_throw_type_error() {
+            // `missing_arguments.window.js`: five calls, five TypeErrors — the
+            // old shim silently read/wrote a key spelled `undefined` instead.
+            let rt = v8_runtime_with_storage(None);
+            let r = rt
+                .eval(
+                    "var n = 0; \
+                     [function() { localStorage.key(); }, \
+                      function() { localStorage.getItem(); }, \
+                      function() { localStorage.setItem(); }, \
+                      function() { localStorage.setItem('a'); }, \
+                      function() { localStorage.removeItem(); }] \
+                         .forEach(function(f) { \
+                             try { f(); } catch (e) { if (e instanceof TypeError) n++; } \
+                         }); \
+                     n",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(5.0));
+        }
+
+        #[test]
+        fn storage_symbol_properties_stay_ordinary() {
+            // `symbol-props.window.js`: only *string* names go through the
+            // backend, a symbol stays a plain own property of the object.
+            let rt = v8_runtime_with_storage(None);
+            assert_storage_str(
+                &rt,
+                "var s = Symbol(); localStorage[s] = 'test'; \
+                 var got = [localStorage[s], localStorage.length]; \
+                 got.push(delete localStorage[s]); \
+                 got.push(localStorage[s] === undefined); \
+                 got.join(',')",
+                "test,0,true,true",
+            );
+        }
+
+        #[test]
+        fn storage_key_index_converts_like_unsigned_long() {
+            // `storage_key.window.js` runs every index twice, once + 2^32.
+            let rt = v8_runtime_with_storage(None);
+            assert_storage_str(
+                &rt,
+                "localStorage.setItem('a', '1'); \
+                 [localStorage.key(0), localStorage.key(0x100000000), \
+                  localStorage.key(-1) === null, localStorage.key(1) === null].join(',')",
+                "a,a,true,true",
+            );
+        }
+
+        #[test]
+        fn storage_two_areas_are_independent_objects() {
+            // One shared `Storage.prototype`, two distinct backends — a write
+            // through the named setter must not cross over.
+            let rt = v8_runtime_with_storage(None);
+            assert_storage_str(
+                &rt,
+                "localStorage.k = 'local'; sessionStorage.k = 'session'; \
+                 [localStorage.getItem('k'), sessionStorage.getItem('k'), \
+                  localStorage !== sessionStorage].join(',')",
+                "local,session,true",
+            );
         }
 
         // ── URLSearchParams tests ─────────────────────────────────────────────────

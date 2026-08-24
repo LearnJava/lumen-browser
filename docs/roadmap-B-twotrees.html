@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-24",
  "counts": {
-  "open": 399,
-  "fixed": 459,
+  "open": 398,
+  "fixed": 461,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 858,
+ "total_bugs": 859,
  "phases": [
   {
    "id": "P0",
@@ -4571,7 +4571,7 @@
        "title": "WPT: вендорить + прогнать категорию `webstorage`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (подтверждён — `localStorage`/`sessionStorage` реальны, `crates/js/src/v8_runtime.rs:3519-3569`, не заглушка). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root webstorage --recursive`, ~7 мин 40 с, 86 файлов, 54 id) — **24/54 harness OK, 63/1270 сабтестов**. Найдены [BUG-773](bugs/BUG-773-OPEN.md) (`Storage` не «legacy platform object» — property-style доступ/`for-in`/`in`/`delete` не проходят через нативный бэкенд) и [BUG-774](bugs/BUG-774-OPEN.md) (`initStorageEvent` без WebIDL-коэрсии). Остальные провалы — уже известный BUG-480 (`<iframe>` без browsing context). Потребовал разовый локальный (некоммитящийся) патч `.venv/…/pywebsocket3/websocket_server.py` (`ssl.wrap_socket` удалён в Python 3.12+, `wss`-порт теперь всегда включён в `config.json` с прошлой сессии)",
+       "note": "Скоуп: ⬜ (подтверждён — `localStorage`/`sessionStorage` реальны, `crates/js/src/v8_runtime.rs:3519-3569`, не заглушка). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root webstorage --recursive`, ~7 мин 40 с, 86 файлов, 54 id) — **24/54 harness OK, 63/1270 сабтестов**. Найдены [BUG-773](bugs/BUG-773-FIXED.md) (`Storage` не «legacy platform object» — property-style доступ/`for-in`/`in`/`delete` не проходят через нативный бэкенд) и [BUG-774](bugs/BUG-774-OPEN.md) (`initStorageEvent` без WebIDL-коэрсии). Остальные провалы — уже известный BUG-480 (`<iframe>` без browsing context). Потребовал разовый локальный (некоммитящийся) патч `.venv/…/pywebsocket3/websocket_server.py` (`ssl.wrap_socket` удалён в Python 3.12+, `wss`-порт теперь всегда включён в `config.json` с прошлой сессии)",
        "bugs": [
         "BUG-773",
         "BUG-774"
@@ -5280,7 +5280,7 @@
       {
        "id": "WPT-RUN-9",
        "title": "WPT-RUN-9: третья полная цифра pass-rate, с работающим https",
-       "status": "blocked",
+       "status": "done",
        "size": "M",
        "note": "Перепрогнать корпус после фикса [BUG-792](bugs/BUG-792-OPEN.md) — третья полная цифра, первая, в которой https реально считается. Заводится решением пользователя 2026-08-20: прогон WPT-RUN-5 НЕ останавливается ради фикса (обе машины уже прошли часы, а правка в `lumen-network` затрагивает защиту от усечения ответа и идёт своим порядком), поэтому вторая цифра выйдет с гарантированно нулевым https, а перепрогон выделен в отдельную задачу. Стартовать только после того, как BUG-792 закрыт И бинарь пересобран: цифра привязана к сборке, прогон на старом бинаре повторит ноль. Порядок тот же, что в WPT-RUN-5 (`run_corpus.py --all --resume`, ~сутки на машину), но `.tmp/wpt-corpus` обязательно ОЧИСТИТЬ: `--resume` пропускает уже отработавшие шарды, а именно они и содержат нулевые https-результаты старой сборки (с 2026-08-20 он пропускает ещё и убитые по бюджету, из которых что-то спасено, — см. срез 9; поднятый бюджет требует `--retry-timeouts`, иначе они так и останутся частичными). Ожидаемый эффект измерим заранее, и с 2026-08-21 он измерен не наивно: 7190 id манифеста (10.6 %) сейчас стоят ноль при 0 harness OK из 635 фактически прогнанных https-тестов, но A/B среза 32 (`tests/wpt/tls_eof_audit.py`) оценивает прибавку к самой цифре в **+0.16 п.п.** (CI90 +0.065…+0.281), а не в 10.6 — https-корпус это платформенные API, которых у движка нет, поэтому доставленное тело даёт вердикт, а не балл. Перепрогон оправдан не цифрой, а тем, что 10.6 % знаменателя начнут проверять движок, и тем, что он ДЕШЕВЕЕТ: 49 id из 120 отвечают быстрее 2 с вместо полного таймаута. Второе обязательное отличие от WPT-RUN-5 — бюджет шарда, и с 2026-08-21 (срез 15) его не надо подбирать: `shard_timeout()` выводит бюджет из объявленных в манифесте таймаутов (`timeout: long` → 60 c плюс `extra_timeout` 5 c, иначе 10 + 5), делит на `--processes` и берёт запас 1.15, а `--shard-timeout-per-id` остался только для воспроизведения старого прогона. Прежнее предписание «поднять до 8» отменено: оно покрывало убитые шарды с запасом 2–4 %, то есть случайно. Проверено на 226 записанных шардах — ни один отработавший не съел больше 62 % выведенного бюджета, все пять убитых (`WebCryptoAPI`/`ai`/`bluetooth`/`encrypted-media`/`fledge`, у четырёх из пяти 96–99 % тестов помечены `long`) покрыты с запасом ≥1.4×, а сумма бюджетов по корпусу — 79 ч против 138 ч у плоских 8 c/id. На саму цифру это не влияет: 481 id, спасённый из тех же убитых шардов, набрал 2.00 балла, так что все 437 недобранных стоят ≈0.003 п.п. — бюджет поднимается ради честности охвата, не ради pass-rate, профиль замера — [docs/tasks/p2-wpt-runner-throughput.md](docs/tasks/p2-wpt-runner-throughput.md Третья оговорка к цифре, помимо https и бюджета шардов: перед публикацией прогнать `tests/wpt/cdata_audit.py` — [BUG-786](bugs/BUG-786-OPEN.md) печатает ложные reftest-PASS (срез 10, до 15.9 % всех reftest-PASS), так что после его починки цифра может УПАСТЬ, и это надо разделить с настоящим движением качества Оговорка про `cdata_audit.py` уточнена срезом 14: BUG-786 в сумме цифру не завышает, а занижает (замер `--repair`: +505 PASS против −93…303), так что после его починки ожидать надо роста; разделять с движением качества всё равно нужно",
        "bugs": [
@@ -10567,10 +10567,10 @@
    "debtor": false
   },
   "BUG-773": {
-   "status": "open",
+   "status": "fixed",
    "title": "`localStorage`/`sessionStorage` не реализуют «legacy platform object» (HTML §8): нет `Proxy`/named-property интерцептора, поэтому `storage.foo = 'x'`/`storage['…",
    "component": "js (`crates/js/src/dom.rs::_lumen_make_storage`, ~9055; `crates/js/src/v8_runtime.rs`, ~3519-3569)",
-   "date": null,
+   "date": "2026-08-24",
    "debtor": false
   },
   "BUG-774": {
@@ -10693,10 +10693,10 @@
    "debtor": false
   },
   "BUG-792": {
-   "status": "open",
+   "status": "fixed",
    "title": "**https-ответ без TLS `close_notify` теряет тело целиком.** `wptserve` отдаёт close-delimited ответы (ни `Content-Length`, ни `chunked`), а `rustls` на обрыве б…",
    "component": "network (`crates/network/src/lib.rs` — EOF-фреймирование тела: `read_response`, `read_framed_buffered`, streaming-путь)",
-   "date": null,
+   "date": "2026-08-24",
    "debtor": false
   },
   "BUG-793": {
@@ -11412,6 +11412,13 @@
    "component": "js (`crates/js/src/dom.rs` — `_lumen_report_exception`; `crates/js/src/v8_runtime.rs` — `eval_and_report`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-901": {
+   "status": "open",
+   "title": "Одиночный (непарный) суррогат `U+D800`…`U+DFFF` — легальный code unit WebIDL `DOMString` — молча превращается в `U+FFFD` при пересечении границы JS↔натив, потом…",
+   "component": "js (`crates/js/src/v8_runtime.rs` — `to_rust_string_lossy` на границе регистрации нативов, 12 мест)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -12040,6 +12047,9 @@
   ],
   "js (`crates/js/src/v8_runtime.rs::_lumen_create_element`/`_lumen_create_element_ns`, `v8_compat.rs::IntoJsReturn for u32`)": [
    "BUG-457"
+  ],
+  "js (`crates/js/src/v8_runtime.rs` — `to_rust_string_lossy` на границе регистрации нативов, 12 мест)": [
+   "BUG-901"
   ],
   "js (`crates/js/src/v8_runtime.rs` — уровень изолята)": [
    "BUG-716"
