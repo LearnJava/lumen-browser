@@ -58,11 +58,11 @@
  "generated": "2026-08-24",
  "counts": {
   "open": 397,
-  "fixed": 463,
+  "fixed": 464,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 860,
+ "total_bugs": 861,
  "phases": [
   {
    "id": "P0",
@@ -4605,7 +4605,7 @@
        "title": "WPT: вендорить + прогнать категорию `workers`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (подтверждён — dedicated `Worker` и `SharedWorker` реальны, `crates/js/src/worker.rs`/`shared_worker.rs`). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root workers --recursive`, ~29 мин, 606 файлов, 287 id) — **94/249 harness OK, 153/877 сабтестов**. Ноль variant-фан-аута, 14 `.https.` файлов, 8 testdriver — дешёвая по всем предсказателям, но 144/155 неуспехов — TIMEOUT: воркерный глобал не даёт `location`/`navigator` ([BUG-776](bugs/BUG-776-OPEN.md), 31 файл), конструкторы `Worker`/`SharedWorker` не читают `options` — модульных воркеров не существует ([BUG-777](bugs/BUG-777-OPEN.md), 24 файла каталога `modules/`), и ещё три отдельных пробела в глобале — `close()`/`fetch()`/`XMLHttpRequest` отсутствуют, `importScripts()` у SharedWorker безусловно бросает ([BUG-778](bugs/BUG-778-FIXED.md), FIXED 2026-08-23). Кластер `onerror/*`/`Worker_ErrorEvent_*` — уже задокументированный [BUG-591](bugs/BUG-591-FIXED.md) (исключение внутри воркера не долетает до `error` родителя), новым не заведён",
+       "note": "Скоуп: ⬜ (подтверждён — dedicated `Worker` и `SharedWorker` реальны, `crates/js/src/worker.rs`/`shared_worker.rs`). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root workers --recursive`, ~29 мин, 606 файлов, 287 id) — **94/249 harness OK, 153/877 сабтестов**. Ноль variant-фан-аута, 14 `.https.` файлов, 8 testdriver — дешёвая по всем предсказателям, но 144/155 неуспехов — TIMEOUT: воркерный глобал не даёт `location`/`navigator` ([BUG-776](bugs/BUG-776-FIXED.md), 31 файл), конструкторы `Worker`/`SharedWorker` не читают `options` — модульных воркеров не существует ([BUG-777](bugs/BUG-777-OPEN.md), 24 файла каталога `modules/`), и ещё три отдельных пробела в глобале — `close()`/`fetch()`/`XMLHttpRequest` отсутствуют, `importScripts()` у SharedWorker безусловно бросает ([BUG-778](bugs/BUG-778-FIXED.md), FIXED 2026-08-23). Кластер `onerror/*`/`Worker_ErrorEvent_*` — уже задокументированный [BUG-591](bugs/BUG-591-FIXED.md) (исключение внутри воркера не долетает до `error` родителя), новым не заведён",
        "bugs": [
         "BUG-776",
         "BUG-777",
@@ -10570,10 +10570,10 @@
    "debtor": false
   },
   "BUG-776": {
-   "status": "open",
+   "status": "fixed",
    "title": "`WorkerGlobalScope` не даёт ни `self.location`, ни `self.navigator` в dedicated- и shared-воркерах (`navigator` отсутствует и в сервис-воркере); любой воркерный…",
    "component": "js (`crates/js/src/worker.rs:264` — `worker_global_shim`; `crates/js/src/shared_worker.rs:99` — `SHARED_WORKER_GLOBAL_SHIM`; `crates/js/src/sw_worker.rs:456` — есть `WorkerLocation`, `navigator` нет)",
-   "date": null,
+   "date": "2026-08-24",
    "debtor": false
   },
   "BUG-777": {
@@ -11408,6 +11408,13 @@
    "component": "dom (`crates/engine/dom/src/vtt.rs::parse_vtt` — разбиение на блоки только по пустым строкам; проверка подписи `header.as_bytes()[6].is_ascii_whitespace()`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-904": {
+   "status": "open",
+   "title": "URL, оканчивающийся на `?`, даёт `search === '?'` вместо `''`: разбор кладёт в `search` весь хвост вместе с вопросительным знаком, не отличая «запрос пустой» от…",
+   "component": "js (`crates/js/src/dom.rs::_lumen_parse_url`, `URL_PARSE_SHIM` — ветка `qIdx >= 0`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11836,6 +11843,9 @@
   ],
   "js (`crates/js/src/dom.rs::_lumen_get_fonts`, ~line 6779)": [
    "BUG-564"
+  ],
+  "js (`crates/js/src/dom.rs::_lumen_parse_url`, `URL_PARSE_SHIM` — ветка `qIdx >= 0`)": [
+   "BUG-904"
   ],
   "js (`crates/js/src/dom.rs` -- `_lumen_build_element`, `_obj`)": [
    "BUG-556"

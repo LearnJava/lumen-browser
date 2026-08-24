@@ -334,6 +334,38 @@ the time — read dates.
   19 tests in `v8_esm.rs`. **Gap:** the shell never calls `register_module_source`, so a
   page's `import './x.js'` still fails "module not found" —
   [BUG-446](../bugs/BUG-446-FIXED.md), engine-independent (rquickjs had it too).
+- **`WorkerLocation`/`WorkerNavigator` in every worker scope ([P1], 2026-08-24,
+  [BUG-776](../bugs/BUG-776-FIXED.md)).** `location` and `navigator` were plain `ReferenceError`s
+  in a dedicated and a shared worker (`navigator` in the service worker too), so any script
+  reading either died on its first line — and, the exception never leaving the worker, WPT saw a
+  TIMEOUT rather than a FAIL. Four points worth carrying. (1) *Where the split falls.* The two
+  interfaces are one shim (`dom.rs::WORKER_LOCATION_NAVIGATOR_SHIM`, evaluated by
+  `worker::install_worker_scope_globals_v8` for all three flavours) — but it builds only the
+  `navigator` singleton, because `location`'s URL is per-flavour: the dedicated and shared workers
+  learn theirs from a Rust-set `_lumen_worker_location_url`, the service worker derives it from its
+  scope, and each calls the shared `_lumen_make_worker_location(url)` itself. It is the one part of
+  `worker_exposed_shim()` that is **not** a verbatim slice of the page program (the page has no
+  `WorkerLocation`), which the splice test now asserts from both sides. (2) *No new plumbing
+  argument.* `location` needs the worker's **unreduced** script URL while BUG-778's
+  `_lumen_worker_base_url` needs it emptied for a `blob:`/`data:` worker; rather than thread two
+  strings that a call site could swap, the JS constructors now pass the script URL alone and Rust
+  derives the base with `worker::worker_base_url` — so `_lumen_create_worker`/`_lumen_sw_connect`
+  kept their arity and the `''`-for-opaque behaviour is stated once. (3) *`[LegacyUnforgeable]` is
+  what the members are, literally*: own, non-configurable accessors with no setter, so
+  `location.href = 1` in a (non-strict) worker script is silently dropped —
+  `interfaces/WorkerGlobalScope/location/setting-members.html` asserts exactly zero exceptions
+  *and* unchanged values, which a `writable: false` data property would fail on the first half in
+  strict mode and a throwing setter on the second. (4) *The `NavigatorID` values may not simply be
+  invented.* The page's effective `navigator` is three layers deep — `dom.rs`'s literal, then
+  `surface_api`'s antidetect patch (`appName`/`appVersion`/`product`, guarded on `undefined`), then
+  `navigator_bindings`'s profile override (`platform`/`language`/`languages`) — and none of them
+  runs in a worker isolate. Putting the shared values into the page shim would have *silently
+  disabled* the antidetect patch by making its guards see a defined property; so the page is
+  untouched and `navigator_bindings::worker_navigator_id_shim` builds the worker's copy instead,
+  reading the same process-global `NavigatorProfile` for the profile-driven half. The duplicated
+  constants are held in step by `worker_navigator_matches_the_page_navigator`, which installs a
+  real page runtime and a worker scope and compares them member by member — that test is what
+  found `appCodeName` missing from `surface_api` in the first place.
 - **Service-worker scope: network `importScripts`, real `fetch`, `indexedDB`,
   `MessageChannel` ([P3], 2026-08-17, `sw_worker.rs`).** The scope had no `importScripts` at all,
   a `fetch` that answered only from CacheStorage, and neither `indexedDB` nor `MessageChannel` —

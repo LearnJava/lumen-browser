@@ -33,7 +33,7 @@ module`, 5 × `XMLHttpRequest`/`fetch is not defined` combined, 4+1 ×
 Three distinct, filed root causes, each isolated by reading the actual
 worker-side support script (not guessed from the log alone):
 
-- **[BUG-776](../../bugs/BUG-776-OPEN.md)** — `self.location`
+- **[BUG-776](../../bugs/BUG-776-FIXED.md)** — `self.location`
   (`WorkerLocation`) and `self.navigator` (`WorkerNavigator`) are missing
   entirely from both `worker_global_shim` (`worker.rs:264`, dedicated) and
   `SHARED_WORKER_GLOBAL_SHIM` (`shared_worker.rs:99`, shared); `navigator`
@@ -84,7 +84,7 @@ per the project's "don't describe a failure mode from intuition" rule.
 неуспехов — TIMEOUT, потому что урезанный `WorkerGlobalScope` роняет
 воркерный скрипт `ReferenceError`-ом ещё до первого `postMessage`, а
 исключение никуда не долетает — харнесс видит только внешний таймаут, а не
-ошибку. Три подтверждённых, заведённых корня: [BUG-776](../bugs/BUG-776-OPEN.md)
+ошибку. Три подтверждённых, заведённых корня: [BUG-776](../bugs/BUG-776-FIXED.md)
 (нет `self.location`/`self.navigator` в dedicated/shared-воркерах, 31 файл
 напрямую), [BUG-777](../bugs/BUG-777-OPEN.md) (конструкторы `Worker`/
 `SharedWorker` не читают `options` — модульных воркеров не существует, весь

@@ -47,20 +47,14 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   // `WorkerLocation` (HTML LS §8.1.5.4) целиком, а не два поля: сервис-воркеры
   // ветвятся по `location.host`/`location.search` прямо на верхнем уровне, и
   // `undefined.includes(...)` роняет установку всего воркера ещё до первого
-  // слушателя (живой пример — `sw.js` t-банка). Разбор берём у той же функции,
-  // что и страница (`_lumen_parse_url` приехал с worker-шимом), поэтому
-  // `origin` — настоящий, а не `scope` без последнего сегмента пути.
-  globalThis.location = (function() {{
-    var abs = (scope.indexOf('://') !== -1) ? scope
-            : (origin + (scope.charAt(0) === '/' ? scope : '/' + scope));
-    var p = _lumen_parse_url(abs);
-    return {{
-      href: p.href, origin: p.origin, protocol: p.protocol,
-      host: p.host, hostname: p.hostname, port: p.port,
-      pathname: p.pathname, search: p.search, hash: p.hash,
-      toString: function() {{ return p.href; }},
-    }};
-  }})();
+  // слушателя (живой пример — `sw.js` t-банка). Объект строит тот же
+  // `_lumen_make_worker_location`, что и у двух других видов воркера
+  // (BUG-776 — до него это был литерал прямо здесь), поэтому `origin` —
+  // настоящий, а не `scope` без последнего сегмента пути, и
+  // `location instanceof WorkerLocation` истинно и тут.
+  globalThis.location = _lumen_make_worker_location(
+    (scope.indexOf('://') !== -1) ? scope
+      : (origin + (scope.charAt(0) === '/' ? scope : '/' + scope)));
   globalThis.registration = {{
     scope: scope,
     active: {{ state: 'activated', scriptURL: '' }},

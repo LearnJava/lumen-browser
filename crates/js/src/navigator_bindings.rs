@@ -161,6 +161,52 @@ fn json_string(s: &str) -> String {
     out
 }
 
+/// Build the `_lumen_navigator_id` object a `WorkerGlobalScope` hangs its
+/// `WorkerNavigator` accessors off (BUG-776), using the process-global
+/// [`NavigatorProfile`] — the same source the page's own `navigator.platform`/
+/// `language`/`languages` come from, so a `fingerprint.toml` override cannot
+/// make the two disagree.
+///
+/// The rest of `NavigatorID` (HTML LS §8.9.1.1) is fixed, and the values are
+/// the ones the *page* ends up reporting once its own layers have run:
+/// `appCodeName`/`appName`/`appVersion`/`product` from
+/// [`crate::surface_api`]'s antidetect patch, `userAgent` from the page shim
+/// (`crate::dom`). They are spelled out a second time here because a worker
+/// runs in its own isolate and neither of those layers is installed in it —
+/// `worker_navigator_matches_the_page_navigator` compares the two live scopes
+/// member by member so the copies cannot drift apart unnoticed.
+///
+/// `productSub`/`vendor`/`vendorSub` are deliberately absent: those three
+/// members of the mixin are `[Exposed=Window]`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn worker_navigator_id_shim() -> String {
+    worker_navigator_id_shim_with(&current_navigator_profile())
+}
+
+/// [`worker_navigator_id_shim`] against an explicit profile, ignoring the
+/// process-global — same split (and same reason) as
+/// [`install_navigator_bindings_v8_with`]: a test that pinned the global would
+/// race `set_and_read_global_profile`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn worker_navigator_id_shim_with(p: &NavigatorProfile) -> String {
+    format!(
+        "var _lumen_navigator_id = {{\
+           appCodeName: 'Mozilla',\
+           appName: 'Netscape',\
+           appVersion: '5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',\
+           product: 'Gecko',\
+           userAgent: 'Lumen/0.5.0',\
+           onLine: false,\
+           platform: {platform},\
+           language: {primary_language},\
+           languages: {languages}\
+         }}; undefined;",
+        platform = json_string(&p.platform),
+        primary_language = json_string(p.languages.first().map_or("en-US", String::as_str)),
+        languages = languages_literal(&p.languages),
+    )
+}
+
 /// Build the navigator/screen/timezone shim source for the given profile.
 #[cfg(feature = "v8-backend")]
 fn build_navigator_shim(p: &NavigatorProfile) -> String {
@@ -431,6 +477,66 @@ mod tests {
         assert_eq!(p.screen_height, 1080);
         assert_eq!(p.color_depth, 24);
         assert_eq!(p.timezone_offset, 0);
+    }
+
+    /// BUG-776: the fixed half of `NavigatorID` is written out twice — once by
+    /// the page's own layers (`dom.rs`'s `navigator` literal plus
+    /// `surface_api`'s antidetect patch) and once by
+    /// [`worker_navigator_id_shim`], because a worker isolate runs neither of
+    /// them. The mixin only means anything if the two agree, and
+    /// `interfaces/WorkerUtils/navigator/*` asserts exactly that by comparing
+    /// the worker's value against the window's — so compare the two live
+    /// scopes here rather than trusting the constants to stay in step.
+    ///
+    /// `platform`/`language`/`languages` are excluded on purpose: they come
+    /// from the process-global profile, which `set_and_read_global_profile`
+    /// mutates, so reading them from two runtimes could race. Their agreement
+    /// is covered by `worker_navigator_id_takes_platform_and_languages_from_profile`.
+    #[test]
+    fn worker_navigator_matches_the_page_navigator() {
+        use std::sync::{Arc, Mutex};
+
+        let page = V8JsRuntime::new().unwrap();
+        page.install_dom(
+            Arc::new(Mutex::new(lumen_dom::Document::new())),
+            "https://example.test/",
+            None, None, None, None, None, None, None, None, false,
+        )
+        .unwrap();
+
+        let worker = V8JsRuntime::new().unwrap();
+        crate::worker::install_worker_scope_globals_v8(&worker).unwrap();
+
+        for name in ["appCodeName", "appName", "appVersion", "product", "userAgent", "onLine"] {
+            let expr = format!("String(navigator.{name})");
+            assert_eq!(
+                page.eval(&expr).unwrap(),
+                worker.eval(&expr).unwrap(),
+                "navigator.{name} differs between the page and a worker scope"
+            );
+        }
+    }
+
+    /// The profile-driven half of the same object: whatever the shell put in
+    /// `fingerprint.toml` must reach a worker too, or the page and the worker
+    /// would report different platforms under any non-default profile.
+    #[test]
+    fn worker_navigator_id_takes_platform_and_languages_from_profile() {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(&worker_navigator_id_shim_with(&custom_profile())).unwrap();
+
+        assert_eq!(
+            rt.eval("_lumen_navigator_id.platform").unwrap(),
+            JsValue::String("Linux x86_64".to_string())
+        );
+        assert_eq!(
+            rt.eval("_lumen_navigator_id.language").unwrap(),
+            JsValue::String("de-DE".to_string())
+        );
+        assert_eq!(
+            rt.eval("_lumen_navigator_id.languages.join(',')").unwrap(),
+            JsValue::String("de-DE,de,en".to_string())
+        );
     }
 
     #[test]

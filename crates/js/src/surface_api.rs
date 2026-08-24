@@ -124,6 +124,18 @@ const SURFACE_API_SHIM: &str = r#"(function() {
     // are running in a real browser.  Absent properties can be as telling as
     // wrong ones.
 
+    // navigator.appCodeName — every browser returns "Mozilla" per spec. Added
+    // with BUG-776, which found it missing here while making a worker's
+    // `WorkerNavigator` answer the same values as the page's `Navigator`: the
+    // mixin is `NavigatorID`, so an absent member on one side is a mismatch.
+    try {
+      if (typeof navigator.appCodeName === 'undefined') {
+        Object.defineProperty(navigator, 'appCodeName', {
+          value: 'Mozilla', writable: false, configurable: true, enumerable: true
+        });
+      }
+    } catch(_) {}
+
     // navigator.appName — all modern browsers return "Netscape" per spec.
     try {
       if (typeof navigator.appName === 'undefined') {
