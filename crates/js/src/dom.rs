@@ -11372,6 +11372,32 @@ function _lumen_flush_mutation_observers() {
     }
 }
 
+// BUG-827: nodes the PARSER wrote must queue childList records too. DOM §4.3
+// hangs `queue a mutation record` off the insertion step itself, not off the
+// API that triggered it, so a node the parser put in the tree owes an observer
+// exactly the record `appendChild` owes it. The shell parses the whole document
+// before the first script runs, so it replays the insertions it would have made
+// here: `pairs` is a flat [parent, child, parent, child, …] list in tree order —
+// the order a streaming parser would have inserted them — covering everything
+// up to and including the `<script>` that is about to execute.
+//
+// Called from `crates/shell/src/main.rs` (`flush_parser_inserts`), which skips
+// the call entirely while `_lumen_mo_observing()` is false: a record queued
+// before anyone called `observe()` is dropped by the spec anyway, and building
+// the argument for a whole document is not free.
+function _lumen_mo_parser_inserted(pairs) {
+    if (_mo_observers.length === 0) return;
+    for (var i = 0; i + 1 < pairs.length; i += 2) {
+        _mo_notify(pairs[i], 'childList', null, null, [pairs[i + 1]], []);
+    }
+}
+
+// True once any MutationObserver exists (constructed, not necessarily observing).
+// The shell's cheap gate for the call above — see `_lumen_mo_parser_inserted`.
+function _lumen_mo_observing() {
+    return _mo_observers.length > 0;
+}
+
 // Wrap _lumen_set_attr to intercept attribute mutations
 var _orig_set_attr = _lumen_set_attr;
 _lumen_set_attr = function(nid, name, value) {
