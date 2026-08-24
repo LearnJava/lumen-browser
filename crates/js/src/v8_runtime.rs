@@ -1195,9 +1195,18 @@ impl V8JsRuntime {
     }
 
     /// Update the page scroll Y exposed to JS `window.scrollY`/`pageYOffset`.
-    /// Mirrors [`crate::QuickJsRuntime::set_page_scroll_y`].
-    pub fn set_page_scroll_y(&self, y: f32) {
-        *self.page_scroll_y.lock().unwrap_or_else(|e| e.into_inner()) = y;
+    ///
+    /// Returns `true` when the position actually moved since the last call, so
+    /// the caller can run CSSOM-View §14 «run the scroll steps» for the
+    /// viewport (BUG-821). The previous value is kept here, per runtime, i.e.
+    /// per document: a navigation builds a fresh runtime whose stored position
+    /// is 0, so resetting the shell's `scroll_y` to the top cannot report a
+    /// change against the *outgoing* document's position.
+    pub fn set_page_scroll_y(&self, y: f32) -> bool {
+        let mut cur = self.page_scroll_y.lock().unwrap_or_else(|e| e.into_inner());
+        let moved = (*cur - y).abs() > f32::EPSILON;
+        *cur = y;
+        moved
     }
 
     /// Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`.
