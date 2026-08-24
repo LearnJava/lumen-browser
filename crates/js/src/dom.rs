@@ -1513,14 +1513,17 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
 
 // ── DOMTokenList (classList) ──────────────────────────────────────────────────
 
-function _lumen_make_class_list(nid) {
+// DOM §7.1: one DOMTokenList over an arbitrary space-separated attribute.
+// `classList` is the `class` case; `relList` (BUG-826) is the same list over
+// `rel` plus a `supports()` of its own.
+function _lumen_make_attr_token_list(nid, attrName) {
     function getArr() {
-        var c = _lumen_get_attr(nid, 'class');
+        var c = _lumen_get_attr(nid, attrName);
         return (c && c.length > 0)
             ? c.split(/\\s+/).filter(function(t) { return t.length > 0; })
             : [];
     }
-    function setArr(arr) { _lumen_set_attr(nid, 'class', arr.join(' ')); }
+    function setArr(arr) { _lumen_set_attr(nid, attrName, arr.join(' ')); }
     var cl = {
         contains: function(cls) { return getArr().indexOf(String(cls)) >= 0; },
         add: function() {
@@ -1567,6 +1570,10 @@ function _lumen_make_class_list(nid) {
         enumerable: true, configurable: true,
     });
     return cl;
+}
+
+function _lumen_make_class_list(nid) {
+    return _lumen_make_attr_token_list(nid, 'class');
 }
 
 // ── CSSStyleDeclaration (inline style) ───────────────────────────────────────
@@ -6687,6 +6694,10 @@ function _lumen_link_prepare(nid) {
     for (var i = 0; i < toks.length; i++) {
         if (toks[i] === 'stylesheet') isSheet = true;
     }
+    // BUG-826: `preload`/`modulepreload`/`prefetch` ride the same insertion
+    // hook. Independent of the stylesheet branch — `rel='preload stylesheet'`
+    // is two link types on one element and the spec processes both.
+    _lumen_link_hint_prepare(nid, toks);
     if (!isSheet) return;
     var href = _lumen_u2n(_lumen_get_attr(nid, 'href'));
     href = (href === null) ? '' : String(href).trim();
@@ -6707,6 +6718,186 @@ function _lumen_link_prepare(nid) {
             _lumen_resource_fire(nid, 'error');
         });
     }, 0);
+}
+
+// ── <link> resource hints: preload / modulepreload / prefetch (BUG-826) ──────
+//
+// HTML LS §4.6.7 «link type preload» and «link type modulepreload». Before
+// this, a hint reached `Event::SubresourceHintFound` in the shell, which only
+// printed it to stderr — so the log claimed a preload had happened while no
+// request was ever made and the element reported nothing to the page.
+//
+// The fetch lives here rather than in the shell for the same reason the
+// stylesheet path above does: `load`/`error` belong to the element, and the
+// shell has no per-node completion signal to forward. It costs the early start
+// the preload scanner exists for — the request now begins once the DOM is
+// parsed, not while the HTML is still streaming — which is the residual left on
+// the bug.
+
+// The `as` attribute is enumerated over the Fetch destinations. A value outside
+// this table leaves it in *no* state, which for `rel=preload` means exactly
+// what an absent `as` means: no resource is obtained, and the element fires
+// neither `load` nor `error` (WPT `preload/onload-event.html` asserts both).
+var _LUMEN_LINK_AS_DESTINATIONS = {
+    'audio': 1, 'audioworklet': 1, 'document': 1, 'embed': 1, 'fetch': 1,
+    'font': 1, 'frame': 1, 'iframe': 1, 'image': 1, 'json': 1, 'manifest': 1,
+    'object': 1, 'paintworklet': 1, 'report': 1, 'script': 1, 'serviceworker': 1,
+    'sharedworker': 1, 'style': 1, 'track': 1, 'video': 1, 'webidentity': 1,
+    'worker': 1, 'xslt': 1
+};
+
+// Destinations a `rel=modulepreload` can serve: the script-like set plus the
+// module types a module map can hold. A *valid* keyword outside it (`as=image`,
+// `as=font`, …) is a destination the module fetch cannot produce, so the
+// element reports `error`; an absent or unrecognized keyword is in no state and
+// falls back to the default destination «script», which succeeds.
+var _LUMEN_MODULEPRELOAD_DESTINATIONS = {
+    'audioworklet': 1, 'json': 1, 'paintworklet': 1, 'script': 1,
+    'serviceworker': 1, 'sharedworker': 1, 'style': 1, 'worker': 1
+};
+
+// nid → 1 once the element's hint has been acted on. Keyed per node, not per
+// URL: the same element must not fetch twice when it is moved around the tree,
+// and the parser-document pass below must not re-run a hint the insertion hook
+// already ran (the two paths overlap for a link a head script appends).
+var _lumen_link_hint_done = {};
+
+// Which of the three hint types this `rel` carries, '' for none. First token
+// wins — an element is one hint at a time, and `rel='preload prefetch'` is not
+// a shape the spec gives a combined meaning to.
+function _lumen_link_hint_kind(toks) {
+    for (var i = 0; i < toks.length; i++) {
+        var t = toks[i];
+        if (t === 'preload' || t === 'modulepreload' || t === 'prefetch') return t;
+    }
+    return '';
+}
+
+// §4.6.7: a `media` that does not match the environment means the resource is
+// not obtained — and therefore no event either way. A media query the engine
+// cannot evaluate is treated as matching, which errs towards fetching.
+function _lumen_link_hint_media_matches(nid) {
+    var media = _lumen_u2n(_lumen_get_attr(nid, 'media'));
+    if (media === null || String(media).trim() === '') return true;
+    try { return !!matchMedia(String(media)).matches; } catch (e) { return true; }
+}
+
+// §4.6.7: a `type` the destination cannot consume also means «no resource is
+// obtained», silently. Only the two destinations whose MIME set the engine
+// actually knows are checked; for every other destination a `type` is accepted,
+// which is the lenient half of the same rule.
+function _lumen_link_hint_type_supported(dest, type) {
+    if (type === null || type === undefined) return true;
+    var t = String(type).trim().toLowerCase();
+    if (t === '') return true;
+    var base = t.split(';')[0].trim();
+    if (dest === 'style') return base === 'text/css';
+    if (dest === 'script') return _lumen_is_classic_script_type(base);
+    return true;
+}
+
+// The shared fetch. `onBody(url, resp, text)` — optional hook run before the
+// `load` event; anything it throws turns the hint into an `error`, which is the
+// right shape for modulepreload (a body that cannot enter the module map is a
+// failed preload).
+function _lumen_link_hint_fetch(nid, href, onBody) {
+    // Task hop for the same reason as the <script>/stylesheet paths above: the
+    // `link.onload = …` assignment almost always follows the appendChild.
+    setTimeout(function() {
+        var url = _url_resolve(String(href), _lumen_document_base_url());
+        fetch(url).then(function(resp) {
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            // Drain the body even when nothing reads it: an unread response
+            // holds its fetch slot (BUG-721).
+            return resp.text().then(function(text) {
+                if (onBody) onBody(url, resp, text);
+            });
+        }).then(function() {
+            _lumen_resource_fire(nid, 'load');
+        }).catch(function(e) {
+            _lumen_console_error('link hint fetch failed: ' + url + ': ' + e);
+            _lumen_resource_fire(nid, 'error');
+        });
+    }, 0);
+}
+
+// `rel=preload`, §4.6.7 «process the linked resource».
+function _lumen_link_preload(nid, href) {
+    var asAttr = _lumen_u2n(_lumen_get_attr(nid, 'as'));
+    var dest = (asAttr === null) ? '' : String(asAttr).trim().toLowerCase();
+    // No state (absent or unrecognized) → nothing is fetched and nothing is
+    // reported. Deliberately silent: a page must be able to write a preload for
+    // a destination this engine has never heard of without seeing a spurious
+    // failure.
+    if (_LUMEN_LINK_AS_DESTINATIONS[dest] !== 1) return;
+    if (!_lumen_link_hint_media_matches(nid)) return;
+    if (!_lumen_link_hint_type_supported(dest, _lumen_u2n(_lumen_get_attr(nid, 'type')))) return;
+    _lumen_link_hint_fetch(nid, href, null);
+}
+
+// `rel=modulepreload`, §4.6.7 «fetch a modulepreload module script graph».
+// Only the entry point is fetched — the graph's static imports are not walked,
+// which matches how far the engine's module loading goes anyway (BUG-446).
+function _lumen_link_modulepreload(nid, href) {
+    var asAttr = _lumen_u2n(_lumen_get_attr(nid, 'as'));
+    var dest = (asAttr === null) ? '' : String(asAttr).trim().toLowerCase();
+    if (dest !== ''
+        && _LUMEN_LINK_AS_DESTINATIONS[dest] === 1
+        && _LUMEN_MODULEPRELOAD_DESTINATIONS[dest] !== 1) {
+        // A destination the module fetch cannot serve fails loudly, unlike the
+        // silent preload case above — the spec fires `error` here.
+        setTimeout(function() { _lumen_resource_fire(nid, 'error'); }, 0);
+        return;
+    }
+    _lumen_link_hint_fetch(nid, href, function(url, resp, text) {
+        // Seed the module map so a later `import` of the same URL reuses these
+        // bytes instead of fetching them again — the whole point of the hint.
+        // Only for a JavaScript response: registering a CSS or JSON body under
+        // the URL would turn a later import's type rejection into a syntax
+        // error, which is a worse answer than the extra request (BUG-896).
+        var ct = null;
+        try { ct = resp.headers.get('content-type'); } catch (e) {}
+        if (ct === null || ct === undefined) return;
+        var base = String(ct).split(';')[0].trim().toLowerCase();
+        if (!_lumen_is_classic_script_type(base)) return;
+        try { _lumen_esm_register(url, text); } catch (e) {}
+    });
+}
+
+// Act on one element's hint, once. `toks` — the already lower-cased `rel`
+// tokens.
+function _lumen_link_hint_prepare(nid, toks) {
+    if (_lumen_link_hint_done[nid] === 1) return;
+    var kind = _lumen_link_hint_kind(toks);
+    if (kind === '') return;
+    var href = _lumen_u2n(_lumen_get_attr(nid, 'href'));
+    href = (href === null) ? '' : String(href).trim();
+    // No href → no resource is obtained, so neither event fires.
+    if (href === '') return;
+    _lumen_link_hint_done[nid] = 1;
+    if (kind === 'preload') { _lumen_link_preload(nid, href); return; }
+    if (kind === 'modulepreload') { _lumen_link_modulepreload(nid, href); return; }
+    // `prefetch` is destination-agnostic: it warms the cache for a future
+    // navigation, so `as`/`type` do not gate it (WPT `preload/prefetch-events`).
+    _lumen_link_hint_fetch(nid, href, null);
+}
+
+// The parser's half. A `<link>` written by the HTML parser never goes through
+// the insertion hook above (that one covers elements minted by createElement),
+// so the hints in the markup are picked up in one pass when parsing is done.
+// Walks the whole document rather than just `<head>` — a `<link>` in the body
+// is conforming markup and WPT uses it.
+function _lumen_link_hints_scan() {
+    var links;
+    try { links = document.getElementsByTagName('link'); } catch (e) { return; }
+    if (!links) return;
+    for (var i = 0; i < links.length; i++) {
+        var el = links[i];
+        if (!el || el.__nid__ === undefined) continue;
+        var rel = _lumen_u2n(_lumen_get_attr(el.__nid__, 'rel'));
+        if (rel === null) continue;
+        _lumen_link_hint_prepare(el.__nid__, String(rel).toLowerCase().split(/\\s+/));
+    }
 }
 
 // Run the pending check for one tracked element, if it is connected by now.
@@ -15281,6 +15472,12 @@ function _lumen_apply_ready_state(state) {
     var rsEv = new Event('readystatechange', { bubbles: false, cancelable: false });
     document.dispatchEvent(rsEv);
     if (state === 'interactive') {
+        // BUG-826: the parser's `<link rel=preload|modulepreload|prefetch>`
+        // elements start their fetch here — parsing is done, so the document
+        // holds every hint the markup carries, and a hint appended by a head
+        // script has already run through the insertion hook (the per-node
+        // guard keeps it from running twice).
+        _lumen_link_hints_scan();
         // DOMContentLoaded fires on document (bubbles) then window
         var dcl = new Event('DOMContentLoaded', { bubbles: true, cancelable: false });
         document.dispatchEvent(dcl);
@@ -15969,6 +16166,55 @@ _lumen_install_reflection(HTMLLinkElement.prototype, [
     ['integrity',      'integrity',      'string'],
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
 ]);
+
+// BUG-826: `relList` is the DOMTokenList over the `rel` attribute, and its
+// `supports()` is how a page feature-detects a link type — WPT's own
+// `preload_helper.js` opens with `link.relList.supports('preload')` and throws
+// out of every preload test when the member is missing. Declared per interface
+// (not in the shared wrapper table), because the supported-token set differs
+// between `<link>` and `<a>` and a shared entry would outrank both (BUG-796).
+var _LUMEN_LINK_REL_TOKENS = [
+    'alternate', 'canonical', 'author', 'dns-prefetch', 'expect', 'help',
+    'icon', 'license', 'manifest', 'modulepreload', 'next', 'pingback',
+    'preconnect', 'prefetch', 'preload', 'prev', 'privacy-policy', 'search',
+    'stylesheet', 'terms-of-service'
+];
+var _LUMEN_ANCHOR_REL_TOKENS = [
+    'alternate', 'author', 'bookmark', 'external', 'help', 'license', 'next',
+    'nofollow', 'noopener', 'noreferrer', 'opener', 'prev', 'privacy-policy',
+    'search', 'tag', 'terms-of-service'
+];
+
+function _lumen_make_rel_list(nid, supported) {
+    var rl = _lumen_make_attr_token_list(nid, 'rel');
+    rl.supports = function(token) {
+        return supported.indexOf(String(token).toLowerCase()) >= 0;
+    };
+    return rl;
+}
+function _lumen_make_link_rel_list(nid) {
+    return _lumen_make_rel_list(nid, _LUMEN_LINK_REL_TOKENS);
+}
+function _lumen_make_anchor_rel_list(nid) {
+    return _lumen_make_rel_list(nid, _LUMEN_ANCHOR_REL_TOKENS);
+}
+
+// Cached in a wrapper slot exactly like `classList`, so `el.relList === el.relList`
+// holds and a token added through one read is visible through the next.
+Object.defineProperty(HTMLLinkElement.prototype, 'relList', {
+    get: function() {
+        if (_lumen_reflect_nid(this) === -1) return null;
+        return _lumen_wrapper_slot(this, '__relList__', _lumen_make_link_rel_list);
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLAnchorElement.prototype, 'relList', {
+    get: function() {
+        if (_lumen_reflect_nid(this) === -1) return null;
+        return _lumen_wrapper_slot(this, '__relList__', _lumen_make_anchor_rel_list);
+    },
+    enumerable: true, configurable: true,
+});
 
 _lumen_install_reflection(HTMLStyleElement.prototype, [
     ['media',          'media',          'string'],
@@ -41465,24 +41711,252 @@ mod tests {
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 
-        /// Scope guard: only `rel=stylesheet` is wired. A `rel=preload` link
-        /// must not be fetched behind the page's back — no event either way.
+        // ── BUG-826: <link rel=preload|modulepreload|prefetch> ────────────────
+        //
+        // The predecessor of this block asserted the *absence* of the feature
+        // («a rel=preload link must not be fetched behind the page's back — no
+        // event either way»), which is what BUG-826 turned out to be: the hint
+        // reached a stderr logger in the shell and nothing else.
+
+        /// A `rel=preload` with a valid `as` fetches and reports `load`.
         #[test]
-        fn dynamic_preload_link_fires_nothing() {
+        fn dynamic_preload_link_fetches_and_fires_load() {
             let provider = Arc::new(FixedFetch { status: 200, body: "x" });
             let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
             rt.eval(
-                r#"globalThis.__b703_any = false;
+                r#"globalThis.__b826_load = 0;
+                   globalThis.__b826_err = 0;
                    var l = document.createElement('link');
                    l.rel = 'preload';
+                   l.as = 'font';
                    l.href = 'thing.woff2';
-                   l.onload = function() { globalThis.__b703_any = true; };
-                   l.onerror = function() { globalThis.__b703_any = true; };
+                   l.onload = function() { globalThis.__b826_load++; };
+                   l.onerror = function() { globalThis.__b826_err++; };
                    document.head.appendChild(l);
                    _lumen_tick_timers();"#,
             )
             .unwrap();
-            let r = rt.eval("globalThis.__b703_any === false").unwrap();
+            let r = rt.eval("globalThis.__b826_load === 1 && globalThis.__b826_err === 0").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// An HTTP failure is reported as `error` — the `*_deny` half of the
+        /// WPT families used to hang exactly like the `*_allow` half.
+        #[test]
+        fn preload_link_fires_error_on_http_failure() {
+            let provider = Arc::new(FixedFetch { status: 404, body: "nope" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                r#"globalThis.__b826_e = false;
+                   var l = document.createElement('link');
+                   l.rel = 'preload';
+                   l.as = 'script';
+                   l.href = 'missing.js';
+                   l.onerror = function() { globalThis.__b826_e = true; };
+                   document.head.appendChild(l);
+                   _lumen_tick_timers();"#,
+            )
+            .unwrap();
+            let r = rt.eval("globalThis.__b826_e === true").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// `as` in no state — absent, or a keyword that is not a destination —
+        /// obtains no resource, and the element then reports *nothing*: WPT's
+        /// `preload/onload-event.html` asserts both the missing-`as` and the
+        /// `as=foobarxmlthing` link stay silent.
+        #[test]
+        fn preload_link_without_valid_as_fires_nothing() {
+            let provider = Arc::new(FixedFetch { status: 200, body: "x" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                r#"globalThis.__b826_any = 0;
+                   function mk(as) {
+                       var l = document.createElement('link');
+                       l.rel = 'preload';
+                       if (as !== null) l.as = as;
+                       l.href = 'thing.bin?' + as;
+                       l.onload = function() { globalThis.__b826_any++; };
+                       l.onerror = function() { globalThis.__b826_any++; };
+                       document.head.appendChild(l);
+                   }
+                   mk(null);
+                   mk('foobarxmlthing');
+                   _lumen_tick_timers();"#,
+            )
+            .unwrap();
+            let r = rt.eval("globalThis.__b826_any === 0").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A `type` the destination cannot consume is the same silent refusal.
+        #[test]
+        fn preload_link_with_wrong_type_fires_nothing() {
+            let provider = Arc::new(FixedFetch { status: 200, body: "x" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                r#"globalThis.__b826_t = 0;
+                   var l = document.createElement('link');
+                   l.rel = 'preload';
+                   l.as = 'style';
+                   l.type = 'text/html';
+                   l.href = 'sheet.css';
+                   l.onload = function() { globalThis.__b826_t++; };
+                   l.onerror = function() { globalThis.__b826_t++; };
+                   document.head.appendChild(l);
+                   _lumen_tick_timers();"#,
+            )
+            .unwrap();
+            let r = rt.eval("globalThis.__b826_t === 0").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// `rel=prefetch` is destination-agnostic: no `as` is needed and the
+        /// element still reports `load`.
+        #[test]
+        fn dynamic_prefetch_link_fires_load() {
+            let provider = Arc::new(FixedFetch { status: 200, body: "x" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                r#"globalThis.__b826_pf = false;
+                   var l = document.createElement('link');
+                   l.rel = 'prefetch';
+                   l.href = 'next-page.html';
+                   l.onload = function() { globalThis.__b826_pf = true; };
+                   document.head.appendChild(l);
+                   _lumen_tick_timers();"#,
+            )
+            .unwrap();
+            let r = rt.eval("globalThis.__b826_pf === true").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// `rel=modulepreload` with no `as` defaults to the «script»
+        /// destination and loads; a valid but non-script-like destination is
+        /// the one case that fires `error` instead of staying silent.
+        #[test]
+        fn modulepreload_link_load_and_bad_destination_error() {
+            let provider = Arc::new(FixedFetch { status: 200, body: "export const a = 1;" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                r#"globalThis.__b826_m = '';
+                   var ok = document.createElement('link');
+                   ok.rel = 'modulepreload';
+                   ok.href = 'mod.js';
+                   ok.onload = function() { globalThis.__b826_m += 'L'; };
+                   ok.onerror = function() { globalThis.__b826_m += 'E'; };
+                   document.head.appendChild(ok);
+                   var bad = document.createElement('link');
+                   bad.rel = 'modulepreload';
+                   bad.as = 'image';
+                   bad.href = 'mod2.js';
+                   bad.onload = function() { globalThis.__b826_m += 'l'; };
+                   bad.onerror = function() { globalThis.__b826_m += 'e'; };
+                   document.head.appendChild(bad);
+                   _lumen_tick_timers();"#,
+            )
+            .unwrap();
+            // Order is not asserted: the two paths settle through different
+            // queues (a plain task for the refusal, a fetch promise for the
+            // load), and the spec fixes neither against the other.
+            let r = rt
+                .eval(
+                    "globalThis.__b826_m.length === 2                      && globalThis.__b826_m.indexOf('L') >= 0                      && globalThis.__b826_m.indexOf('e') >= 0",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// Build a document whose `<head>` already holds a `<link rel=preload>`,
+        /// the way the HTML parser leaves it — no `createElement`, so the
+        /// insertion hook never sees the element.
+        fn make_doc_with_parser_preload_link() -> Arc<Mutex<Document>> {
+            let mut doc = Document::new();
+            let html = doc.create_element(QualName::html("html"));
+            let head = doc.create_element(QualName::html("head"));
+            let body = doc.create_element(QualName::html("body"));
+            let link = doc.create_element(QualName::html("link"));
+            if let NodeData::Element { attrs, .. } = &mut doc.get_mut(link).data {
+                for (name, value) in [
+                    ("rel", "preload"),
+                    ("as", "script"),
+                    ("href", "parsed.js"),
+                    ("onload", "globalThis.__b826_p++"),
+                ] {
+                    attrs.push(lumen_dom::Attribute {
+                        name: QualName::html(name),
+                        value: value.into(),
+                    });
+                }
+            }
+            doc.append_child(doc.root(), html);
+            doc.append_child(html, head);
+            doc.append_child(head, link);
+            doc.append_child(html, body);
+            Arc::new(Mutex::new(doc))
+        }
+
+        /// A hint the *parser* wrote never passes through the insertion hook,
+        /// so it is picked up by the document pass at «interactive» — and the
+        /// inline `onload=` content attribute must be the one that fires.
+        #[test]
+        fn parser_written_preload_link_fetches_at_interactive() {
+            let provider = Arc::new(FixedFetch { status: 200, body: "x" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc_with_parser_preload_link(), provider);
+            rt.eval("globalThis.__b826_p = 0; _lumen_tick_timers();").unwrap();
+            // Nothing has run yet: the element was never inserted through the
+            // DOM API, so only the document pass can reach it.
+            let before = rt.eval("globalThis.__b826_p").unwrap();
+            assert_eq!(before, lumen_core::JsValue::Number(0.0));
+            rt.eval("_lumen_apply_ready_state('interactive'); _lumen_tick_timers();").unwrap();
+            let after = rt.eval("globalThis.__b826_p").unwrap();
+            assert_eq!(after, lumen_core::JsValue::Number(1.0));
+        }
+
+        /// The two paths overlap for a link a head script appends before the
+        /// document pass runs; the per-node guard keeps it at one fetch.
+        #[test]
+        fn preload_link_is_not_fetched_twice_by_the_document_pass() {
+            let provider = Arc::new(FixedFetch { status: 200, body: "x" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                r#"globalThis.__b826_n = 0;
+                   var l = document.createElement('link');
+                   l.rel = 'preload';
+                   l.as = 'script';
+                   l.href = 'once.js';
+                   l.onload = function() { globalThis.__b826_n++; };
+                   document.head.appendChild(l);
+                   _lumen_tick_timers();
+                   _lumen_apply_ready_state('interactive');
+                   _lumen_tick_timers();"#,
+            )
+            .unwrap();
+            let r = rt.eval("globalThis.__b826_n").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(1.0));
+        }
+
+        /// `link.relList.supports('preload')` is the first line of WPT's own
+        /// preload helper — without it every test in the family threw before
+        /// reaching its subject.
+        #[test]
+        fn link_rel_list_supports_and_reflects() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                r#"globalThis.__b826_rl = (function() {
+                       var l = document.createElement('link');
+                       l.rel = 'preload';
+                       var ok = l.relList.supports('preload')
+                             && l.relList.supports('modulepreload')
+                             && !l.relList.supports('nonsense')
+                             && l.relList.contains('preload')
+                             && l.relList === l.relList;
+                       l.relList.add('prefetch');
+                       return ok && l.rel === 'preload prefetch';
+                   })();"#,
+            )
+            .unwrap();
+            let r = rt.eval("globalThis.__b826_rl === true").unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 

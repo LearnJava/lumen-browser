@@ -2,7 +2,7 @@
 
 **Статус:** OPEN
 **Заведён:** 2026-08-22 (WPT-RUN-6, срез 22 — найден живым замером с записью запросов на стороне сервера, есть маркер `element-subresource-never-requested`)
-**Область:** `crates/engine/layout/src/box_tree.rs:2262` (`collect_requests_inner` — условие `name.local == "img"` и только оно), `crates/shell/src/main.rs:6858` (`Event::SubresourceHintFound` — единственный потребитель печатает строку в stderr, см. [BUG-826](BUG-826-OPEN.md))
+**Область:** `crates/engine/layout/src/box_tree.rs:2262` (`collect_requests_inner` — условие `name.local == "img"` и только оно), `crates/shell/src/main.rs:6858` (`Event::SubresourceHintFound` — единственный потребитель печатает строку в stderr, см. [BUG-826](BUG-826-FIXED.md))
 **Владелец:** P1/P3 (`lumen-layout` + шелл). Заведён P2 в ходе WPT-задачи, здесь не чинится.
 
 ## Симптом

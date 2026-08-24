@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-25",
  "counts": {
-  "open": 386,
-  "fixed": 475,
+  "open": 387,
+  "fixed": 476,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 861,
+ "total_bugs": 863,
  "phases": [
   {
    "id": "P0",
@@ -10864,10 +10864,10 @@
    "debtor": false
   },
   "BUG-826": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<link rel=preload\\",
    "component": "shell (`crates/shell/src/main.rs:285` — единственный потребитель `Event::SubresourceHintFound` печатает `⤷ preload …` в stderr; `main.rs:6807` `dispatch_preload_hints`, доккоммент «в Phase 0 sink логирует в stderr; в будущем запустит fetch»), html-parser (`crates/engine/html-parser/src/preload_scanner.rs:144` — `modulepreload`/`prefetch` не распознаются вовсе), js (`crates/js/src/dom.rs` — грузится только `rel=stylesheet`, есть тест-охранник `dynamic_preload_link_fires_nothing`)",
-   "date": null,
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-827": {
@@ -11415,6 +11415,20 @@
    "component": "js (`crates/js/src/shared_worker.rs` — хвост `_lumen_sw_report_exception` и рассылка в `run_shared_worker_thread_v8`; `crates/js/src/v8_runtime.rs::eval_and_report_via` — не разделяет фазу компиляции и фазу исполнения)",
    "date": null,
    "debtor": false
+  },
+  "BUG-906": {
+   "status": "open",
+   "title": "Заголовок ответа `Link: <…>; rel=preload; as=script` (HTML LS §4.6.6 «Link headers») не даёт ни одного запроса — ни на самом документе, ни на его подресурсе. От…",
+   "component": "shell (`crates/shell/src/main.rs` — заголовки ответа документа никуда не передаются), js (`crates/js/src/dom.rs` — хинты берутся только с элементов `<link>`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-907": {
+   "status": "open",
+   "title": "Preload не экономит ни одного запроса и стартует поздно. Тело, скачанное по `<link rel=preload>`, никуда не кладётся: последующий реальный запрос того же URL (`…",
+   "component": "js (`crates/js/src/dom.rs::_lumen_link_hint_fetch` — тело только дренируется), shell (`dispatch_preload_hints` — сетевого запроса по-прежнему нет)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11837,6 +11851,9 @@
   ],
   "js (`crates/js/src/dom.rs::_lumen_get_fonts`, ~line 6779)": [
    "BUG-564"
+  ],
+  "js (`crates/js/src/dom.rs::_lumen_link_hint_fetch` — тело только дренируется), shell (`dispatch_preload_hints` — сетевого запроса по-прежнему нет)": [
+   "BUG-907"
   ],
   "js (`crates/js/src/dom.rs::_lumen_parse_url`, `URL_PARSE_SHIM` — ветка `qIdx >= 0`)": [
    "BUG-904"
@@ -12682,6 +12699,9 @@
   ],
   "shell (`crates/shell/src/main.rs` — дренаж popup-запросов `_lumen_window_open`/`open_new_tab()`), js (`crates/js/src/dom.rs:12190-12220` — заглушка возврата)": [
    "BUG-883"
+  ],
+  "shell (`crates/shell/src/main.rs` — заголовки ответа документа никуда не передаются), js (`crates/js/src/dom.rs` — хинты берутся только с элементов `<link>`)": [
+   "BUG-906"
   ],
   "shell (`crates/shell/src/main.rs` — сидирование `ShieldsPanel::default_enabled`), tooling (`tools/wptrunner/wptrunner/browsers/lumen.py`)": [
    "BUG-800"

@@ -470,9 +470,35 @@ the time — read dates.
   the href, not by a report from the cascade loader — the shell re-collects link hrefs from the
   whole tree (`main.rs::collect_link_hrefs`) and has no per-node completion signal to forward.
   So `load` means "the bytes arrived" (a second, cache-warm request), not "the sheet is in the
-  cascade" — the same approximation the `<script>` path already makes. Deliberately narrow:
+  cascade" — the same approximation the `<script>` path already makes. ~~Deliberately narrow:
   `rel=stylesheet` only (giving `preload`/`prefetch` an event would mean fetching resources the
-  page never asked for) and `createElement`-minted links only, exactly like scripts.
+  page never asked for) and `createElement`-minted links only, exactly like scripts.~~ That
+  narrowness turned out to be the whole of [BUG-826](../bugs/BUG-826-FIXED.md) — see the next
+  entry.
+- **Resource hints ride it too ([P1], 2026-08-25, closes
+  [BUG-826](../bugs/BUG-826-FIXED.md)).** `rel=preload`/`modulepreload`/`prefetch` produced no
+  HTTP request **at all** and no event either way: the preload scanner's
+  `Event::SubresourceHintFound` had exactly one consumer in the workspace — the shell's stderr
+  logger — so the log printed `⤷ preload js …` for a request nobody made. `_lumen_link_prepare`
+  now calls `_lumen_link_hint_prepare` alongside its stylesheet branch (independently: a
+  `rel='preload stylesheet'` element is two link types), and a *parser*-written hint, which
+  never passes through the insertion hook at all, is picked up by `_lumen_link_hints_scan()`
+  from `_lumen_apply_ready_state('interactive')`. **Non-obvious, in order of how likely each is
+  to bite:** (1) HTML LS §4.6.7's refusals are silent, so an `as` in no state, a non-matching
+  `media` and a `type` the destination cannot consume must fetch nothing *and* fire nothing —
+  `preload/onload-event.html` asserts exactly that, and firing `error` there would fail it;
+  (2) `modulepreload` inverts one of those — a valid non-script-like destination fires `error`,
+  while an *unknown* `as` keyword is in no state and falls back to the default `script` and
+  loads; (3) `_lumen_link_hint_done` is keyed per **node**, not per URL, because it doubles as
+  the "already started" flag when the insertion hook and the document pass overlap on one
+  element; (4) a `modulepreload` body enters the module map only when the response's
+  content-type is a JS type — registering a CSS/JSON body under the URL would turn a later
+  import's type rejection into a syntax error (BUG-896). `link.relList`/`a.relList` landed with
+  it (`_lumen_make_class_list` generalized to `_lumen_make_attr_token_list(nid, attrName)`),
+  declared per interface rather than in the shared wrapper table for the BUG-796 reason: the
+  supported-token sets of `<link>` and `<a>` differ. Residual: the `Link:` response-header form
+  ([BUG-906](../bugs/BUG-906-OPEN.md)) and both the preload cache and the early start
+  ([BUG-907](../bugs/BUG-907-OPEN.md)).
 - **`document.currentScript` ([P3], 2026-08-09, closes
   [BUG-486](../bugs/BUG-486-FIXED.md), last blocker of
   [BUG-703](../bugs/BUG-703-FIXED.md)).** Missing from the engine outright until now. It is a

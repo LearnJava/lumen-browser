@@ -1232,12 +1232,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/html-parser/src/picture.rs:69` **struct** `PictureParams` — Параметры picker-а
 `crates/engine/html-parser/src/picture.rs:95` **fn** `pick_picture_source` — Выбрать источник для `<picture>` элемента. См. модульный заголовок
 `crates/engine/html-parser/src/picture.rs:141` **fn** `pick_img_source` — Выбрать источник для одиночного `<img>` элемента (`srcset` + `sizes` +
-`crates/engine/html-parser/src/preload_scanner.rs:61` **enum** `PreloadHint` — Один speculative-fetch hint, извлечённый preload-сканером
-`crates/engine/html-parser/src/preload_scanner.rs:121` **fn** `scan_preload_hints` — Пробежать по HTML и вернуть все subresource-hint-ы, найденные в
-`crates/engine/html-parser/src/preload_scanner.rs:245` **struct** `PreloadScanner` — Инкрементальный preload-сканер (HTML LS §13.2.6.4.7)
-`crates/engine/html-parser/src/preload_scanner.rs:251` **fn** `new` — Создаёт новый инкрементальный сканер
-`crates/engine/html-parser/src/preload_scanner.rs:260` **fn** `feed_bytes` — Скармливает очередной chunk сырых байт и возвращает все hint-ы,
-`crates/engine/html-parser/src/preload_scanner.rs:268` **fn** `end` — Завершает ввод и возвращает hint-ы из буферизованного хвоста
+`crates/engine/html-parser/src/preload_scanner.rs:65` **enum** `PreloadHint` — Один speculative-fetch hint, извлечённый preload-сканером
+`crates/engine/html-parser/src/preload_scanner.rs:132` **fn** `scan_preload_hints` — Пробежать по HTML и вернуть все subresource-hint-ы, найденные в
+`crates/engine/html-parser/src/preload_scanner.rs:262` **struct** `PreloadScanner` — Инкрементальный preload-сканер (HTML LS §13.2.6.4.7)
+`crates/engine/html-parser/src/preload_scanner.rs:268` **fn** `new` — Создаёт новый инкрементальный сканер
+`crates/engine/html-parser/src/preload_scanner.rs:277` **fn** `feed_bytes` — Скармливает очередной chunk сырых байт и возвращает все hint-ы,
+`crates/engine/html-parser/src/preload_scanner.rs:285` **fn** `end` — Завершает ввод и возвращает hint-ы из буферизованного хвоста
 `crates/engine/html-parser/src/push_tokenizer.rs:32` **struct** `PushTokenizer` — Push-режим HTML5 токенизатора. См. module-level docs
 `crates/engine/html-parser/src/push_tokenizer.rs:51` **fn** `new` — Создаёт новый `PushTokenizer` в исходном состоянии
 `crates/engine/html-parser/src/push_tokenizer.rs:66` **fn** `feed` — Скармливает chunk токенизатору и возвращает токены, ставшие
