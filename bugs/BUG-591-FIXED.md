@@ -429,7 +429,7 @@ ric-checked
 шимов. Все закрыты: `worker.rs` (клиентский класс `Worker`: `onmessage`,
 `onerror`, слушатели), `shared_worker.rs` (то же для `SharedWorker`),
 `web_audio.rs` (`onstatechange`; `oncomplete` — именно его
-[BUG-828](BUG-828-OPEN.md) называет причиной немоты `webaudio/*`), `xhr.rs`
+[BUG-828](BUG-828-FIXED.md) называет причиной немоты `webaudio/*`), `xhr.rs`
 (общая развилка `on<type>` + `onreadystatechange`), `video_bindings.rs`
 (`oncuechange` дорожек), `broadcast_channel.rs`, `cookie_store.rs`,
 `media_devices.rs`, `media_stream_recording.rs`, `media_session.rs`,

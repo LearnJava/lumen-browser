@@ -76,11 +76,11 @@
  "generated": "2026-08-25",
  "counts": {
   "open": 386,
-  "fixed": 477,
+  "fixed": 478,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 863,
+ "total_bugs": 864,
  "phases": [
   {
    "id": "P0",
@@ -10896,10 +10896,10 @@
    "debtor": false
   },
   "BUG-828": {
-   "status": "open",
+   "status": "fixed",
    "title": "Web Audio рендерит тишину. Граф «осциллятор → gain → destination», работающий весь рендер, даёт буфер верной длины и `nonzero=0/4410`; `ended` не приходит ни че…",
    "component": "js (`crates/js/src/web_audio.rs:638` — `OfflineAudioContext.prototype.startRendering`, «Phase 0: immediately resolve with a silent buffer» + `try { self.oncomplete(evt) } catch(e) {}`; `:656` — `suspend`/`resume` как `Promise.resolve()`; там же узлы без события `ended` и `AudioParam` без расписания)",
-   "date": null,
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-829": {
@@ -11445,6 +11445,13 @@
    "status": "open",
    "title": "Preload не экономит ни одного запроса и стартует поздно. Тело, скачанное по `<link rel=preload>`, никуда не кладётся: последующий реальный запрос того же URL (`…",
    "component": "js (`crates/js/src/dom.rs::_lumen_link_hint_fetch` — тело только дренируется), shell (`dispatch_preload_hints` — сетевого запроса по-прежнему нет)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-908": {
+   "status": "open",
+   "title": "Пер-сессионного шума ±1e-7 в аудио больше нет: реализация жила в `audio_bindings.rs`, который был мёртв из-за порядка установки ([BUG-550](bugs/BUG-550-FIXED.md…",
+   "component": "js (`crates/js/src/web_audio.rs` — `AudioBuffer.getChannelData`/`copyFromChannel`, `AnalyserNode.getFloat*Data`), ADR-007 Layer 4",
    "date": null,
    "debtor": false
   }
@@ -12099,6 +12106,9 @@
   ],
   "js (`crates/js/src/web_audio.rs:638` — `OfflineAudioContext.prototype.startRendering`, «Phase 0: immediately resolve with a silent buffer» + `try { self.oncomplete(evt) } catch(e) {}`; `:656` — `suspend`/`resume` как `Promise.resolve()`; там же узлы без события `ended` и `AudioParam` без расписания)": [
    "BUG-828"
+  ],
+  "js (`crates/js/src/web_audio.rs` — `AudioBuffer.getChannelData`/`copyFromChannel`, `AnalyserNode.getFloat*Data`), ADR-007 Layer 4": [
+   "BUG-908"
   ],
   "js (`crates/js/src/web_codecs.rs` — `webcodecs_shim`)": [
    "BUG-710"
