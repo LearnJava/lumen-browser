@@ -315,7 +315,7 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   `--selftest` runs the built-in assertions. Fixing it is `WPT-RUN-10`.
 - `tests/wpt/long_timeout_audit.py` — **ours** (WPT-RUN-5 slice 30) — prices a
   defect against the published number instead of arguing about it. Built for
-  [BUG-796](../../bugs/BUG-796-OPEN.md) (`meta.content` is `undefined`, so
+  [BUG-796](../../bugs/BUG-796-FIXED.md) (`meta.content` is `undefined`, so
   `testharness.js` judges a `timeout: long` test by the 10 s default): it
   re-runs each sampled id twice on the same binary — as served, and with a shim
   that repairs `meta.content` ahead of the page's own `testharness.js` — and

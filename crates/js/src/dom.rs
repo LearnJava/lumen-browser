@@ -4697,17 +4697,12 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var clone_nid = _lumen_clone_subtree(nid, deep ? 1 : 0);
             return _lumen_make_element(clone_nid);
         },
-        // HTMLTemplateElement.content (HTML LS §4.12.3) — returns the template's
-        // DocumentFragment content container, or null when not a template element.
-        get content() { var nid = this.__nid__;
-            if ((_lumen_get_tag_name(nid) || '').toUpperCase() !== 'TEMPLATE') return undefined;
-            // Фрагмент заводит и запоминает нативная сторона (в том числе для
-            // шаблона, созданного через createElement). Раньше на промахе тут
-            // создавался НОВЫЙ фрагмент на каждое обращение: `t.content !==
-            // t.content`, и всё записанное в него терялось.
-            var frag_nid = _lumen_u2n(_lumen_get_template_content(nid));
-            return frag_nid !== null ? _lumen_make_document_fragment(frag_nid) : null;
-        },
+        // BUG-796: `content` used to live here, as a template-only getter answering
+        // `undefined` on every other element — and this table shadows the interface
+        // prototypes, so it also swallowed `HTMLMetaElement.content`. It is an IDL
+        // attribute of `HTMLTemplateElement` alone and now sits on that prototype
+        // (search `HTMLTemplateElement.prototype, 'content'`); nothing tag-specific
+        // belongs in this shared table.
         // Scoped to this element's descendants (DOM Parentnode §4.2.5) — works on
         // detached subtrees too, unlike the document-global `_lumen_query_selector`.
         querySelector:    function(sel) { var nid = this.__nid__;
@@ -15008,11 +15003,15 @@ _lumen_install_reflection(HTMLIFrameElement.prototype, [
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
 ]);
 
+// `scheme` is the obsolete-but-conforming member (HTML LS §16.3); `charset` is a
+// content attribute with NO IDL counterpart on this interface — checked against
+// `tests/wpt/interfaces/html.idl`, which BUG-796 got backwards.
 _lumen_install_reflection(HTMLMetaElement.prototype, [
     ['name',           'name',           'string'],
     ['content',        'content',        'string'],
     ['httpEquiv',      'http-equiv',     'string'],
     ['media',          'media',          'string'],
+    ['scheme',         'scheme',         'string'],
 ]);
 
 _lumen_install_reflection(HTMLTableCellElement.prototype, [
@@ -15151,6 +15150,37 @@ Object.defineProperty(HTMLSelectElement.prototype, 'type', {
 });
 Object.defineProperty(HTMLFieldSetElement.prototype, 'type', {
     get: function() { return 'fieldset'; }, enumerable: true, configurable: true,
+});
+
+// HTML LS §4.12.3 — `readonly attribute DocumentFragment content`, an IDL
+// attribute of HTMLTemplateElement and of nothing else. It used to be declared in
+// `_LUMEN_WRAPPER_MEMBERS`, i.e. on the shared wrapper prototype every element
+// gets, where its «not a template → undefined» branch shadowed the reflected
+// `HTMLMetaElement.content` (and would shadow any future `content` on another
+// interface) — BUG-796. `testharness.js` reads `meta.content` to pick its own
+// timeout, so that shadow cost every `<meta name=timeout content=long>` test the
+// long ceiling. Placed here, only a `<template>` wrapper can reach it, because
+// `_lumen_element_prototype_for` hands out this prototype for the TEMPLATE tag
+// alone.
+Object.defineProperty(HTMLTemplateElement.prototype, 'content', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        // `[SameObject]`: the fragment NODE has been stable since BUG-368 (the
+        // native side creates it once and remembers it, `createElement`-built
+        // templates included), but `_lumen_make_document_fragment` mints a fresh
+        // literal per call, so `t.content !== t.content` held and an expando
+        // written on the fragment was lost. The wrapper is cached on the element
+        // wrapper, which is itself interned per nid (BUG-291).
+        var cached = this.__templateContent__;
+        if (cached !== undefined) return cached;
+        var frag_nid = _lumen_u2n(_lumen_get_template_content(n));
+        if (frag_nid === null) return null;
+        var frag = _lumen_make_document_fragment(frag_nid);
+        _lumen_wrapper_set_slot(this, '__templateContent__', frag);
+        return frag;
+    },
+    enumerable: true, configurable: true,
 });
 
 // ── Form-control associations, collections and activation (BUG-383) ──────────
@@ -31183,6 +31213,89 @@ mod tests {
                 t.content.childNodes.length === 1 && t.content.__nid__ === t.content.__nid__
             "#).unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn template_content_is_the_same_wrapper_object() {
+            // HTML LS §4.12.3 объявляет `content` как `[SameObject]`. Узел был
+            // стабилен и раньше, а вот ОБЁРТКА создавалась заново на каждое
+            // чтение, так что `t.content !== t.content` и экспандо на фрагменте
+            // терялось между обращениями.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var t = document.createElement('template');
+                t.content.__probe__ = 42;
+                t.content === t.content && t.content.__probe__ === 42
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn content_is_a_template_member_only() {
+            // BUG-796: `content` жил в общей таблице членов обёртки, поэтому
+            // «собственный» шаблонный геттер стоял на КАЖДОМ элементе и затенял
+            // рефлексию `content` с интерфейсного прототипа.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var d = document.createElement('div');
+                var t = document.createElement('template');
+                JSON.stringify({
+                    on_div: 'content' in d,
+                    on_template: 'content' in t,
+                    template_frag: t.content.__isDocumentFragment__ === true
+                })
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    r#"{"on_div":false,"on_template":true,"template_frag":true}"#.into()
+                )
+            );
+        }
+
+        #[test]
+        fn meta_content_reflects_its_attribute() {
+            // Ровно то, что читает `testharness.js` при выборе своего потолка:
+            // `metas[i].name === 'timeout' && metas[i].content === 'long'`.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var m = document.createElement('meta');
+                m.setAttribute('name', 'timeout');
+                m.setAttribute('content', 'long');
+                m.setAttribute('http-equiv', 'refresh');
+                m.setAttribute('scheme', 'Dublin Core');
+                document.body.appendChild(m);
+                var found = document.getElementsByTagName('meta')[0];
+                JSON.stringify({
+                    name: found.name,
+                    content: found.content,
+                    httpEquiv: found.httpEquiv,
+                    scheme: found.scheme
+                })
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    r#"{"name":"timeout","content":"long","httpEquiv":"refresh","scheme":"Dublin Core"}"#
+                        .into()
+                )
+            );
+        }
+
+        #[test]
+        fn meta_content_is_writable_through_the_idl_attribute() {
+            // Рефлексия двусторонняя: запись в IDL-атрибут обязана дойти до
+            // контентного, иначе `<meta name=viewport>`-код правит копию.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var m = document.createElement('meta');
+                m.content = 'width=device-width';
+                m.getAttribute('content') + '|' + m.content
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("width=device-width|width=device-width".into())
+            );
         }
 
         #[test]
