@@ -1515,6 +1515,27 @@ impl V8JsRuntime {
         self.run(move |_inner| crate::v8_esm::set_import_map(map));
     }
 
+    /// Point this runtime's ESM loader at `base_url` and give it `provider` as
+    /// its network bridge.
+    ///
+    /// `install_dom` does the same two writes for a page runtime; a **worker**
+    /// runtime never goes through `install_dom` at all, so a module worker
+    /// (BUG-777) has to set them itself or its `import` would resolve against
+    /// an empty base and find no fetcher. Both live in `v8_esm`'s thread-local
+    /// state — V8's resolve callback is capture-less and can reach nothing
+    /// else — hence `self.run`, which lands on the runtime's own JS thread.
+    pub(crate) fn set_module_context(
+        &self,
+        base_url: &str,
+        provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    ) {
+        let base_url = base_url.to_owned();
+        self.run(move |_inner| {
+            crate::v8_esm::set_page_url(&base_url);
+            crate::v8_esm::set_fetch_provider(provider);
+        });
+    }
+
     /// Dispatch `f` to the JS thread, blocking until it completes.
     ///
     /// # Safety

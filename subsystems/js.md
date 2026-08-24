@@ -334,6 +334,32 @@ the time — read dates.
   19 tests in `v8_esm.rs`. **Gap:** the shell never calls `register_module_source`, so a
   page's `import './x.js'` still fails "module not found" —
   [BUG-446](../bugs/BUG-446-FIXED.md), engine-independent (rquickjs had it too).
+- **Module workers + `WorkerOptions` ([P1], 2026-08-24,
+  [BUG-777](../bugs/BUG-777-FIXED.md)).** Four things worth carrying. (1) *The options parser is
+  its own shim.* `worker::WORKER_OPTIONS_SHIM` is evaluated by **both** `install_worker_bindings_v8`
+  and `install_shared_worker_bindings_v8` and guards on its own global, because `SHARED_WORKER_SHIM`
+  is a separate `rt.eval` a fix inside `WORKER_SHIM` never reaches (the BUG-780 lesson) and the
+  shared-worker unit tests install their bindings without the dedicated-worker ones. (2) *A worker
+  runtime never goes through `install_dom`*, so the two writes that arm the ESM loader
+  (`v8_esm::set_page_url` + `set_fetch_provider`) have to be made explicitly — the new
+  `V8JsRuntime::set_module_context` does them on the runtime's own JS thread, which is the only
+  thread that can see that thread-local state (V8's resolve callback is capture-less). The script is
+  then evaluated with `eval_module_at`, not `eval_module`, so a relative `import` resolves against
+  the worker's URL rather than the page's — the same reason that method exists for an external
+  `<script type=module src>`. (3) *The measurement was blocked by something else entirely.* Every
+  WPT worker resource branches on `'DedicatedWorkerGlobalScope' in self && self instanceof
+  DedicatedWorkerGlobalScope`, and a scope that answers `false` there executes none of its branches
+  — so `dedicated-worker-options-type.html` failed even its **classic** subtests. The interface
+  objects now come from a factory in the shared `WORKER_LOCATION_NAVIGATOR_SHIM`
+  (`_lumen_define_worker_scope(name)`), called by each flavour with its own name, and carry
+  `instanceof` through the global object's prototype chain rather than a `Symbol.hasInstance` trick
+  — that way `EventTarget.prototype`'s methods reach the scope as HTML LS says, and own globals
+  (`globalThis.x = …`) still shadow the chain. (4) *A shared worker's thread is spawned by its first
+  connect*, so the top-level `eval` always finishes before any `Connect` arrives and
+  `broadcast_shared_worker_error` reached an empty client map — a script that failed to load left
+  its page waiting for the run timeout. A module worker makes that the common case (every failed
+  `import` in the graph lands there), so the failure is now remembered in `pending_error` and
+  replayed to each client as it connects.
 - **`WorkerLocation`/`WorkerNavigator` in every worker scope ([P1], 2026-08-24,
   [BUG-776](../bugs/BUG-776-FIXED.md)).** `location` and `navigator` were plain `ReferenceError`s
   in a dedicated and a shared worker (`navigator` in the service worker too), so any script

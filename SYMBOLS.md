@@ -1548,11 +1548,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/v8_runtime.rs:1468` **fn** `register_top_document` — BUG-480 срез 3: зарегистрировать документ **верха** в JS-контексте
 `crates/js/src/v8_runtime.rs:1501` **fn** `debug_heap_stats` — V8 isolate heap statistics: `(total_heap_size, used_heap_size)` in bytes
 `crates/js/src/v8_runtime.rs:1514` **fn** `set_import_map` — Install the import map (HTML LS §8.1.6.2) used to resolve bare module
-`crates/js/src/v8_runtime.rs:1620` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
-`crates/js/src/v8_runtime.rs:1691` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
-`crates/js/src/v8_runtime.rs:6481` **fn** `eval_and_report` — Evaluate a classic top-level `<script>` body exactly like
-`crates/js/src/v8_runtime.rs:6588` **fn** `eval_module_and_report` — Evaluate `source` as the entry ES module of a top-level page load
-`crates/js/src/v8_runtime.rs:6612` **fn** `eval_module_at_and_report` — External-module counterpart of [`Self::eval_module_and_report`], for
+`crates/js/src/v8_runtime.rs:1641` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
+`crates/js/src/v8_runtime.rs:1712` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
+`crates/js/src/v8_runtime.rs:6502` **fn** `eval_and_report` — Evaluate a classic top-level `<script>` body exactly like
+`crates/js/src/v8_runtime.rs:6609` **fn** `eval_module_and_report` — Evaluate `source` as the entry ES module of a top-level page load
+`crates/js/src/v8_runtime.rs:6633` **fn** `eval_module_at_and_report` — External-module counterpart of [`Self::eval_module_and_report`], for
 `crates/js/src/video_gif_store.rs:36` **struct** `VideoPlaybackState` — Per-`<video>` playback timing, stored by the shell after a GIF is decoded
 `crates/js/src/video_gif_store.rs:57` **fn** `current_ms` — Playback position in ms at a given real-clock instant
 `crates/js/src/video_gif_store.rs:66` **fn** `is_ended` — Whether playback has naturally ended (finite loop count exhausted)
