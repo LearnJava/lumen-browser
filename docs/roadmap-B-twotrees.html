@@ -73,10 +73,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-24",
+ "generated": "2026-08-25",
  "counts": {
-  "open": 389,
-  "fixed": 472,
+  "open": 388,
+  "fixed": 473,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -10861,10 +10861,10 @@
    "debtor": false
   },
   "BUG-823": {
-   "status": "open",
+   "status": "fixed",
    "title": "Streams разрешают промисы только на счастливом пути: `writer.closed` не оседает никогда, `controller.error()` доходит лишь до уже стоящих `read`-запросов, проми…",
-   "component": "js (`crates/js/src/dom.rs:7303-7620` — шим Streams; `:7331` `controller.error`, `:7353` конструктор игнорирует возврат `start()`, `:7406` `pipeTo`)",
-   "date": null,
+   "component": "js (`crates/js/src/dom.rs` — шим Streams: `WritableStream`/`WritableStreamDefaultWriter`/`_ws_*`, `_rs_do_error`, `TransformStream`)",
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-824": {
@@ -11820,9 +11820,6 @@
   "js (`crates/js/src/dom.rs:7217-7276` -- `_lumen_deliver_intersection_observers`)": [
    "BUG-627"
   ],
-  "js (`crates/js/src/dom.rs:7303-7620` — шим Streams; `:7331` `controller.error`, `:7353` конструктор игнорирует возврат `start()`, `:7406` `pipeTo`)": [
-   "BUG-823"
-  ],
   "js (`crates/js/src/dom.rs:7345` `setTimeout`, `:7361` `setInterval` — `delay > 0 ? delay : 0` без верхней границы)": [
    "BUG-847"
   ],
@@ -11975,6 +11972,9 @@
   ],
   "js (`crates/js/src/dom.rs` — фрагментный парсер `innerHTML`)": [
    "BUG-744"
+  ],
+  "js (`crates/js/src/dom.rs` — шим Streams: `WritableStream`/`WritableStreamDefaultWriter`/`_ws_*`, `_rs_do_error`, `TransformStream`)": [
+   "BUG-823"
   ],
   "js (`crates/js/src/dom.rs` — шим медиа-элементов, пути `<audio>` и `<video>` разные), shell (`crates/shell/src/video_bindings.rs`)": [
    "BUG-825"

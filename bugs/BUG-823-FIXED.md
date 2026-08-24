@@ -1,6 +1,6 @@
 # BUG-823 — Streams: промисы разрешаются только на счастливом пути, любая ошибка/закрытие/отмена оставляет промис висеть навсегда
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-25 (P1, ветка `p1-bug823-streams`)
 **Заведён:** 2026-08-21 (WPT-RUN-6, срез 19 — 40 TIMEOUT остатка вместе с [BUG-824](BUG-824-OPEN.md), механизм `streams-promise-unsettled`)
 **Область:** `crates/js/src/dom.rs:7303-7620` — весь шим `ReadableStream`/`WritableStream`/`TransformStream` (в частности `ReadableStreamDefaultController.error` `:7331`, `_rs_do_close` `:7342`, `ReadableStream.pipeTo` `:7406`, конструктор `ReadableStream` `:7353` — `start()` вызывается синхронно и его возвращаемое значение выбрасывается)
 **Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.
@@ -112,3 +112,59 @@ Lumen молча зависает вместо того чтобы отдать 
 2. WPT: `run_report.py --all --root streams --recursive` — файлы
    `writable-streams/*` и `transform-streams/*` доходят до конца (сколько
    при этом PASS — отдельный вопрос, здесь важен сам факт завершения).
+
+## Фикс (2026-08-25, P1)
+
+`WritableStream` переписан по машине состояний спеки (§4), а на читаемой
+стороне закрыты три точечных пробела. Ключ — **реестр промисов**: у потока
+теперь есть `_ws_writeRequests`, `_ws_inFlightWrite`, `_ws_closeRequest`,
+`_ws_inFlightClose`, `_ws_pendingAbort`, а у писателя — дефериды
+`_readyD`/`_closedD` со своим состоянием, так что переход в
+`errored`/`closed` рассылает **все** ожидающие промисы (`_ws_finish_erroring`
+→ write-запросы → close-запрос → `writer.closed` → abort-запрос), а не тот
+один, на котором пришла ошибка.
+
+Что это поменяло по четырём пробелам заявки:
+
+* **`writer.closed`** — прототипный геттер над `_closedD`; оседает и на
+  успешном закрытии (`_ws_finish_in_flight_close`), и на любой ошибке
+  (`_ws_reject_close_and_closed_if_needed`), и на `releaseLock()`.
+* **`controller.error(e)`** — идёт через `WritableStreamStartErroring`
+  (сначала `writer.ready`, потом, когда нет операции «в полёте», полный
+  `FinishErroring`). На читаемой стороне парный `_rs_do_error` рассылает
+  ошибку и стоящим `read`-запросам, и `reader.closed`.
+* **Промис из `start()`** — ожидается на обеих сторонах: у writable
+  контроллер не начинает разбирать очередь, пока `start()` не осел
+  (`_ws_ctrl_setup`), у readable поток остаётся «не стартовавшим» и
+  реджект переводит его в `errored`.
+* **`abort()` синка** — вызывается из `_ws_finish_erroring` (спековые
+  `AbortSteps`), с `AbortController`/`controller.signal` в придачу.
+
+Заодно: `TransformStream` связан в обе стороны (бросок в `transform`/`flush`
+роняет обе половины, `readable.cancel()` роняет writable), `pipeTo` снимает
+блокировки и реджектится вместо зависания, `ReadableStream.cancel()` отдаёт
+результат `cancel()` источника, а `pull()` больше не зовётся реентрантно и
+его реджект ошибает поток. Спековая пометка `[[PromiseIsHandled]]`
+воспроизведена `_stream_mark_handled`, иначе отклонённый движком
+`writer.closed` вылезал бы страничным `unhandledrejection` (BUG-716).
+
+**Сдвиг контракта, который стоит знать:** синк больше не вызывается в том же
+такте, что `write()`/`close()` — очередь двигается только после того, как
+осел промис вокруг `start()` (§4.8.3). Два юнит-теста, писавшие проверку в
+том же `eval()`, разнесены на два — это спековое поведение, а не регрессия.
+
+**Замеры.** Живая проба (dev-release, Windows, `--seconds 6`): все семь
+вариантов печатают ожидаемые маркеры, включая три бывших молчащих —
+`stream-close-throws` → `write-resolved, close-rejected boom, closed-rejected
+boom`; `stream-write-throws` → `write-rejected boom, closed-rejected boom`;
+`stream-abort` → `sink-abort why, abort-resolved, closed-rejected why`; четыре
+контроля (`stream-read-queued`, `stream-pull-demand`, `stream-async-start`,
+`stream-transform-close`) не сдвинулись. Юнит-тесты: 10 новых в
+`dom.rs::tests::v8_whatwg_streams` (по одному на каждый пробел заявки плюс
+`pipeTo`, отмена, две стороны `TransformStream`), весь `lumen-js` — 3106
+пройдено, 0 упало.
+
+**Вне рамок** (остаётся [BUG-824](BUG-824-OPEN.md)): `tee()` по-прежнему
+клонирует снимок очереди вместо ветвления, нет BYOB, `Symbol.asyncIterator`
+и закрытия `TextDecoderStream`; поэлементная отдача `DecompressionStream` —
+[BUG-846](BUG-846-OPEN.md).
