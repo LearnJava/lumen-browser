@@ -165,3 +165,12 @@ Web Storage сломалось бы на `ReferenceError`. `undefined`/`null` �
 | `webstorage/event_initstorageevent.window.html` | 1/5 | **5/5** |
 
 `Unexpected results: 8` → `0`, `rc=1` → `rc=0`.
+
+Полный прогон категории тем же бинарём
+(`run_report.py --all --root webstorage --recursive`, 8 мин 45 с):
+**25/54 harness OK, 1237/1277 сабтестов** против 1229/1277 сразу после закрытия
+[BUG-773](BUG-773-FIXED.md) в тот же день. Harness-число не сдвинулось, и это
+ожидаемо: оба файла `StorageEvent` и раньше доходили до конца — они падали
+сабтестами, а не вставали. Остаток категории — [BUG-480](BUG-480-OPEN.md)
+(события между документами) и [BUG-901](BUG-901-OPEN.md) (одиночный суррогат →
+`U+FFFD` на границе с нативом).
