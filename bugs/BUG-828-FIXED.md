@@ -183,6 +183,49 @@ fan-out тянет источник ровно один раз, а **цикл в
 `ChannelSplitterNode` не различали индексы входов/выходов, а `connect(param)`
 возвращал сам параметр вместо `undefined`.
 
+## Замер после починки (2026-08-25, dev-release, Windows)
+
+Проба `verify_preload_script_audio_gaps.py --seconds 6`:
+
+| проба | было | стало |
+|---|---|---|
+| `audio-source-ended` | только `rendered length=44100` | `source-onended`, `source-ended-listener`, `rendered length=44100` |
+| `audio-param-automation` | `gain-value=1`, `nonzero=0/4410` | `gain-value=0.25`, `nonzero=4409/4410` |
+| `audio-oncomplete-throws` | бросок исчезал | `oncomplete-ran length=128`, `win-error boom` |
+| `audio-offline-suspend` | `currentTime=0 state=closed` | `currentTime=0.5021315… state=suspended`, затем `offline-rendered length=44100` |
+| `audio-context-state` (контроль) | все переходы | все переходы, без просадки |
+
+`nonzero=4409`, а не 4410: синус стартует в фазе 0, поэтому нулевой сэмпл
+действительно нулевой — ожидание «4410/4410» в заявке было идеализированным.
+
+WPT (`run_report.py --all --root … --recursive`), по подкаталогам, которые
+заявка перечисляет в составе остатка:
+
+| подкаталог | harness | подтесты | TIMEOUT |
+|---|---|---|---|
+| `the-audioparam-interface` | 39 OK / 5 ERROR из 44 | 629/871 | **0** (было 5) |
+| `the-audiobuffersourcenode-interface` | 26/26 OK | 246/299 | **0** (было 2) |
+| `the-analysernode-interface` | 10/11 OK | 86/140 | **0** (было 1) |
+| `the-mediastreamaudiosourcenode-interface` | 2/3 OK | 0/77 | **0** (было 1) |
+| `the-oscillatornode-interface` | 4/4 OK | 80/104 | 0 |
+| `the-gainnode-interface` | 4/4 OK | 12/15 | 0 |
+| `the-offlineaudiocontext-interface` | 5/6 OK | 27/68 | 0 |
+| `the-audiocontext-interface` | 12/20 OK | 58/131 | 4 |
+
+То есть 9 из 11 id остатка перестали висеть. Оставшиеся четыре TIMEOUT — все
+в `the-audiocontext-interface` и **не про рендер**:
+`audiocontext-not-fully-active` требует `<iframe>` ([BUG-480](BUG-480-OPEN.md)),
+`audiocontext-sinkid-constructor` — `setSinkId`, которого нет,
+`processing-after-resume` — рендера у живого контекста, которого нет,
+`audiocontext-suspend-resume-close` виснет на `new Audio()` и
+`createMediaStreamDestination().stream` в своей же таблице узлов.
+
+Полный прогон `--root webaudio/the-audio-api` не доводился: он начинается с
+`media-playback-while-not-visible-permission-policy`, где десятки
+`?origin=…`-вариантов на кросс-доменных iframe висят по 10 с каждый (класс
+BUG-480), и это ~50 минут ни о чём. Подкаталоги выше покрывают заявку
+целиком.
+
 **Остатки (не в этом баге):** нет FFT, поэтому `AnalyserNode.get*FrequencyData`
 по-прежнему отдают пол шкалы (временна́я область — настоящая, из кольцевого
 буфера); `decodeAudioData` по-прежнему отдаёт секунду тишины (декодера нет);
