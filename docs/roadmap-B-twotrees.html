@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-25",
  "counts": {
-  "open": 387,
-  "fixed": 474,
+  "open": 386,
+  "fixed": 475,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -10875,10 +10875,10 @@
    "debtor": false
   },
   "BUG-825": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<video>` — заглушка тоньше `<audio>`: изменение `volume`/`muted` не даёт `volumechange` ни через свойство, ни через `addEventListener` (у `<audio>` обе формы р…",
-   "component": "js (`crates/js/src/dom.rs` — шим медиа-элементов, пути `<audio>` и `<video>` разные), shell (`crates/shell/src/video_bindings.rs`)",
-   "date": null,
+   "component": "js (`crates/js/src/video_bindings.rs` — шим `<video>`; `crates/js/src/dom.rs` — хук вставки `<source>`)",
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-826": {
@@ -11976,9 +11976,6 @@
   "js (`crates/js/src/dom.rs` — шим Streams: `WritableStream`/`WritableStreamDefaultWriter`/`_ws_*`, `_rs_do_error`, `TransformStream`)": [
    "BUG-823"
   ],
-  "js (`crates/js/src/dom.rs` — шим медиа-элементов, пути `<audio>` и `<video>` разные), shell (`crates/shell/src/video_bindings.rs`)": [
-   "BUG-825"
-  ],
   "js (`crates/js/src/dom.rs` — шим), shell (исполнение скриптов), layout (`style.rs`)": [
    "BUG-703"
   ],
@@ -12073,6 +12070,9 @@
   ],
   "js (`crates/js/src/video_bindings.rs` — `appendCues()` строит cue из пяти полей; `crates/js/src/text_track_store.rs::tracks_json` и натив `__lumen_vtt_parse` — оба сериализуют `VttCue` без `settings`; `crates/engine/dom/src/vtt.rs` — `VttCueSettings` разбирается и никуда не уезжает)": [
    "BUG-902"
+  ],
+  "js (`crates/js/src/video_bindings.rs` — шим `<video>`; `crates/js/src/dom.rs` — хук вставки `<source>`)": [
+   "BUG-825"
   ],
   "js (`crates/js/src/wasm/parser.rs:547-599` — `parse_element_section`)": [
    "BUG-700"

@@ -1334,6 +1334,39 @@ the time — read dates.
   overlay store. 9 tests in `video_bindings::tests_v8::track_loading`. Live A/B of the
   `webvtt` category: subtests 2/178 → 31/178, wall clock 8:46 → 0:58.
 
+- **The `HTMLMediaElement` state machine on `<video>` ([BUG-825](../bugs/BUG-825-FIXED.md),
+  2026-08-25, `video_bindings.rs` `VIDEO_SHIM` + the `<source>` branch of
+  `dom.rs::_lumen_resource_track`/`_lumen_resource_try_prepare`).** `<video>` had no
+  *loading state at all*: `readyState` was the expression `_gifBacked ? 4 : (_src ? 0 : 4)`
+  — HAVE_ENOUGH_DATA on an untouched element — and a non-GIF `src` synchronously dispatched
+  a fabricated `loadedmetadata` + `canplay` pair for a file nothing had requested. HTML
+  §4.8.11.5's media load and resource selection algorithms are implemented now, both
+  branches: the `src`-attribute branch ends in the «dedicated media source failure steps»
+  (a real `MediaError`, `MEDIA_ERR_SRC_NOT_SUPPORTED`), the `<source>` branch walks
+  candidates, filtering on `type`/`media`, and fires `error` **at the `<source>` and not at
+  the media element** — that split is what `resource-selection-candidate-*` asserts.
+  `load()` re-enters the algorithm through `abort`/`emptied`.
+  `networkState`/`currentSrc`/`error`/`playbackRate`/`defaultPlaybackRate`/`seeking`/
+  `buffered`/`seekable`/`played`/`fastSeek` all exist now.
+  **The load-bearing part of the shape:** every media event is *queued* as a task, never
+  dispatched inline — `e.volume = 0.5; e.onvolumechange = …` is the order
+  `event_volumechange.html` and much of WPT's media suite use, and a synchronous dispatch
+  reaches nobody (the BUG-808 lesson, arrived at from the other side).
+  `volumechange`/`ratechange` key on the *value* changing, so the setters carry equality
+  guards; an out-of-range `volume` throws `IndexSizeError` instead of clamping.
+  `HTMLMediaElement` and `MediaError` are defined here too — neither existed, so the
+  `NETWORK_*`/`HAVE_*` constants had no interface to live on; the two media prototypes are
+  re-linked with `Object.setPrototypeOf`, which only moves the [[Prototype]] and leaves
+  every `_lumen_install_reflection` row an own property of them. Incidentally: the shim's
+  own `controls`/`loop` accessors are gone — they kept the value in a closure and never
+  wrote the content attribute, so `video.controls = true` was invisible to layout and
+  paint — and `duration` with no resource is `NaN` rather than `Infinity`. Contract shifts:
+  `play()` on a non-GIF resource rejects with `NotSupportedError`; `play()` with no
+  resource at all still resolves, because a promise that never settles takes the rest of a
+  `testharness.js` file with it (the BUG-823 shape). `<audio>` keeps its own older model in
+  `audio_element.rs` and still dispatches synchronously. 11 tests in
+  `video_bindings::tests_v8::media_element`.
+
 - **WAAPI `Animation` is an `EventTarget`** (BUG-808, 2026-08-24, `dom.rs`
   `WEB_API_SHIM_TAIL_B`). `Animation.prototype = Object.create(EventTarget.prototype)`
   plus `EventTarget.call(this)` in the constructor; `cancel()`/`_onFinish()` route through

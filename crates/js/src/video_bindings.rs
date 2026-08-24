@@ -34,6 +34,26 @@
 //! | `__lumen_video_can_play_type` | `(mime: String) → String` | canPlayType probe |
 //! | `__lumen_texttracks_json` | `(nid: f64) → String` | JSON of parsed `<track>` cues |
 //! | `__lumen_vtt_parse` | `(text: String) → String` | Parse a WebVTT file (BUG-775) |
+//!
+//! # The `HTMLMediaElement` state machine (BUG-825)
+//!
+//! Everything above is about *playback*; the shim also owns the element's
+//! HTML §4.8.11 state — `networkState` / `readyState` / `currentSrc` / `error`,
+//! `volume` / `muted` / `playbackRate`, and the media load + resource selection
+//! algorithms behind `src =`, `load()` and `<source>` children.  It lives here
+//! rather than in `dom.rs` because that is where the GIF loader it feeds is,
+//! and it is also where `HTMLMediaElement` itself and `MediaError` are defined
+//! (`dom.rs` builds `HTMLVideoElement`/`HTMLAudioElement` straight off
+//! `HTMLElement`, so the constants had no interface to live on).
+//!
+//! Only an animated GIF is decodable, so resource selection ends in the spec's
+//! «dedicated media source failure steps» for every other format — `loadstart`
+//! then `error` with `MEDIA_ERR_SRC_NOT_SUPPORTED` — which is what
+//! `canPlayType` has always said about them.  Every media event is *queued*,
+//! never dispatched inline: the near-universal `e.volume = 0.5;
+//! e.onvolumechange = …` order sees nothing at all from a synchronous
+//! dispatch.  `<audio>` keeps its own, older model in `audio_element.rs` and
+//! still dispatches synchronously.
 
 #[cfg(feature = "v8-backend")]
 use crate::text_track_store::get_text_track_store;
@@ -310,9 +330,121 @@ const VIDEO_SHIM: &str = r#"(function() {
 
   function fireEvent(el, name) {
     try {
-      el.dispatchEvent(new Event(name, { bubbles: false, cancelable: false }));
-    } catch(e) {}
+      var ev = new Event(name, { bubbles: false, cancelable: false });
+      // `_lumen_dispatch` leaves `target` null on the at-target path (BUG-873),
+      // and `event.target` is how a media/`<source>` handler reaches back to the
+      // element it was armed on.
+      try { ev.target = el; } catch (e) {}
+      el.dispatchEvent(ev);
+    } catch(e) {
+      if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e);
+    }
   }
+
+  // Media element event task source (HTML §4.8.11.16). Every media event is
+  // queued rather than dispatched inline: `e.volume = 0.5; e.onvolumechange = …`
+  // — the order `event_volumechange.html` and most of WPT's media suite use —
+  // sees nothing at all from a synchronous dispatch, and BUG-808 measured the
+  // same trap for `EventWatcher`, where an immediate event is worse than none.
+  function queueTask(fn) {
+    if (typeof setTimeout === 'function') { setTimeout(fn, 0); return; }
+    fn();  // unit-test runtimes with no timer stub run the task inline
+  }
+
+  function domException(message, name) {
+    if (typeof DOMException === 'function') {
+      try { return new DOMException(message, name); } catch (e) {}
+    }
+    var err = new Error(message);
+    err.name = name;
+    return err;
+  }
+
+  // ── MediaError (HTML §4.8.11.2) ─────────────────────────────────────────────
+  // No constructor per IDL, so the global throws and instances are minted by
+  // `makeMediaError`. `<video>.error` used to not exist at all (BUG-825).
+
+  if (typeof globalThis.MediaError !== 'function') {
+    var _MediaError = function () { throw new TypeError('Illegal constructor'); };
+    Object.defineProperty(_MediaError, 'name', { value: 'MediaError', configurable: true });
+    var _MEDIA_ERR_CODES = {
+      MEDIA_ERR_ABORTED: 1, MEDIA_ERR_NETWORK: 2,
+      MEDIA_ERR_DECODE: 3, MEDIA_ERR_SRC_NOT_SUPPORTED: 4,
+    };
+    for (var _mk in _MEDIA_ERR_CODES) {
+      Object.defineProperty(_MediaError, _mk, { value: _MEDIA_ERR_CODES[_mk], enumerable: true });
+      Object.defineProperty(_MediaError.prototype, _mk, { value: _MEDIA_ERR_CODES[_mk], enumerable: true });
+    }
+    globalThis.MediaError = _MediaError;
+  }
+
+  var MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
+
+  function makeMediaError(code, message) {
+    var e = Object.create(globalThis.MediaError.prototype);
+    Object.defineProperty(e, 'code', { value: code, enumerable: true });
+    Object.defineProperty(e, 'message', { value: message || '', enumerable: true });
+    return e;
+  }
+
+  // ── HTMLMediaElement (HTML §4.8.11) ─────────────────────────────────────────
+  //
+  // dom.rs builds `HTMLVideoElement`/`HTMLAudioElement` straight off
+  // `HTMLElement` ("Lumen has no HTMLMediaElement interface yet"), so there was
+  // no interface to hang the network/readiness constants on and
+  // `video instanceof HTMLMediaElement` threw. Splicing it in here keeps the
+  // whole media model in one file, and re-linking only changes the
+  // [[Prototype]] — every reflection row dom.rs already installed on the two
+  // prototypes stays an own property of them.
+
+  var NETWORK_EMPTY = 0, NETWORK_IDLE = 1, NETWORK_LOADING = 2, NETWORK_NO_SOURCE = 3;
+  var HAVE_NOTHING = 0, HAVE_METADATA = 1, HAVE_CURRENT_DATA = 2,
+      HAVE_FUTURE_DATA = 3, HAVE_ENOUGH_DATA = 4;
+
+  if (typeof globalThis.HTMLMediaElement !== 'function' && typeof HTMLElement === 'function') {
+    var _HTMLMediaElement = function () { throw new TypeError('Illegal constructor'); };
+    Object.defineProperty(_HTMLMediaElement, 'name', { value: 'HTMLMediaElement', configurable: true });
+    _HTMLMediaElement.prototype = Object.create(HTMLElement.prototype);
+    Object.defineProperty(_HTMLMediaElement.prototype, 'constructor',
+      { value: _HTMLMediaElement, writable: true, configurable: true });
+    var _MEDIA_CONSTS = {
+      NETWORK_EMPTY: NETWORK_EMPTY, NETWORK_IDLE: NETWORK_IDLE,
+      NETWORK_LOADING: NETWORK_LOADING, NETWORK_NO_SOURCE: NETWORK_NO_SOURCE,
+      HAVE_NOTHING: HAVE_NOTHING, HAVE_METADATA: HAVE_METADATA,
+      HAVE_CURRENT_DATA: HAVE_CURRENT_DATA, HAVE_FUTURE_DATA: HAVE_FUTURE_DATA,
+      HAVE_ENOUGH_DATA: HAVE_ENOUGH_DATA,
+    };
+    for (var _ck in _MEDIA_CONSTS) {
+      Object.defineProperty(_HTMLMediaElement, _ck, { value: _MEDIA_CONSTS[_ck], enumerable: true });
+      Object.defineProperty(_HTMLMediaElement.prototype, _ck, { value: _MEDIA_CONSTS[_ck], enumerable: true });
+    }
+    globalThis.HTMLMediaElement = _HTMLMediaElement;
+    if (typeof HTMLVideoElement === 'function')
+      Object.setPrototypeOf(HTMLVideoElement.prototype, _HTMLMediaElement.prototype);
+    if (typeof HTMLAudioElement === 'function')
+      Object.setPrototypeOf(HTMLAudioElement.prototype, _HTMLMediaElement.prototype);
+  }
+
+  // media element nid → «a <source> child was inserted» hook, written by
+  // `patchVideoElement` and read by the DOM insertion hook below.
+  var _lumen_media_hooks = Object.create(null);
+
+  // Called from dom.rs's insertion hook for a script-created <source>: HTML
+  // §4.8.11.5 says inserting one into a media element whose networkState is
+  // NETWORK_EMPTY invokes the media load algorithm. Answers false while the
+  // parent is not a media element, which keeps the element tracked for a later
+  // re-parenting — the same contract `_lumen_track_start_load` has.
+  globalThis._lumen_media_source_inserted = function (nid) {
+    if (typeof _lumen_get_parent !== 'function' || typeof _lumen_u2n !== 'function') return false;
+    var mediaNid = _lumen_u2n(_lumen_get_parent(nid));
+    if (mediaNid === null) return false;
+    var tag = (typeof _lumen_get_tag_name === 'function')
+      ? String(_lumen_get_tag_name(mediaNid) || '').toUpperCase() : '';
+    if (tag !== 'VIDEO' && tag !== 'AUDIO') return false;
+    var hook = _lumen_media_hooks[mediaNid];
+    if (hook) hook();
+    return true;
+  };
 
   // ── TextTrack API (HTML §4.8.11) ────────────────────────────────────────────
   // Read-only view over the shell's parsed <track> cues. No cue mutation.
@@ -668,34 +800,194 @@ const VIDEO_SHIM: &str = r#"(function() {
     el.__lumen_video_patched = true;
 
     var nid      = el.__nid__;
-    var _src     = (el.getAttribute && el.getAttribute('src')) || '';
-    var _muted   = !!(el.hasAttribute && el.hasAttribute('muted'));
     var _volume  = 1.0;
-    var _controls= !!(el.hasAttribute && el.hasAttribute('controls'));
-    var _loop    = !!(el.hasAttribute && el.hasAttribute('loop'));
-    var _autoplay= !!(el.hasAttribute && el.hasAttribute('autoplay'));
+    var _muted   = !!(el.hasAttribute && el.hasAttribute('muted'));
+    var _defaultRate = 1.0;
+    var _rate        = 1.0;
+    var _networkState = NETWORK_EMPTY;
+    var _readyState   = HAVE_NOTHING;
+    var _currentSrc   = '';
+    var _error        = null;
+    var _paused       = true;
+    // Bumped by every media load algorithm run; a selection or fetch whose
+    // generation is stale silently drops itself instead of racing the new one.
+    var _generation   = 0;
     var _loadTimer    = null;
     var _tupdateTimer = null;
     var _gifBacked = false; // true once a GIF is successfully loaded
 
+    function attr(name) {
+      var v = (el.getAttribute && el.getAttribute(name));
+      return (v === undefined || v === null) ? null : String(v);
+    }
+    function hasAttr(name) { return !!(el.hasAttribute && el.hasAttribute(name)); }
+    function queueEvent(name) { queueTask(function () { fireEvent(el, name); }); }
+    function stopTimers() {
+      if (_loadTimer !== null) { clearInterval(_loadTimer); _loadTimer = null; }
+      if (_tupdateTimer !== null) { clearInterval(_tupdateTimer); _tupdateTimer = null; }
+    }
+    function isPaused() {
+      return (_gifBacked && HAS_STORE && nid) ? __lumen_video_paused(nid) : _paused;
+    }
+    // Resolution failure falls back to the raw string rather than to null: a
+    // document with no base URL (a unit-test runtime, an `about:blank` tab)
+    // must still reach the honest `loadstart` → `error` pair instead of going
+    // silent, which is the very defect BUG-825 is about.
+    function resolveUrl(u) {
+      if (typeof _url_resolve === 'function' && typeof _lumen_document_base_url === 'function') {
+        try {
+          var r = _url_resolve(u, _lumen_document_base_url());
+          if (r) return String(r);
+        } catch (e) {}
+      }
+      return u;
+    }
+
+    // ── resource selection (HTML §4.8.11.5) ──────────────────────────────────
+    //
+    // BUG-825: none of this existed. `src =` and `load()` produced no event at
+    // all, `readyState` answered HAVE_ENOUGH_DATA before anything was assigned,
+    // and a non-GIF source got a fabricated `loadedmetadata` + `canplay` pair
+    // for a file the engine had never fetched, let alone decoded. The model
+    // below is the spec's, minus the decoding: an animated GIF really plays
+    // (`video_gif_store`), and every other format ends in the «dedicated media
+    // source failure steps» — which is the honest answer, and the one
+    // `canPlayType` has always given for it.
+
+    // §4.8.11.5 «media load algorithm».
+    function mediaLoadAlgorithm() {
+      var gen = ++_generation;
+      stopTimers();
+      if (_networkState === NETWORK_LOADING || _networkState === NETWORK_IDLE) queueEvent('abort');
+      if (_networkState !== NETWORK_EMPTY) {
+        queueEvent('emptied');
+        if (!isPaused()) queueEvent('pause');
+        if (_gifBacked && HAS_STORE && nid) __lumen_video_pause(nid, nowMs());
+        _gifBacked   = false;
+        _paused      = true;
+        _readyState  = HAVE_NOTHING;
+        _currentSrc  = '';
+        _networkState = NETWORK_EMPTY;
+      }
+      _rate  = _defaultRate;
+      _error = null;
+      resourceSelection(gen);
+    }
+
+    // §4.8.11.5 «resource selection algorithm». Everything past the spec's
+    // «await a stable state» runs as a task, so a page that assigns `src` and
+    // arms `onloadstart` on the next line still sees the event.
+    function resourceSelection(gen) {
+      _networkState = NETWORK_NO_SOURCE;
+      queueTask(function () {
+        if (gen !== _generation) return;
+        if (hasAttr('src')) { startFetch(gen, attr('src') || '', null); return; }
+        var candidates = sourceChildren();
+        // Step 6 «otherwise»: no src attribute and no <source> child at all.
+        if (candidates.length === 0) { _networkState = NETWORK_EMPTY; return; }
+        nextCandidate(gen, candidates, 0);
+      });
+    }
+
+    function sourceChildren() {
+      var out = [];
+      var kids = (el.children && el.children.length !== undefined) ? el.children : null;
+      if (!kids) return out;
+      for (var i = 0; i < kids.length; i++) {
+        var k = kids[i];
+        if (k && String(k.tagName || '').toUpperCase() === 'SOURCE') out.push(k);
+      }
+      return out;
+    }
+
+    // Children branch. A candidate is skipped — with `error` fired at the
+    // <source> itself and never at the media element, which is the whole point
+    // of the split — when it carries no src, an unplayable `type` or a
+    // non-matching `media`.
+    function nextCandidate(gen, list, i) {
+      if (gen !== _generation) return;
+      if (i >= list.length) {
+        // «Wait for a source element to be added»: nothing else in this engine
+        // ever adds one mid-algorithm, so the element settles with no resource
+        // and — per spec — no error of its own.
+        _currentSrc = '';
+        _networkState = NETWORK_NO_SOURCE;
+        return;
+      }
+      var s = list[i];
+      var raw  = (s.getAttribute && s.getAttribute('src'));
+      var type = (s.getAttribute && s.getAttribute('type'));
+      var mq   = (s.getAttribute && s.getAttribute('media'));
+      if (raw === undefined || raw === null || String(raw) === '') { skipCandidate(gen, list, i, s); return; }
+      if (type && el.canPlayType(String(type)) === '') { skipCandidate(gen, list, i, s); return; }
+      if (mq && typeof matchMedia === 'function') {
+        var m = null;
+        try { m = matchMedia(String(mq)); } catch (e) { m = null; }
+        if (m && m.matches === false) { skipCandidate(gen, list, i, s); return; }
+      }
+      startFetch(gen, String(raw), { list: list, index: i, el: s });
+    }
+
+    function skipCandidate(gen, list, i, sourceEl) {
+      queueTask(function () {
+        if (gen !== _generation) return;
+        fireEvent(sourceEl, 'error');
+        nextCandidate(gen, list, i + 1);
+      });
+    }
+
+    // §4.8.11.5 «resource fetch algorithm», reduced to what this engine decodes.
+    function startFetch(gen, url, candidate) {
+      var abs = (url === '') ? null : resolveUrl(url);
+      if (abs === null) { failResource(gen, candidate, 'unresolvable URL'); return; }
+      _currentSrc = abs;
+      _networkState = NETWORK_LOADING;
+      queueEvent('loadstart');
+      if (startGifLoad(gen, url)) return;
+      failResource(gen, candidate, 'unsupported media format');
+    }
+
+    function failResource(gen, candidate, why) {
+      queueTask(function () {
+        if (gen !== _generation) return;
+        if (candidate) {
+          _currentSrc = '';
+          fireEvent(candidate.el, 'error');
+          nextCandidate(gen, candidate.list, candidate.index + 1);
+          return;
+        }
+        // «Dedicated media source failure steps».
+        _error = makeMediaError(MEDIA_ERR_SRC_NOT_SUPPORTED, why);
+        _readyState = HAVE_NOTHING;
+        _networkState = NETWORK_NO_SOURCE;
+        fireEvent(el, 'error');
+      });
+    }
+
     // ── GIF load ─────────────────────────────────────────────────────────────
 
-    function startGifLoad(src) {
+    function startGifLoad(gen, src) {
       if (!HAS_STORE || !nid) return false;
       if (!isGifSrc(src)) return false;
+      if (typeof setInterval !== 'function') return false;
       __lumen_video_load(nid, src);
-      fireEvent(el, 'loadstart');
       // Poll until the shell has decoded the GIF.
       _loadTimer = setInterval(function() {
+        if (gen !== _generation) { clearInterval(_loadTimer); _loadTimer = null; return; }
         if (!__lumen_video_ready(nid)) return;
         clearInterval(_loadTimer); _loadTimer = null;
         _gifBacked = true;
+        _readyState = HAVE_METADATA;
         fireEvent(el, 'durationchange');
         fireEvent(el, 'loadedmetadata');
+        _readyState = HAVE_CURRENT_DATA;
         fireEvent(el, 'loadeddata');
+        _readyState = HAVE_FUTURE_DATA;
         fireEvent(el, 'canplay');
+        _readyState = HAVE_ENOUGH_DATA;
+        _networkState = NETWORK_IDLE;
         fireEvent(el, 'canplaythrough');
-        if (_autoplay) el.play();
+        if (hasAttr('autoplay')) el.play();
       }, POLL_MS);
       return true;
     }
@@ -704,6 +996,7 @@ const VIDEO_SHIM: &str = r#"(function() {
 
     function startTupdate() {
       if (_tupdateTimer !== null) return;
+      if (typeof setInterval !== 'function') return;
       _tupdateTimer = setInterval(function() {
         if (!_gifBacked || !HAS_STORE || __lumen_video_paused(nid)) {
           clearInterval(_tupdateTimer); _tupdateTimer = null; return;
@@ -714,7 +1007,7 @@ const VIDEO_SHIM: &str = r#"(function() {
         if (ended) {
           clearInterval(_tupdateTimer); _tupdateTimer = null;
           fireEvent(el, 'ended');
-          if (_loop) {
+          if (hasAttr('loop')) {
             __lumen_video_seek(nid, 0, nowMs());
             __lumen_video_play(nid, nowMs());
             startTupdate();
@@ -725,26 +1018,24 @@ const VIDEO_SHIM: &str = r#"(function() {
 
     // ── properties ───────────────────────────────────────────────────────────
 
+    // `src` reflects the content attribute and, per HTML LS, returns it
+    // *resolved*; the setter always re-runs the load algorithm, because the
+    // spec keys that on the attribute being «set or changed», not on the value
+    // actually differing.
     Object.defineProperty(el, 'src', {
-      get: function() { return _src; },
+      get: function() { var a = attr('src'); return a === null ? '' : (resolveUrl(a) || a); },
       set: function(v) {
-        var s = String(v || '');
-        if (s === _src) return;
-        _src = s;
-        if (el.setAttribute) el.setAttribute('src', _src);
-        _gifBacked = false;
-        if (_loadTimer) { clearInterval(_loadTimer); _loadTimer = null; }
-        if (_tupdateTimer) { clearInterval(_tupdateTimer); _tupdateTimer = null; }
-        if (!startGifLoad(_src)) {
-          // Non-GIF: Phase 0 immediate events.
-          try {
-            el.dispatchEvent(new Event('loadedmetadata'));
-            el.dispatchEvent(new Event('canplay'));
-          } catch(e) {}
-        }
+        if (el.setAttribute) el.setAttribute('src', String(v === undefined || v === null ? '' : v));
+        mediaLoadAlgorithm();
       },
       configurable: true,
     });
+
+    Object.defineProperty(el, 'currentSrc',   { get: function() { return _currentSrc; },   configurable: true });
+    Object.defineProperty(el, 'networkState', { get: function() { return _networkState; }, configurable: true });
+    Object.defineProperty(el, 'readyState',   { get: function() { return _readyState; },   configurable: true });
+    Object.defineProperty(el, 'error',        { get: function() { return _error; },        configurable: true });
+    Object.defineProperty(el, 'seeking',      { get: function() { return false; },         configurable: true });
 
     Object.defineProperty(el, 'currentTime', {
       get: function() {
@@ -754,7 +1045,9 @@ const VIDEO_SHIM: &str = r#"(function() {
       set: function(v) {
         var secs = Number(v) || 0;
         if (_gifBacked && HAS_STORE && nid) __lumen_video_seek(nid, secs, nowMs());
-        fireEvent(el, 'seeking'); fireEvent(el, 'seeked');
+        // With no media resource there is nothing to seek in: §4.8.11.9 stores
+        // the value as the default playback start position and fires nothing.
+        if (_readyState !== HAVE_NOTHING) { queueEvent('seeking'); queueEvent('seeked'); }
         checkCueChanges(el);
       },
       configurable: true,
@@ -763,16 +1056,13 @@ const VIDEO_SHIM: &str = r#"(function() {
     Object.defineProperty(el, 'duration', {
       get: function() {
         if (_gifBacked && HAS_STORE && nid) return __lumen_video_duration(nid);
-        return Infinity;
+        return NaN;  // §4.8.11.6: NaN while readyState is HAVE_NOTHING
       },
       configurable: true,
     });
 
     Object.defineProperty(el, 'paused', {
-      get: function() {
-        if (_gifBacked && HAS_STORE && nid) return __lumen_video_paused(nid);
-        return true;
-      },
+      get: function() { return isPaused(); },
       configurable: true,
     });
 
@@ -781,11 +1071,6 @@ const VIDEO_SHIM: &str = r#"(function() {
         if (_gifBacked && HAS_STORE && nid) return __lumen_video_ended(nid, nowMs());
         return false;
       },
-      configurable: true,
-    });
-
-    Object.defineProperty(el, 'readyState', {
-      get: function() { return _gifBacked ? 4 : (_src ? 0 : 4); },
       configurable: true,
     });
 
@@ -821,59 +1106,139 @@ const VIDEO_SHIM: &str = r#"(function() {
       configurable: true,
     });
 
-    Object.defineProperty(el, 'muted',    { get: function(){ return _muted; },    set: function(v){ _muted = !!v; }, configurable: true });
-    Object.defineProperty(el, 'volume',   { get: function(){ return _volume; },   set: function(v){ _volume = Math.max(0, Math.min(1, Number(v)||0)); }, configurable: true });
-    Object.defineProperty(el, 'controls', { get: function(){ return _controls; }, set: function(v){ _controls = !!v; }, configurable: true });
-    Object.defineProperty(el, 'loop',     { get: function(){ return _loop; },     set: function(v){ _loop = !!v; }, configurable: true });
+    // §4.8.11.11: `volumechange` is queued whenever *either* of the two values
+    // changes — hence the equality guards, and hence the task hop (BUG-825: the
+    // event fired from neither setter in neither handler form).
+    Object.defineProperty(el, 'volume', {
+      get: function(){ return _volume; },
+      set: function(v) {
+        var n = Number(v);
+        if (isNaN(n) || n < 0 || n > 1) throw domException('volume must be in the range 0..1', 'IndexSizeError');
+        if (n === _volume) return;
+        _volume = n;
+        queueEvent('volumechange');
+      },
+      configurable: true,
+    });
+
+    Object.defineProperty(el, 'muted', {
+      get: function(){ return _muted; },
+      set: function(v) {
+        var b = !!v;
+        if (b === _muted) return;
+        _muted = b;
+        queueEvent('volumechange');
+      },
+      configurable: true,
+    });
+
+    // §4.8.11.10: same rule for `ratechange` over playbackRate and
+    // defaultPlaybackRate. Neither property existed at all before BUG-825, so
+    // `v.playbackRate = 2` merely created an expando.
+    Object.defineProperty(el, 'playbackRate', {
+      get: function(){ return _rate; },
+      set: function(v) {
+        var n = Number(v);
+        if (isNaN(n) || !isFinite(n)) throw new TypeError('playbackRate must be a finite number');
+        if (n === _rate) return;
+        _rate = n;
+        queueEvent('ratechange');
+      },
+      configurable: true,
+    });
+
+    Object.defineProperty(el, 'defaultPlaybackRate', {
+      get: function(){ return _defaultRate; },
+      set: function(v) {
+        var n = Number(v);
+        if (isNaN(n) || !isFinite(n)) throw new TypeError('defaultPlaybackRate must be a finite number');
+        if (n === _defaultRate) return;
+        _defaultRate = n;
+        queueEvent('ratechange');
+      },
+      configurable: true,
+    });
+
+    // `controls`/`loop`/`autoplay` are deliberately NOT own accessors: the ones
+    // that used to sit here kept their value in a closure and never touched the
+    // content attribute, so `video.controls = true` was invisible to layout and
+    // paint. dom.rs already reflects all three on HTMLVideoElement.prototype.
+
+    var _emptyRanges = { length: 0, start: function(){ return 0; }, end: function(){ return 0; } };
+    function ranges() {
+      if (!(_gifBacked && HAS_STORE && nid)) return _emptyRanges;
+      var d = __lumen_video_duration(nid);
+      if (isNaN(d) || d <= 0 || d === Infinity) return _emptyRanges;
+      return { length: 1, start: function(){ return 0; }, end: function(){ return d; } };
+    }
+    Object.defineProperty(el, 'buffered', { get: ranges,                            configurable: true });
+    Object.defineProperty(el, 'seekable', { get: ranges,                            configurable: true });
+    Object.defineProperty(el, 'played',   { get: function(){ return _emptyRanges; }, configurable: true });
 
     // ── methods ───────────────────────────────────────────────────────────────
 
     el.play = function() {
+      // §4.8.11.8 step 1: an element that already failed to find a playable
+      // resource rejects rather than pretending to start.
+      if (_error && _error.code === MEDIA_ERR_SRC_NOT_SUPPORTED) {
+        return Promise.reject(domException('the media resource is not supported', 'NotSupportedError'));
+      }
+      if (_networkState === NETWORK_EMPTY) mediaLoadAlgorithm();
       if (_gifBacked && HAS_STORE && nid) {
         __lumen_video_play(nid, nowMs());
-        fireEvent(el, 'play');
-        fireEvent(el, 'playing');
+        _paused = false;
+        queueEvent('play');
+        queueEvent('playing');
         startTupdate();
         return Promise.resolve();
       }
-      // Phase 0 fallback.
-      fireEvent(el, 'play');
-      fireEvent(el, 'playing');
+      // No decodable resource (yet). The spec leaves this promise pending until
+      // playback actually begins; a promise that never settles takes the rest of
+      // a testharness file with it (the BUG-823 shape), so it resolves and the
+      // element reports itself as playing-but-starved through `waiting`.
+      _paused = false;
+      queueEvent('play');
+      queueEvent('waiting');
       return Promise.resolve();
     };
 
     el.pause = function() {
-      if (_gifBacked && HAS_STORE && nid) {
-        __lumen_video_pause(nid, nowMs());
-      }
-      if (_tupdateTimer) { clearInterval(_tupdateTimer); _tupdateTimer = null; }
-      fireEvent(el, 'pause');
+      if (_networkState === NETWORK_EMPTY) mediaLoadAlgorithm();
+      var wasPaused = isPaused();
+      if (_gifBacked && HAS_STORE && nid) __lumen_video_pause(nid, nowMs());
+      if (_tupdateTimer !== null) { clearInterval(_tupdateTimer); _tupdateTimer = null; }
+      _paused = true;
+      if (!wasPaused) { queueEvent('timeupdate'); queueEvent('pause'); }
     };
 
-    el.load = function() {
-      if (_tupdateTimer) { clearInterval(_tupdateTimer); _tupdateTimer = null; }
-      _gifBacked = false;
-      if (_src) startGifLoad(_src);
-    };
+    el.load = function() { mediaLoadAlgorithm(); };
 
     el.canPlayType = function(type) {
       return HAS_STORE ? __lumen_video_can_play_type(type) : '';
     };
 
-    // If src attribute was already set before patching, trigger load.
-    if (_src) {
-      if (!startGifLoad(_src)) {
-        try {
-          el.dispatchEvent(new Event('loadedmetadata'));
-          el.dispatchEvent(new Event('canplay'));
-        } catch(e) {}
-      }
+    el.fastSeek = function(t) {
+      if (_gifBacked && HAS_STORE && nid) __lumen_video_seek(nid, Number(t) || 0, nowMs());
+    };
+
+    // A <source> appended after the element settled with no resource re-enters
+    // the load algorithm (HTML §4.8.11.5); the hook is keyed by nid because the
+    // insertion is noticed on the child, in dom.rs.
+    if (nid) {
+      _lumen_media_hooks[nid] = function () {
+        if (_networkState === NETWORK_EMPTY) mediaLoadAlgorithm();
+      };
     }
+
+    // A parser-written <video> is patched before the page's first script runs,
+    // so this is the element's first load — and, because every event it produces
+    // is queued, an inline `onloadstart`/`onerror` still catches it.
+    if (hasAttr('src') || sourceChildren().length > 0) mediaLoadAlgorithm();
 
     // Fire an initial cuechange for cues active at t=0 once the shell has
     // parsed the <track> files (deferred so late population is picked up).
     if (typeof setTimeout === 'function') {
-      setTimeout(function() { try { checkCueChanges(el); } catch(e) {} }, 0);
+      setTimeout(function() { try { checkCueChanges(el); } catch(e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }, 0);
     }
   }
 
@@ -979,14 +1344,16 @@ var document = {
         assert!(ok, "play() should return a Promise");
     }
 
+    /// §4.8.11.6: with no media resource the duration is NaN, not Infinity —
+    /// the old stub's Infinity read as «an endless live stream is loaded».
     #[test]
-    fn duration_infinity_without_gif() {
+    fn duration_nan_without_resource() {
         let rt = with_video();
         let ok = bool_eval(
             &rt,
-            "var el = document.createElement('video'); el.duration === Infinity",
+            "var el = document.createElement('video'); Number.isNaN(el.duration)",
         );
-        assert!(ok, "duration should be Infinity when no GIF loaded");
+        assert!(ok, "duration should be NaN while readyState is HAVE_NOTHING");
     }
 
     #[test]
@@ -999,14 +1366,18 @@ var document = {
         assert!(ok, "paused should initially be true");
     }
 
+    /// BUG-825: a fresh `<video>` used to report HAVE_ENOUGH_DATA — «the
+    /// resource is fully loaded» — before anything had been assigned to it.
     #[test]
     fn ready_state_with_no_src() {
         let rt = with_video();
         let ok = bool_eval(
             &rt,
-            "var el = document.createElement('video'); el.readyState === 4",
+            "var el = document.createElement('video');
+             el.readyState === 0 && el.networkState === 0
+               && el.currentSrc === '' && el.error === null",
         );
-        assert!(ok, "readyState should be 4 with no src");
+        assert!(ok, "a fresh <video> is HAVE_NOTHING / NETWORK_EMPTY with no source");
     }
 
     #[test]
@@ -1115,6 +1486,287 @@ tt.length === 1
         install_video_bindings_v8(&rt).unwrap();
         let ready = rt.eval("__lumen_video_ready(55)").unwrap();
         assert_eq!(ready, JsValue::Bool(false), "should not be ready before decode");
+    }
+
+    // ── BUG-825: the HTMLMediaElement state machine on <video> ────────────────
+    //
+    // These need the real DOM (the stub above has no `Event`, no listener
+    // registry and no timers), so they go through `install_dom`.
+    mod media_element {
+        use std::sync::{Arc, Mutex};
+
+        use lumen_core::ext::JsRuntime as _;
+        use lumen_dom::{Document, QualName};
+
+        use crate::v8_runtime::V8JsRuntime;
+
+        fn rt_with_dom() -> V8JsRuntime {
+            let mut doc = Document::new();
+            let html = doc.create_element(QualName::html("html"));
+            let body = doc.create_element(QualName::html("body"));
+            doc.append_child(doc.root(), html);
+            doc.append_child(html, body);
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(
+                Arc::new(Mutex::new(doc)),
+                "",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+            rt
+        }
+
+        /// Turn the event loop far enough for the queued media tasks (and the
+        /// tasks they queue in turn) to run.
+        fn settle(rt: &V8JsRuntime) {
+            for _ in 0..8 {
+                rt.eval("_lumen_tick_timers()").unwrap();
+            }
+        }
+
+        fn truthy(rt: &V8JsRuntime, expr: &str) -> bool {
+            matches!(rt.eval(expr).unwrap(), lumen_core::JsValue::Bool(true))
+        }
+
+        /// The shape `event_volumechange.html` uses: the handler is armed on the
+        /// line *after* the assignment, so a synchronous dispatch reaches
+        /// nobody. This is why the event is queued rather than fired inline.
+        #[test]
+        fn volume_change_is_queued_so_a_later_handler_still_sees_it() {
+            let rt = rt_with_dom();
+            rt.eval(
+                "var seen = [];
+                 var v = document.createElement('video');
+                 v.volume = 0.5;
+                 v.onvolumechange = function() { seen.push(['on', v.volume]); };
+                 v.addEventListener('volumechange', function() { seen.push(['listener', v.volume]); });",
+            )
+            .unwrap();
+            assert!(truthy(&rt, "seen.length === 0"), "volumechange fired synchronously");
+            settle(&rt);
+            assert!(
+                truthy(
+                    &rt,
+                    "seen.length === 2 && seen[0][1] === 0.5 && seen[1][1] === 0.5"
+                ),
+                "both handler forms must see the queued volumechange"
+            );
+        }
+
+        /// `muted` is the second input to the same event, and a write that does
+        /// not change the value fires nothing (§4.8.11.11 keys on the value
+        /// changing, not on the setter running).
+        #[test]
+        fn muted_fires_volumechange_only_on_a_real_change() {
+            let rt = rt_with_dom();
+            rt.eval(
+                "var n = 0;
+                 var v = document.createElement('video');
+                 v.addEventListener('volumechange', function() { n++; });
+                 v.muted = true;
+                 v.muted = true;
+                 v.volume = 1;",
+            )
+            .unwrap();
+            settle(&rt);
+            assert!(truthy(&rt, "n === 1 && v.muted === true"), "expected exactly one volumechange");
+        }
+
+        /// The volume range check is a DOMException, not a silent clamp — the
+        /// old setter clamped, so a page could never tell it had been wrong.
+        #[test]
+        fn volume_out_of_range_throws_index_size_error() {
+            let rt = rt_with_dom();
+            assert!(
+                truthy(
+                    &rt,
+                    "var v = document.createElement('video');
+                     var name = null;
+                     try { v.volume = 2; } catch (e) { name = e.name; }
+                     name === 'IndexSizeError' && v.volume === 1"
+                ),
+                "an out-of-range volume must throw and leave the value alone"
+            );
+        }
+
+        /// `playbackRate`/`defaultPlaybackRate` did not exist at all: assignment
+        /// made an expando and `ratechange` was never dispatched.
+        #[test]
+        fn playback_rate_exists_and_queues_ratechange() {
+            let rt = rt_with_dom();
+            rt.eval(
+                "var n = 0;
+                 var v = document.createElement('video');
+                 v.addEventListener('ratechange', function() { n++; });
+                 var before = [v.playbackRate, v.defaultPlaybackRate];
+                 v.playbackRate = 2;
+                 v.defaultPlaybackRate = 2;
+                 v.playbackRate = 2;",
+            )
+            .unwrap();
+            settle(&rt);
+            assert!(
+                truthy(&rt, "before[0] === 1 && before[1] === 1 && v.playbackRate === 2 && n === 2"),
+                "both rates default to 1 and each real change queues one ratechange"
+            );
+        }
+
+        /// The core of the bug: assigning `src` now runs the resource selection
+        /// algorithm. The engine decodes no video format but GIF, so an mp4
+        /// ends in the dedicated media source failure steps — `loadstart` then
+        /// `error`, with a real `MediaError` — instead of the fabricated
+        /// `loadedmetadata` + `canplay` pair the old shim answered with.
+        #[test]
+        fn assigning_src_runs_resource_selection_and_reports_the_failure() {
+            let rt = rt_with_dom();
+            rt.eval(
+                "var log = [];
+                 var v = document.createElement('video');
+                 v.addEventListener('loadstart', function() { log.push('loadstart:' + v.networkState); });
+                 v.addEventListener('error', function() { log.push('error:' + v.error.code + ':' + v.networkState); });
+                 v.src = 'http://127.0.0.1:1/movie.mp4';",
+            )
+            .unwrap();
+            assert!(truthy(&rt, "log.length === 0"), "selection must not run inside the setter");
+            settle(&rt);
+            assert!(
+                truthy(&rt, "log.length === 2 && log[0] === 'loadstart:2' && log[1] === 'error:4:3'"),
+                "expected loadstart (NETWORK_LOADING) then error (MEDIA_ERR_SRC_NOT_SUPPORTED, NETWORK_NO_SOURCE)"
+            );
+            assert!(
+                truthy(
+                    &rt,
+                    "v.currentSrc === 'http://127.0.0.1:1/movie.mp4'
+                       && v.readyState === 0
+                       && v.error instanceof MediaError
+                       && v.error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED"
+                ),
+                "currentSrc names the selected resource and error is a MediaError"
+            );
+        }
+
+        /// `load()` was a no-op that fired nothing. It must re-enter the whole
+        /// algorithm, which for an element that already had a resource means
+        /// `abort` + `emptied` before the new attempt.
+        #[test]
+        fn load_reruns_the_algorithm_with_abort_and_emptied() {
+            let rt = rt_with_dom();
+            rt.eval(
+                "var v = document.createElement('video');
+                 v.src = 'http://127.0.0.1:1/movie.mp4';",
+            )
+            .unwrap();
+            settle(&rt);
+            rt.eval(
+                "var log = [];
+                 ['abort', 'emptied', 'loadstart', 'error'].forEach(function(t) {
+                     v.addEventListener(t, function() { log.push(t); });
+                 });
+                 v.load();",
+            )
+            .unwrap();
+            settle(&rt);
+            assert!(
+                truthy(&rt, "log.join(',') === 'emptied,loadstart,error'"),
+                "load() should empty the element and try again"
+            );
+        }
+
+        /// The children branch: a failing candidate fires `error` at the
+        /// `<source>` element, never at the media element, and the next
+        /// candidate is tried. A `type` the engine cannot play skips the
+        /// candidate without even a fetch.
+        #[test]
+        fn source_children_report_failure_on_the_source_element() {
+            let rt = rt_with_dom();
+            rt.eval(
+                "var log = [];
+                 var v = document.createElement('video');
+                 v.addEventListener('error', function() { log.push('media-error'); });
+                 var a = document.createElement('source');
+                 a.setAttribute('src', 'http://127.0.0.1:1/a.webm');
+                 a.setAttribute('type', 'video/webm');
+                 a.addEventListener('error', function() { log.push('a'); });
+                 var b = document.createElement('source');
+                 b.setAttribute('src', 'http://127.0.0.1:1/b.mp4');
+                 b.addEventListener('error', function() { log.push('b'); });
+                 v.appendChild(a);
+                 v.appendChild(b);",
+            )
+            .unwrap();
+            settle(&rt);
+            assert!(
+                truthy(&rt, "log.join(',') === 'a,b'"),
+                "each candidate fails on its own <source>, and the media element stays error-free"
+            );
+            assert!(
+                truthy(&rt, "v.error === null && v.networkState === 3"),
+                "children mode ends at NETWORK_NO_SOURCE with no MediaError"
+            );
+        }
+
+        /// `play()` on an element whose resource selection failed rejects with
+        /// NotSupportedError instead of resolving as if playback had started.
+        #[test]
+        fn play_rejects_once_the_resource_is_known_unsupported() {
+            let rt = rt_with_dom();
+            rt.eval(
+                "var v = document.createElement('video');
+                 v.src = 'http://127.0.0.1:1/movie.mp4';",
+            )
+            .unwrap();
+            settle(&rt);
+            rt.eval("var name = null; v.play().catch(function(e) { name = e.name; });")
+                .unwrap();
+            settle(&rt);
+            assert!(truthy(&rt, "name === 'NotSupportedError'"), "play() should reject");
+        }
+
+        /// `HTMLMediaElement` did not exist, so neither did the network/readiness
+        /// constants every media test reads them off.
+        #[test]
+        fn media_element_interface_and_constants_exist() {
+            let rt = rt_with_dom();
+            assert!(
+                truthy(
+                    &rt,
+                    "var v = document.createElement('video');
+                     v instanceof HTMLMediaElement
+                       && v instanceof HTMLVideoElement
+                       && document.createElement('audio') instanceof HTMLMediaElement
+                       && HTMLMediaElement.NETWORK_NO_SOURCE === 3
+                       && v.HAVE_ENOUGH_DATA === 4
+                       && v.NETWORK_EMPTY === 0"
+                ),
+                "HTMLMediaElement must sit between HTMLElement and the two media interfaces"
+            );
+        }
+
+        /// The `controls`/`loop` accessors the shim used to install kept their
+        /// value in a closure, so the content attribute layout and paint read
+        /// never moved. They are gone; dom.rs's reflection owns them.
+        #[test]
+        fn controls_and_loop_write_through_to_the_content_attribute() {
+            let rt = rt_with_dom();
+            assert!(
+                truthy(
+                    &rt,
+                    "var v = document.createElement('video');
+                     v.controls = true; v.loop = true;
+                     v.hasAttribute('controls') && v.hasAttribute('loop')
+                       && v.controls === true && v.loop === true"
+                ),
+                "controls/loop must reflect the content attribute"
+            );
+        }
     }
 
     // ── BUG-775: <track> load/error ───────────────────────────────────────────

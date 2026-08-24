@@ -1,9 +1,9 @@
 # BUG-825 — `<video>` — заглушка тоньше `<audio>`: нет `volumechange`, `networkState`/`currentSrc` не существуют, алгоритм выбора ресурса не запускается, а `loadedmetadata` приходит до всякого `src`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-25
 **Заведён:** 2026-08-21 (WPT-RUN-6, срез 19 — побочная находка, маркера не получил, см. «Масштаб»)
-**Область:** `crates/js/src/dom.rs` — шим медиа-элементов (`<audio>` и `<video>` собираются разными путями), `crates/shell/src/video_bindings.rs`
-**Владелец:** P1/P3 (`lumen-js` + шелл). Заведён P2 в ходе WPT-задачи, здесь не чинится.
+**Область:** `crates/js/src/video_bindings.rs` — шим `<video>` (у `<audio>` свой, в `crates/js/src/audio_element.rs`), `crates/js/src/dom.rs` — хук вставки `<source>`
+**Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, починен P1 2026-08-25.
 
 ## Симптом
 
@@ -136,3 +136,89 @@ media-rate-volume` (dev-release, Linux, коммит `c583a90b4`, `--seconds 5`,
 Маркер `media-resource-selection` в `tests/wpt/timeout_audit.py` — **7 id**
 остатка снимка WPT-RUN-5 (`event_volumechange.html`, `playbackRate.html`,
 четыре `resource-selection-*`, `load-removes-queued-error-event.html`).
+
+## Починено (P1, 2026-08-25)
+
+`crates/js/src/video_bindings.rs` — `<video>` получил машину состояний
+HTML §4.8.11 целиком, `crates/js/src/dom.rs` — хук вставки `<source>`.
+
+**Что оказалось корнем.** Диагноз «не локализована точнее файла» подтвердился
+буквально: у `<video>` не было *состояния загрузки вообще*. `readyState`
+считался выражением `_gifBacked ? 4 : (_src ? 0 : 4)`, то есть «4, пока не
+назначили src» — отсюда и `HAVE_ENOUGH_DATA` на пустом элементе; `src`-сеттер
+для не-GIF синхронно диспатчил выдуманную пару `loadedmetadata`+`canplay` за
+файл, который никто не запрашивал; `load()` перезапускал только GIF-ветку;
+`volume`/`muted` были парой замыканий без событий, `playbackRate` не было.
+
+**Что сделано.**
+
+* **Алгоритмы §4.8.11.5** — «media load algorithm» (`load()`, присваивание
+  `src`, вставка `<source>`) и «resource selection algorithm» с обеими ветками.
+  Ветка атрибута заканчивается «dedicated media source failure steps»
+  (`error` = `MediaError(MEDIA_ERR_SRC_NOT_SUPPORTED)`, `networkState` =
+  `NETWORK_NO_SOURCE`, событие `error` на самом элементе); ветка `<source>`
+  перебирает кандидатов, отсеивая по `type`/`media`, и стреляет `error`
+  **на `<source>`, а не на медиа-элементе** — это ровно то различие, на
+  котором стоят `resource-selection-candidate-*`. `load()` вправду
+  перезапускает алгоритм: `abort` (если шла загрузка) → `emptied` → заново.
+* **События ставятся в очередь задач, а не диспатчатся на месте.** Это не
+  косметика, а условие работоспособности: `e.volume = 0.5; e.onvolumechange =
+  …` — порядок `event_volumechange.html` и половины медиа-набора WPT — при
+  синхронной доставке не видит ничего. Тот же урок, что измерил BUG-808 для
+  `EventWatcher`: немедленное событие хуже отсутствующего.
+* **`volumechange`/`ratechange`** — по спеке они привязаны к *изменению*
+  значения, поэтому у сеттеров стоят проверки на равенство; `volume` вне
+  диапазона бросает `IndexSizeError`, а не молча клампит.
+* **`HTMLMediaElement` и `MediaError` заведены как интерфейсы.** Их не было
+  вовсе (комментарий dom.rs: «Lumen has no HTMLMediaElement interface yet»),
+  так что константам `NETWORK_*`/`HAVE_*` было негде жить, а
+  `video instanceof HTMLMediaElement` бросал. Прототипы `<video>`/`<audio>`
+  перевешены на новый через `Object.setPrototypeOf` — меняется только ссылка
+  [[Prototype]], все строки рефлексии, уже установленные dom.rs, остаются
+  собственными свойствами этих прототипов.
+* **Побочно:** собственные аксессоры `controls`/`loop` удалены. Они держали
+  значение в замыкании и **не писали контент-атрибут**, то есть
+  `video.controls = true` был невидим для layout и paint; рефлексия dom.rs
+  делает это правильно. `duration` без ресурса теперь `NaN`, а не `Infinity`
+  (`Infinity` читался как «загружен бесконечный стрим»). Появились
+  `currentSrc`, `seeking`, `buffered`/`seekable`/`played`, `fastSeek`.
+
+**Сдвиги контракта, которые стоит знать.** Не-GIF ресурс больше не притворяется
+загруженным: `play()` на нём реджектится `NotSupportedError` вместо тихого
+`resolve`. Промис `play()` на элементе *без* ресурса, наоборот, резолвится
+(спека оставила бы его висеть до начала воспроизведения) — висящий промис
+уносит остаток файла `testharness.js` вместе с собой, это форма BUG-823.
+
+**Замер (та же проба, что в «Как проверить фикс»):**
+
+```
+media-volumechange   video-defaults volume=1 muted=false readyState=0 networkState=0,
+                     video-volumechange-listener, video-volumechange volume=0.5
+media-resource-selection
+                     video-src-set networkState=3 currentSrc=, video-load-called networkState=3,
+                     video-emptied networkState=3, video-loadstart networkState=2,
+                     video-error networkState=3
+```
+
+До фикса те же две пробы давали `video-defaults … readyState=4
+networkState=undefined` без единого `video-volumechange`, и `video-loadedmetadata`
+**до** присваивания `src` при полном молчании после него.
+
+11 новых юнит-тестов (`video_bindings::tests_v8::media_element`), 12/12 дампов
+`dump_golden.py` совпадают с эталоном (правка не двигает display-list).
+
+## Остаётся вне рамок
+
+* `<audio>` живёт по своей, более старой модели (`audio_element.rs`) и
+  по-прежнему диспатчит события синхронно. Сводить их в один шим — отдельная
+  работа: у аудио настоящий провайдер воспроизведения и другой цикл загрузки.
+* Декодера, кроме GIF, нет, поэтому «выбор ресурса» физически не может
+  закончиться успехом для mp4/webm — это Phase 1, а не этот баг.
+* `<video poster>` по-прежнему не запрашивается ([BUG-848](BUG-848-OPEN.md)).
+* `<source>`, добавленный **после** того, как элемент уже осел без ресурса
+  (`networkState` = `NETWORK_NO_SOURCE`), не перезапускает выбор: хук слушает
+  только `NETWORK_EMPTY`. Спека в этом месте продолжает приостановленный
+  алгоритм, а не запускает новый, и перезапуск дал бы лишние `emptied`.
+* Парсерно-написанный `<video>` патчится до первого скрипта страницы, поэтому
+  его события видны; парсерный `<track>` — нет, это класс
+  [BUG-804](BUG-804-OPEN.md).
