@@ -10902,6 +10902,22 @@ var window = {
     },
 };
 
+// BUG-480 срез 4: доставка кросс-фреймового message в ЭТО окно из бриджа
+// фреймов (frame_bridge::_lumen_frame_pump_messages). Данные уже разобраны,
+// source — фасад окна отправителя или null. Тот же порядок, что у локального
+// window.postMessage выше: сначала onmessage, затем addEventListener('message').
+globalThis._lumen_deliver_frame_message = function(data, origin, source) {
+    var ev = new MessageEvent(data);
+    ev.origin = origin || '';
+    if (source !== null && source !== undefined) ev.source = source;
+    if (typeof window.onmessage === 'function') {
+        try { window.onmessage(ev); } catch(e) {}
+    }
+    for (var i = 0; i < _message_listeners.length; i++) {
+        try { _message_listeners[i](ev); } catch(e) {}
+    }
+};
+
 // _lumen_dispatch_unhandled_rejection (BUG-716) — Rust→JS bridge for
 // `v8::Isolate::set_promise_reject_callback` (`v8_runtime.rs`). Called
 // directly with the *live* `promise`/`reason` values, never through

@@ -299,3 +299,44 @@ top для глубины 2, cross-origin без документов, frameElem
 storage) — 28 ok без FAILED; `dump_golden.py` 12/12; смоук `--dump-layout`
 (srcdoc-фрейм): `len0=1 idx0=same named=same` у родителя и
 `P=object NE1 TOP1 DOCBODY FEobj` у ребёнка.
+
+## Срез 4 (P3, 2026-08-25) — кросс-фреймовый `postMessage`
+
+Первый канал связи между изолятами: у каждого фасада окна появился
+`postMessage(message, targetOrigin)`, доставка — через процесс-глобальный
+исходящий ящик ([`FRAME_OUTBOX`] в `crates/js/src/frame_bridge.rs`), ключ
+адресата — указатель `Arc<Mutex<Document>>` его документа (один инстанс у
+shell/реестра родителя/JS-контекста ребёнка со среза 1). Отправка валидирует
+`targetOrigin` (`'*'` всегда; `'/'`/опущенный — по флагу `accessible`,
+вычисленному shell'ом; явная строка — совпадение с нормализованным origin
+биндинга) и кладёт конверт; получатель разбирает свой ящик на очередном тике
+(`PersistentJs::pump_frame_messages`, вызывается рядом с pump_websockets и у
+страницы, и у хэндлов фреймов), строит MessageEvent через новый хук
+WEB_API_SHIM `_lumen_deliver_frame_message` и доставляет в
+`window.onmessage` + `addEventListener('message')`. `event.source` —
+интернированный фасад окна отправителя (bid разрешается реестром ПОЛУЧАТЕЛЯ),
+`event.origin` считается на приёме: для `about:`-детей — origin родителя
+(наследование по спеке). `install_dom` проставляет реестру ключ собственного
+документа (`self_key`) и origin страницы (`self_origin`).
+
+Отклонения среза (задокументированы в шиме и тестах): сериализация —
+JSON-круготрип, т.е. подмножество structured clone (верхнеуровневый
+undefined → null; вложенные функции/узлы деградируют; функции/символы
+верхнего уровня бросают `DataCloneError`); рёбра только «предок ↔
+непосредственный потомок» — постинг внука на `window.top` доставляется с
+`source=null`; sibling↔sibling — будущий срез; доставка асинхронная на тике
+пумпы, отдельного пробуждения спящего event loop нет (как у BroadcastChannel).
+Попутное уточнение смоука: инлайн-скрипт ребёнка исполняется ДО регистрации
+предков (лимит срезов 1–3), поэтому `window.parent.postMessage` из тела
+инлайн-скрипта уходит в собственный window — постить нужно после
+DOMContentLoaded.
+
+Проверка: clippy `-p lumen-js --features v8-backend` / `-p lumen-shell`
+-D warnings; тесты js 2989 (+23: 22 юнит-бриджа на двух изолятах — оба
+направления, наследование origin, `'/'`/явный origin, DataCloneError,
+изоляция ящика — + 1 интеграционный install_dom→хук), shell 1586+2 ok;
+`dump_golden.py` 12/12; живой смоук
+`tests/wpt/verify_frame_post_message.py` (dev-release, http-сервер):
+child→parent hello, parent→child ping из обработчика `load` хоста,
+раунд-трип pong, `event.origin = http://127.0.0.1:<port>` и фасадный
+`source` во всех доставках.
