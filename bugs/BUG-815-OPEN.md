@@ -48,7 +48,7 @@ w.onmessage = t.step_func_done(e => assert_equals(e.data, "late"));
 * `setInterval` — алиас `setTimeout` (`worker.rs:377`, комментарий
   «single-shot stub (no repeating in Phase 0)»), то есть повторов нет;
 * исключение любого колбэка гасится (`catch(e) {}`) — см.
-  [BUG-813](BUG-813-OPEN.md).
+  [BUG-813](BUG-813-FIXED.md).
 
 Отдельное следствие порядка: `queueMicrotask` кладёт задачу в *начало* той
 же очереди, а не в очередь микрозадач, так что относительный порядок
@@ -60,7 +60,7 @@ w.onmessage = t.step_func_done(e => assert_equals(e.data, "late"));
 WPT-RUN-5 (`workers/WorkerGlobalScope_setTimeout.htm`,
 `WorkerGlobalScope_setInterval.htm`, `Worker-timeout-increasing-order.html`,
 `workers/interfaces/WorkerUtils/WindowTimers/001` и `003`). Как и у
-[BUG-813](BUG-813-OPEN.md)/[BUG-776](BUG-776-FIXED.md), это оценка снизу:
+[BUG-813](BUG-813-FIXED.md)/[BUG-776](BUG-776-FIXED.md), это оценка снизу:
 каталог `workers/` в снимке в основном не дошёл до своих таймеров, отвалившись
 на `importScripts` ([BUG-778](BUG-778-FIXED.md)).
 

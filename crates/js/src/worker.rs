@@ -344,8 +344,55 @@ pub(crate) fn install_worker_scope_globals_v8(rt: &V8JsRuntime) -> JsResult<()> 
     // `NavigatorProfile` the page's own antidetect layer uses.
     rt.eval(&crate::navigator_bindings::worker_navigator_id_shim())?;
     rt.eval(&crate::dom::worker_exposed_shim())?;
+    rt.eval(WORKER_ERROR_EVENT_SHIM)?;
     Ok(())
 }
+
+/// `ErrorEvent` for a `WorkerGlobalScope` (BUG-813) — the object handed to an
+/// `addEventListener('error', …)` listener inside a worker, and the only event
+/// class such a scope needs.
+///
+/// A local definition rather than a slice of the page shim because the page's
+/// `Event` hierarchy lives in `WEB_API_SHIM_MID`, which is page-only (it pulls
+/// in `document`, `window` and the whole UI-event family); splitting `Event`
+/// out the way `EVENT_TARGET_SHIM` was split is a larger change than this bug.
+/// The consequence to know: inside a worker `errorEvent instanceof Event` is
+/// false, because there is no `Event` in that scope to inherit from.
+///
+/// Evaluated for every worker flavour that goes through
+/// [`install_worker_scope_globals_v8`] — dedicated, shared and service —
+/// and guarded so a scope that already has the page-side class keeps it.
+#[cfg(feature = "v8-backend")]
+pub(crate) const WORKER_ERROR_EVENT_SHIM: &str = r#"
+if (typeof globalThis.ErrorEvent !== 'function') {
+  var _LumenWorkerErrorEvent = function ErrorEvent(type, init) {
+    this.type = String(type);
+    this.message  = (init && init.message  != null) ? String(init.message)  : '';
+    this.filename = (init && init.filename != null) ? String(init.filename) : '';
+    this.lineno   = (init && init.lineno   != null) ? (init.lineno | 0) : 0;
+    this.colno    = (init && init.colno    != null) ? (init.colno  | 0) : 0;
+    this.error    = (init && init.error    !== undefined) ? init.error : null;
+    this.bubbles    = !!(init && init.bubbles);
+    this.cancelable = !!(init && init.cancelable);
+    this.defaultPrevented = false;
+    this.target = null;
+    this.currentTarget = null;
+  };
+  _LumenWorkerErrorEvent.prototype.preventDefault = function() {
+    if (this.cancelable) this.defaultPrevented = true;
+  };
+  _LumenWorkerErrorEvent.prototype.stopPropagation = function() {};
+  _LumenWorkerErrorEvent.prototype.stopImmediatePropagation = function() {};
+  // `assert_class_string(e, 'ErrorEvent')` (WPT's testharness) reads
+  // `Object.prototype.toString`, which for a plain constructor answers
+  // `[object Object]` without this.
+  Object.defineProperty(_LumenWorkerErrorEvent.prototype, Symbol.toStringTag, {
+    value: 'ErrorEvent', configurable: true,
+  });
+  globalThis.ErrorEvent = _LumenWorkerErrorEvent;
+}
+undefined;
+"#;
 
 // ─── worker thread ────────────────────────────────────────────────────────────
 
@@ -385,23 +432,88 @@ fn worker_global_shim(worker_id: u32) -> String {
       typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : '');
   }}
 
-  // Report an uncaught exception from a message/timer callback to the parent
-  // (BUG-591 worker parent-side reporting; HTML LS "report the exception").
+  // ── "report the exception" inside a WorkerGlobalScope ──────────────────────
+  // HTML LS §8.1.3.6 then §10.2.6 "runtime script errors": an uncaught
+  // exception fires `error` at the worker's *own* global scope first, and only
+  // if nothing there cancelled it does it reach the owning `Worker` object on
+  // the page (BUG-813; the page half alone was BUG-591). Sources: the top-level
+  // script (Rust calls this through `eval_and_report_via`, so `err` is the real
+  // thrown value and the location comes from `v8::Message`), a message
+  // callback, a flushed timer, and the net shim's listeners.
+  var _onerror = null;
+  var _errListeners = [];
+  // Re-entrancy guard: an exception thrown *by* an error handler must not fire
+  // `error` again (that recurses), but must not be swallowed either — it goes
+  // straight to the parent instead.
+  var _reportingError = false;
+
+  Object.defineProperty(globalThis, 'onerror', {{
+    get: function() {{ return _onerror; }},
+    set: function(fn) {{ _onerror = typeof fn === 'function' ? fn : null; }},
+    configurable: true,
+  }});
+
   // `filename`/`lineno`/`colno` are best-effort-parsed from `.stack` the same
   // way the page-side `_lumen_report_exception` (`crate::dom::WEB_API_SHIM`)
   // does, since V8's `Error` has no structured location API from script.
-  function _lumen_report_worker_exception(err) {{
-    var message = (err instanceof Error) ? String(err.message) : String(err);
-    var filename = '', lineno = 0, colno = 0;
+  function _lumen_worker_error_location(err) {{
     if (err && typeof err.stack === 'string') {{
       var lines = err.stack.split('\n');
       for (var i = 0; i < lines.length; i++) {{
         var m = /at (?:.*\()?([^\s()]+):(\d+):(\d+)\)?\s*$/.exec(lines[i]);
-        if (m) {{ filename = m[1]; lineno = +m[2]; colno = +m[3]; break; }}
+        if (m) return {{ filename: m[1], lineno: +m[2], colno: +m[3] }};
       }}
     }}
-    _lumen_worker_report_error(message, filename, lineno, colno);
+    return {{ filename: '', lineno: 0, colno: 0 }};
   }}
+
+  function _lumen_report_worker_exception(err, filename, lineno, colno) {{
+    var message = (err instanceof Error) ? String(err.message) : String(err);
+    var loc = _lumen_worker_error_location(err);
+    var file = (typeof filename === 'string' && filename) ? filename : loc.filename;
+    var line = (typeof lineno === 'number' && lineno) ? lineno : loc.lineno;
+    var col  = (typeof colno === 'number' && colno) ? colno : loc.colno;
+    // A worker's classic script is compiled with no resource name, so neither
+    // `v8::Message` nor `Error.stack` carries the URL HTML LS requires here —
+    // and every frame of such a stack belongs to the worker's own script.
+    if (!file || file === '<anonymous>') {{
+      file = (globalThis.location && globalThis.location.href) || '';
+    }}
+    // Read by `run_worker_thread_v8` to tell "the scope reported this" from a
+    // module *load* failure, which never reaches this function at all.
+    globalThis._lumen_worker_error_reported = true;
+
+    if (_reportingError) {{ _lumen_worker_report_error(message, file, line, col); return; }}
+    _reportingError = true;
+    var cancelled = false;
+    try {{
+      // `onerror` on a global scope is an OnErrorEventHandler (WebIDL): it
+      // takes the five legacy arguments rather than the event object, and
+      // cancels by returning true — `support/ErrorEvent.js` returns false
+      // precisely so the page still gets the error.
+      if (typeof _onerror === 'function') {{
+        try {{
+          if (_onerror.call(globalThis, message, file, line, col, err) === true) cancelled = true;
+        }} catch (e) {{ _lumen_report_worker_exception(e); }}
+      }}
+      if (_errListeners.length) {{
+        var ev = new ErrorEvent('error', {{
+          message: message, filename: file, lineno: line, colno: col,
+          error: err, bubbles: false, cancelable: true,
+        }});
+        ev.target = globalThis;
+        for (var i = 0; i < _errListeners.length; i++) {{
+          try {{ _errListeners[i].call(globalThis, ev); }}
+          catch (e) {{ _lumen_report_worker_exception(e); }}
+        }}
+        if (ev.defaultPrevented) cancelled = true;
+      }}
+    }} finally {{ _reportingError = false; }}
+    if (!cancelled) _lumen_worker_report_error(message, file, line, col);
+  }}
+  // The top-level script is evaluated by Rust (`eval_and_report_via`), which
+  // can only reach a global.
+  globalThis._lumen_report_worker_exception = _lumen_report_worker_exception;
 
   // postMessage(data) — send data back to the main thread.
   globalThis.postMessage = function(data) {{
@@ -415,14 +527,16 @@ fn worker_global_shim(worker_id: u32) -> String {
   }});
 
   globalThis.addEventListener = function(type, fn, _opts) {{
-    if (type === 'message' && typeof fn === 'function') _msgListeners.push(fn);
+    if (typeof fn !== 'function') return;
+    if (type === 'message') _msgListeners.push(fn);
+    else if (type === 'error') _errListeners.push(fn);   // BUG-813
   }};
 
   globalThis.removeEventListener = function(type, fn) {{
-    if (type === 'message') {{
-      var i = _msgListeners.indexOf(fn);
-      if (i !== -1) _msgListeners.splice(i, 1);
-    }}
+    var list = type === 'message' ? _msgListeners : (type === 'error' ? _errListeners : null);
+    if (!list) return;
+    var i = list.indexOf(fn);
+    if (i !== -1) list.splice(i, 1);
   }};
 
   // Reconstruct transferred OffscreenCanvas sentinels inside received data.
@@ -1112,10 +1226,42 @@ const WORKER_SHIM: &str = r#"(function() {
       colno: (info && info.colno) | 0,
       bubbles: false, cancelable: true,
     });
+    this._dispatchError(ev);
+  };
+
+  // Internal: run the `error` handlers of this `Worker` over an already-built
+  // event. Split out of `_deliverError` for `dispatchEvent`, which hands in an
+  // event the page constructed itself rather than one made from an `info`.
+  Worker.prototype._dispatchError = function(ev) {
+    ev.target = this; ev.currentTarget = this;
     if (typeof this._onerror === 'function') { try { this._onerror(ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
-    for (var i = 0; i < this._errorListeners.length; i++) {
-      try { this._errorListeners[i](ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
+    var listeners = this._errorListeners.slice();
+    for (var i = 0; i < listeners.length; i++) {
+      try { listeners[i].call(this, ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
     }
+    return !ev.defaultPrevented;
+  };
+
+  // EventTarget.dispatchEvent on the `Worker` object itself (BUG-813).
+  // `Worker` is an `AbstractWorker`, i.e. an `EventTarget`, so a page may
+  // dispatch its own `error`/`message` at it — `Worker_dispatchEvent_
+  // ErrorEvent.htm` does exactly that, with an event carrying a real `error`
+  // object (which a report coming *from* the worker thread can never have,
+  // since it crosses an agent boundary and arrives as JSON).
+  Worker.prototype.dispatchEvent = function(ev) {
+    if (!ev || typeof ev.type !== 'string') {
+      throw new TypeError('dispatchEvent: argument is not an Event');
+    }
+    if (ev.type === 'error') return this._dispatchError(ev);
+    if (ev.type === 'message') {
+      ev.target = this; ev.currentTarget = this;
+      if (typeof this._onmessage === 'function') { try { this._onmessage(ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
+      var listeners = this._listeners.slice();
+      for (var i = 0; i < listeners.length; i++) {
+        try { listeners[i].call(this, ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
+      }
+    }
+    return !ev.defaultPrevented;
   };
 
   globalThis.Worker = Worker;
@@ -1446,25 +1592,42 @@ fn run_worker_thread_v8(
     // external `<script type=module src=…>`. The globals shims above are
     // classic scripts evaluated first, so everything they define on
     // `globalThis` is visible to the module body.
+    // BUG-813: the top-level script goes through the reporting variants so an
+    // uncaught exception fires `error` at the worker's own global scope (which
+    // may have installed `onerror` earlier in the very same script) before it
+    // is forwarded to the page — the forwarding itself is done from JS by
+    // `_lumen_report_worker_exception`, not from here. Routing it through Rust
+    // rather than wrapping the script in `try`/`catch` is what keeps the real
+    // thrown value and V8's structured location, and leaves top-level `let`/
+    // `const`/function declarations in the global scope where they belong.
     let outcome = if is_module {
         rt.set_module_context(&script_url, fp_esm);
-        rt.eval_module_at(&script_url, &script)
+        rt.eval_module_at_and_report_via(&script_url, &script, "_lumen_report_worker_exception")
     } else {
-        rt.eval(&script).map(|_| ())
+        rt.eval_and_report_via(&script, "_lumen_report_worker_exception")
+            .map(|_| ())
     };
     if let Err(e) = outcome {
         eprintln!("[worker-{id}] v8 script error: {e:?}");
-        // BUG-591 worker parent-side reporting: post the top-level failure
-        // back through the reply channel so the owning `Worker` object's
-        // `error` handler actually fires — previously this was `eprintln!`
-        // only, so an uncaught top-level worker exception looked to the
-        // parent exactly like a worker that never posts anything back.
-        let message = match &e {
-            lumen_core::JsError::Parse(m) | lumen_core::JsError::Runtime(m) => m.clone(),
-            lumen_core::JsError::NotImplemented => "not implemented".to_string(),
-        };
-        if let Ok(mut errs) = errors.lock() {
-            errs.push((id, error_info_json(&message, "", 0, 0)));
+        // A module *load* failure (parse/link/import-not-found) never starts
+        // the body, so it does not reach the JS reporter — HTML LS still wants
+        // `error` at the `Worker` object for it, so post it from here. The flag
+        // is the only thing that separates the two cases (BUG-591 worker
+        // parent-side reporting: before it, this was `eprintln!` only, so an
+        // uncaught top-level worker exception looked to the parent exactly like
+        // a worker that never posts anything back).
+        let reported = matches!(
+            rt.eval("!!globalThis._lumen_worker_error_reported"),
+            Ok(lumen_core::JsValue::Bool(true))
+        );
+        if !reported {
+            let message = match &e {
+                lumen_core::JsError::Parse(m) | lumen_core::JsError::Runtime(m) => m.clone(),
+                lumen_core::JsError::NotImplemented => "not implemented".to_string(),
+            };
+            if let Ok(mut errs) = errors.lock() {
+                errs.push((id, error_info_json(&message, "", 0, 0)));
+            }
         }
         // Continue: worker may still receive messages if the error was partial.
     }
@@ -1773,6 +1936,9 @@ mod tests {
 /// proving the whole per-worker `V8JsRuntime` thread actually runs.
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests_v8 {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     fn make_store() -> WorkerBlobStore {
@@ -1842,6 +2008,268 @@ mod tests_v8 {
             .eval("(function(){try{atob('!!!');return false;}catch(e){return e instanceof TypeError;}})()")
             .unwrap();
         assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── BUG-813: "report the exception" inside a WorkerGlobalScope ───────────
+
+    /// Install a dedicated-worker scope over a fresh runtime and hand back the
+    /// error queue the parent-side `Worker` object would drain.
+    fn scope_with_errors(script_url: &str) -> (V8JsRuntime, WorkerErrorQueue) {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(
+            &rt,
+            7,
+            queue,
+            Arc::clone(&errors),
+            make_store(),
+            None,
+            script_url,
+            false,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        (rt, errors)
+    }
+
+    /// [BUG-813] `WorkerGlobalScope.onerror` is an OnErrorEventHandler: it takes
+    /// the five legacy arguments (message, filename, lineno, colno, error), not
+    /// the event object. `workers/support/ErrorEvent.js` — the script behind
+    /// nine vendored tests — reads all four of the first ones and posts them
+    /// back, so passing an event here would report four `undefined`s and the
+    /// family would fail rather than hang.
+    #[test]
+    fn v8_worker_scope_onerror_gets_the_legacy_five_arguments() {
+        let (rt, errors) = scope_with_errors("http://example.test/w.js");
+        let seen = rt
+            .eval(
+                "var seen = null; \
+                 onerror = function(message, filename, lineno, colno, error) { \
+                   seen = [message, filename, lineno, colno, error === _thrown, arguments.length]; \
+                   return false; \
+                 }; \
+                 var _thrown = new Error('boom'); \
+                 _lumen_report_worker_exception(_thrown, 'http://example.test/w.js', 3, 11); \
+                 JSON.stringify(seen.slice(0, 4)) + '|' + seen[4] + '|' + seen[5]",
+            )
+            .unwrap();
+        assert_eq!(
+            seen,
+            lumen_core::JsValue::String(
+                "[\"boom\",\"http://example.test/w.js\",3,11]|true|5".to_string()
+            )
+        );
+        // `return false` is "not handled", so the page still gets the report.
+        let reported = drain_errors(&errors);
+        assert_eq!(reported.len(), 1);
+        assert!(reported[0].1.contains("\"message\":\"boom\""));
+        assert!(reported[0].1.contains("\"lineno\":3"));
+    }
+
+    /// [BUG-813] The cancellation half of the same handler: returning `true`
+    /// from an OnErrorEventHandler cancels the event, and a cancelled error
+    /// must not be forwarded to the owning `Worker` object at all. Asserted
+    /// separately from the argument shape because a handler that is called but
+    /// whose return value is ignored passes the test above unchanged.
+    #[test]
+    fn v8_worker_scope_onerror_returning_true_stops_the_report_to_the_page() {
+        let (rt, errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval(
+            "onerror = function() { return true; }; \
+             _lumen_report_worker_exception(new Error('boom'));",
+        )
+        .unwrap();
+        assert!(drain_errors(&errors).is_empty());
+    }
+
+    /// [BUG-813] `addEventListener('error', …)` inside a worker — the second
+    /// half of `workers/support/ErrorEvent-error.js`, which registers both
+    /// forms. Unlike `onerror` a listener receives the `ErrorEvent` itself,
+    /// including `error` (the thrown value, which crosses no agent boundary
+    /// here and so is the real object, unlike the page-side `e.error === null`).
+    #[test]
+    fn v8_worker_scope_error_listener_receives_the_event_object() {
+        let (rt, errors) = scope_with_errors("http://example.test/w.js");
+        let seen = rt
+            .eval(
+                "var seen = ''; var thrown = new Error('boom'); \
+                 addEventListener('error', function(e) { \
+                   seen = [e.type, e.message, e.filename, e.lineno, e.error === thrown, \
+                           e.bubbles, e.cancelable, \
+                           Object.prototype.toString.call(e)].join('|'); \
+                 }); \
+                 _lumen_report_worker_exception(thrown, 'http://example.test/w.js', 3, 11); \
+                 seen",
+            )
+            .unwrap();
+        assert_eq!(
+            seen,
+            lumen_core::JsValue::String(
+                "error|boom|http://example.test/w.js|3|true|false|true|[object ErrorEvent]"
+                    .to_string()
+            )
+        );
+        assert_eq!(drain_errors(&errors).len(), 1);
+    }
+
+    /// [BUG-813] A listener may cancel too — `preventDefault()` is what
+    /// `WorkerGlobalScope_ErrorEvent_message.htm` relies on one level up, and
+    /// the event has to be `cancelable` for it to take effect.
+    #[test]
+    fn v8_worker_scope_error_listener_prevent_default_stops_the_report() {
+        let (rt, errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval(
+            "var f = function(e) { e.preventDefault(); }; \
+             addEventListener('error', f); \
+             _lumen_report_worker_exception(new Error('boom'));",
+        )
+        .unwrap();
+        assert!(drain_errors(&errors).is_empty());
+        // …and removing that same listener puts the report back, so the list is
+        // real rather than a one-shot "somebody once cancelled" flag.
+        rt.eval(
+            "removeEventListener('error', f); \
+             _lumen_report_worker_exception(new Error('again'));",
+        )
+        .unwrap();
+        assert_eq!(drain_errors(&errors).len(), 1);
+    }
+
+    /// [BUG-813] An exception thrown *by* an error handler must neither recurse
+    /// (firing `error` again re-enters the same handler) nor be swallowed — the
+    /// bare `catch(e) {}` shape BUG-591 swept out of the rest of the engine. It
+    /// goes straight to the page instead, so the page sees two reports: the
+    /// original (the handler did not cancel it) and the handler's own.
+    #[test]
+    fn v8_worker_scope_throwing_error_handler_does_not_recurse() {
+        let (rt, errors) = scope_with_errors("http://example.test/w.js");
+        let calls = rt
+            .eval(
+                "var calls = 0; \
+                 onerror = function() { calls++; throw new Error('nested'); }; \
+                 _lumen_report_worker_exception(new Error('boom')); \
+                 calls",
+            )
+            .unwrap();
+        assert_eq!(calls, lumen_core::JsValue::Number(1.0));
+        let reported = drain_errors(&errors);
+        assert_eq!(reported.len(), 2, "nested + original, neither swallowed");
+        assert!(reported.iter().any(|(_, j)| j.contains("\"message\":\"nested\"")));
+        assert!(reported.iter().any(|(_, j)| j.contains("\"message\":\"boom\"")));
+    }
+
+    /// [BUG-813] V8 compiles a worker's classic script with no resource name,
+    /// so both `v8::Message` and `Error.stack` report `<anonymous>` — but
+    /// `Worker_ErrorEvent_filename.htm` asserts the worker's absolute script
+    /// URL. Every frame of such a stack belongs to that script, so the scope's
+    /// own `location.href` is the substitution.
+    #[test]
+    fn v8_worker_scope_error_filename_falls_back_to_the_script_url() {
+        let (rt, errors) = scope_with_errors("http://example.test/support/w.js");
+        rt.eval("_lumen_report_worker_exception(new Error('boom'));")
+            .unwrap();
+        let reported = drain_errors(&errors);
+        assert_eq!(reported.len(), 1);
+        assert!(
+            reported[0]
+                .1
+                .contains("\"filename\":\"http://example.test/support/w.js\""),
+            "got {}",
+            reported[0].1
+        );
+    }
+
+    /// [BUG-813] End to end over a real worker thread: `support/ErrorEvent.js`
+    /// throws from `onmessage`, its own `onerror` posts the four legacy
+    /// arguments back and returns false, and the page's error queue gets the
+    /// report anyway. This is the exact shape of the nine vendored
+    /// `Worker_ErrorEvent_*`/`WorkerGlobalScope_ErrorEvent_*` tests.
+    #[test]
+    fn v8_worker_end_to_end_message_exception_runs_scope_onerror_then_reports() {
+        use std::time::Duration;
+        let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        let store = make_store();
+        let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let nid = Arc::new(Mutex::new(0u32));
+
+        let script = "onmessage = function(e) { throw new Error(e.data); };\n\
+                      onerror = function(message, location, line, col) {\n\
+                        postMessage(message + '@' + location + ':' + line);\n\
+                        return false;\n\
+                      };\n"
+            .to_string();
+        let worker_id = spawn_worker_v8(
+            &reg,
+            &queue,
+            &errors,
+            &nid,
+            &store,
+            script,
+            "http://example.test/support/ErrorEvent.js".to_string(),
+            false,
+            None,
+        );
+
+        post_to_worker(&reg, worker_id, "\"boom\"".to_string());
+        std::thread::sleep(Duration::from_millis(400));
+
+        let msgs = drain_messages(&queue);
+        assert_eq!(
+            msgs.iter().map(|(_, j)| j.as_str()).collect::<Vec<_>>(),
+            vec!["\"boom@http://example.test/support/ErrorEvent.js:1\""]
+        );
+        let reported = drain_errors(&errors);
+        assert_eq!(reported.len(), 1);
+        assert!(reported[0].1.contains("\"message\":\"boom\""));
+
+        terminate_worker(&reg, worker_id);
+    }
+
+    /// [BUG-813] The top-level script is evaluated by Rust, not by the shim, so
+    /// its exception reaches the scope's own handlers only because
+    /// `run_worker_thread_v8` routes it through `eval_and_report_via`
+    /// (`support/ErrorEvent-error.js` registers both handler forms and then
+    /// throws a bare string at top level). One report reaches the page too,
+    /// exactly one — the fallback push in `run_worker_thread_v8` is for a
+    /// module *load* failure and must stay quiet here.
+    #[test]
+    fn v8_worker_end_to_end_top_level_throw_runs_scope_handlers_once() {
+        use std::time::Duration;
+        let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        let store = make_store();
+        let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let nid = Arc::new(Mutex::new(0u32));
+
+        let script = "onerror = function(message, location, line, col, error) {\n\
+                        postMessage('onerror:' + error);\n\
+                      };\n\
+                      addEventListener('error', function(e) {\n\
+                        postMessage('listener:' + e.error);\n\
+                      });\n\
+                      throw 'hello';\n"
+            .to_string();
+        let worker_id = spawn_worker_v8(
+            &reg,
+            &queue,
+            &errors,
+            &nid,
+            &store,
+            script,
+            "http://example.test/support/ErrorEvent-error.js".to_string(),
+            false,
+            None,
+        );
+        std::thread::sleep(Duration::from_millis(400));
+
+        let mut msgs: Vec<String> = drain_messages(&queue).into_iter().map(|(_, j)| j).collect();
+        msgs.sort();
+        assert_eq!(msgs, vec!["\"listener:hello\"", "\"onerror:hello\""]);
+        assert_eq!(drain_errors(&errors).len(), 1);
+
+        terminate_worker(&reg, worker_id);
     }
 
     /// BUG-401: `performance` was absent from the worker global scope entirely,

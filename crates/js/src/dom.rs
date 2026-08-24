@@ -719,6 +719,9 @@ HashChangeEvent.prototype.constructor = HashChangeEvent;
 
 // ErrorEvent — uncaught script errors
 function ErrorEvent(type, init) {
+    // WebIDL: an interface object is not callable (BUG-813,
+    // `workers/Worker_dispatchEvent_ErrorEvent.htm`).
+    if (!new.target) throw new TypeError(\"Constructor ErrorEvent requires 'new'\");
     Event.call(this, type, init);
     this.message  = (init && init.message  != null) ? String(init.message)  : '';
     this.filename = (init && init.filename != null) ? String(init.filename) : '';
@@ -728,6 +731,12 @@ function ErrorEvent(type, init) {
 }
 ErrorEvent.prototype = Object.create(Event.prototype);
 ErrorEvent.prototype.constructor = ErrorEvent;
+// `assert_class_string(e, 'ErrorEvent')` reads `Object.prototype.toString`,
+// which answers `[object Object]` for a plain constructor without this
+// (BUG-813, `workers/Worker_ErrorEvent_type.htm`).
+Object.defineProperty(ErrorEvent.prototype, Symbol.toStringTag, {
+    value: 'ErrorEvent', configurable: true,
+});
 
 // ── Uncaught exception reporting (HTML LS §8.1.3.6 \"report the exception\") ───
 // BUG-591: dispatches a window 'error' ErrorEvent for a genuinely uncaught
@@ -37249,6 +37258,55 @@ mod tests {
                  e.message === 'oops' && e.filename === 'app.js' && e.lineno === 10 && e.colno === 5"
             ).unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// [BUG-813] Two WebIDL properties of the `ErrorEvent` interface that
+        /// only became observable once a worker error reached the page at all:
+        /// `Object.prototype.toString` must say `[object ErrorEvent]` (what
+        /// `assert_class_string` reads, and what a plain constructor does not
+        /// give), and the interface object must not be callable without `new`.
+        #[test]
+        fn errorevent_class_string_and_new_required() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var tag = Object.prototype.toString.call(new ErrorEvent('error')); \
+                     var threw = false; \
+                     try { ErrorEvent('error'); } catch (e) { threw = (e instanceof TypeError); } \
+                     tag + '|' + threw",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("[object ErrorEvent]|true".to_string())
+            );
+        }
+
+        /// [BUG-813] `Worker` is an `AbstractWorker`, i.e. an `EventTarget`, so
+        /// the page may dispatch its own event at it. The event object must
+        /// arrive untouched — including `error`, which a report coming *from*
+        /// the worker thread can never carry, since it crosses an agent
+        /// boundary and arrives as JSON. No worker is started here: what is
+        /// under test is the page-side class, not the thread.
+        #[test]
+        fn worker_dispatch_event_runs_the_pages_own_error_listener() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var w = new Worker('data:text/javascript,/*noop*/'); \
+                     var seen = ''; var err = new Error('test'); \
+                     w.addEventListener('error', function(e) { \
+                       seen = [e.type, e.message, e.lineno, e.error === err, e.target === w].join('|'); \
+                     }, true); \
+                     var ret = w.dispatchEvent(new ErrorEvent('error', \
+                       {message: 'Hello Worker', lineno: 5, colno: 6, error: err, cancelable: true})); \
+                     seen + '|' + ret",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("error|Hello Worker|5|true|true|true".to_string())
+            );
         }
 
         /// BUG-702: `PromiseRejectionEvent` must be constructible and carry

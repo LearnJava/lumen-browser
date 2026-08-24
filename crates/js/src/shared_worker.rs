@@ -141,23 +141,66 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
       typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : '');
   }
 
-  // Report an uncaught exception from onconnect/onmessage/a flushed timer to
-  // every connected client (BUG-591 SharedWorker parent-side reporting; HTML
-  // LS "report the exception" broadcasts to all owning `SharedWorker`
-  // objects, unlike a dedicated worker's single client). `filename`/`lineno`/
-  // `colno` are best-effort-parsed from `.stack`, same technique as the
-  // dedicated-worker twin (`worker.rs`'s `_lumen_report_worker_exception`).
-  function _lumen_sw_report_exception(err) {
+  // Report an uncaught exception from onconnect/onmessage/a flushed timer.
+  // HTML LS §8.1.3.6 then §10.2.6: it fires `error` at this global scope
+  // first (BUG-813) and only reaches every connected client if nothing
+  // cancelled it (BUG-591 SharedWorker parent-side reporting — "report the
+  // exception" broadcasts to all owning `SharedWorker` objects, unlike a
+  // dedicated worker's single client). `filename`/`lineno`/`colno` are
+  // best-effort-parsed from `.stack`, same technique as the dedicated-worker
+  // twin (`worker.rs`'s `_lumen_report_worker_exception`), whose long comment
+  // covers the re-entrancy guard and the `<anonymous>` fallback too.
+  var _onerror = null;
+  var _errListeners = [];
+  var _reportingError = false;
+
+  function _lumen_sw_report_exception(err, argFile, argLine, argCol) {
     var message = (err instanceof Error) ? String(err.message) : String(err);
-    var filename = '', lineno = 0, colno = 0;
-    if (err && typeof err.stack === 'string') {
+    var filename = (typeof argFile === 'string') ? argFile : '';
+    var lineno = (typeof argLine === 'number') ? argLine : 0;
+    var colno = (typeof argCol === 'number') ? argCol : 0;
+    if (!filename && err && typeof err.stack === 'string') {
       var lines = err.stack.split('\n');
       for (var i = 0; i < lines.length; i++) {
         var m = /at (?:.*\()?([^\s()]+):(\d+):(\d+)\)?\s*$/.exec(lines[i]);
         if (m) { filename = m[1]; lineno = +m[2]; colno = +m[3]; break; }
       }
     }
-    _lumen_sw_report_error(message, filename, lineno, colno);
+    if (!filename || filename === '<anonymous>') {
+      filename = (globalThis.location && globalThis.location.href) || '';
+    }
+    // Read by `run_shared_worker_thread_v8` for the top-level script only: a
+    // scope that cancelled its own error must not have it replayed to clients
+    // as they connect. Set on every report, so a stale `true` cannot leak into
+    // a later one; left `undefined` by a module *load* failure, which never
+    // reaches this function at all.
+    globalThis._lumen_worker_error_cancelled = false;
+    if (_reportingError) { _lumen_sw_report_error(message, filename, lineno, colno); return; }
+    _reportingError = true;
+    var cancelled = false;
+    try {
+      if (typeof _onerror === 'function') {
+        try {
+          if (_onerror.call(globalThis, message, filename, lineno, colno, err) === true) {
+            cancelled = true;
+          }
+        } catch (e) { _lumen_sw_report_exception(e); }
+      }
+      if (_errListeners.length) {
+        var ev = new ErrorEvent('error', {
+          message: message, filename: filename, lineno: lineno, colno: colno,
+          error: err, bubbles: false, cancelable: true,
+        });
+        ev.target = globalThis;
+        for (var i = 0; i < _errListeners.length; i++) {
+          try { _errListeners[i].call(globalThis, ev); }
+          catch (e) { _lumen_sw_report_exception(e); }
+        }
+        if (ev.defaultPrevented) cancelled = true;
+      }
+    } finally { _reportingError = false; }
+    globalThis._lumen_worker_error_cancelled = cancelled;
+    if (!cancelled) _lumen_sw_report_error(message, filename, lineno, colno);
   }
 
   Object.defineProperty(globalThis, 'onconnect', {
@@ -166,14 +209,22 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
     configurable: true,
   });
 
+  Object.defineProperty(globalThis, 'onerror', {
+    get: function() { return _onerror; },
+    set: function(fn) { _onerror = typeof fn === 'function' ? fn : null; },
+    configurable: true,
+  });
+
   globalThis.addEventListener = function(type, fn, _opts) {
-    if (type === 'connect' && typeof fn === 'function') _connectListeners.push(fn);
+    if (typeof fn !== 'function') return;
+    if (type === 'connect') _connectListeners.push(fn);
+    else if (type === 'error') _errListeners.push(fn);   // BUG-813
   };
   globalThis.removeEventListener = function(type, fn) {
-    if (type === 'connect') {
-      var i = _connectListeners.indexOf(fn);
-      if (i !== -1) _connectListeners.splice(i, 1);
-    }
+    var list = type === 'connect' ? _connectListeners : (type === 'error' ? _errListeners : null);
+    if (!list) return;
+    var i = list.indexOf(fn);
+    if (i !== -1) list.splice(i, 1);
   };
 
   // Worker-side MessagePort for a single client connection.
@@ -721,11 +772,18 @@ fn run_shared_worker_thread_v8(
         return;
     }
 
+    // BUG-813: the top-level script goes through the reporting variants so an
+    // uncaught exception fires `error` at this scope's own handlers (which the
+    // very same script may have installed a line earlier) before it is
+    // broadcast to the clients — the broadcast itself is then done from JS by
+    // `_lumen_sw_report_exception`, which is what a `return true` there
+    // cancels. Same shape and same reason as `worker.rs::run_worker_thread_v8`.
     let outcome = if is_module {
         rt.set_module_context(&script_url, fp_esm);
-        rt.eval_module_at(&script_url, &script)
+        rt.eval_module_at_and_report_via(&script_url, &script, "_lumen_worker_exception_reporter")
     } else {
-        rt.eval(&script).map(|_| ())
+        rt.eval_and_report_via(&script, "_lumen_worker_exception_reporter")
+            .map(|_| ())
     };
     // A top-level failure that nobody was connected to hear yet. The worker
     // thread is spawned by the *first* client's connect, so this eval always
@@ -742,12 +800,22 @@ fn run_shared_worker_thread_v8(
         eprintln!("[shared-worker] v8 script error: {e:?}");
         // BUG-591 SharedWorker parent-side reporting: broadcast the top-level
         // failure to every already-connected client.
-        let message = match &e {
-            lumen_core::JsError::Parse(m) | lumen_core::JsError::Runtime(m) => m.clone(),
-            lumen_core::JsError::NotImplemented => "not implemented".to_string(),
-        };
-        broadcast_shared_worker_error(&error_ports, &message, "", 0, 0);
-        pending_error = Some(message);
+        //
+        // BUG-813: unless the scope's own `onerror` cancelled it — the JS-side
+        // report the reporter already made reached the same (still empty) map,
+        // so what is actually being decided here is the replay below.
+        let cancelled = matches!(
+            rt.eval("!!globalThis._lumen_worker_error_cancelled"),
+            Ok(lumen_core::JsValue::Bool(true))
+        );
+        if !cancelled {
+            let message = match &e {
+                lumen_core::JsError::Parse(m) | lumen_core::JsError::Runtime(m) => m.clone(),
+                lumen_core::JsError::NotImplemented => "not implemented".to_string(),
+            };
+            broadcast_shared_worker_error(&error_ports, &message, "", 0, 0);
+            pending_error = Some(message);
+        }
         // Continue: the worker may still service connections if the error was partial.
     }
 
@@ -1002,12 +1070,127 @@ mod tests_v8 {
         }
     }
 
+    /// [BUG-813] A `SharedWorkerGlobalScope` fires `error` at itself before the
+    /// report is broadcast to its clients, exactly like the dedicated twin —
+    /// the difference being only *how many* clients hear it, which is what
+    /// `broadcast_shared_worker_error` already handles. Both handler forms and
+    /// both ways of cancelling are asserted in one runtime because the scope's
+    /// own error path has no per-client state.
+    #[test]
+    fn shared_worker_scope_reports_the_exception_to_itself_first() {
+        let rt = V8JsRuntime::new().unwrap();
+        let ports = Arc::new(Mutex::new(HashMap::new()));
+        let error_ports: Arc<Mutex<HashMap<u32, crate::worker::WorkerErrorQueue>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let client: crate::worker::WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        error_ports.lock().unwrap().insert(1, Arc::clone(&client));
+        install_shared_worker_globals_v8(
+            &rt,
+            ports,
+            Arc::clone(&error_ports),
+            None,
+            "http://example.test/sw.js",
+            false,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+
+        let seen = rt
+            .eval(
+                "var seen = ''; var thrown = new Error('boom'); \
+                 onerror = function(message, filename, lineno, colno, error) { \
+                   seen += 'h:' + message + '@' + filename + ';'; \
+                   return false; \
+                 }; \
+                 addEventListener('error', function(e) { seen += 'l:' + (e.error === thrown) + ';'; }); \
+                 _lumen_worker_exception_reporter(thrown); \
+                 seen",
+            )
+            .unwrap();
+        assert_eq!(
+            seen,
+            JsValue::String("h:boom@http://example.test/sw.js;l:true;".to_string())
+        );
+        assert_eq!(crate::worker::drain_errors(&client).len(), 1);
+
+        // Cancelling stops the broadcast — the whole point of the scope getting
+        // the event first.
+        rt.eval(
+            "onerror = function() { return true; }; \
+             _lumen_worker_exception_reporter(new Error('cancelled'));",
+        )
+        .unwrap();
+        assert!(crate::worker::drain_errors(&client).is_empty());
+    }
+
     fn runtime_with_shared_worker() -> (V8JsRuntime, SharedWorkerOutbox) {
+        let (rt, outbox, _errors) = runtime_with_shared_worker_errors();
+        (rt, outbox)
+    }
+
+    /// [`runtime_with_shared_worker`] keeping the client-side error queue —
+    /// the one `run_shared_worker_thread_v8` replays a top-level failure into
+    /// as each client connects (BUG-813).
+    fn runtime_with_shared_worker_errors(
+    ) -> (V8JsRuntime, SharedWorkerOutbox, crate::worker::WorkerErrorQueue) {
         let rt = V8JsRuntime::new().unwrap();
         let outbox: SharedWorkerOutbox = Arc::new(Mutex::new(Vec::new()));
         let errors: crate::worker::WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         install_shared_worker_bindings_v8(&rt, &outbox, &errors, None).unwrap();
-        (rt, outbox)
+        (rt, outbox, errors)
+    }
+
+    /// Wait until `errors` has something, or the budget runs out. A shared
+    /// worker's top-level script runs on its own thread before the loop reads
+    /// the `Connect` that replays the failure, so the queue fills late.
+    fn wait_for_error(errors: &crate::worker::WorkerErrorQueue) -> Vec<(u32, String)> {
+        for _ in 0..400 {
+            let drained = crate::worker::drain_errors(errors);
+            if !drained.is_empty() {
+                return drained;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        Vec::new()
+    }
+
+    /// [BUG-813] A shared worker's *top-level* exception is evaluated by Rust,
+    /// so it reaches the scope's own `onerror` only because
+    /// `run_shared_worker_thread_v8` routes it through
+    /// `eval_and_report_via`. Asserted through cancellation rather than through
+    /// a `postMessage`, because at top-level time no client is connected yet —
+    /// which is also why the *uncancelled* half has to travel as the replayed
+    /// `pending_error` instead of the JS-side broadcast.
+    #[test]
+    fn v8_shared_worker_top_level_throw_runs_the_scopes_own_onerror() {
+        let (rt, _outbox, errors) = runtime_with_shared_worker_errors();
+        let cancelling = format!(
+            "data:text/javascript,{}",
+            urlencode("onerror=function(m,f,l,c,e){return true;};throw new Error('boom');")
+        );
+        rt.eval(&format!(
+            "new SharedWorker('{cancelling}','v8-toplevel-cancelled');"
+        ))
+        .unwrap();
+        // Give the thread the same budget the positive case gets below, so an
+        // empty queue here means "cancelled", not "not yet".
+        assert!(
+            wait_for_error(&errors).is_empty(),
+            "a cancelling scope handler must stop the report to every client"
+        );
+
+        let (rt2, _outbox2, errors2) = runtime_with_shared_worker_errors();
+        let plain = format!(
+            "data:text/javascript,{}",
+            urlencode("throw new Error('boom');")
+        );
+        rt2.eval(&format!(
+            "new SharedWorker('{plain}','v8-toplevel-reported');"
+        ))
+        .unwrap();
+        let reported = wait_for_error(&errors2);
+        assert_eq!(reported.len(), 1, "uncancelled: the client still hears it");
+        assert!(reported[0].1.contains("boom"), "got {}", reported[0].1);
     }
 
     /// Pump `rt`'s outbox until `count_expr` evaluates to `>= expected`, or the

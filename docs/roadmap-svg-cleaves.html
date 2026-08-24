@@ -58,11 +58,11 @@
  "generated": "2026-08-24",
  "counts": {
   "open": 392,
-  "fixed": 468,
+  "fixed": 469,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 860,
+ "total_bugs": 861,
  "phases": [
   {
    "id": "P0",
@@ -10808,10 +10808,10 @@
    "debtor": false
   },
   "BUG-813": {
-   "status": "open",
-   "title": "Исключение внутри **запущенного** воркера не доходит до страницы: `error` на объекте `Worker` диспатчится исключительно при провале загрузки скрипта (BUG-364),…",
-   "component": "js (`crates/js/src/worker.rs:533-552` — `_onerror`/`_errorListeners` читаются только из ветки `script === null`; `worker.rs:386-393` — `catch(e) {}` в `_lumen_flush_timers`)",
-   "date": null,
+   "status": "fixed",
+   "title": "Исключение внутри **запущенного** воркера не доходило до страницы: `error` на объекте `Worker` диспатчился исключительно при провале загрузки скрипта (BUG-364),…",
+   "component": "js (`crates/js/src/worker.rs` — `worker_global_shim` + `run_worker_thread_v8`; `shared_worker.rs`; `v8_runtime.rs` — `eval_and_report_via`/`eval_module_at_and_report_via`; `dom.rs` — страничный `ErrorEvent`)",
+   "date": "2026-08-24",
    "debtor": false
   },
   "BUG-815": {
@@ -11406,6 +11406,13 @@
    "status": "open",
    "title": "URL, оканчивающийся на `?`, даёт `search === '?'` вместо `''`: разбор кладёт в `search` весь хвост вместе с вопросительным знаком, не отличая «запрос пустой» от…",
    "component": "js (`crates/js/src/dom.rs::_lumen_parse_url`, `URL_PARSE_SHIM` — ветка `qIdx >= 0`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-905": {
+   "status": "open",
+   "title": "Runtime-ошибка shared-воркера рассылается всем подключённым клиентам, тогда как HTML LS §10.2.6 пробрасывает ошибку на объект-владелец **только** для выделенног…",
+   "component": "js (`crates/js/src/shared_worker.rs` — хвост `_lumen_sw_report_exception` и рассылка в `run_shared_worker_thread_v8`; `crates/js/src/v8_runtime.rs::eval_and_report_via` — не разделяет фазу компиляции и фазу исполнения)",
    "date": null,
    "debtor": false
   }
@@ -12010,6 +12017,9 @@
   "js (`crates/js/src/shared_worker.rs:382`–`386` — `key = nm ? 'name:'+nm : 'url:'+url`, `String(name)`; `SHARED_WORKER_GLOBAL_SHIM` не заводит `globalThis.name`)": [
    "BUG-866"
   ],
+  "js (`crates/js/src/shared_worker.rs` — хвост `_lumen_sw_report_exception` и рассылка в `run_shared_worker_thread_v8`; `crates/js/src/v8_runtime.rs::eval_and_report_via` — не разделяет фазу компиляции и фазу исполнения)": [
+   "BUG-905"
+  ],
   "js (`crates/js/src/shared_worker.rs`, `SHARED_WORKER_GLOBAL_SHIM` — объект для `onconnect` собирается литералом с одним полем `ports`)": [
    "BUG-867"
   ],
@@ -12076,11 +12086,11 @@
   "js (`crates/js/src/worker.rs:364-397` — заглушки таймеров, `worker.rs:377` `setInterval = setTimeout`, `worker.rs:834` — единственный вызов `_lumen_flush_timers`; то же в `shared_worker.rs:207,512,523`)": [
    "BUG-815"
   ],
-  "js (`crates/js/src/worker.rs:533-552` — `_onerror`/`_errorListeners` читаются только из ветки `script === null`; `worker.rs:386-393` — `catch(e) {}` в `_lumen_flush_timers`)": [
-   "BUG-813"
-  ],
   "js (`crates/js/src/worker.rs:918` — `_lumenSerializeWithTransfers` понимает только `OffscreenCanvas`; `worker.rs:366` — воркерный `postMessage(data)` объявлен без второго параметра и шлёт `JSON.stringify`; `MessageChannel` определён только в шиме страницы, `dom.rs:12019`)": [
    "BUG-868"
+  ],
+  "js (`crates/js/src/worker.rs` — `worker_global_shim` + `run_worker_thread_v8`; `shared_worker.rs`; `v8_runtime.rs` — `eval_and_report_via`/`eval_module_at_and_report_via`; `dom.rs` — страничный `ErrorEvent`)": [
+   "BUG-813"
   ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"

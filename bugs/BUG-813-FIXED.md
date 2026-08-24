@@ -1,6 +1,6 @@
 # BUG-813 — исключение внутри запущенного воркера не доходит до страницы: `error` на объекте `Worker` диспатчится только при провале загрузки скрипта
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-24 (P1)
 **Заведён:** 2026-08-21 (WPT-RUN-6, срез 18 — 21 TIMEOUT остатка, механизм `worker-no-error-event`)
 **Область:** `crates/js/src/worker.rs:533-552` (единственное место, откуда зовутся `_onerror`/`_errorListeners` — ветка `script === null`), `crates/js/src/worker.rs:386-393` (`_lumen_flush_timers` глушит исключения колбэков), `crates/js/src/worker.rs:834` (Rust-цикл доставки сообщений)
 **Владелец:** P1/P3 (движок, `lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.
@@ -93,3 +93,83 @@ WPT-RUN-5 (`workers/modules` 4, `content-security-policy/inside-worker` 2,
    затем `worker-error`.
 3. WPT: `run_report.py --all --root workers --recursive` — семейство
    `WorkerGlobalScope_ErrorEvent_*` перестаёт висеть.
+
+## Фикс (2026-08-24, P1)
+
+Порядок из HTML LS §8.1.3.6 → §10.2.6 заведён целиком: исключение сперва
+становится событием в **собственной области видимости воркера**, и только
+если её обработчик не отменил его — уходит владеющему объекту `Worker`.
+
+* `worker_global_shim` (`crates/js/src/worker.rs`) и
+  `SHARED_WORKER_GLOBAL_SHIM` (`shared_worker.rs`) получили `onerror`
+  (OnErrorEventHandler: пять legacy-аргументов, отмена по `return true`) и
+  `addEventListener('error')` с настоящим `ErrorEvent` и `preventDefault()`.
+* `WORKER_ERROR_EVENT_SHIM` — локальный `ErrorEvent` для области воркера.
+  Страничная иерархия `Event` живёт в `WEB_API_SHIM_MID`, который тянет за
+  собой `document`/`window`; выносить её отдельно — задача крупнее этого
+  бага. Следствие, которое надо знать: внутри воркера
+  `errorEvent instanceof Event` — `false`.
+* `V8JsRuntime::eval_and_report_via` / `eval_module_at_and_report_via`: имя
+  репортёра стало параметром, потому что у воркера нет
+  `_lumen_report_exception`. Заодно два скопированных блока разбора
+  `v8::Message` в `eval_and_report` свёрнуты в тот же макрос
+  (`report_exception_via!`), что уже обслуживал модульный путь.
+* Верхнеуровневый скрипт обоих видов воркера идёт через эти варианты, а не
+  через `try`/`catch` вокруг тела: так сохраняются настоящее брошенное
+  значение и структурная позиция из `v8::Message`, а верхнеуровневые
+  `let`/`const`/объявления функций остаются в глобальной области. Это же
+  условие требуется двум сабтестам
+  `shared-worker-runtime-error-is-not-parse-error.html`, где `onerror`
+  назначается строкой выше бросающего `eval('1 + ;')`.
+* Rust-фоллбэк остаётся только для провала **загрузки** модуля, который до
+  JS-репортёра не доходит вовсе; отличаются они по флагу, который ставит
+  сам репортёр.
+* Защита от рекурсии: исключение, брошенное самим обработчиком ошибки, не
+  вызывает `error` повторно, но и не глотается (форма `catch(e) {}`, за
+  которой охотился [BUG-591](BUG-591-FIXED.md)) — уходит наверх напрямую.
+* `filename` подставляется из `location.href`, когда V8 отдаёт
+  `<anonymous>`: классический скрипт воркера компилируется без имени
+  ресурса, а `Worker_ErrorEvent_filename.htm` ждёт абсолютный URL воркера.
+
+Три вещи вскрылись на страничной стороне и починены здесь же — до фикса их
+нельзя было увидеть, потому что до страницы не доходило ни одного события:
+`Object.prototype.toString` у `ErrorEvent` отвечал `[object Object]`
+(`assert_class_string` читает именно его), конструктор вызывался без `new`,
+и у `Worker` не было `dispatchEvent` — хотя `Worker` это `AbstractWorker`,
+то есть `EventTarget`.
+
+### Замер
+
+Живая проба (`verify_csp_url_worker_gaps.py`, dev-release, 8 с) — все три
+строки таблицы «Прямое измерение» выше перевернулись:
+
+| проба | было | стало |
+|---|---|---|
+| `worker-throw` | ничего | `worker-error message=boom` + `worker-error-listener` |
+| `worker-onerror-inside` | ничего | `worker-message data=inner-onerror:boom`, затем `worker-error message=boom` |
+| `worker-postmessage` (контроль) | ready/echo | без изменений |
+
+WPT (`run_smoke.py`, 11 файлов семейства + `Worker_dispatchEvent_ErrorEvent`):
+**17/17 сабтестов, 12/12 файлов OK** — `Worker_ErrorEvent_{message,filename,
+lineno,type,bubbles_cancelable,error}`, `WorkerGlobalScope_ErrorEvent_{message,
+filename,lineno,colno}`, `Worker_dispatchEvent_ErrorEvent`. Плюс 12 новых
+юнит-тестов, включая два сквозных через реальный поток воркера.
+
+Гонять семейство приходится `run_smoke.py` (`run_report.py` не видит `.htm`)
+и с временно занулённым портом `wss` в `tests/wpt/config.json` — иначе
+запуск падает на `ssl.wrap_socket` ещё до первого теста (готча CLAUDE.md);
+в этом слоте нет `tests/wpt/.venv`, а системный `pywebsocket3` лежит вне
+рабочей границы проекта и патчить его нельзя.
+
+### Что осталось за рамками
+
+`SharedWorker` **не должен** получать `error` за runtime-ошибку — только за
+провал загрузки скрипта (HTML LS §10.2.6, `SharedWorker-script-error.html`,
+`SharedWorker-exception-propagation.html`). Рассылка клиентам заведена
+[BUG-591](BUG-591-FIXED.md) и этим фиксом не тронута; выделена в
+[BUG-905](BUG-905-OPEN.md), потому что это отдельное правило
+распространения, а не проглоченное исключение, и корректная починка требует
+развести фазу компиляции и фазу исполнения в `eval_and_report_via`.
+
+Таймеры воркера по-прежнему выполняются только при доставке сообщения
+([BUG-815](BUG-815-OPEN.md)) — это соседний дефект, здесь не трогался.
