@@ -1252,6 +1252,30 @@ the time — read dates.
   detached elements, and anything read from a parser-time script
   ([BUG-443](../bugs/BUG-443-OPEN.md)).
 
+- **`<track>` loading and `load`/`error` ([BUG-775](../bugs/BUG-775-FIXED.md), 2026-08-24).**
+  HTML LS §4.8.11.1 «start the track processing model» now runs on the JS side
+  (`video_bindings.rs`, `VIDEO_SHIM`). It had to: the shell's
+  `tracks::load_video_tracks` walks the **parsed** document once per navigation, so a
+  `<track>` minted with `createElement` — the shape every WebVTT test and every custom
+  subtitle player uses — was never fetched at all, and even a parser-written one had no
+  JS-visible «ready» signal. Element tracking reuses `dom.rs`'s
+  `_lumen_resource_track`/`_lumen_resource_try_prepare` (the BUG-571/703 machinery for
+  `<script>`/`<link>`) with a **different** start condition: §4.8.11.1 step 3 gates on the
+  parent being a media element and says nothing about being in a document, so the
+  `_lumen_resource_is_connected` check the other two use would have excluded half of WPT's
+  own tests. The parser stays single-sourced: the new `__lumen_vtt_parse` native runs the
+  same `lumen_dom::vtt::parse_vtt` the shell does and answers `{ok, cues}`, where a parse
+  error is `ok: false` (→ `error`) and a valid file with no cues is `ok: true` (→ `load`).
+  `blob:lumen/` and `data:` are read locally from the raw attribute, before base
+  resolution — `fetch()` has no branch for either. Also added: `HTMLTrackElement.track`
+  (created on first read and reused by the load, so a TextTrack handed out early is never
+  silently replaced), `.readyState`, and the `NONE`/`LOADING`/`LOADED`/`ERROR` constants,
+  all on the prototype. Two deliberate deviations, both towards firing the event: the load
+  is not gated on the text-track mode (there is no mode-change re-trigger, so gating means
+  a page without `default` hangs forever), and cues loaded here do not reach the shell's
+  overlay store. 9 tests in `video_bindings::tests_v8::track_loading`. Live A/B of the
+  `webvtt` category: subtests 2/178 → 31/178, wall clock 8:46 → 0:58.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.

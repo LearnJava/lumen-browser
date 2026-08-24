@@ -119,7 +119,7 @@ function _lumen_resource_track(nid, local) {
 
 ## Почему это TIMEOUT, а не FAIL
 
-Тот же класс, что [BUG-622](bugs/BUG-622-OPEN.md), [BUG-795](bugs/BUG-795-OPEN.md)
+Тот же класс, что [BUG-622](bugs/BUG-622-OPEN.md), [BUG-795](bugs/BUG-795-DUPLICATE.md)
 и хелпер-404 из среза 7: тест регистрирует `async_test`/`promise_test`,
 который резолвится только из обработчика события. Событие не приходит,
 `harness_status` не публикуется, wptrunner убивает страницу по таймауту.
@@ -147,7 +147,7 @@ function _lumen_resource_track(nid, local) {
 - [BUG-571](bugs/BUG-571-FIXED.md) / [BUG-722](bugs/BUG-722-FIXED.md) —
   `createElement`-путь для `<script>`/`<link>`; **работает**, подтверждено
   A/B выше. Чинить их заново не нужно.
-- [BUG-630](bugs/BUG-630-OPEN.md) (`<img>`), [BUG-795](bugs/BUG-795-OPEN.md)
+- [BUG-630](bugs/BUG-630-OPEN.md) (`<img>`), [BUG-795](bugs/BUG-795-DUPLICATE.md)
   (`<track>`), [BUG-798](bugs/BUG-798-OPEN.md) (`<embed>`/`<object>`) — тот
   же КЛАСС («элемент не сообщает об исходе загрузки»), но другие элементы и
   другой код; общего фикса с ними нет.

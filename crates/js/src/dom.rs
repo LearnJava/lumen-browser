@@ -6478,11 +6478,12 @@ var print    = function()  { _lumen_print_dialog(); };
 // page — so `link.onload` never fired, and the common «await the sheet, then
 // render» loader waited forever.
 
-// nid → 'script' | 'link' for an element built by createElement/createElementNS
-// whose insertion has to start a resource load and that has not been prepared
-// yet. The entry is deleted on preparation, so the map doubles as the spec's
-// per-element 'already started' flag: moving an executed script (or a loaded
-// link) around the tree can never fetch it a second time.
+// nid → 'script' | 'link' | 'track' for an element built by createElement/
+// createElementNS whose insertion has to start a resource load and that has not
+// been prepared yet. The entry is deleted on preparation, so the map doubles as
+// the spec's per-element 'already started' flag: moving an executed script (or a
+// loaded link, or a loaded track) around the tree can never fetch it a second
+// time.
 var _lumen_resource_pending = {};
 var _lumen_resource_pending_count = 0;
 
@@ -6491,7 +6492,7 @@ var _lumen_resource_pending_count = 0;
 // mint such an element that the spec allows to act on insertion.
 function _lumen_resource_track(nid, local) {
     var tag = String(local).toLowerCase();
-    if (tag !== 'script' && tag !== 'link') return;
+    if (tag !== 'script' && tag !== 'link' && tag !== 'track') return;
     _lumen_resource_pending[nid] = tag;
     _lumen_resource_pending_count++;
 }
@@ -6698,6 +6699,19 @@ function _lumen_link_prepare(nid) {
 // Run the pending check for one tracked element, if it is connected by now.
 function _lumen_resource_try_prepare(nid) {
     var kind = _lumen_resource_pending[nid];
+    // BUG-775: <track> is the odd one out — HTML LS §4.8.11.1 starts the track
+    // processing model as soon as the element's *parent* is a media element, and
+    // says nothing about being in a document (half of WPT's WebVTT tests never
+    // append the <video> anywhere). The media shim owns the whole model and
+    // answers false while the element is not yet parented to a <video>/<audio>,
+    // in which case the element stays tracked for a later insertion.
+    if (kind === 'track') {
+        if (typeof _lumen_track_start_load !== 'function') return;
+        if (!_lumen_track_start_load(nid)) return;
+        delete _lumen_resource_pending[nid];
+        _lumen_resource_pending_count--;
+        return;
+    }
     if (kind !== 'script' && kind !== 'link') return;
     if (!_lumen_resource_is_connected(nid)) return;
     delete _lumen_resource_pending[nid];
