@@ -42,7 +42,7 @@ worker-side support script (not guessed from the log alone):
   cause of 31 files: all `WorkerLocation_*.htm`/`WorkerNavigator_*.htm`,
   `interfaces/WorkerGlobalScope/location/*`,
   `interfaces/WorkerUtils/navigator/*`.
-- **[BUG-777](../../bugs/BUG-777-OPEN.md)** — `Worker`/`SharedWorker`
+- **[BUG-777](../../bugs/BUG-777-FIXED.md)** — `Worker`/`SharedWorker`
   constructors never read their `options` argument at all: `function
   Worker(url)` (`worker.rs:483`) takes one parameter; `function
   SharedWorker(url, name)` (`shared_worker.rs:302`) always coerces the
@@ -86,7 +86,7 @@ per the project's "don't describe a failure mode from intuition" rule.
 исключение никуда не долетает — харнесс видит только внешний таймаут, а не
 ошибку. Три подтверждённых, заведённых корня: [BUG-776](../bugs/BUG-776-FIXED.md)
 (нет `self.location`/`self.navigator` в dedicated/shared-воркерах, 31 файл
-напрямую), [BUG-777](../bugs/BUG-777-OPEN.md) (конструкторы `Worker`/
+напрямую), [BUG-777](../bugs/BUG-777-FIXED.md) (конструкторы `Worker`/
 `SharedWorker` не читают `options` — модульных воркеров не существует, весь
 каталог `modules/`, 24 файла) и [BUG-778](../bugs/BUG-778-FIXED.md) (нет
 `close()`/`fetch()`/`XMLHttpRequest`, плюс `importScripts()` у SharedWorker

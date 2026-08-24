@@ -24,7 +24,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 #[cfg(feature = "v8-backend")]
-use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn4};
+use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4};
 #[cfg(feature = "v8-backend")]
 use crate::v8_runtime::V8JsRuntime;
 #[cfg(feature = "v8-backend")]
@@ -369,6 +369,12 @@ fn worker_global_shim(worker_id: u32) -> String {
   globalThis.self = globalThis;
   globalThis.name = 'worker-' + wid;
 
+  // `DedicatedWorkerGlobalScope` (BUG-777) — see the factory's own comment in
+  // `crate::dom::WORKER_LOCATION_NAVIGATOR_SHIM`.
+  if (typeof _lumen_define_worker_scope === 'function') {{
+    _lumen_define_worker_scope('DedicatedWorkerGlobalScope');
+  }}
+
   // `location` — HTML LS §10.2.4: the scope's own script URL, set by Rust as
   // `_lumen_worker_location_url` before this shim runs (BUG-776). The class and
   // the `navigator` singleton come from the shim shared with the other two
@@ -477,6 +483,12 @@ fn worker_global_shim(worker_id: u32) -> String {
   // (BUG-778 — previously only data:/blob: worked at all, and an http(s) URL
   // always threw NetworkError even when absolute).
   globalThis.importScripts = function() {{
+    // HTML LS §10.2.3: a module worker may only pull code in through its
+    // module graph, so `importScripts()` throws unconditionally there — even
+    // for zero arguments, and before any URL is looked at (BUG-777).
+    if (typeof _lumen_worker_is_module !== 'undefined' && _lumen_worker_is_module) {{
+      throw new TypeError('importScripts() is not available in a module worker');
+    }}
     for (var i = 0; i < arguments.length; i++) {{
       var u = String(arguments[i]);
       var resolved = u;
@@ -779,6 +791,78 @@ pub(crate) const WORKER_NET_SHIM: &str = r#"(function() {
 })();
 "#;
 
+// ─── WorkerOptions (shared by Worker and SharedWorker) ───────────────────────
+
+/// IIFE defining `_lumen_parse_worker_options` / `_lumen_parse_shared_worker_options`
+/// — the WebIDL conversion of the second constructor argument (BUG-777).
+///
+/// One source of truth for both flavours, evaluated by *both*
+/// [`install_worker_bindings_v8`] and
+/// `shared_worker.rs::install_shared_worker_bindings_v8` (it guards on its own
+/// global, so the second evaluation is a no-op). Two separate copies would be
+/// the BUG-780 trap one more time: `SHARED_WORKER_SHIM` is its own `rt.eval`,
+/// so a fix made in `WORKER_SHIM` would never reach it — and the shared-worker
+/// unit tests install their bindings *without* the dedicated-worker ones, so
+/// referencing a helper the other shim happens to define would break there.
+///
+/// Both conversions must throw **before** the constructor touches the URL:
+/// the binding layer converts arguments first, so
+/// `new Worker(url, {type: 'unknown'})` is a `TypeError` even when the script
+/// would have failed to fetch (`workers/modules/dedicated-worker-options-type.html`
+/// asserts exactly that, twice).
+#[cfg(feature = "v8-backend")]
+pub(crate) const WORKER_OPTIONS_SHIM: &str = r#"(function() {
+  if (typeof globalThis._lumen_parse_worker_options === 'function') return;
+
+  // `enum WorkerType` (HTML LS §10.2.6.1) and `enum RequestCredentials`
+  // (Fetch §5.4) — an out-of-list value is a TypeError, not a fallback to the
+  // default, which is what makes the two negative subtests of
+  // `dedicated-worker-options-type.html` observable at all.
+  var _TYPES = ['classic', 'module'];
+  var _CREDENTIALS = ['omit', 'same-origin', 'include'];
+
+  function _enumOr(value, allowed, enumName) {
+    var s = String(value);
+    if (allowed.indexOf(s) === -1) {
+      throw new TypeError(
+        "Failed to construct 'Worker': The provided value '" + s +
+        "' is not a valid enum value of type " + enumName + '.');
+    }
+    return s;
+  }
+
+  // WebIDL "convert an ECMAScript value to a dictionary": undefined/null give
+  // the all-defaults dictionary, a non-object is a TypeError, and a member
+  // explicitly set to `undefined` counts as absent (so it takes the default
+  // rather than failing the enum check).
+  globalThis._lumen_parse_worker_options = function(options) {
+    var out = { type: 'classic', credentials: 'same-origin', name: '' };
+    if (options === undefined || options === null) return out;
+    if (typeof options !== 'object' && typeof options !== 'function') {
+      throw new TypeError('WorkerOptions: the provided value is not an object.');
+    }
+    if (options.type !== undefined) out.type = _enumOr(options.type, _TYPES, 'WorkerType');
+    if (options.credentials !== undefined) {
+      out.credentials = _enumOr(options.credentials, _CREDENTIALS, 'RequestCredentials');
+    }
+    if (options.name !== undefined) out.name = String(options.name);
+    return out;
+  };
+
+  // `SharedWorker(scriptURL, optional (DOMString or WorkerOptions) options)`:
+  // the union sends null/undefined and every object to the dictionary, and
+  // anything else (a string, a number, a boolean) to DOMString — i.e. the
+  // legacy `new SharedWorker(url, 'my name')` spelling stays a name.
+  globalThis._lumen_parse_shared_worker_options = function(options) {
+    if (options !== undefined && options !== null &&
+        typeof options !== 'object' && typeof options !== 'function') {
+      return { type: 'classic', credentials: 'same-origin', name: String(options) };
+    }
+    return globalThis._lumen_parse_worker_options(options);
+  };
+})();
+"#;
+
 // ─── Worker JS class (evaluated in the main-thread JS context) ───────────────
 
 /// IIFE that defines `globalThis.Worker` and `_lumen_deliver_worker_messages`.
@@ -869,7 +953,11 @@ const WORKER_SHIM: &str = r#"(function() {
     return JSON.stringify(_serializeObj(data, transferSet));
   }
 
-  function Worker(url) {
+  function Worker(url, options) {
+    // WebIDL argument conversion runs before anything else the constructor
+    // does (BUG-777) — an invalid `type`/`credentials` throws TypeError even
+    // though the script URL below would have failed on its own.
+    var opts = _lumen_parse_worker_options(options);
     var script;
     var u = String(url || '');
     // The worker scope's own script URL: `location.href` inside it (BUG-776),
@@ -943,7 +1031,7 @@ const WORKER_SHIM: &str = r#"(function() {
       return;
     }
 
-    this._id = _lumen_create_worker(script, scriptUrl);
+    this._id = _lumen_create_worker(script, scriptUrl, opts.type === 'module');
     _workerRegistry[this._id] = this;
   }
 
@@ -1087,7 +1175,7 @@ pub(crate) fn install_worker_bindings_v8(
     blob_store: &WorkerBlobStore,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) -> JsResult<()> {
-    // _lumen_create_worker(script: String, script_url: String) → u32
+    // _lumen_create_worker(script: String, script_url: String, is_module: bool) → u32
     //
     // `script_url` is the worker's own resolved script URL (the opaque URL
     // itself for a blob:/data: worker) — threaded down to the worker thread,
@@ -1096,6 +1184,11 @@ pub(crate) fn install_worker_bindings_v8(
     // `XMLHttpRequest` resolve a relative or path-absolute target against the
     // way `.worker.html`'s wptrunner-built wrapper needs
     // (`importScripts("/resources/testharness.js")`, BUG-778).
+    //
+    // `is_module` is `WorkerOptions.type === 'module'` (BUG-777): it decides
+    // whether the worker thread evaluates the script as a classic script or as
+    // an ES module, and there is no way to derive it on this side — the option
+    // exists nowhere but the constructor call.
     {
         let reg = Arc::clone(registry);
         let q = Arc::clone(queue);
@@ -1105,8 +1198,10 @@ pub(crate) fn install_worker_bindings_v8(
         let fp = fetch_provider.clone();
         rt.register_native(
             "_lumen_create_worker",
-            into_v8_fn2(move |script: String, script_url: String| -> u32 {
-                spawn_worker_v8(&reg, &q, &errs, &nid, &bs, script, script_url, fp.clone())
+            into_v8_fn3(move |script: String, script_url: String, is_module: bool| -> u32 {
+                spawn_worker_v8(
+                    &reg, &q, &errs, &nid, &bs, script, script_url, is_module, fp.clone(),
+                )
             }),
         )?;
     }
@@ -1162,6 +1257,7 @@ pub(crate) fn install_worker_bindings_v8(
         )?;
     }
 
+    rt.eval(WORKER_OPTIONS_SHIM)?;
     rt.eval(WORKER_SHIM)?;
     Ok(())
 }
@@ -1245,7 +1341,7 @@ pub(crate) fn worker_net_fetch_json(
 #[cfg(feature = "v8-backend")]
 #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-#[allow(clippy::too_many_arguments)]  // spawn-time state for the worker thread, BUG-778 added base_url/fetch_provider
+#[allow(clippy::too_many_arguments)]  // spawn-time state for the worker thread; BUG-778 added base_url/fetch_provider, BUG-777 is_module
 fn spawn_worker_v8(
     registry: &WorkerRegistry,
     queue: &WorkerMessageQueue,
@@ -1254,6 +1350,7 @@ fn spawn_worker_v8(
     blob_store: &WorkerBlobStore,
     script: String,
     script_url: String,
+    is_module: bool,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) -> u32 {
     let id = {
@@ -1271,7 +1368,9 @@ fn spawn_worker_v8(
     let handle = thread::Builder::new()
         .name(format!("lumen-worker-v8-{id}"))
         .spawn(move || {
-            run_worker_thread_v8(id, script, script_url, rx, reply, err_reply, store, fetch_provider)
+            run_worker_thread_v8(
+                id, script, script_url, is_module, rx, reply, err_reply, store, fetch_provider,
+            )
         })
         .expect("failed to spawn Web Worker thread (v8)");
 
@@ -1301,6 +1400,7 @@ fn run_worker_thread_v8(
     id: u32,
     script: String,
     script_url: String,
+    is_module: bool,
     rx: Receiver<WorkerInMsg>,
     reply: Arc<Mutex<Vec<(u32, String)>>>,
     errors: WorkerErrorQueue,
@@ -1320,6 +1420,11 @@ fn run_worker_thread_v8(
     // servicing further tasks (HTML LS §10.2.3 "close a worker").
     let close_flag: WorkerCloseFlag = Arc::new(AtomicBool::new(false));
 
+    // BUG-777: a module worker's own static/dynamic imports are fetched by the
+    // ESM loader *on this thread*, so the same bridge the classic path hands to
+    // `fetch()`/`importScripts()` has to reach `v8_esm`'s thread-local state too.
+    let fp_esm = fetch_provider.clone();
+
     if let Err(e) = install_worker_globals_v8(
         &rt,
         id,
@@ -1328,13 +1433,26 @@ fn run_worker_thread_v8(
         Arc::clone(&blob_store),
         fetch_provider,
         &script_url,
+        is_module,
         Arc::clone(&close_flag),
     ) {
         eprintln!("[worker-{id}] v8 globals install failed: {e:?}");
         return;
     }
 
-    if let Err(e) = rt.eval(&script) {
+    // A module worker evaluates its script under its own URL (BUG-777), so a
+    // relative `import './dep.js'` resolves against the worker script rather
+    // than against the page — the same reason `eval_module_at` exists for an
+    // external `<script type=module src=…>`. The globals shims above are
+    // classic scripts evaluated first, so everything they define on
+    // `globalThis` is visible to the module body.
+    let outcome = if is_module {
+        rt.set_module_context(&script_url, fp_esm);
+        rt.eval_module_at(&script_url, &script)
+    } else {
+        rt.eval(&script).map(|_| ())
+    };
+    if let Err(e) = outcome {
         eprintln!("[worker-{id}] v8 script error: {e:?}");
         // BUG-591 worker parent-side reporting: post the top-level failure
         // back through the reply channel so the owning `Worker` object's
@@ -1376,7 +1494,8 @@ fn run_worker_thread_v8(
 /// `_lumen_worker_net_fetch` (BUG-778), `atob`, `btoa`, sets the
 /// `_lumen_worker_base_url` (BUG-778) and `_lumen_worker_location_url`
 /// (BUG-776) globals — both derived from `script_url`, the worker's own
-/// resolved script URL — and evaluates [`worker_global_shim`] followed by
+/// resolved script URL — plus `_lumen_worker_is_module` (BUG-777, gates
+/// `importScripts`) and evaluates [`worker_global_shim`] followed by
 /// [`WORKER_NET_SHIM`].
 ///
 /// `atob`/`btoa` go through [`crate::v8_compat::V8NativeFnScoped`] (raw scope
@@ -1395,6 +1514,7 @@ fn install_worker_globals_v8(
     blob_store: WorkerBlobStore,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     script_url: &str,
+    is_module: bool,
     close_flag: WorkerCloseFlag,
 ) -> JsResult<()> {
     rt.register_native(
@@ -1488,6 +1608,13 @@ fn install_worker_globals_v8(
     rt.set_global(
         "_lumen_worker_location_url",
         lumen_core::JsValue::String(script_url.to_string()),
+    )?;
+    // BUG-777: read by `worker_global_shim`'s `importScripts`, which HTML LS
+    // §10.2.3 requires to throw `TypeError` in a module worker (the module
+    // graph is the only way such a scope may pull code in).
+    rt.set_global(
+        "_lumen_worker_is_module",
+        lumen_core::JsValue::Bool(is_module),
     )?;
 
     rt.eval(&worker_global_shim(worker_id))?;
@@ -1669,7 +1796,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
 
         let decoded = rt.eval("atob('aGVsbG8=')").unwrap();
         assert_eq!(decoded, lumen_core::JsValue::String("hello".into()));
@@ -1689,7 +1816,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
         let result = rt
             .eval(
                 "var et = new EventTarget(); \
@@ -1709,7 +1836,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
 
         let ok = rt
             .eval("(function(){try{atob('!!!');return false;}catch(e){return e instanceof TypeError;}})()")
@@ -1729,7 +1856,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
 
         for expr in [
             "typeof performance === 'object'",
@@ -1768,7 +1895,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
         let after = epoch_ms();
 
         let origin = match rt.eval("performance.timeOrigin").unwrap() {
@@ -1798,7 +1925,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
 
         assert_eq!(
             rt.eval("typeof _perf_observer_notify").unwrap(),
@@ -1835,7 +1962,7 @@ mod tests_v8 {
                         postMessage(performance.now() >= t0 && performance.timeOrigin > 0);\
                       };"
             .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None);
 
         post_to_worker(&reg, worker_id, "0".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -1858,7 +1985,7 @@ mod tests_v8 {
 
         // Worker echoes its received message doubled.
         let script = "onmessage = function(e) { postMessage(e.data * 2); };".to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None);
 
         post_to_worker(&reg, worker_id, "21".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -1888,7 +2015,7 @@ mod tests_v8 {
             "');onmessage = function(e) { postMessage(add(e.data, 8)); };",
         )
         .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None);
 
         post_to_worker(&reg, worker_id, "34".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -1920,7 +2047,7 @@ mod tests_v8 {
              onmessage = function(e) { postMessage(mul(e.data, 3)); };"
                 .to_string();
 
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None);
         post_to_worker(&reg, worker_id, "7".to_string());
         std::thread::sleep(Duration::from_millis(300));
 
@@ -1942,7 +2069,7 @@ mod tests_v8 {
 
         // Worker posts a reply to every message.
         let script = "onmessage = function(e) { postMessage('got:' + e.data); };".to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None);
 
         // Terminate immediately before any postMessage.
         terminate_worker(&reg, worker_id);
@@ -1966,7 +2093,7 @@ mod tests_v8 {
         );
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store, None, "", Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store, None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
 
         rt.eval(
             "importScripts(\
@@ -1986,7 +2113,7 @@ mod tests_v8 {
         let store = make_store();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store, None, "", Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), store, None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
 
         let result = rt.eval("importScripts('https://external.example/lib.js')");
         assert!(result.is_err(), "importScripts with http URL should throw");
@@ -2093,7 +2220,7 @@ mod tests_v8 {
         // First message replies then closes; a second message must produce
         // no further reply.
         let script = "onmessage = function(e) { postMessage('got:' + e.data); self.close(); };".to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), None);
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None);
 
         post_to_worker(&reg, worker_id, "1".to_string());
         std::thread::sleep(Duration::from_millis(200));
@@ -2114,7 +2241,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
-        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", Arc::new(AtomicBool::new(false))).unwrap();
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), Arc::clone(&errors), make_store(), None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
         for expr in ["typeof fetch", "typeof XMLHttpRequest", "typeof close", "typeof Headers", "typeof Response"] {
             assert_eq!(rt.eval(expr).unwrap(), lumen_core::JsValue::String("function".into()), "{expr}");
         }
@@ -2138,7 +2265,7 @@ mod tests_v8 {
               .then(function(t) { postMessage(t); });\
         };"
             .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), Some(net));
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net));
 
         post_to_worker(&reg, worker_id, "0".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -2170,7 +2297,7 @@ mod tests_v8 {
             x.send();\
         };"
             .to_string();
-        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), Some(net));
+        let worker_id = spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, Some(net));
 
         post_to_worker(&reg, worker_id, "0".to_string());
         std::thread::sleep(Duration::from_millis(300));
@@ -2195,7 +2322,7 @@ mod tests_v8 {
         let net = TestNet::new(&[("https://example.test/resources/testharness.js", "globalThis._ms3 = 30;")]);
         install_worker_globals_v8(
             &rt, 0, Arc::clone(&queue), Arc::clone(&errors), store,
-            Some(net), "https://example.test/worker.js", Arc::new(AtomicBool::new(false)),
+            Some(net), "https://example.test/worker.js", false, Arc::new(AtomicBool::new(false)),
         ).unwrap();
 
         rt.eval("importScripts('/resources/testharness.js')").unwrap();
@@ -2212,7 +2339,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         install_worker_globals_v8(
             &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
-            make_store(), None, "https://example.test:8443/a/w.js?q=1#h?c",
+            make_store(), None, "https://example.test:8443/a/w.js?q=1#h?c", false,
             Arc::new(AtomicBool::new(false)),
         ).unwrap();
 
@@ -2251,7 +2378,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         install_worker_globals_v8(
             &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
-            make_store(), None, "https://example.test/w.js", Arc::new(AtomicBool::new(false)),
+            make_store(), None, "https://example.test/w.js", false, Arc::new(AtomicBool::new(false)),
         ).unwrap();
 
         let thrown = rt
@@ -2277,7 +2404,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         install_worker_globals_v8(
             &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
-            make_store(), None, "https://example.test/w.js", Arc::new(AtomicBool::new(false)),
+            make_store(), None, "https://example.test/w.js", false, Arc::new(AtomicBool::new(false)),
         ).unwrap();
 
         assert_eq!(
@@ -2321,7 +2448,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         install_worker_globals_v8(
             &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
-            make_store(), None, "data:text/javascript,1", Arc::new(AtomicBool::new(false)),
+            make_store(), None, "data:text/javascript,1", false, Arc::new(AtomicBool::new(false)),
         ).unwrap();
 
         assert_eq!(
@@ -2335,6 +2462,239 @@ mod tests_v8 {
         assert_eq!(
             rt.eval("_lumen_worker_base_url").unwrap(),
             lumen_core::JsValue::String(String::new())
+        );
+    }
+
+    // ── BUG-777: WorkerOptions + module workers ──────────────────────────────
+
+    /// The `WorkerType` enum is a hard gate, not a fallback: both negative
+    /// subtests of `workers/modules/dedicated-worker-options-type.html` assert
+    /// a *synchronous* `TypeError`, and before BUG-777 the whole second
+    /// argument was dropped, so both constructions quietly succeeded.
+    #[test]
+    fn v8_worker_options_reject_an_invalid_type() {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(WORKER_OPTIONS_SHIM).unwrap();
+
+        for bad in ["''", "'unknown'", "'Module'"] {
+            let expr = format!(
+                "(function(){{try{{_lumen_parse_worker_options({{type:{bad}}});return 'no-throw';}}\
+                 catch(e){{return e instanceof TypeError ? 'TypeError' : String(e);}}}})()"
+            );
+            assert_eq!(
+                rt.eval(&expr).unwrap(),
+                lumen_core::JsValue::String("TypeError".to_string()),
+                "type {bad} must be rejected"
+            );
+        }
+        // A non-object second argument is a dictionary-conversion TypeError too.
+        assert_eq!(
+            rt.eval(
+                "(function(){try{_lumen_parse_worker_options(7);return 'no-throw';}\
+                 catch(e){return e instanceof TypeError ? 'TypeError' : String(e);}})()"
+            )
+            .unwrap(),
+            lumen_core::JsValue::String("TypeError".to_string())
+        );
+    }
+
+    /// The positive half of the same dictionary conversion, including the
+    /// WebIDL rule that an explicitly-`undefined` member counts as absent
+    /// (otherwise `{type: undefined}` would fail the enum check instead of
+    /// taking the default).
+    #[test]
+    fn v8_worker_options_defaults_and_accepted_values() {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(WORKER_OPTIONS_SHIM).unwrap();
+
+        for (arg, want) in [
+            ("undefined", "classic|same-origin|"),
+            ("null", "classic|same-origin|"),
+            ("{}", "classic|same-origin|"),
+            ("{type: undefined}", "classic|same-origin|"),
+            ("{type: 'module'}", "module|same-origin|"),
+            ("{type: 'classic', credentials: 'omit', name: 'n'}", "classic|omit|n"),
+        ] {
+            let expr = format!(
+                "(function(){{var o=_lumen_parse_worker_options({arg});\
+                 return o.type+'|'+o.credentials+'|'+o.name;}})()"
+            );
+            assert_eq!(
+                rt.eval(&expr).unwrap(),
+                lumen_core::JsValue::String(want.to_string()),
+                "options {arg}"
+            );
+        }
+    }
+
+    /// `SharedWorker`'s union argument: a string stays the legacy name, an
+    /// object is a dictionary. The dictionary spelling is what used to collapse
+    /// to the literal name `[object Object]`.
+    #[test]
+    fn v8_shared_worker_options_union_splits_string_from_dictionary() {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(WORKER_OPTIONS_SHIM).unwrap();
+
+        for (arg, want) in [
+            ("'my name'", "classic|my name"),
+            ("{name: 'my name'}", "classic|my name"),
+            ("{name: 'my name', type: 'module'}", "module|my name"),
+            ("undefined", "classic|"),
+        ] {
+            let expr = format!(
+                "(function(){{var o=_lumen_parse_shared_worker_options({arg});\
+                 return o.type+'|'+o.name;}})()"
+            );
+            assert_eq!(
+                rt.eval(&expr).unwrap(),
+                lumen_core::JsValue::String(want.to_string()),
+                "options {arg}"
+            );
+        }
+    }
+
+    /// End-to-end module worker: the script body uses `import`, which a classic
+    /// script cannot parse at all, and the imported binding must reach the
+    /// message handler. The dependency is served by the fetch double, i.e. the
+    /// ESM loader really runs on the worker thread over the same bridge.
+    #[test]
+    fn v8_module_worker_evaluates_static_import() {
+        use std::time::Duration;
+        let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        let store = make_store();
+        let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let nid = Arc::new(Mutex::new(0u32));
+        let net = TestNet::new(&[("https://example.test/dep.js", "export const answer = 42;")]);
+
+        let script = "import { answer } from './dep.js';\n\
+             self.onmessage = function(e) { postMessage(answer); };"
+            .to_string();
+        let worker_id = spawn_worker_v8(
+            &reg,
+            &queue,
+            &errors,
+            &nid,
+            &store,
+            script,
+            "https://example.test/w.js".to_string(),
+            true,
+            Some(net),
+        );
+
+        post_to_worker(&reg, worker_id, "0".to_string());
+        std::thread::sleep(Duration::from_millis(500));
+
+        let msgs = drain_messages(&queue);
+        assert_eq!(
+            msgs.len(),
+            1,
+            "module worker never replied: errors={:?}",
+            drain_errors(&errors)
+        );
+        assert_eq!(msgs[0].1, "42");
+
+        terminate_worker(&reg, worker_id);
+    }
+
+    /// The same script run as a *classic* worker must fail — otherwise the
+    /// test above would pass with the option ignored, which is exactly the
+    /// state BUG-777 describes (a green test masking a missing feature).
+    #[test]
+    fn v8_classic_worker_still_rejects_an_import_statement() {
+        use std::time::Duration;
+        let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        let store = make_store();
+        let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let nid = Arc::new(Mutex::new(0u32));
+
+        let script = "import { answer } from './dep.js';".to_string();
+        let worker_id = spawn_worker_v8(
+            &reg,
+            &queue,
+            &errors,
+            &nid,
+            &store,
+            script,
+            "https://example.test/w.js".to_string(),
+            false,
+            None,
+        );
+        std::thread::sleep(Duration::from_millis(300));
+
+        let errs = drain_errors(&errors);
+        assert_eq!(errs.len(), 1, "classic worker should report a parse error: {errs:?}");
+        assert!(
+            errs[0].1.contains("import statement"),
+            "unexpected error text: {}",
+            errs[0].1
+        );
+
+        terminate_worker(&reg, worker_id);
+    }
+
+    /// `importScripts()` is unavailable in a module worker (HTML LS §10.2.3),
+    /// and `workers/modules/dedicated-worker-import-failure.html` asserts the
+    /// exception is specifically a `TypeError`.
+    #[test]
+    fn v8_module_worker_import_scripts_throws_type_error() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_worker_globals_v8(
+            &rt,
+            0,
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::new())),
+            make_store(),
+            None,
+            "https://example.test/w.js",
+            true,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+
+        assert_eq!(
+            rt.eval(
+                "(function(){try{importScripts('data:text/javascript,1');return 'no-throw';}\
+                 catch(e){return e.constructor.name;}})()"
+            )
+            .unwrap(),
+            lumen_core::JsValue::String("TypeError".to_string())
+        );
+    }
+
+    /// The scope's own interface object: WPT worker resources branch on
+    /// `'DedicatedWorkerGlobalScope' in self && self instanceof
+    /// DedicatedWorkerGlobalScope`, so both halves have to answer, and the
+    /// scope must not claim to be one of the other two flavours.
+    #[test]
+    fn v8_worker_scope_exposes_its_own_global_scope_interface() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_worker_globals_v8(
+            &rt,
+            0,
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::new())),
+            make_store(),
+            None,
+            "https://example.test/w.js",
+            false,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+
+        for (expr, want) in [
+            ("'DedicatedWorkerGlobalScope' in self", true),
+            ("self instanceof DedicatedWorkerGlobalScope", true),
+            ("self instanceof WorkerGlobalScope", true),
+            ("'SharedWorkerGlobalScope' in self", false),
+        ] {
+            assert_eq!(rt.eval(expr).unwrap(), lumen_core::JsValue::Bool(want), "{expr}");
+        }
+        // Own globals still shadow the fresh prototype chain.
+        assert_eq!(
+            rt.eval("typeof postMessage").unwrap(),
+            lumen_core::JsValue::String("function".to_string())
         );
     }
 }

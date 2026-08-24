@@ -126,6 +126,12 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
 
   globalThis.self = globalThis;
 
+  // `SharedWorkerGlobalScope` (BUG-777) — see the factory's own comment in
+  // `crate::dom::WORKER_LOCATION_NAVIGATOR_SHIM`.
+  if (typeof _lumen_define_worker_scope === 'function') {
+    _lumen_define_worker_scope('SharedWorkerGlobalScope');
+  }
+
   // `location` — HTML LS §10.2.4, built from the Rust-set
   // `_lumen_worker_location_url` (BUG-776). Same two lines as the dedicated
   // worker's shim; the `WorkerLocation` class and the `navigator` singleton
@@ -244,6 +250,12 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   // over the network. `blob:lumen/` still fails — see
   // `install_shared_worker_globals_v8`'s doc comment on why.
   globalThis.importScripts = function() {
+    // HTML LS §10.2.3: unavailable in a module worker, unconditionally and
+    // before any URL is looked at (BUG-777) — the module graph is the only
+    // way such a scope may pull code in.
+    if (typeof _lumen_worker_is_module !== 'undefined' && _lumen_worker_is_module) {
+      throw new TypeError('importScripts() is not available in a module worker');
+    }
     for (var i = 0; i < arguments.length; i++) {
       var u = String(arguments[i]);
       var resolved = u;
@@ -388,10 +400,21 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
     return port;
   }
 
-  function SharedWorker(url, name) {
-    var nm = (name === undefined || name === null) ? '' : String(name);
+  function SharedWorker(url, options) {
+    // `optional (DOMString or WorkerOptions) options` (HTML LS §10.3): a
+    // string is still the legacy name, an object is a full `WorkerOptions`
+    // dictionary. Before BUG-777 every value went through `String(options)`,
+    // so `{name: 'x'}` opened a worker keyed `name:[object Object]` — two
+    // clients passing the same dictionary shared a worker that a third,
+    // passing the same name as a string, could not reach.
+    var opts = _lumen_parse_shared_worker_options(options);
+    var nm = opts.name;
     // Identity key: name when present, else the URL (single-origin process).
-    var key = nm ? ('name:' + nm) : ('url:' + String(url || ''));
+    // The worker type joins the key because a classic and a module worker are
+    // different global scopes — reusing one for the other would run the second
+    // client's script in the wrong mode instead of starting its own worker.
+    var key = (nm ? ('name:' + nm) : ('url:' + String(url || ''))) +
+              (opts.type === 'module' ? '|module' : '');
     this._onerror = null;
     this._errorListeners = [];
     var resolved = _resolveScript(url);
@@ -408,7 +431,7 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
       }, 0);
       return;
     }
-    var pid = _lumen_sw_connect(key, resolved.script, resolved.url);
+    var pid = _lumen_sw_connect(key, resolved.script, resolved.url, opts.type === 'module');
     this.port = _makeClientPort(pid, key);
     _clientPorts[pid] = this.port;
     _sharedWorkerInstances[pid] = this;
@@ -514,6 +537,7 @@ fn connect_shared_worker_v8(
     key: String,
     script: String,
     script_url: String,
+    is_module: bool,
     outbox: SharedWorkerOutbox,
     errors: crate::worker::WorkerErrorQueue,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
@@ -526,7 +550,7 @@ fn connect_shared_worker_v8(
         let fp = fetch_provider.clone();
         let thread = thread::Builder::new()
             .name(format!("lumen-shared-worker-v8-{key}"))
-            .spawn(move || run_shared_worker_thread_v8(script, script_url, rx, fp))
+            .spawn(move || run_shared_worker_thread_v8(script, script_url, is_module, rx, fp))
             .expect("failed to spawn SharedWorker thread (v8)");
         SharedWorkerThread { tx, _thread: thread }
     };
@@ -597,9 +621,19 @@ pub(crate) fn install_shared_worker_bindings_v8(
         let fp = fetch_provider.clone();
         rt.register_native(
             "_lumen_sw_connect",
-            into_v8_fn3(move |key: String, script: String, script_url: String| -> u32 {
-                connect_shared_worker_v8(key, script, script_url, Arc::clone(&out), Arc::clone(&errs), fp.clone())
-            }),
+            into_v8_fn4(
+                move |key: String, script: String, script_url: String, is_module: bool| -> u32 {
+                    connect_shared_worker_v8(
+                        key,
+                        script,
+                        script_url,
+                        is_module,
+                        Arc::clone(&out),
+                        Arc::clone(&errs),
+                        fp.clone(),
+                    )
+                },
+            ),
         )?;
     }
 
@@ -632,6 +666,11 @@ pub(crate) fn install_shared_worker_bindings_v8(
         }),
     )?;
 
+    // BUG-777: same `WorkerOptions` conversion the dedicated worker uses. It
+    // guards on its own global, so evaluating it here as well costs nothing
+    // when `install_worker_bindings_v8` already ran — and keeps the
+    // shared-worker unit tests (which install these bindings alone) working.
+    rt.eval(crate::worker::WORKER_OPTIONS_SHIM)?;
     rt.eval(SHARED_WORKER_SHIM)?;
     Ok(())
 }
@@ -644,6 +683,7 @@ pub(crate) fn install_shared_worker_bindings_v8(
 fn run_shared_worker_thread_v8(
     script: String,
     script_url: String,
+    is_module: bool,
     rx: Receiver<SwInMsg>,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) {
@@ -664,28 +704,50 @@ fn run_shared_worker_thread_v8(
     // below to stop servicing further Connect/Post tasks (HTML LS §10.2.4).
     let close_flag: crate::worker::WorkerCloseFlag = Arc::new(AtomicBool::new(false));
 
+    // BUG-777: the module graph is fetched on this thread — see the twin
+    // comment in `worker.rs::run_worker_thread_v8`.
+    let fp_esm = fetch_provider.clone();
+
     if let Err(e) = install_shared_worker_globals_v8(
         &rt,
         Arc::clone(&ports),
         Arc::clone(&error_ports),
         fetch_provider,
         &script_url,
+        is_module,
         Arc::clone(&close_flag),
     ) {
         eprintln!("[shared-worker] v8 globals install failed: {e:?}");
         return;
     }
 
-    if let Err(e) = rt.eval(&script) {
+    let outcome = if is_module {
+        rt.set_module_context(&script_url, fp_esm);
+        rt.eval_module_at(&script_url, &script)
+    } else {
+        rt.eval(&script).map(|_| ())
+    };
+    // A top-level failure that nobody was connected to hear yet. The worker
+    // thread is spawned by the *first* client's connect, so this eval always
+    // runs before any `Connect` arrives and `broadcast_shared_worker_error`
+    // below reaches an empty map — which is why a shared worker whose script
+    // failed to load used to leave its client waiting for the run's timeout
+    // rather than firing `error` (BUG-777: a module worker makes this the
+    // common case, since every failed `import` in the graph lands here).
+    // Replayed to each client as it connects, matching HTML LS "report the
+    // exception" firing at every `SharedWorker` object owning a port.
+    let mut pending_error: Option<String> = None;
+
+    if let Err(e) = outcome {
         eprintln!("[shared-worker] v8 script error: {e:?}");
         // BUG-591 SharedWorker parent-side reporting: broadcast the top-level
-        // failure to every already-connected client (there may be none yet —
-        // the first client's own Connect below still races this eval).
+        // failure to every already-connected client.
         let message = match &e {
             lumen_core::JsError::Parse(m) | lumen_core::JsError::Runtime(m) => m.clone(),
             lumen_core::JsError::NotImplemented => "not implemented".to_string(),
         };
         broadcast_shared_worker_error(&error_ports, &message, "", 0, 0);
+        pending_error = Some(message);
         // Continue: the worker may still service connections if the error was partial.
     }
 
@@ -697,7 +759,13 @@ fn run_shared_worker_thread_v8(
         match msg {
             SwInMsg::Connect { port_id, outbox, errors } => {
                 ports.lock().unwrap().insert(port_id, outbox);
-                error_ports.lock().unwrap().insert(port_id, errors);
+                error_ports.lock().unwrap().insert(port_id, Arc::clone(&errors));
+                if let Some(message) = pending_error.as_deref() {
+                    errors
+                        .lock()
+                        .unwrap()
+                        .push((port_id, crate::worker::error_info_json(message, "", 0, 0)));
+                }
                 let _ = rt.eval(&format!(
                     "if(typeof _lumen_sw_dispatch_connect==='function')\
                      {{_lumen_sw_dispatch_connect({port_id});\
@@ -759,7 +827,8 @@ fn broadcast_shared_worker_error(
 /// dedicated worker registers, reusing [`crate::worker::worker_net_fetch_json`]/
 /// [`crate::worker::resolve_import_url`] rather than a second implementation),
 /// sets the `_lumen_worker_base_url` (BUG-778) and `_lumen_worker_location_url`
-/// (BUG-776) globals, both derived from `script_url`, and evaluates
+/// (BUG-776) globals, both derived from `script_url`, plus
+/// `_lumen_worker_is_module` (BUG-777, gates `importScripts`), and evaluates
 /// [`SHARED_WORKER_GLOBAL_SHIM`] followed by [`crate::worker::WORKER_NET_SHIM`].
 ///
 /// `importScripts('blob:lumen/…')` is not supported here (`None` is passed as
@@ -776,6 +845,7 @@ fn install_shared_worker_globals_v8(
     error_ports: Arc<Mutex<HashMap<u32, crate::worker::WorkerErrorQueue>>>,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     script_url: &str,
+    is_module: bool,
     close_flag: crate::worker::WorkerCloseFlag,
 ) -> JsResult<()> {
     rt.register_native(
@@ -861,6 +931,12 @@ fn install_shared_worker_globals_v8(
         "_lumen_worker_location_url",
         lumen_core::JsValue::String(script_url.to_string()),
     )?;
+    // BUG-777: read by `SHARED_WORKER_GLOBAL_SHIM`'s `importScripts`, which
+    // HTML LS §10.2.3 requires to throw `TypeError` in a module worker.
+    rt.set_global(
+        "_lumen_worker_is_module",
+        lumen_core::JsValue::Bool(is_module),
+    )?;
 
     rt.eval(SHARED_WORKER_GLOBAL_SHIM)?;
     rt.eval(crate::worker::WORKER_NET_SHIM)?;
@@ -916,7 +992,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let ports = Arc::new(Mutex::new(HashMap::new()));
         let error_ports = Arc::new(Mutex::new(HashMap::new()));
-        install_shared_worker_globals_v8(&rt, ports, error_ports, None, "", Arc::new(AtomicBool::new(false))).unwrap();
+        install_shared_worker_globals_v8(&rt, ports, error_ports, None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
         for expr in [
             "typeof performance.now === 'function'",
             "performance instanceof Performance",
@@ -1128,7 +1204,7 @@ mod tests_v8 {
         let rt = V8JsRuntime::new().unwrap();
         let ports = Arc::new(Mutex::new(HashMap::new()));
         let error_ports = Arc::new(Mutex::new(HashMap::new()));
-        install_shared_worker_globals_v8(&rt, ports, error_ports, None, "", Arc::new(AtomicBool::new(false))).unwrap();
+        install_shared_worker_globals_v8(&rt, ports, error_ports, None, "", false, Arc::new(AtomicBool::new(false))).unwrap();
         for expr in ["typeof fetch", "typeof XMLHttpRequest", "typeof close", "typeof Headers", "typeof Response"] {
             assert_eq!(rt.eval(expr).unwrap(), JsValue::String("function".into()), "{expr}");
         }
@@ -1198,7 +1274,7 @@ mod tests_v8 {
         let error_ports = Arc::new(Mutex::new(HashMap::new()));
         let net = SwTestNet::new(&[("https://example.test/resources/testharness.js", "globalThis._sms1 = 40;")]);
         install_shared_worker_globals_v8(
-            &rt, ports, error_ports, Some(net), "https://example.test/worker.js", Arc::new(AtomicBool::new(false)),
+            &rt, ports, error_ports, Some(net), "https://example.test/worker.js", false, Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
         rt.eval("importScripts('/resources/testharness.js')").unwrap();
@@ -1218,6 +1294,7 @@ mod tests_v8 {
             Arc::new(Mutex::new(HashMap::new())),
             None,
             "https://example.test/a/sw.js?x=1",
+            false,
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
@@ -1235,5 +1312,126 @@ mod tests_v8 {
             rt.eval("navigator.userAgent === _lumen_navigator_id.userAgent").unwrap(),
             JsValue::Bool(true)
         );
+    }
+
+    // ── BUG-777: module shared workers + the options dictionary ──────────────
+
+    /// End-to-end module shared worker: `import` in the script body (a parse
+    /// error for a classic script) and the imported binding read from
+    /// `onconnect`, which is the shape every `workers/modules/shared-worker-*`
+    /// resource uses.
+    #[test]
+    fn v8_module_shared_worker_evaluates_static_import() {
+        // The worker script itself is served over the same bridge, so it has a
+        // real URL for `./sw-dep.js` to resolve against — a `data:` worker has
+        // no base at all (BUG-778).
+        let net = SwTestNet::new(&[
+            ("https://example.test/sw-dep.js", "export const answer = 7;"),
+            (
+                "https://example.test/sw-mod.js",
+                "import { answer } from './sw-dep.js';\n\
+                 self.onconnect = function(e) { e.ports[0].postMessage(answer); };",
+            ),
+        ]);
+        let (rt, outbox) = runtime_with_shared_worker_net(net);
+
+        // `_url_resolve`/`_lumen_document_base_url` live in the page shim, which
+        // this bare runtime does not install; the constructor only needs them to
+        // turn the (already absolute) URL into itself.
+        rt.eval(
+            "globalThis._url_resolve=function(u){return String(u);};\
+             globalThis._lumen_document_base_url=function(){return '';};",
+        )
+        .unwrap();
+        rt.eval(
+            "globalThis.__m=0;\
+             globalThis.__w=new SharedWorker('https://example.test/sw-mod.js',{type:'module'});\
+             __w.port.onmessage=function(ev){globalThis.__m=ev.data;};",
+        )
+        .unwrap();
+        pump_until(&rt, &outbox, "globalThis.__m", 7.0);
+
+        assert_eq!(as_num(&rt.eval("globalThis.__m").unwrap()), 7.0);
+    }
+
+    /// A `SharedWorkerGlobalScope` must answer its own interface check and not
+    /// the dedicated worker's — the WPT resources branch on exactly that pair
+    /// to decide whether to reply through `postMessage` or through a port.
+    #[test]
+    fn v8_shared_worker_scope_exposes_its_own_global_scope_interface() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_shared_worker_globals_v8(
+            &rt,
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+            None,
+            "https://example.test/sw.js",
+            false,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+
+        for (expr, want) in [
+            ("'SharedWorkerGlobalScope' in self", true),
+            ("self instanceof SharedWorkerGlobalScope", true),
+            ("self instanceof WorkerGlobalScope", true),
+            ("'DedicatedWorkerGlobalScope' in self", false),
+        ] {
+            assert_eq!(rt.eval(expr).unwrap(), JsValue::Bool(want), "{expr}");
+        }
+    }
+
+    /// The dictionary spelling of the name must key the same worker as the
+    /// string spelling: before BUG-777 `{name: 'n'}` went through
+    /// `String(options)` and opened a *separate* worker under the identity
+    /// `name:[object Object]`, so two clients written the two different ways
+    /// never met.
+    #[test]
+    fn v8_shared_worker_dictionary_name_keys_the_same_worker_as_the_string() {
+        let (rt, outbox) = runtime_with_shared_worker();
+        let script = "var n=0;onconnect=function(e){var p=e.ports[0];\
+            p.onmessage=function(){n+=1;p.postMessage(n);};};";
+        let data_url = format!("data:text/javascript,{}", urlencode(script));
+        rt.eval(&format!(
+            "globalThis.__d=0;\
+             globalThis.__s1=new SharedWorker('{data_url}','v8-dict-name');\
+             globalThis.__s2=new SharedWorker('{data_url}',{{name:'v8-dict-name'}});\
+             __s2.port.onmessage=function(ev){{globalThis.__d=ev.data;}};\
+             __s1.port.postMessage(0);__s2.port.postMessage(0);"
+        ))
+        .unwrap();
+        // The second connection sees the counter already bumped by the first,
+        // which can only happen if both landed in one worker.
+        pump_until(&rt, &outbox, "globalThis.__d", 2.0);
+        assert_eq!(as_num(&rt.eval("globalThis.__d").unwrap()), 2.0);
+    }
+
+    /// A shared worker whose top-level script fails must tell the client that
+    /// asked for it. The thread is spawned *by* the first connect, so the eval
+    /// always runs before any client is registered — before BUG-777 the report
+    /// was broadcast into an empty map and the page waited forever, which is
+    /// what a module worker turns into the common case (every failed `import`
+    /// in the graph ends here).
+    #[test]
+    fn v8_shared_worker_top_level_failure_reaches_the_first_client() {
+        use std::time::Duration;
+        let outbox: SharedWorkerOutbox = Arc::new(Mutex::new(Vec::new()));
+        let errors: crate::worker::WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+
+        let port_id = connect_shared_worker_v8(
+            "v8-toplevel-fail".to_string(),
+            "throw new Error('sw-boom');".to_string(),
+            "https://example.test/sw.js".to_string(),
+            false,
+            Arc::clone(&outbox),
+            Arc::clone(&errors),
+            None,
+        );
+        std::thread::sleep(Duration::from_millis(300));
+
+        let drained = std::mem::take(&mut *errors.lock().unwrap());
+        assert_eq!(drained.len(), 1, "client never heard the failure: {drained:?}");
+        assert_eq!(drained[0].0, port_id);
+        assert!(drained[0].1.contains("sw-boom"), "unexpected report: {}", drained[0].1);
     }
 }

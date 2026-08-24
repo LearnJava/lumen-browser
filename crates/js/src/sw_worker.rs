@@ -44,6 +44,11 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     format!(r#"
 (function(scope, origin) {{
   globalThis.self = globalThis;
+  // `ServiceWorkerGlobalScope` (BUG-777) — the third flavour of the same
+  // factory, see `crate::dom::WORKER_LOCATION_NAVIGATOR_SHIM`.
+  if (typeof _lumen_define_worker_scope === 'function') {{
+    _lumen_define_worker_scope('ServiceWorkerGlobalScope');
+  }}
   // `WorkerLocation` (HTML LS §8.1.5.4) целиком, а не два поля: сервис-воркеры
   // ветвятся по `location.host`/`location.search` прямо на верхнем уровне, и
   // `undefined.includes(...)` роняет установку всего воркера ещё до первого
