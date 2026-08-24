@@ -64,7 +64,7 @@ if (tag === 'A' || tag === 'AREA') {         // dom.rs:14634
 `html/browsers/browsing-the-web/overlapping-navigations-and-traversals/anchor-fragment-history-back-on-click.html`,
 и у него ожидание всё равно упирается в обход истории (BUG-835), так что
 честного правила «по исходнику видно, что тест висит именно из-за этого»
-не выводится. Заводится по прямому замеру, как [BUG-825](BUG-825-OPEN.md) и
+не выводится. Заводится по прямому замеру, как [BUG-825](BUG-825-FIXED.md) и
 [BUG-829](BUG-829-OPEN.md).
 
 Цена вне WPT существенно выше: якорная навигация по одностраничному

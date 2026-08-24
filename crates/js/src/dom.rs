@@ -6505,7 +6505,7 @@ var _lumen_resource_pending_count = 0;
 // mint such an element that the spec allows to act on insertion.
 function _lumen_resource_track(nid, local) {
     var tag = String(local).toLowerCase();
-    if (tag !== 'script' && tag !== 'link' && tag !== 'track') return;
+    if (tag !== 'script' && tag !== 'link' && tag !== 'track' && tag !== 'source') return;
     _lumen_resource_pending[nid] = tag;
     _lumen_resource_pending_count++;
 }
@@ -6721,6 +6721,18 @@ function _lumen_resource_try_prepare(nid) {
     if (kind === 'track') {
         if (typeof _lumen_track_start_load !== 'function') return;
         if (!_lumen_track_start_load(nid)) return;
+        delete _lumen_resource_pending[nid];
+        _lumen_resource_pending_count--;
+        return;
+    }
+    // BUG-825: <source> is the same shape as <track> — HTML LS §4.8.11.5 keys
+    // «invoke the media load algorithm» on the parent being a media element and
+    // says nothing about being in a document, and the media shim answers false
+    // while the parent is not one, so the element stays tracked for a later
+    // insertion.
+    if (kind === 'source') {
+        if (typeof _lumen_media_source_inserted !== 'function') return;
+        if (!_lumen_media_source_inserted(nid)) return;
         delete _lumen_resource_pending[nid];
         _lumen_resource_pending_count--;
         return;
