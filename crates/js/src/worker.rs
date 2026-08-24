@@ -401,9 +401,9 @@ undefined;
 /// Pure JS (no engine-specific bits), used by [`install_worker_globals_v8`].
 /// Provides `self`, `postMessage`, `onmessage`, `addEventListener`,
 /// `removeEventListener`, `_lumen_worker_dispatch_message`, `console`,
-/// `importScripts` (data: + blob: URLs), `setTimeout`/`clearTimeout`/
-/// `setInterval`/`clearInterval` (minimal stubs), `queueMicrotask`.
-/// `atob`/`btoa` are installed separately as natives since they need
+/// `importScripts` (data: + blob: URLs). Timers (`setTimeout`/`setInterval`/
+/// `queueMicrotask` and friends) come from [`WORKER_TIMERS_SHIM`], shared with
+/// the shared-worker scope. `atob`/`btoa` are installed separately as natives since they need
 /// Rust-side base64 codecs; `EventTarget` and `performance` come from the
 /// shim shared with the page scope ([`install_worker_scope_globals_v8`]).
 #[cfg(feature = "v8-backend")]
@@ -618,34 +618,10 @@ fn worker_global_shim(worker_id: u32) -> String {
     }}
   }};
 
-  // Minimal setTimeout stub: enqueues callbacks, flushed between messages
-  // (see _lumen_flush_timers called by the Rust message loop).
-  var _timerQueue = [];
-  var _nextTimerId = 1;
-  globalThis.setTimeout = function(fn, _delay) {{
-    var id = _nextTimerId++;
-    _timerQueue.push({{ id: id, fn: fn }});
-    return id;
-  }};
-  globalThis.clearTimeout = function(id) {{
-    _timerQueue = _timerQueue.filter(function(t) {{ return t.id !== id; }});
-  }};
-  // setInterval: single-shot stub (no repeating in Phase 0).
-  globalThis.setInterval = globalThis.setTimeout;
-  globalThis.clearInterval = globalThis.clearTimeout;
-
-  // queueMicrotask: front-queue so microtasks fire before regular timers.
-  globalThis.queueMicrotask = function(fn) {{
-    _timerQueue.unshift({{ id: _nextTimerId++, fn: fn }});
-  }};
-
-  // Flush all pending timer callbacks (called by Rust between message dispatches).
-  globalThis._lumen_flush_timers = function() {{
-    var pending = _timerQueue.splice(0);
-    for (var i = 0; i < pending.length; i++) {{
-      try {{ pending[i].fn(); }} catch(e) {{ _lumen_report_worker_exception(e); }}
-    }}
-  }};
+  // `setTimeout`/`setInterval`/`queueMicrotask` come from the shim shared with
+  // the shared-worker scope (`crate::worker::WORKER_TIMERS_SHIM`, evaluated as
+  // its own IIFE right after this one), which is what actually drives them
+  // (BUG-815).
 
   // Exposed so the shared net shim (WORKER_NET_SHIM, evaluated as a
   // separate IIFE right after this one) can route a throwing fetch/XHR
@@ -656,11 +632,170 @@ fn worker_global_shim(worker_id: u32) -> String {
   // queued tasks. `_lumen_worker_self_close` flips a shared flag that
   // `run_worker_thread_v8`'s message loop polls after every dispatched task
   // and stops on, without servicing any more.
-  globalThis.close = function() {{ _lumen_worker_self_close(); }};
+  // `_lumen_worker_closed` is the JS-visible half of the same flag, read by
+  // `WORKER_TIMERS_SHIM`'s task loop so a `close()` from inside a timer stops
+  // the remaining due timers of that very flush rather than only the next one.
+  globalThis.close = function() {{
+    globalThis._lumen_worker_closed = true;
+    _lumen_worker_self_close();
+  }};
 
 }})({worker_id});"#
     )
 }
+
+/// Timers for a `WorkerGlobalScope` — `setTimeout`, `setInterval`,
+/// `clearTimeout`, `clearInterval`, `queueMicrotask` (BUG-815).
+///
+/// Shared verbatim by the dedicated ([`install_worker_globals_v8`]) and shared
+/// (`shared_worker.rs::install_shared_worker_globals_v8`) scopes, evaluated as
+/// its own IIFE right after the flavour-specific globals shim. It depends on
+/// nothing but `globalThis._lumen_worker_exception_reporter`, which that shim
+/// has already set, and it is read lazily so the two flavours can keep their
+/// own reporting functions.
+///
+/// The queue this replaces stored callbacks with no deadline at all, was
+/// drained only from the Rust message loop, and aliased `setInterval` to
+/// `setTimeout` — so a worker nobody wrote to never ran a timer, a delay was
+/// ignored, and an interval fired exactly once (BUG-815). What makes the queue
+/// *run* is on the Rust side: [`run_worker_tasks`] calls
+/// `_lumen_worker_run_tasks` below and sleeps on `recv_timeout` for exactly the
+/// interval it returns, so the thread wakes on whichever comes first — the next
+/// deadline or an incoming message.
+///
+/// Two spec details this carries that the page shim also has, and for the same
+/// reasons: a delay goes through the WebIDL `long` conversion (`| 0`, which is
+/// ToInt32) before being clamped to a non-negative value, and the §8.6 nesting
+/// clamp raises any delay below 4 ms to 4 once the nesting level passes 5.
+/// The clamp is what keeps `setInterval(fn, 0)` from spinning this thread —
+/// a repeat re-runs the timer initialization steps with the nesting level
+/// incremented, so the third cycle onward is 4 ms apart.
+#[cfg(feature = "v8-backend")]
+pub(crate) const WORKER_TIMERS_SHIM: &str = r#"(function() {
+  // {id, fn, args, due (epoch ms), delay, interval (bool), nesting, seq}
+  var _timers = [];
+  var _micro = [];
+  var _nextId = 1;
+  // HTML LS §8.6 "timer nesting level" of the task currently running, so a
+  // timer armed from inside a callback inherits its parent's depth.
+  var _nesting = 0;
+
+  function _report(e) {
+    var r = globalThis._lumen_worker_exception_reporter;
+    if (typeof r === 'function') { try { r(e); } catch (_e) {} }
+  }
+
+  // WebIDL `long`: ToInt32 (so 2^32 becomes 0, matching every other engine),
+  // then HTML LS §8.6 step 5 — a negative timeout becomes 0.
+  function _toDelay(v) {
+    var n = Number(v) | 0;
+    return n < 0 ? 0 : n;
+  }
+
+  function _clamp(delay, nesting) {
+    return (nesting > 5 && delay < 4) ? 4 : delay;
+  }
+
+  function _schedule(fn, delay, args, repeating) {
+    if (typeof fn !== 'function') return 0;
+    var nesting = _nesting + 1;
+    var d = _toDelay(delay);
+    var id = _nextId++;
+    _timers.push({
+      id: id, fn: fn, args: args, delay: d, interval: repeating,
+      nesting: nesting, due: Date.now() + _clamp(d, nesting), seq: id,
+    });
+    return id;
+  }
+
+  globalThis.setTimeout = function(fn, delay) {
+    return _schedule(fn, delay, Array.prototype.slice.call(arguments, 2), false);
+  };
+  globalThis.setInterval = function(fn, delay) {
+    return _schedule(fn, delay, Array.prototype.slice.call(arguments, 2), true);
+  };
+  globalThis.clearTimeout = function(id) {
+    for (var i = 0; i < _timers.length; i++) {
+      if (_timers[i].id === id) { _timers.splice(i, 1); return; }
+    }
+  };
+  // One list, one id space — as the spec's single "map of active timers" has.
+  globalThis.clearInterval = globalThis.clearTimeout;
+
+  globalThis.queueMicrotask = function(fn) {
+    if (typeof fn !== 'function') {
+      throw new TypeError('queueMicrotask: callback is not a function');
+    }
+    _micro.push(fn);
+  };
+
+  function _drainMicrotasks() {
+    while (_micro.length) {
+      var fn = _micro.shift();
+      try { fn(); } catch (e) { _report(e); }
+    }
+  }
+
+  // Index of the due timer that should run next: earliest deadline, ties
+  // broken by insertion order (`seq`, re-stamped on every repeat so a
+  // reloaded interval queues behind whatever was already waiting).
+  function _nextDue(now) {
+    var best = -1;
+    for (var i = 0; i < _timers.length; i++) {
+      var t = _timers[i];
+      if (t.due > now) continue;
+      if (best === -1 || t.due < _timers[best].due
+          || (t.due === _timers[best].due && t.seq < _timers[best].seq)) {
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  // Run everything already due, then report how long the thread may sleep:
+  // milliseconds until the next deadline, or -1 when nothing is pending.
+  // Called from Rust once per turn of the worker's task loop.
+  globalThis._lumen_worker_run_tasks = function() {
+    _drainMicrotasks();
+    for (;;) {
+      var now = Date.now();
+      var i = _nextDue(now);
+      if (i === -1) break;
+      var task = _timers[i];
+      if (task.interval) {
+        // HTML LS §8.6 step 12: a repeating timer re-runs the initialization
+        // steps with the nesting level incremented — which is what puts the
+        // 4 ms floor under a zero-delay interval after a few cycles.
+        task.nesting += 1;
+        task.due = now + _clamp(task.delay, task.nesting);
+        task.seq = _nextId++;
+      } else {
+        _timers.splice(i, 1);
+      }
+      var outer = _nesting;
+      _nesting = task.nesting;
+      try { task.fn.apply(globalThis, task.args); } catch (e) { _report(e); }
+      _nesting = outer;
+      _drainMicrotasks();
+      // A callback may have called close(); the Rust loop checks the flag
+      // right after this returns, so just stop handing out more work.
+      if (globalThis._lumen_worker_closed === true) break;
+    }
+    if (_micro.length) return 0;
+    if (!_timers.length) return -1;
+    var soonest = Infinity;
+    for (var j = 0; j < _timers.length; j++) {
+      if (_timers[j].due < soonest) soonest = _timers[j].due;
+    }
+    var wait = soonest - Date.now();
+    return wait > 0 ? wait : 0;
+  };
+
+  // The name the message-loop eval strings have called since before the queue
+  // had deadlines; kept so the dispatch path still flushes what is due.
+  globalThis._lumen_flush_timers = function() { globalThis._lumen_worker_run_tasks(); };
+})();
+"#;
 
 /// Shared `fetch()`/`XMLHttpRequest`/`Headers`/`Response` surface for a
 /// `WorkerGlobalScope` (BUG-778): minimal but spec-shaped, synchronous over
@@ -1632,13 +1767,40 @@ fn run_worker_thread_v8(
         // Continue: worker may still receive messages if the error was partial.
     }
 
-    // Message loop: continue for Post; Terminate, channel-close, or a
+    // Task loop: continue for Post; Terminate, channel-close, or a
     // BUG-778 `self.close()` (checked both before the top-level script had a
     // chance to call it synchronously, and after every dispatched message —
     // "discard any tasks queued for the worker, and prevent any further
     // tasks from being queued", HTML LS §10.2.3) exits.
-    while !close_flag.load(Ordering::Relaxed) {
-        let Ok(WorkerInMsg::Post(json)) = rx.recv() else { break };
+    //
+    // BUG-815: the wait is bounded by the worker's own next timer deadline
+    // instead of being an unconditional `recv()`, which is what makes a worker
+    // nobody writes to run its timers at all. `run_worker_tasks` flushes
+    // whatever is already due — including anything the top-level script armed,
+    // before the first message ever arrives — and answers with how long the
+    // thread may sleep.
+    loop {
+        if close_flag.load(Ordering::Relaxed) {
+            break;
+        }
+        let wait = run_worker_tasks(&rt);
+        if close_flag.load(Ordering::Relaxed) {
+            break;
+        }
+        let msg = match wait {
+            Some(d) => match rx.recv_timeout(d) {
+                Ok(m) => m,
+                // Deadline reached with nothing incoming — go round and let
+                // `run_worker_tasks` fire the timer that woke us.
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            },
+            None => match rx.recv() {
+                Ok(m) => m,
+                Err(_) => break,
+            },
+        };
+        let WorkerInMsg::Post(json) = msg else { break };
         if rt.set_global("_lw_msg__", lumen_core::JsValue::String(json)).is_ok() {
             let _ = rt.eval(
                 "if(typeof _lumen_worker_dispatch_message==='function')\
@@ -1651,6 +1813,32 @@ fn run_worker_thread_v8(
     // thread and joins it.
 }
 
+/// Run the worker scope's already-due timers and microtasks, and report how
+/// long its thread may block before the next one (BUG-815).
+///
+/// `None` means "nothing is pending" — the caller may wait for an incoming
+/// message indefinitely. Shared by both worker flavours' task loops
+/// ([`run_worker_thread_v8`] and `shared_worker.rs::run_shared_worker_thread_v8`),
+/// which is why it lives here rather than inside either of them.
+///
+/// A failed eval also answers `None`: the JS side catches every callback
+/// exception itself ([`WORKER_TIMERS_SHIM`]), so a throw here would mean the
+/// loop itself is broken, and blocking is a better answer than spinning on it.
+/// The wait is capped at an hour so a timer armed 49 days out (which a page can
+/// ask for) cannot turn into an absurd `Duration`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn run_worker_tasks(rt: &V8JsRuntime) -> Option<std::time::Duration> {
+    // A negative answer (the shim's own "nothing pending", and the `-1` the
+    // guard falls back to when the shim is absent) and a NaN alike fall
+    // through to `None`.
+    match rt.eval("(typeof _lumen_worker_run_tasks==='function')?_lumen_worker_run_tasks():-1") {
+        Ok(lumen_core::JsValue::Number(ms)) if ms >= 0.0 => {
+            Some(std::time::Duration::from_millis(ms.min(3_600_000.0) as u64))
+        }
+        _ => None,
+    }
+}
+
 /// Install the Worker global environment into a V8 runtime. Registers the
 /// natives `_lumen_worker_post_reply`, `_lumen_worker_console_log`,
 /// `_lumen_import_scripts_resolve`, `_lumen_worker_self_close`,
@@ -1659,7 +1847,7 @@ fn run_worker_thread_v8(
 /// (BUG-776) globals — both derived from `script_url`, the worker's own
 /// resolved script URL — plus `_lumen_worker_is_module` (BUG-777, gates
 /// `importScripts`) and evaluates [`worker_global_shim`] followed by
-/// [`WORKER_NET_SHIM`].
+/// [`WORKER_TIMERS_SHIM`] and [`WORKER_NET_SHIM`].
 ///
 /// `atob`/`btoa` go through [`crate::v8_compat::V8NativeFnScoped`] (raw scope
 /// access) rather than the plain `into_v8_fnN` path, because they must throw
@@ -1781,6 +1969,7 @@ fn install_worker_globals_v8(
     )?;
 
     rt.eval(&worker_global_shim(worker_id))?;
+    rt.eval(WORKER_TIMERS_SHIM)?;   // BUG-815
     rt.eval(WORKER_NET_SHIM)?;
     Ok(())
 }
@@ -3124,5 +3313,231 @@ mod tests_v8 {
             rt.eval("typeof postMessage").unwrap(),
             lumen_core::JsValue::String("function".to_string())
         );
+    }
+
+    // ── BUG-815: worker timers ────────────────────────────────────────────────
+
+    /// Turn the worker's task loop exactly the way [`run_worker_thread_v8`]
+    /// does — flush what is due, then sleep for as long as the scope asked —
+    /// until `done` evaluates true. Returns false if the scope ran out of
+    /// pending work, or the budget ran out, without that happening.
+    ///
+    /// Nothing here delivers a message: that is the whole point of the bug —
+    /// before the fix these timers only ran when the page wrote to the worker.
+    fn pump_until(rt: &V8JsRuntime, done: &str, budget: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + budget;
+        loop {
+            let wait = run_worker_tasks(rt);
+            if matches!(rt.eval(done), Ok(lumen_core::JsValue::Bool(true))) {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            match wait {
+                // Capped so a mis-scheduled timer fails the test on the budget
+                // rather than parking the whole suite on one `sleep`.
+                Some(d) => std::thread::sleep(d.min(std::time::Duration::from_millis(20))),
+                None => return false,
+            }
+        }
+    }
+
+    /// [BUG-815] The headline symptom: a worker nobody writes to never ran a
+    /// timer at all, because the only `_lumen_flush_timers` call site was the
+    /// message-delivery loop. `workers/WorkerGlobalScope_setTimeout.htm` is
+    /// exactly this — the page arms nothing and waits for the worker to post.
+    #[test]
+    fn v8_worker_timer_fires_with_no_incoming_message() {
+        let (rt, _errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval("var fired = false; setTimeout(function() { fired = true; }, 10);")
+            .unwrap();
+        assert!(pump_until(&rt, "fired", std::time::Duration::from_secs(5)));
+    }
+
+    /// [BUG-815] The delay was ignored entirely (the old stub's parameter was
+    /// literally named `_delay`), so callbacks ran in arm order. The order
+    /// asserted here is what `Worker-timeout-increasing-order.html` checks.
+    #[test]
+    fn v8_worker_timers_run_in_deadline_order_not_arm_order() {
+        let (rt, _errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval(
+            "var log = []; \
+             setTimeout(function() { log.push('a'); }, 60); \
+             setTimeout(function() { log.push('b'); }, 10); \
+             setTimeout(function() { log.push('c'); }, 35);",
+        )
+        .unwrap();
+        assert!(pump_until(
+            &rt,
+            "log.length === 3",
+            std::time::Duration::from_secs(5)
+        ));
+        assert_eq!(
+            rt.eval("log.join('')").unwrap(),
+            lumen_core::JsValue::String("bca".to_string())
+        );
+    }
+
+    /// [BUG-815] `setInterval` was a bare alias of `setTimeout`, so it fired
+    /// once and stopped — the measured `interval:1` with no `interval:2`.
+    #[test]
+    fn v8_worker_set_interval_repeats() {
+        let (rt, _errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval("var n = 0; var h = setInterval(function() { n++; }, 5);")
+            .unwrap();
+        assert!(pump_until(&rt, "n >= 3", std::time::Duration::from_secs(5)));
+    }
+
+    /// [BUG-815] …and `clearInterval` has to reach the same timer: with the
+    /// two functions aliased there was only ever one shot to cancel.
+    #[test]
+    fn v8_worker_clear_interval_stops_the_repeat() {
+        let (rt, _errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval(
+            "var n = 0; \
+             var h = setInterval(function() { n++; if (n === 2) clearInterval(h); }, 5);",
+        )
+        .unwrap();
+        assert!(pump_until(&rt, "n === 2", std::time::Duration::from_secs(5)));
+        // Nothing is left pending, so the thread would go back to a plain
+        // blocking `recv()` — which is the observable form of "it stopped".
+        assert!(run_worker_tasks(&rt).is_none());
+    }
+
+    /// [BUG-815] The value the Rust loop actually steers by: `None` is "block
+    /// on the channel", `Some(d)` is "wake in `d`". Getting this wrong either
+    /// spins the thread or loses every timer, and neither shows up in the
+    /// callback-level tests above.
+    #[test]
+    fn v8_worker_run_tasks_reports_the_wait_the_loop_should_use() {
+        let (rt, _errors) = scope_with_errors("http://example.test/w.js");
+        assert!(run_worker_tasks(&rt).is_none());
+        rt.eval("setTimeout(function() {}, 10000);").unwrap();
+        let wait = run_worker_tasks(&rt).expect("a pending timer must bound the wait");
+        assert!(
+            wait > std::time::Duration::from_millis(5_000),
+            "expected ≈10 s, got {wait:?}"
+        );
+    }
+
+    /// [BUG-815] `setTimeout(fn, delay, …args)` — the trailing arguments were
+    /// dropped by the old stub, which stored `{id, fn}` and nothing else.
+    #[test]
+    fn v8_worker_set_timeout_passes_extra_arguments() {
+        let (rt, _errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval("var got = null; setTimeout(function(a, b) { got = a + b; }, 0, 'x', 'y');")
+            .unwrap();
+        assert!(pump_until(
+            &rt,
+            "got !== null",
+            std::time::Duration::from_secs(5)
+        ));
+        assert_eq!(
+            rt.eval("got").unwrap(),
+            lumen_core::JsValue::String("xy".to_string())
+        );
+    }
+
+    /// [BUG-815] The old stub put a microtask at the *front of the timer
+    /// queue*, which happens to order these two right but makes a microtask
+    /// queued from a timer callback wait for the next flush. Both halves are
+    /// asserted here: the ordering, and that a microtask queued from inside a
+    /// callback still runs within the same turn.
+    #[test]
+    fn v8_worker_microtasks_run_before_and_between_due_timers() {
+        let (rt, _errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval(
+            "var log = []; \
+             setTimeout(function() { \
+               log.push('t'); queueMicrotask(function() { log.push('m2'); }); \
+             }, 0); \
+             queueMicrotask(function() { log.push('m1'); });",
+        )
+        .unwrap();
+        assert!(pump_until(
+            &rt,
+            "log.length === 3",
+            std::time::Duration::from_secs(5)
+        ));
+        assert_eq!(
+            rt.eval("log.join('')").unwrap(),
+            lumen_core::JsValue::String("m1tm2".to_string())
+        );
+    }
+
+    /// [BUG-815] The §8.6 nesting clamp is not decoration here — it is the
+    /// only thing keeping `setInterval(fn, 0)` from re-arming itself as
+    /// already-due forever inside one flush. Asserting the *wait* rather than
+    /// a tick count is what proves the loop yields: an unclamped build never
+    /// returns from `run_worker_tasks` at all.
+    #[test]
+    fn v8_worker_zero_delay_interval_is_clamped_and_yields() {
+        let (rt, _errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval("var n = 0; setInterval(function() { n++; }, 0);").unwrap();
+        let wait = run_worker_tasks(&rt).expect("a live interval must bound the wait");
+        assert_eq!(wait, std::time::Duration::from_millis(4), "§8.6 clamp");
+        // The five pre-clamp cycles ran inside that one flush.
+        assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(5.0));
+    }
+
+    /// [BUG-815] The whole thing through a real worker thread: the page sends
+    /// **nothing**, and the worker's own `setTimeout`/`setInterval` still post
+    /// back. Every other timer test here drives [`run_worker_tasks`] by hand,
+    /// which cannot catch the half of the bug that lived in the thread's own
+    /// `rx.recv()` — an unconditional block that no deadline could interrupt.
+    /// This is `verify_csp_url_worker_gaps.py --variant worker-timers` in the
+    /// small: `interval:2` is the entry that never used to arrive.
+    #[test]
+    fn v8_worker_end_to_end_timers_run_without_the_page_writing() {
+        use std::time::{Duration, Instant};
+        let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
+        let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
+        let store = make_store();
+        let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let nid = Arc::new(Mutex::new(0u32));
+
+        let script = "queueMicrotask(function() { postMessage('microtask'); }); \
+                      setTimeout(function() { postMessage('timeout'); }, 10); \
+                      var n = 0; \
+                      setInterval(function() { n++; postMessage('interval:' + n); }, 20);"
+            .to_string();
+        let worker_id =
+            spawn_worker_v8(&reg, &queue, &errors, &nid, &store, script, String::new(), false, None);
+
+        let mut got: Vec<String> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && !got.iter().any(|m| m == "\"interval:2\"") {
+            std::thread::sleep(Duration::from_millis(20));
+            got.extend(drain_messages(&queue).into_iter().map(|(_, m)| m));
+        }
+        terminate_worker(&reg, worker_id);
+
+        // Order matters as much as arrival: the microtask before the 10 ms
+        // timeout, and that before the first 20 ms interval tick.
+        let head: Vec<&str> = got.iter().take(4).map(String::as_str).collect();
+        assert_eq!(
+            head,
+            ["\"microtask\"", "\"timeout\"", "\"interval:1\"", "\"interval:2\""],
+            "got {got:?}"
+        );
+    }
+
+    /// [BUG-815] An exception from a timer callback still reaches the page —
+    /// the queue rewrite must not undo BUG-813's reporting path, and the loop
+    /// must carry on with the remaining timers.
+    #[test]
+    fn v8_worker_timer_exception_is_reported_and_the_loop_continues() {
+        let (rt, errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval(
+            "var after = false; \
+             setTimeout(function() { throw new Error('boom'); }, 0); \
+             setTimeout(function() { after = true; }, 0);",
+        )
+        .unwrap();
+        assert!(pump_until(&rt, "after", std::time::Duration::from_secs(5)));
+        let reported = drain_errors(&errors);
+        assert_eq!(reported.len(), 1);
+        assert!(reported[0].1.contains("\"message\":\"boom\""));
     }
 }

@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-24",
  "counts": {
-  "open": 392,
-  "fixed": 469,
+  "open": 391,
+  "fixed": 470,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -10833,10 +10833,10 @@
    "debtor": false
   },
   "BUG-815": {
-   "status": "open",
-   "title": "Таймеры воркера выполняются только при доставке сообщения воркеру, задержка игнорируется, `setInterval` не повторяется. Воркеру, которому страница ничего не шлё…",
-   "component": "js (`crates/js/src/worker.rs:364-397` — заглушки таймеров, `worker.rs:377` `setInterval = setTimeout`, `worker.rs:834` — единственный вызов `_lumen_flush_timers`; то же в `shared_worker.rs:207,512,523`)",
-   "date": null,
+   "status": "fixed",
+   "title": "Таймеры воркера выполнялись только при доставке сообщения воркеру, задержка игнорировалась, `setInterval` не повторялся. Воркеру, которому страница ничего не шл…",
+   "component": "js (`crates/js/src/worker.rs` — новый общий `WORKER_TIMERS_SHIM` + `run_worker_tasks` + цикл `run_worker_thread_v8`; `shared_worker.rs` — тот же цикл и тот же шим вместо своей копии заглушки)",
+   "date": "2026-08-24",
    "debtor": false
   },
   "BUG-816": {
@@ -12101,14 +12101,14 @@
   "js (`crates/js/src/worker.rs:338`+ `worker_global_shim`, `crates/js/src/shared_worker.rs:121`+ `SHARED_WORKER_GLOBAL_SHIM` — вешают на `globalThis` только функции)": [
    "BUG-872"
   ],
-  "js (`crates/js/src/worker.rs:364-397` — заглушки таймеров, `worker.rs:377` `setInterval = setTimeout`, `worker.rs:834` — единственный вызов `_lumen_flush_timers`; то же в `shared_worker.rs:207,512,523`)": [
-   "BUG-815"
-  ],
   "js (`crates/js/src/worker.rs:918` — `_lumenSerializeWithTransfers` понимает только `OffscreenCanvas`; `worker.rs:366` — воркерный `postMessage(data)` объявлен без второго параметра и шлёт `JSON.stringify`; `MessageChannel` определён только в шиме страницы, `dom.rs:12019`)": [
    "BUG-868"
   ],
   "js (`crates/js/src/worker.rs` — `worker_global_shim` + `run_worker_thread_v8`; `shared_worker.rs`; `v8_runtime.rs` — `eval_and_report_via`/`eval_module_at_and_report_via`; `dom.rs` — страничный `ErrorEvent`)": [
    "BUG-813"
+  ],
+  "js (`crates/js/src/worker.rs` — новый общий `WORKER_TIMERS_SHIM` + `run_worker_tasks` + цикл `run_worker_thread_v8`; `shared_worker.rs` — тот же цикл и тот же шим вместо своей копии заглушки)": [
+   "BUG-815"
   ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"
