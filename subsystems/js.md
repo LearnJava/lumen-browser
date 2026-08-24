@@ -1403,8 +1403,48 @@ the time — read dates.
   - 10 new tests in `dom.rs::tests::v8_whatwg_streams`, one per gap plus `pipeTo`, `cancel` and
     both directions of `TransformStream`. Live: all seven variants of
     `tests/wpt/verify_stream_scroll_message_gaps.py` print their expected markers.
-    Out of scope: `tee()`/BYOB/async iteration ([BUG-824](../bugs/BUG-824-OPEN.md)) and
-    `DecompressionStream`'s buffer-then-flush model ([BUG-846](../bugs/BUG-846-OPEN.md)).
+    Out of scope: `tee()`/BYOB/async iteration ([BUG-824](../bugs/BUG-824-FIXED.md), closed
+    the next day) and `DecompressionStream`'s buffer-then-flush model
+    ([BUG-846](../bugs/BUG-846-OPEN.md)).
+
+- **Streams: real `tee()`, byte streams, async iteration, and a stream as a body**
+  ([BUG-824](../bugs/BUG-824-FIXED.md), [P1] 2026-08-25, `crates/js/src/dom.rs`,
+  `WEB_API_SHIM`). Four surfaces a test could only *hang* on, because each was absent or
+  silently substituted by something with different semantics.
+  - **`tee()` (§3.2.6).** It used to snapshot the controller's queue into two independent
+    stubs and close the source: the source reported `locked === false`, and everything it
+    enqueued after the call went nowhere. Now the source is taken under one shared reader and
+    stays `readable` + locked; both branches pull through a single `pullAlgorithm` guarded by
+    `reading`/`readAgain`, so there is never a competing read. Cancelling one branch does not
+    touch the source — it is cancelled only once **both** are, with the reasons aggregated as
+    `[reason1, reason2]` (the «canceling both branches should aggregate the cancel reasons»
+    subtest `readable-streams/tee.any.js` used to stop at).
+  - **`Symbol.asyncIterator` / `values()` (§3.2.6).** A thin wrapper over `getReader()`;
+    `return()` — i.e. leaving a `for await` by `break` — cancels the stream and releases the
+    lock, without which the stream would stay locked for good.
+  - **Byte streams (§3.8/§3.10/§3.11).** `ReadableByteStreamController`,
+    `ReadableStreamBYOBReader` and `ReadableStreamBYOBRequest` are new; the constructor reads
+    `type`/`autoAllocateChunkSize` and throws on an unknown `type`, `getReader({mode:'byob'})`
+    throws on a non-byte stream. The BYOB reader keeps `_byobViews` parallel to
+    `_readRequests` — its presence is also what marks the reader as BYOB for the controller —
+    and both reader flavours share `closed`/`cancel`/`releaseLock` via
+    `_rs_install_reader_common`. **Deliberate deviation:** the spec transfers (detaches) the
+    caller's buffer and answers with a view over the transferred copy;
+    `ArrayBuffer.prototype.transfer` is not wired in this engine, so the same buffer is
+    reused and a page holding the pre-read view still sees the bytes.
+  - **A stream as a `Response`/`Request` body.** `extractBody` no longer substitutes an empty
+    body for a `ReadableStream`: the given stream *is* the body's stream (`resp.body === rs`),
+    `consume()` drains it through the new `_rs_drain_to_bytes`, and `clone()` tees it — the
+    canonical reason to want a working `tee()` at all. Before this, `new Response(rs)
+    .arrayBuffer()` resolved with zero bytes.
+  - The fifth surface the bug listed — `TextDecoderStream` never closing its readable side —
+    turned out to have been fixed as a side effect of BUG-823's writable-side rewrite (the
+    sink's `close` now reaches `_ts_flush`, which closes the readable end). Re-measured
+    before touching anything, and kept under a regression test.
+  - 10 new tests in `dom.rs::tests::v8_whatwg_streams`. Live:
+    `verify_stream_scroll_message_gaps.py` prints the expected markers for all four target
+    variants with the three stream controls unmoved; `dump_golden.py` 12/12, so the change is
+    display-list neutral.
 
 ## Deferred
 

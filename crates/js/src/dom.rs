@@ -8198,6 +8198,10 @@ function _rs_do_close(stream) {
     if (!reader) return;
     var reqs = reader._readRequests;
     reader._readRequests = [];
+    // A BYOB request answers «done» with an empty view over the caller's own
+    // buffer, which its callback builds from the view it captured — so dropping
+    // the parallel view list here is safe.
+    if (reader._byobViews) reader._byobViews = [];
     for (var i = 0; i < reqs.length; i++) reqs[i]({ value: undefined, done: true }, undefined);
     reader._closedD.resolve(undefined);
 }
@@ -8212,6 +8216,7 @@ function _rs_do_error(stream, e) {
     if (!reader) return;
     var reqs = reader._readRequests;
     reader._readRequests = [];
+    if (reader._byobViews) reader._byobViews = [];
     for (var i = 0; i < reqs.length; i++) reqs[i](undefined, e);
     reader._closedD.reject(e);
     _stream_mark_handled(reader._closedD.promise);
@@ -8255,12 +8260,26 @@ function _rs_pull_if_needed(stream) {
 
 function ReadableStream(source, strategy) {
     source = source || {};
+    // §3.2.3 step 2: `type` picks the controller. BUG-824: it used to be ignored,
+    // so a byte stream was silently an ordinary one and `{mode:'byob'}` degraded
+    // to a default reader instead of erroring.
+    if (source.type !== undefined && String(source.type) !== 'bytes') {
+        throw new TypeError('ReadableStream: invalid underlying source type ' + source.type);
+    }
+    var isBytes = source.type !== undefined;
+    var autoAlloc = source.autoAllocateChunkSize;
+    if (isBytes && autoAlloc !== undefined && !(Number(autoAlloc) > 0)) {
+        throw new TypeError('ReadableStream: autoAllocateChunkSize must be greater than 0');
+    }
     this._rs_state = 'readable';
     this._rs_error = undefined;
     this._rs_reader = null;
+    this._rs_bytes = isBytes;
     this._rs_cancel_fn = typeof source.cancel === 'function' ? source.cancel : null;
     this._rs_pull_fn = typeof source.pull === 'function' ? source.pull : null;
-    this._rs_ctrl = new ReadableStreamDefaultController(this);
+    this._rs_ctrl = isBytes
+        ? new ReadableByteStreamController(this, autoAlloc === undefined ? 0 : Number(autoAlloc))
+        : new ReadableStreamDefaultController(this);
     this._rs_started = false;
     this._rs_pulling = false;
     this._rs_pullAgain = false;
@@ -8294,9 +8313,18 @@ function ReadableStream(source, strategy) {
 Object.defineProperty(ReadableStream.prototype, 'locked', {
     get: function() { return this._rs_reader !== null; }
 });
-ReadableStream.prototype.getReader = function() {
+ReadableStream.prototype.getReader = function(options) {
+    var mode = (options === undefined || options === null) ? undefined : Object(options).mode;
+    if (mode !== undefined && String(mode) !== 'byob') {
+        throw new TypeError('ReadableStream.getReader: invalid mode ' + mode);
+    }
+    if (mode !== undefined && !this._rs_bytes) {
+        throw new TypeError('ReadableStream.getReader: mode byob requires a byte stream');
+    }
     if (this._rs_reader !== null) throw new TypeError('ReadableStream is already locked');
-    var reader = new ReadableStreamDefaultReader(this);
+    var reader = mode === undefined
+        ? new ReadableStreamDefaultReader(this)
+        : new ReadableStreamBYOBReader(this);
     this._rs_reader = reader;
     return reader;
 };
@@ -8320,21 +8348,106 @@ ReadableStream.prototype._rs_do_cancel = function(reason) {
     }
     return Promise.resolve(result).then(function() { return undefined; });
 };
+// Streams §3.2.6 «ReadableStreamTee». BUG-824: this used to copy the controller's
+// *current* queue into two independent stubs and close the source — so the source
+// reported `locked === false`, and everything it enqueued after the call went
+// nowhere. Both branches now share one reader on a source that stays locked and
+// readable, which is what makes `tee()` usable for its canonical purpose (reading
+// a response body twice).
 ReadableStream.prototype.tee = function() {
-    var chunks = this._rs_ctrl._queue.slice();
-    var alreadyClosed = this._rs_state !== 'readable' || this._rs_ctrl._closeRequested;
-    var self = this;
-    function makeClone(arr, closed) {
-        return new ReadableStream({
-            start: function(c) {
-                for (var i = 0; i < arr.length; i++) c.enqueue(arr[i]);
-                if (closed) c.close();
+    var reader = this.getReader();
+    var reading = false, readAgain = false;
+    var canceled1 = false, canceled2 = false, reason1, reason2;
+    var ctrl1 = null, ctrl2 = null;
+    var cancelD = _stream_deferred();
+    _stream_mark_handled(cancelD.promise);
+    function pullAlgorithm() {
+        // One read in flight for both branches: the second branch's demand is
+        // remembered rather than issuing a competing read.
+        if (reading) { readAgain = true; return Promise.resolve(undefined); }
+        reading = true;
+        return reader.read().then(function(res) {
+            reading = false;
+            if (res.done) {
+                if (!canceled1 && ctrl1) ctrl1.close();
+                if (!canceled2 && ctrl2) ctrl2.close();
+                return undefined;
             }
+            if (!canceled1 && ctrl1) ctrl1.enqueue(res.value);
+            if (!canceled2 && ctrl2) ctrl2.enqueue(res.value);
+            if (!readAgain) return undefined;
+            readAgain = false;
+            return pullAlgorithm();
+        }, function(e) {
+            reading = false;
+            if (ctrl1) ctrl1.error(e);
+            if (ctrl2) ctrl2.error(e);
+            return undefined;
         });
     }
-    _rs_do_close(self);
-    return [makeClone(chunks, alreadyClosed), makeClone(chunks, alreadyClosed)];
+    // §3.2.6 step 13: the source is cancelled only once *both* branches are, and
+    // with the two reasons aggregated — «canceling both branches should aggregate
+    // the cancel reasons» is the first subtest this used to hang on.
+    function finishCancel() {
+        cancelD.resolve(reader.cancel([reason1, reason2]));
+    }
+    function cancel1(reason) {
+        canceled1 = true;
+        reason1 = reason;
+        if (canceled2) finishCancel();
+        return cancelD.promise;
+    }
+    function cancel2(reason) {
+        canceled2 = true;
+        reason2 = reason;
+        if (canceled1) finishCancel();
+        return cancelD.promise;
+    }
+    var branch1 = new ReadableStream({
+        start: function(c) { ctrl1 = c; },
+        pull: pullAlgorithm,
+        cancel: cancel1
+    });
+    var branch2 = new ReadableStream({
+        start: function(c) { ctrl2 = c; },
+        pull: pullAlgorithm,
+        cancel: cancel2
+    });
+    return [branch1, branch2];
 };
+// Streams §3.2.6 «ReadableStream.prototype.values»/[@@asyncIterator] — the form
+// most modern code reads a stream in. Missing entirely before BUG-824, so
+// `for await (const c of stream)` threw «not async iterable».
+ReadableStream.prototype.values = function(options) {
+    var preventCancel = !!(options !== undefined && options !== null && Object(options).preventCancel);
+    var reader = this.getReader();
+    var iter = {};
+    iter.next = function() {
+        return reader.read().then(function(res) {
+            if (!res.done) return { value: res.value, done: false };
+            // §3.2.6: the lock is released on completion, not kept for good.
+            try { reader.releaseLock(); } catch (e) {}
+            return { value: undefined, done: true };
+        }, function(e) {
+            try { reader.releaseLock(); } catch (x) {}
+            throw e;
+        });
+    };
+    iter['return'] = function(value) {
+        if (preventCancel) {
+            try { reader.releaseLock(); } catch (e) {}
+            return Promise.resolve({ value: value, done: true });
+        }
+        var p = reader.cancel(value);
+        try { reader.releaseLock(); } catch (e) {}
+        return p.then(function() { return { value: value, done: true }; });
+    };
+    iter[Symbol.asyncIterator] = function() { return this; };
+    return iter;
+};
+Object.defineProperty(ReadableStream.prototype, Symbol.asyncIterator, {
+    value: ReadableStream.prototype.values, writable: true, configurable: true
+});
 ReadableStream.prototype.pipeTo = function(dest, options) {
     options = options || {};
     var preventClose = !!options.preventClose;
@@ -8396,9 +8509,28 @@ function ReadableStreamDefaultReader(stream) {
         _stream_mark_handled(this._closedD.promise);
     }
 }
-Object.defineProperty(ReadableStreamDefaultReader.prototype, 'closed', {
-    get: function() { return this._closedD.promise; }
-});
+// `closed`/`cancel`/`releaseLock` are identical for both reader flavours (§3.7,
+// §3.8 differ only in `read`), so they are installed from one place rather than
+// written out twice.
+function _rs_install_reader_common(proto) {
+    Object.defineProperty(proto, 'closed', {
+        get: function() { return this._closedD.promise; }
+    });
+    proto.cancel = function(reason) {
+        var stream = this._stream;
+        if (!stream) return Promise.reject(new TypeError('reader not attached'));
+        return stream._rs_do_cancel(reason);
+    };
+    proto.releaseLock = function() {
+        if (!this._stream) return;
+        if (this._readRequests.length > 0) throw new TypeError('pending read requests');
+        this._stream._rs_reader = null;
+        this._stream = null;
+        this._closedD.reject(new TypeError('reader released'));
+        _stream_mark_handled(this._closedD.promise);
+    };
+}
+_rs_install_reader_common(ReadableStreamDefaultReader.prototype);
 ReadableStreamDefaultReader.prototype.read = function() {
     var stream = this._stream;
     if (!stream) return Promise.reject(new TypeError('reader not attached to a stream'));
@@ -8420,18 +8552,200 @@ ReadableStreamDefaultReader.prototype.read = function() {
     _rs_pull_if_needed(stream);
     return p;
 };
-ReadableStreamDefaultReader.prototype.cancel = function(reason) {
+
+// ── ReadableByteStreamController §3.11 / BYOB reading §3.8, §3.9 ─────────────
+// A byte stream queues `Uint8Array`s and can answer a read straight into the
+// caller's own buffer. BUG-824: none of this existed — `type: 'bytes'` was
+// ignored and `getReader({mode:'byob'})` handed back a default reader, i.e. a
+// silent change of semantics rather than an error.
+//
+// One deliberate deviation: the spec transfers (detaches) the caller's buffer
+// and hands back a view over the transferred copy. `ArrayBuffer.prototype.transfer`
+// is not wired in this engine, so the same buffer is reused — a page that keeps
+// its own reference to the pre-read view still sees the bytes, where a spec
+// browser would have detached it.
+function ReadableByteStreamController(stream, autoAllocateChunkSize) {
+    this._stream = stream;
+    this._queue = [];
+    this._closeRequested = false;
+    this._autoAllocate = autoAllocateChunkSize || 0;
+    this._byobRequest = null;
+    this._autoView = null;
+    this.desiredSize = 1;
+}
+Object.defineProperty(ReadableByteStreamController.prototype, 'byobRequest', {
+    get: function() { return _rbs_byob_request(this); }
+});
+ReadableByteStreamController.prototype.enqueue = function(chunk) {
     var stream = this._stream;
-    if (!stream) return Promise.reject(new TypeError('reader not attached'));
-    return stream._rs_do_cancel(reason);
+    if (!stream || stream._rs_state !== 'readable') return;
+    if (!ArrayBuffer.isView(chunk)) {
+        throw new TypeError('ReadableByteStreamController.enqueue expects an ArrayBufferView');
+    }
+    if (chunk.byteLength > 0) {
+        this._queue.push(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+    }
+    this._byobRequest = null;
+    _rbs_drain(this);
 };
-ReadableStreamDefaultReader.prototype.releaseLock = function() {
-    if (!this._stream) return;
-    if (this._readRequests.length > 0) throw new TypeError('pending read requests');
-    this._stream._rs_reader = null;
-    this._stream = null;
-    this._closedD.reject(new TypeError('reader released'));
-    _stream_mark_handled(this._closedD.promise);
+ReadableByteStreamController.prototype.close = function() {
+    var stream = this._stream;
+    if (!stream || this._closeRequested || stream._rs_state !== 'readable') return;
+    this._closeRequested = true;
+    if (this._queue.length === 0) _rs_do_close(stream);
+};
+ReadableByteStreamController.prototype.error = function(e) {
+    var stream = this._stream;
+    if (!stream || stream._rs_state !== 'readable') return;
+    _rs_do_error(stream, e);
+};
+
+// A view of the caller's own class over `byteLength` bytes of its buffer — a
+// BYOB read must give back the same kind of view it was handed.
+function _rbs_same_kind(view, byteLength) {
+    var Ctor = view.constructor;
+    var per = view.BYTES_PER_ELEMENT || 1;
+    return new Ctor(view.buffer, view.byteOffset, Math.floor(byteLength / per));
+}
+// Copy as much of the queue as fits into `view`; a partially consumed head chunk
+// stays at the front. §3.11 responds as soon as one element is available rather
+// than waiting for the view to fill.
+function _rbs_fill(ctrl, view) {
+    var dest = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+    var written = 0;
+    while (written < dest.length && ctrl._queue.length > 0) {
+        var head = ctrl._queue[0];
+        var n = Math.min(head.length, dest.length - written);
+        dest.set(head.subarray(0, n), written);
+        written += n;
+        if (n === head.length) ctrl._queue.shift();
+        else ctrl._queue[0] = head.subarray(n);
+    }
+    return _rbs_same_kind(view, written);
+}
+// Hand queued bytes to the standing read requests, whichever reader flavour holds
+// the stream.
+function _rbs_drain(ctrl) {
+    var stream = ctrl._stream;
+    var reader = stream && stream._rs_reader;
+    if (!reader) return;
+    while (reader._readRequests.length > 0 && ctrl._queue.length > 0) {
+        var req = reader._readRequests.shift();
+        if (reader._byobViews) {
+            req({ value: _rbs_fill(ctrl, reader._byobViews.shift()), done: false }, undefined);
+        } else {
+            req({ value: ctrl._queue.shift(), done: false }, undefined);
+        }
+    }
+    if (stream._rs_state !== 'readable') return;
+    if (ctrl._closeRequested) {
+        if (ctrl._queue.length === 0) _rs_do_close(stream);
+        return;
+    }
+    if (reader._readRequests.length > 0) _rs_pull_if_needed(stream);
+}
+// §3.11 `byobRequest`: the buffer the source is invited to write into — either the
+// pending BYOB reader's own view, or one allocated from `autoAllocateChunkSize`
+// when a default reader is waiting.
+function _rbs_byob_request(ctrl) {
+    if (ctrl._byobRequest) return ctrl._byobRequest;
+    var stream = ctrl._stream;
+    var reader = stream && stream._rs_reader;
+    if (!reader || ctrl._queue.length > 0) return null;
+    var view = null;
+    if (reader._byobViews) {
+        if (reader._byobViews.length > 0) view = reader._byobViews[0];
+    } else if (ctrl._autoAllocate > 0 && reader._readRequests.length > 0) {
+        if (!ctrl._autoView) ctrl._autoView = new Uint8Array(ctrl._autoAllocate);
+        view = ctrl._autoView;
+    }
+    if (!view) return null;
+    ctrl._byobRequest = new ReadableStreamBYOBRequest(ctrl, view);
+    return ctrl._byobRequest;
+}
+function _rbs_respond(request, bytes) {
+    var ctrl = request._ctrl;
+    if (!ctrl || ctrl._byobRequest !== request) {
+        throw new TypeError('This BYOB request has already been responded to');
+    }
+    ctrl._byobRequest = null;
+    ctrl._autoView = null;
+    // The bytes may already live in the pending view's own buffer; queueing them
+    // and draining keeps one delivery path for both cases (the copy back into the
+    // same range is a no-op).
+    if (bytes.byteLength > 0) ctrl._queue.push(bytes);
+    _rbs_drain(ctrl);
+    if (bytes.byteLength === 0 && ctrl._closeRequested && ctrl._stream
+        && ctrl._stream._rs_state === 'readable') {
+        _rs_do_close(ctrl._stream);
+    }
+}
+
+// ── ReadableStreamBYOBRequest §3.10 ─────────────────────────────────────────
+function ReadableStreamBYOBRequest(ctrl, view) {
+    this._ctrl = ctrl;
+    this._view = view;
+}
+Object.defineProperty(ReadableStreamBYOBRequest.prototype, 'view', {
+    get: function() { return this._view; }
+});
+ReadableStreamBYOBRequest.prototype.respond = function(bytesWritten) {
+    var n = Number(bytesWritten);
+    if (!(n >= 0)) throw new TypeError('respond expects a non-negative byte count');
+    if (n > this._view.byteLength) throw new RangeError('respond: more bytes written than the view holds');
+    _rbs_respond(this, new Uint8Array(this._view.buffer, this._view.byteOffset, n));
+};
+ReadableStreamBYOBRequest.prototype.respondWithNewView = function(view) {
+    if (!ArrayBuffer.isView(view)) throw new TypeError('respondWithNewView expects an ArrayBufferView');
+    _rbs_respond(this, new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+};
+
+// ── ReadableStreamBYOBReader §3.8 ───────────────────────────────────────────
+function ReadableStreamBYOBReader(stream) {
+    this._stream = stream;
+    this._readRequests = [];
+    // Parallel to _readRequests: the view each pending read is to be filled into.
+    // Its presence is also what marks this reader as BYOB for the controller.
+    this._byobViews = [];
+    this._closedD = _stream_deferred();
+    if (stream._rs_state === 'closed') this._closedD.resolve(undefined);
+    else if (stream._rs_state === 'errored') {
+        this._closedD.reject(stream._rs_error);
+        _stream_mark_handled(this._closedD.promise);
+    }
+}
+_rs_install_reader_common(ReadableStreamBYOBReader.prototype);
+ReadableStreamBYOBReader.prototype.read = function(view) {
+    var stream = this._stream;
+    if (!stream) return Promise.reject(new TypeError('reader not attached to a stream'));
+    if (!ArrayBuffer.isView(view)) {
+        return Promise.reject(new TypeError('BYOB read expects an ArrayBufferView'));
+    }
+    if (view.byteLength === 0) {
+        return Promise.reject(new TypeError('BYOB read expects a view of non-zero length'));
+    }
+    if (stream._rs_state === 'errored') return Promise.reject(stream._rs_error);
+    var ctrl = stream._rs_ctrl;
+    if (ctrl._queue.length > 0) {
+        var filled = _rbs_fill(ctrl, view);
+        if (ctrl._closeRequested && ctrl._queue.length === 0) _rs_do_close(stream);
+        else _rs_pull_if_needed(stream);
+        return Promise.resolve({ value: filled, done: false });
+    }
+    if (stream._rs_state === 'closed') {
+        return Promise.resolve({ value: _rbs_same_kind(view, 0), done: true });
+    }
+    var self = this;
+    var p = new Promise(function(resolve, reject) {
+        self._readRequests.push(function(result, err) {
+            if (err !== undefined) { reject(err); return; }
+            if (result.done) { resolve({ value: _rbs_same_kind(view, 0), done: true }); return; }
+            resolve(result);
+        });
+        self._byobViews.push(view);
+    });
+    _rs_pull_if_needed(stream);
+    return p;
 };
 
 // ── WritableStream §4 ────────────────────────────────────────────────────────
@@ -9332,6 +9646,35 @@ function _rs_make_body_stream(bodyBytes, respRef) {
     return stream;
 }
 
+// Reads a ReadableStream to completion and joins it into one Uint8Array. Needed
+// because a Request/Response built over a stream body has no bytes to hand out
+// until the stream has been drained (BUG-824: `new Response(rs).arrayBuffer()`
+// used to resolve with zero bytes, because the constructor built a *fresh* empty
+// body stream and dropped the one it was given).
+function _rs_drain_to_bytes(stream) {
+    var reader = stream.getReader();
+    var chunks = [], total = 0;
+    function step() {
+        return reader.read().then(function(res) {
+            if (res.done) {
+                var out = new Uint8Array(total), off = 0;
+                for (var i = 0; i < chunks.length; i++) { out.set(chunks[i], off); off += chunks[i].length; }
+                return out;
+            }
+            // Fetch §2.2: a body stream yields BufferSource chunks; anything else
+            // is a TypeError rather than a silently dropped chunk.
+            if (!(res.value instanceof ArrayBuffer) && !ArrayBuffer.isView(res.value)) {
+                throw new TypeError('body stream yielded a chunk that is not a BufferSource');
+            }
+            var u = _csToU8(res.value);
+            chunks.push(u);
+            total += u.length;
+            return step();
+        });
+    }
+    return step();
+}
+
 // ── Body mixin, Response, Request (Fetch Standard §2.3-2.6) — BUG-370 ────────
 // Both interfaces share one closure because they share the Body mixin and,
 // like Headers (BUG-369), they are WebIDL interfaces rather than ES5
@@ -9402,14 +9745,16 @@ var Request;
         } else if (ArrayBuffer.isView(source)) {
             bytes = new Uint8Array(source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength));
         } else if (typeof source.getReader === 'function') {
-            // A ReadableStream body cannot be drained synchronously in Phase 0;
-            // it is still carried as `source` so fetch() can see what was passed.
-            bytes = new Uint8Array(0);
+            // Fetch §7.1: for a ReadableStream the body's stream IS the given
+            // stream. It cannot be drained synchronously, so the bytes stay unset
+            // and every consumer goes through _rs_drain_to_bytes instead
+            // (BUG-824: the shim used to substitute an empty body outright).
+            return { bytes: new Uint8Array(0), type: null, source: source, stream: source };
         } else {
             bytes = new TextEncoder().encode(String(source));
             type = 'text/plain;charset=UTF-8';
         }
-        return { bytes: bytes, type: type, source: source };
+        return { bytes: bytes, type: type, source: source, stream: null };
     }
 
     // Materialises the body bytes. `drain` frees the Rust stream slot; a peek
@@ -9448,6 +9793,9 @@ var Request;
         if (st.bodyUsed) return Promise.reject(new TypeError('body already consumed'));
         if (st.stream && st.stream.locked) return Promise.reject(new TypeError('body stream is locked'));
         st.bodyUsed = true;
+        // A body built from a page-supplied ReadableStream has no bytes until the
+        // stream is drained; readBytes() cannot see them (BUG-824).
+        if (st.streamSource) return _rs_drain_to_bytes(st.stream);
         return Promise.resolve(readBytes(st, true));
     }
 
@@ -9544,7 +9892,8 @@ var Request;
     function responseSlots(headers) {
         return { status: 200, statusText: '', headers: headers, redirected: false,
                  type: 'default', url: '', bodyUsed: false, bytes: new Uint8Array(0),
-                 source: null, stream: null, fromFetchCache: false, streamHandle: 0 };
+                 source: null, stream: null, streamSource: false,
+                 fromFetchCache: false, streamHandle: 0 };
     }
     // Wraps ready-made slots, bypassing the constructor's validation — error(),
     // redirect(), clone() and the network factory all produce states the public
@@ -9587,8 +9936,14 @@ var Request;
         }
         RSTATE.set(this, st);
         // A null body stays null (`new Response().body === null`); only a real
-        // body gets a ReadableStream.
-        if (extracted !== null) st.stream = _rs_make_body_stream(st.bytes, st);
+        // body gets a ReadableStream — and a body that *was* a stream keeps that
+        // very stream as `response.body` (BUG-824).
+        if (extracted !== null && extracted.stream !== null) {
+            st.stream = extracted.stream;
+            st.streamSource = true;
+        } else if (extracted !== null) {
+            st.stream = _rs_make_body_stream(st.bytes, st);
+        }
     };
     attr(Response.prototype, 'type', function() { return rstate(this).type; });
     attr(Response.prototype, 'url', function() { return rstate(this).url; });
@@ -9603,7 +9958,7 @@ var Request;
         if (st.bodyUsed || (st.stream && st.stream.locked)) {
             throw new TypeError('Failed to execute clone on Response: body is already used');
         }
-        var bytes = readBytes(st, false);
+        var bytes = st.streamSource ? new Uint8Array(0) : readBytes(st, false);
         // Fetch §2.6 «clone a response» copies the header list verbatim, so the
         // copy is built guard-free and locked afterwards — going through the
         // Response constructor would have the 'response' guard drop Set-Cookie.
@@ -9616,7 +9971,16 @@ var Request;
         copy.bytes = bytes;
         copy.source = st.source;
         var r = rawResponse(copy);
-        if (st.stream !== null) copy.stream = _rs_make_body_stream(bytes, copy);
+        if (st.streamSource) {
+            // Fetch §2.3 «clone a body»: tee the stream and give each side one
+            // branch. This is exactly what tee() could not do before BUG-824.
+            var branches = st.stream.tee();
+            st.stream = branches[0];
+            copy.stream = branches[1];
+            copy.streamSource = true;
+        } else if (st.stream !== null) {
+            copy.stream = _rs_make_body_stream(bytes, copy);
+        }
         return r;
     });
     Object.defineProperty(Response.prototype, Symbol.toStringTag, { value: 'Response', configurable: true });
@@ -9722,7 +10086,7 @@ var Request;
                  referrerPolicy: '', mode: 'cors', credentials: 'same-origin', cache: 'default',
                  redirect: 'follow', integrity: '', keepalive: false, signal: null,
                  bodyUsed: false, bytes: null, source: null, stream: null,
-                 fromFetchCache: false, streamHandle: 0 };
+                 streamSource: false, fromFetchCache: false, streamHandle: 0 };
     }
     // Only `input` is declared, so Request.length is 1 (WebIDL: `init` is optional).
     Request = function Request(input) {
@@ -9771,7 +10135,12 @@ var Request;
             st.bytes = new Uint8Array(0);
         }
         QSTATE.set(this, st);
-        if (extracted !== null) st.stream = _rs_make_body_stream(st.bytes, st);
+        if (extracted !== null && extracted.stream !== null) {
+            st.stream = extracted.stream;
+            st.streamSource = true;
+        } else if (extracted !== null) {
+            st.stream = _rs_make_body_stream(st.bytes, st);
+        }
     };
     attr(Request.prototype, 'url', function() { return qstate(this).url; });
     attr(Request.prototype, 'method', function() { return qstate(this).method; });
@@ -9798,7 +10167,7 @@ var Request;
         copy.mode = st.mode; copy.credentials = st.credentials; copy.cache = st.cache;
         copy.redirect = st.redirect; copy.integrity = st.integrity;
         copy.keepalive = st.keepalive; copy.signal = st.signal;
-        copy.bytes = readBytes(st, false);
+        copy.bytes = st.streamSource ? new Uint8Array(0) : readBytes(st, false);
         copy.source = st.source;
         // As in Response.clone: copy the header list verbatim (guard-free), then
         // lock the copy behind the same guard the original carried.
@@ -9806,7 +10175,14 @@ var Request;
             st.mode === 'no-cors' ? 'request-no-cors' : 'request');
         var q = Object.create(Request.prototype);
         QSTATE.set(q, copy);
-        if (st.stream !== null) copy.stream = _rs_make_body_stream(copy.bytes, copy);
+        if (st.streamSource) {
+            var branches = st.stream.tee();
+            st.stream = branches[0];
+            copy.stream = branches[1];
+            copy.streamSource = true;
+        } else if (st.stream !== null) {
+            copy.stream = _rs_make_body_stream(copy.bytes, copy);
+        }
         return q;
     });
     Object.defineProperty(Request.prototype, Symbol.toStringTag, { value: 'Request', configurable: true });
@@ -38715,6 +39091,233 @@ mod tests {
             ).unwrap();
             let r = rt.eval("out === 'closed-rejected'").unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── BUG-824: tee / BYOB / async iteration / a stream as a body ─────────
+        //
+        // Four surfaces that a test could only hang on, because each of them was
+        // either absent or silently substituted by something with different
+        // semantics. The fifth surface the bug listed — `TextDecoderStream` never
+        // closing its readable side — turned out to have been fixed as a side
+        // effect of BUG-823's writable-side rewrite; `text_decoder_stream_closes_
+        // its_readable_side` below is the guard that keeps it that way.
+
+        /// `tee()` used to snapshot the controller's queue into two stubs and close
+        /// the source, so the source reported `locked === false` and everything it
+        /// enqueued after the call went nowhere.
+        #[test]
+        fn readable_stream_tee_locks_source_and_forwards_later_chunks() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = [], ctrl = null; \
+                 var rs = new ReadableStream({ start: function(c) { ctrl = c; c.enqueue('early'); } }); \
+                 var pair = rs.tee(); \
+                 out.push('locked=' + rs.locked); \
+                 ctrl.enqueue('late'); \
+                 var r0 = pair[0].getReader(), r1 = pair[1].getReader(); \
+                 r0.read().then(function(r) { out.push('a0=' + r.value); return r0.read(); }) \
+                          .then(function(r) { out.push('a1=' + r.value); }); \
+                 r1.read().then(function(r) { out.push('b0=' + r.value); return r1.read(); }) \
+                          .then(function(r) { out.push('b1=' + r.value); });"
+            ).unwrap();
+            for _ in 0..8 {
+                rt.eval("0").unwrap();
+            }
+            let r = rt.eval("out.join(',')").unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("locked=true,a0=early,b0=early,a1=late,b1=late".into())
+            );
+        }
+
+        /// «canceling both branches should aggregate the cancel reasons» — the first
+        /// subtest of `readable-streams/tee.any.js` this used to hang on. One branch
+        /// cancelling must leave the source alone.
+        #[test]
+        fn readable_stream_tee_aggregates_cancel_reasons() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var seen = null, settled = 0; \
+                 var rs = new ReadableStream({ cancel: function(reason) { seen = reason; } }); \
+                 var pair = rs.tee(); \
+                 pair[0].cancel('a').then(function() { settled++; }); \
+                 var afterFirst = seen; \
+                 pair[1].cancel('b').then(function() { settled++; });"
+            ).unwrap();
+            let r = rt.eval(
+                "afterFirst === null && Array.isArray(seen) \
+                 && seen[0] === 'a' && seen[1] === 'b' && settled === 2"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// `type: 'bytes'` was ignored, so `getReader({mode:'byob'})` handed back a
+        /// default reader and a whole `Uint8Array` chunk — a silent change of
+        /// semantics rather than an error.
+        #[test]
+        fn readable_stream_byob_reader_fills_the_callers_view() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = []; \
+                 var bs = new ReadableStream({ type: 'bytes', \
+                   start: function(c) { c.enqueue(new Uint8Array([7, 8, 9])); c.close(); } }); \
+                 var r = bs.getReader({ mode: 'byob' }); \
+                 out.push('ctor=' + r.constructor.name); \
+                 r.read(new Uint8Array(2)) \
+                  .then(function(x) { out.push('one=' + Array.from(x.value) + '/' + x.done); return r.read(new Uint8Array(2)); }) \
+                  .then(function(x) { out.push('two=' + Array.from(x.value) + '/' + x.done); return r.read(new Uint8Array(2)); }) \
+                  .then(function(x) { out.push('end=' + x.value.length + '/' + x.done); });"
+            ).unwrap();
+            for _ in 0..8 {
+                rt.eval("0").unwrap();
+            }
+            let r = rt.eval("out.join(' ')").unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "ctor=ReadableStreamBYOBReader one=7,8/false two=9/false end=0/true".into()
+                )
+            );
+        }
+
+        /// The source side of BYOB: `controller.byobRequest` hands the source the
+        /// caller's own buffer, and `respond(n)` delivers exactly those bytes.
+        #[test]
+        fn readable_byte_stream_controller_exposes_byob_request() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = []; \
+                 var bs = new ReadableStream({ type: 'bytes', pull: function(c) { \
+                   var req = c.byobRequest; \
+                   if (!req) { out.push('no-request'); return; } \
+                   out.push('view=' + req.view.byteLength); \
+                   new Uint8Array(req.view.buffer, req.view.byteOffset, req.view.byteLength)[0] = 42; \
+                   req.respond(1); \
+                 } }); \
+                 var r = bs.getReader({ mode: 'byob' }); \
+                 r.read(new Uint8Array(4)).then(function(x) { out.push('got=' + Array.from(x.value)); });"
+            ).unwrap();
+            let r = rt.eval(
+                "out.indexOf('view=4') >= 0 && out.indexOf('got=42') >= 0"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A `byob` reader on a stream that is not a byte stream is an error, not a
+        /// quiet downgrade; so is an unknown `type`.
+        #[test]
+        fn readable_stream_byob_mode_requires_a_byte_stream() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var threwMode = false, threwType = false; \
+                 try { new ReadableStream().getReader({ mode: 'byob' }); } catch (e) { threwMode = e instanceof TypeError; } \
+                 try { new ReadableStream({ type: 'chars' }); } catch (e) { threwType = e instanceof TypeError; } \
+                 threwMode && threwType"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// `for await (const chunk of stream)` — the most common way modern code
+        /// reads a stream — used to throw «rs is not async iterable».
+        #[test]
+        fn readable_stream_async_iteration_yields_every_chunk() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = ''; \
+                 (async function() { \
+                    var acc = []; \
+                    for await (var c of ReadableStream.from(['a', 'b', 'c'])) acc.push(c); \
+                    out = acc.join(''); \
+                  })();"
+            ).unwrap();
+            let r = rt.eval("out").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("abc".into()));
+        }
+
+        /// Leaving the loop early runs the iterator's `return()`, which cancels the
+        /// stream and releases the lock — otherwise the stream would stay locked for
+        /// good.
+        #[test]
+        fn readable_stream_async_iteration_break_cancels_the_stream() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var cancelled = null, locked = null; \
+                 var rs = new ReadableStream({ \
+                   start: function(c) { c.enqueue(1); c.enqueue(2); }, \
+                   cancel: function(reason) { cancelled = reason === undefined ? 'yes' : reason; } \
+                 }); \
+                 (async function() { \
+                    for await (var c of rs) break; \
+                    locked = rs.locked; \
+                  })();"
+            ).unwrap();
+            let r = rt.eval("cancelled === 'yes' && locked === false").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A `Response`/`Request` built over a ReadableStream used to substitute an
+        /// empty body: the constructor built a *fresh* stream and dropped the one it
+        /// was handed, so `arrayBuffer()` resolved with zero bytes.
+        #[test]
+        fn response_over_a_stream_body_keeps_its_bytes() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = ''; \
+                 var rs = new ReadableStream({ start: function(c) { \
+                   c.enqueue(new Uint8Array([1, 2, 3])); c.enqueue(new Uint8Array([4])); c.close(); } }); \
+                 var resp = new Response(rs); \
+                 var sameStream = resp.body === rs; \
+                 resp.arrayBuffer().then(function(b) { \
+                   out = sameStream + ':' + Array.from(new Uint8Array(b)).join(','); });"
+            ).unwrap();
+            for _ in 0..8 {
+                rt.eval("0").unwrap();
+            }
+            let r = rt.eval("out").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("true:1,2,3,4".into()));
+        }
+
+        /// Fetch §2.3 «clone a body» tees the stream — the canonical reason to want
+        /// a working `tee()` in the first place (cache + parse from one response).
+        #[test]
+        fn response_clone_over_a_stream_body_tees_it() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var a = '', b = ''; \
+                 var rs = new ReadableStream({ start: function(c) { \
+                   c.enqueue(new Uint8Array([9, 9])); c.close(); } }); \
+                 var first = new Response(rs); \
+                 var second = first.clone(); \
+                 first.text().then(function(t) { a = String(t.length); }); \
+                 second.arrayBuffer().then(function(x) { b = Array.from(new Uint8Array(x)).join(','); });"
+            ).unwrap();
+            for _ in 0..8 {
+                rt.eval("0").unwrap();
+            }
+            let r = rt.eval("a + '|' + b").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("2|9,9".into()));
+        }
+
+        /// Regression guard for the fifth surface BUG-824 listed: closing the
+        /// writable side of a `TextDecoderStream` must reach its readable side, or
+        /// `readableStreamToArray` — the helper the whole `encoding/streams`
+        /// category is built on — never sees `done`.
+        #[test]
+        fn text_decoder_stream_closes_its_readable_side() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = []; \
+                 var tds = new TextDecoderStream(); \
+                 var w = tds.writable.getWriter(), r = tds.readable.getReader(); \
+                 w.write(new Uint8Array([104, 105])); w.close(); \
+                 r.read().then(function(x) { out.push(x.value + '/' + x.done); return r.read(); }) \
+                         .then(function(x) { out.push(x.value + '/' + x.done); });"
+            ).unwrap();
+            for _ in 0..8 {
+                rt.eval("0").unwrap();
+            }
+            let r = rt.eval("out.join(' ')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("hi/false undefined/true".into()));
         }
 
         #[test]
