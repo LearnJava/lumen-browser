@@ -68,7 +68,7 @@ subtest failures:
   access" subtest), `storage_string_conversion.window.js`, the `"in
   storage"` assertions in `storage_removeitem.window.js`, and all of
   `symbol-props.window.js`.
-- **[BUG-774](../../bugs/BUG-774-OPEN.md)** —
+- **[BUG-774](../../bugs/BUG-774-FIXED.md)** —
   `StorageEvent.prototype.initStorageEvent` (`dom.rs:636`) assigns its
   eight arguments as-is, with no WebIDL string coercion for `type`/`url`
   and no default-value substitution (`null`) for an omitted/`undefined`
@@ -121,7 +121,7 @@ venv/переустановка). Патч применён заново (тот
 объясняют основную массу провалов: [BUG-773](../bugs/BUG-773-FIXED.md)
 (`Storage` — не «legacy platform object» спеки, property-style
 доступ/`for-in`/`in`/`delete` идут мимо нативного бэкенда, два несвязанных
-слоя данных на одном объекте) и [BUG-774](../bugs/BUG-774-OPEN.md)
+слоя данных на одном объекте) и [BUG-774](../bugs/BUG-774-FIXED.md)
 (`initStorageEvent` без WebIDL-коэрсии/дефолтов). Остальное — уже
 заведённый [BUG-480](../bugs/BUG-480-OPEN.md) (`<iframe>` без browsing
 context, весь кластер `event_*.html`/`document-domain.html`) и
