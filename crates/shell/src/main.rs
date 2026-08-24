@@ -7008,7 +7008,10 @@ fn render_bytes(
 /// `seen` — набор уже отправленных URL (cross-call дедупликация); caller
 /// передаёт `&mut HashSet::new()` для одноразового вызова или persistent-сет
 /// для дедупа между streaming-сканом и финальным pipeline.
-/// В Phase 0 sink логирует в stderr; в будущем запустит fetch через HttpClient.
+/// Sink логирует хинт в stderr. Сам fetch по хинту делает JS-шим на элементе
+/// `<link>` (BUG-826) — там же, где живут его события `load`/`error`; здесь
+/// сетевого запроса по-прежнему нет, поэтому строка лога говорит «хинт найден»,
+/// а не «ресурс запрошен».
 fn dispatch_preload_hints(
     hints: &[lumen_html_parser::PreloadHint],
     base: &ResourceBase,
@@ -7043,6 +7046,13 @@ fn dispatch_preload_hints(
                 };
                 (base.resolve_str(url), kind)
             }
+            // BUG-826: остальные два вида author-хинта. Реальный fetch и
+            // события `load`/`error` для них делает JS-шим на самом элементе
+            // (`_lumen_link_hint_prepare`), здесь — только строка сетевого лога.
+            PreloadHint::ModulePreload { url } =>
+                (base.resolve_str(url), SubresourceKind::Script),
+            PreloadHint::Prefetch { url } =>
+                (base.resolve_str(url), SubresourceKind::Other { as_kind: Some("prefetch".into()) }),
             // Preconnect URL — origin, не содержит path — резолвинг тривиален.
             PreloadHint::Preconnect { url, dns_only } =>
                 (base.resolve_str(url), SubresourceKind::Preconnect { dns_only: *dns_only }),

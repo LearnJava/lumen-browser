@@ -22,7 +22,7 @@ navigator.sendBeacon(abs, new Uint8Array([1,2,3]));     // true, тело пус
 `tests/wpt/verify_focus_mutation_animation_gaps.py --variant beacon`
 (2026-08-23, dev-release, Linux, `main` = `530d0a444`, `--seconds 5`).
 Свидетельство — запись запросов **на стороне сервера пробы**, не в браузере
-(лог браузера здесь не доказательство, [BUG-826](BUG-826-OPEN.md)):
+(лог браузера здесь не доказательство, [BUG-826](BUG-826-FIXED.md)):
 
 | вызов | `sendBeacon` вернул | сервер увидел |
 |---|---|---|

@@ -43,7 +43,7 @@ dyn-json {"vcsi":42}
 `the-script-element/css-module/*` (`charset-bom`, `charset`, `charset-2`,
 `relative-urls`, `import-css-module-basic`, `content-type-checking`) и три
 `text-module/*` (`charset`, `charset-2`, `module`). Четыре из девяти до этого
-среза числились за `resource-no-load-event` ([BUG-826](BUG-826-OPEN.md)), а
+среза числились за `resource-no-load-event` ([BUG-826](BUG-826-FIXED.md)), а
 один — за [BUG-480](BUG-480-OPEN.md): в файлах есть и `<script>`, и `<iframe>`,
 но движок печатает свою причину раньше любого ожидания.
 

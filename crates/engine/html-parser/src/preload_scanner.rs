@@ -11,6 +11,10 @@
 //!
 //! * `<link rel="stylesheet" href="...">` — внешний CSS;
 //! * `<link rel="preload" href="..." as="...">` — author-явный hint;
+//! * `<link rel="modulepreload" href="...">` и `<link rel="prefetch" href="...">`
+//!   — остальные два вида author-хинтов (BUG-826: до этого оба токена не
+//!   попадали ни в один вариант `match`, поэтому для них не было даже строки
+//!   в сетевом логе);
 //! * `<link rel="preconnect|dns-prefetch" href="...">` — connection-уровневые
 //!   подсказки, эмитим как `Preconnect { url }` (тип = только origin, но
 //!   мы не парсим URL — это работа shell);
@@ -94,6 +98,13 @@ pub enum PreloadHint {
         url: String,
         as_kind: Option<String>,
     },
+    /// `<link rel="modulepreload" href="...">`. `as` спекой ограничен
+    /// script-подобными destination-ами, поэтому здесь не хранится: caller
+    /// (JS-шим) перечитывает атрибут с самого элемента.
+    ModulePreload { url: String },
+    /// `<link rel="prefetch" href="...">` — ресурс для будущей навигации.
+    /// Destination-агностичен: `as`/`type` его не фильтруют.
+    Prefetch { url: String },
     /// `<link rel="preconnect">` / `rel="dns-prefetch"`. URL — это origin
     /// (по spec — `href`, обычно `https://cdn.example/`). Caller-у этого
     /// достаточно, чтобы открыть TCP/TLS-сокет / резолвить DNS заранее.
@@ -153,6 +164,12 @@ fn collect_link_hints(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
                     .as_ref()
                     .filter(|s| !s.is_empty())
                     .cloned(),
+            }),
+            "modulepreload" => out.push(PreloadHint::ModulePreload {
+                url: href.to_string(),
+            }),
+            "prefetch" => out.push(PreloadHint::Prefetch {
+                url: href.to_string(),
             }),
             "preconnect" => out.push(PreloadHint::Preconnect {
                 url: href.to_string(),
@@ -433,6 +450,22 @@ mod tests {
                     url: "hero.css".into(),
                     media: None,
                 },
+            ]
+        );
+    }
+
+    #[test]
+    fn link_modulepreload_and_prefetch() {
+        // BUG-826: оба токена сканер раньше не знал вовсе.
+        let hints = scan_preload_hints(
+            r#"<link rel="modulepreload" href="mod.js">
+               <link rel="prefetch" href="/next.html">"#,
+        );
+        assert_eq!(
+            hints,
+            vec![
+                PreloadHint::ModulePreload { url: "mod.js".into() },
+                PreloadHint::Prefetch { url: "/next.html".into() },
             ]
         );
     }
