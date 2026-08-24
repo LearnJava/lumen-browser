@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WPT-RUN-5 slice 30: what does [BUG-796](../../bugs/BUG-796-OPEN.md) cost the number?
+"""WPT-RUN-5 slice 30: what does [BUG-796](../../bugs/BUG-796-FIXED.md) cost the number?
 
 Slice 29 found the defect and bounded its *reach*: `meta.content` answers
 `undefined` in our engine (a template getter on the element wrapper shadows the

@@ -9,7 +9,7 @@ manifest ids (10.6 % of the corpus) carry no document at all** — 0 harness OK 
 
 Reach is not price. Slices 30 and 31 measured that difference twice and both
 times the price was two orders of magnitude below the reach ([BUG-796](
-../../bugs/BUG-796-OPEN.md): 10.1 % of the corpus blocked, +0.10 pass-rate points
+../../bugs/BUG-796-FIXED.md): 10.1 % of the corpus blocked, +0.10 pass-rate points
 once unblocked). An id that never gets its document costs the figure only what it
 *would have scored* with the document, and nothing so far has asked those 7 190
 ids that question — they have never once run with a body.

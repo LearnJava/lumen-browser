@@ -1505,6 +1505,14 @@ the time — read dates.
   content attribute (HTML LS §4.10.5.5 dirty-value flag), and an own property shadows the prototype —
   so adding a `value`/`checked` row to the reflection table would be dead code. Everything else belongs
   in the table (`_LUMEN_*` entries near `_lumen_install_reflection`), never as a new own property.
+  **The shadowing survived BUG-849 — `_LUMEN_WRAPPER_MEMBERS` is no longer per-node, but the shared
+  prototype it is installed on sits one link BELOW the interface prototype, so it still outranks every
+  reflection row and every hand-written `HTML*Element.prototype` accessor.** That is deliberate for the
+  genuinely cross-element members it holds, and a trap for anything tag-specific: `content` lived there
+  as a `<template>`-only getter answering `undefined` on everything else, and thereby swallowed
+  `HTMLMetaElement.content` for two months ([BUG-796](../bugs/BUG-796-FIXED.md)) — `testharness.js`
+  reads exactly that property to pick its own timeout. A member that belongs to one interface goes on
+  that interface's prototype; the shared table is for what every element really has.
 - **DOM shim: `Object.defineProperty` that *redefines* an existing property inherits every attribute
   the new descriptor omits — the `false` defaults only apply to brand-new properties (BUG-367).** The
   shim's usual lock-down idiom, copied from `_lumen_make_doctype` (`{ value: nid, enumerable: false }`),

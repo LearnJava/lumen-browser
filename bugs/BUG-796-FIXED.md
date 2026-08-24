@@ -197,3 +197,68 @@ TIMEOUT с измеримой длительностью): из 3 558 TIMEOUT-id
 Ранее [BUG-869](BUG-869-OPEN.md) числил их за собой; там это исправлено.
 В `tests/wpt/timeout_audit.py` механизм называется
 `harness-long-timeout-ignored`.
+
+## Починено 2026-08-24 (P1, ветка `p1-bug796-meta-content`)
+
+**Статус:** FIXED.
+
+Геттер `content` перенесён из общей таблицы членов обёртки
+(`_LUMEN_WRAPPER_MEMBERS`, `crates/js/src/dom.rs`) на
+`HTMLTemplateElement.prototype` — туда, где его место по IDL. С момента
+[BUG-849](BUG-849-FIXED.md) эта таблица ставится не на каждый узел, а на общий
+прототип-на-интерфейс, который стоит **ниже** интерфейсного прототипа, поэтому
+затенение сохранялось ровно в прежнем виде: собственного свойства на элементе
+уже не было, но `HTMLMetaElement.prototype`'s `content` всё равно проигрывал.
+Прототип для тега `TEMPLATE` раздаёт `_lumen_element_prototype_for`, так что
+после переноса дотянуться до геттера может только обёртка `<template>`.
+
+Заодно закрыт `[SameObject]`: узел фрагмента был стабилен со времён BUG-368, а
+вот **обёртка** создавалась заново на каждое чтение
+(`_lumen_make_document_fragment` — литерал без интернирования), поэтому
+`t.content !== t.content` и экспандо на фрагменте терялось между обращениями.
+Обёртка теперь кэшируется на обёртке элемента, а та интернирована по nid
+(BUG-291).
+
+**Побочное найденное этим багом исправлено в другую сторону, чем предлагалось.**
+`HTMLMetaElement.charset` добавлять было бы неправильно: IDL-атрибута `charset`
+у этого интерфейса нет вовсе — сверено с вендоренным
+`tests/wpt/interfaces/html.idl:234-243`, где перечислены `name`/`httpEquiv`/
+`content`/`media`, а в устаревшем partial (`:3043`) — `scheme`. Добавлен
+`scheme`; `charset` остаётся контентным атрибутом без рефлексии, как в спеке.
+
+### Замер
+
+Проба из «Как проверить фикс», `--dump-layout`, сборка `dev-release` ветки:
+
+```
+M0NAME=timeout M0CONTENT=long M0ATTR=long M1HE=refresh M1CONTENT=5
+TFRAG=true TKIDS=1 TSAMEID=true TSAMEOBJ=true DIVHAS=false
+```
+
+До фикса `M0CONTENT=undefined` и `TSAMEOBJ=false`. `DIVHAS=false` —
+`'content' in div` больше не истинно, то есть шаблонный член ушёл со всех
+прочих элементов.
+
+Юнит-тесты (`crates/js/src/dom.rs`, `cargo test -p lumen-js --features
+v8-backend`): `content_is_a_template_member_only`,
+`meta_content_reflects_its_attribute`,
+`meta_content_is_writable_through_the_idl_attribute`,
+`template_content_is_the_same_wrapper_object` — плюс четыре прежних
+`template_content_*`/`template_inner_html_*`, оставшихся зелёными.
+
+WPT, A/B на одной машине одним и тем же прогоном (`run_report.py --all --root
+… --recursive`), арм «до» — та же ветка с `git stash` правки:
+
+| Категория | до | после | время до | время после |
+|---|---|---|---|---|
+| `html/semantics/scripting-1/the-template-element` (24 id) | 22/24 harness, 447/660 сабтестов | 22/24, 447/660 | 0:23.1 | 0:24.0 |
+| `html/semantics/document-metadata` (109 id) | 74/109 harness, 85/394 сабтестов | 74/109, 85/394 | 6:12.8 | 16:14.1 |
+
+То есть регрессии нет и прироста нет — ровно то, что предсказал срез 30
+(«восстановились два id и оба на нулевой балл»), — а **обратная сторона видна
+прямо здесь**: та же категория с теми же результатами стала стоить в 2.6 раза
+дороже, потому что висящие `timeout: long`-тесты теперь висят по правильным
+60 с вместо 10. На `the-template-element` разницы нет: там `long`-тестов
+попросту нет. Ожидаемое подорожание полного корпуса — +42.8 ч тестового
+времени (замер среза 30, см. выше); плоский `--shard-timeout-per-id` после
+этого коммита применять нельзя.
