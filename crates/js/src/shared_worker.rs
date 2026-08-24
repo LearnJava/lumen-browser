@@ -322,26 +322,10 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
     }
   };
 
-  // Minimal setTimeout stub: callbacks flushed between Rust dispatches.
-  var _timerQueue = [];
-  var _nextTimerId = 1;
-  globalThis.setTimeout = function(fn, _delay) {
-    var id = _nextTimerId++;
-    _timerQueue.push({ id: id, fn: fn });
-    return id;
-  };
-  globalThis.clearTimeout = function(id) {
-    _timerQueue = _timerQueue.filter(function(t) { return t.id !== id; });
-  };
-  globalThis.setInterval = globalThis.setTimeout;
-  globalThis.clearInterval = globalThis.clearTimeout;
-  globalThis.queueMicrotask = function(fn) { _timerQueue.unshift({ id: _nextTimerId++, fn: fn }); };
-  globalThis._lumen_flush_timers = function() {
-    var pending = _timerQueue.splice(0);
-    for (var i = 0; i < pending.length; i++) {
-      try { pending[i].fn(); } catch(e) { _lumen_sw_report_exception(e); }
-    }
-  };
+  // Timers come from the shim shared with the dedicated-worker scope
+  // (`crate::worker::WORKER_TIMERS_SHIM`, evaluated as its own IIFE right
+  // after this one) — deadline-ordered and driven by this thread's own wait
+  // rather than only by an incoming port message (BUG-815).
 
   // Exposed so the shared net shim (`crate::worker::WORKER_NET_SHIM`,
   // evaluated as a separate IIFE right after this one) routes a throwing
@@ -353,7 +337,13 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   // (BUG-778): discard further queued tasks, including a not-yet-delivered
   // `connect`. `_lumen_worker_self_close` flips the shared flag
   // `run_shared_worker_thread_v8`'s message loop polls.
-  globalThis.close = function() { _lumen_worker_self_close(); };
+  // `_lumen_worker_closed` is the JS-visible half of the same flag, read by
+  // `WORKER_TIMERS_SHIM`'s task loop so a `close()` from inside a timer stops
+  // the remaining due timers of that very flush (BUG-815).
+  globalThis.close = function() {
+    globalThis._lumen_worker_closed = true;
+    _lumen_worker_self_close();
+  };
 })();
 "#;
 
@@ -822,8 +812,30 @@ fn run_shared_worker_thread_v8(
     // BUG-778 "close a worker": discard further queued tasks (including a
     // connect from a fresh client) once `self.close()` ran, same shape as
     // `worker.rs::run_worker_thread_v8`'s dedicated-worker loop.
-    while !close_flag.load(Ordering::Relaxed) {
-        let Ok(msg) = rx.recv() else { break };
+    //
+    // BUG-815: like the dedicated worker's loop, the wait is bounded by this
+    // scope's own next timer deadline instead of being an unconditional
+    // `recv()` — a shared worker whose clients stay quiet still has to run its
+    // timers, and the top-level script's are due before the first `connect`.
+    loop {
+        if close_flag.load(Ordering::Relaxed) {
+            break;
+        }
+        let wait = crate::worker::run_worker_tasks(&rt);
+        if close_flag.load(Ordering::Relaxed) {
+            break;
+        }
+        let msg = match wait {
+            Some(d) => match rx.recv_timeout(d) {
+                Ok(m) => m,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            },
+            None => match rx.recv() {
+                Ok(m) => m,
+                Err(_) => break,
+            },
+        };
         match msg {
             SwInMsg::Connect { port_id, outbox, errors } => {
                 ports.lock().unwrap().insert(port_id, outbox);
@@ -897,7 +909,8 @@ fn broadcast_shared_worker_error(
 /// sets the `_lumen_worker_base_url` (BUG-778) and `_lumen_worker_location_url`
 /// (BUG-776) globals, both derived from `script_url`, plus
 /// `_lumen_worker_is_module` (BUG-777, gates `importScripts`), and evaluates
-/// [`SHARED_WORKER_GLOBAL_SHIM`] followed by [`crate::worker::WORKER_NET_SHIM`].
+/// [`SHARED_WORKER_GLOBAL_SHIM`] followed by
+/// [`crate::worker::WORKER_TIMERS_SHIM`] and [`crate::worker::WORKER_NET_SHIM`].
 ///
 /// `importScripts('blob:lumen/…')` is not supported here (`None` is passed as
 /// the blob store — always empty): unlike a dedicated [`crate::worker`], a
@@ -1007,6 +1020,7 @@ fn install_shared_worker_globals_v8(
     )?;
 
     rt.eval(SHARED_WORKER_GLOBAL_SHIM)?;
+    rt.eval(crate::worker::WORKER_TIMERS_SHIM)?;   // BUG-815
     rt.eval(crate::worker::WORKER_NET_SHIM)?;
     Ok(())
 }
@@ -1067,6 +1081,42 @@ mod tests_v8 {
             "Object.getPrototypeOf(Performance.prototype) === EventTarget.prototype",
         ] {
             assert_eq!(rt.eval(expr).unwrap(), JsValue::Bool(true), "{expr}");
+        }
+    }
+
+    /// [BUG-815] The shared scope gets the same deadline-ordered timers the
+    /// dedicated one does — a separate assertion because it evaluates its own
+    /// flavour shim, and its half of the bug (`shared_worker.rs:207,512,523`)
+    /// was the same stub duplicated rather than the same code. The behaviour
+    /// tests live next to the shim in `worker.rs`; what matters here is that
+    /// this scope is wired to it and that its loop's steering value is right —
+    /// a shared worker whose clients stay quiet still has to tick.
+    #[test]
+    fn shared_worker_scope_timers_are_driven_by_the_task_loop() {
+        let rt = V8JsRuntime::new().unwrap();
+        let ports = Arc::new(Mutex::new(HashMap::new()));
+        let error_ports = Arc::new(Mutex::new(HashMap::new()));
+        install_shared_worker_globals_v8(
+            &rt,
+            ports,
+            error_ports,
+            None,
+            "http://example.test/sw.js",
+            false,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        assert!(crate::worker::run_worker_tasks(&rt).is_none());
+        rt.eval("var n = 0; setInterval(function() { n++; }, 5);").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let wait = crate::worker::run_worker_tasks(&rt);
+            if as_num(&rt.eval("n").unwrap()) >= 3.0 {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "interval never repeated");
+            let d = wait.expect("a live interval must bound the wait");
+            std::thread::sleep(d.min(std::time::Duration::from_millis(20)));
         }
     }
 
