@@ -52,7 +52,9 @@ session).
 Two confirmed, filed root causes account for the large majority of
 subtest failures:
 
-- **[BUG-773](../../bugs/BUG-773-OPEN.md)** — `localStorage`/`sessionStorage`
+- **[BUG-773](../../bugs/BUG-773-FIXED.md)** — **fixed 2026-08-24 (P1);
+  described below as it stood when the category was vendored.**
+  `localStorage`/`sessionStorage`
   are plain JS objects (`_lumen_make_storage`, `dom.rs:9055`), not a
   `Proxy`-backed "legacy platform object" per HTML §8. Property-style access
   (`storage.foo = 'x'`), `for-in`/`Object.keys`, and the `in`/`delete`
@@ -110,8 +112,13 @@ venv/переустановка). Патч применён заново (тот
 `ssl.SSLContext`), локально, не в репозитории.
 
 `run_report.py --all --root webstorage --recursive` — ~7 мин 40 с,
-**24/54 harness OK, 63/1270 сабтестов**. Два подтверждённых корня
-объясняют основную массу провалов: [BUG-773](../bugs/BUG-773-OPEN.md)
+**24/54 harness OK, 63/1270 сабтестов**. Повторный прогон 2026-08-24, после
+закрытия BUG-773 (P1): **25/54 harness OK, 1229/1277 сабтестов** — знаменатель
+вырос, потому что файлы, падавшие на первом же утверждении, теперь
+досчитывают свои наборы. Остаток — BUG-480, BUG-774 и новый
+[BUG-901](../bugs/BUG-901-OPEN.md) (одиночный суррогат → `U+FFFD` на границе
+с нативом, `storage_setitem.window.js`, 12 сабтестов). Два подтверждённых корня
+объясняют основную массу провалов: [BUG-773](../bugs/BUG-773-FIXED.md)
 (`Storage` — не «legacy platform object» спеки, property-style
 доступ/`for-in`/`in`/`delete` идут мимо нативного бэкенда, два несвязанных
 слоя данных на одном объекте) и [BUG-774](../bugs/BUG-774-OPEN.md)

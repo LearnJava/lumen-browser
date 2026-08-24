@@ -1,8 +1,9 @@
 # BUG-773 — `localStorage`/`sessionStorage` не реализуют «legacy platform object»: property-style доступ, `for-in`/`Object.keys`, `in`/`delete` не проходят через нативный бэкенд
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-24
 **Компонент:** js (`crates/js/src/dom.rs::_lumen_make_storage`, ~строка 9055; нативные биндинги `crates/js/src/v8_runtime.rs`, ~строки 3519-3569)
 **Найден:** P2, WPT-VENDOR-webstorage, 2026-08-18 — `run_report.py --all --root webstorage --recursive`
+**Исправлен:** P1, 2026-08-24
 
 ## Симптом
 
@@ -97,6 +98,95 @@ interceptor — см. как уже сделано для `Element`/`Node` в д
 глобальный конструктор/интерфейсный объект `window.Storage`. Тот же паттерн
 уже применялся при переносе других WebIDL-шимов с «плоского объекта» на
 настоящий интерфейс — см. [BUG-367](../bugs/BUG-367-FIXED.md).
+
+## Как исправлено (P1, 2026-08-24)
+
+`_lumen_make_storage` больше не строит плоский объект. Появился настоящий
+интерфейс `Storage` (глобальный конструктор, бросающий `TypeError: Illegal
+constructor`) с общим прототипом, а сам объект хранилища — `Proxy` над пустым
+объектом, чей `[[Prototype]]` — этот прототип.
+
+**Что где живёт**
+
+- `Storage.prototype` — `key`/`getItem`/`setItem`/`removeItem`/`clear` и
+  аксессор `length`. По WebIDL члены прототипа интерфейса —
+  writable + enumerable + configurable, поэтому обычное присваивание даёт ровно
+  нужную форму, а `Object.keys(storage)` их не видит: они не собственные.
+  Добавлен `Symbol.toStringTag` = `'Storage'`.
+- Привязка «объект → нативные функции бэкенда» — **`WeakMap`**
+  (`_lumen_storage_impl`), а не поле на объекте. Любое собственное свойство было
+  бы, во-первых, видно странице, во-вторых — **затеняло бы ключ хранилища с тем
+  же именем** (см. правило видимости ниже). Методы достают набор через
+  `_lumen_storage_of(this)`, вызов на чужом получателе даёт
+  `TypeError: Illegal invocation`.
+- Ловушки `Proxy`: `get`/`set`/`has`/`deleteProperty`/`getOwnPropertyDescriptor`
+  /`defineProperty`/`ownKeys` плюс `preventExtensions`→`false` и
+  `setPrototypeOf` в семантике SetImmutablePrototype.
+
+**Три правила спеки, которые легко перепутать местами**
+
+1. **Видимость именованного свойства.** У `Storage` нет
+   `[LegacyOverrideBuiltIns]`, поэтому имя, на которое уже отвечает сам объект
+   или что-либо в цепочке прототипов, **скрывает** одноимённый ключ хранилища
+   при *чтении*. Это то, что оставляет `storage.length` и `storage.clear`
+   членами интерфейса после `setItem('length', …)`
+   (`storage_functions_not_overwritten.window.js`). В коде — предикат
+   `visible(prop)`: `typeof prop === 'string' && !Reflect.has(target, prop) &&
+   getItem(prop) !== undefined`.
+2. **Именованный сеттер затенению не подчиняется.** `storage[k] = v` уходит в
+   `setItem` для любого строкового имени, даже если прототип отвечает на `k`.
+   `set.window.js` прямо проверяет, что одноимённый сеттер на прототипе
+   **не вызывается** (`unreached_func`), а `getItem(k)` после присваивания
+   возвращает новое значение, тогда как `storage[k]` по-прежнему читает
+   прототип. Симметрии между `get` и `set` здесь нет.
+3. **`Object.defineProperty` — третье написание того же сеттера.** Для строкового
+   имени принимается только data-дескриптор (иначе `false` → `TypeError`), и он
+   уходит в `setItem(prop, String(desc.value))` (`defineProperty.window.js`).
+
+**Границы, о которых стоит знать**
+
+- Символьные ключи через хуки именованных свойств **не** проходят — WebIDL
+  маршрутизирует только строки, поэтому символ остаётся обычным собственным
+  свойством цели (`symbol-props.window.js`).
+- `ownKeys` возвращает ключи хранилища **плюс** `Reflect.ownKeys(target)`:
+  инвариант `Proxy` требует, чтобы в списке были все неконфигурируемые
+  собственные свойства цели, а страница может создать такое символьное свойство
+  через `Object.defineProperty`.
+- `Object.defineProperty(storage, 'k', { value: 'v', configurable: false })`
+  через `Proxy` невыразимо: проверка инварианта отвергает неконфигурируемый
+  дескриптор для имени, не являющегося настоящим свойством цели. Спека и WPT
+  такой комбинации не требуют.
+- Арность проверяется явно (`_lumen_storage_arity`) — `getItem()` без аргументов
+  обязан бросить `TypeError`, а не прочитать ключ, записанный как `undefined`
+  (`missing_arguments.window.js`).
+
+**Гейт**
+
+14 новых юнит-тестов в `crates/js/src/dom.rs` (модуль `v8_nav_url_storage`),
+по одному на каждый WPT-файл категории; `cargo test -p lumen-js --features
+v8-backend` — 3013 + 74 зелёных, `cargo clippy -p lumen-js --features
+v8-backend --all-targets -- -D warnings` чисто.
+
+Живой прогон категории (`run_report.py --all --root webstorage --recursive`,
+`dev-release`):
+
+| | до | после |
+|---|---|---|
+| harness OK | 24/54 | 25/54 |
+| сабтесты | 63/1270 | **1229/1277** |
+
+Знаменатель сабтестов вырос (1270 → 1277), потому что файлы, которые раньше
+падали на первом же утверждении, теперь досчитывают свои наборы до конца.
+
+**Остаток категории — чужие баги, не этот.** 36 неожиданных результатов
+раскладываются на четыре кучи: события `storage` между документами и
+`iframe.contentWindow.postMessage`/`watchedNode.addEventListener` —
+[BUG-480](BUG-480-OPEN.md) (у `<iframe>` нет отдельного browsing context);
+`StorageEvent`-конструктор и `initStorageEvent` — [BUG-774](BUG-774-OPEN.md);
+и одна новая находка — [BUG-901](BUG-901-OPEN.md): одиночный суррогат в ключе
+или значении превращается в `U+FFFD` на границе с нативным кодом
+(`storage_setitem.window.js`, 12 сабтестов), потому что Rust `String` — UTF-8 и
+такую строку представить не может. Дефект границы биндингов, а не хранилища.
 
 ## Не расследовано в этой сессии
 

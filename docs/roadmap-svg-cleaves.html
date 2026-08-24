@@ -58,11 +58,11 @@
  "generated": "2026-08-24",
  "counts": {
   "open": 398,
-  "fixed": 460,
+  "fixed": 461,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 858,
+ "total_bugs": 859,
  "phases": [
   {
    "id": "P0",
@@ -4553,7 +4553,7 @@
        "title": "WPT: вендорить + прогнать категорию `webstorage`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (подтверждён — `localStorage`/`sessionStorage` реальны, `crates/js/src/v8_runtime.rs:3519-3569`, не заглушка). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root webstorage --recursive`, ~7 мин 40 с, 86 файлов, 54 id) — **24/54 harness OK, 63/1270 сабтестов**. Найдены [BUG-773](bugs/BUG-773-OPEN.md) (`Storage` не «legacy platform object» — property-style доступ/`for-in`/`in`/`delete` не проходят через нативный бэкенд) и [BUG-774](bugs/BUG-774-OPEN.md) (`initStorageEvent` без WebIDL-коэрсии). Остальные провалы — уже известный BUG-480 (`<iframe>` без browsing context). Потребовал разовый локальный (некоммитящийся) патч `.venv/…/pywebsocket3/websocket_server.py` (`ssl.wrap_socket` удалён в Python 3.12+, `wss`-порт теперь всегда включён в `config.json` с прошлой сессии)",
+       "note": "Скоуп: ⬜ (подтверждён — `localStorage`/`sessionStorage` реальны, `crates/js/src/v8_runtime.rs:3519-3569`, не заглушка). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root webstorage --recursive`, ~7 мин 40 с, 86 файлов, 54 id) — **24/54 harness OK, 63/1270 сабтестов**. Найдены [BUG-773](bugs/BUG-773-FIXED.md) (`Storage` не «legacy platform object» — property-style доступ/`for-in`/`in`/`delete` не проходят через нативный бэкенд) и [BUG-774](bugs/BUG-774-OPEN.md) (`initStorageEvent` без WebIDL-коэрсии). Остальные провалы — уже известный BUG-480 (`<iframe>` без browsing context). Потребовал разовый локальный (некоммитящийся) патч `.venv/…/pywebsocket3/websocket_server.py` (`ssl.wrap_socket` удалён в Python 3.12+, `wss`-порт теперь всегда включён в `config.json` с прошлой сессии)",
        "bugs": [
         "BUG-773",
         "BUG-774"
@@ -10549,10 +10549,10 @@
    "debtor": false
   },
   "BUG-773": {
-   "status": "open",
+   "status": "fixed",
    "title": "`localStorage`/`sessionStorage` не реализуют «legacy platform object» (HTML §8): нет `Proxy`/named-property интерцептора, поэтому `storage.foo = 'x'`/`storage['…",
    "component": "js (`crates/js/src/dom.rs::_lumen_make_storage`, ~9055; `crates/js/src/v8_runtime.rs`, ~3519-3569)",
-   "date": null,
+   "date": "2026-08-24",
    "debtor": false
   },
   "BUG-774": {
@@ -11394,6 +11394,13 @@
    "component": "js (`crates/js/src/dom.rs` — `_lumen_report_exception`; `crates/js/src/v8_runtime.rs` — `eval_and_report`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-901": {
+   "status": "open",
+   "title": "Одиночный (непарный) суррогат `U+D800`…`U+DFFF` — легальный code unit WebIDL `DOMString` — молча превращается в `U+FFFD` при пересечении границы JS↔натив, потом…",
+   "component": "js (`crates/js/src/v8_runtime.rs` — `to_rust_string_lossy` на границе регистрации нативов, 12 мест)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -12022,6 +12029,9 @@
   ],
   "js (`crates/js/src/v8_runtime.rs::_lumen_create_element`/`_lumen_create_element_ns`, `v8_compat.rs::IntoJsReturn for u32`)": [
    "BUG-457"
+  ],
+  "js (`crates/js/src/v8_runtime.rs` — `to_rust_string_lossy` на границе регистрации нативов, 12 мест)": [
+   "BUG-901"
   ],
   "js (`crates/js/src/v8_runtime.rs` — уровень изолята)": [
    "BUG-716"
