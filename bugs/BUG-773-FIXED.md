@@ -182,7 +182,7 @@ v8-backend --all-targets -- -D warnings` чисто.
 раскладываются на четыре кучи: события `storage` между документами и
 `iframe.contentWindow.postMessage`/`watchedNode.addEventListener` —
 [BUG-480](BUG-480-OPEN.md) (у `<iframe>` нет отдельного browsing context);
-`StorageEvent`-конструктор и `initStorageEvent` — [BUG-774](BUG-774-OPEN.md);
+`StorageEvent`-конструктор и `initStorageEvent` — [BUG-774](BUG-774-FIXED.md);
 и одна новая находка — [BUG-901](BUG-901-OPEN.md): одиночный суррогат в ключе
 или значении превращается в `U+FFFD` на границе с нативным кодом
 (`storage_setitem.window.js`, 12 сабтестов), потому что Rust `String` — UTF-8 и
@@ -194,5 +194,5 @@ v8-backend --all-targets -- -D warnings` чисто.
 browsing context) — весь кластер `event_*.html`/`document-domain.html`
 (межконтекстные `storage`-события через `<iframe>`) TIMEOUT/FAIL по этой
 уже заведённой причине, не новая находка. Отдельно заведён
-[BUG-774](../bugs/BUG-774-OPEN.md) — `StorageEvent.prototype.initStorageEvent`
+[BUG-774](../bugs/BUG-774-FIXED.md) — `StorageEvent.prototype.initStorageEvent`
 не делает WebIDL-коэрсию аргументов.

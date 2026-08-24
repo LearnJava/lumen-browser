@@ -635,20 +635,69 @@ TransitionEvent.prototype = Object.create(Event.prototype);
 TransitionEvent.prototype.constructor = TransitionEvent;
 
 // StorageEvent — fires on localStorage/sessionStorage change in another context
-function StorageEvent(type, init) {
+//
+// WebIDL coercion matters here and is easy to get wrong in three separate ways
+// (BUG-774), so both the constructor and initStorageEvent go through the two
+// helpers below instead of assigning arguments as they arrive:
+//   * `DOMString? x = null` — an ABSENT or explicitly `undefined` value takes
+//     the declared default (`null`), an explicit `null` stays `null`, anything
+//     else goes through ToString. So `{key: undefined}` is `null`, not
+//     the string \"undefined\".
+//   * `USVString url = \"\"` — NOT nullable: `undefined` takes the default `\"\"`,
+//     but `null` becomes the string \"null\".
+//   * `DOMString type` on both entry points is a REQUIRED argument with no
+//     default, so it never defaults — `undefined` becomes \"undefined\" and
+//     `null` becomes \"null\", and omitting it altogether is a TypeError.
+// `_lumen_se_nullable_str`/`_lumen_se_default_str` take the raw `arguments` slot so that
+// \"absent\" and \"explicitly undefined\" can share one branch, which is exactly
+// what WebIDL's default-value rule asks for.
+function _lumen_se_nullable_str(v) { return (v === undefined || v === null) ? null : String(v); }
+function _lumen_se_default_str(v)  { return (v === undefined) ? '' : String(v); }
+// `type` is declared alone so that `StorageEvent.length === 1` (WebIDL counts
+// required arguments only); the init dictionary is read out of `arguments`.
+function StorageEvent(type) {
+    if (!(this instanceof StorageEvent)) {
+        throw new TypeError(\"Failed to construct 'StorageEvent': Please use the 'new' operator.\");
+    }
+    if (arguments.length < 1) {
+        throw new TypeError(\"Failed to construct 'StorageEvent': 1 argument required, but only 0 present.\");
+    }
+    var init = arguments[1];
     Event.call(this, type, init);
-    this.key         = (init && init.key         != null) ? init.key         : null;
-    this.oldValue    = (init && init.oldValue    != null) ? init.oldValue    : null;
-    this.newValue    = (init && init.newValue    != null) ? init.newValue    : null;
-    this.url         = (init && init.url         != null) ? String(init.url) : '';
-    this.storageArea = (init && init.storageArea != null) ? init.storageArea : null;
+    // Event's own base coercion is `String(type || '')`, which collapses both
+    // `null` and `undefined` to the empty string — re-do it per WebIDL here
+    // rather than changing the base class every other event shares.
+    this.type        = String(type);
+    this.key         = _lumen_se_nullable_str(init ? init.key      : undefined);
+    this.oldValue    = _lumen_se_nullable_str(init ? init.oldValue : undefined);
+    this.newValue    = _lumen_se_nullable_str(init ? init.newValue : undefined);
+    this.url         = _lumen_se_default_str (init ? init.url      : undefined);
+    this.storageArea = (init && init.storageArea !== undefined && init.storageArea !== null)
+        ? init.storageArea : null;
 }
 StorageEvent.prototype = Object.create(Event.prototype);
 StorageEvent.prototype.constructor = StorageEvent;
-StorageEvent.prototype.initStorageEvent = function(type, bubbles, cancelable, key, oldValue, newValue, url, storageArea) {
-    this.type = type; this.bubbles = !!bubbles; this.cancelable = !!cancelable;
-    this.key = key; this.oldValue = oldValue; this.newValue = newValue;
-    this.url = String(url); this.storageArea = storageArea;
+// Same one-declared-argument trick: `initStorageEvent.length` must be 1.
+StorageEvent.prototype.initStorageEvent = function(type) {
+    if (arguments.length < 1) {
+        throw new TypeError(\"Failed to execute 'initStorageEvent' on 'StorageEvent': 1 argument required, but only 0 present.\");
+    }
+    var a = arguments;
+    this.type        = String(type);
+    this.bubbles     = !!a[1];
+    this.cancelable  = !!a[2];
+    this.key         = _lumen_se_nullable_str(a[3]);
+    this.oldValue    = _lumen_se_nullable_str(a[4]);
+    this.newValue    = _lumen_se_nullable_str(a[5]);
+    this.url         = _lumen_se_default_str (a[6]);
+    this.storageArea = (a[7] === undefined || a[7] === null) ? null : a[7];
+    // DOM LS §2.9 «initialize an event» — the legacy init methods also clear the
+    // flags a previous dispatch may have left on the object.
+    this.isTrusted        = false;
+    this.target           = null;
+    this.defaultPrevented = false;
+    this.cancelBubble     = false;
+    this._stopImmediate   = false;
 };
 
 // PopStateEvent — history.pushState / back / forward
@@ -36426,6 +36475,163 @@ mod tests {
                 "var e = new StorageEvent('storage', {key: 'x', oldValue: 'a', newValue: 'b', url: 'http://ex.com/'}); \
                  e.key === 'x' && e.oldValue === 'a' && e.newValue === 'b' && e.url === 'http://ex.com/'"
             ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── BUG-774: WebIDL coercion of StorageEvent's two entry points ───────
+        // Mirrors `tests/wpt/webstorage/event_constructor.window.js` and
+        // `event_initstorageevent.window.js` subtest for subtest.
+
+        #[test]
+        fn storageevent_ctor_arity_and_new_required() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var threwNoNew = false, threwNoArgs = false; \
+                     try { StorageEvent(''); } catch (e) { threwNoNew = e instanceof TypeError; } \
+                     try { new StorageEvent(); } catch (e) { threwNoArgs = e instanceof TypeError; } \
+                     threwNoNew && threwNoArgs && StorageEvent.length === 1",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn storageevent_ctor_defaults_for_absent_members() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var e = new StorageEvent('type'); \
+                     e.type === 'type' && e.key === null && e.oldValue === null && \
+                     e.newValue === null && e.url === '' && e.storageArea === null",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn storageevent_ctor_null_arguments_stringify_type_and_url() {
+            // `type` is a required DOMString and `url` a non-nullable USVString,
+            // so an explicit `null` becomes the string \"null\" on both; the three
+            // nullable members keep the null.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var e = new StorageEvent(null, {key: null, oldValue: null, newValue: null, \
+                                                     url: null, storageArea: null}); \
+                     e.type === 'null' && e.key === null && e.oldValue === null && \
+                     e.newValue === null && e.url === 'null' && e.storageArea === null",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn storageevent_ctor_undefined_members_take_declared_defaults() {
+            // The mirror image of the test above: an explicitly-`undefined`
+            // dictionary member takes its default, so `url` is '' and NOT
+            // 'undefined' — while the required `type` argument has no default
+            // and does stringify.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var e = new StorageEvent(undefined, {key: undefined, oldValue: undefined, \
+                                                          newValue: undefined, url: undefined, \
+                                                          storageArea: undefined}); \
+                     e.type === 'undefined' && e.key === null && e.oldValue === null && \
+                     e.newValue === null && e.url === '' && e.storageArea === null",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn storageevent_init_arity_and_zero_arguments_throw() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var e = new StorageEvent('storage'), threw = false; \
+                     try { e.initStorageEvent(); } catch (err) { threw = err instanceof TypeError; } \
+                     threw && e.initStorageEvent.length === 1",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn storageevent_init_one_argument_defaults_rest() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var e = new StorageEvent('storage'); e.initStorageEvent('type'); \
+                     e.type === 'type' && e.bubbles === false && e.cancelable === false && \
+                     e.key === null && e.oldValue === null && e.newValue === null && \
+                     e.url === '' && e.storageArea === null",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn storageevent_init_sensible_arguments_pass_through() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var e = new StorageEvent('storage'); \
+                     e.initStorageEvent('type', true, true, 'key', 'oldValue', 'newValue', 'url', localStorage); \
+                     e.type === 'type' && e.bubbles === true && e.cancelable === true && \
+                     e.key === 'key' && e.oldValue === 'oldValue' && e.newValue === 'newValue' && \
+                     e.url === 'url' && e.storageArea === localStorage",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn storageevent_init_eight_null_arguments() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var e = new StorageEvent('storage'); \
+                     e.initStorageEvent(null, null, null, null, null, null, null, null); \
+                     e.type === 'null' && e.bubbles === false && e.cancelable === false && \
+                     e.key === null && e.oldValue === null && e.newValue === null && \
+                     e.url === 'null' && e.storageArea === null",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn storageevent_init_eight_undefined_arguments() {
+            // An explicitly-passed `undefined` is indistinguishable from an
+            // absent argument for every parameter that HAS a default — only
+            // the required `type` stringifies it.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var e = new StorageEvent('storage'); \
+                     e.initStorageEvent(undefined, undefined, undefined, undefined, undefined, \
+                                        undefined, undefined, undefined); \
+                     e.type === 'undefined' && e.bubbles === false && e.cancelable === false && \
+                     e.key === null && e.oldValue === null && e.newValue === null && \
+                     e.url === '' && e.storageArea === null",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn storageevent_init_stringifies_non_string_values() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var e = new StorageEvent('storage'); \
+                     e.initStorageEvent(1, 0, 0, 2, 3, 4, 5); \
+                     e.type === '1' && e.key === '2' && e.oldValue === '3' && \
+                     e.newValue === '4' && e.url === '5'",
+                )
+                .unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 
