@@ -4954,10 +4954,19 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 if (ps) {
                     var pr = _lumen_get_bounding_rect(parent);
                     if (pr) { _lumen_request_scroll(parent, r[0] - pr[0], r[1] - pr[1]); }
-                    break;
+                    return;
                 }
                 parent = _lumen_u2n(_lumen_get_parent(parent));
             }
+            // CSSOM-View §14: the viewport is the last scrolling box of the
+            // chain, so an element with no scrollable ancestor scrolls the PAGE
+            // (BUG-821, second facet — this used to fall off the loop and do
+            // nothing at all, which is most elements on most pages). Layout
+            // rects are document coordinates, so `r[1]` is already the page
+            // offset that puts the element's top edge at the top of the
+            // viewport — the `block: 'start'` default. The arguments stay
+            // ignored here as they are for the container branch (BUG-479).
+            _lumen_request_page_scroll(r[1], 0);
         },
         // ── Focus-related IDL reflection (HTML LS §6.6, BUG-381) ─────────────
         // `tabIndex` reflects the `tabindex` content attribute; with the
@@ -19890,6 +19899,56 @@ mod tests {
             let rt = v8_runtime_with_dom(make_doc());
             let v = rt.eval("window.scrollX").unwrap();
             assert_eq!(v, lumen_core::JsValue::Number(0.0));
+        }
+
+        // ── BUG-821: the page 'scroll' event follows the position, not the wheel ──
+
+        /// The shell calls `set_page_scroll_y` once per rendering update, so the
+        /// «did it move» decision has to live here — otherwise every frame of a
+        /// still page would queue a `scroll` event.
+        #[test]
+        fn set_page_scroll_y_reports_only_real_movement() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(rt.set_page_scroll_y(300.0), "first move must report a change");
+            assert!(!rt.set_page_scroll_y(300.0), "the same position is not a change");
+            assert!(rt.set_page_scroll_y(0.0), "scrolling back to the top is a change");
+        }
+
+        /// The other end of that chain: what the shell fires when the position
+        /// did move has to reach an ordinary `window` listener.
+        #[test]
+        fn fire_window_scroll_reaches_a_window_listener() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "globalThis.__scrolls = 0;
+                 window.addEventListener('scroll', function() { globalThis.__scrolls++; });",
+            )
+            .unwrap();
+            rt.fire_window_scroll();
+            let v = rt.eval("__scrolls").unwrap();
+            assert_eq!(v, lumen_core::JsValue::Number(1.0));
+        }
+
+        /// `scrollIntoView` on an element whose ancestors are all unscrollable
+        /// must scroll the viewport — it used to walk off the ancestor loop and
+        /// do nothing at all.
+        #[test]
+        fn scroll_into_view_without_scrollable_ancestor_scrolls_the_page() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let nid = match rt.eval("document.getElementById('main').__nid__").unwrap() {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected a numeric nid, got {other:?}"),
+            };
+            // Layout rects are document coordinates: the element sits 900 CSS px
+            // down the page, so `block: start` means scrolling the page to 900.
+            let mut rects = std::collections::HashMap::new();
+            rects.insert(nid, [0.0_f32, 900.0, 100.0, 20.0]);
+            rt.update_layout_rects(rects);
+            rt.eval("document.getElementById('main').scrollIntoView()").unwrap();
+            let reqs = rt.take_page_scroll_requests();
+            assert_eq!(reqs.len(), 1, "one page-scroll request expected");
+            assert!((reqs[0].0 - 900.0).abs() < 0.1, "target_y should be 900, got {}", reqs[0].0);
+            assert!(!reqs[0].1, "scrollIntoView is instant until BUG-479 honours its options");
         }
 
         #[test]

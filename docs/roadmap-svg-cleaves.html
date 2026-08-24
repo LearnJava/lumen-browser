@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-24",
  "counts": {
-  "open": 391,
-  "fixed": 470,
+  "open": 390,
+  "fixed": 471,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -10829,10 +10829,10 @@
    "debtor": false
   },
   "BUG-821": {
-   "status": "open",
+   "status": "fixed",
    "title": "Программный скролл страницы **двигает** её (`window.scrollY` после `scrollTo(0,300)` равен 300), но события `scroll` не диспатчит: `fire_window_scroll` имеет ро…",
-   "component": "shell (`crates/shell/src/main.rs:16085` — единственный вызов `fire_window_scroll`, ветка колеса мыши; `main.rs:14222` — слив программных скроллов; `main.rs:16218` — синк `scrollY`), js (`crates/js/src/dom.rs:4213` — `scrollIntoView` без фоллбэка на страницу)",
-   "date": null,
+   "component": "shell (`crates/shell/src/main.rs` — шаг 1 `RedrawRequested`, синк `scrollY`; ветка колеса мыши), js (`crates/js/src/v8_runtime.rs::set_page_scroll_y`, `crates/js/src/dom.rs` — `scrollIntoView`)",
+   "date": "2026-08-24",
    "debtor": false
   },
   "BUG-822": {
@@ -12632,9 +12632,6 @@
   "shell (`crates/shell/src/main.rs:1177` — `A11yPrefs::open_in_memory()`), automation (нет CLI-флага/переменной/BiDi-ручки), tooling (`tools/wptrunner/wptrunner/browsers/lumen.py`)": [
    "BUG-755"
   ],
-  "shell (`crates/shell/src/main.rs:16085` — единственный вызов `fire_window_scroll`, ветка колеса мыши; `main.rs:14222` — слив программных скроллов; `main.rs:16218` — синк `scrollY`), js (`crates/js/src/dom.rs:4213` — `scrollIntoView` без фоллбэка на страницу)": [
-   "BUG-821"
-  ],
   "shell (`crates/shell/src/main.rs:20113`, `:20265` — единственные вызовы `fire_page_lifecycle`, всегда с литералом `\"pagehide\"`) + js (`crates/js/src/dom.rs:7209` — `unload`-слушатели читаются только как блокировщик bfcache; `:13092` — `_lumen_apply_visibility` зовётся с focus/blur, не с навигации)": [
    "BUG-834"
   ],
@@ -12688,6 +12685,9 @@
   ],
   "shell (`crates/shell/src/main.rs` — сидирование `ShieldsPanel::default_enabled`), tooling (`tools/wptrunner/wptrunner/browsers/lumen.py`)": [
    "BUG-800"
+  ],
+  "shell (`crates/shell/src/main.rs` — шаг 1 `RedrawRequested`, синк `scrollY`; ветка колеса мыши), js (`crates/js/src/v8_runtime.rs::set_page_scroll_y`, `crates/js/src/dom.rs` — `scrollIntoView`)": [
+   "BUG-821"
   ],
   "shell (`crates/shell/src/platform/audio_player.rs:314-326` — `PlatformAudioPlayer::load`, вторая блокировка `self.handles` внутри тела `if let`, чьё скрутини держит гард того же нереентерабельного `std::sync::Mutex`)": [
    "BUG-799"

@@ -3175,8 +3175,16 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Synchronize the current page scroll position (`window.scrollY`) into the JS runtime.
     ///
     /// Called after scroll updates to keep JS reads of `window.scrollY` accurate.
+    ///
+    /// Returns `true` when the value actually differs from the one the runtime
+    /// held — i.e. when CSSOM-View §14 «run the scroll steps» must fire a
+    /// `scroll` event for the viewport this frame (BUG-821). The comparison
+    /// lives in the runtime rather than in the shell on purpose: the previous
+    /// position must be per-*document*, so a navigation that resets `scroll_y`
+    /// hands the fresh runtime its own zero instead of firing a phantom
+    /// `scroll` on the new document.
     #[allow(dead_code)]
-    fn set_page_scroll_y(&self, y: f32);
+    fn set_page_scroll_y(&self, y: f32) -> bool;
     /// Adjust the QuickJS GC based on the tab's lifecycle tier (10L).
     ///
     /// `level` encodes aggressiveness: 0 = Soft (active tab, reset threshold),
@@ -3580,7 +3588,7 @@ impl PersistentJs for V8PersistentJs {
     fn take_page_scroll_requests(&self) -> Vec<(f32, bool)> {
         self.rt.take_page_scroll_requests()
     }
-    fn set_page_scroll_y(&self, y: f32) {
+    fn set_page_scroll_y(&self, y: f32) -> bool {
         self.rt.set_page_scroll_y(y)
     }
     fn run_gc_pass(&self, _level: u8) {
@@ -16767,13 +16775,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         } else {
                             if dx_css != 0.0 { self.scroll_x_by(dx_css); }
                             self.scroll_by_smooth(dy_css);
-                            // ADR-016 M2.2c-2d: fire-and-forget window 'scroll'
-                            // event via route_task_js — off-UI-thread under
-                            // LUMEN_ENGINE_THREAD=1, byte-identical sync call when off.
-                            #[cfg(feature = "v8")]
-                            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                                j.fire_window_scroll();
-                            });
+                            // BUG-821: the window 'scroll' event used to be fired
+                            // right here, which made it a property of the mouse
+                            // wheel rather than of the position. It is now fired
+                            // from the RedrawRequested scroll step for every
+                            // movement — including the frames of the smooth
+                            // animation this wheel notch just started — so a
+                            // second dispatch here would only duplicate it (and
+                            // would still fire at the very bottom, where the
+                            // wheel changes nothing).
                         }
                     }
                     MouseScrollDelta::PixelDelta(p) => {
@@ -16901,11 +16911,22 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // (off-UI-thread under LUMEN_ENGINE_THREAD=1, byte-identical sync
                 // call when off); scroll_y is read into a local before routing so
                 // the closure does not re-borrow `self`.
+                //
+                // BUG-821: this is also CSSOM-View §14 «run the scroll steps» —
+                // the one place that sees *every* page-scroll movement, whatever
+                // started it (wheel, keys, scrollbar drag, touch momentum,
+                // find-in-page, `window.scrollTo`). The `scroll` event is bound
+                // to the position changing since the last rendering update, not
+                // to an input device: before this, `fire_window_scroll` had a
+                // single call site in the mouse-wheel branch, so a programmatic
+                // scroll moved the page and told nobody.
                 #[cfg(feature = "v8")]
                 {
                     let scroll_y = self.scroll_y;
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                        j.set_page_scroll_y(scroll_y);
+                        if j.set_page_scroll_y(scroll_y) {
+                            j.fire_window_scroll();
+                        }
                     });
                 }
                 // ADR-008 §10E.4: after scroll, evict CPU-decoded images beyond gate zone.
