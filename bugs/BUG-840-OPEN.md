@@ -36,7 +36,7 @@ function _perf_deliver_to_observer(obs, entries) {
 ```
 
 Пустой `catch` — ровно та же форма, что уже описана в
-[BUG-828](BUG-828-OPEN.md) (`oncomplete` у `OfflineAudioContext`): исключение
+[BUG-828](BUG-828-FIXED.md) (`oncomplete` у `OfflineAudioContext`): исключение
 из колбэка страницы гасится хостовой обёрткой. Спека (Performance Timeline L2
 §6.2.1, HTML LS «report an exception») требует сообщить об исключении в
 `window.onerror`.
