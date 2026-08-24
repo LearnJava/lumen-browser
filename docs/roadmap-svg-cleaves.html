@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-24",
  "counts": {
-  "open": 394,
-  "fixed": 467,
+  "open": 392,
+  "fixed": 468,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 861,
+ "total_bugs": 860,
  "phases": [
   {
    "id": "P0",
@@ -10780,10 +10780,10 @@
    "debtor": false
   },
   "BUG-808": {
-   "status": "open",
+   "status": "fixed",
    "title": "WAAPI `Animation` — не `EventTarget`: `anim.addEventListener('finish', …)` бросает `TypeError: anim.addEventListener is not a function` (подтверждено логом живо…",
    "component": "js (`crates/js/src/dom.rs:15333` — `function Animation(...)`, прототип не подключён к `EventTarget`; `dom.rs:15507` `_onFinish` зовёт только `this.onfinish`)",
-   "date": null,
+   "date": "2026-08-24",
    "debtor": false
   },
   "BUG-809": {
@@ -11098,13 +11098,6 @@
    "status": "open",
    "title": "**Ни один исходящий запрос не несёт `Referer` и `Origin`** — ни сабресурс (`<img>`, `<script src>`), ни `fetch()`, ни `sendBeacon`, включая POST того же происхо…",
    "component": "network (`crates/network/src/lib.rs` — генерации `Referer`/`Origin` нет нигде; единственное упоминание `Referer` в крейте это комментарий `lib.rs:2427`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-860": {
-   "status": "open",
-   "title": "`Animation` не является `EventTarget`: `anim.addEventListener('finish', …)` — `TypeError`, хотя Web Animations §5.3 требует наследования от `EventTarget`. Вредн…",
-   "component": "js (`crates/js/src/dom.rs` — объект `element.animate()`: есть `onfinish`/`oncancel`/`onremove`, нет `addEventListener`/`removeEventListener`)",
    "date": null,
    "debtor": false
   },
@@ -11945,9 +11938,6 @@
   ],
   "js (`crates/js/src/dom.rs` — обвязка `_mo_notify`, `dom.rs:9965`; поля `nextSibling`/`previousSibling` записи, `dom.rs:10001`–`10002`)": [
    "BUG-855"
-  ],
-  "js (`crates/js/src/dom.rs` — объект `element.animate()`: есть `onfinish`/`oncancel`/`onremove`, нет `addEventListener`/`removeEventListener`)": [
-   "BUG-860"
   ],
   "js (`crates/js/src/dom.rs` — объект `navigation`; путь фрагментной навигации о нём не знает)": [
    "BUG-881"

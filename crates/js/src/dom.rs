@@ -16684,8 +16684,13 @@ KeyframeEffect.prototype.getKeyframes = function() { return this._keyframes.slic
 KeyframeEffect.prototype.setKeyframes = function(kf) { this._keyframes = _wa_normalize_keyframes(kf); };
 
 // Animation constructor (Web Animations §3.4).
+// `Animation : EventTarget` (§5.3) — the three playback events (finish, cancel,
+// remove) must reach `addEventListener` and not only the `on<type>` property,
+// which is what BUG-808 was: a bare `addEventListener` call threw TypeError on
+// the first line of every WPT setup that uses `EventWatcher`.
 var _wa_anim_seq = 1;
 function Animation(effect, timeline) {
+    EventTarget.call(this);
     this._wid         = _wa_anim_seq++;
     this.id           = '';
     this.effect       = effect   || null;
@@ -16703,6 +16708,47 @@ function Animation(effect, timeline) {
     this.finished = new Promise(function(res) { self._finishRes = res; });
     this._rafId   = null;
 }
+// Must precede every `Object.defineProperty(Animation.prototype, …)` below —
+// replacing the prototype object afterwards would drop the accessors with it.
+Animation.prototype = Object.create(EventTarget.prototype);
+// Non-enumerable, like `constructor` on every real interface prototype:
+// `web-animations/interfaces/Animation/style-change-events.html` builds one
+// subtest per `Object.keys(Animation.prototype)` entry, so a plain assignment
+// here invents a subtest named after an internal.
+Object.defineProperty(Animation.prototype, 'constructor',
+    { value: Animation, writable: true, configurable: true });
+
+// Fire one playback event (Web Animations §4.4.3) at this animation.
+// `EventTarget.prototype.dispatchEvent` runs the registered listeners and then
+// the `on<type>` property, so both spellings work from one call site.
+//
+// The spec says «queue a task to fire an animation playback event», and the
+// queueing is not a detail: WPT's own `EventWatcher` is armed AFTER the call
+// that triggers the event (`new EventWatcher(t, anim, 'finish'); anim.finish();
+// await watcher.wait_for('finish')`), so a synchronous dispatch arrives with no
+// wait registered and the watcher fails it as «Not expecting event». The event
+// object is still built now, so it carries the times as of the queueing.
+// Written straight into `_lumen_timers` with `nesting: 0` rather than through
+// setTimeout, for the same reason as `_ro_schedule_initial`: the §8.6 4 ms
+// clamp must not apply.
+// Non-enumerable — this is an internal, not an IDL member.
+Object.defineProperty(Animation.prototype, '_fire', {
+    value: function(type, currentTime) {
+        var self = this;
+        var ev = new AnimationPlaybackEvent(type, {
+            currentTime:  (currentTime === undefined) ? this.currentTime : currentTime,
+            timelineTime: this.timeline ? this.timeline.currentTime : null,
+        });
+        var deadline = _lumen_now_ms();
+        _lumen_timers.push({
+            id: _lumen_timer_seq++,
+            fn: function() { self.dispatchEvent(ev); },
+            deadline: deadline, interval: null, nesting: 0,
+        });
+        _lumen_request_wakeup(deadline);
+    },
+    writable: true, configurable: true,
+});
 
 Object.defineProperty(Animation.prototype, 'currentTime', {
     get: function() {
@@ -16773,7 +16819,8 @@ Animation.prototype.cancel = function() {
     this._cancelRaf();
     var idx = _wa_animations.indexOf(this);
     if (idx >= 0) _wa_animations.splice(idx, 1);
-    if (typeof this.oncancel === 'function') try { this.oncancel(new Event('cancel')); } catch(e) { _lumen_report_exception(e); }
+    // §4.4.1: the cancel event carries a null current time by definition.
+    this._fire('cancel', null);
 };
 
 Animation.prototype.finish = function() {
@@ -16860,9 +16907,19 @@ Animation.prototype._clearStyles = function() {
 };
 
 Animation.prototype._onFinish = function() {
-    if (typeof this.onfinish === 'function') try { this.onfinish(new Event('finish')); } catch(e) { _lumen_report_exception(e); }
+    this._fire('finish');
     if (typeof this._finishRes === 'function') { try { this._finishRes(this); } catch(e) {} this._finishRes = null; }
 };
+
+// §4.4.2 `remove` — dispatched when an animation is automatically replaced.
+// The engine has no replacement machinery yet (BUG-704), so nothing calls this
+// today; it exists so the event has one definition when replacement lands, and
+// so `addEventListener('remove', …)` is already wired to it. Non-enumerable
+// for the same reason as `_fire`.
+Object.defineProperty(Animation.prototype, '_onRemove', {
+    value: function() { this._fire('remove'); },
+    writable: true, configurable: true,
+});
 
 // element.animate() factory shortcut (Web Animations §3.3).
 function _wa_element_animate(target, keyframes, options) {
@@ -20158,6 +20215,117 @@ mod tests {
         fn wa_animation_playback_event_class_exposed() {
             let rt = v8_runtime_with_dom(make_doc());
             let v = rt.eval("typeof window.AnimationPlaybackEvent === 'function'").unwrap();
+            assert_eq!(v, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-808: `Animation` must be an `EventTarget` (Web Animations §5.3).
+        /// Before the fix `addEventListener` was simply absent, so the call threw
+        /// and took the whole test file with it.
+        #[test]
+        fn wa_animation_is_event_target() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let v = rt
+                .eval(
+                    "var el = document.getElementById('main'); \
+                     var a = el.animate([{opacity:'0'},{opacity:'1'}], 200); \
+                     a instanceof EventTarget && typeof a.addEventListener === 'function' \
+                       && typeof a.removeEventListener === 'function' \
+                       && typeof a.dispatchEvent === 'function'",
+                )
+                .unwrap();
+            assert_eq!(v, lumen_core::JsValue::Bool(true));
+        }
+
+        /// The listener and the `on<type>` property must BOTH see the finish
+        /// event — the property alone was all that worked before.
+        #[test]
+        fn wa_animation_finish_reaches_listener_and_property() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let v = rt
+                .eval(
+                    "var el = document.getElementById('main'); \
+                     var a = el.animate([{opacity:'0'},{opacity:'1'}], 200); \
+                     var log = []; \
+                     a.addEventListener('finish', function() { log.push('L'); }); \
+                     a.onfinish = function() { log.push('P'); }; \
+                     a.finish(); _lumen_tick_timers(); \
+                     log.join(',')",
+                )
+                .unwrap();
+            assert_eq!(v, lumen_core::JsValue::String("L,P".into()));
+        }
+
+        /// §4.4.3: the playback events are `AnimationPlaybackEvent`s, not bare
+        /// `Event`s, and `cancel` carries a null current time (§4.4.1).
+        #[test]
+        fn wa_animation_cancel_delivers_playback_event() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let v = rt
+                .eval(
+                    "var el = document.getElementById('main'); \
+                     var a = el.animate([{opacity:'0'},{opacity:'1'}], 200); \
+                     var seen = ''; \
+                     a.addEventListener('cancel', function(e) { \
+                         seen = e.type + ':' + (e instanceof AnimationPlaybackEvent) + ':' + (e.currentTime === null); \
+                     }); \
+                     a.cancel(); _lumen_tick_timers(); \
+                     seen",
+                )
+                .unwrap();
+            assert_eq!(v, lumen_core::JsValue::String("cancel:true:true".into()));
+        }
+
+        /// A removed listener must stop firing — proves the registry is real and
+        /// not a one-shot shim around the `on<type>` property.
+        #[test]
+        fn wa_animation_remove_event_listener_detaches() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let v = rt
+                .eval(
+                    "var el = document.getElementById('main'); \
+                     var a = el.animate([{opacity:'0'},{opacity:'1'}], 200); \
+                     var n = 0; \
+                     function h() { n++; } \
+                     a.addEventListener('finish', h); \
+                     a.removeEventListener('finish', h); \
+                     a.finish(); _lumen_tick_timers(); \
+                     n",
+                )
+                .unwrap();
+            assert_eq!(v, lumen_core::JsValue::Number(0.0));
+        }
+
+        /// `web-animations/interfaces/Animation/style-change-events.html`
+        /// builds one subtest per `Object.keys(Animation.prototype)` entry, so
+        /// the three members this fix adds must not be enumerable — otherwise
+        /// the fix invents three failing subtests named after internals.
+        #[test]
+        fn wa_animation_new_prototype_members_are_not_enumerable() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let v = rt
+                .eval(
+                    "Object.keys(Animation.prototype) \
+                       .filter(function(k) { return k === 'constructor' || k === '_fire' || k === '_onRemove'; }) \
+                       .length",
+                )
+                .unwrap();
+            assert_eq!(v, lumen_core::JsValue::Number(0.0));
+        }
+
+        /// The accessors declared after the constructor must survive the
+        /// prototype swap — a swap placed below them would silently drop
+        /// `currentTime`/`playState` and every method.
+        #[test]
+        fn wa_animation_accessors_survive_event_target_prototype() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let v = rt
+                .eval(
+                    "var el = document.getElementById('main'); \
+                     var a = el.animate([{opacity:'0'},{opacity:'1'}], 200); \
+                     a.playState === 'running' && typeof a.pause === 'function' \
+                       && a.constructor === Animation",
+                )
+                .unwrap();
             assert_eq!(v, lumen_core::JsValue::Bool(true));
         }
 
@@ -32178,6 +32346,9 @@ mod tests {
             assert_eq!(r, lumen_core::JsValue::Number(1.0));
         }
 
+        /// The `_lumen_tick_timers()` is required since BUG-808: the playback
+        /// events are queued as event-loop tasks (§4.4.3), not dispatched
+        /// inside `finish()`.
         #[test]
         fn animation_finish_fires_onfinish() {
             let rt = v8_runtime_with_dom(make_doc());
@@ -32185,7 +32356,7 @@ mod tests {
                 "var fired = false; \
                  var a = new Animation(new KeyframeEffect(null, [], 300)); \
                  a.onfinish = function() { fired = true; }; \
-                 a.finish(); \
+                 a.finish(); _lumen_tick_timers(); \
                  fired"
             ).unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));

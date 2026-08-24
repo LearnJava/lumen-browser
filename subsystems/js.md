@@ -1334,6 +1334,37 @@ the time — read dates.
   overlay store. 9 tests in `video_bindings::tests_v8::track_loading`. Live A/B of the
   `webvtt` category: subtests 2/178 → 31/178, wall clock 8:46 → 0:58.
 
+- **WAAPI `Animation` is an `EventTarget`** (BUG-808, 2026-08-24, `dom.rs`
+  `WEB_API_SHIM_TAIL_B`). `Animation.prototype = Object.create(EventTarget.prototype)`
+  plus `EventTarget.call(this)` in the constructor; `cancel()`/`_onFinish()` route through
+  one `_fire(type)` helper, so `dispatchEvent` reaches the listeners *and* the `on<type>`
+  property from a single call site. The events are `AnimationPlaybackEvent`s and `cancel`
+  carries `currentTime === null` (§4.4.1). Three constraints of this object that are easy
+  to break and produce no error when broken:
+  - **The prototype assignment must precede every `Object.defineProperty(Animation.prototype, …)`
+    below it.** The accessors (`currentTime`/`startTime`/`playbackRate`/`playState`/`pending`)
+    and every method are declared after the constructor, so a swap placed lower silently
+    discards them.
+  - **The events are queued as event-loop tasks, never dispatched inline.** Written straight
+    into `_lumen_timers` with `nesting: 0` (the `_ro_schedule_initial` pattern) so the §8.6
+    4 ms clamp does not apply; the event object is built at queueing time, so it carries the
+    times of that moment. This is not spec pedantry — WPT's `EventWatcher` is armed *after*
+    the triggering call, so an inline dispatch fails the subtest as «Not expecting event»
+    (measured: −2 subtests in `scroll-animations` inline vs +1 as a task). Any unit test
+    reading a handler's side effect must call `_lumen_tick_timers()` first.
+  - **Anything added to `Animation.prototype` must be non-enumerable.**
+    `web-animations/interfaces/Animation/style-change-events.html` builds one subtest per
+    `Object.keys(Animation.prototype)` entry, so a plain assignment invents a failing subtest
+    named after an engine internal. `constructor`/`_fire`/`_onRemove` therefore go through
+    `Object.defineProperty`; the older `_scheduleRaf`/`_cancelRaf`/`_tick`/`_applyAtP`/
+    `_clearStyles`/`_onFinish` are still enumerable and still generate such subtests
+    (`Object.keys` on this prototype is empty in a real browser).
+
+  Live A/B: `web-animations` 971/4189 → 974/4189 subtests, `scroll-animations`
+  409/1956 → 410/1956, `css/css-animations` neutral. `remove` has no trigger yet
+  (no automatic replacement, BUG-704) and `event.timelineTime` is `null` until the
+  first rAF tick, since `_wa_current_time` only advances there.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
