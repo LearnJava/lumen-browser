@@ -6434,14 +6434,17 @@ impl JsRuntime for V8JsRuntime {
 // ── Top-level script execution with uncaught-exception reporting (BUG-591) ──
 
 /// Best-effort-extract a filename/line/column from `$tc`'s `v8::Message` and
-/// call the shim's `_lumen_report_exception($exc, filename, lineno, colno)` —
-/// the module-eval counterpart of the inline blocks in
-/// [`V8JsRuntime::eval_and_report`]. A free-standing macro rather than a
-/// function because the `TryCatch`/`HandleScope` type in `$tc` is
-/// lifetime-parameterized per call site (`with_tc!`'s expansion), same reason
-/// `eval_and_report` inlines its own copy twice instead of sharing one.
-macro_rules! report_module_exception {
-    ($tc:expr, $exc:expr) => {{
+/// call the global `$reporter(exc, filename, lineno, colno)` — the shim's
+/// `_lumen_report_exception` for a page script, `_lumen_report_worker_exception`
+/// for a worker's own top-level script (BUG-813). A free-standing macro rather
+/// than a function because the `TryCatch`/`HandleScope` type in `$tc` is
+/// lifetime-parameterized per call site (`with_tc!`'s expansion).
+///
+/// A missing global is not an error: a bare runtime (unit test, `--dump-*`)
+/// carries no shim at all, and the exception still reaches the caller as the
+/// returned `Err`.
+macro_rules! report_exception_via {
+    ($tc:expr, $exc:expr, $reporter:expr) => {{
         let message = $tc.message();
         let (filename, lineno, colno) = message
             .map(|m| {
@@ -6459,7 +6462,7 @@ macro_rules! report_module_exception {
             v8::tc_scope!(rtc, $tc);
             let ctx = rtc.get_current_context();
             let global = ctx.global(rtc);
-            if let Some(key) = v8::String::new(rtc, "_lumen_report_exception")
+            if let Some(key) = v8::String::new(rtc, $reporter)
                 && let Some(report_fn) = global
                     .get(rtc, key.into())
                     .and_then(|v| v8::Local::<v8::Function>::try_from(v).ok())
@@ -6498,9 +6501,23 @@ impl V8JsRuntime {
     /// — those only ever see the exception value after V8 has already
     /// discarded the `Message`, so they best-effort-parse `Error.stack`
     /// instead (`crate::dom::WEB_API_SHIM`).
-    #[allow(clippy::unwrap_used)] // унаследовано, docs/lint-policy.md §10
     pub fn eval_and_report(&self, script: &str) -> JsResult<JsValue> {
-        self.run(|inner| {
+        self.eval_and_report_via(script, "_lumen_report_exception")
+    }
+
+    /// [`Self::eval_and_report`] with the reporting function named explicitly.
+    ///
+    /// A `WorkerGlobalScope` has no `window` and no `_lumen_report_exception`;
+    /// its own "report the exception" entry point is
+    /// `_lumen_report_worker_exception` (`crate::worker::worker_global_shim`),
+    /// which fires `error` at the worker scope first and only forwards to the
+    /// owning `Worker` object on the page if nothing cancelled it (BUG-813).
+    /// That is the only reason this name is a parameter — page code must keep
+    /// going through [`Self::eval_and_report`].
+    #[allow(clippy::unwrap_used)] // унаследовано, docs/lint-policy.md §10
+    pub fn eval_and_report_via(&self, script: &str, reporter: &str) -> JsResult<JsValue> {
+        let reporter = reporter.to_owned();
+        self.run(move |inner| {
             with_tc!(inner, |tc, _ctx| {
                 let src = v8::String::new(tc, script)
                     .ok_or_else(|| JsError::Runtime("OOM: script string".into()))?;
@@ -6508,38 +6525,7 @@ impl V8JsRuntime {
                 let compiled = compile_cached!(tc, script, src);
                 if tc.has_caught() {
                     let exc = tc.exception().unwrap();
-                    let message = tc.message();
-                    let (filename, lineno, colno) = message
-                        .map(|m| {
-                            let filename = m
-                                .get_script_resource_name(tc)
-                                .and_then(|v| v.to_string(tc))
-                                .map(|s| s.to_rust_string_lossy(tc))
-                                .unwrap_or_default();
-                            let lineno = m.get_line_number(tc).unwrap_or(0) as i32;
-                            let colno = m.get_start_column() as i32;
-                            (filename, lineno, colno)
-                        })
-                        .unwrap_or_default();
-                    {
-                        v8::tc_scope!(rtc, tc);
-                        let ctx = rtc.get_current_context();
-                        let global = ctx.global(rtc);
-                        if let Some(key) = v8::String::new(rtc, "_lumen_report_exception")
-                            && let Some(report_fn) = global
-                                .get(rtc, key.into())
-                                .and_then(|v| v8::Local::<v8::Function>::try_from(v).ok())
-                            && let Some(filename_v) = v8::String::new(rtc, &filename)
-                        {
-                            let lineno_v = v8::Integer::new(rtc, lineno);
-                            let colno_v = v8::Integer::new(rtc, colno);
-                            let _ = report_fn.call(
-                                rtc,
-                                global.into(),
-                                &[exc, filename_v.into(), lineno_v.into(), colno_v.into()],
-                            );
-                        }
-                    }
+                    report_exception_via!(tc, exc, reporter.as_str());
                     return Err(v8_err(tc, exc));
                 }
                 let compiled = compiled
@@ -6548,38 +6534,7 @@ impl V8JsRuntime {
                 let result = compiled.run(tc);
                 if tc.has_caught() {
                     let exc = tc.exception().unwrap();
-                    let message = tc.message();
-                    let (filename, lineno, colno) = message
-                        .map(|m| {
-                            let filename = m
-                                .get_script_resource_name(tc)
-                                .and_then(|v| v.to_string(tc))
-                                .map(|s| s.to_rust_string_lossy(tc))
-                                .unwrap_or_default();
-                            let lineno = m.get_line_number(tc).unwrap_or(0) as i32;
-                            let colno = m.get_start_column() as i32;
-                            (filename, lineno, colno)
-                        })
-                        .unwrap_or_default();
-                    {
-                        v8::tc_scope!(rtc, tc);
-                        let ctx = rtc.get_current_context();
-                        let global = ctx.global(rtc);
-                        if let Some(key) = v8::String::new(rtc, "_lumen_report_exception")
-                            && let Some(report_fn) = global
-                                .get(rtc, key.into())
-                                .and_then(|v| v8::Local::<v8::Function>::try_from(v).ok())
-                            && let Some(filename_v) = v8::String::new(rtc, &filename)
-                        {
-                            let lineno_v = v8::Integer::new(rtc, lineno);
-                            let colno_v = v8::Integer::new(rtc, colno);
-                            let _ = report_fn.call(
-                                rtc,
-                                global.into(),
-                                &[exc, filename_v.into(), lineno_v.into(), colno_v.into()],
-                            );
-                        }
-                    }
+                    report_exception_via!(tc, exc, reporter.as_str());
                     return Err(v8_err(tc, exc));
                 }
                 match result {
@@ -6616,7 +6571,7 @@ impl V8JsRuntime {
                     Err(failure) => match tc.exception() {
                         Some(exc) => {
                             if failure == crate::v8_esm::ModuleFailure::Runtime {
-                                report_module_exception!(tc, exc);
+                                report_exception_via!(tc, exc, "_lumen_report_exception");
                             }
                             Err(v8_err(tc, exc))
                         }
@@ -6631,9 +6586,25 @@ impl V8JsRuntime {
     /// `<script type=module src=URL>` ([`crate::v8_esm::evaluate_module_url`]).
     /// Same runtime-only reporting rule.
     pub fn eval_module_at_and_report(&self, url: &str, source: &str) -> JsResult<()> {
+        self.eval_module_at_and_report_via(url, source, "_lumen_report_exception")
+    }
+
+    /// [`Self::eval_module_at_and_report`] with the reporting function named
+    /// explicitly — see [`Self::eval_and_report_via`] for why a worker needs a
+    /// different one (BUG-813). The runtime-only rule is unchanged: a module
+    /// *load* failure is still not reported here, so a caller that has its own
+    /// fallback path for that case (`crate::worker::run_worker_thread_v8`) has
+    /// to ask the scope whether the reporter actually ran.
+    pub fn eval_module_at_and_report_via(
+        &self,
+        url: &str,
+        source: &str,
+        reporter: &str,
+    ) -> JsResult<()> {
         let source = crate::decorators::maybe_transform_decorators_v8(self, source)
             .unwrap_or_else(|| source.to_owned());
         let url = url.to_owned();
+        let reporter = reporter.to_owned();
         self.run(move |inner| {
             with_tc!(inner, |tc, _ctx| {
                 match crate::v8_esm::evaluate_module_url(tc, &url, &source) {
@@ -6641,7 +6612,7 @@ impl V8JsRuntime {
                     Err(failure) => match tc.exception() {
                         Some(exc) => {
                             if failure == crate::v8_esm::ModuleFailure::Runtime {
-                                report_module_exception!(tc, exc);
+                                report_exception_via!(tc, exc, reporter.as_str());
                             }
                             Err(v8_err(tc, exc))
                         }
