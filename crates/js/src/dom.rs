@@ -11214,6 +11214,14 @@ var window = {
     // Dispatched via `_lumen_dispatch_unhandled_rejection` — see BUG-716.
     onunhandledrejection: null,
     onrejectionhandled: null,
+    // BUG-822: declared so `'onscroll' in window` / `'onscrollend' in window`
+    // answer true — the feature test a page runs before deciding whether it may
+    // wait for the end of a scroll. Assignment already worked without them
+    // (`dispatchEvent`'s generic branch reads `window['on' + type]` at dispatch
+    // time), but a bare `in` check did not; declaring the property is all that
+    // branch needs, no dispatch-side change.
+    onscroll: null,
+    onscrollend: null,
     // `location` is deliberately absent here: it is defined directly on
     // `globalThis` as an unforgeable accessor (see `Location` above), and
     // `window` becomes `globalThis` at the end of this shim, so `window.location`
@@ -17319,6 +17327,23 @@ function _lumen_fire_window_scroll_event() {
     if (typeof window !== 'undefined') { window.dispatchEvent(ev); }
     if (typeof document !== 'undefined') { document.dispatchEvent(ev); }
 }
+// BUG-822: the `scrollend` half of the same pair (CSSOM-View §14 «scrollend»).
+// The shell calls these once a scrolling sequence has *completed*, which for an
+// instant scroll is the very rendering update that also fired `scroll` — the
+// spec explicitly allows both in one frame — and for a smooth animation or
+// touch momentum is the update on which it stopped driving the position.
+// Like `scroll`, `scrollend` is non-bubbling and non-cancelable.
+function _lumen_fire_scrollend_on_element(nid) {
+    var el = _lumen_make_element(nid);
+    if (!el) return;
+    var ev = new Event('scrollend', { bubbles: false, cancelable: false });
+    el.dispatchEvent(ev);
+}
+function _lumen_fire_window_scrollend_event() {
+    var ev = new Event('scrollend', { bubbles: false, cancelable: false });
+    if (typeof window !== 'undefined') { window.dispatchEvent(ev); }
+    if (typeof document !== 'undefined') { document.dispatchEvent(ev); }
+}
 
 // ── WindowOrWorkerGlobalScope: window IS the real global object (HTML LS) ──
 // In a real browser self === window === globalThis === the JS engine's own
@@ -19949,6 +19974,94 @@ mod tests {
             assert_eq!(reqs.len(), 1, "one page-scroll request expected");
             assert!((reqs[0].0 - 900.0).abs() < 0.1, "target_y should be 900, got {}", reqs[0].0);
             assert!(!reqs[0].1, "scrollIntoView is instant until BUG-479 honours its options");
+        }
+
+        // ── BUG-822: `scrollend` closes the sequence `scroll` opened ──
+
+        /// An instant page scroll is one complete sequence, so the frame that
+        /// moves the page also owes the `scrollend`; a frame that moves nothing
+        /// owes nothing.
+        #[test]
+        fn page_scrollend_is_due_on_an_instant_scroll() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(rt.page_scrollend_due(true, true), "an instant move ends its own sequence");
+            assert!(!rt.page_scrollend_due(false, true), "a still page owes nothing");
+        }
+
+        /// While an animation/momentum is still driving the position the debt
+        /// accumulates instead: exactly one `scrollend` at the end, not one per
+        /// frame.
+        #[test]
+        fn page_scrollend_waits_for_the_animation_to_settle() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(!rt.page_scrollend_due(true, false), "mid-animation frame owes nothing yet");
+            assert!(!rt.page_scrollend_due(true, false), "still mid-animation");
+            assert!(rt.page_scrollend_due(true, true), "the frame that settles pays the debt");
+            assert!(!rt.page_scrollend_due(false, true), "and the debt is paid only once");
+        }
+
+        /// The final frame of touch momentum can clamp at the edge and move
+        /// nothing at all — the sequence still ended, so the debt taken on
+        /// earlier frames must still be paid.
+        #[test]
+        fn page_scrollend_is_paid_even_if_the_last_frame_does_not_move() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(!rt.page_scrollend_due(true, false));
+            assert!(rt.page_scrollend_due(false, true), "settling with a debt still fires");
+        }
+
+        /// The dispatch end of the same chain, for both targets.
+        #[test]
+        fn fire_window_scrollend_reaches_a_window_listener() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "globalThis.__ends = 0;
+                 window.addEventListener('scrollend', function() { globalThis.__ends++; });",
+            )
+            .unwrap();
+            rt.fire_window_scrollend();
+            let v = rt.eval("__ends").unwrap();
+            assert_eq!(v, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn fire_element_scrollend_reaches_an_element_listener() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let nid = match rt.eval("document.getElementById('main').__nid__").unwrap() {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected a numeric nid, got {other:?}"),
+            };
+            rt.eval(
+                "globalThis.__elEnds = 0;
+                 document.getElementById('main')
+                     .addEventListener('scrollend', function() { globalThis.__elEnds++; });",
+            )
+            .unwrap();
+            rt.fire_element_scrollend(nid);
+            let v = rt.eval("__elEnds").unwrap();
+            assert_eq!(v, lumen_core::JsValue::Number(1.0));
+        }
+
+        /// The feature test a page runs before it decides it may wait for the
+        /// end of a scroll: the name has to be *present*, not merely assignable.
+        #[test]
+        fn onscrollend_is_detectable_on_window() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let v = rt
+                .eval("('onscrollend' in window) && ('onscroll' in window) && window.onscrollend === null")
+                .unwrap();
+            assert_eq!(v, lumen_core::JsValue::Bool(true));
+        }
+
+        /// …and an assignment to it is what the dispatch actually calls.
+        #[test]
+        fn window_onscrollend_handler_is_invoked() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("globalThis.__viaProp = 0; window.onscrollend = function() { globalThis.__viaProp++; };")
+                .unwrap();
+            rt.fire_window_scrollend();
+            let v = rt.eval("__viaProp").unwrap();
+            assert_eq!(v, lumen_core::JsValue::Number(1.0));
         }
 
         #[test]

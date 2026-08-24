@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-24",
  "counts": {
-  "open": 390,
-  "fixed": 471,
+  "open": 389,
+  "fixed": 472,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -10854,10 +10854,10 @@
    "debtor": false
   },
   "BUG-822": {
-   "status": "open",
-   "title": "Событие `scrollend` не диспатчится ниоткуда: функции для него нет в принципе (грep по воркспейсу — ноль совпадений), поэтому ни один путь скролла его не даёт; `…",
-   "component": "js (`crates/js/src/dom.rs:15881-15892` — есть `_lumen_fire_scroll_on_element`/`_lumen_fire_window_scroll_event`, парного `scrollend` нет), shell (`crates/shell/src/main.rs:3496-3510`)",
-   "date": null,
+   "status": "fixed",
+   "title": "Событие `scrollend` не диспатчилось ниоткуда: функции для него не было в принципе (грep по воркспейсу — ноль совпадений), поэтому ни один путь скролла его не да…",
+   "component": "js (`crates/js/src/dom.rs` — `_lumen_fire_scrollend_on_element`/`_lumen_fire_window_scrollend_event`, литерал `window`; `crates/js/src/v8_runtime.rs::page_scrollend_due`), shell (`crates/shell/src/main.rs` — шаг 1 `RedrawRequested`, дренаж `take_scroll_requests`, `try_scroll_overflow_container`)",
+   "date": "2026-08-24",
    "debtor": false
   },
   "BUG-823": {
@@ -11730,9 +11730,6 @@
   "js (`crates/js/src/dom.rs:1577` — `_lumen_make_shadow_root` собирает объектный литерал без прототипа)": [
    "BUG-895"
   ],
-  "js (`crates/js/src/dom.rs:15881-15892` — есть `_lumen_fire_scroll_on_element`/`_lumen_fire_window_scroll_event`, парного `scrollend` нет), shell (`crates/shell/src/main.rs:3496-3510`)": [
-   "BUG-822"
-  ],
   "js (`crates/js/src/dom.rs:3441-3460` -- `MouseEvent` constructor)": [
    "BUG-558"
   ],
@@ -11906,6 +11903,9 @@
   ],
   "js (`crates/js/src/dom.rs` — `_lumen_fetch`), core (`crates/core/src/ext.rs::JsFetchProvider`), network (`crates/network/src/lib.rs`)": [
    "BUG-749"
+  ],
+  "js (`crates/js/src/dom.rs` — `_lumen_fire_scrollend_on_element`/`_lumen_fire_window_scrollend_event`, литерал `window`; `crates/js/src/v8_runtime.rs::page_scrollend_due`), shell (`crates/shell/src/main.rs` — шаг 1 `RedrawRequested`, дренаж `take_scroll_requests`, `try_scroll_overflow_container`)": [
+   "BUG-822"
   ],
   "js (`crates/js/src/dom.rs` — `_lumen_make_style`/`_lumen_serialize_style`)": [
    "BUG-473"

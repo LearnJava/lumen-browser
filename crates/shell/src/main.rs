@@ -3216,6 +3216,24 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn fire_window_scroll(&self);
 
+    /// Fire a non-bubbling `scrollend` Event on the element identified by `nid`
+    /// (CSSOM-View §14). Called once an overflow container has *finished*
+    /// scrolling; both its scroll paths are instant, so that is the same frame
+    /// as [`Self::fire_element_scroll`].
+    #[allow(dead_code)]
+    fn fire_element_scrollend(&self, nid: u32);
+
+    /// Whether the viewport owes a `scrollend` on this rendering update
+    /// (BUG-822). Delegates to the runtime, which holds the debt per document —
+    /// see `V8JsRuntime::page_scrollend_due` for the `moved`/`settled` contract.
+    #[allow(dead_code)]
+    fn page_scrollend_due(&self, moved: bool, settled: bool) -> bool;
+
+    /// Fire a non-bubbling `scrollend` Event on the `window` object
+    /// (CSSOM-View §14), once page scrolling has come to a stop.
+    #[allow(dead_code)]
+    fn fire_window_scrollend(&self);
+
     /// Pause the JS event loop (T0 → T1 lifecycle transition).
     ///
     /// Sets `document.visibilityState = "hidden"`, fires `visibilitychange`.
@@ -3607,6 +3625,19 @@ impl PersistentJs for V8PersistentJs {
     fn fire_window_scroll(&self) {
         self.eval_js(
             "if(typeof _lumen_fire_window_scroll_event==='function')_lumen_fire_window_scroll_event();"
+        );
+    }
+    fn fire_element_scrollend(&self, nid: u32) {
+        self.eval_js(&format!(
+            "if(typeof _lumen_fire_scrollend_on_element==='function')_lumen_fire_scrollend_on_element({nid});"
+        ));
+    }
+    fn page_scrollend_due(&self, moved: bool, settled: bool) -> bool {
+        self.rt.page_scrollend_due(moved, settled)
+    }
+    fn fire_window_scrollend(&self) {
+        self.eval_js(
+            "if(typeof _lumen_fire_window_scrollend_event==='function')_lumen_fire_window_scrollend_event();"
         );
     }
     fn pause_event_loop(&self) {
@@ -14903,6 +14934,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         j.update_scroll_states(states);
                         for nid in scrolled_nids {
                             j.fire_element_scroll(nid);
+                            // BUG-822: a programmatic container scroll is
+                            // applied in full right here — there is no
+                            // per-container animation to wait for — so the
+                            // sequence has already ended and `scrollend`
+                            // follows `scroll` in the same frame.
+                            j.fire_element_scrollend(nid);
                         }
                     });
                     if let Some(w) = self.window.as_ref() {
@@ -16920,12 +16957,33 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // to an input device: before this, `fire_window_scroll` had a
                 // single call site in the mouse-wheel branch, so a programmatic
                 // scroll moved the page and told nobody.
+                //
+                // BUG-822: `scrollend` is the same step's second half. It is due
+                // once the sequence has *stopped*, so it is gated on nothing
+                // still driving the position — a smooth animation, touch
+                // momentum, or a scrollbar thumb held under the cursor. An
+                // instant scroll (`window.scrollTo`, find-in-page, a key jump
+                // that lands immediately) is `moved && settled` and gets both
+                // events in this one frame, which CSSOM-View §14 allows; an
+                // animated one gets `scroll` per frame and a single `scrollend`
+                // on the update that finished it, because `advance_scroll_anim`
+                // /`advance_momentum` clear their animation on the very frame
+                // they last move the page. Known imprecision: a touchpad gesture
+                // still being dragged has no "gesture active" flag here, so a
+                // pause mid-gesture can end one sequence and start another.
                 #[cfg(feature = "v8")]
                 {
                     let scroll_y = self.scroll_y;
+                    let settled = self.scroll_anim.is_none()
+                        && self.momentum_anim.is_none()
+                        && self.scroll_drag.is_none();
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                        if j.set_page_scroll_y(scroll_y) {
+                        let moved = j.set_page_scroll_y(scroll_y);
+                        if moved {
                             j.fire_window_scroll();
+                        }
+                        if j.page_scrollend_due(moved, settled) {
+                            j.fire_window_scrollend();
                         }
                     });
                 }
@@ -23545,6 +23603,11 @@ impl Lumen {
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 js.update_scroll_states(states);
                 js.fire_element_scroll(target_nid);
+                // BUG-822: one wheel notch over a container is applied
+                // instantly, so it is a complete scroll sequence of its own —
+                // unlike the page, which routes the wheel through
+                // `scroll_by_smooth` and therefore ends once per animation.
+                js.fire_element_scrollend(target_nid);
             });
             self.request_redraw();
             true
