@@ -10477,8 +10477,10 @@ function _ro_has_pending_initial() {
 // True once the shell has published a layout snapshot for this document. An
 // observe() from a parse-time script runs before the first push, when every
 // element reads back «no box» — reporting 0×0 then would be a wrong first
-// entry rather than a missing one, so the pass waits instead.
-function _ro_layout_published() {
+// entry rather than a missing one, so the pass waits instead. Shared with the
+// IntersectionObserver first-delivery pass (BUG-807), which waits on the same
+// condition for the same reason.
+function _lumen_layout_published() {
     try {
         var root = document.documentElement;
         return !!(root && _lumen_get_bounding_rect(root.__nid__));
@@ -10490,7 +10492,7 @@ function _ro_layout_published() {
 function _ro_initial_pass() {
     _ro_initial_scheduled = false;
     if (!_ro_has_pending_initial()) return;
-    if (!_ro_layout_published() && _ro_initial_attempts < _RO_INITIAL_MAX_ATTEMPTS) {
+    if (!_lumen_layout_published() && _ro_initial_attempts < _RO_INITIAL_MAX_ATTEMPTS) {
         _ro_initial_attempts++;
         _ro_schedule_initial();
         return;
@@ -10652,8 +10654,25 @@ function _lumen_deliver_canvas_css_resize() {
 // ── IntersectionObserver (WICG Intersection Observer §4) ─────────────────────
 // Delivers intersection entries after layout; the shell calls
 // _lumen_deliver_intersection_observers() after each relayout.
+//
+// BUG-807: the relayout path is not the only trigger. Intersection Observer
+// §3.2 requires observe() itself to queue an initial notification, so the
+// callback must arrive on its own shortly after the call, with nothing in the
+// document changing. The shell only relayouts on a dirty DOM/style, so a page
+// that observed a target and then sat still used to get no callback at all —
+// any unrelated mutation elsewhere on the page delivered it instead, which is
+// what made the «observe and wait» form hang rather than fail.
+// _io_schedule_initial() puts the pass on the event loop itself, the same way
+// ResizeObserver does since BUG-661.
 
 var _io_observers = [];
+
+// True while a first-delivery task is queued (the pass is idempotent, so one
+// queued task covers any number of observe() calls made before it runs).
+var _io_initial_scheduled = false;
+// Turns spent waiting for the first layout snapshot; see _io_initial_pass.
+var _io_initial_attempts = 0;
+var _IO_INITIAL_MAX_ATTEMPTS = 120;
 
 function IntersectionObserver(callback, options) {
     this._cb = callback;
@@ -10664,10 +10683,14 @@ function IntersectionObserver(callback, options) {
 IntersectionObserver.prototype.observe = function(target) {
     if (!target || target.__nid__ === undefined) return;
     for (var i = 0; i < this._observations.length; i++) {
+        // §3.2 step 1: observing an already-observed target is a no-op, so it
+        // queues nothing either.
         if (this._observations[i].target === target) return;
     }
     // lastRatio = -1 means «never delivered» → first delivery always fires
     this._observations.push({ target: target, lastRatio: -1 });
+    _io_initial_attempts = 0;
+    _io_schedule_initial();
 };
 IntersectionObserver.prototype.unobserve = function(target) {
     this._observations = this._observations.filter(function(o) { return o.target !== target; });
@@ -10677,6 +10700,43 @@ IntersectionObserver.prototype.disconnect = function() {
     if (idx >= 0) _io_observers.splice(idx, 1);
     this._observations = [];
 };
+
+// Queue the first-delivery pass as an event-loop task. Written straight into
+// _lumen_timers with nesting 0 rather than through setTimeout so the §8.6 4 ms
+// clamp cannot delay it, and _lumen_request_wakeup makes the parked shell loop
+// wake for it immediately (the BUG-661/BUG-842 pattern).
+function _io_schedule_initial() {
+    if (_io_initial_scheduled) return;
+    _io_initial_scheduled = true;
+    var deadline = _lumen_now_ms();
+    _lumen_timers.push({ id: _lumen_timer_seq++, fn: _io_initial_pass, deadline: deadline, interval: null, nesting: 0 });
+    _lumen_request_wakeup(deadline);
+}
+
+function _io_has_pending_initial() {
+    for (var i = 0; i < _io_observers.length; i++) {
+        var obs = _io_observers[i];
+        for (var j = 0; j < obs._observations.length; j++) {
+            if (obs._observations[j].lastRatio < 0) return true;
+        }
+    }
+    return false;
+}
+
+function _io_initial_pass() {
+    _io_initial_scheduled = false;
+    if (!_io_has_pending_initial()) return;
+    // Before the first layout snapshot every target reads back «no box», which
+    // would deliver a wrong not-intersecting first entry instead of a missing
+    // one; the pass waits for the snapshot, bounded by _IO_INITIAL_MAX_ATTEMPTS
+    // so a document that never gets one (dump modes) does not re-arm forever.
+    if (!_lumen_layout_published() && _io_initial_attempts < _IO_INITIAL_MAX_ATTEMPTS) {
+        _io_initial_attempts++;
+        _io_schedule_initial();
+        return;
+    }
+    _lumen_deliver_intersection_observers();
+}
 
 // Parse CSS margin shorthand into [top, right, bottom, left] px values.
 // Only px units are supported; other units resolve to 0.
@@ -10710,8 +10770,17 @@ function _lumen_deliver_intersection_observers() {
             var o = obs._observations[ei];
             var nid = o.target.__nid__;
             var rect = _lumen_get_bounding_rect(nid);
-            if (!rect) continue;
-            var ex = rect[0], ey = rect[1], ew = rect[2], eh = rect[3];
+            // A target with no box (display:none, detached) still owes its
+            // first notification: §3.2.1 reports such a target as an empty box
+            // with isIntersecting false rather than as «no observation», and
+            // §3.2 makes that notification unconditional. Skipping it here left
+            // an observe-and-wait on such a target hanging forever even with
+            // the pass now queued (BUG-807). A target that had a box and lost
+            // one keeps the old skip — reporting *that* transition is the
+            // delivery-content gap of BUG-626/627/628, not this bug.
+            if (!rect && o.lastRatio >= 0) continue;
+            var ex = rect ? rect[0] : 0, ey = rect ? rect[1] : 0;
+            var ew = rect ? rect[2] : 0, eh = rect ? rect[3] : 0;
             var ix = Math.max(ex, rootLeft);
             var iy = Math.max(ey, rootTop);
             var iw = Math.max(0, Math.min(ex + ew, rootRight) - ix);
@@ -29531,6 +29600,118 @@ mod tests {
             let rt = v8_runtime_with_dom(make_doc());
             let r = rt.eval("typeof window.IntersectionObserver === 'function'").unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-807: `observe()` queues its own initial notification, so a target
+        /// on a page that never relayouts again is still reported — the callback
+        /// used to arrive only as a side effect of an unrelated mutation.
+        #[test]
+        fn intersection_observer_initial_delivery_without_relayout() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let doc_arc = make_doc();
+            let (html_nid, body_nid) = {
+                let doc = doc_arc.lock().unwrap();
+                (
+                    super::find_element_by_tag(&doc, "html").unwrap().index() as u32,
+                    super::find_element_by_tag(&doc, "body").unwrap().index() as u32,
+                )
+            };
+            rt.update_layout_rects(
+                [
+                    (html_nid, [0.0, 0.0, 1024.0, 720.0]),
+                    (body_nid, [0.0, 0.0, 100.0, 50.0]),
+                ]
+                .into_iter()
+                .collect(),
+            );
+            rt.update_viewport_size(1024.0, 720.0);
+            rt.eval(
+                r#"
+                var _io_init_ratio = -1;
+                var _io_init = new IntersectionObserver(function(entries) {
+                    _io_init_ratio = entries[0].intersectionRatio;
+                });
+                _io_init.observe(document.body);
+            "#,
+            )
+            .unwrap();
+            // No relayout, no explicit delivery call — only the event loop turns.
+            assert_eq!(
+                rt.eval("_io_init_ratio").unwrap(),
+                lumen_core::JsValue::Number(-1.0),
+                "observe() must not deliver synchronously"
+            );
+            rt.eval("_lumen_tick_timers()").unwrap();
+            assert_eq!(
+                rt.eval("_io_init_ratio").unwrap(),
+                lumen_core::JsValue::Number(1.0)
+            );
+        }
+
+        /// BUG-807: the pass waits for the first layout snapshot rather than
+        /// reporting every target of a not-yet-laid-out document as invisible.
+        #[test]
+        fn intersection_observer_initial_delivery_waits_for_layout() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.update_viewport_size(1024.0, 720.0);
+            rt.eval(
+                r#"
+                var _io_wait_cnt = 0;
+                var _io_wait = new IntersectionObserver(function() { _io_wait_cnt++; });
+                _io_wait.observe(document.body);
+            "#,
+            )
+            .unwrap();
+            rt.eval("_lumen_tick_timers()").unwrap();
+            assert_eq!(
+                rt.eval("_io_wait_cnt").unwrap(),
+                lumen_core::JsValue::Number(0.0),
+                "no layout snapshot yet → nothing to report"
+            );
+        }
+
+        /// BUG-807: a target with no box owes an initial notification all the
+        /// same (§3.2.1 reports it as an empty box, not as no observation).
+        #[test]
+        fn intersection_observer_initial_delivery_for_boxless_target() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let doc_arc = make_doc();
+            let html_nid = {
+                let doc = doc_arc.lock().unwrap();
+                super::find_element_by_tag(&doc, "html").unwrap().index() as u32
+            };
+            // Document laid out, but the observed target itself has no box.
+            rt.update_layout_rects(
+                [(html_nid, [0.0, 0.0, 1024.0, 720.0])].into_iter().collect(),
+            );
+            rt.update_viewport_size(1024.0, 720.0);
+            rt.eval(
+                r#"
+                var _io_box_cnt = 0;
+                var _io_box_entry = null;
+                var _io_box = new IntersectionObserver(function(entries) {
+                    _io_box_cnt++;
+                    _io_box_entry = entries[0];
+                });
+                _io_box.observe(document.body);
+                _lumen_tick_timers();
+            "#,
+            )
+            .unwrap();
+            assert_eq!(
+                rt.eval("_io_box_cnt").unwrap(),
+                lumen_core::JsValue::Number(1.0)
+            );
+            assert_eq!(
+                rt.eval("_io_box_entry.isIntersecting").unwrap(),
+                lumen_core::JsValue::Bool(false)
+            );
+            // The notification is owed once, not on every pass.
+            rt.eval("_lumen_deliver_intersection_observers()").unwrap();
+            assert_eq!(
+                rt.eval("_io_box_cnt").unwrap(),
+                lumen_core::JsValue::Number(1.0)
+            );
         }
 
         #[test]
