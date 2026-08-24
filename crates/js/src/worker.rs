@@ -1226,10 +1226,42 @@ const WORKER_SHIM: &str = r#"(function() {
       colno: (info && info.colno) | 0,
       bubbles: false, cancelable: true,
     });
+    this._dispatchError(ev);
+  };
+
+  // Internal: run the `error` handlers of this `Worker` over an already-built
+  // event. Split out of `_deliverError` for `dispatchEvent`, which hands in an
+  // event the page constructed itself rather than one made from an `info`.
+  Worker.prototype._dispatchError = function(ev) {
+    ev.target = this; ev.currentTarget = this;
     if (typeof this._onerror === 'function') { try { this._onerror(ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
-    for (var i = 0; i < this._errorListeners.length; i++) {
-      try { this._errorListeners[i](ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
+    var listeners = this._errorListeners.slice();
+    for (var i = 0; i < listeners.length; i++) {
+      try { listeners[i].call(this, ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
     }
+    return !ev.defaultPrevented;
+  };
+
+  // EventTarget.dispatchEvent on the `Worker` object itself (BUG-813).
+  // `Worker` is an `AbstractWorker`, i.e. an `EventTarget`, so a page may
+  // dispatch its own `error`/`message` at it — `Worker_dispatchEvent_
+  // ErrorEvent.htm` does exactly that, with an event carrying a real `error`
+  // object (which a report coming *from* the worker thread can never have,
+  // since it crosses an agent boundary and arrives as JSON).
+  Worker.prototype.dispatchEvent = function(ev) {
+    if (!ev || typeof ev.type !== 'string') {
+      throw new TypeError('dispatchEvent: argument is not an Event');
+    }
+    if (ev.type === 'error') return this._dispatchError(ev);
+    if (ev.type === 'message') {
+      ev.target = this; ev.currentTarget = this;
+      if (typeof this._onmessage === 'function') { try { this._onmessage(ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); } }
+      var listeners = this._listeners.slice();
+      for (var i = 0; i < listeners.length; i++) {
+        try { listeners[i].call(this, ev); } catch (e) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(e); }
+      }
+    }
+    return !ev.defaultPrevented;
   };
 
   globalThis.Worker = Worker;

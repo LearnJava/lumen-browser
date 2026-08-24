@@ -19,7 +19,7 @@ postMessage({ appName: navigator.appName, platform: navigator.platform });
 
 Страница ждёт `worker.onmessage` и не получает ни сообщения, ни ошибки:
 исключение внутри воркера наружу не выходит
-([BUG-813](BUG-813-OPEN.md)), поэтому симптом — идеальная тишина.
+([BUG-813](BUG-813-FIXED.md)), поэтому симптом — идеальная тишина.
 
 ## Прямое измерение
 
@@ -57,7 +57,7 @@ echo-воркер в том же прогоне отвечает нормаль�
 Механизм `worker-navigator-missing` забирает **6 id** остатка снимка
 WPT-RUN-5 — всё семейство `workers/WorkerNavigator_*` (`appName`,
 `appVersion`, `onLine`, `platform`, `userAgent`, `userAgentData`).
-Цифра мала по той же причине, что и у [BUG-813](BUG-813-OPEN.md): каталог
+Цифра мала по той же причине, что и у [BUG-813](BUG-813-FIXED.md): каталог
 `workers/` в снимке в основном отработал по `worker-importscripts`
 ([BUG-778](BUG-778-FIXED.md)) — до чтения `navigator` тесты не доходят.
 Это оценка снизу и одновременно самый дешёвый в починке пункт среза:

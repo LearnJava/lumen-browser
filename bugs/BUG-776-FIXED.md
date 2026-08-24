@@ -112,7 +112,7 @@ worker-message data=typeof navigator=undefined self=object
 `(async () => { postMessage(navigator.platform) })()` — как в
 `workers/support/WorkerNavigator.js` — не печатает **ничего**, тогда как
 echo-воркер в том же прогоне отвечает нормально. Тишина, а не ошибка, —
-следствие [BUG-813](BUG-813-OPEN.md) (исключение из запущенного воркера
+следствие [BUG-813](BUG-813-FIXED.md) (исключение из запущенного воркера
 наружу не выходит).
 
 **Корпусной счёт.** Механизм `worker-navigator-missing` (`timeout_audit.py`)
