@@ -147,10 +147,35 @@ function _lumen_resource_track(nid, local) {
 - [BUG-571](bugs/BUG-571-FIXED.md) / [BUG-722](bugs/BUG-722-FIXED.md) —
   `createElement`-путь для `<script>`/`<link>`; **работает**, подтверждено
   A/B выше. Чинить их заново не нужно.
-- [BUG-630](bugs/BUG-630-OPEN.md) (`<img>`), [BUG-795](bugs/BUG-795-DUPLICATE.md)
-  (`<track>`), [BUG-798](bugs/BUG-798-OPEN.md) (`<embed>`/`<object>`) — тот
-  же КЛАСС («элемент не сообщает об исходе загрузки»), но другие элементы и
-  другой код; общего фикса с ними нет.
+- [BUG-630](bugs/BUG-630-OPEN.md) (`<img>`), [BUG-798](bugs/BUG-798-OPEN.md)
+  (`<embed>`/`<object>`) — тот же КЛАСС («элемент не сообщает об исходе
+  загрузки»), но другие элементы и другой код; общего фикса с ними нет.
+
+## Разметочный `<track>` — сюда же (2026-08-24)
+
+[BUG-775](bugs/BUG-775-FIXED.md) (поглотил [BUG-795](bugs/BUG-795-DUPLICATE.md))
+закрыл **скриптовую** половину `<track>`: элемент, созданный через
+`createElement`, теперь фетчится, разбирается и диспатчит `load`/`error`.
+Разметочный `<track>` остался ровно в форме этого бага и по той же причине:
+его грузит Rust-обход `shell::tracks::load_video_tracks` **до** того, как
+страница успевает повесить обработчик, и никакого сигнала JS-стороне не даёт.
+
+Измерено 2026-08-24 (`run_report.py --all --root
+html/semantics/embedded-content/media-elements/track/track-element
+--recursive`): из 43 файлов `track-webvtt-*.html`, которые BUG-795 считал
+висящими, 34 теперь проходят — они создают трек через
+`track-helpers.js::check_cues_from_track`; висят ровно **9**, где `<track>`
+написан в разметке (`track-webvtt-bom.html`, `-magic-header.html`,
+`-newlines.html`, `-utf8.html`, `-no-timings.html`, `-timings-hour.html`,
+`-timings-no-hours.html`, `-header-comment.html`,
+`-align-text-line-position.html`).
+
+Развилка для фикса нетривиальна и потому не сделана попутно: JS-сторона умеет
+запустить модель и для разметочного трека (это дало бы второй, тёплый по кэшу
+запрос — та же аппроксимация, что уже задокументирована для
+`_lumen_link_prepare`), но тогда `video.textTracks` начнёт строиться из
+JS-списка вместо снимка шелла для **каждой** существующей страницы с
+разметочными треками. Нужно сперва решить, кто из двоих владеет списком.
 - [BUG-459](bugs/BUG-459-OPEN.md) — URL внешнего `<script type=module>`;
   ортогонально, событий не касается.
 
