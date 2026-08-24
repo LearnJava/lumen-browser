@@ -1,6 +1,14 @@
 # BUG-795 — `<track>` never fires `load`/`error`, and `HTMLTrackElement.track` is entirely unimplemented
 
-**Статус:** OPEN
+**Статус:** DUPLICATE → [BUG-775](BUG-775-FIXED.md)
+
+**Дубликат [BUG-775](BUG-775-FIXED.md)** (тот же дефект: `<track>` не диспатчит
+`load`/`error`), слит 2026-08-24. Выживает BUG-775 как более ранний (2026-08-18);
+описанный здесь второй симптом — отсутствующий `HTMLTrackElement.prototype.track`
+— оказался той же дырой и закрыт тем же фиксом, вместе с `.readyState` и
+константами `NONE`/`LOADING`/`LOADED`/`ERROR`. Измерение по категории
+`html/semantics/embedded-content/media-elements` (ниже) перенесено в BUG-775.
+
 **Заведён:** 2026-08-21 (WPT-RUN-6, срез 4 — разбор массового TIMEOUT в `html/semantics/embedded-content`)
 **Область:** `crates/js/src/dom.rs` (`HTMLTrackElement.prototype` reflection block, `dom.rs:13800-13806` — no `track` accessor installed) и `crates/js/src/video_bindings.rs`/`crates/js/src/text_track_store.rs` (существующая `TextTrack`/`TextTrackList` машинерия, но выстроенная только вокруг `<video>.textTracks`, ни разу не привязанная к отдельному `<track>`-узлу)
 **Владелец:** P1/P3 (движок). Заведён P2 в ходе WPT-инструментальной задачи, здесь не чинится.

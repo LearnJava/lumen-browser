@@ -32,7 +32,7 @@ Three distinct, confirmed clusters explain almost every failure:
   explains `api/VTTCue/snapToLines.html`/`text.html`/`vertical.html`
   (`TypeError: video.addTextTrack is not a function`, the already-documented
   `CAPABILITIES.md` gap "⬜ addTextTrack()").
-- **[BUG-775](../../bugs/BUG-775-OPEN.md) (new)** — all 40
+- **[BUG-775](../../bugs/BUG-775-FIXED.md) (new)** — all 40
   `parsing/file-parsing/tests/*.html` files and 5 of 6
   `parsing/cue-text-parsing/tests/*.html` files: `HTMLTrackElement` never
   dispatches `load`/`error`, so the standard `track.onload = ...; video
@@ -76,9 +76,25 @@ harness OK, 1/176 сабтестов**. Два подтверждённых ко
 подавляющее большинство провалов: уже заведённый
 [BUG-570](../bugs/BUG-570-OPEN.md) (`VTTCue`/`VTTRegion`/`TrackEvent` не
 установлены как глобалы — весь `api/VTTCue`/`api/VTTRegion`) и новый
-[BUG-775](../bugs/BUG-775-OPEN.md) (`HTMLTrackElement` никогда не диспатчит
+[BUG-775](../bugs/BUG-775-FIXED.md) (`HTMLTrackElement` никогда не диспатчит
 `load`/`error` — весь `parsing/file-parsing/` и большая часть
 `parsing/cue-text-parsing/` виснут до таймаута раннера). Остальное —
 недостающие общие ресурсы WPT (`WebIDLParser.js`/`idlharness.js`, не
 вендорены нигде в репозитории, не специфично для этой категории) и один
 неисследованный файл-выброс (`getVideoURI is not defined`).
+
+**Повторный прогон 2026-08-24** (P1, после фикса
+[BUG-775](../../bugs/BUG-775-FIXED.md), та же команда, тот же слот): **88/322
+harness OK, 31/178 сабтестов, 0 мин 58 с** против **42/322, 2/178, 8 мин 46 с**
+на непосредственно предшествующем коммите. (Знаменатель harness — 322, а не 72:
+он считает и reftest-ы `rendering/`, которых раннер не исполняет; сравнивать
+осмысленно только сабтесты и время.) Обвал времени прогона — прямое следствие
+исчезновения ~10-секундных таймаутов.
+
+Освободившийся остаток перестал прятаться за TIMEOUT и распался на два новых
+механизма, оба заведены: [BUG-902](../../bugs/BUG-902-OPEN.md) — нет
+`VTTCue.getCueAsHTML()` (92 сабтеста `cue-text-parsing`), настройки cue не
+отдаются странице, `VTTRegion` отсутствует (33 сабтеста); и
+[BUG-903](../../bugs/BUG-903-OPEN.md) — конформность самого `parse_vtt`
+(границы блока по WebVTT §5, строгость подписи), 6 сабтестов
+`file-parsing/`.

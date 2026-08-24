@@ -58,11 +58,11 @@
  "generated": "2026-08-24",
  "counts": {
   "open": 397,
-  "fixed": 462,
+  "fixed": 463,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 859,
+ "total_bugs": 860,
  "phases": [
   {
    "id": "P0",
@@ -4578,7 +4578,7 @@
        "title": "WPT: вендорить + прогнать категорию `webvtt`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (подтверждён — cue-парсер + `<track>`-сбор + оверлей реальны, `lumen_dom::vtt`/`crates/shell/src/tracks.rs`, не заглушка). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root webvtt --recursive`, ~8:17, 821 файл, 72 id; 581/820 файлов — reftest в `rendering/`, не исполняются раннером) — **21/72 harness OK, 1/176 сабтестов**. Найден [BUG-775](bugs/BUG-775-OPEN.md) (`HTMLTrackElement` никогда не диспатчит `load`/`error` — стандартный паттерн `track.onload` виснет до таймаута, роняя все 40 файлов `parsing/file-parsing/` + часть `parsing/cue-text-parsing/`). `api/VTTCue`/`api/VTTRegion` — уже заведённый BUG-570 (конструкторы не установлены как глобалы)",
+       "note": "Скоуп: ⬜ (подтверждён — cue-парсер + `<track>`-сбор + оверлей реальны, `lumen_dom::vtt`/`crates/shell/src/tracks.rs`, не заглушка). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root webvtt --recursive`, ~8:17, 821 файл, 72 id; 581/820 файлов — reftest в `rendering/`, не исполняются раннером) — **21/72 harness OK, 1/176 сабтестов**. Найден [BUG-775](bugs/BUG-775-FIXED.md) (`HTMLTrackElement` никогда не диспатчит `load`/`error` — стандартный паттерн `track.onload` виснет до таймаута, роняя все 40 файлов `parsing/file-parsing/` + часть `parsing/cue-text-parsing/`). `api/VTTCue`/`api/VTTRegion` — уже заведённый BUG-570 (конструкторы не установлены как глобалы). Повторный прогон 2026-08-24 после фикса BUG-775: **88/322 harness OK, 31/178 сабтестов, 0:58** против **42/322, 2/178, 8:46** — остаток распался на [BUG-902](bugs/BUG-902-OPEN.md) (нет `getCueAsHTML`, настройки cue и `VTTRegion` не отдаются) и [BUG-903](bugs/BUG-903-OPEN.md) (конформность `parse_vtt`)",
        "bugs": [
         "BUG-775"
        ]
@@ -10563,10 +10563,10 @@
    "debtor": false
   },
   "BUG-775": {
-   "status": "open",
+   "status": "fixed",
    "title": "`HTMLTrackElement` никогда не диспатчит `load`/`error` -- любой скрипт стандартного паттерна `track.onload = ...; video.appendChild(track)` (все тесты `webvtt/p…",
-   "component": "js (`crates/js/src/dom.rs:13589` -- `HTMLTrackElement` только атрибут-рефлексия, нет диспатча событий; `crates/js/src/video_bindings.rs` -- `fireEvent()` вызывается для `<video>`/`<audio>`, ни разу для `<track>`; `crates/shell/src/tracks.rs::load_video_tracks` -- чисто внутренний парсер, ничего не диспатчит в DOM)",
-   "date": null,
+   "component": "js (`crates/js/src/video_bindings.rs` — `VIDEO_SHIM`, секция «`<track>` loading», натив `__lumen_vtt_parse`; `crates/js/src/dom.rs` — `_lumen_resource_track`/`_lumen_resource_try_prepare`)",
+   "date": "2026-08-24",
    "debtor": false
   },
   "BUG-776": {
@@ -10692,13 +10692,6 @@
    "status": "open",
    "title": "`element.focus()`, вызванный синхронно изнутри обработчика `window` `load` (`addEventListener('load', …)`/`onload`), **никогда не возвращает управление** — ни р…",
    "component": "js/shell (`crates/js/src/dom.rs` — `HTMLElement.prototype.focus`, `_lumen_apply_ready_state`; и/или `crates/shell/src/main.rs:12486-12500` — `notify_window_loaded`/`route_task_js` на переходе `readyState → 'complete'`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-795": {
-   "status": "open",
-   "title": "`<track>` никогда не диспатчит `load`/`error` (только `<video>`/`<audio>` шлют `loadedmetadata`, ни одного диспатча на `<track>` в `video_bindings.rs`), и `HTML…",
-   "component": "js (`crates/js/src/dom.rs:13800-13806` — `HTMLTrackElement.prototype` reflection; `crates/js/src/video_bindings.rs`/`crates/js/src/text_track_store.rs` — существующая `TextTrack`-машинерия, не привязанная к отдельному `<track>`)",
    "date": null,
    "debtor": false
   },
@@ -11401,6 +11394,20 @@
    "component": "js (`crates/js/src/v8_runtime.rs` — `to_rust_string_lossy` на границе регистрации нативов, 12 мест)",
    "date": null,
    "debtor": false
+  },
+  "BUG-902": {
+   "status": "open",
+   "title": "Cue отдаёт странице только текст и тайминги. Три пробела: `VTTCue.getCueAsHTML()` не существует вовсе (`cue.getCueAsHTML is not a function` — **92 уникальных са…",
+   "component": "js (`crates/js/src/video_bindings.rs` — `appendCues()` строит cue из пяти полей; `crates/js/src/text_track_store.rs::tracks_json` и натив `__lumen_vtt_parse` — оба сериализуют `VttCue` без `settings`; `crates/engine/dom/src/vtt.rs` — `VttCueSettings` разбирается и никуда не уезжает)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-903": {
+   "status": "open",
+   "title": "Конформность WebVTT-парсера, 6 сабтестов `webvtt/parsing/file-parsing/`. (1) Блок режется **только** по пустым строкам, а WebVTT §5 требует завершать его и на с…",
+   "component": "dom (`crates/engine/dom/src/vtt.rs::parse_vtt` — разбиение на блоки только по пустым строкам; проверка подписи `header.as_bytes()[6].is_ascii_whitespace()`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11524,6 +11531,9 @@
   ],
   "dom (`crates/engine/dom/src/lib.rs:119` — `enum Namespace`), js (`crates/js/src/v8_runtime.rs:2372-2394` — натив `_lumen_create_element_ns`)": [
    "BUG-830"
+  ],
+  "dom (`crates/engine/dom/src/vtt.rs::parse_vtt` — разбиение на блоки только по пустым строкам; проверка подписи `header.as_bytes()[6].is_ascii_whitespace()`)": [
+   "BUG-903"
   ],
   "driver": [
    "BUG-061",
@@ -11676,9 +11686,6 @@
   ],
   "js (`crates/js/src/dom.rs:13023` — `indexedDB.open` смотрит только на запись базы; `:12509` `onversionchange` и `:12351` `onblocked` объявлены и не диспатчатся ниоткуда)": [
    "BUG-843"
-  ],
-  "js (`crates/js/src/dom.rs:13800-13806` — `HTMLTrackElement.prototype` reflection; `crates/js/src/video_bindings.rs`/`crates/js/src/text_track_store.rs` — существующая `TextTrack`-машинерия, не привязанная к отдельному `<track>`)": [
-   "BUG-795"
   ],
   "js (`crates/js/src/dom.rs:14634` — ветка `A`/`AREA` в `_lumen_run_activation_behavior` зовёт `_lumen_navigate`, минуя `_lumen_navigate_or_fragment` с `:6330`)": [
    "BUG-833"
@@ -12035,6 +12042,9 @@
   ],
   "js (`crates/js/src/v8_runtime.rs` — уровень изолята)": [
    "BUG-716"
+  ],
+  "js (`crates/js/src/video_bindings.rs` — `appendCues()` строит cue из пяти полей; `crates/js/src/text_track_store.rs::tracks_json` и натив `__lumen_vtt_parse` — оба сериализуют `VttCue` без `settings`; `crates/engine/dom/src/vtt.rs` — `VttCueSettings` разбирается и никуда не уезжает)": [
+   "BUG-902"
   ],
   "js (`crates/js/src/wasm/parser.rs:547-599` — `parse_element_section`)": [
    "BUG-700"
