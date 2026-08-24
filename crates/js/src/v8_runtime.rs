@@ -667,6 +667,11 @@ pub struct V8JsRuntime {
     pending_page_scrolls: Arc<Mutex<Vec<(f32, bool)>>>,
     /// Current page scroll Y exposed to JS `window.scrollY` / `window.pageYOffset`.
     page_scroll_y: Arc<Mutex<f32>>,
+    /// BUG-822: `true` when the page moved on a rendering update whose scroll
+    /// sequence was still in flight, so a `scrollend` is still owed once it
+    /// settles. Lives next to [`Self::page_scroll_y`] for the same reason it
+    /// does — the debt belongs to the document, not to the shell.
+    page_scroll_end_pending: Arc<Mutex<bool>>,
     /// Computed CSS styles per node, updated after each relayout by the shell.
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
     /// Resolved CSS custom properties per node (keys carry their `--` prefix),
@@ -921,6 +926,7 @@ impl V8JsRuntime {
             pending_scrolls: Arc::new(Mutex::new(Vec::new())),
             pending_page_scrolls: Arc::new(Mutex::new(Vec::new())),
             page_scroll_y: Arc::new(Mutex::new(0.0)),
+            page_scroll_end_pending: Arc::new(Mutex::new(false)),
             computed_styles: Arc::new(Mutex::new(HashMap::new())),
             custom_properties: Arc::new(Mutex::new(HashMap::new())),
             window_open_requests: Arc::new(Mutex::new(Vec::new())),
@@ -1225,6 +1231,45 @@ impl V8JsRuntime {
         self.eval(
             "if(typeof _lumen_fire_window_scroll_event==='function')\
              _lumen_fire_window_scroll_event();"
+        ).ok();
+    }
+
+    /// BUG-822: decide whether this rendering update owes a `scrollend` on the
+    /// viewport, and clear the debt when it does.
+    ///
+    /// `moved` is [`Self::set_page_scroll_y`]'s answer for this update;
+    /// `settled` says nothing is still driving the scroll (no smooth animation,
+    /// no touch momentum, no scrollbar drag in progress). An instant scroll is
+    /// therefore `moved && settled` and gets `scroll` + `scrollend` in the same
+    /// frame, which CSSOM-View §14 allows; an animated one accumulates the debt
+    /// while it runs and pays it on the update that stops moving the page —
+    /// including the case where the last frame of touch momentum happens to
+    /// clamp at the edge and moves nothing at all.
+    pub fn page_scrollend_due(&self, moved: bool, settled: bool) -> bool {
+        let mut pending = self.page_scroll_end_pending.lock().unwrap_or_else(|e| e.into_inner());
+        if !settled {
+            *pending |= moved;
+            return false;
+        }
+        let due = moved || *pending;
+        *pending = false;
+        due
+    }
+
+    /// Fire a non-bubbling `scrollend` Event on the DOM element identified by `nid`.
+    pub fn fire_element_scrollend(&self, nid: u32) {
+        let script = format!(
+            "if(typeof _lumen_fire_scrollend_on_element==='function')\
+             _lumen_fire_scrollend_on_element({nid});"
+        );
+        self.eval(&script).ok();
+    }
+
+    /// Fire a non-bubbling `scrollend` Event on the `window` object (page scroll).
+    pub fn fire_window_scrollend(&self) {
+        self.eval(
+            "if(typeof _lumen_fire_window_scrollend_event==='function')\
+             _lumen_fire_window_scrollend_event();"
         ).ok();
     }
 
