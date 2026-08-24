@@ -1,6 +1,6 @@
 # BUG-776 — `WorkerGlobalScope` не даёт ни `self.location`, ни `self.navigator` в dedicated- и shared-воркерах
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-24
 **Компонент:** js (`crates/js/src/worker.rs:264` — `worker_global_shim`, IIFE не объявляет `location`/`navigator`; `crates/js/src/shared_worker.rs:99` — `SHARED_WORKER_GLOBAL_SHIM`, та же дыра; `crates/js/src/sw_worker.rs:456` — `WorkerLocation` в сервис-воркере есть, `navigator` там же отсутствует)
 **Найден:** P2, WPT-VENDOR-workers, 2026-08-18 — `run_report.py --all --root workers --recursive`
 
@@ -125,6 +125,107 @@ echo-воркер в том же прогоне отвечает нормаль�
 **Как проверить фикс** (в дополнение к прогону категории):
 `--variant worker-navigator` печатает `typeof navigator=object
 location=object`, `--variant worker-async-postmessage` — `async:<platform>,true`.
+
+## Исправление (P1, 2026-08-24)
+
+Обе половины — `location` и `navigator` — во всех трёх видах воркера.
+
+### `WorkerLocation`
+
+Класс, фабрика `_lumen_make_worker_location(url)` и `navigator` живут в одном
+куске `crates/js/src/dom.rs::WORKER_LOCATION_NAVIGATOR_SHIM`, который
+`worker::install_worker_scope_globals_v8` подмешивает в `worker_exposed_shim()`
+для всех трёх видов. Это **единственная** часть воркерного шима, которая не
+является дословным срезом страничного (у страницы нет `WorkerLocation`) — тест
+склейки теперь утверждает это с обеих сторон.
+
+Сам объект `location` кусок при этом **не** создаёт: его URL у каждого вида
+свой — dedicated и shared получают его из выставленного Rust-ом
+`_lumen_worker_location_url`, сервис-воркер выводит из своего scope. Каждый
+зовёт общую фабрику сам (у сервис-воркера при этом исчез собственный литерал
+на девять полей — теперь и там `location instanceof WorkerLocation`).
+
+**Нового аргумента в цепочке порождения не появилось.** `location` нужен
+**неурезанный** URL скрипта, а `_lumen_worker_base_url` (BUG-778) — урезанный
+до пустой строки для `blob:`/`data:`. Вместо двух строк, которые легко
+перепутать местами на любом из ~8 вызовов, JS-конструкторы `Worker`/
+`SharedWorker` теперь передают **только URL скрипта**, а базу выводит
+`worker::worker_base_url` — правило «для непрозрачного URL база пуста»
+записано ровно один раз, а `_lumen_create_worker`/`_lumen_sw_connect`
+сохранили прежнюю арность.
+
+`[LegacyUnforgeable] readonly attribute` реализован буквально: собственные
+неконфигурируемые аксессоры **без сеттера**. `setting-members.html` требует
+одновременно «ни одного исключения» и «значения не изменились» — свойство-данные
+с `writable: false` провалило бы первое в strict-режиме, бросающий сеттер —
+второе.
+
+### `WorkerNavigator`
+
+Значения `NavigatorID` **нельзя было просто придумать**: у страницы `navigator`
+собирается тремя слоями — литерал в `dom.rs`, затем антидетект-заплатка
+`surface_api.rs` (`appName`/`appVersion`/`product`, под охраной
+`typeof === 'undefined'`), затем профиль `navigator_bindings.rs`
+(`platform`/`language`/`languages`), — и ни один из них в изоляте воркера не
+исполняется. Первая версия правки клала общие значения в **страничный** шим:
+это молча отключило бы заплатку `surface_api` (её охрана увидела бы уже
+определённое свойство) и подменило бы Chrome-подобный `appVersion` на
+собственный. Поэтому страница осталась нетронутой, а копию для воркера строит
+`navigator_bindings::worker_navigator_id_shim`, читая тот же процесс-глобальный
+`NavigatorProfile` — так что `fingerprint.toml` доезжает и до воркера.
+
+Две копии констант держит в согласии тест
+`worker_navigator_matches_the_page_navigator`: он поднимает настоящий страничный
+рантайм (`install_dom`) и воркерную область и сравнивает их член за членом.
+Именно он нашёл, что в `surface_api` не было `appCodeName` (добавлен той же
+правкой). Профильную половину проверяет отдельный тест против явного профиля —
+сравнивать её через два рантайма нельзя, процесс-глобальный слот мутирует
+соседний тест.
+
+`productSub`/`vendor`/`vendorSub` сознательно отсутствуют: эти три члена
+миксина — `[Exposed=Window]`.
+
+### Замеры
+
+Живой A/B на этой машине, бинарь `dev-release`:
+
+| набор | было | стало |
+|---|---|---|
+| `workers/interfaces` (рекурсивно, 53 файла) | 36/53 harness, **26/120** сабтестов | 44/53 harness, **44/120** сабтестов |
+| `workers/` (верхний уровень, 49 файлов) | 23/49 harness, 29/130 сабтестов | 27/49 harness, 31/130 сабтестов |
+| 19 файлов `WorkerLocation_*.htm`/`WorkerNavigator_*.htm` | **19/19 TIMEOUT** | **18/19 PASS**, 1 FAIL |
+
+Последнюю строку `run_report.py` не видит вовсе (расширение `.htm`), она
+прогнана через `run_smoke.py` со списком id.
+
+Живая проба из заявки: `--variant worker-navigator` печатает
+`typeof navigator=object self=object location=object`,
+`--variant worker-async-postmessage` — `async:Win32,false`
+(`false`, а не `true`: `onLine` у страницы тоже `false`, и согласованность
+с ней здесь важнее).
+
+24 новых/затронутых юнит-теста в `worker.rs`, `shared_worker.rs`,
+`navigator_bindings.rs`, `dom.rs`.
+
+### Остаток
+
+- **Редирект скрипта воркера не двигает `location`** — `location/redirect.html`,
+  `redirect-module.html`, `redirect-sharedworker.html` (и
+  `WorkerLocation-origin.sub.window.html`) сообщают адрес *до* редиректа.
+  HTML LS §10.2.6.1 требует ставить URL области из **финального** ответа;
+  синхронный мост `fetch_worker_script` конечный URL наружу не отдаёт вовсе,
+  так что это правка сетевого слоя, а не шима. Раздел «не расследовано» ниже
+  предполагал именно это — предположение подтвердилось.
+- **`WorkerNavigator` не несёт немиксинных членов страничного `navigator`**
+  (`serviceWorker`, `sendBeacon`, `clipboard`, `hardwareConcurrency`,
+  `deviceMemory`, `userAgentData` — последний прямо назван в
+  `WorkerNavigator_userAgentData.http.html`).
+- **`search`/`hash` для URL, оканчивающегося на `?`/`#`** — единственный FAIL
+  из 19: [BUG-904](BUG-904-OPEN.md), дефект общего `_lumen_parse_url`, видимый
+  и на странице.
+- Кластеры `SharedWorker-extendedLifetime-*`/`constructors/*` этой правкой не
+  сдвинулись — предположение раздела ниже о «попутном чтении `location`» не
+  подтвердилось.
 
 ## Не расследовано в этой сессии
 

@@ -17210,6 +17210,69 @@ var removeEventListener = window.removeEventListener.bind(window);
 var dispatchEvent       = window.dispatchEvent.bind(window);
 ";
 
+/// `WorkerLocation` (HTML LS §10.2.4) and `WorkerNavigator` (§10.2.5) — the two
+/// `[Exposed=Worker]` interfaces every `WorkerGlobalScope` has and the page does
+/// not, so unlike its neighbours this piece is spliced **only** into
+/// [`worker_exposed_shim`] and is not a slice of the page program (BUG-776:
+/// before it, `location`/`navigator` were plain `ReferenceError`s in a dedicated
+/// and a shared worker, and `navigator` in a service worker too).
+///
+/// Only the `navigator` singleton is created here, over the `_lumen_navigator_id`
+/// values built in Rust by
+/// [`crate::navigator_bindings::worker_navigator_id_shim`] and evaluated just
+/// before this piece. `location` is not: its URL is the worker's own script URL,
+/// which each flavour learns differently (dedicated/shared from the Rust-set
+/// `_lumen_worker_location_url` global, service from its scope), so each calls
+/// `_lumen_make_worker_location(url)` itself.
+///
+/// The location members are own, non-configurable accessors *without* a setter,
+/// which is what `[LegacyUnforgeable] readonly attribute` means in a
+/// non-strict script: `location.href = 1` must silently do nothing rather than
+/// throw (`interfaces/WorkerGlobalScope/location/setting-members.html` asserts
+/// exactly zero exceptions from eight such assignments). The navigator members
+/// are ordinary prototype accessors — those are not unforgeable.
+pub(crate) const WORKER_LOCATION_NAVIGATOR_SHIM: &str = "
+(function() {
+  function WorkerLocation() { throw new TypeError('Illegal constructor'); }
+  WorkerLocation.prototype.toString = function() { return this.href; };
+  globalThis.WorkerLocation = WorkerLocation;
+
+  var _LOC_MEMBERS = ['href', 'origin', 'protocol', 'host', 'hostname',
+                      'port', 'pathname', 'search', 'hash'];
+
+  // Build the scope's `location` from an absolute URL. Parsing goes through
+  // the same `_lumen_parse_url` the page's `location` uses, so an opaque URL
+  // (a `data:`/`blob:` worker) degrades the same way there as here instead of
+  // throwing.
+  globalThis._lumen_make_worker_location = function(url) {
+    var p = _lumen_parse_url(String(url == null ? '' : url));
+    var loc = Object.create(WorkerLocation.prototype);
+    _LOC_MEMBERS.forEach(function(name) {
+      var value = String(p[name] == null ? '' : p[name]);
+      Object.defineProperty(loc, name, {
+        get: function() { return value; },
+        enumerable: true, configurable: false,
+      });
+    });
+    return loc;
+  };
+
+  function WorkerNavigator() { throw new TypeError('Illegal constructor'); }
+  globalThis.WorkerNavigator = WorkerNavigator;
+
+  var _navId = (typeof _lumen_navigator_id === 'object' && _lumen_navigator_id)
+    ? _lumen_navigator_id : {};
+  Object.keys(_navId).forEach(function(name) {
+    Object.defineProperty(WorkerNavigator.prototype, name, {
+      get: function() { return _navId[name]; },
+      enumerable: true, configurable: true,
+    });
+  });
+
+  globalThis.navigator = Object.create(WorkerNavigator.prototype);
+})();
+";
+
 /// The page-scope Web API shim, re-assembled from its five parts in source
 /// order: head, [`EVENT_TARGET_SHIM`], mid, [`PERFORMANCE_SHIM`], tail.
 ///
@@ -17231,9 +17294,17 @@ pub(crate) fn web_api_shim() -> String {
 /// value convertible for [`crate::v8_runtime::V8JsRuntime::eval`], whose return
 /// path has no representation for the function object the last statement of
 /// [`EVENT_TARGET_SHIM`] would otherwise yield.
+///
+/// [`WORKER_LOCATION_NAVIGATOR_SHIM`] is the one part that is *not* a slice of
+/// the page program — the page has no `WorkerLocation`/`WorkerNavigator`. It
+/// comes last because it reads `URL_PARSE_SHIM`'s parser and the
+/// `_lumen_navigator_id` object its caller evaluates first.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn worker_exposed_shim() -> String {
-    format!("{EVENT_TARGET_SHIM}{PERFORMANCE_SHIM}{URL_PARSE_SHIM}{URL_SHIM}\nundefined;\n")
+    format!(
+        "{EVENT_TARGET_SHIM}{PERFORMANCE_SHIM}{URL_PARSE_SHIM}{URL_SHIM}\
+         {WORKER_LOCATION_NAVIGATOR_SHIM}\nundefined;\n"
+    )
 }
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -17295,6 +17366,11 @@ mod tests {
         let worker = worker_exposed_shim();
         assert!(worker.starts_with(EVENT_TARGET_SHIM));
         assert!(worker.contains(PERFORMANCE_SHIM));
+        // Интерфейсы `[Exposed=Worker]` в странице появиться не должны: это
+        // единственная часть воркерного шима, которой в странице нет (BUG-776).
+        assert!(worker.contains(WORKER_LOCATION_NAVIGATOR_SHIM));
+        assert!(!page.contains("globalThis.WorkerLocation"));
+        assert!(!page.contains("globalThis.WorkerNavigator"));
     }
 
     #[cfg(feature = "v8-backend")]

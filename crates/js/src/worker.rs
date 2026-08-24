@@ -288,10 +288,30 @@ pub(crate) fn resolve_import_url(
 
 // ─── shared WorkerGlobalScope surface ─────────────────────────────────────────
 
+/// The base URL a worker scope resolves a relative `importScripts()`/`fetch()`/
+/// `XMLHttpRequest` target against (BUG-778): its own script URL, or the empty
+/// string when that URL is opaque — nothing can be resolved against a `blob:`
+/// or `data:` URL, and the shims' `_lumen_worker_base_url` guard is a
+/// truthiness check for exactly that case.
+///
+/// Derived here rather than passed in alongside the script URL (BUG-776 needed
+/// the *unreduced* URL for `location`) so the two can never be swapped at a
+/// call site: every worker flavour hands its own script URL down and gets both
+/// values from it.
+pub(crate) fn worker_base_url(script_url: &str) -> &str {
+    if script_url.starts_with("blob:") || script_url.starts_with("data:") {
+        ""
+    } else {
+        script_url
+    }
+}
+
 /// Install the parts of the global scope that WHATWG exposes in **every**
 /// `WorkerGlobalScope`, not just the dedicated-worker one: the `_lumen_now_ms`
-/// clock native plus [`crate::dom::worker_exposed_shim`] (`EventTarget` and the
-/// `Performance` interface with its `performance` singleton).
+/// clock native, the `_lumen_navigator_id` values (BUG-776) and
+/// [`crate::dom::worker_exposed_shim`] (`EventTarget`, the `Performance`
+/// interface with its `performance` singleton, and `WorkerLocation`/
+/// `WorkerNavigator` with the `navigator` singleton).
 ///
 /// Called by all three worker flavours — dedicated ([`install_worker_globals_v8`]),
 /// shared (`shared_worker.rs`) and service (`sw_worker.rs`) — before each
@@ -318,6 +338,11 @@ pub(crate) fn install_worker_scope_globals_v8(rt: &V8JsRuntime) -> JsResult<()> 
                 .unwrap_or(0.0)
         }),
     )?;
+    // BUG-776: the `NavigatorID` values `WORKER_LOCATION_NAVIGATOR_SHIM` (part
+    // of `worker_exposed_shim`) reads — built here rather than baked into that
+    // shim so `platform`/`language`/`languages` come from the same
+    // `NavigatorProfile` the page's own antidetect layer uses.
+    rt.eval(&crate::navigator_bindings::worker_navigator_id_shim())?;
     rt.eval(&crate::dom::worker_exposed_shim())?;
     Ok(())
 }
@@ -343,6 +368,16 @@ fn worker_global_shim(worker_id: u32) -> String {
 
   globalThis.self = globalThis;
   globalThis.name = 'worker-' + wid;
+
+  // `location` — HTML LS §10.2.4: the scope's own script URL, set by Rust as
+  // `_lumen_worker_location_url` before this shim runs (BUG-776). The class and
+  // the `navigator` singleton come from the shim shared with the other two
+  // worker flavours (`crate::dom::WORKER_LOCATION_NAVIGATOR_SHIM`, evaluated by
+  // `install_worker_scope_globals_v8` just before this one).
+  if (typeof _lumen_make_worker_location === 'function') {{
+    globalThis.location = _lumen_make_worker_location(
+      typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : '');
+  }}
 
   // Report an uncaught exception from a message/timer callback to the parent
   // (BUG-591 worker parent-side reporting; HTML LS "report the exception").
@@ -837,10 +872,12 @@ const WORKER_SHIM: &str = r#"(function() {
   function Worker(url) {
     var script;
     var u = String(url || '');
-    // Base URL for this worker's own scope (BUG-778): used Rust-side to
-    // resolve relative/path-absolute importScripts()/fetch()/XHR targets.
-    // Empty for a blob:/data: worker — those have no meaningful origin.
-    var base = '';
+    // The worker scope's own script URL: `location.href` inside it (BUG-776),
+    // and — via `worker_base_url`, Rust-side — the base a relative
+    // importScripts()/fetch()/XHR target resolves against (BUG-778). A
+    // blob:/data: worker keeps its opaque URL here; the base derived from it
+    // is empty, as before.
+    var scriptUrl = u;
 
     if (u.startsWith('blob:lumen/')) {
       // Blob URL created via URL.createObjectURL(blob).
@@ -877,7 +914,7 @@ const WORKER_SHIM: &str = r#"(function() {
       var abs = _url_resolve(u, _lumen_document_base_url());
       var fetched = _lumen_worker_fetch_script(abs);
       script = (typeof fetched === 'string') ? fetched : null;
-      base = abs;
+      scriptUrl = abs;
     }
 
     this._onmessage = null;
@@ -906,7 +943,7 @@ const WORKER_SHIM: &str = r#"(function() {
       return;
     }
 
-    this._id = _lumen_create_worker(script, base);
+    this._id = _lumen_create_worker(script, scriptUrl);
     _workerRegistry[this._id] = this;
   }
 
@@ -1050,13 +1087,15 @@ pub(crate) fn install_worker_bindings_v8(
     blob_store: &WorkerBlobStore,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) -> JsResult<()> {
-    // _lumen_create_worker(script: String, base_url: String) → u32
+    // _lumen_create_worker(script: String, script_url: String) → u32
     //
-    // `base_url` (BUG-778) is the worker's own resolved script URL (empty for
-    // a blob:/data: worker) — threaded down to the worker thread so its
-    // `importScripts()`/`fetch()`/`XMLHttpRequest` can resolve a relative or
-    // path-absolute target the way `.worker.html`'s wptrunner-built wrapper
-    // needs (`importScripts("/resources/testharness.js")`).
+    // `script_url` is the worker's own resolved script URL (the opaque URL
+    // itself for a blob:/data: worker) — threaded down to the worker thread,
+    // where it becomes both `location` (BUG-776) and, reduced by
+    // [`worker_base_url`], the base its `importScripts()`/`fetch()`/
+    // `XMLHttpRequest` resolve a relative or path-absolute target against the
+    // way `.worker.html`'s wptrunner-built wrapper needs
+    // (`importScripts("/resources/testharness.js")`, BUG-778).
     {
         let reg = Arc::clone(registry);
         let q = Arc::clone(queue);
@@ -1066,8 +1105,8 @@ pub(crate) fn install_worker_bindings_v8(
         let fp = fetch_provider.clone();
         rt.register_native(
             "_lumen_create_worker",
-            into_v8_fn2(move |script: String, base_url: String| -> u32 {
-                spawn_worker_v8(&reg, &q, &errs, &nid, &bs, script, base_url, fp.clone())
+            into_v8_fn2(move |script: String, script_url: String| -> u32 {
+                spawn_worker_v8(&reg, &q, &errs, &nid, &bs, script, script_url, fp.clone())
             }),
         )?;
     }
@@ -1214,7 +1253,7 @@ fn spawn_worker_v8(
     next_id: &Arc<Mutex<u32>>,
     blob_store: &WorkerBlobStore,
     script: String,
-    base_url: String,
+    script_url: String,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) -> u32 {
     let id = {
@@ -1232,7 +1271,7 @@ fn spawn_worker_v8(
     let handle = thread::Builder::new()
         .name(format!("lumen-worker-v8-{id}"))
         .spawn(move || {
-            run_worker_thread_v8(id, script, base_url, rx, reply, err_reply, store, fetch_provider)
+            run_worker_thread_v8(id, script, script_url, rx, reply, err_reply, store, fetch_provider)
         })
         .expect("failed to spawn Web Worker thread (v8)");
 
@@ -1261,7 +1300,7 @@ fn spawn_worker_v8(
 fn run_worker_thread_v8(
     id: u32,
     script: String,
-    base_url: String,
+    script_url: String,
     rx: Receiver<WorkerInMsg>,
     reply: Arc<Mutex<Vec<(u32, String)>>>,
     errors: WorkerErrorQueue,
@@ -1288,7 +1327,7 @@ fn run_worker_thread_v8(
         Arc::clone(&errors),
         Arc::clone(&blob_store),
         fetch_provider,
-        &base_url,
+        &script_url,
         Arc::clone(&close_flag),
     ) {
         eprintln!("[worker-{id}] v8 globals install failed: {e:?}");
@@ -1335,8 +1374,10 @@ fn run_worker_thread_v8(
 /// natives `_lumen_worker_post_reply`, `_lumen_worker_console_log`,
 /// `_lumen_import_scripts_resolve`, `_lumen_worker_self_close`,
 /// `_lumen_worker_net_fetch` (BUG-778), `atob`, `btoa`, sets the
-/// `_lumen_worker_base_url` global, and evaluates [`worker_global_shim`]
-/// followed by [`WORKER_NET_SHIM`].
+/// `_lumen_worker_base_url` (BUG-778) and `_lumen_worker_location_url`
+/// (BUG-776) globals — both derived from `script_url`, the worker's own
+/// resolved script URL — and evaluates [`worker_global_shim`] followed by
+/// [`WORKER_NET_SHIM`].
 ///
 /// `atob`/`btoa` go through [`crate::v8_compat::V8NativeFnScoped`] (raw scope
 /// access) rather than the plain `into_v8_fnN` path, because they must throw
@@ -1353,7 +1394,7 @@ fn install_worker_globals_v8(
     errors: WorkerErrorQueue,
     blob_store: WorkerBlobStore,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
-    base_url: &str,
+    script_url: &str,
     close_flag: WorkerCloseFlag,
 ) -> JsResult<()> {
     rt.register_native(
@@ -1437,7 +1478,17 @@ fn install_worker_globals_v8(
     // BUG-778: read by both `worker_global_shim`'s `importScripts` and
     // `WORKER_NET_SHIM`'s `fetch`/`XMLHttpRequest` to resolve a relative
     // target — set before either is evaluated so it is never read as `undefined`.
-    rt.set_global("_lumen_worker_base_url", lumen_core::JsValue::String(base_url.to_string()))?;
+    rt.set_global(
+        "_lumen_worker_base_url",
+        lumen_core::JsValue::String(worker_base_url(script_url).to_string()),
+    )?;
+    // BUG-776: read by `worker_global_shim` to build `location`. Unlike the
+    // base URL this keeps the opaque form (`blob:`/`data:`), which is what
+    // `location.href` must report for such a worker.
+    rt.set_global(
+        "_lumen_worker_location_url",
+        lumen_core::JsValue::String(script_url.to_string()),
+    )?;
 
     rt.eval(&worker_global_shim(worker_id))?;
     rt.eval(WORKER_NET_SHIM)?;
@@ -2149,5 +2200,141 @@ mod tests_v8 {
 
         rt.eval("importScripts('/resources/testharness.js')").unwrap();
         assert_eq!(rt.eval("_ms3").unwrap(), lumen_core::JsValue::Number(30.0));
+    }
+
+    /// BUG-776: the scope's own script URL, split into `WorkerLocation`
+    /// members. The URL carries both a query and a fragment because
+    /// `interfaces/WorkerGlobalScope/location/worker-separate-file.html`
+    /// starts a worker at `post-location-members.js?a#b?c` and asserts both
+    /// survive.
+    #[test]
+    fn v8_worker_location_reports_its_own_script_url() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_worker_globals_v8(
+            &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
+            make_store(), None, "https://example.test:8443/a/w.js?q=1#h?c",
+            Arc::new(AtomicBool::new(false)),
+        ).unwrap();
+
+        for (expr, want) in [
+            ("location.href", "https://example.test:8443/a/w.js?q=1#h?c"),
+            ("location.origin", "https://example.test:8443"),
+            ("location.protocol", "https:"),
+            ("location.host", "example.test:8443"),
+            ("location.hostname", "example.test"),
+            ("location.port", "8443"),
+            ("location.pathname", "/a/w.js"),
+            ("location.search", "?q=1"),
+            ("location.hash", "#h?c"),
+            ("location.toString()", "https://example.test:8443/a/w.js?q=1#h?c"),
+        ] {
+            assert_eq!(
+                rt.eval(expr).unwrap(),
+                lumen_core::JsValue::String(want.to_string()),
+                "{expr}"
+            );
+        }
+        // `returns-same-object.any.js` — one object, not a fresh one per read.
+        assert_eq!(rt.eval("location === location").unwrap(), lumen_core::JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("location instanceof WorkerLocation").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+    }
+
+    /// BUG-776: `[LegacyUnforgeable] readonly attribute` in a non-strict
+    /// script — `setting-members.html` asserts an empty exception list *and*
+    /// unchanged values, so the assignment must be silently dropped rather
+    /// than either throwing or sticking.
+    #[test]
+    fn v8_worker_location_members_are_silently_read_only() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_worker_globals_v8(
+            &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
+            make_store(), None, "https://example.test/w.js", Arc::new(AtomicBool::new(false)),
+        ).unwrap();
+
+        let thrown = rt
+            .eval(
+                "(function() { var n = 0;\
+                   ['href','protocol','host','hostname','port','pathname','search','hash']\
+                     .forEach(function(k) { try { location[k] = 1; } catch (e) { n++; } });\
+                   return n; })()",
+            )
+            .unwrap();
+        assert_eq!(thrown, lumen_core::JsValue::Number(0.0), "assignment must not throw");
+        assert_eq!(
+            rt.eval("location.href").unwrap(),
+            lumen_core::JsValue::String("https://example.test/w.js".to_string())
+        );
+    }
+
+    /// BUG-776: `navigator` exists and answers the values the page's
+    /// `Navigator` answers — the whole `NavigatorID` mixin point, and what
+    /// `interfaces/WorkerUtils/navigator/*` compares against `window`.
+    #[test]
+    fn v8_worker_navigator_answers_the_shared_navigator_id_values() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_worker_globals_v8(
+            &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
+            make_store(), None, "https://example.test/w.js", Arc::new(AtomicBool::new(false)),
+        ).unwrap();
+
+        assert_eq!(
+            rt.eval("navigator instanceof WorkerNavigator").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+        assert_eq!(
+            rt.eval("navigator.appName").unwrap(),
+            lumen_core::JsValue::String("Netscape".to_string())
+        );
+        assert_eq!(
+            rt.eval("navigator.appCodeName").unwrap(),
+            lumen_core::JsValue::String("Mozilla".to_string())
+        );
+        assert_eq!(
+            rt.eval("navigator.product").unwrap(),
+            lumen_core::JsValue::String("Gecko".to_string())
+        );
+        // Every member must come from the one shared source, so a bump of any
+        // of them cannot leave the worker behind.
+        assert_eq!(
+            rt.eval(
+                "Object.keys(_lumen_navigator_id)\
+                   .every(function(k) { return navigator[k] === _lumen_navigator_id[k]; })"
+            )
+            .unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+    }
+
+    /// BUG-776/778: an opaque worker URL is `location` verbatim, while the
+    /// relative-resolution base derived from it stays empty — nothing can be
+    /// resolved against a `data:` URL, and `importScripts` guards on exactly
+    /// that emptiness.
+    #[test]
+    fn v8_data_url_worker_keeps_its_href_but_has_no_base() {
+        assert_eq!(worker_base_url("data:text/javascript,1"), "");
+        assert_eq!(worker_base_url("blob:lumen/7"), "");
+        assert_eq!(worker_base_url("https://example.test/w.js"), "https://example.test/w.js");
+
+        let rt = V8JsRuntime::new().unwrap();
+        install_worker_globals_v8(
+            &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
+            make_store(), None, "data:text/javascript,1", Arc::new(AtomicBool::new(false)),
+        ).unwrap();
+
+        assert_eq!(
+            rt.eval("location.href").unwrap(),
+            lumen_core::JsValue::String("data:text/javascript,1".to_string())
+        );
+        assert_eq!(
+            rt.eval("location.protocol").unwrap(),
+            lumen_core::JsValue::String("data:".to_string())
+        );
+        assert_eq!(
+            rt.eval("_lumen_worker_base_url").unwrap(),
+            lumen_core::JsValue::String(String::new())
+        );
     }
 }

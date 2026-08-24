@@ -126,6 +126,15 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
 
   globalThis.self = globalThis;
 
+  // `location` — HTML LS §10.2.4, built from the Rust-set
+  // `_lumen_worker_location_url` (BUG-776). Same two lines as the dedicated
+  // worker's shim; the `WorkerLocation` class and the `navigator` singleton
+  // are shared (`crate::dom::WORKER_LOCATION_NAVIGATOR_SHIM`).
+  if (typeof _lumen_make_worker_location === 'function') {
+    globalThis.location = _lumen_make_worker_location(
+      typeof _lumen_worker_location_url === 'string' ? _lumen_worker_location_url : '');
+  }
+
   // Report an uncaught exception from onconnect/onmessage/a flushed timer to
   // every connected client (BUG-591 SharedWorker parent-side reporting; HTML
   // LS "report the exception" broadcasts to all owning `SharedWorker`
@@ -295,38 +304,38 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
   var _clientPorts = {};            // port_id → client-side MessagePort
   var _sharedWorkerInstances = {};  // port_id → owning SharedWorker instance
 
-  // Returns { script, base }: `script` is a String, or `null` when an
+  // Returns { script, url }: `script` is a String, or `null` when an
   // external URL's network fetch failed (BUG-364) — the caller must not
   // spawn a worker thread in that case, only fire `error` on the
-  // SharedWorker instance. `base` is the worker's own resolved script URL
-  // (empty for a blob:/data: worker, BUG-778) — threaded down to the worker
-  // thread so its `importScripts()`/`fetch()`/`XMLHttpRequest` can resolve a
-  // relative or path-absolute target.
+  // SharedWorker instance. `url` is the worker's own script URL (the opaque
+  // URL itself for a blob:/data: worker) — threaded down to the worker thread,
+  // where it becomes `location` (BUG-776) and the base its `importScripts()`/
+  // `fetch()`/`XMLHttpRequest` resolve a relative target against (BUG-778).
   function _resolveScript(url) {
     var u = String(url || '');
     if (u.startsWith('blob:lumen/')) {
       var blob = (typeof _object_url_store !== 'undefined') ? _object_url_store[u] : null;
       if (blob && blob._bytes) {
-        try { return { script: new TextDecoder().decode(blob._bytes), base: '' }; }
-        catch(e) { return { script: '', base: '' }; }
+        try { return { script: new TextDecoder().decode(blob._bytes), url: u }; }
+        catch(e) { return { script: '', url: u }; }
       }
-      return { script: '', base: '' };
+      return { script: '', url: u };
     }
     if (u.startsWith('data:')) {
       var comma = u.indexOf(',');
-      if (comma === -1) return { script: '', base: '' };
+      if (comma === -1) return { script: '', url: u };
       var meta = u.slice(5, comma), content = u.slice(comma + 1);
       if (meta.indexOf('base64') !== -1) {
-        try { return { script: atob(content), base: '' }; } catch(e) { return { script: '', base: '' }; }
+        try { return { script: atob(content), url: u }; } catch(e) { return { script: '', url: u }; }
       }
-      try { return { script: decodeURIComponent(content), base: '' }; }
-      catch(e) { return { script: content, base: '' }; }
+      try { return { script: decodeURIComponent(content), url: u }; }
+      catch(e) { return { script: content, url: u }; }
     }
     // External URL: resolve against the document base and fetch the script
     // body synchronously (previously never hit the network at all).
     var abs = _url_resolve(u, _lumen_document_base_url());
     var fetched = _lumen_sw_fetch_script(abs);
-    return { script: (typeof fetched === 'string') ? fetched : null, base: abs };
+    return { script: (typeof fetched === 'string') ? fetched : null, url: abs };
   }
 
   // A port for a SharedWorker whose script failed to fetch: never delivers
@@ -399,7 +408,7 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
       }, 0);
       return;
     }
-    var pid = _lumen_sw_connect(key, resolved.script, resolved.base);
+    var pid = _lumen_sw_connect(key, resolved.script, resolved.url);
     this.port = _makeClientPort(pid, key);
     _clientPorts[pid] = this.port;
     _sharedWorkerInstances[pid] = this;
@@ -504,7 +513,7 @@ fn hub_v8() -> &'static Mutex<HashMap<String, SharedWorkerThread>> {
 fn connect_shared_worker_v8(
     key: String,
     script: String,
-    base_url: String,
+    script_url: String,
     outbox: SharedWorkerOutbox,
     errors: crate::worker::WorkerErrorQueue,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
@@ -512,23 +521,23 @@ fn connect_shared_worker_v8(
     let port_id = PORT_COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut map = hub_v8().lock().unwrap();
 
-    let spawn = |key: String, script: String, base_url: String| -> SharedWorkerThread {
+    let spawn = |key: String, script: String, script_url: String| -> SharedWorkerThread {
         let (tx, rx) = mpsc::channel::<SwInMsg>();
         let fp = fetch_provider.clone();
         let thread = thread::Builder::new()
             .name(format!("lumen-shared-worker-v8-{key}"))
-            .spawn(move || run_shared_worker_thread_v8(script, base_url, rx, fp))
+            .spawn(move || run_shared_worker_thread_v8(script, script_url, rx, fp))
             .expect("failed to spawn SharedWorker thread (v8)");
         SharedWorkerThread { tx, _thread: thread }
     };
 
     let entry = map
         .entry(key.clone())
-        .or_insert_with(|| spawn(key.clone(), script.clone(), base_url.clone()));
+        .or_insert_with(|| spawn(key.clone(), script.clone(), script_url.clone()));
 
     let connect = SwInMsg::Connect { port_id, outbox: Arc::clone(&outbox), errors: Arc::clone(&errors) };
     if entry.tx.send(connect).is_err() {
-        let fresh = spawn(key.clone(), script, base_url);
+        let fresh = spawn(key.clone(), script, script_url);
         let _ = fresh.tx.send(SwInMsg::Connect { port_id, outbox, errors });
         *entry = fresh;
     }
@@ -573,20 +582,23 @@ pub(crate) fn install_shared_worker_bindings_v8(
     errors: &crate::worker::WorkerErrorQueue,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) -> JsResult<()> {
-    // _lumen_sw_connect(key, script, base_url) → u32
+    // _lumen_sw_connect(key, script, script_url) → u32
     //
-    // `base_url` (BUG-778) is the resolved worker script URL (empty for a
-    // blob:/data: worker) — only used for the connection that actually
-    // spawns the thread; later reconnects to an already-live worker ignore
-    // it, matching the pre-existing `script`-is-ignored-on-reuse contract.
+    // `script_url` is the resolved worker script URL (the opaque URL itself
+    // for a blob:/data: worker) — it becomes the scope's `location` (BUG-776)
+    // and, reduced by [`crate::worker::worker_base_url`], the base its
+    // `importScripts()`/`fetch()`/XHR resolve against (BUG-778). Only used for
+    // the connection that actually spawns the thread; later reconnects to an
+    // already-live worker ignore it, matching the pre-existing
+    // `script`-is-ignored-on-reuse contract.
     {
         let out = Arc::clone(outbox);
         let errs = Arc::clone(errors);
         let fp = fetch_provider.clone();
         rt.register_native(
             "_lumen_sw_connect",
-            into_v8_fn3(move |key: String, script: String, base_url: String| -> u32 {
-                connect_shared_worker_v8(key, script, base_url, Arc::clone(&out), Arc::clone(&errs), fp.clone())
+            into_v8_fn3(move |key: String, script: String, script_url: String| -> u32 {
+                connect_shared_worker_v8(key, script, script_url, Arc::clone(&out), Arc::clone(&errs), fp.clone())
             }),
         )?;
     }
@@ -631,7 +643,7 @@ pub(crate) fn install_shared_worker_bindings_v8(
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn run_shared_worker_thread_v8(
     script: String,
-    base_url: String,
+    script_url: String,
     rx: Receiver<SwInMsg>,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) {
@@ -657,7 +669,7 @@ fn run_shared_worker_thread_v8(
         Arc::clone(&ports),
         Arc::clone(&error_ports),
         fetch_provider,
-        &base_url,
+        &script_url,
         Arc::clone(&close_flag),
     ) {
         eprintln!("[shared-worker] v8 globals install failed: {e:?}");
@@ -746,7 +758,8 @@ fn broadcast_shared_worker_error(
 /// `_lumen_import_scripts_resolve` (BUG-778 — the same three natives the
 /// dedicated worker registers, reusing [`crate::worker::worker_net_fetch_json`]/
 /// [`crate::worker::resolve_import_url`] rather than a second implementation),
-/// sets the `_lumen_worker_base_url` global, and evaluates
+/// sets the `_lumen_worker_base_url` (BUG-778) and `_lumen_worker_location_url`
+/// (BUG-776) globals, both derived from `script_url`, and evaluates
 /// [`SHARED_WORKER_GLOBAL_SHIM`] followed by [`crate::worker::WORKER_NET_SHIM`].
 ///
 /// `importScripts('blob:lumen/…')` is not supported here (`None` is passed as
@@ -762,7 +775,7 @@ fn install_shared_worker_globals_v8(
     ports: Arc<Mutex<HashMap<u32, SharedWorkerOutbox>>>,
     error_ports: Arc<Mutex<HashMap<u32, crate::worker::WorkerErrorQueue>>>,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
-    base_url: &str,
+    script_url: &str,
     close_flag: crate::worker::WorkerCloseFlag,
 ) -> JsResult<()> {
     rt.register_native(
@@ -838,7 +851,16 @@ fn install_shared_worker_globals_v8(
 
     // BUG-778: read by both `SHARED_WORKER_GLOBAL_SHIM`'s `importScripts` and
     // `WORKER_NET_SHIM`'s `fetch`/`XMLHttpRequest` — set before either evaluates.
-    rt.set_global("_lumen_worker_base_url", lumen_core::JsValue::String(base_url.to_string()))?;
+    rt.set_global(
+        "_lumen_worker_base_url",
+        lumen_core::JsValue::String(crate::worker::worker_base_url(script_url).to_string()),
+    )?;
+    // BUG-776: read by `SHARED_WORKER_GLOBAL_SHIM` to build `location` — the
+    // unreduced URL, so a blob:/data: shared worker still reports its own href.
+    rt.set_global(
+        "_lumen_worker_location_url",
+        lumen_core::JsValue::String(script_url.to_string()),
+    )?;
 
     rt.eval(SHARED_WORKER_GLOBAL_SHIM)?;
     rt.eval(crate::worker::WORKER_NET_SHIM)?;
@@ -1181,5 +1203,37 @@ mod tests_v8 {
         .unwrap();
         rt.eval("importScripts('/resources/testharness.js')").unwrap();
         assert_eq!(rt.eval("_sms1").unwrap(), JsValue::Number(40.0));
+    }
+
+    /// BUG-776: a `SharedWorkerGlobalScope` is a `WorkerGlobalScope`, so it
+    /// gets the same `location`/`navigator` the dedicated one does — the gap
+    /// was in both flavours, and the shim that closes it is shared, so the
+    /// thing worth pinning here is that this flavour really evaluates it.
+    #[test]
+    fn v8_shared_worker_scope_has_location_and_navigator() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_shared_worker_globals_v8(
+            &rt,
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+            None,
+            "https://example.test/a/sw.js?x=1",
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+
+        assert_eq!(
+            rt.eval("location.href").unwrap(),
+            JsValue::String("https://example.test/a/sw.js?x=1".to_string())
+        );
+        assert_eq!(
+            rt.eval("location.pathname").unwrap(),
+            JsValue::String("/a/sw.js".to_string())
+        );
+        assert_eq!(rt.eval("location instanceof WorkerLocation").unwrap(), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("navigator.userAgent === _lumen_navigator_id.userAgent").unwrap(),
+            JsValue::Bool(true)
+        );
     }
 }
