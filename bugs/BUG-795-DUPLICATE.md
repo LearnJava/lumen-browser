@@ -9,6 +9,14 @@
 константами `NONE`/`LOADING`/`LOADED`/`ERROR`. Измерение по категории
 `html/semantics/embedded-content/media-elements` (ниже) перенесено в BUG-775.
 
+Повторный прогон `track/track-element` 2026-08-24 после фикса: **57 TIMEOUT из
+143 id** (было 75 из 86 файлов), 79 `Test OK`, и `TypeError: Cannot set
+properties of undefined (setting 'mode')` не встречается в логе ни разу.
+Остаток к `<track>` почти не относится: 32 из 57 — весь `cors/*`, который ждёт
+`iframe.onload` у скриптового фрейма ([BUG-885](BUG-885-OPEN.md)), 9 — разметочный
+`<track>` ([BUG-804](BUG-804-OPEN.md)), остальные — `src` после вставки и порядок
+переходов `readyState`.
+
 **Заведён:** 2026-08-21 (WPT-RUN-6, срез 4 — разбор массового TIMEOUT в `html/semantics/embedded-content`)
 **Область:** `crates/js/src/dom.rs` (`HTMLTrackElement.prototype` reflection block, `dom.rs:13800-13806` — no `track` accessor installed) и `crates/js/src/video_bindings.rs`/`crates/js/src/text_track_store.rs` (существующая `TextTrack`/`TextTrackList` машинерия, но выстроенная только вокруг `<video>.textTracks`, ни разу не привязанная к отдельному `<track>`-узлу)
 **Владелец:** P1/P3 (движок). Заведён P2 в ходе WPT-инструментальной задачи, здесь не чинится.
