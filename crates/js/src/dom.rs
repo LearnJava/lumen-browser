@@ -8115,10 +8115,53 @@ AbortSignal.any = function(signals) {
 };
 
 // ── WHATWG Streams (https://streams.spec.whatwg.org/) §3-5 ───────────────────
-// ReadableStream, WritableStream, TransformStream — synchronous-friendly model.
-// For Lumen's synchronous fetch, all chunks are enqueued at construction time.
-// Pull model: start() and pull() are called once; async pull callbacks are not
-// re-invoked (sufficient for response.body / Blob.stream() use cases in Phase 2).
+// ReadableStream, WritableStream, TransformStream.
+//
+// The readable side stays eager on purpose: `start()` runs synchronously and the
+// first `pull()` follows it in the same turn, because fetch reads its body back
+// out of the queue before the page ever sees the response (BUG-703). Everything
+// else follows the spec state machine.
+//
+// BUG-823: the shim used to change a stream state and tell nobody — `writer.closed`
+// was created and never settled, an errored controller reached only the read
+// requests already standing, a promise returned from `start()` was dropped and the
+// sink's `abort()` had no call site at all. The registry below is the fix: every
+// promise the spec keeps a record for (the write requests, the close request, the
+// abort request, `writer.ready`, `writer.closed`, `reader.closed`) is stored, so a
+// transition to `errored`/`closed` settles all of them at once.
+
+// A promise plus its settle functions and a state we can ask about — the spec
+// asks «is writer.[[readyPromise]] pending?» in several places.
+function _stream_deferred() {
+    var d = { state: 'pending' };
+    d.promise = new Promise(function(res, rej) { d._res = res; d._rej = rej; });
+    d.resolve = function(v) { if (d.state !== 'pending') return; d.state = 'fulfilled'; d._res(v); };
+    d.reject = function(e) { if (d.state !== 'pending') return; d.state = 'rejected'; d._rej(e); };
+    return d;
+}
+// Spec «set promise.[[PromiseIsHandled]] to true»: a promise the stream rejects on
+// the page's behalf must not surface as an unhandledrejection (BUG-716) just
+// because the page never asked for it.
+function _stream_mark_handled(p) {
+    if (p && typeof p.then === 'function') p.then(undefined, function() {});
+    return p;
+}
+function _stream_settled_deferred(promise, state) {
+    return { state: state, promise: promise, resolve: function() {}, reject: function() {} };
+}
+function _stream_resolved_deferred() {
+    return _stream_settled_deferred(Promise.resolve(undefined), 'fulfilled');
+}
+function _stream_rejected_deferred(e) {
+    var d = _stream_settled_deferred(Promise.reject(e), 'rejected');
+    _stream_mark_handled(d.promise);
+    return d;
+}
+function _stream_is_thenable(v) {
+    return v !== null && v !== undefined
+        && (typeof v === 'object' || typeof v === 'function')
+        && typeof v.then === 'function';
+}
 
 // ── ReadableStream §3 ────────────────────────────────────────────────────────
 function ReadableStreamDefaultController(stream) {
@@ -8146,23 +8189,68 @@ ReadableStreamDefaultController.prototype.close = function() {
 ReadableStreamDefaultController.prototype.error = function(e) {
     var stream = this._stream;
     if (!stream || stream._rs_state !== 'readable') return;
-    stream._rs_state = 'errored';
-    stream._rs_error = e;
-    if (stream._rs_reader) {
-        var reqs = stream._rs_reader._readRequests;
-        stream._rs_reader._readRequests = [];
-        for (var i = 0; i < reqs.length; i++) reqs[i](undefined, e);
-    }
+    _rs_do_error(stream, e);
 };
 
 function _rs_do_close(stream) {
     stream._rs_state = 'closed';
-    if (stream._rs_reader) {
-        var reqs = stream._rs_reader._readRequests;
-        stream._rs_reader._readRequests = [];
-        for (var i = 0; i < reqs.length; i++) reqs[i]({ value: undefined, done: true }, undefined);
-        if (stream._rs_reader._closedResolve) stream._rs_reader._closedResolve();
+    var reader = stream._rs_reader;
+    if (!reader) return;
+    var reqs = reader._readRequests;
+    reader._readRequests = [];
+    for (var i = 0; i < reqs.length; i++) reqs[i]({ value: undefined, done: true }, undefined);
+    reader._closedD.resolve(undefined);
+}
+
+// Streams §3.9 «ReadableStreamError»: the stored error goes to the standing read
+// requests *and* to `reader.closed`, which is what BUG-823 never did.
+function _rs_do_error(stream, e) {
+    stream._rs_state = 'errored';
+    stream._rs_error = e;
+    stream._rs_ctrl._queue = [];
+    var reader = stream._rs_reader;
+    if (!reader) return;
+    var reqs = reader._readRequests;
+    reader._readRequests = [];
+    for (var i = 0; i < reqs.length; i++) reqs[i](undefined, e);
+    reader._closedD.reject(e);
+    _stream_mark_handled(reader._closedD.promise);
+}
+
+// Demand-driven pull (Streams §3.10 «ReadableStreamDefaultControllerCallPullIfNeeded»):
+// pull once per unit of demand, never re-entrantly, and let a rejected pull error
+// the stream instead of vanishing.
+function _rs_pull_if_needed(stream) {
+    if (!stream._rs_started || !stream._rs_pull_fn) return;
+    if (stream._rs_state !== 'readable') return;
+    var ctrl = stream._rs_ctrl;
+    if (ctrl._closeRequested) return;
+    var standing = stream._rs_reader ? stream._rs_reader._readRequests.length : 0;
+    if (ctrl._queue.length > 0 && standing === 0) return;
+    if (stream._rs_pulling) { stream._rs_pullAgain = true; return; }
+    stream._rs_pulling = true;
+    var result;
+    try {
+        result = stream._rs_pull_fn(ctrl);
+    } catch (e) {
+        stream._rs_pulling = false;
+        if (stream._rs_state === 'readable') _rs_do_error(stream, e);
+        return;
     }
+    if (_stream_is_thenable(result)) {
+        Promise.resolve(result).then(function() {
+            stream._rs_pulling = false;
+            if (!stream._rs_pullAgain) return;
+            stream._rs_pullAgain = false;
+            _rs_pull_if_needed(stream);
+        }, function(e) {
+            stream._rs_pulling = false;
+            if (stream._rs_state === 'readable') _rs_do_error(stream, e);
+        });
+        return;
+    }
+    stream._rs_pulling = false;
+    if (stream._rs_pullAgain) { stream._rs_pullAgain = false; _rs_pull_if_needed(stream); }
 }
 
 function ReadableStream(source, strategy) {
@@ -8171,17 +8259,37 @@ function ReadableStream(source, strategy) {
     this._rs_error = undefined;
     this._rs_reader = null;
     this._rs_cancel_fn = typeof source.cancel === 'function' ? source.cancel : null;
-    // Store pull fn for demand-driven invocation (Streams §3.6.3).
     this._rs_pull_fn = typeof source.pull === 'function' ? source.pull : null;
     this._rs_ctrl = new ReadableStreamDefaultController(this);
+    this._rs_started = false;
+    this._rs_pulling = false;
+    this._rs_pullAgain = false;
+    var self = this;
+    var startResult;
     if (typeof source.start === 'function') {
-        try { source.start(this._rs_ctrl); } catch(e) { this._rs_ctrl.error(e); }
+        try {
+            startResult = source.start(this._rs_ctrl);
+        } catch (e) {
+            this._rs_started = true;
+            this._rs_ctrl.error(e);
+            return;
+        }
     }
-    // Eagerly fill: call pull once after start if queue empty and stream still readable.
-    if (this._rs_pull_fn && this._rs_state === 'readable'
-            && this._rs_ctrl._queue.length === 0 && !this._rs_ctrl._closeRequested) {
-        try { this._rs_pull_fn(this._rs_ctrl); } catch(e) { this._rs_ctrl.error(e); }
+    // A thenable from start() holds the stream back until it settles, and its
+    // rejection errors the stream (BUG-823: the value used to be discarded).
+    if (_stream_is_thenable(startResult)) {
+        Promise.resolve(startResult).then(function() {
+            self._rs_started = true;
+            _rs_pull_if_needed(self);
+        }, function(e) {
+            self._rs_started = true;
+            if (self._rs_state === 'readable') _rs_do_error(self, e);
+        });
+        return;
     }
+    this._rs_started = true;
+    // Eager fill: fetch drains this queue synchronously (BUG-703).
+    _rs_pull_if_needed(this);
 }
 Object.defineProperty(ReadableStream.prototype, 'locked', {
     get: function() { return this._rs_reader !== null; }
@@ -8197,11 +8305,20 @@ ReadableStream.prototype.cancel = function(reason) {
     return this._rs_do_cancel(reason);
 };
 ReadableStream.prototype._rs_do_cancel = function(reason) {
-    if (this._rs_state === 'closed') return Promise.resolve();
+    if (this._rs_state === 'closed') return Promise.resolve(undefined);
     if (this._rs_state === 'errored') return Promise.reject(this._rs_error);
+    this._rs_ctrl._queue = [];
     _rs_do_close(this);
-    if (this._rs_cancel_fn) { try { this._rs_cancel_fn(reason); } catch(e) {} }
-    return Promise.resolve();
+    if (!this._rs_cancel_fn) return Promise.resolve(undefined);
+    // §3.9 «ReadableStreamCancel»: the promise the page gets is the source's own
+    // cancel() result, so a throwing or rejecting source is visible to it.
+    var result;
+    try {
+        result = this._rs_cancel_fn(reason);
+    } catch (e) {
+        return Promise.reject(e);
+    }
+    return Promise.resolve(result).then(function() { return undefined; });
 };
 ReadableStream.prototype.tee = function() {
     var chunks = this._rs_ctrl._queue.slice();
@@ -8219,21 +8336,43 @@ ReadableStream.prototype.tee = function() {
     return [makeClone(chunks, alreadyClosed), makeClone(chunks, alreadyClosed)];
 };
 ReadableStream.prototype.pipeTo = function(dest, options) {
-    var reader = this.getReader();
-    var writer = dest.getWriter();
+    options = options || {};
+    var preventClose = !!options.preventClose;
+    var preventAbort = !!options.preventAbort;
+    var preventCancel = !!options.preventCancel;
+    var reader, writer;
+    try {
+        reader = this.getReader();
+        writer = dest.getWriter();
+    } catch (e) {
+        return Promise.reject(e);
+    }
     function pump() {
-        return reader.read().then(function(result) {
+        return writer.ready.then(function() {
+            return reader.read();
+        }).then(function(result) {
             if (result.done) {
                 reader.releaseLock();
+                if (preventClose) { writer.releaseLock(); return undefined; }
                 return writer.close();
             }
             return writer.write(result.value).then(pump);
         });
     }
-    return pump().catch(function(e) { reader.cancel(e); writer.abort(e); return Promise.reject(e); });
+    // Both ends are torn down before the pipe promise rejects — otherwise the
+    // failure leaves a locked stream and an unsettled `closed` behind.
+    return pump().then(undefined, function(e) {
+        if (!preventCancel) {
+            try { _stream_mark_handled(reader.cancel(e)); } catch (x) {}
+        }
+        if (!preventAbort) {
+            try { _stream_mark_handled(writer.abort(e)); } catch (x) {}
+        }
+        return Promise.reject(e);
+    });
 };
 ReadableStream.prototype.pipeThrough = function(transform, options) {
-    this.pipeTo(transform.writable, options);
+    _stream_mark_handled(this.pipeTo(transform.writable, options));
     return transform.readable;
 };
 ReadableStream.from = function(iterable) {
@@ -8250,14 +8389,16 @@ ReadableStream.from = function(iterable) {
 function ReadableStreamDefaultReader(stream) {
     this._stream = stream;
     this._readRequests = [];
-    var self = this;
-    this.closed = new Promise(function(res, rej) {
-        self._closedResolve = res;
-        self._closedReject = rej;
-    });
-    if (stream._rs_state === 'closed') this._closedResolve();
-    else if (stream._rs_state === 'errored') this._closedReject(stream._rs_error);
+    this._closedD = _stream_deferred();
+    if (stream._rs_state === 'closed') this._closedD.resolve(undefined);
+    else if (stream._rs_state === 'errored') {
+        this._closedD.reject(stream._rs_error);
+        _stream_mark_handled(this._closedD.promise);
+    }
 }
+Object.defineProperty(ReadableStreamDefaultReader.prototype, 'closed', {
+    get: function() { return this._closedD.promise; }
+});
 ReadableStreamDefaultReader.prototype.read = function() {
     var stream = this._stream;
     if (!stream) return Promise.reject(new TypeError('reader not attached to a stream'));
@@ -8266,6 +8407,7 @@ ReadableStreamDefaultReader.prototype.read = function() {
     if (ctrl._queue.length > 0) {
         var chunk = ctrl._queue.shift();
         if (ctrl._closeRequested && ctrl._queue.length === 0) _rs_do_close(stream);
+        else _rs_pull_if_needed(stream);
         return Promise.resolve({ value: chunk, done: false });
     }
     if (stream._rs_state === 'closed') return Promise.resolve({ value: undefined, done: true });
@@ -8275,12 +8417,7 @@ ReadableStreamDefaultReader.prototype.read = function() {
             if (err !== undefined) reject(err); else resolve(result);
         });
     });
-    // Demand-driven pull: when queue is empty and a read is pending, ask source for more data.
-    // pull() either enqueues a chunk (resolving the pending request via enqueue()) or
-    // calls c.close() (resolving via _rs_do_close()). Mirrors Streams spec ReadableStreamFill.
-    if (stream._rs_pull_fn && stream._rs_state === 'readable' && !ctrl._closeRequested) {
-        try { stream._rs_pull_fn(ctrl); } catch(e) { ctrl.error(e); }
-    }
+    _rs_pull_if_needed(stream);
     return p;
 };
 ReadableStreamDefaultReader.prototype.cancel = function(reason) {
@@ -8293,152 +8430,514 @@ ReadableStreamDefaultReader.prototype.releaseLock = function() {
     if (this._readRequests.length > 0) throw new TypeError('pending read requests');
     this._stream._rs_reader = null;
     this._stream = null;
-    if (this._closedReject) this._closedReject(new TypeError('reader released'));
+    this._closedD.reject(new TypeError('reader released'));
+    _stream_mark_handled(this._closedD.promise);
 };
 
 // ── WritableStream §4 ────────────────────────────────────────────────────────
-function WritableStreamDefaultController(stream, sink) {
+// State machine per spec: 'writable' | 'erroring' | 'errored' | 'closed'. There is
+// no 'closing' state — a pending close lives in `_ws_closeRequest`/`_ws_inFlightClose`,
+// which is what lets an error arriving mid-close reject the right promise.
+var _WS_CLOSE_SENTINEL = { closeSentinel: true };
+
+function WritableStreamDefaultController(stream, sink, hwm, sizeFn) {
     this._stream = stream;
     this._sink = sink;
+    this._queue = [];
+    this._queueTotalSize = 0;
+    this._started = false;
+    this._hwm = hwm;
+    this._sizeFn = sizeFn;
+    this._writeFn = typeof sink.write === 'function' ? sink.write : null;
+    this._closeFn = typeof sink.close === 'function' ? sink.close : null;
+    this._abortFn = typeof sink.abort === 'function' ? sink.abort : null;
+    var ac = (typeof AbortController === 'function') ? new AbortController() : null;
+    this._abortController = ac;
+    this.signal = ac ? ac.signal : undefined;
 }
 WritableStreamDefaultController.prototype.error = function(e) {
     var stream = this._stream;
-    if (!stream || (stream._ws_state !== 'writable' && stream._ws_state !== 'closing')) return;
-    stream._ws_state = 'errored';
-    stream._ws_error = e;
+    if (!stream || stream._ws_state !== 'writable') return;
+    _ws_ctrl_error(this, e);
 };
+
+// §4.8.3 «ClearAlgorithms»: once the stream is going down, the sink is never
+// called again — a dropped reference here is what stops a doomed stream from
+// re-entering the page's code.
+function _ws_ctrl_clear(controller) {
+    controller._writeFn = null;
+    controller._closeFn = null;
+    controller._abortFn = null;
+    controller._sizeFn = null;
+}
+function _ws_ctrl_desired_size(controller) { return controller._hwm - controller._queueTotalSize; }
+function _ws_ctrl_backpressure(controller) { return _ws_ctrl_desired_size(controller) <= 0; }
+function _ws_ctrl_reset_queue(controller) { controller._queue = []; controller._queueTotalSize = 0; }
+function _ws_ctrl_enqueue(controller, chunk, size) {
+    controller._queue.push({ chunk: chunk, size: size });
+    controller._queueTotalSize += size;
+}
+function _ws_ctrl_dequeue(controller) {
+    var entry = controller._queue.shift();
+    if (!entry) return undefined;
+    controller._queueTotalSize -= entry.size;
+    if (controller._queueTotalSize < 0) controller._queueTotalSize = 0;
+    return entry.chunk;
+}
+function _ws_ctrl_error(controller, e) {
+    _ws_ctrl_clear(controller);
+    _ws_start_erroring(controller._stream, e);
+}
+function _ws_ctrl_error_if_needed(controller, e) {
+    if (controller._stream && controller._stream._ws_state === 'writable') _ws_ctrl_error(controller, e);
+}
+
+function _ws_ctrl_setup(controller) {
+    var stream = controller._stream;
+    _ws_update_backpressure(stream, _ws_ctrl_backpressure(controller));
+    var startResult;
+    try {
+        startResult = controller._sink.start ? controller._sink.start.call(controller._sink, controller) : undefined;
+    } catch (e) {
+        controller._started = true;
+        _ws_deal_with_rejection(stream, e);
+        return;
+    }
+    // §4.8.3: the start result is always awaited, so a sink that returns a thenable
+    // holds its own queue back until it settles, and a rejection errors the stream.
+    Promise.resolve(startResult).then(function() {
+        controller._started = true;
+        _ws_ctrl_advance(controller);
+    }, function(r) {
+        controller._started = true;
+        _ws_deal_with_rejection(stream, r);
+    });
+}
+
+function _ws_ctrl_advance(controller) {
+    var stream = controller._stream;
+    if (!controller._started) return;
+    if (stream._ws_inFlightWrite !== null) return;
+    if (stream._ws_state === 'erroring') { _ws_finish_erroring(stream); return; }
+    if (controller._queue.length === 0) return;
+    if (controller._queue[0].chunk === _WS_CLOSE_SENTINEL) _ws_ctrl_process_close(controller);
+    else _ws_ctrl_process_write(controller, controller._queue[0].chunk);
+}
+function _ws_ctrl_process_close(controller) {
+    var stream = controller._stream;
+    stream._ws_inFlightClose = stream._ws_closeRequest;
+    stream._ws_closeRequest = null;
+    _ws_ctrl_dequeue(controller);
+    var closeFn = controller._closeFn;
+    var p;
+    try {
+        p = closeFn ? Promise.resolve(closeFn.call(controller._sink, controller)) : Promise.resolve(undefined);
+    } catch (e) {
+        p = Promise.reject(e);
+    }
+    _ws_ctrl_clear(controller);
+    p.then(function() {
+        _ws_finish_in_flight_close(stream);
+    }, function(reason) {
+        _ws_finish_in_flight_close_with_error(stream, reason);
+    });
+}
+function _ws_ctrl_process_write(controller, chunk) {
+    var stream = controller._stream;
+    stream._ws_inFlightWrite = stream._ws_writeRequests.shift();
+    var writeFn = controller._writeFn;
+    var p;
+    try {
+        p = writeFn ? Promise.resolve(writeFn.call(controller._sink, chunk, controller)) : Promise.resolve(undefined);
+    } catch (e) {
+        p = Promise.reject(e);
+    }
+    p.then(function() {
+        _ws_finish_in_flight_write(stream);
+        var state = stream._ws_state;
+        _ws_ctrl_dequeue(controller);
+        if (!_ws_close_queued_or_in_flight(stream) && state === 'writable') {
+            _ws_update_backpressure(stream, _ws_ctrl_backpressure(controller));
+        }
+        _ws_ctrl_advance(controller);
+    }, function(reason) {
+        if (stream._ws_state === 'writable') _ws_ctrl_clear(controller);
+        _ws_finish_in_flight_write_with_error(stream, reason);
+    });
+}
+
+function _ws_close_queued_or_in_flight(stream) {
+    return stream._ws_closeRequest !== null || stream._ws_inFlightClose !== null;
+}
+function _ws_has_operation_in_flight(stream) {
+    return stream._ws_inFlightWrite !== null || stream._ws_inFlightClose !== null;
+}
+function _ws_add_write_request(stream) {
+    var d = _stream_deferred();
+    stream._ws_writeRequests.push(d);
+    return d.promise;
+}
+function _ws_deal_with_rejection(stream, error) {
+    if (stream._ws_state === 'writable') { _ws_start_erroring(stream, error); return; }
+    _ws_finish_erroring(stream);
+}
+function _ws_start_erroring(stream, reason) {
+    if (stream._ws_state !== 'writable') return;
+    stream._ws_error = reason;
+    stream._ws_state = 'erroring';
+    var writer = stream._ws_writer;
+    if (writer) _ws_ensure_ready_rejected(writer, reason);
+    if (!_ws_has_operation_in_flight(stream) && stream._ws_ctrl._started) _ws_finish_erroring(stream);
+}
+// §4.4 «WritableStreamFinishErroring» — the broadcast BUG-823 was missing: every
+// standing write request, the close request, `writer.closed` and the abort request
+// are settled here, in that order.
+function _ws_finish_erroring(stream) {
+    if (stream._ws_state !== 'erroring') return;
+    stream._ws_state = 'errored';
+    _ws_ctrl_reset_queue(stream._ws_ctrl);
+    var storedError = stream._ws_error;
+    var reqs = stream._ws_writeRequests;
+    stream._ws_writeRequests = [];
+    for (var i = 0; i < reqs.length; i++) reqs[i].reject(storedError);
+    var abortRequest = stream._ws_pendingAbort;
+    if (abortRequest === null) { _ws_reject_close_and_closed_if_needed(stream); return; }
+    stream._ws_pendingAbort = null;
+    if (abortRequest.wasAlreadyErroring) {
+        abortRequest.deferred.reject(storedError);
+        _ws_reject_close_and_closed_if_needed(stream);
+        return;
+    }
+    var controller = stream._ws_ctrl;
+    var abortFn = controller._abortFn;
+    var p;
+    try {
+        p = abortFn ? Promise.resolve(abortFn.call(controller._sink, abortRequest.reason)) : Promise.resolve(undefined);
+    } catch (e) {
+        p = Promise.reject(e);
+    }
+    _ws_ctrl_clear(controller);
+    p.then(function() {
+        abortRequest.deferred.resolve(undefined);
+        _ws_reject_close_and_closed_if_needed(stream);
+    }, function(reason) {
+        abortRequest.deferred.reject(reason);
+        _ws_reject_close_and_closed_if_needed(stream);
+    });
+}
+function _ws_reject_close_and_closed_if_needed(stream) {
+    var storedError = stream._ws_error;
+    if (stream._ws_closeRequest !== null) {
+        stream._ws_closeRequest.reject(storedError);
+        stream._ws_closeRequest = null;
+    }
+    var writer = stream._ws_writer;
+    if (writer) _ws_ensure_closed_rejected(writer, storedError);
+}
+function _ws_finish_in_flight_write(stream) {
+    stream._ws_inFlightWrite.resolve(undefined);
+    stream._ws_inFlightWrite = null;
+}
+function _ws_finish_in_flight_write_with_error(stream, error) {
+    stream._ws_inFlightWrite.reject(error);
+    stream._ws_inFlightWrite = null;
+    _ws_deal_with_rejection(stream, error);
+}
+function _ws_finish_in_flight_close(stream) {
+    stream._ws_inFlightClose.resolve(undefined);
+    stream._ws_inFlightClose = null;
+    if (stream._ws_state === 'erroring') {
+        // A close that made it through outranks the pending error (§4.4).
+        stream._ws_error = undefined;
+        if (stream._ws_pendingAbort !== null) {
+            stream._ws_pendingAbort.deferred.resolve(undefined);
+            stream._ws_pendingAbort = null;
+        }
+    }
+    stream._ws_state = 'closed';
+    var writer = stream._ws_writer;
+    if (writer) writer._closedD.resolve(undefined);
+}
+function _ws_finish_in_flight_close_with_error(stream, error) {
+    stream._ws_inFlightClose.reject(error);
+    stream._ws_inFlightClose = null;
+    if (stream._ws_pendingAbort !== null) {
+        stream._ws_pendingAbort.deferred.reject(error);
+        stream._ws_pendingAbort = null;
+    }
+    _ws_deal_with_rejection(stream, error);
+}
+function _ws_update_backpressure(stream, backpressure) {
+    var writer = stream._ws_writer;
+    if (writer && backpressure !== stream._ws_backpressure) {
+        if (backpressure) writer._readyD = _stream_deferred();
+        else writer._readyD.resolve(undefined);
+    }
+    stream._ws_backpressure = backpressure;
+}
+function _ws_ensure_ready_rejected(writer, error) {
+    if (writer._readyD.state === 'pending') writer._readyD.reject(error);
+    else writer._readyD = _stream_rejected_deferred(error);
+    _stream_mark_handled(writer._readyD.promise);
+}
+function _ws_ensure_closed_rejected(writer, error) {
+    if (writer._closedD.state === 'pending') writer._closedD.reject(error);
+    else writer._closedD = _stream_rejected_deferred(error);
+    _stream_mark_handled(writer._closedD.promise);
+}
+function _ws_abort(stream, reason) {
+    if (stream._ws_state === 'closed' || stream._ws_state === 'errored') return Promise.resolve(undefined);
+    if (stream._ws_ctrl._abortController) {
+        try { stream._ws_ctrl._abortController.abort(reason); } catch (e) {}
+    }
+    var state = stream._ws_state;
+    if (state === 'closed' || state === 'errored') return Promise.resolve(undefined);
+    if (stream._ws_pendingAbort !== null) return stream._ws_pendingAbort.deferred.promise;
+    var wasAlreadyErroring = false;
+    if (state === 'erroring') { wasAlreadyErroring = true; reason = undefined; }
+    var d = _stream_deferred();
+    stream._ws_pendingAbort = { deferred: d, reason: reason, wasAlreadyErroring: wasAlreadyErroring };
+    if (!wasAlreadyErroring) _ws_start_erroring(stream, reason);
+    return d.promise;
+}
+function _ws_close(stream) {
+    var state = stream._ws_state;
+    if (state === 'closed' || state === 'errored') {
+        return Promise.reject(new TypeError('cannot close a stream that is already ' + state));
+    }
+    var d = _stream_deferred();
+    stream._ws_closeRequest = d;
+    var writer = stream._ws_writer;
+    if (writer && stream._ws_backpressure && state === 'writable') writer._readyD.resolve(undefined);
+    _ws_ctrl_enqueue(stream._ws_ctrl, _WS_CLOSE_SENTINEL, 0);
+    _ws_ctrl_advance(stream._ws_ctrl);
+    return d.promise;
+}
 
 function WritableStream(sink, strategy) {
     sink = sink || {};
+    strategy = strategy || {};
     this._ws_state = 'writable';
     this._ws_error = undefined;
     this._ws_writer = null;
-    this._ws_ctrl = new WritableStreamDefaultController(this, sink);
-    if (typeof sink.start === 'function') {
-        try { sink.start(this._ws_ctrl); } catch(e) { this._ws_ctrl.error(e); }
-    }
+    this._ws_writeRequests = [];
+    this._ws_inFlightWrite = null;
+    this._ws_closeRequest = null;
+    this._ws_inFlightClose = null;
+    this._ws_pendingAbort = null;
+    this._ws_backpressure = false;
+    var hwm = strategy.highWaterMark === undefined ? 1 : Number(strategy.highWaterMark);
+    if (hwm !== hwm || hwm < 0) throw new RangeError('invalid highWaterMark');
+    var sizeFn = typeof strategy.size === 'function' ? strategy.size : null;
+    this._ws_ctrl = new WritableStreamDefaultController(this, sink, hwm, sizeFn);
+    _ws_ctrl_setup(this._ws_ctrl);
 }
 Object.defineProperty(WritableStream.prototype, 'locked', {
     get: function() { return this._ws_writer !== null; }
 });
 WritableStream.prototype.getWriter = function() {
-    if (this._ws_writer !== null) throw new TypeError('WritableStream is already locked');
-    var writer = new WritableStreamDefaultWriter(this);
-    this._ws_writer = writer;
-    return writer;
+    return new WritableStreamDefaultWriter(this);
 };
 WritableStream.prototype.abort = function(reason) {
     if (this._ws_writer) return Promise.reject(new TypeError('WritableStream is locked'));
-    this._ws_state = 'errored'; this._ws_error = reason;
-    return Promise.resolve();
+    return _ws_abort(this, reason);
 };
 WritableStream.prototype.close = function() {
     if (this._ws_writer) return Promise.reject(new TypeError('WritableStream is locked'));
-    return this._ws_do_close();
-};
-WritableStream.prototype._ws_do_close = function() {
-    var stream = this;
-    if (stream._ws_state !== 'writable') return Promise.resolve();
-    stream._ws_state = 'closing';
-    var sink = stream._ws_ctrl._sink;
-    var p = Promise.resolve();
-    if (typeof sink.close === 'function') {
-        try { p = Promise.resolve(sink.close(stream._ws_ctrl)); } catch(e) { p = Promise.reject(e); }
-    }
-    return p.then(function() { stream._ws_state = 'closed'; });
+    if (_ws_close_queued_or_in_flight(this)) return Promise.reject(new TypeError('close already requested'));
+    return _ws_close(this);
 };
 
 // ── WritableStreamDefaultWriter §4.6 ─────────────────────────────────────────
 function WritableStreamDefaultWriter(stream) {
+    if (!stream || typeof stream._ws_state !== 'string') {
+        throw new TypeError('WritableStreamDefaultWriter requires a WritableStream');
+    }
+    if (stream._ws_writer !== null) throw new TypeError('WritableStream is already locked');
     this._stream = stream;
-    var self = this;
-    this.ready = Promise.resolve();
-    this.closed = new Promise(function(res, rej) {
-        self._closedResolve = res;
-        self._closedReject = rej;
-    });
+    stream._ws_writer = this;
+    var state = stream._ws_state;
+    if (state === 'writable') {
+        this._readyD = (!_ws_close_queued_or_in_flight(stream) && stream._ws_backpressure)
+            ? _stream_deferred() : _stream_resolved_deferred();
+        this._closedD = _stream_deferred();
+    } else if (state === 'erroring') {
+        this._readyD = _stream_rejected_deferred(stream._ws_error);
+        this._closedD = _stream_deferred();
+    } else if (state === 'closed') {
+        this._readyD = _stream_resolved_deferred();
+        this._closedD = _stream_resolved_deferred();
+    } else {
+        this._readyD = _stream_rejected_deferred(stream._ws_error);
+        this._closedD = _stream_rejected_deferred(stream._ws_error);
+    }
 }
+Object.defineProperty(WritableStreamDefaultWriter.prototype, 'closed', {
+    get: function() { return this._closedD.promise; }
+});
+Object.defineProperty(WritableStreamDefaultWriter.prototype, 'ready', {
+    get: function() { return this._readyD.promise; }
+});
 Object.defineProperty(WritableStreamDefaultWriter.prototype, 'desiredSize', {
     get: function() {
         var s = this._stream;
-        if (!s || s._ws_state === 'errored') return null;
-        if (s._ws_state === 'closed' || s._ws_state === 'closing') return 0;
-        return 1;
+        if (!s) throw new TypeError('writer has no stream');
+        if (s._ws_state === 'errored' || s._ws_state === 'erroring') return null;
+        if (s._ws_state === 'closed') return 0;
+        return _ws_ctrl_desired_size(s._ws_ctrl);
     }
 });
 WritableStreamDefaultWriter.prototype.write = function(chunk) {
     var stream = this._stream;
-    if (!stream || stream._ws_state !== 'writable') return Promise.reject(new TypeError('stream not writable'));
-    var sink = stream._ws_ctrl._sink;
-    if (typeof sink.write === 'function') {
-        try { return Promise.resolve(sink.write(chunk, stream._ws_ctrl)); } catch(e) { return Promise.reject(e); }
+    if (!stream) return Promise.reject(new TypeError('writer has no stream'));
+    var controller = stream._ws_ctrl;
+    var chunkSize = 1;
+    if (controller._sizeFn) {
+        try {
+            chunkSize = Number(controller._sizeFn(chunk));
+        } catch (e) {
+            _ws_ctrl_error_if_needed(controller, e);
+            return Promise.reject(e);
+        }
     }
-    return Promise.resolve();
+    var state = stream._ws_state;
+    if (state === 'errored') return Promise.reject(stream._ws_error);
+    if (_ws_close_queued_or_in_flight(stream) || state === 'closed') {
+        return Promise.reject(new TypeError('cannot write to a closing or closed stream'));
+    }
+    if (state === 'erroring') return Promise.reject(stream._ws_error);
+    var promise = _ws_add_write_request(stream);
+    _ws_ctrl_enqueue(controller, chunk, chunkSize);
+    if (!_ws_close_queued_or_in_flight(stream) && stream._ws_state === 'writable') {
+        _ws_update_backpressure(stream, _ws_ctrl_backpressure(controller));
+    }
+    _ws_ctrl_advance(controller);
+    return promise;
 };
 WritableStreamDefaultWriter.prototype.close = function() {
     var stream = this._stream;
-    if (!stream) return Promise.reject(new TypeError('writer not attached'));
-    var p = stream._ws_do_close();
-    this._stream = null;
-    stream._ws_writer = null;
-    var self = this;
-    return p.then(function() { if (self._closedResolve) self._closedResolve(); });
+    if (!stream) return Promise.reject(new TypeError('writer has no stream'));
+    if (_ws_close_queued_or_in_flight(stream)) return Promise.reject(new TypeError('close already requested'));
+    return _ws_close(stream);
 };
 WritableStreamDefaultWriter.prototype.abort = function(reason) {
     var stream = this._stream;
-    if (!stream) return Promise.resolve();
-    this._stream = null;
-    stream._ws_writer = null;
-    return stream.abort(reason);
+    if (!stream) return Promise.reject(new TypeError('writer has no stream'));
+    return _ws_abort(stream, reason);
 };
 WritableStreamDefaultWriter.prototype.releaseLock = function() {
-    if (!this._stream) return;
-    this._stream._ws_writer = null;
+    var stream = this._stream;
+    if (!stream) return;
+    var released = new TypeError('writer was released and can no longer be used to monitor the stream state');
+    _ws_ensure_ready_rejected(this, released);
+    _ws_ensure_closed_rejected(this, released);
+    stream._ws_writer = null;
     this._stream = null;
 };
 
 // ── TransformStream §5 ───────────────────────────────────────────────────────
-function TransformStreamDefaultController(readableCtrl) {
-    this._readableCtrl = readableCtrl;
+// The two halves are wired to each other in both directions: an error on either
+// side takes the other down, which is what «errors thrown in transform put the
+// writable and readable in an errored state» asks for.
+function TransformStreamDefaultController(ts) {
+    this._ts = ts;
 }
+Object.defineProperty(TransformStreamDefaultController.prototype, 'desiredSize', {
+    get: function() {
+        var c = this._ts._ts_readableCtrl;
+        return c ? c.desiredSize : null;
+    }
+});
 TransformStreamDefaultController.prototype.enqueue = function(chunk) {
-    this._readableCtrl.enqueue(chunk);
+    var ctrl = this._ts._ts_readableCtrl;
+    if (ctrl) ctrl.enqueue(chunk);
 };
 TransformStreamDefaultController.prototype.terminate = function() {
-    this._readableCtrl.close();
+    var ts = this._ts;
+    if (ts._ts_readableCtrl) ts._ts_readableCtrl.close();
+    _ts_error_writable(ts, new TypeError('TransformStream terminated'));
 };
 TransformStreamDefaultController.prototype.error = function(e) {
-    this._readableCtrl.error(e);
+    _ts_error(this._ts, e);
 };
+
+function _ts_error(ts, e) {
+    if (ts.readable && ts.readable._rs_state === 'readable' && ts._ts_readableCtrl) {
+        ts._ts_readableCtrl.error(e);
+    }
+    _ts_error_writable(ts, e);
+}
+function _ts_error_writable(ts, e) {
+    if (ts.writable) _ws_ctrl_error_if_needed(ts.writable._ws_ctrl, e);
+}
+function _ts_transform(ts, chunk) {
+    var transformer = ts._ts_transformer;
+    if (typeof transformer.transform !== 'function') {
+        try {
+            ts._ts_ctrl.enqueue(chunk);
+        } catch (e) {
+            _ts_error(ts, e);
+            return Promise.reject(e);
+        }
+        return Promise.resolve(undefined);
+    }
+    var result;
+    try {
+        result = transformer.transform(chunk, ts._ts_ctrl);
+    } catch (e) {
+        _ts_error(ts, e);
+        return Promise.reject(e);
+    }
+    return Promise.resolve(result).then(function() { return undefined; }, function(e) {
+        _ts_error(ts, e);
+        return Promise.reject(e);
+    });
+}
+function _ts_flush(ts) {
+    var transformer = ts._ts_transformer;
+    var result;
+    try {
+        result = typeof transformer.flush === 'function' ? transformer.flush(ts._ts_ctrl) : undefined;
+    } catch (e) {
+        _ts_error(ts, e);
+        return Promise.reject(e);
+    }
+    return Promise.resolve(result).then(function() {
+        if (ts.readable._rs_state === 'readable' && ts._ts_readableCtrl) ts._ts_readableCtrl.close();
+    }, function(e) {
+        _ts_error(ts, e);
+        return Promise.reject(e);
+    });
+}
 
 function TransformStream(transformer, writableStrategy, readableStrategy) {
     transformer = transformer || {};
-    var tc;
     var self = this;
+    this._ts_transformer = transformer;
+    this._ts_ctrl = new TransformStreamDefaultController(this);
+    this._ts_readableCtrl = null;
     this.readable = new ReadableStream({
-        start: function(ctrl) {
-            tc = new TransformStreamDefaultController(ctrl);
-            if (typeof transformer.start === 'function') {
-                try { transformer.start(tc); } catch(e) { ctrl.error(e); }
-            }
-        }
-    });
+        start: function(ctrl) { self._ts_readableCtrl = ctrl; },
+        // §5.3: cancelling the readable end errors the writable one, so a writer
+        // waiting on `closed` after `readable.cancel()` hears about it.
+        cancel: function(reason) { _ts_error_writable(self, reason); }
+    }, readableStrategy);
+    var startResult;
+    try {
+        startResult = typeof transformer.start === 'function' ? transformer.start(this._ts_ctrl) : undefined;
+        this._ts_startPromise = Promise.resolve(startResult);
+    } catch (e) {
+        this._ts_startPromise = Promise.reject(e);
+    }
     this.writable = new WritableStream({
-        write: function(chunk) {
-            if (typeof transformer.transform === 'function') {
-                try { return Promise.resolve(transformer.transform(chunk, tc)); } catch(e) { return Promise.reject(e); }
-            }
-            tc.enqueue(chunk);
-            return Promise.resolve();
-        },
-        close: function() {
-            if (typeof transformer.flush === 'function') {
-                try { return Promise.resolve(transformer.flush(tc)); } catch(e) { return Promise.reject(e); }
-            }
-            tc.terminate();
-            return Promise.resolve();
-        }
-    });
+        start: function() { return self._ts_startPromise; },
+        write: function(chunk) { return _ts_transform(self, chunk); },
+        close: function() { return _ts_flush(self); },
+        abort: function(reason) { _ts_error(self, reason); }
+    }, writableStrategy);
+    // The writable half hears about a failed start() through its own sink; the
+    // readable half needs telling separately.
+    _stream_mark_handled(this._ts_startPromise.then(undefined, function(e) { _ts_error(self, e); }));
 }
 
 // ── TextDecoderStream / TextEncoderStream (Encoding Standard §5.1) ───────────
@@ -37963,17 +38462,24 @@ mod tests {
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 
+        /// Streams §4.8.3: the sink is never called from the same turn as `write()`
+        /// — the controller only starts advancing its queue once the promise
+        /// wrapping `start()` settles. So the assertion has to live in a second
+        /// `eval()`, after the microtask checkpoint (BUG-823 made this shim honour
+        /// that ordering; before, `write()` called the sink synchronously).
         #[test]
         fn writable_stream_get_writer_and_write() {
             let rt = v8_runtime_with_dom(make_doc());
-            let r = rt.eval(
+            rt.eval(
                 "var written = []; \
                  var ws = new WritableStream({ \
                    write: function(chunk) { written.push(chunk); } \
                  }); \
                  var writer = ws.getWriter(); \
-                 writer.write('a'); writer.write('b'); \
-                 written.length === 2 && written[0] === 'a' && written[1] === 'b'"
+                 writer.write('a'); writer.write('b');"
+            ).unwrap();
+            let r = rt.eval(
+                "written.length === 2 && written[0] === 'a' && written[1] === 'b'"
             ).unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
@@ -37992,13 +38498,222 @@ mod tests {
         #[test]
         fn writable_stream_close_resolves() {
             let rt = v8_runtime_with_dom(make_doc());
-            let r = rt.eval(
-                "var closed = false; \
+            rt.eval(
+                "var closed = false, closePromiseSettled = false; \
                  var ws = new WritableStream({ close: function() { closed = true; } }); \
                  var w = ws.getWriter(); \
-                 w.close().then(function() {}); \
-                 closed"
+                 w.close().then(function() { closePromiseSettled = true; });"
             ).unwrap();
+            // The sink runs on the checkpoint, and the promise `close()` returned
+            // settles with it — BUG-823 left the second half hanging.
+            let r = rt.eval("closed && closePromiseSettled").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── BUG-823: every state transition settles the promises waiting on it ──
+        //
+        // Each of these used to leave one promise pending forever, and because
+        // `testharness.js` runs `promise_test`s in sequence, a single such promise
+        // took the rest of the WPT file with it — hence a TIMEOUT of the whole
+        // `.any.html` instead of one failing subtest.
+
+        /// The bug's own repro (`writable-streams/close.any.js`): a sink that throws
+        /// from `close()` rejected `close()` and left `writer.closed` hanging.
+        #[test]
+        fn writer_closed_rejects_when_sink_close_throws() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var log = []; \
+                 var ws = new WritableStream({ close: function() { throw new Error('boom'); } }); \
+                 var w = ws.getWriter(); \
+                 w.write('y').then(function() { log.push('write-ok'); }, \
+                                   function() { log.push('write-rejected'); }); \
+                 w.close().then(function() { log.push('close-ok'); }, \
+                                function(e) { log.push('close-rejected ' + e.message); }); \
+                 w.closed.then(function() { log.push('closed-ok'); }, \
+                               function(e) { log.push('closed-rejected ' + e.message); });"
+            ).unwrap();
+            let r = rt.eval(
+                "log.indexOf('write-ok') >= 0 \
+                 && log.indexOf('close-rejected boom') >= 0 \
+                 && log.indexOf('closed-rejected boom') >= 0"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A throwing `write()` errors the stream, so both the write promise and
+        /// `writer.closed` have to hear about it.
+        #[test]
+        fn writer_closed_rejects_when_sink_write_throws() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var log = []; \
+                 var ws = new WritableStream({ write: function() { throw new Error('wboom'); } }); \
+                 var w = ws.getWriter(); \
+                 w.write('a').then(function() { log.push('write-ok'); }, \
+                                   function(e) { log.push('write-rejected ' + e.message); }); \
+                 w.closed.then(function() { log.push('closed-ok'); }, \
+                               function(e) { log.push('closed-rejected ' + e.message); });"
+            ).unwrap();
+            let r = rt.eval(
+                "log.indexOf('write-rejected wboom') >= 0 \
+                 && log.indexOf('closed-rejected wboom') >= 0"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// The sink's `abort()` had no call site at all before BUG-823.
+        #[test]
+        fn writable_stream_abort_calls_sink_abort() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var log = [], aborted = null; \
+                 var ws = new WritableStream({ abort: function(reason) { aborted = reason; } }); \
+                 var w = ws.getWriter(); \
+                 w.abort('why').then(function() { log.push('abort-resolved'); }, \
+                                     function() { log.push('abort-rejected'); }); \
+                 w.closed.then(function() { log.push('closed-ok'); }, \
+                               function(e) { log.push('closed-rejected ' + e); });"
+            ).unwrap();
+            let r = rt.eval(
+                "aborted === 'why' \
+                 && log.indexOf('abort-resolved') >= 0 \
+                 && log.indexOf('closed-rejected why') >= 0"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A thenable from `start()` used to be discarded, so «start returned a
+        /// rejection» never reached the stream.
+        #[test]
+        fn writable_stream_start_rejection_errors_the_stream() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = ''; \
+                 var ws = new WritableStream({ \
+                   start: function() { return Promise.reject(new Error('nope')); } \
+                 }); \
+                 var w = ws.getWriter(); \
+                 w.closed.then(function() { out = 'closed-ok'; }, \
+                               function(e) { out = 'closed-rejected ' + e.message; });"
+            ).unwrap();
+            let r = rt.eval("out === 'closed-rejected nope'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// The writable half of a pipe going down has to reject the pipe promise
+        /// rather than leave the page waiting on it.
+        #[test]
+        fn pipe_to_rejects_when_destination_write_throws() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = ''; \
+                 var rs = new ReadableStream({ start: function(c) { c.enqueue('a'); c.close(); } }); \
+                 var ws = new WritableStream({ write: function() { throw new Error('dead'); } }); \
+                 rs.pipeTo(ws).then(function() { out = 'resolved'; }, \
+                                    function(e) { out = 'rejected ' + e.message; });"
+            ).unwrap();
+            let r = rt.eval("out === 'rejected dead'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// `controller.error()` reached only the read requests already standing;
+        /// `reader.closed` heard nothing.
+        #[test]
+        fn readable_stream_error_rejects_reader_closed() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = [], ctrl = null; \
+                 var rs = new ReadableStream({ start: function(c) { ctrl = c; } }); \
+                 var reader = rs.getReader(); \
+                 reader.closed.then(function() { out.push('closed-ok'); }, \
+                                    function(e) { out.push('closed-rejected ' + e.message); }); \
+                 reader.read().then(function() { out.push('read-ok'); }, \
+                                    function(e) { out.push('read-rejected ' + e.message); }); \
+                 ctrl.error(new Error('bang'));"
+            ).unwrap();
+            let r = rt.eval(
+                "out.indexOf('closed-rejected bang') >= 0 && out.indexOf('read-rejected bang') >= 0"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// Same gap on the readable side: a rejected `start()` has to error the
+        /// stream, which is what «start should be able to return a promise and
+        /// reject it» asks for.
+        #[test]
+        fn readable_stream_start_rejection_errors_the_stream() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = ''; \
+                 var rs = new ReadableStream({ \
+                   start: function() { return Promise.reject(new Error('late')); } \
+                 }); \
+                 var reader = rs.getReader(); \
+                 reader.read().then(function() { out = 'read-ok'; }, \
+                                    function(e) { out = 'read-rejected ' + e.message; });"
+            ).unwrap();
+            let r = rt.eval("out === 'read-rejected late'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// `cancel()` swallowed whatever the source's own `cancel()` did.
+        #[test]
+        fn readable_stream_cancel_surfaces_source_rejection() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = ''; \
+                 var rs = new ReadableStream({ \
+                   cancel: function() { return Promise.reject(new Error('cboom')); } \
+                 }); \
+                 rs.cancel('r').then(function() { out = 'resolved'; }, \
+                                     function(e) { out = 'rejected ' + e.message; });"
+            ).unwrap();
+            let r = rt.eval("out === 'rejected cboom'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// «errors thrown in transform put the writable and readable in an errored
+        /// state» — the two halves are wired to each other now.
+        #[test]
+        fn transform_stream_transform_error_reaches_both_sides() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = []; \
+                 var ts = new TransformStream({ \
+                   transform: function() { throw new Error('tboom'); } \
+                 }); \
+                 var writer = ts.writable.getWriter(); \
+                 var reader = ts.readable.getReader(); \
+                 writer.write('x').then(function() { out.push('write-ok'); }, \
+                                        function(e) { out.push('write-rejected ' + e.message); }); \
+                 writer.closed.then(function() { out.push('writer-closed-ok'); }, \
+                                    function(e) { out.push('writer-closed-rejected ' + e.message); }); \
+                 reader.closed.then(function() { out.push('reader-closed-ok'); }, \
+                                    function(e) { out.push('reader-closed-rejected ' + e.message); });"
+            ).unwrap();
+            let r = rt.eval(
+                "out.indexOf('write-rejected tboom') >= 0 \
+                 && out.indexOf('writer-closed-rejected tboom') >= 0 \
+                 && out.indexOf('reader-closed-rejected tboom') >= 0"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// Cancelling the readable end of a transform errors the writable one, so a
+        /// writer parked on `closed` is not left there (`transform-streams/backpressure`).
+        #[test]
+        fn transform_stream_readable_cancel_errors_writable() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = ''; \
+                 var ts = new TransformStream(); \
+                 var writer = ts.writable.getWriter(); \
+                 writer.closed.then(function() { out = 'closed-ok'; }, \
+                                    function() { out = 'closed-rejected'; }); \
+                 ts.readable.cancel('done');"
+            ).unwrap();
+            let r = rt.eval("out === 'closed-rejected'").unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 

@@ -1,7 +1,7 @@
 # BUG-824 — Streams: `tee()` закрывает исходный поток и теряет чанки, BYOB-ридер подменяется обычным, async-итерации нет, `TextDecoderStream` не закрывает свою читаемую сторону
 
 **Статус:** OPEN
-**Заведён:** 2026-08-21 (WPT-RUN-6, срез 19 — общий с [BUG-823](BUG-823-OPEN.md) маркер `streams-promise-unsettled`, 40 id)
+**Заведён:** 2026-08-21 (WPT-RUN-6, срез 19 — общий с [BUG-823](BUG-823-FIXED.md) маркер `streams-promise-unsettled`, 40 id)
 **Область:** `crates/js/src/dom.rs:7391-7405` (`ReadableStream.tee`), `:7374` (`getReader` — аргумент не читается), `:7353` (конструктор игнорирует `type: 'bytes'`), `:7603` (`TransformStream`), плюс `TextDecoderStream` в том же шиме
 **Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.
 
@@ -43,7 +43,7 @@ await reader.read();   // первый чанк приходит, второй (
 | `stream-textdecoder` | `decode0 v=€` — и `decode1 done` не приходит никогда |
 | `stream-transform-close` | **контроль**: рукописный `TransformStream` закрытие проводит (`tclose-read1 done`), значит дело именно в `TextDecoderStream` |
 
-Пофайловый прогон (см. [BUG-823](BUG-823-OPEN.md), та же обвязка) сажает на
+Пофайловый прогон (см. [BUG-823](BUG-823-FIXED.md), та же обвязка) сажает на
 эти поверхности `readable-streams/tee.any.js` (первый зависший —
 «canceling both branches should aggregate the cancel reasons»),
 все четыре `readable-byte-streams/*` и пять `encoding/streams/*`
@@ -70,7 +70,7 @@ await reader.read();   // первый чанк приходит, второй (
 ## Масштаб
 
 Отдельного числа у этого бага нет: маркер `streams-promise-unsettled` общий
-с [BUG-823](BUG-823-OPEN.md) (40 id), потому что по исходнику теста эти две
+с [BUG-823](BUG-823-FIXED.md) (40 id), потому что по исходнику теста эти две
 причины неразделимы — файл `readable-byte-streams/general.any.js` одинаково
 подходит под обе. Внутри этих 40 на долю поверхностей отсюда приходятся
 4 id `readable-byte-streams`, 5 `encoding/streams` и `readable-streams/tee`.

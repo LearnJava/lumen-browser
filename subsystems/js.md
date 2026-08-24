@@ -1365,6 +1365,47 @@ the time — read dates.
   (no automatic replacement, BUG-704) and `event.timelineTime` is `null` until the
   first rAF tick, since `_wa_current_time` only advances there.
 
+- **Streams: a state transition now settles the promises waiting on it**
+  ([BUG-823](../bugs/BUG-823-FIXED.md), [P1] 2026-08-25, `crates/js/src/dom.rs`,
+  `WEB_API_SHIM_MID_B`). The shim used to change `_ws_state`/`_rs_state` and tell nobody:
+  `writer.closed` was created and never settled, `controller.error()` reached only the read
+  requests already standing, a promise returned from `start()` was dropped and the sink's
+  `abort()` had no call site anywhere in the workspace.
+  - `WritableStream` is now the spec's own machine (`writable`/`erroring`/`errored`/`closed` —
+    there is deliberately **no** `closing` state; a pending close lives in
+    `_ws_closeRequest`/`_ws_inFlightClose`, which is what lets an error arriving mid-close
+    reject the right promise and lets a close that made it through outrank a pending error).
+    The part that actually fixes the bug is the **registry**: `_ws_writeRequests`,
+    `_ws_inFlightWrite`, `_ws_closeRequest`, `_ws_inFlightClose`, `_ws_pendingAbort`, plus the
+    writer's `_readyD`/`_closedD` deferreds — `_ws_finish_erroring` walks all of them in spec
+    order, so one error settles everything instead of only the promise it arrived on.
+  - `_stream_deferred()` carries an explicit `state`, because the spec asks «is
+    `writer.[[readyPromise]]` pending?» in several places and decides between rejecting it and
+    replacing it with an already-rejected one.
+  - `_stream_mark_handled()` is the spec's «set `[[PromiseIsHandled]]` to true». Not decoration:
+    with BUG-716 wired, a `writer.closed` the engine rejects on the page's behalf would
+    otherwise surface as a page-level `unhandledrejection` for a stream the page never asked
+    about.
+  - **The readable side stays eager on purpose.** `start()` runs synchronously and the first
+    `pull()` follows in the same turn, because fetch reads its body back out of
+    `_rs_ctrl._queue` before the page sees the response (BUG-703). Only a *thenable* `start()`
+    defers. `_rs_pull_if_needed` adds the spec's demand check and `pulling`/`pullAgain`
+    re-entrancy guard, and routes a throwing/rejecting `pull()` into `_rs_do_error`.
+  - `TransformStream` is wired in both directions (a throw in `transform`/`flush` errors both
+    halves; `readable.cancel()` errors the writable one). `terminate()` inside `flush()` — what
+    `CompressionStream` does — is safe: the close is already in flight, so `FinishInFlightClose`
+    still resolves it and clears the stored error.
+  - **Contract shift to know:** the sink is no longer called in the same turn as
+    `write()`/`close()` — §4.8.3 makes the controller wait for the promise wrapping `start()`.
+    Two pre-existing unit tests asserted the old synchronous behaviour in a single `eval()` and
+    were split in two; anything else reading a sink's side effect must cross a microtask
+    checkpoint first.
+  - 10 new tests in `dom.rs::tests::v8_whatwg_streams`, one per gap plus `pipeTo`, `cancel` and
+    both directions of `TransformStream`. Live: all seven variants of
+    `tests/wpt/verify_stream_scroll_message_gaps.py` print their expected markers.
+    Out of scope: `tee()`/BYOB/async iteration ([BUG-824](../bugs/BUG-824-OPEN.md)) and
+    `DecompressionStream`'s buffer-then-flush model ([BUG-846](../bugs/BUG-846-OPEN.md)).
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
