@@ -7287,6 +7287,104 @@ struct ResolvedScript {
     url: Option<String>,
 }
 
+/// Журнал вставок, которые сделал парсер, — для `MutationObserver` (BUG-827).
+///
+/// Шелл разбирает документ целиком и только потом исполняет скрипты, поэтому к
+/// моменту, когда страничный `new MutationObserver(…).observe(…)` вообще может
+/// быть выполнен, дерево уже построено и «вставлять» нечего — записей о
+/// парсерных узлах не возникало ни одной, хотя DOM §4.3 вешает постановку
+/// записи на сам шаг «insert a node», а не на конкретный API: узел, написанный
+/// парсером, обязан дать `childList`-запись ровно так же, как `appendChild`.
+///
+/// Журнал восстанавливает тот порядок, в котором потоковый парсер вставлял бы
+/// узлы (обход дерева в document order), и режет его границами исполняемых
+/// классических `<script>`: перед скриптом K на JS-сторону уходит всё, что
+/// настоящий парсер вставил бы до него, включая сам элемент `<script>` и его
+/// текст. Остаток документа уходит после последнего классического скрипта —
+/// отложенные модули по HTML LS §8.1.3.1 исполняются уже после разбора.
+struct ParserInsertLog {
+    /// `(родитель, вставленный ребёнок)` в порядке дерева.
+    pairs: Vec<(usize, usize)>,
+    /// Для каждого исполняемого `<script>` — конец его поддерева в `pairs`.
+    script_end: HashMap<NodeId, usize>,
+    /// Сколько пар уже отдано (или пропущено) — граница следующего отрезка.
+    cursor: usize,
+}
+
+impl ParserInsertLog {
+    /// Обойти дерево `doc` и запомнить границы поддеревьев узлов `scripts`.
+    fn build(doc: &Document, scripts: &[ResolvedScript]) -> Self {
+        let mut log = Self { pairs: Vec::new(), script_end: HashMap::new(), cursor: 0 };
+        // Без классических скриптов наблюдателя ставить некому: модули по
+        // §8.1.3.1 отложены и исполняются, когда парсер уже всё вставил.
+        if scripts.is_empty() {
+            return log;
+        }
+        let boundaries: std::collections::HashSet<NodeId> =
+            scripts.iter().map(|s| s.node).collect();
+        // Сам корень документа ниоткуда не вставляется — начинаем с его детей.
+        log.walk(doc, doc.root(), &boundaries);
+        log
+    }
+
+    fn walk(&mut self, doc: &Document, id: NodeId, boundaries: &std::collections::HashSet<NodeId>) {
+        for &child in &doc.get(id).children {
+            self.pairs.push((id.index(), child.index()));
+            self.walk(doc, child, boundaries);
+            if boundaries.contains(&child) {
+                self.script_end.insert(child, self.pairs.len());
+            }
+        }
+    }
+
+    /// Граница отрезка: конец поддерева `upto` либо весь остаток при `None`.
+    fn segment_end(&self, upto: Option<NodeId>) -> usize {
+        match upto {
+            Some(n) => self.script_end.get(&n).copied().unwrap_or(self.pairs.len()),
+            None => self.pairs.len(),
+        }
+    }
+}
+
+/// Отдать JS-стороне парсерные вставки вплоть до `upto` (см. [`ParserInsertLog`]).
+///
+/// Наблюдателей нет — строку не строим вовсе: запись, поставленная до
+/// `observe()`, всё равно никому не доставляется, а сериализация вставок целого
+/// документа не бесплатна. Курсор двигается в обоих случаях.
+#[cfg(feature = "v8")]
+fn flush_parser_inserts(
+    log: &mut ParserInsertLog,
+    upto: Option<NodeId>,
+    rt: &lumen_js::v8_runtime::V8JsRuntime,
+) {
+    use lumen_core::ext::JsRuntime as _;
+    use std::fmt::Write as _;
+
+    let end = log.segment_end(upto);
+    if end <= log.cursor {
+        return;
+    }
+    let observing = matches!(
+        rt.eval("_lumen_mo_observing()"),
+        Ok(lumen_core::ext::JsValue::Bool(true))
+    );
+    if observing {
+        let mut js = String::with_capacity((end - log.cursor) * 12 + 32);
+        js.push_str("_lumen_mo_parser_inserted([");
+        for (i, (parent, child)) in log.pairs[log.cursor..end].iter().enumerate() {
+            if i > 0 {
+                js.push(',');
+            }
+            let _ = write!(js, "{parent},{child}");
+        }
+        js.push_str("]);");
+        if let Err(e) = rt.eval(&js) {
+            eprintln!("MutationObserver: парсерные вставки не доставлены: {e}");
+        }
+    }
+    log.cursor = end;
+}
+
 /// Resolve [`ScriptSource`] items to JS source strings in document order,
 /// fetching external `<script src>` bodies via the subresource fetcher
 /// (mirrors [`load_linked_stylesheets`]). Failed fetches are logged and
@@ -7927,6 +8025,10 @@ fn run_scripts_with_dom(
     // to the runtime before any module evaluation (HTML LS §8.1.6.2).
     #[cfg(feature = "v8")]
     let import_map = collect_import_map(&doc);
+    // BUG-827: порядок парсерных вставок надо снять до того, как `doc` уедет в
+    // Arc, — дальше исполнение скриптов уже начнёт менять дерево.
+    #[cfg(feature = "v8")]
+    let mut parser_inserts = ParserInsertLog::build(&doc, &scripts);
 
     let doc_arc = Arc::new(Mutex::new(doc));
 
@@ -7970,6 +8072,11 @@ fn run_scripts_with_dom(
                 }
                 // Classic scripts run first (HTML LS §8.1.3 execution order).
                 for ResolvedScript { node: nid, source: src, .. } in &scripts {
+                    // BUG-827: к этому моменту настоящий парсер уже вставил всё,
+                    // что стоит в документе выше этого скрипта, и сам его
+                    // элемент — наблюдатель, поставленный предыдущим скриптом,
+                    // обязан увидеть эти вставки записями.
+                    flush_parser_inserts(&mut parser_inserts, Some(*nid), &rt);
                     // BUG-486: `document.currentScript` must name the element
                     // being executed for the whole body and nothing else, so the
                     // push/pop pair brackets the eval — including the error paths
@@ -7993,6 +8100,11 @@ fn run_scripts_with_dom(
                     }
                     let _ = rt.eval("_lumen_pop_current_script();");
                 }
+                // BUG-827: хвост документа парсер вставил ещё до того, как
+                // отложенные модули начали исполняться, — отдаём его одним
+                // отрезком здесь, пока наблюдатель последнего классического
+                // скрипта ещё может его услышать.
+                flush_parser_inserts(&mut parser_inserts, None, &rt);
                 // Module scripts run after classic scripts (HTML LS §8.1.3.1 deferred).
                 // No `currentScript` bracket: it is `null` inside a module by spec.
                 for item in &module_scripts {
@@ -31642,6 +31754,88 @@ mod tests {
         assert!(matches!(&classic[0], ScriptSource::Inline(_, s) if s.contains("a=1")));
         assert!(matches!(&classic[1], ScriptSource::External(_, s) if s == "/bundle.js"));
         assert!(matches!(&classic[2], ScriptSource::Inline(_, s) if s.contains("b=2")));
+    }
+
+    // ── BUG-827: порядок парсерных вставок для MutationObserver ───────────────
+
+    /// Собрать `ResolvedScript` из результата [`collect_scripts_ordered`] —
+    /// тела внешних скриптов тесту не нужны, важен только узел.
+    fn resolved_for_test(items: &[ScriptSource]) -> Vec<ResolvedScript> {
+        items
+            .iter()
+            .map(|s| {
+                let (node, source) = match s {
+                    ScriptSource::Inline(n, src) | ScriptSource::External(n, src) => (*n, src),
+                };
+                ResolvedScript { node, source: source.clone(), url: None }
+            })
+            .collect()
+    }
+
+    fn count_nodes(doc: &Document, id: NodeId) -> usize {
+        1 + doc.get(id).children.iter().map(|&c| count_nodes(doc, c)).sum::<usize>()
+    }
+
+    /// Журнал перечисляет каждый узел документа ровно один раз (кроме корня,
+    /// который ниоткуда не вставляется), в порядке дерева.
+    #[test]
+    fn parser_insert_log_lists_every_node_once() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><div><span></span></div><script>a=1;</script></body></html>"#,
+        );
+        let mut classic = Vec::new();
+        let mut modules = Vec::new();
+        collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
+        let scripts = resolved_for_test(&classic);
+        let log = ParserInsertLog::build(&doc, &scripts);
+
+        assert_eq!(log.pairs.len(), count_nodes(&doc, doc.root()) - 1);
+        let mut seen: Vec<usize> = log.pairs.iter().map(|(_, c)| *c).collect();
+        let before = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), before, "ни один узел не вставлен дважды");
+    }
+
+    /// Отрезок скрипта кончается на нём самом (вместе с его текстом), а то, что
+    /// стоит в документе ниже, попадает уже в следующий отрезок: настоящий
+    /// парсер вставил бы это после того, как скрипт отработал.
+    #[test]
+    fn parser_insert_log_cuts_segment_at_the_script() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><div></div><script>a=1;</script><p></p></body></html>"#,
+        );
+        let mut classic = Vec::new();
+        let mut modules = Vec::new();
+        collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
+        let scripts = resolved_for_test(&classic);
+        assert_eq!(scripts.len(), 1);
+        let log = ParserInsertLog::build(&doc, &scripts);
+
+        let at_script = log.segment_end(Some(scripts[0].node));
+        let all = log.segment_end(None);
+        assert!(at_script < all, "ниже скрипта в документе ещё есть узлы");
+
+        // Последняя пара отрезка — текст самого скрипта.
+        let (parent, _) = log.pairs[at_script - 1];
+        assert_eq!(parent, scripts[0].node.index());
+
+        // Первая пара следующего отрезка — <p>.
+        let (_, child) = log.pairs[at_script];
+        let node = doc.get(NodeId::from_index(child));
+        assert!(matches!(&node.data, NodeData::Element { name, .. } if name.local == "p"));
+    }
+
+    /// Без классических скриптов журнал пуст: наблюдателя ставить некому, а
+    /// модули исполняются, когда парсер уже всё вставил (HTML LS §8.1.3.1).
+    #[test]
+    fn parser_insert_log_is_empty_without_classic_scripts() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><div></div><script type="module">export const y = 2;</script></body></html>"#,
+        );
+        let log = ParserInsertLog::build(&doc, &[]);
+        assert!(log.pairs.is_empty());
+        assert_eq!(log.segment_end(None), 0);
     }
 
     /// `<script type=module src>` lands in the module list as `External`.
