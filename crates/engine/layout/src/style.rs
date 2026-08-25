@@ -10843,6 +10843,14 @@ fn default_display(doc: &Document, node: NodeId) -> Display {
         | "label" | "abbr" | "cite" | "q" | "mark" | "u"
         // HTML §15.3.7: <del>, <ins>, <s> — flow content, UA display = inline.
         | "del" | "ins" | "s" => Display::Inline,
+        // HTML rendering §15.3.1 — `<img>` is inline-level replaced content, so
+        // it shares the line box with the text around it (icon in a button, logo
+        // next to a title, avatar in a comment). It never becomes an `InlineRun`
+        // segment — a segment has no height of its own (BUG-728) — but
+        // `is_atomic_inline_level` picks it up as an atomic inline-level box and
+        // it flows inside `InlineBlockRow` beside text and `inline-block`
+        // siblings (IFC-2). Author `display:` overrides win through the cascade.
+        "img" => Display::Inline,
         // CSS 2.1 table model — UA default display values per HTML spec.
         "table" => Display::Table,
         "caption" => Display::TableCaption,
