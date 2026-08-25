@@ -14,7 +14,7 @@
 properties of undefined (setting 'mode')` не встречается в логе ни разу.
 Остаток к `<track>` почти не относится: 32 из 57 — весь `cors/*`, который ждёт
 `iframe.onload` у скриптового фрейма ([BUG-885](BUG-885-OPEN.md)), 9 — разметочный
-`<track>` ([BUG-804](BUG-804-OPEN.md)), остальные — `src` после вставки и порядок
+`<track>` ([BUG-804](BUG-804-FIXED.md)), остальные — `src` после вставки и порядок
 переходов `readyState`.
 
 **Заведён:** 2026-08-21 (WPT-RUN-6, срез 4 — разбор массового TIMEOUT в `html/semantics/embedded-content`)

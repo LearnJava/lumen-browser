@@ -16772,6 +16772,11 @@ function _lumen_apply_ready_state(state) {
         // again, and the per-node flag keeps a `<style>` a head script built
         // from reporting its first update twice.
         _lumen_style_blocks_scan();
+        // BUG-804: the parser's `<track>` elements start the §4.8.11.1 track
+        // processing model from here — same reason once more. The model itself
+        // lives in the media shim (`video_bindings.rs`), which is its own
+        // `rt.eval` and is absent from the DOM-less runtimes, hence the guard.
+        if (typeof _lumen_track_elements_scan === 'function') _lumen_track_elements_scan();
         // BUG-851: a `<details open>` the parser wrote owes a `toggle` event for
         // the same reason — markup never passes through the attribute-write hook
         // that the §4.11.1 change steps hang on. The per-node record keeps an
