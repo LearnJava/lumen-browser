@@ -1274,6 +1274,20 @@ the time — read dates.
   on `!evt.defaultPrevented && evt.isTrusted === false && evt.type === 'click'` — covers submit/reset
   buttons, `<a href>`/`<area>`, checkbox/radio, `<summary>`, `<label>` in one place since they all share
   that same function.
+- **Activation runs on the activation target, not on the clicked node ([BUG-837](../bugs/BUG-837-FIXED.md),
+  2026-08-25).** Both call sites added by BUG-383/BUG-439 above handed `_lumen_run_activation_behavior`
+  the node the click was aimed at, and that function keys on its tag — so `<span>` (no row in the table)
+  meant a dispatched event and nothing else, which is the whole `<label><span></span></label>`,
+  `<a><img></a>`, `<button><svg></svg></button>` family. `_lumen_activation_target(nid)` walks the
+  ancestor chain (= the event path) to the first node with a behaviour; the pre-click flip and its undo
+  moved onto it as well, because DOM §2.9 computes the target *before* dispatch and the halves of one
+  sequence cannot sit on different nodes. `_LUMEN_ACTIVATION_BARRIER_TAGS`
+  (`SELECT`/`TEXTAREA`/`IFRAME`/`EMBED`/`OBJECT`) stops the walk — HTML LS §4.10.20 requires a `<label>`
+  to do nothing for events targeted at interactive-content descendants — and the `disabled` guard moved
+  from `click()` into the behaviour, since the target may now be an ancestor of the checked node. The
+  re-entrancy guard `_lumen_click_in_progress` stays keyed by the *clicked* nid, which keeps
+  label → control → label finite. The native mouse-click path is a separate implementation of the same
+  algorithm (`forms::classify_click`, see `subsystems/shell.md`).
 - **Live node wrapper matches WebIDL on `localName`/`prefix`, namespace-aware `tagName`, a hidden
   `__nid__` handle and `HTMLUnknownElement` ([BUG-367](../bugs/BUG-367-FIXED.md) points 1/2/3/5,
   [P3] 2026-08-10).** Four independent WebIDL gaps in `_lumen_build_element`, the one factory behind

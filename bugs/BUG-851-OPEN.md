@@ -87,7 +87,7 @@ else _lumen_set_attr(parent, 'open', '');
 «Setting open=false on a closed 'details' element should **not** fire a toggle
 event» проходит. Родственный id
 `the-summary-element/anchor-with-inline-element.html` висит по другой причине
-([BUG-837](BUG-837-OPEN.md)).
+([BUG-837](BUG-837-FIXED.md)).
 
 ## Направление починки (не предписание)
 

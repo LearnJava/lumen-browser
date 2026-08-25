@@ -71,10 +71,103 @@ pub enum FormClickAction {
     Nothing,
 }
 
+/// Tags this module knows how to activate — the `match` in [`classify_click`]
+/// below, kept separate so [`activation_target`] can ask «does this node have a
+/// behaviour» without running it.
+fn is_activatable(tag: &str) -> bool {
+    matches!(tag, "input" | "button" | "select" | "summary" | "label")
+}
+
+/// Interactive content with no activation behaviour of its own. The walk stops
+/// here instead of continuing to an ancestor: HTML LS §4.10.20 makes a `<label>`
+/// do nothing for events targeted at such a descendant, so a click inside the
+/// `<textarea>` of a `<label for=cb>` must not toggle `cb`.
+fn is_activation_barrier(tag: &str) -> bool {
+    matches!(tag, "textarea" | "iframe" | "embed" | "object")
+}
+
+/// DOM Standard §2.9 «activation target»: the nearest inclusive ancestor of the
+/// clicked node that has an activation behaviour. A hit test lands on whatever
+/// box is under the cursor — the text inside a `<label>`, the `<img>` inside a
+/// `<button>` — and the behaviour belongs to the ancestor, not to that node
+/// (BUG-837, the native-click half; [`links::find_link_href`] already walks the
+/// same chain for `<a href>`).
+fn activation_target(doc: &Document, node: NodeId) -> Option<NodeId> {
+    let mut current = node;
+    loop {
+        let n = doc.get(current);
+        if let Some(tag) = n.element_name().map(|q| q.local.as_str()) {
+            if is_activatable(tag) {
+                return Some(current);
+            }
+            if is_activation_barrier(tag) {
+                return None;
+            }
+        }
+        current = n.parent?;
+    }
+}
+
+/// HTML LS §4.10.4 — a `<label>`'s labeled control: the element named by `for`,
+/// else its first labelable descendant in tree order. A label whose `for` names
+/// a non-labelable element (or nothing) has no control at all, and per spec that
+/// is not a fallback to the descendant search.
+fn labeled_control(doc: &Document, label: NodeId) -> Option<NodeId> {
+    let is_labelable = |id: NodeId| {
+        doc.get(id)
+            .element_name()
+            .map(|q| q.local.as_str())
+            .is_some_and(|t| {
+                matches!(
+                    t,
+                    "input" | "select" | "textarea" | "button" | "output" | "progress" | "meter"
+                )
+            })
+    };
+    if let Some(target) = doc.get(label).get_attr("for") {
+        if target.is_empty() {
+            return None;
+        }
+        return doc.find_by_id(target).filter(|&id| is_labelable(id));
+    }
+    let mut stack: Vec<NodeId> = doc.get(label).children.iter().rev().copied().collect();
+    while let Some(id) = stack.pop() {
+        if is_labelable(id) {
+            return Some(id);
+        }
+        stack.extend(doc.get(id).children.iter().rev().copied());
+    }
+    None
+}
+
 /// Classify a click on `node` given the current DOM tree.
 pub fn classify_click(doc: &Document, node: NodeId) -> FormClickAction {
-    let n = doc.get(node);
+    let Some(target) = activation_target(doc, node) else {
+        return FormClickAction::Nothing;
+    };
+    // A `<label>` forwards its activation to the labeled control (HTML LS
+    // §4.10.4 «synthetic click activation steps»), so the action is the
+    // control's — which is why the resolution happens before the match below
+    // rather than as a branch inside it.
+    let target = match doc.get(target).element_name().map(|q| q.local.as_str()) {
+        Some("label") => match labeled_control(doc, target) {
+            Some(control) => control,
+            None => return FormClickAction::Nothing,
+        },
+        _ => target,
+    };
+    let n = doc.get(target);
     let tag = n.element_name().map(|q| q.local.as_str()).unwrap_or("");
+    // A disabled form control has no activation behaviour (HTML LS §4.10.19).
+    // The node the hit test landed on used to be the node classified, so this
+    // could not come up before the walk above; now a click on the `<span>`
+    // inside a `<button disabled>` reaches the button.
+    if n.get_attr("disabled").is_some()
+        && matches!(tag, "input" | "select" | "textarea" | "button" | "option" | "optgroup" | "fieldset")
+    {
+        return FormClickAction::Nothing;
+    }
+    let node = target;
     match tag {
         "input" => {
             let itype = n.input_type().unwrap_or(InputType::Text);
@@ -2060,6 +2153,124 @@ mod tests {
         let summary = doc.create_element(QualName::html("summary"));
         doc.append_child(doc.root(), summary);
         matches!(classify_click(&doc, summary), FormClickAction::Nothing);
+    }
+
+    // ── activation target (BUG-837) ──────────────────────────────────────────
+
+    /// Give `node` an attribute; the test docs are built by hand, so there is no
+    /// parser to carry `type`/`for`/`disabled` in.
+    fn set_attr(doc: &mut Document, node: NodeId, name: &str, value: &str) {
+        if let NodeData::Element { ref mut attrs, .. } = doc.get_mut(node).data {
+            attrs.push(Attribute { name: QualName::html(name), value: value.to_owned() });
+        }
+    }
+
+    /// `<label for="cb"><span>peas?</span></label><input type=checkbox id=cb>`
+    /// — returns the span the hit test would land on and the checkbox.
+    fn make_label_doc() -> (Document, NodeId, NodeId, NodeId) {
+        let mut doc = Document::new();
+        let label = doc.create_element(QualName::html("label"));
+        let span = doc.create_element(QualName::html("span"));
+        let cb = doc.create_element(QualName::html("input"));
+        set_attr(&mut doc, label, "for", "cb");
+        set_attr(&mut doc, cb, "type", "checkbox");
+        set_attr(&mut doc, cb, "id", "cb");
+        doc.append_child(doc.root(), label);
+        doc.append_child(label, span);
+        doc.append_child(doc.root(), cb);
+        (doc, label, span, cb)
+    }
+
+    #[test]
+    fn click_inside_a_label_toggles_the_labeled_control() {
+        let (doc, _label, span, cb) = make_label_doc();
+        match classify_click(&doc, span) {
+            FormClickAction::ToggleCheckbox(id) => assert_eq!(id, cb),
+            other => panic!("expected ToggleCheckbox, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn click_on_the_label_itself_toggles_the_labeled_control() {
+        let (doc, label, _span, cb) = make_label_doc();
+        match classify_click(&doc, label) {
+            FormClickAction::ToggleCheckbox(id) => assert_eq!(id, cb),
+            other => panic!("expected ToggleCheckbox, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_label_wrapping_its_control_needs_no_for_attribute() {
+        let mut doc = Document::new();
+        let label = doc.create_element(QualName::html("label"));
+        let cb = doc.create_element(QualName::html("input"));
+        let span = doc.create_element(QualName::html("span"));
+        set_attr(&mut doc, cb, "type", "checkbox");
+        doc.append_child(doc.root(), label);
+        doc.append_child(label, span);
+        doc.append_child(label, cb);
+        match classify_click(&doc, span) {
+            FormClickAction::ToggleCheckbox(id) => assert_eq!(id, cb),
+            other => panic!("expected ToggleCheckbox, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_label_pointing_at_nothing_activates_nothing() {
+        let (mut doc, label, span, _cb) = make_label_doc();
+        if let NodeData::Element { ref mut attrs, .. } = doc.get_mut(label).data {
+            attrs.retain(|a| a.name.local.as_str() != "for");
+        }
+        set_attr(&mut doc, label, "for", "missing");
+        assert!(matches!(classify_click(&doc, span), FormClickAction::Nothing));
+    }
+
+    #[test]
+    fn interactive_content_stops_the_walk() {
+        // HTML LS §4.10.20: the label does nothing for a click targeted at an
+        // interactive-content descendant, so the checkbox must stay untouched.
+        let (mut doc, label, _span, _cb) = make_label_doc();
+        let ta = doc.create_element(QualName::html("textarea"));
+        let inner = doc.create_element(QualName::html("span"));
+        doc.append_child(label, ta);
+        doc.append_child(ta, inner);
+        assert!(matches!(classify_click(&doc, ta), FormClickAction::Nothing));
+        assert!(matches!(classify_click(&doc, inner), FormClickAction::Nothing));
+    }
+
+    #[test]
+    fn click_inside_a_submit_button_submits() {
+        let mut doc = Document::new();
+        let button = doc.create_element(QualName::html("button"));
+        let img = doc.create_element(QualName::html("img"));
+        doc.append_child(doc.root(), button);
+        doc.append_child(button, img);
+        match classify_click(&doc, img) {
+            FormClickAction::SubmitForm(id) => assert_eq!(id, button),
+            other => panic!("expected SubmitForm, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_disabled_ancestor_is_not_activated() {
+        let mut doc = Document::new();
+        let button = doc.create_element(QualName::html("button"));
+        let img = doc.create_element(QualName::html("img"));
+        set_attr(&mut doc, button, "disabled", "");
+        doc.append_child(doc.root(), button);
+        doc.append_child(button, img);
+        assert!(matches!(classify_click(&doc, img), FormClickAction::Nothing));
+    }
+
+    #[test]
+    fn click_inside_a_summary_toggles_its_details() {
+        let (mut doc, details, summary) = make_details_doc();
+        let span = doc.create_element(QualName::html("span"));
+        doc.append_child(summary, span);
+        match classify_click(&doc, span) {
+            FormClickAction::ToggleDetails(id) => assert_eq!(id, details),
+            other => panic!("expected ToggleDetails, got {other:?}"),
+        }
     }
 
     // ── <dialog> modal overlay tests ─────────────────────────────────────────
