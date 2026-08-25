@@ -140,6 +140,21 @@ in the expected order»).
 `error`/`abort` не всплывают с запроса на транзакцию и на соединение
 (`db.onabort`/`db.onerror` не вызываются — [BUG-914](BUG-914-OPEN.md)).
 
+## Проверка на WPT (2026-08-25, dev-release, `run_smoke.py`, три id из «Масштаба»)
+
+| id | было | стало |
+|---|---|---|
+| `transaction-lifetime-empty.any.html` | TIMEOUT | **Test OK, 2/2 подтеста, 0 unexpected** |
+| `idbtransaction-objectStore-exception-order.any.html` | TIMEOUT | Test OK (харнесс доходит до конца), 0/1 — порядок `InvalidStateError` перед `NotFoundError` уже правильный, подтест валится только на форме исключения ([BUG-915](BUG-915-OPEN.md)) |
+| `idbobjectstore_createIndex.any.html` | TIMEOUT | TIMEOUT, 8/21 подтестов; остаток — [BUG-914](BUG-914-OPEN.md) (`t.done()` висит на `db.onabort`) и BUG-915 |
+
+Прогон нашёл ещё два дефекта, к этому багу не относящихся и заведённых
+отдельно: BUG-915 (весь шим бросает `Error`, а не `DOMException`, так что
+`assert_throws_dom` отвергает правильное поведение) и [BUG-916](BUG-916-OPEN.md)
+(запрос выполняется против схемы на момент доставки, а не постановки в очередь:
+индекс, удалённый последней строкой скрипта, не действует и на запросы,
+поставленные до удаления).
+
 Тесты: `idb_empty_transaction_commits`,
 `idb_empty_transactions_commit_in_creation_order`,
 `idb_abort_finishes_transaction_synchronously`,

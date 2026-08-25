@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-25",
  "counts": {
-  "open": 383,
+  "open": 385,
   "fixed": 487,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 870,
+ "total_bugs": 872,
  "phases": [
   {
    "id": "P0",
@@ -11478,6 +11478,20 @@
    "component": "js (`crates/js/src/dom.rs` — `_idb_dispatch_request` стреляет `error` только по самому `IDBRequest`; `_idb_fire_txn` — только по самой `IDBTransaction`; `IDBDatabase.onabort`/`onerror` объявлены в конструкторе и не зовутся ниоткуда)",
    "date": null,
    "debtor": false
+  },
+  "BUG-915": {
+   "status": "open",
+   "title": "IndexedDB бросает обычный `Error` вместо `DOMException`: `e.name` верный, но `e.code` — `undefined` вместо 11 и `e instanceof DOMException` — `false`, поэтому `…",
+   "component": "js (`crates/js/src/dom.rs:14615` — `_idb_error(name, message)` строит `new Error(message)` и присваивает `name`; глобальный `DOMException` в движке есть, `DOM_EXCEPTION_POLYFILL` в `crates/js/src/v8_runtime.rs`, шим им не пользуется)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-916": {
+   "status": "open",
+   "title": "IndexedDB: запрос выполняется против схемы на момент ДОСТАВКИ, а не постановки в очередь — `deleteIndex`, написанный последней строкой скрипта, отменяет уникаль…",
+   "component": "js (`crates/js/src/dom.rs` — отложенная модель: `_idb_make_request` кладёт замыкание, `_idb_dispatch_request` выполняет его при флаше, тогда как `IDBObjectStore.prototype.createIndex`/`deleteIndex` правят `store.indexes` синхронно)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11757,6 +11771,9 @@
   "js (`crates/js/src/dom.rs:13023` — `indexedDB.open` смотрит только на запись базы; `:12509` `onversionchange` и `:12351` `onblocked` объявлены и не диспатчатся ниоткуда)": [
    "BUG-843"
   ],
+  "js (`crates/js/src/dom.rs:14615` — `_idb_error(name, message)` строит `new Error(message)` и присваивает `name`; глобальный `DOMException` в движке есть, `DOM_EXCEPTION_POLYFILL` в `crates/js/src/v8_runtime.rs`, шим им не пользуется)": [
+   "BUG-915"
+  ],
   "js (`crates/js/src/dom.rs:14634` — ветка `A`/`AREA` в `_lumen_run_activation_behavior` зовёт `_lumen_navigate`, минуя `_lumen_navigate_or_fragment` с `:6330`)": [
    "BUG-833"
   ],
@@ -12023,6 +12040,9 @@
   ],
   "js (`crates/js/src/dom.rs` — объект `navigation`; путь фрагментной навигации о нём не знает)": [
    "BUG-881"
+  ],
+  "js (`crates/js/src/dom.rs` — отложенная модель: `_idb_make_request` кладёт замыкание, `_idb_dispatch_request` выполняет его при флаше, тогда как `IDBObjectStore.prototype.createIndex`/`deleteIndex` правят `store.indexes` синхронно)": [
+   "BUG-916"
   ],
   "js (`crates/js/src/dom.rs` — секция `// ── performance (HR Timer …`, `Performance.prototype`)": [
    "BUG-767"
