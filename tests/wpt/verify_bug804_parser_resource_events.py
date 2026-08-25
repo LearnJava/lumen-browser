@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BUG-804: does a `<script>`/`<link>`/`<style>` report the outcome of its load?
+"""BUG-804: does a `<script>`/`<link>`/`<style>`/`<track>` report its load?
 
 The bug report measured one axis (parser insertion vs `createElement`) with one
 form of handler. This probe measures the whole matrix, because every previous
@@ -11,7 +11,12 @@ fix in this family turned out to cover fewer call sites than its report claimed:
 * outcome — a resource that arrives, and one that 404s;
 * and, for `<style>`, the three moments HTML LS §4.14 «update a style block»
   names: insertion with a body, a later `textContent` write, and an `@import`
-  that cannot be obtained.
+  that cannot be obtained;
+* for `<track>`, the media element it hangs under (`<video>` and `<audio>` are
+  both media elements, and the shell's own walk only ever looked at the first),
+  and the two questions the `track-webvtt-*` tests ask inside the handler:
+  whether `track.track.cues` can be read, and whether that TextTrack is the same
+  object `video.textTracks` lists.
 
 The controls matter as much as the subjects. An inline parser `<script>` must
 fire **nothing** (§4.12.1 fires `load` only when «el's from an external file» is
@@ -236,6 +241,82 @@ st.appendChild(document.createTextNode('@import url("b804-asset.css?style-import
 document.head.appendChild(st);
 </script>
 """, "import-style-load + a request for b804-asset.css"),
+
+    # ── <track>: the fourth element of this bug (BUG-775 closed the created
+    # half; the markup half was left in exactly the shape of this report) ─────
+    # The `on<type>` content attribute, the shape every `track-webvtt-*.html`
+    # test uses, plus the two questions those tests ask right after the event:
+    # can `track.track.cues` be read, and is that TextTrack the same object the
+    # media element lists? A list built from the shell's snapshot cannot answer
+    # the second, which is the whole reason the ownership question exists.
+    "track-parsed-attr-load": ("""
+<video>
+  <track src="b804-cues.vtt?parsed-attr" kind="subtitles" default
+         onload="console.log('PROBE parsed-track-load cues=' + (this.track && this.track.cues ? this.track.cues.length : 'null') +
+                             ' same=' + (this.track === this.parentNode.textTracks[0]) +
+                             ' ready=' + this.readyState)"
+         onerror="console.log('PROBE parsed-track-error')">
+</video>
+""", "parsed-track-load cues=1 same=true ready=2"),
+    "track-parsed-404": ("""
+<video>
+  <track src="b804-missing.vtt?parsed-404" kind="subtitles" default
+         onload="console.log('PROBE parsed-track-load')"
+         onerror="console.log('PROBE parsed-track-error ready=' + this.readyState)">
+</video>
+""", "parsed-track-error ready=3"),
+    # Both listener forms, armed by a script standing BELOW the markup — the
+    # ordering `track-webvtt-*.html` uses, and the one that works only because
+    # the whole document is parsed before any script runs.
+    "track-parsed-listener-load": ("""
+<video id="b804-video">
+  <track id="b804-track" src="b804-slow.vtt?parsed-listener" kind="captions" default>
+</video>
+<script>
+var tr = document.getElementById("b804-track");
+console.log("PROBE found-parsed-track=" + (tr ? "yes" : "no"));
+if (tr) {
+    tr.addEventListener("load", function (ev) {
+        console.log("PROBE parsed-track-load-listener target=" + (ev.target && ev.target.id) +
+                    " trusted=" + ev.isTrusted);
+    });
+    tr.onload = function () { console.log("PROBE parsed-track-onload"); };
+}
+</script>
+""", "parsed-track-load-listener + parsed-track-onload"),
+    # `<audio>` is a media element too (§4.8.11.1 step 3 says «media element»,
+    # not «video»), and the shell's own walk never looked at it at all.
+    "track-parsed-audio": ("""
+<audio>
+  <track src="b804-cues.vtt?parsed-audio" kind="subtitles" default
+         onload="console.log('PROBE audio-track-load tracks=' + this.parentNode.textTracks.length)"
+         onerror="console.log('PROBE audio-track-error')">
+</audio>
+""", "audio-track-load tracks=1"),
+    # §4.8.11.1 step 8: a `<track>` with no `src` fails like a failed fetch.
+    # The shell's collector drops such an element before it is ever listed.
+    "track-parsed-no-src": ("""
+<video>
+  <track kind="subtitles" default
+         onload="console.log('PROBE nosrc-track-load')"
+         onerror="console.log('PROBE nosrc-track-error')">
+</video>
+""", "nosrc-track-error"),
+    # Control: the createElement path BUG-775 fixed. If this goes quiet the
+    # change under test broke it.
+    "track-created-load": ("""
+<script>
+var v = document.createElement("video");
+var tr = document.createElement("track");
+tr.src = "b804-cues.vtt?created";
+tr.kind = "subtitles";
+tr.setAttribute("default", "");
+tr.onload = function () { console.log("PROBE created-track-load cues=" + (this.track.cues ? this.track.cues.length : "null")); };
+tr.onerror = function () { console.log("PROBE created-track-error"); };
+v.appendChild(tr);
+document.body.appendChild(v);
+</script>
+""", "created-track-load cues=1"),
 }
 
 PAGE = """<!doctype html>
@@ -257,6 +338,7 @@ ASSETS = {
     "b804-asset.js": "window.b804Ran = (window.b804Ran || 0) + 1;\n",
     "b804-module.js": "export const b804 = 1;\n",
     "b804-asset.css": "#b804 { color: rgb(1, 2, 3); }\n",
+    "b804-cues.vtt": "WEBVTT\n\n1\n00:00:00.000 --> 00:00:30.500\nBear is coming\n",
 }
 
 _TICK_RE = re.compile(r"PROBE tick (\d+)")
@@ -276,9 +358,13 @@ class _Quiet(http.server.SimpleHTTPRequestHandler):
             SERVED.append(self.path)
         if self.path.startswith("/b804-slow."):
             time.sleep(1.0)
-            body = (b"window.b804SlowRan = 1;\n" if ".js" in self.path
-                    else b"#b804 { color: rgb(7, 8, 9); }\n")
-            ctype = "text/javascript" if ".js" in self.path else "text/css"
+            if ".js" in self.path:
+                body, ctype = b"window.b804SlowRan = 1;\n", "text/javascript"
+            elif ".vtt" in self.path:
+                body = b"WEBVTT\n\n1\n00:00:00.000 --> 00:00:30.500\nBear is coming\n"
+                ctype = "text/vtt"
+            else:
+                body, ctype = b"#b804 { color: rgb(7, 8, 9); }\n", "text/css"
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))

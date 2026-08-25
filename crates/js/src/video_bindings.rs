@@ -625,7 +625,10 @@ const VIDEO_SHIM: &str = r#"(function() {
   // they armed (`var track = event.target; var video = track.parentNode;`).
   function fireTrackEvent(nid, type) {
     try {
-      var ev = new Event(type, { bubbles: false, cancelable: false });
+      // `isTrusted` because the engine fires it, not the page — the same thing
+      // BUG-838 had to add to `_lumen_resource_fire` for `<script>`/`<link>`,
+      // and the only way a handler can tell this event from a synthesized one.
+      var ev = new Event(type, { bubbles: false, cancelable: false, isTrusted: true });
       if (typeof _lumen_make_element === 'function') ev.target = _lumen_make_element(nid);
       _lumen_dispatch(nid, ev);
     } catch (e) {
@@ -745,12 +748,28 @@ const VIDEO_SHIM: &str = r#"(function() {
     st.readyState = 1; // HTMLTrackElement.LOADING
 
     // The TextTrack joins the media element's list now, before the bytes are in:
-    // the list is in tree order, and building it on completion instead would
-    // order it by how fast each file happened to arrive.
+    // building it on completion instead would order it by how fast each file
+    // happened to arrive. The position is read off the *tree* rather than taken
+    // as «append», because the two entry points do not run in tree order:
+    // BUG-804's parser scan runs after the document's own scripts, so a track a
+    // head script appended to a markup `<video>` would otherwise stand ahead of
+    // the one written above it in the markup.
     var tt = ensureTrackObject(nid);
     var list = _lumen_track_media_lists[mediaNid];
     if (!list) list = _lumen_track_media_lists[mediaNid] = [];
-    if (list.indexOf(tt) < 0) list.push(tt);
+    if (list.indexOf(tt) < 0) {
+      var kids = (typeof _lumen_get_children === 'function') ? _lumen_get_children(mediaNid) : null;
+      var pos = list.length;
+      if (kids) {
+        pos = 0;
+        for (var ci = 0; ci < kids.length; ci++) {
+          if (+kids[ci] === +nid) break;
+          var sib = _lumen_track_states[kids[ci]];
+          if (sib && sib.track && list.indexOf(sib.track) >= 0) pos++;
+        }
+      }
+      list.splice(pos, 0, tt);
+    }
 
     var raw = trackAttr(nid, 'src');
     var src = raw === null ? '' : raw.trim();
@@ -776,6 +795,90 @@ const VIDEO_SHIM: &str = r#"(function() {
   }
   globalThis._lumen_track_start_load = startTrackLoad;
 
+  // The parser's half of the same model (BUG-804). A <track> written by the
+  // HTML parser never passes through the insertion hook in `dom.rs` — that one
+  // covers elements minted by createElement — so the markup's tracks are picked
+  // up in one pass once parsing is done, the shape `_lumen_link_hints_scan` and
+  // `_lumen_style_blocks_scan` already use for their own elements. The pass runs
+  // after the document's own scripts, so a handler armed below the markup (which
+  // is how every `track-webvtt-*.html` test writes it) is already in place.
+  //
+  // This is also where the «who owns `video.textTracks`» question BUG-804 left
+  // open is answered, in favour of the JS list, and it has to be: the shell's
+  // snapshot (`tracks::load_video_tracks` → `__lumen_texttracks_json`) is keyed
+  // by the <video> and carries no <track> identity at all, so `trackElement.track`
+  // could never be the same object the media element lists — and that identity is
+  // what the tests read inside the handler they were waiting for. The JS list is
+  // also the more spec-correct of the two wherever they differ (`kind`'s
+  // missing/invalid defaults, `mode` from `default` rather than from a
+  // first-subtitles-track heuristic, `<audio>` counting as a media element at
+  // all), and it already won for a script-created track since BUG-775 — leaving
+  // markup on the snapshot would mean one page having two owners depending on
+  // how each of its tracks happened to get there.
+  //
+  // What does NOT move is painting: the shell keeps its own cue store and its own
+  // walk, so the overlay is unchanged, at the price of the file being fetched
+  // twice. That is the approximation `_lumen_link_prepare` and the `@import` path
+  // already carry, and one the createElement path has been paying since BUG-775
+  // anyway — a script-built track whose <video> is in the document is fetched by
+  // both halves today.
+  function scanTrackElements() {
+    var tracks;
+    try { tracks = document.getElementsByTagName('track'); } catch (e) { return; }
+    if (!tracks) return;
+    for (var i = 0; i < tracks.length; i++) {
+      var el = tracks[i];
+      if (!el || el.__nid__ === undefined) continue;
+      var nid = el.__nid__;
+      // Already held by the insertion hook — a script built this one and it is
+      // still waiting for a media parent. Registering it a second time below
+      // would leak the hook's pending counter.
+      if (typeof _lumen_resource_pending !== 'undefined' && _lumen_resource_pending
+          && _lumen_resource_pending[nid] !== undefined) continue;
+      // Returns true once the model has started, and true again for an element
+      // it has already started — so a track a head script appended to a <video>
+      // that is in the markup is not loaded twice.
+      if (startTrackLoad(nid)) continue;
+      // No media parent. Hand the element to the insertion hook so a later
+      // re-parenting starts the model, the same contract createElement has.
+      if (typeof _lumen_resource_track === 'function') _lumen_resource_track(nid, 'track');
+    }
+  }
+  globalThis._lumen_track_elements_scan = scanTrackElements;
+
+  // A media element's list of text tracks exists from the moment the ELEMENTS
+  // do: §4.8.11.1 adds a `<track>`'s text track when the track element is
+  // *inserted*, long before its file arrives. For markup that insertion already
+  // happened — the shell hands this shim a fully parsed document — and the
+  // document's own scripts run BEFORE the `interactive` pass above, so the list
+  // has to be built here rather than there.
+  //
+  // Measured, not assumed: `track-webvtt-utf8.html`, `-timings-hour.html` and
+  // `-header-comment.html` open with
+  //     for (var i = 0; i < video.textTracks.length; i++)
+  //         trackElements[i].onload = t.step_func(trackLoaded);
+  // so a list that is still empty at that moment arms **no handler at all**, and
+  // the test times out no matter how correctly the loads later report. Those
+  // three were the only ones of the bug's nine that the scan alone did not fix.
+  function listMarkupTracks(mediaNid) {
+    if (typeof _lumen_get_children !== 'function') return;
+    var kids;
+    try { kids = _lumen_get_children(mediaNid); } catch (e) { return; }
+    if (!kids) return;
+    // Walked in tree order, so a plain append is the spec's order here.
+    for (var i = 0; i < kids.length; i++) {
+      var tag = (typeof _lumen_get_tag_name === 'function')
+        ? String(_lumen_get_tag_name(kids[i]) || '').toUpperCase() : '';
+      if (tag !== 'TRACK') continue;
+      var st = trackState(kids[i]);
+      if (st.media === null) st.media = mediaNid;
+      var tt = ensureTrackObject(kids[i]);
+      var list = _lumen_track_media_lists[mediaNid];
+      if (!list) list = _lumen_track_media_lists[mediaNid] = [];
+      if (list.indexOf(tt) < 0) list.push(tt);
+    }
+  }
+
   // HTMLTrackElement.track / .readyState and the readiness constants (HTML
   // §4.8.11). On the prototype rather than on each wrapper: since BUG-849 the
   // wrapper shares one prototype per interface, and this state is keyed by nid.
@@ -793,6 +896,29 @@ const VIDEO_SHIM: &str = r#"(function() {
       Object.defineProperty(HTMLTrackElement, rk, { value: TRACK_READINESS[rk], enumerable: true });
       Object.defineProperty(HTMLTrackElement.prototype, rk, { value: TRACK_READINESS[rk], enumerable: true });
     }
+  }
+
+  // `textTracks` is an HTMLMediaElement member, and until BUG-804 it existed
+  // only as an own property `patchVideoElement` puts on each <video> wrapper —
+  // so an <audio> (whose own model lives in `audio_element.rs` and never went
+  // through that patch) had none at all, and the `<track>` the parser wrote
+  // under one had nowhere to be listed once it started loading. Declared on the
+  // prototype, so the <video> own property still shadows it and that path is
+  // untouched; the wrapper is interned per nid (BUG-849), so caching on `this`
+  // is as stable as the <video> version's caching on `el`.
+  if (typeof HTMLMediaElement === 'function') {
+    Object.defineProperty(HTMLMediaElement.prototype, 'textTracks', {
+      get: function() {
+        var nid = this.__nid__;
+        var jsLen = (nid && _lumen_track_media_lists[nid]) ? _lumen_track_media_lists[nid].length : 0;
+        var cached = this.__lumen_text_tracks;
+        if (!cached || cached.length === 0 || (jsLen > 0 && cached._jsLen !== jsLen)) {
+          cached = this.__lumen_text_tracks = buildTextTracks(this, nid);
+        }
+        return cached;
+      },
+      configurable: true,
+    });
   }
 
   function patchVideoElement(el) {
@@ -1242,11 +1368,21 @@ const VIDEO_SHIM: &str = r#"(function() {
     }
   }
 
-  // Patch existing <video> elements.
+  // Patch existing <video> elements, and list the <track> children of every
+  // media element the parser wrote — see `listMarkupTracks` for why the listing
+  // cannot wait for the `interactive` pass that starts the loads. `<audio>` is
+  // in the second loop only: its own model lives in `audio_element.rs` and must
+  // not be patched here.
   if (typeof document !== 'undefined' && document.querySelectorAll) {
     try {
       var videos = document.querySelectorAll('video');
       for (var i = 0; i < videos.length; i++) patchVideoElement(videos[i]);
+    } catch(e) {}
+    try {
+      var media = document.querySelectorAll('video, audio');
+      for (var mi = 0; mi < media.length; mi++) {
+        if (media[mi] && media[mi].__nid__ !== undefined) listMarkupTracks(media[mi].__nid__);
+      }
     } catch(e) {}
   }
 
@@ -2041,6 +2177,188 @@ tt.length === 1
             assert!(
                 truthy(&rt, "JSON.parse(__lumen_vtt_parse('WEBSRT\\n')).ok === false"),
                 "a bad signature is a parse failure, not an empty cue list"
+            );
+        }
+
+        // ── BUG-804: the same model for a <track> the PARSER wrote ────────────
+        //
+        // The distinction the tests below turn on is invisible in the JS text:
+        // a node built here through `Document::create_element` never passes
+        // through the shim's `createElement`, so it is not in
+        // `_lumen_resource_pending` — which is exactly the state a parser-written
+        // element is in, and the state BUG-775's machinery could not reach.
+
+        /// `html > body > <media> > <track src kind default>`, built the way the
+        /// HTML parser builds it. `src` empty means «no src attribute at all».
+        fn doc_with_markup_track(media: &str, src: &str) -> Arc<Mutex<Document>> {
+            use lumen_dom::{Attribute, NodeData};
+
+            let mut doc = Document::new();
+            let html = doc.create_element(QualName::html("html"));
+            let body = doc.create_element(QualName::html("body"));
+            let media_el = doc.create_element(QualName::html(media));
+            let track = doc.create_element(QualName::html("track"));
+            if let NodeData::Element { attrs, .. } = &mut doc.get_mut(track).data {
+                if !src.is_empty() {
+                    attrs.push(Attribute { name: QualName::html("src"), value: src.to_string() });
+                }
+                attrs.push(Attribute {
+                    name: QualName::html("kind"),
+                    value: "subtitles".to_string(),
+                });
+                attrs.push(Attribute { name: QualName::html("default"), value: String::new() });
+            }
+            doc.append_child(doc.root(), html);
+            doc.append_child(html, body);
+            doc.append_child(body, media_el);
+            doc.append_child(media_el, track);
+            Arc::new(Mutex::new(doc))
+        }
+
+        fn rt_with_markup_track(media: &str, src: &str) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(
+                doc_with_markup_track(media, src),
+                "",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+            rt
+        }
+
+        /// The whole shape of the nine `track-webvtt-*.html` files that used to
+        /// hang: the `<track>` is in the markup, the handler is armed by a script
+        /// below it, and the handler reads `track.track.cues`. Driven through
+        /// `_lumen_apply_ready_state` rather than the scan directly, so the test
+        /// also covers the wiring — the scan being unreachable would look exactly
+        /// like the bug.
+        #[test]
+        fn parser_written_track_reports_load_and_owns_the_media_list() {
+            let rt = rt_with_markup_track("video", &format!("data:text/vtt,{VTT}"));
+            rt.eval(
+                "var log = [];
+                 var track = document.getElementsByTagName('track')[0];
+                 var video = document.getElementsByTagName('video')[0];
+                 track.addEventListener('load', function(e) { log.push(e.target === track && e.isTrusted === true); });
+                 track.onerror = function() { log.push('error'); };",
+            )
+            .unwrap();
+            assert!(truthy(&rt, "log.length === 0"), "nothing may fire before the document is parsed");
+            // The list exists before any load does: §4.8.11.1 lists a track when
+            // the ELEMENT is inserted, and the three `track-webvtt-*` tests that
+            // arm their handlers by looping over `video.textTracks.length` fail
+            // outright when it reads 0 here.
+            assert!(
+                truthy(&rt, "video.textTracks.length === 1 && video.textTracks[0] === track.track"),
+                "a markup track must be listed before its file is asked for"
+            );
+            rt.eval("_lumen_apply_ready_state('interactive')").unwrap();
+            settle(&rt);
+            assert!(
+                truthy(&rt, "log.length === 1 && log[0] === true"),
+                "expected exactly one trusted `load` carrying the element as its target"
+            );
+            assert!(
+                truthy(&rt, "track.readyState === HTMLTrackElement.LOADED"),
+                "readyState should be LOADED"
+            );
+            // The half the shell's snapshot cannot supply, and the reason the JS
+            // list owns `textTracks` for markup tracks too.
+            assert!(
+                truthy(
+                    &rt,
+                    "video.textTracks.length === 1 && track.track === video.textTracks[0]
+                       && track.track.cues.length === 1 && track.track.cues[0].text === 'text'"
+                ),
+                "track.track must be the media element's own list entry, with cues"
+            );
+        }
+
+        /// §4.8.11.1 step 3 says «media element», and `<audio>` is one — the
+        /// shell's walk (`tracks::collect_video_tracks`) only ever looked at
+        /// `<video>`, so this track was not merely silent, it was never fetched.
+        #[test]
+        fn parser_written_track_under_audio_loads_too() {
+            let rt = rt_with_markup_track("audio", &format!("data:text/vtt,{VTT}"));
+            rt.eval(
+                "var loads = 0;
+                 var track = document.getElementsByTagName('track')[0];
+                 var audio = document.getElementsByTagName('audio')[0];
+                 track.onload = function() { loads++; };
+                 _lumen_apply_ready_state('interactive');",
+            )
+            .unwrap();
+            settle(&rt);
+            assert!(truthy(&rt, "loads === 1"), "an <audio> child track must load");
+            assert!(
+                truthy(&rt, "audio.textTracks.length === 1 && audio.textTracks[0].cues.length === 1"),
+                "and must reach the media element's list"
+            );
+        }
+
+        /// A markup `<track>` with no `src` is dropped by the shell's collector
+        /// before it is ever listed; §4.8.11.1 step 8 wants an `error` instead.
+        #[test]
+        fn parser_written_track_without_src_reports_error() {
+            let rt = rt_with_markup_track("video", "");
+            rt.eval(
+                "var got = [];
+                 var track = document.getElementsByTagName('track')[0];
+                 track.onload = function() { got.push('load'); };
+                 track.onerror = function() { got.push('error'); };
+                 _lumen_apply_ready_state('interactive');",
+            )
+            .unwrap();
+            settle(&rt);
+            assert!(
+                truthy(&rt, "got.length === 1 && got[0] === 'error'"),
+                "a src-less markup track owes exactly one `error`"
+            );
+            assert!(
+                truthy(&rt, "track.readyState === HTMLTrackElement.ERROR"),
+                "readyState should be ERROR"
+            );
+        }
+
+        /// The two entry points must not both claim the same element: a track a
+        /// head script appended to a `<video>` that is in the markup has already
+        /// run through the insertion hook by the time the scan walks the tree.
+        #[test]
+        fn the_parser_scan_does_not_reload_a_script_inserted_track() {
+            let rt = rt_with_markup_track("video", &format!("data:text/vtt,{VTT}"));
+            rt.eval(&format!(
+                "var loads = 0;
+                 var video = document.getElementsByTagName('video')[0];
+                 var added = document.createElement('track');
+                 added.src = 'data:text/vtt,{VTT}';
+                 added['default'] = true;
+                 added.onload = function() {{ loads++; }};
+                 video.appendChild(added);"
+            ))
+            .unwrap();
+            settle(&rt);
+            assert!(truthy(&rt, "loads === 1"), "the insertion hook should have loaded it once");
+            rt.eval("_lumen_apply_ready_state('interactive')").unwrap();
+            settle(&rt);
+            assert!(truthy(&rt, "loads === 1"), "the parser scan must not load it a second time");
+            // Both tracks are in the list, in tree order, and each element's own
+            // `.track` is its entry.
+            assert!(
+                truthy(
+                    &rt,
+                    "var markup = document.getElementsByTagName('track')[0];
+                     video.textTracks.length === 2 && video.textTracks[0] === markup.track
+                       && video.textTracks[1] === added.track"
+                ),
+                "the list must hold both tracks, in tree order"
             );
         }
     }

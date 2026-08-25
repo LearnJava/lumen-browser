@@ -1450,6 +1450,40 @@ the time — read dates.
   overlay store. 9 tests in `video_bindings::tests_v8::track_loading`. Live A/B of the
   `webvtt` category: subtests 2/178 → 31/178, wall clock 8:46 → 0:58.
 
+- **The same model for a `<track>` the PARSER wrote ([BUG-804](../bugs/BUG-804-FIXED.md)
+  slice 4, 2026-08-25).** `_lumen_track_elements_scan` walks
+  `getElementsByTagName('track')` from `_lumen_apply_ready_state('interactive')`, beside
+  the `<link>`-hint / empty-`src` / `<style>` passes, and calls the same
+  `startTrackLoad`; a track the insertion hook already holds or has already started is
+  skipped, and one with no media parent is handed to `_lumen_resource_track` so a later
+  re-parenting still starts it. **The ownership question BUG-804 left open is answered
+  here in favour of the JS list**, and not on taste: `PageTracks` is keyed by the
+  `<video>` and `TrackInfo` carries no `NodeId`, so the shell's snapshot can never make
+  `trackElement.track` the same object as `video.textTracks[i]` — which is exactly what
+  the nine hung `track-webvtt-*` tests read inside the handler they were waiting for.
+  Painting does not move: the shell keeps its own walk and its own cue store, at the cost
+  of the file being fetched twice under a `<video>`. Three neighbours the report did not
+  name and the fix had to carry: `<audio>` is a media element too (§4.8.11.1 step 3) and
+  the shell's `collect_video_tracks` never looked at one, so such a track was not merely
+  silent but never fetched; `textTracks` existed only as an own property
+  `patchVideoElement` puts on each `<video>` wrapper, so an `<audio>` had none at all —
+  it now also sits on `HTMLMediaElement.prototype`, where the `<video>` own property still
+  shadows it; and the list stopped being in tree order once a second entry point existed,
+  because the markup pass runs *after* the document's scripts, so `startTrackLoad` now
+  computes the insertion index from the media element's children instead of appending.
+  A fifth defect only the whole-category run could show, and the largest: `textTracks`
+  was built lazily out of `_lumen_track_media_lists`, which a track joined when its
+  **load started** — i.e. on the `interactive` pass, after the document's scripts. So
+  `for (var i = 0; i < video.textTracks.length; i++) trackElements[i].onload = …`, how
+  `track-webvtt-utf8`/`-timings-hour`/`-header-comment` arm themselves, armed **no**
+  handler and those three hung no matter how correctly the loads later reported. §4.8.11.1
+  lists a text track when the track *element* is inserted, which for markup has already
+  happened before this shim runs — hence `listMarkupTracks`, called at install time from
+  the same loop that patches the parsed document's `<video>`s. 13 tests in `track_loading`
+  (4 new, driven through `_lumen_apply_ready_state` so the wiring is covered too — an
+  unreachable scan would look exactly like the bug). Category A/B: `track-element`
+  83/143 → 104/143 harness OK, subtests 15/168 → 29/168, zero regressions.
+
 - **The `HTMLMediaElement` state machine on `<video>` ([BUG-825](../bugs/BUG-825-FIXED.md),
   2026-08-25, `video_bindings.rs` `VIDEO_SHIM` + the `<source>` branch of
   `dom.rs::_lumen_resource_track`/`_lumen_resource_try_prepare`).** `<video>` had no
