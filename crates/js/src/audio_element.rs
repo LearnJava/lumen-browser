@@ -263,7 +263,21 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
 
     function startLoad(url) {
       if (!HAS_PROVIDER || !url) return;
+      // A load already in flight must not keep polling for the url it was
+      // started with: its interval would outlive this one and go on firing
+      // events for a resource nobody is waiting for any more.
+      if (_loadTimer !== null) { clearInterval(_loadTimer); _loadTimer = null; }
       _loadStarted = true;
+      // HTML §4.8.11.5 fires each of these ONCE per load.  The readyState the
+      // provider reports is a level, not an edge, so every tick above a
+      // threshold would re-announce it — 40 `loadedmetadata` events for a
+      // resource that takes two seconds to arrive.
+      var _fired = {};
+      function fireOnce(name) {
+        if (_fired[name]) return;
+        _fired[name] = true;
+        fireEvent(el, name);
+      }
       __lumen_audio_load(_handle, url);
       fireEvent(el, 'loadstart');
       fireEvent(el, 'progress');
@@ -271,16 +285,16 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
       _loadTimer = setInterval(function() {
         if (__lumen_audio_has_error(_handle)) {
           clearInterval(_loadTimer); _loadTimer = null;
-          fireEvent(el, 'error');
+          fireOnce('error');
           return;
         }
         var rs = __lumen_audio_ready_state(_handle);
-        if (rs >= 1) { fireEvent(el, 'durationchange'); fireEvent(el, 'loadedmetadata'); }
-        if (rs >= 2) { fireEvent(el, 'loadeddata'); }
-        if (rs >= 3) { fireEvent(el, 'canplay'); }
+        if (rs >= 1) { fireOnce('durationchange'); fireOnce('loadedmetadata'); }
+        if (rs >= 2) { fireOnce('loadeddata'); }
+        if (rs >= 3) { fireOnce('canplay'); }
         if (rs >= 4) {
           clearInterval(_loadTimer); _loadTimer = null;
-          fireEvent(el, 'canplaythrough');
+          fireOnce('canplaythrough');
           if (_autoplay) el.play();
         }
       }, POLL_MS);
@@ -806,5 +820,108 @@ _events.indexOf('seeking') >= 0 && _events.indexOf('seeked') >= 0"#,
     fn set_provider_function_exists() {
         // Just check the function compiles and runs without panic.
         set_audio_playback_provider(Arc::new(NullAudioPlaybackProvider));
+    }
+
+    /// Runtime whose `__lumen_audio_*` natives are JS stubs under the test's
+    /// control, and whose `setInterval` records its callback instead of
+    /// dropping it.  Lets a test step the load poll by hand; touching the
+    /// process-global provider would race the other tests in this module.
+    fn with_pumpable_poll(rt: &V8JsRuntime) {
+        install_dom_stub(rt);
+        rt.eval(
+            r#"
+var _ticks = [];
+setInterval = function(fn) { _ticks.push(fn); return _ticks.length; };
+clearInterval = function(id) { if (id) _ticks[id - 1] = null; };
+var _readyState = 0;
+var _hasError = false;
+var __lumen_audio_alloc       = function() { return 1; };
+var __lumen_audio_load        = function() {};
+var __lumen_audio_ready_state = function() { return _readyState; };
+var __lumen_audio_has_error   = function() { return _hasError; };
+var __lumen_audio_paused      = function() { return true; };
+var __lumen_audio_ended       = function() { return false; };
+var __lumen_audio_duration    = function() { return NaN; };
+var __lumen_audio_play        = function() {};
+var __lumen_audio_pause       = function() {};
+var __lumen_audio_seek        = function() {};
+var __lumen_audio_set_volume  = function() {};
+var __lumen_audio_set_rate    = function() {};
+var __lumen_audio_free        = function() {};
+function pump(n) {
+  for (var i = 0; i < n; i++) {
+    for (var j = 0; j < _ticks.length; j++) { if (_ticks[j]) _ticks[j](); }
+  }
+}
+function countEvents(name) {
+  var c = 0;
+  for (var i = 0; i < _events.length; i++) { if (_events[i] === name) c++; }
+  return c;
+}
+"#,
+        )
+        .unwrap();
+        rt.eval(super::AUDIO_ELEMENT_SHIM).unwrap();
+    }
+
+    /// HTML §4.8.11.5 fires each load event once per load.
+    ///
+    /// The provider reports `readyState` as a level, not an edge, so a poll
+    /// that merely compares it against a threshold re-announces the same event
+    /// on every tick — 40 `loadedmetadata` events for a resource that takes two
+    /// seconds to arrive.
+    #[test]
+    fn load_events_fire_once_per_load() {
+        let rt = V8JsRuntime::new().unwrap();
+        with_pumpable_poll(&rt);
+        let ok = bool_eval(
+            &rt,
+            r#"var el = document.createElement('audio');
+el.src = 'http://example.test/a.mp3';
+_readyState = 1;
+pump(4);
+countEvents('loadedmetadata') === 1 && countEvents('durationchange') === 1"#,
+        );
+        assert!(ok);
+    }
+
+    /// Reaching HAVE_ENOUGH_DATA after several ticks at a lower level must
+    /// still produce one of each event, in order, and stop the poll.
+    #[test]
+    fn load_events_complete_once_when_ready() {
+        let rt = V8JsRuntime::new().unwrap();
+        with_pumpable_poll(&rt);
+        let ok = bool_eval(
+            &rt,
+            r#"var el = document.createElement('audio');
+el.src = 'http://example.test/a.mp3';
+_readyState = 1;
+pump(3);
+_readyState = 4;
+pump(3);
+countEvents('loadedmetadata') === 1 &&
+countEvents('loadeddata') === 1 &&
+countEvents('canplay') === 1 &&
+countEvents('canplaythrough') === 1"#,
+        );
+        assert!(ok);
+    }
+
+    /// A second `src` must not leave the first load's poll running: two live
+    /// intervals would keep firing events for a resource nobody awaits.
+    #[test]
+    fn new_src_stops_previous_load_poll() {
+        let rt = V8JsRuntime::new().unwrap();
+        with_pumpable_poll(&rt);
+        let ok = bool_eval(
+            &rt,
+            r#"var el = document.createElement('audio');
+el.src = 'http://example.test/a.mp3';
+el.src = 'http://example.test/b.mp3';
+_readyState = 1;
+pump(3);
+countEvents('loadedmetadata') === 1"#,
+        );
+        assert!(ok);
     }
 }
