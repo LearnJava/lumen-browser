@@ -11968,13 +11968,6 @@ impl Lumen {
     /// держит `Arc`: все гейты (`if self.js_present`) читают его, поэтому остаются
     /// верны в обоих режимах флага.
     fn set_js_ctx(&mut self, handle: Option<Arc<dyn PersistentJs>>) {
-        // BUG-839: a Resource Timing row belongs to the document that asked for
-        // the load. A runtime swap is a new document, so whatever the previous
-        // one left unclaimed is dropped here rather than landing in the new
-        // page's buffer with a start time before its own time origin. This is
-        // the one place every navigation path (`navigate_to`, back, forward,
-        // reload) funnels through.
-        resource_timing::clear();
         self.js_present = handle.is_some();
         match self.engine_thread.as_ref() {
             // Flag on: the handle lives engine-side; deposit it into
@@ -12424,6 +12417,13 @@ impl Lumen {
             // (зеркалит блок в `resumed`). `stream_builder = None` обязателен,
             // иначе chunk-и допишутся в DOM предыдущей страницы.
             self.preload_dispatched.clear();
+            // BUG-839: a Resource Timing row belongs to the document that asked
+            // for the load, and the loads of THIS document are about to start.
+            // Clearing here rather than when the runtime appears is the whole
+            // point: `set_js_ctx` runs *after* `source.load` has already
+            // fetched the page's stylesheets, scripts and images, so a clear
+            // there would throw away exactly the rows the page is owed.
+            resource_timing::clear();
             self.stream_images_requested.clear();
             self.stream_image_sizes.clear();
             self.stream_image_sizes_dirty = false;
@@ -13587,6 +13587,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
         // Сбрасываем состояние предыдущего streaming-цикла — новая страница.
         self.preload_dispatched.clear();
+        // BUG-839: same reset as the navigation path above, for the first load.
+        resource_timing::clear();
         self.stream_images_requested.clear();
         self.stream_image_sizes.clear();
         self.stream_image_sizes_dirty = false;
