@@ -85,17 +85,30 @@ pub fn take_cv_skipped() -> Vec<(NodeId, f32)> {
 /// [`CV_SLACK_FACTOR`]. Records the node in the skip list when skipping.
 pub(crate) fn cv_should_skip(node: NodeId, start_y: f32, viewport_h: f32) -> bool {
     let relevant = CV_RELEVANT.with(|c| c.borrow().contains(&node));
-    if relevant {
-        return false;
-    }
     let (_sx, sy) = CV_SCROLL.with(|c| *c.borrow());
-    let bottom_bound = sy + viewport_h * (1.0 + CV_SLACK_FACTOR);
-    if start_y > bottom_bound {
+    if cv_is_skipped(relevant, start_y, sy, viewport_h) {
         CV_SKIPPED.with(|c| c.borrow_mut().push((node, start_y)));
         true
     } else {
         false
     }
+}
+
+/// The relevance rule itself, with no thread-local state: `true` when a
+/// `content-visibility: auto` box at flow top `start_y` (page coordinates) is
+/// *not* relevant to the user and its contents are therefore skipped.
+///
+/// Split out of [`cv_should_skip`] so the shell can answer the same question
+/// for a box layout never asked about (BUG-852): layout consults the rule only
+/// for a box that *has* children — there is nothing to skip otherwise — while
+/// the `contentvisibilityautostatechange` event is owed to every
+/// `content-visibility: auto` element, empty ones included. Two copies of this
+/// rule would drift; there is one.
+pub fn cv_is_skipped(relevant: bool, start_y: f32, scroll_y: f32, viewport_h: f32) -> bool {
+    if relevant {
+        return false;
+    }
+    start_y > scroll_y + viewport_h * (1.0 + CV_SLACK_FACTOR)
 }
 
 #[cfg(test)]

@@ -2335,7 +2335,8 @@ SUBTEST_MARKERS = [
         name=r"ContentVisibilityAutoStateChange|content-visibility",
         test=r"/css/css-contain/content-visibility/",
         note="`contentvisibilityautostatechange` is never dispatched and "
-             "`content-visibility` is absent from computed style",
+             "`content-visibility` is absent from computed style "
+             "(FIXED 2026-08-25 — kept for the pre-fix WPT-RUN-5 snapshot)",
     ),
     # An incubating element (WICG/PEPC): `<usermedia>`/`<geolocation>`/
     # `<install>` are `HTMLUnknownElement`, so `onvalidationstatuschange`

@@ -1696,7 +1696,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/store.rs:107` **fn** `unindex_semantic` — Remove a history entry's embedding from the semantic index, if present
 `crates/knowledge/src/store.rs:118` **fn** `search_semantic` — Semantic (embedding-similarity) search over history entries indexed
 
-## lumen-layout  (755 symbols)
+## lumen-layout  (756 symbols)
 
 `crates/engine/layout/src/anchor.rs:47` **enum** `AnchorSide` — Which edge or point of an anchor element the `anchor()` function references
 `crates/engine/layout/src/anchor.rs:76` **enum** `InsetAreaKeyword` — Single-axis `inset-area` keyword, as defined in §5.2 of the spec
@@ -1824,6 +1824,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/content_visibility.rs:50` **fn** `set_cv_scroll` — Set the root scroll offset used by the relevance check for the next layout
 `crates/engine/layout/src/content_visibility.rs:56` **fn** `set_cv_relevant` — Install the set of nodes the shell considers relevant (ratchet set)
 `crates/engine/layout/src/content_visibility.rs:69` **fn** `take_cv_skipped` — Drain the skip records of the last layout pass: `(node, collapsed_top_y)`,
+`crates/engine/layout/src/content_visibility.rs:107` **fn** `cv_is_skipped` — The relevance rule itself, with no thread-local state: `true` when a
 `crates/engine/layout/src/counters.rs:46` **type** `CounterSnapshot` — Per-element counter stacks snapshot
 `crates/engine/layout/src/counters.rs:51` **enum** `QuoteSlot` — Generated-content slot of an element that can carry `open-quote` /
 `crates/engine/layout/src/counters.rs:88` **struct** `CascadeStyles` — BUG-341 S24 — the per-node cascade cache, carried from one pass to the next
@@ -1910,32 +1911,32 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/inert.rs:87` **fn** `collect_inert_regions` — Walk the layout tree and return every inert root box as an [`InertRegion`]
 `crates/engine/layout/src/invariants.rs:113` **struct** `GeometryViolationCounts` — Non-panicking DEVX-8a violation tally, consumed by DEVX-11's `explain_page`
 `crates/engine/layout/src/invariants.rs:125` **fn** `count_geometry_violations` — Walks `root` counting DEVX-8a geometry violations by category — see
-`crates/engine/layout/src/lib.rs:171` **struct** `SelectionHighlight` — Computed `::selection` highlight data — passed to the paint layer so it can
-`crates/engine/layout/src/lib.rs:187` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
-`crates/engine/layout/src/lib.rs:254` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
-`crates/engine/layout/src/lib.rs:275` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
-`crates/engine/layout/src/lib.rs:296` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
-`crates/engine/layout/src/lib.rs:525` **struct** `StickyBox` — Snapshot of a `position: sticky` element captured after normal-flow layout
-`crates/engine/layout/src/lib.rs:558` **fn** `collect_sticky_boxes` — Collect all `position: sticky` elements from the layout tree in document order
-`crates/engine/layout/src/lib.rs:621` **fn** `compute_sticky_offset` — Compute the visual offset `(dx, dy)` in CSS px to apply to a sticky element
-`crates/engine/layout/src/lib.rs:694` **struct** `SnapPoint` — A single snap area inside a [`SnapContainer`]
-`crates/engine/layout/src/lib.rs:712` **struct** `SnapContainer` — A scroll container that participates in CSS Scroll Snap L1
-`crates/engine/layout/src/lib.rs:745` **fn** `collect_snap_containers` — Collect all scroll containers that participate in CSS Scroll Snap L1
-`crates/engine/layout/src/lib.rs:924` **fn** `find_snap_target` — Find the nearest snap target for a scroll gesture
-`crates/engine/layout/src/lib.rs:1023` **struct** `SnapTargets` — The snap areas a container is currently snapped to, one per axis
-`crates/engine/layout/src/lib.rs:1046` **fn** `find_snapped_nodes` — Determine which snap areas a container is snapped to at scroll offset `scroll`
-`crates/engine/layout/src/lib.rs:1096` **struct** `ScrollContainer` — A scrollable overflow container collected from the layout tree
-`crates/engine/layout/src/lib.rs:1128` **fn** `collect_scroll_containers` — Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree
-`crates/engine/layout/src/lib.rs:1184` **fn** `overscroll_should_propagate` — CSS Overscroll Behavior L1 §3 — decide whether a scroll delta a container
-`crates/engine/layout/src/lib.rs:1235` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
-`crates/engine/layout/src/lib.rs:1306` **fn** `collect_custom_properties` — Walks the layout tree and returns a map of `NodeId index → resolved custom
-`crates/engine/layout/src/lib.rs:1369` **fn** `collect_layout_rects` — Walks the layout tree and returns a map of `NodeId index → [x, y, width, height]`
-`crates/engine/layout/src/lib.rs:1403` **fn** `find_box_by_node` — Update the scroll position of a node in the layout tree
-`crates/engine/layout/src/lib.rs:1410` **fn** `set_scroll_position`
-`crates/engine/layout/src/lib.rs:1443` **fn** `collect_view_transition_names` — Find the innermost scroll container whose `clip_rect` contains `(x, y)`
-`crates/engine/layout/src/lib.rs:1480` **fn** `collect_view_transition_groups`
-`crates/engine/layout/src/lib.rs:1506` **fn** `find_scroll_container_at` — `x` and `y` are in CSS px, document-relative (same coordinate space as
-`crates/engine/layout/src/lib.rs:1529` **fn** `find_scroll_container_for_node` — Find the nearest scrolling ancestor of `node` (inclusive of `node` itself),
+`crates/engine/layout/src/lib.rs:173` **struct** `SelectionHighlight` — Computed `::selection` highlight data — passed to the paint layer so it can
+`crates/engine/layout/src/lib.rs:189` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
+`crates/engine/layout/src/lib.rs:256` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
+`crates/engine/layout/src/lib.rs:277` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
+`crates/engine/layout/src/lib.rs:298` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:527` **struct** `StickyBox` — Snapshot of a `position: sticky` element captured after normal-flow layout
+`crates/engine/layout/src/lib.rs:560` **fn** `collect_sticky_boxes` — Collect all `position: sticky` elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:623` **fn** `compute_sticky_offset` — Compute the visual offset `(dx, dy)` in CSS px to apply to a sticky element
+`crates/engine/layout/src/lib.rs:696` **struct** `SnapPoint` — A single snap area inside a [`SnapContainer`]
+`crates/engine/layout/src/lib.rs:714` **struct** `SnapContainer` — A scroll container that participates in CSS Scroll Snap L1
+`crates/engine/layout/src/lib.rs:747` **fn** `collect_snap_containers` — Collect all scroll containers that participate in CSS Scroll Snap L1
+`crates/engine/layout/src/lib.rs:926` **fn** `find_snap_target` — Find the nearest snap target for a scroll gesture
+`crates/engine/layout/src/lib.rs:1025` **struct** `SnapTargets` — The snap areas a container is currently snapped to, one per axis
+`crates/engine/layout/src/lib.rs:1048` **fn** `find_snapped_nodes` — Determine which snap areas a container is snapped to at scroll offset `scroll`
+`crates/engine/layout/src/lib.rs:1098` **struct** `ScrollContainer` — A scrollable overflow container collected from the layout tree
+`crates/engine/layout/src/lib.rs:1130` **fn** `collect_scroll_containers` — Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree
+`crates/engine/layout/src/lib.rs:1186` **fn** `overscroll_should_propagate` — CSS Overscroll Behavior L1 §3 — decide whether a scroll delta a container
+`crates/engine/layout/src/lib.rs:1237` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
+`crates/engine/layout/src/lib.rs:1308` **fn** `collect_custom_properties` — Walks the layout tree and returns a map of `NodeId index → resolved custom
+`crates/engine/layout/src/lib.rs:1371` **fn** `collect_layout_rects` — Walks the layout tree and returns a map of `NodeId index → [x, y, width, height]`
+`crates/engine/layout/src/lib.rs:1405` **fn** `find_box_by_node` — Update the scroll position of a node in the layout tree
+`crates/engine/layout/src/lib.rs:1412` **fn** `set_scroll_position`
+`crates/engine/layout/src/lib.rs:1445` **fn** `collect_view_transition_names` — Find the innermost scroll container whose `clip_rect` contains `(x, y)`
+`crates/engine/layout/src/lib.rs:1482` **fn** `collect_view_transition_groups`
+`crates/engine/layout/src/lib.rs:1508` **fn** `find_scroll_container_at` — `x` and `y` are in CSS px, document-relative (same coordinate space as
+`crates/engine/layout/src/lib.rs:1531` **fn** `find_scroll_container_for_node` — Find the nearest scrolling ancestor of `node` (inclusive of `node` itself),
 `crates/engine/layout/src/line_break.rs:30` **fn** `break_opportunities` — Byte offsets inside `text` at which a soft wrap is allowed
 `crates/engine/layout/src/masonry.rs:33` **fn** `lay_out_masonry` — Greedy waterfall masonry placement algorithm (CSS Grid L3 §14)
 `crates/engine/layout/src/masonry.rs:64` **fn** `min_track_idx` — Returns the index of the track with the minimum running height
@@ -5658,4 +5659,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:228` **fn** `count`
 
 ---
-*Total: 5581 symbols in 24 crates*
+*Total: 5582 symbols in 24 crates*
