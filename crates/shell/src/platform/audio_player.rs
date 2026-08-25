@@ -324,9 +324,17 @@ impl AudioPlaybackProvider for PlatformAudioPlayer {
         // clean slate.  Leaving `has_error` set would make the JS poll fire
         // `error` for the NEW url on its first tick, before a single byte of it
         // had been requested.
+        //
+        // `ready_state` goes to HAVE_NOTHING, not HAVE_METADATA: nothing has
+        // been fetched, let alone decoded, so `duration` is still NaN here.
+        // Claiming 1 made the JS poll announce `loadedmetadata` for metadata
+        // that did not exist yet, and made an element merely *starting* a load
+        // indistinguishable from one that had already decoded its header.
+        // The audio thread raises it to HAVE_ENOUGH_DATA once the decoder has
+        // the real duration.
         {
             let mut st = state.lock().unwrap();
-            st.ready_state = 1;
+            st.ready_state = 0;
             st.has_error = false;
             st.ended = false;
             st.duration = f64::NAN;
