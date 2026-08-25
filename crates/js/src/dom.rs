@@ -6641,7 +6641,7 @@ function _lumen_script_run_module(url, text) {
 function _lumen_script_load_external(nid, src, isModule) {
     setTimeout(function() {
         var url = _url_resolve(String(src), _lumen_document_base_url());
-        fetch(url).then(function(resp) {
+        fetch(url, { _lumenInitiatorType: 'script' }).then(function(resp) {
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             return resp.text();
         }).then(function(text) {
@@ -6784,7 +6784,7 @@ function _lumen_link_prepare(nid) {
     // `link.onload = …` assignment almost always follows the appendChild.
     setTimeout(function() {
         var url = _url_resolve(href, _lumen_document_base_url());
-        fetch(url).then(function(resp) {
+        fetch(url, { _lumenInitiatorType: 'link' }).then(function(resp) {
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             // Drain the body: an unread response holds its fetch slot (BUG-721).
             return resp.text();
@@ -6882,7 +6882,7 @@ function _lumen_link_hint_fetch(nid, href, onBody) {
     // `link.onload = …` assignment almost always follows the appendChild.
     setTimeout(function() {
         var url = _url_resolve(String(href), _lumen_document_base_url());
-        fetch(url).then(function(resp) {
+        fetch(url, { _lumenInitiatorType: 'link' }).then(function(resp) {
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             // Drain the body even when nothing reads it: an unread response
             // holds its fetch slot (BUG-721).
@@ -10964,6 +10964,30 @@ TextDecoder.prototype.decode = function(buf, options) {
 // a bare `function fetch()` at global scope lands as configurable:false, which
 // blocks every polyfill or test shim that swaps window.fetch out (BUG-370 C4).
 // Only `input` is declared, so fetch.length is 1 (WebIDL: `init` is optional).
+// Record a Resource Timing entry for a fetch the shim itself performed
+// (BUG-839). Reads the response metadata straight out of the native fetch
+// cache, so it must be called while that slot still holds this response — that
+// is, before anything starts the next request.
+//
+// Everything the page loads through the shim funnels here: `fetch()` itself,
+// `<script src>`, `<link rel=stylesheet>` and the `rel=preload` family all end
+// up calling `fetch()` (BUG-826/BUG-703), which is why the initiator type is a
+// parameter rather than the constant 'fetch' the URL alone would suggest.
+function _perf_rt_record_fetch(url, initiator, startMs, status) {
+    if (typeof _lumen_record_resource_timing !== 'function') return;
+    var len = 0;
+    try { len = _lumen_fetch_body_length(); } catch (e) { len = 0; }
+    var ctype = '';
+    try {
+        var raw = _lumen_fetch_get_headers();
+        for (var i = 0; i + 1 < raw.length; i += 2) {
+            if (String(raw[i]).toLowerCase() === 'content-type') { ctype = String(raw[i + 1]); break; }
+        }
+    } catch (e) { ctype = ''; }
+    _lumen_record_resource_timing(url, initiator, startMs, performance.now() - startMs,
+        { status: status, decodedBodySize: len, encodedBodySize: len, contentType: ctype });
+}
+
 function _lumen_fetch(input) {
     var init = arguments[1];
     try {
@@ -10982,6 +11006,13 @@ function _lumen_fetch(input) {
         // (the document base) — a bare `fetch('resources/x.js')` must resolve against
         // the current page, not fail as an absolute-URL parse (BUG-347).
         url = _url_resolve(String(url), _lumen_document_base_url());
+        // Resource Timing L2 §4.1: `startTime` is the moment the fetch starts,
+        // i.e. after the URL is known and before anything touches the network.
+        // `_lumenInitiatorType` is the shim's own channel — an element loading
+        // itself through `fetch()` must report `script`/`link`, not `fetch`.
+        var _rtStart = performance.now();
+        var _rtInitiator = (init && typeof init._lumenInitiatorType === 'string')
+            ? init._lumenInitiatorType : 'fetch';
         var method = (init && init.method) ? String(init.method).toUpperCase() :
                      (typeof input === 'object' && input.method ? input.method.toUpperCase() : 'GET');
 
@@ -11121,6 +11152,7 @@ function _lumen_fetch(input) {
                         }
                         var ahdrs = [];
                         for (var i = 0; i + 1 < arawHeaders.length; i += 2) { ahdrs.push([arawHeaders[i], arawHeaders[i + 1]]); }
+                        _perf_rt_record_fetch(url, _rtInitiator, _rtStart, astatus);
                         resolve(_lumen_response_from_fetch_cache(astatus, astatusText, ahdrs, url));
                     });
                 }
@@ -11162,6 +11194,7 @@ function _lumen_fetch(input) {
         for (var i = 0; i + 1 < rawHeaders.length; i += 2) {
             hdrs.push([rawHeaders[i], rawHeaders[i + 1]]);
         }
+        _perf_rt_record_fetch(url, _rtInitiator, _rtStart, status);
         // Use lazy Rust-side chunk reading: body stays in Rust FetchCache until consumed.
         // This avoids copying large response bodies into JS memory at response construction.
         return Promise.resolve(_lumen_response_from_fetch_cache(status, statusText, hdrs, url));
@@ -13399,6 +13432,105 @@ var _perf_origin_ms = typeof _lumen_now_ms === 'function' ? _lumen_now_ms() : 0;
 // Internal entry store: array of {entryType, name, startTime, duration}.
 var _perf_entries = [];
 
+// ── Resource Timing L2 §4.4: the resource timing buffer ──────────────────────
+// The `resource` entry type is the only one with a bounded buffer, so these
+// live next to `_perf_entries` rather than inside it: every other type is
+// appended without a limit. `_perf_rt_size` counts only the `resource` entries
+// *currently in* `_perf_entries` — clearResourceTimings() resets it to 0, which
+// is what makes room for the secondary buffer to drain.
+var _perf_rt_limit = 250;           // resource timing buffer size limit
+var _perf_rt_size = 0;              // resource timing buffer current size
+var _perf_rt_secondary = [];        // resource timing secondary buffer
+var _perf_rt_full_pending = false;  // resource timing buffer full event pending flag
+// Performance Timeline L2 §6.2.1 `droppedEntriesCount` for entryType 'resource':
+// entries the page never made room for, counted for the lifetime of the
+// document. Not reset by clearResourceTimings() — the drop already happened.
+var _perf_rt_dropped = 0;
+
+// §4.4 «can add resource timing entry».
+function _perf_rt_can_add() { return _perf_rt_size < _perf_rt_limit; }
+
+// Queue an engine task. Written straight into `_lumen_timers` with `nesting: 0`
+// where that queue exists (the page), for the reason `_ro_schedule_initial` and
+// `_lumen_fire_hashchange` give: the §8.6 4 ms clamp is about timer *nesting*
+// and must not apply to a task the engine queues on the page's behalf. This
+// block is also spliced into a WorkerGlobalScope, which has neither that queue
+// nor — at the instant this shim is evaluated — a `setTimeout`, hence both
+// fallbacks.
+function _perf_queue_task(fn) {
+    if (typeof _lumen_timers !== 'undefined' && _lumen_timers
+        && typeof _lumen_timer_seq === 'number') {
+        var deadline = (typeof _lumen_now_ms === 'function') ? _lumen_now_ms() : 0;
+        _lumen_timers.push({ id: _lumen_timer_seq++, fn: fn, deadline: deadline, interval: null, nesting: 0 });
+        if (typeof _lumen_request_wakeup === 'function') _lumen_request_wakeup(deadline);
+        return;
+    }
+    if (typeof setTimeout === 'function') { setTimeout(fn, 0); return; }
+    fn();
+}
+
+// §4.4 «add a PerformanceResourceTiming entry». Answers whether the entry
+// landed in the buffer; observers are notified either way, because the
+// performance entry buffer and the observer stream are two separate sinks
+// (Performance Timeline L2 §6.2.1) — a page with a zero-sized buffer still
+// gets its PerformanceObserver callback.
+function _perf_rt_add(entry) {
+    if (_perf_rt_can_add() && !_perf_rt_full_pending) {
+        _perf_entries.push(entry);
+        _perf_rt_size++;
+        return true;
+    }
+    if (!_perf_rt_full_pending) {
+        _perf_rt_full_pending = true;
+        _perf_queue_task(_perf_rt_fire_buffer_full);
+    }
+    _perf_rt_secondary.push(entry);
+    return false;
+}
+
+// §4.4 «copy secondary buffer».
+function _perf_rt_copy_secondary() {
+    while (_perf_rt_secondary.length > 0 && _perf_rt_can_add()) {
+        _perf_entries.push(_perf_rt_secondary.shift());
+        _perf_rt_size++;
+    }
+}
+
+// §4.4 «fire a buffer full event». The loop is the spec's: the page may react
+// to the event by clearing the buffer or raising the limit, and then the
+// entries it was about to lose are copied in after all. One pass that makes no
+// progress means the page did not make room, so the remainder is dropped —
+// counted, because that count is what `droppedEntriesCount` reports.
+function _perf_rt_fire_buffer_full() {
+    while (_perf_rt_secondary.length > 0) {
+        var before = _perf_rt_secondary.length;
+        if (!_perf_rt_can_add()) _perf_rt_dispatch_buffer_full();
+        _perf_rt_copy_secondary();
+        var after = _perf_rt_secondary.length;
+        if (before <= after) {
+            _perf_rt_dropped += after;
+            _perf_rt_secondary = [];
+            break;
+        }
+    }
+    _perf_rt_full_pending = false;
+}
+
+// `resourcetimingbufferfull` at the Performance object. `Event` belongs to the
+// page shim, so a worker (which evaluates this block without it) gets a plain
+// object with the same shape — EventTarget.dispatchEvent reads only `type`.
+function _perf_rt_dispatch_buffer_full() {
+    var ev = null;
+    if (typeof Event === 'function') {
+        try { ev = new Event('resourcetimingbufferfull'); } catch (e) { ev = null; }
+    }
+    if (!ev) {
+        ev = { type: 'resourcetimingbufferfull', target: null, currentTarget: null,
+               defaultPrevented: false, isTrusted: true };
+    }
+    performance.dispatchEvent(ev);
+}
+
 // HR Time L3 §4 declares `interface Performance : EventTarget`, so this is a
 // real interface — constructor plus a prototype chained to EventTarget —
 // rather than the flat object literal it used to be (BUG-400). A singleton is
@@ -13479,11 +13611,35 @@ Performance.prototype.clearMeasures = function(name) {
     }
 };
 // W3C Resource Timing L2 §4.4 — clears all 'resource' entries from the buffer.
+// Resetting the current size is half the operation, not bookkeeping: it is the
+// only way a page can make room for the secondary buffer while the buffer-full
+// event is being handled.
 Performance.prototype.clearResourceTimings = function() {
     _perf_entries = _perf_entries.filter(function(e) { return e.entryType !== 'resource'; });
+    _perf_rt_size = 0;
 };
-// W3C Resource Timing L2 §4.4 — sets max buffer size; Phase 0: no-op (unbounded).
-Performance.prototype.setResourceTimingBufferSize = function(_maxSize) {};
+// W3C Resource Timing L2 §4.4 — sets the buffer size limit. WebIDL
+// `unsigned long`, so the argument wraps modulo 2^32 rather than being clamped:
+// `setResourceTimingBufferSize(-1)` is 4294967295, i.e. effectively unbounded.
+Performance.prototype.setResourceTimingBufferSize = function(maxSize) {
+    var n = Number(maxSize);
+    if (!isFinite(n)) n = 0;
+    _perf_rt_limit = (n < 0 ? Math.ceil(n) : Math.floor(n)) >>> 0;
+};
+// Resource Timing L2 §4.4 `attribute EventHandler onresourcetimingbufferfull`.
+// An IDL event handler is an accessor on the interface prototype, so
+// `'onresourcetimingbufferfull' in performance` answers true even before a
+// handler is assigned — a plain expando (what this used to be) answers false
+// and every feature detection reads the API as absent.
+Object.defineProperty(Performance.prototype, 'onresourcetimingbufferfull', {
+    get: function() {
+        return this._onresourcetimingbufferfull !== undefined ? this._onresourcetimingbufferfull : null;
+    },
+    set: function(v) {
+        this._onresourcetimingbufferfull = (typeof v === 'function') ? v : null;
+    },
+    enumerable: true, configurable: true,
+});
 // HR Time L3 §4 `[Default] object toJSON()`. The default toJSON operation
 // serialises the interface's *attributes*, not its operations, and Performance
 // declares exactly one attribute Lumen implements — timeOrigin. The legacy
@@ -13531,6 +13687,9 @@ function PerformanceObserver(callback) {
     this._cb      = callback;
     this._types   = [];
     this._buffered = false;
+    // Performance Timeline L2 §6.2 «requires dropped entries»: raised by every
+    // observe() call, lowered by the first callback that reports the count.
+    this._requiresDropped = false;
 }
 // Performance Timeline L2 §6.2.2: supportedEntryTypes static accessor.
 Object.defineProperty(PerformanceObserver, 'supportedEntryTypes', {
@@ -13575,15 +13734,25 @@ PerformanceObserver.prototype.observe = function(opts) {
         if (this._types.indexOf(types[i]) === -1) this._types.push(types[i]);
     }
     if (buffered) this._buffered = true;
+    // §6.2 step «set this's requires dropped entries to true» — every observe()
+    // call, not only a buffered one: `droppedentriescount.any.js` re-arms an
+    // already-delivered observer with a second observe() and asserts the count
+    // is reported again.
+    this._requiresDropped = true;
     // De-duplicate in global list.
     var idx = _perf_observers.indexOf(this);
     if (idx === -1) _perf_observers.push(this);
     // If buffered: deliver already-existing matching entries immediately.
+    // Delivered even when the buffer holds nothing, provided this observer has
+    // a dropped count to report — an observer armed on `resource` after the
+    // buffer overflowed learns the count and nothing else, which is exactly the
+    // «Dropped entries counted even if observer was not registered at the time»
+    // case of the WPT file above.
     if (buffered && types.length > 0) {
         var buf = _perf_entries.filter(function(e) {
             return types.indexOf(e.entryType) !== -1;
         });
-        if (buf.length > 0) {
+        if (buf.length > 0 || _perf_dropped_count_for(this) > 0) {
             _perf_deliver_to_observer(this, buf);
         }
     }
@@ -13602,14 +13771,37 @@ PerformanceObserver.prototype.takeRecords = function() {
     return entries;
 };
 
+// Performance Timeline L2 §6.2.1: the number of entries dropped for the types
+// this observer subscribes to. `resource` is the only bounded buffer in the
+// engine, so it is the only type that can contribute — a type with no limit
+// never drops anything, and reporting a non-zero count for it would be a lie
+// the page cannot check.
+function _perf_dropped_count_for(obs) {
+    var n = 0;
+    if (obs._types.indexOf('resource') !== -1) n += _perf_rt_dropped;
+    return n;
+}
+
 // Deliver a batch of entries to a single observer (wraps in EntryList).
+//
+// The callback takes THREE arguments (§6.2.1 `PerformanceObserverCallback`):
+// the entry list, the observer, and a `PerformanceObserverCallbackOptions`
+// whose `droppedEntriesCount` is present only while the observer's «requires
+// dropped entries» flag is up. Delivering two arguments made every read of
+// `options.droppedEntriesCount` throw a TypeError inside the callback — which
+// the surrounding catch then swallowed (BUG-840).
 function _perf_deliver_to_observer(obs, entries) {
     var list = {
         getEntries:        function() { return entries.slice(); },
         getEntriesByName:  function(n, t) { return entries.filter(function(e) { return e.name === n && (!t || e.entryType === t); }); },
         getEntriesByType:  function(t) { return entries.filter(function(e) { return e.entryType === t; }); },
     };
-    try { obs._cb(list, obs); } catch(e) { _lumen_report_exception(e); }
+    var options = {};
+    if (obs._requiresDropped) {
+        options.droppedEntriesCount = _perf_dropped_count_for(obs);
+        obs._requiresDropped = false;
+    }
+    try { obs._cb(list, obs, options); } catch(e) { _lumen_report_exception(e); }
 }
 
 // Called internally when new entries are created (mark/measure/paint).
@@ -13665,37 +13857,102 @@ function _lumen_deliver_layout_shift(value, session_id, had_input) {
     _perf_observer_notify([entry]);
 }
 
-// Called by network layer when a resource fetch completes.
-// W3C Resource Timing L2 §4: creates a PerformanceResourceTiming entry with
-// all sub-timings set to start_ms (Phase 0 — no per-phase breakdown available).
-// initiator = 'script'|'link'|'img'|'fetch'|'xmlhttprequest'|'other'.
-function _lumen_record_resource_timing(url, initiator, start_ms, duration_ms) {
+// Called when a resource fetch completes — from the shim itself for everything
+// the page starts (`fetch()`, XHR, `<script src>`, `<link>`), and from the
+// shell through `_lumen_deliver_resource_timings` for the subresources the
+// engine fetches on the document's behalf (images, stylesheets, fonts).
+//
+// W3C Resource Timing L2 §4. The engine has no per-phase network breakdown, so
+// every connection milestone collapses onto fetchStart and only the two ends of
+// the request are real; the sizes and the status are real when the caller knows
+// them. `detail` is an optional object with `status`, `encodedBodySize`,
+// `decodedBodySize`, `contentType`, `nextHopProtocol`, `deliveryType`.
+// initiator = 'script'|'link'|'img'|'css'|'fetch'|'xmlhttprequest'|'other'.
+function _lumen_record_resource_timing(url, initiator, start_ms, duration_ms, detail) {
     var s = Number(start_ms);
     var d = Number(duration_ms);
+    if (!isFinite(s) || s < 0) s = 0;
+    if (!isFinite(d) || d < 0) d = 0;
+    var det = detail || {};
+    var decoded = Number(det.decodedBodySize) || 0;
+    var encoded = (det.encodedBodySize === undefined || det.encodedBodySize === null)
+        ? decoded : (Number(det.encodedBodySize) || 0);
+    // §4.3 `transferSize`: the encoded body plus the response's own overhead,
+    // for which the spec names 300 bytes as the fixed approximation. A response
+    // served from cache transferred nothing.
+    var delivery = det.deliveryType ? String(det.deliveryType) : '';
+    var transfer = (delivery === 'cache') ? 0 : encoded + 300;
     var entry = {
         entryType: 'resource',
         name: String(url),
         startTime: s,
         duration: d,
         initiatorType: String(initiator),
+        deliveryType: delivery,
+        nextHopProtocol: det.nextHopProtocol ? String(det.nextHopProtocol) : '',
+        workerStart: 0,
+        redirectStart: 0,
+        redirectEnd: 0,
         fetchStart: s,
         domainLookupStart: s,
         domainLookupEnd: s,
         connectStart: s,
         connectEnd: s,
-        secureConnectionStart: s,
+        secureConnectionStart: 0,
         requestStart: s,
+        firstInterimResponseStart: 0,
         responseStart: s,
         responseEnd: s + d,
-        transferSize: 0,
-        encodedBodySize: 0,
-        decodedBodySize: 0,
-        responseStatus: 0,
+        transferSize: transfer,
+        encodedBodySize: encoded,
+        decodedBodySize: decoded,
+        responseStatus: Number(det.status) || 0,
         renderBlockingStatus: 'non-blocking',
-        contentType: '',
+        contentType: det.contentType ? String(det.contentType) : '',
     };
-    _perf_entries.push(entry);
+    // §4.2 `[Default] object toJSON()` — the whole attribute set, which is what
+    // `JSON.stringify(entry)` must produce; an own-property spread would also
+    // carry toJSON itself.
+    var _keys = Object.keys(entry);
+    Object.defineProperty(entry, 'toJSON', {
+        value: function() {
+            var out = {};
+            for (var i = 0; i < _keys.length; i++) { out[_keys[i]] = entry[_keys[i]]; }
+            return out;
+        },
+        writable: true, configurable: true, enumerable: false,
+    });
+    // The buffer and the observer stream are separate sinks: an entry the
+    // buffer refuses is still delivered to every interested observer.
+    _perf_rt_add(entry);
     _perf_observer_notify([entry]);
+}
+
+// Called by the shell once per event-loop step with the subresource loads that
+// completed since the last call (images, stylesheets, fonts, parser scripts) —
+// those are fetched by the engine, on threads that have no JS context, so they
+// cannot record themselves the way the shim-side fetches do.
+//
+// `rows` is a JSON array of
+// {url, initiatorType, startMs, durationMs, status, encodedBodySize,
+//  decodedBodySize, contentType, nextHopProtocol, deliveryType}, where the two
+// timestamps are unix-epoch milliseconds — the same clock `_lumen_now_ms`
+// reads, so they convert to DOMHighResTimeStamps by subtracting the time
+// origin. A load that finished before this document's JS runtime existed lands
+// before the origin; it is clamped to 0 rather than reported negative, since
+// `startTime` is defined to be a non-negative offset from the origin.
+function _lumen_deliver_resource_timings(rows_json) {
+    var rows;
+    try { rows = JSON.parse(String(rows_json)); } catch (e) { return; }
+    if (!rows || !rows.length) return;
+    for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if (!r || !r.url) continue;
+        var start = Number(r.startMs) - _perf_origin_ms;
+        if (!isFinite(start) || start < 0) start = 0;
+        _lumen_record_resource_timing(r.url, r.initiatorType || 'other', start,
+            Number(r.durationMs) || 0, r);
+    }
 }
 
 // Generic entry delivery — called by Rust shell for any PerformanceEntry type.
@@ -20660,6 +20917,214 @@ mod tests {
                 all.length === 3 && all[2].name === 'https://example.com/3.css' && all[2].initiatorType === 'link'
                 "#
             ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── Resource Timing buffer + droppedEntriesCount (BUG-839) ────────────────
+
+        #[test]
+        fn resource_timing_buffer_size_limit_keeps_entry_out_of_buffer() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"
+                performance.setResourceTimingBufferSize(0);
+                _lumen_record_resource_timing('https://example.com/a.js', 'script', 10, 1);
+                _lumen_tick_timers();
+                performance.getEntriesByType('resource').length === 0
+                "#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn resource_timing_observer_sees_entry_the_buffer_refused() {
+            // The buffer and the observer stream are separate sinks: a
+            // zero-sized buffer must not silence PerformanceObserver.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"
+                performance.setResourceTimingBufferSize(0);
+                var seen = 0;
+                new PerformanceObserver(function(l) { seen += l.getEntries().length; })
+                    .observe({type: 'resource'});
+                _lumen_record_resource_timing('https://example.com/a.js', 'script', 10, 1);
+                _lumen_tick_timers();
+                seen === 1 && performance.getEntriesByType('resource').length === 0
+                "#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn resource_timing_buffer_full_event_is_a_queued_task() {
+            // Queued, not inline: the page assigns the handler after the load
+            // that overflows the buffer just as often as before it.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"
+                performance.setResourceTimingBufferSize(1);
+                _lumen_record_resource_timing('https://example.com/a.js', 'script', 10, 1);
+                _lumen_record_resource_timing('https://example.com/b.js', 'script', 20, 1);
+                var fired = 0;
+                performance.onresourcetimingbufferfull = function() { fired++; };
+                var beforeTick = fired;
+                _lumen_tick_timers();
+                beforeTick === 0 && fired === 1
+                "#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn resource_timing_buffer_full_listener_can_make_room() {
+            // The spec's loop: a handler that clears the buffer gets the
+            // entries that were about to be dropped copied in instead.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"
+                performance.setResourceTimingBufferSize(1);
+                performance.addEventListener('resourcetimingbufferfull', function() {
+                    performance.clearResourceTimings();
+                });
+                _lumen_record_resource_timing('https://example.com/a.js', 'script', 10, 1);
+                _lumen_record_resource_timing('https://example.com/b.js', 'script', 20, 1);
+                _lumen_tick_timers();
+                var names = performance.getEntriesByType('resource').map(function(e) { return e.name; });
+                names.length === 1 && names[0] === 'https://example.com/b.js'
+                "#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn resource_timing_onbufferfull_is_an_idl_attribute() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"
+                ('onresourcetimingbufferfull' in performance) &&
+                performance.onresourcetimingbufferfull === null
+                "#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn performance_observer_callback_takes_three_arguments() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"
+                var argc = -1, opts = null;
+                new PerformanceObserver(function(list, obs, options) {
+                    argc = arguments.length; opts = options;
+                }).observe({type: 'mark'});
+                performance.mark('m');
+                argc === 3 && opts !== null && opts.droppedEntriesCount === 0
+                "#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn dropped_entries_count_reported_once_per_observe() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"
+                performance.setResourceTimingBufferSize(0);
+                _lumen_record_resource_timing('https://example.com/a.js', 'script', 10, 1);
+                _lumen_tick_timers();
+                var counts = [];
+                var po = new PerformanceObserver(function(list, obs, options) {
+                    counts.push(options.droppedEntriesCount);
+                });
+                po.observe({type: 'resource'});
+                _lumen_record_resource_timing('https://example.com/b.js', 'script', 20, 1);
+                _lumen_record_resource_timing('https://example.com/c.js', 'script', 30, 1);
+                _lumen_tick_timers();
+                counts.length === 2 && counts[0] === 1 && counts[1] === undefined
+                "#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn dropped_entries_count_zero_for_an_unbounded_type() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"
+                performance.setResourceTimingBufferSize(0);
+                _lumen_record_resource_timing('https://example.com/a.js', 'script', 10, 1);
+                _lumen_tick_timers();
+                var got = -1;
+                new PerformanceObserver(function(list, obs, options) {
+                    got = options.droppedEntriesCount;
+                }).observe({type: 'mark'});
+                performance.mark('m');
+                got === 0
+                "#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn resource_timing_entry_detail_and_tojson() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"
+                _lumen_record_resource_timing('https://example.com/a.js', 'script', 10, 5,
+                    { status: 200, decodedBodySize: 700, encodedBodySize: 300,
+                      contentType: 'text/javascript', nextHopProtocol: 'http/1.1' });
+                var e = performance.getEntriesByType('resource')[0];
+                var j = JSON.parse(JSON.stringify(e));
+                e.responseStatus === 200 && e.decodedBodySize === 700 &&
+                e.encodedBodySize === 300 && e.transferSize === 600 &&
+                e.nextHopProtocol === 'http/1.1' &&
+                j.initiatorType === 'script' && j.responseEnd === 15
+                "#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn shell_delivered_rows_become_resource_entries() {
+            // The shell hands unix-epoch milliseconds; a load that finished
+            // before this runtime existed clamps to 0 rather than going
+            // negative.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"
+                var origin = performance.timeOrigin;
+                _lumen_deliver_resource_timings(JSON.stringify([
+                    { url: 'https://example.com/i.png', initiatorType: 'img',
+                      startMs: origin + 40, durationMs: 12, status: 200,
+                      decodedBodySize: 64, encodedBodySize: 64 },
+                    { url: 'https://example.com/early.css', initiatorType: 'css',
+                      startMs: origin - 500, durationMs: 3, status: 200 }
+                ]));
+                var all = performance.getEntriesByType('resource');
+                all.length === 2 && all[0].startTime === 40 && all[0].initiatorType === 'img' &&
+                all[1].startTime === 0 && all[1].initiatorType === 'css'
+                "#,
+                )
+                .unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 

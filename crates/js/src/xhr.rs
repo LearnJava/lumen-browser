@@ -287,6 +287,11 @@ XMLHttpRequest.prototype.send = function(body) {
         }
     }
 
+    // Resource Timing L2 §4.1: the fetch starts here. `performance` is a
+    // typeof-guard away because this shim is also installed into runtimes with
+    // no page (--dump-*, SVG rasterization, the crate's own unit tests).
+    var _rtStart = (typeof performance !== 'undefined' && performance) ? performance.now() : 0;
+
     // Execute synchronously using the same native fetch bindings.
     var ok;
     try {
@@ -361,6 +366,16 @@ XMLHttpRequest.prototype.send = function(body) {
     var bodyLen = _lumen_fetch_body_length();
     var rawBody = bodyLen > 0 ? _lumen_fetch_body_chunk(0, bodyLen) : [];
     self._buildResponse(rawBody);
+
+    // BUG-839: Resource Timing entry with initiatorType 'xmlhttprequest'.
+    // Recorded here rather than in the shared native bridge because `xhr.rs` is
+    // its own rt.eval — a fix inside WEB_API_SHIM never reaches it (BUG-780).
+    if (typeof _lumen_record_resource_timing === 'function') {
+        _lumen_record_resource_timing(self._url, 'xmlhttprequest', _rtStart,
+            ((typeof performance !== 'undefined' && performance) ? performance.now() : 0) - _rtStart,
+            { status: self.status, decodedBodySize: bodyLen, encodedBodySize: bodyLen,
+              contentType: self.getResponseHeader('content-type') || '' });
+    }
 
     self._setReadyState(4); // DONE
     self._fireProgress('progress', bodyLen, bodyLen);
