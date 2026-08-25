@@ -76,11 +76,11 @@
  "generated": "2026-08-25",
  "counts": {
   "open": 379,
-  "fixed": 495,
+  "fixed": 496,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 874,
+ "total_bugs": 875,
  "phases": [
   {
    "id": "P0",
@@ -11071,10 +11071,10 @@
    "debtor": false
   },
   "BUG-854": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<frame>` не существует как элемент: конструктор `HTMLElement`, ресурс из `src` не запрашивается (доказано записью запросов на сервере пробы), `load` не приходи…",
    "component": "js (`crates/js/src/dom.rs` — `HTMLFrameElement` не определён, при живом `HTMLFrameSetElement`) + shell (вложенный browsing context не создаётся вовсе, ср. BUG-480/BUG-798)",
-   "date": null,
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-855": {
@@ -11522,6 +11522,13 @@
    "status": "open",
    "title": "`<details open>` внутри документа от `DOMParser.parseFromString` (и поддерева из `innerHTML`) не порождает `toggle`: у шагов изменения атрибута два входа — обёр…",
    "component": "js (`crates/js/src/dom.rs` — `_lumen_details_open_scan()` зовётся только из `_lumen_apply_ready_state('interactive')`; обёртки над `_lumen_set_attr`/`_lumen_remove_attr` там же)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-920": {
+   "status": "open",
+   "title": "`iframe.src` отдаёт атрибут дословно (`/child.html`) вместо разрешённого URL, хотя IDL объявляет `[ReflectURL]`: корректная строка рефлексии стоит на прототипе,…",
+   "component": "js (`crates/js/src/iframe_element.rs` — `patchIframeElement`/`reflectAttr` ставит собственные свойства на элемент) поверх `crates/js/src/dom.rs` (`_lumen_install_reflection(HTMLIFrameElement.prototype, [['src','src','url'], …])`)",
    "date": null,
    "debtor": false
   }
@@ -12134,6 +12141,9 @@
   ],
   "js (`crates/js/src/highlight_api.rs` — `HIGHLIGHT_API_SHIM`)": [
    "BUG-534"
+  ],
+  "js (`crates/js/src/iframe_element.rs` — `patchIframeElement`/`reflectAttr` ставит собственные свойства на элемент) поверх `crates/js/src/dom.rs` (`_lumen_install_reflection(HTMLIFrameElement.prototype, [['src','src','url'], …])`)": [
+   "BUG-920"
   ],
   "js (`crates/js/src/import_attributes.rs:44` — `ModuleType::from_attr` знает только `\"json\"`; `crates/js/src/v8_esm.rs:371`/`:403`)": [
    "BUG-896"

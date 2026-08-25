@@ -2733,12 +2733,18 @@ pub fn check_navigation_gate(doc: &Document, sandbox: SandboxFlags) -> usize {
 // iframe sandbox
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// Данные `<iframe>` элемента — URL содержимого и sandbox-ограничения.
+/// Данные элемента-хоста вложенного browsing context — URL содержимого и
+/// sandbox-ограничения.
+///
+/// Хостов два тега: `<iframe>` и обсолетный, но по-прежнему разбираемый
+/// `<frame>` (HTML LS §16.3.3, BUG-854). Тип назван по первому из них ради
+/// совместимости имён; всё, что относится только к `<iframe>` (`srcdoc`,
+/// `sandbox`, `loading`, `fetchpriority`), у `<frame>` просто пусто.
 ///
 /// `is_sandboxed` — `true` если у элемента есть атрибут `sandbox` (даже пустой).
 /// `sandbox` содержит распарсенные флаги (пустые = нет ограничений, все = максимум).
 pub struct IframeInfo {
-    /// `NodeId` самого `<iframe>` элемента — адресат load/error-событий и
+    /// `NodeId` самого элемента-хоста — адресат load/error-событий и
     /// будущий ключ сопоставления «элемент ↔ browsing context» (BUG-480).
     pub node: NodeId,
     /// Значение атрибута `src`, если задан.
@@ -2774,13 +2780,27 @@ fn normalize_fetch_priority(raw: Option<&str>) -> Option<String> {
 
 fn collect_iframes_inner(doc: &Document, id: NodeId, out: &mut Vec<IframeInfo>) {
     let node = doc.get(id);
-    if node
+    // `<frame>` соседствует здесь с `<iframe>`, а не живёт отдельным проходом:
+    // вложенный browsing context у них один и тот же (HTML LS §16.3.3 «process
+    // the frame attributes» — тот же алгоритм, что у §4.8.5), различаются лишь
+    // атрибуты, которых у `<frame>` нет. BUG-854.
+    let is_iframe = node
         .element_name()
         .map(|n| n.local.eq_ignore_ascii_case("iframe"))
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+    let is_frame = node
+        .element_name()
+        .map(|n| n.local.eq_ignore_ascii_case("frame"))
+        .unwrap_or(false);
+    if is_iframe || is_frame {
         let src = node.get_attr("src").filter(|s| !s.is_empty()).map(str::to_owned);
-        let srcdoc = node.get_attr("srcdoc").filter(|s| !s.is_empty()).map(str::to_owned);
+        // `srcdoc` объявлен только у `<iframe>`; на `<frame>` это обычный
+        // неизвестный атрибут, и читать его как источник — выдумка.
+        let srcdoc = node
+            .get_attr("srcdoc")
+            .filter(|_| is_iframe)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
         let is_sandboxed = node.get_attr("sandbox").is_some();
         let sandbox = node.sandbox_flags().unwrap_or_else(SandboxFlags::empty);
         let loading_lazy = node
@@ -2795,11 +2815,13 @@ fn collect_iframes_inner(doc: &Document, id: NodeId, out: &mut Vec<IframeInfo>) 
     }
 }
 
-/// Собрать все `<iframe>` элементы документа с их sandbox-ограничениями.
+/// Собрать все элементы-хосты вложенных browsing context (`<iframe>` и
+/// `<frame>`) документа с их sandbox-ограничениями.
 ///
-/// Каждый `<iframe>` — один `IframeInfo`. Элементы без атрибута `sandbox`
+/// Каждый такой элемент — один `IframeInfo`. Элементы без атрибута `sandbox`
 /// включаются с `is_sandboxed = false` и `sandbox = SandboxFlags::empty()`.
-/// Порядок — depth-first обход дерева.
+/// Порядок — depth-first обход дерева. `<frame>` попадает сюда откуда угодно,
+/// а не только из `<frameset>`: браузеры грузят его и в `<body>` (BUG-854).
 pub fn collect_iframes(doc: &Document) -> Vec<IframeInfo> {
     let mut out = Vec::new();
     collect_iframes_inner(doc, doc.root(), &mut out);
@@ -5413,6 +5435,41 @@ mod tests {
         assert_eq!(frames[0].src.as_deref(), Some("https://example.com"));
         assert!(!frames[0].is_sandboxed);
         assert!(frames[0].sandbox.is_empty());
+    }
+
+    /// BUG-854: `<frame>` — такой же хост вложенного browsing context.
+    /// Строится не через `make_iframe`, чтобы тег был виден в самом тесте.
+    fn make_frame(attrs_in: &[(&str, &str)]) -> Document {
+        let mut doc = Document::new();
+        let frame = doc.create_element(QualName::html("frame"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(frame).data {
+            for (k, v) in attrs_in {
+                attrs.push(Attribute { name: QualName::html(*k), value: (*v).to_string() });
+            }
+        }
+        doc.append_child(doc.root(), frame);
+        doc
+    }
+
+    #[test]
+    fn collect_iframes_finds_frame_element() {
+        let doc = make_frame(&[("src", "child.html"), ("name", "f1")]);
+        let frames = collect_iframes(&doc);
+        assert_eq!(frames.len(), 1, "<frame> is a nested browsing context host too");
+        assert_eq!(frames[0].src.as_deref(), Some("child.html"));
+        assert_eq!(frames[0].name.as_deref(), Some("f1"));
+        assert!(!frames[0].is_sandboxed);
+    }
+
+    #[test]
+    fn collect_iframes_frame_srcdoc_is_not_a_source() {
+        // `srcdoc` объявлен только у `<iframe>` — на `<frame>` это обычный
+        // неизвестный атрибут, и брать его как источник нельзя.
+        let doc = make_frame(&[("srcdoc", "<p>inline"), ("src", "child.html")]);
+        let frames = collect_iframes(&doc);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].srcdoc, None);
+        assert_eq!(frames[0].src.as_deref(), Some("child.html"));
     }
 
     #[test]

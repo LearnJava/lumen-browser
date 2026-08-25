@@ -16888,7 +16888,10 @@ function _lumen_install_reflection(proto, entries) {
  'HTMLOutputElement','HTMLDetailsElement','HTMLEmbedElement','HTMLObjectElement',
  'HTMLSlotElement','HTMLDataElement','HTMLQuoteElement','HTMLModElement',
  'HTMLProgressElement','HTMLMeterElement','HTMLMapElement','HTMLPictureElement',
- 'HTMLTableColElement','HTMLTableCaptionElement','HTMLDListElement','HTMLMenuElement'
+ 'HTMLTableColElement','HTMLTableCaptionElement','HTMLDListElement','HTMLMenuElement',
+ // BUG-854: `<frame>` is obsolete but still parsed and still interface-bearing
+ // (HTML LS §16.3.3), while `<frameset>` next door already had its interface.
+ 'HTMLFrameElement'
 ].forEach(function(_name) {
     if (_name in globalThis) return;
     var _ctor = function() { throw new TypeError('Illegal constructor'); };
@@ -16924,6 +16927,7 @@ _lumen_html_tag_prototypes['COLGROUP']  = HTMLTableColElement;
 _lumen_html_tag_prototypes['CAPTION']   = HTMLTableCaptionElement;
 _lumen_html_tag_prototypes['DL']        = HTMLDListElement;
 _lumen_html_tag_prototypes['MENU']      = HTMLMenuElement;
+_lumen_html_tag_prototypes['FRAME']     = HTMLFrameElement;
 
 // `referrerpolicy` shares one keyword set across <a>/<area>/<img>/<iframe>/…
 var _LUMEN_REFERRER_POLICY = { def: '', keys: [
@@ -17235,6 +17239,52 @@ _lumen_install_reflection(HTMLIFrameElement.prototype, [
     ['loading',        'loading',        'string'],
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
 ]);
+
+// BUG-854 — HTML LS §16.3.3 `HTMLFrameElement`. Obsolete, still parsed, and a
+// real nested browsing context host: WPT's own `name-attribute.window.js` opens
+// with «frame — this works without <frameset>, so great», i.e. the element is
+// loaded wherever it stands, not only inside a frameset.
+_lumen_install_reflection(HTMLFrameElement.prototype, [
+    ['src',          'src',          'url'],
+    ['name',         'name',         'string'],
+    ['scrolling',    'scrolling',    'string'],
+    ['frameBorder',  'frameborder',  'string'],
+    ['longDesc',     'longdesc',     'url'],
+    ['noResize',     'noresize',     'bool'],
+    ['marginHeight', 'marginheight', 'string'],
+    ['marginWidth',  'marginwidth',  'string'],
+]);
+// `contentDocument`/`contentWindow` read the same sub-document registry as
+// `<iframe>` (BUG-480 срез 2, `frame_bridge.rs`) — the shell registers a
+// binding per host node id regardless of the host's tag. Installed on the
+// **prototype**, unlike `iframe_element.rs`'s per-element patch: a `<frame>`
+// written by the parser never passes through a `createElement` hook, and the
+// prototype covers both origins with one definition. `typeof`-guard keeps the
+// shim working in runtimes installed without the bridge (`--dump-*`, SVG
+// rasterization, unit tests).
+_lumen_frame_define_content_accessors(HTMLFrameElement.prototype);
+function _lumen_frame_define_content_accessors(proto) {
+    Object.defineProperty(proto, 'contentDocument', {
+        get: function() {
+            var n = _lumen_reflect_nid(this);
+            return (typeof _lumen_frame_content_document === 'function' && n !== -1)
+                ? _lumen_frame_content_document(n)
+                : null;
+        },
+        enumerable: true,
+        configurable: true,
+    });
+    Object.defineProperty(proto, 'contentWindow', {
+        get: function() {
+            var n = _lumen_reflect_nid(this);
+            return (typeof _lumen_frame_content_window === 'function' && n !== -1)
+                ? _lumen_frame_content_window(n)
+                : null;
+        },
+        enumerable: true,
+        configurable: true,
+    });
+}
 
 // `scheme` is the obsolete-but-conforming member (HTML LS §16.3); `charset` is a
 // content attribute with NO IDL counterpart on this interface — checked against
@@ -24577,6 +24627,33 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(acc, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-854: `<frame>` was an `HTMLElement` with no IDL attributes at
+        /// all, so a page could neither recognize it nor read its `src` — while
+        /// `<frameset>` next door already had its own interface (BUG-415).
+        /// `contentDocument`/`contentWindow` answer `null` here on purpose: the
+        /// sub-document registry (`frame_bridge.rs`) is filled by the shell
+        /// after the child loads, and this runtime has no shell.
+        #[test]
+        fn frame_element_interface_and_reflection() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var f = document.createElement('frame'); \
+                     f instanceof HTMLFrameElement && f instanceof HTMLElement \
+                     && f.constructor.name === 'HTMLFrameElement' \
+                     && f.src === '' && f.name === '' && f.noResize === false \
+                     && (f.name = 'n1', f.getAttribute('name') === 'n1' && f.name === 'n1') \
+                     && (f.noResize = true, f.getAttribute('noresize') === '' && f.noResize === true) \
+                     && (f.frameBorder = '0', f.getAttribute('frameborder') === '0') \
+                     && (f.marginWidth = '4', f.getAttribute('marginwidth') === '4') \
+                     && (f.marginHeight = '5', f.getAttribute('marginheight') === '5') \
+                     && (f.scrolling = 'no', f.getAttribute('scrolling') === 'no') \
+                     && f.contentDocument === null && f.contentWindow === null",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
         }
 
         /// BUG-415: `document.body` had no setter on the detached document, and
