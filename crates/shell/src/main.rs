@@ -1060,6 +1060,7 @@ fn run_window_mode(
         content_width: 0.0,
         cv_skipped: Vec::new(),
         cv_relevant: std::collections::HashSet::new(),
+        cv_auto_state: std::collections::HashMap::new(),
         cv_events: Vec::new(),
         dark_mode: false,
         cursor_position: None,
@@ -3275,6 +3276,13 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn fire_window_scrollend(&self);
 
+    /// Deliver a batch of `content-visibility: auto` state changes to JS as
+    /// `contentvisibilityautostatechange` events (CSS Contain L2 §4.1, BUG-852).
+    ///
+    /// `payload` is a JSON array of `[node_index, skipped]` pairs in tree order.
+    #[allow(dead_code)]
+    fn deliver_cv_state_changes(&self, payload: &str);
+
     /// Pause the JS event loop (T0 → T1 lifecycle transition).
     ///
     /// Sets `document.visibilityState = "hidden"`, fires `visibilitychange`.
@@ -3714,6 +3722,12 @@ impl PersistentJs for V8PersistentJs {
         self.eval_js(
             "if(typeof _lumen_fire_window_scrollend_event==='function')_lumen_fire_window_scrollend_event();"
         );
+    }
+    fn deliver_cv_state_changes(&self, payload: &str) {
+        self.eval_js(&format!(
+            "if(typeof _lumen_deliver_cv_state_changes==='function')\
+             _lumen_deliver_cv_state_changes({payload});"
+        ));
     }
     fn pause_event_loop(&self) {
         self.eval_js("_lumen_apply_visibility(true)");
@@ -6828,39 +6842,66 @@ struct ContentVisibilityChange {
     skipped: bool,
 }
 
-/// Собрать `(node, top_y)` всех `content-visibility: auto` боксов, чьё поддерево
-/// пропущено layout-ом (children пусты). top_y — страница-координаты схлопнутого
-/// бокса. Скан по дереву (а не thread-local) — работает и для layout-а,
-/// выполненного в фоновом потоке загрузки страницы.
-fn collect_cv_skipped(b: &lumen_layout::LayoutBox, out: &mut Vec<(NodeId, f32)>) {
-    if b.style.content_visibility == lumen_layout::style::ContentVisibility::Auto
-        && b.children.is_empty()
-    {
-        out.push((b.node, b.rect.y));
-    }
-    for c in &b.children {
-        collect_cv_skipped(c, out);
-    }
-}
-
-/// Дифф skipped-состояния между двумя layout-проходами → события
-/// [`ContentVisibilityChange`]: появившиеся узлы — `skipped: true`,
-/// исчезнувшие — `skipped: false`.
-fn diff_cv_skipped(
-    prev: &[(NodeId, f32)],
-    next: &[(NodeId, f32)],
-) -> Vec<ContentVisibilityChange> {
-    let prev_set: std::collections::HashSet<NodeId> = prev.iter().map(|&(n, _)| n).collect();
-    let next_set: std::collections::HashSet<NodeId> = next.iter().map(|&(n, _)| n).collect();
-    let mut out = Vec::new();
-    for &(n, _) in next {
-        if !prev_set.contains(&n) {
-            out.push(ContentVisibilityChange { node: n, skipped: true });
+/// Собрать `(node, top_y)` **всех** `content-visibility: auto` боксов в порядке
+/// дерева. top_y — страница-координаты бокса. Скан по дереву (а не thread-local)
+/// — работает и для layout-а, выполненного в фоновом потоке загрузки страницы.
+///
+/// BUG-852: раньше эта функция собирала только боксы с пустым списком детей и
+/// звала их «пропущенными». Совпадение неточное в обе стороны: пустой
+/// `<div style="content-visibility:auto">` — а именно такой строит
+/// `content-visibility-auto-state-changed-first-observation.html` — выглядел
+/// пропущенным, где бы он ни стоял, а layout про него вообще не спрашивал
+/// (`cv_should_skip` вызывается только при `!children.is_empty()`). Состояние
+/// теперь считает [`Lumen::refresh_cv_state`] по самому правилу релевантности.
+///
+/// **Дедупликация по узлу обязательна, и её отсутствие — не мелочь.** Анонимный
+/// бокс (`InlineRun` для inline-содержимого, `InlineBlockRow`, обёртки таблиц)
+/// не имеет своего элемента и несёт стиль родителя, включая
+/// `content-visibility: auto`, — то есть `<div style="content-visibility:auto">
+/// <span>x</span></div>` даёт ДВА бокса с этим значением. Без дедупликации
+/// `diff_cv_state` сравнил бы второй из них с ещё не обновлённым `prev` и
+/// выдал бы страницу **два** события на одно изменение, ровно то, что
+/// `content-visibility-auto-state-changed-first-observation.html` запрещает
+/// («already observed»). Первый бокс в порядке дерева — сам элемент, анонимный
+/// всегда его потомок. Layout решает ту же задачу тем же способом:
+/// `CV_SKIPPED` дедуплицируется по узлу.
+fn collect_cv_auto(b: &lumen_layout::LayoutBox, out: &mut Vec<(NodeId, f32)>) {
+    fn walk(
+        b: &lumen_layout::LayoutBox,
+        seen: &mut std::collections::HashSet<NodeId>,
+        out: &mut Vec<(NodeId, f32)>,
+    ) {
+        if b.style.content_visibility == lumen_layout::style::ContentVisibility::Auto
+            && seen.insert(b.node)
+        {
+            out.push((b.node, b.rect.y));
+        }
+        for c in &b.children {
+            walk(c, seen, out);
         }
     }
-    for &(n, _) in prev {
-        if !next_set.contains(&n) {
-            out.push(ContentVisibilityChange { node: n, skipped: false });
+    walk(b, &mut std::collections::HashSet::new(), out);
+}
+
+/// Дифф skipped-состояния между двумя проходами → события
+/// [`ContentVisibilityChange`].
+///
+/// CSS Contain L2 §4.1: событие должно приходить и на **первое** наблюдение
+/// элемента, в обе стороны — `skipped: false` для элемента во вьюпорте не менее
+/// обязателен, чем `skipped: true` для элемента под ним. Поэтому узел, которого
+/// в `prev` нет вовсе, всегда порождает событие со своим текущим состоянием, а
+/// узел, который из дерева исчез, — никакого: отсоединённый элемент молчит
+/// (`content-visibility-auto-state-changed-removed.html`).
+///
+/// `next` — в порядке дерева, чтобы порядок событий не зависел от обхода хеша.
+fn diff_cv_state(
+    prev: &std::collections::HashMap<NodeId, bool>,
+    next: &[(NodeId, bool)],
+) -> Vec<ContentVisibilityChange> {
+    let mut out = Vec::new();
+    for &(node, skipped) in next {
+        if prev.get(&node) != Some(&skipped) {
+            out.push(ContentVisibilityChange { node, skipped });
         }
     }
     out
@@ -8716,9 +8757,15 @@ struct Lumen {
     /// при скролле): прокидывается в layout через `set_cv_relevant`, такие узлы
     /// больше не пропускаются. Сбрасывается при загрузке страницы.
     cv_relevant: std::collections::HashSet<NodeId>,
+    /// Skipped-состояние **каждого** `content-visibility: auto` узла прошлого
+    /// прохода — база диффа (BUG-852). Отдельно от `cv_skipped`, который держит
+    /// только пропущенные и только ради ratchet-а: «узла в карте нет» и «узел не
+    /// пропущен» — разные вещи, и именно на первом держится событие первого
+    /// наблюдения.
+    cv_auto_state: std::collections::HashMap<NodeId, bool>,
     /// Очередь shell-событий `ContentVisibilityChange` — диффы skipped-состояния
-    /// между layout-проходами. Потребитель Phase 2: P3 доставляет
-    /// `contentvisibilityautostatechange` в JS. Кап 256 записей.
+    /// между layout-проходами. Дренируется раз в кадр в `RedrawRequested` и
+    /// уходит в JS как `contentvisibilityautostatechange`. Кап 256 записей.
     cv_events: Vec<ContentVisibilityChange>,
     /// OS-level `prefers-color-scheme` preference. `true` — система в тёмной теме.
     /// Читается из winit `Window::theme()` при создании окна и обновляется на
@@ -12531,6 +12578,7 @@ impl Lumen {
                 self.cv_relevant.clear();
                 self.cv_events.clear();
                 self.cv_skipped.clear();
+                self.cv_auto_state.clear();
                 self.refresh_cv_state();
                 self.update_snap_containers();
         self.update_scroll_containers();
@@ -13131,6 +13179,7 @@ impl Lumen {
         self.cv_relevant.clear();
         self.cv_events.clear();
         self.cv_skipped.clear();
+        self.cv_auto_state.clear();
         self.refresh_cv_state();
         self.update_snap_containers();
         self.update_scroll_containers();
@@ -17253,6 +17302,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Step 1.6: content-visibility: auto (BB-4) — пропущенный узел
                 // вошёл в расширенный viewport → ratchet relevant + relayout.
                 self.maybe_expand_cv_relevant();
+                // Step 1.65 (BUG-852): и здесь же — единственная точка выдачи
+                // `contentvisibilityautostatechange`. CSS Contain L2 §4.1
+                // определяет релевантность внутри «update the rendering» и
+                // просит поставить событие задачей; очередь наполняют четыре
+                // вызова `refresh_cv_state` (загрузка, релейаут, восстановление,
+                // ratchet выше), а JS-контекст к этому шагу уже есть на всех
+                // путях — на двух из них в момент самого `refresh_cv_state` ещё
+                // нет.
+                #[cfg(feature = "v8")]
+                self.deliver_cv_state_changes();
                 // Step 1.7 (BUG-735): картинки, декодированные streaming/
                 // динамическим путём с прошлого кадра, отдают DOM-у свои
                 // intrinsic-размеры (коалесцированно: одна пачка — один релейаут).
@@ -24143,17 +24202,67 @@ impl Lumen {
     /// Дренирует thread-local layout-крейта, чтобы записи не пережили проход.
     fn refresh_cv_state(&mut self) {
         let _ = lumen_layout::take_cv_skipped();
-        let mut next = Vec::new();
+        let mut auto_boxes = Vec::new();
         if let Some(lb) = self.layout_box.as_ref() {
-            collect_cv_skipped(lb, &mut next);
+            collect_cv_auto(lb, &mut auto_boxes);
         }
-        self.cv_events.extend(diff_cv_skipped(&self.cv_skipped, &next));
-        // Кап очереди: без потребителя (P3 Phase 2) храним только хвост.
+        // BUG-852: состояние считается тем же правилом релевантности, что и в
+        // layout (`cv_is_skipped`), а не выводится из «дети пусты» — иначе
+        // пустой auto-элемент неотличим от пропущенного.
+        let scroll_y = self.scroll_y;
+        let viewport_h = self.viewport_height_css();
+        let next: Vec<(NodeId, bool)> = auto_boxes
+            .iter()
+            .map(|&(n, top)| {
+                let relevant = self.cv_relevant.contains(&n);
+                (n, lumen_layout::cv_is_skipped(relevant, top, scroll_y, viewport_h))
+            })
+            .collect();
+        self.cv_events.extend(diff_cv_state(&self.cv_auto_state, &next));
+        // Кап очереди: доставка идёт раз в кадр, но кадра может и не быть
+        // (фоновая вкладка) — храним только хвост.
         if self.cv_events.len() > 256 {
             let drop_n = self.cv_events.len() - 256;
             self.cv_events.drain(..drop_n);
         }
-        self.cv_skipped = next;
+        self.cv_auto_state = next.iter().copied().collect();
+        self.cv_skipped = auto_boxes
+            .into_iter()
+            .zip(next)
+            .filter_map(|((n, top), (_, skipped))| skipped.then_some((n, top)))
+            .collect();
+    }
+
+    /// Доставить накопленные `contentvisibilityautostatechange` в JS.
+    ///
+    /// Зовётся раз в кадр из `RedrawRequested` — шага «update the rendering»,
+    /// внутри которого CSS Contain L2 §4.1 и определяет релевантность. Точка
+    /// одна на все источники состояния (загрузка страницы, релейаут, ratchet
+    /// при скролле), потому что `refresh_cv_state` вызывается из четырёх мест,
+    /// и в двух из них JS-контекст ещё не установлен.
+    #[cfg(feature = "v8")]
+    fn deliver_cv_state_changes(&mut self) {
+        if self.cv_events.is_empty() || !self.js_present {
+            // Пока JS-контекста нет, события копятся: страница, объявившая
+            // `content-visibility: auto` в разметке, должна получить первое
+            // наблюдение, когда её скрипты уже могут слушать.
+            return;
+        }
+        let payload: String = {
+            let mut s = String::from("[");
+            for (i, ev) in self.cv_events.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                s.push_str(&format!("[{},{}]", ev.node.index(), ev.skipped));
+            }
+            s.push(']');
+            s
+        };
+        self.cv_events.clear();
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.deliver_cv_state_changes(&payload);
+        });
     }
 
     /// Шаг 1.6 «Update the rendering»: если при скролле пропущенный
@@ -24184,13 +24293,6 @@ impl Lumen {
         }
         self.cv_relevant.extend(newly);
         self.relayout_raf_dirty();
-    }
-
-    /// Дренировать очередь [`ContentVisibilityChange`] событий.
-    /// Phase 2: P3 доставляет их в JS как `contentvisibilityautostatechange`.
-    #[allow(dead_code)] // потребитель появится при P3 wiring (STATUS-P3)
-    fn take_cv_events(&mut self) -> Vec<ContentVisibilityChange> {
-        std::mem::take(&mut self.cv_events)
     }
 
     /// Тик анимации перед `Renderer::render`. Если анимация активна —
@@ -25008,6 +25110,7 @@ impl Lumen {
         self.cv_relevant.clear();
         self.cv_events.clear();
         self.cv_skipped.clear();
+        self.cv_auto_state.clear();
         self.refresh_cv_state();
         self.set_js_ctx(js_ctx);
         // ADR-016 M2.2c-2b: зеркалим восстановленный хэндл + DOM в движковый поток.
@@ -30591,34 +30694,50 @@ mod tests {
         NodeId::from_index(n)
     }
 
-    #[test]
-    fn diff_cv_skipped_emits_skipped_true_for_new_nodes() {
-        let prev = vec![(cv_nid(1), 100.0)];
-        let next = vec![(cv_nid(1), 100.0), (cv_nid(2), 2000.0)];
-        let events = diff_cv_skipped(&prev, &next);
-        assert_eq!(events, vec![ContentVisibilityChange { node: cv_nid(2), skipped: true }]);
+    fn cv_state(pairs: &[(usize, bool)]) -> std::collections::HashMap<NodeId, bool> {
+        pairs.iter().map(|&(n, s)| (cv_nid(n), s)).collect()
     }
 
     #[test]
-    fn diff_cv_skipped_emits_skipped_false_for_removed_nodes() {
-        let prev = vec![(cv_nid(1), 100.0), (cv_nid(2), 2000.0)];
-        let next = vec![(cv_nid(2), 2000.0)];
-        let events = diff_cv_skipped(&prev, &next);
-        assert_eq!(events, vec![ContentVisibilityChange { node: cv_nid(1), skipped: false }]);
+    fn diff_cv_state_emits_on_first_observation_both_ways() {
+        // CSS Contain L2 §4.1: the first observation of an element fires in
+        // BOTH directions — this is what
+        // `content-visibility-auto-state-changed-first-observation.html`
+        // asserts, and what the old "new node ⇒ skipped: true" diff could not
+        // express at all.
+        let events = diff_cv_state(
+            &cv_state(&[]),
+            &[(cv_nid(1), false), (cv_nid(2), true)],
+        );
+        assert_eq!(events, vec![
+            ContentVisibilityChange { node: cv_nid(1), skipped: false },
+            ContentVisibilityChange { node: cv_nid(2), skipped: true },
+        ]);
     }
 
     #[test]
-    fn diff_cv_skipped_no_changes_no_events() {
-        let state = vec![(cv_nid(1), 100.0)];
-        assert!(diff_cv_skipped(&state, &state).is_empty());
-        assert!(diff_cv_skipped(&[], &[]).is_empty());
+    fn diff_cv_state_emits_on_transition_only() {
+        let prev = cv_state(&[(1, false), (2, true)]);
+        let events = diff_cv_state(&prev, &[(cv_nid(1), true), (cv_nid(2), true)]);
+        assert_eq!(events, vec![ContentVisibilityChange { node: cv_nid(1), skipped: true }]);
     }
 
     #[test]
-    fn collect_cv_skipped_finds_collapsed_auto_boxes() {
+    fn diff_cv_state_is_silent_for_a_removed_node() {
+        // `content-visibility-auto-state-changed-removed.html`: a disconnected
+        // element must not be told anything, so a node that left the tree is
+        // not a state change.
+        let prev = cv_state(&[(1, true), (2, false)]);
+        assert!(diff_cv_state(&prev, &[(cv_nid(2), false)]).is_empty());
+        assert!(diff_cv_state(&cv_state(&[]), &[]).is_empty());
+    }
+
+    #[test]
+    fn collect_cv_auto_reports_every_auto_box_with_its_state() {
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
-        let html = r#"<div class="spacer"></div><div class="cv"><span>off</span></div>"#;
+        let html = r#"<div class="cv"><span>on</span></div>
+                      <div class="spacer"></div><div class="cv"><span>off</span></div>"#;
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(
             ".spacer { height: 2000px; } .cv { content-visibility: auto; }",
@@ -30626,25 +30745,54 @@ mod tests {
         let lb = lumen_layout::layout(&doc, &sheet, Size::new(300.0, 300.0));
         let _ = lumen_layout::take_cv_skipped();
         let mut found = Vec::new();
-        collect_cv_skipped(&lb, &mut found);
-        assert_eq!(found.len(), 1, "ровно один пропущенный auto-бокс");
-        assert!(found[0].1 >= 2000.0, "top_y — позиция схлопнутого бокса");
+        collect_cv_auto(&lb, &mut found);
+        assert_eq!(found.len(), 2, "оба auto-бокса, а не только пропущенный");
+        let states: Vec<bool> = found
+            .iter()
+            .map(|&(_, top)| lumen_layout::cv_is_skipped(false, top, 0.0, 300.0))
+            .collect();
+        assert_eq!(states, vec![false, true], "первый во вьюпорте, второй под ним");
     }
 
     #[test]
-    fn collect_cv_skipped_ignores_on_screen_auto_boxes() {
+    fn collect_cv_auto_reports_an_empty_auto_box_by_position() {
+        // BUG-852: an empty `content-visibility: auto` element used to be
+        // indistinguishable from a skipped one ("no children ⇒ skipped"), so
+        // one in the viewport reported the wrong state and layout never even
+        // consulted the rule for it. Position decides now, emptiness does not.
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
-        let html = r#"<div class="cv"><div class="inner"></div></div>"#;
-        let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse(
-            ".cv { content-visibility: auto; } .inner { height: 50px; }",
-        );
+        let doc = lumen_html_parser::parse(r#"<div class="cv"></div>"#);
+        let sheet = lumen_css_parser::parse(".cv { content-visibility: auto; }");
         let lb = lumen_layout::layout(&doc, &sheet, Size::new(300.0, 300.0));
         let _ = lumen_layout::take_cv_skipped();
         let mut found = Vec::new();
-        collect_cv_skipped(&lb, &mut found);
-        assert!(found.is_empty(), "видимый auto-бокс выложен и не считается skipped");
+        collect_cv_auto(&lb, &mut found);
+        assert_eq!(found.len(), 1, "пустой auto-бокс тоже наблюдается");
+        assert!(
+            !lumen_layout::cv_is_skipped(false, found[0].1, 0.0, 300.0),
+            "он в начале страницы — значит relevant, а не пропущен"
+        );
+    }
+
+    #[test]
+    fn collect_cv_auto_reports_an_element_with_inline_content_once() {
+        // BUG-852: an anonymous box carries the parent's style, so an auto
+        // element with inline content produces TWO boxes reading
+        // `content-visibility: auto` — the element and its `InlineRun`. Without
+        // dedup by node `diff_cv_state` compares the second against a `prev`
+        // it has not updated yet and hands the page a second event for one
+        // change, which is the "already observed" rejection of
+        // `content-visibility-auto-state-changed-first-observation.html`.
+        lumen_layout::set_cv_scroll(0.0, 0.0);
+        lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+        let doc = lumen_html_parser::parse(r#"<div class="cv"><span>on</span></div>"#);
+        let sheet = lumen_css_parser::parse(".cv { content-visibility: auto; }");
+        let lb = lumen_layout::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let _ = lumen_layout::take_cv_skipped();
+        let mut found = Vec::new();
+        collect_cv_auto(&lb, &mut found);
+        assert_eq!(found.len(), 1, "один элемент — одна запись, анонимный бокс не в счёт");
     }
 
     fn expect_resolved_url(base: &str, href: &str) -> String {

@@ -698,6 +698,21 @@ function ToggleEvent(type, init) {
 ToggleEvent.prototype = Object.create(Event.prototype);
 ToggleEvent.prototype.constructor = ToggleEvent;
 
+// ContentVisibilityAutoStateChangeEvent — CSS Contain L2 §4.1 (BUG-852).
+// `skipped` is a readonly WebIDL boolean with a `false` default, so a member
+// left out (or set to `undefined`) counts as absent, and anything else goes
+// through the ordinary boolean conversion.
+function ContentVisibilityAutoStateChangeEvent(type, init) {
+    if (!new.target) throw new TypeError(\"Constructor ContentVisibilityAutoStateChangeEvent requires 'new'\");
+    Event.call(this, type, init);
+    var skipped = !!(init != null && init.skipped);
+    Object.defineProperty(this, 'skipped', {
+        get: function() { return skipped; }, enumerable: true, configurable: true
+    });
+}
+ContentVisibilityAutoStateChangeEvent.prototype = Object.create(Event.prototype);
+ContentVisibilityAutoStateChangeEvent.prototype.constructor = ContentVisibilityAutoStateChangeEvent;
+
 // ErrorEvent — uncaught script errors
 function ErrorEvent(type, init) {
     // WebIDL: an interface object is not callable (BUG-813,
@@ -1082,6 +1097,11 @@ var _LUMEN_EVENT_HANDLER_ATTRS = [
     'onclose', 'oncontextlost', 'oncontextmenu', 'oncontextrestored', 'oncopy',
     'oncuechange', 'oncut', 'ondblclick', 'ondrag', 'ondragend', 'ondragenter',
     'ondragleave', 'ondragover', 'ondragstart', 'ondrop', 'ondurationchange',
+    // CSS Contain L2 §4.1 — the `content-visibility: auto` state change. The
+    // content-attribute half already worked (`_lumen_is_on_attr_name` accepts
+    // any `on*`), so only the IDL accessor was missing — which is what
+    // `'oncontentvisibilityautostatechange' in el` asks about (BUG-852).
+    'oncontentvisibilityautostatechange',
     'onemptied', 'onencrypted', 'onended', 'onerror', 'onfocus', 'onformdata',
     // Fullscreen §4.2 — declared as plain `null` properties on the element
     // wrapper before BUG-390, i.e. an assignment landed on a throwaway wrapper
@@ -11987,6 +12007,27 @@ function _ro_content_geometry(nid, borderW, borderH) {
     var w = borderW - bl - br - pl - pr;
     var h = borderH - bt - bb - pt - pb;
     return { w: w > 0 ? w : 0, h: h > 0 ? h : 0, x: pl, y: pt };
+}
+
+// CSS Contain L2 §4.1 (BUG-852) — deliver the shell's batch of
+// `content-visibility: auto` state changes. `changes` is an array of
+// `[node_index, skipped]` pairs in tree order, computed inside the shell's
+// «update the rendering» step, so this call already *is* the queued task: the
+// page's own script cannot be on the stack here.
+//
+// `_lumen_dispatch` sets no target of its own (BUG-873), and a page watching
+// several elements through one listener has nothing else to tell them apart —
+// so the target is filled in here, the way `_lumen_details_fire_toggle` does.
+function _lumen_deliver_cv_state_changes(changes) {
+    if (!changes || changes.length === 0) return;
+    for (var i = 0; i < changes.length; i++) {
+        var nid = changes[i][0];
+        var evt = new ContentVisibilityAutoStateChangeEvent('contentvisibilityautostatechange', {
+            bubbles: false, cancelable: false, isTrusted: true, skipped: !!changes[i][1]
+        });
+        evt.target = _lumen_make_element(nid);
+        _lumen_dispatch(nid, evt);
+    }
 }
 
 function _lumen_deliver_resize_observers() {
