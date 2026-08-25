@@ -1333,10 +1333,15 @@ the time — read dates.
   declarations keep winning with no bookkeeping on our side. Non-obvious details for anyone touching
   this: the interceptor is installed at context creation, long before a document exists, and the
   document is published into a **thread-local** by every `install_dom` (so it follows navigation and
-  is simply inert in worker isolates); the lookup takes the document with `try_lock`, never `lock`,
-  because the interceptor fires on *any* global-name miss including one made by JS that a native
-  called while holding the document lock (a blocking take would deadlock the JS thread against
-  itself); and the returned value is built by calling the shim's own `_lumen_make_element`, so
+  is simply inert in worker isolates); the lookup takes the document through `lock_document_bounded`
+  rather than `lock`, because the interceptor fires on *any* global-name miss including one made by
+  JS that a native called while holding the document lock (a blocking take would deadlock the JS
+  thread against itself) — a bare `try_lock` is **not** enough either, since the window `load` event
+  is dispatched through the engine thread and therefore races the UI thread's own pass over the
+  document, which is the whole of [BUG-794](../bugs/BUG-794-FIXED.md): every named element in a
+  `load` handler was a `ReferenceError` while the same names worked in `DOMContentLoaded`, rAF and
+  timers, so the take now waits out a bounded 20 ms before declining; and the returned value is
+  built by calling the shim's own `_lumen_make_element`, so
   `window.probe === document.getElementById('probe')` holds by identity. Measured cost (A/B on one
   build): reads of an *existing* global are unchanged — the interceptor does not deoptimize global
   variable access — while an unresolved name costs ~0.75 µs vs ~0.02 µs on an 8-node document, an

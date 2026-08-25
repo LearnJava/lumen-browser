@@ -1491,73 +1491,73 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/text_track_store.rs:112` **fn** `set_text_track_store` — Install the text-track store from the shell
 `crates/js/src/text_track_store.rs:118` **fn** `get_text_track_store` — Return a clone of the installed store, or `None` in headless/CI mode
 `crates/js/src/v8_runtime.rs:55` **fn** `ensure_v8_platform` — Initialize the V8 platform for this process
-`crates/js/src/v8_runtime.rs:607` **struct** `DomTouched` — BUG-341 S7 — outcome of draining the page-side DOM-mutation tracker since
-`crates/js/src/v8_runtime.rs:629` **type** `CustomPropertySnapshot` — Per-node snapshot of resolved CSS custom properties: node id → the map of
-`crates/js/src/v8_runtime.rs:636` **struct** `V8JsRuntime` — V8-backed JS runtime implementing [`JsRuntime`]
-`crates/js/src/v8_runtime.rs:807` **fn** `set_global_user_agent_override` — Set (or clear with `None`) the process-global `navigator.userAgent` override
-`crates/js/src/v8_runtime.rs:824` **fn** `user_agent_override_script` — Build the JS snippet that redefines `navigator.userAgent` to `ua`
-`crates/js/src/v8_runtime.rs:840` **fn** `set_global_timezone_override` — Set (or clear with `None`) the process-global IANA timezone override
-`crates/js/src/v8_runtime.rs:874` **fn** `timezone_override_script` — Build the JS snippet that sets the global timezone-override marker
-`crates/js/src/v8_runtime.rs:902` **fn** `new` — Create a new V8 runtime on a dedicated thread
-`crates/js/src/v8_runtime.rs:966` **fn** `set_cookie_banner_dismiss` — Set whether the cookie-banner auto-dismiss shim (7C.3) is injected on
-`crates/js/src/v8_runtime.rs:978` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
-`crates/js/src/v8_runtime.rs:994` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS
-`crates/js/src/v8_runtime.rs:1022` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's
-`crates/js/src/v8_runtime.rs:1055` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
-`crates/js/src/v8_runtime.rs:1063` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/v8_runtime.rs:1072` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/v8_runtime.rs:1080` **fn** `take_print_requests` — Drain all print requests queued by `window.print()`
-`crates/js/src/v8_runtime.rs:1096` **fn** `set_deterministic_mode` — Enable or disable deterministic render mode (8F) before calling `install_dom`
-`crates/js/src/v8_runtime.rs:1112` **fn** `with_sw_worker_store` — Attach a `SwWorkerStore` so that `_lumen_sw_activate_script` can spawn and
-`crates/js/src/v8_runtime.rs:1125` **fn** `with_session_storage` — Attach the browsing context's `sessionStorage` partition (BUG-836)
-`crates/js/src/v8_runtime.rs:1132` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/v8_runtime.rs:1139` **fn** `take_dom_touched` — BUG-341 S7: drain the set of nodes touched by tracked DOM-mutation
-`crates/js/src/v8_runtime.rs:1145` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/v8_runtime.rs:1151` **fn** `has_raf_pending` — Non-consuming peek: `true` if rAF callbacks are queued
-`crates/js/src/v8_runtime.rs:1157` **fn** `raf_pending_flag` — ADR-016 M2.3: shared, lock-free handle to the rAF-pending flag
-`crates/js/src/v8_runtime.rs:1163` **fn** `dom_dirty_flag` — ADR-016 M2.3: shared, lock-free handle to the DOM-dirty flag
-`crates/js/src/v8_runtime.rs:1169` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/v8_runtime.rs:1175` **fn** `update_viewport_size` — Update the current viewport dimensions
-`crates/js/src/v8_runtime.rs:1181` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by JS
-`crates/js/src/v8_runtime.rs:1187` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
-`crates/js/src/v8_runtime.rs:1193` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
-`crates/js/src/v8_runtime.rs:1199` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy`
-`crates/js/src/v8_runtime.rs:1211` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY`/`pageYOffset`
-`crates/js/src/v8_runtime.rs:1220` **fn** `fire_element_scroll` — Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`
-`crates/js/src/v8_runtime.rs:1230` **fn** `fire_window_scroll` — Fire a non-bubbling `scroll` Event on the `window` object (page scroll)
-`crates/js/src/v8_runtime.rs:1248` **fn** `page_scrollend_due` — BUG-822: decide whether this rendering update owes a `scrollend` on the
-`crates/js/src/v8_runtime.rs:1260` **fn** `fire_element_scrollend` — Fire a non-bubbling `scrollend` Event on the DOM element identified by `nid`
-`crates/js/src/v8_runtime.rs:1269` **fn** `fire_window_scrollend` — Fire a non-bubbling `scrollend` Event on the `window` object (page scroll)
-`crates/js/src/v8_runtime.rs:1278` **fn** `fire_snap_changing` — Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container
-`crates/js/src/v8_runtime.rs:1284` **fn** `fire_snap_changed` — Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container
-`crates/js/src/v8_runtime.rs:1308` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/v8_runtime.rs:1317` **fn** `update_custom_properties` — Push a fresh snapshot of resolved CSS custom properties into the JS
-`crates/js/src/v8_runtime.rs:1327` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
-`crates/js/src/v8_runtime.rs:1338` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
-`crates/js/src/v8_runtime.rs:1344` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
-`crates/js/src/v8_runtime.rs:1350` **fn** `take_history_url_updates` — Drain `history.pushState`/`history.replaceState` URL-update notifications
-`crates/js/src/v8_runtime.rs:1356` **fn** `take_history_traversals` — Drain all `history.go(n)`/back/forward traversal deltas queued by JS
-`crates/js/src/v8_runtime.rs:1362` **fn** `take_nav_updates` — Drain all Navigation API update requests queued by `_lumen_navigation_request`
-`crates/js/src/v8_runtime.rs:1368` **fn** `take_nav_intercept_result` — Drain `NavigateEvent` intercept results queued during event dispatch
-`crates/js/src/v8_runtime.rs:1374` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()`/`exitFullscreen()`
-`crates/js/src/v8_runtime.rs:1380` **fn** `take_view_transition_events` — Drain CSS View Transition events queued by `document.startViewTransition()` natives
-`crates/js/src/v8_runtime.rs:1388` **fn** `take_focus_requests` — Drain JS dialog focus requests queued by `_lumen_request_focus`/`_lumen_request_blur`
-`crates/js/src/v8_runtime.rs:1397` **fn** `pointer_capture_nid` — Returns the DOM node nid that currently holds pointer capture (pointer_id=1)
-`crates/js/src/v8_runtime.rs:1405` **fn** `take_pointer_capture` — Release the active pointer capture, returning the former capture target nid
-`crates/js/src/v8_runtime.rs:1422` **fn** `flush_canvas_updates` — Drain dirty `<canvas>` 2D buffers for GPU re-upload. Mirrors
-`crates/js/src/v8_runtime.rs:1434` **fn** `register_img_bitmaps` — Register decoded `<img>` bitmaps for canvas `drawImage`, keyed by node id
-`crates/js/src/v8_runtime.rs:1452` **fn** `register_frame_document` — BUG-480 срез 3: зарегистрировать загруженный под-документ `<iframe>` для доступа из
-`crates/js/src/v8_runtime.rs:1491` **fn** `register_parent_document` — BUG-480 срез 3: зарегистрировать документ **родителя** в JS-контексте
-`crates/js/src/v8_runtime.rs:1522` **fn** `register_top_document` — BUG-480 срез 3: зарегистрировать документ **верха** в JS-контексте
-`crates/js/src/v8_runtime.rs:1555` **fn** `debug_heap_stats` — V8 isolate heap statistics: `(total_heap_size, used_heap_size)` in bytes
-`crates/js/src/v8_runtime.rs:1568` **fn** `set_import_map` — Install the import map (HTML LS §8.1.6.2) used to resolve bare module
-`crates/js/src/v8_runtime.rs:1695` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
-`crates/js/src/v8_runtime.rs:1766` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
-`crates/js/src/v8_runtime.rs:6546` **fn** `eval_and_report` — Evaluate a classic top-level `<script>` body exactly like
-`crates/js/src/v8_runtime.rs:6560` **fn** `eval_and_report_via` — [`Self::eval_and_report`] with the reporting function named explicitly
-`crates/js/src/v8_runtime.rs:6606` **fn** `eval_module_and_report` — Evaluate `source` as the entry ES module of a top-level page load
-`crates/js/src/v8_runtime.rs:6630` **fn** `eval_module_at_and_report` — External-module counterpart of [`Self::eval_module_and_report`], for
-`crates/js/src/v8_runtime.rs:6640` **fn** `eval_module_at_and_report_via` — [`Self::eval_module_at_and_report`] with the reporting function named
+`crates/js/src/v8_runtime.rs:646` **struct** `DomTouched` — BUG-341 S7 — outcome of draining the page-side DOM-mutation tracker since
+`crates/js/src/v8_runtime.rs:668` **type** `CustomPropertySnapshot` — Per-node snapshot of resolved CSS custom properties: node id → the map of
+`crates/js/src/v8_runtime.rs:675` **struct** `V8JsRuntime` — V8-backed JS runtime implementing [`JsRuntime`]
+`crates/js/src/v8_runtime.rs:846` **fn** `set_global_user_agent_override` — Set (or clear with `None`) the process-global `navigator.userAgent` override
+`crates/js/src/v8_runtime.rs:863` **fn** `user_agent_override_script` — Build the JS snippet that redefines `navigator.userAgent` to `ua`
+`crates/js/src/v8_runtime.rs:879` **fn** `set_global_timezone_override` — Set (or clear with `None`) the process-global IANA timezone override
+`crates/js/src/v8_runtime.rs:913` **fn** `timezone_override_script` — Build the JS snippet that sets the global timezone-override marker
+`crates/js/src/v8_runtime.rs:941` **fn** `new` — Create a new V8 runtime on a dedicated thread
+`crates/js/src/v8_runtime.rs:1005` **fn** `set_cookie_banner_dismiss` — Set whether the cookie-banner auto-dismiss shim (7C.3) is injected on
+`crates/js/src/v8_runtime.rs:1017` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
+`crates/js/src/v8_runtime.rs:1033` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS
+`crates/js/src/v8_runtime.rs:1061` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's
+`crates/js/src/v8_runtime.rs:1094` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
+`crates/js/src/v8_runtime.rs:1102` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/v8_runtime.rs:1111` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/v8_runtime.rs:1119` **fn** `take_print_requests` — Drain all print requests queued by `window.print()`
+`crates/js/src/v8_runtime.rs:1135` **fn** `set_deterministic_mode` — Enable or disable deterministic render mode (8F) before calling `install_dom`
+`crates/js/src/v8_runtime.rs:1151` **fn** `with_sw_worker_store` — Attach a `SwWorkerStore` so that `_lumen_sw_activate_script` can spawn and
+`crates/js/src/v8_runtime.rs:1164` **fn** `with_session_storage` — Attach the browsing context's `sessionStorage` partition (BUG-836)
+`crates/js/src/v8_runtime.rs:1171` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/v8_runtime.rs:1178` **fn** `take_dom_touched` — BUG-341 S7: drain the set of nodes touched by tracked DOM-mutation
+`crates/js/src/v8_runtime.rs:1184` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/v8_runtime.rs:1190` **fn** `has_raf_pending` — Non-consuming peek: `true` if rAF callbacks are queued
+`crates/js/src/v8_runtime.rs:1196` **fn** `raf_pending_flag` — ADR-016 M2.3: shared, lock-free handle to the rAF-pending flag
+`crates/js/src/v8_runtime.rs:1202` **fn** `dom_dirty_flag` — ADR-016 M2.3: shared, lock-free handle to the DOM-dirty flag
+`crates/js/src/v8_runtime.rs:1208` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/v8_runtime.rs:1214` **fn** `update_viewport_size` — Update the current viewport dimensions
+`crates/js/src/v8_runtime.rs:1220` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by JS
+`crates/js/src/v8_runtime.rs:1226` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
+`crates/js/src/v8_runtime.rs:1232` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
+`crates/js/src/v8_runtime.rs:1238` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy`
+`crates/js/src/v8_runtime.rs:1250` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY`/`pageYOffset`
+`crates/js/src/v8_runtime.rs:1259` **fn** `fire_element_scroll` — Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`
+`crates/js/src/v8_runtime.rs:1269` **fn** `fire_window_scroll` — Fire a non-bubbling `scroll` Event on the `window` object (page scroll)
+`crates/js/src/v8_runtime.rs:1287` **fn** `page_scrollend_due` — BUG-822: decide whether this rendering update owes a `scrollend` on the
+`crates/js/src/v8_runtime.rs:1299` **fn** `fire_element_scrollend` — Fire a non-bubbling `scrollend` Event on the DOM element identified by `nid`
+`crates/js/src/v8_runtime.rs:1308` **fn** `fire_window_scrollend` — Fire a non-bubbling `scrollend` Event on the `window` object (page scroll)
+`crates/js/src/v8_runtime.rs:1317` **fn** `fire_snap_changing` — Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container
+`crates/js/src/v8_runtime.rs:1323` **fn** `fire_snap_changed` — Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container
+`crates/js/src/v8_runtime.rs:1347` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/v8_runtime.rs:1356` **fn** `update_custom_properties` — Push a fresh snapshot of resolved CSS custom properties into the JS
+`crates/js/src/v8_runtime.rs:1366` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
+`crates/js/src/v8_runtime.rs:1377` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
+`crates/js/src/v8_runtime.rs:1383` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
+`crates/js/src/v8_runtime.rs:1389` **fn** `take_history_url_updates` — Drain `history.pushState`/`history.replaceState` URL-update notifications
+`crates/js/src/v8_runtime.rs:1395` **fn** `take_history_traversals` — Drain all `history.go(n)`/back/forward traversal deltas queued by JS
+`crates/js/src/v8_runtime.rs:1401` **fn** `take_nav_updates` — Drain all Navigation API update requests queued by `_lumen_navigation_request`
+`crates/js/src/v8_runtime.rs:1407` **fn** `take_nav_intercept_result` — Drain `NavigateEvent` intercept results queued during event dispatch
+`crates/js/src/v8_runtime.rs:1413` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()`/`exitFullscreen()`
+`crates/js/src/v8_runtime.rs:1419` **fn** `take_view_transition_events` — Drain CSS View Transition events queued by `document.startViewTransition()` natives
+`crates/js/src/v8_runtime.rs:1427` **fn** `take_focus_requests` — Drain JS dialog focus requests queued by `_lumen_request_focus`/`_lumen_request_blur`
+`crates/js/src/v8_runtime.rs:1436` **fn** `pointer_capture_nid` — Returns the DOM node nid that currently holds pointer capture (pointer_id=1)
+`crates/js/src/v8_runtime.rs:1444` **fn** `take_pointer_capture` — Release the active pointer capture, returning the former capture target nid
+`crates/js/src/v8_runtime.rs:1461` **fn** `flush_canvas_updates` — Drain dirty `<canvas>` 2D buffers for GPU re-upload. Mirrors
+`crates/js/src/v8_runtime.rs:1473` **fn** `register_img_bitmaps` — Register decoded `<img>` bitmaps for canvas `drawImage`, keyed by node id
+`crates/js/src/v8_runtime.rs:1491` **fn** `register_frame_document` — BUG-480 срез 3: зарегистрировать загруженный под-документ `<iframe>` для доступа из
+`crates/js/src/v8_runtime.rs:1530` **fn** `register_parent_document` — BUG-480 срез 3: зарегистрировать документ **родителя** в JS-контексте
+`crates/js/src/v8_runtime.rs:1561` **fn** `register_top_document` — BUG-480 срез 3: зарегистрировать документ **верха** в JS-контексте
+`crates/js/src/v8_runtime.rs:1594` **fn** `debug_heap_stats` — V8 isolate heap statistics: `(total_heap_size, used_heap_size)` in bytes
+`crates/js/src/v8_runtime.rs:1607` **fn** `set_import_map` — Install the import map (HTML LS §8.1.6.2) used to resolve bare module
+`crates/js/src/v8_runtime.rs:1734` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
+`crates/js/src/v8_runtime.rs:1805` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
+`crates/js/src/v8_runtime.rs:6585` **fn** `eval_and_report` — Evaluate a classic top-level `<script>` body exactly like
+`crates/js/src/v8_runtime.rs:6599` **fn** `eval_and_report_via` — [`Self::eval_and_report`] with the reporting function named explicitly
+`crates/js/src/v8_runtime.rs:6645` **fn** `eval_module_and_report` — Evaluate `source` as the entry ES module of a top-level page load
+`crates/js/src/v8_runtime.rs:6669` **fn** `eval_module_at_and_report` — External-module counterpart of [`Self::eval_module_and_report`], for
+`crates/js/src/v8_runtime.rs:6679` **fn** `eval_module_at_and_report_via` — [`Self::eval_module_at_and_report`] with the reporting function named
 `crates/js/src/video_gif_store.rs:36` **struct** `VideoPlaybackState` — Per-`<video>` playback timing, stored by the shell after a GIF is decoded
 `crates/js/src/video_gif_store.rs:57` **fn** `current_ms` — Playback position in ms at a given real-clock instant
 `crates/js/src/video_gif_store.rs:66` **fn** `is_ended` — Whether playback has naturally ended (finite loop count exhausted)
