@@ -4814,7 +4814,13 @@ fn print_media_context(viewport: Size, dark_mode: bool) -> lumen_css_parser::Med
     }
 }
 
-fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>, media_ctx: &lumen_css_parser::MediaContext) -> String {
+/// Загрузить все `<link rel=stylesheet>` документа и склеить их текст.
+///
+/// Второй элемент результата — исход по каждому элементу (`узел`, `получен
+/// ли лист`) в порядке объявления, для BUG-804: `load`/`error` принадлежат
+/// элементу `<link>`, а знает исход только этот проход. Раньше провал просто
+/// логировался, и страница не могла отличить загруженный лист от 404.
+fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>, media_ctx: &lumen_css_parser::MediaContext) -> (String, Vec<(NodeId, bool)>) {
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs, media_ctx);
 
@@ -4823,7 +4829,7 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
     // Каждый лист резолвит собственные `@import` относительно СВОЕГО URL
     // (`sheet_base`), чтобы вложенные импорты (`<link href="/css/a.css">` →
     // `@import "b.css"` = `/css/b.css`) разрешались корректно.
-    let parts = parallel_map(&hrefs, |_, href| {
+    let parts = parallel_map(&hrefs, |_, (_, href)| {
         let (text, sheet_base) = fetch_stylesheet_text(href, base, sink, cookie_jar.clone())?;
         Some(inline_css_imports(
             &text,
@@ -4837,11 +4843,15 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
     });
 
     let mut css = String::new();
-    for part in parts.into_iter().flatten() {
-        css.push_str(&part);
-        css.push('\n');
+    let mut outcomes = Vec::with_capacity(parts.len());
+    for ((node, _), part) in hrefs.iter().zip(parts) {
+        outcomes.push((*node, part.is_some()));
+        if let Some(part) = part {
+            css.push_str(&part);
+            css.push('\n');
+        }
     }
-    css
+    (css, outcomes)
 }
 
 /// Загружает текст одной таблицы стилей, разрешённой относительно `base`.
@@ -5002,7 +5012,13 @@ fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
         .any(|w| w.eq_ignore_ascii_case(needle))
 }
 
-fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<String>, media_ctx: &lumen_css_parser::MediaContext) {
+/// Собрать `(узел, href)` каждого `<link rel=stylesheet>`, который попадёт в
+/// каскад.
+///
+/// Узел нужен BUG-804: по нему [`load_linked_stylesheets`] потом сообщает
+/// JS-стороне исход загрузки, чтобы элемент выстрелил `load`/`error`. Раньше
+/// собирались одни адреса, и связи «этот лист — этот элемент» не существовало.
+fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<(NodeId, String)>, media_ctx: &lumen_css_parser::MediaContext) {
     let node = doc.get(id);
     if let NodeData::Element { name, attrs } = &node.data
         && name.local == "link"
@@ -5029,7 +5045,7 @@ fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<String>, media_c
             && !href.is_empty()
             && link_media_matches(media, media_ctx)
         {
-            out.push(href.to_owned());
+            out.push((id, href.to_owned()));
         }
         return;
     }
@@ -5791,7 +5807,7 @@ fn parse_and_layout(
     }
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
-    let (css, dynamic_css) = {
+    let (css, dynamic_css, link_outcomes) = {
         let _s = lumen_core::trace::span("fetch-css", "net");
         let d = doc_arc.lock().unwrap();
         let link_media_ctx = if media_print {
@@ -5817,7 +5833,7 @@ fn parse_and_layout(
         // единого сетевого запроса. `inline_css_imports` возвращает
         // `<импорты> + <исходный текст>`, поэтому префикс = всё до хвоста.
         let imports_prefix = css[..css.len() - inline.len()].to_owned();
-        let linked = load_linked_stylesheets(
+        let (linked, link_outcomes) = load_linked_stylesheets(
             &d,
             base,
             sink,
@@ -5830,8 +5846,33 @@ fn parse_and_layout(
             linked,
             inline_fp: inline_style_fingerprint(&d),
         };
-        (css, dyn_css)
+        (css, dyn_css, link_outcomes)
     };
+
+    // BUG-804: HTML LS §4.6.7 «process the linked resource» — каждый
+    // `<link rel=stylesheet>` обязан сообщить странице `load` или `error`.
+    // Отчёт уходит отсюда, а не из шима: лист грузит проход выше, и только он
+    // знает исход — повторный фетч из JS дал бы второй запрос и всё равно не
+    // отличил бы «лист в каскаде» от «байты пришли». Элемент, который уже
+    // отчитался сам (вставленный скриптом — он проходит через
+    // `_lumen_link_prepare` ЕЩЁ ДО этого прохода, скрипты выполняются раньше),
+    // отсекается общим пер-узловым флагом на JS-стороне.
+    #[cfg(feature = "v8")]
+    if let Some(js) = &js_ctx
+        && !link_outcomes.is_empty()
+    {
+        use std::fmt::Write as _;
+        let mut arg = String::with_capacity(link_outcomes.len() * 8 + 40);
+        arg.push_str("_lumen_deliver_parser_link_events([");
+        for (i, (node, ok)) in link_outcomes.iter().enumerate() {
+            if i > 0 {
+                arg.push(',');
+            }
+            let _ = write!(arg, "{},{}", node.index(), u8::from(*ok));
+        }
+        arg.push_str("]);");
+        js.eval_js(&arg);
+    }
 
     let sheet = {
         let _s = lumen_core::trace::span("parse-css", "parse");
@@ -31155,7 +31196,38 @@ mod tests {
         );
         let mut hrefs = Vec::new();
         collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
-        assert_eq!(hrefs, vec!["style.css"]);
+        let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h)| h.as_str()).collect();
+        assert_eq!(only_hrefs, vec!["style.css"]);
+    }
+
+    /// BUG-804: исход каждого `<link rel=stylesheet>` возвращается по узлам, в
+    /// порядке объявления, и провал не выпадает из списка — иначе элементу
+    /// негде выстрелить `error`. `samples/` заведомо не содержит этих файлов,
+    /// так что оба листа тут «не пришли»; проверяется связь узел↔исход, а не
+    /// сеть.
+    #[test]
+    fn load_linked_stylesheets_reports_one_outcome_per_element() {
+        struct NullSink;
+        impl EventSink for NullSink {
+            fn emit(&self, _event: &Event) {}
+        }
+        let doc = lumen_html_parser::parse(
+            r#"<html><head>
+                 <link rel="stylesheet" href="b804-no-such-a.css">
+                 <link rel="alternate" href="ignored.css">
+                 <link rel="stylesheet" href="b804-no-such-b.css">
+               </head><body></body></html>"#,
+        );
+        let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+        let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+        let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
+        let (css, outcomes) = load_linked_stylesheets(&doc, &base, &sink, None, &ctx);
+        assert!(css.is_empty(), "neither sheet exists on disk");
+        assert_eq!(outcomes.len(), 2, "rel=alternate is not a cascade sheet");
+        assert!(outcomes.iter().all(|(_, ok)| !ok));
+        // Разные элементы — разные узлы: без этого страница не смогла бы
+        // отличить, какой именно `<link>` отчитался.
+        assert_ne!(outcomes[0].0, outcomes[1].0);
     }
 
     // ──────────────── @import file loading (CSS Cascade L4 §6.5) ─────────────
@@ -31354,7 +31426,8 @@ mod tests {
         let mut hrefs = Vec::new();
         collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
         // print.css отсеян; huge.css отсеян (viewport 1024px < 5000px); остальные — да.
-        assert_eq!(hrefs, vec!["screen.css", "all.css", "plain.css", "wide.css"]);
+        let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h)| h.as_str()).collect();
+        assert_eq!(only_hrefs, vec!["screen.css", "all.css", "plain.css", "wide.css"]);
     }
 
     #[test]
@@ -31590,7 +31663,8 @@ mod tests {
         );
         let mut hrefs = Vec::new();
         collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
-        assert_eq!(hrefs, vec!["a.css", "b.css"]);
+        let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h)| h.as_str()).collect();
+        assert_eq!(only_hrefs, vec!["a.css", "b.css"]);
     }
 
     fn args(items: &[&str]) -> Vec<String> {
