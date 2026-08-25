@@ -4584,6 +4584,215 @@ fn assign_first_line_style(
     }
 }
 
+/// Ширина схлопнутого пробела, которым текстовый прогон граничит с соседом по
+/// строке. Повторяет выбор шрифта из [`wrap_inline_run`]: кегль — контейнера,
+/// семейство — первого сегмента, иначе прогон и зазор перед ним меряются
+/// разными шрифтами (BUG-128).
+fn inline_space_width(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>) -> f32 {
+    let (Some(m), BoxKind::InlineRun { segments, .. }) = (measurer, &b.kind) else {
+        return 0.0;
+    };
+    let em = b.style.font_size;
+    segments.first().map_or_else(
+        || m.char_width(' ', em),
+        |seg| m.char_width_with_families(' ', em, &seg.style.font_family),
+    )
+}
+
+/// CSS Text L3 §4.1.1 — схлопнутый пробел, с которого текстовый прогон
+/// начинается: `wrap_inline_run` срезает пробел в начале строки, поэтому зазор
+/// между предшествующим atomic inline и текстом не записан больше нигде.
+///
+/// Считается по сегментам, а не по строкам: значение нужно ДО раскладки
+/// прогона, чтобы знать, с какого x его класть.
+fn inline_run_lead_space(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>) -> f32 {
+    let BoxKind::InlineRun { segments, .. } = &b.kind else {
+        return 0.0;
+    };
+    if b.style.white_space.preserves_whitespace() {
+        // Пробел сохранён в самом сегменте — он уже внутри фрагментов.
+        return 0.0;
+    }
+    let starts_ws = segments
+        .iter()
+        .find(|seg| !seg.text.is_empty())
+        .is_some_and(|seg| seg.text.starts_with(|c: char| c.is_whitespace()));
+    if starts_ws { inline_space_width(b, measurer) } else { 0.0 }
+}
+
+/// Насколько текстовый прогон продвигает inline formatting context — ширина его
+/// ПОСЛЕДНЕЙ строки плюс схлопнутый пробел, которым он заканчивается.
+///
+/// Бокс прогона широк ровно настолько, сколько ему предложили, а не настолько,
+/// сколько занял текст, поэтому продвигаться по `rect.width` нельзя: следующий
+/// atomic inline всегда оказывался бы за правым краем контейнера и переносился
+/// на свою строку (IFC-1 — «Aa <span inline-block> Bb» раскладывался тремя
+/// строками вместо одной). Важна только последняя строка: все предыдущие
+/// закончились мягким переносом, и контент после прогона продолжает именно её.
+fn inline_run_advance(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>) -> f32 {
+    let BoxKind::InlineRun { segments, lines, .. } = &b.kind else {
+        return b.rect.width;
+    };
+    let Some(last) = lines.last() else {
+        // Раскладки не было (нет measurer) — прежнее поведение.
+        return b.rect.width;
+    };
+    let extent = last
+        .iter()
+        .map(|f| f.x + f.width)
+        .fold(0.0_f32, f32::max);
+    let trail = if b.style.white_space.preserves_whitespace() {
+        0.0
+    } else {
+        let ends_ws = segments
+            .iter()
+            .rev()
+            .find(|seg| !seg.text.is_empty())
+            .is_some_and(|seg| seg.text.ends_with(|c: char| c.is_whitespace()));
+        if ends_ws { inline_space_width(b, measurer) } else { 0.0 }
+    };
+    extent + trail
+}
+
+/// CSS 2.1 §10.8.1 — расстояние от верхней кромки border box до базовой линии,
+/// которую бокс предлагает своему inline formatting context. `None` означает,
+/// что такой линии нет и выравнивать бокс надо по нижней кромке margin box:
+/// замещаемый элемент, пустой `inline-block` или `inline-block` с `overflow`,
+/// отличным от `visible`.
+fn inline_baseline(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>) -> Option<f32> {
+    match &b.kind {
+        BoxKind::InlineRun { .. } => {
+            let m = measurer?;
+            let em = b.style.font_size;
+            let line_h = step_line_height(em * b.style.line_height, b.style.line_height_step);
+            // Базовая линия — у ПОСЛЕДНЕЙ строки прогона: именно её продолжает
+            // контент, стоящий за прогоном. Отсчитывается от высоты бокса, а не
+            // как `(n-1) * line_h`, чтобы не разойтись с `::first-line` и
+            // `line-height-step`, которые делают строки разновысокими.
+            let half_leading = (line_h - (m.ascent_px(em) + m.descent_px(em))) / 2.0;
+            Some(b.rect.height - line_h + half_leading + m.ascent_px(em))
+        }
+        // Базовая линия замещаемого элемента — нижняя кромка margin box.
+        BoxKind::Image { .. }
+        | BoxKind::Video { .. }
+        | BoxKind::Canvas { .. }
+        | BoxKind::Audio { .. }
+        | BoxKind::Iframe { .. }
+        | BoxKind::SvgRoot { .. } => None,
+        _ => {
+            if b.style.overflow_x != Overflow::Visible || b.style.overflow_y != Overflow::Visible {
+                return None;
+            }
+            if let BoxKind::FormControl { kind } = &b.kind
+                && !form_control_has_text_baseline(kind)
+            {
+                return None;
+            }
+            if let Some(bl) = last_in_flow_baseline(b, measurer) {
+                return Some(bl);
+            }
+            // HTML §15.5 — у текстового контрола line box своего потока нет
+            // (значение рисует виджет), но базовая линия у него есть, и браузеры
+            // берут её по тексту, а не по нижней кромке. Строка ставится по
+            // центру content box — ровно так, как её рисует
+            // `emit_input_value_text`, иначе раскладка и отрисовка разъедутся.
+            if matches!(b.kind, BoxKind::FormControl { .. }) {
+                let m = measurer?;
+                let s = &b.style;
+                let em = s.font_size;
+                let pt = s.padding_top.resolve_or_zero(em, 0.0, Size::ZERO);
+                let pb = s.padding_bottom.resolve_or_zero(em, 0.0, Size::ZERO);
+                let inner_h = (b.rect.height
+                    - s.border_top_width
+                    - s.border_bottom_width
+                    - pt
+                    - pb)
+                    .max(0.0);
+                let line_h = step_line_height(em * s.line_height, s.line_height_step);
+                let half_leading = (line_h - (m.ascent_px(em) + m.descent_px(em))) / 2.0;
+                return Some(
+                    s.border_top_width
+                        + pt
+                        + ((inner_h - line_h) / 2.0).max(0.0)
+                        + half_leading
+                        + m.ascent_px(em),
+                );
+            }
+            None
+        }
+    }
+}
+
+/// Несёт ли контрол текст, по которому браузер берёт его базовую линию.
+///
+/// `checkbox`/`radio`/`color`/`file`/`range`/`progress`/`meter` — замещаемые
+/// виджеты без текста: их базовая линия — нижняя кромка margin box (CSS 2.1
+/// §10.8.1), и синтезировать текстовую линию для них значит поднять контрол над
+/// строкой. `<textarea>` тоже выравнивается по нижней кромке (проверено против
+/// Edge на TEST-34: `<select>` рядом с ним садится НИЖЕ его нижнего края —
+/// значит базовая линия строки идёт по textarea, а не по его первой строке).
+fn form_control_has_text_baseline(kind: &FormControlKind) -> bool {
+    match kind {
+        FormControlKind::Button | FormControlKind::Select { .. } => true,
+        FormControlKind::Input { input_type, .. } => matches!(
+            input_type,
+            lumen_dom::InputType::Text
+                | lumen_dom::InputType::Password
+                | lumen_dom::InputType::Email
+                | lumen_dom::InputType::Tel
+                | lumen_dom::InputType::Url
+                | lumen_dom::InputType::Number
+                | lumen_dom::InputType::Search
+                | lumen_dom::InputType::Date
+                | lumen_dom::InputType::DateTimeLocal
+                | lumen_dom::InputType::Time
+                | lumen_dom::InputType::Month
+                | lumen_dom::InputType::Week
+                | lumen_dom::InputType::Submit
+                | lumen_dom::InputType::Reset
+                | lumen_dom::InputType::Button
+        ),
+        FormControlKind::Textarea { .. }
+        | FormControlKind::Range { .. }
+        | FormControlKind::Progress { .. }
+        | FormControlKind::Meter { .. } => false,
+    }
+}
+
+/// Базовая линия последнего потомка `b`, находящегося в нормальном потоке
+/// (CSS 2.1 §10.8.1 — «базовая линия последнего line box в нормальном потоке»),
+/// в координатах border box самого `b`.
+fn last_in_flow_baseline(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>) -> Option<f32> {
+    for c in b.children.iter().rev() {
+        if c.style.float_side != FloatSide::None
+            || matches!(c.style.position, Position::Absolute | Position::Fixed)
+        {
+            continue;
+        }
+        if matches!(
+            c.kind,
+            BoxKind::Skip | BoxKind::InlineSpace | BoxKind::Marker { .. }
+        ) {
+            continue;
+        }
+        if let Some(bl) = inline_baseline(c, measurer) {
+            return Some(c.rect.y - b.rect.y + bl);
+        }
+    }
+    None
+}
+
+/// `vertical-align` бокса как участника inline-ряда. Анонимный прогон текста
+/// всегда выравнивается по базовой линии: свойство не наследуется, а `anon_style`
+/// клонирует стиль блока-родителя целиком.
+fn inline_v_align(b: &LayoutBox) -> VerticalAlign {
+    if matches!(b.kind, BoxKind::InlineRun { .. }) {
+        VerticalAlign::Baseline
+    } else {
+        b.style.vertical_align
+    }
+}
+
 /// Разрывает ли бокс анонимный inline-ряд: блочно-уровневый потомок, всплывший
 /// из inline-элемента, не может делить line box с текстом (CSS 2.1 §9.2.1.1).
 /// Анонимные прогоны и пробелы (`BoxRole::AnonymousInlineRun`) наследуют
@@ -9270,26 +9479,80 @@ fn lay_out_inner(
             // Фаза 1: расставляем детей по X, группируем в строки.
             // Фаза 2: применяем вертикальное выравнивание внутри каждой строки.
             //
-            // rows: (row_y, row_max_h, Vec<child_index>)
             // IFC strut (CSS §10.8 / верифицировано pixel-diff TEST-11/TEST-12):
-            // strut_descent добавляется к высоте строки только если в строке есть
-            // хотя бы один элемент с vertical-align: baseline (явный или InlineRun).
-            // Для строк, где все элементы используют top/bottom/middle, strut не
-            // нужен — baseline вообще не задействован (Edge/Blink подтверждено).
+            // strut участвует в высоте строки только если в ней есть хотя бы один
+            // элемент с vertical-align: baseline (явный или InlineRun). Для строк,
+            // где все элементы используют top/bottom/middle, strut не нужен —
+            // baseline вообще не задействован (Edge/Blink подтверждено).
+            // Strut — content area шрифта ряда БЕЗ half-leading, и это осознанное
+            // расхождение со спекой, а не упрощение. `line-height: normal` в этом
+            // движке — 1.2em, тогда как у настоящего шрифта это ascent + descent +
+            // lineGap, то есть почти ровно content area; добавив half-leading от
+            // 1.2em, строка из одних atomic inline становится на ~1.3px выше, чем
+            // в Edge, и TEST-02/04/21/56 (ряды пустых inline-block) уходят в FAIL
+            // на 0.68 % при пороге 0.5 %. Измерено A/B, IFC-1. Строки с текстом
+            // это не задевает: у прогона своё half-leading, и оно всегда больше.
             let strut_descent = measurer.map_or(0.0, |m| m.descent_px(b.style.font_size));
-            // Strut ascent + half x-height of the row's font: needed to locate the
-            // baseline inside the line box for `vertical-align: middle` (CSS 2.1 §10.8.1).
             let strut_ascent = measurer.map_or(0.0, |m| m.ascent_px(b.style.font_size));
+            // Half x-height of the row's font: locates `vertical-align: middle`
+            // relative to the baseline (CSS 2.1 §10.8.1).
             let x_half = measurer.map_or(0.0, |m| m.x_height_px(b.style.font_size)) / 2.0;
-            // rows: (row_y, row_max_h, has_baseline, Vec<child_index>)
-            let mut rows: Vec<(f32, f32, bool, Vec<usize>)> = Vec::new();
+            // Метрики каждого ребёнка как участника строки: ascent — от верхней
+            // кромки margin box до его базовой линии, descent — остаток margin box
+            // под ней. Считаются сразу после раскладки ребёнка, потому что фазе 1
+            // нужна итоговая высота строки, чтобы сдвинуть cur_y (CSS 2.1 §10.8).
+            let mut metrics: Vec<(f32, f32)> = vec![(0.0, 0.0); b.children.len()];
+            // rows: (row_y, above, below, Vec<child_index>)
+            let mut rows: Vec<(f32, f32, f32, Vec<usize>)> = Vec::new();
             let mut cur_x = content_x;
             let mut cur_y = content_y;
-            let mut row_max_h: f32 = 0.0;
             let mut row_y = cur_y;
             let mut cur_row: Vec<usize> = Vec::new();
             let mut row_has_baseline = false;
             let mut total_h: f32 = 0.0;
+
+            // CSS 2.1 §10.8 — размер line box: базовая линия ставится так, чтобы
+            // вместить всех выровненных по ней участников, после чего top/bottom
+            // раздвигают строку в противоположную сторону.
+            let line_metrics = |children: &[LayoutBox],
+                                metrics: &[(f32, f32)],
+                                idxs: &[usize],
+                                has_baseline: bool| -> (f32, f32) {
+                let (mut above, mut below) = if has_baseline {
+                    (strut_ascent, strut_descent)
+                } else {
+                    (0.0, 0.0)
+                };
+                for &idx in idxs {
+                    let (a, d) = metrics[idx];
+                    match inline_v_align(&children[idx]) {
+                        VerticalAlign::Baseline => {
+                            above = above.max(a);
+                            below = below.max(d);
+                        }
+                        // `middle` совмещает центр бокса с (базовая линия − x/2),
+                        // а не с центром line box: высокий top/bottom-участник
+                        // уводит базовую линию от середины (BUG-182, TEST-24 row1).
+                        VerticalAlign::Middle => {
+                            above = above.max((a + d) / 2.0 + x_half);
+                            below = below.max((a + d) / 2.0 - x_half);
+                        }
+                        _ => {}
+                    }
+                }
+                for &idx in idxs {
+                    let (a, d) = metrics[idx];
+                    let fh = a + d;
+                    match inline_v_align(&children[idx]) {
+                        VerticalAlign::Top | VerticalAlign::TextTop => below = below.max(fh - above),
+                        VerticalAlign::Bottom | VerticalAlign::TextBottom => {
+                            above = above.max(fh - below)
+                        }
+                        _ => {}
+                    }
+                }
+                (above, below)
+            };
 
             for i in 0..b.children.len() {
                 // InlineSpace: collapsed whitespace gap — advance cur_x only.
@@ -9299,12 +9562,20 @@ fn lay_out_inner(
                     continue;
                 }
                 let is_run = matches!(b.children[i].kind, BoxKind::InlineRun { .. });
+                // Схлопнутый пробел в начале текста существует только пока текст
+                // не первый на строке: `wrap_inline_run` срезает его как пробел в
+                // начале строки, поэтому зазор после atomic inline даёт этот сдвиг.
+                let lead = if is_run && cur_x > content_x {
+                    inline_run_lead_space(&b.children[i], measurer)
+                } else {
+                    0.0
+                };
                 // Snap inline-block x to integer CSS pixels (Chrome/Edge behaviour at DPR=1).
                 // InlineSpace uses float advance (font metrics); accumulated sub-pixel error
                 // would shift all subsequent elements by up to 1px relative to Edge.
-                let place_x = if is_run { cur_x } else { cur_x.floor() };
+                let place_x = if is_run { cur_x + lead } else { cur_x.floor() };
                 let child_avail = if is_run {
-                    (content_width - (cur_x - content_x)).max(0.0)
+                    (content_width - (place_x - content_x)).max(0.0)
                 } else {
                     content_width
                 };
@@ -9316,97 +9587,79 @@ fn lay_out_inner(
                 let child_mr = b.children[i].style.margin_right.resolve_or_zero(c_em, content_width, viewport);
                 let child_mt = b.children[i].style.margin_top.resolve_or_zero(c_em, content_width, viewport);
                 let child_mb = b.children[i].style.margin_bottom.resolve_or_zero(c_em, content_width, viewport);
-                let child_right = b.children[i].rect.x + b.children[i].rect.width + child_mr;
-                let child_full_h = child_mt + b.children[i].rect.height + child_mb;
+                // Продвижение по строке: у текста — по последней строке прогона,
+                // у остальных — по border box (см. `inline_run_advance`).
+                let mut advance = if is_run {
+                    inline_run_advance(&b.children[i], measurer)
+                } else {
+                    b.children[i].rect.width
+                };
+                let child_right = b.children[i].rect.x + advance + child_mr;
 
                 if !is_run && child_right > content_x + content_width && cur_x > content_x {
-                    let row_strut = if row_has_baseline { strut_descent } else { 0.0 };
-                    let row_spacing = row_max_h + row_strut;
-                    rows.push((row_y, row_max_h, row_has_baseline, std::mem::take(&mut cur_row)));
+                    let (above, below) =
+                        line_metrics(&b.children, &metrics, &cur_row, row_has_baseline);
+                    rows.push((row_y, above, below, std::mem::take(&mut cur_row)));
                     // Snap to integer CSS pixels (Chrome/Edge DPR=1 behaviour): fractional
                     // IFC strut from font metrics (descent_px) would otherwise drift row
                     // y-positions by sub-pixel amounts relative to a browser with a different
                     // default font.
-                    let new_y = (cur_y + row_spacing).round();
+                    let new_y = (cur_y + above + below).round();
                     let actual_spacing = new_y - cur_y;
                     total_h += actual_spacing;
                     cur_y = new_y;
                     row_y = cur_y;
                     cur_x = content_x;
-                    row_max_h = 0.0;
                     row_has_baseline = false;
                     lay_out(&mut b.children[i], cur_x, cur_y, content_width, None, measurer, viewport, children_pcb, hp, false);
+                    advance = b.children[i].rect.width;
                 }
                 cur_row.push(i);
-                let child_is_baseline = is_run
-                    || matches!(b.children[i].style.vertical_align, VerticalAlign::Baseline);
-                if child_is_baseline {
+                if matches!(inline_v_align(&b.children[i]), VerticalAlign::Baseline) {
                     row_has_baseline = true;
                 }
-                cur_x = b.children[i].rect.x + b.children[i].rect.width + child_mr;
-                row_max_h = row_max_h.max(child_full_h);
+                let fh = child_mt + b.children[i].rect.height + child_mb;
+                // Нет собственной базовой линии — выравнивание по нижней кромке
+                // margin box (CSS 2.1 §10.8.1).
+                let asc = match inline_baseline(&b.children[i], measurer) {
+                    Some(bl) => child_mt + bl,
+                    None => fh,
+                };
+                metrics[i] = (asc, fh - asc);
+                cur_x = b.children[i].rect.x + advance + child_mr;
             }
+            let (last_above, last_below) =
+                line_metrics(&b.children, &metrics, &cur_row, row_has_baseline);
             if !cur_row.is_empty() {
-                rows.push((row_y, row_max_h, row_has_baseline, cur_row));
+                rows.push((row_y, last_above, last_below, cur_row));
+                b.rect.height = total_h + last_above + last_below;
+            } else {
+                b.rect.height = total_h;
             }
-            let last_row_strut = if row_has_baseline { strut_descent } else { 0.0 };
-            b.rect.height = total_h + row_max_h + last_row_strut;
 
-            // Фаза 2: vertical-align (CSS 2.1 §10.8.1).
-            // row_h = row_max_h (без strut); row_full_h = row_h + row_strut.
-            // Baseline: dy = row_h - child_h  (bottom at baseline, strut below).
-            // Bottom: dy = row_full_h - child_h (bottom at line-box bottom).
+            // Фаза 2: vertical-align (CSS 2.1 §10.8.1). Дети сейчас стоят border
+            // box'ом на верхней кромке строки; сдвигаем каждого туда, куда его
+            // ставит его собственное выравнивание.
             let mut adjustments: Vec<(usize, f32)> = Vec::new();
-            let child_full_h = |idx: usize| -> f32 {
-                let child = &b.children[idx];
-                let c_em = child.style.font_size;
-                child.style.margin_top.resolve_or_zero(c_em, content_width, viewport)
-                    + child.rect.height
-                    + child.style.margin_bottom.resolve_or_zero(c_em, content_width, viewport)
-            };
-            for (_, row_h, has_baseline, child_idxs) in &rows {
-                let row_strut = if *has_baseline { strut_descent } else { 0.0 };
-                let row_full_h = row_h + row_strut;
-                // Locate the baseline within the line box (distance `above` from the line-box
-                // top). `vertical-align: middle` aligns the box centre with (baseline − x/2),
-                // which coincides with the line-box centre ONLY when the baseline sits at
-                // mid-height. A tall top/bottom-aligned box pulls the baseline off-centre, so
-                // centring middle on the line box is wrong (BUG-182, TEST-24 row1). The strut
-                // (row font) covers any baseline-aligned text runs; explicit baseline-aligned
-                // inline-blocks sit with their bottom margin edge on the baseline.
-                let mut above = strut_ascent;
-                let mut below = strut_descent;
+            for (row_top, above, below, child_idxs) in &rows {
                 for &idx in child_idxs {
-                    let fh = child_full_h(idx);
-                    match b.children[idx].style.vertical_align {
-                        VerticalAlign::Baseline => above = above.max(fh),
-                        VerticalAlign::Middle => {
-                            above = above.max(fh / 2.0 + x_half);
-                            below = below.max(fh / 2.0 - x_half);
-                        }
-                        _ => {}
-                    }
-                }
-                // top-aligned boxes extend the line below the baseline; bottom-aligned ones
-                // extend it above — both shift where the baseline lands.
-                for &idx in child_idxs {
-                    let fh = child_full_h(idx);
-                    match b.children[idx].style.vertical_align {
-                        VerticalAlign::Top | VerticalAlign::TextTop => below = below.max(fh - above),
-                        VerticalAlign::Bottom | VerticalAlign::TextBottom => above = above.max(fh - below),
-                        _ => {}
-                    }
-                }
-                for &idx in child_idxs {
-                    let fh = child_full_h(idx);
-                    let dy = match b.children[idx].style.vertical_align {
-                        VerticalAlign::Baseline => row_h - fh,
-                        VerticalAlign::Bottom | VerticalAlign::TextBottom => row_full_h - fh,
+                    let (a, d) = metrics[idx];
+                    let fh = a + d;
+                    let c_em = b.children[idx].style.font_size;
+                    let mt = b.children[idx]
+                        .style
+                        .margin_top
+                        .resolve_or_zero(c_em, content_width, viewport);
+                    // Верхняя кромка margin box относительно верха строки.
+                    let margin_top_y = match inline_v_align(&b.children[idx]) {
+                        VerticalAlign::Baseline => above - a,
+                        VerticalAlign::Bottom | VerticalAlign::TextBottom => above + below - fh,
                         VerticalAlign::Top | VerticalAlign::TextTop => 0.0,
                         VerticalAlign::Middle => above - x_half - fh / 2.0,
                         _ => 0.0,
                     };
-                    if dy > 0.001 {
+                    let dy = row_top + margin_top_y + mt - b.children[idx].rect.y;
+                    if dy.abs() > 0.001 {
                         adjustments.push((idx, dy));
                     }
                 }
@@ -9414,7 +9667,7 @@ fn lay_out_inner(
             for (idx, dy) in adjustments {
                 // Round dy to integer CSS pixels so vertical-aligned children land on
                 // whole-pixel boundaries, matching the .round() applied to IFC row y-positions
-                // above (line ~4219). Fractional dy causes 0.99% deviation vs Edge (BUG-081).
+                // above. Fractional dy causes 0.99% deviation vs Edge (BUG-081).
                 shift_y_box(&mut b.children[idx], dy.round());
             }
         }
@@ -19058,6 +19311,169 @@ mod tests {
             "bottom box bottom should touch line bottom, got {}",
             bot.rect.y + bot.rect.height
         );
+    }
+
+    /// Fixed-metric measurer for the IFC tests: every glyph is 8px wide, so the
+    /// default trait metrics apply (ascent 0.8em, descent 0.2em) and every
+    /// expected number below is hand-computable.
+    struct Ifc8;
+    impl super::super::TextMeasurer for Ifc8 {
+        fn char_width(&self, _: char, _: f32) -> f32 {
+            8.0
+        }
+    }
+
+    fn ifc_row(html: &str, css: &str) -> super::LayoutBox {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout_measured(&doc, &sheet, Size::new(500.0, 300.0), &Ifc8);
+        fn find(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::InlineBlockRow) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find)
+        }
+        find(&root).expect("InlineBlockRow present").clone()
+    }
+
+    #[test]
+    fn ifc1_text_before_inline_block_stays_on_one_line() {
+        // IFC-1: the run's box is as wide as the space it was offered, so
+        // advancing by `rect.width` pushed the inline-block past the container's
+        // right edge and onto a line of its own — «Aa <ib> Bb» came out three
+        // lines tall. The run must advance by the extent of its own last line.
+        let row = ifc_row(
+            r#"<p>Aa <span class="ib"></span> Bb</p>"#,
+            "p { width: 500px; } .ib { display: inline-block; width: 16px; height: 16px; }",
+        );
+        let kids: Vec<&super::LayoutBox> = row
+            .children
+            .iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .collect();
+        assert_eq!(kids.len(), 3, "run + inline-block + run");
+        // "Aa" = 2 × 8px, then the collapsed space (8px) → x = 24; the trailing
+        // run opens with its own collapsed space → 24 + 16 + 8 = 48.
+        assert_eq!(kids[0].rect.x - row.rect.x, 0.0);
+        assert_eq!(
+            kids[1].rect.x - row.rect.x,
+            24.0,
+            "inline-block follows the text, not a new line"
+        );
+        assert_eq!(
+            kids[2].rect.x - row.rect.x,
+            48.0,
+            "trailing text follows the inline-block"
+        );
+        // One line box: strut ascent 12.8 vs the 16px box's bottom margin edge →
+        // above = 16, below = max(strut 3.2, run 4.8) = 4.8.
+        assert!(
+            (row.rect.height - 20.8).abs() < 0.01,
+            "one line box expected, got h={}",
+            row.rect.height
+        );
+    }
+
+    #[test]
+    fn ifc1_empty_inline_block_sits_on_the_text_baseline() {
+        // CSS 2.1 §10.8.1: an inline-block with no in-flow line box aligns by its
+        // bottom margin edge, so a 16px box pushes the baseline down to 16 and the
+        // text (ascent 12.8 + half-leading 1.6 = 14.4 above its own top) drops by
+        // the 1.6px difference, rounded to 2.
+        let row = ifc_row(
+            r#"<p>Aa <span class="ib"></span> Bb</p>"#,
+            "p { width: 500px; } .ib { display: inline-block; width: 16px; height: 16px; }",
+        );
+        let ib = row
+            .children
+            .iter()
+            .find(|c| c.style.display == crate::style::Display::InlineBlock)
+            .expect("inline-block");
+        let run = row
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, super::BoxKind::InlineRun { .. }))
+            .expect("text run");
+        assert_eq!(ib.rect.y - row.rect.y, 0.0, "tallest box opens the line");
+        assert_eq!(run.rect.y - row.rect.y, 2.0, "text drops onto the shared baseline");
+    }
+
+    #[test]
+    fn ifc1_inline_block_with_text_shares_the_outer_baseline() {
+        // The case that separates baseline alignment from the bottom-alignment it
+        // replaced: an inline-block whose own last line box carries text offers
+        // that line's baseline, so both texts sit at the same y and the line box
+        // is exactly one line-height tall.
+        let row = ifc_row(
+            r#"<p>Aa <span class="ib">Xx</span> Bb</p>"#,
+            "p { width: 500px; } .ib { display: inline-block; }",
+        );
+        let ib = row
+            .children
+            .iter()
+            .find(|c| c.style.display == crate::style::Display::InlineBlock)
+            .expect("inline-block");
+        let runs: Vec<&super::LayoutBox> = row
+            .children
+            .iter()
+            .filter(|c| matches!(c.kind, super::BoxKind::InlineRun { .. }))
+            .collect();
+        assert_eq!(ib.rect.y, runs[0].rect.y, "inner and outer text share a baseline");
+        assert_eq!(runs[0].rect.y, runs[1].rect.y);
+        assert!(
+            (row.rect.height - 19.2).abs() < 0.01,
+            "one line-height tall, got h={}",
+            row.rect.height
+        );
+    }
+
+    #[test]
+    fn ifc1_overflow_hidden_inline_block_aligns_by_bottom_margin_edge() {
+        // CSS 2.1 §10.8.1 — `overflow` other than `visible` suppresses the inner
+        // baseline, so the box behaves like the empty one above even though it
+        // does have a line box of its own.
+        let row = ifc_row(
+            r#"<p>Aa <span class="ib">Xx</span> Bb</p>"#,
+            "p { width: 500px; } \
+             .ib { display: inline-block; overflow: hidden; width: 16px; height: 16px; }",
+        );
+        let ib = row
+            .children
+            .iter()
+            .find(|c| c.style.display == crate::style::Display::InlineBlock)
+            .expect("inline-block");
+        let run = row
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, super::BoxKind::InlineRun { .. }))
+            .expect("text run");
+        assert_eq!(ib.rect.y - row.rect.y, 0.0);
+        assert_eq!(run.rect.y - row.rect.y, 2.0);
+    }
+
+    #[test]
+    fn ifc1_form_control_offers_its_label_baseline() {
+        // A `<button>`'s label is a real line box of its own, so the control
+        // aligns on that baseline (1px border + 14.4) rather than on its bottom
+        // margin edge — the text next to it must not move at all.
+        let row = ifc_row(
+            r#"<p>Aa <button>Xx</button> Bb</p>"#,
+            "p { width: 500px; }",
+        );
+        let ctl = row
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, super::BoxKind::FormControl { .. }))
+            .expect("form control");
+        let run = row
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, super::BoxKind::InlineRun { .. }))
+            .expect("text run");
+        // Control baseline = 1px top border + 14.4; text baseline = 14.4, so the
+        // line's baseline is 15.4 and the text drops by 1.
+        assert_eq!(run.rect.y - row.rect.y, 1.0, "text drops by the control's border");
+        assert_eq!(ctl.rect.y - row.rect.y, 0.0);
     }
 
     #[test]
