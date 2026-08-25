@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-25",
  "counts": {
-  "open": 385,
-  "fixed": 479,
+  "open": 386,
+  "fixed": 480,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 864,
+ "total_bugs": 866,
  "phases": [
   {
    "id": "P0",
@@ -10899,10 +10899,10 @@
    "debtor": false
   },
   "BUG-831": {
-   "status": "open",
+   "status": "fixed",
    "title": "Строковый обработчик таймера молча выбрасывается: `setTimeout(\"code\", 0)` и `setInterval` не компилируют строку, ничего не ставят в очередь и возвращают `0` как…",
    "component": "js (`crates/js/src/dom.rs:6810` — `setTimeout`, `:6828` — `setInterval`, оба открываются `if (typeof fn !== 'function') return 0;`)",
-   "date": null,
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-832": {
@@ -11436,6 +11436,20 @@
    "component": "js (`crates/js/src/web_audio.rs` — `AudioBuffer.getChannelData`/`copyFromChannel`, `AnalyserNode.getFloat*Data`), ADR-007 Layer 4",
    "date": null,
    "debtor": false
+  },
+  "BUG-909": {
+   "status": "open",
+   "title": "Страничный `setTimeout(fn, delay, …args)` теряет хвостовые аргументы: `setTimeout(function(a,b){...}, 0, 'x', 'y')` вызывает обработчик с `undefined, undefined`…",
+   "component": "js (`crates/js/src/dom.rs` — `setTimeout`/`setInterval` кладут в очередь `{id, fn, deadline, interval, nesting}`, `_lumen_tick_timers` зовёт `ready[k].fn()` без аргументов)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-910": {
+   "status": "open",
+   "title": "Динамический `import()` резолвится относительно **URL документа**, а `<base href>` игнорируется в любой форме. Замер прогоном `run_report.py --all --recursive -…",
+   "component": "js (`crates/js/src/v8_esm.rs:331` — `resolve` берёт базой `s.page_url`; `set_page_url` зовётся только из `install_dom`/`set_module_context`, `<base href>` в состояние ESM-слоя не попадает вовсе)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11946,6 +11960,9 @@
   "js (`crates/js/src/dom.rs` — `navigator.userActivation`; потребители: `_lumen_fs_request_error` там же, `crates/js/src/filesystem_access.rs:2601`, `crates/js/src/local_font_access.rs:151`)": [
    "BUG-758"
   ],
+  "js (`crates/js/src/dom.rs` — `setTimeout`/`setInterval` кладут в очередь `{id, fn, deadline, interval, nesting}`, `_lumen_tick_timers` зовёт `ready[k].fn()` без аргументов)": [
+   "BUG-909"
+  ],
   "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)": [
    "BUG-351"
   ],
@@ -12055,6 +12072,9 @@
   ],
   "js (`crates/js/src/typed_om_api.rs`)": [
    "BUG-554"
+  ],
+  "js (`crates/js/src/v8_esm.rs:331` — `resolve` берёт базой `s.page_url`; `set_page_url` зовётся только из `install_dom`/`set_module_context`, `<base href>` в состояние ESM-слоя не попадает вовсе)": [
+   "BUG-910"
   ],
   "js (`crates/js/src/v8_runtime.rs:1358` — `install_dom` создаёт `ss_store` как `WebStorage::default()` без входного параметра, в отличие от `ls_store` строкой выше)": [
    "BUG-836"

@@ -7783,6 +7783,21 @@ function _lumen_clamp_timeout(ms, nesting) {
     return (nesting > 5 && ms < 4) ? 4 : ms;
 }
 
+// HTML LS §8.6 «timer initialization steps»: a handler that is not a Function
+// is taken as a string and run as a **classic script** — compiled when the
+// timer FIRES, not when it is scheduled, and afresh on every firing of a
+// `setInterval` (BUG-831: both entry points used to answer `0` and queue
+// nothing, which a page cannot tell apart from a timer that is not due yet).
+//
+// `(0, eval)` — indirect eval — is what makes it a classic script: it runs in
+// global scope, so `setTimeout('var x = 1')` creates a global the way every
+// other engine does, where a direct `eval(src)` call would evaluate the code
+// inside this closure and throw the assignment away with it.
+function _lumen_timer_string_handler(code) {
+    var src = String(code);
+    return function () { (0, eval)(src); };
+}
+
 function _lumen_tick_timers() {
     var now = _lumen_now_ms();
     var ready = [];
@@ -7825,7 +7840,7 @@ function _lumen_tick_timers() {
 }
 
 function setTimeout(fn, delay) {
-    if (typeof fn !== 'function') return 0;
+    if (typeof fn !== 'function') fn = _lumen_timer_string_handler(fn);
     var nesting = _lumen_timer_nesting + 1;
     var ms = (typeof delay === 'number' && delay > 0) ? delay : 0;
     ms = _lumen_clamp_timeout(ms, nesting);
@@ -7843,7 +7858,7 @@ function clearTimeout(id) {
 }
 
 function setInterval(fn, interval) {
-    if (typeof fn !== 'function') return 0;
+    if (typeof fn !== 'function') fn = _lumen_timer_string_handler(fn);
     var nesting = _lumen_timer_nesting + 1;
     var ms = (typeof interval === 'number' && interval > 0) ? interval : 0;
     var first = _lumen_clamp_timeout(ms, nesting);
@@ -24786,6 +24801,82 @@ mod tests {
             rt.eval("_lumen_tick_timers();").unwrap();
             let result = rt.eval("n").unwrap();
             assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        /// [BUG-831] A string handler used to be dropped at the door
+        /// (`if (typeof fn !== 'function') return 0;`), so the page could not
+        /// tell "never compiled" from "not due yet".
+        #[test]
+        fn bug831_string_timeout_runs_at_tick() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var x = 0; setTimeout(\"x = 1\", 0);").unwrap();
+            let result = rt.eval("_lumen_tick_timers(); x").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        /// [BUG-831] HTML LS §8.6 runs the string as a **classic script**, not
+        /// as a function body: a `var` it declares becomes a global. This is
+        /// what separates indirect eval from `new Function(src)`, which would
+        /// swallow the declaration in its own scope.
+        #[test]
+        fn bug831_string_timeout_runs_in_global_scope() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("setTimeout(\"var bug831_global = 7;\", 0);")
+                .unwrap();
+            let result = rt
+                .eval("_lumen_tick_timers(); typeof bug831_global === 'number' && bug831_global === 7")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        /// [BUG-831] The id handed back for a string handler was the literal
+        /// `0` the spec reserves for "no timer created", yet `clearTimeout`
+        /// accepted it — so cancelling one string timer silently cancelled
+        /// nothing. It must be a real id that cancels a real timer.
+        #[test]
+        fn bug831_string_timeout_id_is_real_and_cancellable() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let id = rt
+                .eval("var y = 0; var id831 = setTimeout(\"y = 1\", 0); id831 !== 0")
+                .unwrap();
+            assert_eq!(id, lumen_core::JsValue::Bool(true));
+            let result = rt
+                .eval("clearTimeout(id831); _lumen_tick_timers(); y")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(0.0));
+        }
+
+        /// [BUG-831] §8.6 compiles the string when the timer **fires**, not
+        /// when it is scheduled: a syntactically broken handler must schedule
+        /// normally and report its exception from the callback the way a
+        /// throwing function handler does (BUG-591), not throw at the call.
+        #[test]
+        fn bug831_string_handler_compiles_at_fire_not_at_schedule() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var armed831 = setTimeout(\"(\", 0);").unwrap();
+            // Scheduling a broken string is not an error…
+            assert_eq!(
+                rt.eval("armed831 !== 0").unwrap(),
+                lumen_core::JsValue::Bool(true)
+            );
+            // …and the failure at fire time stays inside the timer loop.
+            rt.eval("var ran831 = false; setTimeout(function() { ran831 = true; }, 0);")
+                .unwrap();
+            let result = rt.eval("_lumen_tick_timers(); ran831").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        /// [BUG-831] An interval's string is recompiled on every firing, so it
+        /// repeats like a function handler instead of running once (or, as
+        /// before the fix, never).
+        #[test]
+        fn bug831_string_interval_repeats() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var n831 = 0; setInterval(\"n831++\", 0);").unwrap();
+            rt.eval("_lumen_tick_timers();").unwrap();
+            rt.eval("_lumen_tick_timers();").unwrap();
+            let result = rt.eval("n831").unwrap();
+            assert!(matches!(result, lumen_core::JsValue::Number(n) if n >= 2.0));
         }
 
         #[test]

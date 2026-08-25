@@ -696,8 +696,19 @@ pub(crate) const WORKER_TIMERS_SHIM: &str = r#"(function() {
     return (nesting > 5 && delay < 4) ? 4 : delay;
   }
 
+  // HTML LS §8.6: a non-Function handler is a string run as a classic script
+  // when the timer fires, recompiled on every firing of an interval (BUG-831).
+  // Indirect eval is what makes it global-scope: a direct call would evaluate
+  // the code inside this closure. A string handler takes no trailing
+  // arguments (§8.6 step 8 hands them to a Function handler only), so the
+  // list the dispatch loop `apply`s is emptied here.
+  function _stringHandler(code) {
+    var src = String(code);
+    return function () { (0, eval)(src); };
+  }
+
   function _schedule(fn, delay, args, repeating) {
-    if (typeof fn !== 'function') return 0;
+    if (typeof fn !== 'function') { fn = _stringHandler(fn); args = []; }
     var nesting = _nesting + 1;
     var d = _toDelay(delay);
     var id = _nextId++;
@@ -3437,6 +3448,36 @@ mod tests_v8 {
             rt.eval("got").unwrap(),
             lumen_core::JsValue::String("xy".to_string())
         );
+    }
+
+    /// [BUG-831] A string handler was dropped here exactly as on the page —
+    /// `_schedule` opened with the same `typeof fn !== 'function'` guard. §8.6
+    /// applies to `WorkerGlobalScope` too: the string is a classic script run
+    /// in the worker's global scope, so a `var` it declares is a global there.
+    #[test]
+    fn v8_worker_string_timer_handler_runs_as_classic_script() {
+        let (rt, _errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval("setTimeout(\"var fromString = 5;\", 0);").unwrap();
+        assert!(pump_until(
+            &rt,
+            "typeof fromString === 'number'",
+            std::time::Duration::from_secs(5)
+        ));
+        assert_eq!(
+            rt.eval("fromString").unwrap(),
+            lumen_core::JsValue::Number(5.0)
+        );
+    }
+
+    /// [BUG-831] …and an interval's string recompiles per firing, so it
+    /// repeats rather than running once.
+    #[test]
+    fn v8_worker_string_interval_repeats() {
+        let (rt, _errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval("var sn = 0; var sh = setInterval(\"sn++\", 5);")
+            .unwrap();
+        assert!(pump_until(&rt, "sn >= 3", std::time::Duration::from_secs(5)));
+        rt.eval("clearInterval(sh);").unwrap();
     }
 
     /// [BUG-815] The old stub put a microtask at the *front of the timer
