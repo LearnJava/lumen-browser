@@ -191,50 +191,6 @@ fn cache_meta_method(meta_json: &str) -> String {
     "GET".to_string()
 }
 
-/// Decompresses `data` with the given Compression Streams `format` and returns a
-/// status-prefixed byte array shared by the `_lumen_decompress_bytes` native in
-/// both JS engines (rquickjs and V8).
-///
-/// A leading status byte lets the `DecompressionStream` JS shim tell a decode
-/// error apart from a valid empty result (a well-formed stream may legitimately
-/// decompress to zero bytes): `out[0] == 1` → success with `out[1..]` the
-/// decompressed bytes; `out[0] == 0` → the input was corrupt/truncated or the
-/// format unknown, and the shim errors the readable side per
-/// <https://compression.spec.whatwg.org/>.
-pub(crate) fn _decompress_status_prefixed(data: &[u8], format: &str) -> Vec<u8> {
-    use std::io::Read as _;
-    let inflated: std::io::Result<Vec<u8>> = match format {
-        "deflate-raw" => {
-            let mut dec = flate2::read::DeflateDecoder::new(data);
-            let mut out = Vec::new();
-            dec.read_to_end(&mut out).map(|_| out)
-        }
-        "deflate" => {
-            let mut dec = flate2::read::ZlibDecoder::new(data);
-            let mut out = Vec::new();
-            dec.read_to_end(&mut out).map(|_| out)
-        }
-        "gzip" => {
-            let mut dec = flate2::read::GzDecoder::new(data);
-            let mut out = Vec::new();
-            dec.read_to_end(&mut out).map(|_| out)
-        }
-        _ => Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "unknown compression format",
-        )),
-    };
-    match inflated {
-        Ok(mut bytes) => {
-            let mut out = Vec::with_capacity(bytes.len() + 1);
-            out.push(1u8);
-            out.append(&mut bytes);
-            out
-        }
-        Err(_) => vec![0u8],
-    }
-}
-
 // ─── DOM helpers ──────────────────────────────────────────────────────────────
 //
 // Test-only below this point: the production `_lumen_*` natives (V8 install
@@ -9729,65 +9685,77 @@ TextEncoderStream.prototype.constructor = TextEncoderStream;
 // ── CompressionStream / DecompressionStream (WHATWG Compression Streams) ─────
 // https://compression.spec.whatwg.org/
 // Formats: 'deflate-raw' (raw DEFLATE RFC 1951), 'deflate' (zlib RFC 1950), 'gzip'.
-// Buffer-then-flush model: accumulates all input chunks, compresses atomically at
-// flush (TransformStream.writable.close()). Emits a single Uint8Array output chunk.
+//
+// §4/§5 transform algorithm: every chunk goes through a codec that lives in the
+// host (`crates/js/src/compression.rs`, keyed by an opaque handle) and whatever
+// that chunk produced is enqueued right away. The model used to be
+// buffer-then-flush — nothing was decoded until `writer.close()` — so the
+// reflexive «write a chunk, read the result» never resolved (BUG-846). `flush`
+// now only ends the stream.
 var _COMPRESSION_FORMATS = ['deflate-raw', 'deflate', 'gzip'];
 
-function _csConcat(chunks) {
-    var total = 0;
-    for (var i = 0; i < chunks.length; i++) total += chunks[i].length;
-    var out = new Uint8Array(total), off = 0;
-    for (var i = 0; i < chunks.length; i++) { out.set(chunks[i], off); off += chunks[i].length; }
-    return out;
-}
+// Status byte prefixed to every `_lumen_cs_*` reply, see `compression.rs`.
+var _CS_ERROR = 0, _CS_OK = 1, _CS_TRAILING_JUNK = 2;
+
 function _csToU8(chunk) {
     if (chunk instanceof Uint8Array) return chunk;
     if (chunk instanceof ArrayBuffer) return new Uint8Array(chunk);
-    if (chunk && ArrayBuffer.isView(chunk)) return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-    return new Uint8Array(0);
+    if (ArrayBuffer.isView(chunk)) return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    // §4 takes a BufferSource. Anything else is a WebIDL conversion failure,
+    // which must error both sides of the stream rather than being read as an
+    // empty chunk (`compression-bad-chunks`/`decompression-bad-chunks`).
+    throw new TypeError('Compression stream: chunk is not a BufferSource');
+}
+
+// Shared transform/flush for both directions: `st` is {h, label, format}.
+function _csTransform(st, chunk, c) {
+    var bytes = _csToU8(chunk);
+    if (!st.h) throw new TypeError(st.label + ': stream is already errored');
+    var raw = _lumen_cs_push(st.h, bytes);
+    if (raw[0] === _CS_ERROR) {
+        st.h = 0; // the host dropped the codec along with the error
+        throw new TypeError(st.label + ': corrupt or truncated ' + st.format + ' input');
+    }
+    // The output has to reach the reader BEFORE the stream is errored: a read
+    // request standing at this moment is fulfilled directly, while erroring
+    // first would reset the queue and lose it (`decompression-extra-input`
+    // asserts the decoded value arrives and only the *next* read rejects).
+    if (raw.length > 1) c.enqueue(new Uint8Array(raw.slice(1)));
+    if (raw[0] === _CS_TRAILING_JUNK) {
+        _lumen_cs_free(st.h);
+        st.h = 0;
+        throw new TypeError(st.label + ': junk found after the end of the ' + st.format + ' stream');
+    }
+}
+function _csFlush(st, c) {
+    if (!st.h) return;
+    var raw = _lumen_cs_finish(st.h);
+    st.h = 0;
+    if (raw[0] !== _CS_OK) {
+        throw new TypeError(st.label + ': corrupt or truncated ' + st.format + ' input');
+    }
+    if (raw.length > 1) c.enqueue(new Uint8Array(raw.slice(1)));
+}
+function _csInit(self, format, label, decompress) {
+    if (_COMPRESSION_FORMATS.indexOf(format) === -1)
+        throw new TypeError(label + ': unsupported format: ' + format);
+    var st = { h: _lumen_cs_new(format, decompress), label: label, format: format };
+    if (!st.h) throw new TypeError(label + ': unsupported format: ' + format);
+    TransformStream.call(self, {
+        transform: function(chunk, c) { _csTransform(st, chunk, c); },
+        flush: function(c) { _csFlush(st, c); }
+    });
+    self.format = format;
 }
 
 function CompressionStream(format) {
-    if (_COMPRESSION_FORMATS.indexOf(format) === -1)
-        throw new TypeError('CompressionStream: unsupported format: ' + format);
-    var buf = [], fmt = format;
-    TransformStream.call(this, {
-        transform: function(chunk, _c) { buf.push(_csToU8(chunk)); },
-        flush: function(c) {
-            var result = _lumen_compress_bytes(Array.from(_csConcat(buf)), fmt);
-            if (result && result.length > 0) c.enqueue(new Uint8Array(result));
-            c.terminate();
-        }
-    });
-    this.format = format;
+    _csInit(this, format, 'CompressionStream', false);
 }
 CompressionStream.prototype = Object.create(TransformStream.prototype);
 CompressionStream.prototype.constructor = CompressionStream;
 
 function DecompressionStream(format) {
-    if (_COMPRESSION_FORMATS.indexOf(format) === -1)
-        throw new TypeError('DecompressionStream: unsupported format: ' + format);
-    var buf = [], fmt = format;
-    TransformStream.call(this, {
-        transform: function(chunk, _c) { buf.push(_csToU8(chunk)); },
-        flush: function(c) {
-            // Native returns a status-prefixed byte array: [1, ...data] on success
-            // (data may be empty for a valid stream that decompresses to nothing),
-            // [0] on a corrupt/truncated input. Per
-            // https://compression.spec.whatwg.org/ a decode error must error the
-            // readable side, so it is distinguished from a valid empty result
-            // instead of silently terminating the stream.
-            var raw = _lumen_decompress_bytes(Array.from(_csConcat(buf)), fmt);
-            var u = (raw instanceof Uint8Array) ? raw : new Uint8Array(raw);
-            if (u.length < 1 || u[0] !== 1) {
-                c.error(new TypeError('DecompressionStream: corrupt or truncated ' + fmt + ' input'));
-                return;
-            }
-            if (u.length > 1) c.enqueue(u.slice(1));
-            c.terminate();
-        }
-    });
-    this.format = format;
+    _csInit(this, format, 'DecompressionStream', true);
 }
 DecompressionStream.prototype = Object.create(TransformStream.prototype);
 DecompressionStream.prototype.constructor = DecompressionStream;
@@ -35406,50 +35374,150 @@ mod tests {
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 
+        /// Drains a `ReadableStream` reader into `sink.parts` and concatenates.
+        ///
+        /// Since BUG-846 a compression stream emits output as it goes rather
+        /// than one chunk at `close()`, so a test that reads once no longer
+        /// holds the whole payload — the gzip header alone can arrive as its
+        /// own chunk. Every test below therefore collects, exactly as WPT's
+        /// `concatenate-stream.js` does.
+        const COLLECT_JS: &str = "function _collect(rd, sink) { \
+                 rd.read().then(function(r) { \
+                     if (r.done) { sink.done = true; return; } \
+                     sink.parts.push(r.value); _collect(rd, sink); \
+                 }, function() { sink.error = true; }); } \
+             function _joined(sink) { var n = 0, i; \
+                 for (i = 0; i < sink.parts.length; i++) n += sink.parts[i].length; \
+                 var o = new Uint8Array(n), k = 0; \
+                 for (i = 0; i < sink.parts.length; i++) { o.set(sink.parts[i], k); k += sink.parts[i].length; } \
+                 return o; } \
+             function _sink() { return { parts: [], done: false, error: false }; } ";
+
         #[test]
         fn compression_stream_gzip_produces_nonempty_output() {
             let rt = v8_runtime_with_dom(make_doc());
-            // Write [72,101,108,108,111] = "Hello", close, read compressed chunk.
-            rt.eval(
-                "var cs = new CompressionStream('gzip'); \
+            // Write [72,101,108,108,111] = "Hello", close, collect the output.
+            rt.eval(&format!(
+                "{COLLECT_JS} \
+                 var cs = new CompressionStream('gzip'); \
                  var writer = cs.writable.getWriter(); \
                  var reader = cs.readable.getReader(); \
                  writer.write(new Uint8Array([72,101,108,108,111])); \
                  writer.close(); \
-                 var chunk = null; \
-                 reader.read().then(function(r) { chunk = r.value; });",
+                 var sink = _sink(); _collect(reader, sink);"
+            ))
+            .unwrap();
+            let r = rt
+                .eval("sink.done && !sink.error && _joined(sink).length > 0")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-846: the decoded bytes must reach the reader from the *write*,
+        /// with the writable side still open. The buffer-then-flush model this
+        /// replaced left this read pending forever, which is what made three
+        /// `compression/decompression-*` WPT files time out.
+        #[test]
+        fn decompression_stream_emits_without_closing_the_writer() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // WPT's own vector: zlib for the string 'expected output'.
+            rt.eval(
+                "var ds = new DecompressionStream('deflate'); \
+                 var dw = ds.writable.getWriter(); var dr = ds.readable.getReader(); \
+                 dw.write(new Uint8Array([120,156,75,173,40,72,77,46,73,77,81,200,47,45,41,40,45,1,0,48,173,6,36])); \
+                 var got = null, rejected = false; \
+                 dr.read().then(function(r) { got = r.value; }, function() { rejected = true; });",
             )
             .unwrap();
             let r = rt
-                .eval("chunk instanceof Uint8Array && chunk.length > 0")
+                .eval(
+                    "!rejected && got instanceof Uint8Array && \
+                     String.fromCharCode.apply(null, Array.from(got)) === 'expected output'",
+                )
                 .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A chunk that is not a BufferSource is a WebIDL conversion failure,
+        /// which errors both sides (`decompression-bad-chunks`) — it used to be
+        /// silently read as an empty chunk.
+        #[test]
+        fn decompression_stream_rejects_non_buffer_source_chunk() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var ds = new DecompressionStream('gzip'); \
+                 var dw = ds.writable.getWriter(); var dr = ds.readable.getReader(); \
+                 var writeRejected = false, readRejected = false; \
+                 dw.write('not a buffer').then(function() {}, function() { writeRejected = true; }); \
+                 dr.read().then(function() {}, function() { readRejected = true; });",
+            )
+            .unwrap();
+            let r = rt.eval("writeRejected && readRejected").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// Junk behind the end of a stream must not swallow the bytes decoded
+        /// before it: the value arrives, and only the *next* read rejects
+        /// (`decompression-extra-input`).
+        #[test]
+        fn decompression_stream_extra_input_delivers_then_errors() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var ds = new DecompressionStream('deflate'); \
+                 var dw = ds.writable.getWriter(); var dr = ds.readable.getReader(); \
+                 dw.write(new Uint8Array([120,156,75,173,40,72,77,46,73,77,81,200,47,45,41,40,45,1,0,48,173,6,36,0])).then(function(){}, function(){}); \
+                 var first = null, secondRejected = false; \
+                 dr.read().then(function(r) { first = r.value; \
+                     dr.read().then(function() {}, function() { secondRejected = true; }); });",
+            )
+            .unwrap();
+            let r = rt
+                .eval("first instanceof Uint8Array && first.length === 15 && secondRejected")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A body cut one byte short of its own trailer is an error, not a
+        /// successful decode (`decompression-corrupt-input`).
+        #[test]
+        fn decompression_stream_truncated_input_errors_at_close() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var ds = new DecompressionStream('deflate'); \
+                 var dw = ds.writable.getWriter(); var dr = ds.readable.getReader(); \
+                 dw.write(new Uint8Array([120,156,75,173,40,72,77,46,73,77,81,200,47,45,41,40,45,1,0,48,173,6])).then(function(){}, function(){}); \
+                 dw.close().then(function(){}, function(){}); \
+                 var closedRejected = false; \
+                 dr.closed.then(function() {}, function() { closedRejected = true; });",
+            )
+            .unwrap();
+            let r = rt.eval("closedRejected").unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 
         #[test]
         fn compression_stream_gzip_round_trip() {
             let rt = v8_runtime_with_dom(make_doc());
-            rt.eval(
-                "var input = new Uint8Array([72,101,108,108,111]); \
+            rt.eval(&format!(
+                "{COLLECT_JS} \
+                 var input = new Uint8Array([72,101,108,108,111]); \
                  var cs = new CompressionStream('gzip'); \
                  var cw = cs.writable.getWriter(); var cr = cs.readable.getReader(); \
                  cw.write(input); cw.close(); \
-                 var compressed = null; \
-                 cr.read().then(function(r) { compressed = r.value; });",
-            )
+                 var csink = _sink(); _collect(cr, csink);"
+            ))
             .unwrap();
             rt.eval(
                 "var ds = new DecompressionStream('gzip'); \
                  var dw = ds.writable.getWriter(); var dr = ds.readable.getReader(); \
-                 dw.write(compressed); dw.close(); \
-                 var result = null; \
-                 dr.read().then(function(r) { result = r.value; });",
+                 dw.write(_joined(csink)); dw.close(); \
+                 var dsink = _sink(); _collect(dr, dsink);",
             )
             .unwrap();
             let r = rt
                 .eval(
-                    "result instanceof Uint8Array && result.length === 5 && \
-                     result[0] === 72 && result[4] === 111",
+                    "var result = _joined(dsink); \
+                     result.length === 5 && result[0] === 72 && result[4] === 111",
                 )
                 .unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
@@ -35458,27 +35526,26 @@ mod tests {
         #[test]
         fn compression_stream_deflate_round_trip() {
             let rt = v8_runtime_with_dom(make_doc());
-            rt.eval(
-                "var input = new Uint8Array([65,66,67]); \
+            rt.eval(&format!(
+                "{COLLECT_JS} \
+                 var input = new Uint8Array([65,66,67]); \
                  var cs = new CompressionStream('deflate'); \
                  var cw = cs.writable.getWriter(); var cr = cs.readable.getReader(); \
                  cw.write(input); cw.close(); \
-                 var compressed = null; \
-                 cr.read().then(function(r) { compressed = r.value; });",
-            )
+                 var csink = _sink(); _collect(cr, csink);"
+            ))
             .unwrap();
             rt.eval(
                 "var ds = new DecompressionStream('deflate'); \
                  var dw = ds.writable.getWriter(); var dr = ds.readable.getReader(); \
-                 dw.write(compressed); dw.close(); \
-                 var result = null; \
-                 dr.read().then(function(r) { result = r.value; });",
+                 dw.write(_joined(csink)); dw.close(); \
+                 var dsink = _sink(); _collect(dr, dsink);",
             )
             .unwrap();
             let r = rt
                 .eval(
-                    "result instanceof Uint8Array && result.length === 3 && \
-                     result[0] === 65 && result[2] === 67",
+                    "var result = _joined(dsink); \
+                     result.length === 3 && result[0] === 65 && result[2] === 67",
                 )
                 .unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
@@ -35487,27 +35554,26 @@ mod tests {
         #[test]
         fn compression_stream_deflate_raw_round_trip() {
             let rt = v8_runtime_with_dom(make_doc());
-            rt.eval(
-                "var input = new Uint8Array([1,2,3,4,5]); \
+            rt.eval(&format!(
+                "{COLLECT_JS} \
+                 var input = new Uint8Array([1,2,3,4,5]); \
                  var cs = new CompressionStream('deflate-raw'); \
                  var cw = cs.writable.getWriter(); var cr = cs.readable.getReader(); \
                  cw.write(input); cw.close(); \
-                 var compressed = null; \
-                 cr.read().then(function(r) { compressed = r.value; });",
-            )
+                 var csink = _sink(); _collect(cr, csink);"
+            ))
             .unwrap();
             rt.eval(
                 "var ds = new DecompressionStream('deflate-raw'); \
                  var dw = ds.writable.getWriter(); var dr = ds.readable.getReader(); \
-                 dw.write(compressed); dw.close(); \
-                 var result = null; \
-                 dr.read().then(function(r) { result = r.value; });",
+                 dw.write(_joined(csink)); dw.close(); \
+                 var dsink = _sink(); _collect(dr, dsink);",
             )
             .unwrap();
             let r = rt
                 .eval(
-                    "result instanceof Uint8Array && result.length === 5 && \
-                     result[0] === 1 && result[4] === 5",
+                    "var result = _joined(dsink); \
+                     result.length === 5 && result[0] === 1 && result[4] === 5",
                 )
                 .unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
@@ -35534,32 +35600,33 @@ mod tests {
         #[test]
         fn decompression_stream_multi_chunk_matches_single_chunk() {
             let rt = v8_runtime_with_dom(make_doc());
-            // Splitting the compressed body across several writes must decode to the
-            // same bytes as feeding it in one chunk (buffer-then-flush model).
-            rt.eval(
-                "var input = new Uint8Array([9,8,7,6,5,4,3,2,1,0]); \
+            // Splitting the compressed body across several writes must decode to
+            // the same bytes as feeding it in one chunk — the codec has to keep
+            // its state between chunks (`decompression-split-chunk`).
+            rt.eval(&format!(
+                "{COLLECT_JS} \
+                 var input = new Uint8Array([9,8,7,6,5,4,3,2,1,0]); \
                  var cs = new CompressionStream('deflate'); \
                  var cw = cs.writable.getWriter(); var cr = cs.readable.getReader(); \
                  cw.write(input); cw.close(); \
-                 var compressed = null; \
-                 cr.read().then(function(r) { compressed = r.value; });",
-            )
+                 var csink = _sink(); _collect(cr, csink);"
+            ))
             .unwrap();
             rt.eval(
-                "var ds = new DecompressionStream('deflate'); \
+                "var compressed = _joined(csink); \
+                 var ds = new DecompressionStream('deflate'); \
                  var dw = ds.writable.getWriter(); var dr = ds.readable.getReader(); \
                  var mid = compressed.length >> 1; \
                  dw.write(compressed.slice(0, mid)); \
                  dw.write(compressed.slice(mid)); \
                  dw.close(); \
-                 var result = null; \
-                 dr.read().then(function(r) { result = r.value; });",
+                 var dsink = _sink(); _collect(dr, dsink);",
             )
             .unwrap();
             let r = rt
                 .eval(
-                    "result instanceof Uint8Array && result.length === 10 && \
-                     result[0] === 9 && result[9] === 0",
+                    "var result = _joined(dsink); \
+                     result.length === 10 && result[0] === 9 && result[9] === 0",
                 )
                 .unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));

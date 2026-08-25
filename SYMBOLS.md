@@ -1437,7 +1437,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/import_attributes.rs:60` **fn** `new_type_registry` — Creates an empty [`ModuleTypeRegistry`]
 `crates/js/src/import_attributes.rs:310` **fn** `strip_import_attributes` — Strip `with { ... }` / `assert { ... }` import-attribute clauses from
 `crates/js/src/import_meta.rs:23` **fn** `transform_import_meta` — Transform `import.meta` in `source`, binding `url` as `.url`
-`crates/js/src/lib.rs:177` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
+`crates/js/src/lib.rs:178` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
 `crates/js/src/media_capture.rs:57` **fn** `set_audio_capture_provider` — Install the platform audio capture backend
 `crates/js/src/navigator_bindings.rs:35` **struct** `NavigatorProfile` — High-entropy `navigator` / `screen` / timezone values exposed to JavaScript
 `crates/js/src/navigator_bindings.rs:85` **fn** `set_navigator_profile` — Install a process-wide navigator profile (9F.1). Subsequent calls to the
@@ -1553,11 +1553,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/v8_runtime.rs:1568` **fn** `set_import_map` — Install the import map (HTML LS §8.1.6.2) used to resolve bare module
 `crates/js/src/v8_runtime.rs:1695` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
 `crates/js/src/v8_runtime.rs:1766` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
-`crates/js/src/v8_runtime.rs:6572` **fn** `eval_and_report` — Evaluate a classic top-level `<script>` body exactly like
-`crates/js/src/v8_runtime.rs:6586` **fn** `eval_and_report_via` — [`Self::eval_and_report`] with the reporting function named explicitly
-`crates/js/src/v8_runtime.rs:6632` **fn** `eval_module_and_report` — Evaluate `source` as the entry ES module of a top-level page load
-`crates/js/src/v8_runtime.rs:6656` **fn** `eval_module_at_and_report` — External-module counterpart of [`Self::eval_module_and_report`], for
-`crates/js/src/v8_runtime.rs:6666` **fn** `eval_module_at_and_report_via` — [`Self::eval_module_at_and_report`] with the reporting function named
+`crates/js/src/v8_runtime.rs:6546` **fn** `eval_and_report` — Evaluate a classic top-level `<script>` body exactly like
+`crates/js/src/v8_runtime.rs:6560` **fn** `eval_and_report_via` — [`Self::eval_and_report`] with the reporting function named explicitly
+`crates/js/src/v8_runtime.rs:6606` **fn** `eval_module_and_report` — Evaluate `source` as the entry ES module of a top-level page load
+`crates/js/src/v8_runtime.rs:6630` **fn** `eval_module_at_and_report` — External-module counterpart of [`Self::eval_module_and_report`], for
+`crates/js/src/v8_runtime.rs:6640` **fn** `eval_module_at_and_report_via` — [`Self::eval_module_at_and_report`] with the reporting function named
 `crates/js/src/video_gif_store.rs:36` **struct** `VideoPlaybackState` — Per-`<video>` playback timing, stored by the shell after a GIF is decoded
 `crates/js/src/video_gif_store.rs:57` **fn** `current_ms` — Playback position in ms at a given real-clock instant
 `crates/js/src/video_gif_store.rs:66` **fn** `is_ended` — Whether playback has naturally ended (finite loop count exhausted)

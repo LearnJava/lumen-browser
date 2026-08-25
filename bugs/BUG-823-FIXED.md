@@ -170,4 +170,4 @@ boom`; `stream-write-throws` → `write-rejected boom, closed-rejected boom`;
 закрытие `TextDecoderStream` оказалось починено *здесь* как побочный эффект
 переписанной записываемой стороны — перезамер BUG-824 (2026-08-25) показал
 `tds0=hi done=false | tds1 done=true`; остальные три сделаны в BUG-824.
-Поэлементная отдача `DecompressionStream` — [BUG-846](BUG-846-OPEN.md).
+Поэлементная отдача `DecompressionStream` — [BUG-846](BUG-846-FIXED.md).

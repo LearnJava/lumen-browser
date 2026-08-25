@@ -58,11 +58,11 @@
  "generated": "2026-08-25",
  "counts": {
   "open": 383,
-  "fixed": 490,
+  "fixed": 491,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 873,
+ "total_bugs": 874,
  "phases": [
   {
    "id": "P0",
@@ -11004,10 +11004,10 @@
    "debtor": false
   },
   "BUG-846": {
-   "status": "open",
+   "status": "fixed",
    "title": "Compression Streams отдают результат только после `writer.close()`: чтение до закрытия записывающей стороны не разрешается никогда (замер `--variant decompressi…",
    "component": "js (`crates/js/src/dom.rs:8215` `CompressionStream`, `:8232` `DecompressionStream` — `transform` только копит, `enqueue` только во `flush`; `:8197` — комментарий шима, описывающий эту модель)",
-   "date": null,
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-847": {
@@ -11497,6 +11497,13 @@
    "status": "open",
    "title": "IndexedDB: любой «грязный» флаш пересериализует ВЕСЬ снапшот баз происхождения и перезеркаливает ВСЮ схему, O(все базы × все хранилища × все индексы) — инкремен…",
    "component": "js (`crates/js/src/dom.rs` — `_idb_persist_if_dirty` в конце `_lumen_idb_flush`; `_idb_serialize` — `JSON.stringify` всего `_idb_databases`; `_idb_persist_schema` — обход всех баз/хранилищ/индексов с отдельным `_lumen_idb_schema_op` на строку)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-918": {
+   "status": "open",
+   "title": "`unhandledrejection` формируется по концу МИКРОТАСКА, а не задачи: обработчик, навешенный после первого `await` (та же задача, следующий микротаск), уже опаздыв…",
+   "component": "js (`crates/js/src/v8_runtime.rs:407` — `scope.enqueue_microtask(flush)` в `lumen_promise_reject_callback`; `:457` `flush_promise_rejections_callback`)",
    "date": null,
    "debtor": false
   }
@@ -12148,6 +12155,9 @@
   ],
   "js (`crates/js/src/v8_runtime.rs:3543`/`:3554` — `_lumen_ws_send*` зовут `send_text`/`send_binary` из потока JS под `registry.lock()`) + network (`crates/network/src/websocket/mod.rs:189` — `write_frame` в блокирующий `Write`)": [
    "BUG-869"
+  ],
+  "js (`crates/js/src/v8_runtime.rs:407` — `scope.enqueue_microtask(flush)` в `lumen_promise_reject_callback`; `:457` `flush_promise_rejections_callback`)": [
+   "BUG-918"
   ],
   "js (`crates/js/src/v8_runtime.rs:4809-4843` — блок `if let Some(seed) = deterministic_seed`; области `crates/js/src/worker.rs::run_worker_thread_v8`, `shared_worker.rs`, `sw_worker.rs`)": [
    "BUG-768"

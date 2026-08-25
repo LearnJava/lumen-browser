@@ -4939,50 +4939,24 @@ impl V8JsRuntime {
             }
         );
 
-        // Compress `data` using the named format.
-        // `format`: "deflate-raw" (raw DEFLATE, RFC 1951), "deflate" (zlib, RFC 1950), "gzip".
-        // Returns empty Vec on unknown format or I/O error.
-        reg!(
-            "_lumen_compress_bytes",
-            |data: Vec<u8>, format: String| -> Vec<u8> {
-                use flate2::Compression;
-                use std::io::Write as _;
-                match format.as_str() {
-                    "deflate-raw" => {
-                        let mut enc =
-                            flate2::write::DeflateEncoder::new(Vec::new(), Compression::default());
-                        enc.write_all(&data).ok();
-                        enc.finish().unwrap_or_default()
-                    }
-                    "deflate" => {
-                        let mut enc =
-                            flate2::write::ZlibEncoder::new(Vec::new(), Compression::default());
-                        enc.write_all(&data).ok();
-                        enc.finish().unwrap_or_default()
-                    }
-                    "gzip" => {
-                        let mut enc =
-                            flate2::write::GzEncoder::new(Vec::new(), Compression::default());
-                        enc.write_all(&data).ok();
-                        enc.finish().unwrap_or_default()
-                    }
-                    _ => Vec::new(),
-                }
-            }
-        );
-
-        // Decompress `data` using the named format.
-        // `format`: "deflate-raw", "deflate", "gzip".
-        // Returns a status-prefixed byte array (see `crate::dom::_decompress_status_prefixed`)
-        // so the JS `DecompressionStream` shim can tell a decode error apart from a
-        // valid empty result: `out[0] == 1` → success + `out[1..]` decompressed bytes,
-        // `out[0] == 0` → corrupt/truncated/unknown-format input (shim errors the stream).
-        reg!(
-            "_lumen_decompress_bytes",
-            |data: Vec<u8>, format: String| -> Vec<u8> {
-                crate::dom::_decompress_status_prefixed(&data, &format)
-            }
-        );
+        // Compression Streams codecs (`CompressionStream` /
+        // `DecompressionStream`). Stateful and keyed by an opaque handle
+        // because the spec compresses/decompresses per chunk — the one-shot
+        // `bytes -> bytes` pair these replaced had nowhere to keep the codec
+        // between chunks, so nothing was decoded until `writer.close()`
+        // (BUG-846). Status-byte protocol: `crate::compression`.
+        reg!("_lumen_cs_new", |format: String, decompress: bool| -> f64 {
+            f64::from(crate::compression::cs_new(&format, decompress))
+        });
+        reg!("_lumen_cs_push", |handle: f64, data: Vec<u8>| -> Vec<u8> {
+            crate::compression::cs_push(handle as u32, &data)
+        });
+        reg!("_lumen_cs_finish", |handle: f64| -> Vec<u8> {
+            crate::compression::cs_finish(handle as u32)
+        });
+        reg!("_lumen_cs_free", |handle: f64| {
+            crate::compression::cs_free(handle as u32);
+        });
     }
 
     // SubtleCrypto: generateKey/importKey/exportKey/sign/verify/encrypt/decrypt

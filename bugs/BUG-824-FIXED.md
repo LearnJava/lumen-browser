@@ -163,5 +163,5 @@ resp-bytes=3`.
 lumen-js --features v8-backend` — 3116 пройдено, 0 упало; clippy чист.
 
 **Остаётся вне рамок:** `DecompressionStream` по-прежнему отдаёт всё разом
-только на `close()` ([BUG-846](BUG-846-OPEN.md)); передача (detach) буфера
+только на `close()` ([BUG-846](BUG-846-FIXED.md)); передача (detach) буфера
 при BYOB-чтении — см. отступление выше.
