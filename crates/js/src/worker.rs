@@ -725,9 +725,14 @@ pub(crate) const WORKER_TIMERS_SHIM: &str = r#"(function() {
   globalThis.setInterval = function(fn, delay) {
     return _schedule(fn, delay, Array.prototype.slice.call(arguments, 2), true);
   };
+  // The handle is a WebIDL `long` exactly as the delay is, so
+  // `clearTimeout(String(id))` has to cancel timer `id`: the strict `===`
+  // against a raw argument never matched one (BUG-847, the same conversion
+  // the page shim was missing on both arguments).
   globalThis.clearTimeout = function(id) {
+    var handle = Number(id) | 0;
     for (var i = 0; i < _timers.length; i++) {
-      if (_timers[i].id === id) { _timers.splice(i, 1); return; }
+      if (_timers[i].id === handle) { _timers.splice(i, 1); return; }
     }
   };
   // One list, one id space — as the spec's single "map of active timers" has.
@@ -3414,6 +3419,31 @@ mod tests_v8 {
         // Nothing is left pending, so the thread would go back to a plain
         // blocking `recv()` — which is the observable form of "it stopped".
         assert!(run_worker_tasks(&rt).is_none());
+    }
+
+    /// [BUG-847] The `long` conversion the delay already got (`_toDelay`) was
+    /// missing on the *handle*, so `clearTimeout(String(id))` matched nothing
+    /// and the callback still ran — the page shim had the same hole on both
+    /// arguments.
+    #[test]
+    fn v8_worker_clear_timeout_converts_its_handle() {
+        let (rt, _errors) = scope_with_errors("http://example.test/w.js");
+        rt.eval(
+            "var fired = false; \
+             var h = setTimeout(function() { fired = true; }, 5); \
+             clearTimeout(String(h));",
+        )
+        .unwrap();
+        assert!(!pump_until(
+            &rt,
+            "fired",
+            std::time::Duration::from_millis(200)
+        ));
+        assert_eq!(
+            rt.eval("fired").unwrap(),
+            lumen_core::JsValue::Bool(false),
+            "a cancelled timer must not fire"
+        );
     }
 
     /// [BUG-815] The value the Rust loop actually steers by: `None` is "block

@@ -7845,6 +7845,29 @@ function _lumen_clamp_timeout(ms, nesting) {
     return (nesting > 5 && ms < 4) ? 4 : ms;
 }
 
+// WebIDL `long` — the type §8.6 declares for the `timeout` argument — is
+// ToNumber followed by ToInt32, and only then does step 5 «if timeout is less
+// than 0, set timeout to 0» apply. `(typeof delay === 'number' && delay > 0)`
+// implemented neither half (BUG-847), and got four separate answers wrong:
+// `Math.pow(2, 32)` armed a timer 49 days out where ToInt32 makes it 0,
+// `Math.pow(2, 31)` the same via the negative side of the modulo, `Infinity`
+// produced a deadline nothing can ever reach, and a delay that is not already
+// a number — `'100'`, an object with a `valueOf` — was silently taken as 0
+// instead of being converted. This is `_toDelay` of `WORKER_TIMERS_SHIM`
+// verbatim: §8.6 is `WindowOrWorkerGlobalScope`, so the two must agree.
+function _lumen_timer_delay(v) {
+    var n = Number(v) | 0;
+    return n < 0 ? 0 : n;
+}
+
+// The handle of `clearTimeout`/`clearInterval` is a WebIDL `long` too, so
+// `clearTimeout(String(id))` must cancel the timer `id` — the strict `===`
+// against a raw argument never matched one (BUG-847, same defect one function
+// over; `cancelAnimationFrame` next door already converted its own).
+function _lumen_timer_handle(v) {
+    return Number(v) | 0;
+}
+
 // HTML LS §8.6 «timer initialization steps»: a handler that is not a Function
 // is taken as a string and run as a **classic script** — compiled when the
 // timer FIRES, not when it is scheduled, and afresh on every firing of a
@@ -7904,7 +7927,7 @@ function _lumen_tick_timers() {
 function setTimeout(fn, delay) {
     if (typeof fn !== 'function') fn = _lumen_timer_string_handler(fn);
     var nesting = _lumen_timer_nesting + 1;
-    var ms = (typeof delay === 'number' && delay > 0) ? delay : 0;
+    var ms = _lumen_timer_delay(delay);
     ms = _lumen_clamp_timeout(ms, nesting);
     var id = _lumen_timer_seq++;
     var deadline = _lumen_now_ms() + ms;
@@ -7914,15 +7937,16 @@ function setTimeout(fn, delay) {
 }
 
 function clearTimeout(id) {
+    var handle = _lumen_timer_handle(id);
     for (var i = 0; i < _lumen_timers.length; i++) {
-        if (_lumen_timers[i].id === id) { _lumen_timers.splice(i, 1); return; }
+        if (_lumen_timers[i].id === handle) { _lumen_timers.splice(i, 1); return; }
     }
 }
 
 function setInterval(fn, interval) {
     if (typeof fn !== 'function') fn = _lumen_timer_string_handler(fn);
     var nesting = _lumen_timer_nesting + 1;
-    var ms = (typeof interval === 'number' && interval > 0) ? interval : 0;
+    var ms = _lumen_timer_delay(interval);
     var first = _lumen_clamp_timeout(ms, nesting);
     var id = _lumen_timer_seq++;
     var deadline = _lumen_now_ms() + first;
@@ -25928,6 +25952,108 @@ mod tests {
             rt.eval("_lumen_tick_timers();").unwrap();
             let result = rt.eval("n831").unwrap();
             assert!(matches!(result, lumen_core::JsValue::Number(n) if n >= 2.0));
+        }
+
+        /// [BUG-847] The `timeout` argument is a WebIDL `long`, so ToInt32
+        /// makes `Math.pow(2, 32)` an immediate timer. Before the fix it was
+        /// scheduled 49 days out and the page could not tell that apart from a
+        /// timer that had been dropped.
+        #[test]
+        fn bug847_delay_above_int32_range_is_immediate() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var n847 = 0; setTimeout(function() { n847 = 1; }, Math.pow(2, 32));")
+                .unwrap();
+            let result = rt.eval("_lumen_tick_timers(); n847").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        /// [BUG-847] `Math.pow(2, 31)` reaches 0 by the other side of the same
+        /// modulo — ToInt32 makes it the most negative `long`, which §8.6
+        /// step 5 then raises to 0. An interval must repeat at that rate, not
+        /// fire once (`type-long-setinterval.any.js`).
+        #[test]
+        fn bug847_interval_delay_at_int32_boundary_repeats() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var i847 = 0; setInterval(function() { i847++; }, Math.pow(2, 31));")
+                .unwrap();
+            rt.eval("_lumen_tick_timers();").unwrap();
+            rt.eval("_lumen_tick_timers();").unwrap();
+            let result = rt.eval("i847").unwrap();
+            assert!(matches!(result, lumen_core::JsValue::Number(n) if n >= 2.0));
+        }
+
+        /// [BUG-847] `Infinity` used to become the deadline verbatim, i.e. a
+        /// timer nothing can ever reach. ToInt32 of a non-finite number is 0.
+        #[test]
+        fn bug847_infinite_delay_is_immediate() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var inf847 = 0; setTimeout(function() { inf847 = 1; }, Infinity);")
+                .unwrap();
+            let result = rt.eval("_lumen_tick_timers(); inf847").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        /// [BUG-847] The conversion starts at ToNumber, so a delay that is not
+        /// already a number is converted rather than dropped: the old
+        /// `typeof delay === 'number'` guard read `'100'` and an object with a
+        /// `valueOf` as 0, i.e. as "fire on the next tick".
+        #[test]
+        fn bug847_non_number_delay_is_converted_not_dropped() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "(function () {
+                        _lumen_timers.length = 0;
+                        var base = _lumen_now_ms();
+                        setTimeout(function () {}, '100');
+                        setTimeout(function () {}, { valueOf: function () { return 250; } });
+                        setTimeout(function () {}, 1.9);
+                        return _lumen_timers.map(function (t) {
+                            return Math.floor(t.deadline - base);
+                        }).join(',');
+                     })()",
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("100,250,1".into()));
+        }
+
+        /// [BUG-847] A negative delay is 0, not a deadline in the past that
+        /// happens to work by accident — and `undefined`/`NaN`/`null` are 0
+        /// through ToNumber rather than through the dropped-argument branch.
+        #[test]
+        fn bug847_negative_and_nan_delays_are_zero() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "(function () {
+                        _lumen_timers.length = 0;
+                        var base = _lumen_now_ms();
+                        setTimeout(function () {}, -100);
+                        setTimeout(function () {}, NaN);
+                        setTimeout(function () {});
+                        // Zero, so the deadline is the scheduling instant — not
+                        // 100 ms in the past, and not NaN (which fails every
+                        // comparison and so is never due).
+                        return _lumen_timers.every(function (t) {
+                            var d = t.deadline - base;
+                            return d >= 0 && d < 5;
+                        });
+                     })()",
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        /// [BUG-847] The handle of `clearTimeout` is a WebIDL `long` too, so a
+        /// stringified id must cancel the timer it names. The strict `===`
+        /// against the raw argument matched nothing and the callback still ran.
+        #[test]
+        fn bug847_clear_timeout_converts_its_handle() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var c847 = 0; var id847 = setTimeout(function() { c847 = 1; }, 0); clearTimeout(String(id847));")
+                .unwrap();
+            let result = rt.eval("_lumen_tick_timers(); c847").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(0.0));
         }
 
         #[test]
