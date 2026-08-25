@@ -23,6 +23,34 @@ the time — read dates.
 
 ## Done
 
+- **`history.pushState`/`replaceState` resolve their URL, and a traversal restores both halves
+  of the entry ([BUG-829](../bugs/BUG-829-FIXED.md), P1, 2026-08-25).** One reported defect, three
+  boundaries. **(1)** The `url` argument went into `_lumen_location_update` verbatim, so
+  `pushState(s, '', '?x')` left `location.href === '?x'` with an empty `search`. It now goes
+  through `_lumen_history_state_url`: `new URL(url, _lumen_document_base_url())` — the **document
+  base URL** HTML LS §7.4.6 step 3 asks for, not `location.href`, and the two differ on a page with
+  `<base href>` — plus `_lumen_history_can_rewrite_url` (the spec's «can have its URL rewritten»:
+  a difference in scheme/username/password/host/port is refused; an HTTP(S) document is then free
+  inside its origin, while under any other scheme only the fragment may differ). Both throw
+  `SecurityError` **before** `_lumen_history_push`, since a refused call must leave the session
+  history untouched. `""` as the third argument is now a real relative reference resolving to the
+  base URL, where it used to collapse into the "argument omitted" branch. **(2)** In the shell, the
+  `pushState` drain stored the back-stack entry with `display_url: self.display_url.take()`, which
+  is `None` until the first `pushState` (the document URL lives in `source`), and
+  `_lumen_deliver_popstate` reads an empty URL as «keep the current one» — so a traversal restored
+  the state and left `location` on the pushed address. It falls back to the document's own URL now,
+  the way `current_display_url` does. **(3)** The one worth carrying: `fire_popstate` built
+  `_lumen_deliver_popstate({state_json}, '{url}')` with the JSON embedded **bare**, on the
+  reasoning that valid JSON is a valid JS expression — but the shim takes JSON *text* and runs
+  `JSON.parse` on it, so it got an object literal, the parse threw, and every traversal delivered
+  `state: null`. It went unnoticed because `null` is the only value that round-trips through that
+  confusion unchanged. The text is serialized into a JS string literal now
+  (`serde_json::to_string`), and the call is built by `popstate_eval_source` so both argument
+  encodings can be asserted without a live runtime. Accepting either shape on the shim side was
+  rejected: a string state (`pushState("hi")`) is indistinguishable from JSON text that way.
+  `pushState(state, "")` with no URL argument still fires no `popstate`
+  ([BUG-886](../bugs/BUG-886-OPEN.md)) — that entry never reaches the shell's stack.
+
 - **The node wrapper's interface lives on a shared prototype, not on every node
   ([BUG-849](../bugs/BUG-849-FIXED.md), P1, 2026-08-23).** `_lumen_build_element` used
   to mint the whole DOM interface per node — **236 own properties** (the builder's object
@@ -1276,9 +1304,11 @@ the time — read dates.
   before the first colon, and that is what the predicate uses. **(2) Snapshot the value, don't
   re-read it per access.** The flag belongs to the environment settings object and is fixed when
   the document is created (HTML LS §8.1.5.1) — which is exactly the granularity of `install_dom`.
-  A live read is also actively wrong: same-document `history.pushState(s, '', '/x')` stores that
-  raw *relative* string in `_lumen_loc_parts` (see `_lumen_location_update`), which would flip an
-  https page to insecure. The snapshot lives in a closure rather than a `_lumen_…` global, since
+  Until [BUG-829](../bugs/BUG-829-FIXED.md) a live read was also actively wrong: same-document
+  `history.pushState(s, '', '/x')` stored that raw *relative* string in `_lumen_loc_parts` (see
+  `_lumen_location_update`), which would have flipped an https page to insecure. That string is a
+  resolved same-origin URL now, so the snapshot rests on the spec rule alone rather than on working
+  around a defect. The snapshot lives in a closure rather than a `_lumen_…` global, since
   `seal_internal_globals_v8` leaves engine state writable. Nothing in the engine reads the flag yet
   — `[SecureContext]` gating is [BUG-765](../bugs/BUG-765-OPEN.md), and `WorkerGlobalScope` has no
   such property at all ([BUG-766](../bugs/BUG-766-OPEN.md)).

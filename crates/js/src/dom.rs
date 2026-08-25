@@ -7907,11 +7907,16 @@ var _popstate_listeners = [];
 function _lumen_deliver_popstate(state_json, url) {
     var oldHref = _lumen_loc_href;
     var oldHash = oldHref.indexOf('#') >= 0 ? oldHref.slice(oldHref.indexOf('#')) : '';
-    if (url) _lumen_location_update(url);
+    // Since BUG-829 an entry URL is absolute by the time it is stored, so this
+    // resolve is a no-op for anything the engine itself wrote. It stays because
+    // a traversal must never throw: a stale or odd value is resolved leniently
+    // here rather than rejected the way `pushState` rejects it.
+    var target = url ? _url_resolve(String(url), _lumen_document_base_url()) : '';
+    if (target) _lumen_location_update(target);
     // Sync the JS-side HistoryState mirror so history.state reflects the
     // state object delivered by a shell-driven traversal (HTML LS §7.4.6).
     _lumen_history_set_state(state_json);
-    var newHref = url ? url : oldHref;
+    var newHref = target ? target : oldHref;
     var newHash = newHref.indexOf('#') >= 0 ? newHref.slice(newHref.indexOf('#')) : '';
     var s;
     try { s = JSON.parse(state_json); } catch(e) { s = null; }
@@ -7922,9 +7927,53 @@ function _lumen_deliver_popstate(state_json, url) {
     for (var i = 0; i < _popstate_listeners.length; i++) {
         try { _popstate_listeners[i](ev); } catch(e) { _lumen_report_exception(e); }
     }
-    if (url && oldHash !== newHash) {
+    if (target && oldHash !== newHash) {
         _lumen_fire_hashchange(oldHref, newHref);
     }
+}
+
+// HTML LS §7.4.6 «shared history push/replace state steps» step 3: the `url`
+// argument of `pushState`/`replaceState` is parsed relative to the DOCUMENT
+// BASE URL, and it is the *serialization of the result* — an absolute URL —
+// that becomes the entry's, and therefore the document's, URL. Before BUG-829
+// the raw argument was handed to `_lumen_location_update` verbatim, so an SPA
+// router's first `pushState(s, '', '/products/42')` left `location.href` as
+// `/products/42` with an empty `search`: on the *successful* path, with
+// nothing in the console, and with every later absolute-link build, query read
+// or origin comparison on the page running off that garbage.
+// Returns the absolute URL, or throws the `SecurityError` the spec asks for
+// (steps 3.2/3.3) when the URL does not parse or this document may not be
+// rewritten to it.
+function _lumen_history_state_url(url) {
+    var resolved;
+    try {
+        resolved = new URL(String(url), _lumen_document_base_url()).href;
+    } catch (e) {
+        throw new DOMException(
+            'pushState/replaceState: cannot parse ' + String(url) + ' as a URL',
+            'SecurityError');
+    }
+    if (!_lumen_history_can_rewrite_url(resolved)) {
+        throw new DOMException(
+            'pushState/replaceState: a document at ' + _lumen_loc_href +
+            ' cannot have its URL rewritten to ' + resolved,
+            'SecurityError');
+    }
+    return resolved;
+}
+// HTML LS «can have its URL rewritten»: a target differing from the document
+// URL in scheme, credentials, host or port is refused outright; an HTTP(S)
+// document may then move anywhere inside its origin (path, query, fragment),
+// while under any other scheme (`file:`, `about:`, `data:`, `blob:`) only the
+// fragment may differ. The spec names `file:` in a step of its own, but its
+// next step covers the query for that scheme too, so both collapse into the
+// single comparison below.
+function _lumen_history_can_rewrite_url(target) {
+    var t = _lumen_parse_url(target), d = _lumen_loc_parts;
+    if (t.protocol !== d.protocol || t.username !== d.username
+        || t.password !== d.password || t.host !== d.host) return false;
+    if (t.protocol === 'http:' || t.protocol === 'https:') return true;
+    return t.pathname === d.pathname && t.search === d.search;
 }
 
 var history = {
@@ -7936,20 +7985,25 @@ var history = {
     get state()   {
         try { return JSON.parse(_lumen_history_state_json()); } catch(e) { return null; }
     },
+    // `url` is a nullable DOMString defaulting to null, so only an omitted (or
+    // explicitly null) argument leaves the document URL alone; an empty string
+    // is an ordinary relative reference and resolves to the base URL. The
+    // resolution runs BEFORE anything is stored, because its `SecurityError`
+    // must leave the session history untouched (HTML LS §7.4.6 step 3).
     pushState:    function(state, title, url) {
-        var target = String(url !== undefined && url !== null ? url : '');
+        var target = (url === undefined || url === null) ? null : _lumen_history_state_url(url);
         var new_state_json = JSON.stringify(state !== undefined ? state : null);
-        _lumen_history_push(new_state_json, target);
-        if (target) {
+        _lumen_history_push(new_state_json, target === null ? '' : target);
+        if (target !== null) {
             _lumen_location_update(target);
             _lumen_history_push_url(target, new_state_json);
         }
     },
     replaceState: function(state, title, url) {
-        var target = String(url !== undefined && url !== null ? url : '');
+        var target = (url === undefined || url === null) ? null : _lumen_history_state_url(url);
         var new_state_json = JSON.stringify(state !== undefined ? state : null);
-        _lumen_history_replace(new_state_json, target);
-        if (target) {
+        _lumen_history_replace(new_state_json, target === null ? '' : target);
+        if (target !== null) {
             _lumen_location_update(target);
             _lumen_history_replace_url(target, new_state_json);
         }
@@ -13816,11 +13870,12 @@ window.MessagePort           = MessagePort;
 // Snapshotted here, not re-read from `_lumen_loc_parts` on every access: the
 // flag belongs to the environment settings object and is fixed when the
 // document is created (HTML LS §8.1.5.1), and a document is exactly what a
-// fresh runtime is installed for (`install_dom` runs per navigation). A live
-// read would also be actively wrong — a same-document
-// `history.pushState(s, '', '/x')` stores that raw relative string in
-// `_lumen_loc_parts` (see `_lumen_location_update`), which would flip the flag
-// to false on an https page. The value is held in a closure, not in a
+// fresh runtime is installed for (`install_dom` runs per navigation). Until
+// BUG-829 a live read would also have been actively wrong — `pushState` stored
+// its raw relative argument in `_lumen_loc_parts`, which flipped the flag to
+// false on an https page; that string is an absolute URL of the same origin
+// now, so the snapshot rests on the spec rule alone rather than on working
+// around a defect. The value is held in a closure, not in a
 // `_lumen_…` global, so it survives `seal_internal_globals_v8` leaving engine
 // *state* writable; the property itself is the readonly accessor WebIDL
 // declares, so page script cannot answer for the engine by plain assignment.
@@ -24797,7 +24852,7 @@ mod tests {
 
         #[test]
         fn history_push_state_increments_length() {
-            let rt = v8_runtime_with_dom(make_doc());
+            let rt = v8_runtime_with_url("https://example.com/start");
             rt.eval("history.pushState({page: 1}, '', '/page1');").unwrap();
             rt.eval("history.pushState({page: 2}, '', '/page2');").unwrap();
             let result = rt.eval("history.length").unwrap();
@@ -24806,7 +24861,7 @@ mod tests {
 
         #[test]
         fn history_state_after_push_returns_state() {
-            let rt = v8_runtime_with_dom(make_doc());
+            let rt = v8_runtime_with_url("https://example.com/start");
             rt.eval("history.pushState({x: 42}, '', '/p');").unwrap();
             let result = rt.eval("history.state.x").unwrap();
             assert_eq!(result, lumen_core::JsValue::Number(42.0));
@@ -24814,7 +24869,7 @@ mod tests {
 
         #[test]
         fn history_replace_state_keeps_length() {
-            let rt = v8_runtime_with_dom(make_doc());
+            let rt = v8_runtime_with_url("https://example.com/start");
             rt.eval("history.pushState({n: 1}, '', '/a');").unwrap();
             rt.eval("history.replaceState({n: 99}, '', '/a2');").unwrap();
             let len = rt.eval("history.length").unwrap();
@@ -24823,9 +24878,104 @@ mod tests {
             assert_eq!(state, lumen_core::JsValue::Number(99.0));
         }
 
+        /// BUG-829 — HTML LS §7.4.6 step 3: the `url` argument is parsed
+        /// relative to the document base URL, and the *resolved* URL is what
+        /// the document gets. A query-only argument used to land in
+        /// `location.href` verbatim, leaving `search` empty — so an SPA router
+        /// read its own query parameters off a string that was not a URL.
+        #[test]
+        fn history_push_state_resolves_url_against_document_base() {
+            let rt = v8_runtime_with_url("https://example.com/shop/index.html");
+            rt.eval("history.pushState({}, '', '?id=42')").unwrap();
+            assert_eq!(
+                rt.eval("location.href").unwrap(),
+                lumen_core::JsValue::String("https://example.com/shop/index.html?id=42".into())
+            );
+            assert_eq!(
+                rt.eval("location.search").unwrap(),
+                lumen_core::JsValue::String("?id=42".into())
+            );
+            // A path-relative argument resolves against the directory of the
+            // document, a root-relative one against the origin.
+            rt.eval("history.pushState({}, '', 'cart.html')").unwrap();
+            assert_eq!(
+                rt.eval("location.href").unwrap(),
+                lumen_core::JsValue::String("https://example.com/shop/cart.html".into())
+            );
+            rt.eval("history.pushState({}, '', '/about')").unwrap();
+            assert_eq!(
+                rt.eval("location.pathname").unwrap(),
+                lumen_core::JsValue::String("/about".into())
+            );
+        }
+
+        /// The fragment half of the same defect: `pushState(s, '', '#frag')`
+        /// used to leave `location.hash` empty while `href` became `#frag`.
+        #[test]
+        fn history_push_state_resolves_fragment_only_url() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("history.pushState({}, '', '#frag')").unwrap();
+            assert_eq!(
+                rt.eval("location.href").unwrap(),
+                lumen_core::JsValue::String("https://example.com/page#frag".into())
+            );
+            assert_eq!(
+                rt.eval("location.hash").unwrap(),
+                lumen_core::JsValue::String("#frag".into())
+            );
+        }
+
+        /// `replaceState` shares the resolution path with `pushState`.
+        #[test]
+        fn history_replace_state_resolves_url_against_document_base() {
+            let rt = v8_runtime_with_url("https://example.com/shop/index.html");
+            rt.eval("history.replaceState({}, '', '?id=7')").unwrap();
+            assert_eq!(
+                rt.eval("location.search").unwrap(),
+                lumen_core::JsValue::String("?id=7".into())
+            );
+            assert_eq!(
+                rt.eval("location.href").unwrap(),
+                lumen_core::JsValue::String("https://example.com/shop/index.html?id=7".into())
+            );
+        }
+
+        /// HTML LS §7.4.6 step 3.3 — a document may only be rewritten to a URL
+        /// of its own origin. The throw has to happen before anything is
+        /// stored, so a refused call must leave the session history untouched.
+        #[test]
+        fn history_push_state_cross_origin_url_throws_security_error() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            let r = rt
+                .eval(
+                    "var name = '';                      try { history.pushState({}, '', 'https://evil.example/x'); }                      catch (e) { name = e.name; }                      name + '|' + history.length + '|' + location.href",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "SecurityError|1|https://example.com/page".into()
+                )
+            );
+            assert!(rt.take_history_url_updates().is_empty());
+        }
+
+        /// A different port is a different origin too — the check is on the
+        /// whole scheme/credentials/host/port tuple, not on the host alone.
+        #[test]
+        fn history_replace_state_cross_port_url_throws_security_error() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            let r = rt
+                .eval(
+                    "var name = '';                      try { history.replaceState({}, '', 'https://example.com:8443/page'); }                      catch (e) { name = e.name; } name",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("SecurityError".into()));
+        }
+
         #[test]
         fn history_back_fires_popstate_with_previous_state() {
-            let rt = v8_runtime_with_dom(make_doc());
+            let rt = v8_runtime_with_url("https://example.com/start");
             rt.eval(
                 "var events = []; \
                  window.addEventListener('popstate', function(e) { events.push(e.state); }); \
@@ -24848,7 +24998,7 @@ mod tests {
 
         #[test]
         fn history_forward_after_back() {
-            let rt = v8_runtime_with_dom(make_doc());
+            let rt = v8_runtime_with_url("https://example.com/start");
             rt.eval(
                 "history.pushState({n: 1}, '', '/p1'); \
                  history.pushState({n: 2}, '', '/p2'); \
@@ -24878,7 +25028,7 @@ mod tests {
 
         #[test]
         fn window_onpopstate_fires_on_back() {
-            let rt = v8_runtime_with_dom(make_doc());
+            let rt = v8_runtime_with_url("https://example.com/start");
             rt.eval(
                 "var captured = null; \
                  window.onpopstate = function(e) { captured = e.state; }; \
@@ -24892,7 +25042,7 @@ mod tests {
 
         #[test]
         fn history_push_drops_forward_entries() {
-            let rt = v8_runtime_with_dom(make_doc());
+            let rt = v8_runtime_with_url("https://example.com/start");
             rt.eval(
                 "history.pushState({n: 1}, '', '/p1'); \
                  history.pushState({n: 2}, '', '/p2'); \
@@ -25006,7 +25156,7 @@ mod tests {
 
         #[test]
         fn window_remove_event_listener_stops_popstate() {
-            let rt = v8_runtime_with_dom(make_doc());
+            let rt = v8_runtime_with_url("https://example.com/start");
             rt.eval(
                 "var count = 0; \
                  function handler(e) { count++; } \
@@ -28908,8 +29058,10 @@ mod tests {
         fn push_state_updates_location_href() {
             let rt = v8_runtime_with_url("https://example.com/page1");
             rt.eval("history.pushState(null, '', '/page2')").unwrap();
+            // BUG-829: the entry URL is the argument resolved against the document
+            // base URL, not the argument itself.
             let r = rt.eval("location.href").unwrap();
-            assert_eq!(r, lumen_core::JsValue::String("/page2".into()));
+            assert_eq!(r, lumen_core::JsValue::String("https://example.com/page2".into()));
         }
 
         #[test]
@@ -28917,7 +29069,7 @@ mod tests {
             let rt = v8_runtime_with_url("https://example.com/page1");
             rt.eval("history.replaceState({x:1}, '', '/replaced')").unwrap();
             let r = rt.eval("location.href").unwrap();
-            assert_eq!(r, lumen_core::JsValue::String("/replaced".into()));
+            assert_eq!(r, lumen_core::JsValue::String("https://example.com/replaced".into()));
         }
 
         #[test]
@@ -28936,7 +29088,9 @@ mod tests {
             assert_eq!(updates.len(), 1, "one push update expected");
             match &updates[0] {
                 HistoryUrlUpdate::Push { url, new_state_json } => {
-                    assert_eq!(url, "/page2");
+                    // The shell is handed the resolved absolute URL (BUG-829), so
+                    // the address bar and the back-stack entry agree with `location`.
+                    assert_eq!(url, "https://example.com/page2");
                     assert_eq!(new_state_json, r#"{"a":1}"#);
                 }
                 other => panic!("expected Push, got {other:?}"),
@@ -28953,7 +29107,7 @@ mod tests {
             assert_eq!(updates.len(), 1, "one replace update expected");
             match &updates[0] {
                 HistoryUrlUpdate::Replace { url, new_state_json } => {
-                    assert_eq!(url, "/new-page");
+                    assert_eq!(url, "https://example.com/new-page");
                     assert_eq!(new_state_json, r#"{"b":2}"#);
                 }
                 other => panic!("expected Replace, got {other:?}"),
@@ -28981,10 +29135,17 @@ mod tests {
         fn deliver_popstate_updates_location() {
             let rt = v8_runtime_with_url("https://example.com/page1");
             rt.eval("_lumen_deliver_popstate('null', '/restored')").unwrap();
-            // _lumen_location_update updates href (= raw url string).
-            // pathname is only correct for absolute URLs due to _lumen_parse_url limitations.
-            let r = rt.eval("location.href").unwrap();
-            assert_eq!(r, lumen_core::JsValue::String("/restored".into()));
+            // A delivered entry URL is resolved against the document base URL too
+            // (BUG-829), so `location` stays a whole URL through a traversal and
+            // `pathname`/`search` keep working.
+            assert_eq!(
+                rt.eval("location.href").unwrap(),
+                lumen_core::JsValue::String("https://example.com/restored".into())
+            );
+            assert_eq!(
+                rt.eval("location.pathname").unwrap(),
+                lumen_core::JsValue::String("/restored".into())
+            );
         }
 
         #[test]
@@ -41398,13 +41559,14 @@ mod tests {
         }
 
         /// A same-document URL change does not re-create the environment, so
-        /// it must not move the flag — least of all through the raw relative
-        /// string `pushState` leaves in the parsed location parts.
+        /// it must not move the flag. Since BUG-829 the parsed location parts
+        /// hold a resolved same-origin URL rather than the raw relative string,
+        /// so the snapshot is no longer the only thing keeping this true.
         #[test]
         fn is_secure_context_survives_same_document_navigation() {
             let rt = v8_runtime_with_url("https://example.com/page");
             rt.eval("history.pushState({}, '', '/other')").unwrap();
-            assert!(bool_eval(&rt, "location.href === '/other'"));
+            assert!(bool_eval(&rt, "location.href === 'https://example.com/other'"));
             assert!(bool_eval(&rt, "window.isSecureContext === true"));
         }
 

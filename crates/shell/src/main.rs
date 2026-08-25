@@ -3329,6 +3329,21 @@ struct V8PersistentJs {
     rt: lumen_js::v8_runtime::V8JsRuntime,
 }
 
+/// Build the `_lumen_deliver_popstate(...)` call a same-document traversal
+/// evaluates (see `PersistentJs::fire_popstate`).
+///
+/// Split out of `fire_popstate` so the two argument encodings can be asserted
+/// without a live runtime — they are not the same and BUG-829 was exactly that
+/// confusion. `state_json` is JSON **text** that the shim parses, so it goes in
+/// as a JS string literal; `url` is an ordinary string in single quotes.
+#[cfg(feature = "v8")]
+fn popstate_eval_source(state_json: &str, url: &str) -> String {
+    let escaped = url.replace('\\', "\\\\").replace('\'', "\\'");
+    let state_lit =
+        serde_json::to_string(state_json).unwrap_or_else(|_| String::from("\"null\""));
+    format!("_lumen_deliver_popstate({state_lit}, '{escaped}')")
+}
+
 #[cfg(feature = "v8")]
 impl PersistentJs for V8PersistentJs {
     fn eval_js(&self, script: &str) {
@@ -3581,10 +3596,14 @@ impl PersistentJs for V8PersistentJs {
         self.rt.take_history_traversals()
     }
     fn fire_popstate(&self, state_json: &str, url: &str) {
-        // Escape url for embedding in a JS string literal (single-quoted).
-        let escaped = url.replace('\\', "\\\\").replace('\'', "\\'");
-        // state_json is already valid JSON — embed directly without quoting.
-        self.eval_js(&format!("_lumen_deliver_popstate({state_json}, '{escaped}')"));
+        // BUG-829: `state_json` is JSON *text* and `_lumen_deliver_popstate`
+        // parses it as such, so it has to reach the shim as a JS string. This
+        // used to embed it bare — on the reasoning that valid JSON is also a
+        // valid JS expression — which handed the shim an object literal
+        // instead, whose `JSON.parse` then threw, so every traversal restored
+        // `state: null`. Nobody noticed because the one value that survives
+        // that round trip unchanged is `null` itself.
+        self.eval_js(&popstate_eval_source(state_json, url));
     }
     fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)> {
         self.rt.flush_canvas_updates()
@@ -14239,7 +14258,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             for (is_push, url, new_state_json) in updates {
                 if is_push {
                     // pushState: save current state to nav_back as same-doc entry.
-                    let old_display = self.display_url.take();
+                    // BUG-829: before the first pushState `display_url` is None —
+                    // the document URL lives in `source` — so the entry used to be
+                    // stored with no URL at all and `fire_popstate` handed JS an
+                    // empty string, which `_lumen_deliver_popstate` reads as "keep
+                    // the current URL". Traversing back therefore restored the
+                    // state and left `location` on the pushed URL. Fall back to the
+                    // document's own URL, the same way `current_display_url` does.
+                    let old_display = self
+                        .display_url
+                        .take()
+                        .or_else(|| self.source.url_str().map(str::to_owned));
                     let old_state = std::mem::replace(
                          &mut self.current_history_state_json,
                         new_state_json,
@@ -26247,6 +26276,44 @@ mod tests {
         assert_eq!(escape_js_string("it's"), r"it\'s");
         // Non-ASCII goes over as a `\uXXXX` escape, not a raw character.
         assert_eq!(escape_js_string("\u{444}"), r"\u0444");
+    }
+
+    // \u2500\u2500 BUG-829: a traversal hands JS the entry's state as JSON *text* \u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+    /// The shim's `_lumen_deliver_popstate` runs `JSON.parse` on its first
+    /// argument, so a bare `{"n":1}` reached it as an object literal, threw
+    /// inside that parse and delivered `state: null` \u2014 for every state but
+    /// `null`, which is the one value that survived the confusion unchanged.
+    #[cfg(feature = "v8")]
+    #[test]
+    fn popstate_state_is_passed_as_a_json_string_not_an_object_literal() {
+        assert_eq!(
+            popstate_eval_source(r#"{"n":1}"#, "https://example.com/p?a=1"),
+            r#"_lumen_deliver_popstate("{\"n\":1}", 'https://example.com/p?a=1')"#
+        );
+        // A string state is the case the confusion could not have survived at
+        // all: bare, `"hi"` arrived as the JS string `hi` and `JSON.parse`
+        // rejected it.
+        assert_eq!(
+            popstate_eval_source(r#""hi""#, ""),
+            r#"_lumen_deliver_popstate("\"hi\"", '')"#
+        );
+        assert_eq!(
+            popstate_eval_source("null", ""),
+            r#"_lumen_deliver_popstate("null", '')"#
+        );
+    }
+
+    /// The URL keeps its own single-quote encoding, and a state carrying a
+    /// quote or a backslash must not be able to break out of either literal.
+    #[cfg(feature = "v8")]
+    #[test]
+    fn popstate_eval_source_escapes_both_arguments() {
+        let src = popstate_eval_source(r#"{"s":"a'b\\c"}"#, "https://e.example/it's\\x");
+        assert!(src.contains(r#"'https://e.example/it\'s\\x'"#), "url: {src}");
+        // The state literal is double-quoted, so an apostrophe inside it is
+        // harmless; the backslash and the inner quotes are the ones escaped.
+        assert!(src.contains(r#""{\"s\":\"a'b\\\\c\"}""#), "state: {src}");
     }
 
     // ── ADR-023: engine-thread default flip + rollback precedence ────────────

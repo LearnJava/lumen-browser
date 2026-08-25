@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-25",
  "counts": {
-  "open": 386,
-  "fixed": 478,
+  "open": 385,
+  "fixed": 479,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -10903,10 +10903,10 @@
    "debtor": false
   },
   "BUG-829": {
-   "status": "open",
+   "status": "fixed",
    "title": "`history.pushState(s, '', '?x')` кладёт в `Location` НЕРЕЗОЛВНУТУЮ строку: `location.href` становится `?x` (вместо абсолютного URL), `location.search` остаётся…",
    "component": "js (`crates/js/src/dom.rs:6921`/`:6930` — `pushState`/`replaceState` зовут `_lumen_location_update(target)` сырым аргументом; `:6231` — `_lumen_location_update` разбирает эту строку как есть; `:11438` — комментарий шима, который это поведение уже фиксирует)",
-   "date": null,
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-830": {
