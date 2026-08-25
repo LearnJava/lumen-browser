@@ -312,6 +312,81 @@ setTimeout(function () {
 </script>
 """, "cv-support onevent=true + cv-statechange + non-empty computed values"),
 
+    # BUG-852, added by P1 2026-08-25 before the fix. `cv-auto-state` above
+    # measures one element that is skipped from the start; the WPT test the bug
+    # names (`content-visibility-auto-state-changed-first-observation.html`)
+    # measures the *first* observation of an element that has just gained
+    # `content-visibility: auto` — and asserts it fires exactly once, in BOTH
+    # directions: `skipped=false` for an element in the viewport,
+    # `skipped=true` for one below it. Both elements are empty, which is the
+    # part no reading of the shell's diff would have flagged: `collect_cv_skipped`
+    # calls a box skipped when its children are empty, so an empty element is
+    # indistinguishable from a skipped one there while layout's own
+    # `cv_should_skip` never even considers it (it is gated on `!children.is_empty()`).
+    "cv-first-observation": ("""
+<div id="topdiv"></div>
+<div style="height:10000px"></div>
+<div id="bottomdiv"></div>
+<script>
+var n = 0;
+function watch(host, label) {
+    var div = document.createElement("div");
+    div.addEventListener("contentvisibilityautostatechange", function (e) {
+        console.log("PROBE cvfo-event " + label + " n=" + (++n) + " skipped=" + e.skipped);
+    });
+    div.style.contentVisibility = "auto";
+    host.appendChild(div);
+    return div;
+}
+console.log("PROBE cvfo-support onevent=" +
+            ("oncontentvisibilityautostatechange" in document.createElement("div")));
+var top = watch(document.getElementById("topdiv"), "top");
+var bottom = watch(document.getElementById("bottomdiv"), "bottom");
+setTimeout(function () {
+    console.log("PROBE cvfo-checked total=" + n);
+    // A disconnected element must go quiet: the removal must not itself count
+    // as a state change (`content-visibility-auto-state-changed-removed.html`).
+    bottom.remove();
+    setTimeout(function () {
+        console.log("PROBE cvfo-after-remove total=" + n);
+    }, 800);
+}, 1500);
+</script>
+""", "cvfo-event top skipped=false + bottom skipped=true, once each"),
+
+    # BUG-852, same day. The event has a content-attribute form too, and the
+    # WPT file asserts it on `<svg>` as well as on `<div>`; and the computed
+    # value half of the bug covers four names, of which `contain-intrinsic-size`
+    # is a shorthand whose `auto` keyword `ComputedStyle` does not store at all.
+    "cv-computed": ("""
+<div id="a" style="content-visibility: auto; contain-intrinsic-size: auto 1px"></div>
+<div id="b" style="contain-intrinsic-size: 30px 40px; contain: layout paint"></div>
+<div id="c" oncontentvisibilityautostatechange="cvAttrFired('div')"
+     style="content-visibility: auto"></div>
+<svg id="d" oncontentvisibilityautostatechange="cvAttrFired('svg')"
+     style="content-visibility: auto"></svg>
+<script>
+function cvAttrFired(what) { console.log("PROBE cvc-attr-fired " + what); }
+function dump(id, names) {
+    var cs = getComputedStyle(document.getElementById(id));
+    var out = "PROBE cvc-" + id;
+    for (var i = 0; i < names.length; i++) {
+        out += " " + names[i] + "=" + JSON.stringify(cs.getPropertyValue(names[i]));
+    }
+    console.log(out);
+}
+setTimeout(function () {
+    dump("a", ["content-visibility", "contain-intrinsic-size",
+               "contain-intrinsic-width", "contain-intrinsic-height"]);
+    dump("b", ["content-visibility", "contain-intrinsic-size", "contain"]);
+    console.log("PROBE cvc-camel " +
+                JSON.stringify(getComputedStyle(document.getElementById("a")).contentVisibility) +
+                " " +
+                JSON.stringify(getComputedStyle(document.getElementById("a")).containIntrinsicSize));
+}, 1500);
+</script>
+""", "cvc-a content-visibility=auto, contain-intrinsic-size=\"auto 1px\" + cvc-attr-fired"),
+
     # ── an exception thrown from a load handler ────────────────────────────
     # `css/css-shapes/spec-examples/*` are `setup({single_test: true})` pages
     # whose whole body runs from `<body onload>`: an assertion that fails

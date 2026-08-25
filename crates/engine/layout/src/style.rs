@@ -3945,12 +3945,23 @@ pub struct ComputedStyle {
     /// is subject to size containment (`contain: size`, `content-visibility: hidden`,
     /// or `content-visibility: auto` while skipped off-screen). `None` = the CSS
     /// keyword `none` (no placeholder; content-based width collapses). The optional
-    /// `auto` keyword (last-remembered size) is parsed but treated as the length.
+    /// `auto` keyword (last-remembered size) is parsed but treated as the length —
+    /// its presence is kept in [`Self::contain_intrinsic_width_auto`] for
+    /// serialization only, since the computed value the CSSOM must report is the
+    /// specified `auto? [none | <length>]`, not just the length.
     /// Stored as a content-box `Length`, resolved against the font-size at layout.
     pub contain_intrinsic_width: Option<Length>,
+    /// CSS Box Sizing L4 §5 — the `auto` keyword of `contain-intrinsic-width`.
+    /// Behaviourally ignored (no last-remembered size); kept so
+    /// `getComputedStyle` can serialise `auto 1px` rather than `1px`
+    /// (BUG-852).
+    pub contain_intrinsic_width_auto: bool,
     /// CSS Box Sizing L4 §5 — `contain-intrinsic-height`. NOT inherited. Initial: `None`.
     /// Placeholder block-size under size containment. See `contain_intrinsic_width`.
     pub contain_intrinsic_height: Option<Length>,
+    /// CSS Box Sizing L4 §5 — the `auto` keyword of `contain-intrinsic-height`.
+    /// See [`Self::contain_intrinsic_width_auto`].
+    pub contain_intrinsic_height_auto: bool,
     /// CSS Sizing L4 §4.5 — `interpolate-size`. **Inherited.** Initial: `NumericOnly`.
     /// Controls whether keyword sizes (`auto`, `min-content`, …) participate in
     /// transitions/animations. Read by `TransitionScheduler::sync()` to gate
@@ -6980,7 +6991,9 @@ impl ComputedStyle {
             contain: ContainFlags::NONE,
             content_visibility: ContentVisibility::Visible,
             contain_intrinsic_width: None,
+            contain_intrinsic_width_auto: false,
             contain_intrinsic_height: None,
+            contain_intrinsic_height_auto: false,
             interpolate_size: InterpolateSizeMode::NumericOnly,
             container_type: ContainerType::Normal,
             container_name: Vec::new(),
@@ -7473,7 +7486,9 @@ pub fn compute_style(
         content_visibility: ContentVisibility::Visible,
         // CSS Box Sizing L4 §5 — contain-intrinsic-* are NOT inherited.
         contain_intrinsic_width: None,
+        contain_intrinsic_width_auto: false,
         contain_intrinsic_height: None,
+        contain_intrinsic_height_auto: false,
         // CSS Sizing L4 §4.5 — interpolate-size is inherited.
         interpolate_size: inherited.interpolate_size,
         container_type: ContainerType::Normal,
@@ -16636,22 +16651,28 @@ fn apply_declaration(
         // CSS Box Sizing L4 §5 — contain-intrinsic-size and its longhands.
         // Each value is `auto? [ none | <length> ]`. `none` → field stays/becomes
         // `None`; the optional `auto` (last-remembered size) is accepted and
-        // ignored (we always use the length). Logical `*-block-size` /
-        // `*-inline-size` map to height / width under horizontal-tb writing modes.
+        // ignored *by layout* (we always use the length), but recorded so the
+        // computed value round-trips through `getComputedStyle` (BUG-852).
+        // Logical `*-block-size` / `*-inline-size` map to height / width under
+        // horizontal-tb writing modes.
         "contain-intrinsic-width" | "contain-intrinsic-inline-size" => {
-            if let Some(v) = parse_contain_intrinsic_one(val) {
+            if let Some((auto, v)) = parse_contain_intrinsic_one(val) {
                 style.contain_intrinsic_width = v;
+                style.contain_intrinsic_width_auto = auto;
             }
         }
         "contain-intrinsic-height" | "contain-intrinsic-block-size" => {
-            if let Some(v) = parse_contain_intrinsic_one(val) {
+            if let Some((auto, v)) = parse_contain_intrinsic_one(val) {
                 style.contain_intrinsic_height = v;
+                style.contain_intrinsic_height_auto = auto;
             }
         }
         "contain-intrinsic-size" => {
-            if let Some((w, h)) = parse_contain_intrinsic_size(val) {
+            if let Some(((wa, w), (ha, h))) = parse_contain_intrinsic_size(val) {
                 style.contain_intrinsic_width = w;
+                style.contain_intrinsic_width_auto = wa;
                 style.contain_intrinsic_height = h;
+                style.contain_intrinsic_height_auto = ha;
             }
         }
         "interpolate-size" => {
@@ -18366,28 +18387,40 @@ fn apply_text_emphasis_shorthand(style: &mut ComputedStyle, val: &str, is_quirks
 /// `Some(Some(len))` for a length, and `None` on a parse error (declaration is
 /// then ignored, leaving the previous value). The leading `auto` keyword
 /// (last-remembered-size hint) is accepted and discarded.
-fn parse_contain_intrinsic_one(val: &str) -> Option<Option<Length>> {
+/// Returns `(auto_keyword_present, placeholder)` — the `auto` flag is carried
+/// separately because it changes nothing in layout but is part of the computed
+/// value the CSSOM must serialise (BUG-852).
+fn parse_contain_intrinsic_one(val: &str) -> Option<(bool, Option<Length>)> {
     let mut v = val.trim();
+    let mut auto = false;
     if let Some(rest) = v.strip_prefix("auto")
         && (rest.is_empty() || rest.starts_with(char::is_whitespace))
     {
+        auto = true;
         v = rest.trim_start();
     }
     if v.eq_ignore_ascii_case("none") {
-        return Some(None);
+        return Some((auto, None));
     }
-    parse_length(v).map(Some)
+    parse_length(v).map(|l| (auto, Some(l)))
 }
 
 /// CSS Box Sizing L4 §5 — parse the `contain-intrinsic-size` shorthand:
 /// `[ auto? [ none | <length> ] ]{1,2}`. One component sets both axes; two set
-/// width then height. Returns `None` on any parse error.
-fn parse_contain_intrinsic_size(val: &str) -> Option<(Option<Length>, Option<Length>)> {
+/// width then height. Each component carries its own `auto` keyword — the
+/// shorthand's two halves are independent (`auto 1px 2px` is legal), so the flag
+/// travels per axis, like the length. Returns `None` on any parse error.
+#[allow(clippy::type_complexity)]
+fn parse_contain_intrinsic_size(
+    val: &str,
+) -> Option<((bool, Option<Length>), (bool, Option<Length>))> {
     let tokens: Vec<&str> = val.split_whitespace().collect();
-    let mut comps: Vec<Option<Length>> = Vec::new();
+    let mut comps: Vec<(bool, Option<Length>)> = Vec::new();
     let mut i = 0;
     while i < tokens.len() {
+        let mut auto = false;
         if tokens[i].eq_ignore_ascii_case("auto") {
+            auto = true;
             i += 1;
             if i >= tokens.len() {
                 return None;
@@ -18395,10 +18428,10 @@ fn parse_contain_intrinsic_size(val: &str) -> Option<(Option<Length>, Option<Len
         }
         let t = tokens[i];
         if t.eq_ignore_ascii_case("none") {
-            comps.push(None);
+            comps.push((auto, None));
         } else {
             let l = parse_length(t)?;
-            comps.push(Some(l));
+            comps.push((auto, Some(l)));
         }
         i += 1;
     }
@@ -18977,27 +19010,21 @@ fn apply_css_wide_keyword(
             };
         }
         "contain-intrinsic-width" | "contain-intrinsic-inline-size" => {
-            style.contain_intrinsic_width = if inh_only_inherit {
-                inherited.contain_intrinsic_width.clone()
-            } else {
-                init.contain_intrinsic_width.clone()
-            };
+            let src = if inh_only_inherit { inherited } else { &init };
+            style.contain_intrinsic_width = src.contain_intrinsic_width.clone();
+            style.contain_intrinsic_width_auto = src.contain_intrinsic_width_auto;
         }
         "contain-intrinsic-height" | "contain-intrinsic-block-size" => {
-            style.contain_intrinsic_height = if inh_only_inherit {
-                inherited.contain_intrinsic_height.clone()
-            } else {
-                init.contain_intrinsic_height.clone()
-            };
+            let src = if inh_only_inherit { inherited } else { &init };
+            style.contain_intrinsic_height = src.contain_intrinsic_height.clone();
+            style.contain_intrinsic_height_auto = src.contain_intrinsic_height_auto;
         }
         "contain-intrinsic-size" => {
-            if inh_only_inherit {
-                style.contain_intrinsic_width = inherited.contain_intrinsic_width.clone();
-                style.contain_intrinsic_height = inherited.contain_intrinsic_height.clone();
-            } else {
-                style.contain_intrinsic_width = init.contain_intrinsic_width.clone();
-                style.contain_intrinsic_height = init.contain_intrinsic_height.clone();
-            }
+            let src = if inh_only_inherit { inherited } else { &init };
+            style.contain_intrinsic_width = src.contain_intrinsic_width.clone();
+            style.contain_intrinsic_width_auto = src.contain_intrinsic_width_auto;
+            style.contain_intrinsic_height = src.contain_intrinsic_height.clone();
+            style.contain_intrinsic_height_auto = src.contain_intrinsic_height_auto;
         }
         "container-type" => {
             style.container_type = if inh_only_inherit {
