@@ -306,40 +306,44 @@ impl AudioPlaybackProvider for PlatformAudioPlayer {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn load(&self, handle: u64, url: &str) {
         let url = url.to_owned();
-        // Reset ready_state to loading (1) to indicate load started.
-        if let Some(entry) = self.handles.lock().unwrap().get(&handle) {
-            entry.state.lock().unwrap().ready_state = 1;
-        }
-        // Fetch bytes on a background thread, then forward to audio thread.
-        if let Some(tx) = self
-            .handles
-            .lock()
-            .unwrap()
-            .get(&handle)
-            .map(|e| e.tx.clone())
-        {
-            let state = self
-                .handles
-                .lock()
-                .unwrap()
+        // Everything this handle needs is taken under ONE lock and the guard is
+        // dropped before anything else runs.  Reading it out of an `if let`
+        // scrutinee instead would keep the guard alive for the whole body — the
+        // non-reentrant `handles` mutex would then be taken twice by this very
+        // thread, and `load()` would never return to the JS thread that called
+        // it, freezing the document (BUG-799).
+        let entry = {
+            let guard = self.handles.lock().unwrap();
+            guard
                 .get(&handle)
-                .map(|e| Arc::clone(&e.state));
-            thread::Builder::new()
-                .name(format!("lumen-audio-fetch-{handle}"))
-                .spawn(move || {
-                    match fetch_audio_bytes(&url) {
-                        Ok(bytes) => {
-                            let _ = tx.send(AudioCmd::Load(bytes));
-                        }
-                        Err(_) => {
-                            if let Some(st) = state {
-                                st.lock().unwrap().has_error = true;
-                            }
-                        }
-                    }
-                })
-                .expect("spawn audio fetch thread");
+                .map(|e| (e.tx.clone(), Arc::clone(&e.state)))
+        };
+        let Some((tx, state)) = entry else { return };
+
+        // HTML §4.8.11.5 "media load algorithm": a fresh load starts from a
+        // clean slate.  Leaving `has_error` set would make the JS poll fire
+        // `error` for the NEW url on its first tick, before a single byte of it
+        // had been requested.
+        {
+            let mut st = state.lock().unwrap();
+            st.ready_state = 1;
+            st.has_error = false;
+            st.ended = false;
+            st.duration = f64::NAN;
         }
+
+        // Fetch bytes on a background thread, then forward to audio thread.
+        thread::Builder::new()
+            .name(format!("lumen-audio-fetch-{handle}"))
+            .spawn(move || match fetch_audio_bytes(&url) {
+                Ok(bytes) => {
+                    let _ = tx.send(AudioCmd::Load(bytes));
+                }
+                Err(_) => {
+                    state.lock().unwrap().has_error = true;
+                }
+            })
+            .expect("spawn audio fetch thread");
     }
 
     fn play(&self, handle: u64) {
@@ -599,5 +603,60 @@ mod tests {
         let mut out = Vec::new();
         r.read_to_end(&mut out).unwrap();
         assert_eq!(&out, b"Hello");
+    }
+
+    /// BUG-799: `load()` must return to its caller.
+    ///
+    /// The JS thread calls this synchronously from the `src` setter, so a
+    /// self-deadlock here freezes the whole document — no later script, timer
+    /// or event handler on that page ever runs again.  Asserted from a worker
+    /// thread with a deadline so a regression fails the suite instead of
+    /// hanging it.
+    #[test]
+    fn load_returns_to_caller() {
+        let p = Arc::new(PlatformAudioPlayer::new());
+        let h = p.alloc_handle();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let p2 = Arc::clone(&p);
+        thread::Builder::new()
+            .name("bug799-load".into())
+            .spawn(move || {
+                // `data:` URL — no network, the fetch thread settles at once.
+                p2.load(h, "data:audio/mpeg;base64,SGVsbG8=");
+                let _ = done_tx.send(());
+            })
+            .unwrap();
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok(),
+            "load() never returned — self-deadlock on PlatformAudioPlayer::handles"
+        );
+        p.free_handle(h);
+    }
+
+    /// A new load clears the previous load's error (HTML §4.8.11.5).
+    ///
+    /// Otherwise the JS poll fires `error` for the new url on its first tick,
+    /// before a byte of it has been requested.
+    #[test]
+    fn reload_clears_previous_error() {
+        let p = PlatformAudioPlayer::new();
+        let h = p.alloc_handle();
+        // A `data:` URL with no comma fails to parse — the fetch thread reports
+        // the error without touching the network.
+        p.load(h, "data:audio/mpeg");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !p.has_error(h) && std::time::Instant::now() < deadline {
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(p.has_error(h), "failed load did not report an error");
+
+        p.load(h, "data:audio/mpeg;base64,SGVsbG8=");
+        assert!(
+            !p.has_error(h),
+            "a new load kept the previous load's error flag"
+        );
+        p.free_handle(h);
     }
 }
