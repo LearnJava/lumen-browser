@@ -3967,6 +3967,7 @@ impl V8JsRuntime {
                 JsSseEvent::Retry(ms) => {
                     format!(r#"{{"t":"retry","ms":{ms}}}"#)
                 }
+                JsSseEvent::Reconnecting => r#"{"t":"reconnecting"}"#.to_string(),
                 JsSseEvent::Close => r#"{"t":"close"}"#.to_string(),
                 JsSseEvent::Error(e) => {
                     format!(r#"{{"t":"error","message":{}}}"#, json_str(&e))

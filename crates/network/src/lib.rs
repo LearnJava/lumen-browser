@@ -4842,26 +4842,57 @@ struct JsSseSessionImpl {
     cancel: lumen_core::ext::SseCancel,
 }
 
-impl JsSseSessionImpl {
-    /// Create a new session, spawning a background thread that buffers events.
-    ///
-    /// The thread pushes [`JsSseEvent::Open`] first, then forwards every server
-    /// event until the stream ends ([`JsSseEvent::Close`]) or errors
-    /// ([`JsSseEvent::Error`]). `close()` signals the shared cancel handle: it
-    /// wakes a pending reconnect delay immediately, and the loop also checks it
-    /// before each read so an idle session exits promptly. A read already
-    /// blocked in the socket finishes naturally when the server closes.
+/// [`EventSink`] that turns an [`EventSource`](sse) connection's *control*
+/// events into queue entries for the JS session.
+///
+/// Messages deliberately do not go through here — they reach the queue via
+/// [`SseSession::next_event`] on the recv thread, and duplicating them would
+/// double every event. What only the sink can report is the connection
+/// lifecycle: a (re)connection announced and a stream that ended. Both are
+/// emitted synchronously from inside `next_event`, i.e. on that same thread, so
+/// their position relative to the messages is preserved (BUG-844).
+struct JsSseControlSink {
+    /// The session queue, shared with [`JsSseSessionImpl`].
+    queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsSseEvent>>>,
+}
+
+impl lumen_core::ext::EventSink for JsSseControlSink {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-    fn new(mut session: Box<dyn SseSession>) -> Self {
-        let queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsSseEvent>>> =
-            Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+    fn emit(&self, event: &Event) {
+        let out = match event {
+            Event::SseConnected { .. } => JsSseEvent::Open,
+            Event::SseError { .. } => JsSseEvent::Reconnecting,
+            _ => return,
+        };
+        self.queue.lock().unwrap().push_back(out);
+    }
+}
+
+impl JsSseSessionImpl {
+    /// Create a new session over `queue`, spawning a background thread that
+    /// buffers events.
+    ///
+    /// `queue` is the same one [`JsSseControlSink`] writes into and already
+    /// carries the [`JsSseEvent::Open`] of the initial connection — the
+    /// handshake ran before this call, so pushing an `Open` here would double
+    /// it. The thread forwards every server event until the loop is cancelled
+    /// ([`JsSseEvent::Close`]) or fails ([`JsSseEvent::Error`]); reconnection
+    /// happens inside `next_event` and is reported through the sink.
+    /// `close()` signals the shared cancel handle: it wakes a pending reconnect
+    /// delay immediately, and the loop also checks it before each read so an
+    /// idle session exits promptly. A read already blocked in the socket
+    /// finishes naturally when the server closes.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    fn new(
+        mut session: Box<dyn SseSession>,
+        queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsSseEvent>>>,
+    ) -> Self {
         let cancel = session.cancel();
         let cancel_bg = cancel.clone();
 
         let q2 = Arc::clone(&queue);
 
         std::thread::spawn(move || {
-            q2.lock().unwrap().push_back(JsSseEvent::Open);
             loop {
                 if cancel_bg.is_cancelled() {
                     session.close();
@@ -4911,15 +4942,22 @@ impl JsSseProvider for HttpClient {
     fn connect_sse(&self, url: &str) -> Result<Box<dyn JsSseSession>> {
         let parsed = Url::parse(url)
             .map_err(|e| Error::Network(format!("sse: invalid URL: {e}")))?;
+        // The queue is built BEFORE the handshake so the sink can record the
+        // initial `Open` from inside it — the same path every later reconnection
+        // takes, instead of a hand-pushed first event that no reconnection has.
+        let queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsSseEvent>>> =
+            Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
         // Reuse the synchronous SseProvider path; the EventSource handshake runs
         // here, then the background thread takes over event delivery.
         let session = <Self as SseProvider>::connect_sse(
             self,
             &parsed,
             lumen_core::event::TabId(0),
-            Arc::new(NoopEventSink),
+            Arc::new(JsSseControlSink {
+                queue: Arc::clone(&queue),
+            }),
         )?;
-        Ok(Box::new(JsSseSessionImpl::new(session)))
+        Ok(Box::new(JsSseSessionImpl::new(session, queue)))
     }
 }
 
@@ -5014,7 +5052,12 @@ mod tests {
             retry_ms: None,
         });
         let session: Box<dyn SseSession> = Box::new(MockSseSession { events });
-        let impl_ = JsSseSessionImpl::new(session);
+        // The real provider seeds the queue with the `Open` its control sink
+        // recorded during the handshake; the mock has no sink, so seed it here.
+        let queue = Arc::new(std::sync::Mutex::new(
+            [JsSseEvent::Open].into_iter().collect::<std::collections::VecDeque<_>>(),
+        ));
+        let impl_ = JsSseSessionImpl::new(session, queue);
         // Expect: Open, Message{hi,7}, Close.
         let evs = drain_js_sse(&impl_, 3);
         assert_eq!(evs.len(), 3, "got {evs:?}");
@@ -5069,7 +5112,7 @@ mod tests {
             Arc::new(NoopEventSink),
         )
         .expect("connect_sse");
-        let mut sess = JsSseSessionImpl::new(session);
+        let mut sess = JsSseSessionImpl::new(session, Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())));
 
         // Drain until the "hi" message arrives (ignore Open / Retry).
         let deadline = Instant::now() + Duration::from_secs(5);

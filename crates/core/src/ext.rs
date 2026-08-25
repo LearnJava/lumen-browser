@@ -1720,7 +1720,14 @@ pub enum JsSseEvent {
     },
     /// Server requested a specific reconnect delay via `retry:` field (milliseconds).
     Retry(u64),
-    /// Connection closed (server closed the stream or reconnect exhausted).
+    /// The stream ended and the session is about to reconnect (HTML LS §9.2.5
+    /// «reestablish the connection»): the page must see `error` with
+    /// `readyState = CONNECTING`, and a later [`Open`](Self::Open) once the new
+    /// connection is announced. Distinct from [`Close`](Self::Close), which is
+    /// terminal, and from [`Error`](Self::Error), which fails the connection.
+    Reconnecting,
+    /// Session terminated and will produce nothing further (the page called
+    /// `close()`, so the recv loop was cancelled).
     Close,
     /// Network or protocol error; the connection will not recover.
     Error(String),
