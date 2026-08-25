@@ -59,6 +59,7 @@ mod platform;
 mod prefetch;
 mod reader_view;
 mod render_thread;
+mod resource_timing;
 mod source_view;
 mod spellcheck;
 mod startup_trace;
@@ -558,12 +559,16 @@ fn run_cli() -> ExitCode {
     let network_log = Arc::new(std::sync::Mutex::new(
         devtools::network_panel::NetworkLog::default(),
     ));
-    // Sink chain: StdoutEventSink → NetworkLogSink → ShieldCountSink.
-    // Each wrapper forwards to its inner sink, so all three observe every event.
+    // Sink chain: StdoutEventSink → NetworkLogSink → ResourceTimingSink →
+    // ShieldCountSink. Each wrapper forwards to its inner sink, so all four
+    // observe every event — the Resource Timing capture (BUG-839) is a tap, not
+    // a filter.
     let event_sink: Arc<dyn EventSink> = Arc::new(panels::shields_panel::ShieldCountSink {
-        inner: Arc::new(devtools::network_panel::NetworkLogSink {
-            inner: Arc::new(StdoutEventSink),
-            log: Arc::clone(&network_log),
+        inner: Arc::new(resource_timing::ResourceTimingSink {
+            inner: Arc::new(devtools::network_panel::NetworkLogSink {
+                inner: Arc::new(StdoutEventSink),
+                log: Arc::clone(&network_log),
+            }),
         }),
         log: Arc::clone(&blocked_log),
     });
@@ -2976,6 +2981,14 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `duration_ms` is total load time (Navigation Timing L2 §4.2 `duration`).
     /// Calls `_lumen_deliver_perf_entry('navigation', url, 0.0, duration_ms, detail)`.
     fn deliver_nav_timing(&self, url: &str, duration_ms: f64);
+    /// Hand a batch of engine-issued subresource loads to the page's Resource
+    /// Timing buffer (BUG-839).
+    ///
+    /// `rows_json` is the array [`crate::resource_timing::rows_to_json`] builds.
+    /// A batch rather than one call per load because the loads arrive on
+    /// worker threads while this runs once per event-loop step: a page pulling
+    /// forty images would otherwise cost forty JS hops in one tick.
+    fn deliver_resource_timings(&self, rows_json: &str);
     /// Deliver a LargestContentfulPaint entry to JS PerformanceObservers.
     ///
     /// Called when a large content element (>500px²) is rendered.
@@ -3512,6 +3525,18 @@ impl PersistentJs for V8PersistentJs {
         self.eval_js(&format!(
             "_lumen_deliver_perf_entry('navigation', {}, 0.0, {duration_ms}, null)",
             js_string_literal(url),
+        ));
+    }
+    fn deliver_resource_timings(&self, rows_json: &str) {
+        // The payload crosses the boundary as a JS *string literal* holding
+        // JSON text, because the shim runs `JSON.parse` on it. Embedding the
+        // JSON bare on the "valid JSON is a valid JS expression" reasoning is
+        // what made every `popstate` deliver `state: null` for months
+        // (BUG-829) — the receiver's own reading of the payload decides the
+        // encoding, not the payload's syntax.
+        self.eval_js(&format!(
+            "_lumen_deliver_resource_timings({})",
+            js_string_literal(rows_json),
         ));
     }
     fn deliver_lcp_entry(&self, element_id: u32, size: u32, start_ms: f64, render_time_ms: f64) {
@@ -11943,6 +11968,13 @@ impl Lumen {
     /// держит `Arc`: все гейты (`if self.js_present`) читают его, поэтому остаются
     /// верны в обоих режимах флага.
     fn set_js_ctx(&mut self, handle: Option<Arc<dyn PersistentJs>>) {
+        // BUG-839: a Resource Timing row belongs to the document that asked for
+        // the load. A runtime swap is a new document, so whatever the previous
+        // one left unclaimed is dropped here rather than landing in the new
+        // page's buffer with a start time before its own time origin. This is
+        // the one place every navigation path (`navigate_to`, back, forward,
+        // reload) funnels through.
+        resource_timing::clear();
         self.js_present = handle.is_some();
         match self.engine_thread.as_ref() {
             // Flag on: the handle lives engine-side; deposit it into
@@ -14054,6 +14086,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // (the engine thread + `lumen-js` thread are busy anyway). Off the flag
         // `raf_turn_inflight()` is always `false`, so the gate is byte-identical.
         if self.js_present && !self.raf_turn_inflight() {
+            // BUG-839: subresource loads the network layer recorded since the
+            // last step. Drained only when there is a runtime to hand them to —
+            // most of a page's images finish before its JS context exists, and
+            // taking the rows early would throw them away. What bounds the
+            // queue instead is `resource_timing::clear()` on navigation, so a
+            // page that never gets a runtime cannot leak its loads into the
+            // next document's buffer.
+            if let Some(json) =
+                resource_timing::rows_to_json(&resource_timing::take_rows())
+            {
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                    j.deliver_resource_timings(&json);
+                });
+            }
             // ADR-016 M2.2c-2d: per-tick pump-батч (fire-and-forget void) через
             // `route_task_js`. Под флагом (`LUMEN_ENGINE_THREAD=1`) уходит off-UI-thread
             // одним `task` (порядок вызовов внутри сохранён), а последующие

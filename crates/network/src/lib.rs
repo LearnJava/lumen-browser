@@ -702,6 +702,37 @@ fn try_h3_dispatch<'s>(
     }
 }
 
+/// Wall-clock milliseconds since the unix epoch.
+///
+/// The same reading the JS `_lumen_now_ms` native takes, which is what makes a
+/// Resource Timing `startTime` computable on the JS side by a single
+/// subtraction of `performance.timeOrigin` (BUG-839). A monotonic clock would
+/// be better behaved but shares no zero point with the shim.
+fn unix_epoch_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0)
+}
+
+/// Resource Timing L2 §4.3 `initiatorType` for a Fetch request destination.
+///
+/// The spec's value is the *element's* local name, which a destination cannot
+/// always name: `Media` covers `<audio>`, `<video>` and `<track>`, and `Font`
+/// is a `@font-face` body, whose initiator is the stylesheet — hence `css`,
+/// the value the spec reserves for a resource a stylesheet pulled in.
+fn resource_timing_initiator(destination: RequestDestination) -> &'static str {
+    match destination {
+        RequestDestination::Script | RequestDestination::Worker => "script",
+        RequestDestination::Style | RequestDestination::Prefetch => "link",
+        RequestDestination::Image => "img",
+        RequestDestination::Font => "css",
+        RequestDestination::Document => "iframe",
+        RequestDestination::Connect => "fetch",
+        RequestDestination::Media | RequestDestination::Other => "other",
+    }
+}
+
 fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     let name_lc = name.to_ascii_lowercase();
     headers
@@ -3843,12 +3874,28 @@ impl HttpClient {
     ) -> Result<Vec<u8>> {
         let url_str = url.to_string();
         let accept_encoding = self.accept_encoding_header();
+        // BUG-839: Resource Timing needs the two ends of the request. Wall
+        // clock for the start (the JS shim's time origin is read off the same
+        // clock, so the conversion is one subtraction) and a monotonic
+        // stopwatch for the duration, which a wall-clock jump would corrupt.
+        let rt_start_ms = unix_epoch_ms();
+        let rt_clock = std::time::Instant::now();
 
         // HTTP cache check (RFC 7234).
         if let Some(cache) = &self.http_cache
             && let Some(snap) = cache.get(&url_str)
         {
             if snap.is_fresh {
+                self.emit_resource_timing(
+                    &url_str,
+                    destination,
+                    rt_start_ms,
+                    rt_clock.elapsed().as_secs_f64() * 1000.0,
+                    0,
+                    snap.body.len(),
+                    None,
+                    "cache",
+                );
                 return Ok(snap.body);
             }
             if !snap.conditional_headers.is_empty() {
@@ -3886,9 +3933,29 @@ impl HttpClient {
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
+                    self.emit_resource_timing(
+                        &url_str,
+                        destination,
+                        rt_start_ms,
+                        rt_clock.elapsed().as_secs_f64() * 1000.0,
+                        resp.status,
+                        snap.body.len(),
+                        Some(&resp.headers),
+                        "cache",
+                    );
                     return Ok(snap.body);
                 }
                 cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
+                self.emit_resource_timing(
+                    &url_str,
+                    destination,
+                    rt_start_ms,
+                    rt_clock.elapsed().as_secs_f64() * 1000.0,
+                    resp.status,
+                    resp.body.len(),
+                    Some(&resp.headers),
+                    "",
+                );
                 return Ok(resp.body);
             }
         }
@@ -3927,7 +3994,61 @@ impl HttpClient {
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
         }
+        self.emit_resource_timing(
+            &url_str,
+            destination,
+            rt_start_ms,
+            rt_clock.elapsed().as_secs_f64() * 1000.0,
+            resp.status,
+            resp.body.len(),
+            Some(&resp.headers),
+            "",
+        );
         Ok(resp.body)
+    }
+
+    /// Publish a [`Event::ResourceTimed`] for a completed subresource load
+    /// (BUG-839).
+    ///
+    /// Lives on the client rather than at the shell's call sites because
+    /// `fetch_subresource` is the one place every engine-issued subresource
+    /// goes through — images, cascade stylesheets, `@font-face` bodies, parser
+    /// scripts and media alike — and because both of the shell's cache layers
+    /// sit *above* it (`PREFETCH_CACHE::fetch_current` only calls in on a
+    /// miss), so exactly one event is published per resource per navigation.
+    ///
+    /// The page's own `fetch()`/XHR do **not** come through here: those record
+    /// themselves in the JS shim, where the real `performance.now()` of the
+    /// call is available.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_resource_timing(
+        &self,
+        url: &str,
+        destination: RequestDestination,
+        start_ms: f64,
+        duration_ms: f64,
+        status: u16,
+        body_len: usize,
+        headers: Option<&[(String, String)]>,
+        delivery_type: &'static str,
+    ) {
+        let Some(sink) = self.sink.as_deref() else { return };
+        let content_type = headers
+            .and_then(|h| header_value(h, "content-type"))
+            .unwrap_or_default()
+            .to_string();
+        sink.emit(&Event::ResourceTimed {
+            tab_id: self.tab_id,
+            url: url.to_string(),
+            initiator: resource_timing_initiator(destination),
+            start_ms,
+            duration_ms,
+            status,
+            encoded_body_size: body_len as u64,
+            decoded_body_size: body_len as u64,
+            content_type,
+            delivery_type,
+        });
     }
 
     /// Perform a **conditional GET** (RFC 7232) and report whether the resource
@@ -9101,8 +9222,18 @@ world\r\n\
         assert_eq!(client.fetch_subresource(&url, RequestDestination::Script).unwrap(), b"ok");
 
         let events = sink.events();
-        assert_eq!(events.len(), 2, "Started + Completed");
+        // BUG-839 added a third event: the Resource Timing row for the load.
+        assert_eq!(events.len(), 3, "Started + Completed + ResourceTimed");
         assert!(!events.iter().any(|e| matches!(e, Event::RequestBlocked { .. })));
+        match &events[2] {
+            Event::ResourceTimed { url, initiator, status, decoded_body_size, .. } => {
+                assert!(url.ends_with("/lib.js"));
+                assert_eq!(*initiator, "script");
+                assert_eq!(*status, 200);
+                assert_eq!(*decoded_body_size, 2);
+            }
+            other => panic!("expected ResourceTimed, got {other:?}"),
+        }
 
         server.join().unwrap();
     }
@@ -9169,9 +9300,11 @@ world\r\n\
         );
 
         let events = sink.events();
-        assert_eq!(events.len(), 2, "Started + Completed");
+        // BUG-839 added a third event: the Resource Timing row for the load.
+        assert_eq!(events.len(), 3, "Started + Completed + ResourceTimed");
         assert!(matches!(events[0], Event::RequestStarted { .. }));
         assert!(matches!(events[1], Event::RequestCompleted { status: 200, .. }));
+        assert!(matches!(events[2], Event::ResourceTimed { initiator: "img", .. }));
 
         server.join().unwrap();
     }
@@ -9327,8 +9460,12 @@ world\r\n\
         );
 
         let events = sink.events();
-        assert_eq!(events.len(), 2);
+        // BUG-839 added a third event: the Resource Timing row for the load.
+        // A stylesheet's initiatorType is `link` — the element that pulled it
+        // in, not the destination's own name.
+        assert_eq!(events.len(), 3);
         assert!(!events.iter().any(|e| matches!(e, Event::RequestBlocked { .. })));
+        assert!(matches!(events[2], Event::ResourceTimed { initiator: "link", .. }));
 
         server.join().unwrap();
     }
