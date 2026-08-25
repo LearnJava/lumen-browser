@@ -14750,9 +14750,10 @@ function _idb_dispatch_request(req) {
 
 // --- IDBTransaction (Indexed DB §3.4) ----------------------------------------
 
-function IDBTransaction(db, storeNames, mode) {
+function IDBTransaction(db, storeNames, mode, durability) {
     this.db = db;
     this.mode = mode || 'readonly';
+    this.durability = durability || 'default';
     this.objectStoreNames = storeNames.slice().sort();
     this.error = null;
     this.oncomplete = null;
@@ -14763,8 +14764,19 @@ function IDBTransaction(db, storeNames, mode) {
     this._queue = [];
     this._stores = {};
     this._aborted = false;
+    // Indexed DB §3.4 state 'finished': set SYNCHRONOUSLY by abort() and by the
+    // commit inside the flush, long before the terminal event is delivered — a
+    // finished transaction accepts no objectStore(), no request and no second
+    // abort()/commit().
     this._finished = false;
+    // State 'committing': commit() was called explicitly. Requests already in
+    // the queue still run; new ones are refused.
+    this._committing = false;
+    // The terminal event (complete/abort) has been fired. Separate from
+    // _finished, which the same transaction reaches one turn earlier.
+    this._settled = false;
     this._isUpgrade = false;
+    this._snapshot = null;
 }
 IDBTransaction.prototype.objectStore = function(name) {
     if (this._finished) throw _idb_error('InvalidStateError', 'transaction has finished');
@@ -14777,7 +14789,14 @@ IDBTransaction.prototype.objectStore = function(name) {
     return this._stores[name];
 };
 IDBTransaction.prototype.abort = function() {
+    if (this._finished) throw _idb_error('InvalidStateError', 'transaction has already finished');
     this._aborted = true;
+    this._finished = true;
+    _idb_schedule_txn(this);
+};
+IDBTransaction.prototype.commit = function() {
+    if (this._finished || this._committing) throw _idb_error('InvalidStateError', 'transaction is no longer active');
+    this._committing = true;
     _idb_schedule_txn(this);
 };
 IDBTransaction.prototype.addEventListener = function(type, fn) {
@@ -14848,7 +14867,7 @@ function _idb_defer_flush() {
 // across turns the way keep_alive expects (Indexed DB §3.1.7 processes each
 // request as its own task).
 function _idb_flush_txn(txn, budget) {
-    if (txn._finished) return budget;
+    if (txn._settled) return budget;
     while (txn._queue.length > 0 && !txn._aborted && budget > 0) {
         budget--;
         _idb_dispatch_request(txn._queue.shift());
@@ -14861,8 +14880,9 @@ function _idb_flush_txn(txn, budget) {
         return 0;
     }
     txn._finished = true;
+    txn._settled = true;
     if (txn._aborted) {
-        txn._queue = [];
+        _idb_abort_txn_requests(txn);
         _idb_fire_txn(txn, 'abort');
     } else {
         // A committed write/versionchange transaction changed the stored data.
@@ -14872,11 +14892,36 @@ function _idb_flush_txn(txn, budget) {
     return budget;
 }
 
+// Settles every request still queued when the transaction aborted (Indexed DB
+// §3.4.5 «abort a transaction», step 3). Without this a request left in the
+// queue keeps readyState 'pending' and its error handler is never called, so a
+// page waiting on it waits forever. Deliberately not routed through
+// _idb_dispatch_request: the action must not run, and the error event must not
+// re-abort a transaction that is already aborting.
+function _idb_abort_txn_requests(txn) {
+    var queued = txn._queue;
+    txn._queue = [];
+    for (var i = 0; i < queued.length; i++) {
+        var req = queued[i];
+        req._action = null;
+        req.result = undefined;
+        req.error = _idb_error('AbortError', 'transaction was aborted');
+        req.readyState = 'done';
+        var ev = _idb_make_event('error', req, { bubbles: true });
+        if (typeof req.onerror === 'function') {
+            try { req.onerror(ev); } catch(e) { _lumen_console_error('IDB onerror: ' + e); }
+        }
+        for (var j = 0; j < req._errorListeners.length; j++) {
+            try { req._errorListeners[j](ev); } catch(e) { _lumen_console_error('IDB error listener: ' + e); }
+        }
+    }
+}
+
 // Creates a request whose `fn` (data read/write) runs at dispatch time, in the
 // transaction's request order. Synchronous validation (key range, mode) must be
 // done by the caller before calling this, so it can throw to the caller.
 function _idb_make_request(source, txn, fn) {
-    if (txn._finished) throw _idb_error('TransactionInactiveError', 'transaction is not active');
+    if (txn._finished || txn._committing) throw _idb_error('TransactionInactiveError', 'transaction is not active');
     var req = new IDBRequest(source, txn);
     req._action = fn;
     txn._queue.push(req);
@@ -14923,15 +14968,35 @@ IDBDatabase.prototype.deleteObjectStore = function(name) {
     if (!this._data.stores[name]) throw _idb_error('NotFoundError', 'no object store named ' + name);
     delete this._data.stores[name];
 };
-IDBDatabase.prototype.transaction = function(storeNames, mode) {
+IDBDatabase.prototype.transaction = function(storeNames, mode, options) {
+    // WebIDL converts the `mode` argument to the IDBTransactionMode enum before
+    // any step of §3.3.4 runs, so an unknown string is a TypeError even for a
+    // closed connection; 'versionchange' is a valid enum value and is refused
+    // later, by step 5, i.e. AFTER the NotFoundError of an unknown store name.
+    mode = (mode === undefined) ? 'readonly' : String(mode);
+    if (mode !== 'readonly' && mode !== 'readwrite' && mode !== 'versionchange') {
+        throw new TypeError(mode + ' is not a valid value for enumeration IDBTransactionMode');
+    }
+    var durability = (options && options.durability !== undefined) ? String(options.durability) : 'default';
+    if (durability !== 'default' && durability !== 'strict' && durability !== 'relaxed') {
+        throw new TypeError(durability + ' is not a valid value for enumeration IDBTransactionDurability');
+    }
     if (this._closed) throw _idb_error('InvalidStateError', 'database connection is closed');
     if (typeof storeNames === 'string') storeNames = [storeNames];
     else storeNames = storeNames.slice();
-    if (storeNames.length === 0) throw _idb_error('InvalidAccessError', 'empty store scope');
     for (var i = 0; i < storeNames.length; i++) {
         if (!this._data.stores[storeNames[i]]) throw _idb_error('NotFoundError', 'no object store named ' + storeNames[i]);
     }
-    return new IDBTransaction(this, storeNames, mode || 'readonly');
+    if (storeNames.length === 0) throw _idb_error('InvalidAccessError', 'empty store scope');
+    if (mode === 'versionchange') throw new TypeError('a versionchange transaction cannot be created with transaction()');
+    var txn = new IDBTransaction(this, storeNames, mode, durability);
+    // Indexed DB §3.1.7: a transaction is created active and commits as soon as
+    // control returns to the event loop with no request of its own left — it
+    // does NOT need a request to reach a terminal state. Queueing it here rather
+    // than in _idb_make_request is what makes an empty transaction complete, and
+    // it preserves creation order between transactions (the flush is a FIFO).
+    _idb_schedule_txn(txn);
+    return txn;
 };
 IDBDatabase.prototype.close = function() { this._closed = true; };
 
@@ -15337,7 +15402,7 @@ IDBCursor.prototype.delete = function() {
 };
 
 function _idb_open_cursor(source, txn, store, buildList, withValue, direction) {
-    if (txn._finished) throw _idb_error('TransactionInactiveError', 'transaction is not active');
+    if (txn._finished || txn._committing) throw _idb_error('TransactionInactiveError', 'transaction is not active');
     var req = new IDBRequest(source, txn);
     var cursor = new IDBCursor(req, source, txn, store, withValue, direction);
     req._action = function() {
@@ -15390,9 +15455,13 @@ function _idb_process_open(entry, budget) {
         }
         if (!txn._aborted && txn._queue.length > 0) { _idb_pending_opens.unshift(entry); return 0; }
         txn._finished = true;
+        // The version change transaction settles here instead of in
+        // _idb_flush_txn; abort() has put it into _idb_active_txns too, so
+        // without _settled the flush would fire its terminal event a second time.
+        txn._settled = true;
         entry.db._upgradeTxn = null;
         req.transaction = null;
-        if (txn._aborted) { _idb_fire_txn(txn, 'abort'); _idb_dispatch_request(req); return budget; }
+        if (txn._aborted) { _idb_abort_txn_requests(txn); _idb_fire_txn(txn, 'abort'); _idb_dispatch_request(req); return budget; }
         _idb_fire_txn(txn, 'complete');
     }
     req.readyState = 'done';
@@ -35260,6 +35329,177 @@ mod tests {
                 log.join(',')
             "#).unwrap();
             assert_eq!(r, lumen_core::JsValue::String("err:ConstraintError,abort".into()));
+        }
+
+        #[test]
+        fn idb_empty_transaction_commits() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var log = [];
+                var db;
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                req.onsuccess = function(e) { db = e.target.result; };
+                _lumen_idb_flush();
+                var tx = db.transaction('s', 'readonly');
+                tx.oncomplete = function() { log.push('complete'); };
+                tx.onabort = function() { log.push('abort'); };
+                _lumen_idb_flush();
+                log.join(',')
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("complete".into()));
+        }
+
+        #[test]
+        fn idb_empty_transactions_commit_in_creation_order() {
+            // transaction-lifetime-empty.any.js: two empty transactions created
+            // inside a request handler commit AFTER the busy transaction that
+            // preceded them, in the order they were created.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var order = [];
+                var db;
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                req.onsuccess = function(e) { db = e.target.result; };
+                _lumen_idb_flush();
+                var tx1 = db.transaction('s', 'readwrite');
+                tx1.oncomplete = function() { order.push('tx1'); };
+                var st = tx1.objectStore('s');
+                var rq1 = st.put('a', 1);
+                rq1.onsuccess = function() {
+                    order.push('rq1');
+                    var tx2 = db.transaction('s', 'readonly');
+                    tx2.oncomplete = function() { order.push('tx2'); };
+                    var tx3 = db.transaction('s', 'readonly');
+                    tx3.oncomplete = function() { order.push('tx3'); };
+                    var rq2 = st.put('b', 2);
+                    rq2.onsuccess = function() { order.push('rq2'); };
+                };
+                _lumen_idb_flush();
+                order.join(',')
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("rq1,rq2,tx1,tx2,tx3".into()));
+        }
+
+        #[test]
+        fn idb_abort_finishes_transaction_synchronously() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var out = [];
+                function probe(name, fn) {
+                    try { fn(); out.push(name + ':none'); }
+                    catch (e) { out.push(name + ':' + e.name); }
+                }
+                var db;
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                req.onsuccess = function(e) { db = e.target.result; };
+                _lumen_idb_flush();
+                var tx = db.transaction('s', 'readwrite');
+                var store = tx.objectStore('s');
+                tx.abort();
+                probe('objectStore', function() { tx.objectStore('s'); });
+                probe('request', function() { store.get(1); });
+                probe('abort-again', function() { tx.abort(); });
+                out.join(',')
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "objectStore:InvalidStateError,request:TransactionInactiveError,\
+                     abort-again:InvalidStateError"
+                        .into()
+                )
+            );
+        }
+
+        #[test]
+        fn idb_abort_settles_queued_requests_with_abort_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var log = [];
+                var db;
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                req.onsuccess = function(e) { db = e.target.result; };
+                _lumen_idb_flush();
+                var tx = db.transaction('s', 'readwrite');
+                var w = tx.objectStore('s').put('x', 1);
+                w.onsuccess = function() { log.push('success'); };
+                w.onerror = function(ev) { log.push('error:' + ev.target.error.name); };
+                tx.onabort = function() { log.push('txn-abort'); };
+                tx.abort();
+                _lumen_idb_flush();
+                log.join(',') + '|' + w.readyState
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("error:AbortError,txn-abort|done".into())
+            );
+        }
+
+        #[test]
+        fn idb_transaction_commit_refuses_further_requests() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var log = [];
+                var db;
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                req.onsuccess = function(e) { db = e.target.result; };
+                _lumen_idb_flush();
+                var tx = db.transaction('s', 'readwrite');
+                var store = tx.objectStore('s');
+                var w = store.put('x', 1);
+                w.onsuccess = function() { log.push('written'); };
+                tx.oncomplete = function() { log.push('complete'); };
+                tx.commit();
+                try { store.get(1); log.push('accepted'); }
+                catch (e) { log.push('refused:' + e.name); }
+                _lumen_idb_flush();
+                log.join(',')
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "refused:TransactionInactiveError,written,complete".into()
+                )
+            );
+        }
+
+        #[test]
+        fn idb_transaction_rejects_invalid_mode() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var out = [];
+                function probe(name, fn) {
+                    try { fn(); out.push(name + ':none'); }
+                    catch (e) { out.push(name + ':' + (e.name || 'TypeError')); }
+                }
+                var db;
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                req.onsuccess = function(e) { db = e.target.result; };
+                _lumen_idb_flush();
+                probe('bogus', function() { db.transaction('s', 'bogus'); });
+                probe('versionchange', function() { db.transaction('s', 'versionchange'); });
+                // NotFoundError precedes the versionchange TypeError (§3.3.4).
+                probe('missing-store', function() { db.transaction('nope', 'versionchange'); });
+                probe('durability', function() { db.transaction('s', 'readonly', { durability: 'bogus' }); });
+                out.push('relaxed:' + db.transaction('s', 'readonly', { durability: 'relaxed' }).durability);
+                out.push('default:' + db.transaction('s', 'readonly').durability);
+                _lumen_idb_flush();
+                out.join(',')
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "bogus:TypeError,versionchange:TypeError,missing-store:NotFoundError,\
+                     durability:TypeError,relaxed:relaxed,default:default"
+                        .into()
+                )
+            );
         }
 
         #[test]
