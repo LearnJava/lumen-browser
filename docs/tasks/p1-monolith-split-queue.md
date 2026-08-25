@@ -102,18 +102,41 @@ cd .claude/worktrees/split-<id>
 
 ## 4. Очередь
 
-### Группа SH — `crates/shell/src/main.rs` (29 823 строки)
+### Группа SH — `crates/shell/src/main.rs` (29 298 строк после SH-1)
 
 Приоритет сверху вниз: сначала самодостаточные регионы, ядро (`impl Lumen`) — последним.
 
+**Анкеры в этой таблице дрейфуют — пересчитывать в начале батча, не верить числу.**
+Числа переписи 2026-08-23 были сняты с ещё более старого снимка (файл на дату аудита
+уже был 32 088 строк, а не 29 823), из-за чего каждый анкер группы промахивался на
+~600–1 000 строк. Пересчёт — одной командой:
+`rg -n "^(pub )?(struct|enum|impl|fn|mod|trait|const|static|type) " crates/shell/src/main.rs`.
+
+Вторая ловушка переписи: регион в ней **назван по первому item'у**, а не по содержимому.
+SH-1 значился «view-transition слой, самодостаточный, не пересекается с ядром `impl Lumen`»
+только потому, что регион открывался `struct ViewTransitionState`; на деле три типа занимали
+29 строк, а остальные 3 845 были одним блоком `impl Lumen` с релейаутом, chrome и загрузкой
+страницы. Всё, что относится к view transitions, — 25 упоминаний, разбросанных по циклу
+событий, отдельным файлом стать не может. Перед батчем читать карту методов региона, а не
+его первую строку.
+
 | ID | Анкер (строки main.rs) | Регион | Цель |
 |---|---|---:|---|
-| SH-1 ✅ ready | `struct ViewTransitionState` (8797) … до `struct PipOsWindow` (12642) | ~3 850 | новый `src/view_transitions.rs` |
-| SH-2 | `struct PipOsWindow` (12642) … до `impl Lumen` (17667) | ~5 000 | новый `src/pip_window.rs` |
-| SH-3 | фрагменты 1351–8797: `run_dump_mode` (1351), `V8PersistentJs` (3247), `impl PageSource` (3561), `fetch_vtt_text` (5619) | ~5 400 | `src/dump_mode.rs`, `src/page_source.rs`, `src/vtt_fetch.rs` (по одному мини-батчу на файл: SH-3a/b/c) |
-| SH-4 | `mod navigate_by_tests` (31079) … конец файла | ~700+ | `src/navigate_by.rs`, `#[cfg(test)]` |
-| SH-5 | `fn winit_modifiers_state` (24884) … до `mod navigate_by_tests` (31079) | ~6 200 | существующий `src/input/` (обработчики winit/клавиатуры/мыши); при конфликте имён — `src/input/winit_events.rs` |
-| SH-6 | `impl Lumen` (17667) … до `winit_modifiers_state` (24884) | ~7 200 | САМЫЙ РИСКОВАННЫЙ. Только после SH-1…SH-5. Резать на подбатчи по методам: навигация/вкладки/команды IPC/session restore → каталог `src/lumen/` c `mod.rs`; `main.rs` должен стать bootstrap'ом ≤300 строк |
+| SH-1 ✅ DONE 2026-08-26 | `impl Lumen` (9878) … до `struct PipOsWindow` (13723) | 3 633 | `src/relayout.rs` (889), `src/chrome_ui.rs` (1 353), `src/page_load.rs` (1 391). Регион оказался не view-transition слоем, а блоком `impl Lumen`; имена модулей даны по содержимому. В `main.rs` остались 5 методов (141 строка), не относящихся ни к одной из трёх тем: `find_resize_grip_node`, `open_file_picker`, `arm_fullscreen_resize`, `poll_fullscreen_resize`, `begin_zoom_preview` |
+| SH-2 | `struct PipOsWindow` (10037) … до `impl Lumen` (15208) | ~5 170 | новый `src/pip_window.rs` |
+| SH-3 | фрагменты 1363–9878: `run_dump_mode` (1363), `V8PersistentJs` (3381), `impl PageSource` (3780), `fetch_vtt_text` (6004) | ~5 400 | `src/dump_mode.rs`, `src/page_source.rs`, `src/vtt_fetch.rs` (по одному мини-батчу на файл: SH-3a/b/c) |
+| SH-4 | `mod navigate_by_tests` (29159) … конец файла | ~140 | `src/navigate_by.rs`, `#[cfg(test)]` |
+| SH-4b | `mod tests` (22994) … до `mod navigate_by_tests` (29159) | ~6 160 | `src/tests.rs` (`#[cfg(test)] mod tests;`). **Самый дешёвый крупный батч группы**: тестовый модуль ни на что не влияет и переносится целиком. В переписи 2026-08-23 он был не замечен — его строки попали в оценку SH-5 |
+| SH-5 | `fn winit_modifiers_state` (22682) … до `mod tests` (22994) | ~310 | существующий `src/input/` (обработчики winit/клавиатуры/мыши); при конфликте имён — `src/input/winit_events.rs`. Регион в 20 раз меньше, чем значилось в переписи (там в него ошибочно вошёл `mod tests`) |
+| SH-6 | `impl Lumen` (15208) … до `winit_modifiers_state` (22682) | ~7 470 | САМЫЙ РИСКОВАННЫЙ. Только после SH-2…SH-5. Резать на подбатчи по методам: навигация/вкладки/команды IPC/session restore → каталог `src/lumen/` c `mod.rs`; `main.rs` должен стать bootstrap'ом ≤300 строк |
+
+**Приём, обкатанный на SH-1** (`impl Lumen` в подмодуле): блок `impl Lumen { … }` в
+`src/<name>.rs` рядом с `use crate::*;` компилируется без единой правки тела — приватные
+элементы корня крейта видны потомкам, поэтому импортировать поимённо ничего не нужно.
+Единственное неизбежное изменение — видимость: метод, который зовут из `main.rs`,
+обязан стать `pub(crate) fn` (родительский модуль не видит приватные элементы потомка).
+Механическая проверка переноса — сверка построчной подпоследовательности нового файла
+с вырезанным регионом исходника (скрипт батча делал именно это, 3 590 непустых строк).
 
 ### Группа ST — `crates/engine/layout/src/style.rs` (~38 000 строк)
 
