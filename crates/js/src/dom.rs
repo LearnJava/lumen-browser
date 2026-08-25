@@ -14882,6 +14882,7 @@ function _idb_flush_txn(txn, budget) {
     txn._finished = true;
     txn._settled = true;
     if (txn._aborted) {
+        _idb_revert_txn(txn);
         _idb_abort_txn_requests(txn);
         _idb_fire_txn(txn, 'abort');
     } else {
@@ -14890,6 +14891,85 @@ function _idb_flush_txn(txn, budget) {
         _idb_fire_txn(txn, 'complete');
     }
     return budget;
+}
+
+// Copies the mutable half of an object store so an abort can put it back
+// (Indexed DB §3.4.5 «abort a transaction», step 1). The record wrappers are
+// cloned, not shared: _write assigns into an existing wrapper's `value`, so a
+// snapshot holding the same wrapper would be overwritten along with the store.
+// The stored values themselves are shared — a page mutating a stored object in
+// place is already outside what the structured clone would have preserved.
+function _idb_clone_store(store) {
+    var recs = new Array(store.records.length);
+    for (var i = 0; i < store.records.length; i++) {
+        recs[i] = { key: store.records[i].key, value: store.records[i].value };
+    }
+    var indexes = {};
+    for (var n in store.indexes) {
+        var ix = store.indexes[n];
+        indexes[n] = { name: ix.name, keyPath: ix.keyPath, unique: ix.unique, multiEntry: ix.multiEntry };
+    }
+    return { records: recs, indexes: indexes, keyGenerator: store.keyGenerator,
+             name: store.name, keyPath: store.keyPath, autoIncrement: store.autoIncrement };
+}
+
+// Puts a snapshot back INTO THE SAME store object rather than replacing it in
+// the map: every IDBObjectStore/IDBIndex wrapper the page is holding keeps a
+// direct reference to it, and a replacement would leave those wrappers writing
+// into an object no longer reachable from the database.
+function _idb_restore_store(store, snap) {
+    store.records = snap.records;
+    store.indexes = snap.indexes;
+    store.keyGenerator = snap.keyGenerator;
+    store.name = snap.name;
+    store.keyPath = snap.keyPath;
+    store.autoIncrement = snap.autoIncrement;
+}
+
+// Takes the transaction's undo snapshot, once, before its first mutation.
+// A versionchange transaction snapshots the whole database (the store map and
+// the version change with it); an ordinary one only the stores in its scope.
+function _idb_txn_snapshot(txn) {
+    if (txn._snapshot || txn.mode === 'readonly') return;
+    var data = txn.db._data;
+    var stores = {};
+    if (txn._isUpgrade) {
+        for (var n in data.stores) stores[n] = { ref: data.stores[n], snap: _idb_clone_store(data.stores[n]) };
+    } else {
+        for (var i = 0; i < txn.objectStoreNames.length; i++) {
+            var name = txn.objectStoreNames[i];
+            var st = data.stores[name];
+            if (st) stores[name] = { ref: st, snap: _idb_clone_store(st) };
+        }
+    }
+    txn._snapshot = { version: data.version, stores: stores, whole: txn._isUpgrade };
+}
+
+// Reverts everything the transaction wrote (Indexed DB §3.4.5, step 1). Runs
+// before the requests are settled and before the abort event, so a handler
+// already reads the reverted database.
+function _idb_revert_txn(txn) {
+    var snap = txn._snapshot;
+    if (!snap) return;
+    txn._snapshot = null;
+    var data = txn.db._data;
+    if (snap.whole) {
+        data.version = snap.version;
+        txn.db.version = snap.version;
+        // A store created by this transaction has to go; one it deleted comes
+        // back by its original reference, so the page's wrapper still works.
+        for (var name in data.stores) {
+            if (!Object.prototype.hasOwnProperty.call(snap.stores, name)) delete data.stores[name];
+        }
+    }
+    for (var n in snap.stores) {
+        var entry = snap.stores[n];
+        _idb_restore_store(entry.ref, entry.snap);
+        data.stores[n] = entry.ref;
+    }
+    // The reverted state is what has to reach the backend, so a persist is owed
+    // exactly as much as a commit would owe one.
+    _idb_dirty = true;
 }
 
 // Settles every request still queued when the transaction aborted (Indexed DB
@@ -14922,6 +15002,10 @@ function _idb_abort_txn_requests(txn) {
 // done by the caller before calling this, so it can throw to the caller.
 function _idb_make_request(source, txn, fn) {
     if (txn._finished || txn._committing) throw _idb_error('TransactionInactiveError', 'transaction is not active');
+    // Cheapest correct place for the undo snapshot: every data mutation
+    // (add/put/delete/clear, cursor update/delete) is a request, and it is
+    // taken once per transaction. A readonly one is skipped inside.
+    _idb_txn_snapshot(txn);
     var req = new IDBRequest(source, txn);
     req._action = fn;
     txn._queue.push(req);
@@ -14947,6 +15031,10 @@ Object.defineProperty(IDBDatabase.prototype, 'objectStoreNames', {
 });
 IDBDatabase.prototype.createObjectStore = function(name, options) {
     if (!this._upgradeTxn) throw _idb_error('InvalidStateError', 'createObjectStore allowed only during a versionchange transaction');
+    // Schema mutations bypass the request queue, so they take the snapshot
+    // themselves — an aborted upgrade has to lose its new stores and indexes
+    // exactly as it loses its records.
+    _idb_txn_snapshot(this._upgradeTxn);
     name = String(name);
     if (this._data.stores[name]) throw _idb_error('ConstraintError', 'object store already exists: ' + name);
     options = options || {};
@@ -14966,6 +15054,7 @@ IDBDatabase.prototype.createObjectStore = function(name, options) {
 IDBDatabase.prototype.deleteObjectStore = function(name) {
     if (!this._upgradeTxn) throw _idb_error('InvalidStateError', 'deleteObjectStore allowed only during a versionchange transaction');
     if (!this._data.stores[name]) throw _idb_error('NotFoundError', 'no object store named ' + name);
+    _idb_txn_snapshot(this._upgradeTxn);
     delete this._data.stores[name];
 };
 IDBDatabase.prototype.transaction = function(storeNames, mode, options) {
@@ -15167,6 +15256,7 @@ IDBObjectStore.prototype.createIndex = function(name, keyPath, options) {
     if (!this.transaction._isUpgrade) throw _idb_error('InvalidStateError', 'createIndex allowed only during a versionchange transaction');
     name = String(name);
     if (this._store.indexes[name]) throw _idb_error('ConstraintError', 'index already exists: ' + name);
+    _idb_txn_snapshot(this.transaction);
     options = options || {};
     var idx = { name: name, keyPath: keyPath, unique: !!options.unique, multiEntry: !!options.multiEntry };
     this._store.indexes[name] = idx;
@@ -15175,6 +15265,7 @@ IDBObjectStore.prototype.createIndex = function(name, keyPath, options) {
 IDBObjectStore.prototype.deleteIndex = function(name) {
     if (!this.transaction._isUpgrade) throw _idb_error('InvalidStateError', 'deleteIndex allowed only during a versionchange transaction');
     if (!this._store.indexes[name]) throw _idb_error('NotFoundError', 'no index named ' + name);
+    _idb_txn_snapshot(this.transaction);
     delete this._store.indexes[name];
 };
 IDBObjectStore.prototype.index = function(name) {
@@ -15437,6 +15528,10 @@ function _idb_process_open(entry, budget) {
             txn._isUpgrade = true;
             entry._txn = txn;
             db._upgradeTxn = txn;
+            // Eagerly, unlike an ordinary transaction: the version is bumped on
+            // the next line, before any handler can mutate anything, and an
+            // aborted upgrade has to give the old version back too.
+            _idb_txn_snapshot(txn);
             data.version = entry.newVersion;
             db.version = entry.newVersion;
             req.transaction = txn;
@@ -15461,7 +15556,20 @@ function _idb_process_open(entry, budget) {
         txn._settled = true;
         entry.db._upgradeTxn = null;
         req.transaction = null;
-        if (txn._aborted) { _idb_abort_txn_requests(txn); _idb_fire_txn(txn, 'abort'); _idb_dispatch_request(req); return budget; }
+        if (txn._aborted) {
+            _idb_revert_txn(txn);
+            _idb_abort_txn_requests(txn);
+            _idb_fire_txn(txn, 'abort');
+            // An aborted version change fails the open request (§3.3.1): without
+            // this the request has no error and _idb_dispatch_request fires
+            // `success`, handing the page a connection whose upgrade was just
+            // rolled back. An error already recorded (a failed upgrade handler)
+            // wins — it is the more specific reason.
+            if (!req.error) { req.error = _idb_error('AbortError', 'version change transaction was aborted'); }
+            req.result = undefined;
+            _idb_dispatch_request(req);
+            return budget;
+        }
         _idb_fire_txn(txn, 'complete');
     }
     req.readyState = 'done';
@@ -35499,6 +35607,105 @@ mod tests {
                      durability:TypeError,relaxed:relaxed,default:default"
                         .into()
                 )
+            );
+        }
+
+        #[test]
+        fn idb_abort_reverts_applied_writes() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var out = [];
+                var db;
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                req.onsuccess = function(e) { db = e.target.result; };
+                _lumen_idb_flush();
+                // seed a record the aborting transaction will overwrite and delete
+                var seed = db.transaction('s', 'readwrite').objectStore('s');
+                seed.put('kept', 1);
+                seed.put('deleted-later', 2);
+                _lumen_idb_flush();
+
+                var tx = db.transaction('s', 'readwrite');
+                var st = tx.objectStore('s');
+                var w = st.put('new', 3);
+                st.put('overwritten', 1);
+                st.delete(2);
+                // abort only once the writes have actually been applied
+                w.onsuccess = function() { tx.abort(); };
+                _lumen_idb_flush();
+
+                var check = db.transaction('s', 'readonly').objectStore('s');
+                var g1 = check.get(1), g2 = check.get(2), g3 = check.get(3);
+                _lumen_idb_flush();
+                out.push('1=' + g1.result);
+                out.push('2=' + g2.result);
+                out.push('3=' + g3.result);
+                out.join(',')
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("1=kept,2=deleted-later,3=undefined".into())
+            );
+        }
+
+        #[test]
+        fn idb_abort_reverts_key_generator() {
+            // transaction-abort-generator-revert.any.js: the key generator goes
+            // back to where it was, so the next add reuses the aborted key.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var db, keys = [];
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { autoIncrement: true }); };
+                req.onsuccess = function(e) { db = e.target.result; };
+                _lumen_idb_flush();
+                var tx1 = db.transaction('s', 'readwrite');
+                var a = tx1.objectStore('s').add('x');
+                a.onsuccess = function() { keys.push(a.result); tx1.abort(); };
+                _lumen_idb_flush();
+                var tx2 = db.transaction('s', 'readwrite');
+                var b = tx2.objectStore('s').add('y');
+                b.onsuccess = function() { keys.push(b.result); };
+                _lumen_idb_flush();
+                keys.join(',')
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("1,1".into()));
+        }
+
+        #[test]
+        fn idb_abort_reverts_upgrade_schema_and_version() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var out = [];
+                var db;
+                var first = indexedDB.open('d', 1);
+                first.onupgradeneeded = function(e) { e.target.result.createObjectStore('keep'); };
+                first.onsuccess = function(e) { db = e.target.result; db.close(); };
+                _lumen_idb_flush();
+
+                var second = indexedDB.open('d', 2);
+                second.onupgradeneeded = function(e) {
+                    var d = e.target.result;
+                    d.createObjectStore('added');
+                    d.deleteObjectStore('keep');
+                    e.target.transaction.abort();
+                };
+                second.onerror = function() { out.push('open-error'); };
+                _lumen_idb_flush();
+
+                var third = indexedDB.open('d');
+                third.onsuccess = function(e) {
+                    var d = e.target.result;
+                    out.push('version=' + d.version);
+                    out.push('stores=' + d.objectStoreNames.join('/'));
+                };
+                _lumen_idb_flush();
+                out.join(',')
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("open-error,version=1,stores=keep".into())
             );
         }
 
