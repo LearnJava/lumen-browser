@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-25",
  "counts": {
-  "open": 385,
-  "fixed": 488,
+  "open": 383,
+  "fixed": 490,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -10990,17 +10990,17 @@
    "debtor": false
   },
   "BUG-844": {
-   "status": "open",
+   "status": "fixed",
    "title": "`EventSource`: поток, законченный телом ответа (`Content-Length` + keep-alive — форма любого `.py`-обработчика `wptserve`), не считается законченным: ни `error`…",
    "component": "network (`crates/network/src/sse.rs:393` — переподключение только по завершению чтения соединения) + js (`crates/js/src/dom.rs:7521`, `:7538` — ветки `open`/`close` в `_lumen_sse_pump_one`)",
-   "date": null,
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-845": {
-   "status": "open",
+   "status": "fixed",
    "title": "`EventSource`: незавершённый блок оборванного соединения не выбрасывается, а склеивается с данными следующего (`data === \"test2\\ntest1\"`), и его `id:` уходит в…",
    "component": "network (`crates/network/src/sse.rs:393`–`400` — парсер переживает переподключение; `:325` — EOF просто возвращает `Ok(false)`; `:122` — `id` пишется в `last_event_id` сразу при разборе строки)",
-   "date": null,
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-846": {

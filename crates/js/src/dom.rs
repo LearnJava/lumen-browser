@@ -8193,24 +8193,25 @@ function _lumen_sse_pump_one(es) {
             } else if (ev.t === 'retry') {
                 // Server requested a specific reconnect delay (HTML Living Standard §9.2.3).
                 if (typeof ev.ms === 'number' && ev.ms >= 0) { es._retryMs = ev.ms; }
+            } else if (ev.t === 'reconnecting') {
+                // The stream ended and the session is re-establishing the
+                // connection (HTML Living Standard §9.2.5 step 1): readyState
+                // CONNECTING + `error`. The reconnection itself belongs to the
+                // native session — the same handle stays valid and a later
+                // 'open' announces the new connection (BUG-844). Doing it here
+                // as well would open a second connection per drop.
+                if (es._readyState === 2) { continue; }
+                es._readyState = 0; // CONNECTING
+                _lumen_sse_fire(es, 'error', new Event('error', { isTrusted: true }));
             } else if (ev.t === 'close') {
-                // Server-initiated close: per spec fire error with CONNECTING, then reconnect.
+                // Terminal: the native session stopped producing events (the
+                // page called close(), so its recv loop was cancelled). No
+                // reconnect — a stream that merely ended reports 'reconnecting'.
                 _lumen_sse_close(es._handle);
                 es._handle = 0;
                 if (es._readyState !== 2) {
-                    es._readyState = 0; // CONNECTING
-                    var errEv = new Event('error', { isTrusted: true });
-                    _lumen_sse_fire(es, 'error', errEv);
-                    es._reconnecting = true;
-                    (function(target, delay) {
-                        setTimeout(function() {
-                            if (!target._reconnecting || target._readyState === 2) return;
-                            target._reconnecting = false;
-                            var h = _lumen_sse_connect(target._url);
-                            if (!h) { target._readyState = 2; return; }
-                            target._handle = h;
-                        }, delay);
-                    })(es, es._retryMs);
+                    es._readyState = 2; // CLOSED
+                    _lumen_sse_fire(es, 'error', new Event('error', { isTrusted: true }));
                 }
                 break;
             } else if (ev.t === 'error') {
@@ -8265,7 +8266,6 @@ function EventSource(url, opts) {
     this._handle = 0;
     this._lastEventId = '';
     this._retryMs = 3000; // default reconnect delay (HTML Living Standard §9.2.7)
-    this._reconnecting = false;
     // Origin best-effort: scheme+host of the target URL (for MessageEvent.origin).
     this._origin = '';
     var _sep = this._url.indexOf('://');
@@ -8303,7 +8303,6 @@ EventSource.prototype.close = function() {
         _lumen_sse_close(this._handle);
         this._handle = 0;
     }
-    this._reconnecting = false; // cancel any pending reconnect
     this._readyState = 2; // CLOSED
 };
 Object.defineProperty(EventSource.prototype, 'url', {
@@ -29428,11 +29427,14 @@ mod tests {
         }
 
         #[test]
-        fn eventsource_server_close_fires_error_and_reconnects() {
+        fn eventsource_stream_end_fires_error_with_connecting() {
             use lumen_core::ext::JsSseEvent;
-            // Server-initiated close: readyState becomes CONNECTING (0), error fires,
-            // reconnect scheduled (HTML Living Standard §9.2.7).
-            let rt = v8_runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open, JsSseEvent::Close]);
+            // The stream ended and the native session is reconnecting: readyState
+            // becomes CONNECTING (0) and `error` fires (HTML LS §9.2.5 step 1).
+            let rt = v8_runtime_with_mock_sse(
+                make_doc(),
+                vec![JsSseEvent::Open, JsSseEvent::Reconnecting],
+            );
             let r = rt
                 .eval(
                     "var errored = false;
@@ -29526,22 +29528,55 @@ mod tests {
         }
 
         #[test]
-        fn eventsource_close_cancels_pending_reconnect() {
+        fn eventsource_reconnect_fires_open_again() {
             use lumen_core::ext::JsSseEvent;
-            // Calling close() after server-close must cancel the pending reconnect.
+            // Every announced connection fires `open`, not just the first — that
+            // is what the `retry:` WPT tests time (BUG-844).
+            let rt = v8_runtime_with_mock_sse(
+                make_doc(),
+                vec![
+                    JsSseEvent::Open,
+                    JsSseEvent::Reconnecting,
+                    JsSseEvent::Open,
+                ],
+            );
+            let r = rt
+                .eval(
+                    "var opens = 0, errors = 0;
+                     var es = new EventSource('https://x/sse');
+                     es.onopen = function() { opens++; };
+                     es.onerror = function() { errors++; };
+                     _lumen_pump_sse();
+                     [opens, errors, es.readyState]",
+                )
+                .unwrap();
+            match r {
+                lumen_core::JsValue::Array(arr) => {
+                    assert_eq!(arr[0], lumen_core::JsValue::Number(2.0)); // two `open`
+                    assert_eq!(arr[1], lumen_core::JsValue::Number(1.0)); // one `error`
+                    assert_eq!(arr[2], lumen_core::JsValue::Number(1.0)); // OPEN again
+                }
+                other => panic!("expected array, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn eventsource_close_event_is_terminal() {
+            use lumen_core::ext::JsSseEvent;
+            // `Close` means the native session stopped for good; it must not
+            // schedule a reconnect of its own (the session owns reconnection).
             let rt = v8_runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open, JsSseEvent::Close]);
             let r = rt
                 .eval(
                     "var es = new EventSource('https://x/sse');
                      _lumen_pump_sse();
-                     es.close();
-                     [es.readyState, es._reconnecting]",
+                     [es.readyState, es._handle]",
                 )
                 .unwrap();
             match r {
                 lumen_core::JsValue::Array(arr) => {
                     assert_eq!(arr[0], lumen_core::JsValue::Number(2.0)); // CLOSED
-                    assert_eq!(arr[1], lumen_core::JsValue::Bool(false)); // no reconnect
+                    assert_eq!(arr[1], lumen_core::JsValue::Number(0.0)); // handle released
                 }
                 other => panic!("expected array, got {other:?}"),
             }

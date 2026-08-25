@@ -42,6 +42,15 @@ pub struct SseParser {
     line_buf: Vec<u8>,
     event_type: String,
     data_buf: String,
+    /// Spec §9.2.6 «last event ID buffer»: written by the `id:` field of the
+    /// stream currently being parsed. NOT what the reconnect header carries —
+    /// an `id:` in an event that never dispatched must not be sent
+    /// ([`reset_stream`](Self::reset_stream) rolls it back, BUG-845).
+    last_event_id_buf: String,
+    /// Spec §9.2.6 «last event ID string of the event source»: copied from the
+    /// buffer on every dispatch attempt, persists across connections and is
+    /// what [`last_event_id`](Self::last_event_id) — hence `Last-Event-ID` —
+    /// reports.
     last_event_id: String,
     retry_ms: Option<u64>,
     // True when the previous byte was CR; used to skip the LF of a CRLF pair.
@@ -121,7 +130,7 @@ impl SseParser {
             }
             // Spec: ignore if value contains U+0000 NULL.
             "id" if !value.contains('\0') => {
-                self.last_event_id = value.to_string();
+                self.last_event_id_buf = value.to_string();
             }
             // Spec: set retry only if value is all ASCII digits and parses as u64.
             "retry"
@@ -139,6 +148,13 @@ impl SseParser {
 
     /// Dispatch the current event buffers (called on blank line).
     fn dispatch(&mut self) -> Option<SseEvent> {
+        // Spec §9.2.6 step 1 of «dispatch the event»: promote the last event ID
+        // buffer to the event source's last event ID string. This happens
+        // BEFORE the empty-data check, so a blank line after a bare `id:` still
+        // commits the id — and, conversely, an `id:` never followed by a blank
+        // line never commits (BUG-845).
+        self.last_event_id.clone_from(&self.last_event_id_buf);
+
         // Spec: if the data buffer is empty, discard and reset event type.
         if self.data_buf.is_empty() {
             self.event_type.clear();
@@ -180,12 +196,55 @@ impl SseParser {
     pub fn last_event_id(&self) -> &str {
         &self.last_event_id
     }
+
+    /// Take the reconnection time the stream last asked for, if any.
+    ///
+    /// `retry:` takes effect when the field is parsed, not when an event
+    /// dispatches (§9.2.6) — a stream may set it and never dispatch anything.
+    /// [`dispatch`](Self::dispatch) also consumes this value into the event it
+    /// produces, so whichever of the two runs first sees it exactly once.
+    pub fn take_retry(&mut self) -> Option<u64> {
+        self.retry_ms.take()
+    }
+
+    /// Drop everything that belongs to the connection that just ended.
+    ///
+    /// Spec §9.2.6: «Once the end of the file is reached, any pending data must
+    /// be discarded» — an event without its final blank line is not dispatched,
+    /// and its `id:` must not reach the next request's `Last-Event-ID` header
+    /// either, so the buffer rolls back to the last *dispatched* value. What
+    /// survives a reconnection is exactly the last event ID string (BUG-845).
+    pub fn reset_stream(&mut self) {
+        self.line_buf.clear();
+        self.event_type.clear();
+        self.data_buf.clear();
+        self.last_was_cr = false;
+        self.last_event_id_buf.clone_from(&self.last_event_id);
+    }
 }
 
 // ── EventSource ───────────────────────────────────────────────────────────────
 
 const CHUNK: usize = 4096;
 const DEFAULT_RETRY_MS: u64 = 3_000;
+
+/// How the response body is delimited (RFC 7230 §3.3.3).
+///
+/// SSE reads the body incrementally and forever, so the framing is what decides
+/// when the *stream* has ended. Reading until the socket closes is correct only
+/// for the third case: with `Content-Length` or `chunked` on a keep-alive
+/// connection the body ends while the socket stays open, and treating that as
+/// «still streaming» is what left the connection hanging forever (BUG-844) —
+/// every `.py` handler under `wptserve` answers in exactly that shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SseFraming {
+    /// `Content-Length: N` — the stream ends after N body bytes.
+    Length,
+    /// `Transfer-Encoding: chunked` — the stream ends at the last chunk.
+    Chunked,
+    /// Neither header — the stream ends when the socket closes.
+    Eof,
+}
 
 /// Streaming SSE client. Implements [`SseSession`].
 ///
@@ -202,6 +261,11 @@ pub(crate) struct EventSource {
     parser: SseParser,
     /// Active HTTP stream; None when disconnected (will reconnect on next call).
     stream: Option<BufReader<RawStream>>,
+    /// Framing of the body currently being read.
+    framing: SseFraming,
+    /// `Length`: body bytes still to come. `Chunked`: bytes left in the current
+    /// chunk (0 = a chunk-size line is next). Unused for `Eof`.
+    remaining: u64,
     retry_ms: u64,
     /// Shared cancellation handle: stops the reconnect loop and wakes a pending
     /// reconnect sleep when `close()` is signalled from another thread.
@@ -226,6 +290,8 @@ impl EventSource {
             queue: std::collections::VecDeque::new(),
             parser: SseParser::new(),
             stream: None,
+            framing: SseFraming::Eof,
+            remaining: 0,
             retry_ms: DEFAULT_RETRY_MS,
             cancel: lumen_core::ext::SseCancel::new(),
             closed: false,
@@ -311,6 +377,23 @@ impl EventSource {
             )));
         }
 
+        // Body framing decides where the stream ends (see [`SseFraming`]).
+        let chunked = header_value(&headers, "transfer-encoding")
+            .map(|v| v.to_ascii_lowercase().contains("chunked"))
+            .unwrap_or(false);
+        let length = header_value(&headers, "content-length").and_then(|v| v.trim().parse::<u64>().ok());
+        // RFC 7230 §3.3.3 (3): `Transfer-Encoding` wins over `Content-Length`.
+        let (framing, remaining) = match (chunked, length) {
+            (true, _) => (SseFraming::Chunked, 0),
+            (false, Some(n)) => (SseFraming::Length, n),
+            (false, None) => (SseFraming::Eof, 0),
+        };
+        self.framing = framing;
+        self.remaining = remaining;
+
+        // §9.2.6 «announce the connection»: readyState = OPEN, fire `open`.
+        // Emitted on every (re)connection, not just the first — a consumer that
+        // hears about the drop must hear about the recovery too (BUG-844).
         self.sink.emit(&Event::SseConnected {
             tab_id: self.tab_id,
             url: self.url.clone(),
@@ -320,24 +403,111 @@ impl EventSource {
         Ok(())
     }
 
+    /// Read the next slice of the response body into `buf`, honouring the
+    /// framing. `Ok(0)` means the *stream* ended (not necessarily the socket).
+    fn read_body(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let framing = self.framing;
+        let Some(stream) = self.stream.as_mut() else {
+            return Ok(0);
+        };
+        match framing {
+            SseFraming::Eof => stream.read(buf),
+            SseFraming::Length => {
+                if self.remaining == 0 {
+                    return Ok(0);
+                }
+                let take = (buf.len() as u64).min(self.remaining) as usize;
+                let n = stream.read(&mut buf[..take])?;
+                // A short body is a truncated stream, not a protocol error: the
+                // events already handed over stay valid and we reconnect.
+                self.remaining -= n as u64;
+                Ok(n)
+            }
+            SseFraming::Chunked => {
+                if self.remaining == 0 {
+                    let mut size_line = String::new();
+                    if stream.read_line(&mut size_line)? == 0 {
+                        return Ok(0);
+                    }
+                    let size_hex = size_line
+                        .trim_end_matches(['\r', '\n'])
+                        .split(';')
+                        .next()
+                        .unwrap_or("")
+                        .trim();
+                    let Ok(size) = u64::from_str_radix(size_hex, 16) else {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "sse: invalid chunk size",
+                        ));
+                    };
+                    if size == 0 {
+                        // last-chunk: drain the trailer section, then end.
+                        loop {
+                            let mut line = String::new();
+                            let n = stream.read_line(&mut line)?;
+                            if n == 0 || line == "\r\n" || line == "\n" {
+                                break;
+                            }
+                        }
+                        return Ok(0);
+                    }
+                    self.remaining = size;
+                }
+                let take = (buf.len() as u64).min(self.remaining) as usize;
+                let n = stream.read(&mut buf[..take])?;
+                if n == 0 {
+                    return Ok(0);
+                }
+                self.remaining -= n as u64;
+                if self.remaining == 0 {
+                    // CRLF terminating the chunk data.
+                    let mut crlf = [0u8; 2];
+                    stream.read_exact(&mut crlf)?;
+                }
+                Ok(n)
+            }
+        }
+    }
+
+    /// The connection is over: drop it, discard the half-parsed event, and tell
+    /// the observer so it can fire `error` with `readyState = CONNECTING`
+    /// (§9.2.5 step 1). Called for a clean end of stream as well as a read
+    /// error — from the page's point of view the two are the same event.
+    fn end_stream(&mut self, reason: String) {
+        self.stream = None;
+        self.framing = SseFraming::Eof;
+        self.remaining = 0;
+        self.parser.reset_stream();
+        self.sink.emit(&Event::SseError {
+            tab_id: self.tab_id,
+            url: self.url.clone(),
+            message: reason,
+        });
+    }
+
     /// Read one chunk from the active stream and push any complete events into
     /// `self.queue`. Returns `true` if the stream is still open, `false` on EOF.
     fn fill_queue(&mut self) -> Result<bool> {
-        let stream = match self.stream.as_mut() {
-            Some(s) => s,
-            None => return Err(Error::Network("sse: no active stream".into())),
-        };
+        if self.stream.is_none() {
+            return Err(Error::Network("sse: no active stream".into()));
+        }
 
         let mut buf = [0u8; CHUNK];
-        let n = stream
-            .read(&mut buf)
+        let n = self
+            .read_body(&mut buf)
             .map_err(|e| Error::Network(format!("sse: read: {e}")))?;
         if n == 0 {
-            // EOF — server closed the stream.
+            // End of stream — body exhausted or socket closed.
             return Ok(false);
         }
 
         let events = self.parser.push_bytes(&buf[..n]);
+        // `retry:` applies as soon as it is parsed, even if the stream never
+        // dispatches an event carrying it (§9.2.6).
+        if let Some(ms) = self.parser.take_retry() {
+            self.retry_ms = ms;
+        }
         for ev in events {
             // Update retry_ms from server hint.
             if let Some(ms) = ev.retry_ms {
@@ -371,18 +541,9 @@ impl SseSession for EventSource {
             if self.stream.is_some() {
                 match self.fill_queue() {
                     Ok(true) => continue,  // read more; queue may now have events
-                    Ok(false) => {
-                        // Transient drop -> reconnect, no terminal close (HTML SSE §9.2.1).
-                        self.stream = None;
-                    }
-                    Err(e) => {
-                        self.stream = None;
-                        self.sink.emit(&Event::SseError {
-                            tab_id: self.tab_id,
-                            url: self.url.clone(),
-                            message: e.to_string(),
-                        });
-                    }
+                    // Transient drop -> reconnect, no terminal close (HTML SSE §9.2.1).
+                    Ok(false) => self.end_stream("stream ended".into()),
+                    Err(e) => self.end_stream(e.to_string()),
                 }
             }
 
@@ -622,5 +783,286 @@ mod tests {
         let events = parse("retry: 1000\ndata: a\n\nretry: 2000\ndata: b\n\n");
         assert_eq!(events[0].retry_ms, Some(1000));
         assert_eq!(events[1].retry_ms, Some(2000));
+    }
+
+    // ── Конец потока и переподключение (BUG-844 / BUG-845) ────────────────
+
+    #[test]
+    fn dispatch_commits_id_even_when_data_is_empty() {
+        // §9.2.6: продвижение буфера last event ID — ШАГ 1 «диспатча», до
+        // проверки на пустой data. Голый `id:` с пустой строкой события не
+        // порождает, но идентификатор фиксирует.
+        let mut p = SseParser::new();
+        let events = p.push_bytes(b"id: 42\n\n");
+        assert!(events.is_empty(), "пустой data события не даёт");
+        assert_eq!(p.last_event_id(), "42");
+    }
+
+    #[test]
+    fn undispatched_id_does_not_reach_last_event_id() {
+        // `id:` без завершающей пустой строки не диспатчился, значит в
+        // `Last-Event-ID` уходить не должен (BUG-845).
+        let mut p = SseParser::new();
+        p.push_bytes(b"data: a\n\nid: X\ndata: b");
+        assert_eq!(p.last_event_id(), "", "id недиспатченного блока не в счёт");
+    }
+
+    #[test]
+    fn reset_stream_drops_pending_block_and_rolls_back_id() {
+        // Оборванное соединение: незавершённый блок выбрасывается целиком, а
+        // буфер id откатывается к последнему ДИСПАТЧЕННОМУ значению — иначе
+        // данные склеиваются с данными следующего соединения (BUG-845).
+        let mut p = SseParser::new();
+        p.push_bytes(b"id: 1\ndata: a\n\nid: X\ndata: b");
+        assert_eq!(p.last_event_id(), "1");
+
+        p.reset_stream();
+        assert_eq!(p.last_event_id(), "1", "откат к диспатченному id");
+
+        // Следующее соединение: данные оборванного блока не приклеились.
+        let events = p.push_bytes(b"data: c\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "c", "без склейки с 'b'");
+        assert_eq!(events[0].event_type, "message");
+        // И — главное — диспатч нового потока не поднимает `X` из буфера:
+        // именно это уходило в `Last-Event-ID` следующего запроса (BUG-845).
+        assert_eq!(p.last_event_id(), "1", "'X' не всплыл после переподключения");
+    }
+
+    #[test]
+    fn reset_stream_clears_pending_line_and_event_type() {
+        // Недочитанная СТРОКА и тип события — тоже состояние соединения.
+        // Обрыв приходится на середину строки (терминатора нет), поэтому в
+        // `line_buf` остаётся «data: pending»: без очистки он склеится с первой
+        // строкой нового потока, а `event: custom` перекрасит его первое
+        // событие.
+        let mut p = SseParser::new();
+        let events = p.push_bytes(b"event: custom\ndata: pending");
+        assert!(events.is_empty(), "блок не завершён — события нет");
+
+        p.reset_stream();
+
+        let events = p.push_bytes(b"data: fresh\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "fresh", "без склейки с недочитанной строкой");
+        assert_eq!(events[0].event_type, "message", "тип не пережил обрыв");
+    }
+
+    #[test]
+    fn wpt_format_data_before_final_empty_line() {
+        // Тело `eventsource/format-data-before-final-empty-line.any.html`
+        // дословно: поток обрывается на середине второго блока. По спеке
+        // диспатчится ровно один `message` с data === "test1", а блок
+        // `id:test`/`data:test2` уходит вместе с соединением (BUG-845).
+        let mut p = SseParser::new();
+        let events = p.push_bytes(b"retry:400\ndata:test1\n\nid:test\ndata:test2");
+        assert_eq!(events.len(), 1, "второй блок не завершён: {events:?}");
+        assert_eq!(events[0].data, "test1");
+        assert_eq!(p.take_retry(), None, "retry забран в событие");
+
+        p.reset_stream();
+        assert_eq!(
+            p.last_event_id(),
+            "",
+            "id недиспатченного блока не уходит в Last-Event-ID"
+        );
+
+        // Следующее соединение отдаёт то же тело: склейки быть не должно.
+        let events = p.push_bytes(b"retry:400\ndata:test1\n\nid:test\ndata:test2");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "test1", "не 'test2\\ntest1'");
+    }
+
+    #[test]
+    fn take_retry_reports_value_parsed_without_any_dispatch() {
+        // §9.2.6: `retry:` действует с момента разбора поля, а не с диспатча
+        // события — поток может задать задержку и не отдать ни одного события.
+        let mut p = SseParser::new();
+        let events = p.push_bytes(b"retry: 700\n");
+        assert!(events.is_empty());
+        assert_eq!(p.take_retry(), Some(700));
+        assert_eq!(p.take_retry(), None, "значение забирается один раз");
+    }
+
+    #[test]
+    fn dispatch_and_take_retry_do_not_double_report() {
+        // Диспатч тоже забирает `retry_ms` в событие; кто из двух успел первым,
+        // тот и видит значение — но ровно один раз.
+        let mut p = SseParser::new();
+        let events = p.push_bytes(b"retry: 800\ndata: a\n\n");
+        assert_eq!(events[0].retry_ms, Some(800));
+        assert_eq!(p.take_retry(), None);
+    }
+
+    // ── Обрамление тела ответа (BUG-844) ──────────────────────────────────
+
+    /// Резолвер «любое имя — это loopback»: тест ходит на свой же слушатель.
+    struct LoopbackDns;
+    impl DnsResolver for LoopbackDns {
+        fn resolve(&self, _hostname: &str, port: u16) -> Result<Vec<std::net::SocketAddr>> {
+            Ok(vec![std::net::SocketAddr::from(([127, 0, 0, 1], port))])
+        }
+    }
+
+    /// Слушатель на эфемерном порту, не попадающий в список «плохих» портов
+    /// Fetch §3.9 — иначе клиент откажется соединяться и тест замигает
+    /// (форма BUG-911).
+    fn good_listener() -> std::net::TcpListener {
+        loop {
+            let Ok(l) = std::net::TcpListener::bind("127.0.0.1:0") else {
+                continue;
+            };
+            let Ok(addr) = l.local_addr() else { continue };
+            if !crate::bad_port::is_bad_port(addr.port()) {
+                return l;
+            }
+        }
+    }
+
+    /// Поднимает сервер, отвечающий `head` + `body` на каждое соединение и
+    /// ДЕРЖАЩИЙ сокет открытым 10 с, и читает события клиентом в отдельном
+    /// потоке. Возвращает канал событий и счётчик соединений.
+    ///
+    /// Сокет держится открытым намеренно: и `Content-Length`, и `chunked`
+    /// заканчивают поток, не закрывая соединение, — ровно тот случай, который
+    /// раньше концом потока не считался (BUG-844). Держать его нужно на
+    /// отдельном потоке, иначе последовательный `accept` не примет
+    /// переподключение и «одно соединение» прочтётся как его отсутствие.
+    fn serve_holding(
+        head: &'static str,
+        body: &'static [u8],
+    ) -> (
+        std::sync::mpsc::Receiver<String>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::io::Write as _;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let listener = good_listener();
+        let Ok(addr) = listener.local_addr() else {
+            panic!("local_addr")
+        };
+        let conns = Arc::new(AtomicUsize::new(0));
+        let conns_srv = Arc::clone(&conns);
+
+        std::thread::spawn(move || {
+            for sock in listener.incoming() {
+                let Ok(mut sock) = sock else { break };
+                conns_srv.fetch_add(1, Ordering::SeqCst);
+                // Заголовки запроса до пустой строки.
+                let mut byte = [0u8; 1];
+                let mut seen = Vec::new();
+                while std::io::Read::read(&mut sock, &mut byte).unwrap_or(0) == 1 {
+                    seen.push(byte[0]);
+                    if seen.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let _ = sock.write_all(head.as_bytes());
+                let _ = sock.write_all(body);
+                let _ = sock.flush();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(10));
+                    drop(sock);
+                });
+            }
+        });
+
+        let Ok(url) = Url::parse(&format!("http://127.0.0.1:{}/sse", addr.port())) else {
+            panic!("url")
+        };
+        let Ok(mut es) = EventSource::connect(
+            &url,
+            Arc::new(LoopbackDns),
+            Arc::new(lumen_core::ext::NoopEventSink),
+            TabId(0),
+        ) else {
+            panic!("connect")
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok(Some(ev)) = es.next_event() {
+                if tx.send(ev.data).is_err() {
+                    break;
+                }
+            }
+        });
+        (rx, conns)
+    }
+
+    /// Три события подряд от сервера, отдающего по одному на соединение, —
+    /// значит переподключение состоялось дважды. Ждём с ДЕДЛАЙНОМ: без него
+    /// тест зелёный и при сломанном обрамлении, потому что чтение до закрытия
+    /// сокета тоже когда-нибудь кончится — просто через 10 с (проверено
+    /// мутацией `framing = Eof`: тест держался 20 с и всё равно проходил).
+    /// Отличает исправное поведение только время.
+    fn expect_three_reconnects(
+        rx: &std::sync::mpsc::Receiver<String>,
+        conns: &Arc<std::sync::atomic::AtomicUsize>,
+        what: &str,
+    ) {
+        use std::sync::atomic::Ordering;
+        let budget = std::time::Duration::from_secs(3);
+        for i in 0..3 {
+            match rx.recv_timeout(budget) {
+                Ok(data) => assert_eq!(data, "a", "{what}: событие {i}"),
+                Err(e) => panic!(
+                    "{what}: событие {i} не пришло за {budget:?} ({e:?}) — поток \
+                     не считается законченным; соединений на сервере {}",
+                    conns.load(Ordering::SeqCst)
+                ),
+            }
+        }
+        assert!(
+            conns.load(Ordering::SeqCst) >= 3,
+            "{what}: каждое событие — своё соединение, получено {}",
+            conns.load(Ordering::SeqCst)
+        );
+    }
+
+    /// Тело, ограниченное `Content-Length` на keep-alive сокете — форма любого
+    /// `.py`-обработчика `wptserve` (BUG-844).
+    #[test]
+    fn lengthed_body_on_open_socket_ends_stream_and_reconnects() {
+        const BODY: &[u8] = b"retry: 50\ndata: a\n\n";
+        let (rx, conns) = serve_holding(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+             Content-Length: 19\r\nConnection: keep-alive\r\n\r\n",
+            BODY,
+        );
+        assert_eq!(BODY.len(), 19, "Content-Length должен совпасть с телом");
+        expect_three_reconnects(&rx, &conns, "content-length");
+    }
+
+    /// `Transfer-Encoding: chunked` на том же открытом сокете: поток кончается
+    /// последним чанком нулевого размера, а не закрытием соединения. Разбор
+    /// размеров, CRLF после данных чанка и секции трейлеров — отдельная ветка
+    /// `read_body`, которую случай с `Content-Length` не задевает.
+    #[test]
+    fn chunked_body_on_open_socket_ends_stream_at_last_chunk() {
+        // Размеры в hex ровно по длине: "retry: 50\n" — 10 (a), "data: a\n\n" — 9.
+        // Ошибка на единицу съела бы CRLF чанка и сломала разбор.
+        const BODY: &[u8] = b"a\r\nretry: 50\n\r\n9\r\ndata: a\n\n\r\n0\r\n\r\n";
+        let (rx, conns) = serve_holding(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+             Transfer-Encoding: chunked\r\n\r\n",
+            BODY,
+        );
+        expect_three_reconnects(&rx, &conns, "chunked");
+    }
+
+    /// RFC 7230 §3.3.3(3): при обоих заголовках выигрывает `Transfer-Encoding`.
+    /// Если бы победил `Content-Length`, клиент прочёл бы ровно N байт сырого
+    /// чанкового кадра вместе с его служебными строками.
+    #[test]
+    fn chunked_wins_over_content_length() {
+        const BODY: &[u8] = b"a\r\nretry: 50\n\r\n9\r\ndata: a\n\n\r\n0\r\n\r\n";
+        let (rx, conns) = serve_holding(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+             Content-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n",
+            BODY,
+        );
+        expect_three_reconnects(&rx, &conns, "chunked+content-length");
     }
 }

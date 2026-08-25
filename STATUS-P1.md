@@ -1,5 +1,3 @@
-BUGS.md:872
-BUGS.md:873
 BUGS.md:874
 BUGS.md:875
 BUGS.md:879
