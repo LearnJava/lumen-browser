@@ -432,3 +432,61 @@ restyle/layout/paint фрейма, `document.open/write/close`, sibling↔siblin
 postMessage, вызов функций между изолятами, динамически созданные фреймы
 ([BUG-885](BUG-885-OPEN.md)), навигация/замена/удаление фрейма,
 X-Frame-Options/CSP `frame-ancestors`, bfcache фреймов.
+
+## Срез 7 (P3, 2026-08-25) — `focus()`/`blur()` и произвольный `dispatchEvent` через фасад
+
+Ящик событий среза 6 обобщён: [`PendingFrameEvent`] несёт [`FrameEventKind`]
+(`click` | `focus` | `blur` | `dom`) вместо неявного «всегда клик»; постановка —
+единый натив `_lumen_f_queue_event(bid, nid, spec_json)` (бывший
+`_lumen_f_queue_click`; правила те же: нет биндинга / cross-origin / opaque /
+не-элемент / неразбираемая спека — тихий «нет»), конверты всех видов
+разбираются одной пумпой и доставляются хуками WEB_API_SHIM:
+`_lumen_deliver_frame_focus(nid, preventScroll)` /
+`_lumen_deliver_frame_blur(nid)` / `_lumen_deliver_frame_dom_event(nid, env)`;
+клик — прежний `_lumen_deliver_frame_click`.
+
+Содержательную часть исполняет сам ребёнок:
+
+* `focus(options)` — focusability-гейт (`_lumen_is_focusable`) и
+  `_lumen_focus_update(nid)`: blur/focusout на прежде сфокусированном узле
+  ребёнка, focus/focusin на новом, `document.activeElement` актуален сразу
+  после доставки. Два задокументированных отклонения: БЕЗ
+  `_lumen_request_focus` (очередь фокус-запросов рантайма фрейма шеллом пока
+  не дренируется — фреймы не рендерятся; запрос там только копился бы) и без
+  scrollIntoView (`preventScroll` переносится конвертом, но игнорируется —
+  layout у фреймов нулевой);
+* `blur()` — no-op для не сфокусированного элемента (HTML LS §6.6.3), иначе
+  `_lumen_focus_update(-1)`;
+* `dispatchEvent(event)` — переносится снимок type/bubbles/cancelable/
+  composed + detail (JSON-круготрип; detail-функции деградируют как у
+  postMessage, символы бросают TypeError синхронно на отправке); в ребёнке
+  строится заново Event/CustomEvent и диспатчится ТОЧНОЙ копией
+  последовательности его собственного `el.dispatchEvent`: слушатели цели +
+  on<type> (`_lumen_dispatch`) и активационное поведение для недоверенного
+  'click' без preventDefault (BUG-439). Возвращаемое значение спеки
+  (!defaultPrevented) при асинхронной доставке недостижимо — метод ничего не
+  возвращает.
+
+Проверка: clippy `-p lumen-js --features v8-backend` / `-p lumen-shell`
+-D warnings (прогон `-p lumen-js` без фичи красен и на чистом main — 19
+предсуществующих dead-code ошибок вне этого среза); тесты js lib 3263 ok
+(+14: транспорт focus/blur/dispatch обоих направлений поверх пары изолятов,
+сохранение порядка конвертов, отказ чужого/cross-origin биндинга и мусорных
+спек, интеграция install_dom→хуки: activeElement через фасад с пустой очередью
+фокус-запросов шелла, CustomEvent с detail у локального слушателя); shell
+1586+2 ok; `dump_golden.py` 12/12; живой смоук
+`tests/wpt/verify_frame_actions.py` (dev-release, http-сервер): родитель в
+обработчике `load` вызывает `btn.focus()` → ребёнок репортит
+`child-focused active=btn` + непузырящийся focus и всплывший focusin;
+`btn.dispatchEvent(new CustomEvent('hello', {detail:{n:7}}))` →
+`child-hello detail={"n":7,"tag":"slice7"}`; `btn.blur()` → `child-blurred
+active=BODY` + focusout, обработчик которого отвечает родителю кросс-фреймовым
+postMessage (цепочка срезов 4+7 в одном прогоне).
+
+Не входит (очередь): исполнение вставленных `<script>` и запрос подресурсов
+вставленных элементов, restyle/layout/paint фрейма, `document.open/write/close`,
+sibling↔sibling postMessage, вызов функций между изолятами, динамически
+созданные фреймы ([BUG-885](BUG-885-OPEN.md)), навигация/замена/удаление
+фрейма, X-Frame-Options/CSP `frame-ancestors`, bfcache фреймов; уведомление
+шелла о фокусе внутри фрейма (дрен очереди рантаймов фреймов) — вместе с
+layout/rAF фреймов.
