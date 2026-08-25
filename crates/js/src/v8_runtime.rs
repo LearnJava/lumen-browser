@@ -7673,6 +7673,96 @@ mod tests {
         ));
     }
 
+    /// Срез 9: скрипт, вставленный ПУСТЫМ, не помечается «already started»
+    /// первой доставкой (по спеке флаг ставится только когда подготовка
+    /// началась), поэтому поздний `src = …` получает вторую доставку и
+    /// запускает штатную подготовку: fetch силами провайдеров контекста
+    /// (здесь их нет → спековый error на элементе).
+    #[test]
+    fn frame_facade_late_src_starts_preparation_after_silent_first_delivery() {
+        let doc = make_doc();
+        let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
+        rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+        rt.eval(
+            "window.__err = false; \
+             var d = _lumen_frame_content_document(1); \
+             var s = d.createElement('script'); \
+             d.body.appendChild(s); \
+             window.__snid = s.__nid__; \
+             _lumen_make_element(s.__nid__).addEventListener('error', function () { \
+                 window.__err = true; \
+             });",
+        )
+        .unwrap();
+        rt.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(
+            matches!(
+                rt.eval(
+                    "_lumen_frame_scripts_started[__snid] === undefined && window.__err === false"
+                )
+                .unwrap(),
+                JsValue::Bool(true)
+            ),
+            "пустой скрипт первой доставкой не начинается и не помечается"
+        );
+        // Каноничный порядок «appendChild, потом src»: сеттер рефлексии пишет
+        // атрибут через натив записи, тот ставит второй конверт RunScript.
+        rt.eval("s.src = 'late.js';").unwrap();
+        rt.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(
+            matches!(
+                rt.eval("_lumen_frame_scripts_started[__snid] === 1 && window.__err === false")
+                    .unwrap(),
+                JsValue::Bool(true)
+            ),
+            "вторая доставка помечает элемент и запускает загрузку"
+        );
+        // Провайдера сети нет: fetch отклоняется, спековый error доезжает
+        // асинхронно (task hop таймера внутри _lumen_script_load_external).
+        rt.eval("_lumen_tick_timers();").unwrap();
+        assert_eq!(
+            rt.eval("window.__err").unwrap(),
+            JsValue::Bool(true),
+            "неудавшаяся загрузка отстрелила error на элементе"
+        );
+        // Уже начавшийся скрипт повторных доставок не начинает заново.
+        rt.eval("s.src = 'other.js';").unwrap();
+        rt.eval("_lumen_frame_pump_messages(); _lumen_tick_timers();").unwrap();
+        assert_eq!(
+            rt.eval("window.__err").unwrap(),
+            JsValue::Bool(true),
+            "повторный src после already started — no-op"
+        );
+    }
+
+    /// Срез 9: дата-блок (не-JS type) не помечается «already started» вовсе —
+    /// он никогда не становится скриптом, каким бы атрибутам его ни учили.
+    #[test]
+    fn frame_data_block_stays_unmarked_after_delivery() {
+        let doc = make_doc();
+        let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
+        rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+        rt.eval(
+            "var d = _lumen_frame_content_document(1); \
+             var j = d.createElement('script'); \
+             j.setAttribute('type', 'application/json'); \
+             j.textContent = '{\"x\":1}'; \
+             d.body.appendChild(j); \
+             window.__jnid = j.__nid__;",
+        )
+        .unwrap();
+        rt.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(
+            matches!(
+                rt.eval("_lumen_frame_scripts_started[__jnid] === undefined")
+                    .unwrap(),
+                JsValue::Bool(true)
+            ),
+            "дата-блок не начинается ни при какой доставке"
+        );
+    }
+
+
     /// Срез 8: предикат «есть конверт для меня» горит между постановкой и
     /// пумпой и гаснет после разбора ящика — по нему шелл будит спящий цикл.
     #[test]
