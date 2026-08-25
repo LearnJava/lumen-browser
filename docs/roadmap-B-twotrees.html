@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-25",
  "counts": {
-  "open": 379,
-  "fixed": 497,
+  "open": 382,
+  "fixed": 498,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 876,
+ "total_bugs": 880,
  "phases": [
   {
    "id": "P0",
@@ -10735,10 +10735,10 @@
    "debtor": false
   },
   "BUG-799": {
-   "status": "open",
+   "status": "fixed",
    "title": "**Присваивание `src` элементу `<audio>` не возвращает управление никогда** — самодедлок JS-потока, из-за которого на странице не выполняется ни один последующий…",
-   "component": "shell (`crates/shell/src/platform/audio_player.rs:314-326` — `PlatformAudioPlayer::load`, вторая блокировка `self.handles` внутри тела `if let`, чьё скрутини держит гард того же нереентерабельного `std::sync::Mutex`)",
-   "date": null,
+   "component": "shell (`crates/shell/src/platform/audio_player.rs` — `PlatformAudioPlayer::load`), js (`crates/js/src/audio_element.rs` — опрос загрузки в `AUDIO_ELEMENT_SHIM`)",
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-800": {
@@ -11538,6 +11538,34 @@
    "component": "js (`crates/js/src/frame_bridge.rs` — геттер `window.name` ребёнка зовёт `_lumen_f_attr(p, host, 'name')` на КАЖДОЕ чтение)",
    "date": null,
    "debtor": false
+  },
+  "BUG-922": {
+   "status": "open",
+   "title": "Ни одной из тринадцати констант типов узла нет ни на интерфейсе `Node`, ни на самих узлах: `Node.ELEMENT_NODE`/`Node.TEXT_NODE`/`el.ELEMENT_NODE` — `undefined`,…",
+   "component": "js (`crates/js/src/dom.rs` — конструктор `Node`; на `document` одна константа `DOCUMENT_NODE` объявлена точечно на `:2414`, общей таблицы DOM §4.4 нет нигде)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-923": {
+   "status": "open",
+   "title": "Два дефекта, попавшие в один тест. (1) `Audio`/`Image`/`Option` — обычные функции, возвращающие `createElement(…)`, а не legacy factory functions: вызов **без `…",
+   "component": "js (`crates/js/src/audio_element.rs:585-593` — `globalThis.Audio`; `crates/js/src/dom.rs` — `Image`/`Option`, `_lumen_build_element`/`_lumen_element_prototype_for`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-924": {
+   "status": "open",
+   "title": "`<audio src>` не резолвится относительно базы документа: на странице с `http://127.0.0.1:PORT/` абсолютный URL доходит до `loadeddata` за 54 мс, а `/sine440.mp3…",
+   "component": "js (`crates/js/src/audio_element.rs:264-283` — `startLoad(url)` передаёт значение атрибута в `__lumen_audio_load` как есть)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-925": {
+   "status": "open",
+   "title": "Атрибута `loading` у медиа-элемента нет: `el.loading = 'lazy'` кладёт экспандо, `getAttribute('loading')` остаётся `null` (замер по четырём тегам — `audio`/`vid…",
+   "component": "js (`crates/js/src/audio_element.rs` — `patchAudioElement`; `crates/js/src/video_bindings.rs` — то же у `<video>`; `crates/js/src/dom.rs:17149`/`:17239` — рефлексия `loading` у `<img>`/`<iframe>` объявлена `'string'` вместо `'enum'`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11765,6 +11793,15 @@
   ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
    "BUG-281"
+  ],
+  "js (`crates/js/src/audio_element.rs:264-283` — `startLoad(url)` передаёт значение атрибута в `__lumen_audio_load` как есть)": [
+   "BUG-924"
+  ],
+  "js (`crates/js/src/audio_element.rs:585-593` — `globalThis.Audio`; `crates/js/src/dom.rs` — `Image`/`Option`, `_lumen_build_element`/`_lumen_element_prototype_for`)": [
+   "BUG-923"
+  ],
+  "js (`crates/js/src/audio_element.rs` — `patchAudioElement`; `crates/js/src/video_bindings.rs` — то же у `<video>`; `crates/js/src/dom.rs:17149`/`:17239` — рефлексия `loading` у `<img>`/`<iframe>` объявлена `'string'` вместо `'enum'`)": [
+   "BUG-925"
   ],
   "js (`crates/js/src/close_watcher.rs`, `CLOSE_WATCHER_SHIM`)": [
    "BUG-340"
@@ -12074,6 +12111,9 @@
   ],
   "js (`crates/js/src/dom.rs` — глобальный `window`; `:12210` определяет `closed`/`name` только у объекта-заглушки `open()`)": [
    "BUG-887"
+  ],
+  "js (`crates/js/src/dom.rs` — конструктор `Node`; на `document` одна константа `DOCUMENT_NODE` объявлена точечно на `:2414`, общей таблицы DOM §4.4 нет нигде)": [
+   "BUG-922"
   ],
   "js (`crates/js/src/dom.rs` — литерал обёртки элемента, `get content()` для `HTMLTemplateElement.content`, против таблицы `_lumen_install_reflection(HTMLMetaElement.prototype, …)`)": [
    "BUG-796"
@@ -12857,7 +12897,7 @@
   "shell (`crates/shell/src/main.rs` — шаг 1 `RedrawRequested`, синк `scrollY`; ветка колеса мыши), js (`crates/js/src/v8_runtime.rs::set_page_scroll_y`, `crates/js/src/dom.rs` — `scrollIntoView`)": [
    "BUG-821"
   ],
-  "shell (`crates/shell/src/platform/audio_player.rs:314-326` — `PlatformAudioPlayer::load`, вторая блокировка `self.handles` внутри тела `if let`, чьё скрутини держит гард того же нереентерабельного `std::sync::Mutex`)": [
+  "shell (`crates/shell/src/platform/audio_player.rs` — `PlatformAudioPlayer::load`), js (`crates/js/src/audio_element.rs` — опрос загрузки в `AUDIO_ELEMENT_SHIM`)": [
    "BUG-799"
   ],
   "shell (`main.rs::handle_click_at`, ветка `FormClickAction::SubmitForm`), js (`dom.rs` — `WEB_API_SHIM`)": [

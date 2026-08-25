@@ -411,7 +411,7 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   `audio-src-deadlock` (BUG-799, first in the table — that freeze is terminal
   and precedes every other wait on the page). Residual 1 805 → 1 488.
 - `tests/wpt/verify_bug799_audio_timers.py` — **ours** (WPT-RUN-6 slice 13) —
-  reproduces [BUG-799](../../bugs/BUG-799-OPEN.md) in about 90 s and shows what
+  reproduces [BUG-799](../../bugs/BUG-799-FIXED.md) in about 90 s and shows what
   it actually is. Seven pages, a fresh browser process on each, all served over
   http out of this tree so `/media/*` resolves as it does under wptserve; each
   page logs `PROBE tick N` from a 500 ms `setInterval`, and the count is read
