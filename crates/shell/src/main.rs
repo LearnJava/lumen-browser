@@ -7391,6 +7391,51 @@ struct ResolvedScript {
     source: String,
     /// Абсолютный URL внешнего `<script src>`; `None` у inline и `file://`.
     url: Option<String>,
+    /// Исход загрузки внешнего файла: `Some(true)` — тело получено,
+    /// `Some(false)` — не получено (в `source` пусто, исполнять нечего),
+    /// `None` — скрипт инлайновый, внешнего файла у него нет.
+    ///
+    /// BUG-804: HTML LS §4.12.1 требует выстрелить `load` на элементе после
+    /// исполнения внешнего скрипта и `error` — если файл не пришёл, и делает
+    /// это **независимо от того, кто вставил элемент**. Парсерный `<script>`
+    /// не проходит через JS-хук вставки (`_lumen_resource_track` знает только
+    /// об элементах из `createElement`), поэтому исход его загрузки известен
+    /// только здесь — и передаётся на JS-сторону прямо в цикле исполнения,
+    /// где порядок «выполнили тело → выстрелили `load`» получается даром.
+    /// `None` не диспатчит ничего: у инлайнового скрипта «from an external
+    /// file» ложно, и события по спецификации нет вовсе.
+    external_ok: Option<bool>,
+}
+
+impl ResolvedScript {
+    /// Внешний `<script src>`, тело которого получить не удалось.
+    ///
+    /// Остаётся в списке ровно ради своего `error` (BUG-804): тела нет, так что
+    /// цикл исполнения его пропускает, но элемент по HTML LS §4.12.1 обязан
+    /// сообщить странице об отказе. Заодно узел остаётся границей отрезка в
+    /// [`ParserInsertLog`] — настоящий парсер тоже вставил его в дерево.
+    fn failed(node: NodeId) -> Self {
+        Self { node, source: String::new(), url: None, external_ok: Some(false) }
+    }
+}
+
+/// Выстрелить `load`/`error` на элементе `<script>`, который вставил парсер.
+///
+/// Диспатч синхронный, а не задачей: §4.12.1 стреляет `load` сразу после того,
+/// как тело отработало, то есть ДО следующего скрипта документа — страница,
+/// которая в следующем же `<script>` читает выставленный обработчиком флаг,
+/// обязана его увидеть. Отложить событие задачей значило бы доставить его
+/// после всего разбора, что ломает этот порядок.
+#[cfg(feature = "v8")]
+fn fire_parser_script_event(
+    rt: &lumen_js::v8_runtime::V8JsRuntime,
+    node: NodeId,
+    external_ok: Option<bool>,
+) {
+    use lumen_core::ext::JsRuntime as _;
+    let Some(ok) = external_ok else { return };
+    let kind = if ok { "load" } else { "error" };
+    let _ = rt.eval(&format!("_lumen_resource_fire({}, '{kind}');", node.index()));
 }
 
 /// Журнал вставок, которые сделал парсер, — для `MutationObserver` (BUG-827).
@@ -7493,8 +7538,10 @@ fn flush_parser_inserts(
 
 /// Resolve [`ScriptSource`] items to JS source strings in document order,
 /// fetching external `<script src>` bodies via the subresource fetcher
-/// (mirrors [`load_linked_stylesheets`]). Failed fetches are logged and
-/// skipped — one broken script must not abort the rest of the page.
+/// (mirrors [`load_linked_stylesheets`]). A failed fetch is logged and kept in
+/// the list with an empty body and `external_ok: Some(false)` — one broken
+/// script must not abort the rest of the page, but it still owes its element an
+/// `error` event (BUG-804), so it may not be dropped here.
 fn resolve_script_sources(
     items: &[ScriptSource],
     base: &ResourceBase,
@@ -7510,6 +7557,7 @@ fn resolve_script_sources(
             node: *nid,
             source: body.clone(),
             url: None,
+            external_ok: None,
         }),
         ScriptSource::External(nid, src) => match base.resolve(src) {
             ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
@@ -7519,11 +7567,12 @@ fn resolve_script_sources(
                         node: *nid,
                         source: content,
                         url: None,
+                        external_ok: Some(true),
                     })
                 }
                 Err(e) => {
                     eprintln!("Пропуск скрипта {}: {e}", path.display());
-                    None
+                    Some(ResolvedScript::failed(*nid))
                 }
             },
             ResolvedResource::Url(url) => {
@@ -7533,7 +7582,7 @@ fn resolve_script_sources(
                     Ok(u) => u,
                     Err(e) => {
                         eprintln!("Пропуск скрипта {url}: {e}");
-                        return None;
+                        return Some(ResolvedScript::failed(*nid));
                     }
                 };
                 // BUG-171: read through the prefetch cache so a script already
@@ -7558,11 +7607,12 @@ fn resolve_script_sources(
                             // Абсолютный адрес самого скрипта — база
                             // относительных импортов внутри модуля.
                             url: Some(url.clone()),
+                            external_ok: Some(true),
                         })
                     }
                     Err(e) => {
                         eprintln!("Пропуск скрипта {url}: {e}");
-                        None
+                        Some(ResolvedScript::failed(*nid))
                     }
                 }
             }
@@ -8202,12 +8252,19 @@ fn run_scripts_with_dom(
                     ));
                 }
                 // Classic scripts run first (HTML LS §8.1.3 execution order).
-                for ResolvedScript { node: nid, source: src, .. } in &scripts {
+                for ResolvedScript { node: nid, source: src, external_ok, .. } in &scripts {
                     // BUG-827: к этому моменту настоящий парсер уже вставил всё,
                     // что стоит в документе выше этого скрипта, и сам его
                     // элемент — наблюдатель, поставленный предыдущим скриптом,
                     // обязан увидеть эти вставки записями.
                     flush_parser_inserts(&mut parser_inserts, Some(*nid), &rt);
+                    // BUG-804: внешний файл не пришёл — исполнять нечего, но
+                    // элемент обязан сообщить об отказе на своём месте в
+                    // порядке документа.
+                    if *external_ok == Some(false) {
+                        fire_parser_script_event(&rt, *nid, *external_ok);
+                        continue;
+                    }
                     // BUG-486: `document.currentScript` must name the element
                     // being executed for the whole body and nothing else, so the
                     // push/pop pair brackets the eval — including the error paths
@@ -8230,6 +8287,10 @@ fn run_scripts_with_dom(
                         Err(e) => eprintln!("script error: {e}"),
                     }
                     let _ = rt.eval("_lumen_pop_current_script();");
+                    // §4.12.1 «execute the script block», последний шаг:
+                    // внешний классический скрипт стреляет `load` сразу после
+                    // тела. Инлайновый — ничего (`external_ok` = `None`).
+                    fire_parser_script_event(&rt, *nid, *external_ok);
                 }
                 // BUG-827: хвост документа парсер вставил ещё до того, как
                 // отложенные модули начали исполняться, — отдаём его одним
@@ -8239,6 +8300,12 @@ fn run_scripts_with_dom(
                 // Module scripts run after classic scripts (HTML LS §8.1.3.1 deferred).
                 // No `currentScript` bracket: it is `null` inside a module by spec.
                 for item in &module_scripts {
+                    // BUG-804: внешний модуль, чей файл не пришёл, обязан
+                    // выстрелить `error` ровно так же, как классический.
+                    if item.external_ok == Some(false) {
+                        fire_parser_script_event(&rt, item.node, item.external_ok);
+                        continue;
+                    }
                     let src = &item.source;
                     // Внешний модуль исполняется под СВОИМ адресом: от него
                     // считаются его относительные импорты. У inline-модуля
@@ -8263,6 +8330,14 @@ fn run_scripts_with_dom(
                         }
                         Err(e) => eprintln!("module error: {e}"),
                     }
+                    // BUG-804: внешний модуль стреляет `load` после вычисления
+                    // — включая случай, когда тело бросило: исключение уходит в
+                    // window `error` (BUG-591), а элемент всё равно сообщает об
+                    // успешной загрузке. Остаток: провал СВЯЗЫВАНИЯ (не нашёлся
+                    // импорт внутри) по спецификации должен дать `error`, но
+                    // `ModuleFailure` до сюда не доходит — `JsResult` его
+                    // схлопывает, и здесь тоже выйдет `load`.
+                    fire_parser_script_event(&rt, item.node, item.external_ok);
                 }
                 // Extension content scripts run last (after all page scripts).
                 for src in extra_scripts {
@@ -32124,6 +32199,34 @@ mod tests {
         assert!(matches!(&classic[2], ScriptSource::Inline(_, s) if s.contains("b=2")));
     }
 
+    /// BUG-804: скрипт, чей файл не пришёл, обязан остаться в списке — иначе
+    /// его элементу негде выстрелить `error`. Раньше `resolve_script_sources`
+    /// такой скрипт молча выбрасывал, и страница не узнавала об отказе ничего.
+    #[test]
+    fn resolve_script_sources_keeps_a_failed_external_for_its_error_event() {
+        struct NullSink;
+        impl EventSink for NullSink {
+            fn emit(&self, _event: &Event) {}
+        }
+        let doc = lumen_html_parser::parse(
+            r#"<html><body>
+              <script src="b804-does-not-exist.js"></script>
+              <script>ok=1;</script>
+            </body></html>"#,
+        );
+        let mut classic = Vec::new();
+        let mut modules = Vec::new();
+        collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
+        let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+        let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+        let resolved = resolve_script_sources(&classic, &base, &sink, None);
+        assert_eq!(resolved.len(), 2, "the failed script keeps its slot");
+        assert_eq!(resolved[0].external_ok, Some(false));
+        assert!(resolved[0].source.is_empty(), "no body to execute");
+        assert_eq!(resolved[1].external_ok, None, "inline owes no load event");
+        assert!(resolved[1].source.contains("ok=1"));
+    }
+
     // ── BUG-827: порядок парсерных вставок для MutationObserver ───────────────
 
     /// Собрать `ResolvedScript` из результата [`collect_scripts_ordered`] —
@@ -32135,7 +32238,7 @@ mod tests {
                 let (node, source) = match s {
                     ScriptSource::Inline(n, src) | ScriptSource::External(n, src) => (*n, src),
                 };
-                ResolvedScript { node, source: source.clone(), url: None }
+                ResolvedScript { node, source: source.clone(), url: None, external_ok: None }
             })
             .collect()
     }
