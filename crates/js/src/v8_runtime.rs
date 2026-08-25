@@ -85,6 +85,46 @@ fn set_named_access_document(doc: &Arc<Mutex<lumen_dom::Document>>) {
     NAMED_ACCESS_DOC.with(|slot| *slot.borrow_mut() = Some(Arc::clone(doc)));
 }
 
+/// How long a named-property lookup waits for the document lock before giving
+/// up (BUG-794). Sized against the contention it exists for: the window `load`
+/// event is dispatched through the engine thread (ADR-023), so it runs
+/// *concurrently* with the UI thread's own post-load pass over the document,
+/// which was measured holding the lock for 3.9 ms — a plain `try_lock` loses
+/// that race outright and every name in a `load` handler becomes a
+/// `ReferenceError`. The budget is generous against that and still bounded, so
+/// the case the `try_lock` was there for — this very thread already holding the
+/// lock — costs latency instead of deadlocking.
+const NAMED_ACCESS_LOCK_BUDGET: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// Poll interval inside [`NAMED_ACCESS_LOCK_BUDGET`]. Sleeping rather than
+/// spinning: the holder is another OS thread doing layout-sized work, so
+/// burning this thread's quantum only makes it slower to release.
+const NAMED_ACCESS_LOCK_POLL: std::time::Duration = std::time::Duration::from_micros(100);
+
+/// Take the document lock for a named-property lookup, waiting at most
+/// [`NAMED_ACCESS_LOCK_BUDGET`] and declining rather than blocking forever.
+///
+/// `None` means "this name is not a named property of the document" — the only
+/// answer an interceptor that cannot look the name up is allowed to give, and
+/// the pre-BUG-384 behaviour. A poisoned lock declines for the same reason.
+fn lock_document_bounded(
+    doc: &Arc<Mutex<lumen_dom::Document>>,
+) -> Option<std::sync::MutexGuard<'_, lumen_dom::Document>> {
+    let deadline = std::time::Instant::now() + NAMED_ACCESS_LOCK_BUDGET;
+    loop {
+        match doc.try_lock() {
+            Ok(guard) => return Some(guard),
+            Err(std::sync::TryLockError::Poisoned(_)) => return None,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(NAMED_ACCESS_LOCK_POLL);
+            }
+        }
+    }
+}
+
 /// Resolve `name` against the current document's supported property names
 /// (HTML LS §7.3.3): any element whose `id` is `name`, plus `img`/`form`/
 /// `iframe`/`embed`/`object` whose `name` attribute is `name`. Returns the
@@ -97,18 +137,17 @@ fn set_named_access_document(doc: &Arc<Mutex<lumen_dom::Document>>) {
 /// matching `iframe` yields the element rather than its `contentWindow`; and
 /// the lookup is a tree walk per miss rather than a maintained name index.
 ///
-/// Uses `try_lock`, not `lock`: the interceptor fires on *any* global-name
-/// miss, including one made by JS that a native called while holding the
-/// document lock. A blocking lock there would deadlock the JS thread against
-/// itself; giving up instead only costs one unresolved name, which is exactly
-/// the pre-BUG-384 behaviour.
+/// Takes the lock through [`lock_document_bounded`] rather than `lock()`: the
+/// interceptor fires on *any* global-name miss, including one made by JS that a
+/// native called while holding the document lock, and a blocking lock there
+/// would deadlock the JS thread against itself.
 fn named_access_lookup(name: &str) -> Option<u32> {
     if name.is_empty() {
         return None;
     }
     NAMED_ACCESS_DOC.with(|slot| {
         let borrowed = slot.borrow();
-        let doc = borrowed.as_ref()?.try_lock().ok()?;
+        let doc = lock_document_bounded(borrowed.as_ref()?)?;
         find_first_matching(&doc, doc.root(), &|node| match &node.data {
             NodeData::Element { name: tag, .. } => {
                 node.get_attr("id") == Some(name)
@@ -8656,5 +8695,65 @@ mod tests {
         assert_js_true(&rt, "window.later !== undefined && window.later.tagName === 'DIV'");
         rt.eval("document.body.removeChild(el);").unwrap();
         assert_js_true(&rt, "window.later === undefined");
+    }
+
+    // ── BUG-794: the lookup must survive a lock held by another thread ────────
+
+    /// An uncontended lock is taken on the first `try_lock`, without paying the
+    /// poll interval.
+    #[test]
+    fn bounded_document_lock_takes_a_free_lock_at_once() {
+        let doc = make_named_access_doc();
+        let start = std::time::Instant::now();
+        assert!(lock_document_bounded(&doc).is_some());
+        assert!(start.elapsed() < NAMED_ACCESS_LOCK_BUDGET);
+    }
+
+    /// The bug itself: the window `load` event is dispatched on the engine
+    /// thread while the UI thread still holds the document lock (measured at
+    /// 3.9 ms), so a bare `try_lock` declines and every named element in a
+    /// `load` handler becomes a `ReferenceError`. Waiting out a hold of that
+    /// order must resolve the name instead.
+    #[test]
+    fn bounded_document_lock_waits_out_another_thread() {
+        let doc = make_named_access_doc();
+        let held = Arc::clone(&doc);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let guard = held.lock().unwrap();
+            tx.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(4));
+            drop(guard);
+        });
+        rx.recv().unwrap();
+        assert!(doc.try_lock().is_err(), "the other thread must hold the lock");
+        assert!(lock_document_bounded(&doc).is_some());
+        holder.join().unwrap();
+    }
+
+    /// …and it is a *bounded* wait, not a blocking one: a lock this thread will
+    /// never see released — in production, one this very thread already holds —
+    /// must decline within the budget rather than deadlock the JS thread.
+    #[test]
+    fn bounded_document_lock_gives_up_on_a_lock_that_never_frees() {
+        let doc = make_named_access_doc();
+        let held = Arc::clone(&doc);
+        let release = Arc::new(AtomicBool::new(false));
+        let release_holder = Arc::clone(&release);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let guard = held.lock().unwrap();
+            tx.send(()).unwrap();
+            while !release_holder.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            drop(guard);
+        });
+        rx.recv().unwrap();
+        let start = std::time::Instant::now();
+        assert!(lock_document_bounded(&doc).is_none());
+        assert!(start.elapsed() >= NAMED_ACCESS_LOCK_BUDGET);
+        release.store(true, Ordering::SeqCst);
+        holder.join().unwrap();
     }
 }

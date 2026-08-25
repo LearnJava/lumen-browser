@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-25",
  "counts": {
-  "open": 380,
-  "fixed": 496,
+  "open": 379,
+  "fixed": 497,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -10707,10 +10707,10 @@
    "debtor": false
   },
   "BUG-794": {
-   "status": "open",
+   "status": "fixed",
    "title": "`element.focus()`, вызванный синхронно изнутри обработчика `window` `load` (`addEventListener('load', …)`/`onload`), **никогда не возвращает управление** — ни р…",
-   "component": "js/shell (`crates/js/src/dom.rs` — `HTMLElement.prototype.focus`, `_lumen_apply_ready_state`; и/или `crates/shell/src/main.rs:12486-12500` — `notify_window_loaded`/`route_task_js` на переходе `readyState → 'complete'`)",
-   "date": null,
+   "component": "js (`crates/js/src/v8_runtime.rs` — `named_access_lookup`/`lock_document_bounded`, интерцептор именованных свойств окна; заявка указывала на `crates/js/src/dom.rs` `HTMLElement.prototype.focus`/`_lumen_apply_ready_state` и `crates/shell/src/main.rs` `notify_window_loaded`/`route_task_js` — ни то, ни другое)",
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-796": {
@@ -12203,6 +12203,9 @@
   "js (`crates/js/src/v8_runtime.rs::_lumen_create_element`/`_lumen_create_element_ns`, `v8_compat.rs::IntoJsReturn for u32`)": [
    "BUG-457"
   ],
+  "js (`crates/js/src/v8_runtime.rs` — `named_access_lookup`/`lock_document_bounded`, интерцептор именованных свойств окна; заявка указывала на `crates/js/src/dom.rs` `HTMLElement.prototype.focus`/`_lumen_apply_ready_state` и `crates/shell/src/main.rs` `notify_window_loaded`/`route_task_js` — ни то, ни другое)": [
+   "BUG-794"
+  ],
   "js (`crates/js/src/v8_runtime.rs` — `to_rust_string_lossy` на границе регистрации нативов, 12 мест)": [
    "BUG-901"
   ],
@@ -12316,9 +12319,6 @@
   ],
   "js/shell (`crates/js/src/dom.rs:13837-13851` — `HTMLObjectElement`/`HTMLEmbedElement`, только рефлексия атрибутов; `crates/shell/src/main.rs` — нет обработки `<embed>`/`<object>` как источников ресурса)": [
    "BUG-798"
-  ],
-  "js/shell (`crates/js/src/dom.rs` — `HTMLElement.prototype.focus`, `_lumen_apply_ready_state`; и/или `crates/shell/src/main.rs:12486-12500` — `notify_window_loaded`/`route_task_js` на переходе `readyState → 'complete'`)": [
-   "BUG-794"
   ],
   "js/shell граница (`crates/js/src/dom.rs:6196-6205` сеттеры, `crates/js/src/v8_runtime.rs:3106` `_lumen_request_scroll`)": [
    "BUG-523"
