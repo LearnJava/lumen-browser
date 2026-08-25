@@ -2787,12 +2787,14 @@ pub enum BoxKind {
     /// layout дети раскладываются горизонтально слева направо; высота строки
     /// = высота самого высокого дочернего элемента.
     InlineBlockRow,
-    /// Replaced element: изображение (`<img>`). В Phase 0 — block-level
-    /// (одна картинка занимает свою строку). `src` — путь / URL ресурса
-    /// (декодирование откладывается на следующий шаг), `alt` — alternate-текст
-    /// для отображения и AT, размеры берутся из `style.width`/`style.height`
-    /// (которые могут происходить из CSS или HTML-атрибутов как
-    /// presentational hints). Inline-replaced в InlineRun-е — отдельная задача.
+    /// Replaced element: изображение (`<img>`). Inline-уровневый atomic-бокс
+    /// (UA-дефолт `display: inline`, IFC-2): собирается в `InlineBlockRow` и
+    /// делит строку с текстом, а на базовую линию садится нижней кромкой margin
+    /// box (CSS 2.1 §10.8.1 — `inline_baseline` возвращает для него `None`).
+    /// `src` — путь / URL ресурса (декодирование откладывается на следующий
+    /// шаг), `alt` — alternate-текст для отображения и AT, размеры берутся из
+    /// `style.width`/`style.height` (которые могут происходить из CSS или
+    /// HTML-атрибутов как presentational hints).
     Image {
         src: String,
         alt: String,
@@ -4223,6 +4225,43 @@ fn probe_display(
     }
 }
 
+/// `display` плюс признак «бокс выведен из inline-потока»: CSS 2.1 §9.7 делает
+/// плавающий и абсолютно позиционированный бокс блочным независимо от
+/// объявленного `display`.
+///
+/// Отдельная функция, а не второй вызов [`probe_display`]: оба поля читаются из
+/// одного и того же `ComputedStyle`, и повторный проход по каскаду на промахе
+/// кэша стоил бы ровно столько же, сколько первый.
+#[allow(clippy::too_many_arguments)]
+fn probe_display_and_flow(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+    counters: &CounterMap,
+) -> (Display, bool) {
+    BOX_BUILD_STATS.with(|s| {
+        let mut v = s.get();
+        v.display_probes += 1;
+        s.set(v);
+    });
+    let read = |s: &ComputedStyle| {
+        (
+            s.display,
+            s.float_side != FloatSide::None
+                || matches!(s.position, Position::Absolute | Position::Fixed),
+        )
+    };
+    match counters.style_arc(id) {
+        Some(s) => read(&s),
+        None => read(&note_display_probe(|| {
+            compute_style(doc, id, sheet, inherited, viewport, dark_mode)
+        })),
+    }
+}
+
 /// Порождает ли элемент содержимое, которое можно уплощить в `InlineSegment`-ы.
 ///
 /// `<img>` и form controls исключены: это replaced-элементы, у них есть
@@ -4263,10 +4302,10 @@ fn produces_inline_segments_nested(doc: &Document, id: NodeId, display: Display)
     produces_inline_segments(doc, id, display)
 }
 
-/// `<img>` в Phase 0 — block-level replaced element, не inline-контент:
-/// он порождает собственный `BoxKind::Image`, а не вливается в `InlineRun`.
-/// Inline-replaced (картинка внутри строки текста) — отдельная задача;
-/// до неё `<img>` всегда занимает свою строку, как `<div>`.
+/// `<img>` — не inline-**контент**, хотя и inline-уровневый: он порождает
+/// собственный `BoxKind::Image` вместо того, чтобы влиться в `InlineRun`
+/// сегментом (у сегмента нет своей высоты — BUG-728). В строку он попадает
+/// через [`is_atomic_inline_level`], как `inline-block` и form controls.
 #[allow(clippy::too_many_arguments)]
 fn is_inline_content(
     doc: &Document,
@@ -4307,13 +4346,25 @@ fn is_inline_content(
 /// `inline-grid` не попадали сюда и уплощались в сегменты родителя, то есть
 /// не получали бокса вовсе.
 ///
-/// Возвращает false для изображений (`<img>` — replaced element, Phase-0
-/// block-only). Form controls (`<input>`/`<select>`/`<button>`/…) — наоборот,
-/// участвуют как inline-block, когда их computed `display` == InlineBlock
-/// (UA-дефолт из `default_display`): их replaced/виджет-бокс (`BoxKind::
-/// FormControl`) собирается в `InlineBlockRow` и течёт горизонтально рядом с
-/// текстом и соседними контролами. Author `display:block` поверх → обычный
-/// block-бокс (эта функция вернёт false).
+/// Form controls (`<input>`/`<select>`/`<button>`/…) участвуют как inline-block,
+/// когда их computed `display` == InlineBlock (UA-дефолт из `default_display`):
+/// их replaced/виджет-бокс (`BoxKind::FormControl`) собирается в
+/// `InlineBlockRow` и течёт горизонтально рядом с текстом и соседними
+/// контролами. Author `display:block` поверх → обычный block-бокс (эта функция
+/// вернёт false).
+///
+/// `<img>` (IFC-2) — четвёртый случай: у него UA-дефолт `display: inline`, но
+/// как replaced-элемент он неделим, поэтому inline-level он именно **atomic**
+/// (CSS Display L3 §2.1), а не источник сегментов ([`produces_inline_segments`]
+/// возвращает для него false). Поэтому у картинки принимается и `Inline`.
+///
+/// Плавающая или абсолютно позиционированная картинка сюда НЕ попадает: CSS 2.1
+/// §9.7 выводит такой бокс из inline-потока и делает блочным независимо от
+/// `display`, а обтекание умеет только блочная ветка `lay_out`. До IFC-2
+/// `<img>` был блочным всегда, поэтому обтекание у него работало — сузить его
+/// молча значило бы разменять одну раскладку на другую. Тот же случай у
+/// плавающего `inline-block` разбирается по-старому (он и до IFC-2 собирался в
+/// ряд, теряя float) — это отдельный дефект, здесь не трогается.
 #[allow(clippy::too_many_arguments)]
 fn is_atomic_inline_level(
     doc: &Document,
@@ -4324,14 +4375,24 @@ fn is_atomic_inline_level(
     dark_mode: bool,
     counters: &CounterMap,
 ) -> bool {
-    matches!(
-        &doc.get(id).data,
-        NodeData::Element { .. }
-        if !is_image_element(doc, id)
+    if !matches!(&doc.get(id).data, NodeData::Element { .. }) {
+        return false;
+    }
+    if is_image_element(doc, id) {
+        let (display, out_of_flow) =
+            probe_display_and_flow(doc, sheet, id, inherited, viewport, dark_mode, counters);
+        return !out_of_flow
             && matches!(
-                probe_display(doc, sheet, id, inherited, viewport, dark_mode, counters),
-                Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
-            )
+                display,
+                Display::Inline
+                    | Display::InlineBlock
+                    | Display::InlineFlex
+                    | Display::InlineGrid
+            );
+    }
+    matches!(
+        probe_display(doc, sheet, id, inherited, viewport, dark_mode, counters),
+        Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
     )
 }
 
@@ -9349,23 +9410,27 @@ fn lay_out_inner(
                     let child_mb = collapsed_bottom_margin(child, content_width, viewport);
                     child_y = child.rect.y + child.rect.height + child_mb;
                     // CSS 2.1 §10.8 — inline-image line-box descent (the classic
-                    // "image bottom gap"). A bare <img> (and other replaced media)
-                    // is inline-level and sits on its line's baseline by default, so
-                    // the line box — and therefore the containing block's content
-                    // height — extends below the image by the strut's descent. Lumen
-                    // lays a lone <img> as a block-flow child (Phase 0 simplification,
-                    // see `is_inline_content` / `default_display` mapping img→Block),
-                    // which would otherwise drop this sub-baseline space and make every
-                    // image-wrapping block ~descent px too short. In an image grid that
-                    // shortfall accumulates as an upward row drift versus a browser
-                    // (BUG-180, TEST-18). Add the strut descent of *this block's* font
-                    // after a baseline-aligned replaced child. Restricted to the default
-                    // `vertical-align: baseline`; top/middle/bottom anchor the replaced
-                    // box against the line box differently and get no sub-baseline gap.
+                    // "image bottom gap"). `<video>`/`<canvas>`/`<iframe>` are
+                    // inline-level replaced media that Lumen still lays out as
+                    // block-flow children (`default_display` maps them to Block),
+                    // so the sub-baseline space of their line box would be dropped
+                    // and every media-wrapping block would come out ~descent px too
+                    // short; in a grid that shortfall accumulates as an upward row
+                    // drift versus a browser (BUG-180, TEST-18). Add the strut
+                    // descent of *this block's* font after a baseline-aligned such
+                    // child. Restricted to the default `vertical-align: baseline`;
+                    // top/middle/bottom anchor the replaced box against the line box
+                    // differently and get no sub-baseline gap.
+                    //
+                    // `BoxKind::Image` is deliberately NOT in this list since IFC-2:
+                    // an `<img>` is inline-level for real now and gets its descent
+                    // from the `InlineBlockRow` strut. Reaching block flow at all
+                    // means the author blockified it (`display: block`, a float,
+                    // absolute positioning) — and a blockified box has no line box
+                    // and therefore no gap under it.
                     let child_is_replaced_media = matches!(
                         child.kind,
-                        BoxKind::Image { .. } | BoxKind::Video { .. }
-                            | BoxKind::Canvas { .. } | BoxKind::Iframe { .. }
+                        BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Iframe { .. }
                     );
                     if child_is_replaced_media
                         && matches!(child.style.vertical_align, VerticalAlign::Baseline)
@@ -19474,6 +19539,142 @@ mod tests {
         // line's baseline is 15.4 and the text drops by 1.
         assert_eq!(run.rect.y - row.rect.y, 1.0, "text drops by the control's border");
         assert_eq!(ctl.rect.y - row.rect.y, 0.0);
+    }
+
+    #[test]
+    fn ifc2_image_shares_the_line_with_the_text_around_it() {
+        // IFC-2: `<img>` used to be block-level, so «Aa <img> Bb» came out three
+        // lines tall. It is inline-level replaced content now — one line box,
+        // three pieces in it, laid left to right exactly like an inline-block.
+        let row = ifc_row(
+            r#"<p>Aa <img width="16" height="16"> Bb</p>"#,
+            "p { width: 500px; }",
+        );
+        let kids: Vec<&super::LayoutBox> = row
+            .children
+            .iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .collect();
+        assert_eq!(kids.len(), 3, "run + image + run");
+        assert!(matches!(kids[1].kind, super::BoxKind::Image { .. }));
+        // "Aa" = 2 × 8px + the collapsed space = 24; the trailing run opens with
+        // its own collapsed space → 24 + 16 + 8 = 48.
+        assert_eq!(kids[0].rect.x - row.rect.x, 0.0);
+        assert_eq!(kids[1].rect.x - row.rect.x, 24.0, "image follows the text");
+        assert_eq!(kids[2].rect.x - row.rect.x, 48.0, "text follows the image");
+        // above = 16 (the image's bottom margin edge), below = max(strut 3.2,
+        // run 4.8) = 4.8.
+        assert!(
+            (row.rect.height - 20.8).abs() < 0.01,
+            "one line box expected, got h={}",
+            row.rect.height
+        );
+    }
+
+    #[test]
+    fn ifc2_image_sits_on_the_baseline_by_its_bottom_margin_edge() {
+        // CSS 2.1 §10.8.1 — a replaced element offers no baseline of its own, so
+        // its bottom MARGIN edge (not its border box, and not the top of the
+        // line) is what lands on the line's baseline.
+        let row = ifc_row(
+            r#"<p>Aa <img class="i" width="16" height="16"> Bb</p>"#,
+            "p { width: 500px; } .i { margin-bottom: 4px; }",
+        );
+        let img = row
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, super::BoxKind::Image { .. }))
+            .expect("image");
+        let run = row
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, super::BoxKind::InlineRun { .. }))
+            .expect("text run");
+        // Margin box height 20 → baseline at 20 from the top of the line; the
+        // text's own baseline is 14.4, so it drops by 5.6, rounded to 6.
+        assert_eq!(img.rect.y - row.rect.y, 0.0, "the tallest box opens the line");
+        assert_eq!(run.rect.y - row.rect.y, 6.0, "text drops onto the shared baseline");
+        assert!(
+            (row.rect.height - 24.8).abs() < 0.01,
+            "margin counts towards the line box, got h={}",
+            row.rect.height
+        );
+    }
+
+    #[test]
+    fn ifc2_two_images_share_one_line_with_a_collapsed_space() {
+        // The whitespace between two images is one collapsed inter-word gap
+        // (CSS Text L3 §4.1.1), the same `InlineSpace` two inline-blocks get —
+        // not a line break, which is what block-level `<img>` produced.
+        let row = ifc_row(
+            r#"<p><img width="20" height="20"> <img width="20" height="20"></p>"#,
+            "p { width: 500px; }",
+        );
+        let imgs: Vec<&super::LayoutBox> = row
+            .children
+            .iter()
+            .filter(|c| matches!(c.kind, super::BoxKind::Image { .. }))
+            .collect();
+        assert_eq!(imgs.len(), 2);
+        assert_eq!(imgs[0].rect.y, imgs[1].rect.y, "both images on one line");
+        assert_eq!(imgs[1].rect.x - imgs[0].rect.x, 28.0, "20px box + 8px space");
+    }
+
+    #[test]
+    fn ifc2_image_wraps_onto_the_next_line_when_it_does_not_fit() {
+        // An atomic inline that overflows the line moves to the next one whole
+        // (CSS 2.1 §9.4.2) — it is never split, and it never overhangs the
+        // container the way advancing by the run's full box width used to make
+        // the inline-block do (IFC-1).
+        let row = ifc_row(
+            r#"<p>Aa <img width="60" height="10"> <img width="60" height="10"></p>"#,
+            "p { width: 100px; }",
+        );
+        let imgs: Vec<&super::LayoutBox> = row
+            .children
+            .iter()
+            .filter(|c| matches!(c.kind, super::BoxKind::Image { .. }))
+            .collect();
+        assert_eq!(imgs.len(), 2);
+        assert_eq!(imgs[0].rect.x - row.rect.x, 24.0, "first image follows «Aa »");
+        assert_eq!(imgs[1].rect.x - row.rect.x, 0.0, "second image opens a new line");
+        assert!(
+            imgs[1].rect.y > imgs[0].rect.y,
+            "second image must be below the first, got y={} vs {}",
+            imgs[1].rect.y,
+            imgs[0].rect.y
+        );
+    }
+
+    #[test]
+    fn ifc2_floated_image_stays_out_of_the_inline_row() {
+        // CSS 2.1 §9.7 — a float is block-level whatever its `display` says, and
+        // only the block branch of `lay_out` implements the wrap-around. Before
+        // IFC-2 every `<img>` was block-level, so a floated one worked; letting
+        // the UA-default `inline` pull it into `InlineBlockRow` would have traded
+        // one layout for another instead of adding one.
+        let doc = lumen_html_parser::parse(r#"<div>Aa <img class="f" width="16" height="16"> Bb</div>"#);
+        let sheet = lumen_css_parser::parse(".f { float: left; }");
+        let root = super::layout_measured(&doc, &sheet, Size::new(500.0, 300.0), &Ifc8);
+        fn image_parent_is_row(b: &super::LayoutBox, in_row: bool) -> Option<bool> {
+            for c in &b.children {
+                if matches!(c.kind, super::BoxKind::Image { .. }) {
+                    return Some(in_row);
+                }
+                if let Some(v) = image_parent_is_row(
+                    c,
+                    matches!(c.kind, super::BoxKind::InlineBlockRow),
+                ) {
+                    return Some(v);
+                }
+            }
+            None
+        }
+        assert_eq!(
+            image_parent_is_row(&root, false),
+            Some(false),
+            "плавающая картинка обязана остаться блочной"
+        );
     }
 
     #[test]

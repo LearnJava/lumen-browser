@@ -8342,11 +8342,22 @@ mod tests {
 
     // ── <img> replaced element ───────────────────────────────────────────
 
+    /// Первый `BoxKind::Image` в поддереве. Поиск рекурсивный, потому что с
+    /// IFC-2 `<img>` — atomic inline-level бокс и лежит не прямым ребёнком
+    /// блока, а внутри анонимного `InlineBlockRow`, собирающего его строку.
     fn first_image_child(b: &LayoutBox) -> &LayoutBox {
-        b.children
-            .iter()
-            .find(|c| matches!(c.kind, BoxKind::Image { .. }))
-            .expect("expected at least one image child")
+        fn walk(b: &LayoutBox) -> Option<&LayoutBox> {
+            for c in &b.children {
+                if matches!(c.kind, BoxKind::Image { .. }) {
+                    return Some(c);
+                }
+                if let Some(found) = walk(c) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        walk(b).expect("expected at least one image child")
     }
 
     #[test]
@@ -8429,16 +8440,23 @@ mod tests {
     }
 
     #[test]
-    fn img_not_treated_as_inline_content() {
-        // <img> в Phase 0 — block-level. Текст до и после не объединяется с
-        // ним в один InlineRun.
+    fn img_is_atomic_inline_not_inline_content() {
+        // IFC-2: <img> делит строку с текстом, но НЕ вливается в него
+        // сегментом — у сегмента нет собственной высоты (BUG-728). Значит один
+        // анонимный `InlineBlockRow` на всю строку, а внутри — три куска:
+        // прогон «before», картинка, прогон «after».
         let root = lay(r#"<div>before<img src="x" width="10" height="10">after</div>"#, "");
         let div = first_element_child(&root);
-        // div должен иметь 3 потомка: InlineRun("before") + Image + InlineRun("after").
-        assert_eq!(div.children.len(), 3, "got {}", div.children.len());
-        assert!(matches!(div.children[0].kind, BoxKind::InlineRun { .. }));
-        assert!(matches!(div.children[1].kind, BoxKind::Image { .. }));
-        assert!(matches!(div.children[2].kind, BoxKind::InlineRun { .. }));
+        assert_eq!(div.children.len(), 1, "строка должна быть одна, а не {}", div.children.len());
+        let row = &div.children[0];
+        assert!(
+            matches!(row.kind, BoxKind::InlineBlockRow),
+            "картинка с текстом обязана собраться в InlineBlockRow"
+        );
+        assert_eq!(row.children.len(), 3, "got {}", row.children.len());
+        assert!(matches!(row.children[0].kind, BoxKind::InlineRun { .. }));
+        assert!(matches!(row.children[1].kind, BoxKind::Image { .. }));
+        assert!(matches!(row.children[2].kind, BoxKind::InlineRun { .. }));
     }
 
     #[test]
@@ -19051,9 +19069,10 @@ mod tests {
     #[test]
     fn escape_preserves_document_order_around_the_split() {
         // Разрез сохраняет порядок: текст до, всплывший бокс, текст после.
-        // `<img>` в Phase 0 — block-level replaced (UA-дефолт), поэтому внутри
-        // <span> он ведёт себя ровно так же, как прямой ребёнок блока: своя
-        // строка и свои 50×50 — а не 50×высота_строки, как до BUG-728.
+        // `<img>` внутри <span> — тот же escape-механизм BUG-728 (сегментом он
+        // стать не может, у сегмента нет своей высоты), но с IFC-2 все три
+        // куска остаются в ОДНОЙ строке: escape отдаёт бокс, а
+        // `breaks_inline_row` не рвёт на нём ряд — display у картинки inline.
         let root = lay_measured(
             "<div><span>ab<img src=\"a.png\">cd</span></div>",
             "img { width: 50px; height: 50px; }",
@@ -19062,21 +19081,34 @@ mod tests {
         let div = root.children.iter()
             .find(|c| matches!(c.kind, BoxKind::Block))
             .expect("нет блока <div>");
-        let kinds: Vec<&str> = div.children.iter().map(|c| match c.kind {
+        let row = div.children.iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineBlockRow))
+            .expect("нет строки с картинкой");
+        let kinds: Vec<&str> = row.children.iter().map(|c| match c.kind {
             BoxKind::InlineRun { .. } => "run",
             BoxKind::Image { .. } => "img",
             _ => "other",
         }).collect();
         assert_eq!(kinds, vec!["run", "img", "run"], "порядок кусков потока нарушен");
-        let img = &div.children[1];
+        let img = &row.children[1];
         assert!(
             (img.rect.height - 50.0).abs() < 0.5,
             "картинка height {} вместо 50", img.rect.height
         );
-        assert!(img.rect.y >= div.children[0].rect.y, "картинка выше предшествующего текста");
         assert!(
-            div.children[2].rect.y >= img.rect.y + img.rect.height,
-            "текст после картинки не сдвинулся вниз"
+            row.children[0].rect.x < img.rect.x && img.rect.x < row.children[2].rect.x,
+            "порядок по горизонтали нарушен: {} / {} / {}",
+            row.children[0].rect.x, img.rect.x, row.children[2].rect.x
+        );
+        // CSS 2.1 §10.8.1 — базовая линия замещаемого элемента это нижняя
+        // кромка его margin box, поэтому низ картинки и низ соседнего текста
+        // расходятся не больше чем на descent строки, а не на её высоту.
+        assert!(
+            (img.rect.y + img.rect.height
+                - (row.children[0].rect.y + row.children[0].rect.height)).abs() < 6.0,
+            "картинка не села на базовую линию строки: низ {} против низа текста {}",
+            img.rect.y + img.rect.height,
+            row.children[0].rect.y + row.children[0].rect.height
         );
     }
 
