@@ -9,6 +9,7 @@
 //! empties them when the feature is off.
 #![allow(dead_code)]
 
+mod activation_target;
 mod indexed_db;
 mod link_activation;
 mod no_automation_markers;
