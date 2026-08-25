@@ -12968,6 +12968,26 @@ globalThis._lumen_deliver_frame_dom_event = function(nid, env) {
     }
 };
 
+// BUG-480 срез 8: `<script>`, вставленный в под-документ из чужого фасада
+// (appendChild/insertBefore через contentDocument). Мост ставит конверт
+// RunScript, этот хук на тике ЭТОГО контекста исполняет элемент штатной
+// `_lumen_script_prepare` — тем же путём, что скрипт, созданный самим
+// ребёнком: гейт типа (data-блок не исполняется), пустой src → error,
+// внешний src → fetch, инлайн-классика синхронно с document.currentScript.
+//
+// «Already started» — per element (HTML LS §4.12.1): повторная вставка
+// исполненного скрипта не перезапускает его. Отсоединённый до доставки
+// конверт теряется БЕЗ пометки — как у главного документа, где preparation
+// ждёт первого connected-вставки.
+var _lumen_frame_scripts_started = {};
+globalThis._lumen_deliver_frame_run_script = function(nid) {
+    if (typeof nid !== 'number' || nid < 0) return;
+    if (!_lumen_resource_is_connected(nid)) return;
+    if (_lumen_frame_scripts_started[nid] === 1) return;
+    _lumen_frame_scripts_started[nid] = 1;
+    _lumen_script_prepare(nid);
+};
+
 // _lumen_dispatch_unhandled_rejection (BUG-716) — Rust→JS bridge for
 // `v8::Isolate::set_promise_reject_callback` (`v8_runtime.rs`). Called
 // directly with the *live* `promise`/`reason` values, never through

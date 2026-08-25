@@ -133,6 +133,7 @@ pub(crate) fn restore_js_context(
         &ext_scripts,
         classic_scripts,
         module_scripts,
+        false, // always_runtime: страница после гибернации — не фрейм-получатель
     );
 
     // HTML LS §8.2.3: signal DOMContentLoaded so handlers attached during

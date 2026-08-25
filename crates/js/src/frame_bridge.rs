@@ -128,6 +128,22 @@
 //!   `_lumen_dispatch` + активационное поведение для script-dispatched 'click'
 //!   (BUG-439); возвращаемое значение спеки (!defaultPrevented) при
 //!   асинхронной доставке недостижимо — метод ничего не возвращает.
+//!
+//! BUG-480 срез 8 — исполнение `<script>`, вставленных в под-документ из
+//! родителя (срез 5 вставлял их молча):
+//! - фасадные `appendChild`/`insertBefore` после успешной мутации проверяют тег
+//!   вставленного узла и для `<script>` ставят в тот же ящик событий конверт
+//!   [`FrameEventKind::RunScript`] (в момент вставки код НЕ исполняется —
+//!   доставка через границу изолятов у моста всегда асинхронная);
+//! - ребёнок на своём тике отдаёт элемент своей ШТАТНОЙ
+//!   `_lumen_script_prepare` (HTML LS §4.12.1): гейт типа (data-блоки не
+//!   исполняются), пустой `src` → `error`, внешний `src` → fetch силами
+//!   провайдеров самого фрейма, инлайн-классика синхронно с честным
+//!   `document.currentScript`; повторная вставка уже исполненного скрипта не
+//!   перезапускает (per-element «already started» ведёт получатель);
+//! - конверт, адресат которого успел отсоединиться до доставки, теряется без
+//!   пометки «started» — повторная вставка исполнится, как у главного
+//!   документа.
 
 #[cfg(feature = "v8-backend")]
 use std::sync::{Arc, Mutex, OnceLock};
@@ -277,6 +293,11 @@ pub(crate) enum FrameEventKind {
         composed: bool,
         detail_json: Option<String>,
     },
+    /// Срез 8: в под-документ вставлен `<script>` (фасадный `appendChild`/
+    /// `insertBefore`). Получатель готовит и исполняет элемент своей штатной
+    /// `_lumen_script_prepare`; повторная вставка уже исполненного не
+    /// перезапускает (per-element «already started» на стороне получателя).
+    RunScript,
 }
 
 /// Разобрать спецификацию конверта, построенную шимом фасада.
@@ -300,6 +321,7 @@ fn parse_frame_event_spec(spec: &str) -> Option<FrameEventKind> {
                 .unwrap_or(false),
         }),
         "blur" => Some(FrameEventKind::Blur),
+        "runscript" => Some(FrameEventKind::RunScript),
         "dom" => {
             let ev_type = v.get("type")?.as_str()?.to_owned();
             // Верхняя граница разумная, а не спечная: тип события — имя
@@ -348,9 +370,32 @@ pub(crate) struct PendingFrameEvent {
 /// переполнение молча теряет конверт — зомби-страница не должна расти память
 /// бесконечно.
 #[cfg(feature = "v8-backend")]
-pub(crate) fn frame_event_outbox() -> &'static Mutex<Vec<PendingFrameEvent>> {
+fn frame_event_outbox() -> &'static Mutex<Vec<PendingFrameEvent>> {
     static OUTBOX: OnceLock<Mutex<Vec<PendingFrameEvent>>> = OnceLock::new();
     OUTBOX.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Срез 8: есть ли у контекста с ключом документа `key` неразобранные конверты
+/// в любом из ящиков моста. Шелл будит спящий event-loop, пока это так:
+/// без этого конверт, поставленный после затихания страницы (обработчик load,
+/// чужой таймер), лежит до случайного пробуждения. Конверты мёртвых адресатов
+/// (ключ не совпал ни с одним живым контекстом) опрос не держат — латентная
+/// утечка ящика остаётся ограниченной капой, а не превращается в горячий
+/// цикл.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn frame_transport_has_for(key: Option<usize>) -> bool {
+    let Some(key) = key else {
+        return false;
+    };
+    let msgs = frame_outbox().lock().unwrap_or_else(|e| e.into_inner());
+    if msgs.iter().any(|m| Arc::as_ptr(&m.target_doc) as usize == key) {
+        return true;
+    }
+    drop(msgs);
+    let evs = frame_event_outbox()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    evs.iter().any(|e| Arc::as_ptr(&e.target_doc) as usize == key)
 }
 
 /// Нормализованный origin URL биндинга для `event.origin`/валидации
@@ -499,6 +544,48 @@ fn bridge_set_text_content(
         doc.append_child(id, text_node);
     }
     true
+}
+
+/// Срез 8: после успешной фасадной вставки — конверт [`FrameEventKind::RunScript`],
+/// если в под-документ попал `<script>`. Ребёнок исполняет его на своём тике;
+/// здесь только факт вставки фиксируется. Второй короткий захват реестра после
+/// мутации: биндинги только растут (слот стабилен), документ — тот же `Arc`.
+/// Переполненный ящик теряет конверт молча, как у всех событий моста.
+#[cfg(feature = "v8-backend")]
+fn queue_run_script_if_script(registry: &FrameDocRegistry, bid: u32, nid: u32) {
+    let target_doc = {
+        let reg = registry.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(binding) = resolve_slot(&reg, bid) else {
+            return;
+        };
+        if !binding.accessible {
+            return;
+        }
+        let is_script = {
+            let doc = binding.doc.lock().unwrap_or_else(|e| e.into_inner());
+            checked_node(&doc, nid).is_some_and(|id| {
+                matches!(
+                    &doc.get(id).data,
+                    lumen_dom::NodeData::Element { name, .. }
+                        if name.local.eq_ignore_ascii_case("script")
+                )
+            })
+        };
+        if !is_script {
+            return;
+        }
+        Arc::clone(&binding.doc)
+    };
+    let outbox = frame_event_outbox();
+    let mut outbox = outbox.lock().unwrap_or_else(|e| e.into_inner());
+    if outbox.len() >= FRAME_OUTBOX_CAP {
+        return;
+    }
+    outbox.push(PendingFrameEvent {
+        target_doc,
+        nid,
+        kind: FrameEventKind::RunScript,
+    });
 }
 
 /// Первый элемент с тегом `tag` (ASCII case-insensitive) в document order.
@@ -891,6 +978,9 @@ pub(crate) fn install_frame_bridge_v8(
                         FrameEventKind::Blur => serde_json::json!({
                             "kind": "blur", "nid": ev.nid,
                         }),
+                        FrameEventKind::RunScript => serde_json::json!({
+                            "kind": "runscript", "nid": ev.nid,
+                        }),
                         FrameEventKind::Dom {
                             ev_type,
                             bubbles,
@@ -1212,7 +1302,7 @@ pub(crate) fn install_frame_bridge_v8(
         rt.register_native(
             "_lumen_f_append_child",
             into_v8_fn3(move |bid: u32, parent_nid: u32, child_nid: u32| -> bool {
-                with_accessible_doc_mut(&reg, bid, |d| {
+                let ok = with_accessible_doc_mut(&reg, bid, |d| {
                     match (checked_node(d, parent_nid), checked_node(d, child_nid)) {
                         (Some(parent), Some(child)) => {
                             // DEVX-8a: потомок под собственного предка создаёт
@@ -1226,7 +1316,14 @@ pub(crate) fn install_frame_bridge_v8(
                         }
                         _ => false,
                     }
-                }, false)
+                }, false);
+                // Срез 8: вставленный `<script>` исполняется ребёнком на его
+                // тике (конверт RunScript), не в момент вставки — доставка
+                // через границу изолятов у моста всегда асинхронная.
+                if ok {
+                    queue_run_script_if_script(&reg, bid, child_nid);
+                }
+                ok
             }),
         )?;
     }
@@ -1235,7 +1332,7 @@ pub(crate) fn install_frame_bridge_v8(
         rt.register_native(
             "_lumen_f_insert_before",
             into_v8_fn3(move |bid: u32, node_nid: u32, ref_nid: u32| -> bool {
-                with_accessible_doc_mut(&reg, bid, |d| {
+                let ok = with_accessible_doc_mut(&reg, bid, |d| {
                     match (checked_node(d, node_nid), checked_node(d, ref_nid)) {
                         (Some(node), Some(reference)) => {
                             // Спека: reference без родителя → pre-insert
@@ -1251,7 +1348,11 @@ pub(crate) fn install_frame_bridge_v8(
                         }
                         _ => false,
                     }
-                }, false)
+                }, false);
+                if ok {
+                    queue_run_script_if_script(&reg, bid, node_nid);
+                }
+                ok
             }),
         )?;
     }
@@ -1772,6 +1873,9 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
               _lumen_deliver_frame_blur(env.nid);
             } else if (env.kind === 'dom' && typeof _lumen_deliver_frame_dom_event === 'function') {
               _lumen_deliver_frame_dom_event(env.nid, env);
+            } else if (env.kind === 'runscript' &&
+                       typeof _lumen_deliver_frame_run_script === 'function') {
+              _lumen_deliver_frame_run_script(env.nid);
             }
           } catch (e) {}
         }
@@ -2890,5 +2994,80 @@ mod tests {
                 "_lumen_f_queue_event(0, 2, '{\"kind\":\"blur\"}') === true"
             ));
         });
+    }
+
+    // ── Срез 8: исполнение вставленных из родителя <script> ──────────────────
+
+    #[test]
+    fn facade_appended_script_queues_run_script_with_its_nid() {
+        let (rt_parent, rt_child, _pd, _cd) = with_parent_child_pair_docs(true, true);
+        // Хук среза 8 поверх пары: складываем nid пришедших RunScript.
+        rt_child
+            .eval(
+                "globalThis.__runs = []; \
+                 globalThis._lumen_deliver_frame_run_script = function(nid) { \
+                     __runs.push(nid); \
+                 };",
+            )
+            .unwrap();
+        rt_parent
+            .eval(
+                "var d = _lumen_frame_content_document(7); \
+                 var div = d.createElement('div'); \
+                 d.body.appendChild(div); \
+                 var s = d.createElement('script'); \
+                 s.textContent = 'void 0;'; \
+                 d.body.appendChild(s); \
+                 var s2 = d.createElement('script'); \
+                 s2.textContent = 'void 1;'; \
+                 d.body.insertBefore(s2, div); \
+                 globalThis.__snid = [s.__nid__, s2.__nid__];",
+            )
+            .unwrap();
+        rt_child.eval("_lumen_frame_pump_messages()").unwrap();
+        // nid скриптов читаем из JS родителя (индексы арены согласованы по
+        // определению — фасады строятся над тем же деревом, что читает ребёнок).
+        let expected: Vec<u32> = match rt_parent.eval("JSON.stringify(__snid)") {
+            Ok(JsValue::String(s)) => serde_json::from_str(&s).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let got: Vec<u32> = match rt_child.eval("JSON.stringify(__runs)") {
+            Ok(JsValue::String(s)) => serde_json::from_str(&s).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        assert_eq!(
+            got, expected,
+            "оба скрипта доставлены со своими nid; <div> конверт не ставил"
+        );
+    }
+
+    #[test]
+    fn run_script_envelope_requires_accessible_binding() {
+        let (rt_parent, rt_child, _pd, _cd) = with_parent_child_pair_docs(true, false);
+        rt_child
+            .eval(
+                "globalThis.__runs = []; \
+                 globalThis._lumen_deliver_frame_run_script = function(nid) { \
+                     __runs.push(nid); \
+                 };",
+            )
+            .unwrap();
+        // cross-origin: фасада документа нет вовсе — вставки не было.
+        assert!(eval_bool(
+            &rt_parent,
+            "_lumen_frame_content_document(7) === null"
+        ));
+        rt_child.eval("_lumen_frame_pump_messages()").unwrap();
+        let got: Vec<u32> = match rt_child.eval("JSON.stringify(__runs)") {
+            Ok(JsValue::String(s)) => serde_json::from_str(&s).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        assert!(got.is_empty());
+        // Прямая постановка в cross-origin биндинг тоже режется (native
+        // мутации вернул false ещё до queue_run_script_if_script).
+        assert!(eval_bool(
+            &rt_parent,
+            "_lumen_f_append_child(0, 3, 4) === false"
+        ));
     }
 }
