@@ -123,6 +123,35 @@ dev-release, Linux, коммит `c583a90b4`, `--seconds 5`, страница ж
 отображения не поехал (содержимое фрейма по-прежнему не рисуется, это отдельный
 срез BUG-480).
 
+### Прогон категории (A/B, два бинаря из одного дерева)
+
+`run_report.py --all --root html/browsers/windows/nested-browsing-contexts
+--recursive`, «до» = `ea79b5c2c`, «после» = ветка задачи: **2/7 harness OK и
+3/40 подтестов в обоих прогонах**, регрессий нет. Движение — в вердиктах:
+
+```
+-TIMEOUT same-origin <frame>                - Test timed out
++FAIL    same-origin <frame>                - assert_equals: expected "" but got "meh"
+-TIMEOUT same-origin <frame name=>          - Test timed out
++FAIL    same-origin <frame name=>          - assert_equals: expected "" but got "meh"
+-TIMEOUT same-origin <frame name=initialvalue> - Test timed out
++FAIL    same-origin <frame name=initialvalue> - assert_equals: expected "initialvalue" but got "meh"
+```
+
+(шесть строк на два id — файл прогоняется в двух вариантах). Это ровно то, чего
+починка и добивалась: `<frame>` перестал висеть и пошёл по тесту дальше — фрейм
+грузится, ребёнок доставляет сообщение родителю, — и останавливается на том же
+ассерте, на каком стоит `<iframe>`: после `setAttribute('name', 'meh')` ребёнок
+сообщает новое имя, хотя имя контекста задаётся один раз при создании. Дефект
+общий для обоих тегов, к `<frame>` отношения не имеет и заведён отдельно —
+[BUG-921](BUG-921-OPEN.md). Подтесты `cross-origin` остаются TIMEOUT по
+`WPT-RUN-10` (алиасы `www1.127.0.0.1` режутся как mixed content), к движку это
+не относится.
+
+Урок тот же, что у BUG-843: прогон категории называет то, чего проба назвать не
+может — проба измеряла загрузку и на ней останавливалась, а следующий дефект
+виден только тесту, который после загрузки продолжает работать.
+
 ### Ловушка замера, которая чуть не стала фантомным регрессом
 
 Первый прогон `--variant nbc-frame` с дефолтными `--seconds 6` дал `ticks 0` и

@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-25",
  "counts": {
-  "open": 379,
+  "open": 380,
   "fixed": 496,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 875,
+ "total_bugs": 876,
  "phases": [
   {
    "id": "P0",
@@ -11513,6 +11513,13 @@
    "component": "js (`crates/js/src/iframe_element.rs` — `patchIframeElement`/`reflectAttr` ставит собственные свойства на элемент) поверх `crates/js/src/dom.rs` (`_lumen_install_reflection(HTMLIFrameElement.prototype, [['src','src','url'], …])`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-921": {
+   "status": "open",
+   "title": "Имя вложенного browsing context не хранится в контексте: `window.name` ребёнка на каждое обращение перечитывает атрибут `name` узла-хоста, поэтому правка атрибу…",
+   "component": "js (`crates/js/src/frame_bridge.rs` — геттер `window.name` ребёнка зовёт `_lumen_f_attr(p, host, 'name')` на КАЖДОЕ чтение)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -12114,6 +12121,9 @@
   ],
   "js (`crates/js/src/eye_dropper.rs` — тело шима `open()`)": [
    "BUG-698"
+  ],
+  "js (`crates/js/src/frame_bridge.rs` — геттер `window.name` ребёнка зовёт `_lumen_f_attr(p, host, 'name')` на КАЖДОЕ чтение)": [
+   "BUG-921"
   ],
   "js (`crates/js/src/generic_sensor.rs` — `GENERIC_SENSOR_SHIM`, конструктор `SensorErrorEvent`)": [
    "BUG-761"
