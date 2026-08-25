@@ -2356,10 +2356,11 @@ SUBTEST_MARKERS = [
              "`playbackRate` are `undefined` and `load()` fires nothing",
     ),
     SubtestMarker(
-        "script-empty-src", "BUG-853",
+        "script-empty-src", "BUG-838",
         name=r"Script src with an empty URL",
         note="`<script src=\"\">` fires neither `load` nor `error`, so a "
-             "test waiting for the error event hangs",
+             "test waiting for the error event hangs (fixed 2026-08-25; "
+             "BUG-853, which this marker was filed under, is its duplicate)",
     ),
     # The clicked node's own activation behaviour is looked up instead of the
     # nearest activatable ancestor (BUG-837), so a click on an inline element
@@ -4904,8 +4905,13 @@ def selftest():
         for generated, expected in ((".any.sharedworker-module.html", "x.any.js"),
                                     (".any.serviceworker-module.html", "x.any.js"),
                                     (".any.window-module.html", "x.any.js")):
-            check(source_path("/a/x" + generated, tmp)
-                  == os.path.join(tmp, "a", expected),
+            # Normalized on both sides: `source_path` joins the root with the
+            # id's own `/`-separated tail, so on Windows it answers
+            # `T\a/x.any.js` against an `os.path.join` of `T\a\x.any.js` — the
+            # mapping is right and only the string comparison was wrong, which
+            # made this check fail on Windows regardless of the table.
+            check(os.path.normpath(source_path("/a/x" + generated, tmp))
+                  == os.path.normpath(os.path.join(tmp, "a", expected)),
                   f"generated suffix {generated} was not mapped to its source")
 
         # The residual keeps the evidence that did not attribute it.
