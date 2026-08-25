@@ -107,6 +107,27 @@
 //!   [`FRAME_OUTBOX_CAP`], переполнение теряет конверт молча;
 //! - только элементы: клик по фасаду текста/комментария и чужой/вышедший за
 //!   границы арены nid отклоняются нативом («невалидно = пусто»).
+//!
+//! BUG-480 срез 7 — focus()/blur() и произвольный dispatchEvent через фасад:
+//! - ящик событий обобщён: [`PendingFrameEvent`] несёт [`FrameEventKind`]
+//!   (`click` | `focus` | `blur` | `dom`) вместо неявного «всегда клик»,
+//!   постановка идёт через единый натив `_lumen_f_queue_event(bid, nid,
+//!   spec_json)`; конверты всех видов разбираются одной пумпой и доставляются
+//!   хуками WEB_API_SHIM `_lumen_deliver_frame_focus` /
+//!   `_lumen_deliver_frame_blur` / `_lumen_deliver_frame_dom_event` (клик —
+//!   прежний `_lumen_deliver_frame_click`);
+//! - `focus(options)` / `blur()` исполняют СОБСТВЕННУЮ семантику ребёнка
+//!   (`_lumen_is_focusable`, `_lumen_focus_update`: blur/focusout на старом,
+//!   focus/focusin на новом), но БЕЗ уведомления шелла: очередь фокус-запросов
+//!   рантайма фрейма шеллом пока не дренируется (фреймы не рендерятся),
+//!   запрос там только копился бы; `preventScroll` переносится в конверте,
+//!   но пока игнорируется доставкой — layout у фреймов нулевой;
+//! - `dispatchEvent(event)` сериализует type/bubbles/cancelable/composed/detail
+//!   (JSON-круготрип detail) и доставляет в ребёнке ту же недоверенную
+//!   последовательность, что его собственный `el.dispatchEvent`:
+//!   `_lumen_dispatch` + активационное поведение для script-dispatched 'click'
+//!   (BUG-439); возвращаемое значение спеки (!defaultPrevented) при
+//!   асинхронной доставке недостижимо — метод ничего не возвращает.
 
 #[cfg(feature = "v8-backend")]
 use std::sync::{Arc, Mutex, OnceLock};
@@ -223,9 +244,92 @@ pub(crate) fn frame_outbox() -> &'static Mutex<Vec<PendingFrameMessage>> {
 #[cfg(feature = "v8-backend")]
 const FRAME_OUTBOX_CAP: usize = 256;
 
-// ── Срез 6: ящик синтетических кликов через границу изолятов ─────────────────
+// ── Срезы 6–7: ящик синтетических событий через границу изолятов ─────────────
 
-/// Один конверт «фасад родителя вызвал `click()`» до разбора получателем.
+/// Что именно вызвали на фасаде (срез 6 — `click`, срез 7 — остальные).
+///
+/// Получатель исполняет каждое значение СВОЕЙ семантикой: конверт переносит
+/// только намерение и его аргументы, никаких ссылок на объекты изолята
+/// отправителя через границу не идёт.
+#[cfg(feature = "v8-backend")]
+pub(crate) enum FrameEventKind {
+    /// Активация элемента: ребёнок исполняет свою семантику `click()`
+    /// (`_lumen_deliver_frame_click` → `_lumen_perform_click`).
+    Click,
+    /// Фокус на элементе под-документа: `_lumen_is_focusable` +
+    /// `_lumen_focus_update(nid)` без уведомления шелла (см. доки модуля).
+    Focus {
+        /// Флаг `options.preventScroll`; доставкой пока игнорируется —
+        /// layout у фреймов нулевой, перенесён ради стабильности протокола.
+        prevent_scroll: bool,
+    },
+    /// Снятие фокуса: no-op, если сфокусировано не это; иначе
+    /// `_lumen_focus_update(-1)`.
+    Blur,
+    /// Произвольное синтетическое событие: та же последовательность, что у
+    /// `el.dispatchEvent` самого ребёнка. `detail_json` — уже сериализованный
+    /// отправителем `JSON.stringify(detail)`; при разборе вкладывается в
+    /// `CustomEvent` как есть (JSON-подмножество structured clone).
+    Dom {
+        ev_type: String,
+        bubbles: bool,
+        cancelable: bool,
+        composed: bool,
+        detail_json: Option<String>,
+    },
+}
+
+/// Разобрать спецификацию конверта, построенную шимом фасада.
+///
+/// Формат: `{"kind":"click"}` | `{"kind":"blur"}`
+/// | `{"kind":"focus","preventScroll":bool}`
+/// | `{"kind":"dom","type":str,"bubbles":bool,"cancelable":bool,
+///    "composed":bool,"detail":<любой JSON|null>}`.
+/// Всё остальное (чужой kind, пустой/слишком длинный type, невалидный JSON)
+/// — `None`: вызывающий JS получает тихий «нет», неотличимый от отсутствия
+/// биндинга.
+#[cfg(feature = "v8-backend")]
+fn parse_frame_event_spec(spec: &str) -> Option<FrameEventKind> {
+    let v: serde_json::Value = serde_json::from_str(spec).ok()?;
+    match v.get("kind").and_then(serde_json::Value::as_str)? {
+        "click" => Some(FrameEventKind::Click),
+        "focus" => Some(FrameEventKind::Focus {
+            prevent_scroll: v
+                .get("preventScroll")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+        }),
+        "blur" => Some(FrameEventKind::Blur),
+        "dom" => {
+            let ev_type = v.get("type")?.as_str()?.to_owned();
+            // Верхняя граница разумная, а не спечная: тип события — имя
+            // слушателя в карте `_lumen_listeners`, гигантская строка там
+            // ничего осмысленного не адресует.
+            if ev_type.is_empty() || ev_type.len() > 128 {
+                return None;
+            }
+            let flag = |key: &str| {
+                v.get(key)
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+            };
+            Some(FrameEventKind::Dom {
+                ev_type,
+                bubbles: flag("bubbles"),
+                cancelable: flag("cancelable"),
+                composed: flag("composed"),
+                detail_json: v
+                    .get("detail")
+                    .filter(|d| !d.is_null())
+                    .map(serde_json::Value::to_string),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Один конверт «фасад вызвал click()/focus()/blur()/dispatchEvent()» до
+/// разбора получателем.
 #[cfg(feature = "v8-backend")]
 pub(crate) struct PendingFrameEvent {
     /// Клон `Arc<Mutex<Document>>` адресата — тот же ключ получателя, что у
@@ -233,13 +337,16 @@ pub(crate) struct PendingFrameEvent {
     pub(crate) target_doc: Arc<Mutex<lumen_dom::Document>>,
     /// Индекс целевого узла в арене документа-адресата.
     pub(crate) nid: u32,
+    /// Что вызвано на фасаде (семантику исполняет получатель).
+    pub(crate) kind: FrameEventKind,
 }
 
-/// Глобальный ящик «кто-то вызвал `facade.click()`». Пишут нативы любого
-/// изолята, читает только `_lumen_frame_take_events` на JS-потоке получателя
-/// (на том же тике пумпы, что и postMessage). Ёмкость ограничена так же, как у
-/// [`frame_outbox`]: переполнение молча теряет конверт — зомби-страница не
-/// должна расти память бесконечно.
+/// Глобальный ящик «кто-то вызвал `facade.click()`/`focus()`/`blur()`/
+/// `dispatchEvent()`». Пишут нативы любого изолята, читает только
+/// `_lumen_frame_take_events` на JS-потоке получателя (на том же тике пумпы,
+/// что и postMessage). Ёмкость ограничена так же, как у [`frame_outbox`]:
+/// переполнение молча теряет конверт — зомби-страница не должна расти память
+/// бесконечно.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn frame_event_outbox() -> &'static Mutex<Vec<PendingFrameEvent>> {
     static OUTBOX: OnceLock<Mutex<Vec<PendingFrameEvent>>> = OnceLock::new();
@@ -699,18 +806,24 @@ pub(crate) fn install_frame_bridge_v8(
         )?;
     }
 
-    // ── Срез 6: синтетические клики через границу изолятов ───────────────────
-    // Родительский фасад вызвал click(): постановка конверта в глобальный ящик
-    // событий. Выполняется на JS-потоке ОТПРАВИТЕЛЯ; получатель разбирает ящик
-    // у себя на тике (_lumen_frame_take_events рядом с take_messages).
-    // Правила те же, что у нативов чтения/записи: нет биндинга, cross-origin /
-    // opaque (accessible: false), не-элемент или nid за границей арены — тихий
-    // «нет» (false), неотличимый для вызывающего JS.
+    // ── Срезы 6–7: синтетические события через границу изолятов ──────────────
+    // Родительский фасад вызвал click()/focus()/blur()/dispatchEvent():
+    // постановка конверта в глобальный ящик событий. Выполняется на JS-потоке
+    // ОТПРАВИТЕЛЯ; получатель разбирает ящик у себя на тике
+    // (_lumen_frame_take_events рядом с take_messages). Правила те же, что у
+    // нативов чтения/записи: нет биндинга, cross-origin / opaque (accessible:
+    // false), не-элемент или nid за границей арены — тихий «нет» (false),
+    // неотличимый для вызывающего JS; туда же попадает неразбираемая
+    // спецификация конверта.
     {
         let reg = Arc::clone(&registry);
         rt.register_native(
-            "_lumen_f_queue_click",
-            into_v8_fn2(move |bid: u32, nid: u32| -> bool {
+            "_lumen_f_queue_event",
+            into_v8_fn3(move |bid: u32, nid: u32, spec: String| -> bool {
+                let kind = match parse_frame_event_spec(&spec) {
+                    Some(k) => k,
+                    None => return false,
+                };
                 let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(binding) = resolve_slot(&reg, bid) else {
                     return false;
@@ -735,6 +848,7 @@ pub(crate) fn install_frame_bridge_v8(
                 outbox.push(PendingFrameEvent {
                     target_doc: Arc::clone(&binding.doc),
                     nid,
+                    kind,
                 });
                 true
             }),
@@ -756,7 +870,7 @@ pub(crate) fn install_frame_bridge_v8(
                 let mut rest = Vec::new();
                 for ev in outbox.drain(..) {
                     if Arc::as_ptr(&ev.target_doc) as usize == key {
-                        taken.push(ev.nid);
+                        taken.push(ev);
                     } else {
                         rest.push(ev);
                     }
@@ -767,7 +881,34 @@ pub(crate) fn install_frame_bridge_v8(
                 }
                 let items: Vec<serde_json::Value> = taken
                     .into_iter()
-                    .map(|nid| serde_json::json!({ "type": "click", "nid": nid }))
+                    .map(|ev| match ev.kind {
+                        FrameEventKind::Click => serde_json::json!({
+                            "kind": "click", "nid": ev.nid,
+                        }),
+                        FrameEventKind::Focus { prevent_scroll } => serde_json::json!({
+                            "kind": "focus", "nid": ev.nid, "preventScroll": prevent_scroll,
+                        }),
+                        FrameEventKind::Blur => serde_json::json!({
+                            "kind": "blur", "nid": ev.nid,
+                        }),
+                        FrameEventKind::Dom {
+                            ev_type,
+                            bubbles,
+                            cancelable,
+                            composed,
+                            detail_json,
+                        } => {
+                            let detail = detail_json
+                                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                                .unwrap_or(serde_json::Value::Null);
+                            serde_json::json!({
+                                "kind": "dom", "nid": ev.nid,
+                                "type": ev_type, "bubbles": bubbles,
+                                "cancelable": cancelable, "composed": composed,
+                                "detail": detail,
+                            })
+                        }
+                    })
                     .collect();
                 serde_json::to_string(&items).unwrap_or_else(|_| String::new())
             }),
@@ -1267,14 +1408,48 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       remove: function() { _lumen_f_remove_node(bid, nid); },
       get textContent() { return _lumen_f_text(bid, nid); },
       set textContent(v) { _lumen_f_set_text(bid, nid, String(v)); },
-      // BUG-480 срез 6: активация элемента под-документа. Клик асинхронный:
-      // конверт уходит в ящик событий, ребёнок на своём тике исполняет
-      // СОБСТВЕННУЮ семантику click() (хук _lumen_deliver_frame_click из
-      // WEB_API_SHIM). Не-элемент, чужой/недоступный биндинг и переполненный
-      // ящик — тихий no-op (конвенция бриджа «невалидно = пусто»).
+      // BUG-480 срезы 6–7: действия над элементом под-документа. Все они
+      // асинхронные: конверт уходит в ящик событий, ребёнок на своём тике
+      // исполняет СОБСТВЕННУЮ семантику вызова (хуки _lumen_deliver_frame_*
+      // из WEB_API_SHIM). Не-элемент, чужой/недоступный биндинг, неразбираемая
+      // спецификация и переполненный ящик — тихий no-op (конвенция бриджа
+      // «невалидно = пусто»).
       click: function() {
         var t = _lumen_f_tag(bid, nid);
-        if (t) _lumen_f_queue_click(bid, nid);
+        if (t) _lumen_f_queue_event(bid, nid, '{"kind":"click"}');
+      },
+      focus: function(options) {
+        var t = _lumen_f_tag(bid, nid);
+        if (!t) return;
+        _lumen_f_queue_event(bid, nid, JSON.stringify({
+          kind: 'focus',
+          preventScroll: !!(options && options.preventScroll),
+        }));
+      },
+      blur: function() {
+        var t = _lumen_f_tag(bid, nid);
+        if (t) _lumen_f_queue_event(bid, nid, '{"kind":"blur"}');
+      },
+      // Срез 7: произвольное событие через границу. Аргумент — Event-подобный
+      // объект ИЗОЛЯТА ОТПРАВИТЕЛЯ: переносится только его снимок
+      // type/bubbles/cancelable/composed + detail (JSON-круготрип), живых
+      // ссылок через границу не идёт. Возвращаемое значение спеки
+      // (!defaultPrevented) при асинхронной доставке недостижимо — метод
+      // ничего не возвращает.
+      dispatchEvent: function(evt) {
+        var t = _lumen_f_tag(bid, nid);
+        if (!t || !evt || typeof evt !== 'object') return;
+        var type = typeof evt.type === 'string' ? evt.type : String(evt.type);
+        if (!type) return;
+        var spec = {
+          kind: 'dom',
+          type: type,
+          bubbles: !!evt.bubbles,
+          cancelable: !!evt.cancelable,
+          composed: !!evt.composed,
+        };
+        if (evt.detail !== undefined && evt.detail !== null) spec.detail = evt.detail;
+        _lumen_f_queue_event(bid, nid, JSON.stringify(spec));
       },
       // BUG-480 срез 2: содержимое фрейма не layout'ится — честные нули вместо
       // выдуманных размеров (layout фреймов — будущий срез).
@@ -1574,21 +1749,31 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
         }
       }
     }
-    // ── Срез 6: синтетические клики из родительских фасадов ────────────────
+    // ── Срезы 6–7: синтетические события из чужих фасадов ───────────────────
     // Доставка ТОЛЬКО при наличии хука из WEB_API_SHIM: в минимальных
     // тестовых изолятах хука нет, транспорт проверяется переопределением
-    // хука в тестах. Ошибка одного клика не отменяет разбор остальных.
-    if (typeof _lumen_deliver_frame_click === 'function') {
-      var rawEv = _lumen_frame_take_events();
-      if (rawEv) {
-        var evs;
-        try { evs = JSON.parse(rawEv); } catch (e) { evs = null; }
-        if (evs) {
-          for (var j = 0; j < evs.length; j++) {
-            if (evs[j] && typeof evs[j].nid === 'number') {
-              try { _lumen_deliver_frame_click(evs[j].nid); } catch (e) {}
+    // хуков в тестах. Ошибка одного конверта не отменяет разбор остальных.
+    var rawEv = _lumen_frame_take_events();
+    if (rawEv) {
+      var evs;
+      try { evs = JSON.parse(rawEv); } catch (e) { evs = null; }
+      if (evs) {
+        for (var j = 0; j < evs.length; j++) {
+          var env = evs[j];
+          if (!env || typeof env.nid !== 'number') continue;
+          try {
+            if (env.kind === 'click') {
+              if (typeof _lumen_deliver_frame_click === 'function') {
+                _lumen_deliver_frame_click(env.nid);
+              }
+            } else if (env.kind === 'focus' && typeof _lumen_deliver_frame_focus === 'function') {
+              _lumen_deliver_frame_focus(env.nid, !!env.preventScroll);
+            } else if (env.kind === 'blur' && typeof _lumen_deliver_frame_blur === 'function') {
+              _lumen_deliver_frame_blur(env.nid);
+            } else if (env.kind === 'dom' && typeof _lumen_deliver_frame_dom_event === 'function') {
+              _lumen_deliver_frame_dom_event(env.nid, env);
             }
-          }
+          } catch (e) {}
         }
       }
     }
@@ -1970,8 +2155,8 @@ mod tests {
     /// реестре родителя и в self_key ребёнка, и наоборот для родителя.
     ///
     /// Вместо WEB_API_SHIM (в минимальном изоляте его нет) каждый контекст
-    /// получает мини-хуки приёма, складывающие доставки в `__msgs` (срез 4)
-    /// и клики в `__clicks` (срез 6).
+    /// получает мини-хуки приёма, складывающие доставки в `__msgs` (срез 4),
+    /// клики в `__clicks` (срез 6) и фокус/dom-события в `__acts` (срез 7).
     fn with_parent_child_pair(
         parent_accessible_to_child: bool,
         child_accessible_to_parent: bool,
@@ -2043,11 +2228,22 @@ mod tests {
             rt.eval(
                 "globalThis.__msgs = []; \
                  globalThis.__clicks = []; \
+                 globalThis.__acts = []; \
                  globalThis._lumen_deliver_frame_message = function(d, o, s) { \
                      __msgs.push({ d: d, o: o, s: s }); \
                  }; \
                  globalThis._lumen_deliver_frame_click = function(nid) { \
                      __clicks.push(nid); \
+                 }; \
+                 globalThis._lumen_deliver_frame_focus = function(nid, ps) { \
+                     __acts.push(['focus', nid, !!ps]); \
+                 }; \
+                 globalThis._lumen_deliver_frame_blur = function(nid) { \
+                     __acts.push(['blur', nid]); \
+                 }; \
+                 globalThis._lumen_deliver_frame_dom_event = function(nid, env) { \
+                     __acts.push(['dom', nid, env.type, !!env.bubbles, \
+                                  (env.detail === undefined) ? null : env.detail]); \
                  };",
             )
             .unwrap();
@@ -2478,6 +2674,14 @@ mod tests {
         }
     }
 
+    /// Доставки среза 7: `[вид, nid, ...аргументы]` на каждый конверт.
+    fn acts(rt: &V8JsRuntime) -> Vec<serde_json::Value> {
+        match rt.eval("JSON.stringify(__acts)") {
+            Ok(JsValue::String(s)) => serde_json::from_str(&s).unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
     #[test]
     fn facade_click_from_parent_delivers_on_child_pump() {
         let (rt_parent, rt_child, _pd, cd) = with_parent_child_pair_docs(true, true);
@@ -2537,7 +2741,7 @@ mod tests {
             &rt_parent,
             &format!(
                 "_lumen_frame_content_document(7) === null && \
-                 _lumen_f_queue_click(0, {b_nid}) === false"
+                 _lumen_f_queue_event(0, {b_nid}, '{{\"kind\":\"click\"}}') === false"
             )
         ));
         rt_child.eval("_lumen_frame_pump_messages()").unwrap();
@@ -2562,10 +2766,128 @@ mod tests {
             assert!(eval_bool(
                 rt,
                 &format!(
-                    "_lumen_f_queue_click(0, {text_nid}) === false && \
-                     _lumen_f_queue_click(0, 4294967295) === false && \
-                     _lumen_f_queue_click(5, 1) === false"
+                    "_lumen_f_queue_event(0, {text_nid}, '{{\"kind\":\"click\"}}') === false && \
+                     _lumen_f_queue_event(0, 4294967295, '{{\"kind\":\"click\"}}') === false && \
+                     _lumen_f_queue_event(5, 1, '{{\"kind\":\"click\"}}') === false"
                 )
+            ));
+        });
+    }
+
+    // ── Срез 7: focus()/blur()/dispatchEvent через фасад ──────────────────────
+
+    #[test]
+    fn facade_focus_and_blur_deliver_on_child_pump_in_order() {
+        let (rt_parent, rt_child, _pd, cd) = with_parent_child_pair_docs(true, true);
+        rt_parent
+            .eval(
+                "var b = _lumen_frame_content_document(7).querySelector('b'); \
+                 b.focus({ preventScroll: true }); \
+                 b.blur();",
+            )
+            .unwrap();
+        assert!(acts(&rt_child).is_empty(), "до пумпы ничего не доставлено");
+        rt_child.eval("_lumen_frame_pump_messages()").unwrap();
+        let expected = {
+            let d = cd.lock().unwrap();
+            element_index(&d, "b").expect("<b> в дереве ребёнка")
+        };
+        let a = acts(&rt_child);
+        assert_eq!(
+            a,
+            vec![
+                serde_json::json!(["focus", expected, true]),
+                serde_json::json!(["blur", expected]),
+            ],
+            "порядок focus → blur сохранён, preventScroll перенесён"
+        );
+    }
+
+    #[test]
+    fn facade_dispatch_event_round_trips_flags_and_detail() {
+        let (rt_parent, rt_child) = with_parent_child_pair(true, true);
+        rt_parent
+            .eval(
+                "_lumen_frame_content_document(7).querySelector('b') \
+                 .dispatchEvent({ type: 'ping', bubbles: true, cancelable: true, \
+                                  detail: { n: 7, tag: 'x' } });",
+            )
+            .unwrap();
+        rt_child.eval("_lumen_frame_pump_messages()").unwrap();
+        let a = acts(&rt_child);
+        assert_eq!(a.len(), 1);
+        assert_eq!(
+            a[0],
+            serde_json::json!(["dom", a[0][1], "ping", true, {"n": 7, "tag": "x"}]),
+            "type/bubbles/detail дошли до хука получателя"
+        );
+        // detail — не мусор от сериализации, а исходное значение.
+        assert!(eval_bool(
+            &rt_child,
+            "__acts[0][4].n === 7 && __acts[0][4].tag === 'x'"
+        ));
+    }
+
+    #[test]
+    fn child_facade_actions_address_the_parent_doc() {
+        // Симметрия с кликом среза 6: конверт адресован документу-владельцу
+        // элемента, пумпа отправителя его не трогает.
+        let (rt_parent, rt_child, _pd, _cd) = with_parent_child_pair_docs(true, true);
+        rt_child
+            .eval("window.parent.document.getElementById('p').focus();")
+            .unwrap();
+        rt_child.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(acts(&rt_child).is_empty());
+        rt_parent.eval("_lumen_frame_pump_messages()").unwrap();
+        let a = acts(&rt_parent);
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0][0], serde_json::json!("focus"));
+    }
+
+    #[test]
+    fn actions_into_inaccessible_child_are_dropped() {
+        let (rt_parent, rt_child, _pd, cd) = with_parent_child_pair_docs(true, false);
+        let b_nid = {
+            let d = cd.lock().unwrap();
+            element_index(&d, "b").expect("<b> в дереве ребёнка")
+        };
+        assert!(eval_bool(
+            &rt_parent,
+            &format!(
+                "_lumen_f_queue_event(0, {b_nid}, '{{\"kind\":\"focus\"}}') === false && \
+                 _lumen_f_queue_event(0, {b_nid}, '{{\"kind\":\"blur\"}}') === false && \
+                 _lumen_f_queue_event(0, {b_nid}, '{{\"kind\":\"dom\",\"type\":\"x\"}}') === false"
+            )
+        ));
+        rt_child.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(acts(&rt_child).is_empty());
+    }
+
+    #[test]
+    fn queue_event_rejects_malformed_specs_without_touching_outbox() {
+        with_shared_frame("<html><body><b>x</b></body></html>", true, |rt, _| {
+            // Невалидный JSON, чужой kind, пустой/нестроковый/слишком длинный
+            // type — все отклоняются; после этого валидный blur по-прежнему
+            // проходит (ящик жив, мусор его не заблокировал).
+            assert!(eval_bool(
+                rt,
+                "_lumen_f_queue_event(0, 2, 'not json') === false && \
+                 _lumen_f_queue_event(0, 2, '{\"kind\":\"zap\"}') === false && \
+                 _lumen_f_queue_event(0, 2, '{\"kind\":\"dom\",\"type\":\"\"}') === false && \
+                 _lumen_f_queue_event(0, 2, '{\"kind\":\"dom\",\"type\":5}') === false && \
+                 _lumen_f_queue_event(0, 2, '{\"kind\":\"dom\"}') === false"
+            ));
+            let long_type = "x".repeat(129);
+            assert!(eval_bool(
+                rt,
+                &format!(
+                    "_lumen_f_queue_event(0, 2, '{}') === false",
+                    serde_json::json!({"kind": "dom", "type": long_type})
+                )
+            ));
+            assert!(eval_bool(
+                rt,
+                "_lumen_f_queue_event(0, 2, '{\"kind\":\"blur\"}') === true"
             ));
         });
     }

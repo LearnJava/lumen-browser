@@ -7463,6 +7463,87 @@ mod tests {
         ));
     }
 
+    /// BUG-480 срез 7: focus()/blur() через фасад документа обновляют
+    /// `_lumen_last_focused_nid` ЭТОГО контекста (activeElement меняется сразу
+    /// после пумпы), но НЕ ставят фокус-запрос шеллу — очередь рантайма фрейма
+    /// шеллом пока не дренируется, поэтому хук доставки её не наполняет.
+    #[test]
+    fn frame_facade_focus_and_blur_update_active_element_without_shell_request() {
+        let doc = make_doc();
+        let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
+        rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+        // tabindex делает div#main фокусируемым (HTML LS §6.6.1).
+        rt.eval("document.getElementById('main').setAttribute('tabindex', '0');")
+            .unwrap();
+        rt.eval(
+            "_lumen_frame_content_document(1).getElementById('main').focus({ preventScroll: true })",
+        )
+        .unwrap();
+        // До пумпы — только постановка конверта, состояние не тронуто.
+        assert_eq!(
+            rt.eval("document.activeElement === document.body").unwrap(),
+            JsValue::Bool(true)
+        );
+        rt.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(matches!(
+            rt.eval(
+                "document.activeElement !== null \
+                 && document.activeElement.id === 'main'"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        ));
+        // Отклонение среза: уведомления шеллу нет — очередь пуста.
+        assert!(rt.take_focus_requests().is_empty());
+        // blur через фасад возвращает фокус назад.
+        rt.eval("_lumen_frame_content_document(1).getElementById('main').blur()")
+            .unwrap();
+        rt.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(
+            rt.eval("document.activeElement === document.body").unwrap(),
+            JsValue::Bool(true)
+        );
+        assert!(rt.take_focus_requests().is_empty());
+    }
+
+    /// BUG-480 срез 7: dispatchEvent через фасад доставляет событие слушателям
+    /// ЭТОГО изолята с сохранённым detail (JSON-круготрип) — та же механика,
+    /// что у собственного el.dispatchEvent.
+    #[test]
+    fn frame_facade_dispatch_event_runs_local_listeners_with_detail() {
+        let doc = make_doc();
+        let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
+        rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+        rt.eval(
+            "window.__got = null; \
+             document.getElementById('main').addEventListener('hello', function(e) { \
+                 window.__got = { type: e.type, bubbles: e.bubbles, detail: e.detail }; \
+             });",
+        )
+        .unwrap();
+        rt.eval(
+            "_lumen_frame_content_document(1).getElementById('main') \
+             .dispatchEvent({ type: 'hello', bubbles: true, cancelable: false, \
+                              detail: { n: 42 } });",
+        )
+        .unwrap();
+        assert_eq!(
+            rt.eval("window.__got === null").unwrap(),
+            JsValue::Bool(true),
+            "до пумпы доставки нет"
+        );
+        rt.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(matches!(
+            rt.eval(
+                "window.__got !== null && window.__got.type === 'hello' \
+                 && window.__got.bubbles === true \
+                 && window.__got.detail.n === 42"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        ));
+    }
+
     /// Serializes the two `user_agent_override_*` tests below against each
     /// other — both read/write the process-global `GLOBAL_UA_OVERRIDE`
     /// (BUG-295), which every `install_dom` call in the crate consults, so an

@@ -13115,6 +13115,52 @@ globalThis._lumen_deliver_frame_click = function(nid) {
     _lumen_perform_click(nid);
 };
 
+// BUG-480 срез 7: focus() из чужого фасада iframe — семантика
+// HTMLElement.prototype.focus, исполненная В ЭТОМ изоляте: focusability-гейт и
+// _lumen_focus_update (blur/focusout на прежде сфокусированном, focus/focusin
+// на новом). Два отклонения, оба задокументированы в BUG-480: (1) БЕЗ
+// `_lumen_request_focus` — очередь фокус-запросов рантайма фрейма шеллом пока
+// не дренируется (фреймы не рендерятся), запрос там только копился бы;
+// `preventScroll` переносится конвертом, но игнорируется — layout у фреймов
+// нулевой, скроллить нечего.
+globalThis._lumen_deliver_frame_focus = function(nid, preventScroll) {
+    if (typeof nid !== 'number' || nid < 0) return;
+    if (!_lumen_is_focusable(nid)) return;
+    _lumen_focus_update(nid);
+};
+// Парный blur(): no-op для не сфокусированного элемента, как у
+// HTMLElement.prototype.blur; тоже без `_lumen_request_blur`.
+globalThis._lumen_deliver_frame_blur = function(nid) {
+    if (typeof nid !== 'number' || nid < 0) return;
+    if (_lumen_last_focused_nid !== _lumen_nearest_element_nid(nid)) return;
+    _lumen_focus_update(-1);
+};
+// Срез 7: произвольное событие из чужого фасада dispatchEvent(). Точная копия
+// последовательности собственного el.dispatchEvent этого шима (см. фабрику
+// живых элементов): снимок Event строится заново в этом изоляте, диспатчится
+// через _lumen_dispatch (слушатели цели + on<type>), а недоверенный 'click'
+// без preventDefault запускает активационное поведение (BUG-439).
+globalThis._lumen_deliver_frame_dom_event = function(nid, env) {
+    if (typeof nid !== 'number' || nid < 0 || !env) return;
+    var type = typeof env.type === 'string' ? env.type : '';
+    if (!type) return;
+    var init = { bubbles: !!env.bubbles, cancelable: !!env.cancelable };
+    var ev = new Event(type, init);
+    if (env.detail !== null && env.detail !== undefined && typeof CustomEvent === 'function') {
+        ev = new CustomEvent(type, { bubbles: !!env.bubbles, cancelable: !!env.cancelable, detail: env.detail });
+    }
+    ev.target = _lumen_make_element(nid);
+    ev.currentTarget = ev.target;
+    var notCancelled = _lumen_dispatch(nid, ev);
+    if (notCancelled && ev.isTrusted === false && type === 'click') {
+        var at = _lumen_activation_target(nid);
+        if (at !== -1) {
+            _lumen_run_activation_behavior(at, (at === nid)
+                ? _lumen_make_element(nid) : _lumen_make_element(at));
+        }
+    }
+};
+
 // _lumen_dispatch_unhandled_rejection (BUG-716) — Rust→JS bridge for
 // `v8::Isolate::set_promise_reject_callback` (`v8_runtime.rs`). Called
 // directly with the *live* `promise`/`reason` values, never through
