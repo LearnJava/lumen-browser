@@ -64,6 +64,12 @@ addEventListener('hashchange', function (e) {
 var _a = document.createElement('a');
 _a.setAttribute('href', HREF);
 _a.click();
+// BUG-832: `hashchange` is queued on the task source (HTML LS §7.10.6), so the
+// event loop has to turn once before the log can contain it. `location`, by
+// contrast, has already moved — the two halves are deliberately read together
+// here so a regression that re-synchronizes the dispatch shows up as a *double*
+// entry rather than passing quietly.
+_lumen_tick_timers();
 _log.join('|') + ' @ ' + location.href + ' hash=' + location.hash
 "#;
 

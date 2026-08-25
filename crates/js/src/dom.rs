@@ -7371,7 +7371,24 @@ function _lumen_navigate_or_fragment(rawUrl, replace) {
     }
     _lumen_navigate(resolved !== null ? resolved : url, replace);
 }
-// Dispatch a `hashchange` event to window.onhashchange + addEventListener('hashchange').
+// HTML LS §7.10.6: `hashchange` is fired from a task queued on the DOM
+// manipulation task source, NOT from the `location.hash` setter itself. The
+// difference is observable and is the whole of BUG-832: a page that assigns
+// the hash and registers its listener on the very next line — the shape all
+// four residual `scroll-to-fragid` tests use, and a perfectly ordinary one,
+// since the assignment is what the listener is meant to react to — used to
+// miss the event outright, because the dispatch had already run inside the
+// assignment.
+//
+// The event object is built HERE, at queueing time, so it carries the URL pair
+// as of the navigation that caused it: two hash writes in one turn deliver two
+// events with the right `oldURL`/`newURL` each, in order, rather than both
+// reporting whatever `location` settled on.
+//
+// Written straight into `_lumen_timers` with `nesting: 0` rather than through
+// setTimeout, for the same reason as `_ro_schedule_initial` and Animation's
+// `_fire`: the §8.6 4 ms clamp is about timer nesting and must not apply to an
+// engine-queued task.
 function _lumen_fire_hashchange(oldURL, newURL) {
     var ev;
     try {
@@ -7379,6 +7396,18 @@ function _lumen_fire_hashchange(oldURL, newURL) {
     } catch (e) {
         ev = { type: 'hashchange', oldURL: oldURL, newURL: newURL };
     }
+    var deadline = _lumen_now_ms();
+    _lumen_timers.push({
+        id: _lumen_timer_seq++,
+        fn: function () { _lumen_dispatch_hashchange(ev); },
+        deadline: deadline, interval: null, nesting: 0,
+    });
+    _lumen_request_wakeup(deadline);
+}
+
+// Run the listeners of one queued `hashchange`. A listener that throws is
+// reported (BUG-591) and the remaining listeners still run, per §8.5 «invoke».
+function _lumen_dispatch_hashchange(ev) {
     if (typeof window.onhashchange === 'function') {
         try { window.onhashchange.call(window, ev); } catch (e) { _lumen_report_exception(e); }
     }
@@ -28864,6 +28893,9 @@ mod tests {
             let rt = v8_runtime_with_url("https://example.com/page");
             rt.eval("var fired=null; window.onhashchange=function(e){ fired=e.newURL; }; location.hash='x';")
                 .unwrap();
+            // BUG-832: the dispatch is a queued task now, so the event loop has
+            // to turn once before the handler has been called.
+            rt.eval("_lumen_tick_timers()").unwrap();
             assert_eq!(
                 rt.eval("fired").unwrap(),
                 lumen_core::JsValue::String("https://example.com/page#x".into())
@@ -28875,6 +28907,67 @@ mod tests {
             let rt = v8_runtime_with_url("https://example.com/page");
             rt.eval("var n=0; window.addEventListener('hashchange', function(){ n++; }); location.hash='a';")
                 .unwrap();
+            rt.eval("_lumen_tick_timers()").unwrap();
+            assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(1.0));
+        }
+
+        /// BUG-832: `hashchange` must reach a listener registered on the line
+        /// AFTER the assignment that caused it — §7.10.6 queues the dispatch as
+        /// a task, and this is the ordering all four residual `scroll-to-fragid`
+        /// tests depend on. Before the fix the setter ran the listener list inline,
+        /// so this page heard nothing at all.
+        #[test]
+        fn bug832_hashchange_reaches_listener_registered_after_the_assignment() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval(
+                "var fired=null; location.hash='late'; \
+                 window.addEventListener('hashchange', function(e){ fired=e.newURL; });",
+            )
+            .unwrap();
+            assert_eq!(rt.eval("fired").unwrap(), lumen_core::JsValue::Null);
+            rt.eval("_lumen_tick_timers()").unwrap();
+            assert_eq!(
+                rt.eval("fired").unwrap(),
+                lumen_core::JsValue::String("https://example.com/page#late".into())
+            );
+        }
+
+        /// BUG-832: the event object is built at queueing time, so two writes in
+        /// one turn deliver two events carrying their own URL pair, in order —
+        /// not two copies of whatever `location` settled on.
+        #[test]
+        fn bug832_two_hash_writes_in_one_turn_deliver_both_url_pairs_in_order() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval(
+                "var log=[]; window.addEventListener('hashchange', function(e){ \
+                     log.push(e.oldURL + '>' + e.newURL); }); \
+                 location.hash='a'; location.hash='b';",
+            )
+            .unwrap();
+            rt.eval("_lumen_tick_timers()").unwrap();
+            assert_eq!(
+                rt.eval("log.join('|')").unwrap(),
+                lumen_core::JsValue::String(
+                    "https://example.com/page>https://example.com/page#a|\
+                     https://example.com/page#a>https://example.com/page#b"
+                        .into()
+                )
+            );
+        }
+
+        /// BUG-832: the queued dispatch keeps BUG-591's reporting — a listener
+        /// that throws does not take the listeners after it down with it.
+        #[test]
+        fn bug832_throwing_hashchange_listener_does_not_stop_the_next_one() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval(
+                "var n=0; \
+                 window.addEventListener('hashchange', function(){ throw new Error('boom'); }); \
+                 window.addEventListener('hashchange', function(){ n++; }); \
+                 location.hash='x';",
+            )
+            .unwrap();
+            rt.eval("_lumen_tick_timers()").unwrap();
             assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(1.0));
         }
 
@@ -28883,6 +28976,7 @@ mod tests {
             let rt = v8_runtime_with_url("https://example.com/page#sec");
             rt.eval("var n=0; window.addEventListener('hashchange', function(){ n++; }); location.hash='sec';")
                 .unwrap();
+            rt.eval("_lumen_tick_timers()").unwrap();
             assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(0.0));
         }
 
@@ -29097,6 +29191,7 @@ mod tests {
             let rt = v8_runtime_with_url("https://example.com/page");
             rt.eval("var fired=null; window.addEventListener('hashchange', function(e){ fired=e.newURL; }); location.href='#x';")
                 .unwrap();
+            rt.eval("_lumen_tick_timers()").unwrap();
             assert_eq!(
                 rt.eval("fired").unwrap(),
                 lumen_core::JsValue::String("https://example.com/page#x".into())
@@ -29253,6 +29348,7 @@ mod tests {
             let rt = v8_runtime_with_url("https://example.com/page#a");
             rt.eval("var __h = null; window.onhashchange = function(e) { window.__h = e.newURL; };").unwrap();
             rt.eval("_lumen_deliver_popstate('null', 'https://example.com/page#b')").unwrap();
+            rt.eval("_lumen_tick_timers()").unwrap();
             let r = rt.eval("window.__h").unwrap();
             assert_eq!(r, lumen_core::JsValue::String("https://example.com/page#b".into()));
         }
@@ -29262,6 +29358,7 @@ mod tests {
             let rt = v8_runtime_with_url("https://example.com/p#a");
             rt.eval("var n = 0; window.addEventListener('hashchange', function() { n++; });").unwrap();
             rt.eval("_lumen_deliver_popstate('null', 'https://example.com/p#z')").unwrap();
+            rt.eval("_lumen_tick_timers()").unwrap();
             let r = rt.eval("n").unwrap();
             assert_eq!(r, lumen_core::JsValue::Number(1.0));
         }
@@ -29271,6 +29368,7 @@ mod tests {
             let rt = v8_runtime_with_url("https://example.com/a#sec");
             rt.eval("var n = 0; window.addEventListener('hashchange', function() { n++; });").unwrap();
             rt.eval("_lumen_deliver_popstate('null', 'https://example.com/b#sec')").unwrap();
+            rt.eval("_lumen_tick_timers()").unwrap();
             let r = rt.eval("n").unwrap();
             assert_eq!(r, lumen_core::JsValue::Number(0.0));
         }
@@ -29280,6 +29378,7 @@ mod tests {
             let rt = v8_runtime_with_url("https://example.com/page#a");
             rt.eval("var n = 0; window.addEventListener('hashchange', function() { n++; });").unwrap();
             rt.eval("_lumen_deliver_popstate('null', '')").unwrap();
+            rt.eval("_lumen_tick_timers()").unwrap();
             let r = rt.eval("n").unwrap();
             assert_eq!(r, lumen_core::JsValue::Number(0.0));
         }
