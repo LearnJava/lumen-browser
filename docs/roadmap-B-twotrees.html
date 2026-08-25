@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-25",
  "counts": {
-  "open": 384,
-  "fixed": 486,
+  "open": 383,
+  "fixed": 487,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -11484,10 +11484,10 @@
    "debtor": false
   },
   "BUG-913": {
-   "status": "open",
+   "status": "fixed",
    "title": "IndexedDB: `abort()` не откатывает уже применённые записи — запись, чей запрос успел выполниться до `abort()`, переживает откат (замер 2026-08-25: `rolled-back=…",
    "component": "js (`crates/js/src/dom.rs` — `_idb_flush_txn`, ветка `_aborted`: гасит очередь и стреляет `abort`, но не трогает данные; `IDBObjectStore.prototype._write` и соседние мутирующие действия пишут в `store.records` без журнала отмены)",
-   "date": null,
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-914": {
