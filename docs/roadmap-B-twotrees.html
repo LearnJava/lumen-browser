@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-26",
  "counts": {
-  "open": 382,
-  "fixed": 499,
+  "open": 381,
+  "fixed": 500,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -11515,10 +11515,10 @@
    "debtor": false
   },
   "BUG-918": {
-   "status": "open",
+   "status": "fixed",
    "title": "`unhandledrejection` формируется по концу МИКРОТАСКА, а не задачи: обработчик, навешенный после первого `await` (та же задача, следующий микротаск), уже опаздыв…",
-   "component": "js (`crates/js/src/v8_runtime.rs:407` — `scope.enqueue_microtask(flush)` в `lumen_promise_reject_callback`; `:457` `flush_promise_rejections_callback`)",
-   "date": null,
+   "component": "js (`crates/js/src/v8_runtime.rs` — `drain_promise_rejections` из петли `V8Command::Run`; `enqueue_microtask(flush)` удалён из `lumen_promise_reject_callback`)",
+   "date": "2026-08-26",
    "debtor": false
   },
   "BUG-919": {
@@ -12244,14 +12244,14 @@
   "js (`crates/js/src/v8_runtime.rs:3543`/`:3554` — `_lumen_ws_send*` зовут `send_text`/`send_binary` из потока JS под `registry.lock()`) + network (`crates/network/src/websocket/mod.rs:189` — `write_frame` в блокирующий `Write`)": [
    "BUG-869"
   ],
-  "js (`crates/js/src/v8_runtime.rs:407` — `scope.enqueue_microtask(flush)` в `lumen_promise_reject_callback`; `:457` `flush_promise_rejections_callback`)": [
-   "BUG-918"
-  ],
   "js (`crates/js/src/v8_runtime.rs:4809-4843` — блок `if let Some(seed) = deterministic_seed`; области `crates/js/src/worker.rs::run_worker_thread_v8`, `shared_worker.rs`, `sw_worker.rs`)": [
    "BUG-768"
   ],
   "js (`crates/js/src/v8_runtime.rs::_lumen_create_element`/`_lumen_create_element_ns`, `v8_compat.rs::IntoJsReturn for u32`)": [
    "BUG-457"
+  ],
+  "js (`crates/js/src/v8_runtime.rs` — `drain_promise_rejections` из петли `V8Command::Run`; `enqueue_microtask(flush)` удалён из `lumen_promise_reject_callback`)": [
+   "BUG-918"
   ],
   "js (`crates/js/src/v8_runtime.rs` — `named_access_lookup`/`lock_document_bounded`, интерцептор именованных свойств окна; заявка указывала на `crates/js/src/dom.rs` `HTMLElement.prototype.focus`/`_lumen_apply_ready_state` и `crates/shell/src/main.rs` `notify_window_loaded`/`route_task_js` — ни то, ни другое)": [
    "BUG-794"
