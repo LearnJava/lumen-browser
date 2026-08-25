@@ -76,11 +76,11 @@
  "generated": "2026-08-25",
  "counts": {
   "open": 385,
-  "fixed": 481,
+  "fixed": 482,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 866,
+ "total_bugs": 867,
  "phases": [
   {
    "id": "P0",
@@ -10938,10 +10938,10 @@
    "debtor": false
   },
   "BUG-834": {
-   "status": "open",
+   "status": "fixed",
    "title": "Уходящий документ получает только `pagehide` (и с `persisted=true` для обычной навигации по ссылке): `unload`, `beforeunload` и `visibilitychange` не доставляют…",
    "component": "shell (`crates/shell/src/main.rs:20113`, `:20265` — единственные вызовы `fire_page_lifecycle`, всегда с литералом `\"pagehide\"`) + js (`crates/js/src/dom.rs:7209` — `unload`-слушатели читаются только как блокировщик bfcache; `:13092` — `_lumen_apply_visibility` зовётся с focus/blur, не с навигации)",
-   "date": null,
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-835": {
@@ -11466,6 +11466,13 @@
    "status": "open",
    "title": "Динамический `import()` резолвится относительно **URL документа**, а `<base href>` игнорируется в любой форме. Замер прогоном `run_report.py --all --recursive -…",
    "component": "js (`crates/js/src/v8_esm.rs:331` — `resolve` берёт базой `s.page_url`; `set_page_url` зовётся только из `install_dom`/`set_module_context`, `<base href>` в состояние ESM-слоя не попадает вовсе)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-911": {
+   "status": "open",
+   "title": "Тесты крейта берут эфемерный порт у ОС и падают, когда он попал в список «bad ports» Fetch §3.9: один прогон `cargo test -p lumen-network --lib` примерно из 25…",
+   "component": "network (`crates/network/src/lib.rs:6186` — `mock_http_server`, `:8353` — `mock_http_server_capturing`, обе биндят `127.0.0.1:0`; `:302` — `blocked port` из `require_http_scheme`)",
    "date": null,
    "debtor": false
   }
@@ -12490,6 +12497,9 @@
   ],
   "network (`crates/network/src/lib.rs:2566-2567` — вычисление `default_path` перед `jar.process_set_cookie`); потребители — `crates/storage/src/cookies.rs::parse_set_cookie_with_psl` и `path_matches`": [
    "BUG-756"
+  ],
+  "network (`crates/network/src/lib.rs:6186` — `mock_http_server`, `:8353` — `mock_http_server_capturing`, обе биндят `127.0.0.1:0`; `:302` — `blocked port` из `require_http_scheme`)": [
+   "BUG-911"
   ],
   "network (`crates/network/src/lib.rs:6674` — тест `tests::stale_pooled_connection_triggers_retry`, вероятно также продакшн retry-on-stale в connection-pool рядом)": [
    "BUG-789"

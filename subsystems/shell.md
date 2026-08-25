@@ -582,6 +582,27 @@
   `cargo run -p lumen-bench --ci`. All Level 1 DoD boxes now checked
   (`docs/tasks/ph3-bfcache.md`); Level 2 (JS heap survives the freeze)
   re-homed under `P3-v8`.
+- **Done («unload a document» on every navigation path — BUG-834, 2026-08-25):**
+  `navigate_to`, `navigate_back` and `navigate_forward` used to call
+  `fire_page_lifecycle("pagehide", …)` and nothing else; they now run the whole
+  HTML LS §7.4.5–§7.4.6 sequence through two new `PersistentJs` methods,
+  `fire_beforeunload()` and `unload_document(persisted)` (see `subsystems/js.md`
+  for the shim side). The shell-side half of the bug was the `persisted` flag: in
+  `navigate_to` the last branch — «store an HTML snapshot if the freeze was not
+  possible» — raised it **without** checking `bfcache_eligible`, so an ordinary
+  link navigation reported `persisted=true`. A snapshot is the page's *source
+  text*; coming back re-parses the document, so nothing of it survives, and
+  §7.4.6 calls that discarded. The assignment is gone: salvageable is now exactly
+  the parked-whole (BUG-835) and frozen-DOM branches, and the same flag decides
+  whether `unload` fires at all — which lines up with `bfcache_eligible()`
+  already refusing the freeze to a page holding an `unload`/`beforeunload`
+  listener. In `navigate_back`/`navigate_forward` the outgoing page's fate is
+  resolved into `outgoing_parkable` **before** the sequence and reused by the
+  parking branch below, so the flag reported to the page cannot disagree with
+  what the shell does ten lines later (it used to re-query `bfcache_eligible()`
+  there). Not done: `reload()` runs no unload sequence — it is called from inside
+  these same paths, so dispatching there would double-fire — and `window.close()`
+  is [BUG-887](../bugs/BUG-887-OPEN.md).
 - **Done (bfcache eligibility filters — WS/SSE/unload, Ph3 `P3-bfcache` level 1, 2026-07-13):**
   `bfcache_eligible()` (previously always `true`) now queries
   `PersistentJs::has_bfcache_freeze_blocker()` through `route_query_js`,

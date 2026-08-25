@@ -8295,8 +8295,17 @@ var _pageshow_listeners = [];
 var _pagehide_listeners = [];
 
 function _lumen_fire_page_lifecycle(type, persisted) {
-    var evt = new Event(type, { isTrusted: true });
-    evt.persisted = !!persisted;
+    var evt = new PageTransitionEvent(type, { isTrusted: true, persisted: !!persisted });
+    if (type === 'pageshow') {
+        // HTML LS §7.4.6 «reactivate a document»: the page becomes showing and
+        // visible again BEFORE pageshow, so a listener reading
+        // `document.visibilityState` sees 'visible'. A freshly loaded document
+        // is already in that state, so both calls are no-ops there; the pair
+        // matters for a page coming back out of bfcache in the SAME runtime
+        // (BUG-835 parking), which `_lumen_unload_document` had hidden.
+        _lumen_page_showing = true;
+        _lumen_apply_visibility(false);
+    }
     var listeners = type === 'pageshow' ? _pageshow_listeners : _pagehide_listeners;
     for (var i = 0; i < listeners.length; i++) {
         try { listeners[i](evt); } catch(e) { _lumen_report_exception(e); }
@@ -8305,6 +8314,60 @@ function _lumen_fire_page_lifecycle(type, persisted) {
     if (typeof handler === 'function') {
         try { handler(evt); } catch(e) { _lumen_report_exception(e); }
     }
+}
+
+// ── Unloading a document (HTML LS §7.4.5–§7.4.6) ─────────────────────────────
+// `_lumen_page_showing` mirrors the spec's «page showing» flag. It gates the
+// pagehide/visibility half of the unload so a document cannot be hidden twice:
+// the shell runs the sequence once per departure, and a page restored from
+// bfcache flips the flag back on `pageshow`.
+var _lumen_page_showing = true;
+
+// «prompt to unload a document» (HTML LS §7.4.5). Returns true when the page
+// asked to stay — `preventDefault()` on the event, or a non-empty
+// `returnValue`, including the legacy «return a string from onbeforeunload»
+// form (per the event handler processing algorithm, only the on<type> handler's
+// return value counts; an addEventListener callback's does not).
+// The shell only LOGS that answer. Honouring it means showing a confirm dialog,
+// and this engine's `confirm()` is a stub that always answers false, so
+// treating «asked to stay» as «cancel» would wedge every page that sets a
+// returnValue with no way for the user to say «leave». See BUG-834.
+function _lumen_fire_beforeunload() {
+    var evt = new BeforeUnloadEvent('beforeunload', { cancelable: true, isTrusted: true });
+    var arr = _other_win_listeners['beforeunload'];
+    if (arr) {
+        arr = arr.slice();
+        for (var i = 0; i < arr.length; i++) {
+            try { arr[i].call(window, evt); } catch(e) { _lumen_report_exception(e); }
+        }
+    }
+    if (typeof window.onbeforeunload === 'function') {
+        try {
+            var rv = window.onbeforeunload.call(window, evt);
+            if (rv !== undefined && rv !== null) evt.returnValue = String(rv);
+        } catch(e) { _lumen_report_exception(e); }
+    }
+    return !!evt.defaultPrevented || String(evt.returnValue) !== '';
+}
+
+// «unload a document» (HTML LS §7.4.6). The order is fixed by the spec:
+// pagehide → visibilityState 'hidden' → unload, and `unload` fires ONLY for a
+// document that is not salvageable — i.e. one the shell could not retain
+// (`persisted === false`). A page carrying an `unload`/`beforeunload` listener
+// is denied the freeze by `_lumen_bfcache_blocked()` above, so the two halves
+// agree: such a page always reaches the `unload` branch here.
+function _lumen_unload_document(persisted) {
+    if (_lumen_page_showing) {
+        _lumen_page_showing = false;
+        _lumen_fire_page_lifecycle('pagehide', persisted);
+        _lumen_apply_visibility(true);
+    }
+    if (persisted) return;
+    // `unload` has no on<type>-return-value convention, so the generic branch of
+    // `window.dispatchEvent` already does exactly the right thing: listeners in
+    // registration order, then `window.onunload`, each guarded by
+    // `_lumen_report_exception`.
+    window.dispatchEvent(new Event('unload', { isTrusted: true }));
 }
 
 // Whether the current page must be denied a full bfcache freeze (HTML Living
@@ -12410,6 +12473,14 @@ var window = {
     onmessage: null,
     onpageshow: null,
     onpagehide: null,
+    // BUG-834: declared for the same reason as `onscroll` below — `'onunload' in
+    // window` / `'onbeforeunload' in window` is the feature test a page runs
+    // before deciding whether it may hook the unload sequence. Assignment
+    // already worked (`_lumen_bfcache_blocked` and the two dispatch loops in
+    // `_lumen_unload_document`/`_lumen_fire_beforeunload` read the property
+    // directly), a bare `in` check did not.
+    onunload: null,
+    onbeforeunload: null,
     onload: null,
     // BUG-702: present so `'onunhandledrejection' in window` is true, which is the
     // other half of the feature test libraries run for promise-rejection support.
@@ -27101,6 +27172,134 @@ mod tests {
             let rt = v8_runtime_with_dom(make_doc());
             let result = rt.eval("typeof window._lumen_fire_page_lifecycle === 'function'").unwrap();
             assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── BUG-834: «unload a document» (HTML LS §7.4.5–§7.4.6) ──────────────
+
+        /// A discarded document (`persisted = false`) gets the whole sequence in
+        /// spec order: pagehide, then visibilityState 'hidden', then unload.
+        #[test]
+        fn unload_document_fires_pagehide_visibilitychange_unload_in_order() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var log = [];
+                 window.addEventListener('pagehide', function(e) { log.push('pagehide:' + e.persisted); });
+                 document.addEventListener('visibilitychange', function() { log.push('vis:' + document.visibilityState); });
+                 window.addEventListener('unload', function() { log.push('unload'); });
+                 _lumen_unload_document(false);",
+            ).unwrap();
+            let log = rt.eval("log.join(',')").unwrap();
+            assert_eq!(
+                log,
+                lumen_core::JsValue::String("pagehide:false,vis:hidden,unload".to_string())
+            );
+        }
+
+        /// A salvageable document (retained in bfcache) gets pagehide + hidden,
+        /// but NOT `unload` — the spec fires it only for a discarded document.
+        #[test]
+        fn unload_document_persisted_skips_unload_event() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var log = [];
+                 window.addEventListener('pagehide', function(e) { log.push('pagehide:' + e.persisted); });
+                 window.addEventListener('unload', function() { log.push('unload'); });
+                 _lumen_unload_document(true);",
+            ).unwrap();
+            let log = rt.eval("log.join(',')").unwrap();
+            assert_eq!(
+                log,
+                lumen_core::JsValue::String("pagehide:true".to_string())
+            );
+            let hidden = rt.eval("document.visibilityState").unwrap();
+            assert_eq!(hidden, lumen_core::JsValue::String("hidden".to_string()));
+        }
+
+        /// `onunload` — the on<type> handler form — is reached as well; it goes
+        /// through `window.dispatchEvent`'s generic branch.
+        #[test]
+        fn unload_document_calls_onunload_handler() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var saw = ''; window.onunload = function(e) { saw = e.type; };
+                 _lumen_unload_document(false);",
+            ).unwrap();
+            let saw = rt.eval("saw").unwrap();
+            assert_eq!(saw, lumen_core::JsValue::String("unload".to_string()));
+        }
+
+        /// The «page showing» flag makes the sequence idempotent: a second call
+        /// must not fire pagehide/visibilitychange again.
+        #[test]
+        fn unload_document_is_idempotent_on_page_showing_flag() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var n = 0;
+                 window.addEventListener('pagehide', function() { n++; });
+                 _lumen_unload_document(true);
+                 _lumen_unload_document(true);",
+            ).unwrap();
+            let n = rt.eval("n").unwrap();
+            assert_eq!(n, lumen_core::JsValue::Number(1.0));
+        }
+
+        /// A page restored from bfcache in the SAME runtime becomes showing and
+        /// visible again on `pageshow`, so a later departure fires once more.
+        #[test]
+        fn pageshow_restores_page_showing_and_visibility() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var n = 0;
+                 window.addEventListener('pagehide', function() { n++; });
+                 _lumen_unload_document(true);
+                 _lumen_fire_page_lifecycle('pageshow', true);
+                 _lumen_unload_document(true);",
+            ).unwrap();
+            let n = rt.eval("n").unwrap();
+            assert_eq!(n, lumen_core::JsValue::Number(2.0));
+            // The intermediate `pageshow` had to flip visibility back to 'visible',
+            // otherwise the second `_lumen_apply_visibility(true)` is a no-op and
+            // the restored page would report 'hidden' while on screen.
+            let seq = rt
+                .eval("_lumen_fire_page_lifecycle('pageshow', true); document.visibilityState")
+                .unwrap();
+            assert_eq!(seq, lumen_core::JsValue::String("visible".to_string()));
+        }
+
+        /// `beforeunload` reaches both listener forms, and the page's «asked to
+        /// stay» answer is reported back to the shell.
+        #[test]
+        fn beforeunload_reports_prevent_default_and_return_value() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let quiet = rt
+                .eval("window.addEventListener('beforeunload', function(e) {}); _lumen_fire_beforeunload()")
+                .unwrap();
+            assert_eq!(quiet, lumen_core::JsValue::Bool(false));
+
+            let rt2 = v8_runtime_with_dom(make_doc());
+            let prevented = rt2
+                .eval("window.addEventListener('beforeunload', function(e) { e.preventDefault(); }); _lumen_fire_beforeunload()")
+                .unwrap();
+            assert_eq!(prevented, lumen_core::JsValue::Bool(true));
+
+            // Legacy form: a string returned from the on<type> handler sets
+            // `returnValue`. A listener's return value deliberately does not.
+            let rt3 = v8_runtime_with_dom(make_doc());
+            let legacy = rt3
+                .eval("window.onbeforeunload = function(e) { return 'stay'; }; _lumen_fire_beforeunload()")
+                .unwrap();
+            assert_eq!(legacy, lumen_core::JsValue::Bool(true));
+        }
+
+        /// `'onunload' in window` / `'onbeforeunload' in window` — the feature
+        /// test a page runs before hooking the sequence (BUG-822 precedent).
+        #[test]
+        fn window_declares_unload_handler_properties() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval("('onunload' in window) && ('onbeforeunload' in window) && window.onunload === null")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 
         // ── Fetch API tests ───────────────────────────────────────────────────────
