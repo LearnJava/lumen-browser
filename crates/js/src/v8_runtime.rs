@@ -34,7 +34,7 @@ use lumen_dom::{
 use lumen_layout::{matches_selector, query_all, query_all_scoped, query_all_within};
 use std::collections::{HashMap, HashSet};
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::sync::{
     Once,
@@ -753,6 +753,12 @@ pub struct V8JsRuntime {
     /// seed. `None` means derive the seed from the page URL hash (previous,
     /// still-default behaviour).
     deterministic_rng_seed: Mutex<Option<u64>>,
+    /// BUG-480 срез 8: ключ собственного документа в ящиках моста (указатель
+    /// Arc, 0 = контекст без документа — до install_dom). Дублирует
+    /// `frame_docs.self_key` для чтения без захвата реестра: по нему
+    /// [`Self::frame_transport_pending`] отвечает на вопрос шелла «есть ли
+    /// неразобранные конверты для МЕНЯ».
+    self_doc_key: AtomicUsize,
     /// DEVX-16: `--monotonic-clock` — when `true` (and `deterministic` is also
     /// `true`), `Date.now()`/`performance.now()` advance [`Self::deterministic_clock_ms`]
     /// by 1 ms per call instead of staying frozen at 0.
@@ -982,6 +988,7 @@ impl V8JsRuntime {
             pointer_capture_nid: Arc::new(Mutex::new(None)),
             deterministic: AtomicBool::new(false),
             deterministic_rng_seed: Mutex::new(None),
+            self_doc_key: AtomicUsize::new(0),
             deterministic_monotonic: AtomicBool::new(false),
             deterministic_clock_ms: Arc::new(AtomicU64::new(0)),
             sw_worker_store: None,
@@ -1123,6 +1130,16 @@ impl V8JsRuntime {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()),
         )
+    }
+
+    /// BUG-480 срез 8: есть ли в ящиках моста неразобранные конверты,
+    /// адресованные ЭТОМУ контексту. Шелл опрашивает живые рантаймы на каждом
+    /// `about_to_wait` и, пока хоть кто-то отвечает «да», держит короткий poll-
+    /// дедлайн — иначе конверт после затихания страницы лежит до случайного
+    /// пробуждения цикла. До install_dom (ключ 0) всегда `false`.
+    pub fn frame_transport_pending(&self) -> bool {
+        let key = self.self_doc_key.load(Ordering::Relaxed);
+        crate::frame_bridge::frame_transport_has_for((key != 0).then_some(key))
     }
 
     /// Enable or disable deterministic render mode (8F) before calling `install_dom`.
@@ -1857,6 +1874,9 @@ impl V8JsRuntime {
         // же инстанс Arc уходит и в реестр родителя (register_iframe_document),
         // поэтому адресата можно найти с обеих сторон. Ставится до run() —
         // doc уезжает в замыкание по значению.
+        //
+        // Срез 8: тот же ключ дублируется в рантайме — по нему шелл спрашивает
+        // «есть ли неразобранные конверты для МЕНЯ» и будит спящий цикл.
         {
             let mut reg = self
                 .frame_docs
@@ -1864,6 +1884,8 @@ impl V8JsRuntime {
                 .unwrap_or_else(|e| e.into_inner());
             reg.self_key = Some(Arc::as_ptr(&doc) as usize);
             reg.self_origin = page_origin.clone();
+            self.self_doc_key
+                .store(Arc::as_ptr(&doc) as usize, Ordering::Relaxed);
         }
         // BUG-295: session-level `navigator.userAgent` override, if any.
         let ua_override = global_user_agent_override();
@@ -7542,6 +7564,131 @@ mod tests {
             .unwrap(),
             JsValue::Bool(true)
         ));
+    }
+
+    /// BUG-480 срез 8: `<script>`, вставленный в под-документ через фасад
+    /// (createElement + textContent + appendChild), исполняется на тике пумпы
+    /// штатной `_lumen_script_prepare` — с честным document.currentScript.
+    #[test]
+    fn frame_facade_inserted_script_executes_on_pump_with_current_script() {
+        let doc = make_doc();
+        let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
+        rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+        rt.eval(
+            "var d = _lumen_frame_content_document(1); \
+             var s = d.createElement('script'); \
+             s.setAttribute('id', 'probe'); \
+             s.textContent = 'window.__ran = true; \
+                              window.__cs = document.currentScript \
+                                && document.currentScript.id;'; \
+             d.body.appendChild(s);",
+        )
+        .unwrap();
+        // До пумпы скрипт не исполнялся — доставка через границу асинхронная.
+        assert_eq!(
+            rt.eval("window.__ran === undefined").unwrap(),
+            JsValue::Bool(true)
+        );
+        rt.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(matches!(
+            rt.eval("window.__ran === true && window.__cs === 'probe'")
+                .unwrap(),
+            JsValue::Bool(true)
+        ));
+    }
+
+    /// Срез 8: «already started» — per element. Повторная вставка исполненного
+    /// скрипта не перезапускает его; data-блок (не-JS type) не исполняется
+    /// вовсе.
+    #[test]
+    fn frame_inserted_script_runs_once_and_data_blocks_never_run() {
+        let doc = make_doc();
+        let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
+        rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+        rt.eval(
+            "window.__count = 0; \
+             var d = _lumen_frame_content_document(1); \
+             var s = d.createElement('script'); \
+             s.textContent = 'window.__count++;'; \
+             d.body.appendChild(s); \
+             var j = d.createElement('script'); \
+             j.setAttribute('type', 'application/json'); \
+             j.textContent = 'window.__count += 10;'; \
+             d.body.appendChild(j);",
+        )
+        .unwrap();
+        rt.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(
+            rt.eval("window.__count").unwrap(),
+            JsValue::Number(1.0),
+            "классика исполнена один раз, JSON-блок — нет"
+        );
+        // remove + повторный append того же элемента: новый конверт доставлен,
+        // но исполнение не повторяется («already started»).
+        rt.eval(
+            "var d = _lumen_frame_content_document(1); \
+             d.body.removeChild(s); \
+             d.body.appendChild(s);",
+        )
+        .unwrap();
+        rt.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(
+            rt.eval("window.__count").unwrap(),
+            JsValue::Number(1.0),
+            "повторная вставка не перезапускает исполненный скрипт"
+        );
+    }
+
+    /// Срез 8: конверт, чей скрипт успели отсоединить до доставки, теряется
+    /// без пометки «started» — повторная вставка исполняется, как у главного
+    /// документа, где preparation ждёт первой connected-вставки.
+    #[test]
+    fn detached_before_delivery_script_runs_on_reinsertion() {
+        let doc = make_doc();
+        let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
+        rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+        rt.eval(
+            "var d = _lumen_frame_content_document(1); \
+             var s = d.createElement('script'); \
+             s.textContent = 'window.__ran = true;'; \
+             d.body.appendChild(s); \
+             d.body.removeChild(s);",
+        )
+        .unwrap();
+        rt.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(
+            rt.eval("window.__ran === undefined").unwrap(),
+            JsValue::Bool(true),
+            "отсоединённый до доставки конверт не исполняется"
+        );
+        rt.eval(
+            "var d = _lumen_frame_content_document(1); \
+             d.body.appendChild(s);",
+        )
+        .unwrap();
+        rt.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(matches!(
+            rt.eval("window.__ran === true").unwrap(),
+            JsValue::Bool(true)
+        ));
+    }
+
+    /// Срез 8: предикат «есть конверт для меня» горит между постановкой и
+    /// пумпой и гаснет после разбора ящика — по нему шелл будит спящий цикл.
+    #[test]
+    fn frame_transport_pending_flips_around_pump() {
+        let doc = make_doc();
+        let rt = runtime_with_dom(Arc::clone(&doc), "https://parent.example/index.html");
+        rt.register_frame_document(1, Arc::clone(&doc), "about:srcdoc".to_owned(), None, true);
+        assert!(!rt.frame_transport_pending(), "ящик пуст до постановки");
+        rt.eval("_lumen_frame_content_window(1).postMessage('wake', '*')")
+            .unwrap();
+        assert!(
+            rt.frame_transport_pending(),
+            "самоадресованный конверт делает контекст «ожидающим»"
+        );
+        rt.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(!rt.frame_transport_pending(), "ящик разобран пумпой");
     }
 
     /// Serializes the two `user_agent_override_*` tests below against each
