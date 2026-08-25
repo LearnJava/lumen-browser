@@ -13172,11 +13172,34 @@ globalThis._lumen_deliver_frame_dom_event = function(nid, env) {
 // исполненного скрипта не перезапускает его. Отсоединённый до доставки
 // конверт теряется БЕЗ пометки — как у главного документа, где preparation
 // ждёт первого connected-вставки.
+//
+// Срез 9: флаг ставится только когда подготовка РЕАЛЬНО началась по спеке —
+// шаг «set el's already started to true» стоит после гейтов «дата-блок» и
+// «нет src, тело пусто», поэтому оба эти исхода оставляют элемент
+// непомеченным. Иначе поздний setAttribute('src', …) на вставленном пустым
+// скрипте (каноничное `s.src = url` после appendChild) навсегда глотался бы
+// первой доставкой. Предикат зеркалит ранние выходы `_lumen_script_prepare`.
+function _lumen_frame_script_will_start(nid) {
+    var type = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+    var isModule = type !== null && String(type).trim().toLowerCase() === 'module';
+    // Дата-блок никогда не становится скриптом.
+    if (!isModule && !_lumen_is_classic_script_type(type)) return false;
+    // ЛЮБОЙ src начинает элемент: непустой — загрузкой, пустой/пробельный —
+    // error-таском (спека ставит already started до обеих веток).
+    var src = _lumen_u2n(_lumen_get_attr(nid, 'src'));
+    if (src !== null) return true;
+    var body = _lumen_u2n(_lumen_get_text_content(nid));
+    return body !== null && String(body).trim() !== '';
+}
 var _lumen_frame_scripts_started = {};
 globalThis._lumen_deliver_frame_run_script = function(nid) {
     if (typeof nid !== 'number' || nid < 0) return;
     if (!_lumen_resource_is_connected(nid)) return;
+    // Уже начавшийся — спековый ранний выход №1; не начинающийся вовсе
+    // (дата-блок / пусто без src) — выход до пометки, чтобы поздний
+    // setAttribute('src') получил свою доставку.
     if (_lumen_frame_scripts_started[nid] === 1) return;
+    if (!_lumen_frame_script_will_start(nid)) return;
     _lumen_frame_scripts_started[nid] = 1;
     _lumen_script_prepare(nid);
 };

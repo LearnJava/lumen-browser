@@ -144,6 +144,26 @@
 //! - конверт, адресат которого успел отсоединиться до доставки, теряется без
 //!   пометки «started» — повторная вставка исполнится, как у главного
 //!   документа.
+//!
+//! BUG-480 срез 9 — URL-рефлексии фасадов и поздний `src` скрипта (внешний
+//! `<script src>` из родителя: первый клиент подресурсной доставки фрейма):
+//! - фасадный элемент получил `src`/`href` (HTML LS §2.6.2): сеттер хранит
+//!   строку дословно, геттер разрешает против базы под-документа (href первого
+//!   `<base>` против URL документа, иначе сам URL — §4.2.3); до среза запись
+//!   `s.src = url` заводила свойство JS-обёртки в изоляте родителя, атрибут в
+//!   дереве ребёнка не появлялся, и `_lumen_script_prepare` молча уходил в
+//!   инлайн-ветку пустого тела;
+//! - натив записи атрибута (`_lumen_f_set_attr`) после успешного `src` на
+//!   `<script>` ставит тот же конверт RunScript, что и вставка (HTML LS
+//!   §4.12.1: изменение src перезапускает prepare) — каноничное
+//!   `s.src = …` ПОСЛЕ appendChild и до него теперь равнозначны; уже
+//!   начавшийся скрипт no-op-ается у получателя;
+//! - «already started» ведётся по спеке: флаг ставится, только когда
+//!   подготовка реально началась (fetch запущен / тело исполнено / пустой src
+//!   отстрелил error) — дата-блок и элемент без src и без тела остаются
+//!   непомеченными, и поздний `src` обязан получить вторую доставку.
+//!   Предикат старта — `_lumen_frame_script_will_start` (dom.rs), зеркальный
+//!   ранним выходам `_lumen_script_prepare`.
 
 #[cfg(feature = "v8-backend")]
 use std::sync::{Arc, Mutex, OnceLock};
@@ -1268,7 +1288,7 @@ pub(crate) fn install_frame_bridge_v8(
         rt.register_native(
             "_lumen_f_set_attr",
             into_v8_fn4(move |bid: u32, nid: u32, name: String, value: String| -> bool {
-                with_accessible_doc_mut(&reg, bid, |d| {
+                let ok = with_accessible_doc_mut(&reg, bid, |d| {
                     checked_node(d, nid).is_some_and(|id| {
                         let is_element = matches!(&d.get(id).data, lumen_dom::NodeData::Element { .. });
                         if is_element {
@@ -1276,7 +1296,16 @@ pub(crate) fn install_frame_bridge_v8(
                         }
                         is_element
                     })
-                }, false)
+                }, false);
+                // Срез 9: поздний src на `<script>` — тот же триггер подготовки
+                // (HTML LS §4.12.1: изменение src перезапускает prepare), что и
+                // вставка. Конверт идёт через тот же helper: он сам проверяет
+                // доступность биндинга и тег; доставка no-op-ается у получателя
+                // для уже начавшегося скрипта («already started»).
+                if ok && name.eq_ignore_ascii_case("src") {
+                    queue_run_script_if_script(&reg, bid, nid);
+                }
+                ok
             }),
         )?;
     }
@@ -1458,6 +1487,40 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     return window;
   }
 
+  // Срез 9: база под-документа для URL-рефлексий фасадов — href первого
+  // <base>, разрешённый против URL документа, иначе сам URL (HTML LS §4.2.3,
+  // тот же алгоритм, что _lumen_document_base_url главного шима, но над
+  // деревом ЧУЖОГО документа через нативы бриджа). `_url_resolve` живёт в
+  // WEB_API_SHIM и есть во всех прод-контекстах; минимальные тестовые изоляты
+  // без шима получают сырые значения атрибутов.
+  function frameBase(bid) {
+    var url = '';
+    try { url = String(_lumen_f_url(bid) || ''); } catch (e) {}
+    try {
+      var b = _lumen_f_query(bid, 'base');
+      if (b !== null && b !== undefined && typeof _url_resolve === 'function') {
+        var h = _lumen_f_attr(bid, b, 'href');
+        if (h) {
+          var r = _url_resolve(String(h), url);
+          if (r) return r;
+        }
+      }
+    } catch (e) {}
+    return url;
+  }
+
+  // Срез 9: URL-рефлексия фасада (HTML LS §2.6.2 «Reflecting content
+  // attributes»): геттер отдаёт '' при отсутствующем атрибуте, иначе значение,
+  // разрешённое против базы под-документа; сеттер хранит строку дословно.
+  // Запись идёт через натив записи атрибута, поэтому поздний `script.src = …`
+  // сам ставит конверт RunScript (натив _lumen_f_set_attr, срез 9).
+  function frameUrlReflected(bid, nid, attr) {
+    var v = _lumen_f_attr(bid, nid, attr);
+    if (v === null || v === undefined || String(v) === '') return '';
+    if (typeof _url_resolve !== 'function') return String(v);
+    return _url_resolve(String(v), frameBase(bid)) || String(v);
+  }
+
   function frameElem(bid, nid) {
     if (nid === null || nid === undefined || nid < 0) return null;
     var cache = elems[bid];
@@ -1479,6 +1542,14 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       set id(v)        { _lumen_f_set_attr(bid, nid, 'id', String(v)); },
       get className()  { var v = _lumen_f_attr(bid, nid, 'class'); return v !== null && v !== undefined ? v : ''; },
       set className(v) { _lumen_f_set_attr(bid, nid, 'class', String(v)); },
+      // Срез 9: URL-рефлексии src/href (script/img/iframe/a/link/…). Ставятся
+      // на каждый элемент безусловно — как в главном шиме (BUG-450 про
+      // безусловные canvas-члены там отдельная тема); сеттер хранит дословно,
+      // геттер разрешает против базы под-документа.
+      get src()        { return frameUrlReflected(bid, nid, 'src'); },
+      set src(v)       { _lumen_f_set_attr(bid, nid, 'src', String(v)); },
+      get href()       { return frameUrlReflected(bid, nid, 'href'); },
+      set href(v)      { _lumen_f_set_attr(bid, nid, 'href', String(v)); },
       getAttribute: function(n) { return _lumen_f_attr(bid, nid, String(n)); },
       hasAttribute: function(n) { return _lumen_f_has_attr(bid, nid, String(n)); },
       get children() { return _lumen_f_children(bid, nid).map(function(c) { return frameElem(bid, c); }); },
@@ -3069,5 +3140,132 @@ mod tests {
             &rt_parent,
             "_lumen_f_append_child(0, 3, 4) === false"
         ));
+    }
+
+    // ── Срез 9: URL-рефлексии фасадов и поздний src скрипта ───────────────────
+
+    /// Поздний `setAttribute('src', …)` на `<script>`-фасаде ставит ВТОРОЙ
+    /// конверт RunScript — тот же триггер подготовки, что и вставка (HTML LS
+    /// §4.12.1). До среза конверт ставился только фактом вставки, поэтому
+    /// скрипт, вставленный пустым и получивший src после первой доставки,
+    /// не готовился никогда.
+    #[test]
+    fn facade_late_src_on_script_queues_second_run_script() {
+        let (rt_parent, rt_child, _pd, _cd) = with_parent_child_pair_docs(true, true);
+        rt_child
+            .eval(
+                "globalThis.__runs = []; \
+                 globalThis._lumen_deliver_frame_run_script = function(nid) { \
+                     __runs.push(nid); \
+                 };",
+            )
+            .unwrap();
+        rt_parent
+            .eval(
+                "var d = _lumen_frame_content_document(7); \
+                 var s = d.createElement('script'); \
+                 d.body.appendChild(s); \
+                 globalThis.__snid = s.__nid__;",
+            )
+            .unwrap();
+        rt_child.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(
+            match rt_child.eval("JSON.stringify(__runs)") {
+                Ok(JsValue::String(s)) => serde_json::from_str::<Vec<u32>>(&s).unwrap_or_default(),
+                _ => Vec::new(),
+            }
+            .len(),
+            1,
+            "первая доставка — от вставки"
+        );
+        // Каноничная форма `s.src = url` идёт через ту же запись атрибута.
+        rt_parent.eval("s.src = 'https://child.example/x.js';").unwrap();
+        rt_child.eval("_lumen_frame_pump_messages()").unwrap();
+        let got: Vec<u32> = match rt_child.eval("JSON.stringify(__runs)") {
+            Ok(JsValue::String(s)) => serde_json::from_str(&s).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let snid = u32::try_from(
+            match rt_parent.eval("__snid") {
+                Ok(JsValue::Number(n)) => n as i64,
+                _ => -1,
+            },
+        )
+        .unwrap_or(u32::MAX);
+        assert_eq!(got, vec![snid, snid], "поздний src доставил второй конверт с тем же nid");
+    }
+
+    /// Рефлексии src/href фасада: сеттер хранит строку ДОСЛОВНО в атрибуте,
+    /// геттер отдаёт '' для отсутствующего атрибута и разрешает значение
+    /// против базы под-документа (href первого `<base>` против URL документа).
+    /// `_url_resolve` в минимальном изоляте отсутствует — тест ставит детерминированный
+    /// stub, делающий видимость обоих уровней разрешения.
+    #[test]
+    fn facade_src_href_reflections_store_verbatim_and_resolve_against_base() {
+        let (rt_parent, _rt_child, _pd, _cd) = with_parent_child_pair_docs(true, true);
+        rt_parent
+            .eval(
+                "globalThis._url_resolve = function(rel, base) { \
+                     return 'resolved:' + base + '|' + rel; \
+                 };",
+            )
+            .unwrap();
+        rt_parent
+            .eval(
+                "var d = _lumen_frame_content_document(7); \
+                 var img = d.createElement('img'); \
+                 globalThis.__img = img; \
+                 globalThis.__absentSrc = img.src; \
+                 globalThis.__absentHref = img.href; \
+                 img.src = 'pic.png'; \
+                 globalThis.__storedRaw = _lumen_f_attr(0, img.__nid__, 'src'); \
+                 globalThis.__resolvedSrc = img.src; \
+                 var b = d.createElement('base'); \
+                 b.setAttribute('href', '/dir/'); \
+                 d.head.appendChild(b); \
+                 globalThis.__afterBase = img.src;",
+            )
+            .unwrap();
+        // Геттер без атрибута — '' (не null, не URL документа).
+        assert_eq!(
+            rt_parent.eval("__absentSrc").ok(),
+            Some(JsValue::String(String::new()))
+        );
+        assert_eq!(
+            rt_parent.eval("__absentHref").ok(),
+            Some(JsValue::String(String::new()))
+        );
+        // Сеттер сохранил атрибут дословно.
+        assert_eq!(
+            rt_parent.eval("__storedRaw").ok(),
+            Some(JsValue::String("pic.png".to_owned()))
+        );
+        // Геттер разрешил против базы; после вставки <base href="/dir/"> базой
+        // стало разрешённое значение base-href (двухуровневая композиция §4.2.3).
+        assert_eq!(
+            rt_parent.eval("__resolvedSrc").ok(),
+            Some(JsValue::String(
+                "resolved:about:srcdoc|pic.png".to_owned()
+            ))
+        );
+        assert_eq!(
+            rt_parent.eval("__afterBase").ok(),
+            Some(JsValue::String(
+                "resolved:resolved:about:srcdoc|/dir/|pic.png".to_owned()
+            ))
+        );
+        // href — та же пара аксессоров над другим атрибутом (base уже
+        // вставлен выше, поэтому разрешение идёт через двухуровневую базу).
+        rt_parent.eval("img.href = 'a.html';").unwrap();
+        assert_eq!(
+            rt_parent.eval("_lumen_f_attr(0, img.__nid__, 'href')").ok(),
+            Some(JsValue::String("a.html".to_owned()))
+        );
+        assert_eq!(
+            rt_parent.eval("img.href").ok(),
+            Some(JsValue::String(
+                "resolved:resolved:about:srcdoc|/dir/|a.html".to_owned()
+            ))
+        );
     }
 }
