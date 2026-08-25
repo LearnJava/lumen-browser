@@ -16,6 +16,7 @@ use crate::box_tree::{BoxKind, LayoutBox};
 use crate::style::{
     matches_complex, AlignValue, BackgroundImage, BackgroundLayer, BorderStyle, BoxSizing,
     ClearSide, Color,
+    ContainFlags, ContentVisibility,
     CssColor,
     Cursor, Direction, Display, FilterFn, FloatSide, FontStretch, FontStyle, FontWeight,
     FontVariantCaps, FontVariantEmoji, Isolation, Length, LengthOrAuto, MixBlendMode, Overflow,
@@ -1045,7 +1046,59 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         PointerEvents::Stroke => "stroke",
     }.into());
 
+    // ── Containment (CSS Containment L3 §3–§4, CSS Box Sizing L4 §5) ───────
+    // BUG-852: both properties reach layout (the skip decision and the size
+    // placeholder are live) but had no entry here, so a page could set them and
+    // never read them back — `getComputedStyle(el).contentVisibility` answered
+    // `""`, which is not a value the property can ever take.
+    m.insert("content-visibility".into(), match style.content_visibility {
+        ContentVisibility::Visible => "visible",
+        ContentVisibility::Auto => "auto",
+        ContentVisibility::Hidden => "hidden",
+    }.into());
+    m.insert("contain".into(), contain_to_css(style.contain));
+    let cis_w = contain_intrinsic_to_css(
+        style.contain_intrinsic_width_auto, style.contain_intrinsic_width.as_ref());
+    let cis_h = contain_intrinsic_to_css(
+        style.contain_intrinsic_height_auto, style.contain_intrinsic_height.as_ref());
+    // CSSOM §6.2: a shorthand serialises to one component when both axes agree.
+    m.insert("contain-intrinsic-size".into(),
+             if cis_w == cis_h { cis_w.clone() } else { format!("{cis_w} {cis_h}") });
+    m.insert("contain-intrinsic-width".into(), cis_w);
+    m.insert("contain-intrinsic-height".into(), cis_h);
+
     m
+}
+
+/// Serialises [`ContainFlags`] the way CSS Containment L3 §3 asks for: the
+/// `none` keyword when empty, and otherwise the individual keywords in
+/// canonical order — never the `strict`/`content` shorthand keywords, which the
+/// spec defines as computing to the set they expand to.
+fn contain_to_css(flags: ContainFlags) -> String {
+    if flags == ContainFlags::NONE {
+        return "none".into();
+    }
+    let mut out: Vec<&str> = Vec::with_capacity(5);
+    for (bit, name) in [
+        (ContainFlags::SIZE, "size"),
+        (ContainFlags::INLINE_SIZE, "inline-size"),
+        (ContainFlags::LAYOUT, "layout"),
+        (ContainFlags::STYLE, "style"),
+        (ContainFlags::PAINT, "paint"),
+    ] {
+        if flags.0 & bit.0 != 0 {
+            out.push(name);
+        }
+    }
+    out.join(" ")
+}
+
+/// Serialises one axis of `contain-intrinsic-size`: `auto? [ none | <length> ]`.
+/// The `auto` keyword is behaviourally ignored by layout but is part of the
+/// computed value, so it must survive the round-trip (BUG-852).
+fn contain_intrinsic_to_css(auto: bool, len: Option<&Length>) -> String {
+    let base = len.map_or_else(|| "none".to_string(), length_to_css);
+    if auto { format!("auto {base}") } else { base }
 }
 
 /// Serialises a [`ComputedStyle`] into a deterministic JSON object string.
@@ -1585,6 +1638,65 @@ mod tests {
             m.get("scrollbar-color").map(String::as_str),
             Some("rgb(0, 255, 0) rgb(255, 0, 0)")
         );
+    }
+
+    // ── computed_style_to_map: BUG-852 containment additions ─────────────────
+
+    #[test]
+    fn computed_map_containment_defaults() {
+        // All five keys were absent before BUG-852, so `getComputedStyle`
+        // answered `""` — a value neither property can ever take.
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("content-visibility").map(String::as_str), Some("visible"));
+        assert_eq!(m.get("contain").map(String::as_str), Some("none"));
+        assert_eq!(m.get("contain-intrinsic-size").map(String::as_str), Some("none"));
+        assert_eq!(m.get("contain-intrinsic-width").map(String::as_str), Some("none"));
+        assert_eq!(m.get("contain-intrinsic-height").map(String::as_str), Some("none"));
+    }
+
+    #[test]
+    fn computed_map_content_visibility_auto() {
+        let m = div_computed_map("<div>x</div>", "div { content-visibility: auto; }");
+        assert_eq!(m.get("content-visibility").map(String::as_str), Some("auto"));
+        let m = div_computed_map("<div>x</div>", "div { content-visibility: hidden; }");
+        assert_eq!(m.get("content-visibility").map(String::as_str), Some("hidden"));
+    }
+
+    #[test]
+    fn computed_map_contain_expands_shorthand_keywords() {
+        // CSS Containment L3 §3: `strict`/`content` compute to the set they
+        // expand to, so neither keyword may appear in the computed value.
+        let m = div_computed_map("<div>x</div>", "div { contain: layout paint; }");
+        assert_eq!(m.get("contain").map(String::as_str), Some("layout paint"));
+        let m = div_computed_map("<div>x</div>", "div { contain: content; }");
+        assert_eq!(m.get("contain").map(String::as_str), Some("layout style paint"));
+    }
+
+    #[test]
+    fn computed_map_contain_intrinsic_size_keeps_auto_keyword() {
+        // The `auto` keyword changes nothing in layout, which is why the
+        // parser used to drop it — but it is part of the computed value, so
+        // `auto 1px` must not read back as `1px`.
+        let m = div_computed_map("<div>x</div>", "div { contain-intrinsic-size: auto 1px; }");
+        assert_eq!(m.get("contain-intrinsic-size").map(String::as_str), Some("auto 1px"));
+        assert_eq!(m.get("contain-intrinsic-width").map(String::as_str), Some("auto 1px"));
+        assert_eq!(m.get("contain-intrinsic-height").map(String::as_str), Some("auto 1px"));
+    }
+
+    #[test]
+    fn computed_map_contain_intrinsic_size_two_components() {
+        let m = div_computed_map("<div>x</div>", "div { contain-intrinsic-size: 30px 40px; }");
+        assert_eq!(m.get("contain-intrinsic-size").map(String::as_str), Some("30px 40px"));
+        assert_eq!(m.get("contain-intrinsic-width").map(String::as_str), Some("30px"));
+        assert_eq!(m.get("contain-intrinsic-height").map(String::as_str), Some("40px"));
+        // A longhand set on its own leaves the other axis at `none`.
+        // (Relative units are not absolutised here — `length_to_css` reports
+        // `5em` as `5em` for every length property in this map, not just this
+        // one; that is a pre-existing property of the snapshot, so the case is
+        // written in px rather than papering over it.)
+        let m = div_computed_map("<div>x</div>", "div { contain-intrinsic-height: 80px; }");
+        assert_eq!(m.get("contain-intrinsic-width").map(String::as_str), Some("none"));
+        assert_eq!(m.get("contain-intrinsic-size").map(String::as_str), Some("none 80px"));
     }
 
     #[test]
