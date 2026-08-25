@@ -14442,6 +14442,17 @@ pub(crate) const IDB_SHIM: &str = "
 var _idb_databases = {};          // name -> { name, version, stores }
 var _idb_active_txns = [];        // transactions with pending request dispatches
 var _idb_pending_opens = [];      // IDBOpenDBRequest dispatch entries
+// Connection queues (Indexed DB §3.3.1). An upgrade or a delete needs exclusive
+// access to the database, so it may not run while another connection is open:
+// every live IDBDatabase is registered here by name, the request broadcasts
+// `versionchange` to them, fires `blocked` at itself while any of them is still
+// open, and is parked until close() empties the list. Parking (rather than
+// re-queueing) is what keeps a blocked request from spinning the event loop the
+// way BUG-842's unbounded drain did: nothing reschedules a flush for it, and
+// close() is the only thing that can wake it.
+var _idb_connections = {};        // name -> [IDBDatabase] (open or close-pending)
+var _idb_parked_opens = [];       // entries waiting for connections to close, in queue order
+var _idb_parked_names = {};       // name -> true while that name's queue is blocked
 var _idb_flush_scheduled = false; // a flush is pending (microtask or task)
 var _idb_flushing = false;        // a flush is running right now
 var _idb_dirty = false;           // set by any mutation; drives persistence at flush end
@@ -14695,14 +14706,36 @@ function IDBOpenDBRequest() {
     this.onupgradeneeded = null;
     this.onblocked = null;
     this._upgradeListeners = [];
+    this._blockedListeners = [];
 }
 IDBOpenDBRequest.prototype = Object.create(IDBRequest.prototype);
 IDBOpenDBRequest.prototype.constructor = IDBOpenDBRequest;
 IDBOpenDBRequest.prototype.addEventListener = function(type, fn) {
     if (typeof fn !== 'function') return;
     if (type === 'upgradeneeded') this._upgradeListeners.push(fn);
+    else if (type === 'blocked') this._blockedListeners.push(fn);
     else IDBRequest.prototype.addEventListener.call(this, type, fn);
 };
+IDBOpenDBRequest.prototype.removeEventListener = function(type, fn) {
+    var arr = type === 'upgradeneeded' ? this._upgradeListeners
+            : (type === 'blocked' ? this._blockedListeners : null);
+    if (!arr) { IDBRequest.prototype.removeEventListener.call(this, type, fn); return; }
+    var i = arr.indexOf(fn);
+    if (i >= 0) arr.splice(i, 1);
+};
+
+// Fires `blocked` at an open/delete request whose database still has another
+// connection open (Indexed DB §3.3.1 step «fire blocked»). Delete carries
+// newVersion = null.
+function _idb_fire_blocked(req, oldVersion, newVersion) {
+    var ev = _idb_make_event('blocked', req, { oldVersion: oldVersion, newVersion: newVersion });
+    if (typeof req.onblocked === 'function') {
+        try { req.onblocked(ev); } catch(e) { _lumen_console_error('IDB onblocked: ' + e); }
+    }
+    for (var i = 0; i < req._blockedListeners.length; i++) {
+        try { req._blockedListeners[i](ev); } catch(e) { _lumen_console_error('IDB blocked listener: ' + e); }
+    }
+}
 
 function _idb_make_event(type, target, extra) {
     var ev = { type: type, target: target, currentTarget: target, bubbles: false, _prevented: false };
@@ -15020,11 +15053,119 @@ function IDBDatabase(data) {
     this.name = data.name;
     this.version = data.version;
     this._upgradeTxn = null;
+    // «close pending» (Indexed DB §3.3.9): set synchronously by close(), which is
+    // what refuses further transaction() calls. The connection itself stays
+    // registered until its running transactions have finished — see
+    // _idb_conn_open.
     this._closed = false;
+    this._txns = [];
     this.onversionchange = null;
     this.onabort = null;
     this.onerror = null;
     this.onclose = null;
+    // Only `versionchange` has a dispatch site today; the other three types are
+    // accepted so a page can register for them without a TypeError.
+    this._dbListeners = { versionchange: [], abort: [], error: [], close: [] };
+}
+IDBDatabase.prototype.addEventListener = function(type, fn) {
+    if (typeof fn !== 'function') return;
+    var arr = this._dbListeners[type];
+    if (arr) arr.push(fn);
+};
+IDBDatabase.prototype.removeEventListener = function(type, fn) {
+    var arr = this._dbListeners[type];
+    if (!arr) return;
+    var i = arr.indexOf(fn);
+    if (i >= 0) arr.splice(i, 1);
+};
+
+// Fires an event at a connection, on<type> first and then the listener list —
+// the same order every other dispatch in this shim uses.
+function _idb_fire_db_event(db, type, extra) {
+    var ev = _idb_make_event(type, db, extra);
+    var handler = db['on' + type];
+    if (typeof handler === 'function') {
+        try { handler(ev); } catch(e) { _lumen_console_error('IDB db on' + type + ': ' + e); }
+    }
+    var arr = db._dbListeners[type] || [];
+    for (var i = 0; i < arr.length; i++) {
+        try { arr[i](ev); } catch(e) { _lumen_console_error('IDB db ' + type + ' listener: ' + e); }
+    }
+}
+
+// A connection blocks an upgrade until close() has been called AND every
+// transaction it started has finished (Indexed DB §3.3.9 «close a database
+// connection»): running the upgrade under a transaction that is still writing
+// would tear the database apart. Prunes settled transactions on the way past, so
+// a long-lived connection's list stays the size of its concurrent work.
+function _idb_conn_open(db) {
+    var live = [];
+    for (var i = 0; i < db._txns.length; i++) if (!db._txns[i]._settled) live.push(db._txns[i]);
+    db._txns = live;
+    return !db._closed || live.length > 0;
+}
+
+// Connections of `name` that are still open, excluding `exclude` (the connection
+// the requesting open() is itself creating). Fully closed ones are dropped from
+// the registry here — this is the only place it is read, so a lazy sweep is
+// equivalent to reaping them the moment their last transaction settles.
+function _idb_live_connections(name, exclude) {
+    var arr = _idb_connections[name];
+    if (!arr) return [];
+    var kept = [], out = [];
+    for (var i = 0; i < arr.length; i++) {
+        if (!_idb_conn_open(arr[i])) continue;
+        kept.push(arr[i]);
+        if (arr[i] !== exclude) out.push(arr[i]);
+    }
+    if (kept.length > 0) _idb_connections[name] = kept; else delete _idb_connections[name];
+    return out;
+}
+
+// Indexed DB §3.3.9 «close a database connection». Called by close() and by an
+// open request whose version change transaction aborted — that connection is
+// never handed to the page, so leaving it registered would block every queued
+// upgrade and delete on that name for the lifetime of the document.
+function _idb_close_connection(db) {
+    db._closed = true;
+    // The connection may still be holding a running transaction, in which case
+    // _idb_unpark finds it open and the parked requests wait — the end-of-flush
+    // sweep in _lumen_idb_flush releases them when it settles.
+    _idb_unpark(db.name);
+}
+
+function _idb_register_connection(db) {
+    var arr = _idb_connections[db.name];
+    if (!arr) { arr = []; _idb_connections[db.name] = arr; }
+    if (arr.indexOf(db) < 0) arr.push(db);
+}
+
+// Parks a blocked open/delete entry and blocks the whole rest of that name's
+// queue: §3.3.1 processes a connection queue in order, so a request behind a
+// blocked one must not overtake it even when it needs no exclusive access.
+function _idb_park_open(name, entry) {
+    _idb_parked_names[name] = true;
+    _idb_parked_opens.push(entry);
+}
+
+// Wakes a name's parked requests once its last connection has closed, putting
+// them back at the FRONT of the pending queue in their original order.
+// Returns true when it actually released something, so the flush can drain them
+// in the same turn.
+function _idb_unpark(name) {
+    if (!_idb_parked_names[name]) return false;
+    if (_idb_live_connections(name, null).length > 0) return false;
+    delete _idb_parked_names[name];
+    var move = [], keep = [];
+    for (var i = 0; i < _idb_parked_opens.length; i++) {
+        if (_idb_parked_opens[i].name === name) move.push(_idb_parked_opens[i]);
+        else keep.push(_idb_parked_opens[i]);
+    }
+    _idb_parked_opens = keep;
+    if (move.length === 0) return false;
+    _idb_pending_opens = move.concat(_idb_pending_opens);
+    _idb_schedule_flush();
+    return true;
 }
 Object.defineProperty(IDBDatabase.prototype, 'objectStoreNames', {
     get: function() { return Object.keys(this._data.stores).sort(); }
@@ -15079,6 +15220,10 @@ IDBDatabase.prototype.transaction = function(storeNames, mode, options) {
     if (storeNames.length === 0) throw _idb_error('InvalidAccessError', 'empty store scope');
     if (mode === 'versionchange') throw new TypeError('a versionchange transaction cannot be created with transaction()');
     var txn = new IDBTransaction(this, storeNames, mode, durability);
+    // Keeps the connection open for §3.3.9 until this transaction finishes;
+    // pruning here bounds the list to the connection's concurrent transactions.
+    _idb_conn_open(this);
+    this._txns.push(txn);
     // Indexed DB §3.1.7: a transaction is created active and commits as soon as
     // control returns to the event loop with no request of its own left — it
     // does NOT need a request to reach a terminal state. Queueing it here rather
@@ -15087,7 +15232,7 @@ IDBDatabase.prototype.transaction = function(storeNames, mode, options) {
     _idb_schedule_txn(txn);
     return txn;
 };
-IDBDatabase.prototype.close = function() { this._closed = true; };
+IDBDatabase.prototype.close = function() { _idb_close_connection(this); };
 
 // --- IDBObjectStore (Indexed DB §3.2) ----------------------------------------
 
@@ -15516,7 +15661,65 @@ function _idb_open_cursor(source, txn, store, buildList, withValue, direction) {
 // version change transaction has committed (Indexed DB §3.3.1).
 function _idb_process_open(entry, budget) {
     var req = entry.req;
-    if (req.error) { _idb_dispatch_request(req); return budget - 1; }
+    var name = entry.name;
+    // Everything below runs once, when the connection queue lets this request
+    // through — NOT when open()/deleteDatabase() was called. A request that
+    // waited behind a delete must see the database as the delete left it, so the
+    // version comparison, the VersionError and the connection itself are all
+    // resolved here (Indexed DB §3.3.1 «open a database» / «delete a database»).
+    if (!entry._started) {
+        var existing = _idb_databases[name];
+        if (entry._delete) {
+            entry.oldVersion = existing ? existing.version : 0;
+            entry.newVersion = null;
+        } else {
+            entry.oldVersion = existing ? existing.version : 0;
+            entry.newVersion = (entry.version === undefined)
+                ? (existing ? existing.version : 1)
+                : entry.version;
+            if (existing && entry.newVersion < entry.oldVersion) {
+                entry._started = true;
+                req.error = _idb_error('VersionError', 'requested version is lower than the existing version');
+                _idb_dispatch_request(req);
+                return budget - 1;
+            }
+            entry.upgrade = entry.newVersion > entry.oldVersion;
+        }
+        // An upgrade and a delete both need exclusive access: tell every other
+        // connection to get out of the way, then wait for it to actually do so.
+        if (entry.upgrade || entry._delete) {
+            if (!entry._vcSent) {
+                entry._vcSent = true;
+                var others = _idb_live_connections(name, null);
+                for (var c = 0; c < others.length; c++) {
+                    _idb_fire_db_event(others[c], 'versionchange', { oldVersion: entry.oldVersion, newVersion: entry.newVersion });
+                }
+            }
+            // Re-read: a versionchange handler is allowed to close() inline, and
+            // then this request is not blocked at all.
+            if (_idb_live_connections(name, null).length > 0) {
+                if (!entry._blockedFired) {
+                    entry._blockedFired = true;
+                    _idb_fire_blocked(req, entry.oldVersion, entry.newVersion);
+                }
+                _idb_park_open(name, entry);
+                return budget - 1;
+            }
+        }
+        entry._started = true;
+        if (entry._delete) {
+            delete _idb_databases[name];
+        } else {
+            var data = _idb_databases[name];
+            if (!data) { data = { name: name, version: 0, stores: {} }; _idb_databases[name] = data; }
+            entry.data = data;
+            entry.db = new IDBDatabase(data);
+            req.result = entry.db;
+            // Registered before onupgradeneeded runs: a delete queued behind this
+            // open must see the connection the upgrade is holding.
+            _idb_register_connection(entry.db);
+        }
+    }
     // A version upgrade (store/index creation, version bump) or a database
     // deletion mutates the persisted snapshot.
     if (entry.upgrade || entry._delete) _idb_dirty = true;
@@ -15528,6 +15731,9 @@ function _idb_process_open(entry, budget) {
             txn._isUpgrade = true;
             entry._txn = txn;
             db._upgradeTxn = txn;
+            // A close() inside onupgradeneeded must not let a queued delete run
+            // over an upgrade that is still applying its schema (§3.3.9).
+            db._txns.push(txn);
             // Eagerly, unlike an ordinary transaction: the version is bumped on
             // the next line, before any handler can mutate anything, and an
             // aborted upgrade has to give the old version back too.
@@ -15567,6 +15773,7 @@ function _idb_process_open(entry, budget) {
             // wins — it is the more specific reason.
             if (!req.error) { req.error = _idb_error('AbortError', 'version change transaction was aborted'); }
             req.result = undefined;
+            _idb_close_connection(entry.db);
             _idb_dispatch_request(req);
             return budget;
         }
@@ -15574,7 +15781,11 @@ function _idb_process_open(entry, budget) {
     }
     req.readyState = 'done';
     req.error = null;
-    var ev2 = _idb_make_event('success', req);
+    // deleteDatabase's success is an IDBVersionChangeEvent (§3.3.1): oldVersion
+    // is what was deleted, newVersion is null.
+    var ev2 = entry._delete
+        ? _idb_make_event('success', req, { oldVersion: entry.oldVersion, newVersion: null })
+        : _idb_make_event('success', req);
     if (typeof req.onsuccess === 'function') {
         try { req.onsuccess(ev2); } catch(e) { _lumen_console_error('IDB open onsuccess: ' + e); }
     }
@@ -15596,9 +15807,28 @@ function _lumen_idb_flush() {
     // early, so the drain keeps its original backstop instead of a budget.
     var budget = _idb_has_task_queue() ? _IDB_FLUSH_BUDGET : 1000000;
     try {
-        while (budget > 0 && (_idb_pending_opens.length > 0 || _idb_active_txns.length > 0)) {
-            if (_idb_pending_opens.length > 0) { budget = _idb_process_open(_idb_pending_opens.shift(), budget); continue; }
-            budget = _idb_flush_txn(_idb_active_txns.shift(), budget);
+        var woke = true;
+        while (woke) {
+            woke = false;
+            while (budget > 0 && (_idb_pending_opens.length > 0 || _idb_active_txns.length > 0)) {
+                if (_idb_pending_opens.length > 0) {
+                    var entry = _idb_pending_opens.shift();
+                    // A request whose name is already blocked may not overtake the
+                    // one that is waiting there, whatever it needs (§3.3.1).
+                    if (_idb_parked_names[entry.name]) { _idb_parked_opens.push(entry); continue; }
+                    budget = _idb_process_open(entry, budget);
+                    continue;
+                }
+                budget = _idb_flush_txn(_idb_active_txns.shift(), budget);
+            }
+            // A connection whose close() was deferred by a running transaction is
+            // released when that transaction settles, which happens in the drain
+            // above and nowhere else — so this is where such a wait ends, and the
+            // requests it frees run in this same turn rather than the next one.
+            if (budget > 0) {
+                var parked = Object.keys(_idb_parked_names);
+                for (var p = 0; p < parked.length; p++) if (_idb_unpark(parked[p])) woke = true;
+            }
         }
         _idb_persist_if_dirty();
     } finally {
@@ -15616,38 +15846,22 @@ var indexedDB = {
             version = Math.floor(version);
         }
         var req = new IDBOpenDBRequest();
-        var existing = _idb_databases[name];
-        var oldVersion = existing ? existing.version : 0;
-        var newVersion = (version === undefined) ? (existing ? existing.version : 1) : version;
-        if (existing && newVersion < oldVersion) {
-            req.error = _idb_error('VersionError', 'requested version is lower than the existing version');
-            _idb_pending_opens.push({ req: req });
-            _idb_schedule_flush();
-            return req;
-        }
-        var data = existing;
-        if (!data) { data = { name: name, version: 0, stores: {} }; _idb_databases[name] = data; }
-        var db = new IDBDatabase(data);
-        req.result = db;
-        _idb_pending_opens.push({
-            req: req,
-            upgrade: newVersion > data.version,
-            oldVersion: data.version,
-            newVersion: newVersion,
-            db: db,
-            data: data
-        });
+        // Nothing but the argument check happens now: the request joins this
+        // name's connection queue and every decision it makes — the version
+        // comparison, the connection, the upgrade — is taken when the queue
+        // reaches it (§3.3.1), because a request ahead of it may still delete or
+        // upgrade the database.
+        _idb_pending_opens.push({ req: req, name: name, version: version });
         _idb_schedule_flush();
         return req;
     },
     deleteDatabase: function(name) {
         name = String(name);
         var req = new IDBOpenDBRequest();
-        var existing = _idb_databases[name];
         req.result = undefined;
-        var old = existing ? existing.version : 0;
-        delete _idb_databases[name];
-        _idb_pending_opens.push({ req: req, oldVersion: old, newVersion: null, _delete: true });
+        // Deferred for the same reason as open(), and additionally because the
+        // deletion itself may not happen while another connection is open.
+        _idb_pending_opens.push({ req: req, name: name, _delete: true });
         _idb_schedule_flush();
         return req;
     },
@@ -35944,6 +36158,204 @@ mod tests {
         }
 
         #[test]
+        fn idb_upgrade_sends_versionchange_and_waits_for_close() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var log = [], db1 = null;
+                var r1 = indexedDB.open('d', 1);
+                r1.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                r1.onsuccess = function(e) { db1 = e.target.result; };
+                _lumen_idb_flush();
+
+                db1.addEventListener('versionchange', function(e) {
+                    log.push('versionchange ' + e.oldVersion + '->' + e.newVersion);
+                });
+                var r2 = indexedDB.open('d', 2);
+                r2.addEventListener('blocked', function(e) {
+                    log.push('blocked ' + e.oldVersion + '->' + e.newVersion);
+                });
+                r2.onupgradeneeded = function() { log.push('upgradeneeded'); };
+                r2.onsuccess = function() { log.push('success'); };
+                _lumen_idb_flush();
+                log.push('|parked, version still ' + _idb_databases['d'].version);
+
+                db1.close();
+                _lumen_idb_flush();
+                log.join(',')
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "versionchange 1->2,blocked 1->2,|parked, version still 1,upgradeneeded,success"
+                        .into()
+                )
+            );
+        }
+
+        #[test]
+        fn idb_upgrade_is_not_blocked_by_a_closed_connection() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var log = [], db1 = null;
+                var r1 = indexedDB.open('d', 1);
+                r1.onsuccess = function(e) { db1 = e.target.result; };
+                _lumen_idb_flush();
+                db1.onversionchange = function() { log.push('versionchange'); };
+                db1.close();
+                var r2 = indexedDB.open('d', 2);
+                r2.onblocked = function() { log.push('blocked'); };
+                r2.onsuccess = function() { log.push('success v' + r2.result.version); };
+                _lumen_idb_flush();
+                log.join(',')
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("success v2".into()));
+        }
+
+        #[test]
+        fn idb_versionchange_handler_may_close_inline() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var log = [], db1 = null;
+                var r1 = indexedDB.open('d', 1);
+                r1.onsuccess = function(e) { db1 = e.target.result; };
+                _lumen_idb_flush();
+                db1.onversionchange = function() { log.push('versionchange'); db1.close(); };
+                var r2 = indexedDB.open('d', 2);
+                r2.onblocked = function() { log.push('blocked'); };
+                r2.onsuccess = function() { log.push('success'); };
+                _lumen_idb_flush();
+                log.join(',')
+            "#).unwrap();
+            // Closing inside the handler unblocks the request in the same turn,
+            // so `blocked` must not be fired at all (§3.3.1 re-checks after the
+            // versionchange broadcast).
+            assert_eq!(r, lumen_core::JsValue::String("versionchange,success".into()));
+        }
+
+        #[test]
+        fn idb_delete_database_blocks_on_an_open_connection() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var log = [], db1 = null;
+                var r1 = indexedDB.open('d', 3);
+                r1.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                r1.onsuccess = function(e) { db1 = e.target.result; };
+                _lumen_idb_flush();
+
+                db1.onversionchange = function(e) { log.push('versionchange ' + e.oldVersion + '->' + e.newVersion); };
+                var rd = indexedDB.deleteDatabase('d');
+                rd.onblocked = function(e) { log.push('blocked ' + e.oldVersion + '->' + e.newVersion); };
+                rd.onsuccess = function(e) { log.push('deleted ' + e.oldVersion + '->' + e.newVersion); };
+                _lumen_idb_flush();
+                log.push('|still there: ' + (_idb_databases['d'] ? 'yes' : 'no'));
+
+                db1.close();
+                _lumen_idb_flush();
+                log.push('|still there: ' + (_idb_databases['d'] ? 'yes' : 'no'));
+                log.join(',')
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "versionchange 3->null,blocked 3->null,|still there: yes,deleted 3->null,|still there: no"
+                        .into()
+                )
+            );
+        }
+
+        #[test]
+        fn idb_open_behind_a_delete_sees_the_deleted_database() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var log = [];
+                var r1 = indexedDB.open('d', 5);
+                r1.onsuccess = function() { r1.result.close(); };
+                _lumen_idb_flush();
+                // Queued in one turn: the open must resolve its version against
+                // what the delete ahead of it leaves behind, not against what the
+                // database looked like when open() was called.
+                indexedDB.deleteDatabase('d');
+                var r2 = indexedDB.open('d');
+                r2.onupgradeneeded = function(e) { log.push('upgrade ' + e.oldVersion + '->' + e.newVersion); };
+                r2.onsuccess = function() { log.push('v' + r2.result.version); };
+                _lumen_idb_flush();
+                log.join(',')
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("upgrade 0->1,v1".into()));
+        }
+
+        #[test]
+        fn idb_open_and_delete_requests_form_a_fifo_queue() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                // The scenario of WPT IndexedDB/open-request-queue.any.js, with
+                // the deferred close driven explicitly instead of by setTimeout.
+                var log = [], held = [], db = null;
+                var r0 = indexedDB.open('q', 1);
+                r0.onsuccess = function() { db = r0.result; };
+                _lumen_idb_flush();
+
+                function open(token, version) {
+                    var r = indexedDB.open('q', version);
+                    r.onsuccess = function() {
+                        log.push(token + ' success');
+                        var d = r.result;
+                        d.onversionchange = function() { log.push(token + ' versionchange'); held.push(d); };
+                    };
+                    r.onblocked = function() { log.push(token + ' blocked'); };
+                }
+                function del(token) {
+                    var r = indexedDB.deleteDatabase('q');
+                    r.onsuccess = function() { log.push(token + ' success'); };
+                    r.onblocked = function() { log.push(token + ' blocked'); };
+                }
+                open('open1', 2);
+                del('delete1');
+                open('open2', 3);
+                del('delete2');
+                db.close();
+
+                for (var i = 0; i < 8; i++) {
+                    _lumen_idb_flush();
+                    while (held.length > 0) held.shift().close();
+                }
+                log.join(',')
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "open1 success,open1 versionchange,delete1 blocked,delete1 success,\
+                     open2 success,open2 versionchange,delete2 blocked,delete2 success"
+                        .into()
+                )
+            );
+        }
+
+        #[test]
+        fn idb_close_waits_for_a_running_transaction() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var log = [], db1 = null;
+                var r1 = indexedDB.open('d', 1);
+                r1.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                r1.onsuccess = function(e) { db1 = e.target.result; };
+                _lumen_idb_flush();
+
+                var tx = db1.transaction('s', 'readwrite');
+                tx.objectStore('s').put(1, 'k');
+                tx.oncomplete = function() { log.push('txn complete'); };
+                // close() is close-pending: the connection keeps blocking the
+                // upgrade until its transaction has finished (§3.3.9).
+                db1.close();
+                var r2 = indexedDB.open('d', 2);
+                r2.onupgradeneeded = function() { log.push('upgradeneeded'); };
+                _lumen_idb_flush();
+                log.join(',')
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("txn complete,upgradeneeded".into()));
+        }
+
+        #[test]
         fn idb_open_version_downgrade_errors() {
             let rt = v8_runtime_with_dom(make_doc());
             let r = rt.eval(r#"
@@ -36120,7 +36532,8 @@ mod tests {
                 rt.eval(r#"
                     var req = indexedDB.open('d', 1);
                     req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
-                    req.onsuccess = function() {};
+                    // Closed before the delete: an open connection blocks it (§3.3.1).
+                    req.onsuccess = function(e) { e.target.result.close(); };
                     _lumen_idb_flush();
                     indexedDB.deleteDatabase('d');
                     _lumen_idb_flush();

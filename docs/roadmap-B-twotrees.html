@@ -76,11 +76,11 @@
  "generated": "2026-08-25",
  "counts": {
   "open": 385,
-  "fixed": 487,
+  "fixed": 488,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 872,
+ "total_bugs": 873,
  "phases": [
   {
    "id": "P0",
@@ -11001,10 +11001,10 @@
    "debtor": false
   },
   "BUG-843": {
-   "status": "open",
+   "status": "fixed",
    "title": "Нет очереди соединений: второй `open()` с большей версией апгрейдит базу под живым соединением, `versionchange` и `blocked` не приходят никогда (замер `--varian…",
    "component": "js (`crates/js/src/dom.rs:13023` — `indexedDB.open` смотрит только на запись базы; `:12509` `onversionchange` и `:12351` `onblocked` объявлены и не диспатчатся ниоткуда)",
-   "date": null,
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-844": {
@@ -11492,7 +11492,7 @@
   },
   "BUG-914": {
    "status": "open",
-   "title": "IndexedDB: события `error`/`abort` не всплывают по пути `request → transaction → database` (§3.5.6), у `IDBDatabase` нет и `addEventListener`. `db.onabort`/`db.…",
+   "title": "IndexedDB: события `error`/`abort` не всплывают по пути `request → transaction → database` (§3.5.6). `db.onabort`/`db.onerror` не вызываются никогда (`IDBDataba…",
    "component": "js (`crates/js/src/dom.rs` — `_idb_dispatch_request` стреляет `error` только по самому `IDBRequest`; `_idb_fire_txn` — только по самой `IDBTransaction`; `IDBDatabase.onabort`/`onerror` объявлены в конструкторе и не зовутся ниоткуда)",
    "date": null,
    "debtor": false
@@ -11508,6 +11508,13 @@
    "status": "open",
    "title": "IndexedDB: запрос выполняется против схемы на момент ДОСТАВКИ, а не постановки в очередь — `deleteIndex`, написанный последней строкой скрипта, отменяет уникаль…",
    "component": "js (`crates/js/src/dom.rs` — отложенная модель: `_idb_make_request` кладёт замыкание, `_idb_dispatch_request` выполняет его при флаше, тогда как `IDBObjectStore.prototype.createIndex`/`deleteIndex` правят `store.indexes` синхронно)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-917": {
+   "status": "open",
+   "title": "IndexedDB: любой «грязный» флаш пересериализует ВЕСЬ снапшот баз происхождения и перезеркаливает ВСЮ схему, O(все базы × все хранилища × все индексы) — инкремен…",
+   "component": "js (`crates/js/src/dom.rs` — `_idb_persist_if_dirty` в конце `_lumen_idb_flush`; `_idb_serialize` — `JSON.stringify` всего `_idb_databases`; `_idb_persist_schema` — обход всех баз/хранилищ/индексов с отдельным `_lumen_idb_schema_op` на строку)",
    "date": null,
    "debtor": false
   }
@@ -11989,6 +11996,9 @@
   ],
   "js (`crates/js/src/dom.rs` — `_idb_flush_txn`, ветка `_aborted`: гасит очередь и стреляет `abort`, но не трогает данные; `IDBObjectStore.prototype._write` и соседние мутирующие действия пишут в `store.records` без журнала отмены)": [
    "BUG-913"
+  ],
+  "js (`crates/js/src/dom.rs` — `_idb_persist_if_dirty` в конце `_lumen_idb_flush`; `_idb_serialize` — `JSON.stringify` всего `_idb_databases`; `_idb_persist_schema` — обход всех баз/хранилищ/индексов с отдельным `_lumen_idb_schema_op` на строку)": [
+   "BUG-917"
   ],
   "js (`crates/js/src/dom.rs` — `_lumen_fetch`), core (`crates/core/src/ext.rs::JsFetchProvider`), network (`crates/network/src/lib.rs`)": [
    "BUG-749"

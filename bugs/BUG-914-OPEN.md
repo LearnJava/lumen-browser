@@ -22,7 +22,10 @@ Indexed DB §3.5.6: `error` у `IDBRequest` и `abort` у `IDBTransaction` —
 `error` в `_idb_dispatch_request` строится с `bubbles: true`, но диспетчер
 обходит только слушателей самого запроса; `_idb_fire_txn` — только слушателей
 самой транзакции. `IDBDatabase.onabort`/`onerror` объявлены в конструкторе и не
-вызываются ниоткуда, `IDBDatabase` вообще не имеет `addEventListener`.
+вызываются ниоткуда. `IDBDatabase.addEventListener`/`removeEventListener`
+появились в [BUG-843](BUG-843-FIXED.md) (2026-08-25) и принимают в том числе
+`abort`/`error` — но диспетчера у этих двух типов по-прежнему нет, так что
+регистрация теперь не бросает `TypeError` и всё так же ничего не даёт.
 
 Своя механика диспетчеризации у IndexedDB-шима (а не общий `_lumen_dispatch`)
 — причина, по которой сюда не дотянулась ни одна из общих правок событийного
