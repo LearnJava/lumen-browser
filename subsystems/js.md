@@ -1575,6 +1575,54 @@ the time — read dates.
     variants with the three stream controls unmoved; `dump_golden.py` 12/12, so the change is
     display-list neutral.
 
+- **Resource Timing L2 — entries, buffer and the observer's third argument
+  ([BUG-839](../bugs/BUG-839-FIXED.md), 2026-08-25).** The report named one defect
+  ("the producer function has no caller"); there were four, and three of them mean the
+  entry has nowhere to go even once it exists.
+  - **The loads split in two, and the halves live in different crates.** What the page
+    starts itself records in the shim, where the call's real `performance.now()` is:
+    one point (`_perf_rt_record_fetch`, called from `_lumen_fetch`) covers four initiator
+    kinds at once, because since BUG-703/BUG-826 an external `<script src>`, a stylesheet
+    `<link>` and the whole `rel=preload` family all load through `fetch()`. That is why
+    `initiatorType` is a *parameter* (`init._lumenInitiatorType`) and not derived from the
+    URL — otherwise a stylesheet would report itself as `fetch`. `XMLHttpRequest` is fixed
+    separately in `xhr.rs`: it is its own `rt.eval`, so a change inside `WEB_API_SHIM`
+    never reaches it (the BUG-780 lesson). The engine's own subresources are the shell's
+    half — see [`network.md`](network.md) and [`shell.md`](shell.md).
+  - **The §4.4 buffer did not exist.** `setResourceTimingBufferSize` was
+    `function(_maxSize) {}` and `clearResourceTimings` never reset the count. Implemented
+    whole: the limit (250), the secondary buffer, the pending flag, the
+    `resourcetimingbufferfull` event and the spec's loop that copies the entries back in
+    when the page makes room from inside the handler. Resetting the count in
+    `clearResourceTimings` is not bookkeeping but half the operation — it is the *only*
+    way a page can make that room. The event is queued into `_lumen_timers` with
+    `nesting: 0` (the BUG-832 technique), never dispatched inline: the handler is assigned
+    after the overflowing load at least as often as before it.
+  - **`onresourcetimingbufferfull` was a plain expando**, so
+    `'onresourcetimingbufferfull' in performance` answered `false` and every feature
+    detection read the API as absent although assignment "worked". Now an accessor on
+    `Performance.prototype`.
+  - **The callback took two arguments.** Performance Timeline L2 §6.2.1 wants three;
+    `options.droppedEntriesCount` therefore threw a `TypeError` *inside* the callback,
+    which the surrounding catch then ate (BUG-840). `droppedEntriesCount` is present only
+    while the observer's «requires dropped entries» flag is up — raised by **every**
+    `observe()`, lowered by the first delivery that reports it — and counts `resource`
+    only: that is the engine's one bounded buffer, and a non-zero number for an unbounded
+    type would be a claim the page cannot check.
+  - **Buffer and observer stream are separate sinks.** An entry the buffer refuses is
+    still delivered to every subscriber: with `setResourceTimingBufferSize(0)` the callback
+    runs and `getEntriesByType('resource')` stays empty, which is what the first subtest of
+    `performance-timeline/droppedentriescount.any.js` asserts.
+  - 10 new tests in `dom.rs`. Live: the three `po-*` variants of
+    `verify_perf_idb_sse_gaps.py` print their expected markers, slice-27's
+    `resource-timing` variant goes `rt-entries 0 → 3` (`fetch`, `xmlhttprequest`, `img`)
+    with `onresourcetimingbufferfull` `false → true`, slice-25's `perf-resource` goes
+    `rt-late resource 0 → 2`.
+  - **Residual:** `EventSource` produces no entry (its long-lived connection bypasses both
+    paths), a failed load produces none, observer delivery is still synchronous rather than
+    a queued task ([BUG-648](../bugs/BUG-648-OPEN.md)), and every per-phase milestone is
+    collapsed onto `fetchStart`.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.

@@ -220,7 +220,7 @@ URL не качал повторно; тело не-JS типа сознател
   streaming-сканера; выигрыш по параллелизму, ради которого сканер писался, не
   получен. Часть BUG-907.
 * **Resource Timing** по этим запросам по-прежнему пуст
-  ([BUG-839](BUG-839-OPEN.md)), поэтому тесты вида `modulepreload.html` и
+  ([BUG-839](BUG-839-FIXED.md)), поэтому тесты вида `modulepreload.html` и
   `dynamic-adding-preload.html`, которые считают записи
   `performance.getEntriesByName`, теперь падают на этой проверке вместо того,
   чтобы висеть.

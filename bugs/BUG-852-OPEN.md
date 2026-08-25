@@ -49,7 +49,7 @@ content-visibility: auto` под распоркой в 2000 px:
    `contentvisibilityautostatechange` не существует нигде — `grep` по
    `crates/` даёт только три комментария «Phase 2: P3 доставляет…». Та же
    форма, что у [BUG-809](BUG-809-OPEN.md) (`deliver_layout_shift`) и
-   [BUG-839](BUG-839-OPEN.md).
+   [BUG-839](BUG-839-FIXED.md).
 
 ## Масштаб
 

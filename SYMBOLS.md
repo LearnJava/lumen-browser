@@ -4170,7 +4170,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:982` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1037` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (951 symbols)
+## lumen-shell  (953 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -4850,11 +4850,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/reader_view.rs:52` **fn** `build_reader_html` — Wrap an [`ArticleContent`] in the reader template and return a
 `crates/shell/src/render_thread.rs:182` **struct** `ThreadedRenderBackend` — Прокси-бэкенд: реализует [`RenderBackend`], но настоящий GPU-бэкенд живёт на
 `crates/shell/src/render_thread.rs:214` **fn** `new` — Запускает рендер-поток и возвращает прокси
-`crates/shell/src/resource_timing.rs:37` **struct** `ResourceTimingRow` — One completed subresource load, in the shape
-`crates/shell/src/resource_timing.rs:68` **fn** `take_rows` — Drain every pending row. Returns an empty vector when nothing arrived since
-`crates/shell/src/resource_timing.rs:80` **fn** `clear` — Drop everything queued. Called on navigation: entries belong to the document
-`crates/shell/src/resource_timing.rs:88` **fn** `rows_to_json` — Serialise a batch into the JSON array `_lumen_deliver_resource_timings`
-`crates/shell/src/resource_timing.rs:117` **struct** `ResourceTimingSink` — Sink wrapper that captures [`Event::ResourceTimed`] and forwards every
+`crates/shell/src/resource_timing.rs:56` **struct** `ResourceTimingRow` — One completed subresource load, in the shape
+`crates/shell/src/resource_timing.rs:88` **fn** `take_rows` — Drain every pending row for the shell's per-step delivery. Answers empty
+`crates/shell/src/resource_timing.rs:100` **fn** `take_rows_unconditionally` — Drain for the runtime of the document being loaded, ignoring the suspend
+`crates/shell/src/resource_timing.rs:114` **fn** `clear` — Drop everything queued and suspend delivery until [`resume`]. Called at the
+`crates/shell/src/resource_timing.rs:124` **fn** `resume` — Re-enable per-step delivery. Called once the new document is committed, so
+`crates/shell/src/resource_timing.rs:130` **fn** `rows_to_json` — Serialise a batch into the JSON array `_lumen_deliver_resource_timings`
+`crates/shell/src/resource_timing.rs:159` **struct** `ResourceTimingSink` — Sink wrapper that captures [`Event::ResourceTimed`] and forwards every
 `crates/shell/src/runtime.rs:39` **enum** `TaskSource` — Источник task-а — HTML §8.1.4.3 «Task sources». Каждому источнику —
 `crates/shell/src/runtime.rs:91` **struct** `Task` — Task — отложенное действие, выполняемое за пределами текущего call-stack-а
 `crates/shell/src/runtime.rs:97` **fn** `new`
@@ -5654,4 +5656,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:228` **fn** `count`
 
 ---
-*Total: 5577 symbols in 24 crates*
+*Total: 5579 symbols in 24 crates*

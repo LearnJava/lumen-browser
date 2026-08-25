@@ -8135,6 +8135,26 @@ fn run_scripts_with_dom(
                 if let Some(map) = import_map {
                     rt.set_import_map(map);
                 }
+                // BUG-839: hand over the subresource loads that already
+                // finished, before the page's first script runs. The document's
+                // stylesheets and scripts are fetched *during parsing*, i.e.
+                // before this runtime exists, and WPT's
+                // `performance-timeline/case-sensitivity.any.js` reads
+                // `getEntriesByType('resource')` synchronously at the top of
+                // that first script — the shell's once-per-event-loop-step
+                // drain is far too late for it. That drain still covers the
+                // tail (images, anything started later); this take is
+                // unconditional because the suspend flag exists to keep those
+                // very rows away from the *outgoing* document, and this caller
+                // is the incoming one.
+                if let Some(json) = crate::resource_timing::rows_to_json(
+                    &crate::resource_timing::take_rows_unconditionally(),
+                ) {
+                    let _ = rt.eval(&format!(
+                        "_lumen_deliver_resource_timings({})",
+                        js_string_literal(&json)
+                    ));
+                }
                 // Classic scripts run first (HTML LS §8.1.3 execution order).
                 for ResolvedScript { node: nid, source: src, .. } in &scripts {
                     // BUG-827: к этому моменту настоящий парсер уже вставил всё,
@@ -11968,6 +11988,13 @@ impl Lumen {
     /// держит `Arc`: все гейты (`if self.js_present`) читают его, поэтому остаются
     /// верны в обоих режимах флага.
     fn set_js_ctx(&mut self, handle: Option<Arc<dyn PersistentJs>>) {
+        // BUG-839: the document is committed at this point, so per-step
+        // Resource Timing delivery may resume — whatever is still queued, and
+        // everything that arrives from here on, belongs to this runtime. The
+        // *clear* is deliberately not here (it runs where the load starts): by
+        // the time this is reached, `source.load` has already fetched the
+        // page's stylesheets, scripts and images.
+        resource_timing::resume();
         self.js_present = handle.is_some();
         match self.engine_thread.as_ref() {
             // Flag on: the handle lives engine-side; deposit it into
