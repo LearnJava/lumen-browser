@@ -673,6 +673,31 @@ function HashChangeEvent(type, init) {
 HashChangeEvent.prototype = Object.create(Event.prototype);
 HashChangeEvent.prototype.constructor = HashChangeEvent;
 
+// ToggleEvent — <details> and popover state changes (HTML LS §4.11.1, Popover
+// API §3.5). Both used to fire a plain `Event` with `oldState`/`newState` bolted
+// on as own properties and no such global existed at all (BUG-578), so
+// `Object.getPrototypeOf(evt) === ToggleEvent.prototype` — the assertion
+// `toggleEvent.html`'s own `testEvent()` makes of every event it receives —
+// could not hold however correct the states were.
+// `oldState`/`newState` are WebIDL `DOMString` members with a `''` default and
+// readonly attributes, so: a member explicitly set to `undefined` counts as
+// absent (default), anything else is stringified — `null` becomes the string
+// `'null'`, not `''` — and the result is exposed through a getter with no
+// setter, which is what `assert_readonly` looks for. `source` is the Popover
+// API Level 2 member (`Element?`, default null); `relatedTarget` must stay
+// absent, so nothing here invents one.
+function ToggleEvent(type, init) {
+    Event.call(this, type, init);
+    var oldState = (init == null || init.oldState === undefined) ? '' : String(init.oldState);
+    var newState = (init == null || init.newState === undefined) ? '' : String(init.newState);
+    var source   = (init == null || init.source   === undefined) ? null : init.source;
+    Object.defineProperty(this, 'oldState', { get: function() { return oldState; }, enumerable: true, configurable: true });
+    Object.defineProperty(this, 'newState', { get: function() { return newState; }, enumerable: true, configurable: true });
+    Object.defineProperty(this, 'source',   { get: function() { return source;   }, enumerable: true, configurable: true });
+}
+ToggleEvent.prototype = Object.create(Event.prototype);
+ToggleEvent.prototype.constructor = ToggleEvent;
+
 // ErrorEvent — uncaught script errors
 function ErrorEvent(type, init) {
     // WebIDL: an interface object is not callable (BUG-813,
@@ -16412,6 +16437,11 @@ function _lumen_apply_ready_state(state) {
         // src without a word. The per-node guard keeps an element a head script
         // already appended from reporting twice.
         _lumen_script_empty_src_scan();
+        // BUG-851: a `<details open>` the parser wrote owes a `toggle` event for
+        // the same reason — markup never passes through the attribute-write hook
+        // that the §4.11.1 change steps hang on. The per-node record keeps an
+        // element a script has already moved from reporting a second time.
+        _lumen_details_open_scan();
         // DOMContentLoaded fires on document (bubbles) then window
         var dcl = new Event('DOMContentLoaded', { bubbles: true, cancelable: false });
         document.dispatchEvent(dcl);
@@ -18080,9 +18110,31 @@ function _lumen_activation_target(nid) {
     for (var guard = 0; guard < 512; guard++) {
         if (cur === null || cur === undefined || cur === -1) return -1;
         var tag = (_lumen_get_tag_name(cur) || '').toUpperCase();
-        if (_LUMEN_ACTIVATABLE_TAGS[tag] === 1) return cur;
+        // HTML LS §4.6.1: an `<a>`/`<area>` with no `href` is a placeholder, not
+        // a hyperlink — it has no activation behaviour and is not interactive
+        // content, so the walk must pass straight through it. Stopping there is
+        // what made a click on the `<a>` inside a `<summary>` (the shape
+        // `anchor-without-link.html` measures) reach the link branch, find no
+        // `href` and silently do nothing at all.
+        var activatable = _LUMEN_ACTIVATABLE_TAGS[tag] === 1
+            && !((tag === 'A' || tag === 'AREA') && !_lumen_has_attr(cur, 'href'));
+        if (activatable) return cur;
         if (_LUMEN_ACTIVATION_BARRIER_TAGS[tag] === 1) return -1;
         cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    return -1;
+}
+// HTML LS §4.11.2 «summary element»: an element is *the* summary for its parent
+// details only if it is that parent's FIRST summary child. A second `<summary>`
+// is ordinary flow content and activating it must do nothing. Returns the parent
+// `<details>` nid, or -1.
+function _lumen_summary_details_parent(nid) {
+    var parent = _lumen_u2n(_lumen_get_parent(nid));
+    if (parent === null || (_lumen_get_tag_name(parent) || '').toUpperCase() !== 'DETAILS') return -1;
+    var kids = _lumen_get_children(parent);
+    for (var i = 0; i < kids.length; i++) {
+        if ((_lumen_get_tag_name(kids[i]) || '').toUpperCase() !== 'SUMMARY') continue;
+        return kids[i] === nid ? parent : -1;
     }
     return -1;
 }
@@ -18121,8 +18173,13 @@ function _lumen_run_activation_behavior(nid, el) {
         return;
     }
     if (tag === 'SUMMARY') {
-        var parent = _lumen_u2n(_lumen_get_parent(nid));
-        if (parent !== null && (_lumen_get_tag_name(parent) || '').toUpperCase() === 'DETAILS') {
+        // HTML LS §4.11.2: the activation behaviour belongs to a summary that is
+        // *the* summary for its parent details — the first summary child — and to
+        // no other. The flip goes through the ordinary attribute writes so the
+        // §4.11.1 change steps run: they, not this branch, own the `toggle` event
+        // and the exclusive-accordion pass (BUG-851).
+        var parent = _lumen_summary_details_parent(nid);
+        if (parent !== -1) {
             if (_lumen_has_attr(parent, 'open')) _lumen_remove_attr(parent, 'open');
             else _lumen_set_attr(parent, 'open', '');
         }
@@ -18271,56 +18328,163 @@ function _lumen_selectlist_options(sl_nid) {
     return out;
 }
 
-// ── <details>/<summary> toggle (HTML5 §4.11.1) ───────────────────────────────
-// A click anywhere within a <summary> element toggles the `open` attribute on
-// its parent <details> and fires a `toggle` event on <details>.
-document.addEventListener('click', function(evt) {
-    var el = evt.target;
-    while (el && el.__nid__ !== undefined) {
-        var tag = _lumen_get_tag_name(el.__nid__).toLowerCase();
-        if (tag === 'summary') {
-            var pid = _lumen_u2n(_lumen_get_parent(el.__nid__));
-            if (pid !== null && _lumen_get_tag_name(pid).toLowerCase() === 'details') {
-                var wasOpen = _lumen_get_attr(pid, 'open') !== undefined;
-                var oldState = wasOpen ? 'open' : 'closed';
-                if (wasOpen) { _lumen_remove_attr(pid, 'open'); }
-                else         { _lumen_set_attr(pid, 'open', ''); }
-                var newState = wasOpen ? 'closed' : 'open';
-                var toggleEvt = new Event('toggle', { bubbles: false, cancelable: false });
-                toggleEvt.oldState = oldState;
-                toggleEvt.newState = newState;
-                _lumen_dispatch(pid, toggleEvt);
+// ── <details> (HTML LS §4.11.1) ──────────────────────────────────────────────
+// `open` *is* the element's state, so everything that can change it — the
+// `<summary>` activation behaviour, `d.open = …`, `setAttribute`/`removeAttribute`
+// /`toggleAttribute`, the parser's own markup and the shell's native mouse click
+// — funnels through the attribute change steps below, and nothing else touches
+// the attribute on its own. BUG-851: the flip used to live in two places at once
+// (a `click` listener on `document`, which also dispatched `toggle`, and the
+// activation behaviour), so a scripted `summary.click()` flipped `open` twice and
+// landed back where it started — the handler saw `open`, the next statement saw
+// the attribute gone — while a script *write* to `open` notified nobody at all.
 
-                // HTML LS §4.11.1.1: exclusive accordion — opening a <details name=X>
-                // closes all sibling <details> with the same name attribute.
-                if (!wasOpen) {
-                    var detailsName = _lumen_u2n(_lumen_get_attr(pid, 'name'));
-                    if (detailsName !== null && detailsName !== '') {
-                        var parentNid = _lumen_u2n(_lumen_get_parent(pid));
-                        if (parentNid !== null) {
-                            var siblings = _lumen_get_children(parentNid);
-                            for (var _si = 0; _si < siblings.length; _si++) {
-                                var sib = siblings[_si];
-                                if (sib === pid) continue;
-                                if (_lumen_get_tag_name(sib).toLowerCase() !== 'details') continue;
-                                var sibName = _lumen_u2n(_lumen_get_attr(sib, 'name'));
-                                if (sibName !== detailsName) continue;
-                                if (_lumen_get_attr(sib, 'open') === undefined) continue;
-                                _lumen_remove_attr(sib, 'open');
-                                var sibEvt = new Event('toggle', { bubbles: false, cancelable: false });
-                                sibEvt.oldState = 'open';
-                                sibEvt.newState = 'closed';
-                                _lumen_dispatch(sib, sibEvt);
-                            }
-                        }
-                    }
-                }
-            }
-            return;
-        }
-        el = el.parentElement;
+// nid -> { oldState, newState } for a toggle task that is queued but has not run.
+// HTML LS «queue a details toggle event task» reuses a pending task's `oldState`
+// and removes the queued task rather than queueing a second one, so two changes
+// inside one turn produce ONE event describing the whole span — which is what
+// `toggleEvent.html` t2/t6/t8 assert when they expect `closed` → `closed`.
+var _details_toggle_pending = {};
+// nid -> true|false: the state this machinery has already accounted for. A
+// `<details open>` written by the parser owes an event that nothing queued (the
+// shell parses the whole document before the first script runs, so there is no
+// insertion point to hook — the BUG-827 shape), and this is what tells the
+// end-of-parse scan which elements it still owes one.
+var _details_known_open = {};
+
+function _lumen_is_details(nid) {
+    var t = _lumen_get_tag_name(nid);
+    return t !== null && t !== undefined && String(t).toLowerCase() === 'details';
+}
+
+function _lumen_details_fire_toggle(nid) {
+    var rec = _details_toggle_pending[nid];
+    if (!rec) return;
+    delete _details_toggle_pending[nid];
+    var evt = new ToggleEvent('toggle', {
+        bubbles: false, cancelable: false, isTrusted: true,
+        oldState: rec.oldState, newState: rec.newState
+    });
+    // `_lumen_dispatch` sets no target of its own (BUG-873), and a page that
+    // arms one listener over several `<details>` has nothing else to tell them
+    // apart — `name-attribute.html` asserts `event.target === element` on every
+    // one of the four elements it watches.
+    evt.target = _lumen_make_element(nid);
+    _lumen_dispatch(nid, evt);
+}
+
+// HTML LS §4.11.1 «queue a details toggle event task». Written straight into
+// `_lumen_timers` with `nesting: 0` rather than through `setTimeout`, for the
+// reason `_ro_schedule_initial`/`_lumen_fire_hashchange` give: the §8.6 4 ms
+// clamp is about timer *nesting* and must not apply to a task the engine queues
+// on the page's behalf.
+function _lumen_details_queue_toggle(nid, oldState, newState) {
+    var pending = _details_toggle_pending[nid];
+    if (pending) {
+        // The queued task has not run yet, so it reports the span from where the
+        // element was when it was queued to where it is now. No second task.
+        pending.newState = newState;
+        return;
     }
-});
+    _details_toggle_pending[nid] = { oldState: oldState, newState: newState };
+    var deadline = (typeof _lumen_now_ms === 'function') ? _lumen_now_ms() : 0;
+    _lumen_timers.push({
+        id: _lumen_timer_seq++,
+        fn: function() { _lumen_details_fire_toggle(nid); },
+        deadline: deadline, interval: null, nesting: 0
+    });
+    if (typeof _lumen_request_wakeup === 'function') _lumen_request_wakeup(deadline);
+}
+
+// HTML LS §4.11.1.1 «ensure details exclusivity by closing the given element if
+// needed»: opening a `<details name=X>` closes every *other* `<details name=X>`
+// in the same tree. Each of those goes back through the change steps below, so
+// they queue their own `toggle` — the spec's own shape, not a special case.
+function _lumen_details_ensure_exclusivity(nid) {
+    var name = _lumen_u2n(_lumen_get_attr(nid, 'name'));
+    if (name === null || String(name) === '') return;
+    var all;
+    try { all = document.getElementsByTagName('details'); } catch (e) { return; }
+    if (!all) return;
+    for (var i = 0; i < all.length; i++) {
+        var other = all[i];
+        if (!other || other.__nid__ === undefined || other.__nid__ === nid) continue;
+        if (_lumen_get_attr(other.__nid__, 'open') === undefined) continue;
+        var oname = _lumen_u2n(_lumen_get_attr(other.__nid__, 'name'));
+        if (oname === null || String(oname) !== String(name)) continue;
+        _lumen_remove_attr(other.__nid__, 'open');
+    }
+}
+
+// HTML LS §4.11.1 attribute change steps for `open`. `wasOpen`/`isOpen` are the
+// *presence* of the attribute before and after the write: rewriting its value
+// (`open=''` → `open='open'`) is not a state change and owes no event, which is
+// what keeps `details9.open = true` on an already-open element silent.
+function _lumen_details_open_changed(nid, wasOpen, isOpen) {
+    wasOpen = !!wasOpen; isOpen = !!isOpen;
+    _details_known_open[nid] = isOpen;
+    if (wasOpen === isOpen) return;
+    if (isOpen) _lumen_details_ensure_exclusivity(nid);
+    _lumen_details_queue_toggle(nid, wasOpen ? 'open' : 'closed', isOpen ? 'open' : 'closed');
+}
+
+// The single point where a change to `open` becomes an event. Wrapping the two
+// natives (the `_mo_notify` shape further up this file) is what makes the `open`
+// property, `setAttribute`, `removeAttribute`, `toggleAttribute` and the
+// `<summary>` activation behaviour one mechanism instead of five: none of them
+// reaches the document without passing through here.
+var _orig_set_attr_details = _lumen_set_attr;
+_lumen_set_attr = function(nid, name, value) {
+    if (String(name) !== 'open' || !_lumen_is_details(nid)) {
+        _orig_set_attr_details(nid, name, value);
+        return;
+    }
+    var was = _lumen_get_attr(nid, 'open') !== undefined;
+    _orig_set_attr_details(nid, name, value);
+    _lumen_details_open_changed(nid, was, true);
+};
+var _orig_remove_attr_details = _lumen_remove_attr;
+_lumen_remove_attr = function(nid, name) {
+    if (String(name) !== 'open' || !_lumen_is_details(nid)) {
+        _orig_remove_attr_details(nid, name);
+        return;
+    }
+    var was = _lumen_get_attr(nid, 'open') !== undefined;
+    _orig_remove_attr_details(nid, name);
+    _lumen_details_open_changed(nid, was, false);
+};
+
+// The parser's half, called when parsing ends (`_lumen_apply_ready_state`), for
+// the same reason `_lumen_link_hints_scan`/`_lumen_script_empty_src_scan` are:
+// markup never passes through the hook above, so a `<details open>` the parser
+// wrote is owed a `closed` → `open` event that nothing queued. An element a
+// script has already moved carries a `_details_known_open` entry and is skipped,
+// so it can never report twice.
+function _lumen_details_open_scan() {
+    var all;
+    try { all = document.getElementsByTagName('details'); } catch (e) { return; }
+    if (!all) return;
+    for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el || el.__nid__ === undefined) continue;
+        var nid = el.__nid__;
+        if (_details_known_open[nid] !== undefined) continue;
+        if (_lumen_get_attr(nid, 'open') === undefined) { _details_known_open[nid] = false; continue; }
+        _lumen_details_open_changed(nid, false, true);
+    }
+}
+
+// Called by the shell (`main.rs`, `FormClickAction::ToggleDetails`) after it has
+// flipped `open` itself on a native mouse click. The flip stays on the shell
+// side so the attribute is in the document before the relayout that follows it;
+// this only runs the change steps the shell cannot run. Before BUG-851 the shell
+// dispatched a bare `Event('toggle')` of its own here while the deleted document
+// listener flipped the attribute a second time, so a real click on a `<summary>`
+// left `<details>` exactly as it found it and fired two events about it.
+function _lumen_details_native_toggled(nid, wasOpen) {
+    if (!_lumen_is_details(nid)) return;
+    _lumen_details_open_changed(nid, !!wasOpen, _lumen_get_attr(nid, 'open') !== undefined);
+}
 
 // ── <dialog> Escape key handler (HTML5 §4.11.7) ──────────────────────────────
 // Pressing Escape closes the topmost modal dialog: fires `cancel` (cancelable);
@@ -18368,9 +18532,13 @@ function _lumen_popover_show(nid) {
         throw new DOMException('Element is not a popover', 'NotSupportedError');
     }
     if (_lumen_get_attr(nid, _LPOP_ATTR) !== undefined) return; // already open
-    var beforeEvt = new Event('beforetoggle', { bubbles: false, cancelable: false });
-    beforeEvt.oldState = 'closed'; beforeEvt.newState = 'open';
-    _lumen_dispatch(nid, beforeEvt);
+    // Popover API §3.5: a popover's `beforetoggle` is cancelable, and cancelling
+    // it aborts the show. It used to be dispatched with `cancelable: false`, so
+    // `preventDefault()` in a handler did nothing at all (BUG-578).
+    var beforeEvt = new ToggleEvent('beforetoggle', {
+        bubbles: false, cancelable: true, oldState: 'closed', newState: 'open' });
+    beforeEvt.target = _lumen_make_element(nid);
+    if (!_lumen_dispatch(nid, beforeEvt)) return;
     // Re-check: still not open? (beforetoggle could in theory trigger re-entrant show)
     if (_lumen_get_attr(nid, _LPOP_ATTR) !== undefined) return;
     var popVal = (_lumen_get_attr(nid, 'popover') || '').toLowerCase();
@@ -18396,16 +18564,18 @@ function _lumen_popover_show(nid) {
     // hints get a slightly lower z-index than auto (still above page content).
     var style = isHint ? 'position:fixed;z-index:2147483646;inset:auto;margin:auto;overflow:auto;' : _LPOP_STYLE;
     _lumen_set_attr(nid, 'style', style + (saved ? saved : ''));
-    var toggleEvt = new Event('toggle', { bubbles: false, cancelable: false });
-    toggleEvt.oldState = 'closed'; toggleEvt.newState = 'open';
+    var toggleEvt = new ToggleEvent('toggle', {
+        bubbles: false, cancelable: false, oldState: 'closed', newState: 'open' });
+    toggleEvt.target = _lumen_make_element(nid);
     _lumen_dispatch(nid, toggleEvt);
 }
 
 function _lumen_popover_hide(nid) {
     if (_lumen_get_attr(nid, _LPOP_ATTR) === undefined) return; // already closed
-    var beforeEvt = new Event('beforetoggle', { bubbles: false, cancelable: false });
-    beforeEvt.oldState = 'open'; beforeEvt.newState = 'closed';
-    _lumen_dispatch(nid, beforeEvt);
+    var beforeEvt = new ToggleEvent('beforetoggle', {
+        bubbles: false, cancelable: true, oldState: 'open', newState: 'closed' });
+    beforeEvt.target = _lumen_make_element(nid);
+    if (!_lumen_dispatch(nid, beforeEvt)) return;
     if (_lumen_get_attr(nid, _LPOP_ATTR) === undefined) return; // closed by beforetoggle re-entry
     // Remove from whichever stack holds this popover.
     var idx = _lumen_popover_stack.indexOf(nid);
@@ -18425,8 +18595,9 @@ function _lumen_popover_hide(nid) {
         else { _lumen_set_attr(nid, 'style', saved); }
         _lumen_remove_attr(nid, 'data-lumen-popover-saved-style');
     }
-    var toggleEvt = new Event('toggle', { bubbles: false, cancelable: false });
-    toggleEvt.oldState = 'open'; toggleEvt.newState = 'closed';
+    var toggleEvt = new ToggleEvent('toggle', {
+        bubbles: false, cancelable: false, oldState: 'open', newState: 'closed' });
+    toggleEvt.target = _lumen_make_element(nid);
     _lumen_dispatch(nid, toggleEvt);
 }
 
@@ -42487,13 +42658,7 @@ mod tests {
         #[test]
         fn details_summary_click_opens() {
             let rt = v8_runtime_with_dom(make_details_doc());
-            let nid_js = rt.eval(
-                "document.getElementById('s').__nid__"
-            ).unwrap();
-            let nid = match nid_js { lumen_core::JsValue::Number(n) => n as i32, _ => panic!() };
-            rt.eval(&format!(
-                "_lumen_dispatch_bubble({}, 'click')", nid
-            )).unwrap();
+            rt.eval("document.getElementById('s').click()").unwrap();
             assert!(bool_eval(&rt,
                 "document.getElementById('d').hasAttribute('open')"));
         }
@@ -42502,26 +42667,208 @@ mod tests {
         fn details_summary_click_closes() {
             let rt = v8_runtime_with_dom(make_details_doc());
             rt.eval("document.getElementById('d').setAttribute('open', '')").unwrap();
-            let nid_js = rt.eval("document.getElementById('s').__nid__").unwrap();
-            let nid = match nid_js { lumen_core::JsValue::Number(n) => n as i32, _ => panic!() };
-            rt.eval(&format!("_lumen_dispatch_bubble({}, 'click')", nid)).unwrap();
+            rt.eval("document.getElementById('s').click()").unwrap();
             assert!(bool_eval(&rt,
                 "!document.getElementById('d').hasAttribute('open')"));
+        }
+
+        /// BUG-851: the state a `toggle` handler sees has to survive the statement
+        /// after the click. The flip used to happen twice — once in a `click`
+        /// listener on `document` (which also dispatched the event) and once in
+        /// the activation behaviour — so the handler saw `open` and the caller,
+        /// one statement later, saw the attribute gone again.
+        #[test]
+        fn details_summary_click_survives_dispatch() {
+            let rt = v8_runtime_with_dom(make_details_doc());
+            assert!(bool_eval(&rt,
+                "var d = document.getElementById('d'); var seen = null; \
+                 d.addEventListener('toggle', function() { seen = d.open; }); \
+                 document.getElementById('s').click(); \
+                 _lumen_tick_timers(); \
+                 seen === true && d.open === true"));
+        }
+
+        /// HTML LS §4.11.2: only the FIRST `<summary>` child is the disclosure
+        /// control, so activating a second one is not an activation at all.
+        #[test]
+        fn details_second_summary_does_not_toggle() {
+            let doc = make_details_doc();
+            {
+                let mut d = doc.lock().unwrap();
+                let details = d.find_by_id("d").expect("details");
+                let extra = d.create_element(QualName::html("summary"));
+                if let NodeData::Element { attrs, .. } = &mut d.get_mut(extra).data {
+                    attrs.push(lumen_dom::Attribute {
+                        name: QualName::html("id"), value: "s2".into(),
+                    });
+                }
+                d.append_child(details, extra);
+            }
+            let rt = v8_runtime_with_dom(doc);
+            rt.eval("document.getElementById('s2').click()").unwrap();
+            assert!(bool_eval(&rt, "!document.getElementById('d').open"));
         }
 
         #[test]
         fn details_toggle_event_fired() {
             let rt = v8_runtime_with_dom(make_details_doc());
-            rt.eval(
-                "var gotToggle = false; \
-                 document.getElementById('d').addEventListener('toggle', function(e) { \
-                     gotToggle = e.newState === 'open'; \
-                 });"
-            ).unwrap();
-            let nid_js = rt.eval("document.getElementById('s').__nid__").unwrap();
-            let nid = match nid_js { lumen_core::JsValue::Number(n) => n as i32, _ => panic!() };
-            rt.eval(&format!("_lumen_dispatch_bubble({}, 'click')", nid)).unwrap();
-            assert!(bool_eval(&rt, "gotToggle"));
+            assert!(bool_eval(&rt,
+                "var got = null; \
+                 document.getElementById('d').addEventListener('toggle', function(e) { got = e; }); \
+                 document.getElementById('s').click(); \
+                 _lumen_tick_timers(); \
+                 got !== null && got.oldState === 'closed' && got.newState === 'open' \
+                 && got.isTrusted === true && got.bubbles === false && got.cancelable === false \
+                 && got.target === document.getElementById('d') \
+                 && Object.getPrototypeOf(got) === ToggleEvent.prototype"));
+        }
+
+        /// HTML LS §4.6.1: an `<a>` with no `href` is a placeholder, not a
+        /// hyperlink — it has no activation behaviour, so a click inside it must
+        /// reach the `<summary>` above it (`anchor-without-link.html`).
+        #[test]
+        fn details_click_on_hrefless_anchor_in_summary_opens() {
+            let doc = make_details_doc();
+            {
+                let mut d = doc.lock().unwrap();
+                let summary = d.find_by_id("s").expect("summary");
+                let anchor = d.create_element(QualName::html("a"));
+                if let NodeData::Element { attrs, .. } = &mut d.get_mut(anchor).data {
+                    attrs.push(lumen_dom::Attribute {
+                        name: QualName::html("id"), value: "a1".into(),
+                    });
+                }
+                d.append_child(summary, anchor);
+            }
+            let rt = v8_runtime_with_dom(doc);
+            rt.eval("document.getElementById('a1').click()").unwrap();
+            assert!(bool_eval(&rt, "document.getElementById('d').open === true"));
+        }
+
+        /// A script write to `open` — property, `setAttribute` or
+        /// `removeAttribute` — is a state change and owes the same event. Before
+        /// BUG-851 none of the three notified anyone: the shim's only dispatch
+        /// site was the `click` listener this fix deleted.
+        #[test]
+        fn details_script_open_write_fires_toggle() {
+            let rt = v8_runtime_with_dom(make_details_doc());
+            assert!(bool_eval(&rt,
+                "var d = document.getElementById('d'); var log = []; \
+                 d.addEventListener('toggle', function(e) { log.push(e.oldState + '>' + e.newState); }); \
+                 d.open = true; _lumen_tick_timers(); \
+                 d.removeAttribute('open'); _lumen_tick_timers(); \
+                 d.setAttribute('open', ''); _lumen_tick_timers(); \
+                 log.join(',') === 'closed>open,open>closed,closed>open'"));
+        }
+
+        /// The event is a queued task, not an inline dispatch — nothing has been
+        /// delivered by the statement after the write.
+        #[test]
+        fn details_toggle_is_queued_not_synchronous() {
+            let rt = v8_runtime_with_dom(make_details_doc());
+            assert!(bool_eval(&rt,
+                "var d = document.getElementById('d'); var n = 0; \
+                 d.addEventListener('toggle', function() { n++; }); \
+                 d.open = true; \
+                 var duringTurn = n; \
+                 _lumen_tick_timers(); \
+                 duringTurn === 0 && n === 1"));
+        }
+
+        /// HTML LS «queue a details toggle event task»: a second change before the
+        /// task runs replaces it instead of queueing another, so the page gets ONE
+        /// event spanning both — `toggleEvent.html` t2/t6/t8.
+        #[test]
+        fn details_two_writes_in_one_turn_fire_one_event() {
+            let rt = v8_runtime_with_dom(make_details_doc());
+            assert!(bool_eval(&rt,
+                "var d = document.getElementById('d'); var log = []; \
+                 d.addEventListener('toggle', function(e) { log.push(e.oldState + '>' + e.newState); }); \
+                 d.open = true; d.open = false; \
+                 _lumen_tick_timers(); \
+                 log.length === 1 && log[0] === 'closed>closed'"));
+        }
+
+        /// Writing the state the element is already in is not a change and owes no
+        /// event (`toggleEvent.html` t9/t10) — including a rewrite of the content
+        /// attribute's *value*, which never changes its presence.
+        #[test]
+        fn details_no_op_write_fires_nothing() {
+            let rt = v8_runtime_with_dom(make_details_doc());
+            assert!(bool_eval(&rt,
+                "var d = document.getElementById('d'); var n = 0; \
+                 d.addEventListener('toggle', function() { n++; }); \
+                 d.open = false; _lumen_tick_timers(); \
+                 d.open = true; _lumen_tick_timers(); \
+                 d.setAttribute('open', 'open'); d.open = true; _lumen_tick_timers(); \
+                 n === 1"));
+        }
+
+        /// The shell flips `open` itself on a native mouse click and then tells the
+        /// shim what changed: exactly one flip, exactly one event. It used to
+        /// dispatch a bare `Event('toggle')` while the deleted document listener
+        /// flipped the attribute back, so a real click opened nothing.
+        #[test]
+        fn details_native_toggle_notifies_once() {
+            let rt = v8_runtime_with_dom(make_details_doc());
+            assert!(bool_eval(&rt,
+                "var d = document.getElementById('d'); var log = []; \
+                 d.addEventListener('toggle', function(e) { log.push(e.newState); }); \
+                 _lumen_set_attr(d.__nid__, 'open', ''); \
+                 _lumen_details_native_toggled(d.__nid__, false); \
+                 _lumen_tick_timers(); \
+                 log.length === 1 && log[0] === 'open' && d.open === true"));
+        }
+
+        /// HTML LS §4.11.1.1 exclusive accordion — and the sibling it closes gets
+        /// an `open` → `closed` event of its own, through the same steps.
+        #[test]
+        fn details_name_exclusivity_closes_other() {
+            let doc = make_details_doc();
+            {
+                let mut d = doc.lock().unwrap();
+                let first = d.find_by_id("d").expect("details");
+                let body = d.get(first).parent.expect("body");
+                let other = d.create_element(QualName::html("details"));
+                for (n, v) in [("id", "d2"), ("name", "grp")] {
+                    if let NodeData::Element { attrs, .. } = &mut d.get_mut(other).data {
+                        attrs.push(lumen_dom::Attribute {
+                            name: QualName::html(n), value: v.into(),
+                        });
+                    }
+                }
+                d.append_child(body, other);
+                if let NodeData::Element { attrs, .. } = &mut d.get_mut(first).data {
+                    attrs.push(lumen_dom::Attribute {
+                        name: QualName::html("name"), value: "grp".into(),
+                    });
+                }
+            }
+            let rt = v8_runtime_with_dom(doc);
+            assert!(bool_eval(&rt,
+                "var a = document.getElementById('d'), b = document.getElementById('d2'); \
+                 var closed = null; \
+                 b.open = true; _lumen_tick_timers(); \
+                 b.addEventListener('toggle', function(e) { closed = e.oldState + '>' + e.newState; }); \
+                 a.open = true; _lumen_tick_timers(); \
+                 a.open === true && b.open === false && closed === 'open>closed'"));
+        }
+
+        /// A `<details open>` the parser wrote owes an event nobody queued: the
+        /// markup never passes through the attribute-write hook. The end-of-parse
+        /// scan pays it exactly once (`toggleEvent.html` details9).
+        #[test]
+        fn details_parser_open_scan_fires_once() {
+            let rt = v8_runtime_with_dom(make_details_doc());
+            assert!(bool_eval(&rt,
+                "var d = document.getElementById('d'); \
+                 d.open = true; _lumen_tick_timers(); \
+                 _details_known_open = {}; \
+                 var log = []; \
+                 d.addEventListener('toggle', function(e) { log.push(e.oldState + '>' + e.newState); }); \
+                 _lumen_details_open_scan(); _lumen_tick_timers(); \
+                 _lumen_details_open_scan(); _lumen_tick_timers(); \
+                 log.length === 1 && log[0] === 'closed>open'"));
         }
 
         #[test]
