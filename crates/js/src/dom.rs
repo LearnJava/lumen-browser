@@ -12831,6 +12831,17 @@ globalThis._lumen_deliver_frame_message = function(data, origin, source) {
     }
 };
 
+// BUG-480 срез 6: синтетический click() из родительского фасада iframe
+// (frame_bridge::_lumen_frame_pump_messages вызывает на тике ЭТОГО контекста).
+// Исполняется в этом изоляте, поэтому событие достаётся слушателям этого
+// документа; сама последовательность — та же бездоверительная семантика
+// click(), что у HTMLElement.prototype.click (общая _lumen_perform_click,
+// объявление поднимается хостингом в пределах одного скрипта шима).
+globalThis._lumen_deliver_frame_click = function(nid) {
+    if (typeof nid !== 'number' || nid < 0) return;
+    _lumen_perform_click(nid);
+};
+
 // _lumen_dispatch_unhandled_rejection (BUG-716) — Rust→JS bridge for
 // `v8::Isolate::set_promise_reject_callback` (`v8_runtime.rs`). Called
 // directly with the *live* `promise`/`reason` values, never through
@@ -18203,6 +18214,15 @@ function _lumen_activate_reset(nid) {
 HTMLElement.prototype.click = function() {
     var nid = _lumen_reflect_nid(this);
     if (nid === -1) return;
+    _lumen_perform_click(nid);
+};
+// Shared body of the untrusted click() sequence (DOM §2.9): disabled check,
+// re-entrancy guard, activation-target computed before dispatch, the dispatch
+// itself and the post-dispatch half. Used both by the prototype method above
+// and by the BUG-480 slice-6 cross-frame hook (_lumen_deliver_frame_click): a
+// parent-initiated facade click() must run THE CHILD'S OWN click semantics in
+// the child isolate, not a re-implementation of them.
+function _lumen_perform_click(nid) {
     var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
     // HTML LS §4.10.19: a disabled form control is not activated at all — no
     // event either.
@@ -18223,7 +18243,7 @@ HTMLElement.prototype.click = function() {
         var notCancelled = _lumen_dispatch_rich(nid, ev);
         if (at !== -1) {
             if (notCancelled) {
-                _lumen_run_activation_behavior(at, (at === nid) ? this : _lumen_make_element(at));
+                _lumen_run_activation_behavior(at, (at === nid) ? _lumen_make_element(nid) : _lumen_make_element(at));
             } else {
                 _lumen_undo_pre_click_activation(at, pre);
             }
@@ -18231,7 +18251,7 @@ HTMLElement.prototype.click = function() {
     } finally {
         delete _lumen_click_in_progress[nid];
     }
-};
+}
 
 // ── form.submit() / requestSubmit() / reset() (HTML LS §4.10.21) ─────────────
 // `reset()` is entirely a document-side operation and runs here. Submission is

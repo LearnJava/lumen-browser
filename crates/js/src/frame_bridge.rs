@@ -87,6 +87,26 @@
 //!   подресурсов фреймов — будущий срез), restyle/layout/paint фрейма не
 //!   запускается (фреймы ещё не рендерятся вовсе); события через границу
 //!   изолятов (`facade.click()` → слушатели ребёнка) — следующий срез.
+//!
+//! BUG-480 срез 6 — события через границу изолятов: `facade.click()` →
+//! слушатели ребёнка:
+//! - у фасада Element появился `click()`; вызов кладёт конверт в глобальный
+//!   ящик синтетических событий ([`frame_event_outbox`], тот же ключ адресата,
+//!   что у postMessage — указатель `Arc<Mutex<Document>>`);
+//! - получатель разбирает свой ящик на том же тике пумпы, что и сообщения
+//!   (`_lumen_frame_pump_messages`, shell вызывает её и у страницы, и у
+//!   хэндлов фреймов), и доставляет через хук WEB_API_SHIM
+//!   `_lumen_deliver_frame_click(nid)`;
+//! - хук исполняет СОБСТВЕННУЮ семантику click ребёнка — общую функцию
+//!   `_lumen_perform_click` шима (`dom.rs`), ту же, что
+//!   `HTMLElement.prototype.click`: disabled-гейт, re-entrancy guard,
+//!   activation target до диспатча, MouseEvent + `_lumen_dispatch_rich`
+//!   (пузырьки, слушатели, on-атрибуты) и активационное поведение после;
+//! - доставка асинхронная на тике пумпы (отклонение от синхронного по спеке
+//!   dispatch — то же, что у postMessage среза 4); очередь ограничена тем же
+//!   [`FRAME_OUTBOX_CAP`], переполнение теряет конверт молча;
+//! - только элементы: клик по фасаду текста/комментария и чужой/вышедший за
+//!   границы арены nid отклоняются нативом («невалидно = пусто»).
 
 #[cfg(feature = "v8-backend")]
 use std::sync::{Arc, Mutex, OnceLock};
@@ -202,6 +222,29 @@ pub(crate) fn frame_outbox() -> &'static Mutex<Vec<PendingFrameMessage>> {
 /// Верхняя граница неотправленных сообщений во всём процессе.
 #[cfg(feature = "v8-backend")]
 const FRAME_OUTBOX_CAP: usize = 256;
+
+// ── Срез 6: ящик синтетических кликов через границу изолятов ─────────────────
+
+/// Один конверт «фасад родителя вызвал `click()`» до разбора получателем.
+#[cfg(feature = "v8-backend")]
+pub(crate) struct PendingFrameEvent {
+    /// Клон `Arc<Mutex<Document>>` адресата — тот же ключ получателя, что у
+    /// [`PendingFrameMessage`]: держит документ живым, указатель стабильным.
+    pub(crate) target_doc: Arc<Mutex<lumen_dom::Document>>,
+    /// Индекс целевого узла в арене документа-адресата.
+    pub(crate) nid: u32,
+}
+
+/// Глобальный ящик «кто-то вызвал `facade.click()`». Пишут нативы любого
+/// изолята, читает только `_lumen_frame_take_events` на JS-потоке получателя
+/// (на том же тике пумпы, что и postMessage). Ёмкость ограничена так же, как у
+/// [`frame_outbox`]: переполнение молча теряет конверт — зомби-страница не
+/// должна расти память бесконечно.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn frame_event_outbox() -> &'static Mutex<Vec<PendingFrameEvent>> {
+    static OUTBOX: OnceLock<Mutex<Vec<PendingFrameEvent>>> = OnceLock::new();
+    OUTBOX.get_or_init(|| Mutex::new(Vec::new()))
+}
 
 /// Нормализованный origin URL биндинга для `event.origin`/валидации
 /// `targetOrigin`. `about:*` наследует origin контекста-родителя — здесь это
@@ -650,6 +693,81 @@ pub(crate) fn install_frame_bridge_v8(
                                 .unwrap_or(serde_json::Value::Null),
                         })
                     })
+                    .collect();
+                serde_json::to_string(&items).unwrap_or_else(|_| String::new())
+            }),
+        )?;
+    }
+
+    // ── Срез 6: синтетические клики через границу изолятов ───────────────────
+    // Родительский фасад вызвал click(): постановка конверта в глобальный ящик
+    // событий. Выполняется на JS-потоке ОТПРАВИТЕЛЯ; получатель разбирает ящик
+    // у себя на тике (_lumen_frame_take_events рядом с take_messages).
+    // Правила те же, что у нативов чтения/записи: нет биндинга, cross-origin /
+    // opaque (accessible: false), не-элемент или nid за границей арены — тихий
+    // «нет» (false), неотличимый для вызывающего JS.
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_queue_click",
+            into_v8_fn2(move |bid: u32, nid: u32| -> bool {
+                let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(binding) = resolve_slot(&reg, bid) else {
+                    return false;
+                };
+                if !binding.accessible {
+                    return false;
+                }
+                let is_element = {
+                    let doc = binding.doc.lock().unwrap_or_else(|e| e.into_inner());
+                    checked_node(&doc, nid).is_some_and(|id| {
+                        matches!(&doc.get(id).data, lumen_dom::NodeData::Element { .. })
+                    })
+                };
+                if !is_element {
+                    return false;
+                }
+                let outbox = frame_event_outbox();
+                let mut outbox = outbox.lock().unwrap_or_else(|e| e.into_inner());
+                if outbox.len() >= FRAME_OUTBOX_CAP {
+                    return false;
+                }
+                outbox.push(PendingFrameEvent {
+                    target_doc: Arc::clone(&binding.doc),
+                    nid,
+                });
+                true
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_frame_take_events",
+            into_v8_fn0(move || -> String {
+                let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
+                let key = match reg.self_key {
+                    Some(k) => k,
+                    None => return String::new(),
+                };
+                let outbox = frame_event_outbox();
+                let mut outbox = outbox.lock().unwrap_or_else(|e| e.into_inner());
+                let mut taken = Vec::new();
+                let mut rest = Vec::new();
+                for ev in outbox.drain(..) {
+                    if Arc::as_ptr(&ev.target_doc) as usize == key {
+                        taken.push(ev.nid);
+                    } else {
+                        rest.push(ev);
+                    }
+                }
+                *outbox = rest;
+                if taken.is_empty() {
+                    return String::new();
+                }
+                let items: Vec<serde_json::Value> = taken
+                    .into_iter()
+                    .map(|nid| serde_json::json!({ "type": "click", "nid": nid }))
                     .collect();
                 serde_json::to_string(&items).unwrap_or_else(|_| String::new())
             }),
@@ -1149,6 +1267,15 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       remove: function() { _lumen_f_remove_node(bid, nid); },
       get textContent() { return _lumen_f_text(bid, nid); },
       set textContent(v) { _lumen_f_set_text(bid, nid, String(v)); },
+      // BUG-480 срез 6: активация элемента под-документа. Клик асинхронный:
+      // конверт уходит в ящик событий, ребёнок на своём тике исполняет
+      // СОБСТВЕННУЮ семантику click() (хук _lumen_deliver_frame_click из
+      // WEB_API_SHIM). Не-элемент, чужой/недоступный биндинг и переполненный
+      // ящик — тихий no-op (конвенция бриджа «невалидно = пусто»).
+      click: function() {
+        var t = _lumen_f_tag(bid, nid);
+        if (t) _lumen_f_queue_click(bid, nid);
+      },
       // BUG-480 срез 2: содержимое фрейма не layout'ится — честные нули вместо
       // выдуманных размеров (layout фреймов — будущий срез).
       get offsetWidth()  { return 0; },
@@ -1430,19 +1557,40 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
   // хук из WEB_API_SHIM (window.onmessage + addEventListener('message')).
   globalThis._lumen_frame_pump_messages = function() {
     if (typeof window === 'undefined') return;
-    if (typeof _lumen_deliver_frame_message !== 'function') return;
-    var raw = _lumen_frame_take_messages();
-    if (!raw) return;
-    var msgs;
-    try { msgs = JSON.parse(raw); } catch (e) { return; }
-    if (!msgs || !msgs.length) return;
-    for (var i = 0; i < msgs.length; i++) {
-      var m = msgs[i];
-      var source = null;
-      if (m.bid !== null && m.bid !== undefined) {
-        source = winFacade(m.bid);
+    if (typeof _lumen_deliver_frame_message === 'function') {
+      var raw = _lumen_frame_take_messages();
+      if (raw) {
+        var msgs;
+        try { msgs = JSON.parse(raw); } catch (e) { msgs = null; }
+        if (msgs && msgs.length) {
+          for (var i = 0; i < msgs.length; i++) {
+            var m = msgs[i];
+            var source = null;
+            if (m.bid !== null && m.bid !== undefined) {
+              source = winFacade(m.bid);
+            }
+            _lumen_deliver_frame_message(m.data, m.origin, source);
+          }
+        }
       }
-      _lumen_deliver_frame_message(m.data, m.origin, source);
+    }
+    // ── Срез 6: синтетические клики из родительских фасадов ────────────────
+    // Доставка ТОЛЬКО при наличии хука из WEB_API_SHIM: в минимальных
+    // тестовых изолятах хука нет, транспорт проверяется переопределением
+    // хука в тестах. Ошибка одного клика не отменяет разбор остальных.
+    if (typeof _lumen_deliver_frame_click === 'function') {
+      var rawEv = _lumen_frame_take_events();
+      if (rawEv) {
+        var evs;
+        try { evs = JSON.parse(rawEv); } catch (e) { evs = null; }
+        if (evs) {
+          for (var j = 0; j < evs.length; j++) {
+            if (evs[j] && typeof evs[j].nid === 'number') {
+              try { _lumen_deliver_frame_click(evs[j].nid); } catch (e) {}
+            }
+          }
+        }
+      }
     }
   };
 })();
@@ -1822,11 +1970,28 @@ mod tests {
     /// реестре родителя и в self_key ребёнка, и наоборот для родителя.
     ///
     /// Вместо WEB_API_SHIM (в минимальном изоляте его нет) каждый контекст
-    /// получает мини-хук приёма, складывающий доставки в `__msgs`.
+    /// получает мини-хуки приёма, складывающие доставки в `__msgs` (срез 4)
+    /// и клики в `__clicks` (срез 6).
     fn with_parent_child_pair(
         parent_accessible_to_child: bool,
         child_accessible_to_parent: bool,
     ) -> (V8JsRuntime, V8JsRuntime) {
+        let (rt_parent, rt_child, _parent_doc, _child_doc) =
+            with_parent_child_pair_docs(parent_accessible_to_child, child_accessible_to_parent);
+        (rt_parent, rt_child)
+    }
+
+    /// Вариант [`with_parent_child_pair`], дополнительно отдающий оба общих
+    /// `Arc<Mutex<Document>>` — для Rust-стороны ожидаемых nid (срез 6).
+    fn with_parent_child_pair_docs(
+        parent_accessible_to_child: bool,
+        child_accessible_to_parent: bool,
+    ) -> (
+        V8JsRuntime,
+        V8JsRuntime,
+        Arc<Mutex<lumen_dom::Document>>,
+        Arc<Mutex<lumen_dom::Document>>,
+    ) {
         let parent_doc = Arc::new(Mutex::new(lumen_html_parser::parse(
             "<html><body><div id='p'>parent</div></body></html>",
         )));
@@ -1877,13 +2042,17 @@ mod tests {
         for rt in [&rt_parent, &rt_child] {
             rt.eval(
                 "globalThis.__msgs = []; \
+                 globalThis.__clicks = []; \
                  globalThis._lumen_deliver_frame_message = function(d, o, s) { \
                      __msgs.push({ d: d, o: o, s: s }); \
+                 }; \
+                 globalThis._lumen_deliver_frame_click = function(nid) { \
+                     __clicks.push(nid); \
                  };",
             )
             .unwrap();
         }
-        (rt_parent, rt_child)
+        (rt_parent, rt_child, parent_doc, child_doc)
     }
 
     fn msg_count(rt: &V8JsRuntime) -> usize {
@@ -2286,6 +2455,117 @@ mod tests {
                  t.nodeType === 3 && t.textContent === 'plain' && \
                  d.body.appendChild(t) === t && \
                  d.body.textContent === 'plain'"
+            ));
+        });
+    }
+
+    // ── Срез 6: события через границу изолятов ────────────────────────────────
+
+    /// Индекс первого элемента с тегом `tag` в дереве `doc`.
+    fn element_index(doc: &lumen_dom::Document, tag: &str) -> Option<u32> {
+        find_first_matching(doc, doc.root(), &|node| {
+            node.element_name()
+                .map(|n| n.local.eq_ignore_ascii_case(tag))
+                .unwrap_or(false)
+        })
+        .map(|n| n.index() as u32)
+    }
+
+    fn clicks(rt: &V8JsRuntime) -> Vec<u32> {
+        match rt.eval("JSON.stringify(__clicks)") {
+            Ok(JsValue::String(s)) => serde_json::from_str(&s).unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn facade_click_from_parent_delivers_on_child_pump() {
+        let (rt_parent, rt_child, _pd, cd) = with_parent_child_pair_docs(true, true);
+        rt_parent
+            .eval(
+                "var b = _lumen_frame_content_document(7).querySelector('b'); \
+                 globalThis.__bnid = b.__nid__; \
+                 b.click(); b.click();",
+            )
+            .unwrap();
+        // До пумпы доставки нет — конверты лежат в ящике.
+        assert!(clicks(&rt_child).is_empty(), "до пумпы ничего не доставлено");
+        rt_child.eval("_lumen_frame_pump_messages()").unwrap();
+        let expected = {
+            let d = cd.lock().unwrap();
+            element_index(&d, "b").expect("<b> в дереве ребёнка")
+        };
+        // nid фасада — индекс в арене ребёнка; оба клика доставлены по адресу.
+        let got = clicks(&rt_child);
+        assert_eq!(got, vec![expected, expected]);
+        match rt_parent.eval("__bnid") {
+            Ok(JsValue::Number(n)) => assert_eq!(n as u32, expected),
+            other => panic!("__bnid не число: {other:?}"),
+        }
+        // Ящик разобран: повторная пумпа ничего не добавляет.
+        rt_child.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(clicks(&rt_child).len(), 2);
+    }
+
+    #[test]
+    fn child_facade_click_waits_for_the_parent_pump() {
+        let (rt_parent, rt_child, pd, _cd) = with_parent_child_pair_docs(true, true);
+        rt_child
+            .eval("window.parent.document.body.click();")
+            .unwrap();
+        // Пумпа ребёнка не трогает чужой ящик — конверт адресован родителю.
+        rt_child.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(clicks(&rt_child).is_empty());
+        rt_parent.eval("_lumen_frame_pump_messages()").unwrap();
+        let expected = {
+            let d = pd.lock().unwrap();
+            element_index(&d, "body").expect("body в дереве родителя")
+        };
+        assert_eq!(clicks(&rt_parent), vec![expected]);
+    }
+
+    #[test]
+    fn click_into_inaccessible_child_is_dropped() {
+        // Второй флаг false: слот frames родителя cross-origin/opaque — фасад
+        // документа не выдаётся и натив постановки режет конверт до ящика.
+        let (rt_parent, rt_child, _pd, cd) = with_parent_child_pair_docs(true, false);
+        let b_nid = {
+            let d = cd.lock().unwrap();
+            element_index(&d, "b").expect("<b> в дереве ребёнка")
+        };
+        assert!(eval_bool(
+            &rt_parent,
+            &format!(
+                "_lumen_frame_content_document(7) === null && \
+                 _lumen_f_queue_click(0, {b_nid}) === false"
+            )
+        ));
+        rt_child.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(clicks(&rt_child).is_empty());
+    }
+
+    #[test]
+    fn click_queue_rejects_non_elements_and_bad_args() {
+        with_shared_frame("<html><body><b>x</b></body></html>", true, |rt, doc| {
+            let text_nid = {
+                let d = doc.lock().unwrap();
+                let b = find_first_matching(&d, d.root(), &|node| {
+                    node.element_name()
+                        .map(|n| n.local.eq_ignore_ascii_case("b"))
+                        .unwrap_or(false)
+                })
+                .expect("<b> существует");
+                d.get(b).children[0].index() as u32
+            };
+            // Текстовый узел, nid за границей арены и несуществующий bid —
+            // все три дают «нет» и ничего не ставят в ящик.
+            assert!(eval_bool(
+                rt,
+                &format!(
+                    "_lumen_f_queue_click(0, {text_nid}) === false && \
+                     _lumen_f_queue_click(0, 4294967295) === false && \
+                     _lumen_f_queue_click(5, 1) === false"
+                )
             ));
         });
     }
