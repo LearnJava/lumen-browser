@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-25",
  "counts": {
-  "open": 381,
+  "open": 382,
   "fixed": 499,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 880,
+ "total_bugs": 881,
  "phases": [
   {
    "id": "P0",
@@ -5317,15 +5317,18 @@
     {
      "id": "IFC",
      "title": "IFC: не-текстовые элементы внутри строки",
-     "status": "planned",
+     "status": "active",
      "note": "Дорожка «Inline formatting context: не-текстовые элементы внутри строки» (владелец — P1, заведена 2026-08-21 по итогам проб `--dump-layout` на dev-release a7ee9468f). Единственная структурная дыра раскладки, видимая на любом реальном сайте: элемент, который не является текстом, не умеет жить внутри строки — либо выпадает из неё целиком (`<img>`), либо течёт горизонтально, но не выравнивается по базовой линии (`inline-block`, form controls). На вебе это иконка в кнопке, лого рядом с названием, бейдж, аватар в комментарии, звёздочки рейтинга, стрелка в ссылке — каждый такой элемент рвёт строку и раздувает её по вертикали вдвое-втрое. Приоритет по оси «выглядит правильно» первый; по оси «работает вообще» уступает JS-слою (пробы 2026-08-21: lenta/MDN/РБК открываются с падающим JS, habr.com не завершается за 90 с), поэтому в очереди P1 стоит после BUG-716/591/564/778",
      "tasks": [
       {
        "id": "IFC-1",
        "title": "IFC-1: baseline-выравнивание inline-block и form controls",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "Baseline-выравнивание в `InlineBlockRow` (`crates/engine/layout/src/box_tree.rs`). Горизонтальный поток уже работает — вертикального выравнивания по базовой линии нет, куски строки стоят на разных y и line box разбухает. Замер `--dump-layout` 2026-08-21 (dev-release a7ee9468f): `<p>Текст до <span style=\"display:inline-block;width:16px;height:16px\"></span> текст после</p>` даёт InlineRun y=57.86 h=19.20, Block y=84.00 h=16, InlineRun y=81.00 h=19.20 — три разных уровня, высота блока 46.20 px вместо 19.20; `<input size=4>` в той же позиции — текст y=8.00, FormControl y=31.00 h=23.00, хвост y=35.00, высота 49.86. Чинит разом `inline-block`, `<input>`, `<button>`, `<select>`. Спека — CSS 2.1 §10.8.1 (baseline inline-block = базовая линия последнего line box в нормальном потоке, либо нижняя кромка margin box при `overflow != visible`); взаимодействие с `vertical-align` уже частично разобрано в [BUG-182](bugs/BUG-182-FIXED.md) (`middle` центрировался по line box вместо базовой линии) и [BUG-081](bugs/BUG-081-FIXED.md). Правка двигает пиксели — полный графический прогон + регенерация CPU-снапшотов в том же коммите"
+       "note": "Baseline-выравнивание в `InlineBlockRow` (`crates/engine/layout/src/box_tree.rs`). Горизонтальный поток уже работает — вертикального выравнивания по базовой линии нет, куски строки стоят на разных y и line box разбухает. Замер `--dump-layout` 2026-08-21 (dev-release a7ee9468f): `<p>Текст до <span style=\"display:inline-block;width:16px;height:16px\"></span> текст после</p>` даёт InlineRun y=57.86 h=19.20, Block y=84.00 h=16, InlineRun y=81.00 h=19.20 — три разных уровня, высота блока 46.20 px вместо 19.20; `<input size=4>` в той же позиции — текст y=8.00, FormControl y=31.00 h=23.00, хвост y=35.00, высота 49.86. Чинит разом `inline-block`, `<input>`, `<button>`, `<select>`. Спека — CSS 2.1 §10.8.1 (baseline inline-block = базовая линия последнего line box в нормальном потоке, либо нижняя кромка margin box при `overflow != visible`); взаимодействие с `vertical-align` уже частично разобрано в [BUG-182](bugs/BUG-182-FIXED.md) (`middle` центрировался по line box вместо базовой линии) и [BUG-081](bugs/BUG-081-FIXED.md). Правка двигает пиксели — полный графический прогон + регенерация CPU-снапшотов в том же коммите ЗАКРЫТ 2026-08-25 (ветка `p1-ifc1-baseline`): заявка называла один дефект, их оказалось два, и первый был горизонтальный. Бокс `InlineRun` широк ровно настолько, сколько ему предложили, а не сколько занял текст, поэтому продвижение по `rect.width` уводило следующий atomic inline за правый край и тот ВСЕГДА переносился на свою строку — три уровня y из замера были тремя разными строками, а не сбитым выравниванием. Теперь прогон продвигает строку по протяжённости своей последней строки плюс схлопнутые пробелы на краях (`inline_run_advance`/`inline_run_lead_space` — `wrap_inline_run` срезает пробел на границе строки, а `InlineSpace` ставится только между двумя atomic inline, так что больше эти зазоры нигде не записаны). Второй дефект — `vertical-align: baseline` выравнивал нижние кромки margin box: `inline_baseline` даёт настоящую базовую линию (последняя строка прогона; последний line box нормального потока у `inline-block`; подпись у текстового контрола, а при её отсутствии — строка по центру content box той же формулой, что рисует `emit_input_value_text`; `None` = нижняя кромка margin box у пустого бокса, `overflow != visible`, замещаемого элемента и бестекстового виджета checkbox/radio/range/progress/meter/`<textarea>`). Высота строки — `above + below` вместо `max(child_full_h) + strut`. Результат: `<p>` с 16px-инлайн-блоком 21.12px вместо 46.06, `<input size=4>` 23.00 вместо 49.80, `inline-block` с текстом — ровно 19.20 (обе строки на общей базовой линии). Полный графический прогон: TEST-02/04/12/56 0.00 %, TEST-11/12/24 PASS, TEST-34 3.02 % → 2.88 %, TEST-83 6.14 % → 3.87 % (храповик спущен); CPU-снапшот сдвинулся ровно один — 34-forms. Третья находка вне объёма: `<button>`/`<select>` без явной ширины схлопываются в 0 (`is_replaced` даёт им intrinsic-ширину 0, а shrink-to-fit берёт `min` с ней) — заведено как [BUG-926](bugs/BUG-926-OPEN.md). 5 тестов `ifc1_*`. Разбор — [subsystems/layout.md](subsystems/layout.md), готча про strut без half-leading там же.",
+       "bugs": [
+        "BUG-926"
+       ]
       },
       {
        "id": "IFC-2",
@@ -11546,6 +11549,13 @@
    "status": "open",
    "title": "Атрибута `loading` у медиа-элемента нет: `el.loading = 'lazy'` кладёт экспандо, `getAttribute('loading')` остаётся `null` (замер по четырём тегам — `audio`/`vid…",
    "component": "js (`crates/js/src/audio_element.rs` — `patchAudioElement`; `crates/js/src/video_bindings.rs` — то же у `<video>`; `crates/js/src/dom.rs:17149`/`:17239` — рефлексия `loading` у `<img>`/`<iframe>` объявлена `'string'` вместо `'enum'`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-926": {
+   "status": "open",
+   "title": "`<button>` и `<select>` без явной CSS-ширины схлопываются в `width: 0` — на экране остаётся вертикальная полоска из двух рамок, подпись есть в дереве боксов нул…",
+   "component": "layout (`crates/engine/layout/src/box_tree.rs` — `is_replaced` в `lay_out_inner`, затем `b.rect.width = pref_w.min(b.rect.width)` в ветке shrink-to-fit)",
    "date": null,
    "debtor": false
   }

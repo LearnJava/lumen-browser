@@ -534,7 +534,10 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '64': ('BUG-128', 8.99),    # table: margin-collapse таблица↔блок фикснут BUG-193 (13.89% → 8.99%); остаток = font-parity (текст в ~21 ячейках + заголовки, Inter vs Edge) + ~3px накопленный line-height сдвиг
     '18': ('BUG-219', 2.11),    # <img>: «image bottom gap» (baseline descent) фикснут BUG-180 (21.21% → 2.11%); остаток = image-resampling AA (area-avg ≠ Edge downscale kernel). BUG-219 FIXED(DEBTOR) 2026-07-04: Lanczos-3 и Mitchell-bicubic прогнаны, ни один не выигрывает равномерно (Mitchell лучше на 18, хуже на 19) → area-avg сохранён, остаток inherent (rule 2/3)
     '19': ('BUG-219', 9.05),    # object-fit: геометрия всех 5 режимов + object-position верна (BUG-181: средние RGB совпадают, лучший сдвиг 0,0, letterbox корректен) — остаток = image-resampling AA на высокочастотном контенте (perceptron-диаграмма + agi rusty-текстура, area-avg ≠ Edge downscale kernel). BUG-219 FIXED(DEBTOR) 2026-07-04 (см. TEST-18): смена kernel отклонена, baseline не тронут
-    '83': ('BUG-128', 6.14),    # Перецелён из BUG-277 (BUG-277 срез 17, 2026-08-05): «wgpu-окно против
+    '83': ('BUG-128', 3.87),    # Ратчет 6.14→3.87 (IFC-1, 2026-08-25): `.pill` — inline-block с
+    #   текстом внутри; до IFC-1 такой бокс садился на строку нижней кромкой margin box, а не
+    #   базовой линией своей последней строки, так что весь блок `.root-demo` уезжал вниз.
+    #   Замерено трижды подряд, 3.87% стабильно. Перецелён из BUG-277 (BUG-277 срез 17, 2026-08-05): «wgpu-окно против
     #   headless-CPU» (`run.py --only 83` / `--only 83 --ipc`) дал 6.14% против 6.31% — расхождение
     #   бэкендов в пределах шума (Δ0.17пп), дефекта wgpu-исполнителя нет. Свежий diff-снимок —
     #   сплошь цветные ореолы вокруг подписей/кода на всей странице, ни одного артефакта в области

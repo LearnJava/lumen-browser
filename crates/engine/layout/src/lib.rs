@@ -9749,9 +9749,15 @@ mod tests {
 
     #[test]
     fn inline_block_row_without_text_has_no_strut_descent() {
-        // CSS §10.8 / Edge-верификация (TEST-11/TEST-12):
-        // ряд из baseline-aligned inline-block-ов получает strut_descent (3.2px).
+        // CSS §10.8 / Edge-верификация (TEST-11/TEST-12/TEST-34):
+        // ряд из baseline-aligned inline-block-ов получает strut_descent.
         // ряд из bottom-aligned inline-block-ов strut НЕ получает.
+        //
+        // Strut — content area шрифта ряда без half-leading (descent 0.2em у
+        // тестового измерителя). Почему без него — в `box_tree.rs`, ветка
+        // `BoxKind::InlineBlockRow`: `line-height: normal` здесь 1.2em, и
+        // half-leading от него делает строку выше, чем в Edge (IFC-1, A/B на
+        // TEST-02/04/21/56).
         let root_baseline = lay_measured(
             "<div><span></span><span></span></div>",
             "span { display: inline-block; width: 50px; height: 80px; }",
