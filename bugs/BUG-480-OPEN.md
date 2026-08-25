@@ -151,7 +151,7 @@ filed — folds under this bug's umbrella per the pattern above.
 
 Родственные элементы измерены тем же прогоном и разведены по своим багам:
 `<object data>`/`<embed src>` — [BUG-798](BUG-798-OPEN.md), `<frame>` —
-[BUG-854](BUG-854-OPEN.md).
+[BUG-854](BUG-854-FIXED.md).
 
 ## Срез 1 (P3, 2026-08-23) — шелловый конвейер под-документов
 

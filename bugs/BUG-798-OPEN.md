@@ -87,7 +87,7 @@ BUG-480, но **не тот же баг** — `<embed>`/`<object>` не имею
 
 Маркер `nbc-element-never-loads` в `tests/wpt/timeout_audit.py` (стадия
 `SUBTEST_MARKERS`, введена этим срезом) — **7 id** остатка снимка WPT-RUN-5,
-общих с [BUG-854](BUG-854-OPEN.md): `object-handler.html` целиком здесь, а
+общих с [BUG-854](BUG-854-FIXED.md): `object-handler.html` целиком здесь, а
 пять `query-encoding/*?include=nested-browsing` и
 `nested-browsing-contexts/name-attribute.window.html` делят подтесты между
 `<object>`/`<embed>`/`<frame>` (сюда) и `<iframe>`
