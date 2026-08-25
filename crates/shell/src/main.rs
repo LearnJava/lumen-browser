@@ -19453,19 +19453,35 @@ impl Lumen {
                 self.open_file_picker(id);
             }
             forms::FormClickAction::ToggleDetails(id) => {
+                // BUG-851: the flip is the shell's alone. The JS click this
+                // method already dispatched used to reach a `click` listener on
+                // `document` that flipped `open` a second time, so a real mouse
+                // click on a `<summary>` left `<details>` exactly as it found it
+                // — and fired two `toggle` events about the change that did not
+                // happen. That listener is gone; JS is only *told* what changed.
+                let was_open = self.layout_source.as_ref().is_some_and(|src| {
+                    src.document
+                        .lock()
+                        .is_ok_and(|doc| doc.get(id).get_attr("open").is_some())
+                });
                 if let Some(src) = self.layout_source.as_mut() {
                     forms::toggle_details_open(&mut src.document.lock().unwrap(), id);
                 }
-                // Fire HTML5 §4.11.1 `toggle` event on the <details> element.
-                // ADR-016 M2.2c-2d: fire-and-forget `toggle` event через
-                // маршрутизатор — под флагом off-UI-thread, без флага байт-идентично.
+                // HTML LS §4.11.1 attribute change steps for `open` — the queued
+                // `toggle` event and the exclusive-accordion pass. Routing them
+                // through the shim instead of dispatching a bare `Event('toggle')`
+                // here is what makes the native click and every scripted write to
+                // `open` one mechanism.
+                // ADR-016 M2.2c-2d: fire-and-forget через маршрутизатор — под
+                // флагом off-UI-thread, без флага байт-идентично.
                 #[cfg(feature = "v8")]
                 route_eval_js(
                     self.engine_thread.as_ref(),
                     self.js_ctx.as_ref(),
                     format!(
-                        "_lumen_make_element({}).dispatchEvent(new Event('toggle'))",
-                        id.index()
+                        "_lumen_details_native_toggled({}, {})",
+                        id.index(),
+                        was_open
                     ),
                 );
                 // ADR-016 M2.2c-3: <details> open flip already applied to the
