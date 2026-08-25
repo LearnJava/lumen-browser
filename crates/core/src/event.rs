@@ -116,6 +116,39 @@ pub enum Event {
         kind: SubresourceKind,
         priority: FetchPriority,
     },
+    /// W3C Resource Timing L2 §4: подресурс, загруженный самим движком
+    /// (картинка, стиль каскада, шрифт, скрипт из разметки), доехал.
+    ///
+    /// Страница узнаёт о таких загрузках только отсюда: они идут на потоках без
+    /// JS-контекста, поэтому записать себя в `performance` сами не могут — в
+    /// отличие от `fetch()`/XHR, которые пишут запись прямо в шиме. Шелл
+    /// накапливает эти события и отдаёт их в JS одним пакетом на шаге цикла
+    /// событий (BUG-839).
+    ///
+    /// `start_ms` — unix-epoch миллисекунды (тот же отсчёт, что и у нативной
+    /// привязки `_lumen_now_ms`, из которой шим берёт `timeOrigin`), поэтому
+    /// перевод в `DOMHighResTimeStamp` — просто вычитание origin.
+    ResourceTimed {
+        tab_id: TabId,
+        /// Абсолютный URL запроса.
+        url: String,
+        /// `initiatorType` записи: `img` / `link` / `script` / `css` / `other`.
+        initiator: &'static str,
+        /// Начало загрузки, unix-epoch мс.
+        start_ms: f64,
+        /// Длительность загрузки, мс.
+        duration_ms: f64,
+        /// HTTP-статус ответа (0 — неизвестен, например попадание в кэш).
+        status: u16,
+        /// Размер тела на проводе; для ответа из кэша — размер тела в кэше.
+        encoded_body_size: u64,
+        /// Размер тела после распаковки.
+        decoded_body_size: u64,
+        /// Значение заголовка `Content-Type` (пустая строка, если его нет).
+        content_type: String,
+        /// `deliveryType`: `"cache"` для ответа из HTTP-кэша, иначе пусто.
+        delivery_type: &'static str,
+    },
     /// RFC 6455 §1.3: handshake завершён, соединение открыто.
     WebSocketConnected { tab_id: TabId, url: Url },
     /// Получено сообщение от сервера (текст или бинарные данные).
