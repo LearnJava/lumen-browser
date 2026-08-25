@@ -58,11 +58,11 @@
  "generated": "2026-08-25",
  "counts": {
   "open": 384,
-  "fixed": 483,
+  "fixed": 484,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 867,
+ "total_bugs": 868,
  "phases": [
   {
    "id": "P0",
@@ -10948,10 +10948,10 @@
    "debtor": false
   },
   "BUG-838": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<script src=\"\">` не даёт ни `error`, ни `load`: элемент уходит в инлайн-ветку, тела нет, функция молча возвращается. HTML LS §4.12.1 требует поставить задачу с…",
    "component": "js (`crates/js/src/dom.rs:5844`–`5849` — `_lumen_script_prepare` сводит «атрибута нет» и «атрибут пустой» в одно `''` и выходит по `return`)",
-   "date": null,
+   "date": "2026-08-25",
    "debtor": false
   },
   "BUG-839": {
@@ -11457,6 +11457,13 @@
    "component": "network (`crates/network/src/lib.rs:6186` — `mock_http_server`, `:8353` — `mock_http_server_capturing`, обе биндят `127.0.0.1:0`; `:302` — `blocked port` из `require_http_scheme`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-912": {
+   "status": "open",
+   "title": "У событий нет class string: `Object.prototype.toString.call(new Event('x'))` даёт `[object Object]` вместо `[object Event]`, при том что WebIDL §3.7.3 требует н…",
+   "component": "js (`crates/js/src/dom.rs` — 26 конструкторов событий шима; `Symbol.toStringTag` есть ровно у одного, `ErrorEvent` на `:737`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11891,6 +11898,9 @@
   ],
   "js (`crates/js/src/dom.rs` -- element wrapper factory)": [
    "BUG-551"
+  ],
+  "js (`crates/js/src/dom.rs` — 26 конструкторов событий шима; `Symbol.toStringTag` есть ровно у одного, `ErrorEvent` на `:737`)": [
+   "BUG-912"
   ],
   "js (`crates/js/src/dom.rs` — Web Animations shim, сеттер `currentTime` не выполняет «update the finished state», Web Animations §4.4.11)": [
    "BUG-861"
