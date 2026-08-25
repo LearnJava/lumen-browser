@@ -67,6 +67,26 @@
 //!   внком на `window.top` доставляется, но `event.source` у верха для внука
 //!   — `null` (внук не лежит в прямых слотах top), sibling↔sibling — будущий
 //!   срез.
+//!
+//! BUG-480 срез 5 — мутации под-документа из JS родителя (HTML LS §7.5
+//! «API for accessible to the contentDocument»):
+//! - фасады Element/Document получают запись через новое мутабельное
+//!   семейство нативов: `createElement`/`createTextNode` на документе,
+//!   `setAttribute`/`removeAttribute`/`appendChild`/`insertBefore`/
+//!   `removeChild`/`remove`/сеттер `textContent` на элементе, сеттер `title`
+//!   на документе; все операции идут в общий `Arc<Mutex<Document>>`, поэтому
+//!   видны контексту ребёнка немедленно (его врапперы читают живое дерево);
+//! - аргументы-узлы проверяются на принадлежность тому же биндингу
+//!   (`__bid__` на фасаде): чужой фасад → тихий no-op; нативы дополнительно
+//!   проверяют границы арены и цикл («потомок под собственного предка» —
+//!   отклонение от спеки: HierarchyRequestError заменён тихим no-op, как и
+//!   везде в бридже «невалидно = пусто»);
+//! - отклонения задокументированы: вставленные `<script>` не исполняются
+//!   (исполнение скриптов ребёнка происходит один раз при загрузке, срез 1),
+//!   подресурсы вставленных `<img>`/`<link>` не запрашиваются (загрузка
+//!   подресурсов фреймов — будущий срез), restyle/layout/paint фрейма не
+//!   запускается (фреймы ещё не рендерятся вовсе); события через границу
+//!   изолятов (`facade.click()` → слушатели ребёнка) — следующий срез.
 
 #[cfg(feature = "v8-backend")]
 use std::sync::{Arc, Mutex, OnceLock};
@@ -226,6 +246,111 @@ fn with_accessible_doc<R>(
     f(&doc)
 }
 
+/// Мутабельный вариант [`with_accessible_doc`] для среза 5 (запись в
+/// под-документ). Те же правила: нет биндинга или `accessible: false` —
+/// вызывающий JS получает «пусто».
+#[cfg(feature = "v8-backend")]
+fn with_accessible_doc_mut<R>(
+    registry: &FrameDocRegistry,
+    bid: u32,
+    f: impl FnOnce(&mut lumen_dom::Document) -> R,
+    empty: R,
+) -> R {
+    let reg = registry.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(binding) = resolve_slot(&reg, bid) else {
+        return empty;
+    };
+    if !binding.accessible {
+        return empty;
+    }
+    let mut doc = binding.doc.lock().unwrap_or_else(|e| e.into_inner());
+    f(&mut doc)
+}
+
+/// Границы арены для нативов записи: `Document::get` индексирует `Vec` без
+/// проверок, а JS передаёт сырые `u32`. В отличие от нативов чтения
+/// (исторически доверяющих фасадным `nid`) мутации обязаны отвергать чужой
+/// индекс — иначе фасад одного документа испортил бы дерево другого.
+#[cfg(feature = "v8-backend")]
+fn checked_node(doc: &lumen_dom::Document, nid: u32) -> Option<lumen_dom::NodeId> {
+    if nid as usize >= doc.node_count() {
+        return None;
+    }
+    Some(lumen_dom::NodeId::from_index(nid as usize))
+}
+
+/// DEVX-8a-аналог (`lumen_dom::Document::is_self_or_ancestor` — приватный):
+/// true, если `candidate` — сам `node` или его предок по цепочке `parent`.
+#[cfg(feature = "v8-backend")]
+fn is_self_or_ancestor(
+    doc: &lumen_dom::Document,
+    candidate: lumen_dom::NodeId,
+    node: lumen_dom::NodeId,
+) -> bool {
+    let mut cur = Some(node);
+    while let Some(n) = cur {
+        if n == candidate {
+            return true;
+        }
+        cur = doc.get(n).parent;
+    }
+    false
+}
+
+/// Mirrors `v8_runtime::set_attribute` (приватен там; третья копия — рядом
+/// уже живут `dom.rs` и `v8_runtime.rs`).
+#[cfg(feature = "v8-backend")]
+fn bridge_set_attr(doc: &mut lumen_dom::Document, id: lumen_dom::NodeId, name: &str, value: &str) {
+    if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(id).data {
+        if let Some(attr) = attrs
+            .iter_mut()
+            .find(|a| a.name.local.eq_ignore_ascii_case(name))
+        {
+            attr.value = value.to_string();
+        } else {
+            attrs.push(lumen_dom::Attribute {
+                name: lumen_dom::QualName::html(name.to_ascii_lowercase()),
+                value: value.to_string(),
+            });
+        }
+    }
+}
+
+/// Mirrors `v8_runtime::remove_attribute`.
+#[cfg(feature = "v8-backend")]
+fn bridge_remove_attr(doc: &mut lumen_dom::Document, id: lumen_dom::NodeId, name: &str) {
+    if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(id).data {
+        attrs.retain(|a| !a.name.local.eq_ignore_ascii_case(name));
+    }
+}
+
+/// Mirrors `v8_runtime::set_text_content`: Text/Comment перезаписывают свою
+/// строку на месте, остальные узлы заменяют детей одним текстовым узлом.
+#[cfg(feature = "v8-backend")]
+fn bridge_set_text_content(
+    doc: &mut lumen_dom::Document,
+    id: lumen_dom::NodeId,
+    text: &str,
+) -> bool {
+    match &mut doc.get_mut(id).data {
+        lumen_dom::NodeData::Text(s) | lumen_dom::NodeData::Comment(s) => {
+            *s = text.to_string();
+            return true;
+        }
+        _ => {}
+    }
+    let children: Vec<lumen_dom::NodeId> = doc.get(id).children.clone();
+    for child in children {
+        doc.detach(child);
+    }
+    if !text.is_empty()
+        && let Ok(text_node) = doc.try_create_text(text)
+    {
+        doc.append_child(id, text_node);
+    }
+    true
+}
+
 /// Первый элемент с тегом `tag` (ASCII case-insensitive) в document order.
 /// Mirrors `v8_runtime::find_element_by_tag`.
 #[cfg(feature = "v8-backend")]
@@ -285,7 +410,7 @@ pub(crate) fn install_frame_bridge_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
     registry: FrameDocRegistry,
 ) -> lumen_core::JsResult<()> {
-    use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3};
+    use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4};
     use lumen_core::ext::JsRuntime as _;
 
     // bid → есть ли биндинг вообще (для contentWindow, который существует
@@ -757,6 +882,150 @@ pub(crate) fn install_frame_bridge_v8(
         )?;
     }
 
+    // ── Срез 5: мутации под-документа ─────────────────────────────────────────
+    // Все нативы записи проходят через with_accessible_doc_mut и проверяют
+    // границы арены (checked_node): чужой/вышедший за пределы nid — тихий
+    // no-op. Возврат «неудача» (false/-1/null) неотличим для JS от
+    // отсутствия биндинга — конвенция бриджа «невалидно = пусто».
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_create_element",
+            into_v8_fn2(move |bid: u32, tag: String| -> i32 {
+                with_accessible_doc_mut(&reg, bid, |d| {
+                    // -1 при переполнении арены (MAX_DOM_NODES); шим отдаёт null.
+                    d.try_create_element(lumen_dom::QualName::html(tag.to_ascii_lowercase()))
+                        .map(|n| n.index() as i32)
+                        .unwrap_or(-1)
+                }, -1)
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_create_text",
+            into_v8_fn2(move |bid: u32, data: String| -> i32 {
+                with_accessible_doc_mut(&reg, bid, |d| {
+                    d.try_create_text(data)
+                        .map(|n| n.index() as i32)
+                        .unwrap_or(-1)
+                }, -1)
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_set_attr",
+            into_v8_fn4(move |bid: u32, nid: u32, name: String, value: String| -> bool {
+                with_accessible_doc_mut(&reg, bid, |d| {
+                    checked_node(d, nid).is_some_and(|id| {
+                        let is_element = matches!(&d.get(id).data, lumen_dom::NodeData::Element { .. });
+                        if is_element {
+                            bridge_set_attr(d, id, &name, &value);
+                        }
+                        is_element
+                    })
+                }, false)
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_remove_attr",
+            into_v8_fn3(move |bid: u32, nid: u32, name: String| -> bool {
+                with_accessible_doc_mut(&reg, bid, |d| {
+                    checked_node(d, nid).is_some_and(|id| {
+                        let is_element = matches!(&d.get(id).data, lumen_dom::NodeData::Element { .. });
+                        if is_element {
+                            bridge_remove_attr(d, id, &name);
+                        }
+                        is_element
+                    })
+                }, false)
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_append_child",
+            into_v8_fn3(move |bid: u32, parent_nid: u32, child_nid: u32| -> bool {
+                with_accessible_doc_mut(&reg, bid, |d| {
+                    match (checked_node(d, parent_nid), checked_node(d, child_nid)) {
+                        (Some(parent), Some(child)) => {
+                            // DEVX-8a: потомок под собственного предка создаёт
+                            // цикл в арене (в release у append_child нет
+                            // защиты) — отклоняем до вызова.
+                            if is_self_or_ancestor(d, child, parent) {
+                                return false;
+                            }
+                            d.append_child(parent, child);
+                            true
+                        }
+                        _ => false,
+                    }
+                }, false)
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_insert_before",
+            into_v8_fn3(move |bid: u32, node_nid: u32, ref_nid: u32| -> bool {
+                with_accessible_doc_mut(&reg, bid, |d| {
+                    match (checked_node(d, node_nid), checked_node(d, ref_nid)) {
+                        (Some(node), Some(reference)) => {
+                            // Спека: reference без родителя → pre-insert
+                            // невалиден; цикл — тот же запрет DEVX-8a.
+                            let parent = d.get(reference).parent;
+                            match parent {
+                                Some(p) if !is_self_or_ancestor(d, node, p) => {
+                                    d.insert_before(node, reference);
+                                    true
+                                }
+                                _ => false,
+                            }
+                        }
+                        _ => false,
+                    }
+                }, false)
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_remove_node",
+            into_v8_fn2(move |bid: u32, nid: u32| -> bool {
+                with_accessible_doc_mut(&reg, bid, |d| {
+                    match checked_node(d, nid) {
+                        Some(id) => {
+                            d.detach(id);
+                            true
+                        }
+                        None => false,
+                    }
+                }, false)
+            }),
+        )?;
+    }
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_set_text",
+            into_v8_fn3(move |bid: u32, nid: u32, text: String| -> bool {
+                with_accessible_doc_mut(&reg, bid, |d| {
+                    checked_node(d, nid)
+                        .is_some_and(|id| bridge_set_text_content(d, id, &text))
+                }, false)
+            }),
+        )?;
+    }
+
     rt.eval(FRAME_BRIDGE_SHIM)?;
     Ok(())
 }
@@ -796,6 +1065,28 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
 
   function isAncestorBid(bid) { return bid === PARENT_BID || bid === TOP_BID; }
 
+  // Срез 5: аргумент-узел мутации — фасад ТОГО ЖЕ биндинга с числовым __nid__.
+  function isBridgeNode(bid, n) {
+    return n !== null && n !== undefined && typeof n === 'object'
+      && n.__bid__ === bid && typeof n.__nid__ === 'number';
+  }
+
+  // appendChild/insertBefore над нативами записи. ref === null/undefined —
+  // спечный синоним appendChild (insertBefore(node, null)); чужой фасад или
+  // отклонённая нативом вставка — тихий no-op (undefined вместо узла).
+  function bridgeInsert(bid, parentNid, child, ref) {
+    if (!isBridgeNode(bid, child)) return undefined;
+    var ok;
+    if (ref === null || ref === undefined) {
+      ok = _lumen_f_append_child(bid, parentNid, child.__nid__);
+    } else if (isBridgeNode(bid, ref)) {
+      ok = _lumen_f_insert_before(bid, child.__nid__, ref.__nid__);
+    } else {
+      ok = false;
+    }
+    return ok ? child : undefined;
+  }
+
   // Разрешение top-окна текущего КОНТЕКСТА (не фасада): отдельный слот top,
   // иначе слот parent (фрейм 1-го уровня), иначе сам window.
   function topOfContext() {
@@ -814,6 +1105,7 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     var cached = cache[nid];
     if (cached) return cached;
     var el = {
+      __bid__: bid,
       __nid__: nid,
       get nodeType() {
         if (_lumen_f_is_text(bid, nid)) return 3;
@@ -824,8 +1116,9 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       get tagName()    { var t = _lumen_f_tag(bid, nid); return t ? t.toUpperCase() : t; },
       get nodeName()   { var t = _lumen_f_tag(bid, nid); return t ? t.toUpperCase() : t; },
       get id()         { var v = _lumen_f_attr(bid, nid, 'id'); return v !== null && v !== undefined ? v : ''; },
+      set id(v)        { _lumen_f_set_attr(bid, nid, 'id', String(v)); },
       get className()  { var v = _lumen_f_attr(bid, nid, 'class'); return v !== null && v !== undefined ? v : ''; },
-      get textContent(){ return _lumen_f_text(bid, nid); },
+      set className(v) { _lumen_f_set_attr(bid, nid, 'class', String(v)); },
       getAttribute: function(n) { return _lumen_f_attr(bid, nid, String(n)); },
       hasAttribute: function(n) { return _lumen_f_has_attr(bid, nid, String(n)); },
       get children() { return _lumen_f_children(bid, nid).map(function(c) { return frameElem(bid, c); }); },
@@ -840,6 +1133,22 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
       querySelectorAll: function(sel) {
         return _lumen_f_query_all_scoped(bid, nid, String(sel)).map(function(c) { return frameElem(bid, c); });
       },
+      // BUG-480 срез 5: запись через фасад. Аргументы-узлы обязаны быть
+      // фасадами ТОГО ЖЕ биндинга (чужой документ — тихий no-op); removeChild
+      // снимает ребёнка с фактического родителя в дереве (как у главного
+      // документа), без проверки иерархии — отклонение задокументировано.
+      setAttribute: function(n, v) { _lumen_f_set_attr(bid, nid, String(n), String(v)); },
+      removeAttribute: function(n) { _lumen_f_remove_attr(bid, nid, String(n)); },
+      appendChild: function(c) { return bridgeInsert(bid, nid, c, null); },
+      insertBefore: function(c, ref) { return bridgeInsert(bid, nid, c, ref); },
+      removeChild: function(c) {
+        if (!isBridgeNode(bid, c)) return undefined;
+        _lumen_f_remove_node(bid, c.__nid__);
+        return c;
+      },
+      remove: function() { _lumen_f_remove_node(bid, nid); },
+      get textContent() { return _lumen_f_text(bid, nid); },
+      set textContent(v) { _lumen_f_set_text(bid, nid, String(v)); },
       // BUG-480 срез 2: содержимое фрейма не layout'ится — честные нули вместо
       // выдуманных размеров (layout фреймов — будущий срез).
       get offsetWidth()  { return 0; },
@@ -865,6 +1174,23 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     Object.defineProperty(d, 'head',              { get: function() { return el(_lumen_f_head(bid)); }, configurable: true });
     Object.defineProperty(d, 'documentElement',   { get: function() { return el(_lumen_f_document_element(bid)); }, configurable: true });
     Object.defineProperty(d, 'title',             { get: function() { return _lumen_f_title(bid); }, configurable: true });
+    // Срез 5: title записывается в существующий <title>, а без него —
+    // создаётся и вставляется в <head> (HTML LS §4.2.2); совсем без head —
+    // тихий no-op.
+    Object.defineProperty(d, 'title', {
+      set: function(v) {
+        var t = _lumen_f_query(bid, 'title');
+        if (t === null || t === undefined) {
+          var h = el(_lumen_f_head(bid));
+          if (h === null || h === undefined) return;
+          var i = _lumen_f_create_element(bid, 'title');
+          if (i === null || i === undefined || i < 0) return;
+          h.appendChild(frameElem(bid, i));
+        }
+        d.querySelector('title').textContent = String(v);
+      },
+      configurable: true,
+    });
     Object.defineProperty(d, 'URL',               { get: function() { return _lumen_f_url(bid); }, configurable: true });
     Object.defineProperty(d, 'documentURI',       { get: function() { return _lumen_f_url(bid); }, configurable: true });
     // Ребёнок получил window load ещё в срезе 1 — readyState к моменту доступа
@@ -875,6 +1201,16 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     d.querySelector = function(sel) { return el(_lumen_f_query(bid, String(sel))); };
     d.querySelectorAll = function(sel) {
       return _lumen_f_query_all(bid, String(sel)).map(function(n) { return frameElem(bid, n); });
+    };
+    // Срез 5: фабрики узлов под-документа. Отрицательный ответ натива
+    // (переполнение арены) → null, как у главного документа.
+    d.createElement = function(tag) {
+      var i = _lumen_f_create_element(bid, String(tag));
+      return (i !== null && i !== undefined && i >= 0) ? frameElem(bid, i) : null;
+    };
+    d.createTextNode = function(data) {
+      var i = _lumen_f_create_text(bid, String(data));
+      return (i !== null && i !== undefined && i >= 0) ? frameElem(bid, i) : null;
     };
     docs[bid] = d;
     return d;
@@ -1673,5 +2009,284 @@ mod tests {
         assert_eq!(msg_count(&rt_child), 0);
         rt_parent.eval("_lumen_frame_pump_messages()").unwrap();
         assert!(eval_bool(&rt_parent, "__msgs[0].d === 'keep'"));
+    }
+
+    // ── Срез 5: мутации под-документа из родителя ─────────────────────────────
+
+    /// Рантайм + реестр + общий `Arc` документа биндинга `frames[0]` —
+    /// для проверок мутаций и со стороны JS, и со стороны Rust.
+    fn with_shared_frame(
+        html: &str,
+        accessible: bool,
+        f: impl FnOnce(&V8JsRuntime, &Arc<Mutex<lumen_dom::Document>>),
+    ) {
+        let rt = V8JsRuntime::new().unwrap();
+        let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        rt.eval("var window = globalThis;").unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        let doc = Arc::new(Mutex::new(lumen_html_parser::parse(html)));
+        registry.lock().unwrap().frames.push(FrameDocBinding {
+            host_nid: 7,
+            doc: Arc::clone(&doc),
+            url: "about:srcdoc".to_owned(),
+            name: None,
+            accessible,
+        });
+        f(&rt, &doc);
+    }
+
+    /// Второй изолят над ТЕМ ЖЕ `Arc<Mutex<Document>>` — модель «контекст
+    /// ребёнка видит мутации родителя»: у shell документ фрейма один и тот же
+    /// инстанс в реестре родителя и в контексте ребёнка (срез 1).
+    fn sibling_runtime_over(doc: &Arc<Mutex<lumen_dom::Document>>) -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        rt.eval("var window = globalThis;").unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        registry.lock().unwrap().frames.push(FrameDocBinding {
+            host_nid: 7,
+            doc: Arc::clone(doc),
+            url: "about:srcdoc".to_owned(),
+            name: None,
+            accessible: true,
+        });
+        rt
+    }
+
+    #[test]
+    fn mutations_land_in_the_real_child_tree() {
+        with_shared_frame(
+            "<html><body><p>keep</p></body></html>",
+            true,
+            |rt, doc| {
+                assert!(eval_bool(
+                    rt,
+                    "var d = _lumen_frame_content_document(7); \
+                     var p = d.createElement('p'); \
+                     p.id = 'injected'; \
+                     p.setAttribute('data-from', 'parent'); \
+                     p.textContent = 'from-parent'; \
+                     d.body.appendChild(p) === p && \
+                     d.getElementById('injected').textContent === 'from-parent' && \
+                     d.getElementById('injected').getAttribute('data-from') === 'parent'"
+                ));
+                // Мутация попала в настоящее дерево, а не в копию фасада.
+                let injected = {
+                    let d = doc.lock().unwrap();
+                    lumen_dom::Document::find_by_id(&d, "injected")
+                };
+                let injected = injected.expect("узел должен существовать в общем дереве");
+                let d = doc.lock().unwrap();
+                assert_eq!(
+                    d.get(injected).get_attr("data-from"),
+                    Some("parent"),
+                    "атрибут выставлен нативом в общий Document"
+                );
+                let body = d.body().expect("body на месте");
+                assert_eq!(d.get(body).children.len(), 2, "p добавлен последним ребёнком body");
+            },
+        );
+    }
+
+    #[test]
+    fn mutations_are_visible_to_another_isolate_sharing_the_arc() {
+        let shared = Arc::new(Mutex::new(lumen_html_parser::parse(
+            "<html><body><b>old</b></body></html>",
+        )));
+        let writer = sibling_runtime_over(&shared);
+        let reader = sibling_runtime_over(&shared);
+        assert!(eval_bool(
+            &writer,
+            "var d = _lumen_frame_content_document(7); \
+             var s = d.createElement('span'); s.textContent = 'fresh'; \
+             d.body.insertBefore(s, d.body.firstElementChild) !== undefined"
+        ));
+        assert!(eval_bool(
+            &reader,
+            "var b = _lumen_frame_content_document(7).querySelector('body'); \
+             b.children.length === 2 && b.children[0].textContent === 'fresh' \
+             && b.children[0].tagName === 'SPAN'"
+        ));
+    }
+
+    #[test]
+    fn text_content_setter_replaces_children_of_element() {
+        with_shared_frame(
+            "<html><body><div id='a'><b>one</b>two<i>three</i></div></body></html>",
+            true,
+            |rt, _| {
+                assert!(eval_bool(
+                    rt,
+                    "var a = _lumen_frame_content_document(7).getElementById('a'); \
+                     a.textContent = 'flat'; \
+                     a.children.length === 0 && a.textContent === 'flat'"
+                ));
+            },
+        );
+    }
+
+    #[test]
+    fn remove_and_insert_before_reorder_children() {
+        with_shared_frame(
+            "<html><body><ul id='u'><li id='x'>x</li><li id='z'>z</li></ul></body></html>",
+            true,
+            |rt, _| {
+                assert!(eval_bool(
+                    rt,
+                    "var d = _lumen_frame_content_document(7); \
+                     var y = d.createElement('li'); y.id = 'y'; y.textContent = 'y'; \
+                     d.getElementById('u').insertBefore(y, d.getElementById('z')) !== undefined && \
+                     d.getElementById('u').children[1].id === 'y'"
+                ));
+                assert!(eval_bool(
+                    rt,
+                    "var d = _lumen_frame_content_document(7); \
+                     d.getElementById('y').remove(); \
+                     var ids = d.getElementById('u').children.map(function(c) { return c.id; }); \
+                     ids.join(',') === 'x,z'"
+                ));
+            },
+        );
+    }
+
+    #[test]
+    fn remove_child_takes_node_off_its_actual_parent() {
+        with_shared_frame(
+            "<html><body><div id='box'><b id='inner'>t</b></div></body></html>",
+            true,
+            |rt, _| {
+                assert!(eval_bool(
+                    rt,
+                    "var d = _lumen_frame_content_document(7); \
+                     var inner = d.getElementById('inner'); \
+                     d.getElementById('box').removeChild(inner) === inner && \
+                     d.getElementById('box').children.length === 0 && \
+                     inner.parentElement === null"
+                ));
+            },
+        );
+    }
+
+    #[test]
+    fn cross_binding_facade_argument_is_silently_ignored() {
+        // Два биндинга в одном изоляте (разные host_nid): фасад документа
+        // первого не принимает узел второго — проверка __bid__ режет аргумент
+        // до натива. Владение nid'ом на нативном уровне обеспечивает именно
+        // эта JS-граница: нативы модуля приватны и доверяют своим фасадам,
+        // как нативы главного документа доверяют его врапперам.
+        let rt = V8JsRuntime::new().unwrap();
+        let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        rt.eval("var window = globalThis;").unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        for (host, html) in [
+            (7u32, "<html><body><p id='first'>a</p></body></html>"),
+            (8u32, "<html><body><p id='second'>b</p></body></html>"),
+        ] {
+            registry.lock().unwrap().frames.push(FrameDocBinding {
+                host_nid: host,
+                doc: Arc::new(Mutex::new(lumen_html_parser::parse(html))),
+                url: "about:srcdoc".to_owned(),
+                name: None,
+                accessible: true,
+            });
+        }
+        assert!(eval_bool(
+            &rt,
+            "var d0 = _lumen_frame_content_document(7); \
+             var d1 = _lumen_frame_content_document(8); \
+             var alien = d1.createElement('div'); \
+             alien.__bid__ !== d0.body.__bid__ && \
+             d0.body.appendChild(alien) === undefined && \
+             d0.body.children.length === 1 && \
+             d1.body.children.length === 1"
+        ));
+        // Чужой фасад и в removeChild/insertBefore игнорируется.
+        assert!(eval_bool(
+            &rt,
+            "var d0 = _lumen_frame_content_document(7); \
+             var d1 = _lumen_frame_content_document(8); \
+             d0.body.removeChild(d1.createElement('span')) === undefined && \
+             d0.body.insertBefore(d1.createElement('i'), null) === undefined && \
+             d0.getElementById('first').textContent === 'a'"
+        ));
+    }
+
+    #[test]
+    fn inaccessible_frame_mutations_are_no_ops() {
+        with_shared_frame(
+            "<html><body><p>x</p></body></html>",
+            false,
+            |rt, _| {
+                assert!(eval_bool(
+                    rt,
+                    "var d = _lumen_frame_content_document(7); \
+                     d === null && \
+                     _lumen_f_create_element(7, 'div') === -1 && \
+                     _lumen_f_append_child(7, 3, 4) === false && \
+                     _lumen_f_set_attr(7, 3, 'id', 'hax') === false"
+                ));
+            },
+        );
+    }
+
+    #[test]
+    fn cycle_append_is_rejected_without_corrupting_tree() {
+        with_shared_frame(
+            "<html><body><div id='deep'>t</div></body></html>",
+            true,
+            |rt, _| {
+                // documentElement нельзя вставить под собственного потомка.
+                assert!(eval_bool(
+                    rt,
+                    "var d = _lumen_frame_content_document(7); \
+                     d.body.appendChild(d.documentElement) === undefined && \
+                     d.documentElement.parentElement === null"
+                ));
+                assert!(eval_bool(
+                    rt,
+                    "var d = _lumen_frame_content_document(7); \
+                     d.getElementById('deep').textContent === 't' && \
+                     d.body.children.length === 1"
+                ));
+            },
+        );
+    }
+
+    #[test]
+    fn title_setter_creates_title_inside_head() {
+        with_shared_frame("<html><head></head><body>x</body></html>", true, |rt, _| {
+            assert!(eval_bool(
+                rt,
+                "var d = _lumen_frame_content_document(7); \
+                 d.title === '' && (d.title = 'framed') || true; \
+                 d.title === 'framed'"
+            ));
+        });
+        // Повторная запись идёт в существующий <title>.
+        with_shared_frame(
+            "<html><head><title>old</title></head><body></body></html>",
+            true,
+            |rt, _| {
+                assert!(eval_bool(
+                    rt,
+                    "var d = _lumen_frame_content_document(7); \
+                     d.title === 'old' && ((d.title = 'new') || true) && d.title === 'new'"
+                ));
+            },
+        );
+    }
+
+    #[test]
+    fn created_text_node_round_trips_through_facade() {
+        with_shared_frame("<html><body></body></html>", true, |rt, _| {
+            assert!(eval_bool(
+                rt,
+                "var d = _lumen_frame_content_document(7); \
+                 var t = d.createTextNode('plain'); \
+                 t.nodeType === 3 && t.textContent === 'plain' && \
+                 d.body.appendChild(t) === t && \
+                 d.body.textContent === 'plain'"
+            ));
+        });
     }
 }
