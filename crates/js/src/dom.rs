@@ -4768,7 +4768,12 @@ var _LUMEN_WRAPPER_MEMBERS = {
             evt.target = this; evt.currentTarget = this;
             var notCancelled = _lumen_dispatch(nid, evt);
             if (notCancelled && evt.isTrusted === false && evt.type === 'click') {
-                _lumen_run_activation_behavior(nid, this);
+                // Same activation-target walk as `click()` (BUG-837): the
+                // behaviour belongs to the nearest activatable ancestor.
+                var at = _lumen_activation_target(nid);
+                if (at !== -1) {
+                    _lumen_run_activation_behavior(at, (at === nid) ? this : _lumen_make_element(at));
+                }
             }
             return notCancelled;
         },
@@ -17333,8 +17338,44 @@ function _lumen_fire_input_and_change(nid) {
     _lumen_dispatch_rich(nid, new Event('input',  { bubbles: true, cancelable: false }));
     _lumen_dispatch_rich(nid, new Event('change', { bubbles: true, cancelable: false }));
 }
+// Tags that carry an activation behaviour of their own — the table
+// `_lumen_run_activation_behavior` below dispatches on, kept separate so the
+// activation-target walk can ask «does this node have one» without running it.
+var _LUMEN_ACTIVATABLE_TAGS = {
+    INPUT: 1, BUTTON: 1, A: 1, AREA: 1, SUMMARY: 1, LABEL: 1,
+};
+// Interactive content with no activation behaviour of its own. The walk stops
+// here rather than continuing to an ancestor: HTML LS §4.10.20 says a label
+// does nothing for events targeted at its interactive-content descendants, so
+// a click on the `<textarea>` inside `<label for=cb>` must not toggle `cb`.
+var _LUMEN_ACTIVATION_BARRIER_TAGS = {
+    SELECT: 1, TEXTAREA: 1, IFRAME: 1, EMBED: 1, OBJECT: 1,
+};
+// DOM Standard §2.9 «activation target»: the activation behaviour belongs to
+// the nearest inclusive ancestor of the event target that has one, not to the
+// target itself (BUG-837 — a click on the `<span>` inside a `<label>`, the
+// `<img>` inside an `<a>` or the `<svg>` inside a `<button>` used to dispatch
+// the event and then do nothing, because the tag table was consulted for the
+// clicked node alone). The walk is bounded by the event path, i.e. the ancestor
+// chain of `nid`. Returns -1 when nothing on the path is activatable.
+function _lumen_activation_target(nid) {
+    var cur = nid;
+    for (var guard = 0; guard < 512; guard++) {
+        if (cur === null || cur === undefined || cur === -1) return -1;
+        var tag = (_lumen_get_tag_name(cur) || '').toUpperCase();
+        if (_LUMEN_ACTIVATABLE_TAGS[tag] === 1) return cur;
+        if (_LUMEN_ACTIVATION_BARRIER_TAGS[tag] === 1) return -1;
+        cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    return -1;
+}
 function _lumen_run_activation_behavior(nid, el) {
     var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+    // HTML LS §4.10.19: a disabled form control has no activation behaviour.
+    // `click()` checks the node it was called on; now that the target may be an
+    // ancestor of it, the disabled ancestor has to be checked here as well —
+    // otherwise a click on the `<span>` inside `<button disabled>` would submit.
+    if (_LUMEN_DISABLEABLE_TAGS[tag] === 1 && _lumen_has_attr(nid, 'disabled')) return;
     if (tag === 'INPUT') {
         var t = _lumen_u2n(_lumen_get_attr(nid, 'type'));
         t = (t === null) ? 'text' : String(t).toLowerCase();
@@ -17395,15 +17436,24 @@ HTMLElement.prototype.click = function() {
     if (_lumen_click_in_progress[nid]) return;
     _lumen_click_in_progress[nid] = true;
     try {
-        var pre = _lumen_pre_click_activation(nid);
+        // DOM §2.9: the activation target is computed *before* dispatch, and
+        // both halves of the sequence belong to it — the pre-click flip as much
+        // as the behaviour itself (BUG-837).
+        var at = _lumen_activation_target(nid);
+        var pre = (at !== -1) ? _lumen_pre_click_activation(at) : null;
         var ev = new MouseEvent('click', {
             bubbles: true, cancelable: true, composed: true, isTrusted: false,
             clientX: 0, clientY: 0, screenX: 0, screenY: 0,
             button: 0, buttons: 0, detail: 1,
         });
         var notCancelled = _lumen_dispatch_rich(nid, ev);
-        if (notCancelled) _lumen_run_activation_behavior(nid, this);
-        else _lumen_undo_pre_click_activation(nid, pre);
+        if (at !== -1) {
+            if (notCancelled) {
+                _lumen_run_activation_behavior(at, (at === nid) ? this : _lumen_make_element(at));
+            } else {
+                _lumen_undo_pre_click_activation(at, pre);
+            }
+        }
     } finally {
         delete _lumen_click_in_progress[nid];
     }
