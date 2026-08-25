@@ -829,6 +829,32 @@ the time — read dates.
   through `dispatchEvent` — hence no double-fire. Before BUG-392 the generic branch skipped
   the attribute entirely, so any `window.onX = fn` outside `load`/`error` (`onscroll`,
   `ongamepadconnected`) was stored where no dispatch path looked.
+- **«Unload a document» — `beforeunload`/`pagehide`/`visibilitychange`/`unload` (BUG-834, 2026-08-25).**
+  `_lumen_unload_document(persisted)` runs HTML LS §7.4.6 in spec order: `pagehide`
+  (a real `PageTransitionEvent` now, not a plain `Event` with an expando) →
+  `_lumen_apply_visibility(true)` → `unload`; `_lumen_fire_beforeunload()` runs §7.4.5
+  and returns whether the page asked to stay. Both are plain global function
+  declarations called from the shell (`PersistentJs::unload_document` /
+  `fire_beforeunload`) at the three navigation sites, the same way
+  `_lumen_bfcache_blocked` is. Three non-obvious points. (1) `_lumen_page_showing`
+  mirrors the spec's «page showing» flag and makes the sequence idempotent —
+  `_lumen_fire_page_lifecycle('pageshow', …)` raises it again **and** calls
+  `_lumen_apply_visibility(false)`, without which a page restored into the *same*
+  runtime (BUG-835 parking) would stay `hidden` for good and never pay a second
+  `pagehide`. (2) `unload` goes through `window.dispatchEvent`'s generic branch —
+  it has no return-value convention, so that branch's listeners-then-`on<type>`
+  order with `_lumen_report_exception` is exactly right — while `beforeunload`
+  needs its own loop, because only `window.onbeforeunload`'s *return value* sets
+  `returnValue` (an `addEventListener` callback's does not). (3) `persisted` is the
+  spec's salvageable state, not just an event flag: `unload` fires **only** when it
+  is false, which agrees with `_lumen_bfcache_blocked()` below refusing the freeze
+  to any page carrying an `unload`/`beforeunload` listener. `onunload`/`onbeforeunload`
+  are declared on `window` so `'onunload' in window` answers true (BUG-822 precedent).
+  Deliberately absent: cancelling the navigation — that needs a confirm dialog, and
+  `confirm()` here is a stub returning `false`. 7 unit tests
+  (`unload_document_*`, `pageshow_restores_page_showing_and_visibility`,
+  `beforeunload_reports_prevent_default_and_return_value`,
+  `window_declares_unload_handler_properties`).
 - **`_lumen_bfcache_blocked()` — bfcache eligibility check (Ph3 `P3-bfcache` level 1, 2026-07-13).**
   Global JS function in `dom.rs` next to `_lumen_fire_page_lifecycle`. Returns
   `true` when any `_ws_instances`/`_sse_instances` entry has

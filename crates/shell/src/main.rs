@@ -3144,6 +3144,27 @@ pub(crate) trait PersistentJs: Send + Sync {
             "_lumen_fire_page_lifecycle('{event}', {persisted})"
         ));
     }
+    /// Run the spec's «unload a document» steps on the outgoing page
+    /// (HTML LS §7.4.6): `pagehide` → `visibilityState = 'hidden'` → `unload`.
+    ///
+    /// `persisted` is the `PageTransitionEvent` flag AND the salvageable state:
+    /// `true` means the shell retained the document (parked/frozen), so `unload`
+    /// must NOT fire; `false` means the document is discarded and `unload` does.
+    /// Delivered via `_lumen_unload_document` in the JS shim. BUG-834.
+    #[allow(dead_code)]
+    fn unload_document(&self, persisted: bool) {
+        self.eval_js(&format!("_lumen_unload_document({persisted})"));
+    }
+    /// Run the spec's «prompt to unload a document» steps (HTML LS §7.4.5) —
+    /// dispatch `beforeunload` on the outgoing page.
+    ///
+    /// The page's answer («I asked to stay») is deliberately not honoured: that
+    /// needs a user-facing confirm dialog, which this engine does not have.
+    /// See BUG-834 and `_lumen_fire_beforeunload` in the JS shim.
+    #[allow(dead_code)]
+    fn fire_beforeunload(&self) {
+        self.eval_js("_lumen_fire_beforeunload()");
+    }
     /// Drain dirty `<canvas>` 2D pixel buffers for upload to the renderer.
     ///
     /// Returns `(node_index, width, height, rgba)` for every canvas drawn to
@@ -21138,6 +21159,15 @@ impl Lumen {
             persisted = true;
         }
         // Fallback: store an HTML snapshot if freeze was not possible.
+        //
+        // BUG-834: this does NOT make the document salvageable. Coming back
+        // re-parses the page from its source, so the document object, its
+        // listeners, timers and closures are all gone — HTML LS §7.4.6 calls
+        // that a discarded document, which must hear `unload` and must report
+        // `pagehide.persisted === false`. Only the parked and frozen paths above
+        // retain anything, so `persisted` is deliberately left untouched here
+        // (it used to be raised, which is why an ordinary link navigation
+        // reported `persisted=true` and swallowed `unload`).
         if !persisted
             && let Some(ref ls) = self.layout_source
             && let Some(ref html) = ls.html_source
@@ -21150,16 +21180,18 @@ impl Lumen {
                 scroll_y: self.scroll_y,
                 title: self.title.clone(),
             });
-            persisted = true;
         }
-        // HTML LS §8.6: fire `pagehide` on the outgoing page before it unloads.
-        // `persisted = true` signals it was retained in bfcache (restorable on
-        // back-navigation), so listeners can skip teardown they will redo on
-        // `pageshow`.
+        // HTML LS §7.4.5–§7.4.6: run the full unload sequence on the outgoing
+        // page — `beforeunload`, then `pagehide` → `visibilityState = 'hidden'`
+        // → `unload`. `persisted = true` signals the document was retained
+        // (parked/frozen above), which is also its salvageable state: such a
+        // page gets `pagehide` but no `unload`, and its listeners can skip
+        // teardown they would redo on `pageshow`. BUG-834.
         // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
         // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-            j.fire_page_lifecycle("pagehide", persisted);
+            j.fire_beforeunload();
+            j.unload_document(persisted);
         });
         // Push current page to back stack (full-doc entry: no same_doc_state_json).
         self.nav_back.push(NavEntry {
@@ -21307,11 +21339,24 @@ impl Lumen {
         }
 
         // Full-document navigation: restore page and reload.
-        // HTML LS §8.6: fire `pagehide` on the current page before it unloads.
+        // HTML LS §7.4.5–§7.4.6: run the full unload sequence on the current
+        // page — `beforeunload`, then `pagehide` → `visibilityState = 'hidden'`
+        // → `unload`. BUG-834: the outgoing document is retained only on the
+        // parked-page branch below, so that same condition IS its salvageable
+        // state and decides both the `persisted` flag and whether `unload`
+        // fires at all. Computed here (before the sequence) rather than read
+        // back from `park_current_page`, because the events must reach the
+        // page while it is still current.
+        let outgoing_parkable = prev
+            .source
+            .url_str()
+            .is_some_and(|u| self.has_parked_page(u))
+            && self.bfcache_eligible();
         // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
         // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
-        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-            j.fire_page_lifecycle("pagehide", false);
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.fire_beforeunload();
+            j.unload_document(outgoing_parkable);
         });
         // Push current page to forward stack.
         let cur_display = self.display_url.take();
@@ -21334,8 +21379,10 @@ impl Lumen {
             && self.has_parked_page(&url)
         {
             // Park the document being left as well, so Forward restores it alive
-            // too instead of reloading it from scratch.
-            if self.bfcache_eligible() {
+            // too instead of reloading it from scratch. Eligibility was already
+            // resolved above as `outgoing_parkable` — re-querying it here would
+            // let it disagree with the `persisted` flag just reported to the page.
+            if outgoing_parkable {
                 self.park_current_page();
             }
             self.source = prev.source.clone();
@@ -21467,11 +21514,19 @@ impl Lumen {
         }
 
         // Full-document forward navigation.
-        // HTML LS §8.6: fire `pagehide` on the current page before it unloads.
+        // HTML LS §7.4.5–§7.4.6: mirror of `navigate_back` — the full unload
+        // sequence, with the parked-page branch below as the salvageable state
+        // (BUG-834).
+        let outgoing_parkable = next
+            .source
+            .url_str()
+            .is_some_and(|u| self.has_parked_page(u))
+            && self.bfcache_eligible();
         // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
         // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
-        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-            j.fire_page_lifecycle("pagehide", false);
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.fire_beforeunload();
+            j.unload_document(outgoing_parkable);
         });
         let cur_display = self.display_url.take();
         let cur_state = std::mem::replace(
@@ -21490,7 +21545,9 @@ impl Lumen {
         if let Some(url) = next.source.url_str().map(str::to_owned)
             && self.has_parked_page(&url)
         {
-            if self.bfcache_eligible() {
+            // See `navigate_back`: eligibility is `outgoing_parkable`, resolved
+            // before the unload sequence so it cannot disagree with `persisted`.
+            if outgoing_parkable {
                 self.park_current_page();
             }
             self.source = next.source.clone();
