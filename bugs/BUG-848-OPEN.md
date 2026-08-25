@@ -65,7 +65,7 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
 `fetch/metadata/generated/element-*`: `element-link-icon`,
 `element-video-poster`, `element-input-image`, `svg-image`, плюс медийные
 `element-audio`/`element-video`, у которых причина шире —
-[BUG-825](BUG-825-FIXED.md)/[BUG-799](BUG-799-OPEN.md). Все они устроены одинаково:
+[BUG-825](BUG-825-FIXED.md)/[BUG-799](BUG-799-FIXED.md). Все они устроены одинаково:
 `induceRequest()` навешивает `onload`/`onerror` и ждёт события, после
 которого читает заголовки запроса с сервера — событие не приходит, запроса
 нет, тест TIMEOUT.
