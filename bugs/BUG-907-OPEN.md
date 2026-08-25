@@ -40,5 +40,5 @@ URL уже дома» вместо второго запроса.
 WPT `preload/modulepreload.html` и `preload/dynamic-adding-preload.html` считают
 записи `performance.getEntriesByName` и проверяют, что скачиваний ровно одно.
 Учесть: до этого они упрутся в пустой Resource Timing
-([BUG-839](BUG-839-OPEN.md)) — то есть без него измерять придётся на своём
+([BUG-839](BUG-839-FIXED.md)) — то есть без него измерять придётся на своём
 http-сервере, считая (а не дедуплицируя) полученные запросы.

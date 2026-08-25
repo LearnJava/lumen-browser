@@ -22,10 +22,29 @@
 //! `static` the shell drains keeps that wiring out of the already-large
 //! construction path.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use lumen_core::event::Event;
 use lumen_core::ext::EventSink;
+
+/// Hard cap on queued rows.
+///
+/// The queue is drained by whoever owns the current document's JS runtime, and
+/// a page that never gets one (no scripts at all) never drains — its images
+/// would otherwise accumulate until the next navigation. 4096 is far past any
+/// real page's subresource count and past the 250-entry Resource Timing buffer
+/// they feed, so reaching it means nobody is draining.
+const MAX_QUEUED_ROWS: usize = 4096;
+
+/// While true, [`take_rows`] answers empty and leaves the queue alone.
+///
+/// Raised by [`clear`] at the start of a navigation and lowered by [`resume`]
+/// once the new document is committed. Without it the shell's once-per-step
+/// drain — which runs against the *outgoing* document's runtime while the new
+/// one is still loading — would hand the new page's stylesheets and scripts to
+/// the page being replaced.
+static SUSPENDED: AtomicBool = AtomicBool::new(false);
 
 /// One completed subresource load, in the shape
 /// `_lumen_deliver_resource_timings` reads.
@@ -62,10 +81,23 @@ fn queue() -> &'static Mutex<Vec<ResourceTimingRow>> {
     QUEUE.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-/// Drain every pending row. Returns an empty vector when nothing arrived since
-/// the last call, which is the common case — the caller checks that before
+/// Drain every pending row for the shell's per-step delivery. Answers empty
+/// while a navigation is in flight (see [`SUSPENDED`]) and when nothing arrived
+/// since the last call — the common case, which the caller checks before
 /// touching the JS runtime.
 pub fn take_rows() -> Vec<ResourceTimingRow> {
+    if SUSPENDED.load(Ordering::Relaxed) {
+        return Vec::new();
+    }
+    take_rows_unconditionally()
+}
+
+/// Drain for the runtime of the document being loaded, ignoring the suspend
+/// flag: this caller *is* the new document, and it runs before the page's first
+/// script — which is the only moment a synchronous
+/// `getEntriesByType('resource')` at the top of that script can see the
+/// stylesheets and scripts the parser pulled in.
+pub fn take_rows_unconditionally() -> Vec<ResourceTimingRow> {
     match queue().lock() {
         Ok(mut q) => std::mem::take(&mut *q),
         // A poisoned queue means a panic while pushing; timing entries are not
@@ -74,13 +106,23 @@ pub fn take_rows() -> Vec<ResourceTimingRow> {
     }
 }
 
-/// Drop everything queued. Called on navigation: entries belong to the document
-/// that asked for them, and a row left over from the previous page would land
-/// in the new page's buffer with a start time before its own time origin.
+/// Drop everything queued and suspend delivery until [`resume`]. Called at the
+/// start of a navigation, *before* the new document's own subresources are
+/// fetched: entries belong to the document that asked for them, and a row left
+/// over from the previous page would land in the new page's buffer with a start
+/// time before its own time origin.
 pub fn clear() {
+    SUSPENDED.store(true, Ordering::Relaxed);
     if let Ok(mut q) = queue().lock() {
         q.clear();
     }
+}
+
+/// Re-enable per-step delivery. Called once the new document is committed, so
+/// whatever is still queued — and everything that arrives from here on —
+/// belongs to the runtime the shell now holds.
+pub fn resume() {
+    SUSPENDED.store(false, Ordering::Relaxed);
 }
 
 /// Serialise a batch into the JSON array `_lumen_deliver_resource_timings`
@@ -134,6 +176,7 @@ impl EventSink for ResourceTimingSink {
             ..
         } = event
             && let Ok(mut q) = queue().lock()
+            && q.len() < MAX_QUEUED_ROWS
         {
             q.push(ResourceTimingRow {
                 url: url.clone(),
@@ -190,6 +233,7 @@ mod tests {
     fn sink_captures_and_forwards() {
         let _guard = exclusive();
         clear();
+        resume();
         let sink = ResourceTimingSink { inner: Arc::new(NullSink) };
         sink.emit(&timed("https://example.com/a.png"));
         let rows = take_rows();
@@ -210,6 +254,7 @@ mod tests {
     fn json_uses_the_shim_key_names() {
         let _guard = exclusive();
         clear();
+        resume();
         let sink = ResourceTimingSink { inner: Arc::new(NullSink) };
         sink.emit(&timed("https://example.com/b.png"));
         let json = rows_to_json(&take_rows()).expect("non-empty batch");
@@ -232,9 +277,37 @@ mod tests {
     fn clear_drops_pending_rows() {
         let _guard = exclusive();
         clear();
+        resume();
         let sink = ResourceTimingSink { inner: Arc::new(NullSink) };
         sink.emit(&timed("https://example.com/c.png"));
         clear();
+        resume();
         assert!(take_rows().is_empty());
+    }
+
+    #[test]
+    fn suspended_queue_holds_rows_for_the_loading_document() {
+        // The per-step drain must not hand a row to the outgoing document
+        // while the new one is still fetching its subresources; the loading
+        // document's own runtime takes them unconditionally.
+        let _guard = exclusive();
+        clear();
+        let sink = ResourceTimingSink { inner: Arc::new(NullSink) };
+        sink.emit(&timed("https://example.com/d.png"));
+        assert!(take_rows().is_empty(), "suspended drain must answer empty");
+        let rows = take_rows_unconditionally();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].url, "https://example.com/d.png");
+        resume();
+    }
+
+    #[test]
+    fn resume_reopens_the_per_step_drain() {
+        let _guard = exclusive();
+        clear();
+        let sink = ResourceTimingSink { inner: Arc::new(NullSink) };
+        sink.emit(&timed("https://example.com/e.png"));
+        resume();
+        assert_eq!(take_rows().len(), 1);
     }
 }
