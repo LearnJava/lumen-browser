@@ -41797,6 +41797,60 @@ mod tests {
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 
+        /// BUG-918: the report is due at the end of the *task*, i.e. once the
+        /// microtask queue has drained (HTML LS §8.1.7.3 step 4), so a handler
+        /// attached one `await` later — the ordinary shape of a `promise_test`
+        /// — still cancels it. The flush used to be an `enqueue_microtask`,
+        /// which runs ahead of the `await` continuation and reported all three
+        /// of these. The read is a second `eval` on purpose: the flush happens
+        /// after the job that queued the rejection has returned.
+        #[test]
+        fn bug918_rejection_handled_later_in_the_same_task_is_not_reported() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var seen = []; \
+                 window.addEventListener('unhandledrejection', function(e) { seen.push(e.reason.message); }); \
+                 var a = Promise.reject(new TypeError('sync')); a.catch(function() {}); \
+                 var b = Promise.reject(new TypeError('one-await')); \
+                 (async function() { await Promise.resolve(); b.catch(function() {}); })(); \
+                 var c = Promise.reject(new TypeError('microtask')); \
+                 queueMicrotask(function() { c.catch(function() {}); });",
+            )
+            .unwrap();
+            let r = rt.eval("seen.join(',')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String(String::new()));
+        }
+
+        /// The complement of the test above: deferring the flush to the end of
+        /// the task must not lose a rejection nobody ever handles, and a
+        /// handler attached in a *later* task must still produce the
+        /// `rejectionhandled` half of HTML LS §8.1.7.5.
+        #[test]
+        fn bug918_unhandled_rejection_is_still_reported_at_end_of_task() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var seen = []; \
+                 window.addEventListener('unhandledrejection', function(e) { seen.push('u:' + e.reason.message); }); \
+                 window.addEventListener('rejectionhandled', function(e) { seen.push('h:' + e.reason.message); }); \
+                 var late = Promise.reject(new TypeError('late')); \
+                 Promise.reject(new TypeError('never'));",
+            )
+            .unwrap();
+            let r = rt.eval("seen.join(',')").unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("u:late,u:never".to_string())
+            );
+            // A later task attaches the handler: the promise was already
+            // reported, so the engine owes `rejectionhandled` for it.
+            rt.eval("late.catch(function() {});").unwrap();
+            let r = rt.eval("seen.join(',')").unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("u:late,u:never,h:late".to_string())
+            );
+        }
+
         /// BUG-392: on a page where nothing is connected, `getGamepads()` must
         /// report an empty list and the two Window event handler IDL attributes
         /// must already exist (`'onX' in window`).

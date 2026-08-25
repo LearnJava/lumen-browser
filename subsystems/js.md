@@ -1947,11 +1947,19 @@ the time — read dates.
     187/322 subtests and 16/19 harness OK → **242/322 and 18/19**. Residual is brotli (absent —
     a quarter of the category) plus `SharedArrayBuffer` chunks the engine cannot tell from an
     ordinary buffer. `compression-bad-chunks` gained 15 PASS and still went OK → ERROR, on a
-    defect of its own: an unhandled-rejection report fires at the end of a *microtask* instead of
-    the task ([BUG-918](../bugs/BUG-918-OPEN.md)).
+    defect of its own: an unhandled-rejection report fired at the end of a *microtask* instead of
+    the task ([BUG-918](../bugs/BUG-918-FIXED.md), fixed 2026-08-26 — the category is **19/19**
+    harness OK now, at the same 242/322 subtests).
   - **Residual:** a stream abandoned without `close()` and without an error leaks its codec until
     the runtime dies — the shim's `TransformStream` has no `cancel` hook and neither the writer's
     `abort` nor the reader's `cancel` reaches the transformer. Bounded by one document.
+
+- **Where "notify about rejected promises" happens** (`crates/js/src/v8_runtime.rs`, HTML LS §8.1.7.3 step 4). 2026-08-26, [BUG-918](../bugs/BUG-918-FIXED.md).
+  - `lumen_promise_reject_callback` only *queues* into `PENDING_UNHANDLED`/`PENDING_HANDLED`; the dispatch is `drain_promise_rejections`, called from the V8 thread loop right after `V8Command::Run(job)` returns. That is this engine's microtask-checkpoint boundary: with the isolate's auto microtask policy V8 drains the queue before an API call that entered JS returns, so a job handing control back means the checkpoint is over.
+  - **The boundary is the job, not the microtask.** Deferring via `Isolate::enqueue_microtask` (what this did until BUG-918) puts the flush *into* the queue it is supposed to run after: enqueued from the synchronous `Promise.reject`, it runs ahead of the `await` continuation queued later, so a handler attached one `await` on — the ordinary `promise_test` shape — arrived too late and the page got a report it does handle.
+  - **`rusty_v8` 150.1.0 has no binding for `Isolate::AddMicrotasksCompletedCallback`** — the hook Node.js uses for exactly this. `grep MicrotasksCompleted` over the crate's `src/` is empty; only `perform_microtask_checkpoint` and `enqueue_microtask` are bound. Do not go looking for it before checking the version in `crates/js/Cargo.toml`.
+  - Every JS entry point of a runtime funnels through `V8Command::Run`, including the ones with no event loop behind them (`--dump-*`, SVG rasterization, unit tests) — which is why the flush lives there and **not** in `_lumen_timers`: nothing pumps timers in those runtimes, and the `[unhandled-rejection]` stderr line's diagnostic value (BUG-703) was proven precisely there.
+  - Consequence for a unit test: the report lands *after* the `eval` that queued it, so a flag set by an `unhandledrejection` listener must be read in a **second** `rt.eval` (see `bug918_*` in `dom.rs`).
 
 - **`<details>` state and the `toggle` event** (`crates/js/src/dom.rs`, HTML LS §4.11.1). 2026-08-25, [BUG-851](../bugs/BUG-851-FIXED.md).
   - `open` **is** the element's state, so exactly one place changes it and exactly one place reports the change. Everything funnels through the §4.11.1 *attribute change steps* (`_lumen_details_open_changed`): the `open` property, `setAttribute`/`removeAttribute`/`toggleAttribute`, the `<summary>` activation behaviour, the parser's markup and the shell's native mouse click.
