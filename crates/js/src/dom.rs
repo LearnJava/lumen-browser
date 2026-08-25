@@ -6518,7 +6518,8 @@ var _lumen_resource_pending_count = 0;
 // mint such an element that the spec allows to act on insertion.
 function _lumen_resource_track(nid, local) {
     var tag = String(local).toLowerCase();
-    if (tag !== 'script' && tag !== 'link' && tag !== 'track' && tag !== 'source') return;
+    if (tag !== 'script' && tag !== 'link' && tag !== 'track' && tag !== 'source'
+        && tag !== 'style') return;
     _lumen_resource_pending[nid] = tag;
     _lumen_resource_pending_count++;
 }
@@ -6779,23 +6780,22 @@ var _lumen_link_sheet_done = {};
 // whole point (they never pass through the insertion hook, so nothing here
 // could otherwise know they exist, let alone how they ended).
 //
-// Queued as a task rather than dispatched inline for the reason §4.6.7 states
-// outright («queue an element task»): a page may only learn about the sheet
-// once its own turn is over.
+// Dispatched inside this call rather than queued, even though §4.6.7 says
+// «queue an element task». The task hop this path would defer to has nowhere
+// earlier to land: the shell calls in once the cascade pass is done, no page
+// code is on the stack, and a `setTimeout` from here waits for the next timer
+// pump — which can fall *after* `window.onload`, where a stylesheet's `load`
+// may not (in a real browser the sheet blocks the window load outright). The
+// createElement path below keeps its task hop, because there the page's own
+// `link.onload = …` really does follow the insertion.
 function _lumen_deliver_parser_link_events(pairs) {
     if (!pairs || pairs.length === undefined) return;
     for (var i = 0; i + 1 < pairs.length; i += 2) {
         var nid = pairs[i];
         if (_lumen_link_sheet_done[nid] === 1) continue;
         _lumen_link_sheet_done[nid] = 1;
-        _lumen_link_fire_sheet_event(nid, pairs[i + 1] ? 'load' : 'error');
+        _lumen_resource_fire(nid, pairs[i + 1] ? 'load' : 'error');
     }
-}
-
-// One queued `load`/`error` for a stylesheet link. `nid` is captured per
-// iteration, so the loop above cannot hand every task the last element.
-function _lumen_link_fire_sheet_event(nid, type) {
-    setTimeout(function() { _lumen_resource_fire(nid, type); }, 0);
 }
 
 function _lumen_link_prepare(nid) {
@@ -7017,6 +7017,168 @@ function _lumen_link_hints_scan() {
     }
 }
 
+// ── <style>: HTML LS §4.14 «update a style block» (BUG-804) ──────────────────
+//
+// `<style>` never reported anything to the page, on ANY insertion path: it is
+// not in `_lumen_resource_track`'s tag list, and nothing else in the shim knew
+// the element existed. That is a wider hole than the parser one this bug is
+// mostly about — `style.onload` could not fire even for an element the page had
+// just built itself.
+//
+// The whole model lives here rather than in the shell, and for a stronger
+// reason than the <script>/<link> halves: a style block has no network load to
+// report at all, so there is nothing for the shell to know. It is «the sheet is
+// now built» — an event that belongs to the element and to the DOM, and the DOM
+// is here. The one thing that CAN fail is an `@import` inside the block, which
+// §4.14 makes the element report as `error`.
+
+// nid → 1 once the element has had its first update run. Only the *first* one
+// is guarded: §4.14 re-runs on every child-list change, and
+// `style_load_event.html` asserts exactly that (two `load`s for one parse plus
+// one `textContent` write). The flag exists so the parser pass below does not
+// re-do an update the insertion hook already performed.
+var _lumen_style_updated = {};
+
+// `type` decides whether the element has an associated sheet at all. Absent,
+// empty, or an ASCII case-insensitive `text/css` — it does; anything else and
+// §4.14 returns before building one, so no event is due either.
+function _lumen_style_type_is_css(nid) {
+    var type = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+    if (type === null) return true;
+    var s = String(type).trim();
+    return s === '' || s.toLowerCase() === 'text/css';
+}
+
+// The `@import` URLs of a style block, in source order.
+//
+// Deliberately a scan of the text rather than a CSS parse: the shell owns the
+// real cascade, and all this needs to answer is «which subresources does this
+// block claim to need», so that a block whose import cannot be obtained reports
+// `error` (`style_events.html`, `style-error-01.html`). A malformed `@import`
+// the real parser would drop simply does not match here.
+var _LUMEN_STYLE_IMPORT_RE =
+    /@import\\s+(?:url\\(\\s*(?:\"([^\"]*)\"|'([^']*)'|([^)\"'\\s]*))\\s*\\)|\"([^\"]*)\"|'([^']*)')/g;
+
+function _lumen_style_import_urls(text) {
+    var out = [];
+    if (!text) return out;
+    _LUMEN_STYLE_IMPORT_RE.lastIndex = 0;
+    var m;
+    while ((m = _LUMEN_STYLE_IMPORT_RE.exec(text)) !== null) {
+        var url = m[1] || m[2] || m[3] || m[4] || m[5] || '';
+        if (url !== '') out.push(url);
+        // A zero-length match would spin forever; `@import` is 7 chars, so the
+        // regex cannot match empty, but the guard is free.
+        if (m.index === _LUMEN_STYLE_IMPORT_RE.lastIndex) _LUMEN_STYLE_IMPORT_RE.lastIndex++;
+    }
+    return out;
+}
+
+// §4.14 «update a style block» for one element, plus the event it owes.
+//
+// `now` says whether the element may report inside this turn. It is false for
+// every DOM-driven update, because `style.onload = …` is normally assigned on
+// the line *after* the insertion that triggers this, and because
+// `style_load_async.html` asserts the handler does not run synchronously.
+//
+// It is true for the parser pass, and that is not an optimization: the spec
+// fires a parser-written block's `load` during parsing, well before `load` on
+// the window. The pass already runs at the latest defensible moment
+// (`readyState` → `interactive`), so a further task hop pushes the event past
+// `window.onload` — where `style_load_event.html` reads `loadCount` and found
+// 0. There is nothing left to defer to.
+function _lumen_style_update_block(nid, now) {
+    _lumen_style_updated[nid] = 1;
+    if (!_lumen_style_type_is_css(nid)) return;
+    var text = _lumen_u2n(_lumen_get_text_content(nid));
+    var imports = _lumen_style_import_urls(text === null ? '' : String(text));
+    if (imports.length === 0) {
+        if (now) { _lumen_resource_fire(nid, 'load'); return; }
+        setTimeout(function() { _lumen_resource_fire(nid, 'load'); }, 0);
+        return;
+    }
+    // An `@import` has to be obtained before the block can report, so this
+    // branch is asynchronous whatever `now` says.
+    setTimeout(function() { _lumen_style_load_imports(nid, imports); }, 0);
+}
+
+// Obtain every `@import` of the block; the element reports `load` only if all
+// of them arrived as CSS.
+//
+// The content type is checked, not just the status: `style-error-01.html`
+// imports a `text/plain` file that a server answers with 200, and §4.14 wants
+// `error` for it — a sheet that cannot be parsed as CSS was not obtained.
+function _lumen_style_load_imports(nid, imports) {
+    var base = _lumen_document_base_url();
+    var pending = imports.length;
+    var failed = false;
+    var settle = function() {
+        if (--pending > 0) return;
+        _lumen_resource_fire(nid, failed ? 'error' : 'load');
+    };
+    for (var i = 0; i < imports.length; i++) {
+        (function(href) {
+            var url;
+            try { url = _url_resolve(href, base); }
+            catch (e) { failed = true; settle(); return; }
+            fetch(url, { _lumenInitiatorType: 'css' }).then(function(resp) {
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                var ctype = '';
+                try { ctype = String(resp.headers.get('content-type') || ''); } catch (e) {}
+                // An absent Content-Type is not evidence of the wrong one —
+                // only a type that is present and is not CSS refuses the sheet.
+                if (ctype !== '' && ctype.split(';')[0].trim().toLowerCase() !== 'text/css') {
+                    throw new Error('not CSS: ' + ctype);
+                }
+                // Drain the body: an unread response holds its fetch slot
+                // (BUG-721).
+                return resp.text();
+            }).then(function() { settle(); }).catch(function(e) {
+                _lumen_console_error('@import failed: ' + url + ': ' + e);
+                failed = true;
+                settle();
+            });
+        })(imports[i]);
+    }
+}
+
+// Is this node a `<style>` element? By nid alone — this runs on the insertion
+// and text-mutation hot paths, so no wrapper is allocated.
+function _lumen_is_style_element(nid) {
+    if (nid === null || nid === undefined) return false;
+    var local;
+    try { local = _lumen_u2n(_lumen_get_local_name(nid)); } catch (e) { return false; }
+    return local !== null && String(local).toLowerCase() === 'style';
+}
+
+// A child list changed under `parent`: if that parent is a connected `<style>`,
+// its block is rebuilt and the element reports again. This is the half
+// `style_load_event.html` and `style-load-after-mutate.html` are about — the
+// first appends text to an already-inserted element, the second writes
+// `textContent` long after load.
+function _lumen_style_children_changed(parent) {
+    if (!_lumen_is_style_element(parent)) return;
+    if (!_lumen_resource_is_connected(parent)) return;
+    _lumen_style_update_block(parent, false);
+}
+
+// The parser's half, run once the document is parsed — same shape and same
+// reason as `_lumen_link_hints_scan`: a `<style>` written by the parser never
+// passes through the insertion hook. Elements the hook already handled carry
+// the flag and are skipped, so a page whose head script builds a `<style>`
+// still reports exactly one `load` for it.
+function _lumen_style_blocks_scan() {
+    var styles;
+    try { styles = document.getElementsByTagName('style'); } catch (e) { return; }
+    if (!styles) return;
+    for (var i = 0; i < styles.length; i++) {
+        var el = styles[i];
+        if (!el || el.__nid__ === undefined) continue;
+        if (_lumen_style_updated[el.__nid__] === 1) continue;
+        _lumen_style_update_block(el.__nid__, true);
+    }
+}
+
 // Run the pending check for one tracked element, if it is connected by now.
 function _lumen_resource_try_prepare(nid) {
     var kind = _lumen_resource_pending[nid];
@@ -7045,10 +7207,17 @@ function _lumen_resource_try_prepare(nid) {
         _lumen_resource_pending_count--;
         return;
     }
-    if (kind !== 'script' && kind !== 'link') return;
+    if (kind !== 'script' && kind !== 'link' && kind !== 'style') return;
     if (!_lumen_resource_is_connected(nid)) return;
     delete _lumen_resource_pending[nid];
     _lumen_resource_pending_count--;
+    // BUG-804: `<style>` has no resource to fetch — becoming connected IS the
+    // trigger, because §4.14 runs «update a style block» when the element
+    // becomes browsing-context connected and it has children. Later child
+    // changes are picked up by `_lumen_style_children_changed`, not here: the
+    // element leaves the pending map on its first update, exactly like the
+    // spec's own «already started» bookkeeping for the other kinds.
+    if (kind === 'style') { _lumen_style_update_block(nid, false); return; }
     if (kind === 'link') { _lumen_link_prepare(nid); return; }
     _lumen_script_prepare(nid);
 }
@@ -7074,15 +7243,39 @@ function _lumen_resource_after_insert(childNid) {
 // (appendChild, insertBefore, replaceChild, append/prepend/before/after/
 // replaceWith, <select>.add, insertAdjacentElement, …), so a future insertion
 // path cannot silently miss it.
+//
+// BUG-804 adds the mirror question to the same two natives: not «what became
+// connected» but «whose children changed», which is what re-runs a `<style>`
+// block. Both are asked here so a page that builds `<style>` + text in either
+// order reports once for each update.
 var _lumen_native_append_child  = _lumen_append_child;
 var _lumen_native_insert_before = _lumen_insert_before;
 _lumen_append_child = function(parent, child) {
     _lumen_native_append_child(parent, child);
     _lumen_resource_after_insert(child);
+    _lumen_style_children_changed(parent);
 };
 _lumen_insert_before = function(parent, child, reference) {
     _lumen_native_insert_before(parent, child, reference);
     _lumen_resource_after_insert(child);
+    _lumen_style_children_changed(parent);
+};
+
+// `textContent =` / `innerHTML =` replace a style block's children wholesale,
+// which §4.14 treats exactly like an append — and it is the form
+// `style_load_event.html` writes. Wrapped here, below the natives and above the
+// MutationObserver wrappers further down, so both wrappers see every write:
+// the MO one captures whatever `_lumen_set_text_content` names at ITS line,
+// i.e. these.
+var _lumen_native_set_text_content = _lumen_set_text_content;
+var _lumen_native_set_inner_html   = _lumen_set_inner_html;
+_lumen_set_text_content = function(nid, text) {
+    _lumen_native_set_text_content(nid, text);
+    _lumen_style_children_changed(nid);
+};
+_lumen_set_inner_html = function(nid, html) {
+    _lumen_native_set_inner_html(nid, html);
+    _lumen_style_children_changed(nid);
 };
 
 // ── Custom Elements registry ──────────────────────────────────────────────────
@@ -16528,6 +16721,11 @@ function _lumen_apply_ready_state(state) {
         // src without a word. The per-node guard keeps an element a head script
         // already appended from reporting twice.
         _lumen_script_empty_src_scan();
+        // BUG-804: the parser's `<style>` blocks report `load` (or `error`, if
+        // an `@import` inside cannot be obtained) from here — same reason
+        // again, and the per-node flag keeps a `<style>` a head script built
+        // from reporting its first update twice.
+        _lumen_style_blocks_scan();
         // BUG-851: a `<details open>` the parser wrote owes a `toggle` event for
         // the same reason — markup never passes through the attribute-write hook
         // that the §4.11.1 change steps hang on. The per-node record keeps an
@@ -40692,6 +40890,150 @@ mod tests {
                        _lumen_apply_ready_state('interactive');
                        _lumen_tick_timers();
                        globalThis.__b838q === 0"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-804: `<style>` reported nothing on any path — it was not in
+        /// `_lumen_resource_track`'s tag list at all. A block a script builds
+        /// now fires `load` once it is connected, and as a task: the
+        /// `st.onload = …` assignment normally follows the `appendChild`, and
+        /// `style_load_async.html` asserts the handler is not run inline.
+        #[test]
+        fn bug804_created_style_fires_load_as_a_task() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"globalThis.__b804 = [];
+                       var st = document.createElement('style');
+                       st.textContent = '#a { color: red; }';
+                       st.onload = function(ev) { globalThis.__b804.push(ev); };
+                       document.head.appendChild(st);
+                       var sync = globalThis.__b804.length === 0;
+                       _lumen_tick_timers();
+                       var ev = globalThis.__b804[0];
+                       sync && globalThis.__b804.length === 1 && ev.type === 'load'
+                           && ev.isTrusted === true && ev.target === st"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// HTML LS §4.14 re-runs «update a style block» on every child-list
+        /// change, so a later `textContent` write owes a SECOND `load` —
+        /// exactly what `style_load_event.html` counts.
+        #[test]
+        fn bug804_style_text_mutation_fires_load_again() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"globalThis.__b804n = 0;
+                       var st = document.createElement('style');
+                       st.onload = function() { globalThis.__b804n++; };
+                       document.head.appendChild(st);
+                       st.textContent = '.box { color: red; }';
+                       _lumen_tick_timers();
+                       var first = globalThis.__b804n;
+                       st.textContent = '.box { color: green; }';
+                       _lumen_tick_timers();
+                       first === 2 && globalThis.__b804n === 3"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A `<style>` the parser wrote never passes through the insertion
+        /// hook, so the `interactive` scan reports it — and reports it
+        /// *directly*, not through a task: the scan already runs at the latest
+        /// defensible moment, and a further hop puts the event after
+        /// `window.onload`, where `style_load_event.html` reads its counter.
+        #[test]
+        fn bug804_parser_style_fires_load_without_a_timer_pump() {
+            let doc = make_doc();
+            {
+                #[allow(clippy::unwrap_used)]
+                let mut d = doc.lock().unwrap();
+                let style = d.create_element(QualName::html("style"));
+                let text = d.create_text("#a { color: red; }");
+                d.append_child(style, text);
+                let root = d.root();
+                d.append_child(root, style);
+            }
+            let rt = v8_runtime_with_dom(doc);
+            let r = rt
+                .eval(
+                    r#"globalThis.__b804p = 0;
+                       var st = document.getElementsByTagName('style')[0];
+                       st.addEventListener('load', function() { globalThis.__b804p++; });
+                       var before = globalThis.__b804p === 0;
+                       _lumen_apply_ready_state('interactive');
+                       before && globalThis.__b804p === 1"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// The `interactive` scan must skip a `<style>` the insertion hook has
+        /// already updated, or a head script's element reports its first
+        /// update twice.
+        #[test]
+        fn bug804_style_reports_once_across_both_paths() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"globalThis.__b804d = 0;
+                       var st = document.createElement('style');
+                       st.onload = function() { globalThis.__b804d++; };
+                       st.textContent = '#a { color: red; }';
+                       document.head.appendChild(st);
+                       _lumen_apply_ready_state('interactive');
+                       _lumen_tick_timers();
+                       _lumen_tick_timers();
+                       globalThis.__b804d === 1"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A `type` that is neither absent, empty nor `text/css` means the
+        /// element has no associated sheet at all, so §4.14 returns before
+        /// building one and no event is due.
+        #[test]
+        fn bug804_style_with_foreign_type_stays_silent() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"globalThis.__b804t = 0;
+                       var st = document.createElement('style');
+                       st.setAttribute('type', 'text/plain');
+                       st.textContent = '#a { color: red; }';
+                       st.onload = function() { globalThis.__b804t++; };
+                       document.head.appendChild(st);
+                       _lumen_apply_ready_state('interactive');
+                       _lumen_tick_timers();
+                       globalThis.__b804t === 0"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// The `@import` scan decides whether the block has subresources to
+        /// obtain before it may report, so it has to read all three spellings
+        /// the CSS syntax allows — and only those.
+        #[test]
+        fn bug804_style_import_urls_reads_every_spelling() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"var got = _lumen_style_import_urls(
+                           '@import url(a.css);\n' +
+                           '@import url("b.css");\n' +
+                           "@import url('c.css');\n" +
+                           '@import "d.css";\n' +
+                           "@import 'e.css';\n" +
+                           '.x { background: url(not-an-import.png); }');
+                       got.join(',') === 'a.css,b.css,c.css,d.css,e.css'"#,
                 )
                 .unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
