@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-25",
  "counts": {
-  "open": 381,
+  "open": 380,
   "fixed": 494,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 875,
+ "total_bugs": 874,
  "phases": [
   {
    "id": "P0",
@@ -11052,13 +11052,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-853": {
-   "status": "open",
-   "title": "`<script src=\"\">` не порождает ни `load`, ни `error`: присутствующий пустой `src` неотличим от отсутствующего, хотя HTML LS §4.12.1 шаг 30 требует немедленного…",
-   "component": "js (`crates/js/src/dom.rs:6533`–`6534` — `if (src !== '')`, пустой `src` уходит в ветку «источник — тело элемента»)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-854": {
    "status": "open",
    "title": "`<frame>` не существует как элемент: конструктор `HTMLElement`, ресурс из `src` не запрашивается (доказано записью запросов на сервере пробы), `load` не приходи…",
@@ -11875,9 +11868,6 @@
   ],
   "js (`crates/js/src/dom.rs:6530` — ветка не-JS `type`; флага «already started» в шиме нет, повторной подготовки при новом подключении тоже)": [
    "BUG-882"
-  ],
-  "js (`crates/js/src/dom.rs:6533`–`6534` — `if (src !== '')`, пустой `src` уходит в ветку «источник — тело элемента»)": [
-   "BUG-853"
   ],
   "js (`crates/js/src/dom.rs:6602` — `_lumen_make_element` element factory)": [
    "BUG-544"
