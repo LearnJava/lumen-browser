@@ -1191,6 +1191,10 @@ the time — read dates.
   itself diagnosed is fixed).
 
 - **Compression Streams — error signalling** (`crates/js/src/dom.rs`, WHATWG Compression Streams). 2026-07-18.
+  **Superseded 2026-08-25 by [BUG-846](../bugs/BUG-846-FIXED.md)** — the buffer-then-flush model
+  described below, the `_lumen_compress_bytes`/`_lumen_decompress_bytes` natives and
+  `dom.rs::_decompress_status_prefixed` are all gone; the status-prefix idea survives, widened to
+  three states. Kept for the history of why the prefix exists at all.
   - `CompressionStream`/`DecompressionStream` were already functional for the three spec formats
     (`deflate-raw`/`deflate`/`gzip`, buffer-then-flush over `TransformStream`, native `flate2`
     bindings `_lumen_compress_bytes`/`_lumen_decompress_bytes`). Gap: `_lumen_decompress_bytes`
@@ -1537,7 +1541,7 @@ the time — read dates.
     `tests/wpt/verify_stream_scroll_message_gaps.py` print their expected markers.
     Out of scope: `tee()`/BYOB/async iteration ([BUG-824](../bugs/BUG-824-FIXED.md), closed
     the next day) and `DecompressionStream`'s buffer-then-flush model
-    ([BUG-846](../bugs/BUG-846-OPEN.md)).
+    ([BUG-846](../bugs/BUG-846-FIXED.md)).
 
 - **Streams: real `tee()`, byte streams, async iteration, and a stream as a body**
   ([BUG-824](../bugs/BUG-824-FIXED.md), [P1] 2026-08-25, `crates/js/src/dom.rs`,
@@ -1856,3 +1860,46 @@ the time — read dates.
 - **"Report the exception" inside a worker is a JS-side model, and the top-level script reaches it only through a Rust parameter ([BUG-813](../bugs/BUG-813-FIXED.md), [P1] 2026-08-24).** HTML LS §8.1.3.6 → §10.2.6 puts the worker's own scope *first*: `onerror` (OnErrorEventHandler — the five legacy arguments, cancelled by returning `true`) and `addEventListener('error')` (a real `ErrorEvent`, cancelled by `preventDefault()`), and only an uncancelled error travels to the owning `Worker`. Three non-obvious pieces. **(1)** The scope's `ErrorEvent` is a *local* class, `worker::WORKER_ERROR_EVENT_SHIM`, evaluated by `install_worker_scope_globals_v8` for all three flavours — it is **not** a slice of the page shim the way `EVENT_TARGET_SHIM`/`PERFORMANCE_SHIM` are, because the page's `Event` hierarchy lives in `WEB_API_SHIM_MID`, which pulls in `document`/`window`. Consequence: inside a worker `errorEvent instanceof Event` is `false`. It also carries `Symbol.toStringTag`, without which `Object.prototype.toString` answers `[object Object]` and every `assert_class_string` fails. **(2)** The top-level script is evaluated by Rust, so it cannot reach a shim-local function: `V8JsRuntime::eval_and_report_via`/`eval_module_at_and_report_via` take the reporter's *name* as a parameter (`_lumen_report_exception` for a page, `_lumen_report_worker_exception` for a worker, `_lumen_worker_exception_reporter` for a shared one, that last being the cross-shim global `WORKER_NET_SHIM` already used). Routing through Rust rather than wrapping the script body in `try`/`catch` is what keeps the real thrown value and `v8::Message`'s structured location, and leaves top-level `let`/`const`/function declarations in the global scope. The same commit folded `eval_and_report`'s two copy-pasted `v8::Message` blocks into the macro that already served the module path, now `report_exception_via!`. **(3)** A classic worker script is compiled with no resource name, so `v8::Message` and `Error.stack` both say `<anonymous>`; the reporter substitutes the scope's own `location.href`, since every frame of such a stack belongs to that script. A re-entrancy guard sends an exception thrown *by* an error handler straight to the parent instead of firing `error` again — neither recursion nor the bare `catch(e) {}` swallow. Known divergence in the same code: a `SharedWorker` must not hear a runtime error at all ([BUG-905](../bugs/BUG-905-OPEN.md)).
 - **A worker's event loop is its thread's `recv_timeout`, not a timer thread — and the §8.6 nesting clamp is what makes that safe ([BUG-815](../bugs/BUG-815-FIXED.md), [P1] 2026-08-24).** A worker has no task-queue infrastructure of its own: `run_worker_thread_v8`/`run_shared_worker_thread_v8` are the whole event loop, so the only place a deadline can be honoured is the wait on the incoming-message channel. Each turn calls `worker::run_worker_tasks(&rt)`, which evaluates `_lumen_worker_run_tasks()` — flush everything due, answer with the ms until the next deadline or `-1` — and the loop then blocks on `recv()` (`None`) or `recv_timeout(d)` (`Some(d)`), treating a timeout as "wake the timer, go round". Three consequences worth knowing before touching it. **(1)** The timers live in `worker::WORKER_TIMERS_SHIM`, a single shared const evaluated as its own IIFE by *both* flavours right after their globals shim — the previous stubs were the same code copy-pasted into `worker_global_shim` and `SHARED_WORKER_GLOBAL_SHIM`, which is how the shared half stayed broken through several dedicated-worker fixes. It reads its exception reporter lazily off `globalThis._lumen_worker_exception_reporter` precisely so one source can serve two scopes with different reporters (BUG-813). **(2)** `setInterval(fn, 0)` re-arms itself as *already due*, so without the HTML LS §8.6 nesting clamp (`nesting > 5 && delay < 4` → 4 ms, with the nesting level incremented on every repeat as the spec's step 12 requires) `_lumen_worker_run_tasks` would never return and the thread would never reach `recv_timeout` again. The clamp is a liveness property here, not a fidelity detail. **(3)** `queueMicrotask` has a queue of its own, drained before the first timer and after every callback; the old stub pushed a microtask onto the *front of the timer queue*, which ordered the common case right but made a microtask queued from inside a callback wait for the next flush. Not covered: `sw_worker.rs` keeps its own synchronous `setTimeout` stub — a service-worker scope has no loop to yield to.
 - **The Web Audio graph renders for real, in the shim, and every callback but one is a task ([BUG-828](../bugs/BUG-828-FIXED.md), [P1] 2026-08-25).** `web_audio.rs`'s `OfflineAudioContext.startRendering()` used to hand back an all-zero `AudioBuffer` of the right length ("Phase 0: immediately resolve with a silent buffer"); it now runs a pull-based traversal from `destination` in 128-frame render quanta. Four pieces worth knowing before touching it. **(1)** The render lives in the JS shim, not in Rust: there is no native audio graph to move it into, the graph objects are all JS, and the only native this module registers (`_lumen_audio_tick_time`) is now a no-op kept for embedders. **(2)** A node caches its output under a monotonic quantum id (`_qid`), which is both the fan-out optimization and the cycle guard — `_pull` claims the slot with silence *before* recursing into the node's inputs, so a feedback loop reads zeros on the second visit inside one quantum instead of recursing forever. **(3)** `AudioParam` keeps its automation events verbatim and compiles them into segments on first read (`_build`/`_segValue`, §1.6.3), invalidated by every scheduling call; the `value` getter answers the timeline's value at `context.currentTime`, which during a render is the start of the quantum being processed — i.e. the spec's `[[current value]]` without a separate slot to keep in sync. A node connected *into* a param is summed onto the curve in `_fill`. **(4)** `_wa_task` queues every page-facing callback (`ended`, `complete`, the `suspend()` promise) as an event-loop task — BUG-808's rule — and falls back to an inline call when `setTimeout` does not exist, which is the case in every DOM-less runtime (`--dump-*`, SVG rasterization, this module's unit tests) and is how those tests read a rendered buffer at all, since V8 drains microtasks only at the end of a script and a `.then` therefore never runs mid-`eval`. **The one deliberate exception is `statechange`**, still dispatched synchronously although the spec queues it: this engine pumps timers only when it redraws, so on a static page a task waits up to a second and the handler for the `running` transition reads `closed` — measured with the probe's own control variant. Not implemented, and not silently: no FFT (`AnalyserNode.get*FrequencyData` return the floor; the time-domain half is a real ring buffer), no decoder (`decodeAudioData` still returns a second of silence), `DynamicsCompressorNode`/`PannerNode`/`ConvolverNode`/`AudioWorkletNode` pass their input through, and a realtime `AudioContext` renders nothing — its `currentTime` advances off a quantized wall clock purely so `start`/`stop` scheduling and the realtime `ended` timer have a clock to hang on. **Privacy note:** ADR-007 Layer 4's per-session audio noise was deleted with `audio_bindings.rs` (BUG-550, 2026-08-04) and never re-implemented on the surviving shim; while the render was silence that cost nothing, and now the rendered output is deterministic across sessions — see [BUG-908](../bugs/BUG-908-OPEN.md).
+
+- **Compression Streams: a real streaming codec** ([BUG-846](../bugs/BUG-846-FIXED.md),
+  [P1] 2026-08-25, new `crates/js/src/compression.rs` + `WEB_API_SHIM` in `crates/js/src/dom.rs`).
+  The shim used to accumulate every chunk and call a one-shot native at `flush`, so a
+  `reader.read()` before `writer.close()` never resolved — three WPT files timed out on exactly
+  that shape. Four things worth carrying:
+  - **Where the state had to live.** The spec's transform algorithm produces output *per chunk*,
+    which a `bytes -> bytes` native cannot express — it has nowhere to keep the codec between
+    calls. So the codec is host-side, in a `thread_local` registry keyed by an opaque `u32`
+    handle (the `subtle_crypto` `CryptoKey` shape; a V8 isolate is single-threaded and each
+    worker owns its thread). Natives: `_lumen_cs_new`/`_lumen_cs_push`/`_lumen_cs_finish`/
+    `_lumen_cs_free`, each answering a status-prefixed byte array. The old one-shot pair and
+    `dom.rs::_decompress_status_prefixed` were deleted with their last caller.
+  - **Why decompression uses two different flate2 APIs.** `deflate`/`deflate-raw` run on the
+    low-level `flate2::Decompress`, because only it reports `Status::StreamEnd` explicitly —
+    `write::ZlibDecoder::finish()` cannot tell "the adler32 trailer never arrived" from "the
+    stream ended", which is why a truncated body used to decode as a success. `gzip` stays on
+    `write::GzDecoder`, whose `finish()` verifies CRC32 + ISIZE itself; re-deriving the gzip
+    header parse (FEXTRA/FNAME/FCOMMENT/FHCRC) would only risk the very cases
+    `decompression-corrupt-input` checks.
+  - **`zio::Writer` dumps its staging buffer at the START of the next call.** Every `write::*`
+    wrapper does, so the bytes a `write` produced are not in the sink `Vec` when it returns —
+    a full gzip stream pushed in one chunk answered with zero bytes and only surrendered them at
+    `finish`, i.e. the exact symptom being fixed, surviving on one format of three. An empty
+    `write(&[])` performs the dump and nothing else (`compression::pump`).
+  - **Order matters when a stream both produces and fails.** Junk past the end of a stream must
+    enqueue what was decoded *before* erroring: `ReadableStreamDefaultControllerError` resets the
+    queue, so "error, then enqueue" loses the chunk a standing `read()` was owed
+    (`decompression-extra-input`). Hence the third status, `TRAILING_JUNK`, rather than folding
+    it into the error.
+  - **Contract shift to know:** the *compressor* streams too, so the first gzip chunk is its
+    header. A reader must concatenate all chunks (WPT's `concatenate-stream.js` pattern) — four
+    of this file's own unit tests read only the first chunk and had to be rewritten; they passed
+    for two formats of three while doing so.
+  - Measured A/B over the whole vendored `compression` category (Windows, dev-release):
+    187/322 subtests and 16/19 harness OK → **242/322 and 18/19**. Residual is brotli (absent —
+    a quarter of the category) plus `SharedArrayBuffer` chunks the engine cannot tell from an
+    ordinary buffer. `compression-bad-chunks` gained 15 PASS and still went OK → ERROR, on a
+    defect of its own: an unhandled-rejection report fires at the end of a *microtask* instead of
+    the task ([BUG-918](../bugs/BUG-918-OPEN.md)).
+  - **Residual:** a stream abandoned without `close()` and without an error leaks its codec until
+    the runtime dies — the shim's `TransformStream` has no `cancel` hook and neither the writer's
+    `abort` nor the reader's `cancel` reaches the transformer. Bounded by one document.

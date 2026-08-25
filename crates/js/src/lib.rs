@@ -20,6 +20,7 @@ pub mod iframe_element;
 pub mod broadcast_channel;
 pub mod canvas2d;
 pub mod close_watcher;
+pub mod compression;
 pub mod download_bindings;
 pub mod network_log_bindings;
 pub mod pip_bindings;
