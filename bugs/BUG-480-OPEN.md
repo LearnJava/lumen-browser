@@ -340,3 +340,46 @@ DOMContentLoaded.
 child→parent hello, parent→child ping из обработчика `load` хоста,
 раунд-трип pong, `event.origin = http://127.0.0.1:<port>` и фасадный
 `source` во всех доставках.
+
+## Срез 5 (P3, 2026-08-25) — мутации под-документа из JS родителя
+
+Фасады стали записываемыми: у Document — `createElement(tag)`/
+`createTextNode(data)` и сеттер `title` (создаёт `<title>` в `<head>`, если
+его нет), у Element — `setAttribute`/`removeAttribute`, рефлексии-сеттеры
+`id`/`className`, `appendChild`/`insertBefore(node, ref|null)`/
+`removeChild`/`remove()` и сеттер `textContent`. Всё через новое мутабельное
+семейство нативов `_lumen_f_create_element/_create_text/_set_attr/
+_remove_attr/_append_child/_insert_before/_remove_node/_set_text`
+(`frame_bridge.rs`), пишущее в тот же общий `Arc<Mutex<Document>>`, поэтому
+мутация видна контексту ребёнка немедленно — его врапперы читают живое дерево.
+
+Границы корректности: аргументы-узлы обязаны быть фасадами того же биндинга
+(на фасадах появился `__bid__`; чужой документ — тихий no-op), нативы записи
+дополнительно проверяют границы арены (`checked_node`) и цикл «потомок под
+собственного предка» (аналог приватного DEVX-8a `is_self_or_ancestor`;
+отклонение от спеки — HierarchyRequestError заменён тихим no-op, конвенция
+бриджа «невалидно = пусто»). `removeChild`, как у главного документа, снимает
+узел с фактического родителя без проверки иерархии. Владение nid'ом на уровне
+нативов обеспечивает именно JS-граница `__bid__`: нативы модуля приватны,
+как нативы главного документа доверяют его врапперам.
+
+Не входит (очередь): исполнение вставленных `<script>` и запрос подресурсов
+вставленных элементов (загрузка подресурсов фреймов — будущий срез),
+restyle/layout/paint фрейма (фреймы ещё не рендерятся), события через границу
+изолятов (`facade.click()` → слушатели ребёнка) — следующий срез,
+`document.open/write/close`, sibling↔sibling postMessage, вызов функций между
+изолятами, динамически созданные фреймы ([BUG-885](BUG-885-OPEN.md)),
+навигация/замена/удаление фрейма, X-Frame-Options/CSP `frame-ancestors`,
+bfcache фреймов.
+
+Проверка: clippy `-p lumen-js --features v8-backend` / `-p lumen-shell`
+-D warnings; тесты js lib 3245 ok (+10 юнит-бриджа: запись в общее дерево с
+Rust-стороной проверкой, видимость второму изоляту поверх того же `Arc`,
+замена детей сеттером textContent, insertBefore/remove/removeChild, отказ
+чужого биндинга, no-op при inaccessible, отказ цикла без порчи дерева, сеттер
+title в head, текстовый узел); `dump_golden.py` 12/12; живой смоук
+`tests/wpt/verify_frame_mutation.py` (dev-release, http-сервер): родитель в
+обработчике `load` вставляет `<p id=injected>` c атрибутами и текстом, читает
+обратно тем же фасадом, ставит `title`; ребёнок опросом собственного дерева
+рапортует узел и родительский title (`child-sees text=from-parent attr=parent
+title=mutated-by-parent`).
