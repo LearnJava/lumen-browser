@@ -164,6 +164,31 @@
 //!   непомеченными, и поздний `src` обязан получить вторую доставку.
 //!   Предикат старта — `_lumen_frame_script_will_start` (dom.rs), зеркальный
 //!   ранним выходам `_lumen_script_prepare`.
+//!
+//! BUG-480 срез 10 — обратная доставка ресурсных событий через границу
+//! изолятов (обработчики ФАСАДА):
+//! - ресурсное событие (`load`/`error` от `_lumen_resource_fire`: внешний
+//!   скрипт, динамическая таблица стилей, блок `<style>`, …) в контексте,
+//!   у которого ЕСТЬ слот родителя, зеркалится конвертом
+//!   [`FrameEventKind::Resource`] в документ родителя — обратное направление
+//!   всех прежних ящиков (родитель → ребёнок);
+//! - фасадный элемент получил `addEventListener`/`removeEventListener`
+//!   (карта слушателей в WeakMap замыкания шима); доставка на тике пумпы
+//!   родителя строит Event в его изоляте, ставит `target`/`currentTarget` на
+//!   интернированный фасад nid'а (bid отправителя разрешает реестр
+//!   ПОЛУЧАТЕЛЯ, как `event.source` у postMessage) и вызывает сначала
+//!   слушателей, затем свойство `on<type>` — тем же порядком, что локальный
+//!   диспатч; этим закрыт хвост среза 9: `s.onload`, назначенный родителем на
+//!   фасад внешнего скрипта, больше не no-op;
+//! - гейты: постановка требует живого слота родителя и элемента собственного
+//!   документа (новое поле [`FrameDocSlots::self_doc`] даёт нативу доступ к
+//!   собственной арене); фильтр доступности стоит при разборе ящика — биндинг
+//!   отправителя, которого у получателя нет или который `accessible: false`,
+//!   конверт отбрасывает (у cross-origin/opaque детей фасадов элементов нет);
+//! - отклонения задокументированы: ребро только «ребёнок → непосредственный
+//!   родитель» (внук зеркалится среднему фрейму, как у postMessage среза 4);
+//!   доставка асинхронная на тике пумпы; событие в изоляте получателя —
+//!   новый объект Event, а не тот же инстанс, что у ребёнка.
 
 #[cfg(feature = "v8-backend")]
 use std::sync::{Arc, Mutex, OnceLock};
@@ -226,6 +251,11 @@ pub(crate) struct FrameDocSlots {
     /// `install_dom` остаётся `None`, и `_lumen_frame_take_messages`
     /// ничего не отдаёт.
     pub(crate) self_key: Option<usize>,
+    /// Срез 10: клон `Arc` собственного документа — по нему натив
+    /// `_lumen_f_queue_parent_resource` проверяет nid (элемент собственной
+    /// арены) и берёт `source_doc` для конверта [`FrameDocSlots::self_key`].
+    /// Заполняется тем же блоком `install_dom`, что и [`FrameDocSlots::self_key`].
+    pub(crate) self_doc: Option<Arc<Mutex<lumen_dom::Document>>>,
     /// Срез 4: нормализованный origin собственной страницы — им заменяется
     /// origin `about:`-биндинга при вычислении `event.origin` (наследование
     /// origin у srcdoc/about:blank детей).
@@ -318,6 +348,14 @@ pub(crate) enum FrameEventKind {
     /// `_lumen_script_prepare`; повторная вставка уже исполненного не
     /// перезапускает (per-element «already started» на стороне получателя).
     RunScript,
+    /// Срез 10: ресурсное событие (`load`/`error`) на элементе ОТПРАВИТЕЛЯ
+    /// (ребёнка) — зеркальное направление ко всем прежним видам: получатель —
+    /// РОДИТЕЛЬ, и доставляет оно в обработчики фасада (`addEventListener`
+    /// фасада, затем свойство `on<type>`), а не в семантику ребёнка.
+    Resource {
+        /// Тип события (`'load'`/`'error'`/…).
+        ev_type: String,
+    },
 }
 
 /// Разобрать спецификацию конверта, построенную шимом фасада.
@@ -381,6 +419,13 @@ pub(crate) struct PendingFrameEvent {
     pub(crate) nid: u32,
     /// Что вызвано на фасаде (семантику исполняет получатель).
     pub(crate) kind: FrameEventKind,
+    /// Срез 10: ключ документа ОТПРАВИТЕЛЯ (указатель его `Arc`). Для
+    /// [`FrameEventKind::Resource`] получатель разрешает по нему bid биндинга
+    /// отправителя (как `event.source` у postMessage); прежние виды значение
+    /// не читают. `0` — отправитель без установленного `install_dom`
+    /// (минимальный тестовый изолят): bid не резолвится, Resource-конверт
+    /// отбрасывается.
+    pub(crate) source_doc: usize,
 }
 
 /// Глобальный ящик «кто-то вызвал `facade.click()`/`focus()`/`blur()`/
@@ -573,7 +618,7 @@ fn bridge_set_text_content(
 /// Переполненный ящик теряет конверт молча, как у всех событий моста.
 #[cfg(feature = "v8-backend")]
 fn queue_run_script_if_script(registry: &FrameDocRegistry, bid: u32, nid: u32) {
-    let target_doc = {
+    let (target_doc, source_doc) = {
         let reg = registry.lock().unwrap_or_else(|e| e.into_inner());
         let Some(binding) = resolve_slot(&reg, bid) else {
             return;
@@ -594,7 +639,10 @@ fn queue_run_script_if_script(registry: &FrameDocRegistry, bid: u32, nid: u32) {
         if !is_script {
             return;
         }
-        Arc::clone(&binding.doc)
+        (
+            Arc::clone(&binding.doc),
+            reg.self_key.unwrap_or(0),
+        )
     };
     let outbox = frame_event_outbox();
     let mut outbox = outbox.lock().unwrap_or_else(|e| e.into_inner());
@@ -605,7 +653,54 @@ fn queue_run_script_if_script(registry: &FrameDocRegistry, bid: u32, nid: u32) {
         target_doc,
         nid,
         kind: FrameEventKind::RunScript,
+        source_doc,
     });
+}
+
+/// Срез 10: зеркальное направление ящика событий — ресурсное событие
+/// (`load`/`error` от `_lumen_resource_fire`) контекста-фрейма ставится
+/// конвертом в документ РОДИТЕЛЯ. Гейты постановки: у отправителя живой слот
+/// родителя и собственный документ ([`FrameDocSlots::self_doc`], ставится
+/// `install_dom` — минимальные тестовые изоляты молча не ставят ничего), а
+/// nid — элемент собственной арены. Доступность пары проверяет получатель при
+/// разборе ящика: фасады элементов существуют только у доступных биндингов.
+#[cfg(feature = "v8-backend")]
+fn queue_parent_resource(
+    registry: &FrameDocRegistry,
+    nid: u32,
+    ev_type: String,
+) -> bool {
+    let (target_doc, source_doc) = {
+        let reg = registry.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(self_doc) = reg.self_doc.as_ref() else {
+            return false;
+        };
+        let is_element = {
+            let doc = self_doc.lock().unwrap_or_else(|e| e.into_inner());
+            checked_node(&doc, nid).is_some_and(|id| {
+                matches!(&doc.get(id).data, lumen_dom::NodeData::Element { .. })
+            })
+        };
+        if !is_element {
+            return false;
+        }
+        match reg.parent.as_ref() {
+            Some(parent) => (Arc::clone(&parent.doc), reg.self_key.unwrap_or(0)),
+            None => return false,
+        }
+    };
+    let outbox = frame_event_outbox();
+    let mut outbox = outbox.lock().unwrap_or_else(|e| e.into_inner());
+    if outbox.len() >= FRAME_OUTBOX_CAP {
+        return false;
+    }
+    outbox.push(PendingFrameEvent {
+        target_doc,
+        nid,
+        kind: FrameEventKind::Resource { ev_type },
+        source_doc,
+    });
+    true
 }
 
 /// Первый элемент с тегом `tag` (ASCII case-insensitive) в document order.
@@ -956,8 +1051,23 @@ pub(crate) fn install_frame_bridge_v8(
                     target_doc: Arc::clone(&binding.doc),
                     nid,
                     kind,
+                    source_doc: reg.self_key.unwrap_or(0),
                 });
                 true
+            }),
+        )?;
+    }
+    // ── Срез 10: обратная доставка ресурсных событий ─────────────────────────
+    // Рёбро «ребёнок → родитель»: `_lumen_resource_fire` шима фрейма зовёт
+    // глобальное зеркало (`_lumen_frame_mirror_resource`), оно — этот натив.
+    // Постановка без bid: получатель сам разрешит биндинг отправителя по
+    // `source_doc` (как `event.source` у postMessage).
+    {
+        let reg = Arc::clone(&registry);
+        rt.register_native(
+            "_lumen_f_queue_parent_resource",
+            into_v8_fn2(move |nid: u32, ev_type: String| -> bool {
+                queue_parent_resource(&reg, nid, ev_type)
             }),
         )?;
     }
@@ -988,19 +1098,32 @@ pub(crate) fn install_frame_bridge_v8(
                 }
                 let items: Vec<serde_json::Value> = taken
                     .into_iter()
-                    .map(|ev| match ev.kind {
-                        FrameEventKind::Click => serde_json::json!({
+                    .filter_map(|ev| match ev.kind {
+                        FrameEventKind::Click => Some(serde_json::json!({
                             "kind": "click", "nid": ev.nid,
-                        }),
-                        FrameEventKind::Focus { prevent_scroll } => serde_json::json!({
+                        })),
+                        FrameEventKind::Focus { prevent_scroll } => Some(serde_json::json!({
                             "kind": "focus", "nid": ev.nid, "preventScroll": prevent_scroll,
-                        }),
-                        FrameEventKind::Blur => serde_json::json!({
+                        })),
+                        FrameEventKind::Blur => Some(serde_json::json!({
                             "kind": "blur", "nid": ev.nid,
-                        }),
-                        FrameEventKind::RunScript => serde_json::json!({
+                        })),
+                        FrameEventKind::RunScript => Some(serde_json::json!({
                             "kind": "runscript", "nid": ev.nid,
-                        }),
+                        })),
+                        FrameEventKind::Resource { ev_type } => {
+                            // Срез 10: bid отправителя разрешает реестр
+                            // ПОЛУЧАТЕЛЯ. Нет биндинга или `accessible: false` —
+                            // фасадов элементов у получателя нет, конверт
+                            // отбрасывается здесь (фильтр доступности пары).
+                            let sender_bid = reg.frames.iter().position(|b| {
+                                Arc::as_ptr(&b.doc) as usize == ev.source_doc && b.accessible
+                            })?;
+                            Some(serde_json::json!({
+                                "kind": "resource", "nid": ev.nid, "type": ev_type,
+                                "bid": sender_bid as u32,
+                            }))
+                        }
                         FrameEventKind::Dom {
                             ev_type,
                             bubbles,
@@ -1011,12 +1134,12 @@ pub(crate) fn install_frame_bridge_v8(
                             let detail = detail_json
                                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
                                 .unwrap_or(serde_json::Value::Null);
-                            serde_json::json!({
+                            Some(serde_json::json!({
                                 "kind": "dom", "nid": ev.nid,
                                 "type": ev_type, "bubbles": bubbles,
                                 "cancelable": cancelable, "composed": composed,
                                 "detail": detail,
-                            })
+                            }))
                         }
                     })
                     .collect();
@@ -1446,6 +1569,26 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
   var docs = {};
   var elems = {};
 
+  // Срез 10: слушатели фасадных элементов (WeakMap фасад → {тип: [fn]}).
+  // Фасады не настоящие EventTarget, поэтому карта своя; доставку в неё делает
+  // ветка 'resource' пумпы (обратные ресурсные события ребёнка). Ключ — сам
+  // интернированный объект фасада, так что identity-зависимость та же, что у
+  // самих фасадов.
+  var elemListeners = new WeakMap();
+
+  function facadeOn(fel, type, fn, add) {
+    var map = elemListeners.get(fel);
+    if (!map) { map = {}; elemListeners.set(fel, map); }
+    var list = map[type];
+    if (!list) { list = []; map[type] = list; }
+    if (add) {
+      if (list.indexOf(fn) === -1) list.push(fn);
+    } else {
+      var i = list.indexOf(fn);
+      if (i !== -1) list.splice(i, 1);
+    }
+  }
+
   function bidOrNull(hostNid) {
     if (hostNid === null || hostNid === undefined) return null;
     var bid = _lumen_frame_binding(hostNid);
@@ -1622,6 +1765,20 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
         };
         if (evt.detail !== undefined && evt.detail !== null) spec.detail = evt.detail;
         _lumen_f_queue_event(bid, nid, JSON.stringify(spec));
+      },
+      // Срез 10: слушатели фасада. Доставку в них делает ветка 'resource'
+      // пумпы (ресурсные события ребёнка: load/error внешнего скрипта и т.п.);
+      // порядок вызова — сначала слушатели, затем свойство on<type>, как у
+      // локального диспатча шима.
+      addEventListener: function(type, fn) {
+        if (typeof type === 'string' && type && typeof fn === 'function') {
+          facadeOn(el, type, fn, true);
+        }
+      },
+      removeEventListener: function(type, fn) {
+        if (typeof type === 'string' && type && typeof fn === 'function') {
+          facadeOn(el, type, fn, false);
+        }
       },
       // BUG-480 срез 2: содержимое фрейма не layout'ится — честные нули вместо
       // выдуманных размеров (layout фреймов — будущий срез).
@@ -1947,11 +2104,67 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
             } else if (env.kind === 'runscript' &&
                        typeof _lumen_deliver_frame_run_script === 'function') {
               _lumen_deliver_frame_run_script(env.nid);
+            } else if (env.kind === 'resource') {
+              // ── Срез 10: ресурсное событие ребёнка в обработчики фасада ────
+              // Разбирается ЗДЕСЬ, а не хуком WEB_API_SHIM: получатели —
+              // интернированные фасады и их карта слушателей, они приватны для
+              // этого замыкания. bid отправителя ставит натив разбора (реестр
+              // ПОЛУЧАТЕЛЯ, фильтр доступности прошёл уже там). Event строится
+              // заново в этом изоляте; порядок вызова — слушатели фасада,
+              // затем свойство on<type>. В минимальных изолятах без Event
+              // деградирует до plain-object снимка.
+              if ((env.bid !== null && env.bid !== undefined) &&
+                  typeof env.type === 'string' && env.type) {
+                var fel = frameElem(env.bid, env.nid);
+                if (fel) {
+                  var rev = null;
+                  try {
+                    rev = new Event(env.type, { bubbles: false, cancelable: false });
+                  } catch (e2) {}
+                  if (!rev) rev = { type: env.type, bubbles: false, cancelable: false };
+                  rev.target = fel;
+                  rev.currentTarget = fel;
+                  try { rev.isTrusted = true; } catch (e3) {}
+                  var map = elemListeners.get(fel);
+                  var list = map ? map[env.type] : null;
+                  if (list && list.length) {
+                    var snap = list.slice();
+                    for (var k = 0; k < snap.length; k++) {
+                      try { snap[k].call(fel, rev); } catch (err) {
+                        if (typeof _lumen_report_exception === 'function') {
+                          try { _lumen_report_exception(err); } catch (e4) {}
+                        }
+                      }
+                    }
+                  }
+                  var oh = fel['on' + env.type];
+                  if (typeof oh === 'function') {
+                    try { oh.call(fel, rev); } catch (err2) {
+                      if (typeof _lumen_report_exception === 'function') {
+                        try { _lumen_report_exception(err2); } catch (e5) {}
+                      }
+                    }
+                  }
+                }
+              }
             }
           } catch (e) {}
         }
       }
     }
+  };
+
+  // ── Срез 10: зеркало ресурсных событий в родительский изолят ──────────────
+  // Вызывается из `_lumen_resource_fire` (WEB_API_SHIM) после локального
+  // диспатча. Гейт «у контекста есть родитель» стоит внутри натива
+  // (`_lumen_f_queue_parent_resource` читает слот parent): топ-страница
+  // платит один пустой вызов натива на событие и не ставит конвертов.
+  // Возврат — поставлен ли конверт (для тестов).
+  globalThis._lumen_frame_mirror_resource = function(nid, type) {
+    if (typeof nid !== 'number' || nid < 0) return false;
+    if (typeof type !== 'string' || !type || type.length > 128) return false;
+    if (typeof _lumen_f_queue_parent_resource !== 'function') return false;
+    try { return !!_lumen_f_queue_parent_resource(nid, type); } catch (e) { return false; }
   };
 })();
 "#;

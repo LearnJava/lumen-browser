@@ -6569,6 +6569,14 @@ function _lumen_resource_fire(nid, type) {
         _lumen_dispatch(nid, ev);
     }
     catch (e) {}
+    // BUG-480 срез 10: зеркало ресурсного события в родительский изолят —
+    // обработчики фасада (`s.onload`, назначенный родителем на элемент
+    // под-документа) живут не здесь, и без обратного конверта они навсегда
+    // no-op. Гейт «есть родитель» внутри натива; в минимальных изолятах без
+    // бриджа функции нет, топ-страница получает пустой вызов натива.
+    if (typeof _lumen_frame_mirror_resource === 'function') {
+        try { _lumen_frame_mirror_resource(nid, type); } catch (e2) {}
+    }
 }
 
 // HTML LS §3.1.5 «current script» (BUG-486, blocking BUG-703). A stack, not a
