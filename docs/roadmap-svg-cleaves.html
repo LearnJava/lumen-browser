@@ -5484,6 +5484,13 @@
        "status": "ready",
        "size": "M",
        "note": "`crates/engine/dom/src/lib.rs` (6 998 строк): формы → `forms.rs`, selection и range → `selection.rs`, IME → `ime.rs`, FontFaceSet → `font_faces.rs`, PerformanceTimeline → `performance.rs`. Образец уже вынесенных модулей — `vtt.rs`, `contenteditable.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-JS0",
+       "title": "SPLIT-JS0: перепись js/dom.rs",
+       "status": "ready",
+       "size": "S",
+       "note": "Перепись `crates/js/src/dom.rs` (**45 541 строка — крупнейший файл workspace**) и `crates/js/src/v8_runtime.rs` (9 415), нарезка на батчи. Крейта `lumen-js` не было ни в переписи 2026-08-23, ни в списке крейтов дорожки: пробел, вскрытый 2026-08-26 гейтом `scripts/check_file_sizes.py`, который меряет все `.rs` подряд, а не список из плана. Файл рос всю волну JS-правок 2026-08-22…26 и по размеру превосходит `style.rs`, который план называет крупнейшим. Осторожно: `WEB_API_SHIM` — это строковый литерал JS внутри `.rs`, резать его надо по границам шимов (`WEB_API_SHIM_MID` и соседи), а не по строкам Rust. Метод — §1, результат — новая группа батчей в §4 [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
       }
      ]
     }

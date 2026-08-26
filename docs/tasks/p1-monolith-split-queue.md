@@ -1,7 +1,7 @@
 # Очередь SPLIT — разрезание монолитных файлов (P1)
 
 **Developer:** P1 (батчи `crates/shell` может брать P2 — код механический)
-**Крейты:** `lumen-shell`, `lumen-layout`, `lumen-paint`, `lumen-network`, `lumen-css-parser`, `lumen-dom`
+**Крейты:** `lumen-shell`, `lumen-layout`, `lumen-paint`, `lumen-network`, `lumen-css-parser`, `lumen-dom`, `lumen-js` (добавлен 2026-08-26, см. пересчёт в §1)
 **Родитель:** `SPLIT` в [`ROADMAP.md`](../../ROADMAP.md)
 **Ветки:** `p1-split-<id>` (например `p1-split-sh1`)
 **Заведена:** 2026-08-23, по итогам аудита здоровья кода
@@ -48,6 +48,14 @@ rg -n "^pub struct |^struct |^pub enum |^enum |^impl |^pub fn |^fn |^mod |^trait
 
 НЕ резать (табличные/когерентные, монолитность безвредна): `html-parser/entities.rs`,
 `layout/counters.rs`, `layout/incremental.rs`, `animation.rs`, `paint/svg_path.rs`.
+
+**Перепись 2026-08-23 пропустила крупнейший файл workspace.** `crates/js/src/dom.rs`
+— **45 541 строка**, больше `style.rs`, который значится здесь первым; рядом
+`crates/js/src/v8_runtime.rs` (9 415). Крейта `lumen-js` не было ни в таблице, ни
+в списке крейтов дорожки. Вскрыто 2026-08-26 гейтом `scripts/check_file_sizes.py`,
+который меряет **все** `.rs` подряд вместо списка, составленного человеком, —
+26 файлов длиннее 2000 строк против 10 в этой таблице. Мораль для любой будущей
+переписи: список строится машиной по всему дереву, а сверяется глазами, не наоборот.
 
 **Пересчёт на 2026-08-26** (при назначении дорожки P1): style.rs 38 031,
 shell/main.rs 29 298 (после SH-1), box_tree.rs **23 470** (+919), renderer.rs 20 919,
@@ -158,10 +166,11 @@ SH-1 значился «view-transition слой, самодостаточный
 | ST-2 | Логические свойства: `resolve_logical_property` (17906) и окрестность → `style/logical.rs` | |
 | ST-3+ | По итогам ST-0: группы свойств (`values/{typography,box,color_bg,flexgrid,position,effects}`), каскад (`cascade.rs`), матчинг (`matching.rs`) | план зафиксировать в этом файле |
 
-### Группы BT/PR/LB/NW/CP/DM — второй эшелон
+### Группы JS/BT/PR/LB/NW/CP/DM — второй эшелон
 
 | ID | Файл | Первый шаг |
 |---|---|---|
+| JS-0 | `js/dom.rs` (45 541) + `js/v8_runtime.rs` (9 415) | перепись → нарезка. Крупнейший файл workspace, в переписи 2026-08-23 отсутствовал вовсе. `WEB_API_SHIM` внутри — строковый литерал JS, резать его надо по границам шимов (`WEB_API_SHIM_MID` и соседи), а не по строкам Rust; половина «известных готч» CLAUDE.md живёт в этом файле, так что регионы именовать по содержимому особенно строго |
 | BT-0 | `layout/box_tree.rs` (23 470) | перепись → конструкторы по режимам `{block, inline, flex, grid, table, abspos, iframe}`; `build_iframe_document` (зависимость layout→html-parser) — кандидат на отдельный модуль |
 | LB-0 | `layout/lib.rs` (19 155) | перепись → нарезка. Группы под этот файл в исходном плане не было — пробел, замеченный при назначении дорожки P1 2026-08-26, хотя файл шестой по величине в переписи |
 | PR-0 | `paint/renderer.rs` (20 919) | перепись → `{pipelines_wgsl, glyph_atlas, texture_pool, compute}`; WGSL-шейдеры в `.wgsl`-файлы с `include_str!` |
