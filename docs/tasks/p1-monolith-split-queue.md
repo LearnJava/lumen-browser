@@ -5,6 +5,10 @@
 **Родитель:** `SPLIT` в [`ROADMAP.md`](../../ROADMAP.md)
 **Ветки:** `p1-split-<id>` (например `p1-split-sh1`)
 **Заведена:** 2026-08-23, по итогам аудита здоровья кода
+**Назначена P1:** 2026-08-26 — все 19 оставшихся батчей заведены строками в
+`ROADMAP.md` (id `SPLIT-SH2`…`SPLIT-DM1`) и указателями в `STATUS-P1.md`; порядок
+там сверху вниз и есть порядок работы. Группа SH идёт с хвоста файла к голове,
+чтобы вырезка не сдвигала анкеры ещё не взятых батчей.
 
 Один батч = одна строка в `STATUS-P1.md` = одна сессия. Каждый батч — чисто
 механический перенос кода между модулями: ноль изменений поведения, ноль правок
@@ -44,6 +48,13 @@ rg -n "^pub struct |^struct |^pub enum |^enum |^impl |^pub fn |^fn |^mod |^trait
 
 НЕ резать (табличные/когерентные, монолитность безвредна): `html-parser/entities.rs`,
 `layout/counters.rs`, `layout/incremental.rs`, `animation.rs`, `paint/svg_path.rs`.
+
+**Пересчёт на 2026-08-26** (при назначении дорожки P1): style.rs 38 031,
+shell/main.rs 29 298 (после SH-1), box_tree.rs **23 470** (+919), renderer.rs 20 919,
+display_list.rs 19 698, layout/lib.rs 19 155, network/lib.rs **10 217** (+418),
+css-parser/parser.rs 9 192, femtovg_backend.rs 7 955, dom/lib.rs 6 998.
+Два файла выросли, то есть правило «фичи в эти файлы в этот период не заводить»
+не соблюдается — цель движется, и оценки батчей BT-0 и NW-0 снимать заново.
 
 ---
 
@@ -147,11 +158,12 @@ SH-1 значился «view-transition слой, самодостаточный
 | ST-2 | Логические свойства: `resolve_logical_property` (17906) и окрестность → `style/logical.rs` | |
 | ST-3+ | По итогам ST-0: группы свойств (`values/{typography,box,color_bg,flexgrid,position,effects}`), каскад (`cascade.rs`), матчинг (`matching.rs`) | план зафиксировать в этом файле |
 
-### Группы BT/PR/NW/CP/DM — второй эшелон
+### Группы BT/PR/LB/NW/CP/DM — второй эшелон
 
 | ID | Файл | Первый шаг |
 |---|---|---|
-| BT-0 | `layout/box_tree.rs` (22 551) | перепись → конструкторы по режимам `{block, inline, flex, grid, table, abspos, iframe}`; `build_iframe_document` (зависимость layout→html-parser) — кандидат на отдельный модуль |
+| BT-0 | `layout/box_tree.rs` (23 470) | перепись → конструкторы по режимам `{block, inline, flex, grid, table, abspos, iframe}`; `build_iframe_document` (зависимость layout→html-parser) — кандидат на отдельный модуль |
+| LB-0 | `layout/lib.rs` (19 155) | перепись → нарезка. Группы под этот файл в исходном плане не было — пробел, замеченный при назначении дорожки P1 2026-08-26, хотя файл шестой по величине в переписи |
 | PR-0 | `paint/renderer.rs` (20 919) | перепись → `{pipelines_wgsl, glyph_atlas, texture_pool, compute}`; WGSL-шейдеры в `.wgsl`-файлы с `include_str!` |
 | PR-1 | `paint/display_list.rs` (19 698) | перепись → `{commands, builder, serialize, hit_test, cache}` |
 | PR-2 | `paint/backends/femtovg_backend.rs` (7 955) | по командам: path/text/image/blend |
