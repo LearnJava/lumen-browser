@@ -346,6 +346,45 @@ jobs:
           python scripts/gen_roadmap.py
           git diff --exit-code -I'"generated":' -- docs/roadmap-*.html
 
+  file-size:
+    # Blocking from day one, same reasoning as doc-drift: no build, no platform
+    # behaviour, just a line count compared against a committed baseline.
+    #
+    # Two rules in one check (docs/lint-policy.md §5.1): a hard 2000-line cap for
+    # any file not already in the baseline, and a ratchet forbidding silent growth
+    # of the ones the SPLIT track has yet to cut. The ratchet exists because the
+    # plan's prose version of it was not obeyed — between the 2026-08-23 audit and
+    # 2026-08-26 `box_tree.rs` grew by 919 lines and `network/src/lib.rs` by 418,
+    # i.e. the split was chasing a moving target.
+    #
+    # Growth is not forbidden outright: `--update` moves the number and lands in
+    # the same commit's diff, so it becomes a reviewable act instead of an
+    # accident. What cannot happen is growing without anyone noticing.
+    name: File size (SPLIT ratchet)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            /*
+            !/tests/wpt
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # The self-test runs first for the reason docs/lint-policy.md §6 gives about
+      # every gate script: a checker nobody checks reports "clean" for free.
+      - name: Self-test the checker
+        run: python scripts/check_file_sizes.py --self-test
+
+      - name: No new monoliths, no silent growth
+        run: python scripts/check_file_sizes.py
+
   cross:
     # Cold path: push-to-main and nightly only (see the header comment). Keeps the
     # macOS/Windows coverage that the old 3-OS matrix gave — including the unit
