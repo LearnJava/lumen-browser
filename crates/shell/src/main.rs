@@ -5746,6 +5746,9 @@ fn parse_and_layout(
     // РєРѕСЂРѕС‚РєРёРµ вЂ” СЃРєСЂРёРїС‚С‹ РґРµС‚РµР№ Рё `load` С…РѕСЃС‚Р° РёРґСѓС‚ Р±РµР· СѓРґРµСЂР¶Р°РЅРёСЏ РґРµСЂРµРІР°.
     // РЎСЂРµР· 3: РґРѕРєСѓРјРµРЅС‚/Р±Р°Р·Р° СЃС‚СЂР°РЅРёС†С‹ РїРµСЂРµРґР°СЋС‚СЃСЏ Рё РєР°Рє top вЂ” Сѓ С„СЂРµР№РјРѕРІ
     // РїРµСЂРІРѕРіРѕ СѓСЂРѕРІРЅСЏ parent === top, РіР»СѓР±Р¶Рµ top РІСЃРµРіРґР° РєРѕСЂРµРЅСЊ.
+    // РЎСЂРµР· 11: СЌРєСЂР°РЅРЅС‹Р№ media-РіРµР№С‚ `<link>` Рё РІСЊСЋРїРѕСЂС‚ picker-Р° РєР°СЂС‚РёРЅРѕРә вЂ”
+    // С‚Рµ Р¶Рµ, СЃ РєР°РєРёРјРё СЃС‚СЂР°РЅРёС†Р° РіСЂСѓР·РёС‚ СЃРІРѕРё РїРѕРґСЂРµСЃСѓСЂСЃС‹ (print-РіРµР№С‚
+    // С„СЂРµР№РјР°Рј РЅРµ РЅСѓР¶РµРЅ — РїРµС‡Р°С‚СЊ PDF РїРѕРґ-РґРѕРєСѓРјРµРЅС‚РѕРІ РІРЅРµ СЃСЂРµР·Р°).
     let frames = {
         let _s = lumen_core::trace::span("fetch-iframes", "net");
         load_frame_sub_documents(
@@ -5754,6 +5757,8 @@ fn parse_and_layout(
             base,
             &doc_arc,
             base,
+            &screen_media_context(viewport, dark_mode),
+            viewport,
             sink,
             frame_cookie_jar,
             frame_fp,
@@ -7985,6 +7990,13 @@ fn fire_iframe_load_event(parent_js: Option<&Arc<dyn PersistentJs>>, host: NodeI
 /// РѕРєРЅР° СЃС‚СЂР°РЅРёС†С‹; РїСЂРё РїРµСЂРІРѕРј РІС‹Р·РѕРІРµ СЃРѕРІРїР°РґР°СЋС‚ СЃ `parent`/`base`, РІ СЂРµРєСѓСЂСЃРёРё
 /// РїРµСЂРµРґР°СЋС‚СЃСЏ Р±РµР· РёР·РјРµРЅРµРЅРёР№.
 ///
+/// РЎСЂРµР· 11 BUG-480: РїРѕРґСЂРµСЃСѓСЂСЃС‹ РїР°СЂСЃРµСЂРЅС‹С… СЌР»РµРјРµРЅС‚РѕРІ СЂРµР±С‘РЅРєР° (`<img src>`,
+/// `<link rel=stylesheet>`) Р·Р°РїСЂР°С€РёРІР°СЋС‚СЃСЏ СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ СЂР°Р·Р±РѕСЂР° ([`fetch_frame_subresources`],
+/// РґРѕ СЃРєСЂРёРїС‚РѕРІ), Р° РёС… `load`/`error` РґРѕСЃС‚Р°РІР»СЏСЋС‚СЃСЏ РєРѕРЅС‚РµРєСЃС‚Сѓ СЂРµР±С‘РЅРєР° РїРѕСЃР»Рµ DCL
+/// Рё РґРѕ window load ([`deliver_frame_subresource_events`]). `media_ctx`/`viewport` вЂ”
+/// СЌРєСЂР°РЅРЅС‹Р№ РіРµР№С‚ media `<link>` Рё РІСЊСЋРїРѕСЂС‚ picker-Р° РєР°СЂС‚РёРЅРѕРє: С‚Рµ Р¶Рµ Р·РЅР°С‡РµРЅРёСЏ,
+/// С‡С‚Рѕ СЃС‚СЂР°РЅРёС†Р° РёСЃРїРѕР»СЊР·СѓРµС‚ РґР»СЏ СЃРІРѕРёС… РїРѕРґСЂРµСЃСѓСЂСЃРѕРІ.
+///
 /// Р‘Р»РѕРєРёСЂРѕРІРєРё:
 /// - РіР»СѓР±РёРЅР° СЂРµРєСѓСЂСЃРёРё РѕРіСЂР°РЅРёС‡РµРЅР° [`MAX_FRAME_DEPTH`];
 /// - `sandbox` Р±РµР· `allow-scripts` РіРµР№С‚РёС‚СЃСЏ РІРЅСѓС‚СЂРё `run_scripts_with_dom`;
@@ -7997,6 +8009,88 @@ fn fire_iframe_load_event(parent_js: Option<&Arc<dyn PersistentJs>>, host: NodeI
 /// Р±РµСЂС‘С‚СЃСЏ РєРѕСЂРѕС‚РєРѕ (С‚РѕР»СЊРєРѕ РѕР±С…РѕРґ РґРµСЂРµРІР°); РІС‹РїРѕР»РЅРµРЅРёРµ СЃРєСЂРёРїС‚РѕРІ СЂРµР±С‘РЅРєР° Рё
 /// РґРёСЃРїРµРєС‚С‡ `load` РЅР° С…РѕСЃС‚Рµ РёРґСѓС‚ Р‘Р•Р— СѓРґРµСЂР¶Р°РЅРЅС‹С… Р»Р°РєРѕРІ вЂ” РѕР±СЂР°Р±РѕС‚С‡РёРєРё РІРїСЂР°РІРµ
 /// СЃРёРЅС…СЂРѕРЅРЅРѕ С‡РёС‚Р°С‚СЊ DOM РѕР±РµРёС… СЃС‚РѕСЂРѕРЅ.
+/// Исходы подресурсов парсерных элементов под-документа фрейма (BUG-480 срез 11).
+struct FrameSubresourceOutcomes {
+    /// `(узел <link rel=stylesheet>, лист получен)` в порядке объявления —
+    /// форма [`load_linked_stylesheets`].
+    links: Vec<(NodeId, bool)>,
+    /// `(узел <img>, байты получены)` в порядке DOM.
+    images: Vec<(NodeId, bool)>,
+}
+
+/// Запросить подресурсы парсерных элементов под-документа фрейма (BUG-480
+/// срез 11): `<link rel=stylesheet>` и `<img src>`.
+///
+/// До этого среза за URL картинок и листов ребёнка не ходил никто — сервер не
+/// видел ни одного запроса (срез 24 зафиксировал это записью запросов), хотя
+/// сами элементы в дереве были. Проход повторяет страницу: стили — тот же
+/// [`load_linked_stylesheets`] (media-гейт по `media_ctx` страницы), картинки —
+/// picker [`lumen_layout::collect_image_requests`] (`<picture>`/`srcset`), чей
+/// ключ URL совпадает с тем, что эмитит layout.
+///
+/// Текст каскада фрейму не нужен (фреймы пока не рендерятся — очередь
+/// «restyle/layout/paint фрейма») и выбрасывается; нужны только исходы для
+/// событий элемента. Картинки декодируются тоже не полностью — только байты
+/// ([`fetch_image_bytes`]), пиксели некому рисовать. `loading="lazy"` не
+/// запрашивается вовсе: прокси вьюпорта у фреймов нет, так же как срез 1
+/// пропускает сами `loading=lazy`-iframe.
+fn fetch_frame_subresources(
+    doc: &Document,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    media_ctx: &lumen_css_parser::MediaContext,
+    viewport: lumen_core::geom::Size,
+) -> FrameSubresourceOutcomes {
+    let (_, links) = load_linked_stylesheets(doc, base, sink, cookie_jar.clone(), media_ctx);
+
+    let requests: Vec<lumen_layout::ImageRequest> =
+        lumen_layout::collect_image_requests(doc, viewport)
+            .into_iter()
+            .filter(|req| !req.is_lazy)
+            .collect();
+    let fetched = parallel_map(&requests, |_, req| {
+        let sink: &Arc<dyn EventSink> = &sink.clone();
+        fetch_image_bytes(&req.url, base, sink, cookie_jar.clone()).is_ok()
+    });
+    let images = requests
+        .into_iter()
+        .zip(fetched)
+        .map(|(req, ok)| (req.node_id, ok))
+        .collect();
+
+    FrameSubresourceOutcomes { links, images }
+}
+
+/// Доставить исходы подресурсов фрейма ([`fetch_frame_subresources`]) его
+/// JS-контексту (BUG-480 срез 11).
+///
+/// Стили идут через `_lumen_deliver_parser_link_events` — тот же проход, что у
+/// top-level после каскада (пер-узловой флаг «уже отчитался» внутри шима гасит
+/// двойной отчёт для ссылок, вставленных скриптом ребёнка); картинки — через
+/// `_lumen_resource_fire`, как парсерные `<script src>` (BUG-804). Зеркало
+/// среза 10 внутри `_lumen_resource_fire` автоматически доставит те же события
+/// обработчикам фасадов родителя.
+fn deliver_frame_subresource_events(js: &Arc<dyn PersistentJs>, sub: &FrameSubresourceOutcomes) {
+    use std::fmt::Write as _;
+    if !sub.links.is_empty() {
+        let mut arg = String::with_capacity(sub.links.len() * 8 + 40);
+        arg.push_str("_lumen_deliver_parser_link_events([");
+        for (i, (node, ok)) in sub.links.iter().enumerate() {
+            if i > 0 {
+                arg.push(',');
+            }
+            let _ = write!(arg, "{},{}", node.index(), u8::from(*ok));
+        }
+        arg.push_str("]);");
+        js.eval_js(&arg);
+    }
+    for (node, ok) in &sub.images {
+        let kind = if *ok { "load" } else { "error" };
+        js.eval_js(&format!("_lumen_resource_fire({}, '{kind}');", node.index()));
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 #[allow(clippy::unwrap_used)] // РєРѕСЂРѕС‚РєРёР№ Р»РѕРє РґРµСЂРµРІР°; poisoned mutex = РїР°РЅРёРєР° РїРѕС‚РѕРєР° Р·Р°РіСЂСѓР·РєРё, docs/lint-policy.md В§10
 fn load_frame_sub_documents(
@@ -8005,6 +8099,8 @@ fn load_frame_sub_documents(
     base: &ResourceBase,
     top_doc: &Arc<Mutex<Document>>,
     top_base: &ResourceBase,
+    media_ctx: &lumen_css_parser::MediaContext,
+    viewport: lumen_core::geom::Size,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
@@ -8062,6 +8158,21 @@ fn load_frame_sub_documents(
         let child_doc = {
             let _s = lumen_core::trace::span("parse-html-frame", "parse");
             lumen_html_parser::parse(&html)
+        };
+        // СРЕЗ 11 BUG-480: подресурсы парсерных элементов ребёнка (`<img src>`,
+        // `<link rel=stylesheet>`). Сеть стартует ДО скриптов — парсерный порядок
+        // (источник запроса — шаг разбора, а не исполнение); исходы держим до
+        // создания рантайма и доставляем ниже, между DCL и window load.
+        let subresources = {
+            let _s = lumen_core::trace::span("fetch-frame-subresources", "net");
+            fetch_frame_subresources(
+                &child_doc,
+                &child_base,
+                sink,
+                cookie_jar.clone(),
+                media_ctx,
+                viewport,
+            )
         };
         // РЎРєСЂРёРїС‚С‹ СЂРµР±С‘РЅРєР° СЃРѕР±РёСЂР°СЋС‚СЃСЏ Рё (РІРЅРµС€РЅРёРµ) СЃРєР°С‡РёРІР°СЋС‚СЃСЏ Р”Рћ РїРµСЂРµРґР°С‡Рё
         // РґРѕРєСѓРјРµРЅС‚Р° РІ СЂР°РЅС‚Р°Р№Рј: run_scripts_with_dom РїСЂРёРЅРёРјР°РµС‚ doc РїРѕ Р·РЅР°С‡РµРЅРёСЋ.
@@ -8136,10 +8247,12 @@ fn load_frame_sub_documents(
         }
         // Lifecycle СЂРµР±С‘РЅРєР°: DOMContentLoaded СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ parse+inline-СЃРєСЂРёРїС‚РѕРІ
         // (С‚РѕС‚ Р¶Рµ РїРѕСЂСЏРґРѕРє, С‡С‚Рѕ Сѓ top-level РІ parse_and_layout); window load вЂ”
-        // СЃСЂР°Р·Сѓ СЃР»РµРґРѕРј: РїРѕРґСЂРµСЃСѓСЂСЃС‹ С„СЂРµР№РјР° (img/css) вЂ” РѕС‚РґРµР»СЊРЅС‹Р№ СЃСЂРµР·, Р°
-        // РІСЃС‚СЂРѕРµРЅРЅС‹Р№ testharness СЂРµР±С‘РЅРєР° СЃС‚Р°СЂС‚СѓРµС‚ РёРјРµРЅРЅРѕ РЅР° window load.
+        // СЃР»РµРґРѕРј, РќРћ РїРѕСЃР»Рµ РёСЃС…РѕРґРѕРІ РїРѕРґСЂРµСЃСѓСЂСЃРѕРІ (СЃСЂРµР· 11): В«loadВ» РґРѕРєСѓРјРµРЅС‚Р°
+        // СЃР»РµРґСѓРµС‚ Р·Р° РµРіРѕ РїРѕРґСЂРµСЃСѓСЂСЃР°РјРё, Рё С‚РµСЃС‚, РіРґРµ РІРЅСѓС‚СЂРё window load С‡РёС‚Р°СЋС‚
+        // Р·Р°РіСЂСѓР¶РµРЅРЅС‹Р№ `<img>`/`link.onload`, СЂР°Р±РѕС‚Р°РµС‚.
         if let Some(js) = &child_js {
             js.notify_dom_content_loaded();
+            deliver_frame_subresource_events(js, &subresources);
             js.notify_window_loaded();
         }
         // Р’Р»РѕР¶РµРЅРЅС‹Рµ С„СЂРµР№РјС‹ СЂРµР±С‘РЅРєР° РѕР±СЂР°Р±Р°С‚С‹РІР°РµРј, РїРѕРєР° РёР·РІРµСЃС‚РЅР° РµРіРѕ Р±Р°Р·Р°.
@@ -8153,6 +8266,8 @@ fn load_frame_sub_documents(
                     &child_base,
                     top_doc,
                     top_base,
+                    media_ctx,
+                    viewport,
                     sink,
                     cookie_jar.clone(),
                     fetch_provider.clone(),
@@ -27591,6 +27706,62 @@ mod tests {
         // Р Р°Р·РЅС‹Рµ СЌР»РµРјРµРЅС‚С‹ вЂ” СЂР°Р·РЅС‹Рµ СѓР·Р»С‹: Р±РµР· СЌС‚РѕРіРѕ СЃС‚СЂР°РЅРёС†Р° РЅРµ СЃРјРѕРіР»Р° Р±С‹
         // РѕС‚Р»РёС‡РёС‚СЊ, РєР°РєРѕР№ РёРјРµРЅРЅРѕ `<link>` РѕС‚С‡РёС‚Р°Р»СЃСЏ.
         assert_ne!(outcomes[0].0, outcomes[1].0);
+    }
+
+    /// BUG-480 СЃСЂРµР· 11: РїСЂРѕС…РѕРґ РїРѕРґСЂРµСЃСѓСЂСЃРѕРІ РїРѕРґ-РґРѕРєСѓРјРµРЅС‚Р° С„СЂРµР№РјР° Р·Р°РїСЂР°С€РёРІР°РµС‚
+    /// `<link rel=stylesheet>` (РѕР±Р° РёСЃС…РѕРґР°) Рё `<img>` (РѕР±Р° РёСЃС…РѕРґР°), РЅРµ С‚СЂРѕРіР°РµС‚
+    /// `rel=alternate`/`loading="lazy"` Рё РІРѕР·РІСЂР°С‰Р°РµС‚ РёСЃС…РѕРґС‹ РІ РїРѕСЂСЏРґРєРµ DOM.
+    #[test]
+    fn frame_subresources_fetch_links_and_imgs_with_outcomes() {
+        let dir = std::env::temp_dir().join("lumen_frame_subresources_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ok.css"), "p { color: red; }").unwrap();
+        // Р”Р»СЏ file-Р±Р°Р·С‹ `fetch_image_bytes` С‡РёС‚Р°РµС‚ Р±Р°Р№С‚С‹ СЃ РґРёСЃРєР° Р±РµР· РґРµРєРѕРґРёСЂРѕРІР°РЅРёСЏ:
+        // СЃРѕРґРµСЂР¶РёРјРѕРµ РЅРµ РІР°Р¶РЅРѕ, РІР°Р¶РµРЅ С„Р°РєС‚ С‡С‚РµРЅРёСЏ.
+        std::fs::write(dir.join("ok.png"), "bytes").unwrap();
+        // missing.css / missing.png РЅРµ СЃРѕР·РґР°СЋС‚СЃСЏ.
+
+        let doc = lumen_html_parser::parse(&format!(
+            r#"<html><head>
+                 <link rel="stylesheet" href="{}/ok.css">
+                 <link rel="alternate" href="{}/ignored.css">
+                 <link rel="stylesheet" href="{}/missing.css">
+               </head><body>
+                 <img src="{}/ok.png">
+                 <img src="{}/missing.png">
+                 <img loading="lazy" src="{}/lazy.png">
+               </body></html>"#,
+            dir.display(),
+            dir.display(),
+            dir.display(),
+            dir.display(),
+            dir.display(),
+            dir.display(),
+        ));
+        struct NullSink;
+        impl EventSink for NullSink {
+            fn emit(&self, _event: &Event) {}
+        }
+        let base = ResourceBase::File(dir.join("index.html"));
+        let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+        let out = fetch_frame_subresources(
+            &doc,
+            &base,
+            &sink,
+            None,
+            &screen_media_context(Size::new(1024.0, 720.0), false),
+            Size::new(1024.0, 720.0),
+        );
+
+        assert_eq!(out.links.len(), 2, "rel=alternate is not a cascade sheet");
+        assert!(out.links[0].1, "ok.css exists");
+        assert!(!out.links[1].1, "missing.css must report error");
+        assert_ne!(out.links[0].0, out.links[1].0);
+
+        assert_eq!(out.images.len(), 2, "loading=lazy is not requested at all");
+        assert!(out.images[0].1, "ok.png exists");
+        assert!(!out.images[1].1, "missing.png must report error");
     }
 
     // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ @import file loading (CSS Cascade L4 В§6.5) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
