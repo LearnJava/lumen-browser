@@ -1924,12 +1924,17 @@ impl V8JsRuntime {
         //
         // Срез 8: тот же ключ дублируется в рантайме — по нему шелл спрашивает
         // «есть ли неразобранные конверты для МЕНЯ» и будит спящий цикл.
+        //
+        // Срез 10: клон Arc остаётся в реестре — натив обратной доставки
+        // ресурсных событий (`_lumen_f_queue_parent_resource`) проверяет по
+        // нему nid и берёт `source_doc` конверта.
         {
             let mut reg = self
                 .frame_docs
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             reg.self_key = Some(Arc::as_ptr(&doc) as usize);
+            reg.self_doc = Some(Arc::clone(&doc));
             reg.self_origin = page_origin.clone();
             self.self_doc_key
                 .store(Arc::as_ptr(&doc) as usize, Ordering::Relaxed);
@@ -7806,6 +7811,292 @@ mod tests {
                 JsValue::Bool(true)
             ),
             "дата-блок не начинается ни при какой доставке"
+        );
+    }
+
+    // ── BUG-480 срез 10: обратная доставка ресурсных событий ────────────────
+
+    /// Пара изолятов «родитель ↔ ребёнок» на общих документах: у родителя
+    /// биндинг на документ ребёнка (`host_nid`), у ребёнка — слот родителя с
+    /// документом родителя. Точная топология прод-регистраций shell'а.
+    fn parent_child_pair(
+    ) -> (V8JsRuntime, V8JsRuntime, Arc<Mutex<lumen_dom::Document>>, Arc<Mutex<lumen_dom::Document>>)
+    {
+        let parent_doc = make_doc();
+        let child_doc = make_doc();
+        let parent =
+            runtime_with_dom(Arc::clone(&parent_doc), "https://parent.example/index.html");
+        let child = runtime_with_dom(Arc::clone(&child_doc), "about:srcdoc");
+        parent.register_frame_document(
+            1,
+            Arc::clone(&child_doc),
+            "about:srcdoc".to_owned(),
+            None,
+            true,
+        );
+        child.register_parent_document(
+            1,
+            Arc::clone(&parent_doc),
+            "https://parent.example/index.html".to_owned(),
+            true,
+        );
+        (parent, child, parent_doc, child_doc)
+    }
+
+    /// Срез 10: ресурсное событие (`load`) из изолята ребёнка доезжает до
+    /// обработчиков фасада родителя — сначала слушатель `addEventListener`,
+    /// затем свойство `on<type>`; `target`/`currentTarget` — интернированный
+    /// фасад, событие недоверенное по построению конструктора, но помечено
+    /// доверенным (движковое), bubbles/cancelable выключены, как у локального
+    /// `_lumen_resource_fire`.
+    #[test]
+    fn frame_resource_event_reaches_facade_handlers_in_parent() {
+        let (parent, child, parent_doc, _child_doc) = parent_child_pair();
+        parent
+            .eval(
+                "window.__order = []; \
+                 var d = _lumen_frame_content_document(1); \
+                 var s = d.getElementById('main'); \
+                 window.__s = s; \
+                 s.addEventListener('load', function () { window.__order.push('l1'); }); \
+                 s.addEventListener('load', function () { \
+                     window.__order.push('l2'); \
+                 });",
+            )
+            .unwrap();
+        child
+            .eval(
+                "_lumen_frame_mirror_resource(document.getElementById('main').__nid__, 'load')",
+            )
+            .unwrap();
+        // Конверт держит спящий цикл РОДИТЕЛЯ живым (тот же предикат среза 8).
+        assert!(crate::frame_bridge::frame_transport_has_for(Some(
+            Arc::as_ptr(&parent_doc) as usize
+        )));
+        assert_eq!(
+            parent.eval("window.__order.length").unwrap(),
+            JsValue::Number(0.0),
+            "до пумпы родителя доставок нет"
+        );
+        parent.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(
+            matches!(
+                parent
+                    .eval("window.__order.join(',') === 'l1,l2'")
+                    .unwrap(),
+                JsValue::Bool(true)
+            ),
+            "оба слушателя вызываются в порядке регистрации"
+        );
+        // Теперь назначается свойство on<type>: тот же фасад, второй конверт.
+        parent
+            .eval(
+                "window.__s.onerror = function (ev) { \
+                     window.__order.push('prop:' + ev.type + ':' + (ev.target === __s) + ':' + \
+                         (ev.currentTarget === ev.target) + ':' + ev.bubbles + ':' + ev.isTrusted); \
+                 };",
+            )
+            .unwrap();
+        child
+            .eval(
+                "_lumen_frame_mirror_resource(document.getElementById('main').__nid__, 'error')",
+            )
+            .unwrap();
+        parent.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(
+            matches!(
+                parent
+                    .eval("window.__order.join(',').split(',')[2] !== undefined && window.__order[2].indexOf('prop:error:') === 0")
+                    .unwrap(),
+                JsValue::Bool(true)
+            ),
+            "свойство on<type> вызвано после слушателей"
+        );
+        assert!(
+            matches!(
+                parent
+                    .eval("window.__order[2] === 'prop:error:true:true:false:true'")
+                    .unwrap(),
+                JsValue::Bool(true)
+            ),
+            "target/currentTarget — интернированный фасад, isTrusted у движкового события"
+        );
+    }
+
+    /// Срез 10: `removeEventListener` снимает слушателя фасада; повторная
+    /// доставка вызывает только оставшихся.
+    #[test]
+    fn facade_remove_listener_stops_delivery() {
+        let (parent, child, _parent_doc, _child_doc) = parent_child_pair();
+        parent
+            .eval(
+                "window.__n = 0; \
+                 var d = _lumen_frame_content_document(1); \
+                 var s = d.getElementById('main'); \
+                 var fn = function () { window.__n++; }; \
+                 s.addEventListener('load', fn); \
+                 window.__fn = fn;",
+            )
+            .unwrap();
+        child
+            .eval("_lumen_frame_mirror_resource(document.getElementById('main').__nid__, 'load')")
+            .unwrap();
+        parent.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(parent.eval("window.__n").unwrap(), JsValue::Number(1.0));
+        parent
+            .eval(
+                "var s2 = _lumen_frame_content_document(1).getElementById('main'); \
+                 s2.removeEventListener('load', window.__fn);",
+            )
+            .unwrap();
+        child
+            .eval("_lumen_frame_mirror_resource(document.getElementById('main').__nid__, 'load')")
+            .unwrap();
+        parent.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(
+            parent.eval("window.__n").unwrap(),
+            JsValue::Number(1.0),
+            "после removeEventListener доставок нет"
+        );
+    }
+
+    /// Срез 10: гейты постановки зеркала — контекст без слота родителя
+    /// (топ-страница), не-элемент (текстовый узел, nid за ареной) и минимальный
+    /// изолят без натива ничего не ставят.
+    #[test]
+    fn mirror_gates_top_level_non_element_and_missing_native() {
+        let doc = make_doc();
+        let rt = runtime_with_dom(doc, "https://parent.example/index.html");
+        // Топ-страница: слота родителя нет.
+        assert_eq!(
+            rt.eval(
+                "_lumen_frame_mirror_resource(document.getElementById('main').__nid__, 'load')"
+            )
+            .unwrap(),
+            JsValue::Bool(false),
+            "топ-страница не зеркалит"
+        );
+        rt.register_parent_document(
+            1,
+            make_doc(),
+            "https://parent.example/index.html".to_owned(),
+            true,
+        );
+        // Текстовый узел — не элемент.
+        rt.eval("window.__tnid = document.createTextNode('x').__nid__;").unwrap();
+        assert_eq!(
+            rt.eval("_lumen_frame_mirror_resource(__tnid, 'load')").unwrap(),
+            JsValue::Bool(false),
+            "текстовый узел не зеркалится"
+        );
+        // nid за границей арены.
+        assert_eq!(
+            rt.eval("_lumen_frame_mirror_resource(9999999, 'load')").unwrap(),
+            JsValue::Bool(false),
+            "чужой nid отброшен"
+        );
+        // Минимальный изолят без натива: зеркало молча отсутствует.
+        let bare = V8JsRuntime::new().unwrap();
+        bare.eval("var window = globalThis;").unwrap();
+        crate::frame_bridge::install_frame_bridge_v8(&bare, Default::default()).unwrap();
+        assert_eq!(
+            bare.eval("typeof _lumen_frame_mirror_resource").unwrap(),
+            JsValue::String("function".into()),
+            "зеркало установлено вместе с бриджем"
+        );
+        assert_eq!(
+            bare.eval("_lumen_frame_mirror_resource(3, 'load')").unwrap(),
+            JsValue::Bool(false),
+            "без self_doc/слота родителя постановки нет"
+        );
+    }
+
+    /// Срез 10: фильтр доступности при разборе ящика — биндинг отправителя,
+    /// которого у получателя нет или который `accessible: false`, отбрасывает
+    /// конверт БЕЗ доставки (у cross-origin детей фасадов элементов нет).
+    #[test]
+    fn resource_envelope_dropped_without_accessible_sender_binding() {
+        let parent_doc = make_doc();
+        let child_doc = make_doc();
+        let parent =
+            runtime_with_dom(Arc::clone(&parent_doc), "https://parent.example/index.html");
+        let child = runtime_with_dom(Arc::clone(&child_doc), "about:srcdoc");
+        // У родителя НЕТ биндинга на этого ребёнка.
+        child.register_parent_document(
+            1,
+            Arc::clone(&parent_doc),
+            "https://parent.example/index.html".to_owned(),
+            true,
+        );
+        parent
+            .eval("window.__got = false;")
+            .unwrap();
+        child
+            .eval("_lumen_frame_mirror_resource(document.getElementById('main').__nid__, 'load')")
+            .unwrap();
+        parent.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(
+            parent.eval("window.__got").unwrap(),
+            JsValue::Bool(false),
+            "неизвестный отправитель — тихая потеря конверта"
+        );
+        // Ящик разобран (конверт снят и отброшен), второй пумпа чист.
+        assert!(!crate::frame_bridge::frame_transport_has_for(Some(
+            Arc::as_ptr(&parent_doc) as usize
+        )));
+
+        // Теперь биндинг есть, но cross-origin/opaque (accessible=false).
+        parent.register_frame_document(
+            1,
+            Arc::clone(&child_doc),
+            "about:srcdoc".to_owned(),
+            None,
+            false,
+        );
+        child
+            .eval("_lumen_frame_mirror_resource(document.getElementById('main').__nid__, 'load')")
+            .unwrap();
+        parent.eval("_lumen_frame_pump_messages()").unwrap();
+        assert_eq!(
+            parent.eval("window.__got").unwrap(),
+            JsValue::Bool(false),
+            "cross-origin отправитель не доставляется"
+        );
+    }
+
+    /// Срез 10 — заголовочный сценарий: внешний `<script src>` ребёнка,
+    /// вставленный родителем через фасад, при неудавшейся загрузке отстреливает
+    /// спековый `error` В РЕБЁНКЕ, зеркало возвращает его родителю, и
+    /// назначенный на фасад `onerror` наконец вызывается (хвост среза 9:
+    /// раньше обработчики фасада были no-op).
+    #[test]
+    fn external_script_failure_mirrors_error_to_facade_handler() {
+        let (parent, child, _parent_doc, _child_doc) = parent_child_pair();
+        parent
+            .eval(
+                "var d = _lumen_frame_content_document(1); \
+                 var s = d.createElement('script'); \
+                 s.setAttribute('id', 'probe'); \
+                 window.__s = s; \
+                 window.__err = null; \
+                 s.onerror = function (ev) { window.__err = ev.type; }; \
+                 s.src = 'missing.js'; \
+                 d.body.appendChild(s);",
+            )
+            .unwrap();
+        // Ребёнок разбирает конверты RunScript (подготовка ставит task hop),
+        // затем таймер запускает fetch — провайдера нет, цепочка отклоняется.
+        child.eval("_lumen_frame_pump_messages(); _lumen_tick_timers();").unwrap();
+        // Родитель забирает ресурсное событие error.
+        parent.eval("_lumen_frame_pump_messages()").unwrap();
+        assert!(
+            matches!(
+                parent
+                    .eval("window.__err === 'error' && window.__s.onerror !== null")
+                    .unwrap(),
+                JsValue::Bool(true)
+            ),
+            "onerror фасада получил зеркальный error"
         );
     }
 
