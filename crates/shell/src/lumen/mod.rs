@@ -8,4 +8,7 @@
 //! the visibility of methods called from outside their new home differ.
 
 mod automation;
+mod hibernation;
+mod page_snapshot;
+mod session;
 mod tabs_cmd;
