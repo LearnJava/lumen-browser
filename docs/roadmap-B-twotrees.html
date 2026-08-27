@@ -5407,8 +5407,8 @@
       },
       {
        "id": "SPLIT-SH3B",
-       "title": "SPLIT-SH3b: PageSource из main.rs",
-       "status": "ready",
+       "title": "SPLIT-SH3b: PageSource из main.rs ЗАКРЫТ 2026-08-27 (ветка `p1-split-sh3b`): 479 строк уехали по ЧЕТЫРЁМ адресам, а не в один `src/page_source.rs`. Цель переписи описывает одну тему из трёх — ловушка «регион назван по первому item'у» в пятый раз, снова пойманная ДО вырезки; анкер `impl PageSource` дрейфанул с ~2511 на 1534. Разрез по содержимому: «откуда берутся байты документа» — `enum`/`impl PageSource`, возвращаемый ими `struct RawPage`, вытащенный из `load_bytes` предикат `cache_control_no_store` и два конструктора `PageSource` из URL-строки автоматизации и JS-навигации, стоявшие на 700 строк выше (их доккомментарии прямо ссылаются на `PageSource::from_arg`) — в новый `src/page_source.rs` (371 строка); «история навигации» — `NavEntry` + `impl NavEntry` и `JsNavigateRequest` — в новый `src/nav_history.rs` (102). Два типа региона к навигации отношения не имеют и уехали по своей теме: `DomTouchedSummary` — в `src/persistent_js.rs`, потому что его единственный пользователь во всём крейте это `PersistentJs::take_dom_touched` (в `main.rs` оставалось одно вхождение — само объявление), `should_restore_session` — в `src/session_persist.rs`, к `source_url_string`/`dom_blob_of`, отправленным туда SH-5 по той же теме. Два среза, по коммиту на тему; тела перенесены байт в байт (0 расхождений со сверкой против `HEAD` после снятия `pub(crate) `), правится только видимость. Новое для дорожки: правило SH-3a про cfg реэкспорта сработало в форме «пользуются только тесты» — `cache_control_no_store` ушёл под `#[cfg(test)]`, потому что 17 совпадений грепа по `main.rs` оказались одноимённым ПОЛЕМ `RawPage`, а не вызовами функции. main.rs 15 381 → 14 902, тестов 1624 → 1624, `dump_golden.py` 12/12 без дельт. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4",
+       "status": "done",
        "size": "S",
        "note": "Головной фрагмент `crates/shell/src/main.rs`: `impl PageSource` (анкер ~3780, после SPLIT-SH3A — ~2511) → новый `src/page_source.rs`. Забирать вместе с ним объявление `enum PageSource` и соседние навигационные типы `NavEntry`/`JsNavigateRequest`/`DomTouchedSummary` (анкер ~1397 после SH-3A, 133 строки): SPLIT-SH3A оставил их в `main.rs` именно под этот батч, чтобы тип и его реализация не разъехались по файлам. Второй из трёх мини-батчей SH-3. Осторожно с `PageSource::from_arg` — на нём висит [BUG-651](bugs/BUG-651-OPEN.md), но батч только переносит код, поведение править запрещено. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
@@ -5417,14 +5417,14 @@
        "title": "SPLIT-SH3c: fetch_vtt_text из main.rs",
        "status": "ready",
        "size": "S",
-       "note": "Головной фрагмент `crates/shell/src/main.rs`: `fetch_vtt_text` (анкер ~6004) и окрестность → новый `src/vtt_fetch.rs`. Третий из трёх мини-батчей SH-3. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "Головной фрагмент `crates/shell/src/main.rs`: `fetch_vtt_text` (анкер 3284 после SH-3b) и окрестность → новый `src/vtt_fetch.rs`. Третий из трёх мини-батчей SH-3. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
       {
        "id": "SPLIT-SH6",
        "title": "SPLIT-SH6: ядро impl Lumen из main.rs",
        "status": "blocked",
        "size": "L",
-       "note": "Ядро `impl Lumen` в `crates/shell/src/main.rs`: от `impl Lumen` (анкер ~15208) до `fn winit_modifiers_state`, ~7 470 строк. Самый рискованный батч дорожки, стартовать только после SPLIT-SH2, SPLIT-SH3A, SPLIT-SH3B, SPLIT-SH3C, SPLIT-SH4, SPLIT-SH4B, SPLIT-SH5. Резать на подбатчи по темам методов — навигация, вкладки, команды IPC, session restore — в каталог `src/lumen/` с `mod.rs`. Цель батча: `main.rs` становится bootstrap'ом не длиннее 300 строк. Приём с SPLIT-SH1: блок `impl Lumen` в подмодуле рядом с `use crate::*;` собирается без правок тел, единственное неизбежное изменение — `fn` → `pub(crate) fn` у методов, которые зовут из `main.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "Ядро `impl Lumen` в `crates/shell/src/main.rs`: от `impl Lumen` (анкер 7271 после SH-3b) до `fn winit_modifiers_state`, ~7 470 строк. Самый рискованный батч дорожки, стартовать только после SPLIT-SH2, SPLIT-SH3A, SPLIT-SH3B, SPLIT-SH3C, SPLIT-SH4, SPLIT-SH4B, SPLIT-SH5. Резать на подбатчи по темам методов — навигация, вкладки, команды IPC, session restore — в каталог `src/lumen/` с `mod.rs`. Цель батча: `main.rs` становится bootstrap'ом не длиннее 300 строк. Приём с SPLIT-SH1: блок `impl Lumen` в подмодуле рядом с `use crate::*;` собирается без правок тел, единственное неизбежное изменение — `fn` → `pub(crate) fn` у методов, которые зовут из `main.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
       {
        "id": "SPLIT-ST0",
