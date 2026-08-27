@@ -88,6 +88,8 @@ mod network_service;
 use crate::display_list_metrics::{build_split_placeholder, content_height_of, content_width_of};
 use crate::input::winit_events::{css_cursor_to_winit, cursor_icon_for_hover, winit_modifiers_state};
 use crate::js_escape::{escape_js_string, escape_js_string_char};
+use crate::panels::doc_pip_os_window::DocPipOsWindow;
+use crate::panels::pip_os_window::PipOsWindow;
 use crate::scroll::metrics::{LINE_STEP_CSS_PX, clamp_scroll, page_step};
 use crate::session_persist::{dom_blob_of, source_url_string};
 use crate::tab_lifecycle::state::TabState;
@@ -10148,45 +10150,6 @@ impl Lumen {
         self.request_redraw();
     }
 
-}
-
-/// The live OS-level picture-in-picture window (CC-7): a separate always-on-top
-/// `winit::Window` with its own [`RenderBackend`] surface, floating above every
-/// application and showing a tab's `<video>` (poster placeholder) frame.
-///
-/// Owned by [`Lumen::pip_os`]; created from a `_lumen_pip_enter` request and
-/// dropped on exit. The drop closes the OS window (winit destroys the window
-/// when the last `Arc<Window>` is released) and frees the GPU surface.
-struct PipOsWindow {
-    /// The floating OS window. Identified against `WindowEvent`s by its id.
-    window: Arc<Window>,
-    /// Dedicated render backend drawing the forwarded `<video>` content.
-    renderer: Box<dyn RenderBackend>,
-    /// Poster image URL drawn (object-fit: contain) into the window; empty в†’ grey.
-    poster_url: String,
-    /// Source `<video>` border-box (page coords); only its aspect ratio is used
-    /// to letterbox the poster as the user resizes the floating window.
-    video_rect: Rect,
-}
-
-/// The live OS-level Document Picture-in-Picture window (slice 2): a separate
-/// always-on-top `winit::Window` with its own [`RenderBackend`] surface,
-/// laying out and painting the moved DOM subtree's serialized markup (see
-/// `doc_pip_os_window.rs` module docs).
-///
-/// Owned by [`Lumen::doc_pip_os`]; created from a
-/// `_lumen_docpip_request_window` request and dropped on close. The drop
-/// closes the OS window (winit destroys the window when the last
-/// `Arc<Window>` is released) and frees the GPU surface.
-struct DocPipOsWindow {
-    /// The floating OS window. Identified against `WindowEvent`s by its id.
-    window: Arc<Window>,
-    /// Dedicated render backend drawing the content.
-    renderer: Box<dyn RenderBackend>,
-    /// Latest serialized markup of `pipWindow.document`'s hidden content
-    /// container (`_lumen_docpip_set_content_html`), re-parsed and laid out
-    /// on every redraw. Empty until the page appends its first node.
-    content_html: String,
 }
 
 impl ApplicationHandler<LoadEvent> for Lumen {
