@@ -15,6 +15,8 @@
 
 use lumen_storage::{PersistedTab, SessionStore};
 
+use crate::{LayoutSource, PageSource};
+
 /// On-disk file holding the last session for cross-restart restore.
 ///
 /// Sits next to `last_session.lsession` (the portable JSON export); this one is
@@ -43,6 +45,29 @@ pub fn open_store() -> SessionStore {
 #[must_use]
 pub fn active_index(tabs: &[PersistedTab]) -> usize {
     tabs.iter().position(|t| t.is_active).unwrap_or(0)
+}
+
+// — SPLIT SH-5: tab-snapshot field helpers moved out of main.rs ————————
+
+/// URL-СЃС‚СЂРѕРєР° РёР· `PageSource` РґР»СЏ Р·Р°РїРёСЃРё РІ СЃРµСЃСЃРёСЋ, РёР»Рё `None` РґР»СЏ `Empty`
+/// (РЅРµС‡РµРіРѕ РІРѕСЃСЃС‚Р°РЅР°РІР»РёРІР°С‚СЊ). `File` в†’ РїСѓС‚СЊ, `Snapshot` в†’ `base_url`.
+pub(crate) fn source_url_string(src: &PageSource) -> Option<String> {
+    match src {
+        PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => None,
+        PageSource::File(p) => Some(p.display().to_string()),
+        PageSource::Url(u) => Some(u.clone()),
+        PageSource::Snapshot { base_url, .. } => Some(base_url.clone()),
+    }
+}
+
+/// Bincode-СЃРµСЂРёР°Р»РёР·РѕРІР°РЅРЅС‹Р№ `Document` (`Document::to_bytes()`) РґР»СЏ РІРєР»Р°РґРєРё, РёР»Рё
+/// РїСѓСЃС‚РѕР№ РІРµРєС‚РѕСЂ, РµСЃР»Рё СЃС‚СЂР°РЅРёС†Р° РЅРµ Р·Р°РіСЂСѓР¶РµРЅР° Р»РёР±Рѕ СЃРµСЂРёР°Р»РёР·Р°С†РёСЏ РЅРµ СѓРґР°Р»Р°СЃСЊ.
+/// РџСѓСЃС‚РѕР№ blob РЅР° РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёРё РѕР·РЅР°С‡Р°РµС‚ fresh-navigate РїРѕ URL.
+pub(crate) fn dom_blob_of(layout_source: Option<&LayoutSource>) -> Vec<u8> {
+    layout_source
+        .and_then(|ls| ls.document.lock().ok())
+        .and_then(|doc| doc.to_bytes().ok())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

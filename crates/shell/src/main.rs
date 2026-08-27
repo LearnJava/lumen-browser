@@ -35,6 +35,8 @@ mod bench_frames;
 mod chrome_preview;
 mod chrome_ui;
 mod diag_stderr;
+mod display_list_metrics;
+mod js_escape;
 use lumen_bidi_server::spawn as bidi_spawn;
 mod config;
 mod deterministic;
@@ -82,7 +84,14 @@ mod tracks;
 mod zoom;
 mod network_service;
 
+// SPLIT SH-5: helpers that used to live at the bottom of this file.
+use crate::display_list_metrics::{build_split_placeholder, content_height_of, content_width_of};
+use crate::input::winit_events::{css_cursor_to_winit, cursor_icon_for_hover, winit_modifiers_state};
+use crate::js_escape::{escape_js_string, escape_js_string_char};
+use crate::scroll::metrics::{LINE_STEP_CSS_PX, clamp_scroll, page_step};
+use crate::session_persist::{dom_blob_of, source_url_string};
 use crate::tab_lifecycle::state::TabState;
+use crate::tabs::containers::origin_of_url;
 use std::cell::Cell;
 use std::error::Error;
 use std::path::PathBuf;
@@ -118,7 +127,6 @@ use lumen_paint::{
     build_display_list_ordered, build_display_list_ordered_with_anim_split, hit_test, DisplayList,
     RenderBackend,
 };
-use lumen_layout::Cursor as CssCursor;
 use lumen_driver::{
     AutomationCommand, AutomationHandle, AutomationReply, AutomationRequest, BoxModel, ConsoleEntry,
     ConsoleLevel as DriverConsoleLevel, InterceptedRequest, NetworkEntry as DriverNetworkEntry,
@@ -320,7 +328,7 @@ impl EventSink for StdoutEventSink {
 /// SIL OFL 1.1, СЃРј. assets/fonts/OFL.txt.
 const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 use winit::dpi::{LogicalPosition, LogicalSize};
-use winit::event::{DeviceEvent, DeviceId, ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorGrabMode, CursorIcon, Window, WindowId};
@@ -22791,319 +22799,12 @@ impl Lumen {
     }
 }
 
-/// Р”РѕСЃС‚Р°С‚СЊ С‡РёСЃС‚С‹Р№ `ModifiersState` РёР· РѕР±С‘СЂС‚РєРё `Modifiers` (winit 0.30 СЂР°Р·Р»РёС‡Р°РµС‚
-/// "physical state" вЂ” Ctrl РєР°Рє РєР»Р°РІРёС€Р° вЂ” Рё "lock state"; РґР»СЏ shortcuts РЅР°Рј
-/// РЅСѓР¶РЅРѕ С„РёР·РёС‡РµСЃРєРѕРµ СЃРѕСЃС‚РѕСЏРЅРёРµ).
-fn winit_modifiers_state(mods: &Modifiers) -> ModifiersState {
-    mods.state()
-}
-
-/// URL-СЃС‚СЂРѕРєР° РёР· `PageSource` РґР»СЏ Р·Р°РїРёСЃРё РІ СЃРµСЃСЃРёСЋ, РёР»Рё `None` РґР»СЏ `Empty`
-/// (РЅРµС‡РµРіРѕ РІРѕСЃСЃС‚Р°РЅР°РІР»РёРІР°С‚СЊ). `File` в†’ РїСѓС‚СЊ, `Snapshot` в†’ `base_url`.
-fn source_url_string(src: &PageSource) -> Option<String> {
-    match src {
-        PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => None,
-        PageSource::File(p) => Some(p.display().to_string()),
-        PageSource::Url(u) => Some(u.clone()),
-        PageSource::Snapshot { base_url, .. } => Some(base_url.clone()),
-    }
-}
-
-/// Bincode-СЃРµСЂРёР°Р»РёР·РѕРІР°РЅРЅС‹Р№ `Document` (`Document::to_bytes()`) РґР»СЏ РІРєР»Р°РґРєРё, РёР»Рё
-/// РїСѓСЃС‚РѕР№ РІРµРєС‚РѕСЂ, РµСЃР»Рё СЃС‚СЂР°РЅРёС†Р° РЅРµ Р·Р°РіСЂСѓР¶РµРЅР° Р»РёР±Рѕ СЃРµСЂРёР°Р»РёР·Р°С†РёСЏ РЅРµ СѓРґР°Р»Р°СЃСЊ.
-/// РџСѓСЃС‚РѕР№ blob РЅР° РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёРё РѕР·РЅР°С‡Р°РµС‚ fresh-navigate РїРѕ URL.
-fn dom_blob_of(layout_source: Option<&LayoutSource>) -> Vec<u8> {
-    layout_source
-        .and_then(|ls| ls.document.lock().ok())
-        .and_then(|doc| doc.to_bytes().ok())
-        .unwrap_or_default()
-}
-
-/// РР·РІР»РµС‡СЊ origin (`scheme://host[:port]`) РёР· URL-СЃС‚СЂРѕРєРё (7D.2). Р”Р»СЏ file://
-/// РёР»Рё РЅРµРІР°Р»РёРґРЅС‹С… URL РІРѕР·РІСЂР°С‰Р°РµС‚ `None`. РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РєР°Рє РєР»СЋС‡
-/// `ContainerStore` РґР»СЏ cookie/storage РїР°СЂС‚РёС†РёРѕРЅРёСЂРѕРІР°РЅРёСЏ.
-fn origin_of_url(url: &str) -> Option<String> {
-    let parsed = lumen_core::url::Url::parse(url).ok()?;
-    lumen_network::Origin::from_url(&parsed).ok().map(|o| o.to_string())
-}
-
-/// РЎРєРѕР»СЊРєРѕ CSS px СЃРєСЂРѕР»Р»РёРј Р·Р° СЃС‚СЂРµР»РєСѓ (line-step). Р­РјРїРёСЂРёС‡РµСЃРєРѕРµ Р·РЅР°С‡РµРЅРёРµ,
-/// Р±Р»РёР·РєРѕРµ Рє Firefox/Chromium Р±РµР· smooth-scroll вЂ” РѕРєРѕР»Рѕ 2.5 СЃС‚СЂРѕРє 16-px С‚РµРєСЃС‚Р°.
-const LINE_STEP_CSS_PX: f32 = 40.0;
-
 /// Р‘СЋРґР¶РµС‚ idle-РѕРєРЅР° РґР»СЏ `requestIdleCallback`-РѕРІ, РїРµСЂРµРґР°РІР°РµРјС‹Р№ РІ
 /// `EventLoop::run_idle_callbacks` РЅР° РєР°Р¶РґРѕРј `about_to_wait`. Phase 0 РЅРµ Р·РЅР°РµС‚
 /// СЂРµР°Р»СЊРЅРѕРіРѕ РІСЂРµРјРµРЅРё РґРѕ СЃР»РµРґСѓСЋС‰РµРіРѕ vsync, РїРѕСЌС‚РѕРјСѓ РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ С„РёРєСЃРёСЂРѕРІР°РЅРЅС‹Р№
 /// 10 ms вЂ” С‚РѕС‚ Р¶Рµ РґРµС„РѕР»С‚, С‡С‚Рѕ Сѓ Chromium РїСЂРё РѕС‚СЃСѓС‚СЃС‚РІРёРё СЏРІРЅРѕРіРѕ measurement-Р°
 /// idle-РѕРєРЅР°. Idle-callback-Рё С‚СЂР°РєС‚СѓСЋС‚ СЌС‚Рѕ РєР°Рє В«СѓСЃРїРµР№ Р·Р° ~10 msВ».
 const IDLE_BUDGET_MS: f64 = 10.0;
-
-/// PageDown / PageUp / Space вЂ” СЃРєРѕР»СЊРєРѕ РѕС‚ viewport-Р° Р·Р°С…РІР°С‚С‹РІР°РµРј Р·Р° РЅР°Р¶Р°С‚РёРµ.
-/// РњРµРЅСЊС€Рµ 100% РґР°С‘С‚ overlap РјРµР¶РґСѓ В«СЃС‚СЂР°РЅРёС†Р°РјРёВ»: РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ С‚РµСЂСЏРµС‚ РїРѕСЃР»РµРґРЅСЋСЋ
-/// СЃС‚СЂРѕРєСѓ РёР· РІРёРґР°, С‡РёС‚Р°С‚СЊ РґР»РёРЅРЅС‹Рµ С‚РµРєСЃС‚С‹ РєРѕРјС„РѕСЂС‚РЅРµРµ.
-fn page_step(viewport_height: f32) -> f32 {
-    viewport_height * 0.9
-}
-
-/// Pure-fn: РєР°РєРѕР№ `CursorIcon` РїРѕРєР°Р·Р°С‚СЊ РїРѕ СЂРµР·СѓР»СЊС‚Р°С‚Сѓ hit-С‚РµСЃС‚Р° scrollbar-Р°
-/// Рё С„Р»Р°РіСѓ Р°РєС‚РёРІРЅРѕРіРѕ drag-Р°. `Pointer` СЃРёРіРЅР°Р»РёС‚ В«Р·РґРµСЃСЊ РёРЅС‚РµСЂР°РєС‚РёРІВ»:
-/// - drag Р°РєС‚РёРІРµРЅ в†’ `Pointer` РЅРµР·Р°РІРёСЃРёРјРѕ РѕС‚ С‚РµРєСѓС‰РµР№ С‚РѕС‡РєРё (РІРёРЅРёС‚ С€Р»С‘С‚
-///   CursorMoved Р·Р° РїСЂРµРґРµР»Р°РјРё РѕРєРЅР° С‚РѕР¶Рµ, Рё cursor РґРѕР»Р¶РµРЅ В«РїСЂРёР»РёРїРЅСѓС‚СЊВ»);
-/// - hover thumb в†’ `Pointer`;
-/// - hover track РІС‹С€Рµ/РЅРёР¶Рµ thumb-Р° РёР»Рё РєР»РёРє РјРёРјРѕ в†’ `Default` (track-click
-///   С‚РѕР¶Рµ clickable, РЅРѕ cursor-change РЅР° РїСѓСЃС‚РѕРј track-Рµ Р±С‹Р» Р±С‹ С€СѓРјРЅС‹Рј вЂ”
-///   СЃС‚Р°РЅРґР°СЂС‚ РІСЃРµС… Р±СЂР°СѓР·РµСЂРѕРІ).
-fn cursor_icon_for_hover(hover: scrollbar::TrackClick, drag_active: bool) -> CursorIcon {
-    if drag_active {
-        return CursorIcon::Pointer;
-    }
-    match hover {
-        scrollbar::TrackClick::Thumb => CursorIcon::Pointer,
-        _ => CursorIcon::Default,
-    }
-}
-
-/// РљРѕРЅРІРµСЂС‚РёСЂСѓРµС‚ CSS `cursor` keyword РІ winit `CursorIcon`.
-/// `Auto` в†’ `Default` (UA-СЂРµС€РµРЅРёРµ РґР»СЏ Phase 0); `None` в†’ `Default` (winit РЅРµ
-/// РїРѕРґРґРµСЂР¶РёРІР°РµС‚ В«СЃРєСЂС‹С‚С‹Р№ РєСѓСЂСЃРѕСЂВ» С‡РµСЂРµР· CursorIcon вЂ” РЅСѓР¶РµРЅ РѕС‚РґРµР»СЊРЅС‹Р№ API).
-fn css_cursor_to_winit(c: CssCursor) -> CursorIcon {
-    match c {
-        CssCursor::Auto | CssCursor::Default => CursorIcon::Default,
-        CssCursor::None => CursorIcon::Default,
-        CssCursor::ContextMenu => CursorIcon::ContextMenu,
-        CssCursor::Help => CursorIcon::Help,
-        CssCursor::Pointer => CursorIcon::Pointer,
-        CssCursor::Progress => CursorIcon::Progress,
-        CssCursor::Wait => CursorIcon::Wait,
-        CssCursor::Cell => CursorIcon::Cell,
-        CssCursor::Crosshair => CursorIcon::Crosshair,
-        CssCursor::Text => CursorIcon::Text,
-        CssCursor::VerticalText => CursorIcon::VerticalText,
-        CssCursor::Alias => CursorIcon::Alias,
-        CssCursor::Copy => CursorIcon::Copy,
-        CssCursor::Move => CursorIcon::Move,
-        CssCursor::NoDrop => CursorIcon::NoDrop,
-        CssCursor::NotAllowed => CursorIcon::NotAllowed,
-        CssCursor::Grab => CursorIcon::Grab,
-        CssCursor::Grabbing => CursorIcon::Grabbing,
-        CssCursor::AllScroll => CursorIcon::AllScroll,
-        CssCursor::ColResize => CursorIcon::ColResize,
-        CssCursor::RowResize => CursorIcon::RowResize,
-        CssCursor::NResize => CursorIcon::NResize,
-        CssCursor::EResize => CursorIcon::EResize,
-        CssCursor::SResize => CursorIcon::SResize,
-        CssCursor::WResize => CursorIcon::WResize,
-        CssCursor::NeResize => CursorIcon::NeResize,
-        CssCursor::NwResize => CursorIcon::NwResize,
-        CssCursor::SeResize => CursorIcon::SeResize,
-        CssCursor::SwResize => CursorIcon::SwResize,
-        CssCursor::EwResize => CursorIcon::EwResize,
-        CssCursor::NsResize => CursorIcon::NsResize,
-        CssCursor::NeswResize => CursorIcon::NeswResize,
-        CssCursor::NwseResize => CursorIcon::NwseResize,
-        CssCursor::ZoomIn => CursorIcon::ZoomIn,
-        CssCursor::ZoomOut => CursorIcon::ZoomOut,
-    }
-}
-
-/// РљР»Р°РјРї scroll_y РІ `[0, max]`. NaN-input в†’ 0 (Р·Р°С‰РёС‚Р° РѕС‚ arithmetic errors).
-fn clamp_scroll(target: f32, max: f32) -> f32 {
-    if target.is_nan() {
-        return 0.0;
-    }
-    target.clamp(0.0, max)
-}
-
-/// РџРѕР»РЅР°СЏ РІС‹СЃРѕС‚Р° РєРѕРЅС‚РµРЅС‚Р° РІ CSS px вЂ” `max(rect.y + rect.height)` РїРѕ РІСЃРµРј
-/// rect-РЅРµСЃСѓС‰РёРј РєРѕРјР°РЅРґР°Рј display list-Р°. РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ clamping-Р° scroll_y.
-fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
-    use lumen_paint::DisplayCommand;
-    let mut max_y = 0.0_f32;
-    for cmd in dl {
-        let r = match cmd {
-            DisplayCommand::FillRect { rect, .. }
-            | DisplayCommand::FillRoundedRect { rect, .. }
-            | DisplayCommand::DrawBorder { rect, .. }
-            | DisplayCommand::DrawText { rect, .. }
-            | DisplayCommand::DrawImage { rect, .. }
-            | DisplayCommand::LazyImageSlot { rect, .. }
-            | DisplayCommand::DrawBackgroundImage { rect, .. }
-            | DisplayCommand::DrawOutline { rect, .. }
-            | DisplayCommand::DrawLinearGradient { rect, .. }
-            | DisplayCommand::DrawRadialGradient { rect, .. }
-            | DisplayCommand::DrawConicGradient { rect, .. }
-            | DisplayCommand::PushClipRect { rect, .. }
-            | DisplayCommand::PushClipRoundedRect { rect, .. }
-            | DisplayCommand::PushMaskImage { rect, .. }
-            | DisplayCommand::PushMaskLinearGradient { rect, .. }
-            | DisplayCommand::PushMaskRadialGradient { rect, .. }
-            | DisplayCommand::PushMaskConicGradient { rect, .. }
-            | DisplayCommand::PushMaskLayer { rect, .. } => rect,
-            DisplayCommand::DrawCrossFade { dest, .. } => dest,
-            DisplayCommand::PopClip
-            | DisplayCommand::PushClipPath { .. }
-            | DisplayCommand::PushOpacity { .. }
-            | DisplayCommand::PopOpacity
-            | DisplayCommand::PushBlendMode { .. }
-            | DisplayCommand::PopBlendMode
-            | DisplayCommand::PushTransform { .. }
-            | DisplayCommand::PopTransform
-            | DisplayCommand::PopMask
-            | DisplayCommand::PopMaskLayer
-            | DisplayCommand::DrawLayerSnapshot { .. }
-            | DisplayCommand::PushFilter { .. }
-            | DisplayCommand::PopFilter
-            | DisplayCommand::PushBackdropFilter { .. }
-            | DisplayCommand::PopBackdropFilter
-            | DisplayCommand::BeginStickyLayer { .. }
-            | DisplayCommand::EndStickyLayer
-            | DisplayCommand::BeginFixedLayer
-            | DisplayCommand::EndFixedLayer
-            | DisplayCommand::PushScrollLayer { .. }
-            | DisplayCommand::PopScrollLayer
-            | DisplayCommand::DrawSvgPath { .. }
-            | DisplayCommand::DrawSvgFill { .. }
-            | DisplayCommand::DrawSvgStroke { .. }
-            | DisplayCommand::DrawScrollbar { .. }
-            | DisplayCommand::PageBreak
-            | DisplayCommand::BoxModelOverlay { .. } => continue,
-        };
-        let bottom = r.y + r.height;
-        if bottom > max_y {
-            max_y = bottom;
-        }
-    }
-    max_y
-}
-
-/// РџРѕР»РЅР°СЏ С€РёСЂРёРЅР° РєРѕРЅС‚РµРЅС‚Р° РІ CSS px вЂ” `max(rect.x + rect.width)` РїРѕ РІСЃРµРј
-/// rect-РЅРµСЃСѓС‰РёРј РєРѕРјР°РЅРґР°Рј display list-Р°. РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ clamping-Р° scroll_x.
-fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
-    use lumen_paint::DisplayCommand;
-    let mut max_x = 0.0_f32;
-    for cmd in dl {
-        let r = match cmd {
-            DisplayCommand::FillRect { rect, .. }
-            | DisplayCommand::FillRoundedRect { rect, .. }
-            | DisplayCommand::DrawBorder { rect, .. }
-            | DisplayCommand::DrawText { rect, .. }
-            | DisplayCommand::DrawImage { rect, .. }
-            | DisplayCommand::LazyImageSlot { rect, .. }
-            | DisplayCommand::DrawBackgroundImage { rect, .. }
-            | DisplayCommand::DrawOutline { rect, .. }
-            | DisplayCommand::DrawLinearGradient { rect, .. }
-            | DisplayCommand::DrawRadialGradient { rect, .. }
-            | DisplayCommand::DrawConicGradient { rect, .. }
-            | DisplayCommand::PushClipRect { rect, .. }
-            | DisplayCommand::PushClipRoundedRect { rect, .. }
-            | DisplayCommand::PushMaskImage { rect, .. }
-            | DisplayCommand::PushMaskLinearGradient { rect, .. }
-            | DisplayCommand::PushMaskRadialGradient { rect, .. }
-            | DisplayCommand::PushMaskConicGradient { rect, .. }
-            | DisplayCommand::PushMaskLayer { rect, .. } => rect,
-            DisplayCommand::DrawCrossFade { dest, .. } => dest,
-            DisplayCommand::PopClip
-            | DisplayCommand::PushClipPath { .. }
-            | DisplayCommand::PushOpacity { .. }
-            | DisplayCommand::PopOpacity
-            | DisplayCommand::PushBlendMode { .. }
-            | DisplayCommand::PopBlendMode
-            | DisplayCommand::PushTransform { .. }
-            | DisplayCommand::PopTransform
-            | DisplayCommand::PopMask
-            | DisplayCommand::PopMaskLayer
-            | DisplayCommand::DrawLayerSnapshot { .. }
-            | DisplayCommand::PushFilter { .. }
-            | DisplayCommand::PopFilter
-            | DisplayCommand::PushBackdropFilter { .. }
-            | DisplayCommand::PopBackdropFilter
-            | DisplayCommand::BeginStickyLayer { .. }
-            | DisplayCommand::EndStickyLayer
-            | DisplayCommand::BeginFixedLayer
-            | DisplayCommand::EndFixedLayer
-            | DisplayCommand::PushScrollLayer { .. }
-            | DisplayCommand::PopScrollLayer
-            | DisplayCommand::DrawSvgPath { .. }
-            | DisplayCommand::DrawSvgFill { .. }
-            | DisplayCommand::DrawSvgStroke { .. }
-            | DisplayCommand::DrawScrollbar { .. }
-            | DisplayCommand::PageBreak
-            | DisplayCommand::BoxModelOverlay { .. } => continue,
-        };
-        let right = r.x + r.width;
-        if right > max_x {
-            max_x = right;
-        }
-    }
-    max_x
-}
-
-/// Build a minimal placeholder display list for a hibernated tab in split view.
-///
-/// Shows a dark grey background with the URL text вЂ” used when the hibernated
-/// tab's full display list has been evicted from memory.
-fn build_split_placeholder(url: &str) -> lumen_paint::DisplayList {
-    use lumen_layout::{Color, FontStyle, FontWeight};
-    use lumen_paint::DisplayCommand;
-
-    let bg = Color { r: 30, g: 30, b: 35, a: 255 };
-    let fg = Color { r: 180, g: 180, b: 190, a: 255 };
-    vec![
-        // Background fill вЂ” large enough to cover any viewport half.
-        DisplayCommand::FillRect {
-            rect: lumen_core::geom::Rect { x: 0.0, y: 0.0, width: 4096.0, height: 4096.0 },
-            color: bg,
-        },
-        // URL label near vertical centre of a typical viewport half.
-        DisplayCommand::DrawText {
-            font_stretch: lumen_layout::FontStretch::NORMAL,
-            rect: lumen_core::geom::Rect { x: 16.0, y: 300.0, width: 480.0, height: 20.0 },
-            text: url.to_owned(),
-            font_size: 13.0,
-            color: fg,
-            font_family: vec![],
-            font_weight: FontWeight(400),
-            font_style: FontStyle::Normal,
-            font_variation_axes: vec![],
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            highlight_name: None,
-            text_orientation: None,
-        },
-    ]
-}
-
-/// Escape a single character for safe embedding in a JS string literal.
-///
-/// Converts `ch` to an ASCII or `\uXXXX` escape so the character can be
-/// used in `"..."` or `'...'` JS string arguments passed via `eval_js`.
-/// Both quote flavours are escaped because every call site in this crate
-/// interpolates the result into a **single**-quoted literal вЂ” an unescaped
-/// apostrophe there produced a syntax error and the whole dispatch script
-/// was silently dropped (found while fixing BUG-436).
-fn escape_js_string_char(ch: char) -> String {
-    match ch {
-        '"' => r#"\""#.to_owned(),
-        '\'' => r"\'".to_owned(),
-        '\\' => r"\\".to_owned(),
-        '\n' => r"\n".to_owned(),
-        '\r' => r"\r".to_owned(),
-        '\t' => r"\t".to_owned(),
-        c if (c as u32) < 0x20 || (c as u32) > 0x7E => {
-            format!("\\u{:04X}", c as u32)
-        }
-        c => c.to_string(),
-    }
-}
-
-/// Escape a whole string for safe embedding in a single-quoted JS literal.
-///
-/// Character-by-character application of [`escape_js_string_char`] вЂ” used to
-/// hand a form control's new value to `_lumen_set_field_value` (BUG-436).
-fn escape_js_string(s: &str) -> String {
-    s.chars().map(escape_js_string_char).collect()
-}
 
 #[cfg(test)]
 mod tests;

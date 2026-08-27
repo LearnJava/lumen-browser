@@ -27,6 +27,7 @@ pub mod gesture;
 pub mod humanlike;
 pub mod native;
 pub mod vim;
+pub mod winit_events;
 
 use std::sync::mpsc;
 
