@@ -992,3 +992,22 @@ impl PersistentJs for V8PersistentJs {
         self.rt.take_pointer_capture()
     }
 }
+
+/// BUG-341 S7: engine-agnostic mirror of `lumen_js::DomTouched`, kept
+/// independent of the `v8` feature so [`PersistentJs::take_dom_touched`]'s
+/// default (used by no-engine builds, which have no tracker) compiles
+/// unconditionally.
+///
+/// Consumed by [`Lumen::try_relayout_raf_incremental`] (BUG-341 S7 part 2) to
+/// derive the DOM-mutation half of `RestyleDelta::dirty_roots` for the
+/// incremental-cascade path (`layout_mutation_incremental_restyle`).
+#[derive(Debug, Default, Clone)]
+pub(crate) struct DomTouchedSummary {
+    /// Nodes whose selector-relevant state actually changed via a tracked
+    /// mutation primitive. See `lumen_js::DomTouched::nodes`.
+    pub(crate) nodes: std::collections::HashSet<lumen_dom::NodeId>,
+    /// `true` when `nodes` alone is not a safe restyle root-set this cycle вЂ”
+    /// the caller must fall back to a full cascade. See
+    /// `lumen_js::DomTouched::unattributed`.
+    pub(crate) unattributed: bool,
+}
