@@ -284,4 +284,22 @@ impl Lumen {
             .map_err(|e| format!("render_to_image_cpu: {e}"))?;
             lumen_image::encode_png_rgba8(&image).map_err(|e| format!("PNG encoding: {e}"))
         }
+
+    /// Return a cloneable [`InputSender`] for injecting synthetic input events.
+    ///
+    /// Callers on any thread can use the sender to enqueue [`InputCommand`]s;
+    /// they are drained and dispatched in `about_to_wait`.
+    #[allow(dead_code)]
+    pub fn input_sender(&self) -> input::InputSender {
+        self.input_tx.clone()
+    }
+
+    /// Return a cloneable handle for driving this window's automation channel (SDC-2).
+    ///
+    /// Callers on any thread can use this to send [`AutomationCommand`]s and
+    /// block for their reply; commands are drained and dispatched in `about_to_wait`.
+    #[allow(dead_code)]
+    pub fn automation_handle(&self) -> AutomationHandle {
+        AutomationHandle::new(self.automation_cmd_tx.clone())
+    }
 }
