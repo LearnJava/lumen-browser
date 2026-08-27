@@ -38,6 +38,7 @@ mod chrome_preview;
 mod chrome_ui;
 mod cli_args;
 mod diag_stderr;
+mod doc_extract;
 mod display_list_metrics;
 mod dump_mode;
 mod js_escape;
@@ -101,6 +102,7 @@ mod omnibox;
 mod panel_layout;
 mod page_context_menu;
 mod page_load;
+mod page_pipeline;
 mod persistent_js;
 mod panels;
 mod platform;
@@ -133,6 +135,13 @@ mod network_service;
 use crate::display_list_metrics::{
     build_split_placeholder, content_height_of, content_width_of, next_dl_epoch, paint_ordered,
 };
+use crate::app::about_to_wait::PendingWait;
+use crate::doc_extract::{
+    DynamicCssBase, extract_style_blocks, extract_title, inline_style_fingerprint,
+    window_title,
+};
+use crate::input::dnd::{DND_THRESHOLD, DndState};
+use crate::page_pipeline::{dispatch_preload_hints, render_bytes};
 use crate::chrome_ui::ContentAreaDetachment;
 use crate::engine_bridge::{EngineCommit, EngineJsState, route_eval_js, route_query_js, route_task_js};
 use crate::frame_log::{compose_outcome_label, frame_log_nanos, frame_phase_ms};
@@ -3305,238 +3314,6 @@ fn parse_and_layout(
     })
 }
 
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
-#[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
-fn render_bytes(
-    bytes: &[u8],
-    content_type: Option<&str>,
-    base: &ResourceBase,
-    sink: Arc<dyn EventSink>,
-    viewport: Size,
-    preload_seen: &mut std::collections::HashSet<String>,
-    ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
-    ss_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
-    idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
-    sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
-    hp: &dyn HyphenationProvider,
-    cookie_banner_dismiss: bool,
-    deterministic: deterministic::DetConfig,
-    dark_mode: bool,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
-    cross_origin_isolated: bool,
-    sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
-    cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
-    target: lumen_core::ColorSpace,
-    cache_control_no_store: bool,
-) -> Result<RenderedPage, Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target, false)?;
-    let display_list = paint_ordered(&parsed.layout);
-    println!(
-        "Р Р°СЃРїР°СЂСЃРµРЅРѕ: {} DOM-СѓР·Р»РѕРІ, {} CSS-РїСЂР°РІРёР», {} paint-РєРѕРјР°РЅРґ, {} РєР°СЂС‚РёРЅРѕРє, {} preload-С…РёРЅС‚РѕРІ",
-        parsed.document.lock().unwrap().len(),
-        parsed.rule_count,
-        display_list.len(),
-        parsed.images.len(),
-        parsed.preload_hints.len(),
-    );
-    let layout_box = parsed.layout;
-    let layout_source = LayoutSource {
-        document: Arc::clone(&parsed.document),
-        stylesheet: Arc::new(parsed.stylesheet),
-        html_source: Some(parsed.html_source),
-        cache_control_no_store,
-        dynamic_css: Some(parsed.dynamic_css),
-    };
-    Ok((
-        LoadedPage {
-            display_list,
-            title: parsed.title,
-            images: parsed.images,
-            animated_gifs: parsed.animated_gifs,
-            lazy_pairs: parsed.lazy_pairs,
-            layout_box,
-            font_registry: parsed.font_registry,
-            pending_web_fonts: parsed.pending_web_fonts,
-            js_navigate: parsed.js_navigate,
-            page_tracks: parsed.page_tracks,
-            frames: parsed.frames,
-        },
-        layout_source,
-        parsed.js_ctx,
-    ))
-}
-
-/// РћС‚РїСЂР°РІРёС‚СЊ preload-С…РёРЅС‚С‹ РІ EventSink.
-///
-/// РљР°Р¶РґС‹Р№ `PreloadHint` СЂРµР·РѕР»РІРёС‚СЃСЏ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ `base` (4B.3) Рё
-/// РїСЂРµРѕР±СЂР°Р·СѓРµС‚СЃСЏ РІ `Event::SubresourceHintFound { url, kind, priority }`.
-/// РҐРёРЅС‚С‹ СЃРѕСЂС‚РёСЂСѓСЋС‚СЃСЏ РїРѕ СѓР±С‹РІР°РЅРёСЋ РїСЂРёРѕСЂРёС‚РµС‚Р° (High в†’ Medium в†’ Low), С‡С‚РѕР±С‹
-/// СЃР°РјС‹Рµ РєСЂРёС‚РёС‡РЅС‹Рµ СЂРµСЃСѓСЂСЃС‹ СЃС‚Р°СЂС‚РѕРІР°Р»Рё РїРµСЂРІС‹РјРё (РїРѕР»РµР·РЅРѕ РїСЂРё HTTP/2).
-/// `srcset`-СЃС‚СЂРѕРєРё СЌРјРёС‚СЏС‚СЃСЏ РєР°Рє-РµСЃС‚СЊ (multi-URL С„РѕСЂРјР°С‚ вЂ” Р·Р°РґР°С‡Р° picker-Р°).
-/// `seen` вЂ” РЅР°Р±РѕСЂ СѓР¶Рµ РѕС‚РїСЂР°РІР»РµРЅРЅС‹С… URL (cross-call РґРµРґСѓРїР»РёРєР°С†РёСЏ); caller
-/// РїРµСЂРµРґР°С‘С‚ `&mut HashSet::new()` РґР»СЏ РѕРґРЅРѕСЂР°Р·РѕРІРѕРіРѕ РІС‹Р·РѕРІР° РёР»Рё persistent-СЃРµС‚
-/// РґР»СЏ РґРµРґСѓРїР° РјРµР¶РґСѓ streaming-СЃРєР°РЅРѕРј Рё С„РёРЅР°Р»СЊРЅС‹Рј pipeline.
-/// Sink Р»РѕРіРёСЂСѓРµС‚ С…РёРЅС‚ РІ stderr. РЎР°Рј fetch РїРѕ С…РёРЅС‚Сѓ РґРµР»Р°РµС‚ JS-С€РёРј РЅР° СЌР»РµРјРµРЅС‚Рµ
-/// `<link>` (BUG-826) вЂ” С‚Р°Рј Р¶Рµ, РіРґРµ Р¶РёРІСѓС‚ РµРіРѕ СЃРѕР±С‹С‚РёСЏ `load`/`error`; Р·РґРµСЃСЊ
-/// СЃРµС‚РµРІРѕРіРѕ Р·Р°РїСЂРѕСЃР° РїРѕ-РїСЂРµР¶РЅРµРјСѓ РЅРµС‚, РїРѕСЌС‚РѕРјСѓ СЃС‚СЂРѕРєР° Р»РѕРіР° РіРѕРІРѕСЂРёС‚ В«С…РёРЅС‚ РЅР°Р№РґРµРЅВ»,
-/// Р° РЅРµ В«СЂРµСЃСѓСЂСЃ Р·Р°РїСЂРѕС€РµРЅВ».
-fn dispatch_preload_hints(
-    hints: &[lumen_html_parser::PreloadHint],
-    base: &ResourceBase,
-    sink: &Arc<dyn EventSink>,
-    seen: &mut std::collections::HashSet<String>,
-) {
-    use lumen_html_parser::PreloadHint;
-
-    // РџРµСЂРІС‹Р№ РїСЂРѕС…РѕРґ: СЂРµР·РѕР»РІ URL + РІС‹С‡РёСЃР»РµРЅРёРµ kind.
-    let mut resolved: Vec<(String, SubresourceKind)> = Vec::with_capacity(hints.len());
-    for hint in hints {
-        let pair = match hint {
-            PreloadHint::Stylesheet { url, .. } =>
-                (base.resolve_str(url), SubresourceKind::Stylesheet),
-            PreloadHint::Script { url } =>
-                (base.resolve_str(url), SubresourceKind::Script),
-            PreloadHint::Image { url: Some(url), .. } =>
-                (base.resolve_str(url), SubresourceKind::Image),
-            // srcset СЃРѕРґРµСЂР¶РёС‚ СЃРїРёСЃРѕРє URL вЂ” СЂРµР·РѕР»РІРёРЅРі РєР°Р¶РґРѕРіРѕ РєР°РЅРґРёРґР°С‚Р°
-            // РѕС‚РєР»Р°РґС‹РІР°РµС‚СЃСЏ РґРѕ picker-Р°; СЌРјРёС‚РёРј srcset-СЃС‚СЂРѕРєСѓ РєР°Рє-РµСЃС‚СЊ.
-            PreloadHint::Image { url: None, srcset: Some(s), .. } =>
-                (s.clone(), SubresourceKind::Image),
-            PreloadHint::SourceSet { srcset, .. } =>
-                (srcset.clone(), SubresourceKind::Image),
-            PreloadHint::Preload { url, as_kind } => {
-                let kind = match as_kind.as_deref() {
-                    Some("font") => SubresourceKind::Font,
-                    Some("image") => SubresourceKind::Image,
-                    Some("script") => SubresourceKind::Script,
-                    Some("style") => SubresourceKind::Stylesheet,
-                    _ => SubresourceKind::Other { as_kind: as_kind.clone() },
-                };
-                (base.resolve_str(url), kind)
-            }
-            // BUG-826: РѕСЃС‚Р°Р»СЊРЅС‹Рµ РґРІР° РІРёРґР° author-С…РёРЅС‚Р°. Р РµР°Р»СЊРЅС‹Р№ fetch Рё
-            // СЃРѕР±С‹С‚РёСЏ `load`/`error` РґР»СЏ РЅРёС… РґРµР»Р°РµС‚ JS-С€РёРј РЅР° СЃР°РјРѕРј СЌР»РµРјРµРЅС‚Рµ
-            // (`_lumen_link_hint_prepare`), Р·РґРµСЃСЊ вЂ” С‚РѕР»СЊРєРѕ СЃС‚СЂРѕРєР° СЃРµС‚РµРІРѕРіРѕ Р»РѕРіР°.
-            PreloadHint::ModulePreload { url } =>
-                (base.resolve_str(url), SubresourceKind::Script),
-            PreloadHint::Prefetch { url } =>
-                (base.resolve_str(url), SubresourceKind::Other { as_kind: Some("prefetch".into()) }),
-            // Preconnect URL вЂ” origin, РЅРµ СЃРѕРґРµСЂР¶РёС‚ path вЂ” СЂРµР·РѕР»РІРёРЅРі С‚СЂРёРІРёР°Р»РµРЅ.
-            PreloadHint::Preconnect { url, dns_only } =>
-                (base.resolve_str(url), SubresourceKind::Preconnect { dns_only: *dns_only }),
-            PreloadHint::Image { url: None, srcset: None, .. } => continue,
-        };
-        resolved.push(pair);
-    }
-
-    // Stable-sort РїРѕ РїСЂРёРѕСЂРёС‚РµС‚Сѓ: High РїРµСЂРІС‹РјРё. Stable СЃРѕС…СЂР°РЅСЏРµС‚ source-order
-    // РІРЅСѓС‚СЂРё РѕРґРЅРѕРіРѕ СѓСЂРѕРІРЅСЏ РїСЂРёРѕСЂРёС‚РµС‚Р° (РІР°Р¶РЅРѕ РґР»СЏ HTTP/2 multiplexing).
-    resolved.sort_by_key(|(_, k)| FetchPriority::for_kind(k));
-
-    // Р”РµРґСѓРїР»РёРєР°С†РёСЏ + emit: РїСЂРѕРїСѓСЃРєР°РµРј URL, СѓР¶Рµ РѕС‚РїСЂР°РІР»РµРЅРЅС‹Рµ РІ РїСЂРµРґС‹РґСѓС‰РёС… РІС‹Р·РѕРІР°С…
-    // (cross-call dedup РґР»СЏ streaming + С„РёРЅР°Р»СЊРЅРѕРіРѕ pipeline).
-    for (url, kind) in resolved {
-        if seen.insert(url.clone()) {
-            let priority = FetchPriority::for_kind(&kind);
-            sink.emit(&Event::SubresourceHintFound { url, kind, priority });
-        }
-    }
-}
-
-/// РќР°Р№С‚Рё РїРµСЂРІС‹Р№ `<title>` РІ РґРµСЂРµРІРµ Рё СЃРєР»РµРёС‚СЊ РµРіРѕ С‚РµРєСЃС‚РѕРІС‹Рµ РґРµС‚Рё.
-///
-/// HTML5 СЂР°Р·СЂРµС€Р°РµС‚ С‚РѕР»СЊРєРѕ РѕРґРёРЅ `<title>` РІ `<head>`, РЅРѕ РјС‹ lenient-РїР°СЂСЃРµСЂ вЂ”
-/// Р±РµСЂС‘Рј РїРµСЂРІС‹Р№ РІСЃС‚СЂРµС‡РЅС‹Р№. Р­РЅС‚РёС‚Рё СѓР¶Рµ РґРµРєРѕРґРёСЂРѕРІР°РЅС‹ tokenizer-РѕРј (RCDATA-СЂРµР¶РёРј).
-fn extract_title(doc: &Document) -> Option<String> {
-    let mut buf = String::new();
-    if walk_title(doc, doc.root(), &mut buf) {
-        let trimmed = buf.split_whitespace().collect::<Vec<_>>().join(" ");
-        if !trimmed.is_empty() {
-            return Some(trimmed);
-        }
-    }
-    None
-}
-
-fn walk_title(doc: &Document, id: NodeId, out: &mut String) -> bool {
-    let node = doc.get(id);
-    if let NodeData::Element { name, .. } = &node.data
-        && name.local == "title"
-    {
-        for &child in &node.children {
-            if let NodeData::Text(s) = &doc.get(child).data {
-                out.push_str(s);
-            }
-        }
-        return true;
-    }
-    for &child in &node.children {
-        if walk_title(doc, child, out) {
-            return true;
-        }
-    }
-    false
-}
-
-fn extract_style_blocks(doc: &Document) -> String {
-    let mut out = String::new();
-    walk_style_blocks(doc, doc.root(), &mut out);
-    out
-}
-
-/// РҐСЌС€ С‚РµРєСЃС‚Р° РІСЃРµС… РёРЅР»Р°Р№РЅРѕРІС‹С… `<style>` РІ РїРѕСЂСЏРґРєРµ РґРѕРєСѓРјРµРЅС‚Р° (BUG-743).
-///
-/// РЎС‡РёС‚Р°РµС‚СЃСЏ РЅР° РєР°Р¶РґРѕРј СЂРµР»РµР№Р°СѓС‚Рµ, РїРѕСЌС‚РѕРјСѓ РЅРµ СЃРѕР±РёСЂР°РµС‚ СЃС‚СЂРѕРєСѓ: РѕР±С…РѕРґРёС‚ С‚Рµ Р¶Рµ
-/// СѓР·Р»С‹, С‡С‚Рѕ Рё [`walk_style_blocks`], Рё С…СЌС€РёСЂСѓРµС‚ РёС… С‚РµРєСЃС‚ РїРѕ РєСѓСЃРєР°Рј. РњРµРЅСЏРµС‚СЃСЏ
-/// РїСЂРё РІСЃС‚Р°РІРєРµ, СѓРґР°Р»РµРЅРёРё Рё РїСЂР°РІРєРµ Р»СЋР±РѕРіРѕ Р±Р»РѕРєР° вЂ” СЌС‚РѕРіРѕ РґРѕСЃС‚Р°С‚РѕС‡РЅРѕ, С‡С‚РѕР±С‹
-/// РїРѕРЅСЏС‚СЊ, С‡С‚Рѕ РєР°СЃРєР°Рґ РїРѕСЂР° РїРµСЂРµСЃРѕР±СЂР°С‚СЊ.
-fn inline_style_fingerprint(doc: &Document) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    hash_style_blocks(doc, doc.root(), &mut h);
-    // РџСѓСЃС‚РѕР№ РґРѕРєСѓРјРµРЅС‚ Рё РґРѕРєСѓРјРµРЅС‚ Р±РµР· РµРґРёРЅРѕРіРѕ `<style>` РґРѕР»Р¶РЅС‹ РґР°РІР°С‚СЊ РѕРґРёРЅ С…СЌС€ вЂ”
-    // РѕС‚РґРµР»СЊРЅР°СЏ СЃРѕР»СЊ РЅРµ РЅСѓР¶РЅР°, РЅРѕ РґР»РёРЅР° С†РµРїРѕС‡РєРё РІ РЅРµРіРѕ СѓР¶Рµ РІРѕС€Р»Р°.
-    0_u8.hash(&mut h);
-    h.finish()
-}
-
-/// Р РµРєСѓСЂСЃРёРІРЅР°СЏ РїРѕР»РѕРІРёРЅР° [`inline_style_fingerprint`].
-fn hash_style_blocks(doc: &Document, id: NodeId, h: &mut impl std::hash::Hasher) {
-    let node = doc.get(id);
-    if let NodeData::Element { name, .. } = &node.data
-        && name.local == "style"
-    {
-        for &child in &node.children {
-            if let NodeData::Text(s) = &doc.get(child).data {
-                h.write(s.as_bytes());
-            }
-        }
-        h.write_u8(0xff);
-        return;
-    }
-    for &child in &node.children {
-        hash_style_blocks(doc, child, h);
-    }
-}
-
-/// CSS СЃС‚СЂР°РЅРёС†С‹, РєРѕС‚РѕСЂС‹Р№ РґРёРЅР°РјРёС‡РµСЃРєРёР№ `<style>` РёР·РјРµРЅРёС‚СЊ РЅРµ РјРѕР¶РµС‚ (BUG-743).
-///
-/// РџРѕР·РІРѕР»СЏРµС‚ РїРµСЂРµСЃРѕР±СЂР°С‚СЊ РєР°СЃРєР°Рґ РїРѕСЃР»Рµ РїРѕР·РґРЅРµР№ РІСЃС‚Р°РІРєРё `<style>` С†РµР»РёРєРѕРј РёР·
-/// РїР°РјСЏС‚Рё: С‚РµРєСЃС‚, РїСЂРёС‚СЏРЅСѓС‚С‹Р№ `@import`-Р°РјРё РёРЅР»Р°Р№РЅРѕРІС‹С… Р»РёСЃС‚РѕРІ (РїСЂРµС„РёРєСЃ вЂ” РїРѕ CSS
-/// Cascade L4 В§6.5 РїСЂР°РІРёР»Р° РёРјРїРѕСЂС‚РёСЂРѕРІР°РЅРЅРѕРіРѕ Р»РёСЃС‚Р° РёРґСѓС‚ СЂР°РЅСЊС€Рµ), Рё С‚РµР»Р° РІРЅРµС€РЅРёС…
-/// `<link rel=stylesheet>` (СЃСѓС„С„РёРєСЃ вЂ” РєР°Рє РїСЂРё РїРµСЂРІРѕР№ СЃР±РѕСЂРєРµ). РЎРµС‚РµРІС‹С… Р·Р°РїСЂРѕСЃРѕРІ
-/// РїРµСЂРµСЃР±РѕСЂРєР° РЅРµ РґРµР»Р°РµС‚, РїРѕСЌС‚РѕРјСѓ `@import` РІРЅСѓС‚СЂРё *РЅРѕРІРѕРіРѕ* `<style>` РѕСЃС‚Р°РЅРµС‚СЃСЏ
-/// РЅРµСЂР°Р·СЂРµС€С‘РЅРЅС‹Рј; СЌС‚Рѕ РѕСЃРѕР·РЅР°РЅРЅС‹Р№ СЂР°Р·РјРµРЅ вЂ” СЂРµР»РµР№Р°СѓС‚ РЅРµ РјРµСЃС‚Рѕ РґР»СЏ СЃРµС‚Рё.
-#[derive(Clone)]
-struct DynamicCssBase {
-    /// РЎРѕРґРµСЂР¶РёРјРѕРµ `@import`-РѕРІ РёРЅР»Р°Р№РЅРѕРІС‹С… `<style>`, СЂР°Р·СЂРµС€С‘РЅРЅРѕРµ РїСЂРё Р·Р°РіСЂСѓР·РєРµ.
-    imports_prefix: String,
-    /// РЎРєР»РµРµРЅРЅС‹Рµ С‚РµР»Р° РІРЅРµС€РЅРёС… `<link rel=stylesheet>`.
-    linked: String,
-    /// РҐСЌС€ РёРЅР»Р°Р№РЅРѕРІС‹С… `<style>`, РёР· РєРѕС‚РѕСЂС‹С… СЃРѕР±СЂР°РЅ С‚РµРєСѓС‰РёР№ Р»РёСЃС‚.
-    inline_fp: u64,
-}
-
 /// A `<script>` to execute: either an inline body or an external `src`.
 ///
 /// Produced by [`collect_scripts_ordered`] in document order; external entries
@@ -4819,69 +4596,7 @@ fn run_scripts(
     scripts.len()
 }
 
-fn walk_style_blocks(doc: &Document, id: NodeId, out: &mut String) {
-    let node = doc.get(id);
-    if let NodeData::Element { name, .. } = &node.data
-        && name.local == "style"
-    {
-        for &child in &node.children {
-            if let NodeData::Text(s) = &doc.get(child).data {
-                out.push_str(s);
-                out.push('\n');
-            }
-        }
-        return;
-    }
-    for &child in &node.children {
-        walk_style_blocks(doc, child, out);
-    }
-}
-
-/// Р¤РѕСЂРјР°С‚ Р·Р°РіРѕР»РѕРІРєР° РѕРєРЅР°. РЎ title РёР· СЃС‚СЂР°РЅРёС†С‹ вЂ” `"<title> вЂ” Lumen"`,
-/// Р±РµР· вЂ” fallback РЅР° РІРµСЂСЃРёСЋ Р±РёР»РґР°.
-fn window_title(page_title: Option<&str>) -> String {
-    match page_title {
-        Some(t) => format!("{t} вЂ” Lumen"),
-        None => format!("Lumen {}", env!("CARGO_PKG_VERSION")),
-    }
-}
-
-// в”Ђв”Ђ HTML5 Drag and Drop state (PH3-9) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-
-/// Minimum cursor displacement in CSS pixels before a press becomes a drag.
-const DND_THRESHOLD: f32 = 4.0;
-
-/// State for an in-progress HTML5 drag-and-drop gesture (HTML LS В§9.3.3, В§9.10).
-///
-/// Created on `mousedown` when the pressed element is draggable.  Becomes
-/// `active` once the cursor moves в‰Ґ `DND_THRESHOLD` px (`dragstart` fires).
-/// Cleared on `mouseup` after firing `drop` + `dragend`.
-struct DndState {
-    /// DOM node that is being dragged (source of `dragstart`/`drag`/`dragend`).
-    src_nid: lumen_dom::NodeId,
-    /// CSS-pixel coordinates where the mouse button was pressed.
-    press_x: f32,
-    /// CSS-pixel coordinates where the mouse button was pressed.
-    press_y: f32,
-    /// Whether the drag has been activated (threshold crossed, `dragstart` fired).
-    active: bool,
-    /// Drop target currently under the cursor вЂ” used to synthesise
-    /// `dragenter` / `dragleave` when the target changes.
-    over_nid: Option<lumen_dom::NodeId>,
-}
-
 // в”Ђв”Ђ Window + Renderer в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-
-/// A queued `AutomationCommand::Wait` request (SDC-1b), re-checked once per
-/// frame in `about_to_wait` rather than blocking the event loop.
-struct PendingWait {
-    /// Condition to poll вЂ” see [`check_pending_wait_condition`].
-    cond: WaitCondition,
-    /// When this wait gives up and replies `AutomationReply::Error`.
-    deadline: std::time::Instant,
-    /// Where to send the `Ack`/`Error` reply once resolved.
-    reply_tx: std::sync::mpsc::Sender<AutomationReply>,
-}
 
 struct Lumen {
     display_list: DisplayList,

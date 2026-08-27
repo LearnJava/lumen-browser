@@ -1381,3 +1381,14 @@ impl Lumen {
         }
     }
 }
+
+/// A queued `AutomationCommand::Wait` request (SDC-1b), re-checked once per
+/// frame in `about_to_wait` rather than blocking the event loop.
+pub(crate) struct PendingWait {
+    /// Condition to poll вЂ” see [`check_pending_wait_condition`].
+    pub(crate) cond: WaitCondition,
+    /// When this wait gives up and replies `AutomationReply::Error`.
+    pub(crate) deadline: std::time::Instant,
+    /// Where to send the `Ack`/`Error` reply once resolved.
+    pub(crate) reply_tx: std::sync::mpsc::Sender<AutomationReply>,
+}
