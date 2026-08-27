@@ -38,7 +38,10 @@ mod resize_grip;
 mod scrolling;
 mod session;
 mod spell_menu;
+mod state;
 mod tabs_cmd;
 mod text_input;
 mod viewport;
 mod viewport_sync;
+
+pub(crate) use state::Lumen;

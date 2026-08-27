@@ -100,3 +100,11 @@ pub(crate) enum JsNavigateRequest {
         submitter: i32,
     },
 }
+
+/// Pending intercepted navigation awaiting handler completion.
+pub(crate) enum PendingIntercepted {
+    Push { url: String, handler_started: bool },
+    Replace { url: String, handler_started: bool },
+    Back { handler_started: bool },
+    Forward { handler_started: bool },
+}
