@@ -1378,3 +1378,22 @@ impl Lumen {
         self.platform_bridge.update(&ax_tree);
     }
 }
+
+/// BUG-341 S17 вЂ” flatten `bind_model_tracked`'s per-node report into the
+/// `(NodeId, NodeChange)` pairs `restyle_root_set_for_node_change` consumes.
+///
+/// One node can report several attribute writes plus a child-list change in the
+/// same bind; each is answered separately and the root-set unions the results,
+/// so a node whose class changed *and* whose children moved still widens to its
+/// parent via the structural half.
+pub(crate) fn chrome_node_changes(
+    touched: &lumen_chrome::ChromeMutations,
+) -> impl Iterator<Item = (lumen_dom::NodeId, lumen_layout::style::NodeChange<'_>)> {
+    use lumen_layout::style::NodeChange;
+    touched.selector.iter().flat_map(|(id, t)| {
+        t.attrs
+            .iter()
+            .map(move |a| (*id, NodeChange::Attr(a.as_str())))
+            .chain(t.structural.then_some((*id, NodeChange::Unattributed)))
+    })
+}
