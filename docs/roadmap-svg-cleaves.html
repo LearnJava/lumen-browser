@@ -5376,9 +5376,9 @@
       {
        "id": "SPLIT-SH2",
        "title": "SPLIT-SH2: PiP-окно из main.rs",
-       "status": "ready",
+       "status": "done",
        "size": "L",
-       "note": "Слой PiP-окна `crates/shell/src/main.rs`: от `struct PipOsWindow` (анкер ~10037) до следующего `impl Lumen` (~15208), ~5 170 строк → новый `src/pip_window.rs`. Регион больше 4 000 строк, поэтому по правилу §2.6 режется на подбатчи по внутренним секциям, а не тащится одним коммитом. Перед стартом читать карту методов региона, а не его первую строку: перепись называет регион по первому item'у, и на SPLIT-SH1 это оказалось неверно на 3 845 строк. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "Слой PiP-окна `crates/shell/src/main.rs`: от `struct PipOsWindow` (анкер ~10037) до следующего `impl Lumen` (~15208), ~5 170 строк → новый `src/pip_window.rs`. Регион больше 4 000 строк, поэтому по правилу §2.6 режется на подбатчи по внутренним секциям, а не тащится одним коммитом. Перед стартом читать карту методов региона, а не его первую строку: перепись называет регион по первому item'у, и на SPLIT-SH1 это оказалось неверно на 3 845 строк. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 ЗАКРЫТ 2026-08-27 (ветка `p1-split-sh2`): регион оказался не слоем PiP-окна — на PiP приходятся 37 строк из 5 170, остальные 5 138 это один блок `impl ApplicationHandler<LoadEvent> for Lumen`. Trait-impl нельзя разложить по нескольким блокам, а его тело втрое больше потолка `check_file_sizes.py`, поэтому метод трейта стал переходником в одну строку, а тело переехало как `pub(crate) fn on_<метод>` в обычный `impl Lumen`. Четыре среза, каталог `src/app/` из девяти файлов + два PiP-типа в существующие `panels/*`; main.rs 22 813 → 17 638, тестов 1624 → 1624, `dump_golden.py` 12/12 без дельт. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
       {
        "id": "SPLIT-SH3A",
