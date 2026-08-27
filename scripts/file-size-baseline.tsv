@@ -16,11 +16,11 @@
 7955	crates/engine/paint/src/backends/femtovg_backend.rs
 6998	crates/engine/dom/src/lib.rs
 4809	crates/engine/paint/src/cpu_raster.rs
-4643	crates/shell/src/main.rs
 4504	crates/core/src/ext.rs
 4408	crates/js/src/filesystem_access.rs
 4112	crates/bidi-server/src/protocol.rs
 3962	crates/engine/html-parser/src/tree_builder.rs
+3746	crates/shell/src/main.rs
 3614	crates/js/src/worker.rs
 3484	crates/js/src/frame_bridge.rs
 3435	crates/chrome/src/model.rs
