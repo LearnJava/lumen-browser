@@ -4463,20 +4463,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/input/humanlike.rs:267` **fn** `type_text` — Type `text` with Gaussian-distributed inter-keystroke delays
 `crates/shell/src/input/humanlike.rs:287` **fn** `scroll_to` — Scroll to `(x, y)` immediately (no path animation for scrolls)
 `crates/shell/src/input/humanlike.rs:295` **fn** `set_cursor_position` — Override the assumed cursor starting position without moving it
-`crates/shell/src/input/mod.rs:40` **enum** `InputCommand` — A single injected input command
-`crates/shell/src/input/mod.rs:107` **struct** `InputSender` — Sender side of the input injection channel
-`crates/shell/src/input/mod.rs:112` **fn** `click` — Send a synthetic left-click at CSS-pixel coordinates `(x, y)`
-`crates/shell/src/input/mod.rs:118` **fn** `mouse_move` — Send a synthetic mouse-move event to CSS-pixel coordinates `(x, y)`
-`crates/shell/src/input/mod.rs:124` **fn** `type_text` — Send a synthetic text-typing command
-`crates/shell/src/input/mod.rs:130` **fn** `scroll` — Send a synthetic scroll command to position `(x, y)` in CSS pixels
-`crates/shell/src/input/mod.rs:140` **fn** `key_down` — Press and release a special key identified by its W3C `KeyboardEvent.code`
-`crates/shell/src/input/mod.rs:146` **fn** `enter` — Press Enter in the focused element (submits forms, confirms dialogs)
-`crates/shell/src/input/mod.rs:152` **fn** `backspace` — Press Backspace in the focused element (deletes character before cursor)
-`crates/shell/src/input/mod.rs:158` **fn** `tab` — Press Tab (move focus to the next focusable element)
-`crates/shell/src/input/mod.rs:164` **fn** `escape` — Press Escape (dismiss dialogs, close menus, blur focused element)
-`crates/shell/src/input/mod.rs:172` **struct** `InputReceiver` — Receiver side of the input injection channel
-`crates/shell/src/input/mod.rs:176` **fn** `drain` — Non-blocking drain: returns all pending commands without blocking
-`crates/shell/src/input/mod.rs:185` **fn** `channel` — Create a new input injection channel
+`crates/shell/src/input/mod.rs:41` **enum** `InputCommand` — A single injected input command
+`crates/shell/src/input/mod.rs:108` **struct** `InputSender` — Sender side of the input injection channel
+`crates/shell/src/input/mod.rs:113` **fn** `click` — Send a synthetic left-click at CSS-pixel coordinates `(x, y)`
+`crates/shell/src/input/mod.rs:119` **fn** `mouse_move` — Send a synthetic mouse-move event to CSS-pixel coordinates `(x, y)`
+`crates/shell/src/input/mod.rs:125` **fn** `type_text` — Send a synthetic text-typing command
+`crates/shell/src/input/mod.rs:131` **fn** `scroll` — Send a synthetic scroll command to position `(x, y)` in CSS pixels
+`crates/shell/src/input/mod.rs:141` **fn** `key_down` — Press and release a special key identified by its W3C `KeyboardEvent.code`
+`crates/shell/src/input/mod.rs:147` **fn** `enter` — Press Enter in the focused element (submits forms, confirms dialogs)
+`crates/shell/src/input/mod.rs:153` **fn** `backspace` — Press Backspace in the focused element (deletes character before cursor)
+`crates/shell/src/input/mod.rs:159` **fn** `tab` — Press Tab (move focus to the next focusable element)
+`crates/shell/src/input/mod.rs:165` **fn** `escape` — Press Escape (dismiss dialogs, close menus, blur focused element)
+`crates/shell/src/input/mod.rs:173` **struct** `InputReceiver` — Receiver side of the input injection channel
+`crates/shell/src/input/mod.rs:177` **fn** `drain` — Non-blocking drain: returns all pending commands without blocking
+`crates/shell/src/input/mod.rs:186` **fn** `channel` — Create a new input injection channel
 `crates/shell/src/input/vim.rs:41` **enum** `VimState` — Which sub-mode the Vim keybinding layer is currently in
 `crates/shell/src/input/vim.rs:61` **enum** `VimAction` — Decoded action that the caller should execute in response to a keypress
 `crates/shell/src/input/vim.rs:106` **struct** `VimMode` — Vim-mode state machine
@@ -4924,8 +4924,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/scrollbar.rs:185` **struct** `ScrollDrag` — Снапшот состояния на момент начала drag-а: scroll_y страницы и cursor_y
 `crates/shell/src/scrollbar.rs:191` **fn** `new`
 `crates/shell/src/scrollbar.rs:199` **fn** `scroll_for` — Желаемый `scroll_y` при текущей позиции курсора. Если scrollbar
-`crates/shell/src/session_persist.rs:32` **fn** `open_store` — Open the session store at [`SESSION_DB_PATH`], falling back to an in-memory
-`crates/shell/src/session_persist.rs:44` **fn** `active_index` — Index of the tab to make active after restore: the first `is_active` tab, or
+`crates/shell/src/session_persist.rs:34` **fn** `open_store` — Open the session store at [`SESSION_DB_PATH`], falling back to an in-memory
+`crates/shell/src/session_persist.rs:46` **fn** `active_index` — Index of the tab to make active after restore: the first `is_active` tab, or
 `crates/shell/src/source_view.rs:15` **fn** `build_view_source_html` — Wrap `raw` HTML source in a syntax-highlighted page
 `crates/shell/src/spellcheck.rs:22` **fn** `spell_data_dir` — Папка с пользовательскими словарями: `<exe_dir>/data/spell`
 `crates/shell/src/spellcheck.rs:29` **struct** `MultiDictionary` — Комбинированный словарь нескольких локалей. Слово считается верным,

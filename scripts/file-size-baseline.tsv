@@ -6,8 +6,8 @@
 
 45541	crates/js/src/dom.rs
 38031	crates/engine/layout/src/style.rs
-29326	crates/shell/src/main.rs
 23470	crates/engine/layout/src/box_tree.rs
+22813	crates/shell/src/main.rs
 20919	crates/engine/paint/src/renderer.rs
 19698	crates/engine/paint/src/display_list.rs
 19155	crates/engine/layout/src/lib.rs
