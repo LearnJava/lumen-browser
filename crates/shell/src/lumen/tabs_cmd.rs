@@ -472,4 +472,23 @@ impl Lumen {
         self.relayout_chrome_host();
         self.request_redraw();
     }
+
+    /// Persist the current tab-strip layout (horizontal/vertical) into
+    /// `browser_settings`.
+    ///
+    /// CC-15-3: the legacy tab-bar layout-toggle button was the only caller of
+    /// `set_tab_layout` outside the settings panel's snapshot apply вЂ” removing
+    /// its paint/hit-test would have silently dropped persistence from the two
+    /// remaining toggle entry points (`KeyCommand::ToggleVerticalTabs`,
+    /// `PaletteAction::ToggleVerticalTabs`), which never persisted on their
+    /// own. Both now route through here so the choice survives a restart the
+    /// same way the removed button made it.
+    pub(crate) fn persist_tab_layout(&self) {
+        let layout = if self.vertical_tabs.visible {
+            tabs::strip::TabLayout::Vertical
+        } else {
+            tabs::strip::TabLayout::Horizontal
+        };
+        let _ = self.settings_store.set_tab_layout(layout.as_str());
+    }
 }
