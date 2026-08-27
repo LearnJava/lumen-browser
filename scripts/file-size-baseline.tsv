@@ -23,9 +23,9 @@
 3614	crates/js/src/worker.rs
 3484	crates/js/src/frame_bridge.rs
 3435	crates/chrome/src/model.rs
-3213	crates/shell/src/main.rs
 2962	crates/driver/src/session.rs
 2762	crates/network/src/h3/conn_connect.rs
+2715	crates/shell/src/main.rs
 2637	crates/js/src/subtle_crypto.rs
 2544	crates/shell/src/forms.rs
 2365	crates/js/src/video_bindings.rs
