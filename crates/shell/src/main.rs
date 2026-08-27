@@ -42,9 +42,11 @@ mod display_list_metrics;
 mod dump_mode;
 mod js_escape;
 mod layout_metrics;
+mod layout_walk;
 mod nav_history;
 mod page_source;
 mod subresources;
+mod window_metrics;
 // Private `use` in the crate root is visible to descendants, so these lines
 // double as a re-export for the `use crate::*;` of every submodule — no call
 // site elsewhere in the crate had to change when SH-3a moved the bodies out.
@@ -125,7 +127,14 @@ mod zoom;
 mod network_service;
 
 // SPLIT SH-5: helpers that used to live at the bottom of this file.
-use crate::display_list_metrics::{build_split_placeholder, content_height_of, content_width_of};
+use crate::display_list_metrics::{
+    build_split_placeholder, content_height_of, content_width_of, next_dl_epoch, paint_ordered,
+};
+use crate::chrome_ui::ContentAreaDetachment;
+#[cfg(test)]
+use crate::chrome_ui::{restore_content_area, take_content_area};
+use crate::layout_walk::{collect_box_styles, find_video_source, promote_will_change_layers};
+use crate::window_metrics::{FullscreenPoll, content_layout_viewport, decide_fullscreen_poll};
 use crate::input::winit_events::{css_cursor_to_winit, cursor_icon_for_hover, winit_modifiers_state};
 use crate::js_escape::{escape_js_string, escape_js_string_char};
 use crate::panels::doc_pip_os_window::DocPipOsWindow;
@@ -3283,300 +3292,6 @@ fn parse_and_layout(
     })
 }
 
-/// Р РµРєСѓСЂСЃРёРІРЅРѕ СЃРѕР±РёСЂР°РµС‚ `ComputedStyle` РІСЃРµС… СѓР·Р»РѕРІ layout-РґРµСЂРµРІР°.
-/// Р РµР·СѓР»СЊС‚Р°С‚ РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ `transition_scheduler.sync()` РґР»СЏ СЃСЂР°РІРЅРµРЅРёСЏ
-/// РїСЂРµРґС‹РґСѓС‰РµРіРѕ Рё РЅРѕРІРѕРіРѕ СЃС‚РёР»СЏ РїРѕСЃР»Рµ РєР°Р¶РґРѕРіРѕ relayout-Р°.
-fn collect_box_styles(lb: &LayoutBox, map: &mut HashMap<NodeId, ComputedStyle>) {
-    // BUG-341 S12: `LayoutBox::style` is now an `Arc`, but the transition
-    // scheduler owns its snapshot (it diffs it against the next frame), so this
-    // stays a deep copy. Sharing it here would need `prev_styles` to hold `Arc`s
-    // too вЂ” a page-pipeline follow-up, not part of this slice's measured path.
-    map.insert(lb.node, (*lb.style).clone());
-    for child in &lb.children {
-        collect_box_styles(child, map);
-    }
-}
-
-/// Traverse the layout tree and promote nodes with `will-change: transform/opacity/filter`
-/// to their own GPU layers via `RenderBackend::promote_layer`.
-///
-/// Called after every relayout so the promoted-layer set stays current.
-/// Nodes removed from the DOM are cleaned up automatically by `sync_promoted_layers`
-/// (called by each backend's `promote_layer` impl via `LayerCache`).
-fn promote_will_change_layers(lb: &LayoutBox, renderer: &mut dyn RenderBackend) {
-    promote_will_change_rec(lb, renderer);
-}
-
-fn promote_will_change_rec(lb: &LayoutBox, renderer: &mut dyn RenderBackend) {
-    let needs_layer = lb.style.will_change.iter().any(|p| {
-        matches!(p.as_str(), "transform" | "opacity" | "filter")
-    });
-    if needs_layer {
-        let w = lb.rect.width.max(1.0) as u32;
-        let h = lb.rect.height.max(1.0) as u32;
-        renderer.promote_layer(lb.node.index() as u32, w, h);
-    }
-    for child in &lb.children {
-        promote_will_change_rec(child, renderer);
-    }
-}
-
-/// Find the first `<video>` element in the layout tree (depth-first, document
-/// order) and return its `(src, poster)` URLs.  Used by the picture-in-picture
-/// window (task #21) to pick a video to embed.  Returns `None` when the page
-/// has no `<video>`.
-fn find_video_source(lb: &LayoutBox) -> Option<(String, String)> {
-    if let lumen_layout::BoxKind::Video { src, poster } = &lb.kind {
-        return Some((src.clone(), poster.clone()));
-    }
-    for child in &lb.children {
-        if let Some(found) = find_video_source(child) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-/// CC-4/CC-9: removes `#contentArea`'s [`LayoutBox`] from `lb`'s subtree
-/// (depth-first, first match) вЂ” not just its children, but its own box (and
-/// background paint command) too, so the real page painted separately at
-/// that rect is never covered by it. Never matches `lb` itself, only
-/// descendants вЂ” `#contentArea` is never the chrome document's root box.
-///
-/// CC-9: two of `#contentArea`'s own children вЂ” `#findBar`, `#downloadsPanel`
-/// вЂ” are real popovers this pass *does* want painted (they sit outside the
-/// pruned rect via `position:absolute`, CSS Positioned Layout L3 В§9.10, so
-/// splicing them elsewhere in the tree does not change which stacking
-/// context they join: `#contentArea` itself creates none). `salvage_ids`
-/// lists which descendant node ids to keep; they're spliced back into `lb`
-/// at the exact slot `#contentArea` occupied, preserving both their absolute
-/// paint rects (already resolved by the out-of-flow layout pass) and their
-/// tree-order position relative to `#contentArea`'s former siblings.
-///
-/// BUG-341 S22: the pruning is **reversible**. Every removal is recorded in the
-/// returned [`ContentAreaDetachment`], and [`restore_content_area`] puts the
-/// tree back exactly as it was вЂ” which is what lets the next pass take the
-/// live tree as its `prev` basis instead of the pipeline copying a pristine
-/// one aside on every frame (that copy was the largest single item left in an
-/// incremental chrome cycle; see the S22 census in `bugs/BUG-341-OPEN.md`).
-fn take_content_area(
-    lb: &mut LayoutBox,
-    node: lumen_dom::NodeId,
-    salvage_ids: &[&str],
-    doc: &lumen_dom::Document,
-) -> Option<(Rect, ContentAreaDetachment)> {
-    let mut path = Vec::new();
-    take_content_area_at(lb, node, salvage_ids, doc, &mut path)
-}
-
-/// [`take_content_area`]'s recursion, carrying the child-index path walked so
-/// far so the detachment record can name `#contentArea`'s holder.
-fn take_content_area_at(
-    lb: &mut LayoutBox,
-    node: lumen_dom::NodeId,
-    salvage_ids: &[&str],
-    doc: &lumen_dom::Document,
-    path: &mut Vec<usize>,
-) -> Option<(Rect, ContentAreaDetachment)> {
-    if let Some(slot) = lb.children.iter().position(|c| c.node == node) {
-        let mut removed = lb.children.remove(slot);
-        let rect = removed.rect;
-        let mut salvaged = Vec::new();
-        salvage_layout_boxes(&mut removed, salvage_ids, doc, &mut Vec::new(), &mut salvaged);
-        let mut salvage_paths = Vec::with_capacity(salvaged.len());
-        for (offset, (from, b)) in salvaged.into_iter().enumerate() {
-            salvage_paths.push(from);
-            lb.children.insert(slot + offset, b);
-        }
-        return Some((
-            rect,
-            ContentAreaDetachment { holder_path: path.clone(), slot, removed, salvage_paths },
-        ));
-    }
-    for (i, child) in lb.children.iter_mut().enumerate() {
-        path.push(i);
-        if let Some(found) = take_content_area_at(child, node, salvage_ids, doc, path) {
-            return Some(found);
-        }
-        path.pop();
-    }
-    None
-}
-
-/// BUG-341 S22: everything [`take_content_area`] removed from a chrome box
-/// tree, in enough detail for [`restore_content_area`] to undo it exactly.
-///
-/// "Exactly" is the whole point, and the cost of getting it wrong is higher
-/// than it looks. The restored tree is handed to
-/// `layout_mutation_incremental_restyle` as its `prev` basis, and
-/// `incremental_build_box` moves whole *clean* subtrees straight across from
-/// that basis вЂ” on an interaction cycle `#contentArea`'s parent is clean, so a
-/// basis missing `#contentArea` produces a document missing `#contentArea`,
-/// and the next cycle inherits that tree in turn. It is not a slow frame, it
-/// is 155 boxes where there should be 318, permanently. Measured, and gated:
-/// `bug341_s22_a_restored_basis_carries_the_whole_document_forward`.
-struct ContentAreaDetachment {
-    /// Child-index path from the tree root down to the box that held
-    /// `#contentArea` (empty when the root itself held it).
-    holder_path: Vec<usize>,
-    /// Index `#contentArea` occupied among that holder's children вЂ” also the
-    /// slot the salvaged popovers were spliced into.
-    slot: usize,
-    /// `#contentArea`'s own box, with the salvaged popovers already lifted out
-    /// of its subtree.
-    removed: LayoutBox,
-    /// For each salvaged popover, in removal order, the child-index path
-    /// inside [`Self::removed`] it was removed from вЂ” the last element is the
-    /// index within that box's children. Restoring walks these in **reverse**,
-    /// because each path was recorded against the tree state of its own
-    /// removal.
-    salvage_paths: Vec<Vec<usize>>,
-}
-
-/// BUG-341 S22: inverse of [`take_content_area`] вЂ” re-inserts the salvaged
-/// popovers into `#contentArea`'s subtree and `#contentArea` back into its
-/// former slot, reproducing the pre-pruning tree box for box.
-///
-/// Returns `false` if any recorded path no longer addresses a box (only
-/// possible if something mutated the tree between the two calls, which nothing
-/// does today вЂ” `chrome_layout` is read-only until the next pass replaces it).
-/// The caller treats that as "no usable `prev`" and takes the full-layout path,
-/// so a stale record costs a slow frame, never a wrong one.
-fn restore_content_area(root: &mut LayoutBox, detached: ContentAreaDetachment) -> bool {
-    let ContentAreaDetachment { holder_path, slot, mut removed, salvage_paths } = detached;
-    let Some(holder) = follow_box_path_mut(root, &holder_path) else { return false };
-    if slot + salvage_paths.len() > holder.children.len() {
-        return false;
-    }
-    let salvaged: Vec<LayoutBox> = holder.children.drain(slot..slot + salvage_paths.len()).collect();
-    for (from, b) in salvage_paths.into_iter().zip(salvaged).rev() {
-        let Some((&idx, head)) = from.split_last() else { return false };
-        let Some(parent) = follow_box_path_mut(&mut removed, head) else { return false };
-        if idx > parent.children.len() {
-            return false;
-        }
-        parent.children.insert(idx, b);
-    }
-    holder.children.insert(slot, removed);
-    true
-}
-
-/// Walks `path`'s child indices down from `b`. `None` if any index is out of
-/// range.
-fn follow_box_path_mut<'a>(b: &'a mut LayoutBox, path: &[usize]) -> Option<&'a mut LayoutBox> {
-    let mut cur = b;
-    for &i in path {
-        cur = cur.children.get_mut(i)?;
-    }
-    Some(cur)
-}
-
-/// Depth-first: removes every descendant of `lb` whose element id is in
-/// `salvage_ids`, appending it to `out` in tree order together with the
-/// child-index path (relative to the box this recursion started at) it came
-/// from. Used by [`take_content_area`] to rescue specific popovers out of
-/// `#contentArea` before the rest of its subtree is discarded вЂ” and by
-/// [`restore_content_area`] to put them back.
-fn salvage_layout_boxes(
-    lb: &mut LayoutBox,
-    salvage_ids: &[&str],
-    doc: &lumen_dom::Document,
-    prefix: &mut Vec<usize>,
-    out: &mut Vec<(Vec<usize>, LayoutBox)>,
-) {
-    let mut i = 0;
-    while i < lb.children.len() {
-        let matches = doc.get(lb.children[i].node).get_attr("id").is_some_and(|id| salvage_ids.contains(&id));
-        if matches {
-            let mut from = prefix.clone();
-            from.push(i);
-            out.push((from, lb.children.remove(i)));
-        } else {
-            prefix.push(i);
-            salvage_layout_boxes(&mut lb.children[i], salvage_ids, doc, prefix, out);
-            prefix.pop();
-            i += 1;
-        }
-    }
-}
-
-/// CC-10: which modal `Lumen::chrome_modal_ancestor` resolved a `CloseModal`
-/// click to вЂ” `#certOverlay` and `#printOverlay` share the same
-/// `data-action="close-modal"` value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ChromeModalKind {
-    Cert,
-    Print,
-}
-
-/// РЎС‚СЂРѕРёС‚ display list СЃ РїСЂР°РІРёР»СЊРЅС‹Рј painting order (CSS 2.1 Appendix E, z-index stacking).
-fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
-    let tree = StackingTree::build(layout);
-    let order = PaintOrder::from_tree(&tree);
-    build_display_list_ordered(layout, &tree, &order).0
-}
-
-/// Outcome of a single fullscreen-resize poll tick (BUG-167).
-///
-/// Pure decision extracted from [`Lumen::poll_fullscreen_resize`] so the
-/// async-resize reconciliation can be unit-tested without a real window.
-#[derive(Debug, PartialEq, Eq)]
-enum FullscreenPoll {
-    /// The OS applied a new size: resize the renderer to `(w, h)` physical px
-    /// and relayout. Clears the pending state.
-    Apply(u32, u32),
-    /// The size has not been applied yet: keep waiting with `(prev_w, prev_h,
-    /// attempts_left)` (one attempt spent this tick).
-    Wait(u32, u32, u8),
-    /// Give up вЂ” the attempt budget is exhausted. Clears the pending state.
-    Done,
-}
-
-/// Decide what to do on one fullscreen-resize poll tick (BUG-167).
-///
-/// `prev` is the window's physical inner size captured before `set_fullscreen`;
-/// `cur` is the size read this tick; `attempts` is the remaining poll budget.
-/// A zero-sized `cur` (minimized / not yet mapped) counts as "not applied yet".
-fn decide_fullscreen_poll(prev: (u32, u32), cur: (u32, u32), attempts: u8) -> FullscreenPoll {
-    let (prev_w, prev_h) = prev;
-    let (cur_w, cur_h) = cur;
-    if cur_w != 0 && cur_h != 0 && (cur_w != prev_w || cur_h != prev_h) {
-        return FullscreenPoll::Apply(cur_w, cur_h);
-    }
-    match attempts.checked_sub(1) {
-        Some(0) | None => FullscreenPoll::Done,
-        Some(left) => FullscreenPoll::Wait(prev_w, prev_h, left),
-    }
-}
-
-/// CSS-px layout viewport (width, height) for the page content region, derived
-/// from the full renderer surface size `surface` (already in CSS px).
-///
-/// In an interactive window the page is composited *below* the browser chrome:
-/// the tab strip + toolbar (`toolbar::CHROME_H`) always, plus the workspace
-/// switcher (`SWITCHER_HEIGHT`) when visible. The page content is shifted down by that
-/// chrome via `PushTransform`, and scroll clamping uses the same reduced height
-/// (`viewport_height_css`). The layout pass must therefore see the *content*
-/// height вЂ” not the full window вЂ” so that `vh`/`%`-heights/`@media (height)`
-/// resolve against the actually-visible page region. Width is unaffected (the
-/// chrome only occupies vertical space).
-///
-/// Headless surfaces (`--screenshot` / `--dump-*` / `--ipc-server`, i.e.
-/// `has_window == false`) have no chrome: the full surface is the viewport,
-/// which keeps those paths deterministic at 1024Г—720.
-fn content_layout_viewport(surface: Size, has_window: bool, workspace_visible: bool) -> (f32, f32) {
-    if !has_window {
-        return (surface.width, surface.height);
-    }
-    let chrome_h = toolbar::CHROME_H
-        + if workspace_visible {
-            panels::workspace_panel::SWITCHER_HEIGHT
-        } else {
-            0.0
-        };
-    (surface.width, (surface.height - chrome_h).max(0.0))
-}
-
 /// ADR-016 M2.2: СЂРµР·СѓР»СЊС‚Р°С‚ off-thread relayout, РєРѕС‚РѕСЂС‹Р№ РґРІРёР¶РєРѕРІС‹Р№ РїРѕС‚РѕРє
 /// РєРѕРјРјРёС‚РёС‚ UI-СЃС‚РѕСЂРѕРЅРµ С‡РµСЂРµР· [`engine_thread::EngineThread`]. Р’СЃС‘ СЃРѕРґРµСЂР¶РёРјРѕРµ вЂ”
 /// РІР»Р°РґРµСЋС‰РёРµ Р·РЅР°С‡РµРЅРёСЏ (`Send`); РїРѕСЃР»Рµ РєРѕРјРјРёС‚Р° UI Рё РґРІРёР¶РѕРє РЅРµ РґРµР»СЏС‚ РјСѓС‚Р°Р±РµР»СЊРЅРѕРµ
@@ -5752,15 +5467,6 @@ struct PendingWait {
     deadline: std::time::Instant,
     /// Where to send the `Ack`/`Error` reply once resolved.
     reply_tx: std::sync::mpsc::Sender<AutomationReply>,
-}
-
-/// РЎР»РµРґСѓСЋС‰Р°СЏ РІРµСЂСЃРёСЏ display list-Р°; `0` РїСЂРѕРїСѓСЃРєР°РµС‚СЃСЏ вЂ” РѕРЅ Р·Р°СЂРµР·РµСЂРІРёСЂРѕРІР°РЅ Р·Р°
-/// В«РІРµСЂСЃРёСЏ РЅРµРёР·РІРµСЃС‚РЅР°В» (BUG-405 СЃСЂРµР· 39).
-fn next_dl_epoch(cur: u64) -> u64 {
-    match cur.wrapping_add(1) {
-        0 => 1,
-        n => n,
-    }
 }
 
 struct Lumen {
