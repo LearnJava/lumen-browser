@@ -6,6 +6,13 @@
 
 use crate::*;
 
+/// Р‘СЋРґР¶РµС‚ idle-РѕРєРЅР° РґР»СЏ `requestIdleCallback`-РѕРІ, РїРµСЂРµРґР°РІР°РµРјС‹Р№ РІ
+/// `EventLoop::run_idle_callbacks` РЅР° РєР°Р¶РґРѕРј `about_to_wait`. Phase 0 РЅРµ Р·РЅР°РµС‚
+/// СЂРµР°Р»СЊРЅРѕРіРѕ РІСЂРµРјРµРЅРё РґРѕ СЃР»РµРґСѓСЋС‰РµРіРѕ vsync, РїРѕСЌС‚РѕРјСѓ РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ С„РёРєСЃРёСЂРѕРІР°РЅРЅС‹Р№
+/// 10 ms вЂ” С‚РѕС‚ Р¶Рµ РґРµС„РѕР»С‚, С‡С‚Рѕ Сѓ Chromium РїСЂРё РѕС‚СЃСѓС‚СЃС‚РІРёРё СЏРІРЅРѕРіРѕ measurement-Р°
+/// idle-РѕРєРЅР°. Idle-callback-Рё С‚СЂР°РєС‚СѓСЋС‚ СЌС‚Рѕ РєР°Рє В«СѓСЃРїРµР№ Р·Р° ~10 msВ».
+const IDLE_BUDGET_MS: f64 = 10.0;
+
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
     pub(crate) fn on_about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
