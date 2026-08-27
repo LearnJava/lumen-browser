@@ -7,6 +7,7 @@
 //! bodies are byte-identical to what `main.rs` held — only the module path and
 //! the visibility of methods called from outside their new home differ.
 
+mod a11y_media;
 mod ai_answer;
 mod automation;
 mod bfcache;
@@ -14,8 +15,10 @@ mod click;
 mod content_visibility;
 mod cursor;
 mod docking;
+mod file_picker;
 mod find_bar;
 mod form_submit;
+mod gestures;
 mod hibernation;
 mod hint_mode;
 mod keyboard;
@@ -26,11 +29,14 @@ mod page_views;
 mod palette;
 mod panel_data;
 mod panel_keys;
+mod pip;
 mod pointer;
 mod printing;
+mod resize_grip;
 mod scrolling;
 mod session;
 mod spell_menu;
 mod tabs_cmd;
 mod text_input;
 mod viewport;
+mod viewport_sync;
