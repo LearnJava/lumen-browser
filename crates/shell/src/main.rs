@@ -46,6 +46,7 @@ mod layout_metrics;
 mod layout_walk;
 mod nav_history;
 mod page_source;
+mod page_state;
 mod parallel_fetch;
 mod resource_base;
 mod stylesheets;
@@ -153,6 +154,7 @@ use crate::scripts::{
 };
 #[cfg(test)]
 use crate::scripts::{ParserInsertLog, ResolvedScript, ScriptSource, run_scripts};
+use crate::frames::FrameHandle;
 use crate::frames::{apply_iframe_sandbox_gates, base_url_string, load_frame_sub_documents};
 #[cfg(test)]
 use crate::frames::{fetch_frame_subresources, frame_access_allowed};
@@ -171,6 +173,7 @@ use crate::storage_stores::{
 use crate::chrome_ui::{restore_content_area, take_content_area};
 use crate::layout_walk::{collect_box_styles, find_video_source, promote_will_change_layers};
 use crate::window_metrics::{FullscreenPoll, content_layout_viewport, decide_fullscreen_poll};
+use crate::page_state::{PARKED_PAGES_MAX, PageSnapshot, ParkedPage};
 use crate::subresources::{decode_image, fetch_and_decode_images, fetch_image_bytes};
 use crate::stylesheets::{
     inline_css_imports, link_media_matches, load_linked_stylesheets, print_media_context,
@@ -1461,38 +1464,6 @@ impl LoadedPage {
     }
 }
 
-// в”Ђв”Ђ Р РµРЅРґРµСЂ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-
-/// Р–РёРІРѕР№ sub-РґРѕРєСѓРјРµРЅС‚ РѕРґРЅРѕРіРѕ `<iframe>` (BUG-480, СЃСЂРµР· 1).
-///
-/// Р”РµСЂР¶РёС‚ РїРѕСЂРѕР¶РґС‘РЅРЅС‹Р№ `Document` Рё РµРіРѕ JS-РєРѕРЅС‚РµРєСЃС‚ Р¶РёРІС‹РјРё РЅР° РІСЂРµРјСЏ Р¶РёР·РЅРё
-/// СЃС‚СЂР°РЅРёС†С‹: РїРѕРєР° С…СЌРЅРґР» Р¶РёРІ, С‚РёРєР°СЋС‚ С‚Р°Р№РјРµСЂС‹ СЂРµР±С‘РЅРєР° Рё СЂР°Р±РѕС‚Р°СЋС‚ РµРіРѕ
-/// РѕР±СЂР°Р±РѕС‚С‡РёРєРё. РџР°РґР°РµС‚ РІРјРµСЃС‚Рµ СЃРѕ СЃС‚СЂР°РЅРёС†РµР№ вЂ” Р·Р°РјРµРЅР° СЃС‚СЂР°РЅРёС†С‹ РІ
-/// [`Lumen::apply_loaded_page`] СѓРЅРѕСЃРёС‚ РІСЃРµ С„СЂРµР№РјС‹ СЂР°Р·РѕРј, РѕС‚РґРµР»СЊРЅРѕРіРѕ
-/// lifecycle-РјРµРЅРµРґР¶РјРµРЅС‚Р° РЅРµ РЅСѓР¶РЅРѕ.
-///
-/// РЎСЂРµР· 2 РґР°Р» JS СЂРѕРґРёС‚РµР»СЏ С„Р°СЃР°РґС‹ РїРѕРґ-РґРѕРєСѓРјРµРЅС‚Р° С‡РµСЂРµР· СЂРµРµСЃС‚СЂ Р±РёРЅРґРёРЅРіРѕРІ
-/// `frame_bridge.rs` вЂ” СЂРµРіРёСЃС‚СЂР°С†РёСЏ РёРґС‘С‚ РёР· Р»РѕРєР°Р»СЊРЅС‹С… РїРµСЂРµРјРµРЅРЅС‹С… СЌС‚РѕР№ С„СѓРЅРєС†РёРё,
-/// РїРѕСЌС‚РѕРјСѓ РїРѕР»СЏ С…СЌРЅРґР»Р° РїРѕ-РїСЂРµР¶РЅРµРјСѓ РЅРµ С‡РёС‚Р°СЋС‚СЃСЏ; С‡РёС‚Р°С‚СЊСЃСЏ РЅР°С‡РЅСѓС‚ СЃРѕ СЃСЂРµР·РѕРј
-/// РЅР°РІРёРіР°С†РёРё/Р·Р°РјРµРЅС‹ С„СЂРµР№РјР°.
-#[allow(dead_code)] // host/url/doc вЂ” РґРѕ СЃСЂРµР·Р° РЅР°РІРёРіР°С†РёРё/Р·Р°РјРµРЅС‹ С„СЂРµР№РјР° (СЃРј. bugs/BUG-480-OPEN.md)
-struct FrameHandle {
-    /// `NodeId` `<iframe>`-СЌР»РµРјРµРЅС‚Р° РІ РґРѕРєСѓРјРµРЅС‚Рµ-СЂРѕРґРёС‚РµР»Рµ.
-    host: NodeId,
-    /// РђРґСЂРµСЃ РїРѕРґ-РґРѕРєСѓРјРµРЅС‚Р°: СЂР°Р·СЂРµС€С‘РЅРЅС‹Р№ URL, РїСѓС‚СЊ С„Р°Р№Р»Р° РёР»Рё `about:blank` /
-    /// `about:srcdoc`. Р”РёР°РіРЅРѕСЃС‚РёРєР° Рё Р±СѓРґСѓС‰Р°СЏ РЅР°РІРёРіР°С†РёСЏ С„СЂРµР№РјР°.
-    url: String,
-    /// РџРѕРґ-РґРѕРєСѓРјРµРЅС‚. РћС‚РґРµР»СЊРЅС‹Р№ `Arc` вЂ” JS-Р·Р°РјС‹РєР°РЅРёСЏ СЂРµР±С‘РЅРєР° РґРµСЂР¶Р°С‚ РµРіРѕ Р¶Рµ.
-    doc: Arc<Mutex<Document>>,
-    /// JS-РєРѕРЅС‚РµРєСЃС‚ СЂРµР±С‘РЅРєР° (`None` вЂ” Сѓ С„СЂРµР№РјР° РЅРµ Р±С‹Р»Рѕ СЃРєСЂРёРїС‚РѕРІ РёР»Рё v8 РІС‹РєР»СЋС‡РµРЅ).
-    js: Option<Arc<dyn PersistentJs>>,
-}
-
-/// РњР°РєСЃРёРјР°Р»СЊРЅР°СЏ РіР»СѓР±РёРЅР° РІР»РѕР¶РµРЅРЅРѕСЃС‚Рё С„СЂРµР№РјРѕРІ: СЃС‚СЂР°РЅРёС†Р° (0) в†’ iframe (1) в†’
-/// iframe РІ iframe (2) в†’ РіР»СѓР±Р¶Рµ РЅРµ Р·Р°РіСЂСѓР¶Р°РµРј. Р—Р°С‰РёС‚Р° РѕС‚ СЂРµРєСѓСЂСЃРёРІРЅС‹С…
-/// СЃР°РјРѕРІР»РѕР¶РµРЅРёР№ РІ РЅРµРґРѕРІРµСЂРµРЅРЅРѕРј HTML; СЃРїРµРєР° РіР»СѓР±РёРЅСѓ РЅРµ РѕРіСЂР°РЅРёС‡РёРІР°РµС‚.
-const MAX_FRAME_DEPTH: usize = 2;
-
 /// Р РµР·СѓР»СЊС‚Р°С‚ С„Р°Р· `decode в†’ parse в†’ layout` вЂ” РѕР±С‰Р°СЏ С‡Р°СЃС‚СЊ РґР»СЏ РѕРєРѕРЅРЅРѕРіРѕ Рё
 /// dump-СЂРµР¶РёРјРѕРІ. РџРѕР»СЏ РІР»Р°РґРµСЋС‚ СЃРІРѕРёРјРё РґР°РЅРЅС‹РјРё вЂ” РЅРµС‚ СЃСЃС‹Р»РѕРє РЅР°СЂСѓР¶Сѓ.
 struct ParsedPage {
@@ -1567,166 +1538,6 @@ struct LayoutSource {
     /// СЂР°Р·РјРѕСЂРѕР·РєР° РІРєР»Р°РґРєРё, sidebar), РіРґРµ РёСЃС…РѕРґРЅС‹Рµ С‡Р°СЃС‚Рё CSS РЅРµ СЃРѕС…СЂР°РЅРµРЅС‹ вЂ” С‚Р°Рј
     /// РєР°СЃРєР°Рґ РІРµРґС‘С‚ СЃРµР±СЏ РєР°Рє РґРѕ BUG-743 Рё РїРѕР·РґРЅРёР№ `<style>` РЅРµ РїРѕРґС…РІР°С‚С‹РІР°РµС‚СЃСЏ.
     dynamic_css: Option<DynamicCssBase>,
-}
-
-/// A page kept *alive* for back/forward restoration (HTML LS В§7.4.6, "salvageable
-/// document" / bfcache).
-///
-/// The frozen bfcache path ([`Lumen::bfcache_thaw`]) serializes the DOM and
-/// installs a **fresh** JS runtime over it, which loses every timer, closure and
-/// event listener the page had вЂ” the restored document is inert, and that is
-/// exactly what [BUG-835](../../../bugs/BUG-835-FIXED.md) measured: after
-/// `history.back()` no script of the restored page ever ran again. Since each
-/// `V8JsRuntime` owns its own OS thread and isolate,
-/// keeping the whole handle alive is both possible and cheap to reason about:
-/// nothing pumps a parked runtime (`route_task_js` only ever reaches the active
-/// `js_ctx`), so its timers and animation frames are paused for exactly as long
-/// as the page is in the back/forward cache вЂ” which is the spec's model.
-///
-/// Parked entries are capped at [`PARKED_PAGES_MAX`]; a page with no JS runtime
-/// at all is not parked here but frozen the old way, where a fresh runtime over
-/// the restored DOM loses nothing.
-struct ParkedPage {
-    /// The page's live JS runtime, unpumped while parked.
-    js: Arc<dyn PersistentJs>,
-    /// DOM shared with `js` вЂ” the same `Arc` the runtime holds.
-    document: Arc<Mutex<Document>>,
-    /// Stylesheet snapshot the page was laid out with.
-    stylesheet: Arc<lumen_css_parser::Stylesheet>,
-    /// Decoded HTML source, carried over so a later reload of the restored page
-    /// does not need the network.
-    html_source: Option<String>,
-    /// Scroll offset at the moment the page was parked.
-    scroll_x: f32,
-    /// Scroll offset at the moment the page was parked.
-    scroll_y: f32,
-    /// Window title at the moment the page was parked.
-    title: Option<String>,
-}
-
-/// How many live pages may sit in the back/forward cache at once.
-///
-/// Each entry pins a V8 isolate and its thread, so this is deliberately much
-/// smaller than the HTML-snapshot [`BfCache`] capacity.
-const PARKED_PAGES_MAX: usize = 2;
-
-/// Frozen state of a background tab вЂ” moved in/out of `Lumen` on tab switch.
-///
-/// All per-page fields from `Lumen` live here while the tab is not active.
-/// The active tab's state always lives directly in the `Lumen` struct fields.
-struct PageSnapshot {
-    display_list: DisplayList,
-    title: Option<String>,
-    pending_images: Vec<(String, Arc<lumen_image::Image>)>,
-    /// PH3-19: saved across tab switch so web-fonts persist in background tabs.
-    page_font_registry: Arc<lumen_font::FontRegistry>,
-    /// PH3-19: web fonts decoded from @font-face url() sources, needed to
-    /// rebuild MultiFontMeasurer on relayout when the tab is restored.
-    web_fonts: Vec<LoadedWebFont>,
-    source: PageSource,
-    runtime: runtime::EventLoop,
-    animation_scheduler: animation_scheduler::AnimationScheduler,
-    transition_scheduler: TransitionScheduler,
-    starting_style_tracker: StartingStyleTracker,
-    prev_styles: HashMap<NodeId, ComputedStyle>,
-    /// BUG-341 S7: mirrors `Lumen::page_prev_cascade_styles` вЂ” must travel
-    /// with `layout_box` (same producer, same invalidation rule) so a tab
-    /// switch back to this snapshot cannot resurrect a cache that no longer
-    /// matches the restored tree.
-    page_prev_cascade_styles: Option<lumen_layout::CascadeStyles>,
-    page_prev_interactive: (Option<NodeId>, Option<NodeId>, Option<NodeId>),
-    anim_frame: Option<lumen_layout::AnimationFrame>,
-    layout_box: Option<lumen_layout::LayoutBox>,
-    /// P3-webvtt СЃСЂРµР· 3: cues СЃС‚СЂР°РЅРёС†С‹ вЂ” РїРµСЂРµРµР·Р¶Р°СЋС‚ РІРјРµСЃС‚Рµ СЃ РІРєР»Р°РґРєРѕР№.
-    page_tracks: tracks::PageTracks,
-    find: find::FindState,
-    address_bar: address_bar::AddressBarState,
-    hint: hints::HintState,
-    scroll_y: f32,
-    scroll_x: f32,
-    content_height: f32,
-    content_width: f32,
-    layout_source: Option<LayoutSource>,
-    pending_reload: Rc<Cell<bool>>,
-    pending_js_navigate: Option<JsNavigateRequest>,
-    stream_builder: Option<lumen_html_parser::IncrementalTreeBuilder>,
-    stream_last_paint: std::time::Instant,
-    /// CSS accumulated from parallel CSS-loader threads during streaming; applied to intermediate frames.
-    stream_sheet: lumen_css_parser::Stylesheet,
-    /// PH1-2b: whether `layout_box` is a valid graft source for the current stream.
-    stream_layout_seeded: bool,
-    preload_dispatched: std::collections::HashSet<String>,
-    /// PH1-2c: image `src` keys already dispatched to background decode threads
-    /// during the current streaming load. Dedup across intermediate frames so
-    /// each `<img>` is fetched once. Cleared at the start of every navigation.
-    stream_images_requested: std::collections::HashSet<String>,
-    /// BUG-735: mirrors [`Lumen::stream_image_sizes`].
-    stream_image_sizes: HashMap<String, (u32, u32)>,
-    /// BUG-735: mirrors [`Lumen::stream_image_sizes_dirty`].
-    stream_image_sizes_dirty: bool,
-    ime_composing: Option<String>,
-    bfcache: BfCache,
-    /// Parsed stylesheets of frozen bfcache pages, keyed by URL.
-    /// Kept shell-side because `Stylesheet` is not serializable.
-    frozen_styles: HashMap<String, lumen_css_parser::Stylesheet>,
-    /// Mirrors [`Lumen::parked_pages`] вЂ” travels with the tab so a parked page
-    /// can never be restored into a different tab.
-    parked_pages: Vec<(String, ParkedPage)>,
-    nav_back: Vec<NavEntry>,
-    nav_fwd: Vec<NavEntry>,
-    form_state: forms::FormState,
-    validation_tooltip: Option<(Rect, String)>,
-    color_picker_node: Option<NodeId>,
-    /// NodeId of the `<input type="date/вЂ¦">` whose calendar picker is open in this tab snapshot.
-    date_picker_node: Option<NodeId>,
-    /// NodeId of the `<select>` whose dropdown is open in this tab snapshot.
-    select_dropdown_node: Option<NodeId>,
-    ls_storage: HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
-    /// Mirrors [`Lumen::ss_storage`] вЂ” travels with the tab so `sessionStorage`
-    /// written by one of its documents is there for the next one, and for no
-    /// other tab (BUG-836).
-    ss_storage: HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
-    /// Directory for per-origin IndexedDB SQLite files. Cloned from the active
-    /// tab's `idb_dir` when saving a snapshot; restored on tab switch-back.
-    idb_dir: Option<std::path::PathBuf>,
-    sw_backend: Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
-    /// ADR-016 M2.2c-2b: `Arc` (РЅРµ `Box`) вЂ” РѕР±С‰РёР№ С‚РёРї С…СЌРЅРґР»Р° СЃ Р°РєС‚РёРІРЅРѕР№ РІРєР»Р°РґРєРѕР№.
-    js_ctx: Option<Arc<dyn PersistentJs>>,
-    first_paint_delivered: bool,
-    first_contentful_paint_delivered: bool,
-    /// Per-tab settled-navigation-error flag (BUG-308); see the `Lumen` field.
-    load_failed: bool,
-    /// Per-tab settled-navigation-error message (BUG-438); see the `Lumen` field.
-    load_error_message: Option<String>,
-    /// Instant at which the current navigation began (set in `reload()`).
-    /// Used to compute `duration` for the W3C Navigation Timing entry.
-    nav_start: Option<std::time::Instant>,
-    animated_gifs: HashMap<String, lumen_image::AnimatedGif>,
-    gif_last_frame: HashMap<String, usize>,
-    /// GIF-backed `<video>` frame keys: `"video:{nid}"` в†’ current frame index.
-    /// Parallel to `animated_gifs` but keyed by node ID, not URL.
-    video_gif_last_frame: HashMap<u32, usize>,
-    /// Decoded animated GIF frames for `<video>` nodes (keyed by nid).
-    video_gif_frames: HashMap<u32, lumen_image::AnimatedGif>,
-    image_cache: lumen_image::ImageDecodeCache,
-    /// Per-tab user zoom factor. Preserved when the tab goes to background.
-    zoom_factor: f32,
-    /// Virtual URL shown in the address bar when `history.pushState` /
-    /// `history.replaceState` changed the displayed URL without a page load.
-    /// `None` в†’ use `source.url_str()`.  Reset to `None` on any full navigation.
-    display_url: Option<String>,
-    /// Serialised JS state object for the current history entry, mirrored from
-    /// the JS side so the shell can store it in `NavEntry` when pushState fires.
-    /// Initialised to `"null"` (the default initial `history.state`).
-    current_history_state_json: String,
-    /// Original page source preserved while Reader View (В§D-3) is active.
-    /// `None` = this tab is not in reader mode.
-    reader_original_source: Option<PageSource>,
-    /// TLS certificate data for the current page (В§D-1).
-    ///
-    /// Populated when a successful HTTPS connection is made; `None` for HTTP pages
-    /// or when cert extraction is not yet wired (Phase 0 uses stubs).
-    cert_info: Option<panels::cert_panel::PanelCertData>,
 }
 
 #[allow(clippy::too_many_arguments)]
