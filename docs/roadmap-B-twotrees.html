@@ -5401,16 +5401,16 @@
       {
        "id": "SPLIT-SH3A",
        "title": "SPLIT-SH3a: run_dump_mode из main.rs",
-       "status": "ready",
+       "status": "done",
        "size": "S",
-       "note": "Головной фрагмент `crates/shell/src/main.rs`: `run_dump_mode` (анкер ~1363) и `V8PersistentJs` (~3381) → новый `src/dump_mode.rs`. Первый из трёх мини-батчей SH-3 — по одному целевому файлу на батч. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "Головной фрагмент `crates/shell/src/main.rs`: `run_dump_mode` (анкер ~1363) и `V8PersistentJs` (~3381) → новый `src/dump_mode.rs`. Первый из трёх мини-батчей SH-3 — по одному целевому файлу на батч. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 ЗАКРЫТ 2026-08-27 (ветка `p1-split-sh3a`): 2 284 строки уехали по ШЕСТИ адресам, а не в один `src/dump_mode.rs`. Цель переписи описывает первую тему из четырёх — ловушка «регион назван по первому item'у» в четвёртый раз, но, как на SH-5, пойманная ДО вырезки: между анкерами лежат одноразовые headless-рендеры → `src/dump_mode.rs` (609), headless-серверы автоматизации `run_ipc_server`/`run_mcp_mode` → `src/automation_server.rs` (216), разбор командной строки `print_usage` + 18 `extract_*` → `src/cli_args.rs` (456), мост персистентного JS → `src/persistent_js.rs` (994), плюс две залётные функции: счётчики box-дерева → `src/layout_metrics.rs` (34) и `chrome_node_changes` → дописан в `chrome_ui.rs` (+19). Навигационные типы (`enum PageSource` и соседи, 133 строки) сознательно оставлены в `main.rs` для SPLIT-SH3B — объявление enum обязано ехать вместе с `impl PageSource`. Три среза, по коммиту на тему; тела перенесены байт в байт (0 расхождений со сверкой против `HEAD`), правится только видимость. Новое для дорожки: cfg у реэкспорта в корне обязан повторять cfg исходного item'а, иначе сборка без фичи `v8` или без тестов ловит неиспользованный импорт. main.rs 17 638 → 15 381, тестов 1624 → 1624, `dump_golden.py` 12/12 без дельт. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
       {
        "id": "SPLIT-SH3B",
        "title": "SPLIT-SH3b: PageSource из main.rs",
        "status": "ready",
        "size": "S",
-       "note": "Головной фрагмент `crates/shell/src/main.rs`: `impl PageSource` (анкер ~3780) → новый `src/page_source.rs`. Второй из трёх мини-батчей SH-3. Осторожно с `PageSource::from_arg` — на нём висит [BUG-651](bugs/BUG-651-OPEN.md), но батч только переносит код, поведение править запрещено. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "Головной фрагмент `crates/shell/src/main.rs`: `impl PageSource` (анкер ~3780, после SPLIT-SH3A — ~2511) → новый `src/page_source.rs`. Забирать вместе с ним объявление `enum PageSource` и соседние навигационные типы `NavEntry`/`JsNavigateRequest`/`DomTouchedSummary` (анкер ~1397 после SH-3A, 133 строки): SPLIT-SH3A оставил их в `main.rs` именно под этот батч, чтобы тип и его реализация не разъехались по файлам. Второй из трёх мини-батчей SH-3. Осторожно с `PageSource::from_arg` — на нём висит [BUG-651](bugs/BUG-651-OPEN.md), но батч только переносит код, поведение править запрещено. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
       {
        "id": "SPLIT-SH3C",
