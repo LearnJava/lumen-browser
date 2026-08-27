@@ -7,11 +7,17 @@
 //! bodies are byte-identical to what `main.rs` held — only the module path and
 //! the visibility of methods called from outside their new home differ.
 
+mod ai_answer;
 mod automation;
 mod content_visibility;
+mod docking;
 mod hibernation;
 mod page_snapshot;
+mod page_views;
+mod palette;
+mod panel_data;
 mod scrolling;
 mod session;
 mod spell_menu;
 mod tabs_cmd;
+mod viewport;
