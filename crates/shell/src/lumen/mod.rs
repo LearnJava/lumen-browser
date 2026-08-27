@@ -10,12 +10,17 @@
 mod ai_answer;
 mod automation;
 mod content_visibility;
+mod cursor;
 mod docking;
+mod find_bar;
 mod hibernation;
+mod hint_mode;
 mod page_snapshot;
 mod page_views;
 mod palette;
 mod panel_data;
+mod panel_keys;
+mod printing;
 mod scrolling;
 mod session;
 mod spell_menu;
