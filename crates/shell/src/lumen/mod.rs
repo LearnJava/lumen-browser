@@ -9,12 +9,15 @@
 
 mod ai_answer;
 mod automation;
+mod bfcache;
 mod content_visibility;
 mod cursor;
 mod docking;
 mod find_bar;
 mod hibernation;
 mod hint_mode;
+mod nav_state;
+mod navigation;
 mod page_snapshot;
 mod page_views;
 mod palette;
