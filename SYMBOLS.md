@@ -4463,20 +4463,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/input/humanlike.rs:267` **fn** `type_text` — Type `text` with Gaussian-distributed inter-keystroke delays
 `crates/shell/src/input/humanlike.rs:287` **fn** `scroll_to` — Scroll to `(x, y)` immediately (no path animation for scrolls)
 `crates/shell/src/input/humanlike.rs:295` **fn** `set_cursor_position` — Override the assumed cursor starting position without moving it
-`crates/shell/src/input/mod.rs:42` **enum** `InputCommand` — A single injected input command
-`crates/shell/src/input/mod.rs:109` **struct** `InputSender` — Sender side of the input injection channel
-`crates/shell/src/input/mod.rs:114` **fn** `click` — Send a synthetic left-click at CSS-pixel coordinates `(x, y)`
-`crates/shell/src/input/mod.rs:120` **fn** `mouse_move` — Send a synthetic mouse-move event to CSS-pixel coordinates `(x, y)`
-`crates/shell/src/input/mod.rs:126` **fn** `type_text` — Send a synthetic text-typing command
-`crates/shell/src/input/mod.rs:132` **fn** `scroll` — Send a synthetic scroll command to position `(x, y)` in CSS pixels
-`crates/shell/src/input/mod.rs:142` **fn** `key_down` — Press and release a special key identified by its W3C `KeyboardEvent.code`
-`crates/shell/src/input/mod.rs:148` **fn** `enter` — Press Enter in the focused element (submits forms, confirms dialogs)
-`crates/shell/src/input/mod.rs:154` **fn** `backspace` — Press Backspace in the focused element (deletes character before cursor)
-`crates/shell/src/input/mod.rs:160` **fn** `tab` — Press Tab (move focus to the next focusable element)
-`crates/shell/src/input/mod.rs:166` **fn** `escape` — Press Escape (dismiss dialogs, close menus, blur focused element)
-`crates/shell/src/input/mod.rs:174` **struct** `InputReceiver` — Receiver side of the input injection channel
-`crates/shell/src/input/mod.rs:178` **fn** `drain` — Non-blocking drain: returns all pending commands without blocking
-`crates/shell/src/input/mod.rs:187` **fn** `channel` — Create a new input injection channel
+`crates/shell/src/input/mod.rs:43` **enum** `InputCommand` — A single injected input command
+`crates/shell/src/input/mod.rs:110` **struct** `InputSender` — Sender side of the input injection channel
+`crates/shell/src/input/mod.rs:115` **fn** `click` — Send a synthetic left-click at CSS-pixel coordinates `(x, y)`
+`crates/shell/src/input/mod.rs:121` **fn** `mouse_move` — Send a synthetic mouse-move event to CSS-pixel coordinates `(x, y)`
+`crates/shell/src/input/mod.rs:127` **fn** `type_text` — Send a synthetic text-typing command
+`crates/shell/src/input/mod.rs:133` **fn** `scroll` — Send a synthetic scroll command to position `(x, y)` in CSS pixels
+`crates/shell/src/input/mod.rs:143` **fn** `key_down` — Press and release a special key identified by its W3C `KeyboardEvent.code`
+`crates/shell/src/input/mod.rs:149` **fn** `enter` — Press Enter in the focused element (submits forms, confirms dialogs)
+`crates/shell/src/input/mod.rs:155` **fn** `backspace` — Press Backspace in the focused element (deletes character before cursor)
+`crates/shell/src/input/mod.rs:161` **fn** `tab` — Press Tab (move focus to the next focusable element)
+`crates/shell/src/input/mod.rs:167` **fn** `escape` — Press Escape (dismiss dialogs, close menus, blur focused element)
+`crates/shell/src/input/mod.rs:175` **struct** `InputReceiver` — Receiver side of the input injection channel
+`crates/shell/src/input/mod.rs:179` **fn** `drain` — Non-blocking drain: returns all pending commands without blocking
+`crates/shell/src/input/mod.rs:188` **fn** `channel` — Create a new input injection channel
 `crates/shell/src/input/vim.rs:41` **enum** `VimState` — Which sub-mode the Vim keybinding layer is currently in
 `crates/shell/src/input/vim.rs:61` **enum** `VimAction` — Decoded action that the caller should execute in response to a keypress
 `crates/shell/src/input/vim.rs:106` **struct** `VimMode` — Vim-mode state machine

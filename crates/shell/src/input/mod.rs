@@ -26,6 +26,7 @@
 pub mod dnd;
 pub mod gesture;
 pub mod humanlike;
+pub mod keybindings;
 pub mod native;
 pub mod vim;
 pub mod winit_events;
