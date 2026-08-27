@@ -4588,13 +4588,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/command_palette.rs:358` **fn** `fuzzy_score` — Score `haystack` against `needle` as a case-insensitive subsequence match
 `crates/shell/src/panels/command_palette.rs:408` **enum** `PaletteHit` — Result of a click inside the modal palette
 `crates/shell/src/panels/command_palette.rs:432` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the modal palette in a
-`crates/shell/src/panels/doc_pip_os_window.rs:32` **fn** `build_docpip_content` — Build the opaque background fill for the floating Document PiP window
-`crates/shell/src/panels/doc_pip_os_window.rs:48` **enum** `DocPipAction` — What the shell should do after feeding a request into [`DocPipController`]
-`crates/shell/src/panels/doc_pip_os_window.rs:69` **struct** `DocPipController` — Tracks whether the OS Document PiP window is currently open
-`crates/shell/src/panels/doc_pip_os_window.rs:75` **fn** `new` — Create an idle controller with no open window
-`crates/shell/src/panels/doc_pip_os_window.rs:81` **fn** `is_open` — `true` while the OS Document PiP window should be shown
-`crates/shell/src/panels/doc_pip_os_window.rs:86` **fn** `on_open` — Handle `_lumen_docpip_request_window(width, height)`
-`crates/shell/src/panels/doc_pip_os_window.rs:95` **fn** `on_close` — Handle `_lumen_docpip_close()` or an OS close button
+`crates/shell/src/panels/doc_pip_os_window.rs:54` **fn** `build_docpip_content` — Build the opaque background fill for the floating Document PiP window
+`crates/shell/src/panels/doc_pip_os_window.rs:70` **enum** `DocPipAction` — What the shell should do after feeding a request into [`DocPipController`]
+`crates/shell/src/panels/doc_pip_os_window.rs:91` **struct** `DocPipController` — Tracks whether the OS Document PiP window is currently open
+`crates/shell/src/panels/doc_pip_os_window.rs:97` **fn** `new` — Create an idle controller with no open window
+`crates/shell/src/panels/doc_pip_os_window.rs:103` **fn** `is_open` — `true` while the OS Document PiP window should be shown
+`crates/shell/src/panels/doc_pip_os_window.rs:108` **fn** `on_open` — Handle `_lumen_docpip_request_window(width, height)`
+`crates/shell/src/panels/doc_pip_os_window.rs:117` **fn** `on_close` — Handle `_lumen_docpip_close()` or an OS close button
 `crates/shell/src/panels/focus_panel.rs:74` **struct** `PomodoroTimer` — Wall-clock-driven countdown timer
 `crates/shell/src/panels/focus_panel.rs:90` **fn** `new` — Create a running timer of `duration_min` minutes with zero elapsed time
 `crates/shell/src/panels/focus_panel.rs:102` **fn** `tick` — Advance the timer to wall-clock `now_ms`.  Adds the delta since the last
@@ -4644,18 +4644,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/permission_panel.rs:167` **fn** `set_permission` — Set the state for `kind` at the current origin directly (CC-9's
 `crates/shell/src/panels/permission_panel.rs:185` **enum** `PermissionHit` — Result of a click inside the permission panel
 `crates/shell/src/panels/permission_panel.rs:198` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the permission panel
-`crates/shell/src/panels/pip_os_window.rs:53` **struct** `PipOsConfig` — Geometry for the floating PiP window, in logical (CSS) pixels
-`crates/shell/src/panels/pip_os_window.rs:76` **fn** `sized` — A window sized to `width`×`height` (e.g. `documentPictureInPicture
-`crates/shell/src/panels/pip_os_window.rs:98` **fn** `pip_window_attributes` — Build the winit attributes for the floating PiP window
-`crates/shell/src/panels/pip_os_window.rs:127` **fn** `build_pip_content` — Build the display list shown in the floating PiP window for a `<video>`
-`crates/shell/src/panels/pip_os_window.rs:160` **fn** `physical_to_logical` — Convert a window's physical inner size to CSS logical pixels using its DPI
-`crates/shell/src/panels/pip_os_window.rs:188` **enum** `PipAction` — What the shell should do after feeding a request into [`PipController`]
-`crates/shell/src/panels/pip_os_window.rs:203` **struct** `PipController` — Tracks which `<video>` (by node id) currently owns the OS PiP window
-`crates/shell/src/panels/pip_os_window.rs:210` **fn** `new` — Create an idle controller with no active PiP window
-`crates/shell/src/panels/pip_os_window.rs:219` **fn** `active` — Node id of the element currently in OS PiP, or `None`
-`crates/shell/src/panels/pip_os_window.rs:225` **fn** `is_active` — `true` while an OS PiP window should be shown
-`crates/shell/src/panels/pip_os_window.rs:230` **fn** `on_enter` — Handle `_lumen_pip_enter(nid)`: open or re-target the floating window
-`crates/shell/src/panels/pip_os_window.rs:239` **fn** `on_exit` — Handle `_lumen_pip_exit(_)` or an OS close button: tear the window down
+`crates/shell/src/panels/pip_os_window.rs:73` **struct** `PipOsConfig` — Geometry for the floating PiP window, in logical (CSS) pixels
+`crates/shell/src/panels/pip_os_window.rs:96` **fn** `sized` — A window sized to `width`×`height` (e.g. `documentPictureInPicture
+`crates/shell/src/panels/pip_os_window.rs:118` **fn** `pip_window_attributes` — Build the winit attributes for the floating PiP window
+`crates/shell/src/panels/pip_os_window.rs:147` **fn** `build_pip_content` — Build the display list shown in the floating PiP window for a `<video>`
+`crates/shell/src/panels/pip_os_window.rs:180` **fn** `physical_to_logical` — Convert a window's physical inner size to CSS logical pixels using its DPI
+`crates/shell/src/panels/pip_os_window.rs:208` **enum** `PipAction` — What the shell should do after feeding a request into [`PipController`]
+`crates/shell/src/panels/pip_os_window.rs:223` **struct** `PipController` — Tracks which `<video>` (by node id) currently owns the OS PiP window
+`crates/shell/src/panels/pip_os_window.rs:230` **fn** `new` — Create an idle controller with no active PiP window
+`crates/shell/src/panels/pip_os_window.rs:239` **fn** `active` — Node id of the element currently in OS PiP, or `None`
+`crates/shell/src/panels/pip_os_window.rs:245` **fn** `is_active` — `true` while an OS PiP window should be shown
+`crates/shell/src/panels/pip_os_window.rs:250` **fn** `on_enter` — Handle `_lumen_pip_enter(nid)`: open or re-target the floating window
+`crates/shell/src/panels/pip_os_window.rs:259` **fn** `on_exit` — Handle `_lumen_pip_exit(_)` or an OS close button: tear the window down
 `crates/shell/src/panels/pip_window.rs:66` **struct** `PipWindow` — Picture-in-picture window state
 `crates/shell/src/panels/pip_window.rs:89` **fn** `new` — Create an inactive PiP window positioned at the origin (re-anchored to the
 `crates/shell/src/panels/pip_window.rs:103` **fn** `open` — Open the PiP card for a `<video>` source, anchored to the bottom-right of
