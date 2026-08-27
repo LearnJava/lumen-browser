@@ -1,0 +1,11 @@
+//! The `Lumen` application struct and its methods, split out of `main.rs`
+//! (SPLIT-SH6).
+//!
+//! `main.rs` used to carry one ~7 500-line `impl Lumen` block covering every
+//! theme of the shell at once. The submodules here hold that block cut by
+//! theme; each is a plain `impl Lumen { … }` next to `use crate::*;`, so the
+//! bodies are byte-identical to what `main.rs` held — only the module path and
+//! the visibility of methods called from outside their new home differ.
+
+mod automation;
+mod tabs_cmd;
