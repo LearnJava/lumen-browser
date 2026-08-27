@@ -1,8 +1,11 @@
 //! Escaping a Rust string for embedding in a JS string literal.
 //!
 //! Used by the shell's `eval_js` call sites that interpolate a value into a
-//! single-quoted literal (BUG-436). Moved out of `main.rs` by the SPLIT track
-//! (batch SH-5); behaviour and signatures are unchanged.
+//! single-quoted literal (BUG-436); [`js_string_literal`] is the same job for a
+//! call site that wants the quotes emitted too (double-quoted, `v8` only).
+//!
+//! Moved out of `main.rs` by the SPLIT track (batches SH-5, SH-3d); behaviour
+//! and signatures are unchanged.
 
 /// Escape a single character for safe embedding in a JS string literal.
 ///
@@ -33,4 +36,23 @@ pub(crate) fn escape_js_string_char(ch: char) -> String {
 /// hand a form control's new value to `_lumen_set_field_value` (BUG-436).
 pub(crate) fn escape_js_string(s: &str) -> String {
     s.chars().map(escape_js_string_char).collect()
+}
+
+/// Encode `s` as a JS string literal (double-quoted, with escaping).
+/// Used when building JS snippets from Rust strings (e.g., `_lumen_init_lazy_images`).
+#[cfg(feature = "v8")]
+pub(crate) fn js_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
