@@ -573,3 +573,256 @@ pub(crate) fn parse_cli(args: &[String]) -> Result<CliMode, String> {
         _ => Err(format!("СЃР»РёС€РєРѕРј РјРЅРѕРіРѕ Р°СЂРіСѓРјРµРЅС‚РѕРІ: {}", args.len())),
     }
 }
+
+/// Parses the command line and dispatches to the chosen `CliMode`.
+///
+/// Split out of `main` so that every `return` inside it вЂ” including the early
+/// argument-error paths вЂ” is followed by `diag_stderr::flush`.
+pub(crate) fn run_cli() -> ExitCode {
+    // Opt-in visual profiler (В§14.3, BUG-284): `Client::start()` spawns the
+    // background thread that connects to (or is discovered by) a running
+    // Tracy GUI app вЂ” https://github.com/wolfpld/tracy. Must be started
+    // before any `lumen_core::tracy_zone!` spans fire, so this is the very
+    // first thing main() does. No-op unless built with `--features tracy`.
+    #[cfg(feature = "tracy")]
+    let _tracy_client = tracy_client::Client::start();
+    #[cfg(feature = "tracy")]
+    eprintln!("[tracy] РїСЂРѕС„РёР»РёСЂРѕРІС‰РёРє Р°РєС‚РёРІРµРЅ вЂ” РѕС‚РєСЂРѕР№ Tracy GUI, С‡С‚РѕР±С‹ СѓРІРёРґРµС‚СЊ С‚Р°Р№РјР»Р°Р№РЅ");
+
+    // Anchor for launch->first-frame timing (В§4 score table) вЂ” before any work.
+    bench_frames::mark_process_start();
+    // PERF-12: fixed-startup stopwatch. Must precede the config load and the
+    // argument parse below, which are the phases it measures; it also switches
+    // the tracer on for `--trace-nav`, so that startup lands on the timeline
+    // instead of ahead of its origin.
+    let startup = startup_trace::Startup::begin();
+    let cfg_phase = startup.phase("config-load");
+    // Load the fingerprint profile (9F.1) once, before any network or JS setup.
+    // Absent config в†’ engine defaults, so behaviour is unchanged out of the box.
+    let mut startup_profile = config::load().unwrap_or_default();
+    // BUG-295: automation sessions (BiDi / MCP) use an in-memory HTTP cache, never
+    // the persistent on-disk one. The disk cache is keyed by URL and survives across
+    // runs, so on the fixed ports an automation server reuses (e.g. wptserve's
+    // 8000/8001) a resource fetched in one run is replayed stale in the next вЂ” even
+    // after the served file changed on disk. That silently broke
+    // `tests/wpt/run_smoke.py`: the first run (before the wptrunner `env_options` fix
+    // served the right file) cached the wrong `testharnessreport.js` with its
+    // `Cache-Control: max-age=3600`, and every later run kept serving that stale copy
+    // from disk, setting the wrong result global forever, so the harness timed out no
+    // matter what else was fixed. In-memory cache = fresh per process, deterministic.
+    // This must be decided BEFORE `init_global` вЂ” the profile `OnceLock` is set-once,
+    // so a later `init_global` is a no-op вЂ” hence a raw arg scan here rather than
+    // reusing the `extract_*` parsers below.
+    if std::env::args()
+        .any(|a| matches!(a.as_str(), "--bidi-port" | "--mcp-live-port" | "--mcp" | "--mcp-port"))
+    {
+        startup_profile.no_persistent_state = true;
+    }
+    config::init_global(startup_profile);
+    drop(cfg_phase);
+
+    let arg_phase = startup.phase("arg-parse");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (devtools_port, rest_args) = match extract_devtools_port(&args) {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("РћС€РёР±РєР° Р°СЂРіСѓРјРµРЅС‚РѕРІ: {err}");
+            print_usage();
+            return ExitCode::FAILURE;
+        }
+    };
+    let (bidi_port, rest_args) = match extract_bidi_port(&rest_args) {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("РћС€РёР±РєР° Р°СЂРіСѓРјРµРЅС‚РѕРІ: {err}");
+            print_usage();
+            return ExitCode::FAILURE;
+        }
+    };
+    let (mcp_live_port, rest_args) = match extract_mcp_live_port(&rest_args) {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("РћС€РёР±РєР° Р°СЂРіСѓРјРµРЅС‚РѕРІ: {err}");
+            print_usage();
+            return ExitCode::FAILURE;
+        }
+    };
+    let (import_session, rest_args) = match extract_import_session(&rest_args) {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("РћС€РёР±РєР° --import-session: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (no_scrollbar, rest_args) = extract_no_scrollbar(&rest_args);
+    let (maximized, rest_args) = extract_maximized(&rest_args);
+    let (click_log_flag, rest_args) = extract_click_log(&rest_args);
+    click_log::init(click_log_flag);
+    // PERF-6: session health journal. Turned on by `--activity-log`/`--click-log`
+    // (shared surface), the dedicated `--health-log`, or `LUMEN_HEALTH_LOG=1`.
+    let (health_log_flag, rest_args) = extract_health_log(&rest_args);
+    health_log::init(click_log_flag || health_log_flag);
+    let (det_cfg, rest_args) = deterministic::extract_deterministic(&rest_args);
+    let (viewport_override, rest_args) = extract_viewport_override(&rest_args);
+    let (pdf_output, rest_args) = extract_print_to_pdf(&rest_args);
+    let (screenshot_output, rest_args) = extract_screenshot(&rest_args);
+    let (trace_nav_output, rest_args) = extract_trace_nav(&rest_args);
+    let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
+    let (use_network_service, rest_args) = extract_network_service(&rest_args);
+    let (ipc_server, rest_args) = extract_ipc_server(&rest_args);
+    let (proxy, rest_args) = match extract_proxy(&rest_args) {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("РћС€РёР±РєР° --proxy: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Р•СЃР»Рё РїСЂРѕРєСЃРё РїРµСЂРµРґР°РЅ РІ РєРѕРјР°РЅРґРЅРѕР№ СЃС‚СЂРѕРєРµ, РїРµСЂРµРѕРїСЂРµРґРµР»РёС‚СЊ РєРѕРЅС„РёРі.
+    if let Some(proxy_str) = proxy {
+        let mut cfg = config::global().clone();
+        cfg.proxy = Some(proxy_str);
+        config::init_global(cfg);
+    }
+
+    let (tor_port, rest_args) = extract_tor_mode(&rest_args);
+
+    // --tor: РїРµСЂРµРєР»СЋС‡РёС‚СЊ РЅР° РїСЂРѕС„РёР»СЊ TorBrowser + SOCKS5 + Р±РµР· РїРµСЂСЃРёСЃС‚РµРЅС‚РЅРѕРіРѕ С…СЂР°РЅРёР»РёС‰Р°.
+    if let Some(port) = tor_port {
+        if !check_tor_connectivity(port) {
+            eprintln!(
+                "lumen --tor: Tor-РґРµРјРѕРЅ РЅРµРґРѕСЃС‚СѓРїРµРЅ РЅР° 127.0.0.1:{port} вЂ” \
+                 Р·Р°РїСѓСЃС‚РёС‚Рµ Tor РїРµСЂРµРґ Р·Р°РїСѓСЃРєРѕРј Lumen"
+            );
+            return ExitCode::FAILURE;
+        }
+        let mut cfg = config::global().clone();
+        cfg.http_profile = lumen_network::HttpProfile::TorBrowser;
+        cfg.socks5_proxy = Some(format!("socks5://127.0.0.1:{port}"));
+        cfg.no_persistent_state = true;
+        config::init_global(cfg);
+        eprintln!(
+            "lumen: Tor-СЂРµР¶РёРј Р°РєС‚РёРІРёСЂРѕРІР°РЅ (socks5://127.0.0.1:{port}, \
+             РїСЂРѕС„РёР»СЊ TorBrowser, Р±РµР· РїРµСЂСЃРёСЃС‚РµРЅС‚РЅРѕРіРѕ С…СЂР°РЅРёР»РёС‰Р°)"
+        );
+    }
+
+    let cli = if let Some(output) = pdf_output {
+        let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
+        CliMode::PrintToPdf { source, output }
+    } else if let Some(output) = screenshot_output {
+        let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
+        CliMode::Screenshot { source, output }
+    } else if let Some(output) = trace_nav_output {
+        let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
+        CliMode::TraceNav { source, output }
+    } else if let Some(port) = ipc_server {
+        CliMode::IpcServer { port }
+    } else if let Some(mcp) = mcp_mode {
+        CliMode::Mcp(mcp)
+    } else {
+        match parse_cli(&rest_args) {
+            Ok(m) => m,
+            Err(err) => {
+                eprintln!("РћС€РёР±РєР° Р°СЂРіСѓРјРµРЅС‚РѕРІ: {err}");
+                print_usage();
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+
+    drop(arg_phase);
+    let svc_phase = startup.phase("services-init");
+
+    if let Some(port) = devtools_port
+        && let Err(e) = DevToolsServer::spawn(port)
+    {
+        eprintln!("РћС€РёР±РєР° Р·Р°РїСѓСЃРєР° DevTools РЅР° РїРѕСЂС‚Сѓ {port}: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    // SDC-2: automation channel created here (not inside run_window_mode) so
+    // BiDi/MCP front-ends spawned below get a handle that stays valid once the
+    // live window's event loop starts draining `automation_rx`. Without an
+    // open window (e.g. --dump/--screenshot/--mcp combined with --bidi-port),
+    // the receiver is simply never drained and calls through the handle time out.
+    let (automation_cmd_tx, automation_rx) =
+        std::sync::mpsc::channel::<AutomationRequest>();
+    let automation_handle = AutomationHandle::new(automation_cmd_tx.clone());
+
+    if let Some(port) = bidi_port
+        && let Err(e) = bidi_spawn(port, automation_handle.clone())
+    {
+        eprintln!("РћС€РёР±РєР° Р·Р°РїСѓСЃРєР° BiDi РЅР° РїРѕСЂС‚Сѓ {port}: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    if let Some(port) = mcp_live_port
+        && let Err(e) = lumen_mcp::spawn_live(port, automation_handle.clone())
+    {
+        eprintln!("РћС€РёР±РєР° Р·Р°РїСѓСЃРєР° MCP (live) РЅР° РїРѕСЂС‚Сѓ {port}: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    let blocked_log = Arc::new(std::sync::Mutex::new(
+        panels::shields_panel::BlockedLog::default(),
+    ));
+    let network_log = Arc::new(std::sync::Mutex::new(
+        devtools::network_panel::NetworkLog::default(),
+    ));
+    // Sink chain: StdoutEventSink в†’ NetworkLogSink в†’ ResourceTimingSink в†’
+    // ShieldCountSink. Each wrapper forwards to its inner sink, so all four
+    // observe every event вЂ” the Resource Timing capture (BUG-839) is a tap, not
+    // a filter.
+    let event_sink: Arc<dyn EventSink> = Arc::new(panels::shields_panel::ShieldCountSink {
+        inner: Arc::new(resource_timing::ResourceTimingSink {
+            inner: Arc::new(devtools::network_panel::NetworkLogSink {
+                inner: Arc::new(StdoutEventSink),
+                log: Arc::clone(&network_log),
+            }),
+        }),
+        log: Arc::clone(&blocked_log),
+    });
+
+    // PH1-4: Р—Р°РїСѓСЃС‚РёС‚СЊ СЃРµС‚РµРІРѕР№ СЃРµСЂРІРёСЃ РєР°Рє РґРѕС‡РµСЂРЅРёР№ РїСЂРѕС†РµСЃСЃ (РµСЃР»Рё --network-service).
+    // РҐРµРЅРґР» Р¶РёРІС‘С‚ РґРѕ РєРѕРЅС†Р° main() вЂ” РїСЂРё РґСЂРѕРїРµ СѓР±РёРІР°РµС‚ РґРѕС‡РµСЂРЅРёР№ РїСЂРѕС†РµСЃСЃ.
+    // _transport С…СЂР°РЅРёС‚ Arc, С‡С‚РѕР±С‹ РЅРµ РґСЂРѕРїРЅСѓС‚СЊ IPC-СЃРѕРµРґРёРЅРµРЅРёРµ РґРѕ РєРѕРЅС†Р° СЃРµСЃСЃРёРё.
+    let (_network_svc, _transport) = if use_network_service {
+        match network_service::NetworkServiceHandle::spawn() {
+            Ok((handle, transport)) => {
+                eprintln!("lumen: СЃРµС‚РµРІРѕР№ СЃРµСЂРІРёСЃ Р·Р°РїСѓС‰РµРЅ (PH1-4, --network-service)");
+                (Some(handle), Some(transport))
+            }
+            Err(e) => {
+                eprintln!("lumen: РЅРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСѓСЃС‚РёС‚СЊ СЃРµС‚РµРІРѕР№ СЃРµСЂРІРёСЃ: {e}");
+                eprintln!("lumen: РїСЂРѕРґРѕР»Р¶Р°СЋ СЃРѕ РІСЃС‚СЂРѕРµРЅРЅС‹Рј HttpClient");
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
+
+    // --import-session РїРµСЂРµРѕРїСЂРµРґРµР»СЏРµС‚ РёСЃС‚РѕС‡РЅРёРє СЃС‚СЂР°РЅРёС†С‹ Рё РЅР°С‡Р°Р»СЊРЅС‹Р№ scroll.
+    let (cli, initial_scroll) = match import_session {
+        Some((session_source, scroll)) => (CliMode::OpenWindow(session_source), scroll),
+        None => (cli, (0.0_f32, 0.0_f32)),
+    };
+
+    drop(svc_phase);
+    startup.dispatch(cli.mode_name());
+
+    match cli {
+        CliMode::Dump { source, kind } => {
+            run_dump_mode(&source, kind, event_sink, viewport_override)
+        }
+        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, maximized, det_cfg, viewport_override, automation_handle, automation_cmd_tx, automation_rx, bidi_port.is_some() || mcp_live_port.is_some()),
+        CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
+        CliMode::Screenshot { source, output } => {
+            run_screenshot(&source, &output, event_sink, viewport_override)
+        }
+        CliMode::TraceNav { source, output } => run_trace_nav(&source, &output, event_sink),
+        CliMode::Mcp(mcp) => run_mcp_mode(mcp),
+        CliMode::IpcServer { port } => run_ipc_server(port, event_sink),
+    }
+}
