@@ -3,8 +3,14 @@
 //! Every `extract_*` here has the same contract: scan `args` for one flag, return
 //! its parsed value together with the remaining arguments, so `run_cli` can peel
 //! the flags off one at a time and treat whatever is left as the page source.
-//! Moved out of `main.rs` by the SPLIT track (batch SH-3a); behaviour and
-//! signatures are unchanged.
+//!
+//! The launch mode the peeled arguments add up to lives here too ([`CliMode`],
+//! [`McpMode`], [`DumpKind`] and [`parse_cli`], batch SH-3d): `parse_cli` reads
+//! the arguments `run_cli` has left over, so its grammar and the `extract_*`
+//! contract above are two halves of one answer.
+//!
+//! Moved out of `main.rs` by the SPLIT track (batches SH-3a, SH-3d); behaviour
+//! and signatures are unchanged.
 
 use crate::*;
 
@@ -453,4 +459,117 @@ pub(crate) fn check_tor_connectivity(port: u16) -> bool {
     use std::time::Duration;
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
     TcpStream::connect_timeout(&addr, Duration::from_secs(2)).is_ok()
+}
+
+/// Р РµР¶РёРј Р·Р°РїСѓСЃРєР° shell. Р РµС€Р°РµС‚СЃСЏ РЅР° РѕСЃРЅРѕРІРµ CLI-Р°СЂРіСѓРјРµРЅС‚РѕРІ РІ `parse_cli`.
+#[derive(Debug, Clone)]
+pub(crate) enum CliMode {
+    /// РћР±С‹С‡РЅРѕРµ РѕРєРЅРѕ вЂ” С‚РµРєСѓС‰РёР№ source РѕС‚РєСЂС‹РІР°РµС‚СЃСЏ РІ winit-РѕРєРЅРµ.
+    OpenWindow(PageSource),
+    /// Headless: pipeline РїСЂРѕРіРѕРЅСЏРµС‚СЃСЏ РґРѕ РЅСѓР¶РЅРѕР№ С„Р°Р·С‹, СЂРµР·СѓР»СЊС‚Р°С‚ РёРґС‘С‚ РІ stdout.
+    Dump { source: PageSource, kind: DumpKind },
+    /// Headless: СЃС‚СЂР°РЅРёС†Р° СЂРµРЅРґРµСЂРёС‚СЃСЏ РїРѕСЃС‚СЂР°РЅРёС‡РЅРѕ Рё СЃРѕС…СЂР°РЅСЏРµС‚СЃСЏ РєР°Рє PDF.
+    PrintToPdf { source: PageSource, output: std::path::PathBuf },
+    /// Headless: СЃС‚СЂР°РЅРёС†Р° СЂРµРЅРґРµСЂРёС‚СЃСЏ CPU-СЂР°СЃС‚РµСЂРёР·Р°С‚РѕСЂРѕРј Рё СЃРѕС…СЂР°РЅСЏРµС‚СЃСЏ РєР°Рє PNG.
+    Screenshot { source: PageSource, output: std::path::PathBuf },
+    /// Headless (PERF-1): РѕРґРЅР° РЅР°РІРёРіР°С†РёСЏ РїСЂРѕРіРѕРЅСЏРµС‚СЃСЏ С‡РµСЂРµР· С‚РѕС‚ Р¶Рµ CPU-РїСѓС‚СЊ, С‡С‚Рѕ Рё
+    /// `--screenshot`, РЅРѕ СЃ РІРєР»СЋС‡С‘РЅРЅС‹Рј С‚СЂРµР№СЃРµСЂРѕРј; С‚Р°Р№РјР»Р°Р№РЅ СЃРѕС…СЂР°РЅСЏРµС‚СЃСЏ РєР°Рє
+    /// Chrome-trace JSON РґР»СЏ Perfetto / `chrome://tracing`.
+    TraceNav { source: PageSource, output: std::path::PathBuf },
+    /// Headless: MCP-СЃРµСЂРІРµСЂ РґР»СЏ AI-Р°РіРµРЅС‚РѕРІ (Claude, Browser UseвЂ¦).
+    Mcp(McpMode),
+    /// Headless: IPC-СЃРµСЂРІРµСЂ С‚Р°Р±-РєРѕРјР°РЅРґ (TAB-5). РљРѕРЅС‚СЂРѕР»Р»РµСЂ РґСЂР°Р№РІРёС‚ РІРєР»Р°РґРєРё Рё
+    /// РїРѕР»СѓС‡Р°РµС‚ PNG-СЃРЅРёРјРєРё С‡РµСЂРµР· TCP. `Some(port)` вЂ” СЏРІРЅС‹Р№ РїРѕСЂС‚, `None` вЂ” OS.
+    IpcServer { port: Option<u16> },
+}
+
+impl CliMode {
+    /// Short stable label for this mode, used by the PERF-12 startup accounting
+    /// (`startup_trace::Startup::dispatch`) to name the point where fixed
+    /// startup ends and page work begins.
+    pub(crate) fn mode_name(&self) -> &'static str {
+        match self {
+            Self::OpenWindow(_) => "window",
+            Self::Dump { kind, .. } => match kind {
+                DumpKind::Source => "dump-source",
+                DumpKind::Layout => "dump-layout",
+                DumpKind::DisplayList => "dump-display-list",
+            },
+            Self::PrintToPdf { .. } => "print-to-pdf",
+            Self::Screenshot { .. } => "screenshot",
+            Self::TraceNav { .. } => "trace-nav",
+            Self::Mcp(_) => "mcp",
+            Self::IpcServer { .. } => "ipc-server",
+        }
+    }
+}
+
+/// РџР°СЂР°РјРµС‚СЂС‹ MCP-СЂРµР¶РёРјР°.
+#[derive(Debug, Clone)]
+pub(crate) struct McpMode {
+    /// РќР°С‡Р°Р»СЊРЅС‹Р№ URL (РµСЃР»Рё СѓРєР°Р·Р°РЅ).
+    pub(crate) url: Option<String>,
+    /// TCP-РїРѕСЂС‚ РґР»СЏ `--mcp-port N`. None в†’ stdio.
+    pub(crate) port: Option<u16>,
+}
+
+/// Р§С‚Рѕ РёРјРµРЅРЅРѕ РїРµС‡Р°С‚Р°С‚СЊ РІ dump-СЂРµР¶РёРјРµ.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum DumpKind {
+    /// Р”РµРєРѕРґРёСЂРѕРІР°РЅРЅС‹Р№ HTML РїРѕСЃР»Рµ `lumen_encoding::decode`.
+    Source,
+    /// `serialize_layout_tree` вЂ” РґРµС‚РµСЂРјРёРЅРёСЂРѕРІР°РЅРЅС‹Р№ С‚РµРєСЃС‚РѕРІС‹Р№ С„РѕСЂРјР°С‚ layout-РґРµСЂРµРІР°.
+    Layout,
+    /// `serialize_display_list` вЂ” С‚РµРєСЃС‚РѕРІС‹Р№ С„РѕСЂРјР°С‚ paint-РєРѕРјР°РЅРґ.
+    DisplayList,
+}
+
+impl DumpKind {
+    pub(crate) fn from_flag(s: &str) -> Option<Self> {
+        match s {
+            "--dump-source" => Some(DumpKind::Source),
+            "--dump-layout" => Some(DumpKind::Layout),
+            "--dump-display-list" => Some(DumpKind::DisplayList),
+            _ => None,
+        }
+    }
+}
+
+/// Р Р°Р·РѕР±СЂР°С‚СЊ Р°СЂРіСѓРјРµРЅС‚С‹ (Р±РµР· `argv[0]`) РІ СЂРµР¶РёРј Р·Р°РїСѓСЃРєР°.
+///
+/// Р“СЂР°РјРјР°С‚РёРєР°:
+/// - `[]`           в†’ OpenWindow(Empty)
+/// - `[arg]`        в†’ OpenWindow(from_arg(arg)) РµСЃР»Рё arg РЅРµ dump-С„Р»Р°Рі; РёРЅР°С‡Рµ РѕС€РёР±РєР°
+/// - `[flag, tgt]`  в†’ Dump РµСЃР»Рё flag вЂ” dump-С„Р»Р°Рі; РёРЅР°С‡Рµ РѕС€РёР±РєР°
+/// - `[вЂ¦]` (>2)     в†’ РѕС€РёР±РєР°
+///
+/// Dump-С„Р»Р°РіРё РїСЂРёРЅРёРјР°СЋС‚СЃСЏ С‚РѕР»СЊРєРѕ РІ РїРµСЂРІРѕР№ РїРѕР·РёС†РёРё вЂ” РёРЅР°С‡Рµ РїСЂРёС€Р»РѕСЃСЊ Р±С‹ РїР°СЂСЃРёС‚СЊ
+/// Р°СЂРіСѓРјРµРЅС‚С‹ РїСЂРѕРёР·РІРѕР»СЊРЅС‹Рј РїРѕСЂСЏРґРєРѕРј, С‡С‚Рѕ РЅРµ РЅСѓР¶РЅРѕ РґР»СЏ С‚РµРєСѓС‰РµРіРѕ СЃРєРѕСѓРїР°.
+pub(crate) fn parse_cli(args: &[String]) -> Result<CliMode, String> {
+    match args {
+        [] => Ok(CliMode::OpenWindow(PageSource::Empty)),
+        [arg] => {
+            if DumpKind::from_flag(arg).is_some() {
+                Err(format!("С„Р»Р°Рі {arg} С‚СЂРµР±СѓРµС‚ РїСѓС‚СЊ РёР»Рё URL"))
+            } else if arg.starts_with("--") {
+                Err(format!("РЅРµРёР·РІРµСЃС‚РЅС‹Р№ С„Р»Р°Рі: {arg}"))
+            } else {
+                Ok(CliMode::OpenWindow(PageSource::from_arg(Some(arg))))
+            }
+        }
+        [flag, target] => {
+            let kind = DumpKind::from_flag(flag)
+                .ok_or_else(|| format!("РЅРµРёР·РІРµСЃС‚РЅС‹Р№ С„Р»Р°Рі: {flag}"))?;
+            if target.starts_with("--") {
+                return Err(format!(
+                    "РѕР¶РёРґР°Р»СЃСЏ РїСѓС‚СЊ РёР»Рё URL РїРѕСЃР»Рµ {flag}, РїРѕР»СѓС‡РµРЅ С„Р»Р°Рі {target}"
+                ));
+            }
+            Ok(CliMode::Dump {
+                source: PageSource::from_arg(Some(target)),
+                kind,
+            })
+        }
+        _ => Err(format!("СЃР»РёС€РєРѕРј РјРЅРѕРіРѕ Р°СЂРіСѓРјРµРЅС‚РѕРІ: {}", args.len())),
+    }
 }
