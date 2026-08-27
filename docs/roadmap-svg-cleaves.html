@@ -5411,7 +5411,7 @@
       {
        "id": "SPLIT-SH6",
        "title": "SPLIT-SH6: ядро impl Lumen из main.rs",
-       "status": "blocked",
+       "status": "ready",
        "size": "L",
        "note": "Ядро `impl Lumen` в `crates/shell/src/main.rs`: от `impl Lumen` (анкер 7271 после SH-3b) до `fn winit_modifiers_state`, ~7 470 строк. Самый рискованный батч дорожки, стартовать только после SPLIT-SH2, SPLIT-SH3A, SPLIT-SH3B, SPLIT-SH3C, SPLIT-SH4, SPLIT-SH4B, SPLIT-SH5. Резать на подбатчи по темам методов — навигация, вкладки, команды IPC, session restore — в каталог `src/lumen/` с `mod.rs`. Цель батча: `main.rs` становится bootstrap'ом не длиннее 300 строк. Приём с SPLIT-SH1: блок `impl Lumen` в подмодуле рядом с `use crate::*;` собирается без правок тел, единственное неизбежное изменение — `fn` → `pub(crate) fn` у методов, которые зовут из `main.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
