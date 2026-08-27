@@ -303,3 +303,42 @@ impl Lumen {
         AutomationHandle::new(self.automation_cmd_tx.clone())
     }
 }
+
+/// Collect the concatenated text content of `id`'s subtree (SDC-2 `Query` support).
+pub(crate) fn collect_automation_text(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mut String) {
+    let node = doc.get(id);
+    if let NodeData::Text(s) = &node.data {
+        out.push_str(s);
+    }
+    for &child in &node.children {
+        collect_automation_text(doc, child, out);
+    }
+}
+
+/// Convert a `lumen_a11y::AXNode` into the driver's public `A11yNode` reply
+/// type (SDC-2 `A11yTree` support). Mirrors `lumen_driver`'s own private
+/// conversion in `session.rs`/`winit_session.rs` вЂ” kept local here since the
+/// shell has no dependency the other direction.
+pub(crate) fn automation_ax_node(ax: &lumen_a11y::AXNode) -> lumen_driver::A11yNode {
+    let state = lumen_driver::A11yState {
+        disabled: ax.state.disabled,
+        checked: ax.state.checked,
+        expanded: ax.state.expanded,
+        hidden: ax.state.hidden,
+        selected: ax.state.selected,
+        pressed: ax.state.pressed,
+        required: ax.state.required,
+        readonly: ax.state.readonly,
+        invalid: ax.state.invalid,
+        level: ax.state.level,
+    };
+    lumen_driver::A11yNode {
+        node_id: ax.node_id.index() as u32,
+        role: ax.role.as_str().to_owned(),
+        name: ax.name.clone(),
+        description: ax.description.clone(),
+        placeholder: ax.placeholder.clone(),
+        state,
+        children: ax.children.iter().map(automation_ax_node).collect(),
+    }
+}
