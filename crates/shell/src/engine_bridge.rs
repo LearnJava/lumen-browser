@@ -157,3 +157,74 @@ pub(crate) fn route_query_js<R: Send + 'static>(
         None => js.map(read),
     }
 }
+
+/// Whether the ADR-016 engine thread should be spawned.
+///
+/// **ADR-023 (default flip 2026-07-28): now enabled by default.** ADR-016's
+/// M0вЂ“M4.1 stages all landed behind `LUMEN_ENGINE_THREAD=1` and each one was
+/// accepted as byte-identical with the flag off, so the flag had become a
+/// finished-but-unused feature. Leaving it off kept every `relayout()` on the
+/// UI thread, which is what makes real sites hang on load: a page with N
+/// `@font-face` files pays N serialized full relayouts before its first frame
+/// (measured on lenta.ru вЂ” 9 fonts, ~300вЂ“700 ms each, first frame ~6.7 s в†’ ~3.6 s
+/// with the thread on; see `bugs/BUG-274-OPEN.md`, СЃСЂРµР· 2026-07-28).
+///
+/// Rollback (same flag-strategy idiom as ADR-018's V8 cutover and ADR-021's
+/// chrome flip): `LUMEN_NO_ENGINE_THREAD=1` вЂ” or `LUMEN_ENGINE_THREAD=0` for
+/// callers already setting the historical variable вЂ” restores the fully
+/// synchronous UI-thread behaviour.
+///
+/// Deliberately **not** tied to `--deterministic`: `graphic_tests/run.py`
+/// launches with `--deterministic --viewport 1024x720`, so forcing the thread
+/// off there would mean the pixel gate never exercises the shipped default.
+pub(crate) fn engine_thread_enabled() -> bool {
+    let opt_out = std::env::var("LUMEN_NO_ENGINE_THREAD").ok();
+    let legacy = std::env::var("LUMEN_ENGINE_THREAD").ok();
+    engine_thread_enabled_from(opt_out.as_deref(), legacy.as_deref())
+}
+
+/// Pure decision behind [`engine_thread_enabled`], split out so the precedence
+/// rules are unit-testable: reading the real environment from a test is
+/// process-global and races the rest of the (parallel) test binary.
+///
+/// `opt_out` is `LUMEN_NO_ENGINE_THREAD`, `legacy` is the historical
+/// `LUMEN_ENGINE_THREAD`. The opt-out wins over everything; otherwise only an
+/// explicit `LUMEN_ENGINE_THREAD=0` disables the thread. A leftover
+/// `LUMEN_ENGINE_THREAD=1` from before the ADR-023 flip keeps working and now
+/// simply agrees with the default.
+pub(crate) fn engine_thread_enabled_from(opt_out: Option<&str>, legacy: Option<&str>) -> bool {
+    if opt_out == Some("1") {
+        return false;
+    }
+    legacy != Some("0")
+}
+
+/// ADR-016 M2.2: РїРѕРґРЅРёРјР°РµС‚ РґРІРёР¶РєРѕРІС‹Р№ РїРѕС‚РѕРє, РµСЃР»Рё РѕРЅ РЅРµ РѕС‚РєР»СЋС‡С‘РЅ СЏРІРЅРѕ
+/// ([`engine_thread_enabled`] вЂ” СЃ ADR-023 РІРєР»СЋС‡С‘РЅ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ). Р’
+/// M2.2 С‡РµСЂРµР· РїРѕС‚РѕРє РјР°СЂС€СЂСѓС‚РёР·РёСЂСѓРµС‚СЃСЏ off-thread layout РґР»СЏ async-С‚СЂРёРіРіРµСЂРѕРІ
+/// (РїРѕРєР° вЂ” debounce-Р·СѓРј): [`Lumen::submit_relayout_job`] С€Р»С‘С‚ Р·Р°РґР°РЅРёРµ, РїРѕС‚РѕРє
+/// СЃС‡РёС‚Р°РµС‚ [`EngineCommit`] Рё РєР»Р°РґС‘С‚ РІ latest-wins СЃР»РѕС‚, РѕС‚РєСѓРґР° РµРіРѕ Р·Р°Р±РёСЂР°РµС‚
+/// [`Lumen::poll_engine_commit`]. РџСЂРё СЃР±РѕРµ СЃС‚Р°СЂС‚Р° РїРѕС‚РѕРєР° Р»РѕРіРёСЂСѓРµРј Рё РѕС‚РєР°С‚С‹РІР°РµРјСЃСЏ
+/// РЅР° `None` (РєР°Рє РѕР±С‹С‡РЅРѕ, Р±РµР· РґРІРёР¶РєРѕРІРѕРіРѕ РїРѕС‚РѕРєР° вЂ” СЃРёРЅС…СЂРѕРЅРЅС‹Р№ `relayout()`).
+pub(crate) fn spawn_engine_thread_if_enabled()
+-> Option<engine_thread::EngineThread<EngineCommit, EngineJsState>> {
+    if !engine_thread_enabled() {
+        return None;
+    }
+    // ADR-016 M2.2c-2b: РїРѕС‚РѕРє РІР»Р°РґРµРµС‚ `EngineJsState` (Р±СѓРґСѓС‰РµРµ СЃРёРґРµРЅСЊРµ `Document`
+    // + `js_ctx`); СЃС‚Р°СЂС‚СѓРµС‚ РїСѓСЃС‚С‹Рј (`EngineJsState::default()` С‡РµСЂРµР· `spawn()`),
+    // Р·Р°РїРѕР»РЅСЏРµС‚СЃСЏ `sync_engine_js_state` РїСЂРё РїРµСЂРІРѕР№ Р·Р°РіСЂСѓР·РєРµ СЃС‚СЂР°РЅРёС†С‹.
+    match engine_thread::EngineThread::<EngineCommit, EngineJsState>::spawn() {
+        Ok(engine) => {
+            eprintln!(
+                "[engine-thread] Р·Р°РїСѓС‰РµРЅ (ADR-023 РґРµС„РѕР»С‚, M2.2 off-thread layout; \
+                 РѕС‚РєР°С‚ вЂ” LUMEN_NO_ENGINE_THREAD=1)"
+            );
+            Some(engine)
+        }
+        Err(e) => {
+            eprintln!("[engine-thread] РЅРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСѓСЃС‚РёС‚СЊ: {e}; РїСЂРѕРґРѕР»Р¶Р°РµРј Р±РµР· РЅРµРіРѕ");
+            None
+        }
+    }
+}

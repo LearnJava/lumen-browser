@@ -452,3 +452,40 @@ pub(crate) fn decode_image(
 // headless-РґСЂР°Р№РІРµСЂСѓ РЅСѓР¶РЅР° С‚Р° Р¶Рµ Р»РѕРіРёРєР° Р·Р°РїРѕР»РЅРµРЅРёСЏ СЃР»РѕС‚РѕРІ `width`/`height`, Р°
 // РґСѓР±Р»РёСЂРѕРІР°С‚СЊ РµС‘ (СЃРїРµС†-РїСЂР°РІРёР»Рѕ BUG-269 РїСЂРѕ aspect ratio) РѕР·РЅР°С‡Р°Р»Рѕ Р±С‹ РґРІР°
 // СЂР°СЃС…РѕРґСЏС‰РёС…СЃСЏ РЅР°Р±РѕСЂР° СЂР°Р·РјРµСЂРѕРІ Сѓ РѕРєРѕРЅРЅРѕРіРѕ Рё РѕС„Р»Р°Р№РЅ-РїСѓС‚РµР№.
+
+/// PH3-19: РґРµСЃРєСЂРёРїС‚РѕСЂ @font-face url()-РёСЃС‚РѕС‡РЅРёРєР°, РµС‰С‘ РЅРµ Р·Р°РіСЂСѓР¶РµРЅРЅРѕРіРѕ РІ РїР°РјСЏС‚СЊ.
+/// РҐСЂР°РЅРёС‚СЃСЏ РІ `ParsedPage` / `LoadedPage`; `apply_loaded_page` СЃРїР°РІРЅРёС‚
+/// С„РѕРЅРѕРІС‹Р№ РїРѕС‚РѕРє fetch+decode РґР»СЏ РєР°Р¶РґРѕРіРѕ, СЂРµР·СѓР»СЊС‚Р°С‚ вЂ” `LoadEvent::FontLoaded`.
+pub(crate) struct PendingWebFont {
+    /// CSS `font-family` РґРµСЃРєСЂРёРїС‚РѕСЂ.
+    pub(crate) family: String,
+    /// Р Р°Р·СЂРµС€С‘РЅРЅС‹Р№ font-weight (400 = normal, 700 = bold).
+    pub(crate) weight: u16,
+    /// Р Р°Р·СЂРµС€С‘РЅРЅС‹Р№ font-style.
+    pub(crate) style: lumen_core::FontStyle,
+    /// РЎС‹СЂР°СЏ СЃС‚СЂРѕРєР° `unicode-range` РґРµСЃРєСЂРёРїС‚РѕСЂР° (None в†’ РїРѕРєСЂС‹РІР°РµС‚ РІСЃРµ РєРѕРґРїРѕРёРЅС‚С‹).
+    pub(crate) unicode_range_str: Option<String>,
+    /// URL РґР»СЏ fetch (@font-face `src: url(...)`).
+    pub(crate) url: String,
+}
+
+/// PH3-19: web-С€СЂРёС„С‚, СѓР¶Рµ Р·Р°РіСЂСѓР¶РµРЅРЅС‹Р№ Рё РґРµРєРѕРґРёСЂРѕРІР°РЅРЅС‹Р№ РїРѕСЃР»Рµ `FontLoaded`.
+/// РЎРїРёСЃРѕРє С…СЂР°РЅРёС‚СЃСЏ РІ `Lumen::web_fonts` Рё РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ РїРµСЂРµСЃР±РѕСЂРєРё
+/// `MultiFontMeasurer` РїСЂРё РєР°Р¶РґРѕРј relayout вЂ” РёРЅР°С‡Рµ resize/scroll-reflow
+/// С‚РµСЂСЏРµС‚ web-РјРµС‚СЂРёРєРё Рё РѕС‚РєР°С‚С‹РІР°РµС‚СЃСЏ Рє Inter.
+// weight/style С…СЂР°РЅСЏС‚СЃСЏ РґР»СЏ Р±СѓРґСѓС‰РµРіРѕ CSS font-matching (РїРѕ weight/style РґРµСЃРєСЂРёРїС‚РѕСЂР°Рј @font-face).
+// Clone: ADR-016 M2.2 вЂ” off-thread relayout Р·Р°С…РІР°С‚С‹РІР°РµС‚ РІР»Р°РґРµСЋС‰РёР№ СЃРЅРёРјРѕРє web-С€СЂРёС„С‚РѕРІ.
+#[derive(Clone)]
+#[allow(dead_code)]
+pub(crate) struct LoadedWebFont {
+    /// CSS `font-family` РґРµСЃРєСЂРёРїС‚РѕСЂ.
+    pub(crate) family: String,
+    /// Р Р°Р·СЂРµС€С‘РЅРЅС‹Р№ font-weight.
+    pub(crate) weight: u16,
+    /// Р Р°Р·СЂРµС€С‘РЅРЅС‹Р№ font-style.
+    pub(crate) style: lumen_core::FontStyle,
+    /// Р”РёР°РїР°Р·РѕРЅС‹ Unicode РёР· @font-face `unicode-range` РґРµСЃРєСЂРёРїС‚РѕСЂР°.
+    pub(crate) unicode_range: Vec<lumen_font::UnicodeRange>,
+    /// Р”РµРєРѕРґРёСЂРѕРІР°РЅРЅС‹Рµ sfnt-Р±Р°Р№С‚С‹ (TrueType / OTF РїРѕСЃР»Рµ WOFF/WOFF2-СЂР°СЃРїР°РєРѕРІРєРё).
+    pub(crate) bytes: Vec<u8>,
+}

@@ -27,6 +27,7 @@
 
 mod adblock;
 mod address_bar;
+mod assets;
 mod app;
 mod animation_scheduler;
 mod automation_server;
@@ -41,6 +42,8 @@ mod diag_stderr;
 mod doc_extract;
 mod display_list_metrics;
 mod dump_mode;
+mod event_sink;
+mod frame_pacing;
 mod js_escape;
 mod layout_metrics;
 mod layout_walk;
@@ -57,7 +60,11 @@ mod window_metrics;
 // double as a re-export for the `use crate::*;` of every submodule — no call
 // site elsewhere in the crate had to change when SH-3a moved the bodies out.
 use automation_server::{run_ipc_server, run_mcp_mode};
+use assets::{INTER_FONT, SPELL_DICTS};
+use event_sink::StdoutEventSink;
+use frame_pacing::{RAF_MIN_INTERVAL_MS, fast_scroll_degrade_disabled, page_offset_fast_disabled};
 use lumen::Lumen;
+use page_load::{LoadEvent, STREAM_PAINT_INTERVAL_MS};
 use view_transition::{ViewTransitionEvent, ViewTransitionState};
 use cli_args::*;
 use dump_mode::{
@@ -68,7 +75,8 @@ use layout_metrics::{count_layout_boxes, count_rendered_units};
 use nav_history::{JsNavigateRequest, NavEntry, PendingIntercepted};
 use page_source::{PageSource, RawPage, page_source_for_automation_url, resolve_js_navigation};
 use subresources::{
-    fetch_and_decode_background_images, fetch_vtt_text, load_font_faces, rule_to_font_face,
+    LoadedWebFont, PendingWebFont, fetch_and_decode_background_images, fetch_vtt_text,
+    load_font_faces, rule_to_font_face,
 };
 // Only `tests/` calls the helper directly, so an unconditional re-export
 // would be an unused import in the ordinary build (SH-3a: a re-export must
@@ -152,7 +160,8 @@ use crate::doc_extract::{
 };
 use crate::input::dnd::{DND_THRESHOLD, DndState};
 use crate::page_pipeline::{
-    LayoutSource, LoadedPage, dispatch_preload_hints, parse_and_layout, render_bytes,
+    LayoutSource, LoadedPage, RenderOutcome, dispatch_preload_hints, parse_and_layout,
+    render_bytes,
 };
 use crate::scripts::{
     collect_inline_scripts, collect_scripts_ordered, resolve_script_sources,
@@ -165,7 +174,14 @@ use crate::frames::{apply_iframe_sandbox_gates, base_url_string, load_frame_sub_
 #[cfg(test)]
 use crate::frames::{fetch_frame_subresources, frame_access_allowed};
 use crate::chrome_ui::ContentAreaDetachment;
-use crate::engine_bridge::{EngineCommit, EngineJsState, route_eval_js, route_query_js, route_task_js};
+use crate::engine_bridge::{
+    EngineCommit, EngineJsState, route_eval_js, route_query_js, route_task_js,
+    spawn_engine_thread_if_enabled,
+};
+// Only `tests/` calls the pure decision behind `engine_thread_enabled` directly,
+// so an unconditional re-export would be an unused import in the ordinary build.
+#[cfg(test)]
+use crate::engine_bridge::engine_thread_enabled_from;
 use crate::frame_log::{compose_outcome_label, frame_log_nanos, frame_phase_ms};
 use crate::relayout::{
     ContentVisibilityChange, collect_cv_auto, diff_cv_state, meta_initial_scale, relayout_page,
@@ -241,229 +257,11 @@ use lumen_driver::{
     WaitCondition,
 };
 use winit::application::ApplicationHandler;
-
-/// РЎРѕР±С‹С‚РёРµ РѕС‚ background-РїРѕС‚РѕРєР° Р·Р°РіСЂСѓР·РєРё СЃС‚СЂР°РЅРёС†С‹ РІ event loop.
-///
-/// Р—Р°РіСЂСѓР·РєР° СЂР°Р·Р±РёС‚Р° РЅР° С‡РµС‚С‹СЂРµ С„Р°Р·С‹: (0) `EarlyPreloadHints` вЂ” С…РёРЅС‚С‹ РёР· РїРµСЂРІС‹С…
-/// Р±Р°Р№С‚ HTML РґР»СЏ СЂР°РЅРЅРµРіРѕ СЃС‚Р°СЂС‚Р° subresource fetch-РѕРІ; (1) chunks СЃС‹СЂС‹С… Р±Р°Р№С‚ РґР»СЏ
-/// РёРЅРєСЂРµРјРµРЅС‚Р°Р»СЊРЅРѕРіРѕ РїР°СЂСЃРёРЅРіР° Рё РїСЂРѕРјРµР¶СѓС‚РѕС‡РЅС‹С… РєР°РґСЂРѕРІ С‡РµСЂРµР·
-/// `IncrementalTreeBuilder::feed_bytes`; (2) `LoadDone` вЂ” РІСЃРµ Р±Р°Р№С‚С‹ РґРѕСЃС‚СѓРїРЅС‹,
-/// Р·Р°РїСѓСЃРєР°РµРј РїРѕР»РЅС‹Р№ pipeline (CSS + РёР·РѕР±СЂР°Р¶РµРЅРёСЏ); (3) `LoadError` вЂ” РѕС€РёР±РєР° fetch.
-enum LoadEvent {
-    /// No-op wake-up (SDC-2). `winit`'s `ControlFlow::Wait` genuinely parks
-    /// the event loop until an OS window event, a scheduled `WaitUntil`
-    /// deadline, or a proxied user event arrives вЂ” an `AutomationCommand`
-    /// enqueued from a BiDi/MCP thread is none of those, so without this the
-    /// loop could sit parked indefinitely and never drain it.
-    /// `AutomationHandle::execute` sends this through `load_proxy` right
-    /// after queuing a command; `user_event` below does nothing with it вЂ”
-    /// merely *receiving* a proxied event is what interrupts `Wait` and
-    /// triggers the next `about_to_wait` (where automation commands are
-    /// actually drained).
-    AutomationWake,
-    /// Subresource-С…РёРЅС‚С‹ РёР· РїРµСЂРІРѕРіРѕ chunk HTML (HTML LS В§13.2.6.4.7
-    /// В«Speculative HTML parsingВ»). РћС‚РїСЂР°РІР»СЏСЋС‚СЃСЏ Р”Рћ РїРµСЂРІРѕРіРѕ `HtmlChunk`,
-    /// С‡С‚РѕР±С‹ sink РјРѕРі РЅР°С‡Р°С‚СЊ Р·Р°РіСЂСѓР¶Р°С‚СЊ CSS/С€СЂРёС„С‚С‹ РµС‰С‘ РІ РїСЂРѕС†РµСЃСЃРµ РїР°СЂСЃРёРЅРіР°.
-    /// Р”РµРґСѓРїР»РёРєР°С†РёСЏ СЃ С„РёРЅР°Р»СЊРЅС‹РјРё С…РёРЅС‚Р°РјРё РёР· `LoadDone` вЂ” С‡РµСЂРµР·
-    /// `preload_dispatched` РІ `Lumen`.
-    /// РџРѕСЃР»РµРґРЅРµРµ РїРѕР»Рµ вЂ” generation РЅР°РІРёРіР°С†РёРё (U-1): РёРґРµРЅС‚РёС„РёРєР°С‚РѕСЂ load-С†РёРєР»Р°,
-    /// РїСЂРёСЃРІРѕРµРЅРЅС‹Р№ РІ `reload`/`resumed`. `user_event` РѕС‚Р±СЂР°СЃС‹РІР°РµС‚ СЃРѕР±С‹С‚РёРµ, РµСЃР»Рё
-    /// РµРіРѕ generation РЅРµ СЃРѕРІРїР°РґР°РµС‚ СЃ `Lumen::load_generation` вЂ” Р·Р°С‰РёС‚Р° РѕС‚
-    /// СѓСЃС‚Р°СЂРµРІС€РёС… СЃРѕР±С‹С‚РёР№ РіРѕРЅРєРё РЅР°РІРёРіР°С†РёР№ (Р±С‹СЃС‚СЂС‹Р№ back/forward РёР»Рё РєР»РёРє РїРѕ РґРІСѓРј
-    /// СЃСЃС‹Р»РєР°Рј РїРѕРґСЂСЏРґ), РєРѕС‚РѕСЂС‹Рµ РёРЅР°С‡Рµ РїРѕРґРјРµС€Р°Р»Рё Р±С‹ DOM/CSS РїСЂРѕС€Р»РѕР№ СЃС‚СЂР°РЅРёС†С‹.
-    EarlyPreloadHints(Vec<lumen_html_parser::PreloadHint>, ResourceBase, u64),
-    /// BUG-757: Р±Р°Р·Р° РґРѕРєСѓРјРµРЅС‚Р° СЃС‚Р°Р»Р° РёР·РІРµСЃС‚РЅР° Рё РѕС‚Р»РёС‡Р°РµС‚СЃСЏ РѕС‚ Р·Р°РїСЂРѕС€РµРЅРЅРѕРіРѕ
-    /// Р°РґСЂРµСЃР° (СЃРµСЂРІРµСЂ РѕС‚РІРµС‚РёР» СЂРµРґРёСЂРµРєС‚РѕРј). РћС‚РїСЂР°РІР»СЏРµС‚СЃСЏ РёР· streaming-РїРѕС‚РѕРєР°,
-    /// РєР°Рє С‚РѕР»СЊРєРѕ С‚РµР»Рѕ РїРѕС‚РµРєР»Рѕ СЃ С„РёРЅР°Р»СЊРЅРѕРіРѕ hop-Р° вЂ” С‚Рѕ РµСЃС‚СЊ Р”Рћ С‚РѕРіРѕ, РєР°Рє
-    /// С‡Р°СЃС‚РёС‡РЅС‹Р№ DOM РЅР°С‡РЅС‘С‚ Р·Р°РєР°Р·С‹РІР°С‚СЊ РєР°СЂС‚РёРЅРєРё Рё С€СЂРёС„С‚С‹, РєРѕС‚РѕСЂС‹Рµ UI-РїРѕС‚РѕРє
-    /// СЂРµР·РѕР»РІРёС‚ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ Р±Р°Р·С‹. РџРѕСЃР»РµРґРЅРµРµ РїРѕР»Рµ вЂ” generation РЅР°РІРёРіР°С†РёРё (U-1).
-    DocumentBase(ResourceBase, u64),
-    /// РћС‡РµСЂРµРґРЅРѕР№ chunk СЃС‹СЂС‹С… Р±Р°Р№С‚ HTML. UTF-8 РіСЂР°РЅРёС†С‹ РЅРµ РІС‹СЂР°РІРЅРёРІР°СЋС‚СЃСЏ вЂ”
-    /// `IncrementalTreeBuilder::feed_bytes` Р±СѓС„РµСЂРёР·СѓРµС‚ РЅРµР·Р°РІРµСЂС€С‘РЅРЅС‹Рµ
-    /// code-point-С‹ РІРЅСѓС‚СЂРё. РџРѕСЃР»РµРґРЅРµРµ РїРѕР»Рµ вЂ” generation РЅР°РІРёРіР°С†РёРё (U-1).
-    HtmlChunk(Vec<u8>, u64),
-    /// CSS Р·Р°РіСЂСѓР¶РµРЅ РїР°СЂР°Р»Р»РµР»СЊРЅС‹Рј РїРѕС‚РѕРєРѕРј РґР»СЏ РїСЂРѕРјРµР¶СѓС‚РѕС‡РЅС‹С… streaming-РєР°РґСЂРѕРІ.
-    /// РњС‘СЂРґР¶РёС‚СЃСЏ РІ `Lumen::stream_sheet` Рё РїСЂРёРјРµРЅСЏРµС‚СЃСЏ РІ `paint_partial_dom`.
-    /// РџРѕСЃР»РµРґРЅРµРµ РїРѕР»Рµ вЂ” generation РЅР°РІРёРіР°С†РёРё (U-1).
-    CssLoaded(Box<lumen_css_parser::Stylesheet>, u64),
-    /// PH1-2c: РєР°СЂС‚РёРЅРєР° `<img>` РґРµРєРѕРґРёСЂРѕРІР°РЅР° РїР°СЂР°Р»Р»РµР»СЊРЅС‹Рј РїРѕС‚РѕРєРѕРј РІРѕ РІСЂРµРјСЏ
-    /// streaming. Р РµРіРёСЃС‚СЂРёСЂСѓРµС‚СЃСЏ РІ renderer-Рµ РїРѕ РєР»СЋС‡Сѓ `src` Рё РІС‹Р·С‹РІР°РµС‚ redraw вЂ”
-    /// РєР°СЂС‚РёРЅРєРё РїРѕСЏРІР»СЏСЋС‚СЃСЏ РїРѕ РјРµСЂРµ РїСЂРёС…РѕРґР°, Р° РЅРµ СЂР°Р·РѕРј РІ С„РёРЅР°Р»СЊРЅРѕРј `LoadDone`.
-    /// Р”Р»СЏ Р°РЅРёРјРёСЂРѕРІР°РЅРЅРѕРіРѕ GIF `animated` РЅРµСЃС‘С‚ РІСЃРµ РєР°РґСЂС‹ (С‚РёРєР°СЋС‚СЃСЏ РІ
-    /// `RedrawRequested`); `image` вЂ” РЅСѓР»РµРІРѕР№ РєР°РґСЂ РґР»СЏ РЅРµРјРµРґР»РµРЅРЅРѕР№ РѕС‚СЂРёСЃРѕРІРєРё.
-    ImageDecoded {
-        src: String,
-        image: Box<lumen_image::Image>,
-        animated: Option<Box<lumen_image::AnimatedGif>>,
-    },
-    /// PH3-19: web-С€СЂРёС„С‚ РёР· @font-face url() РґРµРєРѕРґРёСЂРѕРІР°РЅ РІ С„РѕРЅРѕРІРѕРј РїРѕС‚РѕРєРµ.
-    /// Р РµРіРёСЃС‚СЂРёСЂСѓРµС‚СЃСЏ РІ FontRegistry + MultiFontMeasurer Рё РІС‹Р·С‹РІР°РµС‚ relayout вЂ”
-    /// С‚РµРєСЃС‚ РїРѕСЏРІР»СЏРµС‚СЃСЏ РІ fallback-С€СЂРёС„С‚Рµ СЃСЂР°Р·Сѓ, РїРѕРґРјРµРЅСЏРµС‚СЃСЏ РїРѕ РїСЂРёС…РѕРґСѓ (FOUT).
-    FontLoaded {
-        family: String,
-        weight: u16,
-        style: lumen_core::FontStyle,
-        unicode_range: Vec<lumen_font::UnicodeRange>,
-        bytes: Vec<u8>,
-    },
-    /// Р’СЃРµ Р±Р°Р№С‚С‹ РїРѕР»СѓС‡РµРЅС‹ вЂ” РґР»СЏ С„РёРЅР°Р»СЊРЅРѕРіРѕ РїРѕР»РЅРѕРіРѕ pipeline.
-    /// РџРѕСЃР»РµРґРЅРµРµ РїРѕР»Рµ вЂ” generation РЅР°РІРёРіР°С†РёРё (U-1).
-    LoadDone(RawPage, u64),
-    /// РћС€РёР±РєР° РїСЂРё Р·Р°РіСЂСѓР·РєРµ СЃС‚СЂР°РЅРёС†С‹. РџРѕСЃР»РµРґРЅРµРµ РїРѕР»Рµ вЂ” generation РЅР°РІРёРіР°С†РёРё (U-1).
-    LoadError(String, u64),
-    /// BUG-171 СЌС‚Р°Рї 2: С„РёРЅР°Р»СЊРЅС‹Р№ pipeline (parse в†’ JS в†’ fetch РїРѕРґСЂРµСЃСѓСЂСЃРѕРІ в†’
-    /// layout) РІС‹РїРѕР»РЅРµРЅ РЅР° С„РѕРЅРѕРІРѕРј РїРѕС‚РѕРєРµ; РіРѕС‚РѕРІС‹Р№ СЂРµР·СѓР»СЊС‚Р°С‚ РїСЂРёРјРµРЅСЏРµС‚СЃСЏ РЅР°
-    /// UI-РїРѕС‚РѕРєРµ (`apply_loaded_page`) Р±РµР· Р±Р»РѕРєРёСЂРѕРІРєРё event loop. РџРѕСЃР»РµРґРЅРµРµ
-    /// РїРѕР»Рµ вЂ” generation РЅР°РІРёРіР°С†РёРё (U-1).
-    RenderDone(Box<RenderOutcome>, u64),
-}
-
-/// Р“РѕС‚РѕРІС‹Р№ СЂРµР·СѓР»СЊС‚Р°С‚ С„РёРЅР°Р»СЊРЅРѕРіРѕ pipeline: display-list-СЃС‚СЂР°РЅРёС†Р°, РёСЃС‚РѕС‡РЅРёРє РґР»СЏ
-/// relayout Рё Р¶РёРІРѕР№ JS-С…СЌРЅРґР» (РµСЃР»Рё РІРєР»СЋС‡С‘РЅ QuickJS). РўРёРї-Р°Р»РёР°СЃ, С‡С‚РѕР±С‹ РІС‹РЅРµСЃС‚Рё
-/// СЃР»РѕР¶РЅСѓСЋ С‚СЂРѕР№РєСѓ РёР· СЃРёРіРЅР°С‚СѓСЂ (`render_bytes`, `RenderOutcome`).
-type RenderedPage = (LoadedPage, LayoutSource, Option<Arc<dyn PersistentJs>>);
-
-/// BUG-171 СЌС‚Р°Рї 2: СЂРµР·СѓР»СЊС‚Р°С‚ С„РёРЅР°Р»СЊРЅРѕРіРѕ off-UI-thread СЂРµРЅРґРµСЂР° (`render_bytes`),
-/// РїРµСЂРµСЃС‹Р»Р°РµРјС‹Р№ РЅР°Р·Р°Рґ РЅР° UI-РїРѕС‚РѕРє С‡РµСЂРµР· `LoadEvent::RenderDone`.
-///
-/// Р’СЃРµ РїРѕР»СЏ `Send`: `LoadedPage`/`LayoutSource` вЂ” РѕР±С‹С‡РЅС‹Рµ РґР°РЅРЅС‹Рµ; `js_ctx` вЂ”
-/// С…СЌРЅРґР» QuickJS (`Send + Sync` РїРѕ ADR-014, СЃРѕР·РґР°РЅ РЅР° СЂРµРЅРґРµСЂ-РїРѕС‚РѕРєРµ);
-/// `preload_dispatched` РІСЂРµРјРµРЅРЅРѕ Р·Р°Р±СЂР°РЅ РёР· `Lumen` РЅР° РІСЂРµРјСЏ СЂРµРЅРґРµСЂР° (РѕРЅ РµРіРѕ
-/// РґРµРґСѓРїР»РёС†РёСЂСѓРµС‚) Рё РІРѕР·РІСЂР°С‰Р°РµС‚СЃСЏ РґР»СЏ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ.
-struct RenderOutcome {
-    /// Р“РѕС‚РѕРІР°СЏ СЃС‚СЂР°РЅРёС†Р° + РёСЃС‚РѕС‡РЅРёРє layout + Р¶РёРІРѕР№ JS-С…СЌРЅРґР»; Р»РёР±Рѕ С‚РµРєСЃС‚ РѕС€РёР±РєРё
-    /// (`Box<dyn Error>` РЅРµ `Send`, РїРѕСЌС‚РѕРјСѓ РєРѕРЅРІРµСЂС‚РёСЂСѓРµС‚СЃСЏ РІ `String`).
-    result: Result<RenderedPage, String>,
-    /// РќР°Р±РѕСЂ СѓР¶Рµ СЂР°Р·РѕСЃР»Р°РЅРЅС‹С… preload-С…РёРЅС‚РѕРІ, Р·Р°Р±СЂР°РЅРЅС‹Р№ РёР·
-    /// `Lumen::preload_dispatched` РЅР° РІСЂРµРјСЏ СЂРµРЅРґРµСЂР°.
-    preload_dispatched: std::collections::HashSet<String>,
-}
-
-/// PH3-19: РґРµСЃРєСЂРёРїС‚РѕСЂ @font-face url()-РёСЃС‚РѕС‡РЅРёРєР°, РµС‰С‘ РЅРµ Р·Р°РіСЂСѓР¶РµРЅРЅРѕРіРѕ РІ РїР°РјСЏС‚СЊ.
-/// РҐСЂР°РЅРёС‚СЃСЏ РІ `ParsedPage` / `LoadedPage`; `apply_loaded_page` СЃРїР°РІРЅРёС‚
-/// С„РѕРЅРѕРІС‹Р№ РїРѕС‚РѕРє fetch+decode РґР»СЏ РєР°Р¶РґРѕРіРѕ, СЂРµР·СѓР»СЊС‚Р°С‚ вЂ” `LoadEvent::FontLoaded`.
-struct PendingWebFont {
-    /// CSS `font-family` РґРµСЃРєСЂРёРїС‚РѕСЂ.
-    family: String,
-    /// Р Р°Р·СЂРµС€С‘РЅРЅС‹Р№ font-weight (400 = normal, 700 = bold).
-    weight: u16,
-    /// Р Р°Р·СЂРµС€С‘РЅРЅС‹Р№ font-style.
-    style: lumen_core::FontStyle,
-    /// РЎС‹СЂР°СЏ СЃС‚СЂРѕРєР° `unicode-range` РґРµСЃРєСЂРёРїС‚РѕСЂР° (None в†’ РїРѕРєСЂС‹РІР°РµС‚ РІСЃРµ РєРѕРґРїРѕРёРЅС‚С‹).
-    unicode_range_str: Option<String>,
-    /// URL РґР»СЏ fetch (@font-face `src: url(...)`).
-    url: String,
-}
-
-/// PH3-19: web-С€СЂРёС„С‚, СѓР¶Рµ Р·Р°РіСЂСѓР¶РµРЅРЅС‹Р№ Рё РґРµРєРѕРґРёСЂРѕРІР°РЅРЅС‹Р№ РїРѕСЃР»Рµ `FontLoaded`.
-/// РЎРїРёСЃРѕРє С…СЂР°РЅРёС‚СЃСЏ РІ `Lumen::web_fonts` Рё РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ РїРµСЂРµСЃР±РѕСЂРєРё
-/// `MultiFontMeasurer` РїСЂРё РєР°Р¶РґРѕРј relayout вЂ” РёРЅР°С‡Рµ resize/scroll-reflow
-/// С‚РµСЂСЏРµС‚ web-РјРµС‚СЂРёРєРё Рё РѕС‚РєР°С‚С‹РІР°РµС‚СЃСЏ Рє Inter.
-// weight/style С…СЂР°РЅСЏС‚СЃСЏ РґР»СЏ Р±СѓРґСѓС‰РµРіРѕ CSS font-matching (РїРѕ weight/style РґРµСЃРєСЂРёРїС‚РѕСЂР°Рј @font-face).
-// Clone: ADR-016 M2.2 вЂ” off-thread relayout Р·Р°С…РІР°С‚С‹РІР°РµС‚ РІР»Р°РґРµСЋС‰РёР№ СЃРЅРёРјРѕРє web-С€СЂРёС„С‚РѕРІ.
-#[derive(Clone)]
-#[allow(dead_code)]
-struct LoadedWebFont {
-    /// CSS `font-family` РґРµСЃРєСЂРёРїС‚РѕСЂ.
-    family: String,
-    /// Р Р°Р·СЂРµС€С‘РЅРЅС‹Р№ font-weight.
-    weight: u16,
-    /// Р Р°Р·СЂРµС€С‘РЅРЅС‹Р№ font-style.
-    style: lumen_core::FontStyle,
-    /// Р”РёР°РїР°Р·РѕРЅС‹ Unicode РёР· @font-face `unicode-range` РґРµСЃРєСЂРёРїС‚РѕСЂР°.
-    unicode_range: Vec<lumen_font::UnicodeRange>,
-    /// Р”РµРєРѕРґРёСЂРѕРІР°РЅРЅС‹Рµ sfnt-Р±Р°Р№С‚С‹ (TrueType / OTF РїРѕСЃР»Рµ WOFF/WOFF2-СЂР°СЃРїР°РєРѕРІРєРё).
-    bytes: Vec<u8>,
-}
-
-/// Р Р°Р·РјРµСЂ РѕРґРЅРѕРіРѕ HTML-chunk РїСЂРё СЂР°Р·Р±РёРІРєРµ РґР»СЏ РёРЅРєСЂРµРјРµРЅС‚Р°Р»СЊРЅРѕРіРѕ РїР°СЂСЃРёРЅРіР°.
-const STREAM_CHUNK_BYTES: usize = 8 * 1024;
-/// РњРёРЅРёРјР°Р»СЊРЅС‹Р№ РёРЅС‚РµСЂРІР°Р» РјРµР¶РґСѓ РїСЂРѕРјРµР¶СѓС‚РѕС‡РЅС‹РјРё РєР°РґСЂР°РјРё РїСЂРё streaming (РјСЃ) вЂ” ~60 Р“С†.
-const STREAM_PAINT_INTERVAL_MS: u128 = 16;
-/// Minimum interval between rAF batches (ms) вЂ” vsync gate at 60 Hz.
-///
-/// Prevents `requestAnimationFrame` from firing more than once per display frame
-/// when `RedrawRequested` is delivered at higher frequency (e.g. from scroll events).
-const RAF_MIN_INTERVAL_MS: f64 = 1000.0 / 60.0;
-
-/// EventSink, РєРѕС‚РѕСЂС‹Р№ РїРµС‡Р°С‚Р°РµС‚ СЃРµС‚РµРІС‹Рµ СЃРѕР±С‹С‚РёСЏ РІ stdout вЂ” СЌС‚Рѕ Рё РµСЃС‚СЊ
-/// В«network logВ» Phase 0, СЂРµР°Р»РёР·СѓСЋС‰РёР№ РїСЂРёРЅС†РёРї в„–4 В«РєР°Р¶РґС‹Р№ РёСЃС…РѕРґСЏС‰РёР№ Р±Р°Р№С‚
-/// РІРёРґРµРЅВ». РџРѕР·Р¶Рµ Р·Р°РјРµРЅРёС‚СЃСЏ РЅР° СЃС‚СЂСѓРєС‚СѓСЂРёСЂРѕРІР°РЅРЅС‹Р№ UI-Р»РѕРіРіРµСЂ.
-struct StdoutEventSink;
-
-impl EventSink for StdoutEventSink {
-    fn emit(&self, event: &Event) {
-        // РЎРµС‚РµРІРѕР№ Р»РѕРі РёРґС‘С‚ РІ stderr, С‡С‚РѕР±С‹ stdout dump-СЂРµР¶РёРјРѕРІ РѕСЃС‚Р°РІР°Р»СЃСЏ С‡РёСЃС‚С‹Рј
-        // (РЅР° РЅС‘Рј вЂ” С‚РѕР»СЊРєРѕ СЃРµСЂРёР°Р»РёР·РѕРІР°РЅРЅС‹Р№ СЂРµР·СѓР»СЊС‚Р°С‚ pipeline-Р°). Р’ РѕРєРѕРЅРЅРѕРј
-        // СЂРµР¶РёРјРµ СЂР°Р·РЅРёС†Р° РЅРµРІРёРґРёРјР°: РѕР±Р° РїРѕС‚РѕРєР° РїРѕРїР°РґР°СЋС‚ РІ С‚РµСЂРјРёРЅР°Р».
-        match event {
-            Event::RequestStarted { url, .. } => eprintln!("в†’ GET {url}"),
-            Event::RequestCompleted { url, status, .. } => eprintln!("в†ђ {status} {url}"),
-            Event::RequestBlocked { url, reason, .. } => eprintln!("вњ— {url} ({reason})"),
-            Event::RequestFailed { url, stage, reason, .. } => {
-                eprintln!("вњ— {url} ({}: {reason})", stage.as_str());
-            }
-            Event::SubresourceHintFound { url, kind, priority } => {
-                let label = match kind {
-                    SubresourceKind::Stylesheet => "css",
-                    SubresourceKind::Script => "js",
-                    SubresourceKind::Image => "img",
-                    SubresourceKind::Font => "font",
-                    SubresourceKind::Preconnect { dns_only: true } => "dns-prefetch",
-                    SubresourceKind::Preconnect { dns_only: false } => "preconnect",
-                    SubresourceKind::Other { .. } => "preload",
-                };
-                let prio = match priority {
-                    FetchPriority::High => "high",
-                    FetchPriority::Medium => "medium",
-                    FetchPriority::Low => "low",
-                };
-                eprintln!("в¤· preload {label} [{prio}] {url}");
-            }
-            Event::FormSubmit { method, action, body, .. } => {
-                if body.is_empty() {
-                    eprintln!("вЉў form {method} {action}");
-                } else {
-                    eprintln!("вЉў form {method} {action} body={body}");
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Bundled-С€СЂРёС„С‚: СЃС‚Р°С‚РёС‡РµСЃРєРёР№ Inter v4.1 Regular (~411 РљР‘),
-/// SIL OFL 1.1, СЃРј. assets/fonts/OFL.txt.
-const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{DeviceEvent, DeviceId, ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorGrabMode, CursorIcon, Window, WindowId};
-
-/// `true`, РµСЃР»Рё fast-scroll РґРµРіСЂР°РґР°С†РёСЏ РѕС‚РєР»СЋС‡РµРЅР°
-/// (`LUMEN_NO_FAST_SCROLL_DEGRADE=1`). Р”РёР°РіРЅРѕСЃС‚РёРєР°: A/B РїРѕРІРµРґРµРЅРёСЏ Рё СЃРєРѕСЂРѕСЃС‚Рё
-/// РЅР° РѕРґРЅРѕРј Р±РёРЅР°СЂРЅРёРєРµ (РїР°С‚С‚РµСЂРЅ `LUMEN_NO_SCROLL_COMPOSITOR`).
-fn fast_scroll_degrade_disabled() -> bool {
-    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *DISABLED.get_or_init(|| {
-        std::env::var("LUMEN_NO_FAST_SCROLL_DEGRADE").is_ok_and(|v| v == "1")
-    })
-}
-
-/// `true`, РµСЃР»Рё С„Р°СЃС‚-РїР°СЃ СЃС‚СЂР°РЅРёС‡РЅРѕРіРѕ СЃРјРµС‰РµРЅРёСЏ РѕС‚РєР»СЋС‡С‘РЅ
-/// (`LUMEN_NO_PAGE_OFFSET=1`) Рё С€РµР»Р» СЃРЅРѕРІР° Р·Р°РІРѕСЂР°С‡РёРІР°РµС‚ display list РІ
-/// `PushTransform` РєР°Р¶РґС‹Р№ РєР°РґСЂ.
-///
-/// BUG-405 СЃСЂРµР· 38: СЂС‹С‡Р°Рі Р·Р°РІРµРґС‘РЅ СЂР°РґРё РёРЅС‚РµСЂР»РёРІРµРґ-A/B РЅР° РћР”РќРћРњ Р±РёРЅР°СЂРЅРёРєРµ
-/// (`scripts/build_phase_census.py --arms offset`) вЂ” РёРЅР°С‡Рµ РїР»РµС‡Рё В«РґРѕВ» Рё
-/// В«РїРѕСЃР»РµВ» РїСЂРёС€Р»РѕСЃСЊ Р±С‹ РјРµСЂРёС‚СЊ СЂР°Р·РЅС‹РјРё СЃР±РѕСЂРєР°РјРё, С‡С‚Рѕ `docs/perf-method.md`
-/// Р·Р°РїСЂРµС‰Р°РµС‚. Р—Р°РѕРґРЅРѕ СЌС‚Рѕ РѕС‚РєР°С‚ РЅР° СЃР»СѓС‡Р°Р№, РµСЃР»Рё С„Р°СЃС‚-РїР°СЃ РІСЃРєСЂРѕРµС‚ РґРµС„РµРєС‚ РІ
-/// РєР°РєРѕРј-С‚Рѕ Р±СЌРєРµРЅРґРµ.
-fn page_offset_fast_disabled() -> bool {
-    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_PAGE_OFFSET").is_ok_and(|v| v == "1"))
-}
 
 fn main() -> ExitCode {
     // BUG-770: install the non-blocking stderr sink before anything can print.
@@ -732,121 +530,6 @@ fn run_cli() -> ExitCode {
         CliMode::TraceNav { source, output } => run_trace_nav(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
         CliMode::IpcServer { port } => run_ipc_server(port, event_sink),
-    }
-}
-
-/// Collect the concatenated text content of `id`'s subtree (SDC-2 `Query` support).
-fn collect_automation_text(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mut String) {
-    let node = doc.get(id);
-    if let NodeData::Text(s) = &node.data {
-        out.push_str(s);
-    }
-    for &child in &node.children {
-        collect_automation_text(doc, child, out);
-    }
-}
-
-/// Convert a `lumen_a11y::AXNode` into the driver's public `A11yNode` reply
-/// type (SDC-2 `A11yTree` support). Mirrors `lumen_driver`'s own private
-/// conversion in `session.rs`/`winit_session.rs` вЂ” kept local here since the
-/// shell has no dependency the other direction.
-fn automation_ax_node(ax: &lumen_a11y::AXNode) -> lumen_driver::A11yNode {
-    let state = lumen_driver::A11yState {
-        disabled: ax.state.disabled,
-        checked: ax.state.checked,
-        expanded: ax.state.expanded,
-        hidden: ax.state.hidden,
-        selected: ax.state.selected,
-        pressed: ax.state.pressed,
-        required: ax.state.required,
-        readonly: ax.state.readonly,
-        invalid: ax.state.invalid,
-        level: ax.state.level,
-    };
-    lumen_driver::A11yNode {
-        node_id: ax.node_id.index() as u32,
-        role: ax.role.as_str().to_owned(),
-        name: ax.name.clone(),
-        description: ax.description.clone(),
-        placeholder: ax.placeholder.clone(),
-        state,
-        children: ax.children.iter().map(automation_ax_node).collect(),
-    }
-}
-
-/// P3-spell СЃСЂРµР· 2: СЃР»РѕРІР°СЂРё Hunspell, Р·Р°РіСЂСѓР¶РµРЅРЅС‹Рµ С„РѕРЅРѕРІС‹Рј РїРѕС‚РѕРєРѕРј РїСЂРё СЃС‚Р°СЂС‚Рµ
-/// РѕРєРЅР° РёР· `data/spell/` (`spellcheck::load_dictionaries`). Р”Рѕ Р·Р°РІРµСЂС€РµРЅРёСЏ
-/// Р·Р°РіСЂСѓР·РєРё `get()` РІРѕР·РІСЂР°С‰Р°РµС‚ `None` Рё СЃРїРµР»Р»-С‡РµРє РјРѕР»С‡РёС‚.
-static SPELL_DICTS: std::sync::OnceLock<spellcheck::MultiDictionary> = std::sync::OnceLock::new();
-
-/// Whether the ADR-016 engine thread should be spawned.
-///
-/// **ADR-023 (default flip 2026-07-28): now enabled by default.** ADR-016's
-/// M0вЂ“M4.1 stages all landed behind `LUMEN_ENGINE_THREAD=1` and each one was
-/// accepted as byte-identical with the flag off, so the flag had become a
-/// finished-but-unused feature. Leaving it off kept every `relayout()` on the
-/// UI thread, which is what makes real sites hang on load: a page with N
-/// `@font-face` files pays N serialized full relayouts before its first frame
-/// (measured on lenta.ru вЂ” 9 fonts, ~300вЂ“700 ms each, first frame ~6.7 s в†’ ~3.6 s
-/// with the thread on; see `bugs/BUG-274-OPEN.md`, СЃСЂРµР· 2026-07-28).
-///
-/// Rollback (same flag-strategy idiom as ADR-018's V8 cutover and ADR-021's
-/// chrome flip): `LUMEN_NO_ENGINE_THREAD=1` вЂ” or `LUMEN_ENGINE_THREAD=0` for
-/// callers already setting the historical variable вЂ” restores the fully
-/// synchronous UI-thread behaviour.
-///
-/// Deliberately **not** tied to `--deterministic`: `graphic_tests/run.py`
-/// launches with `--deterministic --viewport 1024x720`, so forcing the thread
-/// off there would mean the pixel gate never exercises the shipped default.
-fn engine_thread_enabled() -> bool {
-    let opt_out = std::env::var("LUMEN_NO_ENGINE_THREAD").ok();
-    let legacy = std::env::var("LUMEN_ENGINE_THREAD").ok();
-    engine_thread_enabled_from(opt_out.as_deref(), legacy.as_deref())
-}
-
-/// Pure decision behind [`engine_thread_enabled`], split out so the precedence
-/// rules are unit-testable: reading the real environment from a test is
-/// process-global and races the rest of the (parallel) test binary.
-///
-/// `opt_out` is `LUMEN_NO_ENGINE_THREAD`, `legacy` is the historical
-/// `LUMEN_ENGINE_THREAD`. The opt-out wins over everything; otherwise only an
-/// explicit `LUMEN_ENGINE_THREAD=0` disables the thread. A leftover
-/// `LUMEN_ENGINE_THREAD=1` from before the ADR-023 flip keeps working and now
-/// simply agrees with the default.
-fn engine_thread_enabled_from(opt_out: Option<&str>, legacy: Option<&str>) -> bool {
-    if opt_out == Some("1") {
-        return false;
-    }
-    legacy != Some("0")
-}
-
-/// ADR-016 M2.2: РїРѕРґРЅРёРјР°РµС‚ РґРІРёР¶РєРѕРІС‹Р№ РїРѕС‚РѕРє, РµСЃР»Рё РѕРЅ РЅРµ РѕС‚РєР»СЋС‡С‘РЅ СЏРІРЅРѕ
-/// ([`engine_thread_enabled`] вЂ” СЃ ADR-023 РІРєР»СЋС‡С‘РЅ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ). Р’
-/// M2.2 С‡РµСЂРµР· РїРѕС‚РѕРє РјР°СЂС€СЂСѓС‚РёР·РёСЂСѓРµС‚СЃСЏ off-thread layout РґР»СЏ async-С‚СЂРёРіРіРµСЂРѕРІ
-/// (РїРѕРєР° вЂ” debounce-Р·СѓРј): [`Lumen::submit_relayout_job`] С€Р»С‘С‚ Р·Р°РґР°РЅРёРµ, РїРѕС‚РѕРє
-/// СЃС‡РёС‚Р°РµС‚ [`EngineCommit`] Рё РєР»Р°РґС‘С‚ РІ latest-wins СЃР»РѕС‚, РѕС‚РєСѓРґР° РµРіРѕ Р·Р°Р±РёСЂР°РµС‚
-/// [`Lumen::poll_engine_commit`]. РџСЂРё СЃР±РѕРµ СЃС‚Р°СЂС‚Р° РїРѕС‚РѕРєР° Р»РѕРіРёСЂСѓРµРј Рё РѕС‚РєР°С‚С‹РІР°РµРјСЃСЏ
-/// РЅР° `None` (РєР°Рє РѕР±С‹С‡РЅРѕ, Р±РµР· РґРІРёР¶РєРѕРІРѕРіРѕ РїРѕС‚РѕРєР° вЂ” СЃРёРЅС…СЂРѕРЅРЅС‹Р№ `relayout()`).
-fn spawn_engine_thread_if_enabled()
--> Option<engine_thread::EngineThread<EngineCommit, EngineJsState>> {
-    if !engine_thread_enabled() {
-        return None;
-    }
-    // ADR-016 M2.2c-2b: РїРѕС‚РѕРє РІР»Р°РґРµРµС‚ `EngineJsState` (Р±СѓРґСѓС‰РµРµ СЃРёРґРµРЅСЊРµ `Document`
-    // + `js_ctx`); СЃС‚Р°СЂС‚СѓРµС‚ РїСѓСЃС‚С‹Рј (`EngineJsState::default()` С‡РµСЂРµР· `spawn()`),
-    // Р·Р°РїРѕР»РЅСЏРµС‚СЃСЏ `sync_engine_js_state` РїСЂРё РїРµСЂРІРѕР№ Р·Р°РіСЂСѓР·РєРµ СЃС‚СЂР°РЅРёС†С‹.
-    match engine_thread::EngineThread::<EngineCommit, EngineJsState>::spawn() {
-        Ok(engine) => {
-            eprintln!(
-                "[engine-thread] Р·Р°РїСѓС‰РµРЅ (ADR-023 РґРµС„РѕР»С‚, M2.2 off-thread layout; \
-                 РѕС‚РєР°С‚ вЂ” LUMEN_NO_ENGINE_THREAD=1)"
-            );
-            Some(engine)
-        }
-        Err(e) => {
-            eprintln!("[engine-thread] РЅРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСѓСЃС‚РёС‚СЊ: {e}; РїСЂРѕРґРѕР»Р¶Р°РµРј Р±РµР· РЅРµРіРѕ");
-            None
-        }
     }
 }
 
