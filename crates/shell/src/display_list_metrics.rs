@@ -1,11 +1,17 @@
-//! Display-list measurement and the split-view placeholder list.
+//! Building a display list in paint order, measuring one, and the split-view
+//! placeholder list.
 //!
+//! `paint_ordered` is the crate's single entry point for turning a laid-out
+//! tree into a display list with the CSS 2.1 Appendix E painting order;
 //! `content_height_of` / `content_width_of` derive the scrollable extent from
 //! the emitted display list (the shell has no other source for it — see the
 //! `CLAUDE.md` note that a spacer painting nothing leaves `max_scroll()` at 0),
-//! and `build_split_placeholder` synthesises a minimal list for a hibernated
-//! tab whose real one was evicted. Moved out of `main.rs` by the SPLIT track
-//! (batch SH-5); behaviour and signatures are unchanged.
+//! `next_dl_epoch` versions it, and `build_split_placeholder` synthesises a
+//! minimal list for a hibernated tab whose real one was evicted. Moved out of
+//! `main.rs` by the SPLIT track (batches SH-5 and SH-3c); behaviour and
+//! signatures are unchanged.
+
+use crate::*;
 
 /// РџРѕР»РЅР°СЏ РІС‹СЃРѕС‚Р° РєРѕРЅС‚РµРЅС‚Р° РІ CSS px вЂ” `max(rect.y + rect.height)` РїРѕ РІСЃРµРј
 /// rect-РЅРµСЃСѓС‰РёРј РєРѕРјР°РЅРґР°Рј display list-Р°. РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ clamping-Р° scroll_y.
@@ -165,4 +171,20 @@ pub(crate) fn build_split_placeholder(url: &str) -> lumen_paint::DisplayList {
             text_orientation: None,
         },
     ]
+}
+
+/// РЎС‚СЂРѕРёС‚ display list СЃ РїСЂР°РІРёР»СЊРЅС‹Рј painting order (CSS 2.1 Appendix E, z-index stacking).
+pub(crate) fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
+    let tree = StackingTree::build(layout);
+    let order = PaintOrder::from_tree(&tree);
+    build_display_list_ordered(layout, &tree, &order).0
+}
+
+/// РЎР»РµРґСѓСЋС‰Р°СЏ РІРµСЂСЃРёСЏ display list-Р°; `0` РїСЂРѕРїСѓСЃРєР°РµС‚СЃСЏ вЂ” РѕРЅ Р·Р°СЂРµР·РµСЂРІРёСЂРѕРІР°РЅ Р·Р°
+/// В«РІРµСЂСЃРёСЏ РЅРµРёР·РІРµСЃС‚РЅР°В» (BUG-405 СЃСЂРµР· 39).
+pub(crate) fn next_dl_epoch(cur: u64) -> u64 {
+    match cur.wrapping_add(1) {
+        0 => 1,
+        n => n,
+    }
 }

@@ -1397,3 +1397,175 @@ pub(crate) fn chrome_node_changes(
             .chain(t.structural.then_some((*id, NodeChange::Unattributed)))
     })
 }
+
+/// CC-4/CC-9: removes `#contentArea`'s [`LayoutBox`] from `lb`'s subtree
+/// (depth-first, first match) вЂ” not just its children, but its own box (and
+/// background paint command) too, so the real page painted separately at
+/// that rect is never covered by it. Never matches `lb` itself, only
+/// descendants вЂ” `#contentArea` is never the chrome document's root box.
+///
+/// CC-9: two of `#contentArea`'s own children вЂ” `#findBar`, `#downloadsPanel`
+/// вЂ” are real popovers this pass *does* want painted (they sit outside the
+/// pruned rect via `position:absolute`, CSS Positioned Layout L3 В§9.10, so
+/// splicing them elsewhere in the tree does not change which stacking
+/// context they join: `#contentArea` itself creates none). `salvage_ids`
+/// lists which descendant node ids to keep; they're spliced back into `lb`
+/// at the exact slot `#contentArea` occupied, preserving both their absolute
+/// paint rects (already resolved by the out-of-flow layout pass) and their
+/// tree-order position relative to `#contentArea`'s former siblings.
+///
+/// BUG-341 S22: the pruning is **reversible**. Every removal is recorded in the
+/// returned [`ContentAreaDetachment`], and [`restore_content_area`] puts the
+/// tree back exactly as it was вЂ” which is what lets the next pass take the
+/// live tree as its `prev` basis instead of the pipeline copying a pristine
+/// one aside on every frame (that copy was the largest single item left in an
+/// incremental chrome cycle; see the S22 census in `bugs/BUG-341-OPEN.md`).
+pub(crate) fn take_content_area(
+    lb: &mut LayoutBox,
+    node: lumen_dom::NodeId,
+    salvage_ids: &[&str],
+    doc: &lumen_dom::Document,
+) -> Option<(Rect, ContentAreaDetachment)> {
+    let mut path = Vec::new();
+    take_content_area_at(lb, node, salvage_ids, doc, &mut path)
+}
+
+/// [`take_content_area`]'s recursion, carrying the child-index path walked so
+/// far so the detachment record can name `#contentArea`'s holder.
+fn take_content_area_at(
+    lb: &mut LayoutBox,
+    node: lumen_dom::NodeId,
+    salvage_ids: &[&str],
+    doc: &lumen_dom::Document,
+    path: &mut Vec<usize>,
+) -> Option<(Rect, ContentAreaDetachment)> {
+    if let Some(slot) = lb.children.iter().position(|c| c.node == node) {
+        let mut removed = lb.children.remove(slot);
+        let rect = removed.rect;
+        let mut salvaged = Vec::new();
+        salvage_layout_boxes(&mut removed, salvage_ids, doc, &mut Vec::new(), &mut salvaged);
+        let mut salvage_paths = Vec::with_capacity(salvaged.len());
+        for (offset, (from, b)) in salvaged.into_iter().enumerate() {
+            salvage_paths.push(from);
+            lb.children.insert(slot + offset, b);
+        }
+        return Some((
+            rect,
+            ContentAreaDetachment { holder_path: path.clone(), slot, removed, salvage_paths },
+        ));
+    }
+    for (i, child) in lb.children.iter_mut().enumerate() {
+        path.push(i);
+        if let Some(found) = take_content_area_at(child, node, salvage_ids, doc, path) {
+            return Some(found);
+        }
+        path.pop();
+    }
+    None
+}
+
+/// BUG-341 S22: everything [`take_content_area`] removed from a chrome box
+/// tree, in enough detail for [`restore_content_area`] to undo it exactly.
+///
+/// "Exactly" is the whole point, and the cost of getting it wrong is higher
+/// than it looks. The restored tree is handed to
+/// `layout_mutation_incremental_restyle` as its `prev` basis, and
+/// `incremental_build_box` moves whole *clean* subtrees straight across from
+/// that basis вЂ” on an interaction cycle `#contentArea`'s parent is clean, so a
+/// basis missing `#contentArea` produces a document missing `#contentArea`,
+/// and the next cycle inherits that tree in turn. It is not a slow frame, it
+/// is 155 boxes where there should be 318, permanently. Measured, and gated:
+/// `bug341_s22_a_restored_basis_carries_the_whole_document_forward`.
+pub(crate) struct ContentAreaDetachment {
+    /// Child-index path from the tree root down to the box that held
+    /// `#contentArea` (empty when the root itself held it).
+    holder_path: Vec<usize>,
+    /// Index `#contentArea` occupied among that holder's children вЂ” also the
+    /// slot the salvaged popovers were spliced into.
+    slot: usize,
+    /// `#contentArea`'s own box, with the salvaged popovers already lifted out
+    /// of its subtree.
+    removed: LayoutBox,
+    /// For each salvaged popover, in removal order, the child-index path
+    /// inside [`Self::removed`] it was removed from вЂ” the last element is the
+    /// index within that box's children. Restoring walks these in **reverse**,
+    /// because each path was recorded against the tree state of its own
+    /// removal.
+    pub(crate) salvage_paths: Vec<Vec<usize>>,
+}
+
+/// BUG-341 S22: inverse of [`take_content_area`] вЂ” re-inserts the salvaged
+/// popovers into `#contentArea`'s subtree and `#contentArea` back into its
+/// former slot, reproducing the pre-pruning tree box for box.
+///
+/// Returns `false` if any recorded path no longer addresses a box (only
+/// possible if something mutated the tree between the two calls, which nothing
+/// does today вЂ” `chrome_layout` is read-only until the next pass replaces it).
+/// The caller treats that as "no usable `prev`" and takes the full-layout path,
+/// so a stale record costs a slow frame, never a wrong one.
+pub(crate) fn restore_content_area(root: &mut LayoutBox, detached: ContentAreaDetachment) -> bool {
+    let ContentAreaDetachment { holder_path, slot, mut removed, salvage_paths } = detached;
+    let Some(holder) = follow_box_path_mut(root, &holder_path) else { return false };
+    if slot + salvage_paths.len() > holder.children.len() {
+        return false;
+    }
+    let salvaged: Vec<LayoutBox> = holder.children.drain(slot..slot + salvage_paths.len()).collect();
+    for (from, b) in salvage_paths.into_iter().zip(salvaged).rev() {
+        let Some((&idx, head)) = from.split_last() else { return false };
+        let Some(parent) = follow_box_path_mut(&mut removed, head) else { return false };
+        if idx > parent.children.len() {
+            return false;
+        }
+        parent.children.insert(idx, b);
+    }
+    holder.children.insert(slot, removed);
+    true
+}
+
+/// Walks `path`'s child indices down from `b`. `None` if any index is out of
+/// range.
+fn follow_box_path_mut<'a>(b: &'a mut LayoutBox, path: &[usize]) -> Option<&'a mut LayoutBox> {
+    let mut cur = b;
+    for &i in path {
+        cur = cur.children.get_mut(i)?;
+    }
+    Some(cur)
+}
+
+/// Depth-first: removes every descendant of `lb` whose element id is in
+/// `salvage_ids`, appending it to `out` in tree order together with the
+/// child-index path (relative to the box this recursion started at) it came
+/// from. Used by [`take_content_area`] to rescue specific popovers out of
+/// `#contentArea` before the rest of its subtree is discarded вЂ” and by
+/// [`restore_content_area`] to put them back.
+fn salvage_layout_boxes(
+    lb: &mut LayoutBox,
+    salvage_ids: &[&str],
+    doc: &lumen_dom::Document,
+    prefix: &mut Vec<usize>,
+    out: &mut Vec<(Vec<usize>, LayoutBox)>,
+) {
+    let mut i = 0;
+    while i < lb.children.len() {
+        let matches = doc.get(lb.children[i].node).get_attr("id").is_some_and(|id| salvage_ids.contains(&id));
+        if matches {
+            let mut from = prefix.clone();
+            from.push(i);
+            out.push((from, lb.children.remove(i)));
+        } else {
+            prefix.push(i);
+            salvage_layout_boxes(&mut lb.children[i], salvage_ids, doc, prefix, out);
+            prefix.pop();
+            i += 1;
+        }
+    }
+}
+
+/// CC-10: which modal `Lumen::chrome_modal_ancestor` resolved a `CloseModal`
+/// click to вЂ” `#certOverlay` and `#printOverlay` share the same
+/// `data-action="close-modal"` value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChromeModalKind {
+    Cert,
+    Print,
+}
