@@ -42,6 +42,7 @@ mod display_list_metrics;
 mod dump_mode;
 mod js_escape;
 mod layout_metrics;
+mod nav_history;
 mod page_source;
 // Private `use` in the crate root is visible to descendants, so these lines
 // double as a re-export for the `use crate::*;` of every submodule — no call
@@ -53,6 +54,7 @@ use dump_mode::{
     render_source_to_png, run_dump_mode, run_print_to_pdf, run_screenshot, run_trace_nav,
 };
 use layout_metrics::{count_layout_boxes, count_rendered_units};
+use nav_history::{JsNavigateRequest, NavEntry};
 use page_source::{PageSource, RawPage, page_source_for_automation_url, resolve_js_navigation};
 // Only `tests/` calls the helper directly, so an unconditional re-export
 // would be an unused import in the ordinary build (SH-3a: a re-export must
@@ -125,7 +127,7 @@ use crate::js_escape::{escape_js_string, escape_js_string_char};
 use crate::panels::doc_pip_os_window::DocPipOsWindow;
 use crate::panels::pip_os_window::PipOsWindow;
 use crate::scroll::metrics::{LINE_STEP_CSS_PX, clamp_scroll, page_step};
-use crate::session_persist::{dom_blob_of, source_url_string};
+use crate::session_persist::{dom_blob_of, should_restore_session, source_url_string};
 use crate::tab_lifecycle::state::TabState;
 use crate::tabs::containers::origin_of_url;
 use std::cell::Cell;
@@ -778,18 +780,6 @@ fn spawn_engine_thread_if_enabled()
     }
 }
 
-/// Whether `run_window_mode` should restore the last on-disk session for the
-/// initial tab: only for a truly argument-less launch (`source` is
-/// [`PageSource::Empty`]) that isn't driven by an automation front-end.
-///
-/// `automation_mode` is `true` when `--bidi-port`/`--mcp-live-port` was
-/// passed вЂ” those launches are documented as opening an empty window and the
-/// driver always issues its own first navigation, so restoring a leftover
-/// session tab would silently race it (BUG-296).
-fn should_restore_session(source: &PageSource, automation_mode: bool) -> bool {
-    matches!(source, PageSource::Empty) && !automation_mode
-}
-
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::expect_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
 fn run_window_mode(
@@ -1338,118 +1328,6 @@ fn run_window_mode(
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
-}
-
-/// Р—Р°РїРёСЃСЊ РІ СЃС‚РµРєРµ РёСЃС‚РѕСЂРёРё РЅР°РІРёРіР°С†РёРё Р±СЂР°СѓР·РµСЂР°.
-struct NavEntry {
-    source: PageSource,
-    scroll_x: f32,
-    scroll_y: f32,
-    /// Overrides `source.url_str()` in the address bar for same-document entries.
-    /// `None` for full-document navigation entries; `Some(url)` when this entry
-    /// was created by `history.pushState` (the virtual URL at that point).
-    display_url: Option<String>,
-    /// State JSON for a same-document `history.pushState` entry.
-    /// `None` в†’ full navigation (popping this entry reloads the page).
-    /// `Some(json)` в†’ same-document (popping fires `popstate` with this state).
-    same_doc_state_json: Option<String>,
-    /// Navigation API key assigned by the shell for this entry.
-    /// Used by `navigation.traverseTo(key)` and reported via
-    /// `_lumen_navigation_entries_json` so JS can correlate entries.
-    nav_key: String,
-}
-
-impl NavEntry {
-    /// Move the history cursor one intermediate hop toward `back` (true) or
-    /// forward (false) WITHOUT rendering or firing events вЂ” the building block of
-    /// a multi-step `history.go(n)` (see `Lumen::navigate_by`). The current entry
-    /// `cur` is pushed onto the opposite stack and the popped target entry is
-    /// returned as the new current.
-    ///
-    /// The caller MUST have range-checked that the source stack is non-empty;
-    /// `pop` is therefore expected to succeed.
-    #[allow(clippy::expect_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
-    fn shift_history_entry(
-        nav_back: &mut Vec<NavEntry>,
-        nav_fwd: &mut Vec<NavEntry>,
-        cur: NavEntry,
-        back: bool,
-    ) -> NavEntry {
-        if back {
-            let popped = nav_back.pop().expect("source stack must be non-empty");
-            nav_fwd.push(cur);
-            popped
-        } else {
-            let popped = nav_fwd.pop().expect("source stack must be non-empty");
-            nav_back.push(cur);
-            popped
-        }
-    }
-
-    /// Shuttle `cur` through `steps - 1` intermediate hops via
-    /// [`Self::shift_history_entry`], additionally tracking whether any hop
-    /// crossed a full-document entry (`same_doc_state_json.is_none()`) along
-    /// the way вЂ” i.e. whether the entry one hop short of the final
-    /// destination belongs to a different loaded document than `cur` started
-    /// in. `Lumen::navigate_by` uses the returned flag to decide whether a
-    /// same-document destination needs `Lumen::pending_post_reload_traversal`
-    /// (the loaded document is stale relative to it) instead of firing
-    /// `popstate` directly.
-    fn shift_multi_step(
-        nav_back: &mut Vec<NavEntry>,
-        nav_fwd: &mut Vec<NavEntry>,
-        mut cur: NavEntry,
-        steps: usize,
-        back: bool,
-    ) -> (NavEntry, bool) {
-        let mut crossed_document = false;
-        for _ in 1..steps {
-            cur = Self::shift_history_entry(nav_back, nav_fwd, cur, back);
-            if cur.same_doc_state_json.is_none() {
-                crossed_document = true;
-            }
-        }
-        (cur, crossed_document)
-    }
-}
-
-/// РќР°РІРёРіР°С†РёРѕРЅРЅС‹Р№ Р·Р°РїСЂРѕСЃ РѕС‚ JS (location.href=, assign, replace, reload).
-/// РҐСЂР°РЅРёС‚СЃСЏ РІ `Lumen::pending_js_navigate` Рё РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ РІ `about_to_wait`.
-#[cfg_attr(not(feature = "v8"), allow(dead_code))]
-enum JsNavigateRequest {
-    /// РџРµСЂРµР№С‚Рё РЅР° URL, РґРѕР±Р°РІРёС‚СЊ Р·Р°РїРёСЃСЊ РІ РёСЃС‚РѕСЂРёСЋ.
-    Push(String),
-    /// РџРµСЂРµР№С‚Рё РЅР° URL, Р·Р°РјРµРЅРёС‚СЊ С‚РµРєСѓС‰СѓСЋ Р·Р°РїРёСЃСЊ РёСЃС‚РѕСЂРёРё (Р±РµР· push).
-    Replace(String),
-    /// РџРµСЂРµР·Р°РіСЂСѓР·РёС‚СЊ С‚РµРєСѓС‰СѓСЋ СЃС‚СЂР°РЅРёС†Сѓ.
-    Reload,
-    /// Р’С‹РїРѕР»РЅРёС‚СЊ РѕС‚РїСЂР°РІРєСѓ С„РѕСЂРјС‹, Р·Р°РїСЂРѕС€РµРЅРЅСѓСЋ СЃС‚СЂР°РЅРёС†РµР№ РёР· СЃРєСЂРёРїС‚Р°
-    /// (`form.submit()` / `form.requestSubmit()`, BUG-383).
-    SubmitForm {
-        /// РРЅРґРµРєСЃ СѓР·Р»Р° `<form>`.
-        form: u32,
-        /// РРЅРґРµРєСЃ СѓР·Р»Р°-СЃР°Р±РјРёС‚С‚РµСЂР°, Р»РёР±Рѕ `-1`, РµСЃР»Рё РµРіРѕ РЅРµС‚.
-        submitter: i32,
-    },
-}
-
-/// BUG-341 S7: engine-agnostic mirror of `lumen_js::DomTouched`, kept
-/// independent of the `v8` feature so [`PersistentJs::take_dom_touched`]'s
-/// default (used by no-engine builds, which have no tracker) compiles
-/// unconditionally.
-///
-/// Consumed by [`Lumen::try_relayout_raf_incremental`] (BUG-341 S7 part 2) to
-/// derive the DOM-mutation half of `RestyleDelta::dirty_roots` for the
-/// incremental-cascade path (`layout_mutation_incremental_restyle`).
-#[derive(Debug, Default, Clone)]
-struct DomTouchedSummary {
-    /// Nodes whose selector-relevant state actually changed via a tracked
-    /// mutation primitive. See `lumen_js::DomTouched::nodes`.
-    nodes: std::collections::HashSet<lumen_dom::NodeId>,
-    /// `true` when `nodes` alone is not a safe restyle root-set this cycle вЂ”
-    /// the caller must fall back to a full cascade. See
-    /// `lumen_js::DomTouched::unattributed`.
-    unattributed: bool,
 }
 
 /// Р РµР¶РёРј Р·Р°РїСѓСЃРєР° shell. Р РµС€Р°РµС‚СЃСЏ РЅР° РѕСЃРЅРѕРІРµ CLI-Р°СЂРіСѓРјРµРЅС‚РѕРІ РІ `parse_cli`.

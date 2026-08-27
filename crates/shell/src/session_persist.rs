@@ -70,6 +70,18 @@ pub(crate) fn dom_blob_of(layout_source: Option<&LayoutSource>) -> Vec<u8> {
         .unwrap_or_default()
 }
 
+/// Whether `run_window_mode` should restore the last on-disk session for the
+/// initial tab: only for a truly argument-less launch (`source` is
+/// [`PageSource::Empty`]) that isn't driven by an automation front-end.
+///
+/// `automation_mode` is `true` when `--bidi-port`/`--mcp-live-port` was
+/// passed вЂ” those launches are documented as opening an empty window and the
+/// driver always issues its own first navigation, so restoring a leftover
+/// session tab would silently race it (BUG-296).
+pub(crate) fn should_restore_session(source: &PageSource, automation_mode: bool) -> bool {
+    matches!(source, PageSource::Empty) && !automation_mode
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
