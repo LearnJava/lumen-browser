@@ -4329,14 +4329,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/download.rs:366` **fn** `close` — Hide the panel
 `crates/shell/src/download.rs:766` **fn** `hit_test` — Hit-test a click at `(x, y)` (CSS px) against the download popover
 `crates/shell/src/download.rs:804` **fn** `build_download_bar` — Build the viewport-locked download popover overlay
-`crates/shell/src/engine_thread.rs:117` **struct** `EngineThread` — Хэндл долгоживущего движкового потока (ADR-016 M2.2)
-`crates/shell/src/engine_thread.rs:141` **fn** `spawn_with_state` — Запускает именованный движковый поток с состоянием `initial` и возвращает
-`crates/shell/src/engine_thread.rs:155` **fn** `submit` — Ставит задание движковому потоку (fire-and-forget). `generation` —
-`crates/shell/src/engine_thread.rs:162` **fn** `take_committed` — Забирает новейший исполненный коммит из слота, если он есть (latest-wins:
-`crates/shell/src/engine_thread.rs:186` **fn** `readback` — Request/reply: ставит задание и **блокируется**, пока движковый поток не
-`crates/shell/src/engine_thread.rs:205` **fn** `task` — Ставит упорядоченное задание над персистентным состоянием `S` движкового
-`crates/shell/src/engine_thread.rs:224` **fn** `query` — Request/reply над персистентным состоянием `S`: ставит упорядоченное
-`crates/shell/src/engine_thread.rs:253` **fn** `spawn` — Запускает именованный движковый поток c состоянием по умолчанию
+`crates/shell/src/engine_thread.rs:118` **struct** `EngineThread` — Хэндл долгоживущего движкового потока (ADR-016 M2.2)
+`crates/shell/src/engine_thread.rs:142` **fn** `spawn_with_state` — Запускает именованный движковый поток с состоянием `initial` и возвращает
+`crates/shell/src/engine_thread.rs:156` **fn** `submit` — Ставит задание движковому потоку (fire-and-forget). `generation` —
+`crates/shell/src/engine_thread.rs:163` **fn** `take_committed` — Забирает новейший исполненный коммит из слота, если он есть (latest-wins:
+`crates/shell/src/engine_thread.rs:187` **fn** `readback` — Request/reply: ставит задание и **блокируется**, пока движковый поток не
+`crates/shell/src/engine_thread.rs:206` **fn** `task` — Ставит упорядоченное задание над персистентным состоянием `S` движкового
+`crates/shell/src/engine_thread.rs:225` **fn** `query` — Request/reply над персистентным состоянием `S`: ставит упорядоченное
+`crates/shell/src/engine_thread.rs:254` **fn** `spawn` — Запускает именованный движковый поток c состоянием по умолчанию
 `crates/shell/src/extensions/mod.rs:33` **struct** `ContentScript` — A single content-script entry from `manifest.json`
 `crates/shell/src/extensions/mod.rs:42` **struct** `ExtensionManifest` — A parsed `manifest.json` for one extension
 `crates/shell/src/extensions/mod.rs:69` **struct** `ExtensionRegistry` — Registry of all installed extensions for the current profile
@@ -4463,20 +4463,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/input/humanlike.rs:267` **fn** `type_text` — Type `text` with Gaussian-distributed inter-keystroke delays
 `crates/shell/src/input/humanlike.rs:287` **fn** `scroll_to` — Scroll to `(x, y)` immediately (no path animation for scrolls)
 `crates/shell/src/input/humanlike.rs:295` **fn** `set_cursor_position` — Override the assumed cursor starting position without moving it
-`crates/shell/src/input/mod.rs:41` **enum** `InputCommand` — A single injected input command
-`crates/shell/src/input/mod.rs:108` **struct** `InputSender` — Sender side of the input injection channel
-`crates/shell/src/input/mod.rs:113` **fn** `click` — Send a synthetic left-click at CSS-pixel coordinates `(x, y)`
-`crates/shell/src/input/mod.rs:119` **fn** `mouse_move` — Send a synthetic mouse-move event to CSS-pixel coordinates `(x, y)`
-`crates/shell/src/input/mod.rs:125` **fn** `type_text` — Send a synthetic text-typing command
-`crates/shell/src/input/mod.rs:131` **fn** `scroll` — Send a synthetic scroll command to position `(x, y)` in CSS pixels
-`crates/shell/src/input/mod.rs:141` **fn** `key_down` — Press and release a special key identified by its W3C `KeyboardEvent.code`
-`crates/shell/src/input/mod.rs:147` **fn** `enter` — Press Enter in the focused element (submits forms, confirms dialogs)
-`crates/shell/src/input/mod.rs:153` **fn** `backspace` — Press Backspace in the focused element (deletes character before cursor)
-`crates/shell/src/input/mod.rs:159` **fn** `tab` — Press Tab (move focus to the next focusable element)
-`crates/shell/src/input/mod.rs:165` **fn** `escape` — Press Escape (dismiss dialogs, close menus, blur focused element)
-`crates/shell/src/input/mod.rs:173` **struct** `InputReceiver` — Receiver side of the input injection channel
-`crates/shell/src/input/mod.rs:177` **fn** `drain` — Non-blocking drain: returns all pending commands without blocking
-`crates/shell/src/input/mod.rs:186` **fn** `channel` — Create a new input injection channel
+`crates/shell/src/input/mod.rs:42` **enum** `InputCommand` — A single injected input command
+`crates/shell/src/input/mod.rs:109` **struct** `InputSender` — Sender side of the input injection channel
+`crates/shell/src/input/mod.rs:114` **fn** `click` — Send a synthetic left-click at CSS-pixel coordinates `(x, y)`
+`crates/shell/src/input/mod.rs:120` **fn** `mouse_move` — Send a synthetic mouse-move event to CSS-pixel coordinates `(x, y)`
+`crates/shell/src/input/mod.rs:126` **fn** `type_text` — Send a synthetic text-typing command
+`crates/shell/src/input/mod.rs:132` **fn** `scroll` — Send a synthetic scroll command to position `(x, y)` in CSS pixels
+`crates/shell/src/input/mod.rs:142` **fn** `key_down` — Press and release a special key identified by its W3C `KeyboardEvent.code`
+`crates/shell/src/input/mod.rs:148` **fn** `enter` — Press Enter in the focused element (submits forms, confirms dialogs)
+`crates/shell/src/input/mod.rs:154` **fn** `backspace` — Press Backspace in the focused element (deletes character before cursor)
+`crates/shell/src/input/mod.rs:160` **fn** `tab` — Press Tab (move focus to the next focusable element)
+`crates/shell/src/input/mod.rs:166` **fn** `escape` — Press Escape (dismiss dialogs, close menus, blur focused element)
+`crates/shell/src/input/mod.rs:174` **struct** `InputReceiver` — Receiver side of the input injection channel
+`crates/shell/src/input/mod.rs:178` **fn** `drain` — Non-blocking drain: returns all pending commands without blocking
+`crates/shell/src/input/mod.rs:187` **fn** `channel` — Create a new input injection channel
 `crates/shell/src/input/vim.rs:41` **enum** `VimState` — Which sub-mode the Vim keybinding layer is currently in
 `crates/shell/src/input/vim.rs:61` **enum** `VimAction` — Decoded action that the caller should execute in response to a keypress
 `crates/shell/src/input/vim.rs:106` **struct** `VimMode` — Vim-mode state machine
