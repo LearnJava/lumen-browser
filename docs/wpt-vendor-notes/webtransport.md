@@ -58,7 +58,7 @@ webtransport --recursive` (~8 мин, через venv python — системн�
 подхватывал непатченный `pywebsocket3`) — **0/24 harness OK, 0/0
 сабтестов**. Все 24 исхода — `TIMEOUT` на одном и том же
 уже задокументированном TLS-гэпе (`tests/wpt/certs/README.md`,
-[BUG-657](../bugs/BUG-657-OPEN.md)): `UnknownIssuer` при загрузке `.https.`
+[BUG-657](../../bugs/BUG-657-OPEN.md)): `UnknownIssuer` при загрузке `.https.`
 страницы, до всякого обращения к `webtransport.rs`. Не находка категории —
 вся категория состоит из `.https.`-файлов (WebTransport требует HTTPS/QUIC
 по спеке), поэтому попадает в гэп со 100%-й вероятностью. Новый BUG-NNN не

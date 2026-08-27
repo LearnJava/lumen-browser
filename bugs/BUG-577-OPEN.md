@@ -17,7 +17,7 @@ FAIL <test name> - event.composedPath is not a function
 
 288 occurrences across the slice's 14 subdirectories — the single largest
 error cluster in the run, ahead of the already-tracked
-[BUG-574](bugs/BUG-574-OPEN.md) `Node.prototype.contains()` gap (178
+[BUG-574](BUG-574-OPEN.md) `Node.prototype.contains()` gap (178
 occurrences in this same slice).
 
 ## Причина

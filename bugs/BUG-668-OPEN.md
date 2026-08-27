@@ -2,7 +2,7 @@
 
 **Статус:** OPEN
 **Компонент:** js (`crates/js/src/screen_orientation.rs` — `SCREEN_ORIENTATION_SHIM`, Phase 0 Screen Orientation stub)
-**Найден:** P2, WPT-VENDOR-screen-orientation (2026-08-06), live `--mcp-live-port` probe (the WPT run itself gave zero functional signal — all 13 module-importing test files TIMEOUT on the already-documented [BUG-446](bugs/BUG-446-FIXED.md) module-graph gap, `idlharness.window.html` TIMEOUT on the already-documented recurring idlharness infra gap, `lock-bad-argument.html` — the one file that imports nothing — is the only one that ran, 2/2 subtests OK)
+**Найден:** P2, WPT-VENDOR-screen-orientation (2026-08-06), live `--mcp-live-port` probe (the WPT run itself gave zero functional signal — all 13 module-importing test files TIMEOUT on the already-documented [BUG-446](BUG-446-FIXED.md) module-graph gap, `idlharness.window.html` TIMEOUT on the already-documented recurring idlharness infra gap, `lock-bad-argument.html` — the one file that imports nothing — is the only one that ran, 2/2 subtests OK)
 
 ## Run signal
 
@@ -22,7 +22,7 @@ idlharness infra gap (`/resources/WebIDLParser.js` + `/resources/idlharness.js` 
 vendored). Since the module-loading gate blocks 100% of the functional signal this category
 would otherwise produce, a direct `--mcp-live-port` probe of the live `screen.orientation`
 object was run instead (same "probe when the run gives nothing" convention as
-[BUG-666](bugs/BUG-666-OPEN.md)/[BUG-667](bugs/BUG-667-OPEN.md)).
+[BUG-666](BUG-666-OPEN.md)/[BUG-667](BUG-667-OPEN.md)).
 
 ## Probe and result
 
@@ -50,8 +50,8 @@ Two independent defects in `SCREEN_ORIENTATION_SHIM` (`screen_orientation.rs:20`
    test or page script that dispatches a synthetic `change` event via the standard
    `dispatchEvent(new Event('change'))` path (rather than calling the internal
    `_fireChangeEvent` the shim itself defines) cannot work at all. Same class of defect as
-   [BUG-664](bugs/BUG-664-OPEN.md) (`navigator.connection` not an `EventTarget`) and
-   [BUG-400](bugs/BUG-400-FIXED.md) (`performance` a plain object literal) — a recurring pattern
+   [BUG-664](BUG-664-OPEN.md) (`navigator.connection` not an `EventTarget`) and
+   [BUG-400](BUG-400-FIXED.md) (`performance` a plain object literal) — a recurring pattern
    of hand-rolled pub/sub standing in for real `EventTarget` inheritance across Phase 0 shims.
 
 2. **`.lock()` resolves successfully but never updates `type`/`angle`.** `lock()`

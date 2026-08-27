@@ -25,7 +25,7 @@ but got "[object Object]"
 ```
 
 `registry.window.js` shows the same for `navigation` (already
-[BUG-673](bugs/BUG-673-OPEN.md) — not a new finding here).
+[BUG-673](BUG-673-OPEN.md) — not a new finding here).
 
 ## Причина
 
@@ -45,8 +45,8 @@ constructor in the shim (`typeof window.PerformanceMark ===
 therefore falls back to the generic `[object Object]` tag instead of
 `[object PerformanceMark]`/`[object PerformanceMeasure]`.
 
-Same defect class as [BUG-645](bugs/BUG-645-OPEN.md)
-(`PerformancePaintTiming`) and [BUG-673](bugs/BUG-673-OPEN.md)
+Same defect class as [BUG-645](BUG-645-OPEN.md)
+(`PerformancePaintTiming`) and [BUG-673](BUG-673-OPEN.md)
 (`PerformanceResourceTiming`/`PerformanceNavigationTiming`) — WebIDL
 interface objects for `PerformanceEntry` subtypes are systematically
 absent as globals even though the delivery mechanism itself
@@ -60,7 +60,7 @@ rather than by a native hook.
 - `registry.any.js`'s `resource` subtest: NOTRUN, whole test TIMEOUT.
   The category's own `fetch(self.location.href + "?" + Math.random())`
   never produces a `resource` entry — reconfirmation of
-  [BUG-520](bugs/BUG-520-OPEN.md) (Resource Timing hook exists but the
+  [BUG-520](BUG-520-OPEN.md) (Resource Timing hook exists but the
   network layer never calls it for real loads).
 - `registry.window.js`'s `paint`/`longtask` subtests: both NOTRUN, whole
   test TIMEOUT. `paint` entries are only delivered once, on the first
@@ -69,7 +69,7 @@ rather than by a native hook.
   call sites) — a later DOM mutation (`document.head.parentNode.appendChild(...)`)
   never produces a second one. `longtask` is listed in
   `supportedEntryTypes` but never actually generated — reconfirmation of
-  [BUG-354](bugs/BUG-354-OPEN.md).
+  [BUG-354](BUG-354-FIXED.md).
 
 ## Как воспроизвести
 

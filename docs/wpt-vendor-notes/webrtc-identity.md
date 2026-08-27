@@ -56,7 +56,7 @@ No new `BUG-NNN` filed.
 5 файлов, 4 id по глобу, без variant-фан-аута, 0 `testdriver.js`).
 `run_report.py --all --root webrtc-identity --recursive` — ~57 с,
 **1/4 harness OK, 0/1 сабтестов**: три `.https.`-файла падают TIMEOUT/ERROR
-на уже задокументированном TLS-гэпе [BUG-657](../bugs/BUG-657-OPEN.md)
+на уже задокументированном TLS-гэпе [BUG-657](../../bugs/BUG-657-OPEN.md)
 (`UnknownIssuer`), один из них попутно словил BUG-380-паттерн (устаревшие
 результаты предыдущего теста из-за неудавшейся навигации). Единственный
 исполнившийся тест (`RTCPeerConnection-constructor.html`) падает на

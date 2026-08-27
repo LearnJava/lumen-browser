@@ -48,7 +48,7 @@ requires two independent checks the shim performs neither of:
    `__lumen_screen_capture_start('')` and resolves.
 
 Same defect class already filed for other Phase 0/1 stubs with unchecked constructor/method
-arguments — [BUG-646](bugs/BUG-646-OPEN.md) (`PaymentRequest` constructor), [BUG-656](bugs/BUG-656-OPEN.md)
+arguments — [BUG-646](BUG-646-OPEN.md) (`PaymentRequest` constructor), [BUG-656](BUG-656-OPEN.md)
 (`PresentationRequest` constructor).
 
 ## Что НЕ является причиной этого бага

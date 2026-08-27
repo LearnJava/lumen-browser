@@ -6,7 +6,7 @@
 
 ## Механизм
 
-[BUG-555](bugs/BUG-555-OPEN.md) documented that `getComputedStyle()` reads `""`
+[BUG-555](BUG-555-OPEN.md) documented that `getComputedStyle()` reads `""`
 for every property when called from a synchronous inline `<script>` that runs
 during the initial HTML parse — the engine thread has not yet published a
 layout snapshot for the page's first layout pass, and `getComputedStyle` does

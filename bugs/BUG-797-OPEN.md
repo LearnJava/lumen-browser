@@ -32,7 +32,7 @@ return {
 
 Комментарий над функцией это прямо признаёт: «actual cross-window state
 sharing is not implemented (window.opener is always null)». Это уже
-отмечалось как известный хвост в [BUG-359](bugs/BUG-359-FIXED.md) («Второй
+отмечалось как известный хвост в [BUG-359](BUG-359-FIXED.md) («Второй
 барьер не закрыт... `-late`-тесты (opener/popup round-trip) всё ещё
 TIMEOUT, это отдельная задача»), но отдельного номера так и не получило —
 заводится им сейчас.

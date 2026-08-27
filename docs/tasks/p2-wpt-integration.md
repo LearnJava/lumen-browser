@@ -350,7 +350,7 @@ option isn't lost — do not fold it into this task's scope.
 - [x] A deliberately-failing assertion is observed as FAIL (harness genuinely checks assertions) —
       **done 2026-07-18.** `run_smoke.py` now drives `/dom/nodes/Element-hasAttribute.html` end to end:
       `Test OK. Subtests passed 1/2` — subtest 1 genuinely FAILs (`el.setAttributeNS is not a
-      function`, [BUG-309](../../bugs/BUG-309-OPEN.md)), subtest 2 PASSes. The `run_smoke.py`-only
+      function`, [BUG-309](../../bugs/BUG-309-FIXED.md)), subtest 2 PASSes. The `run_smoke.py`-only
       timeout was [BUG-301](../../bugs/BUG-301-FIXED.md): `wptrunner` registers a static route for
       `/resources/testharnessreport.js` that serves its own `__wptrunner_message_queue` report and
       wins over the on-disk file, so Lumen's vendored report (which sets `window.__lumen_wpt_results`,
@@ -363,13 +363,13 @@ option isn't lost — do not fold it into this task's scope.
       each `.ini` header-commented with its tracking bug. The full subset runs green under
       `run_smoke.py` (55 checks / 37 subtests / 18 tests, **0 unexpected**) — every genuine
       failure is recorded as `expected: FAIL`, no test weakened. Nine genuine engine gaps surfaced
-      and filed (grouped): [BUG-310](../../bugs/BUG-310-OPEN.md) (ElementTraversal +
-      `ParentNode.children` — 10 tests), [BUG-311](../../bugs/BUG-311-OPEN.md) (`Node.isConnected`),
-      [BUG-312](../../bugs/BUG-312-OPEN.md) (`Element.hasAttributes()`),
-      [BUG-313](../../bugs/BUG-313-OPEN.md) (`document.createProcessingInstruction`),
+      and filed (grouped): [BUG-310](../../bugs/BUG-310-FIXED.md) (ElementTraversal +
+      `ParentNode.children` — 10 tests), [BUG-311](../../bugs/BUG-311-FIXED.md) (`Node.isConnected`),
+      [BUG-312](../../bugs/BUG-312-FIXED.md) (`Element.hasAttributes()`),
+      [BUG-313](../../bugs/BUG-313-FIXED.md) (`document.createProcessingInstruction`),
       [BUG-314](../../bugs/BUG-314-FIXED.md) (DOM interface constructors not exposed as globals),
-      plus the pre-existing [BUG-302](../../bugs/BUG-302-OPEN.md) (`getElementsByClassName`) and
-      [BUG-309](../../bugs/BUG-309-OPEN.md) (`setAttributeNS`). Excluded from the curated subset
+      plus the pre-existing [BUG-302](../../bugs/BUG-302-FIXED.md) (`getElementsByClassName`) and
+      [BUG-309](../../bugs/BUG-309-FIXED.md) (`setAttributeNS`). Excluded from the curated subset
       (not weakened — filed/noted separately): `Element-classlist.html` (1420 subtests, DOMTokenList
       broken — too large for a hand-maintained `.ini`, bug to file when DOMTokenList is worked) and
       the constructor/`createComment`/`createTextNode` tests that end in `TIMEOUT` (BUG-314 family +
@@ -385,11 +385,11 @@ option isn't lost — do not fold it into this task's scope.
       `MutationObserver-takeRecords.html` (harness `OK`, 3 `FAIL`); `MutationObserver-disconnect.html`
       (harness `TIMEOUT`, 2 subtests `TIMEOUT`) proves wptrunner's async-timeout driving against
       Lumen is reported correctly. Full subset green under `run_smoke.py` (**0 unexpected**), no test
-      weakened. Three genuine gaps filed: [BUG-317](../../bugs/BUG-317-OPEN.md) (`MutationRecord`
+      weakened. Three genuine gaps filed: [BUG-317](../../bugs/BUG-317-FIXED.md) (`MutationRecord`
       global missing, renumbered from BUG-315 — collided with the real BUG-315 above), [BUG-318]
       (../../bugs/BUG-318-OPEN.md) (MutationObserver record bookkeeping + subtree delivery,
       renumbered from BUG-316 — collided with `origin/main`'s BUG-316),
-      [BUG-319](../../bugs/BUG-319-OPEN.md) (renumbered from BUG-317, freed up by the two
+      [BUG-319](../../bugs/BUG-319-FIXED.md) (renumbered from BUG-317, freed up by the two
       renumberings above). `awaitPromise` verified independently
       via `tests/wpt/verify_s6_await_promise.py` (a spawned `lumen --bidi-port` probe, like
       `verify_s3`): `script.evaluate` **ignores** `awaitPromise` — a promise-valued expression returns
@@ -414,7 +414,7 @@ option isn't lost — do not fold it into this task's scope.
       suite" section updated to S1–S7-complete.
 - [x] Any engine/BiDi gap found while running the harness filed as `BUG-NNN` (no test weakened to
       pass) — BUG-278/279/280/291/295/296/298/299/300/301 (all fixed); the first real *test*-surfaced
-      engine gap is [BUG-309](../../bugs/BUG-309-OPEN.md) (`Element.setAttributeNS` missing),
+      engine gap is [BUG-309](../../bugs/BUG-309-FIXED.md) (`Element.setAttributeNS` missing),
       recorded as `expected: FAIL` in metadata rather than weakening the test.
 - [x] `cargo clippy -p lumen-bidi-server --all-targets -- -D warnings` clean; existing
       `bidi-server`/`driver` test suites still pass (verified 2026-07-17: bidi-server 96/96,

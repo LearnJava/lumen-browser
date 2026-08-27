@@ -76,5 +76,5 @@ window-management --recursive` (~5 мин) — **0/5 harness OK**, все 5 TIME
 напрямую (прогон сигнала не дал): `getScreenDetails()` резолвится безусловно
 и никогда не читает `navigator.permissions.query({name:'window-management'})`
 (которое честно отвечает `denied`) — переподтверждение уже открытого
-[BUG-667](../bugs/BUG-667-OPEN.md), заведённого на той же заглушке через
+[BUG-667](../../bugs/BUG-667-OPEN.md), заведённого на той же заглушке через
 сестринскую категорию `screen-details`. Новый BUG-NNN не заводился.

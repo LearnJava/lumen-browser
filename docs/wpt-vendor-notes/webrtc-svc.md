@@ -60,5 +60,5 @@ into it already dead-ends at the documented `addTransceiver` stub.
 `NotAllowedError: Video capture is not available in Lumen Phase 1`
 (ожидаемое ограничение Phase 1, нет захвата камеры); 4 сабтеста — каскад от
 `addTransceiver()`, возвращающего `null` безусловно, тот же дефект, что
-[BUG-721](../bugs/BUG-721-OPEN.md)/[BUG-726](../bugs/BUG-726-OPEN.md).
+[BUG-721](../bugs/BUG-721-OPEN.md)/[BUG-726](../../bugs/BUG-726-OPEN.md).
 Новый BUG-NNN не заводился.

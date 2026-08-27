@@ -5,7 +5,7 @@
 **Компонент:** shell (`crates/shell/src/main.rs::apply_loaded_page` and the
 `update_layout_rects`/`update_computed_styles` publish call inside it), js
 (`crates/js/src/dom.rs:12769` `window.getComputedStyle`) — same subsystem as
-[BUG-382](bugs/BUG-382-FIXED.md)
+[BUG-382](BUG-382-FIXED.md)
 **Найден:** P2, WPT-RUN-3 срез 38 (`css/css-layout-api`), 2026-08-04 — прямая
 проба через `--mcp-live-port` (`.tmp/probe3.html`, `.tmp/probe4.html`), после
 того как реальный прогон `at-supports-rule.https.html`/

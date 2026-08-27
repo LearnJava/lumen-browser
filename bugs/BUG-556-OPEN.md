@@ -17,7 +17,7 @@ FAIL offsetTop/Left of empty inline elements should work as if they were not emp
 this slice) all do `var ref = target.nextSibling;` then read `ref.offsetLeft`
 — `ref` itself is `undefined`, not the sibling `<span>` element (and not
 `null`, which is what DOM §4.4 requires when there genuinely is no sibling).
-Distinct failure mode from [BUG-476](bugs/BUG-476-OPEN.md) (wrong numeric
+Distinct failure mode from [BUG-476](BUG-476-OPEN.md) (wrong numeric
 `offsetLeft` value) — here the property read throws before any geometry is
 even involved.
 

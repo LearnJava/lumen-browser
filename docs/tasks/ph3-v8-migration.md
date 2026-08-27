@@ -1553,9 +1553,9 @@ with untouched bodies, no loose microtask-tolerant assertions in this range (the
 `_lumen_drain_microtasks` clusters are all downstream). No bugs closed either — but unlike
 `v8_ws_sse`, here the pre-check found OPEN defects sitting *directly* on the ported APIs:
 [BUG-375](../../bugs/BUG-375-FIXED.md) (only `URL.prototype.href` has a working setter; the other
-nine swallow assignment silently), [BUG-346](../../bugs/BUG-346-OPEN.md) (`Url::resolve` keeps
+nine swallow assignment silently), [BUG-346](../../bugs/BUG-346-FIXED.md) (`Url::resolve` keeps
 `.`/`..` dot-segments) and the `location`-adjacent
-[BUG-359](../../bugs/BUG-359-FIXED.md)/[BUG-358](../../bugs/BUG-358-OPEN.md). All are
+[BUG-359](../../bugs/BUG-359-FIXED.md)/[BUG-358](../../bugs/BUG-358-FIXED.md). All are
 engine-agnostic (shim / `lumen-core` / shell), which is exactly why the 19 green `URL` tests do not
 touch them: the suite pins Lumen's Phase-0 plumbing, not the spec. Worth recording the reason
 `url_resolve_relative_path` (`new URL('../other.html', base).pathname === '/other.html'`) is green
@@ -3728,7 +3728,7 @@ against bare `V8JsRuntime::new()` + local stubs (`navigator`/`DOMException`
 for contacts, `ServiceWorkerRegistration`/the two native stubs for
 background_sync) — no `install_dom` needed, same shape as `badging.rs`'s
 template. No bridge bugs found; this closes 2 of the 7 modules tracked by
-[BUG-549](../../bugs/BUG-549-OPEN.md) (remaining 5 land in G3/G4 per the
+[BUG-549](../../bugs/BUG-549-FIXED.md) (remaining 5 land in G3/G4 per the
 queue doc — bug stays OPEN until all 7 are ported).
 
 `cargo test -p lumen-js --features v8-backend`: 2568→2568 lib total this run
@@ -3767,7 +3767,7 @@ its existing test suite only exercised `StorageBucketManager` directly
 (never through `navigator.storageBuckets`), so the `typeof navigator/window
 !== 'undefined'` branches in the shim simply no-op under the bare runtime —
 same as before the port. No bridge bugs found. Closes 2 more of the 7 modules
-tracked by [BUG-549](../../bugs/BUG-549-OPEN.md) (4/7 done; remaining 3 —
+tracked by [BUG-549](../../bugs/BUG-549-FIXED.md) (4/7 done; remaining 3 —
 `push_api`/`background_fetch`/`payment_request`/`media_stream_recording` are
 G3/G4 — bug stays OPEN until all 7 land). `storage_buckets.rs` is also one of
 the two modules named in BUG-547 (CAPABILITIES.md overclaim) — the overclaim
@@ -3802,7 +3802,7 @@ background_fetch) ported to `#[cfg(all(test, feature = "v8-backend"))]`
 against bare `V8JsRuntime::new()` with a local `ServiceWorkerRegistration`
 stub + the relevant native no-op stubs — same shape as G1/G2's harnesses. No
 bridge bugs found. Closes 2 more of the 7 modules tracked by
-[BUG-549](../../bugs/BUG-549-OPEN.md) — with G1's `contacts`/`background_sync`
+[BUG-549](../../bugs/BUG-549-FIXED.md) — with G1's `contacts`/`background_sync`
 and G2's `periodic_sync`, that's 5/7 done; remaining 2 —
 `payment_request`/`media_stream_recording` — are G4 (bug stays OPEN until
 all 7 land).
@@ -3832,7 +3832,7 @@ globalThis` alias plus a `DOMException` stub (shim checks `typeof window ===
 'undefined'` and constructs `DOMException`), `media_stream_recording` needs
 `Blob`/`DOMException`/`Date.now()` stubs (matches the original rquickjs test
 harnesses). No bridge bugs found. Closes the last 2 of the 7 modules tracked
-by [BUG-549](../../bugs/BUG-549-OPEN.md) — group G's port work is done (bug
+by [BUG-549](../../bugs/BUG-549-FIXED.md) — group G's port work is done (bug
 resolution/CAPABILITIES.md update deferred to a follow-up, not part of this
 batch's scope).
 

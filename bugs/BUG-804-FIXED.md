@@ -80,8 +80,8 @@ tests/wpt/run_report.py --all --root html/semantics/scripting-1/the-script-eleme
 
 Машинерия событий `load`/`error` (`_lumen_resource_pending`,
 `_lumen_resource_try_prepare`, `_lumen_resource_fire`) была написана
-[BUG-571](bugs/BUG-571-FIXED.md) под `<script>` и обобщена
-[BUG-722](bugs/BUG-722-FIXED.md) на `<link rel=stylesheet>`. Вход в неё
+[BUG-571](BUG-571-FIXED.md) под `<script>` и обобщена
+[BUG-722](BUG-722-FIXED.md) на `<link rel=stylesheet>`. Вход в неё
 ровно один — `_lumen_resource_track(nid, tag)`, который вызывается ТОЛЬКО
 из `document.createElement`/`createElementNS` и имеет жёсткий белый список
 тегов:
@@ -119,7 +119,7 @@ function _lumen_resource_track(nid, local) {
 
 ## Почему это TIMEOUT, а не FAIL
 
-Тот же класс, что [BUG-622](bugs/BUG-622-OPEN.md), [BUG-795](bugs/BUG-795-DUPLICATE.md)
+Тот же класс, что [BUG-622](BUG-622-OPEN.md), [BUG-795](BUG-795-DUPLICATE.md)
 и хелпер-404 из среза 7: тест регистрирует `async_test`/`promise_test`,
 который резолвится только из обработчика события. Событие не приходит,
 `harness_status` не публикуется, wptrunner убивает страницу по таймауту.
@@ -144,16 +144,16 @@ function _lumen_resource_track(nid, local) {
 
 ## Не путать
 
-- [BUG-571](bugs/BUG-571-FIXED.md) / [BUG-722](bugs/BUG-722-FIXED.md) —
+- [BUG-571](BUG-571-FIXED.md) / [BUG-722](BUG-722-FIXED.md) —
   `createElement`-путь для `<script>`/`<link>`; **работает**, подтверждено
   A/B выше. Чинить их заново не нужно.
-- [BUG-630](bugs/BUG-630-OPEN.md) (`<img>`), [BUG-798](bugs/BUG-798-OPEN.md)
+- [BUG-630](BUG-630-OPEN.md) (`<img>`), [BUG-798](BUG-798-OPEN.md)
   (`<embed>`/`<object>`) — тот же КЛАСС («элемент не сообщает об исходе
   загрузки»), но другие элементы и другой код; общего фикса с ними нет.
 
 ## Разметочный `<track>` — сюда же (2026-08-24)
 
-[BUG-775](bugs/BUG-775-FIXED.md) (поглотил [BUG-795](bugs/BUG-795-DUPLICATE.md))
+[BUG-775](BUG-775-FIXED.md) (поглотил [BUG-795](BUG-795-DUPLICATE.md))
 закрыл **скриптовую** половину `<track>`: элемент, созданный через
 `createElement`, теперь фетчится, разбирается и диспатчит `load`/`error`.
 Разметочный `<track>` остался ровно в форме этого бага и по той же причине:
@@ -178,7 +178,7 @@ JS-списка вместо снимка шелла для **каждой** с�
 разметочными треками. Нужно сперва решить, кто из двоих владеет списком.
 
 **Развилка снята срезом 4 (см. ниже) в пользу JS-списка.**
-- [BUG-459](bugs/BUG-459-OPEN.md) — URL внешнего `<script type=module>`;
+- [BUG-459](BUG-459-OPEN.md) — URL внешнего `<script type=module>`;
   ортогонально, событий не касается.
 
 ## Перезамер 2026-08-22 (WPT-RUN-6, срез 20): третья форма маркера
