@@ -534,6 +534,17 @@ fn bug341_s18_keystroke_box_build_census() {
     }
 }
 
+/// BUG-341 S19 diagnostic: census of the whole-tree **copies** an
+/// incremental cycle makes, as opposed to the boxes it builds.
+///
+/// S18 drove the graft down to O(1) per reused subtree and left the copies
+/// as the largest remaining items. This prints, per cycle and per scenario,
+/// the three the queue names: the reuse copy taken out of `prev` inside
+/// `build_box_or_reuse`, the index walk over `prev` that feeds it, and the
+/// pipeline's own `layout.clone()` that persists the next cycle's `prev`
+/// вЂ” each with the number of boxes it touched, so a later run can tell
+/// "the copy got cheaper" from "the region got smaller".
+///
 /// Run: `cargo test -p lumen-shell --profile dev-release
 /// bug341_s19_copy_census -- --ignored --nocapture`.
 #[test]
