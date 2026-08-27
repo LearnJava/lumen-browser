@@ -70,7 +70,7 @@ no native `_lumen_focus`-style function is registered.
 
 ## Фикс
 
-**Часть 1 — `focus()`/`blur()`/`activeElement` — already fixed by [BUG-381](bugs/BUG-381-FIXED.md) (2026-07-29),
+**Часть 1 — `focus()`/`blur()`/`activeElement` — already fixed by [BUG-381](BUG-381-FIXED.md) (2026-07-29),
 filed two days after this bug and covering the exact gap described above** (native
 `_lumen_request_focus`/`_lumen_request_blur` pair, `HTMLElement.prototype.focus(options)`/`blur()`,
 `document.activeElement`, `document.hasFocus()`, the `blur→focusout→focus→focusin` event

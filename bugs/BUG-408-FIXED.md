@@ -96,8 +96,8 @@ toggle/restore/dismiss в `ChromeAction` + `dispatch_chrome_action`. После 
 
 ## Связанные
 
-* [BUG-403](bugs/BUG-403-FIXED.md), [BUG-404](bugs/BUG-404-OPEN.md) — тот же корень
+* [BUG-403](BUG-403-FIXED.md), [BUG-404](BUG-404-FIXED.md) — тот же корень
   (пробелы паритета, не пойманные чек-листом CC-14), другие вызывающие места.
-* [BUG-409](bugs/BUG-409-OPEN.md), [BUG-410](bugs/BUG-410-OPEN.md) — соседние
+* [BUG-409](BUG-409-FIXED.md), [BUG-410](BUG-410-FIXED.md) — соседние
   непереносённые куски того же легаси-таб-бара/омнибокса, найдены тем же срезом.
 * CC-15-3 (`ROADMAP.md`, `docs/tasks/p1-css-chrome.md` §CC-15) — срез, вскрывший пробел.

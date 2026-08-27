@@ -56,11 +56,11 @@ No new `BUG-NNN` filed.
 2026-08-18 (коммит `35be3b44`, `tests/wpt/webusb/`, 41 файл, 32 id, 6
 `-manual.https.html` исключены, без variant-фан-аута). `run_report.py --all
 --root webusb --recursive` (~2:52) — **2/32 harness OK, 0/15 сабтестов**.
-30/32 — `.https.`-гэп TLS `UnknownIssuer` ([BUG-657](../bugs/BUG-657-OPEN.md)),
+30/32 — `.https.`-гэп TLS `UnknownIssuer` ([BUG-657](../../bugs/BUG-657-OPEN.md)),
 не находка категории. Два исполнившихся non-`.https.` теста дали два FAIL —
 оба не новые баги: `insecure-context.any.html` переподтверждает уже открытый
-[BUG-765](../bugs/BUG-765-OPEN.md) (`navigator.usb` ставится безусловно, без
+[BUG-765](../../bugs/BUG-765-OPEN.md) (`navigator.usb` ставится безусловно, без
 гейта по `isSecureContext`); `usb-supported-by-permissions-policy.html`
 ожидаемо не находит `"usb"` в `features()` — WebUSB не имеет
 Permissions-Policy интеграции (Phase-0), это корректное поведение, а не
-регресс [BUG-361](../bugs/BUG-361-FIXED.md). Новый BUG-NNN не заводился.
+регресс [BUG-361](../../bugs/BUG-361-FIXED.md). Новый BUG-NNN не заводился.

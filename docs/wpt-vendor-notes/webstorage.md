@@ -121,12 +121,12 @@ venv/переустановка). Патч применён заново (тот
 провальными сабтестами. Остаток — BUG-480 и
 [BUG-901](../../bugs/BUG-901-OPEN.md) (одиночный суррогат → `U+FFFD` на границе
 с нативом, `storage_setitem.window.js`, 12 сабтестов). Два подтверждённых корня
-объясняют основную массу провалов: [BUG-773](../bugs/BUG-773-FIXED.md)
+объясняют основную массу провалов: [BUG-773](../../bugs/BUG-773-FIXED.md)
 (`Storage` — не «legacy platform object» спеки, property-style
 доступ/`for-in`/`in`/`delete` идут мимо нативного бэкенда, два несвязанных
-слоя данных на одном объекте) и [BUG-774](../bugs/BUG-774-FIXED.md)
+слоя данных на одном объекте) и [BUG-774](../../bugs/BUG-774-FIXED.md)
 (`initStorageEvent` без WebIDL-коэрсии/дефолтов). Остальное — уже
-заведённый [BUG-480](../bugs/BUG-480-OPEN.md) (`<iframe>` без browsing
+заведённый [BUG-480](../../bugs/BUG-480-OPEN.md) (`<iframe>` без browsing
 context, весь кластер `event_*.html`/`document-domain.html`) и
 непокрытая Storage Partitioning (новая опциональная фича, не заведена —
 целиком отсутствующая возможность, не дефект реализованной поверхности).

@@ -84,12 +84,12 @@ per the project's "don't describe a failure mode from intuition" rule.
 неуспехов — TIMEOUT, потому что урезанный `WorkerGlobalScope` роняет
 воркерный скрипт `ReferenceError`-ом ещё до первого `postMessage`, а
 исключение никуда не долетает — харнесс видит только внешний таймаут, а не
-ошибку. Три подтверждённых, заведённых корня: [BUG-776](../bugs/BUG-776-FIXED.md)
+ошибку. Три подтверждённых, заведённых корня: [BUG-776](../../bugs/BUG-776-FIXED.md)
 (нет `self.location`/`self.navigator` в dedicated/shared-воркерах, 31 файл
-напрямую), [BUG-777](../bugs/BUG-777-FIXED.md) (конструкторы `Worker`/
+напрямую), [BUG-777](../../bugs/BUG-777-FIXED.md) (конструкторы `Worker`/
 `SharedWorker` не читают `options` — модульных воркеров не существует, весь
-каталог `modules/`, 24 файла) и [BUG-778](../bugs/BUG-778-FIXED.md) (нет
+каталог `modules/`, 24 файла) и [BUG-778](../../bugs/BUG-778-FIXED.md) (нет
 `close()`/`fetch()`/`XMLHttpRequest`, плюс `importScripts()` у SharedWorker
 безусловно бросает, тогда как у dedicated-воркера работает). Кластер
 `onerror/*`/`Worker_ErrorEvent_*` — уже задокументированный
-[BUG-591](../bugs/BUG-591-FIXED.md), новым не заведён.
+[BUG-591](../../bugs/BUG-591-FIXED.md), новым не заведён.

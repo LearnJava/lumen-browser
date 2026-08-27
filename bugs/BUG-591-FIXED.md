@@ -84,10 +84,10 @@ reproduced live with both `throw new Error(...)` and a bare
 worker's top level. This is the mechanism `tests/wpt/secure-contexts`'s
 `basic-dedicated-worker*.html`/`basic-shared-worker*.html` rely on for
 their `data:` URL worker subtest and is one contributor (alongside
-[BUG-364](bugs/BUG-364-FIXED.md), which blocks that category's non-`data:`
+[BUG-364](BUG-364-FIXED.md), which blocks that category's non-`data:`
 worker subtests separately) to that category's 0/8 harness OK.
 
-**Partially addressed by the [BUG-364](bugs/BUG-364-FIXED.md) fix (P3,
+**Partially addressed by the [BUG-364](BUG-364-FIXED.md) fix (P3,
 2026-08-09):** the accessor-level gap described above — `Worker.prototype`
 having no `onerror` at all and `addEventListener('error', …)` being a silent
 no-op — is now closed; both exist and fire for the script-fetch-failure case
@@ -107,7 +107,7 @@ for that mechanism.
 Runtime("importScripts is not supported")` — the exact stderr line this
 section describes, at the exact moment `.any.worker.html`/`.worker.html`/
 `.any.sharedworker.html`'s wptrunner-generated bootstrap fails on its first
-statement (see [BUG-778](bugs/BUG-778-FIXED.md) for the importScripts gap
+statement (see [BUG-778](BUG-778-FIXED.md) for the importScripts gap
 itself). Because nothing reaches the parent, `fetch_tests_from_worker()`
 just waits out its ~10s per-file timeout: 1210 of 6205 TIMEOUT ids in that
 run (19.5%) are this exact mechanism, the single largest TIMEOUT cluster
@@ -119,7 +119,7 @@ timeout, and would also matter independently for the many `html/webappapis`
 files listed above.
 
 **The window `window.onerror`/`'error'`/`onunhandledrejection` reporting core
-is now wired (P1, 2026-08-22)** — [BUG-716](bugs/BUG-716-FIXED.md) closed the
+is now wired (P1, 2026-08-22)** — [BUG-716](BUG-716-FIXED.md) closed the
 promise-rejection half; this slice closes the "report the exception" (HTML LS
 §8.1.3.6) half for four of its call sites:
 
@@ -193,7 +193,7 @@ drains it alongside the existing message queue and calls a new
 `_lumen_deliver_worker_errors` (`WORKER_SHIM`), which fires an `ErrorEvent`
 named `error` at the owning `Worker` object — both `worker.onerror` and
 `addEventListener('error', …)` now see it, matching the accessor-level fix
-[BUG-364](bugs/BUG-364-FIXED.md) already made for the script-fetch-failure
+[BUG-364](BUG-364-FIXED.md) already made for the script-fetch-failure
 case. `filename`/`lineno`/`colno` are best-effort-parsed from `err.stack`
 inside the worker (same technique the page-side `_lumen_report_exception`
 uses), since V8's `Error` has no structured location API from script; the

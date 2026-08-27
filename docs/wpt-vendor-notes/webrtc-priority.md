@@ -53,7 +53,7 @@ New `BUG-726` filed (only).
 `35be3b44`, `tests/wpt/webrtc-priority/`, 2 файла, 2 id по глобу, без
 variant-фан-аута, 0 `testdriver.js`, без `.https.`). `run_report.py --all
 --root webrtc-priority --recursive` — ~27 с, **2/2 harness OK, 0/9
-сабтестов**. Найден [BUG-726](../bugs/BUG-726-OPEN.md):
+сабтестов**. Найден [BUG-726](../../bugs/BUG-726-OPEN.md):
 `createDataChannel(label, options)` отбрасывает `options` целиком —
 возвращаемый `RTCDataChannel` не отражает ни `priority`, ни любое другое
 поле `RTCDataChannelInit`, `dc1.priority` читается как `undefined` вместо

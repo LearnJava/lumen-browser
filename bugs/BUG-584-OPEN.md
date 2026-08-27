@@ -19,7 +19,7 @@ FAIL <test name> - InterestEvent is not defined
 Interest Invokers (WHATWG HTML draft addition, hover/focus-triggered
 "preview" popovers via `interestfor="idX"` on `<a>`/`<area>`/`<button>`, the
 hover/focus analogue of the existing `command`/`commandfor` click-driven
-mechanism — see [BUG-582](bugs/BUG-582-OPEN.md), same shape of gap) has no
+mechanism — see [BUG-582](BUG-582-OPEN.md), same shape of gap) has no
 implementation: no `interestFor` IDL reflection, no
 `InterestEvent`/`interest`/`loseinterest` dispatch, no hover/focus-delay
 timers driving it.
@@ -29,4 +29,4 @@ timers driving it.
 Whole feature, self-contained to `interestfor/`. Entirely `.tentative.` —
 an early-stage draft, not yet broadly implemented even in other engines —
 flagging for scope triage rather than implying priority, same posture as
-[BUG-583](bugs/BUG-583-OPEN.md) (`<permission>`) found in the same run.
+[BUG-583](BUG-583-OPEN.md) (`<permission>`) found in the same run.

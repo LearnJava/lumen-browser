@@ -46,7 +46,7 @@ timeOrigins differ when worker is created after a delay»). Минимальны
 хочется дублировать логику — оценить, стоит ли выносить общий
 JS-фрагмент `performance`-конструктора в шаред-строку, используемую и
 `WEB_API_SHIM`, и `WORKER_SHIM`, чтобы не разъезжались (после фикса
-[BUG-400](bugs/BUG-400-FIXED.md) это станет актуальнее — EventTarget-
+[BUG-400](BUG-400-FIXED.md) это станет актуальнее — EventTarget-
 наследование и `toJSON()` тоже придётся продублировать или вынести).
 
 ## Исправление (P3, 2026-08-11)
@@ -112,7 +112,7 @@ timeOrigins differ when worker is created after a delay»: у воркера,
 `--deterministic`. Заморозить только его было бы подделкой: патч
 детерминизма выполняется в контексте страницы, поэтому `Date.now()` и
 `Math.random()` внутри любого воркера и без того живые, и остаются
-такими. Пробел заведён целиком — [BUG-768](bugs/BUG-768-OPEN.md).
+такими. Пробел заведён целиком — [BUG-768](BUG-768-OPEN.md).
 
 `PerformanceObserver` в воркер не добавлен (`[Exposed=(Window,Worker)]`,
 но это отдельная поверхность со своей доставкой записей), `Event` в
@@ -149,13 +149,13 @@ timeOrigins differ when worker is created after a delay»: у воркера,
 
 ## Связанные
 
-* [BUG-768](bugs/BUG-768-OPEN.md) — заведён этим фиксом: `--deterministic`
+* [BUG-768](BUG-768-OPEN.md) — заведён этим фиксом: `--deterministic`
   не доезжает ни до одной worker-области (все три источника —
   `Math.random`, `Date.now`, `_lumen_now_ms`).
-* [BUG-766](bugs/BUG-766-OPEN.md) — `isSecureContext` отсутствует в
+* [BUG-766](BUG-766-OPEN.md) — `isSecureContext` отсутствует в
   `WorkerGlobalScope`: тот же класс пробела, и после этого фикса у него
   есть готовое место — `worker::install_worker_scope_globals_v8`.
-* [BUG-400](bugs/BUG-400-FIXED.md) — тот же API (`Performance`), другой
+* [BUG-400](BUG-400-FIXED.md) — тот же API (`Performance`), другой
   root cause: там метод/наследование неполны на `window.performance`,
   здесь объект отсутствует на `self`/`globalThis` воркера целиком.
 * `worker_global_shim` уже содержит несколько намеренно урезанных

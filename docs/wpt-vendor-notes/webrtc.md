@@ -42,7 +42,7 @@ throws `TypeError`). Filed as [BUG-721](../../bugs/BUG-721-OPEN.md).
 `run_report.py --all --root webrtc --recursive --processes=4` — ~17:42,
 258 реально исполненных инстансов (variant-фан-аут): **102/258 harness OK,
 86/1126 сабтестов**. 112 исходов (60 TIMEOUT + 52 ERROR при навигации) —
-уже задокументированный TLS-гэп [BUG-657](../bugs/BUG-657-OPEN.md)
+уже задокументированный TLS-гэп [BUG-657](../../bugs/BUG-657-OPEN.md)
 (подтверждено точным совпадением с числом строк `UnknownIssuer` в логе).
 Два крупнейших кластера падений (66× `setConfiguration(config)` + 63×
 `new RTCPeerConnection(config)`, 129 из 1040 непройденных сабтестов) —

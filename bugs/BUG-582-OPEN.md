@@ -35,7 +35,7 @@ unimplemented feature.
 ## Масштаб
 
 Whole feature, self-contained to `the-button-element/command-and-commandfor/`.
-Depends on [BUG-579](bugs/BUG-579-OPEN.md) (`dialog.requestClose()`) for the
+Depends on [BUG-579](BUG-579-OPEN.md) (`dialog.requestClose()`) for the
 dialog-target subset of its own test matrix, since several
 `command-and-commandfor` subtests target `<dialog>` with built-in
 `command="request-close"` values.

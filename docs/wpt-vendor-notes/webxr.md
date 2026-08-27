@@ -74,16 +74,16 @@ XR в воркспейсе нет. Вендорена целиком 2026-08-18 
 `tests/wpt/webxr/`, 178 файлов, 165 id, без variant-фан-аута). `run_report.py
 --all --root webxr --recursive` (~17 мин) — **1/165 harness OK, 17/19
 сабтестов**. 164/165 — `.https.`-гэп TLS `UnknownIssuer`
-([BUG-657](../bugs/BUG-657-OPEN.md)), не находка категории; после первой (и
+([BUG-657](../../bugs/BUG-657-OPEN.md)), не находка категории; после первой (и
 единственной) успешной загрузки страницы все последующие навигации
-отчитывались уже починенным ([BUG-380](../bugs/BUG-380-FIXED.md)) детектором
+отчитывались уже починенным ([BUG-380](../../bugs/BUG-380-FIXED.md)) детектором
 маркера как явный `ERROR` («document was never replaced») вместо голого
-TIMEOUT — это переподтверждение движкового [BUG-438](../bugs/BUG-438-FIXED.md)
+TIMEOUT — это переподтверждение движкового [BUG-438](../../bugs/BUG-438-FIXED.md)
 (навигация молча не грузит и рапортует успех), не новый/специфичный для
 категории зависон. Два исполнившихся non-`.https.` теста: `historical.html`
 17/17 OK (тривиально — проверяет отсутствие устаревших WebVR-интерфейсов,
 которых никогда не было); `webxr_availability.http.sub.html` — harness
-TIMEOUT, 0/2 сабтестов, переподтверждает [BUG-765](../bugs/BUG-765-OPEN.md)
+TIMEOUT, 0/2 сабтестов, переподтверждает [BUG-765](../../bugs/BUG-765-OPEN.md)
 (`navigator.xr` ставится безусловно, без гейта `isSecureContext`) и
-[BUG-480](../bugs/BUG-480-OPEN.md) (кросс-origin `<iframe>` без browsing
+[BUG-480](../../bugs/BUG-480-OPEN.md) (кросс-origin `<iframe>` без browsing
 context, второй сабтест виснет). Новый BUG-NNN не заводился.

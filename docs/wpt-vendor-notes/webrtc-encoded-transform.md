@@ -52,9 +52,9 @@ API попросту не на что). Вендорена целиком 2026-0
 variant-фан-аута). `run_report.py --all --root webrtc-encoded-transform
 --recursive --processes=4` — ~8:11, **7/38 harness OK, 0/21 сабтестов**.
 Из 31 неожиданного исхода 27 — TIMEOUT (в основном уже задокументированный
-TLS-гэп [BUG-657](../bugs/BUG-657-OPEN.md), `UnknownIssuer` на `.https.`-
+TLS-гэп [BUG-657](../../bugs/BUG-657-OPEN.md), `UnknownIssuer` на `.https.`-
 навигации) и 4 — ERROR (уже задокументированное переиспользование
-результатов сессии, [BUG-380](../bugs/BUG-380-FIXED.md): «Got results from
+результатов сессии, [BUG-380](../../bugs/BUG-380-FIXED.md): «Got results from
 X, expected Y» на четырёх файлах `RTC*Frame-clone`/`-metadata`/
 `insertable-streams-audio`, исполнившихся подряд). Все 21 реально
 исполнившихся сабтеста падают на простой `ReferenceError: <API> is not

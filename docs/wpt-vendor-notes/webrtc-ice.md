@@ -53,6 +53,6 @@ webrtc_stub.rs` — ноль совпадений); ICE-состояние та�
 variant-фан-аута, 0 `testdriver.js`). `run_report.py --all --root
 webrtc-ice --recursive` — ~45 с, **0/1 harness OK**: единственный id
 падает TIMEOUT на уже задокументированном TLS-гэпе
-[BUG-657](../bugs/BUG-657-OPEN.md), сигнала из самого прогона нет, но
+[BUG-657](../../bugs/BUG-657-OPEN.md), сигнала из самого прогона нет, но
 подтверждённое грепом полное отсутствие `RTCIceTransport` означает, что
 и без TLS-гэпа тест упал бы `ReferenceError`. Новый BUG-NNN не заводился.

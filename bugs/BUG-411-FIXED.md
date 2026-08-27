@@ -110,7 +110,7 @@ let permissions = [PermissionKind::Camera, PermissionKind::Microphone]
 
 ## Связанные
 
-* [BUG-408](bugs/BUG-408-OPEN.md), [BUG-409](bugs/BUG-409-OPEN.md), [BUG-410](bugs/BUG-410-OPEN.md) —
+* [BUG-408](BUG-408-FIXED.md), [BUG-409](BUG-409-FIXED.md), [BUG-410](BUG-410-FIXED.md) —
   тот же класс: фичи легаси-хрома, не перенесённые в движковый и вскрытые срезами CC-15.
-* [BUG-404](bugs/BUG-404-OPEN.md) — тот же поповер с другой стороны: его легаси-хит-тест жив и
+* [BUG-404](BUG-404-FIXED.md) — тот же поповер с другой стороны: его легаси-хит-тест жив и
   негейтирован, съедая клики по старому прямоугольнику.

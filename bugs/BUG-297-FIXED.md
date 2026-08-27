@@ -24,8 +24,8 @@ nonzero-fill AA fix). Every P4 CSS-property merge since then (writing-mode, `@fu
 `@color-profile`, `backface-visibility`, `revert-layer`, `counter-set`, `font-size-adjust`,
 `contain-intrinsic-size`, `interpolate-size`, … — see `graphic_tests/COVERAGE.md` entries for tests
 110–145) shifted the CPU rasterizer's pixel output on unrelated pages without regenerating this
-reference set. Same class of staleness as [BUG-118](bugs/BUG-118-FIXED.md) (2026-06-09) and
-[BUG-149](bugs/BUG-149-FIXED.md) (2026-06-13) — third recurrence.
+reference set. Same class of staleness as [BUG-118](BUG-118-FIXED.md) (2026-06-09) and
+[BUG-149](BUG-149-FIXED.md) (2026-06-13) — third recurrence.
 
 ## Repro
 

@@ -39,14 +39,14 @@ Timing L2 §4) — записи остаются "утиными" plain-object �
 
 ## Причина
 
-Тот же класс дефекта, что [BUG-645](bugs/BUG-645-OPEN.md)
-(`PerformancePaintTiming`), [BUG-624](bugs/BUG-624-OPEN.md)
-(`Navigator`), [BUG-637](bugs/BUG-637-OPEN.md) (`Window`) и
-[BUG-589](bugs/BUG-589-OPEN.md) (`window` сам не WebIDL-объект) —
+Тот же класс дефекта, что [BUG-645](BUG-645-OPEN.md)
+(`PerformancePaintTiming`), [BUG-624](BUG-624-OPEN.md)
+(`Navigator`), [BUG-637](BUG-637-OPEN.md) (`Window`) и
+[BUG-589](BUG-589-OPEN.md) (`window` сам не WebIDL-объект) —
 WebIDL-интерфейсные объекты систематически отсутствуют как глобалы,
 хотя поведение самих shim-функций местами уже реализовано. Здесь он
 блокирует ровно то же поле, что уже названо (но не объяснено на уровне
-интерфейса) в [BUG-640](bugs/BUG-640-OPEN.md), которое перечисляет
+интерфейса) в [BUG-640](BUG-640-OPEN.md), которое перечисляет
 `serverTiming` в списке отсутствующих полей `PerformanceNavigationTiming`
 — BUG-640 объясняет пустой `detail_json`, но не то, что даже при
 заполненном `detail_json` результат не был бы `instanceof
