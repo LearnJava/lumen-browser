@@ -1415,3 +1415,91 @@ impl Lumen {
         }
     }
 }
+
+/// РџСЂРѕРіРЅР°С‚СЊ РїРѕСЂС†РёСЋ HTML С‡РµСЂРµР· preload-СЃРєР°РЅРµСЂ, СЌРјРёС‚РЅСѓС‚СЊ `EarlyPreloadHints` Рё
+/// РїР°СЂР°Р»Р»РµР»СЊРЅРѕ Р·Р°РіСЂСѓР·РёС‚СЊ РЅР°Р№РґРµРЅРЅС‹Рµ СЃС‚РёР»Рё (PH1-2 / PH1-8). РћР±С‰Р°СЏ Р»РѕРіРёРєР° РґР»СЏ РѕР±РѕРёС…
+/// РїСѓС‚РµР№ `start_streaming_load`: СЃРµС‚РµРІРѕРіРѕ streaming-Р° (URL) Рё РЅР°СЂРµР·РєРё
+/// СѓР¶Рµ-Р·Р°РіСЂСѓР¶РµРЅРЅРѕРіРѕ Р±СѓС„РµСЂР° (File/Snapshot/Static). Hint-С‹ С€Р»СЋС‚СЃСЏ Р”Рћ РїРµСЂРµРґР°С‡Рё
+/// chunk-Р° DOM-РїР°СЂСЃРµСЂСѓ, С‡С‚РѕР±С‹ fetch РїРѕРґСЂРµСЃСѓСЂСЃРѕРІ СЃС‚Р°СЂС‚РѕРІР°Р» СЂР°РЅСЊС€Рµ.
+#[allow(clippy::too_many_arguments)]
+fn feed_preload_and_emit(
+    scanner: &mut lumen_html_parser::PreloadScanner,
+    chunk: &[u8],
+    base: &ResourceBase,
+    proxy: &EventLoopProxy<LoadEvent>,
+    generation: u64,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<&Arc<lumen_storage::CookieJar>>,
+    media_ctx: &lumen_css_parser::MediaContext,
+) {
+    use lumen_network::RequestDestination;
+
+    let early = scanner.feed_bytes(chunk);
+    if early.is_empty() {
+        return;
+    }
+    let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early.clone(), base.clone(), generation));
+    // PH1-2 + BUG-171: speculatively fetch subresources off the UI thread while the
+    // HTML is still streaming. Linked stylesheets AND external classic scripts are
+    // warmed into the process-global prefetch cache using the SAME subresource
+    // client `parse_and_layout` uses, so the final UI-thread pass reads identical
+    // bytes instantly instead of blocking on the socket (cascade + script order
+    // untouched вЂ” a cache miss simply re-fetches there). Stylesheets additionally
+    // parse here to feed progressive intermediate frames (the previous PH1-2 path).
+    for hint in &early {
+        let (raw_url, dest, is_css) = match hint {
+            lumen_html_parser::PreloadHint::Stylesheet { url, media } => {
+                // BUG-268: print-only Р»РёСЃС‚ С„РёРЅР°Р»СЊРЅС‹Р№ pipeline РІСЃС‘ СЂР°РІРЅРѕ РЅРµ
+                // РІРѕР·СЊРјС‘С‚ (media-РіРµР№С‚ РІ collect_link_hrefs) вЂ” РЅРµ РіСЂРµРµРј РєСЌС€
+                // Рё, РіР»Р°РІРЅРѕРµ, РЅРµ СЌРјРёС‚РёРј CssLoaded: РїСЂРѕРјРµР¶СѓС‚РѕС‡РЅС‹Рµ progressive-
+                // РєР°РґСЂС‹ РЅРµ РґРѕР»Р¶РЅС‹ РєСЂР°СЃРёС‚СЊ СЃС‚СЂР°РЅРёС†Сѓ print-РїСЂР°РІРёР»Р°РјРё.
+                if media.as_deref().is_some_and(|m| !link_media_matches(m, media_ctx)) {
+                    continue;
+                }
+                (url, RequestDestination::Style, true)
+            }
+            lumen_html_parser::PreloadHint::Script { url } => {
+                (url, RequestDestination::Script, false)
+            }
+            _ => continue,
+        };
+        match base.resolve(raw_url) {
+            // Local files: read is instant вЂ” no cache benefit. Only CSS needs a
+            // CssLoaded event for the progressive frame; scripts are read in
+            // `parse_and_layout`.
+            ResolvedResource::File(path) => {
+                if is_css
+                    && let Ok(text) = std::fs::read_to_string(&path)
+                {
+                    let sheet = lumen_css_parser::parse(&text);
+                    let _ = proxy.send_event(LoadEvent::CssLoaded(Box::new(sheet), generation));
+                }
+            }
+            ResolvedResource::Url(resolved) => {
+                let proxy2 = proxy.clone();
+                let base = base.clone();
+                let sink = Arc::clone(sink);
+                let cookie_jar = cookie_jar.cloned();
+                std::thread::spawn(move || {
+                    use lumen_core::url::Url;
+                    let Ok(parsed) = Url::parse(&resolved) else {
+                        return;
+                    };
+                    let bytes = crate::prefetch::PREFETCH_CACHE.fetch(generation, &resolved, || {
+                        let client = base.http_client_for_subresource(sink, cookie_jar);
+                        client
+                            .fetch_subresource(&parsed, dest)
+                            .map_err(|e| e.to_string())
+                    });
+                    if is_css
+                        && let Ok(bytes) = bytes
+                    {
+                        let sheet =
+                            lumen_css_parser::parse(&String::from_utf8_lossy(&bytes[..]));
+                        let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet), generation));
+                    }
+                });
+            }
+        }
+    }
+}
