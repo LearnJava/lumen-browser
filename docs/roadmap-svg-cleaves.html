@@ -55,7 +55,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-27",
+ "generated": "2026-08-28",
  "counts": {
   "open": 381,
   "fixed": 500,
@@ -5418,23 +5418,135 @@
       {
        "id": "SPLIT-ST0",
        "title": "SPLIT-ST0: перепись style.rs",
-       "status": "ready",
+       "status": "done",
        "size": "S",
-       "note": "Перепись `crates/engine/layout/src/style.rs` (38 031 строка, крупнейший файл workspace): карта всех top-level item'ов и максимальных регионов методом §1 плана, нарезка на батчи ST-1…ST-N с анкерами и целевыми модулями, запись плана в [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4. Одна сессия, ноль правок кода. Регион в переписи именовать по содержимому, а не по первому item'у — ошибка, стоившая SPLIT-SH1 переделки плана"
+       "note": "Перепись `crates/engine/layout/src/style.rs` (38 031 строка, крупнейший файл workspace): карта всех top-level item'ов и максимальных регионов методом §1 плана, нарезка на батчи ST-1…ST-N с анкерами и целевыми модулями, запись плана в [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4. Одна сессия, ноль правок кода. Регион в переписи именовать по содержимому, а не по первому item'у — ошибка, стоившая SPLIT-SH1 переделки плана  ЗАКРЫТ 2026-08-27 (ветка `p1-split-st0`): 723 top-level item а, лексер сходится (итоговая глубина 0), файл разложен на 23 региона и 18 батчей ST-1…ST-18, покрывающих 43…38032 без разрывов и наложений (37 990 строк + 21 строка `use`-шапки = сумма спанов 38 011). Метод переписи вынесен в `scripts/split_census.py` и заменяет однострочник `rg` из §1 плана: тот не отличает код от строкового литерала (в `js/dom.rs` 45 531 строка почти вся внутри `const WEB_API_SHIM`), не знает границ item а и не поднимает начало над `///` и атрибутами — три осечки дорожки в одном месте; скрипт проверен на четырёх монолитах очереди. ДВЕ УЖЕ ЗАВЕДЁННЫЕ СТРОКИ ГРУППЫ ИСПРАВЛЕНЫ ПО ФАКТУ: ST-1 указывала анкер `mod rule_index_regression` (~36541) и цель `tests/style/`, тогда как тестов в файле 13 813 строк (36 % файла, 1 195 `#[test]`), главный из них `mod tests` на 24304 — в двенадцати тысячах строк ВЫШЕ того анкера, а `tests/` это каталог интеграционных тестов, куда модуль переехать не может вовсе (читает приватные элементы через `use super::*`); верный адрес — `src/style/tests/`, приём SH-4b. ST-2 («логические свойства») по адресу верна, но это 161 строка на два item а — слита в ST-7. Четыре правила, которыми группа ST отличается от SH, и все четыре из того, что `style.rs` — модуль БИБЛИОТЕЧНОГО крейта: реэкспорт обязан быть `pub use`, а не приватным `use` (113 обращений `lumen_layout::style::` из шести крейтов плюс два блока `pub use style::{…}` в `lib.rs`); `SYMBOLS.md` двинется на КАЖДОМ батче (за всю группу SH не двинулся ни разу, здесь переезжают 208 `pub`-item ов); `#![allow(missing_docs)]` едет с кодом и §10 lint-policy обновляется тем же коммитом (без `///` 13 item ов, 86 `pub`-полей и 326 вариантов `pub enum` — ≈425 из 552, что §10 числит за крейтом); пиксельный гейт обязателен, `style.rs` кормит геометрию. Главная находка — ST-8: `apply_declaration` это 3 045 строк ОДНОЙ функцией (преамбула 70 строк и один `match prop` из 343 веток с `_ => {}`), а потолок нового файла 2 000 строк жёсткий («новый монолит завести нельзя вообще»), так что чистым переносом батч не решается — измерено, что ветки переносятся побайтово (ни одного `return` внутри `match`, все три `?` в комментариях) в форме `fn apply_decl_<тема>(…) -> bool` с `_ => return false` и завершающим `true`, и что все 351 метка уникальны, то есть ветки можно группировать по смыслу; ловушка там же — компилятор поймает дубль метки, но НЕ поймает потерянную ветку (молча проваливается в `_ => {}`), поэтому проверка батча это сверка мультимножества меток до и после. Разбор, швы и запасной вариант — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
       {
        "id": "SPLIT-ST1",
-       "title": "SPLIT-ST1: тесты style.rs",
+       "title": "SPLIT-ST1: mod tests из style.rs",
        "status": "ready",
-       "size": "M",
-       "note": "Тестовые модули `crates/engine/layout/src/style.rs`: анкер `mod rule_index_regression` (~36541) до конца файла → каталог `tests/style/`. Дешёвая вырезка, делается первой в группе ST и не ждёт переписи SPLIT-ST0. Счётчик `#[test]` крейта до и после — в тело коммита. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "size": "L",
+       "note": "Тестовый модуль `crates/engine/layout/src/style.rs`: анкер `mod tests` (24304) до `mod rule_index_regression` (36581), 12 278 строк → `src/style/tests/`, 8 файлов. Модуль ПЛОСКИЙ: ни одного вложенного `mod`, 117 авторских секций-баннеров (`python scripts/split_census.py crates/engine/layout/src/style.rs --inner 24304 36581`). Шапка (24304…24808, 505 строк, 36 хелперов) остаётся в `tests/mod.rs` — её видят все потомки. Резать по баннерам, группируя секции под будущие производственные модули ST-3…ST-18, а НЕ подряд: темы чередуются (цвет лежит в четырёх местах, шрифты в трёх). Механическая проверка: сумма перенесённых строк = 12 278, счётчик `#[test]` крейта 3 620 → 3 620. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
       {
        "id": "SPLIT-ST2",
-       "title": "SPLIT-ST2: логические свойства style.rs",
+       "title": "SPLIT-ST2: хвостовые тест-модули style.rs",
        "status": "ready",
        "size": "M",
-       "note": "Логические свойства `crates/engine/layout/src/style.rs`: `resolve_logical_property` (анкер ~17906) и окрестность → `style/logical.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "Хвостовые тест-модули `crates/engine/layout/src/style.rs`: анкер `mod rule_index_regression` (36582) до конца файла, 1 451 строка — семь уже именованных `#[cfg(test)] mod` по своему файлу в `src/style/tests/`. Делается ПОСЛЕ ST-1, а не до: имя `tests` до него занято инлайновым модулем с телом, и объявить `mod tests;` для каталога рядом нельзя. Модули становятся потомками `tests`, то есть путь `crate::style::rule_index_regression` → `crate::style::tests::…`; ссылок на эти имена в репозитории нет, меняются только id тестов (прецедент SH-4). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST3",
+       "title": "SPLIT-ST3: разбор цвета из style.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "Разбор цвета `crates/engine/layout/src/style.rs`: анкер `fn parse_color` (23036) до `mod tests` (24303), 1 268 строк → `style/parse/color.rs` (legacy/`color()`/hex/`color-mix()`/`color-contrast()`, относительные цвета с их микро-лексером `ColorTok`, конверсии oklab/lab/oklch). Таблицу `NAMED_COLORS` (23283…23437, 155) — отдельным `style/values/named_colors.rs`: она табличная, а §1 плана именно такие файлы выводит из-под правила размера. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST4",
+       "title": "SPLIT-ST4: font-size и стороны бокса из style.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "Размер шрифта и стороны бокса `crates/engine/layout/src/style.rs`: анкер `fn media_context_from_viewport` (22116) до `fn parse_color` (23035), 920 строк. Две темы, не одна: `font-size`/`line-height`/`font`-шортхенд с токенайзером (22116…22514) → `style/parse/font_size.rs`; сеттеры сторон, `margin`/`padding`/`border`/`outline`-шортхенды, scroll-snap, `anchor()`/`anchor-size()` (22515…23035) → `style/parse/box_sides.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST5",
+       "title": "SPLIT-ST5: парсеры значений из style.rs",
+       "status": "ready",
+       "size": "L",
+       "note": "Парсеры значений `crates/engine/layout/src/style.rs`: анкер `fn parse_counter_list` (19769) до `fn media_context_from_viewport` (22115), 2 347 строк, четыре файла: счётчики/кавычки/углы/`clip-path` и `transform`/`filter` (19769…20240) → `style/parse/transform.rs`; `content` (20241…20352) → `style/parse/content.rs`; таймлайны и шортхенды `animation`/`transition` (20353…20818) → `style/parse/timeline.rs`; изображения — `image-set`/`cross-fade`, слои `background`/`mask`, градиенты (20819…22115, 1 297) → `style/parse/image.rs`. Последний придётся делить: 1 297 строк под потолком, но вместе с `parse_grid_template_areas` уже нет. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST6",
+       "title": "SPLIT-ST6: apply_css_wide_keyword из style.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`apply_css_wide_keyword` из `crates/engine/layout/src/style.rs`: анкер 18696 до `fn parse_counter_list` (19768), 1 073 строки одной функцией → `style/apply/css_wide.rs`. Помещается в потолок целиком, правок не требует — самый дешёвый батч группы после ST-18. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST7",
+       "title": "SPLIT-ST7: логические свойства и шортхенды style.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "Логические свойства и шортхенды `crates/engine/layout/src/style.rs`: анкер `struct ParsedTextDecorationShorthand` (17914) до `fn apply_css_wide_keyword` (18695), 782 строки. `resolve_logical_property` + `mod logical_properties_tests` (17914…18074) → `style/logical.rs` — это бывшая строка SPLIT-ST2, самостоятельным батчем не тянувшая; развёртка шортхендов text-decoration/text-emphasis/contain-intrinsic/text-wrap/flex/grid-area (18075…18695) → `style/shorthand.rs`. Пост-каскадную `resolve_logical_properties` (8639…8714) сюда НЕ тянуть — она дописывается в `style/logical.rs` батчем ST-13, иначе сдвинутся анкеры всех батчей ниже. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST8",
+       "title": "SPLIT-ST8: apply_declaration из style.rs",
+       "status": "ready",
+       "size": "L",
+       "note": "`apply_declaration` из `crates/engine/layout/src/style.rs`: анкер 14869 до `struct ParsedTextDecorationShorthand` (17913), 3 045 строк. САМЫЙ РИСКОВАННЫЙ БАТЧ ГРУППЫ и единственный, который не решается чистым переносом: это одна функция — преамбула 70 строк и один `match prop` из 343 веток с `_ => {}`, — а потолок нового файла 2 000 строк жёсткий. Приём (прецедент SH-2): `fn apply_decl_<тема>(…) -> bool` с телами веток байт в байт, `_ => return false` и завершающим `true`, цепочкой из `apply_declaration`; ветки переносятся побайтово (ни одного `return` внутри `match`, все три `?` в комментариях) и группируются по смыслу (все 351 метка уникальна). ЛОВУШКА: компилятор поймает дубль метки, но НЕ поймает потерянную — она молча проваливается в `_ => {}`, свойство перестаёт применяться, и ни один тест сборки этого не заметит; проверка батча — сверка мультимножества меток до и после. Швы, развесовка по `style/apply/{layout,text,paint,motion}.rs` и запасной вариант — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST9",
+       "title": "SPLIT-ST9: длины и calc из style.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "Длины и calc `crates/engine/layout/src/style.rs`: анкер `enum LengthOrAuto` (13303) до `fn apply_declaration` (14868), 1 566 строк, три файла: `Length`/`LengthOrAuto`/`parse_length_q` (13303…13418 + 13700…13951) → `style/values/length.rs`; `CalcNode`/`MathFn`/токенайзер/`resolve_math_func` (13419…13699 + 13952…14358) → `style/calc.rs`; подстановки `var()`/`env()`/`attr()`/пользовательских функций (14359…14868) → `style/substitute.rs`. Осторожно: темы чередуются по адресу — `impl CalcNode` стоит между `enum Length` и `impl Length`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST10",
+       "title": "SPLIT-ST10: фан-аут рестайла и окружение style.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "Фан-аут рестайла и окружение `crates/engine/layout/src/style.rs`: анкер `fn set_cq_context` (12413) до `enum LengthOrAuto` (13302), 890 строк. `StateRestyleIndex`, `NodeRestyleIndex`, `restyle_root_set_for_*` (12552…13139) → `style/restyle.rs` — ядро BUG-341, его тест-модули `state_fanout_tests`/`node_fanout_tests` переезжают батчем ST-2; thread-local контексты, `StyleEnvSnapshot`, флаги forced-colors/print и `node_in_scope` (12413…12551 + 13140…13302) → `style/env.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST11",
+       "title": "SPLIT-ST11: UA-таблица и квирки из style.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "UA-таблица, квирки и презентационные подсказки `crates/engine/layout/src/style.rs`: анкер `fn default_display` (10828) до `fn set_cq_context` (12412), 1 585 строк, четыре файла: дефолты UA и правки под элементы (`apply_ua_*`, `ua_*`) → `style/ua.rs`; презентационные HTML-атрибуты (`apply_*_presentational_hint`, `parse_legacy_color_html_attr`) → `style/presentational.rs`; квирки (`apply_quirks_*`) → `style/quirks.rs`; шрифтовые парсеры (12147…12412) → `style/parse/font.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST12",
+       "title": "SPLIT-ST12: матчинг селекторов из style.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "Матчинг селекторов `crates/engine/layout/src/style.rs`: анкер `fn matches_complex` (9432) до `fn default_display` (10827), 1 396 строк. Два файла, потому что это два разных вопроса: обход комбинаторов и compound/attribute/`::slotted` (9432…9902) → `style/matching.rs`; предикаты состояния формы и позиции в дереве (`matches_disabled`/`matches_checked`/`matches_indeterminate`/`matches_default`/`element_index*`, 9903…10827) → `style/matching/forms.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST13",
+       "title": "SPLIT-ST13: псевдоэлементы и пост-каскадные правки style.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "Псевдоэлементы и пост-каскадные правки `crates/engine/layout/src/style.rs`: анкер `fn element_can_have_scrollbar` (8361) до `fn matches_complex` (9431), 1 071 строка. `apply_webkit_scrollbar_pseudos`/`resolve_system_colors_in_style`/`apply_forced_colors_mode`/`coerce_overflow_axes` → `style/adjust.rs`; `compute_pseudo_element_style*`/`pseudo_inherited_style`/`merge_pseudo_inherited`/`compute_selection_style` → `style/pseudo.rs`; валидация синтаксиса `@property` (9294…9431) → `style/property_syntax.rs`. Плюс `resolve_logical_properties` (8639…8714) дописывается в созданный ST-7 `style/logical.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST14",
+       "title": "SPLIT-ST14: compute_style из style.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`compute_style` из `crates/engine/layout/src/style.rs`: анкер `static COMPUTE_STYLE_CALLS` (7070) до `fn element_can_have_scrollbar` (8360), 1 291 строка — сама `compute_style` (7201…8360, 1 160 одной функцией) плюс `zoom` (7070…7200) → `style/cascade.rs`. Функция помещается в потолок, но файл на 1 291 строку почти под ним, поэтому `zoom` при первом же росте уедет в `style/zoom.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST15",
+       "title": "SPLIT-ST15: ComputedStyle из style.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`ComputedStyle` из `crates/engine/layout/src/style.rs`: `struct ComputedStyle` (3287…4141) плюс `impl ComputedStyle` (6726…7069), 1 199 строк → `style/computed.rs`. ЕДИНСТВЕННЫЙ батч группы с разрывным регионом, и разрыв обязателен: объявление и реализация обязаны ехать вместе (прецедент `enum PageSource`/`impl PageSource`, SH-3a/SH-3b), а между ними лежат 2 584 строки чужих типов значений. Тянет за собой правило про долг документации в максимуме: 375 `pub`-полей, из них 86 без `///`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST16",
+       "title": "SPLIT-ST16: типы значений style.rs, голова",
+       "status": "ready",
+       "size": "L",
+       "note": "Типы значений, голова `crates/engine/layout/src/style.rs`: анкер `enum Display` (673) до `struct ComputedStyle` (3286), 2 614 строк, четыре файла по группам свойств: типографика и текст (673…1639) → `style/values/typography.rs`; цвет и цветовые пространства (1640…2124) → `style/values/color.rs`; бокс, границы, таблицы, SVG-краска, позиционирование (2125…2577) → `style/values/box_model.rs`; тайминг-функции, кривые Безье и перечисления анимации (2578…3286) → `style/values/timing.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST17",
+       "title": "SPLIT-ST17: типы значений style.rs, хвост",
+       "status": "ready",
+       "size": "L",
+       "note": "Типы значений, хвост `crates/engine/layout/src/style.rs`: анкер `enum Content` (4142) до `impl ComputedStyle` (6725), 2 584 строки, пять файлов: содержимое/списки/перенос/интерактивность (4142…4625) → `style/values/misc.rs`; контейнерные запросы вместе с `evaluate_container_condition` и `apply_container_rules` (4626…5058) → `style/container.rs` (это не тип значения, а вычисление); режим письма, user-select, scroll-snap (5059…5223) → `style/values/scroll.rs`; градиенты, фон, маски, object-fit (5224…5804) → `style/values/background.rs`; flex, grid-треки, выравнивание, clip-path, трансформы, фильтры (5805…6725) → `style/values/flexgrid.rs` + `style/values/transform.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-ST18",
+       "title": "SPLIT-ST18: индекс каскада из style.rs",
+       "status": "ready",
+       "size": "S",
+       "note": "Индекс каскада `crates/engine/layout/src/style.rs`: анкер `struct CascadeIndex` (43) до `enum Display` (672), 630 строк — кэш индекса каскада и его диагностика (`CascadeIndexStats`, `PseudoCascadeStats`, счётчики BUG-341, теневые таблицы стилей) → `style/cascade_index.rs`. Имя НЕ `rule_index.rs`: такой модуль в крейте уже есть и решает другую задачу — раскладывает правила по корзинам правого простого селектора, а здесь кэш построенного индекса и его счётчики. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
       {
        "id": "SPLIT-BT0",
