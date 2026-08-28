@@ -44,7 +44,7 @@ element-specific API). Even basic attribute-reflected properties
 (`table.rows`, `tbody.rows`) don't exist — this isn't a missing-methods-only
 gap, the live collections themselves are absent too. Contrast
 `getElementsByTagName`, which is also called on `table` here but is the
-already-tracked, more general [BUG-416](bugs/BUG-416-FIXED.md)
+already-tracked, more general [BUG-416](BUG-416-FIXED.md)
 (`Element.prototype.getElementsByTagName` missing on every element, not
 table-specific) — re-surfacing in this slice, not a new root cause.
 

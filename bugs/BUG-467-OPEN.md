@@ -104,7 +104,7 @@ BUG-380 (browsing-context reuse не проверяет исход навига�
 Committed `.ini` для всех 21 непройденных файлов; повторный прогон из
 worktree подтверждает 0 unexpected / 0 unexpected passes (79/79 expected).
 
-Пересекается с [BUG-471](bugs/BUG-471-OPEN.md) (CSSOM `insertRule`/`sheet` не
+Пересекается с [BUG-471](BUG-471-OPEN.md) (CSSOM `insertRule`/`sheet` не
 подключены) — если `document.fonts` когда-нибудь станет реактивным на
 добавление/удаление `@font-face`-правил через CSSOM, то потребуется тот же
 фундамент, что и для BUG-471.

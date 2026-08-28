@@ -66,12 +66,12 @@ New `BUG-727` filed (only).
 `tests/wpt/webrtc-stats/`, 8 файлов, 8 id по глобу, без variant-фан-аута,
 1 `testdriver.js` (idlharness), 3 `.https.`). `run_report.py --all --root
 webrtc-stats --recursive` — ~82 с, **0/8 harness OK, 0/23 сабтестов**,
-стопроцентный отказ. Найден [BUG-727](../bugs/BUG-727-OPEN.md): стаб
+стопроцентный отказ. Найден [BUG-727](../../bugs/BUG-727-OPEN.md): стаб
 диспатчит `_dispatch` только для `icecandidate` (из `_gatherMdns()`) —
 `ontrack`/`ondatachannel`/`on(ice)connectionstatechange` не вызываются
 никогда, а инстансы `RTCPeerConnection` не связаны друг с другом вовсе, так
 что любой канонический двухпировый тест виснет до таймаута враннера. Три
 файла из восьми дополнительно дают `AssertionError` (уже известный дрейф
-[BUG-380](../bugs/BUG-380-FIXED.md) — переиспользование результата
+[BUG-380](../../bugs/BUG-380-FIXED.md) — переиспользование результата
 предыдущего теста после TIMEOUT), не самостоятельная находка. Новый номер:
 BUG-727.

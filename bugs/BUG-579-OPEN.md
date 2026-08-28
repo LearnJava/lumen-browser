@@ -17,7 +17,7 @@ FAIL <test name> - dialog.requestClose is not a function
 
 `requestClose([returnValue])` (HTML LS §4.11.7, closely mirroring
 `CloseWatcher.requestClose()` — see the unrelated but similarly-named
-[BUG-340](bugs/BUG-340-OPEN.md)) fires a cancelable `cancel` event first and
+[BUG-340](BUG-340-FIXED.md)) fires a cancelable `cancel` event first and
 only proceeds to the normal close steps — set `returnValue`, remove `open`,
 fire `close` — if `cancel` isn't prevented. It is the scriptable equivalent
 of what the existing Escape-key handler already does

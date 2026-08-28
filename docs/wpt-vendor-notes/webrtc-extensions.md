@@ -73,4 +73,4 @@ webrtc-extensions --recursive` — ~52 с, **6/10 harness OK, 2/51
 4 сабтеста — `NotAllowedError: Video capture is not available in Lumen
 Phase 1` (ожидаемое ограничение Phase 1); 2 ERROR — уже задокументированное
 переиспользование browsing context между тестами
-([BUG-380](../bugs/BUG-380-FIXED.md)). Новый BUG-NNN не заводился.
+([BUG-380](../../bugs/BUG-380-FIXED.md)). Новый BUG-NNN не заводился.

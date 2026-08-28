@@ -100,7 +100,7 @@ BUG-780 itself is fixed and the category is re-run.
 предикторам: 0 variant, 1 testdriver-файл, 0 `.https.`).
 
 `run_report.py --all --root xhr --recursive` — 14 мин 19 с, **236/345
-harness OK, 157/1244 сабтестов**. Найден [BUG-780](../bugs/BUG-780-FIXED.md):
+harness OK, 157/1244 сабтестов**. Найден [BUG-780](../../bugs/BUG-780-FIXED.md):
 `XMLHttpRequest.open()` берёт `url` буквально (`this._url = String(url)`),
 без единого шага резолюции против document base — шестой независимый
 сайт семейства BUG-346/347/359/362/370, не унаследовавший фикс BUG-347
@@ -111,9 +111,9 @@ harness OK, 157/1244 сабтестов**. Найден [BUG-780](../bugs/BUG-78
 
 Остальное — уже известные гэпы: `data:`-схема не поддержана сетевым слоем
 вовсе (`crates/network/src/lib.rs:267`, отдельный и заведомый Phase-0
-пробел, не этот баг), второй барьер [BUG-359](../bugs/BUG-359-FIXED.md)
+пробел, не этот баг), второй барьер [BUG-359](../../bugs/BUG-359-FIXED.md)
 у `window.open` (нет реального `opener`), и класс
-[BUG-380](../bugs/BUG-380-FIXED.md) (переиспользуемый browsing context)
+[BUG-380](../../bugs/BUG-380-FIXED.md) (переиспользуемый browsing context)
 у `xmlhttprequest-timeout-reused.html` и соседей. Второй самостоятельный
 баг в этой сессии не root-caused — 739-строчный доминирующий сигнал делает
 дальнейшую построчную триажировку малоценной до фикса BUG-780 и повторного

@@ -922,3 +922,280 @@ impl Lumen {
         }
     }
 }
+
+/// РџРѕРІС‚РѕСЂРЅС‹Р№ layout+paint РїРѕ СЃРѕС…СЂР°РЅС‘РЅРЅРѕРјСѓ `LayoutSource` СЃ РЅРѕРІС‹Рј viewport.
+/// Р’РѕР·РІСЂР°С‰Р°РµС‚ `(DisplayList, LayoutBox)` вЂ” LayoutBox РЅСѓР¶РµРЅ РґР»СЏ animation scheduler.
+/// `dark_mode` is forwarded to `layout_measured_hyp` so `@media (prefers-color-scheme: dark)`
+/// rules take effect on relayout (e.g. after OS theme change or window resize).
+pub(crate) fn relayout_page(
+    src: &LayoutSource,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+) -> (DisplayList, lumen_layout::LayoutBox) {
+    compute_layout(&src.document, &src.stylesheet, viewport, hp, dark_mode, web_fonts)
+}
+
+/// РџСЂРѕС†РµСЃСЃ-РіР»РѕР±Р°Р»СЊРЅС‹Рµ РјРµС‚СЂРёРєРё СЃРёСЃС‚РµРјРЅС‹С… С€СЂРёС„С‚РѕРІ РґР»СЏ РёР·РјРµСЂРёС‚РµР»СЏ: CSS
+/// generic-СЃРµРјРµР№СЃС‚РІР° + РєРѕРЅРєСЂРµС‚РЅС‹Рµ СЃРёСЃС‚РµРјРЅС‹Рµ СЃРµРјРµР№СЃС‚РІР° РїРѕ РёРјРµРЅРё (BUG-128).
+///
+/// РЎС‚СЂРѕРёС‚СЃСЏ РѕРґРёРЅ СЂР°Р· РїРѕРІРµСЂС… РѕР±С‰РµРіРѕ СЃРёСЃС‚РµРјРЅРѕРіРѕ РёРЅРґРµРєСЃР°
+/// ([`lumen_font::shared_system_index`]) Рё РїРµСЂРµРёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РІСЃРµРјРё
+/// РїРµСЂРµСЃР±РѕСЂРєР°РјРё РёР·РјРµСЂРёС‚РµР»СЏ: СЃР°Рј СЃРєР°РЅ РґРёСЂРµРєС‚РѕСЂРёР№ С€СЂРёС„С‚РѕРІ СЃС‚СЂР°РЅРёС†Р° РґРµР»Р°РµС‚ РІ
+/// Р»СЋР±РѕРј СЃР»СѓС‡Р°Рµ (СЂРµРЅРґРµСЂ СЂРµР·РѕР»РІРёС‚ face-С‹ С‡РµСЂРµР· С‚РѕС‚ Р¶Рµ РёРЅРґРµРєСЃ), Р° С‡С‚РµРЅРёРµ Рё
+/// РїР°СЂСЃРёРЅРі РІС‹Р±СЂР°РЅРЅС‹С… С„Р°Р№Р»РѕРІ РЅРµ РґРѕР»Р¶РЅРѕ РїРѕРІС‚РѕСЂСЏС‚СЊСЃСЏ РЅР° РєР°Р¶РґС‹Р№ relayout.
+/// Р›РµРЅРёРІС‹Р№ РєСЌС€ РєРѕРЅРєСЂРµС‚РЅС‹С… СЃРµРјРµР№СЃС‚РІ Р¶РёРІС‘С‚ Р·РґРµСЃСЊ Р¶Рµ, РїРѕСЌС‚РѕРјСѓ `font-family:
+/// Arial` С‡РёС‚Р°РµС‚СЃСЏ СЃ РґРёСЃРєР° РѕРґРёРЅ СЂР°Р· РЅР° РїСЂРѕС†РµСЃСЃ, Р° РЅРµ РЅР° РєР°Р¶РґС‹Р№ СЂРµР»СЌР№Р°СѓС‚.
+pub(crate) fn system_font_faces() -> Arc<lumen_paint::SystemFaceSet> {
+    static SHARED: std::sync::OnceLock<Arc<lumen_paint::SystemFaceSet>> =
+        std::sync::OnceLock::new();
+    SHARED
+        .get_or_init(|| {
+            Arc::new(lumen_paint::SystemFaceSet::from_provider(
+                lumen_font::shared_system_index().clone(),
+            ))
+        })
+        .clone()
+}
+
+/// РР·РјРµСЂРёС‚РµР»СЊ РґР»СЏ СЃС‚СЂР°РЅРёС†С‹: bundled Inter + @font-face-СЃРµРјСЊРё + СЃРёСЃС‚РµРјРЅС‹Рµ
+/// face-С‹ (generic-СЃРµРјРµР№СЃС‚РІР° Рё РєРѕРЅРєСЂРµС‚РЅС‹Рµ СЃРµРјРµР№СЃС‚РІР° РїРѕ РёРјРµРЅРё).
+///
+/// Р•РґРёРЅР°СЏ С‚РѕС‡РєР° СЃР±РѕСЂРєРё РґР»СЏ РІСЃРµС… layout-РїСѓС‚РµР№ (РїРѕР»РЅС‹Р№ / РёРЅРєСЂРµРјРµРЅС‚Р°Р»СЊРЅС‹Р№ /
+/// restyle) вЂ” РёРЅР°С‡Рµ СЃРёСЃС‚РµРјРЅС‹Рµ СЃРµРјРµР№СЃС‚РІР° РјРµСЂСЏСЋС‚СЃСЏ РїРѕ-СЂР°Р·РЅРѕРјСѓ РІ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё РѕС‚
+/// С‚РѕРіРѕ, РµСЃС‚СЊ Р»Рё РЅР° СЃС‚СЂР°РЅРёС†Рµ web-С€СЂРёС„С‚С‹.
+#[allow(clippy::expect_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+pub(crate) fn page_measurer(
+    font: &lumen_font::Font<'static>,
+    web_fonts: &[LoadedWebFont],
+) -> lumen_paint::MultiFontMeasurer {
+    let mut measurer = lumen_paint::MultiFontMeasurer::new(font)
+        .expect("MultiFontMeasurer РёР· bundled Inter");
+    for wf in web_fonts {
+        measurer.register_family_with_ranges(
+            &wf.family,
+            wf.bytes.clone(),
+            wf.unicode_range.clone(),
+        );
+    }
+    measurer.set_system_faces(system_font_faces());
+    measurer
+}
+
+/// РЇРґСЂРѕ style+layout+display-list РїРѕ immutable-СЃРЅР°РїС€РѕС‚Сѓ РґРѕРєСѓРјРµРЅС‚Р° Рё СЃС‚РёР»РµР№.
+///
+/// Р’С‹РЅРµСЃРµРЅРѕ РёР· [`relayout_page`], С‡С‚РѕР±С‹ РѕРґРЅСѓ Рё С‚Сѓ Р¶Рµ СЂР°Р±РѕС‚Сѓ РјРѕР¶РЅРѕ Р±С‹Р»Рѕ РІС‹Р·РІР°С‚СЊ Рё
+/// РЅР° UI-РїРѕС‚РѕРєРµ (СЃРёРЅС…СЂРѕРЅРЅС‹Р№ `relayout()`), Рё РЅР° РґРІРёР¶РєРѕРІРѕРј РїРѕС‚РѕРєРµ (ADR-016 M2.2,
+/// [`Lumen::submit_relayout_job`]) вЂ” РІС‚РѕСЂРѕРјСѓ `LayoutSource` РЅРµРґРѕСЃС‚СѓРїРµРЅ, Сѓ РЅРµРіРѕ РЅР°
+/// СЂСѓРєР°С… С‚РѕР»СЊРєРѕ `Arc`-СЃРЅРёРјРєРё `document`/`stylesheet`. РРЅС‚РµСЂР°РєС‚РёРІРЅРѕРµ СЃРѕСЃС‚РѕСЏРЅРёРµ
+/// (`:hover`/`:focus`/`forced-colors`/`content-visibility` scroll) вЂ” thread-local
+/// (`lumen_layout::set_*`), РїРѕСЌС‚РѕРјСѓ РІС‹Р·С‹РІР°СЋС‰Р°СЏ СЃС‚РѕСЂРѕРЅР° РѕР±СЏР·Р°РЅР° РІС‹СЃС‚Р°РІРёС‚СЊ РµРіРѕ РЅР°
+/// **С‚РѕРј Р¶Рµ** РїРѕС‚РѕРєРµ РґРѕ РІС‹Р·РѕРІР° Рё СЃР±СЂРѕСЃРёС‚СЊ РїРѕСЃР»Рµ.
+#[allow(clippy::expect_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+#[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+pub(crate) fn compute_layout(
+    document: &Mutex<Document>,
+    stylesheet: &lumen_css_parser::Stylesheet,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+) -> (DisplayList, lumen_layout::LayoutBox) {
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
+    // PH3-19: РёР·РјРµСЂРёС‚РµР»СЊ РІРєР»СЋС‡Р°РµС‚ РЅР°РєРѕРїР»РµРЅРЅС‹Рµ web-С€СЂРёС„С‚С‹ (FOUT relayout);
+    // BUG-128: Рё СЃРёСЃС‚РµРјРЅС‹Рµ face-С‹.
+    let measurer = page_measurer(&font, web_fonts);
+    let doc = document.lock().unwrap();
+    let layout = lumen_layout::layout_measured_hyp(&doc, stylesheet, viewport, &measurer, hp, dark_mode);
+    drop(doc);
+    let dl = paint_ordered(&layout);
+    (dl, layout)
+}
+
+/// ADR-016 M4: incremental variant of [`relayout_page`] вЂ” uses
+/// [`lumen_layout::layout_mutation_incremental`] to skip geometry re-computation
+/// for subtrees whose [`lumen_layout::ComputedStyle`] is unchanged, while
+/// preserving full cascade and post-layout passes. `prev` is the previously
+/// laid-out tree stored in `Lumen::layout_box`.
+pub(crate) fn relayout_page_incremental(
+    src: &LayoutSource,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+    prev: &lumen_layout::LayoutBox,
+) -> (DisplayList, lumen_layout::LayoutBox) {
+    compute_layout_incremental(&src.document, &src.stylesheet, viewport, hp, dark_mode, web_fonts, prev)
+}
+
+/// ADR-016 M4: incremental variant of [`compute_layout`] вЂ” runs the full
+/// cascade but reuses geometry from `prev` for unchanged subtrees.
+///
+/// Same caller contract as [`compute_layout`]: thread-local interactive state
+/// must be set before the call and cleared afterwards.
+#[allow(clippy::expect_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+#[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+pub(crate) fn compute_layout_incremental(
+    document: &Mutex<Document>,
+    stylesheet: &lumen_css_parser::Stylesheet,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+    prev: &lumen_layout::LayoutBox,
+) -> (DisplayList, lumen_layout::LayoutBox) {
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
+    let measurer = page_measurer(&font, web_fonts);
+    let doc = document.lock().unwrap();
+    let layout = lumen_layout::layout_mutation_incremental(
+        &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev,
+    );
+    drop(doc);
+    let dl = paint_ordered(&layout);
+    (dl, layout)
+}
+
+/// BUG-341 S7: restyle-aware variant of [`relayout_page_incremental`] вЂ” uses
+/// [`lumen_layout::box_tree::layout_mutation_incremental_restyle`] instead of
+/// [`lumen_layout::layout_mutation_incremental`], skipping cascade work (not
+/// just geometry) for subtrees `delta.dirty_roots` proves untouched. Only
+/// safe when `delta.prev_styles` is the exact `CounterMap::styles()` the
+/// previous cycle over this same document produced вЂ” see
+/// `layout_mutation_incremental_restyle`'s own doc comment for the full
+/// precondition; [`Lumen::page_prev_cascade_styles`] being `Some` is the
+/// caller-side half of that contract. Returns the fresh `CounterMap` so the
+/// caller can persist its `styles()` as the next cycle's `delta.prev_styles`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn relayout_page_incremental_restyle(
+    src: &LayoutSource,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+    // BUG-341 S19: consumed вЂ” the reusable subtrees are moved out of it into
+    // the tree returned. See `layout_mutation_incremental_restyle`.
+    prev: lumen_layout::LayoutBox,
+    delta: lumen_layout::counters::RestyleDelta<'_>,
+) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
+    compute_layout_incremental_restyle(
+        &src.document, &src.stylesheet, viewport, hp, dark_mode, web_fonts, prev, delta,
+    )
+}
+
+/// BUG-341 S7: restyle-aware variant of [`compute_layout_incremental`] вЂ” see
+/// [`relayout_page_incremental_restyle`].
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::expect_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+#[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+pub(crate) fn compute_layout_incremental_restyle(
+    document: &Mutex<Document>,
+    stylesheet: &lumen_css_parser::Stylesheet,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+    // BUG-341 S19: consumed вЂ” the reusable subtrees are moved out of it into
+    // the tree returned. See `layout_mutation_incremental_restyle`.
+    prev: lumen_layout::LayoutBox,
+    delta: lumen_layout::counters::RestyleDelta<'_>,
+) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
+    let measurer = page_measurer(&font, web_fonts);
+    let doc = document.lock().unwrap();
+    let (layout, counters) = lumen_layout::box_tree::layout_mutation_incremental_restyle(
+        &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev, delta,
+    );
+    drop(doc);
+    let dl = paint_ordered(&layout);
+    (dl, layout, counters)
+}
+
+/// CSS Containment L3 В§4.4 (BB-4) вЂ” shell-СЃРѕР±С‹С‚РёРµ: СЌР»РµРјРµРЅС‚ СЃ
+/// `content-visibility: auto` СЃРјРµРЅРёР» skipped-СЃРѕСЃС‚РѕСЏРЅРёРµ РјРµР¶РґСѓ layout-РїСЂРѕС…РѕРґР°РјРё.
+/// `skipped == true` вЂ” РїРѕРґРґРµСЂРµРІРѕ РІС‹РїР°Р»Рѕ РёР· СЂР°СЃС€РёСЂРµРЅРЅРѕРіРѕ viewport Рё РїСЂРѕРїСѓС‰РµРЅРѕ;
+/// `false` вЂ” СѓР·РµР» СЃС‚Р°Р» relevant Рё РµРіРѕ СЃРѕРґРµСЂР¶РёРјРѕРµ СЃРЅРѕРІР° РІС‹Р»РѕР¶РµРЅРѕ.
+/// Phase 2: P3 РґРѕСЃС‚Р°РІР»СЏРµС‚ РєР°Рє `contentvisibilityautostatechange` РІ JS.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ContentVisibilityChange {
+    /// DOM-СѓР·РµР» СЌР»РµРјРµРЅС‚Р° СЃ `content-visibility: auto`.
+    pub(crate) node: NodeId,
+    /// РќРѕРІРѕРµ СЃРѕСЃС‚РѕСЏРЅРёРµ: `true` вЂ” СЃРѕРґРµСЂР¶РёРјРѕРµ РїСЂРѕРїСѓС‰РµРЅРѕ, `false` вЂ” РІС‹Р»РѕР¶РµРЅРѕ.
+    pub(crate) skipped: bool,
+}
+
+/// РЎРѕР±СЂР°С‚СЊ `(node, top_y)` **РІСЃРµС…** `content-visibility: auto` Р±РѕРєСЃРѕРІ РІ РїРѕСЂСЏРґРєРµ
+/// РґРµСЂРµРІР°. top_y вЂ” СЃС‚СЂР°РЅРёС†Р°-РєРѕРѕСЂРґРёРЅР°С‚С‹ Р±РѕРєСЃР°. РЎРєР°РЅ РїРѕ РґРµСЂРµРІСѓ (Р° РЅРµ thread-local)
+/// вЂ” СЂР°Р±РѕС‚Р°РµС‚ Рё РґР»СЏ layout-Р°, РІС‹РїРѕР»РЅРµРЅРЅРѕРіРѕ РІ С„РѕРЅРѕРІРѕРј РїРѕС‚РѕРєРµ Р·Р°РіСЂСѓР·РєРё СЃС‚СЂР°РЅРёС†С‹.
+///
+/// BUG-852: СЂР°РЅСЊС€Рµ СЌС‚Р° С„СѓРЅРєС†РёСЏ СЃРѕР±РёСЂР°Р»Р° С‚РѕР»СЊРєРѕ Р±РѕРєСЃС‹ СЃ РїСѓСЃС‚С‹Рј СЃРїРёСЃРєРѕРј РґРµС‚РµР№ Рё
+/// Р·РІР°Р»Р° РёС… В«РїСЂРѕРїСѓС‰РµРЅРЅС‹РјРёВ». РЎРѕРІРїР°РґРµРЅРёРµ РЅРµС‚РѕС‡РЅРѕРµ РІ РѕР±Рµ СЃС‚РѕСЂРѕРЅС‹: РїСѓСЃС‚РѕР№
+/// `<div style="content-visibility:auto">` вЂ” Р° РёРјРµРЅРЅРѕ С‚Р°РєРѕР№ СЃС‚СЂРѕРёС‚
+/// `content-visibility-auto-state-changed-first-observation.html` вЂ” РІС‹РіР»СЏРґРµР»
+/// РїСЂРѕРїСѓС‰РµРЅРЅС‹Рј, РіРґРµ Р±С‹ РѕРЅ РЅРё СЃС‚РѕСЏР», Р° layout РїСЂРѕ РЅРµРіРѕ РІРѕРѕР±С‰Рµ РЅРµ СЃРїСЂР°С€РёРІР°Р»
+/// (`cv_should_skip` РІС‹Р·С‹РІР°РµС‚СЃСЏ С‚РѕР»СЊРєРѕ РїСЂРё `!children.is_empty()`). РЎРѕСЃС‚РѕСЏРЅРёРµ
+/// С‚РµРїРµСЂСЊ СЃС‡РёС‚Р°РµС‚ [`Lumen::refresh_cv_state`] РїРѕ СЃР°РјРѕРјСѓ РїСЂР°РІРёР»Сѓ СЂРµР»РµРІР°РЅС‚РЅРѕСЃС‚Рё.
+///
+/// **Р”РµРґСѓРїР»РёРєР°С†РёСЏ РїРѕ СѓР·Р»Сѓ РѕР±СЏР·Р°С‚РµР»СЊРЅР°, Рё РµС‘ РѕС‚СЃСѓС‚СЃС‚РІРёРµ вЂ” РЅРµ РјРµР»РѕС‡СЊ.** РђРЅРѕРЅРёРјРЅС‹Р№
+/// Р±РѕРєСЃ (`InlineRun` РґР»СЏ inline-СЃРѕРґРµСЂР¶РёРјРѕРіРѕ, `InlineBlockRow`, РѕР±С‘СЂС‚РєРё С‚Р°Р±Р»РёС†)
+/// РЅРµ РёРјРµРµС‚ СЃРІРѕРµРіРѕ СЌР»РµРјРµРЅС‚Р° Рё РЅРµСЃС‘С‚ СЃС‚РёР»СЊ СЂРѕРґРёС‚РµР»СЏ, РІРєР»СЋС‡Р°СЏ
+/// `content-visibility: auto`, вЂ” С‚Рѕ РµСЃС‚СЊ `<div style="content-visibility:auto">
+/// <span>x</span></div>` РґР°С‘С‚ Р”Р’Рђ Р±РѕРєСЃР° СЃ СЌС‚РёРј Р·РЅР°С‡РµРЅРёРµРј. Р‘РµР· РґРµРґСѓРїР»РёРєР°С†РёРё
+/// `diff_cv_state` СЃСЂР°РІРЅРёР» Р±С‹ РІС‚РѕСЂРѕР№ РёР· РЅРёС… СЃ РµС‰С‘ РЅРµ РѕР±РЅРѕРІР»С‘РЅРЅС‹Рј `prev` Рё
+/// РІС‹РґР°Р» Р±С‹ СЃС‚СЂР°РЅРёС†Сѓ **РґРІР°** СЃРѕР±С‹С‚РёСЏ РЅР° РѕРґРЅРѕ РёР·РјРµРЅРµРЅРёРµ, СЂРѕРІРЅРѕ С‚Рѕ, С‡С‚Рѕ
+/// `content-visibility-auto-state-changed-first-observation.html` Р·Р°РїСЂРµС‰Р°РµС‚
+/// (В«already observedВ»). РџРµСЂРІС‹Р№ Р±РѕРєСЃ РІ РїРѕСЂСЏРґРєРµ РґРµСЂРµРІР° вЂ” СЃР°Рј СЌР»РµРјРµРЅС‚, Р°РЅРѕРЅРёРјРЅС‹Р№
+/// РІСЃРµРіРґР° РµРіРѕ РїРѕС‚РѕРјРѕРє. Layout СЂРµС€Р°РµС‚ С‚Сѓ Р¶Рµ Р·Р°РґР°С‡Сѓ С‚РµРј Р¶Рµ СЃРїРѕСЃРѕР±РѕРј:
+/// `CV_SKIPPED` РґРµРґСѓРїР»РёС†РёСЂСѓРµС‚СЃСЏ РїРѕ СѓР·Р»Сѓ.
+pub(crate) fn collect_cv_auto(b: &lumen_layout::LayoutBox, out: &mut Vec<(NodeId, f32)>) {
+    fn walk(
+        b: &lumen_layout::LayoutBox,
+        seen: &mut std::collections::HashSet<NodeId>,
+        out: &mut Vec<(NodeId, f32)>,
+    ) {
+        if b.style.content_visibility == lumen_layout::style::ContentVisibility::Auto
+            && seen.insert(b.node)
+        {
+            out.push((b.node, b.rect.y));
+        }
+        for c in &b.children {
+            walk(c, seen, out);
+        }
+    }
+    walk(b, &mut std::collections::HashSet::new(), out);
+}
+
+/// Р”РёС„С„ skipped-СЃРѕСЃС‚РѕСЏРЅРёСЏ РјРµР¶РґСѓ РґРІСѓРјСЏ РїСЂРѕС…РѕРґР°РјРё в†’ СЃРѕР±С‹С‚РёСЏ
+/// [`ContentVisibilityChange`].
+///
+/// CSS Contain L2 В§4.1: СЃРѕР±С‹С‚РёРµ РґРѕР»Р¶РЅРѕ РїСЂРёС…РѕРґРёС‚СЊ Рё РЅР° **РїРµСЂРІРѕРµ** РЅР°Р±Р»СЋРґРµРЅРёРµ
+/// СЌР»РµРјРµРЅС‚Р°, РІ РѕР±Рµ СЃС‚РѕСЂРѕРЅС‹ вЂ” `skipped: false` РґР»СЏ СЌР»РµРјРµРЅС‚Р° РІРѕ РІСЊСЋРїРѕСЂС‚Рµ РЅРµ РјРµРЅРµРµ
+/// РѕР±СЏР·Р°С‚РµР»РµРЅ, С‡РµРј `skipped: true` РґР»СЏ СЌР»РµРјРµРЅС‚Р° РїРѕРґ РЅРёРј. РџРѕСЌС‚РѕРјСѓ СѓР·РµР», РєРѕС‚РѕСЂРѕРіРѕ
+/// РІ `prev` РЅРµС‚ РІРѕРІСЃРµ, РІСЃРµРіРґР° РїРѕСЂРѕР¶РґР°РµС‚ СЃРѕР±С‹С‚РёРµ СЃРѕ СЃРІРѕРёРј С‚РµРєСѓС‰РёРј СЃРѕСЃС‚РѕСЏРЅРёРµРј, Р°
+/// СѓР·РµР», РєРѕС‚РѕСЂС‹Р№ РёР· РґРµСЂРµРІР° РёСЃС‡РµР·, вЂ” РЅРёРєР°РєРѕРіРѕ: РѕС‚СЃРѕРµРґРёРЅС‘РЅРЅС‹Р№ СЌР»РµРјРµРЅС‚ РјРѕР»С‡РёС‚
+/// (`content-visibility-auto-state-changed-removed.html`).
+///
+/// `next` вЂ” РІ РїРѕСЂСЏРґРєРµ РґРµСЂРµРІР°, С‡С‚РѕР±С‹ РїРѕСЂСЏРґРѕРє СЃРѕР±С‹С‚РёР№ РЅРµ Р·Р°РІРёСЃРµР» РѕС‚ РѕР±С…РѕРґР° С…РµС€Р°.
+pub(crate) fn diff_cv_state(
+    prev: &std::collections::HashMap<NodeId, bool>,
+    next: &[(NodeId, bool)],
+) -> Vec<ContentVisibilityChange> {
+    let mut out = Vec::new();
+    for &(node, skipped) in next {
+        if prev.get(&node) != Some(&skipped) {
+            out.push(ContentVisibilityChange { node, skipped });
+        }
+    }
+    out
+}
+
+/// Extract `initial-scale` from the `<meta name=viewport>` of a page's document.
+///
+/// Returns `1.0` when the page has no viewport meta or omits `initial-scale`.
+pub(crate) fn meta_initial_scale(src: &LayoutSource) -> f32 {
+    src.document
+        .lock()
+        .ok()
+        .and_then(|doc| doc.viewport_meta().map(|m| m.initial_scale))
+        .unwrap_or(1.0)
+}

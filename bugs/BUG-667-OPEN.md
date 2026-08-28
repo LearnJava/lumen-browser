@@ -52,8 +52,8 @@ performs neither of:
 2. **`getScreenDetails() must require transient user activation`** (W3C Multi-Screen Window
    Placement §3.2 step 2) — the promise resolves with zero prior user gesture (no
    `test_driver.click`, no synthesized click of any kind). Same defect class as
-   [BUG-666](bugs/BUG-666-OPEN.md) (`getDisplayMedia` — user-activation gate + constraints
-   validation both unchecked) and [BUG-646](bugs/BUG-646-OPEN.md)/[BUG-656](bugs/BUG-656-OPEN.md)
+   [BUG-666](BUG-666-OPEN.md) (`getDisplayMedia` — user-activation gate + constraints
+   validation both unchecked) and [BUG-646](BUG-646-OPEN.md)/[BUG-656](BUG-656-OPEN.md)
    (unchecked constructor arguments) — a recurring pattern across Phase 0/1 stubs of gesture-
    or permission-gated Web APIs: the JS shim implements the happy-path return shape but skips
    every precondition check the spec attaches to it.
@@ -67,7 +67,7 @@ performs neither of:
   (single-screen stub, correctly reported as `false`, matching `isExtended.tentative.https.window.js`'s
   only non-permission assertion `typeof self.screen.isExtended === 'boolean'`), not a defect.
 - `navigator.permissions.query({name:'window-management'})` always answering `'granted'` — this
-  was the pre-existing, already-filed [BUG-386](bugs/BUG-386-FIXED.md) defect (no permission-name
+  was the pre-existing, already-filed [BUG-386](BUG-386-FIXED.md) defect (no permission-name
   validation, and by extension no real per-permission state store at all); reconfirmed here as
   the same generic gap, not a `window-management`-specific bug on its own.
   **Stale since 2026-08-10** — BUG-386 is fixed and `window-management` now answers `'denied'`

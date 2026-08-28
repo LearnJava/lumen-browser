@@ -4174,7 +4174,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:982` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1037` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (953 symbols)
+## lumen-shell  (955 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -4329,14 +4329,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/download.rs:366` **fn** `close` — Hide the panel
 `crates/shell/src/download.rs:766` **fn** `hit_test` — Hit-test a click at `(x, y)` (CSS px) against the download popover
 `crates/shell/src/download.rs:804` **fn** `build_download_bar` — Build the viewport-locked download popover overlay
-`crates/shell/src/engine_thread.rs:117` **struct** `EngineThread` — Хэндл долгоживущего движкового потока (ADR-016 M2.2)
-`crates/shell/src/engine_thread.rs:141` **fn** `spawn_with_state` — Запускает именованный движковый поток с состоянием `initial` и возвращает
-`crates/shell/src/engine_thread.rs:155` **fn** `submit` — Ставит задание движковому потоку (fire-and-forget). `generation` —
-`crates/shell/src/engine_thread.rs:162` **fn** `take_committed` — Забирает новейший исполненный коммит из слота, если он есть (latest-wins:
-`crates/shell/src/engine_thread.rs:186` **fn** `readback` — Request/reply: ставит задание и **блокируется**, пока движковый поток не
-`crates/shell/src/engine_thread.rs:205` **fn** `task` — Ставит упорядоченное задание над персистентным состоянием `S` движкового
-`crates/shell/src/engine_thread.rs:224` **fn** `query` — Request/reply над персистентным состоянием `S`: ставит упорядоченное
-`crates/shell/src/engine_thread.rs:253` **fn** `spawn` — Запускает именованный движковый поток c состоянием по умолчанию
+`crates/shell/src/engine_thread.rs:118` **struct** `EngineThread` — Хэндл долгоживущего движкового потока (ADR-016 M2.2)
+`crates/shell/src/engine_thread.rs:142` **fn** `spawn_with_state` — Запускает именованный движковый поток с состоянием `initial` и возвращает
+`crates/shell/src/engine_thread.rs:156` **fn** `submit` — Ставит задание движковому потоку (fire-and-forget). `generation` —
+`crates/shell/src/engine_thread.rs:163` **fn** `take_committed` — Забирает новейший исполненный коммит из слота, если он есть (latest-wins:
+`crates/shell/src/engine_thread.rs:187` **fn** `readback` — Request/reply: ставит задание и **блокируется**, пока движковый поток не
+`crates/shell/src/engine_thread.rs:206` **fn** `task` — Ставит упорядоченное задание над персистентным состоянием `S` движкового
+`crates/shell/src/engine_thread.rs:225` **fn** `query` — Request/reply над персистентным состоянием `S`: ставит упорядоченное
+`crates/shell/src/engine_thread.rs:254` **fn** `spawn` — Запускает именованный движковый поток c состоянием по умолчанию
 `crates/shell/src/extensions/mod.rs:33` **struct** `ContentScript` — A single content-script entry from `manifest.json`
 `crates/shell/src/extensions/mod.rs:42` **struct** `ExtensionManifest` — A parsed `manifest.json` for one extension
 `crates/shell/src/extensions/mod.rs:69` **struct** `ExtensionRegistry` — Registry of all installed extensions for the current profile
@@ -4463,20 +4463,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/input/humanlike.rs:267` **fn** `type_text` — Type `text` with Gaussian-distributed inter-keystroke delays
 `crates/shell/src/input/humanlike.rs:287` **fn** `scroll_to` — Scroll to `(x, y)` immediately (no path animation for scrolls)
 `crates/shell/src/input/humanlike.rs:295` **fn** `set_cursor_position` — Override the assumed cursor starting position without moving it
-`crates/shell/src/input/mod.rs:40` **enum** `InputCommand` — A single injected input command
-`crates/shell/src/input/mod.rs:107` **struct** `InputSender` — Sender side of the input injection channel
-`crates/shell/src/input/mod.rs:112` **fn** `click` — Send a synthetic left-click at CSS-pixel coordinates `(x, y)`
-`crates/shell/src/input/mod.rs:118` **fn** `mouse_move` — Send a synthetic mouse-move event to CSS-pixel coordinates `(x, y)`
-`crates/shell/src/input/mod.rs:124` **fn** `type_text` — Send a synthetic text-typing command
-`crates/shell/src/input/mod.rs:130` **fn** `scroll` — Send a synthetic scroll command to position `(x, y)` in CSS pixels
-`crates/shell/src/input/mod.rs:140` **fn** `key_down` — Press and release a special key identified by its W3C `KeyboardEvent.code`
-`crates/shell/src/input/mod.rs:146` **fn** `enter` — Press Enter in the focused element (submits forms, confirms dialogs)
-`crates/shell/src/input/mod.rs:152` **fn** `backspace` — Press Backspace in the focused element (deletes character before cursor)
-`crates/shell/src/input/mod.rs:158` **fn** `tab` — Press Tab (move focus to the next focusable element)
-`crates/shell/src/input/mod.rs:164` **fn** `escape` — Press Escape (dismiss dialogs, close menus, blur focused element)
-`crates/shell/src/input/mod.rs:172` **struct** `InputReceiver` — Receiver side of the input injection channel
-`crates/shell/src/input/mod.rs:176` **fn** `drain` — Non-blocking drain: returns all pending commands without blocking
-`crates/shell/src/input/mod.rs:185` **fn** `channel` — Create a new input injection channel
+`crates/shell/src/input/mod.rs:43` **enum** `InputCommand` — A single injected input command
+`crates/shell/src/input/mod.rs:110` **struct** `InputSender` — Sender side of the input injection channel
+`crates/shell/src/input/mod.rs:115` **fn** `click` — Send a synthetic left-click at CSS-pixel coordinates `(x, y)`
+`crates/shell/src/input/mod.rs:121` **fn** `mouse_move` — Send a synthetic mouse-move event to CSS-pixel coordinates `(x, y)`
+`crates/shell/src/input/mod.rs:127` **fn** `type_text` — Send a synthetic text-typing command
+`crates/shell/src/input/mod.rs:133` **fn** `scroll` — Send a synthetic scroll command to position `(x, y)` in CSS pixels
+`crates/shell/src/input/mod.rs:143` **fn** `key_down` — Press and release a special key identified by its W3C `KeyboardEvent.code`
+`crates/shell/src/input/mod.rs:149` **fn** `enter` — Press Enter in the focused element (submits forms, confirms dialogs)
+`crates/shell/src/input/mod.rs:155` **fn** `backspace` — Press Backspace in the focused element (deletes character before cursor)
+`crates/shell/src/input/mod.rs:161` **fn** `tab` — Press Tab (move focus to the next focusable element)
+`crates/shell/src/input/mod.rs:167` **fn** `escape` — Press Escape (dismiss dialogs, close menus, blur focused element)
+`crates/shell/src/input/mod.rs:175` **struct** `InputReceiver` — Receiver side of the input injection channel
+`crates/shell/src/input/mod.rs:179` **fn** `drain` — Non-blocking drain: returns all pending commands without blocking
+`crates/shell/src/input/mod.rs:188` **fn** `channel` — Create a new input injection channel
 `crates/shell/src/input/vim.rs:41` **enum** `VimState` — Which sub-mode the Vim keybinding layer is currently in
 `crates/shell/src/input/vim.rs:61` **enum** `VimAction` — Decoded action that the caller should execute in response to a keypress
 `crates/shell/src/input/vim.rs:106` **struct** `VimMode` — Vim-mode state machine
@@ -4488,6 +4488,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/links.rs:63` **fn** `fragment_url` — Build the absolute URL for a same-document fragment navigation: replaces the
 `crates/shell/src/links.rs:87` **fn** `same_document_fragment` — Determine whether navigating from `current` to `resolved` is a same-document
 `crates/shell/src/links.rs:111` **fn** `find_element_by_id` — Walk the document tree and return the first element whose `id` attribute
+`crates/shell/src/lumen/automation.rs:293` **fn** `input_sender` — Return a cloneable [`InputSender`] for injecting synthetic input events
+`crates/shell/src/lumen/automation.rs:302` **fn** `automation_handle` — Return a cloneable handle for driving this window's automation channel (SDC-2)
 `crates/shell/src/memory_poll.rs:23` **struct** `MemoryPollTick` — Throttled memory pressure poller
 `crates/shell/src/memory_poll.rs:36` **fn** `new` — Create a new poller using the given platform source
 `crates/shell/src/memory_poll.rs:49` **fn** `tick` — Poll memory pressure and broadcast to `registry` if pressure is Medium or High
@@ -4588,13 +4590,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/command_palette.rs:358` **fn** `fuzzy_score` — Score `haystack` against `needle` as a case-insensitive subsequence match
 `crates/shell/src/panels/command_palette.rs:408` **enum** `PaletteHit` — Result of a click inside the modal palette
 `crates/shell/src/panels/command_palette.rs:432` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the modal palette in a
-`crates/shell/src/panels/doc_pip_os_window.rs:32` **fn** `build_docpip_content` — Build the opaque background fill for the floating Document PiP window
-`crates/shell/src/panels/doc_pip_os_window.rs:48` **enum** `DocPipAction` — What the shell should do after feeding a request into [`DocPipController`]
-`crates/shell/src/panels/doc_pip_os_window.rs:69` **struct** `DocPipController` — Tracks whether the OS Document PiP window is currently open
-`crates/shell/src/panels/doc_pip_os_window.rs:75` **fn** `new` — Create an idle controller with no open window
-`crates/shell/src/panels/doc_pip_os_window.rs:81` **fn** `is_open` — `true` while the OS Document PiP window should be shown
-`crates/shell/src/panels/doc_pip_os_window.rs:86` **fn** `on_open` — Handle `_lumen_docpip_request_window(width, height)`
-`crates/shell/src/panels/doc_pip_os_window.rs:95` **fn** `on_close` — Handle `_lumen_docpip_close()` or an OS close button
+`crates/shell/src/panels/doc_pip_os_window.rs:54` **fn** `build_docpip_content` — Build the opaque background fill for the floating Document PiP window
+`crates/shell/src/panels/doc_pip_os_window.rs:70` **enum** `DocPipAction` — What the shell should do after feeding a request into [`DocPipController`]
+`crates/shell/src/panels/doc_pip_os_window.rs:91` **struct** `DocPipController` — Tracks whether the OS Document PiP window is currently open
+`crates/shell/src/panels/doc_pip_os_window.rs:97` **fn** `new` — Create an idle controller with no open window
+`crates/shell/src/panels/doc_pip_os_window.rs:103` **fn** `is_open` — `true` while the OS Document PiP window should be shown
+`crates/shell/src/panels/doc_pip_os_window.rs:108` **fn** `on_open` — Handle `_lumen_docpip_request_window(width, height)`
+`crates/shell/src/panels/doc_pip_os_window.rs:117` **fn** `on_close` — Handle `_lumen_docpip_close()` or an OS close button
 `crates/shell/src/panels/focus_panel.rs:74` **struct** `PomodoroTimer` — Wall-clock-driven countdown timer
 `crates/shell/src/panels/focus_panel.rs:90` **fn** `new` — Create a running timer of `duration_min` minutes with zero elapsed time
 `crates/shell/src/panels/focus_panel.rs:102` **fn** `tick` — Advance the timer to wall-clock `now_ms`.  Adds the delta since the last
@@ -4644,18 +4646,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/permission_panel.rs:167` **fn** `set_permission` — Set the state for `kind` at the current origin directly (CC-9's
 `crates/shell/src/panels/permission_panel.rs:185` **enum** `PermissionHit` — Result of a click inside the permission panel
 `crates/shell/src/panels/permission_panel.rs:198` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the permission panel
-`crates/shell/src/panels/pip_os_window.rs:53` **struct** `PipOsConfig` — Geometry for the floating PiP window, in logical (CSS) pixels
-`crates/shell/src/panels/pip_os_window.rs:76` **fn** `sized` — A window sized to `width`×`height` (e.g. `documentPictureInPicture
-`crates/shell/src/panels/pip_os_window.rs:98` **fn** `pip_window_attributes` — Build the winit attributes for the floating PiP window
-`crates/shell/src/panels/pip_os_window.rs:127` **fn** `build_pip_content` — Build the display list shown in the floating PiP window for a `<video>`
-`crates/shell/src/panels/pip_os_window.rs:160` **fn** `physical_to_logical` — Convert a window's physical inner size to CSS logical pixels using its DPI
-`crates/shell/src/panels/pip_os_window.rs:188` **enum** `PipAction` — What the shell should do after feeding a request into [`PipController`]
-`crates/shell/src/panels/pip_os_window.rs:203` **struct** `PipController` — Tracks which `<video>` (by node id) currently owns the OS PiP window
-`crates/shell/src/panels/pip_os_window.rs:210` **fn** `new` — Create an idle controller with no active PiP window
-`crates/shell/src/panels/pip_os_window.rs:219` **fn** `active` — Node id of the element currently in OS PiP, or `None`
-`crates/shell/src/panels/pip_os_window.rs:225` **fn** `is_active` — `true` while an OS PiP window should be shown
-`crates/shell/src/panels/pip_os_window.rs:230` **fn** `on_enter` — Handle `_lumen_pip_enter(nid)`: open or re-target the floating window
-`crates/shell/src/panels/pip_os_window.rs:239` **fn** `on_exit` — Handle `_lumen_pip_exit(_)` or an OS close button: tear the window down
+`crates/shell/src/panels/pip_os_window.rs:73` **struct** `PipOsConfig` — Geometry for the floating PiP window, in logical (CSS) pixels
+`crates/shell/src/panels/pip_os_window.rs:96` **fn** `sized` — A window sized to `width`×`height` (e.g. `documentPictureInPicture
+`crates/shell/src/panels/pip_os_window.rs:118` **fn** `pip_window_attributes` — Build the winit attributes for the floating PiP window
+`crates/shell/src/panels/pip_os_window.rs:147` **fn** `build_pip_content` — Build the display list shown in the floating PiP window for a `<video>`
+`crates/shell/src/panels/pip_os_window.rs:180` **fn** `physical_to_logical` — Convert a window's physical inner size to CSS logical pixels using its DPI
+`crates/shell/src/panels/pip_os_window.rs:208` **enum** `PipAction` — What the shell should do after feeding a request into [`PipController`]
+`crates/shell/src/panels/pip_os_window.rs:223` **struct** `PipController` — Tracks which `<video>` (by node id) currently owns the OS PiP window
+`crates/shell/src/panels/pip_os_window.rs:230` **fn** `new` — Create an idle controller with no active PiP window
+`crates/shell/src/panels/pip_os_window.rs:239` **fn** `active` — Node id of the element currently in OS PiP, or `None`
+`crates/shell/src/panels/pip_os_window.rs:245` **fn** `is_active` — `true` while an OS PiP window should be shown
+`crates/shell/src/panels/pip_os_window.rs:250` **fn** `on_enter` — Handle `_lumen_pip_enter(nid)`: open or re-target the floating window
+`crates/shell/src/panels/pip_os_window.rs:259` **fn** `on_exit` — Handle `_lumen_pip_exit(_)` or an OS close button: tear the window down
 `crates/shell/src/panels/pip_window.rs:66` **struct** `PipWindow` — Picture-in-picture window state
 `crates/shell/src/panels/pip_window.rs:89` **fn** `new` — Create an inactive PiP window positioned at the origin (re-anchored to the
 `crates/shell/src/panels/pip_window.rs:103` **fn** `open` — Open the PiP card for a `<video>` source, anchored to the bottom-right of
@@ -4924,8 +4926,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/scrollbar.rs:185` **struct** `ScrollDrag` — Снапшот состояния на момент начала drag-а: scroll_y страницы и cursor_y
 `crates/shell/src/scrollbar.rs:191` **fn** `new`
 `crates/shell/src/scrollbar.rs:199` **fn** `scroll_for` — Желаемый `scroll_y` при текущей позиции курсора. Если scrollbar
-`crates/shell/src/session_persist.rs:32` **fn** `open_store` — Open the session store at [`SESSION_DB_PATH`], falling back to an in-memory
-`crates/shell/src/session_persist.rs:44` **fn** `active_index` — Index of the tab to make active after restore: the first `is_active` tab, or
+`crates/shell/src/session_persist.rs:34` **fn** `open_store` — Open the session store at [`SESSION_DB_PATH`], falling back to an in-memory
+`crates/shell/src/session_persist.rs:46` **fn** `active_index` — Index of the tab to make active after restore: the first `is_active` tab, or
 `crates/shell/src/source_view.rs:15` **fn** `build_view_source_html` — Wrap `raw` HTML source in a syntax-highlighted page
 `crates/shell/src/spellcheck.rs:22` **fn** `spell_data_dir` — Папка с пользовательскими словарями: `<exe_dir>/data/spell`
 `crates/shell/src/spellcheck.rs:29` **struct** `MultiDictionary` — Комбинированный словарь нескольких локалей. Слово считается верным,
@@ -5660,4 +5662,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:228` **fn** `count`
 
 ---
-*Total: 5583 symbols in 24 crates*
+*Total: 5585 symbols in 24 crates*

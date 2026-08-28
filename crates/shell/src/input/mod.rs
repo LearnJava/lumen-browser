@@ -23,10 +23,13 @@
 //! (`_lumen_dispatch_mouse_event`, `_lumen_dispatch_key_event`), which always
 //! create events with `isTrusted=true`.  JS `dispatchEvent()` is never used.
 
+pub mod dnd;
 pub mod gesture;
 pub mod humanlike;
+pub mod keybindings;
 pub mod native;
 pub mod vim;
+pub mod winit_events;
 
 use std::sync::mpsc;
 

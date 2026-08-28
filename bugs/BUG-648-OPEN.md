@@ -93,13 +93,13 @@ synchronous `_perf_entries` push.
 ## Реконфирмации (не новые)
 
 - `PerformanceObserverEntryList is not defined` (`po-observe.any.html`) —
-  same class as [BUG-645](bugs/BUG-645-OPEN.md)/[BUG-624](bugs/BUG-624-OPEN.md)/
-  [BUG-637](bugs/BUG-637-OPEN.md)/[BUG-589](bugs/BUG-589-OPEN.md): WebIDL
+  same class as [BUG-645](BUG-645-OPEN.md)/[BUG-624](BUG-624-OPEN.md)/
+  [BUG-637](BUG-637-OPEN.md)/[BUG-589](BUG-589-OPEN.md): WebIDL
   interface objects absent as globals even where the underlying behavior
   (the plain-object "list" passed to callbacks, `dom.rs:8319-8326`) works.
 - `case-sensitivity.any.html` (`resources/square.png?id=1` never loads,
   "fetch error: invalid url: invalid url: missing scheme") — same class
-  as [BUG-347](bugs/BUG-347-FIXED.md) (`fetch()`/resource loading doesn't
+  as [BUG-347](BUG-347-FIXED.md) (`fetch()`/resource loading doesn't
   resolve relative URLs — fixed 2026-08-06).
 - `timing-removed-iframe.html` (`Cannot read properties of null (reading
   'performance')` on a detached iframe's `contentWindow`) — same class as
@@ -112,7 +112,7 @@ synchronous `_perf_entries` push.
   as `navigation-timing`/`mixed-content`.
 - `supportedEntryTypes` listing types with no real delivery mechanism
   (`element`/`event`/`first-input`/`longtask`/`soft-navigation`) — already
-  filed as [BUG-354](bugs/BUG-354-OPEN.md).
+  filed as [BUG-354](BUG-354-FIXED.md).
 
 ## Новая, не реконфирмационная находка вне PerformanceObserver
 

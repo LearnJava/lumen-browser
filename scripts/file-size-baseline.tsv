@@ -1,0 +1,31 @@
+# Базовая линия размеров файлов — гейт scripts/check_file_sizes.py.
+# Правило и порядок правки — docs/lint-policy.md §5.1.
+# Строка здесь = файл, который дорожка SPLIT ещё не разрезала.
+# Число может ехать ВНИЗ свободно, ВВЕРХ — только осознанно, тем же
+# коммитом, что и рост, и с объяснением в теле коммита.
+
+38031	crates/engine/layout/src/style.rs
+34540	crates/js/src/dom.rs
+23470	crates/engine/layout/src/box_tree.rs
+20919	crates/engine/paint/src/renderer.rs
+19698	crates/engine/paint/src/display_list.rs
+19155	crates/engine/layout/src/lib.rs
+10217	crates/network/src/lib.rs
+9415	crates/js/src/v8_runtime.rs
+9192	crates/engine/css-parser/src/parser.rs
+7955	crates/engine/paint/src/backends/femtovg_backend.rs
+6998	crates/engine/dom/src/lib.rs
+4809	crates/engine/paint/src/cpu_raster.rs
+4504	crates/core/src/ext.rs
+4408	crates/js/src/filesystem_access.rs
+4112	crates/bidi-server/src/protocol.rs
+3962	crates/engine/html-parser/src/tree_builder.rs
+3614	crates/js/src/worker.rs
+3484	crates/js/src/frame_bridge.rs
+3435	crates/chrome/src/model.rs
+2962	crates/driver/src/session.rs
+2762	crates/network/src/h3/conn_connect.rs
+2637	crates/js/src/subtle_crypto.rs
+2544	crates/shell/src/forms.rs
+2365	crates/js/src/video_bindings.rs
+2067	crates/js/src/web_audio.rs

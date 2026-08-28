@@ -26,6 +26,10 @@ rule through a different mechanism.
 - Changes that can move pixels (paint/display-list, layout geometry, CSS properties, font/text/image code)
   must come with regenerated snapshot references in the same commit, not a follow-up. Flag a paint-affecting
   diff with no snapshot delta.
+- A new `.rs` file over 2000 lines, or growth of one already in `scripts/file-size-baseline.tsv`, is machine-checked
+  (`scripts/check_file_sizes.py`, CI job `file-size`) — so the gate above covers the fact of it. Review the **choice**
+  instead: a diff that raises a baseline number is the author saying "this belongs in the monolith after all", and
+  that claim is worth one question. The alternative is a sibling module, not a smaller patch (`docs/lint-policy.md` §5.1).
 - No hardcoded version strings — the version derives from `[workspace.package] version` in `Cargo.toml`
   (`CARGO_PKG_VERSION`). Flag any literal version number outside that field (one intentional exception:
   the `navigator.userAgent` string in `crates/js/src/dom.rs`).

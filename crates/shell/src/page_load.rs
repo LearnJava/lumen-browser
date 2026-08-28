@@ -1415,3 +1415,172 @@ impl Lumen {
         }
     }
 }
+
+/// РџСЂРѕРіРЅР°С‚СЊ РїРѕСЂС†РёСЋ HTML С‡РµСЂРµР· preload-СЃРєР°РЅРµСЂ, СЌРјРёС‚РЅСѓС‚СЊ `EarlyPreloadHints` Рё
+/// РїР°СЂР°Р»Р»РµР»СЊРЅРѕ Р·Р°РіСЂСѓР·РёС‚СЊ РЅР°Р№РґРµРЅРЅС‹Рµ СЃС‚РёР»Рё (PH1-2 / PH1-8). РћР±С‰Р°СЏ Р»РѕРіРёРєР° РґР»СЏ РѕР±РѕРёС…
+/// РїСѓС‚РµР№ `start_streaming_load`: СЃРµС‚РµРІРѕРіРѕ streaming-Р° (URL) Рё РЅР°СЂРµР·РєРё
+/// СѓР¶Рµ-Р·Р°РіСЂСѓР¶РµРЅРЅРѕРіРѕ Р±СѓС„РµСЂР° (File/Snapshot/Static). Hint-С‹ С€Р»СЋС‚СЃСЏ Р”Рћ РїРµСЂРµРґР°С‡Рё
+/// chunk-Р° DOM-РїР°СЂСЃРµСЂСѓ, С‡С‚РѕР±С‹ fetch РїРѕРґСЂРµСЃСѓСЂСЃРѕРІ СЃС‚Р°СЂС‚РѕРІР°Р» СЂР°РЅСЊС€Рµ.
+#[allow(clippy::too_many_arguments)]
+fn feed_preload_and_emit(
+    scanner: &mut lumen_html_parser::PreloadScanner,
+    chunk: &[u8],
+    base: &ResourceBase,
+    proxy: &EventLoopProxy<LoadEvent>,
+    generation: u64,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<&Arc<lumen_storage::CookieJar>>,
+    media_ctx: &lumen_css_parser::MediaContext,
+) {
+    use lumen_network::RequestDestination;
+
+    let early = scanner.feed_bytes(chunk);
+    if early.is_empty() {
+        return;
+    }
+    let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early.clone(), base.clone(), generation));
+    // PH1-2 + BUG-171: speculatively fetch subresources off the UI thread while the
+    // HTML is still streaming. Linked stylesheets AND external classic scripts are
+    // warmed into the process-global prefetch cache using the SAME subresource
+    // client `parse_and_layout` uses, so the final UI-thread pass reads identical
+    // bytes instantly instead of blocking on the socket (cascade + script order
+    // untouched вЂ” a cache miss simply re-fetches there). Stylesheets additionally
+    // parse here to feed progressive intermediate frames (the previous PH1-2 path).
+    for hint in &early {
+        let (raw_url, dest, is_css) = match hint {
+            lumen_html_parser::PreloadHint::Stylesheet { url, media } => {
+                // BUG-268: print-only Р»РёСЃС‚ С„РёРЅР°Р»СЊРЅС‹Р№ pipeline РІСЃС‘ СЂР°РІРЅРѕ РЅРµ
+                // РІРѕР·СЊРјС‘С‚ (media-РіРµР№С‚ РІ collect_link_hrefs) вЂ” РЅРµ РіСЂРµРµРј РєСЌС€
+                // Рё, РіР»Р°РІРЅРѕРµ, РЅРµ СЌРјРёС‚РёРј CssLoaded: РїСЂРѕРјРµР¶СѓС‚РѕС‡РЅС‹Рµ progressive-
+                // РєР°РґСЂС‹ РЅРµ РґРѕР»Р¶РЅС‹ РєСЂР°СЃРёС‚СЊ СЃС‚СЂР°РЅРёС†Сѓ print-РїСЂР°РІРёР»Р°РјРё.
+                if media.as_deref().is_some_and(|m| !link_media_matches(m, media_ctx)) {
+                    continue;
+                }
+                (url, RequestDestination::Style, true)
+            }
+            lumen_html_parser::PreloadHint::Script { url } => {
+                (url, RequestDestination::Script, false)
+            }
+            _ => continue,
+        };
+        match base.resolve(raw_url) {
+            // Local files: read is instant вЂ” no cache benefit. Only CSS needs a
+            // CssLoaded event for the progressive frame; scripts are read in
+            // `parse_and_layout`.
+            ResolvedResource::File(path) => {
+                if is_css
+                    && let Ok(text) = std::fs::read_to_string(&path)
+                {
+                    let sheet = lumen_css_parser::parse(&text);
+                    let _ = proxy.send_event(LoadEvent::CssLoaded(Box::new(sheet), generation));
+                }
+            }
+            ResolvedResource::Url(resolved) => {
+                let proxy2 = proxy.clone();
+                let base = base.clone();
+                let sink = Arc::clone(sink);
+                let cookie_jar = cookie_jar.cloned();
+                std::thread::spawn(move || {
+                    use lumen_core::url::Url;
+                    let Ok(parsed) = Url::parse(&resolved) else {
+                        return;
+                    };
+                    let bytes = crate::prefetch::PREFETCH_CACHE.fetch(generation, &resolved, || {
+                        let client = base.http_client_for_subresource(sink, cookie_jar);
+                        client
+                            .fetch_subresource(&parsed, dest)
+                            .map_err(|e| e.to_string())
+                    });
+                    if is_css
+                        && let Ok(bytes) = bytes
+                    {
+                        let sheet =
+                            lumen_css_parser::parse(&String::from_utf8_lossy(&bytes[..]));
+                        let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet), generation));
+                    }
+                });
+            }
+        }
+    }
+}
+
+/// РЎРѕР±С‹С‚РёРµ РѕС‚ background-РїРѕС‚РѕРєР° Р·Р°РіСЂСѓР·РєРё СЃС‚СЂР°РЅРёС†С‹ РІ event loop.
+///
+/// Р—Р°РіСЂСѓР·РєР° СЂР°Р·Р±РёС‚Р° РЅР° С‡РµС‚С‹СЂРµ С„Р°Р·С‹: (0) `EarlyPreloadHints` вЂ” С…РёРЅС‚С‹ РёР· РїРµСЂРІС‹С…
+/// Р±Р°Р№С‚ HTML РґР»СЏ СЂР°РЅРЅРµРіРѕ СЃС‚Р°СЂС‚Р° subresource fetch-РѕРІ; (1) chunks СЃС‹СЂС‹С… Р±Р°Р№С‚ РґР»СЏ
+/// РёРЅРєСЂРµРјРµРЅС‚Р°Р»СЊРЅРѕРіРѕ РїР°СЂСЃРёРЅРіР° Рё РїСЂРѕРјРµР¶СѓС‚РѕС‡РЅС‹С… РєР°РґСЂРѕРІ С‡РµСЂРµР·
+/// `IncrementalTreeBuilder::feed_bytes`; (2) `LoadDone` вЂ” РІСЃРµ Р±Р°Р№С‚С‹ РґРѕСЃС‚СѓРїРЅС‹,
+/// Р·Р°РїСѓСЃРєР°РµРј РїРѕР»РЅС‹Р№ pipeline (CSS + РёР·РѕР±СЂР°Р¶РµРЅРёСЏ); (3) `LoadError` вЂ” РѕС€РёР±РєР° fetch.
+pub(crate) enum LoadEvent {
+    /// No-op wake-up (SDC-2). `winit`'s `ControlFlow::Wait` genuinely parks
+    /// the event loop until an OS window event, a scheduled `WaitUntil`
+    /// deadline, or a proxied user event arrives вЂ” an `AutomationCommand`
+    /// enqueued from a BiDi/MCP thread is none of those, so without this the
+    /// loop could sit parked indefinitely and never drain it.
+    /// `AutomationHandle::execute` sends this through `load_proxy` right
+    /// after queuing a command; `user_event` below does nothing with it вЂ”
+    /// merely *receiving* a proxied event is what interrupts `Wait` and
+    /// triggers the next `about_to_wait` (where automation commands are
+    /// actually drained).
+    AutomationWake,
+    /// Subresource-С…РёРЅС‚С‹ РёР· РїРµСЂРІРѕРіРѕ chunk HTML (HTML LS В§13.2.6.4.7
+    /// В«Speculative HTML parsingВ»). РћС‚РїСЂР°РІР»СЏСЋС‚СЃСЏ Р”Рћ РїРµСЂРІРѕРіРѕ `HtmlChunk`,
+    /// С‡С‚РѕР±С‹ sink РјРѕРі РЅР°С‡Р°С‚СЊ Р·Р°РіСЂСѓР¶Р°С‚СЊ CSS/С€СЂРёС„С‚С‹ РµС‰С‘ РІ РїСЂРѕС†РµСЃСЃРµ РїР°СЂСЃРёРЅРіР°.
+    /// Р”РµРґСѓРїР»РёРєР°С†РёСЏ СЃ С„РёРЅР°Р»СЊРЅС‹РјРё С…РёРЅС‚Р°РјРё РёР· `LoadDone` вЂ” С‡РµСЂРµР·
+    /// `preload_dispatched` РІ `Lumen`.
+    /// РџРѕСЃР»РµРґРЅРµРµ РїРѕР»Рµ вЂ” generation РЅР°РІРёРіР°С†РёРё (U-1): РёРґРµРЅС‚РёС„РёРєР°С‚РѕСЂ load-С†РёРєР»Р°,
+    /// РїСЂРёСЃРІРѕРµРЅРЅС‹Р№ РІ `reload`/`resumed`. `user_event` РѕС‚Р±СЂР°СЃС‹РІР°РµС‚ СЃРѕР±С‹С‚РёРµ, РµСЃР»Рё
+    /// РµРіРѕ generation РЅРµ СЃРѕРІРїР°РґР°РµС‚ СЃ `Lumen::load_generation` вЂ” Р·Р°С‰РёС‚Р° РѕС‚
+    /// СѓСЃС‚Р°СЂРµРІС€РёС… СЃРѕР±С‹С‚РёР№ РіРѕРЅРєРё РЅР°РІРёРіР°С†РёР№ (Р±С‹СЃС‚СЂС‹Р№ back/forward РёР»Рё РєР»РёРє РїРѕ РґРІСѓРј
+    /// СЃСЃС‹Р»РєР°Рј РїРѕРґСЂСЏРґ), РєРѕС‚РѕСЂС‹Рµ РёРЅР°С‡Рµ РїРѕРґРјРµС€Р°Р»Рё Р±С‹ DOM/CSS РїСЂРѕС€Р»РѕР№ СЃС‚СЂР°РЅРёС†С‹.
+    EarlyPreloadHints(Vec<lumen_html_parser::PreloadHint>, ResourceBase, u64),
+    /// BUG-757: Р±Р°Р·Р° РґРѕРєСѓРјРµРЅС‚Р° СЃС‚Р°Р»Р° РёР·РІРµСЃС‚РЅР° Рё РѕС‚Р»РёС‡Р°РµС‚СЃСЏ РѕС‚ Р·Р°РїСЂРѕС€РµРЅРЅРѕРіРѕ
+    /// Р°РґСЂРµСЃР° (СЃРµСЂРІРµСЂ РѕС‚РІРµС‚РёР» СЂРµРґРёСЂРµРєС‚РѕРј). РћС‚РїСЂР°РІР»СЏРµС‚СЃСЏ РёР· streaming-РїРѕС‚РѕРєР°,
+    /// РєР°Рє С‚РѕР»СЊРєРѕ С‚РµР»Рѕ РїРѕС‚РµРєР»Рѕ СЃ С„РёРЅР°Р»СЊРЅРѕРіРѕ hop-Р° вЂ” С‚Рѕ РµСЃС‚СЊ Р”Рћ С‚РѕРіРѕ, РєР°Рє
+    /// С‡Р°СЃС‚РёС‡РЅС‹Р№ DOM РЅР°С‡РЅС‘С‚ Р·Р°РєР°Р·С‹РІР°С‚СЊ РєР°СЂС‚РёРЅРєРё Рё С€СЂРёС„С‚С‹, РєРѕС‚РѕСЂС‹Рµ UI-РїРѕС‚РѕРє
+    /// СЂРµР·РѕР»РІРёС‚ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ Р±Р°Р·С‹. РџРѕСЃР»РµРґРЅРµРµ РїРѕР»Рµ вЂ” generation РЅР°РІРёРіР°С†РёРё (U-1).
+    DocumentBase(ResourceBase, u64),
+    /// РћС‡РµСЂРµРґРЅРѕР№ chunk СЃС‹СЂС‹С… Р±Р°Р№С‚ HTML. UTF-8 РіСЂР°РЅРёС†С‹ РЅРµ РІС‹СЂР°РІРЅРёРІР°СЋС‚СЃСЏ вЂ”
+    /// `IncrementalTreeBuilder::feed_bytes` Р±СѓС„РµСЂРёР·СѓРµС‚ РЅРµР·Р°РІРµСЂС€С‘РЅРЅС‹Рµ
+    /// code-point-С‹ РІРЅСѓС‚СЂРё. РџРѕСЃР»РµРґРЅРµРµ РїРѕР»Рµ вЂ” generation РЅР°РІРёРіР°С†РёРё (U-1).
+    HtmlChunk(Vec<u8>, u64),
+    /// CSS Р·Р°РіСЂСѓР¶РµРЅ РїР°СЂР°Р»Р»РµР»СЊРЅС‹Рј РїРѕС‚РѕРєРѕРј РґР»СЏ РїСЂРѕРјРµР¶СѓС‚РѕС‡РЅС‹С… streaming-РєР°РґСЂРѕРІ.
+    /// РњС‘СЂРґР¶РёС‚СЃСЏ РІ `Lumen::stream_sheet` Рё РїСЂРёРјРµРЅСЏРµС‚СЃСЏ РІ `paint_partial_dom`.
+    /// РџРѕСЃР»РµРґРЅРµРµ РїРѕР»Рµ вЂ” generation РЅР°РІРёРіР°С†РёРё (U-1).
+    CssLoaded(Box<lumen_css_parser::Stylesheet>, u64),
+    /// PH1-2c: РєР°СЂС‚РёРЅРєР° `<img>` РґРµРєРѕРґРёСЂРѕРІР°РЅР° РїР°СЂР°Р»Р»РµР»СЊРЅС‹Рј РїРѕС‚РѕРєРѕРј РІРѕ РІСЂРµРјСЏ
+    /// streaming. Р РµРіРёСЃС‚СЂРёСЂСѓРµС‚СЃСЏ РІ renderer-Рµ РїРѕ РєР»СЋС‡Сѓ `src` Рё РІС‹Р·С‹РІР°РµС‚ redraw вЂ”
+    /// РєР°СЂС‚РёРЅРєРё РїРѕСЏРІР»СЏСЋС‚СЃСЏ РїРѕ РјРµСЂРµ РїСЂРёС…РѕРґР°, Р° РЅРµ СЂР°Р·РѕРј РІ С„РёРЅР°Р»СЊРЅРѕРј `LoadDone`.
+    /// Р”Р»СЏ Р°РЅРёРјРёСЂРѕРІР°РЅРЅРѕРіРѕ GIF `animated` РЅРµСЃС‘С‚ РІСЃРµ РєР°РґСЂС‹ (С‚РёРєР°СЋС‚СЃСЏ РІ
+    /// `RedrawRequested`); `image` вЂ” РЅСѓР»РµРІРѕР№ РєР°РґСЂ РґР»СЏ РЅРµРјРµРґР»РµРЅРЅРѕР№ РѕС‚СЂРёСЃРѕРІРєРё.
+    ImageDecoded {
+        src: String,
+        image: Box<lumen_image::Image>,
+        animated: Option<Box<lumen_image::AnimatedGif>>,
+    },
+    /// PH3-19: web-С€СЂРёС„С‚ РёР· @font-face url() РґРµРєРѕРґРёСЂРѕРІР°РЅ РІ С„РѕРЅРѕРІРѕРј РїРѕС‚РѕРєРµ.
+    /// Р РµРіРёСЃС‚СЂРёСЂСѓРµС‚СЃСЏ РІ FontRegistry + MultiFontMeasurer Рё РІС‹Р·С‹РІР°РµС‚ relayout вЂ”
+    /// С‚РµРєСЃС‚ РїРѕСЏРІР»СЏРµС‚СЃСЏ РІ fallback-С€СЂРёС„С‚Рµ СЃСЂР°Р·Сѓ, РїРѕРґРјРµРЅСЏРµС‚СЃСЏ РїРѕ РїСЂРёС…РѕРґСѓ (FOUT).
+    FontLoaded {
+        family: String,
+        weight: u16,
+        style: lumen_core::FontStyle,
+        unicode_range: Vec<lumen_font::UnicodeRange>,
+        bytes: Vec<u8>,
+    },
+    /// Р’СЃРµ Р±Р°Р№С‚С‹ РїРѕР»СѓС‡РµРЅС‹ вЂ” РґР»СЏ С„РёРЅР°Р»СЊРЅРѕРіРѕ РїРѕР»РЅРѕРіРѕ pipeline.
+    /// РџРѕСЃР»РµРґРЅРµРµ РїРѕР»Рµ вЂ” generation РЅР°РІРёРіР°С†РёРё (U-1).
+    LoadDone(RawPage, u64),
+    /// РћС€РёР±РєР° РїСЂРё Р·Р°РіСЂСѓР·РєРµ СЃС‚СЂР°РЅРёС†С‹. РџРѕСЃР»РµРґРЅРµРµ РїРѕР»Рµ вЂ” generation РЅР°РІРёРіР°С†РёРё (U-1).
+    LoadError(String, u64),
+    /// BUG-171 СЌС‚Р°Рї 2: С„РёРЅР°Р»СЊРЅС‹Р№ pipeline (parse в†’ JS в†’ fetch РїРѕРґСЂРµСЃСѓСЂСЃРѕРІ в†’
+    /// layout) РІС‹РїРѕР»РЅРµРЅ РЅР° С„РѕРЅРѕРІРѕРј РїРѕС‚РѕРєРµ; РіРѕС‚РѕРІС‹Р№ СЂРµР·СѓР»СЊС‚Р°С‚ РїСЂРёРјРµРЅСЏРµС‚СЃСЏ РЅР°
+    /// UI-РїРѕС‚РѕРєРµ (`apply_loaded_page`) Р±РµР· Р±Р»РѕРєРёСЂРѕРІРєРё event loop. РџРѕСЃР»РµРґРЅРµРµ
+    /// РїРѕР»Рµ вЂ” generation РЅР°РІРёРіР°С†РёРё (U-1).
+    RenderDone(Box<RenderOutcome>, u64),
+}
+
+/// Р Р°Р·РјРµСЂ РѕРґРЅРѕРіРѕ HTML-chunk РїСЂРё СЂР°Р·Р±РёРІРєРµ РґР»СЏ РёРЅРєСЂРµРјРµРЅС‚Р°Р»СЊРЅРѕРіРѕ РїР°СЂСЃРёРЅРіР°.
+pub(crate) const STREAM_CHUNK_BYTES: usize = 8 * 1024;
+/// РњРёРЅРёРјР°Р»СЊРЅС‹Р№ РёРЅС‚РµСЂРІР°Р» РјРµР¶РґСѓ РїСЂРѕРјРµР¶СѓС‚РѕС‡РЅС‹РјРё РєР°РґСЂР°РјРё РїСЂРё streaming (РјСЃ) вЂ” ~60 Р“С†.
+pub(crate) const STREAM_PAINT_INTERVAL_MS: u128 = 16;

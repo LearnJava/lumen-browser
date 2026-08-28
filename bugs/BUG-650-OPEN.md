@@ -55,5 +55,5 @@ typeof navigator.permissions.requestAll  // "undefined", spec: "function"
 
 The category's only executed harness result (TIMEOUT on `idlharness.any.html`)
 is the already-documented `/resources/idlharness.js`+`/resources/WebIDLParser.js`
-vendoring gap (see [BUG-649](bugs/BUG-649-OPEN.md)'s permissions-category note)
+vendoring gap (see [BUG-649](BUG-649-OPEN.md)'s permissions-category note)
 — not a new finding.
