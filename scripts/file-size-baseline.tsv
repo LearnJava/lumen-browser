@@ -4,8 +4,8 @@
 # Число может ехать ВНИЗ свободно, ВВЕРХ — только осознанно, тем же
 # коммитом, что и рост, и с объяснением в теле коммита.
 
-38339	crates/js/src/dom.rs
 38031	crates/engine/layout/src/style.rs
+34540	crates/js/src/dom.rs
 23470	crates/engine/layout/src/box_tree.rs
 20919	crates/engine/paint/src/renderer.rs
 19698	crates/engine/paint/src/display_list.rs
