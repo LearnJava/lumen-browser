@@ -476,6 +476,12 @@ impl Lumen {
                 self.content_width = content_width_of(&page.display_list);
                 // On full page load, mark all tiles dirty вЂ” content has changed completely.
                 self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
+                // BUG-480 срез 14: под-документы новой страницы заменяют старые
+                // (то же, что делает `apply_loaded_page`, — этот резервный путь
+                // reload'а без окна о фреймах не знал вовсе и оставлял хэндлы
+                // ПРЕДЫДУЩЕГО документа живыми). Строго до записи списка: она
+                // вклеивает в него содержимое фреймов.
+                self.frames = page.frames;
                 self.set_display_list(page.display_list);
                 self.animation_scheduler.clear();
                 self.transition_scheduler = TransitionScheduler::new();
@@ -1076,7 +1082,6 @@ impl Lumen {
         self.content_width = content_width_of(&page.display_list);
         // Full page load: force all tiles dirty.
         self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
-        self.set_display_list(page.display_list);
         self.animation_scheduler.clear();
         self.transition_scheduler = TransitionScheduler::new();
         self.starting_style_tracker = StartingStyleTracker::new();
@@ -1087,6 +1092,12 @@ impl Lumen {
         // BUG-480 СЃСЂРµР· 1: РїРѕРґ-РґРѕРєСѓРјРµРЅС‚С‹ РЅРѕРІРѕР№ СЃС‚СЂР°РЅРёС†С‹ Р·Р°РјРµРЅСЏСЋС‚ СЃС‚Р°СЂС‹Рµ С†РµР»РёРєРѕРј вЂ”
         // РїСЂРµР¶РЅРёРµ С„СЂРµР№РјС‹ (Рё РёС… JS-РєРѕРЅС‚РµРєСЃС‚С‹) РїР°РґР°СЋС‚ РІРјРµСЃС‚Рµ СЃРѕ СЃС‚СЂР°РЅРёС†РµР№.
         self.frames = page.frames;
+        // BUG-480 срез 14: список страницы пишется ПОСЛЕ замены фреймов, а не
+        // до неё — `set_display_list` вклеивает в него содержимое под-документов
+        // из `self.frames`, и на прежнем порядке первый кадр новой страницы
+        // склеивался с фреймами ПРЕДЫДУЩЕЙ (а на первой загрузке — ни с чем,
+        // так что фрейм оставался серой заглушкой до первого relayout).
+        self.set_display_list(page.display_list);
         self.sync_text_track_store();
         // content-visibility: auto (BB-4): РЅРѕРІР°СЏ СЃС‚СЂР°РЅРёС†Р° вЂ” ratchet СЃ РЅСѓР»СЏ.
         self.cv_relevant.clear();

@@ -1245,7 +1245,11 @@ impl Lumen {
                 }
                 if changed {
                     // Rebuild display list with the updated scroll offsets.
-                    let new_dl = paint_ordered(lb);
+                    let mut new_dl = paint_ordered(lb);
+                    // BUG-480 СЃСЂРµР· 14: paint_ordered РїРµСЂРµСЃРѕР±РёСЂР°РµС‚ СЃРїРёСЃРѕРє РёР·
+                    // layout Рё Рѕ С„СЂРµР№РјР°С… РЅРµ Р·РЅР°РµС‚ вЂ” Р±РµР· РІРєР»РµР№РєРё СЃРѕРґРµСЂР¶РёРјРѕРµ
+                    // С„СЂРµР№РјР° РёСЃС‡РµР·Р»Рѕ Р±С‹ РЅР° РїРµСЂРІРѕРј Р¶Рµ СЃРєСЂРѕР»Р»Рµ РєРѕРЅС‚РµР№РЅРµСЂР°.
+                    crate::frames::splice_frame_content(&mut new_dl, &self.frames);
                     let root_id = lb.node.index() as u32;
                     self.tile_grid.update_from_diff(&self.display_list, &new_dl);
                     // Cache directly вЂ” lb mutably borrows self.layout_box; only self.display_list_cache is touched here.

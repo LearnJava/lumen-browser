@@ -8,6 +8,7 @@
 
 use crate::*;
 use crate::relayout::page_measurer;
+use lumen_paint::DisplayCommand;
 
 /// Apply sandbox restrictions for all `<iframe sandbox>` elements in the document.
 ///
@@ -378,48 +379,66 @@ fn frame_measurer() -> Option<lumen_paint::MultiFontMeasurer> {
 }
 
 /// Посчитать cascade + layout под-документа фрейма на заданном вьюпорте и
-/// отдать результат JS-контексту ребёнка (BUG-480 срезы 12/13).
+/// отдать снимок прямоугольников JS-контексту ребёнка (BUG-480 срезы 12/13/14).
 ///
-/// Результат layout нигде не сохраняется — из него нужен только снимок
-/// прямоугольников для `getBoundingClientRect`/`offsetWidth` внутри фрейма
-/// (paint ребёнка — следующий срез очереди). Лок дерева держится ровно на
-/// время прохода: `update_layout_rects` уходит уже без него, потому что это
-/// вызов на JS-поток ребёнка.
+/// Результат ВОЗВРАЩАЕТСЯ, а не выбрасывается (срез 14): по нему рисуется
+/// display list ребёнка и в нём же ищется host-бокс вложенного фрейма
+/// (`NodeId` уникален только внутри своего документа, поэтому вложенному фрейму
+/// нужен именно layout его собственного родителя, а не страницы).
+///
+/// `js` необязателен: у фрейма без скриптов JS-контекста нет, но layout ему
+/// нужен ровно так же — его содержимое всё равно попадает на экран.
+///
+/// Лок дерева держится ровно на время прохода: `update_layout_rects` уходит уже
+/// без него, потому что это вызов на JS-поток ребёнка.
 #[allow(clippy::unwrap_used)] // РєРѕСЂРѕС‚РєРёР№ Р»РѕРє РґРµСЂРµРІР°, docs/lint-policy.md В§10
 fn layout_frame_document(
     doc: &Arc<Mutex<Document>>,
     sheet: &lumen_css_parser::Stylesheet,
     viewport: lumen_core::geom::Size,
-    js: &Arc<dyn PersistentJs>,
+    js: Option<&Arc<dyn PersistentJs>>,
     measurer: &lumen_paint::MultiFontMeasurer,
-) {
-    let rects = {
+) -> lumen_layout::LayoutBox {
+    let (frame_layout, rects) = {
         let d = doc.lock().unwrap();
         let frame_layout = lumen_layout::layout_measured(&d, sheet, viewport, measurer);
-        lumen_layout::collect_layout_rects(&frame_layout)
+        let rects = lumen_layout::collect_layout_rects(&frame_layout);
+        (frame_layout, rects)
     };
-    js.update_layout_rects(rects);
-    js.update_viewport_size(viewport.width, viewport.height);
+    if let Some(js) = js {
+        js.update_layout_rects(rects);
+        js.update_viewport_size(viewport.width, viewport.height);
+    }
+    frame_layout
 }
 
-/// Размер КОНТЕНТНОГО бокса host-элемента `<iframe>`/`<frame>` в layout
-/// родителя — вьюпорт под-документа по HTML LS §4.8.5.
+/// КОНТЕНТНЫЙ бокс host-элемента `<iframe>`/`<frame>` в layout родителя —
+/// вьюпорт под-документа по HTML LS §4.8.5 и одновременно место, куда
+/// вклеивается его display list (срез 14).
 ///
-/// `LayoutBox::rect` — border-бокс, поэтому вычитаются рамки и padding (та же
-/// арифметика, что у `content_box_rect` в `display_list.rs`, где она приватна).
-pub(crate) fn host_content_size(b: &lumen_layout::LayoutBox) -> lumen_core::geom::Size {
+/// `LayoutBox::rect` — border-бокс, поэтому вычитаются рамки и padding. Порядок
+/// операций повторяет приватную `content_box_rect` из `display_list.rs`
+/// побитово: срез 14 ищет по этому прямоугольнику команду-заглушку в готовом
+/// display list родителя, а сравнение чисел с плавающей точкой переживает
+/// перестановку слагаемых не всегда.
+pub(crate) fn host_content_rect(b: &lumen_layout::LayoutBox) -> Rect {
     let s = &b.style;
-    let w = b.rect.width
-        - s.border_left_width
-        - s.border_right_width
-        - s.padding_left.px()
-        - s.padding_right.px();
-    let h = b.rect.height
-        - s.border_top_width
-        - s.border_bottom_width
-        - s.padding_top.px()
-        - s.padding_bottom.px();
-    lumen_core::geom::Size::new(w.max(0.0), h.max(0.0))
+    Rect::new(
+        b.rect.x + s.border_left_width + s.padding_left.px(),
+        b.rect.y + s.border_top_width + s.padding_top.px(),
+        (b.rect.width
+            - s.border_left_width
+            - s.border_right_width
+            - s.padding_left.px()
+            - s.padding_right.px())
+        .max(0.0),
+        (b.rect.height
+            - s.border_top_width
+            - s.border_bottom_width
+            - s.padding_top.px()
+            - s.padding_bottom.px())
+        .max(0.0),
+    )
 }
 
 /// Пересчитать layout под-документов фреймов под РЕАЛЬНЫЙ размер их host-бокса
@@ -438,42 +457,189 @@ pub(crate) fn host_content_size(b: &lumen_layout::LayoutBox) -> lumen_core::geom
 /// случается на каждый кадр анимации, а layout под-документа стоит примерно
 /// столько же, сколько layout страницы его размера.
 ///
-/// Фреймы глубины ≥ 1 пропускаются: их host-элемент живёт в дереве
-/// ПРОМЕЖУТОЧНОГО фрейма, а не страницы, а `NodeId` уникален только внутри
-/// своего документа — поиск такого узла в layout страницы дал бы либо ничего,
-/// либо чужой бокс с совпавшим индексом. Им нужен сохранённый layout их
-/// собственного родителя (следующий срез, вместе с paint).
+/// Обход идёт ПО ВОЗРАСТАНИЮ глубины (срез 14): host-элемент фрейма глубины
+/// `d` живёт в документе фрейма глубины `d-1`, а `NodeId` уникален только
+/// внутри своего документа — искать его в layout страницы значило бы найти либо
+/// ничего, либо чужой бокс с совпавшим индексом. Поэтому вложенному фрейму
+/// нужен уже пересчитанный layout его собственного родителя, а он готов ровно
+/// после прохода предыдущей глубины.
+///
+/// Display list ребёнка собирается ПОСЛЕ всех layout-ов и в обратном порядке
+/// глубин: в него вклеивается содержимое его собственных вложенных фреймов,
+/// значит те должны быть нарисованы раньше.
 pub(crate) fn sync_frame_viewports(frames: &mut [FrameHandle], page_layout: &lumen_layout::LayoutBox) {
     if frames.is_empty() {
         return;
     }
     let mut measurer: Option<lumen_paint::MultiFontMeasurer> = None;
-    for handle in frames.iter_mut() {
-        if handle.depth > 0 {
-            continue;
+    // «Layout пересчитан на этом проходе» — гейт для пересборки display list:
+    // перерисовывать нужно и сам фрейм, и каждого его предка (его содержимое
+    // вклеено в их списки).
+    let mut relaid = vec![false; frames.len()];
+    for depth in 0..=MAX_FRAME_DEPTH {
+        // Фаза 1 — только чтение: где стоит host-бокс каждого фрейма этой
+        // глубины. Отдельно от записи, потому что для глубины ≥ 1 читается
+        // ЧУЖОЙ элемент того же среза (`layout` фрейма-родителя).
+        let mut plan: Vec<(usize, Rect)> = Vec::new();
+        for (i, h) in frames.iter().enumerate() {
+            if h.depth != depth {
+                continue;
+            }
+            let host = match &h.parent_doc {
+                None => crate::forms::find_layout_box(page_layout, h.host),
+                Some(pd) => frames
+                    .iter()
+                    .find(|o| Arc::ptr_eq(&o.doc, pd))
+                    .and_then(|p| p.layout.as_ref())
+                    .and_then(|pl| crate::forms::find_layout_box(pl, h.host)),
+            };
+            if let Some(b) = host {
+                plan.push((i, host_content_rect(b)));
+            }
         }
-        let Some(js) = handle.js.clone() else { continue };
-        let Some(host) = crate::forms::find_layout_box(page_layout, handle.host) else {
-            continue;
-        };
-        let size = host_content_size(host);
-        // Схлопнутый бокс (`display:none`, нулевые атрибуты) вьюпортом быть не
-        // может — ребёнок остаётся на прежнем размере, а не пересчитывается в 0.
-        if size.width <= 0.0 || size.height <= 0.0 {
-            continue;
+        // Фаза 2 — запись.
+        for (i, rect) in plan {
+            // Положение хоста пишется ВСЕГДА, а не только при смене размера:
+            // фрейм может уехать вниз, не изменив габаритов (что-то над ним
+            // выросло), и тогда вклеивать его содержимое надо по новому адресу.
+            frames[i].host_rect = Some(rect);
+            // Схлопнутый бокс (`display:none`, нулевые атрибуты) вьюпортом быть
+            // не может — ребёнок остаётся на прежнем размере, а не считается в 0.
+            if rect.width <= 0.0 || rect.height <= 0.0 {
+                continue;
+            }
+            let size = lumen_core::geom::Size::new(rect.width, rect.height);
+            if (size.width - frames[i].viewport.width).abs() < 0.01
+                && (size.height - frames[i].viewport.height).abs() < 0.01
+                && frames[i].layout.is_some()
+            {
+                continue;
+            }
+            if measurer.is_none() {
+                measurer = frame_measurer();
+            }
+            let Some(m) = measurer.as_ref() else { return };
+            let layout = layout_frame_document(
+                &frames[i].doc,
+                &frames[i].sheet,
+                size,
+                frames[i].js.as_ref(),
+                m,
+            );
+            frames[i].layout = Some(layout);
+            frames[i].viewport = size;
+            relaid[i] = true;
         }
-        if (size.width - handle.viewport.width).abs() < 0.01
-            && (size.height - handle.viewport.height).abs() < 0.01
-        {
-            continue;
-        }
-        if measurer.is_none() {
-            measurer = frame_measurer();
-        }
-        let Some(m) = measurer.as_ref() else { return };
-        layout_frame_document(&handle.doc, &handle.sheet, size, &js, m);
-        handle.viewport = size;
     }
+    rebuild_frame_display_lists(frames, &relaid);
+}
+
+/// Пересобрать display list под-документов, чьё содержимое изменилось
+/// (BUG-480 срез 14).
+///
+/// От глубокого к мелкому: в список фрейма вклеено содержимое его собственных
+/// вложенных фреймов, поэтому те должны быть готовы раньше. Перерисовывается
+/// фрейм, чей layout пересчитан на этом проходе, чей список ещё пуст (первый
+/// проход после загрузки) — и любой, у кого перерисовался потомок.
+fn rebuild_frame_display_lists(frames: &mut [FrameHandle], relaid: &[bool]) {
+    let mut dirty: Vec<bool> = (0..frames.len())
+        .map(|i| relaid[i] || frames[i].content_dl.is_empty())
+        .collect();
+    for depth in (0..=MAX_FRAME_DEPTH).rev() {
+        for i in 0..frames.len() {
+            if frames[i].depth != depth {
+                continue;
+            }
+            let child_dirty = frames.iter().enumerate().any(|(j, c)| {
+                dirty[j]
+                    && c.parent_doc
+                        .as_ref()
+                        .is_some_and(|pd| Arc::ptr_eq(pd, &frames[i].doc))
+            });
+            if !dirty[i] && !child_dirty {
+                continue;
+            }
+            let dl = {
+                let Some(layout) = frames[i].layout.as_ref() else {
+                    continue;
+                };
+                let mut dl = crate::display_list_metrics::paint_ordered(layout);
+                splice_children_of(&mut dl, frames, i);
+                dl
+            };
+            frames[i].content_dl = dl;
+            dirty[i] = true;
+        }
+    }
+}
+
+/// Вклеить содержимое всех под-документов ГЛУБИНЫ 0 в display list страницы
+/// (BUG-480 срез 14) — вместо серой заглушки, которую `display_list.rs` рисует
+/// для `BoxKind::Iframe`.
+///
+/// Вызывается на каждой записи `Lumen::display_list`, а не один раз на загрузку:
+/// список страницы пересобирается из layout при каждом relayout и о фреймах
+/// ничего не знает.
+///
+/// Идемпотентна: заглушка ищется по своей команде, а после вклейки её там
+/// больше нет — повторный проход по уже склеенному списку ничего не делает.
+pub(crate) fn splice_frame_content(dl: &mut DisplayList, frames: &[FrameHandle]) {
+    for h in frames.iter().filter(|h| h.parent_doc.is_none()) {
+        splice_one_frame(dl, h);
+    }
+}
+
+/// То же для вложенных фреймов: вклеить в список фрейма `parent` содержимое
+/// тех фреймов, чей host-элемент лежит в ЕГО документе.
+fn splice_children_of(dl: &mut DisplayList, frames: &[FrameHandle], parent: usize) {
+    for h in frames.iter().filter(|h| {
+        h.parent_doc
+            .as_ref()
+            .is_some_and(|pd| Arc::ptr_eq(pd, &frames[parent].doc))
+    }) {
+        splice_one_frame(dl, h);
+    }
+}
+
+/// Заменить команду-заглушку одного `<iframe>`/`<frame>` на содержимое его
+/// под-документа.
+///
+/// Заглушка — `DrawImage` с ключом-`src` элемента по его контентному боксу
+/// (`display_list.rs`, ветка `BoxKind::Iframe`): нерегистрированный ключ
+/// рисуется серым. Ищется по ПАРЕ «тот же `src` + тот же прямоугольник» —
+/// одного `src` мало (два `<iframe src="">` на странице — обычное дело), одного
+/// прямоугольника мало для гарантии, что это именно заглушка, а не совпавшая по
+/// геометрии картинка.
+///
+/// Координаты ребёнка начинаются от его собственного (0, 0), поэтому вокруг
+/// содержимого встают `PushClipRect` (в системе координат родителя — клип
+/// применяется ДО трансформы) и `PushTransform` на смещение к боксу.
+fn splice_one_frame(dl: &mut DisplayList, h: &FrameHandle) {
+    let Some(rect) = h.host_rect else { return };
+    if h.content_dl.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
+        return;
+    }
+    let Some(at) = dl.iter().position(|c| match c {
+        DisplayCommand::DrawImage { rect: r, src, .. } => {
+            src == &h.host_src
+                && (r.x - rect.x).abs() < 0.01
+                && (r.y - rect.y).abs() < 0.01
+                && (r.width - rect.width).abs() < 0.01
+                && (r.height - rect.height).abs() < 0.01
+        }
+        _ => false,
+    }) else {
+        return;
+    };
+    let mut wrapped: DisplayList = Vec::with_capacity(h.content_dl.len() + 4);
+    wrapped.push(DisplayCommand::PushClipRect { rect });
+    wrapped.push(DisplayCommand::PushTransform {
+        matrix: lumen_layout::Mat4::translation_2d(rect.x, rect.y),
+    });
+    wrapped.extend(h.content_dl.iter().cloned());
+    wrapped.push(DisplayCommand::PopTransform);
+    wrapped.push(DisplayCommand::PopClip);
+    dl.splice(at..at + 1, wrapped);
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -637,19 +803,21 @@ pub(crate) fn load_frame_sub_documents(
         // (реальный размер host-бокса ещё не известен на этом шаге).
         // Измеритель собран как у страницы ([`page_measurer`]), но без
         // @font-face ребёнка (`web_fonts: &[]` — задел следующего среза).
-        // Результат layout нигде не сохраняется — только `update_layout_rects`/
-        // `update_viewport_size` в JS-контекст ребёнка; ни paint (display list
-        // ребёнка по-прежнему серая заглушка, `BoxKind::Iframe`), ни
-        // relayout при последующих мутациях сюда не входят.
         // Каскад ребёнка разбирается один раз и переезжает в хэндл: срез 13
         // пересчитывает layout под реальный host-бокс, и повторный разбор
-        // того же текста на каждом relayout был бы чистой тратой.
+        // того же текста на каждом relayout был бы чистой тратой. Сам layout
+        // тоже едет в хэндл (срез 14): по нему рисуется содержимое фрейма и в
+        // нём ищется host-бокс вложенного фрейма.
         let frame_sheet = lumen_css_parser::parse(&subresources.css);
-        if let Some(js) = &child_js
-            && let Some(measurer) = frame_measurer()
-        {
-            layout_frame_document(&child_doc_arc, &frame_sheet, FRAME_UA_DEFAULT_SIZE, js, &measurer);
-        }
+        let frame_layout = frame_measurer().map(|measurer| {
+            layout_frame_document(
+                &child_doc_arc,
+                &frame_sheet,
+                FRAME_UA_DEFAULT_SIZE,
+                child_js.as_ref(),
+                &measurer,
+            )
+        });
         // Lifecycle СЂРµР±С‘РЅРєР°: DOMContentLoaded СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ parse+inline-СЃРєСЂРёРїС‚РѕРІ
         // (С‚РѕС‚ Р¶Рµ РїРѕСЂСЏРґРѕРє, С‡С‚Рѕ Сѓ top-level РІ parse_and_layout); window load вЂ”
         // СЃР»РµРґРѕРј, РќРћ РїРѕСЃР»Рµ РёСЃС…РѕРґРѕРІ РїРѕРґСЂРµСЃСѓСЂСЃРѕРІ (СЃСЂРµР· 11): В«loadВ» РґРѕРєСѓРјРµРЅС‚Р°
@@ -714,6 +882,11 @@ pub(crate) fn load_frame_sub_documents(
             depth,
             sheet: frame_sheet,
             viewport: FRAME_UA_DEFAULT_SIZE,
+            parent_doc: (depth > 0).then(|| Arc::clone(parent)),
+            layout: frame_layout,
+            content_dl: DisplayList::new(),
+            host_rect: None,
+            host_src: info.src.clone().unwrap_or_default(),
         });
     }
     handles
@@ -743,8 +916,11 @@ pub(crate) struct FrameHandle {
     /// JS-РєРѕРЅС‚РµРєСЃС‚ СЂРµР±С‘РЅРєР° (`None` вЂ” Сѓ С„СЂРµР№РјР° РЅРµ Р±С‹Р»Рѕ СЃРєСЂРёРїС‚РѕРІ РёР»Рё v8 РІС‹РєР»СЋС‡РµРЅ).
     pub(crate) js: Option<Arc<dyn PersistentJs>>,
     /// Глубина вложенности: 0 — фрейм страницы, 1 — фрейм внутри фрейма.
-    /// [`sync_frame_viewports`] ищет host-бокс в layout страницы, что верно
-    /// только для глубины 0 (`NodeId` уникален лишь внутри своего документа).
+    ///
+    /// Задаёт ПОРЯДОК обоих проходов [`sync_frame_viewports`]: host-бокс фрейма
+    /// глубины `d` ищется в layout фрейма глубины `d-1` (`NodeId` уникален лишь
+    /// внутри своего документа), поэтому layout считается по возрастанию
+    /// глубины, а display list — по убыванию.
     pub(crate) depth: usize,
     /// Разобранный каскад под-документа (BUG-480 срез 12 собирает его текст,
     /// срез 13 пересчитывает по нему layout при каждой смене размера хоста).
@@ -753,6 +929,30 @@ pub(crate) struct FrameHandle {
     /// [`FRAME_UA_DEFAULT_SIZE`], затем контентный бокс хоста. Служит гейтом
     /// «размер не менялся — не пересчитывать» в [`sync_frame_viewports`].
     pub(crate) viewport: lumen_core::geom::Size,
+    /// Документ, в дереве которого лежит host-элемент: `None` — страница,
+    /// `Some` — под-документ фрейма-родителя (BUG-480 срез 14).
+    ///
+    /// Родитель адресуется именно `Arc`-ом, а не индексом в списке: список
+    /// плоский, вложенные хэндлы попадают в него раньше своего родителя, а
+    /// `NodeId` хоста уникален лишь внутри своего документа — сравнение
+    /// `Arc::ptr_eq` единственное, что здесь ничего не путает.
+    pub(crate) parent_doc: Option<Arc<Mutex<Document>>>,
+    /// Layout под-документа на текущем [`Self::viewport`] (BUG-480 срез 14).
+    ///
+    /// Хранится по двум причинам: по нему рисуется [`Self::content_dl`], и в
+    /// нём ищется host-бокс ВЛОЖЕННОГО фрейма — в layout страницы его нет.
+    pub(crate) layout: Option<lumen_layout::LayoutBox>,
+    /// Display list под-документа в его собственных координатах, с уже
+    /// вклеенным содержимым его вложенных фреймов (BUG-480 срез 14).
+    ///
+    /// Пуст, пока layout не посчитан: тогда на экране остаётся серая заглушка.
+    pub(crate) content_dl: DisplayList,
+    /// Контентный бокс host-элемента в координатах ЕГО документа — куда
+    /// вклеивается [`Self::content_dl`] (BUG-480 срез 14).
+    pub(crate) host_rect: Option<Rect>,
+    /// Значение атрибута `src` host-элемента — половина ключа, по которому
+    /// [`splice_one_frame`] узнаёт команду-заглушку в display list родителя.
+    pub(crate) host_src: String,
 }
 
 /// РњР°РєСЃРёРјР°Р»СЊРЅР°СЏ РіР»СѓР±РёРЅР° РІР»РѕР¶РµРЅРЅРѕСЃС‚Рё С„СЂРµР№РјРѕРІ: СЃС‚СЂР°РЅРёС†Р° (0) в†’ iframe (1) в†’
