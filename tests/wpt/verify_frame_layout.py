@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
-"""BUG-480 срез 12 — живая проверка layout под-документа `<iframe>`.
+"""BUG-480 срезы 12–13 — живая проверка layout под-документа `<iframe>`.
 
-До этого среза getBoundingClientRect()/офсеты внутри фрейма отвечали
+До среза 12 getBoundingClientRect()/офсеты внутри фрейма отвечали
 "честными нулями" — контентная геометрия ребёнка нигде не считалась
 (frame_bridge.rs: «layout содержимого фрейма — отдельный срез»). Срез 12
 считает cascade + layout ребёнка на UA-дефолтном вьюпорте 300×150 CSS px
 (HTML LS §4.8.5) сразу после исполнения его скриптов и до его
-DOMContentLoaded/load, и пушит результат в JS-контекст ребёнка.
+DOMContentLoaded/load. Срез 13 добавляет второй проход: как только layout
+РОДИТЕЛЯ посчитан, ребёнок пересчитывается под РЕАЛЬНЫЙ контентный бокс
+своего host-элемента.
+
+UA-дефолтную стадию среза 12 видно только из СОБСТВЕННОГО `load` ребёнка:
+скрипт, вставленный родителем, доставляется асинхронно на тике пумпы
+(срез 8), то есть всегда уже после layout страницы — обе фазы репорта
+(`load` и `late`) показывают уже пересчитанное состояние. Проба поэтому
+снимает и то, и другое: `window.__atLoad` ребёнка = стадия 12,
+фазы репорта = стадия 13.
 
 Проверяет (тем же кросс-фреймовым postMessage-механизмом, что и
 verify_frame_run_script.py — script, вставленный родителем в
@@ -15,8 +24,12 @@ contentDocument, исполняется в изоляте ребёнка):
 * элемент ребёнка с явным `width`/`height` отдаёт реальный
   getBoundingClientRect() вместо нулей;
 * offsetWidth/offsetHeight ребёнка совпадают с getBoundingClientRect();
-* элемент, чья ширина зависит от вьюпорта (`width: 100%`), резолвится
-  против UA-дефолтного вьюпорта 300×150, а не против 0×0.
+* в собственном `load` ребёнка `width: 100%` резолвится против UA-дефолтных
+  300px (срез 12);
+* в обеих фазах репорта тот же элемент резолвится против контентного бокса хоста
+  (`<iframe width=500>`), а `matchMedia('(min-width: 400px)')` в ребёнке
+  переключается false → true — независимый признак того, что до ребёнка
+  доехал именно новый вьюпорт, а не только новые прямоугольники (срез 13).
 
 Запуск: ``python tests/wpt/verify_frame_layout.py [--binary PATH]``
 """
@@ -39,15 +52,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 PARENT_PAGE = """<!doctype html><meta charset="utf-8"><title>vfly parent</title>
 <body>parent
-<iframe src="/.vfly-child.html"></iframe>
+<iframe src="/.vfly-child.html" width="500" height="120" style="border:0;padding:0"></iframe>
 <script>
 console.log('PROBE parent-start');
 window.addEventListener('message', function (ev) {
   console.log('PROBE parent-got ' + JSON.stringify(ev.data));
 });
 var frame = document.querySelector('iframe');
-frame.addEventListener('load', function () {
-  console.log('PROBE parent-load');
+function report(phase) {
   var d = frame.contentDocument;
   var s = d.createElement('script');
   s.textContent =
@@ -56,12 +68,23 @@ frame.addEventListener('load', function () {
     "var full = document.getElementById('full');" +
     "var fr = full.getBoundingClientRect();" +
     "window.parent.postMessage({" +
+    "  phase: '" + phase + "'," +
     "  boxW: r.width, boxH: r.height," +
     "  offsetW: box.offsetWidth, offsetH: box.offsetHeight," +
-    "  fullW: fr.width" +
+    "  fullW: fr.width," +
+    "  mq400: matchMedia('(min-width: 400px)').matches," +
+    "  atLoadW: (window.__atLoad || {}).fullW," +
+    "  atLoadMq: (window.__atLoad || {}).mq400" +
     "}, '*');";
   d.body.appendChild(s);
-  console.log('PROBE parent-inserted');
+  console.log('PROBE parent-inserted-' + phase);
+}
+frame.addEventListener('load', function () {
+  console.log('PROBE parent-load');
+  // Фаза load: layout страницы ещё не считался, вьюпорт ребёнка — UA-дефолт.
+  report('load');
+  // Фаза late: страница уже разложена, срез 13 пересчитал ребёнка под хост.
+  setTimeout(function () { report('late'); }, 1500);
 });
 </script>
 </body>
@@ -71,6 +94,18 @@ CHILD_PAGE = """<!doctype html><meta charset="utf-8"><title>vfly child</title>
 <body>
 <div id="box" style="width:120px;height:40px;">box</div>
 <div id="full" style="width:100%;">full</div>
+<script>
+// Собственный `load` ребёнка — единственный момент, где UA-дефолтный вьюпорт
+// среза 12 вообще наблюдаем: скрипт, ВСТАВЛЕННЫЙ родителем, доставляется
+// асинхронно на тике пумпы (срез 8), то есть всегда уже после layout страницы.
+window.__atLoad = null;
+window.addEventListener('load', function () {
+  window.__atLoad = {
+    fullW: document.getElementById('full').getBoundingClientRect().width,
+    mq400: matchMedia('(min-width: 400px)').matches
+  };
+});
+</script>
 </body>
 """
 
@@ -165,24 +200,54 @@ def main() -> int:
         print(f"[{status}] {label}")
 
     expect("parent-load")
-    expect("parent-inserted")
-    # Explicit width/height must resolve to real numbers, not honest zeros.
+    expect("parent-inserted-load")
+    expect("parent-inserted-late")
+
+    # Slice 12: explicit width/height resolve to real numbers, not honest zeros.
     expect_post(
-        lambda p: abs(p.get("boxW", 0) - 120.0) < 0.5 and abs(p.get("boxH", 0) - 40.0) < 0.5,
+        lambda p: abs(p.get("boxW", 0) - 120.0) < 0.5
+        and abs(p.get("boxH", 0) - 40.0) < 0.5,
         "explicit width/height box reports real getBoundingClientRect",
     )
-    # offsetWidth/offsetHeight must agree with getBoundingClientRect.
     expect_post(
         lambda p: abs(p.get("offsetW", 0) - p.get("boxW", -1)) < 0.5
         and abs(p.get("offsetH", 0) - p.get("boxH", -1)) < 0.5,
         "offsetWidth/offsetHeight match getBoundingClientRect",
     )
-    # width:100% must resolve against the 300px UA-default frame viewport
-    # (284 = 300 - 2*8, the UA-default <body> margin — not 0, and not 100%
-    # of an unconstrained/0-width container).
+    # Slice 12 is still the state the child's OWN load handler sees: the child
+    # is laid out before its DOMContentLoaded/load, i.e. before the page's own
+    # layout exists. 284 = 300 - 2*8 (UA-default <body> margin).
     expect_post(
-        lambda p: abs(p.get("fullW", 0) - 284.0) < 0.5,
-        "width:100% resolves against the 300px UA-default frame viewport",
+        lambda p: abs(p.get("atLoadW", 0) - 284.0) < 0.5 and p.get("atLoadMq") is False,
+        "child's own load handler still sees the 300px UA-default viewport",
+    )
+
+    # Slice 13: once the parent's layout exists the child is re-laid-out against
+    # the host's content box. 484 = 500 - 2*8; the iframe carries no border and
+    # no padding, so its content box is exactly the width attribute.
+    #
+    # Both phases assert it: `load` (script injected from the host's load
+    # handler, delivered on the next pump) and `late` (+1.5 s). They agree
+    # because delivery across the isolate boundary is always asynchronous —
+    # the `late` phase is what makes "after the page layout" guaranteed rather
+    # than incidental, and pins that the value does not drift afterwards.
+    for name in ("load", "late"):
+        expect_post(
+            lambda p, name=name: p.get("phase") == name
+            and abs(p.get("fullW", 0) - 484.0) < 0.5,
+            f"{name}: width:100% resolves against the 500px host content box",
+        )
+        expect_post(
+            lambda p, name=name: p.get("phase") == name and p.get("mq400") is True,
+            f"{name}: matchMedia(min-width:400px) flipped — the viewport itself moved",
+        )
+    # The fixed-size box must be unaffected by the viewport change: a relayout
+    # that got the child wrong would move it too.
+    expect_post(
+        lambda p: p.get("phase") == "late"
+        and abs(p.get("boxW", 0) - 120.0) < 0.5
+        and abs(p.get("boxH", 0) - 40.0) < 0.5,
+        "late: the fixed 120x40 box is unchanged by the viewport change",
     )
 
     print("markers:", *markers, sep="\n  ")

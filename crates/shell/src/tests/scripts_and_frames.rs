@@ -401,6 +401,43 @@ fn frame_access_url_parent_to_file_child_denied() {
     assert!(!frame_access_allowed(&u, "file://D:/x.html", false));
 }
 
+// ── host_content_size (BUG-480 срез 13) ──────────────────────────────────────
+
+/// Вьюпорт под-документа — КОНТЕНТНЫЙ бокс хоста, а не его `rect`
+/// (border-бокс): `<iframe width=400 height=200>` с рамкой и padding должен
+/// дать ребёнку ровно 400×200, а не 400+10+6.
+///
+/// Второй ассерт на `rect` не декоративный: без него тест прошёл бы и в том
+/// случае, если бы вычитание рамок вовсе не выполнялось, а атрибуты
+/// резолвились как border-бокс.
+#[test]
+fn frame_host_content_size_is_content_box_not_border_box() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><body style="margin:0"><iframe width="400" height="200"
+             style="border:5px solid black; padding:3px"></iframe></body></html>"#,
+    );
+    let infos = collect_iframes(&doc);
+    assert_eq!(infos.len(), 1);
+
+    let font = lumen_font::Font::parse(INTER_FONT).unwrap();
+    let measurer = crate::relayout::page_measurer(&font, &[]);
+    let sheet = lumen_css_parser::parse("");
+    let layout =
+        lumen_layout::layout_measured(&doc, &sheet, Size::new(1024.0, 720.0), &measurer);
+    let host = crate::forms::find_layout_box(&layout, infos[0].node).expect("бокс <iframe>");
+
+    let size = crate::frames::host_content_size(host);
+    assert!(
+        (size.width - 400.0).abs() < 0.5 && (size.height - 200.0).abs() < 0.5,
+        "контентный бокс = атрибуты width/height, получено {size:?}"
+    );
+    assert!(
+        host.rect.width > 410.0 && host.rect.height > 210.0,
+        "border-бокс шире контентного на padding 3+3 и рамку 5+5: {:?}",
+        host.rect
+    );
+}
+
 // в”Ђв”Ђ PH1-2: Progressive streaming pipeline в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 // Compile-time: streaming throttle must be в‰¤16 ms (~60 Hz).

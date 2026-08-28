@@ -255,8 +255,10 @@ fn fire_iframe_load_event(parent_js: Option<&Arc<dyn PersistentJs>>, host: NodeI
 /// (реальный host-бокс ещё не известен), результат уходит в
 /// `update_layout_rects`/`update_viewport_size` JS-контекста ребёнка — первая
 /// content-геометрия внутри фрейма (`getBoundingClientRect` и т.п.) вместо
-/// честных нулей. Paint (компоновка display list ребёнка в бокс `<iframe>`
-/// вместо серой заглушки) и relayout при мутациях остаются в очереди среза.
+/// честных нулей. Срез 13: как только layout родителя посчитан,
+/// [`sync_frame_viewports`] пересчитывает ребёнка под РЕАЛЬНЫЙ контентный бокс
+/// хоста. Paint (компоновка display list ребёнка в бокс `<iframe>` вместо
+/// серой заглушки) и relayout при мутациях остаются в очереди среза.
 ///
 /// Исходы подресурсов парсерных элементов под-документа фрейма (BUG-480 срез 11).
 pub(crate) struct FrameSubresourceOutcomes {
@@ -356,6 +358,121 @@ fn deliver_frame_subresource_events(js: &Arc<dyn PersistentJs>, sub: &FrameSubre
     for (node, ok) in &sub.images {
         let kind = if *ok { "load" } else { "error" };
         js.eval_js(&format!("_lumen_resource_fire({}, '{kind}');", node.index()));
+    }
+}
+
+/// Измеритель для layout под-документа фрейма: bundled Inter + системные
+/// face-ы, как у страницы ([`page_measurer`]), но без `@font-face`-шрифтов
+/// ребёнка — собственного прохода `url()`-загрузки у фрейма пока нет.
+///
+/// `None` — шрифт не разобрался; вызывающая сторона тогда просто не считает
+/// geometry (лог в stderr), а не валит загрузку страницы.
+fn frame_measurer() -> Option<lumen_paint::MultiFontMeasurer> {
+    match lumen_font::Font::parse(INTER_FONT) {
+        Ok(font) => Some(page_measurer(&font, &[])),
+        Err(e) => {
+            eprintln!("iframe: сбой измерителя шрифта, geometry ребёнка не посчитана: {e}");
+            None
+        }
+    }
+}
+
+/// Посчитать cascade + layout под-документа фрейма на заданном вьюпорте и
+/// отдать результат JS-контексту ребёнка (BUG-480 срезы 12/13).
+///
+/// Результат layout нигде не сохраняется — из него нужен только снимок
+/// прямоугольников для `getBoundingClientRect`/`offsetWidth` внутри фрейма
+/// (paint ребёнка — следующий срез очереди). Лок дерева держится ровно на
+/// время прохода: `update_layout_rects` уходит уже без него, потому что это
+/// вызов на JS-поток ребёнка.
+#[allow(clippy::unwrap_used)] // РєРѕСЂРѕС‚РєРёР№ Р»РѕРє РґРµСЂРµРІР°, docs/lint-policy.md В§10
+fn layout_frame_document(
+    doc: &Arc<Mutex<Document>>,
+    sheet: &lumen_css_parser::Stylesheet,
+    viewport: lumen_core::geom::Size,
+    js: &Arc<dyn PersistentJs>,
+    measurer: &lumen_paint::MultiFontMeasurer,
+) {
+    let rects = {
+        let d = doc.lock().unwrap();
+        let frame_layout = lumen_layout::layout_measured(&d, sheet, viewport, measurer);
+        lumen_layout::collect_layout_rects(&frame_layout)
+    };
+    js.update_layout_rects(rects);
+    js.update_viewport_size(viewport.width, viewport.height);
+}
+
+/// Размер КОНТЕНТНОГО бокса host-элемента `<iframe>`/`<frame>` в layout
+/// родителя — вьюпорт под-документа по HTML LS §4.8.5.
+///
+/// `LayoutBox::rect` — border-бокс, поэтому вычитаются рамки и padding (та же
+/// арифметика, что у `content_box_rect` в `display_list.rs`, где она приватна).
+pub(crate) fn host_content_size(b: &lumen_layout::LayoutBox) -> lumen_core::geom::Size {
+    let s = &b.style;
+    let w = b.rect.width
+        - s.border_left_width
+        - s.border_right_width
+        - s.padding_left.px()
+        - s.padding_right.px();
+    let h = b.rect.height
+        - s.border_top_width
+        - s.border_bottom_width
+        - s.padding_top.px()
+        - s.padding_bottom.px();
+    lumen_core::geom::Size::new(w.max(0.0), h.max(0.0))
+}
+
+/// Пересчитать layout под-документов фреймов под РЕАЛЬНЫЙ размер их host-бокса
+/// (BUG-480 срез 13).
+///
+/// Срез 12 считал geometry ребёнка на UA-дефолтном [`FRAME_UA_DEFAULT_SIZE`],
+/// потому что [`load_frame_sub_documents`] идёт ДО layout страницы-родителя и
+/// настоящего размера бокса ещё не знает. Здесь он уже известен: проход
+/// вызывается сразу после layout родителя — и на первой загрузке
+/// (`parse_and_layout`), и на каждом последующем relayout
+/// ([`Lumen::apply_relayout_result`]), поэтому `width:100%`-фрейм переживает
+/// ресайз окна, смену зума и любое движение вёрстки над ним.
+///
+/// Пересчёт идёт ТОЛЬКО когда контентный бокс хоста реально изменился
+/// (`FrameHandle::viewport` — размер последнего посчитанного прохода): relayout
+/// случается на каждый кадр анимации, а layout под-документа стоит примерно
+/// столько же, сколько layout страницы его размера.
+///
+/// Фреймы глубины ≥ 1 пропускаются: их host-элемент живёт в дереве
+/// ПРОМЕЖУТОЧНОГО фрейма, а не страницы, а `NodeId` уникален только внутри
+/// своего документа — поиск такого узла в layout страницы дал бы либо ничего,
+/// либо чужой бокс с совпавшим индексом. Им нужен сохранённый layout их
+/// собственного родителя (следующий срез, вместе с paint).
+pub(crate) fn sync_frame_viewports(frames: &mut [FrameHandle], page_layout: &lumen_layout::LayoutBox) {
+    if frames.is_empty() {
+        return;
+    }
+    let mut measurer: Option<lumen_paint::MultiFontMeasurer> = None;
+    for handle in frames.iter_mut() {
+        if handle.depth > 0 {
+            continue;
+        }
+        let Some(js) = handle.js.clone() else { continue };
+        let Some(host) = crate::forms::find_layout_box(page_layout, handle.host) else {
+            continue;
+        };
+        let size = host_content_size(host);
+        // Схлопнутый бокс (`display:none`, нулевые атрибуты) вьюпортом быть не
+        // может — ребёнок остаётся на прежнем размере, а не пересчитывается в 0.
+        if size.width <= 0.0 || size.height <= 0.0 {
+            continue;
+        }
+        if (size.width - handle.viewport.width).abs() < 0.01
+            && (size.height - handle.viewport.height).abs() < 0.01
+        {
+            continue;
+        }
+        if measurer.is_none() {
+            measurer = frame_measurer();
+        }
+        let Some(m) = measurer.as_ref() else { return };
+        layout_frame_document(&handle.doc, &handle.sheet, size, &js, m);
+        handle.viewport = size;
     }
 }
 
@@ -524,31 +641,14 @@ pub(crate) fn load_frame_sub_documents(
         // `update_viewport_size` в JS-контекст ребёнка; ни paint (display list
         // ребёнка по-прежнему серая заглушка, `BoxKind::Iframe`), ни
         // relayout при последующих мутациях сюда не входят.
-        if let Some(js) = &child_js {
-            match lumen_font::Font::parse(INTER_FONT) {
-                Ok(font) => {
-                    let frame_sheet = lumen_css_parser::parse(&subresources.css);
-                    let measurer = page_measurer(&font, &[]);
-                    let rects = {
-                        let d = child_doc_arc.lock().unwrap();
-                        let frame_layout = lumen_layout::layout_measured(
-                            &d,
-                            &frame_sheet,
-                            FRAME_UA_DEFAULT_SIZE,
-                            &measurer,
-                        );
-                        lumen_layout::collect_layout_rects(&frame_layout)
-                    };
-                    js.update_layout_rects(rects);
-                    js.update_viewport_size(
-                        FRAME_UA_DEFAULT_SIZE.width,
-                        FRAME_UA_DEFAULT_SIZE.height,
-                    );
-                }
-                Err(e) => eprintln!(
-                    "iframe: сбой измерителя шрифта, geometry ребёнка не посчитана: {e}"
-                ),
-            }
+        // Каскад ребёнка разбирается один раз и переезжает в хэндл: срез 13
+        // пересчитывает layout под реальный host-бокс, и повторный разбор
+        // того же текста на каждом relayout был бы чистой тратой.
+        let frame_sheet = lumen_css_parser::parse(&subresources.css);
+        if let Some(js) = &child_js
+            && let Some(measurer) = frame_measurer()
+        {
+            layout_frame_document(&child_doc_arc, &frame_sheet, FRAME_UA_DEFAULT_SIZE, js, &measurer);
         }
         // Lifecycle СЂРµР±С‘РЅРєР°: DOMContentLoaded СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ parse+inline-СЃРєСЂРёРїС‚РѕРІ
         // (С‚РѕС‚ Р¶Рµ РїРѕСЂСЏРґРѕРє, С‡С‚Рѕ Сѓ top-level РІ parse_and_layout); window load вЂ”
@@ -611,6 +711,9 @@ pub(crate) fn load_frame_sub_documents(
             url: child_url,
             doc: Arc::clone(&child_doc_arc),
             js: child_js,
+            depth,
+            sheet: frame_sheet,
+            viewport: FRAME_UA_DEFAULT_SIZE,
         });
     }
     handles
@@ -628,7 +731,7 @@ pub(crate) fn load_frame_sub_documents(
 /// `frame_bridge.rs` вЂ” СЂРµРіРёСЃС‚СЂР°С†РёСЏ РёРґС‘С‚ РёР· Р»РѕРєР°Р»СЊРЅС‹С… РїРµСЂРµРјРµРЅРЅС‹С… СЌС‚РѕР№ С„СѓРЅРєС†РёРё,
 /// РїРѕСЌС‚РѕРјСѓ РїРѕР»СЏ С…СЌРЅРґР»Р° РїРѕ-РїСЂРµР¶РЅРµРјСѓ РЅРµ С‡РёС‚Р°СЋС‚СЃСЏ; С‡РёС‚Р°С‚СЊСЃСЏ РЅР°С‡РЅСѓС‚ СЃРѕ СЃСЂРµР·РѕРј
 /// РЅР°РІРёРіР°С†РёРё/Р·Р°РјРµРЅС‹ С„СЂРµР№РјР°.
-#[allow(dead_code)] // host/url/doc вЂ” РґРѕ СЃСЂРµР·Р° РЅР°РІРёРіР°С†РёРё/Р·Р°РјРµРЅС‹ С„СЂРµР№РјР° (СЃРј. bugs/BUG-480-OPEN.md)
+#[allow(dead_code)] // url вЂ” РґРѕ СЃСЂРµР·Р° РЅР°РІРёРіР°С†РёРё/Р·Р°РјРµРЅС‹ С„СЂРµР№РјР° (СЃРј. bugs/BUG-480-OPEN.md)
 pub(crate) struct FrameHandle {
     /// `NodeId` `<iframe>`-СЌР»РµРјРµРЅС‚Р° РІ РґРѕРєСѓРјРµРЅС‚Рµ-СЂРѕРґРёС‚РµР»Рµ.
     pub(crate) host: NodeId,
@@ -639,6 +742,17 @@ pub(crate) struct FrameHandle {
     pub(crate) doc: Arc<Mutex<Document>>,
     /// JS-РєРѕРЅС‚РµРєСЃС‚ СЂРµР±С‘РЅРєР° (`None` вЂ” Сѓ С„СЂРµР№РјР° РЅРµ Р±С‹Р»Рѕ СЃРєСЂРёРїС‚РѕРІ РёР»Рё v8 РІС‹РєР»СЋС‡РµРЅ).
     pub(crate) js: Option<Arc<dyn PersistentJs>>,
+    /// Глубина вложенности: 0 — фрейм страницы, 1 — фрейм внутри фрейма.
+    /// [`sync_frame_viewports`] ищет host-бокс в layout страницы, что верно
+    /// только для глубины 0 (`NodeId` уникален лишь внутри своего документа).
+    pub(crate) depth: usize,
+    /// Разобранный каскад под-документа (BUG-480 срез 12 собирает его текст,
+    /// срез 13 пересчитывает по нему layout при каждой смене размера хоста).
+    pub(crate) sheet: lumen_css_parser::Stylesheet,
+    /// Вьюпорт последнего посчитанного layout ребёнка: сначала
+    /// [`FRAME_UA_DEFAULT_SIZE`], затем контентный бокс хоста. Служит гейтом
+    /// «размер не менялся — не пересчитывать» в [`sync_frame_viewports`].
+    pub(crate) viewport: lumen_core::geom::Size,
 }
 
 /// РњР°РєСЃРёРјР°Р»СЊРЅР°СЏ РіР»СѓР±РёРЅР° РІР»РѕР¶РµРЅРЅРѕСЃС‚Рё С„СЂРµР№РјРѕРІ: СЃС‚СЂР°РЅРёС†Р° (0) в†’ iframe (1) в†’
@@ -648,8 +762,10 @@ pub(crate) const MAX_FRAME_DEPTH: usize = 2;
 
 /// UA-дефолт intrinsic-размера `<iframe>` (HTML LS §4.8.5): 300×150 CSS px —
 /// см. `iframe_ua_default_size_300_by_150` в `lumen-layout`. BUG-480 срез 12
-/// использует его как вьюпорт для layout ребёнка: реальный размер host-бокса
-/// ещё не известен в момент вызова (`load_frame_sub_documents` идёт ДО
-/// layout страницы-родителя) — уточнение до host-бокса (атрибуты `width`/
-/// `height`, CSS-переопределение) остаётся в очереди среза.
+/// использует его как вьюпорт для ПЕРВОГО layout ребёнка: реальный размер
+/// host-бокса ещё не известен в момент вызова (`load_frame_sub_documents` идёт
+/// ДО layout страницы-родителя), а собственные скрипты ребёнка и его
+/// DOMContentLoaded/load исполняются уже здесь и обязаны видеть какую-то
+/// geometry. Срез 13 уточняет её до контентного бокса хоста сразу после layout
+/// родителя ([`sync_frame_viewports`]).
 const FRAME_UA_DEFAULT_SIZE: lumen_core::geom::Size = lumen_core::geom::Size::new(300.0, 150.0);
