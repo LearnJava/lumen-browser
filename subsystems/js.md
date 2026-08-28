@@ -1834,6 +1834,16 @@ the time — read dates.
 
 ## Invariants
 
+- **DOM shim: the shim's text is in `crates/js/src/shim/*.js`, not in `dom.rs`** (SPLIT-JS3, 2026-08-28).
+  The 14 `WEB_API_SHIM*`/`EVENT_TARGET_SHIM`/… consts kept their names and their place in `dom.rs`; only
+  the right-hand side changed to `include_str!("shim/<lowercased const name>.js")`, so `worker.rs`,
+  `sw_worker.rs` and every other reader are unaffected. Two consequences. **The files are read verbatim,
+  so nothing in them is escaped** — before the split these were plain `"…"` Rust strings where every
+  quote was `\"`, and an editor or a script that "helpfully" re-adds an escape now corrupts the JS
+  instead of protecting it (a `\\d` turned into `\d` changes a regex and does not break the build).
+  And **one file per const is the invariant, not an accident**: `web_api_shim()` concatenates the consts
+  in source order — that order is the only thing making V8 compile one program with one hoisting scope —
+  so subdividing a `.js` file further would break the eye-checkable correspondence between the two lists.
 - `QuickJsRuntime: Send + Sync` (enforced by `unsafe impl` + `Mutex`).
 - `call_function` pollutes the global namespace with `__lum_args__` only transiently — cleaned up with `delete` after each call.
 - `from_rq` maps `Type::Undefined` to `JsValue::Null` (not `Undefined`) — matches the trait docs which say "simple JSON-compatible types".
