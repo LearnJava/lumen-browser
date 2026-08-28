@@ -5356,6 +5356,14 @@ struct FrameHandle {
 /// СЃР°РјРѕРІР»РѕР¶РµРЅРёР№ РІ РЅРµРґРѕРІРµСЂРµРЅРЅРѕРј HTML; СЃРїРµРєР° РіР»СѓР±РёРЅСѓ РЅРµ РѕРіСЂР°РЅРёС‡РёРІР°РµС‚.
 const MAX_FRAME_DEPTH: usize = 2;
 
+/// UA-дефолт intrinsic-размера `<iframe>` (HTML LS §4.8.5): 300×150 CSS px —
+/// см. `iframe_ua_default_size_300_by_150` в `lumen-layout`. BUG-480 срез 12
+/// использует его как вьюпорт для layout ребёнка: реальный размер host-бокса
+/// ещё не известен в момент вызова (`load_frame_sub_documents` идёт ДО
+/// layout страницы-родителя) — уточнение до host-бокса (атрибуты `width`/
+/// `height`, CSS-переопределение) остаётся в очереди среза.
+const FRAME_UA_DEFAULT_SIZE: lumen_core::geom::Size = lumen_core::geom::Size::new(300.0, 150.0);
+
 /// Р РµР·СѓР»СЊС‚Р°С‚ С„Р°Р· `decode в†’ parse в†’ layout` вЂ” РѕР±С‰Р°СЏ С‡Р°СЃС‚СЊ РґР»СЏ РѕРєРѕРЅРЅРѕРіРѕ Рё
 /// dump-СЂРµР¶РёРјРѕРІ. РџРѕР»СЏ РІР»Р°РґРµСЋС‚ СЃРІРѕРёРјРё РґР°РЅРЅС‹РјРё вЂ” РЅРµС‚ СЃСЃС‹Р»РѕРє РЅР°СЂСѓР¶Сѓ.
 struct ParsedPage {
@@ -8009,6 +8017,14 @@ fn fire_iframe_load_event(parent_js: Option<&Arc<dyn PersistentJs>>, host: NodeI
 /// Р±РµСЂС‘С‚СЃСЏ РєРѕСЂРѕС‚РєРѕ (С‚РѕР»СЊРєРѕ РѕР±С…РѕРґ РґРµСЂРµРІР°); РІС‹РїРѕР»РЅРµРЅРёРµ СЃРєСЂРёРїС‚РѕРІ СЂРµР±С‘РЅРєР° Рё
 /// РґРёСЃРїРµРєС‚С‡ `load` РЅР° С…РѕСЃС‚Рµ РёРґСѓС‚ Р‘Р•Р— СѓРґРµСЂР¶Р°РЅРЅС‹С… Р»Р°РєРѕРІ вЂ” РѕР±СЂР°Р±РѕС‚С‡РёРєРё РІРїСЂР°РІРµ
 /// СЃРёРЅС…СЂРѕРЅРЅРѕ С‡РёС‚Р°С‚СЊ DOM РѕР±РµРёС… СЃС‚РѕСЂРѕРЅ.
+/// Срез 12 BUG-480: сразу после регистрации `parent`/`top` (выше) —
+/// cascade + layout ребёнка на UA-дефолтном вьюпорте [`FRAME_UA_DEFAULT_SIZE`]
+/// (реальный host-бокс ещё не известен), результат уходит в
+/// `update_layout_rects`/`update_viewport_size` JS-контекста ребёнка — первая
+/// content-геометрия внутри фрейма (`getBoundingClientRect` и т.п.) вместо
+/// честных нулей. Paint (компоновка display list ребёнка в бокс `<iframe>`
+/// вместо серой заглушки) и relayout при мутациях остаются в очереди среза.
+///
 /// Исходы подресурсов парсерных элементов под-документа фрейма (BUG-480 срез 11).
 struct FrameSubresourceOutcomes {
     /// `(узел <link rel=stylesheet>, лист получен)` в порядке объявления —
@@ -8016,6 +8032,12 @@ struct FrameSubresourceOutcomes {
     links: Vec<(NodeId, bool)>,
     /// `(узел <img>, байты получены)` в порядке DOM.
     images: Vec<(NodeId, bool)>,
+    /// BUG-480 срез 12: текст каскада ребёнка (инлайновые `<style>` с
+    /// разрешённым `@import`, затем внешние `<link rel=stylesheet>`, в этом
+    /// порядке — форма страницы, `parse_and_layout`). До среза 12 такой текст
+    /// не собирался вовсе (фреймы не лежали в layout); теперь его парсит и
+    /// использует `load_frame_sub_documents` сразу после этого прохода.
+    css: String,
 }
 
 /// Запросить подресурсы парсерных элементов под-документа фрейма (BUG-480
@@ -8028,12 +8050,14 @@ struct FrameSubresourceOutcomes {
 /// picker [`lumen_layout::collect_image_requests`] (`<picture>`/`srcset`), чей
 /// ключ URL совпадает с тем, что эмитит layout.
 ///
-/// Текст каскада фрейму не нужен (фреймы пока не рендерятся — очередь
-/// «restyle/layout/paint фрейма») и выбрасывается; нужны только исходы для
-/// событий элемента. Картинки декодируются тоже не полностью — только байты
-/// ([`fetch_image_bytes`]), пиксели некому рисовать. `loading="lazy"` не
-/// запрашивается вовсе: прокси вьюпорта у фреймов нет, так же как срез 1
-/// пропускает сами `loading=lazy`-iframe.
+/// Срез 12: текст каскада (инлайновые `<style>` через `extract_style_blocks`/
+/// `inline_css_imports`, затем внешние листы) теперь возвращается вместо
+/// отбрасывания — им пользуется layout ребёнка в `load_frame_sub_documents`
+/// сразу после этого прохода. Картинки декодируются по-прежнему не
+/// полностью — только байты ([`fetch_image_bytes`]), в `IMAGE_CACHE` не
+/// попадают: пиксели рисовать пока некому (paint ребёнка — отдельный срез
+/// очереди). `loading="lazy"` не запрашивается вовсе: прокси вьюпорта у
+/// фреймов нет, так же как срез 1 пропускает сами `loading=lazy`-iframe.
 fn fetch_frame_subresources(
     doc: &Document,
     base: &ResourceBase,
@@ -8042,7 +8066,18 @@ fn fetch_frame_subresources(
     media_ctx: &lumen_css_parser::MediaContext,
     viewport: lumen_core::geom::Size,
 ) -> FrameSubresourceOutcomes {
-    let (_, links) = load_linked_stylesheets(doc, base, sink, cookie_jar.clone(), media_ctx);
+    let inline = extract_style_blocks(doc);
+    let mut css = inline_css_imports(
+        &inline,
+        base,
+        sink,
+        cookie_jar.clone(),
+        media_ctx,
+        &mut std::collections::HashSet::new(),
+        0,
+    );
+    let (linked, links) = load_linked_stylesheets(doc, base, sink, cookie_jar.clone(), media_ctx);
+    css.push_str(&linked);
 
     let requests: Vec<lumen_layout::ImageRequest> =
         lumen_layout::collect_image_requests(doc, viewport)
@@ -8059,7 +8094,7 @@ fn fetch_frame_subresources(
         .map(|(req, ok)| (req.node_id, ok))
         .collect();
 
-    FrameSubresourceOutcomes { links, images }
+    FrameSubresourceOutcomes { links, images, css }
 }
 
 /// Доставить исходы подресурсов фрейма ([`fetch_frame_subresources`]) его
@@ -8243,6 +8278,43 @@ fn load_frame_sub_documents(
             if depth >= 1 {
                 let accessible_top = frame_access_allowed(top_base, &child_url, opaque);
                 js.register_top_document(Arc::clone(top_doc), &top_url, accessible_top);
+            }
+        }
+        // BUG-480 срез 12: cascade + layout ребёнка — контентная геометрия
+        // внутри фрейма (getBoundingClientRect/offsetWidth/offsetHeight)
+        // вместо честных нулей (см. frame_bridge.rs: «layout содержимого
+        // фрейма — отдельный срез»). Вьюпорт — [`FRAME_UA_DEFAULT_SIZE`]
+        // (реальный размер host-бокса ещё не известен на этом шаге).
+        // Измеритель собран как у страницы ([`page_measurer`]), но без
+        // @font-face ребёнка (`web_fonts: &[]` — задел следующего среза).
+        // Результат layout нигде не сохраняется — только `update_layout_rects`/
+        // `update_viewport_size` в JS-контекст ребёнка; ни paint (display list
+        // ребёнка по-прежнему серая заглушка, `BoxKind::Iframe`), ни
+        // relayout при последующих мутациях сюда не входят.
+        if let Some(js) = &child_js {
+            match lumen_font::Font::parse(INTER_FONT) {
+                Ok(font) => {
+                    let frame_sheet = lumen_css_parser::parse(&subresources.css);
+                    let measurer = page_measurer(&font, &[]);
+                    let rects = {
+                        let d = child_doc_arc.lock().unwrap();
+                        let frame_layout = lumen_layout::layout_measured(
+                            &d,
+                            &frame_sheet,
+                            FRAME_UA_DEFAULT_SIZE,
+                            &measurer,
+                        );
+                        lumen_layout::collect_layout_rects(&frame_layout)
+                    };
+                    js.update_layout_rects(rects);
+                    js.update_viewport_size(
+                        FRAME_UA_DEFAULT_SIZE.width,
+                        FRAME_UA_DEFAULT_SIZE.height,
+                    );
+                }
+                Err(e) => eprintln!(
+                    "iframe: сбой измерителя шрифта, geometry ребёнка не посчитана: {e}"
+                ),
             }
         }
         // Lifecycle СЂРµР±С‘РЅРєР°: DOMContentLoaded СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ parse+inline-СЃРєСЂРёРїС‚РѕРІ
