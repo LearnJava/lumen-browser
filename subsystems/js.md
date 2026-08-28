@@ -1844,6 +1844,20 @@ the time — read dates.
   And **one file per const is the invariant, not an accident**: `web_api_shim()` concatenates the consts
   in source order — that order is the only thing making V8 compile one program with one hoisting scope —
   so subdividing a `.js` file further would break the eye-checkable correspondence between the two lists.
+- **`v8_runtime.rs` is a module directory now** (SPLIT-JS4/JS-5, 2026-08-28): the tests live in
+  `v8_runtime/tests/`, and the file's tail in `v8_runtime/{history_state,dom_helpers,code_cache,eval,value}.rs`.
+  What stayed in `v8_runtime.rs` is the platform init, `V8JsRuntime` with its inherent `impl`s, and
+  `install_dom`. Two things a later split of this file has to know, both learnt by measurement rather than
+  from the census (`scripts/split_census.py` does not know `macro_rules!` and silently attributes each macro
+  to the *preceding* item's span, so its line ranges under-report where a theme begins). A `macro_rules!`
+  macro is visible only **below its own definition in source order**, so a region carrying one moves as
+  "macro, then its call sites" or not at all; handing it to a sibling module is `pub(super) use <macro>;`
+  (a path, order-independent) rather than `#[macro_use]`, and because `macro_rules!` is not hygienic for
+  paths, every name the body mentions must be in scope at the **expansion** site — `eval.rs` imports
+  `CODE_CACHE` and its neighbours explicitly for exactly that reason. And `use super::*;` in a child
+  **chains through the parent's own glob**, so a child sees what the parent glob-imported from a sibling
+  without naming it; the converse fails, since a glob the parent needs only for its `#[cfg(test)]` child is
+  reported `unused import` — such a name is imported by `tests/mod.rs` itself.
 - `QuickJsRuntime: Send + Sync` (enforced by `unsafe impl` + `Mutex`).
 - `call_function` pollutes the global namespace with `__lum_args__` only transiently — cleaned up with `delete` after each call.
 - `from_rq` maps `Type::Undefined` to `JsValue::Null` (not `Undefined`) — matches the trait docs which say "simple JSON-compatible types".
