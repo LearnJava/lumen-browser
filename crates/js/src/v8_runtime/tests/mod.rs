@@ -9,6 +9,8 @@
 //! `dom_suspend_focus.rs` рядом.
 
 use super::*;
+// Кэш байт-кода — свой модуль (SPLIT-JS5), из `super::*` его имена не видны.
+use super::code_cache::{CODE_CACHE, CODE_CACHE_MIN_LEN, code_cache_hash};
 use lumen_core::JsRuntime;
 
 fn rt() -> V8JsRuntime {
