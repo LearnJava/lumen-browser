@@ -3,6 +3,7 @@ mutations made earlier in the same script execution — no synchronous
 style/layout flush before the read
 
 **Статус:** OPEN
+**Тип:** доработка (нереализованная функциональность), не дефект — ведётся как задача [`CSSOM-4`](../ROADMAP.md) дорожки CSSOM, а не как строка очереди P3. Файл остаётся детальной записью наблюдений: «срезы» ниже — прогоны категорий WPT, упиравшиеся в эту же дыру, а не куски выполненной работы. Переклассифицировано 2026-08-28 по решению пользователя.
 **Дата:** 2026-08-02
 **Компонент:** js/layout boundary (`crates/js/src/v8_runtime.rs::_lumen_get_computed_style`
 + `update_computed_styles`, `crates/driver/src/session.rs:379`)
