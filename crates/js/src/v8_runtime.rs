@@ -67,6 +67,14 @@ mod value;
 
 use value::*;
 
+// ── install_dom sections ──────────────────────────────────────────────────────
+//
+// 41 секция-баннер тела `install_dom` вынесена батчем SPLIT-JS6; здесь остаётся
+// сама функция — её преамбула, вызовы помощников и хвост. Почему `reg!` уехал с
+// контекстом в параметрах, а не «как есть», — в доккомментарии `install`.
+
+mod install;
+
 // ── Platform initialization ───────────────────────────────────────────────────
 
 /// Process-global V8 platform, initialized exactly once.
@@ -2114,49 +2122,11 @@ impl V8JsRuntime {
             let print_requests = Arc::clone(&self.print_requests);
             let pending_focus_requests = Arc::clone(&self.pending_focus_requests);
 
-    // ── console ──────────────────────────────────────────────────────────────
-    {
-        let buf_log = Arc::clone(&console_messages);
-        reg!("_lumen_console_log", move |msg: String| {
-            eprintln!("[JS] {msg}");
-            buf_log.lock().unwrap().push((0, msg));
-        });
-        let buf_warn = Arc::clone(&console_messages);
-        reg!("_lumen_console_warn", move |msg: String| {
-            eprintln!("[JS warn] {msg}");
-            buf_warn.lock().unwrap().push((1, msg));
-        });
-        let buf_err = Arc::clone(&console_messages);
-        reg!("_lumen_console_error", move |msg: String| {
-            eprintln!("[JS error] {msg}");
-            buf_err.lock().unwrap().push((2, msg));
-        });
-    }
+    install::install_console(scope, ctx, store, Arc::clone(&console_messages))?;
 
-    // ── window.print() (W-2) ──────────────────────────────────────────────────
-    {
-        let pr = Arc::clone(&print_requests);
-        reg!("_lumen_print_dialog", move || {
-            eprintln!("[window.print()] Opening print preview dialog");
-            pr.lock().unwrap().push(PrintRequest::default());
-        });
-    }
+    install::install_print(scope, ctx, store, Arc::clone(&print_requests))?;
 
-    // ── dialog focus management (HTML LS §6.6.3) ─────────────────────────────
-    // `showModal()` calls `_lumen_request_focus(nid)` to focus the first autofocus
-    // element (or the dialog itself).  `close()` calls `_lumen_request_focus(prev)`
-    // to restore focus to the element that was active before the dialog opened.
-    // The shell drains these via `take_focus_requests()` after each JS pump.
-    {
-        let pfr = Arc::clone(&pending_focus_requests);
-        reg!("_lumen_request_focus", move |nid: u32| {
-            pfr.lock().unwrap().push(Some(nid));
-        });
-        let pfr2 = Arc::clone(&pending_focus_requests);
-        reg!("_lumen_request_blur", move || {
-            pfr2.lock().unwrap().push(None);
-        });
-    }
+    install::install_dialog_focus(scope, ctx, store, Arc::clone(&pending_focus_requests))?;
 
     // ── document meta ────────────────────────────────────────────────────────
     {
@@ -3156,206 +3126,24 @@ impl V8JsRuntime {
         );
     }
 
-    // ── history ──────────────────────────────────────────────────────────────
-    {
-        let hist = Arc::new(Mutex::new(HistoryState::new()));
+    install::install_history(
+        scope,
+        ctx,
+        store,
+        Arc::clone(&pending_history_url_updates),
+        Arc::clone(&pending_history_traversals),
+    )?;
 
-        let h = Arc::clone(&hist);
-        reg!(
-            "_lumen_history_push",
-            move |state_json: String, url: String| {
-                h.lock().unwrap().push(state_json, url);
-            }
-        );
+    install::install_navigation_api(
+        scope,
+        ctx,
+        store,
+        Arc::clone(&nav_state),
+        Arc::clone(&pending_navigation_updates),
+        Arc::clone(&pending_nav_intercepted),
+    )?;
 
-        let h = Arc::clone(&hist);
-        reg!(
-            "_lumen_history_replace",
-            move |state_json: String, url: String| {
-                h.lock().unwrap().replace(state_json, url);
-            }
-        );
-
-        let h = Arc::clone(&hist);
-        reg!("_lumen_history_go", move |delta: i32| -> bool {
-            h.lock().unwrap().go(delta)
-        });
-
-        // Queue a real session-history traversal for the shell. `history.go(n)` /
-        // `back` / `forward` call this so the shell (single authority) moves its
-        // `nav_back`/`nav_fwd` stacks by `delta` and delivers the destination
-        // popstate or reload — the JS `HistoryState` above is only a read-cache.
-        let t = Arc::clone(&pending_history_traversals);
-        reg!("_lumen_history_traverse", move |delta: i32| {
-            t.lock().unwrap().push(delta);
-        });
-
-        let h = Arc::clone(&hist);
-        reg!("_lumen_history_set_state", move |state_json: String| {
-            h.lock().unwrap().set_state(state_json)
-        });
-
-        let h = Arc::clone(&hist);
-        reg!("_lumen_history_length", move || -> u32 {
-            h.lock().unwrap().length()
-        });
-
-        let h = Arc::clone(&hist);
-        reg!("_lumen_history_state_json", move || -> String {
-            h.lock().unwrap().state_json().to_string()
-        });
-
-        let h = Arc::clone(&hist);
-        reg!("_lumen_history_url", move || -> String {
-            h.lock().unwrap().url().to_string()
-        });
-
-        // Notify shell of pushState/replaceState URL changes so the address bar
-        // can be updated without a page reload.  Called from history.pushState /
-        // history.replaceState in WEB_API_SHIM after the JS HistoryState is updated.
-        let q = Arc::clone(&pending_history_url_updates);
-        reg!(
-            "_lumen_history_push_url",
-            move |url: String, new_state_json: String| {
-                q.lock()
-                    .unwrap()
-                    .push(HistoryUrlUpdate::Push { url, new_state_json });
-            }
-        );
-
-        let q = Arc::clone(&pending_history_url_updates);
-        reg!(
-            "_lumen_history_replace_url",
-            move |url: String, new_state_json: String| {
-                q.lock()
-                    .unwrap()
-                    .push(HistoryUrlUpdate::Replace { url, new_state_json });
-            }
-        );
-    }
-
-    // ── Navigation API ──────────────────────────────────────────────────────────
-    // Shell-backed Navigation API.  All mutations are queued via
-    // `pending_navigation_updates`; the shell drains them in `about_to_wait`
-    // and is the single authority for the nav_back / nav_fwd stacks.
-    {
-        let ns_entries = Arc::clone(&nav_state);
-        let ns_index   = Arc::clone(&nav_state);
-        let ns_back    = Arc::clone(&nav_state);
-        let ns_fwd     = Arc::clone(&nav_state);
-        let ns_set     = Arc::clone(&nav_state);
-        let q          = Arc::clone(&pending_navigation_updates);
-        let pi         = Arc::clone(&pending_nav_intercepted);
-
-        // ── accessors (read nav_state JSON, locked only for copy) ────────────────
-        reg!(
-            "_lumen_navigation_entries_json",
-            move || -> String {
-                ns_entries.lock().map(|s| s.clone()).unwrap_or_default()
-            }
-        );
-
-        reg!(
-            "_lumen_navigation_current_index",
-            move || -> i32 {
-                ns_index.lock()
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .map(|v: serde_json::Value| v.get("index").and_then(|i| i.as_i64()).unwrap_or(0) as i32)
-                    .unwrap_or(0)
-            }
-        );
-
-        reg!(
-            "_lumen_navigation_can_go_back",
-            move || -> bool {
-                ns_back.lock()
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .map(|v: serde_json::Value| {
-                        let idx = v.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
-                        let len = v.get("entries").and_then(|e| e.as_array()).map(|a| a.len()).unwrap_or(0);
-                        idx > 0 && len > 0
-                    })
-                    .unwrap_or(false)
-            }
-        );
-
-        reg!(
-            "_lumen_navigation_can_go_forward",
-            move || -> bool {
-                ns_fwd.lock()
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .map(|v: serde_json::Value| {
-                        let idx = v.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
-                        let len = v.get("entries").and_then(|e| e.as_array()).map(|a| a.len()).unwrap_or(0);
-                        idx + 1 < (len as u64)
-                    })
-                    .unwrap_or(false)
-            }
-        );
-
-        // ── state setter (called from shell via eval_js) ─────────────────────────
-        reg!(
-            "_lumen_navigation_set_state",
-            move |json: String| {
-                *ns_set.lock().unwrap() = json;
-            }
-        );
-
-        // ── navigation action queue ──────────────────────────────────────────────
-        reg!(
-            "_lumen_navigation_report_intercept",
-            move |intercepted: bool, cancelled: bool| {
-                let mut q = pi.lock().unwrap();
-                q.push((intercepted, cancelled));
-            }
-        );
-
-        reg!(
-            "_lumen_navigation_request",
-            move |action_code: u8, url: String, key: String, data: String| {
-                let action = match action_code {
-                    0 => NavAction::Push,
-                    1 => NavAction::Replace,
-                    2 => NavAction::Back,
-                    3 => NavAction::Forward,
-                    4 => NavAction::TraverseTo,
-                    5 => NavAction::Reload,
-                    6 => NavAction::InterceptedSuccess,
-                    7 => NavAction::InterceptedError,
-                    _ => return,
-                };
-                q.lock().unwrap().push((action, url, key, data));
-            }
-        );
-    }
-
-    // ── navigation (location.href =, assign, replace, reload) ────────────────
-    {
-        let nav = Arc::clone(&nav_out);
-        reg!("_lumen_navigate", move |url: String, replace: bool| {
-            *nav.lock().unwrap() = Some(if replace {
-                NavigateRequest::Replace(url)
-            } else {
-                NavigateRequest::Push(url)
-            });
-        });
-
-        let nav = Arc::clone(&nav_out);
-        reg!("_lumen_reload", move || {
-            *nav.lock().unwrap() = Some(NavigateRequest::Reload);
-        });
-
-        // BUG-383: `form.submit()` / `form.requestSubmit()`. The shell owns
-        // encoding and the navigation, so the page only hands over the node
-        // ids; `submitter` is -1 when the form was submitted with no control.
-        let nav = Arc::clone(&nav_out);
-        reg!("_lumen_request_form_submit", move |form: u32, submitter: i32| {
-            *nav.lock().unwrap() = Some(NavigateRequest::SubmitForm { form, submitter });
-        });
-    }
+    install::install_navigation(scope, ctx, store, Arc::clone(&nav_out))?;
 
     // ── Fetch API ─────────────────────────────────────────────────────────────
     {
@@ -4121,356 +3909,69 @@ impl V8JsRuntime {
         });
     }
 
-    // ── localStorage ─────────────────────────────────────────────────────────
-    {
-        let s = Arc::clone(&ls_store);
-        reg!("_lumen_ls_length", move || -> u32 { s.lock().unwrap().len() });
-        let s = Arc::clone(&ls_store);
-        reg!("_lumen_ls_key", move |n: u32| -> Option<String> {
-            s.lock().unwrap().key(n).map(|k| k.to_owned())
-        });
-        let s = Arc::clone(&ls_store);
-        reg!("_lumen_ls_get", move |key: String| -> Option<String> {
-            s.lock().unwrap().get_item(&key).map(|v| v.to_owned())
-        });
-        let s = Arc::clone(&ls_store);
-        reg!("_lumen_ls_set", move |key: String, value: String| {
-            s.lock().unwrap().set_item(key, value);
-        });
-        let s = Arc::clone(&ls_store);
-        reg!("_lumen_ls_remove", move |key: String| {
-            s.lock().unwrap().remove_item(&key);
-        });
-        let s = Arc::clone(&ls_store);
-        reg!("_lumen_ls_clear", move || {
-            s.lock().unwrap().clear();
-        });
-    }
+    install::install_local_storage(scope, ctx, store, Arc::clone(&ls_store))?;
 
-    // ── sessionStorage ────────────────────────────────────────────────────────
-    {
-        let s = Arc::clone(&ss_store);
-        reg!("_lumen_ss_length", move || -> u32 { s.lock().unwrap().len() });
-        let s = Arc::clone(&ss_store);
-        reg!("_lumen_ss_key", move |n: u32| -> Option<String> {
-            s.lock().unwrap().key(n).map(|k| k.to_owned())
-        });
-        let s = Arc::clone(&ss_store);
-        reg!("_lumen_ss_get", move |key: String| -> Option<String> {
-            s.lock().unwrap().get_item(&key).map(|v| v.to_owned())
-        });
-        let s = Arc::clone(&ss_store);
-        reg!("_lumen_ss_set", move |key: String, value: String| {
-            s.lock().unwrap().set_item(key, value);
-        });
-        let s = Arc::clone(&ss_store);
-        reg!("_lumen_ss_remove", move |key: String| {
-            s.lock().unwrap().remove_item(&key);
-        });
-        let s = Arc::clone(&ss_store);
-        reg!("_lumen_ss_clear", move || {
-            s.lock().unwrap().clear();
-        });
-    }
+    install::install_session_storage(scope, ctx, store, Arc::clone(&ss_store))?;
 
-    // ── IndexedDB persistence ─────────────────────────────────────────────────
-    // Registered only when a backend is supplied (None in unit tests / sandboxed
-    // contexts → the JS shim falls back to in-heap-only databases via its
-    // `typeof _lumen_idb_persist === 'function'` guards). The shim serializes the
-    // whole per-origin database set into one opaque JSON snapshot; `_lumen_idb_load`
-    // restores it on init, `_lumen_idb_persist` writes it after each mutating flush.
-    if let Some(idb) = idb_backend {
-        let b = Arc::clone(&idb);
-        reg!("_lumen_idb_load", move || -> Option<String> { b.load() });
-        let b = Arc::clone(&idb);
-        reg!("_lumen_idb_persist", move |snapshot: String| {
-            b.save(&snapshot);
-        });
-        // Structured (Phase 3) row-level path. The JS shim keeps the in-heap
-        // database authoritative and the opaque snapshot (above) as the lossless
-        // restore source; these primitives additionally mirror schema + records
-        // into the per-origin SQLite tables so `databases()` and future row-level
-        // queries survive a reload. No-op on blob-only backends (default trait impls).
-        let b = Arc::clone(&idb);
-        reg!("_lumen_idb_schema_op", move |json: String| -> bool {
-            match serde_json::from_str::<lumen_core::ext::IdbSchemaOp>(&json) {
-                Ok(op) => b.apply_schema(&op).is_ok(),
-                Err(_) => false,
-            }
-        });
-        let b = Arc::clone(&idb);
-        reg!("_lumen_idb_commit_txn", move |json: String| -> bool {
-            match serde_json::from_str::<Vec<lumen_core::ext::IdbRecordOp>>(&json) {
-                Ok(ops) => b.commit_txn(&ops).is_ok(),
-                Err(_) => false,
-            }
-        });
-        let b = Arc::clone(&idb);
-        reg!("_lumen_idb_exec_op", move |json: String| -> Option<String> {
-            serde_json::from_str::<lumen_core::ext::IdbRecordOp>(&json)
-                .ok()
-                .and_then(|op| b.exec_op(&op).ok())
-                .and_then(|result| serde_json::to_string(&result).ok())
-        });
-        let b = Arc::clone(&idb);
-        reg!("_lumen_idb_db_version", move |db_name: String| -> i32 {
-            b.db_version(&db_name) as i32
-        });
-        let b = Arc::clone(&idb);
-        reg!("_lumen_idb_databases", move || -> String {
-            let dbs = b.list_databases();
-            serde_json::to_string(
-                &dbs.iter()
-                    .map(|(name, version)| serde_json::json!({ "name": name, "version": version }))
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap_or_else(|_| "[]".to_string())
-        });
-    }
+    install::install_indexed_db(scope, ctx, store, idb_backend.clone())?;
 
-    // ── performance.now() — high-resolution timestamp ────────────────────────
-    // Returns milliseconds since Unix epoch as f64; JS shim subtracts
-    // the time-origin captured at install_dom_api time to give DOMHighResTimeStamp.
-    // In deterministic mode (8F) always returns 0 so Date.now()/performance.now()
-    // are frozen at the epoch, making rendering output independent of wall-clock
-    // time — unless DEVX-16's `--monotonic-clock` is set, in which case each
-    // call advances `deterministic_clock_ms` by 1 ms instead of staying at 0.
-    let det_time = deterministic_seed.is_some();
-    reg!("_lumen_now_ms", move || -> f64 {
-        if det_time {
-            if monotonic_clock {
-                deterministic_clock_ms.fetch_add(1, Ordering::Relaxed) as f64
-            } else {
-                0.0
-            }
-        } else {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs_f64() * 1000.0)
-                .unwrap_or(0.0)
-        }
-    });
+    install::install_performance_now(
+        scope,
+        ctx,
+        store,
+        deterministic_seed,
+        monotonic_clock,
+        Arc::clone(&deterministic_clock_ms),
+    )?;
 
-    // ── timer wakeup notification ─────────────────────────────────────────────
-    // Called by _lumen_tick_timers / setTimeout / setInterval JS shims when a
-    // timer is scheduled. Stores the earliest pending deadline (Unix epoch ms)
-    // so the shell event loop can set ControlFlow::WaitUntil accordingly.
-    {
-        let tw = Arc::clone(&timer_wakeup);
-        reg!("_lumen_request_wakeup", move |deadline_ms: f64| {
-            let mut lock = tw.lock().unwrap();
-            match *lock {
-                None => *lock = Some(deadline_ms),
-                Some(prev) if deadline_ms < prev => *lock = Some(deadline_ms),
-                _ => {}
-            }
-        });
-    }
+    install::install_timer_wakeup(
+        scope,
+        ctx,
+        store,
+        Arc::clone(&timer_wakeup),
+        Arc::clone(&raf_pending),
+    )?;
 
-    // Called by requestAnimationFrame when a callback is queued.
-    // Shell reads this after each rendering step to decide whether to request
-    // the next redraw for JS animation loops.
-    {
-        let raf = Arc::clone(&raf_pending);
-        reg!("_lumen_mark_raf_pending", move || {
-            raf.store(true, Ordering::Relaxed);
-        });
-    }
+    install::install_element_geometry(
+        scope,
+        ctx,
+        store,
+        Arc::clone(&layout_rects),
+        Arc::clone(&viewport_size),
+    )?;
 
-    // ── element geometry (for getBoundingClientRect / ResizeObserver / IntersectionObserver) ──
-    // Returns [x, y, width, height] for the given NodeId in viewport-relative CSS px,
-    // or undefined if the node has no layout box (display:none, not laid out yet, etc.).
-    {
-        let lr = Arc::clone(&layout_rects);
-        reg!("_lumen_get_bounding_rect", move |nid: u32| -> Option<Vec<f64>> {
-            lr.lock()
-                .unwrap()
-                .get(&nid)
-                .map(|r| vec![f64::from(r[0]), f64::from(r[1]), f64::from(r[2]), f64::from(r[3])])
-        });
-    }
+    install::install_match_media(scope, ctx, store)?;
 
-    // Returns [width, height] of the current viewport in CSS px.
-    {
-        let vs = Arc::clone(&viewport_size);
-        reg!("_lumen_get_viewport_size", move || -> Vec<f64> {
-            let s = *vs.lock().unwrap();
-            vec![f64::from(s[0]), f64::from(s[1])]
-        });
-    }
+    install::install_css_supports_and_lazy_images(
+        scope,
+        ctx,
+        store,
+        Arc::clone(&lazy_img_requests),
+    )?;
 
-    // ── window.matchMedia (CSS Media Queries L4 §4.2) ────────────────────────
-    // Parses `query` as a media query and evaluates it against an ad-hoc
-    // MediaContext built from the supplied viewport size + user-preference
-    // flags. Pure function — no captures: parse_media_query and MediaQuery::matches
-    // are stateless. Returns `true` when the query currently matches.
-    reg!(
-        "_lumen_match_media",
-        |query: String, w: f64, h: f64, dark: bool, reduced_motion: bool| -> bool {
-            let mq = lumen_css_parser::parse_media_query(&query);
-            let ctx = lumen_css_parser::MediaContext {
-                media_type: "screen".to_owned(),
-                width: w as f32,
-                height: h as f32,
-                prefers_dark: dark,
-                prefers_reduced_motion: reduced_motion,
-                forced_colors: false,
-                ..Default::default()
-            };
-            mq.matches(&ctx)
-        }
-    );
+    install::install_scroll_state(
+        scope,
+        ctx,
+        store,
+        Arc::clone(&scroll_states),
+        Arc::clone(&pending_scrolls),
+        Arc::clone(&pending_page_scrolls),
+        Arc::clone(&page_scroll_y),
+    )?;
 
-    // ── CSS.supports() backing (CSS Conditional Rules L3 §6) ──────────────────
-    // Two-argument form: CSS.supports(property, value) → check property name.
-    // Intentionally ignores value in Phase 0 (property-name check is sufficient
-    // for the feature-detection patterns real sites use).
-    reg!(
-        "_lumen_css_supports_prop",
-        |prop: String, _value: String| -> bool {
-            lumen_css_parser::SUPPORTED_PROPERTIES
-                .iter()
-                .any(|p| p.eq_ignore_ascii_case(&prop))
-        }
-    );
-    // One-argument form: CSS.supports(conditionText) → parse + evaluate.
-    reg!(
-        "_lumen_css_supports_cond",
-        |condition: String| -> bool {
-            lumen_css_parser::parse_supports_condition(&condition)
-                .evaluate(lumen_css_parser::SUPPORTED_PROPERTIES)
-        }
-    );
+    install::install_window_open(scope, ctx, store, Arc::clone(&window_open_requests))?;
 
-    // Queues a lazy image load request.  Called by `_lumen_deliver_lazy_images()` in JS
-    // when an image registered via `_lumen_init_lazy_images` enters the lazy-load margin.
-    // Shell drains via `QuickJsRuntime::take_lazy_image_requests` after each layout.
-    {
-        let req = Arc::clone(&lazy_img_requests);
-        reg!("_lumen_request_lazy_image_load", move |nid: u32, url: String| {
-            req.lock().unwrap().push((nid, url));
-        });
-    }
+    install::install_fullscreen(scope, ctx, store, Arc::clone(&fullscreen_requests))?;
 
-    // ── scroll state (for scrollTop/scrollLeft/scrollWidth/scrollHeight) ─────────
-    // Returns [scroll_x, scroll_y, scroll_width, scroll_height] for an overflow container,
-    // or undefined if the node is not a scroll container.
-    {
-        let ss = Arc::clone(&scroll_states);
-        reg!("_lumen_get_scroll_state", move |nid: u32| -> Option<Vec<f64>> {
-            ss.lock()
-                .unwrap()
-                .get(&nid)
-                .map(|s| vec![f64::from(s[0]), f64::from(s[1]), f64::from(s[2]), f64::from(s[3])])
-        });
-    }
-    // Queues a programmatic scroll request.  Shell drains via `take_scroll_requests()`.
-    {
-        let ps = Arc::clone(&pending_scrolls);
-        reg!("_lumen_request_scroll", move |nid: u32, x: f64, y: f64| {
-            ps.lock().unwrap().push((nid, x as f32, y as f32));
-        });
-    }
-    // Queues a page-level scroll request from window.scrollTo/scrollBy.
-    // `smooth=1` → start_smooth_scroll; `smooth=0` → scroll_to (instant).
-    {
-        let pps = Arc::clone(&pending_page_scrolls);
-        reg!("_lumen_request_page_scroll", move |y: f64, smooth: u32| {
-            pps.lock().unwrap().push((y as f32, smooth != 0));
-        });
-    }
-    // Returns current page scroll Y for window.scrollY / window.pageYOffset.
-    {
-        let psy = Arc::clone(&page_scroll_y);
-        reg!("_lumen_get_page_scroll_y", move || -> f64 {
-            f64::from(*psy.lock().unwrap())
-        });
-    }
+    install::install_pointer_lock(scope, ctx, store)?;
 
-    // ── window.open() popup requests ────────────────────────────────────────────
-    // Queues a popup window request. Shell drains via `take_window_open_requests()`.
-    // `features` is the raw feature string ("width=800,height=600,..."); we parse
-    // `width=` and `height=` here so the shell receives typed values.
-    {
-        let wor = Arc::clone(&window_open_requests);
-        reg!(
-            "_lumen_window_open",
-            move |url: String, target: String, features: String| {
-                let mut width: u32 = 800;
-                let mut height: u32 = 600;
-                for part in features.split(',') {
-                    let part = part.trim();
-                    if let Some(v) = part.strip_prefix("width=") {
-                        width = v.trim().parse().unwrap_or(800);
-                    } else if let Some(v) = part.strip_prefix("height=") {
-                        height = v.trim().parse().unwrap_or(600);
-                    }
-                }
-                wor.lock().unwrap().push(PopupRequest { url, target, width, height });
-            }
-        );
-    }
-
-    // ── Fullscreen API (WHATWG Fullscreen §4) ────────────────────────────────────
-    // Shell drains via `take_fullscreen_requests()` and calls `window.set_fullscreen()`.
-    {
-        let fs_req = Arc::clone(&fullscreen_requests);
-        reg!("_lumen_fs_enter", move |nid: u32| {
-            fs_req.lock().unwrap().push(FullscreenRequest::Enter { nid });
-        });
-    }
-    {
-        let fs_req = Arc::clone(&fullscreen_requests);
-        reg!("_lumen_fs_exit", move || {
-            fs_req.lock().unwrap().push(FullscreenRequest::Exit);
-        });
-    }
-
-    // ── Pointer Lock API (W3C Pointer Lock L2 §2-4) ────────────────────────────────
-    // requestPointerLock(element_nid) — lock pointer to element.
-    // Phase 0: in-memory lock. Phase 1: integrate with shell to capture cursor.
-    reg!("_lumen_ptr_lock_request", move |nid: u32| {
-        crate::pointer_lock::request_pointer_lock(nid);
-    });
-
-    // exitPointerLock() — release pointer lock.
-    reg!("_lumen_exit_ptr_lock", move || {
-        crate::pointer_lock::exit_pointer_lock();
-    });
-
-    // pointerLockElement getter — returns locked element or null.
-    reg!("_lumen_ptr_lock_element", move || -> Option<u32> {
-        crate::pointer_lock::get_locked_element_nid()
-    });
-
-    // ── Computed styles (window.getComputedStyle) ────────────────────────────────
-    // Returns the resolved CSS value for `prop` on node `nid`, or "" if unknown.
-    {
-        let cs = Arc::clone(&computed_styles);
-        reg!("_lumen_get_computed_style", move |nid: u32, prop: String| -> String {
-            cs.lock()
-                .unwrap()
-                .get(&nid)
-                .and_then(|m| m.get(&prop))
-                .cloned()
-                .unwrap_or_default()
-        });
-    }
-    // Resolved value of the custom property `prop` (`--`-prefixed) on node
-    // `nid`, or "" when the node declares/inherits none (BUG-732). Separate
-    // from `_lumen_get_computed_style` because custom properties live in their
-    // own inherited, `Arc`-shared map — see `V8JsRuntime::custom_properties`.
-    {
-        let cp = Arc::clone(&custom_properties);
-        reg!("_lumen_get_custom_property", move |nid: u32, prop: String| -> String {
-            cp.lock()
-                .unwrap()
-                .get(&nid)
-                .and_then(|m| m.get(&prop))
-                .cloned()
-                .unwrap_or_default()
-        });
-    }
+    install::install_computed_styles(
+        scope,
+        ctx,
+        store,
+        Arc::clone(&computed_styles),
+        Arc::clone(&custom_properties),
+    )?;
 
     // ── Shadow DOM ───────────────────────────────────────────────────────────────
     // Attaches a new shadow root to `nid` and returns the shadow root NodeId.
@@ -4995,357 +4496,22 @@ impl V8JsRuntime {
         );
     }
 
-    // ── document.cookie (RFC 6265 §5.3-5.4) ─────────────────────────────────
-    // The getter/setter wrap CookieProvider using host/scheme derived from
-    // page_url parsed once at install time. Best-effort: if the URL cannot be
-    // parsed (e.g. file://) we skip cookie injection silently.
-    {
-        let parsed = Url::parse(&page_url).ok();
-        let host = parsed.as_ref().map(|u| u.host().to_ascii_lowercase()).unwrap_or_default();
-        let is_secure = parsed.as_ref().map(|u| u.scheme() == "https").unwrap_or(false);
+    install::install_cookie(scope, ctx, store, page_url.clone(), cookie_jar.clone())?;
 
-        if let Some(jar) = cookie_jar {
-            let jar_get = Arc::clone(&jar);
-            let host_get = host.clone();
-            reg!("_lumen_cookie_get", move || -> String {
-                jar_get.get_for_request(&host_get, "/", is_secure, None, false)
-            });
+    install::install_esm_registry(scope, ctx, store)?;
 
-            let host_set = host;
-            reg!("_lumen_cookie_set", move |cookie_str: String| {
-                jar.process_set_cookie(&cookie_str, &host_set, "/", is_secure, None);
-            });
-        } else {
-            reg!("_lumen_cookie_get", move || -> String { String::new() });
-            reg!("_lumen_cookie_set", move |_unused: String| {});
-        }
-    }
+    install::install_microtask_drain(scope, ctx, store)?;
 
-    // ── ES module registry bridge (BUG-571) ─────────────────────────────────
-    // A `<script type=module>` inserted by page script is prepared entirely in
-    // the shim (`_lumen_script_prepare`), which has no way to reach the
-    // thread-local module map the loader compiles from. These two natives are
-    // that bridge: the shim registers the module body, then calls `import()`,
-    // whose host callback finds the source under the specifier it just wrote.
-    // Both are plain map writes — no re-entry into V8, which the compat-layer
-    // closure signature could not do anyway.
-    reg!("_lumen_esm_register", move |specifier: String, source: String| {
-        crate::v8_esm::register_source(&specifier, &source);
-    });
-    // Inline module bodies have no URL, so the loader mints a virtual
-    // `lumen://inline-N` specifier for them; it is returned to the shim to be
-    // handed straight back to `import()`.
-    reg!("_lumen_esm_register_inline", move |source: String| -> String {
-        crate::v8_esm::register_inline(&source)
-    });
-
-    // ── Microtask drain ─────────────────────────────────────────────────────
-    // TODO(v8-s3): needs isolate access — draining V8's microtask queue requires
-    // `scope.perform_microtask_checkpoint()` on the isolate, which compat-layer
-    // closures (JsValue-level only) cannot reach. Stubbed as a no-op so the global
-    // exists; V8 auto-runs microtasks after each script/task by default so this
-    // primitive (only used to force-flush in QuickJS unit tests) is not required
-    // for correctness under V8. Revisit if a future slice needs manual draining.
-    reg!("_lumen_drain_microtasks", move || {});
-
-    // ── Web Crypto API ──────────────────────────────────────────────────────
-    {
-        // Returns `n` cryptographically-random bytes as a Vec<u8> (JS Array of
-        // integers 0–255). Capped at 65 536 per call per WebCrypto spec §10.1.3.
-        reg!("_lumen_get_random_bytes", |n: u32| -> Vec<u8> {
-            let len = (n as usize).min(65_536);
-            let mut buf = vec![0u8; len];
-            getrandom::getrandom(&mut buf).unwrap_or(());
-            buf
-        });
-
-        // Computes a SHA digest using the named algorithm.
-        // `algo` must be one of "SHA-1", "SHA-256", "SHA-384", "SHA-512".
-        // `data` is the raw input bytes.  Returns empty Vec on unknown algo.
-        reg!(
-            "_lumen_sha_digest",
-            |algo: String, data: Vec<u8>| -> Vec<u8> {
-                // sha1::Digest trait must be in scope to call sha1::Sha1::digest().
-                use sha1::Digest as _;
-                match algo.as_str() {
-                    "SHA-1" => sha1::Sha1::digest(&data).to_vec(),
-                    "SHA-256" => sha2::Sha256::digest(&data).to_vec(),
-                    "SHA-384" => sha2::Sha384::digest(&data).to_vec(),
-                    "SHA-512" => sha2::Sha512::digest(&data).to_vec(),
-                    _ => Vec::new(),
-                }
-            }
-        );
-
-        // Compression Streams codecs (`CompressionStream` /
-        // `DecompressionStream`). Stateful and keyed by an opaque handle
-        // because the spec compresses/decompresses per chunk — the one-shot
-        // `bytes -> bytes` pair these replaced had nowhere to keep the codec
-        // between chunks, so nothing was decoded until `writer.close()`
-        // (BUG-846). Status-byte protocol: `crate::compression`.
-        reg!("_lumen_cs_new", |format: String, decompress: bool| -> f64 {
-            f64::from(crate::compression::cs_new(&format, decompress))
-        });
-        reg!("_lumen_cs_push", |handle: f64, data: Vec<u8>| -> Vec<u8> {
-            crate::compression::cs_push(handle as u32, &data)
-        });
-        reg!("_lumen_cs_finish", |handle: f64| -> Vec<u8> {
-            crate::compression::cs_finish(handle as u32)
-        });
-        reg!("_lumen_cs_free", |handle: f64| {
-            crate::compression::cs_free(handle as u32);
-        });
-    }
-
-    // SubtleCrypto: generateKey/importKey/exportKey/sign/verify/encrypt/decrypt
-    // The underlying key store and algorithm functions in `crate::subtle_crypto`
-    // are plain Rust (no JS-engine dependency), so this is a thin wrapper.
-    {
-        reg!(
-            "_lumen_subtle_generate_key",
-            |alg_json: String, extractable: bool, usages_json: String| -> String {
-                crate::subtle_crypto::generate_key(&alg_json, extractable, &usages_json)
-            }
-        );
-
-        reg!(
-            "_lumen_subtle_import_key",
-            |format: String, key_data: Vec<u8>, alg_json: String, extractable: bool, usages_json: String| -> String {
-                crate::subtle_crypto::import_key(&format, key_data, &alg_json, extractable, &usages_json)
-            }
-        );
-
-        reg!(
-            "_lumen_subtle_export_key",
-            |format: String, key_id: u32| -> Vec<u8> {
-                crate::subtle_crypto::export_key(&format, key_id).unwrap_or_default()
-            }
-        );
-
-        reg!(
-            "_lumen_subtle_export_key_or_err",
-            |format: String, key_id: u32| -> String {
-                match crate::subtle_crypto::export_key(&format, key_id) {
-                    Ok(bytes) => {
-                        if bytes.first() == Some(&b'{') || bytes.first() == Some(&b'[') {
-                            format!("ok:{}", String::from_utf8_lossy(&bytes))
-                        } else {
-                            let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-                            format!("hex:{hex}")
-                        }
-                    }
-                    Err(e) => format!("err:{e}"),
-                }
-            }
-        );
-
-        reg!(
-            "_lumen_subtle_sign",
-            |alg_json: String, key_id: u32, data: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::sign_data(&alg_json, key_id, &data)
-            }
-        );
-
-        reg!(
-            "_lumen_subtle_verify",
-            |alg_json: String, key_id: u32, sig: Vec<u8>, data: Vec<u8>| -> bool {
-                crate::subtle_crypto::verify_signature(&alg_json, key_id, &sig, &data)
-            }
-        );
-
-        reg!(
-            "_lumen_subtle_encrypt",
-            |key_id: u32, iv: Vec<u8>, aad: Vec<u8>, plaintext: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::aes_gcm_encrypt(key_id, &iv, &aad, &plaintext)
-            }
-        );
-
-        reg!(
-            "_lumen_subtle_decrypt",
-            |key_id: u32, iv: Vec<u8>, aad: Vec<u8>, ciphertext: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::aes_gcm_decrypt(key_id, &iv, &aad, &ciphertext)
-            }
-        );
-
-        reg!("_lumen_subtle_key_info", |key_id: u32| -> String {
-            crate::subtle_crypto::key_info(key_id)
-        });
-
-        reg!(
-            "_lumen_subtle_aes_cbc_encrypt",
-            |key_id: u32, iv: Vec<u8>, plaintext: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::aes_cbc_encrypt(key_id, &iv, &plaintext)
-            }
-        );
-
-        reg!(
-            "_lumen_subtle_aes_cbc_decrypt",
-            |key_id: u32, iv: Vec<u8>, ciphertext: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::aes_cbc_decrypt(key_id, &iv, &ciphertext)
-            }
-        );
-
-        reg!(
-            "_lumen_subtle_aes_ctr_crypt",
-            |key_id: u32, counter: Vec<u8>, length: u32, data: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::aes_ctr_crypt(key_id, &counter, length, &data)
-            }
-        );
-
-        reg!(
-            "_lumen_subtle_derive_bits",
-            |alg_json: String, key_id: u32, length_bits: u32| -> Vec<u8> {
-                crate::subtle_crypto::derive_bits(&alg_json, key_id, length_bits)
-            }
-        );
-
-        reg!(
-            "_lumen_subtle_rsa_oaep_encrypt",
-            |key_id: u32, label: Vec<u8>, plaintext: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::rsa_oaep_encrypt(key_id, &label, &plaintext)
-            }
-        );
-
-        reg!(
-            "_lumen_subtle_rsa_oaep_decrypt",
-            |key_id: u32, label: Vec<u8>, ciphertext: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::rsa_oaep_decrypt(key_id, &label, &ciphertext)
-            }
-        );
-    }
-
-    // Trusted Types API: trustedTypes.createPolicy(), TrustedHTML/Script/ScriptURL
-    // (S12b-24-trusted-types) The shim itself is plain JS (`TRUSTED_TYPES_SHIM`, no
-    // rquickjs-specific API), so it's evaluated inline alongside `WEB_API_SHIM` further
-    // down in this function rather than reusing `crate::trusted_types::install_trusted_types_bindings`
-    // (that helper takes an `rquickjs::Ctx` and stays QuickJS-only).
-
-    // D-6: Extension system — chrome.runtime.sendMessage() native binding.
-    // Phase 0: no-op; the message is logged to stderr for debugging.
-    // Phase 1: shell wires a real IPC channel between content scripts and extension background.
-    reg!("_lumen_chrome_runtime_send_message", |msg: String| {
-        let _ = msg;
-    });
-
-    // CSS Typed OM API: element.attributeStyleMap / computedStyleMap()
-    //
-    // BUG-387: the two maps have **separate** backing bindings on purpose.
-    // `attributeStyleMap` reflects only the inline `style=""` attribute (that is
-    // what the spec says a mutable `StylePropertyMap` is), while
-    // `computedStyleMap()` must answer from the cascade — it reads the same
-    // `computed_styles` / `custom_properties` snapshots as
-    // `window.getComputedStyle` (`_lumen_get_computed_style`,
-    // `_lumen_get_custom_property` above), never the inline attribute.
-    {
-        let d = Arc::clone(&doc);
-        reg!("_lumen_get_style_property", move |nid: u32, prop: String| -> String {
-            if let Ok(doc) = d.lock() {
-                let node = doc.get(NodeId::from_index(nid as usize));
-                if let Some(style_attr) = node.get_attr("style") {
-                    let parsed = _parse_style_string(style_attr);
-                    return parsed.get(&_css_property_key(&prop)).cloned().unwrap_or_default();
-                }
-            }
-            String::new()
-        });
-        let d = Arc::clone(&doc);
-        let dirty = Arc::clone(&dom_dirty);
-        let touched = Arc::clone(&dom_touched);
-        reg!("_lumen_set_style_property", move |nid: u32, prop: String, val: String| {
-            if let Ok(mut doc) = d.lock() {
-                let node_id = NodeId::from_index(nid as usize);
-                let old_style = doc.get(node_id).get_attr("style").map(|s| s.to_string());
-                let mut parsed = if let Some(style) = old_style.as_deref() {
-                    _parse_style_string(style)
-                } else {
-                    std::collections::HashMap::new()
-                };
-                parsed.insert(_css_property_key(&prop), val);
-                let css_text = _serialize_style_map(&parsed);
-                set_attribute(&mut doc, node_id, "style", &css_text);
-                if old_style.as_deref() != Some(css_text.as_str()) {
-                    record_dom_touch(&touched, node_id);
-                }
-                dirty.store(true, Ordering::Relaxed);
-            }
-        });
-        let d = Arc::clone(&doc);
-        let dirty = Arc::clone(&dom_dirty);
-        let touched = Arc::clone(&dom_touched);
-        reg!("_lumen_delete_style_property", move |nid: u32, prop: String| {
-            if let Ok(mut doc) = d.lock() {
-                let node_id = NodeId::from_index(nid as usize);
-                let old_style = doc.get(node_id).get_attr("style").map(|s| s.to_string());
-                let mut parsed = if let Some(style) = old_style.as_deref() {
-                    _parse_style_string(style)
-                } else {
-                    std::collections::HashMap::new()
-                };
-                parsed.remove(&_css_property_key(&prop));
-                let css_text = _serialize_style_map(&parsed);
-                if css_text.is_empty() {
-                    remove_attribute(&mut doc, node_id, "style");
-                } else {
-                    set_attribute(&mut doc, node_id, "style", &css_text);
-                }
-                let new_style = if css_text.is_empty() { None } else { Some(css_text.as_str()) };
-                if old_style.as_deref() != new_style {
-                    record_dom_touch(&touched, node_id);
-                }
-                dirty.store(true, Ordering::Relaxed);
-            }
-        });
-        // No `_lumen_has_style_property` here any more (BUG-387): `has()` is
-        // now `get() !== undefined` on both maps, which is what §6.1 says it
-        // means and keeps the two answers from ever disagreeing. The old native
-        // answered a `contains_key` over the inline attribute and was reachable
-        // from the inline map only — exactly the kind of second reader this bug
-        // was about.
-        //
-        // Declarations of the inline `style=""` attribute, as a JSON array of
-        // `[property, value]` pairs sorted by property name — the iteration
-        // source of `attributeStyleMap`. Used to return the literal `"[]"`
-        // (BUG-387): the map's `entries()`/`keys()`/`values()` were dead, and
-        // dead in a way that threw, since the JS shim called `.entries()` on
-        // that *string*.
-        let d = Arc::clone(&doc);
-        reg!("_lumen_get_style_entries", move |nid: u32| -> String {
-            let mut pairs: Vec<(String, String)> = Vec::new();
-            if let Ok(doc) = d.lock() {
-                let node = doc.get(NodeId::from_index(nid as usize));
-                if let Some(style_attr) = node.get_attr("style") {
-                    pairs = _parse_style_string(style_attr).into_iter().collect();
-                }
-            }
-            _style_entries_to_json(pairs)
-        });
-        // Iteration source of `computedStyleMap()`: the resolved cascade, i.e.
-        // exactly what `getComputedStyle` answers from — standard properties
-        // plus this node's resolved custom properties (BUG-732 keeps the latter
-        // in their own `Arc`-shared map, so they are merged here rather than
-        // stored per node).
-        let cs = Arc::clone(&computed_styles);
-        let cp = Arc::clone(&custom_properties);
-        reg!("_lumen_get_computed_style_entries", move |nid: u32| -> String {
-            let mut pairs: Vec<(String, String)> = Vec::new();
-            if let Ok(map) = cs.lock()
-                && let Some(m) = map.get(&nid)
-            {
-                pairs.extend(m.iter().map(|(k, v)| (k.clone(), v.clone())));
-            }
-            if let Ok(map) = cp.lock()
-                && let Some(m) = map.get(&nid)
-            {
-                // A custom property that could not be resolved is published
-                // with an empty value (guaranteed-invalid); the Typed OM map
-                // has nothing to hand out for it, so it is not an entry.
-                pairs.extend(
-                    m.iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| (k.clone(), v.clone())),
-                );
-            }
-            _style_entries_to_json(pairs)
-        });
-    }
+    install::install_crypto_and_typed_om(
+        scope,
+        ctx,
+        store,
+        Arc::clone(&doc),
+        Arc::clone(&dom_dirty),
+        Arc::clone(&dom_touched),
+        Arc::clone(&computed_styles),
+        Arc::clone(&custom_properties),
+    )?;
 
 
             // Inject the page URL + cross-origin-isolation state as JS globals so
