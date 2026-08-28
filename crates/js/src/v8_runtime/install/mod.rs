@@ -17,9 +17,13 @@
 //! due to macro hygiene». Работающая форма — контекст параметрами: площадка
 //! получила приставку `scope, ctx, store,`, тела ветвей не редактировались.
 
+mod dom_core;
+mod net;
 mod platform;
 mod storage;
 
+pub(super) use dom_core::*;
+pub(super) use net::*;
 pub(super) use platform::*;
 pub(super) use storage::*;
 
