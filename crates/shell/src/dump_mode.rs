@@ -601,7 +601,13 @@ pub(crate) fn run_dump(
         DumpKind::DisplayList => {
             let vp = dump_vp;
             let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, lumen_core::ColorSpace::Srgb, false)?;
-            let dl = paint_ordered(&parsed.layout);
+            let mut dl = paint_ordered(&parsed.layout);
+            // BUG-480 срез 14: дамп обязан показывать то же, что попадёт на
+            // экран, — окно вклеивает содержимое под-документов в список
+            // страницы (`Lumen::set_display_list`), и без этой строки дамп
+            // остался бы единственным местом, где `<iframe>` — серая заглушка.
+            // Это же и единственный headless-способ проверить сам срез.
+            crate::frames::splice_frame_content(&mut dl, &parsed.frames);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
         }

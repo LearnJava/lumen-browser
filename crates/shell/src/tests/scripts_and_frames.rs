@@ -401,7 +401,7 @@ fn frame_access_url_parent_to_file_child_denied() {
     assert!(!frame_access_allowed(&u, "file://D:/x.html", false));
 }
 
-// ── host_content_size (BUG-480 срез 13) ──────────────────────────────────────
+// ── host_content_rect (BUG-480 срезы 13/14) ─────────────────────────────────
 
 /// Вьюпорт под-документа — КОНТЕНТНЫЙ бокс хоста, а не его `rect`
 /// (border-бокс): `<iframe width=400 height=200>` с рамкой и padding должен
@@ -410,6 +410,10 @@ fn frame_access_url_parent_to_file_child_denied() {
 /// Второй ассерт на `rect` не декоративный: без него тест прошёл бы и в том
 /// случае, если бы вычитание рамок вовсе не выполнялось, а атрибуты
 /// резолвились как border-бокс.
+///
+/// Третий — про НАЧАЛО прямоугольника, а не про размер (срез 14): по нему
+/// вклеивается display list ребёнка, и сдвиг на рамку+padding здесь означал бы
+/// содержимое фрейма, нарисованное поверх его собственной рамки.
 #[test]
 fn frame_host_content_size_is_content_box_not_border_box() {
     let doc = lumen_html_parser::parse(
@@ -426,16 +430,164 @@ fn frame_host_content_size_is_content_box_not_border_box() {
         lumen_layout::layout_measured(&doc, &sheet, Size::new(1024.0, 720.0), &measurer);
     let host = crate::forms::find_layout_box(&layout, infos[0].node).expect("бокс <iframe>");
 
-    let size = crate::frames::host_content_size(host);
+    let content = crate::frames::host_content_rect(host);
     assert!(
-        (size.width - 400.0).abs() < 0.5 && (size.height - 200.0).abs() < 0.5,
-        "контентный бокс = атрибуты width/height, получено {size:?}"
+        (content.width - 400.0).abs() < 0.5 && (content.height - 200.0).abs() < 0.5,
+        "контентный бокс = атрибуты width/height, получено {content:?}"
     );
     assert!(
         host.rect.width > 410.0 && host.rect.height > 210.0,
         "border-бокс шире контентного на padding 3+3 и рамку 5+5: {:?}",
         host.rect
     );
+    assert!(
+        (content.x - (host.rect.x + 8.0)).abs() < 0.5
+            && (content.y - (host.rect.y + 8.0)).abs() < 0.5,
+        "начало контентного бокса сдвинуто на рамку 5 + padding 3: {content:?} против {:?}",
+        host.rect
+    );
+}
+
+// ── splice_frame_content (BUG-480 срез 14) ──────────────────────────────────
+
+/// Хэндл фрейма, у которого заполнено ровно то, что читает вклейка: адрес
+/// заглушки (`host_src` + `host_rect`) и содержимое (`content_dl`).
+///
+/// Остальные поля — минимально живые заглушки: под-документ вклейке не нужен,
+/// она работает уже по готовому display list ребёнка.
+fn splice_handle(src: &str, host_rect: Rect, content_dl: DisplayList) -> crate::frames::FrameHandle {
+    crate::frames::FrameHandle {
+        host: NodeId::from_index(0),
+        url: "about:blank".to_owned(),
+        doc: Arc::new(Mutex::new(lumen_html_parser::parse("<html></html>"))),
+        js: None,
+        depth: 0,
+        sheet: lumen_css_parser::Stylesheet::default(),
+        viewport: Size::new(host_rect.width, host_rect.height),
+        parent_doc: None,
+        layout: None,
+        content_dl,
+        host_rect: Some(host_rect),
+        host_src: src.to_owned(),
+    }
+}
+
+/// Страница с одним `<iframe src>`: её display list (с серой заглушкой внутри)
+/// и контентный бокс хоста, посчитанный тем же [`host_content_rect`], которым
+/// пользуется [`sync_frame_viewports`].
+///
+/// Заглушку рисует НАСТОЯЩИЙ эмиттер (`paint_ordered` → ветка `BoxKind::Iframe`),
+/// а не рукописная команда: вклейка ищет её по паре «src + прямоугольник», и
+/// расхождение эмиттера с `host_content_rect` хоть на рамку означало бы, что
+/// поиск не находит ничего и содержимое фрейма молча не рисуется.
+fn page_with_iframe_placeholder(src: &str) -> (DisplayList, Rect) {
+    let html = format!(
+        r#"<html><body style="margin:0"><iframe src="{src}" width="400" height="200"
+             style="border:5px solid black; padding:3px"></iframe></body></html>"#
+    );
+    let doc = lumen_html_parser::parse(&html);
+    let infos = collect_iframes(&doc);
+    assert_eq!(infos.len(), 1);
+    let font = lumen_font::Font::parse(INTER_FONT).unwrap();
+    let measurer = crate::relayout::page_measurer(&font, &[]);
+    let sheet = lumen_css_parser::parse("");
+    let layout = lumen_layout::layout_measured(&doc, &sheet, Size::new(1024.0, 720.0), &measurer);
+    let host = crate::forms::find_layout_box(&layout, infos[0].node).expect("бокс <iframe>");
+    let rect = crate::frames::host_content_rect(host);
+    (paint_ordered(&layout), rect)
+}
+
+/// Позиция команды-заглушки `<iframe>` в списке — по её `src`.
+fn placeholder_at(dl: &DisplayList, src: &str) -> Option<usize> {
+    dl.iter().position(|c| {
+        matches!(c, lumen_paint::DisplayCommand::DrawImage { src: s, .. } if s == src)
+    })
+}
+
+/// Вклейка заменяет серую заглушку содержимым под-документа, обёрнутым в клип
+/// по контентному боксу хоста и сдвиг к его началу.
+///
+/// Сдвиг проверяется по КООРДИНАТАМ, а не по факту наличия `PushTransform`:
+/// список ребёнка начинается от его собственного (0, 0), поэтому ошибка в
+/// смещении рисует содержимое фрейма в углу страницы, а не внутри фрейма.
+#[test]
+fn splice_frame_content_replaces_placeholder_with_child_list() {
+    let (mut dl, host_rect) = page_with_iframe_placeholder("child.html");
+    let at = placeholder_at(&dl, "child.html").expect("эмиттер обязан нарисовать заглушку");
+
+    let marker = Rect::new(0.0, 0.0, 40.0, 20.0);
+    let content = vec![lumen_paint::DisplayCommand::FillRect {
+        rect: marker,
+        color: lumen_layout::Color { r: 1, g: 2, b: 3, a: 255 },
+    }];
+    let frames = vec![splice_handle("child.html", host_rect, content)];
+    crate::frames::splice_frame_content(&mut dl, &frames);
+
+    assert!(
+        placeholder_at(&dl, "child.html").is_none(),
+        "заглушка обязана исчезнуть — иначе поверх содержимого остаётся серый прямоугольник"
+    );
+    match &dl[at] {
+        lumen_paint::DisplayCommand::PushClipRect { rect } => assert!(
+            (rect.x - host_rect.x).abs() < 0.01 && (rect.width - host_rect.width).abs() < 0.01,
+            "клип = контентный бокс хоста: {rect:?} против {host_rect:?}"
+        ),
+        other => panic!("на месте заглушки ожидался PushClipRect, получено {other:?}"),
+    }
+    match &dl[at + 1] {
+        lumen_paint::DisplayCommand::PushTransform { matrix } => {
+            let expected = lumen_layout::Mat4::translation_2d(host_rect.x, host_rect.y);
+            assert_eq!(
+                matrix.0, expected.0,
+                "сдвиг = начало контентного бокса, иначе содержимое рисуется мимо фрейма"
+            );
+        }
+        other => panic!("после клипа ожидался PushTransform, получено {other:?}"),
+    }
+    assert!(
+        matches!(&dl[at + 2], lumen_paint::DisplayCommand::FillRect { rect, .. } if *rect == marker),
+        "содержимое ребёнка идёт в его СОБСТВЕННЫХ координатах, без предварительного сдвига"
+    );
+    assert!(matches!(&dl[at + 3], lumen_paint::DisplayCommand::PopTransform));
+    assert!(matches!(&dl[at + 4], lumen_paint::DisplayCommand::PopClip));
+}
+
+/// Повторный проход по уже склеенному списку ничего не делает.
+///
+/// Не декоративно: [`Lumen::set_display_list`] вызывается и на путях, где
+/// список уже прошёл через вклейку (кэш, повторная запись того же списка), а
+/// вторая вклейка означала бы содержимое фрейма, вложенное само в себя.
+#[test]
+fn splice_frame_content_is_idempotent() {
+    let (mut dl, host_rect) = page_with_iframe_placeholder("child.html");
+    let content = vec![lumen_paint::DisplayCommand::FillRect {
+        rect: Rect::new(0.0, 0.0, 40.0, 20.0),
+        color: lumen_layout::Color { r: 1, g: 2, b: 3, a: 255 },
+    }];
+    let frames = vec![splice_handle("child.html", host_rect, content)];
+    crate::frames::splice_frame_content(&mut dl, &frames);
+    let after_first = dl.len();
+    crate::frames::splice_frame_content(&mut dl, &frames);
+    assert_eq!(after_first, dl.len(), "вторая вклейка обязана быть no-op");
+}
+
+/// Заглушка ищется по ПАРЕ «src + прямоугольник»: совпадения одного `src` мало.
+///
+/// Два `<iframe src="">` на странице — обычное дело, и склеить содержимое
+/// первого в бокс второго хуже, чем не склеить вовсе.
+#[test]
+fn splice_frame_content_needs_matching_rect_not_just_src() {
+    let (mut dl, host_rect) = page_with_iframe_placeholder("child.html");
+    let before = dl.clone();
+    let moved = Rect::new(host_rect.x + 50.0, host_rect.y, host_rect.width, host_rect.height);
+    let content = vec![lumen_paint::DisplayCommand::FillRect {
+        rect: Rect::new(0.0, 0.0, 40.0, 20.0),
+        color: lumen_layout::Color { r: 1, g: 2, b: 3, a: 255 },
+    }];
+    let frames = vec![splice_handle("child.html", moved, content)];
+    crate::frames::splice_frame_content(&mut dl, &frames);
+    assert_eq!(before.len(), dl.len(), "чужой бокс — не наша заглушка, список не трогаем");
+    assert!(placeholder_at(&dl, "child.html").is_some());
 }
 
 // в”Ђв”Ђ PH1-2: Progressive streaming pipeline в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
