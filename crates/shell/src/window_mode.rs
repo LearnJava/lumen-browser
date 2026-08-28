@@ -270,6 +270,7 @@ pub(crate) fn run_window_mode(
         cursor_position: None,
         pending_pointer_moves: Vec::new(),
         hovered_nid: None,
+        hovered_frame: None,
         active_nid: None,
         scroll_drag: None,
         scroll_anim: None,

@@ -42,6 +42,78 @@ impl Lumen {
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
+    /// Что под точкой ОКНА: узел страницы, и — если точка попала в содержимое
+    /// `<iframe>` — узел под-документа (BUG-480 срез 16).
+    ///
+    /// Один вызов на оба ответа: hit-тест страницы стоит обхода её layout, а
+    /// спрашивают на каждом движении мыши. Страница без фреймов идёт прежним
+    /// путём и не платит ничего сверх своего hit-теста.
+    pub(crate) fn pointer_target(&self, x_css: f32, y_css: f32) -> frames::PointerTarget {
+        let (page_x, page_y) = self.page_point(x_css, y_css);
+        let Some(lb) = self.layout_box.as_ref() else {
+            return frames::PointerTarget { page: None, frame: None };
+        };
+        let point = Point::new(page_x, page_y);
+        if self.frames.is_empty() {
+            return frames::PointerTarget { page: hit_test(point, lb), frame: None };
+        }
+        frames::pointer_target(&self.frames, lb, point)
+    }
+
+    /// Отправить `MouseEvent` в JS ПОД-ДОКУМЕНТА фрейма (BUG-480 срез 16).
+    ///
+    /// Координаты — уже в системе ребёнка: `clientX`/`clientY` его скрипта
+    /// отсчитываются от его собственного вьюпорта, а не от окна браузера.
+    ///
+    /// Прямой вызов вместо `route_eval_js`: хэндлы фреймов живут только на
+    /// UI-стороне (в `EngineJsState` их нет), а `V8PersistentJs` сам
+    /// тунеллирует на свой JS-поток (ADR-014) — как и памп фреймов в
+    /// `about_to_wait`.
+    #[cfg(feature = "v8")]
+    pub(crate) fn frame_mouse_event(
+        &self,
+        frame: usize,
+        nid: u32,
+        event_type: &str,
+        at: (f32, f32),
+        buttons: (u8, u8),
+    ) {
+        self.frame_input_event("_lumen_dispatch_mouse_event", frame, nid, event_type, at, buttons);
+    }
+
+    /// То же для `PointerEvent` внутри фрейма (BUG-480 срез 16).
+    #[cfg(feature = "v8")]
+    pub(crate) fn frame_pointer_event(
+        &self,
+        frame: usize,
+        nid: u32,
+        event_type: &str,
+        at: (f32, f32),
+        buttons: (u8, u8),
+    ) {
+        self.frame_input_event("_lumen_dispatch_pointer_event", frame, nid, event_type, at, buttons);
+    }
+
+    /// Общее тело двух предыдущих: `buttons` — пара `(button, buttons)` спеки
+    /// UI Events, `at` — точка в системе РЕБЁНКА.
+    #[cfg(feature = "v8")]
+    fn frame_input_event(
+        &self,
+        native: &str,
+        frame: usize,
+        nid: u32,
+        event_type: &str,
+        at: (f32, f32),
+        buttons: (u8, u8),
+    ) {
+        let Some(js) = self.frames.get(frame).and_then(|h| h.js.as_ref()) else { return };
+        js.eval_js(&format!(
+            "{}({}, '{}', {}, {}, {}, {}, {})",
+            native, nid, event_type, at.0 as i32, at.1 as i32,
+            buttons.0, buttons.1, self.mod_flags(),
+        ));
+    }
+
     /// Dispatch a `PointerEvent` of the given `event_type` to DOM node `nid`.
     ///
     /// Always uses pointerId=1, pointerType='mouse', isPrimary=true (mouse input).
@@ -147,11 +219,20 @@ impl Lumen {
         // the legacy `left_dock()`/`CHROME_H` pair, so `mousemove`/`pointermove`
         // target the element the click will target and the one actually painted
         // under the cursor.
-        let (page_x, page_y) = self.page_point(x_css, y_css);
-        let hit = self.layout_box.as_ref().and_then(|lb| {
-            hit_test(Point::new(page_x, page_y), lb)
-        });
-        if let Some(result) = hit {
+        let target = self.pointer_target(x_css, y_css);
+        // BUG-480 срез 16: движение над содержимым фрейма адресует под-документ.
+        // Родителю такое движение не принадлежит вовсе, поэтому ветка не
+        // дополняет страничную, а заменяет её.
+        if let Some(ft) = target.frame.as_ref() {
+            if let Some(fh) = ft.hit.as_ref() {
+                let nid = fh.node.index() as u32;
+                let at = (ft.local.x, ft.local.y);
+                self.frame_pointer_event(ft.frame, nid, "pointermove", at, (0, 0));
+                self.frame_mouse_event(ft.frame, nid, "mousemove", at, (0, 0));
+            }
+            return;
+        }
+        if let Some(result) = target.page {
             // Pointer Events L3 В§4.1: if a pointer capture is active, redirect
             // pointermove (and all pointer events) to the captured element.
             let hit_nid = result.node.index() as u32;

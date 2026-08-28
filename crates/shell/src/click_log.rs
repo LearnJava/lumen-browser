@@ -118,6 +118,12 @@ pub enum ClickOutcome<'a> {
     LinkNavigate { href: &'a str, resolved: &'a str },
     LinkBlocked(&'a str),
     NoLink,
+    /// BUG-480 срез 16: точка попала в содержимое `<iframe>`, событие ушло в
+    /// под-документ. `node` — узел РЕБЁНКА (`None`: под точкой нет его боксов,
+    /// адресовать некому), `x`/`y` — координаты в системе ребёнка. Без этой
+    /// строки клик внутрь фрейма не оставлял бы в журнале ничего: путь
+    /// страницы обрывается раньше всех остальных исходов.
+    IntoFrame { frame: usize, node: Option<u32>, x: f32, y: f32 },
 }
 
 pub fn log_click(info: &ClickInfo<'_>) {
@@ -144,6 +150,10 @@ pub fn log_click(info: &ClickInfo<'_>) {
             format!("navigate  href=\"{href}\"  resolved=\"{resolved}\""),
         ClickOutcome::LinkBlocked(h)  => format!("blocked (javascript:/mailto:)  href=\"{h}\""),
         ClickOutcome::NoLink          => "no <a href> ancestor → nothing".to_owned(),
+        ClickOutcome::IntoFrame { frame, node, x, y } => match node {
+            Some(n) => format!("into frame #{frame}  node={n}  child=({x:.0}, {y:.0})"),
+            None => format!("into frame #{frame}  no box under point  child=({x:.0}, {y:.0})"),
+        },
     };
     detail(&format!("→ {outcome_str}"));
 }

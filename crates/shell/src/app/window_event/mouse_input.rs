@@ -182,6 +182,21 @@ impl Lumen {
                 self.js_pointer_event(nid, "pointerdown", x_css, y_css, 0, 1);
                 self.js_mouse_event(nid, "mousedown", x_css, y_css, 0, 1);
             }
+            // BUG-480 срез 16: курсор над содержимым фрейма — нажатие
+            // принадлежит под-документу. Ветка исключающая: пока `hovered_frame`
+            // непуст, `hovered_nid` пуст по построению, так что двух нажатий
+            // сразу не бывает.
+            #[cfg(feature = "v8")]
+            if let Some((f, n)) = self.hovered_frame {
+                self.flush_pointer_moves();
+                let at = self
+                    .pointer_target(x_css, y_css)
+                    .frame
+                    .map_or((0.0, 0.0), |t| (t.local.x, t.local.y));
+                let nid = n.index() as u32;
+                self.frame_pointer_event(f, nid, "pointerdown", at, (0, 1));
+                self.frame_mouse_event(f, nid, "mousedown", at, (0, 1));
+            }
 
             // HTML5 DnD (PH3-9 / HTML LS В§9.3.3): start candidate when the
             // pressed element is draggable.  Drag does not activate until the
@@ -911,6 +926,25 @@ impl Lumen {
                 {
                     self.js_capture_event(cap_nid, "lostpointercapture");
                 }
+            }
+            // BUG-480 срез 16: отпускание над содержимым фрейма — парная
+            // ветка к `pointerdown`/`mousedown` выше. Захват указателя
+            // (`pointer_capture_nid`) читается только у страницы: у фрейма
+            // свой контекст, и его захват — отдельный срез очереди.
+            #[cfg(feature = "v8")]
+            if let (Some((f, n)), Some(pos)) = (self.hovered_frame, self.cursor_position) {
+                self.flush_pointer_moves();
+                let dpr = self.renderer.as_ref()
+                    .map_or(1.0_f32, |r| r.scale_factor() as f32).max(1e-6);
+                let xu = (pos.x as f32) / dpr;
+                let yu = (pos.y as f32) / dpr;
+                let at = self
+                    .pointer_target(xu, yu)
+                    .frame
+                    .map_or((0.0, 0.0), |t| (t.local.x, t.local.y));
+                let nid = n.index() as u32;
+                self.frame_pointer_event(f, nid, "pointerup", at, (0, 0));
+                self.frame_mouse_event(f, nid, "mouseup", at, (0, 0));
             }
             // HTML5 DnD (PH3-9): fire drop + dragend on release.
             #[cfg(feature = "v8")]

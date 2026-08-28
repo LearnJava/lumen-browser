@@ -296,6 +296,23 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.relayout_chrome();
                     self.request_redraw();
                 }
+                // BUG-480 срез 16: то же для курсора, ушедшего из окна ПОВЕРХ
+                // фрейма — иначе под-документ навсегда остался бы «под
+                // курсором», и следующий вход послал бы ему второй `mouseover`
+                // без парного `mouseout`.
+                #[cfg(feature = "v8")]
+                if let Some((f, n)) = self.hovered_frame.take() {
+                    self.flush_pointer_moves();
+                    let nid = n.index() as u32;
+                    self.frame_pointer_event(f, nid, "pointerout",   (0.0, 0.0), (0, 0));
+                    self.frame_mouse_event(f,   nid, "mouseout",     (0.0, 0.0), (0, 0));
+                    self.frame_pointer_event(f, nid, "pointerleave", (0.0, 0.0), (0, 0));
+                    self.frame_mouse_event(f,   nid, "mouseleave",   (0.0, 0.0), (0, 0));
+                }
+                #[cfg(not(feature = "v8"))]
+                {
+                    self.hovered_frame = None;
+                }
                 self.gesture.cancel();
                 // Р”СЂР°Рі РїСЂРѕРґРѕР»Р¶Р°РµС‚СЃСЏ РґР°Р¶Рµ РєРѕРіРґР° РєСѓСЂСЃРѕСЂ РІС‹С€РµР» РёР· РѕРєРЅР° вЂ” winit
                 // РїСЂРѕРґРѕР»Р¶РёС‚ СЃР»Р°С‚СЊ CursorMoved-СЃРѕР±С‹С‚РёСЏ Р·Р° РїСЂРµРґРµР»Р°РјРё client area,

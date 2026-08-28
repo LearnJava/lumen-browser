@@ -639,6 +639,200 @@ fn rekey_frame_images_rewrites_own_images_and_spares_nested_placeholder() {
     assert_eq!(srcs[2], "other.png", "чего нет в карте — не трогаем");
 }
 
+// ── pointer_target (BUG-480 срез 16) ───────────────────────────────────────
+
+/// Разметка → (документ, его layout на `size`).
+fn laid_out(html: &str, size: Size) -> (Document, lumen_layout::LayoutBox) {
+    let doc = lumen_html_parser::parse(html);
+    let font = lumen_font::Font::parse(INTER_FONT).unwrap();
+    let measurer = crate::relayout::page_measurer(&font, &[]);
+    let sheet = lumen_css_parser::parse("");
+    let layout = lumen_layout::layout_measured(&doc, &sheet, size, &measurer);
+    (doc, layout)
+}
+
+/// Страница с одним `<iframe>` в известном месте и ребёнок с одной цветной
+/// плашкой в своём левом верхнем углу: layout страницы, готовый хэндл фрейма и
+/// `NodeId` плашки ребёнка.
+///
+/// Хост-бокс считается тем же [`host_content_rect`], которым его считает
+/// [`sync_frame_viewports`]: тест о переводе координат, и своя арифметика
+/// прямоугольника проверяла бы сама себя.
+fn page_with_live_frame() -> (lumen_layout::LayoutBox, crate::frames::FrameHandle, NodeId) {
+    let (page_doc, page_layout) = laid_out(
+        r#"<html><body style="margin:0">
+             <iframe src="c.html" width="300" height="200"
+                     style="border:0;position:absolute;left:40px;top:120px"></iframe>
+           </body></html>"#,
+        Size::new(1024.0, 720.0),
+    );
+    let infos = collect_iframes(&page_doc);
+    assert_eq!(infos.len(), 1);
+    let host_box =
+        crate::forms::find_layout_box(&page_layout, infos[0].node).expect("бокс <iframe>");
+    let host_rect = crate::frames::host_content_rect(host_box);
+
+    let (child_doc, child_layout) = laid_out(
+        r#"<html><body style="margin:0"><div id="t"
+             style="position:absolute;left:0;top:0;width:200px;height:100px;background:#f00">
+           </div></body></html>"#,
+        Size::new(host_rect.width, host_rect.height),
+    );
+    let target = child_doc.find_by_id("t").expect("плашка ребёнка");
+
+    let mut handle = splice_handle("c.html", host_rect, Vec::new());
+    handle.host = infos[0].node;
+    handle.doc = Arc::new(Mutex::new(child_doc));
+    handle.layout = Some(child_layout);
+    (page_layout, handle, target)
+}
+
+/// Точка внутри содержимого фрейма адресует УЗЕЛ РЕБЁНКА, а координаты
+/// пересчитываются в его систему.
+///
+/// Проверяются оба: узел без координат означал бы событие, пришедшее верному
+/// слушателю с `clientX`/`clientY` от чужого вьюпорта, а координаты без узла —
+/// событие, ушедшее не туда. `page` при этом остаётся host-элементом: именно
+/// его фокусирует родитель.
+#[test]
+fn pointer_target_inside_frame_maps_to_child_node_and_local_point() {
+    let (page_layout, handle, child_node) = page_with_live_frame();
+    let host = handle.host;
+    let frames = vec![handle];
+
+    let t = crate::frames::pointer_target(&frames, &page_layout, Point::new(100.0, 150.0));
+    let hit = t.frame.expect("точка внутри фрейма");
+    assert_eq!(hit.frame, 0);
+    assert_eq!(hit.hit.map(|h| h.node), Some(child_node), "узел РЕБЁНКА");
+    assert!(
+        (hit.local.x - 60.0).abs() < 0.5 && (hit.local.y - 30.0).abs() < 0.5,
+        "координаты в системе ребёнка: {:?}",
+        hit.local
+    );
+    assert_eq!(t.page.map(|h| h.node), Some(host), "у страницы под точкой — сам <iframe>");
+}
+
+/// Точка рядом с фреймом — обычный путь страницы, `frame` пуст.
+#[test]
+fn pointer_target_outside_frame_stays_on_page() {
+    let (page_layout, handle, _) = page_with_live_frame();
+    let frames = vec![handle];
+    let t = crate::frames::pointer_target(&frames, &page_layout, Point::new(10.0, 10.0));
+    assert!(t.frame.is_none(), "выше и левее фрейма — страница");
+    assert!(t.page.is_some());
+}
+
+/// Хэндл без посчитанного layout (первый кадр до `sync_frame_viewports`) не
+/// забирает событие себе: адресовать в под-документе всё равно нечего, а
+/// проглоченный клик выглядел бы как мёртвая страница.
+#[test]
+fn pointer_target_frame_without_layout_stays_on_page() {
+    let (page_layout, mut handle, _) = page_with_live_frame();
+    handle.layout = None;
+    let frames = vec![handle];
+    let t = crate::frames::pointer_target(&frames, &page_layout, Point::new(100.0, 150.0));
+    assert!(t.frame.is_none());
+}
+
+/// Попадание в САМ host-бокс мимо его контентной части (рамка `<iframe>`) —
+/// это элемент родителя, а не под-документ: `host_rect` вычитает рамку и
+/// padding, и точка на рамке в него не попадает.
+#[test]
+fn pointer_target_on_host_border_stays_on_page() {
+    let (page_doc, page_layout) = laid_out(
+        r#"<html><body style="margin:0">
+             <iframe src="c.html" width="300" height="200"
+                     style="border:10px solid black;position:absolute;left:40px;top:120px"></iframe>
+           </body></html>"#,
+        Size::new(1024.0, 720.0),
+    );
+    let infos = collect_iframes(&page_doc);
+    let host_box =
+        crate::forms::find_layout_box(&page_layout, infos[0].node).expect("бокс <iframe>");
+    let host_rect = crate::frames::host_content_rect(host_box);
+    let (child_doc, child_layout) = laid_out(
+        r#"<html><body style="margin:0"><div style="width:200px;height:100px;background:#f00">
+           </div></body></html>"#,
+        Size::new(host_rect.width, host_rect.height),
+    );
+    let mut handle = splice_handle("c.html", host_rect, Vec::new());
+    handle.host = infos[0].node;
+    handle.doc = Arc::new(Mutex::new(child_doc));
+    handle.layout = Some(child_layout);
+    let frames = vec![handle];
+
+    // (45, 125) — внутри border-бокса, но на рамке шириной 10.
+    let t = crate::frames::pointer_target(&frames, &page_layout, Point::new(45.0, 125.0));
+    assert!(t.frame.is_none(), "рамка хоста принадлежит родителю");
+    // На 10 пикселей глубже — уже содержимое.
+    let t = crate::frames::pointer_target(&frames, &page_layout, Point::new(60.0, 140.0));
+    assert!(t.frame.is_some(), "контентная часть — под-документ");
+}
+
+/// Спуск идёт до САМОГО ГЛУБОКОГО фрейма, и координаты складываются по всей
+/// цепочке. Кандидат ищется по паре «host-узел + документ-хозяин»: `NodeId`
+/// уникален лишь внутри своего документа, и здесь индексы узлов страницы и
+/// под-документа заведомо пересекаются.
+#[test]
+fn pointer_target_descends_into_nested_frame() {
+    let (page_doc, page_layout) = laid_out(
+        r#"<html><body style="margin:0">
+             <iframe src="c.html" width="400" height="300"
+                     style="border:0;position:absolute;left:40px;top:120px"></iframe>
+           </body></html>"#,
+        Size::new(1024.0, 720.0),
+    );
+    let outer_host = collect_iframes(&page_doc)[0].node;
+    let outer_rect = crate::frames::host_content_rect(
+        crate::forms::find_layout_box(&page_layout, outer_host).expect("бокс <iframe>"),
+    );
+
+    // Ребёнок сам держит `<iframe>` со сдвигом (20, 30) в своей системе.
+    let (mid_doc, mid_layout) = laid_out(
+        r#"<html><body style="margin:0">
+             <iframe src="g.html" width="200" height="150"
+                     style="border:0;position:absolute;left:20px;top:30px"></iframe>
+           </body></html>"#,
+        Size::new(outer_rect.width, outer_rect.height),
+    );
+    let inner_host = collect_iframes(&mid_doc)[0].node;
+    let inner_rect = crate::frames::host_content_rect(
+        crate::forms::find_layout_box(&mid_layout, inner_host).expect("бокс вложенного <iframe>"),
+    );
+
+    let (leaf_doc, leaf_layout) = laid_out(
+        r#"<html><body style="margin:0"><div id="t"
+             style="position:absolute;left:0;top:0;width:200px;height:150px;background:#00f">
+           </div></body></html>"#,
+        Size::new(inner_rect.width, inner_rect.height),
+    );
+    let leaf_node = leaf_doc.find_by_id("t").expect("плашка внука");
+
+    let mut mid = splice_handle("c.html", outer_rect, Vec::new());
+    mid.host = outer_host;
+    mid.doc = Arc::new(Mutex::new(mid_doc));
+    mid.layout = Some(mid_layout);
+
+    let mut leaf = splice_handle("g.html", inner_rect, Vec::new());
+    leaf.host = inner_host;
+    leaf.depth = 1;
+    leaf.parent_doc = Some(Arc::clone(&mid.doc));
+    leaf.doc = Arc::new(Mutex::new(leaf_doc));
+    leaf.layout = Some(leaf_layout);
+    let frames = vec![mid, leaf];
+
+    // (40+20+5, 120+30+7) — пять и семь пикселей вглубь содержимого внука.
+    let t = crate::frames::pointer_target(&frames, &page_layout, Point::new(65.0, 157.0));
+    let hit = t.frame.expect("точка внутри внука");
+    assert_eq!(hit.frame, 1, "самый глубокий фрейм, а не первый попавшийся");
+    assert_eq!(hit.hit.map(|h| h.node), Some(leaf_node));
+    assert!(
+        (hit.local.x - 5.0).abs() < 0.5 && (hit.local.y - 7.0).abs() < 0.5,
+        "координаты сложены по всей цепочке: {:?}",
+        hit.local
+    );
+}
+
 // в”Ђв”Ђ PH1-2: Progressive streaming pipeline в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 // Compile-time: streaming throttle must be в‰¤16 ms (~60 Hz).
