@@ -590,6 +590,21 @@ pub(crate) fn sync_frame_viewports(frames: &mut [FrameHandle], page_layout: &lum
         }
     }
     rebuild_frame_display_lists(frames, &relaid);
+    // Срез 17: прокрутка ребёнка могла оказаться за новым пределом — его
+    // содержимое стало ниже или вьюпорт выше. Зажим именно здесь: предел
+    // считается по ГОТОВОМУ display list, а он пересобран строкой выше.
+    for h in frames.iter_mut() {
+        let max = frame_max_scroll(h);
+        if h.scroll_y <= max {
+            continue;
+        }
+        h.scroll_y = max;
+        if let Some(js) = h.js.as_ref()
+            && js.set_page_scroll_y(max)
+        {
+            js.fire_window_scroll();
+        }
+    }
 }
 
 /// Пересобрать display list под-документов, чьё содержимое изменилось
@@ -688,10 +703,16 @@ pub(crate) struct FramePointerHit {
     /// Индекс хэндла в `Lumen::frames` — самого глубокого фрейма, накрывшего
     /// точку.
     pub(crate) frame: usize,
-    /// Та же точка в координатах под-документа этого фрейма: и система, в
-    /// которой валиден [`Self::hit`], и `clientX`/`clientY` события для
-    /// скриптов ребёнка.
-    pub(crate) local: Point,
+    /// Та же точка в координатах ВЬЮПОРТА под-документа — `clientX`/`clientY`
+    /// события для скриптов ребёнка (CSSOM-View §10: отсчёт от левого верхнего
+    /// угла окна просмотра, а не документа).
+    ///
+    /// Со срезом 17 это уже НЕ та система, в которой ищется [`Self::hit`]:
+    /// hit-тест идёт по layout, который о прокрутке не знает (её применяет
+    /// вклейка), поэтому там к точке прибавляется `scroll_y`, а наружу отдаётся
+    /// вьюпортная. Пока фрейм не прокручен, оба ответа совпадают — потому срез
+    /// 16 и обходился одним полем.
+    pub(crate) client: Point,
     /// Hit-тест точки в layout под-документа. `None` — под точкой нет ни
     /// одного бокса ребёнка: событие всё равно принадлежит фрейму (родитель
     /// его не увидит), но адресовать его в под-документе некому.
@@ -763,10 +784,14 @@ pub(crate) fn pointer_target(
             }
             return PointerTarget { page: page_hit, frame: best };
         };
-        cur_pt = Point::new(cur_pt.x - rect.x, cur_pt.y - rect.y);
+        // Срез 17: та же прокрутка, что сдвигает содержимое при вклейке —
+        // иначе клик по видимому блоку попадал бы в тот, что был на этом
+        // месте до прокрутки.
+        let client = Point::new(cur_pt.x - rect.x, cur_pt.y - rect.y);
+        cur_pt = Point::new(client.x, client.y + frames[i].scroll_y);
         cur_layout = layout;
         cur_doc = Some(&frames[i].doc);
-        best = Some(FramePointerHit { frame: i, local: cur_pt, hit: None });
+        best = Some(FramePointerHit { frame: i, client, hit: None });
     }
     PointerTarget { page: page_hit, frame: best }
 }
@@ -812,6 +837,9 @@ fn splice_children_of(dl: &mut DisplayList, frames: &[FrameHandle], parent: usiz
 /// Координаты ребёнка начинаются от его собственного (0, 0), поэтому вокруг
 /// содержимого встают `PushClipRect` (в системе координат родителя — клип
 /// применяется ДО трансформы) и `PushTransform` на смещение к боксу.
+///
+/// Прокрутка под-документа (срез 17) входит в ЭТО смещение, а не в клип:
+/// клип — это окно фрейма на странице, оно на месте, а уезжает содержимое.
 fn splice_one_frame(dl: &mut DisplayList, h: &FrameHandle) {
     let Some(rect) = h.host_rect else { return };
     if h.content_dl.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
@@ -832,7 +860,7 @@ fn splice_one_frame(dl: &mut DisplayList, h: &FrameHandle) {
     let mut wrapped: DisplayList = Vec::with_capacity(h.content_dl.len() + 4);
     wrapped.push(DisplayCommand::PushClipRect { rect });
     wrapped.push(DisplayCommand::PushTransform {
-        matrix: lumen_layout::Mat4::translation_2d(rect.x, rect.y),
+        matrix: lumen_layout::Mat4::translation_2d(rect.x, rect.y - h.scroll_y),
     });
     wrapped.extend(h.content_dl.iter().cloned());
     wrapped.push(DisplayCommand::PopTransform);
@@ -1092,6 +1120,7 @@ pub(crate) fn load_frame_sub_documents(
             host_src: info.src.clone().unwrap_or_default(),
             images: subresources.decoded_images,
             image_keys: subresources.image_keys,
+            scroll_y: 0.0,
         });
     }
     handles
@@ -1167,6 +1196,50 @@ pub(crate) struct FrameHandle {
     /// `(сырой src, ключ регистрации)` картинок под-документа — карта для
     /// [`rekey_frame_images`] (BUG-480 срез 15).
     pub(crate) image_keys: Vec<(String, String)>,
+    /// Прокрутка под-документа по вертикали, CSS px (BUG-480 срез 17).
+    ///
+    /// Читают три разных места, и все три обязаны читать ОДНО поле, иначе
+    /// пиксели, hit-тест и `window.scrollY` ребёнка разойдутся:
+    /// [`splice_one_frame`] сдвигает содержимое, [`pointer_target`] — точку
+    /// спуска, а шелл — позицию в JS-контексте ребёнка.
+    ///
+    /// Горизонтали нет: у под-документа нет ни своей полосы прокрутки, ни
+    /// `window.scrollX` (у страницы он тоже захардкожен в 0), а колесо вбок
+    /// над фреймом уходит странице.
+    pub(crate) scroll_y: f32,
+}
+
+// ── скролл под-документа (BUG-480 срез 17) ──────────────────────────────────
+
+/// Предел прокрутки под-документа: насколько его содержимое выше вьюпорта.
+///
+/// Высота берётся из ГОТОВОГО display list ребёнка — тем же правилом, что и у
+/// страницы ([`content_height_of`]), а не из layout-дерева: у страницы
+/// «прокручивается ровно то, что нарисовано» (пустой распорка без фона не даёт
+/// прокрутки — известная ловушка, см. CLAUDE.md), и разойтись этим двум
+/// ответам внутри одного движка нельзя.
+pub(crate) fn frame_max_scroll(h: &FrameHandle) -> f32 {
+    if h.content_dl.is_empty() {
+        return 0.0;
+    }
+    (crate::display_list_metrics::content_height_of(&h.content_dl) - h.viewport.height).max(0.0)
+}
+
+/// Прокрутить под-документ фрейма `idx` в АБСОЛЮТНУЮ позицию `y` (с зажимом).
+///
+/// Возвращает новую позицию, если она действительно изменилась, и `None`
+/// иначе — вызывающая сторона по этому ответу решает две разные вещи: слать ли
+/// ребёнку `scroll`/`scrollend` (CSSOM-View §14 — событие принадлежит движению,
+/// а не колесу) и продолжать ли цепочку прокрутки выше по CSS Overscroll
+/// Behavior L1 §3, как это уже делают overflow-контейнеры страницы.
+pub(crate) fn scroll_frame_to(frames: &mut [FrameHandle], idx: usize, y: f32) -> Option<f32> {
+    let max = frame_max_scroll(&frames[idx]);
+    let clamped = y.clamp(0.0, max);
+    if (clamped - frames[idx].scroll_y).abs() <= f32::EPSILON {
+        return None;
+    }
+    frames[idx].scroll_y = clamped;
+    Some(clamped)
 }
 
 /// РњР°РєСЃРёРјР°Р»СЊРЅР°СЏ РіР»СѓР±РёРЅР° РІР»РѕР¶РµРЅРЅРѕСЃС‚Рё С„СЂРµР№РјРѕРІ: СЃС‚СЂР°РЅРёС†Р° (0) в†’ iframe (1) в†’

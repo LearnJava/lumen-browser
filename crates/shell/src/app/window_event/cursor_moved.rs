@@ -280,7 +280,7 @@ impl Lumen {
                 }
                 if let (Some((f, n)), Some(t)) = (new_hovered_frame, frame_target.as_ref()) {
                     let nid = n.index() as u32;
-                    let at = (t.local.x, t.local.y);
+                    let at = (t.client.x, t.client.y);
                     self.frame_pointer_event(f, nid, "pointerover", at, (0, 0));
                     self.frame_mouse_event(f, nid, "mouseover", at, (0, 0));
                     self.frame_pointer_event(f, nid, "pointerenter", at, (0, 0));

@@ -471,6 +471,7 @@ fn splice_handle(src: &str, host_rect: Rect, content_dl: DisplayList) -> crate::
         host_src: src.to_owned(),
         images: Vec::new(),
         image_keys: Vec::new(),
+        scroll_y: 0.0,
     }
 }
 
@@ -705,9 +706,9 @@ fn pointer_target_inside_frame_maps_to_child_node_and_local_point() {
     assert_eq!(hit.frame, 0);
     assert_eq!(hit.hit.map(|h| h.node), Some(child_node), "узел РЕБЁНКА");
     assert!(
-        (hit.local.x - 60.0).abs() < 0.5 && (hit.local.y - 30.0).abs() < 0.5,
+        (hit.client.x - 60.0).abs() < 0.5 && (hit.client.y - 30.0).abs() < 0.5,
         "координаты в системе ребёнка: {:?}",
-        hit.local
+        hit.client
     );
     assert_eq!(t.page.map(|h| h.node), Some(host), "у страницы под точкой — сам <iframe>");
 }
@@ -827,10 +828,188 @@ fn pointer_target_descends_into_nested_frame() {
     assert_eq!(hit.frame, 1, "самый глубокий фрейм, а не первый попавшийся");
     assert_eq!(hit.hit.map(|h| h.node), Some(leaf_node));
     assert!(
-        (hit.local.x - 5.0).abs() < 0.5 && (hit.local.y - 7.0).abs() < 0.5,
+        (hit.client.x - 5.0).abs() < 0.5 && (hit.client.y - 7.0).abs() < 0.5,
         "координаты сложены по всей цепочке: {:?}",
-        hit.local
+        hit.client
     );
+}
+
+// ── скролл под-документа (BUG-480 срез 17) ──────────────────────────────────
+
+/// Хэндл фрейма 300×200 с содержимым высотой `content_h`.
+fn scrollable_handle(content_h: f32) -> crate::frames::FrameHandle {
+    let host_rect = Rect::new(40.0, 120.0, 300.0, 200.0);
+    let content = vec![lumen_paint::DisplayCommand::FillRect {
+        rect: Rect::new(0.0, 0.0, 300.0, content_h),
+        color: lumen_layout::Color { r: 1, g: 2, b: 3, a: 255 },
+    }];
+    splice_handle("child.html", host_rect, content)
+}
+
+/// Предел прокрутки под-документа = «нарисованное минус вьюпорт», и он не
+/// уходит в минус на содержимом короче вьюпорта.
+///
+/// Высота берётся из display list, а не из layout, ровно как у страницы: два
+/// ответа на один вопрос внутри одного движка разойтись не должны.
+#[test]
+fn frame_max_scroll_is_painted_height_minus_viewport() {
+    assert!((crate::frames::frame_max_scroll(&scrollable_handle(600.0)) - 400.0).abs() < 0.5);
+    assert_eq!(crate::frames::frame_max_scroll(&scrollable_handle(50.0)), 0.0);
+    // Пустой список — фрейм ещё не нарисован: прокручивать нечего.
+    let mut empty = scrollable_handle(600.0);
+    empty.content_dl = Vec::new();
+    assert_eq!(crate::frames::frame_max_scroll(&empty), 0.0);
+}
+
+/// Прокрутка зажимается пределом, а «не сдвинулось» отличается от
+/// «сдвинулось»: на этом ответе держится и отправка `scroll` ребёнку, и
+/// передача остатка колеса странице.
+#[test]
+fn scroll_frame_to_clamps_and_reports_movement() {
+    let mut frames = vec![scrollable_handle(600.0)];
+    assert_eq!(crate::frames::scroll_frame_to(&mut frames, 0, 150.0), Some(150.0));
+    assert_eq!(
+        crate::frames::scroll_frame_to(&mut frames, 0, 150.0),
+        None,
+        "та же позиция — движения нет"
+    );
+    assert_eq!(
+        crate::frames::scroll_frame_to(&mut frames, 0, 9999.0),
+        Some(400.0),
+        "зажим по нижнему краю содержимого"
+    );
+    assert_eq!(
+        crate::frames::scroll_frame_to(&mut frames, 0, 9999.0),
+        None,
+        "у нижнего края колесо фрейм не двигает — остаток уходит странице"
+    );
+    assert_eq!(crate::frames::scroll_frame_to(&mut frames, 0, -50.0), Some(0.0));
+}
+
+/// Прокрутка уезжает в СДВИГ вклейки, а клип остаётся окном фрейма на
+/// странице: клип — это дырка, в которую видно ребёнка, и двигать её нельзя.
+#[test]
+fn splice_frame_content_offsets_child_by_its_scroll() {
+    let (mut dl, host_rect) = page_with_iframe_placeholder("child.html");
+    let at = placeholder_at(&dl, "child.html").expect("заглушка");
+    let mut handle = splice_handle("child.html", host_rect, vec![
+        lumen_paint::DisplayCommand::FillRect {
+            rect: Rect::new(0.0, 0.0, 300.0, 600.0),
+            color: lumen_layout::Color { r: 1, g: 2, b: 3, a: 255 },
+        },
+    ]);
+    handle.scroll_y = 120.0;
+    crate::frames::splice_frame_content(&mut dl, &[handle]);
+
+    match &dl[at] {
+        lumen_paint::DisplayCommand::PushClipRect { rect } => assert!(
+            (rect.y - host_rect.y).abs() < 0.01,
+            "клип не двигается прокруткой ребёнка: {rect:?}"
+        ),
+        other => panic!("ожидался PushClipRect, получено {other:?}"),
+    }
+    match &dl[at + 1] {
+        lumen_paint::DisplayCommand::PushTransform { matrix } => {
+            let expected =
+                lumen_layout::Mat4::translation_2d(host_rect.x, host_rect.y - 120.0);
+            assert_eq!(matrix.0, expected.0, "содержимое уезжает вверх на прокрутку");
+        }
+        other => panic!("ожидался PushTransform, получено {other:?}"),
+    }
+}
+
+/// В прокрученном фрейме hit-тест и координаты события — РАЗНЫЕ системы.
+///
+/// Найдено пробой `verify_frame_scroll.py`, а не постановкой: срез 16 отдавал
+/// одну точку на оба вопроса, и это было верно ровно до появления прокрутки.
+/// Узел ищется в layout, который о прокрутке не знает (её применяет вклейка),
+/// значит точке поиска нужен + `scroll_y`; `clientX`/`clientY` спека
+/// отсчитывает от ВЬЮПОРТА (CSSOM-View §10), значит наружу идёт точка БЕЗ
+/// него. Перепутать их — это либо клик в блок, уехавший с экрана, либо верный
+/// блок с координатами чужой системы; проверяются поэтому оба ответа сразу.
+#[test]
+fn pointer_target_in_scrolled_frame_hits_visible_block_with_viewport_point() {
+    let (page_doc, page_layout) = laid_out(
+        r#"<html><body style="margin:0">
+             <iframe src="c.html" width="300" height="200"
+                     style="border:0;position:absolute;left:40px;top:120px"></iframe>
+           </body></html>"#,
+        Size::new(1024.0, 720.0),
+    );
+    let host = collect_iframes(&page_doc)[0].node;
+    let host_rect = crate::frames::host_content_rect(
+        crate::forms::find_layout_box(&page_layout, host).expect("бокс <iframe>"),
+    );
+    // Ребёнок — стопка из трёх полос по 100: клик в одну и ту же точку окна
+    // обязан менять адресата вместе с прокруткой.
+    let (child_doc, child_layout) = laid_out(
+        r#"<html><body style="margin:0">
+             <div id="a" style="height:100px;background:#f00"></div>
+             <div id="b" style="height:100px;background:#0f0"></div>
+             <div id="c" style="height:100px;background:#00f"></div>
+           </body></html>"#,
+        Size::new(host_rect.width, host_rect.height),
+    );
+    let (a, c) = (
+        child_doc.find_by_id("a").expect("полоса A"),
+        child_doc.find_by_id("c").expect("полоса C"),
+    );
+    let mut handle = splice_handle("c.html", host_rect, Vec::new());
+    handle.host = host;
+    handle.doc = Arc::new(Mutex::new(child_doc));
+    handle.layout = Some(child_layout);
+
+    // Точка (40+60, 120+30) — 30 пикселей вглубь содержимого фрейма.
+    let point = Point::new(100.0, 150.0);
+    let mut frames = vec![handle];
+    let t = crate::frames::pointer_target(&frames, &page_layout, point);
+    let hit = t.frame.expect("точка внутри фрейма");
+    assert_eq!(hit.hit.map(|h| h.node), Some(a), "без прокрутки — первая полоса");
+
+    frames[0].scroll_y = 200.0;
+    let t = crate::frames::pointer_target(&frames, &page_layout, point);
+    let hit = t.frame.expect("точка внутри фрейма");
+    assert_eq!(
+        hit.hit.map(|h| h.node),
+        Some(c),
+        "после прокрутки на 200 под той же точкой окна — третья полоса"
+    );
+    assert!(
+        (hit.client.y - 30.0).abs() < 0.5,
+        "координаты события остаются вьюпортными: {:?}",
+        hit.client
+    );
+}
+
+/// Пересчёт вьюпортов зажимает прокрутку, оказавшуюся за новым пределом:
+/// содержимое ребёнка могло стать ниже, а хост — выше.
+#[test]
+fn sync_frame_viewports_clamps_stale_scroll() {
+    // Содержимое 600 при вьюпорте 200 — предел 400. Список непустой, поэтому
+    // проход его не пересобирает, и предел в тесте настоящий, а не нулевой
+    // (с нулём зажим «до 0» проходил бы и при сломанной арифметике).
+    let tall = vec![lumen_paint::DisplayCommand::FillRect {
+        rect: Rect::new(0.0, 0.0, 300.0, 600.0),
+        color: lumen_layout::Color { r: 1, g: 2, b: 3, a: 255 },
+    }];
+
+    let (page_layout, mut handle, _) = page_with_live_frame();
+    handle.content_dl = tall.clone();
+    handle.scroll_y = 500.0;
+    let mut frames = vec![handle];
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+    assert!(
+        (frames[0].scroll_y - 400.0).abs() < 0.5,
+        "прокрутка за пределом возвращается К КРАЮ содержимого, а не к нулю: {}",
+        frames[0].scroll_y
+    );
+
+    let (page_layout, mut handle, _) = page_with_live_frame();
+    handle.content_dl = tall;
+    handle.scroll_y = 100.0;
+    let mut frames = vec![handle];
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+    assert_eq!(frames[0].scroll_y, 100.0, "прокрутка в пределах — не трогаем");
 }
 
 // в”Ђв”Ђ PH1-2: Progressive streaming pipeline в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ

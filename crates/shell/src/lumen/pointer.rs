@@ -226,7 +226,7 @@ impl Lumen {
         if let Some(ft) = target.frame.as_ref() {
             if let Some(fh) = ft.hit.as_ref() {
                 let nid = fh.node.index() as u32;
-                let at = (ft.local.x, ft.local.y);
+                let at = (ft.client.x, ft.client.y);
                 self.frame_pointer_event(ft.frame, nid, "pointermove", at, (0, 0));
                 self.frame_mouse_event(ft.frame, nid, "mousemove", at, (0, 0));
             }

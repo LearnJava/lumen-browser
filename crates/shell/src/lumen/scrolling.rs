@@ -151,6 +151,73 @@ impl Lumen {
         }
     }
 
+    /// Прокрутить под-документ фрейма под курсором на `dy` CSS px
+    /// (BUG-480 срез 17).
+    ///
+    /// `true` — колесо ПОГЛОЩЕНО фреймом; страница тогда не двигается вовсе,
+    /// как и при попадании в overflow-контейнер. `false` — точка не во фрейме
+    /// ЛИБО фрейм уже на своём краю: тогда остаток делится дальше по цепочке
+    /// (CSS Overscroll Behavior L1 §3, значение по умолчанию `auto`), то есть
+    /// достигнув низа под-документа колесо продолжает крутить страницу — ровно
+    /// то, чего ждёт человек.
+    ///
+    /// Горизонталь сюда не приходит: у под-документа нет своей горизонтальной
+    /// прокрутки, и `dx` всегда уходит странице.
+    pub(crate) fn try_scroll_frame(&mut self, dy: f32) -> bool {
+        if dy == 0.0 || self.frames.is_empty() {
+            return false;
+        }
+        let Some(cursor) = self.cursor_position else { return false };
+        let dpr = self.renderer.as_ref().map_or(1.0_f32, |r| r.scale_factor() as f32);
+        let target = self.pointer_target((cursor.x as f32) / dpr, (cursor.y as f32) / dpr);
+        // Спуск идёт до САМОГО ГЛУБОКОГО фрейма под точкой: колесо адресует
+        // ближайший к курсору скроллер, как и у вложенных overflow-контейнеров.
+        let Some(hit) = target.frame else { return false };
+        let want = self.frames[hit.frame].scroll_y + dy;
+        self.apply_frame_scroll(hit.frame, want)
+    }
+
+    /// Поставить под-документ фрейма `idx` в абсолютную позицию `y`
+    /// (BUG-480 срез 17) — общее тело колеса и программного
+    /// `window.scrollTo`/`scrollBy` из скрипта самого ребёнка.
+    ///
+    /// `false` — позиция не изменилась (зажата пределом): ни перерисовки, ни
+    /// событий, ни поглощения жеста.
+    pub(crate) fn apply_frame_scroll(&mut self, idx: usize, y: f32) -> bool {
+        let Some(new_y) = frames::scroll_frame_to(&mut self.frames, idx, y) else {
+            return false;
+        };
+        // Список страницы пересобирается целиком: вклейка содержимого фрейма
+        // живёт в `set_display_list`, а её смещение только что изменилось.
+        // Точечного патча (как `patch_scroll_layer` у overflow-контейнеров)
+        // для фрейма нет — его содержимое приезжает отдельным списком.
+        let rebuilt = self
+            .layout_box
+            .as_ref()
+            .map(paint_ordered);
+        if let Some(new_dl) = rebuilt {
+            self.tile_grid.update_from_diff(&self.display_list, &new_dl);
+            self.set_display_list(new_dl);
+        }
+        // CSSOM-View §14 «run the scroll steps» для ВЬЮПОРТА ребёнка: у него
+        // свой документ и свой `window`, поэтому события шлём в его рантайм
+        // напрямую (хэндлы фреймов живут только на UI-стороне, ADR-014).
+        // Прокрутка фрейма мгновенна на обоих путях — своей анимации у неё
+        // нет, — поэтому последовательность закончилась в том же кадре и
+        // `scrollend` идёт следом за `scroll` (BUG-822, как у контейнеров).
+        #[cfg(feature = "v8")]
+        if let Some(js) = self.frames[idx].js.clone() {
+            if js.set_page_scroll_y(new_y) {
+                js.fire_window_scroll();
+            }
+            if js.page_scrollend_due(true, true) {
+                js.fire_window_scrollend();
+            }
+        }
+        self.request_redraw();
+        true
+    }
+
     /// BUG-338: bring `target_rect` (a target element's absolute border-box
     /// rect) into view within every scrolling overflow ancestor of `node`,
     /// vertical axis only вЂ” the ancestor-walk part of `Element.scrollIntoView()`
