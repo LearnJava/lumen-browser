@@ -712,3 +712,77 @@ linkOk=load, linkBad=error, imgOk=load, imgBad=error; исходы до window l
 навигация/замена/удаление фрейма, X-Frame-Options/CSP `frame-ancestors`,
 bfcache фреймов; уведомление шелла о фокусе внутри фрейма — вместе с
 layout/rAF фреймов.
+
+## Срез 12 (P3, 2026-08-28) — layout ребёнка: контентная геометрия внутри фрейма
+
+Первый пункт очереди «restyle/layout/paint фрейма» закрыт частично: сам
+sub-документ фрейма теперь считает cascade + layout, и `getBoundingClientRect`/
+`offsetWidth`/`offsetHeight` внутри фрейма отдают реальные числа вместо
+«честных нулей» (`frame_bridge.rs`: «layout содержимого фрейма — отдельный
+срез», срез 3). Paint остаётся серой заглушкой — компоновка display list
+ребёнка в бокс `<iframe>` не входит в этот срез (см. «Не входит» ниже).
+
+* Текст каскада ребёнка, который срез 11 запрашивал и отбрасывал
+  (`fetch_frame_subresources` шла только за исходами load/error), теперь
+  собирается тем же порядком, что у страницы (`parse_and_layout`):
+  инлайновые `<style>` через `extract_style_blocks`/`inline_css_imports`
+  (с разрешением `@import`), затем внешние `<link rel=stylesheet>` —
+  и возвращается в новом поле `FrameSubresourceOutcomes::css`.
+* `load_frame_sub_documents` парсит этот текст (`lumen_css_parser::parse`) и
+  считает `lumen_layout::layout_measured` сразу после регистрации
+  `parent`/`top` (срез 3) и до `notify_dom_content_loaded`/
+  `notify_window_loaded` (срез 1) — так что скрипты, которые ребёнок
+  выполняет в ответ на свои же DOMContentLoaded/load, уже видят геометрию.
+  Измеритель — `page_measurer` (тот же bundled Inter + системные face-ы, что
+  у страницы), но без web-шрифтов ребёнка (`web_fonts: &[]` — задел
+  следующего среза, у фрейма пока нет собственного прохода `@font-face`
+  url()-загрузки).
+* Вьюпорт — новая константа `FRAME_UA_DEFAULT_SIZE` (300×150 CSS px,
+  HTML LS §4.8.5, тот же UA-дефолт, что уже резолвит host-бокс `<iframe>` в
+  родителе — `iframe_ua_default_size_300_by_150` в `lumen-layout`). Не
+  реальный размер host-бокса: `load_frame_sub_documents` вызывается ДО
+  layout страницы-родителя, так что фактический размер ещё не известен —
+  уточнение до атрибутов `width`/`height`/CSS-переопределения родителя
+  остаётся в очереди.
+* Результат layout нигде не сохраняется (ни на `FrameHandle`, ни где-либо
+  ещё) — используется только для одного прохода `collect_layout_rects` →
+  `js.update_layout_rects(rects)` + `js.update_viewport_size(300, 150)` в
+  JS-контекст ребёнка, тем же механизмом, каким страница делает это для
+  себя (`page_load.rs`, «push initial layout geometry»). Геометрия
+  считается один раз при загрузке; relayout ребёнка при последующих
+  мутациях (его собственных или пришедших от родителя, срез 5) не входит —
+  ни у страницы, ни тем более у фрейма пока нет инкрементального restyle
+  для фреймов (BUG-341 стоит на паузе решением пользователя).
+
+Отклонения среза: вьюпорт фиксированный UA-дефолт для ВСЕХ фреймов
+(независимо от `width`/`height`-атрибутов и CSS) — HTML-атрибуты `<iframe>`
+уже резолвятся в host-боксе родителя (`style.rs::apply_image_presentational_hints`),
+но контентный вьюпорт ребёнка их пока не читает; paint (компоновка display
+list ребёнка в бокс `<iframe>` вместо серой заглушки `BoxKind::Iframe`,
+`display_list.rs`) и декод картинок в `IMAGE_CACHE` — следующие срезы
+очереди, эта правка их не трогает и потому не требует ни графического
+прогона, ни регенерации CPU-снапшотов (`dump_golden.py` подтверждает
+нейтральность display list — 12/12).
+
+Проверка: clippy `-p lumen-shell` -D warnings; тесты shell 1611+2+1 ok
+(регресс: `frame_subresources_fetch_links_and_imgs_with_outcomes` и все
+`frame_access_*`/`iframe_sandbox_*` — зелёные); `dump_golden.py` 12/12; живой
+смоук новый `tests/wpt/verify_frame_layout.py` (явные `width`/`height` →
+реальный `getBoundingClientRect`, `offsetWidth`/`offsetHeight` совпадают с
+ним, `width:100%` резолвится против 300px UA-дефолтного вьюпорта — 284px с
+учётом UA-дефолтного `margin: 8px` у `<body>`) и все восемь регрессионных
+срезов 4–11 (`run_script`/`actions`/`click`/`mutation`/`post_message`/
+`external_script`/`resource_events`/`subresources`) — зелёные на одной
+сборке.
+
+Не входит (очередь): paint ребёнка (компоновка display list в бокс
+`<iframe>` вместо серой заглушки), декод картинок фрейма в `IMAGE_CACHE`,
+вьюпорт ребёнка по реальному host-боксу/атрибутам `width`/`height`,
+`@font-face` url()-шрифты ребёнка, relayout ребёнка при мутациях, вьюпортная
+прокси для `loading=lazy` (ни для картинок ребёнка, ни для самого
+`<iframe loading=lazy>` — срез 1 пропускает такие фреймы целиком),
+`document.open/write/close`, sibling↔sibling postMessage, вызов функций
+между изолятами, динамически созданные фреймы ([BUG-885](BUG-885-OPEN.md)),
+навигация/замена/удаление фрейма, X-Frame-Options/CSP `frame-ancestors`,
+bfcache фреймов; уведомление шелла о фокусе внутри фрейма — вместе с
+rAF фреймов.
