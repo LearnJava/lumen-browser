@@ -519,6 +519,12 @@ impl Lumen {
     /// scroll clamping and JS-observer delivery. Kept identical for both callers
     /// so an off-thread relayout is byte-for-byte equivalent to a synchronous one.
     pub(crate) fn apply_relayout_result(&mut self, new_dl: DisplayList, lb: lumen_layout::LayoutBox, viewport: Size) {
+        // BUG-480 СЃСЂРµР· 13: РєРѕРЅС‚РµРЅС‚РЅС‹Р№ РІСЊСЋРїРѕСЂС‚ РїРѕРґ-РґРѕРєСѓРјРµРЅС‚РѕРІ СЃР»РµРґСѓРµС‚ Р·Р°
+        // СЂР°Р·РјРµСЂРѕРј РёС… host-Р±РѕРєСЃР° вЂ” Р·РЅР°С‡РёС‚ Р·Р° РєР°Р¶РґС‹Рј relayout (СЂРµСЃР°Р№Р·, Р·СѓРј,
+        // Р»СЋР±РѕРµ РґРІРёР¶РµРЅРёРµ РІС‘СЂСЃС‚РєРё РЅР°Рґ С„СЂРµР№РјРѕРј). РџСЂРѕС…РѕРґ СЃР°Рј РіРµР№С‚РёС‚СЃСЏ РЅР°
+        // В«СЂР°Р·РјРµСЂ РЅРµ РјРµРЅСЏР»СЃСЏВ» Рё РЅР° РїСѓСЃС‚РѕРј СЃРїРёСЃРєРµ С„СЂРµР№РјРѕРІ СЃС‚РѕРёС‚ РЅРѕР»СЊ. Р”Рћ
+        // Р·Р°РёРјСЃС‚РІРѕРІР°РЅРёСЏ `layout_source`: С‚Р°Рј Р±РµСЂС‘С‚СЃСЏ `&self` РЅР° РІСЃСЋ С„СѓРЅРєС†РёСЋ.
+        crate::frames::sync_frame_viewports(&mut self.frames, &lb);
         let Some(src) = self.layout_source.as_ref() else { return };
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);

@@ -455,7 +455,7 @@ pub(crate) fn parse_and_layout(
     // РЎСЂРµР· 11: СЌРєСЂР°РЅРЅС‹Р№ media-РіРµР№С‚ `<link>` Рё РІСЊСЋРїРѕСЂС‚ picker-Р° РєР°СЂС‚РёРЅРѕРә вЂ”
     // С‚Рµ Р¶Рµ, СЃ РєР°РєРёРјРё СЃС‚СЂР°РЅРёС†Р° РіСЂСѓР·РёС‚ СЃРІРѕРё РїРѕРґСЂРµСЃСѓСЂСЃС‹ (print-РіРµР№С‚
     // С„СЂРµР№РјР°Рј РЅРµ РЅСѓР¶РµРЅ — РїРµС‡Р°С‚СЊ PDF РїРѕРґ-РґРѕРєСѓРјРµРЅС‚РѕРІ РІРЅРµ СЃСЂРµР·Р°).
-    let frames = {
+    let mut frames = {
         let _s = lumen_core::trace::span("fetch-iframes", "net");
         load_frame_sub_documents(
             &doc_arc,
@@ -675,6 +675,11 @@ pub(crate) fn parse_and_layout(
         lumen_layout::layout_measured_hyp(&d, &sheet, viewport, &measurer, hp, dark_mode)
     };
     lumen_layout::set_print_media(false);
+
+    // BUG-480 срез 13: размер host-бокса каждого `<iframe>` известен только
+    // теперь — пересчитываем layout под-документов под него (срез 12 считал их
+    // на UA-дефолтных 300×150, потому что шёл до этой строки).
+    crate::frames::sync_frame_viewports(&mut frames, &layout);
 
     // CSS Backgrounds L3 В§3.10 вЂ” СЃРѕР±РёСЂР°РµРј `background-image: url(...)` СѓР¶Рµ
     // РїРѕСЃР»Рµ layout-Р° (РєР°СЂС‚РёРЅРєРё С„РѕРЅР° РЅРµ РІР»РёСЏСЋС‚ РЅР° СЂР°СЃС‡С‘С‚ РєРѕСЂРѕР±РѕРє). Р”РµРєРѕРґРёСЂСѓРµРј
