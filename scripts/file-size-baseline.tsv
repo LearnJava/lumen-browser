@@ -27,4 +27,3 @@
 2544	crates/shell/src/forms.rs
 2365	crates/js/src/video_bindings.rs
 2067	crates/js/src/web_audio.rs
-2056	crates/js/src/v8_runtime.rs
