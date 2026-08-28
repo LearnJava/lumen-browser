@@ -5625,9 +5625,58 @@
       {
        "id": "SPLIT-JS0",
        "title": "SPLIT-JS0: перепись js/dom.rs",
+       "status": "done",
+       "size": "S",
+       "note": "Перепись `crates/js/src/dom.rs` (**45 541 строка — крупнейший файл workspace**) и `crates/js/src/v8_runtime.rs` (9 415), нарезка на батчи. Крейта `lumen-js` не было ни в переписи 2026-08-23, ни в списке крейтов дорожки: пробел, вскрытый 2026-08-26 гейтом `scripts/check_file_sizes.py`, который меряет все `.rs` подряд, а не список из плана. Файл рос всю волну JS-правок 2026-08-22…26 и по размеру превосходит `style.rs`, который план называет крупнейшим. Осторожно: `WEB_API_SHIM` — это строковый литерал JS внутри `.rs`, резать его надо по границам шимов (`WEB_API_SHIM_MID` и соседи), а не по строкам Rust. Метод — §1, результат — новая группа батчей в §4 [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) ЗАКРЫТ 2026-08-28 (ветка `p1-split-js0`): лексер сходится на обоих файлах (итоговая глубина 0). ГЛАВНОЕ ЧИСЛО: производственного Rust в крупнейшем файле workspace **270 строк** — `dom.rs` это 34 top-level item а, из них 14 констант с текстом JS-шимов (271…20238, 19 968 строк, 43.8 % файла), `mod tests` (20275…45542, 25 268, 55.5 %) и 36 строк сборки шима; `v8_runtime.rs` — 94 item а, где 3 925 строк это ОДНА функция `install_dom` и 2 459 — тесты. Предупреждение постановки («резать `WEB_API_SHIM` по границам шимов») замером отвечено: границы резать не надо, шимы УЖЕ разрезаны на 14 констант, а `web_api_shim()` склеивает 13 из них ровно в порядке следования по файлу (сверено) — настоящий вопрос в том, где этот JS лежит, и ответ «в `.js` через `include_str!`»: приём прецедентен в workspace (4 площадки), гейт размера читает только `.rs`, публичная поверхность не меняется вовсе. Опасное там одно и измерено: все 14 констант — обычные строки, не raw, то есть перенос это СНЯТИЕ ЭКРАНИРОВАНИЯ (81 строка из 19 968 с обратной косой), ошибка молчалива, поэтому обязательна сверка байтов `web_api_shim()`/`worker_exposed_shim()` до и после. Файлы нарезаны на 7 батчей JS-1…JS-7 (13 363 + 11 905 + 19 968 + 2 459 + 1 175 + 3 925 + 1 811, покрытие без разрывов). `mod tests` в `dom.rs`, в отличие от `style.rs`, НЕ плоский — 36 уже именованных вложенных `mod`, модуль сам себе файл, резать по баннерам не надо. Самый рискованный батч JS-6: `install_dom` — одна функция с 42 секциями и 231 площадкой локального `macro_rules! reg!`; вынести макрос на уровень модуля «как есть» НЕЛЬЗЯ, проверено компилятором (`E0425` + «not accessible due to macro hygiene»), работающая форма — контекст параметрами макроса и приставка `scope, ctx, store,` у 231 площадки при байт-в-байт телах; 41 секция из 42 читает не больше шести имён преамбулы, а 42-я оказалась ловушкой «регион назван по первому item у» в ВОСЬМОЙ раз (баннер «Web Crypto API», а span — весь хвост функции). Две находки не для батчей: шесть функций-помощников продублированы в обоих файлах, и `dom.rs:10` несёт файловый `allow(missing_docs)` под крейтовым — обе в P5. Разбор — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-JS1",
+       "title": "SPLIT-JS1: хвост mod tests из js/dom.rs",
+       "status": "ready",
+       "size": "L",
+       "note": "Тестовый модуль `crates/js/src/dom.rs`, хвост: анкер `mod v8_perf_observers` (32180) до конца файла, 13 363 строки -> `src/dom/tests/`, 23 файла. `mod tests` здесь, в отличие от `style.rs`, НЕ плоский: 36 уже именованных вложенных `mod` на 25 138 строк и 1 589 из 1 591 `#[test]` файла, поэтому резать по баннерам не надо — модуль сам себе файл. Крупнейший в этой половине `v8_perf_observers` (1 583) под потолком. Путь `crate::dom::tests::<имя>` не меняется, ссылок на эти имена в репозитории нет. Механическая проверка: счётчик `#[test]` крейта до и после. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-JS2",
+       "title": "SPLIT-JS2: голова mod tests из js/dom.rs",
+       "status": "ready",
+       "size": "L",
+       "note": "Тестовый модуль `crates/js/src/dom.rs`, голова: анкер `mod tests` (20275) до `mod v8_perf_observers` (32179), 11 905 строк -> `src/dom/tests/`, 13 модулей плюс шапка. Шапка модуля (20275…20372, 98 строк, 2 `#[test]`) остаётся в `tests/mod.rs` — её видят все потомки. Делается ПОСЛЕ SPLIT-JS1 по причине ST-2: пока инлайновый `mod tests` с телом жив, объявить `mod tests;` для каталога рядом нельзя, обёртка снимается последним срезом. Единственный модуль над потолком — `v8_core` (24262…27505, 3 244): шов измерен на границе теста, 24262…25798 (1 537) и 25799…27505 (1 707). `v8_ws_sse` (1 988) под потолком с запасом в 12 строк. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-JS3",
+       "title": "SPLIT-JS3: текст шимов из js/dom.rs в .js",
+       "status": "ready",
+       "size": "M",
+       "note": "Текст JS-шимов `crates/js/src/dom.rs`: анкер `const WEB_API_SHIM_HEAD` (271) до `fn web_api_shim` (20238), 19 968 строк -> 14 `.js`-файлов в `crates/js/src/shim/` через `include_str!`, по одному на константу. Дальше константы НЕ дробить: порядок конкатенации — единственный инвариант шима. Публичная поверхность не меняется вовсе — `const` остаётся с тем же именем, меняется только правая часть, читатели `EVENT_TARGET_SHIM`/`PERFORMANCE_SHIM`/`MESSAGE_CHANNEL_SHIM` в `worker.rs`/`sw_worker.rs` не правятся. ОПАСНОЕ: все 14 констант объявлены обычной строкой, а не raw, то есть перенос это снятие экранирования (81 строка из 19 968 с обратной косой; `\\\\d`, ставшее `\\d`, меняет семантику JS и не роняет сборку) — обязательна сверка байтов `web_api_shim()` и `worker_exposed_shim()` до и после. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-JS4",
+       "title": "SPLIT-JS4: mod tests из js/v8_runtime.rs",
        "status": "ready",
        "size": "S",
-       "note": "Перепись `crates/js/src/dom.rs` (**45 541 строка — крупнейший файл workspace**) и `crates/js/src/v8_runtime.rs` (9 415), нарезка на батчи. Крейта `lumen-js` не было ни в переписи 2026-08-23, ни в списке крейтов дорожки: пробел, вскрытый 2026-08-26 гейтом `scripts/check_file_sizes.py`, который меряет все `.rs` подряд, а не список из плана. Файл рос всю волну JS-правок 2026-08-22…26 и по размеру превосходит `style.rs`, который план называет крупнейшим. Осторожно: `WEB_API_SHIM` — это строковый литерал JS внутри `.rs`, резать его надо по границам шимов (`WEB_API_SHIM_MID` и соседи), а не по строкам Rust. Метод — §1, результат — новая группа батчей в §4 [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "Тестовый модуль `crates/js/src/v8_runtime.rs`: анкер `mod tests` (6958) до конца файла, 2 459 строк -> `src/v8_runtime/tests/`, 2 файла. Модуль ПЛОСКИЙ (ноль вложенных `mod`, 127 item ов), поэтому режется по границе теста: шов измерен на 8469, файлы 6958…8468 (1 511) и 8469…9416 (948). Приём SH-4b с обёрткой, тот же, что в SPLIT-JS2. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-JS5",
+       "title": "SPLIT-JS5: хвост js/v8_runtime.rs",
+       "status": "ready",
+       "size": "S",
+       "note": "Хвост `crates/js/src/v8_runtime.rs`: анкер `struct HistoryState` (5783) до `mod tests` (6957), 1 175 строк по четырём темам: `HistoryState`+`impl` -> `v8_runtime/history_state.rs`; свободные помощники DOM (5846…6205, 360) -> `v8_runtime/dom_helpers.rs`; кэш скомпилированного кода (6206…6313) -> `v8_runtime/code_cache.rs`; `impl JsRuntime for V8JsRuntime` (6314…6637) плюс пятёрка `eval_*_and_report` (6638…6781) и сериализаторы значений с `from_v8`/`to_v8` (6782…6957) -> `v8_runtime/eval.rs` и `v8_runtime/value.rs`. `impl JsRuntime` — trait-impl, по правилу SH-2 едет ОДНИМ блоком и по файлам не раскладывается. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-JS6",
+       "title": "SPLIT-JS6: install_dom из js/v8_runtime.rs",
+       "status": "ready",
+       "size": "L",
+       "note": "`install_dom` из `crates/js/src/v8_runtime.rs`: анкер 1858 до `struct HistoryState` (5782), 3 925 строк. САМЫЙ РИСКОВАННЫЙ БАТЧ ГРУППЫ и единственный, который не решается чистым переносом: это одна функция, тело которой лежит внутри замыкания `self.run(…)`, где объявлен ЛОКАЛЬНЫЙ `macro_rules! reg!` (16 ветвей) и стоит 231 площадка его вызова в 42 секциях-баннерах. Вынести макрос на уровень модуля «как есть» НЕЛЬЗЯ — проверено компилятором: `error[E0425]: cannot find value 'scope' in this scope` … «not accessible due to macro hygiene», и обход через порождающий макрос с `$d:tt` тоже не собирается. Работающая форма (проверена компиляцией): модульный `reg!` с контекстом в параметрах, площадка получает приставку `scope, ctx, store,`, тела веток не редактируются — тот же класс, что SH-2 и ST-8. Сигнатура помощника совпадает с `register_v8_native` (`v8_compat.rs:980`). 41 секция из 42 читает не больше шести имён преамбулы; 42-я — ловушка «регион назван по первому item у» в восьмой раз: баннер «Web Crypto API», а span это весь хвост функции, он вместе с преамбулой (1860…2091) остаётся на месте. Запасной вариант и развесовка — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-JS7",
+       "title": "SPLIT-JS7: голова js/v8_runtime.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "Голова `crates/js/src/v8_runtime.rs`: анкер `static V8_INIT` (47) до `fn install_dom` (1857), 1 811 строк по пяти темам: инициализация платформы и именованный доступ окна (47…267 — ядро BUG-794/384, единственный `try_lock` в `crates/js`) -> `v8_runtime/named_access.rs`; `V8Inner`/`V8Job`/`V8Command` и `DOM_EXCEPTION_POLYFILL` (268…372) -> `v8_runtime/command.rs`; отчёт о непойманных отказах промисов (373…594, BUG-716/918) -> `v8_runtime/promise_reject.rs`; `v8_thread_main` и `DomTouched` (595…716) -> `v8_runtime/thread.rs`; `struct V8JsRuntime` (717…866) вместе с его `impl` (992…1778, 62 метода поверхности шелл-рантайм), `impl Drop` и переопределениями UA/таймзоны -> `v8_runtime/runtime.rs` и `v8_runtime/overrides.rs`. Объявление структуры обязано ехать вместе с `impl` (прецедент `enum PageSource`/`impl PageSource`, SH-3a/SH-3b). Снаружи крейта по полному пути берут шесть имён и все отсюда — реэкспорт `pub use` обязателен. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       }
      ]
     }
