@@ -113,7 +113,7 @@ BUG-438/BUG-657-class TLS-trust gap, not a new finding.
 variant, 0 testdriver, 1 `.https.`).
 
 `run_report.py --all --root xml --recursive` — 56.79 с, **3/7 harness OK,
-4/190 сабтестов**. Найден [BUG-781](../bugs/BUG-781-FIXED.md):
+4/190 сабтестов**. Найден [BUG-781](../../bugs/BUG-781-FIXED.md):
 `DOMParser.parseFromString` игнорирует XML MIME-типы — всегда гоняет
 HTML-токенизатор и заворачивает реальный корень в синтетический `<html>`,
 поэтому `documentElement.tagName`/`.nodeName` для любого XML-документа

@@ -220,7 +220,7 @@ headless pipeline without winit/wgpu/ffmpeg.
   `computed_style_snapshot`, `query_a11y`/`query_a11y_all`) instead of pixel diffing — runs via
   `cargo test -p lumen-driver`, no GPU/Edge. Fixtures: `crates/driver/tests/fixtures/golden-*.html`
   (container/flex geometry, cascade specificity + inheritance, form-control accessible roles).
-  Surfaced [BUG-294](../bugs/BUG-294-OPEN.md) (flex-item `margin-left` double-applied in
+  Surfaced [BUG-294](../bugs/BUG-294-FIXED.md) (flex-item `margin-left` double-applied in
   `lay_out_flex`'s row branch) — the fixture uses `gap` instead of per-item `margin` to avoid
   baking that bug into the golden baseline.
 

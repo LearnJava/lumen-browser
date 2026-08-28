@@ -87,7 +87,7 @@ distinct failure shapes across `tentative/yield/*`:
 - **Cross-frame propagation TIMEOUTs** — `yield-same-origin-propagation.html`,
   `yield-scripted-subframe-propagation.html`, `yield-cross-origin-propagation.html` — separate
   from this bug; these three additionally depend on `<iframe>` having its own browsing context
-  ([BUG-480](bugs/BUG-480-OPEN.md), reconfirmed here, not re-analyzed).
+  ([BUG-480](BUG-480-OPEN.md), reconfirmed here, not re-analyzed).
 
 `yield-then-detach.html`'s `TypeError: Cannot read properties of null (reading
 'DOMException')` is a distinct, likely BUG-480-adjacent iframe-teardown issue, not re-analyzed
@@ -138,7 +138,7 @@ the same iframe/timing gap elsewhere in the run, not verified further this sessi
   resource that isn't vendored per the established convention (only the current category's own
   directory is vendored), not an engine defect.
 - The three cross-frame `yield-*-propagation.html` TIMEOUTs and `yield-then-detach.html` —
-  [BUG-480](bugs/BUG-480-OPEN.md) territory (`<iframe>` has no separate browsing context),
+  [BUG-480](BUG-480-OPEN.md) territory (`<iframe>` has no separate browsing context),
   reconfirmed but not the subject of this bug.
 - `post-task-then-detach.html` / `post-task-with-signal-from-detached-iframe.html` TIMEOUTs —
   same BUG-480 iframe gap.

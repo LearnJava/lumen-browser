@@ -86,13 +86,13 @@ matrix, or the `detail` structured-clone step).
   `[object PerformanceMeasure]`, `PerformanceMark`/`PerformanceMeasure is
   not defined` (`mark-entry-constructor.any.html`,
   `mark-measure-return-objects.any.html`, `user-timing-tojson.html`) —
-  same as [BUG-687](bugs/BUG-687-OPEN.md) (entries are plain objects, not
+  same as [BUG-687](BUG-687-OPEN.md) (entries are plain objects, not
   real `PerformanceMark`/`PerformanceMeasure` instances; no `toJSON()`).
 - `clearMarks.html`/`clearMeasures.html`/`mark.html`/`measure.html`/
   `measures.html`/`measure_associated_with_navigation_timing.html`/
   `measure_navigation_timing.html` TIMEOUT — all use
   `<body onload="...">`/`<body onload=...>` inline event-handler content
-  attributes to kick off the test; same as [BUG-360](bugs/BUG-360-FIXED.md)
+  attributes to kick off the test; same as [BUG-360](BUG-360-FIXED.md)
   (inline event-handler attributes were dead at the time of this run — the
   fix landed in main the same day, in parallel; not re-run against it).
 - `idlharness.any.html` TIMEOUT — `/resources/idlharness.js` 404, the

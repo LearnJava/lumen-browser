@@ -2,7 +2,7 @@
 
 Полная запись исследования CPU/памяти, чтобы не повторять его заново.
 Итог: **BUG-271 (CPU) FIXED**, **BUG-272 (память) — корень найден, срез 1 влит**.
-Статусы и остаток — в [BUGS.md](../BUGS.md), [bugs/BUG-271-FIXED.md](../bugs/BUG-271-FIXED.md), [bugs/BUG-272-OPEN.md](../bugs/BUG-272-OPEN.md).
+Статусы и остаток — в [BUGS.md](../BUGS.md), [bugs/BUG-271-FIXED.md](../bugs/BUG-271-FIXED.md), [bugs/BUG-272-OPEN.md](../bugs/BUG-272-FIXED.md).
 
 ---
 

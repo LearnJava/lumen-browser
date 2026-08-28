@@ -81,7 +81,7 @@ Top error classes from the run log (`sanitizer-basic-filtering.html`,
 ## Что НЕ является причиной этого бага (уже задокументированные гэпы или недоисследовано)
 
 - `node.insertAdjacentHTML is not a function` (24 hits) — reconfirmation of
-  [BUG-351](../bugs/BUG-351-OPEN.md) (`insertAdjacentHTML` missing on the
+  [BUG-351](BUG-351-FIXED.md) (`insertAdjacentHTML` missing on the
   live `Element` entirely).
 - `policy.createParserOptions`/`passthrough.createParserOptions is not a
   function` (8+4 hits, `sethtml-with-trustedtypes*.tentative.html`) — Trusted

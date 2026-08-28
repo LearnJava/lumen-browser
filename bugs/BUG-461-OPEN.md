@@ -30,5 +30,5 @@
 
 ## Связанные
 
-* [BUG-404](bugs/BUG-404-FIXED.md) — тот же аудит CC-15-4/CC-15-3, сайты 1-2 (page_offset drift) закрыты там.
-* [BUG-408](bugs/BUG-408-FIXED.md)/[BUG-409](bugs/BUG-409-FIXED.md)/[BUG-410](bugs/BUG-410-FIXED.md) — прецедент пути 2 (новый `ChromeAction` + `data-*` на сгенерированной строке).
+* [BUG-404](BUG-404-FIXED.md) — тот же аудит CC-15-4/CC-15-3, сайты 1-2 (page_offset drift) закрыты там.
+* [BUG-408](BUG-408-FIXED.md)/[BUG-409](BUG-409-FIXED.md)/[BUG-410](BUG-410-FIXED.md) — прецедент пути 2 (новый `ChromeAction` + `data-*` на сгенерированной строке).

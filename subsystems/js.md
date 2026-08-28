@@ -1072,11 +1072,22 @@ the time — read dates.
 
 - **HTMLIFrameElement JS stubs** (`crates/js/src/iframe_element.rs`, HTML spec §4.8.5, P1 2026-06-03).
   - `src`/`name`/`srcdoc`/`width`/`height`/`sandbox`/`allow`/`referrerPolicy`/`loading` properties reflect HTML attributes via `reflectAttr` helper.
-  - `contentDocument` getter → `null` (Phase 0 — no sub-document navigation; matches cross-origin spec behaviour).
-  - `contentWindow` getter → `null` (same reason).
+  - `contentDocument`/`contentWindow` getters read the frame bridge (`_lumen_frame_content_document/window(this.__nid__)`) — see the frame-bridge entry below; without a loaded binding both stay `null`.
   - `getSVGDocument()` → `null`.
   - Patches existing `<iframe>` elements at load time + intercepts `document.createElement('iframe')`.
-  - 10 unit tests: install_succeeds, src getter/setter, contentDocument null, contentWindow null, name getter/setter, width/height attrs, sandbox reflects, getSVGDocument null, src default empty string. **922 lumen-js lib tests total.**
+  - 10 unit tests: install_succeeds, src getter/setter, name getter/setter, width/height attrs, sandbox reflects, getSVGDocument null, src default empty string.
+
+- **Frame bridge: `<iframe>` browsing context from JS** (`crates/js/src/frame_bridge.rs`, BUG-480 slices 2–10, P3 2026-08-23…26).
+  - Registry of «host element → sub-document» bindings per V8 isolate (`FrameDocSlots`); shell registers each loaded frame (`register_frame_document`, plus `register_parent/top_document` for ancestor slots) before dispatching the host's trusted `load`. Facades (Window/Document/Element) are built by a JS shim over `_lumen_f_*` natives reading the child's shared `Arc<Mutex<Document>>`; interned so `contentDocument === contentDocument`, `defaultView === contentWindow`.
+  - Window hierarchy (slice 3): child's `parent`/`top`/`frameElement`/`name`; parent's live `window.length` + indexed/named accessors (`window[0]`, `window[name]`), installed lazily on first registration to keep top-level `var parent = …` working.
+  - Cross-frame `postMessage` (slice 4): process-global outbox keyed by document `Arc` pointer; `targetOrigin` validation (`'*'`/`'/'`/explicit), async delivery on pump tick, JSON-roundtrip serialization subset of structured clone, ancestor↔child edges.
+  - Mutations from parent (slice 5): Document `createElement`/`createTextNode`/`title` setter; Element `setAttribute`/`removeAttribute`, `id`/`className` reflections, `appendChild`/`insertBefore`/`removeChild`/`remove`, `textContent` setter — via mutable `_lumen_f_*` natives; args must be facades of the same binding (`__bid__`), natives bound-check arena indices and reject ancestor-under-descendant cycles (silent no-op instead of HierarchyRequestError). Visible to the child context immediately (shared tree).
+  - Events across isolates (slices 6–7): facade Element `click()`/`focus(options)`/`blur()`/`dispatchEvent(event)` put envelopes into a process-global event outbox (`FrameEventKind`: click/focus/blur/dom, queued via `_lumen_f_queue_event(bid, nid, spec_json)`); the receiver drains it on its pump tick and runs THE CHILD'S OWN semantics through WEB_API_SHIM hooks — `_lumen_deliver_frame_click` → shared `_lumen_perform_click`, `_lumen_deliver_frame_focus`/`_blur` → focusability gate + `_lumen_focus_update` (focus/focusin/blur/focusout), `_lumen_deliver_frame_dom_event` → rebuilt Event/CustomEvent through the same dispatch + untrusted-click activation as the element's own `dispatchEvent`. Deviations documented in BUG-480: delivery is async on the pump tick; frame runtimes never notify the shell about focus (its request queue is not drained for frames); spec's `!defaultPrevented` return is unreachable, so facade `dispatchEvent` returns nothing.
+  - Inserted `<script>` execution (slice 8): facade `appendChild`/`insertBefore` of a `<script>` queue a `RunScript` envelope; the child runs it through its own `_lumen_script_prepare` (type gate, empty-src error, inline classic with `document.currentScript`; external src waits for frame subresource fetching). «Already started» is per element on the receiver; an envelope whose target detached before delivery is dropped without the flag. Two transport defects fixed alongside: the sleeping event loop now arms a +2 ms poll while any live context has undelivered envelopes (`frame_transport_pending`, pointer-keyed like the registry), and script-less frames get a runtime at all (`run_scripts_with_dom(..., always_runtime)`) — previously a static iframe had no JS context, so nothing could deliver to it.
+  - URL reflections + late src (slice 9): facade `src`/`href` store verbatim and resolve against the sub-document's base (first `<base href>` vs document URL); `_lumen_f_set_attr` queues RunScript after a successful `src` on `<script>`, so «appendChild, then `s.src = …`» works like src-before-insert; «already started» is set only when preparation actually began (`_lumen_frame_script_will_start` mirrors `_lumen_script_prepare`'s early exits), so an element inserted empty still receives the late-src delivery.
+  - Reverse resource-event delivery (slice 10): resource events (`load`/`error` from `_lumen_resource_fire`) in a frame context mirror to the PARENT's isolate as `FrameEventKind::Resource` envelopes (native `_lumen_f_queue_parent_resource` via the shim's `_lumen_frame_mirror_resource`, gated on a live parent slot, `FrameDocSlots::self_doc`, and nid being an own-document element). The recipient resolves the sender's binding bid from `PendingFrameEvent::source_doc` at drain time and drops envelopes without an accessible binding. Facade elements gained `addEventListener`/`removeEventListener` (WeakMap listener map inside the bridge shim closure — facades are not real EventTargets); delivery builds a fresh trusted Event with `target`/`currentTarget` on the interned facade and calls listeners first, then the `on<type>` property. This closes slice 9's tail: `s.onload` assigned by the parent on an inserted script's facade now fires. Deviations: child→immediate-parent edge only, async on the pump tick, fresh event object per recipient, only `_lumen_resource_fire` events mirror.
+  - Access control (`shell::frame_access_allowed`): opaque sandbox denies everything; `about:` inherits parent origin; else origin compare with default-port normalization; file↔file allowed (documented deviation). Cross-origin/opaque get a window facade without `.document`; `contentDocument` is `null`.
+  - Not wired yet: subresource fetch/response-body reads for inserted nodes and frames, frame layout/paint/rAF, `document.open/write/close`, navigation/replacement/removal, sibling postMessage edges, bfcache of frames. Dynamic (script-inserted) iframes never load — BUG-885.
 
 - **Gamepad API** (`crates/js/src/gamepad.rs`, W3C Gamepad Level 2 §4, P1 2026-06-03).
   - `navigator.getGamepads()` → snapshot array, **empty until a device connects** (BUG-392; W3C Gamepad L2 §5.1 forbids a pre-declared non-zero length). The internal list grows to `index + 1` in `_lumen_gamepad_connect` and never shrinks on disconnect. Phase 0 has no hardware polling, so in practice it stays `[]`.
@@ -1443,6 +1454,40 @@ the time — read dates.
   overlay store. 9 tests in `video_bindings::tests_v8::track_loading`. Live A/B of the
   `webvtt` category: subtests 2/178 → 31/178, wall clock 8:46 → 0:58.
 
+- **The same model for a `<track>` the PARSER wrote ([BUG-804](../bugs/BUG-804-FIXED.md)
+  slice 4, 2026-08-25).** `_lumen_track_elements_scan` walks
+  `getElementsByTagName('track')` from `_lumen_apply_ready_state('interactive')`, beside
+  the `<link>`-hint / empty-`src` / `<style>` passes, and calls the same
+  `startTrackLoad`; a track the insertion hook already holds or has already started is
+  skipped, and one with no media parent is handed to `_lumen_resource_track` so a later
+  re-parenting still starts it. **The ownership question BUG-804 left open is answered
+  here in favour of the JS list**, and not on taste: `PageTracks` is keyed by the
+  `<video>` and `TrackInfo` carries no `NodeId`, so the shell's snapshot can never make
+  `trackElement.track` the same object as `video.textTracks[i]` — which is exactly what
+  the nine hung `track-webvtt-*` tests read inside the handler they were waiting for.
+  Painting does not move: the shell keeps its own walk and its own cue store, at the cost
+  of the file being fetched twice under a `<video>`. Three neighbours the report did not
+  name and the fix had to carry: `<audio>` is a media element too (§4.8.11.1 step 3) and
+  the shell's `collect_video_tracks` never looked at one, so such a track was not merely
+  silent but never fetched; `textTracks` existed only as an own property
+  `patchVideoElement` puts on each `<video>` wrapper, so an `<audio>` had none at all —
+  it now also sits on `HTMLMediaElement.prototype`, where the `<video>` own property still
+  shadows it; and the list stopped being in tree order once a second entry point existed,
+  because the markup pass runs *after* the document's scripts, so `startTrackLoad` now
+  computes the insertion index from the media element's children instead of appending.
+  A fifth defect only the whole-category run could show, and the largest: `textTracks`
+  was built lazily out of `_lumen_track_media_lists`, which a track joined when its
+  **load started** — i.e. on the `interactive` pass, after the document's scripts. So
+  `for (var i = 0; i < video.textTracks.length; i++) trackElements[i].onload = …`, how
+  `track-webvtt-utf8`/`-timings-hour`/`-header-comment` arm themselves, armed **no**
+  handler and those three hung no matter how correctly the loads later reported. §4.8.11.1
+  lists a text track when the track *element* is inserted, which for markup has already
+  happened before this shim runs — hence `listMarkupTracks`, called at install time from
+  the same loop that patches the parsed document's `<video>`s. 13 tests in `track_loading`
+  (4 new, driven through `_lumen_apply_ready_state` so the wiring is covered too — an
+  unreachable scan would look exactly like the bug). Category A/B: `track-element`
+  83/143 → 104/143 harness OK, subtests 15/168 → 29/168, zero regressions.
+
 - **The `HTMLMediaElement` state machine on `<video>` ([BUG-825](../bugs/BUG-825-FIXED.md),
   2026-08-25, `video_bindings.rs` `VIDEO_SHIM` + the `<source>` branch of
   `dom.rs::_lumen_resource_track`/`_lumen_resource_try_prepare`).** `<video>` had no
@@ -1789,6 +1834,16 @@ the time — read dates.
 
 ## Invariants
 
+- **DOM shim: the shim's text is in `crates/js/src/shim/*.js`, not in `dom.rs`** (SPLIT-JS3, 2026-08-28).
+  The 14 `WEB_API_SHIM*`/`EVENT_TARGET_SHIM`/… consts kept their names and their place in `dom.rs`; only
+  the right-hand side changed to `include_str!("shim/<lowercased const name>.js")`, so `worker.rs`,
+  `sw_worker.rs` and every other reader are unaffected. Two consequences. **The files are read verbatim,
+  so nothing in them is escaped** — before the split these were plain `"…"` Rust strings where every
+  quote was `\"`, and an editor or a script that "helpfully" re-adds an escape now corrupts the JS
+  instead of protecting it (a `\\d` turned into `\d` changes a regex and does not break the build).
+  And **one file per const is the invariant, not an accident**: `web_api_shim()` concatenates the consts
+  in source order — that order is the only thing making V8 compile one program with one hoisting scope —
+  so subdividing a `.js` file further would break the eye-checkable correspondence between the two lists.
 - `QuickJsRuntime: Send + Sync` (enforced by `unsafe impl` + `Mutex`).
 - `call_function` pollutes the global namespace with `__lum_args__` only transiently — cleaned up with `delete` after each call.
 - `from_rq` maps `Type::Undefined` to `JsValue::Null` (not `Undefined`) — matches the trait docs which say "simple JSON-compatible types".
@@ -1904,11 +1959,19 @@ the time — read dates.
     187/322 subtests and 16/19 harness OK → **242/322 and 18/19**. Residual is brotli (absent —
     a quarter of the category) plus `SharedArrayBuffer` chunks the engine cannot tell from an
     ordinary buffer. `compression-bad-chunks` gained 15 PASS and still went OK → ERROR, on a
-    defect of its own: an unhandled-rejection report fires at the end of a *microtask* instead of
-    the task ([BUG-918](../bugs/BUG-918-OPEN.md)).
+    defect of its own: an unhandled-rejection report fired at the end of a *microtask* instead of
+    the task ([BUG-918](../bugs/BUG-918-FIXED.md), fixed 2026-08-26 — the category is **19/19**
+    harness OK now, at the same 242/322 subtests).
   - **Residual:** a stream abandoned without `close()` and without an error leaks its codec until
     the runtime dies — the shim's `TransformStream` has no `cancel` hook and neither the writer's
     `abort` nor the reader's `cancel` reaches the transformer. Bounded by one document.
+
+- **Where "notify about rejected promises" happens** (`crates/js/src/v8_runtime.rs`, HTML LS §8.1.7.3 step 4). 2026-08-26, [BUG-918](../bugs/BUG-918-FIXED.md).
+  - `lumen_promise_reject_callback` only *queues* into `PENDING_UNHANDLED`/`PENDING_HANDLED`; the dispatch is `drain_promise_rejections`, called from the V8 thread loop right after `V8Command::Run(job)` returns. That is this engine's microtask-checkpoint boundary: with the isolate's auto microtask policy V8 drains the queue before an API call that entered JS returns, so a job handing control back means the checkpoint is over.
+  - **The boundary is the job, not the microtask.** Deferring via `Isolate::enqueue_microtask` (what this did until BUG-918) puts the flush *into* the queue it is supposed to run after: enqueued from the synchronous `Promise.reject`, it runs ahead of the `await` continuation queued later, so a handler attached one `await` on — the ordinary `promise_test` shape — arrived too late and the page got a report it does handle.
+  - **`rusty_v8` 150.1.0 has no binding for `Isolate::AddMicrotasksCompletedCallback`** — the hook Node.js uses for exactly this. `grep MicrotasksCompleted` over the crate's `src/` is empty; only `perform_microtask_checkpoint` and `enqueue_microtask` are bound. Do not go looking for it before checking the version in `crates/js/Cargo.toml`.
+  - Every JS entry point of a runtime funnels through `V8Command::Run`, including the ones with no event loop behind them (`--dump-*`, SVG rasterization, unit tests) — which is why the flush lives there and **not** in `_lumen_timers`: nothing pumps timers in those runtimes, and the `[unhandled-rejection]` stderr line's diagnostic value (BUG-703) was proven precisely there.
+  - Consequence for a unit test: the report lands *after* the `eval` that queued it, so a flag set by an `unhandledrejection` listener must be read in a **second** `rt.eval` (see `bug918_*` in `dom.rs`).
 
 - **`<details>` state and the `toggle` event** (`crates/js/src/dom.rs`, HTML LS §4.11.1). 2026-08-25, [BUG-851](../bugs/BUG-851-FIXED.md).
   - `open` **is** the element's state, so exactly one place changes it and exactly one place reports the change. Everything funnels through the §4.11.1 *attribute change steps* (`_lumen_details_open_changed`): the `open` property, `setAttribute`/`removeAttribute`/`toggleAttribute`, the `<summary>` activation behaviour, the parser's markup and the shell's native mouse click.

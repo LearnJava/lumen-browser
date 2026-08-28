@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """BUG-799: an `<audio>` with a `src` freezes the whole page — reproduce it.
 
-`bugs/BUG-799-OPEN.md` was filed off a run report alone and says so: the
+`bugs/BUG-799-FIXED.md` was filed off a run report alone and says so: the
 `subcount 0/0` of `audio-loading-eager.html` was read as "the test's own
 `step_timeout(…, 5000)` never fired", i.e. page JS stops while an audio
 resource loads — a much heavier claim than "`loadeddata` is never dispatched",

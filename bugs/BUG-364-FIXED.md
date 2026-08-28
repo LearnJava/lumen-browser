@@ -57,7 +57,7 @@ network at all:
   support (previously `Worker` had none at all — only `onmessage`);
   `SharedWorker`'s existing but previously-dead `this.onerror = null` field is
   now actually invoked. This closes the accessor-level gap that
-  [BUG-591](bugs/BUG-591-FIXED.md)'s Worker/SharedWorker reconfirmation flagged
+  [BUG-591](BUG-591-FIXED.md)'s Worker/SharedWorker reconfirmation flagged
   — but only for the script-fetch-failure path added here.
   **BUG-591 stays OPEN**: an uncaught exception thrown *inside* a worker that
   did start (top-level or from a later `postMessage` handler) still only

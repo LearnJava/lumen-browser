@@ -20,7 +20,29 @@
 
 use lumen_core::geom::Rect;
 use lumen_layout::Color;
-use lumen_paint::{DisplayCommand, DisplayList};
+use lumen_paint::{DisplayCommand, DisplayList, RenderBackend};
+use std::sync::Arc;
+use winit::window::Window;
+
+/// The live OS-level Document Picture-in-Picture window (slice 2): a separate
+/// always-on-top `winit::Window` with its own [`RenderBackend`] surface,
+/// laying out and painting the moved DOM subtree's serialized markup (see this
+/// module's docs above).
+///
+/// Owned by `Lumen::doc_pip_os`; created from a
+/// `_lumen_docpip_request_window` request and dropped on close. The drop
+/// closes the OS window (winit destroys the window when the last
+/// `Arc<Window>` is released) and frees the GPU surface.
+pub(crate) struct DocPipOsWindow {
+    /// The floating OS window. Identified against `WindowEvent`s by its id.
+    pub(crate) window: Arc<Window>,
+    /// Dedicated render backend drawing the content.
+    pub(crate) renderer: Box<dyn RenderBackend>,
+    /// Latest serialized markup of `pipWindow.document`'s hidden content
+    /// container (`_lumen_docpip_set_content_html`), re-parsed and laid out
+    /// on every redraw. Empty until the page appends its first node.
+    pub(crate) content_html: String,
+}
 
 /// Background fill for the floating window, painted under the moved subtree.
 const DOC_PIP_BG: Color = Color { r: 24, g: 24, b: 30, a: 255 };

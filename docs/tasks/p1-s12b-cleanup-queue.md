@@ -44,19 +44,19 @@ done | sort -t'|' -k1 -n
 
 | Модуль | Строк | Тестов | Точка установки под QuickJS | Решение (G0, 2026-08-03) |
 |---|---:|---:|---|---|
-| `contacts.rs` | 110 | 4 | `lib.rs:937` | **порт** — [BUG-549](../../bugs/BUG-549-OPEN.md) |
-| `background_sync.rs` | 160 | 5 | `lib.rs:995` | **порт** — [BUG-549](../../bugs/BUG-549-OPEN.md) |
-| `periodic_sync.rs` | 164 | 4 | `lib.rs:1002` | **порт** — [BUG-549](../../bugs/BUG-549-OPEN.md) |
-| `storage_buckets.rs` | 238 | 8 | `lib.rs:1024` | **порт** — [BUG-547](../../bugs/BUG-547-OPEN.md), CAPABILITIES.md overclaim |
-| `push_api.rs` | 255 | 7 | `lib.rs:1009` | **порт** — [BUG-549](../../bugs/BUG-549-OPEN.md) |
-| `background_fetch.rs` | 257 | 6 | `lib.rs:988` | **порт** — [BUG-549](../../bugs/BUG-549-OPEN.md) |
-| `payment_request.rs` | 286 | 6 | `lib.rs:944` | **порт** — [BUG-549](../../bugs/BUG-549-OPEN.md) |
-| `media_stream_recording.rs` | 297 | 8 | `lib.rs:1199` | **порт** — [BUG-549](../../bugs/BUG-549-OPEN.md) |
-| `view_transitions.rs` | 329 | 11 | `lib.rs:1123` | **порт** — [BUG-545](../../bugs/BUG-545-OPEN.md), ROADMAP «done»/CAPABILITIES overclaim; JS-триггер отделён от движкового механизма (см. ниже) |
-| `cookie_store.rs` | 383 | 8 | `lib.rs:1016` | **порт** — [BUG-546](../../bugs/BUG-546-OPEN.md), CAPABILITIES.md overclaim |
-| `cookie_banner.rs` | 451 | 16 | `lib.rs:1030` | **порт** — [BUG-548](../../bugs/BUG-548-OPEN.md), пользовательский тумблер `ToggleCookieBannerDismiss` сейчас no-op |
+| `contacts.rs` | 110 | 4 | `lib.rs:937` | **порт** — [BUG-549](../../bugs/BUG-549-FIXED.md) |
+| `background_sync.rs` | 160 | 5 | `lib.rs:995` | **порт** — [BUG-549](../../bugs/BUG-549-FIXED.md) |
+| `periodic_sync.rs` | 164 | 4 | `lib.rs:1002` | **порт** — [BUG-549](../../bugs/BUG-549-FIXED.md) |
+| `storage_buckets.rs` | 238 | 8 | `lib.rs:1024` | **порт** — [BUG-547](../../bugs/BUG-547-FIXED.md), CAPABILITIES.md overclaim |
+| `push_api.rs` | 255 | 7 | `lib.rs:1009` | **порт** — [BUG-549](../../bugs/BUG-549-FIXED.md) |
+| `background_fetch.rs` | 257 | 6 | `lib.rs:988` | **порт** — [BUG-549](../../bugs/BUG-549-FIXED.md) |
+| `payment_request.rs` | 286 | 6 | `lib.rs:944` | **порт** — [BUG-549](../../bugs/BUG-549-FIXED.md) |
+| `media_stream_recording.rs` | 297 | 8 | `lib.rs:1199` | **порт** — [BUG-549](../../bugs/BUG-549-FIXED.md) |
+| `view_transitions.rs` | 329 | 11 | `lib.rs:1123` | **порт** — [BUG-545](../../bugs/BUG-545-FIXED.md), ROADMAP «done»/CAPABILITIES overclaim; JS-триггер отделён от движкового механизма (см. ниже) |
+| `cookie_store.rs` | 383 | 8 | `lib.rs:1016` | **порт** — [BUG-546](../../bugs/BUG-546-FIXED.md), CAPABILITIES.md overclaim |
+| `cookie_banner.rs` | 451 | 16 | `lib.rs:1030` | **порт** — [BUG-548](../../bugs/BUG-548-FIXED.md), пользовательский тумблер `ToggleCookieBannerDismiss` сейчас no-op |
 | `webgl_bindings.rs` | 564 | 21 | — | **снос, не порт** — мёртвый код на ОБОИХ движках (`install_webgl_bindings` не вызывается вообще нигде вне своих тестов), вытеснен `webgl_canvas.rs` (функциональный WebGL, V8-портирован, сохраняет ADR-007 fingerprint-нормализацию). Бага не заведено — не регресс, просто устаревший модуль; удаление — обычный batch группы A следующего среза |
-| `audio_bindings.rs` | 1120 | 29 | `lib.rs:765` (`new_session_seed`) | **снос, не порт** — [BUG-550](../../bugs/BUG-550-OPEN.md): уже затенён `web_audio.rs` (устанавливается позже в том же контексте, `globalThis.AudioContext` переписывается) ещё ДО V8-перехода; не регресс миграции. Функциональный пробел (доп. типы узлов + ADR-007 audio-noise) — отдельное решение, не в объёме S12b |
+| `audio_bindings.rs` | 1120 | 29 | `lib.rs:765` (`new_session_seed`) | **снос, не порт** — [BUG-550](../../bugs/BUG-550-FIXED.md): уже затенён `web_audio.rs` (устанавливается позже в том же контексте, `globalThis.AudioContext` переписывается) ещё ДО V8-перехода; не регресс миграции. Функциональный пробел (доп. типы узлов + ADR-007 audio-noise) — отдельное решение, не в объёме S12b |
 
 Т.е. `navigator.contacts`, `cookieStore`, `PaymentRequest`, `MediaRecorder`,
 `document.startViewTransition` и др. в дефолтной сборке отсутствуют. Для 11 из 13

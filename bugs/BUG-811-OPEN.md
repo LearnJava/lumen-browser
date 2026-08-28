@@ -38,7 +38,7 @@ async_test(t => {
 | `csp-meta-script` — `script-src 'self'` + инлайн-скрипт | ничего (инлайн запрещён) | `inline-script-ran` — **скрипт выполнился** |
 | `csp-meta-spv` — слушаем событие на `window` и на `document` | `spv-window` / `spv-document` | только `spv-class=function`; **события нет ни разу** |
 | `csp-header-spv` — та же политика заголовком ответа | `spv-window` | только `header-seen`; **события нет** |
-| `csp-meta-img` — `img-src 'none'` + `<img onload/onerror>` | `img-onerror` (заблокировано) | **ни одного события** — но это [BUG-804](BUG-804-OPEN.md) (события ресурсов у элементов из парсера), а не блокировка |
+| `csp-meta-img` — `img-src 'none'` + `<img onload/onerror>` | `img-onerror` (заблокировано) | **ни одного события** — но это [BUG-804](BUG-804-FIXED.md) (события ресурсов у элементов из парсера), а не блокировка |
 
 Строка `csp-meta-img` — единственная, из которой нельзя делать вывод о CSP:
 `<img>` из парсера не диспатчит ни `load`, ни `error` независимо от политики.

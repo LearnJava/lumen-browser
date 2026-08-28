@@ -50,7 +50,7 @@ section to BUG-480 instead.
 
 `run_report.py --all --root x-frame-options --recursive` — 1 мин 21 с,
 **0/6 harness OK, 0/157 сабтестов** — сплошная стена TIMEOUT. Единственная
-причина — уже открытый [BUG-480](../bugs/BUG-480-OPEN.md): каждый сабтест
+причина — уже открытый [BUG-480](../../bugs/BUG-480-OPEN.md): каждый сабтест
 строит `<iframe>` и ждёт либо `message` от вложенной страницы, либо
 `load`-событие самого `<iframe>` — оба пути требуют настоящего вложенного
 browsing context, которого у `<iframe>` в Lumen нет, поэтому логика

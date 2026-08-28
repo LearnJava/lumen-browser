@@ -31,9 +31,9 @@ never given the rest of the `Node` mutation interface, only the one method
 
 Same subsystem, same "two independently-written document objects with
 non-overlapping holes" pattern already flagged by
-[BUG-358](bugs/BUG-358-OPEN.md) (live document missing metadata attributes:
+[BUG-358](BUG-358-FIXED.md) (live document missing metadata attributes:
 `characterSet`/`URL`/`compatMode`/…) and
-[BUG-415](bugs/BUG-415-FIXED.md) (the *detached* document from
+[BUG-415](BUG-415-FIXED.md) (the *detached* document from
 `createHTMLDocument`/`createDocument` missing the same `Node` methods, plus
 HTML accessors) — this is the third, distinct hole in the same pair of
 objects: the **live** document additionally lacks `removeChild`/

@@ -47,9 +47,9 @@ PerformanceEntry` по W3C Paint Timing §2) — записи остаются "
 plain-object значениями, а не инстансами этого интерфейса, поэтому
 `window.PerformancePaintTiming` = `undefined`.
 
-Тот же класс дефекта, что [BUG-624](bugs/BUG-624-OPEN.md) (`Navigator`),
-[BUG-637](bugs/BUG-637-OPEN.md) (`Window`) и
-[BUG-589](bugs/BUG-589-OPEN.md) (`window` сам не WebIDL-объект) —
+Тот же класс дефекта, что [BUG-624](BUG-624-OPEN.md) (`Navigator`),
+[BUG-637](BUG-637-OPEN.md) (`Window`) и
+[BUG-589](BUG-589-OPEN.md) (`window` сам не WebIDL-объект) —
 WebIDL-интерфейсные объекты систематически отсутствуют как глобалы,
 хотя поведение самих shim-функций местами уже реализовано.
 
@@ -60,7 +60,7 @@ WebIDL-интерфейсные объекты систематически от
   сетевой 404 (`../` не схлопывается при резолве относительного URL),
   файл реально вендорен и лежит на диске
   (`tests/wpt/paint-timing/resources/utils.js`) — прямая реконфирмация
-  [BUG-346](bugs/BUG-346-OPEN.md). Симптом в логе — `script error: JS
+  [BUG-346](BUG-346-FIXED.md). Симптом в логе — `script error: JS
   runtime error: test_fcp is not defined` (хелпер из недогруженного
   `utils.js`), затем внешний таймаут wptrunner.
 - 6/36 `ReferenceError: assert{No,}FirstContentfulPaint is not defined` —
