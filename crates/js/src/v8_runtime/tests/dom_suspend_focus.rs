@@ -9,6 +9,10 @@
 //! вместе с его гонкой за замок документа (BUG-794).
 
 use super::*;
+// Ограниченный захват документа (BUG-794) переехал в `v8_runtime::named_access`
+// батчем SPLIT-JS7; глоб родителя эти два имени не протягивает — они нужны
+// только тестам, и в самом `v8_runtime.rs` такой `use` погас бы как unused.
+use crate::v8_runtime::named_access::{NAMED_ACCESS_LOCK_BUDGET, lock_document_bounded};
 
 // BUG-327: `Node.prototype.hasChildNodes()` was missing entirely, and the
 // ordinary live element/text/comment wrapper (`_lumen_build_element`) had no
