@@ -4227,14 +4227,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/click_log.rs:97` **struct** `ClickInfo` — Клик мышью: window-координаты и что под курсором
 `crates/shell/src/click_log.rs:107` **struct** `HitInfo`
 `crates/shell/src/click_log.rs:114` **enum** `ClickOutcome`
-`crates/shell/src/click_log.rs:123` **fn** `log_click`
-`crates/shell/src/click_log.rs:152` **fn** `log_nav` — Навигация на новый URL запущена (navigate_to вызван)
-`crates/shell/src/click_log.rs:158` **fn** `log_load_start` — Фоновый поток загрузки страницы стартовал
-`crates/shell/src/click_log.rs:165` **fn** `log_load_ok` — Страница загружена и отрисована
-`crates/shell/src/click_log.rs:173` **fn** `log_load_err` — Ошибка загрузки
-`crates/shell/src/click_log.rs:181` **fn** `log_fragment` — Скроллинг к фрагменту (#id) без перезагрузки страницы
-`crates/shell/src/click_log.rs:188` **fn** `log_js_nav` — Навигация из JS (location.href=, history.pushState, window.open …)
-`crates/shell/src/click_log.rs:194` **fn** `log_page_ready` — Страница полностью применена (apply_loaded_page завершён)
+`crates/shell/src/click_log.rs:129` **fn** `log_click`
+`crates/shell/src/click_log.rs:162` **fn** `log_nav` — Навигация на новый URL запущена (navigate_to вызван)
+`crates/shell/src/click_log.rs:168` **fn** `log_load_start` — Фоновый поток загрузки страницы стартовал
+`crates/shell/src/click_log.rs:175` **fn** `log_load_ok` — Страница загружена и отрисована
+`crates/shell/src/click_log.rs:183` **fn** `log_load_err` — Ошибка загрузки
+`crates/shell/src/click_log.rs:191` **fn** `log_fragment` — Скроллинг к фрагменту (#id) без перезагрузки страницы
+`crates/shell/src/click_log.rs:198` **fn** `log_js_nav` — Навигация из JS (location.href=, history.pushState, window.open …)
+`crates/shell/src/click_log.rs:204` **fn** `log_page_ready` — Страница полностью применена (apply_loaded_page завершён)
 `crates/shell/src/config.rs:49` **fn** `init_global` — Install the process-global fingerprint profile. Idempotent: the first call
 `crates/shell/src/config.rs:55` **fn** `global` — Return the process-global fingerprint profile, or the default if unset
 `crates/shell/src/config.rs:124` **fn** `init_adblock` — Initialise the ad-block subsystem and install the process-global filter

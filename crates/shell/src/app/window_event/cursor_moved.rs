@@ -242,15 +242,55 @@ impl Lumen {
             // toolbar::CHROME_H` gate вЂ” that constant no longer
             // describes where the chrome's opaque area ends
             // (variable-width sidebar, differently-sized toolbar row).
-            let new_hovered = if self.point_over_chrome(x_css, y_css) {
+            // BUG-480 срез 16: курсор над содержимым фрейма — hover страницы
+            // пуст, а его место занимает пара «фрейм + узел ребёнка». Две
+            // разные переменные, потому что `NodeId` уникален лишь внутри
+            // своего документа: положив узел ребёнка в `hovered_nid`, страница
+            // подсветила бы по `:hover` свой бокс с тем же индексом и послала
+            // бы ему `mousedown`.
+            let target = if self.point_over_chrome(x_css, y_css) {
+                frames::PointerTarget { page: None, frame: None }
+            } else {
+                self.pointer_target(x_css, y_css)
+            };
+            let frame_target = target.frame;
+            let new_hovered_frame =
+                frame_target.as_ref().and_then(|t| t.hit.as_ref().map(|h| (t.frame, h.node)));
+            let new_hovered = if frame_target.is_some() {
                 None
             } else {
-                let (page_x, page_y) = self.page_point(x_css, y_css);
-                self.layout_box
-                    .as_ref()
-                    .and_then(|lb| hit_test(Point::new(page_x, page_y), lb))
-                    .map(|r| r.node)
+                target.page.map(|r| r.node)
             };
+            #[cfg(feature = "v8")]
+            if new_hovered_frame != self.hovered_frame {
+                let old_frame = self.hovered_frame;
+                self.hovered_frame = new_hovered_frame;
+                // Порядок тот же, что у страницы: сначала уход, потом приход.
+                // Координаты — в системе КАЖДОГО из документов; для ухода
+                // берётся точка того же фрейма, которую он видел последней,
+                // а её больше нет, поэтому уход адресуется без пересчёта — с
+                // нулём (`clientX`/`clientY` события leave в этом движке
+                // читаются редко, а неверное окно координат было бы хуже).
+                if let Some((f, n)) = old_frame {
+                    let nid = n.index() as u32;
+                    self.frame_pointer_event(f, nid, "pointerout", (0.0, 0.0), (0, 0));
+                    self.frame_mouse_event(f, nid, "mouseout", (0.0, 0.0), (0, 0));
+                    self.frame_pointer_event(f, nid, "pointerleave", (0.0, 0.0), (0, 0));
+                    self.frame_mouse_event(f, nid, "mouseleave", (0.0, 0.0), (0, 0));
+                }
+                if let (Some((f, n)), Some(t)) = (new_hovered_frame, frame_target.as_ref()) {
+                    let nid = n.index() as u32;
+                    let at = (t.local.x, t.local.y);
+                    self.frame_pointer_event(f, nid, "pointerover", at, (0, 0));
+                    self.frame_mouse_event(f, nid, "mouseover", at, (0, 0));
+                    self.frame_pointer_event(f, nid, "pointerenter", at, (0, 0));
+                    self.frame_mouse_event(f, nid, "mouseenter", at, (0, 0));
+                }
+            }
+            #[cfg(not(feature = "v8"))]
+            {
+                self.hovered_frame = new_hovered_frame;
+            }
             if new_hovered != self.hovered_nid {
                 #[cfg(feature = "v8")]
                 let old_nid = self.hovered_nid;
