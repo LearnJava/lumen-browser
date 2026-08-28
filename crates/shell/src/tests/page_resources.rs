@@ -220,41 +220,41 @@ fn frame_subresources_fetch_links_and_imgs_with_outcomes() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("ok.css"), "p { color: red; }").unwrap();
-    // Р”Р»СЏ file-Р±Р°Р·С‹ `fetch_image_bytes` С‡РёС‚Р°РµС‚ Р±Р°Р№С‚С‹ СЃ РґРёСЃРєР° Р±РµР· РґРµРєРѕРґРёСЂРѕРІР°РЅРёСЏ:
-    // СЃРѕРґРµСЂР¶РёРјРѕРµ РЅРµ РІР°Р¶РЅРѕ, РІР°Р¶РµРЅ С„Р°РєС‚ С‡С‚РµРЅРёСЏ.
-    std::fs::write(dir.join("ok.png"), "bytes").unwrap();
+    // BUG-480 срез 15: картинка теперь ДЕКОДИРУЕТСЯ, а не только читается с
+    // диска, поэтому фикстура обязана быть настоящим PNG — исход `<img>` стал
+    // означать «пиксели есть», а не «байты прочитались».
+    std::fs::write(dir.join("ok.png"), tiny_png(4, 2)).unwrap();
     // missing.css / missing.png РЅРµ СЃРѕР·РґР°СЋС‚СЃСЏ.
 
-    let doc = lumen_html_parser::parse(&format!(
+    // URL-ы ОТНОСИТЕЛЬНЫЕ (разрешаются от базы ребёнка ниже): так пишет живая
+    // разметка, и только на них видно, что ключ регистрации картинки — не
+    // сырой `src` (BUG-480 срез 15).
+    let doc = lumen_html_parser::parse(
         r#"<html><head>
-                 <link rel="stylesheet" href="{}/ok.css">
-                 <link rel="alternate" href="{}/ignored.css">
-                 <link rel="stylesheet" href="{}/missing.css">
+                 <link rel="stylesheet" href="ok.css">
+                 <link rel="alternate" href="ignored.css">
+                 <link rel="stylesheet" href="missing.css">
                </head><body>
-                 <img src="{}/ok.png">
-                 <img src="{}/missing.png">
-                 <img loading="lazy" src="{}/lazy.png">
+                 <img src="ok.png">
+                 <img src="missing.png">
+                 <img loading="lazy" src="lazy.png">
                </body></html>"#,
-        dir.display(),
-        dir.display(),
-        dir.display(),
-        dir.display(),
-        dir.display(),
-        dir.display(),
-    ));
+    );
     struct NullSink;
     impl EventSink for NullSink {
         fn emit(&self, _event: &Event) {}
     }
     let base = ResourceBase::File(dir.join("index.html"));
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let mut doc = doc;
     let out = fetch_frame_subresources(
-        &doc,
+        &mut doc,
         &base,
         &sink,
         None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
         Size::new(1024.0, 720.0),
+        lumen_core::ColorSpace::Srgb,
     );
 
     assert_eq!(out.links.len(), 2, "rel=alternate is not a cascade sheet");
@@ -265,6 +265,40 @@ fn frame_subresources_fetch_links_and_imgs_with_outcomes() {
     assert_eq!(out.images.len(), 2, "loading=lazy is not requested at all");
     assert!(out.images[0].1, "ok.png exists");
     assert!(!out.images[1].1, "missing.png must report error");
+
+    // BUG-480 срез 15: пиксели уехали наружу под РАЗРЕШЁННЫМ ключом, а карта
+    // ключей описывает ОБЕ картинки — битую тоже, иначе её сырой `src` в
+    // display list совпал бы с чужим зарегистрированным ключом страницы.
+    assert_eq!(out.decoded_images.len(), 1, "декодируется только существующая");
+    assert!(
+        out.decoded_images[0].0.ends_with("ok.png") && out.decoded_images[0].0 != "ok.png",
+        "ключ — разрешённый адрес, а не сырой src: {}",
+        out.decoded_images[0].0
+    );
+    assert_eq!(out.decoded_images[0].1.width, 4, "пиксели настоящие, 4x2");
+    assert_eq!(out.image_keys.len(), 2, "в карте и битая картинка");
+    assert!(out.image_keys.iter().all(|(raw, key)| raw != key), "ключ отличается от src");
+    // Intrinsic-размеры дописаны в дерево ребёнка: без них `<img>` без
+    // атрибутов лёг бы нулевым боксом внутри фрейма.
+    let img = out.images[0].0;
+    let lumen_dom::NodeData::Element { attrs, .. } = &doc.get(img).data else {
+        panic!("<img> is an element");
+    };
+    let w = attrs.iter().find(|a| a.name.local == "width").map(|a| a.value.clone());
+    assert_eq!(w.as_deref(), Some("4"), "intrinsic width из декодированной картинки");
+}
+
+/// Настоящий PNG `w`×`h` (непрозрачный) для фикстур: `decode_image` обязан его
+/// разобрать, поэтому строка «bytes» тут больше не годится.
+fn tiny_png(w: u32, h: u32) -> Vec<u8> {
+    let img = lumen_image::Image {
+        width: w,
+        height: h,
+        format: lumen_image::PixelFormat::Rgba8,
+        data: vec![255u8; (w * h * 4) as usize],
+        icc_profile: None,
+    };
+    lumen_image::encode_png_rgba8(&img).unwrap()
 }
 
 // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ @import file loading (CSS Cascade L4 В§6.5) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ

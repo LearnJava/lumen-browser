@@ -480,6 +480,7 @@ pub(crate) fn parse_and_layout(
             deterministic,
             cross_origin_isolated,
             js_ctx.as_ref(),
+            target,
         )
     };
 
@@ -691,6 +692,14 @@ pub(crate) fn parse_and_layout(
         for (src, image) in fetch_and_decode_background_images(&layout, base, sink, cookie_jar.clone(), target) {
             images.push((src, image));
         }
+    }
+    // BUG-480 срез 15: картинки под-документов фреймов едут в ОБЩИЙ список
+    // страницы. Их ключи разрешены относительно базы ребёнка
+    // (`frames::frame_image_key`), поэтому со своими ключами страницы они не
+    // сталкиваются, а все существующие точки регистрации (`apply_loaded_page`,
+    // `reload`, `pending_images`, CPU-кэш снимков) подхватывают их без правок.
+    for h in &frames {
+        images.extend(h.images.iter().map(|(k, i)| (k.clone(), Arc::clone(i))));
     }
 
     let rule_count = sheet.rules.len();

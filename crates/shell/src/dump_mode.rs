@@ -232,7 +232,12 @@ pub(crate) fn render_source_to_png(
 
     let (png, width, height) = {
         let _s = lumen_core::trace::span("paint", "paint");
-        let dl = paint_ordered(&parsed.layout);
+        let mut dl = paint_ordered(&parsed.layout);
+        // BUG-480 срез 15: содержимое под-документов фреймов — и здесь. Живой
+        // путь вклеивает его в `Lumen::set_display_list` (срез 14), а `--dump-
+        // display-list` — у себя; снимок собирает список сам и до этого среза
+        // рисовал на месте фрейма серую заглушку.
+        crate::frames::splice_frame_content(&mut dl, &parsed.frames);
         let image = Renderer::render_to_image_cpu(width, height, &dl, &images, 0.0, 0.0)?;
         let png = lumen_image::encode_png_rgba8(&image)?;
         (png, width, height)

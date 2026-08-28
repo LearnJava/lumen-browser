@@ -469,6 +469,8 @@ fn splice_handle(src: &str, host_rect: Rect, content_dl: DisplayList) -> crate::
         content_dl,
         host_rect: Some(host_rect),
         host_src: src.to_owned(),
+        images: Vec::new(),
+        image_keys: Vec::new(),
     }
 }
 
@@ -588,6 +590,53 @@ fn splice_frame_content_needs_matching_rect_not_just_src() {
     crate::frames::splice_frame_content(&mut dl, &frames);
     assert_eq!(before.len(), dl.len(), "чужой бокс — не наша заглушка, список не трогаем");
     assert!(placeholder_at(&dl, "child.html").is_some());
+}
+
+// ── rekey_frame_images (BUG-480 срез 15) ────────────────────────────────────
+
+/// Ключи картинок под-документа переписываются на разрешённые адреса, а `src`
+/// заглушки ВЛОЖЕННОГО фрейма остаётся нетронутым.
+///
+/// Второе не мелочь и не гипотетика: заглушка ищется вклейкой именно по `src`,
+/// поэтому переписанный ключ означал бы серый прямоугольник вместо содержимого
+/// внука — при том что сама картинка нарисовалась бы правильно, то есть дефект
+/// выглядел бы как «вложенные фреймы перестали работать».
+#[test]
+fn rekey_frame_images_rewrites_own_images_and_spares_nested_placeholder() {
+    let img = |src: &str| lumen_paint::DisplayCommand::DrawImage {
+        rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+        src: src.to_owned(),
+        alt: String::new(),
+        object_fit: lumen_layout::ObjectFit::default(),
+        object_position: lumen_layout::ObjectPosition::default(),
+        image_rendering: lumen_layout::ImageRendering::default(),
+    };
+    let mut dl = vec![img("pic.png"), img("nested.html"), img("other.png")];
+
+    let mut parent = splice_handle("child.html", Rect::new(0.0, 0.0, 100.0, 100.0), Vec::new());
+    parent.image_keys = vec![
+        ("pic.png".to_owned(), "http://h/a/pic.png".to_owned()),
+        // Патологическая разметка: `<img>` на тот же адрес, что вложенный
+        // фрейм. Побеждает фрейм — картинку он всё равно не показал бы.
+        ("nested.html".to_owned(), "http://h/a/nested.html".to_owned()),
+    ];
+    let mut nested = splice_handle("nested.html", Rect::new(0.0, 0.0, 50.0, 50.0), Vec::new());
+    nested.depth = 1;
+    nested.parent_doc = Some(Arc::clone(&parent.doc));
+    let frames = vec![parent, nested];
+
+    crate::frames::rekey_frame_images(&mut dl, &frames, 0);
+
+    let srcs: Vec<String> = dl
+        .iter()
+        .map(|c| match c {
+            lumen_paint::DisplayCommand::DrawImage { src, .. } => src.clone(),
+            _ => String::new(),
+        })
+        .collect();
+    assert_eq!(srcs[0], "http://h/a/pic.png", "своя картинка получает разрешённый ключ");
+    assert_eq!(srcs[1], "nested.html", "заглушка вложенного фрейма остаётся адресуемой");
+    assert_eq!(srcs[2], "other.png", "чего нет в карте — не трогаем");
 }
 
 // в”Ђв”Ђ PH1-2: Progressive streaming pipeline в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
