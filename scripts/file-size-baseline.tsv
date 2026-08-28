@@ -13,7 +13,6 @@
 9192	crates/engine/css-parser/src/parser.rs
 7955	crates/engine/paint/src/backends/femtovg_backend.rs
 6998	crates/engine/dom/src/lib.rs
-4970	crates/js/src/v8_runtime.rs
 4809	crates/engine/paint/src/cpu_raster.rs
 4504	crates/core/src/ext.rs
 4408	crates/js/src/filesystem_access.rs
@@ -24,6 +23,7 @@
 3435	crates/chrome/src/model.rs
 2962	crates/driver/src/session.rs
 2762	crates/network/src/h3/conn_connect.rs
+2680	crates/js/src/v8_runtime.rs
 2637	crates/js/src/subtle_crypto.rs
 2544	crates/shell/src/forms.rs
 2365	crates/js/src/video_bindings.rs
