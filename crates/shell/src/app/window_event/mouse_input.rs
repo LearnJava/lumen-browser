@@ -192,7 +192,7 @@ impl Lumen {
                 let at = self
                     .pointer_target(x_css, y_css)
                     .frame
-                    .map_or((0.0, 0.0), |t| (t.local.x, t.local.y));
+                    .map_or((0.0, 0.0), |t| (t.client.x, t.client.y));
                 let nid = n.index() as u32;
                 self.frame_pointer_event(f, nid, "pointerdown", at, (0, 1));
                 self.frame_mouse_event(f, nid, "mousedown", at, (0, 1));
@@ -941,7 +941,7 @@ impl Lumen {
                 let at = self
                     .pointer_target(xu, yu)
                     .frame
-                    .map_or((0.0, 0.0), |t| (t.local.x, t.local.y));
+                    .map_or((0.0, 0.0), |t| (t.client.x, t.client.y));
                 let nid = n.index() as u32;
                 self.frame_pointer_event(f, nid, "pointerup", at, (0, 0));
                 self.frame_mouse_event(f, nid, "mouseup", at, (0, 0));

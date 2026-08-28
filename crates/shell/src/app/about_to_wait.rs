@@ -130,9 +130,21 @@ impl Lumen {
         // Р±РµР· route_*: V8PersistentJs СЃР°Рј С‚СѓРЅРЅРµР»РёСЂСѓРµС‚ РЅР° JS-РїРѕС‚РѕРє (ADR-014).
         // Р’РЅРµ РіРµР№С‚Р° `js_present`: Сѓ С„СЂРµР№РјР° РјРѕР¶РµС‚ Р±С‹С‚СЊ СЃРєСЂРёРїС‚ РїСЂРё СЃС‚СЂР°РЅРёС†Рµ Р±РµР·
         // РµРґРёРЅРѕРіРѕ СЃРєСЂРёРїС‚Р°. rAF С„СЂРµР№РјРѕРІ РЅРµ С‚РёРєР°РµС‚СЃСЏ (СЃСЂРµР· 1 вЂ” СЃРј. Р±Р°Рі-С„Р°Р№Р»).
-        let frame_js_handles: Vec<Arc<dyn PersistentJs>> =
-            self.frames.iter().filter_map(|f| f.js.clone()).collect();
-        for fjs in &frame_js_handles {
+        // РРЅРґРµРєСЃ С…СЌРЅРґР»Р° РµРґРµС‚ СЂСЏРґРѕРј СЃ СЂР°РЅС‚Р°Р№РјРѕРј (СЃСЂРµР· 17): С„СЂРµР№Рј Р±РµР· СЃРєСЂРёРїС‚РѕРІ
+        // РІ СЌС‚РѕС‚ СЃРїРёСЃРѕРє РЅРµ РїРѕРїР°РґР°РµС‚, РїРѕСЌС‚РѕРјСѓ РїРѕР·РёС†РёСЏ РІ РЅС‘Рј РЅРµ СЂР°РІРЅР° РїРѕР·РёС†РёРё РІ
+        // `self.frames`, Р° РїСЂРѕРєСЂСѓС‚РєР° Р°РґСЂРµСЃСѓРµС‚СЃСЏ РёРјРµРЅРЅРѕ РІС‚РѕСЂРѕР№.
+        let frame_js_handles: Vec<(usize, Arc<dyn PersistentJs>)> = self
+            .frames
+            .iter()
+            .enumerate()
+            .filter_map(|(i, f)| f.js.clone().map(|js| (i, js)))
+            .collect();
+        // BUG-480 СЃСЂРµР· 17: `window.scrollTo`/`scrollBy` РёР· СЃРєСЂРёРїС‚Р° СЃР°РјРѕРіРѕ
+        // СЂРµР±С‘РЅРєР°. РљР°Р¶РґС‹Р№ С„СЂРµР№Рј РєРѕРїРёС‚ Р·Р°РїСЂРѕСЃС‹ РІ РЎР’РћР‘Рњ СЂР°РЅС‚Р°Р№РјРµ, Рё РґРѕ СЃСЂРµР·Р° 17
+        // РёС… РЅРµ РґСЂРµРЅРёСЂРѕРІР°Р» РЅРёРєС‚Рѕ вЂ” СЃС‚СЂР°РЅРёС‡РЅС‹Р№ РґСЂРµРЅР°Р¶ РЅРёР¶Рµ Р·РЅР°РµС‚ С‚РѕР»СЊРєРѕ
+        // `self.js_ctx`. РџСЂРёРјРµРЅСЏСЋС‚СЃСЏ РїРѕСЃР»Рµ С†РёРєР»Р°: С‚Р°Рј РЅСѓР¶РµРЅ `&mut self`.
+        let mut frame_scrolls: Vec<(usize, f32)> = Vec::new();
+        for (idx, fjs) in &frame_js_handles {
             fjs.tick_timers();
             fjs.pump_websockets();
             fjs.pump_sse();
@@ -144,6 +156,16 @@ impl Lumen {
             // РќР°РІРёРіР°С†РёСЏ РёР· С„СЂРµР№РјР° РѕС‚РєР»РѕРЅСЏРµС‚СЃСЏ (СЃСЂРµР· 1) вЂ” РґСЂРµРЅРёРј, С‡С‚РѕР±С‹ Р·Р°РїСЂРѕСЃ
             // РЅРµ РєРѕРїРёР»СЃСЏ Рё РЅРµ СЃСЂР°Р±РѕС‚Р°Р» РїРѕР·Р¶Рµ РёР· РґСЂСѓРіРѕРіРѕ РјРµСЃС‚Р°.
             let _ = fjs.take_navigate_request();
+            // Р“Р»Р°РґРєРёР№ (`behavior: 'smooth'`) РїСЂРёРјРµРЅСЏРµС‚СЃСЏ РјРіРЅРѕРІРµРЅРЅРѕ: СЃРІРѕРµР№
+            // Р°РЅРёРјР°С†РёРё Сѓ РїСЂРѕРєСЂСѓС‚РєРё С„СЂРµР№РјР° РЅРµС‚, Р° С‚РёРєР°С‚СЊ РµС‘ Р±С‹Р»Рѕ Р±С‹ РЅРµРіРґРµ вЂ”
+            // rAF РїРѕРґ-РґРѕРєСѓРјРµРЅС‚РѕРІ РЅРµ РёРґС‘С‚ (СЃСЂРµР· 1). РћС‚РєР»РѕРЅРµРЅРёРµ Р·Р°РїРёСЃР°РЅРѕ РІ
+            // bugs/BUG-480-OPEN.md.
+            for (target_y, _smooth) in fjs.take_page_scroll_requests() {
+                frame_scrolls.push((*idx, target_y));
+            }
+        }
+        for (idx, target_y) in frame_scrolls {
+            self.apply_frame_scroll(idx, target_y);
         }
         // ADR-016 M2.2c-2d (20): gate on `self.js_present` instead of borrowing the
         // `Arc` directly (`if let Some(js) = &self.js_ctx`), so the block stays live
@@ -220,7 +242,7 @@ impl Lumen {
         // BUG-480 СЃСЂРµР· 1: С‚Р°Р№РјРµСЂС‹ С„СЂРµР№РјРѕРІ СѓС‡Р°СЃС‚РІСѓСЋС‚ РІ WaitUntil РЅР°СЂР°РІРЅРµ СЃ
         // С‚Р°Р№РјРµСЂР°РјРё СЃС‚СЂР°РЅРёС†С‹, РёРЅР°С‡Рµ setTimeout СЂРµР±С‘РЅРєР° СЃСЂР°Р±Р°С‚С‹РІР°РµС‚ СЃ Р·Р°РґРµСЂР¶РєРѕР№
         // РґРѕ СЃР»РµРґСѓСЋС‰РµРіРѕ РїСЂРѕР±СѓР¶РґРµРЅРёСЏ РїРѕ С‡СѓР¶РѕРјСѓ РёСЃС‚РѕС‡РЅРёРєСѓ.
-        for fjs in &frame_js_handles {
+        for (_, fjs) in &frame_js_handles {
             if let Some(wakeup_epoch_ms) = fjs.take_timer_wakeup() {
                 let now_epoch_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -243,7 +265,7 @@ impl Lumen {
         // poll-РґРµРґР»Р°Р№РЅ: РїРѕР»СѓС‡Р°С‚РµР»СЊ СЂР°Р·Р±РµСЂС‘С‚ СЏС‰РёРє РЅР° Р±Р»РёР¶Р°Р№С€РµРј С‚РёРєРµ РїСѓРјРїС‹.
         // Р§РёСЃС‚С‹Рµ С‡С‚РµРЅРёСЏ, Р±РµР· РїРѕР±РѕС‡РЅС‹С… СЌС„С„РµРєС‚РѕРІ; РїРѕРґ РґРІРёР¶РєРѕРІС‹Рј РїРѕС‚РѕРєРѕРј СЃС‚СЂР°РЅРёС†Р°
         // РѕРїСЂР°С€РёРІР°РµС‚СЃСЏ С‚РµРј Р¶Рµ route_query_js-РєР°РЅР°Р»РѕРј, С‡С‚Рѕ РѕСЃС‚Р°Р»СЊРЅС‹Рµ С‡С‚РµРЅРёСЏ.
-        let transport_pending = frame_js_handles.iter().any(|fjs| fjs.frame_transport_pending())
+        let transport_pending = frame_js_handles.iter().any(|(_, fjs)| fjs.frame_transport_pending())
             || match self.engine_thread.as_ref() {
                 Some(et) => {
                     route_query_js(

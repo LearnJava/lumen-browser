@@ -305,8 +305,8 @@ impl Lumen {
                     outcome: click_log::ClickOutcome::IntoFrame {
                         frame: target.frame,
                         node: target.hit.as_ref().map(|h| h.node.index() as u32),
-                        x: target.local.x,
-                        y: target.local.y,
+                        x: target.client.x,
+                        y: target.client.y,
                     },
                 });
             }
@@ -316,7 +316,7 @@ impl Lumen {
                     target.frame,
                     hit.node.index() as u32,
                     "click",
-                    (target.local.x, target.local.y),
+                    (target.client.x, target.client.y),
                     (0, 1),
                 );
             }
