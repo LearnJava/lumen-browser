@@ -5358,6 +5358,54 @@
      ]
     },
     {
+     "id": "CSSOM",
+     "title": "CSSOM: объектная модель стилей",
+     "status": "planned",
+     "note": "Дорожка «CSSOM: объектная модель стилей», заведена 2026-08-28 по решению пользователя переклассифицировать зонтичные записи BUGS.md, которые описывают не дефект реализованного кода, а никогда не реализованную функциональность. Четыре записи (BUG-471/484/472/493) заведены 2026-08-02 в ходе WPT-RUN-3 и с тех пор не чинились, а ПОПОЛНЯЛИСЬ: их «срезы» — не куски работы, а прогоны категорий WPT, каждый из которых заново упирался в ту же дыру (у BUG-484 таких прогонов 16, у BUG-472 — 9). Файлы `bugs/BUG-NNN-OPEN.md` остаются на месте и служат детальной записью наблюдений (переименование порвало бы ссылки из CLAUDE.md, STATUS-файлов и питон-тулинга); что меняется — владение и очередь: это задачи фазы, а не строки для P3, который берёт баги по одному. Порядок внутри дорожки: CSSOM-1 (объекты) → CSSOM-2 (inline style) → CSSOM-3 (покрытие чтения) → CSSOM-4 (актуальность чтения); первые две дают классы и парсер, на которые опираются вторые две",
+     "tasks": [
+      {
+       "id": "CSSOM-1",
+       "title": "CSSOM-1: styleSheets, CSSRule, CSSStyleSheet",
+       "status": "planned",
+       "size": "L",
+       "note": "Объектная модель таблиц стилей и правил: `document.styleSheets`, `<style>`/`<link>.sheet` (сейчас `undefined`, не пустой список), классы `CSSStyleSheet`/`CSSRule`/`CSSRuleList`/`CSSStyleRule`/`CSSMediaRule`/… как глобалы, `insertRule`/`deleteRule`, конструктор `new CSSStyleSheet()` (сейчас бросает). Смежные записи того же гэпа, чинятся тем же кодом: BUG-897 (записывающая половина — `adoptedStyleSheets` сейчас plain-экспандо: присваивание `[null]` не бросает, ничего не делает и читается обратно массивом длины 1, то есть проба «присвоил → прочитал → совпало» тут не доказывает НИЧЕГО) и BUG-746. Хвост BUG-804: `style.sheet` остаётся `null` после того, как `<style>` выстрелил `load`",
+       "bugs": [
+        "BUG-471"
+       ]
+      },
+      {
+       "id": "CSSOM-2",
+       "title": "CSSOM-2: парсинг, валидация и сериализация inline `style`",
+       "status": "planned",
+       "size": "L",
+       "note": "Inline-`style` как настоящий `CSSStyleDeclaration` (`crates/js/src/dom.rs::_lumen_make_style`): сейчас сеттер кладёт строку как есть — нет отклонения невалидного значения, нет разворачивания шорткатов в лонгхэнды, нет канонизации при чтении, `cssText` не собирается. 16 прогонов категорий WPT (`css-variables`, `css-logical`, `css-easing`, `css-color-hdr`, `css-rhythm`, `compositing`, `css-scrollbars`, `css-ruby`, `css-transitions`, `css-scroll-snap`, `css-align`, `css-fonts`, `css-text`, `css-flexbox`, `css-ui`, `css-page`) упёрлись в одни и те же три-четыре формы дефекта — их перечень в файле бага и есть спецификация приёмки",
+       "bugs": [
+        "BUG-484"
+       ]
+      },
+      {
+       "id": "CSSOM-3",
+       "title": "CSSOM-3: покрытие `getComputedStyle()`",
+       "status": "planned",
+       "size": "M",
+       "note": "Полнота resolved-value: свойство разбирается и лежит в `ComputedStyle`, но не доезжает до карты сериализации (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`), поэтому `getComputedStyle()` о нём молчит. Замерено по семействам: CSS Logical целиком, `animation-timing-function`/`transition-timing-function`, `overscroll-behavior-x/-y`, `color-scheme`/`color-adjust`/`forced-color-adjust`/`print-color-adjust`, `fill`/`stroke`, `overflow-anchor`/`quotes`/`content`, `background-blend-mode`/`isolation`/`mix-blend-mode`, `scrollbar-color`/`scrollbar-width`, `ruby-*`, `page`. Той же природы BUG-537 (`background-image`/`object-fit`/`object-position`/`image-rendering`/`vertical-align`). Работа механическая и проверяемая построчно — карта против списка полей `ComputedStyle`",
+       "bugs": [
+        "BUG-472"
+       ]
+      },
+      {
+       "id": "CSSOM-4",
+       "title": "CSSOM-4: синхронный флаш стиля перед чтением",
+       "status": "planned",
+       "size": "M",
+       "note": "Актуальность читаемого стиля: нет синхронного флаша стиля/раскладки перед чтением, поэтому `getComputedStyle()` (и `offsetWidth`/`clientWidth`) отдают снимок ДО мутаций, сделанных этим же скриптом. Маскирующая грань, из-за которой дефект не виден в наивной пробе: сравнение двух пустых чтений друг с другом проходит успешно. Делать ПОСЛЕ CSSOM-3 — иначе часть проверок упрётся в отсутствие свойства в карте, а не в устаревший снимок",
+       "bugs": [
+        "BUG-493"
+       ]
+      }
+     ]
+    },
+    {
      "id": "SPLIT",
      "title": "SPLIT: разрезание монолитов",
      "status": "active",
@@ -12205,9 +12253,6 @@
   "js (`crates/js/src/dom.rs:4260-4298` `_lumen_make_style`; `dom.rs:4241-4255` `_lumen_parse_style`/`_lumen_serialize_style`)": [
    "BUG-563"
   ],
-  "js (`crates/js/src/dom.rs:4264-4302`)": [
-   "BUG-484"
-  ],
   "js (`crates/js/src/dom.rs:443`–`460` — `addEventListener` читает только `capture`/`once`)": [
    "BUG-865"
   ],
@@ -12469,7 +12514,6 @@
   "js (`crates/js/src/dom.rs`)": [
    "BUG-462",
    "BUG-464",
-   "BUG-471",
    "BUG-474",
    "BUG-477",
    "BUG-478",
@@ -12663,9 +12707,6 @@
   "js/layout (computed-style reflection)": [
    "BUG-470"
   ],
-  "js/layout граница (`crates/js/src/v8_runtime.rs::_lumen_get_computed_style`, `crates/driver/src/session.rs:379`)": [
-   "BUG-493"
-  ],
   "js/network (`crates/js/src/v8_runtime.rs:3502`/`:3517` — «Phase 0 model: synchronous connect»; ниже `crates/network/src/websocket/mod.rs::connect_deflate`)": [
    "BUG-856"
   ],
@@ -12851,9 +12892,6 @@
   ],
   "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`": [
    "BUG-445"
-  ],
-  "layout (`selector_query.rs::computed_style_to_map`) + js (`_lumen_get_computed_style`)": [
-   "BUG-472"
   ],
   "layout (`style.rs::parse_linear_gradient_angle`) — shared by all 3 paint backends": [
    "BUG-647"

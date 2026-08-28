@@ -71,7 +71,7 @@ Full role definitions, workflows, collaboration rules, task tracking schema — 
 |---|---|---|
 | **P1** | General feature development (source → layout → paint → shell), taken top-down off `STATUS-P1.md`. Finished tracks: DS (design system v3.3, DS-1…DS-19, `docs/design/lumen-v3_3.html`). Current: the CC track (engine chrome) — `STATUS-P1.md` is ordered as one dependency chain «engine roots → chrome visuals → chrome interaction», engine-root bugs that only the chrome exposes (BUG-333/433/431/343/288) were moved here from P3 on 2026-07-29 so one role owns the whole chain. BUG-341 (incremental restyle) is paused by user decision 2026-07-28 — resume only on explicit request | All crates (coordinated with P2/P4) |
 | **P2** | **Reactivated 2026-07-13**: leads P2-wpt (WPT via `wptrunner` + WebDriver BiDi, `docs/tasks/p2-wpt-integration.md`) and the DEVX track (dev-tooling on existing automation surfaces, `docs/automation.md`, ROADMAP.md DEVX-1…6, assigned 2026-07-16). Was reserve (since 2026-06-18). **Owns the CI track since 2026-08-19** (`docs/ci-offload.md`, ROADMAP.md `CI-5`/`CI-6`/`PERF-7`), handed over by P5 whose role forbids the behaviour changes the tail needs. | `lumen-bidi-server`, `lumen-driver`/`lumen-mcp` (DEVX-5), Python tooling `tests/wpt/` + `graphic_tests/run.py` (DEVX-1/4), `.github/workflows/*` |
-| **P3** | **Bug fixes ONLY**: BUGS.md OPEN items, graphic test regressions | All crates (read-only except bug fixes) |
+| **P3** | **Bug fixes ONLY**: BUGS.md OPEN items, graphic test regressions. **Skip a row marked `OPEN (ДОРАБОТКА → <task>)`** — that record describes functionality that was never implemented, not a defect in implemented code, and is owned by the named `ROADMAP.md` task instead (2026-08-28; see BUGS.md's own legend for why the file is not renamed) | All crates (read-only except bug fixes) |
 | **P4** | **CSS properties ONLY**: parsing, ComputedStyle, cascade, end-to-end wiring | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) |
 | **P5** | **Code health ONLY**: audit, workspace-clippy, stub/branch/docs/dep sweeps, safe mechanical cleanup | All crates (read-only except trivial clippy fixes in own crate + branch/worktree/SYMBOLS.md cleanup) |
 
@@ -260,6 +260,7 @@ Update docs **in the same commit** as the code change. Use `grep -n` to find the
 | New feature / capability | `CAPABILITIES.md` + `subsystems/<crate>.md` | ⬜/🟡 → ✅; append bullet to Done section |
 | New feature / capability | `STATUS-PN.md` | delete completed task's pointer line |
 | Bug fixed | `BUGS.md` | `OPEN` → `FIXED <date>` |
+| Bug turns out to be a **feature gap**, not a defect | `BUGS.md` + `ROADMAP.md` + `bugs/BUG-NNN-OPEN.md` + `STATUS-P3.md` | status cell → `OPEN (ДОРАБОТКА → <task>)`; add the `ROADMAP.md` task row (bug id in its `bugs` column) and re-run `gen_roadmap.py`; add a `**Тип:**` line under the bug file's status; delete the pointer line from `STATUS-P3.md`. **Do not rename or move the bug file** — CLAUDE.md, STATUS files and the python tooling reference it by path, and the record of observations stays useful where it is |
 | CSS property (P4) | `CSS-SPECS.md` + `CAPABILITIES.md` | ⬜ → ✅ |
 | New dependency | `docs/plan/tech-stack.md` | append row |
 | Architectural decision | `docs/decisions/ADR-NNN.md` | new file from TEMPLATE.md; update index |
