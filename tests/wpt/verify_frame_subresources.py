@@ -27,10 +27,12 @@ import json
 import os
 import re
 import socket
+import struct
 import subprocess
 import sys
 import threading
 import time
+import zlib
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -88,8 +90,25 @@ window.addEventListener('load', function () {
 </script>
 """
 
+def write_solid_png(w: int, h: int, rgb: tuple) -> bytes:
+    """Минимальный однотонный PNG — тот же генератор, что в `verify_frame_images.py`."""
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+
+    raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw))
+            + chunk(b"IEND", b""))
+
+
 OK_CSS = "p { color: red; }\n"
-OK_PNG = "not-a-real-png-but-bytes-count\n"
+# BUG-480 срез 16: до среза 15 здесь лежала строка «not-a-real-png», и её
+# хватало — исход `<img>` означал «байты прочитались». Срез 15 стал
+# ДЕКОДИРОВАТЬ картинки под-документа, поэтому нераспознанный файл теперь
+# честно кончается `error`, и проба мерила бы не то, что называет.
+OK_PNG = write_solid_png(8, 8, (0, 128, 0))
 
 
 def _free_port() -> int:
@@ -138,7 +157,8 @@ def main() -> int:
         (".vfsrc-ok.png", OK_PNG),
     ]
     for name, body in files:
-        with open(os.path.join(HERE, name), "w", encoding="utf-8") as handle:
+        mode, kwargs = ("wb", {}) if isinstance(body, bytes) else ("w", {"encoding": "utf-8"})
+        with open(os.path.join(HERE, name), mode, **kwargs) as handle:
             handle.write(body)
 
     port, server, requests_seen = _serve()

@@ -669,6 +669,108 @@ pub(crate) fn rekey_frame_images(dl: &mut DisplayList, frames: &[FrameHandle], i
     }
 }
 
+/// Что находится под точкой страницы (BUG-480 срез 16).
+///
+/// Один результат на оба вопроса, потому что задавать их порознь значит дважды
+/// пройти hit-тестом по layout страницы, а спрашивают на каждом движении мыши.
+pub(crate) struct PointerTarget {
+    /// Hit-тест в layout СТРАНИЦЫ. Если точка во фрейме, это его host-элемент
+    /// (для вложенного — самый внешний `<iframe>`): именно его фокусирует и
+    /// подсвечивает родитель.
+    pub(crate) page: Option<lumen_paint::HitTestResult>,
+    /// Непусто, если точка попала в содержимое фрейма.
+    pub(crate) frame: Option<FramePointerHit>,
+}
+
+/// Куда на самом деле указывает точка страницы, если она попала в СОДЕРЖИМОЕ
+/// фрейма (BUG-480 срез 16).
+pub(crate) struct FramePointerHit {
+    /// Индекс хэндла в `Lumen::frames` — самого глубокого фрейма, накрывшего
+    /// точку.
+    pub(crate) frame: usize,
+    /// Та же точка в координатах под-документа этого фрейма: и система, в
+    /// которой валиден [`Self::hit`], и `clientX`/`clientY` события для
+    /// скриптов ребёнка.
+    pub(crate) local: Point,
+    /// Hit-тест точки в layout под-документа. `None` — под точкой нет ни
+    /// одного бокса ребёнка: событие всё равно принадлежит фрейму (родитель
+    /// его не увидит), но адресовать его в под-документе некому.
+    pub(crate) hit: Option<lumen_paint::HitTestResult>,
+}
+
+/// Одинаковый ли документ-хозяин у хэндла и у текущего шага спуска
+/// (`None` — страница).
+fn same_host_doc(handle: &Option<Arc<Mutex<Document>>>, cur: Option<&Arc<Mutex<Document>>>) -> bool {
+    match (handle, cur) {
+        (None, None) => true,
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        _ => false,
+    }
+}
+
+/// Перевести точку страницы в под-документ фрейма, если она туда попала
+/// (BUG-480 срез 16).
+///
+/// Спуск идёт ПО ПОПАДАНИЮ В HOST-ЭЛЕМЕНТ, а не по перебору прямоугольников:
+/// `hit_test` уже умеет z-index, `transform`, `pointer-events` и клипы, а
+/// «содержит ли прямоугольник точку» не умеет ничего из этого — фрейм,
+/// накрытый чужим позиционированным блоком, забирал бы клик себе.
+///
+/// Попадание в САМ host-бокс мимо его контентной части (рамка, padding) фреймом
+/// не считается: там точка адресует `<iframe>` как элемент родителя.
+///
+/// `NodeId` уникален лишь внутри своего документа, поэтому кандидат ищется по
+/// паре «host-узел + документ-хозяин»: у вложенного фрейма (глубина ≥ 1) хозяин
+/// — документ его собственного фрейма-родителя, и совпадение одного лишь
+/// индекса узла нашло бы чужой элемент.
+pub(crate) fn pointer_target(
+    frames: &[FrameHandle],
+    page_layout: &lumen_layout::LayoutBox,
+    page: Point,
+) -> PointerTarget {
+    let mut cur_layout = page_layout;
+    let mut cur_doc: Option<&Arc<Mutex<Document>>> = None;
+    let mut cur_pt = page;
+    let mut page_hit: Option<lumen_paint::HitTestResult> = None;
+    let mut best: Option<FramePointerHit> = None;
+    // Шагов на один больше предельной глубины: последний завершает спуск и
+    // проставляет `hit` даже фрейму самой глубокой вложенности.
+    for step in 0..=MAX_FRAME_DEPTH + 1 {
+        let hit = hit_test(cur_pt, cur_layout);
+        if step == 0 {
+            page_hit = hit.clone();
+        }
+        let descend = hit
+            .as_ref()
+            .and_then(|h| {
+                frames
+                    .iter()
+                    .position(|f| f.host == h.node && same_host_doc(&f.parent_doc, cur_doc))
+            })
+            .and_then(|i| {
+                let rect = frames[i].host_rect?;
+                let layout = frames[i].layout.as_ref()?;
+                let inside = cur_pt.x >= rect.x
+                    && cur_pt.x < rect.right()
+                    && cur_pt.y >= rect.y
+                    && cur_pt.y < rect.bottom();
+                inside.then_some((i, rect, layout))
+            });
+        let Some((i, rect, layout)) = descend else {
+            // Спуск кончился: точка адресует обычный узел текущего документа.
+            if let Some(b) = best.as_mut() {
+                b.hit = hit;
+            }
+            return PointerTarget { page: page_hit, frame: best };
+        };
+        cur_pt = Point::new(cur_pt.x - rect.x, cur_pt.y - rect.y);
+        cur_layout = layout;
+        cur_doc = Some(&frames[i].doc);
+        best = Some(FramePointerHit { frame: i, local: cur_pt, hit: None });
+    }
+    PointerTarget { page: page_hit, frame: best }
+}
+
 /// Вклеить содержимое всех под-документов ГЛУБИНЫ 0 в display list страницы
 /// (BUG-480 срез 14) — вместо серой заглушки, которую `display_list.rs` рисует
 /// для `BoxKind::Iframe`.

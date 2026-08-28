@@ -203,10 +203,13 @@ impl Lumen {
         // default (CC-14): `#contentArea` starts at y=68, not at CHROME_H=72,
         // so every click hit-tested 4 px below the pixel the user aimed at and
         // controls within 4 px of an edge resolved to the wrong node.
+        //
+        // BUG-480 срез 16: тот же вызов отвечает и на вопрос «не внутри ли
+        // фрейма эта точка» — hit-тест страницы по ней делается один раз.
         let (page_x, page_y) = self.page_point(x_css, y_css);
-        let hit_result = self.layout_box.as_ref().and_then(|lb| {
-            hit_test(Point::new(page_x, page_y), lb)
-        });
+        let target = self.pointer_target(x_css, y_css);
+        let frame_target = target.frame;
+        let hit_result = target.page;
 
         // Debug click log вЂ” Р°РєС‚РёРІРёСЂСѓРµС‚СЃСЏ С„Р»Р°РіРѕРј --click-log РёР»Рё LUMEN_CLICK_LOG=1.
         // For click log: report both the hit box node (<p>) and the inline source_node
@@ -281,6 +284,45 @@ impl Lumen {
                 js.notify_focus_changed(focus_idx);
             });
         }
+        // BUG-480 срез 16: точка внутри содержимого фрейма адресует под-документ,
+        // и на этом путь родителя кончается. Ранний возврат — не оптимизация:
+        // событие внутри вложенного browsing context родительскому документу
+        // ВООБЩЕ не принадлежит (DOM §2.9 строит путь в одном дереве), а до
+        // среза родитель получал `click` на самом `<iframe>` — измерено пробой
+        // `verify_frame_hit_test.py`. По той же причине пропускаются форма и
+        // ссылка: единственный узел страницы под этой точкой — сам `<iframe>`.
+        //
+        // Фокус выше уже переведён на host-элемент: с точки зрения родителя
+        // клик внутрь фрейма фокусирует именно контейнер.
+        if let Some(target) = frame_target {
+            if click_log::is_enabled() {
+                let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                    node_id: *nid, tag, id_attr: id, class_attr: cls,
+                });
+                click_log::log_click(&click_log::ClickInfo {
+                    win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                    hit: hit_ref,
+                    outcome: click_log::ClickOutcome::IntoFrame {
+                        frame: target.frame,
+                        node: target.hit.as_ref().map(|h| h.node.index() as u32),
+                        x: target.local.x,
+                        y: target.local.y,
+                    },
+                });
+            }
+            #[cfg(feature = "v8")]
+            if let Some(hit) = target.hit.as_ref() {
+                self.frame_mouse_event(
+                    target.frame,
+                    hit.node.index() as u32,
+                    "click",
+                    (target.local.x, target.local.y),
+                    (0, 1),
+                );
+            }
+            return;
+        }
+
         // Dispatch JS click event (bubbles from hit node to document).
         // Passes viewport coordinates and modifier key state so
         // handlers can read event.clientX/clientY/ctrlKey/etc.

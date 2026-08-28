@@ -394,6 +394,16 @@ pub(crate) struct Lumen {
     /// Updated on every `CursorMoved`; triggers relayout when it changes so
     /// `:hover` rules re-evaluate. `None` when cursor is outside the content area.
     pub(crate) hovered_nid: Option<NodeId>,
+    /// `(индекс фрейма, узел ЕГО документа)` под курсором — когда курсор стоит
+    /// над содержимым `<iframe>` (BUG-480 срез 16).
+    ///
+    /// Пара с [`Self::hovered_nid`], а не часть его: `NodeId` уникален лишь
+    /// внутри своего документа, поэтому узел ребёнка нельзя положить в поле,
+    /// которое читают `:hover`-рестайл страницы и её же `mousedown`/`mouseup`
+    /// — они нашли бы чужой бокс с совпавшим индексом. Ровно одно из двух
+    /// полей непусто: пока курсор во фрейме, страница считает, что курсор не
+    /// над её содержимым.
+    pub(crate) hovered_frame: Option<(usize, NodeId)>,
     /// DOM node whose mouse button is currently held down (CSS `:active` target).
     /// Set on `MouseInput(Pressed)`, cleared on `MouseInput(Released)`.
     pub(crate) active_nid: Option<NodeId>,
