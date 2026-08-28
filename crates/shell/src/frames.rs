@@ -268,6 +268,18 @@ pub(crate) struct FrameSubresourceOutcomes {
     pub(crate) links: Vec<(NodeId, bool)>,
     /// `(узел <img>, байты получены)` в порядке DOM.
     pub(crate) images: Vec<(NodeId, bool)>,
+    /// BUG-480 срез 15: декодированные картинки ребёнка — `(ключ регистрации,
+    /// пиксели)`, форма `LoadedPage::images`. Ключ — РАЗРЕШЁННЫЙ адрес
+    /// ([`frame_image_key`]), а не сырой `src`.
+    pub(crate) decoded_images: Vec<(String, Arc<lumen_image::Image>)>,
+    /// BUG-480 срез 15: `(сырой src, ключ регистрации)` для КАЖДОГО `<img>`
+    /// ребёнка — в том числе не загрузившегося.
+    ///
+    /// По этой карте [`rekey_frame_images`] переписывает ключи в display list
+    /// под-документа. Битые картинки в карте тоже: иначе ключ остался бы сырым
+    /// и совпал бы с чужим зарегистрированным — во фрейме нарисовалась бы
+    /// картинка страницы.
+    pub(crate) image_keys: Vec<(String, String)>,
     /// BUG-480 срез 12: текст каскада ребёнка (инлайновые `<style>` с
     /// разрешённым `@import`, затем внешние `<link rel=stylesheet>`, в этом
     /// порядке — форма страницы, `parse_and_layout`). До среза 12 такой текст
@@ -289,18 +301,23 @@ pub(crate) struct FrameSubresourceOutcomes {
 /// Срез 12: текст каскада (инлайновые `<style>` через `extract_style_blocks`/
 /// `inline_css_imports`, затем внешние листы) теперь возвращается вместо
 /// отбрасывания — им пользуется layout ребёнка в `load_frame_sub_documents`
-/// сразу после этого прохода. Картинки декодируются по-прежнему не
-/// полностью — только байты ([`fetch_image_bytes`]), в `IMAGE_CACHE` не
-/// попадают: пиксели рисовать пока некому (paint ребёнка — отдельный срез
-/// очереди). `loading="lazy"` не запрашивается вовсе: прокси вьюпорта у
+/// сразу после этого прохода.
+///
+/// Срез 15: картинки проходят весь путь страницы, а не только сеть —
+/// [`decode_image`] через `IMAGE_CACHE`, intrinsic-размеры в дерево ребёнка
+/// (иначе `<img>` без атрибутов лёг бы нулевым боксом) и пиксели наружу для
+/// регистрации в рендерере. До среза брались только байты, которые никто не
+/// декодировал: рисовать их было некому, пока содержимое фрейма не попадало на
+/// экран (срез 14). `loading="lazy"` не запрашивается вовсе: прокси вьюпорта у
 /// фреймов нет, так же как срез 1 пропускает сами `loading=lazy`-iframe.
 pub(crate) fn fetch_frame_subresources(
-    doc: &Document,
+    doc: &mut Document,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     media_ctx: &lumen_css_parser::MediaContext,
     viewport: lumen_core::geom::Size,
+    target: lumen_core::ColorSpace,
 ) -> FrameSubresourceOutcomes {
     let inline = extract_style_blocks(doc);
     let mut css = inline_css_imports(
@@ -320,17 +337,58 @@ pub(crate) fn fetch_frame_subresources(
             .into_iter()
             .filter(|req| !req.is_lazy)
             .collect();
-    let fetched = parallel_map(&requests, |_, req| {
+    // Фаза 1 (параллельно): сеть + декодирование, `doc` не трогаем — форма
+    // `fetch_and_decode_images` страницы.
+    let decoded = parallel_map(&requests, |_, req| {
         let sink: &Arc<dyn EventSink> = &sink.clone();
-        fetch_image_bytes(&req.url, base, sink, cookie_jar.clone()).is_ok()
+        let key = frame_image_key(base, &req.url);
+        let img = crate::image_cache::IMAGE_CACHE.get_or_decode_current(&key, || {
+            decode_image(&req.url, base, sink, cookie_jar.clone(), target)
+        });
+        (key, img)
     });
-    let images = requests
-        .into_iter()
-        .zip(fetched)
-        .map(|(req, ok)| (req.node_id, ok))
-        .collect();
+    // Фаза 2 (последовательно): intrinsic-размеры в дерево ребёнка и сборка
+    // выходных векторов в порядке DOM.
+    let mut images = Vec::with_capacity(requests.len());
+    let mut decoded_images = Vec::new();
+    let mut image_keys = Vec::with_capacity(requests.len());
+    for (req, (key, img)) in requests.iter().zip(decoded) {
+        image_keys.push((req.url.clone(), key.clone()));
+        // BUG-269, как у страницы: intrinsic нужен, если автор не задал ХОТЯ БЫ
+        // одно измерение — второе достраивается по соотношению сторон.
+        let wants_intrinsic = !(req.has_explicit_width && req.has_explicit_height);
+        let first = match &img {
+            None => None,
+            Some(crate::image_cache::DecodedImage::Static(i)) => Some(Arc::clone(i)),
+            // Многокадровый GIF: во фрейм идёт первый кадр. Тиканья анимации у
+            // под-документов нет (`Lumen::animated_gifs` — карта страницы),
+            // поэтому сама анимация наружу не отдаётся.
+            Some(crate::image_cache::DecodedImage::Animated { first, .. }) => Some(Arc::clone(first)),
+        };
+        images.push((req.node_id, first.is_some()));
+        if let Some(image) = first {
+            if wants_intrinsic {
+                lumen_layout::apply_intrinsic_size(doc, req.node_id, image.width, image.height);
+            }
+            decoded_images.push((key, image));
+        }
+    }
 
-    FrameSubresourceOutcomes { links, images, css }
+    FrameSubresourceOutcomes { links, images, css, decoded_images, image_keys }
+}
+
+/// Ключ регистрации картинки под-документа фрейма (BUG-480 срез 15):
+/// РАЗРЕШЁННЫЙ относительно базы РЕБЁНКА адрес, а не сырой `src`.
+///
+/// Ключ картинки в `IMAGE_CACHE`, в `Renderer::register_image` и в
+/// `DisplayCommand::DrawImage.src` у страницы — сырое значение атрибута, а оно
+/// уникально только внутри ОДНОГО документа: страница и фрейм из другого
+/// каталога легко держат каждый свой `<img src="pic.png">`. С общим ключом
+/// побеждала бы картинка страницы, причём молча. Разрешённый адрес разводит их
+/// и, наоборот, СХЛОПЫВАЕТ действительно один и тот же файл — тогда декод
+/// разделяется, как и задумано кэшем.
+fn frame_image_key(base: &ResourceBase, raw_src: &str) -> String {
+    base.resolve_str(raw_src)
 }
 
 /// Доставить исходы подресурсов фрейма ([`fetch_frame_subresources`]) его
@@ -564,11 +622,49 @@ fn rebuild_frame_display_lists(frames: &mut [FrameHandle], relaid: &[bool]) {
                     continue;
                 };
                 let mut dl = crate::display_list_metrics::paint_ordered(layout);
+                // Срез 15: ключи картинок ребёнка — ДО вклейки содержимого его
+                // вложенных фреймов. Их команды уже переписаны своими ключами
+                // (список собирается от глубокого к мелкому), а заглушки
+                // вложенных фреймов должны остаться со своим `src` — иначе
+                // [`splice_one_frame`] их не найдёт.
+                rekey_frame_images(&mut dl, frames, i);
                 splice_children_of(&mut dl, frames, i);
                 dl
             };
             frames[i].content_dl = dl;
             dirty[i] = true;
+        }
+    }
+}
+
+/// Переписать ключи картинок под-документа в его display list (BUG-480 срез 15).
+///
+/// `paint_ordered` кладёт в `DrawImage.src` сырое значение атрибута — ключ,
+/// уникальный лишь внутри своего документа. Регистрируются картинки фрейма под
+/// разрешённым адресом ([`frame_image_key`]), поэтому список надо привести к
+/// тем же ключам, иначе рендерер не найдёт текстуру и нарисует серую заглушку.
+///
+/// Заглушки ВЛОЖЕННЫХ фреймов пропускаются по их `src`: [`splice_one_frame`]
+/// ищет их именно по нему, и переписанный ключ означал бы серый прямоугольник
+/// вместо содержимого внука. Совпасть `src` картинки и `src` фрейма могут
+/// только в патологической разметке (`<img>` и `<iframe>` на один адрес), где
+/// правильнее сохранить фрейм.
+pub(crate) fn rekey_frame_images(dl: &mut DisplayList, frames: &[FrameHandle], idx: usize) {
+    if frames[idx].image_keys.is_empty() {
+        return;
+    }
+    for cmd in dl.iter_mut() {
+        let DisplayCommand::DrawImage { src, .. } = cmd else { continue };
+        if frames.iter().any(|h| {
+            h.parent_doc
+                .as_ref()
+                .is_some_and(|pd| Arc::ptr_eq(pd, &frames[idx].doc))
+                && &h.host_src == src
+        }) {
+            continue;
+        }
+        if let Some((_, key)) = frames[idx].image_keys.iter().find(|(raw, _)| raw == src) {
+            *src = key.clone();
         }
     }
 }
@@ -667,6 +763,9 @@ pub(crate) fn load_frame_sub_documents(
     deterministic: deterministic::DetConfig,
     cross_origin_isolated: bool,
     parent_js: Option<&Arc<dyn PersistentJs>>,
+    // BUG-480 срез 15: целевое цветовое пространство декодера картинок — то же,
+    // с которым страница декодирует свои (`parse_and_layout`).
+    target: lumen_core::ColorSpace,
 ) -> Vec<FrameHandle> {
     // URL СЂРѕРґРёС‚РµР»СЏ Рё РІРµСЂС…Р° РґР»СЏ С„Р°СЃР°РґРѕРІ location/URL Сѓ РїСЂРµРґРєРѕРІ (СЃСЂРµР· 3):
     // РІС‹С‡РёСЃР»СЏСЋС‚СЃСЏ РѕРґРёРЅ СЂР°Р· РЅР° СѓСЂРѕРІРµРЅСЊ СЂРµРєСѓСЂСЃРёРё.
@@ -706,7 +805,7 @@ pub(crate) fn load_frame_sub_documents(
             },
         };
 
-        let child_doc = {
+        let mut child_doc = {
             let _s = lumen_core::trace::span("parse-html-frame", "parse");
             lumen_html_parser::parse(&html)
         };
@@ -717,12 +816,13 @@ pub(crate) fn load_frame_sub_documents(
         let subresources = {
             let _s = lumen_core::trace::span("fetch-frame-subresources", "net");
             fetch_frame_subresources(
-                &child_doc,
+                &mut child_doc,
                 &child_base,
                 sink,
                 cookie_jar.clone(),
                 media_ctx,
                 viewport,
+                target,
             )
         };
         // РЎРєСЂРёРїС‚С‹ СЂРµР±С‘РЅРєР° СЃРѕР±РёСЂР°СЋС‚СЃСЏ Рё (РІРЅРµС€РЅРёРµ) СЃРєР°С‡РёРІР°СЋС‚СЃСЏ Р”Рћ РїРµСЂРµРґР°С‡Рё
@@ -856,6 +956,7 @@ pub(crate) fn load_frame_sub_documents(
                     deterministic,
                     cross_origin_isolated,
                     child_js.as_ref(),
+                    target,
                 );
             handles.extend(nested);
         }
@@ -887,6 +988,8 @@ pub(crate) fn load_frame_sub_documents(
             content_dl: DisplayList::new(),
             host_rect: None,
             host_src: info.src.clone().unwrap_or_default(),
+            images: subresources.decoded_images,
+            image_keys: subresources.image_keys,
         });
     }
     handles
@@ -953,6 +1056,15 @@ pub(crate) struct FrameHandle {
     /// Значение атрибута `src` host-элемента — половина ключа, по которому
     /// [`splice_one_frame`] узнаёт команду-заглушку в display list родителя.
     pub(crate) host_src: String,
+    /// Декодированные картинки под-документа (BUG-480 срез 15).
+    ///
+    /// Едут в `LoadedPage::images` страницы: регистрация в рендерере (и в
+    /// CPU-кэше снимков) идёт единым списком, поэтому ни одной новой точки
+    /// регистрации срез не заводит — все существующие подхватывают их сами.
+    pub(crate) images: Vec<(String, Arc<lumen_image::Image>)>,
+    /// `(сырой src, ключ регистрации)` картинок под-документа — карта для
+    /// [`rekey_frame_images`] (BUG-480 срез 15).
+    pub(crate) image_keys: Vec<(String, String)>,
 }
 
 /// РњР°РєСЃРёРјР°Р»СЊРЅР°СЏ РіР»СѓР±РёРЅР° РІР»РѕР¶РµРЅРЅРѕСЃС‚Рё С„СЂРµР№РјРѕРІ: СЃС‚СЂР°РЅРёС†Р° (0) в†’ iframe (1) в†’
