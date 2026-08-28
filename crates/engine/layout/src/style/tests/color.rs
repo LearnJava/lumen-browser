@@ -4,6 +4,9 @@
 //! Перенесено батчем SPLIT-ST1 без правок тел.
 
 use super::*;
+// Батч SPLIT-ST3 увёз таблицу named colors в `style/values/named_colors.rs`;
+// это имя нужно только тестам, поэтому в `style.rs` оно не импортируется.
+use crate::style::values::named_colors::NAMED_COLORS;
 
     // ── oklch() (CSS Color L4 §10.3) ───────────────────────────────────────
 
