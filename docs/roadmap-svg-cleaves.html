@@ -5487,9 +5487,9 @@
       {
        "id": "SPLIT-ST3",
        "title": "SPLIT-ST3: разбор цвета из style.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "Разбор цвета `crates/engine/layout/src/style.rs`: анкер `fn parse_color` (23036) до `mod tests` (24303), 1 268 строк → `style/parse/color.rs` (legacy/`color()`/hex/`color-mix()`/`color-contrast()`, относительные цвета с их микро-лексером `ColorTok`, конверсии oklab/lab/oklch). Таблицу `NAMED_COLORS` (23283…23437, 155) — отдельным `style/values/named_colors.rs`: она табличная, а §1 плана именно такие файлы выводит из-под правила размера. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "Разбор цвета `crates/engine/layout/src/style.rs`: анкер `fn parse_color` (23036) до `mod tests` (24303), 1 268 строк → `style/parse/color.rs` (legacy/`color()`/hex/`color-mix()`/`color-contrast()`, относительные цвета с их микро-лексером `ColorTok`, конверсии oklab/lab/oklch). Таблицу `NAMED_COLORS` (23283…23437, 155) — отдельным `style/values/named_colors.rs`: она табличная, а §1 плана именно такие файлы выводит из-под правила размера. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 ЗАКРЫТ 2026-08-28 (ветка `p1-split-st3`): 1 267 строк уехали в два файла — `style/parse/color.rs` (1 113 тела) и `style/values/named_colors.rs` (154), style.rs 24 305 -> 23 045. Первый батч группы ST с ПРОИЗВОДСТВЕННЫМ кодом: четырём item'ам понадобилась `pub(in crate::style)`, потому что остаток style.rs продолжает их звать — в том числе `encode_srgb` со строки 1 708, за 21 000 строк от региона. Сверка побайтовая, `#[test]` 3 692 -> 3 692"
       },
       {
        "id": "SPLIT-ST4",
