@@ -1007,3 +1007,113 @@ fn automation_bare_path_is_not_percent_decoded() {
         other => panic!("expected File, got {other:?}"),
     }
 }
+
+// -- BUG-443: parse-time getComputedStyle / getBoundingClientRect ------------
+
+/// Run one page through the whole [`parse_and_layout`] pipeline with defaults.
+#[cfg(feature = "v8")]
+fn parse_and_layout_for_test(html: &str) -> crate::page_pipeline::ParsedPage {
+    parse_and_layout(
+        html.as_bytes(),
+        Some("text/html"),
+        &ResourceBase::File(std::env::temp_dir().join("bug443.html")),
+        &(Arc::new(StdoutEventSink) as Arc<dyn EventSink>),
+        Size::new(1024.0, 720.0),
+        &mut std::collections::HashSet::new(),
+        None, None, None, None,
+        &NullHyphenationProvider,
+        false,
+        deterministic::DetConfig::default(),
+        false,
+        None,
+        false,
+        None, None,
+        lumen_core::ColorSpace::Srgb,
+        false,
+    )
+    .expect("pipeline must not fail on a well-formed page")
+}
+
+/// Read back an attribute a probe script wrote onto `<html>`.
+#[cfg(feature = "v8")]
+fn probe_attr(page: &crate::page_pipeline::ParsedPage, name: &str) -> String {
+    let doc = page.document.lock().expect("document lock");
+    let mut found = None;
+    let mut stack = vec![doc.root()];
+    while let Some(id) = stack.pop() {
+        let node = doc.get(id);
+        if let NodeData::Element { attrs, .. } = &node.data
+            && let Some(a) = attrs.iter().find(|a| a.name.local == name)
+        {
+            found = Some(a.value.clone());
+            break;
+        }
+        stack.extend(node.children.iter().copied());
+    }
+    found.unwrap_or_default()
+}
+
+/// An inline `<script>` running during parsing reads the real computed style
+/// and the real border box, not `""` and a zero rect. Before BUG-443 the
+/// cascade and the first layout both ran *after* the page's scripts, so every
+/// such read answered empty.
+#[cfg(feature = "v8")]
+#[test]
+fn parse_time_script_reads_computed_style_and_rect() {
+    let page = parse_and_layout_for_test(
+        "<html><head><style>#t{width:300px;height:120px;color:rgb(1,2,3)}</style></head>\
+         <body><div id=t>t</div>\
+         <script>var e=document.getElementById('t');var r=e.getBoundingClientRect();\
+         document.documentElement.setAttribute('data-w',getComputedStyle(e).getPropertyValue('width'));\
+         document.documentElement.setAttribute('data-c',getComputedStyle(e).getPropertyValue('color'));\
+         document.documentElement.setAttribute('data-r',r.width+'x'+r.height);</script>\
+         </body></html>",
+    );
+    assert_eq!(probe_attr(&page, "data-w"), "300px");
+    assert_eq!(probe_attr(&page, "data-c"), "rgb(1, 2, 3)");
+    assert_eq!(probe_attr(&page, "data-r"), "300x120");
+}
+
+/// A `DOMContentLoaded` handler sees geometry that includes what the scripts
+/// themselves changed — the snapshot is re-derived after they run, not reused
+/// from before them.
+#[cfg(feature = "v8")]
+#[test]
+fn dom_content_loaded_handler_sees_post_script_geometry() {
+    let page = parse_and_layout_for_test(
+        "<html><head><style>#t{width:100px;height:50px}</style></head>\
+         <body><div id=t>t</div>\
+         <script>var s=document.createElement('style');\
+         s.textContent='#t{width:250px;height:70px}';document.head.appendChild(s);\
+         document.addEventListener('DOMContentLoaded',function(){\
+         var e=document.getElementById('t');var r=e.getBoundingClientRect();\
+         document.documentElement.setAttribute('data-r',r.width+'x'+r.height);});</script>\
+         </body></html>",
+    );
+    assert_eq!(probe_attr(&page, "data-r"), "250x70");
+}
+
+/// A `<style>` a script inserts still reaches the FIRST cascade: the CSS is
+/// collected before the scripts now, so the pipeline has to notice the change
+/// and rebuild. Asserted on the final layout, not on JS.
+#[cfg(feature = "v8")]
+#[test]
+fn script_inserted_style_still_reaches_the_first_layout() {
+    let page = parse_and_layout_for_test(
+        "<html><head><style>#t{width:100px;height:50px}</style></head>\
+         <body><div id=t>t</div>\
+         <script>var s=document.createElement('style');\
+         s.textContent='#t{width:250px;height:70px}';document.head.appendChild(s);</script>\
+         </body></html>",
+    );
+    let mut found = None;
+    let mut stack = vec![&page.layout];
+    while let Some(b) = stack.pop() {
+        if b.rect.width == 250.0 && b.rect.height == 70.0 {
+            found = Some(b.rect);
+            break;
+        }
+        stack.extend(b.children.iter());
+    }
+    assert!(found.is_some(), "script-inserted <style> did not reach the layout");
+}

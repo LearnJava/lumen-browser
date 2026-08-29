@@ -83,6 +83,43 @@ fn hash_style_blocks(doc: &Document, id: NodeId, h: &mut impl std::hash::Hasher)
     }
 }
 
+/// Fingerprint of every `<link>` element's `rel`/`href`/`media` in document
+/// order (BUG-443).
+///
+/// The sibling of [`inline_style_fingerprint`] for the *external* half of the
+/// cascade. Since BUG-443 the shell collects the page CSS **before** running
+/// the document's scripts, so it needs to know whether those scripts touched
+/// the set of linked stylesheets — a script-inserted `<link rel=stylesheet>`
+/// must still reach the first cascade, and the only way to notice one is to
+/// compare this hash across script execution. Cheap: no fetch, no string
+/// building, one tree walk.
+pub(crate) fn stylesheet_link_fingerprint(doc: &Document) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    hash_link_elements(doc, doc.root(), &mut h);
+    h.write_u8(0);
+    h.finish()
+}
+
+/// Р РµРєСѓСЂСЃРёРІРЅР°СЏ РїРѕР»РѕРІРёРЅР° [`stylesheet_link_fingerprint`].
+fn hash_link_elements(doc: &Document, id: NodeId, h: &mut impl std::hash::Hasher) {
+    let node = doc.get(id);
+    if let NodeData::Element { name, attrs } = &node.data
+        && name.local == "link"
+    {
+        for a in attrs {
+            h.write(a.name.local.as_bytes());
+            h.write_u8(0x1e);
+            h.write(a.value.as_bytes());
+            h.write_u8(0x1f);
+        }
+        h.write_u8(0xff);
+    }
+    for &child in &node.children {
+        hash_link_elements(doc, child, h);
+    }
+}
+
 /// CSS СЃС‚СЂР°РЅРёС†С‹, РєРѕС‚РѕСЂС‹Р№ РґРёРЅР°РјРёС‡РµСЃРєРёР№ `<style>` РёР·РјРµРЅРёС‚СЊ РЅРµ РјРѕР¶РµС‚ (BUG-743).
 ///
 /// РџРѕР·РІРѕР»СЏРµС‚ РїРµСЂРµСЃРѕР±СЂР°С‚СЊ РєР°СЃРєР°Рґ РїРѕСЃР»Рµ РїРѕР·РґРЅРµР№ РІСЃС‚Р°РІРєРё `<style>` С†РµР»РёРєРѕРј РёР·

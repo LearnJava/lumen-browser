@@ -1156,6 +1156,9 @@ fn spawn_frame(
         // частый встраиваемый случай. Странице (второй вызов) хватает
         // старого поведения: без скриптов ей нечем отвечать.
         true,
+        // BUG-443: a sub-document is laid out only after this call returns
+        // (`layout_frame_document`), so there is no parse-time layout to offer.
+        None,
     );
     // РќР°РІРёРіР°С†РёСЏ РёР· СЃРєСЂРёРїС‚РѕРІ СЂРµР±С‘РЅРєР° (location.href= Рё С‚.Рї.) РІРЅРµ СЃСЂРµР·Р° 1:
     // РѕС‚РєР»РѕРЅСЏРµРј СЃ Р»РѕРіРѕРј, РЅРµ Р·Р°РІР°Р»РёРІР°СЏ СЃС‚СЂР°РЅРёС†Сѓ.

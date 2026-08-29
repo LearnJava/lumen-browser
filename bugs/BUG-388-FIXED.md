@@ -88,7 +88,7 @@ fontVariantEmoji:  "unicode"                          (было "")
   автоматическом прогоне: `A11yPrefs::open_in_memory()`, дефолт `false`, ни
   CLI-флага, ни BiDi/MCP-ручки. `forced_colors_active()` в прогоне всегда
   `false`, так что форсировать движку нечего.
-* **[BUG-443](BUG-443-OPEN.md)/[BUG-555](BUG-555-OPEN.md)** — `getComputedStyle()`,
+* **[BUG-443](BUG-443-FIXED.md)/[BUG-555](BUG-555-OPEN.md)** — `getComputedStyle()`,
   вызванный из инлайнового `<script>` во время разбора (а тесты категории
   читают стиль именно так), детерминированно возвращает `""` для **любого**
   свойства, включая `color`/`display`. Подтверждено пробой: тот же элемент даёт

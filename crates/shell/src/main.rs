@@ -158,12 +158,12 @@ use crate::display_list_metrics::{
 use crate::app::about_to_wait::PendingWait;
 use crate::doc_extract::{
     DynamicCssBase, extract_style_blocks, extract_title, inline_style_fingerprint,
-    window_title,
+    stylesheet_link_fingerprint, window_title,
 };
 use crate::input::dnd::{DND_THRESHOLD, DndState};
 use crate::page_pipeline::{
-    LayoutSource, LoadedPage, RenderOutcome, dispatch_preload_hints, parse_and_layout,
-    render_bytes,
+    JsLayoutSnapshot, LayoutSource, LoadedPage, RenderOutcome, dispatch_preload_hints,
+    parse_and_layout, render_bytes,
 };
 use crate::scripts::{
     collect_inline_scripts, collect_scripts_ordered, resolve_script_sources,

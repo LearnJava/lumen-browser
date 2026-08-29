@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-30",
  "counts": {
-  "open": 377,
-  "fixed": 506,
+  "open": 376,
+  "fixed": 507,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -8640,10 +8640,10 @@
    "debtor": false
   },
   "BUG-443": {
-   "status": "open",
-   "title": "Код, исполняющийся **во время разбора** — инлайновый `<script>` и обработчик `DOMContentLoaded`, — по-прежнему видит `\"\"` от `getComputedStyle()` и нулевой прям…",
-   "component": "shell (`crates/shell/src/main.rs::parse_and_layout` — порядок фаз `parse → CSS → run_scripts_with_dom → images → layout`; `notify_dom_content_loaded` на `main.rs:5466`), js (`crates/js/src/dom.rs` — нативы читают снимок и не умеют его запросить)",
-   "date": null,
+   "status": "fixed",
+   "title": "Код, исполняющийся **во время разбора** — инлайновый `<script>` и обработчик `DOMContentLoaded`, — видел `\"\"` от `getComputedStyle()` и нулевой `getBoundingClie…",
+   "component": "shell (`crates/shell/src/page_pipeline.rs::parse_and_layout` — порядок фаз; `crates/shell/src/scripts.rs::run_scripts_with_dom` — публикация снимка)",
+   "date": "2026-08-30",
    "debtor": false
   },
   "BUG-444": {
@@ -13225,9 +13225,6 @@
   "shell (`crates/shell/src/main.rs::fetch_stylesheet_text`)": [
    "BUG-509"
   ],
-  "shell (`crates/shell/src/main.rs::parse_and_layout` — порядок фаз `parse → CSS → run_scripts_with_dom → images → layout`; `notify_dom_content_loaded` на `main.rs:5466`), js (`crates/js/src/dom.rs` — нативы читают снимок и не умеют его запросить)": [
-   "BUG-443"
-  ],
   "shell (`crates/shell/src/main.rs::render_current_page_to_png`), image (`decode_cache.rs`)": [
    "BUG-729"
   ],
@@ -13254,6 +13251,9 @@
   ],
   "shell (`crates/shell/src/main.rs` — шаг 1 `RedrawRequested`, синк `scrollY`; ветка колеса мыши), js (`crates/js/src/v8_runtime.rs::set_page_scroll_y`, `crates/js/src/dom.rs` — `scrollIntoView`)": [
    "BUG-821"
+  ],
+  "shell (`crates/shell/src/page_pipeline.rs::parse_and_layout` — порядок фаз; `crates/shell/src/scripts.rs::run_scripts_with_dom` — публикация снимка)": [
+   "BUG-443"
   ],
   "shell (`crates/shell/src/platform/audio_player.rs` — `PlatformAudioPlayer::load`), js (`crates/js/src/audio_element.rs` — опрос загрузки в `AUDIO_ELEMENT_SHIM`)": [
    "BUG-799"
