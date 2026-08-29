@@ -6398,11 +6398,14 @@ function _lumen_link_prepare(nid) {
     }, 0);
 }
 
-// ── <link> resource hints: preload / modulepreload / prefetch (BUG-826) ──────
+// ── <link> resource hints: preload / modulepreload / prefetch / icon ─────────
+// ── (BUG-826, `icon` added by BUG-848) ────────────────────────────────────────
 //
-// HTML LS §4.6.7 «link type preload» and «link type modulepreload». Before
-// this, a hint reached `Event::SubresourceHintFound` in the shell, which only
-// printed it to stderr — so the log claimed a preload had happened while no
+// HTML LS §4.6.7 «link type preload» and «link type modulepreload» (`icon` is
+// its own, separate §4.6.7 link type, folded in here for the fetch shape it
+// shares with `prefetch`). Before this, a hint reached
+// `Event::SubresourceHintFound` in the shell, which only printed it to
+// stderr — so the log claimed a preload/icon fetch had happened while no
 // request was ever made and the element reported nothing to the page.
 //
 // The fetch lives here rather than in the shell for the same reason the
@@ -6440,13 +6443,20 @@ var _LUMEN_MODULEPRELOAD_DESTINATIONS = {
 // already ran (the two paths overlap for a link a head script appends).
 var _lumen_link_hint_done = {};
 
-// Which of the three hint types this `rel` carries, '' for none. First token
+// Which of the four hint types this `rel` carries, '' for none. First token
 // wins — an element is one hint at a time, and `rel='preload prefetch'` is not
 // a shape the spec gives a combined meaning to.
+//
+// `icon` (BUG-848) is not a "resource hint" in HTML LS §4.6.7's own taxonomy —
+// it is §4.6.7's separate "link type icon" — but it fetches and reports
+// load/error the same way `prefetch` does (no `as`/`type` gating, either),
+// so it rides this dispatcher instead of a fourth copy of the fetch shape.
+// `rel="shortcut icon"` needs no special case: the token split below already
+// hands `_lumen_link_hint_kind` the plain `icon` token from it.
 function _lumen_link_hint_kind(toks) {
     for (var i = 0; i < toks.length; i++) {
         var t = toks[i];
-        if (t === 'preload' || t === 'modulepreload' || t === 'prefetch') return t;
+        if (t === 'preload' || t === 'modulepreload' || t === 'prefetch' || t === 'icon') return t;
     }
     return '';
 }
@@ -6555,8 +6565,9 @@ function _lumen_link_hint_prepare(nid, toks) {
     _lumen_link_hint_done[nid] = 1;
     if (kind === 'preload') { _lumen_link_preload(nid, href); return; }
     if (kind === 'modulepreload') { _lumen_link_modulepreload(nid, href); return; }
-    // `prefetch` is destination-agnostic: it warms the cache for a future
-    // navigation, so `as`/`type` do not gate it (WPT `preload/prefetch-events`).
+    // `prefetch` and `icon` (BUG-848) are both destination-agnostic: prefetch
+    // warms the cache for a future navigation, icon has no `as` at all — so
+    // neither is gated by `as`/`type` (WPT `preload/prefetch-events`).
     _lumen_link_hint_fetch(nid, href, null);
 }
 

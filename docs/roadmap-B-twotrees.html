@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-30",
  "counts": {
-  "open": 379,
-  "fixed": 504,
+  "open": 378,
+  "fixed": 505,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -11395,10 +11395,10 @@
    "debtor": false
   },
   "BUG-848": {
-   "status": "open",
+   "status": "fixed",
    "title": "Запрос картинки собирается только с `<img>`: `<video poster>`, `<input type=image>` (и из разметки, и из скрипта), SVG `<image href>` и `<link rel=icon>` не пор…",
-   "component": "layout (`crates/engine/layout/src/box_tree.rs:2262` — `collect_requests_inner` матчит только `name.local == \"img\"`) + shell (`crates/shell/src/main.rs:6858` — `SubresourceHintFound` без потребителя, см. BUG-826)",
-   "date": null,
+   "component": "layout (`crates/engine/layout/src/box_tree.rs:2262` — `collect_requests_inner` матчит только `name.local == \"img\"`) + js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_link_hint_kind`/`_lumen_link_hint_prepare`)",
+   "date": "2026-08-30",
    "debtor": false
   },
   "BUG-849": {
@@ -11593,7 +11593,7 @@
   "BUG-878": {
    "status": "open",
    "title": "`<script src>`, добавленный в shadow root через `root.appendChild`, не загружается и не исполняется — запроса нет вовсе (доказано записью запросов на стороне се…",
-   "component": "js (вставка узла в `ShadowRoot`, `crates/js/src/dom.rs:1310-1366`, не поднимает «prepare a script»; сбор подресурсов идёт по light-DOM, ср. [BUG-848](bugs/BUG-848-OPEN.md))",
+   "component": "js (вставка узла в `ShadowRoot`, `crates/js/src/dom.rs:1310-1366`, не поднимает «prepare a script»; сбор подресурсов идёт по light-DOM, ср. [BUG-848](bugs/BUG-848-FIXED.md))",
    "date": null,
    "debtor": false
   },
@@ -12700,7 +12700,7 @@
   "js (shell)": [
    "BUG-233"
   ],
-  "js (вставка узла в `ShadowRoot`, `crates/js/src/dom.rs:1310-1366`, не поднимает «prepare a script»; сбор подресурсов идёт по light-DOM, ср. [BUG-848](bugs/BUG-848-OPEN.md))": [
+  "js (вставка узла в `ShadowRoot`, `crates/js/src/dom.rs:1310-1366`, не поднимает «prepare a script»; сбор подресурсов идёт по light-DOM, ср. [BUG-848](bugs/BUG-848-FIXED.md))": [
    "BUG-878"
   ],
   "js shim (`crates/js/src/dom.rs:5613`, `_lumen_make_style` Proxy `dom.rs:4264`)": [
@@ -12837,7 +12837,7 @@
   "layout (`crates/engine/layout/src/box_tree.rs:10805-10824` — `needs_prelayout` в `layout_flex_container`; второй проход `lay_out_with_used_size` на `:11204`/`:11281`)": [
    "BUG-802"
   ],
-  "layout (`crates/engine/layout/src/box_tree.rs:2262` — `collect_requests_inner` матчит только `name.local == \"img\"`) + shell (`crates/shell/src/main.rs:6858` — `SubresourceHintFound` без потребителя, см. BUG-826)": [
+  "layout (`crates/engine/layout/src/box_tree.rs:2262` — `collect_requests_inner` матчит только `name.local == \"img\"`) + js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_link_hint_kind`/`_lumen_link_hint_prepare`)": [
    "BUG-848"
   ],
   "layout (`crates/engine/layout/src/box_tree.rs::flatten_contents`)": [

@@ -2,7 +2,7 @@
 
 **Статус:** OPEN
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 27 — живой замер, вариант `currentscript`)
-**Область:** сбор подресурсов идёт по light-DOM-дереву (`crates/engine/layout/src/box_tree.rs::collect_requests_inner`, ср. [BUG-848](BUG-848-OPEN.md)); вставка узла в `ShadowRoot` (`crates/js/src/dom.rs:1310-1366` — `_lumen_make_shadow_root`, метод `appendChild`) не поднимает подготовку скрипта («prepare a script», HTML LS §4.12.1)
+**Область:** сбор подресурсов идёт по light-DOM-дереву (`crates/engine/layout/src/box_tree.rs::collect_requests_inner`, ср. [BUG-848](BUG-848-FIXED.md), позже починено); вставка узла в `ShadowRoot` (`crates/js/src/dom.rs:1310-1366` — `_lumen_make_shadow_root`, метод `appendChild`) не поднимает подготовку скрипта («prepare a script», HTML LS §4.12.1)
 **Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.
 
 ## Симптом
