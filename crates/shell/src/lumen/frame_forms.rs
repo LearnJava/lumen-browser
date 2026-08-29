@@ -49,19 +49,30 @@ impl Lumen {
             }
             forms::FormClickAction::ToggleDetails(id) => self.frame_toggle_details(idx, id),
             forms::FormClickAction::SlideRange(id) => self.frame_slide_range(idx, id, at.x),
-            // Оверлеи (`<select>`, палитра, календарь, файловый диалог) и
-            // отправка формы в срез не входят и молча ничего не делают, потому
-            // что каждый упирается в СВОЙ механизм, а не в этот: всплывающие
-            // окна рисуются по прямоугольнику из layout СТРАНИЦЫ
-            // (`self.layout_box`) и адресуются одним `NodeId` без фрейма, а
-            // отправка формы — это навигация фрейма, отдельный пункт очереди
-            // среза. Лог, а не тишина: иначе клик по `<select>` внутри фрейма
-            // выглядит как потерянное событие.
+            // Отправка формы (срез 20) — это навигация фрейма, поэтому она
+            // ничего не перерисовывает здесь: `run_frame_form_submission`
+            // заменяет под-документ целиком и обновляет экран сама.
+            forms::FormClickAction::SubmitForm(submit_node) => {
+                let form = self
+                    .frames
+                    .get(idx)
+                    .and_then(|h| h.doc.lock().ok())
+                    .and_then(|doc| lumen_dom::find_ancestor_form(&doc, submit_node));
+                if let Some(form) = form {
+                    self.run_frame_form_submission(idx, form, Some(submit_node), true);
+                }
+                false
+            }
+            // Оверлеи (`<select>`, палитра, календарь, файловый диалог) в срез
+            // не входят и молча ничего не делают, потому что упираются в СВОЙ
+            // механизм, а не в этот: всплывающие окна рисуются по
+            // прямоугольнику из layout СТРАНИЦЫ (`self.layout_box`) и
+            // адресуются одним `NodeId` без фрейма. Лог, а не тишина: иначе
+            // клик по `<select>` внутри фрейма выглядит как потерянное событие.
             forms::FormClickAction::OpenSelectDropdown(_)
             | forms::FormClickAction::OpenColorPicker(_)
             | forms::FormClickAction::OpenDatePicker(_)
-            | forms::FormClickAction::OpenFilePicker(_)
-            | forms::FormClickAction::SubmitForm(_) => {
+            | forms::FormClickAction::OpenFilePicker(_) => {
                 eprintln!(
                     "iframe: элемент управления {action:?} внутри фрейма пока не поддержан (BUG-480 срез 18)"
                 );

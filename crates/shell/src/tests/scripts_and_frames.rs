@@ -1349,3 +1349,39 @@ fn post_load_image_discovery_dispatches_only_the_new_src() {
     // РќРёС‡РµРіРѕ РЅРµ РјРµРЅСЏР»РѕСЃСЊ вЂ” РЅРё РѕРґРЅРѕРіРѕ Р·Р°РїСЂРѕСЃР°.
     assert!(dispatch(r#"<img src="a.png"><img src="b.png">"#).is_empty());
 }
+
+// ── frame_page_origin (BUG-480 срез 20) ─────────────────────────────────────
+
+/// Начало координат под-документа на СТРАНИЦЕ складывается по цепочке хозяев,
+/// и прокрутка вычитается на каждом звене — тем же правилом, которым
+/// [`crate::frames::splice_one_frame`] везёт пиксели.
+///
+/// Проверяется именно сумма по цепочке: у фрейма глубины 0 ошибка в правиле
+/// незаметна (слагаемое одно), а подсказка валидации, ради которой перевод и
+/// написан, рисуется поверх страницы и в её координатах — промах увёл бы её в
+/// другой угол окна, не сломав ни одной другой проверки.
+#[test]
+fn frame_page_origin_sums_host_rects_and_subtracts_each_scroll() {
+    let mut outer = splice_handle("outer.html", Rect::new(40.0, 120.0, 300.0, 200.0), Vec::new());
+    outer.scroll_y = 30.0;
+    let mut inner = splice_handle("inner.html", Rect::new(10.0, 50.0, 200.0, 100.0), Vec::new());
+    inner.depth = 1;
+    inner.parent_doc = Some(Arc::clone(&outer.doc));
+    inner.scroll_y = 5.0;
+    let frames = vec![outer, inner];
+
+    // Глубина 0: сам host-бокс минус собственная прокрутка ребёнка.
+    assert_eq!(crate::frames::frame_page_origin(&frames, 0), Some((40.0, 90.0)));
+    // Глубина 1: (10, 50 − 5) внутри хозяина + (40, 120 − 30) хозяина.
+    assert_eq!(crate::frames::frame_page_origin(&frames, 1), Some((50.0, 135.0)));
+}
+
+/// Пока host-бокса нет (layout ещё не посчитан), переводить нечего — и это
+/// `None`, а не «начало координат страницы»: (0, 0) нарисовал бы подсказку в
+/// углу окна, как будто она принадлежит странице.
+#[test]
+fn frame_page_origin_is_none_without_host_rect() {
+    let mut h = splice_handle("child.html", Rect::new(40.0, 120.0, 300.0, 200.0), Vec::new());
+    h.host_rect = None;
+    assert_eq!(crate::frames::frame_page_origin(&[h], 0), None);
+}

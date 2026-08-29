@@ -144,6 +144,9 @@ impl Lumen {
         // РёС… РЅРµ РґСЂРµРЅРёСЂРѕРІР°Р» РЅРёРєС‚Рѕ вЂ” СЃС‚СЂР°РЅРёС‡РЅС‹Р№ РґСЂРµРЅР°Р¶ РЅРёР¶Рµ Р·РЅР°РµС‚ С‚РѕР»СЊРєРѕ
         // `self.js_ctx`. РџСЂРёРјРµРЅСЏСЋС‚СЃСЏ РїРѕСЃР»Рµ С†РёРєР»Р°: С‚Р°Рј РЅСѓР¶РµРЅ `&mut self`.
         let mut frame_scrolls: Vec<(usize, f32)> = Vec::new();
+        // BUG-480 срез 20: `form.submit()`/`requestSubmit()` из скрипта самого
+        // ребёнка — второй вход в отправку его формы.
+        let mut frame_submits: Vec<(usize, u32, i32)> = Vec::new();
         for (idx, fjs) in &frame_js_handles {
             fjs.tick_timers();
             fjs.pump_websockets();
@@ -155,7 +158,16 @@ impl Lumen {
             fjs.pump_frame_messages();
             // РќР°РІРёРіР°С†РёСЏ РёР· С„СЂРµР№РјР° РѕС‚РєР»РѕРЅСЏРµС‚СЃСЏ (СЃСЂРµР· 1) вЂ” РґСЂРµРЅРёРј, С‡С‚РѕР±С‹ Р·Р°РїСЂРѕСЃ
             // РЅРµ РєРѕРїРёР»СЃСЏ Рё РЅРµ СЃСЂР°Р±РѕС‚Р°Р» РїРѕР·Р¶Рµ РёР· РґСЂСѓРіРѕРіРѕ РјРµСЃС‚Р°.
-            let _ = fjs.take_navigate_request();
+            //
+            // BUG-480 срез 20: кроме `form.submit()`/`requestSubmit()` — это
+            // не навигация «куда попало», а второй вход в ту же отправку формы
+            // ребёнка, что и нативный клик по submit-кнопке. Применяется после
+            // цикла: там нужен `&mut self`.
+            if let Some(JsNavigateRequest::SubmitForm { form, submitter }) =
+                fjs.take_navigate_request()
+            {
+                frame_submits.push((*idx, form, submitter));
+            }
             // Р“Р»Р°РґРєРёР№ (`behavior: 'smooth'`) РїСЂРёРјРµРЅСЏРµС‚СЃСЏ РјРіРЅРѕРІРµРЅРЅРѕ: СЃРІРѕРµР№
             // Р°РЅРёРјР°С†РёРё Сѓ РїСЂРѕРєСЂСѓС‚РєРё С„СЂРµР№РјР° РЅРµС‚, Р° С‚РёРєР°С‚СЊ РµС‘ Р±С‹Р»Рѕ Р±С‹ РЅРµРіРґРµ вЂ”
             // rAF РїРѕРґ-РґРѕРєСѓРјРµРЅС‚РѕРІ РЅРµ РёРґС‘С‚ (СЃСЂРµР· 1). РћС‚РєР»РѕРЅРµРЅРёРµ Р·Р°РїРёСЃР°РЅРѕ РІ
@@ -166,6 +178,15 @@ impl Lumen {
         }
         for (idx, target_y) in frame_scrolls {
             self.apply_frame_scroll(idx, target_y);
+        }
+        // BUG-480 срез 20: отправка формы, начатая скриптом самого ребёнка.
+        // Событие `submit` уже разослано на JS-стороне (`requestSubmit`) либо
+        // пропущено по спеке (`submit`), поэтому шаг 11 здесь не повторяется —
+        // ровно как на странице.
+        for (idx, form, submitter) in frame_submits {
+            let form_id = NodeId::from_index(form as usize);
+            let submitter_id = (submitter >= 0).then(|| NodeId::from_index(submitter as usize));
+            self.run_frame_form_submission(idx, form_id, submitter_id, false);
         }
         // ADR-016 M2.2c-2d (20): gate on `self.js_present` instead of borrowing the
         // `Arc` directly (`if let Some(js) = &self.js_ctx`), so the block stays live
