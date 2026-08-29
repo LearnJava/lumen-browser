@@ -1,9 +1,9 @@
 # BUG-801 — бесконечный цикл в auto-placement CSS Grid: элемент, не помещающийся в явные колонки, вешает layout намертво
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-29
 **Заведён:** 2026-08-21 (WPT-RUN-6, срез 9 — разбор TIMEOUT рефтестов)
-**Область:** `crates/engine/layout/src/box_tree.rs:11813` (row-flow `loop`) и `:11861` (зеркальный column-flow `loop`) — пасс 2 auto-placement, CSS Grid L1 §8.5
-**Владелец:** P1/P3 (движок). Заведён P2 в ходе WPT-задачи, здесь не чинится.
+**Область:** `crates/engine/layout/src/box_tree.rs` — пасс 2 auto-placement, row-flow и column-flow `loop` (CSS Grid L1 §8.5)
+**Владелец:** P1/P3 (движок). Заведён P2 в ходе WPT-задачи. Исправлен P3, 2026-08-29.
 
 ## Симптом
 
@@ -150,3 +150,60 @@ timeout 30 lumen --dump-layout /tmp/g.html          # должен вернут�
 `grid-span-past-explicit`, `grid-subgrid-nested` — виснут (обрыв на 15 с);
 контроли `grid-inside-explicit` и `grid-single-track` — 0,01 с. После фикса
 все пять строк должны показать `ok`.
+
+## Фикс (P3, 2026-08-29)
+
+Причина подтвердилась ровно так, как описана выше: `fits` — неверная
+проверка, не недостающий guard. Два независимых исправления, по одному на
+форму дефекта, обе в row-flow и column-flow ветках Пасса 2:
+
+1. **Явно заданная колонка/строка** (`fixed_cs`/`fixed_rs != 0`, например
+   `grid-column: 9 / span 2`) — позиция уже не поисковая: `try_ce_val`/
+   `try_re_val` константны, поэтому граничная проверка была ложной на каждой
+   итерации без единого шанса на успех. Теперь для этого случая `fits`
+   снята целиком — решает только занятость ячеек.
+2. **Авто-размещаемый элемент со спаном шире явной сетки**
+   (`grid-column: span 3` при 2 явных треках) — граница вычисляется как
+   `col_bound = max(n_explicit_cols, col_span)` (по строкам аналогично
+   `row_bound`). Это гарантирует, что колонка/строка 1 всегда проходит
+   `fits` (`try_ce_val - 1 == col_span <= col_bound`), поэтому цикл сходится
+   за конечное число шагов, ограниченное числом уже занятых ячеек — ровно
+   то поведение, которого требует CSS Grid L1 §7.1 (наращивание неявной
+   сетки под элемент, которому не хватает места).
+
+Дизъюнкт `|| n_explicit_cols == 1`, ранее случайно спасавший однотрековые
+сетки от зависания (полностью отключая проверку `fits` для них), убран —
+он больше не нужен: `col_bound`/`row_bound` при `n_explicit_cols == 1`
+корректно раскрывается до `col_span`, если тот больше 1.
+
+**Проверено:**
+- Три висящих репро из `REPROS` (`grid-line-past-explicit`,
+  `grid-span-past-explicit`, `grid-subgrid-nested`) и два контроля
+  (`grid-inside-explicit`, `grid-single-track`) — все пять `--dump-layout`
+  завершаются rc=0 за <1.2 с (dev-release, вручную через bash `timeout`,
+  без `verify_layout_hangs.py`, см. ниже).
+- Точный репро из «Симптома» (`grid-template-columns: 50px 50px` +
+  `grid-column: 3`) — rc=0.
+- 4 новых регрессионных теста в `crates/engine/layout/src/lib.rs`:
+  `grid_column_start_beyond_explicit_grid_terminates`,
+  `grid_span_wider_than_explicit_grid_terminates`,
+  `grid_explicit_start_and_span_beyond_grid_terminates`,
+  `grid_row_span_wider_than_explicit_grid_terminates` (последний —
+  зеркало по column-flow/`grid-auto-flow: column`). Все 85 grid-тестов
+  `lumen-layout` зелёные, регрессий нет.
+- `cargo clippy -p lumen-layout --all-targets -- -D warnings` чист.
+
+**`verify_layout_hangs.py --repros` не запускается на этой Windows-машине**
+(`args = ["timeout", str(limit), binary]` резолвит `timeout` как встроенный
+`cmd.exe`/`timeout.exe`, а не POSIX-обёртку скрипта — все пять записей
+отвечают `got=died t=0.02s` одинаково, включая контроли, что выдаёт
+инструментальную проблему, а не поведение браузера). Не чинилось здесь —
+инструмент вне зоны ответственности P3 (`docs/automation.md`/P2). Проверка
+сделана вручную: те же пять тел страниц сохранены как файлы и прогнаны
+`timeout 15 ./target/dev-release/lumen.exe --dump-layout <file>` из git-bash
+(коретилз `timeout`, не встроенный cmd) — воспроизводит тот же сигнал, что
+ждёт `verify_layout_hangs.py`, минус HTTP-обвязка.
+
+**Как проверить фикс на живом WPT-корпусе (не выполнялось здесь):**
+`run_report.py --all --root css/css-grid/grid-lanes --recursive` — TIMEOUT
+по механизму `grid-implicit-track-loop` должен исчезнуть как класс.

@@ -12458,12 +12458,27 @@ fn lay_out_grid(
             // Dense packing starts each scan from (1,1); sparse continues from cursor.
             let (mut scan_r, mut scan_c) = if dense { (1u32, 1u32) } else { (cursor_row, cursor_col) };
 
+            // BUG-801: the column bound below must never be able to reject
+            // EVERY scan position, or the loop has no exit. Two ways that
+            // happened: an auto-placed item whose own `col_span` exceeds
+            // `n_explicit_cols` (`grid-column: span 3` on a 2-column grid)
+            // failed `fits` at every column, since the bound never grew past
+            // the explicit track count — CSS Grid L1 §7.1 grows the implicit
+            // grid to fit such an item rather than refusing it, so the bound
+            // here does too. An item with an EXPLICIT column start beyond the
+            // explicit grid (`grid-column: 9 / span 2` on 2 columns,
+            // `fixed_cs != 0`) failed the same check at every row, since
+            // `try_ce_val` is fixed and never changes — that placement is not
+            // a search at all, so it is exempted from the bound entirely and
+            // only occupancy still applies.
+            let col_bound = (n_explicit_cols as u32).max(col_span);
+
             loop {
                 let try_c   = if fixed_cs != 0 { fixed_cs } else { scan_c };
                 let try_ce_val = if fixed_cs != 0 { fixed_ce } else { try_c + col_span };
 
-                // Bounds: item must fit within explicit column count (or 1-col fallback).
-                let fits = (try_ce_val - 1) <= n_explicit_cols as u32 || n_explicit_cols == 1;
+                // Bounds: item must fit within the (possibly grid-grown) column count.
+                let fits = fixed_cs != 0 || (try_ce_val - 1) <= col_bound;
                 let cell_free = fits && (try_c..try_ce_val)
                     .all(|c| (scan_r..scan_r + row_span).all(|r| !occupied.contains(&(c, r))));
 
@@ -12506,11 +12521,14 @@ fn lay_out_grid(
 
             let (mut scan_r, mut scan_c) = if dense { (1u32, 1u32) } else { (cursor_row, cursor_col) };
 
+            // BUG-801, column-flow mirror of the row-flow fix above.
+            let row_bound = n_explicit_rows.max(row_span);
+
             loop {
                 let try_r      = if fixed_rs != 0 { fixed_rs } else { scan_r };
                 let try_re_val = if fixed_rs != 0 { fixed_re } else { try_r + row_span };
 
-                let fits = (try_re_val - 1) <= n_explicit_rows || n_explicit_rows == 1;
+                let fits = fixed_rs != 0 || (try_re_val - 1) <= row_bound;
                 let cell_free = fits && (scan_c..scan_c + col_span)
                     .all(|c| (try_r..try_re_val).all(|r| !occupied.contains(&(c, r))));
 

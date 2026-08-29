@@ -15175,6 +15175,101 @@ mod tests {
         assert!((d.rect.y - 100.0).abs() < 1.0, "d.y={}: sparse must not back-fill", d.rect.y);
     }
 
+    // ── BUG-801: auto-placement must terminate when an item needs a column
+    //    past the last explicit line ─────────────────────────────────────────
+    //
+    // Three shapes that used to hang `lay_out_grid`'s Pass-2 scan forever: an
+    // explicit column start beyond the explicit grid, a span wider than the
+    // explicit grid, and both combined. Each must finish and grow the implicit
+    // grid to fit the item (CSS Grid L1 §7.1) rather than refusing placement.
+    // A regression here reintroduces an infinite loop, not a wrong pixel — if
+    // this test never returns, that is the failure, not a panic.
+
+    /// `grid-column: 3` on a 2-column grid, row auto: the fixed column start
+    /// is beyond the explicit grid, so the scan must not search columns at
+    /// all for this item — only occupancy decides the row.
+    #[test]
+    fn grid_column_start_beyond_explicit_grid_terminates() {
+        let root = lay(
+            "<body><div id='g'><span id='a'></span><span id='b'></span></div></body>",
+            "#g { display: grid; grid-template-columns: 100px 100px; column-gap: 4px; width: 400px; } \
+             #a { grid-column: 3; height: 20px; } \
+             #b { height: 20px; }",
+        );
+        let grid = first_element_child(&root);
+        let items = grid_items(grid);
+        assert_eq!(items.len(), 2);
+        let a = &items[0];
+        let b = &items[1];
+        // A lands in the implicit 3rd column (past the 2 explicit + gap), row 1.
+        assert!(a.rect.x > 200.0, "a.x={}: must be in the implicit 3rd column", a.rect.x);
+        assert!((a.rect.y - 0.0).abs() < 1.0, "a.y={}", a.rect.y);
+        // B auto-places on row 2, column 1 — placing A's fixed column also
+        // advances the sparse cursor forward past row 1, same as it would for
+        // any other placed item.
+        assert!((b.rect.x - 0.0).abs() < 1.0, "b.x={}", b.rect.x);
+        assert!(b.rect.y > a.rect.y, "b.y={} must be below a.y={}", b.rect.y, a.rect.y);
+    }
+
+    /// `grid-column: span 3` on a 2-column grid, both axes otherwise auto: the
+    /// item's own span exceeds the explicit column count, so the column bound
+    /// used by the scan must grow to the span or no starting column ever fits.
+    #[test]
+    fn grid_span_wider_than_explicit_grid_terminates() {
+        let root = lay(
+            "<body><div id='g'><span id='a'></span><span id='b'></span></div></body>",
+            "#g { display: grid; grid-template-columns: 100px 100px; width: 400px; } \
+             #a { grid-column: span 3; height: 20px; } \
+             #b { height: 20px; }",
+        );
+        let grid = first_element_child(&root);
+        let items = grid_items(grid);
+        assert_eq!(items.len(), 2);
+        let a = &items[0];
+        let b = &items[1];
+        // A must start at column 1 (the only column a span-3 item can ever fit)
+        // and span the grown implicit grid.
+        assert!((a.rect.x - 0.0).abs() < 1.0, "a.x={}", a.rect.x);
+        assert!((a.rect.width - 400.0).abs() < 1.0, "a.w={}: spans the whole grown grid", a.rect.width);
+        // B auto-places on the next row — row 1 is fully occupied by A's span.
+        assert!(b.rect.y > a.rect.y, "b.y={} must be below a.y={}", b.rect.y, a.rect.y);
+    }
+
+    /// `grid-column: 9 / span 2` on a 2-column grid: both defects from the bug
+    /// report at once — explicit start past the grid, spanning further still.
+    #[test]
+    fn grid_explicit_start_and_span_beyond_grid_terminates() {
+        let root = lay(
+            "<body><div id='g'><span id='a'></span></div></body>",
+            "#g { display: grid; grid-template-columns: 100px 100px; width: 400px; } \
+             #a { grid-column: 9 / span 2; height: 20px; }",
+        );
+        let grid = first_element_child(&root);
+        let items = grid_items(grid);
+        assert_eq!(items.len(), 1);
+        // Must land past the 2 explicit columns (200px), in implicit columns
+        // 9-10 — those, and the 6 unused implicit columns before them, share
+        // the leftover width, so the item does not reach the container edge.
+        assert!(items[0].rect.x > 200.0, "x={}: must be past the explicit grid", items[0].rect.x);
+    }
+
+    /// Dense column-flow mirror of the row-flow fix: `grid-row: span 3` on a
+    /// 2-row grid must grow the implicit row count rather than hang.
+    #[test]
+    fn grid_row_span_wider_than_explicit_grid_terminates() {
+        let root = lay(
+            "<body><div id='g'><span id='a'></span></div></body>",
+            "#g { display: grid; grid-template-rows: 50px 50px; grid-auto-flow: column; \
+                  grid-auto-columns: 100px; height: 100px; } \
+             #a { grid-row: span 3; }",
+        );
+        let grid = first_element_child(&root);
+        let items = grid_items(grid);
+        assert_eq!(items.len(), 1);
+        // Reaching this assertion at all is the point — the scan terminated.
+        assert!((items[0].rect.y - 0.0).abs() < 1.0, "y={}", items[0].rect.y);
+    }
+
     /// Dense column flow: small items back-fill gaps left by tall items in earlier columns.
     ///
     ///  2 cols, 3 explicit rows (50px).
