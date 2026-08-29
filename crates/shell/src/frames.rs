@@ -590,9 +590,15 @@ pub(crate) fn sync_frame_viewports(frames: &mut [FrameHandle], page_layout: &lum
         }
     }
     rebuild_frame_display_lists(frames, &relaid);
-    // Срез 17: прокрутка ребёнка могла оказаться за новым пределом — его
-    // содержимое стало ниже или вьюпорт выше. Зажим именно здесь: предел
-    // считается по ГОТОВОМУ display list, а он пересобран строкой выше.
+    clamp_frame_scroll(frames);
+}
+
+/// Зажать прокрутку под-документов, оказавшуюся за новым пределом (срез 17):
+/// содержимое стало ниже или вьюпорт выше.
+///
+/// Вызывается сразу после пересборки display list'ов и только после неё:
+/// предел ([`frame_max_scroll`]) считается по ГОТОВОМУ списку ребёнка.
+fn clamp_frame_scroll(frames: &mut [FrameHandle]) {
     for h in frames.iter_mut() {
         let max = frame_max_scroll(h);
         if h.scroll_y <= max {
@@ -605,6 +611,39 @@ pub(crate) fn sync_frame_viewports(frames: &mut [FrameHandle], page_layout: &lum
             js.fire_window_scroll();
         }
     }
+}
+
+/// Пересчитать под-документ фрейма `idx` после мутации ЕГО DOM — нативное
+/// переключение элемента управления формы (BUG-480 срез 18).
+///
+/// Отличается от [`sync_frame_viewports`] тем, ЧТО изменилось: там менялся
+/// размер host-бокса, здесь — само дерево ребёнка при неизменном вьюпорте,
+/// то есть гейт «размер не менялся — не пересчитывать» пропустил бы правку
+/// молча. Поэтому layout считается здесь напрямую, а `content_dl`
+/// ОЧИЩАЕТСЯ: пустой список — единственный признак «перерисовать», который
+/// понимает [`rebuild_frame_display_lists`], и через него правка сама доходит
+/// до списков всех предков этого фрейма.
+///
+/// Дальше работу доделывает [`sync_frame_viewports`] — не ради экономии кода,
+/// а потому что мутация могла подвинуть host-бокс ВЛОЖЕННОГО фрейма (раскрытый
+/// `<details>` над ним), и порядок обхода по глубине живёт только там.
+pub(crate) fn relayout_frame_content(
+    frames: &mut [FrameHandle],
+    idx: usize,
+    page_layout: &lumen_layout::LayoutBox,
+) {
+    let Some(measurer) = frame_measurer() else { return };
+    let size = frames[idx].viewport;
+    let layout = layout_frame_document(
+        &frames[idx].doc,
+        &frames[idx].sheet,
+        size,
+        frames[idx].js.as_ref(),
+        &measurer,
+    );
+    frames[idx].layout = Some(layout);
+    frames[idx].content_dl.clear();
+    sync_frame_viewports(frames, page_layout);
 }
 
 /// Пересобрать display list под-документов, чьё содержимое изменилось
