@@ -69,6 +69,7 @@ pub(crate) fn render_bytes(
             js_navigate: parsed.js_navigate,
             page_tracks: parsed.page_tracks,
             frames: parsed.frames,
+            frame_env: Some(parsed.frame_env),
         },
         layout_source,
         parsed.js_ctx,
@@ -191,6 +192,12 @@ pub(crate) struct LoadedPage {
     /// BUG-480 СЃСЂРµР· 1: Р¶РёРІС‹Рµ sub-РґРѕРєСѓРјРµРЅС‚С‹ `<iframe>` вЂ” РґРµСЂР¶Р°С‚ JS-РєРѕРЅС‚РµРєСЃС‚С‹
     /// Рё DOM РґРµС‚РµР№ РґРѕ Р·Р°РјРµРЅС‹ СЃС‚СЂР°РЅРёС†С‹.
     pub(crate) frames: Vec<FrameHandle>,
+    /// BUG-480 срез 19: набор провайдеров, которым загружались фреймы этой
+    /// страницы, — им же грузит их навигация фрейма из живого окна.
+    ///
+    /// `None` — путь, где фреймов нет вовсе (headless-рендер `lumen-driver`,
+    /// пустая страница): загружать в живом окне будет нечего.
+    pub(crate) frame_env: Option<frames::FrameLoadEnv>,
 }
 
 impl LoadedPage {
@@ -218,6 +225,7 @@ impl LoadedPage {
             js_navigate: None,
             page_tracks: tracks::PageTracks::default(),
             frames: Vec::new(),
+            frame_env: None,
         }
     }
 }
@@ -265,6 +273,9 @@ pub(crate) struct ParsedPage {
     /// BUG-743: РЅРµРёР·РјРµРЅСЏРµРјР°СЏ С‡Р°СЃС‚СЊ CSS + РѕС‚РїРµС‡Р°С‚РѕРє РёРЅР»Р°Р№РЅРѕРІС‹С… `<style>`,
     /// С‡С‚РѕР±С‹ РїРѕР·РґРЅСЏСЏ РІСЃС‚Р°РІРєР° Р»РёСЃС‚Р° РїРµСЂРµСЃРѕР±СЂР°Р»Р° РєР°СЃРєР°Рґ Р±РµР· СЃРµС‚Рё.
     pub(crate) dynamic_css: DynamicCssBase,
+    /// BUG-480 срез 19: набор провайдеров, которым загружены фреймы этой
+    /// страницы (см. [`LoadedPage::frame_env`]).
+    pub(crate) frame_env: frames::FrameLoadEnv,
     /// BUG-480 СЃСЂРµР· 1: Р¶РёРІС‹Рµ sub-РґРѕРєСѓРјРµРЅС‚С‹ `<iframe>` СЌС‚РѕР№ СЃС‚СЂР°РЅРёС†С‹.
     pub(crate) frames: Vec<FrameHandle>,
 }
@@ -390,13 +401,29 @@ pub(crate) fn parse_and_layout(
     let run_scripts_span = lumen_core::trace::span("run-scripts", "script");
     // BUG-480 СЃСЂРµР· 1: РєР»РѕРЅС‹ РїСЂРѕРІР°Р№РґРµСЂРѕРІ/С…СЂР°РЅРёР»РёС‰ РґР»СЏ sub-РґРѕРєСѓРјРµРЅС‚РѕРІ <iframe> вЂ”
     // РѕСЃРЅРѕРІРЅС‹Рµ СѓС…РѕРґСЏС‚ РІ run_scripts_with_dom РїРѕ Р·РЅР°С‡РµРЅРёСЋ.
-    let (frame_fp, frame_wp, frame_sp) =
-        (fetch_provider.clone(), ws_provider.clone(), sse_provider.clone());
-    let (frame_ls, frame_ss, frame_idb) =
-        (ls_store.clone(), ss_store.clone(), idb_backend.clone());
-    let (frame_sw, frame_sww, frame_cache) =
-        (sw_backend.clone(), sw_worker_store.clone(), cache_backend.clone());
-    let frame_cookie_jar = cookie_jar.clone();
+    // BUG-480 СЃСЂРµР· 19: С‚Рµ Р¶Рµ РєР»РѕРЅС‹, РЅРѕ РѕРґРЅРёРј Р·РЅР°С‡РµРЅРёРµРј [`FrameLoadEnv`] вЂ”
+    // РѕРЅРѕ РїРµСЂРµР¶РёРІР°РµС‚ Р·Р°РіСЂСѓР·РєСѓ Рё СѓРµР·Р¶Р°РµС‚ РІ `Lumen`, С‡С‚РѕР±С‹ РЅР°РІРёРіР°С†РёСЏ С„СЂРµР№РјР°
+    // РїРѕРІС‚РѕСЂРёР»Р° Р·Р°РіСЂСѓР·РєСѓ РїРѕРґ-РґРѕРєСѓРјРµРЅС‚Р° С‚РµРј Р¶Рµ РЅР°Р±РѕСЂРѕРј РїСЂРѕРІР°Р№РґРµСЂРѕРІ.
+    let frame_env = frames::FrameLoadEnv {
+        sink: Arc::clone(sink),
+        cookie_jar: cookie_jar.clone(),
+        fetch_provider: fetch_provider.clone(),
+        ws_provider: ws_provider.clone(),
+        sse_provider: sse_provider.clone(),
+        ls_store: ls_store.clone(),
+        ss_store: ss_store.clone(),
+        idb_backend: idb_backend.clone(),
+        sw_backend: sw_backend.clone(),
+        sw_worker_store: sw_worker_store.clone(),
+        cache_backend: cache_backend.clone(),
+        media_ctx: screen_media_context(viewport, dark_mode),
+        viewport,
+        cookie_banner_dismiss,
+        deterministic,
+        cross_origin_isolated,
+        target,
+        page_base: base.clone(),
+    };
     let (doc_arc, js_nav, js_ctx) = run_scripts_with_dom(
         doc,
         lumen_core::SandboxFlags::empty(),
@@ -457,31 +484,7 @@ pub(crate) fn parse_and_layout(
     // С„СЂРµР№РјР°Рј РЅРµ РЅСѓР¶РµРЅ — РїРµС‡Р°С‚СЊ PDF РїРѕРґ-РґРѕРєСѓРјРµРЅС‚РѕРІ РІРЅРµ СЃСЂРµР·Р°).
     let mut frames = {
         let _s = lumen_core::trace::span("fetch-iframes", "net");
-        load_frame_sub_documents(
-            &doc_arc,
-            0,
-            base,
-            &doc_arc,
-            base,
-            &screen_media_context(viewport, dark_mode),
-            viewport,
-            sink,
-            frame_cookie_jar,
-            frame_fp,
-            frame_wp,
-            frame_sp,
-            frame_ls,
-            frame_ss,
-            frame_idb,
-            frame_sw,
-            frame_sww,
-            frame_cache,
-            cookie_banner_dismiss,
-            deterministic,
-            cross_origin_isolated,
-            js_ctx.as_ref(),
-            target,
-        )
+        load_frame_sub_documents(&doc_arc, 0, base, &doc_arc, &frame_env, js_ctx.as_ref())
     };
 
     // Fetch + decode <img src>. Р”РѕР»Р¶РЅРѕ РёРґС‚Рё Р”Рћ layout, РїРѕС‚РѕРјСѓ С‡С‚Рѕ intrinsic
@@ -721,6 +724,7 @@ pub(crate) fn parse_and_layout(
         page_tracks,
         dynamic_css,
         frames,
+        frame_env,
     })
 }
 

@@ -760,6 +760,13 @@ pub(crate) struct Lumen {
     /// Р’ PageSnapshot РЅРµ РїРѕРїР°РґР°РµС‚ вЂ” РїРѕСЃР»Рµ bfcache-РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ С„СЂРµР№РјС‹ Р±РµР·
     /// СЃРєСЂРёРїС‚РѕРІ (РёР·РІРµСЃС‚РЅРѕРµ РѕРіСЂР°РЅРёС‡РµРЅРёРµ СЃСЂРµР·Р° 1, СЃРј. bugs/BUG-480-OPEN.md).
     pub(crate) frames: Vec<FrameHandle>,
+    /// BUG-480 срез 19: провайдеры, которыми загружены фреймы ТЕКУЩЕЙ
+    /// страницы, — ими же грузит под-документ навигация фрейма.
+    ///
+    /// Едет из `LoadedPage` вместе с самими фреймами и заменяется в том же
+    /// месте: набор принадлежит документу (его origin, его хранилища, его
+    /// база), поэтому пережить смену страницы не может.
+    pub(crate) frame_env: Option<crate::frames::FrameLoadEnv>,
     /// Shared GIF-video store вЂ” same Arc used by JS native bindings (PH3-12).
     ///
     /// The shell owns the Arc; JS bindings hold clones captured at context

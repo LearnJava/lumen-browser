@@ -324,7 +324,15 @@ impl Lumen {
                 // ребёнка не исполнял никто. Порядок «сначала dispatch, потом
                 // переключение» — тот же, что ниже у страницы: обработчик
                 // обязан видеть состояние ДО активации.
-                self.frame_form_click(target.frame, hit.node, target.client);
+                //
+                // BUG-480 срез 19: ссылка разбирается ровно там же, где у
+                // страницы, — после формы и только если форма клик не забрала
+                // (её ветка `FormClickAction::Nothing`). Поиск `<a>` идёт от
+                // `source_node`, а не от бокса: у страницы по той же причине —
+                // клик попадает в текстовый узел внутри инлайн-элемента.
+                if !self.frame_form_click(target.frame, hit.node, target.client) {
+                    self.frame_link_click(target.frame, hit.source_node);
+                }
             }
             return;
         }

@@ -770,6 +770,14 @@ impl V8JsRuntime {
     /// обработчика. `accessible=false` (cross-origin / opaque sandbox)
     /// регистрирует биндинг без доступа к содержимому: `contentWindow`
     /// существует, `contentDocument` и все нативы чтения пусты.
+    ///
+    /// BUG-480 срез 19: повторный вызов для ТОГО ЖЕ хоста (навигация фрейма)
+    /// ЗАМЕЩАЕТ биндинг на месте, а не добавляет второй. Иначе поиск по
+    /// `host_nid` — а он берёт первое совпадение (`_lumen_frame_binding`) —
+    /// вечно отдавал бы выброшенный документ, `window.length` рос бы на
+    /// каждую навигацию, и `window[i]` разъехался бы с порядком документа.
+    /// Сохранение ИНДЕКСА здесь и есть содержательная часть: вложенный
+    /// browsing context при навигации остаётся тем же, меняется его документ.
     pub fn register_frame_document(
         &self,
         host_nid: u32,
@@ -781,14 +789,14 @@ impl V8JsRuntime {
         let registry = Arc::clone(&self.frame_docs);
         let idx = self.run(move |_inner| {
             let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
-            reg.frames.push(crate::frame_bridge::FrameDocBinding {
+            let binding = crate::frame_bridge::FrameDocBinding {
                 host_nid,
                 doc,
                 url,
                 name,
                 accessible,
-            });
-            reg.frames.len() - 1
+            };
+            crate::frame_bridge::upsert_binding(&mut reg, binding)
         });
         // Срез 3: индексный (`window[idx]`) + именованный (`window[имя]`)
         // доступники окна фрейма. Порядок регистрации = порядок документа,

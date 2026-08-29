@@ -209,9 +209,10 @@ pub(crate) const TOP_BID: u32 = u32::MAX - 1;
 
 /// Один зарегистрированный под-документ `<iframe>` в реестре рантайма.
 ///
-/// Живёт в [`FrameDocSlots`] столько же, сколько контекст страницы:
-/// биндинги никогда не удаляются по одному — замена страницы уносит весь
-/// рантайм вместе с реестром (тот же lifecycle, что у [`crate::img_bitmap_store`]).
+/// Живёт в [`FrameDocSlots`] столько же, сколько контекст страницы: биндинг
+/// никогда не удаляется по одному — замена страницы уносит весь рантайм вместе
+/// с реестром (тот же lifecycle, что у [`crate::img_bitmap_store`]). Навигация
+/// фрейма его ЗАМЕЩАЕТ, сохраняя индекс, — см. [`upsert_binding`].
 #[cfg(feature = "v8-backend")]
 pub(crate) struct FrameDocBinding {
     /// `NodeId` элемента-хоста `<iframe>` в документе родителя.
@@ -260,6 +261,31 @@ pub(crate) struct FrameDocSlots {
     /// origin `about:`-биндинга при вычислении `event.origin` (наследование
     /// origin у srcdoc/about:blank детей).
     pub(crate) self_origin: String,
+}
+
+/// Положить биндинг под-документа в реестр и вернуть его `bid`: ЗАМЕСТИТЬ
+/// запись того же хоста, если она есть, иначе добавить в конец
+/// (BUG-480 срез 19).
+///
+/// Замещение с сохранением индекса — содержательная часть, а не экономия:
+/// вложенный browsing context при навигации остаётся тем же, меняется лишь его
+/// документ. Простой `push` давал бы второй биндинг того же хоста, а поиск по
+/// `host_nid` берёт ПЕРВОЕ совпадение (`_lumen_frame_binding`), так что
+/// `contentDocument`/`contentWindow` родителя вечно отдавали бы выброшенный
+/// документ; заодно `window.length` рос бы на каждую навигацию, а `window[i]`
+/// разъезжался бы с порядком документа.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn upsert_binding(slots: &mut FrameDocSlots, binding: FrameDocBinding) -> usize {
+    match slots.frames.iter().position(|b| b.host_nid == binding.host_nid) {
+        Some(i) => {
+            slots.frames[i] = binding;
+            i
+        }
+        None => {
+            slots.frames.push(binding);
+            slots.frames.len() - 1
+        }
+    }
 }
 
 /// Общий `Arc` между `V8JsRuntime`, нативами этого модуля и вызовами
@@ -2918,6 +2944,45 @@ mod tests {
                 ));
             },
         );
+    }
+
+    /// BUG-480 срез 19: навигация фрейма ЗАМЕЩАЕТ биндинг того же хоста, а не
+    /// добавляет второй, — и `bid` при этом сохраняется.
+    ///
+    /// Проверяется тем, что видно из JS, а не длиной вектора: поиск по
+    /// `host_nid` берёт первое совпадение, поэтому лишний биндинг проявился бы
+    /// как «`contentDocument` вечно отдаёт выброшенный документ» — ровно то, на
+    /// чём поймала живая проба.
+    #[test]
+    fn navigating_a_frame_replaces_its_binding_in_place() {
+        let rt = V8JsRuntime::new().unwrap();
+        let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        rt.eval("var window = globalThis;").unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        let make = |html: &str, url: &str| FrameDocBinding {
+            host_nid: 7,
+            doc: Arc::new(Mutex::new(lumen_html_parser::parse(html))),
+            url: url.to_owned(),
+            name: None,
+            accessible: true,
+        };
+        let first = upsert_binding(
+            &mut registry.lock().unwrap(),
+            make("<html><head><title>one</title></head><body></body></html>", "https://e/1"),
+        );
+        assert!(eval_bool(&rt, "_lumen_frame_content_document(7).title === 'one'"));
+        let second = upsert_binding(
+            &mut registry.lock().unwrap(),
+            make("<html><head><title>two</title></head><body></body></html>", "https://e/2"),
+        );
+        assert_eq!((first, second), (0, 0), "bid вложенного контекста обязан пережить навигацию");
+        assert_eq!(registry.lock().unwrap().frames.len(), 1, "второго биндинга того же хоста нет");
+        assert!(eval_bool(&rt, "_lumen_frame_content_document(7).title === 'two'"));
+        assert!(eval_bool(&rt, "_lumen_frame_content_window(7).location.href === 'https://e/2'"));
+        // Чужой хост по-прежнему добавляется отдельной записью.
+        let mut other = make("<html><body></body></html>", "https://e/x");
+        other.host_nid = 8;
+        assert_eq!(upsert_binding(&mut registry.lock().unwrap(), other), 1);
     }
 
     #[test]
