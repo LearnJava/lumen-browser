@@ -2,7 +2,7 @@
 
 **Статус:** FIXED 2026-08-25 (P1)
 **Заведён:** 2026-08-22 (WPT-RUN-6, срез 24 — живой замер, маркер `nbc-element-never-loads`)
-**Область:** `crates/js/src/dom.rs` (таблица интерфейсов элементов — `HTMLFrameElement` не определён; `frameset` при этом даёт `HTMLFrameSetElement`), `crates/shell/src/main.rs:7181` (`apply_iframe_sandbox_gates` — «Phase 0: iframe sub-документы не загружаются»; для `<frame>` нет и этого), `crates/engine/layout/src/box_tree.rs:2262` (`collect_requests_inner` — подресурсы собираются только с `<img>`, см. [BUG-848](BUG-848-OPEN.md))
+**Область:** `crates/js/src/dom.rs` (таблица интерфейсов элементов — `HTMLFrameElement` не определён; `frameset` при этом даёт `HTMLFrameSetElement`), `crates/shell/src/main.rs:7181` (`apply_iframe_sandbox_gates` — «Phase 0: iframe sub-документы не загружаются»; для `<frame>` нет и этого), `crates/engine/layout/src/box_tree.rs:2262` (`collect_requests_inner` — подресурсы собираются только с `<img>`, см. [BUG-848](BUG-848-FIXED.md), позже починено)
 **Владелец:** P1/P3 (`lumen-js` + шелл). Заведён P2 в ходе WPT-задачи, здесь не чинится.
 
 ## Симптом

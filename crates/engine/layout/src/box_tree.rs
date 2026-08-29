@@ -2499,9 +2499,42 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
         }
         return; // void element — нет children
     }
+    // BUG-848: three more elements carry an image URL the display list will
+    // key on but never produced a request at all — `<video poster>`, an
+    // `<input type=image>` control and an SVG `<image>` (href/xlink:href).
+    // None of the three support srcset/loading/fetchpriority, so the request
+    // just carries the "not set" defaults for those fields.
+    if let Some(url) = image_subresource_url(node) {
+        out.push(ImageRequest {
+            node_id: id,
+            url,
+            has_explicit_width: false,
+            has_explicit_height: false,
+            is_lazy: false,
+            fetch_priority: None,
+        });
+    }
     for &child in &node.children {
         collect_requests_inner(doc, child, viewport, out);
     }
+}
+
+/// URL for the three BUG-848 element kinds that carry an image but are not
+/// `<img>`: `<video poster>`, `<input type=image src>`, SVG `<image
+/// href|xlink:href>`. `None` for every other element, or when the relevant
+/// attribute is absent/empty — same "nothing to fetch" rule `<img>` uses.
+fn image_subresource_url(node: &lumen_dom::Node) -> Option<String> {
+    let name = node.element_name()?;
+    let url = match name.local.as_str() {
+        "video" => node.get_attr("poster"),
+        "input" if node.input_type() == Some(lumen_dom::InputType::Image) => node.get_attr("src"),
+        // SVG `<image>`; legacy `xlink:href` (SVG 1.1) alongside the plain
+        // `href` this parser keeps as one attribute, same fallback `<use>`
+        // resolution already uses a few lines up.
+        "image" => node.get_attr("href").or_else(|| node.get_attr("xlink:href")),
+        _ => None,
+    }?;
+    (!url.is_empty()).then(|| url.to_string())
 }
 
 /// Выбрать источник для `<img>`-элемента с учётом окружающего контекста:
@@ -16962,6 +16995,72 @@ mod tests {
         assert_eq!(reqs[1].fetch_priority, Some("low".to_string()), "LOW must normalize to low");
         assert_eq!(reqs[2].fetch_priority, None, "auto must map to None");
         assert_eq!(reqs[3].fetch_priority, None, "absent attr must map to None");
+    }
+
+    // ── BUG-848: image requests for non-`<img>` elements ──────────────────────
+
+    #[test]
+    fn video_poster_produces_an_image_request() {
+        let doc = lumen_html_parser::parse(
+            r#"<video src="clip.mp4" poster="thumb.jpg"></video>"#,
+        );
+        let reqs = super::collect_image_requests(&doc, Size::new(800.0, 600.0));
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].url, "thumb.jpg");
+    }
+
+    #[test]
+    fn video_without_poster_produces_no_request() {
+        let doc = lumen_html_parser::parse(r#"<video src="clip.mp4"></video>"#);
+        let reqs = super::collect_image_requests(&doc, Size::new(800.0, 600.0));
+        assert!(reqs.is_empty(), "no poster attribute must not request anything");
+    }
+
+    #[test]
+    fn input_type_image_src_produces_an_image_request() {
+        let doc = lumen_html_parser::parse(r#"<input type="image" src="btn.png">"#);
+        let reqs = super::collect_image_requests(&doc, Size::new(800.0, 600.0));
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].url, "btn.png");
+    }
+
+    #[test]
+    fn input_type_text_with_src_produces_no_request() {
+        // `src` on a non-image input carries no meaning — must not be
+        // misread as an image URL.
+        let doc = lumen_html_parser::parse(r#"<input type="text" src="btn.png">"#);
+        let reqs = super::collect_image_requests(&doc, Size::new(800.0, 600.0));
+        assert!(reqs.is_empty(), "type=text must not produce an image request");
+    }
+
+    #[test]
+    fn svg_image_href_produces_an_image_request() {
+        let doc = lumen_html_parser::parse(
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><image href="pic.svg" width="8" height="8"/></svg>"#,
+        );
+        let reqs = super::collect_image_requests(&doc, Size::new(800.0, 600.0));
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].url, "pic.svg");
+    }
+
+    #[test]
+    fn svg_image_xlink_href_produces_an_image_request() {
+        // Legacy SVG 1.1 form, same fallback `<use>` already relies on.
+        let doc = lumen_html_parser::parse(
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><image xlink:href="pic.svg" width="8" height="8"/></svg>"#,
+        );
+        let reqs = super::collect_image_requests(&doc, Size::new(800.0, 600.0));
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].url, "pic.svg");
+    }
+
+    #[test]
+    fn svg_image_without_href_produces_no_request() {
+        let doc = lumen_html_parser::parse(
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><image width="8" height="8"/></svg>"#,
+        );
+        let reqs = super::collect_image_requests(&doc, Size::new(800.0, 600.0));
+        assert!(reqs.is_empty(), "no href must not produce a request");
     }
 
     // ── ::first-letter / ::first-line structural markers ─────────────────────

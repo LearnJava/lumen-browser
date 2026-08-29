@@ -88,8 +88,8 @@ Linux, коммит `bafa603d9`) поднимает http-сервер, кото�
 [BUG-799](BUG-799-FIXED.md): страница доживает до строки после присваивания и
 дальше не идёт. Оба id (`fetch/metadata/generated/element-video`,
 `element-audio`) с этого среза атрибутированы маркеру
-`element-subresource-never-requested` ([BUG-848](BUG-848-OPEN.md)), чей ref
-называет и этот баг.
+`element-subresource-never-requested` ([BUG-848](BUG-848-FIXED.md), fixed
+2026-08-30), чей ref называет и этот баг.
 
 ## Направление починки (не предписание)
 
@@ -214,7 +214,7 @@ networkState=undefined` без единого `video-volumechange`, и `video-lo
   работа: у аудио настоящий провайдер воспроизведения и другой цикл загрузки.
 * Декодера, кроме GIF, нет, поэтому «выбор ресурса» физически не может
   закончиться успехом для mp4/webm — это Phase 1, а не этот баг.
-* `<video poster>` по-прежнему не запрашивается ([BUG-848](BUG-848-OPEN.md)).
+* `<video poster>` теперь запрашивается ([BUG-848](BUG-848-FIXED.md), fixed 2026-08-30).
 * `<source>`, добавленный **после** того, как элемент уже осел без ресурса
   (`networkState` = `NETWORK_NO_SOURCE`), не перезапускает выбор: хук слушает
   только `NETWORK_EMPTY`. Спека в этом месте продолжает приостановленный

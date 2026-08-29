@@ -456,6 +456,52 @@ fn dynamic_prefetch_link_fires_load() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+/// BUG-848: `rel=icon` is not a resource hint in §4.6.7's taxonomy but
+/// fetches and reports through the same shape, and both spellings of it
+/// must — `rel="shortcut icon"` is the historic form still in the wild,
+/// and the token split hands the dispatcher the plain `icon` from it.
+#[test]
+fn icon_link_fetches_and_fires_load_in_both_spellings() {
+    let provider = Arc::new(FixedFetch { status: 200, body: "GIF89a" });
+    let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+    rt.eval(
+        r#"globalThis.__b848_icon = 0;
+                   function mkIcon(rel, href) {
+                       var l = document.createElement('link');
+                       l.rel = rel;
+                       l.href = href;
+                       l.onload = function() { globalThis.__b848_icon++; };
+                       document.head.appendChild(l);
+                   }
+                   mkIcon('icon', 'favicon.ico');
+                   mkIcon('shortcut icon', 'legacy.ico');
+                   _lumen_tick_timers();"#,
+    )
+    .unwrap();
+    let r = rt.eval("globalThis.__b848_icon").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(2.0));
+}
+
+/// An icon the server does not have reports `error`, the same half of
+/// the pair every other hint type already had.
+#[test]
+fn icon_link_fires_error_on_http_failure() {
+    let provider = Arc::new(FixedFetch { status: 404, body: "nope" });
+    let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+    rt.eval(
+        r#"globalThis.__b848_ie = false;
+                   var l = document.createElement('link');
+                   l.rel = 'icon';
+                   l.href = 'missing.ico';
+                   l.onerror = function() { globalThis.__b848_ie = true; };
+                   document.head.appendChild(l);
+                   _lumen_tick_timers();"#,
+    )
+    .unwrap();
+    let r = rt.eval("globalThis.__b848_ie === true").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 /// `rel=modulepreload` with no `as` defaults to the «script»
 /// destination and loads; a valid but non-script-like destination is
 /// the one case that fires `error` instead of staying silent.
