@@ -1262,6 +1262,20 @@ fn gaussian_blur(src: &tiny_skia::Pixmap, sigma: f32) -> tiny_skia::Pixmap {
     if radius <= 0 || w == 0 || h == 0 {
         return src.clone();
     }
+    // BUG-850: `box_blur_h`/`box_blur_v`'s accumulator-priming loop
+    // (`for i in -r..=r`) costs O(radius) per row/column regardless of the
+    // layer's own size — an unclamped `backdrop-filter: blur(100000px)`
+    // primed a ~100 000-sample window per row of a 1024px-wide layer, 16 s
+    // for one screenshot. Once the radius reaches the layer's larger
+    // dimension, both box-blur passes' `i.clamp(0, last)` has already pulled
+    // in every real sample of the row/column at least once; growing it
+    // further only adds more repeats of the same edge pixel, shifting the
+    // mix by a fraction no rounded 8-bit channel can still distinguish —
+    // clamping there bounds the cost at O(layer size) with no visible
+    // difference for a radius already this saturated, far above anything a
+    // real blur value on a real layer produces (the graphic-tests corpus
+    // tops out at `blur(8px)`).
+    let radius = radius.min(w.max(h) as i32);
     // Premultiplied RGBA8 → f32 working buffer (4 channels interleaved).
     let mut buf: Vec<f32> = src.data().iter().map(|&b| f32::from(b)).collect();
     let mut tmp = vec![0.0f32; buf.len()];
@@ -3918,6 +3932,35 @@ mod tests {
         assert!(r < 250, "blur leaks ink past the rect edge (r={r})");
         // Far from the rect stays white.
         assert_eq!(px(&img, 60, 60), (255, 255, 255, 255), "far corner stays white");
+    }
+
+    /// BUG-850: an unclamped blur radius made `box_blur_h`/`box_blur_v`'s
+    /// accumulator-priming loop cost O(radius) per row/column regardless of
+    /// the layer's own size — `backdrop-filter: blur(100000px)` on a 1024px
+    /// layer took 16 s for one screenshot. Reaching this assertion at all,
+    /// well under the generous bound, is the point — a regression here
+    /// reintroduces the unbounded cost, not a wrong pixel.
+    #[test]
+    fn filter_blur_huge_radius_does_not_blow_up_cost() {
+        // Fills the left half black so a fully-saturated blur (radius >> the
+        // 256px layer) still produces a measurable, non-white mid-tone deep
+        // in the right (white) half — the accumulator-priming fix bounds
+        // *cost*, not the output, so an oversaturated blur must still blend.
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(100_000.0)], bounds: None },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 128.0, 256.0), color: black },
+            DisplayCommand::PopFilter,
+        ];
+        let start = std::time::Instant::now();
+        let img = rasterize_cpu(256, 256, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed.as_secs() < 10,
+            "blur(100000px) on a 256px layer took {elapsed:?} — the radius clamp regressed",
+        );
+        let (r, _, _, _) = px(&img, 220, 128);
+        assert!(r < 220, "a fully saturated blur must still visibly blend into the far side (r={r})");
     }
 
     /// `filter: blur(0)` (radius rounds to 0) is an identity: the fill composites
