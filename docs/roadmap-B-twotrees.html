@@ -5588,8 +5588,8 @@
       },
       {
        "id": "SPLIT-ST15",
-       "title": "SPLIT-ST15: ComputedStyle из style.rs",
-       "status": "ready",
+       "title": "SPLIT-ST15: ComputedStyle из style.rs  ЗАКРЫТ 2026-08-30 (ветка `p1-split-st15`, один срез): 1 199 строк двумя кусками в `style/computed.rs`, style.rs 7 579 → 6 391, тестов 3 637 — 3 637. Анкеры постановки разошлись с файлом пятый раз подряд (3 439…4 292 и 6 878…7 220), но ОБЪЁМ сошёлся строка в строку. Сверка difflib региона из HEAD против тела нового файла — ровно ноль расхождений. Ловушка SH-3a шестой раз: `MathStyle` и `Ruby*` остались без производственных читателей, но их зовут `style::tests` через `use super::*` — `#[cfg(test)]`-импорты. Главная находка батча к переносу отношения не имеет: `#![allow(missing_docs)]` крейта layout стоит в КОРНЕ (`lib.rs:18`), поэтому линт не срабатывает ни в одном новом файле крейта, и правило «новый файл обязан документировать» здесь не работает — как и ещё в семи крейтах (`core`, `dom`, `font`, `image`, `paint`, `js`, `network`); записано в `docs/lint-policy.md` §10",
+       "status": "done",
        "size": "M",
        "note": "`ComputedStyle` из `crates/engine/layout/src/style.rs`: `struct ComputedStyle` (3287…4141) плюс `impl ComputedStyle` (6726…7069), 1 199 строк → `style/computed.rs`. ЕДИНСТВЕННЫЙ батч группы с разрывным регионом, и разрыв обязателен: объявление и реализация обязаны ехать вместе (прецедент `enum PageSource`/`impl PageSource`, SH-3a/SH-3b), а между ними лежат 2 584 строки чужих типов значений. Тянет за собой правило про долг документации в максимуме: 375 `pub`-полей, из них 86 без `///`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
