@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-29",
  "counts": {
-  "open": 381,
+  "open": 383,
   "fixed": 500,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 881,
+ "total_bugs": 883,
  "phases": [
   {
    "id": "P0",
@@ -11932,6 +11932,20 @@
    "component": "layout (`crates/engine/layout/src/box_tree.rs` — `is_replaced` в `lay_out_inner`, затем `b.rect.width = pref_w.min(b.rect.width)` в ветке shrink-to-fit)",
    "date": null,
    "debtor": false
+  },
+  "BUG-927": {
+   "status": "open",
+   "title": "Нативный клик по `<input type=radio>` не снимает отметку с соседа по группе: в DOM остаются ДВЕ отмеченные кнопки одного `name` в одной форме — состояние, котор…",
+   "component": "shell (`crates/shell/src/lumen/click.rs`, ветка `FormClickAction::ToggleRadio` → `crates/shell/src/forms.rs::toggle_checkbox`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-928": {
+   "status": "open",
+   "title": "Инлайн-уровневый бокс с `position: absolute` из потока не выносится: в дампе у него `position=absolute`, а координаты потоковые — `<span display:inline-block>`…",
+   "component": "layout (`crates/engine/layout/src/box_tree.rs` — сбор `abs_deferred` есть только в блочном цикле `:9041` и во flex-ветке `:8902`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -12859,6 +12873,9 @@
   "layout (`crates/engine/layout/src/box_tree.rs` — размещение `position: absolute`/`fixed`)": [
    "BUG-745"
   ],
+  "layout (`crates/engine/layout/src/box_tree.rs` — сбор `abs_deferred` есть только в блочном цикле `:9041` и во flex-ветке `:8902`)": [
+   "BUG-928"
+  ],
   "layout (`crates/engine/layout/src/box_tree.rs` — те же три функции intrinsic-ширины)": [
    "BUG-738",
    "BUG-740"
@@ -13189,6 +13206,9 @@
   ],
   "shell (`chrome_model_snapshot`, `panels/shields_panel.rs`, `panels/permission_panel.rs`), chrome (`ChromeModel::permissions`, `assets/chrome/chrome.html` `#permPopover`)": [
    "BUG-411"
+  ],
+  "shell (`crates/shell/src/lumen/click.rs`, ветка `FormClickAction::ToggleRadio` → `crates/shell/src/forms.rs::toggle_checkbox`)": [
+   "BUG-927"
   ],
   "shell (`crates/shell/src/main.rs:1177` — `A11yPrefs::open_in_memory()`), automation (нет CLI-флага/переменной/BiDi-ручки), tooling (`tools/wptrunner/wptrunner/browsers/lumen.py`)": [
    "BUG-755"

@@ -310,8 +310,8 @@ impl Lumen {
                     },
                 });
             }
-            #[cfg(feature = "v8")]
             if let Some(hit) = target.hit.as_ref() {
+                #[cfg(feature = "v8")]
                 self.frame_mouse_event(
                     target.frame,
                     hit.node.index() as u32,
@@ -319,6 +319,12 @@ impl Lumen {
                     (target.client.x, target.client.y),
                     (0, 1),
                 );
+                // BUG-480 срез 16 доставлял только СОБЫТИЕ, а собственное
+                // поведение элемента (флажок, `<summary>`, ползунок) для
+                // ребёнка не исполнял никто. Порядок «сначала dispatch, потом
+                // переключение» — тот же, что ниже у страницы: обработчик
+                // обязан видеть состояние ДО активации.
+                self.frame_form_click(target.frame, hit.node, target.client);
             }
             return;
         }

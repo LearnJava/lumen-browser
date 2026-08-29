@@ -1012,6 +1012,171 @@ fn sync_frame_viewports_clamps_stale_scroll() {
     assert_eq!(frames[0].scroll_y, 100.0, "прокрутка в пределах — не трогаем");
 }
 
+// ── формы под-документа (BUG-480 срез 18) ───────────────────────────────────
+
+/// Есть ли в списке синяя заливка — панель, которую прячет закрытый
+/// `<details>` в фикстурах ниже.
+fn has_blue(dl: &DisplayList) -> bool {
+    dl.iter().any(|c| {
+        matches!(c, lumen_paint::DisplayCommand::FillRect { color, .. }
+                 if color.r == 0 && color.g == 0 && color.b == 255)
+    })
+}
+
+/// Страница с `<iframe>` и живой хэндл ребёнка на произвольной разметке —
+/// [`page_with_live_frame`] с параметром вместо фиксированной плашки.
+fn live_frame_with_child(child_html: &str) -> (lumen_layout::LayoutBox, crate::frames::FrameHandle) {
+    let (page_layout, mut handle, _) = page_with_live_frame();
+    let host_rect = handle.host_rect.expect("хост-бокс задан хелпером");
+    let (child_doc, child_layout) =
+        laid_out(child_html, Size::new(host_rect.width, host_rect.height));
+    handle.doc = Arc::new(Mutex::new(child_doc));
+    handle.layout = Some(child_layout);
+    (page_layout, handle)
+}
+
+/// Разметка ребёнка с `<details>`: закрытый прячет синюю панель, открытый — нет.
+const CHILD_WITH_DETAILS: &str = r#"<html><body style="margin:0">
+     <details id="d"><summary>s</summary>
+       <div style="height:60px;background:rgb(0,0,255)"></div>
+     </details>
+   </body></html>"#;
+
+/// Пересчёт после мутации DOM ребёнка идёт при НЕИЗМЕННОМ вьюпорте.
+///
+/// Это и есть отличие среза 18 от 13: гейт «размер хоста не менялся — не
+/// пересчитывать» в [`sync_frame_viewports`] здесь срабатывает всегда, и
+/// правка дошла бы до атрибута, но не до экрана. Проверяется по СОДЕРЖИМОМУ
+/// готового display list, а не по факту вызова: панель за закрытым
+/// `<details>` не рисуется, за открытым — рисуется.
+#[test]
+fn relayout_frame_content_repaints_child_at_unchanged_viewport() {
+    let (page_layout, handle) = live_frame_with_child(CHILD_WITH_DETAILS);
+    let viewport_before = handle.viewport;
+    let mut frames = vec![handle];
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+    assert!(
+        !has_blue(&frames[0].content_dl),
+        "закрытый <details> не рисует панель — иначе тест ниже ничего не докажет"
+    );
+
+    let d = {
+        let doc = frames[0].doc.lock().expect("лок ребёнка");
+        doc.find_by_id("d").expect("<details>")
+    };
+    {
+        let mut doc = frames[0].doc.lock().expect("лок ребёнка");
+        crate::forms::toggle_details_open(&mut doc, d);
+    }
+    // Повторный проход по вьюпортам правку НЕ увидит: размер хоста тот же.
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+    assert!(
+        !has_blue(&frames[0].content_dl),
+        "мутация дерева ребёнка мимо гейта размеров — ровно тот дефект, который чинит срез"
+    );
+
+    crate::frames::relayout_frame_content(&mut frames, 0, &page_layout);
+    assert!(has_blue(&frames[0].content_dl), "раскрытая панель обязана попасть в список");
+    assert_eq!(
+        frames[0].viewport, viewport_before,
+        "вьюпорт ребёнка мутация его DOM не меняет"
+    );
+}
+
+/// Правка внутри ВЛОЖЕННОГО фрейма доходит до списка его предка.
+///
+/// Содержимое внука вклеено в список среднего фрейма, а тот — в список
+/// страницы: перерисовать только внука значит не показать ничего. Порядок
+/// обхода по глубине живёт в [`sync_frame_viewports`], поэтому срез им и
+/// пользуется вместо собственного прохода.
+#[test]
+fn relayout_frame_content_reaches_the_ancestor_list() {
+    // Средний фрейм сам держит `<iframe src="g.html">` — по его заглушке
+    // вклейка и найдёт содержимое внука.
+    let (page_layout, mid) = live_frame_with_child(
+        r#"<html><body style="margin:0">
+             <iframe src="g.html" width="200" height="100" style="border:0"></iframe>
+           </body></html>"#,
+    );
+    let mid_doc = Arc::clone(&mid.doc);
+    let grand_host = {
+        let doc = mid_doc.lock().expect("лок среднего");
+        collect_iframes(&doc)[0].node
+    };
+    let grand_rect = crate::frames::host_content_rect(
+        crate::forms::find_layout_box(mid.layout.as_ref().expect("layout среднего"), grand_host)
+            .expect("бокс <iframe> внука"),
+    );
+
+    let (_, grand_doc_layout) = live_frame_with_child(CHILD_WITH_DETAILS);
+    let mut grand = grand_doc_layout;
+    grand.host = grand_host;
+    grand.host_src = "g.html".to_owned();
+    grand.host_rect = Some(grand_rect);
+    grand.viewport = Size::new(grand_rect.width, grand_rect.height);
+    grand.depth = 1;
+    grand.parent_doc = Some(Arc::clone(&mid_doc));
+    // Layout внука — на СВОЁМ вьюпорте, а не на вьюпорте среднего фрейма.
+    let (gd, gl) = laid_out(CHILD_WITH_DETAILS, grand.viewport);
+    grand.doc = Arc::new(Mutex::new(gd));
+    grand.layout = Some(gl);
+
+    let mut frames = vec![mid, grand];
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+    assert!(!has_blue(&frames[0].content_dl), "панель внука пока спрятана");
+
+    let d = {
+        let doc = frames[1].doc.lock().expect("лок внука");
+        doc.find_by_id("d").expect("<details>")
+    };
+    {
+        let mut doc = frames[1].doc.lock().expect("лок внука");
+        crate::forms::toggle_details_open(&mut doc, d);
+    }
+    crate::frames::relayout_frame_content(&mut frames, 1, &page_layout);
+    assert!(has_blue(&frames[1].content_dl), "внук перерисован");
+    assert!(
+        has_blue(&frames[0].content_dl),
+        "и его содержимое доехало до списка СРЕДНЕГО фрейма — иначе на экране пусто"
+    );
+}
+
+/// Мутация, укоротившая содержимое, зажимает прокрутку ребёнка.
+///
+/// Тот же долг, что у среза 17 при смене размера хоста, но приходит с другой
+/// стороны: закрыть `<details>` можно на прокрученном до низа фрейме, и без
+/// зажима под ним осталась бы пустота.
+#[test]
+fn relayout_frame_content_clamps_scroll_when_child_shrinks() {
+    let tall = r#"<html><body style="margin:0">
+         <details id="d" open><summary>s</summary>
+           <div style="height:600px;background:rgb(0,0,255)"></div>
+         </details>
+       </body></html>"#;
+    let (page_layout, handle) = live_frame_with_child(tall);
+    let mut frames = vec![handle];
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+    let max = crate::frames::frame_max_scroll(&frames[0]);
+    assert!(max > 100.0, "раскрытый <details> обязан давать прокрутку: {max}");
+    assert_eq!(crate::frames::scroll_frame_to(&mut frames, 0, max), Some(max));
+
+    let d = {
+        let doc = frames[0].doc.lock().expect("лок ребёнка");
+        doc.find_by_id("d").expect("<details>")
+    };
+    {
+        let mut doc = frames[0].doc.lock().expect("лок ребёнка");
+        crate::forms::toggle_details_open(&mut doc, d);
+    }
+    crate::frames::relayout_frame_content(&mut frames, 0, &page_layout);
+    assert_eq!(
+        frames[0].scroll_y,
+        crate::frames::frame_max_scroll(&frames[0]),
+        "прокрутка вернулась к новому краю содержимого"
+    );
+    assert!(frames[0].scroll_y < max, "новый край выше прежнего: {}", frames[0].scroll_y);
+}
+
 // в”Ђв”Ђ PH1-2: Progressive streaming pipeline в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 // Compile-time: streaming throttle must be в‰¤16 ms (~60 Hz).

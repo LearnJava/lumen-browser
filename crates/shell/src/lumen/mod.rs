@@ -18,6 +18,7 @@ mod docking;
 mod file_picker;
 mod find_bar;
 mod form_submit;
+mod frame_forms;
 mod gestures;
 mod hibernation;
 mod hint_mode;
