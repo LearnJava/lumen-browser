@@ -73,7 +73,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-28",
+ "generated": "2026-08-29",
  "counts": {
   "open": 381,
   "fixed": 500,
@@ -5512,9 +5512,9 @@
       {
        "id": "SPLIT-ST4",
        "title": "SPLIT-ST4: font-size и стороны бокса из style.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "Размер шрифта и стороны бокса `crates/engine/layout/src/style.rs`: анкер `fn media_context_from_viewport` (22116) до `fn parse_color` (23035), 920 строк. Две темы, не одна: `font-size`/`line-height`/`font`-шортхенд с токенайзером (22116…22514) → `style/parse/font_size.rs`; сеттеры сторон, `margin`/`padding`/`border`/`outline`-шортхенды, scroll-snap, `anchor()`/`anchor-size()` (22515…23035) → `style/parse/box_sides.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "Размер шрифта и стороны бокса `crates/engine/layout/src/style.rs`: анкер `fn media_context_from_viewport` (22116) до `fn parse_color` (23035), 920 строк. Две темы, не одна: `font-size`/`line-height`/`font`-шортхенд с токенайзером (22116…22514) → `style/parse/font_size.rs`; сеттеры сторон, `margin`/`padding`/`border`/`outline`-шортхенды, scroll-snap, `anchor()`/`anchor-size()` (22515…23035) → `style/parse/box_sides.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 ЗАКРЫТ 2026-08-29 (ветка `p1-split-st4`): 901 строка уехала в два файла — `style/parse/font_size.rs` (381 тела) и `style/parse/box_sides.rs` (520), style.rs 23 045 -> 22 152. **Ловушка «регион назван по первому item‑у» на этом батче сработала — впервые за группу ST:** анкер строки, `fn media_context_from_viewport` (32 строки), это контекст `@media`, а не размер шрифта и не стороны бокса; взять его в `font_size.rs` только потому, что он стоит первым, значило бы смешать темы, поэтому он ОСТАВЛЕН в `style.rs` и уедет в `style/env.rs` батчем ST-10, где ему и место по плану. Отсюда 901 строка вместо плановых 920. Видимость понадобилась почти всем: 7 item‑ов из 8 в `font_size.rs` и 26 из 29 в `box_sides.rs` получили `pub(in crate::style)`, потому что остаток style.rs продолжает их звать (`resolve_box_length` — 30 вызовов, `FontSizeBasis` — из `compute_style`, за 14 000 строк от региона); вместе с ними — все семь ПОЛЕЙ `FontShorthand`, иначе арм `\"font\" =>` не читает `parts.style`/`parts.family`. **НОВОЕ ДЛЯ ДОРОЖКИ, и это про подсчёт зависимостей: «зовётся снаружи региона» и «нужен импорт в доноре» — не одно и то же.** У `is_font_size_token` и `split_font_shorthand_tokens` в самом style.rs вызывателей НЕТ, только в тест-модулях, — и обычный `use` в style.rs на них оказывается неиспользуемым импортом в сборке БЕЗ `cfg(test)`. Поймал это опять только `clippy -- -D warnings` (`cargo check --all-targets` был зелёный), лечится импортом в `style/tests/mod.rs`, а не в доноре: считать надо не «есть ли ссылки», а «есть ли ссылки в том же cfg-срезе». Сверка: мультимножество строк «два новых файла» против вырезанных регионов совпадает построчно с точностью до префикса видимости, `#[test]` крейта 3 620 -> 3 620, `cargo test -p lumen-layout` 3 620+71+1 зелёные, `dump_golden.py` 12/12 без дельт. **`SYMBOLS.md` сдвинулся — впервые в группе ST** (324 строки), потому что регион ST-4, в отличие от ST-1…ST-3, стоит ВЫШЕ последних `pub` item‑ов файла; диффа — чистый сдвиг номеров, ни одной записи только с одной стороны. `scripts/file-size-baseline.tsv` обновлён (новые файлы в него не попадают: там только файлы >2000 строк). Гейт `scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)) — вместо него адресные `cargo clippy -p lumen-layout --all-targets -- -D warnings` и `cargo test -p lumen-layout`"
       },
       {
        "id": "SPLIT-ST5",
