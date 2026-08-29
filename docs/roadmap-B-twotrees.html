@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-29",
  "counts": {
-  "open": 383,
-  "fixed": 500,
+  "open": 381,
+  "fixed": 502,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -5568,9 +5568,9 @@
       {
        "id": "SPLIT-ST12",
        "title": "SPLIT-ST12: матчинг селекторов из style.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "Матчинг селекторов `crates/engine/layout/src/style.rs`: анкер `fn matches_complex` (9432) до `fn default_display` (10827), 1 396 строк. Два файла, потому что это два разных вопроса: обход комбинаторов и compound/attribute/`::slotted` (9432…9902) → `style/matching.rs`; предикаты состояния формы и позиции в дереве (`matches_disabled`/`matches_checked`/`matches_indeterminate`/`matches_default`/`element_index*`, 9903…10827) → `style/matching/forms.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "Матчинг селекторов `crates/engine/layout/src/style.rs`: анкер `fn matches_complex` (9432) до `fn default_display` (10827), 1 396 строк. Два файла, потому что это два разных вопроса: обход комбинаторов и compound/attribute/`::slotted` (9432…9902) → `style/matching.rs`; предикаты состояния формы и позиции в дереве (`matches_disabled`/`matches_checked`/`matches_indeterminate`/`matches_default`/`element_index*`, 9903…10827) → `style/matching/forms.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 **ЗАКРЫТ 2026-08-29** (`p1-split-st12`, один срез): 1 403 строки в два файла — `style/matching.rs` (12 item'ов, 264 тела) и `style/matching/forms.rs` (46 item'ов, 1 139 тела, включая `is_self_or_ancestor`), style.rs 11 281 -> 9 888, `#[test]` крейта 3 624 -> 3 624, сверка побайтовая (6 расхождений на 1 403 строках, все — видимость). **Граница между файлами не там, где её назвала постановка.** `default_display`, анкер нижней границы, в файле уже не существует (увезён ST-11) — регион пересчитан по текущему файлу и по теме, не по адресу (правило ST-6). Внутри самого диспетчера `matches_pseudo_class` (189 строк) решался вопрос, в каком файле ему место: постановка звала его в `matching.rs` («обход... и compound/attribute»), но его единственный вызыватель `is_self_or_ancestor` — функция, которую ST-10 явно оставила в доноре именно для этого батча со словами «её дом — `style/matching/forms.rs`» — раскрыла реальную границу: `matches_pseudo_class` со всеми предикатами состояния и позиции ушёл в `forms.rs` целиком (1 139 строк), а `matching.rs` остался тонким (264 строки — только обход комбинаторов, compound/attribute/`::slotted`). **Видимость: шесть функций, а не два файла с чистой односторонней связью.** `matches_pseudo_class`/`matches_defined`/`is_element`/`previous_element_sibling` — `pub(in crate::style)`, потому что их зовут либо родитель `matching.rs` (`is_element`/`previous_element_sibling` — внутри `matches_chain`, единственная связь `forms.rs → matching.rs` в обратную от диспетчера сторону), либо сосед вне обоих файлов (`matches_defined` — только `style::tests::cascade`). `complex_has_host` — та же правка в `matching.rs` (зовёт донор, `style.rs:8087`). `matches_complex` остался `pub(crate)` без изменений (уже был), но получил `pub(crate) use matching::matches_complex;` в `style.rs`, чтобы путь `crate::style::matches_complex` не порвался у `selector_query.rs`/`starting_style.rs`/`style::env` — они на него ссылаются целиком по старому пути. **Пойманная ловушка вне региона: `matches_simple` была приватной, но её путь `crate::style::matches_simple` читал `style::restyle` (ST-10, сосед `matching`, не потомок) — недостающая связь, которую не нашёл первый прогон кросс-крейтового грепа (шаблон-исключение `style\\.rs$` случайно съел и `restyle.rs`, поскольку тот **оканчивается** на «style.rs» как подстроку — `re`+`style.rs`); поймал только `cargo check`.** Правка та же, что у `matches_complex`: `pub(in crate::style) fn` в доноре-функции плюс `pub(in crate::style) use matching::matches_simple;` в `style.rs`, путь не тронут. `HOVER_NID`/`FOCUS_NID`/`ACTIVE_NID` (правки ST-10) держал в `style.rs` только `matches_pseudo_class`; донор их больше не использует — сняты из `use env::{...}` в `style.rs`, добавлены в `style/tests/mod.rs` (их берёт `anchor_positioning_tests` через `super::*`, приём ST-4 «функция только для тестов», расширенный на импортированные константы). `Attribute`/`AttrOp`/`AttrSelector`/`Combinator`/`DirArg`/`PseudoClass` без остатка ушли из `use`-шапки `style.rs` — донор их больше не зовёт нигде (проверено по всему оставшемуся файлу, не только по соседним строкам); `ComplexSelector`/`CompoundSelector`/`SimpleSelector`/`PseudoElementKind`/`Specificity` остались — их держит код каскада вне региона. Гейт: `clippy -p lumen-layout --all-targets -D warnings` и `test -p lumen-layout` (3 624/3 624) зелёные; `scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)); `dump_golden.py` — пустой диф"
       },
       {
        "id": "SPLIT-ST13",
@@ -9022,10 +9022,10 @@
    "debtor": false
   },
   "BUG-496": {
-   "status": "open",
+   "status": "fixed",
    "title": "`HTMLElement.dataset` (DOMStringMap) не реализован вовсе — `grep` ноль совпадений. Скрипт падает на первом же `element.dataset.x`, харнес зависает TIMEOUT с нул…",
-   "component": "js (`crates/js/src/dom.rs`, нет `dataset` нигде в `WEB_API_SHIM`)",
-   "date": null,
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js`, `_lumen_make_dataset`)",
+   "date": "2026-08-29",
    "debtor": false
   },
   "BUG-497": {
@@ -11108,10 +11108,10 @@
    "debtor": false
   },
   "BUG-801": {
-   "status": "open",
+   "status": "fixed",
    "title": "Бесконечный цикл в auto-placement: элемент, которому нужна колонка за последней явной (`grid-column: 3` при двух треках, `span 3`, `9 / span 2`) и у которого вт…",
-   "component": "layout (`crates/engine/layout/src/box_tree.rs:11813` и `:11861` — пасс 2 auto-placement CSS Grid)",
-   "date": null,
+   "component": "layout (`crates/engine/layout/src/box_tree.rs` — пасс 2 auto-placement CSS Grid, row-flow и column-flow `loop`)",
+   "date": "2026-08-29",
    "debtor": false
   },
   "BUG-802": {
@@ -12547,9 +12547,6 @@
   "js (`crates/js/src/dom.rs`, `window` object)": [
    "BUG-623"
   ],
-  "js (`crates/js/src/dom.rs`, нет `dataset` нигде в `WEB_API_SHIM`)": [
-   "BUG-496"
-  ],
   "js (`crates/js/src/esm.rs:148-151` — ветка (4) `resolve_specifier_with` отдаёт значение карты наружу как есть, минуя резолвинг веток (3)/(3b))": [
    "BUG-879"
   ],
@@ -12588,6 +12585,9 @@
   ],
   "js (`crates/js/src/shared_worker.rs`, `SHARED_WORKER_GLOBAL_SHIM` — объект для `onconnect` собирается литералом с одним полем `ports`)": [
    "BUG-867"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js`, `_lumen_make_dataset`)": [
+   "BUG-496"
   ],
   "js (`crates/js/src/surface_api.rs` рядом с `navigator.doNotTrack`, строки 116-121) + network (`crates/network/src/http/headers.rs::build_request_headers`)": [
    "BUG-397"
@@ -12837,9 +12837,6 @@
   "layout (`crates/engine/layout/src/box_tree.rs:10805-10824` — `needs_prelayout` в `layout_flex_container`; второй проход `lay_out_with_used_size` на `:11204`/`:11281`)": [
    "BUG-802"
   ],
-  "layout (`crates/engine/layout/src/box_tree.rs:11813` и `:11861` — пасс 2 auto-placement CSS Grid)": [
-   "BUG-801"
-  ],
   "layout (`crates/engine/layout/src/box_tree.rs:1341-1400` — `parse_svg_transform`, вызывается с `:1680`/`:1803` для атрибута `transform` любого SVG-узла)": [
    "BUG-803"
   ],
@@ -12869,6 +12866,9 @@
   ],
   "layout (`crates/engine/layout/src/box_tree.rs` — ветка `is_image_element`, auto-ширина замещаемого элемента)": [
    "BUG-734"
+  ],
+  "layout (`crates/engine/layout/src/box_tree.rs` — пасс 2 auto-placement CSS Grid, row-flow и column-flow `loop`)": [
+   "BUG-801"
   ],
   "layout (`crates/engine/layout/src/box_tree.rs` — размещение `position: absolute`/`fixed`)": [
    "BUG-745"
