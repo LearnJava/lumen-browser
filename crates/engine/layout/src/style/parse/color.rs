@@ -10,10 +10,11 @@
 
 use lumen_core::ColorSpace;
 
+use crate::style::parse::timeline::tokenize_with_parens;
 use crate::style::values::named_colors::NAMED_COLORS;
 use crate::style::{
     Color, ColorFloat, CssColor, SystemColor, encode_srgb_f32, predefined_to_srgb_linear,
-    split_top_level_commas, tokenize_with_parens,
+    split_top_level_commas,
 };
 
 /// Парсит CSS-значение `<color>` в непрозрачный [`Color`]: named color,
