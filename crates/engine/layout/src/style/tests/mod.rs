@@ -35,6 +35,15 @@
     // `super::*` их не приносит.
     use crate::style::env::FORCED_COLORS;
     use crate::style::restyle::stylesheet_needs_state_fanout;
+    // То же для батча SPLIT-ST12: `matches_defined` уехала в
+    // `style::matching::forms`, её производственный вызыватель
+    // (`matches_pseudo_class`) остался в том же файле — единственный
+    // внешний вызыватель это `style::tests::cascade`. `HOVER_NID`/
+    // `FOCUS_NID`/`ACTIVE_NID` держал в `style.rs` только `matches_pseudo_class`
+    // (тоже уехавшая); `style::tests::anchor_positioning_tests` брала их через
+    // глоб `super::*`, который их больше не приносит.
+    use crate::style::matching::forms::matches_defined;
+    use crate::style::env::{ACTIVE_NID, FOCUS_NID, HOVER_NID};
     // `HashSet` держал в `style.rs` только фан-аут рестайла; после его отъезда
     // единственные вызыватели — тесты фан-аута, поэтому импорт переехал сюда
     // (иначе неиспользуемый импорт в сборке без `cfg(test)`).
