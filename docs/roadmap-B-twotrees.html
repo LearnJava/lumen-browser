@@ -5519,9 +5519,9 @@
       {
        "id": "SPLIT-ST5",
        "title": "SPLIT-ST5: парсеры значений из style.rs",
-       "status": "ready",
+       "status": "done",
        "size": "L",
-       "note": "Парсеры значений `crates/engine/layout/src/style.rs`: анкер `fn parse_counter_list` (19769) до `fn media_context_from_viewport` (22115), 2 347 строк, четыре файла: счётчики/кавычки/углы/`clip-path` и `transform`/`filter` (19769…20240) → `style/parse/transform.rs`; `content` (20241…20352) → `style/parse/content.rs`; таймлайны и шортхенды `animation`/`transition` (20353…20818) → `style/parse/timeline.rs`; изображения — `image-set`/`cross-fade`, слои `background`/`mask`, градиенты (20819…22115, 1 297) → `style/parse/image.rs`. Последний придётся делить: 1 297 строк под потолком, но вместе с `parse_grid_template_areas` уже нет. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "Парсеры значений `crates/engine/layout/src/style.rs`: анкер `fn parse_counter_list` (19769) до `fn media_context_from_viewport` (22115), 2 347 строк, четыре файла: счётчики/кавычки/углы/`clip-path` и `transform`/`filter` (19769…20240) → `style/parse/transform.rs`; `content` (20241…20352) → `style/parse/content.rs`; таймлайны и шортхенды `animation`/`transition` (20353…20818) → `style/parse/timeline.rs`; изображения — `image-set`/`cross-fade`, слои `background`/`mask`, градиенты (20819…22115, 1 297) → `style/parse/image.rs`. Последний придётся делить: 1 297 строк под потолком, но вместе с `parse_grid_template_areas` уже нет. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 ЗАКРЫТ 2026-08-29 (ветка `p1-split-st5`): 2 279 строк уехали в ШЕСТЬ файлов, а не в четыре — `counters.rs` (117), `shape.rs` (133), `transform.rs` (234), `content.rs` (111), `timeline.rs` (444), `image.rs` (1 235); `parse_grid_template_areas` и `parse_aspect_ratio_value` к темам региона не относятся и оставлены в style.rs, а `parse_filter_fn` стоял в 1 900 строках от своего `parse_filter_list` и уехал к нему. style.rs 22 152 -> 19 889, сверка побайтовая, `#[test]` 3 692 -> 3 692. Три `pub fn` зовут из `lib.rs`/`animation.rs`, вне `crate::style` — им `pub use` со старого пути (§2.1)"
       },
       {
        "id": "SPLIT-ST6",

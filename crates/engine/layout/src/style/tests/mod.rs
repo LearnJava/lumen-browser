@@ -9,6 +9,14 @@
     // `style::parse::font_size`: в самом `style.rs` вызывателей у них нет, только
     // здесь, поэтому глоб `super::*` их не приносит и импорт нужен явный.
     use crate::style::parse::font_size::{is_font_size_token, split_font_shorthand_tokens};
+    // То же самое для батча SPLIT-ST5: у `tokenize_with_parens` вызыватель в
+    // `style::parse::color`, а у `extract_gradient_interpolation` — только здесь,
+    // поэтому глоб `super::*` их не приносит.
+    // `MixColorSpace`/`HueInterpolationMethod` тоже остались без вызывателей в
+    // производственном `style.rs` — их читают только эти тесты.
+    use crate::color_mix::{HueInterpolationMethod, MixColorSpace};
+    use crate::style::parse::image::extract_gradient_interpolation;
+    use crate::style::parse::timeline::tokenize_with_parens;
 
     mod box_model;
     mod cascade;
