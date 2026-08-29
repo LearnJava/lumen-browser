@@ -311,6 +311,16 @@ impl Lumen {
                 });
             }
             if let Some(hit) = target.hit.as_ref() {
+                // BUG-480 срез 22: помимо host-фокуса страницы (уже
+                // переведён выше), typeable-поле ВНУТРИ фрейма запоминается
+                // отдельно — `focused_node` не может его адресовать
+                // (`NodeId` уникален только в своём документе, та же причина,
+                // что у `hovered_frame`). Не typeable-узел → предыдущий
+                // адресат клавиатуры фрейма забывается, как у страницы
+                // (`focused_node` тоже переустанавливается на КАЖДЫЙ клик).
+                self.focused_frame = self
+                    .frame_typeable_field(target.frame, hit.node)
+                    .map(|_| (target.frame, hit.node));
                 #[cfg(feature = "v8")]
                 self.frame_mouse_event(
                     target.frame,
@@ -333,9 +343,18 @@ impl Lumen {
                 if !self.frame_form_click(target.frame, hit.node, target.client) {
                     self.frame_link_click(target.frame, hit.source_node);
                 }
+            } else {
+                // Точка во фрейме, но ни на один его бокс не попала (пустой
+                // под-документ, зазор под содержимым) — адресата клавиатуры
+                // нет, как у страницы при клике мимо любого узла.
+                self.focused_frame = None;
             }
             return;
         }
+        // Клик вне содержимого любого фрейма — прежний фокус фрейма, если
+        // был, больше не адресат клавиатуры (страница ведёт себя так же:
+        // `focused_node` выше переустановлен на КАЖДЫЙ клик).
+        self.focused_frame = None;
 
         // Dispatch JS click event (bubbles from hit node to document).
         // Passes viewport coordinates and modifier key state so

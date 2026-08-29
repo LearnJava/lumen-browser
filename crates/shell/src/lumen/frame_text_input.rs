@@ -1,0 +1,140 @@
+//! Native text input into a typeable field ВНУТРИ содержимого фрейма
+//! (BUG-480 срез 22).
+//!
+//! Срез 16 довёл клик до под-документа как событие, срез 18 — собственное
+//! поведение элементов управления формы на нативный клик. Ввод текста
+//! оставался вне очереди: `self.focused_node` после клика внутрь фрейма
+//! указывает на host-элемент `<iframe>` (срез 16 — с точки зрения СТРАНИЦЫ
+//! клик внутрь фрейма фокусирует контейнер), а `Self::typeable_field` в
+//! [`super::text_input`] читает исключительно `self.layout_source` — документ
+//! страницы. Печатать в поле внутри фрейма было решительно некуда.
+//!
+//! Здесь та же пара «классифицировать → применить → перерисовать», что у
+//! [`super::frame_forms`], только против ДРУГОГО поля состояния —
+//! [`crate::lumen::Lumen::focused_frame`] вместо `focused_node` — и с записью
+//! значения через штатный `forms::set_value`/`set_textarea_text`, как у
+//! страницы в [`super::text_input`]. Видимого `:focus` (каретка/outline)
+//! внутри фрейма это НЕ даёт: `frames::layout_frame_document` не вызывает
+//! `set_interactive_state` вовсе — фрейм остаётся интерактивно-слепым для CSS
+//! так же, как и для `:hover` ([`crate::lumen::Lumen::hovered_frame`]); это
+//! отдельный, больший срез очереди.
+
+use crate::*;
+
+impl Lumen {
+    /// Классифицировать `nid` в документе фрейма `idx` как typeable-поле —
+    /// зеркало [`Self::typeable_field`], но против ЕГО документа, а не
+    /// страницы. `None` для несуществующего фрейма/отравленного лока, как и у
+    /// прочих операций среза 18 ([`super::frame_forms`]).
+    pub(crate) fn frame_typeable_field(
+        &self,
+        idx: usize,
+        nid: NodeId,
+    ) -> Option<(TypeableField, String)> {
+        let handle = self.frames.get(idx)?;
+        let doc = handle.doc.lock().ok()?;
+        let node = doc.get(nid);
+        if node.get_attr("disabled").is_some() || node.get_attr("readonly").is_some() {
+            return None;
+        }
+        if node.element_name().is_some_and(|n| n.local.eq_ignore_ascii_case("textarea")) {
+            return Some((TypeableField::Textarea, doc.control_value(nid).into_owned()));
+        }
+        let is_typeable_input = matches!(
+            node.input_type(),
+            Some(lumen_dom::InputType::Text)
+                | Some(lumen_dom::InputType::Password)
+                | Some(lumen_dom::InputType::Email)
+                | Some(lumen_dom::InputType::Tel)
+                | Some(lumen_dom::InputType::Url)
+                | Some(lumen_dom::InputType::Number)
+                | Some(lumen_dom::InputType::Search)
+        );
+        if !is_typeable_input {
+            return None;
+        }
+        Some((TypeableField::Input, doc.control_value(nid).into_owned()))
+    }
+
+    /// Собственное действие движка по умолчанию на typeable-поле фрейма,
+    /// адресуемом `self.focused_frame` — зеркало [`Self::edit_focused_field`].
+    ///
+    /// Мутация дерева ребёнка идёт через [`super::frame_forms::Lumen::with_frame_doc`]
+    /// (тот же короткий лок, что у нативного переключения элемента
+    /// управления), значение в JS-тени фрейма синхронизируется отдельным
+    /// `eval_js` по ЕГО хэндлу — `route_eval_js` знает только контекст
+    /// страницы (та же причина, что у [`super::frame_forms::Lumen::frame_toggle_details`]).
+    fn edit_focused_frame_field(&mut self, edit: impl FnOnce(&str) -> String) -> bool {
+        let Some((idx, nid)) = self.focused_frame else { return false };
+        let Some((kind, current)) = self.frame_typeable_field(idx, nid) else { return false };
+        let next = edit(&current);
+        if next == current {
+            return true;
+        }
+        if !self.with_frame_doc(idx, |doc| match kind {
+            TypeableField::Input => forms::set_value(doc, nid, &next),
+            TypeableField::Textarea => forms::set_textarea_text(doc, nid, &next),
+        }) {
+            return false;
+        }
+        #[cfg(feature = "v8")]
+        if let Some(js) = self.frames.get(idx).and_then(|h| h.js.as_ref()) {
+            js.eval_js(&format!(
+                "_lumen_set_field_value({}, '{}')",
+                nid.index(),
+                escape_js_string(&next)
+            ));
+        }
+        self.refresh_frames(Some(idx));
+        true
+    }
+
+    /// Отправить один `_lumen_dispatch_key_event` в JS-контекст фрейма `idx` —
+    /// прямым `eval_js` по ЕГО хэндлу, как у [`super::frame_forms`], а не
+    /// через `route_eval_js` (страница).
+    #[allow(unused_variables)] // js.eval_js читается только под feature = "v8"
+    fn dispatch_frame_key(&mut self, idx: usize, node_id: usize, event_type: &str, key: &str) {
+        #[cfg(feature = "v8")]
+        if let Some(js) = self.frames.get(idx).and_then(|h| h.js.as_ref()) {
+            js.eval_js(&format!(
+                "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
+                node_id, event_type, key, key,
+            ));
+        }
+    }
+
+    /// Ввести символ во typeable-поле фрейма, адресуемом `self.focused_frame`
+    /// (зеркало [`Self::inject_char`]). `true` — символ принят полем.
+    pub(crate) fn inject_frame_char(&mut self, ch: char) -> bool {
+        let Some((idx, nid)) = self.focused_frame else { return false };
+        let node_id = nid.index();
+        let key = escape_js_string_char(ch);
+        self.dispatch_frame_key(idx, node_id, "keydown", &key);
+        let consumed = self.edit_focused_frame_field(|current| {
+            let mut next = current.to_owned();
+            next.push(ch);
+            next
+        });
+        for event_type in &["input", "keyup"] {
+            self.dispatch_frame_key(idx, node_id, event_type, &key);
+        }
+        consumed
+    }
+
+    /// Backspace во typeable-поле фрейма, адресуемом `self.focused_frame`
+    /// (зеркало [`Self::inject_backspace`]).
+    pub(crate) fn inject_frame_backspace(&mut self) -> bool {
+        let Some((idx, nid)) = self.focused_frame else { return false };
+        let node_id = nid.index();
+        self.dispatch_frame_key(idx, node_id, "keydown", "Backspace");
+        let consumed = self.edit_focused_frame_field(|current| {
+            let mut next = current.to_owned();
+            next.pop();
+            next
+        });
+        for event_type in &["input", "keyup"] {
+            self.dispatch_frame_key(idx, node_id, event_type, "Backspace");
+        }
+        consumed
+    }
+}

@@ -679,9 +679,18 @@ impl Lumen {
                     match self.resolve_automation_target(&target) {
                         Some((x, y)) => {
                             self.handle_click_at(x, y);
+                            // BUG-480 срез 22: клик мог адресовать typeable-поле
+                            // ВНУТРИ фрейма (`self.focused_frame`) вместо поля
+                            // страницы — тот же выбор пути, что в
+                            // `keyboard.rs::handle_key`.
+                            let in_frame = self.focused_frame.is_some();
                             let mut consumed = true;
                             for ch in text.chars() {
-                                consumed &= self.inject_char(ch);
+                                consumed &= if in_frame {
+                                    self.inject_frame_char(ch)
+                                } else {
+                                    self.inject_char(ch)
+                                };
                             }
                             if consumed {
                                 let _ = reply_tx.send(AutomationReply::Ack);

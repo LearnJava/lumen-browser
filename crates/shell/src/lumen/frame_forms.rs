@@ -88,7 +88,10 @@ impl Lumen {
 
     /// Мутация дерева под-документа под коротким локом. `false` — лок отравлен
     /// (паника чужого потока): тогда пересчитывать нечего.
-    fn with_frame_doc(&mut self, idx: usize, edit: impl FnOnce(&mut Document)) -> bool {
+    ///
+    /// `pub(crate)`, а не приватный модулю: тем же приёмом пользуется срез 22
+    /// (`frame_text_input.rs`) для записи значения typeable-поля.
+    pub(crate) fn with_frame_doc(&mut self, idx: usize, edit: impl FnOnce(&mut Document)) -> bool {
         let Some(handle) = self.frames.get(idx) else { return false };
         let Ok(mut doc) = handle.doc.lock() else { return false };
         edit(&mut doc);

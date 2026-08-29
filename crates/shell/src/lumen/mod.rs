@@ -21,6 +21,7 @@ mod form_submit;
 mod frame_form_submit;
 mod frame_forms;
 mod frame_links;
+mod frame_text_input;
 mod gestures;
 mod hibernation;
 mod hint_mode;
