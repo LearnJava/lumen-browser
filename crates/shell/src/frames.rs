@@ -676,6 +676,26 @@ fn rebuild_frame_display_lists(frames: &mut [FrameHandle], relaid: &[bool]) {
                     continue;
                 };
                 let mut dl = crate::display_list_metrics::paint_ordered(layout);
+                // Срез 21: подложка под-документа на весь его вьюпорт — как
+                // [`redraw_requested.rs`] чистит ВСЁ окно в canvas-цвет
+                // страницы (CSS Backgrounds §3.11.1), а не только рамку
+                // корневого бокса, здесь нужен тот же приём для фрейма:
+                // `paint_ordered` кладёт фон `<html>`-бокса только в его
+                // СОБСТВЕННОМ прямоугольнике, который короче вьюпорта, когда
+                // содержимое ниже него — тогда без подложки сквозь фрейм
+                // видно фон СТРАНИЦЫ (residual среза 14, найден пробой среза
+                // 19). Белый по умолчанию — тот же UA-дефолт, которым
+                // `canvas_background_color` документирует своё `None`.
+                let vp = frames[i].viewport;
+                let bg = lumen_layout::canvas_background_color(layout)
+                    .unwrap_or(lumen_layout::style::Color::WHITE);
+                dl.insert(
+                    0,
+                    lumen_paint::DisplayCommand::FillRect {
+                        rect: lumen_core::geom::Rect { x: 0.0, y: 0.0, width: vp.width, height: vp.height },
+                        color: bg,
+                    },
+                );
                 // Срез 15: ключи картинок ребёнка — ДО вклейки содержимого его
                 // вложенных фреймов. Их команды уже переписаны своими ключами
                 // (список собирается от глубокого к мелкому), а заглушки
