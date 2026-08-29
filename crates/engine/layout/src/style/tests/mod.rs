@@ -5,6 +5,11 @@
 //! Тела перенесены батчем SPLIT-ST1 без правок, вместе с отступом модуля.
 
     use super::*;
+    // Хелперы `font`-шортхенда, которые батч SPLIT-ST4 увёз в
+    // `style::parse::font_size`: в самом `style.rs` вызывателей у них нет, только
+    // здесь, поэтому глоб `super::*` их не приносит и импорт нужен явный.
+    use crate::style::parse::font_size::{is_font_size_token, split_font_shorthand_tokens};
+
     mod box_model;
     mod cascade;
     mod color;
