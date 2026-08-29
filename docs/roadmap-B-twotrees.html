@@ -5547,9 +5547,9 @@
       {
        "id": "SPLIT-ST9",
        "title": "SPLIT-ST9: длины и calc из style.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "Длины и calc `crates/engine/layout/src/style.rs`: анкер `enum LengthOrAuto` (13303) до `fn apply_declaration` (14868), 1 566 строк, три файла: `Length`/`LengthOrAuto`/`parse_length_q` (13303…13418 + 13700…13951) → `style/values/length.rs`; `CalcNode`/`MathFn`/токенайзер/`resolve_math_func` (13419…13699 + 13952…14358) → `style/calc.rs`; подстановки `var()`/`env()`/`attr()`/пользовательских функций (14359…14868) → `style/substitute.rs`. Осторожно: темы чередуются по адресу — `impl CalcNode` стоит между `enum Length` и `impl Length`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "Длины и calc `crates/engine/layout/src/style.rs`: анкер `enum LengthOrAuto` (13303) до `fn apply_declaration` (14868), 1 566 строк, три файла: `Length`/`LengthOrAuto`/`parse_length_q` (13303…13418 + 13700…13951) → `style/values/length.rs`; `CalcNode`/`MathFn`/токенайзер/`resolve_math_func` (13419…13699 + 13952…14358) → `style/calc.rs`; подстановки `var()`/`env()`/`attr()`/пользовательских функций (14359…14868) → `style/substitute.rs`. Осторожно: темы чередуются по адресу — `impl CalcNode` стоит между `enum Length` и `impl Length`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4  **ЗАКРЫТ 2026-08-29** (`p1-split-st9`, один срез): 1 517 строк в три файла — `style/values/length.rs` (343 тела), `style/calc.rs` (713), `style/substitute.rs` (461), style.rs 14 979 -> 13 479. Сверка побайтовая, `#[test]` 3 620 -> 3 620. Регион по ТЕКУЩЕМУ файлу 13327…14843: нижний анкер `fn apply_declaration` увезён ST-8, а `expand_grouped_transition_property`/`parse_initial_letter` внутри прежних адресов оставлены в style.rs — они не относятся ни к одной из трёх тем (прецедент ST-4). Первый батч группы, которому понадобился `#![allow(missing_docs)]`: у `pub enum Length`/`CalcNode`/`MathFn`/`RoundStrategy` варианты без `///`, долг переехал вместе с кодом (§2 правило 3), `docs/lint-policy.md` §10 — layout 7 -> 9 файлов."
       },
       {
        "id": "SPLIT-ST10",
