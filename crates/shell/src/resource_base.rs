@@ -29,8 +29,38 @@ impl ResourceBase {
         }
         match self {
             ResourceBase::File(base_path) => {
+                // BUG-440: `href` may carry its own scheme (`about:`, `data:`,
+                // `mailto:`, `file:`, ...) — that addresses a resource outside
+                // this file's directory, not a path relative to it, so it must
+                // not be joined onto `dir` below.
+                if let Some(scheme) = href_scheme(href) {
+                    // `file:` is the one foreign scheme that still names a
+                    // local file, so it resolves to a path instead: handing the
+                    // whole `file://…` string on as a URL only moves the defect
+                    // one caller along, where `PathBuf` receives it verbatim.
+                    if scheme.eq_ignore_ascii_case("file")
+                        && let Some(path) = file_url_to_path(href)
+                    {
+                        return ResolvedResource::File(path);
+                    }
+                    return ResolvedResource::Url(href.to_owned());
+                }
                 let dir = base_path.parent().unwrap_or(std::path::Path::new("."));
-                ResolvedResource::File(dir.join(href))
+                // BUG-440: a GET form submission appends `?query` to the
+                // action, and a bare `#fragment` reference is legal too — a
+                // filesystem path never contains either, so both are cut
+                // before the join, and the percent-escapes the rest is spelled
+                // with are decoded (a URL reference names `my file.html` as
+                // `my%20file.html`). An empty remainder (`"?q=1"`, `"#sec"`)
+                // means "this same file" (RFC 3986 §5.3's empty-reference
+                // case), which `ResourceBase::File` cannot express any other
+                // way since it carries no query/fragment of its own.
+                let path_part = url_path_component(href);
+                if path_part.is_empty() {
+                    ResolvedResource::File(base_path.clone())
+                } else {
+                    ResolvedResource::File(dir.join(path_part))
+                }
             }
             ResourceBase::Url(base_url) => {
                 // Resolve С‡РµСЂРµР· СЃС‚СЂСѓРєС‚СѓСЂРёСЂРѕРІР°РЅРЅС‹Р№ Url РёР· lumen-core; РїСЂРё СЃР±РѕРµ
@@ -107,6 +137,88 @@ impl ResourceBase {
     }
 }
 
+/// The URI scheme `s` begins with (RFC 3986 §3.1: `ALPHA *( ALPHA / DIGIT /
+/// "+" / "-" / "." ) ":"`, the `:` not included) — `about`, `data`, `mailto`,
+/// `file` — or `None` for a scheme-less reference. Mirrors `lumen_core::url`'s
+/// private `has_scheme` (not exposed outside that crate) rather than depending
+/// on it, to keep this a self-contained shell-side fix.
+///
+/// One deliberate narrowing against that function: a **single-letter** prefix
+/// is not a scheme here, because on Windows it is a drive letter — reading
+/// `D:/docs/x.html` as a `d:` URL would send a perfectly good local href to
+/// the network layer. No scheme this engine can act on is one character long,
+/// so the narrowing costs nothing.
+fn href_scheme(s: &str) -> Option<&str> {
+    let end = s.find(':')?;
+    let scheme = &s[..end];
+    if scheme.len() < 2 {
+        return None;
+    }
+    let mut chars = scheme.chars();
+    if !chars.next()?.is_ascii_alphabetic() {
+        return None;
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.') {
+        return None;
+    }
+    Some(scheme)
+}
+
+/// A `file://` URL as a filesystem path, or `None` when `url` is not one.
+///
+/// Shared by [`ResourceBase::resolve`] (a `file:` href on a local page) and
+/// `page_source_for_automation_url` (a BiDi/MCP navigation), so the two cannot
+/// disagree about what a `file://` URL names. On Windows a bare
+/// `strip_prefix("file://")` leaves a slash in front of the drive letter
+/// (`/D:/foo`), which does not resolve; that slash is dropped only when a
+/// drive letter follows, so `file:///home/x` — where the slash IS the root —
+/// is untouched. Query and fragment are cut and percent-escapes decoded for
+/// the same reason as in `resolve`: this is a URL, not a path.
+pub(crate) fn file_url_to_path(url: &str) -> Option<PathBuf> {
+    let rest = url.strip_prefix("file://")?;
+    let rest = rest
+        .strip_prefix('/')
+        .filter(|p| p.as_bytes().get(1) == Some(&b':'))
+        .unwrap_or(rest);
+    Some(PathBuf::from(url_path_component(rest)))
+}
+
+/// The path component of a URL reference, percent-decoded: everything before
+/// the first `?` or `#`, with `%XX` turned back into the byte it stands for.
+///
+/// A `%` that is not followed by two hex digits is kept verbatim rather than
+/// dropped — a literal `%` is a legal character in a filename on every
+/// filesystem this runs on, and silently eating it would send the caller
+/// looking for a different file than the one that exists.
+fn url_path_component(href: &str) -> String {
+    let cut = href.find(['?', '#']).unwrap_or(href.len());
+    let path = &href[..cut];
+    if !path.contains('%') {
+        return path.to_owned();
+    }
+    let bytes = path.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            )
+        {
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    // A decode that does not spell UTF-8 is not a path we can name; keeping the
+    // encoded form at least leaves a readable diagnostic for the caller.
+    String::from_utf8(out).unwrap_or_else(|_| path.to_owned())
+}
+
 /// Session-global Service Worker fetch interceptor (PH3-20).
 ///
 /// Set once in `run_window_mode` after the `Lumen` state (which owns the shared
@@ -121,6 +233,12 @@ fn sw_fetch_interceptor() -> Option<Arc<dyn lumen_core::ext::FetchInterceptor>> 
     SW_FETCH_INTERCEPTOR.get().cloned()
 }
 
+/// What a `href` resolved to: a path to read off disk, or a URL to fetch.
+///
+/// `Debug` so a test that got the wrong variant can name what it got — the
+/// BUG-440 cases differ only in which variant they land on, and an assertion
+/// that can only say "expected File" is one bisect step short of useful.
+#[derive(Debug)]
 pub(crate) enum ResolvedResource {
     File(PathBuf),
     Url(String),

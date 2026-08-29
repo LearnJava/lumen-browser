@@ -853,3 +853,157 @@ fn resolve_str_file_base_yields_path_string() {
     let result = base.resolve_str("style.css");
     assert!(result.ends_with("style.css"), "got: {result}");
 }
+
+// ── BUG-440: File base must not smuggle a query/fragment into the filename,
+// nor join an href that carries its own scheme onto its directory ─────────
+
+#[test]
+fn resolve_file_base_get_query_is_not_part_of_filename() {
+    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    match base.resolve("target.html?q=hello") {
+        ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/target.html")),
+        other => panic!("expected File, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_file_base_strips_fragment() {
+    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    match base.resolve("target.html#sec") {
+        ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/target.html")),
+        other => panic!("expected File, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_file_base_query_only_href_reloads_same_file() {
+    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    match base.resolve("?q=hello") {
+        ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/form.html")),
+        other => panic!("expected File, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_file_base_fragment_only_href_reloads_same_file() {
+    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    match base.resolve("#sec") {
+        ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/form.html")),
+        other => panic!("expected File, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_file_base_about_blank_is_a_url_not_a_path() {
+    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    match base.resolve("about:blank") {
+        ResolvedResource::Url(u) => assert_eq!(u, "about:blank"),
+        other => panic!("expected Url, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_file_base_data_url_is_a_url_not_a_path() {
+    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    match base.resolve("data:text/html,x") {
+        ResolvedResource::Url(u) => assert_eq!(u, "data:text/html,x"),
+        other => panic!("expected Url, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_file_base_plain_relative_href_unaffected() {
+    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    match base.resolve("sub/../target.html") {
+        ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/sub/../target.html")),
+        other => panic!("expected File, got {other:?}"),
+    }
+}
+
+/// GET form submission end-to-end through `make_get_url` + `resolve_str` —
+/// the exact sequence BUG-440 was filed against (`action="target.html"`,
+/// field `q=hello`, page opened as `file://`).
+#[test]
+fn bug440_get_form_submission_resolves_to_the_target_file() {
+    let base = ResourceBase::File(PathBuf::from("D:/tmp/form437target.html"));
+    let get_url = forms::make_get_url("target.html", "q=hello");
+    assert_eq!(base.resolve_str(&get_url), "D:/tmp\\target.html");
+}
+
+/// The other BUG-440 symptom: `action="about:blank"` must resolve to a
+/// literal `"about:blank"` string so `PageSource::from_arg` recognizes it,
+/// not a path like `"D:/tmp\about:blank"`.
+#[test]
+fn bug440_get_form_submission_with_scheme_action_resolves_to_url() {
+    let base = ResourceBase::File(PathBuf::from("D:/tmp/form437target.html"));
+    let get_url = forms::make_get_url("about:blank", "");
+    assert_eq!(base.resolve_str(&get_url), "about:blank");
+}
+
+/// A `file:` href on a local page is still a local file: resolving it to a
+/// `Url` would only move the defect one caller along, where `PathBuf` gets
+/// the whole `file://...` string verbatim (the BUG-651 shape).
+#[test]
+fn resolve_file_base_file_scheme_href_yields_a_path() {
+    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    match base.resolve("file:///D:/other/x.html") {
+        ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/other/x.html")),
+        other => panic!("expected File, got {other:?}"),
+    }
+}
+
+/// The path component of a URL reference is percent-encoded, so a file whose
+/// name holds a space arrives as `%20` and has to be decoded before the
+/// filesystem is asked for it.
+#[test]
+fn resolve_file_base_decodes_percent_escapes() {
+    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    match base.resolve("my%20file.html") {
+        ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/my file.html")),
+        other => panic!("expected File, got {other:?}"),
+    }
+}
+
+/// A `%` that is not a valid escape is a legal filename character and must
+/// survive verbatim — decoding it away would name a different file.
+#[test]
+fn resolve_file_base_keeps_a_lone_percent() {
+    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    match base.resolve("100%done.html") {
+        ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/100%done.html")),
+        other => panic!("expected File, got {other:?}"),
+    }
+}
+
+/// A Windows drive letter is not a URI scheme: one character cannot be one,
+/// and reading `D:/docs/x.html` as a `d:` URL would send a perfectly good
+/// local href to the network layer instead of to disk.
+#[test]
+fn resolve_file_base_drive_letter_is_not_a_scheme() {
+    let base = ResourceBase::File(PathBuf::from("D:/tmp/form.html"));
+    match base.resolve("D:/docs/x.html") {
+        ResolvedResource::File(p) => assert_eq!(p, PathBuf::from("D:/docs/x.html")),
+        other => panic!("expected File, got {other:?}"),
+    }
+}
+
+/// An automation `file://` URL goes through the same rule as a `file:` href
+/// (BUG-440 folded the two onto `file_url_to_path`), so a percent-escaped
+/// name navigates as well from BiDi/MCP as it resolves inside a page.
+#[test]
+fn automation_file_url_decodes_percent_escapes() {
+    match page_source_for_automation_url("file:///D:/tmp/my%20page.html") {
+        PageSource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/my page.html")),
+        other => panic!("expected File, got {other:?}"),
+    }
+}
+
+/// A bare CLI path is not a URL: its `%` is a literal character of the
+/// filename, so the automation fallback must not decode it.
+#[test]
+fn automation_bare_path_is_not_percent_decoded() {
+    match page_source_for_automation_url("D:/tmp/100%done.html") {
+        PageSource::File(p) => assert_eq!(p, PathBuf::from("D:/tmp/100%done.html")),
+        other => panic!("expected File, got {other:?}"),
+    }
+}

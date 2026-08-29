@@ -330,12 +330,14 @@ pub(crate) fn page_source_for_automation_url(url: &str) -> PageSource {
             url: chrome_preview::URL.to_owned(),
         };
     }
-    if let Some(rest) = url.strip_prefix("file://") {
-        let path = rest
-            .strip_prefix('/')
-            .filter(|p| p.as_bytes().get(1) == Some(&b':'))
-            .unwrap_or(rest);
-        return PageSource::File(PathBuf::from(path));
+    // BUG-440: the `file://`-to-path rule itself lives in
+    // `resource_base::file_url_to_path`, shared with a `file:` href resolved
+    // against a local page, so the two callers cannot disagree about what a
+    // `file://` URL names. The bare-path fallback below stays a path: a CLI
+    // argument is not a URL, so its `?`, `#` and `%` are literal characters of
+    // a filename and must not be cut or decoded.
+    if let Some(path) = crate::resource_base::file_url_to_path(url) {
+        return PageSource::File(path);
     }
     PageSource::File(PathBuf::from(url))
 }
