@@ -16,7 +16,11 @@ use crate::*;
 
 /// Куда ведёт ссылка ребёнка — результат разбора её `target`
 /// (HTML LS §4.6.3, «the rules for choosing a navigable»).
-enum LinkTarget {
+///
+/// Тем же правилом выбирает адресата и отправка формы (срез 20): §4.10.21.4
+/// шаг 15 ссылается ровно на §4.6.3, поэтому у `<a target>` и `<form target>`
+/// не может быть двух разных ответов внутри одного движка.
+pub(crate) enum LinkTarget {
     /// Фрейм с этим индексом: `_self`, отсутствующий атрибут — сам кликнутый
     /// фрейм; `_parent` у вложенного — его фрейм-родитель.
     Frame(usize),
@@ -78,7 +82,7 @@ impl Lumen {
     /// ветку намеренно: спека для имени, которого нет, предписывает СОЗДАТЬ
     /// окно, а частичная поддержка — «это имя понимаю, то нет» — была бы хуже
     /// честного отказа с логом.
-    fn link_destination(&self, idx: usize, target: &str) -> LinkTarget {
+    pub(crate) fn link_destination(&self, idx: usize, target: &str) -> LinkTarget {
         let t = target.trim();
         if t.is_empty() || t.eq_ignore_ascii_case("_self") {
             return LinkTarget::Frame(idx);
@@ -160,7 +164,7 @@ impl Lumen {
     /// новый (вместе с хэндлами своих вложенных фреймов) добавлен в конец
     /// списка. Поэтому пересчитываются вьюпорты ВСЕХ фреймов, а не одного:
     /// «пересчитай фрейм номер N» после навигации — вопрос без адресата.
-    fn navigate_frame_to(&mut self, idx: usize, href: &str, nav_base: &ResourceBase) {
+    pub(crate) fn navigate_frame_to(&mut self, idx: usize, href: &str, nav_base: &ResourceBase) {
         let Some(env) = self.frame_env.clone() else {
             eprintln!("iframe: навигация '{href}' без окружения загрузки страницы — пропуск");
             return;
