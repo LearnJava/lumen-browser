@@ -17,6 +17,10 @@
     use crate::color_mix::{HueInterpolationMethod, MixColorSpace};
     use crate::style::parse::image::extract_gradient_interpolation;
     use crate::style::parse::timeline::tokenize_with_parens;
+    // То же для батча SPLIT-ST7: `parse_text_decoration_shorthand` — `#[cfg(test)]`
+    // обёртка над `…_q`, вызыватель у неё только здесь, поэтому в `style.rs`
+    // импорта нет и глоб `super::*` её не приносит.
+    use crate::style::shorthand::parse_text_decoration_shorthand;
 
     mod box_model;
     mod cascade;
