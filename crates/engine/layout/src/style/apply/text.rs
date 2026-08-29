@@ -12,6 +12,7 @@
 
 use crate::mathml::MathStyle;
 use crate::ruby::{RubyAlign, RubyMerge, RubyPosition};
+use crate::style::values::typography::match_unicode_bidi;
 use crate::style::{
     ComputedStyle,
     Content,
@@ -47,7 +48,6 @@ use crate::style::{
     WhiteSpaceCollapse,
     WordBreak,
     WritingMode,
-    match_unicode_bidi,
     parse_font_family,
     parse_font_feature_settings,
     parse_font_palette,
