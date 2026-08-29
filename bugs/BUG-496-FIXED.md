@@ -1,6 +1,6 @@
 # BUG-496: `HTMLElement.dataset` (DOMStringMap) entirely unimplemented
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-29 (doc-sync — fix already landed via [BUG-703](BUG-703-FIXED.md) on 2026-08-09)
 **Дата:** 2026-08-02
 **Компонент:** js (`crates/js/src/dom.rs` — no `dataset` accessor anywhere
 in `WEB_API_SHIM`)
@@ -59,3 +59,21 @@ slice.
 Committed `.ini` for `border-width-cssom.html` under
 `tests/wpt/metadata/css/css-backgrounds/` (`expected: TIMEOUT`, whole
 harness — no subtests ever register).
+
+## Разбор при взятии в работу (P3, 2026-08-29)
+
+Взят как голова `STATUS-P3.md`. Прежде чем чинить, живая проба
+(`--dump-layout` на странице с `data-foo-bar`/`data-x` и `console.log`)
+показала `dataset` полностью рабочим: `typeof` `object`, чтение
+камелкейс-ключа, запись нового свойства отражается как атрибут
+`data-new-prop`, `instanceof DOMStringMap` — `true`. `git log -S
+"_lumen_make_dataset"` нашёл фикс в `d22593fee` (BUG-703, «document.head и
+element.dataset — два отсутствовавших API», 2026-08-09) — `dataset` был
+одним из двух API, найденных заново на живом `tbank.ru` и исправленных
+тем коммитом, но BUG-496 никогда не переводили в FIXED, хотя его файл
+описывал ровно тот же дефект. Оставляю оба файла (не переименовываю в
+DUPLICATE — BUG-703 сам уже FIXED, конвенция DUPLICATE→BUG-NNN писана для
+пары OPEN-записей). `expected: TIMEOUT` для `border-width-cssom.html`
+устарел — снятие из `.ini` и подтверждение зелёного прогона категории
+`css/css-backgrounds` остаётся отдельной работой WPT-трека (не P3-скоуп),
+здесь фиксируется только доксинк по BUGS.md.
