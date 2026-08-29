@@ -21,6 +21,14 @@
     // обёртка над `…_q`, вызыватель у неё только здесь, поэтому в `style.rs`
     // импорта нет и глоб `super::*` её не приносит.
     use crate::style::shorthand::parse_text_decoration_shorthand;
+    // То же для батча SPLIT-ST8: ветки `match prop` уехали из `style.rs` в
+    // `style::apply::*`, и вместе с ними — единственные производственные
+    // вызыватели этих восьмерых. Импорт `style.rs` их больше не держит, поэтому
+    // глоб `super::*` их не приносит, а вызыватель остался только здесь.
+    use crate::style::parse::box_sides::{expand_border_4, split_border_radius_slash, split_radius_pair};
+    use crate::style::parse::color::parse_css_color_legacy;
+    use crate::style::parse::image::{parse_paint_function, parse_single_bg_layer};
+    use crate::style::parse::timeline::{apply_animation_shorthand, apply_transition_shorthand};
 
     mod box_model;
     mod cascade;
