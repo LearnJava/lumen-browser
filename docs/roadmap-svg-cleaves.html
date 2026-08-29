@@ -55,10 +55,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-29",
+ "generated": "2026-08-30",
  "counts": {
-  "open": 381,
-  "fixed": 502,
+  "open": 379,
+  "fixed": 504,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -5557,9 +5557,9 @@
       {
        "id": "SPLIT-ST13",
        "title": "SPLIT-ST13: псевдоэлементы и пост-каскадные правки style.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "Псевдоэлементы и пост-каскадные правки `crates/engine/layout/src/style.rs`: анкер `fn element_can_have_scrollbar` (8361) до `fn matches_complex` (9431), 1 071 строка. `apply_webkit_scrollbar_pseudos`/`resolve_system_colors_in_style`/`apply_forced_colors_mode`/`coerce_overflow_axes` → `style/adjust.rs`; `compute_pseudo_element_style*`/`pseudo_inherited_style`/`merge_pseudo_inherited`/`compute_selection_style` → `style/pseudo.rs`; валидация синтаксиса `@property` (9294…9431) → `style/property_syntax.rs`. Плюс `resolve_logical_properties` (8639…8714) дописывается в созданный ST-7 `style/logical.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "Псевдоэлементы и пост-каскадные правки `crates/engine/layout/src/style.rs`: анкер `fn element_can_have_scrollbar` (8361) до `fn matches_complex` (9431), 1 071 строка. `apply_webkit_scrollbar_pseudos`/`resolve_system_colors_in_style`/`apply_forced_colors_mode`/`coerce_overflow_axes` → `style/adjust.rs`; `compute_pseudo_element_style*`/`pseudo_inherited_style`/`merge_pseudo_inherited`/`compute_selection_style` → `style/pseudo.rs`; валидация синтаксиса `@property` (9294…9431) → `style/property_syntax.rs`. Плюс `resolve_logical_properties` (8639…8714) дописывается в созданный ST-7 `style/logical.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 **ЗАКРЫТ 2026-08-30** (`p1-split-st13`, один срез): 1 035 строк в три новых файла — `style/adjust.rs` (300), `style/pseudo.rs` (554), `style/property_syntax.rs` (176) — плюс 76 строк `resolve_logical_properties`, дописанных в `style/logical.rs` (151 -> 227), style.rs 9 888 -> 8 853, `#[test]` крейта 3 630 -> 3 630, `dump_golden.py` 12/12 с пустым дифом. **Регион пересчитан по ТЕКУЩЕМУ файлу и оказался РАЗРЫВНЫМ — оба анкера постановки в файле уже не существуют** (`fn matches_complex` увёз ST-12, а `element_can_have_scrollbar` стоял на 8 500, не на 8 361): темы чередуются, между ними лежит `compute_style_from_declarations`, которая ни к одной из трёх не относится и ОСТАВЛЕНА в доноре, поэтому вырезка сделана двумя кусками (8 477…8 904 и 8 923…9 548), а не одним. **ГЛАВНОЕ: побайтовая сверка поймала настоящую регрессию, которой не увидел ни компилятор, ни 3 630 тестов** — при переносе `pseudo_inherited_style` (94 строки подряд однотипных присваиваний) потерялись ДВЕ строки, `list_style_position` и `list_style_image`, ровно на стыке двух чтений файла; псевдоэлементы молча перестали бы наследовать эти два свойства. Мультимножество непустых строк региона (1 001) против новых файлов дало 8 расхождений — 7 сигнатур со сменой видимости и один баннер-комментарий, заменённый `//!`-шапкой, — и эти две строки; в телах после починки НОЛЬ расхождений. Вывод для дорожки: счётчик тестов и зелёный clippy НЕ являются проверкой вырезки, ими может быть только сверка строк, и опаснее всего длинный блок одинаковых по форме строк. Видимость: 8 item'ов получили `pub(in crate::style)`, четыре `pub fn` (`compute_pseudo_element_style`/`compute_selection_style`/`merge_pseudo_inherited`/`validate_against_syntax`) — публичная поверхность крейта, им `pub use` со старого пути (§2.1); `PSEUDO_BASE_BUILDS` под `#[cfg(test)]` потребовал импорта с тем же cfg (урок SH-3a, четвёртый раз). Из `use`-шапки донора ушёл `CompoundSelector` — его единственный вызыватель уехал. `scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)) — вместо него адресные `cargo clippy -p lumen-layout --all-targets -D warnings` и `cargo test -p lumen-layout`. База `file-size-baseline.tsv` обновлена и попутно перестала врать: она несла 11 281 для style.rs, хотя в `main` было 9 888"
       },
       {
        "id": "SPLIT-ST14",
@@ -11104,10 +11104,10 @@
    "debtor": false
   },
   "BUG-803": {
-   "status": "open",
+   "status": "fixed",
    "title": "Два дефекта в трёх строках парсера SVG-атрибута `transform`. (1) **Вечный цикл**: имя функции набирается только из `is_alphabetic()`, поэтому на символе, которы…",
-   "component": "layout (`crates/engine/layout/src/box_tree.rs:1341-1400` — `parse_svg_transform`, вызывается с `:1680`/`:1803` для атрибута `transform` любого SVG-узла)",
-   "date": null,
+   "component": "layout (`crates/engine/layout/src/box_tree.rs` — `parse_svg_transform`, вызывается для атрибута `transform` любого SVG-узла)",
+   "date": "2026-08-29",
    "debtor": false
   },
   "BUG-804": {
@@ -11391,10 +11391,10 @@
    "debtor": false
   },
   "BUG-850": {
-   "status": "open",
+   "status": "fixed",
    "title": "Радиус blur не клэмпится размером пиксмапа: `backdrop-filter: blur(100000px)` рисуется 16 с на одном `--screenshot` (r ≈ 50 000 при слое 1024 px, выборки за кра…",
-   "component": "paint (`crates/engine/paint/src/cpu_raster.rs:1261` — `radius` не ограничен размером слоя; `:1293`/`:1315` — прайминг аккумулятора `for i in -r..=r`, O(r) на строку)",
-   "date": null,
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs` — `gaussian_blur`: `radius` не ограничен размером слоя; `box_blur_h`/`box_blur_v` — прайминг аккумулятора `for i in -r..=r`, O(r) на строку/столбец)",
+   "date": "2026-08-29",
    "debtor": false
   },
   "BUG-851": {
@@ -12819,9 +12819,6 @@
   "layout (`crates/engine/layout/src/box_tree.rs:10805-10824` — `needs_prelayout` в `layout_flex_container`; второй проход `lay_out_with_used_size` на `:11204`/`:11281`)": [
    "BUG-802"
   ],
-  "layout (`crates/engine/layout/src/box_tree.rs:1341-1400` — `parse_svg_transform`, вызывается с `:1680`/`:1803` для атрибута `transform` любого SVG-узла)": [
-   "BUG-803"
-  ],
   "layout (`crates/engine/layout/src/box_tree.rs:2262` — `collect_requests_inner` матчит только `name.local == \"img\"`) + shell (`crates/shell/src/main.rs:6858` — `SubresourceHintFound` без потребителя, см. BUG-826)": [
    "BUG-848"
   ],
@@ -12836,6 +12833,9 @@
   ],
   "layout (`crates/engine/layout/src/box_tree.rs` — `max_content_outer_width`, `min_content_outer_width_of_contents`, `preferred_inline_block_width`)": [
    "BUG-737"
+  ],
+  "layout (`crates/engine/layout/src/box_tree.rs` — `parse_svg_transform`, вызывается для атрибута `transform` любого SVG-узла)": [
+   "BUG-803"
   ],
   "layout (`crates/engine/layout/src/box_tree.rs` — `preferred_inline_block_width`, `max_content_outer_width`, `min_content_outer_width`)": [
    "BUG-742"
@@ -13091,7 +13091,7 @@
   "paint (`background-blend-mode` в CPU-растре tiny-skia; тест `crates/driver/tests/cases/snapshot_cpu.rs::cpu_snapshots_match_references`, эталон `graphic_tests/snapshots/cpu/49-background-blend-mode.png`)": [
    "BUG-784"
   ],
-  "paint (`crates/engine/paint/src/cpu_raster.rs:1261` — `radius` не ограничен размером слоя; `:1293`/`:1315` — прайминг аккумулятора `for i in -r..=r`, O(r) на строку)": [
+  "paint (`crates/engine/paint/src/cpu_raster.rs` — `gaussian_blur`: `radius` не ограничен размером слоя; `box_blur_h`/`box_blur_v` — прайминг аккумулятора `for i in -r..=r`, O(r) на строку/столбец)": [
    "BUG-850"
   ],
   "paint (`crates/engine/paint/src/renderer.rs` — пре-резолв face-ов `DrawText`)": [
