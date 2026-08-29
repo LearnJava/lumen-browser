@@ -29,6 +29,16 @@
     use crate::style::parse::color::parse_css_color_legacy;
     use crate::style::parse::image::{parse_paint_function, parse_single_bg_layer};
     use crate::style::parse::timeline::{apply_animation_shorthand, apply_transition_shorthand};
+    // То же для батча SPLIT-ST10: `FORCED_COLORS` и `#[cfg(test)]`-обёртка
+    // `stylesheet_needs_state_fanout` уехали в `style::env`/`style::restyle`, и
+    // производственных вызывателей у них нет — только эти тесты, поэтому глоб
+    // `super::*` их не приносит.
+    use crate::style::env::FORCED_COLORS;
+    use crate::style::restyle::stylesheet_needs_state_fanout;
+    // `HashSet` держал в `style.rs` только фан-аут рестайла; после его отъезда
+    // единственные вызыватели — тесты фан-аута, поэтому импорт переехал сюда
+    // (иначе неиспользуемый импорт в сборке без `cfg(test)`).
+    use std::collections::HashSet;
 
     mod box_model;
     mod cascade;
