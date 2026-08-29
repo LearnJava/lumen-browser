@@ -5561,9 +5561,9 @@
       {
        "id": "SPLIT-ST11",
        "title": "SPLIT-ST11: UA-таблица и квирки из style.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "UA-таблица, квирки и презентационные подсказки `crates/engine/layout/src/style.rs`: анкер `fn default_display` (10828) до `fn set_cq_context` (12412), 1 585 строк, четыре файла: дефолты UA и правки под элементы (`apply_ua_*`, `ua_*`) → `style/ua.rs`; презентационные HTML-атрибуты (`apply_*_presentational_hint`, `parse_legacy_color_html_attr`) → `style/presentational.rs`; квирки (`apply_quirks_*`) → `style/quirks.rs`; шрифтовые парсеры (12147…12412) → `style/parse/font.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "UA-таблица, квирки и презентационные подсказки `crates/engine/layout/src/style.rs`: анкер `fn default_display` (10828) до `fn set_cq_context` (12412), 1 585 строк, четыре файла: дефолты UA и правки под элементы (`apply_ua_*`, `ua_*`) → `style/ua.rs`; презентационные HTML-атрибуты (`apply_*_presentational_hint`, `parse_legacy_color_html_attr`) → `style/presentational.rs`; квирки (`apply_quirks_*`) → `style/quirks.rs`; шрифтовые парсеры (12147…12412) → `style/parse/font.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 **ЗАКРЫТ 2026-08-29** (`p1-split-st11`, один срез): 1 349 строк в четыре файла — `style/ua.rs` (486), `style/presentational.rs` (538), `style/quirks.rs` (85), `style/parse/font.rs` (240), style.rs 12 587 -> 11 281, `#[test]` 3 620 -> 3 620, сверка побайтовая (0 расхождений в 48 телах после нормализации CRLF -> LF, которую внёс python-инструмент прошлой сессии)."
       },
       {
        "id": "SPLIT-ST12",
