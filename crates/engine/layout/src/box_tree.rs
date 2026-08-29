@@ -1464,8 +1464,14 @@ fn parse_svg_transform(attr: Option<&str>) -> SvgTransform {
     let attr_bytes = attr.as_bytes();
 
     while pos < attr_bytes.len() {
-        // Skip whitespace and commas.
-        while pos < attr_bytes.len() && (attr_bytes[pos] as char).is_whitespace() || attr_bytes[pos] == b',' {
+        // Skip whitespace and commas. BUG-803: `&&` binds tighter than `||`,
+        // so an unparenthesized condition reads as
+        // `(pos < len && ws) || attr_bytes[pos] == b','` — once `pos == len`
+        // the first disjunct is false but the second still indexes past the
+        // end of the slice. Both checks must be gated by the length check.
+        while pos < attr_bytes.len()
+            && ((attr_bytes[pos] as char).is_whitespace() || attr_bytes[pos] == b',')
+        {
             pos += 1;
         }
 
@@ -1487,6 +1493,17 @@ fn parse_svg_transform(attr: Option<&str>) -> SvgTransform {
         }
 
         if pos >= attr_bytes.len() || attr_bytes[pos] != b'(' {
+            // BUG-803: a byte that is neither a letter, whitespace, a comma
+            // nor `(` (an underscore, a digit, `;`, `|`, ...) leaves both the
+            // name loop above and this branch without moving `pos` — `continue`
+            // then re-enters this exact position forever. Force one byte of
+            // progress whenever the name loop itself made none, so a name
+            // that already advanced (e.g. `translate` before the `3` of
+            // `translate3d`) still gets a second chance next iteration
+            // instead of being force-skipped mid-token.
+            if pos == start {
+                pos += 1;
+            }
             continue;
         }
 
@@ -20969,6 +20986,70 @@ mod tests {
         assert!((rect.x - expected_x).abs() < 0.2, "scaled tile x: got {}, expected {}", rect.x, expected_x);
         assert!((rect.y - expected_y).abs() < 0.2, "scaled tile y (origin must not be scaled): got {}, expected {}", rect.y, expected_y);
         assert!((rect.width - 30.0).abs() < 0.2 && (rect.height - 30.0).abs() < 0.2, "scaled tile size 30×30: got {}×{}", rect.width, rect.height);
+    }
+
+    // ── BUG-803: `parse_svg_transform` must always return, never index out
+    //    of bounds ─────────────────────────────────────────────────────────
+    //
+    // A token that is neither a letter, whitespace, a comma nor `(` used to
+    // leave `pos` unmoved forever (an infinite loop), and a value ending
+    // exactly at a comma/whitespace check indexed one byte past the slice
+    // (a panic). Every case here is a value that used to hang or panic under
+    // `--dump-layout`; reaching the assertion at all is the point for most of
+    // them — a regression here reintroduces a wedged renderer, not a wrong
+    // pixel.
+
+    #[test]
+    fn svg_transform_fail_me_does_not_hang() {
+        // FAIL_ME(30): uppercase run is alphabetic, so the name loop consumes
+        // it whole and finds `(` — must parse (and ignore) as an unknown
+        // function, not hang.
+        let t = super::parse_svg_transform(Some("FAIL_ME(30)"));
+        assert_eq!(t.matrix, super::SvgTransform::identity().matrix, "unknown function must be ignored, not applied");
+    }
+
+    #[test]
+    fn svg_transform_digit_in_function_name_does_not_hang() {
+        // translate3d/matrix3d/rotate3d/scale3d: `is_alphabetic` stops at the
+        // digit, leaving `pos` on it with zero further alphabetic progress —
+        // this was the exact shape that hung forever pre-fix.
+        for v in ["translate3d(1px,2px,3px)", "matrix3d(1,0,0,0,1,0,0,0,1,0,0,0)", "rotate3d(60deg)", "scale3d(2)"] {
+            let _ = super::parse_svg_transform(Some(v));
+        }
+    }
+
+    #[test]
+    fn svg_transform_underscore_and_pipe_do_not_hang() {
+        // Bytes that are neither letters, whitespace, a comma nor `(` at all
+        // (not even the start of a name) — the name loop makes zero
+        // progress on the very first attempt.
+        for v in ["rotate(30deg)|rotateX(60deg)", "foo_bar(30)", "1", ";", "|"] {
+            let _ = super::parse_svg_transform(Some(v));
+        }
+    }
+
+    #[test]
+    fn svg_transform_valid_rotate_still_parses() {
+        let t = super::parse_svg_transform(Some("rotate(90)"));
+        // rotate(90) ≈ [cos90, sin90, -sin90, cos90, 0, 0] = [0, 1, -1, 0, 0, 0].
+        assert!((t.matrix[0] - 0.0).abs() < 0.001, "matrix={:?}", t.matrix);
+        assert!((t.matrix[1] - 1.0).abs() < 0.001, "matrix={:?}", t.matrix);
+    }
+
+    #[test]
+    fn svg_transform_trailing_comma_does_not_panic() {
+        // rotate(30), and the minimal repro ",": both end mid-scan on a
+        // comma with pos == len — the unparenthesized `&&`/`||` used to index
+        // attr_bytes[pos] unconditionally there.
+        let _ = super::parse_svg_transform(Some("rotate(30),"));
+        let _ = super::parse_svg_transform(Some(","));
+    }
+
+    #[test]
+    fn svg_transform_empty_and_none_are_identity() {
+        assert_eq!(super::parse_svg_transform(Some("")).matrix, super::SvgTransform::identity().matrix);
+        assert_eq!(super::parse_svg_transform(Some("none")).matrix, super::SvgTransform::identity().matrix);
+        assert_eq!(super::parse_svg_transform(None).matrix, super::SvgTransform::identity().matrix);
     }
 
     #[test]
