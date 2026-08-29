@@ -5508,9 +5508,9 @@
       {
        "id": "SPLIT-ST6",
        "title": "SPLIT-ST6: apply_css_wide_keyword из style.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "`apply_css_wide_keyword` из `crates/engine/layout/src/style.rs`: анкер 18696 до `fn parse_counter_list` (19768), 1 073 строки одной функцией → `style/apply/css_wide.rs`. Помещается в потолок целиком, правок не требует — самый дешёвый батч группы после ST-18. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "`apply_css_wide_keyword` из `crates/engine/layout/src/style.rs`: анкер 18696 до `fn parse_counter_list` (19768), 1 073 строки одной функцией → `style/apply/css_wide.rs`. Помещается в потолок целиком, правок не требует — самый дешёвый батч группы после ST-18. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 ЗАКРЫТ 2026-08-29 (ветка `p1-split-st6`): 1 073 строки (18731…19803 в текущей нумерации) уехали одним файлом `style/apply/css_wide.rs` (1 082 строки), style.rs 19 889 -> 18 818, `#[test]` 3 620 -> 3 620, сверка с HEAD побайтовая — ровно одно расхождение на 1 072 строки, `fn` -> `pub(in crate::style) fn`. Постановка «правок не требует» подтвердилась: перепись зависимостей дала три имени (`ComputedStyle`, `CssWideKeyword`, `WhiteSpace`), все уже `pub`, расширять видимость не пришлось никому. Новое для дорожки: НИЖНИЙ анкер батча был удалён предыдущим — `fn parse_counter_list` увёз ST-5, реальная граница это `fn parse_grid_template_areas`, оставленный им в style.rs; границу считать по текущему файлу, а не по таблице. `SYMBOLS.md` сдвинулся на 321 строку, `dump_golden.py` 12/12."
       },
       {
        "id": "SPLIT-ST7",
