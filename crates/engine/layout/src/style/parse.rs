@@ -4,6 +4,7 @@ pub mod box_sides;
 pub mod color;
 pub mod content;
 pub mod counters;
+pub mod font;
 pub mod font_size;
 pub mod image;
 pub mod shape;
