@@ -1553,12 +1553,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/v8_runtime/runtime.rs:726` **fn** `take_pointer_capture` — Release the active pointer capture, returning the former capture target nid
 `crates/js/src/v8_runtime/runtime.rs:743` **fn** `flush_canvas_updates` — Drain dirty `<canvas>` 2D buffers for GPU re-upload. Mirrors
 `crates/js/src/v8_runtime/runtime.rs:755` **fn** `register_img_bitmaps` — Register decoded `<img>` bitmaps for canvas `drawImage`, keyed by node id
-`crates/js/src/v8_runtime/runtime.rs:773` **fn** `register_frame_document` — BUG-480 срез 3: зарегистрировать загруженный под-документ `<iframe>` для доступа из
-`crates/js/src/v8_runtime/runtime.rs:812` **fn** `register_parent_document` — BUG-480 срез 3: зарегистрировать документ **родителя** в JS-контексте
-`crates/js/src/v8_runtime/runtime.rs:843` **fn** `register_top_document` — BUG-480 срез 3: зарегистрировать документ **верха** в JS-контексте
-`crates/js/src/v8_runtime/runtime.rs:876` **fn** `debug_heap_stats` — V8 isolate heap statistics: `(total_heap_size, used_heap_size)` in bytes
-`crates/js/src/v8_runtime/runtime.rs:889` **fn** `set_import_map` — Install the import map (HTML LS §8.1.6.2) used to resolve bare module
-`crates/js/src/v8_runtime/runtime.rs:1016` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
+`crates/js/src/v8_runtime/runtime.rs:781` **fn** `register_frame_document` — BUG-480 срез 3: зарегистрировать загруженный под-документ `<iframe>` для доступа из
+`crates/js/src/v8_runtime/runtime.rs:820` **fn** `register_parent_document` — BUG-480 срез 3: зарегистрировать документ **родителя** в JS-контексте
+`crates/js/src/v8_runtime/runtime.rs:851` **fn** `register_top_document` — BUG-480 срез 3: зарегистрировать документ **верха** в JS-контексте
+`crates/js/src/v8_runtime/runtime.rs:884` **fn** `debug_heap_stats` — V8 isolate heap statistics: `(total_heap_size, used_heap_size)` in bytes
+`crates/js/src/v8_runtime/runtime.rs:897` **fn** `set_import_map` — Install the import map (HTML LS §8.1.6.2) used to resolve bare module
+`crates/js/src/v8_runtime/runtime.rs:1024` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
 `crates/js/src/video_gif_store.rs:36` **struct** `VideoPlaybackState` — Per-`<video>` playback timing, stored by the shell after a GIF is decoded
 `crates/js/src/video_gif_store.rs:57` **fn** `current_ms` — Playback position in ms at a given real-clock instant
 `crates/js/src/video_gif_store.rs:66` **fn** `is_ended` — Whether playback has naturally ended (finite loop count exhausted)
@@ -4174,7 +4174,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:982` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1037` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (955 symbols)
+## lumen-shell  (956 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -4483,11 +4483,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/input/vim.rs:115` **fn** `new` — Create a new `VimMode` in [`VimState::Normal`]
 `crates/shell/src/input/vim.rs:123` **fn** `feed` — Feed one physical key event.  Returns the action to take
 `crates/shell/src/links.rs:15` **fn** `find_link_href` — Walk up the ancestor chain from `node_id` to find the nearest `<a>` element
-`crates/shell/src/links.rs:43` **fn** `is_navigable_href` — Return true if `href` is a URL scheme the browser should navigate to
-`crates/shell/src/links.rs:53` **fn** `fragment_only` — If `href` is a fragment-only reference (starts with `#`), return the
-`crates/shell/src/links.rs:63` **fn** `fragment_url` — Build the absolute URL for a same-document fragment navigation: replaces the
-`crates/shell/src/links.rs:87` **fn** `same_document_fragment` — Determine whether navigating from `current` to `resolved` is a same-document
-`crates/shell/src/links.rs:111` **fn** `find_element_by_id` — Walk the document tree and return the first element whose `id` attribute
+`crates/shell/src/links.rs:25` **fn** `find_link` — `(узел `<a>`, сырое значение href)` — та же ходьба, что у
+`crates/shell/src/links.rs:53` **fn** `is_navigable_href` — Return true if `href` is a URL scheme the browser should navigate to
+`crates/shell/src/links.rs:63` **fn** `fragment_only` — If `href` is a fragment-only reference (starts with `#`), return the
+`crates/shell/src/links.rs:73` **fn** `fragment_url` — Build the absolute URL for a same-document fragment navigation: replaces the
+`crates/shell/src/links.rs:97` **fn** `same_document_fragment` — Determine whether navigating from `current` to `resolved` is a same-document
+`crates/shell/src/links.rs:121` **fn** `find_element_by_id` — Walk the document tree and return the first element whose `id` attribute
 `crates/shell/src/lumen/automation.rs:293` **fn** `input_sender` — Return a cloneable [`InputSender`] for injecting synthetic input events
 `crates/shell/src/lumen/automation.rs:302` **fn** `automation_handle` — Return a cloneable handle for driving this window's automation channel (SDC-2)
 `crates/shell/src/memory_poll.rs:23` **struct** `MemoryPollTick` — Throttled memory pressure poller
@@ -5662,4 +5663,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:228` **fn** `count`
 
 ---
-*Total: 5585 symbols in 24 crates*
+*Total: 5586 symbols in 24 crates*

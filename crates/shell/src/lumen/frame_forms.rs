@@ -24,15 +24,20 @@ impl Lumen {
     /// горизонтальной прокрутки у под-документа нет, поэтому вьюпортная и
     /// документная системы по этой оси совпадают (срез 17).
     ///
-    /// `true` — DOM ребёнка изменён и пересчитан. Вызывается ПОСЛЕ рассылки
-    /// `click` в JS ребёнка, тем же порядком, что у страницы: обработчик видит
-    /// состояние ДО переключения (HTML LS §4.10.5.5 меняет его в activation
-    /// behavior, то есть после dispatch).
+    /// `true` — клик РАЗОБРАН формой, то есть ссылку по нему искать уже не
+    /// нужно; это не то же самое, что «дерево изменилось» (`<select>` открыл бы
+    /// оверлей, ничего не меняя). Гейт тот же, что у страницы, где ссылка
+    /// разбирается в ветке `FormClickAction::Nothing`.
+    ///
+    /// Вызывается ПОСЛЕ рассылки `click` в JS ребёнка, тем же порядком, что у
+    /// страницы: обработчик видит состояние ДО переключения (HTML LS §4.10.5.5
+    /// меняет его в activation behavior, то есть после dispatch).
     pub(crate) fn frame_form_click(&mut self, idx: usize, node: NodeId, at: Point) -> bool {
         let Some(handle) = self.frames.get(idx) else { return false };
         let Ok(doc) = handle.doc.lock() else { return false };
         let action = forms::classify_click(&doc, node);
         drop(doc);
+        let handled = !matches!(action, forms::FormClickAction::Nothing);
 
         let changed = match action {
             // Радиокнопка проходит тем же путём, что флажок, — ровно как у
@@ -65,9 +70,9 @@ impl Lumen {
             forms::FormClickAction::Nothing => false,
         };
         if changed {
-            self.relayout_frame(idx);
+            self.refresh_frames(Some(idx));
         }
-        changed
+        handled
     }
 
     /// Мутация дерева под-документа под коротким локом. `false` — лок отравлен
@@ -124,8 +129,14 @@ impl Lumen {
         self.with_frame_doc(idx, |doc| forms::apply_range_value(doc, id, rect, x))
     }
 
-    /// Показать результат мутации: пересчитать содержимое фрейма и пересобрать
-    /// display list страницы.
+    /// Показать результат изменения содержимого фреймов: пересчитать их
+    /// вьюпорты/списки и пересобрать display list страницы.
+    ///
+    /// `relayout`: `Some(idx)` — дерево ЭТОГО фрейма изменилось при неизменном
+    /// вьюпорте (нативное переключение элемента управления, срез 18), и гейт
+    /// «размер хоста не менялся» пропустил бы правку молча; `None` — состав
+    /// или адрес фреймов изменился и пересчитать нужно всё (навигация фрейма,
+    /// срез 19: после замены хэндла прежний индекс адресует не тот фрейм).
     ///
     /// Список страницы собирается ЦЕЛИКОМ по той же причине, что и при
     /// прокрутке фрейма ([`Lumen::apply_frame_scroll`]): вклейка содержимого
@@ -134,9 +145,12 @@ impl Lumen {
     ///
     /// `layout_box` временно ВЫНИМАЕТСЯ: пересчёт фрейма читает layout
     /// страницы (там стоит host-бокс) и одновременно пишет в `self.frames`.
-    fn relayout_frame(&mut self, idx: usize) {
+    pub(crate) fn refresh_frames(&mut self, relayout: Option<usize>) {
         let Some(page_layout) = self.layout_box.take() else { return };
-        frames::relayout_frame_content(&mut self.frames, idx, &page_layout);
+        match relayout {
+            Some(idx) => frames::relayout_frame_content(&mut self.frames, idx, &page_layout),
+            None => frames::sync_frame_viewports(&mut self.frames, &page_layout),
+        }
         self.layout_box = Some(page_layout);
         let rebuilt = self.layout_box.as_ref().map(paint_ordered);
         if let Some(new_dl) = rebuilt {

@@ -907,41 +907,74 @@ fn splice_one_frame(dl: &mut DisplayList, h: &FrameHandle) {
     dl.splice(at..at + 1, wrapped);
 }
 
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-#[allow(clippy::unwrap_used)] // РєРѕСЂРѕС‚РєРёР№ Р»РѕРє РґРµСЂРµРІР°; poisoned mutex = РїР°РЅРёРєР° РїРѕС‚РѕРєР° Р·Р°РіСЂСѓР·РєРё, docs/lint-policy.md В§10
+/// Окружение загрузки под-документа: всё, что фрейм берёт у страницы, одним
+/// `Clone`-значением (BUG-480 срез 19).
+///
+/// До среза этот десяток провайдеров передавался в [`load_frame_sub_documents`]
+/// по отдельности и существовал ТОЛЬКО внутри `parse_and_layout` — то есть
+/// повторить загрузку под-документа позже, из живого окна, было нечем. Ровно
+/// этим и занимается навигация фрейма ([`navigate_frame`]), поэтому набор
+/// собран в одно значение, которое переезжает в `LoadedPage` и дальше в
+/// `Lumen`.
+#[derive(Clone)]
+pub(crate) struct FrameLoadEnv {
+    /// Приёмник событий загрузки — тот же, что у страницы.
+    pub(crate) sink: Arc<dyn EventSink>,
+    /// Банка cookie сессии.
+    pub(crate) cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    /// Провайдер `window.fetch()` под-документа.
+    pub(crate) fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    /// Провайдер `new WebSocket()`.
+    pub(crate) ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+    /// Провайдер `new EventSource()`.
+    pub(crate) sse_provider: Option<Arc<dyn lumen_core::ext::JsSseProvider>>,
+    /// `localStorage` origin-а страницы.
+    pub(crate) ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
+    /// `sessionStorage` вкладки (BUG-836).
+    pub(crate) ss_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
+    /// Бэкенд IndexedDB.
+    pub(crate) idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
+    /// Бэкенд Service Worker.
+    pub(crate) sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
+    /// Реестр живых SW-потоков.
+    pub(crate) sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
+    /// Бэкенд Cache Storage.
+    pub(crate) cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
+    /// Экранный media-контекст: гейт `<link media>` и `@media` каскада ребёнка.
+    pub(crate) media_ctx: lumen_css_parser::MediaContext,
+    /// Вьюпорт СТРАНИЦЫ — им picker выбирает `srcset`-кандидата картинок
+    /// ребёнка (то же значение, с которым страница грузит свои).
+    pub(crate) viewport: lumen_core::geom::Size,
+    /// Гасить cookie-баннеры.
+    pub(crate) cookie_banner_dismiss: bool,
+    /// Детерминированный режим (`--deterministic`).
+    pub(crate) deterministic: deterministic::DetConfig,
+    /// `crossOriginIsolated` страницы.
+    pub(crate) cross_origin_isolated: bool,
+    /// BUG-480 срез 15: целевое цветовое пространство декодера картинок — то
+    /// же, с которым страница декодирует свои (`parse_and_layout`).
+    pub(crate) target: lumen_core::ColorSpace,
+    /// База ВЕРХНЕГО окна: `window.top.location` фреймов глубины ≥ 1 и вторая
+    /// сторона same-origin-проверки к нему.
+    ///
+    /// Отдельным полем, а не параметром рекурсии: в отличие от `base`, которая
+    /// на каждом уровне своя, эта величина одна на страницу — и навигации
+    /// фрейма (срез 19) взять её больше неоткуда, потому что `PageSource`
+    /// вкладки не знает про редиректные хопы, через которые страница пришла.
+    pub(crate) page_base: ResourceBase,
+}
+
+#[allow(clippy::unwrap_used)] // короткий лок дерева; poisoned mutex = паника потока загрузки, docs/lint-policy.md §10
 pub(crate) fn load_frame_sub_documents(
     parent: &Arc<Mutex<Document>>,
     depth: usize,
     base: &ResourceBase,
     top_doc: &Arc<Mutex<Document>>,
-    top_base: &ResourceBase,
-    media_ctx: &lumen_css_parser::MediaContext,
-    viewport: lumen_core::geom::Size,
-    sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
-    fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
-    ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
-    sse_provider: Option<Arc<dyn lumen_core::ext::JsSseProvider>>,
-    ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
-    ss_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
-    idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
-    sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
-    sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
-    cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
-    cookie_banner_dismiss: bool,
-    deterministic: deterministic::DetConfig,
-    cross_origin_isolated: bool,
+    env: &FrameLoadEnv,
     parent_js: Option<&Arc<dyn PersistentJs>>,
-    // BUG-480 срез 15: целевое цветовое пространство декодера картинок — то же,
-    // с которым страница декодирует свои (`parse_and_layout`).
-    target: lumen_core::ColorSpace,
 ) -> Vec<FrameHandle> {
-    // URL СЂРѕРґРёС‚РµР»СЏ Рё РІРµСЂС…Р° РґР»СЏ С„Р°СЃР°РґРѕРІ location/URL Сѓ РїСЂРµРґРєРѕРІ (СЃСЂРµР· 3):
-    // РІС‹С‡РёСЃР»СЏСЋС‚СЃСЏ РѕРґРёРЅ СЂР°Р· РЅР° СѓСЂРѕРІРµРЅСЊ СЂРµРєСѓСЂСЃРёРё.
-    let parent_url = base_url_string(base);
-    let top_url = base_url_string(top_base);
-    // РљРѕСЂРѕС‚РєРёР№ Р»РѕРє: СЃРѕР±РёСЂР°РµРј РѕРїРёСЃР°РЅРёСЏ С„СЂРµР№РјРѕРІ Рё РѕС‚РїСѓСЃРєР°РµРј РґРµСЂРµРІРѕ вЂ” РґР°Р»СЊС€Рµ
-    // СЃРµС‚СЊ/СЃРєСЂРёРїС‚С‹/СЃРѕР±С‹С‚РёСЏ, РєРѕС‚РѕСЂС‹Рµ РІРїСЂР°РІРµ С‡РёС‚Р°С‚СЊ РґРѕРєСѓРјРµРЅС‚.
+    // Короткий лок: собираем описания фреймов и отпускаем дерево — дальше
+    // сеть/скрипты/события, которые вправе читать документ.
     let infos = {
         let d = parent.lock().unwrap();
         collect_iframes(&d)
@@ -954,215 +987,340 @@ pub(crate) fn load_frame_sub_documents(
         if info.loading_lazy {
             continue;
         }
-        // РСЃС‚РѕС‡РЅРёРє HTML + Р±Р°Р·Р° СЂРµР±С‘РЅРєР° РґР»СЏ РµРіРѕ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅС‹С… URL.
-        let (html, child_base, child_url): (String, ResourceBase, String) = match &info.srcdoc {
-            Some(srcdoc) => (srcdoc.clone(), base.clone(), "about:srcdoc".to_owned()),
-            None => match info.src.as_deref() {
-                Some(src) => match fetch_iframe_source(src, base, sink, cookie_jar.clone()) {
-                    Some(FrameSource::Inline(html)) => (html, base.clone(), "about:blank".to_owned()),
-                    Some(FrameSource::File { html, path }) => {
-                        let url = format!("file://{}", path.display());
-                        (html, ResourceBase::File(path), url)
-                    }
-                    Some(FrameSource::Url { html, url }) => {
-                        (html, ResourceBase::Url(url.clone()), url)
-                    }
-                    None => continue,
-                },
-                // РќРё src, РЅРё srcdoc вЂ” СЃРїРµРєР° РіСЂСѓР·РёС‚ about:blank РЅРµРјРµРґР»РµРЅРЅРѕ.
-                None => (String::new(), base.clone(), "about:blank".to_owned()),
-            },
-        };
-
-        let mut child_doc = {
-            let _s = lumen_core::trace::span("parse-html-frame", "parse");
-            lumen_html_parser::parse(&html)
-        };
-        // СРЕЗ 11 BUG-480: подресурсы парсерных элементов ребёнка (`<img src>`,
-        // `<link rel=stylesheet>`). Сеть стартует ДО скриптов — парсерный порядок
-        // (источник запроса — шаг разбора, а не исполнение); исходы держим до
-        // создания рантайма и доставляем ниже, между DCL и window load.
-        let subresources = {
-            let _s = lumen_core::trace::span("fetch-frame-subresources", "net");
-            fetch_frame_subresources(
-                &mut child_doc,
-                &child_base,
-                sink,
-                cookie_jar.clone(),
-                media_ctx,
-                viewport,
-                target,
-            )
-        };
-        // РЎРєСЂРёРїС‚С‹ СЂРµР±С‘РЅРєР° СЃРѕР±РёСЂР°СЋС‚СЃСЏ Рё (РІРЅРµС€РЅРёРµ) СЃРєР°С‡РёРІР°СЋС‚СЃСЏ Р”Рћ РїРµСЂРµРґР°С‡Рё
-        // РґРѕРєСѓРјРµРЅС‚Р° РІ СЂР°РЅС‚Р°Р№Рј: run_scripts_with_dom РїСЂРёРЅРёРјР°РµС‚ doc РїРѕ Р·РЅР°С‡РµРЅРёСЋ.
-        let (classic_scripts, module_scripts) = {
-            let mut classic_items = Vec::new();
-            let mut module_items = Vec::new();
-            collect_scripts_ordered(&child_doc, child_doc.root(), &mut classic_items, &mut module_items);
-            (
-                resolve_script_sources(&classic_items, &child_base, sink, cookie_jar.clone()),
-                resolve_script_sources(&module_items, &child_base, sink, cookie_jar.clone()),
-            )
-        };
-        // Opaque origin (sandbox Р±РµР· allow-same-origin) вЂ” Р±РµР· РїРµСЂСЃРёСЃС‚РµРЅС‚РЅС‹С…
-        // С…СЂР°РЅРёР»РёС‰; РїСЂРѕРІР°Р№РґРµСЂС‹ СЃРµС‚Рё РѕСЃС‚Р°СЋС‚СЃСЏ: sandbox СЂРµР¶РµС‚ origin-РґРѕСЃС‚СѓРї,
-        // Р° РЅРµ СЃРµС‚СЊ (СЃРєСЂРёРїС‚С‹ С†РµР»РёРєРѕРј РіРµР№С‚СЏС‚СЃСЏ С„Р»Р°РіРѕРј SCRIPTS РѕС‚РґРµР»СЊРЅРѕ).
-        let opaque = info.is_sandboxed && info.sandbox.contains(lumen_core::SandboxFlags::ORIGIN);
-        let (child_doc_arc, child_nav, child_js) = run_scripts_with_dom(
-            child_doc,
-            info.sandbox,
-            &child_url,
-            fetch_provider.clone(),
-            ws_provider.clone(),
-            sse_provider.clone(),
-            ls_store.clone().filter(|_| !opaque),
-            ss_store.clone().filter(|_| !opaque),
-            idb_backend.clone().filter(|_| !opaque),
-            sw_backend.clone().filter(|_| !opaque),
-            sw_worker_store.clone().filter(|_| !opaque),
-            cache_backend.clone().filter(|_| !opaque),
-            cookie_banner_dismiss,
-            deterministic,
-            cross_origin_isolated,
-            &[],
-            classic_scripts,
-            module_scripts,
-            // BUG-480 срез 8: фрейму рантайм нужен даже без единого парсерного
-            // скрипта — иначе ему нечем принимать кросс-фреймовые postMessage/
-            // события/RunScript (срезы 4–8), а статические iframe — самый
-            // частый встраиваемый случай. Странице (второй вызов) хватает
-            // старого поведения: без скриптов ей нечем отвечать.
-            true,
-        );
-        // РќР°РІРёРіР°С†РёСЏ РёР· СЃРєСЂРёРїС‚РѕРІ СЂРµР±С‘РЅРєР° (location.href= Рё С‚.Рї.) РІРЅРµ СЃСЂРµР·Р° 1:
-        // РѕС‚РєР»РѕРЅСЏРµРј СЃ Р»РѕРіРѕРј, РЅРµ Р·Р°РІР°Р»РёРІР°СЏ СЃС‚СЂР°РЅРёС†Сѓ.
-        if let Some(nav) = child_nav {
-            let target = match nav {
-                JsNavigateRequest::Push(url) | JsNavigateRequest::Replace(url) => url,
-                _ => "<reload/submit>".to_owned(),
-            };
-            eprintln!("iframe: РЅР°РІРёРіР°С†РёСЏ РёР· РїРѕРґ-РґРѕРєСѓРјРµРЅС‚Р° ({child_url}) РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚СЃСЏ (BUG-480 СЃСЂРµР· 1), Р·Р°РїСЂРѕСЃ '{target}' РѕС‚РєР»РѕРЅС‘РЅ");
-        }
-        // РЎСЂРµР· 3 BUG-480: СЃСЃС‹Р»РєРё РЅР° РїСЂРµРґРєРѕРІ РІ РєРѕРЅС‚РµРєСЃС‚Рµ СЂРµР±С‘РЅРєР° вЂ” РґРѕ РµРіРѕ
-        // DOMContentLoaded/load, С‡С‚РѕР±С‹ РѕР±СЂР°Р±РѕС‚С‡РёРєРё (РІ С‚.С‡. РІСЃС‚СЂРѕРµРЅРЅС‹Р№
-        // testharness РЅР° window load) С‡РёС‚Р°Р»Рё window.parent/top/frameElement
-        // СЃСЂР°Р·Сѓ. РРЅР»Р°Р№РЅ-СЃРєСЂРёРїС‚С‹ СЂРµР±С‘РЅРєР° Рє СЌС‚РѕРјСѓ РјРѕРјРµРЅС‚Сѓ СѓР¶Рµ РёСЃРїРѕР»РЅРµРЅС‹ Рё РїСЂРё
-        // С‡С‚РµРЅРёРё РІРёРґРµР»Рё РїСЂРµР¶РЅРёР№ fallback (parent === window) вЂ” РёР·РІРµСЃС‚РЅРѕРµ
-        // РѕРіСЂР°РЅРёС‡РµРЅРёРµ СЃСЂРµР·Р°.
-        if let Some(js) = &child_js {
-            let accessible_parent = frame_access_allowed(base, &child_url, opaque);
-            js.register_parent_document(
-                info.node.index() as u32,
-                Arc::clone(parent),
-                &parent_url,
-                accessible_parent,
-            );
-            // Р РµР±С‘РЅРѕРє РіР»СѓР±РёРЅС‹ в‰Ґ 2 РїРѕР»СѓС‡Р°РµС‚ РѕС‚РґРµР»СЊРЅС‹Р№ СЃР»РѕС‚ top: РµРіРѕ РІРµСЂС… вЂ”
-            // РєРѕСЂРµРЅСЊ СЃС‚СЂР°РЅРёС†С‹, Р° РЅРµ РЅРµРїРѕСЃСЂРµРґСЃС‚РІРµРЅРЅС‹Р№ СЂРѕРґРёС‚РµР»СЊ.
-            if depth >= 1 {
-                let accessible_top = frame_access_allowed(top_base, &child_url, opaque);
-                js.register_top_document(Arc::clone(top_doc), &top_url, accessible_top);
-            }
-        }
-        // BUG-480 срез 12: cascade + layout ребёнка — контентная геометрия
-        // внутри фрейма (getBoundingClientRect/offsetWidth/offsetHeight)
-        // вместо честных нулей (см. frame_bridge.rs: «layout содержимого
-        // фрейма — отдельный срез»). Вьюпорт — [`FRAME_UA_DEFAULT_SIZE`]
-        // (реальный размер host-бокса ещё не известен на этом шаге).
-        // Измеритель собран как у страницы ([`page_measurer`]), но без
-        // @font-face ребёнка (`web_fonts: &[]` — задел следующего среза).
-        // Каскад ребёнка разбирается один раз и переезжает в хэндл: срез 13
-        // пересчитывает layout под реальный host-бокс, и повторный разбор
-        // того же текста на каждом relayout был бы чистой тратой. Сам layout
-        // тоже едет в хэндл (срез 14): по нему рисуется содержимое фрейма и в
-        // нём ищется host-бокс вложенного фрейма.
-        let frame_sheet = lumen_css_parser::parse(&subresources.css);
-        let frame_layout = frame_measurer().map(|measurer| {
-            layout_frame_document(
-                &child_doc_arc,
-                &frame_sheet,
-                FRAME_UA_DEFAULT_SIZE,
-                child_js.as_ref(),
-                &measurer,
-            )
-        });
-        // Lifecycle СЂРµР±С‘РЅРєР°: DOMContentLoaded СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ parse+inline-СЃРєСЂРёРїС‚РѕРІ
-        // (С‚РѕС‚ Р¶Рµ РїРѕСЂСЏРґРѕРє, С‡С‚Рѕ Сѓ top-level РІ parse_and_layout); window load вЂ”
-        // СЃР»РµРґРѕРј, РќРћ РїРѕСЃР»Рµ РёСЃС…РѕРґРѕРІ РїРѕРґСЂРµСЃСѓСЂСЃРѕРІ (СЃСЂРµР· 11): В«loadВ» РґРѕРєСѓРјРµРЅС‚Р°
-        // СЃР»РµРґСѓРµС‚ Р·Р° РµРіРѕ РїРѕРґСЂРµСЃСѓСЂСЃР°РјРё, Рё С‚РµСЃС‚, РіРґРµ РІРЅСѓС‚СЂРё window load С‡РёС‚Р°СЋС‚
-        // Р·Р°РіСЂСѓР¶РµРЅРЅС‹Р№ `<img>`/`link.onload`, СЂР°Р±РѕС‚Р°РµС‚.
-        if let Some(js) = &child_js {
-            js.notify_dom_content_loaded();
-            deliver_frame_subresource_events(js, &subresources);
-            js.notify_window_loaded();
-        }
-        // Р’Р»РѕР¶РµРЅРЅС‹Рµ С„СЂРµР№РјС‹ СЂРµР±С‘РЅРєР° РѕР±СЂР°Р±Р°С‚С‹РІР°РµРј, РїРѕРєР° РёР·РІРµСЃС‚РЅР° РµРіРѕ Р±Р°Р·Р°.
-        // РҐСЌРЅРґР»С‹ СѓРїР»РѕС‰Р°СЋС‚СЃСЏ РІ РѕР±С‰РёР№ СЃРїРёСЃРѕРє СЃС‚СЂР°РЅРёС†С‹: РІСЂРµРјСЏ Р¶РёР·РЅРё РІСЃРµС…
-        // РїРѕРґ-РґРѕРєСѓРјРµРЅС‚РѕРІ РїСЂРёРІСЏР·Р°РЅРѕ Рє СЃС‚СЂР°РЅРёС†Рµ С†РµР»РёРєРѕРј (Р·Р°РјРµРЅР°/СѓРґР°Р»РµРЅРёРµ
-        // РѕС‚РґРµР»СЊРЅРѕРіРѕ С„СЂРµР№РјР° вЂ” Р±СѓРґСѓС‰РёР№ СЃСЂРµР·).
-        if depth < MAX_FRAME_DEPTH {
-            let nested = load_frame_sub_documents(
-                    &child_doc_arc,
-                    depth + 1,
-                    &child_base,
-                    top_doc,
-                    top_base,
-                    media_ctx,
-                    viewport,
-                    sink,
-                    cookie_jar.clone(),
-                    fetch_provider.clone(),
-                    ws_provider.clone(),
-                    sse_provider.clone(),
-                    ls_store.clone().filter(|_| !opaque),
-                    ss_store.clone().filter(|_| !opaque),
-                    idb_backend.clone().filter(|_| !opaque),
-                    sw_backend.clone().filter(|_| !opaque),
-                    sw_worker_store.clone().filter(|_| !opaque),
-                    cache_backend.clone().filter(|_| !opaque),
-                    cookie_banner_dismiss,
-                    deterministic,
-                    cross_origin_isolated,
-                    child_js.as_ref(),
-                    target,
-                );
-            handles.extend(nested);
-        }
-        // BUG-480 СЃСЂРµР· 2: Р±РёРЅРґРёРЅРі В«С…РѕСЃС‚ в†’ РїРѕРґ-РґРѕРєСѓРјРµРЅС‚В» РґР»СЏ contentWindow/
-        // contentDocument СЂРѕРґРёС‚РµР»СЏ вЂ” СЃС‚СЂРѕРіРѕ РґРѕ trusted `load` РЅР° С…РѕСЃС‚Рµ,
-        // С‡С‚РѕР±С‹ РѕР±СЂР°Р±РѕС‚С‡РёРєРё С‡РёС‚Р°Р»Рё С„Р°СЃР°РґС‹ СЃСЂР°Р·Сѓ РёР· РѕР±СЂР°Р±РѕС‚С‡РёРєР°. РЎСЂРµР· 3:
-        // РёРјСЏ С…РѕСЃС‚Р° РµРґРµС‚ РІРјРµСЃС‚Рµ СЃ Р±РёРЅРґРёРЅРіРѕРј (РєР»СЋС‡ window[name]).
-        if let Some(js) = parent_js {
-            let accessible = frame_access_allowed(base, &child_url, opaque);
-            js.register_iframe_document(
-                info.node.index() as u32,
-                Arc::clone(&child_doc_arc),
-                &child_url,
-                info.name.as_deref(),
-                accessible,
-            );
-        }
-        fire_iframe_load_event(parent_js, info.node);
-        handles.push(FrameHandle {
-            host: info.node,
-            url: child_url,
-            doc: Arc::clone(&child_doc_arc),
-            js: child_js,
-            depth,
-            sheet: frame_sheet,
-            viewport: FRAME_UA_DEFAULT_SIZE,
-            parent_doc: (depth > 0).then(|| Arc::clone(parent)),
-            layout: frame_layout,
-            content_dl: DisplayList::new(),
-            host_rect: None,
-            host_src: info.src.clone().unwrap_or_default(),
-            images: subresources.decoded_images,
-            image_keys: subresources.image_keys,
-            scroll_y: 0.0,
-        });
+        handles.extend(spawn_frame(&info, None, parent, depth, base, top_doc, env, parent_js));
     }
     handles
+}
+
+/// Загрузить ОДИН под-документ и вернуть его хэндл вместе с хэндлами его
+/// вложенных фреймов (вложенные идут перед ним — порядок исходного цикла).
+///
+/// Выделено из тела цикла [`load_frame_sub_documents`] срезом 19: навигация
+/// фрейма — тот же самый путь, отличающийся ровно одним, откуда взят адрес.
+///
+/// `dest`: `None` — адрес из разметки (`srcdoc`/`src`); `Some((href, base))` —
+/// навигация, где `href` разрешается относительно базы СТАРОГО под-документа
+/// (ссылку резолвит документ, в котором по ней кликнули), а не относительно
+/// документа-хозяина, и где `srcdoc` уже ни при чём: элемент показывает
+/// результат навигации, а не свою разметку.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[allow(clippy::unwrap_used)] // короткий лок дерева; poisoned mutex = паника потока загрузки, docs/lint-policy.md §10
+fn spawn_frame(
+    info: &lumen_dom::IframeInfo,
+    dest: Option<(&str, &ResourceBase)>,
+    parent: &Arc<Mutex<Document>>,
+    depth: usize,
+    base: &ResourceBase,
+    top_doc: &Arc<Mutex<Document>>,
+    env: &FrameLoadEnv,
+    parent_js: Option<&Arc<dyn PersistentJs>>,
+) -> Vec<FrameHandle> {
+    // URL родителя и верха для фасадов location/URL у предков (срез 3).
+    let parent_url = base_url_string(base);
+    let top_url = base_url_string(&env.page_base);
+    let sink = &env.sink;
+    let cookie_jar = env.cookie_jar.clone();
+    let mut handles = Vec::new();
+    // Источник HTML + база ребёнка для его относительных URL.
+    let fetched = match dest {
+        Some((href, nav_base)) => Some(fetch_iframe_source(href, nav_base, sink, cookie_jar.clone())),
+        None if info.srcdoc.is_some() => None,
+        None => info
+            .src
+            .as_deref()
+            .map(|src| fetch_iframe_source(src, base, sink, cookie_jar.clone())),
+    };
+    let (html, child_base, child_url): (String, ResourceBase, String) = match fetched {
+        Some(Some(FrameSource::Inline(html))) => (html, base.clone(), "about:blank".to_owned()),
+        Some(Some(FrameSource::File { html, path })) => {
+            let url = format!("file://{}", path.display());
+            (html, ResourceBase::File(path), url)
+        }
+        Some(Some(FrameSource::Url { html, url })) => (html, ResourceBase::Url(url.clone()), url),
+        // Источник получить нельзя — лог уже напечатан внутри.
+        Some(None) => return handles,
+        None => match &info.srcdoc {
+            Some(srcdoc) => (srcdoc.clone(), base.clone(), "about:srcdoc".to_owned()),
+            // Ни src, ни srcdoc — спека грузит about:blank немедленно.
+            None => (String::new(), base.clone(), "about:blank".to_owned()),
+        },
+    };
+
+    let mut child_doc = {
+        let _s = lumen_core::trace::span("parse-html-frame", "parse");
+        lumen_html_parser::parse(&html)
+    };
+    // СРЕЗ 11 BUG-480: подресурсы парсерных элементов ребёнка (`<img src>`,
+    // `<link rel=stylesheet>`). Сеть стартует ДО скриптов — парсерный порядок
+    // (источник запроса — шаг разбора, а не исполнение); исходы держим до
+    // создания рантайма и доставляем ниже, между DCL и window load.
+    let subresources = {
+        let _s = lumen_core::trace::span("fetch-frame-subresources", "net");
+        fetch_frame_subresources(
+            &mut child_doc,
+            &child_base,
+            sink,
+            cookie_jar.clone(),
+            &env.media_ctx,
+            env.viewport,
+            env.target,
+        )
+    };
+    // РЎРєСЂРёРїС‚С‹ СЂРµР±С‘РЅРєР° СЃРѕР±РёСЂР°СЋС‚СЃСЏ Рё (РІРЅРµС€РЅРёРµ) СЃРєР°С‡РёРІР°СЋС‚СЃСЏ Р”Рћ РїРµСЂРµРґР°С‡Рё
+    // РґРѕРєСѓРјРµРЅС‚Р° РІ СЂР°РЅС‚Р°Р№Рј: run_scripts_with_dom РїСЂРёРЅРёРјР°РµС‚ doc РїРѕ Р·РЅР°С‡РµРЅРёСЋ.
+    let (classic_scripts, module_scripts) = {
+        let mut classic_items = Vec::new();
+        let mut module_items = Vec::new();
+        collect_scripts_ordered(&child_doc, child_doc.root(), &mut classic_items, &mut module_items);
+        (
+            resolve_script_sources(&classic_items, &child_base, sink, cookie_jar.clone()),
+            resolve_script_sources(&module_items, &child_base, sink, cookie_jar.clone()),
+        )
+    };
+    // Opaque origin (sandbox Р±РµР· allow-same-origin) вЂ” Р±РµР· РїРµСЂСЃРёСЃС‚РµРЅС‚РЅС‹С…
+    // С…СЂР°РЅРёР»РёС‰; РїСЂРѕРІР°Р№РґРµСЂС‹ СЃРµС‚Рё РѕСЃС‚Р°СЋС‚СЃСЏ: sandbox СЂРµР¶РµС‚ origin-РґРѕСЃС‚СѓРї,
+    // Р° РЅРµ СЃРµС‚СЊ (СЃРєСЂРёРїС‚С‹ С†РµР»РёРєРѕРј РіРµР№С‚СЏС‚СЃСЏ С„Р»Р°РіРѕРј SCRIPTS РѕС‚РґРµР»СЊРЅРѕ).
+    let opaque = info.is_sandboxed && info.sandbox.contains(lumen_core::SandboxFlags::ORIGIN);
+    let (child_doc_arc, child_nav, child_js) = run_scripts_with_dom(
+        child_doc,
+        info.sandbox,
+        &child_url,
+        env.fetch_provider.clone(),
+        env.ws_provider.clone(),
+        env.sse_provider.clone(),
+        env.ls_store.clone().filter(|_| !opaque),
+        env.ss_store.clone().filter(|_| !opaque),
+        env.idb_backend.clone().filter(|_| !opaque),
+        env.sw_backend.clone().filter(|_| !opaque),
+        env.sw_worker_store.clone().filter(|_| !opaque),
+        env.cache_backend.clone().filter(|_| !opaque),
+        env.cookie_banner_dismiss,
+        env.deterministic,
+        env.cross_origin_isolated,
+        &[],
+        classic_scripts,
+        module_scripts,
+        // BUG-480 срез 8: фрейму рантайм нужен даже без единого парсерного
+        // скрипта — иначе ему нечем принимать кросс-фреймовые postMessage/
+        // события/RunScript (срезы 4–8), а статические iframe — самый
+        // частый встраиваемый случай. Странице (второй вызов) хватает
+        // старого поведения: без скриптов ей нечем отвечать.
+        true,
+    );
+    // РќР°РІРёРіР°С†РёСЏ РёР· СЃРєСЂРёРїС‚РѕРІ СЂРµР±С‘РЅРєР° (location.href= Рё С‚.Рї.) РІРЅРµ СЃСЂРµР·Р° 1:
+    // РѕС‚РєР»РѕРЅСЏРµРј СЃ Р»РѕРіРѕРј, РЅРµ Р·Р°РІР°Р»РёРІР°СЏ СЃС‚СЂР°РЅРёС†Сѓ.
+    if let Some(nav) = child_nav {
+        let target = match nav {
+            JsNavigateRequest::Push(url) | JsNavigateRequest::Replace(url) => url,
+            _ => "<reload/submit>".to_owned(),
+        };
+        eprintln!("iframe: РЅР°РІРёРіР°С†РёСЏ РёР· РїРѕРґ-РґРѕРєСѓРјРµРЅС‚Р° ({child_url}) РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚СЃСЏ (BUG-480 СЃСЂРµР· 1), Р·Р°РїСЂРѕСЃ '{target}' РѕС‚РєР»РѕРЅС‘РЅ");
+    }
+    // РЎСЂРµР· 3 BUG-480: СЃСЃС‹Р»РєРё РЅР° РїСЂРµРґРєРѕРІ РІ РєРѕРЅС‚РµРєСЃС‚Рµ СЂРµР±С‘РЅРєР° вЂ” РґРѕ РµРіРѕ
+    // DOMContentLoaded/load, С‡С‚РѕР±С‹ РѕР±СЂР°Р±РѕС‚С‡РёРєРё (РІ С‚.С‡. РІСЃС‚СЂРѕРµРЅРЅС‹Р№
+    // testharness РЅР° window load) С‡РёС‚Р°Р»Рё window.parent/top/frameElement
+    // СЃСЂР°Р·Сѓ. РРЅР»Р°Р№РЅ-СЃРєСЂРёРїС‚С‹ СЂРµР±С‘РЅРєР° Рє СЌС‚РѕРјСѓ РјРѕРјРµРЅС‚Сѓ СѓР¶Рµ РёСЃРїРѕР»РЅРµРЅС‹ Рё РїСЂРё
+    // С‡С‚РµРЅРёРё РІРёРґРµР»Рё РїСЂРµР¶РЅРёР№ fallback (parent === window) вЂ” РёР·РІРµСЃС‚РЅРѕРµ
+    // РѕРіСЂР°РЅРёС‡РµРЅРёРµ СЃСЂРµР·Р°.
+    if let Some(js) = &child_js {
+        let accessible_parent = frame_access_allowed(base, &child_url, opaque);
+        js.register_parent_document(
+            info.node.index() as u32,
+            Arc::clone(parent),
+            &parent_url,
+            accessible_parent,
+        );
+        // Р РµР±С‘РЅРѕРє РіР»СѓР±РёРЅС‹ в‰Ґ 2 РїРѕР»СѓС‡Р°РµС‚ РѕС‚РґРµР»СЊРЅС‹Р№ СЃР»РѕС‚ top: РµРіРѕ РІРµСЂС… вЂ”
+        // РєРѕСЂРµРЅСЊ СЃС‚СЂР°РЅРёС†С‹, Р° РЅРµ РЅРµРїРѕСЃСЂРµРґСЃС‚РІРµРЅРЅС‹Р№ СЂРѕРґРёС‚РµР»СЊ.
+        if depth >= 1 {
+            let accessible_top = frame_access_allowed(&env.page_base, &child_url, opaque);
+            js.register_top_document(Arc::clone(top_doc), &top_url, accessible_top);
+        }
+    }
+    // BUG-480 срез 12: cascade + layout ребёнка — контентная геометрия
+    // внутри фрейма (getBoundingClientRect/offsetWidth/offsetHeight)
+    // вместо честных нулей (см. frame_bridge.rs: «layout содержимого
+    // фрейма — отдельный срез»). Вьюпорт — [`FRAME_UA_DEFAULT_SIZE`]
+    // (реальный размер host-бокса ещё не известен на этом шаге).
+    // Измеритель собран как у страницы ([`page_measurer`]), но без
+    // @font-face ребёнка (`web_fonts: &[]` — задел следующего среза).
+    // Каскад ребёнка разбирается один раз и переезжает в хэндл: срез 13
+    // пересчитывает layout под реальный host-бокс, и повторный разбор
+    // того же текста на каждом relayout был бы чистой тратой. Сам layout
+    // тоже едет в хэндл (срез 14): по нему рисуется содержимое фрейма и в
+    // нём ищется host-бокс вложенного фрейма.
+    let frame_sheet = lumen_css_parser::parse(&subresources.css);
+    let frame_layout = frame_measurer().map(|measurer| {
+        layout_frame_document(
+            &child_doc_arc,
+            &frame_sheet,
+            FRAME_UA_DEFAULT_SIZE,
+            child_js.as_ref(),
+            &measurer,
+        )
+    });
+    // Lifecycle СЂРµР±С‘РЅРєР°: DOMContentLoaded СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ parse+inline-СЃРєСЂРёРїС‚РѕРІ
+    // (С‚РѕС‚ Р¶Рµ РїРѕСЂСЏРґРѕРє, С‡С‚Рѕ Сѓ top-level РІ parse_and_layout); window load вЂ”
+    // СЃР»РµРґРѕРј, РќРћ РїРѕСЃР»Рµ РёСЃС…РѕРґРѕРІ РїРѕРґСЂРµСЃСѓСЂСЃРѕРІ (СЃСЂРµР· 11): В«loadВ» РґРѕРєСѓРјРµРЅС‚Р°
+    // СЃР»РµРґСѓРµС‚ Р·Р° РµРіРѕ РїРѕРґСЂРµСЃСѓСЂСЃР°РјРё, Рё С‚РµСЃС‚, РіРґРµ РІРЅСѓС‚СЂРё window load С‡РёС‚Р°СЋС‚
+    // Р·Р°РіСЂСѓР¶РµРЅРЅС‹Р№ `<img>`/`link.onload`, СЂР°Р±РѕС‚Р°РµС‚.
+    if let Some(js) = &child_js {
+        js.notify_dom_content_loaded();
+        deliver_frame_subresource_events(js, &subresources);
+        js.notify_window_loaded();
+    }
+    // Р’Р»РѕР¶РµРЅРЅС‹Рµ С„СЂРµР№РјС‹ СЂРµР±С‘РЅРєР° РѕР±СЂР°Р±Р°С‚С‹РІР°РµРј, РїРѕРєР° РёР·РІРµСЃС‚РЅР° РµРіРѕ Р±Р°Р·Р°.
+    // РҐСЌРЅРґР»С‹ СѓРїР»РѕС‰Р°СЋС‚СЃСЏ РІ РѕР±С‰РёР№ СЃРїРёСЃРѕРє СЃС‚СЂР°РЅРёС†С‹: РІСЂРµРјСЏ Р¶РёР·РЅРё РІСЃРµС…
+    // РїРѕРґ-РґРѕРєСѓРјРµРЅС‚РѕРІ РїСЂРёРІСЏР·Р°РЅРѕ Рє СЃС‚СЂР°РЅРёС†Рµ С†РµР»РёРєРѕРј (Р·Р°РјРµРЅР°/СѓРґР°Р»РµРЅРёРµ
+    // РѕС‚РґРµР»СЊРЅРѕРіРѕ С„СЂРµР№РјР° вЂ” Р±СѓРґСѓС‰РёР№ СЃСЂРµР·).
+    if depth < MAX_FRAME_DEPTH {
+        let nested = load_frame_sub_documents(
+            &child_doc_arc,
+            depth + 1,
+            &child_base,
+            top_doc,
+            env,
+            child_js.as_ref(),
+        );
+        handles.extend(nested);
+    }
+    // BUG-480 СЃСЂРµР· 2: Р±РёРЅРґРёРЅРі В«С…РѕСЃС‚ в†’ РїРѕРґ-РґРѕРєСѓРјРµРЅС‚В» РґР»СЏ contentWindow/
+    // contentDocument СЂРѕРґРёС‚РµР»СЏ вЂ” СЃС‚СЂРѕРіРѕ РґРѕ trusted `load` РЅР° С…РѕСЃС‚Рµ,
+    // С‡С‚РѕР±С‹ РѕР±СЂР°Р±РѕС‚С‡РёРєРё С‡РёС‚Р°Р»Рё С„Р°СЃР°РґС‹ СЃСЂР°Р·Сѓ РёР· РѕР±СЂР°Р±РѕС‚С‡РёРєР°. РЎСЂРµР· 3:
+    // РёРјСЏ С…РѕСЃС‚Р° РµРґРµС‚ РІРјРµСЃС‚Рµ СЃ Р±РёРЅРґРёРЅРіРѕРј (РєР»СЋС‡ window[name]).
+    if let Some(js) = parent_js {
+        let accessible = frame_access_allowed(base, &child_url, opaque);
+        js.register_iframe_document(
+            info.node.index() as u32,
+            Arc::clone(&child_doc_arc),
+            &child_url,
+            info.name.as_deref(),
+            accessible,
+        );
+    }
+    fire_iframe_load_event(parent_js, info.node);
+    handles.push(FrameHandle {
+        host: info.node,
+        url: child_url,
+        // BUG-480 срез 19: база ребёнка — сторона резолва его ссылок.
+        base: child_base,
+        doc: Arc::clone(&child_doc_arc),
+        js: child_js,
+        depth,
+        sheet: frame_sheet,
+        viewport: FRAME_UA_DEFAULT_SIZE,
+        parent_doc: (depth > 0).then(|| Arc::clone(parent)),
+        layout: frame_layout,
+        content_dl: DisplayList::new(),
+        host_rect: None,
+        host_src: info.src.clone().unwrap_or_default(),
+        images: subresources.decoded_images,
+        image_keys: subresources.image_keys,
+        scroll_y: 0.0,
+    });
+    handles
+}
+
+/// Навигация под-документа фрейма `idx` по адресу `href` (BUG-480 срез 19).
+///
+/// `href` — сырое значение ссылки, `nav_base` — база документа, В КОТОРОМ по
+/// ней кликнули ([`FrameHandle::base`] этого документа). Это не всегда база
+/// целевого фрейма: `target=_parent` меняет чужой под-документ, а адрес всё
+/// равно написан кликнувшим.
+///
+/// Старый хэндл заменяется новым, а не правится на месте: под-документ — это
+/// другой `Document`, другой JS-контекст и другой каскад, то есть от прежнего
+/// не остаётся ничего, кроме места на странице. Вместе с ним уходят и хэндлы
+/// его ВЛОЖЕННЫХ фреймов — их документы-хозяева только что перестали
+/// существовать, и оставить их значило бы держать живые рантаймы, до которых
+/// уже никто не доберётся.
+///
+/// `host_src` нового хэндла остаётся прежним намеренно: это половина ключа, по
+/// которому [`splice_one_frame`] узнаёт команду-заглушку в display list
+/// родителя, а заглушку рисует layout родителя по атрибуту `src` элемента —
+/// навигация фрейма атрибут не трогает (HTML LS §7.4.2 меняет документ, а не
+/// разметку хозяина).
+///
+/// Возвращает `true`, если под-документ заменён; `false` — фрейма нет, хозяин
+/// не найден или источник не получен (лог напечатан ниже по стеку).
+#[allow(clippy::unwrap_used)] // короткий лок дерева, docs/lint-policy.md §10
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn navigate_frame(
+    frames: &mut Vec<FrameHandle>,
+    idx: usize,
+    href: &str,
+    nav_base: &ResourceBase,
+    page_doc: &Arc<Mutex<Document>>,
+    env: &FrameLoadEnv,
+    page_js: Option<&Arc<dyn PersistentJs>>,
+) -> bool {
+    let Some(h) = frames.get(idx) else { return false };
+    let (host, depth) = (h.host, h.depth);
+    let parent_doc = h.parent_doc.clone();
+    // Всё, что нужно от хозяина, вынимается ДО удаления: и документ, и его
+    // база, и его JS-контекст живут внутри того же `frames`, который сейчас
+    // будет перестроен.
+    let (host_doc, host_base, parent_js) = match &parent_doc {
+        None => (Arc::clone(page_doc), env.page_base.clone(), page_js.cloned()),
+        Some(pd) => {
+            let Some(p) = frames.iter().find(|o| Arc::ptr_eq(&o.doc, pd)) else { return false };
+            (Arc::clone(pd), p.base.clone(), p.js.clone())
+        }
+    };
+    // Описание host-элемента перечитывается из дерева хозяина: sandbox и `name`
+    // принадлежат элементу, а не документу, и переживают навигацию.
+    let Some(info) = ({
+        let d = host_doc.lock().unwrap();
+        collect_iframes(&d).into_iter().find(|i| i.node == host)
+    }) else {
+        return false;
+    };
+
+    let old_doc = Arc::clone(&frames[idx].doc);
+    let spawned = spawn_frame(
+        &info,
+        Some((href, nav_base)),
+        &host_doc,
+        depth,
+        &host_base,
+        page_doc,
+        env,
+        parent_js.as_ref(),
+    );
+    if spawned.is_empty() {
+        return false;
+    }
+    drop_frame_subtree(frames, &old_doc);
+    frames.retain(|o| o.host != host || !same_host_doc(&o.parent_doc, parent_doc.as_ref()));
+    frames.extend(spawned);
+    true
+}
+
+/// Выбросить хэндлы всех фреймов, чей host-элемент лежал в `doc` — прямо или
+/// через цепочку вложенности (BUG-480 срез 19).
+///
+/// Цикл до неподвижной точки, а не один проход: список плоский, и внук
+/// удаляемого фрейма ссылается на документ своего родителя, который сам
+/// удаляется на этом же шаге.
+pub(crate) fn drop_frame_subtree(frames: &mut Vec<FrameHandle>, doc: &Arc<Mutex<Document>>) {
+    let mut doomed: Vec<Arc<Mutex<Document>>> = vec![Arc::clone(doc)];
+    let mut i = 0;
+    while i < doomed.len() {
+        let cur = Arc::clone(&doomed[i]);
+        for h in frames.iter() {
+            if h.parent_doc.as_ref().is_some_and(|pd| Arc::ptr_eq(pd, &cur))
+                && !doomed.iter().any(|d| Arc::ptr_eq(d, &h.doc))
+            {
+                doomed.push(Arc::clone(&h.doc));
+            }
+        }
+        i += 1;
+    }
+    frames.retain(|h| {
+        !h.parent_doc
+            .as_ref()
+            .is_some_and(|pd| doomed.iter().any(|d| Arc::ptr_eq(d, pd)))
+    });
 }
 
 /// Р–РёРІРѕР№ sub-РґРѕРєСѓРјРµРЅС‚ РѕРґРЅРѕРіРѕ `<iframe>` (BUG-480, СЃСЂРµР· 1).
@@ -1177,13 +1335,20 @@ pub(crate) fn load_frame_sub_documents(
 /// `frame_bridge.rs` вЂ” СЂРµРіРёСЃС‚СЂР°С†РёСЏ РёРґС‘С‚ РёР· Р»РѕРєР°Р»СЊРЅС‹С… РїРµСЂРµРјРµРЅРЅС‹С… СЌС‚РѕР№ С„СѓРЅРєС†РёРё,
 /// РїРѕСЌС‚РѕРјСѓ РїРѕР»СЏ С…СЌРЅРґР»Р° РїРѕ-РїСЂРµР¶РЅРµРјСѓ РЅРµ С‡РёС‚Р°СЋС‚СЃСЏ; С‡РёС‚Р°С‚СЊСЃСЏ РЅР°С‡РЅСѓС‚ СЃРѕ СЃСЂРµР·РѕРј
 /// РЅР°РІРёРіР°С†РёРё/Р·Р°РјРµРЅС‹ С„СЂРµР№РјР°.
-#[allow(dead_code)] // url вЂ” РґРѕ СЃСЂРµР·Р° РЅР°РІРёРіР°С†РёРё/Р·Р°РјРµРЅС‹ С„СЂРµР№РјР° (СЃРј. bugs/BUG-480-OPEN.md)
 pub(crate) struct FrameHandle {
     /// `NodeId` `<iframe>`-СЌР»РµРјРµРЅС‚Р° РІ РґРѕРєСѓРјРµРЅС‚Рµ-СЂРѕРґРёС‚РµР»Рµ.
     pub(crate) host: NodeId,
     /// РђРґСЂРµСЃ РїРѕРґ-РґРѕРєСѓРјРµРЅС‚Р°: СЂР°Р·СЂРµС€С‘РЅРЅС‹Р№ URL, РїСѓС‚СЊ С„Р°Р№Р»Р° РёР»Рё `about:blank` /
     /// `about:srcdoc`. Р”РёР°РіРЅРѕСЃС‚РёРєР° Рё Р±СѓРґСѓС‰Р°СЏ РЅР°РІРёРіР°С†РёСЏ С„СЂРµР№РјР°.
     pub(crate) url: String,
+    /// База, относительно которой под-документ разрешает СВОИ адреса
+    /// (BUG-480 срез 19).
+    ///
+    /// Хранится, а не выводится из [`Self::url`]: `about:blank`/`about:srcdoc`
+    /// наследуют базу хозяина, и восстановить её из строки адреса нечем. Читает
+    /// её навигация фрейма — ссылку резолвит тот документ, в котором по ней
+    /// кликнули, а не документ-хозяин.
+    pub(crate) base: ResourceBase,
     /// РџРѕРґ-РґРѕРєСѓРјРµРЅС‚. РћС‚РґРµР»СЊРЅС‹Р№ `Arc` вЂ” JS-Р·Р°РјС‹РєР°РЅРёСЏ СЂРµР±С‘РЅРєР° РґРµСЂР¶Р°С‚ РµРіРѕ Р¶Рµ.
     pub(crate) doc: Arc<Mutex<Document>>,
     /// JS-РєРѕРЅС‚РµРєСЃС‚ СЂРµР±С‘РЅРєР° (`None` вЂ” Сѓ С„СЂРµР№РјР° РЅРµ Р±С‹Р»Рѕ СЃРєСЂРёРїС‚РѕРІ РёР»Рё v8 РІС‹РєР»СЋС‡РµРЅ).

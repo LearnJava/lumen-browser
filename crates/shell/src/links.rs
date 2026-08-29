@@ -12,7 +12,17 @@ use lumen_dom::{Document, NodeData, NodeId};
 ///
 /// This mirrors the HTML5 spec "activation behavior" for the `<a>` element:
 /// the click target can be any descendant of the anchor, not the anchor itself.
-pub fn find_link_href(doc: &Document, mut node_id: NodeId) -> Option<String> {
+pub fn find_link_href(doc: &Document, node_id: NodeId) -> Option<String> {
+    find_link(doc, node_id).map(|(_, href)| href)
+}
+
+/// `(узел `<a>`, сырое значение href)` — та же ходьба, что у
+/// [`find_link_href`], но вызывающей стороне отдаётся ещё и сам элемент.
+///
+/// Нужно там, где решение зависит не только от адреса: BUG-480 срез 19 читает
+/// с найденного `<a>` атрибут `target`, а спрашивать его отдельным обходом
+/// значило бы позволить двум обходам разойтись и взять `target` у чужой ссылки.
+pub fn find_link(doc: &Document, mut node_id: NodeId) -> Option<(NodeId, String)> {
     loop {
         let node = doc.get(node_id);
         if let NodeData::Element { name, attrs } = &node.data
@@ -25,7 +35,7 @@ pub fn find_link_href(doc: &Document, mut node_id: NodeId) -> Option<String> {
             if let Some(h) = href
                 && !h.is_empty()
             {
-                return Some(h.to_owned());
+                return Some((node_id, h.to_owned()));
             }
         }
         {
@@ -255,6 +265,20 @@ mod tests {
             find_link_href(&doc, text_node),
             Some("https://example.com/page".into())
         );
+    }
+
+    /// BUG-480 срез 19: вместе с адресом отдаётся САМ `<a>` — с него читается
+    /// `target`, решающий, чей документ меняет ссылка ребёнка.
+    ///
+    /// Клик приходит на потомка, поэтому важно, что узел — именно найденный
+    /// предок-ссылка, а не тот, по которому кликнули.
+    #[test]
+    fn find_link_returns_the_anchor_itself_for_a_descendant_click() {
+        let (doc, text_node) = make_anchor_with_child("https://example.com/page");
+        let (anchor, href) = find_link(&doc, text_node).expect("предок-ссылка");
+        assert_ne!(anchor, text_node, "вернулась сама ссылка, а не кликнутый узел");
+        assert_eq!(href, "https://example.com/page");
+        assert!(matches!(&doc.get(anchor).data, NodeData::Element { name, .. } if name.local == "a"));
     }
 
     #[test]

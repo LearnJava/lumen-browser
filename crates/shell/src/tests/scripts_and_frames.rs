@@ -459,6 +459,7 @@ fn splice_handle(src: &str, host_rect: Rect, content_dl: DisplayList) -> crate::
     crate::frames::FrameHandle {
         host: NodeId::from_index(0),
         url: "about:blank".to_owned(),
+        base: crate::ResourceBase::Url("about:blank".to_owned()),
         doc: Arc::new(Mutex::new(lumen_html_parser::parse("<html></html>"))),
         js: None,
         depth: 0,
@@ -1175,6 +1176,39 @@ fn relayout_frame_content_clamps_scroll_when_child_shrinks() {
         "прокрутка вернулась к новому краю содержимого"
     );
     assert!(frames[0].scroll_y < max, "новый край выше прежнего: {}", frames[0].scroll_y);
+}
+
+// ── навигация фрейма (BUG-480 срез 19) ──────────────────────────────────────
+
+/// Навигация под-документа уносит с собой хэндлы ВСЕХ его потомков, включая
+/// внуков, и не трогает соседний фрейм страницы.
+///
+/// Цепочка проверяется до внука не ради полноты: список плоский, и внук
+/// ссылается на документ СРЕДНЕГО фрейма, который сам удаляется на этом же
+/// шаге, — одного прохода по списку тут не хватает. Живой рантайм, оставшийся
+/// в списке после того, как его документ-хозяин перестал существовать, никто
+/// уже не пересоберёт и не выбросит.
+#[test]
+fn navigating_a_frame_drops_its_whole_subtree_and_spares_siblings() {
+    let mut child = splice_handle("child.html", Rect::new(0.0, 0.0, 100.0, 50.0), DisplayList::new());
+    child.doc = Arc::new(Mutex::new(lumen_html_parser::parse("<html><body>c</body></html>")));
+    let mut grand = splice_handle("g.html", Rect::new(0.0, 0.0, 50.0, 25.0), DisplayList::new());
+    grand.depth = 1;
+    grand.parent_doc = Some(Arc::clone(&child.doc));
+    let mut great = splice_handle("gg.html", Rect::new(0.0, 0.0, 20.0, 10.0), DisplayList::new());
+    great.depth = 2;
+    great.parent_doc = Some(Arc::clone(&grand.doc));
+    let sibling = splice_handle("other.html", Rect::new(0.0, 0.0, 100.0, 50.0), DisplayList::new());
+
+    let child_doc = Arc::clone(&child.doc);
+    let mut frames = vec![child, grand, great, sibling];
+    crate::frames::drop_frame_subtree(&mut frames, &child_doc);
+
+    // Сам навигируемый фрейм остаётся: его выбрасывает вызывающая сторона
+    // ([`navigate_frame`]) — здесь уходит именно ПОДДЕРЕВО.
+    assert_eq!(frames.len(), 2, "остались только навигируемый фрейм и сосед");
+    assert!(Arc::ptr_eq(&frames[0].doc, &child_doc), "навигируемый фрейм на месте");
+    assert_eq!(frames[1].host_src, "other.html", "сосед страницы не тронут");
 }
 
 // в”Ђв”Ђ PH1-2: Progressive streaming pipeline в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
