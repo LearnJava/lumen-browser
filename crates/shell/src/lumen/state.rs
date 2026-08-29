@@ -815,6 +815,17 @@ pub(crate) struct Lumen {
     ///
     /// `None` until the first click is processed.  Updated by `handle_click_at`.
     pub(crate) focused_node: Option<lumen_dom::NodeId>,
+    /// `(индекс фрейма, узел ЕГО документа)`, если последний клик сфокусировал
+    /// TYPEABLE-поле ВНУТРИ содержимого фрейма (BUG-480 срез 22).
+    ///
+    /// Пара с [`Self::focused_node`], той же формы, что [`Self::hovered_frame`]
+    /// у [`Self::hovered_nid`]: `NodeId` уникален лишь внутри своего документа.
+    /// `focused_node` в этот момент указывает на host-элемент `<iframe>` (клик
+    /// внутрь фрейма фокусирует контейнер с точки зрения страницы, срез 16) —
+    /// это поле не заменяет его, а адресует ВВОД ТЕКСТА внутрь под-документа.
+    /// `None`, если последний клик фрейма попал не на typeable-поле, либо
+    /// последний клик вообще не был по фрейму.
+    pub(crate) focused_frame: Option<(usize, NodeId)>,
     /// Download manager: background download threads, progress channel, and
     /// panel visibility state. Panel toggled via Ctrl+Shift+J.
     pub(crate) downloads: download::DownloadManager,

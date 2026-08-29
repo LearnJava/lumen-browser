@@ -367,6 +367,7 @@ pub(crate) fn run_window_mode(
         input_rx,
         input_tx,
         focused_node: None,
+        focused_frame: None,
         downloads: download::DownloadManager::new(),
         tab_strip: tabs::strip::TabStrip::new(),
         container_store: tabs::containers::ContainerStore::new(),

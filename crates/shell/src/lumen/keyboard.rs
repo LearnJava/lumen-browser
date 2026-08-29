@@ -362,6 +362,32 @@ impl Lumen {
             }
         }
 
+        // Text editing inside a typeable field ВНУТРИ фрейма (BUG-480 срез 22)
+        // — та же логика и то же место, что у страницы ниже, но проверяется
+        // ПЕРВОЙ: `self.focused_node` в этот момент указывает на host-элемент
+        // `<iframe>` (срез 16), который не typeable, так что страничная ветка
+        // всё равно бы не сработала — порядок только для ясности.
+        if (self.modifiers.is_empty() || self.modifiers == ModifiersState::SHIFT)
+            && let Some((idx, nid)) = self.focused_frame
+            && self.frame_typeable_field(idx, nid).is_some()
+        {
+            if code == KeyCode::Backspace {
+                self.inject_frame_backspace();
+                self.request_redraw();
+                return;
+            }
+            if let Some(text) = key_event.logical_key.to_text()
+                && !text.is_empty()
+                && text.chars().all(|c| !c.is_control())
+            {
+                for ch in text.chars() {
+                    self.inject_frame_char(ch);
+                }
+                self.request_redraw();
+                return;
+            }
+        }
+
         // Text editing inside a focused `<input>`/`<textarea>` вЂ” same placement
         // rationale as the contenteditable branch above: without it a printable
         // key falls through to the global keybinding table, where a bare `F`
