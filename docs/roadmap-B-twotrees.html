@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-30",
  "counts": {
-  "open": 378,
-  "fixed": 505,
+  "open": 377,
+  "fixed": 506,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -8637,10 +8637,10 @@
    "debtor": false
   },
   "BUG-440": {
-   "status": "open",
+   "status": "fixed",
    "title": "**На `file://` нативная GET-отправка формы строит непригодный путь.** `method=get action=\"target.html\"` с полем `q=hello` даёт `NAV → \"D:/…/.tmp\\target.html?q=h…",
-   "component": "shell (`main.rs` — `ResourceBase::resolve`/`resolve_str` для `ResourceBase::File`)",
-   "date": null,
+   "component": "shell (`crates/shell/src/resource_base.rs` — `ResourceBase::resolve`/`resolve_str` для `ResourceBase::File`)",
+   "date": "2026-08-30",
    "debtor": false
   },
   "BUG-441": {
@@ -13276,6 +13276,9 @@
   "shell (`crates/shell/src/platform/audio_player.rs` — `PlatformAudioPlayer::load`), js (`crates/js/src/audio_element.rs` — опрос загрузки в `AUDIO_ELEMENT_SHIM`)": [
    "BUG-799"
   ],
+  "shell (`crates/shell/src/resource_base.rs` — `ResourceBase::resolve`/`resolve_str` для `ResourceBase::File`)": [
+   "BUG-440"
+  ],
   "shell (`main.rs::handle_click_at`, ветка `FormClickAction::SubmitForm`), js (`dom.rs` — `WEB_API_SHIM`)": [
    "BUG-437"
   ],
@@ -13287,9 +13290,6 @@
   ],
   "shell (`main.rs::render_source_to_png`) + js (`flush_canvas_updates`)": [
    "BUG-428"
-  ],
-  "shell (`main.rs` — `ResourceBase::resolve`/`resolve_str` для `ResourceBase::File`)": [
-   "BUG-440"
   ],
   "shell (`main.rs` — `about_to_wait`'s `pending_waits` drain, BUG-308's `load_failed`)": [
    "BUG-438"
