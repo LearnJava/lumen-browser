@@ -134,6 +134,9 @@ pub(crate) fn restore_js_context(
         classic_scripts,
         module_scripts,
         false, // always_runtime: страница после гибернации — не фрейм-получатель
+        // BUG-443: the restore path lays the page out afterwards, so it has no
+        // parse-time snapshot to publish either.
+        None,
     );
 
     // HTML LS §8.2.3: signal DOMContentLoaded so handlers attached during

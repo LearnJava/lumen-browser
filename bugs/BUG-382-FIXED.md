@@ -167,7 +167,7 @@ self.layout_box.as_ref()` (`main.rs:10321`, `11067`). Никакой публи�
 `run_scripts_with_dom` → images → layout), поэтому публиковать там нечего. Это
 не доставка, а отсутствие принудительного flush-а раскладки из JS
 («forced synchronous layout» в браузерах) — отдельная задача, заведена как
-[BUG-443](BUG-443-OPEN.md).
+[BUG-443](BUG-443-FIXED.md).
 
 ## Связанные
 

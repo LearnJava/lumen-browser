@@ -489,6 +489,11 @@ pub(crate) fn run_scripts_with_dom(
     // (фреймы: получатель кросс-фреймовых конвертов). Sandbox=SCRIPTS всё
     // равно побеждает — он запрещает исполнение целиком.
     always_runtime: bool,
+    // BUG-443: geometry + computed style of the document as it stands right
+    // now, pushed into the runtime before the first script line executes.
+    // `None` = the caller has no layout to offer (frame/thaw paths), which is
+    // the pre-BUG-443 behaviour: a parse-time read answers `""` / a zero rect.
+    parse_time_layout: Option<JsLayoutSnapshot>,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>) {
     // `scripts` / `module_scripts` are already resolved by the caller in
     // document order, including fetched external `<script src>` bodies (BUG-164).
@@ -541,6 +546,19 @@ pub(crate) fn run_scripts_with_dom(
                 // through the map (HTML LS В§8.1.6.2).
                 if let Some(map) = import_map {
                     rt.set_import_map(map);
+                }
+                // BUG-443: publish the parse-time layout before the first
+                // script line runs. Without it `getComputedStyle` answers `""`
+                // and `getBoundingClientRect` a zero rect for every read made
+                // during parsing — an inline `<script>` or a
+                // `DOMContentLoaded` handler, i.e. where most page code
+                // initializes. The tables are the same four
+                // `apply_loaded_page` pushes after the load completes.
+                if let Some(snap) = parse_time_layout {
+                    rt.update_layout_rects(snap.rects);
+                    rt.update_computed_styles(snap.styles);
+                    rt.update_custom_properties(snap.customs);
+                    rt.update_viewport_size(snap.viewport.0, snap.viewport.1);
                 }
                 // BUG-839: hand over the subresource loads that already
                 // finished, before the page's first script runs. The document's

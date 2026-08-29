@@ -1428,7 +1428,7 @@ the time — read dates.
   `<select>`/`<optgroup>`/`<option>` get none of step 3's synthetic boxes, and a hidden `<br>`
   still emits its feed. A node with no entry at all answers `textContent`, per step 1 —
   detached elements, and anything read from a parser-time script
-  ([BUG-443](../bugs/BUG-443-OPEN.md)).
+  ([BUG-443](../bugs/BUG-443-FIXED.md)).
 
 - **`<track>` loading and `load`/`error` ([BUG-775](../bugs/BUG-775-FIXED.md), 2026-08-24).**
   HTML LS §4.8.11.1 «start the track processing model» now runs on the JS side

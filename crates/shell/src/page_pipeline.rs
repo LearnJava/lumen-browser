@@ -309,6 +309,184 @@ pub(crate) struct LayoutSource {
     pub(crate) dynamic_css: Option<DynamicCssBase>,
 }
 
+/// Everything one page load's cascade is built from: the collected CSS text,
+/// its parsed form and the font stack the text measurer needs.
+///
+/// BUG-443: these four stretches used to sit inline in [`parse_and_layout`],
+/// *after* the document's scripts had run. They are a function now because the
+/// cascade has to exist **before** those scripts (a parse-time
+/// `getComputedStyle` must have something to read) and be rebuilt after them
+/// only if a script touched `<style>`/`<link>`.
+pub(crate) struct PageCascade {
+    /// BUG-743 rebuild base: the part of the CSS a later `<style>` cannot change.
+    pub(crate) dynamic_css: DynamicCssBase,
+    /// Per-`<link rel=stylesheet>` load outcome, for BUG-804's `load`/`error`.
+    pub(crate) link_outcomes: Vec<(NodeId, bool)>,
+    /// Parsed cascade.
+    pub(crate) sheet: lumen_css_parser::Stylesheet,
+    /// `@font-face local()` faces plus the system font index.
+    pub(crate) font_registry: lumen_font::FontRegistry,
+    /// `@font-face url()` sources not fetched yet (loaded in the background).
+    pub(crate) pending_web_fonts: Vec<PendingWebFont>,
+    /// Text measurer wired to the two above.
+    pub(crate) measurer: lumen_paint::MultiFontMeasurer,
+}
+
+/// Fetch + parse the page CSS and build the matching font stack (BUG-443).
+///
+/// Verbatim the code `parse_and_layout` used to run inline; the only change is
+/// that it can now run twice for one load (once before the scripts, once after
+/// them if they changed the stylesheet set).
+#[allow(clippy::too_many_arguments)]
+fn build_page_cascade(
+    doc: &Document,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    viewport: Size,
+    dark_mode: bool,
+    media_print: bool,
+) -> Result<PageCascade, Box<dyn Error>> {
+    let (css, dynamic_css, link_outcomes) = {
+        let _s = lumen_core::trace::span("fetch-css", "net");
+        let link_media_ctx = if media_print {
+            print_media_context(viewport, dark_mode)
+        } else {
+            screen_media_context(viewport, dark_mode)
+        };
+        // РРЅР»Р°Р№РЅРѕРІС‹Рµ <style>: РёС… `@import` СЂРµР·РѕР»РІСЏС‚СЃСЏ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ Р±Р°Р·С‹
+        // РґРѕРєСѓРјРµРЅС‚Р° (CSS-SPECS В§@import). Р’РЅРµС€РЅРёРµ <link> СЂРµР·РѕР»РІСЏС‚ СЃРѕР±СЃС‚РІРµРЅРЅС‹Рµ
+        // `@import` РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ СЃРІРѕРµРіРѕ URL РІРЅСѓС‚СЂРё load_linked_stylesheets.
+        let inline = extract_style_blocks(doc);
+        let mut css = inline_css_imports(
+            &inline,
+            base,
+            sink,
+            cookie_jar.clone(),
+            &link_media_ctx,
+            &mut std::collections::HashSet::new(),
+            0,
+        );
+        // BUG-743: РІСЃС‘, С‡С‚Рѕ РЅРµ РїСЂРёС€Р»Рѕ РёР· РёРЅР»Р°Р№РЅРѕРІС‹С… <style>, РѕС‚РєР»Р°РґС‹РІР°РµС‚СЃСЏ
+        // РѕС‚РґРµР»СЊРЅРѕ вЂ” С‚Р°Рє РїРѕР·РґРЅРёР№ РґРёРЅР°РјРёС‡РµСЃРєРёР№ <style> РїРµСЂРµСЃРѕР±РёСЂР°РµС‚ РєР°СЃРєР°Рґ Р±РµР·
+        // РµРґРёРЅРѕРіРѕ СЃРµС‚РµРІРѕРіРѕ Р·Р°РїСЂРѕСЃР°. `inline_css_imports` РІРѕР·РІСЂР°С‰Р°РµС‚
+        // `<РёРјРїРѕСЂС‚С‹> + <РёСЃС…РѕРґРЅС‹Р№ С‚РµРєСЃС‚>`, РїРѕСЌС‚РѕРјСѓ РїСЂРµС„РёРєСЃ = РІСЃС‘ РґРѕ С…РІРѕСЃС‚Р°.
+        let imports_prefix = css[..css.len() - inline.len()].to_owned();
+        let (linked, link_outcomes) = load_linked_stylesheets(
+            doc,
+            base,
+            sink,
+            cookie_jar.clone(),
+            &link_media_ctx,
+        );
+        css.push_str(&linked);
+        let dyn_css = DynamicCssBase {
+            imports_prefix,
+            linked,
+            inline_fp: inline_style_fingerprint(doc),
+        };
+        (css, dyn_css, link_outcomes)
+    };
+
+    let sheet = {
+        let _s = lumen_core::trace::span("parse-css", "parse");
+        lumen_css_parser::parse(&css)
+    };
+
+    // PH3-19: @font-face Р·Р°РіСЂСѓР·РєР° СЂР°Р·РґРµР»РµРЅР° РЅР° РґРІР° РїСЂРѕС…РѕРґР°.
+    // local()-РёСЃС‚РѕС‡РЅРёРєРё Р·Р°РіСЂСѓР¶Р°СЋС‚СЃСЏ СЃРёРЅС…СЂРѕРЅРЅРѕ (РёР· СЃРёСЃС‚РµРјРЅРѕРіРѕ РёРЅРґРµРєСЃР°, Р±С‹СЃС‚СЂРѕ).
+    // url()-РёСЃС‚РѕС‡РЅРёРєРё вЂ” С‚РѕР»СЊРєРѕ СЃРѕР±РёСЂР°РµРј РІ pending_web_fonts; С„РѕРЅРѕРІС‹Р№ РїРѕС‚РѕРє
+    // fetch+decode СЃРїР°РІРЅРёС‚СЃСЏ РІ apply_loaded_page в†’ РїРµСЂРІС‹Р№ paint РЅРµ Р¶РґС‘С‚ СЃРµС‚Рё.
+    let (font_registry, pending_web_fonts) = {
+        // PERF-12: this stretch вЂ” @font-face resolution through to the measurer's
+        // system faces below вЂ” was the single largest unnamed hole in the
+        // `--trace-nav` waterfall (114 ms of a 128 ms `navigation` on
+        // samples/page.html, against a `layout` span of 0.6 ms). It is dominated
+        // by the lazy system-font index build that PERF-11 caches.
+        let _s = lumen_core::trace::span("font-faces", "font");
+        load_font_faces(&sheet.font_faces, base, sink, cookie_jar)
+    };
+
+    let font = lumen_font::Font::parse(INTER_FONT)
+        .map_err(|e| format!("РѕС€РёР±РєР° СЂР°Р·Р±РѕСЂР° С€СЂРёС„С‚Р°: {e}"))?;
+    // РњРЅРѕРіРѕС€СЂРёС„С‚РѕРІС‹Р№ РёР·РјРµСЂРёС‚РµР»СЊ: Inter РєР°Рє fallback + СѓР¶Рµ Р·Р°РіСЂСѓР¶РµРЅРЅС‹Рµ local()-СЃРµРјСЊРё.
+    // url()-СЃРµРјСЊРё РґРѕР±Р°РІСЏС‚СЃСЏ РїРѕР·Р¶Рµ С‡РµСЂРµР· FontLoaded + relayout_with_web_fonts.
+    let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
+        .map_err(|e| format!("РѕС€РёР±РєР° РјРµС‚СЂРёРє С€СЂРёС„С‚Р°: {e}"))?;
+    // BUG-128: СЃРёСЃС‚РµРјРЅС‹Рµ face-С‹ вЂ” С‚Рµ Р¶Рµ, С‡С‚Рѕ РІС‹Р±РµСЂРµС‚ СЂРµРЅРґРµСЂ.
+    {
+        // PERF-11/PERF-12: `system_font_faces()` is where the lazy system font
+        // index is built on first use вЂ” hundreds of files parsed, once per
+        // process. Named separately from `font-faces` so the trace attributes
+        // the cost to the index rather than to @font-face handling.
+        let _s = lumen_core::trace::span("system-fonts", "font");
+        measurer.set_system_faces(system_font_faces());
+    }
+    for rule in &sheet.font_faces {
+        if !rule.family.is_empty()
+            && let Some(bytes) = font_registry.face_bytes_for_family(&rule.family)
+        {
+            // CSS Fonts L4 В§5.1: РїРµСЂРµРґР°С‘Рј unicode-range РёР· @font-face РґРµСЃРєСЂРёРїС‚РѕСЂР°.
+            let ranges = rule.unicode_range.as_deref()
+                .map(lumen_font::parse_unicode_ranges)
+                .unwrap_or_default();
+            measurer.register_family_with_ranges(&rule.family, bytes, ranges);
+        }
+    }
+
+    Ok(PageCascade { dynamic_css, link_outcomes, sheet, font_registry, pending_web_fonts, measurer })
+}
+
+/// What a JS runtime has to be handed before it can answer `getComputedStyle`,
+/// `getBoundingClientRect`, `offsetWidth` or `window.innerHeight` (BUG-443).
+///
+/// The same four tables `apply_loaded_page`/`relayout_page` push after every
+/// layout; collected here so the *first* one can be pushed before the page's
+/// own scripts run instead of long after them.
+pub(crate) struct JsLayoutSnapshot {
+    /// `node index -> [x, y, w, h]` border boxes.
+    pub(crate) rects: std::collections::HashMap<u32, [f32; 4]>,
+    /// `node index -> property -> serialized computed value`.
+    pub(crate) styles: std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
+    /// `node index -> custom property -> value`.
+    pub(crate) customs:
+        std::collections::HashMap<u32, Arc<std::collections::HashMap<String, String>>>,
+    /// Viewport the layout was run at, for `window.innerWidth`/`innerHeight`.
+    pub(crate) viewport: (f32, f32),
+}
+
+/// Snapshot a laid-out tree into the tables the JS runtime reads (BUG-443).
+pub(crate) fn collect_js_layout_snapshot(root: &LayoutBox, viewport: Size) -> JsLayoutSnapshot {
+    JsLayoutSnapshot {
+        rects: lumen_layout::collect_layout_rects(root),
+        styles: lumen_layout::collect_computed_styles(root),
+        customs: lumen_layout::collect_custom_properties(root),
+        viewport: (viewport.width, viewport.height),
+    }
+}
+
+/// One layout pass with BUG-270's per-pass `print` media flag bracketed.
+fn layout_page(
+    doc: &Document,
+    sheet: &lumen_css_parser::Stylesheet,
+    measurer: &lumen_paint::MultiFontMeasurer,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    media_print: bool,
+) -> LayoutBox {
+    // BUG-270: РїРµС‡Р°С‚СЊ РІ PDF С„РёР»СЊС‚СЂСѓРµС‚ РєР°СЃРєР°Рґ РїРѕ media_type="print" С‡РµСЂРµР·
+    // sticky thread-local. Р¤Р»Р°Рі per-pass, РїРѕСЌС‚РѕРјСѓ СЃР±СЂР°СЃС‹РІР°РµРј СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ layout,
+    // С‡С‚РѕР±С‹ РїРѕСЃР»РµРґСѓСЋС‰РёРµ СЌРєСЂР°РЅРЅС‹Рµ РїСЂРѕС…РѕРґС‹ РЅР° СЌС‚РѕРј Р¶Рµ РїРѕС‚РѕРєРµ РЅРµ РЅР°СЃР»РµРґРѕРІР°Р»Рё print.
+    lumen_layout::set_print_media(media_print);
+    let out = {
+        let _s = lumen_core::trace::span("layout", "layout");
+        lumen_layout::layout_measured_hyp(doc, sheet, viewport, measurer, hp, dark_mode)
+    };
+    lumen_layout::set_print_media(false);
+    out
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
 pub(crate) fn parse_and_layout(
@@ -398,6 +576,49 @@ pub(crate) fn parse_and_layout(
             resolve_script_sources(&module_items, base, sink, cookie_jar.clone()),
         )
     };
+    // BUG-443: the cascade is built BEFORE the page's scripts run, and so is the
+    // first layout, because code executing during parsing вЂ” an inline
+    // `<script>`, a `DOMContentLoaded` handler вЂ” is entitled to read geometry
+    // and computed style. Until now those phases sat after `run_scripts_with_dom`,
+    // so every such read answered `""` / a zero rect. HTML LS В§4.12.1 makes a
+    // classic script wait for pending stylesheets anyway, so building the
+    // cascade first is the spec order, not just a convenience.
+    //
+    // CSS Selectors L4 В§9.6 `:target`: set current target from the URL fragment
+    // so the matcher has the correct target_id before that first cascade.
+    let page_fragment = if let ResourceBase::Url(u) = base {
+        lumen_core::url::Url::parse(u)
+            .ok()
+            .and_then(|u| u.fragment().map(str::to_owned))
+    } else {
+        None
+    };
+    doc.set_target(page_fragment.as_deref());
+    let mut cascade = build_page_cascade(
+        &doc, base, sink, cookie_jar.clone(), viewport, dark_mode, media_print,
+    )?;
+    // Fingerprints of the two stylesheet sources, so the rebuild below can tell
+    // whether the scripts touched either. Cheap: two tree walks, no fetching.
+    let css_sources_before = (inline_style_fingerprint(&doc), stylesheet_link_fingerprint(&doc));
+
+    // The pre-script layout exists only to be read by scripts, so a page with
+    // none pays nothing for it. Its geometry is what the document has *now*:
+    // no images decoded yet, no web fonts registered вЂ” exactly what a real
+    // browser answers for a forced layout at this point.
+    let parse_time_snapshot = if classic_scripts.is_empty()
+        && module_scripts.is_empty()
+        && ext_scripts.is_empty()
+    {
+        None
+    } else {
+        Some(collect_js_layout_snapshot(
+            &layout_page(
+                &doc, &cascade.sheet, &cascade.measurer, viewport, hp, dark_mode, media_print,
+            ),
+            viewport,
+        ))
+    };
+
     let run_scripts_span = lumen_core::trace::span("run-scripts", "script");
     // BUG-480 СЃСЂРµР· 1: РєР»РѕРЅС‹ РїСЂРѕРІР°Р№РґРµСЂРѕРІ/С…СЂР°РЅРёР»РёС‰ РґР»СЏ sub-РґРѕРєСѓРјРµРЅС‚РѕРІ <iframe> вЂ”
     // РѕСЃРЅРѕРІРЅС‹Рµ СѓС…РѕРґСЏС‚ РІ run_scripts_with_dom РїРѕ Р·РЅР°С‡РµРЅРёСЋ.
@@ -444,8 +665,52 @@ pub(crate) fn parse_and_layout(
         classic_scripts,
         module_scripts,
         false,
+        parse_time_snapshot,
     );
     drop(run_scripts_span);
+
+    // BUG-443: the scripts have had their turn at the DOM, so the cascade and
+    // the geometry a `DOMContentLoaded` handler is about to read are re-derived
+    // here. The CSS is only refetched if a script actually touched `<style>` or
+    // `<link>` вЂ” otherwise the pre-script cascade is reused verbatim, which is
+    // what keeps this one network pass per load, as before.
+    let scripts_changed_css = {
+        let d = doc_arc.lock().unwrap();
+        (inline_style_fingerprint(&d), stylesheet_link_fingerprint(&d)) != css_sources_before
+    };
+    if scripts_changed_css {
+        let d = doc_arc.lock().unwrap();
+        cascade = build_page_cascade(
+            &d, base, sink, cookie_jar.clone(), viewport, dark_mode, media_print,
+        )?;
+    }
+    #[cfg(feature = "v8")]
+    if let Some(js) = &js_ctx {
+        // Nothing to re-derive if the scripts changed neither the cascade nor
+        // the tree: the snapshot pushed before they ran is still current, and
+        // this is the one place a whole layout pass can be skipped. The flag is
+        // only *read* here вЂ” `take_dom_dirty` would swallow the relayout the
+        // shell schedules for itself after the load.
+        let dom_touched = js
+            .dom_dirty_flag()
+            .is_none_or(|f| f.load(std::sync::atomic::Ordering::Relaxed));
+        if scripts_changed_css || dom_touched {
+            let snapshot = {
+                let d = doc_arc.lock().unwrap();
+                collect_js_layout_snapshot(
+                    &layout_page(
+                        &d, &cascade.sheet, &cascade.measurer, viewport, hp, dark_mode, media_print,
+                    ),
+                    viewport,
+                )
+            };
+            js.update_layout_rects(snapshot.rects);
+            js.update_computed_styles(snapshot.styles);
+            js.update_custom_properties(snapshot.customs);
+            js.update_viewport_size(snapshot.viewport.0, snapshot.viewport.1);
+        }
+    }
+
     // HTML LS В§8.2.3 вЂ” after HTML parse + inline scripts: readyState в†’ "interactive"
     // + DOMContentLoaded event. Fires before images/fonts are decoded.
     #[cfg(feature = "v8")]
@@ -453,18 +718,8 @@ pub(crate) fn parse_and_layout(
         js.notify_dom_content_loaded();
     }
 
-    // CSS Selectors L4 В§9.6 `:target`: set current target from URL fragment so
-    // the matcher has the correct target_id before style cascade in layout.
-    let page_fragment = if let ResourceBase::Url(u) = base {
-        lumen_core::url::Url::parse(u)
-            .ok()
-            .and_then(|u| u.fragment().map(str::to_owned))
-    } else {
-        None
-    };
     {
-        let mut d = doc_arc.lock().unwrap();
-        d.set_target(page_fragment.as_deref());
+        let d = doc_arc.lock().unwrap();
         // Р“РµР№С‚ РѕС‚РїСЂР°РІРєРё С„РѕСЂРј: Phase 0 вЂ” top-level РґРѕРєСѓРјРµРЅС‚ РЅРµ sandboxed.
         check_form_gate(&d, lumen_core::SandboxFlags::empty());
         // Р“РµР№С‚ РЅР°РІРёРіР°С†РёРё: Phase 0 вЂ” top-level РґРѕРєСѓРјРµРЅС‚ РЅРµ sandboxed.
@@ -536,48 +791,12 @@ pub(crate) fn parse_and_layout(
         }
     }
 
-    // Р’СЃС‚СЂРѕРµРЅРЅС‹Рµ <style> + РІРЅРµС€РЅРёРµ <link rel=stylesheet>.
-    let (css, dynamic_css, link_outcomes) = {
-        let _s = lumen_core::trace::span("fetch-css", "net");
-        let d = doc_arc.lock().unwrap();
-        let link_media_ctx = if media_print {
-            print_media_context(viewport, dark_mode)
-        } else {
-            screen_media_context(viewport, dark_mode)
-        };
-        // РРЅР»Р°Р№РЅРѕРІС‹Рµ <style>: РёС… `@import` СЂРµР·РѕР»РІСЏС‚СЃСЏ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ Р±Р°Р·С‹
-        // РґРѕРєСѓРјРµРЅС‚Р° (CSS-SPECS В§@import). Р’РЅРµС€РЅРёРµ <link> СЂРµР·РѕР»РІСЏС‚ СЃРѕР±СЃС‚РІРµРЅРЅС‹Рµ
-        // `@import` РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ СЃРІРѕРµРіРѕ URL РІРЅСѓС‚СЂРё load_linked_stylesheets.
-        let inline = extract_style_blocks(&d);
-        let mut css = inline_css_imports(
-            &inline,
-            base,
-            sink,
-            cookie_jar.clone(),
-            &link_media_ctx,
-            &mut std::collections::HashSet::new(),
-            0,
-        );
-        // BUG-743: РІСЃС‘, С‡С‚Рѕ РЅРµ РїСЂРёС€Р»Рѕ РёР· РёРЅР»Р°Р№РЅРѕРІС‹С… <style>, РѕС‚РєР»Р°РґС‹РІР°РµС‚СЃСЏ
-        // РѕС‚РґРµР»СЊРЅРѕ вЂ” С‚Р°Рє РїРѕР·РґРЅРёР№ РґРёРЅР°РјРёС‡РµСЃРєРёР№ <style> РїРµСЂРµСЃРѕР±РёСЂР°РµС‚ РєР°СЃРєР°Рґ Р±РµР·
-        // РµРґРёРЅРѕРіРѕ СЃРµС‚РµРІРѕРіРѕ Р·Р°РїСЂРѕСЃР°. `inline_css_imports` РІРѕР·РІСЂР°С‰Р°РµС‚
-        // `<РёРјРїРѕСЂС‚С‹> + <РёСЃС…РѕРґРЅС‹Р№ С‚РµРєСЃС‚>`, РїРѕСЌС‚РѕРјСѓ РїСЂРµС„РёРєСЃ = РІСЃС‘ РґРѕ С…РІРѕСЃС‚Р°.
-        let imports_prefix = css[..css.len() - inline.len()].to_owned();
-        let (linked, link_outcomes) = load_linked_stylesheets(
-            &d,
-            base,
-            sink,
-            cookie_jar.clone(),
-            &link_media_ctx,
-        );
-        css.push_str(&linked);
-        let dyn_css = DynamicCssBase {
-            imports_prefix,
-            linked,
-            inline_fp: inline_style_fingerprint(&d),
-        };
-        (css, dyn_css, link_outcomes)
-    };
+    // BUG-443: the cascade was collected before the scripts ran (and rebuilt
+    // right after them if they touched `<style>`/`<link>`), so there is nothing
+    // left to fetch or parse here — only to hand out.
+    let PageCascade {
+        dynamic_css, link_outcomes, sheet, font_registry, pending_web_fonts, measurer,
+    } = cascade;
 
     // BUG-804: HTML LS В§4.6.7 В«process the linked resourceВ» вЂ” РєР°Р¶РґС‹Р№
     // `<link rel=stylesheet>` РѕР±СЏР·Р°РЅ СЃРѕРѕР±С‰РёС‚СЊ СЃС‚СЂР°РЅРёС†Рµ `load` РёР»Рё `error`.
@@ -604,24 +823,6 @@ pub(crate) fn parse_and_layout(
         js.eval_js(&arg);
     }
 
-    let sheet = {
-        let _s = lumen_core::trace::span("parse-css", "parse");
-        lumen_css_parser::parse(&css)
-    };
-
-    // PH3-19: @font-face Р·Р°РіСЂСѓР·РєР° СЂР°Р·РґРµР»РµРЅР° РЅР° РґРІР° РїСЂРѕС…РѕРґР°.
-    // local()-РёСЃС‚РѕС‡РЅРёРєРё Р·Р°РіСЂСѓР¶Р°СЋС‚СЃСЏ СЃРёРЅС…СЂРѕРЅРЅРѕ (РёР· СЃРёСЃС‚РµРјРЅРѕРіРѕ РёРЅРґРµРєСЃР°, Р±С‹СЃС‚СЂРѕ).
-    // url()-РёСЃС‚РѕС‡РЅРёРєРё вЂ” С‚РѕР»СЊРєРѕ СЃРѕР±РёСЂР°РµРј РІ pending_web_fonts; С„РѕРЅРѕРІС‹Р№ РїРѕС‚РѕРє
-    // fetch+decode СЃРїР°РІРЅРёС‚СЃСЏ РІ apply_loaded_page в†’ РїРµСЂРІС‹Р№ paint РЅРµ Р¶РґС‘С‚ СЃРµС‚Рё.
-    let (font_registry, pending_web_fonts) = {
-        // PERF-12: this stretch вЂ” @font-face resolution through to the measurer's
-        // system faces below вЂ” was the single largest unnamed hole in the
-        // `--trace-nav` waterfall (114 ms of a 128 ms `navigation` on
-        // samples/page.html, against a `layout` span of 0.6 ms). It is dominated
-        // by the lazy system-font index build that PERF-11 caches.
-        let _s = lumen_core::trace::span("font-faces", "font");
-        load_font_faces(&sheet.font_faces, base, sink, cookie_jar.clone())
-    };
 
     // Populate document.fonts with FontFace objects from @font-face rules.
     // local() вЂ” immediately Loaded; url() вЂ” Loading (Р±СѓРґРµС‚ Loaded РїРѕ FontLoaded).
@@ -641,44 +842,14 @@ pub(crate) fn parse_and_layout(
         }
     }
 
-    let font = lumen_font::Font::parse(INTER_FONT)
-        .map_err(|e| format!("РѕС€РёР±РєР° СЂР°Р·Р±РѕСЂР° С€СЂРёС„С‚Р°: {e}"))?;
-    // РњРЅРѕРіРѕС€СЂРёС„С‚РѕРІС‹Р№ РёР·РјРµСЂРёС‚РµР»СЊ: Inter РєР°Рє fallback + СѓР¶Рµ Р·Р°РіСЂСѓР¶РµРЅРЅС‹Рµ local()-СЃРµРјСЊРё.
-    // url()-СЃРµРјСЊРё РґРѕР±Р°РІСЏС‚СЃСЏ РїРѕР·Р¶Рµ С‡РµСЂРµР· FontLoaded + relayout_with_web_fonts.
-    let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
-        .map_err(|e| format!("РѕС€РёР±РєР° РјРµС‚СЂРёРє С€СЂРёС„С‚Р°: {e}"))?;
-    // BUG-128: СЃРёСЃС‚РµРјРЅС‹Рµ face-С‹ вЂ” С‚Рµ Р¶Рµ, С‡С‚Рѕ РІС‹Р±РµСЂРµС‚ СЂРµРЅРґРµСЂ.
-    {
-        // PERF-11/PERF-12: `system_font_faces()` is where the lazy system font
-        // index is built on first use вЂ” hundreds of files parsed, once per
-        // process. Named separately from `font-faces` so the trace attributes
-        // the cost to the index rather than to @font-face handling.
-        let _s = lumen_core::trace::span("system-fonts", "font");
-        measurer.set_system_faces(system_font_faces());
-    }
-    for rule in &sheet.font_faces {
-        if !rule.family.is_empty()
-            && let Some(bytes) = font_registry.face_bytes_for_family(&rule.family)
-        {
-            // CSS Fonts L4 В§5.1: РїРµСЂРµРґР°С‘Рј unicode-range РёР· @font-face РґРµСЃРєСЂРёРїС‚РѕСЂР°.
-            let ranges = rule.unicode_range.as_deref()
-                .map(lumen_font::parse_unicode_ranges)
-                .unwrap_or_default();
-            measurer.register_family_with_ranges(&rule.family, bytes, ranges);
-        }
-    }
     let font_provider = Arc::new(font_registry);
 
-    // BUG-270: РїРµС‡Р°С‚СЊ РІ PDF С„РёР»СЊС‚СЂСѓРµС‚ РєР°СЃРєР°Рґ РїРѕ media_type="print" С‡РµСЂРµР·
-    // sticky thread-local. Р¤Р»Р°Рі per-pass, РїРѕСЌС‚РѕРјСѓ СЃР±СЂР°СЃС‹РІР°РµРј СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ layout,
-    // С‡С‚РѕР±С‹ РїРѕСЃР»РµРґСѓСЋС‰РёРµ СЌРєСЂР°РЅРЅС‹Рµ РїСЂРѕС…РѕРґС‹ РЅР° СЌС‚РѕРј Р¶Рµ РїРѕС‚РѕРєРµ РЅРµ РЅР°СЃР»РµРґРѕРІР°Р»Рё print.
-    lumen_layout::set_print_media(media_print);
+    // BUG-443: same helper the pre-script layout uses, so the print-media
+    // bracket (BUG-270) cannot drift between the two passes.
     let layout = {
-        let _s = lumen_core::trace::span("layout", "layout");
         let d = doc_arc.lock().unwrap();
-        lumen_layout::layout_measured_hyp(&d, &sheet, viewport, &measurer, hp, dark_mode)
+        layout_page(&d, &sheet, &measurer, viewport, hp, dark_mode, media_print)
     };
-    lumen_layout::set_print_media(false);
 
     // BUG-480 срез 13: размер host-бокса каждого `<iframe>` известен только
     // теперь — пересчитываем layout под-документов под него (срез 12 считал их
