@@ -1211,6 +1211,52 @@ fn navigating_a_frame_drops_its_whole_subtree_and_spares_siblings() {
     assert_eq!(frames[1].host_src, "other.html", "сосед страницы не тронут");
 }
 
+// ── фон под-документа на весь вьюпорт (BUG-480 срез 21) ─────────────────────
+
+/// Содержимое короче вьюпорта фрейма — под ним всё равно должен лежать фон
+/// ребёнка (`propagate_canvas_background` переносит его на `<html>`-бокс), а
+/// не фон СТРАНИЦЫ, который иначе просвечивал бы сквозь остаток фрейма
+/// (residual среза 14, найденный пробой среза 19). Первая команда списка —
+/// заливка размером в весь вьюпорт хэндла, а не в короткий контентный бокс.
+#[test]
+fn rebuilt_frame_content_backs_short_content_with_full_viewport_fill() {
+    let child = r#"<html><body style="margin:0;background:rgb(0,128,0)">
+         <div style="height:20px"></div>
+       </body></html>"#;
+    let (page_layout, handle) = live_frame_with_child(child);
+    let viewport = handle.viewport;
+    let mut frames = vec![handle];
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+
+    match frames[0].content_dl.first() {
+        Some(lumen_paint::DisplayCommand::FillRect { rect, color }) => {
+            assert_eq!((rect.width, rect.height), (viewport.width, viewport.height),
+                "подложка обязана закрыть весь вьюпорт фрейма, а не только контентный бокс body");
+            assert_eq!((color.r, color.g, color.b), (0, 128, 0), "цвет — фон ребёнка, а не UA-дефолт");
+        }
+        other => panic!("первой командой списка ожидалась подложка-заливка, получено {other:?}"),
+    }
+}
+
+/// У ребёнка нет вовсе никакого фона — подложка всё равно есть и белая, тот
+/// же UA-дефолт, которым [`lumen_layout::canvas_background_color`]
+/// документирует своё `None` для страницы.
+#[test]
+fn rebuilt_frame_content_defaults_backdrop_to_white_without_child_background() {
+    let (page_layout, handle) = live_frame_with_child(
+        r#"<html><body style="margin:0"><div style="height:20px"></div></body></html>"#,
+    );
+    let mut frames = vec![handle];
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+
+    match frames[0].content_dl.first() {
+        Some(lumen_paint::DisplayCommand::FillRect { color, .. }) => {
+            assert_eq!((color.r, color.g, color.b), (255, 255, 255), "без фона ребёнка — белый UA-дефолт");
+        }
+        other => panic!("первой командой списка ожидалась подложка-заливка, получено {other:?}"),
+    }
+}
+
 // в”Ђв”Ђ PH1-2: Progressive streaming pipeline в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 // Compile-time: streaming throttle must be в‰¤16 ms (~60 Hz).
