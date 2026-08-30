@@ -2625,6 +2625,48 @@ function _lumen_make_canvas_gradient(gid) {
     };
 }
 
+// WebIDL `[EnforceRange] long` (canvas §4.12.5.1 declares every ImageData
+// coordinate that way): ToNumber, reject anything not finite, truncate toward
+// zero, reject outside the 32-bit signed range. Anything looser silently
+// answers a question the page did not ask — `getImageData(NaN, 0, 1, 1)` must
+// throw, not read the origin (BUG-448).
+function _lumen_canvas_long(value, method, argName) {
+    var n = Number(value);
+    if (!isFinite(n)) {
+        throw new TypeError(method + ": " + argName + " is not a finite number");
+    }
+    n = n < 0 ? Math.ceil(n) : Math.floor(n);
+    if (n < -2147483648 || n > 2147483647) {
+        throw new TypeError(method + ": " + argName + " is out of range for a long");
+    }
+    return n;
+}
+
+// Normalizes a rectangle whose width/height may be negative, the way the
+// canvas spec's "get/put image data" steps do: a negative extent flips the
+// rectangle about its origin rather than describing an empty area.
+function _lumen_canvas_normalize_rect(x, y, w, h) {
+    if (w < 0) { x += w; w = -w; }
+    if (h < 0) { y += h; h = -h; }
+    // Flipping can push the origin past the 32-bit range the binding reads it
+    // as; clamping keeps a wrap-around from turning a wholly off-canvas rect
+    // into a read of real pixels. Any rect that far out is empty either way,
+    // the canvas being at most a few thousand pixels wide.
+    if (x < -2147483648) { x = -2147483648; }
+    if (y < -2147483648) { y = -2147483648; }
+    return { x: x, y: y, w: w, h: h };
+}
+
+// Builds the ImageData returned by getImageData/createImageData. `bytes` is
+// the native RGBA8 payload (a plain array) or null for a blank one; a payload
+// of the wrong length means the native could not serve the request, and the
+// spec's answer there is transparent black, not a short buffer.
+function _lumen_make_image_data(w, h, bytes) {
+    var arr = new Uint8ClampedArray(w * h * 4);
+    if (bytes && bytes.length === arr.length) { arr.set(bytes); }
+    return { width: w, height: h, data: arr, colorSpace: 'srgb' };
+}
+
 // Builds a CanvasRenderingContext2D backed by the native _lumen_canvas2d_* bindings
 // (lumen_canvas::Context2D), keyed by the canvas element's node index `nid`.
 // Drawing methods forward to the native rasterizer; the shell uploads the pixel
@@ -2720,17 +2762,22 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
         transform: function(a, b, c, d, e, f) { _lumen_canvas2d_transform(nid, +a, +b, +c, +d, +e, +f); },
         setTransform: function(a, b, c, d, e, f) { _lumen_canvas2d_set_transform(nid, +a, +b, +c, +d, +e, +f); },
         resetTransform: function() { _lumen_canvas2d_reset_transform(nid); },
-        getImageData: function(x, y, sw, sh) {
-            var raw = _lumen_canvas2d_get_image_data(nid);
-            if (!raw) { return { width: sw|0, height: sh|0, data: new Uint8ClampedArray((sw|0) * (sh|0) * 4) }; }
-            var comma1 = raw.indexOf(','), comma2 = raw.indexOf(',', comma1 + 1);
-            var w = parseInt(raw.substring(0, comma1), 10);
-            var h = parseInt(raw.substring(comma1 + 1, comma2), 10);
-            var hex = raw.substring(comma2 + 1);
-            var len = hex.length >> 1;
-            var arr = new Uint8ClampedArray(len);
-            for (var i = 0; i < len; i++) { arr[i] = parseInt(hex.substr(i * 2, 2), 16); }
-            return { width: w, height: h, data: arr };
+        getImageData: function(sx, sy, sw, sh) {
+            if (arguments.length < 4) {
+                throw new TypeError("getImageData: 4 arguments required, but only " +
+                    arguments.length + " present");
+            }
+            var x = _lumen_canvas_long(sx, 'getImageData', 'sx');
+            var y = _lumen_canvas_long(sy, 'getImageData', 'sy');
+            var w = _lumen_canvas_long(sw, 'getImageData', 'sw');
+            var h = _lumen_canvas_long(sh, 'getImageData', 'sh');
+            if (w === 0 || h === 0) {
+                throw new DOMException(
+                    'The source width and height must be non-zero', 'IndexSizeError');
+            }
+            var r = _lumen_canvas_normalize_rect(x, y, w, h);
+            return _lumen_make_image_data(r.w, r.h,
+                _lumen_canvas2d_get_image_data(nid, r.x, r.y, r.w, r.h));
         },
         // Remaining stubs (not yet implemented)
         clip: function(path) {
@@ -2740,12 +2787,41 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
                 _lumen_canvas2d_clip(nid);
             }
         },
-        putImageData: function(imageData, dx, dy) {
-            if (!imageData || !imageData.data) { return; }
-            var d = imageData.data, n = d.length;
+        putImageData: function(imageData, dx, dy, dirtyX, dirtyY, dirtyWidth, dirtyHeight) {
+            if (!imageData || !imageData.data) {
+                throw new TypeError("putImageData: argument 1 is not an ImageData");
+            }
+            var sw = imageData.width | 0, sh = imageData.height | 0;
+            var x = _lumen_canvas_long(dx, 'putImageData', 'dx');
+            var y = _lumen_canvas_long(dy, 'putImageData', 'dy');
+            // The whole source is the default dirty rectangle; the 7-argument
+            // form narrows it (canvas §4.12.5.1.10) and used to be dropped on
+            // the floor here (BUG-448).
+            var dr = { x: 0, y: 0, w: sw, h: sh };
+            if (arguments.length > 3) {
+                dr = _lumen_canvas_normalize_rect(
+                    _lumen_canvas_long(dirtyX, 'putImageData', 'dirtyX'),
+                    _lumen_canvas_long(dirtyY, 'putImageData', 'dirtyY'),
+                    _lumen_canvas_long(dirtyWidth, 'putImageData', 'dirtyWidth'),
+                    _lumen_canvas_long(dirtyHeight, 'putImageData', 'dirtyHeight'));
+            }
+            // Clip the dirty rectangle to the source; only that part crosses
+            // the binding, so a small dirty rect costs a small payload.
+            if (dr.x < 0) { dr.w += dr.x; dr.x = 0; }
+            if (dr.y < 0) { dr.h += dr.y; dr.y = 0; }
+            if (dr.x + dr.w > sw) { dr.w = sw - dr.x; }
+            if (dr.y + dr.h > sh) { dr.h = sh - dr.y; }
+            if (dr.w <= 0 || dr.h <= 0) { return; }
+            var d = imageData.data;
             var H = '0123456789abcdef', hex = '';
-            for (var i = 0; i < n; i++) { var b = d[i] & 255; hex += H[b >> 4] + H[b & 15]; }
-            _lumen_canvas2d_put_image_data(nid, hex, imageData.width | 0, imageData.height | 0, dx | 0, dy | 0);
+            for (var row = 0; row < dr.h; row++) {
+                var base = ((dr.y + row) * sw + dr.x) * 4;
+                for (var i = 0; i < dr.w * 4; i++) {
+                    var b = d[base + i] & 255;
+                    hex += H[b >> 4] + H[b & 15];
+                }
+            }
+            _lumen_canvas2d_put_image_data(nid, hex, dr.w, dr.h, x + dr.x, y + dr.y);
         },
         // drawImage forms: (src,dx,dy) | (src,dx,dy,dw,dh) | (src,sx,sy,sw,sh,dx,dy,dw,dh).
         // Source may be a <canvas>/OffscreenCanvas (canvas bitmap store, via __nid__)
@@ -2820,7 +2896,25 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
             if (!pid) { return null; }
             return { __patid__: pid };
         },
-        createImageData: function(w, h) { return { width: w|0, height: h|0, data: new Uint8ClampedArray((w|0) * (h|0) * 4) }; },
+        createImageData: function(w, h) {
+            // Two overloads: (sw, sh) and the copy form (imageData), which
+            // takes the argument's dimensions and returns transparent black.
+            // The copy form used to fall through to `0|0` and hand back a 0×0
+            // buffer (BUG-448).
+            if (arguments.length === 1) {
+                if (!w || typeof w.width !== 'number' || typeof w.height !== 'number') {
+                    throw new TypeError("createImageData: argument 1 is not an ImageData");
+                }
+                return _lumen_make_image_data(w.width | 0, w.height | 0, null);
+            }
+            var sw = _lumen_canvas_long(w, 'createImageData', 'sw');
+            var sh = _lumen_canvas_long(h, 'createImageData', 'sh');
+            if (sw === 0 || sh === 0) {
+                throw new DOMException(
+                    'The source width and height must be non-zero', 'IndexSizeError');
+            }
+            return _lumen_make_image_data(Math.abs(sw), Math.abs(sh), null);
+        },
     };
     // Stub appearance properties accepted but not yet wired.
     var _stubProps = ['direction','lineDashOffset','imageSmoothingEnabled','filter'];
