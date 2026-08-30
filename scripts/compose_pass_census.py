@@ -72,6 +72,12 @@ OVERLAY_RE = re.compile(r'overlay: (\d+) cmds digest ([0-9a-f]+) changed (\d+)/(
 ARM_SETS = {
     'present': [('fifo', {}), ('immediate', {'LUMEN_PRESENT': 'immediate'})],
     'overlay': [('штатный', {}), ('без overlay', {'LUMEN_NO_COMPOSE_OVERLAY': '1'})],
+    # BUG-405 срез 41: реализация п.76 — блит retained-текстуры «overlay
+    # минус горячая команда» вместо полной перерисовки. В отличие от
+    # `overlay` выше это плечо пиксельно ВЕРНО в обе стороны (гейт —
+    # `overlay_cache_matches_full_overlay_redraw` в renderer.rs), так что
+    # разница `ops`/`draw` — не диагностика, а сам измеряемый выигрыш.
+    'overlay-cache': [('штатный', {}), ('без кэша', {'LUMEN_NO_OVERLAY_CACHE': '1'})],
 }
 
 # Статьи пасса в порядке печати рендерером.
