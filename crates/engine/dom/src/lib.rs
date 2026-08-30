@@ -1007,6 +1007,25 @@ pub struct Document {
     /// Serialised: the text a user typed must survive tab hibernation.
     #[serde(default)]
     dirty_values: HashMap<NodeId, String>,
+    /// Runtime («dirty») checkedness of a checkbox/radio `<input>`, keyed by
+    /// its `NodeId` — the same shape as [`Document::dirty_values`], for the
+    /// same reason (BUG-444). HTML LS §4.10.5.5 distinguishes *checkedness*
+    /// (current state, toggled by the user or a script) from the `checked`
+    /// content attribute (the default `defaultChecked` reads and
+    /// `form.reset()` restores): once anything sets checkedness, the two
+    /// diverge for good via the control's "dirty checkedness flag".
+    ///
+    /// An entry here **is** that flag: present → this map is the current
+    /// checkedness; absent → it falls back to the `checked` attribute, which
+    /// is exactly the spec rule for a content-attribute change reaching a
+    /// non-dirty control. [`Document::control_checked`] is the one place that
+    /// reads current checkedness (`:checked`/`:indeterminate` matching,
+    /// checkbox painting, form submission, constraint validation).
+    ///
+    /// Serialised: matches `dirty_values` — a checkbox a user (un)ticked must
+    /// stay that way across tab hibernation.
+    #[serde(default)]
+    dirty_checkedness: HashMap<NodeId, bool>,
     /// `document.designMode` (HTML LS §6.6.3): when `true`, the whole document
     /// becomes an editing host even though no element carries an explicit
     /// `contenteditable` attribute — see [`find_editing_host`].
@@ -1074,6 +1093,7 @@ impl Document {
             viewport_meta: None,
             pointer_captures: HashMap::new(),
             dirty_values: HashMap::new(),
+            dirty_checkedness: HashMap::new(),
             design_mode: false,
             character_set: default_character_set(),
             content_type: default_content_type(),
@@ -1202,6 +1222,43 @@ impl Document {
     /// what `form.reset()` does to every control it owns (HTML LS §4.10.21.3).
     pub fn clear_control_value(&mut self, id: NodeId) {
         self.dirty_values.remove(&id);
+    }
+
+    /// The control's **current** checkedness (HTML LS §4.10.5.5): the dirty
+    /// checkedness if the control has one, otherwise the default derived from
+    /// the `checked` content attribute.
+    ///
+    /// This is what `:checked`/`:indeterminate` match, what layout paints and
+    /// what form submission and constraint validation read. A non-checkbox/
+    /// radio element simply has no dirty checkedness and no `checked`
+    /// attribute, so it comes back `false` (BUG-444).
+    pub fn control_checked(&self, id: NodeId) -> bool {
+        if let Some(v) = self.dirty_checkedness.get(&id) {
+            return *v;
+        }
+        self.get(id).get_attr("checked").is_some()
+    }
+
+    /// The dirty checkedness alone, `None` when the control still tracks the
+    /// `checked` attribute.
+    pub fn dirty_checked(&self, id: NodeId) -> Option<bool> {
+        self.dirty_checkedness.get(&id).copied()
+    }
+
+    /// Set the control's checkedness and raise its dirty checkedness flag —
+    /// the single write path for a checkbox/radio click and `el.checked = …`.
+    ///
+    /// The `checked` content attribute is deliberately left untouched: it
+    /// stays the default that `defaultChecked`/`form.reset()` restore.
+    pub fn set_control_checked(&mut self, id: NodeId, checked: bool) {
+        self.dirty_checkedness.insert(id, checked);
+    }
+
+    /// Drop the control's dirty checkedness, so it falls back to the
+    /// `checked` attribute — what `form.reset()` does to every checkbox/radio
+    /// it owns (HTML LS §4.10.21.3).
+    pub fn clear_control_checked(&mut self, id: NodeId) {
+        self.dirty_checkedness.remove(&id);
     }
 
     /// Текущий target — id из URL fragment (без ведущего `#`), к которому
@@ -2138,9 +2195,10 @@ fn collect_fields_in(doc: &Document, id: NodeId, form_id: NodeId, out: &mut Vec<
                 return;
             }
             if let Some(name) = node.get_attr("name").filter(|n| !n.is_empty()) {
-                // checkbox и radio включаются только если checked.
+                // checkbox и radio включаются только если checked (текущее
+                // состояние, не только атрибут-дефолт — BUG-444).
                 if matches!(itype.as_str(), "checkbox" | "radio") {
-                    if node.get_attr("checked").is_none() {
+                    if !doc.control_checked(id) {
                         return;
                     }
                     let value = node.get_attr("value").unwrap_or("on").to_string();
@@ -2300,7 +2358,10 @@ pub fn element_validity(doc: &Document, node: NodeId) -> Option<ValidityState> {
     if node_ref.get_attr("required").is_some() {
         let missing = if is_input {
             match itype {
-                "checkbox" | "radio" => node_ref.get_attr("checked").is_none(),
+                // Current checkedness, not just the `checked` attribute
+                // default — a control the user unticked must validate on
+                // what it actually holds (BUG-444, mirrors BUG-441).
+                "checkbox" | "radio" => !doc.control_checked(node),
                 _ => doc.control_value(node).trim().is_empty(),
             }
         } else if tag == "textarea" {
@@ -4663,6 +4724,91 @@ mod tests {
         doc.set_control_value(user, "bob");
         let fields = collect_dom_form_fields(&doc, form);
         assert_eq!(fields, vec![("user".to_string(), "bob".to_string())]);
+    }
+
+    // ── Runtime («dirty») checkedness — BUG-444 ───────────────────────────────
+
+    /// Build `<form><input type=checkbox name=opt checked></form>` — the
+    /// shape the whole default-vs-current distinction turns on.
+    fn make_checkbox_form_doc() -> (Document, NodeId, NodeId) {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let cb = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(cb).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "checkbox".into() });
+            attrs.push(Attribute { name: QualName::html("name"), value: "opt".into() });
+            attrs.push(Attribute { name: QualName::html("checked"), value: String::new() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, cb);
+        (doc, form, cb)
+    }
+
+    #[test]
+    fn control_checked_falls_back_to_default_then_follows_dirty_checkedness() {
+        let (mut doc, _, cb) = make_checkbox_form_doc();
+
+        assert!(doc.control_checked(cb));
+        assert_eq!(doc.dirty_checked(cb), None);
+
+        doc.set_control_checked(cb, false);
+        assert!(!doc.control_checked(cb));
+        assert_eq!(doc.dirty_checked(cb), Some(false));
+        // The attribute keeps holding the default (`defaultChecked`) — this is
+        // the whole point of BUG-444: an unticking click must not destroy it.
+        assert!(doc.get(cb).get_attr("checked").is_some());
+
+        // `form.reset()` drops the dirty checkedness → back to the default.
+        doc.clear_control_checked(cb);
+        assert!(doc.control_checked(cb));
+        assert_eq!(doc.dirty_checked(cb), None);
+    }
+
+    /// A checkbox with no `checked` attribute defaults to unchecked, and
+    /// ticking it must not invent an attribute either.
+    #[test]
+    fn control_checked_of_unchecked_default_is_dirty_only() {
+        let (mut doc, _, cb) = make_checkbox_form_doc();
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(cb).data {
+            attrs.retain(|a| a.name.local.as_str() != "checked");
+        }
+        assert!(!doc.control_checked(cb));
+
+        doc.set_control_checked(cb, true);
+        assert!(doc.control_checked(cb));
+        assert!(doc.get(cb).get_attr("checked").is_none());
+
+        doc.clear_control_checked(cb);
+        assert!(!doc.control_checked(cb));
+    }
+
+    #[test]
+    fn collect_dom_form_fields_uses_runtime_checkedness() {
+        let (mut doc, form, cb) = make_checkbox_form_doc();
+        // Checked by attribute → submitted with the spec's default value `on`.
+        assert_eq!(collect_dom_form_fields(&doc, form), vec![("opt".to_string(), "on".to_string())]);
+
+        // Unticked at runtime → omitted, even though the attribute is still there.
+        doc.set_control_checked(cb, false);
+        assert!(collect_dom_form_fields(&doc, form).is_empty());
+
+        // …and back again.
+        doc.set_control_checked(cb, true);
+        assert_eq!(collect_dom_form_fields(&doc, form), vec![("opt".to_string(), "on".to_string())]);
+    }
+
+    #[test]
+    fn validity_reads_runtime_checkedness() {
+        let (mut doc, _, cb) = make_checkbox_form_doc();
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(cb).data {
+            attrs.push(Attribute { name: QualName::html("required"), value: String::new() });
+        }
+        // Ticked by default → satisfied.
+        assert!(!element_validity(&doc, cb).unwrap().value_missing);
+
+        // Unticked at runtime → valueMissing, on current state not the default.
+        doc.set_control_checked(cb, false);
+        assert!(element_validity(&doc, cb).unwrap().value_missing);
     }
 
     #[test]

@@ -1036,12 +1036,11 @@ impl BrowserSession for InProcessSession {
                 el.input_type(),
                 Some(lumen_dom::InputType::Checkbox) | Some(lumen_dom::InputType::Radio)
             ) {
-                let el = doc.get_mut(node);
-                if el.get_attr("checked").is_some() {
-                    remove_attr(el, "checked");
-                } else {
-                    set_attr(el, "checked", "checked");
-                }
+                // BUG-444: flip the control's runtime checkedness, not the
+                // `checked` content attribute — the attribute stays the
+                // default `defaultChecked`/`form.reset()` read.
+                let checked = doc.control_checked(node);
+                doc.set_control_checked(node, !checked);
             }
         }
         // DEVX-9: the dispatch above (and the native default action just
@@ -2219,32 +2218,6 @@ fn find_layout_box_or_ancestor<'a>(
             return Some(lb);
         }
         id = doc.get(id).parent?;
-    }
-}
-
-/// Записать/перезаписать значение атрибута элемента (element-only; no-op на
-/// текстовых/комментарных узлах). Copied from `winit_session.rs` — no shared
-/// helper module exists between the two session implementations yet.
-#[cfg(feature = "v8")]
-fn set_attr(node: &mut lumen_dom::Node, name: &str, value: &str) {
-    if let NodeData::Element { attrs, .. } = &mut node.data {
-        if let Some(a) = attrs.iter_mut().find(|a| a.name.local.eq_ignore_ascii_case(name)) {
-            a.value = value.to_string();
-        } else {
-            attrs.push(lumen_dom::Attribute {
-                name: lumen_dom::QualName::html(name),
-                value: value.to_string(),
-            });
-        }
-    }
-}
-
-/// Удалить атрибут элемента, если он присутствует. Copied from
-/// `winit_session.rs` — see `set_attr` above.
-#[cfg(feature = "v8")]
-fn remove_attr(node: &mut lumen_dom::Node, name: &str) {
-    if let NodeData::Element { attrs, .. } = &mut node.data {
-        attrs.retain(|a| !a.name.local.eq_ignore_ascii_case(name));
     }
 }
 

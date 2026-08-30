@@ -45,7 +45,7 @@ fn click_toggles_checkbox_checked() {
     // Two clicks toggle checked on then off again — assert no error and the
     // element is still resolvable (state-mutation correctness for `checked`
     // itself is covered by the `v8`-gated eval test below, which can
-    // actually read the attribute back through the DOM).
+    // actually read the current checkedness back through the DOM).
     let after = session.query("#agree").expect("query failed");
     assert_eq!(after.len(), 1);
 }
@@ -107,10 +107,14 @@ fn eval_reads_back_dom_state_after_click_and_type() {
         .type_text(&Target::Selector("#name".into()), "Lumen")
         .expect("type_text failed");
 
+    // BUG-444: a native click writes the control's runtime checkedness, not
+    // the `checked` content attribute — the attribute stays the untouched
+    // default, so `.checked` (not `getAttribute('checked')`) is what a click
+    // actually moves.
     let checked = session
-        .eval("document.getElementById('agree').getAttribute('checked')")
+        .eval("document.getElementById('agree').checked")
         .expect("eval failed");
-    assert_eq!(checked, "\"checked\"");
+    assert_eq!(checked, "true");
 
     let value = session
         .eval("document.getElementById('name').getAttribute('value')")

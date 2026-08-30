@@ -117,8 +117,8 @@ Object.getOwnPropertyNames(div).length = 134,  "click" среди них нет
   список рос вручную.
 * [BUG-441](BUG-441-FIXED.md) — `element.value` из скрипта не доезжает до
   рендера и сбора формы: та же болезнь у *текущего* значения, а не у рефлексии.
-* [BUG-444](BUG-444-OPEN.md) — заведён этой правкой: у checkedness нет
-  хранилища, отдельного от content-атрибута.
+* [BUG-444](BUG-444-FIXED.md) — заведён этой правкой: у checkedness не было
+  хранилища, отдельного от content-атрибута (починено 2026-08-30).
 
 ## Как исправлено (2026-07-29)
 
@@ -170,7 +170,8 @@ Object.getOwnPropertyNames(div).length = 134,  "click" среди них нет
 нему шелл рисует и собирает форму), поэтому первая же запись `el.checked = …`
 уничтожала значение по умолчанию — `defaultChecked` и `form.reset()` не имели
 что восстанавливать. Добавлен снимок `_lumen_default_checked`, снимаемый при
-первой записи; настоящий dirty-checkedness — [BUG-444](BUG-444-OPEN.md).
+первой записи; настоящий dirty-checkedness — [BUG-444](BUG-444-FIXED.md),
+починен 2026-08-30.
 
 **Гейт:** `crates/driver/tests/cases/idl_reflection.rs` — 13 тестов на
 **дефолтном (V8)** движке через `InProcessSession`. Это принципиально:

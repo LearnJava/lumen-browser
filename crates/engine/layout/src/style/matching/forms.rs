@@ -501,14 +501,11 @@ fn matches_placeholder_shown(doc: &Document, node: NodeId) -> bool {
     node_ref.get_attr("value").unwrap_or("").is_empty()
 }
 
-/// `:checked` (CSS Selectors L4 §10.1). Pure attribute-based matcher без
-/// runtime form-state:
-/// - `<input type=checkbox|radio>` с атрибутом `checked` (значение атрибута
-///   не имеет значения — спецификация трактует наличие как true);
+/// `:checked` (CSS Selectors L4 §10.1).
+/// - `<input type=checkbox|radio>` — текущая checkedness
+///   ([`Document::control_checked`]): dirty-состояние от клика/`el.checked =`,
+///   иначе атрибут `checked` (BUG-444);
 /// - `<option>` с атрибутом `selected`.
-///
-/// Динамически переключённый через клик/JS checkbox не отражается в
-/// DOM-атрибутах и здесь не учитывается — Phase 0 без form-state runtime.
 fn matches_checked(doc: &Document, node: NodeId) -> bool {
     let node_ref = doc.get(node);
     let NodeData::Element { name, .. } = &node_ref.data else {
@@ -520,7 +517,7 @@ fn matches_checked(doc: &Document, node: NodeId) -> bool {
             if t != "checkbox" && t != "radio" {
                 return false;
             }
-            node_ref.get_attr("checked").is_some()
+            doc.control_checked(node)
         }
         "option" => node_ref.get_attr("selected").is_some(),
         _ => false,
@@ -569,7 +566,8 @@ fn matches_indeterminate(doc: &Document, node: NodeId) -> bool {
                     if n2_name != radio_name {
                         return false;
                     }
-                    other.get_attr("checked").is_some()
+                    // Текущая checkedness, не только атрибут-дефолт (BUG-444).
+                    doc.control_checked(n)
                 })
             } else {
                 // Phase 0: checkbox indeterminate выставляется только через

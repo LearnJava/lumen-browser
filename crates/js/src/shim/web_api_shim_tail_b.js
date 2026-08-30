@@ -1117,6 +1117,11 @@ _lumen_install_reflection(HTMLInputElement.prototype, [
     ['minLength',      'minlength',      'long',   -1],
     ['size',           'size',           'ulong',  20],
     ['defaultValue',   'value',          'string'],
+    // BUG-444: `checked` itself is not plain reflection — it is the current
+    // checkedness (`Document::dirty_checkedness`, custom accessor elsewhere)
+    // — but `defaultChecked` genuinely is: the `checked` content attribute
+    // IS the default, same shape as `defaultSelected` below.
+    ['defaultChecked', 'checked',        'bool'],
     ['formAction',     'formaction',     'url'],
     ['formEnctype',    'formenctype',    'string'],
     ['formMethod',     'formmethod',     'enum',   { def: '', keys: ['get', 'post', 'dialog'] }],
@@ -1556,18 +1561,6 @@ var _lumen_option_selected = {};
 var _lumen_selection_state = {};
 // nid → indeterminate flag for checkboxes (never reflected as an attribute).
 var _lumen_indeterminate = {};
-// nid → the control's *default* checkedness, captured the first time a script
-// changes the current one. Lumen keeps checkedness in the `checked` content
-// attribute itself — that is what the shell paints and submits from — so the
-// element has no separate storage for the default and the first write would
-// otherwise destroy it, taking `defaultChecked` and `form.reset()` with it.
-// A real dirty-checkedness flag independent of the attribute is BUG-444.
-var _lumen_default_checked = {};
-function _lumen_capture_default_checked(nid) {
-    if (_lumen_default_checked[nid] === undefined) {
-        _lumen_default_checked[nid] = _lumen_has_attr(nid, 'checked');
-    }
-}
 // nid → true while an activation behaviour is running on that node, so a
 // `click()` inside a click handler for the same element cannot recurse forever
 // (label → control → label is the usual cycle).
@@ -2091,26 +2084,6 @@ function _lumen_set_text_selection(nid, start, end, direction) {
 });
 
 // ── Remaining HTMLInputElement bits that are state, not reflection ───────────
-// `defaultChecked` reflects the `checked` content attribute — but that same
-// attribute is where Lumen stores the *current* checkedness, so once a script
-// has written `checked` the attribute no longer answers for the default. Read
-// the snapshot taken at that first write instead (see `_lumen_default_checked`).
-Object.defineProperty(HTMLInputElement.prototype, 'defaultChecked', {
-    get: function() {
-        var n = _lumen_reflect_nid(this);
-        if (n === -1) return false;
-        return (_lumen_default_checked[n] !== undefined)
-            ? _lumen_default_checked[n] : _lumen_has_attr(n, 'checked');
-    },
-    set: function(v) {
-        var n = _lumen_reflect_nid(this);
-        if (n === -1) return;
-        _lumen_default_checked[n] = !!v;
-        if (v) _lumen_set_attr(n, 'checked', '');
-        else _lumen_remove_attr(n, 'checked');
-    },
-    enumerable: true, configurable: true,
-});
 Object.defineProperty(HTMLInputElement.prototype, 'indeterminate', {
     get: function() {
         var n = _lumen_reflect_nid(this);
@@ -2217,6 +2190,9 @@ function _lumen_undo_pre_click_activation(nid, pre) {
     _lumen_make_element(nid).checked = pre.checked;
 }
 // HTML LS §4.10.5.1.13 «radio button group»: same form owner, same name.
+// BUG-444: goes through the dirty-checkedness accessors, not the `checked`
+// attribute directly — the `checked` getter now reads the dirty flag first,
+// so writing the attribute on a sibling that already has one is a no-op.
 function _lumen_radio_select(nid) {
     var name = _lumen_u2n(_lumen_get_attr(nid, 'name'));
     var owner = _lumen_form_owner(nid);
@@ -2227,9 +2203,9 @@ function _lumen_radio_select(nid) {
         var t = _lumen_u2n(_lumen_get_attr(all[i], 'type'));
         if (t === null || String(t).toLowerCase() !== 'radio') continue;
         if (name !== null && _lumen_u2n(_lumen_get_attr(all[i], 'name')) !== name) continue;
-        if (all[i] !== nid) _lumen_remove_attr(all[i], 'checked');
+        if (all[i] !== nid) _lumen_set_dirty_checked(all[i], false);
     }
-    _lumen_set_attr(nid, 'checked', '');
+    _lumen_set_dirty_checked(nid, true);
 }
 function _lumen_fire_input_and_change(nid) {
     _lumen_dispatch_rich(nid, new Event('input',  { bubbles: true, cancelable: false }));
@@ -2422,13 +2398,10 @@ HTMLFormElement.prototype.reset = function() {
         delete _input_values[cn];
         delete _lumen_selection_state[cn];
         delete _lumen_indeterminate[cn];
-        if (tag === 'INPUT') {
-            var defChecked = (_lumen_default_checked[cn] !== undefined)
-                ? _lumen_default_checked[cn] : _lumen_has_attr(cn, 'checked');
-            delete _lumen_default_checked[cn];
-            if (defChecked) _lumen_set_attr(cn, 'checked', '');
-            else _lumen_remove_attr(cn, 'checked');
-        }
+        // Dropping the dirty checkedness restores `checked` to its default —
+        // the `checked` content attribute (BUG-444, same shape as the dirty
+        // value clear above).
+        if (tag === 'INPUT') _lumen_clear_dirty_checked(cn);
     }
 };
 HTMLFormElement.prototype.requestSubmit = function(submitter) {
@@ -3682,13 +3655,14 @@ function _lumen_gc_collect(nids) {
         // BUG-441: the control's runtime value lives document-side; a dead node
         // must not keep its slot in that map either.
         _lumen_clear_dirty_value(nid);
+        // BUG-444: same for the control's runtime checkedness.
+        _lumen_clear_dirty_checked(nid);
         delete _canvas2d_ctxs[nid];
         delete _lumen_element_wrappers[nid];
         // BUG-383 per-nid form state.
         delete _lumen_option_selected[nid];
         delete _lumen_selection_state[nid];
         delete _lumen_indeterminate[nid];
-        delete _lumen_default_checked[nid];
         delete _lumen_click_in_progress[nid];
     }
 }

@@ -668,13 +668,6 @@ fn set_attr(node: &mut lumen_dom::Node, name: &str, value: &str) {
     }
 }
 
-/// Удалить атрибут элемента, если он присутствует.
-fn remove_attr(node: &mut lumen_dom::Node, name: &str) {
-    if let NodeData::Element { attrs, .. } = &mut node.data {
-        attrs.retain(|a| !a.name.local.eq_ignore_ascii_case(name));
-    }
-}
-
 /// Упрощённое (не RFC 3986) разрешение относительного `href` против текущего
 /// URL сессии — достаточно для навигации по `<a>` в headless-автоматизации:
 /// абсолютные URL (содержат `://`) возвращаются как есть, абсолютные пути
@@ -1011,12 +1004,12 @@ impl BrowserSession for WinitSession {
             } else {
                 match input_type {
                     Some(lumen_dom::InputType::Checkbox) | Some(lumen_dom::InputType::Radio) => {
-                        let node = guard.doc.get_mut(id);
-                        if node.get_attr("checked").is_some() {
-                            remove_attr(node, "checked");
-                        } else {
-                            set_attr(node, "checked", "checked");
-                        }
+                        // BUG-444: flip the control's runtime checkedness,
+                        // not the `checked` content attribute — the
+                        // attribute stays the default `defaultChecked`/
+                        // `form.reset()` read.
+                        let checked = guard.doc.control_checked(id);
+                        guard.doc.set_control_checked(id, !checked);
                     }
                     _ => {}
                 }
