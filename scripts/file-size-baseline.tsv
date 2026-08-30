@@ -11,11 +11,9 @@
 9192	crates/engine/css-parser/src/parser.rs
 7955	crates/engine/paint/src/backends/femtovg_backend.rs
 7145	crates/engine/dom/src/lib.rs
-5729	crates/engine/layout/src/box_tree.rs
 4852	crates/engine/paint/src/cpu_raster.rs
 4504	crates/core/src/ext.rs
 4408	crates/js/src/filesystem_access.rs
-4310	crates/engine/layout/src/box_tree.rs
 4112	crates/bidi-server/src/protocol.rs
 3962	crates/engine/html-parser/src/tree_builder.rs
 3614	crates/js/src/worker.rs
