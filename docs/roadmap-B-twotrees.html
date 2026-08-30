@@ -5602,8 +5602,8 @@
       },
       {
        "id": "SPLIT-ST17",
-       "title": "SPLIT-ST17: типы значений style.rs, хвост",
-       "status": "ready",
+       "title": "SPLIT-ST17: типы значений style.rs, хвост **ЗАКРЫТ 2026-08-30** (ветка `p1-split-st17`, один срез): анкер сошёлся с планом впервые за группу ST без пересчёта — регион в файле после ST-16 (3 807 строк) лежал ровно на 866…3449 (2 584 строки). Файлов вышло шесть, а не пять — заголовок таблицы называет цель по последней паре («`flexgrid.rs` + `transform.rs`»), опечатка в счётчике. Итоговые файлы: `style/values/misc.rs` (435), `style/container.rs` (516, НЕ тип значения), `style/values/scroll.rs` (174), `style/values/background.rs` (530), `style/values/flexgrid.rs` (729), `style/values/transform.rs` (285). style.rs 3 807 → 1 271 (ниже потолка 2 000 — выпал из `scripts/file-size-baseline.tsv`), тестов 3 637 → 3 637. Гейт: `cargo check`/`test -p lumen-layout`/`clippy -p lumen-layout --all-targets -- -D warnings` чисты (3 637+71+1 тестов), `check -p lumen-paint -p lumen-driver` зелёный. `scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)). **Группа ST группы SPLIT закрыта этим батчем** — `style.rs` 38 031 → 1 271 строка, 99.7 % файла разложено по модулям. Детали — `docs/tasks/p1-monolith-split-queue.md` §4",
+       "status": "done",
        "size": "L",
        "note": "Типы значений, хвост `crates/engine/layout/src/style.rs`: анкер `enum Content` (4142) до `impl ComputedStyle` (6725), 2 584 строки, пять файлов: содержимое/списки/перенос/интерактивность (4142…4625) → `style/values/misc.rs`; контейнерные запросы вместе с `evaluate_container_condition` и `apply_container_rules` (4626…5058) → `style/container.rs` (это не тип значения, а вычисление); режим письма, user-select, scroll-snap (5059…5223) → `style/values/scroll.rs`; градиенты, фон, маски, object-fit (5224…5804) → `style/values/background.rs`; flex, grid-треки, выравнивание, clip-path, трансформы, фильтры (5805…6725) → `style/values/flexgrid.rs` + `style/values/transform.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
