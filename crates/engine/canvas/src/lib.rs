@@ -18,6 +18,7 @@ mod color;
 mod path;
 pub mod path2d;
 mod rasterize;
+mod image_data;
 pub mod fp_noise;
 
 pub use color::CanvasColor;

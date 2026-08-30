@@ -926,24 +926,22 @@ pub(crate) fn install_canvas2d_bindings_v8(
             measure_text_width(&text, pixel_size)
         }),
     )?;
+    // BUG-448: the rectangle is a parameter, not a suggestion — the crop happens
+    // here, where the bitmap already is, so a one-pixel read transports four
+    // bytes rather than the whole canvas. Returns the RGBA8 bytes of the rect
+    // (empty when the canvas is unknown or the area is unallocatable); the
+    // shim owns the spec's argument checks and builds the `ImageData`.
     rt.register_native(
         "_lumen_canvas2d_get_image_data",
-        into_v8_fn1(|nid: u32| -> String {
+        into_v8_fn5(|nid: u32, sx: i32, sy: i32, sw: u32, sh: u32| -> Vec<u8> {
             CANVASES.with(|c| {
                 let Ok(map) = c.try_borrow() else {
-                    return String::new();
+                    return Vec::new();
                 };
                 let Some(ctx) = map.get(&nid) else {
-                    return String::new();
+                    return Vec::new();
                 };
-                let pixels = ctx.get_image_data();
-                let mut s = String::with_capacity(pixels.len() * 2 + 12);
-                use std::fmt::Write;
-                let _ = write!(s, "{},{},", ctx.width(), ctx.height());
-                for b in &pixels {
-                    let _ = write!(s, "{b:02x}");
-                }
-                s
+                ctx.get_image_data_rect(sx, sy, sw, sh)
             })
         }),
     )?;
@@ -1260,6 +1258,21 @@ mod tests_v8 {
         }
     }
 
+    /// Evaluate an expression yielding the RGBA byte array a `getImageData`
+    /// native returns (`JsValue::Array` of numbers).
+    fn bytes_eval(rt: &V8JsRuntime, expr: &str) -> Vec<u8> {
+        match rt.eval(expr).unwrap() {
+            JsValue::Array(items) => items
+                .into_iter()
+                .map(|v| match v {
+                    JsValue::Number(n) => n as u8,
+                    other => panic!("expected byte, got {other:?}"),
+                })
+                .collect(),
+            other => panic!("expected array, got {other:?}"),
+        }
+    }
+
     fn num_eval(rt: &V8JsRuntime, expr: &str) -> f64 {
         match rt.eval(expr).unwrap() {
             JsValue::Number(n) => n,
@@ -1271,20 +1284,20 @@ mod tests_v8 {
     fn js_create_registers_context() {
         let rt = with_canvas2d();
         rt.eval("_lumen_canvas2d_create(7, 100, 50);").unwrap();
-        let raw = str_eval(&rt, "_lumen_canvas2d_get_image_data(7)");
-        let parts: Vec<&str> = raw.splitn(3, ',').collect();
-        assert_eq!(parts[0], "100");
-        assert_eq!(parts[1], "50");
+        let dims = rt.run_for_test(|| super::with_canvas(7, |c| (c.width(), c.height())));
+        assert_eq!(dims, (100, 50));
     }
 
     #[test]
     fn js_create_clamps_dimensions() {
         let rt = with_canvas2d();
         rt.eval("_lumen_canvas2d_create(1, 0, 99999);").unwrap();
-        let raw = str_eval(&rt, "_lumen_canvas2d_get_image_data(1)");
-        let parts: Vec<&str> = raw.splitn(3, ',').collect();
-        assert_eq!(parts[0], "1", "zero clamped up to 1");
-        assert_eq!(parts[1], super::MAX_CANVAS_DIM.to_string(), "oversized clamped to max");
+        let dims = rt.run_for_test(|| super::with_canvas(1, |c| (c.width(), c.height())));
+        assert_eq!(
+            dims,
+            (1, super::MAX_CANVAS_DIM),
+            "zero clamped up to 1, oversized clamped to max"
+        );
     }
 
     #[test]
@@ -1297,10 +1310,12 @@ mod tests_v8 {
              _lumen_canvas2d_create(3, 10, 10);",
         )
         .unwrap();
-        let raw = str_eval(&rt, "_lumen_canvas2d_get_image_data(3)");
-        let hex = raw.splitn(3, ',').nth(2).unwrap();
         // Re-create must not wipe an existing buffer (entry().or_insert).
-        assert_eq!(&hex[0..2], "ff", "red preserved across re-create");
+        assert_eq!(
+            bytes_eval(&rt, "_lumen_canvas2d_get_image_data(3, 0, 0, 1, 1)"),
+            vec![255, 0, 0, 255],
+            "red preserved across re-create"
+        );
     }
 
     #[test]
@@ -1433,22 +1448,83 @@ mod tests_v8 {
     }
 
     #[test]
-    fn js_get_image_data_returns_dimensions_and_hex() {
+    fn js_get_image_data_returns_only_the_requested_rect() {
+        // BUG-448: the native used to take a bare `nid` and answer with the
+        // whole bitmap, so every rectangle read the origin. The rect is a
+        // parameter now, and its size decides the payload's size.
         let rt = with_canvas2d();
-        rt.eval("_lumen_canvas2d_create(15, 2, 2);").unwrap();
-        let raw = str_eval(&rt, "_lumen_canvas2d_get_image_data(15)");
-        let parts: Vec<&str> = raw.splitn(3, ',').collect();
-        assert_eq!(parts[0], "2");
-        assert_eq!(parts[1], "2");
-        // 2x2 RGBA = 16 bytes = 32 hex chars.
-        assert_eq!(parts[2].len(), 32);
+        rt.eval("_lumen_canvas2d_create(15, 4, 2);").unwrap();
+        assert_eq!(
+            bytes_eval(&rt, "_lumen_canvas2d_get_image_data(15, 0, 0, 4, 2)").len(),
+            4 * 2 * 4,
+            "whole canvas is 4x2 RGBA"
+        );
+        assert_eq!(
+            bytes_eval(&rt, "_lumen_canvas2d_get_image_data(15, 1, 1, 1, 1)").len(),
+            4,
+            "a one-pixel read costs one pixel"
+        );
+    }
+
+    #[test]
+    fn js_get_image_data_reads_the_addressed_pixel() {
+        // The bug's own repro: three non-overlapping stripes, each read at its
+        // own x. Before the fix all three answered with pixel (0, 0).
+        let rt = with_canvas2d();
+        rt.eval(
+            "_lumen_canvas2d_create(16, 6, 1);\
+             _lumen_canvas2d_set_fill_style(16, '#ff0000');\
+             _lumen_canvas2d_fill_rect(16, 0, 0, 2, 1);\
+             _lumen_canvas2d_set_fill_style(16, '#00ff00');\
+             _lumen_canvas2d_fill_rect(16, 2, 0, 2, 1);\
+             _lumen_canvas2d_set_fill_style(16, '#0000ff');\
+             _lumen_canvas2d_fill_rect(16, 4, 0, 2, 1);",
+        )
+        .unwrap();
+        assert_eq!(
+            bytes_eval(&rt, "_lumen_canvas2d_get_image_data(16, 0, 0, 1, 1)"),
+            vec![255, 0, 0, 255]
+        );
+        assert_eq!(
+            bytes_eval(&rt, "_lumen_canvas2d_get_image_data(16, 2, 0, 1, 1)"),
+            vec![0, 255, 0, 255]
+        );
+        assert_eq!(
+            bytes_eval(&rt, "_lumen_canvas2d_get_image_data(16, 4, 0, 1, 1)"),
+            vec![0, 0, 255, 255]
+        );
+    }
+
+    #[test]
+    fn js_get_image_data_outside_the_canvas_is_transparent_black() {
+        let rt = with_canvas2d();
+        rt.eval(
+            "_lumen_canvas2d_create(17, 2, 2);\
+             _lumen_canvas2d_set_fill_style(17, '#ff0000');\
+             _lumen_canvas2d_fill_rect(17, 0, 0, 2, 2);",
+        )
+        .unwrap();
+        assert_eq!(
+            bytes_eval(&rt, "_lumen_canvas2d_get_image_data(17, 5, 5, 1, 1)"),
+            vec![0, 0, 0, 0],
+            "wholly outside"
+        );
+        // Straddling the right edge: first pixel is real, second is outside.
+        assert_eq!(
+            bytes_eval(&rt, "_lumen_canvas2d_get_image_data(17, 1, 0, 2, 1)"),
+            vec![255, 0, 0, 255, 0, 0, 0, 0]
+        );
+        // A negative origin is legal and pads on the near side.
+        assert_eq!(
+            bytes_eval(&rt, "_lumen_canvas2d_get_image_data(17, -1, 0, 2, 1)"),
+            vec![0, 0, 0, 0, 255, 0, 0, 255]
+        );
     }
 
     #[test]
     fn js_get_image_data_unknown_canvas_is_empty() {
         let rt = with_canvas2d();
-        let raw = str_eval(&rt, "_lumen_canvas2d_get_image_data(999)");
-        assert!(raw.is_empty());
+        assert!(bytes_eval(&rt, "_lumen_canvas2d_get_image_data(999, 0, 0, 1, 1)").is_empty());
     }
 
     #[test]
