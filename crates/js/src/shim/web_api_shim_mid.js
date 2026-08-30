@@ -2601,6 +2601,8 @@ Path2D.prototype.ellipse = function(cx, cy, rx, ry, rot, startAngle, endAngle, a
 Path2D.prototype.rect = function(x, y, w, h) {
     _lumen_canvas2d_path2d_rect(this.__pid__, +x, +y, +w, +h);
 };
+// `Object.prototype.toString.call(new Path2D())` must name the interface; the
+// tag itself is defined next to the other canvas classes (`_lumen_idl_tag`).
 Path2D.prototype.addPath = function(path, transform) {
     if (!(path instanceof Path2D)) return;
     if (transform && typeof transform === 'object' && transform.a !== undefined) {
@@ -2612,17 +2614,33 @@ Path2D.prototype.addPath = function(path, transform) {
     }
 };
 
-// ── Canvas 2D context factory (HTML LS §4.12.4) ─────────────────────────────────
-// Builds a CanvasGradient (HTML LS §4.12.4.2) wrapping a native gradient id.
-// `addColorStop` forwards to the native store; the object is recognised by the
-// fillStyle/strokeStyle setters via its `__gid__` field.
-function _lumen_make_canvas_gradient(gid) {
-    return {
-        __gid__: gid,
-        addColorStop: function(offset, color) {
-            _lumen_canvas2d_gradient_add_color_stop(gid, +offset, String(color));
-        },
-    };
+// ── Canvas 2D interfaces (HTML LS §4.12.5) ───────────────────────────────────
+// BUG-449: the context, ImageData, TextMetrics, the gradient and the pattern
+// used to be object literals minted per call, with every member an OWN property
+// and `Object.prototype` for a prototype. So `ctx instanceof
+// CanvasRenderingContext2D` was a ReferenceError rather than `false`, `new
+// ImageData(w, h)` did not exist at all, and neither a polyfill nor a WPT test
+// could patch `X.prototype`. The members live on real prototypes now, and the
+// per-instance state sits in ONE non-enumerable slot — which is also what the
+// brand checks read: a method invoked on a foreign `this` has to throw a
+// TypeError rather than paint onto whichever nid it finds
+// (`2d.imageData.create1.this`, `2d.imageData.put.wrongtype`).
+
+// WebIDL: an interface member is enumerable+configurable on the prototype, an
+// internal slot is invisible to the page. `_lumen_slot` writes the latter.
+function _lumen_slot(obj, name, value) {
+    Object.defineProperty(obj, name, {
+        value: value, writable: true, enumerable: false, configurable: true,
+    });
+}
+
+// `Object.prototype.toString.call(x)` must name the interface (WPT's
+// `assert_class_string`); the tag has to be per class, an inherited one would
+// make every subclass claim the base's name (the BUG-912 shape).
+function _lumen_idl_tag(ctor, name) {
+    Object.defineProperty(ctor.prototype, Symbol.toStringTag, {
+        value: name, writable: false, enumerable: false, configurable: true,
+    });
 }
 
 // WebIDL `[EnforceRange] long` (canvas §4.12.5.1 declares every ImageData
@@ -2642,6 +2660,16 @@ function _lumen_canvas_long(value, method, argName) {
     return n;
 }
 
+// WebIDL plain `unsigned long` (no [EnforceRange]) — the ImageData constructor
+// declares its dimensions that way, so a non-number is NOT a TypeError there:
+// ToUint32('width') is 0, and 0 is what makes the constructor throw
+// IndexSizeError (`2d.imageData.object.ctor.basics`).
+function _lumen_canvas_ulong(value) {
+    var n = Number(value);
+    if (!isFinite(n)) { return 0; }
+    return n >>> 0;
+}
+
 // Normalizes a rectangle whose width/height may be negative, the way the
 // canvas spec's "get/put image data" steps do: a negative extent flips the
 // rectangle about its origin rather than describing an empty area.
@@ -2657,332 +2685,863 @@ function _lumen_canvas_normalize_rect(x, y, w, h) {
     return { x: x, y: y, w: w, h: h };
 }
 
+// ── ImageData (HTML LS §4.12.5.1.14) ─────────────────────────────────────────
+
+// The largest pixel count whose RGBA8 buffer still fits in a 2^30-byte
+// allocation. The spec answers an unallocatable size with IndexSizeError, and
+// `new ImageData(1 << 31, 1 << 31)` is exactly that case.
+var _LUMEN_IMAGE_DATA_MAX_PIXELS = 268435455;
+
+function _lumen_image_data_settings(v, ctorName) {
+    var out = { colorSpace: 'srgb', pixelFormat: 'rgba-unorm8' };
+    if (v === undefined || v === null) { return out; }
+    if (typeof v !== 'object' && typeof v !== 'function') {
+        // A dictionary argument that is neither nullish nor an object is a
+        // TypeError before any of the constructor's own steps run — which is
+        // why `new ImageData(self, 4, 4)` throws TypeError and not
+        // IndexSizeError for its zero width.
+        throw new TypeError(ctorName + ": settings is not an object");
+    }
+    if (v.colorSpace !== undefined) {
+        var cs = String(v.colorSpace);
+        if (cs !== 'srgb' && cs !== 'display-p3') {
+            throw new TypeError(ctorName + ": '" + cs + "' is not a valid PredefinedColorSpace");
+        }
+        out.colorSpace = cs;
+    }
+    if (v.pixelFormat !== undefined) {
+        var pf = String(v.pixelFormat);
+        if (pf !== 'rgba-unorm8' && pf !== 'rgba-float16') {
+            throw new TypeError(ctorName + ": '" + pf + "' is not a valid ImageDataPixelFormat");
+        }
+        if (pf === 'rgba-float16') {
+            // Refusing loudly beats reporting a format whose buffer would still
+            // be 8-bit: the engine has no Float16Array to back it.
+            throw new TypeError(ctorName + ": the 'rgba-float16' pixel format is not supported");
+        }
+        out.pixelFormat = pf;
+    }
+    return out;
+}
+
+function _lumen_is_image_data_buffer(v) {
+    return typeof Uint8ClampedArray === 'function' && v instanceof Uint8ClampedArray;
+}
+
+function ImageData(arg0, arg1, arg2, arg3) {
+    var C = "Failed to construct 'ImageData'";
+    if (!(this instanceof ImageData)) {
+        throw new TypeError(C + ": please use the 'new' operator");
+    }
+    if (arguments.length < 2) {
+        throw new TypeError(C + ": 2 arguments required, but only " +
+            arguments.length + " present");
+    }
+    // WebIDL overload resolution keys on argument 0: a Uint8ClampedArray picks
+    // the (data, sw, sh) form, ANYTHING else falls through to (sw, sh) — which
+    // is why `new ImageData(new Uint8Array(100), 25)` is an IndexSizeError for
+    // width 0 rather than a TypeError for the wrong buffer type.
+    var data = null, w, h = null, settings;
+    if (_lumen_is_image_data_buffer(arg0)) {
+        data = arg0;
+        w = _lumen_canvas_ulong(arg1);
+        if (arg2 !== undefined) { h = _lumen_canvas_ulong(arg2); }
+        settings = arg3;
+    } else {
+        w = _lumen_canvas_ulong(arg0);
+        h = _lumen_canvas_ulong(arg1);
+        settings = arg2;
+    }
+    var opts = _lumen_image_data_settings(settings, C);
+    if (data !== null) {
+        if (data.length % 4 !== 0) {
+            throw new DOMException(
+                C + ": the source data length is not a multiple of 4", 'InvalidStateError');
+        }
+        var rows = data.length / 4;
+        if (w === 0 || rows % w !== 0) {
+            throw new DOMException(
+                C + ": the source data length is not a multiple of (4 * width)", 'IndexSizeError');
+        }
+        var derived = rows / w;
+        if (h === null) {
+            h = derived;
+        } else if (h === 0 || h !== derived) {
+            throw new DOMException(
+                C + ": the source data length does not match the given dimensions", 'IndexSizeError');
+        }
+    } else {
+        if (w === 0 || h === 0) {
+            throw new DOMException(
+                C + ": the source width and height must be non-zero", 'IndexSizeError');
+        }
+        if (w * h > _LUMEN_IMAGE_DATA_MAX_PIXELS) {
+            throw new DOMException(
+                C + ": the requested image data is too large", 'IndexSizeError');
+        }
+        data = new Uint8ClampedArray(w * h * 4);
+    }
+    _lumen_slot(this, '__image_data__', {
+        width: w, height: h, data: data,
+        colorSpace: opts.colorSpace, pixelFormat: opts.pixelFormat,
+    });
+}
+
+function _lumen_image_data_slot(v, member) {
+    if (!v || v.__image_data__ === undefined) {
+        throw new TypeError("Failed to read the '" + member +
+            "' property from 'ImageData': receiver is not an ImageData");
+    }
+    return v.__image_data__;
+}
+
+// `width`/`height`/`data` are readonly (`2d.imageData.object.readonly`), so
+// they are getters with no setter — a page assigning to them is a silent no-op
+// in sloppy mode, exactly as in a spec browser.
+Object.defineProperty(ImageData.prototype, 'width', {
+    get: function() { return _lumen_image_data_slot(this, 'width').width; },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(ImageData.prototype, 'height', {
+    get: function() { return _lumen_image_data_slot(this, 'height').height; },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(ImageData.prototype, 'data', {
+    get: function() { return _lumen_image_data_slot(this, 'data').data; },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(ImageData.prototype, 'colorSpace', {
+    get: function() { return _lumen_image_data_slot(this, 'colorSpace').colorSpace; },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(ImageData.prototype, 'pixelFormat', {
+    get: function() { return _lumen_image_data_slot(this, 'pixelFormat').pixelFormat; },
+    enumerable: true, configurable: true,
+});
+_lumen_idl_tag(ImageData, 'ImageData');
+
 // Builds the ImageData returned by getImageData/createImageData. `bytes` is
 // the native RGBA8 payload (a plain array) or null for a blank one; a payload
 // of the wrong length means the native could not serve the request, and the
 // spec's answer there is transparent black, not a short buffer.
 function _lumen_make_image_data(w, h, bytes) {
-    var arr = new Uint8ClampedArray(w * h * 4);
-    if (bytes && bytes.length === arr.length) { arr.set(bytes); }
-    return { width: w, height: h, data: arr, colorSpace: 'srgb' };
+    var img = new ImageData(w, h);
+    if (bytes && bytes.length === img.data.length) { img.data.set(bytes); }
+    return img;
 }
 
-// Builds a CanvasRenderingContext2D backed by the native _lumen_canvas2d_* bindings
-// (lumen_canvas::Context2D), keyed by the canvas element's node index `nid`.
-// Drawing methods forward to the native rasterizer; the shell uploads the pixel
-// buffer to the renderer under `canvas:{nid}` each frame.
-function _lumen_make_canvas2d_ctx(canvasEl, nid) {
-    var _fillStyle = '#000000';
-    var _strokeStyle = '#000000';
-    var _lineWidth = 1.0;
-    var _globalAlpha = 1.0;
-    var _globalCompositeOperation = 'source-over';
-    var _lineCap = 'butt';
-    var _lineJoin = 'miter';
-    var _miterLimit = 10;
-    var ctx = {
-        canvas: canvasEl,
-        get fillStyle() { return _fillStyle; },
-        set fillStyle(v) {
-            if (v && typeof v === 'object' && v.__gid__ !== undefined) {
-                _fillStyle = v; _lumen_canvas2d_set_fill_style_gradient(nid, v.__gid__);
-            } else if (v && typeof v === 'object' && v.__patid__ !== undefined) {
-                _fillStyle = v; _lumen_canvas2d_set_fill_style_pattern(nid, v.__patid__);
-            } else {
-                _fillStyle = String(v); _lumen_canvas2d_set_fill_style(nid, _fillStyle);
-            }
-        },
-        get strokeStyle() { return _strokeStyle; },
-        set strokeStyle(v) {
-            if (v && typeof v === 'object' && v.__gid__ !== undefined) {
-                _strokeStyle = v; _lumen_canvas2d_set_stroke_style_gradient(nid, v.__gid__);
-            } else if (v && typeof v === 'object' && v.__patid__ !== undefined) {
-                _strokeStyle = v; _lumen_canvas2d_set_stroke_style_pattern(nid, v.__patid__);
-            } else {
-                _strokeStyle = String(v); _lumen_canvas2d_set_stroke_style(nid, _strokeStyle);
-            }
-        },
-        get lineWidth() { return _lineWidth; },
-        set lineWidth(v) { var n = Number(v); if (isFinite(n) && n > 0) { _lineWidth = n; _lumen_canvas2d_set_line_width(nid, n); } },
-        get globalAlpha() { return _globalAlpha; },
-        set globalAlpha(v) { var n = Number(v); if (isFinite(n) && n >= 0 && n <= 1) { _globalAlpha = n; _lumen_canvas2d_set_global_alpha(nid, n); } },
-        get globalCompositeOperation() { return _globalCompositeOperation; },
-        set globalCompositeOperation(v) { var s = String(v); _globalCompositeOperation = s; _lumen_canvas2d_set_global_composite_operation(nid, s); },
-        get lineCap() { return _lineCap; },
-        set lineCap(v) { var s = String(v); _lineCap = s; _lumen_canvas2d_set_line_cap(nid, s); },
-        get lineJoin() { return _lineJoin; },
-        set lineJoin(v) { var s = String(v); _lineJoin = s; _lumen_canvas2d_set_line_join(nid, s); },
-        get miterLimit() { return _miterLimit; },
-        set miterLimit(v) { var n = Number(v); if (isFinite(n) && n > 0) { _miterLimit = n; _lumen_canvas2d_set_miter_limit(nid, n); } },
-        // Rect operations
-        fillRect: function(x, y, w, h) { _lumen_canvas2d_fill_rect(nid, +x, +y, +w, +h); },
-        clearRect: function(x, y, w, h) { _lumen_canvas2d_clear_rect(nid, +x, +y, +w, +h); },
-        strokeRect: function(x, y, w, h) { _lumen_canvas2d_stroke_rect(nid, +x, +y, +w, +h); },
-        // Path operations
-        beginPath: function() { _lumen_canvas2d_begin_path(nid); },
-        moveTo: function(x, y) { _lumen_canvas2d_move_to(nid, +x, +y); },
-        lineTo: function(x, y) { _lumen_canvas2d_line_to(nid, +x, +y); },
-        closePath: function() { _lumen_canvas2d_close_path(nid); },
-        arc: function(cx, cy, r, sa, ea, ccw) { _lumen_canvas2d_arc(nid, +cx, +cy, +r, +sa, +ea, !!ccw); },
-        ellipse: function(cx, cy, rx, ry, rot, sa, ea, ccw) {
-            // Implemented via transforms: save → translate(cx,cy) → rotate(rot) →
-            // scale(rx,ry) → arc(0,0,1,sa,ea,ccw) → restore.
-            _lumen_canvas2d_save(nid);
-            _lumen_canvas2d_translate(nid, +cx, +cy);
-            if (+rot !== 0) { _lumen_canvas2d_rotate(nid, +rot); }
-            _lumen_canvas2d_scale(nid, +rx, +ry);
-            _lumen_canvas2d_arc(nid, 0, 0, 1, +sa, +ea, !!ccw);
-            _lumen_canvas2d_restore(nid);
-        },
-        arcTo: function(x1, y1, x2, y2, r) { _lumen_canvas2d_arc_to(nid, +x1, +y1, +x2, +y2, +r); },
-        rect: function(x, y, w, h) { _lumen_canvas2d_rect(nid, +x, +y, +w, +h); },
-        bezierCurveTo: function(cp1x, cp1y, cp2x, cp2y, x, y) { _lumen_canvas2d_bezier_curve_to(nid, +cp1x, +cp1y, +cp2x, +cp2y, +x, +y); },
-        quadraticCurveTo: function(cpx, cpy, x, y) { _lumen_canvas2d_quadratic_curve_to(nid, +cpx, +cpy, +x, +y); },
-        fill: function(ruleOrPath) {
-            if (ruleOrPath instanceof Path2D) {
-                _lumen_canvas2d_fill_path(nid, ruleOrPath.__pid__);
-            } else {
-                _lumen_canvas2d_fill(nid);
-            }
-        },
-        stroke: function(path) {
-            if (path instanceof Path2D) {
-                _lumen_canvas2d_stroke_path(nid, path.__pid__);
-            } else {
-                _lumen_canvas2d_stroke(nid);
-            }
-        },
-        // State stack
-        save: function() { _lumen_canvas2d_save(nid); },
-        restore: function() { _lumen_canvas2d_restore(nid); },
-        // Transforms
-        translate: function(tx, ty) { _lumen_canvas2d_translate(nid, +tx, +ty); },
-        rotate: function(angle) { _lumen_canvas2d_rotate(nid, +angle); },
-        scale: function(sx, sy) { _lumen_canvas2d_scale(nid, +sx, +sy); },
-        transform: function(a, b, c, d, e, f) { _lumen_canvas2d_transform(nid, +a, +b, +c, +d, +e, +f); },
-        setTransform: function(a, b, c, d, e, f) { _lumen_canvas2d_set_transform(nid, +a, +b, +c, +d, +e, +f); },
-        resetTransform: function() { _lumen_canvas2d_reset_transform(nid); },
-        getImageData: function(sx, sy, sw, sh) {
-            if (arguments.length < 4) {
-                throw new TypeError("getImageData: 4 arguments required, but only " +
-                    arguments.length + " present");
-            }
-            var x = _lumen_canvas_long(sx, 'getImageData', 'sx');
-            var y = _lumen_canvas_long(sy, 'getImageData', 'sy');
-            var w = _lumen_canvas_long(sw, 'getImageData', 'sw');
-            var h = _lumen_canvas_long(sh, 'getImageData', 'sh');
-            if (w === 0 || h === 0) {
-                throw new DOMException(
-                    'The source width and height must be non-zero', 'IndexSizeError');
-            }
-            var r = _lumen_canvas_normalize_rect(x, y, w, h);
-            return _lumen_make_image_data(r.w, r.h,
-                _lumen_canvas2d_get_image_data(nid, r.x, r.y, r.w, r.h));
-        },
-        // Remaining stubs (not yet implemented)
-        clip: function(path) {
-            if (path instanceof Path2D) {
-                _lumen_canvas2d_clip_path(nid, path.__pid__);
-            } else {
-                _lumen_canvas2d_clip(nid);
-            }
-        },
-        putImageData: function(imageData, dx, dy, dirtyX, dirtyY, dirtyWidth, dirtyHeight) {
-            if (!imageData || !imageData.data) {
-                throw new TypeError("putImageData: argument 1 is not an ImageData");
-            }
-            var sw = imageData.width | 0, sh = imageData.height | 0;
-            var x = _lumen_canvas_long(dx, 'putImageData', 'dx');
-            var y = _lumen_canvas_long(dy, 'putImageData', 'dy');
-            // The whole source is the default dirty rectangle; the 7-argument
-            // form narrows it (canvas §4.12.5.1.10) and used to be dropped on
-            // the floor here (BUG-448).
-            var dr = { x: 0, y: 0, w: sw, h: sh };
-            if (arguments.length > 3) {
-                dr = _lumen_canvas_normalize_rect(
-                    _lumen_canvas_long(dirtyX, 'putImageData', 'dirtyX'),
-                    _lumen_canvas_long(dirtyY, 'putImageData', 'dirtyY'),
-                    _lumen_canvas_long(dirtyWidth, 'putImageData', 'dirtyWidth'),
-                    _lumen_canvas_long(dirtyHeight, 'putImageData', 'dirtyHeight'));
-            }
-            // Clip the dirty rectangle to the source; only that part crosses
-            // the binding, so a small dirty rect costs a small payload.
-            if (dr.x < 0) { dr.w += dr.x; dr.x = 0; }
-            if (dr.y < 0) { dr.h += dr.y; dr.y = 0; }
-            if (dr.x + dr.w > sw) { dr.w = sw - dr.x; }
-            if (dr.y + dr.h > sh) { dr.h = sh - dr.y; }
-            if (dr.w <= 0 || dr.h <= 0) { return; }
-            var d = imageData.data;
-            var H = '0123456789abcdef', hex = '';
-            for (var row = 0; row < dr.h; row++) {
-                var base = ((dr.y + row) * sw + dr.x) * 4;
-                for (var i = 0; i < dr.w * 4; i++) {
-                    var b = d[base + i] & 255;
-                    hex += H[b >> 4] + H[b & 15];
-                }
-            }
-            _lumen_canvas2d_put_image_data(nid, hex, dr.w, dr.h, x + dr.x, y + dr.y);
-        },
-        // drawImage forms: (src,dx,dy) | (src,dx,dy,dw,dh) | (src,sx,sy,sw,sh,dx,dy,dw,dh).
-        // Source may be a <canvas>/OffscreenCanvas (canvas bitmap store, via __nid__)
-        // or a decoded <img> element (img_bitmap_store, via __nid__ + tag=img).
-        drawImage: function(image, a, b, c, d, e, f, g, h) {
-            if (!image || image.__nid__ === undefined) { return; }
-            var src = image.__nid__;
-            var isImg = (_lumen_get_tag_name(src) === 'IMG');
-            var iw = +image.width || 0, ih = +image.height || 0;
-            if (arguments.length >= 9) {
-                var sx = +a, sy = +b, sw = +c, sh = +d;
-                var dx9 = +e, dy9 = +f, dw9 = +g, dh9 = +h;
-                if (!(sw > 0) || !(sh > 0) || !(dw9 > 0) || !(dh9 > 0)) { return; }
-                var coords = sx + ',' + sy + ',' + sw + ',' + sh + ',' + dx9 + ',' + dy9 + ',' + dw9 + ',' + dh9;
-                if (isImg) { _lumen_canvas2d_draw_image_crop_from_img(nid, src, coords); }
-                else { _lumen_canvas2d_draw_image_crop(nid, src, coords); }
-                return;
-            }
-            var dx, dy, dw, dh;
-            if (arguments.length >= 5) {
-                dx = +a; dy = +b; dw = +c; dh = +d;
-                if (!(dw > 0) || !(dh > 0)) { return; }
-                if (isImg) { _lumen_canvas2d_draw_image_from_img(nid, src, dx, dy, dw, dh); }
-                else { _lumen_canvas2d_draw_image(nid, src, dx, dy, dw, dh); }
-            } else {
-                dx = +a; dy = +b;
-                if (isImg) {
-                    // 3-arg form: pass dw/dh=0 so the native uses the image's natural size.
-                    _lumen_canvas2d_draw_image_from_img(nid, src, dx, dy, 0, 0);
-                } else {
-                    if (!(iw > 0) || !(ih > 0)) { return; }
-                    _lumen_canvas2d_draw_image(nid, src, dx, dy, iw, ih);
-                }
-            }
-        },
-        fillText: function(t, x, y) {
-            _lumen_canvas2d_fill_text(nid, String(t == null ? '' : t), +x, +y);
-        },
-        strokeText: function(t, x, y) {
-            _lumen_canvas2d_stroke_text(nid, String(t == null ? '' : t), +x, +y);
-        },
-        measureText: function(t) {
-            var s = String(t == null ? '' : t);
-            var w = _lumen_canvas2d_measure_text(nid, s);
-            var fs = parse_canvas_font_size_js(_font);
-            return { width: w, actualBoundingBoxAscent: fs * 0.8, actualBoundingBoxDescent: fs * 0.2 };
-        },
-        setLineDash: function() {}, getLineDash: function() { return []; },
-        isPointInPath: function(pathOrX, xOrY, y) {
-            if (pathOrX instanceof Path2D) {
-                return _lumen_canvas2d_is_point_in_path(nid, pathOrX.__pid__, +xOrY, +y);
-            }
-            return false;
-        },
-        isPointInStroke: function() { return false; },
-        createLinearGradient: function(x0, y0, x1, y1) {
-            return _lumen_make_canvas_gradient(
-                _lumen_canvas2d_create_linear_gradient(nid, +x0, +y0, +x1, +y1));
-        },
-        createRadialGradient: function(x0, y0, r0, x1, y1, r1) {
-            return _lumen_make_canvas_gradient(
-                _lumen_canvas2d_create_radial_gradient(nid, +x0, +y0, +r0, +x1, +y1, +r1));
-        },
-        createConicGradient: function(angle, cx, cy) {
-            return _lumen_make_canvas_gradient(
-                _lumen_canvas2d_create_conic_gradient(nid, +angle, +cx, +cy));
-        },
-        createPattern: function(image, repetition) {
-            if (!image || image.__nid__ === undefined) { return null; }
-            var rep = (repetition == null || repetition === '') ? 'repeat' : String(repetition);
-            var pid = _lumen_canvas2d_create_pattern(image.__nid__, rep);
-            if (!pid) { return null; }
-            return { __patid__: pid };
-        },
-        createImageData: function(w, h) {
-            // Two overloads: (sw, sh) and the copy form (imageData), which
-            // takes the argument's dimensions and returns transparent black.
-            // The copy form used to fall through to `0|0` and hand back a 0×0
-            // buffer (BUG-448).
-            if (arguments.length === 1) {
-                if (!w || typeof w.width !== 'number' || typeof w.height !== 'number') {
-                    throw new TypeError("createImageData: argument 1 is not an ImageData");
-                }
-                return _lumen_make_image_data(w.width | 0, w.height | 0, null);
-            }
-            var sw = _lumen_canvas_long(w, 'createImageData', 'sw');
-            var sh = _lumen_canvas_long(h, 'createImageData', 'sh');
-            if (sw === 0 || sh === 0) {
-                throw new DOMException(
-                    'The source width and height must be non-zero', 'IndexSizeError');
-            }
-            return _lumen_make_image_data(Math.abs(sw), Math.abs(sh), null);
-        },
-    };
-    // Stub appearance properties accepted but not yet wired.
-    var _stubProps = ['direction','lineDashOffset','imageSmoothingEnabled','filter'];
-    for (var _pi = 0; _pi < _stubProps.length; _pi++) {
+// ── CanvasGradient / CanvasPattern (HTML LS §4.12.5.1.4) ─────────────────────
+
+function CanvasGradient() {
+    throw new TypeError("Illegal constructor");
+}
+CanvasGradient.prototype.addColorStop = function(offset, color) {
+    if (!this || this.__gid__ === undefined) {
+        throw new TypeError("Failed to execute 'addColorStop' on 'CanvasGradient': " +
+            "receiver is not a CanvasGradient");
+    }
+    var o = Number(offset);
+    if (!isFinite(o)) {
+        throw new TypeError("addColorStop: offset is not a finite number");
+    }
+    if (o < 0 || o > 1) {
+        throw new DOMException("addColorStop: offset is outside [0, 1]", 'IndexSizeError');
+    }
+    _lumen_canvas2d_gradient_add_color_stop(this.__gid__, o, String(color));
+};
+_lumen_idl_tag(CanvasGradient, 'CanvasGradient');
+_lumen_idl_tag(Path2D, 'Path2D');
+
+function _lumen_make_canvas_gradient(gid) {
+    var g = Object.create(CanvasGradient.prototype);
+    _lumen_slot(g, '__gid__', gid);
+    return g;
+}
+
+function CanvasPattern() {
+    throw new TypeError("Illegal constructor");
+}
+// The transform is stored and reported but not yet applied by the rasterizer —
+// the native pattern has no matrix slot. Kept because a page feature-detects
+// the method, and because dropping the argument silently is what a stub does.
+CanvasPattern.prototype.setTransform = function(transform) {
+    if (!this || this.__patid__ === undefined) {
+        throw new TypeError("Failed to execute 'setTransform' on 'CanvasPattern': " +
+            "receiver is not a CanvasPattern");
+    }
+    var t = transform;
+    if (t === undefined || t === null) {
+        this.__pattern_transform__ = [1, 0, 0, 1, 0, 0];
+        return;
+    }
+    if (typeof t !== 'object') {
+        throw new TypeError("setTransform: argument is not a DOMMatrix2DInit");
+    }
+    this.__pattern_transform__ = [
+        t.a === undefined ? (t.m11 === undefined ? 1 : +t.m11) : +t.a,
+        t.b === undefined ? (t.m12 === undefined ? 0 : +t.m12) : +t.b,
+        t.c === undefined ? (t.m21 === undefined ? 0 : +t.m21) : +t.c,
+        t.d === undefined ? (t.m22 === undefined ? 1 : +t.m22) : +t.d,
+        t.e === undefined ? (t.m41 === undefined ? 0 : +t.m41) : +t.e,
+        t.f === undefined ? (t.m42 === undefined ? 0 : +t.m42) : +t.f,
+    ];
+};
+_lumen_idl_tag(CanvasPattern, 'CanvasPattern');
+
+function _lumen_make_canvas_pattern(patid) {
+    var p = Object.create(CanvasPattern.prototype);
+    _lumen_slot(p, '__patid__', patid);
+    _lumen_slot(p, '__pattern_transform__', [1, 0, 0, 1, 0, 0]);
+    return p;
+}
+
+// ── TextMetrics (HTML LS §4.12.5.1.13) ───────────────────────────────────────
+
+function TextMetrics() {
+    throw new TypeError("Illegal constructor");
+}
+_lumen_idl_tag(TextMetrics, 'TextMetrics');
+
+// One accessor per IDL attribute, all reading the same measurement record, so
+// a page that walks the prototype sees the interface rather than a bag of own
+// data properties.
+(function() {
+    var names = ['width', 'actualBoundingBoxLeft', 'actualBoundingBoxRight',
+        'actualBoundingBoxAscent', 'actualBoundingBoxDescent',
+        'fontBoundingBoxAscent', 'fontBoundingBoxDescent',
+        'emHeightAscent', 'emHeightDescent',
+        'hangingBaseline', 'alphabeticBaseline', 'ideographicBaseline'];
+    for (var i = 0; i < names.length; i++) {
         (function(name) {
-            var _val = (name === 'imageSmoothingEnabled') ? true
-                : (name === 'filter') ? 'none' : 0;
-            Object.defineProperty(ctx, name, {
-                get: function() { return _val; }, set: function(v) { _val = v; }, configurable: true,
+            Object.defineProperty(TextMetrics.prototype, name, {
+                get: function() {
+                    if (!this || this.__text_metrics__ === undefined) {
+                        throw new TypeError("Failed to read the '" + name +
+                            "' property from 'TextMetrics': receiver is not a TextMetrics");
+                    }
+                    return this.__text_metrics__[name];
+                },
+                enumerable: true, configurable: true,
             });
-        })(_stubProps[_pi]);
+        })(names[i]);
     }
-    // Wired shadow properties (Phase 3 native: shadowColor/Blur/OffsetX/OffsetY).
-    var _shadowColor = 'rgba(0, 0, 0, 0)';
-    Object.defineProperty(ctx, 'shadowColor', {
-        get: function() { return _shadowColor; },
-        set: function(v) { _shadowColor = String(v); _lumen_canvas2d_set_shadow_color(nid, _shadowColor); },
-        configurable: true,
+})();
+
+function _lumen_make_text_metrics(values) {
+    var tm = Object.create(TextMetrics.prototype);
+    _lumen_slot(tm, '__text_metrics__', values);
+    return tm;
+}
+
+// ── CanvasRenderingContext2D (HTML LS §4.12.5.1) ─────────────────────────────
+
+function CanvasRenderingContext2D() {
+    throw new TypeError("Illegal constructor");
+}
+_lumen_idl_tag(CanvasRenderingContext2D, 'CanvasRenderingContext2D');
+
+// Every member below starts here: the state slot doubles as the brand check.
+function _lumen_c2d(v, member) {
+    if (!v || v.__canvas2d__ === undefined) {
+        throw new TypeError("Failed to execute '" + member +
+            "' on 'CanvasRenderingContext2D': receiver is not a CanvasRenderingContext2D");
+    }
+    return v.__canvas2d__;
+}
+
+function _lumen_c2d_method(name, fn) {
+    Object.defineProperty(CanvasRenderingContext2D.prototype, name, {
+        value: fn, writable: true, enumerable: true, configurable: true,
     });
-    var _shadowBlur = 0;
-    Object.defineProperty(ctx, 'shadowBlur', {
-        get: function() { return _shadowBlur; },
-        set: function(v) { var n = Number(v); if (isFinite(n) && n >= 0) { _shadowBlur = n; _lumen_canvas2d_set_shadow_blur(nid, n); } },
-        configurable: true,
+}
+
+// A plain state property: getter reads the record, setter validates and pushes
+// the value into the native context.
+function _lumen_c2d_prop(name, apply, coerce) {
+    Object.defineProperty(CanvasRenderingContext2D.prototype, name, {
+        get: function() { return _lumen_c2d(this, name)[name]; },
+        set: function(v) {
+            var st = _lumen_c2d(this, name);
+            var next = coerce(v, st[name]);
+            if (next === undefined) { return; }
+            st[name] = next;
+            if (apply) { apply(st.nid, next); }
+        },
+        enumerable: true, configurable: true,
     });
-    var _shadowOffsetX = 0;
-    Object.defineProperty(ctx, 'shadowOffsetX', {
-        get: function() { return _shadowOffsetX; },
-        set: function(v) { var n = Number(v); if (isFinite(n)) { _shadowOffsetX = n; _lumen_canvas2d_set_shadow_offset_x(nid, n); } },
-        configurable: true,
-    });
-    var _shadowOffsetY = 0;
-    Object.defineProperty(ctx, 'shadowOffsetY', {
-        get: function() { return _shadowOffsetY; },
-        set: function(v) { var n = Number(v); if (isFinite(n)) { _shadowOffsetY = n; _lumen_canvas2d_set_shadow_offset_y(nid, n); } },
-        configurable: true,
-    });
-    // Wired text properties (Phase 4): font, textAlign, textBaseline.
-    var _font = '10px sans-serif';
-    Object.defineProperty(ctx, 'font', {
-        get: function() { return _font; },
-        set: function(v) { _font = String(v); _lumen_canvas2d_set_font(nid, _font); },
-        configurable: true,
-    });
-    var _textAlign = 'start';
-    Object.defineProperty(ctx, 'textAlign', {
-        get: function() { return _textAlign; },
-        set: function(v) { _textAlign = String(v); _lumen_canvas2d_set_text_align(nid, _textAlign); },
-        configurable: true,
-    });
-    var _textBaseline = 'alphabetic';
-    Object.defineProperty(ctx, 'textBaseline', {
-        get: function() { return _textBaseline; },
-        set: function(v) { _textBaseline = String(v); _lumen_canvas2d_set_text_baseline(nid, _textBaseline); },
-        configurable: true,
-    });
-    // Helper: parse px size from font string for TextMetrics ascent/descent approximation.
-    function parse_canvas_font_size_js(f) {
-        var parts = f.split(' ');
-        for (var i = 0; i < parts.length; i++) {
-            if (parts[i].indexOf('px') !== -1) {
-                var n = parseFloat(parts[i]);
-                if (n > 0) return n;
+}
+
+function _lumen_c2d_paint_style(name, setColor, setGradient, setPattern) {
+    Object.defineProperty(CanvasRenderingContext2D.prototype, name, {
+        get: function() { return _lumen_c2d(this, name)[name]; },
+        set: function(v) {
+            var st = _lumen_c2d(this, name);
+            if (v && typeof v === 'object' && v.__gid__ !== undefined) {
+                st[name] = v; setGradient(st.nid, v.__gid__);
+            } else if (v && typeof v === 'object' && v.__patid__ !== undefined) {
+                st[name] = v; setPattern(st.nid, v.__patid__);
+            } else {
+                st[name] = String(v); setColor(st.nid, st[name]);
             }
-        }
-        return 10;
+        },
+        enumerable: true, configurable: true,
+    });
+}
+
+Object.defineProperty(CanvasRenderingContext2D.prototype, 'canvas', {
+    get: function() { return _lumen_c2d(this, 'canvas').canvas; },
+    enumerable: true, configurable: true,
+});
+
+_lumen_c2d_paint_style('fillStyle',
+    function(nid, v) { _lumen_canvas2d_set_fill_style(nid, v); },
+    function(nid, g) { _lumen_canvas2d_set_fill_style_gradient(nid, g); },
+    function(nid, p) { _lumen_canvas2d_set_fill_style_pattern(nid, p); });
+_lumen_c2d_paint_style('strokeStyle',
+    function(nid, v) { _lumen_canvas2d_set_stroke_style(nid, v); },
+    function(nid, g) { _lumen_canvas2d_set_stroke_style_gradient(nid, g); },
+    function(nid, p) { _lumen_canvas2d_set_stroke_style_pattern(nid, p); });
+
+_lumen_c2d_prop('lineWidth', function(nid, v) { _lumen_canvas2d_set_line_width(nid, v); },
+    function(v) { var n = Number(v); return (isFinite(n) && n > 0) ? n : undefined; });
+_lumen_c2d_prop('globalAlpha', function(nid, v) { _lumen_canvas2d_set_global_alpha(nid, v); },
+    function(v) { var n = Number(v); return (isFinite(n) && n >= 0 && n <= 1) ? n : undefined; });
+_lumen_c2d_prop('globalCompositeOperation',
+    function(nid, v) { _lumen_canvas2d_set_global_composite_operation(nid, v); },
+    function(v) { return String(v); });
+_lumen_c2d_prop('lineCap', function(nid, v) { _lumen_canvas2d_set_line_cap(nid, v); },
+    function(v) { return String(v); });
+_lumen_c2d_prop('lineJoin', function(nid, v) { _lumen_canvas2d_set_line_join(nid, v); },
+    function(v) { return String(v); });
+_lumen_c2d_prop('miterLimit', function(nid, v) { _lumen_canvas2d_set_miter_limit(nid, v); },
+    function(v) { var n = Number(v); return (isFinite(n) && n > 0) ? n : undefined; });
+_lumen_c2d_prop('shadowColor', function(nid, v) { _lumen_canvas2d_set_shadow_color(nid, v); },
+    function(v) { return String(v); });
+_lumen_c2d_prop('shadowBlur', function(nid, v) { _lumen_canvas2d_set_shadow_blur(nid, v); },
+    function(v) { var n = Number(v); return (isFinite(n) && n >= 0) ? n : undefined; });
+_lumen_c2d_prop('shadowOffsetX', function(nid, v) { _lumen_canvas2d_set_shadow_offset_x(nid, v); },
+    function(v) { var n = Number(v); return isFinite(n) ? n : undefined; });
+_lumen_c2d_prop('shadowOffsetY', function(nid, v) { _lumen_canvas2d_set_shadow_offset_y(nid, v); },
+    function(v) { var n = Number(v); return isFinite(n) ? n : undefined; });
+_lumen_c2d_prop('font', function(nid, v) { _lumen_canvas2d_set_font(nid, v); },
+    function(v) { return String(v); });
+_lumen_c2d_prop('textAlign', function(nid, v) { _lumen_canvas2d_set_text_align(nid, v); },
+    function(v) { return String(v); });
+_lumen_c2d_prop('textBaseline', function(nid, v) { _lumen_canvas2d_set_text_baseline(nid, v); },
+    function(v) { return String(v); });
+// Accepted, stored and reported, but not yet consulted by the rasterizer.
+_lumen_c2d_prop('direction', null, function(v) { return String(v); });
+_lumen_c2d_prop('lineDashOffset', null,
+    function(v) { var n = Number(v); return isFinite(n) ? n : undefined; });
+_lumen_c2d_prop('imageSmoothingEnabled', null, function(v) { return !!v; });
+_lumen_c2d_prop('filter', null, function(v) { return String(v); });
+
+// Rect operations
+_lumen_c2d_method('fillRect', function(x, y, w, h) {
+    _lumen_canvas2d_fill_rect(_lumen_c2d(this, 'fillRect').nid, +x, +y, +w, +h);
+});
+_lumen_c2d_method('clearRect', function(x, y, w, h) {
+    _lumen_canvas2d_clear_rect(_lumen_c2d(this, 'clearRect').nid, +x, +y, +w, +h);
+});
+_lumen_c2d_method('strokeRect', function(x, y, w, h) {
+    _lumen_canvas2d_stroke_rect(_lumen_c2d(this, 'strokeRect').nid, +x, +y, +w, +h);
+});
+// Path operations
+_lumen_c2d_method('beginPath', function() {
+    _lumen_canvas2d_begin_path(_lumen_c2d(this, 'beginPath').nid);
+});
+_lumen_c2d_method('moveTo', function(x, y) {
+    _lumen_canvas2d_move_to(_lumen_c2d(this, 'moveTo').nid, +x, +y);
+});
+_lumen_c2d_method('lineTo', function(x, y) {
+    _lumen_canvas2d_line_to(_lumen_c2d(this, 'lineTo').nid, +x, +y);
+});
+_lumen_c2d_method('closePath', function() {
+    _lumen_canvas2d_close_path(_lumen_c2d(this, 'closePath').nid);
+});
+_lumen_c2d_method('arc', function(cx, cy, r, sa, ea, ccw) {
+    _lumen_canvas2d_arc(_lumen_c2d(this, 'arc').nid, +cx, +cy, +r, +sa, +ea, !!ccw);
+});
+_lumen_c2d_method('ellipse', function(cx, cy, rx, ry, rot, sa, ea, ccw) {
+    // Implemented via transforms: save → translate(cx,cy) → rotate(rot) →
+    // scale(rx,ry) → arc(0,0,1,sa,ea,ccw) → restore.
+    var nid = _lumen_c2d(this, 'ellipse').nid;
+    _lumen_canvas2d_save(nid);
+    _lumen_canvas2d_translate(nid, +cx, +cy);
+    if (+rot !== 0) { _lumen_canvas2d_rotate(nid, +rot); }
+    _lumen_canvas2d_scale(nid, +rx, +ry);
+    _lumen_canvas2d_arc(nid, 0, 0, 1, +sa, +ea, !!ccw);
+    _lumen_canvas2d_restore(nid);
+});
+_lumen_c2d_method('arcTo', function(x1, y1, x2, y2, r) {
+    _lumen_canvas2d_arc_to(_lumen_c2d(this, 'arcTo').nid, +x1, +y1, +x2, +y2, +r);
+});
+_lumen_c2d_method('rect', function(x, y, w, h) {
+    _lumen_canvas2d_rect(_lumen_c2d(this, 'rect').nid, +x, +y, +w, +h);
+});
+_lumen_c2d_method('bezierCurveTo', function(cp1x, cp1y, cp2x, cp2y, x, y) {
+    _lumen_canvas2d_bezier_curve_to(_lumen_c2d(this, 'bezierCurveTo').nid,
+        +cp1x, +cp1y, +cp2x, +cp2y, +x, +y);
+});
+_lumen_c2d_method('quadraticCurveTo', function(cpx, cpy, x, y) {
+    _lumen_canvas2d_quadratic_curve_to(_lumen_c2d(this, 'quadraticCurveTo').nid,
+        +cpx, +cpy, +x, +y);
+});
+_lumen_c2d_method('fill', function(ruleOrPath) {
+    var nid = _lumen_c2d(this, 'fill').nid;
+    if (ruleOrPath instanceof Path2D) {
+        _lumen_canvas2d_fill_path(nid, ruleOrPath.__pid__);
+    } else {
+        _lumen_canvas2d_fill(nid);
     }
+});
+_lumen_c2d_method('stroke', function(path) {
+    var nid = _lumen_c2d(this, 'stroke').nid;
+    if (path instanceof Path2D) {
+        _lumen_canvas2d_stroke_path(nid, path.__pid__);
+    } else {
+        _lumen_canvas2d_stroke(nid);
+    }
+});
+_lumen_c2d_method('clip', function(path) {
+    var nid = _lumen_c2d(this, 'clip').nid;
+    if (path instanceof Path2D) {
+        _lumen_canvas2d_clip_path(nid, path.__pid__);
+    } else {
+        _lumen_canvas2d_clip(nid);
+    }
+});
+// State stack
+_lumen_c2d_method('save', function() {
+    _lumen_canvas2d_save(_lumen_c2d(this, 'save').nid);
+});
+_lumen_c2d_method('restore', function() {
+    _lumen_canvas2d_restore(_lumen_c2d(this, 'restore').nid);
+});
+// Transforms
+_lumen_c2d_method('translate', function(tx, ty) {
+    _lumen_canvas2d_translate(_lumen_c2d(this, 'translate').nid, +tx, +ty);
+});
+_lumen_c2d_method('rotate', function(angle) {
+    _lumen_canvas2d_rotate(_lumen_c2d(this, 'rotate').nid, +angle);
+});
+_lumen_c2d_method('scale', function(sx, sy) {
+    _lumen_canvas2d_scale(_lumen_c2d(this, 'scale').nid, +sx, +sy);
+});
+_lumen_c2d_method('transform', function(a, b, c, d, e, f) {
+    _lumen_canvas2d_transform(_lumen_c2d(this, 'transform').nid, +a, +b, +c, +d, +e, +f);
+});
+_lumen_c2d_method('setTransform', function(a, b, c, d, e, f) {
+    // `setTransform()` with no arguments resets to the identity matrix
+    // (§4.12.5.1.6); passing the six undefineds through as `+undefined` sent
+    // six NaNs into the native and lost the transform for good.
+    var nid = _lumen_c2d(this, 'setTransform').nid;
+    if (arguments.length === 0) {
+        _lumen_canvas2d_set_transform(nid, 1, 0, 0, 1, 0, 0);
+        return;
+    }
+    if (arguments.length === 1) {
+        var m = a;
+        if (m === null || typeof m !== 'object') {
+            throw new TypeError("setTransform: argument is not a DOMMatrix2DInit");
+        }
+        _lumen_canvas2d_set_transform(nid,
+            m.a === undefined ? 1 : +m.a, m.b === undefined ? 0 : +m.b,
+            m.c === undefined ? 0 : +m.c, m.d === undefined ? 1 : +m.d,
+            m.e === undefined ? 0 : +m.e, m.f === undefined ? 0 : +m.f);
+        return;
+    }
+    _lumen_canvas2d_set_transform(nid, +a, +b, +c, +d, +e, +f);
+});
+_lumen_c2d_method('resetTransform', function() {
+    _lumen_canvas2d_reset_transform(_lumen_c2d(this, 'resetTransform').nid);
+});
+// Pixel manipulation
+_lumen_c2d_method('getImageData', function(sx, sy, sw, sh) {
+    var nid = _lumen_c2d(this, 'getImageData').nid;
+    if (arguments.length < 4) {
+        throw new TypeError("getImageData: 4 arguments required, but only " +
+            arguments.length + " present");
+    }
+    var x = _lumen_canvas_long(sx, 'getImageData', 'sx');
+    var y = _lumen_canvas_long(sy, 'getImageData', 'sy');
+    var w = _lumen_canvas_long(sw, 'getImageData', 'sw');
+    var h = _lumen_canvas_long(sh, 'getImageData', 'sh');
+    if (w === 0 || h === 0) {
+        throw new DOMException(
+            'The source width and height must be non-zero', 'IndexSizeError');
+    }
+    var r = _lumen_canvas_normalize_rect(x, y, w, h);
+    return _lumen_make_image_data(r.w, r.h,
+        _lumen_canvas2d_get_image_data(nid, r.x, r.y, r.w, r.h));
+});
+_lumen_c2d_method('putImageData', function(imageData, dx, dy, dirtyX, dirtyY, dirtyWidth, dirtyHeight) {
+    var nid = _lumen_c2d(this, 'putImageData').nid;
+    if (!imageData || imageData.__image_data__ === undefined) {
+        throw new TypeError("putImageData: argument 1 is not an ImageData");
+    }
+    var sw = imageData.width | 0, sh = imageData.height | 0;
+    var x = _lumen_canvas_long(dx, 'putImageData', 'dx');
+    var y = _lumen_canvas_long(dy, 'putImageData', 'dy');
+    // The whole source is the default dirty rectangle; the 7-argument
+    // form narrows it (canvas §4.12.5.1.10) and used to be dropped on
+    // the floor here (BUG-448).
+    var dr = { x: 0, y: 0, w: sw, h: sh };
+    if (arguments.length > 3) {
+        dr = _lumen_canvas_normalize_rect(
+            _lumen_canvas_long(dirtyX, 'putImageData', 'dirtyX'),
+            _lumen_canvas_long(dirtyY, 'putImageData', 'dirtyY'),
+            _lumen_canvas_long(dirtyWidth, 'putImageData', 'dirtyWidth'),
+            _lumen_canvas_long(dirtyHeight, 'putImageData', 'dirtyHeight'));
+    }
+    // Clip the dirty rectangle to the source; only that part crosses
+    // the binding, so a small dirty rect costs a small payload.
+    if (dr.x < 0) { dr.w += dr.x; dr.x = 0; }
+    if (dr.y < 0) { dr.h += dr.y; dr.y = 0; }
+    if (dr.x + dr.w > sw) { dr.w = sw - dr.x; }
+    if (dr.y + dr.h > sh) { dr.h = sh - dr.y; }
+    if (dr.w <= 0 || dr.h <= 0) { return; }
+    var d = imageData.data;
+    var H = '0123456789abcdef', hex = '';
+    for (var row = 0; row < dr.h; row++) {
+        var base = ((dr.y + row) * sw + dr.x) * 4;
+        for (var i = 0; i < dr.w * 4; i++) {
+            var b = d[base + i] & 255;
+            hex += H[b >> 4] + H[b & 15];
+        }
+    }
+    _lumen_canvas2d_put_image_data(nid, hex, dr.w, dr.h, x + dr.x, y + dr.y);
+});
+_lumen_c2d_method('createImageData', function(w, h) {
+    // Two overloads: (sw, sh) and the copy form (imageData), which
+    // takes the argument's dimensions and returns transparent black.
+    // The copy form used to fall through to `0|0` and hand back a 0×0
+    // buffer (BUG-448).
+    _lumen_c2d(this, 'createImageData');
+    if (arguments.length === 1) {
+        if (!w || w.__image_data__ === undefined) {
+            throw new TypeError("createImageData: argument 1 is not an ImageData");
+        }
+        return _lumen_make_image_data(w.width | 0, w.height | 0, null);
+    }
+    var sw = _lumen_canvas_long(w, 'createImageData', 'sw');
+    var sh = _lumen_canvas_long(h, 'createImageData', 'sh');
+    if (sw === 0 || sh === 0) {
+        throw new DOMException(
+            'The source width and height must be non-zero', 'IndexSizeError');
+    }
+    return _lumen_make_image_data(Math.abs(sw), Math.abs(sh), null);
+});
+// drawImage forms: (src,dx,dy) | (src,dx,dy,dw,dh) | (src,sx,sy,sw,sh,dx,dy,dw,dh).
+// Source may be a <canvas>/OffscreenCanvas (canvas bitmap store, via __nid__)
+// or a decoded <img> element (img_bitmap_store, via __nid__ + tag=img).
+_lumen_c2d_method('drawImage', function(image, a, b, c, d, e, f, g, h) {
+    var nid = _lumen_c2d(this, 'drawImage').nid;
+    if (!image || image.__nid__ === undefined) { return; }
+    var src = image.__nid__;
+    var isImg = (_lumen_get_tag_name(src) === 'IMG');
+    var iw = +image.width || 0, ih = +image.height || 0;
+    if (arguments.length >= 9) {
+        var sx = +a, sy = +b, sw = +c, sh = +d;
+        var dx9 = +e, dy9 = +f, dw9 = +g, dh9 = +h;
+        if (!(sw > 0) || !(sh > 0) || !(dw9 > 0) || !(dh9 > 0)) { return; }
+        var coords = sx + ',' + sy + ',' + sw + ',' + sh + ',' + dx9 + ',' + dy9 + ',' + dw9 + ',' + dh9;
+        if (isImg) { _lumen_canvas2d_draw_image_crop_from_img(nid, src, coords); }
+        else { _lumen_canvas2d_draw_image_crop(nid, src, coords); }
+        return;
+    }
+    var dx, dy, dw, dh;
+    if (arguments.length >= 5) {
+        dx = +a; dy = +b; dw = +c; dh = +d;
+        if (!(dw > 0) || !(dh > 0)) { return; }
+        if (isImg) { _lumen_canvas2d_draw_image_from_img(nid, src, dx, dy, dw, dh); }
+        else { _lumen_canvas2d_draw_image(nid, src, dx, dy, dw, dh); }
+    } else {
+        dx = +a; dy = +b;
+        if (isImg) {
+            // 3-arg form: pass dw/dh=0 so the native uses the image's natural size.
+            _lumen_canvas2d_draw_image_from_img(nid, src, dx, dy, 0, 0);
+        } else {
+            if (!(iw > 0) || !(ih > 0)) { return; }
+            _lumen_canvas2d_draw_image(nid, src, dx, dy, iw, ih);
+        }
+    }
+});
+// Text
+_lumen_c2d_method('fillText', function(t, x, y) {
+    _lumen_canvas2d_fill_text(_lumen_c2d(this, 'fillText').nid,
+        String(t == null ? '' : t), +x, +y);
+});
+_lumen_c2d_method('strokeText', function(t, x, y) {
+    _lumen_canvas2d_stroke_text(_lumen_c2d(this, 'strokeText').nid,
+        String(t == null ? '' : t), +x, +y);
+});
+_lumen_c2d_method('measureText', function(t) {
+    var st = _lumen_c2d(this, 'measureText');
+    var s = String(t == null ? '' : t);
+    // The twelve numbers come from the font itself (glyph boxes for the ink
+    // extents, `hhea` for the vertical ones), in the IDL order the native
+    // documents; the fallback keeps the three the shim used to report at all.
+    var m = _lumen_canvas2d_text_metrics(st.nid, s);
+    if (!m || m.length !== 12) {
+        var fs = _lumen_canvas_font_px(st.font);
+        var w = _lumen_canvas2d_measure_text(st.nid, s);
+        m = [w, 0, w, fs * 0.8, fs * 0.2, fs * 0.8, fs * 0.2,
+             fs * 0.8, fs * 0.2, fs * 0.8, 0, -fs * 0.2];
+    }
+    return _lumen_make_text_metrics({
+        width: m[0],
+        actualBoundingBoxLeft: m[1],
+        actualBoundingBoxRight: m[2],
+        actualBoundingBoxAscent: m[3],
+        actualBoundingBoxDescent: m[4],
+        fontBoundingBoxAscent: m[5],
+        fontBoundingBoxDescent: m[6],
+        emHeightAscent: m[7],
+        emHeightDescent: m[8],
+        hangingBaseline: m[9],
+        alphabeticBaseline: m[10],
+        ideographicBaseline: m[11],
+    });
+});
+// Line dash
+_lumen_c2d_method('setLineDash', function() { _lumen_c2d(this, 'setLineDash'); });
+_lumen_c2d_method('getLineDash', function() { _lumen_c2d(this, 'getLineDash'); return []; });
+// Hit testing
+_lumen_c2d_method('isPointInPath', function(pathOrX, xOrY, y) {
+    var nid = _lumen_c2d(this, 'isPointInPath').nid;
+    if (pathOrX instanceof Path2D) {
+        return _lumen_canvas2d_is_point_in_path(nid, pathOrX.__pid__, +xOrY, +y);
+    }
+    return false;
+});
+_lumen_c2d_method('isPointInStroke', function() {
+    _lumen_c2d(this, 'isPointInStroke');
+    return false;
+});
+// Gradients and patterns
+_lumen_c2d_method('createLinearGradient', function(x0, y0, x1, y1) {
+    return _lumen_make_canvas_gradient(_lumen_canvas2d_create_linear_gradient(
+        _lumen_c2d(this, 'createLinearGradient').nid, +x0, +y0, +x1, +y1));
+});
+_lumen_c2d_method('createRadialGradient', function(x0, y0, r0, x1, y1, r1) {
+    return _lumen_make_canvas_gradient(_lumen_canvas2d_create_radial_gradient(
+        _lumen_c2d(this, 'createRadialGradient').nid, +x0, +y0, +r0, +x1, +y1, +r1));
+});
+_lumen_c2d_method('createConicGradient', function(angle, cx, cy) {
+    return _lumen_make_canvas_gradient(_lumen_canvas2d_create_conic_gradient(
+        _lumen_c2d(this, 'createConicGradient').nid, +angle, +cx, +cy));
+});
+_lumen_c2d_method('createPattern', function(image, repetition) {
+    _lumen_c2d(this, 'createPattern');
+    if (!image || image.__nid__ === undefined) { return null; }
+    var rep = (repetition == null || repetition === '') ? 'repeat' : String(repetition);
+    var pid = _lumen_canvas2d_create_pattern(image.__nid__, rep);
+    if (!pid) { return null; }
+    return _lumen_make_canvas_pattern(pid);
+});
+
+// Enumerated text-shaping state (§4.12.5.1.12). Stored and reported; the
+// rasterizer does not consult them yet, so an invalid value is ignored exactly
+// as the spec asks rather than rejected.
+function _lumen_c2d_enum_prop(name, allowed) {
+    _lumen_c2d_prop(name, null, function(v) {
+        var s = String(v);
+        return allowed.indexOf(s) === -1 ? undefined : s;
+    });
+}
+_lumen_c2d_enum_prop('imageSmoothingQuality', ['low', 'medium', 'high']);
+_lumen_c2d_enum_prop('fontKerning', ['auto', 'normal', 'none']);
+_lumen_c2d_enum_prop('fontStretch', ['ultra-condensed', 'extra-condensed', 'condensed',
+    'semi-condensed', 'normal', 'semi-expanded', 'expanded', 'extra-expanded', 'ultra-expanded']);
+_lumen_c2d_enum_prop('fontVariantCaps', ['normal', 'small-caps', 'all-small-caps', 'petite-caps',
+    'all-petite-caps', 'unicase', 'titling-caps']);
+_lumen_c2d_enum_prop('textRendering', ['auto', 'optimizeSpeed', 'optimizeLegibility',
+    'geometricPrecision']);
+// letterSpacing/wordSpacing take a CSS <length>; anything else is ignored.
+function _lumen_c2d_length_prop(name) {
+    _lumen_c2d_prop(name, null, function(v) {
+        var s = String(v);
+        return /^[+-]?(\d+\.?\d*|\.\d+)(px|em|rem|ex|ch|vw|vh|vmin|vmax|cm|mm|in|pt|pc|q)$/i.test(s)
+            ? s : undefined;
+    });
+}
+_lumen_c2d_length_prop('letterSpacing');
+_lumen_c2d_length_prop('wordSpacing');
+
+// The context is never lost and never opaque: there is one software bitmap per
+// canvas and nothing can take it away (§4.12.5.1.1).
+_lumen_c2d_method('isContextLost', function() {
+    _lumen_c2d(this, 'isContextLost');
+    return false;
+});
+_lumen_c2d_method('getContextAttributes', function() {
+    _lumen_c2d(this, 'getContextAttributes');
+    return { alpha: true, colorSpace: 'srgb', desynchronized: false, willReadFrequently: false };
+});
+
+// §4.12.5.1.2 reset: the bitmap goes transparent black, the state stack is
+// emptied and every attribute returns to its initial value.
+_lumen_c2d_method('reset', function() {
+    var st = _lumen_c2d(this, 'reset');
+    var d = _lumen_canvas_dims(st.nid);
+    _lumen_canvas2d_reset_transform(st.nid);
+    _lumen_canvas2d_clear_rect(st.nid, 0, 0, d[0], d[1]);
+    _lumen_canvas2d_begin_path(st.nid);
+    var defaults = _lumen_canvas2d_default_state(st.canvas, st.nid);
+    for (var k in defaults) {
+        if (k === 'nid' || k === 'canvas') { continue; }
+        st[k] = defaults[k];
+    }
+    _lumen_canvas2d_set_fill_style(st.nid, st.fillStyle);
+    _lumen_canvas2d_set_stroke_style(st.nid, st.strokeStyle);
+    _lumen_canvas2d_set_line_width(st.nid, st.lineWidth);
+    _lumen_canvas2d_set_global_alpha(st.nid, st.globalAlpha);
+    _lumen_canvas2d_set_global_composite_operation(st.nid, st.globalCompositeOperation);
+    _lumen_canvas2d_set_line_cap(st.nid, st.lineCap);
+    _lumen_canvas2d_set_line_join(st.nid, st.lineJoin);
+    _lumen_canvas2d_set_miter_limit(st.nid, st.miterLimit);
+    _lumen_canvas2d_set_shadow_color(st.nid, st.shadowColor);
+    _lumen_canvas2d_set_shadow_blur(st.nid, st.shadowBlur);
+    _lumen_canvas2d_set_shadow_offset_x(st.nid, st.shadowOffsetX);
+    _lumen_canvas2d_set_shadow_offset_y(st.nid, st.shadowOffsetY);
+    _lumen_canvas2d_set_font(st.nid, st.font);
+    _lumen_canvas2d_set_text_align(st.nid, st.textAlign);
+    _lumen_canvas2d_set_text_baseline(st.nid, st.textBaseline);
+});
+
+// §4.12.5.1.7 roundRect. `radii` is one radius or a list of up to four, each a
+// number or a `{x, y}` (DOMPointInit); the corners are scaled down together
+// when they would overlap, so no arc can cross the rectangle's own edge.
+function _lumen_corner_radius(v, method) {
+    if (v !== null && typeof v === 'object') {
+        var rx = v.x === undefined ? 0 : Number(v.x);
+        var ry = v.y === undefined ? 0 : Number(v.y);
+        if (!isFinite(rx) || !isFinite(ry)) {
+            throw new TypeError(method + ": a radius is not a finite number");
+        }
+        if (rx < 0 || ry < 0) {
+            throw new DOMException(method + ": a radius is negative", 'IndexSizeError');
+        }
+        return [rx, ry];
+    }
+    var r = Number(v);
+    if (!isFinite(r)) {
+        throw new TypeError(method + ": a radius is not a finite number");
+    }
+    if (r < 0) {
+        throw new DOMException(method + ": a radius is negative", 'IndexSizeError');
+    }
+    return [r, r];
+}
+_lumen_c2d_method('roundRect', function(x, y, w, h, radii) {
+    var st = _lumen_c2d(this, 'roundRect');
+    var nid = st.nid;
+    var X = +x, Y = +y, W = +w, H = +h;
+    if (!isFinite(X) || !isFinite(Y) || !isFinite(W) || !isFinite(H)) { return; }
+    if (radii === undefined) { radii = 0; }
+    var list = (radii !== null && typeof radii === 'object' && typeof radii.length === 'number')
+        ? Array.prototype.slice.call(radii) : [radii];
+    if (list.length < 1 || list.length > 4) {
+        throw new RangeError("roundRect: radii must hold between one and four radii");
+    }
+    var r = [];
+    for (var i = 0; i < list.length; i++) { r.push(_lumen_corner_radius(list[i], 'roundRect')); }
+    // upperLeft, upperRight, lowerRight, lowerLeft — the CSS corner shorthand.
+    var ul, ur, lr, ll;
+    if (r.length === 1) { ul = ur = lr = ll = r[0]; }
+    else if (r.length === 2) { ul = lr = r[0]; ur = ll = r[1]; }
+    else if (r.length === 3) { ul = r[0]; ur = ll = r[1]; lr = r[2]; }
+    else { ul = r[0]; ur = r[1]; lr = r[2]; ll = r[3]; }
+    // A negative extent mirrors the rectangle, and the corners swap with it.
+    if (W < 0) { X += W; W = -W; var sw1 = ul; ul = ur; ur = sw1; var sw2 = ll; ll = lr; lr = sw2; }
+    if (H < 0) { Y += H; H = -H; var sh1 = ul; ul = ll; ll = sh1; var sh2 = ur; ur = lr; lr = sh2; }
+    var scale = Math.min(
+        H / (ul[1] + ll[1]), W / (ul[0] + ur[0]),
+        H / (ur[1] + lr[1]), W / (ll[0] + lr[0]));
+    if (isFinite(scale) && scale < 1) {
+        ul = [ul[0] * scale, ul[1] * scale]; ur = [ur[0] * scale, ur[1] * scale];
+        lr = [lr[0] * scale, lr[1] * scale]; ll = [ll[0] * scale, ll[1] * scale];
+    }
+    // Each corner is a quarter ellipse; drawn as an arc in a scaled user space,
+    // the way `ellipse` already is, so the path stays one connected subpath.
+    function corner(cx, cy, rx, ry, start, end) {
+        if (rx <= 0 || ry <= 0) { _lumen_canvas2d_line_to(nid, cx, cy); return; }
+        _lumen_canvas2d_save(nid);
+        _lumen_canvas2d_translate(nid, cx, cy);
+        _lumen_canvas2d_scale(nid, rx, ry);
+        _lumen_canvas2d_arc(nid, 0, 0, 1, start, end, false);
+        _lumen_canvas2d_restore(nid);
+    }
+    var HALF = Math.PI / 2;
+    _lumen_canvas2d_move_to(nid, X + ul[0], Y);
+    _lumen_canvas2d_line_to(nid, X + W - ur[0], Y);
+    corner(X + W - ur[0], Y + ur[1], ur[0], ur[1], -HALF, 0);
+    _lumen_canvas2d_line_to(nid, X + W, Y + H - lr[1]);
+    corner(X + W - lr[0], Y + H - lr[1], lr[0], lr[1], 0, HALF);
+    _lumen_canvas2d_line_to(nid, X + ll[0], Y + H);
+    corner(X + ll[0], Y + H - ll[1], ll[0], ll[1], HALF, Math.PI);
+    _lumen_canvas2d_line_to(nid, X, Y + ul[1]);
+    corner(X + ul[0], Y + ul[1], ul[0], ul[1], Math.PI, Math.PI + HALF);
+    _lumen_canvas2d_close_path(nid);
+});
+
+// Parses the px size out of a canvas `font` string, for the TextMetrics
+// ascent/descent approximation.
+function _lumen_canvas_font_px(f) {
+    var parts = String(f).split(' ');
+    for (var i = 0; i < parts.length; i++) {
+        if (parts[i].indexOf('px') !== -1) {
+            var n = parseFloat(parts[i]);
+            if (n > 0) return n;
+        }
+    }
+    return 10;
+}
+
+// Builds a CanvasRenderingContext2D backed by the native _lumen_canvas2d_*
+// bindings (lumen_canvas::Context2D), keyed by the canvas element's node index
+// `nid`. Drawing methods forward to the native rasterizer; the shell uploads
+// the pixel buffer to the renderer under `canvas:{nid}` each frame.
+function _lumen_make_canvas2d_ctx(canvasEl, nid) {
+    var ctx = Object.create(CanvasRenderingContext2D.prototype);
+    _lumen_slot(ctx, '__canvas2d__', _lumen_canvas2d_default_state(canvasEl, nid));
     return ctx;
+}
+
+// The initial value of every attribute (§4.12.5.1.1), in one place because
+// `reset()` has to restore exactly this set.
+function _lumen_canvas2d_default_state(canvasEl, nid) {
+    return {
+        nid: nid,
+        canvas: canvasEl,
+        fillStyle: '#000000',
+        strokeStyle: '#000000',
+        lineWidth: 1.0,
+        globalAlpha: 1.0,
+        globalCompositeOperation: 'source-over',
+        lineCap: 'butt',
+        lineJoin: 'miter',
+        miterLimit: 10,
+        shadowColor: 'rgba(0, 0, 0, 0)',
+        shadowBlur: 0,
+        shadowOffsetX: 0,
+        shadowOffsetY: 0,
+        font: '10px sans-serif',
+        textAlign: 'start',
+        textBaseline: 'alphabetic',
+        direction: 'inherit',
+        lineDashOffset: 0,
+        imageSmoothingEnabled: true,
+        imageSmoothingQuality: 'low',
+        filter: 'none',
+        letterSpacing: '0px',
+        wordSpacing: '0px',
+        fontKerning: 'auto',
+        fontStretch: 'normal',
+        fontVariantCaps: 'normal',
+        textRendering: 'auto',
+    };
 }
 
 // Resolve a canvas element's bitmap width/height (HTML LS §4.12.4 defaults 300×150).
