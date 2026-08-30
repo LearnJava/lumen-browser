@@ -122,7 +122,7 @@ test canvas returns the *whole* canvas's bytes instead of the requested
   вовсе и отдаёт странице сырую транспортную строку. Это
   [BUG-456](BUG-456-OPEN.md), у него свой указатель в `STATUS-P3.md`.
 * `ImageData`/контекст остаются объектными литералами без прототипа —
-  [BUG-449](BUG-449-OPEN.md). Здесь добавлен только член `colorSpace`, сама
+  [BUG-449](BUG-449-FIXED.md). Здесь добавлен только член `colorSpace`, сама
   объектная модель не трогалась.
 
 ### Гейт

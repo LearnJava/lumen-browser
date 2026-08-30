@@ -158,6 +158,111 @@ fn measure_text_width(text: &str, pixel_size: f32) -> f64 {
         .sum()
 }
 
+/// Vertical position of the line named by `text_baseline`, in pixels above the
+/// alphabetic baseline. Mirrors `render_text_to_canvas`'s own baseline table —
+/// the metrics a page reads must describe the text the rasterizer draws.
+fn baseline_offset_px(text_baseline: &str, ascent_px: f32, pixel_size: f32) -> f32 {
+    match text_baseline {
+        "top" => ascent_px,
+        "hanging" => ascent_px * 0.85,
+        "middle" => ascent_px - pixel_size * 0.5,
+        "ideographic" | "bottom" => ascent_px - pixel_size,
+        _ => 0.0, // "alphabetic" — the baseline itself
+    }
+}
+
+/// The twelve `TextMetrics` attributes of `text` under the context's current
+/// font, `textAlign` and `textBaseline` (canvas §4.12.5.1.13), in IDL order:
+/// width, actualBoundingBox{Left,Right,Ascent,Descent},
+/// fontBoundingBox{Ascent,Descent}, emHeight{Ascent,Descent},
+/// hanging/alphabetic/ideographic baseline.
+///
+/// BUG-449: the shim used to report three of these and derive them from the
+/// font size alone. Horizontal extents come from the real glyph bounding boxes,
+/// vertical ones from `hhea`; every value is relative to the alignment point and
+/// to the `textBaseline` line, as the spec measures them.
+#[cfg(feature = "v8-backend")]
+fn text_metrics(nid: u32, text: &str) -> Vec<f64> {
+    let (font_str, text_align, text_baseline) = CANVASES.with(|c| {
+        c.borrow()
+            .get(&nid)
+            .map(|ctx| (ctx.font.clone(), ctx.text_align.clone(), ctx.text_baseline.clone()))
+            .unwrap_or_default()
+    });
+    let pixel_size = parse_canvas_font_size(&font_str);
+    let width = measure_text_width(text, pixel_size);
+
+    let parsed = lumen_font::Font::parse(BUNDLED_FONT).ok();
+    let tables = parsed.as_ref().and_then(|f| {
+        match (f.head(), f.hhea(), f.cmap(), f.hmtx()) {
+            (Ok(head), Ok(hhea), Ok(cmap), Ok(hmtx)) => Some((f, head, hhea, cmap, hmtx)),
+            _ => None,
+        }
+    });
+    let Some((font, head, hhea, cmap, hmtx)) = tables else {
+        // No font: report the advance width and leave every box empty rather
+        // than invent a shape for glyphs nothing could measure.
+        return vec![width, 0.0, width, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    };
+    let upem = f32::from(head.units_per_em).max(1.0);
+    let scale = pixel_size / upem;
+    let font_ascent = f32::from(hhea.ascent) * scale;
+    let font_descent = f32::from(hhea.descent) * scale; // negative, y-up
+    let baseline = baseline_offset_px(&text_baseline, font_ascent, pixel_size);
+
+    // Ink box of the whole run, in y-up pixels around the alphabetic baseline.
+    let mut pen = 0.0f32;
+    let (mut x_min, mut x_max, mut y_min, mut y_max) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+    for ch in text.chars() {
+        let gid = cmap.glyph_index(ch as u32).unwrap_or(0);
+        if let Ok(Some(glyph)) = font.glyph_resolved(gid)
+            && !glyph.bbox.is_inverted()
+            && (glyph.bbox.x_min != glyph.bbox.x_max || glyph.bbox.y_min != glyph.bbox.y_max)
+        {
+            // A blank glyph (a space) carries a degenerate box and contributes
+            // nothing to the ink extents, only to the advance below.
+            let bb = glyph.bbox;
+            x_min = x_min.min(pen + f32::from(bb.x_min) * scale);
+            x_max = x_max.max(pen + f32::from(bb.x_max) * scale);
+            y_min = y_min.min(f32::from(bb.y_min) * scale);
+            y_max = y_max.max(f32::from(bb.y_max) * scale);
+        }
+        pen += f32::from(hmtx.advance_width(gid).unwrap_or(0)) * scale;
+    }
+    if x_min > x_max {
+        // Empty string, or a run of glyphs with no outline at all (a space).
+        x_min = 0.0;
+        x_max = 0.0;
+        y_min = 0.0;
+        y_max = 0.0;
+    }
+    // The horizontal extents are measured from the alignment point, which is
+    // where the text is anchored — not from the pen start.
+    let anchor = match text_align.as_str() {
+        "center" => width as f32 * 0.5,
+        "right" | "end" => width as f32,
+        _ => 0.0,
+    };
+    // Em square: its top sits at the ascent's share of the em, so that the box
+    // spans exactly one em however the font splits ascent and descent.
+    let em_top = pixel_size * (font_ascent / (font_ascent - font_descent).max(f32::EPSILON));
+    let em_bottom = em_top - pixel_size;
+    vec![
+        width,
+        f64::from(anchor - x_min),
+        f64::from(x_max - anchor),
+        f64::from(y_max - baseline),
+        f64::from(baseline - y_min),
+        f64::from(font_ascent - baseline),
+        f64::from(baseline - font_descent),
+        f64::from(em_top - baseline),
+        f64::from(baseline - em_bottom),
+        f64::from(font_ascent * 0.8 - baseline),
+        f64::from(-baseline),
+        f64::from(font_descent - baseline),
+    ]
+}
+
 /// Render `text` at canvas position `(x, y)` with the given fill `color`.
 ///
 /// `x` is the pen start; `y` is adjusted by `text_align` / `text_baseline` before use.
@@ -925,6 +1030,10 @@ pub(crate) fn install_canvas2d_bindings_v8(
             let pixel_size = parse_canvas_font_size(&font_str);
             measure_text_width(&text, pixel_size)
         }),
+    )?;
+    rt.register_native(
+        "_lumen_canvas2d_text_metrics",
+        into_v8_fn2(|nid: u32, text: String| -> Vec<f64> { text_metrics(nid, &text) }),
     )?;
     // BUG-448: the rectangle is a parameter, not a suggestion — the crop happens
     // here, where the bitmap already is, so a one-pixel read transports four

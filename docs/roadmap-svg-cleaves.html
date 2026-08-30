@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-30",
  "counts": {
-  "open": 374,
-  "fixed": 509,
+  "open": 373,
+  "fixed": 510,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -8682,10 +8682,10 @@
    "debtor": false
   },
   "BUG-449": {
-   "status": "open",
-   "title": "Ни один интерфейс Canvas 2D не существует как глобальный объект: из 14 требуемых HTML LS §4.12.5 есть три (`HTMLCanvasElement`, `Path2D`, `OffscreenCanvas`), а…",
-   "component": "js (`crates/js/src/dom.rs` — `getContext` в фабрике обёрток, `_lumen_make_canvas2d_ctx`; `crates/js/src/canvas2d.rs`)",
-   "date": null,
+   "status": "fixed",
+   "title": "**Ни один интерфейс Canvas 2D не существовал как глобальный объект:** из 14 требуемых HTML LS §4.12.5 было три (`HTMLCanvasElement`, `Path2D`, `OffscreenCanvas`…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — классы Canvas 2D и фабрика контекста `_lumen_make_canvas2d_ctx`; натив метрик текста `crates/js/src/canvas2d.rs`)",
+   "date": "2026-08-30",
    "debtor": false
   },
   "BUG-450": {
