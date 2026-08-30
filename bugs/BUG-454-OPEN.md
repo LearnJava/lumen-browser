@@ -60,7 +60,7 @@ C5 identical=true      toDataURL('image/jpeg') → data:image/png;…
 
 Срез `html/canvas/element` (числа — в строке `WPT-VENDOR-html-canvas` ROADMAP.md).
 Прицельно: `element/canvas-host/2d.canvas.host.todataurl.*` (тип и размер),
-`element/pixel-manipulation/*` (там же живёт [BUG-448](BUG-448-OPEN.md) — `getImageData`
+`element/pixel-manipulation/*` (там же живёт [BUG-448](BUG-448-FIXED.md) — `getImageData`
 игнорирует прямоугольник).
 
 ## Направление починки — решение продуктовое, не техническое

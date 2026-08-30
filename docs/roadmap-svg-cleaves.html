@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-30",
  "counts": {
-  "open": 376,
-  "fixed": 507,
+  "open": 374,
+  "fixed": 509,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -8647,10 +8647,10 @@
    "debtor": false
   },
   "BUG-444": {
-   "status": "open",
-   "title": "**У checkedness нет хранилища, отдельного от content-атрибута `checked`.** HTML LS §4.10.5.5 различает текущее состояние и значение по умолчанию (`defaultChecke…",
-   "component": "js (`crates/js/src/dom.rs` — own-свойство `checked` в `_lumen_build_element`), shell (`forms.rs` — сбор формы и покраска читают атрибут)",
-   "date": null,
+   "status": "fixed",
+   "title": "**У checkedness не было хранилища, отдельного от content-атрибута `checked`.** HTML LS §4.10.5.5 различает текущее состояние и значение по умолчанию (`defaultCh…",
+   "component": "dom (`Document::dirty_checkedness` + `control_checked`/`set_control_checked`/`clear_control_checked`), js (`web_api_shim_mid.js` — геттер/сеттер `checked`; `dom_core.rs` — нативы `_lumen_{get,set,clear}_dirty_checked`), layout (`box_tree.rs`, `style/matching/forms.rs`), a11y (`lib.rs`), shell (`forms.rs`), driver (`session.rs`, `winit_session.rs`)",
+   "date": "2026-08-30",
    "debtor": false
   },
   "BUG-445": {
@@ -8675,10 +8675,10 @@
    "debtor": false
   },
   "BUG-448": {
-   "status": "open",
-   "title": "**`getImageData(sx, sy, sw, sh)` игнорирует все четыре аргумента и всегда возвращает весь холст.** Шим объявлен с сигнатурой спеки, но параметры читаются только…",
-   "component": "js (`crates/js/src/dom.rs:5224-5235` — шим `getImageData`; натив `crates/js/src/canvas2d.rs:1003` `_lumen_canvas2d_get_image_data(nid)`)",
-   "date": null,
+   "status": "fixed",
+   "title": "**`getImageData(sx, sy, sw, sh)` игнорировал все четыре аргумента и всегда возвращал весь холст.** Шим был объявлен с сигнатурой спеки, но параметры читались то…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — шим `getImageData`/`putImageData`/`createImageData`; натив `crates/js/src/canvas2d.rs`; вырезка `crates/engine/canvas/src/image_data.rs`)",
+   "date": "2026-08-30",
    "debtor": false
   },
   "BUG-449": {
@@ -12046,6 +12046,9 @@
    "BUG-019",
    "BUG-218"
   ],
+  "dom (`Document::dirty_checkedness` + `control_checked`/`set_control_checked`/`clear_control_checked`), js (`web_api_shim_mid.js` — геттер/сеттер `checked`; `dom_core.rs` — нативы `_lumen_{get,set,clear}_dirty_checked`), layout (`box_tree.rs`, `style/matching/forms.rs`), a11y (`lib.rs`), shell (`forms.rs`), driver (`session.rs`, `winit_session.rs`)": [
+   "BUG-444"
+  ],
   "dom (`Document::dirty_values` + `control_value`/`set_control_value`/`clear_control_value`), js (`dom.rs` — геттер/сеттер `value`; `v8_runtime.rs` — нативы `_lumen_{get,set,clear}_dirty_value`), layout (`box_tree.rs`, `style.rs`), shell (`forms.rs`, `main.rs`), driver (`session.rs`)": [
    "BUG-441"
   ],
@@ -12464,9 +12467,6 @@
   ],
   "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)": [
    "BUG-351"
-  ],
-  "js (`crates/js/src/dom.rs` — own-свойство `checked` в `_lumen_build_element`), shell (`forms.rs` — сбор формы и покраска читают атрибут)": [
-   "BUG-444"
   ],
   "js (`crates/js/src/dom.rs` — глобальный `window`; `:12210` определяет `closed`/`name` только у объекта-заглушки `open()`)": [
    "BUG-887"
