@@ -127,6 +127,21 @@ pub fn create_offscreen_from_pixels(w: u32, h: u32, pixels: Vec<u8>) -> u32 {
     id
 }
 
+/// BUG-454: arm the fingerprint noise generator on an OffscreenCanvas created
+/// via [`create_offscreen_from_pixels`] — used by `transferControlToOffscreen()`
+/// (HTML LS §4.12.14), whose pixels come straight from a live DOM `<canvas>`
+/// rather than through `_lumen_offscreen_canvas_new` (which arms noise itself).
+/// Not called for the other three `create_offscreen_from_pixels` sites
+/// (`ImageBitmap` transfer, `createImageBitmap(blob)`, `createImageBitmap(<img>)`)
+/// — those read decoded image bytes, not a canvas's rendered content, so they
+/// are outside this bug's threat model.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn arm_noise(canvas_id: u32, seed: u64) {
+    with_offscreen_canvas(canvas_id, |c| {
+        c.set_noise_generator(lumen_canvas::CanvasNoiseGenerator::new(seed));
+    });
+}
+
 /// Remove `canvas_id` from the registry and return its `(width, height, pixels)`.
 ///
 /// Used by `ImageBitmapRenderingContext.transferFromImageBitmap` (via
@@ -227,14 +242,29 @@ pub fn flush_dirty() -> Vec<(u32, u32, u32, Vec<u8>)> {
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_offscreen_canvas_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
+    origin: &str,
 ) -> lumen_core::JsResult<()> {
     use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn5, into_v8_fn7};
     use lumen_core::ext::JsRuntime as _;
+    use lumen_canvas::CanvasNoiseGenerator;
+
+    // BUG-454: same per-document seed as `canvas2d.rs`'s element canvases —
+    // `document_noise_seed` mixes it with the origin, `OffscreenCanvas` has no
+    // origin of its own to derive one from. Computed once here and captured by
+    // value into the closure below, not read from a thread-local at call time —
+    // this installer and the native's actual invocation run on different OS
+    // threads in this V8 compat layer, so a thread-local set-here-read-there
+    // would read back its default (measured on `canvas2d.rs`'s first attempt at
+    // this: every canvas silently seeded with 0).
+    let noise_seed = crate::canvas2d::document_noise_seed(origin);
 
     rt.register_native(
         "_lumen_offscreen_canvas_new",
-        into_v8_fn2(|w: u32, h: u32| -> String {
+        into_v8_fn2(move |w: u32, h: u32| -> String {
             let canvas = OffscreenCanvas::new(w, h);
+            with_offscreen_canvas(canvas.id, |c| {
+                c.set_noise_generator(CanvasNoiseGenerator::new(noise_seed));
+            });
             format!(
                 "{{\"__canvas_id__\":{},\"width\":{},\"height\":{}}}",
                 canvas.id, canvas.width, canvas.height
@@ -849,7 +879,7 @@ mod tests_v8 {
         // `throw new DOMException(...)` in `getImageData` would otherwise become
         // a `ReferenceError` (same trap as `filesystem_access.rs`'s harness).
         rt.eval(crate::v8_runtime::DOM_EXCEPTION_POLYFILL).unwrap();
-        super::install_offscreen_canvas_bindings_v8(&rt).unwrap();
+        super::install_offscreen_canvas_bindings_v8(&rt, "https://example.test").unwrap();
         rt
     }
 
@@ -1092,9 +1122,12 @@ mod tests_v8 {
                 ctx.fillStyle = '#ff0000'; ctx.fillRect(0, 0, 4, 4);
                 ctx.fillStyle = '#00ff00'; ctx.fillRect(2, 2, 2, 2);
                 var img = ctx.getImageData(2, 2, 2, 2);
+                // BUG-454: getImageData is noised now (±1 per RGB channel, alpha exact) —
+                // this reads addressing/cropping correctness, not exact colour.
                 img.width === 2 && img.height === 2 && img.data.length === 16 &&
                 img.colorSpace === 'srgb' &&
-                img.data[0] === 0 && img.data[1] === 255 && img.data[2] === 0 && img.data[3] === 255
+                Math.abs(img.data[0] - 0) <= 1 && Math.abs(img.data[1] - 255) <= 1 &&
+                Math.abs(img.data[2] - 0) <= 1 && img.data[3] === 255
             "#,
         );
         assert!(ok, "requested 2x2 rect as a real ImageData, not the whole 4x4 as a wire string");

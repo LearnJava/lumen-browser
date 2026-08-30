@@ -93,19 +93,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/bidi-server/src/server.rs:27` **fn** `spawn` — Spawn the BiDi server on `127.0.0.1:port`. Non-blocking — runs in a background thread
 `crates/bidi-server/src/transport.rs:22` **fn** `handle` — Handle one accepted TCP stream: WS upgrade → BiDi command loop
 
-## lumen-canvas  (100 symbols)
+## lumen-canvas  (98 symbols)
 
 `crates/engine/canvas/src/color.rs:3` **struct** `CanvasColor` — RGBA color used by the Canvas 2D API
 `crates/engine/canvas/src/color.rs:16` **fn** `rgba` — Собирает цвет из каналов 0–255 (альфа не premultiplied)
 `crates/engine/canvas/src/color.rs:21` **fn** `with_alpha_mult` — Multiply `self.a` by `alpha` (0.0–1.0)
 `crates/engine/canvas/src/color.rs:45` **fn** `from_css_str` — Разбирает CSS-значение `<color>`
 `crates/engine/canvas/src/color.rs:59` **fn** `to_css_string` — Сериализация для `fillStyle`/`strokeStyle`/`shadowColor` по
-`crates/engine/canvas/src/fp_noise.rs:17` **struct** `CanvasNoiseGenerator` — Per-session canvas fingerprint noise generator
-`crates/engine/canvas/src/fp_noise.rs:27` **fn** `new` — Create a new noise generator with the given per-session seed
-`crates/engine/canvas/src/fp_noise.rs:48` **fn** `next_noise_u8` — Generate next noise byte (0..=255) clamped to safe range
-`crates/engine/canvas/src/fp_noise.rs:56` **fn** `apply_noise_to_pixel` — Add per-channel noise to an RGBA pixel
-`crates/engine/canvas/src/fp_noise.rs:66` **fn** `apply_noise_to_buffer` — Apply noise to an entire RGBA buffer (row-major, top-left origin)
-`crates/engine/canvas/src/fp_noise.rs:77` **fn** `reset` — Reset the RNG state to the seed (for reproducibility)
+`crates/engine/canvas/src/fp_noise.rs:38` **struct** `CanvasNoiseGenerator` — Per-session canvas fingerprint noise generator
+`crates/engine/canvas/src/fp_noise.rs:58` **fn** `new` — Create a generator for the given per-session seed
+`crates/engine/canvas/src/fp_noise.rs:67` **fn** `channel_delta` — Perturbation for one colour channel of the pixel at `(x, y)`: `-1`, `0` or `+1`
+`crates/engine/canvas/src/fp_noise.rs:83` **fn** `apply_noise_to_rect` — Apply noise in place to the RGBA8 rectangle `out`, whose top-left pixel is at
 `crates/engine/canvas/src/image_data.rs:24` **fn** `get_image_data_rect` — `getImageData(sx, sy, sw, sh)` — RGBA8 copy of the requested rectangle
 `crates/engine/canvas/src/lib.rs:36` **enum** `CompositeOperation` — CSS `globalCompositeOperation` — Porter-Duff compositing mode
 `crates/engine/canvas/src/lib.rs:75` **fn** `from_str` — Parse from the CSS string literal used in `ctx.globalCompositeOperation`
@@ -1387,8 +1385,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/broadcast_channel.rs:101` **fn** `post` — Deliver `json` to every channel named `name` except the sender (`sender_id`)
 `crates/js/src/broadcast_channel.rs:121` **fn** `close` — Remove the channel instance `id` from the global hub and this runtime
 `crates/js/src/broadcast_channel.rs:138` **fn** `drain` — Drain all pending messages addressed to this runtime's channels
-`crates/js/src/canvas2d.rs:379` **fn** `present_rgba` — Present a WebGPU-rendered RGBA8 frame into the `<canvas>` `nid`'s CPU buffer
-`crates/js/src/canvas2d.rs:401` **fn** `flush_dirty` — Drain dirty canvases and return their current RGBA buffers
+`crates/js/src/canvas2d.rs:413` **fn** `present_rgba` — Present a WebGPU-rendered RGBA8 frame into the `<canvas>` `nid`'s CPU buffer
+`crates/js/src/canvas2d.rs:435` **fn** `flush_dirty` — Drain dirty canvases and return their current RGBA buffers
 `crates/js/src/clipboard.rs:35` **fn** `set_clipboard_provider` — Install the host clipboard provider backing `navigator.clipboard`
 `crates/js/src/credentials.rs:49` **fn** `set_credential_provider` — Install the host credential provider backing `navigator.credentials`
 `crates/js/src/css_properties_values_api.rs:18` **struct** `RegisteredPropertiesMap` — Maps property name (e.g. "--my-color") to its definition
@@ -1464,7 +1462,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/offscreen_canvas.rs:74` **fn** `height` — Get canvas height in CSS pixels
 `crates/js/src/offscreen_canvas.rs:79` **fn** `transfer_to_image_bitmap` — Transfer pixel buffer to ImageBitmap and clear the canvas
 `crates/js/src/offscreen_canvas.rs:120` **fn** `create_offscreen_from_pixels` — Create a new OffscreenCanvas pre-filled with existing RGBA8 pixel data
-`crates/js/src/offscreen_canvas.rs:196` **fn** `flush_dirty` — Drain dirty offscreen canvases and return their RGBA buffers
+`crates/js/src/offscreen_canvas.rs:211` **fn** `flush_dirty` — Drain dirty offscreen canvases and return their RGBA buffers
 `crates/js/src/paint_worklet.rs:17` **struct** `PaintWorkletRegistry` — Maps worklet name (e.g. "my-paint") to its definition
 `crates/js/src/paint_worklet.rs:22` **fn** `new`
 `crates/js/src/paint_worklet.rs:27` **fn** `register` — Register a paint worklet definition
@@ -1800,13 +1798,6 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:2321` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
 `crates/engine/layout/src/box_tree.rs:2347` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
 `crates/engine/layout/src/box_tree.rs:2428` **fn** `apply_intrinsic_size` — Доставляет intrinsic-размеры декодированной картинки в layout, дописывая
-`crates/engine/layout/src/box_tree.rs:2619` **struct** `LayoutBox`
-`crates/engine/layout/src/box_tree.rs:2676` **struct** `BoxOrigin` — Where a layout box came from — the identity of a box for all
-`crates/engine/layout/src/box_tree.rs:2702` **enum** `BoxRole` — Disambiguates the many boxes one DOM node — or no node at all — can
-`crates/engine/layout/src/box_tree.rs:2730` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
-`crates/engine/layout/src/box_tree.rs:2776` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
-`crates/engine/layout/src/box_tree.rs:2809` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
-`crates/engine/layout/src/box_tree.rs:2848` **enum** `BoxKind`
 `crates/engine/layout/src/box_tree/container_anchor.rs:21` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/box_tree/entry.rs:54` **fn** `layout` — Lay out a document without a text measurer. For tests and headless dump modes
 `crates/engine/layout/src/box_tree/entry.rs:80` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
@@ -1822,6 +1813,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree/inline_wrap.rs:26` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
 `crates/engine/layout/src/box_tree/inline_wrap.rs:45` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
 `crates/engine/layout/src/box_tree/inline_wrap.rs:75` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
+`crates/engine/layout/src/box_tree/types.rs:4` **struct** `LayoutBox`
+`crates/engine/layout/src/box_tree/types.rs:61` **struct** `BoxOrigin` — Where a layout box came from — the identity of a box for all
+`crates/engine/layout/src/box_tree/types.rs:87` **enum** `BoxRole` — Disambiguates the many boxes one DOM node — or no node at all — can
+`crates/engine/layout/src/box_tree/types.rs:115` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
+`crates/engine/layout/src/box_tree/types.rs:161` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
+`crates/engine/layout/src/box_tree/types.rs:194` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
+`crates/engine/layout/src/box_tree/types.rs:233` **enum** `BoxKind`
 `crates/engine/layout/src/color_mix.rs:38` **enum** `MixColorSpace` — CSS Color L5 §10.2 — interpolation color space for `color-mix()`
 `crates/engine/layout/src/color_mix.rs:63` **fn** `from_css` — Parse a CSS `color-mix()` interpolation space identifier (case-insensitive)
 `crates/engine/layout/src/color_mix.rs:80` **fn** `is_polar` — Returns `true` if this space has a hue (polar) axis
@@ -5675,4 +5673,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:228` **fn** `count`
 
 ---
-*Total: 5598 symbols in 24 crates*
+*Total: 5596 symbols in 24 crates*

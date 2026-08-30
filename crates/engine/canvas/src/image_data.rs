@@ -43,8 +43,10 @@ impl Context2D {
                 out[di..di + 4].copy_from_slice(&self.pixels[si..si + 4]);
             }
         }
-        if let Some(mut noise_gen) = self.noise_generator.clone() {
-            noise_gen.apply_noise_to_buffer(&mut out);
+        // BUG-454: the rectangle's canvas-space origin goes with it, so the pixel at
+        // (sx+col, sy+row) is perturbed the same way whatever rectangle asked for it.
+        if let Some(noise_gen) = self.noise_generator {
+            noise_gen.apply_noise_to_rect(&mut out, sx, sy, sw, sh);
         }
         out
     }

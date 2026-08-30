@@ -5511,14 +5511,50 @@ HTMLCanvasElement.prototype.transferControlToOffscreen = function() {
     return oc;
 };
 
-// Privacy: blank data URL defeats canvas pixel-hash fingerprinting (ADR-007).
-HTMLCanvasElement.prototype.toDataURL = function() {
-    _lumen_canvas_nid(this);
-    return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+// Privacy (ADR-007 layer 4, BUG-454): a blank stub is not a valid answer to
+// HTML LS §4.12.5.7 (wrong size, wrong/lying type) and `getImageData` was
+// never blanked, so a script could always read pixels through that channel —
+// the stub bought a spec-compliance bug, not privacy. The real defence is the
+// per-session+origin noise `_lumen_canvas2d_create` arms on every context
+// (`crates/js/src/canvas2d.rs::document_noise_seed`): `toDataURL` now encodes
+// the canvas's real (noised) bitmap at its real size. `_lumen_canvas2d_create`
+// is idempotent, so this also gives a context — and therefore a real
+// transparent-black bitmap of the right size — to a canvas that was never
+// `getContext`-ed at all.
+HTMLCanvasElement.prototype.toDataURL = function(_type, _quality) {
+    var nid = _lumen_canvas_nid(this);
+    var d = _lumen_canvas_dims(nid);
+    _lumen_canvas2d_create(nid, d[0], d[1]);
+    return _lumen_canvas2d_to_data_url(nid);
 };
-HTMLCanvasElement.prototype.toBlob = function(cb) {
-    _lumen_canvas_nid(this);
-    if (typeof cb === 'function') cb(null);
+// `callback` must be invoked as a queued task (HTML LS §4.12.5.7 step 3), not
+// synchronously — the same "engine callback on the page's behalf" rule
+// `_perf_queue_task`/`_wa_task`/BUG-832's `_lumen_fire_hashchange` follow, and
+// for the same reason: the §8.6 4 ms nesting clamp must not apply to a task
+// the engine itself queues.
+HTMLCanvasElement.prototype.toBlob = function(cb, _type, _quality) {
+    var nid = _lumen_canvas_nid(this);
+    if (typeof cb !== 'function') return;
+    var d = _lumen_canvas_dims(nid);
+    _lumen_canvas2d_create(nid, d[0], d[1]);
+    var dataUrl = _lumen_canvas2d_to_data_url(nid);
+    var fn = function() {
+        var comma = dataUrl.indexOf(',');
+        if (comma < 0) { cb(null); return; }
+        var bin = atob(dataUrl.slice(comma + 1));
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        cb(new Blob([bytes], { type: 'image/png' }));
+    };
+    if (typeof _lumen_timers !== 'undefined' && _lumen_timers && typeof _lumen_timer_seq === 'number') {
+        var deadline = (typeof _lumen_now_ms === 'function') ? _lumen_now_ms() : 0;
+        _lumen_timers.push({ id: _lumen_timer_seq++, fn: fn, deadline: deadline, interval: null, nesting: 0 });
+        if (typeof _lumen_request_wakeup === 'function') _lumen_request_wakeup(deadline);
+    } else if (typeof setTimeout === 'function') {
+        setTimeout(fn, 0);
+    } else {
+        fn();
+    }
 };
 
 // `width`/`height` reflect the content attributes as `unsigned long` with the

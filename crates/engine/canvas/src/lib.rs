@@ -646,8 +646,8 @@ impl Context2D {
     /// If a noise generator is set, returns a noisy copy; otherwise returns raw pixels.
     pub fn get_image_data(&self) -> Vec<u8> {
         let mut data = self.pixels.clone();
-        if let Some(mut noise_gen) = self.noise_generator.clone() {
-            noise_gen.apply_noise_to_buffer(&mut data);
+        if let Some(noise_gen) = self.noise_generator {
+            noise_gen.apply_noise_to_rect(&mut data, 0, 0, self.width, self.height);
         }
         data
     }

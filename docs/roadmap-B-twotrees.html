@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-31",
  "counts": {
-  "open": 371,
-  "fixed": 514,
+  "open": 370,
+  "fixed": 515,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -8868,10 +8868,10 @@
    "debtor": false
   },
   "BUG-454": {
-   "status": "open",
-   "title": "Анти-fingerprint у canvas закрывает один канал чтения пикселей из двух: `toDataURL`/`toBlob` заглушены на всех путях создания элемента, а `getImageData` не загл…",
-   "component": "js (`crates/js/src/dom.rs` — `toDataURL` фабрики; `crates/js/src/webgl_canvas.rs:492-500` — резервная заглушка), privacy",
-   "date": null,
+   "status": "fixed",
+   "title": "Анти-fingerprint у canvas доведён до класса атаки (вариант 1 из файла бага): `getImageData` — холст элемента, `OffscreenCanvas`, `transferControlToOffscreen` —…",
+   "component": "js (`crates/js/src/canvas2d.rs`/`offscreen_canvas.rs`, `crates/js/src/shim/web_api_shim_mid.js`), `lumen-canvas` (`fp_noise.rs`), privacy",
+   "date": "2026-08-31",
    "debtor": false
   },
   "BUG-455": {
