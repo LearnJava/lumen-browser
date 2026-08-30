@@ -556,16 +556,21 @@ fn canvas_get_context_webgl_returns_functional_context() {
     assert_eq!(ok, lumen_core::JsValue::Bool(true));
 }
 
+/// BUG-450: этот тест фиксировал сам дефект — «`div.getContext('2d')` отдаёт
+/// null» описывает элемент, У КОТОРОГО ЕСТЬ метод `getContext`. По HTML LS
+/// §4.12.5 метод принадлежит `HTMLCanvasElement`, и скрипты определяют
+/// поддержку канваса именно как `'getContext' in el`, поэтому у `<div>` его не
+/// должно быть вовсе.
 #[test]
-fn non_canvas_get_context_2d_is_null() {
+fn non_canvas_has_no_get_context_at_all() {
     let rt = v8_runtime_with_dom(make_doc());
-    let is_null = rt
+    let absent = rt
         .eval(
             "var d = document.createElement('div');\
-                     d.getContext('2d') === null",
+             !('getContext' in d) && d.getContext === undefined",
         )
         .unwrap();
-    assert_eq!(is_null, lumen_core::JsValue::Bool(true));
+    assert_eq!(absent, lumen_core::JsValue::Bool(true));
 }
 
 // ── Canvas CSS resize tests ───────────────────────────────────────────────

@@ -18,6 +18,7 @@
 use super::*;
 use crate::v8_runtime::V8JsRuntime;
 
+mod canvas_interface_membership;
 mod canvas_object_model;
 mod selectors_canvas_window;
 
