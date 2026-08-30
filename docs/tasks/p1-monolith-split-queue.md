@@ -445,11 +445,81 @@ lint-policy не нужно. Пиксельный гейт (§2.5) группе 
 2. `dom.rs:10` несёт файловый `#![allow(missing_docs)]` **под** крейтовым
    (`lib.rs:4`) — избыточен, тоже P5.
 
-### Группы BT/PR/LB/NW/CP/DM — второй эшелон
+### Группа BT — `crates/engine/layout/src/box_tree.rs` (23 671 строка)
+
+Перепись BT-0 закрыта 2026-08-30 (`python scripts/split_census.py
+crates/engine/layout/src/box_tree.rs`): **301 top-level item, лексер сходится
+(итоговая глубина 0)**, `# item'ов без /// над ними: 39`. Файл делится на два
+неравных предмета: производственный код 63…14858 (14 796 строк, 275 item'ов)
+и один плоский `mod tests` на 14859…23672 (8 814 строк, 51 авторская
+секция-баннер, **без единого вложенного `mod`** — тот же плоский случай, что
+`style.rs`'s ST-1, но крупнее любого отдельного файла ST-группы). Группа режется,
+как SH/ST, **с хвоста к голове** — сначала тесты (хвост файла), затем
+производственные темы от `container_anchor`/`anchor` (14536) вверх до
+`diagnostics`/`predicates` (63) — так вырезка не сдвигает анкеры ещё не взятых
+батчей. 19 батчей BT-1…BT-19 покрывают 63…23672 без разрывов и наложений.
+
+**Три правила группы BT, унаследованные от ST и JS.**
+
+1. **Реэкспорт `pub use`, а не приватный `use`.** `lib.rs` несёt `pub mod
+   box_tree;` и один блок `pub use box_tree::{…}` на 25 имён (9 типов —
+   `BoxKind`/`BoxOrigin`/`BoxRole`/`FormControlKind`/`ImageRequest`/
+   `InlineFrag`/`InlineSegment`/`LayoutBox`/`PseudoKind` — плюс 16 функций),
+   и 66 внешних обращений `lumen_layout::box_tree::…`/`layout::box_tree::…`
+   по репозиторию (правило ST §2.1: каждый переехавший `pub` item получает
+   `pub use` со старого пути).
+2. **`#![allow(missing_docs)]` на новом файле — не бюрократия, но и не
+   единственный способ увидеть долг.** Крейт `lumen-layout` несёт файловый
+   `#![allow(missing_docs)]` **в корне `lib.rs`** (найдено SPLIT-ST15), то
+   есть линт не сработает ни в одном новом файле крейта независимо от того,
+   поставлен там allow или нет — не тратить на это время при разрезке, долг
+   ищется сверкой `difflib`, а не `cargo check`.
+3. **Пиксельный гейт обязателен (§2.5).** `box_tree.rs` строит геометрию:
+   `scripts/scoped-test.sh` + `python graphic_tests/dump_golden.py` с пустым
+   дифом. Гейт висит на `lumen-network` ([BUG-805](../../bugs/BUG-805-OPEN.md)) —
+   тесты гонять адресно (`cargo test -p lumen-layout`) и писать в тело
+   коммита, почему гейт не зелёный.
+
+**Тестовая группа (BT-1…BT-3) — ключ раскладки ТЕКСТ БАННЕРА, а не номер
+строки** (урок ST-1: после первого среза номера едут, баннер — нет). Шапка
+модуля (14859…15228, 370 строк) остаётся в `box_tree/tests/mod.rs` — её видят
+все потомки. 51 секция группируется в восемь тематических файлов по 320…1500
+строк, упакованных в три батча по ≤4000 перенесённых строк за сессию (§2.6).
+
+| ID | Анкер (строки box_tree.rs) | Регион | Цель |
+|---|---|---:|---|
+| BT-1 | `mod tests` (14859) — секции 2…26, от «BUG-734: intrinsic aspect ratio» до «CSS Generated Content L3 §3.2 — open-quote / close-quote» | 3 287 | Три файла `box_tree/tests/`: `intrinsic_and_wrap.rs` (секции 2…13 — intrinsic-width тесты BUG-734/737/738/739/742 + hyphenation + line-break/word-break/wrap-mode, 1 173), `flow_modes.rs` (14…21 — flow-root/display:contents/margin-центрирование/justify-self и -items/флекс auto-margins/loading=lazy/BUG-848, 667), `pseudo_first_line.rs` (22…26 — ::first-letter/::first-line структурные маркеры + BB-1 сплит + CSS-wiring + ::marker + open/close-quote, 1 447) |
+| BT-2 | секции 27…36, от «BUG-196: ::before/::after на flex-контейнере» до «Flex align-content (multi-line flex wrap)» | 2 577 | Три файла: `generated_float.rs` (27…28 — BUG-196 + BUG-136 float/clear/margin, 524), `shapes_and_contain.rs` (29…35 — shape-outside circle/polygon/path/ellipse/inset + content-visibility + contain-intrinsic-size, 850), `flex_align_content.rs` (36 — одна секция, крупнейшая в модуле, 1 203) |
+| BT-3 | секции 37…51, от «BUG-803: `parse_svg_transform`» до «BUG-341 S36: layout-result cache differential tests» | 2 580 | Два файла: `svg_transform_and_misc.rs` (37…45 — BUG-803 + text-align-last + progress/meter + measure_text_w_varied + border-spacing/-collapse + SVG preserveAspectRatio + grid masonry fallback + margin-collapse родитель↔первый ребёнок, 1 484), `bug341_differential.rs` (46…51 — font-size-adjust + is_open_details + RP-1 + BUG-341 S4/S33/S36 дифференциальные тесты кэшей, 1 096) |
+| BT-4 | `fn apply_container_styles` (14536) … до `mod tests` (14859) | 323 | `box_tree/container_anchor.rs` — контейнерные запросы (`apply_container_styles`/`apply_container_inner`), anchor positioning (`apply_anchor_positions`/`apply_anchor_positions_rec`), `re_style_subtree` (BUG-341) |
+| BT-5 | `fn strip_soft_hyphens` (13179) … до `fn apply_container_styles` (14536) | 1 357 | `box_tree/inline_wrap.rs` — измерение текста/small-caps/hyphenation-хелперы (13179…13705) + `wrap_inline_run` (13706…14203, 498 строк одной функцией — главный алгоритм переноса строк) + выравнивание строк/ellipsis/line-clamp (14204…14535) |
+| BT-6 | `fn grid_content_distribution` (12237) … до `fn strip_soft_hyphens` (13179) | 942 | `box_tree/grid.rs` — распределение по трекам, `lay_out_grid` (696 строк), резолюция grid-line/named-area |
+| BT-7 | `struct UsedSizeOverride` (11259) … до `fn grid_content_distribution` (12237) | 978 | `box_tree/flex.rs` — `lay_out_flex` (943 строки одной функцией) |
+| BT-8 | `fn lay_out_multicol_children` (10835) … до `struct UsedSizeOverride` (11259) | 424 | `box_tree/multicol_abspos.rs` — два небольших режима в одном файле: multicol-колонки + `lay_out_abs_children`/`abs_box_shrinks_to_fit` |
+| BT-9 | `fn lay_out_table_row` (9920) … до `fn lay_out_multicol_children` (10835) | 915 | `box_tree/table.rs` — режим table целиком: строки/collapse-границы/intrinsic-ширины колонок |
+| BT-10 | `fn lay_out_for_vertical` (7866) … до `fn lay_out_table_row` (9920) | 2 054 | Два файла (совокупно под потолком батча §2.6, но не под потолком файла — `lay_out_inner` не делится): `box_tree/bfc.rs` (7866…8065, 200 — BFC/margin-collapse хелперы) + `box_tree/layout_dispatch.rs` (8066…9919, 1 854 — `lay_out`/`lay_out_with_used_size`/`lay_out_cache_checked`/`lay_out_inner`, **1 691 строка одной функцией**, центральный диспетчер режимов, САМЫЙ РИСКОВАННЫЙ БАТЧ ГРУППЫ) |
+| BT-11 | `fn shift_y_box` (7384) … до `fn lay_out_for_vertical` (7866) | 482 | `box_tree/shapes_floats.rs` — `shift_tree` + CSS Shapes L1 парсеры (circle/polygon/ellipse/inset/path) + `FloatContext` (impl 170 строк) + polygon-edge хелперы |
+| BT-12 | `fn contributes_to_intrinsic_width` (6793) … до `fn shift_y_box` (7384) | 591 | `box_tree/intrinsic.rs` — max/min-content ширины, флекс-специфичные intrinsic хелперы |
+| BT-13 | `fn is_base_select_host` (5668) … до `fn contributes_to_intrinsic_width` (6793) | 1 125 | `box_tree/build.rs` — ядро построения бокса: `build_box`/`build_box_or_reuse`/`incremental_build_box`/`build_box_inner` (873 строки одной функцией, второй по размеру в файле) |
+| BT-14 | `fn probe_display` (4240) … до `fn is_base_select_host` (5668) | 1 428 | `box_tree/inline_build.rs` — inline-пробинг (`probe_display*`/`is_atomic_inline_level`/`anon_*`) + `collect_inline_segments` (250 строк) + `content`/pseudo/`::marker` → inline-сегменты |
+| BT-15 | `fn build_shadow_sheets` (3623) … до `fn probe_display` (4240) | 617 | `box_tree/entry.rs` — точки входа `layout`/`layout_measured*`/`lay_out_incremental`/`layout_streaming_incremental`/`layout_mutation_incremental*` (BUG-341 глюйка инкрементального рестайла), `build_iframe_document` (**единственная зависимость layout→html-parser** — ROADMAP это отдельно называл кандидатом в свой модуль; здесь всего 10 строк, оставлена в общем файле точек входа), `font-size-adjust`, `propagate_canvas_background`/`canvas_background_color`, теневые таблицы стилей (`build_shadow_sheets`) |
+| BT-16 | `fn apply_first_letter_style` (3017) … до `fn build_shadow_sheets` (3623) | 606 | `box_tree/pseudo_text.rs` — структурное расщепление `::first-letter`/`::first-line` (`extract_first_letter_float`/`extract_initial_letter`/`split_segments_at_first_line`/`split_first_line_boxes`) |
+| BT-17 | `struct LayoutBox` (2590) … до `fn apply_first_letter_style` (3017) | 427 | `box_tree/types.rs` — центральный словарь типов: `LayoutBox`/`BoxOrigin`/`BoxRole`/`InlineSegment`/`PseudoKind`/`InlineFrag`/`BoxKind` (198 строк один `enum`). Все семь — часть 25-именного `pub use box_tree::{…}` в `lib.rs`, реэкспорт обязателен (правило 1 выше) |
+| BT-18 | `struct ViewBox` (927) … до `struct LayoutBox` (2590) | 1 663 | Два файла: `box_tree/svg.rs` (927…2271, 1 345 — `ViewBox`/`PreserveAspectRatio`/шесть `Svg*` enum'ов, `parse_svg_transform` (152 строки), `process_svg_node` (277), `lay_out_svg_*`, bbox-хелперы) + `box_tree/image_requests.rs` (2272…2589, 318 — `ImageRequest`, `collect_image_requests`/`collect_background_image_requests`, `apply_intrinsic_size`, `resolve_image_source`) |
+| BT-19 | `struct LayoutKeyCensus` (63) … до `struct ViewBox` (927) | 864 | Головной регион файла (взят последним). Два файла: `box_tree/diagnostics.rs` (63…802, 740 — BUG-341 census/кэш-статистика: `LayoutKeyCensus`/`LayoutResultCacheStats`/`BoxBuildStats`/`BoxCopyStats` и их `take_*`/`set_*`) + `box_tree/predicates.rs` (803…926, 124 — `scrollbar_gutter_*` + `is_{image,video,canvas,audio,iframe,picture}_element`) |
+
+Механическая проверка на каждом батче — та же, что у ST/JS: сумма перенесённых
+строк должна сойтись с объёмом региона, счётчик `#[test]` крейта (сейчас смотреть
+свежий — не 3 637, число уехало за счёт слитых веток P4/P3 после ST-18) не должен
+измениться, `dump_golden.py` 12/12 пустой дифф. Анкеры этой таблицы дрейфуют
+на каждом взятом батче — пересчитывать в начале сессии по текущему файлу
+(правило SH/ST «регион по текущему файлу, не по таблице»), не по номерам строк
+выше.
+
+### Группы PR/LB/NW/CP/DM — второй эшелон
 
 | ID | Файл | Первый шаг |
 |---|---|---|
-| BT-0 | `layout/box_tree.rs` (23 470) | перепись → конструкторы по режимам `{block, inline, flex, grid, table, abspos, iframe}`; `build_iframe_document` (зависимость layout→html-parser) — кандидат на отдельный модуль |
 | LB-0 | `layout/lib.rs` (19 155) | перепись → нарезка. Группы под этот файл в исходном плане не было — пробел, замеченный при назначении дорожки P1 2026-08-26, хотя файл шестой по величине в переписи |
 | PR-0 | `paint/renderer.rs` (20 919) | перепись → `{pipelines_wgsl, glyph_atlas, texture_pool, compute}`; WGSL-шейдеры в `.wgsl`-файлы с `include_str!` |
 | PR-1 | `paint/display_list.rs` (19 698) | перепись → `{commands, builder, serialize, hit_test, cache}` |

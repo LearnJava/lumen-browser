@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-30",
  "counts": {
-  "open": 376,
-  "fixed": 507,
+  "open": 375,
+  "fixed": 508,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -5599,9 +5599,142 @@
       {
        "id": "SPLIT-BT0",
        "title": "SPLIT-BT0: перепись box_tree.rs",
+       "status": "done",
+       "size": "S",
+       "note": "Перепись `crates/engine/layout/src/box_tree.rs` (23 470 строк) и нарезка на батчи: конструкторы по режимам block, inline, flex, grid, table, abspos, iframe; `build_iframe_document` (единственная зависимость layout→html-parser) — кандидат на отдельный модуль. Файл вырос на 919 строк с даты аудита 2026-08-23, оценку снимать заново. Метод — §1, результат — таблица батчей в §4 [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) ЗАКРЫТ 2026-08-30 (ветка `p1-split-bt0`): 301 top-level item, лексер сходится (итоговая глубина 0), файл (23 671 строка) разложен на 275 item'ов производственного кода (63…14858, 14 796 строк) и один ПЛОСКИЙ `mod tests` без единого вложенного `mod` (14859…23672, 8 814 строк, 51 авторская секция-баннер) — 19 батчей BT-1…BT-19, покрывающих 63…23672 без разрывов, режутся с хвоста к голове как SH/ST. Три правила унаследованы от ST: реэкспорт `pub use` (25 имён в `lib.rs`, 66 внешних обращений `…box_tree::…`), `#![allow(missing_docs)]` крейта `lumen-layout` стоит в корне `lib.rs` — линт не сработает ни в одном новом файле независимо от allow (находка ST-15), пиксельный гейт обязателен (`scoped-test.sh` висит на [BUG-805](bugs/BUG-805-OPEN.md) — тесты адресно). `build_iframe_document`, названный постановкой кандидатом в отдельный модуль, оказался 10 строками и слит в `box_tree/entry.rs` вместе с точками входа. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT1",
+       "title": "SPLIT-BT1: intrinsic/wrap/flow-modes/pseudo-first-line тесты box_tree.rs",
+       "status": "ready",
+       "size": "L",
+       "note": "Тестовый модуль `crates/engine/layout/src/box_tree.rs`, секции 2…26 (от «BUG-734: intrinsic aspect ratio» до «open-quote / close-quote»), 3 287 строк → три файла `box_tree/tests/`: `intrinsic_and_wrap.rs` (1 173), `flow_modes.rs` (667), `pseudo_first_line.rs` (1 447). Ключ раскладки — текст баннера секции, не номер строки (урок ST-1: после первого среза номера едут). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT2",
+       "title": "SPLIT-BT2: generated/float/shapes/flex-align-content тесты box_tree.rs",
+       "status": "ready",
+       "size": "L",
+       "note": "Тестовый модуль `crates/engine/layout/src/box_tree.rs`, секции 27…36 (от «BUG-196: ::before/::after на flex» до «Flex align-content»), 2 577 строк → `generated_float.rs` (524), `shapes_and_contain.rs` (850), `flex_align_content.rs` (1 203, одна секция). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT3",
+       "title": "SPLIT-BT3: svg-transform/misc/BUG-341-дифференциальные тесты box_tree.rs",
+       "status": "ready",
+       "size": "L",
+       "note": "Тестовый модуль `crates/engine/layout/src/box_tree.rs`, секции 37…51 (от «BUG-803: parse_svg_transform» до «BUG-341 S36»), 2 580 строк → `svg_transform_and_misc.rs` (1 484), `bug341_differential.rs` (1 096). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT4",
+       "title": "SPLIT-BT4: container queries и anchor positioning из box_tree.rs",
        "status": "ready",
        "size": "S",
-       "note": "Перепись `crates/engine/layout/src/box_tree.rs` (23 470 строк) и нарезка на батчи: конструкторы по режимам block, inline, flex, grid, table, abspos, iframe; `build_iframe_document` (единственная зависимость layout→html-parser) — кандидат на отдельный модуль. Файл вырос на 919 строк с даты аудита 2026-08-23, оценку снимать заново. Метод — §1, результат — таблица батчей в §4 [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn apply_container_styles` (14536) до `mod tests` (14859), 323 строки → `box_tree/container_anchor.rs` (контейнерные запросы, anchor positioning, `re_style_subtree`). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT5",
+       "title": "SPLIT-BT5: перенос строк и выравнивание из box_tree.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn strip_soft_hyphens` (13179) до `fn apply_container_styles` (14536), 1 357 строк → `box_tree/inline_wrap.rs` (измерение текста/hyphenation + `wrap_inline_run`, 498 строк одной функцией + выравнивание строк/ellipsis/line-clamp). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT6",
+       "title": "SPLIT-BT6: режим grid из box_tree.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn grid_content_distribution` (12237) до `fn strip_soft_hyphens` (13179), 942 строки → `box_tree/grid.rs` (`lay_out_grid`, 696 строк). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT7",
+       "title": "SPLIT-BT7: режим flex из box_tree.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `struct UsedSizeOverride` (11259) до `fn grid_content_distribution` (12237), 978 строк → `box_tree/flex.rs` (`lay_out_flex`, 943 строки одной функцией). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT8",
+       "title": "SPLIT-BT8: multicol и abspos из box_tree.rs",
+       "status": "ready",
+       "size": "S",
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn lay_out_multicol_children` (10835) до `struct UsedSizeOverride` (11259), 424 строки → `box_tree/multicol_abspos.rs` (multicol + `lay_out_abs_children`). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT9",
+       "title": "SPLIT-BT9: режим table из box_tree.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn lay_out_table_row` (9920) до `fn lay_out_multicol_children` (10835), 915 строк → `box_tree/table.rs` (режим table целиком). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT10",
+       "title": "SPLIT-BT10: BFC и центральный диспетчер layout из box_tree.rs",
+       "status": "ready",
+       "size": "L",
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn lay_out_for_vertical` (7866) до `fn lay_out_table_row` (9920), 2 054 строки, два файла — `box_tree/bfc.rs` (200, BFC/margin-collapse) + `box_tree/layout_dispatch.rs` (1 854 — `lay_out_inner`, 1 691 строка одной функцией, центральный диспетчер режимов). САМЫЙ РИСКОВАННЫЙ БАТЧ ГРУППЫ. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT11",
+       "title": "SPLIT-BT11: shape-outside и floats из box_tree.rs",
+       "status": "ready",
+       "size": "S",
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn shift_y_box` (7384) до `fn lay_out_for_vertical` (7866), 482 строки → `box_tree/shapes_floats.rs` (CSS Shapes парсеры + `FloatContext`). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT12",
+       "title": "SPLIT-BT12: intrinsic-ширины из box_tree.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn contributes_to_intrinsic_width` (6793) до `fn shift_y_box` (7384), 591 строка → `box_tree/intrinsic.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT13",
+       "title": "SPLIT-BT13: ядро построения бокса из box_tree.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn is_base_select_host` (5668) до `fn contributes_to_intrinsic_width` (6793), 1 125 строк → `box_tree/build.rs` (`build_box_inner`, 873 строки одной функцией). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT14",
+       "title": "SPLIT-BT14: построение inline-сегментов из box_tree.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn probe_display` (4240) до `fn is_base_select_host` (5668), 1 428 строк → `box_tree/inline_build.rs` (`collect_inline_segments` + content/pseudo/marker). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT15",
+       "title": "SPLIT-BT15: точки входа layout из box_tree.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn build_shadow_sheets` (3623) до `fn probe_display` (4240), 617 строк → `box_tree/entry.rs` (точки входа `layout`/`layout_measured*`/incremental-варианты, `build_iframe_document`, font-size-adjust, canvas background, теневые таблицы стилей). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT16",
+       "title": "SPLIT-BT16: first-letter/first-line из box_tree.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn apply_first_letter_style` (3017) до `fn build_shadow_sheets` (3623), 606 строк → `box_tree/pseudo_text.rs` (::first-letter/::first-line структурное расщепление). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT17",
+       "title": "SPLIT-BT17: центральные типы box_tree.rs",
+       "status": "ready",
+       "size": "S",
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `struct LayoutBox` (2590) до `fn apply_first_letter_style` (3017), 427 строк → `box_tree/types.rs` (`LayoutBox`/`BoxOrigin`/`BoxRole`/`InlineSegment`/`PseudoKind`/`InlineFrag`/`BoxKind` — центральный словарь типов, часть 25-именного `pub use box_tree::{…}`). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT18",
+       "title": "SPLIT-BT18: SVG-конструктор и image requests из box_tree.rs",
+       "status": "ready",
+       "size": "L",
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `struct ViewBox` (927) до `struct LayoutBox` (2590), 1 663 строки, два файла — `box_tree/svg.rs` (1 345, SVG-конструктор целиком) + `box_tree/image_requests.rs` (318). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+      },
+      {
+       "id": "SPLIT-BT19",
+       "title": "SPLIT-BT19: диагностика BUG-341 и предикаты из box_tree.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `struct LayoutKeyCensus` (63) до `struct ViewBox` (927), 864 строки, головной регион файла (берётся последним) — два файла: `box_tree/diagnostics.rs` (740, BUG-341 census/кэш-статистика) + `box_tree/predicates.rs` (124, scrollbar-gutter + `is_*_element`). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
       {
        "id": "SPLIT-PR0",
@@ -8647,10 +8780,10 @@
    "debtor": false
   },
   "BUG-444": {
-   "status": "open",
-   "title": "**У checkedness нет хранилища, отдельного от content-атрибута `checked`.** HTML LS §4.10.5.5 различает текущее состояние и значение по умолчанию (`defaultChecke…",
-   "component": "js (`crates/js/src/dom.rs` — own-свойство `checked` в `_lumen_build_element`), shell (`forms.rs` — сбор формы и покраска читают атрибут)",
-   "date": null,
+   "status": "fixed",
+   "title": "**У checkedness не было хранилища, отдельного от content-атрибута `checked`.** HTML LS §4.10.5.5 различает текущее состояние и значение по умолчанию (`defaultCh…",
+   "component": "dom (`Document::dirty_checkedness` + `control_checked`/`set_control_checked`/`clear_control_checked`), js (`web_api_shim_mid.js` — геттер/сеттер `checked`; `dom_core.rs` — нативы `_lumen_{get,set,clear}_dirty_checked`), layout (`box_tree.rs`, `style/matching/forms.rs`), a11y (`lib.rs`), shell (`forms.rs`), driver (`session.rs`, `winit_session.rs`)",
+   "date": "2026-08-30",
    "debtor": false
   },
   "BUG-445": {
@@ -12046,6 +12179,9 @@
    "BUG-019",
    "BUG-218"
   ],
+  "dom (`Document::dirty_checkedness` + `control_checked`/`set_control_checked`/`clear_control_checked`), js (`web_api_shim_mid.js` — геттер/сеттер `checked`; `dom_core.rs` — нативы `_lumen_{get,set,clear}_dirty_checked`), layout (`box_tree.rs`, `style/matching/forms.rs`), a11y (`lib.rs`), shell (`forms.rs`), driver (`session.rs`, `winit_session.rs`)": [
+   "BUG-444"
+  ],
   "dom (`Document::dirty_values` + `control_value`/`set_control_value`/`clear_control_value`), js (`dom.rs` — геттер/сеттер `value`; `v8_runtime.rs` — нативы `_lumen_{get,set,clear}_dirty_value`), layout (`box_tree.rs`, `style.rs`), shell (`forms.rs`, `main.rs`), driver (`session.rs`)": [
    "BUG-441"
   ],
@@ -12464,9 +12600,6 @@
   ],
   "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)": [
    "BUG-351"
-  ],
-  "js (`crates/js/src/dom.rs` — own-свойство `checked` в `_lumen_build_element`), shell (`forms.rs` — сбор формы и покраска читают атрибут)": [
-   "BUG-444"
   ],
   "js (`crates/js/src/dom.rs` — глобальный `window`; `:12210` определяет `closed`/`name` только у объекта-заглушки `open()`)": [
    "BUG-887"
