@@ -7550,12 +7550,12 @@ impl Renderer {
 
     /// Резолвит `face_id` для `DrawText` с указанным `font-family` списком.
     /// Если `font_provider` есть — перебирает имена в порядке приоритета
-    /// (CSS Fonts L4 §3.1), для первого найденного через `pick_face` — лениво
-    /// загружает TTF и возвращает `face_id`. Generic CSS-family-ы
-    /// (`serif`/`sans-serif`/`monospace`/`cursive`/`fantasy`/`system-ui`)
-    /// пропускаются — Phase 0 не имеет per-generic-fallback таблицы; в
-    /// конечном итоге падают в default. Если ни одно имя не найдено —
-    /// возвращает 0 (default face).
+    /// (CSS Fonts L4 §3.1), для первого найденного через [`Self::pick_family_face`]
+    /// — лениво загружает TTF и возвращает `face_id`. Generic CSS-family-ы
+    /// (`serif`/`sans-serif`/`monospace`/`cursive`/`fantasy`/`system-ui`) резолвятся
+    /// через `FontProvider::pick_generic_face` (платформенная таблица кандидатов,
+    /// BUG-128) — не пропускаются. Если ни одно имя не найдено — возвращает 0
+    /// (default face).
     fn resolve_face_id(
         &mut self,
         families: &[String],
