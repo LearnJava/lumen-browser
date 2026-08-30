@@ -5683,9 +5683,9 @@
       {
        "id": "SPLIT-BT12",
        "title": "SPLIT-BT12: intrinsic-ширины из box_tree.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn contributes_to_intrinsic_width` (6793) до `fn shift_y_box` (7384), 591 строка → `box_tree/intrinsic.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn contributes_to_intrinsic_width` (6793) до `fn shift_y_box` (7384), 591 строка → `box_tree/intrinsic.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 **ЗАКРЫТ 2026-08-30** (ветка `p1-split-bt12`, один срез): к моменту среза BT-11 уже увезла `shift_y_box`, поэтому нижний анкер более не существовал — фактический регион оказался хвостом файла (перед уже существующим `mod shapes_floats;`), `fn contributes_to_intrinsic_width` (6821, с доккомментарием) … до `flex_item_min_main_width` (7410), 590 строк (план 591). Новый `box_tree/intrinsic.rs`: `preferred_inline_block_width`/`max_content_outer_width`/`min_content_outer_width` + флекс-специфичные `flex_item_max_main_outer`/`flex_auto_base_main_width`/`flex_item_min_main_width` — все шесть стали `pub(crate) fn` (вызываются из `flex.rs`/`layout_dispatch.rs`/`multicol_abspos.rs`). Четыре функции региона (`contributes_to_intrinsic_width`/`is_row_flex_container`/`flex_row_intrinsic_sum`/`min_content_outer_width_of_contents`) вызываются только друг другом внутри региона — остались модуль-приватными. `mod intrinsic;`/`use intrinsic::{…};` вставлены строго на месте вырезки (перед `mod shapes_floats;`). Сверка body-in-body — ровно 6 расхождений, все добавленный `pub(crate) `, ни одной иной правки на 590 строках. box_tree.rs 7435 → 6851, `cargo test -p lumen-layout --lib` 3640/3640, `clippy -p lumen-layout --all-targets -D warnings` чист, нисходящая `cargo build -p lumen-shell --profile dev-release` чистая. `scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)) — тесты гонялись адресно, пиксельный гейт — `dump_golden.py` 12/12 без дельт"
       },
       {
        "id": "SPLIT-BT13",
