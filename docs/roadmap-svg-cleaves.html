@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-30",
  "counts": {
-  "open": 373,
-  "fixed": 510,
+  "open": 372,
+  "fixed": 511,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -5620,9 +5620,9 @@
       {
        "id": "SPLIT-BT3",
        "title": "SPLIT-BT3: svg-transform/misc/BUG-341-дифференциальные тесты box_tree.rs",
-       "status": "ready",
+       "status": "done",
        "size": "L",
-       "note": "Тестовый модуль `crates/engine/layout/src/box_tree.rs`, секции 37…51 (от «BUG-803: parse_svg_transform» до «BUG-341 S36»), 2 580 строк → `svg_transform_and_misc.rs` (1 484), `bug341_differential.rs` (1 096). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "Тестовый модуль `crates/engine/layout/src/box_tree.rs`, секции 37…51 (от «BUG-803: parse_svg_transform» до «BUG-341 S36»), 2 580 строк → `svg_transform_and_misc.rs` (1 484), `bug341_differential.rs` (1 096). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 **ЗАКРЫТ 2026-08-30** (ветка `p1-split-bt3`, один срез): анкеры сошлись с планом день-в-день — регион 15257…17836 внутри `mod tests { … }`, объём двух файлов 1487+1095=2582 строки (план 2580, разница — объявления `mod`). `svg_transform_and_misc.rs` — SVG-transform-парсер, SVG-текст/baseline-shift/dominant-baseline, ::before/::after детали, progress/table-cell — без общих хелперов `find_by_id_all`/`find_markers`/`collect_seg_text` (те остались за BT1/BT2). `bug341_differential.rs` — differential-тесты incr==full кэша раскладки. box_tree.rs 17 838 → 14 861 (‑2 977, ровно регион минус объявление `mod tests;`), `#[test]` крейта 3 637 → 3 637, `box_tree::tests::*` 407 → 407. clippy чист ТОЛЬКО без `--profile dev-release` — этот профиль гасит `debug_assertions`, из-за чего `#[cfg(debug_assertions)] check_geometry(...)` в `box_tree.rs` ложно считается мёртвым кодом под `--all-targets -D warnings`; канонический вызов из CLAUDE.md (без `--profile`) чист. `scripts/check_file_sizes.py` не тронут (box_tree.rs уменьшился, baseline для него с BT0 не обновлялся — тот же прецедент BT2). `scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md))"
       },
       {
        "id": "SPLIT-BT4",
@@ -8843,10 +8843,10 @@
    "debtor": false
   },
   "BUG-453": {
-   "status": "open",
+   "status": "fixed",
    "title": "Потеря GPU-устройства убивает процесс целиком: `frame.present()` ничего не возвращает, и wgpu паникует внутри (`Error in Surface::present: Validation Error / Pa…",
    "component": "paint (`crates/engine/paint/src/renderer.rs:9214` — `frame.present()`; обработка есть только у acquire — `backends/wgpu_backend.rs::surface_error_to_render_error`)",
-   "date": null,
+   "date": "2026-08-30",
    "debtor": false
   },
   "BUG-454": {
