@@ -5662,9 +5662,9 @@
       {
        "id": "SPLIT-BT9",
        "title": "SPLIT-BT9: режим table из box_tree.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn lay_out_table_row` (9920) до `fn lay_out_multicol_children` (10835), 915 строк → `box_tree/table.rs` (режим table целиком). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn lay_out_table_row` (9920) до `fn lay_out_multicol_children` (10835), 915 строк → `box_tree/table.rs` (режим table целиком). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 **ЗАКРЫТ 2026-08-30** (ветка `p1-split-bt9`, один срез): анкер `fn lay_out_multicol_children` уже не стоял в файле — BT8 увезла регион до конца файла раньше, поэтому нижней границей стал конец файла (перед `#[cfg(test)] mod tests;`); фактический регион 9948…10790, 843 строки (одиннадцать функций режима table). Только `lay_out_table_row`/`lay_out_table`/`table_intrinsic_content_width` (вызываются из диспетчера в самом `box_tree.rs`) получили `pub(crate)`; восемь хелперов не имеют вызывателей вне региона — остались приватными. box_tree.rs 10791 → 9950, `cargo test -p lumen-layout --lib` 3640/3640, clippy чист, сверка с HEAD — 3 строки расхождений (только добавленный `pub(crate) `) на 843 строках. `dump_golden.py` 12/12 без дельт; `scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)). Побочная находка вне области батча: `crates/engine/layout/src/table.rs` (827 строк, `pub mod table;` в `lib.rs`) — независимая Phase-0-реализация CSS Tables с теми же именами функций, нигде не вызывается за пределами своих тестов, похоже на мёртвый код — кандидат для P5 стаб-свипа, не тронут (правило «только перенос»)"
       },
       {
        "id": "SPLIT-BT10",
