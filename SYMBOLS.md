@@ -93,12 +93,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/bidi-server/src/server.rs:27` **fn** `spawn` — Spawn the BiDi server on `127.0.0.1:port`. Non-blocking — runs in a background thread
 `crates/bidi-server/src/transport.rs:22` **fn** `handle` — Handle one accepted TCP stream: WS upgrade → BiDi command loop
 
-## lumen-canvas  (99 symbols)
+## lumen-canvas  (100 symbols)
 
 `crates/engine/canvas/src/color.rs:3` **struct** `CanvasColor` — RGBA color used by the Canvas 2D API
 `crates/engine/canvas/src/color.rs:16` **fn** `rgba` — Собирает цвет из каналов 0–255 (альфа не premultiplied)
 `crates/engine/canvas/src/color.rs:21` **fn** `with_alpha_mult` — Multiply `self.a` by `alpha` (0.0–1.0)
-`crates/engine/canvas/src/color.rs:30` **fn** `from_css_str` — Parse a CSS color string.  Supports:
+`crates/engine/canvas/src/color.rs:45` **fn** `from_css_str` — Разбирает CSS-значение `<color>`
+`crates/engine/canvas/src/color.rs:59` **fn** `to_css_string` — Сериализация для `fillStyle`/`strokeStyle`/`shadowColor` по
 `crates/engine/canvas/src/fp_noise.rs:17` **struct** `CanvasNoiseGenerator` — Per-session canvas fingerprint noise generator
 `crates/engine/canvas/src/fp_noise.rs:27` **fn** `new` — Create a new noise generator with the given per-session seed
 `crates/engine/canvas/src/fp_noise.rs:48` **fn** `next_noise_u8` — Generate next noise byte (0..=255) clamped to safe range
@@ -2170,7 +2171,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/style/env.rs:217` **fn** `install` — Install this snapshot on the **current** (worker) thread
 `crates/engine/layout/src/style/logical.rs:26` **fn** `resolve_logical_property` — Resolve CSS Logical Properties based on writing-mode
 `crates/engine/layout/src/style/parse/color.rs:25` **fn** `parse_color` — Парсит CSS-значение `<color>` в непрозрачный [`Color`]: named color,
-`crates/engine/layout/src/style/parse/color.rs:201` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
+`crates/engine/layout/src/style/parse/color.rs:209` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
 `crates/engine/layout/src/style/parse/font.rs:7` **fn** `parse_font_family`
 `crates/engine/layout/src/style/parse/font.rs:21` **fn** `parse_font_family` — Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют
 `crates/engine/layout/src/style/parse/font.rs:83` **fn** `parse_font_variation_settings` — Парсит CSS `font-variation-settings` (CSS Fonts L4 §7)
@@ -5672,4 +5673,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:228` **fn** `count`
 
 ---
-*Total: 5595 symbols in 24 crates*
+*Total: 5596 symbols in 24 crates*

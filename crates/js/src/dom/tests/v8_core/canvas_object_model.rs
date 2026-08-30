@@ -434,3 +434,80 @@ fn round_rect_validates_its_radii() {
     assert_eq!(s(&rt, "ctx.roundRect(0, 0, 8, 8)"), "undefined");
     assert_eq!(s(&rt, "ctx.roundRect(0, 0, 8, 8, [1, 2, 3, 4])"), "undefined");
 }
+
+// ── BUG-451: цветовые атрибуты — разбор, игнорирование, сериализация ───────
+
+/// HTML LS §4.12.5.1.3: валидное значение хранится КАНОНИЧЕСКИ, а не тем
+/// текстом, которым его записали. Раньше `fillStyle` был полем-строкой, и
+/// геттер отдавал `'#0F0'` на `'#0F0'`.
+#[test]
+fn paint_style_getter_returns_canonical_serialization() {
+    let rt = v8_runtime_with_dom(make_doc());
+    for (input, want) in [
+        ("#0F0", "#00ff00"),
+        ("#fa0", "#ffaa00"),
+        ("lime", "#00ff00"),
+        ("hsl(120,100%,50%)", "#00ff00"),
+        ("rgb(0 255 0)", "#00ff00"),
+        ("rgba(255,255,255,0.5)", "rgba(255, 255, 255, 0.5)"),
+        ("transparent", "rgba(0, 0, 0, 0)"),
+    ] {
+        assert_eq!(
+            s(&rt, &format!("(ctx.fillStyle = '{input}', ctx.fillStyle)")),
+            want,
+            "fillStyle = '{input}'"
+        );
+        assert_eq!(
+            s(&rt, &format!("(ctx.strokeStyle = '{input}', ctx.strokeStyle)")),
+            want,
+            "strokeStyle = '{input}'"
+        );
+    }
+}
+
+/// Невалидное значение ИГНОРИРУЕТСЯ: атрибут сохраняет прежнее. Раньше в него
+/// оседал мусор, а рисование продолжалось предыдущим цветом — то есть чтение и
+/// рисование расходились.
+#[test]
+fn paint_style_ignores_invalid_values() {
+    let rt = v8_runtime_with_dom(make_doc());
+    for bad in ["not-a-color", "", "rgb(", "#gg", "currentColor"] {
+        assert_eq!(
+            s(
+                &rt,
+                &format!("(ctx.fillStyle = '#0f0', ctx.fillStyle = '{bad}', ctx.fillStyle)")
+            ),
+            "#00ff00",
+            "fillStyle = '{bad}' обязано быть проигнорировано"
+        );
+    }
+    // Тот же контракт у shadowColor — он тоже <color>, а не произвольная строка.
+    assert_eq!(
+        s(
+            &rt,
+            "(ctx.shadowColor = 'lime', ctx.shadowColor = 'not-a-color', ctx.shadowColor)"
+        ),
+        "#00ff00"
+    );
+    assert_eq!(s(&rt, "(ctx.shadowColor = '#0F0', ctx.shadowColor)"), "#00ff00");
+}
+
+/// Отвергнутое значение не должно доходить и до растеризатора: пиксель обязан
+/// остаться от последнего ПРИНЯТОГО цвета.
+#[test]
+fn invalid_paint_style_does_not_reach_the_rasterizer() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var c = document.createElement('canvas');\
+         c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+         var ctx = c.getContext('2d');\
+         ctx.fillStyle = 'hsl(120, 100%, 50%)';\
+         ctx.fillStyle = 'not-a-color';\
+         ctx.fillRect(0, 0, 2, 2);",
+    )
+    .unwrap();
+    let updates = rt.flush_canvas_updates();
+    assert_eq!(updates.len(), 1);
+    // hsl() раньше не разбиралась вовсе — залит был бы прозрачный/предыдущий.
+    assert_eq!(&updates[0].3[0..4], &[0, 255, 0, 255]);
+}

@@ -30,7 +30,15 @@ pub fn parse_color(s: &str) -> Option<Color> {
     if let Some(c) = parse_hex_color(s) {
         return Some(c);
     }
-    parse_function_color(s)
+    if let Some(c) = parse_function_color(s) {
+        return Some(c);
+    }
+    // `color(<space> …)` — CSS Color L4 §10.1. Хранить его как `ColorFloat`
+    // умеет только каскад ([`parse_css_color_legacy`] пробует эту ветку ПЕРВОЙ,
+    // чтобы не терять wide-gamut точность); здесь она стоит последней и сразу
+    // гамут-маппится в sRGB — для потребителей, у которых нет `CssColor`
+    // (Canvas 2D, BUG-451).
+    parse_css_color_fn(s).map(ColorFloat::to_srgb_color)
 }
 
 /// CSS Quirks Mode §3.4 «hashless hex color quirk».
@@ -272,6 +280,14 @@ pub fn system_color(name_lc: &str, dark: bool) -> Option<Color> {
 
 fn parse_hex_color(s: &str) -> Option<Color> {
     let hex = s.strip_prefix('#')?;
+    // Все ветки ниже режут `hex` БАЙТОВЫМИ индексами, а `len()` — тоже в
+    // байтах, поэтому один не-ASCII символ и проходит проверку длины, и рвёт
+    // границу UTF-8: `#±a` — три байта, ветка `3`, `&hex[0..1]` внутри '±'
+    // → паника (BUG-451, найдено пробой; достижимо из любого стиля страницы,
+    // не только из Canvas 2D).
+    if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
     match hex.len() {
         3 => {
             let r = u8::from_str_radix(&hex[0..1], 16).ok()?;
@@ -320,6 +336,13 @@ fn parse_function_color(s: &str) -> Option<Color> {
     // CSS Color L5 §11 color-contrast().
     if lower.starts_with("color-contrast(") && s.ends_with(')') {
         return parse_color_contrast(&s["color-contrast(".len()..s.len() - 1]);
+    }
+    // CSS Color L4 §7 hwb(). Отдельной веткой, а не вариантом `ColorFn`:
+    // относительная форма `hwb(from …)` требует канала в
+    // `relative_origin_channels`, которого у `MixColorSpace::Hwb` нет (там
+    // ветка `_ => srgb`), и вариант молча давал бы неверный результат.
+    if let Some(b) = lower.strip_prefix("hwb(").and_then(|t| t.strip_suffix(')')) {
+        return parse_hwb_body(b);
     }
     let (kind, body) = if let Some(b) = lower.strip_prefix("rgba(").and_then(|t| t.strip_suffix(')')) {
         (ColorFn::Rgb, b)
@@ -403,6 +426,38 @@ fn parse_function_color(s: &str) -> Option<Color> {
             Some(Color { r, g, b, a: alpha })
         }
     }
+}
+
+/// CSS Color L4 §7 — тело `hwb(<hue> <whiteness>% <blackness>% [/ <alpha>])`
+/// (без имени функции и скобок, уже в нижнем регистре).
+///
+/// Формула спеки: при `w + b >= 1` цвет — серый `w / (w + b)`, иначе чистый тон
+/// (`hsl(h 100% 50%)`) сжимается в интервал `[w, 1 - b]`. Относительная форма
+/// (`hwb(from …)`) не поддержана и отвергается — см. вызывающую ветку.
+fn parse_hwb_body(body: &str) -> Option<Color> {
+    if body.trim_start().starts_with("from ") {
+        return None;
+    }
+    let parts = split_color_args(body);
+    if !(parts.len() == 3 || parts.len() == 4) {
+        return None;
+    }
+    let alpha = if parts.len() == 4 {
+        parse_alpha_component(&parts[3])?
+    } else {
+        255
+    };
+    let h = parse_hue_component(&parts[0])?;
+    let w = parse_percent_component(&parts[1])?;
+    let bk = parse_percent_component(&parts[2])?;
+    if w + bk >= 1.0 {
+        let gray = clamp_byte(w / (w + bk) * 255.0);
+        return Some(Color { r: gray, g: gray, b: gray, a: alpha });
+    }
+    let (pr, pg, pb) = hsl_to_rgb(h, 1.0, 0.5);
+    let span = 1.0 - w - bk;
+    let mix = |c: u8| clamp_byte((f32::from(c) / 255.0 * span + w) * 255.0);
+    Some(Color { r: mix(pr), g: mix(pg), b: mix(pb), a: alpha })
 }
 
 #[derive(Clone, Copy)]

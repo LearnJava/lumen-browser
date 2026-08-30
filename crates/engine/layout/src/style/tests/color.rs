@@ -1316,3 +1316,57 @@ use crate::style::values::named_colors::NAMED_COLORS;
         );
         assert!((out[3] - 1.0).abs() < 1e-4, "alpha preserved");
     }
+
+// ── hwb() и color() в parse_color (BUG-451) ────────────────────────────────
+
+/// CSS Color L4 §7 — `hwb()` не разбиралась НИГДЕ в движке: ни каскадом, ни
+/// Canvas 2D. Обратные конверсии в `color_mix.rs` были, но приватные и только
+/// для смешивания.
+#[test]
+fn hwb_pure_hue_and_gray() {
+    // Чистый тон: белизна и чернота нулевые.
+    assert_eq!(parse_color("hwb(120 0% 0%)"), Some(rgba(0, 255, 0, 255)));
+    assert_eq!(parse_color("hwb(0 0% 0%)"), Some(rgba(255, 0, 0, 255)));
+    // w + b >= 1 — серый w / (w + b), тон не важен.
+    assert_eq!(parse_color("hwb(120 50% 50%)"), Some(rgba(128, 128, 128, 255)));
+    assert_eq!(parse_color("hwb(200 100% 0%)"), Some(rgba(255, 255, 255, 255)));
+    assert_eq!(parse_color("hwb(200 0% 100%)"), Some(rgba(0, 0, 0, 255)));
+    // Тон сжимается в [w, 1 - b].
+    let c = parse_color("hwb(120 25% 25%)").unwrap();
+    assert_eq!((c.r, c.g, c.b), (64, 191, 64));
+    // Альфа через слэш.
+    assert_eq!(parse_color("hwb(120 0% 0% / 0.5)").unwrap().a, 128);
+    // Относительная форма пока не поддержана — и отвергается явно, а не
+    // считается неверно.
+    assert_eq!(parse_color("hwb(from red h w b)"), None);
+    // Компоненты w/b — только проценты.
+    assert_eq!(parse_color("hwb(120 0 0)"), None);
+}
+
+/// `color(<space> …)` раньше разбирался только через `CssColor::Wide`, то есть
+/// был недоступен потребителям без каскада (Canvas 2D). `parse_color` теперь
+/// принимает его последней веткой, сразу гамут-маппя в sRGB.
+#[test]
+fn parse_color_accepts_color_function() {
+    assert_eq!(parse_color("color(srgb 0 1 0)"), Some(rgba(0, 255, 0, 255)));
+    assert_eq!(parse_color("color(srgb 1 1 1)"), Some(rgba(255, 255, 255, 255)));
+    assert_eq!(parse_color("color(srgb 0 0 0 / 0.5)").unwrap().a, 128);
+    // display-p3 зелёный вне гамута sRGB — клипуется, но остаётся зелёным.
+    let c = parse_color("color(display-p3 0 1 0)").unwrap();
+    assert_eq!((c.r, c.g, c.b), (0, 255, 0));
+    assert_eq!(parse_color("color(no-such-space 0 1 0)"), None);
+}
+
+/// BUG-451: длина hex-хвоста считалась в БАЙТАХ, а срезы шли байтовыми
+/// индексами, поэтому один не-ASCII символ проходил проверку длины и рвал
+/// границу UTF-8. Достижимо из обычного стиля страницы, не только из canvas.
+#[test]
+fn hex_color_with_non_ascii_does_not_panic() {
+    assert_eq!(parse_color("#±a"), None);
+    assert_eq!(parse_color("#±ab"), None);
+    assert_eq!(parse_color("#ЖЖЖ"), None);
+    assert_eq!(parse_color("#gg0"), None);
+    // Валидный hex по-прежнему разбирается.
+    assert_eq!(parse_color("#0f0"), Some(rgba(0, 255, 0, 255)));
+    assert_eq!(parse_color("#0f08").unwrap().a, 136);
+}
