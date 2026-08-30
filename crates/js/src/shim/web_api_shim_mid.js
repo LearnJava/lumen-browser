@@ -3134,12 +3134,28 @@ _lumen_c2d_method('clip', function(path) {
         _lumen_canvas2d_clip(nid);
     }
 });
-// State stack
+// State stack. The native side pushes/pops its own copy of the drawing state;
+// this pushes/pops the JS-visible attribute record alongside it, or the two
+// diverge forever after the first save/restore pair (BUG-455) — the page
+// reads one copy while the rasterizer draws with the other.
 _lumen_c2d_method('save', function() {
-    _lumen_canvas2d_save(_lumen_c2d(this, 'save').nid);
+    var st = _lumen_c2d(this, 'save');
+    _lumen_canvas2d_save(st.nid);
+    var snap = {};
+    for (var k in st) {
+        if (k === 'nid' || k === 'canvas') { continue; }
+        snap[k] = st[k];
+    }
+    this.__canvas2d_stack__.push(snap);
 });
 _lumen_c2d_method('restore', function() {
-    _lumen_canvas2d_restore(_lumen_c2d(this, 'restore').nid);
+    var st = _lumen_c2d(this, 'restore');
+    _lumen_canvas2d_restore(st.nid);
+    var stack = this.__canvas2d_stack__;
+    if (stack.length > 0) {
+        var snap = stack.pop();
+        for (var k in snap) { st[k] = snap[k]; }
+    }
 });
 // Transforms
 _lumen_c2d_method('translate', function(tx, ty) {
@@ -3407,6 +3423,7 @@ _lumen_c2d_method('getContextAttributes', function() {
 // emptied and every attribute returns to its initial value.
 _lumen_c2d_method('reset', function() {
     var st = _lumen_c2d(this, 'reset');
+    this.__canvas2d_stack__.length = 0;
     var d = _lumen_canvas_dims(st.nid);
     _lumen_canvas2d_reset_transform(st.nid);
     _lumen_canvas2d_clear_rect(st.nid, 0, 0, d[0], d[1]);
@@ -3529,6 +3546,7 @@ function _lumen_canvas_font_px(f) {
 function _lumen_make_canvas2d_ctx(canvasEl, nid) {
     var ctx = Object.create(CanvasRenderingContext2D.prototype);
     _lumen_slot(ctx, '__canvas2d__', _lumen_canvas2d_default_state(canvasEl, nid));
+    _lumen_slot(ctx, '__canvas2d_stack__', []);
     return ctx;
 }
 
