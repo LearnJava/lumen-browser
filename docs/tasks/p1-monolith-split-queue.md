@@ -516,12 +516,90 @@ crates/engine/layout/src/box_tree.rs`): **301 top-level item, лексер сх�
 (правило SH/ST «регион по текущему файлу, не по таблице»), не по номерам строк
 выше.
 
-### Группы PR/LB/NW/CP/DM — второй эшелон
+### Группа RN — `crates/engine/paint/src/renderer.rs` (21 533 строки)
+
+Перепись SPLIT-PR0 закрыта 2026-08-31 (`python scripts/split_census.py crates/engine/paint/src/renderer.rs`,
+`--inner` на девяти внутренних диапазонах): лексер сходится (итоговая глубина 0),
+326 top-level item'ов. Имя группы — `RN` (не `PR`: этот префикс уже занят
+файловым индексом второго эшелона ниже, где PR-0/PR-1/PR-2 различают три РАЗНЫХ
+файла паковки, а не батчи одного).
+
+**Карта файла** (326 item'ов, из них 157 `fn`, 49 `struct`, 41 `const`, 26 `impl`,
+18 `use`, 17 `static`, 9 `enum`, 7 `type`, 1 `trait`, 1 `mod`):
+
+| Регион | Строки | Объём | Содержимое |
+|---|---|---:|---|
+| use-шапка | 28…53 | 26 | импорты |
+| WGSL-шейдеры | 54…1652 | 1 600 | 20 `const … : &str = r#"…"#` (уже RAW-строки — в отличие от JS-3 escape-снятие не нужно) + `size_bin_for`/`atlas_key` |
+| vertex/font/pipeline-типы | 1653…3317 | 1 665 | 17 vertex-структур, `DrawOp`, кэш-структуры (`GpuImage`/`PageBandCache`/`OverlayCache`/`OffscreenLayer`/…), font-структуры (`CachedGlyph`/`LoadedFace`/`FaceMetrics`/`LazyParsedFaces`), пять `build_*_pipeline`, `HotPipelines`/`HotKind`/`HotDeps`/`spawn_hot_pipelines`, `PipelineDeps`/`WarmedPipeline` |
+| `struct Renderer` | 3318…3742 | 425 | центральный тип — читают ВСЕ `impl`-блоки файла |
+| статики/фичефлаги/band-геометрия | 3743…4871 | 1 129 | census-статики (`TEXTURES_CREATED` и 11 соседей, форма BUG-341), `ClipUniformSlot`/`ClipContour`, ~35 `*_disabled()`/`*_enabled()` env-флагов, band-геометрия (`RingStrip`/`ring_advance_plan`/`band_geometry`) |
+| `impl Renderer` #1 | 4872…6414 | 1 543 | `new`/`new_headless`, `init_pipelines` (764 строки), pipeline warmup, 14 lazy pipeline-getter'ов, хвост — ~30 perf-счётчиков (submissions/rrect_clip_levels/…) |
+| `impl PipelineDeps` | 6415…7399 | 985 | |
+| **`impl Renderer` #2** | 7400…15686 | **8 287** | **см. ниже — самый большой непрерывный регион файла** |
+| free-fn хвост | 15687…18609 | 2 923 | sticky/transform helpers, `SvgSubStats`/`TextSubStats`, SVG shape cache, coverage cache, quad-push/gradient-math, `TextRunCache`+glyph-растеризация, scissor/blend/border emission |
+| `mod tests` | 18610…21533 | 2 924 | плоский, 12 баннерных секций (`--inner` их видит) |
+
+**`impl Renderer` #2 (7400…15686, 8 287 строк, 100 методов) — темы лежат
+непрерывными подряд идущими диапазонами**, в отличие от JS-6's `install_dom`
+(там 231 разрозненная площадка одного макроса): pipeline-геттеры (14, 73 строки) →
+font-provider/face-resolution (7473…7869, 397) → image-регистрация (7870…8245,
+376) → layer-snapshot/backdrop/texture-pool API (8246…8567, 322) →
+resize/viewport (8568…8745, 178) → GPU buffer/texture-хелперы (8746…9053, 308) →
+band-компоновка (9054…9879, 826) → render-точки входа (9880…10108, 229) →
+**`fn render_impl` (10109…15483, 5 375 строк — ОДНА функция)** →
+`render_to_image_*`/`render_tile`/`render_print_pages` (15484…15686, 203).
+
+**`render_impl` — риск группы, крупнее любого индивидуального item'а всей
+дорожки SPLIT** (JS-6's `install_dom` — 3 925 строк, BT-10's `lay_out_inner` —
+1 691). Внутри — 6 баннеров-фаз (`// ── Сбор вершин`, `Atlas upload`, `Uniforms`,
+`Vertex buffers`, `Off-screen текстуры`, `Frame`), т.е. функция физически
+состоит из последовательных стадий с общим локальным состоянием — но превращение
+каждой стадии в отдельный метод (параметризация захваченными `let`-привязками,
+приём JS-6/SH-2) здесь рискованнее: JS-6 такой трансформацией не касался
+заимствований (`macro_rules!` не подчиняется borrow checker), а шесть
+`&mut self`-хелперов, вызванных подряд из одного `&mut self`-метода, ГОРАЗДО
+вероятнее столкнутся с конфликтом заимствований на общих полях `Renderer`
+(текстуры/буферы, которые несколько фаз держат разом). Это отдельное,
+самостоятельное расследование, не входящее в объём переписи. **Запасной
+вариант — тот же, что JS-7 принял для `install_dom` в `v8_runtime.rs`:**
+функция остаётся в базовом файле как есть; после переноса остальных тем
+`renderer.rs` сведётся к use-шапке + `render_impl` (+, возможно, соседних
+render-точек входа) ≈ 5 600…6 000 строк — цель §1 «ни одного файла >8000 строк»
+достигается, критерий §5 «≤2000 на новый файл» — нет (тот же компромисс, что
+принят для `v8_runtime.rs`).
+
+**Батч-план** (RN-1…RN-10, порядок хвост→голова — вырезка не сдвигает ещё не
+взятые анкеры выше по файлу, приём BT/JS). Анкеры пересчитывать в начале каждого
+батча — здесь тоже дрейфуют.
+
+| ID | Анкер (строки renderer.rs) | Регион | Цель |
+|---|---|---:|---|
+| RN-1 | `mod tests` (18610) … конец файла | 2 924 | `renderer/tests/` — модуль остаётся инлайн (приём BT-1: превращение в отдельный `mod.rs` сразу означало бы непререзанные секции внутри), два вложенных `mod`: секции 2…9 (Clip/scissor/blend/border/render-plan/vertex-transform/depth-buffer, 18768…19889, ~1 121) → `clip_blend_vertex.rs`, секции 10…12 (sticky BUG-336 + font-palette COLR/CPAL + COLR color-glyph emission, 19890…21533, ~1 644) → `sticky_colr_font.rs` |
+| RN-2 | free-fn хвост, glyph-часть: `push_glyph_quad`…`rasterize_and_insert` + `TextRunCache` (~17552…18188) плюс `SvgSubStats`/`TextSubStats` (15959…16240) | ~920 | `renderer/glyph_raster.rs` (glyph_atlas) |
+| RN-3 | free-fn хвост, остаток: sticky/transform/`VertexPos` (15687…15958) + SVG shape/coverage cache (16241…16610) + quad-push/gradient-math (16611…17551) + scissor/blend/border emission (18189…18609) | ~2 000 | `renderer/paint_primitives.rs` (compute) |
+| RN-4 | `impl Renderer` #2: image-регистрация + layer-snapshot/backdrop/texture-pool + resize/viewport + GPU buffer-хелперы (7870…9053) | 1 184 | `renderer/texture_pool.rs` (texture_pool) |
+| RN-5 | `impl Renderer` #2: band-компоновка (9054…9879) + band-геометрия из статик-региона (`RingStrip`/`ring_advance_plan`/`band_geometry`/`band_blit_quads`, ~4641…4871) | ~1 056 | `renderer/band_compose.rs` (compute) |
+| RN-6 | **`render_impl` + render-точки входа + `render_to_image_*`** (9880…10108, 10109…15483, 15484…15686) | 5 807 | **риск-батч, отдельное расследование до вырезки** — см. разбор выше; вероятный результат: `render_impl` остаётся в `renderer.rs`, точки входа/`render_to_image_*` уезжают в `renderer/frame_entry.rs` |
+| RN-7 | `impl Renderer` #2: pipeline-геттеры (7400…7472) + `impl PipelineDeps` (6415…7399) + pipeline-builder'ы/`Hot*`/`PipelineDeps`/`WarmedPipeline` (2628…3317) | 1 748 | `renderer/pipelines.rs` (pipelines_wgsl) — вероятно, на подбатчи (>4000 нет, но по темам может распасться на 2 файла) |
+| RN-8 | `impl Renderer` #1: `new`/`new_headless`/`init_pipelines`/warmup (4873…6167) + метрики/census-геттеры оттуда же (6168…6414) + census-статики региона 3743…4871 (минус band-геометрия, ушедшая в RN-5) | ~1 800 | `renderer/construct.rs` (pipelines_wgsl, ctor+init) + `renderer/diagnostics.rs` (метрики, объединить с `SvgSubStats`/`TextSubStats`, если те ещё не ушли в RN-2 — сверить на месте) |
+| RN-9 | `struct Renderer` (3318…3742) + vertex/font/cache-типы (1653…2627) + `ClipUniformSlot`/`ClipContour` (3978…4033) | ~1 480 | `renderer/types.rs` — центральный хаб, `use super::Renderer` во всех остальных файлах группы |
+| RN-10 | WGSL-константы (54…1652) + `size_bin_for`/`atlas_key`/`ATLAS_DIM`/`SIZE_BINS` | 1 600 | `.wgsl`-файлы через `include_str!` (уже raw-строки — перенос безопаснее JS-3, снятия экранирования нет) + тонкая обёртка `renderer/shaders.rs` |
+
+Итог при полном закрытии группы (без RN-6's риск-функции): `renderer.rs` →
+use-шапка + `render_impl` (+ возможно render-точки входа) ≈ 5 400…6 000 строк —
+под потолком §1 (8000), но не под критерием §5 для НОВОГО файла (720 строк над
+2000, тот же компромисс, что `v8_runtime.rs` после JS-7). Обязательные проверки
+на каждом батче — те же, что у BT/JS: счётчик `#[test]` крейта до/после,
+`cargo clippy -p lumen-paint --all-targets -D warnings`, snapshot-прогон
+(правило §2.5: `crates/engine/paint/tests/snapshots/*.snap` — второй набор
+эталонов рядом с CPU PNG, см. BUG-816 в CLAUDE.md).
+
+### Группы LB/NW/CP/DM — второй эшелон (не переписаны)
 
 | ID | Файл | Первый шаг |
 |---|---|---|
 | LB-0 | `layout/lib.rs` (19 155) | перепись → нарезка. Группы под этот файл в исходном плане не было — пробел, замеченный при назначении дорожки P1 2026-08-26, хотя файл шестой по величине в переписи |
-| PR-0 | `paint/renderer.rs` (20 919) | перепись → `{pipelines_wgsl, glyph_atlas, texture_pool, compute}`; WGSL-шейдеры в `.wgsl`-файлы с `include_str!` |
 | PR-1 | `paint/display_list.rs` (19 698) | перепись → `{commands, builder, serialize, hit_test, cache}` |
 | PR-2 | `paint/backends/femtovg_backend.rs` (7 955) | по командам: path/text/image/blend |
 | NW-0 | `network/lib.rs` (9 799) | HTTP/1.1-ядро → `http1/{request,response,chunked}.rs`; в lib.rs оставить сборку transport |

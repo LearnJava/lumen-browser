@@ -5739,9 +5739,79 @@
       {
        "id": "SPLIT-PR0",
        "title": "SPLIT-PR0: перепись renderer.rs",
+       "status": "done",
+       "size": "S",
+       "note": "ЗАКРЫТ 2026-08-31 (ветка `p1-split-pr0`): перепись `crates/engine/paint/src/renderer.rs` — 21 533 строки (рост с 20 919 на дату аудита), 326 top-level item'ов, лексер сходится (глубина 0). Карта: use-шапка (26) + WGSL-шейдеры уже RAW-строками (1 600, перенос в `.wgsl` безопаснее JS-3 — снятия экранирования не требуется) + vertex/font/pipeline-типы (1 665) + `struct Renderer` (425, читают все `impl`-блоки файла) + census-статики/фичефлаги/band-геометрия (1 129) + `impl Renderer` #1 (1 543 — ctor/init_pipelines/warmup/метрики) + `impl PipelineDeps` (985) + `impl Renderer` #2 (**8 287 строк, 100 методов — крупнейший регион файла**) + free-fn хвост (2 923) + `mod tests` плоский (2 924, 12 баннерных секций). `impl Renderer` #2 в отличие от JS-6's `install_dom` лежит ТЕМАТИЧЕСКИ НЕПРЕРЫВНЫМИ диапазонами (pipeline-геттеры → font-loading → image-регистрация → layer/texture-pool → resize → band-компоновка → render-точки входа → `render_impl` → image-рендер-варианты), что делает разрез проще JS-6. **Риск группы — `fn render_impl` (10109…15483, 5 375 строк, ОДНА функция)**, крупнее любого item'а всей дорожки SPLIT (JS-6's `install_dom` 3 925, BT-10's `lay_out_inner` 1 691); внутри шесть баннеров-фаз (Сбор вершин/Atlas upload/Uniforms/Vertex buffers/Off-screen текстуры/Frame) с общим локальным состоянием — превращение фаз в отдельные `&mut self`-методы рискованнее JS-6's макро-трюка (там гигиена макроса, не заимствования; здесь несколько `&mut self`-хелперов подряд на общих полях `Renderer` вероятнее столкнутся с borrow checker'ом) и вынесено за периметр батчей как отдельное расследование; запасной вариант — оставить функцию в `renderer.rs`, как JS-7 сделал для `install_dom`. Файлы нарезаны на 10 батчей RN-1…RN-10 (2924+~920+~2000+1184+~1056+5807+1748+~1800+~1480+1600, покрытие без разрывов). Разбор и батч-таблица — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа RN»"
+      },
+      {
+       "id": "SPLIT-RN1",
+       "title": "SPLIT-RN1: mod tests из paint/renderer.rs",
+       "status": "ready",
+       "size": "L",
+       "note": "`crates/engine/paint/src/renderer.rs`: `mod tests` (18610) до конца файла, 2 924 строки → `renderer/tests/{clip_blend_vertex.rs, sticky_colr_font.rs}` (шапка модуля остаётся инлайн, приём BT-1). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа RN»"
+      },
+      {
+       "id": "SPLIT-RN2",
+       "title": "SPLIT-RN2: glyph-растеризация из paint/renderer.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/paint/src/renderer.rs`: glyph-часть free-fn хвоста (`push_glyph_quad`…`rasterize_and_insert`/`TextRunCache` + `SvgSubStats`/`TextSubStats`), ~920 строк → `renderer/glyph_raster.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа RN»"
+      },
+      {
+       "id": "SPLIT-RN3",
+       "title": "SPLIT-RN3: paint-примитивы из paint/renderer.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/paint/src/renderer.rs`: остаток free-fn хвоста (sticky/transform/`VertexPos` + SVG shape/coverage cache + quad-push/gradient-math + scissor/blend/border emission), ~2 000 строк → `renderer/paint_primitives.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа RN»"
+      },
+      {
+       "id": "SPLIT-RN4",
+       "title": "SPLIT-RN4: texture_pool из paint/renderer.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/paint/src/renderer.rs`: срез `impl Renderer` — image-регистрация + layer-snapshot/backdrop/texture-pool + resize/viewport + GPU buffer-хелперы (7870…9053), 1 184 строки → `renderer/texture_pool.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа RN»"
+      },
+      {
+       "id": "SPLIT-RN5",
+       "title": "SPLIT-RN5: band_compose из paint/renderer.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/paint/src/renderer.rs`: срез `impl Renderer` — band-компоновка (9054…9879) + band-геометрия статик-региона, ~1 056 строк → `renderer/band_compose.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа RN»"
+      },
+      {
+       "id": "SPLIT-RN6",
+       "title": "SPLIT-RN6: render_impl из paint/renderer.rs",
+       "status": "ready",
+       "size": "L",
+       "note": "`crates/engine/paint/src/renderer.rs`: `render_impl` (10109…15483, 5 375 строк — ОДНА функция) + render-точки входа + `render_to_image_*` (9880…15686), 5 807 строк. САМЫЙ РИСКОВАННЫЙ БАТЧ ГРУППЫ — требует отдельного расследования ДО вырезки (можно ли безопасно разбить шесть внутренних фаз `render_impl` на `&mut self`-хелперы без конфликтов заимствования на общих полях `Renderer`, или функция остаётся в `renderer.rs` целиком, как JS-7 оставил `install_dom`). Разбор — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа RN»"
+      },
+      {
+       "id": "SPLIT-RN7",
+       "title": "SPLIT-RN7: pipelines из paint/renderer.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/paint/src/renderer.rs`: pipeline-геттеры (7400…7472) + `impl PipelineDeps` (6415…7399) + pipeline-builder'ы/`Hot*`/`WarmedPipeline` (2628…3317), 1 748 строк → `renderer/pipelines.rs` (возможно, на 2 подфайла). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа RN»"
+      },
+      {
+       "id": "SPLIT-RN8",
+       "title": "SPLIT-RN8: construct+diagnostics из paint/renderer.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/paint/src/renderer.rs`: `impl Renderer` #1 ctor/init_pipelines/warmup/метрики (4873…6414) + census-статики региона 3743…4871 (минус band-геометрия из RN-5), ~1 800 строк → `renderer/construct.rs` + `renderer/diagnostics.rs`. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа RN»"
+      },
+      {
+       "id": "SPLIT-RN9",
+       "title": "SPLIT-RN9: types-хаб из paint/renderer.rs",
        "status": "ready",
        "size": "S",
-       "note": "Перепись `crates/engine/paint/src/renderer.rs` (20 919 строк) и нарезка на батчи: pipelines_wgsl, glyph_atlas, texture_pool, compute; WGSL-шейдеры вынести в `.wgsl`-файлы через `include_str!`. Метод — §1, результат — таблица батчей в §4 [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "`crates/engine/paint/src/renderer.rs`: `struct Renderer` (3318…3742) + vertex/font/cache-типы (1653…2627) + `ClipUniformSlot`/`ClipContour`, ~1 480 строк → `renderer/types.rs` (центральный хаб для всех файлов группы). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа RN»"
+      },
+      {
+       "id": "SPLIT-RN10",
+       "title": "SPLIT-RN10: WGSL-шейдеры из paint/renderer.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`crates/engine/paint/src/renderer.rs`: WGSL-константы (54…1652, уже raw-строки) + `size_bin_for`/`atlas_key`/`ATLAS_DIM`/`SIZE_BINS`, 1 600 строк → `.wgsl`-файлы через `include_str!` + `renderer/shaders.rs`. Последний батч группы — после него `renderer.rs` сводится к use-шапке + `render_impl` (если RN-6 не расселил и его), под потолком §1 (8000 строк). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа RN»"
       },
       {
        "id": "SPLIT-PR1",
