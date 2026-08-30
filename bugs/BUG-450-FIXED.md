@@ -1,6 +1,6 @@
 # BUG-450 — Члены `HTMLCanvasElement` установлены на каждом элементе DOM; `getContext` нарушает контракт аргумента
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-30
 **Компонент:** js (`crates/js/src/dom.rs:5954-6060` — фабрика обёрток `_lumen_build_element`
 ставит `getContext`/`toDataURL`/`toBlob`/`transferControlToOffscreen`/`width`/`height`
 безусловно, а не по тегу)
@@ -72,3 +72,49 @@ getContext.noarg = String(c.getContext())      →  null      (спека: TypeE
    (общий фикс с [BUG-449](BUG-449-FIXED.md)/[BUG-367](BUG-367-FIXED.md)).
 2. Убрать `toLowerCase()` и `|| ''` из `getContext`, добавить проверку
    `arguments.length === 0 → TypeError`.
+
+## Исправлено 2026-08-30
+
+Взят второй путь из п. 1 — не гейт по тегу, а перенос шести членов на
+`HTMLCanvasElement.prototype` за бренд-проверкой `_lumen_canvas_nid` (тот же приём,
+что слот состояния Canvas 2D в [BUG-449](BUG-449-FIXED.md)); `width`/`height` розданы
+по интерфейсам, которым принадлежат по HTML LS. Подробности — коммит
+`5fa1ba302` и строка `BUG-450` в [BUGS.md](../BUGS.md); там же шесть дефектов,
+которые нашла проба «до» вместо двух заявленных.
+
+### A/B по категории `html/canvas/element`
+
+Замер обещан закрывающим коммитом и выполнен отдельно (P3, 2026-08-30). База —
+прогон на состоянии сразу после BUG-449, то есть на `main` без этой правки;
+`fix` — `main` с влитым `7d43ddab3`. Обе стороны `run_report.py --all --root
+html/canvas/element --recursive`, 1496 id.
+
+| | harness OK | сабтесты PASS |
+|---|---|---|
+| base (после BUG-449) | 1186/1496 | 838/3059 |
+| fix (с BUG-450) | **1190/1496** | **841/3061** |
+
+Изменились семь файлов. Прямо по предмету правки — четыре:
+
+- `canvas-context/2d.canvas.context.invalid.args.html` FAIL → **PASS** (контракт
+  аргумента `getContext`);
+- `canvas-host/2d.canvas.host.size.attributes.idl.html` FAIL → **PASS** (отражение
+  `width`/`height` как `unsigned long`);
+- `fill-and-stroke-styles/2d.pattern.image.incomplete.emptysrc.html` ERROR → **OK**,
+  сабтест PASS, и `…/2d.pattern.image.broken.html` ERROR → **OK** — оба падали до
+  первого сабтеста, пока `img.width`/`img.height` обслуживал общий canvas-аксессор.
+
+Два файла (`manual/draw-element-image/privacy/svg-images-ignored…`,
+`manual/wide-gamut-canvas/canvas-display-p3-drawImage-ImageBitmap-Blob…`) прошли
+TIMEOUT → OK при **неизменных** вердиктах сабтестов и времени 11.3 с → 0.13 с,
+11.8 с → 1.07 с. Это не заслуга правки, а механизм «одна зависшая страница уносит
+остаток шарда»: их сосед `2d.canvas.host.size.large.html` в базовом прогоне убивал
+браузер. К плюсу правки эти два не относить.
+
+**Единственный файл, ставший хуже по метке, — тот самый сосед:**
+`canvas-host/2d.canvas.host.size.large.html` ERROR (16.2 с, `WebSocket connection
+closed`, то есть браузер умер) → TIMEOUT (25 с, зависание). Сабтестов нет ни там,
+ни там — регрессии в измеримом смысле нет, сменился режим отказа. Дефект
+доэтотный: страница ставит `canvas.width = canvas.height = 2147483647`, и движок
+берёт это за чистую монету на обеих сторонах A/B. Заведён отдельно —
+[BUG-929](BUG-929-OPEN.md); эта правка его не создала и не чинила.

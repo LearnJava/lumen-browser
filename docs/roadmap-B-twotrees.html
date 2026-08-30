@@ -76,11 +76,11 @@
  "generated": "2026-08-30",
  "counts": {
   "open": 372,
-  "fixed": 511,
+  "fixed": 512,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 883,
+ "total_bugs": 884,
  "phases": [
   {
    "id": "P0",
@@ -8840,10 +8840,10 @@
    "debtor": false
   },
   "BUG-450": {
-   "status": "open",
-   "title": "Члены `HTMLCanvasElement` (`getContext`/`toDataURL`/`toBlob`/`transferControlToOffscreen`/`width`/`height`) установлены на **каждом** элементе DOM: `'getContext…",
-   "component": "js (`crates/js/src/dom.rs` — фабрика обёрток `_lumen_build_element` ставит canvas-члены безусловно, а не по тегу)",
-   "date": null,
+   "status": "fixed",
+   "title": "Члены `HTMLCanvasElement` (`getContext`/`toDataURL`/`toBlob`/`transferControlToOffscreen`/`width`/`height`) были установлены на **каждом** элементе DOM через об…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — canvas members moved off `_LUMEN_WRAPPER_MEMBERS` onto `HTMLCanvasElement.prototype`)",
+   "date": "2026-08-30",
    "debtor": false
   },
   "BUG-451": {
@@ -12079,6 +12079,13 @@
    "component": "layout (`crates/engine/layout/src/box_tree.rs` — сбор `abs_deferred` есть только в блочном цикле `:9041` и во flex-ветке `:8902`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-929": {
+   "status": "open",
+   "title": "**Страница убивает браузер тремя строками: `canvas.width = canvas.height = 2147483647`.** Значение внутри диапазона `unsigned long` и по HTML LS §4.12.4 валидно…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — сеттеры `width`/`height` на `HTMLCanvasElement.prototype`, натив изменения размера), canvas (`crates/engine/canvas` — выделение backing store)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -12718,6 +12725,9 @@
   ],
   "js (`crates/js/src/shared_worker.rs`, `SHARED_WORKER_GLOBAL_SHIM` — объект для `onconnect` собирается литералом с одним полем `ports`)": [
    "BUG-867"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js` — сеттеры `width`/`height` на `HTMLCanvasElement.prototype`, натив изменения размера), canvas (`crates/engine/canvas` — выделение backing store)": [
+   "BUG-929"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js`, `_lumen_make_dataset`)": [
    "BUG-496"

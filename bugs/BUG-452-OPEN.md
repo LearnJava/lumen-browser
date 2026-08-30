@@ -59,5 +59,5 @@ var wp = parseInt(aw, 10);  var w = (aw !== null && !isNaN(wp) && wp >= 0) ? wp 
 (`dom.rs:6057`, `:6071`), где для не-canvas элементов стоит зеркальная ловушка
 `parseInt(v, 10) || 0`.
 
-Смежное по тому же файлу: [BUG-450](BUG-450-OPEN.md) (члены `HTMLCanvasElement` стоят
+Смежное по тому же файлу: [BUG-450](BUG-450-FIXED.md) (члены `HTMLCanvasElement` стоят
 на каждом элементе, а `getContext` нарушает контракт аргумента).

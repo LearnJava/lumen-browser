@@ -160,7 +160,7 @@ A/B по вендоренной категории `html/canvas/element` (1 496 
   `getImageData()` вовсе не принимает аргументов — это [BUG-456](BUG-456-OPEN.md);
   `ImageBitmap` живёт в отдельном шиме `{width, height, __canvas_id__, close()}`.
 * Члены `HTMLCanvasElement` по-прежнему стоят на **каждом** элементе DOM
-  (`'getContext' in div` → `true`) — [BUG-450](BUG-450-OPEN.md), другая сторона той же
+  (`'getContext' in div` → `true`) — [BUG-450](BUG-450-FIXED.md), другая сторона той же
   фабрики обёрток.
 * `letterSpacing`/`wordSpacing` и пять перечислимых свойств хранятся и отдаются, но
   растеризатор их не читает.
