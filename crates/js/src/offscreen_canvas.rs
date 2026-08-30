@@ -387,6 +387,29 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
         }),
     )?;
 
+    // Separate from `_lumen_offscreen_canvas2d_get_image_data` (whole-canvas,
+    // hex-string transport): that one backs `transferToImageBitmap`/
+    // `createImageBitmap`/internal snapshots, which all want the full buffer
+    // in that format, so narrowing it in place would break every one of those
+    // call sites. This is the OffscreenCanvas twin of BUG-448's fix — the
+    // element canvas's `_lumen_canvas2d_get_image_data` (`canvas2d.rs`) took
+    // the same rect-parameter + byte-array-return shape, backed by the same
+    // `Context2D::get_image_data_rect` (`crates/engine/canvas/src/image_data.rs`).
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_get_image_data_rect",
+        into_v8_fn5(|canvas_id: u32, sx: i32, sy: i32, sw: u32, sh: u32| -> Vec<u8> {
+            OFFSCREEN_CANVASES.with(|c| {
+                let Ok(map) = c.try_borrow() else {
+                    return Vec::new();
+                };
+                let Some(canvas) = map.get(&canvas_id) else {
+                    return Vec::new();
+                };
+                canvas.get_image_data_rect(sx, sy, sw, sh)
+            })
+        }),
+    )?;
+
     rt.register_native(
         "_lumen_offscreen_canvas_transfer_to_image_bitmap",
         into_v8_fn1(transfer_to_image_bitmap_native),
@@ -503,8 +526,31 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
           _lumen_offscreen_canvas2d_set_global_alpha(canvasId, Number(a));
         },
 
-        // Image data
-        getImageData: () => _lumen_offscreen_canvas2d_get_image_data(canvasId),
+        // Image data (BUG-456 симптом 3 / BUG-448 twin): used to take no
+        // parameters at all and hand the page the raw "{w},{h},{hex}" wire
+        // string instead of an ImageData. `_offscreen_long` is a local copy of
+        // the element canvas's `[EnforceRange] long` coercion rather than a
+        // call into `web_api_shim_mid.js` — this whole context is its own
+        // standalone `rt.eval` (BUG-780 lesson: a fix in the page shim does
+        // not reach a module installed by a separate eval).
+        getImageData: function(sx, sy, sw, sh) {
+          if (arguments.length < 4) {
+            throw new TypeError(
+              'getImageData: 4 arguments required, but only ' + arguments.length + ' present');
+          }
+          var x = _offscreen_long(sx, 'sx'), y = _offscreen_long(sy, 'sy');
+          var w = _offscreen_long(sw, 'sw'), h = _offscreen_long(sh, 'sh');
+          if (w === 0 || h === 0) {
+            throw new DOMException(
+              'The source width and height must be non-zero', 'IndexSizeError');
+          }
+          if (w < 0) { x += w; w = -w; }
+          if (h < 0) { y += h; h = -h; }
+          var bytes = _lumen_offscreen_canvas2d_get_image_data_rect(canvasId, x, y, w, h);
+          var arr = new Uint8ClampedArray(w * h * 4);
+          if (bytes && bytes.length === arr.length) { arr.set(bytes); }
+          return { width: w, height: h, data: arr, colorSpace: 'srgb' };
+        },
       };
 
       return this._2d_context;
@@ -537,6 +583,16 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
   function _parseWHHex(raw) {
     var c1 = raw.indexOf(','), c2 = raw.indexOf(',', c1 + 1);
     return { w: parseInt(raw.substring(0, c1), 10), h: parseInt(raw.substring(c1 + 1, c2), 10), hex: raw.substring(c2 + 1) };
+  }
+
+  // WebIDL `[EnforceRange] long` coercion for `getImageData`'s four
+  // coordinates: reject non-finite instead of silently reading `(0,0)`.
+  function _offscreen_long(value, argName) {
+    var n = Number(value);
+    if (!isFinite(n)) {
+      throw new TypeError('getImageData: ' + argName + ' is not a finite number');
+    }
+    return n < 0 ? Math.ceil(n) : Math.floor(n);
   }
 
   // createImageBitmap(source[, sx, sy, sw, sh])
@@ -782,6 +838,11 @@ mod tests_v8 {
 
     fn with_offscreen() -> V8JsRuntime {
         let rt = V8JsRuntime::new().unwrap();
+        // On a page `install_dom` runs first and brings `DOMException` with it
+        // (installed before this module's own bindings); here nothing does, so
+        // `throw new DOMException(...)` in `getImageData` would otherwise become
+        // a `ReferenceError` (same trap as `filesystem_access.rs`'s harness).
+        rt.eval(crate::v8_runtime::DOM_EXCEPTION_POLYFILL).unwrap();
         super::install_offscreen_canvas_bindings_v8(&rt).unwrap();
         rt
     }
@@ -1010,5 +1071,60 @@ mod tests_v8 {
             ),
             "OffscreenCanvas and createImageBitmap must be available in fresh (worker) context"
         );
+    }
+
+    #[test]
+    fn js_offscreen_get_image_data_reads_requested_rect() {
+        // BUG-456 симптом 3 / BUG-448 twin: getImageData() used to take no
+        // parameters at all and hand back the raw "{w},{h},{hex}" wire string.
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var canvas = new OffscreenCanvas(4, 4);
+                var ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#ff0000'; ctx.fillRect(0, 0, 4, 4);
+                ctx.fillStyle = '#00ff00'; ctx.fillRect(2, 2, 2, 2);
+                var img = ctx.getImageData(2, 2, 2, 2);
+                img.width === 2 && img.height === 2 && img.data.length === 16 &&
+                img.colorSpace === 'srgb' &&
+                img.data[0] === 0 && img.data[1] === 255 && img.data[2] === 0 && img.data[3] === 255
+            "#,
+        );
+        assert!(ok, "requested 2x2 rect as a real ImageData, not the whole 4x4 as a wire string");
+    }
+
+    #[test]
+    fn js_offscreen_get_image_data_zero_size_throws_index_size_error() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var canvas = new OffscreenCanvas(4, 4);
+                var ctx = canvas.getContext('2d');
+                var name = '';
+                try { ctx.getImageData(0, 0, 0, 4); }
+                catch (e) { name = e.name; }
+                name === 'IndexSizeError'
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_get_image_data_rejects_non_finite_argument() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var canvas = new OffscreenCanvas(4, 4);
+                var ctx = canvas.getContext('2d');
+                var threw = false;
+                try { ctx.getImageData(NaN, 0, 1, 1); }
+                catch (e) { threw = e instanceof TypeError; }
+                threw
+            "#,
+        );
+        assert!(ok);
     }
 }
