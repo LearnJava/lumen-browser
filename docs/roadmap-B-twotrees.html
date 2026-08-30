@@ -5624,16 +5624,16 @@
       {
        "id": "SPLIT-BT1",
        "title": "SPLIT-BT1: intrinsic/wrap/flow-modes/pseudo-first-line тесты box_tree.rs",
-       "status": "ready",
+       "status": "done",
        "size": "L",
-       "note": "Тестовый модуль `crates/engine/layout/src/box_tree.rs`, секции 2…26 (от «BUG-734: intrinsic aspect ratio» до «open-quote / close-quote»), 3 287 строк → три файла `box_tree/tests/`: `intrinsic_and_wrap.rs` (1 173), `flow_modes.rs` (667), `pseudo_first_line.rs` (1 447). Ключ раскладки — текст баннера секции, не номер строки (урок ST-1: после первого среза номера едут). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "Тестовый модуль `crates/engine/layout/src/box_tree.rs`, секции 2…26 (от «BUG-734: intrinsic aspect ratio» до «open-quote / close-quote»), 3 287 строк → три файла `box_tree/tests/`: `intrinsic_and_wrap.rs` (1 173), `flow_modes.rs` (667), `pseudo_first_line.rs` (1 447). **ЗАКРЫТ 2026-08-30** (`p1-split-bt1`): анкеры совпали с планом день-в-день (перепись BT-0 закрылась накануне), региона резать не пришлось. Вложенные модули `box_tree::tests::{intrinsic_and_wrap,flow_modes,pseudo_first_line}` — на уровень глубже прежнего `box_tree::tests`, поэтому каждый перенесённый `super::` стал `super::super::` (280 вхождений, включая уже вложенные `super::super::` → `super::super::super::` — не плоское удвоение, а +1 уровень к каждой цепочке). **Три теста-хелпера оказались общими более чем для одной секции** — `find_by_id_all` (секция 14, используется в 27…51 и в `intrinsic_and_wrap.rs`), `find_markers`/`collect_seg_text` (секция 22, используются в 27…51): поставлены `pub(super)`, вызовы вне определяющего файла переведены на путь `flow_modes::…`/`pseudo_first_line::…` (изнутри `tests`) или `super::flow_modes::…` (из соседа) — план этого не называл, нашлось только компиляцией. Счётчик `#[test]` крейта 407 → 407, `cargo test -p lumen-layout` 3637+71+1 зелено, clippy чист, box_tree.rs 23 671 → 20 388 (‑3 283, ровно размер региона плюс объявления модулей). Ключ раскладки — текст баннера секции, не номер строки (урок ST-1: после первого среза номера едут). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
       {
        "id": "SPLIT-BT2",
        "title": "SPLIT-BT2: generated/float/shapes/flex-align-content тесты box_tree.rs",
-       "status": "ready",
+       "status": "done",
        "size": "L",
-       "note": "Тестовый модуль `crates/engine/layout/src/box_tree.rs`, секции 27…36 (от «BUG-196: ::before/::after на flex» до «Flex align-content»), 2 577 строк → `generated_float.rs` (524), `shapes_and_contain.rs` (850), `flex_align_content.rs` (1 203, одна секция). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "Тестовый модуль `crates/engine/layout/src/box_tree.rs`, секции 27…36 (от «BUG-196: ::before/::after на flex» до «Flex align-content»), 2 577 строк → `generated_float.rs` (524), `shapes_and_contain.rs` (850), `flex_align_content.rs` (1 203, одна секция). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 **ЗАКРЫТ 2026-08-30** (ветка `p1-split-bt2`, один срез): анкеры сошлись с планом день-в-день, без пересчёта — регион 15257…17833 (2 577 строк), объём всех трёх файлов совпал до строки. Три файла в `box_tree/tests/`: `generated_float.rs` (524, единственный без бары `Size` — все обращения уже были `lumen_core::geom::Size::new` полным путём), `shapes_and_contain.rs` (850), `flex_align_content.rs` (1 203) — двум последним нужен `use lumen_core::geom::Size;`, все обращения в них — голым `Size::new`. Приём SH-4b/BT1 подтверждён третий раз: 106 строк региона начинаются внутри многострочного `r#\"…\"#` или строки с переносом `\\` — дедент их не тронул, лексер (тот же, что нашёл этот класс ловушки на SH-4b) размечен посимвольно по всему файлу заранее, чтобы отличить «код» от «продолжение литерала». `super::` — 245 вхождений, каждая цепочка выросла на один уровень («не плоское удвоение» — приём BT1 подтверждён: среди них 4 уже были `super::super::TextMeasurer`, ссылка на трейт из `lib.rs`, и стали `super::super::super::`). Три общих хелпера (`find_by_id_all`/`find_markers`/`collect_seg_text`, определены в `mod tests` и остаются на месте) — 65 голых вызовов получили префикс `super::`. Сверка: обратное преобразование (снять +1 `super::`-уровень и префикс хелперов) региона из HEAD против тела трёх новых файлов — 0 расхождений на 2 577 строках. Рабочая копия хранит CRLF (`core.autocrlf`, `.gitattributes` требует `eol: lf`) — новые файлы нормализованы к LF вручную перед коммитом, иначе git предъявил бы предупреждение о конверсии на первом касании. box_tree.rs 20 412 → 17 838, `#[test]` крейта 3 637 → 3 637, `dump_golden.py` 12/12 без дельт. `scripts/check_file_sizes.py` не тронут: box_tree.rs УМЕНЬШИЛСЯ, а не вырос, гейт реагирует только на рост сверх baseline (baseline.tsv для box_tree.rs с BT0/BT1 не обновлялся — тот же прецедент). `scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)) — тесты крейта адресно"
       },
       {
        "id": "SPLIT-BT3",
@@ -8884,7 +8884,7 @@
   "BUG-456": {
    "status": "open",
    "title": "Контекст `OffscreenCanvas.getContext('2d')` — **отдельная, втрое более бедная реализация**, чем у элементного canvas: 16 членов против 59. Нет `rect`/`roundRect…",
-   "component": "js (`crates/js/src/offscreen_canvas.rs` — литерал `this._2d_context`, `getImageData` на `:767`)",
+   "component": "js (`crates/js/src/offscreen_canvas.rs` — литерал `this._2d_context`)",
    "date": null,
    "debtor": false
   },
