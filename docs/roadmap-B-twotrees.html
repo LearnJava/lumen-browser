@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-30",
  "counts": {
-  "open": 372,
-  "fixed": 511,
+  "open": 371,
+  "fixed": 512,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -5645,9 +5645,9 @@
       {
        "id": "SPLIT-BT4",
        "title": "SPLIT-BT4: container queries и anchor positioning из box_tree.rs",
-       "status": "ready",
+       "status": "done",
        "size": "S",
-       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn apply_container_styles` (14536) до `mod tests` (14859), 323 строки → `box_tree/container_anchor.rs` (контейнерные запросы, anchor positioning, `re_style_subtree`). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn apply_container_styles` (14536) до `mod tests` (14859), 323 строки → `box_tree/container_anchor.rs` (контейнерные запросы, anchor positioning, `re_style_subtree`). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 **ЗАКРЫТ 2026-08-30** (ветка `p1-split-bt4`, один срез): анкеры сошлись с планом день-в-день, регион 14536…14858 (323 строки). Первая ПРОИЗВОДСТВЕННАЯ (не тестовая) вырезка группы BT — потребовала `mod container_anchor;` + `pub use container_anchor::apply_container_styles;` (внешний путь через `lib.rs` не сломан) + приватный `use container_anchor::apply_anchor_positions;` (4 вызывателя внутри самого `box_tree.rs`, `pub(crate)` не тронут). Все пять функций региона перенесены через `use super::*;` без единой именной правки, сверка с `HEAD` — 0 расхождений на 323 строках. box_tree.rs 14 861 → 14 542, `#[test]` крейта 3 637 → 3 637 (батч производственный), clippy чист, `dump_golden.py` 12/12 без дельт (`scoped-test.sh` не гонялся, [BUG-805](bugs/BUG-805-OPEN.md))"
       },
       {
        "id": "SPLIT-BT5",
@@ -8840,10 +8840,10 @@
    "debtor": false
   },
   "BUG-450": {
-   "status": "open",
-   "title": "Члены `HTMLCanvasElement` (`getContext`/`toDataURL`/`toBlob`/`transferControlToOffscreen`/`width`/`height`) установлены на **каждом** элементе DOM: `'getContext…",
-   "component": "js (`crates/js/src/dom.rs` — фабрика обёрток `_lumen_build_element` ставит canvas-члены безусловно, а не по тегу)",
-   "date": null,
+   "status": "fixed",
+   "title": "Члены `HTMLCanvasElement` (`getContext`/`toDataURL`/`toBlob`/`transferControlToOffscreen`/`width`/`height`) были установлены на **каждом** элементе DOM через об…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — canvas members moved off `_LUMEN_WRAPPER_MEMBERS` onto `HTMLCanvasElement.prototype`)",
+   "date": "2026-08-30",
    "debtor": false
   },
   "BUG-451": {
