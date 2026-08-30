@@ -9460,12 +9460,20 @@ impl Renderer {
                 let prefix_len = cache.prefix_len;
                 self.last_overlay_digests = current;
                 if log {
-                    eprintln!("[frame:wgpu]   overlay-cache HIT prefix={prefix_len}");
+                    // BUG-405 срез 42: эта строка — тоже инструмент (п. 71),
+                    // её печать обязана попасть в FRAME_LOG_NANOS, а не в
+                    // невязку разбивки кадра попадания.
+                    timed_log(|| {
+                        eprintln!("[frame:wgpu]   overlay-cache HIT prefix={prefix_len}");
+                    });
                 }
                 return Ok(Some(prefix_len));
             }
             if log {
-                eprintln!("[frame:wgpu]   overlay-cache STALE prefix={}", cache.prefix_len);
+                let stale_prefix = cache.prefix_len;
+                timed_log(|| {
+                    eprintln!("[frame:wgpu]   overlay-cache STALE prefix={stale_prefix}");
+                });
             }
         }
 
@@ -9489,17 +9497,21 @@ impl Renderer {
 
         let Some(last_change) = last_change else {
             if log {
-                eprintln!("[frame:wgpu]   overlay-cache no-change-info same_len={same_len}");
+                timed_log(|| {
+                    eprintln!("[frame:wgpu]   overlay-cache no-change-info same_len={same_len}");
+                });
             }
             return Ok(None);
         };
         let prefix_len = balanced_cut_at_or_after(overlay, last_change + 1);
         if prefix_len >= overlay.len() {
             if log {
-                eprintln!(
-                    "[frame:wgpu]   overlay-cache tail-empty prefix={prefix_len} len={}",
-                    overlay.len(),
-                );
+                let overlay_len = overlay.len();
+                timed_log(|| {
+                    eprintln!(
+                        "[frame:wgpu]   overlay-cache tail-empty prefix={prefix_len} len={overlay_len}",
+                    );
+                });
             }
             return Ok(None);
         }
@@ -9510,7 +9522,9 @@ impl Renderer {
         };
         self.pending_overlay_blit = Some(full_quad(bind_group));
         if log {
-            eprintln!("[frame:wgpu]   overlay-cache MISS built prefix={prefix_len}");
+            timed_log(|| {
+                eprintln!("[frame:wgpu]   overlay-cache MISS built prefix={prefix_len}");
+            });
         }
         Ok(Some(prefix_len))
     }
