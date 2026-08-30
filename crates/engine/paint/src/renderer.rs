@@ -2042,6 +2042,51 @@ struct PageBandCache {
     depth_v: wgpu::TextureView,
 }
 
+/// Retained-текстура СТАБИЛЬНОГО ХВОСТА overlay-списка (BUG-405 срез 41).
+///
+/// Архитектура среза 40 (п.76) предполагала обратное — вынести горячую
+/// команду и реплеить её ПОВЕРХ всего остального. Перепись самой правки
+/// (`overlay-cache` плечо `compose_pass_census.py`) показала, что этот план
+/// на реальном хроме Lumen не срабатывает НИ РАЗУ за 400 тиков стенда:
+/// `anim_split_compose_plan` честно бракует реплей «поверх всего», потому
+/// что скроллбар (обычно `overlay[1]`) геометрически пересекается с фоновой
+/// панелью хедера (`overlay[3]`, рисуется ПОЗЖЕ и накрыла бы его) —
+/// изменение ОДНОЙ команды не означает, что её можно вынести из порядка.
+///
+/// Эта версия порядок не меняет вовсе: НЕСТАБИЛЬНЫЙ ПРЕФИКС списка
+/// (`overlay[..prefix_len]`, на практике 1-2 команды скроллбара у самого
+/// начала) рисуется живьём каждый кадр как раньше; СТАБИЛЬНЫЙ ХВОСТ
+/// (`overlay[prefix_len..]`, подавляющее большинство команд) остаётся на
+/// своём месте в порядке — блитуется той же текстурой, если совпадает с
+/// той, что была на момент постройки. Painter's-order безопасность не
+/// требует НИКАКОГО геометрического анализа: раз относительный порядок не
+/// меняется, а `prefix_len` выбирается на границе сбалансированного
+/// push/pop (`balanced_cut_at_or_after`), результат идентичен полной
+/// перерисовке по построению.
+struct OverlayCache {
+    /// Держит GPU-память текстуры (см. `PageBandCache::_texture`). Отдельный
+    /// `view` не хранится — эта текстура никогда не перерисовывается
+    /// повторно (устарела → строится СОВСЕМ новая, вместе с новым view),
+    /// поэтому view нужен только на момент постройки — он живёт внутри
+    /// `blit_bg` (bind group держит свою ссылку на него).
+    _texture: wgpu::Texture,
+    /// Bind group блита (`image_bgl`: view + linear sampler), переиспользует
+    /// [`Renderer::create_band_blit_bind_group`] — оба входа те же, что у
+    /// блита полосы.
+    blit_bg: wgpu::BindGroup,
+    /// Ширина/высота текстуры в device px (= размеру поверхности — overlay
+    /// viewport-locked, полосы у него нет).
+    w_px: u32,
+    h_px: u32,
+    /// Digest хвоста (`overlay[prefix_len..]`, `hash_one_command` на
+    /// элемент) НА МОМЕНТ постройки — сравнивается с
+    /// `current_overlay_digests[prefix_len..]` БЕЗ сдвига индексов.
+    tail_digests: Vec<u64>,
+    /// Длина живого префикса. Текстура содержит РОВНО `overlay[prefix_len..]`
+    /// в исходном относительном порядке.
+    prefix_len: usize,
+}
+
 /// Одноразовая инъекция blit-квада полосы в начало draw-плана level 0
 /// следующего `render_impl`-вызова (Compose-путь скролл-композитора).
 struct PendingBaseBlit {
@@ -2166,6 +2211,19 @@ enum RenderPassMode {
     /// overlay: present и `FRAMES_RENDERED`, но `last_frame_hash` обновляет
     /// вызывающий (`render()`) — хэш Compose-аргументов не описывает кадр.
     Compose,
+    /// Оффскрин-рендер retained-текстуры стабильного хвоста overlay-списка
+    /// (BUG-405 срез 41). Без present, без счётчиков кадров; в отличие от
+    /// [`RenderPassMode::Band`] клир ВСЕГДА прозрачный (уровень 0 тоже, а не
+    /// только offscreen-уровни) — это UI-хром поверх страницы, а не
+    /// непрозрачный фон документа.
+    OverlayCache {
+        /// Цель рендера (view текстуры кэша).
+        view: wgpu::TextureView,
+        /// Ширина текстуры в device px (= ширина поверхности).
+        w_px: u32,
+        /// Высота текстуры в device px (= высота поверхности).
+        h_px: u32,
+    },
 }
 
 /// Чем кончился путь компоновки (скролл-композитор) на последнем кадре —
@@ -3580,6 +3638,19 @@ pub struct Renderer {
     /// Blit-квад полосы для следующего Compose-рендера. Ставится только
     /// `try_page_compose`, снимается `take()`-ом в начале сбора вершин.
     pending_base_blit: Option<PendingBaseBlit>,
+    /// Retained-текстура стабильного хвоста overlay-списка (BUG-405 срез 41).
+    /// `None` — ещё не построена, либо прошлый кадр её признал устаревшей.
+    overlay_cache: Option<OverlayCache>,
+    /// Blit-квад overlay-кэша для следующего Compose-рендера — тот же
+    /// одноразовый контракт, что у `pending_base_blit` (ставится
+    /// `compose_page`, снимается `take()`-ом сразу после него).
+    pending_overlay_blit: Option<PendingBaseBlit>,
+    /// Digest-вектор overlay-списка ПРОШЛОГО кадра (`hash_one_command` на
+    /// элемент) — не путать с `OverlayCache::tail_digests` (тот держит digest
+    /// ТОЛЬКО хвоста на момент постройки КЭША, а не прошлого кадра; нужен
+    /// обоим: этот ловит «где кончается изменившийся префикс» ради выбора
+    /// точки разреза при пересборке, тот — «кэш всё ещё валиден»).
+    last_overlay_digests: Vec<u64>,
     /// Причина последнего отказа скролл-композитора (BUG-405 срез 22) —
     /// печатается при её СМЕНЕ под `LUMEN_FRAME_LOG>=2`. Без неё отказ виден
     /// только как отсутствие строк `page-compose`, и перепись не может
@@ -4554,6 +4625,41 @@ fn compose_overlay_disabled() -> bool {
     use std::sync::OnceLock;
     static OFF: OnceLock<bool> = OnceLock::new();
     *OFF.get_or_init(|| std::env::var("LUMEN_NO_COMPOSE_OVERLAY").is_ok_and(|v| v != "0"))
+}
+
+/// Плечо A/B среза 41: выключает retained overlay-кэш (`Renderer::overlay_cache_step`),
+/// оставляя штатную полную перерисовку overlay каждый Compose-кадр — как до
+/// среза. Не то же самое, что [`compose_overlay_disabled`]: тот убирает
+/// overlay из кадра целиком (диагностика цены), этот меняет ТОЛЬКО механизм
+/// отрисовки — пиксели обязаны совпасть побитово (гейт слайса).
+fn overlay_cache_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_OVERLAY_CACHE").is_ok_and(|v| v != "0"))
+}
+
+/// Наименьший индекс `j ≥ from`, при котором `overlay[..j]` сбалансирован по
+/// push/pop (кумулятивная глубина возвращается в ноль) — единственно
+/// безопасная точка разреза «живой префикс / кэшируемый хвост»
+/// (`Renderer::overlay_cache_step`, BUG-405 срез 41): резать список посреди
+/// открытого `Push*` нельзя, ни хвост, ни (тем более) префикс порознь не
+/// были бы валидным display list-ом. `from == 0` — пустой префикс всегда
+/// безопасен (глубина 0 тривиально ДО первой команды). Возвращает
+/// `overlay.len()`, если такой точки за `from` не нашлось (весь остаток
+/// списка — один открытый контекст; не должно случаться у валидного
+/// списка, но отказ безопаснее паники).
+fn balanced_cut_at_or_after(overlay: &[DisplayCommand], from: usize) -> usize {
+    if from == 0 {
+        return 0;
+    }
+    let mut depth: i32 = 0;
+    for (i, cmd) in overlay.iter().enumerate() {
+        depth += crate::overlay_partition::layer_delta(cmd);
+        if i + 1 >= from && depth == 0 {
+            return i + 1;
+        }
+    }
+    overlay.len()
 }
 
 thread_local! {
@@ -5757,6 +5863,9 @@ impl Renderer {
             page_band: None,
             last_compose_skip: None,
             pending_base_blit: None,
+            overlay_cache: None,
+            pending_overlay_blit: None,
+            last_overlay_digests: Vec::new(),
             last_content_key: None,
             content_epoch: 0,
             content_fold_memo: None,
@@ -9036,6 +9145,59 @@ impl Renderer {
         })
     }
 
+    /// Строит/пересобирает retained-текстуру стабильного хвоста overlay-списка
+    /// (BUG-405 срез 41): `tail` — `overlay[prefix_len..]`, рисуется в новую
+    /// текстуру с прозрачным клиром ([`RenderPassMode::OverlayCache`]) в
+    /// СВОЁМ исходном относительном порядке. Размер текстуры — вся
+    /// поверхность (overlay viewport-locked, полосы у него, в отличие от
+    /// контента, нет).
+    ///
+    /// `tail_digests` — digest ХВОСТА (не всего списка) на момент постройки;
+    /// `compose_page` сравнивает его с `current[prefix_len..]` на каждом
+    /// последующем вызове, чтобы решить, валиден ли ещё кэш (см.
+    /// doc-комментарий [`OverlayCache`]).
+    fn build_overlay_cache(
+        &mut self,
+        w_px: u32,
+        h_px: u32,
+        tail: &[DisplayCommand],
+        tail_digests: Vec<u64>,
+        prefix_len: usize,
+    ) -> Result<(), wgpu::SurfaceError> {
+        count_texture_created_labeled("overlay-cache", w_px, h_px);
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("overlay-cache"),
+            size: wgpu::Extent3d { width: w_px, height: h_px, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.surface_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // Bind group блита переиспользует `image_bgl` полосы — оба входа
+        // (view + linear sampler) устроены одинаково, ring-repeat сюда не
+        // нужен (один квад, uv всегда `0…1`), но и не мешает.
+        let blit_bg = self.create_band_blit_bind_group(&view);
+        self.render_impl(
+            &[],
+            tail,
+            0.0,
+            0.0,
+            RenderPassMode::OverlayCache { view, w_px, h_px },
+        )?;
+        self.overlay_cache = Some(OverlayCache {
+            _texture: texture,
+            blit_bg,
+            w_px,
+            h_px,
+            tail_digests,
+            prefix_len,
+        });
+        Ok(())
+    }
+
     /// Прогрев полосы скролл-композитора (BUG-405 срез 20): создаёт её текстуры
     /// заранее и один раз отрисовывает в них пустой пасс.
     ///
@@ -9245,7 +9407,114 @@ impl Renderer {
     /// сегментов) уже сделана [`prepare_page_compose`](Self::prepare_page_compose),
     /// `key` посчитан вместе с хэшом кадра одним проходом по списку.
     ///
-    /// Возвращает `Ok(true)`, если кадр показан этим путём.
+    /// BUG-405 срез 41: решает, чем нарисовать overlay кадра компоновки —
+    /// целиком (`None`) или живым префиксом плюс блитом retained-текстуры
+    /// стабильного хвоста (`Some(prefix_len)`, и тогда
+    /// `self.pending_overlay_blit` уже выставлен) — см. doc-комментарий
+    /// [`OverlayCache`] про то, почему хвост, а не «горячая команда поверх
+    /// всего» (первая версия этого среза, забракованная переписью на
+    /// реальном хроме: painter's-order конфликт был не редким случаем, а
+    /// постоянным — скроллбар геометрически пересекается с хедером).
+    ///
+    /// Кэш валиден, пока digest ХВОСТА (`overlay[prefix_len..]`) совпадает
+    /// с тем, что был при постройке — префикс участвует только в выборе
+    /// НОВОЙ точки разреза, но не в проверке валидности старого кэша: он
+    /// рисуется живьём в любом случае, так что его изменение неважно.
+    ///
+    /// Новая точка разреза при пересборке — на одну ПОЗЖЕ самой поздней
+    /// позиции, отличающейся от ПРОШЛОГО кадра (`self.last_overlay_digests`
+    /// — не от кэша, тот мог протухнуть много кадров назад), сдвинутая
+    /// вперёд до ближайшей сбалансированной по push/pop границы
+    /// (`balanced_cut_at_or_after`) — резать список пополам открытого
+    /// `Push*` нельзя.
+    fn overlay_cache_step(
+        &mut self,
+        overlay: &[DisplayCommand],
+    ) -> Result<Option<usize>, wgpu::SurfaceError> {
+        let current: Vec<u64> =
+            overlay.iter().map(crate::display_list::hash_one_command).collect();
+        let (sw, sh) = self.surface_dims();
+        let dpr = self.scale_factor.max(1e-6) as f32;
+        let full_quad = |bind_group: wgpu::BindGroup| PendingBaseBlit {
+            bind_group,
+            quads: vec![(
+                Rect { x: 0.0, y: 0.0, width: sw as f32 / dpr, height: sh as f32 / dpr },
+                [0.0, 0.0],
+                [1.0, 1.0],
+            )],
+        };
+        let log = crate::frame_log_level() >= 2;
+
+        // 1. Кэш уже есть — проверить, что его хвост всё ещё совпадает.
+        if let Some(cache) = self.overlay_cache.as_ref() {
+            let still_matches = cache.w_px == sw
+                && cache.h_px == sh
+                && cache.prefix_len <= current.len()
+                && current.len() - cache.prefix_len == cache.tail_digests.len()
+                && current[cache.prefix_len..]
+                    .iter()
+                    .zip(cache.tail_digests.iter())
+                    .all(|(a, b)| a == b);
+            if still_matches {
+                self.pending_overlay_blit = Some(full_quad(cache.blit_bg.clone()));
+                let prefix_len = cache.prefix_len;
+                self.last_overlay_digests = current;
+                if log {
+                    eprintln!("[frame:wgpu]   overlay-cache HIT prefix={prefix_len}");
+                }
+                return Ok(Some(prefix_len));
+            }
+            if log {
+                eprintln!("[frame:wgpu]   overlay-cache STALE prefix={}", cache.prefix_len);
+            }
+        }
+
+        // Хвост не совпал (кэша не было / устарел / поверхность сменила
+        // размер) — сбросить и попробовать построить новый.
+        self.overlay_cache = None;
+
+        // 2. Точка разреза — сразу после самой поздней позиции, отличающейся
+        // от ПРОШЛОГО кадра.
+        let same_len = self.last_overlay_digests.len() == current.len();
+        let last_change = same_len.then(|| {
+            current
+                .iter()
+                .zip(self.last_overlay_digests.iter())
+                .enumerate()
+                .filter(|(_, (a, b))| a != b)
+                .map(|(i, _)| i)
+                .max()
+        }).flatten();
+        self.last_overlay_digests = current.clone();
+
+        let Some(last_change) = last_change else {
+            if log {
+                eprintln!("[frame:wgpu]   overlay-cache no-change-info same_len={same_len}");
+            }
+            return Ok(None);
+        };
+        let prefix_len = balanced_cut_at_or_after(overlay, last_change + 1);
+        if prefix_len >= overlay.len() {
+            if log {
+                eprintln!(
+                    "[frame:wgpu]   overlay-cache tail-empty prefix={prefix_len} len={}",
+                    overlay.len(),
+                );
+            }
+            return Ok(None);
+        }
+        let tail_digests = current[prefix_len..].to_vec();
+        self.build_overlay_cache(sw, sh, &overlay[prefix_len..], tail_digests, prefix_len)?;
+        let Some(bind_group) = self.overlay_cache.as_ref().map(|c| c.blit_bg.clone()) else {
+            return Ok(None);
+        };
+        self.pending_overlay_blit = Some(full_quad(bind_group));
+        if log {
+            eprintln!("[frame:wgpu]   overlay-cache MISS built prefix={prefix_len}");
+        }
+        Ok(Some(prefix_len))
+    }
+
     fn compose_page(
         &mut self,
         content: &[DisplayCommand],
@@ -9570,8 +9839,25 @@ impl Renderer {
         // Split: анимируемые сегменты рисуются как content-полоса Compose-кадра
         // (получают штатный сдвиг -scroll_y) — поверх blit-а, под overlay.
         let seg_content: &[DisplayCommand] = seg_plan.unwrap_or(&[]);
-        let compose_overlay: &[DisplayCommand] =
-            if compose_overlay_disabled() { &[] } else { overlay };
+        // BUG-405 срез 41: overlay-кэш — retained текстура СТАБИЛЬНОГО ХВОСТА
+        // overlay-списка вместо перерисовки его целиком каждый кадр (порядок
+        // не меняется — см. doc-комментарий `OverlayCache`). `overlay_cache_step`
+        // сама решает, применим ли фаст-пас, и в этом случае ставит
+        // `self.pending_overlay_blit`; `LUMEN_NO_OVERLAY_CACHE` — плечо A/B,
+        // не трогает `compose_overlay_disabled()` (та убирает overlay из
+        // кадра целиком — другая диагностика).
+        let overlay_prefix_len = if compose_overlay_disabled() || overlay_cache_disabled() {
+            None
+        } else {
+            self.overlay_cache_step(overlay)?
+        };
+        let compose_overlay: &[DisplayCommand] = if compose_overlay_disabled() {
+            &[]
+        } else if let Some(prefix_len) = overlay_prefix_len {
+            &overlay[..prefix_len]
+        } else {
+            overlay
+        };
         self.render_impl(seg_content, compose_overlay, scroll_y, 0.0, RenderPassMode::Compose)?;
         Ok(true)
     }
@@ -9854,9 +10140,11 @@ impl Renderer {
         let glyphs_at_entry = load_counter(&GLYPHS_RASTERIZED);
         let glyph_nanos_at_entry = load_counter(&GLYPH_RASTER_NANOS);
 
-        // Размеры цели: для Band — полоса, иначе — поверхность окна/headless.
+        // Размеры цели: для Band — полоса, для OverlayCache — сама поверхность
+        // (см. её doc-комментарий), иначе — поверхность окна/headless.
         let (sw0, sh0) = match &mode {
-            RenderPassMode::Band { w_px, h_px, .. } => (*w_px, *h_px),
+            RenderPassMode::Band { w_px, h_px, .. }
+            | RenderPassMode::OverlayCache { w_px, h_px, .. } => (*w_px, *h_px),
             _ => self.surface_dims(),
         };
 
@@ -10302,6 +10590,10 @@ impl Renderer {
             RenderPassMode::Band { strip, .. } => *strip,
             _ => None,
         };
+        // BUG-405 срез 41: клир уровня 0 у [`RenderPassMode::OverlayCache`]
+        // обязан быть прозрачным, а не цветом фона страницы — эта цель
+        // держит UI-хром, а не документ (см. её doc-комментарий).
+        let level0_transparent = matches!(&mode, RenderPassMode::OverlayCache { .. });
 
         let dpr_f32 = self.scale_factor.max(1e-6) as f32;
         // CSS-px размер цели пасса — ровно то, что уходит в `Uniforms.viewport`
@@ -10346,6 +10638,8 @@ impl Renderer {
                 let load_op = if first {
                     if current_level == 0 && band_strip.is_some() {
                         LoadOpChoice::LoadColorClearDepth
+                    } else if current_level == 0 && level0_transparent {
+                        LoadOpChoice::ClearTransparent
                     } else if current_level == 0 {
                         let rgba = self.canvas_bg
                             .map_or_else(
@@ -12892,6 +13186,32 @@ impl Renderer {
                 }
             }
         }
+        // BUG-405 срез 41: блит retained-текстуры стабильного хвоста overlay
+        // (`Renderer::overlay_cache_step`) — ПОСЛЕ живого overlay-префикса
+        // (только что дорисован циклом выше), на месте, где рисовался бы
+        // остаток полного overlay-списка: относительный порядок overlay
+        // блитом не меняется, только его исполнение — часть команд рисуется
+        // живьём, часть берётся готовыми пикселями из текстуры.
+        //
+        // `sync_scissor!()` обязателен: живой префикс мог закончиться
+        // изнутри клипа (`PopClip` — последняя его команда), и та сама по
+        // себе не эмитит корректирующий `SetScissor` — она лишь возвращает
+        // `clip_stack` в прежнее состояние, а ФАКТИЧЕСКИЙ scissor GPU
+        // остаётся тем, что выставила ПОСЛЕДНЯЯ реальная команда ВНУТРИ
+        // клипа, пока его не пересчитает следующая команда. Инъекция блита
+        // в обход обычного командного цикла эту синхронизацию не получает
+        // даром — без неё блит хвоста наследует чужой (более узкий) scissor
+        // и обрезается по нему.
+        if let Some(blit) = self.pending_overlay_blit.take() {
+            sync_scissor!();
+            let image_batch_idx = image_bind_groups.len() as u32;
+            image_bind_groups.push(blit.bind_group);
+            for (rect, uv0, uv1) in blit.quads {
+                let v_start = image_vertices.len() as u32;
+                push_image_quad(&mut image_vertices, rect, uv0, uv1, 1.0);
+                draw_ops.push(DrawOp::Image { v_start, v_count: 6, image_batch_idx });
+            }
+        }
         flush_batch!();
         let _ = (batch_start, current_scissor); // terminal flush — values not needed after
         // BUG-771 (диагностика, `LUMEN_TEXT_SIG=1`): подпись текста overlay-а и
@@ -12922,6 +13242,7 @@ impl Renderer {
                 RenderPassMode::Band { .. } => "band",
                 RenderPassMode::Compose => "compose",
                 RenderPassMode::Normal { .. } => "normal",
+                RenderPassMode::OverlayCache { .. } => "overlay-cache",
             };
             eprintln!(
                 "[frame:wgpu] text-sig {mode_name} n={} pos={:016x} uv={:016x} col={:016x} atlas={:016x}",
@@ -13214,9 +13535,11 @@ impl Renderer {
         let windowed_frame: Option<wgpu::SurfaceTexture>;
         let headless_tex: Option<wgpu::Texture>;
         let frame_view: wgpu::TextureView;
-        if let RenderPassMode::Band { view, .. } = &mode {
-            // Оффскрин-рендер полосы: цель задана вызывающим, swapchain не
-            // трогаем (клон view — дешёвый Arc-хэндл wgpu).
+        if let RenderPassMode::Band { view, .. } | RenderPassMode::OverlayCache { view, .. } =
+            &mode
+        {
+            // Оффскрин-рендер полосы/overlay-кэша: цель задана вызывающим,
+            // swapchain не трогаем (клон view — дешёвый Arc-хэндл wgpu).
             frame_view = view.clone();
             windowed_frame = None;
             headless_tex = None;
@@ -15122,7 +15445,7 @@ impl Renderer {
         // хэш фиксирует вызывающий render() (хэш Compose-аргументов кадр не
         // описывает); Normal — кадр и хэш, как раньше.
         match mode {
-            RenderPassMode::Band { .. } => {}
+            RenderPassMode::Band { .. } | RenderPassMode::OverlayCache { .. } => {}
             RenderPassMode::Compose => {
                 FRAMES_RENDERED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
@@ -20285,6 +20608,172 @@ mod tests {
         // Нефинитное значение — «без смещения», как у femtovg.
         r.set_page_offset(f32::NAN, 3.0);
         assert_eq!(r.page_offset(), (0.0, 0.0), "NaN просочился в CTM");
+    }
+
+    /// BUG-405 срез 41: overlay-кэш (`Renderer::overlay_cache_step`) даёт ТЕ
+    /// ЖЕ пиксели, что полная перерисовка overlay-списка каждый кадр.
+    ///
+    /// Первая версия этого среза (реплей горячей команды ПОВЕРХ всего
+    /// остального, с восстановлением контекста через
+    /// `anim_split_compose_plan`) была забракована переписью на реальном
+    /// хроме: скроллбар геометрически пересекается с фоновой панелью
+    /// хедера, рисуемой ПОЗЖЕ — реплей поверх всего накрыл бы его чужим
+    /// содержимым, и `anim_split_compose_plan` совершенно верно отказывал
+    /// на каждом кадре стенда (0 из ~750 попыток). Эта версия порядок не
+    /// меняет: нестабильный ПРЕФИКС списка рисуется живьём, стабильный
+    /// ХВОСТ остаётся на своём месте — блитуется. Список нарочно кладёт
+    /// нестабильную команду ПЕРЕД клипом, а не внутри него: точка разреза
+    /// обязана дотянуться до ближайшей СБАЛАНСИРОВАННОЙ по push/pop
+    /// границы, а не просто до первого различия (`balanced_cut_at_or_after`).
+    ///
+    /// Гейт слайса, и он именно об идентичности: `pending_overlay_blit`
+    /// проверяется через ОБЩИЙ по режимам путь `render_impl` (границу
+    /// content|overlay), поэтому headless (без `wgpu::Surface`, где
+    /// `compose_page` в принципе недостижим — `prepare_page_compose` рубит
+    /// его первым же условием) годится как стенд: вызывающий сам решает,
+    /// что подать в overlay-параметр `render()`, ровно как `compose_page`
+    /// решает это для Compose-пасса.
+    ///
+    /// Четыре кадра подряд бьют четыре разных пути `overlay_cache_step`:
+    /// A — кэша ещё нет (первый кадр, ничего не с чем сравнивать); B —
+    /// нестабильная команда (индекс 0, ДО клипа) сменилась с прошлого
+    /// кадра → разрез тривиален (1, сразу после неё — клип целиком уходит
+    /// в хвост нетронутым), кэш строится и используется тем же кадром
+    /// (MISS); C — список побуквенно тот же, что B → кэш валиден без
+    /// пересборки (HIT); D меняет команду ВНУТРИ кэшированного хвоста
+    /// (индекс 2, ПОД клипом) — наивный разрез сразу за ней (3) лёг бы
+    /// ПОСЕРЕДИНЕ открытого клипа, поэтому `balanced_cut_at_or_after`
+    /// обязана сдвинуть его до 4 (сразу за `PopClip`), и кэш обязан
+    /// признать хвост устаревшим и пересобраться заново с этим разрезом.
+    ///
+    /// Требует GPU-адаптер, поэтому `#[ignore]`; запуск:
+    /// `cargo test -p lumen-paint --features backend-wgpu
+    ///  overlay_cache_matches_full_overlay_redraw -- --include-ignored`.
+    #[test]
+    #[ignore = "requires GPU adapter"]
+    fn overlay_cache_matches_full_overlay_redraw() {
+        use crate::DisplayCommand as C;
+
+        let rect = |x: f32, y: f32, w: f32, h: f32| Rect { x, y, width: w, height: h };
+        let rgb = |r: u8, g: u8, b: u8| Color { r, g, b, a: 255 };
+
+        // index: 0 НЕСТАБИЛЬНАЯ (аналог ползунка — меняется каждый кадр),
+        // 1 PushClipRect, 2 команда под клипом, 3 PopClip, 4 сосед-после.
+        let overlay_with = |unstable: Color, clipped: Color| -> Vec<C> {
+            vec![
+                C::FillRect { rect: rect(0.0, 0.0, 10.0, 10.0), color: unstable },
+                C::PushClipRect { rect: rect(20.0, 0.0, 10.0, 10.0) },
+                C::FillRect { rect: rect(20.0, 0.0, 10.0, 10.0), color: clipped },
+                C::PopClip,
+                C::FillRect { rect: rect(40.0, 0.0, 10.0, 10.0), color: rgb(30, 160, 90) },
+            ]
+        };
+        let stable_clip = rgb(80, 90, 200);
+        let overlay_a = overlay_with(rgb(20, 60, 220), stable_clip);
+        let overlay_b = overlay_with(rgb(250, 210, 10), stable_clip);
+        // D: команда ПОД КЛИПОМ (индекс 2, внутри закэшированного хвоста
+        // кадра B/C) сменилась — кэш обязан пересобраться, а не показать
+        // устаревший цвет из текстуры.
+        let overlay_d = overlay_with(rgb(250, 210, 10), rgb(10, 200, 140));
+
+        let bytes = std::fs::read("../../../assets/fonts/Inter-Regular.ttf")
+            .expect("bundled font");
+
+        // Плечо-эталон: та же последовательность кадров, но каждый — полная
+        // перерисовка (второй, независимый headless-рендерер, чтобы кэш
+        // тестируемого не мог просочиться в эталон никаким состоянием).
+        let mut r_ref = Renderer::new_headless(bytes.clone(), 64, 48, ColorSpace::Srgb)
+            .expect("headless renderer (эталон)");
+        let ref_a = r_ref
+            .render_to_image_with_overlay(&[], &overlay_a, 0.0, 0.0)
+            .expect("эталон A");
+        let ref_b = r_ref
+            .render_to_image_with_overlay(&[], &overlay_b, 0.0, 0.0)
+            .expect("эталон B");
+        let ref_c = r_ref
+            .render_to_image_with_overlay(&[], &overlay_b, 0.0, 0.0)
+            .expect("эталон C (= B)");
+        let ref_d = r_ref
+            .render_to_image_with_overlay(&[], &overlay_d, 0.0, 0.0)
+            .expect("эталон D");
+
+        let mut r = Renderer::new_headless(bytes, 64, 48, ColorSpace::Srgb)
+            .expect("headless renderer (тест)");
+
+        // Кадр A: кэша ещё нет — `overlay_cache_step` обязан отказаться.
+        let prefix_a = r.overlay_cache_step(&overlay_a).expect("шаг A");
+        assert!(prefix_a.is_none(), "кадр без предыдущего не мог построить кэш");
+        assert!(r.overlay_cache.is_none(), "кэш не мог возникнуть на кадре A");
+        let img_a = r
+            .render_to_image_with_overlay(&[], &overlay_a, 0.0, 0.0)
+            .expect("render A");
+        assert_eq!(img_a.data, ref_a.data, "кадр A разошёлся с эталоном без всякого кэша");
+
+        // Кадр B: индекс 0 сменился — MISS, разрез сдвигается балансом с 1
+        // (первое различие) до 4 (мимо клипа), кэш строится и уже
+        // используется этим же кадром.
+        let prefix_b = r.overlay_cache_step(&overlay_b).expect("шаг B");
+        let prefix_b = prefix_b.expect("кадр B обязан был построить и применить кэш");
+        assert_eq!(prefix_b, 1, "разрез B — сразу после нестабильной команды, клип не тронут");
+        assert!(r.overlay_cache.is_some(), "кэш обязан существовать после кадра B");
+        let img_b = r
+            .render_to_image_with_overlay(&[], &overlay_b[..prefix_b], 0.0, 0.0)
+            .expect("render B (живой префикс + кэш хвоста)");
+        assert_eq!(
+            img_b.data, ref_b.data,
+            "MISS-кадр B: {} байт из {} разошлись с полной перерисовкой",
+            img_b.data.iter().zip(&ref_b.data).filter(|(x, y)| x != y).count(),
+            img_b.data.len(),
+        );
+
+        // Кадр C: список побуквенно тот же, что B — HIT, кэш переиспользуется
+        // без пересборки текстуры. `&c._texture as *const _` тут не годится:
+        // это адрес ПОЛЯ `self.overlay_cache`, то есть смещение внутри
+        // `self` — он одинаков независимо от того, какое значение лежит по
+        // этому смещению. Считаем сами создания текстур глобальным
+        // счётчиком (`TEXTURES_CREATED`, уже используется движком для
+        // ровно такого гейта в других тестах этого файла).
+        let created_before_c = load_counter(&TEXTURES_CREATED);
+        let prefix_c = r.overlay_cache_step(&overlay_b).expect("шаг C");
+        let prefix_c = prefix_c.expect("HIT обязан вернуть длину живого префикса");
+        assert_eq!(prefix_c, prefix_b, "HIT обязан вернуть тот же разрез, что MISS");
+        assert_eq!(
+            load_counter(&TEXTURES_CREATED), created_before_c,
+            "HIT пересоздал текстуру кэша"
+        );
+        let img_c = r
+            .render_to_image_with_overlay(&[], &overlay_b[..prefix_c], 0.0, 0.0)
+            .expect("render C (HIT)");
+        assert_eq!(
+            img_c.data, ref_c.data,
+            "HIT-кадр C: {} байт из {} разошлись с полной перерисовкой",
+            img_c.data.iter().zip(&ref_c.data).filter(|(x, y)| x != y).count(),
+            img_c.data.len(),
+        );
+
+        // Кадр D: сменилась команда ВНУТРИ кэшированного хвоста — кэш
+        // обязан пересобраться (не показать устаревший цвет из текстуры).
+        let created_before_d = load_counter(&TEXTURES_CREATED);
+        let prefix_d = r.overlay_cache_step(&overlay_d).expect("шаг D");
+        let prefix_d = prefix_d.expect("хвост изменился, но разрез всё ещё возможен");
+        assert_eq!(
+            prefix_d, 4,
+            "наивный разрез (3, сразу после изменившейся команды) лёг бы внутри клипа — \
+             balanced_cut_at_or_after обязана была сдвинуть его за PopClip"
+        );
+        assert_eq!(
+            load_counter(&TEXTURES_CREATED), created_before_d + 1,
+            "изменение под клипом обязано было пересобрать РОВНО одну новую текстуру кэша"
+        );
+        let img_d = r
+            .render_to_image_with_overlay(&[], &overlay_d[..prefix_d], 0.0, 0.0)
+            .expect("render D (кэш пересобран)");
+        assert_eq!(
+            img_d.data, ref_d.data,
+            "кадр D разошёлся с эталоном после пересборки кэша: {} байт из {} различаются",
+            img_d.data.iter().zip(&ref_d.data).filter(|(x, y)| x != y).count(),
+            img_d.data.len(),
+        );
     }
 
     /// BUG-406 срез 2: пять горячих пайплайнов собраны РАЗНЫМИ потоками.
