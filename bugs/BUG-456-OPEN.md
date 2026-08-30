@@ -1,8 +1,7 @@
 # BUG-456 — Контекст `OffscreenCanvas.getContext('2d')` — отдельный шим на 16 членов вместо 59, без единого геттера, а `getImageData` отдаёт сырую строку транспорта
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/offscreen_canvas.rs` — литерал `this._2d_context`,
-`getImageData` на `:767`)
+**Статус:** OPEN (симптом 3 исправлен 2026-08-30 — см. ниже)
+**Компонент:** js (`crates/js/src/offscreen_canvas.rs` — литерал `this._2d_context`)
 **Найден:** 2026-07-29 (P2), WPT-VENDOR-html-canvas — прогон среза `html/canvas/offscreen`
 
 ## Симптом
@@ -37,9 +36,9 @@ measureText  fillText  drawImage  putImageData  createLinearGradient
 O fillStyle-get=undefined      (перед этим записали '#00ff00', заливка сработала)
 ```
 
-## Симптом 3: транспорт натива протекает в скрипт страницы
+## Симптом 3: транспорт натива протекает в скрипт страницы — ИСПРАВЛЕНО 2026-08-30
 
-`getImageData` (`offscreen_canvas.rs:767`) возвращает результат натива как есть:
+`getImageData` не принимала параметров и возвращала результат натива как есть:
 
 ```js
 getImageData: () => _lumen_offscreen_canvas2d_get_image_data(canvasId),
@@ -49,14 +48,29 @@ getImageData: () => _lumen_offscreen_canvas2d_get_image_data(canvasId),
 O getImageData type=string  hasData=false  raw=20,20,00ff00ff00ff00ff00ff00ff00ff00ff00…
 ```
 
-То есть страница получает **строку** `"{w},{h},{hex_rgba}"` вместо объекта
-`ImageData`. Это и есть доминирующий класс отказов среза: 200+ сабтестов падают
+То есть страница получала **строку** `"{w},{h},{hex_rgba}"` вместо объекта
+`ImageData`. Это и был доминирующий класс отказов среза: 200+ сабтестов падали
 `Cannot read properties of undefined (reading '0')` — тесты делают
-`getImageData(…).data[0]`. Элементный контекст ту же строку хотя бы разбирает
-(`dom.rs:5224`), пусть и игнорируя прямоугольник ([BUG-448](BUG-448-FIXED.md)).
+`getImageData(…).data[0]`. Элементный контекст ту же строку хотя бы разбирал
+(`dom.rs`, до BUG-448), пусть и игнорируя прямоугольник ([BUG-448](BUG-448-FIXED.md)).
 
-Пиксели при этом верные (`00ff00ff` — ровно то, что залили): растеризатор работает,
-сломан шим.
+Пиксели при этом были верные (`00ff00ff` — ровно то, что залили): растеризатор
+работал, был сломан шим.
+
+**Исправлено тем же приёмом, что BUG-448** (двойник по описанию): прямоугольник
+стал параметром отдельного натива `_lumen_offscreen_canvas2d_get_image_data_rect`,
+переиспользующего тот же `Context2D::get_image_data_rect`
+(`crates/engine/canvas/src/image_data.rs`) — старый нативный биндинг
+`_lumen_offscreen_canvas2d_get_image_data` не тронут, его используют
+`transferToImageBitmap`/`createImageBitmap`/внутренние снимки, которым нужен
+весь буфер целиком в hex-формате, и сужать его на месте значило бы сломать все
+эти вызовы. Шим `getImageData(sx, sy, sw, sh)` теперь: требует все 4 аргумента
+(иначе `TypeError`), коэрсит их через `[EnforceRange] long` (не-конечное —
+`TypeError`), бросает `IndexSizeError` на нулевые `sw`/`sh` и нормализует
+отрицательные, возвращает `{width, height, data: Uint8ClampedArray, colorSpace:
+'srgb'}`. Проба «до» правки нашла эти три сопутствующих дефекта к названному
+одному. Тесты — `offscreen_canvas.rs::tests_v8::js_offscreen_get_image_data_*`
+(3 шт).
 
 ## Данные WPT
 
@@ -80,5 +94,5 @@ canvas и контекст OffscreenCanvas по спеке — почти оди
 общий прототип из [BUG-449](BUG-449-OPEN.md), затем оба контекста как два класса
 над одной фабрикой членов, различающиеся списком нативов.
 
-Отдельно и дёшево, до всякого рефакторинга: завернуть `getImageData` в тот же
-разбор, что в `dom.rs`, — сейчас наружу торчит внутренний формат транспорта.
+`getImageData` (симптом 3) исправлена отдельно и дёшево, до этого рефакторинга —
+см. выше. Остаток (симптомы 1 и 2) по-прежнему ждёт общего прототипа.
