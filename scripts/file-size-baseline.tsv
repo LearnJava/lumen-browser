@@ -4,13 +4,14 @@
 # Число может ехать ВНИЗ свободно, ВВЕРХ — только осознанно, тем же
 # коммитом, что и рост, и с объяснением в теле коммита.
 
-21518	crates/engine/paint/src/renderer.rs
+21532	crates/engine/paint/src/renderer.rs
 19698	crates/engine/paint/src/display_list.rs
 19250	crates/engine/layout/src/lib.rs
 10217	crates/network/src/lib.rs
 9192	crates/engine/css-parser/src/parser.rs
 7955	crates/engine/paint/src/backends/femtovg_backend.rs
 7145	crates/engine/dom/src/lib.rs
+5729	crates/engine/layout/src/box_tree.rs
 4852	crates/engine/paint/src/cpu_raster.rs
 4504	crates/core/src/ext.rs
 4408	crates/js/src/filesystem_access.rs

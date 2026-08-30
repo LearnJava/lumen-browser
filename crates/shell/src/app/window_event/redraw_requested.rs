@@ -1401,7 +1401,7 @@ impl Lumen {
             let log_ms = (frame_log_nanos() - log_nanos_at_paint) as f64 / 1e6;
             eprintln!(
                 "[frame]   top: scroll {:.2} sda {:.2} anim {:.2} js {:.2} \
-                         build {:.2} paint {:.2} (Р»РѕРі {:.2})",
+                         build {:.2} paint {:.2} (лог {:.2})",
                 marks[0],
                 marks[1] - marks[0],
                 marks[2] - marks[1],
@@ -1435,8 +1435,8 @@ impl Lumen {
             let d = |i: usize| ph[i] - phase_at_paint[i];
             let named = d(0) + d(1) + d(2) + d(3) + log_ms + wrap_ms;
             eprintln!(
-                "[frame]   paint: prep {:.2} hash {:.2} band {:.2} РїР°СЃСЃ {:.2} \
-                         Р»РѕРі {:.2} РѕР±С‘СЂС‚РєР° {:.2} | РЅРµРІСЏР·РєР° {:.2}",
+                "[frame]   paint: prep {:.2} hash {:.2} band {:.2} пасс {:.2} \
+                         лог {:.2} обёртка {:.2} | невязка {:.2}",
                 d(0),
                 d(1),
                 d(2),
