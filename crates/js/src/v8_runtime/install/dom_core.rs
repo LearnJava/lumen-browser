@@ -473,8 +473,51 @@ pub(crate) fn install_node_properties(
                 dirty.store(true, Ordering::Relaxed);
             }
         });
+        // ── Checkbox/radio runtime checkedness (BUG-444) ────────────────────
+        // Same shape as the dirty-value trio above: `el.checked` is NOT the
+        // `checked` content attribute — the attribute only seeds the default
+        // that `defaultChecked`/`form.reset()` restore (HTML LS §4.10.5.5).
         let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, 
+        reg!(scope, ctx, store,
+            "_lumen_get_dirty_checked",
+            move |node_id: u32| -> Option<bool> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                doc.dirty_checked(nid)
+            }
+        );
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
+        reg!(scope, ctx, store,
+            "_lumen_set_dirty_checked",
+            move |node_id: u32, checked: bool| {
+                let mut doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                let changed = doc.dirty_checked(nid) != Some(checked);
+                doc.set_control_checked(nid, checked);
+                if changed {
+                    // Drives `:checked`/`:indeterminate` and the painted mark
+                    // — same restyle trigger as an attribute change.
+                    record_dom_touch(&touched, nid);
+                    dirty.store(true, Ordering::Relaxed);
+                }
+            }
+        );
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
+        reg!(scope, ctx, store, "_lumen_clear_dirty_checked", move |node_id: u32| {
+            let mut doc = d.lock().unwrap();
+            let nid = NodeId::from_index(node_id as usize);
+            if doc.dirty_checked(nid).is_some() {
+                doc.clear_control_checked(nid);
+                record_dom_touch(&touched, nid);
+                dirty.store(true, Ordering::Relaxed);
+            }
+        });
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
             "_lumen_get_attr_names",
             move |node_id: u32| -> Vec<String> {
                 let doc = d.lock().unwrap();

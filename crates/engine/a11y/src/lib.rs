@@ -260,7 +260,7 @@ fn compute_state(doc: &Document, node_id: NodeId, node: &lumen_dom::Node) -> AXS
         .is_some_and(|v| v.eq_ignore_ascii_case("true"));
 
     AXState {
-        checked: checked_state(node),
+        checked: checked_state(doc, node_id, node),
         disabled: node
             .get_attr("aria-disabled")
             .is_some_and(|v| v.eq_ignore_ascii_case("true"))
@@ -344,7 +344,7 @@ fn compute_state(doc: &Document, node_id: NodeId, node: &lumen_dom::Node) -> AXS
     }
 }
 
-fn checked_state(node: &lumen_dom::Node) -> Option<Option<bool>> {
+fn checked_state(doc: &Document, node_id: NodeId, node: &lumen_dom::Node) -> Option<Option<bool>> {
     match node.get_attr("aria-checked") {
         Some(v) if v.eq_ignore_ascii_case("true") => Some(Some(true)),
         Some(v) if v.eq_ignore_ascii_case("false") => Some(Some(false)),
@@ -354,7 +354,10 @@ fn checked_state(node: &lumen_dom::Node) -> Option<Option<bool>> {
                 .input_type()
                 .is_some_and(|t| matches!(t, InputType::Checkbox | InputType::Radio));
             if is_checkable {
-                Some(Some(node.get_attr("checked").is_some()))
+                // Current checkedness, not just the `checked` attribute
+                // default — a screen reader must announce what the box
+                // actually shows (BUG-444, mirrors BUG-441).
+                Some(Some(doc.control_checked(node_id)))
             } else {
                 None
             }

@@ -236,17 +236,18 @@ pub fn toggle_details_open(doc: &mut Document, id: NodeId) {
     }
 }
 
-/// Toggle the `checked` attribute on a checkbox input in the live DOM.
+/// Toggle a checkbox/radio input's current checkedness in the live DOM.
 /// After calling this, relayout is needed to update `:checked` pseudo-class.
+///
+/// Writes the control's runtime checkedness, not the `checked` content
+/// attribute: HTML LS §4.10.5.5 keeps the attribute as the *default* that
+/// `defaultChecked` reads and `form.reset()` restores. A native mouse click
+/// used to write the attribute directly, which destroyed the default the
+/// moment a script hadn't already snapshotted it — the one path BUG-383's
+/// `_lumen_default_checked` workaround could not cover (BUG-444).
 pub fn toggle_checkbox(doc: &mut Document, id: NodeId) {
-    let node = doc.get_mut(id);
-    if let NodeData::Element { ref mut attrs, .. } = node.data {
-        if attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("checked")) {
-            attrs.retain(|a| !a.name.local.eq_ignore_ascii_case("checked"));
-        } else {
-            attrs.push(Attribute { name: QualName::html("checked"), value: String::new() });
-        }
-    }
+    let checked = doc.control_checked(id);
+    doc.set_control_checked(id, !checked);
 }
 
 /// Set the current value of an `<input>` in the live DOM — typing, a picker

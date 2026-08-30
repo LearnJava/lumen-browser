@@ -261,6 +261,64 @@ fn form_reset_restores_defaults() {
     assert_eq!(out, "v|true");
 }
 
+/// BUG-444 — a **native** click must not destroy the control's default
+/// checkedness.
+///
+/// This is the one path BUG-383's `_lumen_default_checked` workaround could
+/// never cover: the shell/driver flipped the `checked` content attribute
+/// straight from Rust, so it never passed the JS-side snapshot. Since
+/// checkedness *was* that attribute, the first native click erased the default
+/// — `defaultChecked` flipped with it and `form.reset()` had nothing to
+/// restore. The scripted path above passed all along, which is exactly why
+/// this needs its own test.
+#[test]
+fn native_click_keeps_default_checkedness() {
+    let mut s = session();
+    assert_eq!(ev(&mut s, "document.getElementById('c').checked"), "true");
+
+    s.click(&lumen_driver::Target::Selector("#c".into())).expect("native click");
+
+    // Current checkedness follows the click…
+    assert_eq!(ev(&mut s, "document.getElementById('c').checked"), "false");
+    // …while the default it was born with survives it.
+    assert_eq!(
+        ev(&mut s, "document.getElementById('c').defaultChecked"),
+        "true",
+        "a native click flipped `defaultChecked` — checkedness is still stored \
+         in the `checked` content attribute"
+    );
+    // …so `form.reset()` has something to restore.
+    assert_eq!(
+        ev(
+            &mut s,
+            "(function () {
+                document.getElementById('f').reset();
+                return String(document.getElementById('c').checked);
+            })()"
+        ),
+        "true",
+        "form.reset() could not restore the default a native click destroyed"
+    );
+}
+
+/// The runtime checkedness a native click writes must be the *same* storage a
+/// script reads and writes — one control cannot have two answers depending on
+/// who asks.
+#[test]
+fn native_and_scripted_checkedness_share_one_storage() {
+    let mut s = session();
+    // Script unticks, native click re-ticks.
+    ev(&mut s, "document.getElementById('c').checked = false");
+    s.click(&lumen_driver::Target::Selector("#c".into())).expect("native click");
+    assert_eq!(ev(&mut s, "document.getElementById('c').checked"), "true");
+
+    // `defaultChecked` is writable and independent of the current state
+    // (HTML LS §4.10.5.5 — it reflects the content attribute).
+    ev(&mut s, "document.getElementById('c').defaultChecked = false");
+    assert_eq!(ev(&mut s, "document.getElementById('c').checked"), "true");
+    assert_eq!(ev(&mut s, "document.getElementById('c').getAttribute('checked')"), "null");
+}
+
 /// `label.control` / `control.labels` / `control.form` — the association graph
 /// the bug listed as entirely missing.
 #[test]

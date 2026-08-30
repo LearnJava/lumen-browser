@@ -6194,7 +6194,10 @@ fn build_box_inner(
                                     .clamp(min, max);
                                 FormControlKind::Range { value, min, max }
                             } else {
-                                let checked = node.get_attr("checked").is_some();
+                                // BUG-444: the painted mark is the control's
+                                // current checkedness; `checked=` is only its
+                                // default.
+                                let checked = doc.control_checked(id);
                                 // BUG-441: the painted text is the control's
                                 // current value; `value=` is only its default.
                                 let value_text = doc.control_value(id).into_owned();

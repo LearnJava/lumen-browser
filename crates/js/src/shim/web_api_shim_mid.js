@@ -4572,8 +4572,10 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // Where the current value is *stored* differs: for `<input>`/`<textarea>`
         // it is document-side (`Document::dirty_values`, BUG-441) because layout
         // and form submission read it from there; the rest still use the JS-side
-        // `_input_values` map, and `checked` still rides the content attribute
-        // (BUG-444 — same modelling defect, not yet fixed).
+        // `_input_values` map. `checked` is document-side too
+        // (`Document::dirty_checkedness`, BUG-444), for the same reason —
+        // checkbox painting, `:checked`/`:indeterminate` matching and form
+        // submission all read it from Rust.
         get value() { var nid = this.__nid__;
             var tag0 = (_lumen_get_tag_name(nid) || '').toUpperCase();
             // BUG-441: for the two text-entry controls the current value lives
@@ -4620,13 +4622,15 @@ var _LUMEN_WRAPPER_MEMBERS = {
             }
             _input_values[nid] = String(v);
         },
-        // BUG-442: presence must go through `_lumen_has_attr` — on the default (V8)
-        // engine a missing attribute comes back as `null`, not `undefined`.
-        get checked() { var nid = this.__nid__; return _lumen_has_attr(nid, 'checked'); },
+        // BUG-444: the control's current checkedness lives document-side
+        // (`Document::dirty_checkedness`) — the `checked` content attribute
+        // is only its default, reflected separately as `defaultChecked`.
+        get checked() { var nid = this.__nid__;
+            var dc = _lumen_u2n(_lumen_get_dirty_checked(nid));
+            return dc !== null ? dc : _lumen_has_attr(nid, 'checked');
+        },
         set checked(v) { var nid = this.__nid__;
-            _lumen_capture_default_checked(nid);
-            if (v) _lumen_set_attr(nid, 'checked', '');
-            else _lumen_remove_attr(nid, 'checked');
+            _lumen_set_dirty_checked(nid, !!v);
         },
         // ── Constraint Validation API (HTML LS §4.10.21) ─────────────────────────
         get validity() { var nid = this.__nid__; return _compute_validity(this); },
