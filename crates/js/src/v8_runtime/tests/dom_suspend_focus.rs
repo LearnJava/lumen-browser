@@ -672,12 +672,43 @@ fn tab_index_reflects_the_content_attribute() {
              d.tabIndex = -1;\
              d.getAttribute('tabindex') === '-1' && d.tabIndex === -1",
     );
-    // A `tabindex` that is not an integer falls back to the default.
+    // BUG-452: a trailing tail is IGNORED, not rejected — HTML LS §2.4.4.1 step
+    // 8 collects ASCII digits and stops, so `'2px'` reflects as 2. This used to
+    // assert −1, which was the shared parser's own too-strict behaviour written
+    // down as if it were the rule; WPT's reference implementation of the same
+    // steps (`tests/wpt/html/dom/reflection.js::ReflectionTests.parseInt`)
+    // returns 5 for its `"5%"` case through exactly this branch.
     assert_js_true(
         &rt,
         "var d = document.getElementById('plain');\
              d.setAttribute('tabindex', '2px');\
+             d.tabIndex === 2",
+    );
+    // Genuinely unparseable, and out of the reflected `long` range, both fall
+    // back to the default.
+    assert_js_true(
+        &rt,
+        "var d = document.getElementById('plain');\
+             d.setAttribute('tabindex', 'px2');\
              d.tabIndex === -1",
+    );
+    assert_js_true(
+        &rt,
+        "var d = document.getElementById('plain');\
+             d.setAttribute('tabindex', '\\u00A07');\
+             d.tabIndex === -1",
+    );
+    // Out of the reflected `long` range → the DEFAULT, not the value read back
+    // verbatim. Which default that is comes from focusability, not from this
+    // rule: §2.4.4.1 parses `'2147483648'` successfully (the range cap lives in
+    // §2.6.2 reflection, not in the parse), so the `tabindex` focus flag is set
+    // and the element's default is 0 — hence the assertion is «not verbatim»
+    // plus the focusable default, not a hardcoded −1.
+    assert_js_true(
+        &rt,
+        "var d = document.getElementById('plain');\
+             d.setAttribute('tabindex', '2147483648');\
+             d.tabIndex === 0",
     );
 }
 

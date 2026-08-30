@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 pub use lumen_core::sandbox::{parse_sandbox_value, SandboxFlags};
 
+pub mod attr_int;
 pub mod contenteditable;
 pub use contenteditable::{CommandHistory, DomCommand, DragData, PasteData, drop_into, paste_into};
 

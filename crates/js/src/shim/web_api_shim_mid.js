@@ -3567,15 +3567,35 @@ function _lumen_canvas2d_default_state(canvasEl, nid) {
     };
 }
 
-// Resolve a canvas element's bitmap width/height (HTML LS §4.12.4 defaults 300×150).
+// Resolve a canvas element's bitmap width/height (HTML LS §4.12.4 defaults
+// 300×150). The attributes reflect as `unsigned long`, so this is the §2.6.2
+// getter: parse non-negative integer, and answer the default for an error or for
+// anything outside 0…2147483647.
+//
+// BUG-452: this used to be `parseInt(aw, 10) || default`, where `||` swallowed
+// the perfectly valid **0** (`<canvas width=0>` measured 300×150, and
+// `canvas.width = 0; canvas.width` answered 300 while the attribute honestly
+// held '0'). Three more values came out wrong through the same two lines:
+// `'0x100'` parses to 0 and was likewise swallowed, `'-100'` sailed through `||`
+// as a truthy −100 and the `< 1` clamps below then reported **1** rather than the
+// default, and an out-of-range `'4294967291'` was returned verbatim.
+//
+// The `< 1` clamps are gone: a zero-size canvas is legal and simply has no
+// pixels. The native backing store keeps its own `clamp(1, MAX_CANVAS_DIM)`
+// (`canvas2d.rs`) so the rasterizer never sees a zero extent — that clamp is an
+// allocation detail and must not be observable here, which is precisely the
+// confusion these two lines encoded.
 function _lumen_canvas_dims(nid) {
-    var aw = _lumen_u2n(_lumen_get_attr(nid, 'width'));
-    var ah = _lumen_u2n(_lumen_get_attr(nid, 'height'));
-    var w = (aw !== null) ? (parseInt(aw, 10) || 300) : 300;
-    var h = (ah !== null) ? (parseInt(ah, 10) || 150) : 150;
-    if (w < 1) w = 1;
-    if (h < 1) h = 1;
-    return [w, h];
+    return [
+        _lumen_canvas_dim_attr(nid, 'width', 300),
+        _lumen_canvas_dim_attr(nid, 'height', 150),
+    ];
+}
+
+function _lumen_canvas_dim_attr(nid, attr, def) {
+    var p = _lumen_parse_integer(_lumen_u2n(_lumen_get_attr(nid, attr)));
+    if (p === null || p < 0 || p > 2147483647) return def;
+    return p;
 }
 
 // ── Element factory ───────────────────────────────────────────────────────────
@@ -5089,16 +5109,28 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // attribute absent or unparseable the default is 0 for elements that
         // are focusable anyway and −1 for everything else. `<body>`/`<html>`
         // report −1 even though a script may focus them, matching browsers.
+        // BUG-452: `tabIndex` is a hand-written accessor rather than a row of
+        // the `_lumen_define_reflection` table, so it did not inherit that
+        // table's `long` range guard — `tabindex="2147483648"` read back
+        // verbatim instead of falling back to the default.
         get tabIndex() { var nid = this.__nid__;
             var parsed = _lumen_parse_integer(_lumen_u2n(_lumen_get_attr(nid, 'tabindex')));
-            if (parsed !== null) return parsed;
+            if (parsed !== null && parsed >= _LUMEN_LONG_MIN && parsed <= _LUMEN_LONG_MAX) return parsed;
             var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
             if (tag === 'BODY' || tag === 'HTML') return -1;
             return _lumen_is_focusable(nid) ? 0 : -1;
         },
+        // The SETTER takes a WebIDL `long`, so its argument is converted with
+        // ToNumber + truncation, NOT parsed with the content-attribute rules:
+        // `el.tabIndex = '3px'` is `NaN` → 0, where the string `tabindex="3px"`
+        // is 3. Using the parser here made the two agree on a value the spec
+        // gives different answers for, and disagreed with the `long` setter of
+        // the reflection table next door on the very same conversion.
         set tabIndex(v) { var nid = this.__nid__;
-            var n = _lumen_parse_integer(v);
-            _lumen_set_attr(nid, 'tabindex', String(n !== null ? n : 0));
+            var n = Number(v);
+            n = isFinite(n) ? Math.trunc(n) : 0;
+            if (n < _LUMEN_LONG_MIN || n > _LUMEN_LONG_MAX) n = 0;
+            _lumen_set_attr(nid, 'tabindex', String(n));
         },
         // Boolean `autofocus` content attribute (HTML LS §6.6.6).
         get autofocus() { var nid = this.__nid__; return _lumen_has_attr(nid, 'autofocus'); },

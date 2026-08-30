@@ -640,27 +640,52 @@ var _LUMEN_FOCUSABLE_TAGS = {
     SELECT: 1, TEXTAREA: 1, BUTTON: 1, IFRAME: 1, EMBED: 1, OBJECT: 1, SUMMARY: 1,
 };
 
-// HTML LS §2.4.4.1 «rules for parsing integers», the subset `tabindex` needs:
-// optional sign followed by ASCII digits only. Returns null when the value is
-// absent or does not parse — deliberately stricter than `parseInt`, which would
-// accept '12px'.
+// HTML LS §2.4.4.1 «rules for parsing integers»: skip ASCII whitespace, take an
+// optional sign, require at least one ASCII digit, then «collect a sequence of
+// code points that are ASCII digits» and STOP. Returns null on error (absent,
+// empty, no digit where one is required).
+//
+// BUG-452: the trailing tail is ignored, not rejected. This used to bail out on
+// the first non-digit («deliberately stricter than parseInt, which would accept
+// '12px'»), which is stricter than the spec rather than than `parseInt`: step 8
+// collects digits and returns, so `'100em'`, `'100.999'`, `'100#!?'` and
+// `'0x100'` are 100/100/100/**0**, not errors. Three WPT expectations turn on
+// exactly that (`2d.canvas.host.size.attributes.parse.{hex,trailingjunk,em}`),
+// and `tabindex='3zzz'` answered −1 instead of 3 through the same line.
+// `trim()` is likewise not the spec's skip: it also eats U+00A0 and the rest of
+// Unicode whitespace, where §2.4.4.1 skips ASCII whitespace only.
 function _lumen_parse_integer(v) {
     if (v === null || v === undefined) return null;
-    var s = String(v).trim();
-    if (s === '') return null;
+    var s = String(v);
     var i = 0;
-    var sign = 1;
-    if (s.charAt(0) === '-') { sign = -1; i = 1; }
-    else if (s.charAt(0) === '+') { i = 1; }
+    // ASCII whitespace: TAB, LF, FF, CR, SPACE (Infra §4.6).
+    while (i < s.length) {
+        var ws = s.charCodeAt(i);
+        if (ws !== 9 && ws !== 10 && ws !== 12 && ws !== 13 && ws !== 32) break;
+        i++;
+    }
     if (i >= s.length) return null;
+    var sign = 1;
+    if (s.charAt(i) === '-') { sign = -1; i++; }
+    else if (s.charAt(i) === '+') { i++; }
+    if (i >= s.length) return null;
+    var c = s.charCodeAt(i);
+    if (c < 48 || c > 57) return null;
     var n = 0;
     for (; i < s.length; i++) {
-        var c = s.charCodeAt(i);
-        if (c < 48 || c > 57) return null;
+        c = s.charCodeAt(i);
+        if (c < 48 || c > 57) break;
         n = n * 10 + (c - 48);
     }
     return sign * n;
 }
+
+// Reflection range guards (HTML LS §2.6.2). A reflected `long` answers the
+// default outside −2147483648…2147483647, a reflected `unsigned long` outside
+// 0…2147483647 — the parse itself has no upper bound, so without these
+// `<img width="2147483648">` read back verbatim as 2147483648.
+var _LUMEN_LONG_MAX = 2147483647;
+var _LUMEN_LONG_MIN = -2147483648;
 
 // Nearest inclusive ancestor of `nid` that is an element, or -1. The shell
 // tracks focus by layout box and a box's node can be a text node, while the
@@ -884,7 +909,8 @@ function _lumen_define_reflection(proto, entry) {
             if (n === -1) return extra;
             var p = _lumen_parse_integer(_lumen_u2n(_lumen_get_attr(n, attr)));
             if (p === null) return extra;
-            if (kind === 'ulong' && p < 0) return extra;
+            var lo = (kind === 'ulong') ? 0 : _LUMEN_LONG_MIN;
+            if (p < lo || p > _LUMEN_LONG_MAX) return extra;
             return p;
         };
         set = function(v) {
@@ -892,7 +918,8 @@ function _lumen_define_reflection(proto, entry) {
             if (n === -1) return;
             var p = Number(v);
             p = isFinite(p) ? Math.trunc(p) : 0;
-            if (kind === 'ulong' && p < 0) p = extra;
+            var lo = (kind === 'ulong') ? 0 : _LUMEN_LONG_MIN;
+            if (p < lo || p > _LUMEN_LONG_MAX) p = extra;
             _lumen_set_attr(n, attr, String(p));
         };
     } else if (kind === 'url') {
