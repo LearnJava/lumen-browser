@@ -123,6 +123,21 @@ impl WgpuBackend {
     pub fn renderer_mut(&mut self) -> &mut Renderer {
         &mut self.renderer
     }
+
+    /// BUG-453: как [`surface_error_to_render_error`], но сперва проверяет
+    /// [`Renderer::device_lost_reason`] — если GPU-устройство потеряно
+    /// (подтверждено драйвером через `Device::set_device_lost_callback`),
+    /// это сильнее любого кода в `wgpu::SurfaceError`: `Lost`/`Outdated`
+    /// после реальной потери устройства означают «переключиться на
+    /// fallback-бэкенд», а не generic `SurfaceLost` («пересоздать surface и
+    /// повторить»), который `resize()` на потерянном устройстве больше не
+    /// выполняет (см. правку в `Renderer::resize`).
+    fn map_surface_error(&self, e: wgpu::SurfaceError) -> RenderError {
+        if let Some(reason) = self.renderer.device_lost_reason() {
+            return RenderError::DeviceLost(reason);
+        }
+        surface_error_to_render_error(e)
+    }
 }
 
 impl RenderBackend for WgpuBackend {
@@ -142,7 +157,7 @@ impl RenderBackend for WgpuBackend {
     ) -> Result<(), RenderError> {
         self.renderer
             .render(content, overlay, scroll_y, scroll_x)
-            .map_err(surface_error_to_render_error)
+            .map_err(|e| self.map_surface_error(e))
     }
 
     fn render_with_anim(
@@ -155,7 +170,7 @@ impl RenderBackend for WgpuBackend {
     ) -> Result<(), RenderError> {
         self.renderer
             .render_with_anim(content, overlay, scroll_y, scroll_x, anim_ranges)
-            .map_err(surface_error_to_render_error)
+            .map_err(|e| self.map_surface_error(e))
     }
 
     fn set_content_epoch(&mut self, epoch: u64) {

@@ -3262,6 +3262,15 @@ pub struct Renderer {
     surface: Option<wgpu::Surface<'static>>,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    /// BUG-453: `Some(reason)` после коллбэка `Device::set_device_lost_callback`
+    /// (регистрируется один раз в `init_pipelines`) — после этого рендер
+    /// перестаёт трогать `device`/`queue`/`surface`: на потерянном
+    /// устройстве любой вызов, включая `SurfaceTexture::present()`, падает
+    /// панику библиотеки без пути восстановления изнутри `render_impl`.
+    /// `OnceLock`, а не `AtomicBool`, чтобы донести настоящую причину до
+    /// `WgpuBackend::render` — `wgpu::SurfaceError` (тип, который может
+    /// вернуть `render_impl`) не умеет нести произвольную строку.
+    device_lost: Arc<std::sync::OnceLock<String>>,
     /// Surface configuration; `None` in headless mode.
     config: Option<wgpu::SurfaceConfiguration>,
     /// Width in physical pixels when headless (`surface = None`); 0 otherwise.
@@ -5077,6 +5086,27 @@ impl Renderer {
         gpu_fingerprint: GpuFingerprint,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let t_init = std::time::Instant::now();
+        // BUG-453: единственная точка создания `Device` для обоих
+        // конструкторов (windowed `new_async` и headless `new_headless_async`
+        // сходятся сюда) — регистрируем коллбэк потери устройства здесь,
+        // один раз. `wgpu::SurfaceTexture::present()` возвращает `()` и
+        // паникует изнутри библиотеки при потерянном устройстве без единого
+        // способа поймать это исключение из `render_impl`; единственный
+        // корректный вариант — не доводить до вызова, реагируя на потерю
+        // заранее (флаг проверяется на входе в `render_impl`/`resize`).
+        let device_lost: Arc<std::sync::OnceLock<String>> = Arc::new(std::sync::OnceLock::new());
+        {
+            let cell = device_lost.clone();
+            device.set_device_lost_callback(move |reason, message| {
+                eprintln!("[wgpu] device lost ({reason:?}): {message}");
+                // `Device::set_device_lost_callback` в wgpu 26 фиксирует
+                // callback единожды на весь срок жизни `Device`, поэтому
+                // повторного вызова после первой потери не бывает — `set`
+                // на второй попытке (если он всё же случится) молча
+                // отбрасывается, а не паникует.
+                let _ = cell.set(format!("{reason:?}: {message}"));
+            });
+        }
         /// Печатает время от входа в `init_pipelines` до контрольной точки
         /// (только под `LUMEN_FRAME_LOG`).
         fn mark(t0: &std::time::Instant, label: &str) {
@@ -5693,6 +5723,7 @@ impl Renderer {
             surface,
             device,
             queue,
+            device_lost,
             config,
             headless_w,
             headless_h,
@@ -8428,6 +8459,13 @@ impl Renderer {
     /// For headless mode, updates the stored physical dimensions.
     pub fn resize(&mut self, width: u32, height: u32) {
         self.content_generation = self.content_generation.wrapping_add(1);
+        // BUG-453: устройство потеряно — `surface.configure` ниже валиден не
+        // больше, чем `frame.present()`, который эту потерю и обнаруживает.
+        // Дальше в этом методе трогать нечего: без Device его пересоздавать
+        // здесь не пытаемся (отдельная задача восстановления).
+        if self.device_lost.get().is_some() {
+            return;
+        }
         if width > 0 && height > 0 {
             if let (Some(surface), Some(config)) =
                 (self.surface.as_ref(), self.config.as_mut())
@@ -8468,6 +8506,18 @@ impl Renderer {
     #[must_use]
     pub fn scale_factor(&self) -> f64 {
         self.scale_factor
+    }
+
+    /// BUG-453: `Some(reason)`, если GPU-устройство было потеряно (TDR, сон,
+    /// отключение монитора, обновление драйвера) и подтверждено драйвером
+    /// через `Device::set_device_lost_callback`. `WgpuBackend::render`
+    /// использует это, чтобы вернуть настоящий `RenderError::DeviceLost`
+    /// вместо generic-маппинга `wgpu::SurfaceError::Lost` → `SurfaceLost`
+    /// (который читается как «пересоздать surface и повторить», а не как
+    /// «переключиться на fallback-бэкенд»).
+    #[must_use]
+    pub fn device_lost_reason(&self) -> Option<String> {
+        self.device_lost.get().cloned()
     }
 
     /// Target color space for this renderer's output surface.
@@ -9764,6 +9814,15 @@ impl Renderer {
         scroll_x: f32,
         mode: RenderPassMode,
     ) -> Result<(), wgpu::SurfaceError> {
+        // BUG-453: устройство потеряно (TDR, сон, отключение монитора,
+        // обновление драйвера — коллбэк из `init_pipelines`) — дальше по
+        // функции идут вызовы `self.device`/`self.queue`, а в конце —
+        // `frame.present()`, который на потерянном устройстве паникует
+        // изнутри wgpu без пути перехвата (`SurfaceTexture::present`
+        // возвращает `()`). Выходим раньше, чем тронули хоть один из них.
+        if self.device_lost.get().is_some() {
+            return Err(wgpu::SurfaceError::Lost);
+        }
         // BUG-274: пофазный тайминг кадра (LUMEN_FRAME_LOG=2) — разбивка
         // wgpu-кадра на faces/collect/prep/acquire/encode/submit, чтобы
         // диагностировать, какая фаза жжёт CPU в простое.
@@ -20289,6 +20348,57 @@ mod tests {
             !r.hot_pipeline_threads.borrow().contains(&std::thread::current().id()),
             "поток-владелец попал в число сборщиков горячих пайплайнов",
         );
+    }
+
+    /// BUG-453: потерянное устройство не должно паниковать `render()`/`resize()`.
+    ///
+    /// `wgpu::SurfaceTexture::present()` возвращает `()` и паникует внутри
+    /// библиотеки при потере устройства — перехватить это исключение из
+    /// `render_impl` нельзя, единственный корректный вариант — не доходить
+    /// до вызова. Тест не воспроизводит настоящую потерю устройства (TDR —
+    /// свойство драйвера, а не тестового окружения), а напрямую взводит
+    /// `device_lost` — ту же ячейку, которую в проде заполняет коллбэк
+    /// `Device::set_device_lost_callback`, — и проверяет, что оба места,
+    /// читающие её (`render_impl`/`resize`), деградируют вместо падения.
+    /// Headless-режим (`windowed_frame` всегда `None`, `present()` не
+    /// вызывается вовсе) здесь достаточен: правка — общий ранний выход в
+    /// начале `render_impl`, до какого-либо обращения к `device`/`queue`,
+    /// а не что-то специфичное для swapchain-пути.
+    ///
+    /// Требует GPU-адаптер, поэтому `#[ignore]`; запуск:
+    /// `cargo test -p lumen-paint --features backend-wgpu
+    ///  device_lost_skips_present_instead_of_panicking -- --include-ignored`.
+    #[test]
+    #[ignore = "requires GPU adapter"]
+    fn device_lost_skips_present_instead_of_panicking() {
+        let bytes = std::fs::read("../../../assets/fonts/Inter-Regular.ttf")
+            .expect("bundled font");
+        let mut r = Renderer::new_headless(bytes, 64, 48, ColorSpace::Srgb)
+            .expect("headless renderer");
+        assert!(
+            r.device_lost_reason().is_none(),
+            "свежий рендерер не должен считаться потерявшим устройство",
+        );
+        assert!(
+            r.render(&[], &[], 0.0, 0.0).is_ok(),
+            "обычный кадр на живом устройстве обязан рисоваться",
+        );
+        r.device_lost
+            .set("Unknown: simulated TDR".to_string())
+            .expect("флаг ещё не должен быть взведён");
+        assert_eq!(
+            r.device_lost_reason().as_deref(),
+            Some("Unknown: simulated TDR"),
+            "device_lost_reason() обязан вернуть причину, а не булев флаг",
+        );
+        let result = r.render(&[], &[], 0.0, 0.0);
+        assert!(
+            matches!(result, Err(wgpu::SurfaceError::Lost)),
+            "render() на потерянном устройстве обязан вернуть Err, а не рисовать: {result:?}",
+        );
+        // resize() не должен трогать device/surface на потерянном устройстве —
+        // не паникует и есть весь смысл проверки.
+        r.resize(128, 96);
     }
 
     /// BUG-771: слот пре-резолва face-а адресуется индексом САМОЙ команды.
