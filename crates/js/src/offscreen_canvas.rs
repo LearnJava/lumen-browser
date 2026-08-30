@@ -330,22 +330,18 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
         "_lumen_offscreen_canvas2d_set_fill_style",
         into_v8_fn2(|canvas_id: u32, css: String| {
             use lumen_canvas::{CanvasColor, PaintSource};
-            with_offscreen_canvas(canvas_id, |c| {
-                if let Some(color) = CanvasColor::from_css_str(&css) {
-                    c.fill_style = PaintSource::Color(color);
-                }
-            });
+            let color = CanvasColor::from_css_str(&css)?;
+            with_offscreen_canvas(canvas_id, |c| c.fill_style = PaintSource::Color(color));
+            Some(color.to_css_string())
         }),
     )?;
     rt.register_native(
         "_lumen_offscreen_canvas2d_set_stroke_style",
         into_v8_fn2(|canvas_id: u32, css: String| {
             use lumen_canvas::{CanvasColor, PaintSource};
-            with_offscreen_canvas(canvas_id, |c| {
-                if let Some(color) = CanvasColor::from_css_str(&css) {
-                    c.stroke_style = PaintSource::Color(color);
-                }
-            });
+            let color = CanvasColor::from_css_str(&css)?;
+            with_offscreen_canvas(canvas_id, |c| c.stroke_style = PaintSource::Color(color));
+            Some(color.to_css_string())
         }),
     )?;
     rt.register_native(
@@ -486,13 +482,16 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
 
       // Create and cache a 2D context proxy
       const canvasId = this.__canvas_id__;
+      // Хранилище двух цветовых атрибутов: у них ниже пара get/set, поэтому
+      // как поля литерала они жить не могут (аксессор с тем же ключом их
+      // перекрывает). Начальное значение — §4.12.5.1.1.
+      let _fillStyle = '#000000';
+      let _strokeStyle = '#000000';
       this._2d_context = {
         // Canvas reference
         canvas: this,
 
         // Drawing state
-        fillStyle: '#000000',
-        strokeStyle: '#000000',
         lineWidth: 1,
         globalAlpha: 1,
 
@@ -510,15 +509,22 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
         fill: () => _lumen_offscreen_canvas2d_fill(canvasId),
         stroke: () => _lumen_offscreen_canvas2d_stroke(canvasId),
 
-        // Style setters
+        // Style setters. Натив возвращает каноническую сериализацию принятого
+        // цвета либо null на невалидной строке — тогда атрибут НЕ меняется
+        // (HTML LS §4.12.5.1.3). Геттеры до BUG-451 отсутствовали вовсе, и
+        // `ctx.fillStyle` читался как `undefined`.
         set fillStyle(val) {
           if (typeof val !== 'string') val = String(val);
-          _lumen_offscreen_canvas2d_set_fill_style(canvasId, val);
+          var ser = _lumen_offscreen_canvas2d_set_fill_style(canvasId, val);
+          if (ser !== null && ser !== undefined) { _fillStyle = ser; }
         },
+        get fillStyle() { return _fillStyle; },
         set strokeStyle(val) {
           if (typeof val !== 'string') val = String(val);
-          _lumen_offscreen_canvas2d_set_stroke_style(canvasId, val);
+          var ser = _lumen_offscreen_canvas2d_set_stroke_style(canvasId, val);
+          if (ser !== null && ser !== undefined) { _strokeStyle = ser; }
         },
+        get strokeStyle() { return _strokeStyle; },
         set lineWidth(w) {
           _lumen_offscreen_canvas2d_set_line_width(canvasId, Number(w));
         },

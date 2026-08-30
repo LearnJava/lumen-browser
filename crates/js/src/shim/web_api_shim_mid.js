@@ -2981,8 +2981,31 @@ function _lumen_c2d_paint_style(name, setColor, setGradient, setPattern) {
             } else if (v && typeof v === 'object' && v.__patid__ !== undefined) {
                 st[name] = v; setPattern(st.nid, v.__patid__);
             } else {
-                st[name] = String(v); setColor(st.nid, st[name]);
+                // HTML LS §4.12.5.1.3: строка разбирается как CSS <color>;
+                // невалидная ИГНОРИРУЕТСЯ (атрибут сохраняет прежнее
+                // значение), валидная хранится в канонической сериализации —
+                // её и возвращает натив (BUG-451). Раньше здесь оседала сырая
+                // строка, поэтому геттер отдавал '#0F0' и даже 'not-a-color'.
+                var ser = setColor(st.nid, String(v));
+                if (ser === null || ser === undefined) { return; }
+                st[name] = ser;
             }
+        },
+        enumerable: true, configurable: true,
+    });
+}
+
+// `shadowColor` — тот же контракт «разобрать / игнорировать невалидное /
+// хранить канонически», но без градиентов и паттернов: по §4.12.5.1.3 это
+// только <color>.
+function _lumen_c2d_color_prop(name, setColor) {
+    Object.defineProperty(CanvasRenderingContext2D.prototype, name, {
+        get: function() { return _lumen_c2d(this, name)[name]; },
+        set: function(v) {
+            var st = _lumen_c2d(this, name);
+            var ser = setColor(st.nid, String(v));
+            if (ser === null || ser === undefined) { return; }
+            st[name] = ser;
         },
         enumerable: true, configurable: true,
     });
@@ -2994,11 +3017,11 @@ Object.defineProperty(CanvasRenderingContext2D.prototype, 'canvas', {
 });
 
 _lumen_c2d_paint_style('fillStyle',
-    function(nid, v) { _lumen_canvas2d_set_fill_style(nid, v); },
+    function(nid, v) { return _lumen_canvas2d_set_fill_style(nid, v); },
     function(nid, g) { _lumen_canvas2d_set_fill_style_gradient(nid, g); },
     function(nid, p) { _lumen_canvas2d_set_fill_style_pattern(nid, p); });
 _lumen_c2d_paint_style('strokeStyle',
-    function(nid, v) { _lumen_canvas2d_set_stroke_style(nid, v); },
+    function(nid, v) { return _lumen_canvas2d_set_stroke_style(nid, v); },
     function(nid, g) { _lumen_canvas2d_set_stroke_style_gradient(nid, g); },
     function(nid, p) { _lumen_canvas2d_set_stroke_style_pattern(nid, p); });
 
@@ -3015,8 +3038,8 @@ _lumen_c2d_prop('lineJoin', function(nid, v) { _lumen_canvas2d_set_line_join(nid
     function(v) { return String(v); });
 _lumen_c2d_prop('miterLimit', function(nid, v) { _lumen_canvas2d_set_miter_limit(nid, v); },
     function(v) { var n = Number(v); return (isFinite(n) && n > 0) ? n : undefined; });
-_lumen_c2d_prop('shadowColor', function(nid, v) { _lumen_canvas2d_set_shadow_color(nid, v); },
-    function(v) { return String(v); });
+_lumen_c2d_color_prop('shadowColor',
+    function(nid, v) { return _lumen_canvas2d_set_shadow_color(nid, v); });
 _lumen_c2d_prop('shadowBlur', function(nid, v) { _lumen_canvas2d_set_shadow_blur(nid, v); },
     function(v) { var n = Number(v); return (isFinite(n) && n >= 0) ? n : undefined; });
 _lumen_c2d_prop('shadowOffsetX', function(nid, v) { _lumen_canvas2d_set_shadow_offset_x(nid, v); },

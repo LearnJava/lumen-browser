@@ -40,7 +40,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Text Decoration L3 | [css-text-decor-3](https://www.w3.org/TR/css-text-decor-3/) | ✅ | underline/overline/line-through; style/color/thickness |
 | Selectors L3 | [css3-selectors](https://www.w3.org/TR/css3-selectors/) | ✅ | type/class/id/attr; combinators; :nth-*; :not() |
 | CSS Logical Properties L1 | [css-logical-1](https://www.w3.org/TR/css-logical-1/) | ✅ | margin/padding/border/inset logical → physical (LTR) |
-| CSS Color L4 | [css-color-4](https://www.w3.org/TR/css-color-4/) | 🟡 | oklch ✅; color-mix() ✅ (p4-color-mix-parsing 2026-06-08); system color keywords ✅ (p4-system-colors 2026-06-13); color() predefined spaces ✅ (srgb-linear/a98-rgb/prophoto-rgb/xyz/xyz-d65/xyz-d50, p4-color-function-spaces 2026-06-13); wide-gamut display output ⬜ |
+| CSS Color L4 | [css-color-4](https://www.w3.org/TR/css-color-4/) | 🟡 | oklch ✅; color-mix() ✅ (p4-color-mix-parsing 2026-06-08); system color keywords ✅ (p4-system-colors 2026-06-13); color() predefined spaces ✅ (srgb-linear/a98-rgb/prophoto-rgb/xyz/xyz-d65/xyz-d50, p4-color-function-spaces 2026-06-13); hwb() ✅ (P3 2026-08-30, BUG-451; относительная форма ⬜); wide-gamut display output ⬜ |
 
 ### Tier 1 — Critical gaps (break most web pages when missing)
 
@@ -211,6 +211,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `accent-color` | ✅ | parsed + wired to form controls (checkbox/radio/range/progress) in display_list.rs (P4 2026-06-14); 5 tests + graphic 110 |
 | `color-mix()` | ✅ | parse_color_mix() in style.rs (P4 2026-06-08); 3 tests |
 | `color()` predefined spaces | ✅ | srgb/display-p3/rec2020 + srgb-linear/a98-rgb/prophoto-rgb/xyz/xyz-d65/xyz-d50 (P4 2026-06-13); non-displayable gamut-mapped to sRGB; 11 tests; test 96 |
+| `hwb()` | ✅ | CSS Color L4 §7 (P3 2026-08-30, [BUG-451](bugs/BUG-451-FIXED.md)) — раньше не разбиралась нигде, хотя обратные конверсии для `color-mix` существовали; относительная форма `hwb(from …)` ⬜ (нет канала у `MixColorSpace::Hwb` в `relative_origin_channels`) |
 
 ### [T0] Fonts
 

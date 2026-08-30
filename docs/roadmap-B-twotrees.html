@@ -76,11 +76,11 @@
  "generated": "2026-08-30",
  "counts": {
   "open": 372,
-  "fixed": 512,
+  "fixed": 513,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 884,
+ "total_bugs": 885,
  "phases": [
   {
    "id": "P0",
@@ -8847,10 +8847,10 @@
    "debtor": false
   },
   "BUG-451": {
-   "status": "open",
-   "title": "Canvas 2D разбирает цвет собственным парсером на 60 строк: поддержаны `#rrggbb`/`#rgb`/`rgb(r,g,b)`/`rgba(...)`/именованные — и всё. **`hsl()`/`hsla()` не подде…",
-   "component": "canvas (`crates/engine/canvas/src/color.rs:23-83` — `CanvasColor::from_css_str`), js (`crates/js/src/dom.rs` — геттер `fillStyle`/`strokeStyle`)",
-   "date": null,
+   "status": "fixed",
+   "title": "Canvas 2D разбирал цвет собственным парсером на 60 строк (`#rrggbb`/`#rgb`/`rgb(,,)`/`rgba(,,,)` и 20 имён — всё). **`hsl()`/`hsla()` не поддерживались вовсе**,…",
+   "component": "canvas (`crates/engine/canvas/src/color.rs`), layout (`style/parse/color.rs`), js (`canvas2d.rs`/`offscreen_canvas.rs`/`web_api_shim_mid.js`)",
+   "date": "2026-08-30",
    "debtor": false
   },
   "BUG-452": {
@@ -12086,6 +12086,13 @@
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — сеттеры `width`/`height` на `HTMLCanvasElement.prototype`, натив изменения размера), canvas (`crates/engine/canvas` — выделение backing store)",
    "date": null,
    "debtor": false
+  },
+  "BUG-930": {
+   "status": "open",
+   "title": "Остаток [BUG-451](bugs/BUG-451-FIXED.md), две половины одной нехватки контекста. (1) **`ctx.fillStyle = 'currentColor'` игнорируется**: по HTML LS §4.12.5.1.3 k…",
+   "component": "js (`crates/js/src/canvas2d.rs` — натив сеттера цвета; `crates/js/src/shim/web_api_shim_mid.js` — `_lumen_c2d_paint_style`), canvas (`crates/engine/canvas/src/color.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -12325,6 +12332,9 @@
   ],
   "js (`crates/js/src/audio_element.rs` — `patchAudioElement`; `crates/js/src/video_bindings.rs` — то же у `<video>`; `crates/js/src/dom.rs:17149`/`:17239` — рефлексия `loading` у `<img>`/`<iframe>` объявлена `'string'` вместо `'enum'`)": [
    "BUG-925"
+  ],
+  "js (`crates/js/src/canvas2d.rs` — натив сеттера цвета; `crates/js/src/shim/web_api_shim_mid.js` — `_lumen_c2d_paint_style`), canvas (`crates/engine/canvas/src/color.rs`)": [
+   "BUG-930"
   ],
   "js (`crates/js/src/close_watcher.rs`, `CLOSE_WATCHER_SHIM`)": [
    "BUG-340"

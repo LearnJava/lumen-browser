@@ -555,24 +555,25 @@ pub(crate) fn install_canvas2d_bindings_v8(
     )?;
 
     // ── Style setters ─────────────────────────────────────────────────────────
+    // Оба сеттера цвета возвращают КАНОНИЧЕСКУЮ сериализацию принятого
+    // значения (HTML LS §4.12.5.1.3) либо `null`, если строка цветом не
+    // является. Шим хранит возвращённое, поэтому геттер отдаёт `'#00ff00'`
+    // на `'#0F0'`, а невалидная запись не меняет ни атрибут, ни натив
+    // (BUG-451).
     rt.register_native(
         "_lumen_canvas2d_set_fill_style",
         into_v8_fn2(|nid: u32, css: String| {
-            with_canvas(nid, |c| {
-                if let Some(color) = CanvasColor::from_css_str(&css) {
-                    c.fill_style = PaintSource::Color(color);
-                }
-            });
+            let color = CanvasColor::from_css_str(&css)?;
+            with_canvas(nid, |c| c.fill_style = PaintSource::Color(color));
+            Some(color.to_css_string())
         }),
     )?;
     rt.register_native(
         "_lumen_canvas2d_set_stroke_style",
         into_v8_fn2(|nid: u32, css: String| {
-            with_canvas(nid, |c| {
-                if let Some(color) = CanvasColor::from_css_str(&css) {
-                    c.stroke_style = PaintSource::Color(color);
-                }
-            });
+            let color = CanvasColor::from_css_str(&css)?;
+            with_canvas(nid, |c| c.stroke_style = PaintSource::Color(color));
+            Some(color.to_css_string())
         }),
     )?;
     rt.register_native(
@@ -840,11 +841,9 @@ pub(crate) fn install_canvas2d_bindings_v8(
     rt.register_native(
         "_lumen_canvas2d_set_shadow_color",
         into_v8_fn2(|nid: u32, css: String| {
-            with_canvas(nid, |c| {
-                if let Some(color) = CanvasColor::from_css_str(&css) {
-                    c.shadow_color = color;
-                }
-            });
+            let color = CanvasColor::from_css_str(&css)?;
+            with_canvas(nid, |c| c.shadow_color = color);
+            Some(color.to_css_string())
         }),
     )?;
     rt.register_native(

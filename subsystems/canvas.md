@@ -16,7 +16,17 @@ Phase 5 implementation: all drawing operations write to an in-process `Vec<u8>` 
 - `globalAlpha` — multiplies the alpha channel on all drawing operations.
 - Porter-Duff source-over compositing in `composite_pixel`.
 - `clearRect` uses direct write (copy semantics), not source-over.
-- `CanvasColor::from_css_str` — parses `#rrggbb`, `#rgb`, `rgb()`, `rgba()`, 19 named colors.
+- `CanvasColor::from_css_str` — colour parsing. Since [BUG-451](../bugs/BUG-451-FIXED.md)
+  (2026-08-30) this is a two-line wrapper over `lumen_layout::parse_color`, i.e. the
+  cascade's own parser, and **not** a copy: the crate already depended on `lumen-layout`,
+  so the duplicate (`#rrggbb`/`#rgb`/`rgb(,,)`/`rgba(,,,)`/19 names, no `hsl()` at all,
+  and a slice panic on `'rgb('`) was deleted rather than extended. Anything the cascade
+  accepts a canvas now accepts. `None` means "not a colour" — the caller must **keep the
+  previous value** (HTML LS §4.12.5.1.3), never fall back to black.
+- `CanvasColor::to_css_string` — the §4.12.5.1.3 serialization (`#rrggbb` when opaque,
+  `rgba(r, g, b, a)` otherwise). Alpha is stored as a byte but serialized as a 0–1 number,
+  so it prints the *shortest decimal that round-trips back to the same byte* (128 → `0.5`,
+  not `0.502`); every one of the 256 values is covered by a round-trip test.
 - Scanline even-odd fill for closed paths.
 - Thick-stroke line rasterization (perpendicular quad, scanline fill).
 - `arc()` approximated as polyline (up to 180 segments).
