@@ -5005,132 +5005,6 @@ var _LUMEN_WRAPPER_MEMBERS = {
             return { x: r[0], y: r[1], width: r[2], height: r[3],
                      top: r[1], left: r[0], right: r[0]+r[2], bottom: r[1]+r[3] };
         },
-        // HTMLCanvasElement.getContext (HTML LS §4.12.4). '2d' returns a cached
-        // CanvasRenderingContext2D; 'webgl'/'webgl2' fall through to null (the
-        // functional WebGL path is the separate webgl_canvas shim). Only meaningful
-        // on <canvas>; harmless on other elements (creates an unused buffer at most).
-        // Returns null when control has been transferred via transferControlToOffscreen.
-        getContext: function(contextType) { var nid = this.__nid__;
-            var t = ('' + (contextType || '')).toLowerCase();
-            if (t === '2d') {
-                if (_canvas2d_ctxs[nid]) return _canvas2d_ctxs[nid];
-                if ((_lumen_get_tag_name(nid) || '').toLowerCase() !== 'canvas') return null;
-                if (typeof _lumen_canvas_is_transferred === 'function' && _lumen_canvas_is_transferred(nid)) return null;
-                var d = _lumen_canvas_dims(nid);
-                _lumen_canvas2d_create(nid, d[0], d[1]);
-                var c2d = _lumen_make_canvas2d_ctx(this, nid);
-                _canvas2d_ctxs[nid] = c2d;
-                return c2d;
-            }
-            // 'bitmaprenderer' returns an ImageBitmapRenderingContext (HTML LS §4.12.5.1):
-            // transferFromImageBitmap(bitmap) replaces this canvas's displayed bitmap wholesale
-            // (no drawing operations of its own, unlike '2d').
-            if (t === 'bitmaprenderer') {
-                if (_canvas_bitmaprenderer_ctxs[nid]) return _canvas_bitmaprenderer_ctxs[nid];
-                if ((_lumen_get_tag_name(nid) || '').toLowerCase() !== 'canvas') return null;
-                if (typeof _lumen_canvas_is_transferred === 'function' && _lumen_canvas_is_transferred(nid)) return null;
-                var bd = _lumen_canvas_dims(nid);
-                _lumen_canvas2d_create(nid, bd[0], bd[1]);
-                var brctx = {
-                    canvas: this,
-                    transferFromImageBitmap: function(bitmap) {
-                        if (bitmap === null) {
-                            _lumen_canvas2d_clear_rect(nid, 0, 0, _lumen_canvas_dims(nid)[0], _lumen_canvas_dims(nid)[1]);
-                            return;
-                        }
-                        if (!bitmap || typeof bitmap.__canvas_id__ !== 'number') {
-                            throw new TypeError('transferFromImageBitmap: argument is not an ImageBitmap');
-                        }
-                        var ok = _lumen_bitmaprenderer_transfer_from_image_bitmap(nid, bitmap.__canvas_id__);
-                        if (!ok) {
-                            throw new DOMException('transferFromImageBitmap: the ImageBitmap has been detached', 'InvalidStateError');
-                        }
-                    }
-                };
-                _canvas_bitmaprenderer_ctxs[nid] = brctx;
-                return brctx;
-            }
-            // 'webgpu' returns a GPUCanvasContext bound to this canvas. configure() allocates a
-            // render-target texture; rendered frames present into the canvas:{nid} 2D buffer the
-            // shell composites. Returns null without the WebGPU shim (Phase 0 builds).
-            if (t === 'webgpu') {
-                if (_canvas_webgpu_ctxs[nid]) return _canvas_webgpu_ctxs[nid];
-                if ((_lumen_get_tag_name(nid) || '').toLowerCase() !== 'canvas') return null;
-                if (typeof _lumen_canvas_is_transferred === 'function' && _lumen_canvas_is_transferred(nid)) return null;
-                if (typeof GPUCanvasContext !== 'function') return null;
-                var wd = _lumen_canvas_dims(nid);
-                _lumen_canvas2d_create(nid, wd[0], wd[1]);
-                var gctx = new GPUCanvasContext(this);
-                _canvas_webgpu_ctxs[nid] = gctx;
-                return gctx;
-            }
-            return null;
-        },
-        // HTMLCanvasElement.transferControlToOffscreen (HTML LS §4.12.14).
-        // Transfers the canvas bitmap to a new OffscreenCanvas and prevents future
-        // getContext() calls. The returned OffscreenCanvas can be sent to a Worker
-        // via postMessage with a transfer list.
-        transferControlToOffscreen: function() { var nid = this.__nid__;
-            if ((_lumen_get_tag_name(nid) || '').toLowerCase() !== 'canvas') {
-                throw new DOMException('transferControlToOffscreen: not a canvas element', 'InvalidStateError');
-            }
-            if (typeof _lumen_canvas_is_transferred === 'function' && _lumen_canvas_is_transferred(nid)) {
-                throw new DOMException('Canvas control already transferred', 'InvalidStateError');
-            }
-            if (_canvas2d_ctxs[nid]) {
-                throw new DOMException('Canvas already has an active 2D context', 'InvalidStateError');
-            }
-            var d = _lumen_canvas_dims(nid);
-            _lumen_canvas2d_create(nid, d[0], d[1]);
-            var jsonStr = _lumen_canvas_transfer_control_to_offscreen(nid);
-            var obj = JSON.parse(jsonStr);
-            // Create an OffscreenCanvas JS object wrapping the pre-created native canvas.
-            // We set __canvas_id__ directly instead of calling the constructor so the
-            // native side does not allocate a second backing buffer.
-            var oc = Object.create(OffscreenCanvas.prototype);
-            oc.__canvas_id__ = obj.__canvas_id__;
-            oc.width = obj.width;
-            oc.height = obj.height;
-            oc._2d_context = null;
-            return oc;
-        },
-        // Privacy: blank data URL defeats canvas pixel-hash fingerprinting (ADR-007).
-        toDataURL: function() { var nid = this.__nid__;
-            return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
-        },
-        toBlob: function(cb) { var nid = this.__nid__; if (typeof cb === 'function') cb(null); },
-        // HTMLCanvasElement.width/height reflect content attributes as unsigned long
-        // (HTML LS §4.12.4). Setting resizes the backing bitmap (which clears it).
-        // Only wired for <canvas>; other elements keep attribute-string semantics
-        // via getAttribute and are unaffected by these accessors.
-        get width() { var nid = this.__nid__;
-            if ((_lumen_get_tag_name(nid) || '').toLowerCase() === 'canvas') {
-                return _lumen_canvas_dims(nid)[0];
-            }
-            var v = _lumen_u2n(_lumen_get_attr(nid, 'width'));
-            return v !== null ? (parseInt(v, 10) || 0) : 0;
-        },
-        set width(v) { var nid = this.__nid__;
-            var n = parseInt(v, 10); if (!(n >= 0)) n = 0;
-            _lumen_set_attr(nid, 'width', String(n));
-            if ((_lumen_get_tag_name(nid) || '').toLowerCase() === 'canvas' && _canvas2d_ctxs[nid]) {
-                var d = _lumen_canvas_dims(nid); _lumen_canvas2d_resize(nid, d[0], d[1]);
-            }
-        },
-        get height() { var nid = this.__nid__;
-            if ((_lumen_get_tag_name(nid) || '').toLowerCase() === 'canvas') {
-                return _lumen_canvas_dims(nid)[1];
-            }
-            var v = _lumen_u2n(_lumen_get_attr(nid, 'height'));
-            return v !== null ? (parseInt(v, 10) || 0) : 0;
-        },
-        set height(v) { var nid = this.__nid__;
-            var n = parseInt(v, 10); if (!(n >= 0)) n = 0;
-            _lumen_set_attr(nid, 'height', String(n));
-            if ((_lumen_get_tag_name(nid) || '').toLowerCase() === 'canvas' && _canvas2d_ctxs[nid]) {
-                var d = _lumen_canvas_dims(nid); _lumen_canvas2d_resize(nid, d[0], d[1]);
-            }
-        },
         // `src` used to live here as an own property on EVERY element (BUG-305).
         // It is now one row of the reflection table (BUG-383) installed on the
         // interfaces that actually have the attribute — `<img>`/`<script>`/
@@ -5459,6 +5333,165 @@ var _LUMEN_WRAPPER_MEMBERS = {
             }
         },
 };
+
+// ── HTMLCanvasElement (HTML LS §4.12.5) ──────────────────────────────────────
+// BUG-450: `getContext`/`toDataURL`/`toBlob`/`transferControlToOffscreen`/
+// `width`/`height` used to live in `_LUMEN_WRAPPER_MEMBERS`, i.e. on the shared
+// per-interface prototype EVERY element wrapper chains through — so
+// `'getContext' in document.createElement('div')` answered true, `div.toDataURL()`
+// returned a PNG, and `div.width = 42` wrote a `width` attribute HTML LS does not
+// give `<div>`. Scripts feature-detect canvas with exactly that `in` test. Six
+// members of one interface belong on that interface's prototype, which is the
+// move BUG-796 made for `content` and BUG-383 for `src`; `width`/`height` are
+// handed to the interfaces that really own them by the reflection table in
+// `web_api_shim_tail_b.js`.
+//
+// A wrapper's [[Prototype]] sits one link BELOW the interface prototype
+// (`_lumen_wrapper_proto_for`), so a `<canvas>` still reaches these while nothing
+// else does — and, unlike the old placement, a page can now patch
+// `HTMLCanvasElement.prototype` and be seen by parser-built canvases.
+
+// WebIDL brand check. Without it `HTMLCanvasElement.prototype.toDataURL.call(div)`
+// would still operate on whatever node id it found on the receiver — the same
+// hole BUG-449 closed for the Canvas 2D interfaces, whose state slot doubles as
+// their brand.
+function _lumen_canvas_nid(self) {
+    var nid = (self === null || self === undefined) ? undefined : self.__nid__;
+    if (nid === null || nid === undefined
+        || (_lumen_get_tag_name(nid) || '').toLowerCase() !== 'canvas') {
+        throw new TypeError('Illegal invocation: receiver is not an HTMLCanvasElement');
+    }
+    return nid;
+}
+
+// `getContext(contextId, options)` — `contextId` is a required DOMString, and
+// §4.12.5 matches it by EXACT value against the context-id table. Lower-casing it
+// (as this did) made `'2D'` and `'WebGL'` hand out contexts the spec refuses, and
+// `contextType || ''` turned `getContext(0)` into `getContext('')` instead of the
+// WebIDL string conversion `'0'`. '2d' returns a cached CanvasRenderingContext2D;
+// 'webgl'/'webgl2' fall through to null here (the functional WebGL path is the
+// separate `webgl_canvas` shim, which wraps this method per element). Returns
+// null once control has been transferred via transferControlToOffscreen.
+HTMLCanvasElement.prototype.getContext = function(contextType) {
+    var nid = _lumen_canvas_nid(this);
+    if (arguments.length === 0) {
+        throw new TypeError("Failed to execute 'getContext' on 'HTMLCanvasElement': "
+            + '1 argument required, but only 0 present.');
+    }
+    var t = String(contextType);
+    if (typeof _lumen_canvas_is_transferred === 'function' && _lumen_canvas_is_transferred(nid)) return null;
+    if (t === '2d') {
+        if (_canvas2d_ctxs[nid]) return _canvas2d_ctxs[nid];
+        var d = _lumen_canvas_dims(nid);
+        _lumen_canvas2d_create(nid, d[0], d[1]);
+        var c2d = _lumen_make_canvas2d_ctx(this, nid);
+        _canvas2d_ctxs[nid] = c2d;
+        return c2d;
+    }
+    // 'bitmaprenderer' returns an ImageBitmapRenderingContext (HTML LS §4.12.5.1):
+    // transferFromImageBitmap(bitmap) replaces this canvas's displayed bitmap wholesale
+    // (no drawing operations of its own, unlike '2d').
+    if (t === 'bitmaprenderer') {
+        if (_canvas_bitmaprenderer_ctxs[nid]) return _canvas_bitmaprenderer_ctxs[nid];
+        var bd = _lumen_canvas_dims(nid);
+        _lumen_canvas2d_create(nid, bd[0], bd[1]);
+        var brctx = {
+            canvas: this,
+            transferFromImageBitmap: function(bitmap) {
+                if (bitmap === null) {
+                    _lumen_canvas2d_clear_rect(nid, 0, 0, _lumen_canvas_dims(nid)[0], _lumen_canvas_dims(nid)[1]);
+                    return;
+                }
+                if (!bitmap || typeof bitmap.__canvas_id__ !== 'number') {
+                    throw new TypeError('transferFromImageBitmap: argument is not an ImageBitmap');
+                }
+                var ok = _lumen_bitmaprenderer_transfer_from_image_bitmap(nid, bitmap.__canvas_id__);
+                if (!ok) {
+                    throw new DOMException('transferFromImageBitmap: the ImageBitmap has been detached', 'InvalidStateError');
+                }
+            }
+        };
+        _canvas_bitmaprenderer_ctxs[nid] = brctx;
+        return brctx;
+    }
+    // 'webgpu' returns a GPUCanvasContext bound to this canvas. configure() allocates a
+    // render-target texture; rendered frames present into the canvas:{nid} 2D buffer the
+    // shell composites. Returns null without the WebGPU shim (Phase 0 builds).
+    if (t === 'webgpu') {
+        if (_canvas_webgpu_ctxs[nid]) return _canvas_webgpu_ctxs[nid];
+        if (typeof GPUCanvasContext !== 'function') return null;
+        var wd = _lumen_canvas_dims(nid);
+        _lumen_canvas2d_create(nid, wd[0], wd[1]);
+        var gctx = new GPUCanvasContext(this);
+        _canvas_webgpu_ctxs[nid] = gctx;
+        return gctx;
+    }
+    return null;
+};
+
+// HTMLCanvasElement.transferControlToOffscreen (HTML LS §4.12.14).
+// Transfers the canvas bitmap to a new OffscreenCanvas and prevents future
+// getContext() calls. The returned OffscreenCanvas can be sent to a Worker
+// via postMessage with a transfer list.
+HTMLCanvasElement.prototype.transferControlToOffscreen = function() {
+    var nid = _lumen_canvas_nid(this);
+    if (typeof _lumen_canvas_is_transferred === 'function' && _lumen_canvas_is_transferred(nid)) {
+        throw new DOMException('Canvas control already transferred', 'InvalidStateError');
+    }
+    if (_canvas2d_ctxs[nid]) {
+        throw new DOMException('Canvas already has an active 2D context', 'InvalidStateError');
+    }
+    var d = _lumen_canvas_dims(nid);
+    _lumen_canvas2d_create(nid, d[0], d[1]);
+    var jsonStr = _lumen_canvas_transfer_control_to_offscreen(nid);
+    var obj = JSON.parse(jsonStr);
+    // Create an OffscreenCanvas JS object wrapping the pre-created native canvas.
+    // We set __canvas_id__ directly instead of calling the constructor so the
+    // native side does not allocate a second backing buffer.
+    var oc = Object.create(OffscreenCanvas.prototype);
+    oc.__canvas_id__ = obj.__canvas_id__;
+    oc.width = obj.width;
+    oc.height = obj.height;
+    oc._2d_context = null;
+    return oc;
+};
+
+// Privacy: blank data URL defeats canvas pixel-hash fingerprinting (ADR-007).
+HTMLCanvasElement.prototype.toDataURL = function() {
+    _lumen_canvas_nid(this);
+    return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+};
+HTMLCanvasElement.prototype.toBlob = function(cb) {
+    _lumen_canvas_nid(this);
+    if (typeof cb === 'function') cb(null);
+};
+
+// `width`/`height` reflect the content attributes as `unsigned long` with the
+// interface defaults 300 and 150 (§4.12.5). Setting resizes the backing bitmap,
+// which clears it. The setter follows HTML LS §2.6.2 reflection rather than the
+// old `parseInt`: a value outside [0, 2147483647] — which is what a negative or
+// non-numeric argument becomes — writes the DEFAULT to the content attribute,
+// where before `canvas.width = -1` wrote `width="0"` while the getter answered
+// 300, i.e. the attribute and the IDL attribute disagreed.
+function _lumen_canvas_define_dim(name, index, def) {
+    Object.defineProperty(HTMLCanvasElement.prototype, name, {
+        get: function() { return _lumen_canvas_dims(_lumen_canvas_nid(this))[index]; },
+        set: function(v) {
+            var nid = _lumen_canvas_nid(this);
+            var n = Number(v);
+            n = isFinite(n) ? Math.trunc(n) : 0;
+            if (n < 0 || n > 2147483647) n = def;
+            _lumen_set_attr(nid, name, String(n));
+            if (_canvas2d_ctxs[nid]) {
+                var d = _lumen_canvas_dims(nid);
+                _lumen_canvas2d_resize(nid, d[0], d[1]);
+            }
+        },
+        enumerable: true, configurable: true,
+    });
+}
+_lumen_canvas_define_dim('width', 0, 300);
+_lumen_canvas_define_dim('height', 1, 150);
 
     // ── contentEditable / isContentEditable (HTML LS §6.9.3) ────────────────
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'contentEditable', {

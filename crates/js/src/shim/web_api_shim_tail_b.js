@@ -1214,6 +1214,45 @@ _lumen_install_reflection(HTMLImageElement.prototype, [
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
 ]);
 
+// BUG-450: `width`/`height` are not a global attribute pair — until the canvas
+// members moved onto `HTMLCanvasElement.prototype` they were served to EVERY
+// element by the shared wrapper table, which is why `document.createElement('div')
+// .width = 42` wrote a `width` attribute. The interfaces below are the complete
+// set HTML LS gives the pair to (checked against `tests/wpt/interfaces/html.idl`),
+// and the type differs per interface: `unsigned long` on the four modern ones,
+// `DOMString` on the obsolete-but-parsed ones, where `<td width="5">` must read
+// back as the string `'5'` and not the number 5. `<canvas>` is deliberately absent
+// — its pair resizes a bitmap and is defined next to `getContext`.
+[HTMLImageElement.prototype, HTMLVideoElement.prototype,
+ HTMLInputElement.prototype, HTMLSourceElement.prototype].forEach(function(_p) {
+    _lumen_install_reflection(_p, [
+        ['width',      'width',      'ulong', 0],
+        ['height',     'height',     'ulong', 0],
+    ]);
+});
+// `<iframe>` is patched per element by `iframe_element.rs` with the same string
+// semantics; that own property keeps shadowing this row, which exists for the
+// iframes that patch never reaches (`innerHTML`, `createElementNS`).
+// (`HTMLMarqueeElement` owns the pair too but has no interface in this engine,
+// so `<marquee>` is left without it rather than growing an interface here.)
+[HTMLIFrameElement.prototype, HTMLEmbedElement.prototype,
+ HTMLObjectElement.prototype].forEach(function(_p) {
+    _lumen_install_reflection(_p, [
+        ['width',      'width',      'string'],
+        ['height',     'height',     'string'],
+    ]);
+});
+_lumen_install_reflection(HTMLTableCellElement.prototype, [
+    ['width',          'width',          'string'],
+    ['height',         'height',         'string'],
+]);
+// `width` alone — these three carry no obsolete `height` IDL attribute.
+[HTMLTableColElement.prototype, HTMLTableElement.prototype,
+ HTMLHRElement.prototype].forEach(function(_p) {
+    _lumen_install_reflection(_p, [['width', 'width', 'string']]);
+});
+_lumen_install_reflection(HTMLPreElement.prototype, [['width', 'width', 'long', 0]]);
+
 _lumen_install_reflection(HTMLScriptElement.prototype, [
     ['src',            'src',            'url'],
     ['type',           'type',           'string'],

@@ -311,14 +311,24 @@ const WEBGL_SHIM: &str = r#"(function() {
 
   function _addCanvasStubs(el) {
     var _ctx = null;
-    // BUG-348: the element factory (`dom.rs::WEB_API_SHIM`) has already installed the
-    // working '2d'/'bitmaprenderer'/'webgpu' accessor on `el`; this wrapper adds the
-    // WebGL context types ON TOP of it. Returning null for everything else used to
-    // shadow that accessor permanently — Canvas 2D was dead for every canvas built
-    // with `document.createElement`.
+    // BUG-348: the element factory (`web_api_shim_mid.js`) has already installed the
+    // working '2d'/'bitmaprenderer'/'webgpu' accessor — since BUG-450 on
+    // `HTMLCanvasElement.prototype` rather than on every element — and this wrapper
+    // adds the WebGL context types ON TOP of it. Returning null for everything else
+    // used to shadow that accessor permanently — Canvas 2D was dead for every canvas
+    // built with `document.createElement`.
     var _origGetContext = (typeof el.getContext === 'function') ? el.getContext : null;
     el.getContext = function(contextType) {
-      var t = ('' + (contextType || '')).toLowerCase();
+      // BUG-450: the same argument contract as the prototype method this shadows —
+      // §4.12.5 matches `contextId` by exact value, so `'WebGL'` must answer null
+      // instead of being lower-cased into a context, and a missing required
+      // DOMString is a TypeError. `arguments` is forwarded below, so the two
+      // implementations cannot disagree about how many were passed.
+      if (arguments.length === 0) {
+        throw new TypeError("Failed to execute 'getContext' on 'HTMLCanvasElement': "
+          + '1 argument required, but only 0 present.');
+      }
+      var t = String(contextType);
       if (t === 'webgl' || t === 'webgl2' || t === 'experimental-webgl') {
         if (!_ctx) {
           var d = _canvasDims(el);
@@ -623,7 +633,9 @@ mod tests_v8 {
     return { _tag: tag, width: 8, height: 8,
              getAttribute: function(){ return ''; }, setAttribute: function(){},
              getContext: function(t) {
-               return (('' + t).toLowerCase() === '2d') ? { __base_2d: true, canvas: this } : null;
+               // Exact-value match, like the real prototype method (BUG-450) —
+               // a fixture that lower-cased would teach the wrong contract.
+               return (String(t) === '2d') ? { __base_2d: true, canvas: this } : null;
              },
              toDataURL: function(){ return 'data:image/png;base64,BASE'; },
              toBlob: function(cb){ if (typeof cb === 'function') cb('base-blob'); } };
@@ -825,9 +837,11 @@ gl.getAttribLocation(p, 'a_pos')"#,
         }
     }
 
-    /// The WebGL stubs are attached to `<canvas>` only. (The element factory puts a
-    /// `getContext` on *every* element — harmless, it answers `null` off-canvas — so
-    /// the discriminator is the WebGL context, not the presence of the method.)
+    /// The WebGL stubs are attached to `<canvas>` only. The discriminator is the
+    /// WebGL context rather than the presence of the method, because this test runs
+    /// against `install_minimal_dom`'s stand-in factory, which hands a `getContext`
+    /// to every tag; in the real shim `getContext` lives on
+    /// `HTMLCanvasElement.prototype` and a `<div>` has none at all (BUG-450).
     #[test]
     fn non_canvas_gets_no_webgl_stub() {
         let rt = with_webgl();
