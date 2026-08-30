@@ -2117,24 +2117,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/starting_style.rs:91` **fn** `consume` — Remove `node` from the "entered" set
 `crates/engine/layout/src/starting_style.rs:99` **fn** `remove` — Remove all state for `node` — called when the node leaves the DOM
 `crates/engine/layout/src/starting_style.rs:128` **fn** `resolve_starting_style` — Look up `@starting-style` declarations that match `node` in `sheet`
-`crates/engine/layout/src/style.rs:637` **struct** `CascadeIndexStats` — BUG-341 S20 — tally of [`CascadeIndex`] rebuilds
-`crates/engine/layout/src/style.rs:655` **fn** `add` — Folds `other` into `self` field by field
-`crates/engine/layout/src/style.rs:692` **fn** `take_cascade_index_stats` — Returns the accumulated [`CascadeIndexStats`] and resets the tally
-`crates/engine/layout/src/style.rs:698` **fn** `add_cascade_index_stats` — Folds a rayon worker's drained [`CascadeIndexStats`] into this thread's
-`crates/engine/layout/src/style.rs:715` **struct** `PseudoCascadeStats` — BUG-341 S20 — per-pass tally of [`compute_pseudo_element_style`] calls
-`crates/engine/layout/src/style.rs:727` **fn** `add` — Folds another tally into this one
-`crates/engine/layout/src/style.rs:758` **fn** `set_pseudo_cascade_diagnostics` — Enables/disables the BUG-341 S20 pseudo-cascade census — see
-`crates/engine/layout/src/style.rs:763` **fn** `take_pseudo_cascade_stats` — Returns the accumulated [`PseudoCascadeStats`] and resets the tally
-`crates/engine/layout/src/style.rs:769` **fn** `add_pseudo_cascade_stats` — Folds a rayon worker's drained [`PseudoCascadeStats`] into this thread's
-`crates/engine/layout/src/style.rs:790` **fn** `take_pseudo_cascade_sites` — Returns the per-pseudo split of [`PseudoCascadeStats`] and resets it
-`crates/engine/layout/src/style.rs:795` **fn** `add_pseudo_cascade_sites` — Folds a rayon worker's drained per-pseudo split into this thread's map
-`crates/engine/layout/src/style.rs:835` **fn** `clear_rule_idx_cache` — Drops every cached [`CascadeIndex`] on the current thread
-`crates/engine/layout/src/style.rs:859` **fn** `sheet_has_quote_content` — CSS Generated Content L3 §3.2 — whether `sheet` can produce quote content
-`crates/engine/layout/src/style.rs:871` **fn** `sheet_targets_pseudo` — BUG-341 S23 — whether `sheet` uses `pseudo` (name without the `::`) as the
-`crates/engine/layout/src/style.rs:904` **fn** `set_shadow_sheets` — Install the per-shadow-host author stylesheets for the current layout pass
-`crates/engine/layout/src/style.rs:910` **fn** `clear_shadow_sheets` — Drop all installed shadow-tree stylesheets (used by tests to avoid leaking
-`crates/engine/layout/src/style.rs:923` **fn** `compute_style_from_declarations` — Build a `ComputedStyle` from a flat list of declarations with neutral context
-`crates/engine/layout/src/style.rs:1213` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
+`crates/engine/layout/src/style.rs:342` **fn** `compute_style_from_declarations` — Build a `ComputedStyle` from a flat list of declarations with neutral context
+`crates/engine/layout/src/style.rs:632` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
 `crates/engine/layout/src/style/calc.rs:9` **enum** `CalcNode`
 `crates/engine/layout/src/style/calc.rs:24` **enum** `CalcNode` — CSS Values L4 §10 — AST `calc()`-выражения. Хранится как двоичное дерево
 `crates/engine/layout/src/style/calc.rs:53` **enum** `MathFn` — CSS Values L4 §10.7-10.9 — научные math-функции. Имена case-insensitive
@@ -2142,6 +2126,22 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/style/calc.rs:106` **fn** `resolve` — Резолвит выражение в `f32`-пиксели по тем же правилам, что
 `crates/engine/layout/src/style/cascade.rs:60` **fn** `take_compute_style_calls` — Returns the number of [`compute_style`] runs since the last drain, and
 `crates/engine/layout/src/style/cascade.rs:178` **fn** `compute_style` — Computes the `ComputedStyle` for `node` by running the CSS cascade
+`crates/engine/layout/src/style/cascade_index.rs:378` **struct** `CascadeIndexStats` — BUG-341 S20 — tally of [`CascadeIndex`] rebuilds
+`crates/engine/layout/src/style/cascade_index.rs:396` **fn** `add` — Folds `other` into `self` field by field
+`crates/engine/layout/src/style/cascade_index.rs:433` **fn** `take_cascade_index_stats` — Returns the accumulated [`CascadeIndexStats`] and resets the tally
+`crates/engine/layout/src/style/cascade_index.rs:439` **fn** `add_cascade_index_stats` — Folds a rayon worker's drained [`CascadeIndexStats`] into this thread's
+`crates/engine/layout/src/style/cascade_index.rs:456` **struct** `PseudoCascadeStats` — BUG-341 S20 — per-pass tally of [`compute_pseudo_element_style`] calls
+`crates/engine/layout/src/style/cascade_index.rs:468` **fn** `add` — Folds another tally into this one
+`crates/engine/layout/src/style/cascade_index.rs:499` **fn** `set_pseudo_cascade_diagnostics` — Enables/disables the BUG-341 S20 pseudo-cascade census — see
+`crates/engine/layout/src/style/cascade_index.rs:504` **fn** `take_pseudo_cascade_stats` — Returns the accumulated [`PseudoCascadeStats`] and resets the tally
+`crates/engine/layout/src/style/cascade_index.rs:510` **fn** `add_pseudo_cascade_stats` — Folds a rayon worker's drained [`PseudoCascadeStats`] into this thread's
+`crates/engine/layout/src/style/cascade_index.rs:531` **fn** `take_pseudo_cascade_sites` — Returns the per-pseudo split of [`PseudoCascadeStats`] and resets it
+`crates/engine/layout/src/style/cascade_index.rs:536` **fn** `add_pseudo_cascade_sites` — Folds a rayon worker's drained per-pseudo split into this thread's map
+`crates/engine/layout/src/style/cascade_index.rs:576` **fn** `clear_rule_idx_cache` — Drops every cached [`CascadeIndex`] on the current thread
+`crates/engine/layout/src/style/cascade_index.rs:600` **fn** `sheet_has_quote_content` — CSS Generated Content L3 §3.2 — whether `sheet` can produce quote content
+`crates/engine/layout/src/style/cascade_index.rs:612` **fn** `sheet_targets_pseudo` — BUG-341 S23 — whether `sheet` uses `pseudo` (name without the `::`) as the
+`crates/engine/layout/src/style/cascade_index.rs:645` **fn** `set_shadow_sheets` — Install the per-shadow-host author stylesheets for the current layout pass
+`crates/engine/layout/src/style/cascade_index.rs:651` **fn** `clear_shadow_sheets` — Drop all installed shadow-tree stylesheets (used by tests to avoid leaking
 `crates/engine/layout/src/style/computed.rs:57` **struct** `ComputedStyle`
 `crates/engine/layout/src/style/computed.rs:916` **fn** `outline_used_width` — CSS 2.1 §17.6.1 / Basic UI L4 §5.2 — **used** value `outline-width`
 `crates/engine/layout/src/style/computed.rs:927` **fn** `text_rendering_eq` — Два стиля рендерят текст одинаково (цвет, размер, интерлиньяж, начертание,
