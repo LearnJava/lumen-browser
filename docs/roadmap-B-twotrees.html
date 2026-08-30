@@ -73,10 +73,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-30",
+ "generated": "2026-08-31",
  "counts": {
-  "open": 372,
-  "fixed": 513,
+  "open": 370,
+  "fixed": 515,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -5687,9 +5687,9 @@
       {
        "id": "SPLIT-BT10",
        "title": "SPLIT-BT10: BFC и центральный диспетчер layout из box_tree.rs",
-       "status": "ready",
+       "status": "done",
        "size": "L",
-       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn lay_out_for_vertical` (7866) до `fn lay_out_table_row` (9920), 2 054 строки, два файла — `box_tree/bfc.rs` (200, BFC/margin-collapse) + `box_tree/layout_dispatch.rs` (1 854 — `lay_out_inner`, 1 691 строка одной функцией, центральный диспетчер режимов). САМЫЙ РИСКОВАННЫЙ БАТЧ ГРУППЫ. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn lay_out_for_vertical` (7866) до `fn lay_out_table_row` (9920), 2 054 строки, два файла — `box_tree/bfc.rs` (200, BFC/margin-collapse) + `box_tree/layout_dispatch.rs` (1 854 — `lay_out_inner`, 1 691 строка одной функцией, центральный диспетчер режимов). САМЫЙ РИСКОВАННЫЙ БАТЧ ГРУППЫ. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 **ЗАКРЫТ 2026-08-30** (ветка `p1-split-bt10`, один срез): к моменту среза BT-9 уже увезла `lay_out_table_row` в `table.rs`, поэтому верхний анкер более не существовал в файле — фактический регион оказался хвостом файла, `fn lay_out_for_vertical` (7894, с доккомментарием) … до `#[cfg(test)] mod tests;` (9948), 2 052 строки, поровну как в плане — `box_tree/bfc.rs` (199 — семь BFC/margin-collapse хелперов) + `box_tree/layout_dispatch.rs` (1 853 — `lay_out`/`lay_out_with_used_size`/`lay_out_cache_checked`/`lay_out_inner`). `mod bfc;`/`mod layout_dispatch;` в корне `box_tree.rs` + `pub(crate) use bfc::lay_out_for_vertical;` (уже был `pub(crate) fn`, читается `vertical.rs` по пути `crate::box_tree::lay_out_for_vertical`) + приватный `use bfc::{collapsed_bottom_margin, collapsed_top_margin, contained_content_height, establishes_bfc, has_in_flow_content, last_collapsible_child};` + приватный `use layout_dispatch::{lay_out, lay_out_with_used_size};` (оба вызываются из пяти уже вынесенных сиблингов — `container_anchor.rs`/`flex.rs`/`grid.rs`/`multicol_abspos.rs`/`table.rs` — и из ещё не вынесенного кода самого `box_tree.rs`, поэтому стали `pub(crate) fn`, ранее модуль-приватные). Шесть перечисленных хелперов region'а стали `pub(crate) fn` (вызываются только из `layout_dispatch.rs`, соседнего модуля — приватность не пересекает границу сиблингов); `first_collapsible_child` вызывается ТОЛЬКО внутри `bfc.rs` (из `collapsed_top_margin`), реэкспорт в `box_tree.rs` дал `unused_imports` — остался модуль-приватным `fn`, без `use` со стороны `box_tree.rs`; `lay_out_cache_checked`/`lay_out_inner` вызываются только друг другом и рекурсивно внутри `layout_dispatch.rs` — остались модуль-приватными. Сверка body-in-body (`diff` региона из `HEAD` main против тел новых файлов) — 0 расхождений кроме восьми добавленных `pub(crate) `, ни одной иной правки на 2 052 строках. box_tree.rs 9950 → 7906 (регион −2052, плюс восемь новых строк `mod`×2/`use`×3/пустых), `cargo test -p lumen-layout --lib` 3640/3640 (батч производственный, тестов не переносил), `clippy -p lumen-layout --all-targets -D warnings` чист, нисходящая `cargo check -p lumen-shell` чиста. `scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)) — тесты гонялись адресно, `dump_golden.py` 12/12 без дельт"
       },
       {
        "id": "SPLIT-BT11",
@@ -8854,10 +8854,10 @@
    "debtor": false
   },
   "BUG-452": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<canvas width=\"0\">` даёт 300×150: `parseInt('0',10)",
-   "component": "js (`crates/js/src/dom.rs` — `_lumen_canvas_dims`; геттеры `width`/`height`)",
-   "date": null,
+   "component": "js (шим: `_lumen_canvas_dims`, `_lumen_parse_integer`, `_lumen_define_reflection`, `tabIndex`) / layout (`box_tree.rs`) / dom (`attr_int.rs`)",
+   "date": "2026-08-30",
    "debtor": false
   },
   "BUG-453": {
@@ -8868,10 +8868,10 @@
    "debtor": false
   },
   "BUG-454": {
-   "status": "open",
-   "title": "Анти-fingerprint у canvas закрывает один канал чтения пикселей из двух: `toDataURL`/`toBlob` заглушены на всех путях создания элемента, а `getImageData` не загл…",
-   "component": "js (`crates/js/src/dom.rs` — `toDataURL` фабрики; `crates/js/src/webgl_canvas.rs:492-500` — резервная заглушка), privacy",
-   "date": null,
+   "status": "fixed",
+   "title": "Анти-fingerprint у canvas доведён до класса атаки (вариант 1 из файла бага): `getImageData` — холст элемента, `OffscreenCanvas`, `transferControlToOffscreen` —…",
+   "component": "js (`crates/js/src/canvas2d.rs`/`offscreen_canvas.rs`, `crates/js/src/shim/web_api_shim_mid.js`), `lumen-canvas` (`fp_noise.rs`), privacy",
+   "date": "2026-08-31",
    "debtor": false
   },
   "BUG-455": {

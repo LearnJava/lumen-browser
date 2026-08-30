@@ -24,7 +24,7 @@ p.width=0
 
 То есть `div.toDataURL()` отдаёт валидный PNG-data-URL, а присваивание `div.width`
 создаёт на `<div>` атрибут `width`, которого в HTML LS у него нет. (Уточнение
-2026-07-29: сам PNG — заглушка 1×1 из [BUG-454](BUG-454-OPEN.md), а не пиксели
+2026-07-29: сам PNG — заглушка 1×1 из [BUG-454](BUG-454-FIXED.md), а не пиксели
 элемента; утечки содержимого тут нет, есть лишний член интерфейса.) По спеке `width`,
 `height`, `getContext`, `toDataURL`, `toBlob`, `transferControlToOffscreen` живут на
 `HTMLCanvasElement`, и `'toDataURL' in document.createElement('div')` обязано быть

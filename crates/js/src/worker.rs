@@ -2778,7 +2778,7 @@ mod tests_v8 {
         let errors: WorkerErrorQueue = Arc::new(Mutex::new(Vec::new()));
         let nid = Arc::new(Mutex::new(0u32));
         install_worker_bindings_v8(&rt, &reg, &queue, &errors, &nid, &make_store(), None).unwrap();
-        crate::offscreen_canvas::install_offscreen_canvas_bindings_v8(&rt).unwrap();
+        crate::offscreen_canvas::install_offscreen_canvas_bindings_v8(&rt, "https://example.test").unwrap();
 
         let result = rt
             .eval(

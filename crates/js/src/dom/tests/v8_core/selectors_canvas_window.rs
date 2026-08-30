@@ -1722,6 +1722,34 @@ fn bug591_mutation_observer_callback_exception_fires_window_error() {
     assert_eq!(result, lumen_core::JsValue::String("mo-boom".to_string()));
 }
 
+/// BUG-454: `getImageData` is noised now (±1 per RGB channel, alpha never
+/// perturbed — ADR-007 layer 4), so a test built before the fix that compares
+/// exact colour bytes from a striped fixture needs tolerance at exactly the
+/// positions that are RGB channels of an in-canvas pixel. `tolerant` lists
+/// those positions (0-based) in the comma-separated fields of `actual`/`expected`;
+/// every other position (dimensions, alpha, an out-of-canvas transparent pixel)
+/// must still match exactly.
+#[cfg(test)]
+fn assert_csv_close(actual: &lumen_core::JsValue, expected: &str, tolerant: &[usize]) {
+    let actual = match actual {
+        lumen_core::JsValue::String(s) => s,
+        other => panic!("expected string, got {other:?}"),
+    };
+    let a: Vec<i64> = actual.split(',').map(|s| s.parse().unwrap()).collect();
+    let e: Vec<i64> = expected.split(',').map(|s| s.parse().unwrap()).collect();
+    assert_eq!(a.len(), e.len(), "{actual} vs {expected}");
+    for i in 0..a.len() {
+        if tolerant.contains(&i) {
+            assert!(
+                (a[i] - e[i]).abs() <= 1,
+                "field {i} outside ±1 noise tolerance: {actual} vs {expected}"
+            );
+        } else {
+            assert_eq!(a[i], e[i], "field {i} mismatch: {actual} vs {expected}");
+        }
+    }
+}
+
 /// Builds a 6×1 canvas with three non-overlapping stripes at x = 0/2/4
 /// (red/green/blue) and a transparent gap nowhere — the bug's own repro shape,
 /// shrunk. Returns the runtime with `ctx` bound in the global scope.
@@ -1752,13 +1780,13 @@ fn get_image_data_honours_its_rectangle() {
     // (0, 0). `getImageData(0, 0, w, h)` — what the graphic tests use — was
     // the one accidentally correct call, which is why this stayed invisible.
     let rt = striped_canvas_runtime();
-    for (x, expected) in [(1, "255,0,0,255"), (3, "0,255,0,255"), (5, "0,0,255,255")] {
+    for (x, expected) in [
+        (1, "1,1,4,255,0,0,255"),
+        (3, "1,1,4,0,255,0,255"),
+        (5, "1,1,4,0,0,255,255"),
+    ] {
         let got = rt.eval(&format!("rgba({x}, 0)")).unwrap();
-        assert_eq!(
-            got,
-            lumen_core::JsValue::String(format!("1,1,4,{expected}")),
-            "pixel at x={x} must be its own stripe, at its own size"
-        );
+        assert_csv_close(&got, expected, &[3, 4, 5]);
     }
     // A sub-rectangle carries exactly its own pixels, not the canvas's.
     let strip = rt
@@ -1777,15 +1805,19 @@ fn get_image_data_pads_outside_the_canvas() {
     let straddling = rt
         .eval("var d = ctx.getImageData(5, 0, 2, 1); d.data[0] + ',' + d.data[2] + ',' + d.data[7]")
         .unwrap();
-    assert_eq!(
-        straddling,
-        lumen_core::JsValue::String("0,255,0".into()),
-        "in-canvas pixel keeps its blue, the one past the edge is transparent"
+    assert_csv_close(
+        &straddling,
+        "0,255,0",
+        &[0, 1], // R/B of the in-canvas pixel; the third field is an out-of-canvas alpha (exact 0)
     );
     let before_origin = rt
         .eval("var d = ctx.getImageData(-1, 0, 2, 1); d.data[3] + ',' + d.data[4]")
         .unwrap();
-    assert_eq!(before_origin, lumen_core::JsValue::String("0,255".into()));
+    assert_csv_close(
+        &before_origin,
+        "0,255",
+        &[1], // field 0 is an out-of-canvas alpha (exact 0), field 1 is an in-canvas R
+    );
 }
 
 #[test]
@@ -1808,19 +1840,20 @@ fn get_image_data_argument_conversion_follows_webidl() {
     // gets normalized about its origin.
     assert_eq!(probe("ctx.getImageData(0, 0, 0, 1)"), "IndexSizeError");
     assert_eq!(probe("ctx.getImageData(0, 0, 1, 0)"), "IndexSizeError");
-    let flipped = rt
+    let flipped = match rt
         .eval("var d = ctx.getImageData(2, 1, -2, -1); d.width + 'x' + d.height + ':' + d.data[0]")
-        .unwrap();
-    assert_eq!(
-        flipped,
-        lumen_core::JsValue::String("2x1:255".into()),
-        "(2,1,-2,-1) is the rect at (0,0) sized 2x1, i.e. the red stripe"
-    );
+        .unwrap()
+    {
+        lumen_core::JsValue::String(s) => s,
+        other => panic!("expected string, got {other:?}"),
+    };
+    let (dims, r) = flipped.split_once(':').expect("dims:value shape");
+    assert_eq!(dims, "2x1", "(2,1,-2,-1) is the rect at (0,0) sized 2x1, i.e. the red stripe");
+    let r: i64 = r.parse().expect("numeric R channel");
+    assert!((r - 255).abs() <= 1, "R channel outside ±1 noise tolerance: {r}");
     // A fractional coordinate truncates toward zero rather than rounding.
-    assert_eq!(
-        rt.eval("rgba(3.9, 0.9)").unwrap(),
-        lumen_core::JsValue::String("1,1,4,0,255,0,255".into())
-    );
+    let got = rt.eval("rgba(3.9, 0.9)").unwrap();
+    assert_csv_close(&got, "1,1,4,0,255,0,255", &[3, 4, 5]);
 }
 
 #[test]
@@ -1836,21 +1869,9 @@ fn put_image_data_applies_the_dirty_rectangle() {
          ctx.putImageData(src, 0, 0, 2, 0, 2, 1);",
     )
     .unwrap();
-    assert_eq!(
-        rt.eval("rgba(2, 0)").unwrap(),
-        lumen_core::JsValue::String("1,1,4,1,2,3,255".into()),
-        "inside the dirty rect"
-    );
-    assert_eq!(
-        rt.eval("rgba(1, 0)").unwrap(),
-        lumen_core::JsValue::String("1,1,4,255,0,0,255".into()),
-        "left of the dirty rect is untouched"
-    );
-    assert_eq!(
-        rt.eval("rgba(2, 1)").unwrap(),
-        lumen_core::JsValue::String("1,1,4,0,255,0,255".into()),
-        "below the dirty rect is untouched"
-    );
+    assert_csv_close(&rt.eval("rgba(2, 0)").unwrap(), "1,1,4,1,2,3,255", &[3, 4, 5]);
+    assert_csv_close(&rt.eval("rgba(1, 0)").unwrap(), "1,1,4,255,0,0,255", &[3, 4, 5]);
+    assert_csv_close(&rt.eval("rgba(2, 1)").unwrap(), "1,1,4,0,255,0,255", &[3, 4, 5]);
 }
 
 #[test]

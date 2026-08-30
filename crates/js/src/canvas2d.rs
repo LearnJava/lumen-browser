@@ -34,8 +34,8 @@ use lumen_canvas::Context2D;
 // rquickjs installer that used to reach it too was removed in S12b-B30.
 #[cfg(feature = "v8-backend")]
 use lumen_canvas::{
-    CanvasColor, CanvasGradient, CanvasPattern, Path2dData, PaintSource, RepeatMode,
-    CompositeOperation, LineCap, LineJoin,
+    CanvasColor, CanvasGradient, CanvasNoiseGenerator, CanvasPattern, Path2dData, PaintSource,
+    RepeatMode, CompositeOperation, LineCap, LineJoin,
 };
 
 thread_local! {
@@ -63,6 +63,40 @@ thread_local! {
     /// Once transferred, `getContext()` returns null for these nids (HTML LS §4.12.14).
     #[cfg(feature = "v8-backend")]
     static TRANSFERRED: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
+}
+
+/// Per-process session seed (ADR-007 layer 4, docs/plan/privacy.md §9.5 layer 4):
+/// stable for the life of one browser run, different across restarts — "session"
+/// in the Brave-style sense the fingerprint-noise design calls for.
+#[cfg(feature = "v8-backend")]
+fn session_seed() -> u64 {
+    use std::sync::OnceLock;
+    static SEED: OnceLock<u64> = OnceLock::new();
+    *SEED.get_or_init(|| {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        nanos ^ (std::process::id() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    })
+}
+
+/// Mixes the per-process session seed with the document's origin (FNV-1a), so
+/// two different sites visited in the same session cannot correlate the same
+/// drawn scene through canvas noise, while re-reading a canvas on the SAME
+/// site keeps a stable fingerprint within one session — the Brave-style
+/// per-site+session canvas noise model docs/plan/privacy.md §9.5 layer 4 asks
+/// for. Shared with [`crate::offscreen_canvas`], which has no document origin
+/// of its own to derive a seed from.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn document_noise_seed(origin: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ session_seed();
+    for b in origin.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    h
 }
 
 /// Allocate a new unique object ID for a gradient or pattern.
@@ -446,20 +480,36 @@ fn bitmaprenderer_transfer_native(nid: u32, canvas_id: u32) -> bool {
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_canvas2d_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
+    origin: &str,
 ) -> lumen_core::JsResult<()> {
     use crate::v8_compat::{
         into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4, into_v8_fn5, into_v8_fn6,
         into_v8_fn7,
     };
 
+    // BUG-454: computed once here and moved into the closure by value, NOT read
+    // from a thread-local at call time — `install_canvas2d_bindings_v8` and the
+    // registered native run on different OS threads in this V8 compat layer (the
+    // installer runs wherever `install_dom` was dispatched from; the actual
+    // native call, like every `_lumen_*` invocation, runs on the isolate's own
+    // dedicated thread), so a `thread_local!` set here would be read back as its
+    // default on that other thread. `offscreen_canvas.rs`'s `_lumen_offscreen_canvas_new`
+    // already used this shape; a `NOISE_SEED` thread-local variant of this that
+    // set-here-read-there was measured to silently seed every canvas with 0.
+    let noise_seed = document_noise_seed(origin);
+
     rt.register_native(
         "_lumen_canvas2d_create",
-        into_v8_fn3(|nid: u32, w: u32, h: u32| {
+        into_v8_fn3(move |nid: u32, w: u32, h: u32| {
             let w = w.clamp(1, MAX_CANVAS_DIM);
             let h = h.clamp(1, MAX_CANVAS_DIM);
             CANVASES.with(|c| {
                 if let Ok(mut map) = c.try_borrow_mut() {
-                    map.entry(nid).or_insert_with(|| Context2D::new(w, h));
+                    map.entry(nid).or_insert_with(|| {
+                        let mut ctx = Context2D::new(w, h);
+                        ctx.set_noise_generator(CanvasNoiseGenerator::new(noise_seed));
+                        ctx
+                    });
                 }
             });
         }),
@@ -1053,6 +1103,43 @@ pub(crate) fn install_canvas2d_bindings_v8(
             })
         }),
     )?;
+    // BUG-454 symptom 2: the old stub returned the SAME 1×1 PNG regardless of
+    // the canvas's size, which is not a valid answer to HTML LS §4.12.5.7 (the
+    // image must be exactly `width × height`). This encodes the real (already
+    // noised — same `get_image_data()` `getImageData` uses, ADR-007 layer 4)
+    // bitmap at its own size. Only PNG exists (no JPEG/WebP encoder), so the
+    // MIME in the returned string is always `image/png` regardless of the
+    // requested type — §4.12.5.7's fallback allowed by spec, done honestly
+    // rather than silently relabelling a PNG as the requested type. The shim
+    // calls `_lumen_canvas2d_create` first, so `nid` always has an entry here
+    // (an untouched canvas is the all-transparent-black bitmap its attributes
+    // declare, exactly like a freshly `getContext('2d')`-ed one).
+    rt.register_native(
+        "_lumen_canvas2d_to_data_url",
+        into_v8_fn1(|nid: u32| -> String {
+            let png = CANVASES.with(|c| -> Option<Vec<u8>> {
+                let map = c.try_borrow().ok()?;
+                let ctx = map.get(&nid)?;
+                let img = lumen_image::Image {
+                    width: ctx.width(),
+                    height: ctx.height(),
+                    format: lumen_image::PixelFormat::Rgba8,
+                    data: ctx.get_image_data(),
+                    icc_profile: None,
+                };
+                lumen_image::encode_png_rgba8(&img).ok()
+            });
+            match png {
+                Some(bytes) => format!(
+                    "data:image/png;base64,{}",
+                    crate::sw_worker::base64_encode(&bytes)
+                ),
+                // Unencodable (e.g. borrow contention) — HTML LS §4.12.5.7 allows
+                // "data:," for "the bitmap has no pixels".
+                None => "data:,".to_string(),
+            }
+        }),
+    )?;
 
     // ── Path2D bindings ──────────────────────────────────────────────────────
     rt.register_native(
@@ -1241,7 +1328,7 @@ pub(crate) fn install_canvas2d_bindings_v8(
     // resulting OffscreenCanvas object is fully functional under v8-backend too.
     rt.register_native(
         "_lumen_canvas_transfer_control_to_offscreen",
-        into_v8_fn1(|nid: u32| -> String {
+        into_v8_fn1(move |nid: u32| -> String {
             let (w, h, pixels) = CANVASES.with(|c| {
                 let Ok(mut map) = c.try_borrow_mut() else {
                     return (1u32, 1u32, vec![0u8; 4]);
@@ -1250,6 +1337,7 @@ pub(crate) fn install_canvas2d_bindings_v8(
                 (ctx2d.width(), ctx2d.height(), ctx2d.pixels().to_vec())
             });
             let offscreen_id = crate::offscreen_canvas::create_offscreen_from_pixels(w, h, pixels);
+            crate::offscreen_canvas::arm_noise(offscreen_id, noise_seed);
             TRANSFERRED.with(|t| {
                 t.borrow_mut().insert(nid);
             });
@@ -1351,7 +1439,7 @@ mod tests_v8 {
 
     fn with_canvas2d() -> V8JsRuntime {
         let rt = V8JsRuntime::new().unwrap();
-        super::install_canvas2d_bindings_v8(&rt).unwrap();
+        super::install_canvas2d_bindings_v8(&rt, "https://example.test").unwrap();
         rt
     }
 
@@ -1378,6 +1466,29 @@ mod tests_v8 {
                 })
                 .collect(),
             other => panic!("expected array, got {other:?}"),
+        }
+    }
+
+    /// BUG-454: `with_canvas2d()` now runs behind a real (armed) noise
+    /// generator, so any RGBA bytes a test reads through `getImageData` may
+    /// drift by ±1 per colour channel (alpha is never perturbed) — this
+    /// compares actual RGBA8 pixels (one or more, back to back) against
+    /// expected ones under that tolerance, for tests whose subject is
+    /// cropping/addressing rather than exact colour reproduction. A
+    /// transparent-black pixel (alpha 0, e.g. outside the canvas) is exempt
+    /// from noise by construction (property 3 of `CanvasNoiseGenerator`), so
+    /// it is compared exactly like every alpha byte.
+    fn assert_rgba_close(actual: &[u8], expected: &[u8]) {
+        assert_eq!(actual.len(), expected.len(), "byte count mismatch: {actual:?} vs {expected:?}");
+        assert_eq!(actual.len() % 4, 0, "not whole RGBA8 pixels: {actual:?}");
+        for (a_px, e_px) in actual.chunks_exact(4).zip(expected.chunks_exact(4)) {
+            assert_eq!(a_px[3], e_px[3], "alpha must be exact: {actual:?} vs {expected:?}");
+            for i in 0..3 {
+                assert!(
+                    (i64::from(a_px[i]) - i64::from(e_px[i])).abs() <= 1,
+                    "channel {i} outside ±1 noise tolerance: {actual:?} vs {expected:?}"
+                );
+            }
         }
     }
 
@@ -1419,10 +1530,9 @@ mod tests_v8 {
         )
         .unwrap();
         // Re-create must not wipe an existing buffer (entry().or_insert).
-        assert_eq!(
-            bytes_eval(&rt, "_lumen_canvas2d_get_image_data(3, 0, 0, 1, 1)"),
-            vec![255, 0, 0, 255],
-            "red preserved across re-create"
+        assert_rgba_close(
+            &bytes_eval(&rt, "_lumen_canvas2d_get_image_data(3, 0, 0, 1, 1)"),
+            &[255, 0, 0, 255],
         );
     }
 
@@ -1589,17 +1699,17 @@ mod tests_v8 {
              _lumen_canvas2d_fill_rect(16, 4, 0, 2, 1);",
         )
         .unwrap();
-        assert_eq!(
-            bytes_eval(&rt, "_lumen_canvas2d_get_image_data(16, 0, 0, 1, 1)"),
-            vec![255, 0, 0, 255]
+        assert_rgba_close(
+            &bytes_eval(&rt, "_lumen_canvas2d_get_image_data(16, 0, 0, 1, 1)"),
+            &[255, 0, 0, 255],
         );
-        assert_eq!(
-            bytes_eval(&rt, "_lumen_canvas2d_get_image_data(16, 2, 0, 1, 1)"),
-            vec![0, 255, 0, 255]
+        assert_rgba_close(
+            &bytes_eval(&rt, "_lumen_canvas2d_get_image_data(16, 2, 0, 1, 1)"),
+            &[0, 255, 0, 255],
         );
-        assert_eq!(
-            bytes_eval(&rt, "_lumen_canvas2d_get_image_data(16, 4, 0, 1, 1)"),
-            vec![0, 0, 255, 255]
+        assert_rgba_close(
+            &bytes_eval(&rt, "_lumen_canvas2d_get_image_data(16, 4, 0, 1, 1)"),
+            &[0, 0, 255, 255],
         );
     }
 
@@ -1618,14 +1728,14 @@ mod tests_v8 {
             "wholly outside"
         );
         // Straddling the right edge: first pixel is real, second is outside.
-        assert_eq!(
-            bytes_eval(&rt, "_lumen_canvas2d_get_image_data(17, 1, 0, 2, 1)"),
-            vec![255, 0, 0, 255, 0, 0, 0, 0]
+        assert_rgba_close(
+            &bytes_eval(&rt, "_lumen_canvas2d_get_image_data(17, 1, 0, 2, 1)"),
+            &[255, 0, 0, 255, 0, 0, 0, 0],
         );
         // A negative origin is legal and pads on the near side.
-        assert_eq!(
-            bytes_eval(&rt, "_lumen_canvas2d_get_image_data(17, -1, 0, 2, 1)"),
-            vec![0, 0, 0, 0, 255, 0, 0, 255]
+        assert_rgba_close(
+            &bytes_eval(&rt, "_lumen_canvas2d_get_image_data(17, -1, 0, 2, 1)"),
+            &[0, 0, 0, 0, 255, 0, 0, 255],
         );
     }
 
