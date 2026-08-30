@@ -1,8 +1,10 @@
 # BUG-448 — `getImageData(sx, sy, sw, sh)` игнорирует все четыре аргумента и всегда отдаёт весь холст
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:5224-5235` — шим `getImageData`;
-натив `crates/js/src/canvas2d.rs:1003` `_lumen_canvas2d_get_image_data(nid)`)
+**Статус:** FIXED 2026-08-30
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` — шим
+`getImageData`/`putImageData`/`createImageData`; натив
+`crates/js/src/canvas2d.rs` `_lumen_canvas2d_get_image_data`; вырезка
+`crates/engine/canvas/src/image_data.rs`)
 **Найден:** 2026-07-29 (P2), WPT-VENDOR-html-canvas, проба `--dump-layout`
 
 ## Симптом
@@ -80,3 +82,59 @@ Same mechanism, new price tag: `canvas-composite-modes.html` (15/15
 ImageData expected 4 but got 16` -- `getImageData(0, 0, 1, 1)` on a small
 test canvas returns the *whole* canvas's bytes instead of the requested
 1x1 region. `.ini` under `tests/wpt/metadata/css/compositing/`.
+
+## Исправление (2026-08-30, P3)
+
+Прямоугольник стал параметром натива и вырезается в Rust, где битмап уже в
+руках — `Context2D::get_image_data_rect(sx, sy, sw, sh)`. Область вне холста
+отдаётся прозрачно-чёрной, как требуют шаги «get image data»; транспорт
+переведён с hex-строки на массив байт, поэтому JS-цикл `parseInt` исчез
+целиком, а чтение одного пикселя стоит 4 байта вместо 360 000 hex-символов.
+
+Метод живёт в новом `crates/engine/canvas/src/image_data.rs`, а не в
+`canvas/src/lib.rs`: тот файл был на 1967 строках, и +38 перевели бы его через
+потолок 2000 (`docs/lint-policy.md` §5.1). Как дочерний модуль корня крейта он
+по-прежнему видит приватный `pixels`, так что это обычный inherent-метод.
+
+### Что нашла проба «до» правки
+
+Заявка называла два дефекта (аргументы и dirty-rect `putImageData`); проба на
+холсте 6×2 с тремя полосами нашла ещё четыре, все в том же шиме:
+
+1. Аргументы не проходили преобразование `[EnforceRange] long`, которым они
+   объявлены в IDL: `getImageData(NaN, 0, 1, 1)`, `getImageData(Infinity, …)`
+   и вызов вообще без аргументов молча читали холст вместо `TypeError`.
+2. `sw`/`sh` = 0 не давали `IndexSizeError`, а отрицательные не
+   нормализовались (спека переворачивает прямоугольник вокруг начала).
+3. Форма-копия `createImageData(imageData)` уходила в `w|0` на объекте и
+   возвращала буфер 0×0 — то есть перестала быть формой вовсе.
+4. `createImageData(0, 0)` не бросал `IndexSizeError`, а `colorSpace` не было
+   ни на одном `ImageData`.
+
+Сопутствующий дефект из заявки (7-аргументный `putImageData`) закрыт тоже, но
+обрезка сделана **в шиме**: через биндинг едет только грязная область, поэтому
+узкий dirty-rect стал ещё и дешевле, а не только правильным.
+
+### Что осталось и почему это не этот баг
+
+* У 2D-контекста `OffscreenCanvas` свой шим (`offscreen_canvas.rs`, отдельный
+  `rt.eval` — урок BUG-780), где `getImageData()` не принимает аргументов
+  вовсе и отдаёт странице сырую транспортную строку. Это
+  [BUG-456](BUG-456-OPEN.md), у него свой указатель в `STATUS-P3.md`.
+* `ImageData`/контекст остаются объектными литералами без прототипа —
+  [BUG-449](BUG-449-OPEN.md). Здесь добавлен только член `colorSpace`, сама
+  объектная модель не трогалась.
+
+### Гейт
+
+`cargo clippy -p lumen-canvas`/`-p lumen-js --features v8-backend`
+`--all-targets -- -D warnings`; `cargo test -p lumen-canvas` (70),
+`-p lumen-js` `selectors_canvas_window` (107) и `canvas2d` (33). Регрессионные
+тесты — пять в `selectors_canvas_window.rs` (уровень страницы: прямоугольник,
+паддинг за краем, преобразование аргументов, dirty-rect, обе формы
+`createImageData`) и четыре в `canvas2d.rs` (уровень натива).
+
+Пиксели не двигаются: 3-аргументный `putImageData` даёт ту же грязную область,
+что и раньше (весь источник), а `getImageData(0, 0, w, h)` — те же байты, так
+что оба вызова из `graphic_tests/146-imagebitmap.html` и `1000000-final.html`
+неотличимы от прежних.
