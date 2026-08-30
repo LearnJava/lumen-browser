@@ -511,3 +511,135 @@ fn invalid_paint_style_does_not_reach_the_rasterizer() {
     // hsl() раньше не разбиралась вовсе — залит был бы прозрачный/предыдущий.
     assert_eq!(&updates[0].3[0..4], &[0, 255, 0, 255]);
 }
+
+// ── BUG-455: save()/restore() и JS-видимое состояние ────────────────────────
+
+/// Раньше `save`/`restore` дёргали только натив; JS-обёртка держала атрибуты
+/// отдельными полями и ни с чем не синхронизировалась, так что после первой же
+/// пары save/restore чтение и рисование расходились навсегда.
+#[test]
+fn restore_restores_every_js_visible_attribute() {
+    let rt = v8_runtime_with_dom(make_doc());
+    for (attr, during) in [
+        ("fillStyle", "'#00ff00'"),
+        ("strokeStyle", "'#00ff00'"),
+        ("lineWidth", "7"),
+        ("lineCap", "'round'"),
+        ("lineJoin", "'round'"),
+        ("miterLimit", "3"),
+        ("globalAlpha", "0.5"),
+        ("globalCompositeOperation", "'xor'"),
+        ("shadowBlur", "5"),
+        ("shadowColor", "'#00ff00'"),
+        ("shadowOffsetX", "4"),
+        ("shadowOffsetY", "4"),
+        ("font", "'20px serif'"),
+        ("textAlign", "'center'"),
+        ("textBaseline", "'top'"),
+    ] {
+        let expr = format!(
+            "(function() {{ \
+                var before = ctx.{attr}; \
+                ctx.save(); \
+                ctx.{attr} = {during}; \
+                ctx.restore(); \
+                return ctx.{attr} === before; \
+             }})()"
+        );
+        assert_eq!(s(&rt, &expr), "true", "restore() must restore {attr}");
+    }
+}
+
+/// `save()` сам по себе не имеет права трогать состояние — только класть его в
+/// стек.
+#[test]
+fn save_does_not_modify_state() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert_eq!(
+        s(
+            &rt,
+            "(ctx.lineWidth = 3, (function() { var before = ctx.lineWidth; ctx.save(); \
+             return ctx.lineWidth === before; })())"
+        ),
+        "true"
+    );
+}
+
+/// `restore()` со пустым стеком — no-op (§4.12.5.1.2), не бросает и не портит
+/// текущее состояние.
+#[test]
+fn restore_on_empty_stack_is_noop() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert_eq!(
+        s(
+            &rt,
+            "(ctx.lineWidth = 5, ctx.restore(), ctx.lineWidth)"
+        ),
+        "5"
+    );
+}
+
+/// Вложенные save/restore обязаны вести себя как стек, а не как единственная
+/// ячейка.
+#[test]
+fn nested_save_restore_is_a_real_stack() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert_eq!(
+        s(
+            &rt,
+            "(function() { \
+                ctx.lineWidth = 1; \
+                ctx.save(); ctx.lineWidth = 2; \
+                ctx.save(); ctx.lineWidth = 3; \
+                ctx.restore(); \
+                var mid = ctx.lineWidth; \
+                ctx.restore(); \
+                return mid + ',' + ctx.lineWidth; \
+             })()"
+        ),
+        "2,1"
+    );
+}
+
+/// `reset()` обязан опустошить стек состояний целиком (§4.12.5.1.2), иначе
+/// `restore()` после `reset()` вернул бы состояние из-до-сброса.
+#[test]
+fn reset_empties_the_state_stack() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert_eq!(
+        s(
+            &rt,
+            "(function() { \
+                ctx.lineWidth = 2; \
+                ctx.save(); \
+                ctx.lineWidth = 9; \
+                ctx.reset(); \
+                var afterReset = ctx.lineWidth; \
+                ctx.restore(); \
+                return afterReset + ',' + ctx.lineWidth; \
+             })()"
+        ),
+        "1,1"
+    );
+}
+
+/// Стиль-объект (градиент) переживает save/restore по ссылке, а не только
+/// строковые атрибуты.
+#[test]
+fn restore_restores_gradient_paint_style_by_reference() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert_eq!(
+        s(
+            &rt,
+            "(function() { \
+                var g = ctx.createLinearGradient(0, 0, 1, 1); \
+                ctx.fillStyle = g; \
+                ctx.save(); \
+                ctx.fillStyle = '#ff0000'; \
+                ctx.restore(); \
+                return ctx.fillStyle === g; \
+             })()"
+        ),
+        "true"
+    );
+}
