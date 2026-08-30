@@ -5673,9 +5673,9 @@
       {
        "id": "SPLIT-BT8",
        "title": "SPLIT-BT8: multicol и abspos из box_tree.rs",
-       "status": "ready",
+       "status": "done",
        "size": "S",
-       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn lay_out_multicol_children` (10835) до `struct UsedSizeOverride` (11259), 424 строки → `box_tree/multicol_abspos.rs` (multicol + `lay_out_abs_children`). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "`crates/engine/layout/src/box_tree.rs`: анкер `fn lay_out_multicol_children` (10835) до `struct UsedSizeOverride` (11259), 424 строки → `box_tree/multicol_abspos.rs` (multicol + `lay_out_abs_children`). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 **ЗАКРЫТ 2026-08-30** (ветка `p1-split-bt8`, один срез): анкер `struct UsedSizeOverride` уже не стоял в файле — BT7 (flex.rs) увезла сам тип раньше, поэтому нижней границей региона стал конец файла (перед `#[cfg(test)] mod tests;`), а не именованный анкер; фактический регион 10786…11279, 494 строки (пять функций: `box_is_column_sliceable`/`balanced_column_height`/`lay_out_multicol_children` — multicol, `abs_box_shrinks_to_fit`/`lay_out_abs_children` — abspos), без разрывов и без стороннего кода внутри. box_tree.rs 11283 → 10791 (регион минус три строки объявления модуля плюс схлопнутая двойная пустая строка), `cargo test -p lumen-layout --lib` 3640/3640, clippy чист, тела перенесены `use super::*;` без единой именной правки — сверка с HEAD 0 расхождений на 494 строках. Только `lay_out_multicol_children`/`lay_out_abs_children` (вызываются из диспетчера режимов в самом `box_tree.rs`) получили `pub(crate)`; три хелпера (`box_is_column_sliceable`/`balanced_column_height`/`abs_box_shrinks_to_fit`) не имеют вызывателей вне региона — остались приватными. `dump_golden.py` 12/12 без дельт; `scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md))"
       },
       {
        "id": "SPLIT-BT9",
