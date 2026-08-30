@@ -6,7 +6,7 @@
 
 19698	crates/engine/paint/src/display_list.rs
 19250	crates/engine/layout/src/lib.rs
-18652	crates/engine/paint/src/renderer.rs
+17741	crates/engine/paint/src/renderer.rs
 10217	crates/network/src/lib.rs
 9192	crates/engine/css-parser/src/parser.rs
 7955	crates/engine/paint/src/backends/femtovg_backend.rs
