@@ -6063,16 +6063,16 @@ fn build_box_inner(
                 BoxKind::Video { src, poster }
             } else if is_canvas_element(doc, id) {
                 let node = doc.get(id);
-                // HTML LS §4.12.4: width/height content attributes are
-                // non-negative integers; defaults are 300×150 CSS px.
-                let cw = node
-                    .get_attr("width")
-                    .and_then(|v| v.trim().parse::<u32>().ok())
-                    .unwrap_or(300);
-                let ch = node
-                    .get_attr("height")
-                    .and_then(|v| v.trim().parse::<u32>().ok())
-                    .unwrap_or(150);
+                // HTML LS §4.12.4: width/height content attributes reflect as
+                // `unsigned long`; defaults are 300×150 CSS px.
+                //
+                // BUG-452: this was `v.trim().parse::<u32>()`, whose rules are
+                // neither the spec's nor `parseInt`'s — it rejected `"100.999"`,
+                // `"100em"` and `"0x100"` (§2.4.4.1 gives 100/100/**0**), so the
+                // box was laid out at the 300×150 default while `canvas.width`
+                // from script answered 100 off the JS mirror of the same rule.
+                let cw = lumen_dom::attr_int::reflect_unsigned_long(node.get_attr("width"), 300);
+                let ch = lumen_dom::attr_int::reflect_unsigned_long(node.get_attr("height"), 150);
                 // The bitmap dimensions act as intrinsic size; explicit CSS
                 // width/height (or presentational hints) win if already set.
                 //
