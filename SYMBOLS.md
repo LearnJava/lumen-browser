@@ -1758,25 +1758,25 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/animation.rs:1295` **fn** `remove_node` — Remove all transition state for `node` (called when node leaves DOM)
 `crates/engine/layout/src/animation.rs:1333` **fn** `tick` — Compute interpolated style overrides for the current frame
 `crates/engine/layout/src/bidi.rs:332` **fn** `visual_text` — UAX #9 rules L2 (character half) and L4 — the text of `level`'s fragment as
-`crates/engine/layout/src/box_tree.rs:102` **struct** `LayoutKeyCensus` — BUG-341 S30 census: how often a hypothetical (node, incoming-constraints)
-`crates/engine/layout/src/box_tree.rs:187` **fn** `set_layout_key_census` — Enables/disables the BUG-341 S30/S31/S35 layout-key census and clears its
-`crates/engine/layout/src/box_tree.rs:194` **fn** `take_layout_key_census` — Returns the accumulated [`LayoutKeyCensus`] and resets the tally
-`crates/engine/layout/src/box_tree.rs:470` **fn** `set_layout_result_cache` — Enables/disables the BUG-341 S36 layout-result cache and clears its
-`crates/engine/layout/src/box_tree.rs:478` **fn** `layout_result_cache_enabled` — Whether the BUG-341 S36 layout-result cache is currently enabled
-`crates/engine/layout/src/box_tree.rs:487` **struct** `LayoutResultCacheStats` — BUG-341 S36 — per-pass tally of what the cache-checked wrapper did,
-`crates/engine/layout/src/box_tree.rs:503` **fn** `take_layout_result_cache_stats` — Returns the accumulated [`LayoutResultCacheStats`] and resets the tally
-`crates/engine/layout/src/box_tree.rs:523` **fn** `set_incremental_box_build` — Enables/disables incremental box-build reuse for subsequent
-`crates/engine/layout/src/box_tree.rs:528` **fn** `incremental_box_build_enabled` — Whether incremental box-build reuse is currently enabled on this thread
-`crates/engine/layout/src/box_tree.rs:540` **struct** `BoxBuildStats` — BUG-341 S4/S15 — per-pass tally of what the box-build stage rebuilt versus
-`crates/engine/layout/src/box_tree.rs:619` **fn** `take_box_build_stats` — Returns the accumulated [`BoxBuildStats`] and resets the tally
-`crates/engine/layout/src/box_tree.rs:642` **fn** `set_box_build_diagnostics` — Enables/disables the BUG-341 S18 per-node build census, clearing the log
-`crates/engine/layout/src/box_tree.rs:651` **fn** `take_box_build_log` — Drains the BUG-341 S18 build census — the `NodeId` of every box really built
-`crates/engine/layout/src/box_tree.rs:684` **fn** `set_box_time_diagnostics` — Enables/disables the BUG-341 S20 per-box timing census, clearing the log
-`crates/engine/layout/src/box_tree.rs:692` **fn** `take_box_build_time_log` — Drains the BUG-341 S20 per-box timing census — see [`BOX_BUILD_TIME_LOG`]
-`crates/engine/layout/src/box_tree.rs:703` **struct** `BoxCopyStats` — BUG-341 S18/S19 census: what one incremental box-build pass spent on
-`crates/engine/layout/src/box_tree.rs:726` **fn** `take_box_copy_stats` — Drains the BUG-341 S18/S19 copy census — see [`BoxCopyStats`]
-`crates/engine/layout/src/box_tree.rs:766` **fn** `take_box_probe_ns` — Drains the BUG-341 S25 probe timers — see [`PROBE_NS`] / [`STYLE_MISS_NS`]
 `crates/engine/layout/src/box_tree/container_anchor.rs:21` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree/diagnostics.rs:22` **struct** `LayoutKeyCensus` — BUG-341 S30 census: how often a hypothetical (node, incoming-constraints)
+`crates/engine/layout/src/box_tree/diagnostics.rs:107` **fn** `set_layout_key_census` — Enables/disables the BUG-341 S30/S31/S35 layout-key census and clears its
+`crates/engine/layout/src/box_tree/diagnostics.rs:114` **fn** `take_layout_key_census` — Returns the accumulated [`LayoutKeyCensus`] and resets the tally
+`crates/engine/layout/src/box_tree/diagnostics.rs:390` **fn** `set_layout_result_cache` — Enables/disables the BUG-341 S36 layout-result cache and clears its
+`crates/engine/layout/src/box_tree/diagnostics.rs:398` **fn** `layout_result_cache_enabled` — Whether the BUG-341 S36 layout-result cache is currently enabled
+`crates/engine/layout/src/box_tree/diagnostics.rs:407` **struct** `LayoutResultCacheStats` — BUG-341 S36 — per-pass tally of what the cache-checked wrapper did,
+`crates/engine/layout/src/box_tree/diagnostics.rs:423` **fn** `take_layout_result_cache_stats` — Returns the accumulated [`LayoutResultCacheStats`] and resets the tally
+`crates/engine/layout/src/box_tree/diagnostics.rs:443` **fn** `set_incremental_box_build` — Enables/disables incremental box-build reuse for subsequent
+`crates/engine/layout/src/box_tree/diagnostics.rs:448` **fn** `incremental_box_build_enabled` — Whether incremental box-build reuse is currently enabled on this thread
+`crates/engine/layout/src/box_tree/diagnostics.rs:460` **struct** `BoxBuildStats` — BUG-341 S4/S15 — per-pass tally of what the box-build stage rebuilt versus
+`crates/engine/layout/src/box_tree/diagnostics.rs:539` **fn** `take_box_build_stats` — Returns the accumulated [`BoxBuildStats`] and resets the tally
+`crates/engine/layout/src/box_tree/diagnostics.rs:562` **fn** `set_box_build_diagnostics` — Enables/disables the BUG-341 S18 per-node build census, clearing the log
+`crates/engine/layout/src/box_tree/diagnostics.rs:571` **fn** `take_box_build_log` — Drains the BUG-341 S18 build census — the `NodeId` of every box really built
+`crates/engine/layout/src/box_tree/diagnostics.rs:604` **fn** `set_box_time_diagnostics` — Enables/disables the BUG-341 S20 per-box timing census, clearing the log
+`crates/engine/layout/src/box_tree/diagnostics.rs:612` **fn** `take_box_build_time_log` — Drains the BUG-341 S20 per-box timing census — see [`BOX_BUILD_TIME_LOG`]
+`crates/engine/layout/src/box_tree/diagnostics.rs:623` **struct** `BoxCopyStats` — BUG-341 S18/S19 census: what one incremental box-build pass spent on
+`crates/engine/layout/src/box_tree/diagnostics.rs:646` **fn** `take_box_copy_stats` — Drains the BUG-341 S18/S19 copy census — see [`BoxCopyStats`]
+`crates/engine/layout/src/box_tree/diagnostics.rs:686` **fn** `take_box_probe_ns` — Drains the BUG-341 S25 probe timers — see [`PROBE_NS`] / [`STYLE_MISS_NS`]
 `crates/engine/layout/src/box_tree/entry.rs:54` **fn** `layout` — Lay out a document without a text measurer. For tests and headless dump modes
 `crates/engine/layout/src/box_tree/entry.rs:80` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
 `crates/engine/layout/src/box_tree/entry.rs:93` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
