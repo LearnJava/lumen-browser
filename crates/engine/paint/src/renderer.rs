@@ -3887,6 +3887,26 @@ pub static FRAMES_SKIPPED: std::sync::atomic::AtomicU64 =
 pub static FRAME_LOG_NANOS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// BUG-405 срез 44: наносекунды между входом в [`Renderer::render_with_anim`]
+/// и стартом секундомера [`ComposeMarks`] — работа, которая идёт ДО первой
+/// отсечки `marks.t0` и потому не попадает ни в один слот
+/// [`FRAME_PHASE_NANOS`] (те все — дельты ОТ `marks.t0`).
+///
+/// Кандидат остатка п. 84 (невязка честного кадра попадания не падает до нуля
+/// даже при `LUMEN_NO_OVERLAY_CACHE=1`): `recover_exhausted_atlas` и
+/// `ComposeOutcome::Skip.store()` выполняются здесь, прежде чем заводится
+/// секундомер. Складывается процессно, как [`FRAME_LOG_NANOS`].
+pub static PRE_MARKS_NANOS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// BUG-405 срез 44: наносекунды между решением `overlay_cache_step` и
+/// вызовом `render_impl(..., RenderPassMode::Compose)` внутри `compose_page`
+/// (сборка `seg_content`/`compose_overlay`) — второй кандидат остатка п. 84,
+/// названный самим текстом пункта. Складывается процессно, как
+/// [`FRAME_LOG_NANOS`].
+pub static POST_CACHE_NANOS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// BUG-405 срез 37: подстатьи вызова рендерера в наносекундах, доступные на
 /// УРОВНЕ 1 покадрового лога.
 ///
@@ -9850,6 +9870,12 @@ impl Renderer {
             });
         }
 
+        // BUG-405 срез 44: третий кандидат остатка п. 84 — сборка
+        // `seg_content`/`compose_overlay` между решением по `overlay_cache_step`
+        // и вызовом `render_impl`, ни статьёй FRAME_PHASE_NANOS (кончаются на
+        // mark(4)), ни статьёй `пасс` (начинается своим t_frame0 внутри
+        // render_impl) не покрытая.
+        let t_post_cache = crate::frame_log_enabled().then(std::time::Instant::now);
         // Split: анимируемые сегменты рисуются как content-полоса Compose-кадра
         // (получают штатный сдвиг -scroll_y) — поверх blit-а, под overlay.
         let seg_content: &[DisplayCommand] = seg_plan.unwrap_or(&[]);
@@ -9872,6 +9898,12 @@ impl Renderer {
         } else {
             overlay
         };
+        if let Some(t0) = t_post_cache {
+            POST_CACHE_NANOS.fetch_add(
+                t0.elapsed().as_nanos() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
         self.render_impl(seg_content, compose_overlay, scroll_y, 0.0, RenderPassMode::Compose)?;
         Ok(true)
     }
@@ -9966,6 +9998,9 @@ impl Renderer {
         scroll_x: f32,
         anim_ranges: &[std::ops::Range<usize>],
     ) -> Result<(), wgpu::SurfaceError> {
+        // BUG-405 срез 44: точка отсчёта ДО первой отсечки `ComposeMarks` —
+        // см. doc-комментарий `PRE_MARKS_NANOS`.
+        let t_entry = crate::frame_log_enabled().then(std::time::Instant::now);
         // BUG-435: место в атласе кончилось на прошлом кадре — сбрасываем ДО
         // хэша кадра, чтобы бамп поколения контента попал в хэш и кадр не был
         // пропущен как идентичный.
@@ -9998,6 +10033,12 @@ impl Renderer {
         // «компоновки не было», а не как повтор прошлого попадания.
         ComposeOutcome::Skip.store();
         let mut marks = ComposeMarks::new();
+        if let Some(t0) = t_entry {
+            PRE_MARKS_NANOS.fetch_add(
+                t0.elapsed().as_nanos() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
         let prep = self.prepare_page_compose(content, scroll_x, anim_ranges, &mut marks);
         let skip: &[std::ops::Range<usize>] = prep.as_ref().map_or(&[], |p| &p.ranges);
         let band_dims = prep.as_ref().map_or((0, 0), |p| (p.sw, p.band_h_px));

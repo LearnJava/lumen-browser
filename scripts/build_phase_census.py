@@ -56,7 +56,8 @@ BUILD_RE = re.compile(
     r'tail ([\-\d.]+) \| chrome (\d+)x(\d+)=(\d+) cmds, overlay (\d+) \| band (\S+)')
 PAINT_RE = re.compile(
     r'\[frame\]\s+paint: prep ([\-\d.]+) hash ([\-\d.]+) band ([\-\d.]+) '
-    r'пасс ([\-\d.]+) лог ([\-\d.]+) обёртка ([\-\d.]+) \| невязка ([\-\d.]+)')
+    r'пасс ([\-\d.]+) лог ([\-\d.]+) предметки ([\-\d.]+) послекэша ([\-\d.]+) '
+    r'предвызов ([\-\d.]+) обёртка ([\-\d.]+) \| невязка ([\-\d.]+)')
 ADAPTER_RE = re.compile(r'\[wgpu\] adapter: (.*)')
 
 ARM_SETS = {
@@ -75,7 +76,10 @@ ARM_SETS = {
 
 PHASES = ['chrome', 'sbar', 'panels', 'tail']
 # Подстатьи вызова рендерера (слоты FRAME_PHASE_NANOS + цена печати + остаток).
-PAINT_PHASES = ['prep', 'hash', 'band', 'пасс', 'лог', 'обёртка', 'невязка']
+PAINT_PHASES = [
+    'prep', 'hash', 'band', 'пасс', 'лог', 'предметки', 'послекэша', 'предвызов', 'обёртка',
+    'невязка',
+]
 
 
 def parse(log_path: str) -> dict:

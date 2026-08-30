@@ -1263,6 +1263,12 @@ impl Lumen {
         let log_nanos_at_paint = frame_log_nanos();
         // BUG-405 СЃСЂРµР· 37: С‚Рµ Р¶Рµ РґРµР»СЊС‚Р°-СЃРЅРёРјРєРё РґР»СЏ РїРѕРґСЃС‚Р°С‚РµР№ СЂРµРЅРґРµСЂРµСЂР°.
         let phase_at_paint = frame_phase_ms();
+        // BUG-405 slice 44: same delta-snapshot for the pre-`ComposeMarks`
+        // gap (`PRE_MARKS_NANOS`) — see `pre_marks_nanos` doc comment.
+        let pre_marks_at_paint = pre_marks_nanos();
+        // BUG-405 slice 44: same delta-snapshot for `POST_CACHE_NANOS` — see
+        // `post_cache_nanos` doc comment.
+        let post_cache_at_paint = post_cache_nanos();
 
         // BUG-405 СЃСЂРµР· 37: С†РµРЅР° РћР‘РЃР РўРљР СЃС‚СЂР°РЅРёС†С‹, РїР»Р°С‚РёРјР°СЏ РІРЅСѓС‚СЂРё РѕРєРЅР°
         // `paint`, РЅРѕ СЃРЅР°СЂСѓР¶Рё РІСЃРµС… СЃС‡С‘С‚С‡РёРєРѕРІ СЂРµРЅРґРµСЂРµСЂР°. Р¤Р°СЃС‚-РїР°СЃ
@@ -1271,6 +1277,14 @@ impl Lumen {
         // Р±РµСЂС‘С‚СЃСЏ РІРµС‚РєР° РЅРёР¶Рµ, Рё РѕРЅР° РєРѕРїРёСЂСѓРµС‚ РІРµСЃСЊ display list РєР°Р¶РґС‹Р№
         // РєР°РґСЂ. Р‘РµР· СЌС‚РѕР№ РѕС‚СЃРµС‡РєРё С†РµРЅР° РєРѕРїРёРё СЃРёРґРµР»Р° Р±С‹ РІ РЅРµРІСЏР·РєРµ.
         let mut wrap_ms = 0.0_f64;
+        // BUG-405 slice 44: shell-side setup between `marks[4]` and the
+        // actual `render`/`render_with_anim` call — overlay/counter
+        // snapshots, `set_canvas_background`/`set_page_offset`/
+        // `set_content_epoch`, branch selection. On the fast path this used
+        // to be entirely unnamed (only the fallback branch's `wrap_ms`
+        // covered a piece of it); set right before each of the three call
+        // sites below, so it never includes the render call itself.
+        let mut setup_ms = 0.0_f64;
         // BUG-405 СЃСЂРµР· 39: РІРµСЂСЃРёСЏ СЃРїРёСЃРєР° РґР»СЏ СЂРµРЅРґРµСЂРµСЂР°. РќРµРЅСѓР»РµРІР°СЏ СЂРѕРІРЅРѕ
         // С‚РѕРіРґР°, РєРѕРіРґР° РІ СЂРµРЅРґРµСЂРµСЂ СѓС…РѕРґРёС‚ retained-СЃРїРёСЃРѕРє СЃС‚СЂР°РЅРёС†С‹ вЂ” Сѓ
         // РїСЂРѕРёР·РІРѕРґРЅС‹С… СЃРїРёСЃРєРѕРІ (Р°РЅРёРјР°С†РёРѕРЅРЅР°СЏ РїР°С‚С‡-РєРѕРїРёСЏ `anim_dl`,
@@ -1287,6 +1301,9 @@ impl Lumen {
                 // Split-view mode: combined DL with baked scroll; renderer gets 0,0.
                 r.set_page_offset(0.0, 0.0);
                 r.set_content_epoch(0);
+                if let Some(t0) = frame_log_t0 {
+                    setup_ms = t0.elapsed().as_secs_f64() * 1e3 - marks[4];
+                }
                 if let Err(err) = r.render(&combined, &overlay_buf, 0.0, 0.0) {
                     eprintln!("РћС€РёР±РєР° СЂРµРЅРґРµСЂР° (split): {err:?}");
                 }
@@ -1320,6 +1337,9 @@ impl Lumen {
                     r.set_content_epoch(retained_epoch);
                     let ranges: &[std::ops::Range<usize>] =
                         if anim_dl.is_some() { &anim_ranges } else { &[] };
+                    if let Some(t0) = frame_log_t0 {
+                        setup_ms = t0.elapsed().as_secs_f64() * 1e3 - marks[4];
+                    }
                     if let Err(err) = r.render_with_anim(
                         base,
                         &overlay_buf,
@@ -1365,6 +1385,9 @@ impl Lumen {
                         };
                     if let (Some(t0), Some(before)) = (frame_log_t0, t_wrap) {
                         wrap_ms = (t0.elapsed() - before).as_secs_f64() * 1e3;
+                    }
+                    if let Some(t0) = frame_log_t0 {
+                        setup_ms = t0.elapsed().as_secs_f64() * 1e3 - marks[4];
                     }
                     if let Err(err) = r.render_with_anim(
                         &shifted,
@@ -1433,15 +1456,33 @@ impl Lumen {
             // РїРѕС„Р°Р·РЅРѕРіРѕ Р±Р»РѕРєР° СѓСЂРѕРІРЅСЏ 2 (РїСѓРЅРєС‚ 71).
             let ph = frame_phase_ms();
             let d = |i: usize| ph[i] - phase_at_paint[i];
-            let named = d(0) + d(1) + d(2) + d(3) + log_ms + wrap_ms;
+            // BUG-405 slice 44: gap before `ComposeMarks::new()` starts —
+            // see `pre_marks_nanos` doc comment. Named separately from
+            // `d(0)` (`prep`, a `ComposeMarks`-relative phase) because it
+            // happens strictly BEFORE that timer starts.
+            let pre_marks_ms = (pre_marks_nanos() - pre_marks_at_paint) as f64 / 1e6;
+            let post_cache_ms = (post_cache_nanos() - post_cache_at_paint) as f64 / 1e6;
+            // BUG-405 slice 44: `setup_ms` (marks[4] -> just before the
+            // `render`/`render_with_anim` call) is a SUPERSET of `wrap_ms`
+            // on the fallback branch (the `shifted`-list build is a
+            // sub-interval of it) — `wrap_ms` stays out of `named` to avoid
+            // double-counting that sub-interval; it is still printed on its
+            // own for the `offset` A/B arm in `build_phase_census.py`, which
+            // isolates exactly that sub-cost.
+            let named =
+                d(0) + d(1) + d(2) + d(3) + log_ms + pre_marks_ms + post_cache_ms + setup_ms;
             eprintln!(
                 "[frame]   paint: prep {:.2} hash {:.2} band {:.2} пасс {:.2} \
-                         лог {:.2} обёртка {:.2} | невязка {:.2}",
+                         лог {:.2} предметки {:.2} послекэша {:.2} предвызов {:.2} \
+                         обёртка {:.2} | невязка {:.2}",
                 d(0),
                 d(1),
                 d(2),
                 d(3),
                 log_ms,
+                pre_marks_ms,
+                post_cache_ms,
+                setup_ms,
                 wrap_ms,
                 (marks[5] - marks[4] - named).max(0.0),
             );
