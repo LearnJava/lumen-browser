@@ -60,6 +60,10 @@ ctx.fillStyle;   // '#00ff00' — гамут-маппинг в sRGB, прост�
 
 ## Цена в WPT
 
-`html/canvas/element/fill-and-stroke-styles/2d.fillStyle.colormix.currentcolor`
-(и зеркальный `strokeStyle`), серия `2d.fillStyle.colorObject.*`, wide-gamut
-тесты `…/wide-gamut-canvas/*`.
+измерено прогоном категории 2026-08-30 — пять файлов, у каждого 0/1 сабтеста:
+`2d.fillStyle.colormix`, `2d.fillStyle.colormix.currentcolor`,
+`2d.strokeStyle.colormix`, `2d.gradient.colormix`, `2d.fillStyle.CSSHSL`.
+Первые четыре падают ТОЛЬКО на сериализации — цвет разбирается и рисуется
+верно, но читается обратно как `#800080` вместо `color(srgb 0.5 0 0.5)`;
+`CSSHSL` требует ещё и типизированных цветовых объектов (серия
+`2d.fillStyle.colorObject.*`). Плюс wide-gamut `…/manual/wide-gamut-canvas/*`.
