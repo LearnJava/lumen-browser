@@ -55,13 +55,26 @@ COMPOSE_RE = re.compile(
     r'compose-top: skip ([\d.]+) geom ([\d.]+) split ([\d.]+) band ([\d.]+)')
 WGPU_RE = re.compile(r'\[frame:wgpu\] total\s+([\d.]+)ms')
 ADAPTER_RE = re.compile(r'\[wgpu\] adapter: (.*)')
+# BUG-405 срез 44: зазор ДО старта секундомера `ComposeMarks`
+# (`PRE_MARKS_NANOS`) — печатается той же строкой `paint:`, что и `обёртка`.
+PRE_MARKS_RE = re.compile(r'предметки ([\-\d.]+)')
+# BUG-405 срез 44: зазор `marks[4]` -> вызов `render`/`render_with_anim` в
+# шелле (снимок/set_*-подготовка ДО обращения к рендереру).
+PRE_CALL_RE = re.compile(r'предвызов ([\-\d.]+)')
+# BUG-405 срез 44: зазор между решением `overlay_cache_step` и вызовом
+# `render_impl` внутри `compose_page` (сборка seg_content/compose_overlay) —
+# второй кандидат п. 84, названный самим текстом пункта.
+POST_CACHE_RE = re.compile(r'послекэша ([\-\d.]+)')
 
 ARMS = [('лог 1', '1'), ('лог 2', '2')]
 
 # Статьи кадра попадания в порядке печати сводки. `лог` — измеренная цена
-# печати самого пофазного блока (счётчик `FRAME_LOG_NANOS`), `невязка` — то,
-# что не назвала ни одна статья.
-COLUMNS = ['shell', 'hash', 'band-реш.', 'пасс', 'лог', 'невязка']
+# печати самого пофазного блока (счётчик `FRAME_LOG_NANOS`), `предметки` —
+# зазор до старта `ComposeMarks` (срез 44), `невязка` — то, что не назвала ни
+# одна статья.
+COLUMNS = [
+    'shell', 'hash', 'band-реш.', 'пасс', 'лог', 'предметки', 'послекэша', 'предвызов', 'невязка',
+]
 
 
 def parse(log_path: str) -> dict:
@@ -102,6 +115,24 @@ def parse(log_path: str) -> dict:
                 # На промахе таких строк две (полоса и композит) — берём сумму.
                 cur['пасс'] = cur.get('пасс', 0.0) + float(m.group(1))
                 continue
+            # BUG-405 срез 44: три поля живут в ОДНОЙ строке `paint:` — три
+            # независимых `search` без `continue` между ними, иначе первое
+            # совпадение съедало бы проверку двух остальных на той же строке.
+            matched_paint_extra = False
+            m = PRE_MARKS_RE.search(line)
+            if m:
+                cur['предметки'] = float(m.group(1))
+                matched_paint_extra = True
+            m = PRE_CALL_RE.search(line)
+            if m:
+                cur['предвызов'] = float(m.group(1))
+                matched_paint_extra = True
+            m = POST_CACHE_RE.search(line)
+            if m:
+                cur['послекэша'] = float(m.group(1))
+                matched_paint_extra = True
+            if matched_paint_extra:
+                continue
             m = TOP_RE.search(line)
             if m:
                 g = [float(x) for x in m.groups()]
@@ -115,8 +146,10 @@ def parse(log_path: str) -> dict:
                 cur['hit'] = hit
                 ys.append(float(m.group(2)))
                 if 'paint' in cur:
-                    named = sum(cur.get(k, 0.0) for k in
-                                ('hash', 'band-реш.', 'пасс', 'лог'))
+                    named = sum(
+                        cur.get(k, 0.0) for k in
+                        ('hash', 'band-реш.', 'пасс', 'лог', 'предметки', 'послекэша', 'предвызов')
+                    )
                     cur['невязка'] = max(cur['paint'] - named, 0.0)
                     cur['честный'] = max(cur['total'] - cur.get('лог', 0.0), 0.0)
                 frames.append(cur)

@@ -57,3 +57,31 @@ pub(crate) fn compose_outcome_label() -> &'static str {
 pub(crate) fn frame_log_nanos() -> u64 {
     0
 }
+
+/// Nanoseconds spent inside `render_with_anim` before its own `ComposeMarks`
+/// timer starts (BUG-405 slice 44, `PRE_MARKS_NANOS`) — a candidate source of
+/// the residual that survives even with the overlay cache disabled.
+#[cfg(feature = "backend-wgpu")]
+pub(crate) fn pre_marks_nanos() -> u64 {
+    lumen_paint::load_counter(&lumen_paint::PRE_MARKS_NANOS)
+}
+
+/// Stub for [`pre_marks_nanos`] on non-wgpu builds.
+#[cfg(not(feature = "backend-wgpu"))]
+pub(crate) fn pre_marks_nanos() -> u64 {
+    0
+}
+
+/// Nanoseconds spent inside `compose_page` between the `overlay_cache_step`
+/// decision and the `render_impl` call (BUG-405 slice 44, `POST_CACHE_NANOS`)
+/// — the second candidate п.84 itself names.
+#[cfg(feature = "backend-wgpu")]
+pub(crate) fn post_cache_nanos() -> u64 {
+    lumen_paint::load_counter(&lumen_paint::POST_CACHE_NANOS)
+}
+
+/// Stub for [`post_cache_nanos`] on non-wgpu builds.
+#[cfg(not(feature = "backend-wgpu"))]
+pub(crate) fn post_cache_nanos() -> u64 {
+    0
+}

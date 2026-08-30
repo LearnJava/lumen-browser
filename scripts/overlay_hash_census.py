@@ -58,8 +58,9 @@ def main() -> int:
             rows[tag].append(report(f'{tag} (повтор {rep})', parse(log)))
 
     print('\n' + '=' * 78)
-    print(f'{"плечо":10s} | {"невязка":>8s} | {"пасс":>8s} | {"hash":>8s} | '
-          f'{"band-реш.":>10s} | {"честный":>8s}')
+    print(f'{"плечо":10s} | {"невязка":>8s} | {"предметки":>10s} | {"послекэша":>10s} | '
+          f'{"предвызов":>10s} | {"пасс":>8s} | {"hash":>8s} | {"band-реш.":>10s} | '
+          f'{"честный":>8s}')
     import statistics
     for tag, _ in ARMS:
         rs = rows[tag]
@@ -72,7 +73,8 @@ def main() -> int:
             return statistics.median([c.get(key, float('nan')) for c in cols_all])
 
         fair = statistics.median([r['fair_p50'] for r in rs if r['fair_p50'] == r['fair_p50']])
-        print(f'{tag:10s} | {med("невязка"):8.3f} | {med("пасс"):8.3f} | '
+        print(f'{tag:10s} | {med("невязка"):8.3f} | {med("предметки"):10.3f} | '
+              f'{med("послекэша"):10.3f} | {med("предвызов"):10.3f} | {med("пасс"):8.3f} | '
               f'{med("hash"):8.3f} | {med("band-реш."):10.3f} | {fair:8.3f}')
     return 0
 
