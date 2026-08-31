@@ -492,6 +492,79 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
         }),
     )?;
 
+    // ── Remaining state properties (BUG-456 симптом 1, next slice) ──────────
+    // Same natives as `canvas2d.rs`'s element-canvas twins, over the same
+    // `Context2D` fields — the engine already had these, only the JS binding
+    // was missing on the offscreen side.
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_set_global_composite_operation",
+        into_v8_fn2(|canvas_id: u32, op: String| {
+            use lumen_canvas::CompositeOperation;
+            if let Some(op) = CompositeOperation::from_str(&op) {
+                with_offscreen_canvas(canvas_id, |c| c.composite_operation = op);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_set_line_cap",
+        into_v8_fn2(|canvas_id: u32, cap: String| {
+            use lumen_canvas::LineCap;
+            if let Some(cap) = LineCap::from_str(&cap) {
+                with_offscreen_canvas(canvas_id, |c| c.line_cap = cap);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_set_line_join",
+        into_v8_fn2(|canvas_id: u32, join: String| {
+            use lumen_canvas::LineJoin;
+            if let Some(join) = LineJoin::from_str(&join) {
+                with_offscreen_canvas(canvas_id, |c| c.line_join = join);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_set_miter_limit",
+        into_v8_fn2(|canvas_id: u32, limit: f64| {
+            if limit.is_finite() && limit > 0.0 {
+                with_offscreen_canvas(canvas_id, |c| c.miter_limit = limit as f32);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_set_shadow_color",
+        into_v8_fn2(|canvas_id: u32, css: String| {
+            use lumen_canvas::CanvasColor;
+            let color = CanvasColor::from_css_str(&css)?;
+            with_offscreen_canvas(canvas_id, |c| c.shadow_color = color);
+            Some(color.to_css_string())
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_set_shadow_blur",
+        into_v8_fn2(|canvas_id: u32, v: f64| {
+            if v.is_finite() && v >= 0.0 {
+                with_offscreen_canvas(canvas_id, |c| c.shadow_blur = v as f32);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_set_shadow_offset_x",
+        into_v8_fn2(|canvas_id: u32, v: f64| {
+            if v.is_finite() {
+                with_offscreen_canvas(canvas_id, |c| c.shadow_offset_x = v as f32);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_set_shadow_offset_y",
+        into_v8_fn2(|canvas_id: u32, v: f64| {
+            if v.is_finite() {
+                with_offscreen_canvas(canvas_id, |c| c.shadow_offset_y = v as f32);
+            }
+        }),
+    )?;
+
     rt.register_native(
         "_lumen_offscreen_canvas2d_get_image_data",
         into_v8_fn1(|canvas_id: u32| -> String {
@@ -622,6 +695,18 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
       let _strokeStyle = '#000000';
       let _lineWidth = 1;
       let _globalAlpha = 1;
+      // BUG-456 симптом 1 (state properties slice): same shape as the four
+      // attributes above — a flat field would be dead code under an
+      // accessor of the same name, so each gets its own tracked variable.
+      // Defaults — §4.12.5.1.1 / lumen_canvas::DrawState::default().
+      let _globalCompositeOperation = 'source-over';
+      let _lineCap = 'butt';
+      let _lineJoin = 'miter';
+      let _miterLimit = 10;
+      let _shadowColor = 'rgba(0, 0, 0, 0)';
+      let _shadowBlur = 0;
+      let _shadowOffsetX = 0;
+      let _shadowOffsetY = 0;
       // Стек состояний save()/restore() (§4.12.5.1.2) — параллельно нативному,
       // как у элементного контекста (`web_api_shim_mid.js`): та же ловушка
       // BUG-455, если копии разойдутся.
@@ -674,6 +759,10 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
           stack.push({
             fillStyle: _fillStyle, strokeStyle: _strokeStyle,
             lineWidth: _lineWidth, globalAlpha: _globalAlpha,
+            globalCompositeOperation: _globalCompositeOperation,
+            lineCap: _lineCap, lineJoin: _lineJoin, miterLimit: _miterLimit,
+            shadowColor: _shadowColor, shadowBlur: _shadowBlur,
+            shadowOffsetX: _shadowOffsetX, shadowOffsetY: _shadowOffsetY,
           });
         },
         restore: function() {
@@ -682,6 +771,11 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
           if (snap) {
             _fillStyle = snap.fillStyle; _strokeStyle = snap.strokeStyle;
             _lineWidth = snap.lineWidth; _globalAlpha = snap.globalAlpha;
+            _globalCompositeOperation = snap.globalCompositeOperation;
+            _lineCap = snap.lineCap; _lineJoin = snap.lineJoin;
+            _miterLimit = snap.miterLimit;
+            _shadowColor = snap.shadowColor; _shadowBlur = snap.shadowBlur;
+            _shadowOffsetX = snap.shadowOffsetX; _shadowOffsetY = snap.shadowOffsetY;
           }
         },
 
@@ -727,6 +821,21 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
           _lumen_offscreen_canvas2d_set_line_width(canvasId, 1);
           _globalAlpha = 1;
           _lumen_offscreen_canvas2d_set_global_alpha(canvasId, 1);
+          _globalCompositeOperation = 'source-over';
+          _lumen_offscreen_canvas2d_set_global_composite_operation(canvasId, 'source-over');
+          _lineCap = 'butt';
+          _lumen_offscreen_canvas2d_set_line_cap(canvasId, 'butt');
+          _lineJoin = 'miter';
+          _lumen_offscreen_canvas2d_set_line_join(canvasId, 'miter');
+          _miterLimit = 10;
+          _lumen_offscreen_canvas2d_set_miter_limit(canvasId, 10);
+          _shadowColor = _lumen_offscreen_canvas2d_set_shadow_color(canvasId, 'rgba(0, 0, 0, 0)') || 'rgba(0, 0, 0, 0)';
+          _shadowBlur = 0;
+          _lumen_offscreen_canvas2d_set_shadow_blur(canvasId, 0);
+          _shadowOffsetX = 0;
+          _lumen_offscreen_canvas2d_set_shadow_offset_x(canvasId, 0);
+          _shadowOffsetY = 0;
+          _lumen_offscreen_canvas2d_set_shadow_offset_y(canvasId, 0);
         },
 
         // Style setters. Натив возвращает каноническую сериализацию принятого
@@ -765,6 +874,70 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
           }
         },
         get globalAlpha() { return _globalAlpha; },
+        // BUG-456 симптом 1 (state properties slice): plain string-enum
+        // setters over already-public `Context2D` fields, symmetric to the
+        // element context's `_lumen_c2d_prop` (`web_api_shim_mid.js`) — an
+        // unrecognized keyword is silently ignored (attribute keeps its
+        // prior value), matching the native's own `from_str` → `Option`
+        // shape rather than throwing.
+        set globalCompositeOperation(v) {
+          v = String(v);
+          _lumen_offscreen_canvas2d_set_global_composite_operation(canvasId, v);
+          _globalCompositeOperation = v;
+        },
+        get globalCompositeOperation() { return _globalCompositeOperation; },
+        set lineCap(v) {
+          v = String(v);
+          _lumen_offscreen_canvas2d_set_line_cap(canvasId, v);
+          _lineCap = v;
+        },
+        get lineCap() { return _lineCap; },
+        set lineJoin(v) {
+          v = String(v);
+          _lumen_offscreen_canvas2d_set_line_join(canvasId, v);
+          _lineJoin = v;
+        },
+        get lineJoin() { return _lineJoin; },
+        set miterLimit(v) {
+          var n = Number(v);
+          if (isFinite(n) && n > 0) {
+            _miterLimit = n;
+            _lumen_offscreen_canvas2d_set_miter_limit(canvasId, n);
+          }
+        },
+        get miterLimit() { return _miterLimit; },
+        // `shadowColor` follows the paint-style contract (parse / ignore
+        // invalid / store the native's canonical serialization) — same as
+        // `fillStyle`/`strokeStyle` above, minus gradients/patterns.
+        set shadowColor(v) {
+          var ser = _lumen_offscreen_canvas2d_set_shadow_color(canvasId, String(v));
+          if (ser !== null && ser !== undefined) { _shadowColor = ser; }
+        },
+        get shadowColor() { return _shadowColor; },
+        set shadowBlur(v) {
+          var n = Number(v);
+          if (isFinite(n) && n >= 0) {
+            _shadowBlur = n;
+            _lumen_offscreen_canvas2d_set_shadow_blur(canvasId, n);
+          }
+        },
+        get shadowBlur() { return _shadowBlur; },
+        set shadowOffsetX(v) {
+          var n = Number(v);
+          if (isFinite(n)) {
+            _shadowOffsetX = n;
+            _lumen_offscreen_canvas2d_set_shadow_offset_x(canvasId, n);
+          }
+        },
+        get shadowOffsetX() { return _shadowOffsetX; },
+        set shadowOffsetY(v) {
+          var n = Number(v);
+          if (isFinite(n)) {
+            _shadowOffsetY = n;
+            _lumen_offscreen_canvas2d_set_shadow_offset_y(canvasId, n);
+          }
+        },
+        get shadowOffsetY() { return _shadowOffsetY; },
 
         // Image data (BUG-456 симптом 3 / BUG-448 twin): used to take no
         // parameters at all and hand the page the raw "{w},{h},{hex}" wire
@@ -1541,6 +1714,107 @@ mod tests_v8 {
                 ctx.translate(5, 5);
                 ctx.reset();
                 ctx.fillStyle === '#000000' && ctx.lineWidth === 1
+            "#,
+        );
+        assert!(ok);
+    }
+
+    // ── BUG-456 симптом 1: state properties (composite op/line cap/line
+    // join/miter limit/shadow*) — next slice after the geometry natives.
+    #[test]
+    fn js_offscreen_state_properties_round_trip() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var ctx = new OffscreenCanvas(10, 10).getContext('2d');
+                ctx.globalCompositeOperation = 'multiply';
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'bevel';
+                ctx.miterLimit = 5;
+                ctx.shadowColor = '#ff0000';
+                ctx.shadowBlur = 3;
+                ctx.shadowOffsetX = 1;
+                ctx.shadowOffsetY = 2;
+                ctx.globalCompositeOperation === 'multiply' &&
+                ctx.lineCap === 'round' && ctx.lineJoin === 'bevel' &&
+                ctx.miterLimit === 5 && ctx.shadowColor === '#ff0000' &&
+                ctx.shadowBlur === 3 && ctx.shadowOffsetX === 1 &&
+                ctx.shadowOffsetY === 2
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_state_properties_have_spec_defaults() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var ctx = new OffscreenCanvas(10, 10).getContext('2d');
+                ctx.globalCompositeOperation === 'source-over' &&
+                ctx.lineCap === 'butt' && ctx.lineJoin === 'miter' &&
+                ctx.miterLimit === 10 && ctx.shadowColor === 'rgba(0, 0, 0, 0)' &&
+                ctx.shadowBlur === 0 && ctx.shadowOffsetX === 0 &&
+                ctx.shadowOffsetY === 0
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_state_properties_survive_save_restore() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var ctx = new OffscreenCanvas(10, 10).getContext('2d');
+                ctx.lineCap = 'round';
+                ctx.shadowBlur = 4;
+                ctx.save();
+                ctx.lineCap = 'square';
+                ctx.shadowBlur = 9;
+                ctx.restore();
+                ctx.lineCap === 'round' && ctx.shadowBlur === 4
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_reset_clears_state_properties() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var ctx = new OffscreenCanvas(10, 10).getContext('2d');
+                ctx.globalCompositeOperation = 'xor';
+                ctx.lineCap = 'square';
+                ctx.miterLimit = 2;
+                ctx.shadowColor = '#00ff00';
+                ctx.shadowOffsetX = 5;
+                ctx.reset();
+                ctx.globalCompositeOperation === 'source-over' &&
+                ctx.lineCap === 'butt' && ctx.miterLimit === 10 &&
+                ctx.shadowColor === 'rgba(0, 0, 0, 0)' && ctx.shadowOffsetX === 0
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_miter_limit_ignores_non_positive_value() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var ctx = new OffscreenCanvas(10, 10).getContext('2d');
+                ctx.miterLimit = 5;
+                ctx.miterLimit = -1;
+                ctx.miterLimit = 0;
+                ctx.miterLimit = NaN;
+                ctx.miterLimit === 5
             "#,
         );
         assert!(ok);
