@@ -1461,3 +1461,150 @@ fn bug405_slice51_chrome_overlay_cache_net_win_at_four_active_strips() {
     // that baseline, not against 0%.
     eprintln!("cache-on saves {saved:.1}% at strips_used=4 (by min of {SAMPLES} interleaved samples)");
 }
+
+// -- BUG-405 срез 52: is strips_used=4 even reachable on the real chrome layout? --
+
+/// Builds the real chrome `(host_rect, chrome_dl)` pair `relayout_chrome_host`
+/// itself would produce вЂ” срез 49's level (no live `Lumen`/renderer needed):
+/// the actual `(doc, sheet)` asset, a `ChromeModel` with every panel that can
+/// widen a strip turned on, run through the same `layout_measured_hyp`/
+/// `take_content_area` pair production uses, `dl` built AFTER pruning like
+/// `relayout_chrome_host` does. Shared by both srez-52 tests below so the
+/// timing gate does not duplicate the fixture-building the correctness gate
+/// already covers.
+fn bug405_slice52_real_chrome_overlay_fixture() -> (Rect, lumen_paint::DisplayList, (f32, f32)) {
+    let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1280.0, 800.0);
+
+    // Every panel that can widen a strip, turned on at once вЂ” the real-UI
+    // analogue of срез 51's "all four margins" intent: vertical sidebar
+    // (left), `#rightSidebar` (right). `#findBar`/`#downloadsPanel` are
+    // turned on too, but CC-9's own doc comment on `relayout_chrome_host`
+    // says both are salvaged out of `#contentArea` BEFORE `page_host_rect` is
+    // computed, i.e. they overlay the content area rather than resizing it,
+    // so they should not be able to add a strip even in principle вЂ” the
+    // `strips_used` assertion below exists to confirm that reading holds,
+    // not to assume it.
+    let mut model = cc12_bench_model("");
+    model.layout_vertical = true;
+    model.sidebar_collapsed = false;
+    model.right_sidebar.open = true;
+    model.find.open = true;
+    model.downloads_open = true;
+
+    let _ = lumen_chrome::bind_model_tracked(&mut doc, &model);
+    let mut layout = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+
+    let content_area = doc
+        .find_by_id(lumen_chrome::ids::CONTENT_AREA)
+        .expect("chrome preview must have #contentArea");
+    let (host_rect, _detached) = take_content_area(
+        &mut layout,
+        content_area,
+        &[
+            lumen_chrome::ids::FIND_BAR,
+            lumen_chrome::ids::DOWNLOADS_PANEL,
+            lumen_chrome::ids::CP_OVERLAY,
+            lumen_chrome::ids::CERT_OVERLAY,
+            lumen_chrome::ids::PRINT_OVERLAY,
+        ],
+        &doc,
+    )
+    .expect("#contentArea must have a box to prune");
+
+    // Same order as `relayout_chrome_host`: `dl` is built from `layout`
+    // AFTER `#contentArea` is pruned out of it вЂ” this is the real
+    // `chrome_dl`, not срез 51's synthetic 130-`FillRect` stand-in.
+    let chrome_dl = paint_ordered(&layout);
+    (host_rect, chrome_dl, (viewport.width, viewport.height))
+}
+
+/// Срез 51's own remainder flagged this: it measured the `chrome_mix`
+/// multiplier at `strips_used=4` on a HAND-PICKED `Rect` (copied from срез
+/// 50's correctness fixture, which "just happens" to leave a margin on all
+/// four sides) вЂ” not on any host rect the real chrome layout ever produces.
+///
+/// Reading `assets/chrome/chrome.html`'s own CSS answers this ahead of the
+/// test running: `.body-row{flex:1}` (the flex row holding `#contentArea` +
+/// `#rightSidebar`) fills 100% of the height left under `.toolbar`, and
+/// nothing downstream of it is shorter than its container вЂ” there is no
+/// element anywhere in the asset that could leave a gap between
+/// `#contentArea`'s bottom edge and the window's. `strips_used` should
+/// therefore cap at 3 (top toolbar + left vertical-sidebar + right
+/// `#rightSidebar`), never reach 4 вЂ” срез 51's `chrome_mix` scenario names a
+/// shape the real UI cannot produce.
+#[test]
+fn bug405_slice52_real_chrome_layout_caps_at_three_active_strips() {
+    let (host_rect, chrome_dl, (win_w, win_h)) = bug405_slice52_real_chrome_overlay_fixture();
+    let (_, strips_used, _) = chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, false, None);
+    eprintln!(
+        "BUG405_S52 host_rect={host_rect:?} viewport=({win_w}, {win_h}) strips_used={strips_used} \
+         cmds={}",
+        chrome_dl.len(),
+    );
+    assert_eq!(
+        strips_used, 3,
+        "the asset's CSS (`.body-row{{flex:1}}` leaves no vertical gap below #contentArea) predicts a \
+         structural ceiling of 3 non-degenerate strips (top/left/right) on the real chrome layout, never \
+         срез 51's 4 вЂ” if this fails, either the asset changed to add a bottom-shrinking element (a new \
+         strip is genuinely reachable, срез 51's number is back in play) or this reasoning was wrong \
+         (investigate before trusting either arm's percentage)",
+    );
+}
+
+/// The net win at the real `strips_used` ceiling (срез 52's correctness gate
+/// above measures it at 3, not срез 51's synthetic 4) вЂ” real `host_rect` and
+/// real `chrome_dl` (actual command count from the real chrome layout, not
+/// срез 51's 130-`FillRect` stand-in). `#[ignore]`d like срез 51's sibling
+/// gate вЂ” run explicitly:
+/// `cargo test -p lumen-shell --profile dev-release bug405_slice52 -- --ignored --nocapture`.
+#[test]
+#[ignore = "manual perf gate (BUG-405 срез 52) вЂ” doc comment has the run command"]
+fn bug405_slice52_chrome_overlay_cache_net_win_on_real_layout() {
+    let (host_rect, chrome_dl, (win_w, win_h)) = bug405_slice52_real_chrome_overlay_fixture();
+    let (_, strips_used, cache) =
+        chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, true, None);
+    let cache = cache.expect("cold build must produce a cache to remember");
+
+    const WARMUP: usize = 20;
+    const SAMPLES: usize = 500;
+
+    let mut hit_stats = lumen_paint::FrameStats::new();
+    let mut rebuild_stats = lumen_paint::FrameStats::new();
+    // Same interleaved-per-round shape as срез 51 (docs/perf-method.md) вЂ” both
+    // arms see the same cache/allocator warmth instead of one racing first.
+    for i in 0..WARMUP + SAMPLES {
+        let t0 = std::time::Instant::now();
+        let (framed, _, new_cache) =
+            chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, true, Some(&cache));
+        let hit_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        assert!(new_cache.is_none(), "must stay a HIT for the whole loop");
+        std::hint::black_box(&framed);
+
+        let t1 = std::time::Instant::now();
+        let (framed2, strips2, _) =
+            chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, false, None);
+        let rebuild_ms = t1.elapsed().as_secs_f32() * 1000.0;
+        assert_eq!(strips2, strips_used);
+        std::hint::black_box(&framed2);
+
+        if i >= WARMUP {
+            hit_stats.record(hit_ms);
+            rebuild_stats.record(rebuild_ms);
+        }
+    }
+
+    let hit_summary = hit_stats.summary().expect("samples collected");
+    let rebuild_summary = rebuild_stats.summary().expect("samples collected");
+    eprintln!("{}", hit_summary.display_with("BUG405_S52_HIT_REAL"));
+    eprintln!("{}", rebuild_summary.display_with("BUG405_S52_REBUILD_REAL"));
+    let saved = (1.0 - hit_summary.min_ms / rebuild_summary.min_ms) * 100.0;
+    eprintln!(
+        "cache-on saves {saved:.1}% at strips_used={strips_used} on the REAL chrome layout \
+         (cmds={}, by min of {SAMPLES} interleaved samples)",
+        chrome_dl.len(),
+    );
+}
