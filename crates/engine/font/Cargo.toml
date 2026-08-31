@@ -27,14 +27,14 @@ default = ["rustybuzz-shaping"]
 # `rustybuzz`-backed `TextShaper` (LIB-1, ADR-027): full complex-script
 # shaping (mark attachment, Arabic joining, Indic reordering) that
 # `crate::shape::Shaper`'s own `GSUB`/`GPOS` engine (stage-1,
-# Latin/Cyrillic-only) does not implement. Compiled in by default so it can
-# be reached without a rebuild, but NOT yet the active engine for production
-# rendering — `lumen_font::active_text_shaper` still defaults to the own
-# engine until `LIB-2` re-shoots the graphic-tests/CPU/paint snapshot
-# references a shaper swap drifts; set `LUMEN_RUSTYBUZZ_SHAPING=1` to opt in
-# before then. Disabling this feature drops the `rustybuzz`/`ttf-parser`
-# dependency entirely. The own engine is removed at `LIB-3`, once `LIB-2`'s
-# re-shot references confirm the replacement.
+# Latin/Cyrillic-only) does not implement. Compiled in by default and, since
+# `LIB-2` re-shot the graphic-tests/CPU/paint snapshot references the swap
+# drifts, also the active engine for production rendering —
+# `lumen_font::active_text_shaper` defaults to it; set
+# `LUMEN_OWN_TEXT_SHAPING=1` to roll back to the own engine. Disabling this
+# feature drops the `rustybuzz`/`ttf-parser` dependency entirely and falls
+# back to the own engine unconditionally. The own engine itself is removed
+# at `LIB-3`, once the swap has held.
 rustybuzz-shaping = ["dep:rustybuzz"]
 
 # Политики проекта как машинные проверки — [workspace.lints] в корневом
