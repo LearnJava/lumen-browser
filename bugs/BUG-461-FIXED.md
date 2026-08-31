@@ -1,8 +1,51 @@
 # BUG-461 — три легаси-оверлея (палитра/щиты/разрешения) хит-тестят мимо движкового хрома
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-31
 **Компонент:** shell (`crates/shell/src/main.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`)
 **Найден:** P1, при разборе BUG-404 (2026-07-31) — третий-пятый сайт того же аудита CC-15-4, вынесен в отдельный баг, потому что фикс не сводится к простой замене `toolbar::CHROME_H` → `page_offset()` (в отличие от сайтов 1-2, закрытых в BUG-404).
+
+## Закрытие (P3, 2026-08-31)
+
+Выбран путь 1 из «Почему не просто добавить `data-action`» ниже — измерить реальный
+layout-rect нужного chrome-узла и передавать его в существующие `hit_test()` вместо
+жёстких констант; минимальный риск регрессии, путь 2 (новые `ChromeAction`) не
+понадобился.
+
+Три новых метода на `Lumen` (`crates/shell/src/chrome_ui.rs`), рядом с
+`chrome_omni_input_rect`/`page_offset` — тем же приёмом, каким CC-5 уже мерит
+`chrome_page_host_rect`:
+
+* `chrome_cp_box_rect()` — рект `.cp-box`. У `#cpOverlay` в ассете ровно один
+  ребёнок (`.cp-box` не несёт своего `id`), так что это `first().rect` его бокса.
+* `chrome_cp_row_rects()` — рект каждого текущего `.cp-row` из `#cpList.children`,
+  в том же `scroll_row`-относительном порядке, в котором `chrome_model_snapshot`
+  их строит (`palette_results.skip(scroll_row).take(MAX_VISIBLE_ROWS)`) — индекс
+  `i` в списке это абсолютный `scroll_row + i`.
+* `chrome_perm_popover_rect()` — рект `#permPopover`, общий для щитов и разрешений.
+
+`panels::command_palette::hit_test` переписан: принимает `box_rect`/`row_rects`
+вместо `viewport_w` и убранных `PANEL_WIDTH`(560, реальный CSS `.cp-box` — 600)/
+`TOP_MARGIN`/`INPUT_H`/`ROW_H` — сама разница 560 vs 600 уже объясняла, почему клик
+у края реального бокса засчитывался как Dismiss. `panels::shields_panel::hit_test`/
+`panels::permission_panel::hit_test` переписаны на измеренный `popover_rect` вместо
+`window_w`/`toolbar::CHROME_H`-геометрии; внутренние пропорции (close-кнопка
+20×20, порог toggle-зоны 55% высоты у щитов; `HEADER_H`/`ROW_H`/`BTN_W` у
+разрешений) не подгонялись под реальную разметку `#permPopover` (grid статистики +
+`set-row` + 4×`perm-row` с раздельными allow/deny-кнопками) — это отдельная,
+более крупная переделка модели (путь 2), а не то, что было измеряемо сломано в
+этой находке; см. «Что уже подтверждено» ниже про недостающий close-контрол.
+
+Три вызывающих места в `crates/shell/src/app/window_event/mouse_input.rs`
+обновлены под новые сигнатуры; при отсутствии ещё не построенного chrome-layout
+(`None`) используется `Rect::ZERO`, что гарантированно не матчит ни один клик
+(вырожденный случай безопасен по построению — `x < 0 || x >= 0` истинно для
+любого `x >= 0`).
+
+Гейт: `cargo clippy -p lumen-shell --all-targets -- -D warnings` чист,
+`cargo test -p lumen-shell` (полный пакет) — 1659/1659 OK, включая переписанные
+юнит-тесты трёх панелей (координаты теперь берутся из тестового измеренного
+rect, а не из вычисляемого `box_origin`/`panel_origin`) и новый регрессионный
+тест на саму найденную ширину 560-vs-600.
 
 ## Симптом
 

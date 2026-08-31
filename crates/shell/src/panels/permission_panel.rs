@@ -19,28 +19,12 @@ use std::collections::HashMap;
 
 // ── Visual constants ─────────────────────────────────────────────────────────
 
-/// Width of the floating permission panel in CSS px.
-pub const PANEL_W: f32 = 240.0;
-/// Height of the floating permission panel in CSS px.
-///
-/// Includes the header, the four permission rows, and the reserved
-/// [`FINE_PRINT_H`] block at the bottom for the session-only disclaimer.
-pub const PANEL_H: f32 = HEADER_H + 4.0 * ROW_H + FINE_PRINT_H;
-/// Top offset from the tab-bar bottom edge (CSS px).
-const PANEL_TOP_OFFSET: f32 = 4.0;
-/// Left margin from the window edge (CSS px).
-const PANEL_LEFT_MARGIN: f32 = 8.0;
 /// Height of the header row (origin + close button).
 const HEADER_H: f32 = 28.0;
 /// Height of each permission row.
 const ROW_H: f32 = 30.0;
 /// Horizontal padding inside the panel.
 const PAD_X: f32 = 10.0;
-/// Reserved height at the bottom of the panel for the session-only fine
-/// print (divider + up to three wrapped text lines + padding). Sized for
-/// the current disclaimer wording; grows automatically if the string is
-/// ever edited, since [`wrap_text`] output is capped at 3 lines here.
-const FINE_PRINT_H: f32 = 56.0;
 
 const BTN_W: f32 = 54.0;
 
@@ -193,16 +177,22 @@ pub enum PermissionHit {
 
 /// Hit-test a click at CSS-px `(x, y)` against the permission panel.
 ///
-/// Returns `None` when the click is outside the panel.
-/// `tab_bar_h` is the height of the tab bar (panel is anchored below it).
-pub fn hit_test(
-    _panel: &PermissionPanel,
-    x: f32,
-    y: f32,
-    tab_bar_h: f32,
-) -> Option<PermissionHit> {
-    let (px, py) = panel_origin(tab_bar_h);
-    if x < px || x >= px + PANEL_W || y < py || y >= py + PANEL_H {
+/// Returns `None` when the click is outside the panel. BUG-461:
+/// `popover_rect` is `#permPopover`'s real measured layout rect
+/// (`Lumen::chrome_perm_popover_rect`) — the shared engine-drawn popover
+/// this panel's controls now render into — not a guess anchored to the
+/// window's left edge/`toolbar::CHROME_H`, which drifted from where
+/// `chrome.css` actually places it (nested under `.omnibox-wrap`, anchored
+/// to the omnibox/shield button, not the window). The internal
+/// header/row/button proportions below stay a heuristic (the real markup's
+/// shield-stats block and allow/deny button pair don't match this panel's
+/// single-toggle-per-row model — a residual noted in the bug file, not
+/// fixed here), but the outer bound now matches the real box instead of a
+/// stale corner of the window. A zero-sized `popover_rect` (no chrome
+/// layout yet) safely matches nothing.
+pub fn hit_test(_panel: &PermissionPanel, x: f32, y: f32, popover_rect: lumen_core::geom::Rect) -> Option<PermissionHit> {
+    let (px, py, pw, ph) = (popover_rect.x, popover_rect.y, popover_rect.width, popover_rect.height);
+    if x < px || x >= px + pw || y < py || y >= py + ph {
         return None;
     }
 
@@ -210,7 +200,7 @@ pub fn hit_test(
     let rel_y = y - py;
 
     // Close button: top-right 20×20 area of the header.
-    if rel_x >= PANEL_W - 20.0 && rel_y < HEADER_H {
+    if rel_x >= pw - 20.0 && rel_y < HEADER_H {
         return Some(PermissionHit::Close);
     }
 
@@ -220,7 +210,7 @@ pub fn hit_test(
         let row_bot = row_top + ROW_H;
         if rel_y >= row_top && rel_y < row_bot {
             // Toggle button: right side of the row.
-            let btn_x = PANEL_W - PAD_X - BTN_W;
+            let btn_x = pw - PAD_X - BTN_W;
             if rel_x >= btn_x && rel_x < btn_x + BTN_W {
                 return Some(PermissionHit::Toggle(*kind));
             }
@@ -229,13 +219,6 @@ pub fn hit_test(
     }
 
     Some(PermissionHit::Empty)
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Top-left corner of the permission panel in CSS px.
-fn panel_origin(tab_bar_h: f32) -> (f32, f32) {
-    (PANEL_LEFT_MARGIN, tab_bar_h + PANEL_TOP_OFFSET)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -338,49 +321,60 @@ mod tests {
         );
     }
 
-    // ── Hit-testing ──────────────────────────────────────────────────────────
+    // ── Hit-testing (BUG-461: against a measured popover rect) ────────────────
+
+    fn test_popover_rect() -> lumen_core::geom::Rect {
+        lumen_core::geom::Rect::new(700.0, TAB_H + 4.0, 240.0, 200.0)
+    }
 
     #[test]
     fn hit_outside_panel_returns_none() {
         let p = make_panel(Some("https://example.com"));
-        // Far top-left outside panel.
-        assert_eq!(hit_test(&p, 500.0, TAB_H + 2.0, TAB_H), None);
+        // Far top-left, well outside the measured popover rect.
+        assert_eq!(hit_test(&p, 0.0, TAB_H + 2.0, test_popover_rect()), None);
+    }
+
+    #[test]
+    fn hit_outside_zero_rect_returns_none() {
+        // No chrome layout yet — a zero-sized rect must match nothing.
+        let p = make_panel(Some("https://example.com"));
+        assert_eq!(hit_test(&p, 0.0, 0.0, lumen_core::geom::Rect::ZERO), None);
     }
 
     #[test]
     fn hit_close_button() {
         let p = make_panel(Some("https://example.com"));
-        let (px, py) = panel_origin(TAB_H);
-        let hit = hit_test(&p, px + PANEL_W - 5.0, py + 5.0, TAB_H);
+        let r = test_popover_rect();
+        let hit = hit_test(&p, r.x + r.width - 5.0, r.y + 5.0, r);
         assert_eq!(hit, Some(PermissionHit::Close));
     }
 
     #[test]
     fn hit_first_toggle_button() {
         let p = make_panel(Some("https://example.com"));
-        let (px, py) = panel_origin(TAB_H);
-        let btn_x = px + PANEL_W - PAD_X - BTN_W + BTN_W / 2.0;
-        let btn_y = py + HEADER_H + ROW_H / 2.0;
-        let hit = hit_test(&p, btn_x, btn_y, TAB_H);
+        let r = test_popover_rect();
+        let btn_x = r.x + r.width - PAD_X - BTN_W + BTN_W / 2.0;
+        let btn_y = r.y + HEADER_H + ROW_H / 2.0;
+        let hit = hit_test(&p, btn_x, btn_y, r);
         assert_eq!(hit, Some(PermissionHit::Toggle(PermissionKind::Camera)));
     }
 
     #[test]
     fn hit_second_toggle_button() {
         let p = make_panel(Some("https://example.com"));
-        let (px, py) = panel_origin(TAB_H);
-        let btn_x = px + PANEL_W - PAD_X - BTN_W + BTN_W / 2.0;
-        let btn_y = py + HEADER_H + ROW_H + ROW_H / 2.0;
-        let hit = hit_test(&p, btn_x, btn_y, TAB_H);
+        let r = test_popover_rect();
+        let btn_x = r.x + r.width - PAD_X - BTN_W + BTN_W / 2.0;
+        let btn_y = r.y + HEADER_H + ROW_H + ROW_H / 2.0;
+        let hit = hit_test(&p, btn_x, btn_y, r);
         assert_eq!(hit, Some(PermissionHit::Toggle(PermissionKind::Microphone)));
     }
 
     #[test]
     fn hit_row_label_returns_empty() {
         let p = make_panel(Some("https://example.com"));
-        let (px, py) = panel_origin(TAB_H);
+        let r = test_popover_rect();
         // Click the label area (left side of row), not the button.
-        let hit = hit_test(&p, px + 30.0, py + HEADER_H + 15.0, TAB_H);
+        let hit = hit_test(&p, r.x + 30.0, r.y + HEADER_H + 15.0, r);
         assert_eq!(hit, Some(PermissionHit::Empty));
     }
 
