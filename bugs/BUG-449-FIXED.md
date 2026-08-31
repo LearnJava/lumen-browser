@@ -157,7 +157,7 @@ A/B по вендоренной категории `html/canvas/element` (1 496 
   тем же молчаливым враньём, из-за которого заведён этот баг.
 * `ImageBitmap`, `ImageBitmapRenderingContext`, `OffscreenCanvasRenderingContext2D` —
   по-прежнему литералы. У `OffscreenCanvas` свой шим (`offscreen_canvas.rs`), и его
-  `getImageData()` вовсе не принимает аргументов — это [BUG-456](BUG-456-OPEN.md);
+  `getImageData()` вовсе не принимает аргументов — это [BUG-456](BUG-456-FIXED.md), fixed 2026-08-31;
   `ImageBitmap` живёт в отдельном шиме `{width, height, __canvas_id__, close()}`.
 * Члены `HTMLCanvasElement` по-прежнему стоят на **каждом** элементе DOM
   (`'getContext' in div` → `true`) — [BUG-450](BUG-450-FIXED.md), другая сторона той же

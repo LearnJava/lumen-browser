@@ -1385,8 +1385,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/broadcast_channel.rs:101` **fn** `post` — Deliver `json` to every channel named `name` except the sender (`sender_id`)
 `crates/js/src/broadcast_channel.rs:121` **fn** `close` — Remove the channel instance `id` from the global hub and this runtime
 `crates/js/src/broadcast_channel.rs:138` **fn** `drain` — Drain all pending messages addressed to this runtime's channels
-`crates/js/src/canvas2d.rs:413` **fn** `present_rgba` — Present a WebGPU-rendered RGBA8 frame into the `<canvas>` `nid`'s CPU buffer
-`crates/js/src/canvas2d.rs:435` **fn** `flush_dirty` — Drain dirty canvases and return their current RGBA buffers
+`crates/js/src/canvas2d.rs:448` **fn** `present_rgba` — Present a WebGPU-rendered RGBA8 frame into the `<canvas>` `nid`'s CPU buffer
+`crates/js/src/canvas2d.rs:470` **fn** `flush_dirty` — Drain dirty canvases and return their current RGBA buffers
 `crates/js/src/clipboard.rs:35` **fn** `set_clipboard_provider` — Install the host clipboard provider backing `navigator.clipboard`
 `crates/js/src/credentials.rs:49` **fn** `set_credential_provider` — Install the host credential provider backing `navigator.credentials`
 `crates/js/src/css_properties_values_api.rs:18` **struct** `RegisteredPropertiesMap` — Maps property name (e.g. "--my-color") to its definition

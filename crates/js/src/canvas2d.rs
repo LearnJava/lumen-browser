@@ -43,12 +43,16 @@ thread_local! {
     static CANVASES: RefCell<HashMap<u32, Context2D>> = RefCell::new(HashMap::new());
     /// Node indices whose pixel buffer changed since the last [`flush_dirty`].
     static DIRTY: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
-    /// In-flight gradients awaiting `setFillStyle`/`setStrokeStyle`, keyed by object ID.
+    /// In-flight gradients awaiting `setFillStyle`/`setStrokeStyle`, keyed by
+    /// object ID. `pub(crate)`: shared with [`crate::offscreen_canvas`], whose
+    /// `createLinearGradient`/etc natives insert into the same table rather
+    /// than keeping a second one — a `CanvasGradient` is plain data, not tied
+    /// to either registry's canvas keying scheme (BUG-456).
     #[cfg(feature = "v8-backend")]
-    static GRADIENTS: RefCell<HashMap<u32, CanvasGradient>> = RefCell::new(HashMap::new());
-    /// In-flight patterns, keyed by object ID.
+    pub(crate) static GRADIENTS: RefCell<HashMap<u32, CanvasGradient>> = RefCell::new(HashMap::new());
+    /// In-flight patterns, keyed by object ID. `pub(crate)` — see [`GRADIENTS`].
     #[cfg(feature = "v8-backend")]
-    static PATTERNS: RefCell<HashMap<u32, CanvasPattern>> = RefCell::new(HashMap::new());
+    pub(crate) static PATTERNS: RefCell<HashMap<u32, CanvasPattern>> = RefCell::new(HashMap::new());
     /// Auto-increment for gradient/pattern object IDs.
     #[cfg(feature = "v8-backend")]
     static NEXT_PAINT_ID: Cell<u32> = const { Cell::new(1) };
@@ -100,8 +104,9 @@ pub(crate) fn document_noise_seed(origin: &str) -> u64 {
 }
 
 /// Allocate a new unique object ID for a gradient or pattern.
+/// `pub(crate)`: shared with [`crate::offscreen_canvas`] — see [`GRADIENTS`].
 #[cfg(feature = "v8-backend")]
-fn next_paint_id() -> u32 {
+pub(crate) fn next_paint_id() -> u32 {
     NEXT_PAINT_ID.with(|c| {
         let id = c.get();
         c.set(id.wrapping_add(1).max(1));
@@ -120,8 +125,9 @@ fn next_path_id() -> u32 {
 }
 
 /// Decode a hex string (`"ff00aa"`) into bytes. Silently ignores odd-length or bad chars.
+/// `pub(crate)`: shared with [`crate::offscreen_canvas`]'s `putImageData` native.
 #[cfg(feature = "v8-backend")]
-fn decode_hex(s: &str) -> Vec<u8> {
+pub(crate) fn decode_hex(s: &str) -> Vec<u8> {
     let s = s.trim_start_matches("0x");
     let n = s.len() / 2;
     let mut out = Vec::with_capacity(n);
@@ -156,7 +162,13 @@ const BUNDLED_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.
 ///
 /// Iterates space-separated tokens and takes the first one ending in `"px"`.
 /// Falls back to the Canvas 2D spec default (10 px) if no token matches.
-fn parse_canvas_font_size(font: &str) -> f32 {
+///
+/// `pub(crate)`: shared with [`crate::offscreen_canvas`], whose 2D context is
+/// its own independent registry (`OFFSCREEN_CANVASES`, keyed by `canvas_id`
+/// rather than DOM `nid`) but measures text with the same bundled font and the
+/// same font-string grammar — duplicating this parser would drift the two
+/// contexts' `measureText` results apart for no reason (BUG-456).
+pub(crate) fn parse_canvas_font_size(font: &str) -> f32 {
     for part in font.split_ascii_whitespace() {
         if let Some(px) = part.strip_suffix("px")
             && let Ok(v) = px.parse::<f32>()
@@ -170,7 +182,10 @@ fn parse_canvas_font_size(font: &str) -> f32 {
 /// Measure total advance width of `text` in pixels using the bundled Inter font at `pixel_size`.
 ///
 /// Returns a fallback estimate (0.55 × pixel_size per char) when font parsing fails.
-fn measure_text_width(text: &str, pixel_size: f32) -> f64 {
+///
+/// `pub(crate)`: shared with [`crate::offscreen_canvas`] — see
+/// [`parse_canvas_font_size`].
+pub(crate) fn measure_text_width(text: &str, pixel_size: f32) -> f64 {
     let Ok(font) = lumen_font::Font::parse(BUNDLED_FONT) else {
         return text.chars().count() as f64 * f64::from(pixel_size) * 0.55;
     };
@@ -223,7 +238,21 @@ fn text_metrics(nid: u32, text: &str) -> Vec<f64> {
             .map(|ctx| (ctx.font.clone(), ctx.text_align.clone(), ctx.text_baseline.clone()))
             .unwrap_or_default()
     });
-    let pixel_size = parse_canvas_font_size(&font_str);
+    text_metrics_for(&font_str, &text_align, &text_baseline, text)
+}
+
+/// Core of [`text_metrics`], decoupled from the DOM `nid`-keyed [`CANVASES`]
+/// registry: takes the three state strings directly rather than looking them
+/// up, so [`crate::offscreen_canvas`] (its own `canvas_id`-keyed registry) can
+/// call it without duplicating the glyph-box math (BUG-456).
+#[cfg(feature = "v8-backend")]
+pub(crate) fn text_metrics_for(
+    font_str: &str,
+    text_align: &str,
+    text_baseline: &str,
+    text: &str,
+) -> Vec<f64> {
+    let pixel_size = parse_canvas_font_size(font_str);
     let width = measure_text_width(text, pixel_size);
 
     let parsed = lumen_font::Font::parse(BUNDLED_FONT).ok();
@@ -242,7 +271,7 @@ fn text_metrics(nid: u32, text: &str) -> Vec<f64> {
     let scale = pixel_size / upem;
     let font_ascent = f32::from(hhea.ascent) * scale;
     let font_descent = f32::from(hhea.descent) * scale; // negative, y-up
-    let baseline = baseline_offset_px(&text_baseline, font_ascent, pixel_size);
+    let baseline = baseline_offset_px(text_baseline, font_ascent, pixel_size);
 
     // Ink box of the whole run, in y-up pixels around the alphabetic baseline.
     let mut pen = 0.0f32;
@@ -272,7 +301,7 @@ fn text_metrics(nid: u32, text: &str) -> Vec<f64> {
     }
     // The horizontal extents are measured from the alignment point, which is
     // where the text is anchored — not from the pen start.
-    let anchor = match text_align.as_str() {
+    let anchor = match text_align {
         "center" => width as f32 * 0.5,
         "right" | "end" => width as f32,
         _ => 0.0,
@@ -304,6 +333,15 @@ fn text_metrics(nid: u32, text: &str) -> Vec<f64> {
 /// `y` IS the baseline position (not the top of the glyph).
 #[cfg(feature = "v8-backend")]
 fn render_text_to_canvas(nid: u32, text: &str, x: f32, y: f32, color: CanvasColor) {
+    with_canvas(nid, |ctx| render_text_glyphs_for(ctx, text, x, y, color));
+}
+
+/// Core of [`render_text_to_canvas`], operating directly on a `Context2D`
+/// (its `font`/`text_align`/`text_baseline` fields) instead of looking them up
+/// by DOM `nid` in [`CANVASES`] — shared with [`crate::offscreen_canvas`],
+/// whose contexts live in a different registry keyed by `canvas_id` (BUG-456).
+#[cfg(feature = "v8-backend")]
+pub(crate) fn render_text_glyphs_for(ctx: &mut Context2D, text: &str, x: f32, y: f32, color: CanvasColor) {
     if text.is_empty() {
         return;
     }
@@ -312,12 +350,9 @@ fn render_text_to_canvas(nid: u32, text: &str, x: f32, y: f32, color: CanvasColo
         font.head(), font.hhea(), font.cmap(), font.hmtx(),
     ) else { return };
 
-    let (font_str, text_align, text_baseline) = CANVASES.with(|c| {
-        c.borrow()
-            .get(&nid)
-            .map(|ctx| (ctx.font.clone(), ctx.text_align.clone(), ctx.text_baseline.clone()))
-            .unwrap_or_default()
-    });
+    let font_str = ctx.font.clone();
+    let text_align = ctx.text_align.clone();
+    let text_baseline = ctx.text_baseline.clone();
 
     let pixel_size = parse_canvas_font_size(&font_str);
     let units_per_em = head.units_per_em;
@@ -372,7 +407,7 @@ fn render_text_to_canvas(nid: u32, text: &str, x: f32, y: f32, color: CanvasColo
         .iter()
         .map(|(gx, gy, gw, gh, px, c)| (*gx, *gy, *gw, *gh, px.as_slice(), *c))
         .collect();
-    with_canvas(nid, |ctx| ctx.fill_text_glyphs(&glyphs));
+    ctx.fill_text_glyphs(&glyphs);
 }
 
 /// Run `f` against the context for `nid`, returning `R::default()` if absent.

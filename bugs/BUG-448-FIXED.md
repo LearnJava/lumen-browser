@@ -120,7 +120,7 @@ test canvas returns the *whole* canvas's bytes instead of the requested
 * У 2D-контекста `OffscreenCanvas` свой шим (`offscreen_canvas.rs`, отдельный
   `rt.eval` — урок BUG-780), где `getImageData()` не принимает аргументов
   вовсе и отдаёт странице сырую транспортную строку. Это
-  [BUG-456](BUG-456-OPEN.md), у него свой указатель в `STATUS-P3.md`.
+  [BUG-456](BUG-456-FIXED.md), fixed 2026-08-31.
 * `ImageData`/контекст остаются объектными литералами без прототипа —
   [BUG-449](BUG-449-FIXED.md). Здесь добавлен только член `colorSpace`, сама
   объектная модель не трогалась.
