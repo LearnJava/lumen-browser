@@ -174,6 +174,8 @@ Full list (8 items) — [docs/plan/architecture.md](docs/plan/architecture.md) �
 
 Full tables (permanent + provisional + Lumen core) — [docs/plan/tech-stack.md](docs/plan/tech-stack.md) §5.
 
+**The boundary is decision ownership, not subsystem name** ([ADR-027](docs/decisions/ADR-027-own-vs-vendored-boundary.md), 2026-08-31). Ours wherever *we* decide what correct means (layout, cascade, paint order, browsing contexts, what the browser shows or refuses to send); vendored wherever a committee already decided and wrote it into a spec (file format, Unicode table, OpenType lookup, URL state machine, compression, crypto). The test: *if we implement this ourselves and disagree with the reference implementation, are we wrong by definition?* — if yes, take the implementation. This replaced §5's name list, which had drifted out of sync with the code in three places (it claimed an own PNG decoder and an own DEFLATE — both are `zune_png`/`flate2` — and listed `tiny-skia` as never-take while it is a `lumen-paint` dependency). `rustybuzz`, `ttf-parser`, `resvg`/`usvg` and `url` left the never-take list; `html5ever`, `cssparser`, `stylo`, `taffy`, `hyper`, `hickory-resolver`, `encoding_rs`, `adblock`, `readability`, `tokio` and `egui`/`iced`/`Slint` stay forbidden permanently — those are the engine. The trait-anchor and per-dependency justification rules below are unchanged.
+
 ### No new dep without justification
 
 Every new `[dependencies]` entry requires this in the commit body:
