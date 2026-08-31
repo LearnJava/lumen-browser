@@ -6,6 +6,7 @@
 //! (`docs/tasks/p1-monolith-split-queue.md` §4, группа DL, батч DL-1).
 
 use super::*;
+use super::svg_text_decoration::{char_has_ink_descender, emit_decoration_line_skip_ink, SkipInkParams};
 
 #[cfg(test)]
 mod highlight_tests {
