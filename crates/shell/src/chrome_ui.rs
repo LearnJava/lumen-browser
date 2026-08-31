@@ -275,6 +275,11 @@ impl Lumen {
             );
             self.chrome_dl_content_hash = Some(actual_hash);
         }
+        // BUG-405 срез 50: bumped unconditionally (not just when `dl`'s bytes
+        // actually differ) — a safe superset of "content changed" that lets
+        // `ChromeOverlayFrameCache` invalidate on generation equality alone,
+        // no hashing needed. See the struct's own doc comment.
+        self.chrome_layout_generation = self.chrome_layout_generation.wrapping_add(1);
         self.chrome_layout = Some((layout, dl));
     }
 
@@ -1580,6 +1585,139 @@ fn salvage_layout_boxes(
             i += 1;
         }
     }
+}
+
+/// BUG-405 срез 50 (п.85 "вариант (б)"): the already strip-clipped and
+/// caret-painted chrome overlay segment ([`Lumen::relayout_chrome_host`]'s
+/// doc comment on `chrome_layout` — "painted at the front of `overlay_buf`
+/// every frame") — cached across `RedrawRequested` calls instead of rebuilt
+/// (up to 4 `chrome_dl.extend_from_slice` copies, one per non-degenerate
+/// clip strip around the page host, see the `chrome_mix` diagnostic) when
+/// nothing that shapes it changed since the frame this cache was built for.
+///
+/// Validity is a plain field-equality check against the four inputs the
+/// build actually reads (`generation`, `host_rect`, `viewport`, `caret`) —
+/// no content hashing needed, because [`Lumen::chrome_layout_generation`] is
+/// a safe SUPERSET of "chrome_dl's bytes changed": [`Lumen::relayout_chrome_host`]
+/// bumps it on every pass, whether or not the pass actually produced
+/// different bytes (срезы 48/49 measured `predict_same`/`actual_same`
+/// agreement on a steady-state repeat, but this cache does not need that
+/// guarantee — a spurious rebuild on an unrelated bump costs one frame, a
+/// false HIT would cost a wrong pixel forever). Never consulted while a
+/// chrome CSS transition/animation is live (the caller's `chrome_dl_anim` is
+/// `Some`) — an animated frame's content differs every tick by construction.
+pub(crate) struct ChromeOverlayFrameCache {
+    /// [`Lumen::chrome_layout_generation`] the cache was built under.
+    pub(crate) generation: u64,
+    /// `Lumen::chrome_page_host_rect` the strips were cut around.
+    pub(crate) host_rect: Rect,
+    /// `(window width, window height)` in CSS px — the strip geometry's other
+    /// input besides `host_rect`.
+    pub(crate) viewport: (f32, f32),
+    /// The hand-painted omnibox caret's `(rect, color)`, or `None` while
+    /// nothing should be drawn — mirrors the condition the caller gates the
+    /// caret `FillRect` on.
+    pub(crate) caret: Option<(Rect, lumen_layout::Color)>,
+    /// How many non-degenerate strips `chrome_dl` was copied into when this
+    /// was built — kept only so a cache HIT can still print the `chrome_mix`
+    /// diagnostic line (`build: chrome … | chrome WxH=N cmds …`).
+    pub(crate) strips_used: usize,
+    /// The assembled segment itself — clip strips around `chrome_dl` plus the
+    /// caret fill, ready to be prepended to `overlay_buf` with one clone.
+    pub(crate) framed: lumen_paint::DisplayList,
+}
+
+/// BUG-405 срез 50: reuse-or-build decision behind [`ChromeOverlayFrameCache`],
+/// factored out as a free function (no `&Lumen`/renderer needed) so it is
+/// unit-testable directly вЂ” срез 49 found building a whole `Lumen` for one
+/// diagnostic test disproportionate, and the same reasoning applies here.
+///
+/// Returns the assembled segment, the strip count (for the `chrome_mix`
+/// diagnostic), and, when a NEW cache should be remembered, `Some` of it.
+/// `None` in that third slot means "leave `Lumen::chrome_overlay_frame_cache`
+/// exactly as it is" вЂ” true both on a HIT (the existing cache is still the
+/// right one to keep) and when `cache_enabled` is `false` (nothing to
+/// remember, and the caller does not clear a stale entry either вЂ” the next
+/// eligible frame will simply overwrite it).
+#[allow(clippy::too_many_arguments)] // BUG-405 срез 50: same shape as lumen-paint's Renderer::compose_page
+pub(crate) fn chrome_overlay_segment(
+    chrome_dl: &[lumen_paint::DisplayCommand],
+    host: Rect,
+    win_w: f32,
+    win_h: f32,
+    caret_plan: Option<(Rect, lumen_layout::Color)>,
+    generation: u64,
+    cache_enabled: bool,
+    cache: Option<&ChromeOverlayFrameCache>,
+) -> (lumen_paint::DisplayList, usize, Option<ChromeOverlayFrameCache>) {
+    if cache_enabled && let Some(c) = cache.filter(|c| {
+        c.generation == generation
+            && c.host_rect == host
+            && c.viewport == (win_w, win_h)
+            && c.caret == caret_plan
+    }) {
+        return (c.framed.clone(), c.strips_used, None);
+    }
+    let (framed, strips_used) = build_chrome_overlay_strips(chrome_dl, host, win_w, win_h, caret_plan);
+    let new_cache = cache_enabled.then(|| ChromeOverlayFrameCache {
+        generation,
+        host_rect: host,
+        viewport: (win_w, win_h),
+        caret: caret_plan,
+        strips_used,
+        framed: framed.clone(),
+    });
+    (framed, strips_used, new_cache)
+}
+
+/// BUG-405 срез 50: the actual clip-strip + caret build, unchanged from the
+/// code [`chrome_overlay_segment`] replaced inline in `RedrawRequested`.
+fn build_chrome_overlay_strips(
+    chrome_dl: &[lumen_paint::DisplayCommand],
+    host: Rect,
+    win_w: f32,
+    win_h: f32,
+    caret_plan: Option<(Rect, lumen_layout::Color)>,
+) -> (lumen_paint::DisplayList, usize) {
+    let strips = [
+        Rect { x: 0.0, y: 0.0, width: win_w, height: host.y },
+        Rect {
+            x: 0.0,
+            y: host.y + host.height,
+            width: win_w,
+            height: (win_h - (host.y + host.height)).max(0.0),
+        },
+        Rect { x: 0.0, y: host.y, width: host.x, height: host.height },
+        Rect {
+            x: host.x + host.width,
+            y: host.y,
+            width: (win_w - (host.x + host.width)).max(0.0),
+            height: host.height,
+        },
+    ];
+    let mut framed = lumen_paint::DisplayList::new();
+    let mut strips_used = 0_usize;
+    for strip in strips {
+        if strip.width <= 0.0 || strip.height <= 0.0 {
+            continue;
+        }
+        strips_used += 1;
+        framed.push(lumen_paint::DisplayCommand::PushClipRect { rect: strip });
+        framed.extend_from_slice(chrome_dl);
+        framed.push(lumen_paint::DisplayCommand::PopClip);
+    }
+    if let Some((rect, color)) = caret_plan {
+        framed.push(lumen_paint::DisplayCommand::FillRect { rect, color });
+    }
+    (framed, strips_used)
+}
+
+/// `true` if [`ChromeOverlayFrameCache`] reuse is disabled
+/// (`LUMEN_NO_CHROME_OVERLAY_CACHE=1`) вЂ” A/B lever (`docs/perf-method.md`),
+/// same shape as `frame_pacing::fast_scroll_degrade_disabled`.
+pub(crate) fn chrome_overlay_cache_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_CHROME_OVERLAY_CACHE").is_ok_and(|v| v == "1"))
 }
 
 /// CC-10: which modal `Lumen::chrome_modal_ancestor` resolved a `CloseModal`
