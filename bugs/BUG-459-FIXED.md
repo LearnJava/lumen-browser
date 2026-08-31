@@ -1,6 +1,6 @@
 # BUG-459: внешний `<script type=module src>` теряет свой реальный URL — относительный/динамический `import()` из него резолвится от адреса страницы, а не от адреса скрипта
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-31 (P3, ревизия — исправлено ранее вместе с V8 ESM-переработкой, до этой сессии)
 **Дата:** 2026-07-30
 **Компонент:** js (V8 ESM, `crates/js/src/v8_esm.rs` + вызывающий код в `crates/shell/src/main.rs`)
 **Найден:** P1 при проверке [BUG-303](BUG-303-FIXED.md) (github.com JS-hang)
@@ -74,3 +74,48 @@ webpack-сплиттинг (динамический `import()` чанков) б
 Регресс-тест: внешний модуль А (зарегистрирован под `https://cdn.test/a.js`)
 делает `import('./b.js')` — должен резолвиться в `https://cdn.test/b.js`,
 не в `<page-url>/b.js`. Аналогично для `import.meta.url` внутри А.
+
+## Ревизия 2026-08-31 (P3)
+
+Первая строка `STATUS-P3.md`, не считая заведомо-DEBTOR/чужих записей
+впереди (BUG-282/286/288/290/306/330 — все закрыты как KNOWN_DEBTOR/вне
+скоупа P3; BUG-341 — паузирован пользователем, домен P1). Проверено
+чтением кода + двумя новыми regression-тестами
+(`eval_module_at_resolves_relative_static_import_against_own_url`,
+`eval_module_at_resolves_relative_dynamic_import_against_own_url`,
+`crates/js/src/v8_runtime/tests/mod.rs`), оба зелёные на текущем `main`.
+
+Заявленный дефект уже не воспроизводится:
+
+- `v8_esm::evaluate_module_url` (вызывается из `eval_module_at`/
+  `eval_module_at_and_report`, `v8_runtime/eval.rs`) регистрирует внешний
+  модуль под его собственным `url` (`register_source(url, source)`), а не
+  под `lumen://inline-N`.
+- `resolve_module_callback` (статический `import`) и `dynamic_import_callback`
+  (динамический `import()`) оба берут базой резолвинга специфаер САМОГО
+  referrer-модуля (`specifier_by_hash` по identity-hash / V8 resource name),
+  а не `page_url` — фолбэк на `page_url` остался только в
+  `evaluate_entry_module` (инлайновые `<script type=module>`, у которых
+  своего URL действительно нет).
+- `import.meta.url` внешнего модуля тоже верный: `module_text` прогоняет
+  `transform_import_meta` с `specifier` — тем же URL, что был зарегистрирован
+  для этого модуля, а не с `page_url`.
+
+Пункты 1–3 предложенного фикса, таким образом, уже реализованы (другим
+путём, чем набросано выше — не через `Vec<(Option<String>, String)>` в
+`main.rs`, а через отдельный метод `eval_module_at`/`eval_module_at_and_report`
+с собственным specifier-параметром). Похоже, устранено попутно вместе с
+переработкой V8 ESM-стека (S12b-23, тесты рядом отмечены «BUG-350: none of
+this worked before S12b-23») — заявка была написана 2026-07-30 против
+`main.rs`-кода того времени (`module_scripts: Vec<String>` без URL,
+единый `rt.eval_module(src)`), которого в файле уже нет: SPLIT разнёс
+`main.rs` на модули, сборка тел скриптов теперь в
+`crates/shell/src/scripts.rs::ResolvedScript{url, ...}`, вызов —
+`rt.eval_module_at_and_report(url, src)` при `Some(url)`. Пункт 4 (не
+трогать QuickJS-путь) неприменим — QuickJS полностью выпилен из воркспейса
+S12b-F2/F4 (2026-08-04), второго движка не существует.
+
+Единственное, чего не хватало, — регресс-теста именно на это поведение
+(существующий `eval_module_at_and_report_runtime_error_fires_window_error`
+проверяет только отчёт об исключении, BUG-591, не базу резолвинга) — он
+добавлен этой ревизией.
