@@ -4019,13 +4019,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/renderer.rs:7350` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
 `crates/engine/paint/src/renderer.rs:7365` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
 `crates/engine/paint/src/renderer.rs:7378` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
-`crates/engine/paint/src/renderer.rs:7712` **fn** `render` — `scroll_y ≥ 0`, `scroll_x ≥ 0`. Negatives caller обязан клампить до 0
-`crates/engine/paint/src/renderer.rs:7724` **fn** `set_content_epoch` — Объявляет версию списка `content` ближайшего кадра (BUG-405 срез 39)
-`crates/engine/paint/src/renderer.rs:7793` **fn** `render_with_anim` — Как [`render`](Self::render), но с диапазонами анимируемых сегментов
-`crates/engine/paint/src/renderer.rs:13325` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
-`crates/engine/paint/src/renderer.rs:13351` **fn** `render_tile`
-`crates/engine/paint/src/renderer.rs:13390` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
-`crates/engine/paint/src/renderer.rs:13508` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
+`crates/engine/paint/src/renderer/frame_entry.rs:18` **fn** `render` — `scroll_y ≥ 0`, `scroll_x ≥ 0`. Negatives caller обязан клампить до 0
+`crates/engine/paint/src/renderer/frame_entry.rs:30` **fn** `set_content_epoch` — Объявляет версию списка `content` ближайшего кадра (BUG-405 срез 39)
+`crates/engine/paint/src/renderer/frame_entry.rs:99` **fn** `render_with_anim` — Как [`render`](Self::render), но с диапазонами анимируемых сегментов
+`crates/engine/paint/src/renderer/frame_entry.rs:259` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
+`crates/engine/paint/src/renderer/frame_entry.rs:285` **fn** `render_tile`
+`crates/engine/paint/src/renderer/frame_entry.rs:324` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
+`crates/engine/paint/src/renderer/frame_entry.rs:442` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
 `crates/engine/paint/src/renderer/texture_pool.rs:21` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
 `crates/engine/paint/src/renderer/texture_pool.rs:397` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
 `crates/engine/paint/src/renderer/texture_pool.rs:406` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
