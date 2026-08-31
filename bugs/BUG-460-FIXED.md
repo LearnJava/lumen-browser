@@ -1,8 +1,8 @@
 # BUG-460 — column-direction flex: `align-items` other than `stretch` doesn't shrink-to-fit the cross size (width)
 
-**Статус:** OPEN
-**Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_flex`)
-**Найден:** P1, 2026-07-31, при фиксе [BUG-425](BUG-425-OPEN.md)
+**Статус:** FIXED (обнаружено ревизией) 2026-08-31
+**Компонент:** layout (`crates/engine/layout/src/box_tree/flex.rs::lay_out_flex`)
+**Найден:** P1, 2026-07-31, при фиксе [BUG-425](BUG-425-FIXED.md)
 
 ## Симптом
 
@@ -39,7 +39,7 @@ cargo build -p lumen-shell --profile dev-release
 
 ## Note
 
-This became directly visible only after [BUG-425](BUG-425-OPEN.md) fixed a
+This became directly visible only after [BUG-425](BUG-425-FIXED.md) fixed a
 related-but-distinct defect: `BoxKind::FormControl` (`<button>`, `<select>`)
 was unconditionally treated as a CSS "replaced element" for auto-width
 purposes, so it got `width: 0` instead of filling available space — for
@@ -67,3 +67,37 @@ laid out at content-width-minus-margins unconditionally in the column final
 pass, `box_tree.rs` around `lay_out(&mut children[i], content_x, content_y +
 main_cursor, content_width - m_l - m_r, …)`) — that call would need to pass a
 narrower/shrink-to-fit width for non-stretch alignments instead.
+
+## Резолюция (P3-ревизия, 2026-08-31)
+
+Ревизия строки STATUS-P3.md обнаружила, что описанный дефект уже устранён —
+не под этим номером бага. Коммит `e9566ca38` (2026-08-18, «Флекс: auto-поля,
+потолок роста и поперечная ось колоночного контейнера», разбирал независимый
+живой случай `tbank.ru/login/`) добавил в `lay_out_flex` именно ту поперечную
+ось колоночного контейнера, которую этот баг описывал: `cross_align`
+(`align_self` поверх `align_items`), `aligned_cross` (Start/End/Center) даёт
+`used_cross` через `max_content_outer_width`/`min_content_outer_width`
+(shrink-to-fit) вместо безусловного `avail_cross`, плюс позиционирование
+`cross_shift` по тому же правилу, что и строчный случай. Задача не
+упоминала BUG-460 явно — найдена по совпадению формулировки «поперечная ось
+колоночного контейнера» с текстом этого бага, не по номеру.
+
+Проверено репро из этого файла (`--dump-layout assets/chrome/chrome.html`):
+`.nt-restore` теперь `FormControl rect=(538.44, 315.08, 187.12, 21.00)`
+внутри родителя `.newtab` `Block rect=(240.00, 36.00, 784.00, 320.08)`
+(content box `x ∈ [260, 1004]`, padding 20px) — центр кнопки
+538.44 + 187.12/2 = 632.0 точно совпадает с центром контейнера
+240 + 784/2 = 632.0, при ширине 187.12px вместо растяжения на все 744px
+content-ширины. Соответствует ожиданию из `## Repro`.
+
+Тесты, добавленные 2026-08-18, покрывали только ветку auto-margin
+(`margin: auto` на поперечной оси); голый `align-items`/`align-self` без
+auto-полей и без явного `width` — точный случай этого бага — не имел
+регресс-теста. Добавлены три в
+`crates/engine/layout/src/box_tree/tests/flex_align_content.rs`:
+`flex_column_align_items_center_shrinks_to_fit_and_centers`,
+`flex_column_align_items_flex_end_shrinks_to_fit_and_pushes_to_end`,
+`flex_column_align_self_center_overrides_container_align_items`.
+
+`.ws-add`/`align-items: stretch` (упомянутый в `## Note`) не проверялся
+отдельно этой ревизией — вне репро этого файла.
