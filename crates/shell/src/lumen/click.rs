@@ -14,8 +14,60 @@
 use crate::*;
 
 impl Lumen {
-    #[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+    /// Клик по точке вьюпорта — и, если он сдвинул фокус ВНУТРИ фрейма,
+    /// пересчёт под-документа (BUG-480 срез 23).
+    ///
+    /// Обёртка, а не строка в конце тела: у `handle_click_at_inner` два
+    /// выхода — ранний `return` ветки фрейма и обычный конец страничной, — и
+    /// проверка в одном из них молча не покрывала бы второй. Страница платит
+    /// за смену `:focus` тем же самым (`relayout_chrome` в теле ниже).
     pub(crate) fn handle_click_at(&mut self, x_css: f32, y_css: f32) {
+        let before = self.focused_frame;
+        self.handle_click_at_inner(x_css, y_css);
+        if self.focused_frame != before {
+            self.notify_frame_focus(before, self.focused_frame);
+            self.refresh_frames(None);
+        }
+    }
+
+    /// Сообщить JS-контекстам фреймов о смене фокуса внутри под-документа —
+    /// `document.activeElement` ребёнка (BUG-480 срез 23).
+    ///
+    /// Страница делает то же самое `notify_focus_changed` по своему контексту;
+    /// здесь адресат — контекст РЕБЁНКА, поэтому вызов уходит прямым `eval_js`
+    /// по его хэндлу, а не через `route_task_js` (тот знает только контекст
+    /// страницы — та же причина, что у `frame_mouse_event` и у клавиатурных
+    /// событий среза 22).
+    ///
+    /// Уведомляются ОБА фрейма — покинутый и получивший фокус: без первого
+    /// `document.activeElement` ушедшего остался бы указывать на свой узел, и
+    /// два под-документа одновременно считали бы себя сфокусированными.
+    #[allow(unused_variables)] // хэндл читается только под feature = "v8"
+    fn notify_frame_focus(
+        &mut self,
+        before: Option<(usize, NodeId)>,
+        after: Option<(usize, NodeId)>,
+    ) {
+        #[cfg(feature = "v8")]
+        {
+            let notify = |idx: usize, nid: Option<NodeId>| {
+                if let Some(js) = self.frames.get(idx).and_then(|h| h.js.clone()) {
+                    js.notify_focus_changed(nid.map(|n| n.index() as u32));
+                }
+            };
+            if let Some((idx, _)) = before
+                && before.map(|(i, _)| i) != after.map(|(i, _)| i)
+            {
+                notify(idx, None);
+            }
+            if let Some((idx, nid)) = after {
+                notify(idx, Some(nid));
+            }
+        }
+    }
+
+    #[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+    fn handle_click_at_inner(&mut self, x_css: f32, y_css: f32) {
         // Dismiss validation tooltip on any non-scrollbar click.
         self.validation_tooltip = None;
         let scroll_y = self.scroll_y;
@@ -318,9 +370,13 @@ impl Lumen {
                 // что у `hovered_frame`). Не typeable-узел → предыдущий
                 // адресат клавиатуры фрейма забывается, как у страницы
                 // (`focused_node` тоже переустанавливается на КАЖДЫЙ клик).
-                self.focused_frame = self
-                    .frame_typeable_field(target.frame, hit.node)
-                    .map(|_| (target.frame, hit.node));
+                //
+                // Срез 23: сюда пишется ЛЮБОЙ узел под точкой, а не только
+                // typeable-поле — `:focus` внутри фрейма обязан вести себя
+                // как на странице, где `focused_node` тоже принимает любой
+                // узел. Обе точки ввода текста перепроверяют typeable-ность
+                // на месте использования, так что срез 22 от этого не страдает.
+                self.focused_frame = Some((target.frame, hit.node));
                 #[cfg(feature = "v8")]
                 self.frame_mouse_event(
                     target.frame,

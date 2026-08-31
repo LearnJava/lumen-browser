@@ -261,6 +261,11 @@ impl Lumen {
             } else {
                 target.page.map(|r| r.node)
             };
+            // BUG-480 срез 23: признак считается ДО обеих `cfg`-веток ниже —
+            // каждая из них присваивает `hovered_frame` сама, а `:hover`
+            // под-документа надо пересчитать в обеих: нарисованный вид не
+            // зависит от того, собран ли движок со скриптами.
+            let hovered_frame_changed = new_hovered_frame != self.hovered_frame;
             #[cfg(feature = "v8")]
             if new_hovered_frame != self.hovered_frame {
                 let old_frame = self.hovered_frame;
@@ -290,6 +295,9 @@ impl Lumen {
             #[cfg(not(feature = "v8"))]
             {
                 self.hovered_frame = new_hovered_frame;
+            }
+            if hovered_frame_changed {
+                self.refresh_frames(None);
             }
             if new_hovered != self.hovered_nid {
                 #[cfg(feature = "v8")]

@@ -447,8 +447,62 @@ fn frame_measurer() -> Option<lumen_paint::MultiFontMeasurer> {
 /// `js` необязателен: у фрейма без скриптов JS-контекста нет, но layout ему
 /// нужен ровно так же — его содержимое всё равно попадает на экран.
 ///
+/// Интерактивное состояние ОДНОГО под-документа: узлы его собственного дерева,
+/// под которыми курсор, в которых фокус и которые нажаты (BUG-480 срез 23).
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct FrameNodeState {
+    /// Узел под курсором — `:hover`.
+    pub(crate) hovered: Option<NodeId>,
+    /// Узел с фокусом — `:focus` (и `:focus-within` у его предков).
+    pub(crate) focused: Option<NodeId>,
+    /// Нажатый узел — `:active`.
+    pub(crate) active: Option<NodeId>,
+}
+
+/// Интерактивное состояние ВСЕХ под-документов — то, что знает [`crate::lumen::Lumen`]
+/// и что должно доехать до каскада конкретного ребёнка (BUG-480 срез 23).
+///
+/// Каждое поле адресует узел парой `(индекс фрейма, узел ЕГО документа)` —
+/// `NodeId` уникален лишь внутри своего документа, поэтому одного `NodeId`
+/// здесь недостаточно (та же причина, по которой у `hovered_frame`/
+/// `focused_frame` эта пара уже была).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct FrameInteractive {
+    /// `Lumen::hovered_frame` — узел под курсором внутри под-документа.
+    pub(crate) hovered: Option<(usize, NodeId)>,
+    /// `Lumen::focused_frame` — узел с фокусом внутри под-документа.
+    pub(crate) focused: Option<(usize, NodeId)>,
+    /// `Lumen::active_frame` — нажатый узел внутри под-документа.
+    pub(crate) active: Option<(usize, NodeId)>,
+}
+
+impl FrameInteractive {
+    /// Состояние КОНКРЕТНОГО фрейма: узел соседнего фрейма для этого прохода —
+    /// просто «ничего», а не чужой `NodeId` с совпавшим индексом.
+    fn for_frame(self, idx: usize) -> FrameNodeState {
+        let pick =
+            |v: Option<(usize, NodeId)>| v.filter(|(i, _)| *i == idx).map(|(_, n)| n);
+        FrameNodeState {
+            hovered: pick(self.hovered),
+            focused: pick(self.focused),
+            active: pick(self.active),
+        }
+    }
+}
+
 /// Лок дерева держится ровно на время прохода: `update_layout_rects` уходит уже
 /// без него, потому что это вызов на JS-поток ребёнка.
+///
+/// `state` — интерактивное состояние ЭТОГО под-документа (BUG-480 срез 23).
+/// Ставится и снимается вокруг одного прохода: `lumen_layout` держит его в
+/// thread-local на весь процесс, поэтому оставленное состояние ребёнка
+/// досталось бы следующему проходу страницы (та же причина, по которой так
+/// делает хром — см. `relayout_chrome_host`).
+///
+/// Вычисленные стили публикуются здесь же, рядом с прямоугольниками: без них
+/// `getComputedStyle` внутри фрейма отдавал пустую строку для ЛЮБОГО свойства
+/// любого узла — независимо от интерактивного состояния (измерено пробой
+/// `verify_frame_focus_style.py` до правки).
 #[allow(clippy::unwrap_used)] // РєРѕСЂРѕС‚РєРёР№ Р»РѕРє РґРµСЂРµРІР°, docs/lint-policy.md В§10
 fn layout_frame_document(
     doc: &Arc<Mutex<Document>>,
@@ -456,15 +510,20 @@ fn layout_frame_document(
     viewport: lumen_core::geom::Size,
     js: Option<&Arc<dyn PersistentJs>>,
     measurer: &lumen_paint::MultiFontMeasurer,
+    state: FrameNodeState,
 ) -> lumen_layout::LayoutBox {
-    let (frame_layout, rects) = {
+    let (frame_layout, rects, styles) = {
         let d = doc.lock().unwrap();
+        lumen_layout::set_interactive_state(state.hovered, state.focused, state.active);
         let frame_layout = lumen_layout::layout_measured(&d, sheet, viewport, measurer);
+        lumen_layout::clear_interactive_state();
         let rects = lumen_layout::collect_layout_rects(&frame_layout);
-        (frame_layout, rects)
+        let styles = lumen_layout::collect_computed_styles(&frame_layout);
+        (frame_layout, rects, styles)
     };
     if let Some(js) = js {
         js.update_layout_rects(rects);
+        js.update_computed_styles(styles);
         js.update_viewport_size(viewport.width, viewport.height);
     }
     frame_layout
@@ -525,7 +584,11 @@ pub(crate) fn host_content_rect(b: &lumen_layout::LayoutBox) -> Rect {
 /// Display list ребёнка собирается ПОСЛЕ всех layout-ов и в обратном порядке
 /// глубин: в него вклеивается содержимое его собственных вложенных фреймов,
 /// значит те должны быть нарисованы раньше.
-pub(crate) fn sync_frame_viewports(frames: &mut [FrameHandle], page_layout: &lumen_layout::LayoutBox) {
+pub(crate) fn sync_frame_viewports(
+    frames: &mut [FrameHandle],
+    page_layout: &lumen_layout::LayoutBox,
+    interactive: FrameInteractive,
+) {
     if frames.is_empty() {
         return;
     }
@@ -567,8 +630,16 @@ pub(crate) fn sync_frame_viewports(frames: &mut [FrameHandle], page_layout: &lum
                 continue;
             }
             let size = lumen_core::geom::Size::new(rect.width, rect.height);
+            // Гейт «ничего не изменилось — не пересчитывать» сравнивает ДВА
+            // входа прохода, а не один (BUG-480 срез 23): размер host-бокса и
+            // интерактивное состояние ребёнка. Каскад `:hover`/`:focus`/
+            // `:active` — такой же вход layout, как вьюпорт, и без второй
+            // половины сравнения клик внутрь фрейма менял бы состояние, а
+            // пересчёта не вызывал: размер-то остался прежним.
+            let state = interactive.for_frame(i);
             if (size.width - frames[i].viewport.width).abs() < 0.01
                 && (size.height - frames[i].viewport.height).abs() < 0.01
+                && frames[i].interactive == state
                 && frames[i].layout.is_some()
             {
                 continue;
@@ -583,9 +654,11 @@ pub(crate) fn sync_frame_viewports(frames: &mut [FrameHandle], page_layout: &lum
                 size,
                 frames[i].js.as_ref(),
                 m,
+                state,
             );
             frames[i].layout = Some(layout);
             frames[i].viewport = size;
+            frames[i].interactive = state;
             relaid[i] = true;
         }
     }
@@ -631,19 +704,23 @@ pub(crate) fn relayout_frame_content(
     frames: &mut [FrameHandle],
     idx: usize,
     page_layout: &lumen_layout::LayoutBox,
+    interactive: FrameInteractive,
 ) {
     let Some(measurer) = frame_measurer() else { return };
     let size = frames[idx].viewport;
+    let state = interactive.for_frame(idx);
     let layout = layout_frame_document(
         &frames[idx].doc,
         &frames[idx].sheet,
         size,
         frames[idx].js.as_ref(),
         &measurer,
+        state,
     );
     frames[idx].layout = Some(layout);
+    frames[idx].interactive = state;
     frames[idx].content_dl.clear();
-    sync_frame_viewports(frames, page_layout);
+    sync_frame_viewports(frames, page_layout, interactive);
 }
 
 /// Пересобрать display list под-документов, чьё содержимое изменилось
@@ -1210,6 +1287,9 @@ fn spawn_frame(
             FRAME_UA_DEFAULT_SIZE,
             child_js.as_ref(),
             &measurer,
+            // Только что созданный фрейм не может быть ни под курсором, ни в
+            // фокусе: его хэндла ещё нет в списке, адресовать его нечем.
+            FrameNodeState::default(),
         )
     });
     // Lifecycle СЂРµР±С‘РЅРєР°: DOMContentLoaded СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ parse+inline-СЃРєСЂРёРїС‚РѕРІ
@@ -1265,6 +1345,7 @@ fn spawn_frame(
         parent_doc: (depth > 0).then(|| Arc::clone(parent)),
         layout: frame_layout,
         content_dl: DisplayList::new(),
+        interactive: FrameNodeState::default(),
         host_rect: None,
         host_src: info.src.clone().unwrap_or_default(),
         images: subresources.decoded_images,
@@ -1438,6 +1519,14 @@ pub(crate) struct FrameHandle {
     ///
     /// Пуст, пока layout не посчитан: тогда на экране остаётся серая заглушка.
     pub(crate) content_dl: DisplayList,
+    /// Интерактивное состояние ПОСЛЕДНЕГО посчитанного прохода ребёнка
+    /// (BUG-480 срез 23) — вторая половина гейта «ничего не изменилось — не
+    /// пересчитывать» в [`sync_frame_viewports`], рядом с [`Self::viewport`].
+    ///
+    /// Хранится здесь, а не выводится вызывающим: так любой, кто передаст
+    /// новое [`FrameInteractive`], автоматически получит пересчёт ровно тех
+    /// фреймов, чьё состояние сдвинулось, и не может забыть назвать их сам.
+    pub(crate) interactive: FrameNodeState,
     /// Контентный бокс host-элемента в координатах ЕГО документа — куда
     /// вклеивается [`Self::content_dl`] (BUG-480 срез 14).
     pub(crate) host_rect: Option<Rect>,

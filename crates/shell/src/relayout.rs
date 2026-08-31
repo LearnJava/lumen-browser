@@ -532,7 +532,8 @@ impl Lumen {
         // Р»СЋР±РѕРµ РґРІРёР¶РµРЅРёРµ РІС‘СЂСЃС‚РєРё РЅР°Рґ С„СЂРµР№РјРѕРј). РџСЂРѕС…РѕРґ СЃР°Рј РіРµР№С‚РёС‚СЃСЏ РЅР°
         // В«СЂР°Р·РјРµСЂ РЅРµ РјРµРЅСЏР»СЃСЏВ» Рё РЅР° РїСѓСЃС‚РѕРј СЃРїРёСЃРєРµ С„СЂРµР№РјРѕРІ СЃС‚РѕРёС‚ РЅРѕР»СЊ. Р”Рћ
         // Р·Р°РёРјСЃС‚РІРѕРІР°РЅРёСЏ `layout_source`: С‚Р°Рј Р±РµСЂС‘С‚СЃСЏ `&self` РЅР° РІСЃСЋ С„СѓРЅРєС†РёСЋ.
-        crate::frames::sync_frame_viewports(&mut self.frames, &lb);
+        let frame_state = self.frame_interactive();
+        crate::frames::sync_frame_viewports(&mut self.frames, &lb, frame_state);
         let Some(src) = self.layout_source.as_ref() else { return };
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);

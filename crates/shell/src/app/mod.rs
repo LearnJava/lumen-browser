@@ -313,6 +313,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 {
                     self.hovered_frame = None;
                 }
+                // BUG-480 срез 23: `:hover`/`:active` под-документа снимаются
+                // вместе с курсором — иначе фрейм остался бы подсвеченным
+                // после ухода мыши из окна. `hovered_frame` обнулён обеими
+                // ветками выше, `active_frame` — здесь: нажатие тоже больше
+                // некому отпустить.
+                let frame_state_dropped = self.hovered_frame.is_some() || self.active_frame.is_some();
+                self.hovered_frame = None;
+                self.active_frame = None;
+                if frame_state_dropped {
+                    self.refresh_frames(None);
+                }
                 self.gesture.cancel();
                 // Р”СЂР°Рі РїСЂРѕРґРѕР»Р¶Р°РµС‚СЃСЏ РґР°Р¶Рµ РєРѕРіРґР° РєСѓСЂСЃРѕСЂ РІС‹С€РµР» РёР· РѕРєРЅР° вЂ” winit
                 // РїСЂРѕРґРѕР»Р¶РёС‚ СЃР»Р°С‚СЊ CursorMoved-СЃРѕР±С‹С‚РёСЏ Р·Р° РїСЂРµРґРµР»Р°РјРё client area,
