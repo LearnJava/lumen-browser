@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-31",
  "counts": {
-  "open": 367,
-  "fixed": 520,
+  "open": 366,
+  "fixed": 522,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 887,
+ "total_bugs": 888,
  "phases": [
   {
    "id": "P0",
@@ -304,7 +304,7 @@
      "title": "Ph-wgpu-default: перенос + флип дефолта",
      "status": "done",
      "size": "XL",
-     "note": "Перенос perf/reliability-наработок из постоянной эксперимент-ветки `p1-exp-wgpu-only` (никогда не вливается) в main с сохранением femtovg, затем флип дефолтного рендер-бэкенда на wgpu; бриф `docs/tasks/ph-wgpu-default.md`. Фаза 2 (перенос) + Фаза 3 (флип дефолта, `P1-wgpu-flip`) + BUG-276 + `P1-wgpu-vkgl` — все влиты. Ф0 (`P1-wgpu-ph0`) закрыта СВЕРКОЙ 2026-07-14: устаревшую `p1-wgpu-cross-platform` вливать не нужно, её полезный след уже в main через `p1-wgpu-vkgl` + `p1-linux-scroll-perf`",
+     "note": "Перенос perf/reliability-наработок из эксперимент-ветки `p1-exp-wgpu-only` (не вливалась; удалена 2026-08-31, журнал — `docs/perf/experiment-wgpu-only.md`) в main с сохранением femtovg, затем флип дефолтного рендер-бэкенда на wgpu; бриф `docs/tasks/ph-wgpu-default.md`. Фаза 2 (перенос) + Фаза 3 (флип дефолта, `P1-wgpu-flip`) + BUG-276 + `P1-wgpu-vkgl` — все влиты. Ф0 (`P1-wgpu-ph0`) закрыта СВЕРКОЙ 2026-07-14: устаревшую `p1-wgpu-cross-platform` вливать не нужно, её полезный след уже в main через `p1-wgpu-vkgl` + `p1-linux-scroll-perf`",
      "bugs": [
       "BUG-276"
      ],
@@ -6087,9 +6087,9 @@
       {
        "id": "LIB-2",
        "title": "LIB-2: пересъёмка эталонов после смены шейпера",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Пересъёмка ТРЁХ независимых наборов эталонов после LIB-1, в одном коммите: graphic_tests/ (полный ~20-минутный прогон, gdigrab, без единого касания рабочего стола за время прогона), graphic_tests/snapshots/cpu/ (SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render cases::snapshot_cpu) и crates/engine/paint/tests/snapshots/ (UPDATE_SNAPSHOTS=1 cargo test -p lumen-paint --test all). Каждое расхождение разобрать поимённо: ожидаемый сдвиг глифа либо баг. Пропуск шага оставляет гейт красным следующей роли — так уже было с BUG-816."
+       "note": "ЗАКРЫТ 2026-08-31 (ветка `p1-lib-2`): дефолт `lumen_font::active_text_shaper()` переключён на `RustybuzzShaper`, откатной флаг переименован `LUMEN_RUSTYBUZZ_SHAPING=1` → `LUMEN_OWN_TEXT_SHAPING=1` (теперь откат — это опция, а не путь по умолчанию). Пересъёмка ТРЁХ независимых наборов эталонов, в одном коммите: **CPU-снимки** (`SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render cases::snapshot_cpu`) сдвинулись на 4 из 81 PNG (`127-svg-text-anchor`, `128-baseline-shift`, `32-list-markers`, `57-canvas-2d` — единственные страницы, где CPU-путь рисует реальный текст), каждый разобран визуально — ожидаемый сдвиг формы глифа, не поломка. **Текстовые `.snap`** (`UPDATE_SNAPSHOTS=1 cargo test -p lumen-paint --test all`) не изменились вовсе: команда `DrawText` в снимке несёт строку/позицию/размер, а не форму глифов — смена шейпера её не затрагивает по конструкции. **Полный `graphic_tests/run.py --continue-on-fail`** (153 теста, LUMEN_PROFILE=dev-release) — дельта против прогона ДО флипа (`20260831-053031.json`) нулевая; два незнакомых FAIL (TEST-150/151, 7.04%/6.51%) идентичны прогону до флипа (7.02%/6.49%) — не регрессия LIB-2, чужой открытый дефект. Объясняется правилом graphic_tests «страницы — только графика, без текста» (docs/graphic-tests.md): смена шейпера структурно не может подвинуть эти эталоны. Результат прогона закоммичен: `graphic_tests/results/20260831-202650.json`. Гейт держал слот `p1-work` — прерванная предыдущая сборка оставила повреждённые rlib `lumen-paint` в общем `target/` (линковщик: undefined symbol в std/core), лечится `cargo clean -p lumen-paint --profile dev-release`."
       },
       {
        "id": "LIB-3",
@@ -6387,17 +6387,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-932": {
+  "BUG-933": {
    "status": "open",
-   "title": "Остаток [BUG-456](bugs/BUG-456-FIXED.md): `OffscreenCanvas.getContext('2d')` теперь функционально полон (симптомы 1–3 закрыты), но сам объект контекста, а также…",
-   "component": "js (`crates/js/src/offscreen_canvas.rs` — `_2d_context`/`OffscreenCanvas`/`ImageBitmap` объявлены объектными литералами, не классами)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-461": {
-   "status": "open",
-   "title": "Командная палитра/поповер щитов-разрешений рисуются движковым хромом (`#cpOverlay`/`#permPopover`), но клики по ним разбирают легаси Rust-хит-тестеры со своей г…",
-   "component": "shell (`main.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`)",
+   "title": "Остаток [BUG-932](bugs/BUG-932-FIXED.md): `ImageBitmap` (offscreen side) остался объектным литералом `{width, height, __canvas_id__, close}`, не классом — `bitm…",
+   "component": "js (`crates/js/src/offscreen_canvas.rs` — `transferToImageBitmap`/`createImageBitmap`)",
    "date": null,
    "debtor": false
   },
@@ -12434,6 +12427,20 @@
    "component": "layout (`box_tree/flex.rs::lay_out_flex`)",
    "date": "2026-08-31",
    "debtor": false
+  },
+  "BUG-932": {
+   "status": "fixed",
+   "title": "Остаток [BUG-456](bugs/BUG-456-FIXED.md): контекст `OffscreenCanvas.getContext('2d')`, а также `CanvasGradient`/`CanvasPattern`/`TextMetrics`/значения `getImage…",
+   "component": "js (`crates/js/src/offscreen_canvas.rs` — `_2d_context`/`OffscreenCanvas`/`ImageBitmap` объявлены объектными литералами, не классами)",
+   "date": "2026-08-31",
+   "debtor": false
+  },
+  "BUG-461": {
+   "status": "fixed",
+   "title": "Командная палитра/поповер щитов-разрешений рисуются движковым хромом (`#cpOverlay`/`#permPopover`), но клики по ним разбирали легаси Rust-хит-тестеры со своей г…",
+   "component": "shell (`crates/shell/src/chrome_ui.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`, `app/window_event/mouse_input.rs`)",
+   "date": "2026-08-31",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -13070,6 +13077,9 @@
   ],
   "js (`crates/js/src/offscreen_canvas.rs` — `_2d_context`/`OffscreenCanvas`/`ImageBitmap` объявлены объектными литералами, не классами)": [
    "BUG-932"
+  ],
+  "js (`crates/js/src/offscreen_canvas.rs` — `transferToImageBitmap`/`createImageBitmap`)": [
+   "BUG-933"
   ],
   "js (`crates/js/src/permissions_policy.rs:37-44` — `FeaturePolicy.prototype.allowsFeature`)": [
    "BUG-697"
@@ -13709,6 +13719,9 @@
   "shell (`chrome_model_snapshot`, `panels/shields_panel.rs`, `panels/permission_panel.rs`), chrome (`ChromeModel::permissions`, `assets/chrome/chrome.html` `#permPopover`)": [
    "BUG-411"
   ],
+  "shell (`crates/shell/src/chrome_ui.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`, `app/window_event/mouse_input.rs`)": [
+   "BUG-461"
+  ],
   "shell (`crates/shell/src/lumen/click.rs`, ветка `FormClickAction::ToggleRadio` → `crates/shell/src/forms.rs::toggle_checkbox`)": [
    "BUG-927"
   ],
@@ -13804,9 +13817,6 @@
   ],
   "shell (`main.rs`, `maybe_expand_cv_relevant`)": [
    "BUG-286"
-  ],
-  "shell (`main.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`)": [
-   "BUG-461"
   ],
   "shell (event loop) + js (таймер-шим)": [
    "BUG-271"

@@ -1,15 +1,21 @@
 # lumen-paint 🟡 (fill rects + rounded rects SDF + textured text + textured images + FontMeasurer)
 
-> **Experimental branch `p1-exp-wgpu-only` (2026-07-08): OpenGL is removed.**
-> `femtovg_backend.rs`, the `backend-femtovg` feature and the femtovg/glutin deps are
-> deleted; the wgpu `Renderer` is the only windowed backend (DX12 first on Windows,
-> Vulkan fallback / `WGPU_BACKEND=vulkan` opt-in — see BUG-275). New in this branch:
-> skip-identical-frame in `Renderer::render` (total frame hash + `content_generation`;
-> `LUMEN_NO_FRAME_SKIP=1` disables), phase-level frame diagnostics
-> (`LUMEN_FRAME_LOG=2`: faces/collect/prep/acquire/encode/submit + per-RenderPlanItem
-> breakdown + texture counter), `LUMEN_PRESENT=mailbox|immediate`, allocation-free
-> Debug hashing (`HashFmt` in `hash_commands`/`diff_display_lists`/`TileGrid`).
-> femtovg-specific bullets below describe pre-branch history and no longer apply here.
+> **Windowed backend: wgpu `Renderer` by default, femtovg/OpenGL kept as the fallback**
+> ([ADR-017](../docs/decisions/ADR-017-wgpu-default-backend.md), 2026-07-13). DX12 first on
+> Windows, Vulkan fallback / `WGPU_BACKEND=vulkan` opt-in — see BUG-275; the backend is
+> auto-probed at startup (`backend_probe.rs`) and cached in `<exe_dir>/data/paint/`.
+> `backends/femtovg_backend.rs` and the `backend-femtovg` feature still exist — they are the
+> safety net for GPUs where the wgpu probe fails, so femtovg-specific bullets below still apply.
+> Perf machinery ported from the (now deleted) `p1-exp-wgpu-only` polygon: skip-identical-frame
+> in `Renderer::render` (total frame hash + `content_generation`; `LUMEN_NO_FRAME_SKIP=1`
+> disables), phase-level frame diagnostics (`LUMEN_FRAME_LOG=2`:
+> faces/collect/prep/acquire/encode/submit + per-RenderPlanItem breakdown + texture counter),
+> `LUMEN_PRESENT=mailbox|immediate`, allocation-free Debug hashing (`HashFmt` in
+> `hash_commands`/`diff_display_lists`/`TileGrid`), bbox-scissor, viewport-cull, the scroll
+> compositor and the static/animated split. The polygon's own journal — with the before/after
+> numbers behind each of these — is archived at
+> [`docs/perf/experiment-wgpu-only.md`](../docs/perf/experiment-wgpu-only.md); code comments
+> here citing `EXPERIMENT.md §N` refer to that file.
 
 - **`ProvenanceIndex`/`ProvenanceSpan` — display-list provenance (DEVX-7, ADR-025 §3, 2026-08-02).** `build_display_list_ordered`/`_dpr` now return `(DisplayList, ProvenanceIndex)` instead of a bare `DisplayList` — a side index mapping ranges of the emitted command list back to the `BoxOrigin` (node + role) that produced them, without touching `DisplayCommand` itself (`size_of` pinned at 192 bytes by a regression test). Built by `fill_buckets` recording `RawSpan{sc, field, range}` local to one `ScBucket` field (`pre`/`root_bg`/`contents`/`post`), translated to global indices by `build_display_list_ordered_dpr` at the exact `out.append()` that flushes each field; `clip_depth` is filled by one linear scan over the finished list rather than threaded through the recursion. Key finding beyond what ADR-025 anticipated: **any box with descendants owns more than one span, not just SC-owning boxes** — `fill_buckets`'s own-emission-before-children / own-emission-after-children structure means a box's paint is never one contiguous range once it has children, matching the general "lead span + trail span" shape the ADR only described for the SC pre/root_bg/post split. Scope: only the introspection-facing `build_display_list_ordered*` builds provenance; the compositor-animation path (`ordered_with_anim_internal`, used by scroll-band rendering) discards it (`&mut Vec::new()`) since nothing reads it there yet. Consumers (`session.rs`, `winit_session.rs`, `main.rs::paint_ordered`) currently discard the second tuple element (`.0`) — DEVX-10 (`explain_element`) is the first planned reader. `provenance_distinguishes_element_anon_and_pseudo_boxes` proves the DoD: an `Element` box and its own `AnonymousInlineRun` text child share a `NodeId` but get disjoint spans under different `BoxOrigin`s, and an isolated `::before` gets its own `Pseudo` span.
 - **`crates/engine/paint/src/invariants.rs` — provenance structural checks, DEVX-8b's acceptance test for DEVX-7 (ADR-025 §4, 2026-08-02).** `debug_assert!`-only, called from `build_display_list_ordered_dpr` right before it returns, zero cost in release. Four checks: (1) coverage — every command index is claimed by exactly one `ProvenanceSpan` (a coverage-count array over `out.len()`; `record_span`'s bracketed appends make spans contiguous and non-overlapping by construction, so any count `!= 1` is a real bug); (2) clip/scroll-layer stack balance over the whole list (never popped past empty, fully closed by the end) — the ground `clip_depth` needs to mean anything; (3) origin resolution — every `BoxOrigin::node` referenced by a span is collected from the same `LayoutBox` tree that produced the list, catching dangling ids from a stale incremental graft; (4) every `Block`/`FlowRoot`/`TableRow`/`Table`/`TableRowGroup` box with a visible background/border (mirroring `emit_box_self`'s own opacity/visibility/`empty-cells`/zero-clip suppressions) owns at least one span for its origin. Item 4 is intentionally scoped to that one `BoxKind` family — other kinds (inline runs, form controls, markers, SVG) have their own visibility rules and are out of scope, same narrowing spirit as DEVX-8a's geometry invariant. A candidate fifth check — "clip depth is constant within one span's own range" — was designed and rejected: a `root_bg` span legitimately includes the box's own overflow-clip push right after its background, so depth changes mid-span by design. Validated two ways: the crate's 39 `ordered_*` tests plus `provenance_distinguishes_element_anon_and_pseudo_boxes` (covering overflow-hidden, transforms, opacity, blend modes, masks, collapsed table borders, SVG) all pass with the checks live, and a debug-build `--dump-display-list` sweep over all 158 `graphic_tests/*.html` + 16 `samples/*.html` fires zero assertions. `dump_golden.py` empty diff (12/12, `LUMEN_PROFILE=debug`) — read-only checks behind `cfg(debug_assertions)`, cannot move a pixel.
