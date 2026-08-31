@@ -10,6 +10,8 @@ use super::*;
 use super::text_and_images::{build, fills, texts};
 // build_ordered уехал в display_list/tests/ordered_build_scroll.rs (батч DL-5).
 use super::ordered_build_scroll::build_ordered;
+// BorderPrecedence/CollapsedBorder/TableContext уехали в display_list/table.rs (батч DL-7).
+use super::table::{BorderPrecedence, CollapsedBorder, TableContext};
 
     // ── image-set() (CSS Images L4 §5) ──────────────────────────────────────
 
