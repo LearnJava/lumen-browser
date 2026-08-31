@@ -727,6 +727,59 @@ impl Lumen {
         })
     }
 
+    /// Resolves `id` against [`Self::chrome_doc`] and returns that node's
+    /// rect in [`Self::chrome_layout`] — `None` before the first chrome
+    /// layout exists, or if `id` does not resolve (should not happen for any
+    /// `ids::*` constant, which the build-time gate guarantees exists in the
+    /// asset — see `crates/chrome/build.rs`).
+    fn chrome_node_rect(&self, id: &str) -> Option<Rect> {
+        let (doc, _) = self.chrome_doc.as_ref()?;
+        let (layout, _) = self.chrome_layout.as_ref()?;
+        let nid = doc.find_by_id(id)?;
+        lumen_layout::find_box_by_node(layout, nid).map(|b| b.rect)
+    }
+
+    /// BUG-461: `.cp-box`'s real measured rect — the command palette's
+    /// modal box, used as [`panels::command_palette::hit_test`]'s Dismiss
+    /// boundary. `#cpOverlay` (`ids::CP_OVERLAY`) has exactly one child in
+    /// the asset, `.cp-box` itself (see `assets/chrome/chrome.html`), so its
+    /// first child's rect is `.cp-box`'s — no id of its own is needed.
+    pub(crate) fn chrome_cp_box_rect(&self) -> Option<Rect> {
+        let (doc, _) = self.chrome_doc.as_ref()?;
+        let (layout, _) = self.chrome_layout.as_ref()?;
+        let overlay_id = doc.find_by_id(lumen_chrome::ids::CP_OVERLAY)?;
+        let overlay_box = lumen_layout::find_box_by_node(layout, overlay_id)?;
+        overlay_box.children.first().map(|b| b.rect)
+    }
+
+    /// BUG-461: real measured rects of the currently rendered `.cp-row`
+    /// elements, in `#cpList` tree order — the same `scroll_row`-relative
+    /// window `Lumen::chrome_model_snapshot`'s `palette_results` slices, so
+    /// index `i` here is filtered-index `scroll_row + i`. Replaces the fixed
+    /// `ROW_H`/`INPUT_H` arithmetic `panels::command_palette::hit_test` used
+    /// to compute a row's y-range from — that assumed row height/box width
+    /// could (and did) drift from what `chrome.css` actually renders.
+    pub(crate) fn chrome_cp_row_rects(&self) -> Vec<Rect> {
+        let Some((doc, _)) = self.chrome_doc.as_ref() else { return Vec::new() };
+        let Some((layout, _)) = self.chrome_layout.as_ref() else { return Vec::new() };
+        let Some(list_id) = doc.find_by_id(lumen_chrome::ids::CP_LIST) else { return Vec::new() };
+        lumen_layout::find_box_by_node(layout, list_id)
+            .map(|b| b.children.iter().map(|c| c.rect).collect())
+            .unwrap_or_default()
+    }
+
+    /// BUG-461: `#permPopover`'s real measured rect — the shared popover for
+    /// both the shields panel and the per-site permission panel. Replaces
+    /// `shields_panel`/`permission_panel`'s `panel_origin()` guesses, which
+    /// anchored a hardcoded box size to the window edge/`toolbar::CHROME_H`
+    /// instead of the omnibox-relative position `chrome.css` actually uses
+    /// (`.popover{ position:absolute; top:34px; right:0 }` inside
+    /// `.omnibox-wrap`) — the same `BUG-404`-class drift `page_offset()`
+    /// already fixed for `profile_menu`.
+    pub(crate) fn chrome_perm_popover_rect(&self) -> Option<Rect> {
+        self.chrome_node_rect(lumen_chrome::ids::PERM_POPOVER)
+    }
+
     /// CC-6: reads and parses a `data-tab-id`/`data-ws-id`-style integer
     /// attribute off `nid` in the live `chrome_doc` вЂ” the id `ChromeModel`
     /// (`crates/chrome/src/model.rs`) stamps on rebuilt tab rows/workspace

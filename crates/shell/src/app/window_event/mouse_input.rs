@@ -235,12 +235,17 @@ impl Lumen {
             // Command palette (task #23): modal вЂ” captures every click.
             // A click on a row activates it; a click on the scrim closes.
             if self.command_palette.visible {
-                let win_w = self.viewport_width_css();
+                // BUG-461: measured `.cp-box`/`.cp-row` rects from the
+                // engine chrome layout, not a guessed viewport-centred box —
+                // see `Lumen::chrome_cp_box_rect`'s doc comment.
+                let box_rect = self.chrome_cp_box_rect().unwrap_or(lumen_core::geom::Rect::ZERO);
+                let row_rects = self.chrome_cp_row_rects();
                 match panels::command_palette::hit_test(
-                    &self.command_palette,
                     x_css,
                     y_css,
-                    win_w,
+                    box_rect,
+                    &row_rects,
+                    self.command_palette.scroll_row,
                 ) {
                     panels::command_palette::PaletteHit::Row(filtered_idx) => {
                         self.command_palette.selected = filtered_idx;
@@ -517,14 +522,15 @@ impl Lumen {
 
             // Shields floating panel (7C.4): top-right overlay.
             if self.shields.visible {
-                let win_w = self.viewport_width_css();
-                let tab_h = toolbar::CHROME_H;
+                // BUG-461: `#permPopover`'s real measured rect, not a guess
+                // anchored to the window edge/`toolbar::CHROME_H`.
+                let popover_rect =
+                    self.chrome_perm_popover_rect().unwrap_or(lumen_core::geom::Rect::ZERO);
                 if let Some(hit) = panels::shields_panel::hit_test(
                     &self.shields,
                     x_css,
                     y_css,
-                    win_w,
-                    tab_h,
+                    popover_rect,
                 ) {
                     match hit {
                         panels::shields_panel::ShieldsHit::Toggle => {
@@ -572,12 +578,15 @@ impl Lumen {
 
             // Permission popover (7C.2): top-left overlay below tab bar.
             if self.permission.visible {
-                let tab_h = toolbar::CHROME_H;
+                // BUG-461: `#permPopover`'s real measured rect, not a guess
+                // anchored to the window edge/`toolbar::CHROME_H`.
+                let popover_rect =
+                    self.chrome_perm_popover_rect().unwrap_or(lumen_core::geom::Rect::ZERO);
                 if let Some(hit) = panels::permission_panel::hit_test(
                     &self.permission,
                     x_css,
                     y_css,
-                    tab_h,
+                    popover_rect,
                 ) {
                     match hit {
                         panels::permission_panel::PermissionHit::Toggle(kind) => {
