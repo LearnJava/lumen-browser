@@ -1269,6 +1269,9 @@ impl Lumen {
         // BUG-405 slice 44: same delta-snapshot for `POST_CACHE_NANOS` — see
         // `post_cache_nanos` doc comment.
         let post_cache_at_paint = post_cache_nanos();
+        // BUG-405 slice 45: same delta-snapshot for `TAIL_NANOS` — see
+        // `tail_nanos` doc comment.
+        let tail_at_paint = tail_nanos();
 
         // BUG-405 СЃСЂРµР· 37: С†РµРЅР° РћР‘РЃР РўРљР СЃС‚СЂР°РЅРёС†С‹, РїР»Р°С‚РёРјР°СЏ РІРЅСѓС‚СЂРё РѕРєРЅР°
         // `paint`, РЅРѕ СЃРЅР°СЂСѓР¶Рё РІСЃРµС… СЃС‡С‘С‚С‡РёРєРѕРІ СЂРµРЅРґРµСЂРµСЂР°. Р¤Р°СЃС‚-РїР°СЃ
@@ -1462,6 +1465,11 @@ impl Lumen {
             // happens strictly BEFORE that timer starts.
             let pre_marks_ms = (pre_marks_nanos() - pre_marks_at_paint) as f64 / 1e6;
             let post_cache_ms = (post_cache_nanos() - post_cache_at_paint) as f64 / 1e6;
+            // BUG-405 slice 45: gap between the `FRAME_PHASE_NANOS[3]`
+            // (`пасс`) snapshot and `render_impl`'s own return — see
+            // `tail_nanos` doc comment. Third candidate for the п.84
+            // residual, after slice 44 ruled out `предметки`/`послекэша`.
+            let tail_ms = (tail_nanos() - tail_at_paint) as f64 / 1e6;
             // BUG-405 slice 44: `setup_ms` (marks[4] -> just before the
             // `render`/`render_with_anim` call) is a SUPERSET of `wrap_ms`
             // on the fallback branch (the `shifted`-list build is a
@@ -1469,12 +1477,12 @@ impl Lumen {
             // double-counting that sub-interval; it is still printed on its
             // own for the `offset` A/B arm in `build_phase_census.py`, which
             // isolates exactly that sub-cost.
-            let named =
-                d(0) + d(1) + d(2) + d(3) + log_ms + pre_marks_ms + post_cache_ms + setup_ms;
+            let named = d(0) + d(1) + d(2) + d(3) + log_ms
+                + pre_marks_ms + post_cache_ms + setup_ms + tail_ms;
             eprintln!(
                 "[frame]   paint: prep {:.2} hash {:.2} band {:.2} пасс {:.2} \
                          лог {:.2} предметки {:.2} послекэша {:.2} предвызов {:.2} \
-                         обёртка {:.2} | невязка {:.2}",
+                         хвост {:.2} обёртка {:.2} | невязка {:.2}",
                 d(0),
                 d(1),
                 d(2),
@@ -1483,6 +1491,7 @@ impl Lumen {
                 pre_marks_ms,
                 post_cache_ms,
                 setup_ms,
+                tail_ms,
                 wrap_ms,
                 (marks[5] - marks[4] - named).max(0.0),
             );

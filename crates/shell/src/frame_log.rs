@@ -85,3 +85,18 @@ pub(crate) fn post_cache_nanos() -> u64 {
 pub(crate) fn post_cache_nanos() -> u64 {
     0
 }
+
+/// Nanoseconds spent inside `render_impl` between the `FRAME_PHASE_NANOS[3]`
+/// snapshot and the function's own return (BUG-405 slice 45, `TAIL_NANOS`) —
+/// the third candidate for the residual that survives п.84 even with slice
+/// 44's two named candidates ruled out.
+#[cfg(feature = "backend-wgpu")]
+pub(crate) fn tail_nanos() -> u64 {
+    lumen_paint::load_counter(&lumen_paint::TAIL_NANOS)
+}
+
+/// Stub for [`tail_nanos`] on non-wgpu builds.
+#[cfg(not(feature = "backend-wgpu"))]
+pub(crate) fn tail_nanos() -> u64 {
+    0
+}

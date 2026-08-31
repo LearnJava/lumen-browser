@@ -65,6 +65,10 @@ PRE_CALL_RE = re.compile(r'предвызов ([\-\d.]+)')
 # `render_impl` внутри `compose_page` (сборка seg_content/compose_overlay) —
 # второй кандидат п. 84, названный самим текстом пункта.
 POST_CACHE_RE = re.compile(r'послекэша ([\-\d.]+)')
+# BUG-405 срез 45: зазор между отсечкой FRAME_PHASE_NANOS[3] (`пасс`) и
+# фактическим возвратом `render_impl` — третий кандидат п. 84 (диспетчер по
+# `mode` + запись `pending_readback`, ни одной статьёй ранее не покрытые).
+TAIL_RE = re.compile(r'хвост ([\-\d.]+)')
 
 ARMS = [('лог 1', '1'), ('лог 2', '2')]
 
@@ -73,7 +77,8 @@ ARMS = [('лог 1', '1'), ('лог 2', '2')]
 # зазор до старта `ComposeMarks` (срез 44), `невязка` — то, что не назвала ни
 # одна статья.
 COLUMNS = [
-    'shell', 'hash', 'band-реш.', 'пасс', 'лог', 'предметки', 'послекэша', 'предвызов', 'невязка',
+    'shell', 'hash', 'band-реш.', 'пасс', 'лог', 'предметки', 'послекэша', 'предвызов',
+    'хвост', 'невязка',
 ]
 
 
@@ -115,9 +120,11 @@ def parse(log_path: str) -> dict:
                 # На промахе таких строк две (полоса и композит) — берём сумму.
                 cur['пасс'] = cur.get('пасс', 0.0) + float(m.group(1))
                 continue
-            # BUG-405 срез 44: три поля живут в ОДНОЙ строке `paint:` — три
-            # независимых `search` без `continue` между ними, иначе первое
-            # совпадение съедало бы проверку двух остальных на той же строке.
+            # BUG-405 срез 44 (+45): четыре поля живут в ОДНОЙ строке `paint:`
+            # — независимые `search` без `continue` между ними, иначе первое
+            # совпадение съедало бы проверку остальных на той же строке
+            # (см. срез 44 «побочная находка» — этот баг уже один раз здесь
+            # был и стоил ложного «оба кандидата на нуле»).
             matched_paint_extra = False
             m = PRE_MARKS_RE.search(line)
             if m:
@@ -130,6 +137,10 @@ def parse(log_path: str) -> dict:
             m = POST_CACHE_RE.search(line)
             if m:
                 cur['послекэша'] = float(m.group(1))
+                matched_paint_extra = True
+            m = TAIL_RE.search(line)
+            if m:
+                cur['хвост'] = float(m.group(1))
                 matched_paint_extra = True
             if matched_paint_extra:
                 continue
@@ -148,7 +159,8 @@ def parse(log_path: str) -> dict:
                 if 'paint' in cur:
                     named = sum(
                         cur.get(k, 0.0) for k in
-                        ('hash', 'band-реш.', 'пасс', 'лог', 'предметки', 'послекэша', 'предвызов')
+                        ('hash', 'band-реш.', 'пасс', 'лог', 'предметки', 'послекэша',
+                         'предвызов', 'хвост')
                     )
                     cur['невязка'] = max(cur['paint'] - named, 0.0)
                     cur['честный'] = max(cur['total'] - cur.get('лог', 0.0), 0.0)
