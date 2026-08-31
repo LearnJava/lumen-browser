@@ -3982,43 +3982,43 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/renderer.rs:2292` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 `crates/engine/paint/src/renderer.rs:2323` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
 `crates/engine/paint/src/renderer.rs:2352` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
-`crates/engine/paint/src/renderer.rs:3318` **struct** `Renderer`
-`crates/engine/paint/src/renderer.rs:3973` **fn** `load_counter` — Reads a diagnostics counter
-`crates/engine/paint/src/renderer.rs:4725` **fn** `new`
-`crates/engine/paint/src/renderer.rs:4930` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
-`crates/engine/paint/src/renderer.rs:5869` **fn** `warm_lazy_pipelines_blocking` — Прогревает ленивые пайплайны синхронно, на вызывающем потоке
-`crates/engine/paint/src/renderer.rs:5884` **fn** `pipelines_compiled` — Сколько ленивых пайплайнов **этот** рендер скомпилировал за свою жизнь
-`crates/engine/paint/src/renderer.rs:5897` **fn** `hot_pipeline_threads` — Сколько РАЗНЫХ потоков скомпилировало пять горячих пайплайнов этого
-`crates/engine/paint/src/renderer.rs:5910` **fn** `hot_pipelines_built_on_ui_thread` — Сколько горячих пайплайнов пришлось скомпилировать самому UI-потоку —
-`crates/engine/paint/src/renderer.rs:6020` **fn** `submissions` — Сколько командных списков **кадра** отправил в очередь этот рендер
-`crates/engine/paint/src/renderer.rs:6031` **fn** `rrect_clip_levels` — Сколько скруглённых клипов этот рендер обслужил offscreen-уровнем
-`crates/engine/paint/src/renderer.rs:6041` **fn** `cull_merges` — Сколько разрезов пасса родителя склеено обратно после выброса
-`crates/engine/paint/src/renderer.rs:6050` **fn** `plan_passes` — Сколько пассов (элементов плана кадра) закодировал этот рендер
-`crates/engine/paint/src/renderer.rs:6061` **fn** `state_elisions` — Сколько команд состояния пасса не отправлено, потому что нужное
-`crates/engine/paint/src/renderer.rs:6071` **fn** `draw_merges` — Сколько вызовов `draw` слито с предыдущим (BUG-405 срез 10)
-`crates/engine/paint/src/renderer.rs:6080` **fn** `set_state_elision_enabled` — Включает/выключает отсев повторных команд состояния пасса
-`crates/engine/paint/src/renderer.rs:6091` **fn** `atlas_bytes_uploaded` — Сколько байт пикселей атласа глифов отправлено в GPU этим рендером
-`crates/engine/paint/src/renderer.rs:6102` **fn** `atlas_uploads` — Сколько раз атлас глифов заливался в GPU этим рендером
-`crates/engine/paint/src/renderer.rs:6111` **fn** `set_atlas_partial_upload_enabled` — Включает/выключает построчную заливку атласа (BUG-405 срез 11) на этом
-`crates/engine/paint/src/renderer.rs:6121` **fn** `filter_passes` — Сколько render-пассов закодировали filter-элементы планов этого
-`crates/engine/paint/src/renderer.rs:6133` **fn** `shadow_draws` — Сколько внешних теней (`box-shadow`) этот рендер нарисовал
-`crates/engine/paint/src/renderer.rs:6144` **fn** `nested_shader_clips` — Сколько вложенных скруглённых клипов этот рендер обслужил ВТОРЫМ
-`crates/engine/paint/src/renderer.rs:6155` **fn** `coverage_cache_stats` — Сколько раз покрытие SVG-супа взято готовым из кэша, а не пересчитано
-`crates/engine/paint/src/renderer.rs:6166` **fn** `svg_shape_cache_stats` — Сколько команд SVG получили готовую фигуру из кэша (BUG-405 срез 12),
-`crates/engine/paint/src/renderer.rs:6175` **fn** `set_svg_shape_cache_enabled` — Включает/выключает мемоизацию фигур SVG (BUG-405 срез 12)
-`crates/engine/paint/src/renderer.rs:6181` **fn** `text_run_cache_stats` — Попаданий и промахов кэша укладки текста (BUG-405 срез 13) за жизнь
-`crates/engine/paint/src/renderer.rs:6190` **fn** `set_text_run_cache_enabled` — Включает/выключает мемоизацию укладки текстового run-а (BUG-405 срез 13)
-`crates/engine/paint/src/renderer.rs:6199` **fn** `set_coverage_cache_enabled` — Включает/выключает кэш покрытия SVG-супов (BUG-405 срез 9)
-`crates/engine/paint/src/renderer.rs:6208` **fn** `set_nested_shader_clip_enabled` — Включает/выключает второй шейдерный контур (BUG-405 срез 8)
-`crates/engine/paint/src/renderer.rs:6217` **fn** `set_shadow_analytic_enabled` — Включает/выключает аналитическую размытую тень (BUG-405 срез 7)
-`crates/engine/paint/src/renderer.rs:6227` **fn** `set_blur_merge_enabled` — Включает/выключает склейку вертикального прохода блюра с композитом
-`crates/engine/paint/src/renderer.rs:6238` **fn** `set_cull_merge_enabled` — Включает/выключает склейку пасса родителя вокруг выброшенного
-`crates/engine/paint/src/renderer.rs:6246` **fn** `warmed_pipeline_count` — Сколько ленивых ячеек пайплайнов уже заполнено (BUG-405/406)
-`crates/engine/paint/src/renderer.rs:7325` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
-`crates/engine/paint/src/renderer.rs:7333` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
-`crates/engine/paint/src/renderer.rs:7350` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
-`crates/engine/paint/src/renderer.rs:7365` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
-`crates/engine/paint/src/renderer.rs:7378` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
+`crates/engine/paint/src/renderer.rs:2594` **struct** `Renderer`
+`crates/engine/paint/src/renderer.rs:3249` **fn** `load_counter` — Reads a diagnostics counter
+`crates/engine/paint/src/renderer.rs:4001` **fn** `new`
+`crates/engine/paint/src/renderer.rs:4206` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
+`crates/engine/paint/src/renderer.rs:5145` **fn** `warm_lazy_pipelines_blocking` — Прогревает ленивые пайплайны синхронно, на вызывающем потоке
+`crates/engine/paint/src/renderer.rs:5160` **fn** `pipelines_compiled` — Сколько ленивых пайплайнов **этот** рендер скомпилировал за свою жизнь
+`crates/engine/paint/src/renderer.rs:5173` **fn** `hot_pipeline_threads` — Сколько РАЗНЫХ потоков скомпилировало пять горячих пайплайнов этого
+`crates/engine/paint/src/renderer.rs:5186` **fn** `hot_pipelines_built_on_ui_thread` — Сколько горячих пайплайнов пришлось скомпилировать самому UI-потоку —
+`crates/engine/paint/src/renderer.rs:5296` **fn** `submissions` — Сколько командных списков **кадра** отправил в очередь этот рендер
+`crates/engine/paint/src/renderer.rs:5307` **fn** `rrect_clip_levels` — Сколько скруглённых клипов этот рендер обслужил offscreen-уровнем
+`crates/engine/paint/src/renderer.rs:5317` **fn** `cull_merges` — Сколько разрезов пасса родителя склеено обратно после выброса
+`crates/engine/paint/src/renderer.rs:5326` **fn** `plan_passes` — Сколько пассов (элементов плана кадра) закодировал этот рендер
+`crates/engine/paint/src/renderer.rs:5337` **fn** `state_elisions` — Сколько команд состояния пасса не отправлено, потому что нужное
+`crates/engine/paint/src/renderer.rs:5347` **fn** `draw_merges` — Сколько вызовов `draw` слито с предыдущим (BUG-405 срез 10)
+`crates/engine/paint/src/renderer.rs:5356` **fn** `set_state_elision_enabled` — Включает/выключает отсев повторных команд состояния пасса
+`crates/engine/paint/src/renderer.rs:5367` **fn** `atlas_bytes_uploaded` — Сколько байт пикселей атласа глифов отправлено в GPU этим рендером
+`crates/engine/paint/src/renderer.rs:5378` **fn** `atlas_uploads` — Сколько раз атлас глифов заливался в GPU этим рендером
+`crates/engine/paint/src/renderer.rs:5387` **fn** `set_atlas_partial_upload_enabled` — Включает/выключает построчную заливку атласа (BUG-405 срез 11) на этом
+`crates/engine/paint/src/renderer.rs:5397` **fn** `filter_passes` — Сколько render-пассов закодировали filter-элементы планов этого
+`crates/engine/paint/src/renderer.rs:5409` **fn** `shadow_draws` — Сколько внешних теней (`box-shadow`) этот рендер нарисовал
+`crates/engine/paint/src/renderer.rs:5420` **fn** `nested_shader_clips` — Сколько вложенных скруглённых клипов этот рендер обслужил ВТОРЫМ
+`crates/engine/paint/src/renderer.rs:5431` **fn** `coverage_cache_stats` — Сколько раз покрытие SVG-супа взято готовым из кэша, а не пересчитано
+`crates/engine/paint/src/renderer.rs:5442` **fn** `svg_shape_cache_stats` — Сколько команд SVG получили готовую фигуру из кэша (BUG-405 срез 12),
+`crates/engine/paint/src/renderer.rs:5451` **fn** `set_svg_shape_cache_enabled` — Включает/выключает мемоизацию фигур SVG (BUG-405 срез 12)
+`crates/engine/paint/src/renderer.rs:5457` **fn** `text_run_cache_stats` — Попаданий и промахов кэша укладки текста (BUG-405 срез 13) за жизнь
+`crates/engine/paint/src/renderer.rs:5466` **fn** `set_text_run_cache_enabled` — Включает/выключает мемоизацию укладки текстового run-а (BUG-405 срез 13)
+`crates/engine/paint/src/renderer.rs:5475` **fn** `set_coverage_cache_enabled` — Включает/выключает кэш покрытия SVG-супов (BUG-405 срез 9)
+`crates/engine/paint/src/renderer.rs:5484` **fn** `set_nested_shader_clip_enabled` — Включает/выключает второй шейдерный контур (BUG-405 срез 8)
+`crates/engine/paint/src/renderer.rs:5493` **fn** `set_shadow_analytic_enabled` — Включает/выключает аналитическую размытую тень (BUG-405 срез 7)
+`crates/engine/paint/src/renderer.rs:5503` **fn** `set_blur_merge_enabled` — Включает/выключает склейку вертикального прохода блюра с композитом
+`crates/engine/paint/src/renderer.rs:5514` **fn** `set_cull_merge_enabled` — Включает/выключает склейку пасса родителя вокруг выброшенного
+`crates/engine/paint/src/renderer.rs:5522` **fn** `warmed_pipeline_count` — Сколько ленивых ячеек пайплайнов уже заполнено (BUG-405/406)
+`crates/engine/paint/src/renderer.rs:5550` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
+`crates/engine/paint/src/renderer.rs:5558` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
+`crates/engine/paint/src/renderer.rs:5575` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
+`crates/engine/paint/src/renderer.rs:5590` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
+`crates/engine/paint/src/renderer.rs:5603` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
 `crates/engine/paint/src/renderer/frame_entry.rs:18` **fn** `render` — `scroll_y ≥ 0`, `scroll_x ≥ 0`. Negatives caller обязан клампить до 0
 `crates/engine/paint/src/renderer/frame_entry.rs:30` **fn** `set_content_epoch` — Объявляет версию списка `content` ближайшего кадра (BUG-405 срез 39)
 `crates/engine/paint/src/renderer/frame_entry.rs:99` **fn** `render_with_anim` — Как [`render`](Self::render), но с диапазонами анимируемых сегментов

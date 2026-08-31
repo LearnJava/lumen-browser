@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-31",
  "counts": {
-  "open": 369,
+  "open": 370,
   "fixed": 516,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 885,
+ "total_bugs": 886,
  "phases": [
   {
    "id": "P0",
@@ -5786,11 +5786,11 @@
        "note": "`crates/engine/paint/src/renderer.rs`: `render_impl` (риск-функция, 5 375 строк) + render-точки входа + `render_to_image_*`. **ЗАКРЫТ 2026-08-31** (ветка `p1-split-rn6`, один срез): расследование ДО вырезки (обязательное условие батча) проверило все `let`-биндинги фазы «Сбор вершин» (самой крупной из шести, 3080 строк) на заимствования `self`, пересекающие границу фазы — нашлось ровно одно (`lazy_faces = LazyParsedFaces::new(&self.faces)`), и оно полностью потребляется внутри той же фазы (последнее использование на 9365-й строке региона, до конца фазы на 11148-й), не доживая до следующей. Все агрегаты, которыми фазы обмениваются (13 `Vec<Vertex>`, `render_plan: Vec<RenderPlanItem>`, `clip_slots: Vec<ClipUniformSlot>`, `grad_params: Vec<GradParamsCpu>`, счётчики) — owned-данные без времени жизни `self`. **Вывод: разбиение на шесть `&mut self`-хелперов конфликтом заимствований не заблокировано** — но и не достигает потолка §5 (≤2000 строк/новый файл), поскольку сама фаза «Сбор вершин» (3080 строк) больше потолка уже в одиночку, и довести её до предела потребовало бы отдельного, ещё более глубокого расследования вложенной структуры — вне объёма этого батча. Принят запасной вариант, обозначенный в самой заявке батча: тот же компромисс, что JS-7 принял для `install_dom` в `v8_runtime.rs`. Вырезана только безрисковая часть: `render`/`render_with_anim`/`set_content_epoch` + приватные хелперы `content_fold_reuse`/`remember_content_fold` (233 строки) и `render_to_image_cpu`/`render_tile`/`render_to_image`/`render_to_image_with_overlay`/`render_print_pages` (202 строки, включая doc-комментарий, ошибочно оставшийся по эту сторону границы при первом резе — перенесён вручную) — итого 435 строк → `renderer/frame_entry.rs`, второй `impl Renderer` блок в новом файле (приём RN-4/RN-5). Видимость: `render_impl`/`content_fold_reuse`/`remember_content_fold` вызываются из `frame_entry.rs` БЕЗ `pub(crate)` — этот модуль, как и `band_compose.rs` (RN-5), дочерний по отношению к модулю, где эти приватные методы объявлены, и приватность родителя ему уже видна (то же правило, что подтвердил уже существовавший вызов `self.render_impl(...)` из `band_compose.rs`); единственная реальная правка видимости — `render_to_image_with_overlay` → `pub(crate)` (зовётся тестом `renderer/tests/*`, сиблинг-модулем). Сверка body-in-body (реконструкция региона из `HEAD` против тела нового файла, диффом) — 0 расхождений, кроме ожидаемого перемещения doc-комментария `render_to_image_cpu`. `renderer.rs` 13568 → 13126 (регион −435, минус лишняя пустая строка на месте головного реза, минус перенесённый в `frame_entry.rs` 7-строчный doc-блок), `cargo test -p lumen-paint --lib --features backend-wgpu` 1185/1185 (12 ignored, без изменений от RN-5), `--test all --features backend-wgpu` 34/34 без диффов, `cargo clippy -p lumen-paint --all-targets --features backend-wgpu -D warnings` чист, нисходящая `cargo check -p lumen-shell --profile dev-release` чистая, `python graphic_tests/dump_golden.py` (LUMEN_PROFILE=dev-release) 12/12 без дельт. `scripts/check_file_sizes.py --update`, `SYMBOLS.md` перегенерирован. `scripts/scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)) — тесты гонялись адресно. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа RN»"
       },
       {
-       "id": "SPLIT-RN7",
+       "id": "SPLIT-RN7 ✅ DONE 2026-08-31",
        "title": "SPLIT-RN7: pipelines из paint/renderer.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "`crates/engine/paint/src/renderer.rs`: pipeline-геттеры (7400…7472) + `impl PipelineDeps` (6415…7399) + pipeline-builder'ы/`Hot*`/`WarmedPipeline` (2628…3317), 1 748 строк → `renderer/pipelines.rs` (возможно, на 2 подфайла). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа RN»"
+       "note": "`crates/engine/paint/src/renderer.rs`: pipeline-геттеры (7400…7472) + `impl PipelineDeps` (6415…7399) + pipeline-builder'ы/`Hot*`/`WarmedPipeline` (2628…3317), 1 748 строк → `renderer/pipelines.rs` (возможно, на 2 подфайла). **ЗАКРЫТ 2026-08-31** (ветка `p1-split-rn7`, один срез): анкеры пересчитаны заново — три диапазона совпали с планом почти дословно (724+984+67 = 1775 строк в один файл, разбор на два не понадобился), геттеры вынесены вторым `impl Renderer` блоком (приём RN-4…RN-6). Видимость: `HotPipelines`/`HotDeps`/`HotKind`/`HotDelivery`/`HOT_KINDS`/`PipelineDeps`/`WarmedPipeline` и их поля — `pub(crate)` (конструируются как структурные литералы в оставшемся `impl Renderer` #1), 14 геттеров — `pub(crate)` (зовёт `render_impl` в `renderer.rs` и `texture_pool.rs`-сиблинг). Сверка body-in-body — 0 расхождений кроме `pub(crate)`. `renderer.rs` 13126 → 11357, тесты/clippy/нисходящий check без изменений от RN-6, `dump_golden.py` без дельт. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа RN»"
       },
       {
        "id": "SPLIT-RN8",
@@ -12145,6 +12145,13 @@
    "component": "js (`crates/js/src/canvas2d.rs` — натив сеттера цвета; `crates/js/src/shim/web_api_shim_mid.js` — `_lumen_c2d_paint_style`), canvas (`crates/engine/canvas/src/color.rs`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-931": {
+   "status": "open",
+   "title": "TEST-51: третий scroll-контейнер (`overflow-x:scroll`, инлайн-блочные дети 180×60) в живом окне рисует первого ребёнка высотой ~31px вместо 60px — сплошная обре…",
+   "component": "paint (`crates/engine/paint/src/renderer.rs` — wgpu `render_impl`, `PushScrollLayer`/`FillRect`/`sync_scissor_to_stack`/`bind_and_draw!`/`run_draw_ops!`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -13316,6 +13323,9 @@
   ],
   "paint (`crates/engine/paint/src/cpu_raster.rs` — `gaussian_blur`: `radius` не ограничен размером слоя; `box_blur_h`/`box_blur_v` — прайминг аккумулятора `for i in -r..=r`, O(r) на строку/столбец)": [
    "BUG-850"
+  ],
+  "paint (`crates/engine/paint/src/renderer.rs` — wgpu `render_impl`, `PushScrollLayer`/`FillRect`/`sync_scissor_to_stack`/`bind_and_draw!`/`run_draw_ops!`)": [
+   "BUG-931"
   ],
   "paint (`crates/engine/paint/src/renderer.rs` — пре-резолв face-ов `DrawText`)": [
    "BUG-771"
