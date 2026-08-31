@@ -9,9 +9,8 @@
 //! (`docs/tasks/p1-monolith-split-queue.md` §4, группа DL, батч DL-5).
 
 use super::*;
-// P1/SPLIT-DL6 ещё не взят: build/images остаются в `mod tests` в
-// display_list.rs — общие хелперы, ещё не вынесенные оттуда.
-use super::tests::{build, images};
+// build/images уехали в display_list/tests/text_and_images.rs (батч DL-6).
+use super::text_and_images::{build, images};
 
     // ── Тесты <iframe> / DrawImage placeholder ──────────────────────────────
 

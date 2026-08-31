@@ -9,9 +9,8 @@
 //! (`docs/tasks/p1-monolith-split-queue.md` §4, группа DL, батч DL-5).
 
 use super::*;
-// P1/SPLIT-DL6 ещё не взят: Fixed8 остаётся в `mod tests` в display_list.rs —
-// общий хелпер, ещё не вынесенный оттуда.
-use super::tests::Fixed8;
+// Fixed8 уехал в display_list/tests/text_and_images.rs (батч DL-6).
+use super::text_and_images::Fixed8;
 
     // ── build_display_list_ordered ─────────────────────────────────────
 

@@ -6,9 +6,8 @@
 //! (`docs/tasks/p1-monolith-split-queue.md` §4, группа DL, батч DL-4).
 
 use super::*;
-// P1/SPLIT-DL6 ещё не взят: build/fills/Fixed8 остаются в `mod tests` в
-// display_list.rs — общие хелперы, ещё не вынесенные оттуда.
-use super::tests::{build, fills, Fixed8};
+// build/fills/Fixed8 уехали в display_list/tests/text_and_images.rs (батч DL-6).
+use super::text_and_images::{build, fills, Fixed8};
 // build_ordered/count_variant уехали в
 // display_list/tests/ordered_build_scroll.rs (батч DL-5).
 use super::ordered_build_scroll::{build_ordered, count_variant};
