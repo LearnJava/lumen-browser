@@ -58,11 +58,11 @@
  "generated": "2026-08-31",
  "counts": {
   "open": 369,
-  "fixed": 516,
+  "fixed": 517,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 885,
+ "total_bugs": 886,
  "phases": [
   {
    "id": "P0",
@@ -7324,10 +7324,10 @@
    "debtor": true
   },
   "BUG-199": {
-   "status": "open",
-   "title": "`@starting-style` — Lumen рендерит спек-корректное settled-состояние (обе коробки 200×200, opacity 1 после 0.4s entry-перехода); display-list геометрия/цвета ид…",
-   "component": "layout",
-   "date": null,
+   "status": "fixed",
+   "title": "Годами документировался как «settled-состояние, дефекта движка нет, класс BUG-126» на основе `--dump-display-list` (однократный статический снимок) — **диагноз…",
+   "component": "graphic_tests",
+   "date": "2026-08-31",
    "debtor": true
   },
   "BUG-200": {
@@ -12145,6 +12145,13 @@
    "component": "js (`crates/js/src/canvas2d.rs` — натив сеттера цвета; `crates/js/src/shim/web_api_shim_mid.js` — `_lumen_c2d_paint_style`), canvas (`crates/engine/canvas/src/color.rs`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-931": {
+   "status": "open",
+   "title": "TEST-51: третий scroll-контейнер (`overflow-x:scroll`, инлайн-блочные дети 180×60) в живом окне рисует первого ребёнка высотой ~31px вместо 60px — сплошная обре…",
+   "component": "paint (`crates/engine/paint/src/renderer.rs` — wgpu `render_impl`, `PushScrollLayer`/`FillRect`/`sync_scissor_to_stack`/`bind_and_draw!`/`run_draw_ops!`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -12313,6 +12320,9 @@
   ],
   "font (`system_fonts.rs`)": [
    "BUG-329"
+  ],
+  "graphic_tests": [
+   "BUG-199"
   ],
   "html-parser": [
    "BUG-021"
@@ -13000,7 +13010,6 @@
    "BUG-193",
    "BUG-194",
    "BUG-197",
-   "BUG-199",
    "BUG-201",
    "BUG-202",
    "BUG-204",
@@ -13316,6 +13325,9 @@
   ],
   "paint (`crates/engine/paint/src/cpu_raster.rs` — `gaussian_blur`: `radius` не ограничен размером слоя; `box_blur_h`/`box_blur_v` — прайминг аккумулятора `for i in -r..=r`, O(r) на строку/столбец)": [
    "BUG-850"
+  ],
+  "paint (`crates/engine/paint/src/renderer.rs` — wgpu `render_impl`, `PushScrollLayer`/`FillRect`/`sync_scissor_to_stack`/`bind_and_draw!`/`run_draw_ops!`)": [
+   "BUG-931"
   ],
   "paint (`crates/engine/paint/src/renderer.rs` — пре-резолв face-ов `DrawText`)": [
    "BUG-771"

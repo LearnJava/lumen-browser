@@ -26,13 +26,20 @@
     .box-b { opacity: 0; transform: translateX(-80px); }
   }
 
+  /* No `transition` property here on purpose: this test's job is to check
+     that @starting-style parses cleanly and doesn't leak into a *static*
+     render (see the file-level comment). A `transition` on these rules
+     would arm a genuine entry-transition on page load, and neither browser
+     is guaranteed to have it finished by the time a one-shot headless
+     screenshot is taken — Edge's own reference capture was observed to
+     land at a random point of such a transition across runs, corrupting
+     the comparison target itself (BUG-199). */
   .box-a {
     width: 200px;
     height: 200px;
     background-color: #e94560;
     border-radius: 12px;
     opacity: 1;
-    transition: opacity 0.4s ease, transform 0.4s ease;
   }
 
   .box-b {
@@ -41,7 +48,6 @@
     background-color: #0f3460;
     border-radius: 12px;
     opacity: 1;
-    transition: opacity 0.4s ease, transform 0.4s ease;
   }
 </style>
 <body>
