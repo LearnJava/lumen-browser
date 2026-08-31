@@ -124,6 +124,10 @@ pub enum ClickOutcome<'a> {
     /// строки клик внутрь фрейма не оставлял бы в журнале ничего: путь
     /// страницы обрывается раньше всех остальных исходов.
     IntoFrame { frame: usize, node: Option<u32>, x: f32, y: f32 },
+    /// BUG-480 срез 24: ссылка СТРАНИЦЫ с `target="имя"`, совпавшим с живым
+    /// фреймом — сама страница остаётся на месте, а меняется под-документ
+    /// `frame`.
+    LinkIntoNamedFrame { frame: usize, href: &'a str },
 }
 
 pub fn log_click(info: &ClickInfo<'_>) {
@@ -154,6 +158,8 @@ pub fn log_click(info: &ClickInfo<'_>) {
             Some(n) => format!("into frame #{frame}  node={n}  child=({x:.0}, {y:.0})"),
             None => format!("into frame #{frame}  no box under point  child=({x:.0}, {y:.0})"),
         },
+        ClickOutcome::LinkIntoNamedFrame { frame, href } =>
+            format!("navigate named frame #{frame}  href=\"{href}\""),
     };
     detail(&format!("→ {outcome_str}"));
 }
