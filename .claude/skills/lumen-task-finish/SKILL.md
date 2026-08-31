@@ -1,15 +1,15 @@
 ---
 name: lumen-task-finish
 description: >
-  Завершает задачу по протоколу Lumen: clippy + тесты, обновление CLAUDE.md
-  и lumen-plan.md, merge --no-ff в main, удаление worktree.
+  Завершает задачу по протоколу Lumen: clippy + scoped-тесты, синхронизация
+  статусных документов, merge --no-ff в main, push, освобождение слота.
   Используй когда задача реализована и готова к слиянию.
 when_to_use: >
   Фразы-триггеры: "заверши задачу", "смерджи ветку", "влей ветку", "merge task",
   "задача готова", "ready to merge", "закончил задачу". Также когда все тесты
   проходят и реализация завершена.
 model: claude-sonnet-4-6
-allowed-tools: Bash(git *) Bash(cargo *) Bash(export PATH*) Read Edit
+allowed-tools: Bash(git *) Bash(cargo *) Bash(bash scripts/*) Bash(python scripts/*) Bash(export PATH*) Read Edit
 ---
 
 # Завершение задачи — протокол merge в Lumen
@@ -17,10 +17,15 @@ allowed-tools: Bash(git *) Bash(cargo *) Bash(export PATH*) Read Edit
 $ARGUMENTS — имя ветки/задачи (например `font-fallback`).
 Если не передан — определи из текущей ветки: `git branch --show-current`
 
-> **Этот скилл — финальный гейт качества (workspace clippy + test).**
+> **Этот скилл — финальный гейт качества (workspace clippy + scoped test).**
 > НЕ запускай per-crate `cargo clippy -p … / cargo test -p …` вручную прямо
 > перед его вызовом — это двойная оплата за те же крейты. В процессе работы
 > достаточно `cargo check`; полную проверку делает скилл один раз ниже.
+
+> **Правило «merge+push после каждого коммита» (пользователь, 2026-08-19)
+> означает, что шаги 1–4 уже прогонялись по ходу задачи.** Здесь они закрывают
+> хвост последнего коммита. Если после последнего merge в main ничего не
+> менялось — сразу к шагу 7.
 
 > **Оба гейта (шаги 1–2) гони СИНХРОННО** — обычный Bash-вызов с
 > `timeout: 600000`, НЕ `run_in_background`. Фоновые output-файлы буферизуются
@@ -37,10 +42,12 @@ cargo clippy --workspace --all-targets -- -D warnings > .tmp/gate-clippy.log 2>&
 tail -5 .tmp/gate-clippy.log            # детали ошибок: grep -E "^error" .tmp/gate-clippy.log
 ```
 
-> sccache + rust-lld уже включены глобально в `.cargo/config.toml` — отдельно
-> прокидывать не нужно. Профиль `dev` (по умолчанию) быстрее компилируется,
-> чем `dev-release`, для корректностного гейта — НЕ навешивай `--profile dev-release`
-> на clippy/test (он оправдан только в `graphic_tests/run.py`, где важен рантайм рендера).
+> **sccache отключён** с 2026-08-19 — версия 0.15.0 валит компилятор под
+> тулчейном 1.97.0 (`.cargo/config.toml`, обёртка закомментирована). Ничего
+> прокидывать не нужно. Профиль `dev` (по умолчанию) компилируется быстрее,
+> чем `dev-release`; для корректностного гейта **не** навешивай
+> `--profile dev-release` — он оправдан только в `graphic_tests/run.py`, где
+> важен рантайм рендера.
 
 Если есть warnings — исправь их **до** продолжения. Не делай `#[allow(...)]`
 без явной причины.
@@ -49,9 +56,8 @@ tail -5 .tmp/gate-clippy.log            # детали ошибок: grep -E "^e
 
 Шаг 1 (`clippy --workspace --all-targets`) уже **скомпилировал весь workspace** и
 поймал кросс-крейтовую поломку сборки. Поэтому здесь гоняем тесты только
-затронутых крейтов + их транзитивных обратных зависимостей, а не весь workspace:
-на 22 крейта `test --workspace` — это ~110 отдельных линковок тест-бинарей (~30 мин;
-замеры в памяти `project_build_test_perf_findings`).
+затронутых крейтов + их транзитивных обратных зависимостей: на 22 крейта
+`test --workspace` — это ~110 отдельных линковок тест-бинарей (~30 мин).
 
 ```bash
 export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
@@ -63,112 +69,94 @@ tail -20 .tmp/gate-test.log             # упавшие тесты: grep -B2 "F
 Скрипт сам берёт затронутые пакеты из `git diff` (коммиты ветки + рабочее дерево)
 и считает замыкание обратных зависимостей. Правки только в доках/конфигах → тестов нет.
 
+> **Гейт сломан на `lumen-network`: [BUG-805](../../../bugs/BUG-805-OPEN.md).**
+> `udp_round_trip` (`crates/network/src/h3/udp.rs`) висит, и скрипт не доходит
+> до конца, когда замыкание втягивает этот крейт. **Не жди зависания до
+> таймаута и не считай его красным гейтом:** прогони тесты своих крейтов
+> адресно (`cargo test -p <crate>`) и напиши в теле коммита, почему общий гейт
+> не зелёный. Не «чинить» это правкой чужого теста.
+
 Если тесты падают — исправь. Не коммить красные тесты.
 
-> Полный `cargo test --workspace` не нужен принудительно: если правка трогает
-> корневой крейт (`lumen-core` и т.п.), замыкание само раскроется почти на весь
-> workspace. `lumen-driver` (64 тест-бинаря) втягивается почти всегда — его
-> консолидация вынесена отдельной задачей в `STATUS-P1.md`.
+## Шаг 3 — Синхронизируй документы (матрица doc-sync)
 
-## Шаг 3 — Обнови lumen-plan.md
+Полная матрица — [CLAUDE.md](../../../CLAUDE.md) §«Doc sync rules». Что нужно
+почти всегда:
 
-В файле `lumen-plan.md`:
+1. **`STATUS-PN.md`** — удали строку-указатель завершённой задачи. Указатель —
+   это НОМЕР СТРОКИ в источнике, чужие правки его уводят: сверяй по файлу, а не
+   по памяти.
+2. **`CAPABILITIES.md` + `subsystems/<crate>.md`** — новая возможность:
+   ⬜/🟡 → ✅ и строка в «Готово».
+3. **`BUGS.md`** — багфикс: `OPEN` → `FIXED <дата>`, и **переименуй файл**
+   `bugs/BUG-NNN-OPEN.md` → `-FIXED.md`. Об этом забывают чаще всего; после
+   переименования почини кросс-ссылки (`grep -rl "BUG-NNN-OPEN"`).
+4. **`ROADMAP.md`** — если менялась структура задач, затем
+   `python scripts/gen_roadmap.py`. Одна задача = ровно одна строка таблицы:
+   перенос строки внутри ячейки молча обрезает всю таблицу ниже.
+5. **`CLAUDE.md` §Known gotchas** — только если найдена ЖИВАЯ ловушка.
+   Починенный баг оттуда **удаляется**, а не переписывается в «~~было~~ —
+   fixed»; переносимый урок метода идёт в `docs/probe-method.md`.
 
-1. В блоке `## 🔄 В работе сейчас` — удали строку резервации этой задачи.
-   Если осталось пусто — восстанови `_(никто ничего не зарезервировал)_`.
+`SYMBOLS.md` и `docs/roadmap-*.html` — генерируемые и не коммитятся; держи их
+свежими локально, если пользуешься (`python scripts/gen_symbols.py`).
 
-2. В блоке `## Статус реализации` — смени маркер:
-   - `⬜` → `✅` (или `🟡` → `✅`) для реализованного пункта
-   - Если частично — оставь `🟡` с пометкой что готово
+## Шаг 4 — Коммит документации
 
-## Шаг 4 — Обнови CLAUDE.md
-
-В файле `CLAUDE.md`:
-
-1. **[SUBSYSTEMS.md](../../../SUBSYSTEMS.md)** — расширь раздел крейта:
-   - В «Готово» добавь что реализовано (одна строка на фичу)
-   - Обнови число тестов (`N тестов`)
-   - Если пункт был в «Отложено» — убери
-
-2. **«История последних merge-ов»** — добавь в начало списка:
-   ```
-   *            <имя-ветки>           — <одна строка что сделано>
-   ```
-
-3. **«Roadmap — что предстоит»** — если пункт реализован, удали его.
-
-4. **[DECISIONS.md](../../../DECISIONS.md)** — если приняли архитектурное решение в ходе задачи,
-   добавь запись.
-
-## Шаг 5 — Коммит обновлений документации
-
-Если CLAUDE.md / lumen-plan.md не были обновлены в коммите с кодом —
-сделай отдельный коммит:
+Если документы не были обновлены в коммите с кодом — отдельный коммит:
 
 ```bash
-git add CLAUDE.md lumen-plan.md
-git commit -m "Обновить статус задачи <имя> в плане и CLAUDE.md
+git add -A && git commit -m "Обновить статус задачи <имя>
 
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
-## Шаг 5б — Запушить ветку и дождаться зелёного CI
+## Шаг 5 — Merge в main
 
-Решение 2026-08-18 ([docs/ci-offload.md](../../../docs/ci-offload.md) §8, вариант 1).
-`ci.yml` и `red-lines.yml` триггерятся на push веток `p[1-5]-*`, поэтому PR открывать
-не нужно. **Красную ветку не мержим.**
+**CI не ждём** (решение пользователя 2026-08-19, [docs/ci-offload.md](../../../docs/ci-offload.md) §8):
+локальный гейт — единственная предмерджевая проверка, ожидание прогона стоило
+бы ~30 мин на каждый коммит. За красным CI на `main` следим после пуша и чиним
+отдельно.
 
-`gh` не в PATH у bash — путь задать явно.
+**Важно:** корень часто держит чужие незакоммиченные файлы и блокирует merge.
 
-```bash
-export PATH="/c/Program Files/GitHub CLI:$PATH"
-git push -u origin $ARGUMENTS
-
-RUN=$(gh run list --repo LearnJava/lumen-browser --branch $ARGUMENTS \
-        --workflow CI --limit 1 --json databaseId -q '.[0].databaseId')
-gh run watch --repo LearnJava/lumen-browser "$RUN"
-```
-
-Если красный — читать причину и чинить **на ветке**, потом push ещё раз
-(`concurrency` отменит предыдущий прогон сам):
-
-```bash
-gh run view "$RUN" --repo LearnJava/lumen-browser --log-failed | head -40
-```
-
-Прогон холодный — 20–25 минут. Это не замена локального гейта (шаги 1–2), а
-дополнение: CI сейчас гоняет `cargo check -p lumen-shell` и юнит-тесты 16 крейтов,
-но **не** `clippy --workspace` и **не** снапшоты — то есть он слабее локального
-гейта и добавляет только Linux и macOS.
-
-## Шаг 6 — Merge в main
-
-**Важно:** main должен быть свободен (не занят другим worktree с uncommitted changes).
-
-Проверь:
 ```bash
 git worktree list
 ```
 
-!`git worktree list`
-
-Merge выполняется через временный worktree на main **или** через основной
-клон, если он не занят:
-
 ```bash
-# Вариант А — через главное дерево (если оно на main и чистое):
+# Вариант А — через главный чекаут (если он на main и не конфликтует):
 git -C /d/RustProjects/lumen-browser merge --no-ff $ARGUMENTS \
     -m "Влить ветку $ARGUMENTS: <однострочное описание>"
 
-# Вариант Б — через временный detached worktree (путь ТОЛЬКО внутри папки
-# браузера: /tmp и ../lumen-* запрещены рабочей границей):
-git worktree add --detach .claude/worktrees/merge-$ARGUMENTS main
+# Вариант Б — если корень блокирует merge: временный worktree.
+# Путь ТОЛЬКО внутри папки браузера (/tmp и ../lumen-* запрещены рабочей границей).
+# ВНИМАНИЕ: чекаут этого репозитория — ~59 000 файлов, обычный `worktree add`
+# не укладывается в таймаут инструмента. Бери sparse без tests/wpt, иначе
+# получишь недокачанное дерево и индекс, в котором ВЕСЬ репозиторий помечен
+# удалённым (коммит в таком состоянии сносит дерево):
+git worktree add --no-checkout --detach .claude/worktrees/merge-$ARGUMENTS main
+git -C .claude/worktrees/merge-$ARGUMENTS sparse-checkout set --no-cone '/*' '!/tests/wpt'
+git -C .claude/worktrees/merge-$ARGUMENTS checkout
+git -C .claude/worktrees/merge-$ARGUMENTS status --short          # ОБЯЗАТЕЛЬНО: должно быть пусто
 git -C .claude/worktrees/merge-$ARGUMENTS merge --no-ff $ARGUMENTS \
     -m "Влить ветку $ARGUMENTS: <однострочное описание>"
-git worktree remove .claude/worktrees/merge-$ARGUMENTS
+git -C .claude/worktrees/merge-$ARGUMENTS push origin HEAD:main
+git worktree remove .claude/worktrees/merge-$ARGUMENTS   # не забывать: осиротевшие
+                                                          # merge-* каталоги копятся
 ```
 
 `--no-ff` обязателен — сохраняет видимую структуру в `git log --graph`.
+
+## Шаг 6 — Push
+
+```bash
+git push origin main
+```
+
+Если merge шёл вариантом Б — локальный `main` отстаёт от `origin/main`, и это же
+заставит `worktree-pool.sh release` отказать. Освобождать слот тогда через
+`git checkout --detach origin/main` внутри слота.
 
 ## Шаг 7 — Освободи слот и удали ветку
 
@@ -176,7 +164,7 @@ git worktree remove .claude/worktrees/merge-$ARGUMENTS
 («cannot delete branch ... used by worktree at ...»).
 
 ```bash
-bash scripts/worktree-pool.sh release p<N>-work   # detached HEAD на main, target/ остаётся
+bash scripts/worktree-pool.sh release p<N>-work   # detached HEAD, прогретый target/ остаётся
 git branch -d $ARGUMENTS
 ```
 
@@ -184,16 +172,13 @@ git branch -d $ARGUMENTS
 Удалять надо только ad-hoc worktree, если задача велась в нём:
 `git worktree remove .claude/worktrees/$ARGUMENTS`.
 
-Если `git branch -d` отказывает (ветка не полностью смержена) —
-убедись что merge прошёл успешно, затем `-D` вместо `-d`.
-
-Удалить и **удалённую** ветку — она нужна была только для прогона CI (шаг 5б):
+Если ветка пушилась в origin — удалить и там:
 
 ```bash
 git push origin --delete $ARGUMENTS
 ```
 
-Не пропускать: к 2026-08-18 в `origin` накопилось 29 веток, старейшая с июня.
+Не пропускать: удалённые ветки копятся (31 штука к 2026-08-31, старейшая с июня).
 
 ## Шаг 8 — Проверь результат
 
@@ -201,7 +186,5 @@ git push origin --delete $ARGUMENTS
 git log --oneline --graph -5
 ```
 
-!`git log --oneline --graph -5`
-
-Убедись что merge-коммит виден с правильным сообщением.
-Сообщи пользователю: что смержено, сколько тестов теперь в workspace.
+Убедись, что merge-коммит виден с правильным сообщением. Сообщи пользователю:
+что смержено и в каком состоянии гейт (зелёный / обойдён из-за BUG-805).

@@ -37,7 +37,7 @@ P5 понимает короткие команды. Каждая запуска
 | `clippy` / `clippy-all` | `cargo clippy --workspace --all-targets -- -D warnings` целиком (P5-исключение из правила «-p»). Показать только error-блоки. | `/lumen-health-check clippy` |
 | `stubs` / `заглушки` | Поиск `todo!()` / `unimplemented!()` / `unreachable!()` и висящих `// CSS:` хэндофов без хозяина + `grep OPEN BUGS.md`. | `/lumen-health-check stubs` |
 | `branches` / `чистка веток` | Список влитых веток (`--merged main`), веток с `: gone]`, зомби-worktree. Предложить безопасное удаление. | `/lumen-health-check branches` |
-| `docs` / `дрейф доков` | `python scripts/gen_symbols.py` → `git diff SYMBOLS.md` (рассинхрон символов); сверка статус-маркеров в lumen-plan.md с кодом. | `/lumen-health-check docs` |
+| `docs` / `дрейф доков` | `python scripts/gen_symbols.py` и `python scripts/gen_roadmap.py` отрабатывают без ошибки (оба файла gitignored с 2026-08-31 — дрейфовать нечему, проверяем работоспособность генераторов и необрезанность дерева); сверка статус-маркеров с кодом. | `/lumen-health-check docs` |
 | `deps` / `аудит зависимостей` | Новые/дублирующиеся зависимости: `cargo tree -d`, поиск незадокументированных `[dependencies]` без «Why this dependency». | `/lumen-health-check deps` |
 | `dupes` / `дубликаты` | Поиск похожих/дублирующих полей в `ComputedStyle` и параллельно реализованных функций (риск параллельных сессий P1/P2/P4). | `/lumen-health-check dupes` |
 
@@ -52,7 +52,7 @@ P5 понимает короткие команды. Каждая запуска
 2. **Безопасную чистку делай сразу** (без отдельной задачи):
    - удаление веток, влитых в main (`git branch -d`, только `--merged`);
    - удаление зомби/осиротевших worktree (`git worktree prune` + `remove`);
-   - регенерация `SYMBOLS.md` (`python scripts/gen_symbols.py`) — отдельным коммитом;
+   - удаление осиротевших каталогов `.claude/worktrees/merge-*` и веток `merge-tmp-*`;
    - тривиальный clippy-фикс (неиспользованный импорт, `&` лишний) в своём крейте.
 3. **Крупные находки НЕ чини сам** — заведи:
    - визуальный/логический баг → строка `OPEN` в `BUGS.md` (следующий BUG-NNN);
@@ -83,7 +83,7 @@ P5 правит код **только** в своём крейте при три
 | 1 | Полный `health` свип по main | раз в спринт / после крупной вехи |
 | 2 | Чистка влитых веток и осиротевших worktree | раз в 1–2 недели |
 | 3 | Аудит `todo!()`/`unimplemented!()` и висящих `// CSS:` | раз в спринт |
-| 4 | Регенерация `SYMBOLS.md` + сверка дрейфа доков | при расхождении |
+| 4 | Генераторы (`gen_symbols.py`/`gen_roadmap.py`) запускаются + сверка дрейфа доков | при расхождении |
 | 5 | `dupes` — поиск дублирующих полей `ComputedStyle` | по запросу / после серии мержей P1+P2+P4 |
 
 ### Постоянно

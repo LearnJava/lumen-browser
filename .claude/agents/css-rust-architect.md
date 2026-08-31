@@ -107,7 +107,7 @@ Before marking any CSS task complete:
 - [ ] `--dump-layout` shows correct computed values
 - [ ] `--dump-display-list` shows correct draw commands
 - [ ] Graphic test updated and pipeline passes for this test
-- [ ] `SYMBOLS.md` regenerated (`python scripts/gen_symbols.py`)
+- [ ] (`SYMBOLS.md` is generated and gitignored — regenerate locally if you use it, nothing to commit)
 - [ ] `CSS-SPECS.md` status updated (⬜ → ✅)
 - [ ] `lumen-plan.md` task marker updated
 - [ ] `STATUS-P4.md` pointer line for the completed task deleted
