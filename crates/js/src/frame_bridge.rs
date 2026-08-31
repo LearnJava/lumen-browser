@@ -191,6 +191,8 @@
 //!   новый объект Event, а не тот же инстанс, что у ребёнка.
 
 #[cfg(feature = "v8-backend")]
+use std::collections::HashSet;
+#[cfg(feature = "v8-backend")]
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Псевдо-bid слота «окно родителя» в реестре ([`FrameDocSlots::parent`]).
@@ -510,6 +512,31 @@ fn resolve_slot(slots: &FrameDocSlots, bid: u32) -> Option<&FrameDocBinding> {
     }
 }
 
+// ── Срез 25: relayout ребёнка после мутации ЧЕРЕЗ МОСТ ───────────────────────
+
+/// Глобальный сигнал «документ с этим ключом мутирован мостом» (BUG-480
+/// срез 25). Ключ — тот же `Arc::as_ptr(&doc) as usize`, что у
+/// [`FrameDocSlots::self_key`]/[`frame_outbox`]: родитель мутирует ребёнка в
+/// СВОЁМ изоляте ([`with_accessible_doc_mut`]), у ребёнка своя, отдельная
+/// `V8JsRuntime` с собственным `dom_dirty` — дёрнуть его напрямую неоткуда, и
+/// этот реестр единственный канал сигнала для кросс-изолятной записи. Мутация
+/// ребёнка ЕГО СОБСТВЕННЫМ скриптом идёт обычными нативами `dom.rs` в его же
+/// рантайме и уже поднимает штатный `dom_dirty` этого рантайма — реестр ей не
+/// нужен, шелл дренирует оба источника рядом (`about_to_wait.rs`).
+#[cfg(feature = "v8-backend")]
+fn frame_dom_dirty() -> &'static Mutex<HashSet<usize>> {
+    static DIRTY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+    DIRTY.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Забрать (и сбросить) флаг «документ с этим ключом мутирован мостом».
+/// Единственный вызывающий — [`crate::v8_runtime::runtime::V8JsRuntime::take_frame_dom_dirty`]
+/// со своим `self_doc_key`; `false`, если мутаций не было.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn take_frame_dom_dirty(key: usize) -> bool {
+    frame_dom_dirty().lock().unwrap_or_else(|e| e.into_inner()).remove(&key)
+}
+
 /// Захватить биндинг `bid` на чтение, если он существует и разрешён.
 ///
 /// Все нативы чтения проходят через эту точку: несуществующий bid и
@@ -535,6 +562,16 @@ fn with_accessible_doc<R>(
 /// Мутабельный вариант [`with_accessible_doc`] для среза 5 (запись в
 /// под-документ). Те же правила: нет биндинга или `accessible: false` —
 /// вызывающий JS получает «пусто».
+///
+/// Срез 25: помечает целевой документ грязным ([`frame_dom_dirty`])
+/// безусловно, как только биндинг разрешён и доступен — до вызова `f`, а не
+/// по его результату. Все восемь нативов, идущих через эту точку, либо сами
+/// меняют дерево (append/insert/remove/set_text) либо готовят узел к
+/// вставке (create_element/create_text, где мутация видимого дерева ещё не
+/// произошла) — в обоих случаях лишний пересчёт фрейма стоит дёшево
+/// (`relayout_frame_content` гейтов не имеет само по себе, но вызывается
+/// самим шеллом не чаще одного раза за тик), а пропущенный испортил бы
+/// видимый результат.
 #[cfg(feature = "v8-backend")]
 fn with_accessible_doc_mut<R>(
     registry: &FrameDocRegistry,
@@ -549,8 +586,12 @@ fn with_accessible_doc_mut<R>(
     if !binding.accessible {
         return empty;
     }
+    let key = Arc::as_ptr(&binding.doc) as usize;
     let mut doc = binding.doc.lock().unwrap_or_else(|e| e.into_inner());
-    f(&mut doc)
+    let result = f(&mut doc);
+    drop(doc);
+    frame_dom_dirty().lock().unwrap_or_else(|e| e.into_inner()).insert(key);
+    result
 }
 
 /// Границы арены для нативов записи: `Document::get` индексирует `Vec` без
@@ -3045,6 +3086,53 @@ mod tests {
                 ));
             },
         );
+    }
+
+    // ── Срез 25: relayout ребёнка после мутации через мост ──────────────────
+
+    #[test]
+    fn bridge_mutation_marks_frame_dirty_and_drains_once() {
+        with_shared_frame(
+            "<html><body><p id='p'>x</p></body></html>",
+            true,
+            |rt, doc| {
+                let key = Arc::as_ptr(doc) as usize;
+                // Ничего не менялось — флага нет.
+                assert!(!take_frame_dom_dirty(key));
+                assert!(eval_bool(
+                    rt,
+                    "var el = _lumen_frame_content_document(7).getElementById('p'); \
+                     el.setAttribute('data-x', '1'); \
+                     el.getAttribute('data-x') === '1'"
+                ));
+                // Забирается ровно один раз — второй запрос без новой мутации пуст.
+                assert!(take_frame_dom_dirty(key));
+                assert!(!take_frame_dom_dirty(key));
+            },
+        );
+    }
+
+    #[test]
+    fn inaccessible_bridge_mutation_does_not_mark_dirty() {
+        with_shared_frame("<html><body><p>x</p></body></html>", false, |_rt, doc| {
+            let key = Arc::as_ptr(doc) as usize;
+            // Натив выше уже проверил, что запись сюда — no-op; здесь — что
+            // no-op не поднимает флаг, который заставил бы шелл впустую
+            // пересчитать фрейм.
+            assert!(!take_frame_dom_dirty(key));
+        });
+    }
+
+    #[test]
+    fn bridge_read_does_not_mark_dirty() {
+        with_shared_frame("<html><body><p id='p'>x</p></body></html>", true, |rt, doc| {
+            let key = Arc::as_ptr(doc) as usize;
+            assert!(eval_bool(
+                rt,
+                "_lumen_frame_content_document(7).getElementById('p').textContent === 'x'"
+            ));
+            assert!(!take_frame_dom_dirty(key));
+        });
     }
 
     #[test]

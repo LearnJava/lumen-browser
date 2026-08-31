@@ -147,6 +147,11 @@ impl Lumen {
         // BUG-480 срез 20: `form.submit()`/`requestSubmit()` из скрипта самого
         // ребёнка — второй вход в отправку его формы.
         let mut frame_submits: Vec<(usize, u32, i32)> = Vec::new();
+        // BUG-480 срез 25: relayout ребёнка при мутации его DOM — своим
+        // скриптом (штатный `take_dom_dirty` этого рантайма) или родителем
+        // через мост (`take_frame_dom_dirty`, тот же тик, что и остальной
+        // дренаж моста выше).
+        let mut frame_dirty: Vec<usize> = Vec::new();
         for (idx, fjs) in &frame_js_handles {
             fjs.tick_timers();
             fjs.pump_websockets();
@@ -175,9 +180,26 @@ impl Lumen {
             for (target_y, _smooth) in fjs.take_page_scroll_requests() {
                 frame_scrolls.push((*idx, target_y));
             }
+            // BUG-480 срез 25: оба источника дренируются безусловно (не
+            // `else if`) — своя мутация и мутация от родителя могли прийти
+            // в один и тот же тик, и пропуск второго флага оставил бы его
+            // висеть до следующей случайной мутации.
+            let own_dirty = fjs.take_dom_dirty();
+            let bridge_dirty = fjs.take_frame_dom_dirty();
+            if own_dirty || bridge_dirty {
+                frame_dirty.push(*idx);
+            }
         }
         for (idx, target_y) in frame_scrolls {
             self.apply_frame_scroll(idx, target_y);
+        }
+        // BUG-480 срез 25: `refresh_frames(Some(idx))` пересчитывает layout
+        // ЭТОГО фрейма без гейта «размер/интерактив не менялись» (он для
+        // другого входа — сам вьюпорт здесь не тронут) и пересобирает
+        // display list страницы — та же функция, что уже применяет
+        // нативное переключение элемента формы (срез 18).
+        for idx in frame_dirty {
+            self.refresh_frames(Some(idx));
         }
         // BUG-480 срез 20: отправка формы, начатая скриптом самого ребёнка.
         // Событие `submit` уже разослано на JS-стороне (`requestSubmit`) либо

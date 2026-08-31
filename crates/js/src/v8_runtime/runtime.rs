@@ -407,6 +407,17 @@ impl V8JsRuntime {
         crate::frame_bridge::frame_transport_has_for((key != 0).then_some(key))
     }
 
+    /// BUG-480 срез 25: этот контекст — под-документ фрейма, чьё дерево
+    /// изменил родитель ЧЕРЕЗ МОСТ (`contentDocument`/фасады, в СВОЁМ
+    /// изоляте — обычный [`Self::take_dom_dirty`] этого контекста такую
+    /// мутацию не видит, она прошла мимо его собственных нативов). Ключ —
+    /// тот же `self_doc_key`, что у [`Self::frame_transport_pending`]; до
+    /// `install_dom` (ключ 0) всегда `false`, как и у него.
+    pub fn take_frame_dom_dirty(&self) -> bool {
+        let key = self.self_doc_key.load(Ordering::Relaxed);
+        key != 0 && crate::frame_bridge::take_frame_dom_dirty(key)
+    }
+
     /// Enable or disable deterministic render mode (8F) before calling `install_dom`.
     ///
     /// `rng_seed` (DEVX-16, `--rng-seed`): overrides the URL-hash-derived

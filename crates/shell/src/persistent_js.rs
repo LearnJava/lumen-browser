@@ -57,6 +57,15 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn frame_transport_pending(&self) -> bool {
         false
     }
+    /// BUG-480 срез 25: забрать (и сбросить) флаг «этот под-документ мутирован
+    /// МОСТОМ» — родитель писал в него через `contentDocument`/фасады
+    /// (setAttribute/appendChild/…) в СВОЁМ изоляте, поэтому обычный
+    /// [`Self::take_dom_dirty`] ребёнка такую мутацию не видит: она прошла
+    /// мимо его собственных нативов. Default `false` для движков без моста
+    /// (`NullPersistentJs`, минимальные тестовые изоляты).
+    fn take_frame_dom_dirty(&self) -> bool {
+        false
+    }
     /// Returns `true` if JS mutated the DOM since the last call, clearing the flag.
     ///
     /// Called after each rAF pass in `RedrawRequested`; when `true`, a relayout
@@ -669,6 +678,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn take_dom_dirty(&self) -> bool {
         self.rt.take_dom_dirty()
+    }
+    fn take_frame_dom_dirty(&self) -> bool {
+        self.rt.take_frame_dom_dirty()
     }
     fn take_dom_touched(&self) -> DomTouchedSummary {
         let t = self.rt.take_dom_touched();
