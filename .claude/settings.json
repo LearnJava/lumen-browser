@@ -1,0 +1,77 @@
+{
+  "$comment": [
+    "Общие для проекта разрешения. Заведено 2026-08-31: до этого существовал только",
+    "личный .claude/settings.local.json (35 правил, наполовину одноразовых —",
+    "'awk NR>=12800' по конкретному файлу, curl конкретного css), поэтому каждая",
+    "новая сессия и каждый слот пула переспрашивали одно и то же.",
+    "",
+    "allow — рутина протокола из CLAUDE.md: сборка, тесты, гейт, git-цикл",
+    "'коммит → merge --no-ff → push', генераторы и скрипты репозитория.",
+    "deny — прозаические запреты CLAUDE.md и памяти проекта, переведённые в",
+    "машинную форму. Это единственный способ сделать их не зависящими от того,",
+    "прочитал ли их кто-то в этой сессии.",
+    "",
+    "Личные и одноразовые правила держать в .claude/settings.local.json (не",
+    "версионируется). Сюда добавлять только то, что верно для любой роли.",
+    "",
+    "`git push origin --delete <ветка>` намеренно НЕ внесён ни в allow, ни в deny:",
+    "шаг 7 чеклиста его требует, но это необратимая операция на общем remote —",
+    "пусть спрашивает каждый раз."
+  ],
+
+  "permissions": {
+    "allow": [
+      "Bash(export PATH=*)",
+
+      "Bash(cargo check *)",
+      "Bash(cargo build *)",
+      "Bash(cargo test *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo run -p lumen-shell *)",
+      "Bash(cargo tree *)",
+
+      "Bash(git status*)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git diff *)",
+      "Bash(git branch *)",
+      "Bash(git add *)",
+      "Bash(git rm *)",
+      "Bash(git mv *)",
+      "Bash(git commit *)",
+      "Bash(git checkout *)",
+      "Bash(git restore *)",
+      "Bash(git stash *)",
+      "Bash(git fetch *)",
+      "Bash(git pull *)",
+      "Bash(git merge *)",
+      "Bash(git worktree *)",
+      "Bash(git ls-files *)",
+      "Bash(git ls-tree *)",
+      "Bash(git push origin main)",
+      "Bash(git push origin HEAD:main)",
+
+      "Bash(bash scripts/*)",
+      "Bash(python scripts/*)",
+      "Bash(python graphic_tests/*)",
+      "Bash(python tests/wpt/*)"
+    ],
+
+    "deny": [
+      "Bash(git config *)",
+      "Bash(git push --force*)",
+      "Bash(git push -f *)",
+      "Bash(git rebase *)",
+      "Bash(git commit --amend*)",
+      "Bash(git commit --no-verify*)",
+      "Bash(git filter-branch*)",
+      "Bash(git reflog expire*)",
+      "Bash(git gc --prune*)",
+
+      "Bash(cargo fmt*)",
+
+      "Bash(taskkill /IM *)",
+      "Bash(taskkill /im *)"
+    ]
+  }
+}

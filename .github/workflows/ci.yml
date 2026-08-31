@@ -73,9 +73,13 @@ jobs:
             !/tests/wpt
           sparse-checkout-cone-mode: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned, see rust-toolchain.toml)
+        # Пин совпадает с rust-toolchain.toml. Раньше здесь стоял @stable: rustup всё
+        # равно уважает rust-toolchain.toml, поэтому джоб СКАЧИВАЛ ДВА тулчейна и
+        # ставил clippy не на тот, которым потом линтует. Менять вместе с пином.
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.97.0"
           components: clippy
 
       # Do NOT cache `target/` wholesale: it is 38 GiB locally against a 10 GB
@@ -106,6 +110,20 @@ jobs:
             libegl-dev libgles2-mesa-dev \
             libasound2-dev \
             pkg-config
+
+      # The workflows name the toolchain explicitly (7 places), rust-toolchain.toml
+      # names it once, and rustup obeys the file — so a bump to the file alone would
+      # leave the workflows downloading a second, unused toolchain instead of
+      # failing. This step is the only thing that makes that drift visible.
+      - name: Toolchain matches the pin in rust-toolchain.toml
+        run: |
+          pinned=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+          actual=$(rustc --version | cut -d' ' -f2)
+          echo "pinned=$pinned actual=$actual"
+          if [ "$pinned" != "$actual" ]; then
+            echo "::error::CI runs $actual but rust-toolchain.toml pins $pinned — update the toolchain input in .github/workflows/*.yml"
+            exit 1
+          fi
 
       # Verify the main shell binary compiles.
       - name: Compile check (lumen-shell)
@@ -160,8 +178,13 @@ jobs:
             !/tests/wpt
           sparse-checkout-cone-mode: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned, see rust-toolchain.toml)
+        # Пин совпадает с rust-toolchain.toml. Раньше здесь стоял @stable: rustup всё
+        # равно уважает rust-toolchain.toml, поэтому джоб СКАЧИВАЛ ДВА тулчейна и
+        # ставил clippy не на тот, которым потом линтует. Менять вместе с пином.
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.0"
 
       - name: Cargo dependency cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
@@ -221,9 +244,13 @@ jobs:
             !/tests/wpt
           sparse-checkout-cone-mode: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned, see rust-toolchain.toml)
+        # Пин совпадает с rust-toolchain.toml. Раньше здесь стоял @stable: rustup всё
+        # равно уважает rust-toolchain.toml, поэтому джоб СКАЧИВАЛ ДВА тулчейна и
+        # ставил clippy не на тот, которым потом линтует. Менять вместе с пином.
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.97.0"
           components: clippy
 
       - name: Cargo dependency cache
@@ -273,8 +300,13 @@ jobs:
             !/tests/wpt
           sparse-checkout-cone-mode: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned, see rust-toolchain.toml)
+        # Пин совпадает с rust-toolchain.toml. Раньше здесь стоял @stable: rustup всё
+        # равно уважает rust-toolchain.toml, поэтому джоб СКАЧИВАЛ ДВА тулчейна и
+        # ставил clippy не на тот, которым потом линтует. Менять вместе с пином.
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.0"
 
       - name: Cargo dependency cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
@@ -421,8 +453,13 @@ jobs:
             !/tests/wpt
           sparse-checkout-cone-mode: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned, see rust-toolchain.toml)
+        # Пин совпадает с rust-toolchain.toml. Раньше здесь стоял @stable: rustup всё
+        # равно уважает rust-toolchain.toml, поэтому джоб СКАЧИВАЛ ДВА тулчейна и
+        # ставил clippy не на тот, которым потом линтует. Менять вместе с пином.
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.0"
 
       - name: Cargo dependency cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
