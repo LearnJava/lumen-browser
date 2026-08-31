@@ -186,6 +186,7 @@ use crate::engine_bridge::{
 use crate::engine_bridge::engine_thread_enabled_from;
 use crate::frame_log::{
     compose_outcome_label, frame_log_nanos, frame_phase_ms, post_cache_nanos, pre_marks_nanos,
+    tail_nanos,
 };
 use crate::relayout::{
     ContentVisibilityChange, collect_cv_auto, diff_cv_state, meta_initial_scale, relayout_page,

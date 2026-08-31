@@ -8,8 +8,8 @@
 19250	crates/engine/layout/src/lib.rs
 10217	crates/network/src/lib.rs
 9192	crates/engine/css-parser/src/parser.rs
+8873	crates/engine/paint/src/renderer.rs
 7955	crates/engine/paint/src/backends/femtovg_backend.rs
-7522	crates/engine/paint/src/renderer.rs
 7145	crates/engine/dom/src/lib.rs
 4852	crates/engine/paint/src/cpu_raster.rs
 4504	crates/core/src/ext.rs

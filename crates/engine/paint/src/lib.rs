@@ -357,7 +357,7 @@ pub use layer_cache::{LayerCache, LayerKey};
 pub use renderer::{
     last_compose, load_counter, ComposeOutcome, ImageRegisterError, Renderer,
     SnapshotUploadError, DL_EPOCH_MISMATCHES, DL_FOLD_REUSED, FRAMES_RENDERED, FRAMES_SKIPPED,
-    FRAME_LOG_NANOS, FRAME_PHASE_NANOS, POST_CACHE_NANOS, PRE_MARKS_NANOS,
+    FRAME_LOG_NANOS, FRAME_PHASE_NANOS, POST_CACHE_NANOS, PRE_MARKS_NANOS, TAIL_NANOS,
 };
 pub use scroll_snap::{find_scroll_snap_y, find_scroll_snap_y_proximity};
 pub use webgl::SoftwareWebGl;
