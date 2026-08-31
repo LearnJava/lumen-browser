@@ -135,9 +135,6 @@ pub fn build_varied_text_paths(
 
     let head = font.head().ok()?;
     let hhea = font.hhea().ok()?;
-    let cmap = font.cmap().ok()?;
-    let hmtx = font.hmtx().ok()?;
-    let shaper = lumen_font::Shaper::with_features(&font, features);
 
     let units_per_em = f32::from(head.units_per_em);
     if units_per_em == 0.0 {
@@ -167,11 +164,20 @@ pub fn build_varied_text_paths(
         if segment.is_empty() {
             continue;
         }
-        let glyph_ids: Vec<u16> = segment
-            .chars()
-            .map(|ch| cmap.glyph_index(ch as u32).unwrap_or(0))
-            .collect();
-        let shaped = shaper.shape(&glyph_ids, &hmtx);
+        // LIB-1: `lumen_font::active_text_shaper()` replaces the direct
+        // cmap+`Shaper` call this function used to make; behaviour is
+        // unchanged by default (own engine, `axes` ignored here as before).
+        // Opting into `rustybuzz` (`LUMEN_RUSTYBUZZ_SHAPING=1`) also starts
+        // applying `axes` to positioning (GDEF/GPOS variation deltas), not
+        // just to the outline via `coords` below.
+        let shaped = lumen_font::active_text_shaper().shape(
+            font_bytes,
+            segment,
+            lumen_core::ext::ShapeDirection::LeftToRight,
+            None,
+            features,
+            axes,
+        );
         for sg in &shaped {
             let pen_x = cursor_x + sg.x_offset as f32 * scale;
             let pen_baseline = baseline_y - sg.y_offset as f32 * scale;

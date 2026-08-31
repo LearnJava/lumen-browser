@@ -228,7 +228,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/chrome/src/model.rs:689` **fn** `bind_model` — Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
 `crates/chrome/src/model.rs:751` **fn** `bind_model_tracked` — Like [`bind_model`], but also reports what the call actually changed, split
 
-## lumen-core  (295 symbols)
+## lumen-core  (298 symbols)
 
 `crates/core/src/auth.rs:21` **fn** `generate_token` — Generate a fresh per-run authentication token
 `crates/core/src/auth.rs:37` **fn** `tokens_match` — Constant-time token comparison
@@ -393,6 +393,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/ext.rs:4474` **struct** `SwFetchRequest` — Message sent from the main thread to a Service Worker execution thread
 `crates/core/src/ext.rs:4489` **struct** `SwWorkerHandle` — Opaque handle to a running Service Worker execution thread
 `crates/core/src/ext.rs:4502` **type** `SwWorkerStore` — Map from `(origin, scope)` to live SW worker handles
+`crates/core/src/ext.rs:4515` **enum** `ShapeDirection` — Resolved bidi direction of a text run, passed to a [`TextShaper`] so it
+`crates/core/src/ext.rs:4531` **struct** `ShapedGlyph` — One shaped glyph, ready to draw. All metrics are in font design units
+`crates/core/src/ext.rs:4553` **trait** `TextShaper` — Turns a run of Unicode text into positioned glyphs for one font
 `crates/core/src/form.rs:20` **struct** `FormEntry` — Запись формы — пара (name, value) с опциональным filename (для multipart)
 `crates/core/src/form.rs:26` **enum** `FormValue`
 `crates/core/src/form.rs:38` **fn** `text`
@@ -989,7 +992,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/encoding/src/unicode_provider.rs:31` **fn** `new` — Создаёт провайдер с auto-режимом (LSTM/dictionary для CJK/Thai/etc)
 `crates/engine/encoding/src/unicode_provider.rs:40` **fn** `new_latin` — Облегчённая версия — только Latin + UAX #14 rules, без LSTM
 
-## lumen-font  (241 symbols)
+## lumen-font  (244 symbols)
 
 `crates/engine/font/src/avar.rs:37` **struct** `AxisValueMap` — Одна пара (fromCoord → toCoord) в segment map оси. Координаты в
 `crates/engine/font/src/avar.rs:49` **struct** `SegmentMap` — Segment map для одной оси: список пар, отсортированных по `from`
@@ -1204,6 +1207,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/system_fonts.rs:60` **fn** `with_dirs` — Индекс с явно заданным списком директорий — для тестов и
 `crates/engine/font/src/system_fonts.rs:80` **fn** `family_count` — Сколько family-имён зарегистрировано. Для тестов и диагностики;
 `crates/engine/font/src/system_fonts.rs:100` **fn** `shared_system_index` — Процесс-глобальный индекс системных шрифтов
+`crates/engine/font/src/text_shaper.rs:39` **struct** `OwnTextShaper` — `TextShaper` backed by this crate's own `GSUB`/`GPOS` engine
+`crates/engine/font/src/text_shaper.rs:94` **struct** `RustybuzzShaper` — `TextShaper` backed by `rustybuzz` — the LIB-1 replacement
+`crates/engine/font/src/text_shaper.rs:179` **fn** `active_text_shaper` — The `TextShaper` implementation callers should use
 `crates/engine/font/src/unicode_range.rs:12` **struct** `UnicodeRange` — Один диапазон кодепоинтов из `unicode-range:` дескриптора @font-face
 `crates/engine/font/src/unicode_range.rs:21` **fn** `contains` — Проверяет, входит ли кодепоинт `cp` в этот диапазон
 `crates/engine/font/src/unicode_range.rs:35` **fn** `parse_unicode_ranges` — Парсит CSS `unicode-range` дескриптор в список `UnicodeRange`
@@ -5676,4 +5682,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:228` **fn** `count`
 
 ---
-*Total: 5599 symbols in 24 crates*
+*Total: 5605 symbols in 24 crates*
