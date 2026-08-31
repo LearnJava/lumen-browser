@@ -1,6 +1,6 @@
 # BUG-456 — Контекст `OffscreenCanvas.getContext('2d')` — отдельный шим на 16 членов вместо 59, без единого геттера, а `getImageData` отдаёт сырую строку транспорта
 
-**Статус:** OPEN (симптом 3 исправлен 2026-08-30 — см. ниже)
+**Статус:** OPEN (симптомы 2 и 3 исправлены, симптом 1 частично закрыт 2026-08-31 — см. ниже)
 **Компонент:** js (`crates/js/src/offscreen_canvas.rs` — литерал `this._2d_context`)
 **Найден:** 2026-07-29 (P2), WPT-VENDOR-html-canvas — прогон среза `html/canvas/offscreen`
 
@@ -27,7 +27,7 @@ measureText  fillText  drawImage  putImageData  createLinearGradient
 `save`/`restore` нет вовсе — то есть у OffscreenCanvas не просто расходятся две
 копии состояния ([BUG-455](BUG-455-OPEN.md)), а стека состояний нет как такового.
 
-## Симптом 2: четыре атрибута — сеттеры без геттеров
+## Симптом 2: четыре атрибута — сеттеры без геттеров — ИСПРАВЛЕНО 2026-08-31
 
 `fillStyle`, `strokeStyle`, `lineWidth`, `globalAlpha` объявлены только через
 `set …(val)`. Чтение даёт `undefined`:
@@ -35,6 +35,18 @@ measureText  fillText  drawImage  putImageData  createLinearGradient
 ```
 O fillStyle-get=undefined      (перед этим записали '#00ff00', заливка сработала)
 ```
+
+**Проба «до» правки нашла ровно половину этого списка уже исправленной по
+дороге**: `fillStyle`/`strokeStyle` к этому моменту (за счёт несвязанной
+работы над BUG-451, канонической сериализацией цвета) уже имели рабочую пару
+`get`/`set` — только `lineWidth` и `globalAlpha` оставались сеттерами без
+геттера. Причина, почему литерал вообще мог содержать оба члена дважды:
+`this._2d_context = { lineWidth: 1, globalAlpha: 1, …, set lineWidth(w) {…},
+set globalAlpha(a) {…} }` — объектный литерал не запрещает повторное имя
+ключа, последнее определение (аксессор) молча вытесняет плоское поле, так что
+`lineWidth: 1` было мёртвым кодом с самого начала. Оба атрибута получили
+собственные приватные переменные (`_lineWidth`/`_globalAlpha`, тот же приём,
+что уже применён к `_fillStyle`/`_strokeStyle`) и пару `get`/`set`.
 
 ## Симптом 3: транспорт натива протекает в скрипт страницы — ИСПРАВЛЕНО 2026-08-30
 
@@ -84,15 +96,61 @@ O getImageData type=string  hasData=false  raw=20,20,00ff00ff00ff00ff00ff00ff00f
 | `ctx.rect is not a function` | 25 |
 | `ctx.roundRect is not a function` | 12 |
 
-## Направление починки
+## Направление починки — почему «переиспользовать первый прототип» не сработало
 
-Не дописывать второй шим, а **переиспользовать первый**: контекст элементного
-canvas и контекст OffscreenCanvas по спеке — почти один и тот же набор членов
-(`CanvasRenderingContext2D` vs `OffscreenCanvasRenderingContext2D`; различия —
-`canvas`, `commit`, отсутствие `drawFocusIfNeeded`/`scrollPathIntoView`). Сейчас
-это две независимые реализации, и вторая отстала. Правильный порядок: сначала
-общий прототип из [BUG-449](BUG-449-FIXED.md), затем оба контекста как два класса
-над одной фабрикой членов, различающиеся списком нативов.
+Первоначальный план («сначала общий прототип из [BUG-449](BUG-449-FIXED.md),
+затем оба контекста как два класса над одной фабрикой членов») разбился о
+границу, которую сам BUG-449 не пересекает: `CanvasRenderingContext2D` —
+класс в `web_api_shim_mid.js`, который эволюционирует в `dom.rs`'s
+`WEB_API_SHIM` — **странице-only** шиме. `OffscreenCanvas` обязан работать и
+в воркере (это весь смысл интерфейса — 2D-рисование без DOM), а воркер
+получает `OFFSCREEN_CANVAS_SHIM` как отдельный `rt.eval` (`worker.rs`) без
+`WEB_API_SHIM_MID` вообще — так же, как `xhr.rs`/`audio_element.rs` не видят
+исправлений в `dom.rs` (BUG-780 lesson, тот же список гочей CLAUDE.md).
+Наследование от `CanvasRenderingContext2D.prototype` в шиме, который эта
+страница не гарантированно грузит, дало бы `ReferenceError` в воркере вместо
+объекта — второй, более тихий вариант того же дефекта.
 
-`getImageData` (симптом 3) исправлена отдельно и дёшево, до этого рефакторинга —
-см. выше. Остаток (симптомы 1 и 2) по-прежнему ждёт общего прототипа.
+**Что сделано вместо этого (2026-08-31): второй шим не переписан целиком, а
+достроен своей собственной, независимой копией того же алгоритма**, с
+нативами, зовущими тот же `lumen_canvas::Context2D` (одна инженерная модель
+на обе реализации, просто два JS-фасада над ней — двумя разными регистрами,
+`CANVASES`/`nid` на элементной стороне и `OFFSCREEN_CANVASES`/`canvas_id` на
+offscreen). Добавлено 13 новых нативов
+(`_lumen_offscreen_canvas2d_{save,restore,translate,rotate,scale,transform,
+set_transform,reset_transform,rect,bezier_curve_to,quadratic_curve_to,arc_to,
+clip}`), каждый — тонкая обёртка над уже существующим публичным методом
+`Context2D` (движок их уже реализовывал для элементного пути, здесь просто не
+было JS-биндинга). `ellipse`/`roundRect` не получили отдельных нативов —
+ни у элементного контекста их нет, оба композируются из
+`save`/`translate`/`rotate`/`scale`/`arc`/`restore` в JS (`roundRect` —
+дословный порт `_lumen_corner_radius`/`roundRect` из `web_api_shim_mid.js`,
+адаптированный на offscreen-имена нативов, раз шимы не делят JS-реалм).
+
+Закрыта и часть государственного стека: `save`/`restore` теперь существуют и
+синхронизируют нативный стек (CTM/путь/клип) с четырьмя JS-зеркалируемыми
+атрибутами (`fillStyle`/`strokeStyle`/`lineWidth`/`globalAlpha`) — тот же урок
+BUG-455, что и у элементного контекста: если копии не двигаются в одном такте,
+`restore()` возвращает страницу в состояние, которого JS-сторона не видит.
+`reset()` (§4.12.5.1.2) тоже добавлен: сброс трансформации, полная заливка
+прозрачным чёрным, обнуление пути и стека, возврат четырёх атрибутов к
+дефолтам.
+
+**Ещё не тронуто (остаток симптома 1):** `measureText`, `fillText`,
+`strokeText`, `drawImage`, `putImageData`, `createImageData`,
+`createLinearGradient`/`createRadialGradient`/`createConicGradient`,
+`createPattern`, `isPointInPath`/`isPointInStroke`, `setLineDash`/
+`getLineDash`, и свойства состояния `globalCompositeOperation`/`lineCap`/
+`lineJoin`/`miterLimit`/`shadowColor`/`shadowBlur`/`shadowOffsetX`/
+`shadowOffsetY`/`font`/`textAlign`/`textBaseline` — каждое требует либо нового
+натива не тривиальной формы (текст, изображения, градиенты держат
+собственное состояние), либо решения о том, где хранить дополнительные
+JS-зеркалируемые атрибуты в `save`/`restore`. Следующий срез должен начать с
+`globalCompositeOperation`/`lineCap`/`lineJoin`/`miterLimit`/`shadow*` —
+это чистые сеттеры поверх уже публичных полей `Context2D`, симметричные
+только что добавленным геометрическим нативам.
+
+Тесты — `offscreen_canvas.rs::tests_v8::js_offscreen_{line_width_and_global_
+alpha_round_trip, save_restore_round_trips_tracked_attributes, context_has_
+transform_and_path_methods, transform_ops_do_not_throw, reset_clears_fill_
+style_and_transform}` (5 шт).
