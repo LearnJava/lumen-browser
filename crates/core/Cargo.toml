@@ -20,6 +20,14 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # feature-gated — see the workspace Cargo.toml comment above the version pin.
 tracy-client = { workspace = true, optional = true }
 
+[dev-dependencies]
+# Why this dependency (serde_json, dev-only): LIB-0 conformance census
+# (docs/conformance-method.md) reads tests/wpt/url/resources/urltestdata.json
+# to measure lumen_core::url against the WHATWG corpus before ADR-027 LIB-6
+# decides whether to replace it. Already resolved in the workspace lockfile
+# (crates/js, crates/shell, ...); test-only here, no prod footprint.
+serde_json = "1.0"
+
 [features]
 tracy = ["dep:tracy-client"]
 
