@@ -8,7 +8,42 @@
 
 ## Статус
 
-**PLANNED.** Не начинать, пока `LIB-0` не дал число.
+**DONE 2026-08-31** (ветка `p1-lib1-rustybuzz`). Trait-anchor, `rustybuzz`-шейпер
+и флаг отката реализованы и протестированы; **производственный рендеринг
+по умолчанию остаётся на своём движке** — `LIB-2` (пересъёмка эталонов)
+обязана предшествовать переключению умолчания, иначе гейт `dump_golden.py`/
+графический прогон краснеет без ревью (правило BUG-816). До `LIB-2`
+`rustybuzz` включается через `LUMEN_RUSTYBUZZ_SHAPING=1` — см.
+`lumen_font::active_text_shaper`.
+
+Отклонения от постановки, все обоснованы измерением, а не интуицией:
+
+- **`variation_axes`** — не «нормализованные design-space координаты», а
+  сырые CSS `font-variation-settings`-пары `(tag, значение)`: это ровно то,
+  что принимает `rustybuzz::Face::set_variations`/`ttf_parser` (нормализацию
+  через `fvar`/`avar` оба выполняют сами), и совпадает с уже существующей
+  сигнатурой `varied_text.rs::build_varied_text_paths`.
+- **Направление/скрипт остаются `LeftToRight`/`None` на обоих реальных
+  call site'ах** (`cpu_raster.rs`, `varied_text.rs`) — в paint нет резолва
+  bidi-направления по рану (модуль `lumen-layout::bidi` физически
+  переупорядочивает текст на уровне layout, PAINT о направлении рана не
+  знает вообще). Трейт полностью принимает оба параметра и `RustybuzzShaper`
+  их правильно использует — доказано интеграционными тестами напрямую
+  против системных шрифтов (`tests/cases/rustybuzz_complex_scripts.rs`);
+  прокидывание реального направления из layout в paint — отдельная задача,
+  не эта.
+- **`unicode-bidi`/`icu_segmenter` не понадобились.** `rustybuzz::shape`
+  сам вызывает `UnicodeBuffer::guess_segment_properties()`, которая
+  заполняет script/language ТОЛЬКО если они не выставлены явно — этого
+  достаточно и для отдельно шейпящегося рана, и для варианта, когда вызывающий
+  код уже знает направление.
+- **`cluster` — byte offset в исходной `&str`**, не индекс символа (как было
+  у старого `Shaper::shape(glyph_ids, hmtx)`) — таково соглашение `rustybuzz`
+  (`UnicodeBuffer::push_str` кладёт `cluster = i` из `char_indices()`), и
+  `OwnTextShaper`-обёртка пересчитывает старые индексные кластеры в byte
+  offset, чтобы оба шейпера отдавали одну единицу измерения. Поле пока не
+  читается ни одним потребителем (ни `cluster` из старого `Shaper`
+  не читался) — задел под будущий caret/hit-test.
 
 ## Что сейчас
 
@@ -71,10 +106,48 @@
 
 ## Валидация
 
-- `cargo clippy -p lumen-font --all-targets -- -D warnings` + `cargo test -p lumen-font`.
-- Проба текста из `LIB-0` показывает прикреплённую диакритику, арабское
-  соединение и деванагари; цифра выросла.
-- Дамп `--dump-display-list` на латинице и кириллице **сравнить с «до»**:
-  ожидается сдвиг метрик, но не исчезновение и не дублирование глифов.
+- `cargo clippy -p lumen-core/-p lumen-font/-p lumen-paint --all-targets -- -D warnings` —
+  чисто. `cargo test -p lumen-font` (406 passed) и нисходящий
+  `cargo check -p lumen-shell` — чисто.
+- **Проба LIB-0 через API, не через страницу.** Прогон через реальную
+  страницу/скриншот невозможен в принципе: ни один headless/MCP путь
+  снимка не использует `SystemFontIndex` (CLAUDE.md, гочта «No headless or
+  MCP screenshot path renders text through `SystemFontIndex`», 2026-08-31),
+  а bundled Inter не содержит ни арабских, ни деванагари глифов. Вместо
+  этого — три интеграционных теста напрямую против `RustybuzzShaper::shape`
+  с реальными системными шрифтами Windows (`tests/cases/rustybuzz_complex_scripts.rs`,
+  `#[ignore]`, машинно-зависимые):
+  - `arabic_medial_form_differs_from_isolated_form` (Tahoma) — медиальная
+    форма BEH отличается от изолированной (GSUB 5/6 контекстное соединение);
+  - `combining_diacritic_attaches_via_mark_positioning` (Tahoma, BEH+FATHA) —
+    `rustybuzz` даёт ненулевой anchor-offset у метки (GPOS 4), свой движок
+    на том же входе — offset (0, 0) при нулевом advance (не приклеена, а
+    случайно оказалась на месте из-за нулевого `hmtx`-advance символа);
+  - `devanagari_vowel_sign_reorders_before_consonant` (Nirmala) — гласный
+    знак выходит ПЕРЕД согласной (визуальный порядок), а не в порядке ввода.
+  Все три зелёные на этой машине; на машине без этих файлов —
+  `#[ignore]`-проверка молча пропускается (тот же приём, что
+  `cases::real_system_fonts`), а не падает.
+- Дамп `--dump-display-list`/`--screenshot` на `samples/page.html`
+  **байт-в-байт совпадает** с `main` и при `LUMEN_RUSTYBUZZ_SHAPING=1`, и без
+  — ожидаемо: `--dump-display-list` вообще не заходит в шейпинг (это
+  layout-артефакт, дергает текстовый measurer, а не `cpu_raster.rs`), а
+  `--screenshot` рисует только латиницу/кириллицу bundled Inter без меток и
+  контекстных lookup'ов, то есть ни один активированный lookup не различает
+  движки на этом конкретном контенте — не регрессия, `python
+  graphic_tests/dump_golden.py` (12/12 PASS) подтверждает нулевое влияние на
+  layout для (текущего, дефолтного) пути.
 - Тело коммита содержит обоснование зависимости по форме
   `**Why this dependency:**` (категория, trait-anchor, graduation criterion).
+- **Память/время (два парсера таблиц).** Бинарный размер — де-факто ноль:
+  `rustybuzz`+`ttf-parser 0.21.1` уже были безусловной (не опциональной)
+  зависимостью `femtovg` (её собственный, неиспользуемый text-путь) той же
+  версии `0.14.1` — `cargo tree -p lumen-shell -i rustybuzz` показывает ОДИН
+  экземпляр пакета на оба ребра. Оба парсера ленивые и заимствуют один и тот
+  же `&[u8]` без копирования байтов шрифта — цена это не дублирование
+  памяти, а офсетные структуры (сотни байт). Время: release, bundled Inter,
+  предложение EN+RU ~90 символов, 20 000 итераций — **~32 мкс/вызов у
+  своего движка против ~199 мкс/вызов у `rustybuzz` (~6×)** — ожидаемо:
+  `rustybuzz` прогоняет весь OT-конвейер (script/direction resolution,
+  нормализация, полный набор GSUB/GPOS lookup'ов), а не только Type 1/2/4.
+  Не гейтируется как регрессия: активный по умолчанию движок не менялся.

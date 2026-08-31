@@ -14,5 +14,6 @@ mod composite_bbox;
 mod inter_real_font;
 mod inter_shaping;
 mod real_system_fonts;
+mod rustybuzz_complex_scripts;
 mod variable_fonts_runtime;
 mod woff2_real_font;

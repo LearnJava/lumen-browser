@@ -40,6 +40,7 @@ pub mod gvar;
 pub mod head;
 pub mod otlayout;
 pub mod shape;
+pub mod text_shaper;
 pub mod hvar;
 pub mod item_variation;
 pub mod hhea;
@@ -74,6 +75,9 @@ pub use gsub::Gsub;
 pub use gvar::{GlyphVariationData, Gvar, PointNumbers, TupleVariation};
 pub use head::{Head, IndexToLocFormat};
 pub use shape::{ShapedGlyph, Shaper};
+pub use text_shaper::{OwnTextShaper, active_text_shaper};
+#[cfg(feature = "rustybuzz-shaping")]
+pub use text_shaper::RustybuzzShaper;
 pub use hvar::Hvar;
 pub use item_variation::{
     ItemVariationData, ItemVariationStore, RegionAxisCoordinates, VariationRegion,

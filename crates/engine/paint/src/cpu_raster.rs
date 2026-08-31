@@ -2626,37 +2626,28 @@ fn color_to_skia(color: Color) -> tiny_skia::Color {
 
 /// Parsed bundled face plus the tables `rasterize_text` needs. `None` if the
 /// embedded font fails to parse (should never happen for committed Inter).
+///
+/// Shaping itself (cmap mapping + GSUB/GPOS or `rustybuzz`, LIB-1) does not
+/// need a table held here — `lumen_font::active_text_shaper()` re-derives
+/// them from `BUNDLED_FONT` per call, same as `load_bundled_face` already
+/// re-parses this struct once per `DrawText` run.
 struct CpuFace<'a> {
     font: lumen_font::Font<'a>,
     units_per_em: u16,
     ascent: f32,
     descent: f32,
-    cmap: lumen_font::Cmap<'a>,
-    hmtx: lumen_font::Hmtx<'a>,
-    /// GSUB/GPOS shaper for the bundled face: applies ligatures + kerning so
-    /// the CPU snapshot matches a real shaping engine. Borrows the `'static`
-    /// `GSUB`/`GPOS` table bytes, not the [`CpuFace`] itself.
-    shaper: lumen_font::Shaper<'a>,
 }
 
-/// Parse the bundled Inter face once per `DrawText` run. `features` are the
-/// CSS `font-feature-settings` overrides applied on top of the shaper's
-/// default feature set (empty slice = `normal`).
-fn load_bundled_face(features: &[([u8; 4], u32)]) -> Option<CpuFace<'static>> {
+/// Parse the bundled Inter face once per `DrawText` run.
+fn load_bundled_face() -> Option<CpuFace<'static>> {
     let font = lumen_font::Font::parse(BUNDLED_FONT).ok()?;
     let head = font.head().ok()?;
     let hhea = font.hhea().ok()?;
-    let cmap = font.cmap().ok()?;
-    let hmtx = font.hmtx().ok()?;
-    let shaper = lumen_font::Shaper::with_features(&font, features);
     Some(CpuFace {
         font,
         units_per_em: head.units_per_em,
         ascent: f32::from(hhea.ascent),
         descent: f32::from(hhea.descent),
-        cmap,
-        hmtx,
-        shaper,
     })
 }
 
@@ -2727,7 +2718,13 @@ fn rasterize_text_rotated(
 /// [`rasterize_text_mixed`] because a whitespace-only `Other` segment
 /// produces no ink (so [`rasterize_text`]'s returned bbox can't place it) but
 /// still has to advance the column by its real width.
-fn measure_run_advance(face: &CpuFace, text: &str, font_size: f32, tab_size: f32) -> f32 {
+fn measure_run_advance(
+    face: &CpuFace,
+    text: &str,
+    font_size: f32,
+    tab_size: f32,
+    font_features: &[([u8; 4], u32)],
+) -> f32 {
     let advance_scale = font_size / f32::from(face.units_per_em);
     let mut total = 0.0_f32;
     let mut first_segment = true;
@@ -2740,11 +2737,14 @@ fn measure_run_advance(face: &CpuFace, text: &str, font_size: f32, tab_size: f32
         if segment.is_empty() {
             continue;
         }
-        let glyph_ids: Vec<u16> = segment
-            .chars()
-            .map(|ch| face.cmap.glyph_index(ch as u32).unwrap_or(0))
-            .collect();
-        let shaped = face.shaper.shape(&glyph_ids, &face.hmtx);
+        let shaped = lumen_font::active_text_shaper().shape(
+            BUNDLED_FONT,
+            segment,
+            lumen_core::ext::ShapeDirection::LeftToRight,
+            None,
+            font_features,
+            &[],
+        );
         total += shaped.iter().map(|sg| sg.x_advance as f32 * advance_scale).sum::<f32>();
     }
     total
@@ -2780,7 +2780,7 @@ fn rasterize_text_mixed(
     font_style: lumen_layout::FontStyle,
     font_features: &[([u8; 4], u32)],
 ) -> Result<Option<DrawBounds>, Box<dyn std::error::Error>> {
-    let Some(face) = load_bundled_face(font_features) else {
+    let Some(face) = load_bundled_face() else {
         return Ok(None);
     };
     let width = pixmap.width();
@@ -2811,7 +2811,7 @@ fn rasterize_text_mixed(
             }
             crate::display_list::MixedSegment::Other(s) => (s, false),
         };
-        let advance = measure_run_advance(&face, &seg_text, font_size, tab_size);
+        let advance = measure_run_advance(&face, &seg_text, font_size, tab_size, font_features);
         if upright {
             let dest_rect =
                 Rect { x: rect.x, y: rect.y + y_cursor, width: rect.width, height: rect.height };
@@ -2913,7 +2913,7 @@ fn rasterize_text(
         }
         _ => {}
     }
-    let Some(face) = load_bundled_face(font_features) else {
+    let Some(face) = load_bundled_face() else {
         return Ok(None);
     };
     let denom = face.ascent - face.descent;
@@ -2960,15 +2960,20 @@ fn rasterize_text(
         if segment.is_empty() {
             continue;
         }
-        // No fallback faces on the CPU path: a missing codepoint resolves to
-        // glyph 0 (.notdef), matching the GPU renderer's `(primary, 0)` result.
-        let glyph_ids: Vec<u16> = segment
-            .chars()
-            .map(|ch| face.cmap.glyph_index(ch as u32).unwrap_or(0))
-            .collect();
-        // Shape: GSUB ligatures then GPOS kerning. With no layout tables this
-        // returns base advances — identical to the old per-character path.
-        let shaped = face.shaper.shape(&glyph_ids, &face.hmtx);
+        // Shape via `lumen_font::active_text_shaper()` (LIB-1): the own
+        // GSUB/GPOS engine by default, `rustybuzz` opt-in via
+        // `LUMEN_RUSTYBUZZ_SHAPING=1` until LIB-2 re-shoots this path's
+        // snapshot references and flips the default. No fallback faces on
+        // the CPU path: a missing codepoint resolves to glyph 0 (.notdef),
+        // matching the GPU renderer's `(primary, 0)` result.
+        let shaped = lumen_font::active_text_shaper().shape(
+            BUNDLED_FONT,
+            segment,
+            lumen_core::ext::ShapeDirection::LeftToRight,
+            None,
+            font_features,
+            &[],
+        );
         for sg in &shaped {
             let pen_x = cursor_x + sg.x_offset as f32 * advance_scale;
             let glyph_baseline = baseline_y - sg.y_offset as f32 * advance_scale;

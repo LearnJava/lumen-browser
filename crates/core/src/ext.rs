@@ -4502,3 +4502,74 @@ pub struct SwWorkerHandle {
 pub type SwWorkerStore = std::sync::Arc<
     std::sync::Mutex<std::collections::HashMap<(String, String), SwWorkerHandle>>,
 >;
+
+// ============================================================================
+// Text shaping (LIB-1, ADR-027): trait-anchor for lumen-font's two shaper
+// implementations.
+// ============================================================================
+
+/// Resolved bidi direction of a text run, passed to a [`TextShaper`] so it
+/// can apply direction-dependent shaping (Arabic joining, mark reordering)
+/// without re-deriving it from the text itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShapeDirection {
+    /// Left-to-right (Latin, Cyrillic, most scripts).
+    LeftToRight,
+    /// Right-to-left (Arabic, Hebrew).
+    RightToLeft,
+}
+
+/// One shaped glyph, ready to draw. All metrics are in font design units
+/// (`units_per_em`); the caller scales by `font_size / units_per_em`.
+///
+/// `cluster` is the byte offset into the shaped `text` of the first
+/// codepoint that contributed to this glyph — matching `rustybuzz`'s (and
+/// HarfBuzz's) convention, so both `TextShaper` implementations report the
+/// same unit. Not yet consumed by any caret/hit-test code in this
+/// workspace; carried for that future use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShapedGlyph {
+    /// Resolved glyph id to rasterize (post-substitution).
+    pub glyph_id: u16,
+    /// Byte offset of the source cluster (see struct doc).
+    pub cluster: u32,
+    /// Total horizontal advance, font units.
+    pub x_advance: i32,
+    /// Horizontal draw offset from the pen position, font units.
+    pub x_offset: i32,
+    /// Vertical draw offset from the baseline (positive = up), font units.
+    pub y_offset: i32,
+}
+
+/// Turns a run of Unicode text into positioned glyphs for one font.
+///
+/// Trait-anchor for LIB-1 (ADR-027): `lumen-font` provides two
+/// implementations — its own `GSUB`/`GPOS` engine (Latin/Cyrillic-only,
+/// stage-1 scope) and a `rustybuzz`-backed one (full complex-script
+/// support: mark attachment, Arabic joining, Indic reordering) — both
+/// taking the same inputs, so a caller can swap without touching call
+/// sites — see `lumen_font::active_text_shaper` for which one is active by
+/// default and how to opt into the other (`LUMEN_RUSTYBUZZ_SHAPING=1`).
+pub trait TextShaper: Send + Sync {
+    /// Shapes `text` against the font at `font_data`.
+    ///
+    /// - `direction`: already-resolved bidi direction of the run.
+    /// - `script`: optional ISO 15924 tag (e.g. `*b"Arab"`); `None` lets the
+    ///   implementation infer it from `text`.
+    /// - `features`: CSS `font-feature-settings` overrides — `(tag, 0)`
+    ///   disables a feature that is on by default, `(tag, >=1)` enables one
+    ///   that is off by default.
+    /// - `variation_axes`: CSS `font-variation-settings` pairs — raw
+    ///   user-space axis values (e.g. `(*b"wght", 700.0)`), the same shape
+    ///   `rustybuzz::Face::set_variations`/`ttf_parser` take; empty for a
+    ///   static font or the face's default instance.
+    fn shape(
+        &self,
+        font_data: &[u8],
+        text: &str,
+        direction: ShapeDirection,
+        script: Option<[u8; 4]>,
+        features: &[([u8; 4], u32)],
+        variation_axes: &[([u8; 4], f32)],
+    ) -> Vec<ShapedGlyph>;
+}

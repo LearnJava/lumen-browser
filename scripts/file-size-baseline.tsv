@@ -11,8 +11,8 @@
 5943	crates/engine/paint/src/renderer.rs
 5414	crates/engine/paint/src/display_list.rs
 5342	crates/engine/dom/src/lib.rs
-4852	crates/engine/paint/src/cpu_raster.rs
-4504	crates/core/src/ext.rs
+4857	crates/engine/paint/src/cpu_raster.rs
+4575	crates/core/src/ext.rs
 4408	crates/js/src/filesystem_access.rs
 4112	crates/bidi-server/src/protocol.rs
 3962	crates/engine/html-parser/src/tree_builder.rs

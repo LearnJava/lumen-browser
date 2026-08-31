@@ -11,7 +11,31 @@ description = "Lumen: TrueType / OpenType парсер и растеризато
 lumen-core.workspace = true
 brotli-decompressor = "5"
 zune-inflate = "0.2"
+# Why this dependency: permanent tier (ADR-027 — OpenType shaping is a spec a
+# committee already wrote, we are wrong by definition if we disagree with the
+# reference implementation), trait-anchor `lumen_core::ext::TextShaper`
+# (LIB-1). Version pinned to the `0.14` line already resolved in the
+# workspace lockfile as a transitive dependency of `femtovg` (its own,
+# unused, text-shaping path), so this adds no second `rustybuzz`/`ttf-parser`
+# version. `rustybuzz-shaping` feature (below) keeps it removable at zero
+# cost if it ever needs to be dropped.
+rustybuzz = { version = "0.14", optional = true }
 workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
+
+[features]
+default = ["rustybuzz-shaping"]
+# `rustybuzz`-backed `TextShaper` (LIB-1, ADR-027): full complex-script
+# shaping (mark attachment, Arabic joining, Indic reordering) that
+# `crate::shape::Shaper`'s own `GSUB`/`GPOS` engine (stage-1,
+# Latin/Cyrillic-only) does not implement. Compiled in by default so it can
+# be reached without a rebuild, but NOT yet the active engine for production
+# rendering — `lumen_font::active_text_shaper` still defaults to the own
+# engine until `LIB-2` re-shoots the graphic-tests/CPU/paint snapshot
+# references a shaper swap drifts; set `LUMEN_RUSTYBUZZ_SHAPING=1` to opt in
+# before then. Disabling this feature drops the `rustybuzz`/`ttf-parser`
+# dependency entirely. The own engine is removed at `LIB-3`, once `LIB-2`'s
+# re-shot references confirm the replacement.
+rustybuzz-shaping = ["dep:rustybuzz"]
 
 # Политики проекта как машинные проверки — [workspace.lints] в корневом
 # Cargo.toml, протокол docs/lint-policy.md.
