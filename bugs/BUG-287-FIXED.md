@@ -126,7 +126,7 @@ overflow-axis coercion (BUG-020) корректно переводит `overflow
 которого `emit_scrollbars` (BUG-220, 2026-06-24 — на месяц позже BUG-020)
 теперь рисует статический scrollbar; Edge использует overlay-scrollbar,
 невидимый в headless-скриншоте (тот же класс, что уже задокументирован для
-TEST-83 в `bugs/BUG-220-FIXED.md`). Полный разбор → [BUG-288](BUG-288-OPEN.md).
+TEST-83 в `bugs/BUG-220-FIXED.md`). Полный разбор → [BUG-288](BUG-288-FIXED.md).
 TEST-14 добавлен в `KNOWN_DEBTORS` (baseline 1.63%), из списка BUG-287
 вычёркивается.
 
