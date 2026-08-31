@@ -300,14 +300,28 @@ jobs:
 
   doc-drift:
     # Blocking from day one — unlike the two probes above this needs no build and
-    # no platform-specific behaviour, it just re-runs the generators and asks git
-    # whether anything moved.
+    # no platform-specific behaviour.
+    #
+    # WHAT IT CHECKS CHANGED ON 2026-08-31. `SYMBOLS.md` and `docs/roadmap-*.html`
+    # used to be committed, and this job re-ran the generators and asked git
+    # whether anything moved. That made every author regenerate ~4 MB of derived
+    # text per commit: over 300 commits the two roadmap trees were the two most
+    # frequently touched files in the repository (66 each, ahead of ROADMAP.md
+    # itself), SYMBOLS.md was fifth (54) — and since three roles commit in
+    # parallel, those regenerations collided in nearly every merge. Both files are
+    # now gitignored: they are pure derivatives of ROADMAP.md/BUGS.md/CSS-SPECS.md
+    # and of `crates/`, and both generators run in under two seconds, so there is
+    # nothing to keep in sync.
+    #
+    # What is left is the half that had real value: the generators must still RUN.
+    # A newline inside a ROADMAP.md table cell silently truncates the task table
+    # (CLAUDE.md §Known gotchas), and a broken table is what this catches now.
     #
     # NOT included: `tests/wpt/run_report.py --check` (docs/ci-offload.md §4 lists
     # it under doc-drift). It needs a full wptrunner run — hours, a live browser
     # binary and a working `wss` server (CLAUDE.md §Known gotchas) — so it does not
     # belong in a 2-minute job. It stays a manual P2 gate on the TEST track.
-    name: Doc drift (generated files)
+    name: Doc drift (generators run)
     runs-on: ubuntu-latest
 
     steps:
@@ -324,27 +338,27 @@ jobs:
         with:
           python-version: '3.x'
 
-      # SYMBOLS.md is a pure text scan of `crates/` — a public item added without
-      # regenerating it silently rots the index (CLAUDE.md §Doc sync rules).
-      - name: SYMBOLS.md is current
-        run: |
-          python scripts/gen_symbols.py
-          git diff --exit-code -- SYMBOLS.md
+      # A crash here means `crates/` grew something the scanner cannot parse.
+      - name: SYMBOLS.md generator runs
+        run: python scripts/gen_symbols.py
 
-      # The roadmap trees are generated from ROADMAP.md + BUGS.md + CSS-SPECS.md,
-      # so a bug flipped to FIXED without a regen leaves the trees lying.
-      #
-      # `-I` (ignore lines matching a regex) is load-bearing: gen_roadmap.py
-      # stamps a `"generated": "<today>"` field into the embedded JSON, so a byte
-      # comparison fails on any day later than the commit — and, because the
-      # runner is UTC while the author may not be, sometimes on the same day too.
-      # That is exactly how this job first went red. Do not "simplify" it back to
-      # a plain --exit-code; drop the stamp from the generator instead if this
-      # ever needs to be exact.
-      - name: Roadmap trees are current
+      # A crash here means ROADMAP.md / BUGS.md / CSS-SPECS.md are malformed.
+      # The count assertion catches the silent failure mode the generator itself
+      # cannot report: `_table_rows` stops at the first line not starting with
+      # `|`, so a task row split across two lines hides every row below it — no
+      # error, no warning, just fewer rows in the tree (19 hidden that way in
+      # 2026-08-19). The floor below is a floor, not an exact count: the tree held
+      # 807 ids on 2026-08-31 and only grows, so anything under 600 means rows were
+      # swallowed rather than deleted on purpose. Raise it when it starts to bind.
+      - name: Roadmap generator runs, and the tree is not truncated
         run: |
           python scripts/gen_roadmap.py
-          git diff --exit-code -I'"generated":' -- docs/roadmap-*.html
+          tasks=$(grep -c '"id":' docs/roadmap-B-twotrees.html)
+          echo "ids in generated tree: $tasks"
+          if [ "$tasks" -lt 600 ]; then
+            echo "::error::Only $tasks task ids in the generated tree — a ROADMAP.md table row is probably split across two lines (CLAUDE.md §Known gotchas)."
+            exit 1
+          fi
 
   file-size:
     # Blocking from day one, same reasoning as doc-drift: no build, no platform

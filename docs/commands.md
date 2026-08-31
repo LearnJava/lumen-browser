@@ -131,7 +131,7 @@ grep "BUG-042" BUGS.md
 grep "LayoutBox" SYMBOLS.md
 ```
 
-**SYMBOLS.md — symbol index.** Auto-generated index of every `pub fn/struct/enum/trait/type` with `file:line`. `grep "SymbolName" SYMBOLS.md` → `Read file offset=<line> limit=30`. Regenerate on every public API change: `python scripts/gen_symbols.py` (add to same commit).
+**SYMBOLS.md — symbol index.** Auto-generated index of every `pub fn/struct/enum/trait/type` with `file:line`. `grep "SymbolName" SYMBOLS.md` → `Read file offset=<line> limit=30`. **Generated and gitignored** (2026-08-31) — if the file is absent or stale in your worktree, run `python scripts/gen_symbols.py` (~2 s). Nothing to commit.
 
 ---
 

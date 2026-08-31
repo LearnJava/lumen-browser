@@ -10,7 +10,7 @@ Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `fo
 | **P2** | **Reactivated 2026-07-13**: leads P2-wpt (WPT integration via `wptrunner` + WebDriver BiDi, `docs/tasks/p2-wpt-integration.md`) and the DEVX dev-tooling track (`docs/automation.md`, ROADMAP.md DEVX-1…6, assigned 2026-07-16). Was reserve 2026-06-18…2026-07-13 (tasks of that period inherited by P1, `STATUS-P1.md`). | `lumen-bidi-server`, `lumen-driver`/`lumen-mcp` (DEVX-5), Python tooling `tests/wpt/` + `graphic_tests/run.py` (DEVX-1/4) |
 | **P3** | **Bug fixes ONLY**: BUGS.md OPEN items, graphic test regressions | All crates (read-only except bug fixes) |
 | **P4** | **CSS properties ONLY**: parsing, ComputedStyle, cascade, end-to-end wiring | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) |
-| **P5** | **Code health ONLY**: audit, workspace-clippy, stub/branch/docs/dep sweeps, safe mechanical cleanup | All crates (read-only except trivial clippy fixes in own crate + branch/worktree/SYMBOLS.md cleanup) |
+| **P5** | **Code health ONLY**: audit, workspace-clippy, stub/branch/docs/dep sweeps, safe mechanical cleanup | All crates (read-only except trivial clippy fixes in own crate + branch/worktree cleanup) |
 
 ---
 
@@ -84,7 +84,7 @@ P4 writes:  ComputedStyle.filter field + apply_declaration("filter") + emits Fil
 P5's mandate is **audit + cheap safe cleanup + filing tasks** — never solo refactoring that changes API or behaviour.
 
 - **Use the `/lumen-health-check <target>` skill** instead of running sweeps by hand. Targets: `full` (default), `clippy`, `stubs`, `branches`, `docs`, `deps`, `dupes`. Trigger phrases and the full alias→action table live in `STATUS-P5.md`.
-- **What P5 fixes directly (no separate task):** delete `--merged` branches, prune orphaned worktrees, regenerate `SYMBOLS.md`, trivial clippy fixes (unused import, stray `&`) **in its own crate only**.
+- **What P5 fixes directly (no separate task):** delete `--merged` branches, prune orphaned worktrees, trivial clippy fixes (unused import, stray `&`) **in its own crate only**. (`SYMBOLS.md` is generated and gitignored since 2026-08-31 — there is no drift left to fix.)
 - **What P5 does NOT fix — it files instead:**
   - visual/logic bug → `OPEN` line in `BUGS.md` (next BUG-NNN)
   - duplication / needed refactor → `ROADMAP.md` row + a pointer line (`ROADMAP.md:NN` or code `file:line`) in `STATUS-P1.md`/`STATUS-P2.md`

@@ -108,12 +108,16 @@ git worktree remove .claude/worktrees/<name>    # для пустых/завер
 Дрейф автогенерируемых доков и статус-маркеров.
 
 ```bash
-python scripts/gen_symbols.py
-git diff --stat SYMBOLS.md
+python scripts/gen_symbols.py     # ~2 с; файл gitignored, коммитить нечего
+python scripts/gen_roadmap.py     # ~0.5 с; деревья тоже gitignored
 ```
 
-- Если `SYMBOLS.md` изменился — значит он был устаревшим. Закоммить регенерацию
-  отдельным коммитом `chore: регенерировать SYMBOLS.md`.
+- `SYMBOLS.md` и `docs/roadmap-*.html` **не версионируются** с 2026-08-31 —
+  дрейфовать им негде, и отдельный коммит `chore: регенерировать SYMBOLS.md`
+  больше не нужен. Проверяем только, что оба генератора отрабатывают без
+  ошибки (то же делает джоб `doc-drift` в CI) и что дерево не обрезано:
+  `grep -c '"id":' docs/roadmap-B-twotrees.html` — резкое падение числа значит,
+  что строку таблицы в `ROADMAP.md` разорвали переносом.
 - Сверь статус-маркеры в `lumen-plan.md` (✅🟡⬜) с реальностью кода для недавно
   закрытых задач (по `git log --oneline -20`). Расхождение → поправить маркер.
 - Проверь, что указатели в `STATUS-PN.md` не ведут на уже завершённые задачи
