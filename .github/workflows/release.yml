@@ -54,9 +54,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned, see rust-toolchain.toml)
+        # Пин совпадает с rust-toolchain.toml. Раньше здесь стоял @stable: rustup всё
+        # равно уважает rust-toolchain.toml, поэтому джоб СКАЧИВАЛ ДВА тулчейна и
+        # ставил clippy не на тот, которым потом линтует. Менять вместе с пином.
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.97.0"
           targets: ${{ matrix.target }}
 
       - name: Cache Cargo registry

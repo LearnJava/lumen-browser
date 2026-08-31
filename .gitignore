@@ -93,3 +93,6 @@ last_session.db-wal
 /SYMBOLS.md
 /docs/roadmap-B-twotrees.html
 /docs/roadmap-svg-cleaves.html
+
+# Личные правки настроек Claude Code (общие лежат в .claude/settings.json).
+/.claude/settings.local.json
