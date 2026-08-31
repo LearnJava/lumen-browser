@@ -1215,3 +1215,87 @@ fn bug341_s17_keystroke_recascades_the_input_not_the_omnibox() {
         "the incremental cascade under the narrowed root-set must equal the full one",
     );
 }
+
+// в”Ђв”Ђ BUG-405 slice 49: does `predict_same` really predict `chrome_dl` byte identity в”Ђв”Ђ
+
+/// BUG-405 slice 48's census (`scripts/chrome_dl_repeat_census.py`, driven over
+/// MCP) could only ever produce `predict=false`: `new_tab`/`navigate` are the
+/// only automation events that reach `relayout_chrome_host`, and both always
+/// touch `bind_model`'s content, so `touched.is_empty()` is never true in that
+/// sample. The one shape that *would* hit `predict=true` in real use в€’ two
+/// consecutive `relayout_chrome_host` passes with the exact same hover target
+/// (a mouse jittering inside a still-hovered button, or any call reached for
+/// an unrelated reason while hover happens not to have moved) в€’ needs a real
+/// `CursorMoved` (`crates/shell/src/lumen/cursor_moved.rs`) or a real chrome
+/// click (`dispatch_chrome_action`), neither reachable through MCP's
+/// hit-test-free `click` (see CLAUDE.md's "hovered/active nid ... cannot be
+/// exercised by any automation surface" gotcha).
+///
+/// `relayout_chrome_host` itself cannot be unit-tested directly either вЂ” it
+/// early-returns without a real `self.renderer`, and building a `Lumen` (246
+/// fields: JS runtime, network stack, tab manager, вЂ¦) for one diagnostic test
+/// is out of proportion to what this slice can safely reach. So this
+/// reproduces the *identical* four-input formula
+/// (`touched.is_empty() && interactive_stable && viewport_stable &&
+/// forced_colors_stable`) and the *identical* building blocks
+/// `relayout_chrome_host`/`cc12_bench_cycle` use
+/// (`bind_model_tracked`/`set_interactive_state`/`layout_measured_hyp`/
+/// `paint_ordered`/`hash_display_list`) at the doc/sheet level в€’ the same
+/// level every other `bug341_s*` gate in this file already tests at в€’ instead
+/// of going through `Lumen`.
+#[test]
+fn bug405_slice49_chrome_dl_predict_same_holds_for_a_steady_state_hover_repeat() {
+    let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1280.0, 800.0);
+    let model = cc12_bench_model("");
+    let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR).expect("chrome preview must have #sidebar");
+
+    // Cycle 0 (cold): establishes the bound model and gives cycle 1 a
+    // predecessor `dl` to compare against, exactly like the first call to
+    // `relayout_chrome_host` in a live session.
+    let _ = lumen_chrome::bind_model_tracked(&mut doc, &model);
+    lumen_layout::set_interactive_state(Some(sidebar), None, None);
+    let layout0 = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+    let dl0 = paint_ordered(&layout0);
+    let hash0 = lumen_paint::hash_display_list(&[], &dl0, 0.0, 0.0, 0, 0);
+    lumen_layout::clear_interactive_state();
+
+    // Cycle 1 reproduces exactly the shape срез 48's census could not reach:
+    // `relayout_chrome_host` invoked again with the SAME hover target and an
+    // unchanged model. `touched` stays empty (nothing in `model` changed
+    // since cycle 0) and `new_interactive == chrome_prev_interactive` holds
+    // because the hover target is identical в€’ both are the real preconditions
+    // `predict_same` checks, not stand-ins for them.
+    let touched1 = lumen_chrome::bind_model_tracked(&mut doc, &model);
+    lumen_layout::set_interactive_state(Some(sidebar), None, None);
+    let layout1 = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+    let dl1 = paint_ordered(&layout1);
+    let hash1 = lumen_paint::hash_display_list(&[], &dl1, 0.0, 0.0, 0, 0);
+    lumen_layout::clear_interactive_state();
+
+    // `viewport_stable`/`forced_colors_stable` are trivially true here в€’
+    // neither viewport nor Forced-Colors Mode is touched by this fixture,
+    // which mirrors the real precondition: either one flipping already
+    // forces `relayout_chrome_host`'s full-layout fallback, a separate path
+    // this slice does not need to reproduce.
+    let interactive_stable = true; // hover target identical across both cycles
+    let predict_same = touched1.is_empty() && interactive_stable;
+    assert!(
+        predict_same,
+        "reproduction must land on predict=true в€’ the exact case срез 48's MCP census (0/55 \
+             predict=true calls) could not reach; touched1={touched1:?}",
+    );
+
+    let actual_same = hash0 == hash1;
+    assert!(
+        actual_same,
+        "BUG-405 Рї.85: predict_same=true but chrome_dl bytes differ (hash0={hash0} hash1={hash1}) \
+             в€’ this is the dangerous direction (predict=true, actual=false) a content_epoch \
+             skip-path for chrome_dl would need to rule out on the ONE shape срез 48's census left \
+             unmeasured. If this ever fails, the skip-path proposed in `bugs/BUG-405-OPEN.md`'s \
+             'Остаток' would have shown stale chrome on screen for a plain hover-hold.",
+    );
+}
