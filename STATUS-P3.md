@@ -1,6 +1,3 @@
-BUGS.md:119
-BUGS.md:120
-BUGS.md:144
 BUGS.md:146
 BUGS.md:147
 BUGS.md:148
