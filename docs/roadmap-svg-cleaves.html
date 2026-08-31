@@ -58,11 +58,11 @@
  "generated": "2026-08-31",
  "counts": {
   "open": 369,
-  "fixed": 517,
+  "fixed": 518,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 886,
+ "total_bugs": 887,
  "phases": [
   {
    "id": "P0",
@@ -5898,11 +5898,11 @@
        "note": "**ЗАКРЫТ 2026-08-31** (ветка `p1-split-dl11`, один срез): регион `const SCROLLBAR_WIDTH` (6083, план указывал 6036 — дрейф от несвязанных мержей) … `fn is_opacity_subtree_painted` (524 строки, план 526) вынесен в два файла — `display_list/scrollbars.rs` (332 строки: scrollbar-геометрия/рендер + `patch_scroll_layer`) и `display_list/outline_misc.rs` (191 строка: outline/resize-grip/column-rule + `is_paint_visible`/`is_opacity_subtree_painted`), фактическая граница между файлами отличается от плановой 242/284 — DL10-класс дрейфа. Тело перенесено байт-в-байт; правки видимости: `emit_scrollbars`/`emit_column_rules`/`emit_outline`/`emit_resize_grip` → `pub(crate)` (нужны `walk.rs`/`svg_text_decoration.rs` через `use super::*`), три `SCROLLBAR_*` константы → `pub(crate)` под `#[cfg(test)]` (только `tests/anim_and_chrome.rs`), `patch_scroll_layer`/`point_on_resize_grip` остались `pub` (публичный API крейта через `lib.rs`), `is_paint_visible`/`is_opacity_subtree_painted` → `pub(crate)` (нужны `invariants.rs` напрямую по пути `crate::display_list::`). `display_list.rs` 6659 → 6145. `cargo test -p lumen-paint --lib --features backend-wgpu` 1185/1185, `--test all --features backend-wgpu` 34/34 без диффов, `cargo clippy -p lumen-paint --all-targets --features backend-wgpu -- -D warnings` чист, нисходящая `cargo build -p lumen-shell --profile dev-release` чистая, `python graphic_tests/dump_golden.py` 12/12 без дельт. `scripts/check_file_sizes.py --update` (6659 → 6145 в baseline), `SYMBOLS.md` перегенерирован (`patch_scroll_layer`/`point_on_resize_grip` переехали). `scripts/scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)) — тесты гонялись адресно. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа DL»"
       },
       {
-       "id": "SPLIT-DL12",
+       "id": "SPLIT-DL12 ✅ DONE 2026-08-31",
        "title": "SPLIT-DL12: background_mask+box_shadow из paint/display_list.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "`paint/display_list.rs`: background/gradient/mask-эмиссия + box-shadow — `fn gradient_tile_rects` (5293) … до конца `emit_inset_box_shadows`, 743 строки → `display_list/background_mask.rs` (535) + `display_list/box_shadow.rs` (208). Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "**ЗАКРЫТ 2026-08-31** (ветка `p1-split-dl12`, один срез): регион `fn gradient_tile_rects` (5352, план указывал 5293 — тот же класс дрейфа, что DL-3/4/5/7/8/9/11) … до конца `emit_inset_box_shadows` (742 строки с ведущим doc-comment'ом, план 743) вынесен в два файла по внутренней границе `emit_push_mask_layer`/`emit_box_shadows` — `display_list/background_mask.rs` (534 строки тела: tile-геометрия градиентного фона, `emit_background_layer`/`emit_background_image`, CSS Masking `emit_push_mask`/`emit_push_mask_layer`) и `display_list/box_shadow.rs` (207 строк тела: outset/inset box-shadow, `spread_corner_radii`), фактическая граница отличается от плановой 535/208 на ту же ±1 строку, что и предыдущие двухфайловые батчи. Сверка body-in-body (`diff` против `git show HEAD` по обоим кускам) — 0 расхождений. Правки видимости: `gradient_tile_rects`/`mask_stops_for_mode` → `pub(crate)` под `#[cfg(test)]` (зовут только `tests/background_and_layers.rs`/`tests/anim_and_chrome.rs` соответственно); `emit_background_image`/`emit_push_mask`/`rendered_mask_layers` → `pub(crate)` (зовут `walk.rs`/`table.rs` через `use super::*`, а `rendered_mask_layers` — ещё и `display_list.rs` сам, из `mask_clip_paint_rect`, оставшейся НИЖЕ вырезанного региона); `emit_box_shadows`/`emit_inset_box_shadows` → `pub(crate)` (зовут `svg_text_decoration.rs`/`walk.rs`). `gradient_paint_rects`/`emit_background_layer`/`is_renderable_mask_source`/`emit_push_mask_layer`/`spread_corner_radii` остались приватными — вызывателей вне своего нового файла нет. **Находка вне census'а: `rendered_mask_layers` не всплыл ни в одном grep по соседним файлам/крейтам — единственный вызыватель, `mask_clip_paint_rect`, сидит в САМОМ `display_list.rs`, за 4700+ строк от региона, ниже границы среза; поймал только `cargo check` (`E0425`).** Приём ST-3 «считать имена по всему файлу, а не по окрестности региона» здесь недостаточен буквально — нужно считать и по остатку ЭТОГО ЖЕ файла, включая код, что лёг ниже вырезки. `display_list.rs` 6145 → 5414, `cargo test -p lumen-paint --lib --features backend-wgpu` 1185/1185, `--test all --features backend-wgpu` 34/34 без диффов, `cargo clippy -p lumen-paint --all-targets --features backend-wgpu -- -D warnings` чист, нисходящая `cargo build -p lumen-shell --profile dev-release --features backend-wgpu` чистая, `python graphic_tests/dump_golden.py` 12/12 без дельт. `scripts/check_file_sizes.py --update` (6145 → 5414 в baseline), `SYMBOLS.md` не двинулся (только `pub(crate)`-правки, ни одного `pub`-item'а). `scripts/scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)) — тесты гонялись адресно. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа DL»"
       },
       {
        "id": "SPLIT-DL13",
@@ -9067,9 +9067,16 @@
    "debtor": false
   },
   "BUG-456": {
+   "status": "fixed",
+   "title": "Контекст `OffscreenCanvas.getContext('2d')` был **отдельной, втрое более бедной реализацией**, чем у элементного canvas: изначально 16 членов против 59, нет `sa…",
+   "component": "js (`crates/js/src/offscreen_canvas.rs` — литерал `this._2d_context`; `crates/js/src/canvas2d.rs` — text/gradient/pattern helpers, сделаны `pub(crate)`)",
+   "date": "2026-08-31",
+   "debtor": false
+  },
+  "BUG-932": {
    "status": "open",
-   "title": "Контекст `OffscreenCanvas.getContext('2d')` — **отдельная, втрое более бедная реализация**, чем у элементного canvas: изначально 16 членов против 59, нет `save`…",
-   "component": "js (`crates/js/src/offscreen_canvas.rs` — литерал `this._2d_context`)",
+   "title": "Остаток [BUG-456](bugs/BUG-456-FIXED.md): `OffscreenCanvas.getContext('2d')` теперь функционально полон (симптомы 1–3 закрыты), но сам объект контекста, а также…",
+   "component": "js (`crates/js/src/offscreen_canvas.rs` — `_2d_context`/`OffscreenCanvas`/`ImageBitmap` объявлены объектными литералами, не классами)",
    "date": null,
    "debtor": false
   },
@@ -12918,6 +12925,9 @@
   ],
   "js (`crates/js/src/navigator_bindings.rs:213-225` -- `_screen` object literal)": [
    "BUG-559"
+  ],
+  "js (`crates/js/src/offscreen_canvas.rs` — `_2d_context`/`OffscreenCanvas`/`ImageBitmap` объявлены объектными литералами, не классами)": [
+   "BUG-932"
   ],
   "js (`crates/js/src/permissions_policy.rs:37-44` — `FeaturePolicy.prototype.allowsFeature`)": [
    "BUG-697"
