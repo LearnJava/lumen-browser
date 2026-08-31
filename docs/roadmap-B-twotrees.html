@@ -73,10 +73,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-31",
+ "generated": "2026-09-01",
  "counts": {
-  "open": 366,
-  "fixed": 522,
+  "open": 365,
+  "fixed": 523,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -6094,9 +6094,9 @@
       {
        "id": "LIB-3",
        "title": "LIB-3: снять свой шейпер после подтверждения замены",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Удалить свой шейпер (gsub.rs, gpos.rs, шейпинговую часть otlayout.rs, ~1350 строк) и флаг отката — только после того, как LIB-2 закрыт и цифра LIB-0 выросла. Парсер таблиц lumen-font остаётся: его читают растеризатор, метрики, variable и color fonts. Обновить scripts/file-size-baseline.tsv и SYMBOLS.md."
+       "note": "ЗАКРЫТ 2026-09-01 (ветка `p1-lib3-remove-own-shaper`): удалены `crates/engine/font/src/{gsub,gpos,otlayout,shape}.rs` (~1350 строк — `otlayout` был общим слоем только для `gsub`/`gpos`, никто другой его не читал) и `OwnTextShaper` вместе с флагом отката (`LUMEN_OWN_TEXT_SHAPING`); `text_shaper.rs::active_text_shaper()` теперь безусловно возвращает `RustybuzzShaper`, `rustybuzz` в `Cargo.toml` стал обязательной зависимостью (feature `rustybuzz-shaping` снята). Интеграционный файл `tests/cases/inter_shaping.rs` (14 тестов исключительно на own-движке) удалён целиком; `rustybuzz_complex_scripts.rs` лишился контрастного сравнения с `OwnTextShaper`. Условие приёмки было выполнено инструментальной задачей 2026-09-01 ([docs/conformance/2026-09-01-lib3-cpu-system-fonts.md](docs/conformance/2026-09-01-lib3-cpu-system-fonts.md)): rustybuzz — структурный PASS на арабском соединении против FAIL own-движка. Поведение дефолтной сборки не меняется (rustybuzz был дефолтом с LIB-2) — `cargo test -p lumen-font` 393 unit + 26 integration (5 ignored) зелёные, `dump_golden.py` без диффа. Парсер таблиц lumen-font (face/cmap/hmtx/…) не тронут — его читают растеризатор, метрики, variable и color fonts. `scripts/file-size-baseline.tsv` заодно поправлен (несвязанный дрейф `cpu_raster.rs` из предыдущего смерженного коммита, не обновлённый там)."
       },
       {
        "id": "LIB-4",
@@ -6391,13 +6391,6 @@
    "status": "open",
    "title": "Остаток [BUG-932](bugs/BUG-932-FIXED.md): `ImageBitmap` (offscreen side) остался объектным литералом `{width, height, __canvas_id__, close}`, не классом — `bitm…",
    "component": "js (`crates/js/src/offscreen_canvas.rs` — `transferToImageBitmap`/`createImageBitmap`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-462": {
-   "status": "open",
-   "title": "`Node.prototype.contains` отсутствует целиком на живых (присоединённых) DOM-узлах — `document.contains(el)`/`el.contains(other)` бросают `TypeError`, не сломанн…",
-   "component": "js (`crates/js/src/dom.rs`)",
    "date": null,
    "debtor": false
   },
@@ -12440,6 +12433,13 @@
    "title": "Командная палитра/поповер щитов-разрешений рисуются движковым хромом (`#cpOverlay`/`#permPopover`), но клики по ним разбирали легаси Rust-хит-тестеры со своей г…",
    "component": "shell (`crates/shell/src/chrome_ui.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`, `app/window_event/mouse_input.rs`)",
    "date": "2026-08-31",
+   "debtor": false
+  },
+  "BUG-462": {
+   "status": "fixed",
+   "title": "`Node.prototype.contains` отсутствовал целиком на живых (присоединённых) DOM-узлах — `document.contains(el)`/`el.contains(other)` бросали `TypeError`. Блокирова…",
+   "component": "js (`crates/js/src/dom.rs`)",
+   "date": "2026-09-01",
    "debtor": false
   }
  },

@@ -28,8 +28,9 @@ use lumen_core::{FontProvider, NORMAL_STRETCH_PERCENT};
 /// conformance probe (`docs/conformance-method.md`).
 const BUNDLED_FONT: &[u8] = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
 
-/// `LUMEN_CPU_SYSTEM_FONTS` opt-in, read once (same `OnceLock` pattern as
-/// `LUMEN_OWN_TEXT_SHAPING` in `text_shaper.rs`). Diagnostic-only: exists so
+/// `LUMEN_CPU_SYSTEM_FONTS` opt-in, read once (same `OnceLock` pattern
+/// `text_shaper.rs` used for its now-removed `LUMEN_OWN_TEXT_SHAPING`
+/// rollback flag, LIB-3). Diagnostic-only: exists so
 /// the LIB-3 conformance re-measurement can render `docs/conformance/probes/
 /// text-shaping.html`'s Arabic/Devanagari/Hebrew/RTL checks against a real OS
 /// face instead of bundled-Inter `.notdef` tofu. Unset in every default build,
@@ -3017,10 +3018,9 @@ fn rasterize_text(
         if segment.is_empty() {
             continue;
         }
-        // Shape via `lumen_font::active_text_shaper()` (LIB-1/LIB-2):
-        // `rustybuzz` by default since LIB-2 re-shot this path's snapshot
-        // references, own GSUB/GPOS engine as a `LUMEN_OWN_TEXT_SHAPING=1`
-        // rollback. No cross-family fallback within one run: a missing
+        // Shape via `lumen_font::active_text_shaper()` (LIB-1/LIB-2/LIB-3):
+        // `rustybuzz`, the sole shaper since LIB-3 deleted the own GSUB/GPOS
+        // engine. No cross-family fallback within one run: a missing
         // codepoint in `bytes` resolves to glyph 0 (.notdef) — matching the
         // GPU renderer's `(primary, 0)` result when it too has no fallback
         // configured. `bytes` itself is Inter by default, or the first

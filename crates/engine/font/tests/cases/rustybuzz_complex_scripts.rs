@@ -1,9 +1,8 @@
 //! Complex-script conformance for [`lumen_font::RustybuzzShaper`] (LIB-1).
 //!
 //! Marked `#[ignore]` — machine-dependent (needs real Windows system fonts
-//! with Arabic/Devanagari coverage: `crate::shape::Shaper`'s own engine has
-//! no complex-script support at all, so there is nothing to test it
-//! against, and the bundled Inter face has neither script). Run manually:
+//! with Arabic/Devanagari coverage; the bundled Inter face has neither
+//! script). Run manually:
 //! `cargo test -p lumen-font --test all -- --ignored --nocapture rustybuzz_complex_scripts`.
 //!
 //! This is the direct-API counterpart to the LIB-0 conformance probe
@@ -16,7 +15,7 @@
 //! that blind spot entirely.
 
 use lumen_core::ext::{ShapeDirection, TextShaper};
-use lumen_font::{OwnTextShaper, RustybuzzShaper};
+use lumen_font::RustybuzzShaper;
 use std::path::Path;
 
 /// Reads a system font file, skipping the check (not failing it) if this
@@ -42,10 +41,8 @@ fn arabic_medial_form_differs_from_isolated_form() {
 
     // Arabic BEH (U+0628) alone shapes to its isolated form; the same
     // letter sandwiched between two others (here ALEF, BEH, ALEF) must
-    // shape to its MEDIAL form — a different glyph id. `crate::shape`'s own
-    // engine has no GSUB 5/6 (contextual/chained) lookups, so it always
-    // emits the isolated-form glyph regardless of context; this is exactly
-    // what LIB-1 replaces.
+    // shape to its MEDIAL form — a different glyph id. This needs GSUB 5/6
+    // (contextual/chained) lookups, which is exactly what LIB-1 brought in.
     let isolated = RustybuzzShaper.shape(
         &font,
         "\u{0628}",
@@ -86,12 +83,7 @@ fn combining_diacritic_attaches_via_mark_positioning() {
     // (harakat) have no precomposed codepoint and are never pre-ligated —
     // there are far too many consonant+mark combinations for a font to
     // bother — so a font can only place them correctly via `GPOS` Lookup
-    // Type 4 (mark-to-base), which `crate::shape::Shaper` does not
-    // implement (LIB-1 task doc). Measured directly against Tahoma: the
-    // own engine places the mark at a bare `(0, 0)` offset (floating next
-    // to the base, at the pen position its own zero `hmtx` advance leaves
-    // it — a lucky-looking but wrong placement, not attachment), while
-    // rustybuzz resolves a real anchor offset.
+    // Type 4 (mark-to-base), which is exactly what LIB-1 brought in.
     let base_alone = RustybuzzShaper.shape(
         &font,
         "\u{0628}",
@@ -126,24 +118,6 @@ fn combining_diacritic_attaches_via_mark_positioning() {
         "rustybuzz must resolve a real GPOS anchor offset for the mark, \
          not leave it at (0, 0)"
     );
-
-    // Contrast: `crate::shape::Shaper` cannot do this at all — its mark
-    // lands at a bare (0, 0), proving the trait-anchor's own-engine path
-    // still lacks GPOS 4, exactly as documented.
-    let own_combo = OwnTextShaper.shape(
-        &font,
-        "\u{0628}\u{064E}",
-        ShapeDirection::RightToLeft,
-        None,
-        &[],
-        &[],
-    );
-    let own_mark = own_combo
-        .iter()
-        .find(|g| g.glyph_id != base_glyph)
-        .expect("own engine must not drop the mark glyph either");
-    assert_eq!(own_mark.x_offset, 0, "own engine has no mark anchor to apply");
-    assert_eq!(own_mark.y_offset, 0, "own engine has no mark anchor to apply");
 }
 
 #[test]
