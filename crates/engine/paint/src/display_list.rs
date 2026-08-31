@@ -1956,6 +1956,21 @@ pub fn fold_content_dual(content: &[DisplayCommand], skip: &[std::ops::Range<usi
     (frame.finish(), key.finish())
 }
 
+/// Дайджест overlay-списка, один [`hash_one_command`] на элемент (BUG-405
+/// срез 47). Раньше он считался НЕЗАВИСИМО в двух местах одного и того же
+/// кадра: здесь (внутри [`hash_display_list_dual_memo`], статья `frame-hash`)
+/// и в `Renderer::overlay_cache_step` (статья `послекэша` — срез 44 измерил
+/// её ~0.12 мс на кадр попадания, срез 43 назвал сам факт безусловного
+/// пересчёта). Оба потребителя сравнивают дайджест с одним и тем же
+/// определением (`hash_one_command`), так что вызывающий (`render_with_anim`)
+/// теперь считает его ОДИН раз и передаёт результат в оба места —
+/// [`hash_display_list_dual_memo_with_overlay_digests`] и
+/// `overlay_cache_step`.
+#[must_use]
+pub fn fold_overlay(overlay: &[DisplayCommand]) -> Vec<u64> {
+    overlay.iter().map(hash_one_command).collect()
+}
+
 /// [`hash_display_list_dual`] с ГОТОВОЙ свёрткой content-части (BUG-405 срез 39).
 ///
 /// `folds` — результат [`fold_content_dual`] для этого же `content`/`skip`,
@@ -1971,10 +1986,41 @@ pub fn fold_content_dual(content: &[DisplayCommand], skip: &[std::ops::Range<usi
 ///
 /// Ответственность за «список не менялся» лежит на вызывающем
 /// ([`RenderBackend::set_content_epoch`](crate::backend::RenderBackend::set_content_epoch)).
+///
+/// Пересчитывает overlay-дайджест внутри себя ([`fold_overlay`]) — тесты и
+/// прочие вызывающие, которым нечего переиспользовать, используют эту форму
+/// как раньше. Горячий путь `render_with_anim` вызывает
+/// [`hash_display_list_dual_memo_with_overlay_digests`] напрямую с уже
+/// посчитанным дайджестом (срез 47).
 #[must_use]
 pub fn hash_display_list_dual_memo(
     content: &[DisplayCommand],
     overlay: &[DisplayCommand],
+    skip: &[std::ops::Range<usize>],
+    scroll: (f32, f32),
+    surface: (u32, u32),
+    band: (u32, u32),
+    folds: Option<(u64, u64)>,
+) -> ((u64, u64), (u64, u64)) {
+    hash_display_list_dual_memo_with_overlay_digests(
+        content,
+        &fold_overlay(overlay),
+        skip,
+        scroll,
+        surface,
+        band,
+        folds,
+    )
+}
+
+/// [`hash_display_list_dual_memo`] с ГОТОВЫМ overlay-дайджестом
+/// ([`fold_overlay`]) вместо самого overlay-списка (BUG-405 срез 47) — та же
+/// формула хэша, `overlay_digests.len()` заменяет `overlay.len()` (равны по
+/// построению: один дайджест на команду).
+#[must_use]
+pub fn hash_display_list_dual_memo_with_overlay_digests(
+    content: &[DisplayCommand],
+    overlay_digests: &[u64],
     skip: &[std::ops::Range<usize>],
     scroll: (f32, f32),
     surface: (u32, u32),
@@ -1994,7 +2040,7 @@ pub fn hash_display_list_dual_memo(
     frame.write_u32(scroll_x.to_bits());
     frame.write_u32(scroll_y.to_bits());
     frame.write_usize(content.len());
-    frame.write_usize(overlay.len());
+    frame.write_usize(overlay_digests.len());
     frame.write_u64(folds.0);
 
     let skipped: usize = skip.iter().map(std::ops::Range::len).sum();
@@ -2004,8 +2050,8 @@ pub fn hash_display_list_dual_memo(
     key.write_usize(content.len().saturating_sub(skipped));
     key.write_u64(folds.1);
 
-    for cmd in overlay {
-        frame.write_u64(hash_one_command(cmd));
+    for &d in overlay_digests {
+        frame.write_u64(d);
     }
     ((frame.finish(), key.finish()), folds)
 }

@@ -5925,7 +5925,7 @@ use diagnostics::{
     create_depth_texture, cull_merge_disabled, dl_epoch_disabled, dl_epoch_verify,
     dual_hash_disabled, flush_compose_marks, frame_skip_disabled, image_mips_disabled,
     img_xform_disabled, nested_shader_clip_disabled, no_clip_slot,
-    overlay_cache_disabled, pipeline_warmup_disabled, requested_max_texture_dim,
+    overlay_cache_disabled, overlay_digest_reuse_disabled, pipeline_warmup_disabled, requested_max_texture_dim,
     resolve_text_face_ids, rot_aa_disabled, rot_clip_disabled, scroll_compositor_disabled,
     select_surface_format, shader_rrect_clip_disabled, shadow_analytic_disabled,
     skip_signature, split_submit_disabled, state_elision_disabled, svg_aa_disabled,

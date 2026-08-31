@@ -4,7 +4,7 @@
 # Число может ехать ВНИЗ свободно, ВВЕРХ — только осознанно, тем же
 # коммитом, что и рост, и с объяснением в теле коммита.
 
-19297	crates/engine/paint/src/display_list.rs
+19343	crates/engine/paint/src/display_list.rs
 19250	crates/engine/layout/src/lib.rs
 10217	crates/network/src/lib.rs
 9192	crates/engine/css-parser/src/parser.rs

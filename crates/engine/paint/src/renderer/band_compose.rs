@@ -560,12 +560,23 @@ impl Renderer {
     /// вперёд до ближайшей сбалансированной по push/pop границы
     /// (`balanced_cut_at_or_after`) — резать список пополам открытого
     /// `Push*` нельзя.
+    ///
+    /// `overlay_digests` — тот же [`crate::display_list::fold_overlay`],
+    /// который `render_with_anim` уже посчитал для кадрового хэша (BUG-405
+    /// срез 47): раньше этот метод обходил `overlay` `hash_one_command`-ом
+    /// ЗАНОВО, хотя тот же дайджест уже был посчитан секундами раньше в этом
+    /// же кадре (срез 43/44 измерили эту вторую свёртку как статью
+    /// `послекэша`, ~0.12 мс на кадре попадания). `None` (только под
+    /// `LUMEN_NO_OVERLAY_DIGEST_REUSE=1`) — старое поведение, для A/B.
     pub(crate) fn overlay_cache_step(
         &mut self,
         overlay: &[DisplayCommand],
+        overlay_digests: Option<&[u64]>,
     ) -> Result<Option<usize>, wgpu::SurfaceError> {
-        let current: Vec<u64> =
-            overlay.iter().map(crate::display_list::hash_one_command).collect();
+        let current: Vec<u64> = match overlay_digests {
+            Some(d) => d.to_vec(),
+            None => overlay.iter().map(crate::display_list::hash_one_command).collect(),
+        };
         let (sw, sh) = self.surface_dims();
         let dpr = self.scale_factor.max(1e-6) as f32;
         let full_quad = |bind_group: wgpu::BindGroup| PendingBaseBlit {
@@ -662,10 +673,12 @@ impl Renderer {
         Ok(Some(prefix_len))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn compose_page(
         &mut self,
         content: &[DisplayCommand],
         overlay: &[DisplayCommand],
+        overlay_digests: Option<&[u64]>,
         scroll_y: f32,
         prep: &ComposePrep,
         key: u64,
@@ -1002,7 +1015,10 @@ impl Renderer {
         let overlay_prefix_len = if compose_overlay_disabled() || overlay_cache_disabled() {
             None
         } else {
-            self.overlay_cache_step(overlay)?
+            self.overlay_cache_step(
+                overlay,
+                (!overlay_digest_reuse_disabled()).then_some(overlay_digests).flatten(),
+            )?
         };
         let compose_overlay: &[DisplayCommand] = if compose_overlay_disabled() {
             &[]
