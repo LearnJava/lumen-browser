@@ -5833,10 +5833,143 @@
       },
       {
        "id": "SPLIT-PR1",
-       "title": "SPLIT-PR1: перепись display_list.rs",
+       "title": "SPLIT-PR1: перепись display_list.rs, батч-план DL-1…DL-19",
+       "status": "done",
+       "size": "S",
+       "note": "ЗАКРЫТ 2026-08-31 (ветка `p1-split-pr1`): перепись `crates/engine/paint/src/display_list.rs` — 19 698 строк, 214 top-level item'ов, лексер сходится (глубина 0). Оригинальная постановка («commands, builder, serialize, hit_test, cache») не подтвердилась — `hit_test` в файле не встречается, уже вынесен в отдельный `hit_test.rs`. Карта: use-шапка (25) + типы примитивов (291) + `enum DisplayCommand`+`impl` (770, центральный тип) + provenance/geometry (445) + хэши/diff/fingerprint (1 142) + serialize+builder+print (1 128) + text emphasis/frags/inline-run (513) + box-layer-ops/bucket-fill (493) + inline-frag/shadows/bg-геометрия (465) + background/gradient/mask (535) + box-shadow (208) + scrollbar (242) + outline/resize-grip/column-rules/visibility (284) + form-controls (712) + `emit_box_self`+3D+`walk` (1 294, риск группы) + SVG+text-decoration+`walk_with_anim` (850) + table painting (283) + `mod tests` (9 592, плоский, 62 баннерных секции) + код ПОСЛЕ тестового модуля (407 — форма SH-4/RN-1). Батч-план DL-1…DL-19 (хвост→голова) — таблица §4 [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL1",
+       "title": "SPLIT-DL1: text_highlight из paint/display_list.rs",
        "status": "ready",
        "size": "S",
-       "note": "Перепись `crates/engine/paint/src/display_list.rs` (19 698 строк) и нарезка на батчи: commands, builder, serialize, hit_test, cache. Типы с `derive(Serialize, Deserialize)` переносить целиком и не переименовывать даже внутри крейта — ADR-008 hibernation-snapshots. Метод — §1, результат — таблица батчей в §4 [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "`paint/display_list.rs`: код после `mod tests` — `fn emit_text_with_highlights` (19293) … конец файла, 407 строк → `display_list/text_highlight.rs` (38) + `display_list/tests/highlight.rs` (369). Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL2",
+       "title": "SPLIT-DL2: tests/svg_table_and_hash из paint/display_list.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`paint/display_list.rs`: хвост тестового модуля — image-set()/backdrop-filter-hash/структурный хэш команд/table rendering/SVG text/FilterMode/overflow:clip/progress/meter/font-stretch (17305…19292), 1 988 строк → `display_list/tests/svg_table_and_hash.rs`. Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL3",
+       "title": "SPLIT-DL3: tests/anim_and_chrome из paint/display_list.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`paint/display_list.rs`: static/animated split/clip-path/list-marker/scrollbar/print margin-box тесты (15338…17304), 1 967 строк → `display_list/tests/anim_and_chrome.rs`. Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL4",
+       "title": "SPLIT-DL4: tests/shadows_and_transforms из paint/display_list.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`paint/display_list.rs`: ProvenanceIndex/outline/shadows/backdrop-filter/transform/3D depth тесты (13680…15337), 1 658 строк → `display_list/tests/shadows_and_transforms.rs`. Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL5",
+       "title": "SPLIT-DL5: tests/background_and_layers из paint/display_list.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`paint/display_list.rs`: iframe/audio/bg-image/gradient/mask/object-fit/scroll-layer/layer-ops тесты (11637…13679), 2 043 строки → `display_list/tests/background_and_layers.rs`. Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL6",
+       "title": "SPLIT-DL6: tests/text_and_images из paint/display_list.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`paint/display_list.rs`: голова тестового модуля — cull_rect/writing-mode/bg-repeat/canvas/line-wrap/text-decoration/border/img/lazy тесты (9706…11636), 1 931 строка → `display_list/tests/text_and_images.rs`; после DL-2…DL-6 обёртка `mod tests {}` пуста — снять `#[cfg(test)] mod tests;` тем же срезом. Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL7",
+       "title": "SPLIT-DL7: table.rs из paint/display_list.rs",
+       "status": "ready",
+       "size": "S",
+       "note": "`paint/display_list.rs`: table painting — `enum BorderPrecedence` (9418) … до конца `emit_table_cell_content`, 283 строки → `display_list/table.rs`. Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL8",
+       "title": "SPLIT-DL8: svg_text_decoration.rs из paint/display_list.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`paint/display_list.rs`: SVG+text-decoration+`walk_with_anim` — `fn apply_opacity_to_color` (8568) … до конца `walk_with_anim`, 850 строк → `display_list/svg_text_decoration.rs`. Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL9",
+       "title": "SPLIT-DL9: walk.rs из paint/display_list.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`paint/display_list.rs`: `emit_box_self`+3D-глубина+`walk` — `fn emit_box_self` (7274) … до конца `walk`, 1 294 строки → `display_list/walk.rs`, центральный обходчик, риск группы (аналог RN-6/BT-10). Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL10",
+       "title": "SPLIT-DL10: form_controls.rs из paint/display_list.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`paint/display_list.rs`: form controls — `const ACCENT_DEFAULT` (6562) … до `fn box_generates_content`, 712 строк → `display_list/form_controls.rs`. Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL11",
+       "title": "SPLIT-DL11: scrollbars+outline_misc из paint/display_list.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`paint/display_list.rs`: scrollbar + outline/resize-grip/column-rules/visibility — `const SCROLLBAR_WIDTH` (6036) … до `fn is_opacity_subtree_painted`, 526 строк → `display_list/scrollbars.rs` (242) + `display_list/outline_misc.rs` (284). Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL12",
+       "title": "SPLIT-DL12: background_mask+box_shadow из paint/display_list.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`paint/display_list.rs`: background/gradient/mask-эмиссия + box-shadow — `fn gradient_tile_rects` (5293) … до конца `emit_inset_box_shadows`, 743 строки → `display_list/background_mask.rs` (535) + `display_list/box_shadow.rs` (208). Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL13",
+       "title": "SPLIT-DL13: box_layer+inline_frag из paint/display_list.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`paint/display_list.rs`: box-layer-ops/bucket-fill + inline-frag/shadows/bg-геометрия — `struct BoxLayerOps` (4335) … до `fn select_image_set_url`, 958 строк → `display_list/box_layer.rs` (493) + `display_list/inline_frag.rs` (465). Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL14",
+       "title": "SPLIT-DL14: text_run.rs из paint/display_list.rs",
+       "status": "ready",
+       "size": "S",
+       "note": "`paint/display_list.rs`: text emphasis/frags/inline-run — `fn emphasis_mark_str` (3822) … до `fn first_line_content_rect`, 513 строк → `display_list/text_run.rs`. Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL15",
+       "title": "SPLIT-DL15: serialize+builder+print из paint/display_list.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`paint/display_list.rs`: serialize + builder-семейство + print-конвейер — `fn serialize_display_list` (2694) … до `fn clip_path_to_shape`, 1 128 строк → `display_list/serialize.rs` (453) + `display_list/builder.rs` (366) + `display_list/print.rs` (309). Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL16",
+       "title": "SPLIT-DL16: fingerprint.rs из paint/display_list.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`paint/display_list.rs`: хэши/diff/fingerprint — `struct HashFmt` (1552) … до `fn union_all_rects`, 1 142 строки → `display_list/fingerprint.rs`. Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL17",
+       "title": "SPLIT-DL17: geometry.rs из paint/display_list.rs",
+       "status": "ready",
+       "size": "S",
+       "note": "`paint/display_list.rs`: provenance/geometry-хелперы — `struct ProvenanceIndex` (1107) … до `fn contains_backdrop_filter`, 445 строк → `display_list/geometry.rs`. Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL18",
+       "title": "SPLIT-DL18: commands.rs из paint/display_list.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`paint/display_list.rs`: `enum DisplayCommand`+`impl`+`type DisplayList` (337…1106), 770 строк → `display_list/commands.rs` — центральный тип, часть публичного API крейта, ADR-008 hibernation-snapshots (не переименовывать). Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-DL19",
+       "title": "SPLIT-DL19: paint_types.rs из paint/display_list.rs",
+       "status": "ready",
+       "size": "S",
+       "note": "`paint/display_list.rs`: типы примитивов — `enum FilterMode` (46) … до конца `impl ResolvedClipShape`, 291 строка → `display_list/paint_types.rs`; use-шапка остаётся в хабе. Головной регион группы, берётся последним. Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
       },
       {
        "id": "SPLIT-LB0",
