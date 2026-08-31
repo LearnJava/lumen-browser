@@ -38,3 +38,18 @@ text-orientation mixed/upright/sideways, Latin+CJK) — 3.68% diff vs Edge
 требует per-glyph advance модели (отдельная задача — layout, не paint).
 
 `KNOWN_DEBTORS['145'] = ('BUG-290', <baseline>)` в `graphic_tests/run.py`.
+
+## Ревизия P3 2026-09-01
+
+Первая строка очереди STATUS-P3.md (BUGS.md:43), проверена top-down. Живой
+прогон `graphic_tests/run.py --only 145 --no-cache` стабильно даёт 3.39%
+(два чистых прохода) вместо прежнего baseline 3.68% — ратчет применён.
+Diff-картинка не показывает новых структурных расхождений: тот же
+font-parity ghosting в колонках `mixed`/`upright` (текстовые метки и
+CJK-глифы), геометрия поворота (`sideways` целиком, CJK в `mixed`)
+по-прежнему пиксель-в-пиксель совпадает с Edge. Улучшение правдоподобно от
+несвязанных фиксов, слитых после 2026-07-16 (тот же класс, что ратчеты
+BUG-099/124/127/128 2026-08-31). Точечного P3-дефекта не найдено — оба
+источника остатка (font-parity, upright per-glyph advance) остаются в
+доменах, которым уже назначены (FP-1/BUG-128, `docs/tasks/ph3-writing-mode-vertical.md`).
+Указатель STATUS-P3.md снят.
