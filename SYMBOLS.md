@@ -643,208 +643,208 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/contenteditable.rs:317` **fn** `current_pos` — Return the current position in history (how many commands have been executed/redone)
 `crates/engine/dom/src/contenteditable.rs:329` **fn** `paste_into` — Handle paste operation: insert paste data at selection or cursor position
 `crates/engine/dom/src/contenteditable.rs:361` **fn** `drop_into` — Handle drop operation: insert drag data at drop position
-`crates/engine/dom/src/lib.rs:38` **enum** `ViewportWidth` — Width dimension of a `<meta name=viewport>` tag
-`crates/engine/dom/src/lib.rs:50` **struct** `ViewportMeta` — Parsed `<meta name="viewport" content="…">` descriptor
-`crates/engine/dom/src/lib.rs:65` **enum** `DomSnapshotError` — Error returned by [`Document::to_bytes`] and [`Document::from_bytes`]
-`crates/engine/dom/src/lib.rs:96` **struct** `NodeLimitExceeded` — Returned by [`Document::try_create_element`] when [`MAX_DOM_NODES`] is reached
-`crates/engine/dom/src/lib.rs:107` **struct** `NodeId`
-`crates/engine/dom/src/lib.rs:110` **fn** `index`
-`crates/engine/dom/src/lib.rs:114` **fn** `from_index`
-`crates/engine/dom/src/lib.rs:120` **enum** `Namespace`
-`crates/engine/dom/src/lib.rs:134` **struct** `QualName`
-`crates/engine/dom/src/lib.rs:140` **fn** `html`
-`crates/engine/dom/src/lib.rs:149` **struct** `Attribute`
-`crates/engine/dom/src/lib.rs:159` **enum** `ShadowRootMode` — Shadow root mode per Shadow DOM spec §4.2
-`crates/engine/dom/src/lib.rs:174` **enum** `NodeData`
-`crates/engine/dom/src/lib.rs:207` **struct** `Node`
-`crates/engine/dom/src/lib.rs:214` **fn** `element_name`
-`crates/engine/dom/src/lib.rs:223` **fn** `get_attr` — Возвращает значение атрибута по имени (ASCII case-insensitive). На
-`crates/engine/dom/src/lib.rs:239` **fn** `sandbox_flags` — Sandbox-ограничения для `<iframe sandbox="...">` по HTML LS §7.6.5
-`crates/engine/dom/src/lib.rs:251` **fn** `input_type` — HTML5 form input type для `<input type="...">`. Возвращает None
-`crates/engine/dom/src/lib.rs:265` **fn** `input_mode` — Virtual keyboard hint for `<input inputmode="...">` and `<textarea inputmode="...">`
-`crates/engine/dom/src/lib.rs:280` **enum** `InputType` — HTML5 form input types (HTML Standard §4.10.5). Спека определяет
-`crates/engine/dom/src/lib.rs:332` **fn** `parse` — Распарсить значение `type`-атрибута. Case-insensitive по
-`crates/engine/dom/src/lib.rs:361` **fn** `as_str`
-`crates/engine/dom/src/lib.rs:392` **fn** `is_textual` — Текстовая семантика — поле с буквенным контентом, на котором
-`crates/engine/dom/src/lib.rs:402` **fn** `is_button_like` — Кнопочная семантика — submit/reset/button/image, рендерится
-`crates/engine/dom/src/lib.rs:416` **enum** `InputMode` — HTML Living Standard `inputmode` attribute values — hint to user agent about
-`crates/engine/dom/src/lib.rs:438` **fn** `parse` — Parse `inputmode` attribute value. Case-insensitive per HTML spec
-`crates/engine/dom/src/lib.rs:451` **fn** `as_str`
-`crates/engine/dom/src/lib.rs:467` **struct** `FormInfo` — Данные `<form>` элемента — URL назначения, метод и число полей ввода
-`crates/engine/dom/src/lib.rs:483` **enum** `FormSubmitEvent` — Результат попытки отправить форму (HTML5 §4.10.22 form submission algorithm)
-`crates/engine/dom/src/lib.rs:509` **enum** `DocumentMode` — Парсинг-режим документа по HTML5 §13.2.6.2 «The insertion mode»
-`crates/engine/dom/src/lib.rs:532` **struct** `DomPosition` — A position within the document (WHATWG DOM §4.4)
-`crates/engine/dom/src/lib.rs:545` **struct** `Range` — A contiguous range of document content (WHATWG DOM §4.5)
-`crates/engine/dom/src/lib.rs:554` **fn** `collapsed` — Collapsed range: both endpoints at `pos`
-`crates/engine/dom/src/lib.rs:559` **fn** `is_collapsed` — True when start and end are the same position
-`crates/engine/dom/src/lib.rs:571` **struct** `Selection` — The current document text selection (WHATWG Selection API)
-`crates/engine/dom/src/lib.rs:580` **fn** `is_collapsed` — True when anchor == focus (or no selection)
-`crates/engine/dom/src/lib.rs:589` **fn** `get_range` — The selection as a normalised Range (start ≤ end in node order)
-`crates/engine/dom/src/lib.rs:604` **fn** `collapse` — Collapse the selection to a single point
-`crates/engine/dom/src/lib.rs:610` **fn** `extend_focus` — Extend the focus end to `pos` (anchor stays fixed)
-`crates/engine/dom/src/lib.rs:615` **fn** `clear` — Remove the selection entirely
-`crates/engine/dom/src/lib.rs:634` **struct** `CompositionState` — Tracks the current IME composition session
-`crates/engine/dom/src/lib.rs:649` **enum** `FontFaceStatus` — The status of a FontFace: whether it's been loaded, is loading, or failed
-`crates/engine/dom/src/lib.rs:663` **struct** `FontFace` — Represents a @font-face rule and its loading status
-`crates/engine/dom/src/lib.rs:682` **fn** `new` — Create a new FontFace from @font-face rule components
-`crates/engine/dom/src/lib.rs:705` **struct** `FontFaceSet` — A collection of FontFace objects representing all @font-face rules in the document
-`crates/engine/dom/src/lib.rs:712` **fn** `new` — Create a new empty FontFaceSet
-`crates/engine/dom/src/lib.rs:719` **fn** `add` — Add a FontFace to the set
-`crates/engine/dom/src/lib.rs:724` **fn** `size` — Get the number of FontFaces in the set
-`crates/engine/dom/src/lib.rs:729` **fn** `has_family` — Check if the set contains a FontFace with a specific family name
-`crates/engine/dom/src/lib.rs:734` **fn** `get_by_family` — Get all FontFaces with a specific family name
-`crates/engine/dom/src/lib.rs:739` **fn** `all` — Get all FontFaces
-`crates/engine/dom/src/lib.rs:744` **fn** `clear` — Clear all FontFaces from the set
-`crates/engine/dom/src/lib.rs:751` **enum** `PerformanceEntryType` — Type of a performance entry (mark, measure, navigation, resource, etc.)
-`crates/engine/dom/src/lib.rs:782` **struct** `PerformanceEntry` — A single performance entry (mark, measure, or resource timing)
-`crates/engine/dom/src/lib.rs:795` **fn** `new` — Create a new performance entry
-`crates/engine/dom/src/lib.rs:810` **fn** `end_time` — Get the end time of this entry (start_time + duration)
-`crates/engine/dom/src/lib.rs:818` **struct** `PerformanceEntries` — Collection of performance entries
-`crates/engine/dom/src/lib.rs:825` **fn** `new` — Create a new empty performance entries collection
-`crates/engine/dom/src/lib.rs:832` **fn** `add_entry` — Add a performance entry
-`crates/engine/dom/src/lib.rs:837` **fn** `all` — Get all performance entries
-`crates/engine/dom/src/lib.rs:842` **fn** `get_by_type` — Get entries by type (mark, measure, etc.)
-`crates/engine/dom/src/lib.rs:850` **fn** `get_by_name` — Get entries by name
-`crates/engine/dom/src/lib.rs:858` **fn** `get_first_by_name` — Get a single entry by name (returns the first match)
-`crates/engine/dom/src/lib.rs:863` **fn** `clear` — Clear all performance entries
-`crates/engine/dom/src/lib.rs:868` **fn** `len` — Get the count of entries
-`crates/engine/dom/src/lib.rs:873` **fn** `is_empty` — Check if the collection is empty
-`crates/engine/dom/src/lib.rs:881` **struct** `PerformanceObserver` — Placeholder for PerformanceObserver observer registration
-`crates/engine/dom/src/lib.rs:890` **fn** `new` — Create a new PerformanceObserver
-`crates/engine/dom/src/lib.rs:898` **fn** `observe` — Add entry types to observe
-`crates/engine/dom/src/lib.rs:903` **fn** `disconnect` — Disconnect the observer
-`crates/engine/dom/src/lib.rs:909` **fn** `observed_types` — Get the observed entry types
-`crates/engine/dom/src/lib.rs:914` **fn** `is_observing` — Check if this observer is watching a specific entry type
-`crates/engine/dom/src/lib.rs:919` **fn** `set_handle` — Set the observer handle (assigned by shell runtime when registered)
-`crates/engine/dom/src/lib.rs:924` **fn** `handle` — Get the observer handle
-`crates/engine/dom/src/lib.rs:936` **struct** `Document`
-`crates/engine/dom/src/lib.rs:1075` **fn** `new`
-`crates/engine/dom/src/lib.rs:1105` **fn** `design_mode` — Current value of `document.designMode` (HTML LS §6.6.3)
-`crates/engine/dom/src/lib.rs:1110` **fn** `set_design_mode` — Set `document.designMode`. Driven by the JS shim's setter
-`crates/engine/dom/src/lib.rs:1115` **fn** `character_set` — `document.characterSet`/`charset`/`inputEncoding` (DOM §7.3, BUG-358)
-`crates/engine/dom/src/lib.rs:1121` **fn** `set_character_set` — Set the document's encoding name. Called once by the shell right after
-`crates/engine/dom/src/lib.rs:1126` **fn** `content_type` — `document.contentType` (DOM §4.5, BUG-358)
-`crates/engine/dom/src/lib.rs:1132` **fn** `set_content_type` — Set the document's MIME type. Called once by the shell from the
-`crates/engine/dom/src/lib.rs:1136` **fn** `root`
-`crates/engine/dom/src/lib.rs:1144` **fn** `mode` — Текущий парсинг-режим. Tree builder выставляет его при
-`crates/engine/dom/src/lib.rs:1150` **fn** `set_mode` — Установить режим. Использует tree builder при инициализации
-`crates/engine/dom/src/lib.rs:1155` **fn** `viewport_meta` — Parsed `<meta name="viewport">` descriptor, if the page declared one
-`crates/engine/dom/src/lib.rs:1161` **fn** `set_viewport_meta` — Set the viewport meta descriptor. Called by the HTML parser when it
-`crates/engine/dom/src/lib.rs:1167` **fn** `get_selection` — Current selection. The shell updates this on mouse events; JS reads it
-`crates/engine/dom/src/lib.rs:1172` **fn** `set_selection` — Replace the current selection
-`crates/engine/dom/src/lib.rs:1177` **fn** `clear_selection` — Clear the selection
-`crates/engine/dom/src/lib.rs:1189` **fn** `control_value` — The control's **current** value (HTML LS §4.10.5.5 «value»): the dirty
-`crates/engine/dom/src/lib.rs:1208` **fn** `dirty_value` — The dirty value alone, `None` when the control still shows its default
-`crates/engine/dom/src/lib.rs:1218` **fn** `set_control_value` — Set the control's value and raise its dirty value flag — the single
-`crates/engine/dom/src/lib.rs:1224` **fn** `clear_control_value` — Drop the control's dirty value, so it falls back to its default —
-`crates/engine/dom/src/lib.rs:1236` **fn** `control_checked` — The control's **current** checkedness (HTML LS §4.10.5.5): the dirty
-`crates/engine/dom/src/lib.rs:1245` **fn** `dirty_checked` — The dirty checkedness alone, `None` when the control still tracks the
-`crates/engine/dom/src/lib.rs:1254` **fn** `set_control_checked` — Set the control's checkedness and raise its dirty checkedness flag —
-`crates/engine/dom/src/lib.rs:1261` **fn** `clear_control_checked` — Drop the control's dirty checkedness, so it falls back to the
-`crates/engine/dom/src/lib.rs:1276` **fn** `target` — Текущий target — id из URL fragment (без ведущего `#`), к которому
-`crates/engine/dom/src/lib.rs:1283` **fn** `set_target` — Установить current target (id без `#`). `None` — нет fragment-а в URL
-`crates/engine/dom/src/lib.rs:1295` **fn** `attach_shadow` — Attach a shadow root to `host` and return its `NodeId`
-`crates/engine/dom/src/lib.rs:1302` **fn** `shadow_root_of` — Return the shadow root attached to `host`, or `None` if not a shadow host
-`crates/engine/dom/src/lib.rs:1307` **fn** `is_shadow_host` — Whether `id` is a shadow host (has an attached shadow root)
-`crates/engine/dom/src/lib.rs:1311` **fn** `get`
-`crates/engine/dom/src/lib.rs:1315` **fn** `get_mut`
-`crates/engine/dom/src/lib.rs:1319` **fn** `len`
-`crates/engine/dom/src/lib.rs:1323` **fn** `is_empty`
-`crates/engine/dom/src/lib.rs:1335` **fn** `base_href` — HTML5 §4.2.3 — найти первый `<base href="...">` в документе и
-`crates/engine/dom/src/lib.rs:1349` **fn** `document_element` — Returns the document's root element `NodeId` — the `<html>` element that is
-`crates/engine/dom/src/lib.rs:1357` **fn** `body` — Returns the `<body>` element's `NodeId`, walking root → `<html>` → `<body>`
-`crates/engine/dom/src/lib.rs:1367` **fn** `find_first_element` — Найти первый элемент, удовлетворяющий предикату. Pre-order обход
-`crates/engine/dom/src/lib.rs:1388` **fn** `find_by_id` — Find a node by its `id` attribute (case-sensitive, per HTML spec)
-`crates/engine/dom/src/lib.rs:1416` **fn** `node_count` — Number of nodes currently allocated in this document's arena (including the root)
-`crates/engine/dom/src/lib.rs:1422` **fn** `create_element` — Create an element unconditionally. Used by the HTML parser — does **not** enforce
-`crates/engine/dom/src/lib.rs:1434` **fn** `try_create_element` — Create an element, returning `Err(`[`NodeLimitExceeded`]`)` if the arena already
-`crates/engine/dom/src/lib.rs:1447` **fn** `create_text` — Create a text node unconditionally. Used by the HTML parser — does **not**
-`crates/engine/dom/src/lib.rs:1457` **fn** `try_create_text` — Create a text node, returning `Err(`[`NodeLimitExceeded`]`)` if the arena already
-`crates/engine/dom/src/lib.rs:1467` **fn** `create_comment` — Create a comment node unconditionally. Used by the HTML parser — does **not**
-`crates/engine/dom/src/lib.rs:1477` **fn** `try_create_comment` — Create a comment node, returning `Err(`[`NodeLimitExceeded`]`)` if the arena already
-`crates/engine/dom/src/lib.rs:1490` **fn** `create_fragment` — Allocate a `DocumentFragment` node in the arena
-`crates/engine/dom/src/lib.rs:1498` **fn** `set_template_content` — Register `fragment` as the content container for `template`
-`crates/engine/dom/src/lib.rs:1504` **fn** `template_content` — Return the content `DocumentFragment` for a `<template>` element, or
-`crates/engine/dom/src/lib.rs:1508` **fn** `create_doctype`
-`crates/engine/dom/src/lib.rs:1537` **fn** `append_child` — Append `child` as the last child of `parent`. If `child` already has a parent, it is detached first
-`crates/engine/dom/src/lib.rs:1554` **fn** `insert_after` — Insert `new_node` immediately after `reference` in their shared parent
-`crates/engine/dom/src/lib.rs:1578` **fn** `detach` — Remove `node` from its current parent. The node itself stays in the arena and can be re-attached
-`crates/engine/dom/src/lib.rs:1592` **fn** `insert_before` — Insert `new_node` immediately before `reference` in `reference`'s parent
-`crates/engine/dom/src/lib.rs:1617` **fn** `deep_clone` — Deep-clone `node` and (if `deep`) all its descendants
-`crates/engine/dom/src/lib.rs:1641` **fn** `acquire_js_ref` — Increment the JS wrapper reference count for `node_id`
-`crates/engine/dom/src/lib.rs:1659` **fn** `release_js_ref` — Decrement the JS wrapper reference count for `node_id`
-`crates/engine/dom/src/lib.rs:1675` **fn** `js_ref_count` — Returns the number of live JS wrapper objects currently referencing `node_id`
-`crates/engine/dom/src/lib.rs:1688` **fn** `is_detached` — Returns `true` if `node_id` is not reachable from the document tree
-`crates/engine/dom/src/lib.rs:1715` **fn** `dead_node_ids` — Returns the IDs of all nodes that are safe to collect from the arena
-`crates/engine/dom/src/lib.rs:1758` **fn** `begin_composition` — Begin a new IME composition session in the given editable element
-`crates/engine/dom/src/lib.rs:1775` **fn** `update_composition` — Update the active composition with new preedit text and selection range
-`crates/engine/dom/src/lib.rs:1789` **fn** `end_composition` — End the active composition and return its final state
-`crates/engine/dom/src/lib.rs:1799` **fn** `get_composition` — Get the current composition state without removing it
-`crates/engine/dom/src/lib.rs:1807` **fn** `is_composing` — Check if an IME composition is currently active
-`crates/engine/dom/src/lib.rs:1815` **fn** `get_composition_range` — Get the composition range (offset and length) if composition is active
-`crates/engine/dom/src/lib.rs:1823` **fn** `get_composition_target` — Get the target node that is receiving composition input
-`crates/engine/dom/src/lib.rs:1829` **fn** `fonts` — Get a reference to the document's FontFaceSet collection
-`crates/engine/dom/src/lib.rs:1835` **fn** `fonts_mut` — Get a mutable reference to the document's FontFaceSet collection
-`crates/engine/dom/src/lib.rs:1843` **fn** `set_timing_origin` — Set the timing origin (navigation start time in milliseconds since epoch)
-`crates/engine/dom/src/lib.rs:1849` **fn** `current_time` — Get the current time relative to timing_origin (milliseconds)
-`crates/engine/dom/src/lib.rs:1857` **fn** `mark` — Record a performance mark at the current time
-`crates/engine/dom/src/lib.rs:1866` **fn** `measure` — Record a performance measure between two marks
-`crates/engine/dom/src/lib.rs:1880` **fn** `performance_entries` — Get a reference to the performance entries collection
-`crates/engine/dom/src/lib.rs:1886` **fn** `performance_entries_mut` — Get a mutable reference to the performance entries collection
-`crates/engine/dom/src/lib.rs:1891` **fn** `performance_entries_by_type` — Get all performance entries of a specific type
-`crates/engine/dom/src/lib.rs:1899` **fn** `performance_entries_by_name` — Get all performance entries with a specific name
-`crates/engine/dom/src/lib.rs:1904` **fn** `clear_performance_entries` — Clear all performance entries
-`crates/engine/dom/src/lib.rs:1917` **fn** `to_bytes` — Serialise the entire document to a compact binary blob (bincode)
-`crates/engine/dom/src/lib.rs:1922` **fn** `from_bytes` — Deserialise a document from a binary blob produced by [`to_bytes`]
-`crates/engine/dom/src/lib.rs:2019` **fn** `check_form_gate` — Гейт отправки форм по sandbox-флагу HTML §7.6.5
-`crates/engine/dom/src/lib.rs:2040` **fn** `find_ancestor_form` — Найти ближайший предок `<form>` для узла `node`
-`crates/engine/dom/src/lib.rs:2057` **fn** `find_ancestor_dialog` — Walk up the DOM from `node` and return the first ancestor `<dialog>` element
-`crates/engine/dom/src/lib.rs:2076` **fn** `node_is_contenteditable` — True when `node` carries `contenteditable=""` or `contenteditable="true"`
-`crates/engine/dom/src/lib.rs:2096` **fn** `find_editing_host` — Walk up the tree from `node` (inclusive) and return the nearest element
-`crates/engine/dom/src/lib.rs:2118` **fn** `is_element_draggable` — Return `true` when `node` is draggable by default HTML5 rules (HTML LS §9.3.3)
-`crates/engine/dom/src/lib.rs:2139` **fn** `set_pointer_capture` — Set pointer capture for `pointer_id` to `node` (W3C Pointer Events L3 §4.1)
-`crates/engine/dom/src/lib.rs:2147` **fn** `release_pointer_capture` — Release pointer capture for `pointer_id` from `node`
-`crates/engine/dom/src/lib.rs:2154` **fn** `has_pointer_capture` — Returns `true` if `node` currently holds pointer capture for `pointer_id`
-`crates/engine/dom/src/lib.rs:2162` **fn** `pointer_capture_target` — Returns the element that holds pointer capture for `pointer_id`, if any
-`crates/engine/dom/src/lib.rs:2176` **fn** `collect_dom_form_fields` — Собрать имена и значения submittable-контролов формы из DOM-атрибутов
-`crates/engine/dom/src/lib.rs:2282` **struct** `ValidityState` — Validity state for a form control — HTML5 §4.10.21.1 `ValidityState` interface
-`crates/engine/dom/src/lib.rs:2307` **fn** `valid` — Returns `true` when all flags are `false` (element satisfies all constraints)
-`crates/engine/dom/src/lib.rs:2328` **fn** `element_validity` — Returns the validity state for `node`, or `None` if the node is not a
-`crates/engine/dom/src/lib.rs:2437` **fn** `check_validity_form` — Returns `true` if all submittable controls in `form_id` satisfy their
-`crates/engine/dom/src/lib.rs:2445` **fn** `invalid_controls_in_form` — Returns the `NodeId`s of all invalid (failing constraint validation) controls
-`crates/engine/dom/src/lib.rs:2462` **fn** `submit_form` — Execute HTML5 form submission algorithm (§4.10.22 «Form submission»)
-`crates/engine/dom/src/lib.rs:2601` **struct** `AnchorInfo` — Информация об якорной ссылке (`<a href>`), найденной в документе
-`crates/engine/dom/src/lib.rs:2634` **struct** `FlatTree` — Pre-computed composed tree (flat tree) for Shadow DOM layout traversal
-`crates/engine/dom/src/lib.rs:2644` **fn** `children_of` — Composed-tree children of `id`
-`crates/engine/dom/src/lib.rs:2669` **fn** `is_plain` — Whether the composed tree *is* the DOM tree — no shadow host or slot
-`crates/engine/dom/src/lib.rs:2682` **fn** `build_flat_tree` — Build the composed (flat) tree for the document
-`crates/engine/dom/src/lib.rs:2778` **fn** `check_navigation_gate` — Гейт навигации по sandbox-флагу HTML §7.6.5
-`crates/engine/dom/src/lib.rs:2808` **struct** `IframeInfo` — Данные элемента-хоста вложенного browsing context — URL содержимого и
-`crates/engine/dom/src/lib.rs:2887` **fn** `collect_iframes` — Собрать все элементы-хосты вложенных browsing context (`<iframe>` и
-`crates/engine/dom/src/lib.rs:2898` **fn** `check_popup_gate` — Гейт открытия popup-ов (`window.open()`, `target="_blank"`) по sandbox HTML §7.6.5
-`crates/engine/dom/src/lib.rs:2917` **enum** `EditInputType` — Input event type per Input Events Level 2 §4.1.3
-`crates/engine/dom/src/lib.rs:2948` **fn** `as_str` — The canonical `inputType` string for the `InputEvent` interface
-`crates/engine/dom/src/lib.rs:2971` **struct** `InputEvent` — Data for a `beforeinput` or `input` DOM event (Input Events Level 2 §4.1)
-`crates/engine/dom/src/lib.rs:2990` **fn** `trusted` — Construct a trusted input event (native input pipeline or automation
-`crates/engine/dom/src/lib.rs:3001` **fn** `untrusted` — Construct an untrusted input event (synthesized by page script via
-`crates/engine/dom/src/lib.rs:3022` **enum** `CompositionEventType` — Type of IME composition event (UI Events §5.2.5)
-`crates/engine/dom/src/lib.rs:3033` **fn** `as_str` — The canonical DOM event name per UI Events §5.2.5
-`crates/engine/dom/src/lib.rs:3047` **struct** `CompositionData` — Data for a `compositionstart` / `compositionupdate` / `compositionend` event
-`crates/engine/dom/src/lib.rs:3074` **struct** `CompositionEvent` — An IME composition event (compositionstart / update / end)
-`crates/engine/dom/src/lib.rs:3093` **fn** `new` — Create a new trusted composition event (native IME pipeline)
-`crates/engine/dom/src/lib.rs:3105` **fn** `untrusted` — Create an untrusted composition event (synthesized by page script)
-`crates/engine/dom/src/lib.rs:3116` **fn** `start` — Create a `compositionstart` event with initial IME text
-`crates/engine/dom/src/lib.rs:3131` **fn** `update` — Create a `compositionupdate` event for interim preedit text
-`crates/engine/dom/src/lib.rs:3146` **fn** `end` — Create a `compositionend` event for final committed text
-`crates/engine/dom/src/lib.rs:3174` **fn** `split_text_node` — Split a text node at `byte_offset`, creating a second text node with the
-`crates/engine/dom/src/lib.rs:3216` **fn** `insert_text_at` — Insert `text` into the text node at `pos`, returning the caret position
-`crates/engine/dom/src/lib.rs:3274` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
-`crates/engine/dom/src/lib.rs:3328` **fn** `insert_paragraph_break`
-`crates/engine/dom/src/lib.rs:3357` **fn** `node_text_content` — Returns the full text content of `node` — concatenation of all descendant text nodes
-`crates/engine/dom/src/lib.rs:3370` **fn** `locate_text_offset_range` — Locate the text node and local byte range covering `[start, end)` of
-`crates/engine/dom/src/lib.rs:3414` **fn** `node_child_count` — Number of direct DOM children of `node`
-`crates/engine/dom/src/lib.rs:3423` **fn** `node_length` — DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
-`crates/engine/dom/src/lib.rs:3435` **fn** `range_text` — Extracts the text covered by `range` (WHATWG DOM §4.6 `stringification`)
+`crates/engine/dom/src/font_faces.rs:5` **enum** `FontFaceStatus` — The status of a FontFace: whether it's been loaded, is loading, or failed
+`crates/engine/dom/src/font_faces.rs:19` **struct** `FontFace` — Represents a @font-face rule and its loading status
+`crates/engine/dom/src/font_faces.rs:38` **fn** `new` — Create a new FontFace from @font-face rule components
+`crates/engine/dom/src/font_faces.rs:61` **struct** `FontFaceSet` — A collection of FontFace objects representing all @font-face rules in the document
+`crates/engine/dom/src/font_faces.rs:68` **fn** `new` — Create a new empty FontFaceSet
+`crates/engine/dom/src/font_faces.rs:75` **fn** `add` — Add a FontFace to the set
+`crates/engine/dom/src/font_faces.rs:80` **fn** `size` — Get the number of FontFaces in the set
+`crates/engine/dom/src/font_faces.rs:85` **fn** `has_family` — Check if the set contains a FontFace with a specific family name
+`crates/engine/dom/src/font_faces.rs:90` **fn** `get_by_family` — Get all FontFaces with a specific family name
+`crates/engine/dom/src/font_faces.rs:95` **fn** `all` — Get all FontFaces
+`crates/engine/dom/src/font_faces.rs:100` **fn** `clear` — Clear all FontFaces from the set
+`crates/engine/dom/src/font_faces.rs:108` **fn** `fonts` — Get a reference to the document's FontFaceSet collection
+`crates/engine/dom/src/font_faces.rs:114` **fn** `fonts_mut` — Get a mutable reference to the document's FontFaceSet collection
+`crates/engine/dom/src/forms.rs:8` **enum** `InputType` — HTML5 form input types (HTML Standard §4.10.5). Спека определяет
+`crates/engine/dom/src/forms.rs:60` **fn** `parse` — Распарсить значение `type`-атрибута. Case-insensitive по
+`crates/engine/dom/src/forms.rs:89` **fn** `as_str`
+`crates/engine/dom/src/forms.rs:120` **fn** `is_textual` — Текстовая семантика — поле с буквенным контентом, на котором
+`crates/engine/dom/src/forms.rs:130` **fn** `is_button_like` — Кнопочная семантика — submit/reset/button/image, рендерится
+`crates/engine/dom/src/forms.rs:144` **enum** `InputMode` — HTML Living Standard `inputmode` attribute values — hint to user agent about
+`crates/engine/dom/src/forms.rs:166` **fn** `parse` — Parse `inputmode` attribute value. Case-insensitive per HTML spec
+`crates/engine/dom/src/forms.rs:179` **fn** `as_str`
+`crates/engine/dom/src/forms.rs:195` **struct** `FormInfo` — Данные `<form>` элемента — URL назначения, метод и число полей ввода
+`crates/engine/dom/src/forms.rs:211` **enum** `FormSubmitEvent` — Результат попытки отправить форму (HTML5 §4.10.22 form submission algorithm)
+`crates/engine/dom/src/forms.rs:280` **fn** `check_form_gate` — Гейт отправки форм по sandbox-флагу HTML §7.6.5
+`crates/engine/dom/src/forms.rs:301` **fn** `find_ancestor_form` — Найти ближайший предок `<form>` для узла `node`
+`crates/engine/dom/src/forms.rs:324` **fn** `collect_dom_form_fields` — Собрать имена и значения submittable-контролов формы из DOM-атрибутов
+`crates/engine/dom/src/forms.rs:430` **struct** `ValidityState` — Validity state for a form control — HTML5 §4.10.21.1 `ValidityState` interface
+`crates/engine/dom/src/forms.rs:455` **fn** `valid` — Returns `true` when all flags are `false` (element satisfies all constraints)
+`crates/engine/dom/src/forms.rs:476` **fn** `element_validity` — Returns the validity state for `node`, or `None` if the node is not a
+`crates/engine/dom/src/forms.rs:585` **fn** `check_validity_form` — Returns `true` if all submittable controls in `form_id` satisfy their
+`crates/engine/dom/src/forms.rs:593` **fn** `invalid_controls_in_form` — Returns the `NodeId`s of all invalid (failing constraint validation) controls
+`crates/engine/dom/src/forms.rs:610` **fn** `submit_form` — Execute HTML5 form submission algorithm (§4.10.22 «Form submission»)
+`crates/engine/dom/src/ime.rs:16` **struct** `CompositionState` — Tracks the current IME composition session
+`crates/engine/dom/src/ime.rs:36` **enum** `EditInputType` — Input event type per Input Events Level 2 §4.1.3
+`crates/engine/dom/src/ime.rs:67` **fn** `as_str` — The canonical `inputType` string for the `InputEvent` interface
+`crates/engine/dom/src/ime.rs:90` **struct** `InputEvent` — Data for a `beforeinput` or `input` DOM event (Input Events Level 2 §4.1)
+`crates/engine/dom/src/ime.rs:109` **fn** `trusted` — Construct a trusted input event (native input pipeline or automation
+`crates/engine/dom/src/ime.rs:120` **fn** `untrusted` — Construct an untrusted input event (synthesized by page script via
+`crates/engine/dom/src/ime.rs:141` **enum** `CompositionEventType` — Type of IME composition event (UI Events §5.2.5)
+`crates/engine/dom/src/ime.rs:152` **fn** `as_str` — The canonical DOM event name per UI Events §5.2.5
+`crates/engine/dom/src/ime.rs:166` **struct** `CompositionData` — Data for a `compositionstart` / `compositionupdate` / `compositionend` event
+`crates/engine/dom/src/ime.rs:193` **struct** `CompositionEvent` — An IME composition event (compositionstart / update / end)
+`crates/engine/dom/src/ime.rs:212` **fn** `new` — Create a new trusted composition event (native IME pipeline)
+`crates/engine/dom/src/ime.rs:224` **fn** `untrusted` — Create an untrusted composition event (synthesized by page script)
+`crates/engine/dom/src/ime.rs:235` **fn** `start` — Create a `compositionstart` event with initial IME text
+`crates/engine/dom/src/ime.rs:250` **fn** `update` — Create a `compositionupdate` event for interim preedit text
+`crates/engine/dom/src/ime.rs:265` **fn** `end` — Create a `compositionend` event for final committed text
+`crates/engine/dom/src/ime.rs:294` **fn** `begin_composition` — Begin a new IME composition session in the given editable element
+`crates/engine/dom/src/ime.rs:311` **fn** `update_composition` — Update the active composition with new preedit text and selection range
+`crates/engine/dom/src/ime.rs:325` **fn** `end_composition` — End the active composition and return its final state
+`crates/engine/dom/src/ime.rs:335` **fn** `get_composition` — Get the current composition state without removing it
+`crates/engine/dom/src/ime.rs:343` **fn** `is_composing` — Check if an IME composition is currently active
+`crates/engine/dom/src/ime.rs:351` **fn** `get_composition_range` — Get the composition range (offset and length) if composition is active
+`crates/engine/dom/src/ime.rs:359` **fn** `get_composition_target` — Get the target node that is receiving composition input
+`crates/engine/dom/src/lib.rs:66` **enum** `ViewportWidth` — Width dimension of a `<meta name=viewport>` tag
+`crates/engine/dom/src/lib.rs:78` **struct** `ViewportMeta` — Parsed `<meta name="viewport" content="…">` descriptor
+`crates/engine/dom/src/lib.rs:93` **enum** `DomSnapshotError` — Error returned by [`Document::to_bytes`] and [`Document::from_bytes`]
+`crates/engine/dom/src/lib.rs:124` **struct** `NodeLimitExceeded` — Returned by [`Document::try_create_element`] when [`MAX_DOM_NODES`] is reached
+`crates/engine/dom/src/lib.rs:135` **struct** `NodeId`
+`crates/engine/dom/src/lib.rs:138` **fn** `index`
+`crates/engine/dom/src/lib.rs:142` **fn** `from_index`
+`crates/engine/dom/src/lib.rs:148` **enum** `Namespace`
+`crates/engine/dom/src/lib.rs:162` **struct** `QualName`
+`crates/engine/dom/src/lib.rs:168` **fn** `html`
+`crates/engine/dom/src/lib.rs:177` **struct** `Attribute`
+`crates/engine/dom/src/lib.rs:187` **enum** `ShadowRootMode` — Shadow root mode per Shadow DOM spec §4.2
+`crates/engine/dom/src/lib.rs:202` **enum** `NodeData`
+`crates/engine/dom/src/lib.rs:235` **struct** `Node`
+`crates/engine/dom/src/lib.rs:242` **fn** `element_name`
+`crates/engine/dom/src/lib.rs:251` **fn** `get_attr` — Возвращает значение атрибута по имени (ASCII case-insensitive). На
+`crates/engine/dom/src/lib.rs:267` **fn** `sandbox_flags` — Sandbox-ограничения для `<iframe sandbox="...">` по HTML LS §7.6.5
+`crates/engine/dom/src/lib.rs:279` **fn** `input_type` — HTML5 form input type для `<input type="...">`. Возвращает None
+`crates/engine/dom/src/lib.rs:293` **fn** `input_mode` — Virtual keyboard hint for `<input inputmode="...">` and `<textarea inputmode="...">`
+`crates/engine/dom/src/lib.rs:312` **enum** `DocumentMode` — Парсинг-режим документа по HTML5 §13.2.6.2 «The insertion mode»
+`crates/engine/dom/src/lib.rs:330` **struct** `Document`
+`crates/engine/dom/src/lib.rs:469` **fn** `new`
+`crates/engine/dom/src/lib.rs:499` **fn** `design_mode` — Current value of `document.designMode` (HTML LS §6.6.3)
+`crates/engine/dom/src/lib.rs:504` **fn** `set_design_mode` — Set `document.designMode`. Driven by the JS shim's setter
+`crates/engine/dom/src/lib.rs:509` **fn** `character_set` — `document.characterSet`/`charset`/`inputEncoding` (DOM §7.3, BUG-358)
+`crates/engine/dom/src/lib.rs:515` **fn** `set_character_set` — Set the document's encoding name. Called once by the shell right after
+`crates/engine/dom/src/lib.rs:520` **fn** `content_type` — `document.contentType` (DOM §4.5, BUG-358)
+`crates/engine/dom/src/lib.rs:526` **fn** `set_content_type` — Set the document's MIME type. Called once by the shell from the
+`crates/engine/dom/src/lib.rs:530` **fn** `root`
+`crates/engine/dom/src/lib.rs:538` **fn** `mode` — Текущий парсинг-режим. Tree builder выставляет его при
+`crates/engine/dom/src/lib.rs:544` **fn** `set_mode` — Установить режим. Использует tree builder при инициализации
+`crates/engine/dom/src/lib.rs:549` **fn** `viewport_meta` — Parsed `<meta name="viewport">` descriptor, if the page declared one
+`crates/engine/dom/src/lib.rs:555` **fn** `set_viewport_meta` — Set the viewport meta descriptor. Called by the HTML parser when it
+`crates/engine/dom/src/lib.rs:561` **fn** `get_selection` — Current selection. The shell updates this on mouse events; JS reads it
+`crates/engine/dom/src/lib.rs:566` **fn** `set_selection` — Replace the current selection
+`crates/engine/dom/src/lib.rs:571` **fn** `clear_selection` — Clear the selection
+`crates/engine/dom/src/lib.rs:583` **fn** `control_value` — The control's **current** value (HTML LS §4.10.5.5 «value»): the dirty
+`crates/engine/dom/src/lib.rs:602` **fn** `dirty_value` — The dirty value alone, `None` when the control still shows its default
+`crates/engine/dom/src/lib.rs:612` **fn** `set_control_value` — Set the control's value and raise its dirty value flag — the single
+`crates/engine/dom/src/lib.rs:618` **fn** `clear_control_value` — Drop the control's dirty value, so it falls back to its default —
+`crates/engine/dom/src/lib.rs:630` **fn** `control_checked` — The control's **current** checkedness (HTML LS §4.10.5.5): the dirty
+`crates/engine/dom/src/lib.rs:639` **fn** `dirty_checked` — The dirty checkedness alone, `None` when the control still tracks the
+`crates/engine/dom/src/lib.rs:648` **fn** `set_control_checked` — Set the control's checkedness and raise its dirty checkedness flag —
+`crates/engine/dom/src/lib.rs:655` **fn** `clear_control_checked` — Drop the control's dirty checkedness, so it falls back to the
+`crates/engine/dom/src/lib.rs:670` **fn** `target` — Текущий target — id из URL fragment (без ведущего `#`), к которому
+`crates/engine/dom/src/lib.rs:677` **fn** `set_target` — Установить current target (id без `#`). `None` — нет fragment-а в URL
+`crates/engine/dom/src/lib.rs:689` **fn** `attach_shadow` — Attach a shadow root to `host` and return its `NodeId`
+`crates/engine/dom/src/lib.rs:696` **fn** `shadow_root_of` — Return the shadow root attached to `host`, or `None` if not a shadow host
+`crates/engine/dom/src/lib.rs:701` **fn** `is_shadow_host` — Whether `id` is a shadow host (has an attached shadow root)
+`crates/engine/dom/src/lib.rs:705` **fn** `get`
+`crates/engine/dom/src/lib.rs:709` **fn** `get_mut`
+`crates/engine/dom/src/lib.rs:713` **fn** `len`
+`crates/engine/dom/src/lib.rs:717` **fn** `is_empty`
+`crates/engine/dom/src/lib.rs:729` **fn** `base_href` — HTML5 §4.2.3 — найти первый `<base href="...">` в документе и
+`crates/engine/dom/src/lib.rs:743` **fn** `document_element` — Returns the document's root element `NodeId` — the `<html>` element that is
+`crates/engine/dom/src/lib.rs:751` **fn** `body` — Returns the `<body>` element's `NodeId`, walking root → `<html>` → `<body>`
+`crates/engine/dom/src/lib.rs:761` **fn** `find_first_element` — Найти первый элемент, удовлетворяющий предикату. Pre-order обход
+`crates/engine/dom/src/lib.rs:782` **fn** `find_by_id` — Find a node by its `id` attribute (case-sensitive, per HTML spec)
+`crates/engine/dom/src/lib.rs:810` **fn** `node_count` — Number of nodes currently allocated in this document's arena (including the root)
+`crates/engine/dom/src/lib.rs:816` **fn** `create_element` — Create an element unconditionally. Used by the HTML parser — does **not** enforce
+`crates/engine/dom/src/lib.rs:828` **fn** `try_create_element` — Create an element, returning `Err(`[`NodeLimitExceeded`]`)` if the arena already
+`crates/engine/dom/src/lib.rs:841` **fn** `create_text` — Create a text node unconditionally. Used by the HTML parser — does **not**
+`crates/engine/dom/src/lib.rs:851` **fn** `try_create_text` — Create a text node, returning `Err(`[`NodeLimitExceeded`]`)` if the arena already
+`crates/engine/dom/src/lib.rs:861` **fn** `create_comment` — Create a comment node unconditionally. Used by the HTML parser — does **not**
+`crates/engine/dom/src/lib.rs:871` **fn** `try_create_comment` — Create a comment node, returning `Err(`[`NodeLimitExceeded`]`)` if the arena already
+`crates/engine/dom/src/lib.rs:884` **fn** `create_fragment` — Allocate a `DocumentFragment` node in the arena
+`crates/engine/dom/src/lib.rs:892` **fn** `set_template_content` — Register `fragment` as the content container for `template`
+`crates/engine/dom/src/lib.rs:898` **fn** `template_content` — Return the content `DocumentFragment` for a `<template>` element, or
+`crates/engine/dom/src/lib.rs:902` **fn** `create_doctype`
+`crates/engine/dom/src/lib.rs:931` **fn** `append_child` — Append `child` as the last child of `parent`. If `child` already has a parent, it is detached first
+`crates/engine/dom/src/lib.rs:948` **fn** `insert_after` — Insert `new_node` immediately after `reference` in their shared parent
+`crates/engine/dom/src/lib.rs:972` **fn** `detach` — Remove `node` from its current parent. The node itself stays in the arena and can be re-attached
+`crates/engine/dom/src/lib.rs:986` **fn** `insert_before` — Insert `new_node` immediately before `reference` in `reference`'s parent
+`crates/engine/dom/src/lib.rs:1011` **fn** `deep_clone` — Deep-clone `node` and (if `deep`) all its descendants
+`crates/engine/dom/src/lib.rs:1035` **fn** `acquire_js_ref` — Increment the JS wrapper reference count for `node_id`
+`crates/engine/dom/src/lib.rs:1053` **fn** `release_js_ref` — Decrement the JS wrapper reference count for `node_id`
+`crates/engine/dom/src/lib.rs:1069` **fn** `js_ref_count` — Returns the number of live JS wrapper objects currently referencing `node_id`
+`crates/engine/dom/src/lib.rs:1082` **fn** `is_detached` — Returns `true` if `node_id` is not reachable from the document tree
+`crates/engine/dom/src/lib.rs:1109` **fn** `dead_node_ids` — Returns the IDs of all nodes that are safe to collect from the arena
+`crates/engine/dom/src/lib.rs:1150` **fn** `to_bytes` — Serialise the entire document to a compact binary blob (bincode)
+`crates/engine/dom/src/lib.rs:1155` **fn** `from_bytes` — Deserialise a document from a binary blob produced by [`to_bytes`]
+`crates/engine/dom/src/lib.rs:1204` **fn** `find_ancestor_dialog` — Walk up the DOM from `node` and return the first ancestor `<dialog>` element
+`crates/engine/dom/src/lib.rs:1223` **fn** `node_is_contenteditable` — True when `node` carries `contenteditable=""` or `contenteditable="true"`
+`crates/engine/dom/src/lib.rs:1243` **fn** `find_editing_host` — Walk up the tree from `node` (inclusive) and return the nearest element
+`crates/engine/dom/src/lib.rs:1265` **fn** `is_element_draggable` — Return `true` when `node` is draggable by default HTML5 rules (HTML LS §9.3.3)
+`crates/engine/dom/src/lib.rs:1286` **fn** `set_pointer_capture` — Set pointer capture for `pointer_id` to `node` (W3C Pointer Events L3 §4.1)
+`crates/engine/dom/src/lib.rs:1294` **fn** `release_pointer_capture` — Release pointer capture for `pointer_id` from `node`
+`crates/engine/dom/src/lib.rs:1301` **fn** `has_pointer_capture` — Returns `true` if `node` currently holds pointer capture for `pointer_id`
+`crates/engine/dom/src/lib.rs:1309` **fn** `pointer_capture_target` — Returns the element that holds pointer capture for `pointer_id`, if any
+`crates/engine/dom/src/lib.rs:1374` **struct** `AnchorInfo` — Информация об якорной ссылке (`<a href>`), найденной в документе
+`crates/engine/dom/src/lib.rs:1407` **struct** `FlatTree` — Pre-computed composed tree (flat tree) for Shadow DOM layout traversal
+`crates/engine/dom/src/lib.rs:1417` **fn** `children_of` — Composed-tree children of `id`
+`crates/engine/dom/src/lib.rs:1442` **fn** `is_plain` — Whether the composed tree *is* the DOM tree — no shadow host or slot
+`crates/engine/dom/src/lib.rs:1455` **fn** `build_flat_tree` — Build the composed (flat) tree for the document
+`crates/engine/dom/src/lib.rs:1551` **fn** `check_navigation_gate` — Гейт навигации по sandbox-флагу HTML §7.6.5
+`crates/engine/dom/src/lib.rs:1581` **struct** `IframeInfo` — Данные элемента-хоста вложенного browsing context — URL содержимого и
+`crates/engine/dom/src/lib.rs:1660` **fn** `collect_iframes` — Собрать все элементы-хосты вложенных browsing context (`<iframe>` и
+`crates/engine/dom/src/lib.rs:1671` **fn** `check_popup_gate` — Гейт открытия popup-ов (`window.open()`, `target="_blank"`) по sandbox HTML §7.6.5
+`crates/engine/dom/src/performance.rs:5` **enum** `PerformanceEntryType` — Type of a performance entry (mark, measure, navigation, resource, etc.)
+`crates/engine/dom/src/performance.rs:36` **struct** `PerformanceEntry` — A single performance entry (mark, measure, or resource timing)
+`crates/engine/dom/src/performance.rs:49` **fn** `new` — Create a new performance entry
+`crates/engine/dom/src/performance.rs:64` **fn** `end_time` — Get the end time of this entry (start_time + duration)
+`crates/engine/dom/src/performance.rs:72` **struct** `PerformanceEntries` — Collection of performance entries
+`crates/engine/dom/src/performance.rs:79` **fn** `new` — Create a new empty performance entries collection
+`crates/engine/dom/src/performance.rs:86` **fn** `add_entry` — Add a performance entry
+`crates/engine/dom/src/performance.rs:91` **fn** `all` — Get all performance entries
+`crates/engine/dom/src/performance.rs:96` **fn** `get_by_type` — Get entries by type (mark, measure, etc.)
+`crates/engine/dom/src/performance.rs:104` **fn** `get_by_name` — Get entries by name
+`crates/engine/dom/src/performance.rs:112` **fn** `get_first_by_name` — Get a single entry by name (returns the first match)
+`crates/engine/dom/src/performance.rs:117` **fn** `clear` — Clear all performance entries
+`crates/engine/dom/src/performance.rs:122` **fn** `len` — Get the count of entries
+`crates/engine/dom/src/performance.rs:127` **fn** `is_empty` — Check if the collection is empty
+`crates/engine/dom/src/performance.rs:135` **struct** `PerformanceObserver` — Placeholder for PerformanceObserver observer registration
+`crates/engine/dom/src/performance.rs:144` **fn** `new` — Create a new PerformanceObserver
+`crates/engine/dom/src/performance.rs:152` **fn** `observe` — Add entry types to observe
+`crates/engine/dom/src/performance.rs:157` **fn** `disconnect` — Disconnect the observer
+`crates/engine/dom/src/performance.rs:163` **fn** `observed_types` — Get the observed entry types
+`crates/engine/dom/src/performance.rs:168` **fn** `is_observing` — Check if this observer is watching a specific entry type
+`crates/engine/dom/src/performance.rs:173` **fn** `set_handle` — Set the observer handle (assigned by shell runtime when registered)
+`crates/engine/dom/src/performance.rs:178` **fn** `handle` — Get the observer handle
+`crates/engine/dom/src/performance.rs:194` **fn** `set_timing_origin` — Set the timing origin (navigation start time in milliseconds since epoch)
+`crates/engine/dom/src/performance.rs:200` **fn** `current_time` — Get the current time relative to timing_origin (milliseconds)
+`crates/engine/dom/src/performance.rs:208` **fn** `mark` — Record a performance mark at the current time
+`crates/engine/dom/src/performance.rs:217` **fn** `measure` — Record a performance measure between two marks
+`crates/engine/dom/src/performance.rs:231` **fn** `performance_entries` — Get a reference to the performance entries collection
+`crates/engine/dom/src/performance.rs:237` **fn** `performance_entries_mut` — Get a mutable reference to the performance entries collection
+`crates/engine/dom/src/performance.rs:242` **fn** `performance_entries_by_type` — Get all performance entries of a specific type
+`crates/engine/dom/src/performance.rs:250` **fn** `performance_entries_by_name` — Get all performance entries with a specific name
+`crates/engine/dom/src/performance.rs:255` **fn** `clear_performance_entries` — Clear all performance entries
+`crates/engine/dom/src/selection.rs:9` **struct** `DomPosition` — A position within the document (WHATWG DOM §4.4)
+`crates/engine/dom/src/selection.rs:22` **struct** `Range` — A contiguous range of document content (WHATWG DOM §4.5)
+`crates/engine/dom/src/selection.rs:31` **fn** `collapsed` — Collapsed range: both endpoints at `pos`
+`crates/engine/dom/src/selection.rs:36` **fn** `is_collapsed` — True when start and end are the same position
+`crates/engine/dom/src/selection.rs:48` **struct** `Selection` — The current document text selection (WHATWG Selection API)
+`crates/engine/dom/src/selection.rs:57` **fn** `is_collapsed` — True when anchor == focus (or no selection)
+`crates/engine/dom/src/selection.rs:66` **fn** `get_range` — The selection as a normalised Range (start ≤ end in node order)
+`crates/engine/dom/src/selection.rs:81` **fn** `collapse` — Collapse the selection to a single point
+`crates/engine/dom/src/selection.rs:87` **fn** `extend_focus` — Extend the focus end to `pos` (anchor stays fixed)
+`crates/engine/dom/src/selection.rs:92` **fn** `clear` — Remove the selection entirely
+`crates/engine/dom/src/selection.rs:109` **fn** `split_text_node` — Split a text node at `byte_offset`, creating a second text node with the
+`crates/engine/dom/src/selection.rs:151` **fn** `insert_text_at` — Insert `text` into the text node at `pos`, returning the caret position
+`crates/engine/dom/src/selection.rs:209` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
+`crates/engine/dom/src/selection.rs:263` **fn** `insert_paragraph_break`
+`crates/engine/dom/src/selection.rs:292` **fn** `node_text_content` — Returns the full text content of `node` — concatenation of all descendant text nodes
+`crates/engine/dom/src/selection.rs:305` **fn** `locate_text_offset_range` — Locate the text node and local byte range covering `[start, end)` of
+`crates/engine/dom/src/selection.rs:349` **fn** `node_child_count` — Number of direct DOM children of `node`
+`crates/engine/dom/src/selection.rs:358` **fn** `node_length` — DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
+`crates/engine/dom/src/selection.rs:370` **fn** `range_text` — Extracts the text covered by `range` (WHATWG DOM §4.6 `stringification`)
 `crates/engine/dom/src/vtt.rs:12` **struct** `VttCueSettings` — Настройки позиционирования cue (WebVTT §6.3). Phase 0: сырые строки значений
 `crates/engine/dom/src/vtt.rs:21` **struct** `VttCue`
 `crates/engine/dom/src/vtt.rs:33` **enum** `VttError`
