@@ -8761,6 +8761,10 @@ impl Renderer {
                 std::sync::atomic::Ordering::Relaxed,
             );
         }
+        // BUG-405 срез 45: точка отсчёта для TAIL_NANOS — см. его doc-комментарий.
+        // Ставится ПОСЛЕ диагностического блока выше, чтобы не задваивать с
+        // FRAME_LOG_NANOS то, что тот уже посчитал.
+        let t_tail = crate::frame_log_enabled().then(std::time::Instant::now);
         // Финализация по режиму: Band — служебный оффскрин-проход, не кадр
         // (не считаем и хэш не трогаем); Compose — настоящий кадр, но его
         // хэш фиксирует вызывающий render() (хэш Compose-аргументов кадр не
@@ -8777,6 +8781,9 @@ impl Renderer {
         }
         // In headless mode, keep the rendered texture alive for render_to_image().
         self.pending_readback = headless_tex;
+        if let Some(t0) = t_tail {
+            TAIL_NANOS.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
         Ok(())
     }
 }
@@ -8837,7 +8844,7 @@ mod diagnostics;
 // renderer.rs до вырезки, RN-8).
 pub use diagnostics::{
     load_counter, DL_EPOCH_MISMATCHES, DL_FOLD_REUSED, FRAMES_RENDERED, FRAMES_SKIPPED,
-    FRAME_LOG_NANOS, FRAME_PHASE_NANOS, POST_CACHE_NANOS, PRE_MARKS_NANOS,
+    FRAME_LOG_NANOS, FRAME_PHASE_NANOS, POST_CACHE_NANOS, PRE_MARKS_NANOS, TAIL_NANOS,
 };
 use diagnostics::{
     anim_split_disabled, atlas_partial_upload_disabled, balanced_cut_at_or_after,
