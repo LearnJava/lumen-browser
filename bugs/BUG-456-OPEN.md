@@ -1,6 +1,6 @@
 # BUG-456 — Контекст `OffscreenCanvas.getContext('2d')` — отдельный шим на 16 членов вместо 59, без единого геттера, а `getImageData` отдаёт сырую строку транспорта
 
-**Статус:** OPEN (симптомы 2 и 3 исправлены, симптом 1 частично закрыт 2026-08-31 — см. ниже)
+**Статус:** OPEN (симптомы 2 и 3 исправлены, симптом 1 частично закрыт 2026-08-31 — геометрия + save/restore/reset + 8 свойств состояния, см. ниже)
 **Компонент:** js (`crates/js/src/offscreen_canvas.rs` — литерал `this._2d_context`)
 **Найден:** 2026-07-29 (P2), WPT-VENDOR-html-canvas — прогон среза `html/canvas/offscreen`
 
@@ -136,21 +136,42 @@ BUG-455, что и у элементного контекста: если коп
 прозрачным чёрным, обнуление пути и стека, возврат четырёх атрибутов к
 дефолтам.
 
-**Ещё не тронуто (остаток симптома 1):** `measureText`, `fillText`,
-`strokeText`, `drawImage`, `putImageData`, `createImageData`,
-`createLinearGradient`/`createRadialGradient`/`createConicGradient`,
-`createPattern`, `isPointInPath`/`isPointInStroke`, `setLineDash`/
-`getLineDash`, и свойства состояния `globalCompositeOperation`/`lineCap`/
-`lineJoin`/`miterLimit`/`shadowColor`/`shadowBlur`/`shadowOffsetX`/
-`shadowOffsetY`/`font`/`textAlign`/`textBaseline` — каждое требует либо нового
-натива не тривиальной формы (текст, изображения, градиенты держат
-собственное состояние), либо решения о том, где хранить дополнительные
-JS-зеркалируемые атрибуты в `save`/`restore`. Следующий срез должен начать с
-`globalCompositeOperation`/`lineCap`/`lineJoin`/`miterLimit`/`shadow*` —
-это чистые сеттеры поверх уже публичных полей `Context2D`, симметричные
-только что добавленным геометрическим нативам.
+## Симптом 1 (продолжение, 2026-08-31): globalCompositeOperation/lineCap/lineJoin/miterLimit/shadow*
 
-Тесты — `offscreen_canvas.rs::tests_v8::js_offscreen_{line_width_and_global_
+Восемь свойств состояния получили пару `get`/`set` тем же приёмом, что
+`lineWidth`/`globalAlpha` (симптом 2) и `fillStyle`/`strokeStyle`: своя
+приватная переменная на каждый атрибут (аксессор с тем же именем ключа не
+может сосуществовать с полем-литералом — тот же мёртвый-код капкан, что и
+раньше), включены в стек `save`/`restore` и в сброс `reset()`. Восемь новых
+нативов (`_lumen_offscreen_canvas2d_set_{global_composite_operation,
+line_cap, line_join, miter_limit, shadow_color, shadow_blur, shadow_offset_x,
+shadow_offset_y}`) — тонкие обёртки над уже публичными полями `Context2D`,
+той же формы, что и элементный `canvas2d.rs`. `shadowColor` следует контракту
+паразитных цветовых атрибутов (`fillStyle`): невалидная строка игнорируется,
+геттер отдаёт каноническую сериализацию натива, а не сырой ввод.
+`globalCompositeOperation`/`lineCap`/`lineJoin` — как и на элементном
+контексте (`_lumen_c2d_prop` в `web_api_shim_mid.js`) — принимают и
+зеркалируют **любую** строку без проверки против списка допустимых ключевых
+слов: натив молча игнорирует нераспознанное значение (растеризация не
+меняется), а JS-геттер всё равно вернёт то, что записали. Это не новый
+дефект этого среза, а точная симметрия уже существующего у элементного
+контекста поведения — фиксировать оба сразу значило бы расширять BUG-456 за
+пределы «offscreen отстаёт от element».
+
+**Остаток симптома 1:** `measureText`, `fillText`, `strokeText`, `drawImage`,
+`putImageData`, `createImageData`, `createLinearGradient`/
+`createRadialGradient`/`createConicGradient`, `createPattern`,
+`isPointInPath`/`isPointInStroke`, `setLineDash`/`getLineDash`, и свойства
+`font`/`textAlign`/`textBaseline` — каждое требует нового натива не
+тривиальной формы (текст, изображения, градиенты держат собственное
+состояние, которого сейчас на offscreen-стороне нет вовсе).
+
+Тесты — `offscreen_canvas.rs::tests_v8::js_offscreen_{state_properties_
+round_trip, state_properties_have_spec_defaults,
+state_properties_survive_save_restore, reset_clears_state_properties,
+miter_limit_ignores_non_positive_value}` (5 шт).
+
+Тесты (симптом 1, геометрия) — `offscreen_canvas.rs::tests_v8::js_offscreen_{line_width_and_global_
 alpha_round_trip, save_restore_round_trips_tracked_attributes, context_has_
 transform_and_path_methods, transform_ops_do_not_throw, reset_clears_fill_
 style_and_transform}` (5 шт).
