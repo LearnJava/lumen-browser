@@ -1299,3 +1299,64 @@ fn bug405_slice49_chrome_dl_predict_same_holds_for_a_steady_state_hover_repeat()
              'Остаток' would have shown stale chrome on screen for a plain hover-hold.",
     );
 }
+
+// -- BUG-405 srez 50: ChromeOverlayFrameCache reuse-or-build decision --
+
+/// A cache HIT must return bytes identical to a fresh rebuild, and each of
+/// the four key inputs (generation/host/viewport/caret) must, on its own,
+/// force a MISS -- the correctness gate chrome_overlay_segment's doc comment
+/// promises. Pure-function test, no Lumen/renderer needed (srez 49 found
+/// that disproportionate for one gate).
+#[test]
+fn bug405_slice50_chrome_overlay_cache_hit_matches_fresh_build_and_key_changes_miss() {
+    let chrome_dl = vec![lumen_paint::DisplayCommand::FillRect {
+        rect: Rect::new(0.0, 0.0, 40.0, 20.0),
+        color: lumen_layout::Color { r: 10, g: 20, b: 30, a: 255 },
+    }];
+    let host = Rect::new(200.0, 40.0, 800.0, 700.0);
+    let (win_w, win_h) = (1024.0_f32, 768.0_f32);
+    let caret = Some((
+        Rect::new(300.0, 10.0, 2.0, 20.0),
+        lumen_layout::Color { r: 0, g: 120, b: 220, a: 220 },
+    ));
+
+    // Cold: no cache yet -- must build fresh and hand back something to
+    // remember.
+    let (framed0, strips0, cache0) =
+        chrome_overlay_segment(&chrome_dl, host, win_w, win_h, caret, 1, true, None);
+    let cache0 = cache0.expect("cold call must produce a cache to remember");
+
+    // Same generation/host/viewport/caret, cache present -- must be a HIT:
+    // no new cache (nothing changed to remember), bytes identical to cycle 0.
+    let (framed1, strips1, cache1) =
+        chrome_overlay_segment(&chrome_dl, host, win_w, win_h, caret, 1, true, Some(&cache0));
+    assert!(cache1.is_none(), "unchanged key must reuse the existing cache, not rebuild one");
+    assert_eq!(framed1, framed0, "HIT must be byte-identical to the fresh build it reuses");
+    assert_eq!(strips1, strips0);
+
+    // Each key field, changed alone, must force a rebuild (a MISS) -- this
+    // is what makes the cache SAFE: a stale entry is invalidated, not reused.
+    let cases = [
+        ("generation", 2, host, (win_w, win_h), caret),
+        ("host", 1, Rect::new(210.0, 40.0, 800.0, 700.0), (win_w, win_h), caret),
+        ("viewport", 1, host, (1025.0, 768.0), caret),
+        ("caret", 1, host, (win_w, win_h), None),
+    ];
+    for (label, gen_, host2, vp2, caret2) in cases {
+        let (_, _, new_cache) =
+            chrome_overlay_segment(&chrome_dl, host2, vp2.0, vp2.1, caret2, gen_, true, Some(&cache0));
+        assert!(
+            new_cache.is_some(),
+            "changing only `{label}` must miss the cache and rebuild -- a false HIT here would \
+             show stale chrome pixels on screen",
+        );
+    }
+
+    // cache_enabled=false must never consult (or update) the cache, even
+    // when one that would otherwise match is passed in -- the
+    // LUMEN_NO_CHROME_OVERLAY_CACHE=1 A/B lever's whole point.
+    let (framed_disabled, _, cache_disabled) =
+        chrome_overlay_segment(&chrome_dl, host, win_w, win_h, caret, 1, false, Some(&cache0));
+    assert_eq!(framed_disabled, framed0, "disabled arm must still build the correct bytes");
+    assert!(cache_disabled.is_none(), "disabled arm must not remember a cache either");
+}

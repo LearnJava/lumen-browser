@@ -524,34 +524,6 @@ impl Lumen {
             let chrome_dl = chrome_dl_anim.as_ref().unwrap_or(chrome_dl);
             let win_w = self.viewport_width_css();
             let win_h = self.window_height_css();
-            let strips = [
-                Rect { x: 0.0, y: 0.0, width: win_w, height: host.y },
-                Rect {
-                    x: 0.0,
-                    y: host.y + host.height,
-                    width: win_w,
-                    height: (win_h - (host.y + host.height)).max(0.0),
-                },
-                Rect { x: 0.0, y: host.y, width: host.x, height: host.height },
-                Rect {
-                    x: host.x + host.width,
-                    y: host.y,
-                    width: (win_w - (host.x + host.width)).max(0.0),
-                    height: host.height,
-                },
-            ];
-            let mut framed = lumen_paint::DisplayList::new();
-            let mut strips_used = 0_usize;
-            for strip in strips {
-                if strip.width <= 0.0 || strip.height <= 0.0 {
-                    continue;
-                }
-                strips_used += 1;
-                framed.push(lumen_paint::DisplayCommand::PushClipRect { rect: strip });
-                framed.extend_from_slice(chrome_dl);
-                framed.push(lumen_paint::DisplayCommand::PopClip);
-            }
-            chrome_mix = (chrome_dl.len(), strips_used, framed.len());
             // CC-7: `#omniInput` editing stays owned by the legacy
             // `address_bar` state machine вЂ” no native `<input>` caret
             // exists (`crates/chrome/src/model.rs` only binds the
@@ -563,20 +535,53 @@ impl Lumen {
             // `AddressBarState` only supports append/backspace at the
             // end of the string. Hidden while a dropdown suggestion is
             // selected, mirroring the same overlay behavior.
-            if self.address_bar.is_open()
+            //
+            // BUG-405 срез 50: computed up front, not inside the build
+            // branch below вЂ” it is part of `ChromeOverlayFrameCache`'s key
+            // (a caret blink/selection change must miss the cache exactly
+            // like a real `chrome_dl` change would).
+            let caret_plan = if self.address_bar.is_open()
                 && self.address_bar.selected_idx().is_none()
                 && !self.address_bar.input().is_empty()
-                && let Some(field) = self.chrome_omni_input_rect
             {
-                framed.push(lumen_paint::DisplayCommand::FillRect {
-                    rect: Rect::new(
-                        field.x + field.width - 8.0,
-                        field.y + 4.0,
-                        2.0,
-                        (field.height - 8.0).max(0.0),
-                    ),
-                    color: lumen_layout::Color { a: 220, ..pal.accent },
-                });
+                self.chrome_omni_input_rect.map(|field| {
+                    (
+                        Rect::new(
+                            field.x + field.width - 8.0,
+                            field.y + 4.0,
+                            2.0,
+                            (field.height - 8.0).max(0.0),
+                        ),
+                        lumen_layout::Color { a: 220, ..pal.accent },
+                    )
+                })
+            } else {
+                None
+            };
+            // BUG-405 срез 50 (п.85 "вариант (б)"): `chrome_dl` is provably
+            // unchanged whenever `relayout_chrome_host` hasn't run since this
+            // cache was built (`chrome_layout_generation` вЂ” bumped
+            // unconditionally by every pass, a safe superset of "content
+            // changed", see its own doc comment) вЂ” reuse the assembled
+            // segment with one `Vec` clone instead of re-copying `chrome_dl`
+            // into up to 4 clip strips (`chrome_mix`'s multiplier). Never a
+            // candidate while a chrome CSS transition/animation is live
+            // (`chrome_dl_anim.is_some()`): that content differs every tick
+            // by construction. `LUMEN_NO_CHROME_OVERLAY_CACHE=1` disables
+            // reuse for A/B (docs/perf-method.md).
+            let (mut framed, strips_used, new_cache) = chrome_overlay_segment(
+                chrome_dl,
+                host,
+                win_w,
+                win_h,
+                caret_plan,
+                self.chrome_layout_generation,
+                chrome_dl_anim.is_none() && !chrome_overlay_cache_disabled(),
+                self.chrome_overlay_frame_cache.as_ref(),
+            );
+            chrome_mix = (chrome_dl.len(), strips_used, framed.len());
+            if let Some(c) = new_cache {
+                self.chrome_overlay_frame_cache = Some(c);
             }
             framed.append(&mut overlay_buf);
             overlay_buf = framed;

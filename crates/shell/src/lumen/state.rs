@@ -198,6 +198,15 @@ pub(crate) struct Lumen {
     /// `chrome_dl` не изменились — предпосылка content_epoch-архитектуры overlay
     /// (срез 46), которую этот срез проверяет БЕЗ правки самого relayout-пути.
     pub(crate) chrome_dl_content_hash: Option<u64>,
+    /// BUG-405 срез 50: monotonic version of [`Self::chrome_layout`], bumped
+    /// unconditionally by every [`Self::relayout_chrome_host`] pass — see
+    /// [`ChromeOverlayFrameCache`]'s doc comment for why "unconditional" (not
+    /// "only when bytes changed") is the correct, safe choice here.
+    pub(crate) chrome_layout_generation: u64,
+    /// BUG-405 срез 50: the last `RedrawRequested`'s assembled chrome overlay
+    /// segment, reused verbatim on a later frame when nothing that shapes it
+    /// has changed — see [`ChromeOverlayFrameCache`]'s own doc comment.
+    pub(crate) chrome_overlay_frame_cache: Option<ChromeOverlayFrameCache>,
     /// CC-11: last computed animation/transition frame for the chrome
     /// document. `None` when the chrome flag is off or nothing is currently
     /// animating. Only the compositor-offloadable properties (opacity,
