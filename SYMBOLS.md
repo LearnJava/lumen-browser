@@ -3977,17 +3977,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/overlay_partition.rs:319` **fn** `is_spatial_layer_open` — `true` for a command that opens a **spatial** ancestor layer — clip, transform,
 `crates/engine/paint/src/overlay_partition.rs:335` **fn** `is_compositing_layer_open` — `true` for a command that opens a **compositing** ancestor layer — opacity, blend
 `crates/engine/paint/src/overlay_partition.rs:368` **fn** `spatial_layer_close` — The matching close command for a **spatial** ancestor layer open (ADR-016
-`crates/engine/paint/src/renderer.rs:2247` **enum** `ComposeOutcome` — Чем кончился путь компоновки (скролл-композитор) на кадре — BUG-405 срез 37
-`crates/engine/paint/src/renderer.rs:2280` **fn** `last_compose` — Исход пути компоновки на последнем отрисованном кадре (BUG-405 срез 37)
-`crates/engine/paint/src/renderer.rs:2292` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
-`crates/engine/paint/src/renderer.rs:2323` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
-`crates/engine/paint/src/renderer.rs:2352` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
-`crates/engine/paint/src/renderer.rs:2594` **struct** `Renderer`
-`crates/engine/paint/src/renderer.rs:3025` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
-`crates/engine/paint/src/renderer.rs:3033` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
-`crates/engine/paint/src/renderer.rs:3050` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
-`crates/engine/paint/src/renderer.rs:3065` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
-`crates/engine/paint/src/renderer.rs:3078` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
+`crates/engine/paint/src/renderer.rs:1659` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
+`crates/engine/paint/src/renderer.rs:1667` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
+`crates/engine/paint/src/renderer.rs:1684` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
+`crates/engine/paint/src/renderer.rs:1699` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
+`crates/engine/paint/src/renderer.rs:1712` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
 `crates/engine/paint/src/renderer/construct.rs:11` **fn** `new`
 `crates/engine/paint/src/renderer/construct.rs:216` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
 `crates/engine/paint/src/renderer/construct.rs:1155` **fn** `warm_lazy_pipelines_blocking` — Прогревает ленивые пайплайны синхронно, на вызывающем потоке
@@ -4063,6 +4057,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/renderer/texture_pool.rs:825` **fn** `set_page_offset` — Фиксированное смещение страницы в CSS px (ADR-016 M0.4, BUG-405 срез 38)
 `crates/engine/paint/src/renderer/texture_pool.rs:835` **fn** `page_offset` — Текущее смещение страницы (см. [`set_page_offset`](Self::set_page_offset))
 `crates/engine/paint/src/renderer/texture_pool.rs:878` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
+`crates/engine/paint/src/renderer/types.rs:606` **enum** `ComposeOutcome` — Чем кончился путь компоновки (скролл-композитор) на кадре — BUG-405 срез 37
+`crates/engine/paint/src/renderer/types.rs:639` **fn** `last_compose` — Исход пути компоновки на последнем отрисованном кадре (BUG-405 срез 37)
+`crates/engine/paint/src/renderer/types.rs:651` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
+`crates/engine/paint/src/renderer/types.rs:682` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
+`crates/engine/paint/src/renderer/types.rs:711` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
+`crates/engine/paint/src/renderer/types.rs:953` **struct** `Renderer`
 `crates/engine/paint/src/scroll_cache.rs:60` **enum** `ScrollFramePlan` — What the render backend should do with the current frame, given the retained
 `crates/engine/paint/src/scroll_cache.rs:116` **fn** `label` — A stable one-word label for the plan variant — `"blit"`,
 `crates/engine/paint/src/scroll_cache.rs:131` **struct** `ScrollCache` — Bookkeeping for the retained scroll-content surface (ADR-016 M3)
