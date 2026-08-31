@@ -6,9 +6,8 @@
 //! (`docs/tasks/p1-monolith-split-queue.md` §4, группа DL, батч DL-2).
 
 use super::*;
-// build/fills/texts остаются в `mod tests` в display_list.rs — общие хелперы
-// всей группы DL, ещё не вынесенные оттуда.
-use super::tests::{build, fills, texts};
+// build/fills/texts уехали в display_list/tests/text_and_images.rs (батч DL-6).
+use super::text_and_images::{build, fills, texts};
 // build_ordered уехал в display_list/tests/ordered_build_scroll.rs (батч DL-5).
 use super::ordered_build_scroll::build_ordered;
 
