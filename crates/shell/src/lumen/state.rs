@@ -190,6 +190,14 @@ pub(crate) struct Lumen {
     /// or the incremental path would reuse `chrome_prev_cascade_styles`
     /// computed under the wrong Forced-Colors state.
     pub(crate) chrome_prev_forced_colors: bool,
+    /// BUG-405 срез 48 (диагностика, п.85): total-хэш ([`lumen_paint::hash_display_list`]
+    /// с пустым content-лейном) предыдущего [`Self::relayout_chrome_host`]-прохода —
+    /// только сравнение с текущим под `LUMEN_FRAME_LOG=2`, ни на что не влияет.
+    /// Нужен, чтобы измерить, насколько надёжно `touched.is_empty()` +
+    /// стабильность interactive/viewport/forced-colors предсказывают, что байты
+    /// `chrome_dl` не изменились — предпосылка content_epoch-архитектуры overlay
+    /// (срез 46), которую этот срез проверяет БЕЗ правки самого relayout-пути.
+    pub(crate) chrome_dl_content_hash: Option<u64>,
     /// CC-11: last computed animation/transition frame for the chrome
     /// document. `None` when the chrome flag is off or nothing is currently
     /// animating. Only the compositor-offloadable properties (opacity,

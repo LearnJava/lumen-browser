@@ -94,6 +94,13 @@ impl Lumen {
         let forced_colors = lumen_layout::forced_colors_active();
         let viewport_stable = self.chrome_prev_viewport == Some(viewport);
         let forced_colors_stable = self.chrome_prev_forced_colors == forced_colors;
+        // BUG-405 срез 48 (диагностика, п.85): все четыре входа read-нутся
+        // ДО того, как строки ниже перезапишут `chrome_prev_*` этим
+        // проходом — `predict_same` называет, что было бы известно БЕЗ
+        // хэширования `dl` (`touched` уже посчитан выше, до этой точки).
+        let interactive_stable = new_interactive == self.chrome_prev_interactive;
+        let predict_same =
+            touched.is_empty() && interactive_stable && viewport_stable && forced_colors_stable;
         // BUG-341 S22: the previous pass's pristine tree is *reconstructed*
         // from the live one, not copied out of it while it was still pristine.
         // `chrome_layout` holds the pruned tree that pass painted, and
@@ -254,6 +261,20 @@ impl Lumen {
         }
         self.chrome_prev_styles = new_styles;
         let dl = paint_ordered(&layout);
+        // BUG-405 срез 48 (диагностика, п.85): не гейтит поведение — только
+        // печать под `LUMEN_FRAME_LOG=2`. `hash_display_list` берёт `dl` как
+        // overlay-лейн (content — пустой срез), тот же тотальный хэш, что уже
+        // используют кадровый хэш и overlay-кэш (band_compose.rs), так что
+        // «actual=true» здесь означает ровно то же самое «байты не
+        // изменились», что видит overlay_cache_step дальше по кадру.
+        if lumen_paint::frame_log_level() >= 2 {
+            let actual_hash = lumen_paint::hash_display_list(&[], &dl, 0.0, 0.0, 0, 0);
+            let actual_same = self.chrome_dl_content_hash == Some(actual_hash);
+            eprintln!(
+                "[frame] chrome-dl-repeat predict={predict_same} actual={actual_same}"
+            );
+            self.chrome_dl_content_hash = Some(actual_hash);
+        }
         self.chrome_layout = Some((layout, dl));
     }
 
