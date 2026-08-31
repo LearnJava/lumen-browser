@@ -10,19 +10,14 @@
 //!   attachment, Arabic joining, Indic reordering — none of which the own
 //!   engine implements.
 //!
-//! [`active_text_shaper`] picks one at runtime. **Default is still the own
-//! engine** — `LIB-1` lands the trait, the `rustybuzz` implementation and
-//! this switch fully tested and buildable, but does not flip production
-//! rendering to it: that change moves every glyph metric (see
-//! `crate::shape`'s scope gap above), which drifts the graphic-tests
-//! references, the CPU snapshot PNGs and the paint crate's textual
-//! display-list snapshots all at once — reviewing and re-shooting those
-//! three sets is `LIB-2`'s own task, deliberately kept separate so it gets
-//! its own dedicated session rather than being bundled silently into this
-//! one. Until `LIB-2` flips this default, set `LUMEN_RUSTYBUZZ_SHAPING=1` to
-//! opt in (e.g. to validate complex-script shaping directly). The direction
-//! reverses at `LIB-3`, which removes the own engine for good — from then
-//! on the *rollback* is what needs an env var.
+//! [`active_text_shaper`] picks one at runtime. **Default is `rustybuzz`
+//! since `LIB-2`** (2026-08-31), which re-shot the graphic-tests references,
+//! the CPU snapshot PNGs and the paint crate's textual display-list
+//! snapshots to match — that swap moves every glyph metric governed by the
+//! own engine's scope gap (see `crate::shape`'s module doc). Set
+//! `LUMEN_OWN_TEXT_SHAPING=1` to roll back to the own engine (e.g. to A/B a
+//! regression against it). `LIB-3` removes the own engine and this rollback
+//! flag for good once the swap has held.
 
 use lumen_core::ext::{ShapeDirection, ShapedGlyph, TextShaper};
 
@@ -33,8 +28,9 @@ use crate::shape::Shaper;
 ///
 /// Ignores `direction`, `script` and `variation_axes`: the own engine has no
 /// complex-script or variable-positioning support to steer (see
-/// [`crate::shape`]'s module doc). Still the default [`active_text_shaper`]
-/// until `LIB-2` re-shoots snapshot references; removed at `LIB-3`.
+/// [`crate::shape`]'s module doc). No longer the default [`active_text_shaper`]
+/// since `LIB-2`; kept as the `LUMEN_OWN_TEXT_SHAPING=1` rollback until
+/// `LIB-3` removes it.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct OwnTextShaper;
 
@@ -163,28 +159,27 @@ impl TextShaper for RustybuzzShaper {
 }
 
 /// Cached choice of the active [`TextShaper`], read once from
-/// `LUMEN_RUSTYBUZZ_SHAPING` (any value opts into the `rustybuzz` engine) —
-/// the `WGPU_BACKEND`/`LUMEN_NO_*`-style env-var convention this workspace
-/// uses for a backend choice that needs testing without a rebuild.
+/// `LUMEN_OWN_TEXT_SHAPING` (any value rolls back to the own engine) — the
+/// `WGPU_BACKEND`/`LUMEN_NO_*`-style env-var convention this workspace uses
+/// for a backend choice that needs testing without a rebuild.
 static ACTIVE_SHAPER: std::sync::OnceLock<Box<dyn TextShaper>> = std::sync::OnceLock::new();
 
 /// The `TextShaper` implementation callers should use.
 ///
-/// Defaults to the own `GSUB`/`GPOS` engine — production rendering does not
-/// move to `rustybuzz` until `LIB-2` re-shoots the graphic-tests/CPU/paint
-/// snapshot references that a shaping-engine swap drifts (see module doc).
-/// Set `LUMEN_RUSTYBUZZ_SHAPING=1` to opt into `rustybuzz` before then (only
-/// takes effect if the `rustybuzz-shaping` feature is compiled in, which it
-/// is by default).
+/// Defaults to `rustybuzz` since `LIB-2` re-shot the graphic-tests/CPU/paint
+/// snapshot references for the swap (see module doc). Set
+/// `LUMEN_OWN_TEXT_SHAPING=1` to roll back to the own `GSUB`/`GPOS` engine
+/// (only takes effect if the `rustybuzz-shaping` feature is compiled in,
+/// which it is by default — without it there is only the own engine).
 pub fn active_text_shaper() -> &'static dyn TextShaper {
     ACTIVE_SHAPER
         .get_or_init(|| {
             #[cfg(feature = "rustybuzz-shaping")]
             {
-                if std::env::var_os("LUMEN_RUSTYBUZZ_SHAPING").is_some() {
-                    Box::new(RustybuzzShaper)
-                } else {
+                if std::env::var_os("LUMEN_OWN_TEXT_SHAPING").is_some() {
                     Box::new(OwnTextShaper)
+                } else {
+                    Box::new(RustybuzzShaper)
                 }
             }
             #[cfg(not(feature = "rustybuzz-shaping"))]

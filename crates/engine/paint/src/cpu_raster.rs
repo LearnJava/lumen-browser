@@ -2960,11 +2960,11 @@ fn rasterize_text(
         if segment.is_empty() {
             continue;
         }
-        // Shape via `lumen_font::active_text_shaper()` (LIB-1): the own
-        // GSUB/GPOS engine by default, `rustybuzz` opt-in via
-        // `LUMEN_RUSTYBUZZ_SHAPING=1` until LIB-2 re-shoots this path's
-        // snapshot references and flips the default. No fallback faces on
-        // the CPU path: a missing codepoint resolves to glyph 0 (.notdef),
+        // Shape via `lumen_font::active_text_shaper()` (LIB-1/LIB-2):
+        // `rustybuzz` by default since LIB-2 re-shot this path's snapshot
+        // references, own GSUB/GPOS engine as a `LUMEN_OWN_TEXT_SHAPING=1`
+        // rollback. No fallback faces on the CPU path: a missing codepoint
+        // resolves to glyph 0 (.notdef),
         // matching the GPU renderer's `(primary, 0)` result.
         let shaped = lumen_font::active_text_shaper().shape(
             BUNDLED_FONT,
