@@ -1,6 +1,6 @@
 # BUG-462: `Node.prototype.contains` missing on live (attached) DOM nodes
 
-**Статус:** OPEN
+**Статус:** FIXED (закрыто ревизией) 2026-09-01
 **Дата:** 2026-08-02
 **Компонент:** js (`crates/js/src/dom.rs` — живая обёртка `Element`/`Document`, тот же
 `_lumen_build_element`/handwritten `var document = {…}` литерал, что в
@@ -83,3 +83,21 @@ boundaries, per DOM Standard §4.4 `Node.contains`) checking for identity with
 prototype consolidation, but a narrow instance-level shim (matching the existing
 per-instance-property pattern the rest of the live wrapper uses) unblocks this
 sooner if the bigger prototype refactor is not imminent.
+
+## Закрытие (P3-ревизия, 2026-09-01)
+
+Уже сделано — побочным эффектом [BUG-732](BUG-732-FIXED.md) (2026-08-10, «шесть
+базовых DOM/CSSOM-API отсутствуют в шиме»). Тот фикс добавил
+`Node.prototype.contains` (`crates/js/src/shim/web_api_shim_mid.js`) и отдельный
+`document.contains` для живого `document`-литерала, посчитанные по id узлов арены
+(`_lumen_node_contains`), а не по идентичности JS-обёрток — ровно с учётом
+ловушки, которую называет этот баг (`document` не имеет `__nid__` и не совпадает
+с обёрткой, которую отдаёт `documentElement.parentNode`, так что наивный обход
+`parentNode` со сравнением `===` дал бы `document.contains(el) === false` для
+любого элемента страницы). BUG-732 не был заведён под этим номером — отдельная
+заявка (BUG-462) с тем же симптомом осталась открытой.
+
+Подтверждено юнит-тестами `dom::tests::v8_bug732_node_and_collections::{contains_self_descendant_and_foreign_node, document_contains_element}`
+(`cargo test -p lumen-js --features v8-backend v8_bug732_node_and_collections` —
+7/7 OK на чистом `main`, код не менялся) — покрывают ровно сценарии этой заявки:
+`document.contains(el)`, `el.contains(other)`, detached-элемент, `null`.
