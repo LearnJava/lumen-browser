@@ -419,6 +419,50 @@ fn eval_module_at_and_report_runtime_error_fires_window_error() {
     assert_eq!(caught, JsValue::String("url-module-boom".to_string()));
 }
 
+/// BUG-459: an external `<script type=module src=URL>` must resolve its own
+/// relative *static* imports against its own URL, not the page URL -- and
+/// `import.meta.url` must be its own URL too (HTML LS §8.1.3.8).
+#[test]
+fn eval_module_at_resolves_relative_static_import_against_own_url() {
+    let rt = rt();
+    rt.register_module_source("https://cdn.test/b.js", "export const b = 'b-value';");
+    rt.eval_module_at(
+        "https://cdn.test/a.js",
+        "import { b } from './b.js'; \
+         globalThis.__b__ = b; \
+         globalThis.__meta__ = import.meta.url;",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("globalThis.__b__").unwrap(),
+        JsValue::String("b-value".to_string())
+    );
+    assert_eq!(
+        rt.eval("globalThis.__meta__").unwrap(),
+        JsValue::String("https://cdn.test/a.js".to_string())
+    );
+}
+
+/// Same as above for a *dynamic* `import()` -- the shape webpack/Vite
+/// code-splitting chunk loaders actually use.
+#[test]
+fn eval_module_at_resolves_relative_dynamic_import_against_own_url() {
+    let rt = rt();
+    rt.register_module_source(
+        "https://cdn.test/chunk.js",
+        "export const chunk = 'chunk-value';",
+    );
+    rt.eval_module_at(
+        "https://cdn.test/a.js",
+        "import('./chunk.js').then(m => { globalThis.__chunk__ = m.chunk; });",
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("globalThis.__chunk__").unwrap(),
+        JsValue::String("chunk-value".to_string())
+    );
+}
+
 #[test]
 fn round_trip_bool() {
     let rt = rt();
