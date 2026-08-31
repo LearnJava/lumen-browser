@@ -205,6 +205,61 @@ fn flex_column_item_margin_left_applied_once() {
     assert_eq!(a.rect.x, 15.0, "a.x {} (expected 15 = margin-left applied once)", a.rect.x);
 }
 
+/// Fixed 8px per character, so the expected intrinsic widths are exact.
+struct FixedCharWidth8;
+impl crate::TextMeasurer for FixedCharWidth8 {
+    fn char_width(&self, _: char, _: f32) -> f32 {
+        8.0
+    }
+}
+
+#[test]
+fn flex_column_align_items_center_shrinks_to_fit_and_centers() {
+    // BUG-460: a column container's cross axis is width. `align-items: center`
+    // on a non-replaced item with no explicit width used to be a no-op — the
+    // item filled the whole container width regardless (ordinary block
+    // auto-width already fills available space, and the column arm had no
+    // shrink-to-fit/alignment logic for anything but the default `stretch`).
+    // Live case: `.newtab .nt-restore` in `assets/chrome/chrome.html`.
+    let html = r#"<div id="flex"><div id="item">aaaa</div></div>"#;
+    let css = "body{margin:0} #flex{display:flex;flex-direction:column;align-items:center;width:300px;height:200px} #item{font-size:16px}";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &FixedCharWidth8);
+    let item = super::find_by_id_all(&root, &doc, "item").expect("item");
+    assert_eq!(item.rect.width, 32.0, "shrink-to-fit width (4 chars × 8px), w={}", item.rect.width);
+    assert_eq!(item.rect.x, 134.0, "centered: (300 − 32) / 2, x={}", item.rect.x);
+}
+
+#[test]
+fn flex_column_align_items_flex_end_shrinks_to_fit_and_pushes_to_end() {
+    // Same gap as above, `flex-end` arm: item must shrink to content width and
+    // sit flush against the cross-end, not stretch full width then align.
+    let html = r#"<div id="flex"><div id="item">aaaa</div></div>"#;
+    let css = "body{margin:0} #flex{display:flex;flex-direction:column;align-items:flex-end;width:300px;height:200px} #item{font-size:16px}";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &FixedCharWidth8);
+    let item = super::find_by_id_all(&root, &doc, "item").expect("item");
+    assert_eq!(item.rect.width, 32.0, "shrink-to-fit width, w={}", item.rect.width);
+    assert_eq!(item.rect.x, 268.0, "flush with cross-end: 300 − 32, x={}", item.rect.x);
+}
+
+#[test]
+fn flex_column_align_self_center_overrides_container_align_items() {
+    // `align-self` on the item must win over the container's `align-items`
+    // (here `flex-start`, itself a non-stretch value exercising the same
+    // shrink-to-fit path) for the column cross axis, mirroring the row arm.
+    let html = r#"<div id="flex"><div id="item">aaaa</div></div>"#;
+    let css = "body{margin:0} #flex{display:flex;flex-direction:column;align-items:flex-start;width:300px;height:200px} #item{font-size:16px;align-self:center}";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &FixedCharWidth8);
+    let item = super::find_by_id_all(&root, &doc, "item").expect("item");
+    assert_eq!(item.rect.width, 32.0, "shrink-to-fit width, w={}", item.rect.width);
+    assert_eq!(item.rect.x, 134.0, "align-self:center wins over container's flex-start, x={}", item.rect.x);
+}
+
 #[test]
 fn flex_align_content_center() {
     // center: offset=100 → line1 y=100, line2 y=150.
