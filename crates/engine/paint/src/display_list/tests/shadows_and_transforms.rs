@@ -6,10 +6,12 @@
 //! (`docs/tasks/p1-monolith-split-queue.md` §4, группа DL, батч DL-4).
 
 use super::*;
-// P1/SPLIT-DL5/DL-6 ещё не взяты: build/build_ordered/fills/count_variant/
-// Fixed8 остаются в `mod tests` в display_list.rs — общие хелперы, ещё не
-// вынесенные оттуда.
-use super::tests::{build, build_ordered, count_variant, fills, Fixed8};
+// P1/SPLIT-DL6 ещё не взят: build/fills/Fixed8 остаются в `mod tests` в
+// display_list.rs — общие хелперы, ещё не вынесенные оттуда.
+use super::tests::{build, fills, Fixed8};
+// build_ordered/count_variant уехали в
+// display_list/tests/ordered_build_scroll.rs (батч DL-5).
+use super::ordered_build_scroll::{build_ordered, count_variant};
 
     // ───────── DEVX-7 п.4: ProvenanceIndex ─────────
 

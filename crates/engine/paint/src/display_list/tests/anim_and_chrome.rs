@@ -12,9 +12,11 @@ use super::*;
 // display_list/tests/svg_table_and_hash.rs (батч DL-2), но их зовут тесты
 // этого файла (батч DL-3).
 use super::svg_table_and_hash::{debug_hash_one, hash_corpus, red_fill};
-// build/build_ordered остаются в `mod tests` в display_list.rs — общие
-// хелперы, ещё не вынесенные оттуда.
-use super::tests::{build, build_ordered};
+// build остаётся в `mod tests` в display_list.rs — общий хелпер, ещё не
+// вынесенный оттуда.
+use super::tests::build;
+// build_ordered уехал в display_list/tests/ordered_build_scroll.rs (батч DL-5).
+use super::ordered_build_scroll::build_ordered;
 // find_bg_node уехал в display_list/tests/shadows_and_transforms.rs (батч DL-4).
 use super::shadows_and_transforms::find_bg_node;
 use lumen_dom::NodeId;
