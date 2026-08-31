@@ -2,6 +2,13 @@
 
 ### Политика зависимостей
 
+> **Критерий границы — [ADR-027](../decisions/ADR-027-own-vs-vendored-boundary.md) (2026-08-31).** Раздел больше не перечисляет подсистемы по именам, а отвечает на вопрос «кто принимает решение»:
+>
+> - **Своё** — там, где *мы* решаем, что считать правильным: раскладка бокса, момент инвалидации стиля, порядок отрисовки, поведение вложенного контекста просмотра, что браузер показывает пользователю и чего он не отправляет.
+> - **Готовое** — там, где решение уже принял комитет и записал в спеку: формат файла, таблица Unicode, OpenType-lookup, конечный автомат разбора URL, алгоритм сжатия, криптографический примитив.
+>
+> Проверка: *если мы напишем это сами и разойдёмся с эталонной реализацией — правы мы или нет?* Если неправы по определению, решение принадлежит спеке. Требования trait-anchor и обоснования в теле коммита не отменяются — см. конец раздела.
+
 **Стратегия (обновлено 2026-05-15): сначала рабочий браузер, потом разговор «что переписывать самим».** Раньше §5 формулировался бинарно — «всё своё, кроме 5 exception». На практике это упирало в задачи, которые ничего не определяют в идентичности Lumen, но стоят месяцев работы (image decoders, Unicode UAX-таблицы, Brotli, WOFF2, HTTP/3). Новая формулировка — две категории exception:
 
 - **Permanent.** Никогда не пишем сами. Универсальное правило безопасности / здравого смысла. 5 шт.
@@ -13,11 +20,11 @@
 
 - HTML / CSS парсеров, DOM, style cascade, selectors;
 - layout (block, inline, flex, grid), paint, compositing;
-- URL-парсинга и базового Punycode (RFC 3492 — IDNA UTS#46 опционально через provisional `idna`);
+- Punycode (RFC 3492) и homograph-проверки IDN — часть решения «что показать в адресной строке», см. `lumen-core::idn`. **Сам разбор URL — под вопросом (ADR-027):** это конечный автомат WHATWG, решение принимает спека; текущие ~370 строк `lumen-core::url` меряются против `urltestdata.json` в задаче `LIB-0`, замена рассматривается в `LIB-6`;
 - HTTP/1.1, HTTP/2, DNS-резолвера с DoH/DoT (HTTP/3 — через provisional `quinn`);
 - определения и конвертации кодировок (cp1251, KOI8-R, CP866 и др.);
-- PNG-декодера (готов в `lumen-image` + свой DEFLATE, переиспользуемый для HTTP gzip/deflate); JPEG/WebP/GIF — через provisional image-decoder-crate;
-- TrueType-парсинга и text shaping для Latin / Cyrillic (WOFF2 — через provisional `woff2`);
+- ~~PNG-декодера (готов в `lumen-image` + свой DEFLATE…)~~ — **устарело, исправлено 2026-08-31.** Своего PNG-декодера нет: `crates/engine/image/src/png/mod.rs` — 125-строчная обёртка над `zune_png`, JPEG/WebP/AVIF — такие же обёртки. Своего DEFLATE тоже нет: `crates/network/src/flate.rs` — это `flate2`, WOFF1 распаковывается `miniz_oxide`. Все растровые кодеки и сжатие — provisional-категория ниже;
+- TrueType-парсинга (`lumen-font`: cmap/glyf/CFF/COLR/CPAL/fvar/gvar — variable и color fonts), подбора шрифтов и растеризации глифов. **Text shaping — под вопросом (ADR-027):** GSUB реализует lookup-типы 1 и 4 из 8, GPOS — 1 и 2 из 9, диакритика не прикрепляется (нет GPOS 4), сложных письменностей нет; это таблицы OpenType, решение принимает спека. Замена на `rustybuzz` — задачи `LIB-1`…`LIB-3`;
 - движка адблок-фильтров;
 - 2D-растеризации поверх GPU-абстракции;
 - ephemeral KV-хранилища (in-memory, для тестов и session-scope данных);
@@ -82,26 +89,32 @@ Trait-anchor у каждого — в `lumen-core::ext`. Подключаем п
 
 ### Что НЕ берём как зависимости (даже временно — ядро Lumen)
 
-Эти крейты регулярно обсуждаются как «возьми готовое», но для всех решение — **отвергнуть**. Это идентичность проекта.
+Эти крейты регулярно обсуждаются как «возьми готовое», но для всех решение — **отвергнуть**. Это идентичность проекта: места, где решение принимаем мы (ADR-027).
 
 - ~~`html5ever`~~ → свой HTML-парсер по [HTML5 spec](https://html.spec.whatwg.org/multipage/parsing.html) (см. §6.1).
 - ~~`cssparser` + `selectors`~~ → свой CSS-парсер по CSS Syntax L3 (§6.2).
 - ~~`stylo`~~ → свой каскад и computed values (§6.4).
 - ~~`taffy`~~ → свой layout: block, inline, flex, grid (§6.5).
-- ~~`tiny-skia`~~ → свой 2D-растеризатор (CPU для v0.1, GPU через `wgpu` дальше).
 - ~~`hyper`~~ → свой HTTP/1.1 и HTTP/2 поверх `rustls` + std (только HTTP/3 через provisional `quinn`).
 - ~~`hickory-resolver`~~ → свой DNS-резолвер с DoH/DoT поверх `rustls`.
-- ~~`ttf-parser` / `font-kit`~~ → свой TrueType-парсер и font matcher (только WOFF2-распаковка через provisional `woff2`).
-- ~~`rustybuzz`~~ → свой shaper для Latin / Cyrillic. Сложные скрипты (арабский, индийский, тайский) — в v1.0+, отдельным модулем; пока «не поддерживается».
 - ~~`encoding_rs`~~ → свои таблицы декодирования (cp1251, KOI8-R, CP866, UTF-8, ASCII, Win-1252).
-- ~~`url`~~ → свой URL parser по WHATWG URL spec (текущий стаб в `lumen-core::url`).
 - ~~`unicode-security`~~ → свои homograph checks для IDN.
 - ~~`adblock`~~ (Brave) → свой filter matcher.
 - ~~`readability`~~ → своя реализация readability heuristics с настройкой под кириллицу (§10.9).
 - ~~`postcard` + `serde`~~ → своя компактная binary serialization для IPC.
 - ~~`tokio`~~ → свой минимальный async-исполнитель поверх std + epoll/kqueue/IOCP (или single-threaded на старте).
 - ~~`egui` / `iced` / `Slint`~~ → свой иммедиат-режим UI поверх `wgpu`-примитивов из paint-крейта.
-- ~~`flate2` / `miniz_oxide`~~ для PNG — отвергнуто (см. [DECISIONS.md](DECISIONS.md)). PNG-декодер с собственным DEFLATE уже написан в `lumen-image`; DEFLATE переиспользуется для HTTP `Content-Encoding: gzip/deflate`.
+- ~~`flate2` / `miniz_oxide`~~ для PNG — **запись отменена 2026-08-31.** Решение не выполнено и выполнено не будет: своего PNG-декодера нет (обёртка над `zune_png`), своего DEFLATE нет (`flate2` в `crates/network/src/flate.rs`, `miniz_oxide` в WOFF1). Историческая запись — [DECISIONS.md](../../DECISIONS.md).
+
+**Покинули этот список 2026-08-31 по [ADR-027](../decisions/ADR-027-own-vs-vendored-boundary.md)** — во всех четырёх случаях решение принимает спека, а не мы:
+
+| Крейт | Почему ушёл | Задача |
+|---|---|---|
+| `rustybuzz` | Свой шейпер закрыт задачей `U-2` как done и покрывает GSUB 1/4 из 8, GPOS 1/2 из 9; диакритика не прикрепляется, сложных письменностей нет | `LIB-1`…`LIB-3` |
+| `ttf-parser` | Приходит транзитивно с `rustybuzz`. Свой парсер таблиц остаётся — растеризация, метрики, variable/color fonts наши | `LIB-1` |
+| `resvg` / `usvg` | В пути отрисовки SVG **ноль** упоминаний `linearGradient`/`radialGradient`/`url(#…)`; нет `clipPath`, `mask`, `filter`, `pattern`, `marker`, `<image>` | `LIB-4`, `LIB-5` |
+| `url` | Конечный автомат WHATWG против ~370 своих строк; официальный корпус `urltestdata.json` уже лежит в `tests/wpt/url/resources/` | `LIB-0`, `LIB-6` |
+| `tiny-skia` | **Уже зависимость** (`crates/engine/paint/Cargo.toml`, бэкенд `cpu-render`) — запись была неверна фактически | — |
 
 ### Devtools (не runtime — допустимы)
 
