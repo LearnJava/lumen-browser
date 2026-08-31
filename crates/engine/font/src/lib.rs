@@ -6,10 +6,11 @@
 //! Cyrillic без hinting, kerning и ligatures.
 //!
 //! TTF/OTF — формат с большим количеством обязательных и опциональных
-//! таблиц; реализуем по мере необходимости. Шейпинг (U-2 этап 1): GSUB
-//! лигатуры (`liga`/`clig`) + GPOS кернинг (`kern`) для Latin/Cyrillic —
-//! см. [`shape::Shaper`]. CFF outlines (PostScript-OpenType `.otf`, U-2 этап 2)
-//! поддержаны — см. [`cff::Cff`] (Type 2 charstrings, CID-keyed CFF).
+//! таблиц; реализуем по мере необходимости. Шейпинг — через `rustybuzz`
+//! (LIB-1..LIB-3, ADR-027) за trait-anchor `lumen_core::ext::TextShaper`,
+//! см. [`text_shaper::active_text_shaper`]. CFF outlines (PostScript-OpenType
+//! `.otf`, U-2 этап 2) поддержаны — см. [`cff::Cff`] (Type 2 charstrings,
+//! CID-keyed CFF).
 //! Color glyphs: `COLR` v0 + `CPAL` поддержаны — см. [`colr::Colr`] и
 //! [`cpal::Cpal`] (layered glyphs + палитры для CSS `font-palette`).
 //! Не поддерживается (отложено): hinting (TT instructions), CFF2 (variable
@@ -34,12 +35,8 @@ pub mod face;
 mod font_cache;
 pub mod fvar;
 pub mod glyf;
-pub mod gpos;
-pub mod gsub;
 pub mod gvar;
 pub mod head;
-pub mod otlayout;
-pub mod shape;
 pub mod text_shaper;
 pub mod hvar;
 pub mod item_variation;
@@ -70,14 +67,9 @@ pub use fvar::{Fvar, NamedInstance, VariationAxis};
 pub use glyf::{
     Anchor, BoundingBox, CompositeComponent, Contour, Glyf, Glyph, Outline, OutlinePoint,
 };
-pub use gpos::Gpos;
-pub use gsub::Gsub;
 pub use gvar::{GlyphVariationData, Gvar, PointNumbers, TupleVariation};
 pub use head::{Head, IndexToLocFormat};
-pub use shape::{ShapedGlyph, Shaper};
-pub use text_shaper::{OwnTextShaper, active_text_shaper};
-#[cfg(feature = "rustybuzz-shaping")]
-pub use text_shaper::RustybuzzShaper;
+pub use text_shaper::{RustybuzzShaper, active_text_shaper};
 pub use hvar::Hvar;
 pub use item_variation::{
     ItemVariationData, ItemVariationStore, RegionAxisCoordinates, VariationRegion,

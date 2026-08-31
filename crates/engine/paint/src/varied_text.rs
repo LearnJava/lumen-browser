@@ -166,10 +166,9 @@ pub fn build_varied_text_paths(
         }
         // LIB-1: `lumen_font::active_text_shaper()` replaces the direct
         // cmap+`Shaper` call this function used to make; `rustybuzz` (the
-        // default since LIB-2) also applies `axes` to positioning
-        // (GDEF/GPOS variation deltas), not just to the outline via
-        // `coords` below. Rolling back with `LUMEN_OWN_TEXT_SHAPING=1`
-        // returns to the own engine, which ignores `axes` here as before.
+        // sole shaper since LIB-3) also applies `axes` to positioning
+        // (GDEF/GPOS variation deltas), not just to the outline via `coords`
+        // below.
         let shaped = lumen_font::active_text_shaper().shape(
             font_bytes,
             segment,

@@ -1,95 +1,20 @@
-//! `lumen_core::ext::TextShaper` implementations (LIB-1, ADR-027).
+//! `lumen_core::ext::TextShaper` implementation (LIB-1/LIB-3, ADR-027).
 //!
-//! Two shapers, same trait, same inputs:
-//!
-//! - [`OwnTextShaper`] adapts [`crate::shape::Shaper`] (this crate's own
-//!   `GSUB`/`GPOS` engine, stage-1 scope: Latin/Cyrillic ligatures + kerning
-//!   only — see that module's doc comment for what it does not do).
-//! - [`RustybuzzShaper`] (behind the `rustybuzz-shaping` feature, default
-//!   on) shapes through `rustybuzz`: full complex-script support — mark
-//!   attachment, Arabic joining, Indic reordering — none of which the own
-//!   engine implements.
-//!
-//! [`active_text_shaper`] picks one at runtime. **Default is `rustybuzz`
-//! since `LIB-2`** (2026-08-31), which re-shot the graphic-tests references,
-//! the CPU snapshot PNGs and the paint crate's textual display-list
-//! snapshots to match — that swap moves every glyph metric governed by the
-//! own engine's scope gap (see `crate::shape`'s module doc). Set
-//! `LUMEN_OWN_TEXT_SHAPING=1` to roll back to the own engine (e.g. to A/B a
-//! regression against it). `LIB-3` removes the own engine and this rollback
-//! flag for good once the swap has held.
+//! [`RustybuzzShaper`] shapes through `rustybuzz`: full complex-script
+//! support — mark attachment, Arabic joining, Indic reordering. It replaced
+//! this crate's own `GSUB`/`GPOS` engine (Latin/Cyrillic ligatures + kerning
+//! only) as the default at `LIB-2` (2026-08-31, which re-shot the graphic-tests
+//! references, the CPU snapshot PNGs and the paint crate's textual
+//! display-list snapshots to match) and the own engine was deleted outright
+//! at `LIB-3` (2026-09-01) once that swap had held.
 
 use lumen_core::ext::{ShapeDirection, ShapedGlyph, TextShaper};
 
-use crate::face::Font;
-use crate::shape::Shaper;
-
-/// `TextShaper` backed by this crate's own `GSUB`/`GPOS` engine.
-///
-/// Ignores `direction`, `script` and `variation_axes`: the own engine has no
-/// complex-script or variable-positioning support to steer (see
-/// [`crate::shape`]'s module doc). No longer the default [`active_text_shaper`]
-/// since `LIB-2`; kept as the `LUMEN_OWN_TEXT_SHAPING=1` rollback until
-/// `LIB-3` removes it.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct OwnTextShaper;
-
-impl TextShaper for OwnTextShaper {
-    fn shape(
-        &self,
-        font_data: &[u8],
-        text: &str,
-        _direction: ShapeDirection,
-        _script: Option<[u8; 4]>,
-        features: &[([u8; 4], u32)],
-        _variation_axes: &[([u8; 4], f32)],
-    ) -> Vec<ShapedGlyph> {
-        if text.is_empty() {
-            return Vec::new();
-        }
-        let Ok(font) = Font::parse(font_data) else {
-            return Vec::new();
-        };
-        let Ok(cmap) = font.cmap() else {
-            return Vec::new();
-        };
-        let Ok(hmtx) = font.hmtx() else {
-            return Vec::new();
-        };
-
-        // Parallel to `glyph_ids`: byte offset of the char each entry came
-        // from, so a post-ligature `cluster` (an index into this array) can
-        // be translated back to the trait's byte-offset convention.
-        let mut byte_offsets: Vec<u32> = Vec::new();
-        let glyph_ids: Vec<u16> = text
-            .char_indices()
-            .map(|(i, ch)| {
-                byte_offsets.push(i as u32);
-                cmap.glyph_index(ch as u32).unwrap_or(0)
-            })
-            .collect();
-
-        let shaper = Shaper::with_features(&font, features);
-        shaper
-            .shape(&glyph_ids, &hmtx)
-            .into_iter()
-            .map(|sg| ShapedGlyph {
-                glyph_id: sg.glyph_id,
-                cluster: byte_offsets.get(sg.cluster as usize).copied().unwrap_or(0),
-                x_advance: sg.x_advance,
-                x_offset: sg.x_offset,
-                y_offset: sg.y_offset,
-            })
-            .collect()
-    }
-}
-
-/// `TextShaper` backed by `rustybuzz` — the LIB-1 replacement.
-#[cfg(feature = "rustybuzz-shaping")]
+/// `TextShaper` backed by `rustybuzz` — the LIB-1 replacement, sole
+/// implementation since `LIB-3`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RustybuzzShaper;
 
-#[cfg(feature = "rustybuzz-shaping")]
 impl TextShaper for RustybuzzShaper {
     fn shape(
         &self,
@@ -158,36 +83,12 @@ impl TextShaper for RustybuzzShaper {
     }
 }
 
-/// Cached choice of the active [`TextShaper`], read once from
-/// `LUMEN_OWN_TEXT_SHAPING` (any value rolls back to the own engine) — the
-/// `WGPU_BACKEND`/`LUMEN_NO_*`-style env-var convention this workspace uses
-/// for a backend choice that needs testing without a rebuild.
-static ACTIVE_SHAPER: std::sync::OnceLock<Box<dyn TextShaper>> = std::sync::OnceLock::new();
-
-/// The `TextShaper` implementation callers should use.
+/// The [`TextShaper`] implementation callers should use.
 ///
-/// Defaults to `rustybuzz` since `LIB-2` re-shot the graphic-tests/CPU/paint
-/// snapshot references for the swap (see module doc). Set
-/// `LUMEN_OWN_TEXT_SHAPING=1` to roll back to the own `GSUB`/`GPOS` engine
-/// (only takes effect if the `rustybuzz-shaping` feature is compiled in,
-/// which it is by default — without it there is only the own engine).
+/// `rustybuzz`-backed, the sole implementation since `LIB-3` removed the
+/// crate's own `GSUB`/`GPOS` engine.
 pub fn active_text_shaper() -> &'static dyn TextShaper {
-    ACTIVE_SHAPER
-        .get_or_init(|| {
-            #[cfg(feature = "rustybuzz-shaping")]
-            {
-                if std::env::var_os("LUMEN_OWN_TEXT_SHAPING").is_some() {
-                    Box::new(OwnTextShaper)
-                } else {
-                    Box::new(RustybuzzShaper)
-                }
-            }
-            #[cfg(not(feature = "rustybuzz-shaping"))]
-            {
-                Box::new(OwnTextShaper)
-            }
-        })
-        .as_ref()
+    &RustybuzzShaper
 }
 
 #[cfg(test)]
@@ -196,32 +97,6 @@ mod tests {
 
     const BUNDLED_FONT: &[u8] = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
 
-    #[test]
-    fn own_shaper_empty_text_is_empty() {
-        let shaped =
-            OwnTextShaper.shape(BUNDLED_FONT, "", ShapeDirection::LeftToRight, None, &[], &[]);
-        assert!(shaped.is_empty());
-    }
-
-    #[test]
-    fn own_shaper_reports_byte_offset_clusters() {
-        // "café" — the 'é' is 2 bytes in UTF-8, so its cluster must be 3
-        // (byte offset), not 3 chars later read as index 3 too — pick a
-        // string where the two would visibly disagree if this regressed.
-        let shaped = OwnTextShaper.shape(
-            BUNDLED_FONT,
-            "aé",
-            ShapeDirection::LeftToRight,
-            None,
-            &[],
-            &[],
-        );
-        assert_eq!(shaped.len(), 2);
-        assert_eq!(shaped[0].cluster, 0);
-        assert_eq!(shaped[1].cluster, 1, "'é' starts at byte 1");
-    }
-
-    #[cfg(feature = "rustybuzz-shaping")]
     #[test]
     fn rustybuzz_shaper_empty_text_is_empty() {
         let shaped = RustybuzzShaper.shape(
@@ -235,9 +110,10 @@ mod tests {
         assert!(shaped.is_empty());
     }
 
-    #[cfg(feature = "rustybuzz-shaping")]
     #[test]
     fn rustybuzz_shaper_reports_byte_offset_clusters() {
+        // "café" — the 'é' is 2 bytes in UTF-8, so its cluster must be 1
+        // (byte offset), not "index 1" read as a char count.
         let shaped = RustybuzzShaper.shape(
             BUNDLED_FONT,
             "aé",
@@ -251,13 +127,10 @@ mod tests {
         assert_eq!(shaped[1].cluster, 1, "'é' starts at byte 1");
     }
 
-    #[cfg(feature = "rustybuzz-shaping")]
     #[test]
     fn rustybuzz_shaper_kerns_known_pair() {
-        // Parity check vs `crate::shape`'s own inter_shaping.rs tests: the
-        // bundled Inter face kerns "AV" — both shapers must apply *some*
-        // negative adjustment, not the same one (rustybuzz runs the full
-        // OT pipeline, the own engine only Type-1/2 lookups).
+        // The bundled Inter face kerns "AV" — a negative x-advance
+        // adjustment vs. the bare hmtx advance.
         let shaped = RustybuzzShaper.shape(
             BUNDLED_FONT,
             "AV",
@@ -278,5 +151,3 @@ mod tests {
         assert_eq!(shaped.len(), 2);
     }
 }
-
-

@@ -582,10 +582,10 @@ impl FontVariantEmoji {
 /// Собирает набор OpenType-фич для `DrawText.font_features`.
 ///
 /// CSS Fonts L4 §6.4 (Font Feature Resolution) задаёт порядок: сперва фичи
-/// от `font-variant-*`, последними — `font-feature-settings`. Шейпер
-/// (`otlayout::apply_feature_overrides`) применяет пары слева направо, так
-/// что более поздняя запись перекрывает раннюю — то есть автор может
-/// выключить фичу капители через `font-feature-settings`.
+/// от `font-variant-*`, последними — `font-feature-settings`. `rustybuzz`
+/// применяет пары слева направо, так что более поздняя запись перекрывает
+/// раннюю — то есть автор может выключить фичу капители через
+/// `font-feature-settings`.
 pub fn text_font_features(style: &ComputedStyle) -> Vec<([u8; 4], u32)> {
     let caps = style.font_variant_caps.feature_tags();
     let mut out = Vec::with_capacity(caps.len() + style.font_feature_settings.len());

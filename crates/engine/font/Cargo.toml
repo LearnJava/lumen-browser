@@ -17,25 +17,10 @@ zune-inflate = "0.2"
 # (LIB-1). Version pinned to the `0.14` line already resolved in the
 # workspace lockfile as a transitive dependency of `femtovg` (its own,
 # unused, text-shaping path), so this adds no second `rustybuzz`/`ttf-parser`
-# version. `rustybuzz-shaping` feature (below) keeps it removable at zero
-# cost if it ever needs to be dropped.
-rustybuzz = { version = "0.14", optional = true }
+# version. Unconditional since `LIB-3` (2026-09-01) removed the crate's own
+# `GSUB`/`GPOS` engine, `rustybuzz`'s only fallback.
+rustybuzz = "0.14"
 workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
-
-[features]
-default = ["rustybuzz-shaping"]
-# `rustybuzz`-backed `TextShaper` (LIB-1, ADR-027): full complex-script
-# shaping (mark attachment, Arabic joining, Indic reordering) that
-# `crate::shape::Shaper`'s own `GSUB`/`GPOS` engine (stage-1,
-# Latin/Cyrillic-only) does not implement. Compiled in by default and, since
-# `LIB-2` re-shot the graphic-tests/CPU/paint snapshot references the swap
-# drifts, also the active engine for production rendering —
-# `lumen_font::active_text_shaper` defaults to it; set
-# `LUMEN_OWN_TEXT_SHAPING=1` to roll back to the own engine. Disabling this
-# feature drops the `rustybuzz`/`ttf-parser` dependency entirely and falls
-# back to the own engine unconditionally. The own engine itself is removed
-# at `LIB-3`, once the swap has held.
-rustybuzz-shaping = ["dep:rustybuzz"]
 
 # Политики проекта как машинные проверки — [workspace.lints] в корневом
 # Cargo.toml, протокол docs/lint-policy.md.

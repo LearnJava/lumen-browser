@@ -4543,13 +4543,12 @@ pub struct ShapedGlyph {
 
 /// Turns a run of Unicode text into positioned glyphs for one font.
 ///
-/// Trait-anchor for LIB-1 (ADR-027): `lumen-font` provides two
-/// implementations — its own `GSUB`/`GPOS` engine (Latin/Cyrillic-only,
-/// stage-1 scope) and a `rustybuzz`-backed one (full complex-script
-/// support: mark attachment, Arabic joining, Indic reordering) — both
-/// taking the same inputs, so a caller can swap without touching call
-/// sites — see `lumen_font::active_text_shaper` for which one is active by
-/// default and how to opt into the other (`LUMEN_OWN_TEXT_SHAPING=1`).
+/// Trait-anchor for LIB-1 (ADR-027): `lumen-font` provides a
+/// `rustybuzz`-backed implementation (full complex-script support: mark
+/// attachment, Arabic joining, Indic reordering) — see
+/// `lumen_font::active_text_shaper`. `lumen-font`'s own `GSUB`/`GPOS` engine
+/// (Latin/Cyrillic-only, stage-1 scope) implemented this trait too until
+/// `LIB-3` (2026-09-01) deleted it once the `rustybuzz` swap had held.
 pub trait TextShaper: Send + Sync {
     /// Shapes `text` against the font at `font_data`.
     ///
