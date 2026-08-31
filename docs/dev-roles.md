@@ -36,7 +36,9 @@ Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `fo
 1. Run `python graphic_tests/run.py --continue-on-fail` → identify failing tests
 2. Pick highest-deviation OPEN item from `BUGS.md`
 3. Locate code via `SYMBOLS.md` + targeted grep (do not read whole files)
-4. Fix + add regression test + mark `BUGS.md`: `OPEN → FIXED <date>`
+4. Fix + add regression test + **move** the row from `BUGS.md` to `BUGS-FIXED.md` with status
+   `FIXED <date>`, rename `bugs/BUG-NNN-OPEN.md` → `-FIXED.md`, then
+   `python scripts/remap_status_pointers.py --apply`
 5. `cargo clippy -p <crate> --all-targets -- -D warnings` → `cargo test -p <crate>` → commit
 
 P3 branch prefix: `p3-bug-<id>`, e.g. `p3-bug023-opacity`.
@@ -137,14 +139,17 @@ ROADMAP.md (one line per task, status ≠ done)   ← master task list for P1/P2
 - **`STATUS-PN.md` holds only `<source>:NN` pointer lines** — `<source>` ∈ {ROADMAP.md, BUGS.md,
   CSS-SPECS.md} or a code `file:line`. The `<id>`/task-file link is recovered from that row. Stable
   anchor is the row key (`<id>` in ROADMAP, `BUG-NNN` in BUGS.md, property name in CSS-SPECS.md);
-  the `:NN` line number is fragile. BUGS.md is append-only (fixed bugs flip OPEN→FIXED in place,
-  never deleted), so a `BUGS.md:NN` pointer stays valid until rows are inserted above it.
-- **Reindex on source insertion (mandatory).** When you insert `K` new rows into a source file
-  (`ROADMAP.md` / `BUGS.md` / `CSS-SPECS.md`) at line `L`, every pointer into that same file (in all
-  `STATUS-PN.md`) with `NN ≥ L` must be bumped by `+K`. After any edit that shifts rows, verify each
-  STATUS pointer still lands on its intended row (`sed -n 'NNp' <source>`). Prefer appending new rows
-  at the end (ROADMAP: end of phase block; BUGS.md: end of file) to minimise shift. Append-only edits
-  below all pointers need no reindex.
+  the `:NN` line number is fragile. Since 2026-08-31 a fixed bug's row **moves** to `BUGS-FIXED.md`
+  instead of flipping in place, so closing a bug shifts every pointer below it — the reindex below is
+  no longer an occasional chore.
+- **Reindex on any row shift (mandatory), and do it with the script:**
+  `python scripts/remap_status_pointers.py --apply`. It reads the source file as of `HEAD`, recovers
+  the anchor each pointer stood on, finds that anchor in your working copy, and rewrites the numbers
+  (all five STATUS files at once; sources you did not touch are skipped). Run it **once, before the
+  commit** — it assumes the pointers were correct at `--base`, so a second run over already-fixed
+  numbers would resolve them against the wrong anchors. It refuses to guess for a pointer whose bug
+  moved to the archive: that one is stale and its line must simply be deleted (protocol step 4).
+  Manual arithmetic (`NN ≥ L → +K`) is still correct but was measured at 194 pointers for P3 alone.
 - **On completion:** delete the STATUS-PN.md line → delete (or `## Status: MERGED`) the task file →
   set `ROADMAP.md` status to `done` (run `python scripts/gen_roadmap.py`) → mark
   `CAPABILITIES.md`/`CSS-SPECS.md`/`BUGS.md`. (Full list — §«Task completion checklist».)

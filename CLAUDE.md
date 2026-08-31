@@ -262,7 +262,7 @@ Update docs **in the same commit** as the code change. Use `grep -n` to find the
 |---|---|---|
 | New feature / capability | `CAPABILITIES.md` + `subsystems/<crate>.md` | ⬜/🟡 → ✅; append bullet to Done section |
 | New feature / capability | `STATUS-PN.md` | delete completed task's pointer line |
-| Bug fixed | `BUGS.md` | `OPEN` → `FIXED <date>` |
+| Bug fixed | `BUGS.md` → `BUGS-FIXED.md` | **move** the row to the archive with status `FIXED <date>` (it is not flipped in place — 548 of 918 rows were closed ones, 2/3 of a file read in every session), rename `bugs/BUG-NNN-OPEN.md` → `-FIXED.md`, then `python scripts/remap_status_pointers.py --apply` — moving a row shifts every `STATUS-PN.md` pointer below it |
 | Bug turns out to be a **feature gap**, not a defect | `BUGS.md` + `ROADMAP.md` + `bugs/BUG-NNN-OPEN.md` + `STATUS-P3.md` | status cell → `OPEN (ДОРАБОТКА → <task>)`; add the `ROADMAP.md` task row (bug id in its `bugs` column) and re-run `gen_roadmap.py`; add a `**Тип:**` line under the bug file's status; delete the pointer line from `STATUS-P3.md`. **Do not rename or move the bug file** — CLAUDE.md, STATUS files and the python tooling reference it by path, and the record of observations stays useful where it is |
 | CSS property (P4) | `CSS-SPECS.md` + `CAPABILITIES.md` | ⬜ → ✅ |
 | New dependency | `docs/plan/tech-stack.md` | append row |

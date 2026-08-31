@@ -50,6 +50,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 ROADMAP_MD = ROOT / "ROADMAP.md"
 BUGS_MD = ROOT / "BUGS.md"
+# Закрытые баги вынесены из BUGS.md 2026-08-31 (2/3 объёма файла описывали
+# починенное). Дерево показывает и открытые, и закрытые, поэтому читаем оба;
+# архива может не быть в старом чекауте — тогда просто нет закрытых.
+BUGS_FIXED_MD = ROOT / "BUGS-FIXED.md"
 CSS_SPECS_MD = ROOT / "CSS-SPECS.md"
 HTML_FILES = [
     ROOT / "docs" / "roadmap-B-twotrees.html",
@@ -176,9 +180,24 @@ def parse_roadmap():
     return {"phases": phases}
 
 
+def _bug_table_lines():
+    """Строки обеих таблиц багов — открытых и архива.
+
+    Режем ТОЛЬКО по '\\n': str.splitlines() режет ещё и по одиночному CR, а в
+    описаниях багов сырые CR встречаются (строка BUG-792 была разорвана на
+    четыре, и её описание в дереве обрывалось на полуслове — CLAUDE.md
+    §Known gotchas про Python text mode).
+    """
+    for path in (BUGS_MD, BUGS_FIXED_MD):
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8", newline="").split("\n"):
+            yield line
+
+
 def parse_bugs():
     bugs = {}
-    for line in BUGS_MD.read_text(encoding="utf-8").splitlines():
+    for line in _bug_table_lines():
         m = BUG_ROW.match(line)
         if not m:
             continue
