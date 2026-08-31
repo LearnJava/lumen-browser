@@ -50,8 +50,11 @@ on:
       - '.github/workflows/perf-gate.yml'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  # Исключение для main закодировано в ГРУППЕ, а не в cancel-in-progress:
+  # интерполяция `${{ ... }}` даёт строку, непустая строка истинна, поэтому
+  # прежняя запись отменяла прогоны и на main тоже (ci.yml, измерение 2026-08-31).
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || 'branch' }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
