@@ -3977,11 +3977,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/overlay_partition.rs:319` **fn** `is_spatial_layer_open` — `true` for a command that opens a **spatial** ancestor layer — clip, transform,
 `crates/engine/paint/src/overlay_partition.rs:335` **fn** `is_compositing_layer_open` — `true` for a command that opens a **compositing** ancestor layer — opacity, blend
 `crates/engine/paint/src/overlay_partition.rs:368` **fn** `spatial_layer_close` — The matching close command for a **spatial** ancestor layer open (ADR-016
-`crates/engine/paint/src/renderer.rs:1659` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
-`crates/engine/paint/src/renderer.rs:1667` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
-`crates/engine/paint/src/renderer.rs:1684` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
-`crates/engine/paint/src/renderer.rs:1699` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
-`crates/engine/paint/src/renderer.rs:1712` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
+`crates/engine/paint/src/renderer.rs:73` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
+`crates/engine/paint/src/renderer.rs:81` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
+`crates/engine/paint/src/renderer.rs:98` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
+`crates/engine/paint/src/renderer.rs:113` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
+`crates/engine/paint/src/renderer.rs:126` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
 `crates/engine/paint/src/renderer/construct.rs:11` **fn** `new`
 `crates/engine/paint/src/renderer/construct.rs:216` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
 `crates/engine/paint/src/renderer/construct.rs:1155` **fn** `warm_lazy_pipelines_blocking` — Прогревает ленивые пайплайны синхронно, на вызывающем потоке
