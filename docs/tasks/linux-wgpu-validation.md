@@ -73,8 +73,11 @@ BUG-274 next.
 
 ## Out of scope
 
-`p1-exp-wgpu-only` is a **permanent experimental branch, never merged into
-main** (user decision 2026-07-08). Do not port anything from it in this session.
+`p1-exp-wgpu-only` was an experimental branch that never merged into main (user
+decision 2026-07-08) and was **deleted on 2026-08-31** once its wins had been
+ported by the P1-wgpu-default track. Its journal is archived at
+[`docs/perf/experiment-wgpu-only.md`](../perf/experiment-wgpu-only.md); there is
+nothing left to port from it in this session.
 
 ## Reporting back
 

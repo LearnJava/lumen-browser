@@ -9,7 +9,7 @@ page via CDP, and reports median/p95 frame time (rAF delta) plus process-tree
 CPU% and peak PSS sampled from /proc — the same summary shape bench_scroll.py
 prints for Lumen.
 
-Caveat (as documented in EXPERIMENT.md §13): Chromium composites scroll
+Caveat (as documented in docs/perf/experiment-wgpu-only.md §13): Chromium composites scroll
 off the main thread, so the rAF delta is a *lower bound* on its true per-frame
 cost, not the exact cost. The GPU/CPU-occupancy and memory numbers have no such
 caveat. Numbers are indicative, gate-worthy only alongside the caveat.

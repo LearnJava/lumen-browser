@@ -1,8 +1,10 @@
-//! Warm-frame benchmark harness (p1-exp-wgpu-only, experimental branch).
+//! Warm-frame benchmark harness (ported from the `p1-exp-wgpu-only` polygon, whose
+//! journal is archived at `docs/perf/experiment-wgpu-only.md` — the `EXPERIMENT.md`
+//! section references below point there; the branch itself was deleted 2026-08-31).
 //!
 //! # Why this exists
 //!
-//! Every optimization on this branch was measured with `measure_idle.ps1`, which
+//! Every optimization on that branch was measured with `measure_idle.ps1`, which
 //! samples process CPU over a 10-second *idle* window. Measurement 2026-07-09
 //! (EXPERIMENT.md §12) showed that window contains **four frames** and no
 //! `skip (identical frame)` at all: without input the shell never calls

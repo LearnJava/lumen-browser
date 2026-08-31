@@ -211,8 +211,11 @@ closing note. Doc-sync: CAPABILITIES.md, `subsystems/paint.md`, `docs/decisions/
 
 ## Notes
 
-- `p1-exp-wgpu-only` is read-only source material (`git show origin/p1-exp-wgpu-only:<path>`)
-  — never merge it, never branch from it.
+- ~~`p1-exp-wgpu-only` is read-only source material (`git show origin/p1-exp-wgpu-only:<path>`)
+  — never merge it, never branch from it.~~ **The branch was deleted on 2026-08-31** (user
+  decision), this port having consumed it. Only its journal survives, archived as
+  [`docs/perf/experiment-wgpu-only.md`](../perf/experiment-wgpu-only.md); the `git show`
+  commands elsewhere in this brief no longer resolve.
 - No CI on Linux/macOS in this repo; Phase 0 and any cfg-gated non-Windows code in later
   slices needs manual validation on a real machine (see `docs/tasks/linux-wgpu-validation.md`).
 

@@ -20,9 +20,10 @@
 - **Ветка/worktree (актуально):** `p1-linux-scroll-perf`, worktree
   `.claude/worktrees/linux-scroll-perf`, собран **от main**. Прежний
   `p1-wgpu-cross-platform` / `.claude/worktrees/wgpu-validation` — устарел
-  (см. статус выше). Windows-only `p1-exp-wgpu-only` в `main` не вливается
-  никогда; её `EXPERIMENT.md` — журнал 25 срезов, справочник приёмов, но её
-  PowerShell-харнесс на Linux не работает.
+  (см. статус выше). Windows-only `p1-exp-wgpu-only` **удалена 2026-08-31**; её
+  журнал — 26 срезов, справочник приёмов — заархивирован как
+  [`docs/perf/experiment-wgpu-only.md`](../perf/experiment-wgpu-only.md), но её
+  PowerShell-харнесс в `main` не портировался и на Linux не работает.
 - **Работать из каталога worktree**, коммитить в `p1-linux-scroll-perf`,
   `git push` — только по явной просьбе пользователя.
 - **Железное правило (выведено кровью на exp-ветке):** ни строчки оптимизации
@@ -132,8 +133,9 @@ smooth-scroll'ит колесо — работа на событие не иде
 
 1. Замер ДО: `bench_scroll.py` на 1000000-final + bench-anim-scroll, wgpu, 3 прогона.
 2. Портировать первый приём (bbox-scissor — самый безопасный, пиксели идентичны,
-   kill-switch `LUMEN_NO_BBOX_SCISSOR`). Механику брать из `EXPERIMENT.md` п.16
-   ветки `p1-exp-wgpu-only` (`git show origin/p1-exp-wgpu-only:EXPERIMENT.md`).
+   kill-switch `LUMEN_NO_BBOX_SCISSOR`). Механику брать из п.16 архива
+   [`docs/perf/experiment-wgpu-only.md`](../perf/experiment-wgpu-only.md)
+   (ветки `p1-exp-wgpu-only` больше нет, `git show` по ней не сработает).
 3. Замер ПОСЛЕ тем же скриптом, в тот же заход. Пиксельная A/B через kill-switch.
 4. Зафиксировать в этом файле числа ДО/ПОСЛЕ и в коммите.
 
