@@ -36,13 +36,29 @@ on:
     # would only ever be exercised by a push to main.
     - cron: '0 3 * * *'
 
-# One run per branch. A second push supersedes the first: with branch gating a
-# task branch gets pushed several times, and 20-minute runs would otherwise pile
-# up against the 20-job free-tier limit. `main` is exempt — every commit that
-# lands there keeps its own result.
+# One run per branch: a second push supersedes the first, because a task branch
+# gets pushed several times and 20-minute runs would otherwise pile up against
+# the 20-job free-tier limit. On `main` every commit gets a group of its OWN, so
+# there is never anything to supersede — that was always the intent.
+#
+# THE EXEMPTION USED TO BE WRITTEN AS `cancel-in-progress: ${{ github.ref !=
+# 'refs/heads/main' }}` AND DID NOT WORK. An interpolated expression arrives as a
+# string, and a non-empty string is truthy, so `false` cancelled just as eagerly
+# as `true`. Measured 2026-08-31 over the last 50 CI runs on `main`: 38 cancelled,
+# 6 success, 4 failure — and every cancellation landed on the exact second the
+# next run was created (created 16:24:14 → cancelled 16:27:46, next run created
+# 16:27:44). With five roles merging per commit, a 20-25 min cold run almost never
+# survived to a verdict, which quietly made the project rule «don't wait for CI
+# before merging, watch `main` afterwards» check nothing at all.
+#
+# Encoding the exemption in the GROUP instead of in `cancel-in-progress` does not
+# depend on that string-truthiness quirk at all. The cost is real and deliberate:
+# every commit on `main` now runs its own full CI, so runs queue against the
+# 20-job cap instead of replacing each other. Minutes are free on a public repo,
+# and a per-commit verdict is what makes a red `main` bisectable.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || 'branch' }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
