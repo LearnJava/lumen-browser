@@ -331,9 +331,11 @@ impl Lumen {
     /// layout product synchronously (Step 5 PerformancePaintTiming) and therefore
     /// uses the blocking [`Self::readback_relayout_job`] path instead.
     ///
-    /// ADR-016 M4: tries the incremental path first ([`Self::try_relayout_raf_incremental`])
-    /// before falling back to the full [`Self::relayout`] (single-thread) or
-    /// [`Self::submit_relayout_job`] (engine thread).
+    /// ADR-016 M4: when the engine thread is present (default since ADR-023),
+    /// [`Self::submit_relayout_job`] (full, off-thread) wins and the incremental
+    /// path below is never reached (BUG-935). In the single-thread fallback path,
+    /// tries the incremental layout ([`Self::try_relayout_raf_incremental`])
+    /// before the full [`Self::relayout`].
     pub(crate) fn relayout_raf_dirty(&mut self) {
         if !self.submit_relayout_job() && !self.try_relayout_raf_incremental() {
             self.relayout();
