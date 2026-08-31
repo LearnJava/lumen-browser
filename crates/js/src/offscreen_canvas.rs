@@ -244,7 +244,9 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
     origin: &str,
 ) -> lumen_core::JsResult<()> {
-    use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn5, into_v8_fn7};
+    use crate::v8_compat::{
+        into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn5, into_v8_fn6, into_v8_fn7,
+    };
     use lumen_core::ext::JsRuntime as _;
     use lumen_canvas::CanvasNoiseGenerator;
 
@@ -391,6 +393,105 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
         }),
     )?;
 
+    // ── State stack, transforms, additional path ops (BUG-456 симптом 1) ────
+    // Same shape as `canvas2d.rs`'s element-canvas twins, backed by the same
+    // `Context2D` methods, just resolved via `with_offscreen_canvas` (a
+    // different registry, keyed by `canvas_id` rather than DOM `nid`).
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_save",
+        into_v8_fn1(|canvas_id: u32| {
+            with_offscreen_canvas(canvas_id, |c| c.save());
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_restore",
+        into_v8_fn1(|canvas_id: u32| {
+            with_offscreen_canvas(canvas_id, |c| c.restore());
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_translate",
+        into_v8_fn3(|canvas_id: u32, tx: f64, ty: f64| {
+            with_offscreen_canvas(canvas_id, |c| c.translate(tx as f32, ty as f32));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_rotate",
+        into_v8_fn2(|canvas_id: u32, angle: f64| {
+            with_offscreen_canvas(canvas_id, |c| c.rotate(angle as f32));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_scale",
+        into_v8_fn3(|canvas_id: u32, sx: f64, sy: f64| {
+            with_offscreen_canvas(canvas_id, |c| c.scale(sx as f32, sy as f32));
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_transform",
+        into_v8_fn7(|canvas_id: u32, a: f64, b: f64, c2: f64, d: f64, e: f64, f2: f64| {
+            with_offscreen_canvas(canvas_id, |c| {
+                c.transform(a as f32, b as f32, c2 as f32, d as f32, e as f32, f2 as f32);
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_set_transform",
+        into_v8_fn7(|canvas_id: u32, a: f64, b: f64, c2: f64, d: f64, e: f64, f2: f64| {
+            with_offscreen_canvas(canvas_id, |c| {
+                c.set_transform(a as f32, b as f32, c2 as f32, d as f32, e as f32, f2 as f32);
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_reset_transform",
+        into_v8_fn1(|canvas_id: u32| {
+            with_offscreen_canvas(canvas_id, |c| c.reset_transform());
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_rect",
+        into_v8_fn5(|canvas_id: u32, x: f64, y: f64, w: f64, h: f64| {
+            with_offscreen_canvas(canvas_id, |c| {
+                c.rect(x as f32, y as f32, w as f32, h as f32)
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_bezier_curve_to",
+        into_v8_fn7(|canvas_id: u32, cp1x: f64, cp1y: f64, cp2x: f64, cp2y: f64, x: f64, y: f64| {
+            with_offscreen_canvas(canvas_id, |c| {
+                c.bezier_curve_to(
+                    cp1x as f32, cp1y as f32,
+                    cp2x as f32, cp2y as f32,
+                    x as f32, y as f32,
+                );
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_quadratic_curve_to",
+        into_v8_fn5(|canvas_id: u32, cpx: f64, cpy: f64, x: f64, y: f64| {
+            with_offscreen_canvas(canvas_id, |c| {
+                c.quadratic_curve_to(cpx as f32, cpy as f32, x as f32, y as f32);
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_arc_to",
+        into_v8_fn6(|canvas_id: u32, x1: f64, y1: f64, x2: f64, y2: f64, r: f64| {
+            with_offscreen_canvas(canvas_id, |c| {
+                c.arc_to(x1 as f32, y1 as f32, x2 as f32, y2 as f32, r as f32);
+            });
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_clip",
+        into_v8_fn1(|canvas_id: u32| {
+            with_offscreen_canvas(canvas_id, |c| c.clip());
+        }),
+    )?;
+
     rt.register_native(
         "_lumen_offscreen_canvas2d_get_image_data",
         into_v8_fn1(|canvas_id: u32| -> String {
@@ -512,32 +613,121 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
 
       // Create and cache a 2D context proxy
       const canvasId = this.__canvas_id__;
-      // Хранилище двух цветовых атрибутов: у них ниже пара get/set, поэтому
-      // как поля литерала они жить не могут (аксессор с тем же ключом их
-      // перекрывает). Начальное значение — §4.12.5.1.1.
+      const canvasRef = this;
+      // Хранилище четырёх атрибутов с парой get/set (BUG-456 симптом 2): как
+      // поля литерала они жить не могут (аксессор с тем же ключом их
+      // перекрывает — `lineWidth: 1` ниже был мёртвым кодом, затёртым
+      // следующим за ним `set lineWidth`). Начальные значения — §4.12.5.1.1.
       let _fillStyle = '#000000';
       let _strokeStyle = '#000000';
+      let _lineWidth = 1;
+      let _globalAlpha = 1;
+      // Стек состояний save()/restore() (§4.12.5.1.2) — параллельно нативному,
+      // как у элементного контекста (`web_api_shim_mid.js`): та же ловушка
+      // BUG-455, если копии разойдутся.
+      const stack = [];
       this._2d_context = {
         // Canvas reference
         canvas: this,
-
-        // Drawing state
-        lineWidth: 1,
-        globalAlpha: 1,
 
         // Rectangles
         fillRect: (x, y, w, h) => _lumen_offscreen_canvas2d_fill_rect(canvasId, x, y, w, h),
         clearRect: (x, y, w, h) => _lumen_offscreen_canvas2d_clear_rect(canvasId, x, y, w, h),
         strokeRect: (x, y, w, h) => _lumen_offscreen_canvas2d_stroke_rect(canvasId, x, y, w, h),
 
-        // Paths
+        // Paths (BUG-456 симптом 1: rect/arcTo/bezierCurveTo/quadraticCurveTo/
+        // ellipse/roundRect/clip added next to the pre-existing four).
         beginPath: () => _lumen_offscreen_canvas2d_begin_path(canvasId),
         moveTo: (x, y) => _lumen_offscreen_canvas2d_move_to(canvasId, x, y),
         lineTo: (x, y) => _lumen_offscreen_canvas2d_line_to(canvasId, x, y),
         closePath: () => _lumen_offscreen_canvas2d_close_path(canvasId),
-        arc: (cx, cy, r, sa, ea, ccw) => _lumen_offscreen_canvas2d_arc(canvasId, cx, cy, r, sa, ea, ccw),
+        arc: (cx, cy, r, sa, ea, ccw) =>
+          _lumen_offscreen_canvas2d_arc(canvasId, cx, cy, r, sa, ea, !!ccw),
+        rect: (x, y, w, h) => _lumen_offscreen_canvas2d_rect(canvasId, x, y, w, h),
+        bezierCurveTo: (cp1x, cp1y, cp2x, cp2y, x, y) =>
+          _lumen_offscreen_canvas2d_bezier_curve_to(canvasId, cp1x, cp1y, cp2x, cp2y, x, y),
+        quadraticCurveTo: (cpx, cpy, x, y) =>
+          _lumen_offscreen_canvas2d_quadratic_curve_to(canvasId, cpx, cpy, x, y),
+        arcTo: (x1, y1, x2, y2, r) =>
+          _lumen_offscreen_canvas2d_arc_to(canvasId, x1, y1, x2, y2, r),
+        // No dedicated native on either context — composed from transforms +
+        // arc, same as the element context's `ellipse` (`web_api_shim_mid.js`).
+        ellipse: function(cx, cy, rx, ry, rot, sa, ea, ccw) {
+          _lumen_offscreen_canvas2d_save(canvasId);
+          _lumen_offscreen_canvas2d_translate(canvasId, cx, cy);
+          if (rot) { _lumen_offscreen_canvas2d_rotate(canvasId, rot); }
+          _lumen_offscreen_canvas2d_scale(canvasId, rx, ry);
+          _lumen_offscreen_canvas2d_arc(canvasId, 0, 0, 1, sa, ea, !!ccw);
+          _lumen_offscreen_canvas2d_restore(canvasId);
+        },
+        roundRect: function(x, y, w, h, radii) {
+          _offscreen_round_rect(canvasId, x, y, w, h, radii);
+        },
         fill: () => _lumen_offscreen_canvas2d_fill(canvasId),
         stroke: () => _lumen_offscreen_canvas2d_stroke(canvasId),
+        clip: () => _lumen_offscreen_canvas2d_clip(canvasId),
+
+        // State stack. Pushes/pops the native CTM/path-clip state and the
+        // four JS-mirrored attributes together — the BUG-455 lesson.
+        save: function() {
+          _lumen_offscreen_canvas2d_save(canvasId);
+          stack.push({
+            fillStyle: _fillStyle, strokeStyle: _strokeStyle,
+            lineWidth: _lineWidth, globalAlpha: _globalAlpha,
+          });
+        },
+        restore: function() {
+          _lumen_offscreen_canvas2d_restore(canvasId);
+          var snap = stack.pop();
+          if (snap) {
+            _fillStyle = snap.fillStyle; _strokeStyle = snap.strokeStyle;
+            _lineWidth = snap.lineWidth; _globalAlpha = snap.globalAlpha;
+          }
+        },
+
+        // Transforms
+        translate: (tx, ty) => _lumen_offscreen_canvas2d_translate(canvasId, tx, ty),
+        rotate: (angle) => _lumen_offscreen_canvas2d_rotate(canvasId, angle),
+        scale: (sx, sy) => _lumen_offscreen_canvas2d_scale(canvasId, sx, sy),
+        transform: (a, b, c, d, e, f) =>
+          _lumen_offscreen_canvas2d_transform(canvasId, a, b, c, d, e, f),
+        setTransform: function(a, b, c, d, e, f) {
+          // setTransform() with no arguments resets to identity (§4.12.5.1.6)
+          // — the same NaN trap BUG-449 fixed on the element context.
+          if (arguments.length === 0) {
+            _lumen_offscreen_canvas2d_set_transform(canvasId, 1, 0, 0, 1, 0, 0);
+            return;
+          }
+          if (arguments.length === 1) {
+            var m = a;
+            if (m === null || typeof m !== 'object') {
+              throw new TypeError('setTransform: argument is not a DOMMatrix2DInit');
+            }
+            _lumen_offscreen_canvas2d_set_transform(canvasId,
+              m.a === undefined ? 1 : +m.a, m.b === undefined ? 0 : +m.b,
+              m.c === undefined ? 0 : +m.c, m.d === undefined ? 1 : +m.d,
+              m.e === undefined ? 0 : +m.e, m.f === undefined ? 0 : +m.f);
+            return;
+          }
+          _lumen_offscreen_canvas2d_set_transform(canvasId, a, b, c, d, e, f);
+        },
+        resetTransform: () => _lumen_offscreen_canvas2d_reset_transform(canvasId),
+
+        // §4.12.5.1.2 reset: bitmap goes transparent black, path/transform/
+        // clip/state-stack clear, and the four tracked attributes return to
+        // their initial values.
+        reset: function() {
+          stack.length = 0;
+          _lumen_offscreen_canvas2d_reset_transform(canvasId);
+          _lumen_offscreen_canvas2d_clear_rect(canvasId, 0, 0, canvasRef.width, canvasRef.height);
+          _lumen_offscreen_canvas2d_begin_path(canvasId);
+          _fillStyle = _lumen_offscreen_canvas2d_set_fill_style(canvasId, '#000000') || '#000000';
+          _strokeStyle = _lumen_offscreen_canvas2d_set_stroke_style(canvasId, '#000000') || '#000000';
+          _lineWidth = 1;
+          _lumen_offscreen_canvas2d_set_line_width(canvasId, 1);
+          _globalAlpha = 1;
+          _lumen_offscreen_canvas2d_set_global_alpha(canvasId, 1);
+        },
 
         // Style setters. Натив возвращает каноническую сериализацию принятого
         // цвета либо null на невалидной строке — тогда атрибут НЕ меняется
@@ -555,12 +745,26 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
           if (ser !== null && ser !== undefined) { _strokeStyle = ser; }
         },
         get strokeStyle() { return _strokeStyle; },
+        // BUG-456 симптом 2: lineWidth/globalAlpha had setters but no
+        // getters at all (unlike fillStyle/strokeStyle above, which already
+        // had a working pair) — reading either back always answered
+        // `undefined` even right after a successful write.
         set lineWidth(w) {
-          _lumen_offscreen_canvas2d_set_line_width(canvasId, Number(w));
+          var n = Number(w);
+          if (isFinite(n) && n > 0) {
+            _lineWidth = n;
+            _lumen_offscreen_canvas2d_set_line_width(canvasId, n);
+          }
         },
+        get lineWidth() { return _lineWidth; },
         set globalAlpha(a) {
-          _lumen_offscreen_canvas2d_set_global_alpha(canvasId, Number(a));
+          var n = Number(a);
+          if (isFinite(n) && n >= 0 && n <= 1) {
+            _globalAlpha = n;
+            _lumen_offscreen_canvas2d_set_global_alpha(canvasId, n);
+          }
         },
+        get globalAlpha() { return _globalAlpha; },
 
         // Image data (BUG-456 симптом 3 / BUG-448 twin): used to take no
         // parameters at all and hand the page the raw "{w},{h},{hex}" wire
@@ -619,6 +823,82 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
   function _parseWHHex(raw) {
     var c1 = raw.indexOf(','), c2 = raw.indexOf(',', c1 + 1);
     return { w: parseInt(raw.substring(0, c1), 10), h: parseInt(raw.substring(c1 + 1, c2), 10), hex: raw.substring(c2 + 1) };
+  }
+
+  // roundRect (§4.12.5.1.7) corner radius normalization: a number or a
+  // `{x, y}` (DOMPointInit), ported verbatim from the element context's
+  // `_lumen_corner_radius` (`web_api_shim_mid.js`).
+  function _offscreen_corner_radius(v) {
+    if (v !== null && typeof v === 'object') {
+      var rx = v.x === undefined ? 0 : Number(v.x);
+      var ry = v.y === undefined ? 0 : Number(v.y);
+      if (!isFinite(rx) || !isFinite(ry)) {
+        throw new TypeError('roundRect: a radius is not a finite number');
+      }
+      if (rx < 0 || ry < 0) {
+        throw new DOMException('roundRect: a radius is negative', 'IndexSizeError');
+      }
+      return [rx, ry];
+    }
+    var r = Number(v);
+    if (!isFinite(r)) {
+      throw new TypeError('roundRect: a radius is not a finite number');
+    }
+    if (r < 0) {
+      throw new DOMException('roundRect: a radius is negative', 'IndexSizeError');
+    }
+    return [r, r];
+  }
+
+  // roundRect (§4.12.5.1.7): each corner is a quarter ellipse, scaled down
+  // together when they would overlap — same algorithm as the element
+  // context's `roundRect` (`web_api_shim_mid.js`), ported to the offscreen
+  // native names since the two contexts do not share a JS realm (a worker
+  // has no page DOM/`CanvasRenderingContext2D` to reuse).
+  function _offscreen_round_rect(canvasId, x, y, w, h, radii) {
+    var X = +x, Y = +y, W = +w, H = +h;
+    if (!isFinite(X) || !isFinite(Y) || !isFinite(W) || !isFinite(H)) { return; }
+    if (radii === undefined) { radii = 0; }
+    var list = (radii !== null && typeof radii === 'object' && typeof radii.length === 'number')
+        ? Array.prototype.slice.call(radii) : [radii];
+    if (list.length < 1 || list.length > 4) {
+      throw new RangeError('roundRect: radii must hold between one and four radii');
+    }
+    var r = [];
+    for (var i = 0; i < list.length; i++) { r.push(_offscreen_corner_radius(list[i])); }
+    var ul, ur, lr, ll;
+    if (r.length === 1) { ul = ur = lr = ll = r[0]; }
+    else if (r.length === 2) { ul = lr = r[0]; ur = ll = r[1]; }
+    else if (r.length === 3) { ul = r[0]; ur = ll = r[1]; lr = r[2]; }
+    else { ul = r[0]; ur = r[1]; lr = r[2]; ll = r[3]; }
+    if (W < 0) { X += W; W = -W; var sw1 = ul; ul = ur; ur = sw1; var sw2 = ll; ll = lr; lr = sw2; }
+    if (H < 0) { Y += H; H = -H; var sh1 = ul; ul = ll; ll = sh1; var sh2 = ur; ur = lr; lr = sh2; }
+    var scale = Math.min(
+        H / (ul[1] + ll[1]), W / (ul[0] + ur[0]),
+        H / (ur[1] + lr[1]), W / (ll[0] + lr[0]));
+    if (isFinite(scale) && scale < 1) {
+      ul = [ul[0] * scale, ul[1] * scale]; ur = [ur[0] * scale, ur[1] * scale];
+      lr = [lr[0] * scale, lr[1] * scale]; ll = [ll[0] * scale, ll[1] * scale];
+    }
+    function corner(cx, cy, rx, ry, start, end) {
+      if (rx <= 0 || ry <= 0) { _lumen_offscreen_canvas2d_line_to(canvasId, cx, cy); return; }
+      _lumen_offscreen_canvas2d_save(canvasId);
+      _lumen_offscreen_canvas2d_translate(canvasId, cx, cy);
+      _lumen_offscreen_canvas2d_scale(canvasId, rx, ry);
+      _lumen_offscreen_canvas2d_arc(canvasId, 0, 0, 1, start, end, false);
+      _lumen_offscreen_canvas2d_restore(canvasId);
+    }
+    var HALF = Math.PI / 2;
+    _lumen_offscreen_canvas2d_move_to(canvasId, X + ul[0], Y);
+    _lumen_offscreen_canvas2d_line_to(canvasId, X + W - ur[0], Y);
+    corner(X + W - ur[0], Y + ur[1], ur[0], ur[1], -HALF, 0);
+    _lumen_offscreen_canvas2d_line_to(canvasId, X + W, Y + H - lr[1]);
+    corner(X + W - lr[0], Y + H - lr[1], lr[0], lr[1], 0, HALF);
+    _lumen_offscreen_canvas2d_line_to(canvasId, X + ll[0], Y + H);
+    corner(X + ll[0], Y + H - ll[1], ll[0], ll[1], HALF, Math.PI);
+    _lumen_offscreen_canvas2d_line_to(canvasId, X, Y + ul[1]);
+    corner(X + ul[0], Y + ul[1], ul[0], ul[1], Math.PI, Math.PI + HALF);
+    _lumen_offscreen_canvas2d_close_path(canvasId);
   }
 
   // WebIDL `[EnforceRange] long` coercion for `getImageData`'s four
@@ -1162,6 +1442,105 @@ mod tests_v8 {
                 try { ctx.getImageData(NaN, 0, 1, 1); }
                 catch (e) { threw = e instanceof TypeError; }
                 threw
+            "#,
+        );
+        assert!(ok);
+    }
+
+    // ── BUG-456 симптом 2: lineWidth/globalAlpha getters ────────────────────
+    #[test]
+    fn js_offscreen_line_width_and_global_alpha_round_trip() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var ctx = new OffscreenCanvas(10, 10).getContext('2d');
+                ctx.lineWidth = 4;
+                ctx.globalAlpha = 0.5;
+                ctx.lineWidth === 4 && ctx.globalAlpha === 0.5
+            "#,
+        );
+        assert!(ok);
+    }
+
+    // ── BUG-456 симптом 1: state stack, transforms, additional path ops ────
+    #[test]
+    fn js_offscreen_save_restore_round_trips_tracked_attributes() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var ctx = new OffscreenCanvas(10, 10).getContext('2d');
+                ctx.fillStyle = '#00ff00';
+                ctx.lineWidth = 3;
+                ctx.save();
+                ctx.fillStyle = '#ff0000';
+                ctx.lineWidth = 9;
+                ctx.restore();
+                ctx.fillStyle === '#00ff00' && ctx.lineWidth === 3
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_context_has_transform_and_path_methods() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var ctx = new OffscreenCanvas(10, 10).getContext('2d');
+                ['translate', 'rotate', 'scale', 'transform', 'setTransform',
+                 'resetTransform', 'rect', 'bezierCurveTo', 'quadraticCurveTo',
+                 'arcTo', 'ellipse', 'roundRect', 'clip', 'save', 'restore', 'reset']
+                    .every(function(name) { return typeof ctx[name] === 'function'; })
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_transform_ops_do_not_throw() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var ctx = new OffscreenCanvas(20, 20).getContext('2d');
+                ctx.save();
+                ctx.translate(2, 2);
+                ctx.rotate(0.1);
+                ctx.scale(1.5, 1.5);
+                ctx.transform(1, 0, 0, 1, 1, 1);
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                ctx.setTransform();
+                ctx.resetTransform();
+                ctx.restore();
+                ctx.beginPath();
+                ctx.rect(0, 0, 5, 5);
+                ctx.bezierCurveTo(1, 1, 2, 2, 3, 3);
+                ctx.quadraticCurveTo(1, 1, 2, 2);
+                ctx.arcTo(0, 0, 5, 0, 2);
+                ctx.ellipse(5, 5, 3, 2, 0, 0, Math.PI * 2);
+                ctx.roundRect(0, 0, 10, 10, 2);
+                ctx.clip();
+                true
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_reset_clears_fill_style_and_transform() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var ctx = new OffscreenCanvas(10, 10).getContext('2d');
+                ctx.fillStyle = '#00ff00';
+                ctx.lineWidth = 7;
+                ctx.translate(5, 5);
+                ctx.reset();
+                ctx.fillStyle === '#000000' && ctx.lineWidth === 1
             "#,
         );
         assert!(ok);
