@@ -828,7 +828,7 @@ fn overlay_cache_matches_full_overlay_redraw() {
         .expect("headless renderer (тест)");
 
     // Кадр A: кэша ещё нет — `overlay_cache_step` обязан отказаться.
-    let prefix_a = r.overlay_cache_step(&overlay_a).expect("шаг A");
+    let prefix_a = r.overlay_cache_step(&overlay_a, None).expect("шаг A");
     assert!(prefix_a.is_none(), "кадр без предыдущего не мог построить кэш");
     assert!(r.overlay_cache.is_none(), "кэш не мог возникнуть на кадре A");
     let img_a = r
@@ -839,7 +839,7 @@ fn overlay_cache_matches_full_overlay_redraw() {
     // Кадр B: индекс 0 сменился — MISS, разрез сдвигается балансом с 1
     // (первое различие) до 4 (мимо клипа), кэш строится и уже
     // используется этим же кадром.
-    let prefix_b = r.overlay_cache_step(&overlay_b).expect("шаг B");
+    let prefix_b = r.overlay_cache_step(&overlay_b, None).expect("шаг B");
     let prefix_b = prefix_b.expect("кадр B обязан был построить и применить кэш");
     assert_eq!(prefix_b, 1, "разрез B — сразу после нестабильной команды, клип не тронут");
     assert!(r.overlay_cache.is_some(), "кэш обязан существовать после кадра B");
@@ -861,7 +861,7 @@ fn overlay_cache_matches_full_overlay_redraw() {
     // счётчиком (`TEXTURES_CREATED`, уже используется движком для
     // ровно такого гейта в других тестах этого файла).
     let created_before_c = load_counter(&TEXTURES_CREATED);
-    let prefix_c = r.overlay_cache_step(&overlay_b).expect("шаг C");
+    let prefix_c = r.overlay_cache_step(&overlay_b, None).expect("шаг C");
     let prefix_c = prefix_c.expect("HIT обязан вернуть длину живого префикса");
     assert_eq!(prefix_c, prefix_b, "HIT обязан вернуть тот же разрез, что MISS");
     assert_eq!(
@@ -881,7 +881,7 @@ fn overlay_cache_matches_full_overlay_redraw() {
     // Кадр D: сменилась команда ВНУТРИ кэшированного хвоста — кэш
     // обязан пересобраться (не показать устаревший цвет из текстуры).
     let created_before_d = load_counter(&TEXTURES_CREATED);
-    let prefix_d = r.overlay_cache_step(&overlay_d).expect("шаг D");
+    let prefix_d = r.overlay_cache_step(&overlay_d, None).expect("шаг D");
     let prefix_d = prefix_d.expect("хвост изменился, но разрез всё ещё возможен");
     assert_eq!(
         prefix_d, 4,

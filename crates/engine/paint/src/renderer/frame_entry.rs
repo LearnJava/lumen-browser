@@ -152,6 +152,13 @@ impl Renderer {
         // кадре — единственная статья, которой различаются плечи `frame-hash`,
         // поэтому она печатается рядом с его временем.
         let mut fold_reused = false;
+        // BUG-405 срез 47: overlay-дайджест ([`crate::display_list::fold_overlay`])
+        // считается здесь ОДИН раз и переиспользуется ниже в `compose_page` →
+        // `overlay_cache_step`, которая раньше пересчитывала тот же дайджест
+        // заново (статья `послекэша`, срез 44). `None` на плече `dual_hash_disabled()`
+        // — та ветка сознательно воспроизводит поведение до среза 35 (два
+        // раздельных обхода) и не должна получать переиспользуемый дайджест.
+        let mut overlay_digests: Option<Vec<u64>> = None;
         let (base_hash, band_key_base) = if dual_hash_disabled() {
             // Плечо A/B: два раздельных обхода, как до среза 35.
             (
@@ -170,15 +177,18 @@ impl Renderer {
             // слеп ни к одному из них.
             let reuse = self.content_fold_reuse(content, skip);
             fold_reused = reuse.is_some();
-            let (hashes, folds) = crate::display_list::hash_display_list_dual_memo(
-                content,
-                overlay,
-                skip,
-                (scroll_x, scroll_y),
-                (sw0, sh0),
-                band_dims,
-                reuse,
-            );
+            let digests = crate::display_list::fold_overlay(overlay);
+            let (hashes, folds) =
+                crate::display_list::hash_display_list_dual_memo_with_overlay_digests(
+                    content,
+                    &digests,
+                    skip,
+                    (scroll_x, scroll_y),
+                    (sw0, sh0),
+                    band_dims,
+                    reuse,
+                );
+            overlay_digests = Some(digests);
             if fold_reused {
                 DL_FOLD_REUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
@@ -231,7 +241,15 @@ impl Renderer {
         // собирается из персистентной полосы + overlay, минуя перерисовку
         // контента. `None`/`false` — путь неприменим, рисуем монолитом.
         if let Some(prep) = prep
-            && self.compose_page(content, overlay, scroll_y, &prep, band_key, &mut marks)?
+            && self.compose_page(
+                content,
+                overlay,
+                overlay_digests.as_deref(),
+                scroll_y,
+                &prep,
+                band_key,
+                &mut marks,
+            )?
         {
             self.last_frame_hash = Some(frame_hash);
             flush_compose_marks(&marks);

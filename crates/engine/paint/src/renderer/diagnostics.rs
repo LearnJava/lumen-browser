@@ -937,6 +937,23 @@ pub(crate) fn overlay_cache_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var("LUMEN_NO_OVERLAY_CACHE").is_ok_and(|v| v != "0"))
 }
 
+/// `LUMEN_NO_OVERLAY_DIGEST_REUSE=1` — не переиспользовать overlay-дайджест
+/// кадрового хэша в `overlay_cache_step`, пересчитывать его там заново, как
+/// до среза 47 (BUG-405, пункт 83/84 остатка).
+///
+/// Плечо A/B и рычаг отката: `render_with_anim` считает
+/// [`crate::display_list::fold_overlay`] один раз и передаёт результат в оба
+/// потребителя (кадровый хэш и `overlay_cache_step`) — этот рычаг заставляет
+/// `overlay_cache_step` получить `None` и обойти overlay `hash_one_command`-ом
+/// САМ, второй раз за кадр, воспроизводя цену до среза. Работа плеч
+/// различается ровно на этот второй обход; счётчик-гейт — статья `послекэша`
+/// (`POST_CACHE_NANOS`, срез 44), которая покрывает именно этот вызов.
+pub(crate) fn overlay_digest_reuse_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_OVERLAY_DIGEST_REUSE").is_ok_and(|v| v != "0"))
+}
+
 /// Наименьший индекс `j ≥ from`, при котором `overlay[..j]` сбалансирован по
 /// push/pop (кумулятивная глубина возвращается в ноль) — единственно
 /// безопасная точка разреза «живой префикс / кэшируемый хвост»
