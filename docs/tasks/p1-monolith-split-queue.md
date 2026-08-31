@@ -668,7 +668,7 @@ CLAUDE.md).
 | PR-2 | `paint/backends/femtovg_backend.rs` (7 955) | по командам: path/text/image/blend |
 | NW-0 | `network/lib.rs` (9 799) | HTTP/1.1-ядро → `http1/{request,response,chunked}.rs`; в lib.rs оставить сборку transport |
 | CP-1 | `css-parser/parser.rs` (9 192) | тестовый модуль (с ~5098) → `tests/`; затем `parser/{selectors,at_rules,declarations}` |
-| DM-1 | `dom/lib.rs` (6 934) | формы → `forms.rs`, selection/range → `selection.rs`, IME → `ime.rs`, FontFaceSet → `font_faces.rs`, PerformanceTimeline → `performance.rs` (образец — уже вынесенные `vtt.rs`, `contenteditable.rs`) |
+| DM-1 ✅ DONE 2026-08-31 | `dom/lib.rs` (7 145 на срезе) | **ЗАКРЫТ** (`p1-split-dm1`, один срез): пять модулей вынесены целиком по `split_census.py` — `forms.rs` (686), `selection.rs` (419), `ime.rs` (362, включая вырезанный из `impl Document` кусок 1747…1825), `font_faces.rs` (117, включая `Document::fonts`/`fonts_mut`, 1827…1837 — банер "IME" в оригинале ошибочно накрывал и их), `performance.rs` (258, включая `Document`-методы 1839…1906). `mod tests` (3652 строки) не тронут — остаётся в `lib.rs`, ссылки `super::X` резолвятся через `pub use`/`use` реэкспорты в корне. `lib.rs` 7145 → 5341. Подробности в строке `SPLIT-DM1` [ROADMAP.md](../../ROADMAP.md) |
 
 ---
 
