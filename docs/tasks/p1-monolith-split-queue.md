@@ -595,12 +595,76 @@ use-шапка + `render_impl` (+ возможно render-точки входа)
 (правило §2.5: `crates/engine/paint/tests/snapshots/*.snap` — второй набор
 эталонов рядом с CPU PNG, см. BUG-816 в CLAUDE.md).
 
+### Группа DL — `crates/engine/paint/src/display_list.rs` (19 698 строк)
+
+Перепись SPLIT-PR1 закрыта 2026-08-31 (`python scripts/split_census.py
+crates/engine/paint/src/display_list.rs`): 214 top-level item'ов, лексер сходится
+(итоговая глубина 0). Имя группы — `DL` (не `PR`: тот же конфликт, что у RN —
+`PR-1`/`PR-2` уже различают файлы второго эшелона, не батчи одного; `PR-2`
+остаётся за `femtovg_backend.rs` ниже).
+
+**Оригинальная постановка ROADMAP («commands, builder, serialize, hit_test,
+cache») не подтвердилась переписью.** `hit_test` в файле не встречается вовсе —
+хит-тестинг уже вынесен в отдельный `crates/engine/paint/src/hit_test.rs`
+(проверено `grep -rln "fn hit_test"` по крейту), тот же паттерн, что у RN, где
+предварительный план тоже писался до переписи и разошёлся с содержимым.
+
+**Карта файла** (214 item'ов): use-шапка (21…45, 25) → типы примитивов (46…336,
+291 — `FilterMode`/`BlendMode`/`MaskMode`/`CornerRadii`/`ResolvedClipShape`) →
+`enum DisplayCommand`+`impl`+`type DisplayList` (337…1106, 770 — центральный тип,
+читают все emit-функции файла) → provenance/geometry-хелперы (1107…1551, 445) →
+хэши/diff/fingerprint (1552…2693, 1142 — `hash_*`/`FrameFingerprint`/
+`diff_display_lists`) → serialize+builder+print-конвейер (2694…3821, 1128) →
+text emphasis/frags/inline-run (3822…4334, 513) → box-layer-ops+bucket-fill
+(4335…4827, 493) → inline-frag/shadows/bg-геометрия (4828…5292, 465) →
+background/gradient/mask-эмиссия (5293…5827, 535) → box-shadow-эмиссия
+(5828…6035, 208) → scrollbar-эмиссия (6036…6277, 242) → outline/resize-grip/
+column-rules/visibility (6278…6561, 284) → form-controls-эмиссия (6562…7273,
+712) → `emit_box_self`+3D-глубина+`walk` (7274…8567, 1294 — центральный
+обходчик коробки, самый рискованный батч группы) → SVG+text-decoration+
+`walk_with_anim` (8568…9417, 850) → table-painting (9418…9700, 283) →
+`mod tests` (9701…19292, 9592 — плоский, 62 баннерных секции, `--inner` их
+видит) → `fn emit_text_with_highlights` (19293…19330, 38 — **код ПОСЛЕ
+тестового модуля**, форма SH-4/BT-16/RN-1 «хвост за тестами») →
+`mod highlight_tests` (19331…19699, 369).
+
+**Батч-план** (DL-1…DL-19, порядок хвост→голова — приём SH/ST/JS/BT/RN, вырезка
+не сдвигает ещё не взятые анкеры выше по файлу). Анкеры пересчитывать в начале
+каждого батча — здесь тоже дрейфуют.
+
+| ID | Анкер (строки display_list.rs) | Регион | Цель |
+|---|---|---:|---|
+| DL-1 | `fn emit_text_with_highlights` (19293) … конец файла | 407 | `display_list/text_highlight.rs` (38, продакшен) + `display_list/tests/highlight.rs` (369) — единственный код после `mod tests`, форма SH-4/RN-1 |
+| DL-2 | хвост `mod tests`: image-set()/backdrop-filter-hash/структурный хэш команд/table rendering Phase1/SVG text/FilterMode conversion/overflow:clip/progress/meter/font-stretch (17305…19292) | 1 988 | `display_list/tests/svg_table_and_hash.rs` |
+| DL-3 | static/animated split (EXPERIMENT)/text-emphasis/clip-path/column-rules/sticky/list-marker/bg-blend/BoxModelOverlay/MaskMode push-pop/ScrollLayer push-pop/DrawScrollbar/PageBreak-print/strip-bg-graphics/print margin-box/DrawCrossFade (15338…17304) | 1 967 | `display_list/tests/anim_and_chrome.rs` |
+| DL-4 | ProvenanceIndex (DEVX-7)/outline/text-shadow/box-shadow/backdrop-filter/bg-clip/visibility:hidden/opacity:0/transform-pipeline/backface-visibility/3D depth sorting/build_display_list_with_anim (13680…15337) | 1 658 | `display_list/tests/shadows_and_transforms.rs` |
+| DL-5 | iframe/audio/bg-image url()/gradient bg (BUG-087)/bg-origin/mask-origin/mask-composite/fit_image/object-fit (BUG-181)/build_display_list_ordered/patch_scroll_layer/layer-ops эмиссия (11637…13679) | 2 043 | `display_list/tests/background_and_layers.rs` |
+| DL-6 | голова `mod tests`: cull_rect (ADR-016)/writing-mode vertical/bg-repeat:round/canvas bitmap (BUG-099)/line-wrapping/inline-flow/text-decoration/border/img/loading=lazy/video (9706…11636) | 1 931 | `display_list/tests/text_and_images.rs`; после DL-2…DL-6 обёртка `mod tests { … }` (9701…9705, 19292) пуста — снять `#[cfg(test)] mod tests;` тем же срезом, что и DL-6 |
+| DL-7 | table painting: `enum BorderPrecedence` (9418) … до конца `emit_table_cell_content` | 283 | `display_list/table.rs` |
+| DL-8 | SVG+text-decoration+`walk_with_anim`: `fn apply_opacity_to_color` (8568) … до конца `walk_with_anim` | 850 | `display_list/svg_text_decoration.rs` |
+| DL-9 | `emit_box_self`+3D-глубина+`walk`: `fn emit_box_self` (7274) … до конца `walk` | 1 294 | `display_list/walk.rs` — центральный обходчик, риск группы (аналог RN-6's `render_impl`/BT-10's `lay_out_inner`) |
+| DL-10 | form controls: `const ACCENT_DEFAULT` (6562) … до `fn box_generates_content` | 712 | `display_list/form_controls.rs` |
+| DL-11 | scrollbar + outline/resize-grip/column-rules/visibility: `const SCROLLBAR_WIDTH` (6036) … до `fn is_opacity_subtree_painted` | 526 | `display_list/scrollbars.rs` (242) + `display_list/outline_misc.rs` (284) |
+| DL-12 | background/gradient/mask-эмиссия + box-shadow: `fn gradient_tile_rects` (5293) … до конца `emit_inset_box_shadows` | 743 | `display_list/background_mask.rs` (535) + `display_list/box_shadow.rs` (208) |
+| DL-13 | box-layer-ops/bucket-fill + inline-frag/shadows/bg-геометрия: `struct BoxLayerOps` (4335) … до `fn select_image_set_url` | 958 | `display_list/box_layer.rs` (493) + `display_list/inline_frag.rs` (465) |
+| DL-14 | text emphasis/frags/inline-run: `fn emphasis_mark_str` (3822) … до `fn first_line_content_rect` | 513 | `display_list/text_run.rs` |
+| DL-15 | serialize + builder-семейство + print-конвейер: `fn serialize_display_list` (2694) … до `fn clip_path_to_shape` | 1 128 | `display_list/serialize.rs` (453 — `serialize_display_list`+name-mapping) + `display_list/builder.rs` (366 — `build_display_list*`-семейство+`SplitTracker`+`ordered_with_anim_internal`) + `display_list/print.rs` (309 — `build_print_display_list`+margin-box+page-breaks+bucket/span) |
+| DL-16 | хэши/diff/fingerprint: `struct HashFmt` (1552) … до `fn union_all_rects` | 1 142 | `display_list/fingerprint.rs` |
+| DL-17 | provenance/geometry-хелперы: `struct ProvenanceIndex` (1107) … до `fn contains_backdrop_filter` | 445 | `display_list/geometry.rs` |
+| DL-18 | `enum DisplayCommand`+`impl`+`type DisplayList` (337…1106) | 770 | `display_list/commands.rs` — центральный тип, часть публичного API крейта (`pub use`), переносить без переименования (ADR-008 hibernation-snapshots — `DisplayCommand` под `derive(Serialize, Deserialize)`) |
+| DL-19 | типы примитивов: `enum FilterMode` (46) … до конца `impl ResolvedClipShape` | 291 | `display_list/paint_types.rs`; use-шапка (21…45) остаётся в `display_list.rs`-хабе |
+
+Обязательные проверки на каждом батче — как у RN: счётчик `#[test]` крейта
+до/после, `cargo clippy -p lumen-paint --all-targets --features backend-wgpu
+-- -D warnings`, снапшот-прогон (правило §2.5: `crates/engine/paint/tests/
+snapshots/*.snap` — второй набор эталонов рядом с CPU PNG, см. BUG-816 в
+CLAUDE.md).
+
 ### Группы LB/NW/CP/DM — второй эшелон (не переписаны)
 
 | ID | Файл | Первый шаг |
 |---|---|---|
 | LB-0 | `layout/lib.rs` (19 155) | перепись → нарезка. Группы под этот файл в исходном плане не было — пробел, замеченный при назначении дорожки P1 2026-08-26, хотя файл шестой по величине в переписи |
-| PR-1 | `paint/display_list.rs` (19 698) | перепись → `{commands, builder, serialize, hit_test, cache}` |
 | PR-2 | `paint/backends/femtovg_backend.rs` (7 955) | по командам: path/text/image/blend |
 | NW-0 | `network/lib.rs` (9 799) | HTTP/1.1-ядро → `http1/{request,response,chunked}.rs`; в lib.rs оставить сборку transport |
 | CP-1 | `css-parser/parser.rs` (9 192) | тестовый модуль (с ~5098) → `tests/`; затем `parser/{selectors,at_rules,declarations}` |
