@@ -1360,3 +1360,104 @@ fn bug405_slice50_chrome_overlay_cache_hit_matches_fresh_build_and_key_changes_m
     assert_eq!(framed_disabled, framed0, "disabled arm must still build the correct bytes");
     assert!(cache_disabled.is_none(), "disabled arm must not remember a cache either");
 }
+
+// -- BUG-405 срез 51: re-measure the net win at strips_used=4 --
+
+/// Срез 50's "Остаток" promised a re-measurement on a multi-band layout
+/// (sidebar + narrow window, all four overlay strips active) вЂ” the
+/// `chrome_mix` multiplier its `bench-text-scroll.html` stand never
+/// exercised (window maximized there в†’ only the top strip is
+/// non-degenerate, `strips_used=[1]`).
+///
+/// A live-window census for that layout turns out to be unreachable through
+/// the existing MCP automation surface: `AutomationCommand::Click` resolves
+/// its `Target` (`Point`/`NodeId`/`Selector`, `crates/shell/src/lumen/
+/// automation.rs::resolve_automation_target`) purely against
+/// `self.layout_box`/`self.layout_source` вЂ” the PAGE document вЂ” and then
+/// calls `Lumen::handle_click_at` directly. That is a different path from a
+/// real winit `MouseInput` event, which checks `self.point_over_chrome`
+/// FIRST and dispatches to `chrome_hit_test`/`dispatch_chrome_action`
+/// before ever reaching page hit-testing
+/// (`crates/shell/src/app/window_event/mouse_input.rs`). No chrome control
+/// вЂ” the vertical-tabs toggle (`Ctrl+B`, no chrome UI equivalent either),
+/// `data-action="open-web-sidebar"`, `data-action="open-ai-sidebar"` вЂ” is
+/// reachable from a census script driving the live window over MCP, and
+/// none of these toggles persist across a fresh launch to be pre-seeded via
+/// config. So this slice measures the same pure function directly instead
+/// вЂ” no live window, GPU or MCP needed at all, same reasoning as срез 49's
+/// "a whole `Lumen` for one diagnostic is disproportionate".
+///
+/// Host/window numbers are copied from `bug405_slice50_...`'s correctness
+/// fixture, which already happens to leave a margin on all four sides
+/// (`strips_used == 4`, asserted below) вЂ” that test just never timed
+/// anything.
+///
+/// `#[ignore]`d like срез 50's sibling gates вЂ” run explicitly:
+/// `cargo test -p lumen-shell --profile dev-release bug405_slice51 -- --ignored --nocapture`.
+#[test]
+#[ignore = "manual perf gate (BUG-405 срез 51) вЂ” doc comment has the run command"]
+fn bug405_slice51_chrome_overlay_cache_net_win_at_four_active_strips() {
+    // ~130 commands в€’ `build: chrome` census (срез 50) logged `cmds=130` at
+    // strips_used=1 on the real chrome document, so this fixture's `chrome_dl`
+    // matches that order of magnitude instead of the single-`FillRect` toy
+    // срез 50's correctness test used (fine for byte-equality, too small for
+    // a stable timing signal here).
+    let chrome_dl: Vec<lumen_paint::DisplayCommand> = (0..130)
+        .map(|i| lumen_paint::DisplayCommand::FillRect {
+            rect: Rect::new(i as f32, 0.0, 40.0, 20.0),
+            color: lumen_layout::Color { r: 10, g: 20, b: 30, a: 255 },
+        })
+        .collect();
+    let host = Rect::new(200.0, 40.0, 800.0, 700.0);
+    let (win_w, win_h) = (1024.0_f32, 768.0_f32);
+    let caret = Some((
+        Rect::new(300.0, 10.0, 2.0, 20.0),
+        lumen_layout::Color { r: 0, g: 120, b: 220, a: 220 },
+    ));
+
+    let (_, strips_used, cache) =
+        chrome_overlay_segment(&chrome_dl, host, win_w, win_h, caret, 1, true, None);
+    assert_eq!(
+        strips_used, 4,
+        "fixture must exercise all four strips вЂ” the chrome_mix multiplier this slice measures",
+    );
+    let cache = cache.expect("cold build must produce a cache to remember");
+
+    const WARMUP: usize = 20;
+    const SAMPLES: usize = 500;
+
+    let mut hit_stats = lumen_paint::FrameStats::new();
+    let mut rebuild_stats = lumen_paint::FrameStats::new();
+    // Interleaved HIT-then-rebuild each round (docs/perf-method.md) вЂ” both
+    // arms see the same cache/allocator warmth instead of one racing first.
+    for i in 0..WARMUP + SAMPLES {
+        let t0 = std::time::Instant::now();
+        let (framed, _, new_cache) =
+            chrome_overlay_segment(&chrome_dl, host, win_w, win_h, caret, 1, true, Some(&cache));
+        let hit_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        assert!(new_cache.is_none(), "must stay a HIT for the whole loop");
+        std::hint::black_box(&framed);
+
+        let t1 = std::time::Instant::now();
+        let (framed2, strips2, _) =
+            chrome_overlay_segment(&chrome_dl, host, win_w, win_h, caret, 1, false, None);
+        let rebuild_ms = t1.elapsed().as_secs_f32() * 1000.0;
+        assert_eq!(strips2, 4);
+        std::hint::black_box(&framed2);
+
+        if i >= WARMUP {
+            hit_stats.record(hit_ms);
+            rebuild_stats.record(rebuild_ms);
+        }
+    }
+
+    let hit_summary = hit_stats.summary().expect("samples collected");
+    let rebuild_summary = rebuild_stats.summary().expect("samples collected");
+    eprintln!("{}", hit_summary.display_with("BUG405_S51_HIT_4STRIP"));
+    eprintln!("{}", rebuild_summary.display_with("BUG405_S51_REBUILD_4STRIP"));
+    let saved = (1.0 - hit_summary.min_ms / rebuild_summary.min_ms) * 100.0;
+    // срез 50 measured -20% on the live stand at strips_used=1 (one strip's
+    // worth of `chrome_dl` copied either way) вЂ” compare this number against
+    // that baseline, not against 0%.
+    eprintln!("cache-on saves {saved:.1}% at strips_used=4 (by min of {SAMPLES} interleaved samples)");
+}
