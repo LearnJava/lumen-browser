@@ -1,0 +1,24 @@
+# Search-tool ignore (ripgrep, and every tool built on it — Grep/Glob).
+# NOT a .gitignore: git does not read this file.
+#
+# `.claude/worktrees/*` holds full checkouts of other roles' branches, one per
+# pool slot. Measured 2026-08-31: 3189 of the 4266 `.rs` files reachable from
+# the repo root live in those copies — so every search read the project four
+# times and mixed hits from stale branches into the results, which is worse than
+# slow: a grep for a symbol answered with 18 matches from an abandoned
+# `merge-tmp-*` worktree and hid the real ones below the output limit.
+#
+# Work inside a slot still searches that slot normally — this only stops a
+# search rooted at the repo from descending into the others.
+.claude/worktrees/
+
+# Build output of the root checkout (43 GB as of 2026-08-31) and of any slot.
+target/
+
+# Vendored Python environment for the WPT harness (`tests/wpt/.venv/.gitignore`
+# is a bare `*`, so git never shows it — but ripgrep would).
+tests/wpt/.venv/
+
+# Run logs and scratch files (`/.tmp/` in .gitignore).
+.tmp/
+__pycache__/
