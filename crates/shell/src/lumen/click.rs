@@ -650,13 +650,46 @@ impl Lumen {
                 // Use source_node (text node inside inline element) so find_link_href
                 // can walk up and find the <a> parent: text в†’ <a href="вЂ¦"> в†’ found.
                 // Falls back to r.node for non-inline boxes.
-                let href = hit_result.as_ref().and_then(|r| {
-                    self.layout_source
-                        .as_ref()
-                        .and_then(|src| links::find_link_href(&src.document.lock().unwrap(), r.source_node))
+                // The `target` attribute rides along with the href (BUG-480
+                // slice 24): a page link can name an existing frame the same
+                // way a frame link already does (frame_links.rs), and reading
+                // it in this one lock keeps the two answers from a link that
+                // mutates between two separate walks.
+                let link = hit_result.as_ref().and_then(|r| {
+                    self.layout_source.as_ref().and_then(|src| {
+                        let doc = src.document.lock().unwrap();
+                        links::find_link(&doc, r.source_node).map(|(anchor, href)| {
+                            let target = doc.get(anchor).get_attr("target").unwrap_or_default().to_owned();
+                            (href, target)
+                        })
+                    })
                 });
-                if let Some(href) = href {
-                    if let Some(frag) = links::fragment_only(&href) {
+                if let Some((href, target_attr)) = link {
+                    let t = target_attr.trim();
+                    let named_frame = (!t.is_empty() && !t.eq_ignore_ascii_case("_self"))
+                        .then(|| self.find_frame_by_name(t))
+                        .flatten();
+                    if let Some(idx) = named_frame
+                        && links::is_navigable_href(&href)
+                    {
+                        // The link lives in the PAGE, so its own base is the
+                        // page's (`frame_env.page_base`), not the target
+                        // frame's — same rule `_parent` already follows in
+                        // `Lumen::link_destination`.
+                        if click_log::is_enabled() {
+                            let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                                node_id: *nid, tag, id_attr: id, class_attr: cls,
+                            });
+                            click_log::log_click(&click_log::ClickInfo {
+                                win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                                hit: hit_ref,
+                                outcome: click_log::ClickOutcome::LinkIntoNamedFrame { frame: idx, href: &href },
+                            });
+                        }
+                        if let Some(nav_base) = self.frame_env.as_ref().map(|e| e.page_base.clone()) {
+                            self.navigate_frame_to(idx, &href, &nav_base);
+                        }
+                    } else if let Some(frag) = links::fragment_only(&href) {
                         if click_log::is_enabled() {
                             let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
                                 node_id: *nid, tag, id_attr: id, class_attr: cls,

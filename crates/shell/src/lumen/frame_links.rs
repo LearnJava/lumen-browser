@@ -22,7 +22,8 @@ use crate::*;
 /// не может быть двух разных ответов внутри одного движка.
 pub(crate) enum LinkTarget {
     /// Фрейм с этим индексом: `_self`, отсутствующий атрибут — сам кликнутый
-    /// фрейм; `_parent` у вложенного — его фрейм-родитель.
+    /// фрейм; `_parent` у вложенного — его фрейм-родитель; именованный
+    /// `target`, совпавший с `name` живого фрейма (срез 24), — тот фрейм.
     Frame(usize),
     /// Страница: `_top`, а для фрейма глубины 0 и `_parent` — его родитель и
     /// есть верхнее окно.
@@ -78,10 +79,12 @@ impl Lumen {
 
     /// Разобрать `target` ссылки ребёнка.
     ///
-    /// Именованный контекст (`target="content"`) и `_blank` попадают в одну
-    /// ветку намеренно: спека для имени, которого нет, предписывает СОЗДАТЬ
-    /// окно, а частичная поддержка — «это имя понимаю, то нет» — была бы хуже
-    /// честного отказа с логом.
+    /// `_blank` — окно, которое движок не создаёт ([BUG-883]), без исключений:
+    /// спека резервирует это имя, так что живой фрейм с таким `name` (если он
+    /// вообще возможен) им не адресуется. Любое другое непустое имя сперва
+    /// ищется среди живых фреймов (срез 24, [`Self::find_frame_by_name`]) — и
+    /// только когда совпадения нет, движок честно отказывается СОЗДАТЬ новый
+    /// browsing context, а не притворяется, что умеет часть.
     pub(crate) fn link_destination(&self, idx: usize, target: &str) -> LinkTarget {
         let t = target.trim();
         if t.is_empty() || t.eq_ignore_ascii_case("_self") {
@@ -101,7 +104,39 @@ impl Lumen {
                 .position(|o| Arc::ptr_eq(&o.doc, &parent_doc))
                 .map_or(LinkTarget::Page, LinkTarget::Frame);
         }
-        LinkTarget::NewWindow
+        if t.eq_ignore_ascii_case("_blank") {
+            return LinkTarget::NewWindow;
+        }
+        match self.find_frame_by_name(t) {
+            Some(named) => LinkTarget::Frame(named),
+            None => LinkTarget::NewWindow,
+        }
+    }
+
+    /// Найти живой фрейм по имени его host-элемента — `name="..."` на
+    /// `<iframe>`/`<frame>` (HTML LS §7.3.2, «the rules for choosing a
+    /// navigable», ветка совпадения по browsing context name), срез 24.
+    ///
+    /// Имя читается с host-узла в документе, где тот стоит: у фрейма глубины 0
+    /// это страница ([`Lumen::layout_source`]), у вложенного — документ его
+    /// фрейма-родителя ([`crate::frames::FrameHandle::parent_doc`]) — та же
+    /// пара источников, что уже различает срез 19 у `_parent`. Совпадение
+    /// регистрозависимое и точное, как у `id` ([`links::find_element_by_id`]);
+    /// первый найденный фрейм побеждает — повторное имя у двух живых фреймов
+    /// не гарантировано движком и не встречается ни в одном сценарии среза.
+    pub(crate) fn find_frame_by_name(&self, name: &str) -> Option<usize> {
+        if name.is_empty() {
+            return None;
+        }
+        let page_doc = self.layout_source.as_ref().map(|s| &s.document);
+        for (idx, handle) in self.frames.iter().enumerate() {
+            let Some(owner) = handle.parent_doc.as_ref().or(page_doc) else { continue };
+            let Ok(doc) = owner.lock() else { continue };
+            if doc.get(handle.host).get_attr("name") == Some(name) {
+                return Some(idx);
+            }
+        }
+        None
     }
 
     /// `target=_top`/`_parent` у фрейма глубины 0: навигация СТРАНИЦЫ по
