@@ -6073,9 +6073,9 @@
       {
        "id": "LIB-0",
        "title": "LIB-0: перепись конформности «до» (URL, текст, SVG)",
-       "status": "ready",
+       "status": "done",
        "size": "S",
-       "note": "Перепись «до»: прогнать lumen_core::url по tests/wpt/url/resources/urltestdata.json; снять страницы-пробы текста (лигатуры, кернинг, комбинирующая диакритика = GPOS 4, вьетнамский, арабское соединение, деванагари, иврит, RTL) и SVG (линейный и радиальный градиент, url(#) на stroke, clipPath, mask, feGaussianBlur, pattern, marker, вложенный image, контрольная фигура) в двух путях — inline и внешним файлом через img src. Метод, знаменатель и правило приёмки — docs/conformance-method.md; результат — docs/conformance/ГГГГ-ММ-ДД.md, файл «до» не переписывается никогда."
+       "note": "ЗАКРЫТ 2026-08-31 (ветка `p1-lib-0`): результат — docs/conformance/2026-08-31.md. URL — 370/882 (41.95%), знаменатель = urltestdata.json минус 9 записей про searchParams; разбивка провалов сведена к двум веткам алгоритма, которых в url.rs нет вовсе (IPv6-литералы в `[...]`, preprocessing запрещённых/control кодпоинтов host), а не к точечным IDNA/percent-encoding дырам — важно для решения LIB-6. SVG — 2/18 (inline+внешний × 9 проверок), подтверждает численно «ноль градиентов/масок/фильтров», byte-level свидетельство в dump-display-list. **Текст закрыть числом не удалось** — методологическая находка: КАЖДЫЙ headless/MCP путь снимка (`--screenshot`, `--dump-display-list`-рендер, MCP `resource://screenshot` живого окна) строит `Renderer::new_headless(INTER_FONT.to_vec(), …)` без `FontProvider` вообще (`crates/driver/src/winit_session.rs::screenshot`, тот же приём в `cpu_raster.rs`) — класс BUG-221, но шире, чем документировано: системные шрифты не участвуют НИ В ОДНОМ снимке, хотя `SystemFontIndex` их находит и `cmap` парсит верно (проверено юнит-пробой поверх lumen-font напрямую: Tahoma U+0639→969, U+05E9→697). Проверки 05–08 (Arabic/Devanagari/Hebrew/RTL) помечены «не проверено», а не FAIL — заводить их как FAIL по снимку значило бы измерять BUG-221, а не шейпер. Ловушка добавлена в docs/conformance-method.md §4. Перед повтором после LIB-1 нужно закрыть эту дыру инструментария (снимок через видимое окно + gdigrab, или per-glyph ID в dump)."
       },
       {
        "id": "LIB-1",

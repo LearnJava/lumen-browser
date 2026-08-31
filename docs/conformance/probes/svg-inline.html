@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LIB-0 SVG conformance probe — inline &lt;svg&gt; in markup</title>
+<style>
+  body { margin: 0; background: #ffffff; }
+  .row { display: flex; align-items: center; border-bottom: 1px solid #cccccc; padding: 10px 12px; }
+  .label { width: 260px; font-family: monospace; font-size: 14px; color: #333333; flex-shrink: 0; }
+  svg { border: 1px solid #dddddd; }
+  #control { width: 80px; height: 40px; background: magenta; }
+</style>
+</head>
+<body>
+  <div class="row"><div class="label">01 linear gradient (fill)</div>
+    <svg viewBox="0 0 150 80" width="150" height="80">
+      <defs>
+        <linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#ff0000"/>
+          <stop offset="1" stop-color="#0000ff"/>
+        </linearGradient>
+      </defs>
+      <rect x="5" y="5" width="140" height="70" fill="url(#g1)"/>
+    </svg>
+  </div>
+
+  <div class="row"><div class="label">02 radial gradient (fill)</div>
+    <svg viewBox="0 0 150 80" width="150" height="80">
+      <defs>
+        <radialGradient id="g2" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stop-color="#ffff00"/>
+          <stop offset="1" stop-color="#008000"/>
+        </radialGradient>
+      </defs>
+      <circle cx="75" cy="40" r="35" fill="url(#g2)"/>
+    </svg>
+  </div>
+
+  <div class="row"><div class="label">03 gradient url(#) on stroke</div>
+    <svg viewBox="0 0 150 80" width="150" height="80">
+      <defs>
+        <linearGradient id="g3" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#ff00ff"/>
+          <stop offset="1" stop-color="#00ffff"/>
+        </linearGradient>
+      </defs>
+      <rect x="10" y="10" width="130" height="60" fill="none" stroke="url(#g3)" stroke-width="8"/>
+    </svg>
+  </div>
+
+  <div class="row"><div class="label">04 clipPath</div>
+    <svg viewBox="0 0 150 80" width="150" height="80">
+      <defs>
+        <clipPath id="c1">
+          <circle cx="75" cy="40" r="30"/>
+        </clipPath>
+      </defs>
+      <rect x="0" y="0" width="150" height="80" fill="#333333" clip-path="url(#c1)"/>
+    </svg>
+  </div>
+
+  <div class="row"><div class="label">05 mask</div>
+    <svg viewBox="0 0 150 80" width="150" height="80">
+      <defs>
+        <mask id="m1">
+          <rect x="0" y="0" width="150" height="80" fill="#ffffff"/>
+          <circle cx="75" cy="40" r="30" fill="#000000"/>
+        </mask>
+      </defs>
+      <rect x="0" y="0" width="150" height="80" fill="#8000ff" mask="url(#m1)"/>
+    </svg>
+  </div>
+
+  <div class="row"><div class="label">06 filter feGaussianBlur</div>
+    <svg viewBox="0 0 150 80" width="150" height="80">
+      <defs>
+        <filter id="f1" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="4"/>
+        </filter>
+      </defs>
+      <rect x="30" y="20" width="90" height="40" fill="#ff6600" filter="url(#f1)"/>
+    </svg>
+  </div>
+
+  <div class="row"><div class="label">07 pattern</div>
+    <svg viewBox="0 0 150 80" width="150" height="80">
+      <defs>
+        <pattern id="p1" width="10" height="10" patternUnits="userSpaceOnUse">
+          <rect width="10" height="10" fill="#eeeeee"/>
+          <rect width="5" height="5" fill="#333333"/>
+          <rect x="5" y="5" width="5" height="5" fill="#333333"/>
+        </pattern>
+      </defs>
+      <rect x="5" y="5" width="140" height="70" fill="url(#p1)"/>
+    </svg>
+  </div>
+
+  <div class="row"><div class="label">08 marker (path ends)</div>
+    <svg viewBox="0 0 150 80" width="150" height="80">
+      <defs>
+        <marker id="arrow" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#000000"/>
+        </marker>
+      </defs>
+      <path d="M10,40 L140,40" stroke="#000000" stroke-width="3" fill="none" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    </svg>
+  </div>
+
+  <div class="row"><div class="label">09 nested &lt;image&gt;</div>
+    <svg viewBox="0 0 150 80" width="150" height="80">
+      <image x="10" y="10" width="60" height="60" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAGUlEQVR42mN4VqcktWcOJsmAVRRIMgxKHQAnM18BRNX51wAAAABJRU5ErkJggg=="/>
+    </svg>
+  </div>
+
+  <div class="row"><div class="label">10 control (must render)</div>
+    <svg viewBox="0 0 150 80" width="150" height="80">
+      <rect x="5" y="5" width="140" height="70" fill="#ff00ff"/>
+    </svg>
+  </div>
+
+  <div class="row"><div class="label">CONTROL (pure HTML, must always be visible)</div><div id="control"></div></div>
+</body>
+</html>

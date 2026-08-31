@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LIB-0 text shaping conformance probe</title>
+<style>
+  /* LIB-0 (docs/conformance-method.md §3.2): each row is one independent,
+     binary-readable check. Do not combine checks in one row — a probe must
+     not name what it itself defines (docs/conformance-method.md §4). */
+  body { margin: 0; background: #ffffff; font-size: 40px; }
+  .row { display: flex; align-items: baseline; border-bottom: 1px solid #cccccc; padding: 10px 12px; }
+  .label { width: 300px; font-family: monospace; font-size: 14px; color: #333333; flex-shrink: 0; }
+  .latin { font-family: "Inter", sans-serif; }
+  .fallback { font-family: "Segoe UI", "Tahoma", "Nirmala UI", "Arial Unicode MS", sans-serif; }
+  .rtl { direction: rtl; }
+  #control { width: 80px; height: 40px; background: magenta; }
+</style>
+</head>
+<body>
+  <!-- 01: fi/ffi ligature — Inter carries GSUB type 4 (standard ligatures). -->
+  <div class="row"><div class="label">01 ligature fi/ffi (Inter)</div><div class="latin" id="t01">fine office fluffy</div></div>
+
+  <!-- 02: AV/To kerning pair — Inter carries GPOS type 2 (pair adjustment). -->
+  <div class="row"><div class="label">02 kerning AV/To (Inter)</div><div class="latin" id="t02">AVATAR TOTAL WAY</div></div>
+
+  <!-- 03: combining diacritic vs precomposed — GPOS type 4 (mark-to-base),
+       the own shaper's documented gap. Two rows must render identically in
+       width and glyph shape for this check to pass. -->
+  <div class="row"><div class="label">03a decomposed e + U+0301 (Inter)</div><div class="latin" id="t03a">caf&#x65;&#x301; r&#x65;&#x301;sum&#x65;&#x301;</div></div>
+  <div class="row"><div class="label">03b precomposed &eacute; (Inter)</div><div class="latin" id="t03b">caf&eacute; r&eacute;sum&eacute;</div></div>
+
+  <!-- 04: Vietnamese — two diacritics stacked on one base letter (tone mark
+       over a modified vowel), also GPOS mark-to-base territory. -->
+  <div class="row"><div class="label">04 Vietnamese (Inter)</div><div class="latin" id="t04">Ti&#7871;ng Vi&#7879;t – Xin ch&#224;o, c&#225;c b&#7841;n!</div></div>
+
+  <!-- 05: Arabic joining forms — isolated, initial, medial, final of the
+       same letter (&#x639; ain), then a real word to see it in context. -->
+  <div class="row"><div class="label">05 Arabic joining forms</div><div class="fallback rtl" id="t05">&#x639; &#x639;&#x627; &#x628;&#x639;&#x644; &#x644;&#x639;&#x628; — &#x628;&#x633;&#x645; &#x627;&#x644;&#x644;&#x647;</div></div>
+
+  <!-- 06: Devanagari — reordering of a pre-base vowel sign (matra) that
+       visually moves left of its consonant cluster. -->
+  <div class="row"><div class="label">06 Devanagari reorder</div><div class="fallback" id="t06">&#2361;&#2367;&#2344;&#2381;&#2342;&#2368; &#2325;&#2367;&#2340;&#2366;&#2348; &#2360;&#2381;&#2325;&#2370;&#2354;</div></div>
+
+  <!-- 07: Hebrew with niqqud (vowel points combine above/below consonants). -->
+  <div class="row"><div class="label">07 Hebrew niqqud</div><div class="fallback rtl" id="t07">&#1513;&#1464;&#1500;&#1493;&#1465;&#1501; &#1506;&#1493;&#1500;&#1464;&#1501;</div></div>
+
+  <!-- 08: RTL string with embedded Western digits — bidi algorithm keeps
+       the digits left-to-right inside the right-to-left run. -->
+  <div class="row"><div class="label">08 RTL + mixed numbers</div><div class="fallback rtl" id="t08">&#1605;&#1585;&#1581;&#1576;&#1575; 12345 &#1593;&#1575;&#1604;&#1605;</div></div>
+
+  <!-- Control: must render at all times, proves the page loaded — a
+       missing sample above is otherwise indistinguishable from "the page
+       never rendered" (docs/conformance-method.md §4). -->
+  <div class="row"><div class="label">CONTROL (must always be visible)</div><div id="control"></div></div>
+</body>
+</html>

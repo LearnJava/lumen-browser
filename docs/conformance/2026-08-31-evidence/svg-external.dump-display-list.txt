@@ -1,0 +1,45 @@
+FillRect (0.00, 0.00, 1024.00, 1091.00) #ffffffff
+DrawBorder (0.00, 0.00, 1024.00, 103.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 44.00, 260.00, 16.80) "01 linear gradient (fill)" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+DrawBorder (272.00, 10.00, 152.00, 82.00) w=[1.00,1.00,1.00,1.00] c=[#ddddddff,#ddddddff,#ddddddff,#ddddddff]
+DrawImage (273.00, 11.00, 150.00, 80.00) src="svg/01-gradient-linear-fill.svg" alt="01"
+DrawBorder (0.00, 103.00, 1024.00, 103.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 147.00, 260.00, 16.80) "02 radial gradient (fill)" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+DrawBorder (272.00, 113.00, 152.00, 82.00) w=[1.00,1.00,1.00,1.00] c=[#ddddddff,#ddddddff,#ddddddff,#ddddddff]
+DrawImage (273.00, 114.00, 150.00, 80.00) src="svg/02-gradient-radial-fill.svg" alt="02"
+DrawBorder (0.00, 206.00, 1024.00, 103.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 250.00, 260.00, 16.80) "03 gradient url(#) on stroke" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+DrawBorder (272.00, 216.00, 152.00, 82.00) w=[1.00,1.00,1.00,1.00] c=[#ddddddff,#ddddddff,#ddddddff,#ddddddff]
+DrawImage (273.00, 217.00, 150.00, 80.00) src="svg/03-gradient-stroke.svg" alt="03"
+DrawBorder (0.00, 309.00, 1024.00, 103.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 353.00, 260.00, 16.80) "04 clipPath" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+DrawBorder (272.00, 319.00, 152.00, 82.00) w=[1.00,1.00,1.00,1.00] c=[#ddddddff,#ddddddff,#ddddddff,#ddddddff]
+DrawImage (273.00, 320.00, 150.00, 80.00) src="svg/04-clippath.svg" alt="04"
+DrawBorder (0.00, 412.00, 1024.00, 103.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 456.00, 260.00, 16.80) "05 mask" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+DrawBorder (272.00, 422.00, 152.00, 82.00) w=[1.00,1.00,1.00,1.00] c=[#ddddddff,#ddddddff,#ddddddff,#ddddddff]
+DrawImage (273.00, 423.00, 150.00, 80.00) src="svg/05-mask.svg" alt="05"
+DrawBorder (0.00, 515.00, 1024.00, 103.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 559.00, 260.00, 16.80) "06 filter feGaussianBlur" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+DrawBorder (272.00, 525.00, 152.00, 82.00) w=[1.00,1.00,1.00,1.00] c=[#ddddddff,#ddddddff,#ddddddff,#ddddddff]
+DrawImage (273.00, 526.00, 150.00, 80.00) src="svg/06-filter-blur.svg" alt="06"
+DrawBorder (0.00, 618.00, 1024.00, 103.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 662.00, 260.00, 16.80) "07 pattern" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+DrawBorder (272.00, 628.00, 152.00, 82.00) w=[1.00,1.00,1.00,1.00] c=[#ddddddff,#ddddddff,#ddddddff,#ddddddff]
+DrawImage (273.00, 629.00, 150.00, 80.00) src="svg/07-pattern.svg" alt="07"
+DrawBorder (0.00, 721.00, 1024.00, 103.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 765.00, 260.00, 16.80) "08 marker (path ends)" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+DrawBorder (272.00, 731.00, 152.00, 82.00) w=[1.00,1.00,1.00,1.00] c=[#ddddddff,#ddddddff,#ddddddff,#ddddddff]
+DrawImage (273.00, 732.00, 150.00, 80.00) src="svg/08-marker.svg" alt="08"
+DrawBorder (0.00, 824.00, 1024.00, 103.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 868.00, 260.00, 16.80) "09 nested <image>" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+DrawBorder (272.00, 834.00, 152.00, 82.00) w=[1.00,1.00,1.00,1.00] c=[#ddddddff,#ddddddff,#ddddddff,#ddddddff]
+DrawImage (273.00, 835.00, 150.00, 80.00) src="svg/09-nested-image.svg" alt="09"
+DrawBorder (0.00, 927.00, 1024.00, 103.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 971.00, 260.00, 16.80) "10 control (must render)" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+DrawBorder (272.00, 937.00, 152.00, 82.00) w=[1.00,1.00,1.00,1.00] c=[#ddddddff,#ddddddff,#ddddddff,#ddddddff]
+DrawImage (273.00, 938.00, 150.00, 80.00) src="svg/10-control.svg" alt="10"
+DrawBorder (0.00, 1030.00, 1024.00, 61.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 1044.60, 260.00, 16.80) "CONTROL (pure HTML, must always" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+DrawText (12.00, 1061.40, 260.00, 16.80) "be visible)" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+FillRect (272.00, 1040.00, 80.00, 40.00) #ff00ffff

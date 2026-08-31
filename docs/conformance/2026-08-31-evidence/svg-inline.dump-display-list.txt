@@ -1,0 +1,53 @@
+FillRect (0.00, 0.00, 1024.00, 1071.00) #ffffffff
+DrawBorder (0.00, 0.00, 1024.00, 101.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 43.00, 260.00, 16.80) "01 linear gradient (fill)" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+PushClipRect (273.00, 11.00, 148.00, 78.00)
+FillRect (277.00, 15.00, 140.00, 70.00) #000000ff
+PopClip
+DrawBorder (0.00, 101.00, 1024.00, 101.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 144.00, 260.00, 16.80) "02 radial gradient (fill)" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+PushClipRect (273.00, 112.00, 148.00, 78.00)
+FillRoundedRect (312.00, 116.00, 70.00, 70.00) #000000ff r=[35.00,35.00,35.00,35.00]
+PopClip
+DrawBorder (0.00, 202.00, 1024.00, 101.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 245.00, 260.00, 16.80) "03 gradient url(#) on stroke" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+PushClipRect (273.00, 213.00, 148.00, 78.00)
+PopClip
+DrawBorder (0.00, 303.00, 1024.00, 101.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 346.00, 260.00, 16.80) "04 clipPath" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+PushClipRect (273.00, 314.00, 148.00, 78.00)
+FillRect (272.00, 313.00, 150.00, 80.00) #333333ff
+PopClip
+DrawBorder (0.00, 404.00, 1024.00, 101.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 447.00, 260.00, 16.80) "05 mask" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+PushClipRect (273.00, 415.00, 148.00, 78.00)
+FillRect (272.00, 414.00, 150.00, 80.00) #8000ffff
+PopClip
+DrawBorder (0.00, 505.00, 1024.00, 101.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 548.00, 260.00, 16.80) "06 filter feGaussianBlur" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+PushClipRect (273.00, 516.00, 148.00, 78.00)
+FillRect (302.00, 535.00, 90.00, 40.00) #ff6600ff
+PopClip
+DrawBorder (0.00, 606.00, 1024.00, 101.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 649.00, 260.00, 16.80) "07 pattern" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+PushClipRect (273.00, 617.00, 148.00, 78.00)
+FillRect (277.00, 621.00, 140.00, 70.00) #000000ff
+PopClip
+DrawBorder (0.00, 707.00, 1024.00, 101.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 750.00, 260.00, 16.80) "08 marker (path ends)" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+PushClipRect (273.00, 718.00, 148.00, 78.00)
+DrawSvgStroke contours=1 pts=2 w=3.00 dash=0 #000000ff
+PopClip
+DrawBorder (0.00, 808.00, 1024.00, 101.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 851.00, 260.00, 16.80) "09 nested <image>" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+PushClipRect (273.00, 819.00, 148.00, 78.00)
+PopClip
+DrawBorder (0.00, 909.00, 1024.00, 101.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 952.00, 260.00, 16.80) "10 control (must render)" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+PushClipRect (273.00, 920.00, 148.00, 78.00)
+FillRect (277.00, 924.00, 140.00, 70.00) #ff00ffff
+PopClip
+DrawBorder (0.00, 1010.00, 1024.00, 61.00) w=[0.00,0.00,1.00,0.00] c=[#000000ff,#000000ff,#ccccccff,#000000ff]
+DrawText (12.00, 1024.60, 260.00, 16.80) "CONTROL (pure HTML, must always" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+DrawText (12.00, 1041.40, 260.00, 16.80) "be visible)" 14.00 #333333ff family=["monospace"] var=["opsz"=14]
+FillRect (272.00, 1020.00, 80.00, 40.00) #ff00ffff

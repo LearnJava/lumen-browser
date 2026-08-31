@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LIB-0 SVG conformance probe — external file (&lt;img src=*.svg&gt;)</title>
+<style>
+  body { margin: 0; background: #ffffff; }
+  .row { display: flex; align-items: center; border-bottom: 1px solid #cccccc; padding: 10px 12px; }
+  .label { width: 260px; font-family: monospace; font-size: 14px; color: #333333; flex-shrink: 0; }
+  img { width: 150px; height: 80px; border: 1px solid #dddddd; }
+  #control { width: 80px; height: 40px; background: magenta; }
+</style>
+</head>
+<body>
+  <div class="row"><div class="label">01 linear gradient (fill)</div><img src="svg/01-gradient-linear-fill.svg" alt="01"></div>
+  <div class="row"><div class="label">02 radial gradient (fill)</div><img src="svg/02-gradient-radial-fill.svg" alt="02"></div>
+  <div class="row"><div class="label">03 gradient url(#) on stroke</div><img src="svg/03-gradient-stroke.svg" alt="03"></div>
+  <div class="row"><div class="label">04 clipPath</div><img src="svg/04-clippath.svg" alt="04"></div>
+  <div class="row"><div class="label">05 mask</div><img src="svg/05-mask.svg" alt="05"></div>
+  <div class="row"><div class="label">06 filter feGaussianBlur</div><img src="svg/06-filter-blur.svg" alt="06"></div>
+  <div class="row"><div class="label">07 pattern</div><img src="svg/07-pattern.svg" alt="07"></div>
+  <div class="row"><div class="label">08 marker (path ends)</div><img src="svg/08-marker.svg" alt="08"></div>
+  <div class="row"><div class="label">09 nested &lt;image&gt;</div><img src="svg/09-nested-image.svg" alt="09"></div>
+  <div class="row"><div class="label">10 control (must render)</div><img src="svg/10-control.svg" alt="10"></div>
+  <!-- Second control, pure HTML, independent of the image-loading path
+       entirely — distinguishes "page didn't load" from "img src=*.svg never
+       fetched" (docs/conformance-method.md §4). -->
+  <div class="row"><div class="label">CONTROL (pure HTML, must always be visible)</div><div id="control"></div></div>
+</body>
+</html>
