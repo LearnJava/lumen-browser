@@ -20,8 +20,8 @@
 3614	crates/js/src/worker.rs
 3435	crates/chrome/src/model.rs
 2935	crates/driver/src/session.rs
+2850	crates/js/src/offscreen_canvas.rs
 2762	crates/network/src/h3/conn_connect.rs
-2658	crates/js/src/offscreen_canvas.rs
 2637	crates/js/src/subtle_crypto.rs
 2545	crates/shell/src/forms.rs
 2365	crates/js/src/video_bindings.rs

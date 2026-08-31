@@ -970,6 +970,174 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
 
 /// OffscreenCanvas constructor: new OffscreenCanvas(width, height)
 (function() {
+  // ── Class registry for BUG-932 ────────────────────────────────────────────
+  // The 2D context, gradients, patterns, text metrics and image data below
+  // used to be object literals minted per call, with `Object.prototype` as
+  // their prototype: `ctx.constructor.name === 'Object'`,
+  // `ctx instanceof OffscreenCanvasRenderingContext2D` was a ReferenceError
+  // (no such global existed), and a page/worker script could not feature-
+  // detect via `instanceof` or extend the prototype — the same class of
+  // defect BUG-449 fixed for the element `<canvas>` context.
+  //
+  // `OffscreenCanvasRenderingContext2D` has no page-shim counterpart at all
+  // (its own WebIDL interface, HTML LS §OffscreenCanvas), so it is always
+  // defined here. `CanvasGradient`/`CanvasPattern`/`TextMetrics`/`ImageData`
+  // DO have one (`web_api_shim_mid.js`, BUG-449) and in the real browser this
+  // module evaluates after it in the same V8 context
+  // (`v8_runtime.rs::install_dom` calls `install_offscreen_canvas_bindings_v8`
+  // after `WEB_API_SHIM`) — reused when present so e.g.
+  // `offscreenCtx.createLinearGradient(...) instanceof CanvasGradient` agrees
+  // with the element context's. Falls back to a local, self-contained
+  // definition when the global is absent (this module's own V8 unit-test
+  // harness installs nothing but itself, `tests_v8::with_offscreen` — same
+  // typeof-guard shape as BUG-780's XHR fix, for the same reason: a shim
+  // evaluated as its own `rt.eval` cannot assume another module's eval
+  // already ran).
+  function _offscreen_slot(obj, name, value) {
+    Object.defineProperty(obj, name, {
+      value: value, writable: true, enumerable: false, configurable: true,
+    });
+  }
+  function _offscreen_idl_tag(ctor, name) {
+    Object.defineProperty(ctor.prototype, Symbol.toStringTag, {
+      value: name, writable: false, enumerable: false, configurable: true,
+    });
+  }
+
+  function OffscreenCanvasRenderingContext2D() { throw new TypeError('Illegal constructor'); }
+  _offscreen_idl_tag(OffscreenCanvasRenderingContext2D, 'OffscreenCanvasRenderingContext2D');
+  globalThis.OffscreenCanvasRenderingContext2D = OffscreenCanvasRenderingContext2D;
+
+  var CanvasGradient = (typeof globalThis.CanvasGradient === 'function') ? globalThis.CanvasGradient : (function() {
+    function CanvasGradient() { throw new TypeError('Illegal constructor'); }
+    _offscreen_idl_tag(CanvasGradient, 'CanvasGradient');
+    CanvasGradient.prototype.addColorStop = function(offset, color) {
+      if (!this || this.__gid__ === undefined) {
+        throw new TypeError("Failed to execute 'addColorStop' on 'CanvasGradient': " +
+          "receiver is not a CanvasGradient");
+      }
+      var o = Number(offset);
+      if (!isFinite(o)) {
+        throw new TypeError('addColorStop: offset is not a finite number');
+      }
+      if (o < 0 || o > 1) {
+        throw new DOMException('addColorStop: offset is outside [0, 1]', 'IndexSizeError');
+      }
+      _lumen_offscreen_canvas2d_gradient_add_color_stop(this.__gid__, o, String(color));
+    };
+    globalThis.CanvasGradient = CanvasGradient;
+    return CanvasGradient;
+  })();
+
+  var CanvasPattern = (typeof globalThis.CanvasPattern === 'function') ? globalThis.CanvasPattern : (function() {
+    function CanvasPattern() { throw new TypeError('Illegal constructor'); }
+    _offscreen_idl_tag(CanvasPattern, 'CanvasPattern');
+    CanvasPattern.prototype.setTransform = function(transform) {
+      if (!this || this.__patid__ === undefined) {
+        throw new TypeError("Failed to execute 'setTransform' on 'CanvasPattern': " +
+          "receiver is not a CanvasPattern");
+      }
+      var t = transform;
+      if (t === undefined || t === null) {
+        this.__pattern_transform__ = [1, 0, 0, 1, 0, 0];
+        return;
+      }
+      if (typeof t !== 'object') {
+        throw new TypeError('setTransform: argument is not a DOMMatrix2DInit');
+      }
+      this.__pattern_transform__ = [
+        t.a === undefined ? (t.m11 === undefined ? 1 : +t.m11) : +t.a,
+        t.b === undefined ? (t.m12 === undefined ? 0 : +t.m12) : +t.b,
+        t.c === undefined ? (t.m21 === undefined ? 0 : +t.m21) : +t.c,
+        t.d === undefined ? (t.m22 === undefined ? 1 : +t.m22) : +t.d,
+        t.e === undefined ? (t.m41 === undefined ? 0 : +t.m41) : +t.e,
+        t.f === undefined ? (t.m42 === undefined ? 0 : +t.m42) : +t.f,
+      ];
+    };
+    globalThis.CanvasPattern = CanvasPattern;
+    return CanvasPattern;
+  })();
+
+  var TextMetrics = (typeof globalThis.TextMetrics === 'function') ? globalThis.TextMetrics : (function() {
+    function TextMetrics() { throw new TypeError('Illegal constructor'); }
+    _offscreen_idl_tag(TextMetrics, 'TextMetrics');
+    var names = ['width', 'actualBoundingBoxLeft', 'actualBoundingBoxRight',
+      'actualBoundingBoxAscent', 'actualBoundingBoxDescent',
+      'fontBoundingBoxAscent', 'fontBoundingBoxDescent',
+      'emHeightAscent', 'emHeightDescent',
+      'hangingBaseline', 'alphabeticBaseline', 'ideographicBaseline'];
+    names.forEach(function(name) {
+      Object.defineProperty(TextMetrics.prototype, name, {
+        get: function() {
+          if (!this || this.__text_metrics__ === undefined) {
+            throw new TypeError("Failed to read the '" + name +
+              "' property from 'TextMetrics': receiver is not a TextMetrics");
+          }
+          return this.__text_metrics__[name];
+        },
+        enumerable: true, configurable: true,
+      });
+    });
+    globalThis.TextMetrics = TextMetrics;
+    return TextMetrics;
+  })();
+
+  var _OffscreenImageData = (typeof globalThis.ImageData === 'function') ? globalThis.ImageData : (function() {
+    function ImageData(w, h) {
+      if (!(this instanceof ImageData)) {
+        throw new TypeError("Failed to construct 'ImageData': please use the 'new' operator");
+      }
+      var W = Math.max(0, Math.floor(Number(w) || 0));
+      var H = Math.max(0, Math.floor(Number(h) || 0));
+      if (W === 0 || H === 0) {
+        throw new DOMException(
+          "Failed to construct 'ImageData': the source width and height must be non-zero",
+          'IndexSizeError');
+      }
+      _offscreen_slot(this, '__image_data__',
+        { width: W, height: H, data: new Uint8ClampedArray(W * H * 4), colorSpace: 'srgb' });
+    }
+    _offscreen_idl_tag(ImageData, 'ImageData');
+    function slot(v, member) {
+      if (!v || v.__image_data__ === undefined) {
+        throw new TypeError("Failed to read the '" + member +
+          "' property from 'ImageData': receiver is not an ImageData");
+      }
+      return v.__image_data__;
+    }
+    ['width', 'height', 'data', 'colorSpace'].forEach(function(name) {
+      Object.defineProperty(ImageData.prototype, name, {
+        get: function() { return slot(this, name)[name]; },
+        enumerable: true, configurable: true,
+      });
+    });
+    globalThis.ImageData = ImageData;
+    return ImageData;
+  })();
+
+  function _offscreen_make_gradient(gid) {
+    var g = Object.create(CanvasGradient.prototype);
+    _offscreen_slot(g, '__gid__', gid);
+    return g;
+  }
+  function _offscreen_make_pattern(patid) {
+    var p = Object.create(CanvasPattern.prototype);
+    _offscreen_slot(p, '__patid__', patid);
+    _offscreen_slot(p, '__pattern_transform__', [1, 0, 0, 1, 0, 0]);
+    return p;
+  }
+  function _offscreen_make_text_metrics(values) {
+    var tm = Object.create(TextMetrics.prototype);
+    _offscreen_slot(tm, '__text_metrics__', values);
+    return tm;
+  }
+  function _offscreen_make_image_data(w, h, bytes, colorSpace) {
+    var img = Object.create(_OffscreenImageData.prototype);
+    _offscreen_slot(img, '__image_data__',
+      { width: w, height: h, data: bytes, colorSpace: colorSpace || 'srgb' });
+    return img;
+  }
+
   globalThis.OffscreenCanvas = class {
     constructor(width, height) {
       width = Math.max(1, Math.min(4096, width || 0)) >>> 0;
@@ -1026,7 +1194,12 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
       // как у элементного контекста (`web_api_shim_mid.js`): та же ловушка
       // BUG-455, если копии разойдутся.
       const stack = [];
-      this._2d_context = {
+      // BUG-932: built as a plain literal (`impl`), then re-homed onto
+      // `OffscreenCanvasRenderingContext2D.prototype` below — none of these
+      // members read `this`, so the re-home is behaviorally transparent, and
+      // `Object.getOwnPropertyDescriptors` preserves the get/set pairs below
+      // as real accessors rather than sampling them once as plain values.
+      var impl = {
         // Canvas reference
         canvas: this,
 
@@ -1165,10 +1338,11 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
         // цвета либо null на невалидной строке — тогда атрибут НЕ меняется
         // (HTML LS §4.12.5.1.3). Геттеры до BUG-451 отсутствовали вовсе, и
         // `ctx.fillStyle` читался как `undefined`.
-        // BUG-456 симптом 1 (remaining scope): a gradient/pattern object (duck-
-        // typed by `__gid__`/`__patid__`, the same tag `_offscreen_make_gradient`/
-        // `_offscreen_make_pattern` below stamp) is now accepted here too, same
-        // three-way branch as the element context's `_lumen_c2d_paint_style`.
+        // BUG-456 симптом 1 (remaining scope): a `CanvasGradient`/`CanvasPattern`
+        // instance (branded by `__gid__`/`__patid__`, minted by
+        // `_offscreen_make_gradient`/`_offscreen_make_pattern` above) is now
+        // accepted here too, same three-way branch as the element context's
+        // `_lumen_c2d_paint_style`.
         set fillStyle(val) {
           if (val && typeof val === 'object' && val.__gid__ !== undefined) {
             _fillStyle = val;
@@ -1310,11 +1484,8 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
         measureText: function(t) {
           var s = String(t == null ? '' : t);
           // Same twelve-number IDL order as the element context's
-          // `measureText` (`web_api_shim_mid.js`); a plain duck-typed object
-          // rather than a `TextMetrics` class instance, matching how this
-          // whole context already returns `getImageData` as a plain object
-          // instead of an `ImageData` instance — no shared class registry
-          // with the page (worker realm, BUG-780 lesson).
+          // `measureText` (`web_api_shim_mid.js`) — a real `TextMetrics`
+          // instance (BUG-932), not a plain duck-typed object.
           var m = _lumen_offscreen_canvas2d_text_metrics(canvasId, s);
           if (!m || m.length !== 12) {
             var fs = _offscreen_font_px(_font);
@@ -1322,7 +1493,7 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
             m = [w, 0, w, fs * 0.8, fs * 0.2, fs * 0.8, fs * 0.2,
                  fs * 0.8, fs * 0.2, fs * 0.8, 0, -fs * 0.2];
           }
-          return {
+          return _offscreen_make_text_metrics({
             width: m[0],
             actualBoundingBoxLeft: m[1],
             actualBoundingBoxRight: m[2],
@@ -1335,7 +1506,7 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
             hangingBaseline: m[9],
             alphabeticBaseline: m[10],
             ideographicBaseline: m[11],
-          };
+          });
         },
 
         // drawImage forms: (src,dx,dy) | (src,dx,dy,dw,dh) |
@@ -1435,7 +1606,7 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
           var bytes = _lumen_offscreen_canvas2d_get_image_data_rect(canvasId, x, y, w, h);
           var arr = new Uint8ClampedArray(w * h * 4);
           if (bytes && bytes.length === arr.length) { arr.set(bytes); }
-          return { width: w, height: h, data: arr, colorSpace: 'srgb' };
+          return _offscreen_make_image_data(w, h, arr, 'srgb');
         },
         // putImageData (BUG-456 симптом 1, remaining scope) — same dirty-
         // rectangle narrowing as the element context's `putImageData`
@@ -1483,7 +1654,7 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
               throw new TypeError('createImageData: argument 1 is not an ImageData');
             }
             var cw = w.width | 0, ch = w.height | 0;
-            return { width: cw, height: ch, data: new Uint8ClampedArray(cw * ch * 4), colorSpace: 'srgb' };
+            return _offscreen_make_image_data(cw, ch, new Uint8ClampedArray(cw * ch * 4), 'srgb');
           }
           var sw = _offscreen_long(w, 'createImageData', 'sw');
           var sh = _offscreen_long(h, 'createImageData', 'sh');
@@ -1492,9 +1663,18 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
               'The source width and height must be non-zero', 'IndexSizeError');
           }
           var aw = Math.abs(sw), ah = Math.abs(sh);
-          return { width: aw, height: ah, data: new Uint8ClampedArray(aw * ah * 4), colorSpace: 'srgb' };
+          return _offscreen_make_image_data(aw, ah, new Uint8ClampedArray(aw * ah * 4), 'srgb');
         },
       };
+
+      // BUG-932: re-home `impl`'s members onto a real prototype so
+      // `instanceof OffscreenCanvasRenderingContext2D` and `constructor.name`
+      // resolve correctly, instead of returning the literal — a fresh
+      // `Object.create` per canvas rather than a module-level singleton
+      // prototype instance, since state (draw attributes, the save/restore
+      // stack) lives in the closure, not on a shared slot.
+      this._2d_context = Object.create(
+        OffscreenCanvasRenderingContext2D.prototype, Object.getOwnPropertyDescriptors(impl));
 
       return this._2d_context;
     }
@@ -1639,50 +1819,6 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
       }
     }
     return 10;
-  }
-
-  // CanvasGradient/CanvasPattern — plain duck-typed objects (no shared class
-  // registry with the page realm, same reasoning as `getImageData` returning
-  // a plain object instead of an `ImageData` instance: this whole context is
-  // its own standalone `rt.eval`, BUG-780 lesson).
-  function _offscreen_make_gradient(gid) {
-    return {
-      __gid__: gid,
-      addColorStop: function(offset, color) {
-        var o = Number(offset);
-        if (!isFinite(o)) {
-          throw new TypeError('addColorStop: offset is not a finite number');
-        }
-        if (o < 0 || o > 1) {
-          throw new DOMException('addColorStop: offset is outside [0, 1]', 'IndexSizeError');
-        }
-        _lumen_offscreen_canvas2d_gradient_add_color_stop(gid, o, String(color));
-      },
-    };
-  }
-  function _offscreen_make_pattern(patid) {
-    return {
-      __patid__: patid,
-      __pattern_transform__: [1, 0, 0, 1, 0, 0],
-      setTransform: function(transform) {
-        var t = transform;
-        if (t === undefined || t === null) {
-          this.__pattern_transform__ = [1, 0, 0, 1, 0, 0];
-          return;
-        }
-        if (typeof t !== 'object') {
-          throw new TypeError('setTransform: argument is not a DOMMatrix2DInit');
-        }
-        this.__pattern_transform__ = [
-          t.a === undefined ? (t.m11 === undefined ? 1 : +t.m11) : +t.a,
-          t.b === undefined ? (t.m12 === undefined ? 0 : +t.m12) : +t.b,
-          t.c === undefined ? (t.m21 === undefined ? 0 : +t.m21) : +t.c,
-          t.d === undefined ? (t.m22 === undefined ? 1 : +t.m22) : +t.d,
-          t.e === undefined ? (t.m41 === undefined ? 0 : +t.m41) : +t.e,
-          t.f === undefined ? (t.m42 === undefined ? 0 : +t.m42) : +t.f,
-        ];
-      },
-    };
   }
 
   // createImageBitmap(source[, sx, sy, sw, sh])
@@ -1979,6 +2115,62 @@ mod tests_v8 {
                 let ctx1 = canvas.getContext('2d');
                 let ctx2 = canvas.getContext('2d');
                 ctx1 === ctx2  // Same instance cached
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_canvas_context_is_real_class_instance() {
+        // BUG-932: the context, gradient, pattern, text-metrics and image-data
+        // objects used to be duck-typed literals with `Object.prototype` —
+        // `ctx.constructor.name === 'Object'` and `instanceof
+        // OffscreenCanvasRenderingContext2D` threw a ReferenceError (no such
+        // global existed). All five now brand-check and report correctly.
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                let canvas = new OffscreenCanvas(50, 50);
+                let ctx = canvas.getContext('2d');
+                let g = ctx.createLinearGradient(0, 0, 1, 1);
+                let p = ctx.createPattern(new OffscreenCanvas(2, 2), 'repeat');
+                let tm = ctx.measureText('x');
+                let id = ctx.getImageData(0, 0, 1, 1);
+
+                ctx.constructor.name === 'OffscreenCanvasRenderingContext2D' &&
+                ctx instanceof OffscreenCanvasRenderingContext2D &&
+                Object.prototype.toString.call(ctx) === '[object OffscreenCanvasRenderingContext2D]' &&
+
+                g.constructor.name === 'CanvasGradient' &&
+                g instanceof CanvasGradient &&
+
+                p !== null && p.constructor.name === 'CanvasPattern' &&
+                p instanceof CanvasPattern &&
+
+                tm.constructor.name === 'TextMetrics' &&
+                tm instanceof TextMetrics &&
+
+                id.constructor.name === 'ImageData' &&
+                id instanceof ImageData
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_canvas_context_illegal_constructor_throws() {
+        // Direct `new OffscreenCanvasRenderingContext2D()` (bypassing
+        // getContext) must fail like every other browser-minted interface,
+        // not silently succeed with a useless instance.
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                let threw = false;
+                try { new OffscreenCanvasRenderingContext2D(); }
+                catch (e) { threw = e instanceof TypeError; }
+                threw
             "#,
         );
         assert!(ok);
