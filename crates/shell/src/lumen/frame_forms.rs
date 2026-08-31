@@ -143,6 +143,19 @@ impl Lumen {
         self.with_frame_doc(idx, |doc| forms::apply_range_value(doc, id, rect, x))
     }
 
+    /// Интерактивное состояние под-документов одним значением (BUG-480 срез 23).
+    ///
+    /// Три поля `Lumen` — единственный источник истины; [`crate::frames::FrameHandle::interactive`]
+    /// хранит лишь то, с чем ребёнок был посчитан в последний раз, и служит
+    /// гейтом пересчёта, как `viewport` рядом с ним.
+    pub(crate) fn frame_interactive(&self) -> frames::FrameInteractive {
+        frames::FrameInteractive {
+            hovered: self.hovered_frame,
+            focused: self.focused_frame,
+            active: self.active_frame,
+        }
+    }
+
     /// Показать результат изменения содержимого фреймов: пересчитать их
     /// вьюпорты/списки и пересобрать display list страницы.
     ///
@@ -161,9 +174,12 @@ impl Lumen {
     /// страницы (там стоит host-бокс) и одновременно пишет в `self.frames`.
     pub(crate) fn refresh_frames(&mut self, relayout: Option<usize>) {
         let Some(page_layout) = self.layout_box.take() else { return };
+        let interactive = self.frame_interactive();
         match relayout {
-            Some(idx) => frames::relayout_frame_content(&mut self.frames, idx, &page_layout),
-            None => frames::sync_frame_viewports(&mut self.frames, &page_layout),
+            Some(idx) => {
+                frames::relayout_frame_content(&mut self.frames, idx, &page_layout, interactive)
+            }
+            None => frames::sync_frame_viewports(&mut self.frames, &page_layout, interactive),
         }
         self.layout_box = Some(page_layout);
         let rebuilt = self.layout_box.as_ref().map(paint_ordered);

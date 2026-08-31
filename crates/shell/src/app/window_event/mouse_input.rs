@@ -197,6 +197,13 @@ impl Lumen {
                 self.frame_pointer_event(f, nid, "pointerdown", at, (0, 1));
                 self.frame_mouse_event(f, nid, "mousedown", at, (0, 1));
             }
+            // BUG-480 срез 23: `:active` под-документа — зеркало `active_nid`
+            // выше. Ставится вне `#[cfg(feature = "v8")]`: нажатый вид не
+            // зависит от того, есть ли у ребёнка скрипты.
+            if self.active_frame != self.hovered_frame {
+                self.active_frame = self.hovered_frame;
+                self.refresh_frames(None);
+            }
 
             // HTML5 DnD (PH3-9 / HTML LS В§9.3.3): start candidate when the
             // pressed element is draggable.  Drag does not activate until the
@@ -877,6 +884,12 @@ impl Lumen {
                 }
                 self.update_cursor_icon();
                 return;
+            }
+            // BUG-480 срез 23: `:active` под-документа снимается на отпускании
+            // ровно как страничный ниже.
+            if self.active_frame.is_some() {
+                self.active_frame = None;
+                self.refresh_frames(None);
             }
             // CSS :active вЂ” clear on release.
             if self.active_nid.is_some() {

@@ -468,6 +468,7 @@ fn splice_handle(src: &str, host_rect: Rect, content_dl: DisplayList) -> crate::
         parent_doc: None,
         layout: None,
         content_dl,
+        interactive: crate::frames::FrameNodeState::default(),
         host_rect: Some(host_rect),
         host_src: src.to_owned(),
         images: Vec::new(),
@@ -998,7 +999,7 @@ fn sync_frame_viewports_clamps_stale_scroll() {
     handle.content_dl = tall.clone();
     handle.scroll_y = 500.0;
     let mut frames = vec![handle];
-    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout, Default::default());
     assert!(
         (frames[0].scroll_y - 400.0).abs() < 0.5,
         "прокрутка за пределом возвращается К КРАЮ содержимого, а не к нулю: {}",
@@ -1009,7 +1010,7 @@ fn sync_frame_viewports_clamps_stale_scroll() {
     handle.content_dl = tall;
     handle.scroll_y = 100.0;
     let mut frames = vec![handle];
-    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout, Default::default());
     assert_eq!(frames[0].scroll_y, 100.0, "прокрутка в пределах — не трогаем");
 }
 
@@ -1055,7 +1056,7 @@ fn relayout_frame_content_repaints_child_at_unchanged_viewport() {
     let (page_layout, handle) = live_frame_with_child(CHILD_WITH_DETAILS);
     let viewport_before = handle.viewport;
     let mut frames = vec![handle];
-    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout, Default::default());
     assert!(
         !has_blue(&frames[0].content_dl),
         "закрытый <details> не рисует панель — иначе тест ниже ничего не докажет"
@@ -1070,13 +1071,13 @@ fn relayout_frame_content_repaints_child_at_unchanged_viewport() {
         crate::forms::toggle_details_open(&mut doc, d);
     }
     // Повторный проход по вьюпортам правку НЕ увидит: размер хоста тот же.
-    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout, Default::default());
     assert!(
         !has_blue(&frames[0].content_dl),
         "мутация дерева ребёнка мимо гейта размеров — ровно тот дефект, который чинит срез"
     );
 
-    crate::frames::relayout_frame_content(&mut frames, 0, &page_layout);
+    crate::frames::relayout_frame_content(&mut frames, 0, &page_layout, Default::default());
     assert!(has_blue(&frames[0].content_dl), "раскрытая панель обязана попасть в список");
     assert_eq!(
         frames[0].viewport, viewport_before,
@@ -1123,7 +1124,7 @@ fn relayout_frame_content_reaches_the_ancestor_list() {
     grand.layout = Some(gl);
 
     let mut frames = vec![mid, grand];
-    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout, Default::default());
     assert!(!has_blue(&frames[0].content_dl), "панель внука пока спрятана");
 
     let d = {
@@ -1134,7 +1135,7 @@ fn relayout_frame_content_reaches_the_ancestor_list() {
         let mut doc = frames[1].doc.lock().expect("лок внука");
         crate::forms::toggle_details_open(&mut doc, d);
     }
-    crate::frames::relayout_frame_content(&mut frames, 1, &page_layout);
+    crate::frames::relayout_frame_content(&mut frames, 1, &page_layout, Default::default());
     assert!(has_blue(&frames[1].content_dl), "внук перерисован");
     assert!(
         has_blue(&frames[0].content_dl),
@@ -1156,7 +1157,7 @@ fn relayout_frame_content_clamps_scroll_when_child_shrinks() {
        </body></html>"#;
     let (page_layout, handle) = live_frame_with_child(tall);
     let mut frames = vec![handle];
-    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout, Default::default());
     let max = crate::frames::frame_max_scroll(&frames[0]);
     assert!(max > 100.0, "раскрытый <details> обязан давать прокрутку: {max}");
     assert_eq!(crate::frames::scroll_frame_to(&mut frames, 0, max), Some(max));
@@ -1169,7 +1170,7 @@ fn relayout_frame_content_clamps_scroll_when_child_shrinks() {
         let mut doc = frames[0].doc.lock().expect("лок ребёнка");
         crate::forms::toggle_details_open(&mut doc, d);
     }
-    crate::frames::relayout_frame_content(&mut frames, 0, &page_layout);
+    crate::frames::relayout_frame_content(&mut frames, 0, &page_layout, Default::default());
     assert_eq!(
         frames[0].scroll_y,
         crate::frames::frame_max_scroll(&frames[0]),
@@ -1226,7 +1227,7 @@ fn rebuilt_frame_content_backs_short_content_with_full_viewport_fill() {
     let (page_layout, handle) = live_frame_with_child(child);
     let viewport = handle.viewport;
     let mut frames = vec![handle];
-    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout, Default::default());
 
     match frames[0].content_dl.first() {
         Some(lumen_paint::DisplayCommand::FillRect { rect, color }) => {
@@ -1247,7 +1248,7 @@ fn rebuilt_frame_content_defaults_backdrop_to_white_without_child_background() {
         r#"<html><body style="margin:0"><div style="height:20px"></div></body></html>"#,
     );
     let mut frames = vec![handle];
-    crate::frames::sync_frame_viewports(&mut frames, &page_layout);
+    crate::frames::sync_frame_viewports(&mut frames, &page_layout, Default::default());
 
     match frames[0].content_dl.first() {
         Some(lumen_paint::DisplayCommand::FillRect { color, .. }) => {
