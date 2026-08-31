@@ -12,7 +12,7 @@ Do not re-read a whole file to make a small update — use `grep -n` to find the
 | New feature / capability | `CAPABILITIES.md` | `grep -n "<subsystem>\|<keyword>" CAPABILITIES.md` → change ⬜/🟡 → ✅ on that line |
 | New feature / capability | `subsystems/<crate>.md` | append bullet to **Done** section (file is small — read whole) |
 | New feature / capability | `STATUS-PN.md` (your role) | delete the completed task's pointer line |
-| Bug fixed | `BUGS.md` | `grep -n "BUG-NNN" BUGS.md` → change `OPEN` → `FIXED <date>` |
+| Bug fixed | `BUGS.md` → `BUGS-FIXED.md` | `grep -n "BUG-NNN" BUGS.md` → **move** the row into `BUGS-FIXED.md` with `FIXED <date>` (closed rows live in the archive since 2026-08-31), then `python scripts/remap_status_pointers.py --apply` |
 | CSS property (P4) | `CSS-SPECS.md` | `grep -n "<property-name>" CSS-SPECS.md` → change ⬜ → ✅ |
 | CSS property (P4) | `CAPABILITIES.md` | same as "New feature" above |
 | New dependency | `docs/plan/tech-stack.md` | append row to the relevant table (permanent or provisional) |
