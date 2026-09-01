@@ -186,7 +186,8 @@ pub use values::color::{Color, ColorFloat, CssColor, SystemColor};
 pub use values::box_model::{
     BorderCollapse, BorderStyle, BoxSizing, BreakValue, ClearSide, EmptyCells, FillRule,
     FloatSide, Isolation, MixBlendMode, OutlineColor, OutlineStyle, PaintOrderSlot, Position,
-    StrokeLinecap, StrokeLinejoin, SvgPaint, SvgPaintOrder, VerticalAlign,
+    StrokeLinecap, StrokeLinejoin, SvgGradientDef, SvgGradientUnits, SvgPaint, SvgPaintOrder,
+    VerticalAlign,
 };
 pub use values::timing::{
     AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline, CssWideKeyword,

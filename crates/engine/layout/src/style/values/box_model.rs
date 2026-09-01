@@ -7,11 +7,22 @@
 //! Перенесено батчем SPLIT-ST16 из `crates/engine/layout/src/style.rs`
 //! (анкер `enum SvgPaint` до конца `impl VerticalAlign`) без правок тел.
 
+use std::sync::Arc;
+
 use crate::style::values::color::Color;
+use crate::style::values::transform::GradientStop;
 
 /// SVG Presentation §11.2 — `fill` / `stroke` paint value (`<paint>` type).
 /// Used by SVG shape elements. Inherited by descendants.
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// `Url`/`Gradient` — LIB-5: `url(#id)` referencing a paint-server element
+/// (`<linearGradient>`/`<radialGradient>`). Cascade parsing (`apply/paint.rs`)
+/// has no DOM access, so it can only store the raw id as `Url`; box-tree build
+/// (`box_tree/svg.rs`, which does have `&Document`) resolves it against the
+/// referenced element and replaces it with `Gradient` before the box is
+/// stored. A `Url` surviving to paint (unresolved — bad id, or not a
+/// gradient) resolves like `None`.
+#[derive(Debug, Clone, PartialEq)]
 pub enum SvgPaint {
     /// `none` — shape not painted (fully transparent).
     None,
@@ -19,6 +30,10 @@ pub enum SvgPaint {
     CurrentColor,
     /// Explicit sRGB color value.
     Color(Color),
+    /// `url(#id)` — raw paint-server reference, not yet resolved against the DOM.
+    Url(String),
+    /// A `url(#id)` reference resolved to a concrete gradient definition.
+    Gradient(Arc<SvgGradientDef>),
 }
 
 impl Default for SvgPaint {
@@ -30,12 +45,87 @@ impl Default for SvgPaint {
 }
 
 impl SvgPaint {
-    /// Resolves the paint value to a concrete `Color`. Returns `None` if paint is `none`.
-    pub fn resolve(self, current_color: Color) -> Option<Color> {
+    /// Resolves the paint value to a flat `Color`. Returns `None` for `none`
+    /// and for `Gradient`/unresolved `Url` — a gradient paint is not
+    /// representable as one color; paint (`svg_text_decoration.rs`) matches
+    /// `SvgPaint::Gradient` directly for shapes/paths it can clip-and-fill
+    /// with the gradient, and otherwise falls back to the gradient's first
+    /// stop for callers (border-based rect/circle/ellipse/line stroke) that
+    /// can only paint a flat color.
+    pub fn resolve(&self, current_color: Color) -> Option<Color> {
         match self {
-            SvgPaint::None => None,
+            SvgPaint::None | SvgPaint::Url(_) => None,
             SvgPaint::CurrentColor => Some(current_color),
-            SvgPaint::Color(c) => Some(c),
+            SvgPaint::Color(c) => Some(*c),
+            SvgPaint::Gradient(g) => g.stops().first().map(|s| s.color),
+        }
+    }
+}
+
+/// LIB-5 — SVG `gradientUnits` (SVG L1 §13.2.2/§13.2.3). Selects the coordinate
+/// system `SvgGradientDef`'s geometry is expressed in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SvgGradientUnits {
+    /// `objectBoundingBox` (default) — coordinates are fractions (0..1, or the
+    /// equivalent percentage) of the painted shape's own bounding box.
+    ObjectBoundingBox,
+    /// `userSpaceOnUse` — coordinates are in the same user-unit space as the
+    /// shape's own geometry (before the shape's `transform`/viewBox scale).
+    UserSpaceOnUse,
+}
+
+/// LIB-5 — an SVG `<linearGradient>`/`<radialGradient>` paint server, resolved
+/// from the DOM (id lookup + `<stop>` children) at box-tree build time.
+///
+/// Deliberately a *separate* type from `ParsedGradient` (the CSS
+/// `linear-gradient()`/`radial-gradient()` model in `style/values/background.rs`)
+/// rather than shoehorned into it: SVG's coordinate model (an explicit line or
+/// circle, in `objectBoundingBox` or `userSpaceOnUse` units) has no equivalent
+/// in CSS's (an angle/keyword-sized shape implicitly centred on the painted
+/// box), so forcing one into the other would either lose geometry or carry
+/// unused CSS-only fields. What *is* shared is the terminal representation —
+/// [`GradientStop`] and the `DrawLinearGradient`/`DrawRadialGradient` display
+/// commands — which paint reuses as-is once this type resolves SVG's geometry
+/// down to concrete document-space coordinates.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SvgGradientDef {
+    /// `<linearGradient x1 y1 x2 y2>`.
+    Linear {
+        /// Gradient vector start point, in `units`.
+        x1: f32,
+        /// Gradient vector start point, in `units`.
+        y1: f32,
+        /// Gradient vector end point, in `units`.
+        x2: f32,
+        /// Gradient vector end point, in `units`.
+        y2: f32,
+        /// Coordinate system `x1..y2` are expressed in.
+        units: SvgGradientUnits,
+        /// Color stops, ordered by offset.
+        stops: Vec<GradientStop>,
+    },
+    /// `<radialGradient cx cy r>`. SVG 2's focal-point `fx`/`fy` are not modelled —
+    /// the gradient is always drawn centred at `(cx, cy)`.
+    Radial {
+        /// Circle center, in `units`.
+        cx: f32,
+        /// Circle center, in `units`.
+        cy: f32,
+        /// Circle radius, in `units`.
+        r: f32,
+        /// Coordinate system `cx`/`cy`/`r` are expressed in.
+        units: SvgGradientUnits,
+        /// Color stops, ordered by offset.
+        stops: Vec<GradientStop>,
+    },
+}
+
+impl SvgGradientDef {
+    /// The stop list, regardless of gradient kind — used for the flat-color
+    /// fallback ([`SvgPaint::resolve`]) and paint-time stop lookup.
+    pub fn stops(&self) -> &[GradientStop] {
+        match self {
+            SvgGradientDef::Linear { stops, .. } | SvgGradientDef::Radial { stops, .. } => stops,
         }
     }
 }

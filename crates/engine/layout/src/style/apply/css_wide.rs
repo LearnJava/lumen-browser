@@ -511,13 +511,13 @@ pub(in crate::style) fn apply_css_wide_keyword(
             style.opacity = if inh_only_inherit { inherited.opacity } else { init.opacity };
         }
         "fill" => {
-            style.svg_fill = if inh_only_inherit { inherited.svg_fill } else { init.svg_fill };
+            style.svg_fill = if inh_only_inherit { inherited.svg_fill.clone() } else { init.svg_fill.clone() };
         }
         "fill-opacity" => {
             style.svg_fill_opacity = if inh_only_inherit { inherited.svg_fill_opacity } else { init.svg_fill_opacity };
         }
         "stroke" => {
-            style.svg_stroke = if inh_only_inherit { inherited.svg_stroke } else { init.svg_stroke };
+            style.svg_stroke = if inh_only_inherit { inherited.svg_stroke.clone() } else { init.svg_stroke.clone() };
         }
         "stroke-opacity" => {
             style.svg_stroke_opacity = if inh_only_inherit { inherited.svg_stroke_opacity } else { init.svg_stroke_opacity };

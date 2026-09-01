@@ -495,9 +495,9 @@ pub fn compute_style(
         offset_rotate: OffsetRotate::Auto,
         offset_anchor: None,
         // SVG presentation attributes — all inherited per SVG spec §11.
-        svg_fill: inherited.svg_fill,
+        svg_fill: inherited.svg_fill.clone(),
         svg_fill_opacity: inherited.svg_fill_opacity,
-        svg_stroke: inherited.svg_stroke,
+        svg_stroke: inherited.svg_stroke.clone(),
         svg_stroke_opacity: inherited.svg_stroke_opacity,
         svg_stroke_width: inherited.svg_stroke_width,
         svg_fill_rule: inherited.svg_fill_rule,
