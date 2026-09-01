@@ -191,7 +191,7 @@ impl Lumen {
                         }
                     }
                     self.request_redraw();
-                } else if self.try_scroll_frame(dy_css) {
+                } else if self.try_scroll_frame(dx_css, dy_css) {
                     // BUG-480 СЃСЂРµР· 17: РєРѕР»РµСЃРѕ РЅР°Рґ СЃРѕРґРµСЂР¶РёРјС‹Рј С„СЂРµР№РјР°
                     // РєСЂСѓС‚РёС‚ РµРіРѕ РїРѕРґ-РґРѕРєСѓРјРµРЅС‚, Р° РЅРµ СЃС‚СЂР°РЅРёС†Сѓ. РџСЂРѕРІРµСЂСЏРµС‚СЃСЏ
                     // Р”Рћ overflow-РєРѕРЅС‚РµР№РЅРµСЂРѕРІ: С„СЂРµР№Рј вЂ” Р±Р»РёР¶Р°Р№С€РёР№ Рє РєСѓСЂСЃРѕСЂСѓ
@@ -255,7 +255,7 @@ impl Lumen {
                                     (sv.right.scroll_y + dy_css).clamp(0.0, max);
                             }
                             self.request_redraw();
-                        } else if self.try_scroll_frame(dy_css) {
+                        } else if self.try_scroll_frame(dx_css, dy_css) {
                             // BUG-480 СЃСЂРµР· 17: С‚РѕС‚ Р¶Рµ Р°РґСЂРµСЃР°С‚, С‡С‚Рѕ Рё Сѓ РєРѕР»РµСЃР°.
                         } else if self.try_scroll_overflow_container(dx_css, dy_css) {
                             // Touchpad gesture started over overflow container.
@@ -290,7 +290,7 @@ impl Lumen {
                                     (sv.right.scroll_y + dy_css).clamp(0.0, max);
                             }
                             self.request_redraw();
-                        } else if self.try_scroll_frame(dy_css) {
+                        } else if self.try_scroll_frame(dx_css, dy_css) {
                             // BUG-480 СЃСЂРµР· 17: С‚РѕС‚ Р¶Рµ Р°РґСЂРµСЃР°С‚, С‡С‚Рѕ Рё Сѓ РєРѕР»РµСЃР°.
                         } else if self.try_scroll_overflow_container(dx_css, dy_css) {
                             // Touchpad move over overflow container.
