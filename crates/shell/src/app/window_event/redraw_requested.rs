@@ -710,10 +710,22 @@ impl Lumen {
         // РґРёР°РїР°Р·РѕРЅС‹ Р°РЅРёРјРёСЂСѓРµРјС‹С… СЃРµРіРјРµРЅС‚РѕРІ вЂ” СЃРєСЂРѕР»Р»-РєРѕРјРїРѕР·РёС‚РѕСЂ РєСЌС€РёСЂСѓРµС‚ РїРѕР»РѕСЃСѓ
         // РїРѕ СЃС‚Р°С‚РёРєРµ, СЃРµРіРјРµРЅС‚С‹ СЂРёСЃСѓРµС‚ РїРѕРІРµСЂС…. РџРѕР·РґРЅРµР№С€РёРµ append-С‹ РІ anim_dl
         // (cue, squiggles) РёРґСѓС‚ РІ РєРѕРЅРµС† СЃРїРёСЃРєР° Рё РґРёР°РїР°Р·РѕРЅС‹ РЅРµ СЃРґРІРёРіР°СЋС‚.
+        // FRAME-7: the focused `<input>`'s caret rides the same per-NodeId
+        // override map as CSS-animation offload — computed up front (before
+        // `frame`/`lb` are borrowed) since it needs `&self`, not the
+        // `anim_frame`/`layout_box` fields specifically.
+        let caret_override = self.focused_input_caret();
         let mut anim_ranges: Vec<std::ops::Range<usize>> = Vec::new();
         let mut anim_dl: Option<lumen_paint::DisplayList> =
-            if let (Some(frame), Some(lb)) = (&self.anim_frame, &self.layout_box) {
-                let comp = frame.to_compositor_frame();
+            if let Some(lb) = &self.layout_box {
+                let mut comp = self
+                    .anim_frame
+                    .as_ref()
+                    .map(|f| f.to_compositor_frame())
+                    .unwrap_or_default();
+                if let Some((nid, cursor)) = caret_override {
+                    comp.overrides.entry(nid).or_default().caret = Some(cursor);
+                }
                 if !comp.is_empty() {
                     let tree = StackingTree::build(lb);
                     let order = PaintOrder::from_tree(&tree);

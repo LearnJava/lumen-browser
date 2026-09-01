@@ -593,7 +593,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `touch-action` | 🟡 | parsed; gesture ⬜ |
 | `resize` | ✅ | parsed + drag-UI (grip hit-test, axis-gated by `resize` value + `writing-mode`, CC-CSS-4) |
 | `appearance` | ✅ | none/auto/compat/base-select; `appearance:none` strips UA box + suppresses native indicator (p4-appearance-none 2026-06-14); `base-select` renders `<select>` as an author-styleable widget tree + author-styled `<option>` picker (p1-select-base 2026-07-17) |
-| `caret-color` | 🟡 | parsed; text input ⬜ |
+| `caret-color` | 🟡 | page `<input>` caret ✅ (FRAME-7 срез 1); `<textarea>`/frame input ⬜ |
 | `will-change` | 🟡 | parsed; GPU hints ⬜ |
 
 ### [T3] At-Rules

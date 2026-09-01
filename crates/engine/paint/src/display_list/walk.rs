@@ -146,7 +146,7 @@ pub(crate) fn emit_box_self(
                 });
             }
             emit_outline(b, out);
-            emit_form_control_indicator(b, kind, out);
+            emit_form_control_indicator(b, kind, ov, out);
         }
         BoxKind::Image { src, alt, is_lazy } => {
             if !is_paint_visible(b) {
@@ -993,7 +993,10 @@ pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&
                 });
             }
             emit_outline(b, out);
-            emit_form_control_indicator(b, kind, out);
+            // FRAME-7: this legacy `walk()` recursion has no compositor-override
+            // parameter at all (unlike `emit_box_self`, which `fill_buckets` calls
+            // for the ordered/anim-aware paint path) — a caret can never reach here.
+            emit_form_control_indicator(b, kind, None, out);
         }
         BoxKind::InlineBlockRow => {
             // Анонимный контейнер: нет фона/бордера собственного.
