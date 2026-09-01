@@ -2268,6 +2268,50 @@ SOURCE_MARKERS = [
             "/document-policy/reporting/sync-xhr-report-only.html",
             "/permissions-policy/reporting/sync-xhr-report-only.html"),
     ),
+
+    # WPT-RUN-6 slice 33, both `_exact_id_marker`-keyed entries below. See
+    # `verify_slice33_gaps.py`'s module docstring for the reads that found
+    # them.
+    Mechanism(
+        # Live probe (`--variant dom-cycle-appendchild`): `testselect2.
+        # add(opt2)`, where `opt2` is an inclusive ancestor of `testselect2`
+        # in the markup, never returns — no exception, no next line, not
+        # even a 500ms `setInterval` tick over 8s (the control variant prints
+        # 15). `Document::append_child`/`insert_before`/`insert_after`
+        # (`crates/engine/dom/src/lib.rs`) guard the DOM §4.2.3
+        # inclusive-ancestor cycle check with `debug_assert!` only, which
+        # `[profile.dev-release]`/`[profile.release]` compile to nothing (no
+        # `debug-assertions` override — grep-confirmed) — so the check never
+        # runs, the mutation creates a real two-node parent cycle, and
+        # whatever downstream code first walks it hangs the whole engine
+        # with no crash and no log line.
+        "dom-cycle-no-hierarchy-error", "BUG-954",
+        [], "`appendChild`/`insertBefore` never throw `HierarchyRequestError` "
+        "on an inclusive-ancestor cycle — the only guard is a `debug_assert!` "
+        "compiled out of the dev-release/release profiles — so the insertion "
+        "silently creates a real DOM cycle and hangs the engine",
+        predicate=_exact_id_marker(
+            "/html/semantics/forms/the-select-element/select-add.html"),
+    ),
+    Mechanism(
+        # Live probe (`--variant media-empty-src-loadstart`): `<video
+        # src="">` fires `error` but never `loadstart` (`video_bindings.
+        # rs::startFetch` returns via `failResource` before the
+        # `queueEvent('loadstart')` line when the URL is the empty string);
+        # `<audio src="">` fires NEITHER (`audio_element.rs::startLoad`'s
+        # `if (!HAS_PROVIDER || !url) return;` treats the falsy empty string
+        # as "nothing to load" and never runs at all). `currentSrc.html`
+        # arms `loadstart` before asserting and calling `done()`, so the
+        # empty-src cases (4 of 16 async tests, both tags × both markup
+        # forms) never complete and the whole file times out.
+        "media-empty-src-no-loadstart", "BUG-955",
+        [], "`<audio>`/`<video>` with `src=\"\"` never fire `loadstart` "
+        "(`<audio>` fires neither `loadstart` nor `error`) — a test arming "
+        "`loadstart` before its assertions hangs on the empty-src case",
+        predicate=_exact_id_marker(
+            "/html/semantics/embedded-content/media-elements/"
+            "location-of-the-media-resource/currentSrc.html"),
+    ),
 ]
 
 #: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched

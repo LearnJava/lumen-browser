@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-954)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-956)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -398,6 +398,8 @@
 | [BUG-951](bugs/BUG-951-OPEN.md) | OPEN | js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_lumen_is_focusable`, `HTMLElement.prototype.focus`) | `<label>.focus()` без собственного `tabindex` — полный no-op: не фокусируется ни метка, ни связанный контрол (`for`/первый labelable-потомок), `_lumen_is_focusable` не знает тега `LABEL`. Найден P2 2026-09-01 (WPT-RUN-6 срез 32, `forward-focus-to-associated-element.html`) |
 | [BUG-952](bugs/BUG-952-OPEN.md) | OPEN | js (V8-раннер — вызов колбэков `setTimeout`/`setInterval`) | Исключение, брошенное внутри колбэка таймера, не попадает никуда: ни `script error:`/`[JS error]` в логе браузера (как для синхронных ошибок), ни `window.onerror` — колбэк просто обрывается, остальной цикл событий жив. Тест, чей `done()` стоит после броска, висит до TIMEOUT вместо FAIL. Найден P2 2026-09-01 (WPT-RUN-6 срез 32, `user-timing/measure.html`) |
 | [BUG-953](bugs/BUG-953-OPEN.md) | OPEN (ДОРАБОТКА → `GAP-POLICYREPORT`, [ROADMAP.md](ROADMAP.md)) | js (`crates/js/src/reporting_api.rs`) | `ReportingObserver` реализован, но ни один Rust- или шим-файл не генерирует `document-policy-violation`/`permissions-policy-violation` отчёт — сверки фичи с политикой нет вовсе, ни для одной фичи. Найден P2 2026-09-01 (WPT-RUN-6 срез 32, `document-policy/reporting/sync-xhr-report-only.html`) |
+| [BUG-954](bugs/BUG-954-OPEN.md) | OPEN | dom (`crates/engine/dom/src/lib.rs` — `Document::append_child`/`insert_before`/`insert_after`), js (`crates/js/src/v8_runtime/install/dom_core.rs`) | `appendChild`/`insertBefore` не бросают `HierarchyRequestError` на вставке узла в собственного потомка (DOM §4.2.3) — единственная защита это `debug_assert!`, компилируемый в пустоту в `dev-release`/`release` (нет `debug-assertions` override). Вставка тихо создаёт настоящий цикл в дереве и вешает движок целиком, без паники и без строки в логе. Найден P2 2026-09-02 (WPT-RUN-6 срез 33, `select-add.html`) |
+| [BUG-955](bugs/BUG-955-OPEN.md) | OPEN | js (`crates/js/src/video_bindings.rs::startFetch`, `crates/js/src/audio_element.rs::startLoad`) | `<video src="">` бросает `error`, но не `loadstart` (ранний `return` перед `queueEvent('loadstart')`); `<audio src="">` не бросает вообще ничего (`if (!HAS_PROVIDER \|\| !url) return;` берёт `url` как булево). Второй экземпляр того же дефекта в другом шиме. Найден P2 2026-09-02 (WPT-RUN-6 срез 33, `currentSrc.html`) |
 
 ---
 
