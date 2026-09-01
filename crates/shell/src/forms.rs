@@ -538,6 +538,35 @@ pub fn textarea_caret_rect(
     Rect::new(content_x + measure(&prefix), content_y + line_idx as f32 * line_h, 1.0, line_h)
 }
 
+/// FRAME-7 remainder (1): caret bar rect for a focused `<input>` INSIDE a
+/// frame, computed straight from the layout box tree — a shell-side overlay
+/// mirroring [`textarea_caret_rect`], not the page `<input>`'s
+/// `CompositorOverride` channel (`lumen_paint`'s `emit_input_caret`, whose
+/// geometry this duplicates): a frame's `content_dl` is rebuilt only on
+/// relayout (`frames::rebuild_frame_display_lists`'s dirty gate), so wiring
+/// the compositor-override channel through it is a much larger change than a
+/// per-redraw shell overlay — see FRAME-7's ROADMAP "Остаток" note.
+///
+/// `field_box` is the `<input>`'s `FormControl` box. Same 2px content inset
+/// and per-glyph advance approximation as `emit_input_caret` — this crate has
+/// no real `TextMeasurer` either.
+pub fn input_caret_rect(field_box: &LayoutBox, value: &str, char_index: usize) -> Rect {
+    let s = &field_box.style;
+    let bl = s.border_left_width;
+    let bt = s.border_top_width;
+    let bb = s.border_bottom_width;
+    let inset = 2.0_f32;
+    let content_x = field_box.rect.x + bl + inset;
+    let content_y = field_box.rect.y + bt;
+    let content_h = (field_box.rect.height - bt - bb).max(1.0);
+    let font_size = s.font_size;
+
+    let chars_before = char_index.min(value.chars().count());
+    let caret_x = content_x + font_size * 0.5 * chars_before as f32;
+
+    Rect::new(caret_x, content_y, 1.0, content_h)
+}
+
 /// Walk `doc` and collect all NodeIds with `data-lumen-modal` attribute
 /// (set by `dialog.showModal()`, cleared by `close()` and Escape handler).
 /// Returns them in DOM order (first opened first).
@@ -2697,5 +2726,34 @@ mod tests {
         let rect = textarea_caret_rect(&field, "x", 0, &char_width_measure);
         assert_eq!(rect.x, 7.0);
         assert_eq!(rect.y, 9.0);
+    }
+
+    // ── FRAME-7 остаток (1): <input> caret geometry ──────────────────────────
+
+    #[test]
+    fn input_caret_rect_at_start() {
+        let field = make_field_lb(NodeId::from_index(1), Rect::new(10.0, 20.0, 100.0, 30.0), vec![]);
+        let rect = input_caret_rect(&field, "abc", 0);
+        // border 0 (ComputedStyle::root()) + 2px inset.
+        assert_eq!(rect.x, 12.0);
+        assert_eq!(rect.y, 20.0);
+        assert_eq!(rect.width, 1.0);
+        assert_eq!(rect.height, 30.0);
+    }
+
+    #[test]
+    fn input_caret_rect_advances_by_char_count() {
+        let field = make_field_lb(NodeId::from_index(1), Rect::new(0.0, 0.0, 100.0, 20.0), vec![]);
+        let rect = input_caret_rect(&field, "abcd", 2);
+        // font_size(16) * 0.5 * 2 chars = 16px past the content edge.
+        assert_eq!(rect.x, 2.0 + 16.0);
+    }
+
+    #[test]
+    fn input_caret_rect_clamps_to_value_length() {
+        let field = make_field_lb(NodeId::from_index(1), Rect::new(0.0, 0.0, 100.0, 20.0), vec![]);
+        let rect = input_caret_rect(&field, "ab", 99);
+        // char_index past the value clamps to its length (2 chars).
+        assert_eq!(rect.x, 2.0 + 16.0);
     }
 }

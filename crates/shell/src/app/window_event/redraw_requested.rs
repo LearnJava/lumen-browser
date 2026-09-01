@@ -1244,6 +1244,97 @@ impl Lumen {
             }
         }
 
+        // FRAME-7 остаток (1): caret bar for a focused `<input>`/`<textarea>`
+        // INSIDE a frame — a shell-side overlay in PAGE coordinates
+        // (`frames::frame_page_origin` translates the rect found in the
+        // frame's OWN layout tree, the same offset `show_frame_validation_tooltip`
+        // uses), not the `CompositorOverride` channel the page `<input>` caret
+        // rides above: a frame's `content_dl` is rebuilt only on relayout
+        // (`frames::rebuild_frame_display_lists`'s dirty gate), so wiring the
+        // override channel through it is the much larger change FRAME-7's
+        // ROADMAP "Остаток" note describes. Clipped to the frame's OWN
+        // viewport (translated the same way) in addition to the field's own
+        // box, so a field scrolled out of the frame's visible area — or a
+        // frame scrolled out of the page's — does not leave a caret floating
+        // over unrelated content.
+        if let Some(handle) = self.focused_frame.and_then(|(idx, _)| self.frames.get(idx))
+            && let Some((fidx, nid, cursor, value)) = self.focused_frame_input_caret()
+            && let Some(field_lb) = handle.layout.as_ref().and_then(|lb| forms::find_layout_box(lb, nid))
+            && let Some((ox, oy)) = frames::frame_page_origin(&self.frames, fidx)
+        {
+            let rect = forms::input_caret_rect(field_lb, &value, cursor);
+            let color = field_lb.style.caret_color.unwrap_or(field_lb.style.color);
+            let translate = |r: lumen_core::geom::Rect| lumen_core::geom::Rect {
+                x: r.x + ox,
+                y: r.y + oy,
+                ..r
+            };
+            let viewport_rect = lumen_core::geom::Rect {
+                x: ox,
+                y: oy,
+                width: handle.viewport.width,
+                height: handle.viewport.height,
+            };
+            let mut caret_cmd = vec![
+                lumen_paint::DisplayCommand::PushClipRect { rect: viewport_rect },
+                lumen_paint::DisplayCommand::PushClipRect { rect: translate(field_lb.rect) },
+                lumen_paint::DisplayCommand::FillRect { rect: translate(rect), color },
+                lumen_paint::DisplayCommand::PopClip,
+                lumen_paint::DisplayCommand::PopClip,
+            ];
+            if let Some(dl) = anim_dl.as_mut() {
+                dl.append(&mut caret_cmd);
+            } else {
+                let mut buf = page_buf
+                    .take()
+                    .unwrap_or_else(|| self.display_list.clone());
+                buf.append(&mut caret_cmd);
+                page_buf = Some(buf);
+            }
+        }
+        if let Some(handle) = self.focused_frame.and_then(|(idx, _)| self.frames.get(idx))
+            && let Some((fidx, nid, cursor, value)) = self.focused_frame_textarea_caret()
+            && let Some(field_lb) = handle.layout.as_ref().and_then(|lb| forms::find_layout_box(lb, nid))
+            && let Some((ox, oy)) = frames::frame_page_origin(&self.frames, fidx)
+            && let Ok(font) = lumen_font::Font::parse(INTER_FONT)
+            && let Ok(m) = lumen_paint::FontMeasurer::new(&font)
+        {
+            let fs = field_lb.style.font_size;
+            let measure = |s: &str| -> f32 {
+                use lumen_layout::TextMeasurer;
+                s.chars().map(|c| m.char_width(c, fs)).sum()
+            };
+            let rect = forms::textarea_caret_rect(field_lb, &value, cursor, &measure);
+            let color = field_lb.style.caret_color.unwrap_or(field_lb.style.color);
+            let translate = |r: lumen_core::geom::Rect| lumen_core::geom::Rect {
+                x: r.x + ox,
+                y: r.y + oy,
+                ..r
+            };
+            let viewport_rect = lumen_core::geom::Rect {
+                x: ox,
+                y: oy,
+                width: handle.viewport.width,
+                height: handle.viewport.height,
+            };
+            let mut caret_cmd = vec![
+                lumen_paint::DisplayCommand::PushClipRect { rect: viewport_rect },
+                lumen_paint::DisplayCommand::PushClipRect { rect: translate(field_lb.rect) },
+                lumen_paint::DisplayCommand::FillRect { rect: translate(rect), color },
+                lumen_paint::DisplayCommand::PopClip,
+                lumen_paint::DisplayCommand::PopClip,
+            ];
+            if let Some(dl) = anim_dl.as_mut() {
+                dl.append(&mut caret_cmd);
+            } else {
+                let mut buf = page_buf
+                    .take()
+                    .unwrap_or_else(|| self.display_list.clone());
+                buf.append(&mut caret_cmd);
+                page_buf = Some(buf);
+            }
+        }
+
         // DS-15: Anonymous profile draws a thin red inset outline
         // around the whole window (design ref: `box-shadow: inset 0
         // 0 0 2px var(--accent)` on `.app-frame`). Appended last of
