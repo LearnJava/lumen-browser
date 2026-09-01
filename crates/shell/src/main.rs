@@ -175,7 +175,9 @@ use crate::scripts::{ParserInsertLog, ResolvedScript, ScriptSource, run_scripts}
 use crate::frames::FrameHandle;
 use crate::frames::{apply_iframe_sandbox_gates, base_url_string, load_frame_sub_documents};
 #[cfg(test)]
-use crate::frames::{fetch_frame_subresources, frame_access_allowed};
+use crate::frames::{
+    fetch_frame_subresources, fetch_iframe_source, frame_access_allowed, frame_error_document,
+};
 use crate::chrome_ui::{
     ChromeOverlayFrameCache, ContentAreaDetachment, chrome_overlay_cache_disabled,
     chrome_overlay_digest_reuse_disabled, chrome_overlay_segment,

@@ -459,6 +459,7 @@ fn splice_handle(src: &str, host_rect: Rect, content_dl: DisplayList) -> crate::
     crate::frames::FrameHandle {
         host: NodeId::from_index(0),
         url: "about:blank".to_owned(),
+        load_failed: false,
         base: crate::ResourceBase::Url("about:blank".to_owned()),
         doc: Arc::new(Mutex::new(lumen_html_parser::parse("<html></html>"))),
         js: None,
@@ -1358,6 +1359,62 @@ fn navigating_a_frame_drops_its_whole_subtree_and_spares_siblings() {
     assert_eq!(frames.len(), 2, "остались только навигируемый фрейм и сосед");
     assert!(Arc::ptr_eq(&frames[0].doc, &child_doc), "навигируемый фрейм на месте");
     assert_eq!(frames[1].host_src, "other.html", "сосед страницы не тронут");
+}
+
+// ── документ ошибки навигации фрейма (FRAME-4 срез 2) ───────────────────────
+
+struct NullSink;
+impl EventSink for NullSink {
+    fn emit(&self, _event: &Event) {}
+}
+
+/// `javascript:`/`data:` — неподдержанные схемы (BUG-480 срез 1) — теперь
+/// возвращают причину и адрес, а не молча гасят навигацию: этими двумя
+/// полями [`spawn_frame`] строит error-документ вместо пустого хэндла.
+#[test]
+fn fetch_iframe_source_reports_reason_and_url_for_unsupported_schemes() {
+    let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let err = fetch_iframe_source("javascript:alert(1)", &base, &sink, None)
+        .err()
+        .expect("javascript: не поддерживается");
+    assert!(err.reason.contains("javascript:"), "причина называет схему: {}", err.reason);
+    assert_eq!(err.attempted_url, "javascript:alert(1)");
+
+    let err = fetch_iframe_source("data:text/html,x", &base, &sink, None)
+        .err()
+        .expect("data: не поддерживается");
+    assert!(err.reason.contains("data:"), "причина называет схему: {}", err.reason);
+    assert_eq!(err.attempted_url, "data:text/html,x");
+}
+
+/// Файл, которого нет на диске, — та же форма отказа, что и у схем выше:
+/// `attempted_url` собран как `file://` того же пути, что видит пользователь
+/// в error-документе.
+#[test]
+fn fetch_iframe_source_reports_missing_file() {
+    let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let err = fetch_iframe_source("frame4-does-not-exist.html", &base, &sink, None)
+        .err()
+        .expect("файла нет на диске");
+    assert!(err.attempted_url.starts_with("file://"), "url = {}", err.attempted_url);
+    assert!(err.attempted_url.ends_with("frame4-does-not-exist.html"));
+}
+
+/// `frame_error_document` экранирует и адрес, и причину — обе несут сырой
+/// пользовательский/сетевой текст (ссылка со страницы, сообщение об ошибке
+/// сети), которому нельзя дать разорвать разметку синтетического документа.
+#[test]
+fn frame_error_document_escapes_url_and_reason() {
+    let html = frame_error_document(
+        "http://x/<script>alert(1)</script>",
+        "reason with \"quotes\" & <tags>",
+    );
+    assert!(!html.contains("<script>alert(1)</script>"), "url не экранирован: {html}");
+    assert!(html.contains("&lt;script&gt;"), "экранированный url отсутствует: {html}");
+    assert!(html.contains("&amp;"), "экранированный амперсанд отсутствует: {html}");
+    assert!(html.contains("&lt;tags&gt;"), "экранированная причина отсутствует: {html}");
 }
 
 // ── фон под-документа на весь вьюпорт (BUG-480 срез 21) ─────────────────────
