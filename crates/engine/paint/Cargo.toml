@@ -60,16 +60,29 @@ lumen-layout.workspace = true
 lumen-core.workspace = true
 
 [features]
-# Phase 2 (текущий): femtovg OpenGL ES 2.0 (ADR-010 §Migration path, RB-9)
+# ВАЖНО: ни один флаг ниже НЕ выбирает бэкенд — они лишь решают, что вообще
+# компилируется. Выбор рабочего бэкенда автоматический и происходит в рантайме
+# (`crates/shell/src/backend_factory.rs`): `LUMEN_BACKEND` → иначе wgpu (ADR-017)
+# с probe-выбором API Vulkan→GL→DX12 (`backend_probe.rs`, результат кэшируется в
+# `<exe_dir>/data/paint/backend_probe.txt`) → при сбое инициализации автоматический
+# откат на femtovg. Поэтому шелл держит в своём `default` ОБА бэкенда сразу
+# (`crates/shell/Cargo.toml`): убрать оттуда `backend-femtovg` — значит убрать
+# fallback, а не «выбрать wgpu».
+#
+# `default` этого крейта внутри workspace не применяется вовсе: корневой
+# Cargo.toml тянет `lumen-paint` с `default-features = false`. Значение ниже
+# работает только при отдельной сборке самого крейта — менять его смысла нет,
+# и на выбор бэкенда в браузере оно не влияет.
 default = ["backend-femtovg"]
 
-# wgpu-бэкенд — Phase 1 / fallback для Phase 2 (ADR-010 §Migration path)
+# wgpu-бэкенд — рантайм-дефолт браузера (ADR-017, вытеснил порядок ADR-010 RB-9)
 backend-wgpu = ["dep:wgpu", "dep:winit"]
 
-# femtovg-бэкенд — Phase 2 default (ADR-010 §Migration path, RB-9)
+# femtovg-бэкенд — рантайм-fallback: только при сбое инициализации wgpu либо по
+# явному `LUMEN_BACKEND=femtovg` (ADR-017; был дефолтом до флипа, ADR-010 RB-9)
 backend-femtovg = ["dep:femtovg", "dep:glutin", "dep:glutin-winit", "dep:winit", "dep:imgref", "dep:rgb"]
 
-# vello-бэкенд — Phase 3 default (dep:vello добавляется в RB-10)
+# vello-бэкенд — план фазы 3, RB-7 заглушка (dep:vello добавляется в RB-10)
 backend-vello = []
 
 # CPU-бэкенд (tiny-skia) — headless CI без GPU; реализует RenderBackend (ADR-010 RB-8)
