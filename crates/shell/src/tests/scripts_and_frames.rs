@@ -475,6 +475,7 @@ fn splice_handle(src: &str, host_rect: Rect, content_dl: DisplayList) -> crate::
         image_keys: Vec::new(),
         scroll_y: 0.0,
         scroll_x: 0.0,
+        scroll_containers: Vec::new(),
     }
 }
 
@@ -1295,6 +1296,35 @@ fn relayout_frame_content_clamps_scroll_when_child_shrinks() {
         "прокрутка вернулась к новому краю содержимого"
     );
     assert!(frames[0].scroll_y < max, "новый край выше прежнего: {}", frames[0].scroll_y);
+}
+
+// ── overflow-контейнеры внутри под-документа (FRAME-3 срез 3) ───────────────
+
+/// `relayout_frame_content` пересчитывает `layout` РЕБЁНКА безусловно (в
+/// отличие от `sync_frame_viewports`, гейтящего пересчёт на «вьюпорт не
+/// менялся») — поэтому именно эта функция здесь проверяет то, что нужно
+/// [`Lumen::try_scroll_frame_overflow_container`]: `FrameHandle::scroll_containers`
+/// собран заново из СВЕЖЕГО дерева ребёнка, а не остался от фикстуры.
+#[test]
+fn relayout_frame_content_populates_scroll_containers() {
+    let child_html = r#"<html><body style="margin:0">
+         <div id="box" style="width:100px;height:100px;overflow:auto">
+           <div style="height:400px"></div>
+         </div>
+       </body></html>"#;
+    let (page_layout, handle) = live_frame_with_child(child_html);
+    let mut frames = vec![handle];
+    assert!(
+        frames[0].scroll_containers.is_empty(),
+        "фикстура строит layout напрямую, минуя collect_scroll_containers — список пуст ДО пересчёта"
+    );
+    crate::frames::relayout_frame_content(&mut frames, 0, &page_layout, Default::default());
+    assert_eq!(
+        frames[0].scroll_containers.len(),
+        1,
+        "overflow:auto контейнер ребёнка обязан попасть в список фрейма: {:?}",
+        frames[0].scroll_containers.iter().map(|c| c.node).collect::<Vec<_>>()
+    );
 }
 
 // ── навигация фрейма (BUG-480 срез 19) ──────────────────────────────────────
