@@ -362,6 +362,7 @@ pub(crate) fn run_window_mode(
         video_gif_frames: HashMap::new(),
         frames: Vec::new(),
         frame_env: None,
+        frame_nav_requests: Vec::new(),
         video_gif_store,
         text_track_store,
         image_cache: lumen_image::ImageDecodeCache::new(),

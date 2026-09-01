@@ -1553,12 +1553,157 @@ fn spawn_frame(
     handles
 }
 
-/// Навигация под-документа фрейма `idx` по адресу `href` (BUG-480 срез 19).
+/// Всё, что [`run_frame_navigation`] нужно от хозяина фрейма, снятое ДО того,
+/// как загрузка ребёнка уйдёт на фоновый поток (FRAME-4 срез 3).
+///
+/// `spawn_frame` не трогает `Lumen::frames`, поэтому его вызов сам по себе
+/// потокобезопасен (`Document` — `Send + Sync` по конструкции, см. assert в
+/// `lumen_dom::lib.rs`; `PersistentJs: Send + Sync`) — единственное, что
+/// нельзя нести через границу потока, это ЖИВОЙ индекс/заём `Lumen::frames`,
+/// который на момент завершения загрузки может уже не существовать
+/// (навигация предка, полная перезагрузка страницы). [`Self::old_doc`] — это
+/// и есть якорь идентичности вместо индекса: [`apply_frame_navigation`]
+/// проверяет его присутствие в `frames`, а не читает `idx`.
+pub(crate) struct FrameNavPrep {
+    pub(crate) host: NodeId,
+    depth: usize,
+    pub(crate) host_doc: Arc<Mutex<Document>>,
+    host_base: ResourceBase,
+    parent_js: Option<Arc<dyn PersistentJs>>,
+    info: lumen_dom::IframeInfo,
+    /// Документ, который эта навигация заменяет — якорь идентичности вместо
+    /// индекса (см. doc на [`Self`]).
+    pub(crate) old_doc: Arc<Mutex<Document>>,
+}
+
+/// Один слот "чья очередь" для generation-guard навигации фрейма
+/// (FRAME-4 срез 3): без него ответ МЕДЛЕННОГО запроса, пришедший ПОСЛЕ
+/// БЫСТРОГО (пользователь кликнул по второй ссылке, не дождавшись первой),
+/// откатил бы фрейм назад — контроля по одному лишь [`FrameNavPrep::old_doc`]
+/// для этого недостаточно: оба запроса читают ОДИН и тот же старый документ,
+/// раз ни один из них ещё не применился.
+///
+/// Ключ — пара (документ-хозяин, host-узел), а не `Arc`-адрес сам по себе:
+/// адрес аллокации может быть переиспользован после `Drop` совершенно другим
+/// документом (ABA), поэтому сравнение всегда идёт через `Arc::ptr_eq` по
+/// живому значению, а не по хэшу указателя.
+pub(crate) struct FrameNavRequest {
+    host_doc: Arc<Mutex<Document>>,
+    host: NodeId,
+    generation: u64,
+}
+
+/// Снять описание хозяина и старый документ фрейма `idx` — синхронная,
+/// быстрая (короткий лок дерева) часть навигации; сеть и парсинг остаются в
+/// [`run_frame_navigation`], который вызывающая сторона уносит на фоновый
+/// поток.
+///
+/// `host_src` нового хэндла остаётся прежним намеренно: это половина ключа, по
+/// которому [`splice_one_frame`] узнаёт команду-заглушку в display list
+/// родителя, а заглушку рисует layout родителя по атрибуту `src` элемента —
+/// навигация фрейма атрибут не трогает (HTML LS §7.4.2 меняет документ, а не
+/// разметку хозяина).
+#[allow(clippy::unwrap_used)] // короткий лок дерева, docs/lint-policy.md §10
+pub(crate) fn prepare_frame_navigation(
+    frames: &[FrameHandle],
+    idx: usize,
+    page_doc: &Arc<Mutex<Document>>,
+    env: &FrameLoadEnv,
+    page_js: Option<&Arc<dyn PersistentJs>>,
+) -> Option<FrameNavPrep> {
+    let h = frames.get(idx)?;
+    let (host, depth) = (h.host, h.depth);
+    let parent_doc = h.parent_doc.clone();
+    // Всё, что нужно от хозяина, вынимается СЕЙЧАС: к моменту завершения
+    // фоновой загрузки `frames` мог перестроиться (другая навигация того же
+    // или соседнего фрейма), а хозяин адресуется `Arc`, а не индексом.
+    let (host_doc, host_base, parent_js) = match &parent_doc {
+        None => (Arc::clone(page_doc), env.page_base.clone(), page_js.cloned()),
+        Some(pd) => {
+            let p = frames.iter().find(|o| Arc::ptr_eq(&o.doc, pd))?;
+            (Arc::clone(pd), p.base.clone(), p.js.clone())
+        }
+    };
+    // Описание host-элемента перечитывается из дерева хозяина: sandbox и `name`
+    // принадлежат элементу, а не документу, и переживают навигацию.
+    let info = {
+        let d = host_doc.lock().unwrap();
+        collect_iframes(&d).into_iter().find(|i| i.node == host)
+    }?;
+    let old_doc = Arc::clone(&h.doc);
+    Some(FrameNavPrep { host, depth, host_doc, host_base, parent_js, info, old_doc })
+}
+
+/// Найти (или завести) generation-слот хозяина `(host_doc, host)` и увеличить
+/// его — вызывается на UI-потоке СИНХРОННО, до того как загрузка уйдёт на
+/// фоновый поток, чтобы каждый клик получил свой уникальный, монотонно
+/// растущий номер. [`apply_frame_navigation`]'s caller сверяет его при
+/// получении ответа: несовпадение значит «этот хозяин навигировал ещё раз,
+/// пока мы ждали сеть» — ответ отбрасывается, что бы он ни принёс.
+pub(crate) fn bump_frame_nav_generation(
+    requests: &mut Vec<FrameNavRequest>,
+    host_doc: &Arc<Mutex<Document>>,
+    host: NodeId,
+) -> u64 {
+    if let Some(r) = requests.iter_mut().find(|r| r.host == host && Arc::ptr_eq(&r.host_doc, host_doc)) {
+        r.generation += 1;
+        r.generation
+    } else {
+        requests.push(FrameNavRequest { host_doc: Arc::clone(host_doc), host, generation: 1 });
+        1
+    }
+}
+
+/// Действительно ли `generation` — ещё текущий номер слота `(host_doc, host)`
+/// (FRAME-4 срез 3). Слот НЕ удаляется здесь — следующая навигация того же
+/// хозяина продолжит расти от текущего числа, а не начнёт с 1 и не столкнётся
+/// со значением какого-то более раннего в полёте ответа.
+pub(crate) fn frame_nav_generation_current(
+    requests: &[FrameNavRequest],
+    host_doc: &Arc<Mutex<Document>>,
+    host: NodeId,
+    generation: u64,
+) -> bool {
+    requests
+        .iter()
+        .any(|r| r.host == host && Arc::ptr_eq(&r.host_doc, host_doc) && r.generation == generation)
+}
+
+/// Забыть про фреймы страницы, которой больше нет (полная перезагрузка) —
+/// `host_doc`, по которому раньше сверялись слоты, вот-вот перестанет
+/// существовать вместе со старым `Lumen::frames`.
+pub(crate) fn clear_frame_nav_requests(requests: &mut Vec<FrameNavRequest>) {
+    requests.clear();
+}
+
+/// Навигация под-документа фрейма по адресу `href` (BUG-480 срез 19) — сеть,
+/// парсинг, скрипты и layout ребёнка (FRAME-4 срез 3: вызывается на фоновом
+/// потоке, результат применяет [`apply_frame_navigation`] на UI-потоке).
 ///
 /// `href` — сырое значение ссылки, `nav_base` — база документа, В КОТОРОМ по
 /// ней кликнули ([`FrameHandle::base`] этого документа). Это не всегда база
 /// целевого фрейма: `target=_parent` меняет чужой под-документ, а адрес всё
 /// равно написан кликнувшим.
+pub(crate) fn run_frame_navigation(
+    prep: &FrameNavPrep,
+    href: &str,
+    nav_base: &ResourceBase,
+    page_doc: &Arc<Mutex<Document>>,
+    env: &FrameLoadEnv,
+) -> Vec<FrameHandle> {
+    spawn_frame(
+        &prep.info,
+        Some((href, nav_base)),
+        &prep.host_doc,
+        prep.depth,
+        &prep.host_base,
+        page_doc,
+        env,
+        prep.parent_js.as_ref(),
+    )
+}
+
+/// Вклеить результат [`run_frame_navigation`] в `frames` на UI-потоке.
 ///
 /// Старый хэндл заменяется новым, а не правится на месте: под-документ — это
 /// другой `Document`, другой JS-контекст и другой каскад, то есть от прежнего
@@ -1567,74 +1712,34 @@ fn spawn_frame(
 /// существовать, и оставить их значило бы держать живые рантаймы, до которых
 /// уже никто не доберётся.
 ///
-/// `host_src` нового хэндла остаётся прежним намеренно: это половина ключа, по
-/// которому [`splice_one_frame`] узнаёт команду-заглушку в display list
-/// родителя, а заглушку рисует layout родителя по атрибуту `src` элемента —
-/// навигация фрейма атрибут не трогает (HTML LS §7.4.2 меняет документ, а не
-/// разметку хозяина).
-///
-/// Возвращает `true`, если под-документ заменён; `false` — фрейма нет, хозяин
-/// не найден или источник не получен (лог напечатан ниже по стеку).
-#[allow(clippy::unwrap_used)] // короткий лок дерева, docs/lint-policy.md §10
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn navigate_frame(
+/// Возвращает `false` (ничего не меняя), если `old_doc` уже отсутствует в
+/// `frames` — предок навигировал сам, или страница успела перезагрузиться
+/// целиком, пока этот ответ летел с фонового потока; вызывающая сторона в
+/// этом случае просто роняет `handles` вместе с их JS-рантаймами. Пустой
+/// `handles` тоже трактуется как отказ — `spawn_frame` пуст лишь в случае,
+/// которого сегодняшняя логика (FRAME-4 срез 2, документ ошибки) не создаёт,
+/// но контракт остаётся тем же, что был у синхронной `navigate_frame`.
+pub(crate) fn apply_frame_navigation(
     frames: &mut Vec<FrameHandle>,
-    idx: usize,
-    href: &str,
-    nav_base: &ResourceBase,
-    page_doc: &Arc<Mutex<Document>>,
-    env: &FrameLoadEnv,
-    page_js: Option<&Arc<dyn PersistentJs>>,
+    old_doc: &Arc<Mutex<Document>>,
+    handles: Vec<FrameHandle>,
 ) -> bool {
-    let Some(h) = frames.get(idx) else { return false };
-    let (host, depth) = (h.host, h.depth);
-    let parent_doc = h.parent_doc.clone();
-    // Всё, что нужно от хозяина, вынимается ДО удаления: и документ, и его
-    // база, и его JS-контекст живут внутри того же `frames`, который сейчас
-    // будет перестроен.
-    let (host_doc, host_base, parent_js) = match &parent_doc {
-        None => (Arc::clone(page_doc), env.page_base.clone(), page_js.cloned()),
-        Some(pd) => {
-            let Some(p) = frames.iter().find(|o| Arc::ptr_eq(&o.doc, pd)) else { return false };
-            (Arc::clone(pd), p.base.clone(), p.js.clone())
-        }
-    };
-    // Описание host-элемента перечитывается из дерева хозяина: sandbox и `name`
-    // принадлежат элементу, а не документу, и переживают навигацию.
-    let Some(info) = ({
-        let d = host_doc.lock().unwrap();
-        collect_iframes(&d).into_iter().find(|i| i.node == host)
-    }) else {
-        return false;
-    };
-
-    let old_doc = Arc::clone(&frames[idx].doc);
-    let spawned = spawn_frame(
-        &info,
-        Some((href, nav_base)),
-        &host_doc,
-        depth,
-        &host_base,
-        page_doc,
-        env,
-        parent_js.as_ref(),
-    );
-    if spawned.is_empty() {
+    if handles.is_empty() || !frames.iter().any(|o| Arc::ptr_eq(&o.doc, old_doc)) {
         return false;
     }
-    // FRAME-4 срез 2: `spawned`'s own handle is always LAST (`spawn_frame`
+    // FRAME-4 срез 2: `handles`'s own handle is always LAST (`spawn_frame`
     // pushes it after extending with its nested children) — the frame-level
     // outcome, distinct from the source-fetch-level reason already printed
     // inside `fetch_iframe_source`. Navigation still "succeeds" here (a
     // document replaced the old one), but the visible result is an error
     // page, worth a diagnostic of its own for anyone correlating logs with
     // the screen.
-    if spawned.last().is_some_and(|h| h.load_failed) {
-        eprintln!("iframe: '{href}' — навигация фрейма показывает документ ошибки");
+    if handles.last().is_some_and(|h| h.load_failed) {
+        eprintln!("iframe: навигация фрейма показывает документ ошибки");
     }
-    drop_frame_subtree(frames, &old_doc);
-    frames.retain(|o| o.host != host || !same_host_doc(&o.parent_doc, parent_doc.as_ref()));
-    frames.extend(spawned);
+    drop_frame_subtree(frames, old_doc);
+    frames.retain(|o| !Arc::ptr_eq(&o.doc, old_doc));
+    frames.extend(handles);
     true
 }
 

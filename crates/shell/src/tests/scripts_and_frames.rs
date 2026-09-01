@@ -1355,10 +1355,101 @@ fn navigating_a_frame_drops_its_whole_subtree_and_spares_siblings() {
     crate::frames::drop_frame_subtree(&mut frames, &child_doc);
 
     // Сам навигируемый фрейм остаётся: его выбрасывает вызывающая сторона
-    // ([`navigate_frame`]) — здесь уходит именно ПОДДЕРЕВО.
+    // ([`crate::frames::apply_frame_navigation`]) — здесь уходит именно ПОДДЕРЕВО.
     assert_eq!(frames.len(), 2, "остались только навигируемый фрейм и сосед");
     assert!(Arc::ptr_eq(&frames[0].doc, &child_doc), "навигируемый фрейм на месте");
     assert_eq!(frames[1].host_src, "other.html", "сосед страницы не тронут");
+}
+
+// ── асинхронная навигация фрейма (FRAME-4 срез 3) ───────────────────────────
+
+/// `apply_frame_navigation` — успешный путь: старый хэндл (и его поддерево)
+/// уходит, новый встаёт на его место, сосед не тронут.
+#[test]
+fn apply_frame_navigation_replaces_old_doc_with_new_handles() {
+    let old = splice_handle("old.html", Rect::new(0.0, 0.0, 100.0, 50.0), DisplayList::new());
+    let old_doc = Arc::clone(&old.doc);
+    let mut child_of_old = splice_handle("nested.html", Rect::new(0.0, 0.0, 50.0, 25.0), DisplayList::new());
+    child_of_old.depth = 1;
+    child_of_old.parent_doc = Some(Arc::clone(&old_doc));
+    let sibling = splice_handle("other.html", Rect::new(0.0, 0.0, 100.0, 50.0), DisplayList::new());
+    let mut frames = vec![old, child_of_old, sibling];
+
+    let new_handle = splice_handle("old.html", Rect::new(0.0, 0.0, 100.0, 50.0), DisplayList::new());
+    let new_doc = Arc::clone(&new_handle.doc);
+    let applied = crate::frames::apply_frame_navigation(&mut frames, &old_doc, vec![new_handle]);
+
+    assert!(applied, "старый документ был в списке — навигация обязана примениться");
+    assert_eq!(frames.len(), 2, "поддерево старого хэндла ушло, сосед и новый хэндл остались");
+    assert!(frames.iter().any(|h| Arc::ptr_eq(&h.doc, &new_doc)), "новый документ на месте");
+    assert!(!frames.iter().any(|h| Arc::ptr_eq(&h.doc, &old_doc)), "старый документ выброшен");
+    assert!(frames.iter().any(|h| h.host_src == "other.html"), "сосед не тронут");
+}
+
+/// Ответ, чей `old_doc` уже не в `frames` (предок навигировал сам, либо
+/// страница перезагрузилась целиком, пока этот ответ летел с фонового
+/// потока) — отбрасывается целиком, список не меняется.
+#[test]
+fn apply_frame_navigation_drops_stale_response_whose_old_doc_is_gone() {
+    let sibling = splice_handle("other.html", Rect::new(0.0, 0.0, 100.0, 50.0), DisplayList::new());
+    let mut frames = vec![sibling];
+    let long_gone = Arc::new(Mutex::new(lumen_html_parser::parse("<html></html>")));
+    let new_handle = splice_handle("old.html", Rect::new(0.0, 0.0, 100.0, 50.0), DisplayList::new());
+
+    let applied = crate::frames::apply_frame_navigation(&mut frames, &long_gone, vec![new_handle]);
+
+    assert!(!applied, "old_doc отсутствует — ответ обязан быть отброшен");
+    assert_eq!(frames.len(), 1, "список не тронут");
+    assert_eq!(frames[0].host_src, "other.html");
+}
+
+/// Пустой `handles` (контракт, унаследованный от прежней синхронной
+/// `navigate_frame`) — тоже отказ, даже если `old_doc` ещё в списке.
+#[test]
+fn apply_frame_navigation_drops_empty_handles() {
+    let old = splice_handle("old.html", Rect::new(0.0, 0.0, 100.0, 50.0), DisplayList::new());
+    let old_doc = Arc::clone(&old.doc);
+    let mut frames = vec![old];
+
+    let applied = crate::frames::apply_frame_navigation(&mut frames, &old_doc, Vec::new());
+
+    assert!(!applied);
+    assert_eq!(frames.len(), 1, "ничего не должно было измениться");
+}
+
+/// Второй клик по тому же хозяину (пока первый ещё в полёте) получает
+/// следующий, ОТЛИЧНЫЙ номер — а не тот же самый, что позволил бы медленному
+/// первому ответу пройти проверку generation, как будто он и есть последний.
+#[test]
+fn bump_frame_nav_generation_increments_same_host_and_starts_fresh_for_new_host() {
+    let mut requests = Vec::new();
+    let host_doc = Arc::new(Mutex::new(lumen_html_parser::parse("<html></html>")));
+    let host = NodeId::from_index(3);
+
+    let first = crate::frames::bump_frame_nav_generation(&mut requests, &host_doc, host);
+    let second = crate::frames::bump_frame_nav_generation(&mut requests, &host_doc, host);
+    assert_ne!(first, second, "второй клик того же хозяина обязан получить новый номер");
+
+    let other_doc = Arc::new(Mutex::new(lumen_html_parser::parse("<html></html>")));
+    let other_host = crate::frames::bump_frame_nav_generation(&mut requests, &other_doc, host);
+    assert_eq!(other_host, 1, "другой документ-хозяин с тем же NodeId — свой отдельный слот");
+}
+
+/// `frame_nav_generation_current` — истина только для номера, который
+/// сверяется с ПОСЛЕДНИМ `bump`; более ранний (устаревший) номер того же
+/// хозяина — ложь.
+#[test]
+fn frame_nav_generation_current_true_for_latest_false_for_stale() {
+    let mut requests = Vec::new();
+    let host_doc = Arc::new(Mutex::new(lumen_html_parser::parse("<html></html>")));
+    let host = NodeId::from_index(5);
+
+    let stale = crate::frames::bump_frame_nav_generation(&mut requests, &host_doc, host);
+    let latest = crate::frames::bump_frame_nav_generation(&mut requests, &host_doc, host);
+
+    assert!(crate::frames::frame_nav_generation_current(&requests, &host_doc, host, latest));
+    assert!(!crate::frames::frame_nav_generation_current(&requests, &host_doc, host, stale));
+    assert!(!crate::frames::frame_nav_generation_current(&requests, &host_doc, NodeId::from_index(6), latest));
 }
 
 // ── документ ошибки навигации фрейма (FRAME-4 срез 2) ───────────────────────

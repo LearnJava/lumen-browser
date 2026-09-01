@@ -256,6 +256,9 @@ impl Lumen {
                 self.stream_builder = None;
                 self.stream_sheet = lumen_css_parser::Stylesheet::default();
             }
+            LoadEvent::FrameNavDone { host_doc, host, old_doc, generation, handles } => {
+                self.on_frame_nav_done(&host_doc, host, &old_doc, generation, handles);
+            }
         }
     }
 }
