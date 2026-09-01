@@ -32,7 +32,7 @@ rule through a different mechanism.
   that claim is worth one question. The alternative is a sibling module, not a smaller patch (`docs/lint-policy.md` §5.1).
 - No hardcoded version strings — the version derives from `[workspace.package] version` in `Cargo.toml`
   (`CARGO_PKG_VERSION`). Flag any literal version number outside that field (one intentional exception:
-  the `navigator.userAgent` string in `crates/js/src/dom.rs`).
+  the `navigator.userAgent` string in `crates/js/src/shim/web_api_shim_mid_b.js`).
 
 ## Architecture boundaries
 
@@ -40,10 +40,13 @@ rule through a different mechanism.
   import that creates a cycle or skips a layer backward.
 - CSS-related changes belong in `css-parser` (parsing) → `layout` (`style.rs`, ComputedStyle/cascade) →
   `paint` (`display_list.rs`, wiring). Flag CSS logic leaking into `shell` or paint-only crates.
-- JS engine: V8 (`rusty_v8`) is the default and the only actively developed path. Flag new code that
-  targets the legacy `rquickjs`/QuickJS path in `crates/js` — it's being deleted, not extended (the shell-side `quickjs` feature is gone since S12b-F1; `rquickjs` is no longer reachable from `lumen-shell` at all).
-  Engine-independent JS fixes belong in the shared shim (`WEB_API_SHIM` in `crates/js/src/dom.rs`), not
-  duplicated per engine.
+- JS engine: V8 (`rusty_v8`) is the only engine. `rquickjs`/QuickJS was removed from the workspace
+  outright on 2026-08-04 (S12b-F1…F4) — flag any change that targets it as targeting code that does not
+  exist, not as extending a legacy path.
+  Engine-independent JS fixes belong in the shared shim — `crates/js/src/shim/*.js`, one file per
+  `WEB_API_SHIM*` const since SPLIT-JS3 (2026-08-28), not the `dom.rs` string literals it replaced.
+  Note that per-feature modules (`xhr.rs`, `worker.rs`, `web_audio.rs`, …) install their own JS, which a
+  page-shim fix does not reach: flag a fix that assumes one edit covers all of them.
 
 ## Style / design
 
