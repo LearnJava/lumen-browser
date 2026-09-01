@@ -2,6 +2,14 @@ use super::*;
 
 const ACCENT_DEFAULT: Color = Color { r: 21, g: 90, b: 192, a: 255 };
 
+/// FRAME-7 remainder 2: fallback text-selection highlight colour for a
+/// typeable field, used since a form control's value is not part of the DOM
+/// text `::selection` targets — this engine has no per-field way to author a
+/// different one. Same `#308aff` the OS-accent fallback
+/// [`lumen_layout::SelectionHighlight::bg_color`]'s doc comment recommends,
+/// translucent so the value text drawn on top stays legible.
+const SELECTION_HIGHLIGHT_DEFAULT: Color = Color { r: 0x30, g: 0x8a, b: 0xff, a: 110 };
+
 /// Render checkbox checkmark or radio dot for checked form controls.
 /// P2 note: this renders a simple filled rectangle as indicator; a full
 /// vector checkmark / circle belongs to the renderer GPU primitive set.
@@ -135,6 +143,46 @@ fn emit_input_caret(b: &LayoutBox, value: &str, char_index: usize, out: &mut Vec
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(caret_x, content_y, 1.0, content_h),
         color,
+    });
+    out.push(DisplayCommand::PopClip);
+}
+
+/// FRAME-7 remainder 2: paint the active text-selection highlight inside a
+/// focused `<input>` as a background rect behind char range `[start, end)`
+/// (HTML LS §4.10.5.1, CSS Pseudo-Elements L4 §5.6 — the closest analogue,
+/// though a form control's value is not a `::selection` target). Same
+/// geometry approximation as [`emit_input_caret`] (per-glyph advance, no real
+/// `TextMeasurer`) and same content-box clip. Drawn by the caller BEFORE
+/// [`emit_input_value_text`] so the value's glyphs paint on top of the
+/// highlight rather than under it.
+fn emit_input_selection(b: &LayoutBox, value: &str, start: usize, end: usize, out: &mut Vec<DisplayCommand>) {
+    let s = &b.style;
+    let bl = s.border_left_width;
+    let bt = s.border_top_width;
+    let br = s.border_right_width;
+    let bb = s.border_bottom_width;
+    let inset = 2.0_f32;
+    let content_x = b.rect.x + bl + inset;
+    let content_y = b.rect.y + bt;
+    let content_w = (b.rect.width - bl - br - inset * 2.0).max(1.0);
+    let content_h = (b.rect.height - bt - bb).max(1.0);
+    let font_size = s.font_size;
+
+    let len = value.chars().count();
+    let start = start.min(len);
+    let end = end.min(len);
+    if start >= end {
+        return;
+    }
+    let sel_x = content_x + font_size * 0.5 * start as f32;
+    let sel_w = font_size * 0.5 * (end - start) as f32;
+
+    out.push(DisplayCommand::PushClipRect {
+        rect: Rect::new(content_x, content_y, content_w, content_h),
+    });
+    out.push(DisplayCommand::FillRect {
+        rect: Rect::new(sel_x, content_y, sel_w, content_h),
+        color: SELECTION_HIGHLIGHT_DEFAULT,
     });
     out.push(DisplayCommand::PopClip);
 }
@@ -306,6 +354,15 @@ pub(crate) fn emit_form_control_indicator(
                 | InputType::Tel | InputType::Url | InputType::Number
                 | InputType::Search | InputType::Date | InputType::DateTimeLocal
                 | InputType::Time | InputType::Month | InputType::Week => {
+                    // FRAME-7 remainder 2: the selection highlight paints
+                    // BEHIND the value text (same "background rect before
+                    // glyphs" order `frag_selection_highlight` uses for
+                    // ordinary DOM text), so it must run before either the
+                    // value or placeholder path below.
+                    let selection = ov.and_then(|o| o.selection);
+                    if let Some((start, end)) = selection {
+                        emit_input_selection(b, value_text, start, end, out);
+                    }
                     if value_text.is_empty() && !placeholder.is_empty() {
                         // HTML rendering §15.5.5 — an empty text input paints its
                         // `placeholder` as a grey hint (never masked, even for
@@ -319,8 +376,12 @@ pub(crate) fn emit_form_control_indicator(
                     // focused typeable field, so no further gating by input_type
                     // is needed here — a Date/Time/etc. input (which paints
                     // through this same arm but has no cursor tracking) never
-                    // gets a caret override in the first place.
-                    if let Some(idx) = ov.and_then(|o| o.caret) {
+                    // gets a caret override in the first place. FRAME-7
+                    // remainder 2: an active selection suppresses the caret bar
+                    // — the OS-wide convention every text editor follows.
+                    if selection.is_none()
+                        && let Some(idx) = ov.and_then(|o| o.caret)
+                    {
                         emit_input_caret(b, value_text, idx, out);
                     }
                     return;

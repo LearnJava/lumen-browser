@@ -862,6 +862,22 @@ pub(crate) struct Lumen {
     /// document on navigation ([`crate::page_load`]) and on tab reset
     /// ([`crate::lumen::tabs_cmd`]).
     pub(crate) frame_text_cursor: HashMap<(usize, NodeId), usize>,
+    /// Char-index selection anchor for a typeable field ВНУТРИ содержимого
+    /// фрейма (FRAME-7 remainder 2) — mirror of `FormControlState::selection_anchor`
+    /// (page), keyed the same way [`Self::frame_text_cursor`] is (a frame's
+    /// sub-document has no per-`NodeId` state map of its own). Cleared
+    /// alongside `frame_text_cursor` on navigation/tab reset — see that
+    /// field's doc comment.
+    pub(crate) frame_text_selection_anchor: HashMap<(usize, NodeId), usize>,
+    /// Mouse-drag text selection in progress (FRAME-7 остаток) — armed by
+    /// [`super::text_drag_select::Lumen::begin_text_drag_select`] right after
+    /// a left-button press lands on a typeable field's focus, updated by
+    /// [`super::text_drag_select::Lumen::update_text_drag_select`] on every
+    /// `CursorMoved` while held, and disarmed on `ElementState::Released`
+    /// (`mouse_input.rs`) — the button-release path every other drag field on
+    /// this struct (`scroll_drag`, `panel_resize`, `dnd_state`) already
+    /// follows.
+    pub(crate) text_drag: Option<super::text_drag_select::TextDragTarget>,
     /// `(индекс фрейма, узел ЕГО документа)` под НАЖАТОЙ кнопкой мыши внутри
     /// содержимого фрейма — `:active` под-документа (BUG-480 срез 23).
     ///

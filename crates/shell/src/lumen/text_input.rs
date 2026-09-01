@@ -17,6 +17,34 @@
 
 use crate::*;
 
+/// What a text-editing default action does to a field's value, applied by
+/// [`Lumen::edit_focused_field_at_cursor`] (page) and
+/// [`super::frame_text_input::Lumen::edit_focused_frame_field_at_cursor`]
+/// (frame) — factored out of the old closure-per-call-site shape (FRAME-7
+/// remainder 2) so both can splice an active selection out FIRST and only
+/// then decide whether the action still applies (a typed char does; a
+/// Backspace/Delete does not — see `edit_focused_field_at_cursor`'s doc
+/// comment). `pub(crate)`: shared verbatim by both the page and frame edit
+/// paths rather than duplicated.
+pub(crate) enum EditAction {
+    InsertChar(char),
+    Backspace,
+    DeleteForward,
+}
+
+impl EditAction {
+    /// Apply the action against `current` at char-index `cursor` — the same
+    /// per-action arithmetic `text_cursor` already provides, used when there
+    /// is no active selection to splice out first.
+    pub(crate) fn apply(&self, current: &str, cursor: usize) -> (String, usize) {
+        match self {
+            EditAction::InsertChar(ch) => insert_char_at(current, cursor, *ch),
+            EditAction::Backspace => delete_char_before(current, cursor),
+            EditAction::DeleteForward => (delete_char_after(current, cursor), cursor),
+        }
+    }
+}
+
 impl Lumen {
     /// Inject a typed character into the focused element (TypeText injection path).
     ///
@@ -146,28 +174,136 @@ impl Lumen {
         Some((nid, cursor.min(len), current))
     }
 
+    /// Char-index selection range for `nid`, normalized (`start <= end`) —
+    /// `None` when no selection is active (no anchor, or anchor == cursor).
+    /// Shared by cursor movement (collapse-to-edge) and painting queries.
+    fn field_selection_range(&self, nid: lumen_dom::NodeId, cursor: usize) -> Option<(usize, usize)> {
+        let anchor = self.form_state.get(&nid)?.selection_anchor?;
+        if anchor == cursor {
+            return None;
+        }
+        Some((anchor.min(cursor), anchor.max(cursor)))
+    }
+
     /// Move the focused field's text cursor by `delta` chars (Left = `-1`,
     /// Right = `+1`), clamped to `[0, value length]`. `true` iff a typeable
     /// field was focused (regardless of whether the cursor was already at the
     /// clamped edge).
+    ///
+    /// FRAME-7 remainder 2: with an active selection, an unshifted Left/Right
+    /// collapses the cursor to the near edge of the selection (the OS-wide
+    /// convention) instead of moving `delta` chars from wherever the cursor
+    /// itself sat — matching what every other multi-line/single-line text
+    /// editor does, and clears the selection either way.
     pub(crate) fn move_focused_cursor(&mut self, delta: i32) -> bool {
         let Some(nid) = self.focused_node else { return false };
         let Some((_, current)) = self.typeable_field(nid) else { return false };
-        let cursor = self.field_cursor(nid, &current) as i32;
-        let len = char_len(&current) as i32;
-        let next = (cursor + delta).clamp(0, len) as usize;
-        self.form_state.entry(nid).or_default().cursor = Some(next);
+        let cursor = self.field_cursor(nid, &current);
+        let next = match self.field_selection_range(nid, cursor) {
+            Some((start, end)) => if delta < 0 { start } else { end },
+            None => {
+                let len = char_len(&current) as i32;
+                (cursor as i32 + delta).clamp(0, len) as usize
+            }
+        };
+        let slot = self.form_state.entry(nid).or_default();
+        slot.cursor = Some(next);
+        slot.selection_anchor = None;
         true
     }
 
     /// Home (`to_start = true`) / End (`to_start = false`) вЂ” jump the focused
-    /// field's text cursor to the start or end of the value.
+    /// field's text cursor to the start or end of the value, clearing any
+    /// active selection (FRAME-7 remainder 2).
     pub(crate) fn jump_focused_cursor(&mut self, to_start: bool) -> bool {
         let Some(nid) = self.focused_node else { return false };
         let Some((_, current)) = self.typeable_field(nid) else { return false };
         let target = if to_start { 0 } else { char_len(&current) };
-        self.form_state.entry(nid).or_default().cursor = Some(target);
+        let slot = self.form_state.entry(nid).or_default();
+        slot.cursor = Some(target);
+        slot.selection_anchor = None;
         true
+    }
+
+    /// Shift+Left/Right (FRAME-7 remainder 2): extend the focused field's
+    /// selection by `delta` chars. The anchor is pinned at the cursor's
+    /// position the FIRST time a selection starts (an already-active
+    /// selection keeps its anchor — only the moving end, the cursor,
+    /// changes), mirroring how every text editor's Shift+arrow works.
+    pub(crate) fn extend_focused_selection(&mut self, delta: i32) -> bool {
+        let Some(nid) = self.focused_node else { return false };
+        let Some((_, current)) = self.typeable_field(nid) else { return false };
+        let cursor = self.field_cursor(nid, &current);
+        let len = char_len(&current) as i32;
+        let next = (cursor as i32 + delta).clamp(0, len) as usize;
+        let slot = self.form_state.entry(nid).or_default();
+        if slot.selection_anchor.is_none() {
+            slot.selection_anchor = Some(cursor);
+        }
+        slot.cursor = Some(next);
+        true
+    }
+
+    /// Shift+Home (`to_start = true`) / Shift+End (`to_start = false`)
+    /// (FRAME-7 remainder 2): extend the focused field's selection to the
+    /// start or end of the value. Same anchor-pinning rule as
+    /// [`Self::extend_focused_selection`].
+    pub(crate) fn extend_focused_selection_to_edge(&mut self, to_start: bool) -> bool {
+        let Some(nid) = self.focused_node else { return false };
+        let Some((_, current)) = self.typeable_field(nid) else { return false };
+        let cursor = self.field_cursor(nid, &current);
+        let target = if to_start { 0 } else { char_len(&current) };
+        let slot = self.form_state.entry(nid).or_default();
+        if slot.selection_anchor.is_none() {
+            slot.selection_anchor = Some(cursor);
+        }
+        slot.cursor = Some(target);
+        true
+    }
+
+    /// FRAME-7 remainder 2: the focused page-level `<input>`'s selection
+    /// range, if one should be painted this frame — `None` when nothing
+    /// typeable is focused or no selection is active. Read-only, like
+    /// [`Self::focused_input_caret`] — a paint pass must never mutate
+    /// `form_state`. Returned bounds are normalized (`start <= end`) and
+    /// clamped to the current value's length, same defensive clamp
+    /// `focused_input_caret` applies (an external mutation can shrink the
+    /// value out from under a stale selection).
+    pub(crate) fn focused_input_selection(&self) -> Option<(lumen_dom::NodeId, usize, usize)> {
+        let nid = self.focused_node?;
+        let (kind, current) = self.typeable_field(nid)?;
+        if kind != TypeableField::Input {
+            return None;
+        }
+        let len = char_len(&current);
+        let slot = self.form_state.get(&nid)?;
+        let anchor = slot.selection_anchor?.min(len);
+        let cursor = slot.cursor.unwrap_or(len).min(len);
+        if anchor == cursor {
+            return None;
+        }
+        Some((nid, anchor.min(cursor), anchor.max(cursor)))
+    }
+
+    /// FRAME-7 remainder 2: the focused page-level `<textarea>`'s selection
+    /// range and current value, if one should be painted this frame —
+    /// mirror of [`Self::focused_input_selection`], kept separate for the
+    /// same reason [`Self::focused_textarea_caret`] is separate from
+    /// [`Self::focused_input_caret`] (different paint mechanisms).
+    pub(crate) fn focused_textarea_selection(&self) -> Option<(lumen_dom::NodeId, usize, usize, String)> {
+        let nid = self.focused_node?;
+        let (kind, current) = self.typeable_field(nid)?;
+        if kind != TypeableField::Textarea {
+            return None;
+        }
+        let len = char_len(&current);
+        let slot = self.form_state.get(&nid)?;
+        let anchor = slot.selection_anchor?.min(len);
+        let cursor = slot.cursor.unwrap_or(len).min(len);
+        if anchor == cursor {
+            return None;
+        }
+        Some((nid, anchor.min(cursor), anchor.max(cursor), current))
     }
 
     /// Engine-side text-editing default action on the focused form control
@@ -186,15 +322,30 @@ impl Lumen {
     /// happens with the document lock held and no JS dispatched under it (the
     /// deadlock trap found in BUG-437); the JS-side value shadow is synced
     /// afterwards so a listener reading `this.value` sees the new value.
-    fn edit_focused_field_at_cursor(
-        &mut self,
-        edit: impl FnOnce(&str, usize) -> (String, usize),
-    ) -> bool {
+    ///
+    /// FRAME-7 remainder 2: an active selection is spliced OUT of the value
+    /// first — a typed char replaces it (OS-wide "typing over a selection"
+    /// convention), a Backspace/Delete simply removes it (the selection IS
+    /// the thing to delete; it does not also delete one more char beyond the
+    /// range). Either way the selection is consumed, matching every other
+    /// text editor.
+    fn edit_focused_field_at_cursor(&mut self, action: EditAction) -> bool {
         let Some(nid) = self.focused_node else { return false };
         let Some((kind, current)) = self.typeable_field(nid) else { return false };
         let cursor = self.field_cursor(nid, &current);
-        let (next, next_cursor) = edit(&current, cursor);
-        self.form_state.entry(nid).or_default().cursor = Some(next_cursor);
+        let (next, next_cursor) = match self.field_selection_range(nid, cursor) {
+            Some((start, end)) => {
+                let spliced = delete_char_range(&current, start, end);
+                match action {
+                    EditAction::InsertChar(ch) => insert_char_at(&spliced, start, ch),
+                    EditAction::Backspace | EditAction::DeleteForward => (spliced, start),
+                }
+            }
+            None => action.apply(&current, cursor),
+        };
+        let slot = self.form_state.entry(nid).or_default();
+        slot.cursor = Some(next_cursor);
+        slot.selection_anchor = None;
         if next == current {
             return true;
         }
@@ -234,8 +385,7 @@ impl Lumen {
         // `take_navigate_request` read ordered after via `route_query_js`; byte-identical
         // off-flag.
         self.dispatch_injected_key(node_id, "keydown", &key);
-        let consumed =
-            self.edit_focused_field_at_cursor(|current, cursor| insert_char_at(current, cursor, ch));
+        let consumed = self.edit_focused_field_at_cursor(EditAction::InsertChar(ch));
         for event_type in &["input", "keyup"] {
             self.dispatch_injected_key(node_id, event_type, &key);
         }
@@ -259,7 +409,7 @@ impl Lumen {
     pub(crate) fn inject_backspace(&mut self) -> bool {
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         self.dispatch_injected_key(node_id, "keydown", "Backspace");
-        let consumed = self.edit_focused_field_at_cursor(delete_char_before);
+        let consumed = self.edit_focused_field_at_cursor(EditAction::Backspace);
         for event_type in &["input", "keyup"] {
             self.dispatch_injected_key(node_id, event_type, "Backspace");
         }
@@ -276,9 +426,7 @@ impl Lumen {
     pub(crate) fn inject_delete_forward(&mut self) -> bool {
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         self.dispatch_injected_key(node_id, "keydown", "Delete");
-        let consumed = self.edit_focused_field_at_cursor(|current, cursor| {
-            (delete_char_after(current, cursor), cursor)
-        });
+        let consumed = self.edit_focused_field_at_cursor(EditAction::DeleteForward);
         for event_type in &["input", "keyup"] {
             self.dispatch_injected_key(node_id, event_type, "Delete");
         }

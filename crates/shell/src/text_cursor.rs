@@ -52,6 +52,21 @@ pub(crate) fn delete_char_after(s: &str, at: usize) -> String {
     chars.into_iter().collect()
 }
 
+/// Delete the char range `[start, end)` (char indices, `start <= end`
+/// expected — callers normalize an anchor/cursor pair before calling this).
+/// Used to replace/clear an active text selection (FRAME-7 remainder 2)
+/// before an insert or a Backspace/Delete applies. Both bounds are clamped to
+/// the string's length; `start >= end` after clamping is a no-op.
+pub(crate) fn delete_char_range(s: &str, start: usize, end: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let start = start.min(chars.len());
+    let end = end.min(chars.len());
+    if start >= end {
+        return s.to_owned();
+    }
+    chars[..start].iter().chain(chars[end..].iter()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,5 +111,26 @@ mod tests {
     #[test]
     fn char_len_counts_chars_not_bytes() {
         assert_eq!(char_len("привет"), 6);
+    }
+
+    #[test]
+    fn delete_char_range_middle() {
+        assert_eq!(delete_char_range("abcde", 1, 3), "ade".to_owned());
+    }
+
+    #[test]
+    fn delete_char_range_clamps_end_past_len() {
+        assert_eq!(delete_char_range("abc", 1, 99), "a".to_owned());
+    }
+
+    #[test]
+    fn delete_char_range_start_ge_end_is_noop() {
+        assert_eq!(delete_char_range("abc", 2, 2), "abc".to_owned());
+        assert_eq!(delete_char_range("abc", 2, 1), "abc".to_owned());
+    }
+
+    #[test]
+    fn delete_char_range_multibyte() {
+        assert_eq!(delete_char_range("привет", 2, 5), "прт".to_owned());
     }
 }

@@ -21,6 +21,8 @@
 
 use crate::*;
 
+use super::text_input::EditAction;
+
 impl Lumen {
     /// Классифицировать `nid` в документе фрейма `idx` как typeable-поле —
     /// зеркало [`Self::typeable_field`], но против ЕГО документа, а не
@@ -67,15 +69,34 @@ impl Lumen {
         c.min(len)
     }
 
+    /// Char-index selection range for the frame field `(idx, nid)`, normalized
+    /// (`start <= end`) — mirror of
+    /// [`super::text_input::Lumen::field_selection_range`] (page). `None`
+    /// when no selection is active.
+    fn frame_field_selection_range(&self, idx: usize, nid: NodeId, cursor: usize) -> Option<(usize, usize)> {
+        let anchor = *self.frame_text_selection_anchor.get(&(idx, nid))?;
+        if anchor == cursor {
+            return None;
+        }
+        Some((anchor.min(cursor), anchor.max(cursor)))
+    }
+
     /// Move the focused frame field's text cursor by `delta` chars — mirror
-    /// of [`super::text_input::Lumen::move_focused_cursor`] (page).
+    /// of [`super::text_input::Lumen::move_focused_cursor`] (page), including
+    /// the FRAME-7 remainder 2 selection-collapse behaviour.
     pub(crate) fn move_focused_frame_cursor(&mut self, delta: i32) -> bool {
         let Some((idx, nid)) = self.focused_frame else { return false };
         let Some((_, current)) = self.frame_typeable_field(idx, nid) else { return false };
-        let cursor = self.frame_field_cursor(idx, nid, &current) as i32;
-        let len = char_len(&current) as i32;
-        let next = (cursor + delta).clamp(0, len) as usize;
+        let cursor = self.frame_field_cursor(idx, nid, &current);
+        let next = match self.frame_field_selection_range(idx, nid, cursor) {
+            Some((start, end)) => if delta < 0 { start } else { end },
+            None => {
+                let len = char_len(&current) as i32;
+                (cursor as i32 + delta).clamp(0, len) as usize
+            }
+        };
         self.frame_text_cursor.insert((idx, nid), next);
+        self.frame_text_selection_anchor.remove(&(idx, nid));
         true
     }
 
@@ -86,6 +107,33 @@ impl Lumen {
         let Some((idx, nid)) = self.focused_frame else { return false };
         let Some((_, current)) = self.frame_typeable_field(idx, nid) else { return false };
         let target = if to_start { 0 } else { char_len(&current) };
+        self.frame_text_cursor.insert((idx, nid), target);
+        self.frame_text_selection_anchor.remove(&(idx, nid));
+        true
+    }
+
+    /// Shift+Left/Right for the focused frame field — mirror of
+    /// [`super::text_input::Lumen::extend_focused_selection`] (page).
+    pub(crate) fn extend_focused_frame_selection(&mut self, delta: i32) -> bool {
+        let Some((idx, nid)) = self.focused_frame else { return false };
+        let Some((_, current)) = self.frame_typeable_field(idx, nid) else { return false };
+        let cursor = self.frame_field_cursor(idx, nid, &current);
+        let len = char_len(&current) as i32;
+        let next = (cursor as i32 + delta).clamp(0, len) as usize;
+        self.frame_text_selection_anchor.entry((idx, nid)).or_insert(cursor);
+        self.frame_text_cursor.insert((idx, nid), next);
+        true
+    }
+
+    /// Shift+Home (`to_start = true`) / Shift+End (`to_start = false`) for
+    /// the focused frame field — mirror of
+    /// [`super::text_input::Lumen::extend_focused_selection_to_edge`] (page).
+    pub(crate) fn extend_focused_frame_selection_to_edge(&mut self, to_start: bool) -> bool {
+        let Some((idx, nid)) = self.focused_frame else { return false };
+        let Some((_, current)) = self.frame_typeable_field(idx, nid) else { return false };
+        let cursor = self.frame_field_cursor(idx, nid, &current);
+        let target = if to_start { 0 } else { char_len(&current) };
+        self.frame_text_selection_anchor.entry((idx, nid)).or_insert(cursor);
         self.frame_text_cursor.insert((idx, nid), target);
         true
     }
@@ -127,6 +175,42 @@ impl Lumen {
         Some((idx, nid, cursor.min(len), current))
     }
 
+    /// FRAME-7 remainder 2: the focused frame `<input>`'s selection range and
+    /// current value, if one should be painted this frame — mirror of
+    /// [`super::text_input::Lumen::focused_input_selection`].
+    pub(crate) fn focused_frame_input_selection(&self) -> Option<(usize, NodeId, usize, usize, String)> {
+        let (idx, nid) = self.focused_frame?;
+        let (kind, current) = self.frame_typeable_field(idx, nid)?;
+        if kind != TypeableField::Input {
+            return None;
+        }
+        let len = char_len(&current);
+        let anchor = self.frame_text_selection_anchor.get(&(idx, nid)).copied()?.min(len);
+        let cursor = self.frame_text_cursor.get(&(idx, nid)).copied().unwrap_or(len).min(len);
+        if anchor == cursor {
+            return None;
+        }
+        Some((idx, nid, anchor.min(cursor), anchor.max(cursor), current))
+    }
+
+    /// FRAME-7 remainder 2: the focused frame `<textarea>`'s selection range
+    /// and current value — mirror of
+    /// [`super::text_input::Lumen::focused_textarea_selection`].
+    pub(crate) fn focused_frame_textarea_selection(&self) -> Option<(usize, NodeId, usize, usize, String)> {
+        let (idx, nid) = self.focused_frame?;
+        let (kind, current) = self.frame_typeable_field(idx, nid)?;
+        if kind != TypeableField::Textarea {
+            return None;
+        }
+        let len = char_len(&current);
+        let anchor = self.frame_text_selection_anchor.get(&(idx, nid)).copied()?.min(len);
+        let cursor = self.frame_text_cursor.get(&(idx, nid)).copied().unwrap_or(len).min(len);
+        if anchor == cursor {
+            return None;
+        }
+        Some((idx, nid, anchor.min(cursor), anchor.max(cursor), current))
+    }
+
     /// Собственное действие движка по умолчанию на typeable-поле фрейма,
     /// адресуемом `self.focused_frame` — зеркало
     /// [`super::text_input::Lumen::edit_focused_field_at_cursor`]:
@@ -138,15 +222,22 @@ impl Lumen {
     /// управления), значение в JS-тени фрейма синхронизируется отдельным
     /// `eval_js` по ЕГО хэндлу — `route_eval_js` знает только контекст
     /// страницы (та же причина, что у [`super::frame_forms::Lumen::frame_toggle_details`]).
-    fn edit_focused_frame_field_at_cursor(
-        &mut self,
-        edit: impl FnOnce(&str, usize) -> (String, usize),
-    ) -> bool {
+    fn edit_focused_frame_field_at_cursor(&mut self, action: EditAction) -> bool {
         let Some((idx, nid)) = self.focused_frame else { return false };
         let Some((kind, current)) = self.frame_typeable_field(idx, nid) else { return false };
         let cursor = self.frame_field_cursor(idx, nid, &current);
-        let (next, next_cursor) = edit(&current, cursor);
+        let (next, next_cursor) = match self.frame_field_selection_range(idx, nid, cursor) {
+            Some((start, end)) => {
+                let spliced = delete_char_range(&current, start, end);
+                match action {
+                    EditAction::InsertChar(ch) => insert_char_at(&spliced, start, ch),
+                    EditAction::Backspace | EditAction::DeleteForward => (spliced, start),
+                }
+            }
+            None => action.apply(&current, cursor),
+        };
         self.frame_text_cursor.insert((idx, nid), next_cursor);
+        self.frame_text_selection_anchor.remove(&(idx, nid));
         if next == current {
             return true;
         }
@@ -189,8 +280,7 @@ impl Lumen {
         let node_id = nid.index();
         let key = escape_js_string_char(ch);
         self.dispatch_frame_key(idx, node_id, "keydown", &key);
-        let consumed = self
-            .edit_focused_frame_field_at_cursor(|current, cursor| insert_char_at(current, cursor, ch));
+        let consumed = self.edit_focused_frame_field_at_cursor(EditAction::InsertChar(ch));
         for event_type in &["input", "keyup"] {
             self.dispatch_frame_key(idx, node_id, event_type, &key);
         }
@@ -203,7 +293,7 @@ impl Lumen {
         let Some((idx, nid)) = self.focused_frame else { return false };
         let node_id = nid.index();
         self.dispatch_frame_key(idx, node_id, "keydown", "Backspace");
-        let consumed = self.edit_focused_frame_field_at_cursor(delete_char_before);
+        let consumed = self.edit_focused_frame_field_at_cursor(EditAction::Backspace);
         for event_type in &["input", "keyup"] {
             self.dispatch_frame_key(idx, node_id, event_type, "Backspace");
         }
@@ -217,9 +307,7 @@ impl Lumen {
         let Some((idx, nid)) = self.focused_frame else { return false };
         let node_id = nid.index();
         self.dispatch_frame_key(idx, node_id, "keydown", "Delete");
-        let consumed = self.edit_focused_frame_field_at_cursor(|current, cursor| {
-            (delete_char_after(current, cursor), cursor)
-        });
+        let consumed = self.edit_focused_frame_field_at_cursor(EditAction::DeleteForward);
         for event_type in &["input", "keyup"] {
             self.dispatch_frame_key(idx, node_id, event_type, "Delete");
         }

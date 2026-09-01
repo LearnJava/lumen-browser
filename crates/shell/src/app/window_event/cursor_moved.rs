@@ -181,6 +181,18 @@ impl Lumen {
             );
             self.scroll_to(target);
         }
+        // FRAME-7 остаток: active mouse-drag text selection — extend the
+        // cursor (never the anchor) to the char under the new position.
+        if self.text_drag.is_some() {
+            let dpr = self
+                .renderer
+                .as_ref()
+                .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                .max(1e-6);
+            let x_css = (position.x as f32) / dpr;
+            let y_css = (position.y as f32) / dpr;
+            self.update_text_drag_select(x_css, y_css);
+        }
         // PiP window drag (task #21): follow the cursor while the title
         // bar is held, clamped to the window.
         if self.pip.dragging() {

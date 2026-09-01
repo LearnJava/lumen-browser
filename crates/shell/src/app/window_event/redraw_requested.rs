@@ -715,6 +715,9 @@ impl Lumen {
         // `frame`/`lb` are borrowed) since it needs `&self`, not the
         // `anim_frame`/`layout_box` fields specifically.
         let caret_override = self.focused_input_caret();
+        // FRAME-7 remainder 2: the focused `<input>`'s selection range, same
+        // override channel as the caret above.
+        let selection_override = self.focused_input_selection();
         let mut anim_ranges: Vec<std::ops::Range<usize>> = Vec::new();
         let mut anim_dl: Option<lumen_paint::DisplayList> =
             if let Some(lb) = &self.layout_box {
@@ -725,6 +728,9 @@ impl Lumen {
                     .unwrap_or_default();
                 if let Some((nid, cursor)) = caret_override {
                     comp.overrides.entry(nid).or_default().caret = Some(cursor);
+                }
+                if let Some((nid, start, end)) = selection_override {
+                    comp.overrides.entry(nid).or_default().selection = Some((start, end));
                 }
                 if !comp.is_empty() {
                     let tree = StackingTree::build(lb);
@@ -1213,7 +1219,45 @@ impl Lumen {
         // `CompositorOverride` channel slice 1 used for a page `<input>`: see
         // `forms::textarea_caret_rect`'s doc comment for why a textarea needs
         // a different mechanism.
+        // FRAME-7 remainder 2: selection highlight for a focused `<textarea>`
+        // — same shell-side overlay mechanism as its caret bar below, painted
+        // first so the caret (suppressed below while a selection is active,
+        // the same convention `emit_input_selection` enforces for a page
+        // `<input>`) never draws on top of it.
+        if let Some((nid, start, end, value)) = self.focused_textarea_selection()
+            && let Some(lb) = self.layout_box.as_ref()
+            && let Some(field_lb) = forms::find_layout_box(lb, nid)
+            && let Ok(font) = lumen_font::Font::parse(INTER_FONT)
+            && let Ok(m) = lumen_paint::FontMeasurer::new(&font)
+        {
+            let fs = field_lb.style.font_size;
+            let measure = |s: &str| -> f32 {
+                use lumen_layout::TextMeasurer;
+                s.chars().map(|c| m.char_width(c, fs)).sum()
+            };
+            let rects = forms::textarea_selection_rects(field_lb, &value, start, end, &measure);
+            if !rects.is_empty() {
+                let mut sel_cmd =
+                    vec![lumen_paint::DisplayCommand::PushClipRect { rect: field_lb.rect }];
+                for rect in rects {
+                    sel_cmd.push(lumen_paint::DisplayCommand::FillRect {
+                        rect,
+                        color: forms::SELECTION_HIGHLIGHT_DEFAULT,
+                    });
+                }
+                sel_cmd.push(lumen_paint::DisplayCommand::PopClip);
+                if let Some(dl) = anim_dl.as_mut() {
+                    dl.append(&mut sel_cmd);
+                } else {
+                    let mut buf = page_buf.take().unwrap_or_else(|| self.display_list.clone());
+                    buf.append(&mut sel_cmd);
+                    page_buf = Some(buf);
+                }
+            }
+        }
+
         if let Some((nid, cursor, value)) = self.focused_textarea_caret()
+            && self.focused_textarea_selection().is_none()
             && let Some(lb) = self.layout_box.as_ref()
             && let Some(field_lb) = forms::find_layout_box(lb, nid)
             && let Ok(font) = lumen_font::Font::parse(INTER_FONT)
@@ -1257,8 +1301,48 @@ impl Lumen {
         // box, so a field scrolled out of the frame's visible area — or a
         // frame scrolled out of the page's — does not leave a caret floating
         // over unrelated content.
+        // FRAME-7 remainder 2: selection highlight for a focused frame
+        // `<input>` — same translate-into-page-coordinates + double clip as
+        // its caret below, painted first so the caret (gated off below while
+        // a selection is active) never draws on top of it.
+        if let Some(handle) = self.focused_frame.and_then(|(idx, _)| self.frames.get(idx))
+            && let Some((fidx, nid, start, end, value)) = self.focused_frame_input_selection()
+            && let Some(field_lb) = handle.layout.as_ref().and_then(|lb| forms::find_layout_box(lb, nid))
+            && let Some((ox, oy)) = frames::frame_page_origin(&self.frames, fidx)
+        {
+            let rect = forms::input_selection_rect(field_lb, &value, start, end);
+            let translate = |r: lumen_core::geom::Rect| lumen_core::geom::Rect {
+                x: r.x + ox,
+                y: r.y + oy,
+                ..r
+            };
+            let viewport_rect = lumen_core::geom::Rect {
+                x: ox,
+                y: oy,
+                width: handle.viewport.width,
+                height: handle.viewport.height,
+            };
+            let mut sel_cmd = vec![
+                lumen_paint::DisplayCommand::PushClipRect { rect: viewport_rect },
+                lumen_paint::DisplayCommand::PushClipRect { rect: translate(field_lb.rect) },
+                lumen_paint::DisplayCommand::FillRect {
+                    rect: translate(rect),
+                    color: forms::SELECTION_HIGHLIGHT_DEFAULT,
+                },
+                lumen_paint::DisplayCommand::PopClip,
+                lumen_paint::DisplayCommand::PopClip,
+            ];
+            if let Some(dl) = anim_dl.as_mut() {
+                dl.append(&mut sel_cmd);
+            } else {
+                let mut buf = page_buf.take().unwrap_or_else(|| self.display_list.clone());
+                buf.append(&mut sel_cmd);
+                page_buf = Some(buf);
+            }
+        }
         if let Some(handle) = self.focused_frame.and_then(|(idx, _)| self.frames.get(idx))
             && let Some((fidx, nid, cursor, value)) = self.focused_frame_input_caret()
+            && self.focused_frame_input_selection().is_none()
             && let Some(field_lb) = handle.layout.as_ref().and_then(|lb| forms::find_layout_box(lb, nid))
             && let Some((ox, oy)) = frames::frame_page_origin(&self.frames, fidx)
         {
@@ -1292,8 +1376,58 @@ impl Lumen {
                 page_buf = Some(buf);
             }
         }
+        // FRAME-7 remainder 2: selection highlight for a focused frame
+        // `<textarea>` — same shell-side overlay + translate as its caret
+        // below, painted first for the same "caret never on top" reason.
+        if let Some(handle) = self.focused_frame.and_then(|(idx, _)| self.frames.get(idx))
+            && let Some((fidx, nid, start, end, value)) = self.focused_frame_textarea_selection()
+            && let Some(field_lb) = handle.layout.as_ref().and_then(|lb| forms::find_layout_box(lb, nid))
+            && let Some((ox, oy)) = frames::frame_page_origin(&self.frames, fidx)
+            && let Ok(font) = lumen_font::Font::parse(INTER_FONT)
+            && let Ok(m) = lumen_paint::FontMeasurer::new(&font)
+        {
+            let fs = field_lb.style.font_size;
+            let measure = |s: &str| -> f32 {
+                use lumen_layout::TextMeasurer;
+                s.chars().map(|c| m.char_width(c, fs)).sum()
+            };
+            let rects = forms::textarea_selection_rects(field_lb, &value, start, end, &measure);
+            if !rects.is_empty() {
+                let translate = |r: lumen_core::geom::Rect| lumen_core::geom::Rect {
+                    x: r.x + ox,
+                    y: r.y + oy,
+                    ..r
+                };
+                let viewport_rect = lumen_core::geom::Rect {
+                    x: ox,
+                    y: oy,
+                    width: handle.viewport.width,
+                    height: handle.viewport.height,
+                };
+                let mut sel_cmd = vec![
+                    lumen_paint::DisplayCommand::PushClipRect { rect: viewport_rect },
+                    lumen_paint::DisplayCommand::PushClipRect { rect: translate(field_lb.rect) },
+                ];
+                for rect in rects {
+                    sel_cmd.push(lumen_paint::DisplayCommand::FillRect {
+                        rect: translate(rect),
+                        color: forms::SELECTION_HIGHLIGHT_DEFAULT,
+                    });
+                }
+                sel_cmd.push(lumen_paint::DisplayCommand::PopClip);
+                sel_cmd.push(lumen_paint::DisplayCommand::PopClip);
+                if let Some(dl) = anim_dl.as_mut() {
+                    dl.append(&mut sel_cmd);
+                } else {
+                    let mut buf = page_buf.take().unwrap_or_else(|| self.display_list.clone());
+                    buf.append(&mut sel_cmd);
+                    page_buf = Some(buf);
+                }
+            }
+        }
         if let Some(handle) = self.focused_frame.and_then(|(idx, _)| self.frames.get(idx))
             && let Some((fidx, nid, cursor, value)) = self.focused_frame_textarea_caret()
+            && self.focused_frame_textarea_selection().is_none()
             && let Some(field_lb) = handle.layout.as_ref().and_then(|lb| forms::find_layout_box(lb, nid))
             && let Some((ox, oy)) = frames::frame_page_origin(&self.frames, fidx)
             && let Ok(font) = lumen_font::Font::parse(INTER_FONT)

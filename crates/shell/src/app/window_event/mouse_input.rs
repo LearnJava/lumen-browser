@@ -877,6 +877,10 @@ impl Lumen {
                 }
                 scrollbar::TrackClick::None => {
                     self.handle_click_at(x_css, y_css);
+                    // FRAME-7 остаток: arm mouse-drag text selection if the
+                    // click above landed on a typeable field — `focused_node`/
+                    // `focused_frame` are this click's outcome by now.
+                    self.begin_text_drag_select(x_css, y_css);
                 }
             }
         } else {
@@ -1022,6 +1026,9 @@ impl Lumen {
                 self.pip.end_drag();
             }
             self.scroll_drag = None;
+            // FRAME-7 остаток: end an in-progress mouse-drag text selection —
+            // the selection itself stays, only the drag tracking stops.
+            self.text_drag = None;
             // РљСѓСЂСЃРѕСЂ Р±С‹Р» В«Р·Р°С„РёРєСЃРёСЂРѕРІР°РЅВ» РєР°Рє Pointer РїРѕРєР° С‚СЏРЅСѓР»Рё
             // thumb; С‚РµРїРµСЂСЊ РїРµСЂРµСЃС‡РёС‚Р°РµРј РїРѕ hover-С‚РѕС‡РєРµ С‚РµРєСѓС‰РµРіРѕ
             // РїРѕР»РѕР¶РµРЅРёСЏ РєСѓСЂСЃРѕСЂР° (CursorMoved-event РЅР° release СЃР°Рј
