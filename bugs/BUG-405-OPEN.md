@@ -6042,3 +6042,71 @@ find-bar/hint-режима возвращают **пустой `Vec`** — им 
   версионируемыми только «на будущее» — сейчас они не вносят измеримой
   стоимости на общем пути, брать их в п.85 раньше scrollbar/chrome_dl-хэша
   не имеет смысла.
+
+## Срез 55 (2026-09-01): вариант (б) среза 54 измерен — рехэш chrome-сегмента
+это ~100% стоимости `fold_overlay` на реальной раскладке
+
+Срез 54 оставил развилку: либо построить `ScrollbarOverlayFrameCache`
+(вариант а), либо сперва измерить, какую долю `fold_overlay`
+(`display_list.rs:1970`) составляет именно избыточный пересчёт хэша уже
+известного HIT-сегмента `chrome_dl` (вариант б), и по числу решить, стоит
+ли пробрасывать кэшированный дайджест из `ChromeOverlayFrameCache` в
+`overlay_cache_step`. Этот срез закрывает вариант (б) — сам фикс не делает.
+
+### Замер
+
+Новый тест `bug405_slice55_fold_overlay_cost_is_mostly_chrome_segment`
+(`#[ignore]`, `crates/shell/src/tests/chrome_incremental.rs`) переиспользует
+РЕАЛЬНУЮ фикстуру среза 52 (`chrome_overlay_segment` на настоящей раскладке,
+`strips_used=3`) плюс реальный scrollbar-оверлей
+(`scrollbar::build_scrollbar_overlay`, ровно 2 `FillRect`, срез 54 подтвердил
+это как единственный source, реально присутствующий каждый кадр на горячем
+пути прокрутки кроме уже закэшированного `chrome_dl`). Интерливед A/B по
+образцу срезов 43/44/47/50/52 (500 повторов после 20 прогревочных, сравнение
+по минимуму): полный `fold_overlay(full_overlay)` против
+`fold_overlay(&full_overlay[chrome_len..])` — «лучший случай» фикса, где
+хэш chrome-префикса приходит из кэша, а не пересчитывается.
+
+```
+cargo test -p lumen-shell --profile dev-release bug405_slice55 -- --ignored --nocapture
+BUG405_S55_FOLD_FULL      count=500 min=0.26ms p50=0.31ms p95=0.54ms p99=0.65ms max=0.81ms
+BUG405_S55_FOLD_TAIL_ONLY count=500 min=0.00ms p50=0.00ms p95=0.00ms p99=0.00ms max=0.02ms
+chrome-segment rehash accounts for 100.0% of fold_overlay's cost
+  (882 chrome cmds vs 2 scrollbar cmds, min of 500 interleaved samples, full=0.2561ms tail=0.0001ms)
+```
+
+Повторный прогон (устойчивость): `full=0.2833ms tail=0.0001ms`, доля снова
+100.0%. Хвост (только 2 scrollbar-команды) округляется в 0 при точности
+среза; вся измеримая стоимость `fold_overlay` на этой раскладке приходится
+на рехэш 882 команд chrome-сегмента (после кадрирования полосами — не
+исходные 292 `chrome_dl`, framing даёт больше команд на `strips_used=3`).
+
+### Что это значит для п.85
+
+Вариант (б) даёт однозначный ответ: рехэш `chrome_dl` — не «слишком малая
+доля, чтобы оправдать content_epoch-плумбинг» (гипотеза среза 47 про
+послекэш 0.14→0.02мс), а практически ВСЯ стоимость `fold_overlay` на
+типичной длинной странице во время скролла. `ScrollbarOverlayFrameCache`
+(вариант а среза 54) решал бы не ту часть задачи — 2 команды и так стоят
+≈0. Следующий содержательный шаг п.85 — пробросить уже посчитанный дайджест
+`ChromeOverlayFrameCache` (срез 50) в `overlay_cache_step`, чтобы
+`fold_overlay` не пересчитывал хэш HIT-сегмента заново, а не строить
+отдельный кэш для scrollbar.
+
+### Гейты
+
+* `cargo check -p lumen-shell --tests` — чисто.
+* `cargo clippy -p lumen-shell --all-targets -- -D warnings` — чисто.
+* `cargo test -p lumen-shell -- chrome` — 25 passed (без изменений в числе
+  обычных), 4 ignored (был 3 + новый срез 55), 0 failed — без регрессий.
+* Правка — только один новый `#[ignore]`d тест, рендер-путь не тронут —
+  `dump_golden.py`/CPU-снапшоты не нужны.
+
+### Остаток
+
+* Сам фикс (проброс дайджеста `ChromeOverlayFrameCache` в
+  `overlay_cache_step`, чтобы `fold_overlay` не звал `hash_one_command` по
+  HIT-сегменту) не сделан этим срезом — только измерен и обоснован как
+  следующий шаг.
+* Источники 3–9 (форма-виджеты, диалог, view-transition, hints) по-прежнему
+  вне п.85 — без изменений от среза 54.

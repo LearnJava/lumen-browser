@@ -1608,3 +1608,81 @@ fn bug405_slice52_chrome_overlay_cache_net_win_on_real_layout() {
         chrome_dl.len(),
     );
 }
+
+// -- BUG-405 срез 55: how much of fold_overlay's cost is the chrome-segment rehash? --
+
+/// Срез 54's census (`bugs/BUG-405-OPEN.md` "Остаток", вариант (б)) narrowed
+/// п.85 to one concrete question: `fold_overlay` (`display_list.rs:1970`)
+/// hashes EVERY overlay command every frame with `hash_one_command`,
+/// including the `chrome_dl` segment a `ChromeOverlayFrameCache` HIT already
+/// proves byte-identical to every earlier HIT since the cache was built — but
+/// is that rehash actually a measurable share of `fold_overlay`'s own cost,
+/// or (as срез 47's numbers suggest — "послекэша" 0.14→0.02мс after the
+/// double-hash was deduplicated) too small already to justify the
+/// `content_epoch`-style plumbing a real fix would need? Measured directly
+/// (docs/perf-method.md: counter/identity, not wall-clock feel) — no engine
+/// code touched, `fold_overlay` runs exactly as it stands on `main` today.
+///
+/// Fixture: срез 52's REAL chrome segment (cmds=292 chrome_dl → framed at
+/// strips_used=3, not a synthetic stand-in) plus the real scrollbar overlay
+/// (`scrollbar::build_scrollbar_overlay`, exactly 2 `FillRect`s) — the two
+/// overlay sources срез 54's read of `redraw_requested.rs` confirmed are
+/// actually present every frame on the hot scrolling path (the other 7
+/// builders return an empty `Vec` on a plain page).
+///
+/// `cargo test -p lumen-shell --profile dev-release bug405_slice55 -- --ignored --nocapture`.
+#[test]
+#[ignore = "manual perf gate (BUG-405 срез 55) — doc comment has the run command"]
+fn bug405_slice55_fold_overlay_cost_is_mostly_chrome_segment() {
+    let (host_rect, chrome_dl, (win_w, win_h)) = bug405_slice52_real_chrome_overlay_fixture();
+    let (chrome_segment, strips_used, _) =
+        chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, false, None);
+    assert_eq!(strips_used, 3, "must match срез 52's real-layout ceiling");
+
+    let scrollbar_cmds = scrollbar::build_scrollbar_overlay(400.0, 4000.0, win_w, win_h);
+    assert_eq!(scrollbar_cmds.len(), 2, "срез 54's read: exactly track+thumb");
+
+    let mut full_overlay = chrome_segment.clone();
+    full_overlay.extend(scrollbar_cmds.iter().cloned());
+    let chrome_len = chrome_segment.len();
+
+    const WARMUP: usize = 20;
+    const SAMPLES: usize = 500;
+    let mut full_stats = lumen_paint::FrameStats::new();
+    let mut tail_only_stats = lumen_paint::FrameStats::new();
+    // Interleaved each round (docs/perf-method.md) — both arms see the same
+    // allocator/cache warmth instead of one racing first.
+    for i in 0..WARMUP + SAMPLES {
+        let t0 = std::time::Instant::now();
+        let digests_full = lumen_paint::display_list::fold_overlay(&full_overlay);
+        let full_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        std::hint::black_box(&digests_full);
+
+        let t1 = std::time::Instant::now();
+        // The best case a chrome-digest-reuse fix could reach: only the tail
+        // (scrollbar) actually gets hashed, the chrome prefix's digests come
+        // from `ChromeOverlayFrameCache` instead of `hash_one_command`.
+        let digests_tail = lumen_paint::display_list::fold_overlay(&full_overlay[chrome_len..]);
+        let tail_ms = t1.elapsed().as_secs_f32() * 1000.0;
+        std::hint::black_box(&digests_tail);
+
+        if i >= WARMUP {
+            full_stats.record(full_ms);
+            tail_only_stats.record(tail_ms);
+        }
+    }
+
+    let full_summary = full_stats.summary().expect("samples collected");
+    let tail_summary = tail_only_stats.summary().expect("samples collected");
+    eprintln!("{}", full_summary.display_with("BUG405_S55_FOLD_FULL"));
+    eprintln!("{}", tail_summary.display_with("BUG405_S55_FOLD_TAIL_ONLY"));
+    let attributable = (1.0 - tail_summary.min_ms / full_summary.min_ms) * 100.0;
+    eprintln!(
+        "chrome-segment rehash accounts for {attributable:.1}% of fold_overlay's cost \
+         ({chrome_len} chrome cmds vs {} scrollbar cmds, min of {SAMPLES} interleaved samples, \
+         full={:.4}ms tail={:.4}ms)",
+        full_overlay.len() - chrome_len,
+        full_summary.min_ms,
+        tail_summary.min_ms,
+    );
+}
