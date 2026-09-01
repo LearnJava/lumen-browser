@@ -1,6 +1,7 @@
 # BUG-873 — `dispatchEvent` не распространяет событие по дереву: ни capture, ни bubble; настоящий клик доходит до `document`, но не до `window`
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → [GAP-EVENTPATH](../ROADMAP.md))
+**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-EVENTPATH` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 27 — живой замер, варианты `bubble-to-window`/`bubble-detail`/`body-error-bubble`)
 **Область:** `crates/js/src/dom.rs:4696` — `dispatchEvent` обёртки элемента зовёт `_lumen_dispatch(nid, evt)` (`:1086`), то есть слушателей ОДНОГО узла, независимо от `evt.bubbles`; `crates/js/src/dom.rs:6249` — `document.dispatchEvent` обходит только реестр документа; `crates/js/src/dom.rs:1112` `_lumen_dispatch_bubble` и `_lumen_dispatch_rich` (пути настоящего ввода) поднимаются по предкам и заканчивают на `document`, `window` в цепочке нет вовсе
 **Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.

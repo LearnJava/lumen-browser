@@ -1,6 +1,7 @@
 # BUG-727 — `RTCPeerConnection` stub never fires `ontrack`/`ondatachannel`/`on(ice)connectionstatechange` — any two-peer WPT test hangs to the harness timeout
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → [GAP-WEBRTC](../ROADMAP.md))
+**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-WEBRTC` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Компонент:** js (`crates/js/src/webrtc_stub.rs` — `WEBRTC_SHIM`)
 **Найден:** P2, WPT-VENDOR-webrtc-stats, 2026-08-09
 

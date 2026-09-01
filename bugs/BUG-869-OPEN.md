@@ -1,6 +1,7 @@
 # BUG-869 — `WebSocket.send()` пишет в сокет синхронно: медленный получатель замораживает документ, `bufferedAmount` всегда 0
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → [GAP-WSASYNC](../ROADMAP.md))
+**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-WSASYNC` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 26 — живой замер, варианты `ws-backpressure`, `ws-backpressure-steps`)
 **Область:** `crates/js/src/v8_runtime.rs:3543`/`:3554` — нативы `_lumen_ws_send`/`_lumen_ws_send_bin` зовут `sess.send_text`/`send_binary` прямо из потока JS, под `registry.lock()`; ниже `crates/network/src/websocket/mod.rs:189` — `send_frame` → `frame::write_frame(&mut self.stream, …)`, обычный блокирующий `Write` в TCP-сокет. Очереди отправки нет вовсе: `crates/js/src/dom.rs:9880` увеличивает `this.bufferedAmount += n`, но ниже по коду счётчик не уменьшается по мере слива, а на практике остаётся 0
 **Владелец:** P1/P3 (`lumen-js`/`lumen-network`). Заведён P2 в ходе WPT-задачи, здесь не чинится.

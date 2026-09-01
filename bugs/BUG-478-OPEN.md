@@ -1,6 +1,7 @@
 # BUG-478: `Element.prototype.getClientRects()`/`getBoxQuads()` missing (only `Range` has `getClientRects`)
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → [GAP-GEOM](../ROADMAP.md))
+**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-GEOM` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Дата:** 2026-08-02
 **Компонент:** js (`crates/js/src/dom.rs`)
 **Найден:** WPT-RUN-3 срез 4 (`ROADMAP.md`) — массовый прогон `css/cssom-view`
@@ -73,8 +74,8 @@ WPT-RUN-5 (до фикса BUG-591/716) исключение никуда не �
 Важная поправка к готче в `CLAUDE.md`: элемент-адресованный `test_driver`-экшен
 падает **не** на `document.defaultView` ([BUG-622](BUG-622-OPEN.md), это
 следующий по порядку отказ, `testdriver-extra.js::get_context`), а раньше — на
-этом баге. `elementsFromPoint`/`elementFromPoint` ([BUG-464](BUG-464-OPEN.md),
-[BUG-477](BUG-477-OPEN.md)) — третье звено той же цепочки: даже с
+этом баге. `elementsFromPoint`/`elementFromPoint` ([BUG-464](BUG-464-FIXED.md),
+[BUG-477](BUG-477-DUPLICATE.md)) — третье звено той же цепочки: даже с
 `getClientRects` дерево не построится.
 
 **Масштаб этой грани:** механизм `testdriver-click-preconditions` в
@@ -82,5 +83,32 @@ WPT-RUN-5 (до фикса BUG-591/716) исключение никуда не �
 весь кластер `css/selectors/focus-visible-*`, плюс `focus/scroll-matches-focus.html`
 и `html/semantics/forms/the-label-element/forward-focus-to-associated-element.html`.
 
-Дубликаты этого же дефекта, заведённые независимо: [BUG-551](BUG-551-OPEN.md),
-[BUG-580](BUG-580-OPEN.md) — чинить одним коммитом, закрывать все три.
+## Слияние дубликатов 2026-09-02 (ре-триаж пула WPT-RUN-5/6)
+
+[BUG-551](BUG-551-DUPLICATE.md) и [BUG-580](BUG-580-DUPLICATE.md) — тот же
+отсутствующий метод, заведённый двумя другими срезами. Формально сведены сюда:
+выживает первый по дате (эта запись, 2026-08-02), у тех статус
+`DUPLICATE → BUG-478`, файлы переименованы в `-DUPLICATE.md`, восемь входящих
+ссылок поправлены. Три записи на один `grep`-ноль — это и есть иллюстрация
+правила [docs/probe-method.md §8](../docs/probe-method.md): пробел, заведённый
+багом, переоткрывается на каждом следующем прогоне.
+
+Уникальные замеры, перенесённые из них:
+
+- **из BUG-551** (WPT-RUN-3 срез 33, `css/css-sizing`, 2026-08-03):
+  `contain-intrinsic-size/auto-010.html` — 1 файл / 2 сабтеста, «Last remembered
+  size» на многофрагментном элементе, то есть случай, где однорректный фолбэк
+  `[getBoundingClientRect()]` заведомо не годится. Там же уточнение по коду:
+  третье вхождение `getClientRects` в файле — заглушка `_CaretPosition`
+  (`dom.rs:10516`), не `Element`.
+- **из BUG-580** (WPT-VENDOR-html-semantics-misc, 2026-08-04): **76 сабтестов**,
+  подавляющая часть — через хелпер `isVisible()` в
+  `popovers/resources/popover-utils.js`. Сопутствующие пробелы, замеренные тем же
+  проходом: `Document.prototype.elementFromPoint` (8 обращений) — с тех пор
+  реализован ([BUG-464](BUG-464-FIXED.md)/[BUG-477](BUG-477-DUPLICATE.md),
+  2026-09-01), и `Node.prototype.getRootNode()` (6 обращений) —
+  [BUG-599](BUG-599-OPEN.md), остаётся багом: это один метод, а не семейство.
+
+Суммарный масштаб после слияния: 12 сабтестов `cssom-view` + 7 `getBoxQuads` +
+76 `html/semantics` + 2 `css-sizing`, плюс 14 id `testdriver-click-preconditions`,
+которые упираются в него раньше всего остального.

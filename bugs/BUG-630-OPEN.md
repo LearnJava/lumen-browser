@@ -1,6 +1,7 @@
 # BUG-630: `<img>` never fires `load`/`error`, and `HTMLImageElement` has no `complete`/`naturalWidth`/`naturalHeight`/`onload`/`onerror` at all — for every image format, not just JPEG XL
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → [GAP-LOADEV](../ROADMAP.md))
+**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-LOADEV` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Компонент:** js (`crates/js/src/dom.rs:10864-10875` — `HTMLImageElement.prototype` gets only `_lumen_install_reflection` attribute reflection, no decoded-state accessors, no event-handler IDL attributes), shell (`crates/shell/src/main.rs:4892-4904` `decode_image`, `crates/shell/src/main.rs:10630-10635` lazy-load path, `crates/shell/src/main.rs:5507-5512` background-image path — all three log-and-drop a decode `Err`/`Ok` with no signal back to JS)
 **Найден:** P2, WPT-VENDOR-jpegxl, 2026-08-05
 

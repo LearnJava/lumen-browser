@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-01",
  "counts": {
-  "open": 359,
-  "fixed": 530,
+  "open": 355,
+  "fixed": 532,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 889,
+ "total_bugs": 887,
  "phases": [
   {
    "id": "P0",
@@ -3138,7 +3138,7 @@
        "title": "WPT: прогнать срез `html/rendering`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком (`--processes=4`, ~2 мин) — **115/149 harness OK, 187/1053 сабтестов** (296 `reftest` вне охвата минимального исполнителя, как и предсказывала строка). Основная масса из 900+ unexpected — не новые находки, а концентрированный ценник уже известных сквозных дефектов: [BUG-367](bugs/BUG-367-FIXED.md) (`localName`/`prefix` отсутствуют — `<undefined type=submit>` во всех тест-именах и телах ассертов button-layout/computed-style.html, 167/167 сабтестов одного файла), [BUG-488](bugs/BUG-488-OPEN.md) (`getComputedStyle` пуст для ЛЮБОГО inline-элемента — `<span>`/`<a>`), [BUG-351](bugs/BUG-351-FIXED.md) (`outerHTML` отсутствует на живом DOM), [BUG-478](bugs/BUG-478-OPEN.md)/[522](bugs/BUG-522-OPEN.md)/[551](bugs/BUG-551-OPEN.md)/[580](bugs/BUG-580-OPEN.md) (`Element.getClientRects` отсутствует), [BUG-414](bugs/BUG-414-FIXED.md) (`dataset` отсутствует — 12 хитов в iframe-frameborder.html), [BUG-368](bugs/BUG-368-FIXED.md) (`innerHTML` текстовая заглушка — `table_tr`-инъекция в table-attribute.html даёт `getElementById`=null, каскадный ERROR/NOTRUN на 8 сабтестов той же категории). Три новых бага, все подтверждены живой пробой `--mcp-live-port` поверх сигнала прогона: [BUG-602](bugs/BUG-602-OPEN.md) (легаси `align` — вообще нет IDL-рефлексии ни на одном элементе, отдельно от table `align`→`text-align` presentational hint, который работает), [BUG-603](bugs/BUG-603-FIXED.md) (`bgcolor` presentational hint применяется только из начального парсинга и никогда не переприменяется на рантайменый `setAttribute`, плюс `background`/`bordercolor`/`cellspacing` не реализованы вовсе), [BUG-604](bugs/BUG-604-OPEN.md) (нет UA shadow tree у `<video>`/`<audio>`/`<select>`/`<details>` — дочерний контент рендерится напрямую вместо ожидаемого no-slot/slot-контракта). Отдельно расширен [BUG-537](bugs/BUG-537-OPEN.md) новым шестым свойством: `aspect-ratio` пропущен в whitelist `computed_style_to_map`, изолировано на блочном элементе, чтобы исключить BUG-488/443/555",
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком (`--processes=4`, ~2 мин) — **115/149 harness OK, 187/1053 сабтестов** (296 `reftest` вне охвата минимального исполнителя, как и предсказывала строка). Основная масса из 900+ unexpected — не новые находки, а концентрированный ценник уже известных сквозных дефектов: [BUG-367](bugs/BUG-367-FIXED.md) (`localName`/`prefix` отсутствуют — `<undefined type=submit>` во всех тест-именах и телах ассертов button-layout/computed-style.html, 167/167 сабтестов одного файла), [BUG-488](bugs/BUG-488-OPEN.md) (`getComputedStyle` пуст для ЛЮБОГО inline-элемента — `<span>`/`<a>`), [BUG-351](bugs/BUG-351-FIXED.md) (`outerHTML` отсутствует на живом DOM), [BUG-478](bugs/BUG-478-OPEN.md)/[522](bugs/BUG-522-OPEN.md)/[551](bugs/BUG-551-DUPLICATE.md)/[580](bugs/BUG-580-DUPLICATE.md) (`Element.getClientRects` отсутствует), [BUG-414](bugs/BUG-414-FIXED.md) (`dataset` отсутствует — 12 хитов в iframe-frameborder.html), [BUG-368](bugs/BUG-368-FIXED.md) (`innerHTML` текстовая заглушка — `table_tr`-инъекция в table-attribute.html даёт `getElementById`=null, каскадный ERROR/NOTRUN на 8 сабтестов той же категории). Три новых бага, все подтверждены живой пробой `--mcp-live-port` поверх сигнала прогона: [BUG-602](bugs/BUG-602-OPEN.md) (легаси `align` — вообще нет IDL-рефлексии ни на одном элементе, отдельно от table `align`→`text-align` presentational hint, который работает), [BUG-603](bugs/BUG-603-FIXED.md) (`bgcolor` presentational hint применяется только из начального парсинга и никогда не переприменяется на рантайменый `setAttribute`, плюс `background`/`bordercolor`/`cellspacing` не реализованы вовсе), [BUG-604](bugs/BUG-604-OPEN.md) (нет UA shadow tree у `<video>`/`<audio>`/`<select>`/`<details>` — дочерний контент рендерится напрямую вместо ожидаемого no-slot/slot-контракта). Отдельно расширен [BUG-537](bugs/BUG-537-OPEN.md) новым шестым свойством: `aspect-ratio` пропущен в whitelist `computed_style_to_map`, изолировано на блочном элементе, чтобы исключить BUG-488/443/555",
        "bugs": [
         "BUG-602",
         "BUG-603",
@@ -4705,7 +4705,7 @@
        "title": "WPT: прогнать подсрез `html/semantics/{interactive-elements,popovers,permission-element,links,interestfor,selectors,the-button-element,tabular-data,menu,grouping-content,text-level-semantics,disabled-elements,edits,sections}` + 2 корневых файла",
        "status": "done",
        "size": "M",
-       "note": "Скоуп: ⬜ (кандидат). Подсрез `html/semantics`, вынесен из `WPT-VENDOR-html-semantics` 2026-08-04. DONE 2026-08-04: вопреки наивной оценке «~13 ч, не помещается в сессию» (та же формула, что развела `html`/`html-semantics`), реальный прогон — 14 подкаталогов отдельными `run_report.py --all --root html/semantics/<dir> --recursive --processes 6` + 2 корневых файла (`interfaces.html`, `rellist-feature-detection.html`) нерекурсивным `--root html/semantics` — занял суммарно **~15 мин**. Прогнано целиком, ни один подкаталог не пропущен: **316/444 harness OK, 591/5529 сабтестов**. Восемь новых багов, все root-caused прямым чтением `dom.rs` (не только по WPT-сигналу, по образцу предыдущих подсрезов): [BUG-577](bugs/BUG-577-OPEN.md) — крупнейшая находка всего среза: `Event.prototype.composedPath()` отсутствует целиком, наследуется всеми подтипами событий (`CustomEvent`/`UIEvent`/`MouseEvent`/…) — 288 попаданий, больше даже уже известного BUG-574 (`contains()`) в этом же срезе; вероятно объясняет необъяснённый шум и в уже закрытых срезах (не переаудированы задним числом). [BUG-578](bugs/BUG-578-FIXED.md) — popover/`<details>` `toggle`/`beforetoggle` диспатчатся как обычный `Event` с вручную приклеенными `oldState`/`newState`, интерфейса `ToggleEvent` нет вовсе (154, функциональность show/hide работает, это чисто гэп типа события). [BUG-579](bugs/BUG-579-OPEN.md) — `HTMLDialogElement.prototype.requestClose()` отсутствует, хотя `show`/`showModal`/`close` есть (154, `the-dialog-element/`). [BUG-580](bugs/BUG-580-OPEN.md) — `Element.prototype.getClientRects()` отсутствует при наличии `getBoundingClientRect()` (76, в основном через `popover-utils.js`'s `isVisible()`) + два мелких попутных гэпа без отдельного BUG-NNN: `Document.prototype.elementFromPoint` (8), `Node.prototype.getRootNode()` (6). [BUG-581](bugs/BUG-581-OPEN.md) — `HTMLTableElement`/`HTMLTableRowElement`/`HTMLTableSectionElement` — голые интерфейсы без единого специфичного метода/свойства (`rows`/`tBodies`/`insertRow`/`createTBody`/`deleteCaption` и т.д., 156, `tabular-data/`: 28/29 harness OK, но только 9/153 сабтестов). [BUG-582](bugs/BUG-582-OPEN.md) — Invoker Commands API (`command`/`commandfor`/`CommandEvent`) не реализован вовсе, хотя более узкий `popovertarget`/`popovertargetaction` работает (84, `the-button-element/command-and-commandfor/`). [BUG-583](bugs/BUG-583-OPEN.md) — элемент `<permission>` не реализован вовсе, падает в generic unknown-tag путь; единственный источник спеки — Chromium origin trial (48, `permission-element/`). [BUG-584](bugs/BUG-584-OPEN.md) — Interest Invokers API (`interestfor`/`InterestEvent`, hover/focus-аналог BUG-582) не реализован вовсе, целиком `.tentative.` (36, `interestfor/`). Переподтверждены: BUG-384 (named access on Window — доминирует в `ReferenceError: <id> is not defined` по короткому идентификатору popover/dialog/invoker/form/sibling и т.п., десятки файлов во всех 14 подкаталогах) и BUG-416 (`getElementsByTagName` на table). Попутно исправлен пропуск: строки BUGS.md для BUG-574/575/576 (найдены в `WPT-VENDOR-html-semantics-forms`, файлы `bugs/BUG-57{4,5,6}-OPEN.md` существовали, но не были добавлены в таблицу BUGS.md) — добавлены этой же правкой",
+       "note": "Скоуп: ⬜ (кандидат). Подсрез `html/semantics`, вынесен из `WPT-VENDOR-html-semantics` 2026-08-04. DONE 2026-08-04: вопреки наивной оценке «~13 ч, не помещается в сессию» (та же формула, что развела `html`/`html-semantics`), реальный прогон — 14 подкаталогов отдельными `run_report.py --all --root html/semantics/<dir> --recursive --processes 6` + 2 корневых файла (`interfaces.html`, `rellist-feature-detection.html`) нерекурсивным `--root html/semantics` — занял суммарно **~15 мин**. Прогнано целиком, ни один подкаталог не пропущен: **316/444 harness OK, 591/5529 сабтестов**. Восемь новых багов, все root-caused прямым чтением `dom.rs` (не только по WPT-сигналу, по образцу предыдущих подсрезов): [BUG-577](bugs/BUG-577-OPEN.md) — крупнейшая находка всего среза: `Event.prototype.composedPath()` отсутствует целиком, наследуется всеми подтипами событий (`CustomEvent`/`UIEvent`/`MouseEvent`/…) — 288 попаданий, больше даже уже известного BUG-574 (`contains()`) в этом же срезе; вероятно объясняет необъяснённый шум и в уже закрытых срезах (не переаудированы задним числом). [BUG-578](bugs/BUG-578-FIXED.md) — popover/`<details>` `toggle`/`beforetoggle` диспатчатся как обычный `Event` с вручную приклеенными `oldState`/`newState`, интерфейса `ToggleEvent` нет вовсе (154, функциональность show/hide работает, это чисто гэп типа события). [BUG-579](bugs/BUG-579-OPEN.md) — `HTMLDialogElement.prototype.requestClose()` отсутствует, хотя `show`/`showModal`/`close` есть (154, `the-dialog-element/`). [BUG-580](bugs/BUG-580-DUPLICATE.md) — `Element.prototype.getClientRects()` отсутствует при наличии `getBoundingClientRect()` (76, в основном через `popover-utils.js`'s `isVisible()`) + два мелких попутных гэпа без отдельного BUG-NNN: `Document.prototype.elementFromPoint` (8), `Node.prototype.getRootNode()` (6). [BUG-581](bugs/BUG-581-OPEN.md) — `HTMLTableElement`/`HTMLTableRowElement`/`HTMLTableSectionElement` — голые интерфейсы без единого специфичного метода/свойства (`rows`/`tBodies`/`insertRow`/`createTBody`/`deleteCaption` и т.д., 156, `tabular-data/`: 28/29 harness OK, но только 9/153 сабтестов). [BUG-582](bugs/BUG-582-OPEN.md) — Invoker Commands API (`command`/`commandfor`/`CommandEvent`) не реализован вовсе, хотя более узкий `popovertarget`/`popovertargetaction` работает (84, `the-button-element/command-and-commandfor/`). [BUG-583](bugs/BUG-583-OPEN.md) — элемент `<permission>` не реализован вовсе, падает в generic unknown-tag путь; единственный источник спеки — Chromium origin trial (48, `permission-element/`). [BUG-584](bugs/BUG-584-OPEN.md) — Interest Invokers API (`interestfor`/`InterestEvent`, hover/focus-аналог BUG-582) не реализован вовсе, целиком `.tentative.` (36, `interestfor/`). Переподтверждены: BUG-384 (named access on Window — доминирует в `ReferenceError: <id> is not defined` по короткому идентификатору popover/dialog/invoker/form/sibling и т.п., десятки файлов во всех 14 подкаталогах) и BUG-416 (`getElementsByTagName` на table). Попутно исправлен пропуск: строки BUGS.md для BUG-574/575/576 (найдены в `WPT-VENDOR-html-semantics-forms`, файлы `bugs/BUG-57{4,5,6}-OPEN.md` существовали, но не были добавлены в таблицу BUGS.md) — добавлены этой же правкой",
        "bugs": [
         "BUG-577",
         "BUG-578",
@@ -5209,7 +5209,7 @@
      "title": "WPT-RUN: пропускная способность WPT-раннера",
      "status": "active",
      "size": "L",
-     "note": "Дорожка пропускной способности WPT-раннера (владелец тулинга — P2; движковые баги по находкам — P3/P1). Превратить УЖЕ ВЕНДОРЕННЫЙ корпус в измеряемый: не вендорить новое (это WPT-VENDOR) и не писать новые тесты (это TEST), а снять три ограничения исполнителя. Повод: категория `css/` вендорена целиком (54350 файлов, 34607 id — рекорд корпуса), прогнана на 1.1% (382 id), и на этой пробе прошло 1294 из 2594 сабтестов — половина базовой блочной модели CSS1/CSS2 падает, а в BUGS.md на css-parser числится 13 багов из 429, т.е. счёт багов отражает, где искали, а не где они есть. Бриф — docs/tasks/p2-wpt-runner-throughput.md",
+     "note": "Дорожка пропускной способности WPT-раннера (владелец тулинга — P2; движковые баги по находкам — P3/P1). Превратить УЖЕ ВЕНДОРЕННЫЙ корпус в измеряемый: не вендорить новое (это WPT-VENDOR) и не писать новые тесты (это TEST), а снять три ограничения исполнителя. Повод: категория `css/` вендорена целиком (54350 файлов, 34607 id — рекорд корпуса), прогнана на 1.1% (382 id), и на этой пробе прошло 1294 из 2594 сабтестов — половина базовой блочной модели CSS1/CSS2 падает, а в BUGS.md на css-parser числится 13 багов из 429, т.е. счёт багов отражает, где искали, а не где они есть. Бриф — docs/tasks/p2-wpt-runner-throughput.md **Правило заведения находок (2026-09-02):** механизм, разобранный срезом, становится багом только если код есть и работает неверно; если функциональности нет вовсе И она размером с семейство API или модель состояния, а не с один член — это задача ROADMAP, а запись бага получает статус `OPEN (ДОРАБОТКА → <task>)` и уходит из очереди P3. Развилка, оба условия и цена ошибки — [docs/probe-method.md §8](docs/probe-method.md); легенда статуса — [BUGS.md](BUGS.md). До 2026-09-02 правила не было, и срезы WPT-RUN-5/6 заводили багом всё подряд — отсюда ре-триаж пула дорожки. Ре-триаж проведён 2026-09-02: из 73 OPEN-записей, на которые ссылается строка WPT-RUN-6, 38 переведены в `ДОРАБОТКА` (новая дорожка `GAP`, 22 задачи, плюс CSSOM-1, CSSOM-5, FRAME-8 и WPT-RUN-12), 2 слиты дубликатами в BUG-478 (три записи на один отсутствующий `Element.getClientRects()`), 33 остались багами как дефекты реализованного кода; очередь P3 похудела на 11 указателей — остальные 29 в ней и не стояли, потому что заводились P2 по ходу прогонов.",
      "tasks": [
       {
        "id": "WPT-RUN-1",
@@ -5289,6 +5289,16 @@
        "status": "done",
        "size": "S",
        "note": "DONE 2026-08-23: `docs/wpt-status.md` синхронизирован с фактами — интро «Охват» переписано (277/277 категорий вендорены, дорожка `WPT-VENDOR` закрыта, три явные оговорки: частичный вендоринг `dom`, выборочные прогоны `css`/`content-security-policy`/`mixed-content`, невендоренные общие хелперы), 25 строк индекса переведены с «—» на ✅ с однопредложенческой заметкой (дата, объём, headline прогона, ссылка на `wpt-vendor-notes/` либо на DONE-ноту строки ROADMAP) и ссылкой на профильный баг в колонке «Баг», заметки 🟡-строк `dom`/`mixed-content` объясняют причину статуса (`dom` — только `dom/nodes/`, `WPT-VENDOR-dom-rest`; `mixed-content` — 🟡 про прогон, остановленный на 78/388 id при нулевой дисперсии). Генерируемый блок `gen:dom/nodes` не тронут. Исходная постановка: `docs/wpt-status.md` разошёлся с фактами и порождает неверную оценку охвата «2/277»: интро до сих пор утверждает «вендорены и гоняются две категории» (текст времён 2026-07-18), а категорийный индекс показывает 25 категорий как невендоренные («—»), хотя все они вендорены и прогнаны — строки `WPT-VENDOR-*` в ROADMAP.md в статусе `done`, каталоги на диске существуют, у 4 есть заметки в `docs/wpt-vendor-notes/`. Файл — заявленный источник правды по охвату, и сейчас он лжёт. Задача — переписать интро, проставить ✅+короткие заметки 25 строкам (точный список с номерами строк ROADMAP — [docs/tasks/p2-wpt-status-sync.md](docs/tasks/p2-wpt-status-sync.md)), сверить 🟡-строки `dom`/`mixed-content`. Исполнитель — P2, заведено 2026-08-23"
+      },
+      {
+       "id": "WPT-RUN-12",
+       "title": "WPT-RUN-12: исполнители testdriver-экшенов",
+       "status": "ready",
+       "size": "M",
+       "note": "Исполнитель WPT реализует ровно два testdriver-экшена (`click` и `generate_test_report`); `action_sequence`, `send_keys`, `bless`, `set_permission`, `delete_all_cookies`, `get_computed_role`, `get_computed_label` и остальные из примерно тридцати отклоняются `ActionError`, а отклонённый промис страница не видит, поэтому тест висит до таймаута враннера вместо честного FAIL. Подтверждено инструментированием `_handle_action`. Порядок строгий: `testdriver.js` открывается вызовом `element.getClientRects()`, которого нет (GAP-GEOM), так что до экшенов дело не доходит в принципе. Владелец — P2: это его собственный тулинг, а не движок.",
+       "bugs": [
+        "BUG-810"
+       ]
       }
      ]
     },
@@ -5383,6 +5393,16 @@
        "note": "Актуальность читаемого стиля: нет синхронного флаша стиля/раскладки перед чтением, поэтому `getComputedStyle()` (и `offsetWidth`/`clientWidth`) отдают снимок ДО мутаций, сделанных этим же скриптом. Маскирующая грань, из-за которой дефект не виден в наивной пробе: сравнение двух пустых чтений друг с другом проходит успешно. Делать ПОСЛЕ CSSOM-3 — иначе часть проверок упрётся в отсутствие свойства в карте, а не в устаревший снимок",
        "bugs": [
         "BUG-493"
+       ]
+      },
+      {
+       "id": "CSSOM-5",
+       "title": "CSSOM-5: конструируемые таблицы стилей и adoptedStyleSheets",
+       "status": "planned",
+       "size": "M",
+       "note": "Записывающая половина CSSOM (читающая — CSSOM-1): `new CSSStyleSheet()` — `ReferenceError`, `document.adoptedStyleSheets` до присваивания `undefined` вместо пустого `FrozenArray`, а присваивание принимает что угодно, включая массив с `null`, не бросает и не даёт эффекта — это обычное поле объекта, а не аксессор; на теневом корне то же. Заведено ре-триажем WPT-RUN-6 2026-09-02: BUG-897 описывает не дефект, а отсутствующую половину той же модели, что CSSOM-1. От неё зависит GAP-CSSMOD.",
+       "bugs": [
+        "BUG-897"
        ]
       }
      ]
@@ -6181,6 +6201,16 @@
        "status": "planned",
        "size": "M",
        "note": "Оверлеи форм внутри фрейма: select, выбор цвета, даты и файла. Срез 18 сделал остальные элементы управления, а эти четыре печатают строку в stderr и ничего не делают — попап рисуется из layout_box СТРАНИЦЫ и адресуется голым NodeId, который внутри чужого документа ничего не значит. Координаты для отрисовки над страницей уже посчитаны — frames::frame_page_origin из среза 20. Проверять придётся юнит-тестом: снимок MCP оверлеев не содержит вовсе, что срез 20 доказал контролем на собственном тултипе страницы."
+      },
+      {
+       "id": "FRAME-8",
+       "title": "FRAME-8: фрейм, которым распоряжается скрипт",
+       "status": "planned",
+       "size": "M",
+       "note": "Фрейм, которым распоряжается скрипт, не грузится никогда: ни вставленный через `createElement` с `appendChild`, ни парсерный, которому `src` присвоили из JS, ни с `src` в `about:blank`, ни вовсе без атрибута — ни HTTP-запроса, ни `load`, ни исполнения скриптов ребёнка. Работает единственная форма — фрейм, которого парсер увидел с готовым URL. Все три формы измерены отдельно; практическое следствие для проб: фреймы писать в разметку с финальным URL. Перенесено в дорожку ре-триажем WPT-RUN-6 2026-09-02 — у шелла нет пути «поднять под-документ по требованию скрипта», это не дефект существующего.",
+       "bugs": [
+        "BUG-885"
+       ]
       }
      ]
     },
@@ -6192,6 +6222,247 @@
      "note": "Дорожка «CSS Font Loading API» (владелец — P1), выделена из BUG-467 по правилу «нереализованная функциональность — задача ROADMAP, а не баг» (решение 2026-08-28). Глобальные конструкторы `FontFace`/`FontFaceSet`/`FontFaceSetLoadEvent` не определены вовсе (`grep` по `crates/js/src/dom.rs`/`v8_runtime.rs` — ноль совпадений вне комментариев), `document.fonts` (`_lumen_get_fonts()`, `crates/js/src/dom.rs:6770`) — статичный read-only снимок только с `length`/`item`/`entries`/`forEach`/`Symbol.iterator`, без `size`/`add`/`delete`/`clear`/`has`/`keys`/`load`/`ready`/`addEventListener`/`onloading*`. Найдено WPT-RUN-3 срез 2 (только `.ready`, вызывает TIMEOUT до регистрации первого `test()`), расширено срезом 17 (`css/css-font-loading`, 21 файл/0 из 79 сабтестов), срезами 26/31/33 (`css-ruby`/`css-fonts`/`css-sizing`, тот же `document.fonts.ready`/`.load` идиом). Полный перечень отсутствующих членов и упавших файлов — в bugs/BUG-467-OPEN.md",
      "bugs": [
       "BUG-467"
+     ]
+    },
+    {
+     "id": "GAP",
+     "title": "GAP: пробелы платформы, найденные прогоном WPT",
+     "status": "planned",
+     "size": "L",
+     "note": "Дорожка «Пробелы платформы, найденные прогоном WPT» (заведена 2026-09-02 ре-триажем пула WPT-RUN-5/6; владелец НЕ назначен — приоритет и фаза за пользователем). Сюда вынесены записи `BUGS.md`, которые описывают не дефект, а никогда не реализованную функциональность размером с семейство API или модель состояния — по правилу заведения из [docs/probe-method.md §8](docs/probe-method.md), которого во время срезов ещё не было. Каждая задача несёт свои id багов в колонке bugs; файлы `bugs/BUG-NNN-OPEN.md` остаются на месте как запись наблюдений и получают статус `OPEN (ДОРАБОТКА → GAP-*)`, то есть уходят из очереди P3. Это НЕ план работ: строки заведены, чтобы записи перестали лежать в очереди, которая их по определению не берёт, и чтобы их можно было приоритизировать поштучно. Часть — кандидаты в собственные дорожки по образцу CSSOM/FRAME/FONTLOAD, часть — в фазу 3 рядом с `P3-*`-строками; решение не принято.",
+     "tasks": [
+      {
+       "id": "GAP-EVENTPATH",
+       "title": "GAP: путь события и IDL-обработчики",
+       "status": "planned",
+       "size": "L",
+       "note": "Пути события не построено: `dispatchEvent` со `bubbles: true` слышит только сам узел — ни предок, ни `body`, ни `document`, ни `window`, ни слушатель с `capture: true`; `event.eventPhase` — `undefined`, у события на `document` `e.target === null` (BUG-873). Нативный клик по предкам поднимается, то есть у шелла путь свой, а у скриптового диспатча его нет вовсе. Вторая половина — обработчики-атрибуты IDL: `document.on<type> = fn` присваивается и не вызывается никогда, `'onerror' in window` и `'onresize' in document` дают `false`, из-за чего ломается стандартная идиома детекта `'onX' in Y` (BUG-874). Строить надо event path по DOM LS §2.9 (composed path, три фазы, `target`/`currentTarget`/`eventPhase`) и объявление обработчиков на Window/Document, а не чинить точку диспатча.",
+       "bugs": [
+        "BUG-873",
+        "BUG-874"
+       ]
+      },
+      {
+       "id": "GAP-NAVCTX",
+       "title": "GAP: контексты просмотра и навигация, которыми распоряжается скрипт",
+       "status": "planned",
+       "size": "L",
+       "note": "Вспомогательного контекста просмотра нет: `window.open()` возвращает заглушку с `opener: null` и `postMessage`-no-op (BUG-797), а сам вызов и клик по `<a target=_blank>` убивают документ-вызыватель — ни один его таймер больше не срабатывает, при том что открываемый документ загружен и исполняет скрипты (BUG-883). Рядом два пробела того же слоя навигации шелла: `javascript:`-URL не исполняется нигде — ни парсерный `<iframe src>`, ни присваивание `location.href`, ни клик по ссылке, а `open()` с этой схемой уходит в сеть с `unsupported scheme` (BUG-884); `window.close()` — no-op без шагов выгрузки, `window.closed` и `window.name` — `undefined` (BUG-887). Общее у всех четырёх — модель «второго документа, которым распоряжается скрипт», которой в шелле нет.",
+       "bugs": [
+        "BUG-797",
+        "BUG-883",
+        "BUG-884",
+        "BUG-887"
+       ]
+      },
+      {
+       "id": "GAP-LOADEV",
+       "title": "GAP: модель загрузки сабресурсов и её события",
+       "status": "planned",
+       "size": "L",
+       "note": "События загрузки сабресурсов не диспатчит ни один тег, и это три независимых куска кода. `<img>` не шлёт ни `load`, ни `error` ни на одном пути вставки при видимо декодирующейся картинке, а `complete`/`naturalWidth`/`naturalHeight`/`onload`/`onerror` отсутствуют во всей цепочке прототипов `HTMLImageElement` — члены IDL просто не заводились (BUG-630). `<object data>` и `<embed src>` не грузят содержимое вовсе: ни резолва URL, ни запроса, ни события (BUG-798). `<script src>`, добавленный в теневой корень, не порождает запроса — доказано записью на стороне сервера пробы, лог браузера здесь не улика (BUG-878). Нужна общая модель «ресурс элемента: резолв, запрос, исход, событие», иначе четвёртый тег повторит то же.",
+       "bugs": [
+        "BUG-630",
+        "BUG-798",
+        "BUG-878"
+       ]
+      },
+      {
+       "id": "GAP-XMLDOC",
+       "title": "GAP: XML-путь разбора документа и foreign content",
+       "status": "planned",
+       "size": "L",
+       "note": "XML-пути разбора документа нет вовсе: `.xhtml`/`.xht`/`.svg` разбираются HTML-парсером, из-за чего открывающий CDATA-маркер съедается как prelude плохого правила вместе с первым правилом каждого блока `<style>` — 736 блоков корпуса из 4 327 несут единственное правило и теряют встроенный стиль целиком (BUG-786). Ниже лежит вторая половина: парсер не реализует HTML LS §13.2.6.5 foreign content — всё разобранное из разметки, включая содержимое `<svg>`, безусловно попадает в неймспейс XHTML и апперкейсится как HTML-тег (BUG-685). Цена измерена на корпусе: срез 14 WPT-RUN-5 показал, что потерянный стиль даёт ещё и ЛОЖНЫЕ PASS у рефтестов, когда обе стороны пары рендерятся одинаково голыми.",
+       "bugs": [
+        "BUG-786",
+        "BUG-685"
+       ]
+      },
+      {
+       "id": "GAP-SVGDOM",
+       "title": "GAP: SVG DOM у элементов из разметки и отражения атрибутов",
+       "status": "planned",
+       "size": "M",
+       "note": "SVG-элемент, написанный парсером, — это `HTMLUnknownElement`: `instanceof SVGElement` даёт `false`, `getBBox`/`getCTM` отсутствуют, тогда как у элемента из `createElementNS` они есть. Отражений анимируемых атрибутов нет на ОБОИХ путях — `text.x`, `rect.width`, `svg.viewBox`, `g.transform`, `g.className` дают `undefined`, потому что `svg.rs` объявляет их телами конструкторов, а патч `createElementNS` только переставляет прототип. Зависит от foreign content (GAP-XMLDOC): пока парсер не заводит элементы в SVG-неймспейсе, чинить нечего.",
+       "bugs": [
+        "BUG-889"
+       ]
+      },
+      {
+       "id": "GAP-XPATH",
+       "title": "GAP: XSLT и XPath",
+       "status": "planned",
+       "size": "M",
+       "note": "XSLT и XPath отсутствуют целиком: `XSLTProcessor`, `document.evaluate`, `XPathEvaluator`, `XPathResult` — ноль совпадений по крейтам, при исправных `DOMParser`/`XMLSerializer` рядом. Два разных механизма собраны в одну задачу намеренно: оба нужны прежде всего XML-документам и оба упираются в тот же отсутствующий XML-путь (GAP-XMLDOC).",
+       "bugs": [
+        "BUG-891"
+       ]
+      },
+      {
+       "id": "GAP-CSSANIM",
+       "title": "GAP: CSS-анимации и переходы, наблюдаемые из JS",
+       "status": "planned",
+       "size": "L",
+       "note": "CSS-переходы и анимации не наблюдаются из JS ни одним способом: `getAnimations()` не возвращает переход (дальше `undefined` на любом `.effect`/`.ready`/`.finish`), `transitionrun`/`transitionstart`/`transitionend`/`transitioncancel` не диспатчатся, `getComputedStyle()` не отражает промежуточное интерполированное значение даже для поддержанного свойства (BUG-536); `animationend` для реальной, не сконструированной вручную анимации не приходит тоже (BUG-503). Сама анимация при этом рисуется — отсутствует не эффект, а модель времени, видимая скриптом. Пока её нет, любой `async_test`, ждущий анимационного события, может только висеть.",
+       "bugs": [
+        "BUG-536",
+        "BUG-503"
+       ]
+      },
+      {
+       "id": "GAP-SMIL",
+       "title": "GAP: SMIL-анимация SVG",
+       "status": "planned",
+       "size": "L",
+       "note": "SMIL-анимации SVG нет нигде в воркспейсе: `<animate>`/`<animateTransform>`/`<animateMotion>`/`<set>` ничего не анимируют и не диспатчат `beginEvent`/`endEvent`/`repeatEvent`, поэтому тест, ждущий анимационного события, висит с пустым логом. Замерено `verify_event_delivery_gaps.py --variant smil-events` и `--variant smil-dom` в живом окне по http. Кандидат на явное решение о скоупе наравне с работой: SMIL — угасающая спека, и «не берём» здесь такой же законный исход, как реализация.",
+       "bugs": [
+        "BUG-806"
+       ]
+      },
+      {
+       "id": "GAP-CSPENF",
+       "title": "GAP: применение Content Security Policy",
+       "status": "planned",
+       "size": "L",
+       "note": "CSP разбирается и не применяется: ни одна директива ничего не блокирует — `script-src 'self'` не мешает инлайн-скрипту выполниться (подтверждено живой пробой), а `securitypolicyviolation` не диспатчится никогда, хотя класс `SecurityPolicyViolationEvent` объявлен. Из-за объявления без доставки тесты не падают, а висят: 105 TIMEOUT остатка WPT-RUN-5, крупнейший механизм среза 18. Шире WPT это дыра безопасности, а не тестовая: политика любой строгости принимается и не действует.",
+       "bugs": [
+        "BUG-811"
+       ]
+      },
+      {
+       "id": "GAP-GEOM",
+       "title": "GAP: Geometry Interfaces и Element.getClientRects",
+       "status": "planned",
+       "size": "M",
+       "note": "Модуль Geometry Interfaces отсутствует целиком как глобалы — `DOMMatrix`, `DOMPoint`, `DOMRect`, их `ReadOnly`-варианты, `DOMRectList`, `DOMQuad`, `WebKitCSSMatrix` бросают `TypeError`/`ReferenceError` (BUG-522), из-за чего невозможен и `Element.prototype.getClientRects()`: он обязан вернуть `DOMRectList`, а метод с этим именем есть только на `Range` (BUG-478). Цена getClientRects измерена не в сабтестах: `resources/testdriver.js` открывается его вызовом, поэтому без него не работает НИ ОДИН testdriver-экшен (WPT-RUN-12), а `getBoundingClientRect()` возвращает обычный объект без `toJSON`. Дубликаты BUG-551 и BUG-580 закрыты в пользу BUG-478 тем же ре-триажем — три бага на один отсутствующий метод и есть иллюстрация правила §8.",
+       "bugs": [
+        "BUG-522",
+        "BUG-478"
+       ]
+      },
+      {
+       "id": "GAP-WORKERSCOPE",
+       "title": "GAP: интерфейсные объекты воркерной области и перенос MessagePort",
+       "status": "planned",
+       "size": "L",
+       "note": "У воркерной глобальной области нет ни одного интерфейсного объекта: `WorkerGlobalScope`, `DedicatedWorkerGlobalScope`, `SharedWorkerGlobalScope`, `MessageEvent`, `MessageChannel`, `MessagePort`, `WorkerNavigator`, `ErrorEvent` — все `false` в `in self`, `self.constructor` пуст, `self instanceof DedicatedWorkerGlobalScope` — `ReferenceError`, из-за чего ломается буквальная идиома WPT «есть в self и instanceof» (BUG-872). Вторая половина того же пробела — перенос: `MessagePort` не пересекает границу воркера ни в одну сторону (`e.ports.length === 0` туда, `e.ports === undefined` обратно), `new MessageChannel()` внутри воркера — `ReferenceError`, при том что сами сообщения ходят (BUG-868).",
+       "bugs": [
+        "BUG-872",
+        "BUG-868"
+       ]
+      },
+      {
+       "id": "GAP-SLOT",
+       "title": "GAP: слотирование в теневом дереве",
+       "status": "planned",
+       "size": "M",
+       "note": "Распределения по слотам нет: `slot.assignedNodes()` пусто и при light-DOM-ребёнке с атрибутом `slot` в разметке, и после добавления такого ребёнка из скрипта, а `slotchange` не диспатчится ни в одной форме слушателя. Соседнее исправно — `attachShadow`, `root.innerHTML`, `root.querySelector('slot')`, `HTMLSlotElement` с методами, — то есть отсутствует именно алгоритм назначения слоттеблов, а не теневое дерево. Смежные дефекты теневого корня (BUG-877 идентичность обёртки, BUG-895 отсутствие примеси ParentNode) остаются багами: там код есть и работает неверно.",
+       "bugs": [
+        "BUG-876"
+       ]
+      },
+      {
+       "id": "GAP-WSASYNC",
+       "title": "GAP: асинхронная модель WebSocket",
+       "status": "planned",
+       "size": "L",
+       "note": "WebSocket синхронен на обоих концах, то есть асинхронной модели у него нет. Конструктор блокирует весь документ до конца хэндшейка: сервер, принявший TCP и молчащий, замораживает страницу навсегда — ноль тиков `setInterval`, ни одного последующего скрипта, ни рендеринга (BUG-856). `send()` пишет в сокет синхронно и без очереди: получатель, читающий медленнее отправителя, держит поток около 312 мс на вызов, `bufferedAmount` всё время 0, `setInterval(500)` не срабатывает ни разу — готовый источник механизма `hung-browser` в прогоне (BUG-869). Точечные дефекты той же обвязки (BUG-862 — приведение аргумента `send` по WebIDL) остаются багами.",
+       "bugs": [
+        "BUG-856",
+        "BUG-869"
+       ]
+      },
+      {
+       "id": "GAP-TYPEDOM",
+       "title": "GAP: CSS Typed OM",
+       "status": "planned",
+       "size": "L",
+       "note": "CSS Typed OM реализован на четверть: есть `CSSStyleValue`, `CSSUnitValue`, `CSSKeywordValue`, частичный `CSSNumericValue` и две карты свойств; нет фабрик единиц на объекте `CSS`, иерархии `CSSMathValue`, семейств `CSSTransformValue`/`CSSColorValue`, `CSSUnparsedValue`/`CSSVariableReferenceValue`, `CSSStyleValue.parse`/`.parseAll` и записи через `StylePropertyMap.set`. Пересекается с дорожкой CSSOM по границе «объектная модель стилей», но это отдельная спека и отдельный файл `crates/js/src/typed_om_api.rs`.",
+       "bugs": [
+        "BUG-554"
+       ]
+      },
+      {
+       "id": "GAP-DOCWRITE",
+       "title": "GAP: document.open/close и динамическая вставка разметки",
+       "status": "planned",
+       "size": "M",
+       "note": "`document.open()` и `document.close()` отсутствуют целиком (`TypeError` на вызове) при живых `write`/`writeln` (BUG-888); более ранняя заявка BUG-568 называет отсутствующими все четыре и в этой части устарела — сверять по BUG-888. Поведение `write` после `load` — осознанный no-op из BUG-701 (узел не вставляется, записанный `<script>` не исполняется), поэтому задача не «добавить два метода», а решить, строим ли мы модель динамической вставки разметки целиком: `html/webappapis/dynamic-markup-insertion/` — около 55 файлов, и половина BUG-568 оказывается следствием того решения, а не отдельным дефектом.",
+       "bugs": [
+        "BUG-888",
+        "BUG-568"
+       ]
+      },
+      {
+       "id": "GAP-USERACT",
+       "title": "GAP: транзиентная активация пользователя",
+       "status": "planned",
+       "size": "M",
+       "note": "Транзиентной активации как состояния документа в движке нет: `navigator.userActivation` захардкожен в значение «активна и была активна», поэтому каждый гейт «только по жесту пользователя» вырождается в «всегда разрешено». Это не один атрибут — на том же окне активации стоят гейты пикеров File System Access (гейт написан верно и добавлен BUG-374, но флаг никогда не `false`), попапы, полноэкранный режим, автовоспроизведение. Нужна модель: окно активации, его потребление и срок.",
+       "bugs": [
+        "BUG-751"
+       ]
+      },
+      {
+       "id": "GAP-REFERRER",
+       "title": "GAP: Referer/Origin и модель referrer policy",
+       "status": "planned",
+       "size": "M",
+       "note": "Ни один исходящий запрос не несёт `Referer` и `Origin` — ни сабресурс (`<img>`, `<script src>`), ни `fetch()`, ни `sendBeacon`, включая POST того же происхождения; замерено сервером пробы, а не логом браузера. Расходится с собственным планом: `docs/plan/privacy.md` обещает `strict-origin-when-cross-origin`, то есть полный `Referer` для same-origin. Работа — модель referrer policy (источник политики, понижение при переходе границы происхождения, `Origin` для небезопасных методов), а не одна строка генерации заголовка.",
+       "bugs": [
+        "BUG-859"
+       ]
+      },
+      {
+       "id": "GAP-VVPORT",
+       "title": "GAP: visualViewport",
+       "status": "planned",
+       "size": "S",
+       "note": "`window.visualViewport` отсутствует целиком (проверка наличия в `window` даёт `false`), интерфейса `VisualViewport` нет ни в каком виде — чтение падает `TypeError` на первой строке теста. Вся невендоренная категория `visual-viewport/` стоит на этом объекте; нужен не геттер, а различение layout- и visual-вьюпорта в шелле с событиями `resize`/`scroll`.",
+       "bugs": [
+        "BUG-875"
+       ]
+      },
+      {
+       "id": "GAP-LAYOUTSHIFT",
+       "title": "GAP: Layout Instability",
+       "status": "planned",
+       "size": "M",
+       "note": "Layout Instability объявлен и не доставляется ни разу: `PerformanceObserver.supportedEntryTypes` содержит `layout-shift`, `observe()` его принимает, а записи не приходит никогда — `grep -rn deliver_layout_shift crates/` даёт объявление, реализацию, JS-хук и три заглушки, и ни одного вызова из layout/reflow. Именно объявление превращает категорию в TIMEOUT, а не в FAIL: хелпер `ScoreWatcher` ждёт запись вечно. Дешёвая половина — снять тип из `supportedEntryTypes`, пока он не доставляется — отдельное решение: она чинит вердикт прогона, но это отказ от обещания, а не его выполнение.",
+       "bugs": [
+        "BUG-809"
+       ]
+      },
+      {
+       "id": "GAP-CEREG",
+       "title": "GAP: CustomElementRegistry и области видимости реестров",
+       "status": "planned",
+       "size": "M",
+       "note": "Глобального конструктора `CustomElementRegistry` нет, поэтому нет и области видимости реестров: `new CustomElementRegistry()` и передача реестра словарём в `createElement`/`importNode` дают `ReferenceError` на первой строке. Сам единственный реестр исправен (`define`, `connectedCallback` при вставке, `get`, `whenDefined`), то есть работа — не custom elements, а множественность реестров и их привязка к дереву. Вся папка `custom-elements/registries/` стоит на этом.",
+       "bugs": [
+        "BUG-890"
+       ]
+      },
+      {
+       "id": "GAP-CSSMOD",
+       "title": "GAP: CSS-модули",
+       "status": "planned",
+       "size": "S",
+       "note": "CSS-модули (импорт таблицы стилей с атрибутом типа `css`) не поддерживаются: атрибут отклоняется ПОСЛЕ загрузки файла — сервер пробы видит `GET` — сообщением о неподдерживаемом типе импорта, и в статической, и в динамической форме, при том что JSON-модуль на той же странице разрешается. Упирается в CSSOM: результат импорта — конструируемый `CSSStyleSheet`, которого нет (CSSOM-5), поэтому делать после него, а не до.",
+       "bugs": [
+        "BUG-896"
+       ]
+      },
+      {
+       "id": "GAP-WEBRTC",
+       "title": "GAP: WebRTC поверх заглушки RTCPeerConnection",
+       "status": "planned",
+       "size": "L",
+       "note": "`RTCPeerConnection` — стаб, который не диспатчит ничего: `ontrack`, `ondatachannel`, `onconnectionstatechange`, `oniceconnectionstatechange` не вызываются никогда, внутренний `_dispatch()` дёргается только из `_gatherMdns()` ради `icecandidate`, каждый инстанс полностью изолирован от «удалённого» пира. Поэтому любой тест канонической двухпировой формы (локальный и удалённый peer, ждём событие на удалённой стороне) висит до таймаута враннера вместо собственного ограниченного отказа. Кандидат на явное решение о скоупе: WebRTC — крупная подсистема, и «не берём в этой фазе» здесь законный исход.",
+       "bugs": [
+        "BUG-727"
+       ]
+      }
      ]
     }
    ],
@@ -6393,13 +6664,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-470": {
-   "status": "open",
-   "title": "`getComputedStyle()` не выставляет ключи `float`/`clear` вовсе (`'float' in getComputedStyle(el)` — `false`), хотя float-раскладка сама по себе работает — гэп в…",
-   "component": "js/layout (computed-style reflection)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-471": {
    "status": "open",
    "title": "CSSOM-модель таблиц стилей и правил не подключена к шиму вовсе: `document.styleSheets` — `undefined` (не пустой массив), `<style>`/`<link>.sheet` отсутствует, г…",
@@ -6411,13 +6675,6 @@
    "status": "open",
    "title": "`getComputedStyle()` — не резолвер по запросу, а `HashMap`-lookup по карте, заполняемой один раз за проход layout рукописным списком ~64 свойств (`computed_styl…",
    "component": "layout (`selector_query.rs::computed_style_to_map`) + js (`_lumen_get_computed_style`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-473": {
-   "status": "open",
-   "title": "`CSSStyleDeclaration.cssText` (инлайновый `style`) сериализуется наивной конкатенацией объявлений — не схлопывает лонгхенды в шорткод (`margin-top/right/bottom/…",
-   "component": "js (`crates/js/src/dom.rs` — `_lumen_make_style`/`_lumen_serialize_style`)",
    "date": null,
    "debtor": false
   },
@@ -6869,13 +7126,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-551": {
-   "status": "open",
-   "title": "`Element.prototype.getClientRects()` missing entirely -- only `getBoundingClientRect()` exists; `getClientRects` is defined only on `Range` (`dom.rs:6944`) and…",
-   "component": "js (`crates/js/src/dom.rs` -- element wrapper factory)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-552": {
    "status": "open",
    "title": "`document.compatMode`/`characterSet`/`contentType`/`documentURI` are wired up ONLY inside the detached-document constructor (`createHTMLDocument()` etc.) -- the…",
@@ -7041,13 +7291,6 @@
    "status": "open",
    "title": "`HTMLDialogElement.prototype.requestClose()` missing entirely -- `show`/`showModal`/`close`/`returnValue` exist, `requestClose` (fires cancelable `cancel` then…",
    "component": "js (`crates/js/src/dom.rs:5667-5702` `<dialog>` API block)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-580": {
-   "status": "open",
-   "title": "`Element.prototype.getClientRects()` missing entirely (contrast `Range.prototype.getClientRects` at `dom.rs:6940`, which does exist and shows the one-line fix p…",
-   "component": "js (`crates/js/src/dom.rs:6044-6049` -- `getBoundingClientRect` exists, no sibling `getClientRects`)",
    "date": null,
    "debtor": false
   },
@@ -12454,6 +12697,20 @@
    "component": "layout (float positioning, CSS2.1 §9.5.1)",
    "date": "2026-09-01",
    "debtor": false
+  },
+  "BUG-470": {
+   "status": "fixed",
+   "title": "`getComputedStyle()` не выставляла ключи `float`/`clear` вовсе (`'float' in getComputedStyle(el)` — `false`), хотя float-раскладка сама по себе работает — гэп в…",
+   "component": "js/layout (computed-style reflection)",
+   "date": "2026-09-01",
+   "debtor": false
+  },
+  "BUG-473": {
+   "status": "fixed",
+   "title": "`CSSStyleDeclaration.cssText` (инлайновый `style`) сериализовалась наивной конкатенацией объявлений — не схлопывала лонгхенды в шорткод (`margin-top/right/botto…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_style`/`_lumen_serialize_style`)",
+   "date": "2026-09-01",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -12714,12 +12971,6 @@
   "js (`crates/js/src/dom.rs:10537-10543` — `MediaQueryList` конструктор)": [
    "BUG-526"
   ],
-  "js (`crates/js/src/dom.rs:10864-10875` -- `HTMLImageElement.prototype` reflection), shell (`crates/shell/src/main.rs:4892-4904,10630-10635,5507-5512` -- decode call sites)": [
-   "BUG-630"
-  ],
-  "js (`crates/js/src/dom.rs:11454-11483` — `window.open`)": [
-   "BUG-797"
-  ],
   "js (`crates/js/src/dom.rs:11539` — `_perf_deliver_to_observer`: `try { obs._cb(list, obs); } catch(e) {}`)": [
    "BUG-840"
   ],
@@ -12786,9 +13037,6 @@
   "js (`crates/js/src/dom.rs:443`–`460` — `addEventListener` читает только `capture`/`once`)": [
    "BUG-865"
   ],
-  "js (`crates/js/src/dom.rs:4696` — `dispatchEvent` элемента зовёт `_lumen_dispatch` для ОДНОГО узла; `:6249` — `document.dispatchEvent` только реестр документа; `:1112` `_lumen_dispatch_bubble` доходит до `document` и не знает про `window`)": [
-   "BUG-873"
-  ],
   "js (`crates/js/src/dom.rs:4780-4827` -- `_lumen_build_detached_document`)": [
    "BUG-552"
   ],
@@ -12797,9 +13045,6 @@
   ],
   "js (`crates/js/src/dom.rs:5066` — `insertBefore` элемента; у `document`, `dom.rs:2526`, та же проверка есть)": [
    "BUG-894"
-  ],
-  "js (`crates/js/src/dom.rs:5086` — `assignedNodes`; `grep -rn \"'slotchange'\" crates/` — ни одной точки диспатча)": [
-   "BUG-876"
   ],
   "js (`crates/js/src/dom.rs:5190` — геттер `shadowRoot` каждый раз строит свежий `_lumen_make_shadow_root`; то же у `attachShadow`, `:4715`)": [
    "BUG-877"
@@ -12819,12 +13064,6 @@
   "js (`crates/js/src/dom.rs:6206-6227`, `:11619-11632`)": [
    "BUG-479"
   ],
-  "js (`crates/js/src/dom.rs:6212-6240` — блок `document.write`/`writeln`, `open`/`close` в нём не определены)": [
-   "BUG-888"
-  ],
-  "js (`crates/js/src/dom.rs:6249` — `document.dispatchEvent` не заглядывает в `_lumen_on_handlers`; `:13795` — движковая доставка `readystatechange` идёт через него же)": [
-   "BUG-874"
-  ],
   "js (`crates/js/src/dom.rs:6323` — `_lumen_set_location_hash` зовёт `_lumen_fire_hashchange` синхронно; `:6351` — то же в `_lumen_navigate_or_fragment`)": [
    "BUG-832"
   ],
@@ -12833,9 +13072,6 @@
   ],
   "js (`crates/js/src/dom.rs:6602` — `_lumen_make_element` element factory)": [
    "BUG-544"
-  ],
-  "js (`crates/js/src/dom.rs:6716` — `var customElements = {`, класса за литералом нет; `grep -n \"CustomElementRegistry\" crates/` — ноль)": [
-   "BUG-890"
   ],
   "js (`crates/js/src/dom.rs:6810` — `setTimeout`, `:6828` — `setInterval`, оба открываются `if (typeof fn !== 'function') return 0;`)": [
    "BUG-831"
@@ -12894,9 +13130,6 @@
   "js (`crates/js/src/dom.rs` -- `_lumen_build_element`, `_obj`)": [
    "BUG-556"
   ],
-  "js (`crates/js/src/dom.rs` -- element wrapper factory)": [
-   "BUG-551"
-  ],
   "js (`crates/js/src/dom.rs` — 26 конструкторов событий шима; `Symbol.toStringTag` есть ровно у одного, `ErrorEvent` на `:737`)": [
    "BUG-912"
   ],
@@ -12951,9 +13184,6 @@
   "js (`crates/js/src/dom.rs` — `_lumen_fire_scrollend_on_element`/`_lumen_fire_window_scrollend_event`, литерал `window`; `crates/js/src/v8_runtime.rs::page_scrollend_due`), shell (`crates/shell/src/main.rs` — шаг 1 `RedrawRequested`, дренаж `take_scroll_requests`, `try_scroll_overflow_container`)": [
    "BUG-822"
   ],
-  "js (`crates/js/src/dom.rs` — `_lumen_make_style`/`_lumen_serialize_style`)": [
-   "BUG-473"
-  ],
   "js (`crates/js/src/dom.rs` — `_lumen_on_handlers` table + `_lumen_dispatch`/`_lumen_dispatch_bubble`/`_lumen_dispatch_rich`; `_lumen_build_element`; `setAttribute`/`removeAttribute`)": [
    "BUG-360"
   ],
@@ -12993,20 +13223,11 @@
   "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)": [
    "BUG-351"
   ],
-  "js (`crates/js/src/dom.rs` — глобальный `window`; `:12210` определяет `closed`/`name` только у объекта-заглушки `open()`)": [
-   "BUG-887"
-  ],
   "js (`crates/js/src/dom.rs` — конструктор `Node`; на `document` одна константа `DOCUMENT_NODE` объявлена точечно на `:2414`, общей таблицы DOM §4.4 нет нигде)": [
    "BUG-922"
   ],
   "js (`crates/js/src/dom.rs` — литерал обёртки элемента, `get content()` для `HTMLTemplateElement.content`, против таблицы `_lumen_install_reflection(HTMLMetaElement.prototype, …)`)": [
    "BUG-796"
-  ],
-  "js (`crates/js/src/dom.rs` — ни `CSSStyleSheet`, ни аксессора `adoptedStyleSheets`; свойство создаётся самим присваиванием)": [
-   "BUG-897"
-  ],
-  "js (`crates/js/src/dom.rs` — ни одного `DOMMatrix`/`DOMPoint`/`DOMRect`/`DOMQuad`-конструктора нигде)": [
-   "BUG-522"
   ],
   "js (`crates/js/src/dom.rs` — обвязка `_mo_notify`, `dom.rs:9965`; поля `nextSibling`/`previousSibling` записи, `dom.rs:10001`–`10002`)": [
    "BUG-855"
@@ -13035,7 +13256,6 @@
   "js (`crates/js/src/dom.rs`)": [
    "BUG-462",
    "BUG-474",
-   "BUG-478",
    "BUG-481",
    "BUG-482",
    "BUG-485"
@@ -13073,9 +13293,6 @@
   "js (`crates/js/src/iframe_element.rs` — `patchIframeElement`/`reflectAttr` ставит собственные свойства на элемент) поверх `crates/js/src/dom.rs` (`_lumen_install_reflection(HTMLIFrameElement.prototype, [['src','src','url'], …])`)": [
    "BUG-920"
   ],
-  "js (`crates/js/src/import_attributes.rs:44` — `ModuleType::from_attr` знает только `\"json\"`; `crates/js/src/v8_esm.rs:371`/`:403`)": [
-   "BUG-896"
-  ],
   "js (`crates/js/src/navigator_bindings.rs:213-225` -- `_screen` object literal)": [
    "BUG-559"
   ],
@@ -13097,6 +13314,9 @@
   "js (`crates/js/src/shared_worker.rs`, `SHARED_WORKER_GLOBAL_SHIM` — объект для `onconnect` собирается литералом с одним полем `ports`)": [
    "BUG-867"
   ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_style`/`_lumen_serialize_style`)": [
+   "BUG-473"
+  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — сеттеры `width`/`height` на `HTMLCanvasElement.prototype`, натив изменения размера), canvas (`crates/engine/canvas` — выделение backing store)": [
    "BUG-929"
   ],
@@ -13109,23 +13329,14 @@
   "js (`crates/js/src/surface_api.rs` рядом с `navigator.doNotTrack`, строки 116-121) + network (`crates/network/src/http/headers.rs::build_request_headers`)": [
    "BUG-397"
   ],
-  "js (`crates/js/src/svg.rs:901-918` — типизированные классы навешиваются только патчем `createElementNS`; поля `x`/`width`/`viewBox` объявлены телами конструкторов, `:308-311`)": [
-   "BUG-889"
-  ],
   "js (`crates/js/src/sw_worker.rs` — шим глобального скоупа service worker)": [
    "BUG-748"
-  ],
-  "js (`crates/js/src/typed_om_api.rs`)": [
-   "BUG-554"
   ],
   "js (`crates/js/src/v8_esm.rs:331` — `resolve` берёт базой `s.page_url`; `set_page_url` зовётся только из `install_dom`/`set_module_context`, `<base href>` в состояние ESM-слоя не попадает вовсе)": [
    "BUG-910"
   ],
   "js (`crates/js/src/v8_runtime.rs:1358` — `install_dom` создаёт `ss_store` как `WebStorage::default()` без входного параметра, в отличие от `ls_store` строкой выше)": [
    "BUG-836"
-  ],
-  "js (`crates/js/src/v8_runtime.rs:3543`/`:3554` — `_lumen_ws_send*` зовут `send_text`/`send_binary` из потока JS под `registry.lock()`) + network (`crates/network/src/websocket/mod.rs:189` — `write_frame` в блокирующий `Write`)": [
-   "BUG-869"
   ],
   "js (`crates/js/src/v8_runtime.rs:4809-4843` — блок `if let Some(seed) = deterministic_seed`; области `crates/js/src/worker.rs::run_worker_thread_v8`, `shared_worker.rs`, `sw_worker.rs`)": [
    "BUG-768"
@@ -13181,12 +13392,6 @@
   "js (`crates/js/src/worker.rs:227` — `worker_global_shim`)": [
    "BUG-766"
   ],
-  "js (`crates/js/src/worker.rs:338`+ `worker_global_shim`, `crates/js/src/shared_worker.rs:121`+ `SHARED_WORKER_GLOBAL_SHIM` — вешают на `globalThis` только функции)": [
-   "BUG-872"
-  ],
-  "js (`crates/js/src/worker.rs:918` — `_lumenSerializeWithTransfers` понимает только `OffscreenCanvas`; `worker.rs:366` — воркерный `postMessage(data)` объявлен без второго параметра и шлёт `JSON.stringify`; `MessageChannel` определён только в шиме страницы, `dom.rs:12019`)": [
-   "BUG-868"
-  ],
   "js (`crates/js/src/worker.rs` — `worker_global_shim` + `run_worker_thread_v8`; `shared_worker.rs`; `v8_runtime.rs` — `eval_and_report_via`/`eval_module_at_and_report_via`; `dom.rs` — страничный `ErrorEvent`)": [
    "BUG-813"
   ],
@@ -13205,23 +13410,14 @@
   "js (`dom.rs` — элементный `dispatchEvent` в `_lumen_make_element`)": [
    "BUG-439"
   ],
-  "js (`grep -rn \"XSLTProcessor\\": [
-   "BUG-891"
-  ],
   "js (`grep -rn \"valueAsNumber\\": [
    "BUG-893"
-  ],
-  "js (`grep -rn visualViewport crates/` — ноль совпадений)": [
-   "BUG-875"
   ],
   "js (live DOM bindings)": [
    "BUG-279"
   ],
   "js (shell)": [
    "BUG-233"
-  ],
-  "js (вставка узла в `ShadowRoot`, `crates/js/src/dom.rs:1310-1366`, не поднимает «prepare a script»; сбор подресурсов идёт по light-DOM, ср. [BUG-848](bugs/BUG-848-FIXED.md))": [
-   "BUG-878"
   ],
   "js shim (`crates/js/src/dom.rs:5613`, `_lumen_make_style` Proxy `dom.rs:4264`)": [
    "BUG-494"
@@ -13235,26 +13431,14 @@
   "js/dom": [
    "BUG-306"
   ],
-  "js/engine граница (диспетчеризация animation-событий, точное место не изолировано)": [
-   "BUG-503"
-  ],
-  "js/layout (CSS Transitions runtime — owner file not yet located)": [
-   "BUG-536"
-  ],
   "js/layout (computed-style reflection)": [
    "BUG-470"
-  ],
-  "js/network (`crates/js/src/v8_runtime.rs:3502`/`:3517` — «Phase 0 model: synchronous connect»; ниже `crates/network/src/websocket/mod.rs::connect_deflate`)": [
-   "BUG-856"
   ],
   "js/network граница (`crates/js/src/dom.rs:11353` — `_lumen_record_resource_timing`, ни одного вызова вне `dom.rs`)": [
    "BUG-520"
   ],
   "js/shell (`crates/js/src/dom.rs:13474` `HTMLElement.prototype.focus`; `crates/shell/src/main.rs:3048` shell focus-queue drain)": [
    "BUG-560"
-  ],
-  "js/shell (`crates/js/src/dom.rs:13837-13851` — `HTMLObjectElement`/`HTMLEmbedElement`, только рефлексия атрибутов; `crates/shell/src/main.rs` — нет обработки `<embed>`/`<object>` как источников ресурса)": [
-   "BUG-798"
   ],
   "js/shell граница (`crates/js/src/dom.rs:6196-6205` сеттеры, `crates/js/src/v8_runtime.rs:3106` `_lumen_request_scroll`)": [
    "BUG-523"
@@ -13529,9 +13713,6 @@
   "network (`crates/network/src/lib.rs::read_head`, `crates/network/src/h2/conn.rs`)": [
    "BUG-679"
   ],
-  "network (`crates/network/src/lib.rs` — генерации `Referer`/`Origin` нет нигде; единственное упоминание `Referer` в крейте это комментарий `lib.rs:2427`)": [
-   "BUG-859"
-  ],
   "network (`crates/network/src/sse.rs:393` — переподключение только по завершению чтения соединения) + js (`crates/js/src/dom.rs:7521`, `:7538` — ветки `open`/`close` в `_lumen_sse_pump_one`)": [
    "BUG-844"
   ],
@@ -13756,14 +13937,8 @@
   "shell (`crates/shell/src/main.rs:285` — единственный потребитель `Event::SubresourceHintFound` печатает `⤷ preload …` в stderr; `main.rs:6807` `dispatch_preload_hints`, доккоммент «в Phase 0 sink логирует в stderr; в будущем запустит fetch»), html-parser (`crates/engine/html-parser/src/preload_scanner.rs:144` — `modulepreload`/`prefetch` не распознаются вовсе), js (`crates/js/src/dom.rs` — грузится только `rel=stylesheet`, есть тест-охранник `dynamic_preload_link_fires_nothing`)": [
    "BUG-826"
   ],
-  "shell (`crates/shell/src/main.rs:2925` — объявление `deliver_layout_shift` под `#[allow(dead_code)]`, реализация `main.rs:3359`; JS-хук `crates/js/src/dom.rs:11035`; список типов `dom.rs:10907`)": [
-   "BUG-809"
-  ],
   "shell (`crates/shell/src/main.rs:525` — `let (_network_svc, _transport) = …`) / network (`crates/network/src/bin/network_service.rs`)": [
    "BUG-769"
-  ],
-  "shell (`crates/shell/src/main.rs:5464` — `load_frame_sub_documents` зовётся только из `parse_and_layout`)": [
-   "BUG-885"
   ],
   "shell (`crates/shell/src/main.rs::apply_loaded_page`), js (`crates/js/src/dom.rs:12769` `window.getComputedStyle`)": [
    "BUG-555"
@@ -13780,17 +13955,11 @@
   "shell (`crates/shell/src/main.rs` — `parse_and_layout`, `LayoutSource`, `Lumen::refresh_dynamic_css`)": [
    "BUG-743"
   ],
-  "shell (`crates/shell/src/main.rs` — `resolve_js_navigation`, `load_frame_sub_documents`), js (`crates/js/src/dom.rs` — `_lumen_navigate_or_fragment`, `window.open`)": [
-   "BUG-884"
-  ],
   "shell (`crates/shell/src/main.rs` — `spawn_image_requests` / арм `LoadEvent::ImageDecoded`)": [
    "BUG-735"
   ],
   "shell (`crates/shell/src/main.rs` — `spawn_stream_image_loads` / `apply_relayout_result`)": [
    "BUG-730"
-  ],
-  "shell (`crates/shell/src/main.rs` — дренаж popup-запросов `_lumen_window_open`/`open_new_tab()`), js (`crates/js/src/dom.rs:12190-12220` — заглушка возврата)": [
-   "BUG-883"
   ],
   "shell (`crates/shell/src/main.rs` — заголовки ответа документа никуда не передаются), js (`crates/js/src/dom.rs` — хинты берутся только с элементов `<link>`)": [
    "BUG-906"
@@ -13887,9 +14056,6 @@
   "test/snapshot (`snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)": [
    "BUG-297"
   ],
-  "tests/wpt tooling (`tools/wptrunner/wptrunner/executors/executorlumen.py:310-334` — `_handle_action`)": [
-   "BUG-810"
-  ],
   "tooling (`scripts/scroll_perf.py`)": [
    "BUG-332"
   ],
@@ -13898,12 +14064,6 @@
   ],
   "wptrunner-интеграция (`browsers/lumen.py` `env_options`)": [
    "BUG-301"
-  ],
-  "движок целиком (нет модели времени SMIL нигде в воркспейсе; в JS-слое `crates/js/src/svg.rs:762-795` — четыре класса анимационных элементов как явные заглушки с пустыми `beginElement()`/`endElement()`)": [
-   "BUG-806"
-  ],
-  "движок целиком (парсеры политики `crates/network/src/csp.rs:159`, `crates/storage/src/csp_policies.rs`; JS-хук `crates/js/src/csp.rs:60` `_lumen_dispatch_csp_violation` — без единого вызова вне юнит-теста того же файла)": [
-   "BUG-811"
   ],
   "не изолирован (layout / paint / js)": [
    "BUG-733"
