@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-951)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-954)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -395,6 +395,9 @@
 | [BUG-948](bugs/BUG-948-OPEN.md) | OPEN | js (`crates/js/src/shim/web_api_shim_tail.js` — `_PERF_SUPPORTED_ENTRY_TYPES`) | `longtask`/`long-animation-frame` намеренно отсутствуют из `supportedEntryTypes` (собственный комментарий: ни одна `PerformanceEntry` такого типа никогда не производится) — `observe()` тихо не подписывает ничего, колбэк не срабатывает никогда, вместо ошибки. Объём — не точечная правка (нужна модель измерения долгих задач/кадров), возможно потребуется отдельная задача в ROADMAP.md при взятии в работу. Найден P2 2026-09-01 (WPT-RUN-6 срез 31, `supported-longtask-types.window.html`, `loaf-toJSON.html`) |
 | [BUG-949](bugs/BUG-949-OPEN.md) | OPEN | js (`crates/js/src/v8_runtime/runtime.rs` — `pending_page_scrolls`/`page_scroll_y`; `install/platform.rs:349`) | `scrollY`/`pageYOffset` читают позицию ДО прокрутки вплоть до ~500мс после `scrollTo()` — запрос ставится в очередь и применяется только на следующем проходе шелла, не синхронно и не в течение `raf`/микротаска. Живая проба (не «пустой спейсер», у страницы есть фон). Найден P2 2026-09-01 (WPT-RUN-6 срез 31, `css/css-scroll-anchoring/reading-scroll-forces-anchoring.html`) |
 | [BUG-950](bugs/BUG-950-OPEN.md) | OPEN (ДОРАБОТКА → `P2-scrolldriven`, [ROADMAP.md](ROADMAP.md)) | js (`crates/js/src/scroll_timeline.rs` — Phase 0 готова, Phase 1 нет по собственному doc-комментарию строки 16) | `animation-timeline: scroll(self)` не двигает вычисленный стиль анимируемого свойства вообще — проводка от `ScrollTimeline.currentTime` к `AnimationScheduler` (Phase 1) не сделана, хотя JS-объектная модель (Phase 0) готова. Не то же самое, что [BUG-231](bugs/BUG-231-FIXED.md) (FIXED, композит-путь уже вычисленного значения). Найден P2 2026-09-01 (WPT-RUN-6 срез 31, `scroll-timeline-snapshot-elementsFromPoint.html`) |
+| [BUG-951](bugs/BUG-951-OPEN.md) | OPEN | js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_lumen_is_focusable`, `HTMLElement.prototype.focus`) | `<label>.focus()` без собственного `tabindex` — полный no-op: не фокусируется ни метка, ни связанный контрол (`for`/первый labelable-потомок), `_lumen_is_focusable` не знает тега `LABEL`. Найден P2 2026-09-01 (WPT-RUN-6 срез 32, `forward-focus-to-associated-element.html`) |
+| [BUG-952](bugs/BUG-952-OPEN.md) | OPEN | js (V8-раннер — вызов колбэков `setTimeout`/`setInterval`) | Исключение, брошенное внутри колбэка таймера, не попадает никуда: ни `script error:`/`[JS error]` в логе браузера (как для синхронных ошибок), ни `window.onerror` — колбэк просто обрывается, остальной цикл событий жив. Тест, чей `done()` стоит после броска, висит до TIMEOUT вместо FAIL. Найден P2 2026-09-01 (WPT-RUN-6 срез 32, `user-timing/measure.html`) |
+| [BUG-953](bugs/BUG-953-OPEN.md) | OPEN (ДОРАБОТКА → `GAP-POLICYREPORT`, [ROADMAP.md](ROADMAP.md)) | js (`crates/js/src/reporting_api.rs`) | `ReportingObserver` реализован, но ни один Rust- или шим-файл не генерирует `document-policy-violation`/`permissions-policy-violation` отчёт — сверки фичи с политикой нет вовсе, ни для одной фичи. Найден P2 2026-09-01 (WPT-RUN-6 срез 32, `document-policy/reporting/sync-xhr-report-only.html`) |
 
 ---
 

@@ -2183,6 +2183,91 @@ SOURCE_MARKERS = [
             "/scroll-animations/scroll-timelines/"
             "scroll-timeline-snapshot-elementsFromPoint.html"),
     ),
+
+    # WPT-RUN-6 slice 32, all four `_exact_id_marker`-keyed entries below.
+    # See `verify_slice32_gaps.py`'s module docstring for the reads that
+    # found them, including the one candidate it ruled OUT (`video_crash_
+    # empty_src.html` — `error` fires for both `about:blank` and `""`,
+    # matching the `assigning_src_runs_resource_selection_and_reports_the_
+    # failure` unit test, so this id stays unclassified).
+    Mechanism(
+        # Live probe (`--variant label-focus-forward`): `label.focus()` on a
+        # `<label>` without its own `tabindex` sets `document.activeElement`
+        # to nothing at all — not even the label itself, let alone the
+        # associated control. `_lumen_is_focusable` (`web_api_shim_tail_b.
+        # js`) has no `LABEL` case, so the early-return in `HTMLElement.
+        # prototype.focus` fires before any forwarding logic could run (there
+        # is none to run — grepping `label` in the shim only turns up
+        # `_LUMEN_LABELABLE_TAGS`, which serves click-activation, not focus).
+        "label-focus-no-forward", "BUG-951",
+        [], "`<label>.focus()` without an explicit `tabindex` is a silent "
+        "no-op — no forwarding to the associated/first labelable control, "
+        "and the label itself does not get focused either",
+        predicate=_exact_id_marker(
+            "/html/semantics/forms/the-label-element/"
+            "forward-focus-to-associated-element.html"),
+    ),
+    Mechanism(
+        # Live probe (`--variant timer-callback-exception`): a `TypeError`
+        # thrown from inside a `setTimeout` callback produces nothing at all
+        # on the browser's own stderr — no `script error:`/`[JS error]` line,
+        # unlike a synchronously-thrown one (see `swallowed_errors`, 39
+        # distinct texts that DO reach the log). A second, independent
+        # `setTimeout` fired normally in the same run, so the event loop
+        # itself is fine — only the thrown callback's remainder is lost.
+        # `measure.html`/`measure_navigation_timing.html`/`test-navigate-
+        # within-document.html` all read `window.performance.timing` (legacy
+        # Navigation Timing L1, not implemented) unconditionally inside a
+        # `step_timeout` (= `setTimeout`) callback that also calls `done()` —
+        # the callback dies on the `TypeError` before `done()` runs, so the
+        # harness sees TIMEOUT instead of the FAIL the missing attribute
+        # alone would have produced.
+        "timer-callback-exception-swallowed", "BUG-952",
+        [],
+        "an exception thrown inside a `setTimeout`/`setInterval` callback is "
+        "swallowed with no log line and no `window.onerror` — the callback's "
+        "remainder (here, `done()`) never runs",
+        predicate=_exact_id_marker(
+            "/user-timing/measure.html",
+            "/user-timing/measure_navigation_timing.html",
+            "/navigation-timing/test-navigate-within-document.html"),
+    ),
+    Mechanism(
+        # Live probe (`--variant iframe-late-src-reassign`): a parser-
+        # inserted `<iframe>` whose `src` is reassigned from script produces
+        # no request and no `load` — `iframe-contentDocument-body` stays
+        # `null` through a 2s wait. Not a new mechanism: this is the
+        # `frame-late-src` variant BUG-885/FRAME-8 already measured
+        # (2026-08-23), reached here from a different id. `websockets/
+        # unload-a-document/003.html`/`004.html` both drive `iframe.src =
+        # 'data:text/html,...'` on an already-inserted iframe from a
+        # `navigate` callback — same shape, no WebSocket-specific cause.
+        "iframe-late-src-no-navigate", "BUG-885",
+        [], "a `src` reassigned from script on an already-inserted `<iframe>` "
+        "produces no request and no `load` — the same gap BUG-885/FRAME-8 "
+        "already tracks for a script-created frame",
+        predicate=_exact_id_marker(
+            "/websockets/unload-a-document/003.html",
+            "/websockets/unload-a-document/004.html"),
+    ),
+    Mechanism(
+        # Static read (`grep -rn "document-policy-violation\|permissions-
+        # policy-violation" crates/js/src/*.rs crates/js/src/shim/*.js` —
+        # zero matches): `ReportingObserver` itself is implemented
+        # (`reporting_api.rs`) and accepts a `types`-filtered callback, but
+        # nothing anywhere ever constructs a report of either type — not
+        # `sync-xhr`, not any other Document/Permissions Policy feature.
+        # Filed as a ДОРАБОТКА (`GAP-POLICYREPORT`), same shape as
+        # `GAP-CSPENF`: the policy-parsing + per-feature-check model does not
+        # exist, not a single missing call site.
+        "policy-violation-report-missing", "BUG-953",
+        [], "`ReportingObserver` exists but nothing ever queues a "
+        "`document-policy-violation`/`permissions-policy-violation` report "
+        "— a page awaiting its first report hangs forever",
+        predicate=_exact_id_marker(
+            "/document-policy/reporting/sync-xhr-report-only.html",
+            "/permissions-policy/reporting/sync-xhr-report-only.html"),
+    ),
 ]
 
 #: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched
