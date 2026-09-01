@@ -690,14 +690,19 @@ pub(crate) fn sync_frame_viewports(
 fn clamp_frame_scroll(frames: &mut [FrameHandle]) {
     for h in frames.iter_mut() {
         let max = frame_max_scroll(h);
-        if h.scroll_y <= max {
-            continue;
+        if h.scroll_y > max {
+            h.scroll_y = max;
+            if let Some(js) = h.js.as_ref()
+                && js.set_page_scroll_y(max)
+            {
+                js.fire_window_scroll();
+            }
         }
-        h.scroll_y = max;
-        if let Some(js) = h.js.as_ref()
-            && js.set_page_scroll_y(max)
-        {
-            js.fire_window_scroll();
+        // Горизонталь (FRAME-3 срез 1): нет JS-моста (`scroll_x` doc-comment),
+        // так что только зажим числа — событие слать некому и нечего.
+        let max_x = frame_max_scroll_x(h);
+        if h.scroll_x > max_x {
+            h.scroll_x = max_x;
         }
     }
 }
@@ -940,7 +945,7 @@ pub(crate) fn pointer_target(
         // иначе клик по видимому блоку попадал бы в тот, что был на этом
         // месте до прокрутки.
         let client = Point::new(cur_pt.x - rect.x, cur_pt.y - rect.y);
-        cur_pt = Point::new(client.x, client.y + frames[i].scroll_y);
+        cur_pt = Point::new(client.x + frames[i].scroll_x, client.y + frames[i].scroll_y);
         cur_layout = layout;
         cur_doc = Some(&frames[i].doc);
         best = Some(FramePointerHit { frame: i, client, hit: None });
@@ -1012,7 +1017,7 @@ fn splice_one_frame(dl: &mut DisplayList, h: &FrameHandle) {
     let mut wrapped: DisplayList = Vec::with_capacity(h.content_dl.len() + 4);
     wrapped.push(DisplayCommand::PushClipRect { rect });
     wrapped.push(DisplayCommand::PushTransform {
-        matrix: lumen_layout::Mat4::translation_2d(rect.x, rect.y - h.scroll_y),
+        matrix: lumen_layout::Mat4::translation_2d(rect.x - h.scroll_x, rect.y - h.scroll_y),
     });
     wrapped.extend(h.content_dl.iter().cloned());
     wrapped.push(DisplayCommand::PopTransform);
@@ -1042,7 +1047,7 @@ pub(crate) fn frame_page_origin(frames: &[FrameHandle], idx: usize) -> Option<(f
     for _ in 0..=MAX_FRAME_DEPTH {
         let h = frames.get(cur)?;
         let rect = h.host_rect?;
-        x += rect.x;
+        x += rect.x - h.scroll_x;
         y += rect.y - h.scroll_y;
         let Some(pd) = h.parent_doc.as_ref() else { return Some((x, y)) };
         cur = frames.iter().position(|o| Arc::ptr_eq(&o.doc, pd))?;
@@ -1367,6 +1372,7 @@ fn spawn_frame(
         images: subresources.decoded_images,
         image_keys: subresources.image_keys,
         scroll_y: 0.0,
+        scroll_x: 0.0,
     });
     handles
 }
@@ -1560,15 +1566,22 @@ pub(crate) struct FrameHandle {
     pub(crate) image_keys: Vec<(String, String)>,
     /// Прокрутка под-документа по вертикали, CSS px (BUG-480 срез 17).
     ///
-    /// Читают три разных места, и все три обязаны читать ОДНО поле, иначе
+    /// Читают четыре разных места, и все обязаны читать ОДНО поле, иначе
     /// пиксели, hit-тест и `window.scrollY` ребёнка разойдутся:
     /// [`splice_one_frame`] сдвигает содержимое, [`pointer_target`] — точку
-    /// спуска, а шелл — позицию в JS-контексте ребёнка.
-    ///
-    /// Горизонтали нет: у под-документа нет ни своей полосы прокрутки, ни
-    /// `window.scrollX` (у страницы он тоже захардкожен в 0), а колесо вбок
-    /// над фреймом уходит странице.
+    /// спуска, [`frame_page_origin`] — координаты оверлеев поверх фрейма, а
+    /// шелл — позицию в JS-контексте ребёнка.
     pub(crate) scroll_y: f32,
+    /// Прокрутка под-документа по горизонтали, CSS px (FRAME-3 срез 1).
+    ///
+    /// Сестра [`Self::scroll_y`] и её же три ПЕРВЫХ читателя (сплайс,
+    /// hit-тест, [`frame_page_origin`]) — тот же инвариант «одно поле».
+    /// Четвёртого читателя, JS-контекста, у неё НЕТ: `window.scrollX`
+    /// ребёнка, как и у страницы (`scrolling.rs`), остаётся захардкожен в
+    /// 0 — колесо вбок двигает содержимое визуально, но `scroll`/`scrollend`
+    /// по этой оси ребёнку не шлётся, симметрично тому, что `scroll_x_by`
+    /// самой странице тоже их не шлёт.
+    pub(crate) scroll_x: f32,
 }
 
 // ── скролл под-документа (BUG-480 срез 17) ──────────────────────────────────
@@ -1587,6 +1600,15 @@ pub(crate) fn frame_max_scroll(h: &FrameHandle) -> f32 {
     (crate::display_list_metrics::content_height_of(&h.content_dl) - h.viewport.height).max(0.0)
 }
 
+/// Предел горизонтальной прокрутки под-документа (FRAME-3 срез 1) — то же
+/// правило, что [`frame_max_scroll`], по ширине.
+pub(crate) fn frame_max_scroll_x(h: &FrameHandle) -> f32 {
+    if h.content_dl.is_empty() {
+        return 0.0;
+    }
+    (crate::display_list_metrics::content_width_of(&h.content_dl) - h.viewport.width).max(0.0)
+}
+
 /// Прокрутить под-документ фрейма `idx` в АБСОЛЮТНУЮ позицию `y` (с зажимом).
 ///
 /// Возвращает новую позицию, если она действительно изменилась, и `None`
@@ -1601,6 +1623,18 @@ pub(crate) fn scroll_frame_to(frames: &mut [FrameHandle], idx: usize, y: f32) ->
         return None;
     }
     frames[idx].scroll_y = clamped;
+    Some(clamped)
+}
+
+/// Прокрутить под-документ фрейма `idx` в АБСОЛЮТНУЮ горизонтальную позицию
+/// `x` (с зажимом) — FRAME-3 срез 1, зеркало [`scroll_frame_to`].
+pub(crate) fn scroll_frame_to_x(frames: &mut [FrameHandle], idx: usize, x: f32) -> Option<f32> {
+    let max = frame_max_scroll_x(&frames[idx]);
+    let clamped = x.clamp(0.0, max);
+    if (clamped - frames[idx].scroll_x).abs() <= f32::EPSILON {
+        return None;
+    }
+    frames[idx].scroll_x = clamped;
     Some(clamped)
 }
 
