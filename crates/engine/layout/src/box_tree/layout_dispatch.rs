@@ -1398,7 +1398,29 @@ fn lay_out_inner(
                     // last-child chain (collapse-through), mirroring `collapsed_mt` on
                     // the top edge. For non-block kinds this is just the own margin.
                     let child_mb = collapsed_bottom_margin(child, content_width, viewport);
-                    child_y = child.rect.y + child.rect.height + child_mb;
+                    // CSS 2.1 §8.3.1 (self-collapsing empty box): an empty, non-BFC
+                    // block with no in-flow content and a used height of 0 has its own
+                    // top and bottom margins adjoining — they merge into ONE value with
+                    // whatever already collapsed into this position (`prev_block_mb`/
+                    // `collapsed_mt`) instead of stacking as two separate gaps around a
+                    // box that occupies no vertical space.
+                    let self_collapses = is_block
+                        && !establishes_bfc(child)
+                        && child.style.clear == ClearSide::None
+                        && !has_in_flow_content(child)
+                        && child.rect.height.abs() < 0.01;
+                    if self_collapses {
+                        let old_gap = prev_block_mb.max(collapsed_mt);
+                        let merged = old_gap.max(child_mb);
+                        if merged > old_gap {
+                            child.rect.y += merged - old_gap;
+                        }
+                        child_y += merged;
+                        prev_block_mb = merged;
+                    } else {
+                        child_y = child.rect.y + child.rect.height + child_mb;
+                        prev_block_mb = if is_block { child_mb.max(0.0) } else { 0.0 };
+                    }
                     // CSS 2.1 §10.8 — inline-image line-box descent (the classic
                     // "image bottom gap"). `<video>`/`<canvas>`/`<iframe>` are
                     // inline-level replaced media that Lumen still lays out as
@@ -1427,7 +1449,6 @@ fn lay_out_inner(
                     {
                         child_y += measurer.map_or(0.0, |m| m.descent_px(b.style.font_size));
                     }
-                    prev_block_mb = if is_block { child_mb.max(0.0) } else { 0.0 };
                 }
                 // CSS 2.1 §8.3.1: parent↔last-child bottom margin collapse. When this
                 // box collapses its bottom margin (auto height, no bottom padding/border,
