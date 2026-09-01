@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-01",
  "counts": {
-  "open": 365,
-  "fixed": 526,
+  "open": 363,
+  "fixed": 528,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -6194,6 +6194,16 @@
        "note": "Оверлеи форм внутри фрейма: select, выбор цвета, даты и файла. Срез 18 сделал остальные элементы управления, а эти четыре печатают строку в stderr и ничего не делают — попап рисуется из layout_box СТРАНИЦЫ и адресуется голым NodeId, который внутри чужого документа ничего не значит. Координаты для отрисовки над страницей уже посчитаны — frames::frame_page_origin из среза 20. Проверять придётся юнит-тестом: снимок MCP оверлеев не содержит вовсе, что срез 20 доказал контролем на собственном тултипе страницы."
       }
      ]
+    },
+    {
+     "id": "FONTLOAD",
+     "title": "FONTLOAD: CSS Font Loading API (FontFace/FontFaceSet)",
+     "status": "planned",
+     "size": "L",
+     "note": "Дорожка «CSS Font Loading API» (владелец — P1), выделена из BUG-467 по правилу «нереализованная функциональность — задача ROADMAP, а не баг» (решение 2026-08-28). Глобальные конструкторы `FontFace`/`FontFaceSet`/`FontFaceSetLoadEvent` не определены вовсе (`grep` по `crates/js/src/dom.rs`/`v8_runtime.rs` — ноль совпадений вне комментариев), `document.fonts` (`_lumen_get_fonts()`, `crates/js/src/dom.rs:6770`) — статичный read-only снимок только с `length`/`item`/`entries`/`forEach`/`Symbol.iterator`, без `size`/`add`/`delete`/`clear`/`has`/`keys`/`load`/`ready`/`addEventListener`/`onloading*`. Найдено WPT-RUN-3 срез 2 (только `.ready`, вызывает TIMEOUT до регистрации первого `test()`), расширено срезом 17 (`css/css-font-loading`, 21 файл/0 из 79 сабтестов), срезами 26/31/33 (`css-ruby`/`css-fonts`/`css-sizing`, тот же `document.fonts.ready`/`.load` идиом). Полный перечень отсутствующих членов и упавших файлов — в bugs/BUG-467-OPEN.md",
+     "bugs": [
+      "BUG-467"
+     ]
     }
    ],
    "date": "36–48 мес"
@@ -6391,20 +6401,6 @@
    "status": "open",
    "title": "`document.elementFromPoint`/`elementsFromPoint` (CSSOM View §3) не реализованы вовсе. 10 файлов `css/CSS2/*` — 8 как чистый FAIL (`TypeError`), 2 как TIMEOUT (в…",
    "component": "js (`crates/js/src/dom.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-465": {
-   "status": "open",
-   "title": "Цветовые значения из `CSSStyleDeclaration`/`getComputedStyle` не сериализуются в канонический вид `rgb(r, g, b)` (CSS Color §4.2/CSSOM §6.7.3) — возвращается ис…",
-   "component": "css-parser/layout",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-466": {
-   "status": "open",
-   "title": "Margin collapsing \"через\" пустой блок (CSS2.1 §8.3.1) не реализован — margin родителя и следующего элемента не схлопываются в один при пустом промежуточном блок…",
-   "component": "layout (block formatting context)",
    "date": null,
    "debtor": false
   },
@@ -12456,6 +12452,13 @@
    "date": "2026-09-01",
    "debtor": true
   },
+  "BUG-465": {
+   "status": "fixed",
+   "title": "Заявка называла `getComputedStyle()`/`CSSStyleDeclaration` разом — ревизия сузила: `getComputedStyle()` уже сериализует канонически (`selector_query::color_to_c…",
+   "component": "js/css-parser/layout (`CSSStyleDeclaration` specified-value reflection)",
+   "date": "2026-09-01",
+   "debtor": false
+  },
   "BUG-463": {
    "status": "fixed",
    "title": "WAAPI `element.animate()`/`getAnimations()` жили на `_LUMEN_WRAPPER_MEMBERS` — общем прототипе, который висит на цепочке НИЖЕ `Element.prototype` (BUG-849), поэ…",
@@ -12467,6 +12470,13 @@
    "status": "fixed",
    "title": "paint (wgpu — путь отрисовки вновь открывшейся полосы при scroll-blit, `crates/engine/paint/src/renderer.rs`)",
    "component": "COPY_DST`, пиксельно нейтрально), интерливед живой A/B 3 пары — надбавка min 16.87 мс с битами против 18.58 без. Инструмент — `band_copy_cost_census` (`#[ignore]`-тест `lumen-paint`); цена меряется НАКЛОНОМ по числу копий в submit-е, а прокси через `LoadOp::Clear` отвергнут (65 ГБ/с = fast-clear метаданными). Остаток пополнен п. 60 (пропорциональна ли цена промаха числу перерисованных строк при неизменной цели — не измерено, первый шаг среза 29) и п. 61 (ping-pong требует второй полосы +18.6 МиБ, кольцевой адресации — нет).",
+   "date": "2026-09-01",
+   "debtor": false
+  },
+  "BUG-466": {
+   "status": "fixed",
+   "title": "Margin collapsing \"через\" пустой блок (CSS2.1 §8.3.1) не было реализовано — margin родителя и следующего элемента не схлопывались в один при пустом промежуточно…",
+   "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs`)",
    "date": "2026-09-01",
    "debtor": false
   }
@@ -12530,7 +12540,6 @@
    "BUG-114",
    "BUG-196",
    "BUG-213",
-   "BUG-465",
    "BUG-500"
   ],
   "css-parser/layout (`ComputedStyle` — no field exists)": [
@@ -12852,9 +12861,6 @@
   ],
   "js (`crates/js/src/dom.rs:6716` — `var customElements = {`, класса за литералом нет; `grep -n \"CustomElementRegistry\" crates/` — ноль)": [
    "BUG-890"
-  ],
-  "js (`crates/js/src/dom.rs:6770` — `_lumen_get_fonts()`)": [
-   "BUG-467"
   ],
   "js (`crates/js/src/dom.rs:6810` — `setTimeout`, `:6828` — `setInterval`, оба открываются `if (typeof fn !== 'function') return 0;`)": [
    "BUG-831"
@@ -13247,6 +13253,9 @@
   "js/css-parser (`crates/js/src/dom.rs::CSS.supports`, `crates/engine/css-parser/src/parser.rs::SupportsCondition::evaluate`)": [
    "BUG-501"
   ],
+  "js/css-parser/layout (`CSSStyleDeclaration` specified-value reflection)": [
+   "BUG-465"
+  ],
   "js/dom": [
    "BUG-306"
   ],
@@ -13417,6 +13426,9 @@
    "BUG-738",
    "BUG-740"
   ],
+  "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs`)": [
+   "BUG-466"
+  ],
   "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)": [
    "BUG-355"
   ],
@@ -13452,9 +13464,6 @@
   ],
   "layout (`style.rs` cascade, `rule_index.rs`)": [
    "BUG-284"
-  ],
-  "layout (block formatting context)": [
-   "BUG-466"
   ],
   "layout (float positioning, CSS2.1 §9.5.1)": [
    "BUG-469"
