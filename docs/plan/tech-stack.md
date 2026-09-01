@@ -116,7 +116,7 @@ Trait-anchor у каждого — в `lumen-core::ext`. Подключаем п
 |---|---|---|
 | `rustybuzz` | Свой шейпер закрыт задачей `U-2` как done и покрывает GSUB 1/4 из 8, GPOS 1/2 из 9; диакритика не прикрепляется, сложных письменностей нет | `LIB-1`…`LIB-3` |
 | `ttf-parser` | Приходит транзитивно с `rustybuzz`. Свой парсер таблиц остаётся — растеризация, метрики, variable/color fonts наши | `LIB-1` |
-| `resvg` / `usvg` | В пути отрисовки SVG **ноль** упоминаний `linearGradient`/`radialGradient`/`url(#…)`; нет `clipPath`, `mask`, `filter`, `pattern`, `marker`, `<image>` | `LIB-4` (done 2026-09-01, внешний SVG — см. Permanent exceptions выше), `LIB-5` (inline SVG, не сделано) |
+| `resvg` / `usvg` | Исходная причина (до замены): в пути отрисовки SVG **ноль** упоминаний `linearGradient`/`radialGradient`/`url(#…)`; нет `clipPath`, `mask`, `filter`, `pattern`, `marker`, `<image>`. Текущее состояние — см. Permanent exceptions выше | `LIB-4` (done 2026-09-01, внешний SVG через сам `resvg`/`usvg`), `LIB-5` (done частично 2026-09-01 — только градиенты inline SVG, свой tree/cascade сохранён: публичное API `usvg` `pub(crate)`-закрыто, целиком непригодно как библиотека), `LIB-9` (done частично 2026-09-01 — `<mask>` inline SVG, wgpu-путь пока с багом [BUG-936](../../bugs/BUG-936-OPEN.md)) |
 | `url` | Конечный автомат WHATWG против ~370 своих строк; официальный корпус `urltestdata.json` уже лежит в `tests/wpt/url/resources/` | `LIB-0` (done), `LIB-6` (done 2026-09-01, обязательная зависимость — см. Permanent exceptions выше) |
 | `tiny-skia` | **Уже зависимость** (`crates/engine/paint/Cargo.toml`, бэкенд `cpu-render`) — запись была неверна фактически | — |
 
