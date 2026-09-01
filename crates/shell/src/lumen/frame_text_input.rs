@@ -90,6 +90,43 @@ impl Lumen {
         true
     }
 
+    /// FRAME-7 remainder (1): the focused frame `<input>`'s char-index
+    /// cursor and current value, if a caret bar should be painted this frame
+    /// — mirror of [`super::text_input::Lumen::focused_input_caret`], reading
+    /// [`Self::focused_frame`]/`frame_text_cursor` instead of the page's
+    /// `focused_node`/`form_state`. Read-only, like its page counterpart.
+    /// Returns the value too (unlike the page version): the page's
+    /// `CompositorOverride` paint site already carries `value_text` from its
+    /// own model, but this frame path paints through a shell-side overlay
+    /// (`forms::input_caret_rect`) that has no such model to read from.
+    pub(crate) fn focused_frame_input_caret(&self) -> Option<(usize, NodeId, usize, String)> {
+        let (idx, nid) = self.focused_frame?;
+        let (kind, current) = self.frame_typeable_field(idx, nid)?;
+        if kind != TypeableField::Input {
+            // FRAME-7: a frame `<textarea>` caret goes through
+            // `focused_frame_textarea_caret` instead — same split as the
+            // page's two caret paths (see `focused_textarea_caret`'s note).
+            return None;
+        }
+        let len = char_len(&current);
+        let cursor = self.frame_text_cursor.get(&(idx, nid)).copied().unwrap_or(len);
+        Some((idx, nid, cursor.min(len), current))
+    }
+
+    /// FRAME-7 remainder (1): the focused frame `<textarea>`'s char-index
+    /// cursor and current value — mirror of
+    /// [`super::text_input::Lumen::focused_textarea_caret`].
+    pub(crate) fn focused_frame_textarea_caret(&self) -> Option<(usize, NodeId, usize, String)> {
+        let (idx, nid) = self.focused_frame?;
+        let (kind, current) = self.frame_typeable_field(idx, nid)?;
+        if kind != TypeableField::Textarea {
+            return None;
+        }
+        let len = char_len(&current);
+        let cursor = self.frame_text_cursor.get(&(idx, nid)).copied().unwrap_or(len);
+        Some((idx, nid, cursor.min(len), current))
+    }
+
     /// Собственное действие движка по умолчанию на typeable-поле фрейма,
     /// адресуемом `self.focused_frame` — зеркало
     /// [`super::text_input::Lumen::edit_focused_field_at_cursor`]:
