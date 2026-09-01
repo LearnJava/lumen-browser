@@ -45,6 +45,14 @@ pub struct FormControlState {
     /// snapshots (always `None` after restore) — only the value persists,
     /// same tradeoff `checked` already made for those paths.
     pub cursor: Option<usize>,
+    /// Char-index selection anchor (FRAME-7 remainder 2 — Shift+arrow text
+    /// selection). `Some(a)` together with `cursor == Some(c)` and `a != c`
+    /// means chars `[min(a,c), max(a,c))` are selected; `None` (the common
+    /// case) means no selection is active. Set when a Shift+arrow first
+    /// extends past a bare cursor, cleared by any unshifted cursor movement
+    /// or by an edit that consumes the selection. Not round-tripped through
+    /// hibernation/tab snapshots, same as `cursor`.
+    pub selection_anchor: Option<usize>,
 }
 
 /// `NodeId` → mutable state map for all form controls on the current page.
@@ -565,6 +573,186 @@ pub fn input_caret_rect(field_box: &LayoutBox, value: &str, char_index: usize) -
     let caret_x = content_x + font_size * 0.5 * chars_before as f32;
 
     Rect::new(caret_x, content_y, 1.0, content_h)
+}
+
+/// FRAME-7 remainder 2: fallback text-selection highlight colour for a
+/// typeable field's shell-side overlays (frame `<input>`, page/frame
+/// `<textarea>`) — same value as `lumen_paint`'s `SELECTION_HIGHLIGHT_DEFAULT`
+/// (the page `<input>` path, which rides the `CompositorOverride` channel
+/// instead and lives in that crate). Kept as a separate constant rather than
+/// exported from `lumen-paint`: this crate already duplicates the caret
+/// geometry helpers for the same "different rendering mechanism" reason (see
+/// `textarea_caret_rect`'s doc comment).
+pub const SELECTION_HIGHLIGHT_DEFAULT: Color = Color { r: 0x30, g: 0x8a, b: 0xff, a: 110 };
+
+/// FRAME-7 remainder 2: selection highlight rect for a focused `<input>`
+/// INSIDE a frame, char range `[start, end)` — mirror of [`input_caret_rect`]
+/// the same way [`textarea_selection_rects`] mirrors [`textarea_caret_rect`].
+/// Returns a zero-width rect when the range is empty; callers should not draw
+/// a fill for it (mirroring `lumen_paint::emit_input_selection`'s own guard).
+pub fn input_selection_rect(field_box: &LayoutBox, value: &str, start: usize, end: usize) -> Rect {
+    let s = &field_box.style;
+    let bl = s.border_left_width;
+    let bt = s.border_top_width;
+    let bb = s.border_bottom_width;
+    let inset = 2.0_f32;
+    let content_x = field_box.rect.x + bl + inset;
+    let content_y = field_box.rect.y + bt;
+    let content_h = (field_box.rect.height - bt - bb).max(1.0);
+    let font_size = s.font_size;
+
+    let len = value.chars().count();
+    let start = start.min(len);
+    let end = end.min(len);
+    let sel_x = content_x + font_size * 0.5 * start as f32;
+    let sel_w = font_size * 0.5 * end.saturating_sub(start) as f32;
+
+    Rect::new(sel_x, content_y, sel_w, content_h)
+}
+
+/// FRAME-7 remainder 2: selection highlight rects for a focused `<textarea>`,
+/// char range `[start, end)` — one rect per logical line the range overlaps,
+/// same logical-line/visual-line tolerance [`textarea_caret_rect`] documents.
+/// A range spanning N lines yields N rects (start clipped to the range on the
+/// first line, end clipped on the last, full line width in between); an empty
+/// or out-of-bounds range yields no rects.
+pub fn textarea_selection_rects(
+    field_box: &LayoutBox,
+    value: &str,
+    start: usize,
+    end: usize,
+    measure: &dyn Fn(&str) -> f32,
+) -> Vec<Rect> {
+    if start >= end {
+        return Vec::new();
+    }
+    let s = &field_box.style;
+    let inline_run = field_box
+        .children
+        .iter()
+        .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }));
+    let (content_x, content_y) = match inline_run {
+        Some(ir) => (ir.rect.x, ir.rect.y),
+        None => (
+            field_box.rect.x + s.border_left_width + s.padding_left.px(),
+            field_box.rect.y + s.border_top_width + s.padding_top.px(),
+        ),
+    };
+    let raw_line_h = s.font_size * s.line_height;
+    let line_h = if s.line_height_step > 0.0 {
+        (raw_line_h / s.line_height_step).ceil() * s.line_height_step
+    } else {
+        raw_line_h
+    };
+
+    let mut rects = Vec::new();
+    let mut offset = 0usize;
+    for (line_idx, line) in value.split('\n').enumerate() {
+        let n = line.chars().count();
+        let line_start = offset;
+        let line_end = line_start + n;
+        offset = line_end + 1; // +1 for the '\n' consumed between logical lines
+
+        if start >= line_end || end <= line_start {
+            continue;
+        }
+        let sel_start_in_line = start.max(line_start) - line_start;
+        let sel_end_in_line = end.min(line_end) - line_start;
+        if sel_start_in_line >= sel_end_in_line {
+            continue;
+        }
+        let prefix: String = line.chars().take(sel_start_in_line).collect();
+        let selected: String =
+            line.chars().skip(sel_start_in_line).take(sel_end_in_line - sel_start_in_line).collect();
+        let x = content_x + measure(&prefix);
+        let w = measure(&selected).max(1.0);
+        rects.push(Rect::new(x, content_y + line_idx as f32 * line_h, w, line_h));
+    }
+    rects
+}
+
+/// FRAME-7 остаток: char-index under viewport-space `x` for a focused
+/// `<input>` — the inverse of [`input_caret_rect`]/[`input_selection_rect`],
+/// used to place the cursor/anchor for a mouse press or drag. Same content
+/// inset and per-glyph `font_size * 0.5` advance approximation those two
+/// share, so a hit test and the caret it later paints always agree.
+/// Clamped to `[0, value length]` — a click past either edge of the field
+/// lands on the nearest end, matching every other text editor.
+pub fn input_char_index_at_x(field_box: &LayoutBox, value: &str, x: f32) -> usize {
+    let s = &field_box.style;
+    let bl = s.border_left_width;
+    let inset = 2.0_f32;
+    let content_x = field_box.rect.x + bl + inset;
+    let font_size = s.font_size;
+    let len = value.chars().count();
+    if font_size <= 0.0 {
+        return len;
+    }
+    let raw = (x - content_x) / (font_size * 0.5);
+    raw.round().clamp(0.0, len as f32) as usize
+}
+
+/// FRAME-7 остаток: char-index under document-space `(x, y)` for a focused
+/// `<textarea>` — the inverse of [`textarea_caret_rect`]/[`textarea_selection_rects`],
+/// same logical-line tolerance those document (a `pre-wrap` visual wrap is
+/// not accounted for). `y` picks the logical line via the same `line_h` those
+/// use; `x` within that line is found by the closest char-boundary prefix
+/// width, mirroring the O(n) glyph-advance scan `textarea_selection_rects`
+/// already does per selected line — textarea values are short shell-side
+/// text, not a reason to keep a running-width cache.
+pub fn textarea_char_index_at_point(
+    field_box: &LayoutBox,
+    value: &str,
+    x: f32,
+    y: f32,
+    measure: &dyn Fn(&str) -> f32,
+) -> usize {
+    let s = &field_box.style;
+    let inline_run = field_box
+        .children
+        .iter()
+        .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }));
+    let (content_x, content_y) = match inline_run {
+        Some(ir) => (ir.rect.x, ir.rect.y),
+        None => (
+            field_box.rect.x + s.border_left_width + s.padding_left.px(),
+            field_box.rect.y + s.border_top_width + s.padding_top.px(),
+        ),
+    };
+    let raw_line_h = s.font_size * s.line_height;
+    let line_h = if s.line_height_step > 0.0 {
+        (raw_line_h / s.line_height_step).ceil() * s.line_height_step
+    } else {
+        raw_line_h
+    }
+    .max(1.0);
+
+    let lines: Vec<&str> = value.split('\n').collect();
+    let rel_line = ((y - content_y) / line_h).floor();
+    let line_idx = if rel_line < 0.0 {
+        0
+    } else {
+        (rel_line as usize).min(lines.len().saturating_sub(1))
+    };
+
+    let mut offset = 0usize;
+    for line in &lines[..line_idx] {
+        offset += line.chars().count() + 1; // +1 for the '\n' consumed between logical lines
+    }
+    let line = lines[line_idx];
+    let chars: Vec<char> = line.chars().collect();
+    let rel_x = x - content_x;
+    let mut best_i = 0usize;
+    let mut best_dist = f32::MAX;
+    for i in 0..=chars.len() {
+        let prefix: String = chars[..i].iter().collect();
+        let dist = (measure(&prefix) - rel_x).abs();
+        if dist < best_dist {
+            best_dist = dist;
+            best_i = i;
+        }
+    }
+    offset + best_i
 }
 
 /// Walk `doc` and collect all NodeIds with `data-lumen-modal` attribute
@@ -2755,5 +2943,64 @@ mod tests {
         let rect = input_caret_rect(&field, "ab", 99);
         // char_index past the value clamps to its length (2 chars).
         assert_eq!(rect.x, 2.0 + 16.0);
+    }
+
+    // ── FRAME-7 остаток: mouse-drag hit tests (inverse of the rects above) ──
+
+    #[test]
+    fn input_char_index_at_x_lands_on_content_edge() {
+        let field = make_field_lb(NodeId::from_index(1), Rect::new(0.0, 0.0, 100.0, 20.0), vec![]);
+        // content_x = 0 + border(0) + inset(2).
+        assert_eq!(input_char_index_at_x(&field, "abcd", 2.0), 0);
+    }
+
+    #[test]
+    fn input_char_index_at_x_rounds_to_nearest_char() {
+        let field = make_field_lb(NodeId::from_index(1), Rect::new(0.0, 0.0, 100.0, 20.0), vec![]);
+        // font_size(16) * 0.5 = 8px/char; content_x + 8 rounds to 1 char in.
+        assert_eq!(input_char_index_at_x(&field, "abcd", 2.0 + 8.0), 1);
+        // Halfway between 1 and 2 chars rounds to the nearer one (12px → 1.5 → round-to-even 2).
+        assert_eq!(input_char_index_at_x(&field, "abcd", 2.0 + 20.0), 3);
+    }
+
+    #[test]
+    fn input_char_index_at_x_clamps_to_value_bounds() {
+        let field = make_field_lb(NodeId::from_index(1), Rect::new(0.0, 0.0, 100.0, 20.0), vec![]);
+        assert_eq!(input_char_index_at_x(&field, "abcd", -50.0), 0);
+        assert_eq!(input_char_index_at_x(&field, "abcd", 9999.0), 4);
+    }
+
+    #[test]
+    fn textarea_char_index_at_point_first_line_start() {
+        let field = make_field_lb(NodeId::from_index(1), Rect::new(0.0, 0.0, 100.0, 50.0), vec![]);
+        let idx = textarea_char_index_at_point(&field, "ab\ncd", 0.0, 0.0, &char_width_measure);
+        assert_eq!(idx, 0);
+    }
+
+    #[test]
+    fn textarea_char_index_at_point_end_of_first_line() {
+        let field = make_field_lb(NodeId::from_index(1), Rect::new(0.0, 0.0, 100.0, 50.0), vec![]);
+        // "ab" is 16px wide at 8px/char вЂ” a click right at that edge lands
+        // after both chars, still on line 0 (not yet the '\n').
+        let idx = textarea_char_index_at_point(&field, "ab\ncd", 16.0, 0.0, &char_width_measure);
+        assert_eq!(idx, 2);
+    }
+
+    #[test]
+    fn textarea_char_index_at_point_second_line() {
+        let field = make_field_lb(NodeId::from_index(1), Rect::new(0.0, 0.0, 100.0, 50.0), vec![]);
+        let line_h = 16.0 * 1.2;
+        // Second logical line starts at char-index 3 ("ab\n" consumed).
+        let idx = textarea_char_index_at_point(&field, "ab\ncd", 0.0, line_h, &char_width_measure);
+        assert_eq!(idx, 3);
+    }
+
+    #[test]
+    fn textarea_char_index_at_point_clamps_below_last_line() {
+        let field = make_field_lb(NodeId::from_index(1), Rect::new(0.0, 0.0, 100.0, 50.0), vec![]);
+        let idx = textarea_char_index_at_point(&field, "ab\ncd", 0.0, 9999.0, &char_width_measure);
+        // Clamped to the last logical line's start (char-index 3), not past it
+        // since x=0 is the line's own start.
+        assert_eq!(idx, 3);
     }
 }

@@ -419,31 +419,54 @@ impl Lumen {
         // below: KeyCode::ArrowLeft/Right/Home/End are bound there to
         // ScrollLine*/ScrollHome/ScrollEnd (`input/keybindings.rs`), so
         // without this branch Left/Right/Home/End while typing scroll the
-        // page instead of moving the caret. Shift/Ctrl combinations (word
-        // jump, range selection) are left to the keybinding table/no-op —
-        // out of scope here, see FRAME-2's queue note.
-        if self.modifiers.is_empty() {
+        // page instead of moving the caret. Shift+Left/Right/Home/End
+        // (FRAME-7 remainder 2) extends the field's text selection instead
+        // of moving a bare cursor — same key set, `shift` below picks the
+        // `extend_*`/`move_*`+`jump_*` pair. Ctrl combinations (word jump)
+        // are left to the keybinding table/no-op — out of scope here, see
+        // FRAME-2's queue note. Shift+Delete is deliberately left
+        // unhandled here (falls through to the global keybinding table's
+        // no-op) rather than guessing at "cut" semantics no other part of
+        // this branch implements yet.
+        if self.modifiers.is_empty() || self.modifiers == ModifiersState::SHIFT {
+            let shift = self.modifiers == ModifiersState::SHIFT;
             let handled_in_frame = self
                 .focused_frame
                 .is_some_and(|(idx, nid)| self.frame_typeable_field(idx, nid).is_some())
                 && match code {
                     KeyCode::ArrowLeft => {
-                        self.move_focused_frame_cursor(-1);
+                        if shift {
+                            self.extend_focused_frame_selection(-1);
+                        } else {
+                            self.move_focused_frame_cursor(-1);
+                        }
                         true
                     }
                     KeyCode::ArrowRight => {
-                        self.move_focused_frame_cursor(1);
+                        if shift {
+                            self.extend_focused_frame_selection(1);
+                        } else {
+                            self.move_focused_frame_cursor(1);
+                        }
                         true
                     }
                     KeyCode::Home => {
-                        self.jump_focused_frame_cursor(true);
+                        if shift {
+                            self.extend_focused_frame_selection_to_edge(true);
+                        } else {
+                            self.jump_focused_frame_cursor(true);
+                        }
                         true
                     }
                     KeyCode::End => {
-                        self.jump_focused_frame_cursor(false);
+                        if shift {
+                            self.extend_focused_frame_selection_to_edge(false);
+                        } else {
+                            self.jump_focused_frame_cursor(false);
+                        }
                         true
                     }
-                    KeyCode::Delete => {
+                    KeyCode::Delete if !shift => {
                         self.inject_frame_delete_forward();
                         true
                     }
@@ -456,22 +479,38 @@ impl Lumen {
             if self.focused_node.is_some_and(|nid| self.typeable_field(nid).is_some()) {
                 let handled = match code {
                     KeyCode::ArrowLeft => {
-                        self.move_focused_cursor(-1);
+                        if shift {
+                            self.extend_focused_selection(-1);
+                        } else {
+                            self.move_focused_cursor(-1);
+                        }
                         true
                     }
                     KeyCode::ArrowRight => {
-                        self.move_focused_cursor(1);
+                        if shift {
+                            self.extend_focused_selection(1);
+                        } else {
+                            self.move_focused_cursor(1);
+                        }
                         true
                     }
                     KeyCode::Home => {
-                        self.jump_focused_cursor(true);
+                        if shift {
+                            self.extend_focused_selection_to_edge(true);
+                        } else {
+                            self.jump_focused_cursor(true);
+                        }
                         true
                     }
                     KeyCode::End => {
-                        self.jump_focused_cursor(false);
+                        if shift {
+                            self.extend_focused_selection_to_edge(false);
+                        } else {
+                            self.jump_focused_cursor(false);
+                        }
                         true
                     }
-                    KeyCode::Delete => {
+                    KeyCode::Delete if !shift => {
                         self.inject_delete_forward();
                         true
                     }

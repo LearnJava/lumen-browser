@@ -146,6 +146,12 @@ pub struct CompositorOverride {
     /// populates it from `FormControlState::cursor` at display-list-build
     /// time; layout crate itself never sets it.
     pub caret: Option<usize>,
+    /// FRAME-7 remainder 2: normalized (`start <= end`) char-index selection
+    /// range to paint as a highlight rect behind a focused `<input>`'s text,
+    /// same carrier as `caret` and populated the same way from
+    /// `FormControlState::selection_anchor` + `cursor`. `None` when no
+    /// selection is active — the common case.
+    pub selection: Option<(usize, usize)>,
 }
 
 /// Per-frame compositor overrides — output of `AnimationFrame::to_compositor_frame`.
