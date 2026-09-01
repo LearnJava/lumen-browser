@@ -1188,6 +1188,23 @@ def _shared_worker_module_marker(text, test_id):
     return bool(test_id) and ".any.sharedworker-module.html" in test_id
 
 
+def _exact_id_marker(*ids):
+    """Factory for a mechanism whose evidence is "grep the engine source for
+    the API this id needs and it isn't there" rather than a shape in the test
+    (WPT-RUN-6 slice 31). Matching the *test* would say no more than matching
+    its path: every file that needs the missing API drops out of the corpus,
+    so the source pattern degenerates to the id itself. `ids` are full `/`-
+    rooted paths, matched exactly — no prefix/substring, so a sibling test
+    that happens to share a directory is never pulled in by mistake.
+    """
+    idset = frozenset(ids)
+
+    def _pred(text, test_id):
+        return test_id in idset
+
+    return _pred
+
+
 #: `pushState(state, title)` — the two-argument form — creates an entry whose
 #: traversal dispatches no `popstate` at all, while the same call with a third
 #: (URL) argument does, and so does an entry made by `location.hash =`
@@ -2014,6 +2031,157 @@ SOURCE_MARKERS = [
          r"currentSrc[^;\n]*(?:audio|Audio)"],
         "`audio.currentSrc` is `undefined` at every step of the resource "
         "selection algorithm, while `video.currentSrc` is complete",
+    ),
+
+    # WPT-RUN-6 slice 31, all nine `_exact_id_marker`-keyed entries below.
+    # None of these needed a live probe to confirm — each is an API a test
+    # calls that a workspace-wide grep turns up zero references for (or, for
+    # the last three, a live probe that reproduced the same defect standalone
+    # with no ambiguity about the cause). See `verify_scroll_view_transition_
+    # gaps.py`'s module docstring for the read that found them, including two
+    # candidates it ruled OUT: a suspected freeze on huge scrolled content
+    # that did not reproduce under five repeated measurements, and a
+    # suspected `window[n]`/`window.length` gap that turned out already fixed
+    # (BUG-480 срез 3, 2026-08-23) by a per-feature shim (`frame_bridge.rs`)
+    # the first grep pass never looked at — `crates/js/src/shim/*.js` was not
+    # the whole story, see the gotcha in `CLAUDE.md` about per-feature shims.
+    Mechanism(
+        # Zero references to `currentCSSZoom` anywhere in the workspace — the
+        # CSS zoom OM member `ResizeObserverEntry`/`Element` need to report
+        # sizes that are not scaled by `zoom` does not exist.
+        "css-zoom-om-missing", "BUG-943",
+        [], "`Element.currentCSSZoom` does not exist, so a `ResizeObserver` "
+        "callback cannot separate the zoomed and unzoomed halves of an entry",
+        predicate=_exact_id_marker("/resize-observer/zoom.html"),
+    ),
+    Mechanism(
+        # Zero references to `scroll-initial-target` anywhere in the
+        # workspace — the property is not parsed, not cascaded, and the
+        # "scroll the initial target into view on load" step of CSS Scroll
+        # Snap 2 never runs.
+        "scroll-initial-target-unsupported", "BUG-944",
+        [], "the `scroll-initial-target` property does not exist, so the "
+        "scroller it names is never scrolled to on load",
+        predicate=_exact_id_marker(
+            "/css/css-scroll-snap/scroll-initial-target/"
+            "scroll-initial-target-shadow-dom.tentative.html"),
+    ),
+    Mechanism(
+        # Zero references to `pagereveal` anywhere in the workspace — the
+        # event HTML LS / CSS View Transitions 2 fires once per navigation is
+        # never dispatched, so a page that only listens for it hangs on its
+        # very first `await`.
+        "pagereveal-not-fired", "BUG-945",
+        [], "the `pagereveal` event is never dispatched on `window`",
+        predicate=_exact_id_marker(
+            "/css/css-view-transitions/navigation/"
+            "pagereveal-no-view-transition.html"),
+    ),
+    Mechanism(
+        # No shim file (`grep -rn trustedTypes crates/js/src/shim`) ever
+        # reads `trustedTypes`/`window.trustedTypes.defaultPolicy` — the
+        # policy factory in `trusted_types.rs` is a complete, self-contained
+        # API surface that no DOM sink ever calls into. `setTimeout`/
+        # `setInterval` given a string handler run it as a classic script via
+        # `(0, eval)` unconditionally (`_lumen_timer_string_handler`,
+        # `web_api_shim_mid_b.js`), so `policy.createScript(...)` happens to
+        # work by accident (its `TrustedScript` stringifies to the right
+        # source) while the *default*-policy subtests — a bare string handler
+        # that the default policy is supposed to transform — never invoke any
+        # policy at all and their callback is never reached. Distinct from
+        # BUG-811 (CSP not enforced): this is the Trusted Types object model
+        # itself never being consulted, independent of any CSP directive.
+        "trusted-types-sink-not-consulted", "BUG-946",
+        [], "no DOM sink (`setTimeout`/`setInterval` included) ever reads "
+        "`trustedTypes`/`defaultPolicy` — a raw string handler runs unchanged "
+        "instead of through the default policy's `createScript`",
+        predicate=_exact_id_marker(
+            "/trusted-types/Window-setTimeout-setInterval.html"),
+    ),
+    Mechanism(
+        # `notifications_bindings.rs`'s own doc comment: a `denied` permission
+        # (the privacy-first default) makes the constructor "do nothing
+        # (silent drop)". HTML Notifications API §6 step 5.1 requires firing
+        # `error` instead — the difference between "nothing happens" and "the
+        # promise this test awaits settles" is exactly what hangs the file.
+        "notification-denied-silent", "BUG-947",
+        [], "`new Notification()` under a denied permission silently drops "
+        "the notification instead of firing `error`, so a handler armed on "
+        "`onerror` is never called",
+        predicate=_exact_id_marker("/notifications/constructor-non-secure.html"),
+    ),
+    Mechanism(
+        # `_PERF_SUPPORTED_ENTRY_TYPES` (`web_api_shim_tail.js`) deliberately
+        # excludes `longtask`/`long-animation-frame` — its own comment says no
+        # `PerformanceEntry` of either type is ever produced. `observe()`'s
+        # single-type form aborts silently per spec step 6 (a `console.warn`,
+        # no throw — "PerformanceObserver: unsupported entryType
+        # long-animation-frame" is the exact line these two ids print), so
+        # both tests wait forever on an entry that can never arrive rather
+        # than failing on a rejected call.
+        "longtask-entrytype-unimplemented", "BUG-948",
+        [], "`longtask`/`long-animation-frame` are absent from "
+        "`supportedEntryTypes` — no entry of either type is ever produced, "
+        "so `observe()` silently admits nothing and the callback never runs",
+        predicate=_exact_id_marker(
+            "/longtask-timing/supported-longtask-types.window.html",
+            "/long-animation-frame/loaf-toJSON.html"),
+    ),
+    Mechanism(
+        # Live probe (`--variant scroll-anchor-read`): `window.scrollTo(0,
+        # 150)` followed by an IMMEDIATE `scrollY` read reports `0` even with
+        # a background-painted, genuinely-scrollable page — not the "spacer
+        # paints nothing" gotcha, ruled out by giving every box a background.
+        # A `setTimeout` after the same call sees the correct value. Traced to
+        # `_lumen_request_page_scroll` (`v8_runtime/install/platform.rs`)
+        # queuing into `pending_page_scrolls`, which the SHELL drains on its
+        # next pass and only then updates `page_scroll_y` — the value
+        # `_lumen_get_page_scroll_y` reads. `reading-scroll-forces-anchoring.
+        # html` assumes CSSOM View's synchronous flush-on-read and never gets
+        # past its first assertion.
+        "scroll-position-read-async", "BUG-949",
+        [], "`scrollY`/`pageYOffset` read the pre-scroll value until a later "
+        "task runs — `scrollTo()` queues the move for the shell's next pass "
+        "rather than applying it before returning",
+        predicate=_exact_id_marker(
+            "/css/css-scroll-anchoring/reading-scroll-forces-anchoring.html"),
+    ),
+    Mechanism(
+        # Live probe (`--variant focus-scroll-into-view`, corrected to
+        # include the real test's `:focus` rule after the first pass wrongly
+        # dropped it — see the verify script's module docstring): the target
+        # sits at (0, 0) — already in view — until `:focus` un-pins it back
+        # to its off-screen in-flow position, so scrolling only needs to
+        # happen AFTER that style applies. No `scroll` marker fires at all
+        # and `scrollY` stays `0` through a 2.5 s wait. Same root cause as
+        # BUG-560, a different victim: `HTMLElement.prototype.focus()` calls
+        # `_lumen_request_focus(nid)` (queued, applied only on the shell's
+        # next pump — BUG-560's own finding) and THEN synchronously calls
+        # `scrollIntoView()`, whose `_lumen_get_bounding_rect` reads the
+        # layout as it stood BEFORE that pump — i.e. before `:focus` moved
+        # the element at all, so there is nothing yet to scroll to.
+        "focus-no-scroll-into-view", "BUG-560",
+        [], "`.focus()` never scrolls its target into view when the move "
+        "itself is caused by the `:focus` style (the common case) — "
+        "`scrollIntoView()` runs synchronously, before the shell's next "
+        "pump applies the focus-driven style/layout change BUG-560 already "
+        "documents",
+        predicate=_exact_id_marker("/focus/scroll-matches-focus.html"),
+    ),
+    Mechanism(
+        # Live probe (`--variant scroll-timeline-elementsfrompoint`):
+        # `animation-timeline: scroll(self)` never touches the animated
+        # property's computed value — `getComputedStyle(...).backgroundColor`
+        # stays at its unanimated default both before and after the scroll,
+        # although `scroll_timeline.rs` exists and the CSS parses (`CSS.
+        # supports('animation-timeline: scroll()')` is not what fails here).
+        "scroll-timeline-not-driven", "BUG-950",
+        [], "`animation-timeline: scroll()` does not drive the animation's "
+        "computed style — the keyframe value never changes as the scroller "
+        "moves",
+        predicate=_exact_id_marker(
+            "/scroll-animations/scroll-timelines/"
+            "scroll-timeline-snapshot-elementsFromPoint.html"),
     ),
 ]
 
@@ -5523,6 +5691,56 @@ def selftest():
               "the measured wasm-decode ids were not loaded from the probe")
         check(MEASURED_REFS.get("wasm-locals-unbounded") == "BUG-898",
               "the measured wasm mechanism has no owner")
+
+        # WPT-RUN-6 slice 31: the nine `_exact_id_marker`-keyed entries.
+        # `classify_source` bails out before the predicate runs if the file
+        # is not on disk (`_read_source` returns `None`), so each id needs a
+        # real (if empty) file at its exact path — content is irrelevant,
+        # the predicate matches on `test_id` alone.
+        _EXACT_ID_CASES = [
+            ("css-zoom-om-missing", "/resize-observer/zoom.html"),
+            ("scroll-initial-target-unsupported",
+             "/css/css-scroll-snap/scroll-initial-target/"
+             "scroll-initial-target-shadow-dom.tentative.html"),
+            ("pagereveal-not-fired",
+             "/css/css-view-transitions/navigation/"
+             "pagereveal-no-view-transition.html"),
+            ("trusted-types-sink-not-consulted",
+             "/trusted-types/Window-setTimeout-setInterval.html"),
+            ("notification-denied-silent",
+             "/notifications/constructor-non-secure.html"),
+            ("longtask-entrytype-unimplemented",
+             "/longtask-timing/supported-longtask-types.window.html"),
+            ("longtask-entrytype-unimplemented",
+             "/long-animation-frame/loaf-toJSON.html"),
+            ("scroll-position-read-async",
+             "/css/css-scroll-anchoring/reading-scroll-forces-anchoring.html"),
+            ("focus-no-scroll-into-view", "/focus/scroll-matches-focus.html"),
+            ("scroll-timeline-not-driven",
+             "/scroll-animations/scroll-timelines/"
+             "scroll-timeline-snapshot-elementsFromPoint.html"),
+        ]
+        for key, tid in _EXACT_ID_CASES:
+            # `.window.html`/`.any.html`/etc. are generated ids — the file on
+            # disk is the `_GENERATED_SUFFIXES`-mapped source, not the literal
+            # id path (`source_path` does the mapping the same way
+            # `classify_source` will).
+            full = source_path(tid, tmp)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "w", encoding="utf-8") as handle:
+                handle.write("<script>/* slice-31 selftest stub */</script>")
+            check(classify_source(tid, tmp, {}) == key,
+                  f"{tid} was not attributed to {key}")
+        # A sibling id in the same directory, with the same shape of content,
+        # must NOT match — the predicate is an exact path, not a prefix or a
+        # content pattern (mutation check for `_exact_id_marker`).
+        sibling = "/focus/scroll-matches-focus-sibling.html"
+        full = os.path.join(tmp, sibling.lstrip("/"))
+        with open(full, "w", encoding="utf-8") as handle:
+            handle.write("<script>/* slice-31 selftest stub */</script>")
+        check(classify_source(sibling, tmp, {}) != "focus-no-scroll-into-view",
+              "a sibling id under the same directory must not match "
+              "_exact_id_marker's exact-path check")
 
         # A key MAY be shared by two stages — one mechanism can have both a
         # noisy and a silent form (`iframe-no-nested-context`,
