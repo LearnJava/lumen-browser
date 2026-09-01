@@ -483,6 +483,8 @@ impl Lumen {
                 // вклеивает в него содержимое фреймов.
                 self.frames = page.frames;
                 self.frame_env = page.frame_env;
+                // FRAME-4 срез 3: см. тот же сброс в `apply_loaded_page`.
+                frames::clear_frame_nav_requests(&mut self.frame_nav_requests);
                 // BUG-480 срез 16: индекс в этом списке — единственное, чем
                 // адресован фрейм под курсором, поэтому пережить его замену он
                 // не может: указывал бы на чужой хэндл.
@@ -1102,6 +1104,12 @@ impl Lumen {
         // прежние фреймы (и их JS-контексты) падают вместе со страницей.
         self.frames = page.frames;
         self.frame_env = page.frame_env;
+        // FRAME-4 срез 3: слоты старой страницы адресуют документы, которых
+        // больше нет — новый ответ на них уже не придёт (generation этого
+        // хозяина у следующей страницы начнётся заново), а старый, если
+        // всё ещё летит, и так уйдёт в `apply_frame_navigation`'s "old_doc
+        // отсутствует" ветку; чистка здесь — только против утечки памяти.
+        frames::clear_frame_nav_requests(&mut self.frame_nav_requests);
         // BUG-480 срез 16: см. тот же сброс в резервном пути reload'а выше.
         self.hovered_frame = None;
         // BUG-480 срез 14: список страницы пишется ПОСЛЕ замены фреймов, а не
@@ -1609,6 +1617,24 @@ pub(crate) enum LoadEvent {
     /// UI-потоке (`apply_loaded_page`) без блокировки event loop. Последнее
     /// поле — generation навигации (U-1).
     RenderDone(Box<RenderOutcome>, u64),
+    /// FRAME-4 срез 3: навигация ОДНОГО фрейма (клик по ссылке/сабмит формы/
+    /// шаг истории внутри него) выполнена на фоновом потоке — та же сеть+
+    /// парсинг+скрипты+layout, что раньше блокировали UI-поток целиком внутри
+    /// `frames::navigate_frame`, теперь `frames::run_frame_navigation` там же,
+    /// но за пределами event loop. `host_doc`+`host` — ключ generation-слота
+    /// (`frames::FrameNavRequest`), `generation` — снятый при отправке номер:
+    /// `Lumen::on_frame_nav_done` сверяет их и роняет ответ, если хозяин успел
+    /// навигировать ещё раз, пока этот запрос был в полёте. `old_doc` —
+    /// документ, который заменяет `handles` (пусто, если фрейма к этому
+    /// моменту уже нет — предок навигировал сам, либо страница
+    /// перезагрузилась целиком).
+    FrameNavDone {
+        host_doc: Arc<Mutex<Document>>,
+        host: NodeId,
+        old_doc: Arc<Mutex<Document>>,
+        generation: u64,
+        handles: Vec<frames::FrameHandle>,
+    },
 }
 
 /// Размер одного HTML-chunk при разбивке для инкрементального парсинга.

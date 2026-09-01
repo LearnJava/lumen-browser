@@ -791,6 +791,13 @@ pub(crate) struct Lumen {
     /// месте: набор принадлежит документу (его origin, его хранилища, его
     /// база), поэтому пережить смену страницы не может.
     pub(crate) frame_env: Option<crate::frames::FrameLoadEnv>,
+    /// FRAME-4 срез 3: generation-слоты навигаций фреймов текущей страницы,
+    /// ещё не завершившихся или уже применённых (см.
+    /// `crate::frames::FrameNavRequest`) — по одному на живой `(host_doc,
+    /// host)`, куда сверяется ответ фонового потока
+    /// [`Lumen::on_frame_nav_done`]. Заменяется вместе с [`Self::frames`]:
+    /// `host_doc` внутри слота адресует документ, которого больше не будет.
+    pub(crate) frame_nav_requests: Vec<crate::frames::FrameNavRequest>,
     /// Shared GIF-video store — same Arc used by JS native bindings (PH3-12).
     ///
     /// The shell owns the Arc; JS bindings hold clones captured at context

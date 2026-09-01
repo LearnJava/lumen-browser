@@ -241,6 +241,17 @@ impl Lumen {
     /// истории ([`Self::traverse_frame`]) — ЧТО происходит с хэндлами и
     /// вьюпортами от источника не зависит, разнится только запись в историю
     /// (у второго её нет — сам шаг историю не расширяет).
+    ///
+    /// FRAME-4 срез 3: сеть+парсинг+скрипты+layout ребёнка (раньше здесь же,
+    /// синхронно на UI-потоке) теперь уходят в `std::thread::spawn` —
+    /// `frames::run_frame_navigation` — тем же способом, каким уже грузится
+    /// сама страница (`start_streaming_load`/`render_bytes`,
+    /// `LoadEvent`+`EventLoopProxy`). Возвращает `true`, если запрос
+    /// ПРИНЯТ (фрейм найден, окружение есть) — не «документ уже заменён»:
+    /// сама подмена приходит позже, `LoadEvent::FrameNavDone`, и её
+    /// применяет [`Self::on_frame_nav_done`]. История и сброс hover/focus/
+    /// active читают только адрес и identity, известные ДО сети, поэтому
+    /// синхронный «принят» — всё, что им нужно.
     fn replace_frame_document(&mut self, idx: usize, href: &str, nav_base: &ResourceBase) -> bool {
         let Some(env) = self.frame_env.clone() else {
             eprintln!("iframe: навигация '{href}' без окружения загрузки страницы — пропуск");
@@ -254,16 +265,46 @@ impl Lumen {
         // [`Lumen::clone_js_ctx`]. С `self.js_ctx` родитель молча не узнавал
         // ни о новом под-документе, ни о `load` на своём `<iframe>`.
         let page_js = self.clone_js_ctx();
-        if !frames::navigate_frame(
-            &mut self.frames,
-            idx,
-            href,
-            nav_base,
-            &page_doc,
-            &env,
-            page_js.as_ref(),
-        ) {
+        let Some(prep) = frames::prepare_frame_navigation(&self.frames, idx, &page_doc, &env, page_js.as_ref())
+        else {
             return false;
+        };
+        let generation = frames::bump_frame_nav_generation(&mut self.frame_nav_requests, &prep.host_doc, prep.host);
+        let (host_doc, host) = (Arc::clone(&prep.host_doc), prep.host);
+        let href = href.to_owned();
+        let nav_base = nav_base.clone();
+        let proxy = self.load_proxy.clone();
+        std::thread::spawn(move || {
+            let old_doc = Arc::clone(&prep.old_doc);
+            let handles = frames::run_frame_navigation(&prep, &href, &nav_base, &page_doc, &env);
+            let _ = proxy.send_event(LoadEvent::FrameNavDone { host_doc, host, old_doc, generation, handles });
+        });
+        true
+    }
+
+    /// Применить ответ фонового потока навигации фрейма (FRAME-4 срез 3),
+    /// `LoadEvent::FrameNavDone`.
+    ///
+    /// Отбрасывает ответ (ничего не меняя), если `(host_doc, host)` успел
+    /// навигировать ещё раз, пока этот запрос летел — быстрый второй клик по
+    /// другой ссылке того же фрейма не должен откатываться медленным ответом
+    /// на первый. `apply_frame_navigation` отдельно отбрасывает ответ, чей
+    /// `old_doc` уже не в `self.frames` (предок навигировал сам, страница
+    /// перезагрузилась целиком) — тот же исход, что раньше давал `idx`,
+    /// переставший существовать к моменту (синхронного) возврата.
+    pub(crate) fn on_frame_nav_done(
+        &mut self,
+        host_doc: &Arc<Mutex<Document>>,
+        host: NodeId,
+        old_doc: &Arc<Mutex<Document>>,
+        generation: u64,
+        handles: Vec<frames::FrameHandle>,
+    ) {
+        if !frames::frame_nav_generation_current(&self.frame_nav_requests, host_doc, host, generation) {
+            return;
+        }
+        if !frames::apply_frame_navigation(&mut self.frames, old_doc, handles) {
+            return;
         }
         // Индекс фрейма под курсором указывал на выброшенный хэндл (срез 16 —
         // та же причина, по которой его сбрасывает смена страницы). Срез 23:
@@ -274,7 +315,6 @@ impl Lumen {
         self.focused_frame = None;
         self.active_frame = None;
         self.refresh_frames(None);
-        true
     }
 
     /// FRAME-4: применить ОДИН шаг истории — вернуть фрейм верхнего уровня с
