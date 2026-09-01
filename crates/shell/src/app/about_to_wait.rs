@@ -399,6 +399,43 @@ impl Lumen {
                 next_wakeup = Some(next_wakeup.map_or(raf_wakeup, |t| t.min(raf_wakeup)));
             }
         }
+        // FRAME-1: rAF под-документов <iframe>/<frame> — до этого среза не
+        // тикал вовсе (см. комментарий у объявления `frame_js_handles` выше),
+        // из-за чего собственный `requestAnimationFrame`-цикл скрипта ребёнка
+        // (JS-анимации, полифилы) никогда не получал ни одного кадра. Хэндлы
+        // фреймов никогда не идут через engine-thread (тот же комментарий),
+        // поэтому здесь один синхронный проход без ADR-016 M2.3-ветки —
+        // аналог `else`-ветки страницы выше, БЕЗ её `self.engine_thread`
+        // развилки. Гейт `now_ms - self.last_raf_batch_ms` — тот же таймер,
+        // что у страницы: комбинированная страница+фреймы частота остаётся
+        // ⩽60 Hz (BUG-271), а не по счётчику по каждому фрейму отдельно.
+        let mut frame_raf_dirty: Vec<usize> = Vec::new();
+        for (idx, fjs) in &frame_js_handles {
+            if now_ms - self.last_raf_batch_ms < RAF_MIN_INTERVAL_MS || !fjs.has_raf_pending() {
+                continue;
+            }
+            fjs.take_raf_pending();
+            self.last_raf_batch_ms = now_ms;
+            let raf_ts = if self.deterministic.enabled { 0.0 } else { -1.0 };
+            fjs.run_animation_frame(raf_ts);
+            if fjs.take_dom_dirty() {
+                frame_raf_dirty.push(*idx);
+            }
+        }
+        // BUG-480 срез 25: тот же путь пересчёта, что у мутаций родителя/себя
+        // выше — `refresh_frames` без гейта «размер/интерактив не менялись»
+        // и с пересборкой display list страницы.
+        for idx in frame_raf_dirty {
+            self.refresh_frames(Some(idx));
+        }
+        for (_, fjs) in &frame_js_handles {
+            if fjs.has_raf_pending() {
+                let due_in_ms = (self.last_raf_batch_ms + RAF_MIN_INTERVAL_MS - now_ms).max(0.0);
+                let raf_wakeup = std::time::Instant::now()
+                    + std::time::Duration::from_millis(due_in_ms as u64 + 1);
+                next_wakeup = Some(next_wakeup.map_or(raf_wakeup, |t| t.min(raf_wakeup)));
+            }
+        }
         // ADR-016 M2.2: apply any off-thread layout result the engine thread has
         // committed since the last iteration (no-op when the engine thread is off).
         self.poll_engine_commit();

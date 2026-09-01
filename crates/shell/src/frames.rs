@@ -638,11 +638,17 @@ pub(crate) fn sync_frame_viewports(
             // половины сравнения клик внутрь фрейма менял бы состояние, а
             // пересчёта не вызывал: размер-то остался прежним.
             let state = interactive.for_frame(i);
-            if (size.width - frames[i].viewport.width).abs() < 0.01
-                && (size.height - frames[i].viewport.height).abs() < 0.01
-                && frames[i].interactive == state
-                && frames[i].layout.is_some()
-            {
+            // FRAME-1: тот же вход, что и гейт ниже, нужен ОТДЕЛЬНО от него —
+            // гейт пропускает пересчёт и при смене одного интерактива без
+            // смены размера, а `resize` должен сработать только на РЕАЛЬНОЕ
+            // изменение вьюпорта (включая самый первый проход этой функции —
+            // переход с UA-дефолта [`FRAME_UA_DEFAULT_SIZE`] на настоящий
+            // host-бокс, тот самый переход, из-за которого страница, кэширующая
+            // размер в обработчике `load`, застревала на 300x150: к этому
+            // моменту `load` ребёнка уже отработал на старом размере).
+            let viewport_changed = (size.width - frames[i].viewport.width).abs() >= 0.01
+                || (size.height - frames[i].viewport.height).abs() >= 0.01;
+            if !viewport_changed && frames[i].interactive == state && frames[i].layout.is_some() {
                 continue;
             }
             if measurer.is_none() {
@@ -661,6 +667,15 @@ pub(crate) fn sync_frame_viewports(
             frames[i].viewport = size;
             frames[i].interactive = state;
             relaid[i] = true;
+            // FRAME-1: `resize` — событие ребёнку по HTML LS §7.4.4, счётчик
+            // страницы ([`crate::app::window_event`]'s `WindowEvent::Resized`)
+            // для его собственного вьюпорта. `update_viewport_size` внутри
+            // [`layout_frame_document`] уже обновила прочитанные значения
+            // (`window.innerWidth`/`innerHeight`) — событие лишь сообщает
+            // скрипту, что их стоит перечитать.
+            if viewport_changed && let Some(js) = frames[i].js.as_ref() {
+                js.fire_window_resize();
+            }
         }
     }
     rebuild_frame_display_lists(frames, &relaid);
