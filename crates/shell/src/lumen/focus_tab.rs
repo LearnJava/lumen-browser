@@ -1,6 +1,8 @@
 //! Tab / Shift+Tab sequential focus navigation on the page (FRAME-7 срез 2:
-//! Tab-driven focus change did not exist at all before this slice) and,
-//! since срез 4, WITHIN a frame's own document.
+//! Tab-driven focus change did not exist at all before this slice), WITHIN a
+//! frame's own document (срез 4), and — срез 5 — the page→frame ENTRY point:
+//! Tab landing on an `<iframe>` host now continues into the frame's own
+//! first/last focusable field instead of stopping on the host element.
 //!
 //! The order itself is pure DOM logic in [`crate::focus_nav`]; this module
 //! is the side-effecting glue that mirrors what a click does to
@@ -55,6 +57,26 @@ impl Lumen {
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
             js.notify_focus_changed(focus_idx);
         });
+        // FRAME-7 срез 5: `next` may itself be a top-level `<iframe>` host —
+        // per HTML Standard §6.6.6 the frame's OWN order is spliced in right
+        // there, so Tab must continue into it instead of stopping on the
+        // container. `before_frame` was cleared above (`None`), so
+        // `advance_frame_focus`'s `current = None` lookup lands on the
+        // frame's first (`forward`) or last (`!forward`) entry — the same
+        // "no current position → start of order" branch
+        // `focus_nav::next_focus_target_no_wrap` uses when a click hands it a
+        // frame with no prior focus. A frame with no focusable field at all
+        // leaves focus on the host, same as before this slice. Nested frames
+        // (a frame's own child `<iframe>`) are out of scope here — only the
+        // page's own `self.frames` entries with `parent_doc.is_none()` are a
+        // page-level host.
+        if let Some(idx) = self
+            .frames
+            .iter()
+            .position(|f| f.host == next && f.parent_doc.is_none())
+        {
+            self.advance_frame_focus(idx, forward);
+        }
         true
     }
 
@@ -67,9 +89,10 @@ impl Lumen {
     /// focusable node at all), so the caller (`keyboard.rs`'s Tab handler)
     /// falls back to [`Self::advance_page_focus`] to leave the frame —
     /// `self.focused_node` still addresses the `<iframe>` host at that point
-    /// (set by the click that entered the frame), so that call lands on
-    /// exactly the page-level sibling before/after it, same as it always did
-    /// for a frame with zero focusable fields.
+    /// (set by the click that entered the frame, or — срез 5 — by
+    /// `advance_page_focus` landing Tab on the host directly), so that call
+    /// lands on exactly the page-level sibling before/after it, same as it
+    /// always did for a frame with zero focusable fields.
     pub(crate) fn advance_frame_focus(&mut self, idx: usize, forward: bool) -> bool {
         let Some(handle) = self.frames.get(idx) else {
             return false;
