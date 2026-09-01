@@ -1207,6 +1207,43 @@ impl Lumen {
             }
         }
 
+        // FRAME-7 (remainder item 1): caret bar for a focused `<textarea>` —
+        // a shell-side overlay built straight from the (cached, still-valid)
+        // layout box tree, like the squiggle overlay above, rather than the
+        // `CompositorOverride` channel slice 1 used for a page `<input>`: see
+        // `forms::textarea_caret_rect`'s doc comment for why a textarea needs
+        // a different mechanism.
+        if let Some((nid, cursor, value)) = self.focused_textarea_caret()
+            && let Some(lb) = self.layout_box.as_ref()
+            && let Some(field_lb) = forms::find_layout_box(lb, nid)
+            && let Ok(font) = lumen_font::Font::parse(INTER_FONT)
+            && let Ok(m) = lumen_paint::FontMeasurer::new(&font)
+        {
+            let fs = field_lb.style.font_size;
+            let measure = |s: &str| -> f32 {
+                use lumen_layout::TextMeasurer;
+                s.chars().map(|c| m.char_width(c, fs)).sum()
+            };
+            let rect = forms::textarea_caret_rect(field_lb, &value, cursor, &measure);
+            // CSS UI L4 §6.3 `caret-color: auto` follows the text color —
+            // same resolution `emit_input_caret` applies for `<input>`.
+            let color = field_lb.style.caret_color.unwrap_or(field_lb.style.color);
+            let mut caret_cmd = vec![
+                lumen_paint::DisplayCommand::PushClipRect { rect: field_lb.rect },
+                lumen_paint::DisplayCommand::FillRect { rect, color },
+                lumen_paint::DisplayCommand::PopClip,
+            ];
+            if let Some(dl) = anim_dl.as_mut() {
+                dl.append(&mut caret_cmd);
+            } else {
+                let mut buf = page_buf
+                    .take()
+                    .unwrap_or_else(|| self.display_list.clone());
+                buf.append(&mut caret_cmd);
+                page_buf = Some(buf);
+            }
+        }
+
         // DS-15: Anonymous profile draws a thin red inset outline
         // around the whole window (design ref: `box-shadow: inset 0
         // 0 0 2px var(--accent)` on `.app-frame`). Appended last of

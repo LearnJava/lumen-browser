@@ -22,7 +22,7 @@
 2935	crates/driver/src/session.rs
 2850	crates/js/src/offscreen_canvas.rs
 2762	crates/network/src/h3/conn_connect.rs
+2701	crates/shell/src/forms.rs
 2637	crates/js/src/subtle_crypto.rs
-2552	crates/shell/src/forms.rs
 2365	crates/js/src/video_bindings.rs
 2067	crates/js/src/web_audio.rs
