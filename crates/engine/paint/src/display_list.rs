@@ -1971,6 +1971,31 @@ pub fn fold_overlay(overlay: &[DisplayCommand]) -> Vec<u64> {
     overlay.iter().map(hash_one_command).collect()
 }
 
+/// Как [`fold_overlay`], но переиспользует готовые дайджесты хвоста
+/// `overlay[start..]` вместо пересчёта `hash_one_command` по нему (BUG-405
+/// срез 57, п.85). `reuse` — `(start, digests)`, где `digests[i]` обязан
+/// быть дайджестом именно `overlay[start + i]`; это гарантирует вызывающий
+/// (shell), а не эта функция — здесь только проверка длины
+/// (`start + digests.len() == overlay.len()`), достаточная, чтобы не
+/// вылезти за границы, но НЕ доказывающая, что дайджесты относятся к тем
+/// же командам. Несовпадение длины (сокращённый overlay, промах кэша,
+/// смена состава билдеров) — тихий откат на полный [`fold_overlay`], не
+/// панику: единственный источник этого аргумента (`ChromeOverlayFrameCache`
+/// через [`RenderBackend::set_overlay_digest_reuse`](crate::backend::RenderBackend::set_overlay_digest_reuse))
+/// уже перепроверяет применимость на своей стороне перед вызовом.
+#[must_use]
+pub fn fold_overlay_with_reuse(overlay: &[DisplayCommand], reuse: Option<&(usize, Vec<u64>)>) -> Vec<u64> {
+    if let Some((start, tail_digests)) = reuse
+        && *start <= overlay.len()
+        && overlay.len() - start == tail_digests.len()
+    {
+        let mut out: Vec<u64> = overlay[..*start].iter().map(hash_one_command).collect();
+        out.extend_from_slice(tail_digests);
+        return out;
+    }
+    fold_overlay(overlay)
+}
+
 /// [`hash_display_list_dual`] с ГОТОВОЙ свёрткой content-части (BUG-405 срез 39).
 ///
 /// `folds` — результат [`fold_content_dual`] для этого же `content`/`skip`,

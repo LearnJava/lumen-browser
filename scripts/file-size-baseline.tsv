@@ -9,7 +9,7 @@
 9192	crates/engine/css-parser/src/parser.rs
 7955	crates/engine/paint/src/backends/femtovg_backend.rs
 5943	crates/engine/paint/src/renderer.rs
-5414	crates/engine/paint/src/display_list.rs
+5439	crates/engine/paint/src/display_list.rs
 5342	crates/engine/dom/src/lib.rs
 4917	crates/engine/paint/src/cpu_raster.rs
 4574	crates/core/src/ext.rs

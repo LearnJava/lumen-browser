@@ -177,6 +177,10 @@ impl RenderBackend for WgpuBackend {
         self.renderer.set_content_epoch(epoch);
     }
 
+    fn set_overlay_digest_reuse(&mut self, reuse: Option<(usize, Vec<u64>)>) {
+        self.renderer.set_overlay_digest_reuse(reuse);
+    }
+
     fn resize(&mut self, width: u32, height: u32) {
         self.renderer.resize(width, height);
     }

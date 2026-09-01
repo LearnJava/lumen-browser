@@ -176,7 +176,7 @@ use crate::frames::{apply_iframe_sandbox_gates, base_url_string, load_frame_sub_
 use crate::frames::{fetch_frame_subresources, frame_access_allowed};
 use crate::chrome_ui::{
     ChromeOverlayFrameCache, ContentAreaDetachment, chrome_overlay_cache_disabled,
-    chrome_overlay_segment,
+    chrome_overlay_digest_reuse_disabled, chrome_overlay_segment,
 };
 use crate::engine_bridge::{
     EngineCommit, EngineJsState, route_eval_js, route_query_js, route_task_js,

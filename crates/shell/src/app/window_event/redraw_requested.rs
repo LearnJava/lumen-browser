@@ -457,6 +457,13 @@ impl Lumen {
             pal.accent = entry.color;
         }
 
+        // BUG-405 срез 57 (п.85): (длина, дайджесты) chrome-сегмента, если он
+        // был спрайден в `overlay_buf` этим кадром — `Some` заполняется в
+        // блоке хрома ниже. Используется только когда после него до самого
+        // рендера в `overlay_buf` ничего не ДОПИСАНО (см. проверку рядом с
+        // `overlay_len` ниже) — то есть когда хром провably остаётся хвостом
+        // финального буфера, а не где-то в середине.
+        let mut chrome_tail_digests: Option<(usize, Vec<u64>)> = None;
         let (mut page_buf, mut overlay_buf): (Option<lumen_paint::DisplayList>, lumen_paint::DisplayList) =
             if self.find.is_open() {
                 let matches = self.current_matches();
@@ -569,7 +576,7 @@ impl Lumen {
             // (`chrome_dl_anim.is_some()`): that content differs every tick
             // by construction. `LUMEN_NO_CHROME_OVERLAY_CACHE=1` disables
             // reuse for A/B (docs/perf-method.md).
-            let (mut framed, strips_used, new_cache) = chrome_overlay_segment(
+            let (mut framed, strips_used, digests, new_cache) = chrome_overlay_segment(
                 chrome_dl,
                 host,
                 win_w,
@@ -583,6 +590,13 @@ impl Lumen {
             if let Some(c) = new_cache {
                 self.chrome_overlay_frame_cache = Some(c);
             }
+            // BUG-405 срез 57: `overlay_buf` пуст в этой точке (все ветки
+            // Step 6 выше либо оставляют его `Vec::new()`, либо кладут
+            // страницу в `page_buf`, а не в overlay) — `framed.len()`
+            // именно поэтому равен длине сегмента внутри финального буфера,
+            // не только внутри `framed` самого по себе.
+            chrome_tail_digests =
+                (!chrome_overlay_digest_reuse_disabled()).then_some((framed.len(), digests));
             framed.append(&mut overlay_buf);
             overlay_buf = framed;
         }
@@ -759,6 +773,17 @@ impl Lumen {
         if transition_done {
             self.view_transition = None;
         }
+
+        // BUG-405 срез 57: снимок длины ПОСЛЕ последнего builder-а, что
+        // ПРЕПЕНДИТ (`X.append(&mut overlay_buf); overlay_buf = X;` —
+        // хром/scrollbar/tooltip/picker/date-picker/select-dropdown/dialog/
+        // view-transition выше), ДО первого builder-а, что ДОПИСЫВАЕТ в
+        // конец (`overlay_buf.append(&mut Y)` — hint/console/network/
+        // privacy/inspector/… ниже). Срез 56 нашёл, что каждый препенд
+        // сохраняет хром хвостом накопленного буфера независимо от того,
+        // сколько их сработало — значит если длина не выросла к моменту
+        // рендера, хром остаётся хвостом и там же, а не где-то в середине.
+        let overlay_len_after_prepend_phase = overlay_buf.len();
 
         // Hint overlay: viewport-locked Р±РµР№РґР¶Рё kbd-РЅР°РІРёРіР°С†РёРё.
         // Р”РѕР±Р°РІР»СЏСЋС‚СЃСЏ РїРѕСЃР»РµРґРЅРёРјРё в†’ СЂРёСЃСѓСЋС‚СЃСЏ РїРѕРІРµСЂС… scrollbar/tooltip.
@@ -1263,6 +1288,16 @@ impl Lumen {
         // (СЃСЂРµР· 36) СЃС‡РёС‚Р°Р»Р° РµС‘ РёР·РЅСѓС‚СЂРё paint, Р·РґРµСЃСЊ РѕРЅР° РЅСѓР¶РЅР° СЂСЏРґРѕРј СЃ
         // СЂР°СЃРєР»Р°РґРєРѕР№ С…СЂРѕРјР°, С‡С‚РѕР±С‹ РІРёРґРµС‚СЊ РґРѕР»СЋ С…СЂРѕРјР° РІ overlay.
         let overlay_len = overlay_buf.len();
+        // BUG-405 срез 57 (п.85): хром остаётся хвостом `overlay_buf` ровно
+        // когда после снимка `overlay_len_after_prepend_phase` в буфер
+        // ничего не дописано — тогда его дайджесты, посчитанные вместе с
+        // `ChromeOverlayFrameCache` (при HIT — БЕЗ пересчёта), валидны для
+        // `overlay_buf[overlay_len - chrome_len..]` и рендереру не нужно
+        // хэшировать их заново в `fold_overlay`.
+        let overlay_digest_reuse = chrome_tail_digests.as_ref().and_then(|(chrome_len, digests)| {
+            (overlay_len == overlay_len_after_prepend_phase && *chrome_len <= overlay_len)
+                .then(|| (overlay_len - chrome_len, digests.clone()))
+        });
         // BUG-405 СЃСЂРµР· 34: СЃРЅРёРјРѕРє СЃС‡С‘С‚С‡РёРєР° РїРµС‡Р°С‚Рё РїРѕС„Р°Р·РЅРѕРіРѕ Р»РѕРіР° вЂ” РµРіРѕ
         // РґРµР»СЊС‚Р° Р·Р° РєР°РґСЂ Рё РµСЃС‚СЊ С†РµРЅР° РёРЅСЃС‚СЂСѓРјРµРЅС‚Р° РІРЅСѓС‚СЂРё `paint`.
         let log_nanos_at_paint = frame_log_nanos();
@@ -1305,6 +1340,7 @@ impl Lumen {
         };
         if let Some(r) = self.renderer.as_mut() {
             r.set_canvas_background(canvas_bg);
+            r.set_overlay_digest_reuse(overlay_digest_reuse);
             if let Some(combined) = split_combined {
                 // Split-view mode: combined DL with baked scroll; renderer gets 0,0.
                 r.set_page_offset(0.0, 0.0);
