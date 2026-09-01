@@ -6201,6 +6201,16 @@
        "note": "Оверлеи форм внутри фрейма: select, выбор цвета, даты и файла. Срез 18 сделал остальные элементы управления, а эти четыре печатают строку в stderr и ничего не делают — попап рисуется из layout_box СТРАНИЦЫ и адресуется голым NodeId, который внутри чужого документа ничего не значит. Координаты для отрисовки над страницей уже посчитаны — frames::frame_page_origin из среза 20. Проверять придётся юнит-тестом: снимок MCP оверлеев не содержит вовсе, что срез 20 доказал контролем на собственном тултипе страницы."
       }
      ]
+    },
+    {
+     "id": "FONTLOAD",
+     "title": "FONTLOAD: CSS Font Loading API (FontFace/FontFaceSet)",
+     "status": "planned",
+     "size": "L",
+     "note": "Дорожка «CSS Font Loading API» (владелец — P1), выделена из BUG-467 по правилу «нереализованная функциональность — задача ROADMAP, а не баг» (решение 2026-08-28). Глобальные конструкторы `FontFace`/`FontFaceSet`/`FontFaceSetLoadEvent` не определены вовсе (`grep` по `crates/js/src/dom.rs`/`v8_runtime.rs` — ноль совпадений вне комментариев), `document.fonts` (`_lumen_get_fonts()`, `crates/js/src/dom.rs:6770`) — статичный read-only снимок только с `length`/`item`/`entries`/`forEach`/`Symbol.iterator`, без `size`/`add`/`delete`/`clear`/`has`/`keys`/`load`/`ready`/`addEventListener`/`onloading*`. Найдено WPT-RUN-3 срез 2 (только `.ready`, вызывает TIMEOUT до регистрации первого `test()`), расширено срезом 17 (`css/css-font-loading`, 21 файл/0 из 79 сабтестов), срезами 26/31/33 (`css-ruby`/`css-fonts`/`css-sizing`, тот же `document.fonts.ready`/`.load` идиом). Полный перечень отсутствующих членов и упавших файлов — в bugs/BUG-467-OPEN.md",
+     "bugs": [
+      "BUG-467"
+     ]
     }
    ],
    "date": "36–48 мес"
@@ -12858,9 +12868,6 @@
   ],
   "js (`crates/js/src/dom.rs:6716` — `var customElements = {`, класса за литералом нет; `grep -n \"CustomElementRegistry\" crates/` — ноль)": [
    "BUG-890"
-  ],
-  "js (`crates/js/src/dom.rs:6770` — `_lumen_get_fonts()`)": [
-   "BUG-467"
   ],
   "js (`crates/js/src/dom.rs:6810` — `setTimeout`, `:6828` — `setInterval`, оба открываются `if (typeof fn !== 'function') return 0;`)": [
    "BUG-831"

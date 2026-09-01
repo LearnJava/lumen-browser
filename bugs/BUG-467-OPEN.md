@@ -1,6 +1,7 @@
 # BUG-467: CSS Font Loading API (FontFace/FontFaceSet/FontFaceSetLoadEvent) practically unimplemented
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → FONTLOAD)
+**Тип:** нереализованная функциональность, не дефект — ведётся как задача `FONTLOAD` в [ROADMAP.md](../ROADMAP.md) (решение 2026-08-28); P3 как баг не берёт
 **Дата:** 2026-08-02
 **Компонент:** js (`crates/js/src/dom.rs:6770` — `_lumen_get_fonts()`, CSS Fonts
 Module Level 4 §11 / CSS Font Loading Module)
