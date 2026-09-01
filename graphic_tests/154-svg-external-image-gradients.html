@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TEST-154: External SVG images via resvg (LIB-4)</title>
+    <style>
+        body {
+            background: #ff00ff;
+            width: 1024px;
+            height: 720px;
+            margin: 0;
+            padding: 0;
+        }
+        .__f {
+            background: white;
+            width: 1022px;
+            height: 718px;
+            margin: 1px;
+            padding: 20px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .row {
+            display: flex;
+            gap: 20px;
+        }
+        .col {
+            width: 202px;
+        }
+        .cell {
+            width: 200px;
+            height: 120px;
+            border: 1px solid #ccc;
+        }
+        .label {
+            margin-top: 6px;
+            font-size: 12px;
+            color: #666;
+        }
+        #img-cell {
+            width: 200px;
+            height: 120px;
+        }
+        #bg-cell {
+            background-image: url("154-radial-pattern.svg");
+            background-repeat: no-repeat;
+        }
+    </style>
+</head>
+<body>
+    <div class="__f">
+        <!-- LIB-4: the own SVG-to-DisplayList renderer draws zero gradients/
+             clipPath/pattern (ADR-027); both cells below must show colour
+             gradients, not flat/blank boxes. -->
+        <div class="row">
+            <div class="col">
+                <img id="img-cell" class="cell" alt="external SVG: linearGradient + clipPath"
+                     src="154-linear-gradient-clip.svg">
+                <div class="label">img: gradient+clip</div>
+            </div>
+            <div class="col">
+                <div id="bg-cell" class="cell"></div>
+                <div class="label">background: gradient+pattern</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

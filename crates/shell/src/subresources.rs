@@ -59,20 +59,13 @@ pub(crate) fn fetch_and_decode_background_images(
                 return None;
             }
         };
-        // RP-5: РІРЅРµС€РЅРёР№ SVG СЂРµРЅРґРµСЂРёС‚СЃСЏ С‡РµСЂРµР· layout/paint-pipeline, РєР°Рє РІ
-        // decode_image; РѕСЃС‚Р°Р»СЊРЅС‹Рµ С„РѕСЂРјР°С‚С‹ вЂ” РѕР±С‹С‡РЅС‹Рј СЂР°СЃС‚СЂРѕРІС‹Рј РґРµРєРѕРґРµСЂРѕРј.
-        let image = if lumen_image::is_svg(&bytes) {
-            match svg_image::rasterize_svg(&bytes, base, sink) {
-                Some(i) => i,
-                None => return None,
-            }
-        } else {
-            match lumen_image::decode_to(&bytes, target) {
-                Ok(i) => i,
-                Err(e) => {
-                    eprintln!("РќРµ РґРµРєРѕРґРёСЂСѓРµС‚СЃСЏ bg-РєР°СЂС‚РёРЅРєР° {url}: {e}");
-                    return None;
-                }
+        // LIB-4: SVG больше не особый случай — `decode_to` рисует его через
+        // resvg наравне с любым растровым форматом.
+        let image = match lumen_image::decode_to(&bytes, target) {
+            Ok(i) => i,
+            Err(e) => {
+                eprintln!("РќРµ РґРµРєРѕРґРёСЂСѓРµС‚СЃСЏ bg-РєР°СЂС‚РёРЅРєР° {url}: {e}");
+                return None;
             }
         };
         eprintln!(
@@ -417,21 +410,7 @@ pub(crate) fn decode_image(
         };
     }
 
-    // RP-5: РІРЅРµС€РЅРёР№ SVG РЅРµ РёРјРµРµС‚ СЂР°СЃС‚СЂРѕРІРѕРіРѕ РґРµРєРѕРґРµСЂР° вЂ” СЂРµРЅРґРµСЂРёРј СЂР°Р·РјРµС‚РєСѓ
-    // С‡РµСЂРµР· РѕР±С‹С‡РЅС‹Р№ layout/paint-pipeline РІ intrinsic-СЂР°Р·РјРµСЂРµ.
-    if lumen_image::is_svg(&bytes) {
-        return match svg_image::rasterize_svg(&bytes, base, sink) {
-            Some(image) => {
-                eprintln!(
-                    "Р—Р°РіСЂСѓР¶РµРЅР° SVG-РєР°СЂС‚РёРЅРєР°: {} ({}Г—{})",
-                    raw_src, image.width, image.height
-                );
-                Some(DecodedImage::Static(Arc::new(image)))
-            }
-            None => None,
-        };
-    }
-
+    // LIB-4: SVG больше не особый случай — `decode_to` рисует его через resvg.
     match lumen_image::decode_to(&bytes, target) {
         Ok(image) => {
             eprintln!(

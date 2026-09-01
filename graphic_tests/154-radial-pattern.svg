@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120">
+  <defs>
+    <radialGradient id="rg" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffff00"/>
+      <stop offset="1" stop-color="#008000"/>
+    </radialGradient>
+    <pattern id="pat" width="20" height="20" patternUnits="userSpaceOnUse">
+      <rect width="20" height="20" fill="url(#rg)"/>
+      <circle cx="10" cy="10" r="6" fill="#ffffff" opacity="0.5"/>
+    </pattern>
+  </defs>
+  <rect width="200" height="120" fill="url(#pat)"/>
+</svg>
