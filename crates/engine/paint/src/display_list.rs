@@ -5394,7 +5394,7 @@ pub(crate) use form_controls::is_hidden_empty_cell;
 use form_controls::meter_gauge_color;
 
 mod svg_text_decoration;
-use svg_text_decoration::{emit_svg_shape, emit_svg_text, push_text_decoration, walk_with_anim};
+use svg_text_decoration::{emit_svg_shape, emit_svg_shape_masked, emit_svg_text, push_text_decoration, walk_with_anim};
 
 #[cfg(test)]
 #[path = "display_list/tests/text_and_images.rs"]

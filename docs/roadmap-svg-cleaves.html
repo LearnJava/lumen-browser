@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-01",
  "counts": {
-  "open": 365,
-  "fixed": 523,
+  "open": 367,
+  "fixed": 524,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 888,
+ "total_bugs": 891,
  "phases": [
   {
    "id": "P0",
@@ -6083,16 +6083,23 @@
       {
        "id": "LIB-4",
        "title": "LIB-4: внешний SVG через resvg",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Внешний SVG (img src, favicon, background-image) через resvg. Сейчас он рисуется своим движком (RP-5, done) и потому без градиентов, clipPath, mask, filter, pattern, marker и вложенного image. Точка входа — lumen_image::is_svg и crates/shell/src/svg_image.rs. tiny-skia, на которой рисует resvg, уже в дереве (бэкенд cpu-render), новых транзитивных зависимостей почти нет. Растр кэшировать по паре (url, целевой размер): SVG перерастрируется при смене размера."
+       "note": "ЗАКРЫТ 2026-09-01 (ветка `p1-lib4-external-svg-resvg`): внешний SVG (`<img src>`, `background-image`) рисуется через `resvg`/`usvg` **0.44.0** (пин под `tiny-skia` 0.11.4 — та же версия, что уже несёт `lumen-paint`'s `cpu-render`), не своим SVG-to-DisplayList движком. Новый модуль `lumen_image::decode_svg` (`crates/engine/image/src/svg.rs`) дописан в `decode_raw`'s dispatch-по-сигнатуре сразу после AVIF — SVG стал обычным декодируемым форматом наравне с PNG/JPEG/GIF/WebP/AVIF, `decode`/`decode_raw` больше не возвращают `UnknownFormat` для него. Прежний путь — `crates/shell/src/svg_image.rs` (обёртка в HTML + прогон через layout/paint pipeline, RP-5) — удалён целиком, оба call site в `subresources.rs` теперь просто `decode_to`. Интринзик-размер резолвит `usvg::Tree::size()` (`width`/`height`/`viewBox`), при отсутствии обоих — CSS Images §5.1 дефолт 300×150, а не `usvg`'s собственный no-hint дефолт 100×100 (это дефолт *вьюпорта* из SVG-спеки, другой вопрос). `raster-images` включена (вложенный `<image>`), `text`/`system-fonts` выключены (детерминизм графгейта важнее рендера текста внутри SVG — кросс-машинная нестабильность через `fontdb`). 5 unit-тестов в `svg.rs`, включая регрессионный на реальный градиент (свой движок рисует ноль градиентов, ADR-027). Графтест `graphic_tests/154-svg-external-image-gradients.html` (linearGradient+clipPath через `<img src>`, radialGradient+pattern через `background-image`) — 0.19% против Edge (font-parity debtor на подписях), решающий кадр снят на профиле `dev-release` (`LUMEN_PROFILE=release` в `run.py` — стале от 2026-08-22, до этой задачи, и на нём та же страница рисует сплошной чёрный: старый own-engine путь не умеет `url(#...)`-заливки и не имеет фолбэка)."
       },
       {
        "id": "LIB-5",
-       "title": "LIB-5: inline-SVG — модель красок из usvg",
-       "status": "planned",
+       "title": "LIB-5: inline-SVG — модель красок из usvg (градиенты)",
+       "status": "done",
        "size": "L",
-       "note": "Inline-SVG: взять у usvg модель путей, красок и градиентов, а дерево, каскад и хит-тест оставить своими — узлы обязаны жить в общем DOM ради CSS и JS, отдать поддерево целиком в resvg нельзя. Закрывает отсутствие градиентов и масок в crates/engine/layout/src/box_tree/svg.rs и crates/engine/paint/src/svg_path.rs. НЕ закрывает BUG-685 (парсер без foreign content), BUG-830 (createElementNS), BUG-889 (SVG из парсера — HTMLUnknownElement), BUG-806 (SMIL) — это звенья парсера и DOM, наша работа."
+       "note": "ЗАКРЫТ (частично, срез «градиенты»; масок нет — вынесены в LIB-9) 2026-09-01 (ветка `p1-lib5-inline-svg-paint-model`): `<linearGradient>`/`<radialGradient>` для `fill`/`stroke=\"url(#id)\"` на живых SVG-элементах — дерево/каскад/хит-тест остались свои, поддерево в resvg не отдавалось. Постановка «взять у usvg модель путей/красок/градиентов» на практике не сводится к вызову API: **весь публичный API `usvg` 0.44 (`Path`/`Fill`/`Stroke`/`LinearGradient`/`RadialGradient`/`Stop`/`Group`/`Tree`) имеет `pub(crate)`-поля и только `pub(crate)`-конструкторы** — единственный вход это `Tree::from_str`/`from_data`, разбор целого SVG-XML через `roxmltree`; своих DOM/каскад-данных туда не подать. Взято архитектурно: своя пара типов `SvgPaint::Gradient(Arc<SvgGradientDef>)`/`SvgGradientDef::{Linear,Radial}`, а не форма CSS `ParsedGradient` (её `RadialSize` — только keyword-биннинг closest-side/farthest-corner, явный радиус «падает на farthest-corner» ещё до этой задачи — не подходит explicit SVG `r`) — общий для обоих слой это только терминал: `GradientStop` + команды `DrawLinearGradient`/`DrawRadialGradient`, уже отрисованные во всех трёх бэкендах под CSS-градиенты. Резолвинг `url(#id)` — двухфазный: каскад (`apply/paint.rs`, доступа к `Document` нет) кладёт сырой id в `SvgPaint::Url`, `box_tree/svg.rs::process_svg_node` (доступ к `Document` есть) резолвит по `doc.find_by_id` и заменяет на `SvgPaint::Gradient` до создания `LayoutBox` — потомки, наследующие paint без своего `fill`, наследуют уже резолвленный градиент как обычное каскадное значение. Заливка — `PushClipRect`/`PushClipRoundedRect`(rect)/`PushClipPath::Ellipse`(circle/ellipse)/`PushClipPath::Polygon`(path, только ПЕРВЫЙ контур — граница) + `DrawLinearGradient`/`DrawRadialGradient` внутри — ноль нового кода в рендер-бэкендах, чистое переиспользование. `objectBoundingBox` (дефолт) точный; `userSpaceOnUse` — best-effort через уже посчитанную `svg_paint_matrix` (не полноценный маппинг вложенных трансформов). Найдена и обойдена независимая ловушка: HTML5-токенизатор лоуэркейсит ВСЕ имена тегов (`html-parser/src/tokenizer.rs`), поэтому `<linearGradient>`/`<radialGradient>` в DOM — `lineargradient`/`radialgradient`; и `<stop/>` — не void-элемент, второй `<stop/>` в самозакрывающемся списке становится DOM-ребёнком первого (тот же класс ловушки, что `<rect/>`/`<use/>` в этом же файле) — `collect_gradient_stops` поэтому рекурсивно собирает `<stop>` по всему поддереву, а не только прямых детей. `stop-color`/`stop-opacity`/`offset` читаются как DOM-атрибуты напрямую (не через каскад — `<stop>` внутри `<defs>` никогда не получает `LayoutBox`/`compute_style`). Тест `graphic_tests/155-svg-inline-gradients.html` (6 панелей), `run.py` TESTS + `COVERAGE.md`; `SAVE_CPU_SNAPSHOTS=1`-прогон и `dump_golden.py` — нулевой дифф на существующих 55/12 эталонах. **НЕ закрыто этим срезом**: SVG `<mask>` — вынесено в LIB-9 (инфраструктура `PushMaskLayer`/`PopMaskLayer` в display_list.rs уже полностью реализована во всех трёх бэкендах, но НИ ОДИН emit-путь её не строит — мёртвый, но готовый код); `clipPath`/`pattern`/`marker`/`filter` — не входили в постановку этого ряда буквально («градиентов и масок»), пропуск честный, не регрессия; градиент на stroke падает на плоский цвет первого stop'а (клип по контуру ШТРИХА, а не заливки, требует отдельной геометрии — caps/joins/dashes); путь с несколькими subpath (`M…Z M…Z`, дырчатые фигуры) клипуется только по первому контуру — `ResolvedClipShape::Polygon` несёт один `Vec<(f32,f32)>`, не список контуров. НЕ закрывает (как и раньше) BUG-685 (парсер без foreign content), BUG-830 (createElementNS), BUG-889 (SVG из парсера — HTMLUnknownElement), BUG-806 (SMIL) — звенья парсера и DOM."
+      },
+      {
+       "id": "LIB-9",
+       "title": "LIB-9: SVG mask через PushMaskLayer",
+       "status": "done",
+       "size": "M",
+       "note": "ЗАКРЫТ (частично, срез «SvgShape + CPU-путь»; wgpu-рендер немаскирован — вынесено в BUG-936) 2026-09-01 (ветка `p1-lib9-svg-mask`): остаток LIB-5 — SVG `<mask>` (`mask=\"url(#id)\"`/CSS `mask:` на живом SVG-shape-элементе rect/circle/ellipse/line/path/polygon/polyline, ссылающемся на `<mask>` с произвольным содержимым). Постановка «инфраструктура PushMaskLayer/PopMaskLayer уже целиком реализована во всех трёх бэкендах» оказалась НЕВЕРНОЙ при проверке: femtovg имел лишь scissor-заглушку, cpu_raster.rs не обрабатывал команды вовсе (падали в `_ => {}`) — реализовано по-настоящему только в wgpu. Взято: DOM-резолвинг в новом поле `BoxKind::SvgShape::svg_mask: Option<Box<SvgMaskContent>>` (`box_tree/svg.rs::resolve_svg_mask`, тот же паттерн, что LIB-5 для градиентов; поле — не на `LayoutBox`/`ComputedStyle`, чтобы не трогать сотню site конструкторов и не создавать цикл `style`↔`box_tree`), layout-проброс координат маски через `lay_out_svg_element_position`, paint-эмиссия изолирующего `PushOpacity{1.0}` + собственная заливка формы + `PushMaskLayer`/контент маски/`PopMaskLayer`/`PopOpacity` (`svg_text_decoration.rs::emit_svg_shape_masked`), presentational-атрибут `mask` добавлен в `apply_svg_presentational_hints`, `mask-type` читается с `<mask>`-элемента (luminance по умолчанию per SVG Masking L1 §8.3, а не alpha от `match-source`). `cpu_raster.rs` получил настоящую реализацию (`LayerComposite::MaskLayer`, читает alpha/luminance прямо из отрендеренного слоя без MaskSpec-заглушки) — обязательное условие CPU-снапшот-гейта, подтверждено визуально (`--screenshot` совпадает с Edge на всех 6 панелях `graphic_tests/156-svg-mask.html`). **НЕ закрыто**: (1) wgpu живое окно рендерит БЕЗ видимого эффекта маски несмотря на верный display-list и рабочий CPU-путь — найден, диагностирован (backend-независимо, Vulkan и DX12 идентичны), не устранён, заведён [BUG-936](bugs/BUG-936-OPEN.md), тест зарегистрирован в `KNOWN_DEBTORS` (10.02%); (2) `mask` на `<g>`-группах вне области (падает на прежнее поведение — не регрессия); (3) femtovg остаётся scissor-заглушкой (ADR-017: фолбэк, не дефолт). 6 unit-тестов резолвинга (`svg_layout.rs`), полный `graphic_tests/run.py --continue-on-fail` — 0 регрессий (дельта vs main пуста)."
       },
       {
        "id": "LIB-6",
@@ -6113,7 +6120,7 @@
        "title": "LIB-8: сверка документации после замен",
        "status": "planned",
        "size": "S",
-       "note": "Сверка документации одним заходом после LIB-5: CAPABILITIES.md (SVG и текст), subsystems/font.md и subsystems/paint.md (где теперь проходит граница со внешним кодом), CLAUDE.md (Known gotchas — убрать устаревшее, добавить «шейпинг = rustybuzz, свой gsub/gpos удалён»), docs/plan/tech-stack.md §5 (сверка с фактом), SYMBOLS.md через scripts/gen_symbols.py. Отдельный ADR на замену, условия которой разошлись с ADR-027."
+       "note": "Сверка документации одним заходом после LIB-5 И LIB-9 (SVG-масок): CAPABILITIES.md (SVG и текст), subsystems/font.md и subsystems/paint.md (где теперь проходит граница со внешним кодом), CLAUDE.md (Known gotchas — убрать устаревшее, добавить «шейпинг = rustybuzz, свой gsub/gpos удалён»), docs/plan/tech-stack.md §5 (сверка с фактом), SYMBOLS.md через scripts/gen_symbols.py. Отдельный ADR на замену, условия которой разошлись с ADR-027."
       }
      ]
     },
@@ -6320,16 +6327,9 @@
    "date": null,
    "debtor": true
   },
-  "BUG-288": {
-   "status": "open",
-   "title": "TEST-14 (overflow, часть BUG-287): overflow-axis coercion (BUG-020, CSS Overflow L3 §2.1 — один явный не-`visible` axis коэрсит второй `visible` в `auto`) корре…",
-   "component": "paint (`emit_scrollbars`) / test-triage",
-   "date": null,
-   "debtor": true
-  },
   "BUG-290": {
    "status": "open",
-   "title": "TEST-145 (writing-mode) residual 3.68% после BUG-289: (1) font-parity Inter vs Edge sans (rule 3, тот же класс что BUG-100/TEST-58); (2) `text-orientation: upri…",
+   "title": "TEST-145 (writing-mode) residual 3.68%→**3.39%** (ратчет, ревизия P3 2026-09-01, два чистых прогона) после BUG-289: (1) font-parity Inter vs Edge sans (rule 3,…",
    "component": "paint/layout (font metrics; `upright` per-glyph advance)",
    "date": null,
    "debtor": true
@@ -8769,6 +8769,27 @@
    "component": "paint (`crates/engine/paint/src/renderer.rs` — wgpu `render_impl`, `PushScrollLayer`/`FillRect`/`sync_scissor_to_stack`/`bind_and_draw!`/`run_draw_ops!`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-934": {
+   "status": "open",
+   "title": "`AutomationCommand::Click`/`::Type` резолвят цель и зовут `handle_click_at` напрямую — эта функция (~700 строк, `click.rs`) нигде не вызывает `point_over_chrome…",
+   "component": "shell (`crates/shell/src/lumen/automation.rs::resolve_automation_target`, `crates/shell/src/lumen/click.rs::handle_click_at`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-935": {
+   "status": "open",
+   "title": "ADR-016 M4-инкрементальный путь для rAF-DOM-мутаций (`try_relayout_raf_incremental`) не выполняется на дефолтной сборке: `&&`-короткое замыкание в `relayout_raf…",
+   "component": "shell (`crates/shell/src/relayout.rs` — `relayout_raf_dirty`/`relayout_raf_dirty_readback`)",
+   "date": null,
+   "debtor": true
+  },
+  "BUG-936": {
+   "status": "open",
+   "title": "`PushMaskLayer`/`PopMaskLayer` (CSS Masking L1 §5) wgpu-композит не даёт видимого эффекта маски в живом окне — контент рендерится немаскированным, хотя display-…",
+   "component": "paint (`crates/engine/paint/src/renderer.rs` — `MaskLayerComposite`)",
+   "date": null,
+   "debtor": true
   },
   "BUG-001": {
    "status": "fixed",
@@ -12423,6 +12444,13 @@
    "component": "js (`crates/js/src/dom.rs`)",
    "date": "2026-09-01",
    "debtor": false
+  },
+  "BUG-288": {
+   "status": "fixed",
+   "title": "TEST-14 (overflow, часть BUG-287): overflow-axis coercion (BUG-020, CSS Overflow L3 §2.1) корректно клипует контент, но `auto` — scrollable-значение, и `emit_sc…",
+   "component": "paint (`emit_scrollbars`) / test-triage",
+   "date": "2026-09-01",
+   "debtor": true
   }
  },
  "unlinked": {
@@ -13603,6 +13631,9 @@
   "paint (`crates/engine/paint/src/cpu_raster.rs` — `gaussian_blur`: `radius` не ограничен размером слоя; `box_blur_h`/`box_blur_v` — прайминг аккумулятора `for i in -r..=r`, O(r) на строку/столбец)": [
    "BUG-850"
   ],
+  "paint (`crates/engine/paint/src/renderer.rs` — `MaskLayerComposite`)": [
+   "BUG-936"
+  ],
   "paint (`crates/engine/paint/src/renderer.rs` — wgpu `render_impl`, `PushScrollLayer`/`FillRect`/`sync_scissor_to_stack`/`bind_and_draw!`/`run_draw_ops!`)": [
    "BUG-931"
   ],
@@ -13704,6 +13735,9 @@
   "shell (`crates/shell/src/chrome_ui.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`, `app/window_event/mouse_input.rs`)": [
    "BUG-461"
   ],
+  "shell (`crates/shell/src/lumen/automation.rs::resolve_automation_target`, `crates/shell/src/lumen/click.rs::handle_click_at`)": [
+   "BUG-934"
+  ],
   "shell (`crates/shell/src/lumen/click.rs`, ветка `FormClickAction::ToggleRadio` → `crates/shell/src/forms.rs::toggle_checkbox`)": [
    "BUG-927"
   ],
@@ -13772,6 +13806,9 @@
   ],
   "shell (`crates/shell/src/platform/audio_player.rs` — `PlatformAudioPlayer::load`), js (`crates/js/src/audio_element.rs` — опрос загрузки в `AUDIO_ELEMENT_SHIM`)": [
    "BUG-799"
+  ],
+  "shell (`crates/shell/src/relayout.rs` — `relayout_raf_dirty`/`relayout_raf_dirty_readback`)": [
+   "BUG-935"
   ],
   "shell (`crates/shell/src/resource_base.rs` — `ResourceBase::resolve`/`resolve_str` для `ResourceBase::File`)": [
    "BUG-440"

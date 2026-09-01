@@ -108,6 +108,22 @@ enum LayerComposite {
     /// and multiplied into the layer's alpha before it is composited down with
     /// plain `SourceOver`.
     Mask(MaskSpec),
+    /// LIB-9 — CSS Masking L1 §5 `PushMaskLayer`/`PopMaskLayer`: an SVG
+    /// `<mask>` element's *content* renders into the layer (not the masked
+    /// element's own content, unlike every other variant above); on close it
+    /// is read as a per-pixel mask value (`mode`) and multiplied into the
+    /// layer **below** in place, within `rect` only — the below layer already
+    /// holds the masked shape's own paint (emitted before `PushMaskLayer`, at
+    /// the same level via the caller's isolating `PushOpacity`). See
+    /// `composite_mask_layer_rendered`.
+    MaskLayer {
+        /// Border-box of the masked element, in page px. Pixels outside it
+        /// are left unmodified.
+        rect: Rect,
+        /// Alpha (mask layer's own alpha channel) or luminance (weighted RGB
+        /// × alpha) — mirrors the wgpu `MASK_LAYER_SHADER_SRC` `fs_alpha`/`fs_luma`.
+        mode: crate::display_list::MaskMode,
+    },
     /// BUG-140 — `clip-path` basic-shape (`PushClipPath`/`PopClip`). The
     /// element's subtree renders into a transparent full-size layer (page
     /// coordinates, pre-transform — the command is emitted inside the
@@ -649,6 +665,18 @@ pub(crate) fn rasterize_cpu(
                     repeating: *repeating,
                 }));
             }
+            // LIB-9 — SVG `<mask>` element content (`PushMaskLayer`/
+            // `PopMaskLayer`, CSS Masking L1 §5). Opens a transparent layer for
+            // the mask's *content* — the caller emits the masked shape's own
+            // paint BEFORE this command (into the layer below, opened by its
+            // own isolating `PushOpacity`), so `PopMaskLayer` reads down into
+            // already-painted content rather than up into a copy of it.
+            DisplayCommand::PushMaskLayer { rect, mode } => {
+                let layer = tiny_skia::Pixmap::new(width, height)
+                    .ok_or("Failed to create mask-content layer")?;
+                layers.push(CpuLayer::new(layer));
+                layer_ops.push(LayerComposite::MaskLayer { rect: *rect, mode: *mode });
+            }
             // Close the current off-screen group (opacity, transform, blend, filter
             // or mask) and composite it onto the layer below per its recorded op.
             // The pops share the logic because the emitter guarantees balanced,
@@ -658,6 +686,7 @@ pub(crate) fn rasterize_cpu(
             | DisplayCommand::PopTransform
             | DisplayCommand::PopBlendMode
             | DisplayCommand::PopFilter
+            | DisplayCommand::PopMaskLayer
             | DisplayCommand::PopMask => {
                 if let (Some(top), Some(op)) = (layers.pop(), layer_ops.pop()) {
                     // BUG-424: restore the document-space clip the matching
@@ -794,6 +823,13 @@ fn close_layer(dst: &mut CpuLayer, src: &CpuLayer, op: &LayerComposite) {
         LayerComposite::Mask(spec) => {
             composite_mask_layer(&mut dst.pm, &src.pm, spec, src_dirty);
             dst.mark(src_dirty);
+        }
+        // LIB-9: unlike every other arm, `dst` already holds the content to
+        // keep (the masked shape's own paint) — `src` (the mask's rendered
+        // content) is only read, never copied onto `dst`, and no new region
+        // of `dst` becomes non-transparent, so `dst.mark` is not needed.
+        LayerComposite::MaskLayer { rect, mode } => {
+            composite_mask_layer_rendered(&mut dst.pm, &src.pm, *rect, *mode);
         }
         LayerComposite::ClipShape(shape) => {
             composite_clip_shape_layer(&mut dst.pm, &src.pm, shape, src_dirty);
@@ -1085,6 +1121,60 @@ fn render_mask(spec: &MaskSpec, width: u32, height: u32) -> Option<tiny_skia::Pi
 /// the full-canvas `mask`, so each crop pixel is multiplied by exactly the same
 /// mask alpha as in the pre-crop full-canvas pass. The crop must lie inside the
 /// mask (guaranteed by [`crop_dirty_window`]'s canvas clamp).
+/// LIB-9 — `PopMaskLayer`'s composite. Multiplies `dst`'s own premultiplied
+/// RGBA in place by a per-pixel mask value read from `mask_src` (the
+/// just-closed mask-content layer), within `rect` only (CSS Masking L1 §5 —
+/// pixels outside `rect` are unaffected). Unlike [`composite_mask_layer`]
+/// (which copies a rendered `src` crop *onto* `dst`), `dst` already holds the
+/// masked shape's own paint (rendered before `PushMaskLayer`, into the same
+/// layer via the emitter's isolating `PushOpacity`) — this only attenuates it
+/// in place; `mask_src` itself is discarded afterwards.
+///
+/// `mode` mirrors the wgpu `MASK_LAYER_SHADER_SRC`'s `fs_alpha`/`fs_luma`:
+/// `Alpha` reads `mask_src`'s alpha channel directly (same read
+/// `multiply_alpha_by_mask` does for the image/gradient mask path);
+/// `Luminance` computes `0.2126·R + 0.7152·G + 0.0722·B` on `mask_src`'s
+/// **premultiplied** bytes — since premultiplication is a uniform per-channel
+/// scalar, this linear combination already equals `luma(unpremultiplied)·alpha`
+/// without unpremultiplying first (same trick `mask_stops_for_mode`,
+/// `background_mask.rs`, uses on gradient stops).
+fn composite_mask_layer_rendered(
+    dst: &mut tiny_skia::Pixmap,
+    mask_src: &tiny_skia::Pixmap,
+    rect: Rect,
+    mode: crate::display_list::MaskMode,
+) {
+    let (w, h) = (dst.width() as i32, dst.height() as i32);
+    let x0 = (rect.x.floor() as i32).clamp(0, w);
+    let y0 = (rect.y.floor() as i32).clamp(0, h);
+    let x1 = ((rect.x + rect.width).ceil() as i32).clamp(0, w);
+    let y1 = ((rect.y + rect.height).ceil() as i32).clamp(0, h);
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    let stride = w as usize * 4;
+    let md = mask_src.data();
+    let dd = dst.data_mut();
+    for y in y0..y1 {
+        let row = y as usize * stride;
+        for x in x0..x1 {
+            let i = row + x as usize * 4;
+            let value: u32 = match mode {
+                crate::display_list::MaskMode::Alpha => u32::from(md[i + 3]),
+                crate::display_list::MaskMode::Luminance => {
+                    let r = f32::from(md[i]);
+                    let g = f32::from(md[i + 1]);
+                    let b = f32::from(md[i + 2]);
+                    (0.2126 * r + 0.7152 * g + 0.0722 * b).round().clamp(0.0, 255.0) as u32
+                }
+            };
+            for ch in &mut dd[i..i + 4] {
+                *ch = ((u32::from(*ch) * value + 127) / 255) as u8;
+            }
+        }
+    }
+}
+
 fn multiply_alpha_by_mask(
     layer: &mut tiny_skia::Pixmap,
     mask: &tiny_skia::Pixmap,

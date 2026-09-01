@@ -422,8 +422,11 @@ pub(crate) fn emit_box_self(
                 out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
             }
         }
-        BoxKind::SvgShape { shape, .. } => {
-            emit_svg_shape(b, shape, out);
+        BoxKind::SvgShape { shape, svg_mask, .. } => {
+            match svg_mask.as_deref() {
+                Some(mask) => emit_svg_shape_masked(b, shape, mask, out, dpr, sel),
+                None => emit_svg_shape(b, shape, out),
+            }
         }
         BoxKind::SvgText { text, text_anchor, dominant_baseline, baseline_shift, .. } => {
             emit_svg_text(b, text, *text_anchor, *dominant_baseline, *baseline_shift, out);
@@ -1282,10 +1285,13 @@ pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&
             }
             out.push(DisplayCommand::PopClip);
         }
-        BoxKind::SvgShape { shape, .. } => {
+        BoxKind::SvgShape { shape, svg_mask, .. } => {
             // CSS: fill, stroke, stroke-width — P4 wires ComputedStyle svg_fill/svg_stroke fields.
             // Default SVG presentation: fill=black (SVG spec §11.2), no stroke.
-            emit_svg_shape(b, shape, out);
+            match svg_mask.as_deref() {
+                Some(mask) => emit_svg_shape_masked(b, shape, mask, out, dpr, sel),
+                None => emit_svg_shape(b, shape, out),
+            }
         }
         BoxKind::SvgText { text, text_anchor, dominant_baseline, baseline_shift, .. } => {
             // SVG text element: emit DrawText command with proper positioning.

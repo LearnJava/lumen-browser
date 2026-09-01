@@ -141,6 +141,50 @@ fn emit_svg_gradient_fill(
     cmds.push(DisplayCommand::PopClip);
 }
 
+/// LIB-9 — emits `shape`'s own paint, then applies `mask` (a resolved SVG
+/// `<mask>` element, `lumen_layout::SvgMaskContent`) as a `PushMaskLayer`/
+/// `PopMaskLayer` alpha/luminance mask (CSS Masking L1 §5).
+///
+/// Order matters and is the opposite of `PushMaskImage`/`PushMask*Gradient`
+/// (`background_mask.rs`): those wrap the masked element's *own* content
+/// between push/pop and composite it against a statically-known
+/// alpha/gradient source. `PushMaskLayer`/`PopMaskLayer` instead renders the
+/// *mask's* content between push/pop, in its own offscreen layer, and
+/// `PopMaskLayer` composites it against whatever was rendered at the level
+/// **below** it — so the shape's own paint must come first, at that lower
+/// level (see `PushMaskLayer`'s doc comment, `display_list.rs`).
+///
+/// The isolating `PushOpacity{alpha:1.0}`/`PopOpacity` wrapper mirrors
+/// `emit_background_image`'s `needs_isolation` (BUG-277 slice 2): without a
+/// level of its own, a masked shape with no ancestor stacking context sits
+/// at `from_level == 1`, and the wgpu composite's `from_level < 2` guard
+/// (`renderer.rs`) silently skips it.
+pub(crate) fn emit_svg_shape_masked(
+    b: &LayoutBox,
+    shape: &SvgShapeKind,
+    mask: &lumen_layout::SvgMaskContent,
+    out: &mut DisplayList,
+    dpr: f32,
+    sel: Option<&SelectionHighlight>,
+) {
+    // `lumen_layout::MaskMode` and `display_list::MaskMode` are distinct types
+    // (the paint crate's own copy predates `lumen-layout`'s CSS `mask-mode`
+    // one) — same two variants, translated by hand rather than merged, to
+    // keep this a self-contained LIB-9 change.
+    let mode = match mask.mode {
+        lumen_layout::MaskMode::Alpha => MaskMode::Alpha,
+        lumen_layout::MaskMode::Luminance => MaskMode::Luminance,
+    };
+    out.push(DisplayCommand::PushOpacity { alpha: 1.0, bounds: Some(b.rect) });
+    emit_svg_shape(b, shape, out);
+    out.push(DisplayCommand::PushMaskLayer { rect: b.rect, mode });
+    for content_box in &mask.content {
+        walk(content_box, out, dpr, sel);
+    }
+    out.push(DisplayCommand::PopMaskLayer);
+    out.push(DisplayCommand::PopOpacity);
+}
+
 /// Emits paint commands for a single SVG shape using its pre-computed document-space rect.
 /// Reads `svg_fill` / `svg_stroke` / `svg_fill_opacity` / `svg_stroke_opacity` /
 /// `svg_stroke_width` from `ComputedStyle` — wired by P4 per SVG §11.2/11.3/11.4.
