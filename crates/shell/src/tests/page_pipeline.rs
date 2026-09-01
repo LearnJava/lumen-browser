@@ -1118,6 +1118,34 @@ fn computed_style_in_operator_reports_known_properties() {
     assert_eq!(probe_attr(&page, "data-float-val"), "left");
 }
 
+/// BUG-473: `CSSStyleDeclaration.cssText`/`getPropertyValue` used to
+/// serialize declarations by naive `k+': '+v` concatenation — no trailing
+/// `;`, no TRBL-longhand-to-shorthand collapsing, and (via the old raw-text
+/// `cssText` getter) no normalization of a `var()` value's surrounding
+/// whitespace. All three are exercised through one inline `style` attribute.
+#[cfg(feature = "v8")]
+#[test]
+fn inline_style_serialization_collapses_shorthand_and_normalizes_text() {
+    let page = parse_and_layout_for_test(
+        "<html><body><div id=t style='margin-top:10px;margin-right:10px;\
+         margin-bottom:10px;margin-left:10px;left:10px;font-size:var( --a )'>t</div>\
+         <script>var e=document.getElementById('t');\
+         document.documentElement.setAttribute('data-css-text',e.style.cssText);\
+         document.documentElement.setAttribute('data-margin',e.style.getPropertyValue('margin'));\
+         </script></body></html>",
+    );
+    let css_text = probe_attr(&page, "data-css-text");
+    assert!(
+        css_text.contains("margin: 10px;"),
+        "shorthand not collapsed: {css_text}"
+    );
+    assert!(
+        css_text.ends_with("font-size: var( --a );"),
+        "trailing `;` missing or var() whitespace not preserved: {css_text}"
+    );
+    assert_eq!(probe_attr(&page, "data-margin"), "10px");
+}
+
 /// A `<style>` a script inserts still reaches the FIRST cascade: the CSS is
 /// collected before the scripts now, so the pipeline has to notice the change
 /// and rebuild. Asserted on the final layout, not on JS.
