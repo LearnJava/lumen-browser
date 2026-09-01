@@ -1,6 +1,14 @@
+> **Дубль.** Тот же гэп двумя срезами позже описан отдельно в
+> [BUG-464](BUG-464-FIXED.md) (заведён тоже 2026-08-02, WPT-RUN-3 срез 2,
+> `css/CSS2`). По конвенции выживает первый по дате — этот файл оставлен
+> только как след находки и масштаба (срезы 11/31 расширили список файлов на
+> `css-overflow`/`css-transforms`/`css-flexbox`), разбор фикса и оба списка
+> затронутых WPT-файлов — в BUG-464. Починено 2026-09-01 (P3), тем же
+> коммитом.
+
 # BUG-477: `document.elementFromPoint`/`elementsFromPoint` not implemented — no point-based hit-testing API on the JS side
 
-**Статус:** OPEN
+**Статус:** DUPLICATE → [BUG-464](BUG-464-FIXED.md) (закрыт 2026-09-01)
 **Дата:** 2026-08-02
 **Компонент:** js (`crates/js/src/dom.rs`)
 **Найден:** WPT-RUN-3 срез 4 (`ROADMAP.md`) — массовый прогон `css/cssom-view`

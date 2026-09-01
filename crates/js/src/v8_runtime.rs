@@ -242,6 +242,7 @@ impl V8JsRuntime {
             let dom_touched = Arc::clone(&self.dom_touched);
             let raf_pending = Arc::clone(&self.raf_pending);
             let layout_rects = Arc::clone(&self.layout_rects);
+            let hit_test_tree = Arc::clone(&self.hit_test_tree);
             let viewport_size = Arc::clone(&self.viewport_size);
             let lazy_img_requests = Arc::clone(&self.lazy_img_requests);
             let scroll_states = Arc::clone(&self.scroll_states);
@@ -367,6 +368,8 @@ impl V8JsRuntime {
                 Arc::clone(&layout_rects),
                 Arc::clone(&viewport_size),
             )?;
+
+            install::install_point_hit_test(scope, ctx, store, Arc::clone(&hit_test_tree))?;
 
             install::install_match_media(scope, ctx, store)?;
 

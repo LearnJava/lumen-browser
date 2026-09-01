@@ -152,6 +152,9 @@ mod v8_matchmedia;
 mod v8_elem_geometry_scroll;
 
 #[cfg(feature = "v8-backend")]
+mod v8_point_hit_test;
+
+#[cfg(feature = "v8-backend")]
 mod v8_lazy_image_io;
 
 #[cfg(feature = "v8-backend")]

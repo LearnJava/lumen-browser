@@ -656,6 +656,7 @@ impl Lumen {
                 && let Some(lb_ref) = self.layout_box.as_ref()
             {
                 let rects = collect_layout_rects(lb_ref);
+                let hit_test_tree = Arc::new(lb_ref.clone());
                 let styles = collect_computed_styles(lb_ref);
                 let customs = collect_custom_properties(lb_ref);
                 let (vw, vh) = (viewport.width, viewport.height);
@@ -669,6 +670,7 @@ impl Lumen {
                     .collect();
                 lazy_reqs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                     js.update_layout_rects(rects);
+                    js.update_hit_test_tree(hit_test_tree);
                     js.update_computed_styles(styles);
                     js.update_custom_properties(customs);
                     js.update_viewport_size(vw, vh);

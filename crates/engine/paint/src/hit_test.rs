@@ -78,6 +78,25 @@ pub fn hit_test(point: Point, root: &LayoutBox) -> Option<HitTestResult> {
     hit_test_box(point, root)
 }
 
+/// Полный hit-тест: все боксы, чей rect содержит точку, в paint-порядке
+/// (топ-слой первый). Бэкенд `document.elementsFromPoint` (CSSOM View §3,
+/// BUG-464/BUG-477) — в отличие от [`hit_test`], не останавливается на первом
+/// попадании, а обходит дерево тем же алгоритмом (группы positive-z / in-flow
+/// reverse-DOM / negative-z, transform-инверсия, `pointer-events`/`display`
+/// фильтры) и собирает КАЖДОЕ попадание, включая предков хита. Отдельная
+/// функция, а не обёртка над `hit_test`, — hit-тест клика/курсора (частый,
+/// interactive путь) не должен платить за полный обход дерева ради первого
+/// попадания.
+///
+/// Один DOM-узел может отдать больше одного бокса (принципал + `InlineRun`);
+/// вызывающий (JS-натив `_lumen_elements_from_point`) отвечает за дедупликацию
+/// по `NodeId`, сохраняя порядок первого вхождения.
+pub fn hit_test_all(point: Point, root: &LayoutBox) -> Vec<HitTestResult> {
+    let mut out = Vec::new();
+    hit_test_all_box(point, root, &mut out);
+    out
+}
+
 fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
     if matches!(b.kind, BoxKind::Skip) || b.style.display == Display::None {
         return None;
@@ -160,6 +179,74 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
         cursor: b.style.cursor,
         user_select: b.style.user_select,
     })
+}
+
+/// Та же группировка/инверсия/фильтры, что и [`hit_test_box`], но вместо
+/// возврата первого попадания — накапливает ВСЕ в `out`, топ-слой первым.
+/// После того как поддерево ребёнка отдало свои попадания, к их `path`
+/// дописывается `b.node` (тот же приём, что и в `hit_test_box`, только сразу
+/// для всего среза `out`, добавленного этим поддеревом, а не для одного `hit`).
+fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
+    if matches!(b.kind, BoxKind::Skip) || b.style.display == Display::None {
+        return;
+    }
+
+    let child_point = match invert_box_transform(b) {
+        Some(inv) => {
+            let (x, y) = inv.transform_point_2d(point.x, point.y);
+            Point::new(x, y)
+        }
+        None if !b.style.transform.is_empty() => {
+            // Сингулярный transform: бокс и его поддерево визуально не существуют.
+            return;
+        }
+        None => point,
+    };
+
+    let mut positive: Vec<(&LayoutBox, i32)> = Vec::new();
+    let mut negative: Vec<(&LayoutBox, i32)> = Vec::new();
+    let mut in_flow: Vec<&LayoutBox> = Vec::new();
+    for child in &b.children {
+        let creates_sc = box_can_own_stacking_context(child)
+            && creates_stacking_context(&child.style);
+        match (creates_sc, child.style.z_index) {
+            (true, Some(z)) if z > 0 => positive.push((child, z)),
+            (true, Some(z)) if z < 0 => negative.push((child, z)),
+            _ => in_flow.push(child),
+        }
+    }
+    positive.sort_by_key(|c| std::cmp::Reverse(c.1));
+    negative.sort_by_key(|c| std::cmp::Reverse(c.1));
+
+    let start = out.len();
+    for (child, _) in &positive {
+        hit_test_all_box(child_point, child, out);
+    }
+    for child in in_flow.iter().rev() {
+        hit_test_all_box(child_point, child, out);
+    }
+    for (child, _) in &negative {
+        hit_test_all_box(child_point, child, out);
+    }
+    for r in &mut out[start..] {
+        r.path.push(b.node);
+    }
+
+    if !rect_contains(b.rect, child_point) {
+        return;
+    }
+    if matches!(b.style.pointer_events, PointerEvents::None) {
+        return;
+    }
+    let source_node = find_inline_source(b, child_point);
+    out.push(HitTestResult {
+        node: b.node,
+        source_node,
+        local_point: child_point,
+        path: vec![b.node],
+        cursor: b.style.cursor,
+        user_select: b.style.user_select,
+    });
 }
 
 /// Для `InlineRun`-бокса возвращает `source_node` того `InlineFrag`, под
@@ -538,5 +625,65 @@ mod tests {
         );
         let r = hit_test(Point::new(10.0, 10.0), &root).expect("hit");
         assert_eq!(r.user_select, UserSelect::All);
+    }
+
+    #[test]
+    fn hit_test_all_includes_ancestors_topmost_first() {
+        // <div class="outer"><div class="inner">x</div></div>: точка внутри
+        // .inner должна вернуть и .inner (топ), и .outer, и root — в этом
+        // порядке (потомок раньше предка).
+        let (doc, root) = build(
+            r#"<div class="outer"><div class="inner">x</div></div>"#,
+            ".outer { height: 100px; } .inner { height: 50px; }",
+        );
+        let outer = by_class(&doc, "outer");
+        let inner = by_class(&doc, "inner");
+        let hits = hit_test_all(Point::new(10.0, 10.0), &root);
+        let nodes: Vec<_> = hits.iter().map(|h| h.node).collect();
+        let inner_pos = nodes.iter().position(|&n| n == inner).expect(".inner hit");
+        let outer_pos = nodes.iter().position(|&n| n == outer).expect(".outer hit");
+        assert!(inner_pos < outer_pos, ".inner (topmost) должен идти раньше .outer");
+        assert_eq!(nodes.last(), Some(&root.node), "root — последний (нижний слой)");
+    }
+
+    #[test]
+    fn hit_test_all_includes_both_overlapping_siblings() {
+        // .below и .above перекрываются; hit_test (одиночный) вернул бы только
+        // .above (выше по z-index), но elementsFromPoint обязан вернуть ОБА —
+        // это как раз то, чего единичный hit_test/path не даёт.
+        let html = r#"<div class="below"></div><div class="above"></div>"#;
+        let css = "
+            div { position: relative; width: 200px; height: 100px; }
+            .below { z-index: 1; }
+            .above { z-index: 2; margin-top: -50px; }
+        ";
+        let (doc, root) = build(html, css);
+        let below = by_class(&doc, "below");
+        let above = by_class(&doc, "above");
+        let hits = hit_test_all(Point::new(10.0, 60.0), &root);
+        let nodes: Vec<_> = hits.iter().map(|h| h.node).collect();
+        let above_pos = nodes.iter().position(|&n| n == above).expect(".above hit");
+        let below_pos = nodes.iter().position(|&n| n == below).expect(".below hit — sibling, not just ancestor");
+        assert!(above_pos < below_pos, "выше по z-index — раньше в списке");
+    }
+
+    #[test]
+    fn hit_test_all_empty_outside_viewport() {
+        let (_, root) = build("<p>x</p>", "");
+        assert!(hit_test_all(Point::new(5000.0, 5000.0), &root).is_empty());
+    }
+
+    #[test]
+    fn hit_test_all_skips_pointer_events_none_box_itself() {
+        let (doc, root) = build(
+            r#"<div class="outer"><div class="inner">hi</div></div>"#,
+            ".outer { pointer-events: none; height: 50px; }",
+        );
+        let outer = by_class(&doc, "outer");
+        let hits = hit_test_all(Point::new(10.0, 10.0), &root);
+        assert!(
+            !hits.iter().any(|h| h.node == outer),
+            "pointer-events:none box никогда не должен попасть в elementsFromPoint"
+        );
     }
 }

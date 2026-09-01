@@ -556,6 +556,7 @@ pub(crate) fn run_scripts_with_dom(
                 // `apply_loaded_page` pushes after the load completes.
                 if let Some(snap) = parse_time_layout {
                     rt.update_layout_rects(snap.rects);
+                    rt.update_hit_test_tree(snap.tree);
                     rt.update_computed_styles(snap.styles);
                     rt.update_custom_properties(snap.customs);
                     rt.update_viewport_size(snap.viewport.0, snap.viewport.1);
