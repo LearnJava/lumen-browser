@@ -655,3 +655,88 @@ fn svg_image_without_href_produces_no_request() {
     assert!(reqs.is_empty(), "no href must not produce a request");
 }
 
+// ── margins collapsing through an empty block (BUG-466, CSS 2.1 §8.3.1) ───
+
+/// Lays out `<div id=before></div><div id=test style="margin:50px;{extra}">
+/// </div><div id=after></div>` and returns (before.bottom, test.height,
+/// after.top) so a test can check whether `#test`'s top/bottom margins
+/// collapsed through it into a single gap.
+fn margin_collapse_through_probe(extra_test_css: &str) -> (f32, f32, f32) {
+    let html = r#"<div id="before"></div><div id="test"></div><div id="after"></div>"#;
+    let css = format!("#test {{ margin: 50px; {extra_test_css} }}");
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(&css);
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    fn find_by_id<'a>(
+        b: &'a super::super::LayoutBox,
+        doc: &lumen_dom::Document,
+        id: &str,
+    ) -> Option<&'a super::super::LayoutBox> {
+        if let lumen_dom::NodeData::Element { attrs, .. } = &doc.get(b.node).data
+            && attrs.iter().any(|a| a.name.local == "id" && a.value == id)
+        {
+            return Some(b);
+        }
+        for child in &b.children {
+            if let Some(f) = find_by_id(child, doc, id) {
+                return Some(f);
+            }
+        }
+        None
+    }
+    let before = find_by_id(&root, &doc, "before").expect("#before not found");
+    let test = find_by_id(&root, &doc, "test").expect("#test not found");
+    let after = find_by_id(&root, &doc, "after").expect("#after not found");
+    (before.rect.y + before.rect.height, test.rect.height, after.rect.y)
+}
+
+#[test]
+fn bug466_empty_auto_height_block_margins_collapse_through() {
+    let (before_bottom, test_height, after_top) = margin_collapse_through_probe("");
+    assert_eq!(test_height, 0.0);
+    assert_eq!(
+        after_top - before_bottom,
+        50.0,
+        "an empty auto-height block's own top/bottom margins must collapse through into one"
+    );
+}
+
+#[test]
+fn bug466_zero_explicit_height_still_collapses_through() {
+    // Even an explicit `height: 0` counts as adjoining margins once the used
+    // height is 0 (the WPT test's own note: expectations depend only on the
+    // used height, not on which property produced it).
+    let (before_bottom, test_height, after_top) =
+        margin_collapse_through_probe("height: 0px;");
+    assert_eq!(test_height, 0.0);
+    assert_eq!(after_top - before_bottom, 50.0);
+}
+
+#[test]
+fn bug466_nonzero_height_block_does_not_collapse_through() {
+    let (before_bottom, test_height, after_top) =
+        margin_collapse_through_probe("height: 1px;");
+    assert_eq!(test_height, 1.0);
+    assert_eq!(
+        after_top - before_bottom - test_height,
+        100.0,
+        "a block with nonzero used height must not fold its own margins together"
+    );
+}
+
+#[test]
+fn bug466_min_height_and_max_height_also_gate_collapse_through() {
+    // `min-height`/`max-height` (not just `height`) determine the used height
+    // that decides collapse-through — the WPT test exercises all three.
+    let cases: &[(&str, f32)] = &[
+        ("min-height: 0px;", 50.0),
+        ("min-height: 1px;", 100.0),
+        ("height: 1px; max-height: 0px;", 50.0),
+        ("height: 0%;", 50.0),
+    ];
+    for (css, expected) in cases {
+        let (before_bottom, test_height, after_top) = margin_collapse_through_probe(css);
+        let gap = after_top - before_bottom - test_height;
+        assert_eq!(gap, *expected, "case {css:?}: gap {gap} height {test_height}");
+    }
+}
