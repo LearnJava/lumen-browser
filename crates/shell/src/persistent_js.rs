@@ -512,6 +512,15 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn fire_window_scrollend(&self);
 
+    /// Fire a non-bubbling, non-cancelable `resize` Event on the `window`
+    /// object (HTML LS В§7.4.4 В«Firing events using the resize algorithmВ»).
+    ///
+    /// FRAME-1: called whenever a sub-document's viewport (its `<iframe>`
+    /// host box, per HTML LS В§4.8.5) actually changes size вЂ” the frame
+    /// counterpart of `WindowEvent::Resized` on the top-level page.
+    #[allow(dead_code)]
+    fn fire_window_resize(&self);
+
     /// Deliver a batch of `content-visibility: auto` state changes to JS as
     /// `contentvisibilityautostatechange` events (CSS Contain L2 В§4.1, BUG-852).
     ///
@@ -963,6 +972,11 @@ impl PersistentJs for V8PersistentJs {
     fn fire_window_scrollend(&self) {
         self.eval_js(
             "if(typeof _lumen_fire_window_scrollend_event==='function')_lumen_fire_window_scrollend_event();"
+        );
+    }
+    fn fire_window_resize(&self) {
+        self.eval_js(
+            "if(typeof _lumen_fire_window_resize_event==='function')_lumen_fire_window_resize_event();"
         );
     }
     fn deliver_cv_state_changes(&self, payload: &str) {

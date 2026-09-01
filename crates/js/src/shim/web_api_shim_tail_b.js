@@ -3827,6 +3827,15 @@ function _lumen_fire_window_scrollend_event() {
     if (typeof document !== 'undefined') { document.dispatchEvent(ev); }
 }
 
+// FRAME-1: fired on a sub-document's window when its viewport (the host
+// `<iframe>`'s content box) actually changes size (`frames.rs::sync_frame_viewports`).
+// Per HTML LS §7.4.4 the resize event targets `window` only — unlike `scroll`,
+// it has no legacy `document`-target form.
+function _lumen_fire_window_resize_event() {
+    var ev = new Event('resize', { bubbles: false, cancelable: false });
+    if (typeof window !== 'undefined') { window.dispatchEvent(ev); }
+}
+
 // ── WindowOrWorkerGlobalScope: window IS the real global object (HTML LS) ──
 // In a real browser self === window === globalThis === the JS engine's own
 // global object — so ANY property a script assigns via `window.foo = ...` /
