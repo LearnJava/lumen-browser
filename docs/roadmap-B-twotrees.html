@@ -5311,9 +5311,9 @@
       {
        "id": "WPT-RUN-12",
        "title": "WPT-RUN-12: исполнители testdriver-экшенов",
-       "status": "ready",
+       "status": "blocked",
        "size": "M",
-       "note": "Исполнитель WPT реализует ровно два testdriver-экшена (`click` и `generate_test_report`); `action_sequence`, `send_keys`, `bless`, `set_permission`, `delete_all_cookies`, `get_computed_role`, `get_computed_label` и остальные из примерно тридцати отклоняются `ActionError`, а отклонённый промис страница не видит, поэтому тест висит до таймаута враннера вместо честного FAIL. Подтверждено инструментированием `_handle_action`. Порядок строгий: `testdriver.js` открывается вызовом `element.getClientRects()`, которого нет (GAP-GEOM), так что до экшенов дело не доходит в принципе. Владелец — P2: это его собственный тулинг, а не движок.",
+       "note": "Исполнитель WPT реализует ровно два testdriver-экшена (`click` и `generate_test_report`); `action_sequence`, `send_keys`, `bless`, `set_permission`, `delete_all_cookies`, `get_computed_role`, `get_computed_label` и остальные из примерно тридцати отклоняются `ActionError`, а отклонённый промис страница не видит, поэтому тест висит до таймаута враннера вместо честного FAIL. Подтверждено инструментированием `_handle_action`. Порядок строгий: `testdriver.js` открывается вызовом `element.getClientRects()`, которого нет (GAP-GEOM), так что до экшенов дело не доходит в принципе. Владелец — P2: это его собственный тулинг, а не движок. Статус `blocked`, а не `ready`: пока `Element.getClientRects()` не существует (GAP-GEOM), написанные экшены нечем проверить — они не будут вызваны ни разу.",
        "bugs": [
         "BUG-810"
        ]
