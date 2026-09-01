@@ -1117,8 +1117,16 @@ fn lay_out_inner(
                             let r = fc.right_edge_at(child_y, container_right);
                             (r - l).max(0.0)
                         };
+                        // CSS 2.1 §10.3.5 / §8.3: an explicit (incl. percentage) width and its
+                        // percentage margins/padding resolve against the float's containing
+                        // block — the same block the float would use if it weren't floated —
+                        // not against the (possibly float-narrowed) space at the current line.
+                        // Using the narrowed `probe_avail` here made `width:100%` collapse to
+                        // near-zero when squeezed next to prior floats, so it never dropped to
+                        // a new line under rule 8 below and poisoned every later `clear_y`
+                        // computation that depended on its true bottom edge (BUG-469).
                         let probe_w = if child.style.width.is_some() {
-                            probe_avail
+                            content_width
                         } else {
                             preferred_inline_block_width(child, measurer, viewport)
                                 .or_else(|| {
@@ -1159,8 +1167,11 @@ fn lay_out_inner(
                         // Re-lay-out at the dropped line: an auto-width float may grow into the
                         // wider line, and the box's origin changed.
                         if dropped {
+                            // Same containing-block basis as the probe layout above — an
+                            // explicit width must not be re-resolved against the new line's
+                            // narrowed gap either.
                             let w = if child.style.width.is_some() {
-                                avail_w
+                                content_width
                             } else {
                                 preferred_inline_block_width(child, measurer, viewport)
                                     .or_else(|| {
