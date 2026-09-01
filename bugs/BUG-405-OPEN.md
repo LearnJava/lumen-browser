@@ -6110,3 +6110,85 @@ chrome-segment rehash accounts for 100.0% of fold_overlay's cost
   следующий шаг.
 * Источники 3–9 (форма-виджеты, диалог, view-transition, hints) по-прежнему
   вне п.85 — без изменений от среза 54.
+
+## Срез 56 (2026-09-01): фикстура среза 55 держала chrome первым — реальный
+порядок команд обратный, headline-число подтверждено, форма будущего фикса
+скорректирована
+
+Перед тем как браться за «следующий содержательный шаг п.85», названный
+срезом 55 (пробросить дайджест `ChromeOverlayFrameCache` в
+`overlay_cache_step`), чтение `redraw_requested.rs`'s Step 6 целиком (не
+только doc-комментариев кэша, которые читали срезы 50/54/55) сверило
+допущение фикстуры с реальным кодом.
+
+### Находка
+
+На обычном кадре живой прокрутки (без find-bar, validation tooltip,
+color/date picker, `<dialog>`, view transition, hint-оверлея — все эти блоки
+между шагом хрома и шагом scrollbar-а условны и на простой странице ложны)
+`overlay_buf` строится ДВУМЯ `Vec::append`:
+
+1. шаг хрома: `framed.append(&mut overlay_buf)` при пустом `overlay_buf`,
+   затем `overlay_buf = framed` — пока только хром;
+2. шаг scrollbar-а: `combined = scrollbar_cmds; combined.append(&mut
+   overlay_buf)`, затем `overlay_buf = combined`.
+
+`Vec::append(&mut other)` оставляет элементы `self` первыми и переносит
+элементы `other` ПОСЛЕ них — то есть шаг 2 кладёт **scrollbar первым, хром
+вторым**, ровно наоборот тому, что предполагала фикстура среза 55
+(`full_overlay = chrome_segment; extend(scrollbar_cmds)`). Все более поздние
+overlay-строители той же функции (tooltip/pickers/dialog/view-transition)
+используют ТОТ ЖЕ приём `X.append(&mut overlay_buf); overlay_buf = X;` —
+значит любой из них, сработавший на кадре, тоже встаёт ПЕРЕД хромом. Смещение
+хрома внутри `overlay_buf` — не фиксированная длина префикса, оно плывёт
+вместе с тем, какие из этих строителей отработали в этом кадре, и даже на
+голом кадре «только scrollbar» хром начинается со смещения 2, а не 0.
+
+### Замер (исправленная фикстура)
+
+Новый тест `bug405_slice56_fold_overlay_cost_holds_with_real_command_order`
+(`#[ignore]`, тот же файл) переиспользует фикстуру среза 52/55, но собирает
+`full_overlay` в РЕАЛЬНОМ порядке (`scrollbar_cmds` затем `chrome_segment`), и
+сравнивает полный `fold_overlay` с «лучшим случаем» фикса — хэшируется
+только волатильный scrollbar-префикс (`full_overlay[..scrollbar_len]`),
+хром считается пришедшим из кэша:
+
+```
+cargo test -p lumen-shell --profile dev-release bug405_slice56 -- --ignored --nocapture
+BUG405_S56_FOLD_FULL          count=500 min=0.33-0.41ms p50=0.37-0.62ms p95=0.62-0.99ms max=1.14-2.66ms
+BUG405_S56_FOLD_VOLATILE_ONLY count=500 min=0.00ms p50=0.00ms p95=0.00-0.01ms max=0.01-0.20ms
+chrome-segment rehash accounts for 99.9% of fold_overlay's cost with the REAL command order
+  (882 chrome cmds vs 2 scrollbar cmds, min of 500 interleaved samples)
+```
+
+Два прогона (устойчивость): 99.9% оба раза, тот же порядок величин, что и
+100.0% среза 55 — обратный порядок массива не двигает командный count,
+который считает `hash_one_command`, поэтому headline-число среза 55
+подтверждено под честной фикстурой.
+
+### Что это значит для формы фикса
+
+Число не меняется, но меняется КОНТРАКТ: реальный механизм переиспользования
+не может просить у `Renderer` «переиспользуй первые K дайджестов» —
+K команд у начала массива часто НЕ являются кэшированным chrome-сегментом.
+Нужен объявляемый вызывающим (шеллом) диапазон `(start, len)`,
+пересчитываемый каждый кадр из фактической сборки (`scrollbar_cmds.len()`,
+когда scrollbar нарисован, иначе `0`, ДО того как отработал любой
+prepend-строитель overlay) — а не константный слот префикса/суффикса.
+Правки движка это не требует до тех пор, пока сам фикс не начат.
+
+### Гейты
+
+* `cargo check -p lumen-shell --tests` — чисто.
+* `cargo clippy -p lumen-shell --all-targets -- -D warnings` — чисто.
+* `cargo test -p lumen-shell -- chrome` — 25 passed (без изменений в числе
+  обычных), 5 ignored (был 4 + новый срез 56), 0 failed — без регрессий.
+* Правка — только один новый `#[ignore]`d тест, рендер-путь не тронут —
+  `dump_golden.py`/CPU-снапшоты не нужны.
+
+### Остаток
+
+* Сам фикс (диапазонный, не префиксный, проброс дайджеста
+  `ChromeOverlayFrameCache` в `overlay_cache_step`) всё ещё не сделан —
+  теперь с верной формой контракта.
+* Источники 3–9 остатка среза 54 по-прежнему вне п.85, без изменений.

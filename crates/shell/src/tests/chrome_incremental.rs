@@ -1686,3 +1686,106 @@ fn bug405_slice55_fold_overlay_cost_is_mostly_chrome_segment() {
         tail_summary.min_ms,
     );
 }
+
+// -- BUG-405 срез 56: срез 55's fixture put chrome first — real order is scrollbar first --
+
+/// Reading `redraw_requested.rs`'s Step 6 top-down (not just the caret/cache
+/// doc comments срезы 50/54/55 already read) shows the common live-scrolling
+/// case — no find-bar, no validation tooltip, no color/date picker, no
+/// `<dialog>`, no view transition, no hint overlay, i.e. every block between
+/// the chrome step and the scrollbar step is a conditional `if let`/`if` that
+/// is false on a plain page — builds `overlay_buf` with exactly two
+/// `Vec::append` calls:
+///
+/// 1. chrome step: `framed.append(&mut overlay_buf)` while `overlay_buf` is
+///    still empty, then `overlay_buf = framed` — chrome only, so far.
+/// 2. scrollbar step: `combined = scrollbar_cmds; combined.append(&mut
+///    overlay_buf)`, then `overlay_buf = combined`.
+///
+/// `Vec::append(&mut other)` keeps `self`'s elements first and moves
+/// `other`'s elements after them, so step 2 puts the **scrollbar first,
+/// chrome second** — the reverse of срез 55's `full_overlay = chrome_segment;
+/// extend(scrollbar_cmds)` fixture. Every later overlay builder in the same
+/// function (tooltip/pickers/dialog/view-transition) uses the identical
+/// `X.append(&mut overlay_buf); overlay_buf = X;` prepend shape, so any of
+/// them firing that frame also lands in front of chrome — chrome's start
+/// offset inside `overlay_buf` is not a fixed prefix length at all, it moves
+/// with whichever of those builders ran, and even the bare scrollbar-only
+/// frame this test measures puts chrome at offset 2, not 0.
+///
+/// This does not move срез 55's headline number (rehashing the ~292-command
+/// chrome segment dominates `fold_overlay`'s cost regardless of which end of
+/// the array it sits at — the command count `hash_one_command` walks is
+/// invariant to order), but it does invalidate the "cache by prefix length"
+/// framing срез 54 suggested: a real digest-reuse mechanism cannot ask the
+/// `Renderer` to "reuse the first K digests", because the K commands at the
+/// front are frequently NOT the cached chrome segment. It needs a
+/// caller-declared `(start, len)` RANGE, recomputed every frame from the
+/// actual composition (`scrollbar_cmds.len()` when the scrollbar drew, `0`
+/// otherwise, before any prepending overlay builder ran) — a fixed prefix or
+/// suffix slot is the wrong shape for this cache's key. No engine code
+/// touched, `fold_overlay` runs exactly as it stands on `main` today.
+///
+/// `cargo test -p lumen-shell --profile dev-release bug405_slice56 -- --ignored --nocapture`.
+#[test]
+#[ignore = "manual perf gate (BUG-405 срез 56) — doc comment has the run command"]
+fn bug405_slice56_fold_overlay_cost_holds_with_real_command_order() {
+    let (host_rect, chrome_dl, (win_w, win_h)) = bug405_slice52_real_chrome_overlay_fixture();
+    let (chrome_segment, strips_used, _) =
+        chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, false, None);
+    assert_eq!(strips_used, 3, "must match срез 52's real-layout ceiling");
+
+    let scrollbar_cmds = scrollbar::build_scrollbar_overlay(400.0, 4000.0, win_w, win_h);
+    assert_eq!(scrollbar_cmds.len(), 2, "срез 54's read: exactly track+thumb");
+
+    // Real `redraw_requested.rs` order on the common live-scrolling frame:
+    // scrollbar (volatile, changes with `scroll_y` every frame) FIRST,
+    // chrome (stable across a `chrome_layout_generation`) SECOND — the
+    // reverse of срез 55's fixture.
+    let mut full_overlay = scrollbar_cmds.clone();
+    full_overlay.extend(chrome_segment.iter().cloned());
+    let scrollbar_len = scrollbar_cmds.len();
+
+    const WARMUP: usize = 20;
+    const SAMPLES: usize = 500;
+    let mut full_stats = lumen_paint::FrameStats::new();
+    let mut volatile_only_stats = lumen_paint::FrameStats::new();
+    // Interleaved each round (docs/perf-method.md) — both arms see the same
+    // allocator/cache warmth instead of one racing first.
+    for i in 0..WARMUP + SAMPLES {
+        let t0 = std::time::Instant::now();
+        let digests_full = lumen_paint::display_list::fold_overlay(&full_overlay);
+        let full_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        std::hint::black_box(&digests_full);
+
+        let t1 = std::time::Instant::now();
+        // Best case a range-aware chrome-digest-reuse fix could reach: only
+        // the volatile prefix (scrollbar) gets hashed, chrome's digests are
+        // assumed supplied by `ChromeOverlayFrameCache` at whatever offset it
+        // actually starts at this frame.
+        let digests_volatile =
+            lumen_paint::display_list::fold_overlay(&full_overlay[..scrollbar_len]);
+        let volatile_ms = t1.elapsed().as_secs_f32() * 1000.0;
+        std::hint::black_box(&digests_volatile);
+
+        if i >= WARMUP {
+            full_stats.record(full_ms);
+            volatile_only_stats.record(volatile_ms);
+        }
+    }
+
+    let full_summary = full_stats.summary().expect("samples collected");
+    let volatile_summary = volatile_only_stats.summary().expect("samples collected");
+    eprintln!("{}", full_summary.display_with("BUG405_S56_FOLD_FULL"));
+    eprintln!("{}", volatile_summary.display_with("BUG405_S56_FOLD_VOLATILE_ONLY"));
+    let attributable = (1.0 - volatile_summary.min_ms / full_summary.min_ms) * 100.0;
+    eprintln!(
+        "chrome-segment rehash accounts for {attributable:.1}% of fold_overlay's cost with the \
+         REAL command order (scrollbar first, chrome second) — confirms срез 55's number under \
+         the corrected fixture ({} chrome cmds vs {scrollbar_len} scrollbar cmds, min of \
+         {SAMPLES} interleaved samples, full={:.4}ms volatile-only={:.4}ms)",
+        chrome_segment.len(),
+        full_summary.min_ms,
+        volatile_summary.min_ms,
+    );
+}
