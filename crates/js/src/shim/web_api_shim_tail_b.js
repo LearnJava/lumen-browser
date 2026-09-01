@@ -35,6 +35,23 @@ window.getComputedStyle = function(element, pseudoElt) {
                 if (nid != null) return _lumen_computed_property(nid, kebab);
             }
             return undefined;
+        },
+        // BUG-470: without a `has` trap, `prop in getComputedStyle(el)` falls
+        // through to `Reflect.has` on the empty `{}` target and is always
+        // `false` — for every property, not just the one a caller happens to
+        // probe. WPT's `assert_not_inherited()` starts with exactly that
+        // check, so this alone made `float`/`clear` (and anything else) read
+        // as "unsupported". Mirrors `get`'s non-empty-string heuristic, same
+        // one `StylePropertyMapReadOnly.prototype.has` already uses.
+        has: function(target, prop) {
+            if (prop === 'getPropertyValue' || prop === 'length' || prop === 'item' || prop === 'cssText') {
+                return true;
+            }
+            if (typeof prop === 'string' && !/^\d+$/.test(prop)) {
+                var kebab = prop.replace(/([A-Z])/g, function(m) { return '-' + m.toLowerCase(); });
+                if (nid != null) return _lumen_computed_property(nid, kebab) !== '';
+            }
+            return false;
         }
     };
     // Return a Proxy if available (modern JS), otherwise a plain object with getPropertyValue.

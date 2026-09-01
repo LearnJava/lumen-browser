@@ -1093,6 +1093,31 @@ fn dom_content_loaded_handler_sees_post_script_geometry() {
     assert_eq!(probe_attr(&page, "data-r"), "250x70");
 }
 
+/// BUG-470: `prop in getComputedStyle(el)` used to be `false` for every
+/// property, not just `float`/`clear` — the returned `Proxy({}, handler)`
+/// had no `has` trap, so `in` fell through to `Reflect.has` on the empty
+/// target object regardless of what `get` would have answered. `float`/
+/// `clear` themselves were already in `computed_style_to_map` (since before
+/// this bug was even filed); the gap was entirely in the `in` check WPT's
+/// `assert_not_inherited()` starts with.
+#[cfg(feature = "v8")]
+#[test]
+fn computed_style_in_operator_reports_known_properties() {
+    let page = parse_and_layout_for_test(
+        "<html><body><div id=t style='float:left'>t</div>\
+         <script>var e=document.getElementById('t');var cs=getComputedStyle(e);\
+         document.documentElement.setAttribute('data-float','float' in cs);\
+         document.documentElement.setAttribute('data-clear','clear' in cs);\
+         document.documentElement.setAttribute('data-bogus','__lumenBogusProp__' in cs);\
+         document.documentElement.setAttribute('data-float-val',cs.getPropertyValue('float'));\
+         </script></body></html>",
+    );
+    assert_eq!(probe_attr(&page, "data-float"), "true");
+    assert_eq!(probe_attr(&page, "data-clear"), "true");
+    assert_eq!(probe_attr(&page, "data-bogus"), "false");
+    assert_eq!(probe_attr(&page, "data-float-val"), "left");
+}
+
 /// A `<style>` a script inserts still reaches the FIRST cascade: the CSS is
 /// collected before the scripts now, so the pipeline has to notice the change
 /// and rebuild. Asserted on the final layout, not on JS.
