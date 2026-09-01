@@ -1295,7 +1295,7 @@ fn bug405_slice49_chrome_dl_predict_same_holds_for_a_steady_state_hover_repeat()
         "BUG-405 Рї.85: predict_same=true but chrome_dl bytes differ (hash0={hash0} hash1={hash1}) \
              в€’ this is the dangerous direction (predict=true, actual=false) a content_epoch \
              skip-path for chrome_dl would need to rule out on the ONE shape срез 48's census left \
-             unmeasured. If this ever fails, the skip-path proposed in `bugs/BUG-405-OPEN.md`'s \
+             unmeasured. If this ever fails, the skip-path proposed in `bugs/BUG-405-FIXED.md`'s \
              'Остаток' would have shown stale chrome on screen for a plain hover-hold.",
     );
 }
@@ -1611,7 +1611,7 @@ fn bug405_slice52_chrome_overlay_cache_net_win_on_real_layout() {
 
 // -- BUG-405 срез 55: how much of fold_overlay's cost is the chrome-segment rehash? --
 
-/// Срез 54's census (`bugs/BUG-405-OPEN.md` "Остаток", вариант (б)) narrowed
+/// Срез 54's census (`bugs/BUG-405-FIXED.md` "Остаток", вариант (б)) narrowed
 /// п.85 to one concrete question: `fold_overlay` (`display_list.rs:1970`)
 /// hashes EVERY overlay command every frame with `hash_one_command`,
 /// including the `chrome_dl` segment a `ChromeOverlayFrameCache` HIT already

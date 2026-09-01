@@ -96,7 +96,7 @@ patch is unsafe.
 
 ## Связь
 
-Named as an open remainder by BUG-405 срезы 48/49/50/51/52 (`bugs/BUG-405-OPEN.md`)
+Named as an open remainder by BUG-405 срезы 48/49/50/51/52 (`bugs/BUG-405-FIXED.md`)
 without its own ticket; this file is that ticket. Not a BUG-405 slice itself —
 filed separately per that remainder's own instruction ("остаётся
 незаведённым отдельным тикетом").
