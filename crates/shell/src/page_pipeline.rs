@@ -354,7 +354,7 @@ fn build_page_cascade(
         } else {
             screen_media_context(viewport, dark_mode)
         };
-        // РРЅР»Р°Р№РЅРѕРІС‹Рµ <style>: их `@import` резолвятся относительно базы
+        // Инлайновые <style>: их `@import` резолвятся относительно базы
         // документа (CSS-SPECS §@import). Внешние <link> резолвят собственные
         // `@import` относительно своего URL внутри load_linked_stylesheets.
         let inline = extract_style_blocks(doc);
@@ -738,7 +738,7 @@ pub(crate) fn parse_and_layout(
     // короткие — скрипты детей и `load` хоста идут без удержания дерева.
     // Срез 3: документ/база страницы передаются и как top — у фреймов
     // первого уровня parent === top, глубже top всегда корень.
-    // Срез 11: экранный media-гейт `<link>` и вьюпорт picker-а РєР°СЂС‚РёРЅРѕРә —
+    // Срез 11: экранный media-гейт `<link>` и вьюпорт picker-а картинок —
     // те же, с какими страница грузит свои подресурсы (print-гейт
     // фреймам не нужен — печать PDF под-документов вне среза).
     let mut frames = {
