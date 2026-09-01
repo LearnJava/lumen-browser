@@ -102,12 +102,34 @@ def _table_rows(lines, header_contains):
         if line.startswith("|") and header_contains in line:
             i += 2  # шапка + разделитель |---|
             while i < n and lines[i].strip().startswith("|"):
-                cells = [c.strip() for c in lines[i].strip().strip("|").split("|")]
+                # Без .strip() на ячейке: строка с лишним `|` внутри ячейки
+                # склеивается обратно вызывающей стороной (`_fold_cells`), и
+                # там пробелы вокруг него должны сохраниться.
+                cells = lines[i].strip().strip("|").split("|")
                 rows.append(cells)
                 i += 1
             return rows
         i += 1
     return rows
+
+
+def _fold_cells(cells, width):
+    """Ячейки строки, приведённые к `width` штук.
+
+    Markdown не даёт экранировать `|` внутри ячейки так, чтобы `split("|")` это
+    понял, а в заметках задач литеральный `|` встречается (значения CSS вида
+    `a | b`, регулярки, псевдотаблицы). Схема таблицы фиксирована, и лишний
+    разделитель может попасть только в предпоследнюю колонку `note`: id, phase,
+    parent, status, size, bugs и title по построению без `|`. Поэтому середина
+    склеивается обратно, а не строка выбрасывается — до 2026-09-01 такие строки
+    молча пропускались (`len(cells) != 8: continue`), и 16 задач, включая всю
+    строку WPT-RUN-6, не попадали в деревья вообще.
+    """
+    if len(cells) < width:
+        return None
+    if len(cells) > width:
+        cells = cells[:width - 2] + ["|".join(cells[width - 2:-1])] + cells[-1:]
+    return [c.strip() for c in cells]
 
 
 def parse_roadmap():
@@ -124,7 +146,8 @@ def parse_roadmap():
     phases = []
     phase_by_id = {}
     for cells in phase_rows:
-        if len(cells) != 4:
+        cells = _fold_cells(cells, 4)
+        if cells is None:
             continue
         pid, status, dt, title = cells
         node = {"id": pid, "title": title, "status": status or "planned", "tasks": []}
@@ -138,7 +161,8 @@ def parse_roadmap():
     task_by_id = {}
     order = []
     for cells in task_rows:
-        if len(cells) != 8:
+        cells = _fold_cells(cells, 8)
+        if cells is None:
             continue
         tid, phase, parent, status, size, bugs, note, title = cells
         node = {"id": tid, "title": title, "status": status or "planned"}
