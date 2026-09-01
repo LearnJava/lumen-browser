@@ -522,3 +522,40 @@ fn nested_floats_stack() {
     );
 }
 
+#[test]
+fn bug469_full_width_float_squeezed_between_floats_still_clears_below_it() {
+    // BUG-469 (CSS 2.1 §9.5.1 rule 8 / §10.3.5, WPT
+    // css/CSS2/floats/zero-space-between-floats-004.html): a `float:right;
+    // width:100%` box placed right after two 100px floats that already fill
+    // the whole 200px containing block must resolve its width against the
+    // *containing block* (200px), not the zero-width gap left between the
+    // prior floats — otherwise it "fits" without dropping to a new line
+    // (rule 8) and its bottom edge, which every later `clear` measures
+    // against, ends up wrong. A `clear:right` block after it must land at
+    // y=200 (below the full-width float's own row), not y=100 (the first
+    // row's height, as if the full-width float never dropped).
+    let html = "<div id=container>\
+                   <div class=fl></div>\
+                   <div class=fr></div>\
+                   <div class=full></div>\
+                   <div id=cleared></div>\
+                 </div>";
+    let css = "body{margin:0} \
+               #container{width:200px} \
+               .fl{float:left;width:100px;height:100px} \
+               .fr{float:right;width:100px;height:100px} \
+               .full{float:right;width:100%;height:100px} \
+               #cleared{clear:right;width:10px;height:10px}";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout(&doc, &sheet, lumen_core::geom::Size::new(800.0, 600.0));
+    let container = super::find_by_id_all(&root, &doc, "container").expect("container");
+    let cleared = super::find_by_id_all(&root, &doc, "cleared").expect("cleared");
+    assert_eq!(
+        cleared.rect.y - container.rect.y,
+        200.0,
+        "clear:right must drop below the full-width float's own row (y=200), got y={}",
+        cleared.rect.y - container.rect.y,
+    );
+}
+
