@@ -155,7 +155,7 @@ use logical::resolve_logical_properties;
 // (`pub mod style` в `lib.rs`), вызывателей внутри `style.rs` у неё нет, поэтому
 // без реэкспорта путь `lumen_layout::style::resolve_logical_property` пропал бы.
 pub use logical::resolve_logical_property;
-pub use parse::color::{parse_color, system_color};
+pub use parse::color::{canonical_specified_color, parse_color, system_color};
 // Реэкспорт со старого пути: этих троих зовут `lib.rs` и `animation.rs`, то есть
 // потребитель вне `crate::style` (правило §2.1 очереди SPLIT).
 pub use parse::image::{parse_background_gradient, parse_gradient_stops};
