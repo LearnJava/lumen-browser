@@ -78,7 +78,11 @@ pub(crate) fn apply_iframe_sandbox_gates(doc: &Document) -> usize {
 // ── iframe sub-документы (BUG-480) ───────────────────────────────────────────
 
 /// Откуда брать HTML sub-документа фрейма.
-enum FrameSource {
+///
+/// `pub(crate)`, а не модульно-приватный: [`fetch_iframe_source`] сам
+/// `pub(crate)` (нужен тесту в `tests/scripts_and_frames.rs`), и тип его
+/// `Ok`-варианта обязан быть виден не менее широко.
+pub(crate) enum FrameSource {
     /// Готовый HTML (атрибут `srcdoc` / пустой `about:blank`).
     Inline(String),
     /// Прочитанный файл.
@@ -87,52 +91,114 @@ enum FrameSource {
     Url { html: String, url: String },
 }
 
+/// Итог неудачной попытки получить исходник под-документа фрейма (FRAME-4
+/// срез 2): причина — для error-документа и уже привычного stderr-лога,
+/// `attempted_url` — адрес, который так и не открылся, он же становится
+/// [`FrameHandle::url`] вместо адреса, ушедшего в никуда молча.
+pub(crate) struct FetchError {
+    pub(crate) reason: String,
+    pub(crate) attempted_url: String,
+}
+
 /// Получить исходник под-документа для `src`-фрейма: разрешить относительно
 /// `base`, файл прочитать с диска, URL скачать через subresource-клиент с
 /// `RequestDestination::Document` (тот же mixed-content/SW-интерсептор, что у
-/// остальных подресурсов). `None` — источник получить нельзя (лог в stderr).
-fn fetch_iframe_source(
+/// остальных подресурсов). `Err` — источник получить нельзя (лог уже
+/// напечатан внутри; вызывающая сторона показывает причину в самом фрейме —
+/// FRAME-4 срез 2, до него `spawn_frame` на этой ошибке просто не заводил
+/// хэндл, и фрейм молча оставался прежним документом либо серой заглушкой).
+pub(crate) fn fetch_iframe_source(
     src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
-) -> Option<FrameSource> {
+) -> Result<FrameSource, FetchError> {
     if src.trim().is_empty() {
-        return Some(FrameSource::Inline(String::new()));
+        return Ok(FrameSource::Inline(String::new()));
     }
     let lowered = src.trim_start().to_ascii_lowercase();
     if lowered.starts_with("javascript:") {
-        eprintln!("iframe: javascript:-URL не поддерживаются (BUG-480 срез 1), пропуск '{src}'");
-        return None;
+        let reason = "javascript:-URL не поддерживаются (BUG-480 срез 1)".to_owned();
+        eprintln!("iframe: {reason}, пропуск '{src}'");
+        return Err(FetchError { reason, attempted_url: src.to_owned() });
     }
     if lowered.starts_with("data:") {
-        eprintln!("iframe: data:-URL не поддерживаются (BUG-480 срез 1), пропуск '{src}'");
-        return None;
+        let reason = "data:-URL не поддерживаются (BUG-480 срез 1)".to_owned();
+        eprintln!("iframe: {reason}, пропуск '{src}'");
+        return Err(FetchError { reason, attempted_url: src.to_owned() });
     }
     match base.resolve(src) {
         ResolvedResource::File(path) => {
-            let html = std::fs::read_to_string(&path)
-                .map_err(|e| eprintln!("iframe: файл {} не читается: {e}", path.display()))
-                .ok()?;
-            Some(FrameSource::File { html, path })
+            let attempted_url = format!("file://{}", path.display());
+            match std::fs::read_to_string(&path) {
+                Ok(html) => Ok(FrameSource::File { html, path }),
+                Err(e) => {
+                    let reason = format!("файл {} не читается: {e}", path.display());
+                    eprintln!("iframe: {reason}");
+                    Err(FetchError { reason, attempted_url })
+                }
+            }
         }
         ResolvedResource::Url(url) => {
             use lumen_core::url::Url as _Url;
             use lumen_network::RequestDestination;
-            let sub_url = _Url::parse(&url)
-                .map_err(|e| eprintln!("iframe: битый URL '{url}': {e}"))
-                .ok()?;
+            let sub_url = match _Url::parse(&url) {
+                Ok(u) => u,
+                Err(e) => {
+                    let reason = format!("битый URL '{url}': {e}");
+                    eprintln!("iframe: {reason}");
+                    return Err(FetchError { reason, attempted_url: url });
+                }
+            };
             let client = base.http_client_for_subresource(Arc::clone(sink), cookie_jar);
-            let bytes = client
-                .fetch_subresource(&sub_url, RequestDestination::Document)
-                .map_err(|e| eprintln!("iframe: загрузка '{url}' не удалась: {e}"))
-                .ok()?;
-            Some(FrameSource::Url {
-                html: String::from_utf8_lossy(&bytes).into_owned(),
-                url,
-            })
+            match client.fetch_subresource(&sub_url, RequestDestination::Document) {
+                Ok(bytes) => Ok(FrameSource::Url {
+                    html: String::from_utf8_lossy(&bytes).into_owned(),
+                    url,
+                }),
+                Err(e) => {
+                    let reason = format!("загрузка '{url}' не удалась: {e}");
+                    eprintln!("iframe: {reason}");
+                    Err(FetchError { reason, attempted_url: url })
+                }
+            }
         }
     }
+}
+
+/// Экранирует символы, опасные в HTML-тексте (то же правило, что
+/// `newtab.rs::escape_html` — своя копия по тому же соглашению модуля).
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Синтетический документ «навигация фрейма не удалась» (FRAME-4 срез 2) —
+/// тот же приём, что уже показывает `about:blank`/`srcdoc` инлайном, только
+/// текст не с диска, а собран здесь. `url`/`reason` экранируются: оба несут
+/// сырой ввод страницы (адрес ссылки, текст сетевой ошибки).
+pub(crate) fn frame_error_document(url: &str, reason: &str) -> String {
+    format!(
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>\
+         <body style=\"font-family:sans-serif;color:#5f6368;background:#fff;\
+         padding:16px;margin:0\">\
+         <p style=\"margin:0 0 4px;font-weight:bold\">Не удалось загрузить фрейм</p>\
+         <p style=\"margin:0;word-break:break-all\">{}</p>\
+         <p style=\"margin:8px 0 0;color:#888\">{}</p>\
+         </body></html>",
+        html_escape(url),
+        html_escape(reason),
+    )
 }
 
 /// Origin-строка абсолютного URL (`scheme://host:port`, host в нижнем регистре).
@@ -1270,19 +1336,31 @@ fn spawn_frame(
             .as_deref()
             .map(|src| fetch_iframe_source(src, base, sink, cookie_jar.clone())),
     };
-    let (html, child_base, child_url): (String, ResourceBase, String) = match fetched {
-        Some(Some(FrameSource::Inline(html))) => (html, base.clone(), "about:blank".to_owned()),
-        Some(Some(FrameSource::File { html, path })) => {
+    // FRAME-4 срез 2: источник, который получить не удалось, больше не
+    // обрывает загрузку фрейма — вместо неё под-документом становится
+    // синтетическая страница ошибки, тем же путём (parse+layout+paint), что и
+    // любой другой под-документ; `load_failed` — единственная разница,
+    // видимая остальному коду (история, диагностика).
+    let (html, child_base, child_url, load_failed): (String, ResourceBase, String, bool) = match fetched
+    {
+        Some(Ok(FrameSource::Inline(html))) => (html, base.clone(), "about:blank".to_owned(), false),
+        Some(Ok(FrameSource::File { html, path })) => {
             let url = format!("file://{}", path.display());
-            (html, ResourceBase::File(path), url)
+            (html, ResourceBase::File(path), url, false)
         }
-        Some(Some(FrameSource::Url { html, url })) => (html, ResourceBase::Url(url.clone()), url),
-        // Источник получить нельзя — лог уже напечатан внутри.
-        Some(None) => return handles,
+        Some(Ok(FrameSource::Url { html, url })) => {
+            (html, ResourceBase::Url(url.clone()), url, false)
+        }
+        Some(Err(e)) => (
+            frame_error_document(&e.attempted_url, &e.reason),
+            base.clone(),
+            e.attempted_url,
+            true,
+        ),
         None => match &info.srcdoc {
-            Some(srcdoc) => (srcdoc.clone(), base.clone(), "about:srcdoc".to_owned()),
+            Some(srcdoc) => (srcdoc.clone(), base.clone(), "about:srcdoc".to_owned(), false),
             // Ни src, ни srcdoc — спека грузит about:blank немедленно.
-            None => (String::new(), base.clone(), "about:blank".to_owned()),
+            None => (String::new(), base.clone(), "about:blank".to_owned(), false),
         },
     };
 
@@ -1452,6 +1530,7 @@ fn spawn_frame(
     handles.push(FrameHandle {
         host: info.node,
         url: child_url,
+        load_failed,
         // BUG-480 срез 19: база ребёнка — сторона резолва его ссылок.
         base: child_base,
         doc: Arc::clone(&child_doc_arc),
@@ -1543,6 +1622,16 @@ pub(crate) fn navigate_frame(
     if spawned.is_empty() {
         return false;
     }
+    // FRAME-4 срез 2: `spawned`'s own handle is always LAST (`spawn_frame`
+    // pushes it after extending with its nested children) — the frame-level
+    // outcome, distinct from the source-fetch-level reason already printed
+    // inside `fetch_iframe_source`. Navigation still "succeeds" here (a
+    // document replaced the old one), but the visible result is an error
+    // page, worth a diagnostic of its own for anyone correlating logs with
+    // the screen.
+    if spawned.last().is_some_and(|h| h.load_failed) {
+        eprintln!("iframe: '{href}' — навигация фрейма показывает документ ошибки");
+    }
     drop_frame_subtree(frames, &old_doc);
     frames.retain(|o| o.host != host || !same_host_doc(&o.parent_doc, parent_doc.as_ref()));
     frames.extend(spawned);
@@ -1594,6 +1683,12 @@ pub(crate) struct FrameHandle {
     /// Адрес под-документа: разрешённый URL, путь файла или `about:blank` /
     /// `about:srcdoc`. Диагностика и будущая навигация фрейма.
     pub(crate) url: String,
+    /// `true` — [`Self::doc`] не то, что просили: `src`/навигация не
+    /// получили ответ (сеть, битый файл, неподдержанная схема), и вместо
+    /// содержимого показан синтетический документ ошибки (FRAME-4 срез 2,
+    /// [`frame_error_document`]). `Self::url` в этом случае — адрес, который
+    /// не открылся, а не адрес того, что реально показано.
+    pub(crate) load_failed: bool,
     /// База, относительно которой под-документ разрешает СВОИ адреса
     /// (BUG-480 срез 19).
     ///
