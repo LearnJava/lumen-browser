@@ -42,9 +42,11 @@ cargo clippy --workspace --all-targets -- -D warnings > .tmp/gate-clippy.log 2>&
 tail -5 .tmp/gate-clippy.log            # детали ошибок: grep -E "^error" .tmp/gate-clippy.log
 ```
 
-> **sccache отключён** с 2026-08-19 — версия 0.15.0 валит компилятор под
-> тулчейном 1.97.0 (`.cargo/config.toml`, обёртка закомментирована). Ничего
-> прокидывать не нужно. Профиль `dev` (по умолчанию) компилируется быстрее,
+> **sccache включён** и требует версию **≥ 0.17.0** (`.cargo/config.toml`,
+> обёртка возвращена 2026-09-01). Прокидывать ничего не нужно, но если
+> `sccache --version` старее — гейт упадёт на `0xc0000409` в первом же вызове
+> компилятора, лечится `cargo install sccache --version 0.17.0`
+> (`docs/build-speed.md` §3.8). Профиль `dev` (по умолчанию) компилируется быстрее,
 > чем `dev-release`; для корректностного гейта **не** навешивай
 > `--profile dev-release` — он оправдан только в `graphic_tests/run.py`, где
 > важен рантайм рендера.
