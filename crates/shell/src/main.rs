@@ -275,7 +275,30 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorGrabMode, CursorIcon, Window, WindowId};
 
+/// Switches the process's console output code page to UTF-8 (65001).
+///
+/// Rust's `println!`/`eprintln!` write the string's raw UTF-8 bytes; a
+/// console left on the OS default code page (866/1251 on Russian Windows)
+/// decodes those bytes one at a time, turning every non-ASCII character
+/// (Cyrillic log text, `—`, `→`, …) into mojibake. No-op if the call fails
+/// (e.g. stdout redirected to a file, or a non-console handle) — output is
+/// unaffected either way since only the *interpretation* of already-correct
+/// bytes changes.
+#[cfg(target_os = "windows")]
+fn set_console_utf8() {
+    unsafe extern "system" {
+        fn SetConsoleOutputCP(wCodePageId: u32) -> i32;
+    }
+    const CP_UTF8: u32 = 65001;
+    // SAFETY: `SetConsoleOutputCP` takes a plain code page id, no pointers.
+    unsafe {
+        SetConsoleOutputCP(CP_UTF8);
+    }
+}
+
 fn main() -> ExitCode {
+    #[cfg(target_os = "windows")]
+    set_console_utf8();
     // BUG-770: install the non-blocking stderr sink before anything can print.
     // A parent that captures stderr as a pipe and stops reading it used to
     // block whichever thread called `eprintln!` next вЂ” with the UI thread that
