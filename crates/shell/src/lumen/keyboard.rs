@@ -616,20 +616,65 @@ impl Lumen {
             }
             KeyCommand::HistoryBack => self.navigate_back(),
             KeyCommand::HistoryForward => self.navigate_forward(),
-            KeyCommand::ScrollLineDown => self.scroll_active_pane(LINE_STEP_CSS_PX),
-            KeyCommand::ScrollLineUp => self.scroll_active_pane(-LINE_STEP_CSS_PX),
-            KeyCommand::ScrollLineRight => self.scroll_x_by(LINE_STEP_CSS_PX),
-            KeyCommand::ScrollLineLeft => self.scroll_x_by(-LINE_STEP_CSS_PX),
+            // FRAME-3 срез 2: клавиатурная прокрутка, пока фокус (`focused_frame`)
+            // стоит внутри фрейма, адресует ЕГО под-документ, а не страницу —
+            // `try_scroll_focused_frame{,_to}` возвращают `false` и без
+            // фокуса во фрейме, и когда фрейм уже упёрся в свой край, так что
+            // в обоих случаях жест уходит дальше по прежней ветке страницы
+            // (тот же overscroll-chain, что у колеса, `try_scroll_frame`).
+            KeyCommand::ScrollLineDown => {
+                if !self.try_scroll_focused_frame(0.0, LINE_STEP_CSS_PX) {
+                    self.scroll_active_pane(LINE_STEP_CSS_PX);
+                }
+            }
+            KeyCommand::ScrollLineUp => {
+                if !self.try_scroll_focused_frame(0.0, -LINE_STEP_CSS_PX) {
+                    self.scroll_active_pane(-LINE_STEP_CSS_PX);
+                }
+            }
+            KeyCommand::ScrollLineRight => {
+                if !self.try_scroll_focused_frame(LINE_STEP_CSS_PX, 0.0) {
+                    self.scroll_x_by(LINE_STEP_CSS_PX);
+                }
+            }
+            KeyCommand::ScrollLineLeft => {
+                if !self.try_scroll_focused_frame(-LINE_STEP_CSS_PX, 0.0) {
+                    self.scroll_x_by(-LINE_STEP_CSS_PX);
+                }
+            }
             KeyCommand::ScrollPageDown => {
-                let vh = self.viewport_height_css();
-                self.scroll_active_pane(page_step(vh));
+                // «Страница» под PageDown/Up внутри фрейма — это ЕГО
+                // собственный вьюпорт (`FrameHandle::viewport`), а не вьюпорт
+                // страницы-хозяина: иначе шаг съезжал бы с высотой ребёнка.
+                let frame_step = self
+                    .focused_frame
+                    .map(|(idx, _)| page_step(self.frames[idx].viewport.height));
+                let handled = frame_step.is_some_and(|s| self.try_scroll_focused_frame(0.0, s));
+                if !handled {
+                    let vh = self.viewport_height_css();
+                    self.scroll_active_pane(page_step(vh));
+                }
             }
             KeyCommand::ScrollPageUp => {
-                let vh = self.viewport_height_css();
-                self.scroll_active_pane(-page_step(vh));
+                let frame_step = self
+                    .focused_frame
+                    .map(|(idx, _)| page_step(self.frames[idx].viewport.height));
+                let handled = frame_step.is_some_and(|s| self.try_scroll_focused_frame(0.0, -s));
+                if !handled {
+                    let vh = self.viewport_height_css();
+                    self.scroll_active_pane(-page_step(vh));
+                }
             }
-            KeyCommand::ScrollHome => self.scroll_active_pane_to(0.0),
-            KeyCommand::ScrollEnd => self.scroll_active_pane_to(f32::INFINITY),
+            KeyCommand::ScrollHome => {
+                if !self.try_scroll_focused_frame_to(0.0) {
+                    self.scroll_active_pane_to(0.0);
+                }
+            }
+            KeyCommand::ScrollEnd => {
+                if !self.try_scroll_focused_frame_to(f32::INFINITY) {
+                    self.scroll_active_pane_to(f32::INFINITY);
+                }
+            }
             KeyCommand::NewTab => self.open_new_tab(),
             KeyCommand::CloseTab => {
                 let idx = self.tab_strip.active;

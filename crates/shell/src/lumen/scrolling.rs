@@ -245,6 +245,50 @@ impl Lumen {
         true
     }
 
+    /// Прокрутить под-документ ФОКУСНОГО фрейма клавиатурой на `(dx, dy)`
+    /// CSS px (FRAME-3 срез 2) — клавиатурный аналог [`Self::try_scroll_frame`].
+    /// У клавиши нет курсора, поэтому целевой фрейм — `self.focused_frame`
+    /// (то же поле, что уже маршрутизирует движение каретки — срез с кареткой
+    /// внутри фрейма, `keyboard.rs`), а не `pointer_target`.
+    ///
+    /// `true` — фрейм поглотил жест хотя бы по одной оси; `false` — фокуса
+    /// во фрейме нет, либо фрейм уже на своём краю по обеим запрошенным
+    /// осям (CSS Overscroll Behavior L1 §3, default `auto`): тогда клавиша
+    /// должна продолжить листать страницу как раньше.
+    pub(crate) fn try_scroll_focused_frame(&mut self, dx: f32, dy: f32) -> bool {
+        if (dx == 0.0 && dy == 0.0) || self.frames.is_empty() {
+            return false;
+        }
+        let Some((idx, _)) = self.focused_frame else { return false };
+        let want_y = self.frames[idx].scroll_y + dy;
+        let want_x = self.frames[idx].scroll_x + dx;
+        // Обе оси независимы — тот же порядок вызовов, что у `try_scroll_frame`.
+        let moved_y = self.apply_frame_scroll(idx, want_y);
+        let moved_x = self.apply_frame_scroll_x(idx, want_x);
+        moved_y || moved_x
+    }
+
+    /// Поставить под-документ ФОКУСНОГО фрейма в АБСОЛЮТНУЮ вертикальную
+    /// позицию (FRAME-3 срез 2) — клавиатурный аналог для `Home`/`End`,
+    /// зеркало [`Self::try_scroll_focused_frame`] по абсолютной, а не
+    /// относительной позиции. `f32::INFINITY` = «в самый низ», как у
+    /// [`Self::scroll_active_pane_to`].
+    ///
+    /// `true`/`false` — та же CSS Overscroll Behavior L1 §3 семантика: `false`
+    /// либо без фокуса во фрейме, либо позиция не изменилась (уже на краю).
+    pub(crate) fn try_scroll_focused_frame_to(&mut self, y: f32) -> bool {
+        if self.frames.is_empty() {
+            return false;
+        }
+        let Some((idx, _)) = self.focused_frame else { return false };
+        let target = if y.is_infinite() {
+            frames::frame_max_scroll(&self.frames[idx])
+        } else {
+            y
+        };
+        self.apply_frame_scroll(idx, target)
+    }
+
     /// BUG-338: bring `target_rect` (a target element's absolute border-box
     /// rect) into view within every scrolling overflow ancestor of `node`,
     /// vertical axis only вЂ” the ancestor-walk part of `Element.scrollIntoView()`
