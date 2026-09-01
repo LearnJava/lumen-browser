@@ -5825,13 +5825,21 @@ _lumen_canvas_define_dim('height', 1, 150);
         },
         enumerable: false, configurable: true,
     });
-    // Web Animations API (WAAPI Level 1) — element.animate() and getAnimations().
-    _LUMEN_WRAPPER_MEMBERS.animate = function(keyframes, options) { var nid = this.__nid__;
-        return _wa_element_animate(this, keyframes, options);
-    };
-    _LUMEN_WRAPPER_MEMBERS.getAnimations = function() { var nid = this.__nid__;
-        return _wa_get_animations_for(this);
-    };
+    // Web Animations API (WAAPI Level 1) — element.animate()/getAnimations() live on
+    // `Element.prototype` itself (Animatable is Element-only, Web Animations §3), not on
+    // `_LUMEN_WRAPPER_MEMBERS`'s shared proto, which every node — including Text/Comment —
+    // inherits: `interpolation-testcommon.js`'s feature-detect (`'animate' in
+    // Element.prototype`) walks Element.prototype's own ANCESTOR chain, which never
+    // reaches the wrapper proto sitting BELOW it in the chain, so it read false even
+    // though `element.animate()` itself worked (BUG-463).
+    Object.defineProperty(Element.prototype, 'animate', {
+        value: function(keyframes, options) { return _wa_element_animate(this, keyframes, options); },
+        writable: true, enumerable: false, configurable: true,
+    });
+    Object.defineProperty(Element.prototype, 'getAnimations', {
+        value: function() { return _wa_get_animations_for(this); },
+        writable: true, enumerable: false, configurable: true,
+    });
     // DOM LS §4.4: `ownerDocument` must be the same `document` object by reference
     // for every node — react-dom's container-identity check (BUG-281) compares
     // `element.ownerDocument === document`. Defined non-enumerable (matching real

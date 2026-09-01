@@ -1,8 +1,8 @@
 # BUG-463: WAAPI `animate`/`getAnimations` missing from `Element.prototype`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-01
 **Дата:** 2026-08-02
-**Компонент:** js (`crates/js/src/dom.rs:6603-6608` — `_lumen_build_element`)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` — was `crates/js/src/dom.rs:6603-6608` `_lumen_build_element` before SPLIT-JS3 moved the shim text out)
 **Найден:** WPT-RUN-3 срез 2 (`ROADMAP.md`) — массовый прогон `css/CSS2` (816 id,
 `run_report.py --all --root css/CSS2 --recursive --processes=6`)
 
@@ -119,3 +119,43 @@ majority of subtests (the plain numeric-interpolation cases) already pass;
 only the ones that also probe the raw Web Animations path fail this
 specific feature-detect. `.ini` under
 `tests/wpt/metadata/css/css-transitions/animations/`.
+
+## Fix (P3, 2026-09-01)
+
+By the time of the fix the shim's per-instance own-property layout described
+above had already been replaced (BUG-849) by a shared wrapper proto —
+`_LUMEN_WRAPPER_MEMBERS`, applied to an interface-specific object that sits
+one link BELOW the interface prototype in the chain (`instance → wrapper
+proto → HTMLDivElement.prototype → … → Element.prototype`). `animate`/
+`getAnimations` had moved onto that wrapper proto along with everything
+else, which fixed nothing for this bug: `'animate' in Element.prototype`
+still walks only `Element.prototype`'s own ANCESTOR chain, which never
+reaches a descendant sitting below it — same `false` as before, different
+mechanism.
+
+Moved both methods directly onto `Element.prototype` via
+`Object.defineProperty` (`writable: true, enumerable: false, configurable:
+true` — CLAUDE.md's "anything added to a JS prototype must be
+non-enumerable" rule, matching the style already used for
+`previousElementSibling` etc. in the same file). Calls still resolve via
+ordinary prototype inheritance (every element interface's prototype chain
+already terminates at `Element.prototype`), so `element.animate()` behavior
+is unchanged. Side effect (correct, not a regression): `_LUMEN_WRAPPER_MEMBERS`
+is shared by the CharacterData chain too (Text/Comment), so before this fix
+Text/Comment nodes wrongly exposed `.animate`/`.getAnimations` as well —
+Animatable is Element-only per Web Animations §3. They no longer do.
+
+Regression tests added — `dom/tests/v8_window_anim_compress.rs`:
+`element_animate_visible_on_element_prototype` (`'animate' in
+Element.prototype` / `'getAnimations' in Element.prototype` both `true`)
+and `element_animate_non_enumerable_and_element_only` (not in
+`Object.keys(Element.prototype)`, not present on a Text node).
+
+Verification: `cargo test -p lumen-js --features v8-backend element_animate`
+5/5 OK; `cargo clippy -p lumen-js --all-targets --features v8-backend --
+-D warnings` clean. Not re-run against a live WPT corpus in this slice —
+the `.ini` files referenced above still carry `expected: FAIL` and are a
+follow-up for whoever next touches WPT expectations for these categories.
+[BUG-530](BUG-530-OPEN.md) documents that most of the
+`*-interpolation.html`/`*-no-interpolation.html` files this bug named will
+still fail after this fix, just past this specific assertion.

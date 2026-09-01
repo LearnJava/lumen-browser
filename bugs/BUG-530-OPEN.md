@@ -45,7 +45,7 @@ getComputedStyle(target).marginLeft;  // ожидание "25px", факт "0px"
 `*-interpolation.html`/`*-no-interpolation.html` тестов через весь `css/`)
 делает ровно `animation.pause(); animation.currentTime = 50 * 1000;` перед
 чтением `getComputedStyle()` — то есть каждый файл, уже атрибутированный
-[BUG-463](BUG-463-OPEN.md) (`'animate' in Element.prototype` отвечает
+[BUG-463](BUG-463-FIXED.md) (`'animate' in Element.prototype` отвечает
 `false`, тест падает на feature-detect раньше, чем доходит до этого кода),
 после гипотетического фикса BUG-463 **не позеленеет**, а упадёт здесь же —
 BUG-463 сейчас маскирует эту находку на десятках файлов через весь корпус
@@ -66,6 +66,6 @@ BUG-463 сейчас маскирует эту находку на десятк�
 
 Не добавлен — находка ещё не привязана к конкретным файлам через `.ini`
 (9 файлов `css/css-properties-values-api/animation/` в этом срезе; полный
-масштаб — все файлы, уже перечисленные в [BUG-463](BUG-463-OPEN.md), плюс
+масштаб — все файлы, уже перечисленные в [BUG-463](BUG-463-FIXED.md), плюс
 любые будущие срезы, использующие `interpolation-testcommon.js` или
 собственный `pause()+currentTime`-паттерн).

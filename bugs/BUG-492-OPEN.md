@@ -34,7 +34,7 @@ mechanisms applied to this newly-discovered property:
   unrecognized (this bug), via the same `interpolation-testcommon.js`
   `'from'/'to' value should be supported` assertion BUG-491 hits.
 - 12 subtests: `assert_true('animate' in Element.prototype, 'Web Animations
-  should be supported')` fails — this is [BUG-463](../bugs/BUG-463-OPEN.md)
+  should be supported')` fails — this is [BUG-463](../bugs/BUG-463-FIXED.md)
   (WAAPI `animate` not installed on `Element.prototype`), unrelated to
   `border-image` itself; extend, not new.
 
@@ -72,7 +72,7 @@ three shapes already anticipated by sl.8's `## Симптом`:
 
 `discrete-no-interpolation.html` (35 of its 77 subtests) additionally
 confirms `border-image-repeat` specifically, shared with
-[BUG-463](BUG-463-OPEN.md) for the other 42 (WAAPI-not-supported) subtests
+[BUG-463](BUG-463-FIXED.md) for the other 42 (WAAPI-not-supported) subtests
 in the same file.
 
 ## .ini

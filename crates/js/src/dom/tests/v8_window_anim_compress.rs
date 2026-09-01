@@ -499,6 +499,32 @@ fn element_get_animations() {
     assert_eq!(r, lumen_core::JsValue::Number(1.0));
 }
 
+/// BUG-463: `interpolation-testcommon.js` feature-detects WAAPI via
+/// `'animate' in Element.prototype`, which requires the methods to live on
+/// the real `Element.prototype`, not on the shared wrapper proto every node
+/// (including Text/Comment) inherits from below it.
+#[test]
+fn element_animate_visible_on_element_prototype() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "('animate' in Element.prototype) && ('getAnimations' in Element.prototype)"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+/// Companion to the above: the methods must stay non-enumerable (CLAUDE.md
+/// "Anything added to a JS prototype must be non-enumerable"), and must not
+/// leak onto Text nodes — Animatable is Element-only (Web Animations §3).
+#[test]
+fn element_animate_non_enumerable_and_element_only() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "Object.keys(Element.prototype).indexOf('animate') === -1 && \
+                 !('animate' in document.createTextNode('x'))"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 #[test]
 fn document_get_animations() {
     let rt = v8_runtime_with_dom(make_doc());
