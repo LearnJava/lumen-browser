@@ -11,6 +11,136 @@ fn apply_opacity_to_color(color: Color, opacity: f32) -> Color {
     Color { r: color.r, g: color.g, b: color.b, a: (color.a as f32 * opacity).round() as u8 }
 }
 
+/// LIB-5 — applies `fill-opacity`/`stroke-opacity` to every stop of a
+/// resolved SVG gradient (mirrors `apply_opacity_to_color`, but for the
+/// per-stop alpha `DrawLinearGradient`/`DrawRadialGradient` carry instead of
+/// one flat color).
+fn apply_opacity_to_stops(stops: &[GradientStop], opacity: f32) -> Vec<GradientStop> {
+    stops.iter().map(|s| GradientStop { color: apply_opacity_to_color(s.color, opacity), ..s.clone() }).collect()
+}
+
+/// LIB-5 — bounding box of a set of already-flattened path contours, in
+/// whatever coordinate space they're already in (document px in the
+/// non-CTM fast path, local user space under a `PushTransform` CTM — see
+/// `emit_svg_shape`'s `geom`/`needs_ctm`). Layout cannot give paint a path's
+/// bbox (`svg_shape_bbox` returns `Rect::ZERO` for `SvgShapeKind::Path` —
+/// full `d` parsing is deferred to paint), so an `objectBoundingBox` gradient
+/// on a `<path>` resolves against this instead of `geom`.
+fn contours_bbox(contours: &[Vec<[f32; 2]>]) -> Rect {
+    let (mut min_x, mut min_y, mut max_x, mut max_y) =
+        (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for c in contours {
+        for &[x, y] in c {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+    if min_x.is_finite() { Rect::new(min_x, min_y, max_x - min_x, max_y - min_y) } else { Rect::ZERO }
+}
+
+/// LIB-5 — maps one `SvgGradientDef` coordinate (a fraction for
+/// `ObjectBoundingBox`, a user unit for `UserSpaceOnUse`) into the same
+/// coordinate space `geom` is already in.
+///
+/// `ObjectBoundingBox` is always relative to `geom` regardless of CTM state
+/// (it's defined relative to the shape's own bbox, which is exactly what
+/// `geom` is). `UserSpaceOnUse` needs the split `geom` itself uses: under a
+/// `PushTransform` CTM (`needs_ctm`), raw user coordinates are already in the
+/// space that transform maps — pass them through unchanged; otherwise apply
+/// `xmat` (the shape's full document-space paint matrix, `svg_paint_matrix`)
+/// by hand, since no `PushTransform` is active to do it.
+fn svg_gradient_point(
+    units: SvgGradientUnits,
+    x: f32,
+    y: f32,
+    geom: Rect,
+    xmat: [f32; 6],
+    needs_ctm: bool,
+) -> (f32, f32) {
+    match units {
+        SvgGradientUnits::ObjectBoundingBox => (geom.x + x * geom.width, geom.y + y * geom.height),
+        SvgGradientUnits::UserSpaceOnUse if needs_ctm => (x, y),
+        SvgGradientUnits::UserSpaceOnUse => {
+            let [a, b, c, d, e, f] = xmat;
+            (a * x + c * y + e, b * x + d * y + f)
+        }
+    }
+}
+
+/// LIB-5 — resolves an `SvgGradientDef` (already opacity-adjusted stops) to
+/// the `DrawLinearGradient`/`DrawRadialGradient` display command that paints
+/// it, positioned against `geom` (see [`svg_gradient_point`]).
+///
+/// The `DrawLinearGradient` this reuses is CSS's — it always draws its line
+/// through the *center* of `rect` at `angle_deg`. An SVG gradient vector
+/// that isn't itself center-symmetric about the shape's bbox (an
+/// off-center `x1`/`y1`/`x2`/`y2`) is therefore approximated by the
+/// through-center line at the same angle — exact for the common symmetric
+/// case (SVG's own default `0% 0% 100% 0%` included), approximate otherwise.
+fn svg_gradient_command(
+    def: &SvgGradientDef,
+    stops: Vec<GradientStop>,
+    geom: Rect,
+    xmat: [f32; 6],
+    needs_ctm: bool,
+) -> DisplayCommand {
+    match def {
+        SvgGradientDef::Linear { x1, y1, x2, y2, units, .. } => {
+            let (px1, py1) = svg_gradient_point(*units, *x1, *y1, geom, xmat, needs_ctm);
+            let (px2, py2) = svg_gradient_point(*units, *x2, *y2, geom, xmat, needs_ctm);
+            // atan2(dx, -dy): CSS angle convention (0° = up, clockwise) from
+            // the SVG vector's (dx, dy) in standard down-is-positive-y space.
+            let angle_deg = (px2 - px1).atan2(py1 - py2).to_degrees();
+            DisplayCommand::DrawLinearGradient { rect: geom, angle_deg, stops, repeating: false }
+        }
+        SvgGradientDef::Radial { cx, cy, r, units, .. } => {
+            let (pcx, pcy) = svg_gradient_point(*units, *cx, *cy, geom, xmat, needs_ctm);
+            let center_x_pct = if geom.width > 0.0 { (pcx - geom.x) / geom.width } else { 0.5 };
+            let center_y_pct = if geom.height > 0.0 { (pcy - geom.y) / geom.height } else { 0.5 };
+            let radius_px = match units {
+                // SVG L1 §7.10 objectBoundingBox diagonal formula (same one
+                // `clip_path_to_shape`'s `ClipPath::Circle` arm uses for CSS
+                // `circle()`'s percentage radius, CSS Shapes L1 §5).
+                SvgGradientUnits::ObjectBoundingBox => {
+                    r * ((geom.width * geom.width + geom.height * geom.height) * 0.5).sqrt()
+                }
+                SvgGradientUnits::UserSpaceOnUse if needs_ctm => *r,
+                SvgGradientUnits::UserSpaceOnUse => r * ((xmat[0].abs() + xmat[3].abs()) * 0.5),
+            };
+            DisplayCommand::DrawRadialGradient {
+                rect: geom,
+                center_x_pct,
+                center_y_pct,
+                radius_x: radius_px.max(0.01),
+                radius_y: radius_px.max(0.01),
+                stops,
+                repeating: false,
+            }
+        }
+    }
+}
+
+/// LIB-5 — emits a gradient-filled shape: clip to `clip_push`'s shape, draw
+/// the gradient across `geom`, release the clip. Reused by every fill arm
+/// (`Rect`/`Circle`/`Ellipse`/`Path`) — only the clip shape and `geom`
+/// differ per shape kind.
+fn emit_svg_gradient_fill(
+    cmds: &mut DisplayList,
+    clip_push: DisplayCommand,
+    def: &SvgGradientDef,
+    opacity: f32,
+    geom: Rect,
+    xmat: [f32; 6],
+    needs_ctm: bool,
+) {
+    let stops = apply_opacity_to_stops(def.stops(), opacity);
+    cmds.push(clip_push);
+    cmds.push(svg_gradient_command(def, stops, geom, xmat, needs_ctm));
+    cmds.push(DisplayCommand::PopClip);
+}
+
 /// Emits paint commands for a single SVG shape using its pre-computed document-space rect.
 /// Reads `svg_fill` / `svg_stroke` / `svg_fill_opacity` / `svg_stroke_opacity` /
 /// `svg_stroke_width` from `ComputedStyle` — wired by P4 per SVG §11.2/11.3/11.4.
@@ -29,6 +159,18 @@ pub(crate) fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut Disp
     let stroke_color = b.style.svg_stroke.resolve(current_color)
         .map(|c| apply_opacity_to_color(c, b.style.svg_stroke_opacity));
     let stroke_w = b.style.svg_stroke_width;
+    // LIB-5 — `fill: url(#gradient)` clip-and-fills with the resolved
+    // gradient instead of `fill_color`'s flat color (see the `fill_color`
+    // arms below). `stroke: url(#gradient)` is NOT given the same treatment
+    // — a gradient-filled stroke needs clipping to the stroke's own outline
+    // (caps/joins/dashes), not the fill shape's, which is materially more
+    // work than reusing `PushClipPath` on the fill contour. `stroke_color`
+    // above already carries a sensible fallback for it: `SvgPaint::resolve`
+    // returns the gradient's first stop as a flat color.
+    let fill_gradient = match &b.style.svg_fill {
+        SvgPaint::Gradient(g) => Some(g.as_ref()),
+        _ => None,
+    };
 
     // CSS Fill & Stroke L3 §6 / SVG 2 §13.7 — `paint-order`. Fill and stroke
     // commands are collected separately so they can be emitted fill-first
@@ -93,7 +235,14 @@ pub(crate) fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut Disp
             let r = (*rx).min(geom.width / 2.0);
             let r_y = (*ry).min(geom.height / 2.0);
             let radii = CornerRadii { tl: r, tl_y: r_y, tr: r, tr_y: r_y, br: r, br_y: r_y, bl: r, bl_y: r_y };
-            if let Some(fc) = fill_color {
+            if let Some(g) = fill_gradient {
+                let clip = if has_radius {
+                    DisplayCommand::PushClipRoundedRect { rect: geom, radii: [r, r, r, r] }
+                } else {
+                    DisplayCommand::PushClipRect { rect: geom }
+                };
+                emit_svg_gradient_fill(&mut fill_cmds, clip, g, b.style.svg_fill_opacity, geom, xmat, needs_ctm);
+            } else if let Some(fc) = fill_color {
                 if has_radius {
                     fill_cmds.push(DisplayCommand::FillRoundedRect { rect: geom, color: fc, radii });
                 } else {
@@ -133,7 +282,17 @@ pub(crate) fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut Disp
             let rx_px = geom.width / 2.0;
             let ry_px = geom.height / 2.0;
             let radii = CornerRadii { tl: rx_px, tl_y: ry_px, tr: rx_px, tr_y: ry_px, br: rx_px, br_y: ry_px, bl: rx_px, bl_y: ry_px };
-            if let Some(fc) = fill_color {
+            if let Some(g) = fill_gradient {
+                let clip = DisplayCommand::PushClipPath {
+                    shape: ResolvedClipShape::Ellipse {
+                        cx: geom.x + rx_px,
+                        cy: geom.y + ry_px,
+                        rx: rx_px,
+                        ry: ry_px,
+                    },
+                };
+                emit_svg_gradient_fill(&mut fill_cmds, clip, g, b.style.svg_fill_opacity, geom, xmat, needs_ctm);
+            } else if let Some(fc) = fill_color {
                 fill_cmds.push(DisplayCommand::FillRoundedRect { rect: geom, color: fc, radii });
             }
             if let Some(sc) = stroke_color && stroke_w > 0.0 {
@@ -189,12 +348,40 @@ pub(crate) fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut Disp
             }
         }
         SvgShapeKind::Path { d } => {
-            let need_fill   = fill_color.is_some();
+            let need_fill   = fill_color.is_some() || fill_gradient.is_some();
             let need_stroke = stroke_color.is_some() && stroke_w > 0.0;
             if need_fill || need_stroke {
                 let segs = crate::svg_path::parse_svg_path(d);
                 let contours = crate::svg_path::flatten_path(&segs, 0.5);
-                if let Some(fc) = fill_color {
+                if let Some(g) = fill_gradient {
+                    // LIB-5: clip to the path's own outline, then draw the
+                    // gradient across it — same technique as Rect/Ellipse
+                    // above, but the clip shape is an arbitrary polygon
+                    // (`ResolvedClipShape::Polygon` takes exactly one
+                    // contour) rather than a primitive. A path with more
+                    // than one sub-path (`M…Z M…Z`, e.g. a letter with a
+                    // hole) clips to only the FIRST — a documented gap, not
+                    // a silent one (LIB-5 follow-up: multi-contour clip).
+                    let shifted: Vec<Vec<[f32; 2]>> = contours
+                        .iter()
+                        .filter(|c| c.len() >= 2)
+                        .map(|c| {
+                            c.iter()
+                                .map(|[x, y]| [x + path_shift.0, y + path_shift.1])
+                                .collect()
+                        })
+                        .collect();
+                    if let Some(outer) = shifted.first() {
+                        let bbox = contours_bbox(&shifted);
+                        let clip = DisplayCommand::PushClipPath {
+                            shape: ResolvedClipShape::Polygon {
+                                verts: outer.iter().map(|[x, y]| (*x, *y)).collect(),
+                                even_odd: matches!(b.style.svg_fill_rule, FillRule::EvenOdd),
+                            },
+                        };
+                        emit_svg_gradient_fill(&mut fill_cmds, clip, g, b.style.svg_fill_opacity, bbox, xmat, needs_ctm);
+                    }
+                } else if let Some(fc) = fill_color {
                     match b.style.svg_fill_rule {
                         // BUG-247 / BUG-173: nonzero fills are emitted as raw
                         // outline contours (`DrawSvgFill`), not a triangle soup.

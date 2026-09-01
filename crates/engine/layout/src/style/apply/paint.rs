@@ -687,6 +687,10 @@ pub(in crate::style) fn apply_decl_paint(
                 style.svg_fill = SvgPaint::None;
             } else if v.eq_ignore_ascii_case("currentcolor") {
                 style.svg_fill = SvgPaint::CurrentColor;
+            } else if let Some(id) = svg_paint_url_id(v) {
+                // LIB-5: `url(#id)` — resolved against the DOM later, in
+                // `box_tree/svg.rs` (cascade has no `Document` access).
+                style.svg_fill = SvgPaint::Url(id);
             } else if let Some(c) = parse_color_legacy(v, is_quirks) {
                 style.svg_fill = SvgPaint::Color(c);
             }
@@ -708,6 +712,8 @@ pub(in crate::style) fn apply_decl_paint(
                 style.svg_stroke = SvgPaint::None;
             } else if v.eq_ignore_ascii_case("currentcolor") {
                 style.svg_stroke = SvgPaint::CurrentColor;
+            } else if let Some(id) = svg_paint_url_id(v) {
+                style.svg_stroke = SvgPaint::Url(id);
             } else if let Some(c) = parse_color_legacy(v, is_quirks) {
                 style.svg_stroke = SvgPaint::Color(c);
             }
@@ -980,4 +986,19 @@ pub(in crate::style) fn apply_decl_paint(
         _ => return false,
     }
     true
+}
+
+/// LIB-5 — extracts the fragment id from an SVG `<paint>` `url(#id)` /
+/// `url("#id")` / `url('#id')` reference. `None` for anything else (a color
+/// keyword, `none`, `currentColor`, or a non-fragment `url(...)` — SVG paint
+/// only supports same-document fragment references).
+fn svg_paint_url_id(v: &str) -> Option<String> {
+    if v.len() < 5 || !v[..4].eq_ignore_ascii_case("url(") {
+        return None;
+    }
+    let inner = v[4..].strip_suffix(')')?.trim();
+    let inner = inner.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
+        .or_else(|| inner.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+        .unwrap_or(inner);
+    inner.strip_prefix('#').map(str::to_owned).filter(|id| !id.is_empty())
 }

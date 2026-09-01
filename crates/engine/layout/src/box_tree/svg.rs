@@ -1,5 +1,8 @@
 use super::*;
 
+use crate::style::{Color, GradientStop, SvgGradientDef, SvgGradientUnits, SvgPaint, parse_color};
+use lumen_core::ColorSpace;
+
 /// SVG `viewBox="min-x min-y width height"` attribute. Maps SVG user-unit space
 /// to the CSS pixel rect of the `<svg>` element. All four values are in SVG user units.
 #[derive(Debug, Clone, PartialEq)]
@@ -419,6 +422,159 @@ fn svg_attr_f32(doc: &Document, id: NodeId, attr: &str) -> f32 {
         .get_attr(attr)
         .and_then(|v| v.trim().parse::<f32>().ok())
         .unwrap_or(0.0)
+}
+
+// ─── SVG paint servers (LIB-5) ─────────────────────────────────────────────
+
+/// Parses an SVG gradient coordinate: a bare number (already in `units`'
+/// scale — a 0..1 fraction for `objectBoundingBox`, a user unit for
+/// `userSpaceOnUse`) or a `<percentage>` (divided by 100, SVG L1 §4.5 treats
+/// `N%` and the bare fraction `N/100` as equivalent for these attributes).
+/// Returns `default` if the attribute is absent or unparseable.
+fn svg_gradient_coord(doc: &Document, id: NodeId, attr: &str, default: f32) -> f32 {
+    let Some(raw) = doc.get(id).get_attr(attr) else { return default };
+    let raw = raw.trim();
+    match raw.strip_suffix('%') {
+        Some(pct) => pct.trim().parse::<f32>().map(|v| v / 100.0).unwrap_or(default),
+        None => raw.parse::<f32>().unwrap_or(default),
+    }
+}
+
+/// Recursively collects `<stop>` element ids under `parent_id`, in document
+/// order — see [`collect_gradient_stops`] for why a direct-children scan
+/// isn't enough. Any non-`<stop>` descendant (an `<animate>`, a mis-nested
+/// non-stop sibling) is skipped but still walked into.
+fn collect_stop_ids(doc: &Document, parent_id: NodeId, out: &mut Vec<NodeId>) {
+    for &child_id in &doc.get(parent_id).children {
+        if doc.get(child_id).element_name().is_some_and(|n| n.local.as_str() == "stop") {
+            out.push(child_id);
+        }
+        collect_stop_ids(doc, child_id, out);
+    }
+}
+
+/// Collects the `<stop>` descendants of a `<linearGradient>`/`<radialGradient>`
+/// element (SVG L1 §13.2.4) into display-list-ready [`GradientStop`]s, in
+/// document order.
+///
+/// Walks the full subtree, not just direct children: `<stop/>` is not an
+/// HTML void element, so the HTML5 parser (no SVG foreign-content mode, same
+/// gotcha `<rect/>`/`<use/>` already work around elsewhere in this file)
+/// treats its trailing `/` as decorative and opens a real element — the
+/// *next* `<stop/>` becomes its DOM *child*, not its sibling. A direct-children
+/// scan would silently keep only the first stop of every self-closed list.
+///
+/// Reads `offset`/`stop-color`/`stop-opacity` as DOM **presentation
+/// attributes only** — a `style="stop-color:…"` inline style or an author
+/// stylesheet rule targeting `stop` is not applied, since `<stop>` elements
+/// never become a `LayoutBox` (they live under `<defs>`, skipped by
+/// `collect_svg_shapes`) and so never go through `compute_style`. Covers the
+/// overwhelmingly common authoring form; a `<stop>` relying on CSS for its
+/// color paints black instead (SVG L1 §13.2.4's own fallback for an invalid
+/// `stop-color`).
+///
+/// SVG L1 §13.2.4 requires offsets to be non-decreasing — a `<stop>` whose
+/// `offset` is less than the previous one is clamped up to it.
+fn collect_gradient_stops(doc: &Document, gradient_id: NodeId) -> Vec<GradientStop> {
+    let mut stops = Vec::new();
+    let mut floor = 0.0_f32;
+    let mut ids = Vec::new();
+    collect_stop_ids(doc, gradient_id, &mut ids);
+    for child_id in ids {
+        let offset = svg_gradient_coord(doc, child_id, "offset", 0.0).clamp(0.0, 1.0).max(floor);
+        floor = offset;
+        let color_attr = doc.get(child_id).get_attr("stop-color").unwrap_or("black");
+        // `currentColor` on a <stop> should resolve to the stop element's own
+        // (inherited) `color` — out of scope here (no cascade pass over
+        // `<defs>` content); falls back to the SVG default paint (black).
+        let base = if color_attr.trim().eq_ignore_ascii_case("currentcolor") {
+            None
+        } else {
+            parse_color(color_attr.trim())
+        }
+        .unwrap_or(Color::BLACK);
+        let opacity = doc.get(child_id).get_attr("stop-opacity")
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0);
+        let a = (opacity * 255.0).round().clamp(0.0, 255.0) as u8;
+        stops.push(GradientStop {
+            color: Color { a, ..base },
+            color_space: ColorSpace::default(),
+            position: Some(Length::Percent(offset * 100.0)),
+        });
+    }
+    stops
+}
+
+/// Resolves an SVG paint-server reference (`fill`/`stroke` `url(#id)`) into a
+/// concrete gradient definition. `None` when `id` doesn't resolve, isn't a
+/// `<linearGradient>`/`<radialGradient>`, or (after one `href` hop) has no
+/// `<stop>` children — SVG L1 §13.2.1's fallback for all of these is "not
+/// painted" (like `fill: none`), which the caller applies by leaving the
+/// paint as `SvgPaint::None` when this returns `None`.
+fn resolve_svg_gradient(doc: &Document, id: &str) -> Option<SvgGradientDef> {
+    let node_id = doc.find_by_id(id)?;
+    // The HTML5 tokenizer ASCII-lowercases every tag name it builds
+    // (`html-parser/src/tokenizer.rs`), same as any other tag — `<linearGradient>`
+    // is stored as `lineargradient` — so this must compare case-insensitively
+    // (`get_attr` already does, via `eq_ignore_ascii_case`; tag names don't).
+    let tag = doc.get(node_id).element_name()?.local.as_str().to_owned();
+    let is_linear = tag.eq_ignore_ascii_case("linearGradient");
+    let is_radial = tag.eq_ignore_ascii_case("radialGradient");
+    if !is_linear && !is_radial {
+        return None;
+    }
+    let units = match doc.get(node_id).get_attr("gradientUnits") {
+        Some(v) if v.trim().eq_ignore_ascii_case("userSpaceOnUse") => SvgGradientUnits::UserSpaceOnUse,
+        _ => SvgGradientUnits::ObjectBoundingBox,
+    };
+    let mut stops = collect_gradient_stops(doc, node_id);
+    if stops.is_empty() {
+        // SVG L1 §13.2.1 — `xlink:href`/`href` inherits stops (and, for any
+        // geometry attribute this element doesn't specify itself) from
+        // another gradient. One hop only: a `<stop>`-less chain longer than
+        // one link is rare in authored content, and bounding the hop count
+        // avoids needing cycle detection for a reference chain.
+        let href = doc.get(node_id).get_attr("href")
+            .or_else(|| doc.get(node_id).get_attr("xlink:href"))?;
+        let ref_node = doc.find_by_id(href.trim_start_matches('#'))?;
+        stops = collect_gradient_stops(doc, ref_node);
+        if stops.is_empty() {
+            return None;
+        }
+    }
+    Some(if is_linear {
+        // SVG L1 §13.2.2 defaults: a horizontal gradient spanning the full box.
+        SvgGradientDef::Linear {
+            x1: svg_gradient_coord(doc, node_id, "x1", 0.0),
+            y1: svg_gradient_coord(doc, node_id, "y1", 0.0),
+            x2: svg_gradient_coord(doc, node_id, "x2", 1.0),
+            y2: svg_gradient_coord(doc, node_id, "y2", 0.0),
+            units,
+            stops,
+        }
+    } else {
+        // SVG L1 §13.2.3 defaults: centred, radius half the box. SVG 2's focal
+        // point (`fx`/`fy`) is not modelled — see `SvgGradientDef::Radial`.
+        SvgGradientDef::Radial {
+            cx: svg_gradient_coord(doc, node_id, "cx", 0.5),
+            cy: svg_gradient_coord(doc, node_id, "cy", 0.5),
+            r: svg_gradient_coord(doc, node_id, "r", 0.5),
+            units,
+            stops,
+        }
+    })
+}
+
+/// Resolves a `SvgPaint::Url` in place against the DOM, replacing it with
+/// `Gradient` (found) or `None` (unresolvable — SVG L1 §13.2.1 fallback).
+/// No-op for every other `SvgPaint` variant.
+fn resolve_svg_paint_url(doc: &Document, paint: &mut SvgPaint) {
+    let SvgPaint::Url(id) = paint else { return };
+    *paint = resolve_svg_gradient(doc, id)
+        .map(|g| SvgPaint::Gradient(Arc::new(g)))
+        .unwrap_or(SvgPaint::None);
 }
 
 /// Parses the SVG `viewBox="min-x min-y width height"` attribute.
@@ -875,9 +1031,20 @@ fn process_svg_node(
     let Some(name) = doc.get(child_id).element_name() else {
         return; // text node / comment / etc.
     };
-    let style = Arc::new(crate::style::compute_style(doc, child_id, sheet, inherited, viewport, dark_mode));
+    let mut style = Arc::new(crate::style::compute_style(doc, child_id, sheet, inherited, viewport, dark_mode));
     if style.display == crate::style::Display::None {
         return;
+    }
+    // LIB-5 — `fill`/`stroke: url(#id)` is only a fragment id after cascade
+    // (which has no `Document`); resolve it against the DOM here, once per
+    // element, so descendants that inherit the paint (no `fill`/`stroke` of
+    // their own) inherit the already-resolved `Gradient` like any other
+    // inherited value. `Arc::make_mut` is cheap here: `style` was just
+    // created above and has no other references yet, so this never clones.
+    if matches!(style.svg_fill, SvgPaint::Url(_)) || matches!(style.svg_stroke, SvgPaint::Url(_)) {
+        let s = Arc::make_mut(&mut style);
+        resolve_svg_paint_url(doc, &mut s.svg_fill);
+        resolve_svg_paint_url(doc, &mut s.svg_stroke);
     }
     let svg_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
 
