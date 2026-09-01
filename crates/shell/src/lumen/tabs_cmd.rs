@@ -62,6 +62,7 @@ impl Lumen {
         self.nav_back = Vec::new();
         self.nav_fwd = Vec::new();
         self.form_state = HashMap::new();
+        self.frame_text_cursor = HashMap::new();
         self.validation_tooltip = None;
         self.color_picker_node = None;
         self.date_picker_node = None;

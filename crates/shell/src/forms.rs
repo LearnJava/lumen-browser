@@ -38,6 +38,13 @@ pub struct FormControlState {
     /// Updated on ToggleCheckbox; read during form reset / serialization.
     #[allow(dead_code)]
     pub checked: bool,
+    /// Char-index text cursor for a typeable `<input>`/`<textarea>` (FRAME-2
+    /// п.1). `None` means "not yet touched by cursor movement" — the field
+    /// reads as end-of-text, matching the append-only behaviour it had before
+    /// cursor tracking existed. Not round-tripped through hibernation/tab
+    /// snapshots (always `None` after restore) — only the value persists,
+    /// same tradeoff `checked` already made for those paths.
+    pub cursor: Option<usize>,
 }
 
 /// `NodeId` → mutable state map for all form controls on the current page.

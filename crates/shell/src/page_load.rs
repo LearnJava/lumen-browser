@@ -1179,6 +1179,7 @@ impl Lumen {
         self.forward_momentum_stop();
         self.touchpad_vel = (0.0, 0.0);
         self.form_state.clear();
+        self.frame_text_cursor.clear();
         self.validation_tooltip = None;
         self.color_picker_node = None;
         self.date_picker_node = None;

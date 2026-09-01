@@ -414,6 +414,76 @@ impl Lumen {
             }
         }
 
+        // Text-cursor movement inside a focused typeable field (page or
+        // frame) — FRAME-2 п.1. Must run BEFORE the global keybinding table
+        // below: KeyCode::ArrowLeft/Right/Home/End are bound there to
+        // ScrollLine*/ScrollHome/ScrollEnd (`input/keybindings.rs`), so
+        // without this branch Left/Right/Home/End while typing scroll the
+        // page instead of moving the caret. Shift/Ctrl combinations (word
+        // jump, range selection) are left to the keybinding table/no-op —
+        // out of scope here, see FRAME-2's queue note.
+        if self.modifiers.is_empty() {
+            let handled_in_frame = self
+                .focused_frame
+                .is_some_and(|(idx, nid)| self.frame_typeable_field(idx, nid).is_some())
+                && match code {
+                    KeyCode::ArrowLeft => {
+                        self.move_focused_frame_cursor(-1);
+                        true
+                    }
+                    KeyCode::ArrowRight => {
+                        self.move_focused_frame_cursor(1);
+                        true
+                    }
+                    KeyCode::Home => {
+                        self.jump_focused_frame_cursor(true);
+                        true
+                    }
+                    KeyCode::End => {
+                        self.jump_focused_frame_cursor(false);
+                        true
+                    }
+                    KeyCode::Delete => {
+                        self.inject_frame_delete_forward();
+                        true
+                    }
+                    _ => false,
+                };
+            if handled_in_frame {
+                self.request_redraw();
+                return;
+            }
+            if self.focused_node.is_some_and(|nid| self.typeable_field(nid).is_some()) {
+                let handled = match code {
+                    KeyCode::ArrowLeft => {
+                        self.move_focused_cursor(-1);
+                        true
+                    }
+                    KeyCode::ArrowRight => {
+                        self.move_focused_cursor(1);
+                        true
+                    }
+                    KeyCode::Home => {
+                        self.jump_focused_cursor(true);
+                        true
+                    }
+                    KeyCode::End => {
+                        self.jump_focused_cursor(false);
+                        true
+                    }
+                    KeyCode::Delete => {
+                        self.inject_delete_forward();
+                        true
+                    }
+                    _ => false,
+                };
+                if handled {
+                    self.request_redraw();
+                    return;
+                }
+            }
+        }
+
         let Some(cmd) = keybinding_for(code, self.modifiers) else {
             return;
         };
