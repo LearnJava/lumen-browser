@@ -1093,3 +1093,170 @@ fn layout_result_cache_key_distinguishes_used_size_override_from_plain_probe() {
         item.rect,
     );
 }
+
+/// BUG-341 S37 — S36 left one question unattempted: "profiling which piece
+/// of the per-call fixed cost dominates (key construction vs. HashMap
+/// lookup vs. clone-on-insert)". Isolated microbench per
+/// `docs/perf-method.md`'s "ask price from a separate microbench before
+/// operating the whole path" rule, instead of re-running the whole
+/// `lay_out_cache_checked` A/B (already done three times, S32/S33/S36) to
+/// answer a question about one internal piece of it.
+///
+/// Run: `cargo test -p lumen-layout --profile dev-release
+/// box_tree::tests::bug341_differential::bug341_s37_cache_fixed_cost_breakdown
+/// -- --ignored --nocapture`.
+#[test]
+#[ignore = "manual perf measurement (BUG-341 S37) — see doc comment for run command"]
+fn bug341_s37_cache_fixed_cost_breakdown() {
+    use crate::counters::{build_counter_style_registry, precompute_counters};
+    use crate::style::ComputedStyle;
+    use lumen_dom::build_flat_tree;
+    use std::collections::HashMap;
+    use std::hint::black_box;
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    // A moderately nested flex row of 20 items, each with two text-bearing
+    // spans — representative subtree size for one `lay_out_flex` item (not
+    // the whole ~2300-node chrome document S36 measured the wall-clock A/B
+    // on), so the clone benchmark below pays a realistic depth/fan-out, not
+    // a single leaf box.
+    let mut html = String::from(r#"<div class="row">"#);
+    for i in 0..20 {
+        html.push_str(&format!(
+            r#"<div class="item"><span class="a">label {i}</span><span class="b">value {i}</span></div>"#
+        ));
+    }
+    html.push_str("</div>");
+    let css = r#"
+        .row { display: flex; }
+        .item { display: flex; flex-direction: column; padding: 4px; }
+    "#;
+    let vp = Size::new(800.0, 600.0);
+    let doc = lumen_html_parser::parse(&html);
+    let sheet = lumen_css_parser::parse(css);
+    let flat = build_flat_tree(&doc);
+    let root_style = ComputedStyle::root();
+    let counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+    let registry = build_counter_style_registry(&sheet);
+    let null_hp = lumen_core::ext::NullHyphenationProvider;
+    let init_pcb = super::super::Rect::new(0.0, 0.0, vp.width, vp.height);
+
+    let mut tree = super::super::build_box(
+        &doc, &sheet, doc.root(), &root_style, vp, &flat, &counters, &registry, false, None,
+    );
+    super::super::lay_out(
+        &mut tree, 0.0, 0.0, vp.width, Some(vp.height), None, vp, init_pcb, &null_hp, false,
+    );
+    let body = tree.children.last().expect("html > body");
+    let row = body.children.last().expect("body > .row").clone();
+
+    fn count_nodes(b: &super::super::LayoutBox) -> usize {
+        1 + b.children.iter().map(count_nodes).sum::<usize>()
+    }
+    let subtree_nodes = count_nodes(&row);
+    let style = Arc::clone(&row.style);
+
+    const N: usize = 50_000;
+
+    // (a) key construction alone: 11 fields, 8 of them `f32::to_bits`.
+    let t = Instant::now();
+    let mut acc = 0u64;
+    for i in 0..N {
+        let key = super::super::LayoutResultKey {
+            node: row.node,
+            width_bits: (i as f32).to_bits(),
+            height_bits: Some((i as f32).to_bits()),
+            viewport_w_bits: vp.width.to_bits(),
+            viewport_h_bits: vp.height.to_bits(),
+            pcb_x_bits: 0.0f32.to_bits(),
+            pcb_y_bits: 0.0f32.to_bits(),
+            pcb_w_bits: vp.width.to_bits(),
+            pcb_h_bits: vp.height.to_bits(),
+            in_block_flow: false,
+            measurer_ptr: 0,
+            hp_ptr: i,
+            used_size_override: super::super::UsedSizeOverrideBits::from(None),
+        };
+        acc = acc.wrapping_add(black_box(key).width_bits as u64);
+    }
+    black_box(acc);
+    let key_ns = t.elapsed().as_nanos() as f64;
+
+    // (b) HashMap lookup against a realistically populated map (200 distinct
+    // keys — same order of magnitude as a handful of hundred live entries,
+    // well under the ~4 260 S36 measured on the full chrome document but
+    // enough to exercise real hashing/bucket-walk, not an empty map),
+    // alternating hit/miss.
+    let mut map: HashMap<super::super::LayoutResultKey, super::super::LayoutResultEntry> =
+        HashMap::new();
+    let mut sample_keys = Vec::new();
+    for i in 0..200u32 {
+        let key = super::super::LayoutResultKey {
+            node: row.node,
+            width_bits: (i as f32).to_bits(),
+            height_bits: None,
+            viewport_w_bits: vp.width.to_bits(),
+            viewport_h_bits: vp.height.to_bits(),
+            pcb_x_bits: 0.0f32.to_bits(),
+            pcb_y_bits: 0.0f32.to_bits(),
+            pcb_w_bits: vp.width.to_bits(),
+            pcb_h_bits: vp.height.to_bits(),
+            in_block_flow: false,
+            measurer_ptr: 0,
+            hp_ptr: 0,
+            used_size_override: super::super::UsedSizeOverrideBits::from(None),
+        };
+        map.insert(
+            key,
+            super::super::LayoutResultEntry {
+                style: Arc::clone(&style),
+                start_x: 0.0,
+                start_y: 0.0,
+                result: row.clone(),
+            },
+        );
+        sample_keys.push(key);
+    }
+    let miss_key = super::super::LayoutResultKey { width_bits: 999_999, ..sample_keys[0] };
+    let t = Instant::now();
+    let mut found = 0u64;
+    for i in 0..N {
+        let k = if i % 2 == 0 { &sample_keys[i % sample_keys.len()] } else { &miss_key };
+        if black_box(map.get(k)).is_some() {
+            found += 1;
+        }
+    }
+    black_box(found);
+    let lookup_ns = t.elapsed().as_nanos() as f64;
+
+    // (c) clone-on-insert: the two clones `lay_out_cache_checked` pays on
+    // every miss it decides to cache — `Arc::clone(&b.style)` (refcount
+    // bump) and `b.clone()` (the whole `LayoutBox` subtree, recursing
+    // through every descendant's `Vec<LayoutBox>`).
+    let t = Instant::now();
+    for _ in 0..N {
+        black_box(Arc::clone(&style));
+    }
+    let arc_clone_ns = t.elapsed().as_nanos() as f64;
+
+    const N_SUBTREE: usize = 5_000; // fewer reps: this arm is the expensive one
+    let t = Instant::now();
+    for _ in 0..N_SUBTREE {
+        black_box(row.clone());
+    }
+    let subtree_clone_ns = t.elapsed().as_nanos() as f64;
+
+    eprintln!(
+        "[s37] subtree_nodes={subtree_nodes} N={N} N_SUBTREE={N_SUBTREE}\n\
+         [s37] key_construction   {:>8.1} ns/call\n\
+         [s37] hashmap_lookup     {:>8.1} ns/call (200-entry map, 50% hit)\n\
+         [s37] arc_style_clone    {:>8.1} ns/call\n\
+         [s37] subtree_clone      {:>8.1} ns/call  ({:.2} ns/node)",
+        key_ns / N as f64,
+        lookup_ns / N as f64,
+        arc_clone_ns / N as f64,
+        subtree_clone_ns / N_SUBTREE as f64,
+        subtree_clone_ns / N_SUBTREE as f64 / subtree_nodes as f64,
+    );
+}
