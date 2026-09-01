@@ -13,19 +13,19 @@
 use crate::*;
 
 impl Lumen {
-    /// CSS Containment L3 В§4.4 (BB-4): РѕР±РЅРѕРІРёС‚СЊ skipped-СЃРѕСЃС‚РѕСЏРЅРёРµ
-    /// `content-visibility: auto` РїРѕСЃР»Рµ СЃРјРµРЅС‹ `layout_box` вЂ” РїРµСЂРµСЃРєР°РЅРёСЂРѕРІР°С‚СЊ
-    /// РґРµСЂРµРІРѕ, Р·Р°РґРёС„С„Р°С‚СЊ СЃ РїСЂРµРґС‹РґСѓС‰РёРј РїСЂРѕС…РѕРґРѕРј, РґРѕР±Р°РІРёС‚СЊ СЃРѕР±С‹С‚РёСЏ РІ `cv_events`.
-    /// Р”СЂРµРЅРёСЂСѓРµС‚ thread-local layout-РєСЂРµР№С‚Р°, С‡С‚РѕР±С‹ Р·Р°РїРёСЃРё РЅРµ РїРµСЂРµР¶РёР»Рё РїСЂРѕС…РѕРґ.
+    /// CSS Containment L3 §4.4 (BB-4): обновить skipped-состояние
+    /// `content-visibility: auto` после смены `layout_box` — пересканировать
+    /// дерево, задиффать с предыдущим проходом, добавить события в `cv_events`.
+    /// Дренирует thread-local layout-крейта, чтобы записи не пережили проход.
     pub(crate) fn refresh_cv_state(&mut self) {
         let _ = lumen_layout::take_cv_skipped();
         let mut auto_boxes = Vec::new();
         if let Some(lb) = self.layout_box.as_ref() {
             collect_cv_auto(lb, &mut auto_boxes);
         }
-        // BUG-852: СЃРѕСЃС‚РѕСЏРЅРёРµ СЃС‡РёС‚Р°РµС‚СЃСЏ С‚РµРј Р¶Рµ РїСЂР°РІРёР»РѕРј СЂРµР»РµРІР°РЅС‚РЅРѕСЃС‚Рё, С‡С‚Рѕ Рё РІ
-        // layout (`cv_is_skipped`), Р° РЅРµ РІС‹РІРѕРґРёС‚СЃСЏ РёР· В«РґРµС‚Рё РїСѓСЃС‚С‹В» вЂ” РёРЅР°С‡Рµ
-        // РїСѓСЃС‚РѕР№ auto-СЌР»РµРјРµРЅС‚ РЅРµРѕС‚Р»РёС‡РёРј РѕС‚ РїСЂРѕРїСѓС‰РµРЅРЅРѕРіРѕ.
+        // BUG-852: состояние считается тем же правилом релевантности, что и в
+        // layout (`cv_is_skipped`), а не выводится из «дети пусты» — иначе
+        // пустой auto-элемент неотличим от пропущенного.
         let scroll_y = self.scroll_y;
         let viewport_h = self.viewport_height_css();
         let next: Vec<(NodeId, bool)> = auto_boxes
@@ -36,8 +36,8 @@ impl Lumen {
             })
             .collect();
         self.cv_events.extend(diff_cv_state(&self.cv_auto_state, &next));
-        // РљР°Рї РѕС‡РµСЂРµРґРё: РґРѕСЃС‚Р°РІРєР° РёРґС‘С‚ СЂР°Р· РІ РєР°РґСЂ, РЅРѕ РєР°РґСЂР° РјРѕР¶РµС‚ Рё РЅРµ Р±С‹С‚СЊ
-        // (С„РѕРЅРѕРІР°СЏ РІРєР»Р°РґРєР°) вЂ” С…СЂР°РЅРёРј С‚РѕР»СЊРєРѕ С…РІРѕСЃС‚.
+        // Кап очереди: доставка идёт раз в кадр, но кадра может и не быть
+        // (фоновая вкладка) — храним только хвост.
         if self.cv_events.len() > 256 {
             let drop_n = self.cv_events.len() - 256;
             self.cv_events.drain(..drop_n);
@@ -50,19 +50,19 @@ impl Lumen {
             .collect();
     }
 
-    /// Р”РѕСЃС‚Р°РІРёС‚СЊ РЅР°РєРѕРїР»РµРЅРЅС‹Рµ `contentvisibilityautostatechange` РІ JS.
+    /// Доставить накопленные `contentvisibilityautostatechange` в JS.
     ///
-    /// Р—РѕРІС‘С‚СЃСЏ СЂР°Р· РІ РєР°РґСЂ РёР· `RedrawRequested` вЂ” С€Р°РіР° В«update the renderingВ»,
-    /// РІРЅСѓС‚СЂРё РєРѕС‚РѕСЂРѕРіРѕ CSS Contain L2 В§4.1 Рё РѕРїСЂРµРґРµР»СЏРµС‚ СЂРµР»РµРІР°РЅС‚РЅРѕСЃС‚СЊ. РўРѕС‡РєР°
-    /// РѕРґРЅР° РЅР° РІСЃРµ РёСЃС‚РѕС‡РЅРёРєРё СЃРѕСЃС‚РѕСЏРЅРёСЏ (Р·Р°РіСЂСѓР·РєР° СЃС‚СЂР°РЅРёС†С‹, СЂРµР»РµР№Р°СѓС‚, ratchet
-    /// РїСЂРё СЃРєСЂРѕР»Р»Рµ), РїРѕС‚РѕРјСѓ С‡С‚Рѕ `refresh_cv_state` РІС‹Р·С‹РІР°РµС‚СЃСЏ РёР· С‡РµС‚С‹СЂС‘С… РјРµСЃС‚,
-    /// Рё РІ РґРІСѓС… РёР· РЅРёС… JS-РєРѕРЅС‚РµРєСЃС‚ РµС‰С‘ РЅРµ СѓСЃС‚Р°РЅРѕРІР»РµРЅ.
+    /// Зовётся раз в кадр из `RedrawRequested` — шага «update the rendering»,
+    /// внутри которого CSS Contain L2 §4.1 и определяет релевантность. Точка
+    /// одна на все источники состояния (загрузка страницы, релейаут, ratchet
+    /// при скролле), потому что `refresh_cv_state` вызывается из четырёх мест,
+    /// и в двух из них JS-контекст ещё не установлен.
     #[cfg(feature = "v8")]
     pub(crate) fn deliver_cv_state_changes(&mut self) {
         if self.cv_events.is_empty() || !self.js_present {
-            // РџРѕРєР° JS-РєРѕРЅС‚РµРєСЃС‚Р° РЅРµС‚, СЃРѕР±С‹С‚РёСЏ РєРѕРїСЏС‚СЃСЏ: СЃС‚СЂР°РЅРёС†Р°, РѕР±СЉСЏРІРёРІС€Р°СЏ
-            // `content-visibility: auto` РІ СЂР°Р·РјРµС‚РєРµ, РґРѕР»Р¶РЅР° РїРѕР»СѓС‡РёС‚СЊ РїРµСЂРІРѕРµ
-            // РЅР°Р±Р»СЋРґРµРЅРёРµ, РєРѕРіРґР° РµС‘ СЃРєСЂРёРїС‚С‹ СѓР¶Рµ РјРѕРіСѓС‚ СЃР»СѓС€Р°С‚СЊ.
+            // Пока JS-контекста нет, события копятся: страница, объявившая
+            // `content-visibility: auto` в разметке, должна получить первое
+            // наблюдение, когда её скрипты уже могут слушать.
             return;
         }
         let payload: String = {
@@ -82,14 +82,14 @@ impl Lumen {
         });
     }
 
-    /// РЁР°Рі 1.6 В«Update the renderingВ»: РµСЃР»Рё РїСЂРё СЃРєСЂРѕР»Р»Рµ РїСЂРѕРїСѓС‰РµРЅРЅС‹Р№
-    /// `content-visibility: auto` СѓР·РµР» РІРѕС€С‘Р» РІ СЂР°СЃС€РёСЂРµРЅРЅС‹Р№ viewport вЂ”
-    /// ratchet РІ `cv_relevant` + relayout (РµРіРѕ СЃРѕРґРµСЂР¶РёРјРѕРµ РІС‹РєР»Р°РґС‹РІР°РµС‚СЃСЏ).
+    /// Шаг 1.6 «Update the rendering»: если при скролле пропущенный
+    /// `content-visibility: auto` узел вошёл в расширенный viewport —
+    /// ratchet в `cv_relevant` + relayout (его содержимое выкладывается).
     ///
     /// BUG-286: routed through [`Self::relayout_raf_dirty`] (not the direct
     /// synchronous [`Self::relayout`]) so this scroll-time trigger gets the
     /// same off-UI-thread treatment as the other `RedrawRequested` relayout
-    /// sites once `LUMEN_ENGINE_THREAD=1` вЂ” this was the one caller still
+    /// sites once `LUMEN_ENGINE_THREAD=1` — this was the one caller still
     /// calling `relayout()` directly. No behavior change on the default
     /// (flag-off) build: `relayout_raf_dirty()` falls back to the same
     /// incremental-then-full sequence.
@@ -112,7 +112,7 @@ impl Lumen {
         self.relayout_raf_dirty();
     }
 
-    /// Drop CPU-decoded images that have scrolled outside the gate zone (ADR-008 В§10E.4).
+    /// Drop CPU-decoded images that have scrolled outside the gate zone (ADR-008 §10E.4).
     ///
     /// Called once per rendered frame (in `RedrawRequested`) after scroll advancement.
     /// No-op when the cache is empty or the layout tree or renderer is unavailable.

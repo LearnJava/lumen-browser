@@ -18,11 +18,11 @@ impl Lumen {
     ///
     /// BUG-352: also the single point every navigation path (full-document
     /// load, same-document popstate, JS-intercepted push/replace) funnels
-    /// through once `self.source`/`self.display_url` has its final value вЂ”
+    /// through once `self.source`/`self.display_url` has its final value —
     /// so it doubles as the trigger to refresh the engine-drawn chrome's
     /// `#omniInput` (`relayout_chrome_host`/`chrome_omnibox_value` reads
     /// `current_display_url()`). Without this, the omnibox only ever
-    /// refreshed from the omnibox's own key handler (CC-7) вЂ” every other
+    /// refreshed from the omnibox's own key handler (CC-7) — every other
     /// way the URL can change (a clicked link, `history.back()`/`forward()`,
     /// BiDi/MCP `navigate`, which is exactly `wptrunner`'s navigation model)
     /// left it showing whatever URL was on screen at the last keystroke,
@@ -62,7 +62,7 @@ impl Lumen {
         }
         let state = serde_json::json!({ "entries": entries, "index": idx });
         // The native binding takes a String argument, so the JSON text must
-        // be embedded as a JS string literal (double encoding) вЂ” passing a
+        // be embedded as a JS string literal (double encoding) — passing a
         // bare object literal makes the arg conversion fail and the state
         // silently never reaches the runtime.
         let Ok(json) = serde_json::to_string(&state) else { return };
@@ -74,7 +74,7 @@ impl Lumen {
             self.js_ctx.as_ref(),
             format!("_lumen_navigation_set_state({quoted})"),
         );
-        // BUG-352: see doc comment above вЂ” keeps the omnibox in sync with
+        // BUG-352: see doc comment above — keeps the omnibox in sync with
         // every navigation, not just omnibox-driven ones. No-op off the
         // flag (`relayout_chrome_host` early-returns when `chrome_doc`/the
         // renderer aren't ready yet, e.g. the very first call before the
@@ -107,7 +107,7 @@ impl Lumen {
     /// Apply a same-document `history.go(n)` destination whose containing
     /// document had to be (re)loaded first (see `pending_post_reload_traversal`):
     /// fires `popstate` with `state_json`, updates the address bar to
-    /// `display_url`, and fires `currententrychange` вЂ” the same tail as the
+    /// `display_url`, and fires `currententrychange` — the same tail as the
     /// ordinary same-document branch in `navigate_back`/`navigate_forward`,
     /// just run once the correct document's JS runtime actually exists.
     pub(crate) fn apply_post_reload_traversal(&mut self, state_json: String, display_url: Option<String>) {

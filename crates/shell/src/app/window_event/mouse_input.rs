@@ -32,7 +32,7 @@ impl Lumen {
                 // chrome hit-test + `data-tab-id` (the same
                 // mechanism `ChromeAction::SelectTab` uses for a
                 // left-click), not `tabs::strip::hit_test`'s legacy
-                // geometry вЂ” the engine-drawn tab strip's real
+                // geometry — the engine-drawn tab strip's real
                 // layout no longer matches `TAB_BAR_HEIGHT`/
                 // `ARCHIVE_BTN_W`/`LAYOUT_BTN_W`/`SETTINGS_BTN_W`.
                 let tab_id = self.chrome_hit_test(x_css, y_css).and_then(|hit| {
@@ -53,7 +53,7 @@ impl Lumen {
                     return;
                 }
             }
-            // P3-spell СЃСЂРµР· 3: right-click on a misspelled word in a
+            // P3-spell срез 3: right-click on a misspelled word in a
             // focused text input opens the spell suggestion menu instead
             // of starting a mouse gesture.
             if state == ElementState::Pressed && self.try_open_spell_menu(x_css, y_css) {
@@ -68,21 +68,21 @@ impl Lumen {
                 self.execute_gesture_action(action, event_loop);
             }
         } else if button != MouseButton::Left {
-            // Middle / back / forward вЂ” ignore.
+            // Middle / back / forward — ignore.
         } else if state == ElementState::Pressed {
-            // CSS :active вЂ” set immediately on press so :active rules apply.
+            // CSS :active — set immediately on press so :active rules apply.
             if self.active_nid != self.hovered_nid {
                 self.active_nid = self.hovered_nid;
-                // ADR-016 M2.2b-5: :active restyle is async-safe вЂ” the
+                // ADR-016 M2.2b-5: :active restyle is async-safe — the
                 // click hit-test below reads the pre-:active layout (the
                 // geometry the user pressed on), which is correct.
                 self.relayout_chrome();
                 self.request_redraw();
             }
             let Some(cursor) = self.cursor_position else {
-                // Р‘РµР· CursorMoved-snapshot-Р° РґРѕ Press вЂ” РЅРµ Р·РЅР°РµРј РіРґРµ
-                // РєР»РёРє; bail out. Р РµР°Р»РёСЃС‚РёС‡РЅРѕ вЂ” Press РІСЃРµРіРґР° РїСЂРёС…РѕРґРёС‚
-                // РїРѕСЃР»Рµ CursorMoved, РЅРѕ Р·Р°С‰РёС‚РёРјСЃСЏ.
+                // Без CursorMoved-snapshot-а до Press — не знаем где
+                // клик; bail out. Реалистично — Press всегда приходит
+                // после CursorMoved, но защитимся.
                 return;
             };
             let dpr = self
@@ -92,7 +92,7 @@ impl Lumen {
                 .max(1e-6);
             let x_css = (cursor.x as f32) / dpr;
             let y_css = (cursor.y as f32) / dpr;
-            // CC-5: chrome's own `:active` вЂ” mirrors the page's
+            // CC-5: chrome's own `:active` — mirrors the page's
             // `active_nid` handling above but scoped to `chrome_layout`
             // (see `relayout_chrome_host`'s doc comment for why the two
             // documents can't share interactive thread-locals).
@@ -108,7 +108,7 @@ impl Lumen {
                 return;
             }
             // CC-4: while the tab context menu is open it captures the
-            // click вЂ” picking a row runs the action, anywhere else just
+            // click — picking a row runs the action, anywhere else just
             // dismisses it. The click never reaches the page / panels.
             if self.tab_context_menu.is_open() {
                 let win_w = self.viewport_width_css();
@@ -127,8 +127,8 @@ impl Lumen {
                 self.request_redraw();
                 return;
             }
-            // P3-spell СЃСЂРµР· 3: while the page spell menu is open it
-            // captures the click вЂ” picking a row applies the correction /
+            // P3-spell срез 3: while the page spell menu is open it
+            // captures the click — picking a row applies the correction /
             // dictionary action, anywhere else just dismisses it.
             if self.page_context_menu.is_open() {
                 let win_w = self.viewport_width_css();
@@ -141,7 +141,7 @@ impl Lumen {
                 self.request_redraw();
                 return;
             }
-            // CC-2: the download panel is a top-most bottom overlay вЂ” it
+            // CC-2: the download panel is a top-most bottom overlay — it
             // captures clicks on its buttons / close / body before they
             // reach the page. A click outside the panel closes it.
             if self.downloads.visible {
@@ -171,7 +171,7 @@ impl Lumen {
                 }
             }
             // Fire mousedown + pointerdown on the hovered DOM element.
-            // Per W3C UI Events В§17.6 + Pointer Events L2 В§10 вЂ” fires before
+            // Per W3C UI Events §17.6 + Pointer Events L2 §10 — fires before
             // any default action (click). Only when cursor is over page content.
             #[cfg(feature = "v8")]
             if let Some(hov) = self.hovered_nid {
@@ -205,9 +205,9 @@ impl Lumen {
                 self.refresh_frames(None);
             }
 
-            // HTML5 DnD (PH3-9 / HTML LS В§9.3.3): start candidate when the
+            // HTML5 DnD (PH3-9 / HTML LS §9.3.3): start candidate when the
             // pressed element is draggable.  Drag does not activate until the
-            // cursor moves в‰Ґ DND_THRESHOLD px (handled in CursorMoved).
+            // cursor moves ≥ DND_THRESHOLD px (handled in CursorMoved).
             #[cfg(feature = "v8")]
             if let Some(hov) = self.hovered_nid
                 && let Some(ls) = self.layout_source.as_ref() {
@@ -232,7 +232,7 @@ impl Lumen {
                     return;
                 }
 
-            // Command palette (task #23): modal вЂ” captures every click.
+            // Command palette (task #23): modal — captures every click.
             // A click on a row activates it; a click on the scrim closes.
             if self.command_palette.visible {
                 // BUG-461: measured `.cp-box`/`.cp-row` rects from the
@@ -264,7 +264,7 @@ impl Lumen {
             }
 
             // Focus mode widget (task #25): floating top-right card. A
-            // click on the ring pauses/resumes; the `Г—` corner exits.
+            // click on the ring pauses/resumes; the `×` corner exits.
             if self.focus.active {
                 let win_w = self.viewport_width_css();
                 if let Some(hit) =
@@ -287,7 +287,7 @@ impl Lumen {
             }
 
             // Picture-in-picture window (task #21): floating draggable
-            // card. `Г—` closes, the centre button toggles play/pause, the
+            // card. `×` closes, the centre button toggles play/pause, the
             // title bar starts a drag, the body swallows the click.
             if self.pip.active
                 && let Some(hit) = panels::pip_window::hit_test(&self.pip, x_css, y_css)
@@ -306,14 +306,14 @@ impl Lumen {
 
             // CC-5 (docs/tasks/p1-css-chrome.md): the engine-drawn
             // chrome (CC-4) covers the whole top-strip/sidebar area the
-            // legacy hit-testers below assume вЂ” falling through to both
+            // legacy hit-testers below assume — falling through to both
             // would double-count the same physical click (nothing
             // paints the legacy geometry to click on, yet their y/x-range
             // checks don't know that). Route exclusively through the
             // chrome hit-test + `data-action` dispatch instead; a click
             // outside the chrome's own opaque area (i.e. on real page
             // content, including any floating popover panel drawn above
-            // it вЂ” those stay positioned within the page-content rect)
+            // it — those stay positioned within the page-content rect)
             // is left unhandled here and falls through unchanged to the
             // panel checks below.
             if self.point_over_chrome(x_css, y_css) {
@@ -323,9 +323,9 @@ impl Lumen {
                 if let Some(hit) = hit {
                     // CC-7: `.omnibox`/`#omniInput` carries no
                     // `data-action` (nothing to translate an
-                    // `onfocus` handler from вЂ” the frozen design
+                    // `onfocus` handler from — the frozen design
                     // reference has none either, see CC-7 in
-                    // docs/tasks/p1-css-chrome.md) вЂ” special-cased
+                    // docs/tasks/p1-css-chrome.md) — special-cased
                     // here exactly like the legacy
                     // `toolbar::ToolbarHit::Omnibox` branch it
                     // mirrors: a no-op while already open so an
@@ -340,7 +340,7 @@ impl Lumen {
                             let current = self.current_display_url().to_owned();
                             self.address_bar.open(&current);
                             // CC-7: the relayout above ran before
-                            // `open()` вЂ” redo it so the
+                            // `open()` — redo it so the
                             // `:focus-within` ring/caret show on
                             // this same click, not one input
                             // later (see the matching comment in
@@ -356,7 +356,7 @@ impl Lumen {
             }
             // CC-15-3: the legacy tab-bar/toolbar left-click dispatch
             // (tab switch/close/adblock, archive/layout/settings
-            // buttons, toolbar buttons) lived here вЂ” removed along with
+            // buttons, toolbar buttons) lived here — removed along with
             // the paint/hit-test functions it called, unreachable since
             // CC-4 routed those clicks through `chrome_hit_test` above.
             // Archive panel: close on click below tab bar when open.
@@ -498,7 +498,7 @@ impl Lumen {
                         panels::profile_menu::ProfileMenuHit::SwitchTo(id) => {
                             if self.profiles.set_active(Some(id)).is_ok() {
                                 self.profile_menu.set_active(Some(id));
-                                // DS-16: Anonymous is ephemeral вЂ” every
+                                // DS-16: Anonymous is ephemeral — every
                                 // time it becomes active, start from a
                                 // fresh in-memory jar so no cookie
                                 // survives a previous Anonymous session.
@@ -536,7 +536,7 @@ impl Lumen {
                         panels::shields_panel::ShieldsHit::Toggle => {
                             // BUG-411: same per-site flip the engine
                             // popover's switch performs (this legacy
-                            // hit-test is still ungated вЂ” BUG-404).
+                            // hit-test is still ungated — BUG-404).
                             self.shields.toggle_current_site();
                             self.sync_adblock_filter();
                             self.request_redraw();
@@ -603,7 +603,7 @@ impl Lumen {
                 }
             }
 
-            // В§12.3 Read-later panel (Ctrl+Shift+R): right-docked overlay.
+            // §12.3 Read-later panel (Ctrl+Shift+R): right-docked overlay.
             if self.read_later_panel.visible {
                 use panels::read_later_panel::ReadLaterHit;
                 let win_w = self.viewport_width_css();
@@ -652,7 +652,7 @@ impl Lumen {
             }
 
             // CC-10b/CC-15-6: the legacy bookmark-manager overlay's click
-            // hit-test lived here, gated off the rollback flag вЂ”
+            // hit-test lived here, gated off the rollback flag —
             // `#view-bookmarks` in the engine chrome owns it now.
 
             // Accessibility settings panel (E-2): centred overlay.
@@ -709,14 +709,14 @@ impl Lumen {
             }
 
             // CC-10b/CC-15-6: the legacy print-dialog click hit-test lived
-            // here, gated off the rollback flag вЂ” the engine chrome's own
+            // here, gated off the rollback flag — the engine chrome's own
             // print panel owns it now.
 
             // CC-10b/CC-15-6: the legacy settings-panel click hit-test lived
-            // here, gated off the rollback flag вЂ” `#view-settings` in the
+            // here, gated off the rollback flag — `#view-settings` in the
             // engine chrome owns it now.
 
-            // Keyboard shortcuts panel (В§D-4): centred overlay.
+            // Keyboard shortcuts panel (§D-4): centred overlay.
             if self.shortcuts_panel.visible {
                 let win_w = self.viewport_width_css();
                 let win_h = self.viewport_height_css();
@@ -745,14 +745,14 @@ impl Lumen {
             }
 
             // CC-10b/CC-15-6: the legacy certificate-panel click hit-test
-            // lived here, gated off the rollback flag вЂ” the engine chrome's
+            // lived here, gated off the rollback flag — the engine chrome's
             // own cert popover owns it now.
 
             // CC-10b/CC-15-6: the legacy history-panel click hit-test lived
-            // here, gated off the rollback flag вЂ” `#view-history` in the
+            // here, gated off the rollback flag — `#view-history` in the
             // engine chrome owns it now.
 
-            // Note viewer overlay (В§12.2, GG-2): click [Г—] to close.
+            // Note viewer overlay (§12.2, GG-2): click [×] to close.
             if self.note_viewer.visible {
                 let win_size = self.window.as_ref().map_or((1024, 720), |w| {
                     let s = w.inner_size();
@@ -771,11 +771,11 @@ impl Lumen {
             }
 
             // CC-10b/CC-15-6: the legacy AI-sidebar click hit-test lived
-            // here, gated off the rollback flag вЂ” `#rightSidebar` in the
+            // here, gated off the rollback flag — `#rightSidebar` in the
             // engine chrome owns it now.
 
             // CC-10b/CC-15-6: the legacy web-sidebar click hit-test lived
-            // here, gated off the rollback flag вЂ” `#rightSidebar` in the
+            // here, gated off the rollback flag — `#rightSidebar` in the
             // engine chrome owns it now.
 
             // Workspace switcher bar (7A.3): clicks in the bottom bar area.
@@ -797,7 +797,7 @@ impl Lumen {
                             self.request_redraw();
                         }
                         panels::workspace_panel::WorkspaceHit::DeleteWorkspace(id) => {
-                            // Never delete the last workspace вЂ” require at least one.
+                            // Never delete the last workspace — require at least one.
                             if self.workspace_panel.workspaces.len() > 1 {
                                 let _ = self.workspaces.delete(id);
                                 self.refresh_workspaces();
@@ -844,12 +844,12 @@ impl Lumen {
                 if let Some(ref mut sv) = self.split_view {
                     sv.focus_at(x_css, split_x);
                     if sv.cursor_in_right(x_css, split_x) {
-                        // Right pane clicked вЂ” focus only, no link navigation.
+                        // Right pane clicked — focus only, no link navigation.
                         self.request_redraw();
                         return;
                     }
                 }
-                // Left pane clicked вЂ” fall through to normal handling below.
+                // Left pane clicked — fall through to normal handling below.
             }
 
             let vh = self.viewport_height_css();
@@ -868,11 +868,11 @@ impl Lumen {
                     ));
                 }
                 scrollbar::TrackClick::Above => {
-                    // РљР»РёРє РїРѕ track РІС‹С€Рµ thumb-Р° вЂ” РїСЂС‹Р¶РѕРє РЅР° СЃС‚СЂР°РЅРёС†Сѓ РІРІРµСЂС….
+                    // Клик по track выше thumb-а — прыжок на страницу вверх.
                     self.scroll_by_smooth(-page_step(vh));
                 }
                 scrollbar::TrackClick::Below => {
-                    // РљР»РёРє РїРѕ track РЅРёР¶Рµ thumb-Р° вЂ” РїСЂС‹Р¶РѕРє РЅР° СЃС‚СЂР°РЅРёС†Сѓ РІРЅРёР·.
+                    // Клик по track ниже thumb-а — прыжок на страницу вниз.
                     self.scroll_by_smooth(page_step(vh));
                 }
                 scrollbar::TrackClick::None => {
@@ -884,7 +884,7 @@ impl Lumen {
                 }
             }
         } else {
-            // Released вЂ” Р·Р°РІРµСЂС€Р°РµРј drag (РµСЃР»Рё Р±С‹Р») Рё СЃР±СЂР°СЃС‹РІР°РµРј resize.
+            // Released — завершаем drag (если был) и сбрасываем resize.
             self.resize_active = None;
             // F2-6: end a docked-panel resize drag and persist the layout.
             if let Some((_, id)) = self.panel_resize.take() {
@@ -904,17 +904,17 @@ impl Lumen {
                 self.active_frame = None;
                 self.refresh_frames(None);
             }
-            // CSS :active вЂ” clear on release.
+            // CSS :active — clear on release.
             if self.active_nid.is_some() {
                 self.active_nid = None;
-                // ADR-016 M2.2b-5: :active clear is async-safe вЂ” the
+                // ADR-016 M2.2b-5: :active clear is async-safe — the
                 // mouseup/pointerup JS events below target `hovered_nid`,
                 // not this reflow's geometry.
                 self.relayout_chrome();
                 self.request_redraw();
             }
             // Fire mouseup + pointerup on the hovered DOM element.
-            // Per W3C UI Events В§17.6 + Pointer Events L2 В§10.
+            // Per W3C UI Events §17.6 + Pointer Events L2 §10.
             #[cfg(feature = "v8")]
             if let (Some(hov), Some(pos)) = (self.hovered_nid, self.cursor_position) {
                 // Ph3 pointer-events-l3: flush queued pointermove samples
@@ -925,10 +925,10 @@ impl Lumen {
                 let xu = (pos.x as f32) / dpr;
                 let yu = (pos.y as f32) / dpr;
                 let hit_nid = hov.index() as u32;
-                // Pointer Events L3 В§4.1: route pointerup to capture target if active.
-                // ADR-016 M2.2c-2d: pre-dispatch capture-read С‡РµСЂРµР· `route_query_js`
-                // (РїРѕРґ С„Р»Р°РіРѕРј вЂ” Р±Р»РѕРєРёСЂСѓСЋС‰РёР№ `query`; РІРЅРµС€РЅРёР№ `None` = РІРµС‚РєР° В«Р±РµР· JSВ»
-                // в†’ `hit_nid`, РєР°Рє РїСЂРµР¶РЅРёР№ `and_then(...).unwrap_or(hit_nid)`).
+                // Pointer Events L3 §4.1: route pointerup to capture target if active.
+                // ADR-016 M2.2c-2d: pre-dispatch capture-read через `route_query_js`
+                // (под флагом — блокирующий `query`; внешний `None` = ветка «без JS»
+                // → `hit_nid`, как прежний `and_then(...).unwrap_or(hit_nid)`).
                 let ptr_nid = route_query_js(
                     self.engine_thread.as_ref(),
                     self.js_ctx.as_ref(),
@@ -940,9 +940,9 @@ impl Lumen {
                 self.flush_pointer_moves();
                 self.js_pointer_event(ptr_nid, "pointerup", xu, yu, 0, 0);
                 self.js_mouse_event(hit_nid, "mouseup", xu, yu, 0, 0);
-                // Pointer Events L3 В§4.1: implicit release on pointerup.
-                // Р§РёС‚Р°РµС‚СЃСЏ **РїРѕСЃР»Рµ** СѓР¶Рµ РјР°СЂС€СЂСѓС‚РёР·РёСЂРѕРІР°РЅРЅС‹С… pointerup/mouseup
-                // eval-`task` вЂ” read-after-eval РїРѕСЂСЏРґРѕРє СЃРѕС…СЂР°РЅС‘РЅ.
+                // Pointer Events L3 §4.1: implicit release on pointerup.
+                // Читается **после** уже маршрутизированных pointerup/mouseup
+                // eval-`task` — read-after-eval порядок сохранён.
                 if let Some(cap_nid) = route_query_js(
                     self.engine_thread.as_ref(),
                     self.js_ctx.as_ref(),
@@ -991,7 +991,7 @@ impl Lumen {
                 self.js_drag_event(dnd.src_nid.index() as u32, "dragend", xu, yu);
             }
 
-            // Tab drag-and-drop (В§O-9): resolve the drop and reorder.
+            // Tab drag-and-drop (§O-9): resolve the drop and reorder.
             if let Some(drag) = self.tab_drag.take()
                 && drag.active {
                     let dpr = self
@@ -1019,7 +1019,7 @@ impl Lumen {
                 }
             // CC-15-6: the bookmark drag-drop release handler lived here.
             // Its only drag source was the legacy overlay's press
-            // hit-test, removed with the rollback flag вЂ” the engine
+            // hit-test, removed with the rollback flag — the engine
             // `#view-bookmarks` has no drag source yet (BUG-422).
             // End a PiP window drag (task #21).
             if self.pip.dragging() {
@@ -1029,10 +1029,10 @@ impl Lumen {
             // FRAME-7 остаток: end an in-progress mouse-drag text selection —
             // the selection itself stays, only the drag tracking stops.
             self.text_drag = None;
-            // РљСѓСЂСЃРѕСЂ Р±С‹Р» В«Р·Р°С„РёРєСЃРёСЂРѕРІР°РЅВ» РєР°Рє Pointer РїРѕРєР° С‚СЏРЅСѓР»Рё
-            // thumb; С‚РµРїРµСЂСЊ РїРµСЂРµСЃС‡РёС‚Р°РµРј РїРѕ hover-С‚РѕС‡РєРµ С‚РµРєСѓС‰РµРіРѕ
-            // РїРѕР»РѕР¶РµРЅРёСЏ РєСѓСЂСЃРѕСЂР° (CursorMoved-event РЅР° release СЃР°Рј
-            // РЅРµ РїСЂРёС…РѕРґРёС‚, РїРѕСЌС‚РѕРјСѓ РґРµР»Р°РµРј РІСЂСѓС‡РЅСѓСЋ).
+            // Курсор был «зафиксирован» как Pointer пока тянули
+            // thumb; теперь пересчитаем по hover-точке текущего
+            // положения курсора (CursorMoved-event на release сам
+            // не приходит, поэтому делаем вручную).
             self.update_cursor_icon();
         }
     }

@@ -11,15 +11,15 @@
 use crate::*;
 
 impl Lumen {
-    /// P3-spell СЃСЂРµР· 2+3+4: РґР»СЏ СѓР·Р»Р° `nid` РїРѕРґ С„РѕРєСѓСЃРѕРј РѕРїСЂРµРґРµР»СЏРµС‚ С†РµР»СЊ
-    /// СЃРїРµР»Р»-С‡РµРєР°. Р’РѕР·РІСЂР°С‰Р°РµС‚ `(target_node, placeholder, kind)`:
-    /// * `<textarea>` РёР»Рё `<input>` С‚РµРєСЃС‚РѕРІРѕРіРѕ С‚РёРїР° (password РёСЃРєР»СЋС‡С‘РЅ) вЂ” СЃР°Рј
-    ///   СѓР·РµР», РµРіРѕ `placeholder` (РїСѓСЃС‚Р°СЏ СЃС‚СЂРѕРєР° РїСЂРё РѕС‚СЃСѓС‚СЃС‚РІРёРё) Рё
-    ///   СЃРѕРѕС‚РІРµС‚СЃС‚РІСѓСЋС‰РёР№ [`page_context_menu::SpellTargetKind`];
-    /// * СѓР·РµР» РІРЅСѓС‚СЂРё `contenteditable` вЂ” СЂРµРґР°РєС‚РёСЂСѓСЋС‰РёР№ С…РѕСЃС‚, РїСѓСЃС‚РѕР№
-    ///   placeholder (Сѓ contenteditable РЅРµС‚ placeholder-Р°С‚СЂРёР±СѓС‚Р°) Рё
+    /// P3-spell срез 2+3+4: для узла `nid` под фокусом определяет цель
+    /// спелл-чека. Возвращает `(target_node, placeholder, kind)`:
+    /// * `<textarea>` или `<input>` текстового типа (password исключён) — сам
+    ///   узел, его `placeholder` (пустая строка при отсутствии) и
+    ///   соответствующий [`page_context_menu::SpellTargetKind`];
+    /// * узел внутри `contenteditable` — редактирующий хост, пустой
+    ///   placeholder (у contenteditable нет placeholder-атрибута) и
     ///   `ContentEditable`;
-    /// * РёРЅР°С‡Рµ вЂ” `None`.
+    /// * иначе — `None`.
     pub(crate) fn spell_target(
         &self,
         nid: lumen_dom::NodeId,
@@ -49,9 +49,9 @@ impl Lumen {
             .map(|host| (host, String::new(), SpellTargetKind::ContentEditable))
     }
 
-    /// P3-spell СЃСЂРµР· 3: СЃР»РѕРІР°, РєРѕС‚РѕСЂС‹Рµ РЅРµ СЃС‡РёС‚Р°СЋС‚СЃСЏ РѕС€РёР±РѕС‡РЅС‹РјРё РїРѕРјРёРјРѕ СЃР»РѕРІР°СЂРµР№ вЂ”
-    /// РѕР±СЉРµРґРёРЅРµРЅРёРµ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРѕРіРѕ СЃР»РѕРІР°СЂСЏ Рё В«РџСЂРѕРїСѓС‰РµРЅРЅС‹С…В» РЅР° СЃРµСЃСЃРёСЋ. Р’СЃРµ
-    /// СЃР»РѕРІР° СѓР¶Рµ РІ lowercase.
+    /// P3-spell срез 3: слова, которые не считаются ошибочными помимо словарей —
+    /// объединение пользовательского словаря и «Пропущенных» на сессию. Все
+    /// слова уже в lowercase.
     pub(crate) fn spell_allow_set(&self) -> std::collections::HashSet<String> {
         self.spell_user_words
             .iter()
@@ -60,12 +60,12 @@ impl Lumen {
             .collect()
     }
 
-    /// P3-spell СЃСЂРµР· 4: РїРѕР»РЅС‹Р№ Р»РѕРіРёС‡РµСЃРєРёР№ С‚РµРєСЃС‚ РїРѕР»СЏ `target_node` вЂ”
-    /// `value`-Р°С‚СЂРёР±СѓС‚ РґР»СЏ `<input>`, Р»РёР±Рѕ (РґР»СЏ `<textarea>`/contenteditable)
-    /// РєРѕРЅРєР°С‚РµРЅР°С†РёСЏ С‚РµРєСЃС‚РѕРІС‹С… СѓР·Р»РѕРІ-РїРѕС‚РѕРјРєРѕРІ (`lumen_dom::node_text_content`).
-    /// РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РєР°Рє Р±Р°Р·Р° РґР»СЏ РіР»РѕР±Р°Р»СЊРЅС‹С… byte-СЃРјРµС‰РµРЅРёР№ СЃР»РѕРІР° РІ
-    /// [`page_context_menu::SpellTarget`], РІ РѕС‚Р»РёС‡РёРµ РѕС‚ С‚РµРєСЃС‚Р° РѕРґРЅРѕР№
-    /// РІРёР·СѓР°Р»СЊРЅРѕР№ (wrapped) СЃС‚СЂРѕРєРё.
+    /// P3-spell срез 4: полный логический текст поля `target_node` —
+    /// `value`-атрибут для `<input>`, либо (для `<textarea>`/contenteditable)
+    /// конкатенация текстовых узлов-потомков (`lumen_dom::node_text_content`).
+    /// Используется как база для глобальных byte-смещений слова в
+    /// [`page_context_menu::SpellTarget`], в отличие от текста одной
+    /// визуальной (wrapped) строки.
     fn spell_field_full_text(
         &self,
         target_node: lumen_dom::NodeId,
@@ -75,9 +75,9 @@ impl Lumen {
         let Some(ls) = self.layout_source.as_ref() else { return String::new() };
         let Ok(doc) = ls.document.lock() else { return String::new() };
         match kind {
-            // BUG-441: Сѓ `<input>`/`<textarea>` РїСЂРѕРІРµСЂСЏРµРј С‚Рѕ, С‡С‚Рѕ РІ РїРѕР»Рµ СЃРµР№С‡Р°СЃ
-            // (runtime-Р·РЅР°С‡РµРЅРёРµ), Р° РЅРµ РґРµС„РѕР»С‚ РёР· СЂР°Р·РјРµС‚РєРё. `contenteditable`
-            // СЂРµРґР°РєС‚РёСЂСѓРµС‚СЃСЏ РїСЂСЏРјРѕ РІ DOM, РїРѕСЌС‚РѕРјСѓ С‚Р°Рј РїРѕ-РїСЂРµР¶РЅРµРјСѓ С‚РµРєСЃС‚ СѓР·Р»РѕРІ.
+            // BUG-441: у `<input>`/`<textarea>` проверяем то, что в поле сейчас
+            // (runtime-значение), а не дефолт из разметки. `contenteditable`
+            // редактируется прямо в DOM, поэтому там по-прежнему текст узлов.
             SpellTargetKind::Input | SpellTargetKind::Textarea => {
                 doc.control_value(target_node).into_owned()
             }
@@ -85,17 +85,17 @@ impl Lumen {
         }
     }
 
-    /// P3-spell СЃСЂРµР· 3+4: РїСЂРё right-click РїРѕ РѕС€РёР±РѕС‡РЅРѕРјСѓ СЃР»РѕРІСѓ РІ С„РѕРєСѓСЃРЅРѕРј
-    /// `<input>`/`<textarea>`/contenteditable РѕС‚РєСЂС‹РІР°РµС‚ РјРµРЅСЋ РїРѕРґСЃРєР°Р·РѕРє.
-    /// Р’РѕР·РІСЂР°С‰Р°РµС‚ `true`, РµСЃР»Рё РјРµРЅСЋ РѕС‚РєСЂС‹С‚Рѕ (РєР»РёРє РѕР±СЂР°Р±РѕС‚Р°РЅ), РёРЅР°С‡Рµ `false`
-    /// (РєР»РёРє РёРґС‘С‚ РґР°Р»СЊС€Рµ вЂ” Р¶РµСЃС‚).
+    /// P3-spell срез 3+4: при right-click по ошибочному слову в фокусном
+    /// `<input>`/`<textarea>`/contenteditable открывает меню подсказок.
+    /// Возвращает `true`, если меню открыто (клик обработан), иначе `false`
+    /// (клик идёт дальше — жест).
     ///
-    /// РњРЅРѕРіРѕСЃС‚СЂРѕС‡РЅС‹Рµ РїРѕР»СЏ СЂРёСЃСѓСЋС‚ РѕРґРЅСѓ `DrawText`-РєРѕРјР°РЅРґСѓ РЅР° РІРёР·СѓР°Р»СЊРЅСѓСЋ
-    /// (wrapped) СЃС‚СЂРѕРєСѓ вЂ” Р±Р°Р№С‚РѕРІРѕРµ СЃРјРµС‰РµРЅРёРµ СЃР»РѕРІР° РІРЅСѓС‚СЂРё РєР»РёРєР° РЅР°Р№РґРµРЅРЅРѕР№
-    /// СЃС‚СЂРѕРєРё СЃР°РјРѕ РїРѕ СЃРµР±Рµ Р±РµСЃСЃРјС‹СЃР»РµРЅРЅРѕ Р·Р° РїСЂРµРґРµР»Р°РјРё РїРµСЂРІРѕР№ СЃС‚СЂРѕРєРё.
-    /// `spellcheck::locate_line_word_in_full_text` РїРµСЂРµСЃС‡РёС‚С‹РІР°РµС‚ РµРіРѕ РІ
-    /// РіР»РѕР±Р°Р»СЊРЅРѕРµ СЃРјРµС‰РµРЅРёРµ РІРЅСѓС‚СЂРё РїРѕР»РЅРѕРіРѕ Р·РЅР°С‡РµРЅРёСЏ РїРѕР»СЏ, РёСЃРїРѕР»СЊР·СѓСЏ
-    /// РїСЂРµРґС€РµСЃС‚РІСѓСЋС‰РёРµ СЃС‚СЂРѕРєРё С‚РѕРіРѕ Р¶Рµ РїРѕР»СЏ РєР°Рє СЏРєРѕСЂСЏ.
+    /// Многострочные поля рисуют одну `DrawText`-команду на визуальную
+    /// (wrapped) строку — байтовое смещение слова внутри клика найденной
+    /// строки само по себе бессмысленно за пределами первой строки.
+    /// `spellcheck::locate_line_word_in_full_text` пересчитывает его в
+    /// глобальное смещение внутри полного значения поля, используя
+    /// предшествующие строки того же поля как якоря.
     pub(crate) fn try_open_spell_menu(&mut self, x_css: f32, y_css: f32) -> bool {
         use lumen_core::ext::SpellChecker;
         let Some(dicts) = SPELL_DICTS.get() else { return false };
@@ -163,7 +163,7 @@ impl Lumen {
                 };
                 let word = &text[s..e];
                 if dicts.check(word) || allow.contains(&word.to_lowercase()) {
-                    // Word under cursor is spelled correctly вЂ” no menu.
+                    // Word under cursor is spelled correctly — no menu.
                     return false;
                 }
 
@@ -206,14 +206,14 @@ impl Lumen {
         }
     }
 
-    /// P3-spell СЃСЂРµР· 3+4: РїСЂРёРјРµРЅСЏРµС‚ РІС‹Р±СЂР°РЅРЅРѕРµ РґРµР№СЃС‚РІРёРµ РјРµРЅСЋ РїРѕРґСЃРєР°Р·РѕРє.
-    /// `Use` Р·Р°РјРµРЅСЏРµС‚ СЃР»РѕРІРѕ Рё РїРµСЂРµРІС‘СЂСЃС‚С‹РІР°РµС‚ вЂ” РґР»СЏ `<input>`/`<textarea>`
-    /// РїРµСЂРµСЃС‚СЂР°РёРІР°СЏ РїРѕР»РЅРѕРµ Р·РЅР°С‡РµРЅРёРµ С‡РµСЂРµР· `target.apply()`; РґР»СЏ
-    /// contenteditable С‚РѕС‡РµС‡РЅРѕ РїСЂР°РІСЏ С‚РѕР»СЊРєРѕ С‚РµРєСЃС‚РѕРІС‹Р№ СѓР·РµР», СЃРѕРґРµСЂР¶Р°С‰РёР№ СЃР»РѕРІРѕ
+    /// P3-spell срез 3+4: применяет выбранное действие меню подсказок.
+    /// `Use` заменяет слово и перевёрстывает — для `<input>`/`<textarea>`
+    /// перестраивая полное значение через `target.apply()`; для
+    /// contenteditable точечно правя только текстовый узел, содержащий слово
     /// (`lumen_dom::locate_text_offset_range` + `delete_range`/`insert_text_at`),
-    /// РЅРµ С‚СЂРѕРіР°СЏ РѕСЃС‚Р°Р»СЊРЅСѓСЋ rich-text СЃС‚СЂСѓРєС‚СѓСЂСѓ. `AddToDict` РґРѕР±Р°РІР»СЏРµС‚ СЃР»РѕРІРѕ РІ
-    /// РїРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРёР№ СЃР»РѕРІР°СЂСЊ (С„Р°Р№Р» + РїР°РјСЏС‚СЊ); `Ignore` РґРѕР±Р°РІР»СЏРµС‚ СЃР»РѕРІРѕ РІ
-    /// РЅР°Р±РѕСЂ РїСЂРѕРїСѓС‰РµРЅРЅС‹С… РЅР° СЃРµСЃСЃРёСЋ.
+    /// не трогая остальную rich-text структуру. `AddToDict` добавляет слово в
+    /// пользовательский словарь (файл + память); `Ignore` добавляет слово в
+    /// набор пропущенных на сессию.
     pub(crate) fn exec_spell_menu_action(&mut self, action: page_context_menu::SpellMenuAction) {
         use page_context_menu::{SpellMenuAction, SpellTargetKind};
         let Some(target) = self.page_context_menu.target().cloned() else { return };
@@ -260,7 +260,7 @@ impl Lumen {
                 }
                 // ADR-016 M2.2c-3 (2): spellcheck-replace mutates the shared DOM
                 // (input value / textarea text / contenteditable range) with no
-                // synchronous geometry read after вЂ” Bucket A, route off-thread when
+                // synchronous geometry read after — Bucket A, route off-thread when
                 // `LUMEN_ENGINE_THREAD=1`, byte-identical otherwise.
                 self.relayout_form();
             }

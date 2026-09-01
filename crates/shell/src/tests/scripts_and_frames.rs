@@ -3,10 +3,10 @@
 
 use super::*;
 
-// в”Ђв”Ђ BUG-164: external <script src> collection в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── BUG-164: external <script src> collection ─────────────────────────────
 
 /// External `<script src>` is recorded as `External` in document order,
-/// interleaved with inline classic scripts (HTML LS В§8.1.3.1).
+/// interleaved with inline classic scripts (HTML LS §8.1.3.1).
 #[test]
 fn collect_scripts_ordered_records_external_in_order() {
     let doc = lumen_html_parser::parse(
@@ -26,9 +26,9 @@ fn collect_scripts_ordered_records_external_in_order() {
     assert!(matches!(&classic[2], ScriptSource::Inline(_, s) if s.contains("b=2")));
 }
 
-/// BUG-804: СЃРєСЂРёРїС‚, С‡РµР№ С„Р°Р№Р» РЅРµ РїСЂРёС€С‘Р», РѕР±СЏР·Р°РЅ РѕСЃС‚Р°С‚СЊСЃСЏ РІ СЃРїРёСЃРєРµ вЂ” РёРЅР°С‡Рµ
-/// РµРіРѕ СЌР»РµРјРµРЅС‚Сѓ РЅРµРіРґРµ РІС‹СЃС‚СЂРµР»РёС‚СЊ `error`. Р Р°РЅСЊС€Рµ `resolve_script_sources`
-/// С‚Р°РєРѕР№ СЃРєСЂРёРїС‚ РјРѕР»С‡Р° РІС‹Р±СЂР°СЃС‹РІР°Р», Рё СЃС‚СЂР°РЅРёС†Р° РЅРµ СѓР·РЅР°РІР°Р»Р° РѕР± РѕС‚РєР°Р·Рµ РЅРёС‡РµРіРѕ.
+/// BUG-804: скрипт, чей файл не пришёл, обязан остаться в списке — иначе
+/// его элементу негде выстрелить `error`. Раньше `resolve_script_sources`
+/// такой скрипт молча выбрасывал, и страница не узнавала об отказе ничего.
 #[test]
 fn resolve_script_sources_keeps_a_failed_external_for_its_error_event() {
     struct NullSink;
@@ -54,10 +54,10 @@ fn resolve_script_sources_keeps_a_failed_external_for_its_error_event() {
     assert!(resolved[1].source.contains("ok=1"));
 }
 
-// в”Ђв”Ђ BUG-827: РїРѕСЂСЏРґРѕРє РїР°СЂСЃРµСЂРЅС‹С… РІСЃС‚Р°РІРѕРє РґР»СЏ MutationObserver в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── BUG-827: порядок парсерных вставок для MutationObserver ───────────────
 
-/// РЎРѕР±СЂР°С‚СЊ `ResolvedScript` РёР· СЂРµР·СѓР»СЊС‚Р°С‚Р° [`collect_scripts_ordered`] вЂ”
-/// С‚РµР»Р° РІРЅРµС€РЅРёС… СЃРєСЂРёРїС‚РѕРІ С‚РµСЃС‚Сѓ РЅРµ РЅСѓР¶РЅС‹, РІР°Р¶РµРЅ С‚РѕР»СЊРєРѕ СѓР·РµР».
+/// Собрать `ResolvedScript` из результата [`collect_scripts_ordered`] —
+/// тела внешних скриптов тесту не нужны, важен только узел.
 fn resolved_for_test(items: &[ScriptSource]) -> Vec<ResolvedScript> {
     items
         .iter()
@@ -74,8 +74,8 @@ fn count_nodes(doc: &Document, id: NodeId) -> usize {
     1 + doc.get(id).children.iter().map(|&c| count_nodes(doc, c)).sum::<usize>()
 }
 
-/// Р–СѓСЂРЅР°Р» РїРµСЂРµС‡РёСЃР»СЏРµС‚ РєР°Р¶РґС‹Р№ СѓР·РµР» РґРѕРєСѓРјРµРЅС‚Р° СЂРѕРІРЅРѕ РѕРґРёРЅ СЂР°Р· (РєСЂРѕРјРµ РєРѕСЂРЅСЏ,
-/// РєРѕС‚РѕСЂС‹Р№ РЅРёРѕС‚РєСѓРґР° РЅРµ РІСЃС‚Р°РІР»СЏРµС‚СЃСЏ), РІ РїРѕСЂСЏРґРєРµ РґРµСЂРµРІР°.
+/// Журнал перечисляет каждый узел документа ровно один раз (кроме корня,
+/// который ниоткуда не вставляется), в порядке дерева.
 #[test]
 fn parser_insert_log_lists_every_node_once() {
     let doc = lumen_html_parser::parse(
@@ -92,12 +92,12 @@ fn parser_insert_log_lists_every_node_once() {
     let before = seen.len();
     seen.sort_unstable();
     seen.dedup();
-    assert_eq!(seen.len(), before, "РЅРё РѕРґРёРЅ СѓР·РµР» РЅРµ РІСЃС‚Р°РІР»РµРЅ РґРІР°Р¶РґС‹");
+    assert_eq!(seen.len(), before, "ни один узел не вставлен дважды");
 }
 
-/// РћС‚СЂРµР·РѕРє СЃРєСЂРёРїС‚Р° РєРѕРЅС‡Р°РµС‚СЃСЏ РЅР° РЅС‘Рј СЃР°РјРѕРј (РІРјРµСЃС‚Рµ СЃ РµРіРѕ С‚РµРєСЃС‚РѕРј), Р° С‚Рѕ, С‡С‚Рѕ
-/// СЃС‚РѕРёС‚ РІ РґРѕРєСѓРјРµРЅС‚Рµ РЅРёР¶Рµ, РїРѕРїР°РґР°РµС‚ СѓР¶Рµ РІ СЃР»РµРґСѓСЋС‰РёР№ РѕС‚СЂРµР·РѕРє: РЅР°СЃС‚РѕСЏС‰РёР№
-/// РїР°СЂСЃРµСЂ РІСЃС‚Р°РІРёР» Р±С‹ СЌС‚Рѕ РїРѕСЃР»Рµ С‚РѕРіРѕ, РєР°Рє СЃРєСЂРёРїС‚ РѕС‚СЂР°Р±РѕС‚Р°Р».
+/// Отрезок скрипта кончается на нём самом (вместе с его текстом), а то, что
+/// стоит в документе ниже, попадает уже в следующий отрезок: настоящий
+/// парсер вставил бы это после того, как скрипт отработал.
 #[test]
 fn parser_insert_log_cuts_segment_at_the_script() {
     let doc = lumen_html_parser::parse(
@@ -112,20 +112,20 @@ fn parser_insert_log_cuts_segment_at_the_script() {
 
     let at_script = log.segment_end(Some(scripts[0].node));
     let all = log.segment_end(None);
-    assert!(at_script < all, "РЅРёР¶Рµ СЃРєСЂРёРїС‚Р° РІ РґРѕРєСѓРјРµРЅС‚Рµ РµС‰С‘ РµСЃС‚СЊ СѓР·Р»С‹");
+    assert!(at_script < all, "ниже скрипта в документе ещё есть узлы");
 
-    // РџРѕСЃР»РµРґРЅСЏСЏ РїР°СЂР° РѕС‚СЂРµР·РєР° вЂ” С‚РµРєСЃС‚ СЃР°РјРѕРіРѕ СЃРєСЂРёРїС‚Р°.
+    // Последняя пара отрезка — текст самого скрипта.
     let (parent, _) = log.pairs[at_script - 1];
     assert_eq!(parent, scripts[0].node.index());
 
-    // РџРµСЂРІР°СЏ РїР°СЂР° СЃР»РµРґСѓСЋС‰РµРіРѕ РѕС‚СЂРµР·РєР° вЂ” <p>.
+    // Первая пара следующего отрезка — <p>.
     let (_, child) = log.pairs[at_script];
     let node = doc.get(NodeId::from_index(child));
     assert!(matches!(&node.data, NodeData::Element { name, .. } if name.local == "p"));
 }
 
-/// Р‘РµР· РєР»Р°СЃСЃРёС‡РµСЃРєРёС… СЃРєСЂРёРїС‚РѕРІ Р¶СѓСЂРЅР°Р» РїСѓСЃС‚: РЅР°Р±Р»СЋРґР°С‚РµР»СЏ СЃС‚Р°РІРёС‚СЊ РЅРµРєРѕРјСѓ, Р°
-/// РјРѕРґСѓР»Рё РёСЃРїРѕР»РЅСЏСЋС‚СЃСЏ, РєРѕРіРґР° РїР°СЂСЃРµСЂ СѓР¶Рµ РІСЃС‘ РІСЃС‚Р°РІРёР» (HTML LS В§8.1.3.1).
+/// Без классических скриптов журнал пуст: наблюдателя ставить некому, а
+/// модули исполняются, когда парсер уже всё вставил (HTML LS §8.1.3.1).
 #[test]
 fn parser_insert_log_is_empty_without_classic_scripts() {
     let doc = lumen_html_parser::parse(
@@ -151,7 +151,7 @@ fn collect_scripts_ordered_external_module() {
 }
 
 /// Non-JS script blocks (`application/ld+json`, `importmap`) are data, not
-/// code вЂ” they must not be collected for execution, with or without `src`.
+/// code — they must not be collected for execution, with or without `src`.
 #[test]
 fn collect_scripts_ordered_skips_non_js_types() {
     let doc = lumen_html_parser::parse(
@@ -170,10 +170,10 @@ fn collect_scripts_ordered_skips_non_js_types() {
     assert!(matches!(&classic[0], ScriptSource::Inline(_, s) if s.contains("real=1")));
 }
 
-/// `nomodule` вЂ” Р·Р°РїР°СЃРЅР°СЏ СЃР±РѕСЂРєР° РґР»СЏ РґРІРёР¶РєР° Р±РµР· ES-РјРѕРґСѓР»РµР№. Р”РІРёР¶РѕРє СЃ
-/// РјРѕРґСѓР»СЏРјРё РѕР±СЏР·Р°РЅ РµС‘ РїСЂРѕРїСѓСЃС‚РёС‚СЊ, РёРЅР°С‡Рµ СЃР°Р№С‚ РїРѕР»СѓС‡Р°РµС‚ РѕР±Рµ СЃР±РѕСЂРєРё СЂР°Р·РѕРј
-/// (Р¶РёРІРѕР№ РїСЂРёРјРµСЂ вЂ” С„РѕСЂРјР° РІС…РѕРґР° id.tbank.ru: legacy Рё СЃРѕРІСЂРµРјРµРЅРЅС‹Р№ Р±Р°РЅРґР»
-/// РјРѕРЅС‚РёСЂРѕРІР°Р»РёСЃСЊ РІ РѕРґРёРЅ РєРѕСЂРµРЅСЊ Рё РіР°СЃРёР»Рё РґСЂСѓРі РґСЂСѓРіР°).
+/// `nomodule` — запасная сборка для движка без ES-модулей. Движок с
+/// модулями обязан её пропустить, иначе сайт получает обе сборки разом
+/// (живой пример — форма входа id.tbank.ru: legacy и современный бандл
+/// монтировались в один корень и гасили друг друга).
 #[test]
 fn collect_scripts_ordered_skips_nomodule() {
     let doc = lumen_html_parser::parse(
@@ -189,12 +189,12 @@ fn collect_scripts_ordered_skips_nomodule() {
     collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
     assert_eq!(modules.len(), 1);
     assert!(matches!(&modules[0], ScriptSource::External(_, s) if s == "/modern.js"));
-    assert_eq!(classic.len(), 1, "РѕР±Рµ nomodule-СЃР±РѕСЂРєРё РґРѕР»Р¶РЅС‹ Р±С‹С‚СЊ РїСЂРѕРїСѓС‰РµРЅС‹");
+    assert_eq!(classic.len(), 1, "обе nomodule-сборки должны быть пропущены");
     assert!(matches!(&classic[0], ScriptSource::Inline(_, s) if s.contains("plain=1")));
 }
 
 /// When both `src` and an inline body are present, `src` wins and the inline
-/// body is ignored (HTML LS В§4.12.1).
+/// body is ignored (HTML LS §4.12.1).
 #[test]
 fn collect_scripts_ordered_src_wins_over_inline_body() {
     let doc = lumen_html_parser::parse(
@@ -225,7 +225,7 @@ fn resolve_script_sources_passes_inline_through() {
     // BUG-486: each body keeps the id of its own `<script>` element, so the
     // executor can point `document.currentScript` at it.
     assert_ne!(out[0].node, out[1].node);
-    // Inline-СЃРєСЂРёРїС‚ СЃРІРѕРµРіРѕ Р°РґСЂРµСЃР° РЅРµ РёРјРµРµС‚ вЂ” Р±Р°Р·Р° РёРјРїРѕСЂС‚РѕРІ РѕСЃС‚Р°С‘С‚СЃСЏ СЃС‚СЂР°РЅРёС†РµР№.
+    // Inline-скрипт своего адреса не имеет — база импортов остаётся страницей.
     assert!(out[0].url.is_none());
 }
 
@@ -243,7 +243,7 @@ fn run_scripts_allowed_calls_runtime() {
     let doc = lumen_html_parser::parse(
         r#"<html><body><script>x=1;</script></body></html>"#,
     );
-    // empty() вЂ” Р±РµР· РѕРіСЂР°РЅРёС‡РµРЅРёР№, СЃРєСЂРёРїС‚С‹ СЂР°Р·СЂРµС€РµРЅС‹; NullJsRuntime в†’ NotImplemented
+    // empty() — без ограничений, скрипты разрешены; NullJsRuntime → NotImplemented
     let count = run_scripts(&doc, lumen_core::SandboxFlags::empty(), &lumen_core::NullJsRuntime);
     assert_eq!(count, 1);
 }
@@ -257,7 +257,7 @@ fn run_scripts_no_scripts_returns_zero() {
     assert_eq!(count, 0);
 }
 
-// в”Ђв”Ђ navigation gate в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── navigation gate ──────────────────────────────────────────────────────
 
 #[test]
 fn navigation_gate_blocked_by_sandbox_returns_count() {
@@ -283,7 +283,7 @@ fn navigation_gate_no_anchors_returns_zero() {
     assert_eq!(check_navigation_gate(&doc, lumen_core::SandboxFlags::NAVIGATION), 0);
 }
 
-// в”Ђв”Ђ apply_iframe_sandbox_gates в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── apply_iframe_sandbox_gates ───────────────────────────────────────────
 
 #[test]
 fn iframe_sandbox_no_iframes_returns_zero() {
@@ -311,7 +311,7 @@ fn iframe_sandbox_srcdoc_scripts_blocked() {
 
 #[test]
 fn iframe_sandbox_srcdoc_scripts_allowed() {
-    // allow-scripts lifts SCRIPTS; AUXILIARY_NAVIGATION still set в†’ popup blocked (+1).
+    // allow-scripts lifts SCRIPTS; AUXILIARY_NAVIGATION still set → popup blocked (+1).
     let doc = lumen_html_parser::parse(
         r#"<html><body><iframe sandbox="allow-scripts" srcdoc="<script>x=1;</script>"></iframe></body></html>"#,
     );
@@ -345,7 +345,7 @@ fn iframe_sandbox_srcdoc_no_sandbox_attr_no_blocking() {
     assert_eq!(apply_iframe_sandbox_gates(&doc), 0);
 }
 
-// в”Ђв”Ђ frame_access_allowed (BUG-480 СЃСЂРµР· 2) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── frame_access_allowed (BUG-480 срез 2) ────────────────────────────────
 
 #[test]
 fn frame_access_about_urls_inherit_parent_origin() {
@@ -369,7 +369,7 @@ fn frame_access_same_origin_allowed_cross_origin_denied() {
         "https://a.example/child.html",
         false
     ));
-    // РџРѕСЂС‚ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ Рё СЂРµРіРёСЃС‚СЂ С…РѕСЃС‚Р° РЅРµ РІР»РёСЏСЋС‚ РЅР° СЃРѕРІРїР°РґРµРЅРёРµ origin.
+    // Порт по умолчанию и регистр хоста не влияют на совпадение origin.
     assert!(frame_access_allowed(
         &a,
         "HTTPS://A.EXAMPLE:443/other.html",
@@ -396,7 +396,7 @@ fn frame_access_file_parent_talks_only_to_files() {
 
 #[test]
 fn frame_access_url_parent_to_file_child_denied() {
-    // РЈ file://-СЂРµР±С‘РЅРєР° opaque origin вЂ” СЃРµС‚РµРІРѕР№ СЂРѕРґРёС‚РµР»СЊ РµРіРѕ РЅРµ С‡РёС‚Р°РµС‚.
+    // У file://-ребёнка opaque origin — сетевой родитель его не читает.
     let u = ResourceBase::Url("https://a.example/".to_owned());
     assert!(!frame_access_allowed(&u, "file://D:/x.html", false));
 }
@@ -1376,14 +1376,14 @@ fn rebuilt_frame_content_defaults_backdrop_to_white_without_child_background() {
     }
 }
 
-// в”Ђв”Ђ PH1-2: Progressive streaming pipeline в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── PH1-2: Progressive streaming pipeline ──────────────────────────────────
 
-// Compile-time: streaming throttle must be в‰¤16 ms (~60 Hz).
+// Compile-time: streaming throttle must be ≤16 ms (~60 Hz).
 // Prevents accidental reversion to the old 150 ms value.
 const _: () = assert!(STREAM_PAINT_INTERVAL_MS <= 16);
 const _: () = assert!(STREAM_PAINT_INTERVAL_MS >= 14);
 
-// в”Ђв”Ђ extract_tor_mode в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── extract_tor_mode ─────────────────────────────────────────────────────
 
 #[test]
 fn tor_mode_not_present() {
@@ -1416,7 +1416,7 @@ fn tor_mode_port_before_tor_flag() {
 
 #[test]
 fn tor_mode_no_flag_no_extra_port() {
-    // --tor-port without --tor в†’ tor_found=false в†’ return None (port consumed but no tor).
+    // --tor-port without --tor → tor_found=false → return None (port consumed but no tor).
     let (port, rest) = extract_tor_mode(&args(&["--tor-port", "9150", "page.html"]));
     assert!(port.is_none());
     assert_eq!(rest, args(&["page.html"]));
@@ -1429,7 +1429,7 @@ fn tor_mode_empty_args() {
     assert!(rest.is_empty());
 }
 
-// в”Ђв”Ђ PH1-2c: РїСЂРѕРіСЂРµСЃСЃРёРІРЅР°СЏ РїРѕРґРіСЂСѓР·РєР° РєР°СЂС‚РёРЅРѕРє РІРѕ РІСЂРµРјСЏ streaming в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── PH1-2c: прогрессивная подгрузка картинок во время streaming ─────────
 
 #[test]
 fn resource_base_maps_url_and_file_sources() {
@@ -1450,7 +1450,7 @@ fn resource_base_maps_url_and_file_sources() {
 
 #[test]
 fn resource_base_none_for_baseless_sources() {
-    // РСЃС‚РѕС‡РЅРёРєРё Р±РµР· Р±Р°Р·С‹ РЅРµ РґРѕР»Р¶РЅС‹ СЃРїР°РІРЅРёС‚СЊ streaming-Р·Р°РіСЂСѓР·РєСѓ РєР°СЂС‚РёРЅРѕРє.
+    // Источники без базы не должны спавнить streaming-загрузку картинок.
     assert!(PageSource::Empty.resource_base().is_none());
     assert!(PageSource::AboutBlank.resource_base().is_none());
     assert!(
@@ -1462,8 +1462,8 @@ fn resource_base_none_for_baseless_sources() {
 
 #[test]
 fn stream_image_discovery_dedups_and_skips_lazy() {
-    // Р’РѕСЃРїСЂРѕРёР·РІРѕРґРёС‚ С„РёР»СЊС‚СЂР°С†РёСЋ РёР· spawn_stream_image_loads: lazy РїСЂРѕРїСѓСЃРєР°РµРј,
-    // РїРѕРІС‚РѕСЂРЅРѕ РІСЃС‚СЂРµС‡РµРЅРЅС‹Р№ src РЅРµ Р·Р°РїСЂР°С€РёРІР°РµРј РґРІР°Р¶РґС‹ РјРµР¶РґСѓ РєР°РґСЂР°РјРё.
+    // Воспроизводит фильтрацию из spawn_stream_image_loads: lazy пропускаем,
+    // повторно встреченный src не запрашиваем дважды между кадрами.
     let html = r#"
             <img src="a.png">
             <img src="b.png" loading="lazy">
@@ -1482,16 +1482,16 @@ fn stream_image_discovery_dedups_and_skips_lazy() {
             dispatched.push(req.url);
         }
     }
-    assert_eq!(dispatched, vec!["a.png".to_owned()], "lazy РїСЂРѕРїСѓС‰РµРЅ, РґСѓР±Р»СЊ a.png СЃС…Р»РѕРїРЅСѓС‚");
+    assert_eq!(dispatched, vec!["a.png".to_owned()], "lazy пропущен, дубль a.png схлопнут");
 }
 
 #[test]
 fn post_load_image_discovery_dispatches_only_the_new_src() {
-    // BUG-730: РІС‚РѕСЂРѕР№ РїСЂРѕС…РѕРґ (`spawn_dynamic_image_loads` РїРѕСЃР»Рµ СЂРµР»РµР№Р°СѓС‚Р°
-    // JS-РјСѓС‚Р°С†РёРё) РІРёРґРёС‚ РІРµСЃСЊ РґРѕРєСѓРјРµРЅС‚ С†РµР»РёРєРѕРј, Р° РЅРµ С‚РѕР»СЊРєРѕ РґРѕРµС…Р°РІС€СѓСЋ РїРѕ СЃРµС‚Рё
-    // СЂР°Р·РјРµС‚РєСѓ. Р”РµРґСѓРї С‡РµСЂРµР· С‚РѕС‚ Р¶Рµ `stream_images_requested` РѕР±СЏР·Р°РЅ РїСЂРѕРїСѓСЃС‚РёС‚СЊ
-    // СѓР¶Рµ Р·Р°РіСЂСѓР¶РµРЅРЅРѕРµ Рё РІС‹РґР°С‚СЊ СЂРѕРІРЅРѕ РїРѕСЏРІРёРІС€РёР№СЃСЏ `<img>` вЂ” РёРЅР°С‡Рµ РєР°Р¶РґС‹Р№
-    // СЂРµР»РµР№Р°СѓС‚ РїРµСЂРµРєР°С‡РёРІР°Р» Р±С‹ РІСЃСЋ СЃС‚СЂР°РЅРёС†Сѓ Р·Р°РЅРѕРІРѕ.
+    // BUG-730: второй проход (`spawn_dynamic_image_loads` после релейаута
+    // JS-мутации) видит весь документ целиком, а не только доехавшую по сети
+    // разметку. Дедуп через тот же `stream_images_requested` обязан пропустить
+    // уже загруженное и выдать ровно появившийся `<img>` — иначе каждый
+    // релейаут перекачивал бы всю страницу заново.
     let vp = Size::new(300.0, 300.0);
     let mut requested: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut dispatch = |html: &str| -> Vec<String> {
@@ -1505,13 +1505,13 @@ fn post_load_image_discovery_dispatches_only_the_new_src() {
     };
 
     assert_eq!(dispatch(r#"<img src="a.png">"#), vec!["a.png".to_owned()]);
-    // РЎРєСЂРёРїС‚ РґРѕРїРёСЃР°Р» РІС‚РѕСЂСѓСЋ РєР°СЂС‚РёРЅРєСѓ вЂ” РїСЂРёРµС…Р°Р»Р° С‚РѕР»СЊРєРѕ РѕРЅР°.
+    // Скрипт дописал вторую картинку — приехала только она.
     assert_eq!(
         dispatch(r#"<img src="a.png"><img src="b.png">"#),
         vec!["b.png".to_owned()],
-        "a.png СѓР¶Рµ Р·Р°РїСЂРѕС€РµРЅР°, РїРѕРІС‚РѕСЂРЅРѕ РЅРµ СѓС…РѕРґРёС‚"
+        "a.png уже запрошена, повторно не уходит"
     );
-    // РќРёС‡РµРіРѕ РЅРµ РјРµРЅСЏР»РѕСЃСЊ вЂ” РЅРё РѕРґРЅРѕРіРѕ Р·Р°РїСЂРѕСЃР°.
+    // Ничего не менялось — ни одного запроса.
     assert!(dispatch(r#"<img src="a.png"><img src="b.png">"#).is_empty());
 }
 

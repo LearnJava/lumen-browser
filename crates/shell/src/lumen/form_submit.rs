@@ -14,27 +14,27 @@
 use crate::*;
 
 impl Lumen {
-    /// HTML LS В§4.10.21.4 step 11 вЂ” fire a cancelable `submit` event at `form`
+    /// HTML LS §4.10.21.4 step 11 — fire a cancelable `submit` event at `form`
     /// (with `submitter` exposed as `SubmitEvent.submitter`) and report whether
     /// the submission may proceed.
     ///
     /// Returns `false` only when a page handler called `preventDefault()`. With
     /// no JS runtime installed, or if the shim call itself throws, it returns
-    /// `true` вЂ” a script-less page must submit exactly as it did before BUG-437,
+    /// `true` — a script-less page must submit exactly as it did before BUG-437,
     /// and a broken dispatch must never silently swallow a real submission.
     ///
-    /// Any navigation the handler queued (`location.href = вЂ¦`, how an SPA
+    /// Any navigation the handler queued (`location.href = …`, how an SPA
     /// normally takes the form over) is picked up here, mirroring the
-    /// click-dispatch path in [`Self::handle_click_at`] вЂ” a *cancelled*
+    /// click-dispatch path in [`Self::handle_click_at`] — a *cancelled*
     /// submission still has to honour it.
-    /// Run the HTML form-submission algorithm for `form` (HTML LS В§4.10.21.4).
+    /// Run the HTML form-submission algorithm for `form` (HTML LS §4.10.21.4).
     ///
     /// `submitter` is the activated submit control, or `None` when the page
     /// submitted the form from script with no control (`form.submit()`).
-    /// `fire_submit_event` controls step 11 вЂ” the cancelable `submit` event:
+    /// `fire_submit_event` controls step 11 — the cancelable `submit` event:
     /// a real click passes `true`, while the script paths pass `false` because
     /// `requestSubmit()` already fired the event on the JS side and `submit()`
-    /// is defined to skip it entirely (В§4.10.21.3).
+    /// is defined to skip it entirely (§4.10.21.3).
     ///
     /// Extracted from the click handler (BUG-383) so `form.submit()` reaching
     /// the shell over `NavigateRequest::SubmitForm` runs the very same encoding,
@@ -48,7 +48,7 @@ impl Lumen {
         // BUG-437: everything the document lock is needed for is read in
         // one scoped borrow *before* any JS runs. Dispatching the
         // `submit` event below re-enters the JS runtime, which locks the
-        // very same `Arc<Mutex<Document>>` вЂ” holding `doc` across that
+        // very same `Arc<Mutex<Document>>` — holding `doc` across that
         // call would deadlock the UI thread.
         let prepared = self.layout_source.as_ref().and_then(|src| {
             let doc = src.document.lock().ok()?;
@@ -61,9 +61,9 @@ impl Lumen {
         if let Some((submit_event, enctype, dialog_node)) = prepared {
             match submit_event {
                 lumen_dom::FormSubmitEvent::Valid { action, method, fields } => {
-                    // HTML LS В§4.10.21.4 step 11: fire a **cancelable**
+                    // HTML LS §4.10.21.4 step 11: fire a **cancelable**
                     // `submit` event at the form before submitting.
-                    // BUG-437: this step was missing entirely вЂ” the shell
+                    // BUG-437: this step was missing entirely — the shell
                     // went straight to the native submission below, so a
                     // page's own `submit` handler never ran and could not
                     // `preventDefault()` the navigation. That made every
@@ -75,7 +75,7 @@ impl Lumen {
                     {
                         return;
                     }
-                    // Form passed validation вЂ” encode using enctype (HTML LS В§4.10.21.6).
+                    // Form passed validation — encode using enctype (HTML LS §4.10.21.6).
                     let body = if enctype == "multipart/form-data" {
                         // Multipart: deterministic boundary for Phase 0.
                         let boundary = "----LumenFormBoundary0000000000000000";
@@ -93,7 +93,7 @@ impl Lumen {
                     });
                     match method.as_str() {
                         "dialog" => {
-                            // HTML LS В§4.10.18.3: form with method="dialog" closes
+                            // HTML LS §4.10.18.3: form with method="dialog" closes
                             // the nearest ancestor <dialog>, setting its returnValue
                             // to the submit button's value attribute.
                             let rv = fields.iter()
@@ -103,9 +103,9 @@ impl Lumen {
                             if let Some(dnid) = dialog_node {
                                 let dnid_idx = dnid.index() as u32;
                                 let rv = rv.to_string();
-                                // ADR-016 M2.2c-2d: fire-and-forget dialog-close С‡РµСЂРµР·
-                                // РјР°СЂС€СЂСѓС‚РёР·Р°С‚РѕСЂ вЂ” РїРѕРґ С„Р»Р°РіРѕРј off-UI-thread, Р±РµР· С„Р»Р°РіР°
-                                // Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ РїСЂРµР¶РЅРµРјСѓ `js.fire_dialog_close`.
+                                // ADR-016 M2.2c-2d: fire-and-forget dialog-close через
+                                // маршрутизатор — под флагом off-UI-thread, без флага
+                                // байт-идентично прежнему `js.fire_dialog_close`.
                                 route_task_js(
                                     self.engine_thread.as_ref(),
                                     self.js_ctx.as_ref(),
@@ -114,7 +114,7 @@ impl Lumen {
                             }
                         }
                         "get" => {
-                            // HTML LS В§form-submission step 23: navigate
+                            // HTML LS §form-submission step 23: navigate
                             // to action + query-string (only urlencoded for GET).
                             let url_body = if enctype == "multipart/form-data" {
                                 forms::encode_form_fields(&fields)
@@ -132,8 +132,8 @@ impl Lumen {
                     }
                 }
                 lumen_dom::FormSubmitEvent::Invalid { invalid_controls } => {
-                    // Form contains invalid controls вЂ” show first error.
-                    // HTML LS В§4.10.21.4 step 4 rejects the submission
+                    // Form contains invalid controls — show first error.
+                    // HTML LS §4.10.21.4 step 4 rejects the submission
                     // before step 11, so no `submit` event is fired here.
                     if let Some(&first_invalid) = invalid_controls.first() {
                         let tooltip = self.layout_source.as_ref().and_then(|src| {
@@ -148,7 +148,7 @@ impl Lumen {
                             }
                         }
                         eprintln!(
-                            "forms: submit blocked вЂ” {} control(s) failed constraint validation",
+                            "forms: submit blocked — {} control(s) failed constraint validation",
                             invalid_controls.len()
                         );
                     }
@@ -164,7 +164,7 @@ impl Lumen {
             submitter.index(),
         );
         // `_lumen_dispatch_rich` returns `!event.defaultPrevented`, JSON-encoded
-        // by `eval_js_value` вЂ” so only a literal `false` cancels.
+        // by `eval_js_value` — so only a literal `false` cancels.
         let proceed = match route_query_js(
             self.engine_thread.as_ref(),
             self.js_ctx.as_ref(),

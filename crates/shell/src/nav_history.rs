@@ -8,7 +8,7 @@
 
 use crate::*;
 
-/// Р—Р°РїРёСЃСЊ РІ СЃС‚РµРєРµ РёСЃС‚РѕСЂРёРё РЅР°РІРёРіР°С†РёРё Р±СЂР°СѓР·РµСЂР°.
+/// Запись в стеке истории навигации браузера.
 pub(crate) struct NavEntry {
     pub(crate) source: PageSource,
     pub(crate) scroll_x: f32,
@@ -18,8 +18,8 @@ pub(crate) struct NavEntry {
     /// was created by `history.pushState` (the virtual URL at that point).
     pub(crate) display_url: Option<String>,
     /// State JSON for a same-document `history.pushState` entry.
-    /// `None` в†’ full navigation (popping this entry reloads the page).
-    /// `Some(json)` в†’ same-document (popping fires `popstate` with this state).
+    /// `None` → full navigation (popping this entry reloads the page).
+    /// `Some(json)` → same-document (popping fires `popstate` with this state).
     pub(crate) same_doc_state_json: Option<String>,
     /// Navigation API key assigned by the shell for this entry.
     /// Used by `navigation.traverseTo(key)` and reported via
@@ -29,14 +29,14 @@ pub(crate) struct NavEntry {
 
 impl NavEntry {
     /// Move the history cursor one intermediate hop toward `back` (true) or
-    /// forward (false) WITHOUT rendering or firing events вЂ” the building block of
+    /// forward (false) WITHOUT rendering or firing events — the building block of
     /// a multi-step `history.go(n)` (see `Lumen::navigate_by`). The current entry
     /// `cur` is pushed onto the opposite stack and the popped target entry is
     /// returned as the new current.
     ///
     /// The caller MUST have range-checked that the source stack is non-empty;
     /// `pop` is therefore expected to succeed.
-    #[allow(clippy::expect_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn shift_history_entry(
         nav_back: &mut Vec<NavEntry>,
         nav_fwd: &mut Vec<NavEntry>,
@@ -57,7 +57,7 @@ impl NavEntry {
     /// Shuttle `cur` through `steps - 1` intermediate hops via
     /// [`Self::shift_history_entry`], additionally tracking whether any hop
     /// crossed a full-document entry (`same_doc_state_json.is_none()`) along
-    /// the way вЂ” i.e. whether the entry one hop short of the final
+    /// the way — i.e. whether the entry one hop short of the final
     /// destination belongs to a different loaded document than `cur` started
     /// in. `Lumen::navigate_by` uses the returned flag to decide whether a
     /// same-document destination needs `Lumen::pending_post_reload_traversal`
@@ -81,22 +81,22 @@ impl NavEntry {
     }
 }
 
-/// РќР°РІРёРіР°С†РёРѕРЅРЅС‹Р№ Р·Р°РїСЂРѕСЃ РѕС‚ JS (location.href=, assign, replace, reload).
-/// РҐСЂР°РЅРёС‚СЃСЏ РІ `Lumen::pending_js_navigate` Рё РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ РІ `about_to_wait`.
+/// Навигационный запрос от JS (location.href=, assign, replace, reload).
+/// Хранится в `Lumen::pending_js_navigate` и выполняется в `about_to_wait`.
 #[cfg_attr(not(feature = "v8"), allow(dead_code))]
 pub(crate) enum JsNavigateRequest {
-    /// РџРµСЂРµР№С‚Рё РЅР° URL, РґРѕР±Р°РІРёС‚СЊ Р·Р°РїРёСЃСЊ РІ РёСЃС‚РѕСЂРёСЋ.
+    /// Перейти на URL, добавить запись в историю.
     Push(String),
-    /// РџРµСЂРµР№С‚Рё РЅР° URL, Р·Р°РјРµРЅРёС‚СЊ С‚РµРєСѓС‰СѓСЋ Р·Р°РїРёСЃСЊ РёСЃС‚РѕСЂРёРё (Р±РµР· push).
+    /// Перейти на URL, заменить текущую запись истории (без push).
     Replace(String),
-    /// РџРµСЂРµР·Р°РіСЂСѓР·РёС‚СЊ С‚РµРєСѓС‰СѓСЋ СЃС‚СЂР°РЅРёС†Сѓ.
+    /// Перезагрузить текущую страницу.
     Reload,
-    /// Р’С‹РїРѕР»РЅРёС‚СЊ РѕС‚РїСЂР°РІРєСѓ С„РѕСЂРјС‹, Р·Р°РїСЂРѕС€РµРЅРЅСѓСЋ СЃС‚СЂР°РЅРёС†РµР№ РёР· СЃРєСЂРёРїС‚Р°
+    /// Выполнить отправку формы, запрошенную страницей из скрипта
     /// (`form.submit()` / `form.requestSubmit()`, BUG-383).
     SubmitForm {
-        /// РРЅРґРµРєСЃ СѓР·Р»Р° `<form>`.
+        /// Индекс узла `<form>`.
         form: u32,
-        /// РРЅРґРµРєСЃ СѓР·Р»Р°-СЃР°Р±РјРёС‚С‚РµСЂР°, Р»РёР±Рѕ `-1`, РµСЃР»Рё РµРіРѕ РЅРµС‚.
+        /// Индекс узла-сабмиттера, либо `-1`, если его нет.
         submitter: i32,
     },
 }

@@ -22,7 +22,7 @@ pub(crate) enum FullscreenPoll {
     /// The size has not been applied yet: keep waiting with `(prev_w, prev_h,
     /// attempts_left)` (one attempt spent this tick).
     Wait(u32, u32, u8),
-    /// Give up вЂ” the attempt budget is exhausted. Clears the pending state.
+    /// Give up — the attempt budget is exhausted. Clears the pending state.
     Done,
 }
 
@@ -51,13 +51,13 @@ pub(crate) fn decide_fullscreen_poll(prev: (u32, u32), cur: (u32, u32), attempts
 /// switcher (`SWITCHER_HEIGHT`) when visible. The page content is shifted down by that
 /// chrome via `PushTransform`, and scroll clamping uses the same reduced height
 /// (`viewport_height_css`). The layout pass must therefore see the *content*
-/// height вЂ” not the full window вЂ” so that `vh`/`%`-heights/`@media (height)`
+/// height — not the full window — so that `vh`/`%`-heights/`@media (height)`
 /// resolve against the actually-visible page region. Width is unaffected (the
 /// chrome only occupies vertical space).
 ///
 /// Headless surfaces (`--screenshot` / `--dump-*` / `--ipc-server`, i.e.
 /// `has_window == false`) have no chrome: the full surface is the viewport,
-/// which keeps those paths deterministic at 1024Г—720.
+/// which keeps those paths deterministic at 1024×720.
 pub(crate) fn content_layout_viewport(surface: Size, has_window: bool, workspace_visible: bool) -> (f32, f32) {
     if !has_window {
         return (surface.width, surface.height);

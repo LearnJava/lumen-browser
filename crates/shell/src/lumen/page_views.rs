@@ -18,7 +18,7 @@ impl Lumen {
     ///
     /// Called after every save/delete and when the panel opens.  Shows the 50
     /// most recent items (unread first, then read, then archived).
-    /// Toggle Reader View (В§D-3, F9).
+    /// Toggle Reader View (§D-3, F9).
     ///
     /// When entering reader mode: extracts the article region from the current
     /// page's HTML source, wraps it in a clean reading template, and re-renders
@@ -28,13 +28,13 @@ impl Lumen {
     /// When exiting: restores the stashed source and reloads.
     pub(crate) fn toggle_reader_view(&mut self) {
         if let Some(original) = self.reader_original_source.take() {
-            // Exit reader mode вЂ” restore original page.
+            // Exit reader mode — restore original page.
             self.source = original;
             self.reload();
             return;
         }
 
-        // Enter reader mode вЂ” extract article from current HTML source.
+        // Enter reader mode — extract article from current HTML source.
         let html = match self.layout_source.as_ref().and_then(|ls| ls.html_source.as_deref()) {
             Some(s) if !s.is_empty() => s.to_owned(),
             _ => return, // nothing to extract from
@@ -52,7 +52,7 @@ impl Lumen {
         self.reload();
     }
 
-    /// Show syntax-highlighted source of the current page (Ctrl+U, В§D-2).
+    /// Show syntax-highlighted source of the current page (Ctrl+U, §D-2).
     ///
     /// Uses the already-parsed HTML stored in `layout_source.html_source`.
     /// No-op when the page has no HTML source (e.g. empty tab).
@@ -71,7 +71,7 @@ impl Lumen {
         });
     }
 
-    /// Fetch `url` and display its raw bytes as syntax-highlighted source (В§D-2).
+    /// Fetch `url` and display its raw bytes as syntax-highlighted source (§D-2).
     ///
     /// Used when the user types `view-source:<url>` in the address bar.
     pub(crate) fn show_view_source_for_url(&mut self, url: &str) {
@@ -88,7 +88,7 @@ impl Lumen {
                 });
             }
             Err(e) => {
-                eprintln!("view-source: РЅРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ {url}: {e}");
+                eprintln!("view-source: не удалось загрузить {url}: {e}");
             }
         }
     }

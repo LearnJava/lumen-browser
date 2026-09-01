@@ -14,7 +14,7 @@
 use crate::*;
 
 impl Lumen {
-    #[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn handle_key(&mut self, event_loop: &ActiveEventLoop, key_event: &KeyEvent) {
         if key_event.state != ElementState::Pressed {
             return;
@@ -23,9 +23,9 @@ impl Lumen {
             return;
         };
 
-        // РљРѕРјР°РЅРґРЅР°СЏ РїР°Р»РёС‚СЂР° вЂ” РјРѕРґР°Р»СЊРЅС‹Р№ overlay: РїРѕРєР° РѕС‚РєСЂС‹С‚Р°, РїРµСЂРµС…РІР°С‚С‹РІР°РµС‚ РІСЃРµ
-        // РєР»Р°РІРёС€Рё (Esc/Enter/в†‘/в†“/Backspace/РїРµС‡Р°С‚СЊ). Ctrl+K (toggle) РїСЂРѕРїСѓСЃРєР°РµС‚СЃСЏ
-        // РІ РіР»РѕР±Р°Р»СЊРЅС‹Р№ keybinding-РїСѓС‚СЊ РЅРёР¶Рµ, С‡С‚РѕР±С‹ Р·Р°РєСЂС‹С‚СЊ РїР°Р»РёС‚СЂСѓ.
+        // Командная палитра — модальный overlay: пока открыта, перехватывает все
+        // клавиши (Esc/Enter/↑/↓/Backspace/печать). Ctrl+K (toggle) пропускается
+        // в глобальный keybinding-путь ниже, чтобы закрыть палитру.
         if self.command_palette.visible
             && !(code == KeyCode::KeyK && self.modifiers == ModifiersState::CONTROL)
             && self.handle_palette_key(code, key_event, event_loop)
@@ -33,23 +33,23 @@ impl Lumen {
             return;
         }
 
-        // РђРґСЂРµСЃРЅР°СЏ СЃС‚СЂРѕРєР° (Ctrl+L) РїРµСЂРµС…РІР°С‚С‹РІР°РµС‚ РІРІРѕРґ РїРµСЂРІРѕР№: Esc=close,
-        // Enter=navigate, Backspace=СѓРґР°Р»РёС‚СЊ СЃРёРјРІРѕР», РёРЅР°С‡Рµ вЂ” С‚РµРєСЃС‚ URL.
+        // Адресная строка (Ctrl+L) перехватывает ввод первой: Esc=close,
+        // Enter=navigate, Backspace=удалить символ, иначе — текст URL.
         if self.address_bar.is_open() {
             self.handle_address_bar_key(code, key_event, event_loop);
             return;
         }
 
-        // РљРѕРіРґР° find bar РѕС‚РєСЂС‹С‚ вЂ” РІСЃРµ РєР»Р°РІРёС€Рё РёРґСѓС‚ РІ РЅРµРіРѕ: РІРІРѕРґ СЃРёРјРІРѕР»РѕРІ,
-        // Esc=close, Backspace=СЃС‚РёСЂР°РЅРёРµ, Enter/F3=next (Shift=prev). Р­С‚Рѕ РЅРµ
-        // РґР°С‘С‚ СЃР»СѓС‡Р°Р№РЅРѕ СЃСЂР°Р±РѕС‚Р°С‚СЊ Esc=Exit РёР»Рё Ctrl+R=Reload РІ РјРѕРјРµРЅС‚ РїРѕРёСЃРєР°.
+        // Когда find bar открыт — все клавиши идут в него: ввод символов,
+        // Esc=close, Backspace=стирание, Enter/F3=next (Shift=prev). Это не
+        // даёт случайно сработать Esc=Exit или Ctrl+R=Reload в момент поиска.
         if self.find.is_open() {
             self.handle_find_key(code, key_event);
             return;
         }
 
-        // Hint-СЂРµР¶РёРј: РІСЃРµ РєР»Р°РІРёС€Рё РёРґСѓС‚ РІ РЅРµРіРѕ РїРѕРєР° Р°РєС‚РёРІРµРЅ.
-        // Esc=close, Р±СѓРєРІР°=СЃСѓР¶РµРЅРёРµ/Р°РєС‚РёРІР°С†РёСЏ С…РёРЅС‚Р°.
+        // Hint-режим: все клавиши идут в него пока активен.
+        // Esc=close, буква=сужение/активация хинта.
         if self.hint.is_active() {
             self.handle_hint_key(code, key_event);
             return;
@@ -91,7 +91,7 @@ impl Lumen {
             return;
         }
 
-        // Keyboard shortcuts panel вЂ” capture any keypress when rebinding (В§D-4).
+        // Keyboard shortcuts panel — capture any keypress when rebinding (§D-4).
         if self.shortcuts_panel.visible && self.handle_shortcuts_key(code, key_event) {
             return;
         }
@@ -176,7 +176,7 @@ impl Lumen {
             }
         }
 
-        // Pointer Lock API (W3C Pointer Lock L2 В§6.7): Escape releases pointer lock.
+        // Pointer Lock API (W3C Pointer Lock L2 §6.7): Escape releases pointer lock.
         // Must be processed before fullscreen so a locked pointer in fullscreen exits
         // lock first, letting a second Escape then exit fullscreen.
         #[cfg(feature = "v8")]
@@ -192,8 +192,8 @@ impl Lumen {
                 window.set_cursor_visible(true);
             }
             // Dispatch pointerlockchange so document.pointerLockElement clears in
-            // JS. ADR-016 M2.2c-2d: fire-and-forget void eval С‡РµСЂРµР· РјР°СЂС€СЂСѓС‚РёР·Р°С‚РѕСЂ вЂ”
-            // РїРѕРґ С„Р»Р°РіРѕРј off-UI-thread, Р±РµР· С„Р»Р°РіР° Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ.
+            // JS. ADR-016 M2.2c-2d: fire-and-forget void eval через маршрутизатор —
+            // под флагом off-UI-thread, без флага байт-идентично.
             route_eval_js(
                 self.engine_thread.as_ref(),
                 self.js_ctx.as_ref(),
@@ -202,7 +202,7 @@ impl Lumen {
             return;
         }
 
-        // Fullscreen API (WHATWG Fullscreen В§4.6): Escape always exits fullscreen first.
+        // Fullscreen API (WHATWG Fullscreen §4.6): Escape always exits fullscreen first.
         // If we are fullscreen and the user presses Escape (no repeat, no mods), exit
         // fullscreen before processing any other shortcut.
         if self.fullscreen_nid.is_some()
@@ -219,9 +219,9 @@ impl Lumen {
                 self.arm_fullscreen_resize(prev);
             }
             // Notify JS so fullscreenchange fires and document.fullscreenElement clears.
-            // ADR-016 M2.2c-2d: fire-and-forget void eval С‡РµСЂРµР· РјР°СЂС€СЂСѓС‚РёР·Р°С‚РѕСЂ вЂ” РїРѕРґ
-            // С„Р»Р°РіРѕРј off-UI-thread, Р±РµР· С„Р»Р°РіР° (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ) Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ РїСЂРµР¶РЅРµРјСѓ
-            // `js.eval_js(вЂ¦)` (РїСЂРё РѕС‚СЃСѓС‚СЃС‚РІСѓСЋС‰РµРј С…СЌРЅРґР»Рµ вЂ” no-op, РєР°Рє РїСЂРµР¶РЅРёР№ `if let`).
+            // ADR-016 M2.2c-2d: fire-and-forget void eval через маршрутизатор — под
+            // флагом off-UI-thread, без флага (по умолчанию) байт-идентично прежнему
+            // `js.eval_js(…)` (при отсутствующем хэндле — no-op, как прежний `if let`).
             #[cfg(feature = "v8")]
             route_eval_js(
                 self.engine_thread.as_ref(),
@@ -243,7 +243,7 @@ impl Lumen {
             return;
         }
 
-        // P3-spell СЃСЂРµР· 3: Escape closes the page spell suggestion menu.
+        // P3-spell срез 3: Escape closes the page spell suggestion menu.
         if self.page_context_menu.is_open()
             && code == KeyCode::Escape
             && self.modifiers.is_empty()
@@ -267,22 +267,22 @@ impl Lumen {
             return;
         }
 
-        // contenteditable key routing вЂ” before global keybindings so that
+        // contenteditable key routing — before global keybindings so that
         // typing inside an editable region is not swallowed by scroll commands.
         // Only active when the focused node is inside a contenteditable host
         // and no modifier (Ctrl/Alt/Meta) is held (those go to keybindings).
         if (self.modifiers.is_empty() || self.modifiers == ModifiersState::SHIFT)
             && let (Some(nid), Some(src)) = (self.focused_node, self.layout_source.as_ref())
         {
-            // ADR-016 M2.2c-2d: contenteditable-key void-eval С‡РµСЂРµР· `route_eval_js` вЂ”
-            // СЃРЅРёРјР°РµРј РїСЂСЏРјС‹Рµ `self.js_ctx`-РѕР±СЂР°С‰РµРЅРёСЏ. DOM-read (`find_editing_host`)
-            // РѕСЃС‚Р°С‘С‚СЃСЏ РЅР° UI-РїРѕС‚РѕРєРµ (С‡РёС‚Р°РµС‚ СЂР°Р·РґРµР»СЏРµРјС‹Р№ `src.document`, РЅРµ JS-С…СЌРЅРґР»);
-            // СЃР°РјРё `_lumen_handle_contenteditable_key`-РІС‹Р·РѕРІС‹ вЂ” С‡РёСЃС‚С‹Р№ fire-and-forget
-            // void Р±РµР· СЃРёРЅС…СЂРѕРЅРЅРѕРіРѕ С‡С‚РµРЅРёСЏ СЂРµР·СѓР»СЊС‚Р°С‚Р° СЃР»РµРґРѕРј, РїРѕСЌС‚РѕРјСѓ РїРѕРґ С„Р»Р°РіРѕРј
-            // (`LUMEN_ENGINE_THREAD=1`) СѓС…РѕРґСЏС‚ off-UI-thread РѕРґРЅРёРј `task`, Р±РµР· С„Р»Р°РіР° (РїРѕ
-            // СѓРјРѕР»С‡Р°РЅРёСЋ) вЂ” СЃРёРЅС…СЂРѕРЅРЅС‹Р№ РІС‹Р·РѕРІ РїРѕ UI-С…СЌРЅРґР»Сѓ, Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ. Р“РµР№С‚ Р·Р°РјРµРЅС‘РЅ
-            // СЃ `if let Some(js)` РЅР° `is_some()`, С‡С‚РѕР±С‹ editing-host detection Рё eval
-            // РІС‹РїРѕР»РЅСЏР»РёСЃСЊ С‚РѕР»СЊРєРѕ РїСЂРё РЅР°Р»РёС‡РёРё JS-РєРѕРЅС‚РµРєСЃС‚Р° (РєР°Рє РїСЂРµР¶РґРµ).
+            // ADR-016 M2.2c-2d: contenteditable-key void-eval через `route_eval_js` —
+            // снимаем прямые `self.js_ctx`-обращения. DOM-read (`find_editing_host`)
+            // остаётся на UI-потоке (читает разделяемый `src.document`, не JS-хэндл);
+            // сами `_lumen_handle_contenteditable_key`-вызовы — чистый fire-and-forget
+            // void без синхронного чтения результата следом, поэтому под флагом
+            // (`LUMEN_ENGINE_THREAD=1`) уходят off-UI-thread одним `task`, без флага (по
+            // умолчанию) — синхронный вызов по UI-хэндлу, байт-идентично. Гейт заменён
+            // с `if let Some(js)` на `is_some()`, чтобы editing-host detection и eval
+            // выполнялись только при наличии JS-контекста (как прежде).
             #[cfg(feature = "v8")]
             if self.js_present {
                 // Check contenteditable by reading the DOM directly (eval_js returns ()).
@@ -333,7 +333,7 @@ impl Lumen {
                             true
                         }
                         _ => {
-                            // Printable key вЂ” extract text from logical key.
+                            // Printable key — extract text from logical key.
                             if let Some(text) = key_event.logical_key.to_text()
                                 && !text.is_empty()
                                 && text.chars().all(|c| !c.is_control())
@@ -388,12 +388,12 @@ impl Lumen {
             }
         }
 
-        // Text editing inside a focused `<input>`/`<textarea>` вЂ” same placement
+        // Text editing inside a focused `<input>`/`<textarea>` — same placement
         // rationale as the contenteditable branch above: without it a printable
         // key falls through to the global keybinding table, where a bare `F`
         // opens hint mode and Space scrolls the page instead of reaching the
         // field. The insertion itself is the engine's own default action
-        // (`inject_char` в†’ `edit_focused_field`, BUG-436).
+        // (`inject_char` → `edit_focused_field`, BUG-436).
         if (self.modifiers.is_empty() || self.modifiers == ModifiersState::SHIFT)
             && self.focused_node.is_some_and(|nid| self.typeable_field(nid).is_some())
         {
@@ -555,8 +555,8 @@ impl Lumen {
         let Some(cmd) = keybinding_for(code, self.modifiers) else {
             return;
         };
-        // Scroll-РєРѕРјР°РЅРґС‹ СЂР°Р·СЂРµС€Р°РµРј РЅР° repeat (auto-repeat РїСЂРё СѓРґРµСЂР¶Р°РЅРёРё),
-        // РѕСЃС‚Р°Р»СЊРЅС‹Рµ вЂ” С‚РѕР»СЊРєРѕ РЅР° РїРµСЂРІРѕРµ РЅР°Р¶Р°С‚РёРµ.
+        // Scroll-команды разрешаем на repeat (auto-repeat при удержании),
+        // остальные — только на первое нажатие.
         let is_scroll = matches!(
             cmd,
             KeyCommand::ScrollLineDown
@@ -573,12 +573,12 @@ impl Lumen {
         }
         match cmd {
             KeyCommand::Reload => {
-                // HTML В§8.1.4 В«Event loopВ»: РїРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРёРµ РґРµР№СЃС‚РІРёСЏ (reload)
-                // РїР»Р°РЅРёСЂСѓСЋС‚СЃСЏ С‡РµСЂРµР· UserInteraction task source, Р° РЅРµ РІС‹Р·С‹РІР°СЋС‚СЃСЏ
-                // РЅР°РїСЂСЏРјСѓСЋ. `pending_reload` вЂ” С„Р»Р°Рі-РјРѕСЃС‚: closure-Р·Р°РґР°С‡Р° РјРѕР¶РµС‚
-                // Р±С‹С‚СЊ `+ 'static`, Lumen вЂ” РЅРµС‚; Cell РїРѕР·РІРѕР»СЏРµС‚ РёР· Р·Р°РјС‹РєР°РЅРёСЏ
-                // СѓСЃС‚Р°РЅРѕРІРёС‚СЊ С„Р»Р°Рі, РєРѕС‚РѕСЂС‹Р№ `about_to_wait` РїСЂРѕРІРµСЂСЏРµС‚ Рё РІС‹Р·С‹РІР°РµС‚
-                // `reload()` РїРѕСЃР»Рµ РґСЂРµРЅР°Р¶Р° РѕС‡РµСЂРµРґРё.
+                // HTML §8.1.4 «Event loop»: пользовательские действия (reload)
+                // планируются через UserInteraction task source, а не вызываются
+                // напрямую. `pending_reload` — флаг-мост: closure-задача может
+                // быть `+ 'static`, Lumen — нет; Cell позволяет из замыкания
+                // установить флаг, который `about_to_wait` проверяет и вызывает
+                // `reload()` после дренажа очереди.
                 let flag = Rc::clone(&self.pending_reload);
                 self.runtime.handle().queue_task(
                     runtime::TaskSource::UserInteraction,
@@ -596,7 +596,7 @@ impl Lumen {
                 let current = self.current_display_url().to_owned();
                 self.address_bar.open(&current);
                 // CC-7: reflect the now-open state (focus ring, value) in
-                // the engine-rendered `#omniInput` вЂ” see the comment on the
+                // the engine-rendered `#omniInput` — see the comment on the
                 // matching call in `Self::handle_address_bar_key`.
                 self.relayout_chrome_host();
                 self.request_redraw();
@@ -712,7 +712,7 @@ impl Lumen {
             KeyCommand::ToggleVerticalTabs => {
                 self.vertical_tabs.toggle();
                 self.persist_tab_layout();
-                // Viewport width changes вЂ” re-layout the current page (ADR-016
+                // Viewport width changes — re-layout the current page (ADR-016
                 // M2.2b: chrome-inset change, off-thread when the engine is on).
                 self.relayout_chrome();
                 self.request_redraw();
@@ -733,7 +733,7 @@ impl Lumen {
             }
             KeyCommand::ToggleWorkspaces => {
                 self.workspace_panel.toggle();
-                // Viewport height changes вЂ” re-layout so content doesn't hide
+                // Viewport height changes — re-layout so content doesn't hide
                 // under bar (ADR-016 M2.2b: async-safe chrome-inset relayout).
                 self.relayout_chrome();
                 self.request_redraw();
@@ -752,7 +752,7 @@ impl Lumen {
             }
             KeyCommand::ToggleAiPanel => {
                 self.ai_panel.toggle();
-                // AI panel occupies right PANEL_WIDTH вЂ” relayout so main content
+                // AI panel occupies right PANEL_WIDTH — relayout so main content
                 // width adjusts accordingly. ADR-016 M2.2b-3: async-safe chrome
                 // toggle (only the content viewport width shifts, no synchronous
                 // geometry read follows), so route off-thread when the engine
@@ -780,7 +780,7 @@ impl Lumen {
                     self.a11y_panel.visible = false;
                     self.deliver_a11y_media_changes();
                     // Re-style with the (possibly toggled) forced-colors pref.
-                    // ADR-016 M2.2b-3: async-safe вЂ” closing the a11y panel widens
+                    // ADR-016 M2.2b-3: async-safe — closing the a11y panel widens
                     // the content viewport and re-styles under the new
                     // forced-colors preference, but nothing reads page geometry
                     // synchronously afterwards, so route off-thread when enabled.
@@ -808,7 +808,7 @@ impl Lumen {
                 // CC-10: `#cpOverlay`'s engine-rendered open state/results
                 // (`Self::chrome_model_snapshot`) is baked into
                 // `self.chrome_layout` at `relayout_chrome_host` time, not
-                // recomputed every `RedrawRequested` вЂ” same class of gap
+                // recomputed every `RedrawRequested` — same class of gap
                 // CC-7/CC-9 found for the omnibox/find-bar. No-op off the flag.
                 self.relayout_chrome_host();
             }

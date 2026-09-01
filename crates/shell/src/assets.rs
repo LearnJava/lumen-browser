@@ -12,11 +12,11 @@
 
 use crate::*;
 
-/// Bundled-С€СЂРёС„С‚: СЃС‚Р°С‚РёС‡РµСЃРєРёР№ Inter v4.1 Regular (~411 РљР‘),
-/// SIL OFL 1.1, СЃРј. assets/fonts/OFL.txt.
+/// Bundled-шрифт: статический Inter v4.1 Regular (~411 КБ),
+/// SIL OFL 1.1, см. assets/fonts/OFL.txt.
 pub(crate) const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 
-/// P3-spell СЃСЂРµР· 2: СЃР»РѕРІР°СЂРё Hunspell, Р·Р°РіСЂСѓР¶РµРЅРЅС‹Рµ С„РѕРЅРѕРІС‹Рј РїРѕС‚РѕРєРѕРј РїСЂРё СЃС‚Р°СЂС‚Рµ
-/// РѕРєРЅР° РёР· `data/spell/` (`spellcheck::load_dictionaries`). Р”Рѕ Р·Р°РІРµСЂС€РµРЅРёСЏ
-/// Р·Р°РіСЂСѓР·РєРё `get()` РІРѕР·РІСЂР°С‰Р°РµС‚ `None` Рё СЃРїРµР»Р»-С‡РµРє РјРѕР»С‡РёС‚.
+/// P3-spell срез 2: словари Hunspell, загруженные фоновым потоком при старте
+/// окна из `data/spell/` (`spellcheck::load_dictionaries`). До завершения
+/// загрузки `get()` возвращает `None` и спелл-чек молчит.
 pub(crate) static SPELL_DICTS: std::sync::OnceLock<spellcheck::MultiDictionary> = std::sync::OnceLock::new();

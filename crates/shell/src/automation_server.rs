@@ -8,30 +8,30 @@
 
 use crate::*;
 
-/// Р—Р°РїСѓСЃС‚РёС‚СЊ headless IPC-СЃРµСЂРІРµСЂ С‚Р°Р±-РєРѕРјР°РЅРґ (TAB-5).
+/// Запустить headless IPC-сервер таб-команд (TAB-5).
 ///
-/// РЎР»СѓС€Р°РµС‚ TCP loopback (`lumen_ipc`), РїРµС‡Р°С‚Р°РµС‚ РІС‹Р±СЂР°РЅРЅС‹Р№ РїРѕСЂС‚ РІ stdout СЃС‚СЂРѕРєРѕР№
-/// `LUMEN_IPC_PORT=<port>` (РєРѕРЅС‚СЂРѕР»Р»РµСЂ РµС‘ РїР°СЂСЃРёС‚), Р·Р°С‚РµРј РѕР±СЃР»СѓР¶РёРІР°РµС‚ РєРѕРјР°РЅРґС‹:
+/// Слушает TCP loopback (`lumen_ipc`), печатает выбранный порт в stdout строкой
+/// `LUMEN_IPC_PORT=<port>` (контроллер её парсит), затем обслуживает команды:
 /// `CreateTab` / `NavigateTab` / `Screenshot` / `CloseTab` / `Shutdown`.
 ///
-/// В«Р’РєР»Р°РґРєР°В» Р·РґРµСЃСЊ вЂ” headless-РєРѕРЅС‚РµРєСЃС‚ СЂРµРЅРґРµСЂР°: С…СЂР°РЅРёС‚ Р»РёС€СЊ СЃРІРѕР№ [`PageSource`],
-/// Р° С„Р°РєС‚РёС‡РµСЃРєРёР№ load в†’ layout в†’ CPU-СЂР°СЃС‚РµСЂРёР·Р°С†РёСЏ РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ Р»РµРЅРёРІРѕ РЅР°
-/// `Screenshot` С‡РµСЂРµР· С‚РѕС‚ Р¶Рµ РїСѓС‚СЊ, С‡С‚Рѕ Рё `--screenshot` ([`render_source_to_png`]).
-/// РћРєРЅРѕ/wgpu/winit РЅРµ СЃРѕР·РґР°СЋС‚СЃСЏ вЂ” СЃРЅРёРјРѕРє РїРёРєСЃРµР»СЊРЅРѕ РІРѕСЃРїСЂРѕРёР·РІРѕРґРёРј Рё СЂР°Р±РѕС‚Р°РµС‚ РІ CI.
-/// РЎРѕСЃС‚РѕСЏРЅРёРµ РІРєР»Р°РґРѕРє РїРµСЂРµР¶РёРІР°РµС‚ РїРµСЂРµРїРѕРґРєР»СЋС‡РµРЅРёСЏ РєР»РёРµРЅС‚Р°; СЃРµСЂРІРµСЂ РІС‹С…РѕРґРёС‚ РїРѕ
+/// «Вкладка» здесь — headless-контекст рендера: хранит лишь свой [`PageSource`],
+/// а фактический load → layout → CPU-растеризация выполняется лениво на
+/// `Screenshot` через тот же путь, что и `--screenshot` ([`render_source_to_png`]).
+/// Окно/wgpu/winit не создаются — снимок пиксельно воспроизводим и работает в CI.
+/// Состояние вкладок переживает переподключения клиента; сервер выходит по
 /// `Shutdown`.
 pub(crate) fn run_ipc_server(port: Option<u16>, event_sink: Arc<dyn EventSink>) -> ExitCode {
     use lumen_ipc::{IpcRequest, IpcResponse, IpcServer, TabId};
     use std::collections::HashMap;
     use std::io::Write as _;
 
-    // `IpcServer::bind` РІСЃРµРіРґР° СЃР»СѓС€Р°РµС‚ 127.0.0.1:0 (OS РЅР°Р·РЅР°С‡Р°РµС‚ РїРѕСЂС‚). РЇРІРЅС‹Р№
-    // `--ipc-port` РїРѕРєР° РЅРѕСЃРёС‚ РёРЅС„РѕСЂРјР°С†РёРѕРЅРЅС‹Р№ С…Р°СЂР°РєС‚РµСЂ вЂ” РєРѕРЅС‚СЂРѕР»Р»РµСЂ РІСЃС‘ СЂР°РІРЅРѕ
-    // С‡РёС‚Р°РµС‚ С„Р°РєС‚РёС‡РµСЃРєРёР№ РїРѕСЂС‚ РёР· stdout-СЃС‚СЂРѕРєРё `LUMEN_IPC_PORT=`.
+    // `IpcServer::bind` всегда слушает 127.0.0.1:0 (OS назначает порт). Явный
+    // `--ipc-port` пока носит информационный характер — контроллер всё равно
+    // читает фактический порт из stdout-строки `LUMEN_IPC_PORT=`.
     let (server, bound_port) = match IpcServer::bind() {
         Ok(sp) => sp,
         Err(e) => {
-            eprintln!("lumen --ipc-server: РЅРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ РїРѕСЂС‚: {e}");
+            eprintln!("lumen --ipc-server: не удалось открыть порт: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -39,38 +39,38 @@ pub(crate) fn run_ipc_server(port: Option<u16>, event_sink: Arc<dyn EventSink>) 
         && requested != bound_port
     {
         eprintln!(
-            "lumen --ipc-server: СЏРІРЅС‹Р№ РїРѕСЂС‚ {requested} РёРіРЅРѕСЂРёСЂСѓРµС‚СЃСЏ (bind РЅР°Р·РЅР°С‡Р°РµС‚ \
-             РїРѕСЂС‚ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё); РёСЃРїРѕР»СЊР·СѓСЋ {bound_port}"
+            "lumen --ipc-server: явный порт {requested} игнорируется (bind назначает \
+             порт автоматически); использую {bound_port}"
         );
     }
 
-    // РљРѕРЅС‚СЂРѕР»Р»РµСЂ РїР°СЂСЃРёС‚ СЌС‚Рё СЃС‚СЂРѕРєРё РёР· stdout, С‡С‚РѕР±С‹ СѓР·РЅР°С‚СЊ РїРѕСЂС‚ РїРѕРґРєР»СЋС‡РµРЅРёСЏ Рё
-    // С‚РѕРєРµРЅ Р°СѓС‚РµРЅС‚РёС„РёРєР°С†РёРё (ADR-024 В§Access model, DEVX-15).
+    // Контроллер парсит эти строки из stdout, чтобы узнать порт подключения и
+    // токен аутентификации (ADR-024 §Access model, DEVX-15).
     let token = lumen_core::auth::generate_token();
     println!("LUMEN_IPC_PORT={bound_port}");
     println!("LUMEN_IPC_TOKEN={token}");
     let _ = std::io::stdout().flush();
-    eprintln!("lumen: IPC-СЃРµСЂРІРµСЂ С‚Р°Р±-РєРѕРјР°РЅРґ Р·Р°РїСѓС‰РµРЅ РЅР° 127.0.0.1:{bound_port} (TAB-5)");
+    eprintln!("lumen: IPC-сервер таб-команд запущен на 127.0.0.1:{bound_port} (TAB-5)");
 
     let mut tabs: HashMap<TabId, PageSource> = HashMap::new();
     let mut next_id: TabId = 1;
 
-    // Р’РЅРµС€РЅРёР№ С†РёРєР»: РїСЂРёРЅРёРјР°РµРј РїРѕРґРєР»СЋС‡РµРЅРёСЏ (РєРѕРЅС‚СЂРѕР»Р»РµСЂ РјРѕР¶РµС‚ РїРµСЂРµРїРѕРґРєР»СЋС‡Р°С‚СЊСЃСЏ).
+    // Внешний цикл: принимаем подключения (контроллер может переподключаться).
     loop {
         let mut channel = match server.accept() {
             Ok(ch) => ch,
             Err(e) => {
-                eprintln!("lumen --ipc-server: РѕС€РёР±РєР° accept: {e}");
+                eprintln!("lumen --ipc-server: ошибка accept: {e}");
                 return ExitCode::FAILURE;
             }
         };
 
-        // РљР°Р¶РґРѕРµ РЅРѕРІРѕРµ СЃРѕРµРґРёРЅРµРЅРёРµ РЅР°С‡РёРЅР°РµС‚ РЅРµР°СѓС‚РµРЅС‚РёС„РёС†РёСЂРѕРІР°РЅРЅС‹Рј вЂ” `Auth` СЃ
-        // РІРµСЂРЅС‹Рј С‚РѕРєРµРЅРѕРј РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РїРµСЂРІС‹Рј СЃРѕРѕР±С‰РµРЅРёРµРј.
+        // Каждое новое соединение начинает неаутентифицированным — `Auth` с
+        // верным токеном должен быть первым сообщением.
         let mut authenticated = false;
 
-        // Р’РЅСѓС‚СЂРµРЅРЅРёР№ С†РёРєР»: РѕР±СЃР»СѓР¶РёРІР°РµРј Р·Р°РїСЂРѕСЃС‹ С‚РµРєСѓС‰РµРіРѕ РїРѕРґРєР»СЋС‡РµРЅРёСЏ РґРѕ СЂР°Р·СЂС‹РІР°
-        // (`recv` РІРµСЂРЅС‘С‚ Err РїСЂРё РѕС‚РєР»СЋС‡РµРЅРёРё РєР»РёРµРЅС‚Р° вЂ” Р¶РґС‘Рј СЃР»РµРґСѓСЋС‰РµРµ РїРѕРґРєР»СЋС‡РµРЅРёРµ).
+        // Внутренний цикл: обслуживаем запросы текущего подключения до разрыва
+        // (`recv` вернёт Err при отключении клиента — ждём следующее подключение).
         while let Ok(req) = channel.recv::<IpcRequest>() {
             if !authenticated {
                 match req {
@@ -82,14 +82,14 @@ pub(crate) fn run_ipc_server(port: Option<u16>, event_sink: Arc<dyn EventSink>) 
                             }
                         } else {
                             let _ = channel.send(&IpcResponse::AuthErr {
-                                message: "РЅРµРІРµСЂРЅС‹Р№ С‚РѕРєРµРЅ".to_owned(),
+                                message: "неверный токен".to_owned(),
                             });
                             break;
                         }
                     }
                     _ => {
                         let _ = channel.send(&IpcResponse::AuthErr {
-                            message: "РЅСѓР¶РЅР° Р°СѓС‚РµРЅС‚РёС„РёРєР°С†РёСЏ: СЃРЅР°С‡Р°Р»Р° РѕС‚РїСЂР°РІСЊС‚Рµ Auth".to_owned(),
+                            message: "нужна аутентификация: сначала отправьте Auth".to_owned(),
                         });
                         break;
                     }
@@ -102,12 +102,12 @@ pub(crate) fn run_ipc_server(port: Option<u16>, event_sink: Arc<dyn EventSink>) 
                 IpcRequest::Ping => IpcResponse::Pong,
                 IpcRequest::Shutdown => {
                     let _ = channel.send(&IpcResponse::Shutdown);
-                    eprintln!("lumen --ipc-server: РїРѕР»СѓС‡РµРЅ Shutdown, РІС‹С…РѕРґРёРј");
+                    eprintln!("lumen --ipc-server: получен Shutdown, выходим");
                     return ExitCode::SUCCESS;
                 }
                 IpcRequest::Fetch(fr) => IpcResponse::FetchErr(lumen_ipc::FetchErr {
                     id: fr.id,
-                    error: "ipc-server: Fetch РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚СЃСЏ РІ СЂРµР¶РёРјРµ С‚Р°Р±-РєРѕРјР°РЅРґ".to_owned(),
+                    error: "ipc-server: Fetch не поддерживается в режиме таб-команд".to_owned(),
                 }),
                 IpcRequest::CreateTab => {
                     let tab_id = next_id;
@@ -121,7 +121,7 @@ pub(crate) fn run_ipc_server(port: Option<u16>, event_sink: Arc<dyn EventSink>) 
                     } else {
                         IpcResponse::TabError {
                             tab_id,
-                            message: format!("РЅРµС‚ РІРєР»Р°РґРєРё СЃ id {tab_id}"),
+                            message: format!("нет вкладки с id {tab_id}"),
                         }
                     }
                 }
@@ -132,7 +132,7 @@ pub(crate) fn run_ipc_server(port: Option<u16>, event_sink: Arc<dyn EventSink>) 
                     } else {
                         IpcResponse::TabError {
                             tab_id,
-                            message: format!("РЅРµС‚ РІРєР»Р°РґРєРё СЃ id {tab_id}"),
+                            message: format!("нет вкладки с id {tab_id}"),
                         }
                     }
                 }
@@ -141,28 +141,28 @@ pub(crate) fn run_ipc_server(port: Option<u16>, event_sink: Arc<dyn EventSink>) 
                         Ok((png, _w, _h)) => IpcResponse::Screenshot { tab_id, png },
                         Err(e) => IpcResponse::TabError {
                             tab_id,
-                            message: format!("РѕС€РёР±РєР° СЂРµРЅРґРµСЂР°: {e}"),
+                            message: format!("ошибка рендера: {e}"),
                         },
                     },
                     None => IpcResponse::TabError {
                         tab_id,
-                        message: format!("РЅРµС‚ РІРєР»Р°РґРєРё СЃ id {tab_id}"),
+                        message: format!("нет вкладки с id {tab_id}"),
                     },
                 },
             };
 
             if channel.send(&resp).is_err() {
-                // РќРµ СЃРјРѕРіР»Рё РѕС‚РІРµС‚РёС‚СЊ вЂ” СЃРѕРµРґРёРЅРµРЅРёРµ РјРµСЂС‚РІРѕ, Р¶РґС‘Рј РїРµСЂРµРїРѕРґРєР»СЋС‡РµРЅРёСЏ.
+                // Не смогли ответить — соединение мертво, ждём переподключения.
                 break;
             }
         }
     }
 }
 
-/// Р—Р°РїСѓСЃС‚РёС‚СЊ MCP-СЃРµСЂРІРµСЂ РІ headless-СЂРµР¶РёРјРµ.
+/// Запустить MCP-сервер в headless-режиме.
 ///
-/// РЎРѕР·РґР°С‘С‚ `InProcessSession`, РѕРїС†РёРѕРЅР°Р»СЊРЅРѕ Р·Р°РіСЂСѓР¶Р°РµС‚ URL, Р·Р°С‚РµРј Р·Р°РїСѓСЃРєР°РµС‚
-/// `McpServer` РїРѕРІРµСЂС… stdio РёР»Рё TCP-С‚СЂР°РЅСЃРїРѕСЂС‚Р°. Р‘Р»РѕРєРёСЂСѓРµС‚ РґРѕ РѕС‚РєР»СЋС‡РµРЅРёСЏ РєР»РёРµРЅС‚Р°.
+/// Создаёт `InProcessSession`, опционально загружает URL, затем запускает
+/// `McpServer` поверх stdio или TCP-транспорта. Блокирует до отключения клиента.
 pub(crate) fn run_mcp_mode(mcp: McpMode) -> ExitCode {
     use lumen_driver::{BrowserSession, InProcessSession};
     use lumen_mcp::{McpServer, StdioTransport, TcpTransport};
@@ -172,14 +172,14 @@ pub(crate) fn run_mcp_mode(mcp: McpMode) -> ExitCode {
     if let Some(ref url) = mcp.url
         && let Err(e) = session.navigate(url)
     {
-        eprintln!("MCP: РѕС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё {url}: {e}");
+        eprintln!("MCP: ошибка загрузки {url}: {e}");
     }
 
     if let Some(port) = mcp.port {
         let listener = match TcpListener::bind(("127.0.0.1", port)) {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("MCP: РЅРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ РїРѕСЂС‚ {port}: {e}");
+                eprintln!("MCP: не удалось открыть порт {port}: {e}");
                 return ExitCode::FAILURE;
             }
         };
@@ -195,13 +195,13 @@ pub(crate) fn run_mcp_mode(mcp: McpMode) -> ExitCode {
                         let _ = server.run();
                     }
                     Err(e) => {
-                        eprintln!("MCP: РѕС€РёР±РєР° С‚СЂР°РЅСЃРїРѕСЂС‚Р°: {e}");
+                        eprintln!("MCP: ошибка транспорта: {e}");
                         return ExitCode::FAILURE;
                     }
                 }
             }
             Err(e) => {
-                eprintln!("MCP: РѕС€РёР±РєР° accept: {e}");
+                eprintln!("MCP: ошибка accept: {e}");
                 return ExitCode::FAILURE;
             }
         }

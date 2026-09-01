@@ -2980,7 +2980,7 @@ mod tests {
     #[test]
     fn textarea_char_index_at_point_end_of_first_line() {
         let field = make_field_lb(NodeId::from_index(1), Rect::new(0.0, 0.0, 100.0, 50.0), vec![]);
-        // "ab" is 16px wide at 8px/char вЂ” a click right at that edge lands
+        // "ab" is 16px wide at 8px/char — a click right at that edge lands
         // after both chars, still on line 0 (not yet the '\n').
         let idx = textarea_char_index_at_point(&field, "ab\ncd", 16.0, 0.0, &char_width_measure);
         assert_eq!(idx, 2);

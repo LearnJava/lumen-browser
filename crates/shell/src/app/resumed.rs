@@ -10,15 +10,15 @@ use crate::*;
 impl Lumen {
     pub(crate) fn on_resumed(&mut self, event_loop: &ActiveEventLoop) {
         let (win_w, win_h) = if let Some((w, h)) = self.viewport_override {
-            // `--viewport` (DEVX-1) wins over both defaults below вЂ” lets
-            // `--deterministic` be combined with graphic_tests' fixed 1024Г—720
+            // `--viewport` (DEVX-1) wins over both defaults below — lets
+            // `--deterministic` be combined with graphic_tests' fixed 1024×720
             // crop-calibration contract.
             (w, h + toolbar::CHROME_H)
         } else if self.deterministic.enabled {
             (1280.0, 800.0)
         } else {
-            // Р’С‹СЃРѕС‚Р° РѕРєРЅР° = CSS viewport (720) + tab bar + toolbar (CHROME_H) = 792,
-            // С‡С‚РѕР±С‹ РІРµР±-РєРѕРЅС‚РµРЅС‚ РїРѕР»СѓС‡Р°Р» СЂРѕРІРЅРѕ 720 CSS px, РєР°Рє РѕР¶РёРґР°СЋС‚ graphic tests.
+            // Высота окна = CSS viewport (720) + tab bar + toolbar (CHROME_H) = 792,
+            // чтобы веб-контент получал ровно 720 CSS px, как ожидают graphic tests.
             (1024.0, 720.0 + toolbar::CHROME_H)
         };
         let attrs = Window::default_attributes()
@@ -30,15 +30,15 @@ impl Lumen {
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(err) => {
-                eprintln!("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ РѕРєРЅРѕ: {err}");
+                eprintln!("Не удалось создать окно: {err}");
                 event_loop.exit();
                 return;
             }
         };
 
-        // CSS Media Queries L5 В§5.2 вЂ” read the OS `prefers-color-scheme` once the
+        // CSS Media Queries L5 §5.2 — read the OS `prefers-color-scheme` once the
         // window exists. winit resolves it per platform (Win32 immersive dark mode,
-        // macOS NSAppearance, Linux portal/XSettings); `None` в†’ light fallback.
+        // macOS NSAppearance, Linux portal/XSettings); `None` → light fallback.
         // In deterministic/headless runs we keep light to preserve snapshot stability.
         if !self.deterministic.enabled {
             self.dark_mode = platform::dark_mode::theme_prefers_dark(window.theme());
@@ -60,7 +60,7 @@ impl Lumen {
 
         self.window = Some(window.clone());
 
-        // РЎР±СЂР°СЃС‹РІР°РµРј СЃРѕСЃС‚РѕСЏРЅРёРµ РїСЂРµРґС‹РґСѓС‰РµРіРѕ streaming-С†РёРєР»Р° вЂ” РЅРѕРІР°СЏ СЃС‚СЂР°РЅРёС†Р°.
+        // Сбрасываем состояние предыдущего streaming-цикла — новая страница.
         self.preload_dispatched.clear();
         // BUG-839: same reset as the navigation path above, for the first load.
         resource_timing::clear();
@@ -80,20 +80,20 @@ impl Lumen {
         // seconds on wgpu/DX12 (pipeline compilation, see BUG-406). Starting
         // `start_streaming_load` here (before backend creation) overlaps
         // network fetch/HTML parsing with GPU init instead of serializing
-        // them вЂ” `HtmlChunk`'s `paint_partial_dom` already no-ops while
+        // them — `HtmlChunk`'s `paint_partial_dom` already no-ops while
         // `self.renderer` is `None`, so this only changes *when* streaming
         // starts, not what it produces (display-list-neutral). On a local
         // file this can lose to CPU contention with the DX12 driver's
         // background pipeline-compile threads (BUG-406's "call returns
-        // early, driver finishes later" hazard) вЂ” but three interleaved
+        // early, driver finishes later" hazard) — but three interleaved
         // rounds on a real network page (lenta.ru, live window,
         // `LUMEN_FRAME_LOG=1`, 2026-08-05) showed a consistent win by
         // `RenderDone` (true final page, not the mid-stream "first
         // non-empty frame" snapshot earlier measurements used): OLD
         // 3193/3278/3356ms vs NEW 2960/3001/3019ms, groups don't overlap.
         // Default flipped to early-stream; `LUMEN_NO_EARLY_STREAM=1` restores
-        // the old (post-backend) ordering as an escape hatch вЂ” see the
-        // "СЃСЂРµР·" write-ups in BUG-274-OPEN.md.
+        // the old (post-backend) ordering as an escape hatch — see the
+        // "срез" write-ups in BUG-274-OPEN.md.
         let early_stream = std::env::var_os("LUMEN_NO_EARLY_STREAM").is_none();
         if early_stream {
             self.start_streaming_load(self.load_generation);
@@ -111,7 +111,7 @@ impl Lumen {
         ) {
             Ok(r) => r,
             Err(err) => {
-                eprintln!("РќРµ СѓРґР°Р»РѕСЃСЊ РёРЅРёС†РёР°Р»РёР·РёСЂРѕРІР°С‚СЊ СЂРµРЅРґРµСЂ: {err}");
+                eprintln!("Не удалось инициализировать рендер: {err}");
                 event_loop.exit();
                 return;
             }
@@ -122,13 +122,13 @@ impl Lumen {
             eprintln!("[frame:cold-start] backend ready at {ms:.0}ms");
         }
 
-        // Р—Р°Р»РёРІР°РµРј РґРµРєРѕРґРёСЂРѕРІР°РЅРЅС‹Рµ СЂР°РЅРµРµ РєР°СЂС‚РёРЅРєРё РІ GPU. Take, С‡С‚РѕР±С‹ РѕСЃРІРѕР±РѕРґРёС‚СЊ
-        // РїР°РјСЏС‚СЊ Vec (РёР·РѕР±СЂР°Р¶РµРЅРёРµ РєРѕРїРёСЂСѓРµС‚СЃСЏ РІ wgpu Texture РІРЅСѓС‚СЂРё register_image).
+        // Заливаем декодированные ранее картинки в GPU. Take, чтобы освободить
+        // память Vec (изображение копируется в wgpu Texture внутри register_image).
         for (src, image) in self.pending_images.drain(..) {
-            // BUG-272 СЃСЂРµР· 17: `image` вЂ” Arc; register shares it, raw_images
+            // BUG-272 срез 17: `image` — Arc; register shares it, raw_images
             // holds no separate copy.
             if let Err(err) = renderer.register_image(src.clone(), Arc::clone(&image)) {
-                eprintln!("РљР°СЂС‚РёРЅРєР° {src} РЅРµ Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅР°: {err}");
+                eprintln!("Картинка {src} не зарегистрирована: {err}");
             }
             self.image_cache.insert(lumen_image::ImageKey::new(&src), (*image).clone());
         }

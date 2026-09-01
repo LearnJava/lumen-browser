@@ -21,7 +21,7 @@ impl Lumen {
     ///
     /// CC-5: hover/active state comes from [`Self::chrome_hovered_nid`]/
     /// [`Self::chrome_active_nid`]. CC-7 adds `:focus`/`:focus-within` for
-    /// `#omniInput` вЂ” `Some` exactly while the legacy `address_bar` is open;
+    /// `#omniInput` — `Some` exactly while the legacy `address_bar` is open;
     /// its caret is still hand-painted (no native `<input>` caret exists,
     /// see [`Self::chrome_omni_input_rect`]), only editing state moved to
     /// chrome-DOM. The interactive thread-locals are process-wide (brief
@@ -30,24 +30,24 @@ impl Lumen {
     /// left behind, and clears them again afterward so a subsequent page
     /// relayout does not inherit chrome's state either.
     ///
-    /// The design reference's `#contentArea` вЂ” the container it reserves for
+    /// The design reference's `#contentArea` — the container it reserves for
     /// live tab content, doubling as the brief's "`#page-host`" (no new id
-    /// was introduced) вЂ” carries its own placeholder markup (new-tab tiles, a
-    /// demo site page, вЂ¦) meant for standalone preview
+    /// was introduced) — carries its own placeholder markup (new-tab tiles, a
+    /// demo site page, …) meant for standalone preview
     /// (`about:chrome-preview`, CC-1), not for stacking under the real tab
     /// content this host paints separately at that same rect
     /// ([`Self::chrome_page_host_rect`]). Since this pass's display list
     /// paints *above* the page in `overlay_buf`, leaving that placeholder in
-    /// вЂ” or even just clearing its children but keeping its own box вЂ” would
+    /// — or even just clearing its children but keeping its own box — would
     /// permanently hide the real page behind either the placeholder markup or
     /// `#contentArea`'s own `background:var(--surface-0)` fill. This pass
     /// therefore removes `#contentArea` from the tree entirely
     /// ([`take_content_area`]) right after layout, capturing its rect into
-    /// `chrome_page_host_rect` first, and before [`paint_ordered`] вЂ” except
+    /// `chrome_page_host_rect` first, and before [`paint_ordered`] — except
     /// `#findBar`/`#downloadsPanel` (CC-9), salvaged back into the tree at
     /// `#contentArea`'s former slot since they're real popovers, not preview
     /// placeholder content.
-    #[allow(clippy::expect_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn relayout_chrome_host(&mut self) {
         if self.chrome_doc.is_none() {
             return;
@@ -58,23 +58,23 @@ impl Lumen {
             return;
         }
         // CC-6: rebind ChromeModel from current shell state before every
-        // layout pass вЂ” no separate dirty flag, `bind_model` is cheap (a
+        // layout pass — no separate dirty flag, `bind_model` is cheap (a
         // handful of attribute/text mutations + two small list rebuilds).
         let model = self.chrome_model_snapshot();
         let Some((doc, sheet)) = self.chrome_doc.as_mut() else { return };
-        // BUG-341 S6: `bind_model_tracked` (not plain `bind_model`) вЂ” reports
+        // BUG-341 S6: `bind_model_tracked` (not plain `bind_model`) — reports
         // every node whose selector-relevant attribute/class actually changed
         // value, or whose row-list container gained/lost a member, so a
-        // content-mutating pass (typed omnibox text, a tab title, вЂ¦) can also
+        // content-mutating pass (typed omnibox text, a tab title, …) can also
         // take the incremental path below instead of only a pure
-        // interactive-state transition (S5's limit вЂ” see BUG-341 "S5" В§"Not
+        // interactive-state transition (S5's limit — see BUG-341 "S5" §"Not
         // attempted").
         let touched = lumen_chrome::bind_model_tracked(doc, &model);
-        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
         // CC-7: `#omniInput` is focused (`:focus`/`:focus-within`, e.g. the
         // `.omnibox` accent ring) exactly while the legacy `address_bar` is
-        // open вЂ” there is no other focusable element in the chrome document
+        // open — there is no other focusable element in the chrome document
         // yet, so a single node id is enough.
         let omni_input = doc.find_by_id(lumen_chrome::ids::OMNI_INPUT);
         let chrome_focus = if self.address_bar.is_open() { omni_input } else { None };
@@ -82,11 +82,11 @@ impl Lumen {
         // BUG-341 S5/S6: `layout_mutation_incremental` (plain graft_geometry,
         // no incremental cascade) was tried here early on and measured
         // *worse* than a plain full layout (`graft_geometry`'s then-O(depth)
-        // redundant clone bug) вЂ” fixed since (BUG-341 "third session"), and
+        // redundant clone bug) — fixed since (BUG-341 "third session"), and
         // now combined with the S3 incremental cascade via
         // `layout_mutation_incremental_restyle`. Safe whenever a previous
         // pristine tree/cascade cache exists to graft/diff against and
-        // viewport/Forced-Colors still match вЂ” a resize or Forced-Colors flip
+        // viewport/Forced-Colors still match — a resize or Forced-Colors flip
         // invalidates geometry `bind_model_tracked` cannot see, so those still
         // force the full, known-correct `layout_measured_hyp_with_counters`
         // fallback (as does the very first pass).
@@ -105,7 +105,7 @@ impl Lumen {
         // from the live one, not copied out of it while it was still pristine.
         // `chrome_layout` holds the pruned tree that pass painted, and
         // `chrome_content_area_detached` holds exactly what the pruning took
-        // out вЂ” putting the second back into the first yields the pre-pruning
+        // out — putting the second back into the first yields the pre-pruning
         // tree box for box, for the price of one insert per salvaged popover
         // instead of a whole-tree copy. Taking `chrome_layout` by value is
         // what makes it free: the incremental path below *moves* the reusable
@@ -126,7 +126,7 @@ impl Lumen {
         ) {
             (true, Some(prev)) => {
                 let (prev_hover, prev_focus, prev_active) = self.chrome_prev_interactive;
-                // BUG-341 S7: computed once per pass, not once per axis вЂ” the
+                // BUG-341 S7: computed once per pass, not once per axis — the
                 // stylesheet/shadow-DOM shape doesn't change between the three
                 // hover/focus/active calls below.
                 let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
@@ -150,7 +150,7 @@ impl Lumen {
                     &state_index,
                 ));
                 // BUG-341 S6: DOM-mutation root-set, unioned with the
-                // interactive-state one above вЂ” `touched` is empty on a pure
+                // interactive-state one above — `touched` is empty on a pure
                 // hover/focus/active-only pass (S5's original case), non-empty
                 // whenever `bind_model` actually changed content this cycle.
                 // BUG-341 S17: the report names the mutated attributes, so the
@@ -169,14 +169,14 @@ impl Lumen {
                     // whose content it mutated (see `ChromeMutations::content`
                     // and the source-level completeness gate behind it), so
                     // this cycle can name them instead of declaring the whole
-                    // document unstable the way S4-S15 had to вЂ” one changed
+                    // document unstable the way S4-S15 had to — one changed
                     // omnibox character no longer costs all 318 boxes.
                     content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
                 };
                 lumen_layout::counters::set_incremental_restyle(true);
                 // BUG-341 S15: reuse whole box subtrees from `prev` too, not
                 // just their geometry. Licensed by the `content_dirty` record
-                // this call site establishes above вЂ” a subtree containing a
+                // this call site establishes above — a subtree containing a
                 // mutated node stays out of `clean_subtrees`.
                 lumen_layout::box_tree::set_incremental_box_build(true);
                 let result = lumen_layout::box_tree::layout_mutation_incremental_restyle(
@@ -205,19 +205,19 @@ impl Lumen {
         lumen_layout::clear_interactive_state();
         // Persist this pass's cascade cache as the `prev` basis for the next
         // call's incremental path (BUG-341 S5). Its box-tree counterpart is no
-        // longer copied here вЂ” S22 records `take_content_area`'s removals
+        // longer copied here — S22 records `take_content_area`'s removals
         // below instead and undoes them at the top of the next pass.
         self.chrome_prev_cascade_styles = cascade_styles.into_styles();
         self.chrome_prev_viewport = Some(viewport);
         self.chrome_prev_interactive = new_interactive;
         self.chrome_prev_forced_colors = forced_colors;
         // CC-9: `#findBar`/`#downloadsPanel` are salvaged out of
-        // `#contentArea` before the rest of it is discarded вЂ” see
+        // `#contentArea` before the rest of it is discarded — see
         // `take_content_area`'s doc comment. CC-10 adds the command palette
-        // and cert/print modals вЂ” all three are `position:absolute` direct
+        // and cert/print modals — all three are `position:absolute` direct
         // children of `#contentArea` too, same reasoning as `#findBar`/
         // `#downloadsPanel`.
-        // BUG-341 S22: the detachment record is kept, not discarded вЂ” it is
+        // BUG-341 S22: the detachment record is kept, not discarded — it is
         // what lets the next pass rebuild this tree's pristine form instead of
         // this pass copying one aside.
         let pruned = doc.find_by_id(lumen_chrome::ids::CONTENT_AREA).and_then(|id| {
@@ -241,11 +241,11 @@ impl Lumen {
         self.chrome_page_host_rect = page_host_rect;
         self.chrome_content_area_detached = detached;
         // CC-7/CC-9: captured non-destructively (unlike `#contentArea`
-        // above) вЂ” these nodes stay in the tree and paint normally.
+        // above) — these nodes stay in the tree and paint normally.
         self.chrome_omni_input_rect = omni_input
             .and_then(|id| lumen_layout::find_box_by_node(&layout, id))
             .map(|b| b.rect);
-        // CC-11: sync transitions вЂ” compare chrome_prev_styles with the fresh
+        // CC-11: sync transitions — compare chrome_prev_styles with the fresh
         // layout before replacing it, mirroring apply_relayout_result's
         // page-side sync (main.rs's collect_box_styles + sync loop). No
         // @starting-style handling here: bind_model mutates existing
@@ -285,13 +285,13 @@ impl Lumen {
 
     /// CC-6 (docs/tasks/p1-css-chrome.md): snapshots tab strip, workspaces,
     /// theme, tab layout, and active profile into a [`lumen_chrome::ChromeModel`]
-    /// вЂ” [`Self::relayout_chrome_host`] binds this before every chrome layout
+    /// — [`Self::relayout_chrome_host`] binds this before every chrome layout
     /// pass. Mirrors the same shell fields [`Self::chrome_snapshot`] (DS-17 a11y
     /// tree) reads, shaped for [`lumen_chrome::bind_model`] instead. CC-7 adds
     /// the omnibox value/spoof-warning, read from the legacy `address_bar`.
     pub(crate) fn chrome_model_snapshot(&self) -> lumen_chrome::ChromeModel {
         let active_id = self.tab_strip.tabs.get(self.tab_strip.active).map(|t| t.id);
-        // BUG-409: iterate `visible_indices()` rather than `tabs` directly вЂ”
+        // BUG-409: iterate `visible_indices()` rather than `tabs` directly —
         // a collapsed group's non-leftmost members stay hidden behind the
         // leftmost (chip) row, mirroring the legacy strip's own collapse
         // behaviour. For a strip with no collapsed groups this is `0..len()`.
@@ -306,10 +306,10 @@ impl Lumen {
                     title: t.title.clone(),
                     active: Some(t.id) == active_id,
                     sleeping: t.tab_state == TabState::Hibernated,
-                    // CC-8: tree-style tabs (7A.2) вЂ” a tab with an opener is
+                    // CC-8: tree-style tabs (7A.2) — a tab with an opener is
                     // rendered as a `.child` row with a `.tree-line` connector.
                     // The asset's CSS only indents one nesting level, so this
-                    // collapses depth в‰Ґ1 to a single boolean rather than
+                    // collapses depth ≥1 to a single boolean rather than
                     // threading `tabs::tree::depth_of`'s full depth through.
                     is_child: t.opener_id.is_some(),
                     container_color: t.container.border_color().map(Self::chrome_hex_color),
@@ -346,7 +346,7 @@ impl Lumen {
         let (omnibox_value, omnibox_warning) =
             address_bar::chrome_omnibox_value(&self.address_bar, self.current_display_url());
         // CC-9: same `MAX_VISIBLE` cap the legacy `address_bar::build_dropdown`
-        // applies вЂ” the asset's `.dropdown` isn't scroll-clipped, so an
+        // applies — the asset's `.dropdown` isn't scroll-clipped, so an
         // uncapped list would grow the popover past its designed height.
         let dropdown_suggestions: Vec<lumen_chrome::ChromeSuggestionModel> = self
             .address_bar
@@ -356,7 +356,7 @@ impl Lumen {
             .enumerate()
             .map(|(idx, s)| {
                 // CC-15-3/DS-6: punycode-guard both strings, as the legacy
-                // `build_dropdown` did вЂ” without this a homograph host in a
+                // `build_dropdown` did — without this a homograph host in a
                 // history/bookmark hit renders in its Unicode form.
                 let (label, sub_label) = address_bar::chrome_suggestion_text(s);
                 lumen_chrome::ChromeSuggestionModel {
@@ -372,13 +372,13 @@ impl Lumen {
             open: self.address_bar.is_open() && !dropdown_suggestions.is_empty(),
             suggestions: dropdown_suggestions,
         };
-        // CC-9: `current_matches()` re-scans the display list for the query вЂ”
+        // CC-9: `current_matches()` re-scans the display list for the query —
         // cheap relative to a full relayout, and this snapshot only runs on
         // explicit chrome-relayout triggers (resize/click/key), not every
         // `RedrawRequested` frame (see `Self::relayout_chrome_host`'s doc).
         let find_matches_len = if self.find.is_open() { self.current_matches().len() } else { 0 };
         // CC-15-6/BUG-419: the "ERR" state is carried over from the deleted
-        // legacy bar (`find::append_bar`) вЂ” without it an invalid regex is
+        // legacy bar (`find::append_bar`) — without it an invalid regex is
         // indistinguishable from "no matches" (`0/0`). The legacy bar also
         // painted it red (`BAR_ERR`); `error` drives `#findCount`'s `.error`
         // class to restore that accent (see BUG-419).
@@ -403,23 +403,23 @@ impl Lumen {
             .iter()
             .map(|d| {
                 let (meta, progress_fraction) = match &d.status {
-                    download::DownloadStatus::Pending => ("Р’ РѕС‡РµСЂРµРґРёвЂ¦".to_owned(), None),
+                    download::DownloadStatus::Pending => ("В очереди…".to_owned(), None),
                     download::DownloadStatus::InProgress => {
                         let text = match d.total {
                             Some(t) if t > 0 => format!(
-                                "{} / {} вЂ” РёРґС‘С‚ Р·Р°РіСЂСѓР·РєР°вЂ¦",
+                                "{} / {} — идёт загрузка…",
                                 download::human_bytes(d.received),
                                 download::human_bytes(t)
                             ),
-                            _ => "Р—Р°РіСЂСѓР·РєР°вЂ¦".to_owned(),
+                            _ => "Загрузка…".to_owned(),
                         };
                         (text, Some(d.progress_fraction().unwrap_or(0.6)))
                     }
                     download::DownloadStatus::Done { bytes } => {
-                        (format!("{} вЂ” РіРѕС‚РѕРІРѕ", download::human_bytes(*bytes)), None)
+                        (format!("{} — готово", download::human_bytes(*bytes)), None)
                     }
-                    download::DownloadStatus::Failed(reason) => (format!("РћС€РёР±РєР°: {reason}"), None),
-                    download::DownloadStatus::Cancelled => ("РћС‚РјРµРЅРµРЅРѕ".to_owned(), None),
+                    download::DownloadStatus::Failed(reason) => (format!("Ошибка: {reason}"), None),
+                    download::DownloadStatus::Cancelled => ("Отменено".to_owned(), None),
                 };
                 lumen_chrome::ChromeDownloadModel {
                     id: d.id.raw(),
@@ -431,7 +431,7 @@ impl Lumen {
             })
             .collect();
         // BUG-408: mirrors `TabArchive`'s entries into `#archivePanel`'s
-        // `.arc-list` вЂ” same shape `ChromeTabModel`'s favicon fallback and
+        // `.arc-list` — same shape `ChromeTabModel`'s favicon fallback and
         // `container_color` convention already use.
         let archive: Vec<lumen_chrome::ChromeArchiveEntryModel> = self
             .archive
@@ -451,11 +451,11 @@ impl Lumen {
             })
             .collect();
         // CC-9: the frozen design merges shields' blocked-count and the
-        // permission rows into one `#permPopover` вЂ” no separate engine
+        // permission rows into one `#permPopover` — no separate engine
         // control exists for `PermissionPanel::visible` (`Ctrl+Shift+P`), so
         // either legacy toggle shows it.
         let popover_open = self.shields.visible || self.permission.visible;
-        // BUG-411: all four `PermissionKind::ALL` rows вЂ” the asset gained the
+        // BUG-411: all four `PermissionKind::ALL` rows — the asset gained the
         // Notifications/Clipboard rows the frozen design was missing, so their
         // state is no longer unreachable from the UI.
         let permissions = panels::permission_panel::PermissionKind::ALL
@@ -466,7 +466,7 @@ impl Lumen {
         });
         // CC-10: same `MAX_VISIBLE_ROWS`-windowed slice
         // `command_palette::build_panel` shows, mapped down to what `.cp-row`
-        // can render вЂ” a command's keyboard shortcut, or a bookmark/history
+        // can render — a command's keyboard shortcut, or a bookmark/history
         // item's URL, as the sub-label.
         let filtered = self.command_palette.filtered();
         let palette_results: Vec<lumen_chrome::ChromePaletteResultModel> = filtered
@@ -497,8 +497,8 @@ impl Lumen {
             results: palette_results,
         };
         // CC-10: the design's 6 `.cert-row`s + `.cert-fp` cover a subset of
-        // `PanelCertData`'s 9 fields (no TLS-version slot) вЂ” missing/empty
-        // individual fields render as `"вЂ”"`, mirroring
+        // `PanelCertData`'s 9 fields (no TLS-version slot) — missing/empty
+        // individual fields render as `"—"`, mirroring
         // `cert_panel::build_rows`'s own em-dash fallback.
         let dash = |s: &str| if s.is_empty() { "\u{2014}".to_owned() } else { s.to_owned() };
         let cert = match &self.cert_panel.cert {
@@ -507,7 +507,7 @@ impl Lumen {
                 let issuer = if !c.issuer_org.is_empty() { c.issuer_org.clone() } else { dash(&c.issuer_cn) };
                 lumen_chrome::ChromeCertModel {
                     open: self.cert_panel.visible,
-                    title: format!("РЎРµСЂС‚РёС„РёРєР°С‚ вЂ” {}", dash(&c.subject_cn)),
+                    title: format!("Сертификат — {}", dash(&c.subject_cn)),
                     rows: [
                         dash(&c.subject_cn),
                         dash(&c.subject_org),
@@ -521,12 +521,12 @@ impl Lumen {
             }
             _ => lumen_chrome::ChromeCertModel {
                 open: self.cert_panel.visible,
-                title: "РЎРµСЂС‚РёС„РёРєР°С‚ РЅРµРґРѕСЃС‚СѓРїРµРЅ".to_owned(),
+                title: "Сертификат недоступен".to_owned(),
                 rows: std::array::from_fn(|_| "\u{2014}".to_owned()),
                 fingerprint: "\u{2014}".to_owned(),
             },
         };
-        // CC-10b: which `#contentArea` view is shown вЂ” mirrors whichever of
+        // CC-10b: which `#contentArea` view is shown — mirrors whichever of
         // the three legacy panel `visible` flags is set (kept mutually
         // exclusive by `dispatch_chrome_action`'s `ShowView` handler), same
         // "reuse the legacy flag as source of truth" approach CC-9/CC-10
@@ -540,7 +540,7 @@ impl Lumen {
         } else {
             lumen_chrome::ChromeContentView::Page
         };
-        // CC-10b: DS-16's "history not saved" banner вЂ” same anonymous-profile
+        // CC-10b: DS-16's "history not saved" banner — same anonymous-profile
         // check the legacy `history_panel::build_panel` call site makes.
         let is_anon = self
             .profile_menu
@@ -564,11 +564,11 @@ impl Lumen {
                 })
                 .collect(),
         };
-        // CC-10b: `"Р’СЃРµ Р·Р°РєР»Р°РґРєРё"` (the `None`-filter entry) followed by the
-        // real folder set вЂ” mirrors `bookmark_panel::hit_test`'s own "All"
+        // CC-10b: `"Все закладки"` (the `None`-filter entry) followed by the
+        // real folder set — mirrors `bookmark_panel::hit_test`'s own "All"
         // row convention.
         let mut bookmark_folders = vec![lumen_chrome::ChromeBookmarkFolderModel {
-            label: "Р’СЃРµ Р·Р°РєР»Р°РґРєРё".to_owned(),
+            label: "Все закладки".to_owned(),
             active: self.bookmark_panel.selected_folder.is_none(),
             filter: None,
         }];
@@ -581,7 +581,7 @@ impl Lumen {
         }));
         let bookmarks = lumen_chrome::ChromeBookmarksModel {
             folders: bookmark_folders,
-            title: self.bookmark_panel.selected_folder.clone().unwrap_or_else(|| "Р’СЃРµ Р·Р°РєР»Р°РґРєРё".to_owned()),
+            title: self.bookmark_panel.selected_folder.clone().unwrap_or_else(|| "Все закладки".to_owned()),
             cards: self
                 .bookmark_panel
                 .visible_entries()
@@ -606,7 +606,7 @@ impl Lumen {
             fingerprint_on: self.settings_panel.draft.fingerprint_mode != "off",
         };
         // CC-10b: the design's single tabbed `#rightSidebar` merges the
-        // legacy independently-dockable `ai_panel`/`sidebar` вЂ” kept mutually
+        // legacy independently-dockable `ai_panel`/`sidebar` — kept mutually
         // exclusive by `dispatch_chrome_action`'s `OpenAiSidebar`/
         // `OpenWebSidebar`/`SetSidebarTab` handlers, so `sidebar.visible`
         // alone picks the tab.
@@ -639,7 +639,7 @@ impl Lumen {
             blocked_total: self.shields.blocked_total_count(),
             permissions,
             // BUG-411: the popover names the host it applies to and carries the
-            // per-site shields switch вЂ” both lost when CC-15-4 removed the
+            // per-site shields switch — both lost when CC-15-4 removed the
             // legacy panels that used to show them.
             popover_domain: self.shields.current_domain.clone().unwrap_or_default(),
             site_shields_on: self.shields.enabled_for_current(),
@@ -660,22 +660,22 @@ impl Lumen {
 
     /// CC-8: renders a [`lumen_layout::Color`] as the `#RRGGBB` string
     /// `ChromeModel`'s container/workspace colour fields need (CSS custom
-    /// properties and inline `style="background:вЂ¦"` are both plain text).
-    /// Drops alpha вЂ” every caller (container accent, workspace accent) is
+    /// properties and inline `style="background:…"` are both plain text).
+    /// Drops alpha — every caller (container accent, workspace accent) is
     /// opaque in practice.
     pub(crate) fn chrome_hex_color(c: lumen_layout::Color) -> String {
         format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b)
     }
 
     /// CC-5 (docs/tasks/p1-css-chrome.md): where the page content starts, in
-    /// window CSS pixels вЂ” the single source of truth input-coordinate
+    /// window CSS pixels — the single source of truth input-coordinate
     /// conversion ([`Self::page_point`], [`Self::update_cursor_icon`]) and
     /// the render-time page transform share, so a click/hover always lands
     /// on the same page element the frame actually painted there.
     ///
     /// This is [`Self::chrome_page_host_rect`]'s origin, falling back to
     /// `(0, CHROME_H)` before the first chrome layout exists, mirroring
-    /// [`Self::relayout_chrome_host`]'s own degenerate-size guard вЂ” that frame
+    /// [`Self::relayout_chrome_host`]'s own degenerate-size guard — that frame
     /// paints the page flush with the window too.
     pub(crate) fn page_offset(&self) -> (f32, f32) {
         self.chrome_page_host_rect
@@ -684,10 +684,10 @@ impl Lumen {
     }
 
     /// CC-5: `true` when `(x_css, y_css)` falls outside the page-content
-    /// rect вЂ” i.e. over an opaque chrome furniture area (sidebar, toolbar,
+    /// rect — i.e. over an opaque chrome furniture area (sidebar, toolbar,
     /// tab strip). A `None` [`Self::chrome_page_host_rect`] (no chrome layout
     /// yet) counts as "over chrome": mirrors [`Self::relayout_chrome_host`]'s
-    /// guard вЂ” nothing is painted at the page rect either in that frame, so
+    /// guard — nothing is painted at the page rect either in that frame, so
     /// there is no page underneath to click through to yet.
     pub(crate) fn point_over_chrome(&self, x_css: f32, y_css: f32) -> bool {
         match self.chrome_page_host_rect {
@@ -698,7 +698,7 @@ impl Lumen {
         }
     }
 
-    /// CC-5: hit-tests [`Self::chrome_layout`] at window-CSS coordinates вЂ”
+    /// CC-5: hit-tests [`Self::chrome_layout`] at window-CSS coordinates —
     /// the chrome document paints at the window origin, no scroll/page
     /// transform involved. `None` before the first chrome layout exists.
     pub(crate) fn chrome_hit_test(&self, x_css: f32, y_css: f32) -> Option<lumen_paint::HitTestResult> {
@@ -706,14 +706,14 @@ impl Lumen {
         hit_test(Point::new(x_css, y_css), layout)
     }
 
-    /// CC-5: walks `hit.path` (bubble order, closest node first вЂ” the same
+    /// CC-5: walks `hit.path` (bubble order, closest node first — the same
     /// list `HitTestResult` already builds for event-dispatch bubbling) for
     /// the nearest ancestor carrying a recognised `data-action`, mirroring
     /// how the legacy toolbar/tab-strip hit-testers resolve a click to one
     /// semantic action regardless of which child element (icon, label,
-    /// badge) the point actually landed on. Returns the carrying node too вЂ”
+    /// badge) the point actually landed on. Returns the carrying node too —
     /// `dispatch_chrome_action` needs it to read action-specific sibling
-    /// attributes (`data-view`, вЂ¦).
+    /// attributes (`data-view`, …).
     pub(crate) fn chrome_action_at(
         &self,
         hit: &lumen_paint::HitTestResult,
@@ -781,7 +781,7 @@ impl Lumen {
     }
 
     /// CC-6: reads and parses a `data-tab-id`/`data-ws-id`-style integer
-    /// attribute off `nid` in the live `chrome_doc` вЂ” the id `ChromeModel`
+    /// attribute off `nid` in the live `chrome_doc` — the id `ChromeModel`
     /// (`crates/chrome/src/model.rs`) stamps on rebuilt tab rows/workspace
     /// buttons so a click can be resolved back to a `tab_strip`/
     /// `workspace_panel` entry. `None` off the flag, before the first chrome
@@ -791,7 +791,7 @@ impl Lumen {
         doc.get(nid).get_attr(attr)?.parse().ok()
     }
 
-    /// BUG-422: the string sibling of [`Self::chrome_data_id`] вЂ” reads a
+    /// BUG-422: the string sibling of [`Self::chrome_data_id`] — reads a
     /// `data-*` attribute off `nid` as an owned `String`.
     ///
     /// The `#view-history`/`#view-bookmarks` row actions key off the entry's
@@ -806,17 +806,17 @@ impl Lumen {
     }
 
     /// CC-5/CC-6: routes a chrome `data-action` click to the shell's existing
-    /// handlers вЂ” the same functions the legacy toolbar/tab-strip hit-
-    /// testers call, so behavior (reload semantics, panel toggling, вЂ¦)
+    /// handlers — the same functions the legacy toolbar/tab-strip hit-
+    /// testers call, so behavior (reload semantics, panel toggling, …)
     /// matches exactly. `SelectTab`/`CloseTab`/`SelectWorkspace`/`AddWorkspace`
     /// resolve the clicked row back to a real `tab_strip`/`workspace_panel`
     /// entry via the `data-tab-id`/`data-ws-id` attribute `ChromeModel`
-    /// stamped on it (CC-6, `crates/chrome/src/model.rs`) вЂ” `nid` is the
+    /// stamped on it (CC-6, `crates/chrome/src/model.rs`) — `nid` is the
     /// `data-action`-carrying node itself for these four. `SetSettingsSection`/
     /// `ShowView`/`SetSidebarTab` and friends (CC-10b) since grew the same
     /// pattern for the settings/history/bookmarks views and the right
     /// sidebar. A handful of actions remain permanent no-ops for reasons
-    /// specific to each вЂ” see the comment on the final match arm below
+    /// specific to each — see the comment on the final match arm below
     /// (BUG-426).
     pub(crate) fn dispatch_chrome_action(
         &mut self,
@@ -827,9 +827,9 @@ impl Lumen {
         use lumen_chrome::ChromeAction;
         match action {
             ChromeAction::Reload => {
-                // Mirrors `toolbar::ToolbarHit::Reload` вЂ” routed through the
+                // Mirrors `toolbar::ToolbarHit::Reload` — routed through the
                 // UserInteraction task source rather than called directly
-                // (HTML В§8.1.4).
+                // (HTML §8.1.4).
                 let flag = Rc::clone(&self.pending_reload);
                 self.runtime.handle().queue_task(
                     runtime::TaskSource::UserInteraction,
@@ -847,7 +847,7 @@ impl Lumen {
                 self.shields.toggle();
                 // CC-9: `#permPopover`'s `.open` class is baked into
                 // `chrome_layout` at `relayout_chrome_host` time, same gap
-                // CC-7 found for `#omniInput` вЂ” without this the popover
+                // CC-7 found for `#omniInput` — without this the popover
                 // wouldn't show until some other trigger relayouts chrome.
                 self.relayout_chrome_host();
             }
@@ -861,13 +861,13 @@ impl Lumen {
                 self.relayout_chrome_host();
             }
             // CC-10b: `#rightSidebar` is a single tabbed panel in the design
-            // (`.right-sidebar`/`.content-area` are flex siblings вЂ” opening
+            // (`.right-sidebar`/`.content-area` are flex siblings — opening
             // it really does push `#contentArea`, unlike the modal overlays
-            // CC-9/CC-10 gated) вЂ” mutually exclusive with the AI tab so
+            // CC-9/CC-10 gated) — mutually exclusive with the AI tab so
             // `chrome_model_snapshot`'s `right_sidebar.tab` stays unambiguous.
             // `relayout_chrome()` keeps the legacy (flag-off) page-reflow
             // behavior; `relayout_chrome_host()` is the CC-7/9/10-class fix
-            // this action was missing вЂ” `#rightSidebar`'s `.open` class is
+            // this action was missing — `#rightSidebar`'s `.open` class is
             // baked into `chrome_layout` at relayout time, so without it the
             // panel wouldn't show until some other trigger relayouts chrome.
             ChromeAction::OpenWebSidebar => {
@@ -919,7 +919,7 @@ impl Lumen {
                 self.relayout_chrome_host();
             }
             // BUG-420: `#printOrientationSelect` has exactly two `<option>`s
-            // (РљРЅРёР¶РЅР°СЏ/РђР»СЊР±РѕРјРЅР°СЏ) вЂ” a click anywhere on the closed select
+            // (Книжная/Альбомная) — a click anywhere on the closed select
             // just flips between them, mirroring `#printOverlay`'s lack of a
             // real dropdown-popover mechanism in the chrome host.
             ChromeAction::CyclePrintOrientation => {
@@ -933,7 +933,7 @@ impl Lumen {
                 self.print_panel.print_backgrounds = !self.print_panel.print_backgrounds;
                 self.relayout_chrome_host();
             }
-            // BUG-420: the "РџРµС‡Р°С‚СЊ" footer button вЂ” was `close-modal` (did
+            // BUG-420: the "Печать" footer button — was `close-modal` (did
             // nothing but dismiss the overlay). Runs the real PDF export
             // with `PrintPanel`'s current settings, mirroring
             // `handle_print_request`'s JS `window.print()` path.
@@ -950,7 +950,7 @@ impl Lumen {
             }
             // CC-10b: `data-view` picks the target. `#view-page`/`#view-history`/
             // `#view-bookmarks`/`#view-settings` are mutually exclusive
-            // (`.view.active`, one at a time вЂ” `chrome_model_snapshot`'s
+            // (`.view.active`, one at a time — `chrome_model_snapshot`'s
             // `content_view` derives from whichever legacy panel's `visible`
             // flag is set), so opening one closes the other two. Reuses the
             // exact legacy open/refresh calls the `Ctrl+H`/`Ctrl+Shift+O`/
@@ -1010,7 +1010,7 @@ impl Lumen {
             // BUG-422: `#view-history`/`#view-bookmarks` entry actions. Every
             // one of them resolves the clicked node through `data-hist-url`/
             // `data-bm-url`/`data-bm-folder` (stamped by `bind_history`/
-            // `bind_bookmarks`, `crates/chrome/src/model.rs`) вЂ” the same
+            // `bind_bookmarks`, `crates/chrome/src/model.rs`) — the same
             // attribute-carries-the-context shape as `data-tab-id` above.
             //
             // Opening an entry also drops the view back to the page: the four
@@ -1058,8 +1058,8 @@ impl Lumen {
                     self.relayout_chrome_host();
                 }
             }
-            // `.hist-head`'s "РћС‡РёСЃС‚РёС‚СЊ" button. Wipes the store, not just the
-            // panel's cached rows вЂ” `refresh_history` then re-reads it.
+            // `.hist-head`'s "Очистить" button. Wipes the store, not just the
+            // panel's cached rows — `refresh_history` then re-reads it.
             ChromeAction::ClearHistory => {
                 let _ = self.history_store.clear();
                 self.refresh_history();
@@ -1079,8 +1079,8 @@ impl Lumen {
                     self.relayout_chrome_host();
                 }
             }
-            // `data-bm-folder` is always present on a bound `.bm-folder` row вЂ”
-            // `""` is the "Р’СЃРµ Р·Р°РєР»Р°РґРєРё" row and means "no filter", so an
+            // `data-bm-folder` is always present on a bound `.bm-folder` row —
+            // `""` is the "Все закладки" row and means "no filter", so an
             // empty value is meaningful here (unlike the URL actions above).
             ChromeAction::SelectFolder => {
                 if let Some(folder) = self.chrome_data_attr(nid, "data-bm-folder") {
@@ -1129,7 +1129,7 @@ impl Lumen {
                 self.relayout_chrome_host();
             }
             // CC-9: `#omniDropdown` rows carry `data-sugg-idx` (stamped by
-            // `bind_dropdown`, mirroring `data-tab-id`) вЂ” resolve it back to
+            // `bind_dropdown`, mirroring `data-tab-id`) — resolve it back to
             // `AddressBarState::suggestions()[idx]` and commit exactly like
             // `AddressBarState::commit()`'s `selected_idx` branch would, just
             // without requiring keyboard navigation to have set that index
@@ -1147,7 +1147,7 @@ impl Lumen {
             }
             // CC-9: resolves the clicked button's `.perm-row` ancestor back
             // to a `PermissionKind` by position (the asset's two static rows
-            // are Camera then Microphone, `PermissionKind::ALL`'s first two вЂ”
+            // are Camera then Microphone, `PermissionKind::ALL`'s first two —
             // see `Self::chrome_permission_kind_for_node`), then sets it
             // directly per `data-perm` ("allow"/"deny"). Unlike the legacy
             // panel's single cycle button, the design has two distinct
@@ -1173,14 +1173,14 @@ impl Lumen {
             }
             // CC-10: `#cpOverlay` itself carries this action (scrim click
             // closes the palette, mirroring the legacy modal's own
-            // click-outside behavior) вЂ” `nid` doesn't need resolving further.
+            // click-outside behavior) — `nid` doesn't need resolving further.
             ChromeAction::ClosePalette => {
                 self.command_palette.close();
                 self.relayout_chrome_host();
             }
             // CC-10: shared by `#certOverlay` and `#printOverlay` (root
             // scrim, `.modal-close`, and both footer buttons all carry this
-            // same action) вЂ” which one to close is resolved by walking up
+            // same action) — which one to close is resolved by walking up
             // from `nid` to whichever modal ancestor it's inside.
             ChromeAction::CloseModal => match self.chrome_modal_ancestor(nid) {
                 Some(ChromeModalKind::Cert) => {
@@ -1194,7 +1194,7 @@ impl Lumen {
                 None => {}
             },
             // CC-10b: `.set-nav .item`/`.set-section` both carry the same
-            // slug on `data-section`/`data-set` вЂ” `bind_settings` matches
+            // slug on `data-section`/`data-set` — `bind_settings` matches
             // `ChromeSettingsModel::active_section` against either
             // attribute, so this only needs to store the clicked slug.
             ChromeAction::SetSettingsSection => {
@@ -1207,7 +1207,7 @@ impl Lumen {
             }
             // CC-10b: switches the active tab without closing the panel
             // (unlike `OpenAiSidebar`/`OpenWebSidebar`, which toggle
-            // open/closed) вЂ” mirrors clicking a tab in an already-open
+            // open/closed) — mirrors clicking a tab in an already-open
             // `#rightSidebar`.
             ChromeAction::SetSidebarTab => {
                 if let Some(tab) =
@@ -1235,19 +1235,19 @@ impl Lumen {
                 self.relayout_chrome_host();
             }
             // BUG-421: of `#view-settings`'s six `.toggle`s, only these two
-            // (Privacy в†’ "Adblock & Fingerprinting") have a clean 1:1 backing
-            // field on `SettingsPanel::draft` вЂ” they got their own
+            // (Privacy → "Adblock & Fingerprinting") have a clean 1:1 backing
+            // field on `SettingsPanel::draft` — they got their own
             // `data-action` in the design reference (`toggleShields`/
             // `toggleFingerprintMode`) instead of the shared `toggle-switch`,
             // so `nid` here is already the specific toggle and needs no
             // structural resolver. Persisted on close via
-            // `close_settings_panel` в†’ `settings_store.apply_snapshot`, same
+            // `close_settings_panel` → `settings_store.apply_snapshot`, same
             // as every other `draft` field.
             ChromeAction::ToggleShields => {
                 self.settings_panel.toggle_shields();
                 // BUG-411: the setting is the fallback every host without a
                 // per-site exception uses, so a flip here has to reach the
-                // live filter too вЂ” not just the draft that `close_settings_panel`
+                // live filter too — not just the draft that `close_settings_panel`
                 // will persist.
                 self.shields.set_default_enabled(self.settings_panel.draft.shields_enabled);
                 self.sync_adblock_filter();
@@ -1255,8 +1255,8 @@ impl Lumen {
             }
             // BUG-411: the per-site switch restored into `#permPopover`. Unlike
             // `ToggleShields` above (the global setting) this keys off the
-            // current host, and unlike the legacy panel's switch вЂ” which only
-            // ever painted itself вЂ” it drives the real process-global filter.
+            // current host, and unlike the legacy panel's switch — which only
+            // ever painted itself — it drives the real process-global filter.
             ChromeAction::ToggleSiteShields => {
                 self.shields.toggle_current_site();
                 self.sync_adblock_filter();
@@ -1268,11 +1268,11 @@ impl Lumen {
             }
             // BUG-426 reinvestigation (2026-08-01): all six of these were
             // filed together as "sit in one empty branch" but each is a
-            // no-op for its own, unrelated reason вЂ” none is a small wiring
+            // no-op for its own, unrelated reason — none is a small wiring
             // gap like BUG-419/420/421 turned out to be.
             //
             // `SetProfile`: `#profileMenu`/`.pm-item` in the chrome asset are
-            // permanently unreachable, not just unwired вЂ” CC-15-1
+            // permanently unreachable, not just unwired — CC-15-1
             // (`docs/tasks/p1-css-chrome.md`) deliberately kept the profile
             // switcher a legacy overlay (`panels::profile_menu::build_panel`,
             // painted and hit-tested outside `chrome_doc` entirely, see the
@@ -1288,7 +1288,7 @@ impl Lumen {
             // (`data-action="archive-card"`) live inside `#view-bookmarks`'s
             // `.bm-grid`, whose *entire* card list `bind_bookmarks`
             // (`crates/chrome/src/model.rs`) deletes and rebuilds from
-            // `ChromeBookmarksModel::cards` on every relayout вЂ”
+            // `ChromeBookmarksModel::cards` on every relayout —
             // `remove_children_with_class(doc, grid, "bm-card")` matches by
             // class token, so it removes `.bm-card.readlater` too, and the
             // rebuilt cards never carry a `readlater`/`archive-card` variant
@@ -1300,30 +1300,30 @@ impl Lumen {
             // with a clean 1:1 backing field got their own `data-action` in
             // [BUG-421](../../../bugs/BUG-421-FIXED.md) (`ToggleShields`/
             // `ToggleFingerprintMode`, handled above). The remaining four
-            // ("РџСЂРёРЅСѓРґРёС‚РµР»СЊРЅС‹Р№ HTTPS", the two Extensions rows, and the QA
-            // "РЎС‚Р°Р±РёР»СЊРЅС‹Рµ test-id" row) have no matching real-state field at
-            // all вЂ” no force-HTTPS setting, no extensions/QA-flag store вЂ”
+            // ("Принудительный HTTPS", the two Extensions rows, and the QA
+            // "Стабильные test-id" row) have no matching real-state field at
+            // all — no force-HTTPS setting, no extensions/QA-flag store —
             // so a click still can't resolve to anything.
             //
             // `ToggleFocusTimer`/`ToggleFocus`: unlike the above, real
             // backing state exists (`self.focus: FocusModePanel`) and is
-            // fully interactive already вЂ” but through a *different* legacy
+            // fully interactive already — but through a *different* legacy
             // overlay (`panels::focus_panel::build_panel` + its own
             // `MouseInput`/`FocusHit` hit-test, unconditionally painted
             // whenever `self.focus.active`), not `chrome_doc`. The chrome
             // asset's `.focus-timer` pill is a simpler visual (icon + `MM:SS`
             // + two buttons) than the legacy widget's card-with-progress-ring
-            // вЂ” `body` never gets a `focus-mode` class, so the pill has no
+            // — `body` never gets a `focus-mode` class, so the pill has no
             // layout box today. Wiring these two actions for real would mean
             // either drawing both widgets at once (visibly duplicated) or
             // retiring the ring animation to cut over to the frozen design's
             // pill, the same class of legacy-overlay-vs-engine-chrome call
-            // CC-15-1 already made for the profile switcher вЂ” a follow-up
+            // CC-15-1 already made for the profile switcher — a follow-up
             // task, not a same-shape fix as this bug's other five actions.
             //
             // `SetDevtoolsTab`: `.dt-tab`'s four static rows (Elements /
-            // Console / Network / Sources, `data-dt-tab="вЂ¦"`) mock a
-            // multi-panel DevTools UI the engine does not have вЂ”
+            // Console / Network / Sources, `data-dt-tab="…"`) mock a
+            // multi-panel DevTools UI the engine does not have —
             // `self.devtools_console: ConsolePanel` is a single JS-console
             // view with no per-tab data behind Elements/Network/Sources, so
             // there is nothing to switch between.
@@ -1337,7 +1337,7 @@ impl Lumen {
     }
 
     /// CC-10: which modal `nid` (a `close-modal`-carrying node, or one of its
-    /// descendants) belongs to вЂ” `#certOverlay` and `#printOverlay` share the
+    /// descendants) belongs to — `#certOverlay` and `#printOverlay` share the
     /// same `data-action` value, so this walks up the tree to disambiguate,
     /// mirroring [`Self::chrome_permission_kind_for_node`].
     pub(crate) fn chrome_modal_ancestor(&self, nid: NodeId) -> Option<ChromeModalKind> {
@@ -1359,7 +1359,7 @@ impl Lumen {
 
     /// CC-9: walks up from `nid` (a `.perm-btn` inside `#permPopover`) to its
     /// `.perm-row` ancestor, then resolves that row's position among
-    /// `#permPopover`'s `.perm-row` children to a [`PermissionKind`] вЂ”
+    /// `#permPopover`'s `.perm-row` children to a [`PermissionKind`] —
     /// `PermissionKind::ALL`'s first two entries, matching the frozen
     /// design's fixed row order (Camera, Microphone; it has no rows for
     /// Notifications/Clipboard). `None` if `nid` isn't inside a `.perm-row`,
@@ -1392,7 +1392,7 @@ impl Lumen {
     }
 
     /// Snapshot the tab strip, toolbar, and omnibox for the synthetic chrome
-    /// AX nodes (DS-17) вЂ” `lumen_a11y::chrome::chrome_nodes` turns this into
+    /// AX nodes (DS-17) — `lumen_a11y::chrome::chrome_nodes` turns this into
     /// `TabList`/`ToolBar` siblings of the DOM-derived tree.
     pub(crate) fn chrome_snapshot(&self) -> lumen_a11y::chrome::ChromeSnapshot {
         use lumen_a11y::chrome::{ChromeButton, ChromeSnapshot, ChromeTab};
@@ -1407,16 +1407,16 @@ impl Lumen {
 
         let profile_name = self.profile_menu.active_entry().map(|e| e.name.as_str()).unwrap_or("?");
         let buttons = vec![
-            ChromeButton { name: format!("РџСЂРѕС„РёР»СЊ: {profile_name}"), pressed: None },
-            ChromeButton { name: "РќР°Р·Р°Рґ".to_owned(), pressed: None },
-            ChromeButton { name: "Р’РїРµСЂС‘Рґ".to_owned(), pressed: None },
-            ChromeButton { name: "РћР±РЅРѕРІРёС‚СЊ".to_owned(), pressed: None },
-            ChromeButton { name: "РќР°Р№С‚Рё РЅР° СЃС‚СЂР°РЅРёС†Рµ".to_owned(), pressed: Some(self.find.is_open()) },
-            ChromeButton { name: "Р’РµР±-СЃР°Р№РґР±Р°СЂ".to_owned(), pressed: Some(self.sidebar.visible) },
-            ChromeButton { name: "РР-СЃР°Р№РґР±Р°СЂ".to_owned(), pressed: Some(self.ai_panel.visible) },
-            ChromeButton { name: "Р—Р°РіСЂСѓР·РєРё".to_owned(), pressed: Some(self.downloads.visible) },
+            ChromeButton { name: format!("Профиль: {profile_name}"), pressed: None },
+            ChromeButton { name: "Назад".to_owned(), pressed: None },
+            ChromeButton { name: "Вперёд".to_owned(), pressed: None },
+            ChromeButton { name: "Обновить".to_owned(), pressed: None },
+            ChromeButton { name: "Найти на странице".to_owned(), pressed: Some(self.find.is_open()) },
+            ChromeButton { name: "Веб-сайдбар".to_owned(), pressed: Some(self.sidebar.visible) },
+            ChromeButton { name: "ИИ-сайдбар".to_owned(), pressed: Some(self.ai_panel.visible) },
+            ChromeButton { name: "Загрузки".to_owned(), pressed: Some(self.downloads.visible) },
             ChromeButton { name: "DevTools".to_owned(), pressed: Some(self.devtools_console.visible) },
-            ChromeButton { name: "РќР°СЃС‚СЂРѕР№РєРё".to_owned(), pressed: Some(self.settings_panel.visible) },
+            ChromeButton { name: "Настройки".to_owned(), pressed: Some(self.settings_panel.visible) },
         ];
 
         let omnibox_value = if self.address_bar.is_open() {
@@ -1429,7 +1429,7 @@ impl Lumen {
     }
 
     /// Chrome AX siblings for [`Self::update_platform_ax_tree`]/
-    /// `automation_a11y_tree` вЂ” CC-13: these come from the engine-rendered
+    /// `automation_a11y_tree` — CC-13: these come from the engine-rendered
     /// chrome `Document` via `lumen_a11y::chrome::chrome_root_from_document`
     /// (real ARIA roles off `assets/chrome/chrome.html`, injected at generation
     /// time). The DS-17 synthetic-snapshot fallback below is unreachable since
@@ -1445,7 +1445,7 @@ impl Lumen {
     }
 
     /// Rebuild the platform accessibility tree from the current DOM and push it to
-    /// the OS bridge. Called after every full page load and tab switch вЂ” the
+    /// the OS bridge. Called after every full page load and tab switch — the
     /// chrome nodes (DS-17, CC-13) are attached as siblings so they stay live too.
     pub(crate) fn update_platform_ax_tree(&mut self) {
         let Some(src) = &self.layout_source else { return };
@@ -1458,7 +1458,7 @@ impl Lumen {
     }
 }
 
-/// BUG-341 S17 вЂ” flatten `bind_model_tracked`'s per-node report into the
+/// BUG-341 S17 — flatten `bind_model_tracked`'s per-node report into the
 /// `(NodeId, NodeChange)` pairs `restyle_root_set_for_node_change` consumes.
 ///
 /// One node can report several attribute writes plus a child-list change in the
@@ -1478,14 +1478,14 @@ pub(crate) fn chrome_node_changes(
 }
 
 /// CC-4/CC-9: removes `#contentArea`'s [`LayoutBox`] from `lb`'s subtree
-/// (depth-first, first match) вЂ” not just its children, but its own box (and
+/// (depth-first, first match) — not just its children, but its own box (and
 /// background paint command) too, so the real page painted separately at
 /// that rect is never covered by it. Never matches `lb` itself, only
-/// descendants вЂ” `#contentArea` is never the chrome document's root box.
+/// descendants — `#contentArea` is never the chrome document's root box.
 ///
-/// CC-9: two of `#contentArea`'s own children вЂ” `#findBar`, `#downloadsPanel`
-/// вЂ” are real popovers this pass *does* want painted (they sit outside the
-/// pruned rect via `position:absolute`, CSS Positioned Layout L3 В§9.10, so
+/// CC-9: two of `#contentArea`'s own children — `#findBar`, `#downloadsPanel`
+/// — are real popovers this pass *does* want painted (they sit outside the
+/// pruned rect via `position:absolute`, CSS Positioned Layout L3 §9.10, so
 /// splicing them elsewhere in the tree does not change which stacking
 /// context they join: `#contentArea` itself creates none). `salvage_ids`
 /// lists which descendant node ids to keep; they're spliced back into `lb`
@@ -1495,7 +1495,7 @@ pub(crate) fn chrome_node_changes(
 ///
 /// BUG-341 S22: the pruning is **reversible**. Every removal is recorded in the
 /// returned [`ContentAreaDetachment`], and [`restore_content_area`] puts the
-/// tree back exactly as it was вЂ” which is what lets the next pass take the
+/// tree back exactly as it was — which is what lets the next pass take the
 /// live tree as its `prev` basis instead of the pipeline copying a pristine
 /// one aside on every frame (that copy was the largest single item left in an
 /// incremental chrome cycle; see the S22 census in `bugs/BUG-341-OPEN.md`).
@@ -1550,7 +1550,7 @@ fn take_content_area_at(
 /// than it looks. The restored tree is handed to
 /// `layout_mutation_incremental_restyle` as its `prev` basis, and
 /// `incremental_build_box` moves whole *clean* subtrees straight across from
-/// that basis вЂ” on an interaction cycle `#contentArea`'s parent is clean, so a
+/// that basis — on an interaction cycle `#contentArea`'s parent is clean, so a
 /// basis missing `#contentArea` produces a document missing `#contentArea`,
 /// and the next cycle inherits that tree in turn. It is not a slow frame, it
 /// is 155 boxes where there should be 318, permanently. Measured, and gated:
@@ -1559,27 +1559,27 @@ pub(crate) struct ContentAreaDetachment {
     /// Child-index path from the tree root down to the box that held
     /// `#contentArea` (empty when the root itself held it).
     holder_path: Vec<usize>,
-    /// Index `#contentArea` occupied among that holder's children вЂ” also the
+    /// Index `#contentArea` occupied among that holder's children — also the
     /// slot the salvaged popovers were spliced into.
     slot: usize,
     /// `#contentArea`'s own box, with the salvaged popovers already lifted out
     /// of its subtree.
     removed: LayoutBox,
     /// For each salvaged popover, in removal order, the child-index path
-    /// inside [`Self::removed`] it was removed from вЂ” the last element is the
+    /// inside [`Self::removed`] it was removed from — the last element is the
     /// index within that box's children. Restoring walks these in **reverse**,
     /// because each path was recorded against the tree state of its own
     /// removal.
     pub(crate) salvage_paths: Vec<Vec<usize>>,
 }
 
-/// BUG-341 S22: inverse of [`take_content_area`] вЂ” re-inserts the salvaged
+/// BUG-341 S22: inverse of [`take_content_area`] — re-inserts the salvaged
 /// popovers into `#contentArea`'s subtree and `#contentArea` back into its
 /// former slot, reproducing the pre-pruning tree box for box.
 ///
 /// Returns `false` if any recorded path no longer addresses a box (only
 /// possible if something mutated the tree between the two calls, which nothing
-/// does today вЂ” `chrome_layout` is read-only until the next pass replaces it).
+/// does today — `chrome_layout` is read-only until the next pass replaces it).
 /// The caller treats that as "no usable `prev`" and takes the full-layout path,
 /// so a stale record costs a slow frame, never a wrong one.
 pub(crate) fn restore_content_area(root: &mut LayoutBox, detached: ContentAreaDetachment) -> bool {
@@ -1615,7 +1615,7 @@ fn follow_box_path_mut<'a>(b: &'a mut LayoutBox, path: &[usize]) -> Option<&'a m
 /// `salvage_ids`, appending it to `out` in tree order together with the
 /// child-index path (relative to the box this recursion started at) it came
 /// from. Used by [`take_content_area`] to rescue specific popovers out of
-/// `#contentArea` before the rest of its subtree is discarded вЂ” and by
+/// `#contentArea` before the rest of its subtree is discarded — and by
 /// [`restore_content_area`] to put them back.
 fn salvage_layout_boxes(
     lb: &mut LayoutBox,
@@ -1689,7 +1689,7 @@ pub(crate) struct ChromeOverlayFrameCache {
 
 /// BUG-405 срез 50: reuse-or-build decision behind [`ChromeOverlayFrameCache`],
 /// factored out as a free function (no `&Lumen`/renderer needed) so it is
-/// unit-testable directly вЂ” срез 49 found building a whole `Lumen` for one
+/// unit-testable directly — срез 49 found building a whole `Lumen` for one
 /// diagnostic test disproportionate, and the same reasoning applies here.
 ///
 /// Returns the assembled segment, the strip count (for the `chrome_mix`
@@ -1697,9 +1697,9 @@ pub(crate) struct ChromeOverlayFrameCache {
 /// `DisplayList`, cloned from the cache on a HIT, freshly folded on a
 /// build), and, when a NEW cache should be remembered, `Some` of it. `None`
 /// in that fourth slot means "leave `Lumen::chrome_overlay_frame_cache`
-/// exactly as it is" вЂ” true both on a HIT (the existing cache is still the
+/// exactly as it is" — true both on a HIT (the existing cache is still the
 /// right one to keep) and when `cache_enabled` is `false` (nothing to
-/// remember, and the caller does not clear a stale entry either вЂ” the next
+/// remember, and the caller does not clear a stale entry either — the next
 /// eligible frame will simply overwrite it).
 #[allow(clippy::too_many_arguments)] // BUG-405 срез 50: same shape as lumen-paint's Renderer::compose_page
 pub(crate) fn chrome_overlay_segment(
@@ -1777,7 +1777,7 @@ fn build_chrome_overlay_strips(
 }
 
 /// `true` if [`ChromeOverlayFrameCache`] reuse is disabled
-/// (`LUMEN_NO_CHROME_OVERLAY_CACHE=1`) вЂ” A/B lever (`docs/perf-method.md`),
+/// (`LUMEN_NO_CHROME_OVERLAY_CACHE=1`) — A/B lever (`docs/perf-method.md`),
 /// same shape as `frame_pacing::fast_scroll_degrade_disabled`.
 pub(crate) fn chrome_overlay_cache_disabled() -> bool {
     static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -1804,7 +1804,7 @@ pub(crate) fn chrome_overlay_digest_reuse_disabled() -> bool {
 }
 
 /// CC-10: which modal `Lumen::chrome_modal_ancestor` resolved a `CloseModal`
-/// click to вЂ” `#certOverlay` and `#printOverlay` share the same
+/// click to — `#certOverlay` and `#printOverlay` share the same
 /// `data-action="close-modal"` value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChromeModalKind {

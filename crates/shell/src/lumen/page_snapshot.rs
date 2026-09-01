@@ -15,8 +15,8 @@ impl Lumen {
     /// Called before switching to a different tab so the current page state can
     /// be frozen while the new tab becomes active.
     pub(crate) fn save_page_snapshot(&mut self) -> PageSnapshot {
-        // РЎРїРёСЃРѕРє СѓРµР·Р¶Р°РµС‚ РІ СЃРЅР°РїС€РѕС‚, Р°РєС‚РёРІРЅС‹Р№ СЃР»РѕС‚ РѕСЃС‚Р°С‘С‚СЃСЏ РїСѓСЃС‚С‹Рј вЂ” РІРµСЂСЃРёСЏ
-        // РѕР±СЏР·Р°РЅР° СЃРјРµРЅРёС‚СЊСЃСЏ С‚Р°Рє Р¶Рµ, РєР°Рє РїСЂРё РѕР±С‹С‡РЅРѕР№ Р·Р°РјРµРЅРµ (BUG-405 СЃСЂРµР· 39).
+        // Список уезжает в снапшот, активный слот остаётся пустым — версия
+        // обязана смениться так же, как при обычной замене (BUG-405 срез 39).
         self.bump_display_list_epoch();
         let snap = PageSnapshot {
             display_list: std::mem::take(&mut self.display_list),
@@ -105,8 +105,8 @@ impl Lumen {
             reader_original_source: self.reader_original_source.take(),
             cert_info: self.cert_info.take(),
         };
-        // ADR-016 M2.2d: Р°РєС‚РёРІРЅР°СЏ РІРєР»Р°РґРєР° РѕС‚РґР°Р»Р° СЃРІРѕР№ JS-С…СЌРЅРґР» РІ СЃРЅР°РїС€РѕС‚
-        // (`js_ctx.take()` РІС‹С€Рµ) в†’ `js_present` СЃР±СЂР°СЃС‹РІР°РµС‚СЃСЏ РІРјРµСЃС‚Рµ СЃ РЅРёРј.
+        // ADR-016 M2.2d: активная вкладка отдала свой JS-хэндл в снапшот
+        // (`js_ctx.take()` выше) → `js_present` сбрасывается вместе с ним.
         self.js_present = false;
         snap
     }
@@ -114,7 +114,7 @@ impl Lumen {
     /// Restore per-page fields from a `PageSnapshot` into `self`.
     ///
     /// Called after a tab switch to make a previously-frozen tab active again.
-    #[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn restore_page_snapshot(&mut self, snap: PageSnapshot) {
         self.set_display_list(snap.display_list);
         self.title = snap.title;
@@ -204,7 +204,7 @@ impl Lumen {
         self.current_history_state_json = snap.current_history_state_json;
         self.reader_original_source = snap.reader_original_source;
         self.cert_info = snap.cert_info;
-        // ADR-016 M2.2c-2b: Р·РµСЂРєР°Р»РёРј С…СЌРЅРґР» + DOM РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРЅРѕР№ РІРєР»Р°РґРєРё РІ РїРѕС‚РѕРє.
+        // ADR-016 M2.2c-2b: зеркалим хэндл + DOM восстановленной вкладки в поток.
         self.sync_engine_js_state();
         // Notify platform bridge with the restored tab's accessibility tree.
         self.update_platform_ax_tree();

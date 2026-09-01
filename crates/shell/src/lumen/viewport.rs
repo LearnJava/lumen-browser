@@ -39,8 +39,8 @@ impl Lumen {
         self.display_color_profile.active_profile()
     }
 
-    /// РўРµРєСѓС‰Р°СЏ Р»РѕРіРёС‡РµСЃРєР°СЏ (CSS px) РІС‹СЃРѕС‚Р° viewport-Р°. Р•СЃР»Рё РѕРєРЅРѕ РµС‰С‘ РЅРµ СЃРѕР·РґР°РЅРѕ вЂ”
-    /// fallback РЅР° layout-viewport 720 px, РєРѕС‚РѕСЂС‹Р№ Сѓ РЅР°СЃ hardcoded РІ pipeline.
+    /// Текущая логическая (CSS px) высота viewport-а. Если окно ещё не создано —
+    /// fallback на layout-viewport 720 px, который у нас hardcoded в pipeline.
     pub(crate) fn viewport_height_css(&self) -> f32 {
         let total = match (self.window.as_ref(), self.renderer.as_ref()) {
             (Some(w), Some(r)) => {
@@ -71,9 +71,9 @@ impl Lumen {
         }
     }
 
-    /// CSS px С€РёСЂРёРЅР° viewport-Р° вЂ” РїРѕР»РЅР°СЏ С€РёСЂРёРЅР° РѕРєРЅР°, РЅСѓР¶РЅР° scrollbar-overlay-Сѓ
-    /// РґР»СЏ СЂР°Р·РјРµС‰РµРЅРёСЏ Сѓ РїСЂР°РІРѕРіРѕ РєСЂР°СЏ. Fallback РЅР° layout-viewport 1024 px (С‚РѕС‚
-    /// Р¶Рµ hardcoded СЂР°Р·РјРµСЂ, С‡С‚Рѕ Рё РІ pipeline РґРѕ СЃРѕР·РґР°РЅРёСЏ РѕРєРЅР°).
+    /// CSS px ширина viewport-а — полная ширина окна, нужна scrollbar-overlay-у
+    /// для размещения у правого края. Fallback на layout-viewport 1024 px (тот
+    /// же hardcoded размер, что и в pipeline до создания окна).
     pub(crate) fn viewport_width_css(&self) -> f32 {
         match (self.window.as_ref(), self.renderer.as_ref()) {
             (Some(w), Some(r)) => {
@@ -85,9 +85,9 @@ impl Lumen {
         }
     }
 
-    /// CSS px С€РёСЂРёРЅР° РѕР±Р»Р°СЃС‚Рё РєРѕРЅС‚РµРЅС‚Р° СЃС‚СЂР°РЅРёС†С‹ вЂ” РїРѕР»РЅР°СЏ С€РёСЂРёРЅР° РѕРєРЅР° РјРёРЅСѓСЃ
-    /// С€РёСЂРёРЅР° РІРµСЂС‚РёРєР°Р»СЊРЅС‹С… РїР°РЅРµР»РµР№ РІРєР»Р°РґРѕРє (СЃР»РµРІР°) Рё sidebar (СЃРїСЂР°РІР°), РµСЃР»Рё
-    /// РѕРЅРё РІРёРґРёРјС‹. РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ РєР»Р°РјРїРёРЅРіР° РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅРѕРіРѕ СЃРєСЂРѕР»Р»Р°.
+    /// CSS px ширина области контента страницы — полная ширина окна минус
+    /// ширина вертикальных панелей вкладок (слева) и sidebar (справа), если
+    /// они видимы. Используется для клампинга горизонтального скролла.
     pub(crate) fn page_content_width_css(&self) -> f32 {
         let (left_offset, right_offset) = self.docked_panel_offsets();
         (self.viewport_width_css() - left_offset - right_offset).max(0.0)

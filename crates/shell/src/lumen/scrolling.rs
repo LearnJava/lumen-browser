@@ -11,15 +11,15 @@
 use crate::*;
 
 impl Lumen {
-    /// РњР°РєСЃРёРјР°Р»СЊРЅС‹Р№ РІР°Р»РёРґРЅС‹Р№ scroll_y: РЅРёС‡РµРіРѕ РЅРµ СЃРєСЂРѕР»Р»РёРј, РµСЃР»Рё РєРѕРЅС‚РµРЅС‚
-    /// РїРѕРјРµС‰Р°РµС‚СЃСЏ РІ viewport. РРЅР°С‡Рµ вЂ” `content_height в€’ viewport_height`.
+    /// Максимальный валидный scroll_y: ничего не скроллим, если контент
+    /// помещается в viewport. Иначе — `content_height − viewport_height`.
     pub(crate) fn max_scroll(&self) -> f32 {
         (self.content_height - self.viewport_height_css()).max(0.0)
     }
 
-    /// РњР°РєСЃРёРјР°Р»СЊРЅС‹Р№ РІР°Р»РёРґРЅС‹Р№ scroll_x: 0 РµСЃР»Рё РєРѕРЅС‚РµРЅС‚ РїРѕРјРµС‰Р°РµС‚СЃСЏ РїРѕ С€РёСЂРёРЅРµ.
+    /// Максимальный валидный scroll_x: 0 если контент помещается по ширине.
     ///
-    /// РСЃРїРѕР»СЊР·СѓРµС‚ `page_content_width_css()` вЂ” РїРѕР»РЅР°СЏ С€РёСЂРёРЅР° РјРёРЅСѓСЃ РїР°РЅРµР»СЊ РІРєР»Р°РґРѕРє.
+    /// Использует `page_content_width_css()` — полная ширина минус панель вкладок.
     pub(crate) fn max_scroll_x(&self) -> f32 {
         (self.content_width - self.page_content_width_css()).max(0.0)
     }
@@ -53,7 +53,7 @@ impl Lumen {
     ///
     /// The cursor position is converted from physical pixels to document-space
     /// CSS px (adds page scroll offsets so hit-testing works on scrolled pages).
-    #[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn try_scroll_overflow_container(&mut self, dx: f32, dy: f32) -> bool {
         let Some(cursor) = self.cursor_position else { return false };
         if self.layout_box.is_none() { return false; }
@@ -78,7 +78,7 @@ impl Lumen {
         let new_x = (cur_x + dx).clamp(0.0, (sw - clip_w).max(0.0));
         let new_y = (cur_y + dy).clamp(0.0, (sh - clip_h).max(0.0));
 
-        // CSS Overscroll Behavior L1 В§3 вЂ” scroll-chain stop. If the container is
+        // CSS Overscroll Behavior L1 §3 — scroll-chain stop. If the container is
         // at its boundary on every axis and `overscroll-behavior` permits it, let
         // the residual delta propagate to the page; otherwise the chain stops
         // here (event consumed even if the container did not move).
@@ -88,7 +88,7 @@ impl Lumen {
             return false;
         }
         if !moved_x && !moved_y {
-            // Boundary reached but propagation is blocked (contain/none) вЂ” consume
+            // Boundary reached but propagation is blocked (contain/none) — consume
             // the gesture without a relayout/redraw.
             return true;
         }
@@ -100,14 +100,14 @@ impl Lumen {
             false
         };
         if scrolled {
-            // Р‘С‹СЃС‚СЂС‹Р№ РїСѓС‚СЊ: С‚РѕС‡РµС‡РЅС‹Р№ РїР°С‚С‡ СЃРєСЂРѕР»Р»-СЃР»РѕСЏ РІ РіРѕС‚РѕРІРѕРј display list вЂ”
-            // layout РґРµС‚РµР№ РїСЂРё СЃРєСЂРѕР»Р»Рµ РЅРµ РјРµРЅСЏРµС‚СЃСЏ, РїРѕСЌС‚РѕРјСѓ РїРѕР»РЅР°СЏ РїРµСЂРµСЃР±РѕСЂРєР°
-            // paint_ordered РЅР° РєР°Р¶РґС‹Р№ С‚РёРє РєРѕР»РµСЃР° РЅРµ РЅСѓР¶РЅР° (СЃРј.
-            // lumen_paint::patch_scroll_layer; СЌРєРІРёРІР°Р»РµРЅС‚РЅРѕСЃС‚СЊ РїРµСЂРµСЃР±РѕСЂРєРµ
-            // Р·Р°РєСЂРµРїР»РµРЅР° С‚РµСЃС‚Р°РјРё patch_scroll_layer_* РІ display_list.rs).
-            // РЎРїРёСЃРѕРє РїСЂР°РІРёС‚СЃСЏ РќРђ РњР•РЎРўР• вЂ” РІРµСЂСЃРёСЋ Р±Р°РјРїР°РµРј Р·Р°СЂР°РЅРµРµ: Р·Р°РјС‹РєР°РЅРёРµ РЅРёР¶Рµ
-            // Р·Р°С…РІР°С‚С‹РІР°РµС‚ С‚РѕР»СЊРєРѕ РїРѕР»Рµ `display_list` (`layout_box` Р·Р°РЅСЏС‚
-            // СЃРѕСЃРµРґРЅРёРј Р·Р°РёРјСЃС‚РІРѕРІР°РЅРёРµРј), РїРѕСЌС‚РѕРјСѓ `&mut self` РІРЅСѓС‚СЂРё РЅРµРіРѕ РЅРµС‚.
+            // Быстрый путь: точечный патч скролл-слоя в готовом display list —
+            // layout детей при скролле не меняется, поэтому полная пересборка
+            // paint_ordered на каждый тик колеса не нужна (см.
+            // lumen_paint::patch_scroll_layer; эквивалентность пересборке
+            // закреплена тестами patch_scroll_layer_* в display_list.rs).
+            // Список правится НА МЕСТЕ — версию бампаем заранее: замыкание ниже
+            // захватывает только поле `display_list` (`layout_box` занят
+            // соседним заимствованием), поэтому `&mut self` внутри него нет.
             self.bump_display_list_epoch();
             let patched = lumen_layout::find_box_by_node(
                 self.layout_box.as_ref().unwrap(),
@@ -115,12 +115,12 @@ impl Lumen {
             )
             .is_some_and(|cb| lumen_paint::patch_scroll_layer(&mut self.display_list, cb));
             if patched {
-                // РўРѕС‡РµС‡РЅР°СЏ РїСЂР°РІРєР°: РіСЂСЏР·РЅС‹Рµ С‚РѕР»СЊРєРѕ С‚Р°Р№Р»С‹ РїРѕРґ РєРѕРЅС‚РµР№РЅРµСЂРѕРј.
+                // Точечная правка: грязные только тайлы под контейнером.
                 if let Some(c) = self.scroll_containers.iter().find(|c| c.node == target) {
                     self.tile_grid.mark_rect_dirty(c.clip_rect);
                 }
             } else {
-                // Fallback: РїРѕР»РЅР°СЏ РїРµСЂРµСЃР±РѕСЂРєР° РїСЂРё Р»СЋР±РѕР№ РЅРµСЃС‚Р°РЅРґР°СЂС‚РЅРѕР№ СЃС‚СЂСѓРєС‚СѓСЂРµ DL.
+                // Fallback: полная пересборка при любой нестандартной структуре DL.
                 let new_dl = paint_ordered(self.layout_box.as_ref().unwrap());
                 self.tile_grid.update_from_diff(&self.display_list, &new_dl);
                 self.set_display_list(new_dl);
@@ -130,16 +130,16 @@ impl Lumen {
                 .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                 .collect();
             // ADR-016 M2.2c-2d (16): overflow-container scroll fire-and-forget void
-            // (`update_scroll_states` push в†’ `fire_element_scroll`) С‡РµСЂРµР· `route_task_js`.
-            // `states` (owned `HashMap`) Рё `target_nid` (`u32`, Copy) РїРµСЂРµРµР·Р¶Р°СЋС‚ РІ
-            // `move`-Р·Р°РјС‹РєР°РЅРёРµ `Send + 'static`; РїРѕСЂСЏРґРѕРє pushв†’dispatch СЃРѕС…СЂР°РЅС‘РЅ РІРЅСѓС‚СЂРё
-            // РѕРґРЅРѕРіРѕ `task`. РџРѕРґ С„Р»Р°РіРѕРј (`LUMEN_ENGINE_THREAD=1`) СѓС…РѕРґРёС‚ off-UI-thread;
-            // Р±РµР· С„Р»Р°РіР° (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ) вЂ” СЃРёРЅС…СЂРѕРЅРЅС‹Рµ РІС‹Р·РѕРІС‹, **Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ**.
+            // (`update_scroll_states` push → `fire_element_scroll`) через `route_task_js`.
+            // `states` (owned `HashMap`) и `target_nid` (`u32`, Copy) переезжают в
+            // `move`-замыкание `Send + 'static`; порядок push→dispatch сохранён внутри
+            // одного `task`. Под флагом (`LUMEN_ENGINE_THREAD=1`) уходит off-UI-thread;
+            // без флага (по умолчанию) — синхронные вызовы, **байт-идентично**.
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 js.update_scroll_states(states);
                 js.fire_element_scroll(target_nid);
                 // BUG-822: one wheel notch over a container is applied
-                // instantly, so it is a complete scroll sequence of its own вЂ”
+                // instantly, so it is a complete scroll sequence of its own —
                 // unlike the page, which routes the wheel through
                 // `scroll_by_smooth` and therefore ends once per animation.
                 js.fire_element_scrollend(target_nid);
@@ -291,16 +291,16 @@ impl Lumen {
 
     /// BUG-338: bring `target_rect` (a target element's absolute border-box
     /// rect) into view within every scrolling overflow ancestor of `node`,
-    /// vertical axis only вЂ” the ancestor-walk part of `Element.scrollIntoView()`
+    /// vertical axis only — the ancestor-walk part of `Element.scrollIntoView()`
     /// that fragment navigation is supposed to invoke but never did (only the
     /// page-level scroll below ran). Walks the DOM parent chain from `node`,
     /// scrolls each `ScrollContainer` match whose current viewport doesn't
     /// already contain `target_rect` just enough to bring it in (align the
     /// nearer edge), and leaves already-visible containers untouched. Content
-    /// boxes carry absolute (unscrolled) coordinates вЂ” see `PushScrollLayer`'s
-    /// paint-time `translate(-scroll_x, -scroll_y)` вЂ” so each container's
+    /// boxes carry absolute (unscrolled) coordinates — see `PushScrollLayer`'s
+    /// paint-time `translate(-scroll_x, -scroll_y)` — so each container's
     /// adjustment is independent of its ancestors' own scroll offset.
-    #[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn scroll_nested_ancestors_into_view(&mut self, node: NodeId, target_rect: lumen_core::geom::Rect) {
         let Some(src) = self.layout_source.as_ref() else { return };
         let mut ancestor = src.document.lock().unwrap().get(node).parent;
@@ -394,7 +394,7 @@ impl Lumen {
         target_x
     }
 
-    /// Р“РѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅС‹Р№ СЃРєСЂРѕР»Р» РЅР° delta CSS px (РёРЅСЃС‚Р°РЅС‚РЅС‹Р№).
+    /// Горизонтальный скролл на delta CSS px (инстантный).
     pub(crate) fn scroll_x_by(&mut self, delta: f32) {
         let clamped = clamp_scroll(self.scroll_x + delta, self.max_scroll_x());
         let snapped = self.apply_page_x_snap(clamped);
@@ -404,16 +404,16 @@ impl Lumen {
         }
     }
 
-    /// РЈСЃС‚Р°РЅРѕРІРёС‚СЊ scroll_y РІ Р°Р±СЃРѕР»СЋС‚РЅРѕРµ Р·РЅР°С‡РµРЅРёРµ (РїРѕСЃР»Рµ clamping-Р°). `f32::INFINITY`
-    /// = В«Рє СЃР°РјРѕРјСѓ РЅРёР·СѓВ», `0.0` = В«РІРІРµСЂС…В». Р—Р°РїСЂР°С€РёРІР°РµС‚ redraw С‚РѕР»СЊРєРѕ РµСЃР»Рё Р·РЅР°С‡РµРЅРёРµ
-    /// РґРµР№СЃС‚РІРёС‚РµР»СЊРЅРѕ РёР·РјРµРЅРёР»РѕСЃСЊ вЂ” РёРЅР°С‡Рµ wheel-spam РІ СЃР°РјРѕРј РЅРёР·Сѓ РЅРµ РґС‘СЂРіР°Р» Р±С‹ GPU.
+    /// Установить scroll_y в абсолютное значение (после clamping-а). `f32::INFINITY`
+    /// = «к самому низу», `0.0` = «вверх». Запрашивает redraw только если значение
+    /// действительно изменилось — иначе wheel-spam в самом низу не дёргал бы GPU.
     ///
-    /// РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ РёРЅСЃС‚Р°РЅС‚-РїСѓС‚РµР№: drag thumb scrollbar-Р°. Р”Р»СЏ
-    /// РїРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРёС… scroll-РєРѕРјР°РЅРґ (wheel / keys / page-jump / find) вЂ”
+    /// Используется для инстант-путей: drag thumb scrollbar-а. Для
+    /// пользовательских scroll-команд (wheel / keys / page-jump / find) —
     /// `start_smooth_scroll` / `scroll_by_smooth`.
     pub(crate) fn scroll_to(&mut self, target: f32) {
-        // РРЅСЃС‚Р°РЅС‚-РїСѓС‚СЊ cancel-РёС‚ Р°РєС‚РёРІРЅСѓСЋ Р°РЅРёРјР°С†РёСЋ вЂ” РјС‹ С‚РѕР»СЊРєРѕ С‡С‚Рѕ
-        // *РїСЂРёРєР°Р·Р°Р»Рё* Р±С‹С‚СЊ РІ РєРѕРЅРєСЂРµС‚РЅРѕР№ С‚РѕС‡РєРµ.
+        // Инстант-путь cancel-ит активную анимацию — мы только что
+        // *приказали* быть в конкретной точке.
         self.scroll_anim = None;
         let clamped = clamp_scroll(target, self.max_scroll());
         if (clamped - self.scroll_y).abs() > f32::EPSILON {
@@ -422,10 +422,10 @@ impl Lumen {
         }
     }
 
-    /// Р—Р°РїСѓСЃС‚РёС‚СЊ smooth-scroll Рє target Y. Cancel-РёС‚ Р°РєС‚РёРІРЅСѓСЋ Р°РЅРёРјР°С†РёСЋ.
-    /// Target РєР»Р°РјРїРёС‚СЃСЏ. Р•СЃР»Рё target == С‚РµРєСѓС‰РµРјСѓ scroll_y вЂ” Р°РЅРёРјР°С†РёСЏ РЅРµ
-    /// СЃС‚Р°СЂС‚СѓРµС‚ (Рё С‚РµРєСѓС‰Р°СЏ СЃР±СЂР°СЃС‹РІР°РµС‚СЃСЏ). РџСЂРёРјРµРЅСЏРµС‚ CSS Scroll Snap L1 РµСЃР»Рё
-    /// СЃС‚СЂР°РЅРёС†Р° РѕР±СЉСЏРІР»СЏРµС‚ `scroll-snap-type` РЅР° РєРѕСЂРЅРµРІРѕРј СЌР»РµРјРµРЅС‚Рµ.
+    /// Запустить smooth-scroll к target Y. Cancel-ит активную анимацию.
+    /// Target клампится. Если target == текущему scroll_y — анимация не
+    /// стартует (и текущая сбрасывается). Применяет CSS Scroll Snap L1 если
+    /// страница объявляет `scroll-snap-type` на корневом элементе.
     pub(crate) fn start_smooth_scroll(&mut self, target: f32) {
         let max = self.max_scroll();
         let target_clamped = clamp_scroll(target, max);
@@ -445,11 +445,11 @@ impl Lumen {
         self.request_redraw();
     }
 
-    /// Smooth-РІР°СЂРёР°РЅС‚ `scroll_by`. Р•СЃР»Рё СѓР¶Рµ РёРґС‘С‚ Р°РЅРёРјР°С†РёСЏ вЂ” delta
-    /// РґРѕР±Р°РІР»СЏРµС‚СЃСЏ Рє РµС‘ target-Сѓ, Р° РЅРµ Рє С‚РµРєСѓС‰РµРјСѓ scroll_y. Р­С‚Рѕ РїСЂР°РІРёР»СЊРЅР°СЏ
-    /// СЃРµРјР°РЅС‚РёРєР° РґР»СЏ repeat-input (key-repeat, wheel-spam): РєР°Р¶РґРѕРµ
-    /// РЅР°Р¶Р°С‚РёРµ РґРѕРїРёСЃС‹РІР°РµС‚ delta Рє С‚РѕС‡РєРµ РЅР°Р·РЅР°С‡РµРЅРёСЏ, Р° РЅРµ РґС‘СЂРіР°РµС‚ Р°РЅРёРјР°С†РёСЋ
-    /// РІ РѕР±СЂР°С‚РЅСѓСЋ СЃС‚РѕСЂРѕРЅСѓ.
+    /// Smooth-вариант `scroll_by`. Если уже идёт анимация — delta
+    /// добавляется к её target-у, а не к текущему scroll_y. Это правильная
+    /// семантика для repeat-input (key-repeat, wheel-spam): каждое
+    /// нажатие дописывает delta к точке назначения, а не дёргает анимацию
+    /// в обратную сторону.
     pub(crate) fn scroll_by_smooth(&mut self, delta: f32) {
         let base = self.scroll_anim.as_ref().map_or(self.scroll_y, |a| a.target());
         self.start_smooth_scroll(base + delta);
@@ -497,10 +497,10 @@ impl Lumen {
         self.start_smooth_scroll(target);
     }
 
-    /// РўРёРє Р°РЅРёРјР°С†РёРё РїРµСЂРµРґ `Renderer::render`. Р•СЃР»Рё Р°РЅРёРјР°С†РёСЏ Р°РєС‚РёРІРЅР° вЂ”
-    /// РѕР±РЅРѕРІР»СЏРµС‚ `scroll_y` РїРѕ out-cubic easing Рё РІРѕР·РІСЂР°С‰Р°РµС‚ `true`,
-    /// СЃРёРіРЅР°Р»РёР·РёСЂСѓСЏ caller-Сѓ Р·Р°РїСЂРѕСЃРёС‚СЊ РµС‰С‘ РѕРґРёРЅ redraw. РЎР±СЂР°СЃС‹РІР°РµС‚
-    /// `scroll_anim` РїРѕ Р·Р°РІРµСЂС€РµРЅРёРё.
+    /// Тик анимации перед `Renderer::render`. Если анимация активна —
+    /// обновляет `scroll_y` по out-cubic easing и возвращает `true`,
+    /// сигнализируя caller-у запросить ещё один redraw. Сбрасывает
+    /// `scroll_anim` по завершении.
     pub(crate) fn advance_scroll_anim(&mut self) -> bool {
         let Some(anim) = self.scroll_anim else {
             return false;
@@ -516,10 +516,10 @@ impl Lumen {
         }
     }
 
-    /// ADR-016 M1.3: РїРµСЂРµРґР°С‚СЊ Р°РєС‚РёРІРЅСѓСЋ РёРЅРµСЂС†РёСЋ СЂРµРЅРґРµСЂ-РїРѕС‚РѕРєСѓ, С‡С‚РѕР±С‹ РїСЂРµР·РµРЅС‚Р°С†РёСЏ
-    /// РїСЂРѕРґРѕР»Р¶Р°Р»Р°СЃСЊ РЅР° vsync, РґР°Р¶Рµ РµСЃР»Рё UI-РїРѕС‚РѕРє Р·Р°СЃС‚РѕРїРѕСЂРёС‚СЃСЏ (РґРѕР»РіРёР№ JS-С‚РёРє).
-    /// No-op РЅР° РѕРґРЅРѕРїРѕС‚РѕС‡РЅРѕРј Р±СЌРєРµРЅРґРµ (РјРµС‚РѕРґ С‚СЂРµР№С‚Р° РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ РїСѓСЃС‚РѕР№), РїРѕСЌС‚РѕРјСѓ
-    /// РїСЂРё РІС‹РєР»СЋС‡РµРЅРЅРѕРј `LUMEN_RENDER_THREAD` РїРѕРІРµРґРµРЅРёРµ РЅРµ РјРµРЅСЏРµС‚СЃСЏ.
+    /// ADR-016 M1.3: передать активную инерцию рендер-потоку, чтобы презентация
+    /// продолжалась на vsync, даже если UI-поток застопорится (долгий JS-тик).
+    /// No-op на однопоточном бэкенде (метод трейта по умолчанию пустой), поэтому
+    /// при выключенном `LUMEN_RENDER_THREAD` поведение не меняется.
     pub(crate) fn forward_momentum_start(&mut self, vel_y: f32, vel_x: f32) {
         let max_y = self.max_scroll();
         let max_x = self.max_scroll_x();
@@ -528,16 +528,16 @@ impl Lumen {
         }
     }
 
-    /// ADR-016 M1.3: РѕС‚РјРµРЅРёС‚СЊ render-side РёРЅРµСЂС†РёСЋ (РЅРѕРІС‹Р№ Р¶РµСЃС‚, РЅР°РІРёРіР°С†РёСЏ, РєРѕРЅРµС†
-    /// Р°РЅРёРјР°С†РёРё). No-op РЅР° РѕРґРЅРѕРїРѕС‚РѕС‡РЅРѕРј Р±СЌРєРµРЅРґРµ.
+    /// ADR-016 M1.3: отменить render-side инерцию (новый жест, навигация, конец
+    /// анимации). No-op на однопоточном бэкенде.
     pub(crate) fn forward_momentum_stop(&mut self) {
         if let Some(r) = self.renderer.as_mut() {
             r.stop_render_momentum();
         }
     }
 
-    /// РўРёРє momentum-Р°РЅРёРјР°С†РёРё. РћР±РЅРѕРІР»СЏРµС‚ `scroll_y` / `scroll_x` РЅР°РїСЂСЏРјСѓСЋ
-    /// (Р±РµР· smooth-scroll Р°РЅРёРјР°С†РёРё). Р’РѕР·РІСЂР°С‰Р°РµС‚ `true` РїРѕРєР° Р°РЅРёРјР°С†РёСЏ Р¶РёРІР°.
+    /// Тик momentum-анимации. Обновляет `scroll_y` / `scroll_x` напрямую
+    /// (без smooth-scroll анимации). Возвращает `true` пока анимация жива.
     pub(crate) fn advance_momentum(&mut self, now_ms: f64) -> bool {
         let Some(ref mut anim) = self.momentum_anim else {
             return false;
@@ -557,8 +557,8 @@ impl Lumen {
         }
         if done {
             self.momentum_anim = None;
-            // РРЅРµСЂС†РёСЏ РёСЃСЃСЏРєР»Р° вЂ” СЃРЅСЏС‚СЊ РІР»Р°РґРµРЅРёРµ СЃ СЂРµРЅРґРµСЂ-РїРѕС‚РѕРєР° (РѕРЅ С‚Р°РєР¶Рµ
-            // СЃР°РјРѕР·Р°РІРµСЂС€Р°РµС‚СЃСЏ РїРѕ С‚РѕРјСѓ Р¶Рµ РїРѕСЂРѕРіСѓ, РЅРѕ СЏРІРЅР°СЏ РѕС‚РјРµРЅР° РґРµС‚РµСЂРјРёРЅРёСЂСѓРµС‚).
+            // Инерция иссякла — снять владение с рендер-потока (он также
+            // самозавершается по тому же порогу, но явная отмена детерминирует).
             self.forward_momentum_stop();
             false
         } else {

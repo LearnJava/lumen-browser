@@ -31,7 +31,7 @@ fn page_source_from_arg_none_is_empty() {
 
 #[test]
 fn page_source_describe() {
-    assert_eq!(PageSource::Empty.describe(), "(РїСѓСЃС‚Р°СЏ РІРєР»Р°РґРєР°)");
+    assert_eq!(PageSource::Empty.describe(), "(пустая вкладка)");
     assert_eq!(
         PageSource::Url("https://x.test".to_owned()).describe(),
         "https://x.test",
@@ -174,40 +174,40 @@ fn parse_cli_dump_display_list() {
 
 #[test]
 fn parse_cli_dump_flag_without_target_errors() {
-    // --dump-X РІ РѕРґРёРЅРѕС‡РєСѓ вЂ” РЅРµС‚ С†РµР»Рё РґР»СЏ РїСЂРѕРіРѕРЅР° pipeline-Р°.
+    // --dump-X в одиночку — нет цели для прогона pipeline-а.
     let err = parse_cli(&args(&["--dump-layout"])).unwrap_err();
-    assert!(err.contains("С‚СЂРµР±СѓРµС‚"), "got: {err}");
+    assert!(err.contains("требует"), "got: {err}");
 }
 
 #[test]
 fn parse_cli_unknown_flag_alone_errors() {
     let err = parse_cli(&args(&["--unknown"])).unwrap_err();
-    assert!(err.contains("РЅРµРёР·РІРµСЃС‚РЅС‹Р№"), "got: {err}");
+    assert!(err.contains("неизвестный"), "got: {err}");
 }
 
 #[test]
 fn parse_cli_two_args_first_is_target_errors() {
-    // `lumen a.html b.html` вЂ” РјС‹ РЅРµ Р·РЅР°РµРј С‡С‚Рѕ РґРµР»Р°С‚СЊ; СЏРІРЅР°СЏ РѕС€РёР±РєР° Р»СѓС‡С€Рµ,
-    // С‡РµРј В«РѕС‚РєСЂС‹С‚СЊ РїРµСЂРІС‹Р№, РїСЂРѕРёРіРЅРѕСЂРёСЂРѕРІР°С‚СЊ РІС‚РѕСЂРѕР№В».
+    // `lumen a.html b.html` — мы не знаем что делать; явная ошибка лучше,
+    // чем «открыть первый, проигнорировать второй».
     let err = parse_cli(&args(&["a.html", "b.html"])).unwrap_err();
-    assert!(err.contains("РЅРµРёР·РІРµСЃС‚РЅС‹Р№"), "got: {err}");
+    assert!(err.contains("неизвестный"), "got: {err}");
 }
 
 #[test]
 fn parse_cli_dump_flag_then_flag_errors() {
-    // `lumen --dump-layout --dump-source` вЂ” РѕР±Р° С„Р»Р°Рі, target РЅРµС‚.
+    // `lumen --dump-layout --dump-source` — оба флаг, target нет.
     let err =
         parse_cli(&args(&["--dump-layout", "--dump-source"])).unwrap_err();
-    assert!(err.contains("РѕР¶РёРґР°Р»СЃСЏ"), "got: {err}");
+    assert!(err.contains("ожидался"), "got: {err}");
 }
 
 #[test]
 fn parse_cli_too_many_args_errors() {
     let err = parse_cli(&args(&["--dump-layout", "a.html", "b.html"])).unwrap_err();
-    assert!(err.contains("РјРЅРѕРіРѕ"), "got: {err}");
+    assert!(err.contains("много"), "got: {err}");
 }
 
-// в”Ђв”Ђ extract_print_to_pdf в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── extract_print_to_pdf ─────────────────────────────────────────────────
 
 #[test]
 fn extract_print_to_pdf_basic() {
@@ -238,7 +238,7 @@ fn extract_print_to_pdf_combined_with_other_flags() {
     assert_eq!(rest, args(&["b.html"]));
 }
 
-// в”Ђв”Ђ extract_screenshot в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── extract_screenshot ───────────────────────────────────────────────────
 
 #[test]
 fn extract_screenshot_basic() {
@@ -271,7 +271,7 @@ fn extract_screenshot_only_first_flag_consumed() {
     assert_eq!(rest, args(&["--screenshot", "b.png"]));
 }
 
-// в”Ђв”Ђ extract_trace_nav (PERF-1) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── extract_trace_nav (PERF-1) ───────────────────────────────────────────
 
 #[test]
 fn extract_trace_nav_basic() {
@@ -349,13 +349,13 @@ fn encode_images_as_pdf_single_page() {
     };
     let pdf = encode_images_as_pdf(&[img], 2, 2);
     assert!(pdf.starts_with(b"%PDF-"));
-    // PDF objects contain binary + ASCII text вЂ” search raw bytes for key strings.
+    // PDF objects contain binary + ASCII text — search raw bytes for key strings.
     let contains = |needle: &[u8]| pdf.windows(needle.len()).any(|w| w == needle);
     assert!(contains(b"/Page") || contains(b"/MediaBox"),
         "expected /Page or /MediaBox in PDF output (len={})", pdf.len());
 }
 
-// в”Ђв”Ђ Scroll-state helpers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Scroll-state helpers ─────────────────────────────────────────────────
 
 #[test]
 fn clamp_scroll_inside_range() {
@@ -378,7 +378,7 @@ fn clamp_scroll_clamps_overshoot_to_max() {
 
 #[test]
 fn clamp_scroll_zero_max_keeps_at_zero() {
-    // РљРѕРЅС‚РµРЅС‚ РїРѕРјРµС‰Р°РµС‚СЃСЏ РІ viewport вЂ” max_scroll = 0.
+    // Контент помещается в viewport — max_scroll = 0.
     assert_eq!(clamp_scroll(50.0, 0.0), 0.0);
     assert_eq!(clamp_scroll(-5.0, 0.0), 0.0);
 }
@@ -398,8 +398,8 @@ fn cursor_icon_thumb_hover_is_pointer() {
 
 #[test]
 fn cursor_icon_track_above_is_default() {
-    // Track-click С‚РѕР¶Рµ clickable (page-jump), РЅРѕ cursor-change РЅР° РїСѓСЃС‚РѕРј
-    // track-Рµ Р±С‹Р» Р±С‹ С€СѓРјРЅС‹Рј вЂ” СЃС‚Р°РЅРґР°СЂС‚ РІСЃРµС… Р±СЂР°СѓР·РµСЂРѕРІ: С‚РѕР»СЊРєРѕ thumb.
+    // Track-click тоже clickable (page-jump), но cursor-change на пустом
+    // track-е был бы шумным — стандарт всех браузеров: только thumb.
     assert_eq!(
         cursor_icon_for_hover(scrollbar::TrackClick::Above, false),
         CursorIcon::Default
@@ -424,9 +424,9 @@ fn cursor_icon_off_scrollbar_is_default() {
 
 #[test]
 fn cursor_icon_drag_active_overrides_hover() {
-    // Р’Рѕ РІСЂРµРјСЏ drag-Р° cursor РґРѕР»Р¶РµРЅ В«РїСЂРёР»РёРїРЅСѓС‚СЊВ» Рє Pointer РЅРµР·Р°РІРёСЃРёРјРѕ
-    // РѕС‚ С‚РµРєСѓС‰РµР№ РїРѕР·РёС†РёРё РєСѓСЂСЃРѕСЂР° вЂ” winit С€Р»С‘С‚ CursorMoved Р·Р° РїСЂРµРґРµР»Р°РјРё
-    // РѕРєРЅР°, hover-РєР»Р°СЃСЃРёС„РёРєР°С‚РѕСЂ С‚Р°Рј РІРµСЂРЅС‘С‚ None, РЅРѕ drag-С„Р»Р°Рі РїРѕР±РµР¶РґР°РµС‚.
+    // Во время drag-а cursor должен «прилипнуть» к Pointer независимо
+    // от текущей позиции курсора — winit шлёт CursorMoved за пределами
+    // окна, hover-классификатор там вернёт None, но drag-флаг побеждает.
     assert_eq!(
         cursor_icon_for_hover(scrollbar::TrackClick::None, true),
         CursorIcon::Pointer
@@ -439,8 +439,8 @@ fn cursor_icon_drag_active_overrides_hover() {
 
 #[test]
 fn page_step_is_below_full_viewport() {
-    // 90% РѕС‚ viewport-Р° вЂ” РѕСЃС‚Р°РІР»СЏРµС‚ overlap, С‡С‚РѕР±С‹ РїСЂРё PageDown РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ
-    // РЅРµ С‚РµСЂСЏР» РїРѕСЃР»РµРґРЅСЋСЋ СЃС‚СЂРѕРєСѓ РёР· РІРёРґР°.
+    // 90% от viewport-а — оставляет overlap, чтобы при PageDown пользователь
+    // не терял последнюю строку из вида.
     assert!((page_step(720.0) - 648.0).abs() < 0.01);
     assert!(page_step(720.0) < 720.0);
 }
@@ -484,7 +484,7 @@ fn content_height_ignores_pop_commands() {
     assert_eq!(content_height_of(&dl), 0.0);
 }
 
-// в”Ђв”Ђ content_width_of в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── content_width_of ──────────────────────────────────────────────────────
 
 #[test]
 fn content_width_empty_list_is_zero() {
@@ -525,7 +525,7 @@ fn content_width_ignores_pop_commands() {
     assert_eq!(content_width_of(&dl), 0.0);
 }
 
-// в”Ђв”Ђ Scroll-keybindings в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Scroll-keybindings ────────────────────────────────────────────────────
 
 #[test]
 fn keybinding_arrow_down_scrolls() {
@@ -553,8 +553,8 @@ fn keybinding_arrow_right_left_scroll_horizontal() {
 
 #[test]
 fn keybinding_arrow_with_modifier_is_none() {
-    // Ctrl+СЃС‚СЂРµР»РєР° РЅРµ РЅР°С€Р° вЂ” РѕСЃС‚Р°РІР»РµРЅРѕ РґР»СЏ РІРѕР·РјРѕР¶РЅРѕР№ РёРЅС‚РµРіСЂР°С†РёРё СЃ
-    // word-wise navigation РІ Р±СѓРґСѓС‰РµРј (РєРѕРіРґР° РїРѕСЏРІРёС‚СЃСЏ omnibox).
+    // Ctrl+стрелка не наша — оставлено для возможной интеграции с
+    // word-wise navigation в будущем (когда появится omnibox).
     assert_eq!(
         keybinding_for(KeyCode::ArrowDown, ModifiersState::CONTROL),
         None,
@@ -597,7 +597,7 @@ fn keybinding_home_end_jump() {
     );
 }
 
-// в”Ђв”Ђ script execution gate в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── script execution gate ────────────────────────────────────────────────
 
 #[test]
 fn collect_inline_scripts_finds_inline() {

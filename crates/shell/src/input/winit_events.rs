@@ -13,21 +13,21 @@ use winit::window::CursorIcon;
 
 use crate::scrollbar;
 
-/// Р”РѕСЃС‚Р°С‚СЊ С‡РёСЃС‚С‹Р№ `ModifiersState` РёР· РѕР±С‘СЂС‚РєРё `Modifiers` (winit 0.30 СЂР°Р·Р»РёС‡Р°РµС‚
-/// "physical state" вЂ” Ctrl РєР°Рє РєР»Р°РІРёС€Р° вЂ” Рё "lock state"; РґР»СЏ shortcuts РЅР°Рј
-/// РЅСѓР¶РЅРѕ С„РёР·РёС‡РµСЃРєРѕРµ СЃРѕСЃС‚РѕСЏРЅРёРµ).
+/// Достать чистый `ModifiersState` из обёртки `Modifiers` (winit 0.30 различает
+/// "physical state" — Ctrl как клавиша — и "lock state"; для shortcuts нам
+/// нужно физическое состояние).
 pub(crate) fn winit_modifiers_state(mods: &Modifiers) -> ModifiersState {
     mods.state()
 }
 
-/// Pure-fn: РєР°РєРѕР№ `CursorIcon` РїРѕРєР°Р·Р°С‚СЊ РїРѕ СЂРµР·СѓР»СЊС‚Р°С‚Сѓ hit-С‚РµСЃС‚Р° scrollbar-Р°
-/// Рё С„Р»Р°РіСѓ Р°РєС‚РёРІРЅРѕРіРѕ drag-Р°. `Pointer` СЃРёРіРЅР°Р»РёС‚ В«Р·РґРµСЃСЊ РёРЅС‚РµСЂР°РєС‚РёРІВ»:
-/// - drag Р°РєС‚РёРІРµРЅ в†’ `Pointer` РЅРµР·Р°РІРёСЃРёРјРѕ РѕС‚ С‚РµРєСѓС‰РµР№ С‚РѕС‡РєРё (РІРёРЅРёС‚ С€Р»С‘С‚
-///   CursorMoved Р·Р° РїСЂРµРґРµР»Р°РјРё РѕРєРЅР° С‚РѕР¶Рµ, Рё cursor РґРѕР»Р¶РµРЅ В«РїСЂРёР»РёРїРЅСѓС‚СЊВ»);
-/// - hover thumb в†’ `Pointer`;
-/// - hover track РІС‹С€Рµ/РЅРёР¶Рµ thumb-Р° РёР»Рё РєР»РёРє РјРёРјРѕ в†’ `Default` (track-click
-///   С‚РѕР¶Рµ clickable, РЅРѕ cursor-change РЅР° РїСѓСЃС‚РѕРј track-Рµ Р±С‹Р» Р±С‹ С€СѓРјРЅС‹Рј вЂ”
-///   СЃС‚Р°РЅРґР°СЂС‚ РІСЃРµС… Р±СЂР°СѓР·РµСЂРѕРІ).
+/// Pure-fn: какой `CursorIcon` показать по результату hit-теста scrollbar-а
+/// и флагу активного drag-а. `Pointer` сигналит «здесь интерактив»:
+/// - drag активен → `Pointer` независимо от текущей точки (винит шлёт
+///   CursorMoved за пределами окна тоже, и cursor должен «прилипнуть»);
+/// - hover thumb → `Pointer`;
+/// - hover track выше/ниже thumb-а или клик мимо → `Default` (track-click
+///   тоже clickable, но cursor-change на пустом track-е был бы шумным —
+///   стандарт всех браузеров).
 pub(crate) fn cursor_icon_for_hover(hover: scrollbar::TrackClick, drag_active: bool) -> CursorIcon {
     if drag_active {
         return CursorIcon::Pointer;
@@ -38,9 +38,9 @@ pub(crate) fn cursor_icon_for_hover(hover: scrollbar::TrackClick, drag_active: b
     }
 }
 
-/// РљРѕРЅРІРµСЂС‚РёСЂСѓРµС‚ CSS `cursor` keyword РІ winit `CursorIcon`.
-/// `Auto` в†’ `Default` (UA-СЂРµС€РµРЅРёРµ РґР»СЏ Phase 0); `None` в†’ `Default` (winit РЅРµ
-/// РїРѕРґРґРµСЂР¶РёРІР°РµС‚ В«СЃРєСЂС‹С‚С‹Р№ РєСѓСЂСЃРѕСЂВ» С‡РµСЂРµР· CursorIcon вЂ” РЅСѓР¶РµРЅ РѕС‚РґРµР»СЊРЅС‹Р№ API).
+/// Конвертирует CSS `cursor` keyword в winit `CursorIcon`.
+/// `Auto` → `Default` (UA-решение для Phase 0); `None` → `Default` (winit не
+/// поддерживает «скрытый курсор» через CursorIcon — нужен отдельный API).
 pub(crate) fn css_cursor_to_winit(c: CssCursor) -> CursorIcon {
     match c {
         CssCursor::Auto | CssCursor::Default => CursorIcon::Default,

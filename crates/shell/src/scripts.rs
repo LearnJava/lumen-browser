@@ -17,13 +17,13 @@ pub(crate) enum ScriptSource {
     /// `<script>` element itself, which backs `document.currentScript` while the
     /// body runs (BUG-486).
     Inline(NodeId, String),
-    /// External `<script src="...">` вЂ” raw `src` attribute, resolved relative
+    /// External `<script src="...">` — raw `src` attribute, resolved relative
     /// to the document base, plus the element's id (see [`ScriptSource::Inline`]).
     External(NodeId, String),
 }
 
 /// True for `type` values that designate an executable classic script
-/// (HTML LS В§2.1.5 "JavaScript MIME type"). An absent/empty `type` is classic.
+/// (HTML LS §2.1.5 "JavaScript MIME type"). An absent/empty `type` is classic.
 /// Everything else (`module`, `importmap`, `application/json`,
 /// `application/ld+json`, `speculationrules`, templates) is data, not code.
 pub(crate) fn is_classic_script_type(t: Option<&str>) -> bool {
@@ -56,10 +56,10 @@ pub(crate) fn is_classic_script_type(t: Option<&str>) -> bool {
 }
 
 /// Walk the DOM in document order, classifying `<script>` elements into
-/// `classic` and `module` execution lists (HTML LS В§8.1.3.1). Unlike
+/// `classic` and `module` execution lists (HTML LS §8.1.3.1). Unlike
 /// [`collect_inline_scripts`], external `<script src>` are recorded as
 /// [`ScriptSource::External`] so the caller can fetch and execute their bodies
-/// (BUG-164). `defer`/`async` are not modelled separately вЂ” the shell runs
+/// (BUG-164). `defer`/`async` are not modelled separately — the shell runs
 /// every script synchronously in document order, which matches the eventual
 /// classic-then-module execution in [`run_scripts_with_dom`].
 pub(crate) fn collect_scripts_ordered(
@@ -78,17 +78,17 @@ pub(crate) fn collect_scripts_ordered(
         if !is_module && !is_classic_script_type(script_type) {
             return;
         }
-        // `nomodule` (HTML LS В§4.12.1): РєР»Р°СЃСЃРёС‡РµСЃРєРёР№ СЃРєСЂРёРїС‚ СЃ СЌС‚РёРј Р°С‚СЂРёР±СѓС‚РѕРј вЂ”
-        // Р·Р°РїР°СЃРЅР°СЏ СЃР±РѕСЂРєР° РґР»СЏ РґРІРёР¶РєР° Р‘Р•Р— РјРѕРґСѓР»РµР№, Рё РґРІРёР¶РѕРє СЃ РјРѕРґСѓР»СЏРјРё РѕР±СЏР·Р°РЅ РµС‘
-        // РїСЂРѕРїСѓСЃС‚РёС‚СЊ. РџРѕРєР° РЅРµ РїСЂРѕРїСѓСЃРєР°Р»Рё, СЃР°Р№С‚ СЃ РїР°СЂРѕР№ module/nomodule РїРѕР»СѓС‡Р°Р»
-        // РѕР±Рµ СЃР±РѕСЂРєРё СЂР°Р·РѕРј: legacy-Р±Р°РЅРґР» Рё СЃРѕРІСЂРµРјРµРЅРЅС‹Р№ РјРѕРЅС‚РёСЂРѕРІР°Р»РёСЃСЊ РІ РѕРґРёРЅ Рё
-        // С‚РѕС‚ Р¶Рµ РєРѕСЂРµРЅСЊ Рё РіР°СЃРёР»Рё РґСЂСѓРі РґСЂСѓРіР° (Р¶РёРІРѕР№ РїСЂРёРјРµСЂ вЂ” С„РѕСЂРјР° РІС…РѕРґР°
+        // `nomodule` (HTML LS §4.12.1): классический скрипт с этим атрибутом —
+        // запасная сборка для движка БЕЗ модулей, и движок с модулями обязан её
+        // пропустить. Пока не пропускали, сайт с парой module/nomodule получал
+        // обе сборки разом: legacy-бандл и современный монтировались в один и
+        // тот же корень и гасили друг друга (живой пример — форма входа
         // id.tbank.ru, 2026-08-17).
         if !is_module && node.get_attr("nomodule").is_some() {
             return;
         }
         let target = if is_module { modules } else { classic };
-        // `src` wins over inline body (HTML LS В§4.12.1 вЂ” inline ignored if set).
+        // `src` wins over inline body (HTML LS §4.12.1 — inline ignored if set).
         if let Some(src) = node.get_attr("src") {
             let src = src.trim();
             if !src.is_empty() {
@@ -112,53 +112,53 @@ pub(crate) fn collect_scripts_ordered(
     }
 }
 
-/// РЎРєСЂРёРїС‚, РіРѕС‚РѕРІС‹Р№ Рє РёСЃРїРѕР»РЅРµРЅРёСЋ: С‚РµР»Рѕ РїР»СЋСЃ СЃРѕР±СЃС‚РІРµРЅРЅС‹Р№ Р°РґСЂРµСЃ РІРЅРµС€РЅРµРіРѕ С„Р°Р№Р»Р°.
+/// Скрипт, готовый к исполнению: тело плюс собственный адрес внешнего файла.
 ///
-/// РђРґСЂРµСЃ РЅСѓР¶РµРЅ С‚РѕР»СЊРєРѕ РјРѕРґСѓР»СЏРј вЂ” РѕРЅ СЃР»СѓР¶РёС‚ Р±Р°Р·РѕР№ РёС… РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅС‹С… РёРјРїРѕСЂС‚РѕРІ
-/// (`./chunk.js` Р±Р°РЅРґР»Р° СЃ CDN РѕР±СЏР·Р°РЅ СЂРµР·РѕР»РІРёС‚СЊСЃСЏ РѕС‚ CDN, Р° РЅРµ РѕС‚ РґРѕРєСѓРјРµРЅС‚Р°).
-/// РЈ inline-СЃРєСЂРёРїС‚РѕРІ РµРіРѕ РЅРµС‚.
+/// Адрес нужен только модулям — он служит базой их относительных импортов
+/// (`./chunk.js` бандла с CDN обязан резолвиться от CDN, а не от документа).
+/// У inline-скриптов его нет.
 pub(crate) struct ResolvedScript {
-    /// РЈР·РµР» `<script>`, РёР· РєРѕС‚РѕСЂРѕРіРѕ С‚РµР»Рѕ РІР·СЏС‚Рѕ (РґР»СЏ `document.currentScript`).
+    /// Узел `<script>`, из которого тело взято (для `document.currentScript`).
     pub(crate) node: NodeId,
-    /// РСЃС…РѕРґРЅС‹Р№ С‚РµРєСЃС‚ СЃРєСЂРёРїС‚Р°.
+    /// Исходный текст скрипта.
     pub(crate) source: String,
-    /// РђР±СЃРѕР»СЋС‚РЅС‹Р№ URL РІРЅРµС€РЅРµРіРѕ `<script src>`; `None` Сѓ inline Рё `file://`.
+    /// Абсолютный URL внешнего `<script src>`; `None` у inline и `file://`.
     pub(crate) url: Option<String>,
-    /// РСЃС…РѕРґ Р·Р°РіСЂСѓР·РєРё РІРЅРµС€РЅРµРіРѕ С„Р°Р№Р»Р°: `Some(true)` вЂ” С‚РµР»Рѕ РїРѕР»СѓС‡РµРЅРѕ,
-    /// `Some(false)` вЂ” РЅРµ РїРѕР»СѓС‡РµРЅРѕ (РІ `source` РїСѓСЃС‚Рѕ, РёСЃРїРѕР»РЅСЏС‚СЊ РЅРµС‡РµРіРѕ),
-    /// `None` вЂ” СЃРєСЂРёРїС‚ РёРЅР»Р°Р№РЅРѕРІС‹Р№, РІРЅРµС€РЅРµРіРѕ С„Р°Р№Р»Р° Сѓ РЅРµРіРѕ РЅРµС‚.
+    /// Исход загрузки внешнего файла: `Some(true)` — тело получено,
+    /// `Some(false)` — не получено (в `source` пусто, исполнять нечего),
+    /// `None` — скрипт инлайновый, внешнего файла у него нет.
     ///
-    /// BUG-804: HTML LS В§4.12.1 С‚СЂРµР±СѓРµС‚ РІС‹СЃС‚СЂРµР»РёС‚СЊ `load` РЅР° СЌР»РµРјРµРЅС‚Рµ РїРѕСЃР»Рµ
-    /// РёСЃРїРѕР»РЅРµРЅРёСЏ РІРЅРµС€РЅРµРіРѕ СЃРєСЂРёРїС‚Р° Рё `error` вЂ” РµСЃР»Рё С„Р°Р№Р» РЅРµ РїСЂРёС€С‘Р», Рё РґРµР»Р°РµС‚
-    /// СЌС‚Рѕ **РЅРµР·Р°РІРёСЃРёРјРѕ РѕС‚ С‚РѕРіРѕ, РєС‚Рѕ РІСЃС‚Р°РІРёР» СЌР»РµРјРµРЅС‚**. РџР°СЂСЃРµСЂРЅС‹Р№ `<script>`
-    /// РЅРµ РїСЂРѕС…РѕРґРёС‚ С‡РµСЂРµР· JS-С…СѓРє РІСЃС‚Р°РІРєРё (`_lumen_resource_track` Р·РЅР°РµС‚ С‚РѕР»СЊРєРѕ
-    /// РѕР± СЌР»РµРјРµРЅС‚Р°С… РёР· `createElement`), РїРѕСЌС‚РѕРјСѓ РёСЃС…РѕРґ РµРіРѕ Р·Р°РіСЂСѓР·РєРё РёР·РІРµСЃС‚РµРЅ
-    /// С‚РѕР»СЊРєРѕ Р·РґРµСЃСЊ вЂ” Рё РїРµСЂРµРґР°С‘С‚СЃСЏ РЅР° JS-СЃС‚РѕСЂРѕРЅСѓ РїСЂСЏРјРѕ РІ С†РёРєР»Рµ РёСЃРїРѕР»РЅРµРЅРёСЏ,
-    /// РіРґРµ РїРѕСЂСЏРґРѕРє В«РІС‹РїРѕР»РЅРёР»Рё С‚РµР»Рѕ в†’ РІС‹СЃС‚СЂРµР»РёР»Рё `load`В» РїРѕР»СѓС‡Р°РµС‚СЃСЏ РґР°СЂРѕРј.
-    /// `None` РЅРµ РґРёСЃРїР°С‚С‡РёС‚ РЅРёС‡РµРіРѕ: Сѓ РёРЅР»Р°Р№РЅРѕРІРѕРіРѕ СЃРєСЂРёРїС‚Р° В«from an external
-    /// fileВ» Р»РѕР¶РЅРѕ, Рё СЃРѕР±С‹С‚РёСЏ РїРѕ СЃРїРµС†РёС„РёРєР°С†РёРё РЅРµС‚ РІРѕРІСЃРµ.
+    /// BUG-804: HTML LS §4.12.1 требует выстрелить `load` на элементе после
+    /// исполнения внешнего скрипта и `error` — если файл не пришёл, и делает
+    /// это **независимо от того, кто вставил элемент**. Парсерный `<script>`
+    /// не проходит через JS-хук вставки (`_lumen_resource_track` знает только
+    /// об элементах из `createElement`), поэтому исход его загрузки известен
+    /// только здесь — и передаётся на JS-сторону прямо в цикле исполнения,
+    /// где порядок «выполнили тело → выстрелили `load`» получается даром.
+    /// `None` не диспатчит ничего: у инлайнового скрипта «from an external
+    /// file» ложно, и события по спецификации нет вовсе.
     pub(crate) external_ok: Option<bool>,
 }
 
 impl ResolvedScript {
-    /// Р’РЅРµС€РЅРёР№ `<script src>`, С‚РµР»Рѕ РєРѕС‚РѕСЂРѕРіРѕ РїРѕР»СѓС‡РёС‚СЊ РЅРµ СѓРґР°Р»РѕСЃСЊ.
+    /// Внешний `<script src>`, тело которого получить не удалось.
     ///
-    /// РћСЃС‚Р°С‘С‚СЃСЏ РІ СЃРїРёСЃРєРµ СЂРѕРІРЅРѕ СЂР°РґРё СЃРІРѕРµРіРѕ `error` (BUG-804): С‚РµР»Р° РЅРµС‚, С‚Р°Рє С‡С‚Рѕ
-    /// С†РёРєР» РёСЃРїРѕР»РЅРµРЅРёСЏ РµРіРѕ РїСЂРѕРїСѓСЃРєР°РµС‚, РЅРѕ СЌР»РµРјРµРЅС‚ РїРѕ HTML LS В§4.12.1 РѕР±СЏР·Р°РЅ
-    /// СЃРѕРѕР±С‰РёС‚СЊ СЃС‚СЂР°РЅРёС†Рµ РѕР± РѕС‚РєР°Р·Рµ. Р—Р°РѕРґРЅРѕ СѓР·РµР» РѕСЃС‚Р°С‘С‚СЃСЏ РіСЂР°РЅРёС†РµР№ РѕС‚СЂРµР·РєР° РІ
-    /// [`ParserInsertLog`] вЂ” РЅР°СЃС‚РѕСЏС‰РёР№ РїР°СЂСЃРµСЂ С‚РѕР¶Рµ РІСЃС‚Р°РІРёР» РµРіРѕ РІ РґРµСЂРµРІРѕ.
+    /// Остаётся в списке ровно ради своего `error` (BUG-804): тела нет, так что
+    /// цикл исполнения его пропускает, но элемент по HTML LS §4.12.1 обязан
+    /// сообщить странице об отказе. Заодно узел остаётся границей отрезка в
+    /// [`ParserInsertLog`] — настоящий парсер тоже вставил его в дерево.
     fn failed(node: NodeId) -> Self {
         Self { node, source: String::new(), url: None, external_ok: Some(false) }
     }
 }
 
-/// Р’С‹СЃС‚СЂРµР»РёС‚СЊ `load`/`error` РЅР° СЌР»РµРјРµРЅС‚Рµ `<script>`, РєРѕС‚РѕСЂС‹Р№ РІСЃС‚Р°РІРёР» РїР°СЂСЃРµСЂ.
+/// Выстрелить `load`/`error` на элементе `<script>`, который вставил парсер.
 ///
-/// Р”РёСЃРїР°С‚С‡ СЃРёРЅС…СЂРѕРЅРЅС‹Р№, Р° РЅРµ Р·Р°РґР°С‡РµР№: В§4.12.1 СЃС‚СЂРµР»СЏРµС‚ `load` СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ С‚РѕРіРѕ,
-/// РєР°Рє С‚РµР»Рѕ РѕС‚СЂР°Р±РѕС‚Р°Р»Рѕ, С‚Рѕ РµСЃС‚СЊ Р”Рћ СЃР»РµРґСѓСЋС‰РµРіРѕ СЃРєСЂРёРїС‚Р° РґРѕРєСѓРјРµРЅС‚Р° вЂ” СЃС‚СЂР°РЅРёС†Р°,
-/// РєРѕС‚РѕСЂР°СЏ РІ СЃР»РµРґСѓСЋС‰РµРј Р¶Рµ `<script>` С‡РёС‚Р°РµС‚ РІС‹СЃС‚Р°РІР»РµРЅРЅС‹Р№ РѕР±СЂР°Р±РѕС‚С‡РёРєРѕРј С„Р»Р°Рі,
-/// РѕР±СЏР·Р°РЅР° РµРіРѕ СѓРІРёРґРµС‚СЊ. РћС‚Р»РѕР¶РёС‚СЊ СЃРѕР±С‹С‚РёРµ Р·Р°РґР°С‡РµР№ Р·РЅР°С‡РёР»Рѕ Р±С‹ РґРѕСЃС‚Р°РІРёС‚СЊ РµРіРѕ
-/// РїРѕСЃР»Рµ РІСЃРµРіРѕ СЂР°Р·Р±РѕСЂР°, С‡С‚Рѕ Р»РѕРјР°РµС‚ СЌС‚РѕС‚ РїРѕСЂСЏРґРѕРє.
+/// Диспатч синхронный, а не задачей: §4.12.1 стреляет `load` сразу после того,
+/// как тело отработало, то есть ДО следующего скрипта документа — страница,
+/// которая в следующем же `<script>` читает выставленный обработчиком флаг,
+/// обязана его увидеть. Отложить событие задачей значило бы доставить его
+/// после всего разбора, что ломает этот порядок.
 #[cfg(feature = "v8")]
 pub(crate) fn fire_parser_script_event(
     rt: &lumen_js::v8_runtime::V8JsRuntime,
@@ -171,42 +171,42 @@ pub(crate) fn fire_parser_script_event(
     let _ = rt.eval(&format!("_lumen_resource_fire({}, '{kind}');", node.index()));
 }
 
-/// Р–СѓСЂРЅР°Р» РІСЃС‚Р°РІРѕРє, РєРѕС‚РѕСЂС‹Рµ СЃРґРµР»Р°Р» РїР°СЂСЃРµСЂ, вЂ” РґР»СЏ `MutationObserver` (BUG-827).
+/// Журнал вставок, которые сделал парсер, — для `MutationObserver` (BUG-827).
 ///
-/// РЁРµР»Р» СЂР°Р·Р±РёСЂР°РµС‚ РґРѕРєСѓРјРµРЅС‚ С†РµР»РёРєРѕРј Рё С‚РѕР»СЊРєРѕ РїРѕС‚РѕРј РёСЃРїРѕР»РЅСЏРµС‚ СЃРєСЂРёРїС‚С‹, РїРѕСЌС‚РѕРјСѓ Рє
-/// РјРѕРјРµРЅС‚Сѓ, РєРѕРіРґР° СЃС‚СЂР°РЅРёС‡РЅС‹Р№ `new MutationObserver(вЂ¦).observe(вЂ¦)` РІРѕРѕР±С‰Рµ РјРѕР¶РµС‚
-/// Р±С‹С‚СЊ РІС‹РїРѕР»РЅРµРЅ, РґРµСЂРµРІРѕ СѓР¶Рµ РїРѕСЃС‚СЂРѕРµРЅРѕ Рё В«РІСЃС‚Р°РІР»СЏС‚СЊВ» РЅРµС‡РµРіРѕ вЂ” Р·Р°РїРёСЃРµР№ Рѕ
-/// РїР°СЂСЃРµСЂРЅС‹С… СѓР·Р»Р°С… РЅРµ РІРѕР·РЅРёРєР°Р»Рѕ РЅРё РѕРґРЅРѕР№, С…РѕС‚СЏ DOM В§4.3 РІРµС€Р°РµС‚ РїРѕСЃС‚Р°РЅРѕРІРєСѓ
-/// Р·Р°РїРёСЃРё РЅР° СЃР°Рј С€Р°Рі В«insert a nodeВ», Р° РЅРµ РЅР° РєРѕРЅРєСЂРµС‚РЅС‹Р№ API: СѓР·РµР», РЅР°РїРёСЃР°РЅРЅС‹Р№
-/// РїР°СЂСЃРµСЂРѕРј, РѕР±СЏР·Р°РЅ РґР°С‚СЊ `childList`-Р·Р°РїРёСЃСЊ СЂРѕРІРЅРѕ С‚Р°Рє Р¶Рµ, РєР°Рє `appendChild`.
+/// Шелл разбирает документ целиком и только потом исполняет скрипты, поэтому к
+/// моменту, когда страничный `new MutationObserver(…).observe(…)` вообще может
+/// быть выполнен, дерево уже построено и «вставлять» нечего — записей о
+/// парсерных узлах не возникало ни одной, хотя DOM §4.3 вешает постановку
+/// записи на сам шаг «insert a node», а не на конкретный API: узел, написанный
+/// парсером, обязан дать `childList`-запись ровно так же, как `appendChild`.
 ///
-/// Р–СѓСЂРЅР°Р» РІРѕСЃСЃС‚Р°РЅР°РІР»РёРІР°РµС‚ С‚РѕС‚ РїРѕСЂСЏРґРѕРє, РІ РєРѕС‚РѕСЂРѕРј РїРѕС‚РѕРєРѕРІС‹Р№ РїР°СЂСЃРµСЂ РІСЃС‚Р°РІР»СЏР» Р±С‹
-/// СѓР·Р»С‹ (РѕР±С…РѕРґ РґРµСЂРµРІР° РІ document order), Рё СЂРµР¶РµС‚ РµРіРѕ РіСЂР°РЅРёС†Р°РјРё РёСЃРїРѕР»РЅСЏРµРјС‹С…
-/// РєР»Р°СЃСЃРёС‡РµСЃРєРёС… `<script>`: РїРµСЂРµРґ СЃРєСЂРёРїС‚РѕРј K РЅР° JS-СЃС‚РѕСЂРѕРЅСѓ СѓС…РѕРґРёС‚ РІСЃС‘, С‡С‚Рѕ
-/// РЅР°СЃС‚РѕСЏС‰РёР№ РїР°СЂСЃРµСЂ РІСЃС‚Р°РІРёР» Р±С‹ РґРѕ РЅРµРіРѕ, РІРєР»СЋС‡Р°СЏ СЃР°Рј СЌР»РµРјРµРЅС‚ `<script>` Рё РµРіРѕ
-/// С‚РµРєСЃС‚. РћСЃС‚Р°С‚РѕРє РґРѕРєСѓРјРµРЅС‚Р° СѓС…РѕРґРёС‚ РїРѕСЃР»Рµ РїРѕСЃР»РµРґРЅРµРіРѕ РєР»Р°СЃСЃРёС‡РµСЃРєРѕРіРѕ СЃРєСЂРёРїС‚Р° вЂ”
-/// РѕС‚Р»РѕР¶РµРЅРЅС‹Рµ РјРѕРґСѓР»Рё РїРѕ HTML LS В§8.1.3.1 РёСЃРїРѕР»РЅСЏСЋС‚СЃСЏ СѓР¶Рµ РїРѕСЃР»Рµ СЂР°Р·Р±РѕСЂР°.
+/// Журнал восстанавливает тот порядок, в котором потоковый парсер вставлял бы
+/// узлы (обход дерева в document order), и режет его границами исполняемых
+/// классических `<script>`: перед скриптом K на JS-сторону уходит всё, что
+/// настоящий парсер вставил бы до него, включая сам элемент `<script>` и его
+/// текст. Остаток документа уходит после последнего классического скрипта —
+/// отложенные модули по HTML LS §8.1.3.1 исполняются уже после разбора.
 pub(crate) struct ParserInsertLog {
-    /// `(СЂРѕРґРёС‚РµР»СЊ, РІСЃС‚Р°РІР»РµРЅРЅС‹Р№ СЂРµР±С‘РЅРѕРє)` РІ РїРѕСЂСЏРґРєРµ РґРµСЂРµРІР°.
+    /// `(родитель, вставленный ребёнок)` в порядке дерева.
     pub(crate) pairs: Vec<(usize, usize)>,
-    /// Р”Р»СЏ РєР°Р¶РґРѕРіРѕ РёСЃРїРѕР»РЅСЏРµРјРѕРіРѕ `<script>` вЂ” РєРѕРЅРµС† РµРіРѕ РїРѕРґРґРµСЂРµРІР° РІ `pairs`.
+    /// Для каждого исполняемого `<script>` — конец его поддерева в `pairs`.
     pub(crate) script_end: HashMap<NodeId, usize>,
-    /// РЎРєРѕР»СЊРєРѕ РїР°СЂ СѓР¶Рµ РѕС‚РґР°РЅРѕ (РёР»Рё РїСЂРѕРїСѓС‰РµРЅРѕ) вЂ” РіСЂР°РЅРёС†Р° СЃР»РµРґСѓСЋС‰РµРіРѕ РѕС‚СЂРµР·РєР°.
+    /// Сколько пар уже отдано (или пропущено) — граница следующего отрезка.
     pub(crate) cursor: usize,
 }
 
 impl ParserInsertLog {
-    /// РћР±РѕР№С‚Рё РґРµСЂРµРІРѕ `doc` Рё Р·Р°РїРѕРјРЅРёС‚СЊ РіСЂР°РЅРёС†С‹ РїРѕРґРґРµСЂРµРІСЊРµРІ СѓР·Р»РѕРІ `scripts`.
+    /// Обойти дерево `doc` и запомнить границы поддеревьев узлов `scripts`.
     pub(crate) fn build(doc: &Document, scripts: &[ResolvedScript]) -> Self {
         let mut log = Self { pairs: Vec::new(), script_end: HashMap::new(), cursor: 0 };
-        // Р‘РµР· РєР»Р°СЃСЃРёС‡РµСЃРєРёС… СЃРєСЂРёРїС‚РѕРІ РЅР°Р±Р»СЋРґР°С‚РµР»СЏ СЃС‚Р°РІРёС‚СЊ РЅРµРєРѕРјСѓ: РјРѕРґСѓР»Рё РїРѕ
-        // В§8.1.3.1 РѕС‚Р»РѕР¶РµРЅС‹ Рё РёСЃРїРѕР»РЅСЏСЋС‚СЃСЏ, РєРѕРіРґР° РїР°СЂСЃРµСЂ СѓР¶Рµ РІСЃС‘ РІСЃС‚Р°РІРёР».
+        // Без классических скриптов наблюдателя ставить некому: модули по
+        // §8.1.3.1 отложены и исполняются, когда парсер уже всё вставил.
         if scripts.is_empty() {
             return log;
         }
         let boundaries: std::collections::HashSet<NodeId> =
             scripts.iter().map(|s| s.node).collect();
-        // РЎР°Рј РєРѕСЂРµРЅСЊ РґРѕРєСѓРјРµРЅС‚Р° РЅРёРѕС‚РєСѓРґР° РЅРµ РІСЃС‚Р°РІР»СЏРµС‚СЃСЏ вЂ” РЅР°С‡РёРЅР°РµРј СЃ РµРіРѕ РґРµС‚РµР№.
+        // Сам корень документа ниоткуда не вставляется — начинаем с его детей.
         log.walk(doc, doc.root(), &boundaries);
         log
     }
@@ -221,7 +221,7 @@ impl ParserInsertLog {
         }
     }
 
-    /// Р“СЂР°РЅРёС†Р° РѕС‚СЂРµР·РєР°: РєРѕРЅРµС† РїРѕРґРґРµСЂРµРІР° `upto` Р»РёР±Рѕ РІРµСЃСЊ РѕСЃС‚Р°С‚РѕРє РїСЂРё `None`.
+    /// Граница отрезка: конец поддерева `upto` либо весь остаток при `None`.
     pub(crate) fn segment_end(&self, upto: Option<NodeId>) -> usize {
         match upto {
             Some(n) => self.script_end.get(&n).copied().unwrap_or(self.pairs.len()),
@@ -230,11 +230,11 @@ impl ParserInsertLog {
     }
 }
 
-/// РћС‚РґР°С‚СЊ JS-СЃС‚РѕСЂРѕРЅРµ РїР°СЂСЃРµСЂРЅС‹Рµ РІСЃС‚Р°РІРєРё РІРїР»РѕС‚СЊ РґРѕ `upto` (СЃРј. [`ParserInsertLog`]).
+/// Отдать JS-стороне парсерные вставки вплоть до `upto` (см. [`ParserInsertLog`]).
 ///
-/// РќР°Р±Р»СЋРґР°С‚РµР»РµР№ РЅРµС‚ вЂ” СЃС‚СЂРѕРєСѓ РЅРµ СЃС‚СЂРѕРёРј РІРѕРІСЃРµ: Р·Р°РїРёСЃСЊ, РїРѕСЃС‚Р°РІР»РµРЅРЅР°СЏ РґРѕ
-/// `observe()`, РІСЃС‘ СЂР°РІРЅРѕ РЅРёРєРѕРјСѓ РЅРµ РґРѕСЃС‚Р°РІР»СЏРµС‚СЃСЏ, Р° СЃРµСЂРёР°Р»РёР·Р°С†РёСЏ РІСЃС‚Р°РІРѕРє С†РµР»РѕРіРѕ
-/// РґРѕРєСѓРјРµРЅС‚Р° РЅРµ Р±РµСЃРїР»Р°С‚РЅР°. РљСѓСЂСЃРѕСЂ РґРІРёРіР°РµС‚СЃСЏ РІ РѕР±РѕРёС… СЃР»СѓС‡Р°СЏС….
+/// Наблюдателей нет — строку не строим вовсе: запись, поставленная до
+/// `observe()`, всё равно никому не доставляется, а сериализация вставок целого
+/// документа не бесплатна. Курсор двигается в обоих случаях.
 #[cfg(feature = "v8")]
 pub(crate) fn flush_parser_inserts(
     log: &mut ParserInsertLog,
@@ -263,7 +263,7 @@ pub(crate) fn flush_parser_inserts(
         }
         js.push_str("]);");
         if let Err(e) = rt.eval(&js) {
-            eprintln!("MutationObserver: РїР°СЂСЃРµСЂРЅС‹Рµ РІСЃС‚Р°РІРєРё РЅРµ РґРѕСЃС‚Р°РІР»РµРЅС‹: {e}");
+            eprintln!("MutationObserver: парсерные вставки не доставлены: {e}");
         }
     }
     log.cursor = end;
@@ -272,7 +272,7 @@ pub(crate) fn flush_parser_inserts(
 /// Resolve [`ScriptSource`] items to JS source strings in document order,
 /// fetching external `<script src>` bodies via the subresource fetcher
 /// (mirrors [`load_linked_stylesheets`]). A failed fetch is logged and kept in
-/// the list with an empty body and `external_ok: Some(false)` вЂ” one broken
+/// the list with an empty body and `external_ok: Some(false)` — one broken
 /// script must not abort the rest of the page, but it still owes its element an
 /// `error` event (BUG-804), so it may not be dropped here.
 pub(crate) fn resolve_script_sources(
@@ -281,10 +281,10 @@ pub(crate) fn resolve_script_sources(
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> Vec<ResolvedScript> {
-    // Р’РЅРµС€РЅРёРµ `<script src>` РіСЂСѓР·СЏС‚СЃСЏ РїР°СЂР°Р»Р»РµР»СЊРЅРѕ (СЃРµС‚СЊ вЂ” РіР»Р°РІРЅС‹Р№ С‚РѕСЂРјРѕР·), РЅРѕ
-    // СЂРµР·СѓР»СЊС‚Р°С‚ СЃРѕР±РёСЂР°РµС‚СЃСЏ СЃС‚СЂРѕРіРѕ РІ РёСЃС…РѕРґРЅРѕРј РїРѕСЂСЏРґРєРµ: РєР»Р°СЃСЃРёС‡РµСЃРєРёРµ СЃРєСЂРёРїС‚С‹
-    // РѕР±СЏР·Р°РЅС‹ РІС‹РїРѕР»РЅСЏС‚СЊСЃСЏ РІ РїРѕСЂСЏРґРєРµ РґРѕРєСѓРјРµРЅС‚Р° (HTML LS В§8.1.3.1). Inline-С‚РµР»Р°
-    // РїСЂРѕС…РѕРґСЏС‚ РЅР°СЃРєРІРѕР·СЊ Р±РµР· СЃРµС‚Рё.
+    // Внешние `<script src>` грузятся параллельно (сеть — главный тормоз), но
+    // результат собирается строго в исходном порядке: классические скрипты
+    // обязаны выполняться в порядке документа (HTML LS §8.1.3.1). Inline-тела
+    // проходят насквозь без сети.
     let fetched = parallel_map(items, |_, item| match item {
         ScriptSource::Inline(nid, body) => Some(ResolvedScript {
             node: *nid,
@@ -295,7 +295,7 @@ pub(crate) fn resolve_script_sources(
         ScriptSource::External(nid, src) => match base.resolve(src) {
             ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
                 Ok(content) => {
-                    eprintln!("Р—Р°РіСЂСѓР¶РµРЅ СЃРєСЂРёРїС‚: {}", path.display());
+                    eprintln!("Загружен скрипт: {}", path.display());
                     Some(ResolvedScript {
                         node: *nid,
                         source: content,
@@ -304,7 +304,7 @@ pub(crate) fn resolve_script_sources(
                     })
                 }
                 Err(e) => {
-                    eprintln!("РџСЂРѕРїСѓСЃРє СЃРєСЂРёРїС‚Р° {}: {e}", path.display());
+                    eprintln!("Пропуск скрипта {}: {e}", path.display());
                     Some(ResolvedScript::failed(*nid))
                 }
             },
@@ -314,7 +314,7 @@ pub(crate) fn resolve_script_sources(
                 let sub_url = match Url::parse(&url) {
                     Ok(u) => u,
                     Err(e) => {
-                        eprintln!("РџСЂРѕРїСѓСЃРє СЃРєСЂРёРїС‚Р° {url}: {e}");
+                        eprintln!("Пропуск скрипта {url}: {e}");
                         return Some(ResolvedScript::failed(*nid));
                     }
                 };
@@ -332,19 +332,19 @@ pub(crate) fn resolve_script_sources(
                 });
                 match bytes {
                     Ok(bytes) => {
-                        eprintln!("Р—Р°РіСЂСѓР¶РµРЅ СЃРєСЂРёРїС‚: {url}");
+                        eprintln!("Загружен скрипт: {url}");
                         fetch_span.set_bytes(bytes.len());
                         Some(ResolvedScript {
                             node: *nid,
                             source: String::from_utf8_lossy(&bytes[..]).into_owned(),
-                            // РђР±СЃРѕР»СЋС‚РЅС‹Р№ Р°РґСЂРµСЃ СЃР°РјРѕРіРѕ СЃРєСЂРёРїС‚Р° вЂ” Р±Р°Р·Р°
-                            // РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅС‹С… РёРјРїРѕСЂС‚РѕРІ РІРЅСѓС‚СЂРё РјРѕРґСѓР»СЏ.
+                            // Абсолютный адрес самого скрипта — база
+                            // относительных импортов внутри модуля.
                             url: Some(url.clone()),
                             external_ok: Some(true),
                         })
                     }
                     Err(e) => {
-                        eprintln!("РџСЂРѕРїСѓСЃРє СЃРєСЂРёРїС‚Р° {url}: {e}");
+                        eprintln!("Пропуск скрипта {url}: {e}");
                         Some(ResolvedScript::failed(*nid))
                     }
                 }
@@ -357,7 +357,7 @@ pub(crate) fn resolve_script_sources(
 /// Collect `<script>` elements from the DOM, separating classic from module scripts.
 ///
 /// `scripts` receives classic `<script>` bodies (no `type` attribute, or `type=text/javascript`).
-/// `module_scripts` receives `<script type=module>` bodies (HTML LS В§8.1.3.1).
+/// `module_scripts` receives `<script type=module>` bodies (HTML LS §8.1.3.1).
 /// Both skip `<script src="...">` (external-only) and empty inline bodies.
 pub(crate) fn collect_inline_scripts(
     doc: &Document,
@@ -372,7 +372,7 @@ pub(crate) fn collect_inline_scripts(
         let script_type = node.get_attr("type").map(|t| t.trim());
         let is_module = script_type.is_some_and(|t| t.eq_ignore_ascii_case("module"));
         let is_importmap = script_type.is_some_and(|t| t.eq_ignore_ascii_case("importmap"));
-        // РўРѕС‚ Р¶Рµ РїСЂРѕРїСѓСЃРє `nomodule`, С‡С‚Рѕ Рё РІ `collect_scripts_ordered`.
+        // Тот же пропуск `nomodule`, что и в `collect_scripts_ordered`.
         if !is_module && !is_importmap && node.get_attr("nomodule").is_some() {
             return;
         }
@@ -440,27 +440,27 @@ fn collect_import_map_impl(
     None
 }
 
-/// Р’С‹РїРѕР»РЅРёС‚СЊ inline `<script>` Р±Р»РѕРєРё СЃ DOM-РґРѕСЃС‚СѓРїРѕРј (V8 + install_dom).
+/// Выполнить inline `<script>` блоки с DOM-доступом (V8 + install_dom).
 ///
-/// РџСЂРёРЅРёРјР°РµС‚ `doc` РїРѕ Р·РЅР°С‡РµРЅРёСЋ, РѕР±РѕСЂР°С‡РёРІР°РµС‚ РІ `Arc<Mutex<>>` РЅР° РІСЂРµРјСЏ РІС‹РїРѕР»РЅРµРЅРёСЏ
-/// Р’С‹РїРѕР»РЅСЏРµС‚ inline `<script>` Р±Р»РѕРєРё С‡РµСЂРµР· V8 (РµСЃР»Рё feature РІРєР»СЋС‡С‘РЅ),
-/// РІРѕР·РІСЂР°С‰Р°РµС‚ `(Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>)`.
+/// Принимает `doc` по значению, оборачивает в `Arc<Mutex<>>` на время выполнения
+/// Выполняет inline `<script>` блоки через V8 (если feature включён),
+/// возвращает `(Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>)`.
 ///
-/// Р”РѕРєСѓРјРµРЅС‚ РѕР±РѕСЂР°С‡РёРІР°РµС‚СЃСЏ РІ `Arc<Mutex>` С‡С‚РѕР±С‹ JS-Р·Р°РјС‹РєР°РЅРёСЏ Рё layout-РєРѕРґ
-/// РјРѕРіР»Рё СЂР°Р·РґРµР»РёС‚СЊ РґРѕСЃС‚СѓРї Р±РµР· Р»РёС€РЅРёС… РєР»РѕРЅРѕРІ. Persistent runtime РІРѕР·РІСЂР°С‰Р°РµС‚СЃСЏ
-/// РєР°Рє `PersistentJs` РґР»СЏ РґРёСЃРїР°С‚С‡Р° СЃРѕР±С‹С‚РёР№ РїРѕСЃР»Рµ Р·Р°РіСЂСѓР·РєРё СЃС‚СЂР°РЅРёС†С‹.
+/// Документ оборачивается в `Arc<Mutex>` чтобы JS-замыкания и layout-код
+/// могли разделить доступ без лишних клонов. Persistent runtime возвращается
+/// как `PersistentJs` для диспатча событий после загрузки страницы.
 ///
-/// `page_url` РїСЂРѕР±СЂР°СЃС‹РІР°РµС‚СЃСЏ РІ `window.location` (РёРЅРёС†РёР°Р»РёР·Р°С†РёСЏ).
-/// `fetch_provider` РїСЂРѕР±СЂР°СЃС‹РІР°РµС‚СЃСЏ РІ `window.fetch()`.
-/// `ws_provider` РїСЂРѕР±СЂР°СЃС‹РІР°РµС‚СЃСЏ РІ `new WebSocket(url)`.
-/// `sse_provider` РїСЂРѕР±СЂР°СЃС‹РІР°РµС‚СЃСЏ РІ `new EventSource(url)`.
-/// `ls_store` вЂ” localStorage partition РґР»СЏ С‚РµРєСѓС‰РµРіРѕ origin (persists across reloads).
-/// `ss_store` вЂ” sessionStorage partition РІРєР»Р°РґРєРё РґР»СЏ С‚РѕРіРѕ Р¶Рµ origin (BUG-836):
-/// Р¶РёРІС‘С‚, РїРѕРєР° Р¶РёРІР° РІРєР»Р°РґРєР°, Рё РїРµСЂРµР¶РёРІР°РµС‚ СЃРјРµРЅСѓ РґРѕРєСѓРјРµРЅС‚Р°.
-/// `None` = no network (sandboxed context РёР»Рё РѕС‚РєР»СЋС‡С‘РЅ v8 feature).
-/// `scripts` / `module_scripts` вЂ” СѓР¶Рµ СЂР°Р·СЂРµС€С‘РЅРЅС‹Рµ С‚РµР»Р° classic / module СЃРєСЂРёРїС‚РѕРІ
-/// РІ РїРѕСЂСЏРґРєРµ РґРѕРєСѓРјРµРЅС‚Р°, РІРєР»СЋС‡Р°СЏ РґРѕР·Р°РіСЂСѓР¶РµРЅРЅС‹Рµ РІРЅРµС€РЅРёРµ `<script src>` (BUG-164);
-/// СЃРѕР±РёСЂР°СЋС‚СЃСЏ РІС‹Р·С‹РІР°СЋС‰РёРј С‡РµСЂРµР· [`collect_scripts_ordered`] + [`resolve_script_sources`].
+/// `page_url` пробрасывается в `window.location` (инициализация).
+/// `fetch_provider` пробрасывается в `window.fetch()`.
+/// `ws_provider` пробрасывается в `new WebSocket(url)`.
+/// `sse_provider` пробрасывается в `new EventSource(url)`.
+/// `ls_store` — localStorage partition для текущего origin (persists across reloads).
+/// `ss_store` — sessionStorage partition вкладки для того же origin (BUG-836):
+/// живёт, пока жива вкладка, и переживает смену документа.
+/// `None` = no network (sandboxed context или отключён v8 feature).
+/// `scripts` / `module_scripts` — уже разрешённые тела classic / module скриптов
+/// в порядке документа, включая дозагруженные внешние `<script src>` (BUG-164);
+/// собираются вызывающим через [`collect_scripts_ordered`] + [`resolve_script_sources`].
 #[allow(clippy::needless_return)] // `return` inside #[cfg] block is needed for correct control flow
 #[allow(unused_variables, clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn run_scripts_with_dom(
@@ -514,7 +514,7 @@ pub(crate) fn run_scripts_with_dom(
     }
     if sandbox.contains(lumen_core::SandboxFlags::SCRIPTS) {
         eprintln!(
-            "sandbox: Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅРѕ {} СЃРєСЂРёРїС‚(РѕРІ) + {} РјРѕРґСѓР»(РµР№) (sandbox=scripts)",
+            "sandbox: заблокировано {} скрипт(ов) + {} модул(ей) (sandbox=scripts)",
             scripts.len(), module_scripts.len()
         );
         return (doc_arc, None, None);
@@ -543,7 +543,7 @@ pub(crate) fn run_scripts_with_dom(
                     eprintln!("JS DOM init failed: {e}");
                 }
                 // Must precede module evaluation: bare specifiers resolve
-                // through the map (HTML LS В§8.1.6.2).
+                // through the map (HTML LS §8.1.6.2).
                 if let Some(map) = import_map {
                     rt.set_import_map(map);
                 }
@@ -567,7 +567,7 @@ pub(crate) fn run_scripts_with_dom(
                 // before this runtime exists, and WPT's
                 // `performance-timeline/case-sensitivity.any.js` reads
                 // `getEntriesByType('resource')` synchronously at the top of
-                // that first script вЂ” the shell's once-per-event-loop-step
+                // that first script — the shell's once-per-event-loop-step
                 // drain is far too late for it. That drain still covers the
                 // tail (images, anything started later); this take is
                 // unconditional because the suspend flag exists to keep those
@@ -581,27 +581,27 @@ pub(crate) fn run_scripts_with_dom(
                         js_string_literal(&json)
                     ));
                 }
-                // Classic scripts run first (HTML LS В§8.1.3 execution order).
+                // Classic scripts run first (HTML LS §8.1.3 execution order).
                 for ResolvedScript { node: nid, source: src, external_ok, .. } in &scripts {
-                    // BUG-827: Рє СЌС‚РѕРјСѓ РјРѕРјРµРЅС‚Сѓ РЅР°СЃС‚РѕСЏС‰РёР№ РїР°СЂСЃРµСЂ СѓР¶Рµ РІСЃС‚Р°РІРёР» РІСЃС‘,
-                    // С‡С‚Рѕ СЃС‚РѕРёС‚ РІ РґРѕРєСѓРјРµРЅС‚Рµ РІС‹С€Рµ СЌС‚РѕРіРѕ СЃРєСЂРёРїС‚Р°, Рё СЃР°Рј РµРіРѕ
-                    // СЌР»РµРјРµРЅС‚ вЂ” РЅР°Р±Р»СЋРґР°С‚РµР»СЊ, РїРѕСЃС‚Р°РІР»РµРЅРЅС‹Р№ РїСЂРµРґС‹РґСѓС‰РёРј СЃРєСЂРёРїС‚РѕРј,
-                    // РѕР±СЏР·Р°РЅ СѓРІРёРґРµС‚СЊ СЌС‚Рё РІСЃС‚Р°РІРєРё Р·Р°РїРёСЃСЏРјРё.
+                    // BUG-827: к этому моменту настоящий парсер уже вставил всё,
+                    // что стоит в документе выше этого скрипта, и сам его
+                    // элемент — наблюдатель, поставленный предыдущим скриптом,
+                    // обязан увидеть эти вставки записями.
                     flush_parser_inserts(&mut parser_inserts, Some(*nid), &rt);
-                    // BUG-804: РІРЅРµС€РЅРёР№ С„Р°Р№Р» РЅРµ РїСЂРёС€С‘Р» вЂ” РёСЃРїРѕР»РЅСЏС‚СЊ РЅРµС‡РµРіРѕ, РЅРѕ
-                    // СЌР»РµРјРµРЅС‚ РѕР±СЏР·Р°РЅ СЃРѕРѕР±С‰РёС‚СЊ РѕР± РѕС‚РєР°Р·Рµ РЅР° СЃРІРѕС‘Рј РјРµСЃС‚Рµ РІ
-                    // РїРѕСЂСЏРґРєРµ РґРѕРєСѓРјРµРЅС‚Р°.
+                    // BUG-804: внешний файл не пришёл — исполнять нечего, но
+                    // элемент обязан сообщить об отказе на своём месте в
+                    // порядке документа.
                     if *external_ok == Some(false) {
                         fire_parser_script_event(&rt, *nid, *external_ok);
                         continue;
                     }
                     // BUG-486: `document.currentScript` must name the element
                     // being executed for the whole body and nothing else, so the
-                    // push/pop pair brackets the eval вЂ” including the error paths
+                    // push/pop pair brackets the eval — including the error paths
                     // below, or one throwing script would leave a stale value
                     // behind for every script after it.
                     let _ = rt.eval(&format!("_lumen_push_current_script({});", nid.index()));
-                    // eval_and_report (not the plain trait eval()) вЂ” this is
+                    // eval_and_report (not the plain trait eval()) — this is
                     // the genuine top-level page-script execution boundary,
                     // so an uncaught exception must also reach the page's own
                     // window 'error'/onerror listeners (BUG-591), not just
@@ -610,38 +610,38 @@ pub(crate) fn run_scripts_with_dom(
                         Ok(_) => {}
                         Err(lumen_core::JsError::NotImplemented) => {
                             eprintln!(
-                                "script: engine=v8, РІС‹РїРѕР»РЅРµРЅРёРµ РїСЂРѕРїСѓС‰РµРЅРѕ ({} Р±Р°Р№С‚)",
+                                "script: engine=v8, выполнение пропущено ({} байт)",
                                 src.len()
                             );
                         }
                         Err(e) => eprintln!("script error: {e}"),
                     }
                     let _ = rt.eval("_lumen_pop_current_script();");
-                    // В§4.12.1 В«execute the script blockВ», РїРѕСЃР»РµРґРЅРёР№ С€Р°Рі:
-                    // РІРЅРµС€РЅРёР№ РєР»Р°СЃСЃРёС‡РµСЃРєРёР№ СЃРєСЂРёРїС‚ СЃС‚СЂРµР»СЏРµС‚ `load` СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ
-                    // С‚РµР»Р°. РРЅР»Р°Р№РЅРѕРІС‹Р№ вЂ” РЅРёС‡РµРіРѕ (`external_ok` = `None`).
+                    // §4.12.1 «execute the script block», последний шаг:
+                    // внешний классический скрипт стреляет `load` сразу после
+                    // тела. Инлайновый — ничего (`external_ok` = `None`).
                     fire_parser_script_event(&rt, *nid, *external_ok);
                 }
-                // BUG-827: С…РІРѕСЃС‚ РґРѕРєСѓРјРµРЅС‚Р° РїР°СЂСЃРµСЂ РІСЃС‚Р°РІРёР» РµС‰С‘ РґРѕ С‚РѕРіРѕ, РєР°Рє
-                // РѕС‚Р»РѕР¶РµРЅРЅС‹Рµ РјРѕРґСѓР»Рё РЅР°С‡Р°Р»Рё РёСЃРїРѕР»РЅСЏС‚СЊСЃСЏ, вЂ” РѕС‚РґР°С‘Рј РµРіРѕ РѕРґРЅРёРј
-                // РѕС‚СЂРµР·РєРѕРј Р·РґРµСЃСЊ, РїРѕРєР° РЅР°Р±Р»СЋРґР°С‚РµР»СЊ РїРѕСЃР»РµРґРЅРµРіРѕ РєР»Р°СЃСЃРёС‡РµСЃРєРѕРіРѕ
-                // СЃРєСЂРёРїС‚Р° РµС‰С‘ РјРѕР¶РµС‚ РµРіРѕ СѓСЃР»С‹С€Р°С‚СЊ.
+                // BUG-827: хвост документа парсер вставил ещё до того, как
+                // отложенные модули начали исполняться, — отдаём его одним
+                // отрезком здесь, пока наблюдатель последнего классического
+                // скрипта ещё может его услышать.
                 flush_parser_inserts(&mut parser_inserts, None, &rt);
-                // Module scripts run after classic scripts (HTML LS В§8.1.3.1 deferred).
+                // Module scripts run after classic scripts (HTML LS §8.1.3.1 deferred).
                 // No `currentScript` bracket: it is `null` inside a module by spec.
                 for item in &module_scripts {
-                    // BUG-804: РІРЅРµС€РЅРёР№ РјРѕРґСѓР»СЊ, С‡РµР№ С„Р°Р№Р» РЅРµ РїСЂРёС€С‘Р», РѕР±СЏР·Р°РЅ
-                    // РІС‹СЃС‚СЂРµР»РёС‚СЊ `error` СЂРѕРІРЅРѕ С‚Р°Рє Р¶Рµ, РєР°Рє РєР»Р°СЃСЃРёС‡РµСЃРєРёР№.
+                    // BUG-804: внешний модуль, чей файл не пришёл, обязан
+                    // выстрелить `error` ровно так же, как классический.
                     if item.external_ok == Some(false) {
                         fire_parser_script_event(&rt, item.node, item.external_ok);
                         continue;
                     }
                     let src = &item.source;
-                    // Р’РЅРµС€РЅРёР№ РјРѕРґСѓР»СЊ РёСЃРїРѕР»РЅСЏРµС‚СЃСЏ РїРѕРґ РЎР’РћРРњ Р°РґСЂРµСЃРѕРј: РѕС‚ РЅРµРіРѕ
-                    // СЃС‡РёС‚Р°СЋС‚СЃСЏ РµРіРѕ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅС‹Рµ РёРјРїРѕСЂС‚С‹. РЈ inline-РјРѕРґСѓР»СЏ
-                    // Р°РґСЂРµСЃР° РЅРµС‚ вЂ” Р±Р°Р·Р° РѕСЃС‚Р°С‘С‚СЃСЏ Р°РґСЂРµСЃРѕРј СЃС‚СЂР°РЅРёС†С‹.
+                    // Внешний модуль исполняется под СВОИМ адресом: от него
+                    // считаются его относительные импорты. У inline-модуля
+                    // адреса нет — база остаётся адресом страницы.
                     // eval_module_at_and_report/eval_module_and_report (not the
-                    // plain trait methods) вЂ” this is the top-level page-script
+                    // plain trait methods) — this is the top-level page-script
                     // boundary, so a runtime error in the module body must also
                     // reach window 'error'/onerror (BUG-591); a load/link
                     // failure stays unreported here (belongs to the script
@@ -654,19 +654,19 @@ pub(crate) fn run_scripts_with_dom(
                         Ok(()) => {}
                         Err(lumen_core::JsError::NotImplemented) => {
                             eprintln!(
-                                "module: engine=v8, РІС‹РїРѕР»РЅРµРЅРёРµ РїСЂРѕРїСѓС‰РµРЅРѕ ({} Р±Р°Р№С‚)",
+                                "module: engine=v8, выполнение пропущено ({} байт)",
                                 src.len()
                             );
                         }
                         Err(e) => eprintln!("module error: {e}"),
                     }
-                    // BUG-804: РІРЅРµС€РЅРёР№ РјРѕРґСѓР»СЊ СЃС‚СЂРµР»СЏРµС‚ `load` РїРѕСЃР»Рµ РІС‹С‡РёСЃР»РµРЅРёСЏ
-                    // вЂ” РІРєР»СЋС‡Р°СЏ СЃР»СѓС‡Р°Р№, РєРѕРіРґР° С‚РµР»Рѕ Р±СЂРѕСЃРёР»Рѕ: РёСЃРєР»СЋС‡РµРЅРёРµ СѓС…РѕРґРёС‚ РІ
-                    // window `error` (BUG-591), Р° СЌР»РµРјРµРЅС‚ РІСЃС‘ СЂР°РІРЅРѕ СЃРѕРѕР±С‰Р°РµС‚ РѕР±
-                    // СѓСЃРїРµС€РЅРѕР№ Р·Р°РіСЂСѓР·РєРµ. РћСЃС‚Р°С‚РѕРє: РїСЂРѕРІР°Р» РЎР’РЇР—Р«Р’РђРќРРЇ (РЅРµ РЅР°С€С‘Р»СЃСЏ
-                    // РёРјРїРѕСЂС‚ РІРЅСѓС‚СЂРё) РїРѕ СЃРїРµС†РёС„РёРєР°С†РёРё РґРѕР»Р¶РµРЅ РґР°С‚СЊ `error`, РЅРѕ
-                    // `ModuleFailure` РґРѕ СЃСЋРґР° РЅРµ РґРѕС…РѕРґРёС‚ вЂ” `JsResult` РµРіРѕ
-                    // СЃС…Р»РѕРїС‹РІР°РµС‚, Рё Р·РґРµСЃСЊ С‚РѕР¶Рµ РІС‹Р№РґРµС‚ `load`.
+                    // BUG-804: внешний модуль стреляет `load` после вычисления
+                    // — включая случай, когда тело бросило: исключение уходит в
+                    // window `error` (BUG-591), а элемент всё равно сообщает об
+                    // успешной загрузке. Остаток: провал СВЯЗЫВАНИЯ (не нашёлся
+                    // импорт внутри) по спецификации должен дать `error`, но
+                    // `ModuleFailure` до сюда не доходит — `JsResult` его
+                    // схлопывает, и здесь тоже выйдет `load`.
                     fire_parser_script_event(&rt, item.node, item.external_ok);
                 }
                 // Extension content scripts run last (after all page scripts).
@@ -675,7 +675,7 @@ pub(crate) fn run_scripts_with_dom(
                         Ok(_) => {}
                         Err(lumen_core::JsError::NotImplemented) => {
                             eprintln!(
-                                "extension: engine=v8, РІС‹РїРѕР»РЅРµРЅРёРµ РїСЂРѕРїСѓС‰РµРЅРѕ ({} Р±Р°Р№С‚)",
+                                "extension: engine=v8, выполнение пропущено ({} байт)",
                                 src.len()
                             );
                         }
@@ -712,7 +712,7 @@ pub(crate) fn run_scripts_with_dom(
                 Ok(_) => {}
                 Err(lumen_core::JsError::NotImplemented) => {
                     eprintln!(
-                        "script: engine=null, РІС‹РїРѕР»РЅРµРЅРёРµ РїСЂРѕРїСѓС‰РµРЅРѕ ({} Р±Р°Р№С‚)",
+                        "script: engine=null, выполнение пропущено ({} байт)",
                         src.len()
                     );
                 }
@@ -723,12 +723,12 @@ pub(crate) fn run_scripts_with_dom(
     }
 }
 
-/// Р’С‹РїРѕР»РЅРёС‚СЊ inline `<script>` Р±Р»РѕРєРё РµСЃР»Рё sandbox РїРѕР·РІРѕР»СЏРµС‚, РёРЅР°С‡Рµ Р·Р°Р±Р»РѕРєРёСЂРѕРІР°С‚СЊ.
+/// Выполнить inline `<script>` блоки если sandbox позволяет, иначе заблокировать.
 ///
-/// `SandboxFlags::SCRIPTS` СѓСЃС‚Р°РЅРѕРІР»РµРЅ вЂ” СЃРєСЂРёРїС‚С‹ Р·Р°РїСЂРµС‰РµРЅС‹; С„СѓРЅРєС†РёСЏ Р»РѕРіРёСЂСѓРµС‚
-/// РєРѕР»РёС‡РµСЃС‚РІРѕ Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅРЅС‹С… Рё РІРѕР·РІСЂР°С‰Р°РµС‚ 0. РРЅР°С‡Рµ РєР°Р¶РґС‹Р№ СЃРєСЂРёРїС‚ РїРµСЂРµРґР°С‘С‚СЃСЏ
-/// РІ `runtime.eval()`; Р±РµР· feature `v8` СЌС‚Рѕ NullJsRuntime в†’ `NotImplemented`.
-/// Р’РѕР·РІСЂР°С‰Р°РµС‚ С‡РёСЃР»Рѕ СЃРєСЂРёРїС‚РѕРІ, РїРµСЂРµРґР°РЅРЅС‹С… РІ runtime.
+/// `SandboxFlags::SCRIPTS` установлен — скрипты запрещены; функция логирует
+/// количество заблокированных и возвращает 0. Иначе каждый скрипт передаётся
+/// в `runtime.eval()`; без feature `v8` это NullJsRuntime → `NotImplemented`.
+/// Возвращает число скриптов, переданных в runtime.
 #[cfg(test)]
 pub(crate) fn run_scripts(
     doc: &Document,
@@ -743,7 +743,7 @@ pub(crate) fn run_scripts(
     }
     if sandbox.contains(lumen_core::SandboxFlags::SCRIPTS) {
         eprintln!(
-            "sandbox: Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅРѕ {} СЃРєСЂРёРїС‚(РѕРІ) (sandbox=scripts)",
+            "sandbox: заблокировано {} скрипт(ов) (sandbox=scripts)",
             scripts.len()
         );
         return 0;
@@ -753,7 +753,7 @@ pub(crate) fn run_scripts(
             Ok(_) => {}
             Err(lumen_core::JsError::NotImplemented) => {
                 eprintln!(
-                    "script: engine={}, РІС‹РїРѕР»РЅРµРЅРёРµ РїСЂРѕРїСѓС‰РµРЅРѕ ({} Р±Р°Р№С‚)",
+                    "script: engine={}, выполнение пропущено ({} байт)",
                     runtime.engine_name(),
                     src.len()
                 );

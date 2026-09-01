@@ -10,9 +10,9 @@
 use crate::*;
 
 impl Lumen {
-    /// РЎРѕС…СЂР°РЅРёС‚СЊ С‚РµРєСѓС‰СѓСЋ РІРєР»Р°РґРєСѓ РІ `last_session.lsession` РїСЂРё Р·Р°РєСЂС‹С‚РёРё РѕРєРЅР°.
+    /// Сохранить текущую вкладку в `last_session.lsession` при закрытии окна.
     ///
-    /// Silent вЂ” РѕС€РёР±РєРё Р·Р°РїРёСЃРё РЅРµ Р»РѕРјР°СЋС‚ РІС‹С…РѕРґ. РќРµ СЃРѕС…СЂР°РЅСЏРµС‚ Empty-СЃС‚СЂР°РЅРёС†Сѓ.
+    /// Silent — ошибки записи не ломают выход. Не сохраняет Empty-страницу.
     pub(crate) fn save_session_on_close(&self) {
         let url = match &self.source {
             PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => return,
@@ -41,12 +41,12 @@ impl Lumen {
     }
 
     /// Persist every open tab (URL + title + scroll + serialised DOM) to the
-    /// SQLite session store on window close (В§10I).
+    /// SQLite session store on window close (§10I).
     ///
     /// Walks the tab strip in left-to-right order, pulling each tab's state from
     /// whichever slot holds it: the active tab from `self`, background tabs from
     /// `bg_tabs`, hibernated tabs from `tab_snapshots`. Tabs without a real URL
-    /// (blank, never-loaded) are skipped. Silent вЂ” write errors do not block exit.
+    /// (blank, never-loaded) are skipped. Silent — write errors do not block exit.
     pub(crate) fn save_full_session(&self) {
         let mut tabs: Vec<lumen_storage::PersistedTab> = Vec::new();
         let active_idx = self.tab_strip.active;
@@ -70,7 +70,7 @@ impl Lumen {
                     dom_blob: dom_blob_of(snap.layout_source.as_ref()),
                 })
             } else if self.hibernated_tabs.contains_key(&entry.id) {
-                // DOM blob already on disk in tab_snapshots вЂ” copy it over.
+                // DOM blob already on disk in tab_snapshots — copy it over.
                 match self.tab_snapshots.fetch(entry.id as i64) {
                     Ok(Some(data)) if !data.url.is_empty() => Some(lumen_storage::PersistedTab {
                         url: data.url,
@@ -91,11 +91,11 @@ impl Lumen {
         }
 
         if let Err(e) = self.session_store.save(&tabs) {
-            eprintln!("session: РЅРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ СЃРµСЃСЃРёСЋ: {e}");
+            eprintln!("session: не удалось сохранить сессию: {e}");
         }
     }
 
-    /// Reopen the tabs saved by [`Self::save_full_session`] (В§10I).
+    /// Reopen the tabs saved by [`Self::save_full_session`] (§10I).
     ///
     /// Called once at launch only when the user started the browser with no
     /// explicit page (so we do not clobber an `argv`-requested page). The
@@ -108,13 +108,13 @@ impl Lumen {
             Ok(t) if !t.is_empty() => t,
             Ok(_) => return,
             Err(e) => {
-                eprintln!("session: РЅРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕС‡РёС‚Р°С‚СЊ СЃРµСЃСЃРёСЋ: {e}");
+                eprintln!("session: не удалось прочитать сессию: {e}");
                 return;
             }
         };
         let active_idx = session_persist::active_index(&tabs);
 
-        // Rebuild the tab strip from scratch вЂ” one entry per restored tab, in
+        // Rebuild the tab strip from scratch — one entry per restored tab, in
         // saved order. The strip starts with a single blank tab (id 0); reuse it.
         self.tab_strip.tabs.clear();
         self.tab_strip.next_id = 0;
@@ -125,7 +125,7 @@ impl Lumen {
             self.tab_strip.tabs.push(tabs::strip::TabEntry {
                 id,
                 title: if tab.title.is_empty() {
-                    "Р’РѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРЅР°СЏ РІРєР»Р°РґРєР°".to_owned()
+                    "Восстановленная вкладка".to_owned()
                 } else {
                     tab.title.clone()
                 },
@@ -170,5 +170,5 @@ impl Lumen {
         self.tab_strip.active = active_idx.min(self.tab_strip.tabs.len().saturating_sub(1));
     }
 
-    // в”Ђв”Ђ Tab lifecycle: hibernation and restore в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    // ── Tab lifecycle: hibernation and restore ─────────────────────────────────
 }

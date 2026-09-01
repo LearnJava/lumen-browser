@@ -10,7 +10,7 @@ pub(crate) fn count_layout_boxes(b: &lumen_layout::LayoutBox) -> usize {
     1 + b.children.iter().map(count_layout_boxes).sum::<usize>()
 }
 
-/// PERF-6: count "rendered units" вЂ” things that actually paint: non-whitespace
+/// PERF-6: count "rendered units" — things that actually paint: non-whitespace
 /// characters across inline text runs plus replaced elements
 /// (`<img>`/`<canvas>`/`<video>`/`<iframe>`). Zero means the page painted
 /// nothing visible, which for a content-bearing DOM signals a white screen.

@@ -23,8 +23,8 @@ impl Lumen {
                 self.scroll_to_active_match();
                 self.request_redraw();
             }
-            // Enter / F3 вЂ” СЃР»РµРґСѓСЋС‰РёР№ РјР°С‚С‡ (Shift вЂ” РїСЂРµРґС‹РґСѓС‰РёР№).
-            // Ctrl+G / Cmd+G вЂ” С‚Рѕ Р¶Рµ (Firefox-СЃС‚РёР»СЊ find-next), Shift вЂ” РїСЂРµРґС‹РґСѓС‰РёР№.
+            // Enter / F3 — следующий матч (Shift — предыдущий).
+            // Ctrl+G / Cmd+G — то же (Firefox-стиль find-next), Shift — предыдущий.
             KeyCode::Enter | KeyCode::F3 => {
                 if !key_event.repeat {
                     let total = self.current_matches().len();
@@ -47,17 +47,17 @@ impl Lumen {
                 self.scroll_to_active_match();
                 self.request_redraw();
             }
-            // Ctrl+R вЂ” РїРµСЂРµРєР»СЋС‡РёС‚СЊ plain-text в†” regex СЂРµР¶РёРј.
+            // Ctrl+R — переключить plain-text ↔ regex режим.
             KeyCode::KeyR if ctrl_or_super && !key_event.repeat => {
                 self.find.toggle_regex_mode();
                 self.scroll_to_active_match();
                 self.request_redraw();
             }
             _ => {
-                // РўРµРєСЃС‚РѕРІС‹Р№ РІРІРѕРґ. РџСЂРё РјРѕРґРёС„РёРєР°С‚РѕСЂР°С… Ctrl/Cmd РЅРµ РІСЃС‚Р°РІР»СЏРµРј вЂ”
-                // СЌС‚Рѕ shortcut РІ Р°РґСЂРµСЃ find-Р° (РёР»Рё Р±СѓРґСѓС‰РёС… С‡РµРіРѕ-С‚Рѕ РµС‰С‘), РЅРµ
-                // СЃРёРјРІРѕР» РґР»СЏ query. Р‘РµР· РЅРёС… text вЂ” СЌС‚Рѕ СѓР¶Рµ layout-aware
-                // СЃРёРјРІРѕР» РѕС‚ winit, СЃ СѓС‡С‘С‚РѕРј IME / dead-keys.
+                // Текстовый ввод. При модификаторах Ctrl/Cmd не вставляем —
+                // это shortcut в адрес find-а (или будущих чего-то ещё), не
+                // символ для query. Без них text — это уже layout-aware
+                // символ от winit, с учётом IME / dead-keys.
                 if ctrl_or_super {
                     return;
                 }
@@ -73,17 +73,17 @@ impl Lumen {
         // CC-9 (docs/tasks/p1-css-chrome.md): `#findBar`'s engine-rendered
         // value/count (`Self::chrome_model_snapshot`) is baked into
         // `self.chrome_layout` at `relayout_chrome_host` time, not
-        // recomputed every `RedrawRequested` вЂ” every branch above mutates
+        // recomputed every `RedrawRequested` — every branch above mutates
         // `self.find`, so without this call the on-screen bar would keep
         // showing stale text/count. Mirrors the same call at the end of
         // `Self::handle_address_bar_key` (CC-7). No-op off the flag.
         self.relayout_chrome_host();
     }
 
-    /// Р•СЃР»Рё Р°РєС‚РёРІРЅС‹Р№ match РІРЅРµ РІРёРґРёРјРѕР№ С‡Р°СЃС‚Рё viewport-Р° вЂ” СЃРґРІРёРіР°РµС‚ scroll С‚Р°Рє,
-    /// С‡С‚РѕР±С‹ РѕРЅ РїРѕРїР°Р» РІ РІРµСЂС…РЅСЋСЋ С‡РµС‚РІРµСЂС‚СЊ РѕРєРЅР°. Р’С‹Р·С‹РІР°РµС‚СЃСЏ РїРѕСЃР»Рµ Р»СЋР±РѕРіРѕ
-    /// РґРµР№СЃС‚РІРёСЏ, РјРµРЅСЏСЋС‰РµРіРѕ active match: next/prev, backspace, С‚РµРєСЃС‚РѕРІС‹Р№ РІРІРѕРґ.
-    /// РџСЂРё Р·Р°РєСЂС‹С‚РѕРј Р±Р°СЂРµ / РїСѓСЃС‚РѕРј query / РѕС‚СЃСѓС‚СЃС‚РІРёРё РјР°С‚С‡РµР№ вЂ” no-op.
+    /// Если активный match вне видимой части viewport-а — сдвигает scroll так,
+    /// чтобы он попал в верхнюю четверть окна. Вызывается после любого
+    /// действия, меняющего active match: next/prev, backspace, текстовый ввод.
+    /// При закрытом баре / пустом query / отсутствии матчей — no-op.
     fn scroll_to_active_match(&mut self) {
         let matches = self.current_matches();
         if matches.is_empty() {
@@ -99,12 +99,12 @@ impl Lumen {
         }
     }
 
-    /// РџРµСЂРµСЃС‡РёС‚С‹РІР°РµС‚ С‚РµРєСѓС‰РёР№ СЃРїРёСЃРѕРє СЃРѕРІРїР°РґРµРЅРёР№.
+    /// Пересчитывает текущий список совпадений.
     ///
-    /// - Plain-text СЂРµР¶РёРј: substring search РїРѕ DrawText-РєРѕРјР°РЅРґР°Рј display list.
-    /// - Regex СЂРµР¶РёРј (Ctrl+R): regex РїРѕ [`TextFragment`][lumen_layout::TextFragment]
-    ///   РёР· [`collect_visible_text`][lumen_layout::collect_visible_text]; РїРѕР·РёС†РёРё
-    ///   Р±РµСЂСѓС‚СЃСЏ РёР· `TextFragment.rect`, `dl_index` вЂ” lookup РїРѕ (x, y, text) РІ DL.
+    /// - Plain-text режим: substring search по DrawText-командам display list.
+    /// - Regex режим (Ctrl+R): regex по [`TextFragment`][lumen_layout::TextFragment]
+    ///   из [`collect_visible_text`][lumen_layout::collect_visible_text]; позиции
+    ///   берутся из `TextFragment.rect`, `dl_index` — lookup по (x, y, text) в DL.
     pub(crate) fn current_matches(&self) -> Vec<find::FindMatch> {
         if !self.find.is_open() || self.find.query().is_empty() {
             return Vec::new();

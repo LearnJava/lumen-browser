@@ -13,21 +13,21 @@ use crate::*;
 /// renders. The JS DOM closures hold a reference to the same
 /// `Arc<Mutex<Document>>` as `LayoutSource::document`, so event-driven DOM
 /// mutations are visible to the next relayout without a full page reload.
-// BUG-171 СЌС‚Р°Рї 2: `Send` РЅСѓР¶РµРЅ, С‡С‚РѕР±С‹ РіРѕС‚РѕРІС‹Р№ JS-С…СЌРЅРґР» (`QuickJsRuntime` вЂ”
-// `Send + Sync` РїРѕ ADR-014/B-1), СЃРѕР·РґР°РЅРЅС‹Р№ С„РёРЅР°Р»СЊРЅС‹Рј pipeline РЅР° С„РѕРЅРѕРІРѕРј РїРѕС‚РѕРєРµ,
-// РїРµСЂРµСЃС‹Р»Р°Р»СЃСЏ РѕР±СЂР°С‚РЅРѕ РЅР° UI-РїРѕС‚РѕРє РІРЅСѓС‚СЂРё `LoadEvent::RenderDone`.
+// BUG-171 этап 2: `Send` нужен, чтобы готовый JS-хэндл (`QuickJsRuntime` —
+// `Send + Sync` по ADR-014/B-1), созданный финальным pipeline на фоновом потоке,
+// пересылался обратно на UI-поток внутри `LoadEvent::RenderDone`.
 //
-// ADR-016 M2.2c-2b: `Sync` РґРѕР±Р°РІР»РµРЅ, С‡С‚РѕР±С‹ С…СЌРЅРґР» РјРѕР¶РЅРѕ Р±С‹Р»Рѕ РґРµСЂР¶Р°С‚СЊ Р·Р°
-// `Arc<dyn PersistentJs>` Рё **СЂР°Р·РґРµР»СЏС‚СЊ** РјРµР¶РґСѓ UI-РїРѕС‚РѕРєРѕРј Рё РґРІРёР¶РєРѕРІС‹Рј РїРѕС‚РѕРєРѕРј РЅР°
-// РІСЂРµРјСЏ РјРёРіСЂР°С†РёРё `js_ctx` РЅР° РґРІРёР¶РєРѕРІС‹Р№ РїРѕС‚РѕРє (СЃРј. `EngineJsState`). Р’СЃРµ РјРµС‚РѕРґС‹
-// СѓР¶Рµ Р±РµСЂСѓС‚ `&self`, Р° `QuickJsRuntime` вЂ” `Send + Sync` (РІСЃРµ РІС‹Р·РѕРІС‹ С‚СѓРЅРЅРµР»РёСЂСѓСЋС‚СЃСЏ
-// РЅР° РІС‹РґРµР»РµРЅРЅС‹Р№ JS-РїРѕС‚РѕРє С‡РµСЂРµР· `SyncSender`, ADR-014), РїРѕСЌС‚РѕРјСѓ `Sync` РґРµСЂР¶РёС‚СЃСЏ
-// Р±РµР· `unsafe`. UI-СЃС‚РѕСЂРѕРЅРЅРёР№ `Arc`-РєР»РѕРЅ СѓРґР°Р»СЏРµС‚СЃСЏ РІ M2.2c-2d.
+// ADR-016 M2.2c-2b: `Sync` добавлен, чтобы хэндл можно было держать за
+// `Arc<dyn PersistentJs>` и **разделять** между UI-потоком и движковым потоком на
+// время миграции `js_ctx` на движковый поток (см. `EngineJsState`). Все методы
+// уже берут `&self`, а `QuickJsRuntime` — `Send + Sync` (все вызовы туннелируются
+// на выделенный JS-поток через `SyncSender`, ADR-014), поэтому `Sync` держится
+// без `unsafe`. UI-сторонний `Arc`-клон удаляется в M2.2c-2d.
 pub(crate) trait PersistentJs: Send + Sync {
     /// Evaluate a JS script (event handler dispatch, rAF tick, etc.).
     fn eval_js(&self, script: &str);
     /// Evaluate `script` and return its result as a JSON string (SDC-1b
-    /// `AutomationCommand::Eval` вЂ” unlike `eval_js`, the value is not discarded).
+    /// `AutomationCommand::Eval` — unlike `eval_js`, the value is not discarded).
     fn eval_js_value(&self, script: &str) -> Result<String, String>;
     /// Consume any navigation request placed by JS during the last `eval_js`.
     fn take_navigate_request(&self) -> Option<JsNavigateRequest>;
@@ -49,11 +49,11 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Take the next timer wakeup deadline as Unix epoch ms, clearing the stored
     /// value.  Returns `None` if no timers are pending after the last tick.
     fn take_timer_wakeup(&self) -> Option<f64>;
-    /// BUG-480 СЃСЂРµР· 8: РµСЃС‚СЊ Р»Рё РІ СЏС‰РёРєР°С… РјРѕСЃС‚Р° РЅРµСЂР°Р·РѕР±СЂР°РЅРЅС‹Рµ РєРѕРЅРІРµСЂС‚С‹,
-    /// Р°РґСЂРµСЃРѕРІР°РЅРЅС‹Рµ Р­РўРћРњРЈ РєРѕРЅС‚РµРєСЃС‚Сѓ (РєСЂРѕСЃСЃ-С„СЂРµР№РјРѕРІС‹Рµ postMessage/СЃРѕР±С‹С‚РёСЏ/
-    /// RunScript). РЁРµР»Р» РґРµСЂР¶РёС‚ РєРѕСЂРѕС‚РєРёР№ poll-РґРµРґР»Р°Р№РЅ, РїРѕРєР° С…РѕС‚СЊ РѕРґРёРЅ Р¶РёРІРѕР№
-    /// РєРѕРЅС‚РµРєСЃС‚ РѕС‚РІРµС‡Р°РµС‚ В«РґР°В» вЂ” РёРЅР°С‡Рµ РґРѕСЃС‚Р°РІРєР° РїРѕСЃР»Рµ Р·Р°С‚РёС…Р°РЅРёСЏ СЃС‚СЂР°РЅРёС†С‹ Р¶РґС‘С‚
-    /// СЃР»СѓС‡Р°Р№РЅРѕРіРѕ РїСЂРѕР±СѓР¶РґРµРЅРёСЏ С†РёРєР»Р°. Default РґР»СЏ РґРІРёР¶РєРѕРІ Р±РµР· РјРѕСЃС‚Р°.
+    /// BUG-480 срез 8: есть ли в ящиках моста неразобранные конверты,
+    /// адресованные ЭТОМУ контексту (кросс-фреймовые postMessage/события/
+    /// RunScript). Шелл держит короткий poll-дедлайн, пока хоть один живой
+    /// контекст отвечает «да» — иначе доставка после затихания страницы ждёт
+    /// случайного пробуждения цикла. Default для движков без моста.
     fn frame_transport_pending(&self) -> bool {
         false
     }
@@ -72,14 +72,14 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// must happen before the next paint to reflect DOM changes.
     fn take_dom_dirty(&self) -> bool;
     /// BUG-341 S7: drain the page-side DOM-mutation tracker since the last
-    /// call вЂ” feeds `lumen_layout::style::restyle_root_set_for_node_change`
+    /// call — feeds `lumen_layout::style::restyle_root_set_for_node_change`
     /// so `Lumen::try_relayout_raf_incremental` can take the incremental-
     /// cascade path (`layout_mutation_incremental_restyle`) instead of a full
     /// cascade for JS DOM mutations.
     ///
-    /// Default (used by engines without a tracker вЂ” `NullPersistentJs`):
+    /// Default (used by engines without a tracker — `NullPersistentJs`):
     /// no touched nodes but `unattributed: true`, forcing the caller to fall
-    /// back to a full cascade вЂ” preserves those engines' existing behaviour
+    /// back to a full cascade — preserves those engines' existing behaviour
     /// exactly.
     fn take_dom_touched(&self) -> DomTouchedSummary {
         DomTouchedSummary { nodes: std::collections::HashSet::new(), unattributed: true }
@@ -110,7 +110,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     ///
     /// Returns `None` for runtimes that do not expose it (default). The
     /// `v8` runtime returns a clone of its `Arc<AtomicBool>`, letting the
-    /// UI thread read the flag without a blocking engine-thread `query` вЂ” the
+    /// UI thread read the flag without a blocking engine-thread `query` — the
     /// scheduling read must never serialize behind an in-flight (long) JS turn.
     fn raf_pending_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         None
@@ -155,9 +155,9 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn register_lazy_images(&self, pairs: &[(u32, &str)]);
     /// Push decoded `<img>` bitmaps `(nid, Arc<Image>)` into the JS canvas drawImage store.
     ///
-    /// Call after `fetch_and_decode_images` so `drawImage(imgElement, вЂ¦)` works.
-    /// The `Arc` is shared with the decoded-image cache вЂ” no pixel copy (BUG-272
-    /// СЃСЂРµР· 20). Default no-op covers non-QuickJS builds and `NullPersistentJs`.
+    /// Call after `fetch_and_decode_images` so `drawImage(imgElement, …)` works.
+    /// The `Arc` is shared with the decoded-image cache — no pixel copy (BUG-272
+    /// срез 20). Default no-op covers non-QuickJS builds and `NullPersistentJs`.
     #[allow(dead_code)]
     fn register_img_bitmaps(&self, _bitmaps: Vec<(u32, Arc<lumen_image::Image>)>) {}
     /// Check registered lazy images against the current viewport and enqueue load
@@ -171,18 +171,18 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Returns `(node_id, url)` pairs for images that entered the lazy-load margin.
     #[allow(dead_code)]
     fn take_lazy_image_requests(&self) -> Vec<(u32, String)>;
-    /// BUG-480 СЃСЂРµР· 2: Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°С‚СЊ Р·Р°РіСЂСѓР¶РµРЅРЅС‹Р№ РїРѕРґ-РґРѕРєСѓРјРµРЅС‚ `<iframe>` РІ
-    /// JS-РєРѕРЅС‚РµРєСЃС‚Рµ СЂРѕРґРёС‚РµР»СЏ вЂ” РїРѕСЃР»Рµ СЌС‚РѕРіРѕ `iframe.contentWindow`/
-    /// `contentDocument` РёР· СЃРєСЂРёРїС‚РѕРІ СЂРѕРґРёС‚РµР»СЏ РІРёРґСЏС‚ С„Р°СЃР°РґС‹ РїРѕРґ-РґРѕРєСѓРјРµРЅС‚Р°
+    /// BUG-480 срез 2: зарегистрировать загруженный под-документ `<iframe>` в
+    /// JS-контексте родителя — после этого `iframe.contentWindow`/
+    /// `contentDocument` из скриптов родителя видят фасады под-документа
     /// (`crates/js/src/frame_bridge.rs`).
     ///
-    /// Р’С‹Р·С‹РІР°РµС‚СЃСЏ РёР· [`load_frame_sub_documents`] РїРѕСЃР»Рµ РёСЃРїРѕР»РЅРµРЅРёСЏ СЃРєСЂРёРїС‚РѕРІ
-    /// СЂРµР±С‘РЅРєР° Рё **РґРѕ** РґРёСЃРїР°С‚С‡Р° trusted `load` РЅР° С…РѕСЃС‚Рµ. `name` вЂ” Р·РЅР°С‡РµРЅРёРµ
-    /// Р°С‚СЂРёР±СѓС‚Р° `name` С…РѕСЃС‚Р° (РєР»СЋС‡ РёРјРµРЅРѕРІР°РЅРЅРѕРіРѕ РґРѕСЃС‚СѓРїР° `window[name]`,
-    /// СЃСЂРµР· 3). `accessible=false`
-    /// (cross-origin / opaque sandbox) СЂРµРіРёСЃС‚СЂРёСЂСѓРµС‚ Р±РёРЅРґРёРЅРі Р±РµР· РґРѕСЃС‚СѓРїР° Рє
-    /// СЃРѕРґРµСЂР¶РёРјРѕРјСѓ: `contentWindow` РµСЃС‚СЊ, `contentDocument` вЂ” `null`.
-    /// Default no-op РїРѕРєСЂС‹РІР°РµС‚ СЃР±РѕСЂРєРё Р±РµР· v8.
+    /// Вызывается из [`load_frame_sub_documents`] после исполнения скриптов
+    /// ребёнка и **до** диспатча trusted `load` на хосте. `name` — значение
+    /// атрибута `name` хоста (ключ именованного доступа `window[name]`,
+    /// срез 3). `accessible=false`
+    /// (cross-origin / opaque sandbox) регистрирует биндинг без доступа к
+    /// содержимому: `contentWindow` есть, `contentDocument` — `null`.
+    /// Default no-op покрывает сборки без v8.
     fn register_iframe_document(
         &self,
         _host_nid: u32,
@@ -192,14 +192,14 @@ pub(crate) trait PersistentJs: Send + Sync {
         _accessible: bool,
     ) {
     }
-    /// BUG-480 СЃСЂРµР· 3: Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°С‚СЊ РґРѕРєСѓРјРµРЅС‚ СЂРѕРґРёС‚РµР»СЏ РІ JS-РєРѕРЅС‚РµРєСЃС‚Рµ
-    /// С„СЂРµР№РјР° вЂ” РІРЅСѓС‚СЂРё С„СЂРµР№РјР° `window.parent`/`window.frameElement`/`window.name`
-    /// РІРёРґСЏС‚ С„Р°СЃР°Рґ СЂРѕРґРёС‚РµР»СЊСЃРєРѕР№ СЃС‚РѕСЂРѕРЅС‹ (`crates/js/src/frame_bridge.rs`).
+    /// BUG-480 срез 3: зарегистрировать документ родителя в JS-контексте
+    /// фрейма — внутри фрейма `window.parent`/`window.frameElement`/`window.name`
+    /// видят фасад родительской стороны (`crates/js/src/frame_bridge.rs`).
     ///
-    /// Р’С‹Р·С‹РІР°РµС‚СЃСЏ РёР· [`load_frame_sub_documents`] СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ СЃРѕР·РґР°РЅРёСЏ
-    /// РєРѕРЅС‚РµРєСЃС‚Р° СЂРµР±С‘РЅРєР° Рё РґРѕ РµРіРѕ DOMContentLoaded/load: РѕР±СЂР°Р±РѕС‚С‡РёРєРё СЂРµР±С‘РЅРєР°
-    /// С‡РёС‚Р°СЋС‚ РїСЂРµРґРєРѕРІ РёР· Р»СЋР±РѕРіРѕ СЃРѕР±С‹С‚РёСЏ. `host_nid` вЂ” nid С…РѕСЃС‚Р° РІ РґРµСЂРµРІРµ
-    /// СЂРѕРґРёС‚РµР»СЏ. Default no-op РїРѕРєСЂС‹РІР°РµС‚ СЃР±РѕСЂРєРё Р±РµР· v8.
+    /// Вызывается из [`load_frame_sub_documents`] сразу после создания
+    /// контекста ребёнка и до его DOMContentLoaded/load: обработчики ребёнка
+    /// читают предков из любого события. `host_nid` — nid хоста в дереве
+    /// родителя. Default no-op покрывает сборки без v8.
     fn register_parent_document(
         &self,
         _host_nid: u32,
@@ -208,10 +208,10 @@ pub(crate) trait PersistentJs: Send + Sync {
         _accessible: bool,
     ) {
     }
-    /// BUG-480 СЃСЂРµР· 3: Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°С‚СЊ РґРѕРєСѓРјРµРЅС‚ РІРµСЂС…РЅРµРіРѕ РѕРєРЅР° РІ JS-РєРѕРЅС‚РµРєСЃС‚Рµ
-    /// С„СЂРµР№РјР° РіР»СѓР±РёРЅС‹ в‰Ґ 2 (`window.top` РІРµРґС‘С‚ РІ РєРѕСЂРµРЅСЊ, Р° РЅРµ РІ РЅРµРїРѕСЃСЂРµРґСЃС‚РІРµРЅРЅРѕРіРѕ
-    /// СЂРѕРґРёС‚РµР»СЏ). Р”Р»СЏ С„СЂРµР№РјР° РїРµСЂРІРѕРіРѕ СѓСЂРѕРІРЅСЏ РЅРµ РІС‹Р·С‹РІР°РµС‚СЃСЏ вЂ” С‚Р°Рј top СЂР°Р·СЂРµС€Р°РµС‚СЃСЏ
-    /// С‡РµСЂРµР· [`PersistentJs::register_parent_document`]. Default no-op Р±РµР· v8.
+    /// BUG-480 срез 3: зарегистрировать документ верхнего окна в JS-контексте
+    /// фрейма глубины ≥ 2 (`window.top` ведёт в корень, а не в непосредственного
+    /// родителя). Для фрейма первого уровня не вызывается — там top разрешается
+    /// через [`PersistentJs::register_parent_document`]. Default no-op без v8.
     fn register_top_document(&self, _doc: Arc<Mutex<Document>>, _url: &str, _accessible: bool) {}
     /// Deliver a PerformancePaintTiming entry to JS PerformanceObservers.
     ///
@@ -223,7 +223,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Deliver a PerformanceNavigationTiming entry to JS PerformanceObservers.
     ///
     /// Called after a page load completes. `url` is the navigation URL;
-    /// `duration_ms` is total load time (Navigation Timing L2 В§4.2 `duration`).
+    /// `duration_ms` is total load time (Navigation Timing L2 §4.2 `duration`).
     /// Calls `_lumen_deliver_perf_entry('navigation', url, 0.0, duration_ms, detail)`.
     fn deliver_nav_timing(&self, url: &str, duration_ms: f64);
     /// Hand a batch of engine-issued subresource loads to the page's Resource
@@ -236,7 +236,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn deliver_resource_timings(&self, rows_json: &str);
     /// Deliver a LargestContentfulPaint entry to JS PerformanceObservers.
     ///
-    /// Called when a large content element (>500pxВІ) is rendered.
+    /// Called when a large content element (>500px²) is rendered.
     /// `element_id` = NID; `size` = area in pixels; `render_time_ms` = render completion timestamp.
     #[allow(dead_code)]
     fn deliver_lcp_entry(&self, element_id: u32, size: u32, start_ms: f64, render_time_ms: f64);
@@ -255,7 +255,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Push a fresh snapshot of resolved CSS custom properties into the JS
     /// runtime (BUG-732).
     ///
-    /// Published from every place that publishes computed styles вЂ” the two
+    /// Published from every place that publishes computed styles — the two
     /// snapshots are the two halves of what `window.getComputedStyle()` can
     /// answer, and a page that gets only the first reports `""` for every
     /// `var()`-declared value.
@@ -274,7 +274,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn notify_window_loaded(&self);
     /// Notify all registered `MediaQueryList` instances that the viewport or
-    /// user preferences changed (CSS Media Queries L4 В§4.2). Each MQL whose
+    /// user preferences changed (CSS Media Queries L4 §4.2). Each MQL whose
     /// `matches` flipped fires a `change` event on its listeners.
     ///
     /// Must be called after `update_viewport_size` so JS reads consistent
@@ -293,7 +293,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     ///
     /// Must be called on every event-loop step so that `onopen`/`onmessage`/
     /// `onerror` handlers fire promptly. Calls `_lumen_pump_sse()` which drains
-    /// `_lumen_sse_poll()` for every open handle (HTML Living Standard В§9.2).
+    /// `_lumen_sse_poll()` for every open handle (HTML Living Standard §9.2).
     #[allow(dead_code)]
     fn pump_sse(&self);
     /// Deliver messages posted by Web Worker threads to their `Worker` JS instances.
@@ -313,14 +313,14 @@ pub(crate) trait PersistentJs: Send + Sync {
     ///
     /// Must be called on every event-loop tick alongside `pump_workers()` so that
     /// each client `port`'s `onmessage` / `addEventListener('message', fn)` fires
-    /// when a shared worker replies (WHATWG HTML В§10.2).
+    /// when a shared worker replies (WHATWG HTML §10.2).
     #[allow(dead_code)]
     fn pump_shared_workers(&self);
-    /// BUG-480 СЃСЂРµР· 4: СЂР°Р·РѕР±СЂР°С‚СЊ СЏС‰РёРє РєСЂРѕСЃСЃ-С„СЂРµР№РјРѕРІС‹С… postMessage
-    /// (`crates/js/src/frame_bridge.rs`) Рё РґРѕСЃС‚Р°РІРёС‚СЊ Р°РґСЂРµСЃРѕРІР°РЅРЅС‹Рµ СЌС‚РѕРјСѓ
-    /// РєРѕРЅС‚РµРєСЃС‚Сѓ СЃРѕРѕР±С‰РµРЅРёСЏ РєР°Рє MessageEvent РІ window.onmessage /
-    /// addEventListener('message'). Р’С‹Р·С‹РІР°РµС‚СЃСЏ РЅР° РєР°Р¶РґРѕРј С‚РёРєРµ СЂСЏРґРѕРј СЃ
-    /// pump_broadcast_channels вЂ” Рё Сѓ СЃС‚СЂР°РЅРёС†С‹, Рё Сѓ С…СЌРЅРґР»РѕРІ С„СЂРµР№РјРѕРІ.
+    /// BUG-480 срез 4: разобрать ящик кросс-фреймовых postMessage
+    /// (`crates/js/src/frame_bridge.rs`) и доставить адресованные этому
+    /// контексту сообщения как MessageEvent в window.onmessage /
+    /// addEventListener('message'). Вызывается на каждом тике рядом с
+    /// pump_broadcast_channels — и у страницы, и у хэндлов фреймов.
     #[allow(dead_code)]
     fn pump_frame_messages(&self) {}
     /// Drain OS notification requests queued by `new Notification(...)` in JS.
@@ -354,7 +354,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn take_console_messages(&self) -> Vec<(u8, String)>;
     /// Push a fresh snapshot of per-node scroll state into the JS runtime.
     ///
-    /// Maps NodeId index в†’ `[scroll_x, scroll_y, scroll_width, scroll_height]`.
+    /// Maps NodeId index → `[scroll_x, scroll_y, scroll_width, scroll_height]`.
     /// Called after every `relayout_page` so JS reads `scrollTop`/`scrollLeft`/
     /// `scrollWidth`/`scrollHeight` consistently.
     #[allow(dead_code)]
@@ -389,10 +389,10 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn fire_popstate(&self, state_json: &str, url: &str);
     /// Fire a page-lifecycle event (`pageshow` / `pagehide`) on `window`
-    /// (HTML Living Standard В§8.6 вЂ” back/forward cache).
+    /// (HTML Living Standard §8.6 — back/forward cache).
     ///
     /// `event` is `"pageshow"` or `"pagehide"` (always a fixed literal supplied
-    /// by the shell вЂ” never user data). `persisted` is the `PageTransitionEvent`
+    /// by the shell — never user data). `persisted` is the `PageTransitionEvent`
     /// `.persisted` flag: `true` when the page was/will be retained in bfcache
     /// (restorable without a reload), `false` for a fresh load or a discarded
     /// page. Delivered via `_lumen_fire_page_lifecycle` in the JS shim.
@@ -402,8 +402,8 @@ pub(crate) trait PersistentJs: Send + Sync {
             "_lumen_fire_page_lifecycle('{event}', {persisted})"
         ));
     }
-    /// Run the spec's В«unload a documentВ» steps on the outgoing page
-    /// (HTML LS В§7.4.6): `pagehide` в†’ `visibilityState = 'hidden'` в†’ `unload`.
+    /// Run the spec's «unload a document» steps on the outgoing page
+    /// (HTML LS §7.4.6): `pagehide` → `visibilityState = 'hidden'` → `unload`.
     ///
     /// `persisted` is the `PageTransitionEvent` flag AND the salvageable state:
     /// `true` means the shell retained the document (parked/frozen), so `unload`
@@ -413,10 +413,10 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn unload_document(&self, persisted: bool) {
         self.eval_js(&format!("_lumen_unload_document({persisted})"));
     }
-    /// Run the spec's В«prompt to unload a documentВ» steps (HTML LS В§7.4.5) вЂ”
+    /// Run the spec's «prompt to unload a document» steps (HTML LS §7.4.5) —
     /// dispatch `beforeunload` on the outgoing page.
     ///
-    /// The page's answer (В«I asked to stayВ») is deliberately not honoured: that
+    /// The page's answer («I asked to stay») is deliberately not honoured: that
     /// needs a user-facing confirm dialog, which this engine does not have.
     /// See BUG-834 and `_lumen_fire_beforeunload` in the JS shim.
     #[allow(dead_code)]
@@ -428,11 +428,11 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Returns `(node_index, width, height, rgba)` for every canvas drawn to
     /// since the last drain. Shell registers each as
     /// `Renderer::register_image("canvas:{nid}", ...)` and requests a repaint.
-    /// Returns an empty vec when no canvas was drawn (HTML LS В§4.12.4).
+    /// Returns an empty vec when no canvas was drawn (HTML LS §4.12.4).
     #[allow(dead_code)]
     fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)>;
     /// Drain fullscreen requests queued by `element.requestFullscreen()` and
-    /// `document.exitFullscreen()` (WHATWG Fullscreen В§4).
+    /// `document.exitFullscreen()` (WHATWG Fullscreen §4).
     ///
     /// Each entry is `(enter, nid)`: `enter = true` means enter OS fullscreen
     /// for the element with the given node index; `false` means exit fullscreen
@@ -463,7 +463,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Called after scroll updates to keep JS reads of `window.scrollY` accurate.
     ///
     /// Returns `true` when the value actually differs from the one the runtime
-    /// held вЂ” i.e. when CSSOM-View В§14 В«run the scroll stepsВ» must fire a
+    /// held — i.e. when CSSOM-View §14 «run the scroll steps» must fire a
     /// `scroll` event for the viewport this frame (BUG-821). The comparison
     /// lives in the runtime rather than in the shell on purpose: the previous
     /// position must be per-*document*, so a navigation that resets `scroll_y`
@@ -484,59 +484,59 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `progress_x` = inline-axis fraction `[0.0, 1.0]` (scroll_x / max_scroll_x).
     ///
     /// Called after each scroll update in `RedrawRequested` step 1. Drives
-    /// CSS Scroll-Driven Animations L1 В§3 (CSS Scroll-Driven Animations Level 1).
+    /// CSS Scroll-Driven Animations L1 §3 (CSS Scroll-Driven Animations Level 1).
     #[allow(dead_code)]
     fn deliver_scroll_progress(&self, progress_y: f32, progress_x: f32);
 
     /// Fire a non-bubbling `scroll` Event on the element identified by `nid`.
     ///
     /// Called after every overflow-container scroll-position change (both
-    /// wheel-driven and JS-programmatic). Per WHATWG HTML В§8.1.6.2.
+    /// wheel-driven and JS-programmatic). Per WHATWG HTML §8.1.6.2.
     #[allow(dead_code)]
     fn fire_element_scroll(&self, nid: u32);
 
     /// Fire a non-bubbling `scroll` Event on the `window` object.
     ///
     /// Called whenever the page-level scroll position changes.
-    /// Per WHATWG HTML В§8.1.6.2.
+    /// Per WHATWG HTML §8.1.6.2.
     #[allow(dead_code)]
     fn fire_window_scroll(&self);
 
     /// Fire a non-bubbling `scrollend` Event on the element identified by `nid`
-    /// (CSSOM-View В§14). Called once an overflow container has *finished*
+    /// (CSSOM-View §14). Called once an overflow container has *finished*
     /// scrolling; both its scroll paths are instant, so that is the same frame
     /// as [`Self::fire_element_scroll`].
     #[allow(dead_code)]
     fn fire_element_scrollend(&self, nid: u32);
 
     /// Whether the viewport owes a `scrollend` on this rendering update
-    /// (BUG-822). Delegates to the runtime, which holds the debt per document вЂ”
+    /// (BUG-822). Delegates to the runtime, which holds the debt per document —
     /// see `V8JsRuntime::page_scrollend_due` for the `moved`/`settled` contract.
     #[allow(dead_code)]
     fn page_scrollend_due(&self, moved: bool, settled: bool) -> bool;
 
     /// Fire a non-bubbling `scrollend` Event on the `window` object
-    /// (CSSOM-View В§14), once page scrolling has come to a stop.
+    /// (CSSOM-View §14), once page scrolling has come to a stop.
     #[allow(dead_code)]
     fn fire_window_scrollend(&self);
 
     /// Fire a non-bubbling, non-cancelable `resize` Event on the `window`
-    /// object (HTML LS В§7.4.4 В«Firing events using the resize algorithmВ»).
+    /// object (HTML LS §7.4.4 «Firing events using the resize algorithm»).
     ///
     /// FRAME-1: called whenever a sub-document's viewport (its `<iframe>`
-    /// host box, per HTML LS В§4.8.5) actually changes size вЂ” the frame
+    /// host box, per HTML LS §4.8.5) actually changes size — the frame
     /// counterpart of `WindowEvent::Resized` on the top-level page.
     #[allow(dead_code)]
     fn fire_window_resize(&self);
 
     /// Deliver a batch of `content-visibility: auto` state changes to JS as
-    /// `contentvisibilityautostatechange` events (CSS Contain L2 В§4.1, BUG-852).
+    /// `contentvisibilityautostatechange` events (CSS Contain L2 §4.1, BUG-852).
     ///
     /// `payload` is a JSON array of `[node_index, skipped]` pairs in tree order.
     #[allow(dead_code)]
     fn deliver_cv_state_changes(&self, payload: &str);
 
-    /// Pause the JS event loop (T0 в†’ T1 lifecycle transition).
+    /// Pause the JS event loop (T0 → T1 lifecycle transition).
     ///
     /// Sets `document.visibilityState = "hidden"`, fires `visibilitychange`.
     /// Called when a tab is sent to background in `switch_tab`.
@@ -544,7 +544,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn pause_event_loop(&self) {}
 
-    /// Resume the JS event loop (T1 в†’ T0 lifecycle transition).
+    /// Resume the JS event loop (T1 → T0 lifecycle transition).
     ///
     /// Sets `document.visibilityState = "visible"`, fires `visibilitychange`.
     /// Called when a background tab is brought to foreground in `switch_tab`.
@@ -574,7 +574,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Runs the shim's focus-update steps (BUG-381): sets `document.activeElement`,
     /// fires `blur`/`focusout`/`focus`/`focusin` and updates `_lumen_last_focused_nid`
     /// so `showModal()` can record it for restoration when the dialog closes.
-    /// `nid = None` means focus was cleared. Idempotent вЂ” echoing a focus the page
+    /// `nid = None` means focus was cleared. Idempotent — echoing a focus the page
     /// itself just requested via `element.focus()` dispatches nothing.
     #[allow(dead_code)]
     fn notify_focus_changed(&self, _nid: Option<u32>) {}
@@ -598,7 +598,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// in `readyState === OPEN`) or registered `unload`/`beforeunload` handlers.
     ///
     /// Both disqualify a page from the full bfcache freeze per HTML Living
-    /// Standard В§8.6 вЂ” [`Lumen::bfcache_eligible`] falls back to the
+    /// Standard §8.6 — [`Lumen::bfcache_eligible`] falls back to the
     /// HTML-snapshot path when this returns `true`. Default `false` (no
     /// blockers) covers runtimes without this introspection.
     #[allow(dead_code)] // called only for bfcache eligibility check
@@ -606,7 +606,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Atomically clear and return the current pointer capture target node ID.
     ///
     /// Called by the shell after `pointerup` (implicit release per W3C Pointer Events
-    /// L3 В§4.1).  Returns `None` if no capture was active.
+    /// L3 §4.1).  Returns `None` if no capture was active.
     #[allow(dead_code)]
     fn take_pointer_capture(&self) -> Option<u32> { None }
 }
@@ -615,7 +615,7 @@ pub(crate) trait PersistentJs: Send + Sync {
 ///
 /// Methods backed by state wired in `install_dom` (S3 core DOM) delegate to `V8JsRuntime` accessors;
 /// methods for subsystems not yet ported to V8 (view transitions, bfcache
-/// heap suspend вЂ” see `docs/tasks/ph3-v8-migration.md` slices S11) use the
+/// heap suspend — see `docs/tasks/ph3-v8-migration.md` slices S11) use the
 /// trait's own default no-op/empty implementation or a local stub, and start
 /// returning real data once their slice lands. Workers (dedicated + shared +
 /// service) were wired in S10; pointer capture in S12b-20.
@@ -628,7 +628,7 @@ pub(crate) struct V8PersistentJs {
 /// evaluates (see `PersistentJs::fire_popstate`).
 ///
 /// Split out of `fire_popstate` so the two argument encodings can be asserted
-/// without a live runtime вЂ” they are not the same and BUG-829 was exactly that
+/// without a live runtime — they are not the same and BUG-829 was exactly that
 /// confusion. `state_json` is JSON **text** that the shim parses, so it goes in
 /// as a JS string literal; `url` is an ordinary string in single quotes.
 #[cfg(feature = "v8")]
@@ -749,7 +749,7 @@ impl PersistentJs for V8PersistentJs {
     }
     // BUG-447: this override was missing, so on the default V8 build the call fell
     // through to the trait's no-op default and the `img_bitmap_store` stayed empty
-    // for the whole session вЂ” `drawImage(imgElement, вЂ¦)` silently painted nothing.
+    // for the whole session — `drawImage(imgElement, …)` silently painted nothing.
     fn register_img_bitmaps(&self, bitmaps: Vec<(u32, Arc<lumen_image::Image>)>) {
         self.rt.register_img_bitmaps(bitmaps);
     }
@@ -802,7 +802,7 @@ impl PersistentJs for V8PersistentJs {
         // JSON text, because the shim runs `JSON.parse` on it. Embedding the
         // JSON bare on the "valid JSON is a valid JS expression" reasoning is
         // what made every `popstate` deliver `state: null` for months
-        // (BUG-829) вЂ” the receiver's own reading of the payload decides the
+        // (BUG-829) — the receiver's own reading of the payload decides the
         // encoding, not the payload's syntax.
         self.eval_js(&format!(
             "_lumen_deliver_resource_timings({})",
@@ -914,8 +914,8 @@ impl PersistentJs for V8PersistentJs {
     fn fire_popstate(&self, state_json: &str, url: &str) {
         // BUG-829: `state_json` is JSON *text* and `_lumen_deliver_popstate`
         // parses it as such, so it has to reach the shim as a JS string. This
-        // used to embed it bare вЂ” on the reasoning that valid JSON is also a
-        // valid JS expression вЂ” which handed the shim an object literal
+        // used to embed it bare — on the reasoning that valid JSON is also a
+        // valid JS expression — which handed the shim an object literal
         // instead, whose `JSON.parse` then threw, so every traversal restored
         // `state: null`. Nobody noticed because the one value that survives
         // that round trip unchanged is `null` itself.
@@ -1043,7 +1043,7 @@ pub(crate) struct DomTouchedSummary {
     /// Nodes whose selector-relevant state actually changed via a tracked
     /// mutation primitive. See `lumen_js::DomTouched::nodes`.
     pub(crate) nodes: std::collections::HashSet<lumen_dom::NodeId>,
-    /// `true` when `nodes` alone is not a safe restyle root-set this cycle вЂ”
+    /// `true` when `nodes` alone is not a safe restyle root-set this cycle —
     /// the caller must fall back to a full cascade. See
     /// `lumen_js::DomTouched::unattributed`.
     pub(crate) unattributed: bool,

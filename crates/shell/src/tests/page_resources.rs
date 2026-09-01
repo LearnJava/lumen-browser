@@ -32,11 +32,11 @@ fn dispatch_preload_hints_emits_events() {
     // `Arc::new(CollectingSink(..))` and never reassigned, so the erased
     // `dyn EventSink` really points at a `CollectingSink`; the pointer is
     // derived from a live `Arc` that outlives the borrow. A test-only
-    // downcast вЂ” `EventSink` has no `Any` supertrait to do it safely.
+    // downcast — `EventSink` has no `Any` supertrait to do it safely.
     let events = unsafe { (*sink_any).0.lock().unwrap() };
     assert_eq!(events.len(), 2);
 
-    // CSS (High) СЃРѕСЂС‚РёСЂСѓРµС‚СЃСЏ РїРµСЂРµРґ JS (Medium) РЅРµР·Р°РІРёСЃРёРјРѕ РѕС‚ source-order
+    // CSS (High) сортируется перед JS (Medium) независимо от source-order
     let Event::SubresourceHintFound { url, kind, priority } = &events[0] else { panic!() };
     assert_eq!(url, "https://example.com/reset.css");
     assert_eq!(*kind, SubresourceKind::Stylesheet);
@@ -63,7 +63,7 @@ fn dispatch_preload_hints_deduplicates_same_url() {
     let sink: Arc<dyn EventSink> =
         Arc::new(CollectingSink(Mutex::new(Vec::new())));
     let base = ResourceBase::Url("https://example.com/".to_owned());
-    // rel="preload stylesheet" СЃРѕР·РґР°С‘С‚ РґРІР° С…РёРЅС‚Р° РЅР° РѕРґРёРЅ href
+    // rel="preload stylesheet" создаёт два хинта на один href
     let hints = vec![
         PreloadHint::Preload { url: "style.css".into(), as_kind: Some("style".into()) },
         PreloadHint::Stylesheet { url: "style.css".into(), media: None },
@@ -77,9 +77,9 @@ fn dispatch_preload_hints_deduplicates_same_url() {
     // `Arc::new(CollectingSink(..))` and never reassigned, so the erased
     // `dyn EventSink` really points at a `CollectingSink`; the pointer is
     // derived from a live `Arc` that outlives the borrow. A test-only
-    // downcast вЂ” `EventSink` has no `Any` supertrait to do it safely.
+    // downcast — `EventSink` has no `Any` supertrait to do it safely.
     let events = unsafe { (*sink_any).0.lock().unwrap() };
-    // style.css РїРѕСЏРІР»СЏРµС‚СЃСЏ РґРІР°Р¶РґС‹ вЂ” РґРѕР»Р¶РµРЅ emit-РёС‚СЊСЃСЏ РѕРґРёРЅ СЂР°Р·
+    // style.css появляется дважды — должен emit-иться один раз
     assert_eq!(events.len(), 2, "expected 2 unique urls, got {}", events.len());
     let urls: Vec<_> = events.iter().map(|e| {
         let Event::SubresourceHintFound { url, .. } = e else { panic!() };
@@ -91,7 +91,7 @@ fn dispatch_preload_hints_deduplicates_same_url() {
 
 #[test]
 fn dispatch_preload_hints_cross_call_dedup() {
-    // Р’С‚РѕСЂРѕР№ РІС‹Р·РѕРІ СЃ С‚РµРј Р¶Рµ seen-РЅР°Р±РѕСЂРѕРј РЅРµ РґРѕР»Р¶РµРЅ РїРѕРІС‚РѕСЂРЅРѕ СЌРјРёС‚РёС‚СЊ.
+    // Второй вызов с тем же seen-набором не должен повторно эмитить.
     use lumen_html_parser::PreloadHint;
     use std::sync::{Arc, Mutex};
 
@@ -104,11 +104,11 @@ fn dispatch_preload_hints_cross_call_dedup() {
     let base = ResourceBase::Url("https://example.com/".to_owned());
     let mut seen = std::collections::HashSet::new();
 
-    // РџРµСЂРІС‹Р№ РІС‹Р·РѕРІ вЂ” СЂР°РЅРЅРёР№ СЃРєР°РЅ (streaming chunk)
+    // Первый вызов — ранний скан (streaming chunk)
     let early = vec![PreloadHint::Stylesheet { url: "reset.css".into(), media: None }];
     dispatch_preload_hints(&early, &base, &sink, &mut seen);
 
-    // Р’С‚РѕСЂРѕР№ РІС‹Р·РѕРІ вЂ” С„РёРЅР°Р»СЊРЅС‹Р№ pipeline: С‚Рµ Р¶Рµ С…РёРЅС‚С‹ + РЅРѕРІС‹Р№
+    // Второй вызов — финальный pipeline: те же хинты + новый
     let full = vec![
         PreloadHint::Stylesheet { url: "reset.css".into(), media: None },
         PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None },
@@ -120,9 +120,9 @@ fn dispatch_preload_hints_cross_call_dedup() {
     // `Arc::new(CollectingSink(..))` and never reassigned, so the erased
     // `dyn EventSink` really points at a `CollectingSink`; the pointer is
     // derived from a live `Arc` that outlives the borrow. A test-only
-    // downcast вЂ” `EventSink` has no `Any` supertrait to do it safely.
+    // downcast — `EventSink` has no `Any` supertrait to do it safely.
     let events = unsafe { (*sink_any).0.lock().unwrap() };
-    // reset.css вЂ” РѕРґРёРЅ СЂР°Р· (РёР· РїРµСЂРІРѕРіРѕ РІС‹Р·РѕРІР°), hero.png вЂ” РѕРґРёРЅ СЂР°Р· (РёР· РІС‚РѕСЂРѕРіРѕ)
+    // reset.css — один раз (из первого вызова), hero.png — один раз (из второго)
     assert_eq!(events.len(), 2);
     let urls: Vec<_> = events.iter().map(|e| {
         let Event::SubresourceHintFound { url, .. } = e else { panic!() };
@@ -144,7 +144,7 @@ fn dispatch_preload_hints_sorts_by_priority() {
 
     let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(Mutex::new(Vec::new())));
     let base = ResourceBase::Url("https://example.com/".to_owned());
-    // Source-order: img (Low) в†’ script (Medium) в†’ css (High)
+    // Source-order: img (Low) → script (Medium) → css (High)
     let hints = vec![
         PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None },
         PreloadHint::Script { url: "app.js".into() },
@@ -158,11 +158,11 @@ fn dispatch_preload_hints_sorts_by_priority() {
     // `Arc::new(CollectingSink(..))` and never reassigned, so the erased
     // `dyn EventSink` really points at a `CollectingSink`; the pointer is
     // derived from a live `Arc` that outlives the borrow. A test-only
-    // downcast вЂ” `EventSink` has no `Any` supertrait to do it safely.
+    // downcast — `EventSink` has no `Any` supertrait to do it safely.
     let events = unsafe { (*sink_any).0.lock().unwrap() };
     assert_eq!(events.len(), 3);
 
-    // РџРѕСЃР»Рµ СЃРѕСЂС‚РёСЂРѕРІРєРё: css(High) в†’ js(Medium) в†’ img(Low)
+    // После сортировки: css(High) → js(Medium) → img(Low)
     let priorities: Vec<_> = events.iter().map(|e| {
         let Event::SubresourceHintFound { priority, .. } = e else { panic!() };
         *priority
@@ -181,11 +181,11 @@ fn collect_link_hrefs_finds_stylesheet() {
     assert_eq!(only_hrefs, vec!["style.css"]);
 }
 
-/// BUG-804: РёСЃС…РѕРґ РєР°Р¶РґРѕРіРѕ `<link rel=stylesheet>` РІРѕР·РІСЂР°С‰Р°РµС‚СЃСЏ РїРѕ СѓР·Р»Р°Рј, РІ
-/// РїРѕСЂСЏРґРєРµ РѕР±СЉСЏРІР»РµРЅРёСЏ, Рё РїСЂРѕРІР°Р» РЅРµ РІС‹РїР°РґР°РµС‚ РёР· СЃРїРёСЃРєР° вЂ” РёРЅР°С‡Рµ СЌР»РµРјРµРЅС‚Сѓ
-/// РЅРµРіРґРµ РІС‹СЃС‚СЂРµР»РёС‚СЊ `error`. `samples/` Р·Р°РІРµРґРѕРјРѕ РЅРµ СЃРѕРґРµСЂР¶РёС‚ СЌС‚РёС… С„Р°Р№Р»РѕРІ,
-/// С‚Р°Рє С‡С‚Рѕ РѕР±Р° Р»РёСЃС‚Р° С‚СѓС‚ В«РЅРµ РїСЂРёС€Р»РёВ»; РїСЂРѕРІРµСЂСЏРµС‚СЃСЏ СЃРІСЏР·СЊ СѓР·РµР»в†”РёСЃС…РѕРґ, Р° РЅРµ
-/// СЃРµС‚СЊ.
+/// BUG-804: исход каждого `<link rel=stylesheet>` возвращается по узлам, в
+/// порядке объявления, и провал не выпадает из списка — иначе элементу
+/// негде выстрелить `error`. `samples/` заведомо не содержит этих файлов,
+/// так что оба листа тут «не пришли»; проверяется связь узел↔исход, а не
+/// сеть.
 #[test]
 fn load_linked_stylesheets_reports_one_outcome_per_element() {
     struct NullSink;
@@ -206,14 +206,14 @@ fn load_linked_stylesheets_reports_one_outcome_per_element() {
     assert!(css.is_empty(), "neither sheet exists on disk");
     assert_eq!(outcomes.len(), 2, "rel=alternate is not a cascade sheet");
     assert!(outcomes.iter().all(|(_, ok)| !ok));
-    // Р Р°Р·РЅС‹Рµ СЌР»РµРјРµРЅС‚С‹ вЂ” СЂР°Р·РЅС‹Рµ СѓР·Р»С‹: Р±РµР· СЌС‚РѕРіРѕ СЃС‚СЂР°РЅРёС†Р° РЅРµ СЃРјРѕРіР»Р° Р±С‹
-    // РѕС‚Р»РёС‡РёС‚СЊ, РєР°РєРѕР№ РёРјРµРЅРЅРѕ `<link>` РѕС‚С‡РёС‚Р°Р»СЃСЏ.
+    // Разные элементы — разные узлы: без этого страница не смогла бы
+    // отличить, какой именно `<link>` отчитался.
     assert_ne!(outcomes[0].0, outcomes[1].0);
 }
 
-/// BUG-480 СЃСЂРµР· 11: РїСЂРѕС…РѕРґ РїРѕРґСЂРµСЃСѓСЂСЃРѕРІ РїРѕРґ-РґРѕРєСѓРјРµРЅС‚Р° С„СЂРµР№РјР° Р·Р°РїСЂР°С€РёРІР°РµС‚
-/// `<link rel=stylesheet>` (РѕР±Р° РёСЃС…РѕРґР°) Рё `<img>` (РѕР±Р° РёСЃС…РѕРґР°), РЅРµ С‚СЂРѕРіР°РµС‚
-/// `rel=alternate`/`loading="lazy"` Рё РІРѕР·РІСЂР°С‰Р°РµС‚ РёСЃС…РѕРґС‹ РІ РїРѕСЂСЏРґРєРµ DOM.
+/// BUG-480 срез 11: проход подресурсов под-документа фрейма запрашивает
+/// `<link rel=stylesheet>` (оба исхода) и `<img>` (оба исхода), не трогает
+/// `rel=alternate`/`loading="lazy"` и возвращает исходы в порядке DOM.
 #[test]
 fn frame_subresources_fetch_links_and_imgs_with_outcomes() {
     let dir = std::env::temp_dir().join("lumen_frame_subresources_test");
@@ -224,7 +224,7 @@ fn frame_subresources_fetch_links_and_imgs_with_outcomes() {
     // диска, поэтому фикстура обязана быть настоящим PNG — исход `<img>` стал
     // означать «пиксели есть», а не «байты прочитались».
     std::fs::write(dir.join("ok.png"), tiny_png(4, 2)).unwrap();
-    // missing.css / missing.png РЅРµ СЃРѕР·РґР°СЋС‚СЃСЏ.
+    // missing.css / missing.png не создаются.
 
     // URL-ы ОТНОСИТЕЛЬНЫЕ (разрешаются от базы ребёнка ниже): так пишет живая
     // разметка, и только на них видно, что ключ регистрации картинки — не
@@ -301,10 +301,10 @@ fn tiny_png(w: u32, h: u32) -> Vec<u8> {
     lumen_image::encode_png_rgba8(&img).unwrap()
 }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ @import file loading (CSS Cascade L4 В§6.5) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ──────────────── @import file loading (CSS Cascade L4 §6.5) ─────────────
 
-/// РЎРѕР·РґР°С‘С‚ СѓРЅРёРєР°Р»СЊРЅСѓСЋ РІСЂРµРјРµРЅРЅСѓСЋ РґРёСЂРµРєС‚РѕСЂРёСЋ РґР»СЏ CSS-С„РёРєСЃС‚СѓСЂ `@import`-С‚РµСЃС‚Р°,
-/// РѕС‡РёС‰Р°СЏ РїСЂРѕС€Р»С‹Р№ РїСЂРѕРіРѕРЅ. Р’РѕР·РІСЂР°С‰Р°РµС‚ РїСѓС‚СЊ РґРёСЂРµРєС‚РѕСЂРёРё.
+/// Создаёт уникальную временную директорию для CSS-фикстур `@import`-теста,
+/// очищая прошлый прогон. Возвращает путь директории.
 fn import_fixture_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("lumen_import_test_{name}"));
     let _ = std::fs::remove_dir_all(&dir);
@@ -316,8 +316,8 @@ fn null_sink() -> Arc<dyn EventSink> {
     Arc::new(StdoutEventSink)
 }
 
-/// `@import` РїСЂРµРґРїРѕСЃС‹Р»Р°РµС‚ СЃРѕРґРµСЂР¶РёРјРѕРµ РёРјРїРѕСЂС‚РёСЂРѕРІР°РЅРЅРѕРіРѕ Р»РёСЃС‚Р° СЃРѕР±СЃС‚РІРµРЅРЅС‹Рј
-/// РїСЂР°РІРёР»Р°Рј РёРјРїРѕСЂС‚РёСЂСѓСЋС‰РµРіРѕ (РёРјРїРѕСЂС‚ В«СЂР°РЅСЊС€РµВ» РІ РєР°СЃРєР°РґРµ).
+/// `@import` предпосылает содержимое импортированного листа собственным
+/// правилам импортирующего (импорт «раньше» в каскаде).
 #[test]
 fn inline_css_imports_prepends_imported_content() {
     let dir = import_fixture_dir("prepend");
@@ -335,9 +335,9 @@ fn inline_css_imports_prepends_imported_content() {
     assert!(b_pos < a_pos, "imported rules must precede importing sheet's own rules");
 }
 
-/// BUG-743: СЂРµР·СѓР»СЊС‚Р°С‚ РІСЃРµРіРґР° **РѕРєР°РЅС‡РёРІР°РµС‚СЃСЏ** РёСЃС…РѕРґРЅС‹Рј С‚РµРєСЃС‚РѕРј Р»РёСЃС‚Р° вЂ”
-/// РЅР° СЌС‚РѕРј РёРЅРІР°СЂРёР°РЅС‚Рµ РґРµСЂР¶РёС‚СЃСЏ РІС‹СЂРµР·Р°РЅРёРµ `imports_prefix` РІ
-/// `parse_and_layout` (РїСЂРµС„РёРєСЃ = РІСЃС‘, С‡С‚Рѕ РґР»РёРЅРЅРµРµ РёСЃС…РѕРґРЅРѕРіРѕ С‚РµРєСЃС‚Р°).
+/// BUG-743: результат всегда **оканчивается** исходным текстом листа —
+/// на этом инварианте держится вырезание `imports_prefix` в
+/// `parse_and_layout` (префикс = всё, что длиннее исходного текста).
 #[test]
 fn inline_css_imports_result_ends_with_source_text() {
     let dir = import_fixture_dir("suffix");
@@ -349,14 +349,14 @@ fn inline_css_imports_result_ends_with_source_text() {
             text, &base, &null_sink(), None, &ctx,
             &mut std::collections::HashSet::new(), 0,
         );
-        assert!(out.ends_with(text), "СЂРµР·СѓР»СЊС‚Р°С‚ РЅРµ РѕРєР°РЅС‡РёРІР°РµС‚СЃСЏ РёСЃС…РѕРґРЅРёРєРѕРј: {out:?}");
+        assert!(out.ends_with(text), "результат не оканчивается исходником: {out:?}");
     }
 }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ BUG-743: РѕС‚РїРµС‡Р°С‚РѕРє РёРЅР»Р°Р№РЅРѕРІС‹С… <style> в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ──────────────── BUG-743: отпечаток инлайновых <style> ──────────────────
 
-/// Р’СЃС‚Р°РІРєР° РЅРѕРІРѕРіРѕ `<style>` РјРµРЅСЏРµС‚ РѕС‚РїРµС‡Р°С‚РѕРє вЂ” РёРЅР°С‡Рµ РїРѕР·РґРЅРёР№ РґРёРЅР°РјРёС‡РµСЃРєРёР№
-/// Р»РёСЃС‚ РЅРµ РїРµСЂРµСЃРѕР±РµСЂС‘С‚ РєР°СЃРєР°Рґ.
+/// Вставка нового `<style>` меняет отпечаток — иначе поздний динамический
+/// лист не пересоберёт каскад.
 #[test]
 fn inline_style_fingerprint_detects_added_block() {
     let a = lumen_html_parser::parse("<html><head><style>.a{color:red}</style></head><body></body></html>");
@@ -366,8 +366,8 @@ fn inline_style_fingerprint_detects_added_block() {
     assert_ne!(inline_style_fingerprint(&a), inline_style_fingerprint(&b));
 }
 
-/// РџСЂР°РІРєР° С‚РµРєСЃС‚Р° Р±Р»РѕРєР° Р±РµР· РёР·РјРµРЅРµРЅРёСЏ РґР»РёРЅС‹ С‚РѕР¶Рµ РјРµРЅСЏРµС‚ РѕС‚РїРµС‡Р°С‚РѕРє вЂ”
-/// СЃС‡С‘С‚С‡РёРєР° Р±Р»РѕРєРѕРІ РёР»Рё СЃСѓРјРјР°СЂРЅРѕР№ РґР»РёРЅС‹ Р±С‹Р»Рѕ Р±С‹ РЅРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ.
+/// Правка текста блока без изменения длины тоже меняет отпечаток —
+/// счётчика блоков или суммарной длины было бы недостаточно.
 #[test]
 fn inline_style_fingerprint_detects_same_length_edit() {
     let a = lumen_html_parser::parse("<html><head><style>.a{color:red}</style></head></html>");
@@ -375,8 +375,8 @@ fn inline_style_fingerprint_detects_same_length_edit() {
     assert_ne!(inline_style_fingerprint(&a), inline_style_fingerprint(&b));
 }
 
-/// РћРґРёРЅ Рё С‚РѕС‚ Р¶Рµ РґРѕРєСѓРјРµРЅС‚ РґР°С‘С‚ РѕРґРёРЅ Рё С‚РѕС‚ Р¶Рµ РѕС‚РїРµС‡Р°С‚РѕРє, Р° РїРµСЂРµСЃС‚Р°РЅРѕРІРєР°
-/// С‚РµРєСЃС‚Р° РјРµР¶РґСѓ РґРІСѓРјСЏ Р±Р»РѕРєР°РјРё вЂ” СЂР°Р·РЅС‹Р№ (РіСЂР°РЅРёС†С‹ Р±Р»РѕРєРѕРІ СѓС‡РёС‚С‹РІР°СЋС‚СЃСЏ).
+/// Один и тот же документ даёт один и тот же отпечаток, а перестановка
+/// текста между двумя блоками — разный (границы блоков учитываются).
 #[test]
 fn inline_style_fingerprint_is_stable_and_block_aware() {
     let src = "<html><head><style>.a{}</style><style>.b{}</style></head></html>";
@@ -387,15 +387,15 @@ fn inline_style_fingerprint_is_stable_and_block_aware() {
     assert_ne!(inline_style_fingerprint(&a), inline_style_fingerprint(&merged));
 }
 
-/// Р”РѕРєСѓРјРµРЅС‚ Р±РµР· РµРґРёРЅРѕРіРѕ `<style>` вЂ” РѕС‚РїРµС‡Р°С‚РѕРє СЃС‡РёС‚Р°РµС‚СЃСЏ Рё РЅРµ РїР°РЅРёРєСѓРµС‚.
+/// Документ без единого `<style>` — отпечаток считается и не паникует.
 #[test]
 fn inline_style_fingerprint_handles_document_without_styles() {
-    let a = lumen_html_parser::parse("<html><body><p>С‚РµРєСЃС‚</p></body></html>");
-    let b = lumen_html_parser::parse("<html><body><p>РґСЂСѓРіРѕР№</p></body></html>");
+    let a = lumen_html_parser::parse("<html><body><p>текст</p></body></html>");
+    let b = lumen_html_parser::parse("<html><body><p>другой</p></body></html>");
     assert_eq!(inline_style_fingerprint(&a), inline_style_fingerprint(&b));
 }
 
-/// Р’Р»РѕР¶РµРЅРЅС‹Рµ `@import` (a в†’ b в†’ c) СЂР°Р·РІРѕСЂР°С‡РёРІР°СЋС‚СЃСЏ РІ РїРѕСЂСЏРґРєРµ c, b, a.
+/// Вложенные `@import` (a → b → c) разворачиваются в порядке c, b, a.
 #[test]
 fn inline_css_imports_nested_order() {
     let dir = import_fixture_dir("nested");
@@ -413,24 +413,24 @@ fn inline_css_imports_nested_order() {
     assert!(c < b && b < a, "expected c < b < a, got c={c} b={b} a={a}");
 }
 
-/// Р¦РёРєР»РёС‡РµСЃРєРёР№ `@import` (a в†’ b в†’ a) Р·Р°РІРµСЂС€Р°РµС‚СЃСЏ Р±РµР· Р±РµСЃРєРѕРЅРµС‡РЅРѕР№ СЂРµРєСѓСЂСЃРёРё.
+/// Циклический `@import` (a → b → a) завершается без бесконечной рекурсии.
 #[test]
 fn inline_css_imports_cycle_guard() {
     let dir = import_fixture_dir("cycle");
     std::fs::write(dir.join("a.css"), "@import url(b.css);\n.a{}").unwrap();
     std::fs::write(dir.join("b.css"), "@import url(a.css);\n.b{}").unwrap();
     let base = ResourceBase::File(dir.join("a.css"));
-    // РќР°С‡РёРЅР°РµРј СЃ СЃРѕРґРµСЂР¶РёРјРѕРіРѕ a.css вЂ” С‚РѕС‚ Р¶Рµ С„Р°Р№Р» Р±СѓРґРµС‚ РёРјРїРѕСЂС‚РёСЂРѕРІР°РЅ РёР· b.
+    // Начинаем с содержимого a.css — тот же файл будет импортирован из b.
     let out = inline_css_imports(
         "@import url(b.css);\n.a{}", &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
         &mut std::collections::HashSet::new(), 0,
     );
-    // РљР°Р¶РґС‹Р№ Р»РёСЃС‚ Р·Р°РіСЂСѓР¶РµРЅ РјР°РєСЃРёРјСѓРј РѕРґРёРЅ СЂР°Р· (guard РїРѕ `seen`).
+    // Каждый лист загружен максимум один раз (guard по `seen`).
     assert_eq!(out.matches(".b{}").count(), 1);
 }
 
-/// `@import url(x) print;` РЅРµ Р·Р°РіСЂСѓР¶Р°РµС‚СЃСЏ РїРѕРґ СЌРєСЂР°РЅРЅС‹Рј РєРѕРЅС‚РµРєСЃС‚РѕРј.
+/// `@import url(x) print;` не загружается под экранным контекстом.
 #[test]
 fn inline_css_imports_media_gate() {
     let dir = import_fixture_dir("media");
@@ -445,8 +445,8 @@ fn inline_css_imports_media_gate() {
     assert!(out.contains(".a{}"));
 }
 
-/// РћС‚СЃСѓС‚СЃС‚РІСѓСЋС‰РёР№ РёРјРїРѕСЂС‚РёСЂСѓРµРјС‹Р№ С„Р°Р№Р» РЅРµ РІР°Р»РёС‚ СЂРµРЅРґРµСЂ вЂ” С‚РµРєСЃС‚ РІРѕР·РІСЂР°С‰Р°РµС‚СЃСЏ,
-/// СЃРѕР±СЃС‚РІРµРЅРЅС‹Рµ РїСЂР°РІРёР»Р° СЃРѕС…СЂР°РЅРµРЅС‹.
+/// Отсутствующий импортируемый файл не валит рендер — текст возвращается,
+/// собственные правила сохранены.
 #[test]
 fn inline_css_imports_missing_file_is_skipped() {
     let dir = import_fixture_dir("missing");
@@ -459,7 +459,7 @@ fn inline_css_imports_missing_file_is_skipped() {
     assert!(out.contains(".a{}"));
 }
 
-/// РўРµРєСЃС‚ Р±РµР· `@import` РІРѕР·РІСЂР°С‰Р°РµС‚СЃСЏ Р±РµР· РёР·РјРµРЅРµРЅРёР№ (Р±С‹СЃС‚СЂС‹Р№ РїСѓС‚СЊ).
+/// Текст без `@import` возвращается без изменений (быстрый путь).
 #[test]
 fn inline_css_imports_no_import_passthrough() {
     let base = ResourceBase::File(std::path::PathBuf::from("x/a.css"));
@@ -496,7 +496,7 @@ fn collect_link_hrefs_media_gate() {
     );
     let mut hrefs = Vec::new();
     collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
-    // print.css РѕС‚СЃРµСЏРЅ; huge.css РѕС‚СЃРµСЏРЅ (viewport 1024px < 5000px); РѕСЃС‚Р°Р»СЊРЅС‹Рµ вЂ” РґР°.
+    // print.css отсеян; huge.css отсеян (viewport 1024px < 5000px); остальные — да.
     let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h)| h.as_str()).collect();
     assert_eq!(only_hrefs, vec!["screen.css", "all.css", "plain.css", "wide.css"]);
 }
@@ -521,11 +521,11 @@ fn extract_title_basic() {
 
 #[test]
 fn extract_title_cyrillic_and_entities() {
-    // RCDATA-СЂРµР¶РёРј РґРµРєРѕРґРёСЂСѓРµС‚ &amp; в†’ '&' РїСЂСЏРјРѕ РІ tokenizer-Рµ.
+    // RCDATA-режим декодирует &amp; → '&' прямо в tokenizer-е.
     let doc = lumen_html_parser::parse(
-        r#"<html><head><title>Р”РѕРј &amp; РЎР°Рґ</title></head><body></body></html>"#,
+        r#"<html><head><title>Дом &amp; Сад</title></head><body></body></html>"#,
     );
-    assert_eq!(extract_title(&doc).as_deref(), Some("Р”РѕРј & РЎР°Рґ"));
+    assert_eq!(extract_title(&doc).as_deref(), Some("Дом & Сад"));
 }
 
 #[test]
@@ -552,7 +552,7 @@ fn extract_title_empty_is_none() {
 
 #[test]
 fn extract_title_first_wins() {
-    // Lenient: РµСЃР»Рё СЃС‚СЂР°РЅРёС†Р° РѕР±СЉСЏРІРёР»Р° <title> РґРІР°Р¶РґС‹, Р±РµСЂС‘Рј РїРµСЂРІС‹Р№.
+    // Lenient: если страница объявила <title> дважды, берём первый.
     let doc = lumen_html_parser::parse(
         "<html><head><title>A</title><title>B</title></head><body></body></html>",
     );
@@ -561,12 +561,12 @@ fn extract_title_first_wins() {
 
 #[test]
 fn window_title_with_page() {
-    assert_eq!(window_title(Some("Foo")), "Foo вЂ” Lumen");
+    assert_eq!(window_title(Some("Foo")), "Foo — Lumen");
 }
 
 #[test]
 fn window_title_fallback() {
-    // Fallback СЃРѕРґРµСЂР¶РёС‚ РІРµСЂСЃРёСЋ РїР°РєРµС‚Р° вЂ” РїСЂРѕРІРµСЂСЏРµРј РїСЂРµС„РёРєСЃ.
+    // Fallback содержит версию пакета — проверяем префикс.
     let t = window_title(None);
     assert!(t.starts_with("Lumen "));
 }
@@ -589,14 +589,14 @@ fn keybinding_ctrl_r_reload() {
 
 #[test]
 fn keybinding_plain_r_is_none() {
-    // Р‘РµР· Ctrl вЂ” РѕР±С‹С‡РЅР°СЏ Р±СѓРєРІР°, РЅРµ РєРѕРјР°РЅРґР°. Р—Р°С‰РёС‚Р° РѕС‚ РїРµСЂРµС…РІР°С‚Р° РІРІРѕРґР°
-    // РІ РѕРјРЅРёР±РѕРєСЃ (РєРѕРіРґР° РѕРЅ РїРѕСЏРІРёС‚СЃСЏ).
+    // Без Ctrl — обычная буква, не команда. Защита от перехвата ввода
+    // в омнибокс (когда он появится).
     assert_eq!(keybinding_for(KeyCode::KeyR, ModifiersState::empty()), None);
 }
 
 #[test]
 fn keybinding_ctrl_shift_r_is_read_later() {
-    // Ctrl+Shift+R в†’ toggle Read-later panel (В§12.3).
+    // Ctrl+Shift+R → toggle Read-later panel (§12.3).
     assert_eq!(
         keybinding_for(KeyCode::KeyR, ModifiersState::CONTROL | ModifiersState::SHIFT),
         Some(KeyCommand::ToggleReadLater),
@@ -621,7 +621,7 @@ fn keybinding_ctrl_w_close_tab() {
 
 #[test]
 fn keybinding_ctrl_escape_is_none() {
-    // Esc + Р»СЋР±С‹Рµ РјРѕРґРёС„РёРєР°С‚РѕСЂС‹ вЂ” РЅРµ РЅР°С€Р° РєРѕРјР°РЅРґР° (СЂР°РјРї РґР»СЏ Р±СѓРґСѓС‰РµРіРѕ).
+    // Esc + любые модификаторы — не наша команда (рамп для будущего).
     assert_eq!(
         keybinding_for(KeyCode::Escape, ModifiersState::CONTROL),
         None,
@@ -660,7 +660,7 @@ fn keybinding_f6_opens_address_bar() {
 
 #[test]
 fn keybinding_plain_f_opens_hints() {
-    // F Р±РµР· РјРѕРґРёС„РёРєР°С‚РѕСЂРѕРІ РѕС‚РєСЂС‹РІР°РµС‚ hint-СЂРµР¶РёРј kbd-РЅР°РІРёРіР°С†РёРё.
+    // F без модификаторов открывает hint-режим kbd-навигации.
     assert_eq!(
         keybinding_for(KeyCode::KeyF, ModifiersState::empty()),
         Some(KeyCommand::HintModeOpen)

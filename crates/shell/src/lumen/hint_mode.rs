@@ -10,11 +10,11 @@
 use crate::*;
 
 impl Lumen {
-    /// РћР±СЂР°Р±Р°С‚С‹РІР°РµС‚ РєР»Р°РІРёС€РЅС‹Р№ РІРІРѕРґ РїРѕРєР° hint-СЂРµР¶РёРј Р°РєС‚РёРІРµРЅ.
+    /// Обрабатывает клавишный ввод пока hint-режим активен.
     ///
-    /// `Escape` вЂ” Р·Р°РєСЂС‹С‚СЊ overlay. Р›СЋР±РѕР№ РѕРґРёРЅРѕС‡РЅС‹Р№ СЃРёРјРІРѕР» (СЃС‚СЂРѕС‡РЅС‹Р№ ASCII) вЂ”
-    /// РїРµСЂРµРґР°С‘С‚СЃСЏ РІ `HintState::push_char`; РїСЂРё СѓРЅРёРєР°Р»СЊРЅРѕРј СЃРѕРІРїР°РґРµРЅРёРё РІС‹Р·С‹РІР°РµС‚СЃСЏ
-    /// `activate_node`. РќРµСЂР°СЃРїРѕР·РЅР°РЅРЅС‹Рµ РєР»Р°РІРёС€Рё РёРіРЅРѕСЂРёСЂСѓСЋС‚СЃСЏ.
+    /// `Escape` — закрыть overlay. Любой одиночный символ (строчный ASCII) —
+    /// передаётся в `HintState::push_char`; при уникальном совпадении вызывается
+    /// `activate_node`. Нераспознанные клавиши игнорируются.
     pub(crate) fn handle_hint_key(&mut self, code: KeyCode, key_event: &KeyEvent) {
         if matches!(code, KeyCode::Escape) && !key_event.repeat {
             self.hint.close();
@@ -37,17 +37,17 @@ impl Lumen {
         }
     }
 
-    /// РђРєС‚РёРІРёСЂРѕРІР°С‚СЊ DOM-СѓР·РµР» `node_id` РєР°Рє Р±СѓРґС‚Рѕ РїРѕ РЅРµРјСѓ РєР»РёРєРЅСѓР»Рё РјС‹С€СЊСЋ.
+    /// Активировать DOM-узел `node_id` как будто по нему кликнули мышью.
     ///
-    /// Р”РёСЃРїР°С‚С‡РёС‚ JS click-СЃРѕР±С‹С‚РёРµ, РѕР±СЂР°Р±Р°С‚С‹РІР°РµС‚ form-РґРµР№СЃС‚РІРёРµ (checkbox/radio),
-    /// Рё РЅР°РІРёРіРёСЂСѓРµС‚ РїРѕ СЃСЃС‹Р»РєРµ РµСЃР»Рё СѓР·РµР» РІРЅСѓС‚СЂРё `<a href>`. РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ
-    /// hint-СЂРµР¶РёРјРѕРј РґР»СЏ Р°РєС‚РёРІР°С†РёРё СЌР»РµРјРµРЅС‚Р° Р±РµР· СѓС‡Р°СЃС‚РёСЏ РјС‹С€Рё.
-    #[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+    /// Диспатчит JS click-событие, обрабатывает form-действие (checkbox/radio),
+    /// и навигирует по ссылке если узел внутри `<a href>`. Используется
+    /// hint-режимом для активации элемента без участия мыши.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn activate_node(&mut self, node_id: NodeId) {
-        // JS click dispatch (bubbling РѕС‚ СѓР·Р»Р° РґРѕ document).
+        // JS click dispatch (bubbling от узла до document).
         // Hint-mode activations have no real mouse coordinates, so x/y are 0.
         // ADR-016 M2.2c-2d (10): same read-after-eval routing as the mouse click
-        // dispatch вЂ” `_lumen_dispatch_mouse_event('click', вЂ¦)` fire-and-forget via
+        // dispatch — `_lumen_dispatch_mouse_event('click', …)` fire-and-forget via
         // `route_eval_js`, then `take_navigate_request` ordered after via
         // `route_query_js`; byte-identical off-flag.
         #[cfg(feature = "v8")]
@@ -77,7 +77,7 @@ impl Lumen {
                     forms::toggle_checkbox(&mut src.document.lock().unwrap(), id);
                 }
                 // ADR-016 M2.2c-3 (2): async-safe form-control DOM mutation (Bucket
-                // A) вЂ” no synchronous geometry read after, route off-thread when
+                // A) — no synchronous geometry read after, route off-thread when
                 // `LUMEN_ENGINE_THREAD=1`, byte-identical otherwise.
                 self.relayout_form();
             }
@@ -122,8 +122,8 @@ impl Lumen {
                 if let Some(src) = self.layout_source.as_mut() {
                     forms::toggle_details_open(&mut src.document.lock().unwrap(), id);
                 }
-                // ADR-016 M2.2c-2d: fire-and-forget `toggle` event С‡РµСЂРµР·
-                // РјР°СЂС€СЂСѓС‚РёР·Р°С‚РѕСЂ вЂ” РїРѕРґ С„Р»Р°РіРѕРј off-UI-thread, Р±РµР· С„Р»Р°РіР° Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ.
+                // ADR-016 M2.2c-2d: fire-and-forget `toggle` event через
+                // маршрутизатор — под флагом off-UI-thread, без флага байт-идентично.
                 #[cfg(feature = "v8")]
                 route_eval_js(
                     self.engine_thread.as_ref(),

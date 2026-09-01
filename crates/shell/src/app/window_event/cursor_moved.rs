@@ -12,7 +12,7 @@ use winit::dpi::PhysicalPosition;
 impl Lumen {
     pub(crate) fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.cursor_position = Some(position);
-        // F2-6: while resizing a docked panel, the drag owns the cursor вЂ”
+        // F2-6: while resizing a docked panel, the drag owns the cursor —
         // update its width and relayout, skip page/inspector hover work.
         if self.panel_resize.is_some() {
             let dpr = self
@@ -62,7 +62,7 @@ impl Lumen {
                 (position.y as f32) / dpr,
             );
         }
-        // Tab drag-and-drop (В§O-9): update ghost position; activate after threshold.
+        // Tab drag-and-drop (§O-9): update ghost position; activate after threshold.
         if let Some(ref mut tab_drag) = self.tab_drag {
             let dpr = self
                 .renderer
@@ -166,7 +166,7 @@ impl Lumen {
             }
         }
 
-        // РђРєС‚РёРІРЅС‹Р№ drag вЂ” РїРµСЂРµСЃС‡РёС‚Р°С‚СЊ scroll РїРѕ РЅРѕРІРѕР№ РїРѕР·РёС†РёРё.
+        // Активный drag — пересчитать scroll по новой позиции.
         if let Some(drag) = self.scroll_drag {
             let dpr = self
                 .renderer
@@ -212,12 +212,12 @@ impl Lumen {
             self.request_redraw();
         }
         // Pointer Lock: skip normal hover/mousemove dispatch while locked.
-        // Raw movement deltas arrive via device_event в†’ _lumen_dispatch_locked_mousemove.
+        // Raw movement deltas arrive via device_event → _lumen_dispatch_locked_mousemove.
         #[cfg(feature = "v8")]
         if lumen_js::pointer_lock::is_pointer_locked() {
             return;
         }
-        // CSS :hover tracking вЂ” find the element under the cursor and
+        // CSS :hover tracking — find the element under the cursor and
         // trigger relayout when it changes so :hover rules re-evaluate.
         {
             let dpr = self
@@ -228,7 +228,7 @@ impl Lumen {
             let x_css = (position.x as f32) / dpr;
             let y_css = (position.y as f32) / dpr;
             // CC-5: independent hover tracking for the engine-drawn
-            // chrome document вЂ” separate thread-locals/relayout pass
+            // chrome document — separate thread-locals/relayout pass
             // from the page's own `:hover` below (`relayout_chrome_host`'s
             // doc comment explains why the two must not share state).
             // `point_over_chrome`/`chrome_hit_test` both answer "no
@@ -244,14 +244,14 @@ impl Lumen {
                 self.relayout_chrome_host();
                 self.request_redraw();
             }
-            // Pointer Events L3 В§4.1: buffer this raw sample instead of
+            // Pointer Events L3 §4.1: buffer this raw sample instead of
             // dispatching immediately. Flushed as one coalesced
             // `pointermove` on the next `about_to_wait` tick, or sooner
             // (below) if hover changes so ordering vs enter/leave holds.
             #[cfg(feature = "v8")]
             self.pending_pointer_moves.push((x_css, y_css));
             // CC-5: `point_over_chrome` replaces the legacy `y_css <
-            // toolbar::CHROME_H` gate вЂ” that constant no longer
+            // toolbar::CHROME_H` gate — that constant no longer
             // describes where the chrome's opaque area ends
             // (variable-width sidebar, differently-sized toolbar row).
             // BUG-480 срез 16: курсор над содержимым фрейма — hover страницы
@@ -320,7 +320,7 @@ impl Lumen {
                 // target `old_nid`/`new_hovered`, not this reflow).
                 self.relayout_chrome();
                 self.request_redraw();
-                // Dispatch hover-change events per W3C UI Events В§17.5 / Pointer Events L2 В§10.
+                // Dispatch hover-change events per W3C UI Events §17.5 / Pointer Events L2 §10.
                 #[cfg(feature = "v8")]
                 {
                     // Ph3 pointer-events-l3: flush pointermove samples
@@ -348,12 +348,12 @@ impl Lumen {
             }
             // Ph3 pointer-events-l3: queue this raw sample for the next
             // coalesced pointermove flush (about_to_wait tick, next
-            // hover-boundary crossing, or press/release) вЂ” Pointer
-            // Events L3 В§4.1.
+            // hover-boundary crossing, or press/release) — Pointer
+            // Events L3 §4.1.
             #[cfg(feature = "v8")]
             self.pending_pointer_moves.push((x_css, y_css));
         }
-        // CC-15-4: the settings-panel hover tracker lived here вЂ” it fed
+        // CC-15-4: the settings-panel hover tracker lived here — it fed
         // only `settings_panel::tooltip_for`/`build_tooltip`, both
         // deleted with the legacy paint, so every `CursorMoved` while
         // the panel was open cost a `request_redraw()` for nothing.
@@ -380,7 +380,7 @@ impl Lumen {
                 self.request_redraw();
             }
         }
-        // B-7/CC-CSS-4: Active resize вЂ” update element width/height as mouse
+        // B-7/CC-CSS-4: Active resize — update element width/height as mouse
         // moves, gated to the axes the grip's `resize` value allows (a pure
         // `resize: vertical` grip must not also change width on a diagonal drag).
         #[cfg(feature = "v8")]
@@ -395,11 +395,11 @@ impl Lumen {
             let delta_x = if allow_w { x_css - start_x } else { 0.0 };
             let delta_y = if allow_h { y_css - start_y } else { 0.0 };
             let nid_u32 = node_id.index() as u32;
-            // ADR-016 M2.2c-2d: resize-eval С‡РµСЂРµР· `route_eval_js` вЂ” СЃРЅРёРјР°РµРј РїСЂСЏРјРѕРµ
-            // `self.js_ctx`-РѕР±СЂР°С‰РµРЅРёРµ. Р§РёСЃС‚С‹Р№ fire-and-forget void Р±РµР· С‡С‚РµРЅРёСЏ
-            // СЂРµР·СѓР»СЊС‚Р°С‚Р° СЃР»РµРґРѕРј; РїРѕРґ С„Р»Р°РіРѕРј (`LUMEN_ENGINE_THREAD=1`) СѓС…РѕРґРёС‚
-            // off-UI-thread РѕРґРЅРёРј `task`, Р±РµР· С„Р»Р°РіР° (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ) вЂ” СЃРёРЅС…СЂРѕРЅРЅС‹Р№
-            // РІС‹Р·РѕРІ РїРѕ UI-С…СЌРЅРґР»Сѓ, Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ РїСЂРµР¶РЅРµРјСѓ `js.eval_js`.
+            // ADR-016 M2.2c-2d: resize-eval через `route_eval_js` — снимаем прямое
+            // `self.js_ctx`-обращение. Чистый fire-and-forget void без чтения
+            // результата следом; под флагом (`LUMEN_ENGINE_THREAD=1`) уходит
+            // off-UI-thread одним `task`, без флага (по умолчанию) — синхронный
+            // вызов по UI-хэндлу, байт-идентично прежнему `js.eval_js`.
             #[cfg(feature = "v8")]
             route_eval_js(
                 self.engine_thread.as_ref(),
