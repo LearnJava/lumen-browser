@@ -34,6 +34,17 @@ impl Lumen {
         );
         let scrollbar_icon = cursor_icon_for_hover(hover, self.scroll_drag.is_some());
 
+        // FRAME-3 remainder: собственный scrollbar фрейма — та же
+        // приоритетность, что у страничного, но проверяется РАНЬШЕ (мышь
+        // над курсором может одновременно быть "внутри" страничного трека
+        // справа И над фреймом, если фрейм растянут до самого края; самый
+        // глубокий скроллер должен выигрывать, как и у клика).
+        let frame_hover = self
+            .classify_frame_scrollbar_click(x_css, y_css)
+            .map_or(scrollbar::TrackClick::None, |(_, click, _)| click);
+        let frame_scrollbar_icon =
+            cursor_icon_for_hover(frame_hover, self.frame_scroll_drag.is_some());
+
         // F2-6: a docked-panel resize drag (or hovering an edge) shows the
         // horizontal-resize cursor, ahead of scrollbar/page/chrome hover.
         let desired = if self.panel_resize.is_some() || self.resize_edge_at(x_css, y_css).is_some() {
@@ -46,6 +57,8 @@ impl Lumen {
                 Some(result) => css_cursor_to_winit(result.cursor),
                 None => CursorIcon::Default,
             }
+        } else if frame_scrollbar_icon != CursorIcon::Default {
+            frame_scrollbar_icon
         } else if scrollbar_icon != CursorIcon::Default {
             scrollbar_icon
         } else if let Some(lb) = &self.layout_box {

@@ -181,6 +181,19 @@ impl Lumen {
             );
             self.scroll_to(target);
         }
+        // FRAME-3 remainder: активный drag СОБСТВЕННОГО scrollbar-а фрейма —
+        // тот же приём, что выше у страничного `scroll_drag`, но целевой
+        // фрейм несёт свой индекс (несколько фреймов держат независимые
+        // drag-и).
+        if let Some((fidx, drag)) = self.frame_scroll_drag {
+            let dpr = self
+                .renderer
+                .as_ref()
+                .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                .max(1e-6);
+            let cursor_y_css = (position.y as f32) / dpr;
+            self.drag_frame_scrollbar_to(fidx, drag, cursor_y_css);
+        }
         // FRAME-7 остаток: active mouse-drag text selection — extend the
         // cursor (never the anchor) to the char under the new position.
         if self.text_drag.is_some() {

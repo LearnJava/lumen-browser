@@ -1583,3 +1583,130 @@ fn frame_page_origin_is_none_without_host_rect() {
     h.host_rect = None;
     assert_eq!(crate::frames::frame_page_origin(&[h], 0), None);
 }
+
+// ── frame_box_page_origin / frame_scrollbar_overlay (FRAME-3 remainder:
+// собственный scrollbar фрейма) ─────────────────────────────────────────────
+
+/// `frame_box_page_origin` переводит бокс ХОСТА, не его содержимое:
+/// топ-уровневый фрейм не вычитает свой же scroll (бокс не двигается от
+/// прокрутки СВОЕГО содержимого), а вложенный складывается с origin-ом
+/// ПРЕДКА (`frame_page_origin`, который его собственный scroll уже вычел).
+/// Те же цифры, что у `frame_page_origin_composes_across_two_levels` выше —
+/// разница видна по несовпадению с ЕЁ ответами.
+#[test]
+fn frame_box_page_origin_is_host_box_not_content() {
+    let mut outer = splice_handle("outer.html", Rect::new(40.0, 120.0, 300.0, 200.0), Vec::new());
+    outer.scroll_y = 30.0;
+    outer.scroll_x = 8.0;
+    let mut inner = splice_handle("inner.html", Rect::new(10.0, 50.0, 200.0, 100.0), Vec::new());
+    inner.depth = 1;
+    inner.parent_doc = Some(Arc::clone(&outer.doc));
+    inner.scroll_y = 5.0;
+    inner.scroll_x = 3.0;
+    let frames = vec![outer, inner];
+
+    // Топ-уровневый: сам host_rect — БЕЗ вычитания (8, 30), в отличие от
+    // `frame_page_origin(&frames, 0)`, которое дало бы (32, 90).
+    assert_eq!(crate::frames::frame_box_page_origin(&frames, 0), Some((40.0, 120.0)));
+    // Вложенный: его host_rect (10, 50) сложен с origin-ом ПРЕДКА (32, 90) =
+    // (42, 140) — а не с его собственным ответом frame_page_origin (39, 135).
+    assert_eq!(crate::frames::frame_box_page_origin(&frames, 1), Some((42.0, 140.0)));
+}
+
+/// Как и `frame_page_origin_is_none_without_host_rect` — нечего переводить,
+/// пока layout не посчитан.
+#[test]
+fn frame_box_page_origin_is_none_without_host_rect() {
+    let mut h = splice_handle("child.html", Rect::new(40.0, 120.0, 300.0, 200.0), Vec::new());
+    h.host_rect = None;
+    assert_eq!(crate::frames::frame_box_page_origin(&[h], 0), None);
+}
+
+/// `frame_content_height` — та же величина, что `frame_max_scroll` клампит
+/// пределом, но БЕЗ вычитания viewport-а: `scrollbar::build_scrollbar_overlay`
+/// ожидает именно content-height.
+#[test]
+fn frame_content_height_is_max_scroll_plus_viewport() {
+    assert!((crate::frames::frame_content_height(&scrollable_handle(600.0)) - 600.0).abs() < 0.5);
+    // Контент короче вьюпорта: max_scroll зажат в 0, а не отрицателен —
+    // content_height падает ровно до высоты вьюпорта.
+    assert!((crate::frames::frame_content_height(&scrollable_handle(50.0)) - 200.0).abs() < 0.5);
+}
+
+/// Полоса рисуется в боксе фрейма НА СТРАНИЦЕ (клип + сдвиг к его началу),
+/// а не в (0, 0) — иначе несколько фреймов рисовали бы свои полосы друг на
+/// друге. Форма брекета — та же четвёрка, что даёт страничный
+/// `scrollbar::build_scrollbar_overlay`, обёрнутая в клип/transform, как у
+/// `splice_one_frame`.
+#[test]
+fn frame_scrollbar_overlay_draws_track_and_thumb_at_frame_box() {
+    let h = scrollable_handle(600.0); // host_rect (40, 120, 300, 200)
+    let out = crate::frames::frame_scrollbar_overlay(&[h], 0.0, 0.0);
+    assert_eq!(out.len(), 6, "клип + transform + track + thumb + pop + pop");
+    match &out[0] {
+        lumen_paint::DisplayCommand::PushClipRect { rect } => {
+            assert!((rect.x - 40.0).abs() < 0.01 && (rect.y - 120.0).abs() < 0.01);
+            assert!((rect.width - 300.0).abs() < 0.01 && (rect.height - 200.0).abs() < 0.01);
+        }
+        other => panic!("ожидался PushClipRect, получено {other:?}"),
+    }
+    match &out[1] {
+        lumen_paint::DisplayCommand::PushTransform { matrix } => {
+            let expected = lumen_layout::Mat4::translation_2d(40.0, 120.0);
+            assert_eq!(
+                matrix.0, expected.0,
+                "сдвиг = начало бокса фрейма, иначе полоса рисуется мимо него"
+            );
+        }
+        other => panic!("ожидался PushTransform, получено {other:?}"),
+    }
+    assert!(matches!(&out[2], lumen_paint::DisplayCommand::FillRect { .. }), "track");
+    assert!(matches!(&out[3], lumen_paint::DisplayCommand::FillRect { .. }), "thumb");
+    assert!(matches!(&out[4], lumen_paint::DisplayCommand::PopTransform));
+    assert!(matches!(&out[5], lumen_paint::DisplayCommand::PopClip));
+}
+
+/// Origin полосы двигает СТРАНИЧНЫЙ scroll (родитель уехал), а не scroll
+/// СОДЕРЖИМОГО фрейма (его собственная прокрутка сдвигает только thumb
+/// внутри бара, посчитанный `scrollbar::build_scrollbar_overlay` из
+/// `h.scroll_y`, а не сам бар на странице) — та же граница, которую
+/// `frame_box_page_origin` уже проводит между собственным и чужим scroll-ом.
+#[test]
+fn frame_scrollbar_overlay_shifts_by_page_scroll_not_own_scroll() {
+    let mut h = scrollable_handle(600.0);
+    h.scroll_y = 100.0;
+    let out = crate::frames::frame_scrollbar_overlay(&[h], 5.0, 20.0);
+    match &out[1] {
+        lumen_paint::DisplayCommand::PushTransform { matrix } => {
+            let expected = lumen_layout::Mat4::translation_2d(40.0 - 5.0, 120.0 - 20.0);
+            assert_eq!(
+                matrix.0, expected.0,
+                "сдвиг = бокс минус СТРАНИЧНЫЙ scroll, собственный scroll фрейма его не двигает"
+            );
+        }
+        other => panic!("ожидался PushTransform, получено {other:?}"),
+    }
+}
+
+/// Контент короче вьюпорта — скроллить нечего, полоса не рисуется (то же
+/// правило, что у страничного scrollbar-а).
+#[test]
+fn frame_scrollbar_overlay_empty_when_content_fits() {
+    assert!(crate::frames::frame_scrollbar_overlay(&[scrollable_handle(50.0)], 0.0, 0.0).is_empty());
+}
+
+/// Фрейм без посчитанного layout (`host_rect: None`) не даёт вклада, но не
+/// ломает остальных — та же гранулярность видимости, что у
+/// `splice_one_frame`/`splice_frame_content`.
+#[test]
+fn frame_scrollbar_overlay_skips_invisible_frames_but_draws_others() {
+    let mut hidden = scrollable_handle(600.0);
+    hidden.host_rect = None;
+    let visible = scrollable_handle(600.0);
+    let out = crate::frames::frame_scrollbar_overlay(&[hidden, visible], 0.0, 0.0);
+    assert_eq!(
+        out.len(),
+        6,
+        "невидимый фрейм не даёт вклада, видимый рисуется как обычно"
+    );
+}

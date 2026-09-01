@@ -430,6 +430,13 @@ pub(crate) struct Lumen {
     /// начала drag-а — это даёт «закреплённый под пальцем» thumb (стандартный
     /// scrollbar UX).
     pub(crate) scroll_drag: Option<scrollbar::ScrollDrag>,
+    /// Активный drag СОБСТВЕННОГО scrollbar-thumb-а фрейма (FRAME-3
+    /// remainder) — зеркало [`Self::scroll_drag`], но должен помнить ЕЩЁ и
+    /// КАКОЙ фрейм: несколько фреймов на странице держат независимые
+    /// scroll-полосы. `MouseInput Released` сбрасывает в `None`, как и
+    /// навигация (frames пересобирается целиком — старый индекс адресовал
+    /// бы чужой или отсутствующий хэндл).
+    pub(crate) frame_scroll_drag: Option<(usize, scrollbar::ScrollDrag)>,
     /// Активная smooth-scroll анимация для keyboard / wheel / page-jump /
     /// find-scroll-to-match. `None` — `scroll_y` стационарен или меняется
     /// инстантно (drag, reload). При live-анимации `RedrawRequested` тикает

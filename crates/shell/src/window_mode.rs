@@ -276,6 +276,7 @@ pub(crate) fn run_window_mode(
         hovered_frame: None,
         active_nid: None,
         scroll_drag: None,
+        frame_scroll_drag: None,
         scroll_anim: None,
         momentum_anim: None,
         touchpad_vel: (0.0, 0.0),

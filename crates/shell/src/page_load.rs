@@ -554,6 +554,7 @@ impl Lumen {
                 // Любой активный drag прерывается (content_height другой,
                 // thumb-геометрия пересчитана с нуля).
                 self.scroll_drag = None;
+                self.frame_scroll_drag = None;
                 // Активные анимации старой страницы сбрасываем.
                 self.scroll_anim = None;
                 self.momentum_anim = None;
@@ -1174,6 +1175,7 @@ impl Lumen {
         self.scroll_x = restore_x;
         self.scroll_y = restore_y;
         self.scroll_drag = None;
+        self.frame_scroll_drag = None;
         self.scroll_anim = None;
         self.momentum_anim = None;
         self.forward_momentum_stop();

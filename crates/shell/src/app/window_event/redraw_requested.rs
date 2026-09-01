@@ -610,12 +610,20 @@ impl Lumen {
         // справа от `ww - 8`), так что фактического overdraw нет.
         // --no-scrollbar подавляет полосу для screenshot-пайплайна.
         if !self.no_scrollbar {
-            let scrollbar_cmds = scrollbar::build_scrollbar_overlay(
+            // FRAME-3 remainder: собственный scrollbar каждого видимого
+            // фрейма — то же приём, добавлен в ту же полосу overlay-а рядом
+            // со страничным.
+            let mut scrollbar_cmds = scrollbar::build_scrollbar_overlay(
                 self.scroll_y,
                 self.content_height,
                 self.viewport_width_css(),
                 self.viewport_height_css(),
             );
+            scrollbar_cmds.extend(frames::frame_scrollbar_overlay(
+                &self.frames,
+                self.scroll_x,
+                self.scroll_y,
+            ));
             if !scrollbar_cmds.is_empty() {
                 let mut combined = scrollbar_cmds;
                 combined.append(&mut overlay_buf);
