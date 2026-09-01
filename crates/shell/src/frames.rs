@@ -663,6 +663,7 @@ pub(crate) fn sync_frame_viewports(
                 m,
                 state,
             );
+            frames[i].scroll_containers = lumen_layout::collect_scroll_containers(&layout);
             frames[i].layout = Some(layout);
             frames[i].viewport = size;
             frames[i].interactive = state;
@@ -738,6 +739,7 @@ pub(crate) fn relayout_frame_content(
         &measurer,
         state,
     );
+    frames[idx].scroll_containers = lumen_layout::collect_scroll_containers(&layout);
     frames[idx].layout = Some(layout);
     frames[idx].interactive = state;
     frames[idx].content_dl.clear();
@@ -751,7 +753,12 @@ pub(crate) fn relayout_frame_content(
 /// вложенных фреймов, поэтому те должны быть готовы раньше. Перерисовывается
 /// фрейм, чей layout пересчитан на этом проходе, чей список ещё пуст (первый
 /// проход после загрузки) — и любой, у кого перерисовался потомок.
-fn rebuild_frame_display_lists(frames: &mut [FrameHandle], relaid: &[bool]) {
+/// `pub(crate)` (не только для [`sync_frame_viewports`]) с FRAME-3 среза 3:
+/// прокрутка overflow-контейнера ВНУТРИ под-документа меняет его
+/// `content_dl`, не вьюпорт, поэтому зовёт эту функцию напрямую с `relaid`,
+/// взведённым только для своего индекса — та же пропагация «потомок
+/// перерисовался» наверх по цепочке хостов уже здесь, второй такой не нужно.
+pub(crate) fn rebuild_frame_display_lists(frames: &mut [FrameHandle], relaid: &[bool]) {
     let mut dirty: Vec<bool> = (0..frames.len())
         .map(|i| relaid[i] || frames[i].content_dl.is_empty())
         .collect();
@@ -1353,6 +1360,10 @@ fn spawn_frame(
         );
     }
     fire_iframe_load_event(parent_js, info.node);
+    let frame_scroll_containers = frame_layout
+        .as_ref()
+        .map(lumen_layout::collect_scroll_containers)
+        .unwrap_or_default();
     handles.push(FrameHandle {
         host: info.node,
         url: child_url,
@@ -1373,6 +1384,7 @@ fn spawn_frame(
         image_keys: subresources.image_keys,
         scroll_y: 0.0,
         scroll_x: 0.0,
+        scroll_containers: frame_scroll_containers,
     });
     handles
 }
@@ -1582,6 +1594,17 @@ pub(crate) struct FrameHandle {
     /// по этой оси ребёнку не шлётся, симметрично тому, что `scroll_x_by`
     /// самой странице тоже их не шлёт.
     pub(crate) scroll_x: f32,
+    /// Overflow-контейнеры (`overflow: scroll|auto`) СОБСТВЕННОГО дерева
+    /// под-документа (FRAME-3 срез 3) — зеркало [`Lumen::scroll_containers`]
+    /// на уровне фрейма, а не отдельная per-node карта: у фрейма и так один
+    /// хэндл на под-документ, а `NodeId` внутри него не пересекается с
+    /// `NodeId`-ами родителя, так что дополнительный ключ избыточен.
+    ///
+    /// Пересобирается КАЖДЫЙ раз, когда пересчитан [`Self::layout`] (обе точки
+    /// присвоения этого поля обязаны обновлять и это тоже, иначе хит-тест
+    /// колеса читал бы геометрию от предыдущего прохода) — `collect_scroll_containers`
+    /// того же движка, что уже строит `Lumen::scroll_containers` для страницы.
+    pub(crate) scroll_containers: Vec<lumen_layout::ScrollContainer>,
 }
 
 // ── скролл под-документа (BUG-480 срез 17) ──────────────────────────────────

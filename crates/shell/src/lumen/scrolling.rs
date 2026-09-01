@@ -151,6 +151,110 @@ impl Lumen {
         }
     }
 
+    /// Прокрутить overflow-контейнер (`overflow: scroll|auto`) ВНУТРИ
+    /// под-документа фрейма под курсором на `(dx, dy)` CSS px (FRAME-3 срез 3,
+    /// остаток дорожки — зеркало [`Self::try_scroll_overflow_container`] на
+    /// уровне под-документа, тем же движком `lumen_layout`).
+    ///
+    /// Цель ищется через [`frames::pointer_target`], не через собственный
+    /// hit-тест: точка внутри фрейма приходит уже в системе координат
+    /// ВЬЮПОРТА ребёнка (`FramePointerHit::client`), а `ScrollContainer::clip_rect`
+    /// — в document-space РЕБЁНКА, поэтому к `client` нужно прибавить его же
+    /// `scroll_x`/`scroll_y` — тот же перевод, что `pointer_target` сам делает
+    /// при спуске во ВЛОЖЕННЫЙ фрейм (`frames.rs`, комментарий среза 17).
+    ///
+    /// Вызывается ДО [`Self::try_scroll_frame`]: overflow-контейнер внутри
+    /// под-документа — самый глубокий скроллер под курсором и должен победить
+    /// прокрутку фрейма целиком, точно так же, как контейнеры страницы
+    /// побеждают прокрутку самой страницы.
+    #[allow(clippy::unwrap_used)]  // тот же приём, что try_scroll_overflow_container
+    pub(crate) fn try_scroll_frame_overflow_container(&mut self, dx: f32, dy: f32) -> bool {
+        if self.frames.is_empty() {
+            return false;
+        }
+        let Some(cursor) = self.cursor_position else { return false };
+        let dpr = self.renderer.as_ref().map_or(1.0_f32, |r| r.scale_factor() as f32);
+        let target = self.pointer_target((cursor.x as f32) / dpr, (cursor.y as f32) / dpr);
+        let Some(hit) = target.frame else { return false };
+        let idx = hit.frame;
+        let x_css = hit.client.x + self.frames[idx].scroll_x;
+        let y_css = hit.client.y + self.frames[idx].scroll_y;
+
+        let Some(target_node) =
+            find_scroll_container_at(&self.frames[idx].scroll_containers, x_css, y_css)
+        else {
+            return false;
+        };
+
+        let current = self.frames[idx].scroll_containers.iter()
+            .find(|c| c.node == target_node)
+            .map(|c| (c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height,
+                      c.clip_rect.width, c.clip_rect.height,
+                      c.overscroll_behavior_x, c.overscroll_behavior_y));
+        let Some((cur_x, cur_y, sw, sh, clip_w, clip_h, ob_x, ob_y)) = current else { return false };
+
+        let new_x = (cur_x + dx).clamp(0.0, (sw - clip_w).max(0.0));
+        let new_y = (cur_y + dy).clamp(0.0, (sh - clip_h).max(0.0));
+
+        // CSS Overscroll Behavior L1 §3 — та же chain-семантика, что у
+        // страничных контейнеров: на границе с `auto` жест уходит дальше
+        // (к прокрутке всего фрейма), `contain`/`none` его глушит на месте.
+        let moved_x = (new_x - cur_x).abs() > f32::EPSILON;
+        let moved_y = (new_y - cur_y).abs() > f32::EPSILON;
+        if lumen_layout::overscroll_should_propagate(ob_x, ob_y, dx, dy, moved_x, moved_y) {
+            return false;
+        }
+        if !moved_x && !moved_y {
+            return true;
+        }
+
+        let scrolled = if let Some(lb) = self.frames[idx].layout.as_mut() {
+            set_scroll_position(lb, target_node, new_x, new_y)
+        } else {
+            false
+        };
+        if !scrolled {
+            return false;
+        }
+
+        self.frames[idx].scroll_containers =
+            lumen_layout::collect_scroll_containers(self.frames[idx].layout.as_ref().unwrap());
+        // Точечного патча (как `patch_scroll_layer` у страницы) для фрейма
+        // нет — тот же грубый грануляр, что уже принят у [`Self::apply_frame_scroll`]:
+        // пересобрать content_dl фрейма (и его предков — функция сама
+        // пропагирует «потомок перерисовался» по цепочке хостов) и список
+        // страницы целиком.
+        let mut relaid = vec![false; self.frames.len()];
+        relaid[idx] = true;
+        frames::rebuild_frame_display_lists(&mut self.frames, &relaid);
+        let rebuilt = self.layout_box.as_ref().map(paint_ordered);
+        if let Some(new_dl) = rebuilt {
+            self.tile_grid.update_from_diff(&self.display_list, &new_dl);
+            self.set_display_list(new_dl);
+        }
+
+        // CSSOM-View §14 для элемента ВНУТРИ ребёнка: `frames[idx].js` — его
+        // собственный рантайм (как уже зовёт его напрямую, без роутинга на
+        // engine-поток, `apply_frame_scroll` — фреймы не engine-threaded,
+        // FRAME-1), а не `route_task_js`, который адресует ТОЛЬКО контекст
+        // страницы.
+        if let Some(js) = self.frames[idx].js.clone() {
+            let states: std::collections::HashMap<_, _> = self.frames[idx].scroll_containers.iter()
+                .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+                .collect();
+            let target_nid = target_node.index() as u32;
+            js.update_scroll_states(states);
+            js.fire_element_scroll(target_nid);
+            // BUG-822: один notch колеса над контейнером — законченная
+            // последовательность прокрутки сама по себе, симметрично тому, что
+            // страничный `try_scroll_overflow_container` уже делает.
+            js.fire_element_scrollend(target_nid);
+        }
+
+        self.request_redraw();
+        true
+    }
+
     /// Прокрутить под-документ фрейма под курсором на `(dx, dy)` CSS px
     /// (BUG-480 срез 17; горизонталь — FRAME-3 срез 1).
     ///

@@ -191,6 +191,10 @@ impl Lumen {
                         }
                     }
                     self.request_redraw();
+                } else if self.try_scroll_frame_overflow_container(dx_css, dy_css) {
+                    // FRAME-3 срез 3: overflow-контейнер ВНУТРИ под-документа —
+                    // самый глубокий скроллер под курсором, проверяется до
+                    // прокрутки фрейма целиком.
                 } else if self.try_scroll_frame(dx_css, dy_css) {
                     // BUG-480 срез 17: колесо над содержимым фрейма
                     // крутит его под-документ, а не страницу. Проверяется
@@ -255,6 +259,8 @@ impl Lumen {
                                     (sv.right.scroll_y + dy_css).clamp(0.0, max);
                             }
                             self.request_redraw();
+                        } else if self.try_scroll_frame_overflow_container(dx_css, dy_css) {
+                            // FRAME-3 срез 3: то же соглашение, что у LineDelta-ветки.
                         } else if self.try_scroll_frame(dx_css, dy_css) {
                             // BUG-480 срез 17: тот же адресат, что и у колеса.
                         } else if self.try_scroll_overflow_container(dx_css, dy_css) {
@@ -290,6 +296,8 @@ impl Lumen {
                                     (sv.right.scroll_y + dy_css).clamp(0.0, max);
                             }
                             self.request_redraw();
+                        } else if self.try_scroll_frame_overflow_container(dx_css, dy_css) {
+                            // FRAME-3 срез 3: то же соглашение, что у LineDelta-ветки.
                         } else if self.try_scroll_frame(dx_css, dy_css) {
                             // BUG-480 срез 17: тот же адресат, что и у колеса.
                         } else if self.try_scroll_overflow_container(dx_css, dy_css) {
