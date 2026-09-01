@@ -1,6 +1,7 @@
 # BUG-874 — `on<type>`-свойства уровня документа никогда не вызываются, а `in`-проверка на `window`/`document`/`navigation` отвечает `false`
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → [GAP-EVENTPATH](../ROADMAP.md))
+**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-EVENTPATH` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 27 — живой замер, варианты `handler-idl`/`cbx-report`/`navigation-onprops`)
 **Область:** `crates/js/src/dom.rs:6249` — `document.dispatchEvent` обходит только `_lumen_listeners` документа и не заглядывает в `_lumen_on_handlers`; `crates/js/src/dom.rs:13795` — движковая доставка `readystatechange` идёт тем же `document.dispatchEvent`; таблица `_LUMEN_EVENT_HANDLER_ATTRS` (`:1010`) обслуживает только обёртки элементов
 **Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.

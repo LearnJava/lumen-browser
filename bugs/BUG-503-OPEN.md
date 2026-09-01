@@ -1,7 +1,8 @@
 # BUG-503: `animationend` never fires for a real (engine-driven, non-scripted)
 CSS animation — `async_test`s waiting on it TIMEOUT
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → [GAP-CSSANIM](../ROADMAP.md))
+**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-CSSANIM` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Дата:** 2026-08-02
 **Компонент:** js/engine boundary (animation event dispatch — exact site not
 isolated this slice; `AnimationEvent` constructor exists in

@@ -1,6 +1,7 @@
 # BUG-856 — конструктор `WebSocket` блокирует документ до конца хэндшейка: сервер, который принял TCP и молчит, замораживает страницу навсегда
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → [GAP-WSASYNC](../ROADMAP.md))
+**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-WSASYNC` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 25 — живой замер, маркеры `ws-connect-hang`, `ws-connect-refused`, `ws-close-connecting`)
 **Область:** `crates/js/src/v8_runtime.rs:3502` — комментарий модели прямо говорит «Phase 0 model: **synchronous connect**»; `_lumen_ws_connect` (`v8_runtime.rs:3517`) зовёт `provider.connect(&url, &protos)` в потоке JS и возвращает хэндл только после ответа. Ниже по стеку — `crates/network/src/lib.rs::HttpClient::connect` (impl `JsWebSocketProvider`) → `crates/network/src/websocket/mod.rs::connect_deflate`
 **Владелец:** P1/P3 (движок: `lumen-js` + `lumen-network`). Заведён P2 в ходе WPT-задачи, здесь не чинится.

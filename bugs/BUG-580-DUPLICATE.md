@@ -1,6 +1,7 @@
 # BUG-580: `Element.prototype.getClientRects()` missing entirely (element has `getBoundingClientRect` but no `getClientRects`)
 
-**Статус:** OPEN
+**Статус:** DUPLICATE → [BUG-478](BUG-478-OPEN.md)
+**Тип:** дубликат [BUG-478](BUG-478-OPEN.md) — тот же отсутствующий `Element.prototype.getClientRects()`, заведённый другим срезом. Выживает первый по дате (BUG-478, 2026-08-02); уникальные замеры этой записи перенесены туда. Слит 2026-09-02 ре-триажем пула WPT-RUN-5/6.
 **Компонент:** js (`crates/js/src/dom.rs:6044-6049` — `getBoundingClientRect`
 exists on the element object literal; no sibling `getClientRects`. The only
 `getClientRects` in the whole file, `dom.rs:6940`, belongs to `Range`, not

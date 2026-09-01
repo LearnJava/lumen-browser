@@ -1,6 +1,7 @@
 # BUG-868 — `MessagePort` не пересекает границу воркера ни в одну сторону: список transfer отбрасывается, а `MessageChannel` в воркерной области не определён
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → [GAP-WORKERSCOPE](../ROADMAP.md))
+**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-WORKERSCOPE` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 26 — живой замер, вариант `worker-port`)
 **Область:** `crates/js/src/worker.rs:918` — `Worker.prototype.postMessage(data, transfer)` зовёт `_lumenSerializeWithTransfers`, который понимает только `OffscreenCanvas` (`__canvas_id__`); `crates/js/src/worker.rs:366` — воркерный `globalThis.postMessage = function(data)` объявлен **без** второго параметра и сериализует `JSON.stringify(data)`; `MessageChannel`/`MessagePort` определены только в шиме страницы (`crates/js/src/dom.rs:12010`, `:12019` — `globalThis.MessageChannel = MessageChannel` внутри `WEB_API_SHIM`, который в воркер не попадает)
 **Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.

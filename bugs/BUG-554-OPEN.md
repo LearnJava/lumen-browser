@@ -1,6 +1,7 @@
 # BUG-554: CSS Typed OM value-type hierarchy and unit-factory functions almost entirely missing — only a narrow base slice exists
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → [GAP-TYPEDOM](../ROADMAP.md))
+**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-TYPEDOM` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Дата:** 2026-08-04
 **Компонент:** js (`crates/js/src/typed_om_api.rs`)
 **Найден:** WPT-RUN-3 срез 37 (`ROADMAP.md`) — массовый прогон `css/css-typed-om`

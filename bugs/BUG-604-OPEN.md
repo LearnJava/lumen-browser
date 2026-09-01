@@ -11,7 +11,7 @@ FAIL <video></video> has a shadow tree with no slots - child.getClientRects is n
 FAIL <select></select> has a shadow tree with slot - assert_not_equals: child should be in the flat tree got disallowed value 0
 ```
 (`widgets/shadow-dom.html` — the `getClientRects` `TypeError`s are
-[BUG-478](BUG-478-OPEN.md)/[BUG-522](BUG-522-OPEN.md)/[BUG-551](BUG-551-OPEN.md)/[BUG-580](BUG-580-OPEN.md)
+[BUG-478](BUG-478-OPEN.md)/[BUG-522](BUG-522-OPEN.md)/[BUG-551](BUG-551-DUPLICATE.md)/[BUG-580](BUG-580-DUPLICATE.md)
 territory and the `outerHTML`-in-test-name-collision harness `ERROR` is
 [BUG-351](BUG-351-OPEN.md); this bug is the *assertion content* underneath
 both, once those are stripped out)

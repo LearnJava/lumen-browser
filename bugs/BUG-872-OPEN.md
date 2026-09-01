@@ -1,6 +1,7 @@
 # BUG-872 — у воркерной глобальной области нет ни одного интерфейсного объекта: `self instanceof DedicatedWorkerGlobalScope` — `ReferenceError`, `self.constructor` — `undefined`
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → [GAP-WORKERSCOPE](../ROADMAP.md))
+**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-WORKERSCOPE` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 26 — живой замер, вариант `worker-global-interfaces`)
 **Область:** `crates/js/src/worker.rs:338`+ (`worker_global_shim`) и `crates/js/src/shared_worker.rs:121`+ (`SHARED_WORKER_GLOBAL_SHIM`) — оба шима вешают на `globalThis` только функции (`postMessage`, `importScripts`, `close`, аксессоры `onmessage`), но не создают ни интерфейсных объектов (`WorkerGlobalScope`, `DedicatedWorkerGlobalScope`, `SharedWorkerGlobalScope`), ни прототипной цепочки для самой области
 **Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.

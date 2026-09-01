@@ -1,6 +1,7 @@
 # BUG-884 — `javascript:`-URL не исполняется нигде: ни в `<iframe src>`, ни по клику, ни через `location.href`, ни в `open()` — уходит в сеть как «unsupported scheme»
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → [GAP-NAVCTX](../ROADMAP.md))
+**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-NAVCTX` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 28 — живой замер, варианты `jsurl-iframe`/`jsurl-nav`)
 **Область:** shell (`crates/shell/src/main.rs` — `resolve_js_navigation`, `load_frame_sub_documents`: `javascript:`/`data:` «отклоняются с логом»), js (`crates/js/src/dom.rs` — `_lumen_navigate_or_fragment`, `window.open`)
 **Владелец:** P1/P3. Заведён P2 в ходе WPT-задачи, здесь не чинится.

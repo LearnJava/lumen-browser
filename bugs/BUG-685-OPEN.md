@@ -1,6 +1,7 @@
 # BUG-685 — HTML parser never switches to the SVG namespace inside `<svg>`; declarative SVG markup never gets the SVG DOM prototype chain
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → [GAP-XMLDOC](../ROADMAP.md))
+**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-XMLDOC` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Компонент:** engine (`crates/engine/html-parser/src/tree_builder.rs:1879` — `create_element_with_attrs` calls `self.doc.create_element(QualName::html(name))` unconditionally, no foreign-content branch anywhere in the crate); knock-on in js (`crates/js/src/dom.rs:1673` `_lumen_element_prototype_for` — only patches the prototype away from `Element.prototype` for the XHTML namespace; `crates/js/src/svg.rs:905-921` — the `SVG_TAG_MAP` prototype swap only fires from the `document.createElementNS` override, never for parser-created nodes)
 **Найден:** P2, WPT-VENDOR-svg, 2026-08-06
 

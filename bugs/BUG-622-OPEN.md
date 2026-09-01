@@ -121,7 +121,7 @@ document.defaultView === 'undefined'` — баг открыт и актуале�
 замер показывает, что элемент-адресованный `test_driver`-экшен до
 `testdriver-extra.js::get_context` **не доходит**: `resources/testdriver.js::click`
 раньше зовёт `element.getClientRects()`, которого нет
-([BUG-478](BUG-478-OPEN.md)/[BUG-551](BUG-551-OPEN.md)/[BUG-580](BUG-580-OPEN.md)),
+([BUG-478](BUG-478-OPEN.md)/[BUG-551](BUG-551-DUPLICATE.md)/[BUG-580](BUG-580-DUPLICATE.md)),
 и бросает синхронно:
 
 ```
