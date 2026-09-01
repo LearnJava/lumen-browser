@@ -1,7 +1,7 @@
 # BUG-805 — `scripts/scoped-test.sh` не может стать зелёным: `lumen-network` виснет на UDP-тесте и осыпается на loopback-тестах под нагрузкой
 
 **Статус:** OPEN
-**Заведён:** 2026-08-21 (P3, побочно на гейте [BUG-405](BUG-405-OPEN.md) среза 37)
+**Заведён:** 2026-08-21 (P3, побочно на гейте [BUG-405](BUG-405-FIXED.md) среза 37)
 **Домен:** network (`crates/network/src/h3/udp.rs:450`, `crates/network/src/lib.rs` — тесты `tests::fetch_*`/`auth_*`)
 
 ## Симптом

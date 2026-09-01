@@ -111,5 +111,5 @@ construction.
 - ADR-016 — multithreaded render pipeline (the mandate and M0–M4 staging)
 - `docs/tasks/ph3-render-multithreading.md` — per-slice history, M2 acceptance
 - `bugs/BUG-274-OPEN.md` — cold-start investigation that produced the measurement
-- `bugs/BUG-405-OPEN.md` — scroll expose-band stalls, explicitly not fixed here
+- `bugs/BUG-405-FIXED.md` — scroll expose-band stalls, explicitly not fixed here
 - `docs/perf-method.md` — counter-over-wall-clock acceptance rule

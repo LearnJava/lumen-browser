@@ -58,11 +58,11 @@
  "generated": "2026-09-01",
  "counts": {
   "open": 365,
-  "fixed": 523,
+  "fixed": 525,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 888,
+ "total_bugs": 890,
  "phases": [
   {
    "id": "P0",
@@ -6083,16 +6083,23 @@
       {
        "id": "LIB-4",
        "title": "LIB-4: внешний SVG через resvg",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Внешний SVG (img src, favicon, background-image) через resvg. Сейчас он рисуется своим движком (RP-5, done) и потому без градиентов, clipPath, mask, filter, pattern, marker и вложенного image. Точка входа — lumen_image::is_svg и crates/shell/src/svg_image.rs. tiny-skia, на которой рисует resvg, уже в дереве (бэкенд cpu-render), новых транзитивных зависимостей почти нет. Растр кэшировать по паре (url, целевой размер): SVG перерастрируется при смене размера."
+       "note": "ЗАКРЫТ 2026-09-01 (ветка `p1-lib4-external-svg-resvg`): внешний SVG (`<img src>`, `background-image`) рисуется через `resvg`/`usvg` **0.44.0** (пин под `tiny-skia` 0.11.4 — та же версия, что уже несёт `lumen-paint`'s `cpu-render`), не своим SVG-to-DisplayList движком. Новый модуль `lumen_image::decode_svg` (`crates/engine/image/src/svg.rs`) дописан в `decode_raw`'s dispatch-по-сигнатуре сразу после AVIF — SVG стал обычным декодируемым форматом наравне с PNG/JPEG/GIF/WebP/AVIF, `decode`/`decode_raw` больше не возвращают `UnknownFormat` для него. Прежний путь — `crates/shell/src/svg_image.rs` (обёртка в HTML + прогон через layout/paint pipeline, RP-5) — удалён целиком, оба call site в `subresources.rs` теперь просто `decode_to`. Интринзик-размер резолвит `usvg::Tree::size()` (`width`/`height`/`viewBox`), при отсутствии обоих — CSS Images §5.1 дефолт 300×150, а не `usvg`'s собственный no-hint дефолт 100×100 (это дефолт *вьюпорта* из SVG-спеки, другой вопрос). `raster-images` включена (вложенный `<image>`), `text`/`system-fonts` выключены (детерминизм графгейта важнее рендера текста внутри SVG — кросс-машинная нестабильность через `fontdb`). 5 unit-тестов в `svg.rs`, включая регрессионный на реальный градиент (свой движок рисует ноль градиентов, ADR-027). Графтест `graphic_tests/154-svg-external-image-gradients.html` (linearGradient+clipPath через `<img src>`, radialGradient+pattern через `background-image`) — 0.19% против Edge (font-parity debtor на подписях), решающий кадр снят на профиле `dev-release` (`LUMEN_PROFILE=release` в `run.py` — стале от 2026-08-22, до этой задачи, и на нём та же страница рисует сплошной чёрный: старый own-engine путь не умеет `url(#...)`-заливки и не имеет фолбэка)."
       },
       {
        "id": "LIB-5",
-       "title": "LIB-5: inline-SVG — модель красок из usvg",
-       "status": "planned",
+       "title": "LIB-5: inline-SVG — модель красок из usvg (градиенты)",
+       "status": "done",
        "size": "L",
-       "note": "Inline-SVG: взять у usvg модель путей, красок и градиентов, а дерево, каскад и хит-тест оставить своими — узлы обязаны жить в общем DOM ради CSS и JS, отдать поддерево целиком в resvg нельзя. Закрывает отсутствие градиентов и масок в crates/engine/layout/src/box_tree/svg.rs и crates/engine/paint/src/svg_path.rs. НЕ закрывает BUG-685 (парсер без foreign content), BUG-830 (createElementNS), BUG-889 (SVG из парсера — HTMLUnknownElement), BUG-806 (SMIL) — это звенья парсера и DOM, наша работа."
+       "note": "ЗАКРЫТ (частично, срез «градиенты»; масок нет — вынесены в LIB-9) 2026-09-01 (ветка `p1-lib5-inline-svg-paint-model`): `<linearGradient>`/`<radialGradient>` для `fill`/`stroke=\"url(#id)\"` на живых SVG-элементах — дерево/каскад/хит-тест остались свои, поддерево в resvg не отдавалось. Постановка «взять у usvg модель путей/красок/градиентов» на практике не сводится к вызову API: **весь публичный API `usvg` 0.44 (`Path`/`Fill`/`Stroke`/`LinearGradient`/`RadialGradient`/`Stop`/`Group`/`Tree`) имеет `pub(crate)`-поля и только `pub(crate)`-конструкторы** — единственный вход это `Tree::from_str`/`from_data`, разбор целого SVG-XML через `roxmltree`; своих DOM/каскад-данных туда не подать. Взято архитектурно: своя пара типов `SvgPaint::Gradient(Arc<SvgGradientDef>)`/`SvgGradientDef::{Linear,Radial}`, а не форма CSS `ParsedGradient` (её `RadialSize` — только keyword-биннинг closest-side/farthest-corner, явный радиус «падает на farthest-corner» ещё до этой задачи — не подходит explicit SVG `r`) — общий для обоих слой это только терминал: `GradientStop` + команды `DrawLinearGradient`/`DrawRadialGradient`, уже отрисованные во всех трёх бэкендах под CSS-градиенты. Резолвинг `url(#id)` — двухфазный: каскад (`apply/paint.rs`, доступа к `Document` нет) кладёт сырой id в `SvgPaint::Url`, `box_tree/svg.rs::process_svg_node` (доступ к `Document` есть) резолвит по `doc.find_by_id` и заменяет на `SvgPaint::Gradient` до создания `LayoutBox` — потомки, наследующие paint без своего `fill`, наследуют уже резолвленный градиент как обычное каскадное значение. Заливка — `PushClipRect`/`PushClipRoundedRect`(rect)/`PushClipPath::Ellipse`(circle/ellipse)/`PushClipPath::Polygon`(path, только ПЕРВЫЙ контур — граница) + `DrawLinearGradient`/`DrawRadialGradient` внутри — ноль нового кода в рендер-бэкендах, чистое переиспользование. `objectBoundingBox` (дефолт) точный; `userSpaceOnUse` — best-effort через уже посчитанную `svg_paint_matrix` (не полноценный маппинг вложенных трансформов). Найдена и обойдена независимая ловушка: HTML5-токенизатор лоуэркейсит ВСЕ имена тегов (`html-parser/src/tokenizer.rs`), поэтому `<linearGradient>`/`<radialGradient>` в DOM — `lineargradient`/`radialgradient`; и `<stop/>` — не void-элемент, второй `<stop/>` в самозакрывающемся списке становится DOM-ребёнком первого (тот же класс ловушки, что `<rect/>`/`<use/>` в этом же файле) — `collect_gradient_stops` поэтому рекурсивно собирает `<stop>` по всему поддереву, а не только прямых детей. `stop-color`/`stop-opacity`/`offset` читаются как DOM-атрибуты напрямую (не через каскад — `<stop>` внутри `<defs>` никогда не получает `LayoutBox`/`compute_style`). Тест `graphic_tests/155-svg-inline-gradients.html` (6 панелей), `run.py` TESTS + `COVERAGE.md`; `SAVE_CPU_SNAPSHOTS=1`-прогон и `dump_golden.py` — нулевой дифф на существующих 55/12 эталонах. **НЕ закрыто этим срезом**: SVG `<mask>` — вынесено в LIB-9 (инфраструктура `PushMaskLayer`/`PopMaskLayer` в display_list.rs уже полностью реализована во всех трёх бэкендах, но НИ ОДИН emit-путь её не строит — мёртвый, но готовый код); `clipPath`/`pattern`/`marker`/`filter` — не входили в постановку этого ряда буквально («градиентов и масок»), пропуск честный, не регрессия; градиент на stroke падает на плоский цвет первого stop'а (клип по контуру ШТРИХА, а не заливки, требует отдельной геометрии — caps/joins/dashes); путь с несколькими subpath (`M…Z M…Z`, дырчатые фигуры) клипуется только по первому контуру — `ResolvedClipShape::Polygon` несёт один `Vec<(f32,f32)>`, не список контуров. НЕ закрывает (как и раньше) BUG-685 (парсер без foreign content), BUG-830 (createElementNS), BUG-889 (SVG из парсера — HTMLUnknownElement), BUG-806 (SMIL) — звенья парсера и DOM."
+      },
+      {
+       "id": "LIB-9",
+       "title": "LIB-9: SVG mask через PushMaskLayer",
+       "status": "planned",
+       "size": "M",
+       "note": "Остаток LIB-5: SVG `<mask>` (`mask=\"url(#id)\"` на живом SVG-элементе, ссылающемся на `<mask>` с произвольным содержимым — не градиентная CSS `mask-image`, которая уже работает через `PushMaskImage`/`PushMaskGradient*`). Разблокирующая находка LIB-5: `DisplayCommand::PushMaskLayer`/`PopMaskLayer` (display_list.rs) — «рендерь содержимое между Push/Pop в офскрин-слой, применяй как альфа-маску» — уже целиком реализованы в cpu_raster.rs/femtovg_backend.rs/renderer.rs (комментарий в коде: «CSS Masking L1 §5»), но их не строит НИ ОДИН emit-путь: это готовый, но неиспользуемый механизм. Работа — только на emit-стороне (`box_tree/svg.rs`/`display_list/background_mask.rs`): резолвить `<mask>` по id (тот же паттерн, что `<use>`/градиенты), эмитить `PushMaskLayer` → display-команды содержимого маски (переиспользовать существующий SVG-shape-walk) → `PopMaskLayer`. Рендер-бэкенды трогать не нужно — только их первый настоящий вызывающий."
       },
       {
        "id": "LIB-6",
@@ -6113,7 +6120,7 @@
        "title": "LIB-8: сверка документации после замен",
        "status": "planned",
        "size": "S",
-       "note": "Сверка документации одним заходом после LIB-5: CAPABILITIES.md (SVG и текст), subsystems/font.md и subsystems/paint.md (где теперь проходит граница со внешним кодом), CLAUDE.md (Known gotchas — убрать устаревшее, добавить «шейпинг = rustybuzz, свой gsub/gpos удалён»), docs/plan/tech-stack.md §5 (сверка с фактом), SYMBOLS.md через scripts/gen_symbols.py. Отдельный ADR на замену, условия которой разошлись с ADR-027."
+       "note": "Сверка документации одним заходом после LIB-5 И LIB-9 (SVG-масок): CAPABILITIES.md (SVG и текст), subsystems/font.md и subsystems/paint.md (где теперь проходит граница со внешним кодом), CLAUDE.md (Known gotchas — убрать устаревшее, добавить «шейпинг = rustybuzz, свой gsub/gpos удалён»), docs/plan/tech-stack.md §5 (сверка с фактом), SYMBOLS.md через scripts/gen_symbols.py. Отдельный ADR на замену, условия которой разошлись с ADR-027."
       }
      ]
     },
@@ -6320,16 +6327,9 @@
    "date": null,
    "debtor": true
   },
-  "BUG-288": {
-   "status": "open",
-   "title": "TEST-14 (overflow, часть BUG-287): overflow-axis coercion (BUG-020, CSS Overflow L3 §2.1 — один явный не-`visible` axis коэрсит второй `visible` в `auto`) корре…",
-   "component": "paint (`emit_scrollbars`) / test-triage",
-   "date": null,
-   "debtor": true
-  },
   "BUG-290": {
    "status": "open",
-   "title": "TEST-145 (writing-mode) residual 3.68% после BUG-289: (1) font-parity Inter vs Edge sans (rule 3, тот же класс что BUG-100/TEST-58); (2) `text-orientation: upri…",
+   "title": "TEST-145 (writing-mode) residual 3.68%→**3.39%** (ратчет, ревизия P3 2026-09-01, два чистых прогона) после BUG-289: (1) font-parity Inter vs Edge sans (rule 3,…",
    "component": "paint/layout (font metrics; `upright` per-glyph advance)",
    "date": null,
    "debtor": true
@@ -6352,13 +6352,6 @@
    "status": "open",
    "title": "Новый headless перф-гейт CC-12 (`cc12_chrome_perf_gate_hover_and_keystroke_cycles`) показал `relayout_chrome_host`'s mutate→restyle→relayout→paint цикл стоит ~5…",
    "component": "layout (`box_tree.rs`, `lay_out_flex`) — **general engine bug, not chrome-specific**",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-405": {
-   "status": "open",
-   "title": "paint (wgpu — путь отрисовки вновь открывшейся полосы при scroll-blit, `crates/engine/paint/src/renderer.rs`)",
-   "component": "COPY_DST`, пиксельно нейтрально), интерливед живой A/B 3 пары — надбавка min 16.87 мс с битами против 18.58 без. Инструмент — `band_copy_cost_census` (`#[ignore]`-тест `lumen-paint`); цена меряется НАКЛОНОМ по числу копий в submit-е, а прокси через `LoadOp::Clear` отвергнут (65 ГБ/с = fast-clear метаданными). Остаток пополнен п. 60 (пропорциональна ли цена промаха числу перерисованных строк при неизменной цели — не измерено, первый шаг среза 29) и п. 61 (ping-pong требует второй полосы +18.6 МиБ, кольцевой адресации — нет).",
    "date": null,
    "debtor": false
   },
@@ -8136,7 +8129,7 @@
   "BUG-782": {
    "status": "open",
    "title": "**TEST-18 (картинки) ушёл с 2.31 % на 6.34 %** — порог теста 0.5 %, запись должника BUG-219 рассчитана на 2.11 %. Эталон `graphic_tests/results/latest.json` сня…",
-   "component": "paint/image (кандидаты — срезы 20–23 [BUG-405](bugs/BUG-405-OPEN.md) и [BUG-771](bugs/BUG-771-FIXED.md); коммит не бисекчен)",
+   "component": "paint/image (кандидаты — срезы 20–23 [BUG-405](bugs/BUG-405-FIXED.md) и [BUG-771](bugs/BUG-771-FIXED.md); коммит не бисекчен)",
    "date": null,
    "debtor": false
   },
@@ -8769,6 +8762,20 @@
    "component": "paint (`crates/engine/paint/src/renderer.rs` — wgpu `render_impl`, `PushScrollLayer`/`FillRect`/`sync_scissor_to_stack`/`bind_and_draw!`/`run_draw_ops!`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-934": {
+   "status": "open",
+   "title": "`AutomationCommand::Click`/`::Type` резолвят цель и зовут `handle_click_at` напрямую — эта функция (~700 строк, `click.rs`) нигде не вызывает `point_over_chrome…",
+   "component": "shell (`crates/shell/src/lumen/automation.rs::resolve_automation_target`, `crates/shell/src/lumen/click.rs::handle_click_at`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-935": {
+   "status": "open",
+   "title": "ADR-016 M4-инкрементальный путь для rAF-DOM-мутаций (`try_relayout_raf_incremental`) не выполняется на дефолтной сборке: `&&`-короткое замыкание в `relayout_raf…",
+   "component": "shell (`crates/shell/src/relayout.rs` — `relayout_raf_dirty`/`relayout_raf_dirty_readback`)",
+   "date": null,
+   "debtor": true
   },
   "BUG-001": {
    "status": "fixed",
@@ -12423,6 +12430,20 @@
    "component": "js (`crates/js/src/dom.rs`)",
    "date": "2026-09-01",
    "debtor": false
+  },
+  "BUG-288": {
+   "status": "fixed",
+   "title": "TEST-14 (overflow, часть BUG-287): overflow-axis coercion (BUG-020, CSS Overflow L3 §2.1) корректно клипует контент, но `auto` — scrollable-значение, и `emit_sc…",
+   "component": "paint (`emit_scrollbars`) / test-triage",
+   "date": "2026-09-01",
+   "debtor": true
+  },
+  "BUG-405": {
+   "status": "fixed",
+   "title": "paint (wgpu — путь отрисовки вновь открывшейся полосы при scroll-blit, `crates/engine/paint/src/renderer.rs`)",
+   "component": "COPY_DST`, пиксельно нейтрально), интерливед живой A/B 3 пары — надбавка min 16.87 мс с битами против 18.58 без. Инструмент — `band_copy_cost_census` (`#[ignore]`-тест `lumen-paint`); цена меряется НАКЛОНОМ по числу копий в submit-е, а прокси через `LoadOp::Clear` отвергнут (65 ГБ/с = fast-clear метаданными). Остаток пополнен п. 60 (пропорциональна ли цена промаха числу перерисованных строк при неизменной цели — не измерено, первый шаг среза 29) и п. 61 (ping-pong требует второй полосы +18.6 МиБ, кольцевой адресации — нет).",
+   "date": "2026-09-01",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -13663,7 +13684,7 @@
   "paint/image": [
    "BUG-032"
   ],
-  "paint/image (кандидаты — срезы 20–23 [BUG-405](bugs/BUG-405-OPEN.md) и [BUG-771](bugs/BUG-771-FIXED.md); коммит не бисекчен)": [
+  "paint/image (кандидаты — срезы 20–23 [BUG-405](bugs/BUG-405-FIXED.md) и [BUG-771](bugs/BUG-771-FIXED.md); коммит не бисекчен)": [
    "BUG-782"
   ],
   "paint/layout": [
@@ -13703,6 +13724,9 @@
   ],
   "shell (`crates/shell/src/chrome_ui.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`, `app/window_event/mouse_input.rs`)": [
    "BUG-461"
+  ],
+  "shell (`crates/shell/src/lumen/automation.rs::resolve_automation_target`, `crates/shell/src/lumen/click.rs::handle_click_at`)": [
+   "BUG-934"
   ],
   "shell (`crates/shell/src/lumen/click.rs`, ветка `FormClickAction::ToggleRadio` → `crates/shell/src/forms.rs::toggle_checkbox`)": [
    "BUG-927"
@@ -13772,6 +13796,9 @@
   ],
   "shell (`crates/shell/src/platform/audio_player.rs` — `PlatformAudioPlayer::load`), js (`crates/js/src/audio_element.rs` — опрос загрузки в `AUDIO_ELEMENT_SHIM`)": [
    "BUG-799"
+  ],
+  "shell (`crates/shell/src/relayout.rs` — `relayout_raf_dirty`/`relayout_raf_dirty_readback`)": [
+   "BUG-935"
   ],
   "shell (`crates/shell/src/resource_base.rs` — `ResourceBase::resolve`/`resolve_str` для `ResourceBase::File`)": [
    "BUG-440"
