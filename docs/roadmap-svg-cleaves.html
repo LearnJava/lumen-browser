@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-01",
  "counts": {
-  "open": 360,
-  "fixed": 532,
+  "open": 368,
+  "fixed": 533,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 892,
+ "total_bugs": 901,
  "phases": [
   {
    "id": "P0",
@@ -561,10 +561,11 @@
     {
      "id": "P2-scrolldriven",
      "title": "CSS Scroll-Driven Animations L1",
-     "status": "done",
-     "note": "PARTIAL (ревизия P3 2026-07-04): парсинг + resolve прогресса от scroll/view готовы (scroll_timeline.rs), композит animated background-color готов (BUG-231 FIXED); TEST-78 остаток = font-parity (BUG-127 → KNOWN_DEBTOR 4.64)",
+     "status": "planned",
+     "note": "PARTIAL (ревизия P3 2026-07-04): парсинг + resolve прогресса от scroll/view готовы (scroll_timeline.rs), композит animated background-color готов (BUG-231 FIXED); TEST-78 остаток = font-parity (BUG-127 → KNOWN_DEBTOR 4.64). Подтверждено живой пробой 2026-09-01 (WPT-RUN-6 срез 31, BUG-950): Phase 1 — проводка `animation-timeline: scroll()` от `ScrollTimeline.currentTime` в `AnimationScheduler` для keyframe-прогресса — по-прежнему не сделана, `getComputedStyle` анимируемого свойства не двигается вовсе при прокрутке",
      "bugs": [
-      "BUG-127"
+      "BUG-127",
+      "BUG-950"
      ]
     },
     {
@@ -6351,10 +6352,10 @@
       },
       {
        "id": "FRAME-3",
-       "title": "FRAME-3: остальные виды прокрутки внутри фрейма",
+       "title": "FRAME-3: скроллбар внутри фрейма",
        "status": "planned",
        "size": "M",
-       "note": "Прокрутка внутри фрейма помимо вертикального колеса: горизонтальная, клавиатурная, собственный скроллбар ребёнка и прокрутка overflow-контейнера ВНУТРИ под-документа. Срез 17 сделал вертикальное колесо и window.scrollTo из скрипта ребёнка с цепочкой наружу по CSS Overscroll Behavior L1 §3; ориентир по устройству — одно число FrameHandle::scroll_y с тремя читателями, которые не должны разъехаться (трансляция в сплайсе, обратная добавка в хит-тесте, window.scrollY в рантайме ребёнка)."
+       "note": "Прокрутка внутри фрейма помимо вертикального колеса: горизонтальная, клавиатурная, собственный скроллбар ребёнка и прокрутка overflow-контейнера ВНУТРИ под-документа. Срез 17 сделал вертикальное колесо и window.scrollTo из скрипта ребёнка с цепочкой наружу по CSS Overscroll Behavior L1 §3; ориентир по устройству — одно число FrameHandle::scroll_y с тремя читателями, которые не должны разъехаться (трансляция в сплайсе, обратная добавка в хит-тесте, window.scrollY в рантайме ребёнка). Срез 1 (2026-09-02, ветка `p1-frame3-frame-scroll`) добавил горизонталь колесом/тачпадом: сестринское поле `FrameHandle::scroll_x` с ТЕМИ ЖЕ читателями, что и `scroll_y` (сплайс, hit-тест, `frame_page_origin`), плюс `frame_max_scroll_x`/`scroll_frame_to_x`/`apply_frame_scroll_x`; `try_scroll_frame` теперь принимает `(dx, dy)` и роутит обе оси независимо. Без JS-моста нарочно: `window.scrollX` ребёнка остаётся 0, как и у самой страницы (`scrolling.rs`) — симметрия, не пробел. Срез 2 (2026-09-01, ветка `p1-frame3-keyboard-scroll`) добавил клавиатурную прокрутку: `Lumen::try_scroll_focused_frame{,_to}` (`scrolling.rs`) — клавиатурный аналог `try_scroll_frame`, но без курсора адресует фрейм через `self.focused_frame` (то же поле, что уже маршрутизирует движение каретки внутри фрейма), а не `pointer_target`; каждая из восьми веток скролла в `keyboard.rs::handle_key` (Line↑↓←→/Page↑↓/Home/End) сначала пробует фокусный фрейм и падает на прежнюю страничную ветку, только если фрейма в фокусе нет ЛИБО он уже упёрся в свой край по обеим осям — тот же overscroll-chain, что у колеса. PageUp/Down внутри фрейма считает шаг от ЕГО СОБСТВЕННОГО вьюпорта (`FrameHandle::viewport.height`), не от вьюпорта страницы-хозяина. Новых юнит-тестов нет по той же причине, что у среза 1 колеса и у среза 17 BUG-480: `try_scroll_frame`/`apply_frame_scroll{,_x}` — методы `Lumen`, который в тестах shell не конструируется нигде, а automation-поверхность клавишу вообще не знает (`AutomationCommand` без raw key press, только `Type`/`Click`/`Scroll` — тот же пробел, что уже описан у среза 17 для колеса); код — чистая оркестровка уже протестированных примитивов (`frame_max_scroll`, `scroll_frame_to{,_x}`). Срез 3 (2026-09-01, ветка `p1-frame3-overflow-scroll`) добавил прокрутку overflow-контейнеров (`overflow: scroll|auto`) ВНУТРИ под-документа: новое поле `FrameHandle::scroll_containers: Vec<lumen_layout::ScrollContainer>` (`frames.rs`) — зеркало странично́го `Lumen::scroll_containers`, а не отдельная per-node карта (у фрейма и так один хэндл на под-документ), пересобирается ТЕМ ЖЕ `lumen_layout::collect_scroll_containers` в обеих точках присвоения `FrameHandle::layout` (`sync_frame_viewports`, `relayout_frame_content`) и при первом построении хэндла. Новый `Lumen::try_scroll_frame_overflow_container` (`scrolling.rs`) — зеркало страничного `try_scroll_overflow_container` на уровне под-документа: цель ищет через `frames::pointer_target` (`FramePointerHit::client` — координата ВЬЮПОРТА ребёнка, к ней прибавляется его же `scroll_x`/`scroll_y`, тот же перевод, что `pointer_target` сам делает при спуске в ВЛОЖЕННЫЙ фрейм), хит-тестит по `find_scroll_container_at`, двигает `set_scroll_position` на layout-дереве фрейма, применяет ту же CSS Overscroll Behavior L1 §3 chain-семантику (`overscroll_should_propagate`), затем пересобирает `content_dl` фрейма и его предков (`frames::rebuild_frame_display_lists`, сделана `pub(crate)` ради этого вызова — та же грубая гранулярность «полная пересборка», что уже принята у `apply_frame_scroll`, точечного патча для фрейма нет) и список страницы целиком; JS-зеркало (`update_scroll_states`/`fire_element_scroll`/`fire_element_scrollend`) зовётся НАПРЯМУЮ на `frames[idx].js`, тем же синхронным путём, что `apply_frame_scroll` уже использует для `window`-событий ребёнка (фреймы не engine-threaded, FRAME-1). Порядок в `mouse_wheel.rs` (все три ветки — LineDelta и обе фазы PixelDelta): контейнер ВНУТРИ фрейма проверяется ПЕРВЫМ, до прокрутки самого фрейма — самый глубокий скроллер под курсором должен победить. Юнит-тест `relayout_frame_content_populates_scroll_containers` (`tests/scripts_and_frames.rs`) проверяет само поле через функцию, пересчитывающую layout ребёнка безусловно; `try_scroll_frame_overflow_container` сам, как и остальная оркестровка `Lumen`, без теста по прежней причине (метод `Lumen`, который в тестах shell не конструируется). Живая проверка колесом не сделана — та же причина, что у срезов 1/2 (нет raw-wheel automation surface). `cargo test -p lumen-shell --bin lumen frames::` (67/67), `cargo clippy -p lumen-shell --all-targets -- -D warnings` чист. **Остаток**: собственный скроллбар фрейма (визуал + hit-тест клика/drag) — BUG-480-OPEN.md фиксирует его как открытое."
       },
       {
        "id": "FRAME-4",
@@ -9222,6 +9223,62 @@
    "status": "open",
    "title": "У канвы нет флага origin-clean: картинка с чужого источника рисуется и читается обратно, `getImageData`/`toDataURL` не бросают `SecurityError` никогда, атрибут…",
    "component": "js (`crates/js/src/canvas2d.rs`, `crates/js/src/offscreen_canvas.rs`), network",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-943": {
+   "status": "open",
+   "title": "`Element.currentCSSZoom` не существует нигде в рабочем дереве — `ResizeObserverEntry` не может отдать немасштабированный размер отдельно от масштабированного. Н…",
+   "component": "js (шим), layout (`zoom`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-944": {
+   "status": "open",
+   "title": "CSS `scroll-initial-target` не реализовано целиком (CSS Scroll Snap 2 — новый модуль, не в `CSS-SPECS.md`): свойство не парсится, «прокрутить цель в видимость п…",
+   "component": "css-parser, layout (`style/values/scroll.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-945": {
+   "status": "open",
+   "title": "`pagereveal` не диспатчится ни из одного места (ноль совпадений по `crates/`) — страница, ждущая его после навигации, зависает на первом `await`. Найден P2 2026…",
+   "component": "js (`crates/js/src/view_transitions.rs`, `crates/shell/src/persistent_js.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-946": {
+   "status": "open",
+   "title": "Trusted Types объектная модель реализована целиком, но ни один DOM sink её не читает (ноль совпадений `trustedTypes`/`defaultPolicy` в шиме) — строковый обработ…",
+   "component": "js (`crates/js/src/trusted_types.rs`, `crates/js/src/shim/web_api_shim_mid_b.js` — `_lumen_timer_string_handler`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-947": {
+   "status": "open",
+   "title": "`new Notification()` под запрещённым разрешением молча ничего не делает («silent drop», собственный doc-комментарий строки 116) вместо диспатча `error` по HTML…",
+   "component": "js (`crates/js/src/notifications_bindings.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-948": {
+   "status": "open",
+   "title": "`longtask`/`long-animation-frame` намеренно отсутствуют из `supportedEntryTypes` (собственный комментарий: ни одна `PerformanceEntry` такого типа никогда не про…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail.js` — `_PERF_SUPPORTED_ENTRY_TYPES`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-949": {
+   "status": "open",
+   "title": "`scrollY`/`pageYOffset` читают позицию ДО прокрутки вплоть до ~500мс после `scrollTo()` — запрос ставится в очередь и применяется только на следующем проходе ше…",
+   "component": "js (`crates/js/src/v8_runtime/runtime.rs` — `pending_page_scrolls`/`page_scroll_y`; `install/platform.rs:349`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-950": {
+   "status": "open",
+   "title": "`animation-timeline: scroll(self)` не двигает вычисленный стиль анимируемого свойства вообще — проводка от `ScrollTimeline.currentTime` к `AnimationScheduler` (…",
+   "component": "js (`crates/js/src/scroll_timeline.rs` — Phase 0 готова, Phase 1 нет по собственному doc-комментарию строки 16)",
    "date": null,
    "debtor": false
   },
@@ -12941,6 +12998,13 @@
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_style`/`_lumen_serialize_style`)",
    "date": "2026-09-01",
    "debtor": false
+  },
+  "BUG-942": {
+   "status": "fixed",
+   "title": "Часть строковых литералов и doc-комментариев в `crates/shell/` были не кириллицей, криво показанной консолью, а реально испорченными байтами, закоммиченными в g…",
+   "component": "shell (90 файлов под `crates/shell/`)",
+   "date": "2026-09-01",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -12995,6 +13059,9 @@
   ],
   "css-parser + layout (`overflow-anchor` не парсится вовсе, `grep -rn \"overflow-anchor\" crates/engine/css-parser/src/` — ноль совпадений; в layout нет алгоритма выбора/подстройки якоря, единственное упоминание — doc-comment `layout/src/style.rs:896`)": [
    "BUG-524"
+  ],
+  "css-parser, layout (`style/values/scroll.rs`)": [
+   "BUG-944"
   ],
   "css-parser/layout": [
    "BUG-088",
@@ -13469,6 +13536,9 @@
   "js (`crates/js/src/navigator_bindings.rs:213-225` -- `_screen` object literal)": [
    "BUG-559"
   ],
+  "js (`crates/js/src/notifications_bindings.rs`)": [
+   "BUG-947"
+  ],
   "js (`crates/js/src/offscreen_canvas.rs` — `_2d_context`/`OffscreenCanvas`/`ImageBitmap` объявлены объектными литералами, не классами)": [
    "BUG-932"
   ],
@@ -13499,8 +13569,14 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js`, `_lumen_make_dataset`)": [
    "BUG-496"
   ],
+  "js (`crates/js/src/shim/web_api_shim_tail.js` — `_PERF_SUPPORTED_ENTRY_TYPES`)": [
+   "BUG-948"
+  ],
   "js (`crates/js/src/sw_worker.rs` — шим глобального скоупа service worker)": [
    "BUG-748"
+  ],
+  "js (`crates/js/src/trusted_types.rs`, `crates/js/src/shim/web_api_shim_mid_b.js` — `_lumen_timer_string_handler`)": [
+   "BUG-946"
   ],
   "js (`crates/js/src/v8_esm.rs:331` — `resolve` берёт базой `s.page_url`; `set_page_url` зовётся только из `install_dom`/`set_module_context`, `<base href>` в состояние ESM-слоя не попадает вовсе)": [
    "BUG-910"
@@ -13523,11 +13599,17 @@
   "js (`crates/js/src/v8_runtime/install/platform.rs`, `crates/engine/paint/src/hit_test.rs`)": [
    "BUG-464"
   ],
+  "js (`crates/js/src/v8_runtime/runtime.rs` — `pending_page_scrolls`/`page_scroll_y`; `install/platform.rs:349`)": [
+   "BUG-949"
+  ],
   "js (`crates/js/src/video_bindings.rs` — `appendCues()` строит cue из пяти полей; `crates/js/src/text_track_store.rs::tracks_json` и натив `__lumen_vtt_parse` — оба сериализуют `VttCue` без `settings`; `crates/engine/dom/src/vtt.rs` — `VttCueSettings` разбирается и никуда не уезжает)": [
    "BUG-902"
   ],
   "js (`crates/js/src/video_bindings.rs` — шим `<video>`; `crates/js/src/dom.rs` — хук вставки `<source>`)": [
    "BUG-825"
+  ],
+  "js (`crates/js/src/view_transitions.rs`, `crates/shell/src/persistent_js.rs`)": [
+   "BUG-945"
   ],
   "js (`crates/js/src/wasm/parser.rs:547-599` — `parse_element_section`)": [
    "BUG-700"
@@ -13576,6 +13658,9 @@
   ],
   "js (shell)": [
    "BUG-233"
+  ],
+  "js (шим), layout (`zoom`)": [
+   "BUG-943"
   ],
   "js shim (`crates/js/src/dom.rs:5613`, `_lumen_make_style` Proxy `dom.rs:4264`)": [
    "BUG-494"
@@ -14055,6 +14140,9 @@
    "BUG-068",
    "BUG-147",
    "BUG-148"
+  ],
+  "shell (90 файлов под `crates/shell/`)": [
+   "BUG-942"
   ],
   "shell (`crates/shell/src/chrome_ui.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`, `app/window_event/mouse_input.rs`)": [
    "BUG-461"
