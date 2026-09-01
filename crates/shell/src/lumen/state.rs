@@ -851,6 +851,17 @@ pub(crate) struct Lumen {
     ///
     /// `None`, если последний клик не был по содержимому фрейма.
     pub(crate) focused_frame: Option<(usize, NodeId)>,
+    /// Char-index text cursor for a typeable field ВНУТРИ содержимого фрейма
+    /// (FRAME-2 п.1), keyed by `(индекс фрейма, узел ЕГО документа)` — the
+    /// same pairing [`Self::focused_frame`] uses, needed for the same reason:
+    /// `NodeId` is unique only within its own document. The page-side
+    /// counterpart lives on `FormControlState::cursor` (page controls already
+    /// have a per-`NodeId` state map in [`Self::form_state`]; a frame's
+    /// sub-document does not, so this is a standalone map rather than a new
+    /// field threaded through one). Cleared alongside `focused_frame`'s
+    /// document on navigation ([`crate::page_load`]) and on tab reset
+    /// ([`crate::lumen::tabs_cmd`]).
+    pub(crate) frame_text_cursor: HashMap<(usize, NodeId), usize>,
     /// `(индекс фрейма, узел ЕГО документа)` под НАЖАТОЙ кнопкой мыши внутри
     /// содержимого фрейма — `:active` под-документа (BUG-480 срез 23).
     ///

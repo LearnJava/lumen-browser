@@ -54,6 +54,7 @@ mod parallel_fetch;
 mod resource_base;
 mod stylesheets;
 mod subresources;
+mod text_cursor;
 mod view_transition;
 mod window_metrics;
 mod window_mode;
@@ -217,6 +218,7 @@ use crate::input::winit_events::{css_cursor_to_winit, cursor_icon_for_hover, win
 #[cfg(feature = "v8")]
 use crate::js_escape::js_string_literal;
 use crate::js_escape::{escape_js_string, escape_js_string_char};
+use crate::text_cursor::{char_len, delete_char_after, delete_char_before, insert_char_at};
 use crate::panels::doc_pip_os_window::DocPipOsWindow;
 use crate::panels::pip_os_window::PipOsWindow;
 use crate::scroll::metrics::{LINE_STEP_CSS_PX, clamp_scroll, page_step};

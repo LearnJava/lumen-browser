@@ -90,8 +90,50 @@ impl Lumen {
         Some((TypeableField::Input, doc.control_value(nid).into_owned()))
     }
 
+    /// Read (and lazily initialize) the char-index text cursor for `nid`'s
+    /// current value (FRAME-2 п.1).
+    ///
+    /// Defaults to end-of-text on first touch — exactly the append-only
+    /// behaviour the field had before cursor tracking existed, so a field
+    /// never touched by Left/Right/Home/End keeps typing at the end like it
+    /// always did. Clamped to the current value's length on every read: an
+    /// external mutation (JS `input.value = …`, spellcheck replace) can shrink
+    /// the value out from under a stale cursor.
+    fn field_cursor(&mut self, nid: lumen_dom::NodeId, current: &str) -> usize {
+        let len = char_len(current);
+        let slot = self.form_state.entry(nid).or_default();
+        let c = *slot.cursor.get_or_insert(len);
+        c.min(len)
+    }
+
+    /// Move the focused field's text cursor by `delta` chars (Left = `-1`,
+    /// Right = `+1`), clamped to `[0, value length]`. `true` iff a typeable
+    /// field was focused (regardless of whether the cursor was already at the
+    /// clamped edge).
+    pub(crate) fn move_focused_cursor(&mut self, delta: i32) -> bool {
+        let Some(nid) = self.focused_node else { return false };
+        let Some((_, current)) = self.typeable_field(nid) else { return false };
+        let cursor = self.field_cursor(nid, &current) as i32;
+        let len = char_len(&current) as i32;
+        let next = (cursor + delta).clamp(0, len) as usize;
+        self.form_state.entry(nid).or_default().cursor = Some(next);
+        true
+    }
+
+    /// Home (`to_start = true`) / End (`to_start = false`) вЂ” jump the focused
+    /// field's text cursor to the start or end of the value.
+    pub(crate) fn jump_focused_cursor(&mut self, to_start: bool) -> bool {
+        let Some(nid) = self.focused_node else { return false };
+        let Some((_, current)) = self.typeable_field(nid) else { return false };
+        let target = if to_start { 0 } else { char_len(&current) };
+        self.form_state.entry(nid).or_default().cursor = Some(target);
+        true
+    }
+
     /// Engine-side text-editing default action on the focused form control
-    /// (BUG-436): `edit` maps the field's current value to its new value.
+    /// (BUG-436): `edit` maps the field's current value + cursor position to
+    /// its new value + cursor position (FRAME-2 п.1 вЂ” insertion/deletion at
+    /// the tracked cursor, not always at the end of the value).
     ///
     /// The JS shim only *dispatches* `keydown`/`input`/`keyup`; changing the
     /// control's value is the engine's own default action (HTML LS В§4.10.5.5),
@@ -104,10 +146,15 @@ impl Lumen {
     /// happens with the document lock held and no JS dispatched under it (the
     /// deadlock trap found in BUG-437); the JS-side value shadow is synced
     /// afterwards so a listener reading `this.value` sees the new value.
-    fn edit_focused_field(&mut self, edit: impl FnOnce(&str) -> String) -> bool {
+    fn edit_focused_field_at_cursor(
+        &mut self,
+        edit: impl FnOnce(&str, usize) -> (String, usize),
+    ) -> bool {
         let Some(nid) = self.focused_node else { return false };
         let Some((kind, current)) = self.typeable_field(nid) else { return false };
-        let next = edit(&current);
+        let cursor = self.field_cursor(nid, &current);
+        let (next, next_cursor) = edit(&current, cursor);
+        self.form_state.entry(nid).or_default().cursor = Some(next_cursor);
         if next == current {
             return true;
         }
@@ -147,11 +194,8 @@ impl Lumen {
         // `take_navigate_request` read ordered after via `route_query_js`; byte-identical
         // off-flag.
         self.dispatch_injected_key(node_id, "keydown", &key);
-        let consumed = self.edit_focused_field(|current| {
-            let mut next = current.to_owned();
-            next.push(ch);
-            next
-        });
+        let consumed =
+            self.edit_focused_field_at_cursor(|current, cursor| insert_char_at(current, cursor, ch));
         for event_type in &["input", "keyup"] {
             self.dispatch_injected_key(node_id, event_type, &key);
         }
@@ -166,7 +210,8 @@ impl Lumen {
     }
 
     /// Backspace on the focused form control: `keydown` в†’ engine deletes the
-    /// last character ([`Self::edit_focused_field`]) в†’ `input` в†’ `keyup`.
+    /// char before the cursor ([`Self::edit_focused_field_at_cursor`]) в†’
+    /// `input` в†’ `keyup`.
     ///
     /// The counterpart of [`Self::inject_char`] вЂ” without it a field could be
     /// filled but never corrected. Returns `true` when a form control consumed
@@ -174,13 +219,28 @@ impl Lumen {
     pub(crate) fn inject_backspace(&mut self) -> bool {
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         self.dispatch_injected_key(node_id, "keydown", "Backspace");
-        let consumed = self.edit_focused_field(|current| {
-            let mut next = current.to_owned();
-            next.pop();
-            next
-        });
+        let consumed = self.edit_focused_field_at_cursor(delete_char_before);
         for event_type in &["input", "keyup"] {
             self.dispatch_injected_key(node_id, event_type, "Backspace");
+        }
+        consumed
+    }
+
+    /// Delete (forward-delete) on the focused form control: `keydown` в†’
+    /// engine deletes the char after the cursor
+    /// ([`Self::edit_focused_field_at_cursor`]) в†’ `input` в†’ `keyup`.
+    ///
+    /// Previously missing entirely вЂ” only Backspace existed вЂ” because there
+    /// was no cursor position for "after" to mean anything relative to.
+    /// Returns `true` when a form control consumed the key.
+    pub(crate) fn inject_delete_forward(&mut self) -> bool {
+        let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
+        self.dispatch_injected_key(node_id, "keydown", "Delete");
+        let consumed = self.edit_focused_field_at_cursor(|current, cursor| {
+            (delete_char_after(current, cursor), cursor)
+        });
+        for event_type in &["input", "keyup"] {
+            self.dispatch_injected_key(node_id, event_type, "Delete");
         }
         consumed
     }

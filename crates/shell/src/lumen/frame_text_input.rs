@@ -56,18 +56,60 @@ impl Lumen {
         Some((TypeableField::Input, doc.control_value(nid).into_owned()))
     }
 
+    /// Read (and lazily initialize) the char-index text cursor for the
+    /// typeable field `(idx, nid)` — mirror of
+    /// [`super::text_input::Lumen::field_cursor`] (page), keyed against
+    /// [`crate::lumen::Lumen::frame_text_cursor`] instead of `form_state`
+    /// (a frame's sub-document has no per-`NodeId` state map of its own).
+    fn frame_field_cursor(&mut self, idx: usize, nid: NodeId, current: &str) -> usize {
+        let len = char_len(current);
+        let c = *self.frame_text_cursor.entry((idx, nid)).or_insert(len);
+        c.min(len)
+    }
+
+    /// Move the focused frame field's text cursor by `delta` chars — mirror
+    /// of [`super::text_input::Lumen::move_focused_cursor`] (page).
+    pub(crate) fn move_focused_frame_cursor(&mut self, delta: i32) -> bool {
+        let Some((idx, nid)) = self.focused_frame else { return false };
+        let Some((_, current)) = self.frame_typeable_field(idx, nid) else { return false };
+        let cursor = self.frame_field_cursor(idx, nid, &current) as i32;
+        let len = char_len(&current) as i32;
+        let next = (cursor + delta).clamp(0, len) as usize;
+        self.frame_text_cursor.insert((idx, nid), next);
+        true
+    }
+
+    /// Home (`to_start = true`) / End (`to_start = false`) for the focused
+    /// frame field — mirror of
+    /// [`super::text_input::Lumen::jump_focused_cursor`] (page).
+    pub(crate) fn jump_focused_frame_cursor(&mut self, to_start: bool) -> bool {
+        let Some((idx, nid)) = self.focused_frame else { return false };
+        let Some((_, current)) = self.frame_typeable_field(idx, nid) else { return false };
+        let target = if to_start { 0 } else { char_len(&current) };
+        self.frame_text_cursor.insert((idx, nid), target);
+        true
+    }
+
     /// Собственное действие движка по умолчанию на typeable-поле фрейма,
-    /// адресуемом `self.focused_frame` — зеркало [`Self::edit_focused_field`].
+    /// адресуемом `self.focused_frame` — зеркало
+    /// [`super::text_input::Lumen::edit_focused_field_at_cursor`]:
+    /// insertion/deletion at the tracked cursor, not always at the end of the
+    /// value (FRAME-2 п.1).
     ///
     /// Мутация дерева ребёнка идёт через [`super::frame_forms::Lumen::with_frame_doc`]
     /// (тот же короткий лок, что у нативного переключения элемента
     /// управления), значение в JS-тени фрейма синхронизируется отдельным
     /// `eval_js` по ЕГО хэндлу — `route_eval_js` знает только контекст
     /// страницы (та же причина, что у [`super::frame_forms::Lumen::frame_toggle_details`]).
-    fn edit_focused_frame_field(&mut self, edit: impl FnOnce(&str) -> String) -> bool {
+    fn edit_focused_frame_field_at_cursor(
+        &mut self,
+        edit: impl FnOnce(&str, usize) -> (String, usize),
+    ) -> bool {
         let Some((idx, nid)) = self.focused_frame else { return false };
         let Some((kind, current)) = self.frame_typeable_field(idx, nid) else { return false };
-        let next = edit(&current);
+        let cursor = self.frame_field_cursor(idx, nid, &current);
+        let (next, next_cursor) = edit(&current, cursor);
+        self.frame_text_cursor.insert((idx, nid), next_cursor);
         if next == current {
             return true;
         }
@@ -110,11 +152,8 @@ impl Lumen {
         let node_id = nid.index();
         let key = escape_js_string_char(ch);
         self.dispatch_frame_key(idx, node_id, "keydown", &key);
-        let consumed = self.edit_focused_frame_field(|current| {
-            let mut next = current.to_owned();
-            next.push(ch);
-            next
-        });
+        let consumed = self
+            .edit_focused_frame_field_at_cursor(|current, cursor| insert_char_at(current, cursor, ch));
         for event_type in &["input", "keyup"] {
             self.dispatch_frame_key(idx, node_id, event_type, &key);
         }
@@ -122,18 +161,30 @@ impl Lumen {
     }
 
     /// Backspace во typeable-поле фрейма, адресуемом `self.focused_frame`
-    /// (зеркало [`Self::inject_backspace`]).
+    /// (зеркало [`Self::inject_backspace`]) — удаляет символ ПЕРЕД курсором.
     pub(crate) fn inject_frame_backspace(&mut self) -> bool {
         let Some((idx, nid)) = self.focused_frame else { return false };
         let node_id = nid.index();
         self.dispatch_frame_key(idx, node_id, "keydown", "Backspace");
-        let consumed = self.edit_focused_frame_field(|current| {
-            let mut next = current.to_owned();
-            next.pop();
-            next
-        });
+        let consumed = self.edit_focused_frame_field_at_cursor(delete_char_before);
         for event_type in &["input", "keyup"] {
             self.dispatch_frame_key(idx, node_id, event_type, "Backspace");
+        }
+        consumed
+    }
+
+    /// Delete (forward-delete) во typeable-поле фрейма, адресуемом
+    /// `self.focused_frame` (зеркало [`Self::inject_delete_forward`]) —
+    /// удаляет символ ПОСЛЕ курсора.
+    pub(crate) fn inject_frame_delete_forward(&mut self) -> bool {
+        let Some((idx, nid)) = self.focused_frame else { return false };
+        let node_id = nid.index();
+        self.dispatch_frame_key(idx, node_id, "keydown", "Delete");
+        let consumed = self.edit_focused_frame_field_at_cursor(|current, cursor| {
+            (delete_char_after(current, cursor), cursor)
+        });
+        for event_type in &["input", "keyup"] {
+            self.dispatch_frame_key(idx, node_id, event_type, "Delete");
         }
         consumed
     }

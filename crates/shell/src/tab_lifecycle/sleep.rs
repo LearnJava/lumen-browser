@@ -69,7 +69,7 @@ pub fn deserialize_form_state(json: &str) -> FormState {
             .get("checked")
             .and_then(JsonValue::as_bool)
             .unwrap_or(false);
-        out.insert(NodeId::from_index(id_usize), FormControlState { value, checked });
+        out.insert(NodeId::from_index(id_usize), FormControlState { value, checked, cursor: None });
     }
     out
 }
@@ -103,7 +103,7 @@ mod tests {
         entries
             .iter()
             .map(|&(id, val, checked)| {
-                (NodeId::from_index(id), FormControlState { value: val.to_owned(), checked })
+                (NodeId::from_index(id), FormControlState { value: val.to_owned(), checked, cursor: None })
             })
             .collect()
     }
