@@ -138,6 +138,7 @@ impl Lumen {
             display_url: None,
             same_doc_state_json: None,
             nav_key: self.current_nav_key.clone(),
+            frame_target: None,
         });
         // New navigation invalidates forward history and resets same-doc state.
         self.nav_fwd.clear();
@@ -201,8 +202,50 @@ impl Lumen {
         self.reload();
     }
 
+    /// FRAME-4: consume one frame-only history step off the top of
+    /// `nav_back` (`back = true`) or `nav_fwd` (`back = false`) — called only
+    /// once the caller has confirmed the top entry carries `frame_target`.
+    /// Re-navigates that top-level frame via [`Self::traverse_frame`] and
+    /// pushes the undo/redo counterpart onto the opposite stack; never
+    /// touches `self.source`, bfcache or the unload sequence — the PAGE did
+    /// not navigate, only one of its `<iframe>`s did.
+    fn traverse_frame_history(&mut self, back: bool) {
+        let entry = if back { self.nav_back.pop() } else { self.nav_fwd.pop() };
+        let Some(entry) = entry else { return };
+        let Some((host, target_url)) = entry.frame_target else { return };
+        if let Some(prev_url) = self.traverse_frame(host, &target_url) {
+            let redo = NavEntry {
+                source: self.source.clone(),
+                scroll_x: self.scroll_x,
+                scroll_y: self.scroll_y,
+                display_url: self.display_url.clone(),
+                same_doc_state_json: None,
+                nav_key: self.current_nav_key.clone(),
+                frame_target: Some((host, prev_url)),
+            };
+            if back {
+                self.nav_fwd.push(redo);
+            } else {
+                self.nav_back.push(redo);
+            }
+        }
+        // Ни история фрейма, ни её отсутствие не входят в window.navigation
+        // страницы (см. `commit_nav_state`) — commit нужен только ради кнопок
+        // Back/Forward в chrome, которые читают `!nav_back.is_empty()`.
+        self.commit_nav_state();
+        self.request_redraw();
+    }
+
     /// Перейти на предыдущую страницу в истории (Alt+Left).
     pub(crate) fn navigate_back(&mut self) {
+        // FRAME-4: a frame-only step never reaches window.navigation —
+        // subframe navigations aren't part of the top Document's Navigation
+        // API per spec — so it is handled and returned BEFORE the JS
+        // traverse dispatch/intercept below, which is page-level.
+        if self.nav_back.last().is_some_and(|e| e.frame_target.is_some()) {
+            self.traverse_frame_history(true);
+            return;
+        }
         // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
         // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
@@ -252,6 +295,7 @@ impl Lumen {
                     display_url: cur_display,
                     same_doc_state_json: Some(cur_state),
                     nav_key: self.current_nav_key.clone(),
+                    frame_target: None,
                 });
                 let url = prev.display_url.unwrap_or_default();
                 self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
@@ -309,6 +353,7 @@ impl Lumen {
 
             same_doc_state_json: if cur_state != "null" { Some(cur_state) } else { None },
             nav_key: self.current_nav_key.clone(),
+            frame_target: None,
         });
         // BUG-835: a live parked page wins over every frozen/snapshot payload —
         // it is the only restore path that brings the document's JS state back.
@@ -383,6 +428,12 @@ impl Lumen {
 
     /// Перейти на следующую страницу в истории (Alt+Right).
     pub(crate) fn navigate_forward(&mut self) {
+        // FRAME-4: see `navigate_back` — a frame-only step is handled and
+        // returned before the JS traverse dispatch/intercept below.
+        if self.nav_fwd.last().is_some_and(|e| e.frame_target.is_some()) {
+            self.traverse_frame_history(false);
+            return;
+        }
         // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
         // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
@@ -431,6 +482,7 @@ impl Lumen {
                     display_url: cur_display,
                     same_doc_state_json: Some(cur_state),
                     nav_key: self.current_nav_key.clone(),
+                    frame_target: None,
                 });
                 let url = next.display_url.unwrap_or_default();
                 self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
@@ -477,6 +529,7 @@ impl Lumen {
             display_url: cur_display,
             same_doc_state_json: if cur_state != "null" { Some(cur_state) } else { None },
             nav_key: self.current_nav_key.clone(),
+            frame_target: None,
         });
         // BUG-835: mirror of `navigate_back` — a live parked page wins.
         if let Some(url) = next.source.url_str().map(str::to_owned)
@@ -597,6 +650,7 @@ impl Lumen {
                     None
                 },
                 nav_key: self.current_nav_key.clone(),
+                frame_target: None,
             };
             let (cur, crossed) = NavEntry::shift_multi_step(
                 &mut self.nav_back,

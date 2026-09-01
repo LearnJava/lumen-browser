@@ -548,6 +548,7 @@ impl Lumen {
                          display_url: old_display,
                          same_doc_state_json: Some(old_state),
                          nav_key: self.current_nav_key.clone(),
+                         frame_target: None,
                      });
                     self.nav_key_counter += 1;
                     self.current_nav_key = format!("nav-{}", self.nav_key_counter);
@@ -674,6 +675,7 @@ impl Lumen {
                                             display_url: None,
                                             same_doc_state_json: Some(state.clone()),
                                             nav_key: self.current_nav_key.clone(),
+                                            frame_target: None,
                                         });
                                         self.nav_key_counter += 1;
                                         self.current_nav_key = format!(
