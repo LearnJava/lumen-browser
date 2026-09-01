@@ -64,6 +64,18 @@ cargo --version
 
 ## Сборка и запуск
 
+Репозиторный `.cargo/config.toml` включает кэш компиляции **sccache**, поэтому его
+нужно поставить до первой сборки — иначе любая команда `cargo` падает сразу
+(`could not execute process 'sccache … rustc -vV'`):
+
+```bash
+cargo install sccache --version 0.17.0    # версия обязательна: 0.15.0 роняет
+sccache --version                         # компилятор с 0xc0000409 под тулчейном 1.97.0
+```
+
+Если sccache не нужен — собирай с `RUSTC_WRAPPER=` (пустое значение перебивает
+конфиг), так делает и CI. Подробности — [docs/build-speed.md](docs/build-speed.md) §3.8.
+
 Клонируй репозиторий и из его корня:
 
 ```bash
