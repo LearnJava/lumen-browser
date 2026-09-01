@@ -349,6 +349,78 @@ impl Lumen {
         true
     }
 
+    /// Перевести (x_css, y_css) — сырые оконные CSS px курсора — в
+    /// СОБСТВЕННЫЕ viewport-локальные координаты фрейма `idx` (FRAME-3
+    /// remainder: собственный scrollbar фрейма). Та же "raw overlay"
+    /// конвенция, что уже использует page-level scrollbar-хиттест
+    /// (`scrollbar::classify_track_click` в `mouse_input.rs`) и
+    /// [`frames::frame_scrollbar_overlay`] для рисования — курсор минус
+    /// page-scroll минус origin бокса фрейма на странице.
+    ///
+    /// `None` — фрейм не виден (нет `host_rect`/`content_dl`, вырожденный
+    /// бокс) либо геометрия какого-то предка ещё не посчитана.
+    fn frame_local_point(&self, idx: usize, x_css: f32, y_css: f32) -> Option<(f32, f32)> {
+        let h = self.frames.get(idx)?;
+        let rect = h.host_rect?;
+        if h.content_dl.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
+            return None;
+        }
+        let (ox, oy) = frames::frame_box_page_origin(&self.frames, idx)?;
+        Some((x_css - (ox - self.scroll_x), y_css - (oy - self.scroll_y)))
+    }
+
+    /// Классифицировать клик по СОБСТВЕННОМУ scrollbar-у фрейма (FRAME-3
+    /// remainder) — зеркало page-level `scrollbar::classify_track_click` в
+    /// `mouse_input.rs`, но перебирает все видимые фреймы и берёт САМЫЙ
+    /// ГЛУБОКИЙ (topmost) совпавший, тем же принципом, что и курсор-хиттест
+    /// [`Self::pointer_target`] спускается до самого вложенного фрейма под
+    /// точкой.
+    ///
+    /// Возвращает индекс фрейма, исход классификации и Y курсора в
+    /// viewport-локальных CSS px ЭТОГО фрейма (нужен `ScrollDrag::new`).
+    pub(crate) fn classify_frame_scrollbar_click(
+        &self,
+        x_css: f32,
+        y_css: f32,
+    ) -> Option<(usize, scrollbar::TrackClick, f32)> {
+        let mut best: Option<(usize, scrollbar::TrackClick, f32, usize)> = None;
+        for (idx, h) in self.frames.iter().enumerate() {
+            let Some((local_x, local_y)) = self.frame_local_point(idx, x_css, y_css) else {
+                continue;
+            };
+            let click = scrollbar::classify_track_click(
+                local_x,
+                local_y,
+                h.scroll_y,
+                frames::frame_content_height(h),
+                h.viewport.width,
+                h.viewport.height,
+            );
+            if click == scrollbar::TrackClick::None {
+                continue;
+            }
+            if best.as_ref().is_none_or(|b| h.depth >= b.3) {
+                best = Some((idx, click, local_y, h.depth));
+            }
+        }
+        best.map(|(idx, click, local_y, _depth)| (idx, click, local_y))
+    }
+
+    /// Прокрутить под-документ фрейма `idx` в АБСОЛЮТНУЮ позицию по текущей
+    /// позиции курсора ходе drag-а СОБСТВЕННОГО scrollbar-thumb-а (FRAME-3
+    /// remainder) — вызывается из `CursorMoved` пока `frame_scroll_drag`
+    /// держит `(idx, ScrollDrag)`. `apply_frame_scroll` сам клампит и делает
+    /// весь остальной штатный путь (relayout сплайса, JS `scroll`/`scrollend`
+    /// ребёнка, redraw) — здесь только пересчёт целевой позиции по
+    /// геометрии, актуальной ПРЯМО СЕЙЧАС (бокс фрейма мог сдвинуться, если
+    /// двигалась страница-предок).
+    pub(crate) fn drag_frame_scrollbar_to(&mut self, idx: usize, drag: scrollbar::ScrollDrag, cursor_y_css: f32) {
+        let Some((_, local_y)) = self.frame_local_point(idx, 0.0, cursor_y_css) else { return };
+        let Some(h) = self.frames.get(idx) else { return };
+        let target = drag.scroll_for(local_y, frames::frame_content_height(h), h.viewport.height);
+        self.apply_frame_scroll(idx, target);
+    }
+
     /// Прокрутить под-документ ФОКУСНОГО фрейма клавиатурой на `(dx, dy)`
     /// CSS px (FRAME-3 срез 2) — клавиатурный аналог [`Self::try_scroll_frame`].
     /// У клавиши нет курсора, поэтому целевой фрейм — `self.focused_frame`

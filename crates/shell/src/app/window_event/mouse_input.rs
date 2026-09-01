@@ -852,6 +852,35 @@ impl Lumen {
                 // Left pane clicked — fall through to normal handling below.
             }
 
+            // FRAME-3 remainder: собственный scrollbar фрейма первым —
+            // "самый глубокий скроллер под курсором должен победить" (тот же
+            // принцип, что уже применён к колесу над overflow-контейнером
+            // ВНУТРИ под-документа, `mouse_wheel.rs`). Страничный scrollbar
+            // ниже проверяется, только если ни один фрейм под точкой не
+            // ответил.
+            if let Some((fidx, click, local_y)) = self.classify_frame_scrollbar_click(x_css, y_css) {
+                match click {
+                    scrollbar::TrackClick::Thumb => {
+                        self.frame_scroll_drag = Some((
+                            fidx,
+                            scrollbar::ScrollDrag::new(self.frames[fidx].scroll_y, local_y),
+                        ));
+                    }
+                    scrollbar::TrackClick::Above => {
+                        // Прокрутка фрейма мгновенна (своей анимации нет,
+                        // см. `apply_frame_scroll`) — page-jump без smooth.
+                        let step = page_step(self.frames[fidx].viewport.height);
+                        self.apply_frame_scroll(fidx, self.frames[fidx].scroll_y - step);
+                    }
+                    scrollbar::TrackClick::Below => {
+                        let step = page_step(self.frames[fidx].viewport.height);
+                        self.apply_frame_scroll(fidx, self.frames[fidx].scroll_y + step);
+                    }
+                    scrollbar::TrackClick::None => {}
+                }
+                return;
+            }
+
             let vh = self.viewport_height_css();
             match scrollbar::classify_track_click(
                 x_css,
@@ -1026,6 +1055,7 @@ impl Lumen {
                 self.pip.end_drag();
             }
             self.scroll_drag = None;
+            self.frame_scroll_drag = None;
             // FRAME-7 остаток: end an in-progress mouse-drag text selection —
             // the selection itself stays, only the drag tracking stops.
             self.text_drag = None;

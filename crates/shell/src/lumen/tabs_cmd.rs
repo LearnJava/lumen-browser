@@ -102,6 +102,7 @@ impl Lumen {
         self.momentum_anim = None;
         self.forward_momentum_stop();
         self.scroll_drag = None;
+        self.frame_scroll_drag = None;
         // ADR-016 M2.2c-2b: очищаем хэндл + DOM в движковом потоке для чистой вкладки.
         self.sync_engine_js_state();
     }

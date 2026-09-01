@@ -1062,6 +1062,91 @@ pub(crate) fn frame_page_origin(frames: &[FrameHandle], idx: usize) -> Option<(f
     None
 }
 
+/// Origin ХОСТ-БОКСА фрейма `idx` на странице (FRAME-3 remainder:
+/// собственный scrollbar фрейма).
+///
+/// Не путать с [`frame_page_origin`]: та переводит точку СОДЕРЖИМОГО фрейма
+/// (вычитает и его СОБСТВЕННЫЙ scroll), а этой нужен сам бокс — он не
+/// двигается от прокрутки СВОЕГО содержимого, только от прокрутки ПРЕДКОВ.
+/// Для фрейма страницы (`parent_doc: None`) это просто его `host_rect`
+/// (координаты документа страницы); для вложенного — тот же бокс, сложенный
+/// с origin-ом родителя (`frame_page_origin` родителя уже вычитает его
+/// собственный scroll — то самое смещение, которому подчинён ЭТОТ
+/// host-бокс, лежащий в документе родителя).
+pub(crate) fn frame_box_page_origin(frames: &[FrameHandle], idx: usize) -> Option<(f32, f32)> {
+    let h = frames.get(idx)?;
+    let rect = h.host_rect?;
+    match h.parent_doc.as_ref() {
+        None => Some((rect.x, rect.y)),
+        Some(pd) => {
+            let parent = frames.iter().position(|o| Arc::ptr_eq(&o.doc, pd))?;
+            let (px, py) = frame_page_origin(frames, parent)?;
+            Some((px + rect.x, py + rect.y))
+        }
+    }
+}
+
+/// Высота содержимого под-документа фрейма `h` — та же величина, что
+/// [`frame_max_scroll`] уже вычисляет для клампа, но без вычитания
+/// viewport-а: `scrollbar::build_scrollbar_overlay` ожидает именно
+/// content-height, а не max-scroll.
+pub(crate) fn frame_content_height(h: &FrameHandle) -> f32 {
+    frame_max_scroll(h) + h.viewport.height
+}
+
+/// Оверлей СОБСТВЕННОГО scrollbar-а каждого видимого фрейма (FRAME-3
+/// remainder: "собственный скроллбар фрейма" — визуал).
+///
+/// Зеркало страничного `scrollbar::build_scrollbar_overlay`, вызванное на
+/// геометрию КАЖДОГО `FrameHandle` вместо `Lumen`: те же pure-fn формулы,
+/// свой viewport и свой content-height ([`frame_content_height`]), обёрнутые
+/// в клип и трансляцию к боксу фрейма НА СТРАНИЦЕ — иначе полоса рисовалась
+/// бы в (0,0) для каждого фрейма разом.
+///
+/// Origin — [`frame_box_page_origin`] (бокс ХОСТА, не его содержимого: свой
+/// скролл фрейма не должен двигать полосу, только скролл ПРЕДКОВ), минус
+/// `page_scroll_{x,y}` — та же "raw overlay" конвенция, что уже использует
+/// страничный scrollbar и `build_validation_tooltip`
+/// (`frame_form_submit.rs::show_frame_validation_tooltip` — тот же приём для
+/// фреймовой tooltip-валидации): overlay viewport-locked, страничный
+/// page-offset (панель вкладок) его не подхватывает — ни у страничного
+/// scrollbar-а, ни у этого.
+pub(crate) fn frame_scrollbar_overlay(
+    frames: &[FrameHandle],
+    page_scroll_x: f32,
+    page_scroll_y: f32,
+) -> DisplayList {
+    let mut out: DisplayList = Vec::new();
+    for (idx, h) in frames.iter().enumerate() {
+        let Some(rect) = h.host_rect else { continue };
+        if h.content_dl.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
+            continue;
+        }
+        let Some((ox, oy)) = frame_box_page_origin(frames, idx) else { continue };
+        let bar = crate::scrollbar::build_scrollbar_overlay(
+            h.scroll_y,
+            frame_content_height(h),
+            h.viewport.width,
+            h.viewport.height,
+        );
+        if bar.is_empty() {
+            continue;
+        }
+        let sx = ox - page_scroll_x;
+        let sy = oy - page_scroll_y;
+        out.push(DisplayCommand::PushClipRect {
+            rect: Rect::new(sx, sy, h.viewport.width, h.viewport.height),
+        });
+        out.push(DisplayCommand::PushTransform {
+            matrix: lumen_layout::Mat4::translation_2d(sx, sy),
+        });
+        out.extend(bar);
+        out.push(DisplayCommand::PopTransform);
+        out.push(DisplayCommand::PopClip);
+    }
+    out
+}
+
 /// Окружение загрузки под-документа: всё, что фрейм берёт у страницы, одним
 /// `Clone`-значением (BUG-480 срез 19).
 ///
