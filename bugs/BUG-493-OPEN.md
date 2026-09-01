@@ -314,3 +314,41 @@ this slice did NOT fit this bug (`auto-004.html`'s `expected 1 but got 50`,
 `replaced-element-028.html`, `quirks-mode-003.html`) — left as unclustered
 residual, genuinely distinct numeric mismatches rather than empty/zero
 reads.
+
+## Срез CSS2 normal-flow (absorbed from [BUG-468](BUG-468-DUPLICATE.md), P3 2026-09-01)
+
+BUG-468 (`css/CSS2/normal-flow/containing-block-percent-{padding,margin}-{left,right,top,bottom}.html`,
+8 files, filed WPT-RUN-3 срез 2 — earlier in the same run than this bug's
+срез 8, but merged here rather than the reverse: see BUG-468's own file for
+why) is the same mechanism wearing a percentage-resolution costume. Pattern:
+
+```html
+<div id="container" style="width:123px;">
+  <div id="child"></div>  <!-- CSS: padding-left:10%; width:50px; height:100px -->
+</div>
+<script>
+  document.body.offsetTop;
+  container.style.width = "500px";
+  checkLayout("#container");   // check-layout-th.js reads child.offsetWidth
+</script>
+```
+
+Live-probed (`--dump-layout` with `console.log` either side of the mutation,
+independent of any WPT harness): `child.offsetWidth` reads `62.3` (correct
+pre-mutation value: `50 + 10% of 123`) both *before and after* the
+`style.width` mutation — the percentage is not "measuring 0" as BUG-468's
+original filing guessed, it is the same stale pre-mutation snapshot срез 12
+already documented for `offsetWidth`/`clientWidth`, just observed through a
+percentage-dependent property this time.
+
+**New confirmation this slice: the staleness is not percentage-specific at
+all.** A percent-free control (`<div style="width:50px">` mutated to
+`width:300px`, read back same-tick) shows the identical symptom —
+`offsetWidth` still reports `50`. This rules out any percentage-resolution
+logic as a contributing factor and reinforces срез 12's conclusion at full
+strength: **no DOM geometry/style accessor in this engine forces a
+synchronous layout flush before reading**, full stop, regardless of what
+CSS feature produced the value being read. 8 files / 8 subtests this slice.
+`.ini` already correctly `expected: FAIL` under
+`tests/wpt/metadata/css/CSS2/normal-flow/` (unmodified, filed against
+BUG-468 originally, mechanism identical).
