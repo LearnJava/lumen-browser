@@ -12,7 +12,7 @@
 use crate::*;
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::expect_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn run_window_mode(
     source: PageSource,
     event_sink: Arc<dyn EventSink>,
@@ -28,7 +28,7 @@ pub(crate) fn run_window_mode(
     automation_rx: std::sync::mpsc::Receiver<AutomationRequest>,
     automation_mode: bool,
 ) -> ExitCode {
-    println!("Lumen v{} вЂ” Phase 2 (Interactive) complete", env!("CARGO_PKG_VERSION"));
+    println!("Lumen v{} — Phase 2 (Interactive) complete", env!("CARGO_PKG_VERSION"));
 
     // Wire navigator.clipboard to the OS clipboard (task #26). Process-global,
     // installed once; the JS bindings _lumen_clipboard_read/_write forward here.
@@ -44,13 +44,13 @@ pub(crate) fn run_window_mode(
         platform::audio_capture::PlatformAudioCapture,
     ));
 
-    // P3-spell СЃСЂРµР· 2: СЃР»РѕРІР°СЂРё Hunspell РіСЂСѓР·СЏС‚СЃСЏ С„РѕРЅРѕРј (СЂР°Р·РІРѕСЂР°С‡РёРІР°РЅРёРµ Р°С„С„РёРєСЃРѕРІ
-    // Р±РѕР»СЊС€РёС… СЃР»РѕРІР°СЂРµР№ Р·Р°РЅРёРјР°РµС‚ СЃРµРєСѓРЅРґС‹) вЂ” СЃС‚Р°СЂС‚ РѕРєРЅР° РЅРµ Р¶РґС‘С‚.
+    // P3-spell срез 2: словари Hunspell грузятся фоном (разворачивание аффиксов
+    // больших словарей занимает секунды) — старт окна не ждёт.
     std::thread::spawn(|| {
         let dicts = spellcheck::load_dictionaries(&spellcheck::spell_data_dir());
         if !dicts.is_empty() {
             use lumen_core::ext::SpellChecker;
-            println!("Spell: СЃР»РѕРІР°СЂРё Р·Р°РіСЂСѓР¶РµРЅС‹ ({})", dicts.locale());
+            println!("Spell: словари загружены ({})", dicts.locale());
         }
         let _ = SPELL_DICTS.set(dicts);
     });
@@ -88,7 +88,7 @@ pub(crate) fn run_window_mode(
     let video_gif_store: std::sync::Arc<lumen_js::VideoGifStore> =
         std::sync::Arc::new(lumen_js::VideoGifStore::default());
 
-    // Wire the TextTrack store (P3-webvtt slice 4) вЂ” mirrors parsed `<track>`
+    // Wire the TextTrack store (P3-webvtt slice 4) — mirrors parsed `<track>`
     // cues into the JS `video.textTracks` API. Same Arc shared with bindings.
     #[cfg(feature = "v8")]
     let text_track_store = {
@@ -113,7 +113,7 @@ pub(crate) fn run_window_mode(
 
     // Background refresh of external filter lists (EasyList/EasyPrivacy):
     // conditional GET of any list past its ~4-day expiry, then hot-swap the
-    // reparsed filter. Best-effort вЂ” network errors keep the cached version;
+    // reparsed filter. Best-effort — network errors keep the cached version;
     // panics are isolated to this thread and never crash the browser.
     {
         let store = std::sync::Arc::clone(&adblock_store);
@@ -129,27 +129,27 @@ pub(crate) fn run_window_mode(
             .ok();
     }
 
-    // Streaming pipeline: РѕРєРЅРѕ СЃРѕР·РґР°С‘С‚СЃСЏ РЅРµРјРµРґР»РµРЅРЅРѕ, Р·Р°РіСЂСѓР·РєР° СЃС‚Р°СЂС‚СѓРµС‚
-    // РїРѕСЃР»Рµ `resumed` РІ background-РїРѕС‚РѕРєРµ. Р”Рѕ РїСЂРёС…РѕРґР° РґР°РЅРЅС‹С… СЂРёСЃСѓРµРј РїСѓСЃС‚СѓСЋ СЃС‚СЂР°РЅРёС†Сѓ.
+    // Streaming pipeline: окно создаётся немедленно, загрузка стартует
+    // после `resumed` в background-потоке. До прихода данных рисуем пустую страницу.
     let event_loop = match EventLoop::<LoadEvent>::with_user_event().build() {
         Ok(el) => el,
         Err(err) => {
-            eprintln!("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ event loop: {err}");
+            eprintln!("Не удалось создать event loop: {err}");
             return ExitCode::FAILURE;
         }
     };
     let load_proxy = event_loop.create_proxy();
     // SDC-1b/SDC-2: automation command channel for BiDi/MCP/graphic_tests control.
     // Created by main() (not here) so front-ends spawned before the window
-    // exists (bidi_spawn) already hold a valid handle вЂ” see call site.
+    // exists (bidi_spawn) already hold a valid handle — see call site.
     //
     // Attach the wake callback now that `load_proxy` exists: without it, a
     // command enqueued from a BiDi/MCP thread has no way to interrupt a
     // parked `ControlFlow::Wait` event loop (no OS event, timer, or redraw
     // is inherently triggered by an mpsc send from an unrelated thread) and
     // could sit undrained indefinitely. `set_wake` updates the shared cell
-    // every clone of `automation_handle` вЂ” including the ones already handed
-    // to `bidi_spawn`/`lumen_mcp::spawn_live` in `main()` вЂ” points to.
+    // every clone of `automation_handle` — including the ones already handed
+    // to `bidi_spawn`/`lumen_mcp::spawn_live` in `main()` — points to.
     {
         let wake_proxy = load_proxy.clone();
         automation_handle.set_wake(std::sync::Arc::new(move || {
@@ -160,8 +160,8 @@ pub(crate) fn run_window_mode(
     let (read_later_tx, read_later_rx) =
         std::sync::mpsc::channel::<(String, String, Vec<u8>)>();
 
-    // DS-14: persistent profile registry вЂ” first run seeds the 4 default
-    // profiles and makes the first one ("Р›РёС‡РЅС‹Р№") active. On later runs the
+    // DS-14: persistent profile registry — first run seeds the 4 default
+    // profiles and makes the first one ("Личный") active. On later runs the
     // registry already has rows and an active pointer, so this block is a
     // no-op past the `count() == 0` check (persists across restart).
     let profiles_registry = {
@@ -329,10 +329,10 @@ pub(crate) fn run_window_mode(
         cookie_jar: Arc::new(
             lumen_storage::CookieJar::open_in_memory().expect("cookie_jar init"),
         ),
-        // DS-16: Anonymous profile's own ephemeral cookie jar вЂ” kept
+        // DS-16: Anonymous profile's own ephemeral cookie jar — kept
         // separate from `cookie_jar` so Anonymous browsing never mixes
         // cookies with Personal/Work/Guest. Reset to a fresh instance every
-        // time Anonymous becomes the active profile вЂ” see
+        // time Anonymous becomes the active profile — see
         // `active_cookie_jar`/`ProfileMenuHit::SwitchTo`.
         anonymous_cookie_jar: Arc::new(
             lumen_storage::CookieJar::open_in_memory().expect("anonymous_cookie_jar init"),
@@ -509,17 +509,17 @@ pub(crate) fn run_window_mode(
         cert_info: None,
         cert_panel: panels::cert_panel::CertPanel::new(),
     };
-    // BUG-411: seed the shields fallback from the persisted "Р‘Р»РѕРєРёСЂРѕРІР°С‚СЊ
-    // СЂРµРєР»Р°РјСѓ" setting and push it at the process-global filter, which
+    // BUG-411: seed the shields fallback from the persisted "Блокировать
+    // рекламу" setting and push it at the process-global filter, which
     // `config::init_adblock` deliberately leaves off. Before this the setting
-    // was write-only вЂ” nothing read `BrowserSettings::shields_enabled` back вЂ”
+    // was write-only — nothing read `BrowserSettings::shields_enabled` back —
     // and after CC-15 removed the in-tab checkbox there was no reachable UI
     // that enabled filtering at all.
     //
     // BUG-800: `LUMEN_NO_ADBLOCK=1` overrides the persisted default to off.
     // EasyList's 100K+ rules false-positive on WPT's own test-infra request
     // shapes (e.g. `common/security-features/subresource/document.py?...
-    // action=purge...`) вЂ” the request is silently blocked, the navigation
+    // action=purge...`) — the request is silently blocked, the navigation
     // that depended on it fails without an error (BUG-438), and the stale
     // document poisons the next result. `tools/wptrunner/wptrunner/browsers/
     // lumen.py` sets this for every automation-launched process.
@@ -553,19 +553,19 @@ pub(crate) fn run_window_mode(
     //
     // Also skipped in automation mode (BUG-296): an automation driver's own
     // `browsingContext.navigate` races a leftover `last_session.db` tab (saved
-    // by a prior interactive run from the same working directory вЂ” the session
+    // by a prior interactive run from the same working directory — the session
     // store's on-disk file is a bare CWD-relative path, see `session_persist.rs`)
     // restoring into the same top-level context, sometimes landing *after* the
     // driver's navigate and silently leaving `window`/`document` pointed at the
     // stale page. `lumen --bidi-port`/`--mcp-live-port` are documented as
-    // opening an empty window (`print_usage`'s "РїСѓСЃС‚РѕРµ РѕРєРЅРѕ") вЂ” automation
+    // opening an empty window (`print_usage`'s "пустое окно") — automation
     // callers always drive their own first navigation, so restoring a session
     // here would violate that contract even without the race.
     if should_restore_session(&app.source, automation_mode) {
         app.restore_session();
     }
     if let Err(err) = event_loop.run_app(&mut app) {
-        eprintln!("РћС€РёР±РєР° event loop: {err}");
+        eprintln!("Ошибка event loop: {err}");
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS

@@ -9,10 +9,10 @@
 use crate::*;
 
 impl Lumen {
-    /// РџРµСЂРµСЃС‡РёС‚Р°С‚СЊ Р¶РµР»Р°РµРјС‹Р№ `CursorIcon` РїРѕ С‚РµРєСѓС‰РµР№ РїРѕР·РёС†РёРё РєСѓСЂСЃРѕСЂР° Рё
-    /// РїСЂРё РёР·РјРµРЅРµРЅРёРё РІС‹Р·РІР°С‚СЊ `Window::set_cursor`. CursorMoved РјРѕР¶РµС‚
-    /// РґС‘СЂРіР°С‚СЊСЃСЏ СЃРѕС‚РЅРё СЂР°Р· РІ СЃРµРєСѓРЅРґСѓ вЂ” `last_cursor_icon` РєСЌС€РёСЂСѓРµС‚
-    /// РїСЂРµРґС‹РґСѓС‰РµРµ Р·РЅР°С‡РµРЅРёРµ, С‡С‚РѕР±С‹ РЅРµ РґРµР»Р°С‚СЊ Р»РёС€РЅРёР№ FFI-РІС‹Р·РѕРІ РІ winit.
+    /// Пересчитать желаемый `CursorIcon` по текущей позиции курсора и
+    /// при изменении вызвать `Window::set_cursor`. CursorMoved может
+    /// дёргаться сотни раз в секунду — `last_cursor_icon` кэширует
+    /// предыдущее значение, чтобы не делать лишний FFI-вызов в winit.
     pub(crate) fn update_cursor_icon(&mut self) {
         let (Some(window), Some(renderer), Some(pos)) =
             (self.window.as_ref(), self.renderer.as_ref(), self.cursor_position)
@@ -40,7 +40,7 @@ impl Lumen {
             CursorIcon::EwResize
         } else if self.point_over_chrome(x_css, y_css) {
             // CC-5: the engine-drawn chrome owns the cursor over its own
-            // opaque area (sidebar, toolbar, tab strip) вЂ” ahead of
+            // opaque area (sidebar, toolbar, tab strip) — ahead of
             // scrollbar/page hit-test below, which assume page coordinates.
             match self.chrome_hit_test(x_css, y_css) {
                 Some(result) => css_cursor_to_winit(result.cursor),

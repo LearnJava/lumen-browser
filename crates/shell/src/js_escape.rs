@@ -12,7 +12,7 @@
 /// Converts `ch` to an ASCII or `\uXXXX` escape so the character can be
 /// used in `"..."` or `'...'` JS string arguments passed via `eval_js`.
 /// Both quote flavours are escaped because every call site in this crate
-/// interpolates the result into a **single**-quoted literal вЂ” an unescaped
+/// interpolates the result into a **single**-quoted literal — an unescaped
 /// apostrophe there produced a syntax error and the whole dispatch script
 /// was silently dropped (found while fixing BUG-436).
 pub(crate) fn escape_js_string_char(ch: char) -> String {
@@ -32,7 +32,7 @@ pub(crate) fn escape_js_string_char(ch: char) -> String {
 
 /// Escape a whole string for safe embedding in a single-quoted JS literal.
 ///
-/// Character-by-character application of [`escape_js_string_char`] вЂ” used to
+/// Character-by-character application of [`escape_js_string_char`] — used to
 /// hand a form control's new value to `_lumen_set_field_value` (BUG-436).
 pub(crate) fn escape_js_string(s: &str) -> String {
     s.chars().map(escape_js_string_char).collect()

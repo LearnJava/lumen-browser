@@ -15,7 +15,7 @@
 use crate::*;
 
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-#[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn render_bytes(
     bytes: &[u8],
     content_type: Option<&str>,
@@ -41,7 +41,7 @@ pub(crate) fn render_bytes(
     let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target, false)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
-        "Р Р°СЃРїР°СЂСЃРµРЅРѕ: {} DOM-СѓР·Р»РѕРІ, {} CSS-РїСЂР°РІРёР», {} paint-РєРѕРјР°РЅРґ, {} РєР°СЂС‚РёРЅРѕРє, {} preload-С…РёРЅС‚РѕРІ",
+        "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
         parsed.document.lock().unwrap().len(),
         parsed.rule_count,
         display_list.len(),
@@ -76,20 +76,20 @@ pub(crate) fn render_bytes(
     ))
 }
 
-/// РћС‚РїСЂР°РІРёС‚СЊ preload-С…РёРЅС‚С‹ РІ EventSink.
+/// Отправить preload-хинты в EventSink.
 ///
-/// РљР°Р¶РґС‹Р№ `PreloadHint` СЂРµР·РѕР»РІРёС‚СЃСЏ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ `base` (4B.3) Рё
-/// РїСЂРµРѕР±СЂР°Р·СѓРµС‚СЃСЏ РІ `Event::SubresourceHintFound { url, kind, priority }`.
-/// РҐРёРЅС‚С‹ СЃРѕСЂС‚РёСЂСѓСЋС‚СЃСЏ РїРѕ СѓР±С‹РІР°РЅРёСЋ РїСЂРёРѕСЂРёС‚РµС‚Р° (High в†’ Medium в†’ Low), С‡С‚РѕР±С‹
-/// СЃР°РјС‹Рµ РєСЂРёС‚РёС‡РЅС‹Рµ СЂРµСЃСѓСЂСЃС‹ СЃС‚Р°СЂС‚РѕРІР°Р»Рё РїРµСЂРІС‹РјРё (РїРѕР»РµР·РЅРѕ РїСЂРё HTTP/2).
-/// `srcset`-СЃС‚СЂРѕРєРё СЌРјРёС‚СЏС‚СЃСЏ РєР°Рє-РµСЃС‚СЊ (multi-URL С„РѕСЂРјР°С‚ вЂ” Р·Р°РґР°С‡Р° picker-Р°).
-/// `seen` вЂ” РЅР°Р±РѕСЂ СѓР¶Рµ РѕС‚РїСЂР°РІР»РµРЅРЅС‹С… URL (cross-call РґРµРґСѓРїР»РёРєР°С†РёСЏ); caller
-/// РїРµСЂРµРґР°С‘С‚ `&mut HashSet::new()` РґР»СЏ РѕРґРЅРѕСЂР°Р·РѕРІРѕРіРѕ РІС‹Р·РѕРІР° РёР»Рё persistent-СЃРµС‚
-/// РґР»СЏ РґРµРґСѓРїР° РјРµР¶РґСѓ streaming-СЃРєР°РЅРѕРј Рё С„РёРЅР°Р»СЊРЅС‹Рј pipeline.
-/// Sink Р»РѕРіРёСЂСѓРµС‚ С…РёРЅС‚ РІ stderr. РЎР°Рј fetch РїРѕ С…РёРЅС‚Сѓ РґРµР»Р°РµС‚ JS-С€РёРј РЅР° СЌР»РµРјРµРЅС‚Рµ
-/// `<link>` (BUG-826) вЂ” С‚Р°Рј Р¶Рµ, РіРґРµ Р¶РёРІСѓС‚ РµРіРѕ СЃРѕР±С‹С‚РёСЏ `load`/`error`; Р·РґРµСЃСЊ
-/// СЃРµС‚РµРІРѕРіРѕ Р·Р°РїСЂРѕСЃР° РїРѕ-РїСЂРµР¶РЅРµРјСѓ РЅРµС‚, РїРѕСЌС‚РѕРјСѓ СЃС‚СЂРѕРєР° Р»РѕРіР° РіРѕРІРѕСЂРёС‚ В«С…РёРЅС‚ РЅР°Р№РґРµРЅВ»,
-/// Р° РЅРµ В«СЂРµСЃСѓСЂСЃ Р·Р°РїСЂРѕС€РµРЅВ».
+/// Каждый `PreloadHint` резолвится относительно `base` (4B.3) и
+/// преобразуется в `Event::SubresourceHintFound { url, kind, priority }`.
+/// Хинты сортируются по убыванию приоритета (High → Medium → Low), чтобы
+/// самые критичные ресурсы стартовали первыми (полезно при HTTP/2).
+/// `srcset`-строки эмитятся как-есть (multi-URL формат — задача picker-а).
+/// `seen` — набор уже отправленных URL (cross-call дедупликация); caller
+/// передаёт `&mut HashSet::new()` для одноразового вызова или persistent-сет
+/// для дедупа между streaming-сканом и финальным pipeline.
+/// Sink логирует хинт в stderr. Сам fetch по хинту делает JS-шим на элементе
+/// `<link>` (BUG-826) — там же, где живут его события `load`/`error`; здесь
+/// сетевого запроса по-прежнему нет, поэтому строка лога говорит «хинт найден»,
+/// а не «ресурс запрошен».
 pub(crate) fn dispatch_preload_hints(
     hints: &[lumen_html_parser::PreloadHint],
     base: &ResourceBase,
@@ -98,7 +98,7 @@ pub(crate) fn dispatch_preload_hints(
 ) {
     use lumen_html_parser::PreloadHint;
 
-    // РџРµСЂРІС‹Р№ РїСЂРѕС…РѕРґ: СЂРµР·РѕР»РІ URL + РІС‹С‡РёСЃР»РµРЅРёРµ kind.
+    // Первый проход: резолв URL + вычисление kind.
     let mut resolved: Vec<(String, SubresourceKind)> = Vec::with_capacity(hints.len());
     for hint in hints {
         let pair = match hint {
@@ -108,8 +108,8 @@ pub(crate) fn dispatch_preload_hints(
                 (base.resolve_str(url), SubresourceKind::Script),
             PreloadHint::Image { url: Some(url), .. } =>
                 (base.resolve_str(url), SubresourceKind::Image),
-            // srcset СЃРѕРґРµСЂР¶РёС‚ СЃРїРёСЃРѕРє URL вЂ” СЂРµР·РѕР»РІРёРЅРі РєР°Р¶РґРѕРіРѕ РєР°РЅРґРёРґР°С‚Р°
-            // РѕС‚РєР»Р°РґС‹РІР°РµС‚СЃСЏ РґРѕ picker-Р°; СЌРјРёС‚РёРј srcset-СЃС‚СЂРѕРєСѓ РєР°Рє-РµСЃС‚СЊ.
+            // srcset содержит список URL — резолвинг каждого кандидата
+            // откладывается до picker-а; эмитим srcset-строку как-есть.
             PreloadHint::Image { url: None, srcset: Some(s), .. } =>
                 (s.clone(), SubresourceKind::Image),
             PreloadHint::SourceSet { srcset, .. } =>
@@ -124,14 +124,14 @@ pub(crate) fn dispatch_preload_hints(
                 };
                 (base.resolve_str(url), kind)
             }
-            // BUG-826: РѕСЃС‚Р°Р»СЊРЅС‹Рµ РґРІР° РІРёРґР° author-С…РёРЅС‚Р°. Р РµР°Р»СЊРЅС‹Р№ fetch Рё
-            // СЃРѕР±С‹С‚РёСЏ `load`/`error` РґР»СЏ РЅРёС… РґРµР»Р°РµС‚ JS-С€РёРј РЅР° СЃР°РјРѕРј СЌР»РµРјРµРЅС‚Рµ
-            // (`_lumen_link_hint_prepare`), Р·РґРµСЃСЊ вЂ” С‚РѕР»СЊРєРѕ СЃС‚СЂРѕРєР° СЃРµС‚РµРІРѕРіРѕ Р»РѕРіР°.
+            // BUG-826: остальные два вида author-хинта. Реальный fetch и
+            // события `load`/`error` для них делает JS-шим на самом элементе
+            // (`_lumen_link_hint_prepare`), здесь — только строка сетевого лога.
             PreloadHint::ModulePreload { url } =>
                 (base.resolve_str(url), SubresourceKind::Script),
             PreloadHint::Prefetch { url } =>
                 (base.resolve_str(url), SubresourceKind::Other { as_kind: Some("prefetch".into()) }),
-            // Preconnect URL вЂ” origin, РЅРµ СЃРѕРґРµСЂР¶РёС‚ path вЂ” СЂРµР·РѕР»РІРёРЅРі С‚СЂРёРІРёР°Р»РµРЅ.
+            // Preconnect URL — origin, не содержит path — резолвинг тривиален.
             PreloadHint::Preconnect { url, dns_only } =>
                 (base.resolve_str(url), SubresourceKind::Preconnect { dns_only: *dns_only }),
             PreloadHint::Image { url: None, srcset: None, .. } => continue,
@@ -139,12 +139,12 @@ pub(crate) fn dispatch_preload_hints(
         resolved.push(pair);
     }
 
-    // Stable-sort РїРѕ РїСЂРёРѕСЂРёС‚РµС‚Сѓ: High РїРµСЂРІС‹РјРё. Stable СЃРѕС…СЂР°РЅСЏРµС‚ source-order
-    // РІРЅСѓС‚СЂРё РѕРґРЅРѕРіРѕ СѓСЂРѕРІРЅСЏ РїСЂРёРѕСЂРёС‚РµС‚Р° (РІР°Р¶РЅРѕ РґР»СЏ HTTP/2 multiplexing).
+    // Stable-sort по приоритету: High первыми. Stable сохраняет source-order
+    // внутри одного уровня приоритета (важно для HTTP/2 multiplexing).
     resolved.sort_by_key(|(_, k)| FetchPriority::for_kind(k));
 
-    // Р”РµРґСѓРїР»РёРєР°С†РёСЏ + emit: РїСЂРѕРїСѓСЃРєР°РµРј URL, СѓР¶Рµ РѕС‚РїСЂР°РІР»РµРЅРЅС‹Рµ РІ РїСЂРµРґС‹РґСѓС‰РёС… РІС‹Р·РѕРІР°С…
-    // (cross-call dedup РґР»СЏ streaming + С„РёРЅР°Р»СЊРЅРѕРіРѕ pipeline).
+    // Дедупликация + emit: пропускаем URL, уже отправленные в предыдущих вызовах
+    // (cross-call dedup для streaming + финального pipeline).
     for (url, kind) in resolved {
         if seen.insert(url.clone()) {
             let priority = FetchPriority::for_kind(&kind);
@@ -153,44 +153,44 @@ pub(crate) fn dispatch_preload_hints(
     }
 }
 
-/// Р РµР·СѓР»СЊС‚Р°С‚ Р·Р°РіСЂСѓР·РєРё СЃС‚СЂР°РЅРёС†С‹: С‡С‚Рѕ СЂРёСЃРѕРІР°С‚СЊ Рё РєР°Рє РЅР°Р·РІР°С‚СЊ РѕРєРЅРѕ.
-/// Р Р°СЃС€РёСЂСЏРµС‚СЃСЏ: favicon, current URL, scroll state вЂ” РїРѕР·Р¶Рµ.
+/// Результат загрузки страницы: что рисовать и как назвать окно.
+/// Расширяется: favicon, current URL, scroll state — позже.
 pub(crate) struct LoadedPage {
     pub(crate) display_list: DisplayList,
     pub(crate) title: Option<String>,
-    /// Р”РµРєРѕРґРёСЂРѕРІР°РЅРЅС‹Рµ `<img src="вЂ¦">` РґР»СЏ GPU upload С‡РµСЂРµР·
-    /// `Renderer::register_image`. РљР»СЋС‡ вЂ” raw src attribute value (С‚РѕС‚ Р¶Рµ,
-    /// С‡С‚Рѕ РїРѕРїР°РґР°РµС‚ РІ `DisplayCommand::DrawImage.src`), С‡С‚РѕР±С‹ render-side
-    /// РјРѕРі СЃРґРµР»Р°С‚СЊ lookup Р±РµР· РѕС‚РґРµР»СЊРЅРѕР№ РЅРѕСЂРјР°Р»РёР·Р°С†РёРё URL. `Arc<Image>` (BUG-272
-    /// СЃСЂРµР· 17): СЂР°Р·РґРµР»СЏРµС‚ РїРёРєСЃРµР»Рё СЃ `IMAGE_CACHE`/`register_image`, РЅРµ РєРѕРїРёСЂСѓРµС‚.
+    /// Декодированные `<img src="…">` для GPU upload через
+    /// `Renderer::register_image`. Ключ — raw src attribute value (тот же,
+    /// что попадает в `DisplayCommand::DrawImage.src`), чтобы render-side
+    /// мог сделать lookup без отдельной нормализации URL. `Arc<Image>` (BUG-272
+    /// срез 17): разделяет пиксели с `IMAGE_CACHE`/`register_image`, не копирует.
     pub(crate) images: Vec<(String, Arc<lumen_image::Image>)>,
     /// Multi-frame GIF animations decoded at load time. Keyed by the same src URL
     /// as `DrawImage.src`. Frame 0 of each entry is already in `images` so the
     /// renderer has a valid texture on first paint; subsequent frames are uploaded
     /// on each `RedrawRequested` tick via `Lumen::animated_gifs`.
     pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedGif)>,
-    /// `(node_id_u32, url)` pairs for `<img loading="lazy">` вЂ” registered with JS
+    /// `(node_id_u32, url)` pairs for `<img loading="lazy">` — registered with JS
     /// after page load via `_lumen_init_lazy_images` for proximity-based loading.
     #[allow(dead_code)] // read only inside #[cfg(feature = "v8")] blocks
     pub(crate) lazy_pairs: Vec<(u32, String)>,
-    /// Layout-РґРµСЂРµРІРѕ СЃС‚СЂР°РЅРёС†С‹ вЂ” РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ animation scheduler-РѕРј.
+    /// Layout-дерево страницы — используется animation scheduler-ом.
     pub(crate) layout_box: lumen_layout::LayoutBox,
-    /// РџСЂРѕРІР°Р№РґРµСЂ С€СЂРёС„С‚РѕРІ СЃ @font-face local()-РёСЃС‚РѕС‡РЅРёРєР°РјРё СЃС‚СЂР°РЅРёС†С‹.
-    /// РџРµСЂРµРґР°С‘С‚СЃСЏ СЂРµРЅРґРµСЂСѓ С‡РµСЂРµР· `set_font_provider` РїСЂРё apply_loaded_page.
-    /// PH3-19: РєРѕРЅРєСЂРµС‚РЅС‹Р№ С‚РёРї (РЅРµ С‚СЂРµР№С‚-РѕР±СЉРµРєС‚), С‡С‚РѕР±С‹ `apply_loaded_page`
-    /// РјРѕРі РґРёРЅР°РјРёС‡РµСЃРєРё РґРѕСЂРµРіРёСЃС‚СЂРёСЂРѕРІР°С‚СЊ web-С€СЂРёС„С‚С‹ С‡РµСЂРµР· `register_from_bytes`.
+    /// Провайдер шрифтов с @font-face local()-источниками страницы.
+    /// Передаётся рендеру через `set_font_provider` при apply_loaded_page.
+    /// PH3-19: конкретный тип (не трейт-объект), чтобы `apply_loaded_page`
+    /// мог динамически дорегистрировать web-шрифты через `register_from_bytes`.
     pub(crate) font_registry: Arc<lumen_font::FontRegistry>,
-    /// PH3-19: @font-face url()-РёСЃС‚РѕС‡РЅРёРєРё, РµС‰С‘ РЅРµ Р·Р°РіСЂСѓР¶РµРЅРЅС‹Рµ РІ РјРѕРјРµРЅС‚ РїРµСЂРІРѕРіРѕ
-    /// layout-Р°. `apply_loaded_page` СЃРїР°РІРЅРёС‚ С„РѕРЅРѕРІС‹Р№ РїРѕС‚РѕРє РґР»СЏ РєР°Р¶РґРѕРіРѕ;
-    /// СЂРµР·СѓР»СЊС‚Р°С‚ РїСЂРёС…РѕРґРёС‚ РєР°Рє `LoadEvent::FontLoaded` в†’ relayout СЃ FOUT.
+    /// PH3-19: @font-face url()-источники, ещё не загруженные в момент первого
+    /// layout-а. `apply_loaded_page` спавнит фоновый поток для каждого;
+    /// результат приходит как `LoadEvent::FontLoaded` → relayout с FOUT.
     pub(crate) pending_web_fonts: Vec<PendingWebFont>,
-    /// РќР°РІРёРіР°С†РёРѕРЅРЅС‹Р№ Р·Р°РїСЂРѕСЃ РѕС‚ JS (location.href= Рё С‚.Рї.), РІС‹РїРѕР»РЅРµРЅРЅС‹Р№
-    /// РІ РїСЂРѕС†РµСЃСЃРµ Р·Р°РіСЂСѓР·РєРё. РћР±СЂР°Р±Р°С‚С‹РІР°РµС‚СЃСЏ РІ `about_to_wait`.
+    /// Навигационный запрос от JS (location.href= и т.п.), выполненный
+    /// в процессе загрузки. Обрабатывается в `about_to_wait`.
     pub(crate) js_navigate: Option<JsNavigateRequest>,
-    /// P3-webvtt СЃСЂРµР· 3: WebVTT-cues РїРѕ РєР°Р¶РґРѕРјСѓ `<video>` СЃС‚СЂР°РЅРёС†С‹.
+    /// P3-webvtt срез 3: WebVTT-cues по каждому `<video>` страницы.
     pub(crate) page_tracks: tracks::PageTracks,
-    /// BUG-480 СЃСЂРµР· 1: Р¶РёРІС‹Рµ sub-РґРѕРєСѓРјРµРЅС‚С‹ `<iframe>` вЂ” РґРµСЂР¶Р°С‚ JS-РєРѕРЅС‚РµРєСЃС‚С‹
-    /// Рё DOM РґРµС‚РµР№ РґРѕ Р·Р°РјРµРЅС‹ СЃС‚СЂР°РЅРёС†С‹.
+    /// BUG-480 срез 1: живые sub-документы `<iframe>` — держат JS-контексты
+    /// и DOM детей до замены страницы.
     pub(crate) frames: Vec<FrameHandle>,
     /// BUG-480 срез 19: набор провайдеров, которым загружались фреймы этой
     /// страницы, — им же грузит их навигация фрейма из живого окна.
@@ -230,60 +230,60 @@ impl LoadedPage {
     }
 }
 
-/// Р РµР·СѓР»СЊС‚Р°С‚ С„Р°Р· `decode в†’ parse в†’ layout` вЂ” РѕР±С‰Р°СЏ С‡Р°СЃС‚СЊ РґР»СЏ РѕРєРѕРЅРЅРѕРіРѕ Рё
-/// dump-СЂРµР¶РёРјРѕРІ. РџРѕР»СЏ РІР»Р°РґРµСЋС‚ СЃРІРѕРёРјРё РґР°РЅРЅС‹РјРё вЂ” РЅРµС‚ СЃСЃС‹Р»РѕРє РЅР°СЂСѓР¶Сѓ.
+/// Результат фаз `decode → parse → layout` — общая часть для оконного и
+/// dump-режимов. Поля владеют своими данными — нет ссылок наружу.
 pub(crate) struct ParsedPage {
-    /// Parsed DOM вЂ” shared with JS closures via Arc so event handlers can
+    /// Parsed DOM — shared with JS closures via Arc so event handlers can
     /// mutate the document without rebuilding the entire page.
     pub(crate) document: Arc<Mutex<Document>>,
     pub(crate) stylesheet: lumen_css_parser::Stylesheet,
     pub(crate) layout: LayoutBox,
     pub(crate) title: Option<String>,
     pub(crate) rule_count: usize,
-    /// Р”РµРєРѕРґРёСЂРѕРІР°РЅРЅС‹Рµ РёР·РѕР±СЂР°Р¶РµРЅРёСЏ, РЅР°Р№РґРµРЅРЅС‹Рµ РїСЂРё РѕР±С…РѕРґРµ DOM. РЎРј. [`LoadedPage::images`].
+    /// Декодированные изображения, найденные при обходе DOM. См. [`LoadedPage::images`].
     pub(crate) images: Vec<(String, Arc<lumen_image::Image>)>,
     /// Multi-frame GIF animations found in the DOM. See [`LoadedPage::animated_gifs`].
     pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedGif)>,
-    /// `(node_id_u32, url)` pairs for `<img loading="lazy">` elements вЂ” skipped by
+    /// `(node_id_u32, url)` pairs for `<img loading="lazy">` elements — skipped by
     /// the eager fetch pass; registered with JS `_lumen_init_lazy_images` after load.
     pub(crate) lazy_pairs: Vec<(u32, String)>,
-    /// Subresource-С…РёРЅС‚С‹, РЅР°Р№РґРµРЅРЅС‹Рµ preload-СЃРєР°РЅРµСЂРѕРј Р”Рћ DOM-РїР°СЂСЃРёРЅРіР°.
-    /// Source-order: РїРµСЂРІС‹Рµ С…РёРЅС‚С‹ РІР°Р¶РЅРµРµ (РёС… fetch СЃС‚Р°СЂС‚СѓРµС‚ РїРµСЂРІС‹Рј).
+    /// Subresource-хинты, найденные preload-сканером ДО DOM-парсинга.
+    /// Source-order: первые хинты важнее (их fetch стартует первым).
     pub(crate) preload_hints: Vec<lumen_html_parser::PreloadHint>,
-    /// Decoded UTF-8 HTML source вЂ” stored for bfcache snapshot.
+    /// Decoded UTF-8 HTML source — stored for bfcache snapshot.
     pub(crate) html_source: String,
-    /// @font-face local()-С€СЂРёС„С‚С‹ + СЃРёСЃС‚РµРјРЅС‹Рµ С€СЂРёС„С‚С‹. РџРµСЂРµРґР°С‘С‚СЃСЏ СЂРµРЅРґРµСЂСѓ.
-    /// PH3-19: РєРѕРЅРєСЂРµС‚РЅС‹Р№ `FontRegistry` (РЅРµ С‚СЂРµР№С‚-РѕР±СЉРµРєС‚) РґР»СЏ РґРѕСЂРµРіРёСЃС‚СЂР°С†РёРё
-    /// web-С€СЂРёС„С‚РѕРІ РїРѕСЃР»Рµ `FontLoaded` Р±РµР· РґР°СѓРЅРєР°СЃС‚Р°.
+    /// @font-face local()-шрифты + системные шрифты. Передаётся рендеру.
+    /// PH3-19: конкретный `FontRegistry` (не трейт-объект) для дорегистрации
+    /// web-шрифтов после `FontLoaded` без даункаста.
     pub(crate) font_registry: Arc<lumen_font::FontRegistry>,
-    /// PH3-19: @font-face url()-РёСЃС‚РѕС‡РЅРёРєРё, РµС‰С‘ РЅРµ Р·Р°РіСЂСѓР¶РµРЅРЅС‹Рµ; РїРµСЂРµРґР°СЋС‚СЃСЏ РІ
-    /// `LoadedPage` Рё РґР°Р»РµРµ РІ С„РѕРЅРѕРІС‹Рµ РїРѕС‚РѕРєРё С‡РµСЂРµР· `apply_loaded_page`.
+    /// PH3-19: @font-face url()-источники, ещё не загруженные; передаются в
+    /// `LoadedPage` и далее в фоновые потоки через `apply_loaded_page`.
     pub(crate) pending_web_fonts: Vec<PendingWebFont>,
-    /// РќР°РІРёРіР°С†РёРѕРЅРЅС‹Р№ Р·Р°РїСЂРѕСЃ, РІС‹СЃС‚Р°РІР»РµРЅРЅС‹Р№ JS РІРѕ РІСЂРµРјСЏ РІС‹РїРѕР»РЅРµРЅРёСЏ СЃРєСЂРёРїС‚РѕРІ.
+    /// Навигационный запрос, выставленный JS во время выполнения скриптов.
     pub(crate) js_navigate: Option<JsNavigateRequest>,
     /// Persistent JS context (V8) kept alive after page load so that
     /// event handlers registered via `addEventListener` continue to work.
     /// `None` when the v8 feature is disabled or script init failed.
     ///
-    /// ADR-016 M2.2c-2b: `Arc` (РЅРµ `Box`), С‡С‚РѕР±С‹ С…СЌРЅРґР» РјРѕР¶РЅРѕ Р±С‹Р»Рѕ СЂР°Р·РґРµР»РёС‚СЊ СЃ
-    /// РґРІРёР¶РєРѕРІС‹Рј РїРѕС‚РѕРєРѕРј (`EngineJsState`) РЅР° РІСЂРµРјСЏ РјРёРіСЂР°С†РёРё `js_ctx` РЅР° РЅРµРіРѕ.
+    /// ADR-016 M2.2c-2b: `Arc` (не `Box`), чтобы хэндл можно было разделить с
+    /// движковым потоком (`EngineJsState`) на время миграции `js_ctx` на него.
     pub(crate) js_ctx: Option<Arc<dyn PersistentJs>>,
-    /// P3-webvtt СЃСЂРµР· 3: WebVTT-cues, Р·Р°РіСЂСѓР¶РµРЅРЅС‹Рµ РёР· `<track>` РєР°Р¶РґРѕРіРѕ `<video>`.
+    /// P3-webvtt срез 3: WebVTT-cues, загруженные из `<track>` каждого `<video>`.
     pub(crate) page_tracks: tracks::PageTracks,
-    /// BUG-743: РЅРµРёР·РјРµРЅСЏРµРјР°СЏ С‡Р°СЃС‚СЊ CSS + РѕС‚РїРµС‡Р°С‚РѕРє РёРЅР»Р°Р№РЅРѕРІС‹С… `<style>`,
-    /// С‡С‚РѕР±С‹ РїРѕР·РґРЅСЏСЏ РІСЃС‚Р°РІРєР° Р»РёСЃС‚Р° РїРµСЂРµСЃРѕР±СЂР°Р»Р° РєР°СЃРєР°Рґ Р±РµР· СЃРµС‚Рё.
+    /// BUG-743: неизменяемая часть CSS + отпечаток инлайновых `<style>`,
+    /// чтобы поздняя вставка листа пересобрала каскад без сети.
     pub(crate) dynamic_css: DynamicCssBase,
     /// BUG-480 срез 19: набор провайдеров, которым загружены фреймы этой
     /// страницы (см. [`LoadedPage::frame_env`]).
     pub(crate) frame_env: frames::FrameLoadEnv,
-    /// BUG-480 СЃСЂРµР· 1: Р¶РёРІС‹Рµ sub-РґРѕРєСѓРјРµРЅС‚С‹ `<iframe>` СЌС‚РѕР№ СЃС‚СЂР°РЅРёС†С‹.
+    /// BUG-480 срез 1: живые sub-документы `<iframe>` этой страницы.
     pub(crate) frames: Vec<FrameHandle>,
 }
 
-/// РСЃС‚РѕС‡РЅРёРє РґР»СЏ РїРѕРІС‚РѕСЂРЅРѕРіРѕ layout Р±РµР· РїРѕРІС‚РѕСЂРЅРѕР№ Р·Р°РіСЂСѓР·РєРё/РїР°СЂСЃРёРЅРіР°.
-/// РҐСЂР°РЅРёС‚СЃСЏ РІ `Lumen`; РѕР±РЅРѕРІР»СЏРµС‚СЃСЏ С‚РѕР»СЊРєРѕ РїСЂРё reload/load РЅРѕРІРѕР№ СЃС‚СЂР°РЅРёС†С‹.
+/// Источник для повторного layout без повторной загрузки/парсинга.
+/// Хранится в `Lumen`; обновляется только при reload/load новой страницы.
 pub(crate) struct LayoutSource {
-    /// DOM вЂ” shared with the persistent JS runtime via Arc<Mutex> so that
+    /// DOM — shared with the persistent JS runtime via Arc<Mutex> so that
     /// JS event handlers can mutate it between repaints.
     pub(crate) document: Arc<Mutex<Document>>,
     /// Parsed stylesheet, shared as an immutable `Arc` snapshot (ADR-016 M2.2b):
@@ -299,13 +299,13 @@ pub(crate) struct LayoutSource {
     /// Checked by [`Lumen::bfcache_eligible`] on navigate-away; `true` routes
     /// the page to the HTML-snapshot bfcache fallback instead of a full
     /// freeze. `false` for non-network sources (file/thaw/sidebar/hibernate
-    /// restore) вЂ” no header to check, so the page is treated as cacheable.
+    /// restore) — no header to check, so the page is treated as cacheable.
     pub(crate) cache_control_no_store: bool,
-    /// BUG-743: С‡Р°СЃС‚СЊ CSS, РЅРµ Р·Р°РІРёСЃСЏС‰Р°СЏ РѕС‚ РёРЅР»Р°Р№РЅРѕРІС‹С… `<style>`, РїР»СЋСЃ РѕС‚РїРµС‡Р°С‚РѕРє
-    /// С‚РµС… Р±Р»РѕРєРѕРІ, РёР· РєРѕС‚РѕСЂС‹С… СЃРѕР±СЂР°РЅ С‚РµРєСѓС‰РёР№ [`Self::stylesheet`]. `Some` РЅР°
-    /// РѕР±С‹С‡РЅРѕРј РїСѓС‚Рё Р·Р°РіСЂСѓР·РєРё; `None` РЅР° РїСѓС‚СЏС… РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ (bfcache-thaw,
-    /// СЂР°Р·РјРѕСЂРѕР·РєР° РІРєР»Р°РґРєРё, sidebar), РіРґРµ РёСЃС…РѕРґРЅС‹Рµ С‡Р°СЃС‚Рё CSS РЅРµ СЃРѕС…СЂР°РЅРµРЅС‹ вЂ” С‚Р°Рј
-    /// РєР°СЃРєР°Рґ РІРµРґС‘С‚ СЃРµР±СЏ РєР°Рє РґРѕ BUG-743 Рё РїРѕР·РґРЅРёР№ `<style>` РЅРµ РїРѕРґС…РІР°С‚С‹РІР°РµС‚СЃСЏ.
+    /// BUG-743: часть CSS, не зависящая от инлайновых `<style>`, плюс отпечаток
+    /// тех блоков, из которых собран текущий [`Self::stylesheet`]. `Some` на
+    /// обычном пути загрузки; `None` на путях восстановления (bfcache-thaw,
+    /// разморозка вкладки, sidebar), где исходные части CSS не сохранены — там
+    /// каскад ведёт себя как до BUG-743 и поздний `<style>` не подхватывается.
     pub(crate) dynamic_css: Option<DynamicCssBase>,
 }
 
@@ -354,9 +354,9 @@ fn build_page_cascade(
         } else {
             screen_media_context(viewport, dark_mode)
         };
-        // РРЅР»Р°Р№РЅРѕРІС‹Рµ <style>: РёС… `@import` СЂРµР·РѕР»РІСЏС‚СЃСЏ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ Р±Р°Р·С‹
-        // РґРѕРєСѓРјРµРЅС‚Р° (CSS-SPECS В§@import). Р’РЅРµС€РЅРёРµ <link> СЂРµР·РѕР»РІСЏС‚ СЃРѕР±СЃС‚РІРµРЅРЅС‹Рµ
-        // `@import` РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ СЃРІРѕРµРіРѕ URL РІРЅСѓС‚СЂРё load_linked_stylesheets.
+        // РРЅР»Р°Р№РЅРѕРІС‹Рµ <style>: их `@import` резолвятся относительно базы
+        // документа (CSS-SPECS §@import). Внешние <link> резолвят собственные
+        // `@import` относительно своего URL внутри load_linked_stylesheets.
         let inline = extract_style_blocks(doc);
         let mut css = inline_css_imports(
             &inline,
@@ -367,10 +367,10 @@ fn build_page_cascade(
             &mut std::collections::HashSet::new(),
             0,
         );
-        // BUG-743: РІСЃС‘, С‡С‚Рѕ РЅРµ РїСЂРёС€Р»Рѕ РёР· РёРЅР»Р°Р№РЅРѕРІС‹С… <style>, РѕС‚РєР»Р°РґС‹РІР°РµС‚СЃСЏ
-        // РѕС‚РґРµР»СЊРЅРѕ вЂ” С‚Р°Рє РїРѕР·РґРЅРёР№ РґРёРЅР°РјРёС‡РµСЃРєРёР№ <style> РїРµСЂРµСЃРѕР±РёСЂР°РµС‚ РєР°СЃРєР°Рґ Р±РµР·
-        // РµРґРёРЅРѕРіРѕ СЃРµС‚РµРІРѕРіРѕ Р·Р°РїСЂРѕСЃР°. `inline_css_imports` РІРѕР·РІСЂР°С‰Р°РµС‚
-        // `<РёРјРїРѕСЂС‚С‹> + <РёСЃС…РѕРґРЅС‹Р№ С‚РµРєСЃС‚>`, РїРѕСЌС‚РѕРјСѓ РїСЂРµС„РёРєСЃ = РІСЃС‘ РґРѕ С…РІРѕСЃС‚Р°.
+        // BUG-743: всё, что не пришло из инлайновых <style>, откладывается
+        // отдельно — так поздний динамический <style> пересобирает каскад без
+        // единого сетевого запроса. `inline_css_imports` возвращает
+        // `<импорты> + <исходный текст>`, поэтому префикс = всё до хвоста.
         let imports_prefix = css[..css.len() - inline.len()].to_owned();
         let (linked, link_outcomes) = load_linked_stylesheets(
             doc,
@@ -393,13 +393,13 @@ fn build_page_cascade(
         lumen_css_parser::parse(&css)
     };
 
-    // PH3-19: @font-face Р·Р°РіСЂСѓР·РєР° СЂР°Р·РґРµР»РµРЅР° РЅР° РґРІР° РїСЂРѕС…РѕРґР°.
-    // local()-РёСЃС‚РѕС‡РЅРёРєРё Р·Р°РіСЂСѓР¶Р°СЋС‚СЃСЏ СЃРёРЅС…СЂРѕРЅРЅРѕ (РёР· СЃРёСЃС‚РµРјРЅРѕРіРѕ РёРЅРґРµРєСЃР°, Р±С‹СЃС‚СЂРѕ).
-    // url()-РёСЃС‚РѕС‡РЅРёРєРё вЂ” С‚РѕР»СЊРєРѕ СЃРѕР±РёСЂР°РµРј РІ pending_web_fonts; С„РѕРЅРѕРІС‹Р№ РїРѕС‚РѕРє
-    // fetch+decode СЃРїР°РІРЅРёС‚СЃСЏ РІ apply_loaded_page в†’ РїРµСЂРІС‹Р№ paint РЅРµ Р¶РґС‘С‚ СЃРµС‚Рё.
+    // PH3-19: @font-face загрузка разделена на два прохода.
+    // local()-источники загружаются синхронно (из системного индекса, быстро).
+    // url()-источники — только собираем в pending_web_fonts; фоновый поток
+    // fetch+decode спавнится в apply_loaded_page → первый paint не ждёт сети.
     let (font_registry, pending_web_fonts) = {
-        // PERF-12: this stretch вЂ” @font-face resolution through to the measurer's
-        // system faces below вЂ” was the single largest unnamed hole in the
+        // PERF-12: this stretch — @font-face resolution through to the measurer's
+        // system faces below — was the single largest unnamed hole in the
         // `--trace-nav` waterfall (114 ms of a 128 ms `navigation` on
         // samples/page.html, against a `layout` span of 0.6 ms). It is dominated
         // by the lazy system-font index build that PERF-11 caches.
@@ -408,15 +408,15 @@ fn build_page_cascade(
     };
 
     let font = lumen_font::Font::parse(INTER_FONT)
-        .map_err(|e| format!("РѕС€РёР±РєР° СЂР°Р·Р±РѕСЂР° С€СЂРёС„С‚Р°: {e}"))?;
-    // РњРЅРѕРіРѕС€СЂРёС„С‚РѕРІС‹Р№ РёР·РјРµСЂРёС‚РµР»СЊ: Inter РєР°Рє fallback + СѓР¶Рµ Р·Р°РіСЂСѓР¶РµРЅРЅС‹Рµ local()-СЃРµРјСЊРё.
-    // url()-СЃРµРјСЊРё РґРѕР±Р°РІСЏС‚СЃСЏ РїРѕР·Р¶Рµ С‡РµСЂРµР· FontLoaded + relayout_with_web_fonts.
+        .map_err(|e| format!("ошибка разбора шрифта: {e}"))?;
+    // Многошрифтовый измеритель: Inter как fallback + уже загруженные local()-семьи.
+    // url()-семьи добавятся позже через FontLoaded + relayout_with_web_fonts.
     let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
-        .map_err(|e| format!("РѕС€РёР±РєР° РјРµС‚СЂРёРє С€СЂРёС„С‚Р°: {e}"))?;
-    // BUG-128: СЃРёСЃС‚РµРјРЅС‹Рµ face-С‹ вЂ” С‚Рµ Р¶Рµ, С‡С‚Рѕ РІС‹Р±РµСЂРµС‚ СЂРµРЅРґРµСЂ.
+        .map_err(|e| format!("ошибка метрик шрифта: {e}"))?;
+    // BUG-128: системные face-ы — те же, что выберет рендер.
     {
         // PERF-11/PERF-12: `system_font_faces()` is where the lazy system font
-        // index is built on first use вЂ” hundreds of files parsed, once per
+        // index is built on first use — hundreds of files parsed, once per
         // process. Named separately from `font-faces` so the trace attributes
         // the cost to the index rather than to @font-face handling.
         let _s = lumen_core::trace::span("system-fonts", "font");
@@ -426,7 +426,7 @@ fn build_page_cascade(
         if !rule.family.is_empty()
             && let Some(bytes) = font_registry.face_bytes_for_family(&rule.family)
         {
-            // CSS Fonts L4 В§5.1: РїРµСЂРµРґР°С‘Рј unicode-range РёР· @font-face РґРµСЃРєСЂРёРїС‚РѕСЂР°.
+            // CSS Fonts L4 §5.1: передаём unicode-range из @font-face дескриптора.
             let ranges = rule.unicode_range.as_deref()
                 .map(lumen_font::parse_unicode_ranges)
                 .unwrap_or_default();
@@ -479,9 +479,9 @@ fn layout_page(
     dark_mode: bool,
     media_print: bool,
 ) -> LayoutBox {
-    // BUG-270: РїРµС‡Р°С‚СЊ РІ PDF С„РёР»СЊС‚СЂСѓРµС‚ РєР°СЃРєР°Рґ РїРѕ media_type="print" С‡РµСЂРµР·
-    // sticky thread-local. Р¤Р»Р°Рі per-pass, РїРѕСЌС‚РѕРјСѓ СЃР±СЂР°СЃС‹РІР°РµРј СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ layout,
-    // С‡С‚РѕР±С‹ РїРѕСЃР»РµРґСѓСЋС‰РёРµ СЌРєСЂР°РЅРЅС‹Рµ РїСЂРѕС…РѕРґС‹ РЅР° СЌС‚РѕРј Р¶Рµ РїРѕС‚РѕРєРµ РЅРµ РЅР°СЃР»РµРґРѕРІР°Р»Рё print.
+    // BUG-270: печать в PDF фильтрует каскад по media_type="print" через
+    // sticky thread-local. Флаг per-pass, поэтому сбрасываем сразу после layout,
+    // чтобы последующие экранные проходы на этом же потоке не наследовали print.
     lumen_layout::set_print_media(media_print);
     let out = {
         let _s = lumen_core::trace::span("layout", "layout");
@@ -492,7 +492,7 @@ fn layout_page(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn parse_and_layout(
     bytes: &[u8],
     content_type: Option<&str>,
@@ -515,16 +515,16 @@ pub(crate) fn parse_and_layout(
     target: lumen_core::ColorSpace,
     media_print: bool,
 ) -> Result<ParsedPage, Box<dyn Error>> {
-    // РљРѕРґРёСЂРѕРІРєСѓ РѕРїСЂРµРґРµР»СЏРµРј РїРѕ BOM -> <meta charset> -> СЌРІСЂРёСЃС‚РёРєРµ. Р­С‚Рѕ РїРѕРєСЂС‹РІР°РµС‚
-    // Рё UTF-8 (Р±РѕР»СЊС€РёРЅСЃС‚РІРѕ), Рё СЃС‚Р°СЂС‹Рµ cp1251 / koi8-r / cp866 С„Р°Р№Р»С‹.
+    // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
+    // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
     let encoding = lumen_encoding::detect(bytes, content_type);
     let source = lumen_encoding::decode(encoding, bytes);
-    eprintln!("РљРѕРґРёСЂРѕРІРєР°: {}", encoding.name());
+    eprintln!("Кодировка: {}", encoding.name());
 
-    // Preload-СЃРєР°РЅРµСЂ Р·Р°РїСѓСЃРєР°РµС‚СЃСЏ Р”Рћ DOM-РїР°СЂСЃРёРЅРіР° (HTML LS В§13.2.6.4.7).
-    // `preload_seen` вЂ” cross-call dedup: РµСЃР»Рё streaming СѓР¶Рµ РѕС‚РїСЂР°РІРёР» <head>-С…РёРЅС‚С‹
-    // С‡РµСЂРµР· EarlyPreloadHints, С„РёРЅР°Р»СЊРЅС‹Р№ scan РїСЂРѕРїСѓСЃС‚РёС‚ РёС… Рё РґРѕР±Р°РІРёС‚ С‚РѕР»СЊРєРѕ РЅРѕРІС‹Рµ
-    // (body-images, lazy-loaded resources Рё С‚.Рї.).
+    // Preload-сканер запускается ДО DOM-парсинга (HTML LS §13.2.6.4.7).
+    // `preload_seen` — cross-call dedup: если streaming уже отправил <head>-хинты
+    // через EarlyPreloadHints, финальный scan пропустит их и добавит только новые
+    // (body-images, lazy-loaded resources и т.п.).
     let preload_hints = lumen_html_parser::scan_preload_hints(&source);
     dispatch_preload_hints(&preload_hints, base, sink, preload_seen);
 
@@ -544,10 +544,10 @@ pub(crate) fn parse_and_layout(
     }
     let title = extract_title(&doc);
 
-    // Р“РµР№С‚ РІС‹РїРѕР»РЅРµРЅРёСЏ СЃРєСЂРёРїС‚РѕРІ: top-level РґРѕРєСѓРјРµРЅС‚ РЅРµ sandboxed.
-    // QuickJS + install_dom РґР°СЋС‚ СЃРєСЂРёРїС‚Р°Рј РїРѕР»РЅС‹Р№ РґРѕСЃС‚СѓРї Рє DOM-РґРµСЂРµРІСѓ.
-    // fetch_provider РїСЂРѕР±СЂР°СЃС‹РІР°РµС‚СЃСЏ РІ window.fetch(); ws_provider вЂ” РІ new WebSocket();
-    // sse_provider вЂ” РІ new EventSource(). Р’СЃРµ С‚СЂРё РёСЃРїРѕР»СЊР·СѓСЋС‚ РѕРґРёРЅ HttpClient.
+    // Гейт выполнения скриптов: top-level документ не sandboxed.
+    // QuickJS + install_dom дают скриптам полный доступ к DOM-дереву.
+    // fetch_provider пробрасывается в window.fetch(); ws_provider — в new WebSocket();
+    // sse_provider — в new EventSource(). Все три используют один HttpClient.
     let (fetch_provider, ws_provider, sse_provider) = match base {
         ResourceBase::Url(_) => {
             let client = base.http_client_for_subresource(Arc::clone(sink), cookie_jar.clone());
@@ -562,7 +562,7 @@ pub(crate) fn parse_and_layout(
         }
         ResourceBase::File(_) => (None, None, None),
     };
-    // URL СЃС‚СЂР°РЅРёС†С‹ РґР»СЏ РёРЅРёС†РёР°Р»РёР·Р°С†РёРё window.location РІ JS.
+    // URL страницы для инициализации window.location в JS.
     let page_url = base_url_string(base);
     // Extension content scripts: collect JS sources that match the page URL.
     let ext_registry = extensions::ExtensionRegistry::load();
@@ -581,14 +581,14 @@ pub(crate) fn parse_and_layout(
         )
     };
     // BUG-443: the cascade is built BEFORE the page's scripts run, and so is the
-    // first layout, because code executing during parsing вЂ” an inline
-    // `<script>`, a `DOMContentLoaded` handler вЂ” is entitled to read geometry
+    // first layout, because code executing during parsing — an inline
+    // `<script>`, a `DOMContentLoaded` handler — is entitled to read geometry
     // and computed style. Until now those phases sat after `run_scripts_with_dom`,
-    // so every such read answered `""` / a zero rect. HTML LS В§4.12.1 makes a
+    // so every such read answered `""` / a zero rect. HTML LS §4.12.1 makes a
     // classic script wait for pending stylesheets anyway, so building the
     // cascade first is the spec order, not just a convenience.
     //
-    // CSS Selectors L4 В§9.6 `:target`: set current target from the URL fragment
+    // CSS Selectors L4 §9.6 `:target`: set current target from the URL fragment
     // so the matcher has the correct target_id before that first cascade.
     let page_fragment = if let ResourceBase::Url(u) = base {
         lumen_core::url::Url::parse(u)
@@ -607,7 +607,7 @@ pub(crate) fn parse_and_layout(
 
     // The pre-script layout exists only to be read by scripts, so a page with
     // none pays nothing for it. Its geometry is what the document has *now*:
-    // no images decoded yet, no web fonts registered вЂ” exactly what a real
+    // no images decoded yet, no web fonts registered — exactly what a real
     // browser answers for a forced layout at this point.
     let parse_time_snapshot = if classic_scripts.is_empty()
         && module_scripts.is_empty()
@@ -624,11 +624,11 @@ pub(crate) fn parse_and_layout(
     };
 
     let run_scripts_span = lumen_core::trace::span("run-scripts", "script");
-    // BUG-480 СЃСЂРµР· 1: РєР»РѕРЅС‹ РїСЂРѕРІР°Р№РґРµСЂРѕРІ/С…СЂР°РЅРёР»РёС‰ РґР»СЏ sub-РґРѕРєСѓРјРµРЅС‚РѕРІ <iframe> вЂ”
-    // РѕСЃРЅРѕРІРЅС‹Рµ СѓС…РѕРґСЏС‚ РІ run_scripts_with_dom РїРѕ Р·РЅР°С‡РµРЅРёСЋ.
-    // BUG-480 СЃСЂРµР· 19: С‚Рµ Р¶Рµ РєР»РѕРЅС‹, РЅРѕ РѕРґРЅРёРј Р·РЅР°С‡РµРЅРёРµРј [`FrameLoadEnv`] вЂ”
-    // РѕРЅРѕ РїРµСЂРµР¶РёРІР°РµС‚ Р·Р°РіСЂСѓР·РєСѓ Рё СѓРµР·Р¶Р°РµС‚ РІ `Lumen`, С‡С‚РѕР±С‹ РЅР°РІРёРіР°С†РёСЏ С„СЂРµР№РјР°
-    // РїРѕРІС‚РѕСЂРёР»Р° Р·Р°РіСЂСѓР·РєСѓ РїРѕРґ-РґРѕРєСѓРјРµРЅС‚Р° С‚РµРј Р¶Рµ РЅР°Р±РѕСЂРѕРј РїСЂРѕРІР°Р№РґРµСЂРѕРІ.
+    // BUG-480 срез 1: клоны провайдеров/хранилищ для sub-документов <iframe> —
+    // основные уходят в run_scripts_with_dom по значению.
+    // BUG-480 срез 19: те же клоны, но одним значением [`FrameLoadEnv`] —
+    // оно переживает загрузку и уезжает в `Lumen`, чтобы навигация фрейма
+    // повторила загрузку под-документа тем же набором провайдеров.
     let frame_env = frames::FrameLoadEnv {
         sink: Arc::clone(sink),
         cookie_jar: cookie_jar.clone(),
@@ -676,7 +676,7 @@ pub(crate) fn parse_and_layout(
     // BUG-443: the scripts have had their turn at the DOM, so the cascade and
     // the geometry a `DOMContentLoaded` handler is about to read are re-derived
     // here. The CSS is only refetched if a script actually touched `<style>` or
-    // `<link>` вЂ” otherwise the pre-script cascade is reused verbatim, which is
+    // `<link>` — otherwise the pre-script cascade is reused verbatim, which is
     // what keeps this one network pass per load, as before.
     let scripts_changed_css = {
         let d = doc_arc.lock().unwrap();
@@ -693,7 +693,7 @@ pub(crate) fn parse_and_layout(
         // Nothing to re-derive if the scripts changed neither the cascade nor
         // the tree: the snapshot pushed before they ran is still current, and
         // this is the one place a whole layout pass can be skipped. The flag is
-        // only *read* here вЂ” `take_dom_dirty` would swallow the relayout the
+        // only *read* here — `take_dom_dirty` would swallow the relayout the
         // shell schedules for itself after the load.
         let dom_touched = js
             .dom_dirty_flag()
@@ -715,7 +715,7 @@ pub(crate) fn parse_and_layout(
         }
     }
 
-    // HTML LS В§8.2.3 вЂ” after HTML parse + inline scripts: readyState в†’ "interactive"
+    // HTML LS §8.2.3 — after HTML parse + inline scripts: readyState → "interactive"
     // + DOMContentLoaded event. Fires before images/fonts are decoded.
     #[cfg(feature = "v8")]
     if let Some(js) = &js_ctx {
@@ -724,42 +724,42 @@ pub(crate) fn parse_and_layout(
 
     {
         let d = doc_arc.lock().unwrap();
-        // Р“РµР№С‚ РѕС‚РїСЂР°РІРєРё С„РѕСЂРј: Phase 0 вЂ” top-level РґРѕРєСѓРјРµРЅС‚ РЅРµ sandboxed.
+        // Гейт отправки форм: Phase 0 — top-level документ не sandboxed.
         check_form_gate(&d, lumen_core::SandboxFlags::empty());
-        // Р“РµР№С‚ РЅР°РІРёРіР°С†РёРё: Phase 0 вЂ” top-level РґРѕРєСѓРјРµРЅС‚ РЅРµ sandboxed.
+        // Гейт навигации: Phase 0 — top-level документ не sandboxed.
         check_navigation_gate(&d, lumen_core::SandboxFlags::empty());
-        // РџСЂРёРјРµРЅСЏРµРј sandbox-РѕРіСЂР°РЅРёС‡РµРЅРёСЏ РёР· <iframe sandbox> СЌР»РµРјРµРЅС‚РѕРІ.
-        // Phase 0: iframe sub-РґРѕРєСѓРјРµРЅС‚С‹ РЅРµ Р·Р°РіСЂСѓР¶Р°СЋС‚СЃСЏ вЂ” РїСЂРёРјРµРЅСЏРµРј РіРµР№С‚С‹
-        // Рє СЃР°РјРѕРјСѓ iframe-СЌР»РµРјРµРЅС‚Сѓ, Р»РѕРіРёСЂСѓРµРј РѕРіСЂР°РЅРёС‡РµРЅРёСЏ РґР»СЏ Р±СѓРґСѓС‰РµРіРѕ Phase 1.
+        // Применяем sandbox-ограничения из <iframe sandbox> элементов.
+        // Phase 0: iframe sub-документы не загружаются — применяем гейты
+        // к самому iframe-элементу, логируем ограничения для будущего Phase 1.
         apply_iframe_sandbox_gates(&d);
     }
 
-    // BUG-480 СЃСЂРµР· 1: Р·Р°РіСЂСѓР·РєР° sub-РґРѕРєСѓРјРµРЅС‚РѕРІ <iframe>. Р›РѕРєРё РІРЅСѓС‚СЂРё С„СѓРЅРєС†РёРё
-    // РєРѕСЂРѕС‚РєРёРµ вЂ” СЃРєСЂРёРїС‚С‹ РґРµС‚РµР№ Рё `load` С…РѕСЃС‚Р° РёРґСѓС‚ Р±РµР· СѓРґРµСЂР¶Р°РЅРёСЏ РґРµСЂРµРІР°.
-    // РЎСЂРµР· 3: РґРѕРєСѓРјРµРЅС‚/Р±Р°Р·Р° СЃС‚СЂР°РЅРёС†С‹ РїРµСЂРµРґР°СЋС‚СЃСЏ Рё РєР°Рє top вЂ” Сѓ С„СЂРµР№РјРѕРІ
-    // РїРµСЂРІРѕРіРѕ СѓСЂРѕРІРЅСЏ parent === top, РіР»СѓР±Р¶Рµ top РІСЃРµРіРґР° РєРѕСЂРµРЅСЊ.
-    // РЎСЂРµР· 11: СЌРєСЂР°РЅРЅС‹Р№ media-РіРµР№С‚ `<link>` Рё РІСЊСЋРїРѕСЂС‚ picker-Р° РєР°СЂС‚РёРЅРѕРә вЂ”
-    // С‚Рµ Р¶Рµ, СЃ РєР°РєРёРјРё СЃС‚СЂР°РЅРёС†Р° РіСЂСѓР·РёС‚ СЃРІРѕРё РїРѕРґСЂРµСЃСѓСЂСЃС‹ (print-РіРµР№С‚
-    // С„СЂРµР№РјР°Рј РЅРµ РЅСѓР¶РµРЅ — РїРµС‡Р°С‚СЊ PDF РїРѕРґ-РґРѕРєСѓРјРµРЅС‚РѕРІ РІРЅРµ СЃСЂРµР·Р°).
+    // BUG-480 срез 1: загрузка sub-документов <iframe>. Локи внутри функции
+    // короткие — скрипты детей и `load` хоста идут без удержания дерева.
+    // Срез 3: документ/база страницы передаются и как top — у фреймов
+    // первого уровня parent === top, глубже top всегда корень.
+    // Срез 11: экранный media-гейт `<link>` и вьюпорт picker-а РєР°СЂС‚РёРЅРѕРә —
+    // те же, с какими страница грузит свои подресурсы (print-гейт
+    // фреймам не нужен — печать PDF под-документов вне среза).
     let mut frames = {
         let _s = lumen_core::trace::span("fetch-iframes", "net");
         load_frame_sub_documents(&doc_arc, 0, base, &doc_arc, &frame_env, js_ctx.as_ref())
     };
 
-    // Fetch + decode <img src>. Р”РѕР»Р¶РЅРѕ РёРґС‚Рё Р”Рћ layout, РїРѕС‚РѕРјСѓ С‡С‚Рѕ intrinsic
-    // dimensions РёР· РґРµРєРѕРґРёСЂРѕРІР°РЅРЅРѕРіРѕ РёР·РѕР±СЂР°Р¶РµРЅРёСЏ РїСЂРѕСЃС‚Р°РІР»СЏСЋС‚СЃСЏ РєР°Рє HTML
-    // presentational hints (width/height attribute) Рё РїРѕС‚РѕРј РїРѕРґС…РІР°С‚С‹РІР°СЋС‚СЃСЏ
-    // style cascade. Errors silently РїСЂРѕРїСѓСЃРєР°СЋС‚СЃСЏ вЂ” Р±РёС‚Р°СЏ РєР°СЂС‚РёРЅРєР° РЅРµ РІР°Р»РёС‚
-    // РІСЃСЋ СЃС‚СЂР°РЅРёС†Сѓ, layout РЅР°СЂРёСЃСѓРµС‚ СЃРµСЂС‹Р№ placeholder.
-    // loading="lazy" РёР·РѕР±СЂР°Р¶РµРЅРёСЏ РІРѕР·РІСЂР°С‰Р°СЋС‚СЃСЏ РІ lazy_pairs Рё РЅРµ Р·Р°РіСЂСѓР¶Р°СЋС‚СЃСЏ СЃРµР№С‡Р°СЃ.
+    // Fetch + decode <img src>. Должно идти ДО layout, потому что intrinsic
+    // dimensions из декодированного изображения проставляются как HTML
+    // presentational hints (width/height attribute) и потом подхватываются
+    // style cascade. Errors silently пропускаются — битая картинка не валит
+    // всю страницу, layout нарисует серый placeholder.
+    // loading="lazy" изображения возвращаются в lazy_pairs и не загружаются сейчас.
     let (images, animated_gifs, lazy_pairs) = {
         let _s = lumen_core::trace::span("fetch-images", "net");
         let mut d = doc_arc.lock().unwrap();
         fetch_and_decode_images(&mut d, base, sink, viewport, cookie_jar.clone(), target)
     };
 
-    // P3-webvtt СЃСЂРµР· 3: Р·Р°РіСЂСѓР·РєР° WebVTT-СЃСѓР±С‚РёС‚СЂРѕРІ РёР· <track> РєР°Р¶РґРѕРіРѕ <video>.
-    // РћС€РёР±РєРё С„РµС‚С‡Р°/РїР°СЂСЃРёРЅРіР° РЅРµ РІР°Р»СЏС‚ СЃС‚СЂР°РЅРёС†Сѓ вЂ” РІРёРґРµРѕ РїСЂРѕСЃС‚Рѕ РѕСЃС‚Р°С‘С‚СЃСЏ Р±РµР· cues.
+    // P3-webvtt срез 3: загрузка WebVTT-субтитров из <track> каждого <video>.
+    // Ошибки фетча/парсинга не валят страницу — видео просто остаётся без cues.
     let page_tracks = {
         let d = doc_arc.lock().unwrap();
         tracks::load_video_tracks(&d, &|src| {
@@ -768,7 +768,7 @@ pub(crate) fn parse_and_layout(
     };
 
     // Register decoded <img> bitmaps with the JS runtime so Canvas 2D
-    // drawImage(imgElement, вЂ¦) can read the pixels. Collect nidв†’url from DOM
+    // drawImage(imgElement, …) can read the pixels. Collect nid→url from DOM
     // (same traversal fetch_and_decode_images used), join with decoded images by
     // URL, and share the decoded `Arc<Image>` into img_bitmap_store on the JS thread.
     #[cfg(feature = "v8")]
@@ -777,10 +777,10 @@ pub(crate) fn parse_and_layout(
             let d = doc_arc.lock().unwrap();
             lumen_layout::collect_image_requests(&d, viewport)
         };
-        // BUG-272 СЃСЂРµР· 20: share the decoded `Arc<Image>` with the JS canvas
+        // BUG-272 срез 20: share the decoded `Arc<Image>` with the JS canvas
         // drawImage store instead of eagerly copying an RGBA8 buffer per image.
         // The store converts to RGBA8 lazily, only for images a canvas actually
-        // draws вЂ” images never used as a drawImage source cost zero extra bytes.
+        // draws — images never used as a drawImage source cost zero extra bytes.
         let url_to_img: std::collections::HashMap<&str, &std::sync::Arc<lumen_image::Image>> =
             images.iter().map(|(url, img)| (url.as_str(), img)).collect();
         let bitmaps: Vec<(u32, std::sync::Arc<lumen_image::Image>)> = img_reqs
@@ -802,14 +802,14 @@ pub(crate) fn parse_and_layout(
         dynamic_css, link_outcomes, sheet, font_registry, pending_web_fonts, measurer,
     } = cascade;
 
-    // BUG-804: HTML LS В§4.6.7 В«process the linked resourceВ» вЂ” РєР°Р¶РґС‹Р№
-    // `<link rel=stylesheet>` РѕР±СЏР·Р°РЅ СЃРѕРѕР±С‰РёС‚СЊ СЃС‚СЂР°РЅРёС†Рµ `load` РёР»Рё `error`.
-    // РћС‚С‡С‘С‚ СѓС…РѕРґРёС‚ РѕС‚СЃСЋРґР°, Р° РЅРµ РёР· С€РёРјР°: Р»РёСЃС‚ РіСЂСѓР·РёС‚ РїСЂРѕС…РѕРґ РІС‹С€Рµ, Рё С‚РѕР»СЊРєРѕ РѕРЅ
-    // Р·РЅР°РµС‚ РёСЃС…РѕРґ вЂ” РїРѕРІС‚РѕСЂРЅС‹Р№ С„РµС‚С‡ РёР· JS РґР°Р» Р±С‹ РІС‚РѕСЂРѕР№ Р·Р°РїСЂРѕСЃ Рё РІСЃС‘ СЂР°РІРЅРѕ РЅРµ
-    // РѕС‚Р»РёС‡РёР» Р±С‹ В«Р»РёСЃС‚ РІ РєР°СЃРєР°РґРµВ» РѕС‚ В«Р±Р°Р№С‚С‹ РїСЂРёС€Р»РёВ». Р­Р»РµРјРµРЅС‚, РєРѕС‚РѕСЂС‹Р№ СѓР¶Рµ
-    // РѕС‚С‡РёС‚Р°Р»СЃСЏ СЃР°Рј (РІСЃС‚Р°РІР»РµРЅРЅС‹Р№ СЃРєСЂРёРїС‚РѕРј вЂ” РѕРЅ РїСЂРѕС…РѕРґРёС‚ С‡РµСЂРµР·
-    // `_lumen_link_prepare` Р•Р©РЃ Р”Рћ СЌС‚РѕРіРѕ РїСЂРѕС…РѕРґР°, СЃРєСЂРёРїС‚С‹ РІС‹РїРѕР»РЅСЏСЋС‚СЃСЏ СЂР°РЅСЊС€Рµ),
-    // РѕС‚СЃРµРєР°РµС‚СЃСЏ РѕР±С‰РёРј РїРµСЂ-СѓР·Р»РѕРІС‹Рј С„Р»Р°РіРѕРј РЅР° JS-СЃС‚РѕСЂРѕРЅРµ.
+    // BUG-804: HTML LS §4.6.7 «process the linked resource» — каждый
+    // `<link rel=stylesheet>` обязан сообщить странице `load` или `error`.
+    // Отчёт уходит отсюда, а не из шима: лист грузит проход выше, и только он
+    // знает исход — повторный фетч из JS дал бы второй запрос и всё равно не
+    // отличил бы «лист в каскаде» от «байты пришли». Элемент, который уже
+    // отчитался сам (вставленный скриптом — он проходит через
+    // `_lumen_link_prepare` ЕЩЁ ДО этого прохода, скрипты выполняются раньше),
+    // отсекается общим пер-узловым флагом на JS-стороне.
     #[cfg(feature = "v8")]
     if let Some(js) = &js_ctx
         && !link_outcomes.is_empty()
@@ -829,12 +829,12 @@ pub(crate) fn parse_and_layout(
 
 
     // Populate document.fonts with FontFace objects from @font-face rules.
-    // local() вЂ” immediately Loaded; url() вЂ” Loading (Р±СѓРґРµС‚ Loaded РїРѕ FontLoaded).
+    // local() — immediately Loaded; url() — Loading (будет Loaded по FontLoaded).
     {
         let mut d = doc_arc.lock().unwrap();
         for rule in &sheet.font_faces {
             let mut font_face = rule_to_font_face(rule);
-            // local() rules already resolved вЂ” mark Loaded; url() rules stay Loading.
+            // local() rules already resolved — mark Loaded; url() rules stay Loading.
             let has_local = rule.sources.iter().any(|s| {
                 s.kind == lumen_css_parser::FontFaceSourceKind::Local
                     && font_registry.face_bytes_for_family(&rule.family).is_some()
@@ -862,9 +862,9 @@ pub(crate) fn parse_and_layout(
     // только что созданы, ни курсора над ними, ни фокуса в них ещё не было.
     crate::frames::sync_frame_viewports(&mut frames, &layout, Default::default());
 
-    // CSS Backgrounds L3 В§3.10 вЂ” СЃРѕР±РёСЂР°РµРј `background-image: url(...)` СѓР¶Рµ
-    // РїРѕСЃР»Рµ layout-Р° (РєР°СЂС‚РёРЅРєРё С„РѕРЅР° РЅРµ РІР»РёСЏСЋС‚ РЅР° СЂР°СЃС‡С‘С‚ РєРѕСЂРѕР±РѕРє). Р”РµРєРѕРґРёСЂСѓРµРј
-    // Рё РґРѕР±Р°РІР»СЏРµРј Рє `images` С‚РµРј Р¶Рµ РєР»СЋС‡РѕРј, С‡С‚Рѕ СЌРјРёС‚С‚РµСЂ РєР»Р°РґС‘С‚ РІ
+    // CSS Backgrounds L3 §3.10 — собираем `background-image: url(...)` уже
+    // после layout-а (картинки фона не влияют на расчёт коробок). Декодируем
+    // и добавляем к `images` тем же ключом, что эмиттер кладёт в
     // `DisplayCommand::DrawBackgroundImage.src`.
     let mut images = images;
     {
@@ -905,23 +905,23 @@ pub(crate) fn parse_and_layout(
     })
 }
 
-/// Р“РѕС‚РѕРІС‹Р№ СЂРµР·СѓР»СЊС‚Р°С‚ С„РёРЅР°Р»СЊРЅРѕРіРѕ pipeline: display-list-СЃС‚СЂР°РЅРёС†Р°, РёСЃС‚РѕС‡РЅРёРє РґР»СЏ
-/// relayout Рё Р¶РёРІРѕР№ JS-С…СЌРЅРґР» (РµСЃР»Рё РІРєР»СЋС‡С‘РЅ QuickJS). РўРёРї-Р°Р»РёР°СЃ, С‡С‚РѕР±С‹ РІС‹РЅРµСЃС‚Рё
-/// СЃР»РѕР¶РЅСѓСЋ С‚СЂРѕР№РєСѓ РёР· СЃРёРіРЅР°С‚СѓСЂ (`render_bytes`, `RenderOutcome`).
+/// Готовый результат финального pipeline: display-list-страница, источник для
+/// relayout и живой JS-хэндл (если включён QuickJS). Тип-алиас, чтобы вынести
+/// сложную тройку из сигнатур (`render_bytes`, `RenderOutcome`).
 pub(crate) type RenderedPage = (LoadedPage, LayoutSource, Option<Arc<dyn PersistentJs>>);
 
-/// BUG-171 СЌС‚Р°Рї 2: СЂРµР·СѓР»СЊС‚Р°С‚ С„РёРЅР°Р»СЊРЅРѕРіРѕ off-UI-thread СЂРµРЅРґРµСЂР° (`render_bytes`),
-/// РїРµСЂРµСЃС‹Р»Р°РµРјС‹Р№ РЅР°Р·Р°Рґ РЅР° UI-РїРѕС‚РѕРє С‡РµСЂРµР· `LoadEvent::RenderDone`.
+/// BUG-171 этап 2: результат финального off-UI-thread рендера (`render_bytes`),
+/// пересылаемый назад на UI-поток через `LoadEvent::RenderDone`.
 ///
-/// Р’СЃРµ РїРѕР»СЏ `Send`: `LoadedPage`/`LayoutSource` вЂ” РѕР±С‹С‡РЅС‹Рµ РґР°РЅРЅС‹Рµ; `js_ctx` вЂ”
-/// С…СЌРЅРґР» QuickJS (`Send + Sync` РїРѕ ADR-014, СЃРѕР·РґР°РЅ РЅР° СЂРµРЅРґРµСЂ-РїРѕС‚РѕРєРµ);
-/// `preload_dispatched` РІСЂРµРјРµРЅРЅРѕ Р·Р°Р±СЂР°РЅ РёР· `Lumen` РЅР° РІСЂРµРјСЏ СЂРµРЅРґРµСЂР° (РѕРЅ РµРіРѕ
-/// РґРµРґСѓРїР»РёС†РёСЂСѓРµС‚) Рё РІРѕР·РІСЂР°С‰Р°РµС‚СЃСЏ РґР»СЏ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ.
+/// Все поля `Send`: `LoadedPage`/`LayoutSource` — обычные данные; `js_ctx` —
+/// хэндл QuickJS (`Send + Sync` по ADR-014, создан на рендер-потоке);
+/// `preload_dispatched` временно забран из `Lumen` на время рендера (он его
+/// дедуплицирует) и возвращается для восстановления.
 pub(crate) struct RenderOutcome {
-    /// Р“РѕС‚РѕРІР°СЏ СЃС‚СЂР°РЅРёС†Р° + РёСЃС‚РѕС‡РЅРёРє layout + Р¶РёРІРѕР№ JS-С…СЌРЅРґР»; Р»РёР±Рѕ С‚РµРєСЃС‚ РѕС€РёР±РєРё
-    /// (`Box<dyn Error>` РЅРµ `Send`, РїРѕСЌС‚РѕРјСѓ РєРѕРЅРІРµСЂС‚РёСЂСѓРµС‚СЃСЏ РІ `String`).
+    /// Готовая страница + источник layout + живой JS-хэндл; либо текст ошибки
+    /// (`Box<dyn Error>` не `Send`, поэтому конвертируется в `String`).
     pub(crate) result: Result<RenderedPage, String>,
-    /// РќР°Р±РѕСЂ СѓР¶Рµ СЂР°Р·РѕСЃР»Р°РЅРЅС‹С… preload-С…РёРЅС‚РѕРІ, Р·Р°Р±СЂР°РЅРЅС‹Р№ РёР·
-    /// `Lumen::preload_dispatched` РЅР° РІСЂРµРјСЏ СЂРµРЅРґРµСЂР°.
+    /// Набор уже разосланных preload-хинтов, забранный из
+    /// `Lumen::preload_dispatched` на время рендера.
     pub(crate) preload_dispatched: std::collections::HashSet<String>,
 }

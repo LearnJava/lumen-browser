@@ -45,8 +45,8 @@ impl Lumen {
 
     /// Handle keyboard input when the history panel is visible.
     ///
-    /// When `search_active`: printable chars в†’ search query, Backspace в†’ delete
-    /// char, Escape в†’ blur search (panel stays open). Arrow keys scroll the list.
+    /// When `search_active`: printable chars → search query, Backspace → delete
+    /// char, Escape → blur search (panel stays open). Arrow keys scroll the list.
     /// Returns `true` if the key was consumed.
     pub(crate) fn handle_history_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
         if self.modifiers.control_key() || self.modifiers.super_key() {
@@ -153,7 +153,7 @@ impl Lumen {
         }
     }
 
-    /// Open the settings panel, populating every section вЂ” including the ones
+    /// Open the settings panel, populating every section — including the ones
     /// backed by stores other than `settings_store` (HTTP/3 from the process-
     /// global fingerprint profile, Tor status from the same, ad-block
     /// subscriptions from `AdblockStore`, spellcheck locale from `SPELL_DICTS`).
@@ -172,9 +172,9 @@ impl Lumen {
 
     /// Close the settings panel, flushing the draft to every backing store.
     ///
-    /// Centralised so all four close paths (Г— button, click outside, `Ctrl+,`
+    /// Centralised so all four close paths (× button, click outside, `Ctrl+,`
     /// toggle, `Escape`) apply theme/dark-mode sync and the HTTP/3 rewrite
-    /// identically вЂ” previously only the Г— button synced `dark_mode`.
+    /// identically — previously only the × button synced `dark_mode`.
     pub(crate) fn close_settings_panel(&mut self) {
         let draft = self.settings_panel.apply_draft();
         // Apply theme & accent from draft when panel closes.
@@ -187,7 +187,7 @@ impl Lumen {
         if new_dark != self.dark_mode {
             self.dark_mode = new_dark;
             // ADR-016 M2.2b-4: an explicit dark/light lock is async-safe like
-            // the OS theme flip вЂ” a whole-page restyle with no synchronous
+            // the OS theme flip — a whole-page restyle with no synchronous
             // geometry read here (only chrome state follows), so route it
             // off-thread.
             self.relayout_chrome();
@@ -203,15 +203,15 @@ impl Lumen {
         self.shields.set_default_enabled(draft.shields_enabled);
         self.sync_adblock_filter();
         // HTTP/3 lives in fingerprint.toml, loaded once into a process-global
-        // at startup вЂ” only rewrite the file (and note the restart) if the
+        // at startup — only rewrite the file (and note the restart) if the
         // draft actually changed it.
         if self.settings_panel.http3_draft != config::global().http3 {
             match config::set_http3(self.settings_panel.http3_draft) {
                 Ok(()) => eprintln!(
-                    "settings: HTTP/3 РёР·РјРµРЅС‘РЅ РЅР° {} вЂ” РІСЃС‚СѓРїРёС‚ РІ СЃРёР»Сѓ РїРѕСЃР»Рµ РїРµСЂРµР·Р°РїСѓСЃРєР° Р±СЂР°СѓР·РµСЂР°",
+                    "settings: HTTP/3 изменён на {} — вступит в силу после перезапуска браузера",
                     self.settings_panel.http3_draft
                 ),
-                Err(e) => eprintln!("settings: РЅРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїРёСЃР°С‚СЊ fingerprint.toml: {e}"),
+                Err(e) => eprintln!("settings: не удалось записать fingerprint.toml: {e}"),
             }
         }
         self.settings_panel.visible = false;
@@ -255,11 +255,11 @@ impl Lumen {
         }
     }
 
-    /// РћР±СЂР°Р±Р°С‚С‹РІР°РµС‚ РєР»Р°РІРёС€РЅС‹Р№ РІРІРѕРґ РґР»СЏ РїР°РЅРµР»Рё РіРѕСЂСЏС‡РёС… РєР»Р°РІРёС€ (В§D-4).
+    /// Обрабатывает клавишный ввод для панели горячих клавиш (§D-4).
     ///
-    /// РљРѕРіРґР° Р°РєС‚РёРІРµРЅ rebind mode (`rebinding.is_some()`): Р·Р°С…РІР°С‚С‹РІР°РµС‚
-    /// СЃР»РµРґСѓСЋС‰СѓСЋ РєР»Р°РІРёС€Сѓ Рё РїРµСЂРµРґР°С‘С‚ РІ `accept_rebind`. Esc РѕС‚РјРµРЅСЏРµС‚ rebind.
-    /// Р’РѕР·РІСЂР°С‰Р°РµС‚ `true`, РµСЃР»Рё СЃРѕР±С‹С‚РёРµ РїРѕРіР»РѕС‰РµРЅРѕ.
+    /// Когда активен rebind mode (`rebinding.is_some()`): захватывает
+    /// следующую клавишу и передаёт в `accept_rebind`. Esc отменяет rebind.
+    /// Возвращает `true`, если событие поглощено.
     pub(crate) fn handle_shortcuts_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
         if key_event.repeat {
             return false;

@@ -16,7 +16,7 @@ impl Lumen {
     /// flipped to either window edge; [`Self::left_dock`] / [`Self::right_dock`]
     /// pick the first visible one whose effective side matches.
     ///
-    /// CC-10b/CC-15-6: `ID_AI`/`ID_SIDEBAR` are **not** listed вЂ” they paint as
+    /// CC-10b/CC-15-6: `ID_AI`/`ID_SIDEBAR` are **not** listed — they paint as
     /// `#rightSidebar`, a real flex sibling of `#contentArea` in the engine
     /// chrome layout, so `chrome_page_host_rect` ([`Self::page_offset`]) already
     /// reflects their width. Listing them would make
@@ -66,7 +66,7 @@ impl Lumen {
     /// Active right-docked sidebar as `(persist id, current width CSS px)`, or
     /// `None` when none is visible. Resolved in [`Self::dockable_sidebars`]
     /// priority order: a tab sidebar flipped to the right edge precedes the AI
-    /// panel, which precedes the web sidebar вЂ” mirroring
+    /// panel, which precedes the web sidebar — mirroring
     /// [`Self::page_content_width_css`].
     fn right_dock(&self) -> Option<(&'static str, f32)> {
         self.dockable_sidebars().into_iter().find_map(|(id, visible, default_w)| {
@@ -136,7 +136,7 @@ impl Lumen {
     /// the `(dock side, panel id)` a press there would start resizing.
     ///
     /// Left docks have their handle at `x = width`; right docks at
-    /// `x = viewport_width в€’ width`.
+    /// `x = viewport_width − width`.
     pub(crate) fn resize_edge_at(&self, x_css: f32, y_css: f32) -> Option<(panel_layout::Dock, &'static str)> {
         if y_css < toolbar::CHROME_H {
             return None;
@@ -202,7 +202,7 @@ impl Lumen {
             document: doc_arc,
             stylesheet: Arc::new(sheet),
             html_source: None,
-            // Sidebar panel, not the main navigable page вЂ” not bfcache-tracked.
+            // Sidebar panel, not the main navigable page — not bfcache-tracked.
             cache_control_no_store: false,
             // BUG-743: the sidebar page runs no scripts, so no `<style>` can
             // appear in it after this build.

@@ -9,7 +9,7 @@ use crate::*;
 
 impl Lumen {
     /// Rebuild the command-palette item list: curated commands, every bookmark,
-    /// and вЂ” when the query is non-empty вЂ” matching history pages (FTS).
+    /// and — when the query is non-empty — matching history pages (FTS).
     ///
     /// History depends on the query (the FTS index has no "list all"), so this
     /// is called both on open and on every query edit. Commands and bookmarks
@@ -20,7 +20,7 @@ impl Lumen {
         let mut items: Vec<PaletteItem> =
             PaletteAction::all().iter().copied().map(PaletteItem::command).collect();
 
-        // Bookmarks (query-independent вЂ” fuzzy-filtered in the palette).
+        // Bookmarks (query-independent — fuzzy-filtered in the palette).
         for b in self.bookmarks.list_all().unwrap_or_default() {
             items.push(PaletteItem::bookmark(b.title, b.url));
         }
@@ -41,7 +41,7 @@ impl Lumen {
     /// Handle a key while the command palette modal is open.
     ///
     /// Always returns `true` (the modal swallows every key). `Esc` closes,
-    /// `Enter` activates the selected item, `в†‘/в†“` move the selection,
+    /// `Enter` activates the selected item, `↑/↓` move the selection,
     /// `Backspace` edits the query, and printable characters extend it. Editing
     /// the query refreshes history results.
     pub(crate) fn handle_palette_key(

@@ -68,7 +68,7 @@ impl Lumen {
                 (lb.rect, poster)
             })
             .or_else(|| {
-                // Node id has no box yet вЂ” fall back to the first <video>'s poster.
+                // Node id has no box yet — fall back to the first <video>'s poster.
                 self.layout_box.as_ref().and_then(|root| {
                     find_video_source(root)
                         .map(|(_, poster)| (Rect::new(0.0, 0.0, 16.0, 9.0), poster))
@@ -85,7 +85,7 @@ impl Lumen {
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(err) => {
-                eprintln!("PiP: РЅРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ OS-РѕРєРЅРѕ ({err}); fallback РЅР° overlay");
+                eprintln!("PiP: не удалось создать OS-окно ({err}); fallback на overlay");
                 self.open_pip_overlay();
                 return;
             }
@@ -97,7 +97,7 @@ impl Lumen {
         ) {
             Ok(r) => r,
             Err(err) => {
-                eprintln!("PiP: РЅРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ СЂРµРЅРґРµСЂ OS-РѕРєРЅР° ({err}); fallback РЅР° overlay");
+                eprintln!("PiP: не удалось создать рендер OS-окна ({err}); fallback на overlay");
                 self.open_pip_overlay();
                 return;
             }
@@ -119,13 +119,13 @@ impl Lumen {
     }
 
     /// P3-pip: open a real OS floating window for Document Picture-in-Picture
-    /// (`documentPictureInPicture.requestWindow({width, height})`) вЂ” no
+    /// (`documentPictureInPicture.requestWindow({width, height})`) — no
     /// `<video>` is involved, so the window shows a plain sized container
-    /// (empty poster в†’ [`panels::pip_os_window::build_pip_content`] draws just
+    /// (empty poster → [`panels::pip_os_window::build_pip_content`] draws just
     /// the background fill). Forwarding the requesting document's actual DOM
-    /// content into the window is a follow-up вЂ” see
+    /// content into the window is a follow-up — see
     /// `docs/tasks/ph3-picture-in-picture.md`. Unlike [`Self::open_pip_os`]
-    /// there is no video overlay to fall back to on window/backend failure вЂ”
+    /// there is no video overlay to fall back to on window/backend failure —
     /// this Phase 0 slice just logs and gives up.
     pub(crate) fn open_pip_os_document(&mut self, event_loop: &ActiveEventLoop, width: f32, height: f32) {
         use panels::pip_os_window::{pip_window_attributes, PipOsConfig};
@@ -144,7 +144,7 @@ impl Lumen {
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(err) => {
-                eprintln!("Document PiP: РЅРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ OS-РѕРєРЅРѕ ({err})");
+                eprintln!("Document PiP: не удалось создать OS-окно ({err})");
                 return;
             }
         };
@@ -155,7 +155,7 @@ impl Lumen {
         ) {
             Ok(r) => r,
             Err(err) => {
-                eprintln!("Document PiP: РЅРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ СЂРµРЅРґРµСЂ OS-РѕРєРЅР° ({err})");
+                eprintln!("Document PiP: не удалось создать рендер OS-окна ({err})");
                 return;
             }
         };
@@ -177,7 +177,7 @@ impl Lumen {
         self.pip.close();
     }
 
-    /// CC-7: redraw the OS PiP window with the forwarded `<video>` content вЂ”
+    /// CC-7: redraw the OS PiP window with the forwarded `<video>` content —
     /// the poster letterboxed (`object-fit: contain`) into the floating window's
     /// current client area. No-op when no OS PiP window is open.
     pub(crate) fn render_pip_os(&mut self) {
@@ -200,10 +200,10 @@ impl Lumen {
     }
 
     /// P3-pip slice 5: notify JS of the OS PiP window's current CSS-pixel size
-    /// via [`Self::notify_pip_window_resized`] вЂ” updates whichever
+    /// via [`Self::notify_pip_window_resized`] — updates whichever
     /// `PictureInPictureWindow` is active (video or legacy Document PiP,
     /// both backed by [`Self::pip_os`]) and fires its `resize` event. No-op
-    /// when no OS PiP window is open. Reads the window's own current size вЂ”
+    /// when no OS PiP window is open. Reads the window's own current size —
     /// use this from event handlers (e.g. `ScaleFactorChanged`) that don't
     /// already have a fresh logical size on hand; when one is already
     /// computed (e.g. `WindowEvent::Resized`), call
@@ -226,7 +226,7 @@ impl Lumen {
     /// window instead of the `(0, 0)` stub set at `requestPictureInPicture()`
     /// time, and its `resize` event fires when the user drags the window's
     /// edge. Called once right after the OS window is created and again on
-    /// every `WindowEvent::Resized` вЂ” not on `ScaleFactorChanged`/
+    /// every `WindowEvent::Resized` — not on `ScaleFactorChanged`/
     /// `RedrawRequested`, which don't change the logical size delivered here.
     /// `route_eval_js` no-ops when no JS runtime is installed, so this is
     /// safe to call unconditionally regardless of the `v8` feature.
@@ -243,7 +243,7 @@ impl Lumen {
 
     /// Document Picture-in-Picture (slice 1): open the real OS-level floating
     /// window at the requested logical size. Mirrors [`Self::open_pip_os`]
-    /// minus the `<video>` forwarding and the in-window overlay fallback вЂ” on
+    /// minus the `<video>` forwarding and the in-window overlay fallback — on
     /// window/backend creation failure the request is simply dropped (the JS
     /// `requestWindow()` promise already resolved with a `PictureInPictureWindow`
     /// whose `.document` stays a JS-only mock either way, see `document_pip.rs`).
@@ -266,7 +266,7 @@ impl Lumen {
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(err) => {
-                eprintln!("Document PiP: РЅРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ OS-РѕРєРЅРѕ ({err})");
+                eprintln!("Document PiP: не удалось создать OS-окно ({err})");
                 self.doc_pip_controller = DocPipController::new();
                 return;
             }
@@ -278,7 +278,7 @@ impl Lumen {
         ) {
             Ok(r) => r,
             Err(err) => {
-                eprintln!("Document PiP: РЅРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ СЂРµРЅРґРµСЂ OS-РѕРєРЅР° ({err})");
+                eprintln!("Document PiP: не удалось создать рендер OS-окна ({err})");
                 self.doc_pip_controller = DocPipController::new();
                 return;
             }
@@ -302,8 +302,8 @@ impl Lumen {
     }
 
     /// Document Picture-in-Picture (slice 3): redraw the OS floating window.
-    /// Background fill (`build_docpip_content`) first, then вЂ” if the page has
-    /// appended anything to `pipWindow.document.body` вЂ” the moved subtree's
+    /// Background fill (`build_docpip_content`) first, then — if the page has
+    /// appended anything to `pipWindow.document.body` — the moved subtree's
     /// last-known markup (`pip.content_html`) is re-parsed into a fresh
     /// detached [`lumen_dom::Document`], laid out at the window's own size
     /// against the main page's own author stylesheet (`self.layout_source`),

@@ -10,17 +10,17 @@
 use crate::*;
 
 impl Lumen {
-    /// Promote a background tab from T2в†’T3 (Hibernated) by serialising its DOM
+    /// Promote a background tab from T2→T3 (Hibernated) by serialising its DOM
     /// to SQLite and evicting the in-memory `PageSnapshot`.
     ///
     /// On failure (serialise error, SQLite error) the snapshot is put back into
     /// `bg_tabs` and the tab stays at T2.
     ///
-    /// This is also the T2в†’T3 bfcache degradation point (`docs/tasks/ph3-bfcache.md`
+    /// This is also the T2→T3 bfcache degradation point (`docs/tasks/ph3-bfcache.md`
     /// step 8): `snap` owns the tab's `bfcache: BfCache`, which may hold `Frozen`
     /// entries (each carrying a full DOM byte blob). `bg_tabs.remove` moves `snap`
     /// into this function; on the success path it is never re-inserted anywhere,
-    /// so it вЂ” and every `FrozenPage` inside its `bfcache` вЂ” is freed when this
+    /// so it — and every `FrozenPage` inside its `bfcache` — is freed when this
     /// function returns. No separate `degrade_bfcache_entries` pass is needed: the
     /// whole per-tab state (bfcache included) is already released at T3.
     fn hibernate_bg_tab(&mut self, tab_id: usize) {
@@ -60,8 +60,8 @@ impl Lumen {
         };
 
         if let Err(e) = self.tab_snapshots.store(tab_id as i64, &data) {
-            eprintln!("РћС€РёР±РєР° hibernate tab {tab_id}: {e}");
-            // Rollback вЂ” keep the snapshot in RAM.
+            eprintln!("Ошибка hibernate tab {tab_id}: {e}");
+            // Rollback — keep the snapshot in RAM.
             self.bg_tabs.insert(tab_id, snap);
             return;
         }
@@ -145,7 +145,7 @@ impl Lumen {
         let doc = match Document::from_bytes(&data.dom_blob) {
             Ok(d) => d,
             Err(e) => {
-                eprintln!("РћС€РёР±РєР° РґРµСЃРµСЂРёР°Р»РёР·Р°С†РёРё DOM РІРєР»Р°РґРєРё {tab_id}: {e}");
+                eprintln!("Ошибка десериализации DOM вкладки {tab_id}: {e}");
                 self.hibernated_tabs.insert(tab_id, meta);
                 self.restore_spinner_start_ms = None;
                 return false;
@@ -188,12 +188,12 @@ impl Lumen {
             document: Arc::clone(&document_arc),
             stylesheet: Arc::new(stylesheet),
             html_source: None,
-            // Tab hibernation (T3в†’T0) restore вЂ” original Cache-Control is not
+            // Tab hibernation (T3→T0) restore — original Cache-Control is not
             // preserved across the hibernate/restore round-trip; treat as
             // cacheable (matches the rest of this struct's restore paths).
             cache_control_no_store: false,
             // BUG-743: only the inline `<style>` text survives hibernation
-            // (`extract_style_blocks`), the external-sheet bodies do not вЂ” a
+            // (`extract_style_blocks`), the external-sheet bodies do not — a
             // rebuild would silently drop them, so the cascade stays frozen.
             dynamic_css: None,
         };
@@ -209,8 +209,8 @@ impl Lumen {
         let meta_scale = meta_initial_scale(&layout_source);
         let (css_w, css_h) = zoom::effective_viewport(phys.0, phys.1, meta_scale, self.zoom_factor);
         let viewport = lumen_core::geom::Size::new(css_w, css_h);
-        // content-visibility: auto (BB-4): relevance РїСЂРѕС‚РёРІ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРЅРѕРіРѕ
-        // scroll-РїРѕР»РѕР¶РµРЅРёСЏ; ratchet РЅРѕРІРѕР№ СЃС‚СЂР°РЅРёС†С‹ СЃС‚Р°СЂС‚СѓРµС‚ СЃ РЅСѓР»СЏ.
+        // content-visibility: auto (BB-4): relevance против восстановленного
+        // scroll-положения; ratchet новой страницы стартует с нуля.
         lumen_layout::set_cv_scroll(data.scroll_x, data.scroll_y);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
         let (display_list, lb) = relayout_page(&layout_source, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts);
@@ -229,7 +229,7 @@ impl Lumen {
         self.cv_auto_state.clear();
         self.refresh_cv_state();
         self.set_js_ctx(js_ctx);
-        // ADR-016 M2.2c-2b: Р·РµСЂРєР°Р»РёРј РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРЅС‹Р№ С…СЌРЅРґР» + DOM РІ РґРІРёР¶РєРѕРІС‹Р№ РїРѕС‚РѕРє.
+        // ADR-016 M2.2c-2b: зеркалим восстановленный хэндл + DOM в движковый поток.
         self.sync_engine_js_state();
         self.scroll_x = data.scroll_x;
         self.scroll_y = data.scroll_y;
@@ -239,7 +239,7 @@ impl Lumen {
         // Seed the restored runtime with layout geometry + viewport so JS can
         // query bounding rects immediately (mirrors the fresh-load path).
         // ADR-016 M2.2c-2d: routed off-thread through `route_task_js`, same as the
-        // fresh-load seed above (`self.js_present` gate в†’ byte-identical off).
+        // fresh-load seed above (`self.js_present` gate → byte-identical off).
         #[cfg(feature = "v8")]
         if self.js_present
             && let Some(lb_ref) = self.layout_box.as_ref()
@@ -258,10 +258,10 @@ impl Lumen {
             });
         }
 
-        // Remove the SQLite entry вЂ” it is no longer needed.
+        // Remove the SQLite entry — it is no longer needed.
         let _ = self.tab_snapshots.delete(tab_id as i64);
 
-        // Restore complete вЂ” hide the spinner overlay.
+        // Restore complete — hide the spinner overlay.
         self.restore_spinner_start_ms = None;
 
         true
@@ -291,7 +291,7 @@ impl Lumen {
                 continue;
             }
 
-            // T1 в†’ T2: checkpoint scroll + form state to SQLite for crash recovery.
+            // T1 → T2: checkpoint scroll + form state to SQLite for crash recovery.
             if tr.to == tab_lifecycle::TabState::BackgroundOld
                 && let Some(snap) = self.bg_tabs.get(&tab_id)
             {
@@ -329,7 +329,7 @@ impl Lumen {
         }
 
         // Auto-archive (7A.5): move background tabs idle for > 12 h out of the
-        // strip.  Only runs when there are в‰Ґ 2 tabs (the active tab is never
+        // strip.  Only runs when there are ≥ 2 tabs (the active tab is never
         // archived) and the tab is not already hibernated (RAM already saved).
         if self.tab_strip.len() >= 2 {
             let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
@@ -377,5 +377,5 @@ impl Lumen {
         }
     }
 
-    // в”Ђв”Ђ Tab management в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    // ── Tab management ────────────────────────────────────────────────────────
 }

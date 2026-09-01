@@ -67,7 +67,7 @@ impl Lumen {
         // value/warning/caret (`Self::chrome_model_snapshot`,
         // `Self::chrome_omni_input_rect`) is baked into `self.chrome_layout`
         // at `relayout_chrome_host` time, not recomputed every
-        // `RedrawRequested` вЂ” every branch above mutates `self.address_bar`
+        // `RedrawRequested` — every branch above mutates `self.address_bar`
         // (text, selection, or open/closed), so without this call the
         // on-screen field would keep showing stale text while the user
         // types. No-op off the flag (`Self::relayout_chrome_host` early-
@@ -77,17 +77,17 @@ impl Lumen {
 
     /// Process a committed omnibox value: resolve aliases, then navigate or act.
     ///
-    /// Order: `sidebar:` prefix в†’ bang aliases (`!g`) в†’ `@notes` / `@read-later`
-    /// в†’ record in search_history в†’ plain navigate.
+    /// Order: `sidebar:` prefix → bang aliases (`!g`) → `@notes` / `@read-later`
+    /// → record in search_history → plain navigate.
     pub(crate) fn handle_omnibox_commit(&mut self, value: String) {
-        // `view-source:<url>` вЂ” fetch and display syntax-highlighted source (В§D-2).
+        // `view-source:<url>` — fetch and display syntax-highlighted source (§D-2).
         if let Some(target_url) = value.trim().strip_prefix("view-source:") {
             let target_url = target_url.trim().to_owned();
             self.show_view_source_for_url(&target_url);
             return;
         }
 
-        // `note-viewer:<id>` вЂ” open the note viewer overlay (В§12.2, GG-2).
+        // `note-viewer:<id>` — open the note viewer overlay (§12.2, GG-2).
         if let Some(id_str) = value.trim().strip_prefix("note-viewer:") {
             if let Ok(id) = id_str.parse::<i64>()
                 && let Ok(Some(note)) = self.notes_store.get(id)
@@ -98,8 +98,8 @@ impl Lumen {
             return;
         }
 
-        // `switch-tab:<id>` вЂ” switch to an open tab by its stable id (В§12.4,
-        // `@tabs` omnibox prefix). Resolve id в†’ current index (tabs reorder).
+        // `switch-tab:<id>` — switch to an open tab by its stable id (§12.4,
+        // `@tabs` omnibox prefix). Resolve id → current index (tabs reorder).
         if let Some(id_str) = value.trim().strip_prefix("switch-tab:") {
             if let Ok(id) = id_str.parse::<usize>()
                 && let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == id)
@@ -109,35 +109,35 @@ impl Lumen {
             return;
         }
 
-        // `ai-answer:noop` вЂ” committing an `@ai` answer row is a no-op (В§12.5):
+        // `ai-answer:noop` — committing an `@ai` answer row is a no-op (§12.5):
         // the RAG answer is already fully shown in the dropdown row itself,
         // there is no URL to navigate to.
         if value.trim() == "ai-answer:noop" {
             return;
         }
 
-        // `about:settings` вЂ” open the browser settings overlay (task D-7).
+        // `about:settings` — open the browser settings overlay (task D-7).
         if value.trim() == "about:settings" {
             self.open_settings_panel();
             self.request_redraw();
             return;
         }
 
-        // `about:newtab?...` вЂ” pin/unpin/"+"/restore-closed special links
+        // `about:newtab?...` — pin/unpin/"+"/restore-closed special links
         // (DS-11), committed e.g. by pasting a copied tile link.
         if let Some(action) = newtab::parse_action(value.trim()) {
             self.apply_newtab_action(action);
             return;
         }
 
-        // `about:newtab` вЂ” internal start page with a speed dial of pinned +
+        // `about:newtab` — internal start page with a speed dial of pinned +
         // most-visited sites (task CC-5, DS-11).
         if value.trim() == newtab::NEWTAB_URL {
             self.navigate_to(self.build_newtab_source());
             return;
         }
 
-        // `about:chrome-preview` вЂ” CC-1 render-smoke for the engine-drawn
+        // `about:chrome-preview` — CC-1 render-smoke for the engine-drawn
         // chrome asset (docs/tasks/p1-css-chrome.md).
         if value.trim() == chrome_preview::URL {
             self.navigate_to(PageSource::Static {
@@ -147,7 +147,7 @@ impl Lumen {
             return;
         }
 
-        // `sidebar:<url>` вЂ” load the URL into the right-docked sidebar panel (7D.3).
+        // `sidebar:<url>` — load the URL into the right-docked sidebar panel (7D.3).
         if let Some(sidebar_url) = value.strip_prefix("sidebar:") {
             let sidebar_url = sidebar_url.trim().to_owned();
             if !sidebar_url.is_empty() {
@@ -158,11 +158,11 @@ impl Lumen {
                         self.open_sidebar_page(sidebar_url, &raw.bytes, String::new());
                     }
                     Err(err) => {
-                        eprintln!("sidebar: РЅРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ {sidebar_url}: {err}");
+                        eprintln!("sidebar: не удалось загрузить {sidebar_url}: {err}");
                         // Open panel with placeholder so user sees feedback.
                         self.sidebar.open(sidebar_url);
                         // ADR-016 M2.2b-8: the sidebar becoming visible narrows the
-                        // main page's content viewport вЂ” the same async-safe
+                        // main page's content viewport — the same async-safe
                         // chrome-inset relayout the success path already routes off
                         // the UI thread (`open_sidebar_page`, M2.2b-3).
                         self.relayout_chrome();
@@ -193,9 +193,9 @@ impl Lumen {
                         use lumen_core::url::Url;
                         use lumen_network::HttpClient;
                         let Ok(parsed) = Url::parse(&url_clone) else { return };
-                        // Р§РµСЂРµР· apply_http, Р° РЅРµ РіРѕР»С‹Рј HttpClient::new(): РёРЅР°С‡Рµ
-                        // В«СЃРѕС…СЂР°РЅРёС‚СЊ РЅР° РїРѕС‚РѕРјВ» С…РѕРґРёС‚ РјРёРјРѕ HSTS, РїСЂРѕРєСЃРё, DoH Рё
-                        // РєСЌС€Р° вЂ” СЃРІРѕРёРј, РЅРёС‡РµРј РЅРµ РЅР°СЃС‚СЂРѕРµРЅРЅС‹Рј РєР»РёРµРЅС‚РѕРј (BUG-402).
+                        // Через apply_http, а не голым HttpClient::new(): иначе
+                        // «сохранить на потом» ходит мимо HSTS, прокси, DoH и
+                        // кэша — своим, ничем не настроенным клиентом (BUG-402).
                         let client = crate::config::global().apply_http(HttpClient::new());
                         let Ok(html) = client.fetch(&parsed) else { return };
                         let title = panels::read_later_panel::extract_title_from_html(&html);
@@ -224,7 +224,7 @@ impl Lumen {
             return;
         }
 
-        // No alias matched вЂ” plain URL or search query.
+        // No alias matched — plain URL or search query.
         if !value.contains("://") && !value.starts_with('@') {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -235,11 +235,11 @@ impl Lumen {
         self.navigate_to(PageSource::from_arg(Some(&value)));
     }
 
-    /// Р—Р°РїСЂР°С€РёРІР°РµС‚ РїРѕРґСЃРєР°Р·РєРё РґР»СЏ С‚РµРєСѓС‰РµРіРѕ РІРІРѕРґР° РІ Р°РґСЂРµСЃРЅРѕР№ СЃС‚СЂРѕРєРµ.
+    /// Запрашивает подсказки для текущего ввода в адресной строке.
     ///
-    /// `@history <query>` в†’ FTS5-РїРѕРёСЃРє РїРѕ РёСЃС‚РѕСЂРёРё СЃС‚СЂР°РЅРёС†.
-    /// `@notes <query>` в†’ FTS5-РїРѕРёСЃРє РїРѕ Р·Р°РјРµС‚РєР°Рј (В§12.2).
-    /// РћР±С‹С‡РЅС‹Р№ РІРІРѕРґ в†’ prefix-match РїРѕ search_history + FTS5.
+    /// `@history <query>` → FTS5-поиск по истории страниц.
+    /// `@notes <query>` → FTS5-поиск по заметкам (§12.2).
+    /// Обычный ввод → prefix-match по search_history + FTS5.
     fn query_omnibox_suggestions(&self) -> Vec<address_bar::OmniboxSuggestion> {
         use address_bar::{OmniboxPrefix, OmniboxSuggestion, parse_omnibox_prefix};
 
@@ -253,7 +253,7 @@ impl Lumen {
 
         match prefix {
             OmniboxPrefix::History => {
-                // @history <query> вЂ” С‚РѕР»СЊРєРѕ FTS.
+                // @history <query> — только FTS.
                 if !query.is_empty() && let Ok(hits) = self.history_fts.search(query, 7) {
                     for hit in hits {
                         suggestions.push(OmniboxSuggestion::HistoryFts {
@@ -265,7 +265,7 @@ impl Lumen {
                 }
             }
             OmniboxPrefix::Notes => {
-                // @notes <query> вЂ” FTS5-РїРѕРёСЃРє РїРѕ Р·Р°РјРµС‚РєР°Рј В§12.2 (РґРѕ 5 СЂРµР·СѓР»СЊС‚Р°С‚РѕРІ).
+                // @notes <query> — FTS5-поиск по заметкам §12.2 (до 5 результатов).
                 if !query.is_empty() && let Ok(hits) = self.notes_store.search(query, 5) {
                     for hit in hits {
                         let viewer_url = format!("note-viewer:{}", hit.note.id);
@@ -279,8 +279,8 @@ impl Lumen {
                 }
             }
             OmniboxPrefix::ReadLater => {
-                // @read-later <query> вЂ” FTS5-РїРѕРёСЃРє РїРѕ СЃРѕС…СЂР°РЅС‘РЅРЅС‹Рј СЃС‚СЂР°РЅРёС†Р°Рј В§12.3
-                // (РґРѕ 7 СЂРµР·СѓР»СЊС‚Р°С‚РѕРІ). Р’С‹Р±РѕСЂ РїРѕРґСЃРєР°Р·РєРё в†’ РЅР°РІРёРіР°С†РёСЏ РЅР° URL.
+                // @read-later <query> — FTS5-поиск по сохранённым страницам §12.3
+                // (до 7 результатов). Выбор подсказки → навигация на URL.
                 if !query.is_empty() && let Ok(hits) = self.read_later_store.search(query, 7) {
                     for hit in hits {
                         suggestions.push(OmniboxSuggestion::ReadLater {
@@ -292,9 +292,9 @@ impl Lumen {
                 }
             }
             OmniboxPrefix::Tabs => {
-                // @tabs <query> вЂ” РїРѕРґСЃС‚СЂРѕС‡РЅС‹Р№ РїРѕРёСЃРє РїРѕ РѕС‚РєСЂС‹С‚С‹Рј РІРєР»Р°РґРєР°Рј В§12.4
-                // (Р·Р°РіРѕР»РѕРІРѕРє + URL), case-insensitive. РџСѓСЃС‚РѕР№ Р·Р°РїСЂРѕСЃ в†’ РІСЃРµ
-                // РІРєР»Р°РґРєРё. Р’С‹Р±РѕСЂ РїРѕРґСЃРєР°Р·РєРё в†’ РїРµСЂРµРєР»СЋС‡РµРЅРёРµ РїРѕ СЃС‚Р°Р±РёР»СЊРЅРѕРјСѓ id.
+                // @tabs <query> — подстрочный поиск по открытым вкладкам §12.4
+                // (заголовок + URL), case-insensitive. Пустой запрос → все
+                // вкладки. Выбор подсказки → переключение по стабильному id.
                 let needle = query.to_lowercase();
                 let active = self.tab_strip.active;
                 for (idx, tab) in self.tab_strip.tabs.iter().enumerate() {
@@ -322,10 +322,10 @@ impl Lumen {
                 }
             }
             OmniboxPrefix::Bookmarks => {
-                // @bookmarks <query> вЂ” РїРѕРґСЃС‚СЂРѕС‡РЅС‹Р№ РїРѕРёСЃРє РїРѕ Р·Р°РєР»Р°РґРєР°Рј В§12.8
-                // (title/url/С‚РµРіРё), case-insensitive. РџСЂРё РЅР°Р»РёС‡РёРё AI-СЌРјР±РµРґРґРёРЅРіР°
-                // Р·Р°РїСЂРѕСЃР° СЂРµР·СѓР»СЊС‚Р°С‚ РґРѕРїРѕР»РЅСЏРµС‚СЃСЏ cosine-similarity СЂР°РЅР¶РёСЂРѕРІР°РЅРёРµРј
-                // РїРѕРІРµСЂС… С‚РµРєСЃС‚РѕРІС‹С… СЃРѕРІРїР°РґРµРЅРёР№ (РЅРµ Р·Р°РјРµРЅСЏРµС‚ РёС… вЂ” closes the loop
+                // @bookmarks <query> — подстрочный поиск по закладкам §12.8
+                // (title/url/теги), case-insensitive. При наличии AI-эмбеддинга
+                // запроса результат дополняется cosine-similarity ранжированием
+                // поверх текстовых совпадений (не заменяет их — closes the loop
                 // for bookmarks that don't textually match but are related).
                 if let Ok(bookmarks) = self.bookmarks.list_all() {
                     let needle = query.to_lowercase();
@@ -372,16 +372,16 @@ impl Lumen {
                 }
             }
             OmniboxPrefix::Ai => {
-                // @ai <query> вЂ” РµРґРёРЅСЃС‚РІРµРЅРЅР°СЏ СЃС‚СЂРѕРєР°: RAG-РѕС‚РІРµС‚ (В§12.5) РїРѕРґ
-                // `--features ai`, Р»РёР±Рѕ СЃС‚Р°С‚РёС‡РЅС‹Р№ hint РїРѕРґ РµС‘ РѕС‚СЃСѓС‚СЃС‚РІРёРµ
-                // (СЃРј. `Self::ai_answer_for`, РѕР±Рµ РІРµС‚РєРё cfg-gated). РџСѓСЃС‚РѕР№
-                // Р·Р°РїСЂРѕСЃ вЂ” РЅРё РѕРґРЅРѕР№ СЃС‚СЂРѕРєРё, РєР°Рє Сѓ РѕСЃС‚Р°Р»СЊРЅС‹С… РїСЂРµС„РёРєСЃРѕРІ.
+                // @ai <query> — единственная строка: RAG-ответ (§12.5) под
+                // `--features ai`, либо статичный hint под её отсутствие
+                // (см. `Self::ai_answer_for`, обе ветки cfg-gated). Пустой
+                // запрос — ни одной строки, как у остальных префиксов.
                 if !query.is_empty() {
                     suggestions.push(OmniboxSuggestion::Ai { answer: self.ai_answer_for(query) });
                 }
             }
             OmniboxPrefix::Plain => {
-                // prefix-match РїРѕ search_history (РґРѕ 4 СЃС‚СЂРѕРє).
+                // prefix-match по search_history (до 4 строк).
                 if let Ok(queries) = self.search_history.prefix_match(query, 4) {
                     for q in queries {
                         suggestions.push(OmniboxSuggestion::SearchQuery {
@@ -390,8 +390,8 @@ impl Lumen {
                         });
                     }
                 }
-                // URL/title substring match РїРѕ history_store (РґРѕ 5 СЃС‚СЂРѕРє).
-                // Р”Р°С‘С‚ СЂРµР·СѓР»СЊС‚Р°С‚С‹ РїРѕ URL-С„СЂР°РіРјРµРЅС‚Сѓ РґР°Р¶Рµ Р±РµР· FTS5-РёРЅРґРµРєСЃР°.
+                // URL/title substring match по history_store (до 5 строк).
+                // Даёт результаты по URL-фрагменту даже без FTS5-индекса.
                 if let Ok(hits) = self.history_store.search_prefix(query, 5) {
                     for hit in hits {
                         suggestions.push(OmniboxSuggestion::HistoryFts {
@@ -401,10 +401,10 @@ impl Lumen {
                         });
                     }
                 }
-                // FTS5 РїРѕ РёСЃС‚РѕСЂРёРё СЃС‚СЂР°РЅРёС† (РґРѕ 4 СЃС‚СЂРѕРє, РёС‚РѕРіРѕ в‰¤ 8).
+                // FTS5 по истории страниц (до 4 строк, итого ≤ 8).
                 if let Ok(hits) = self.history_fts.search(query, 4) {
                     for hit in hits {
-                        // Р”РµРґСѓРїР»РёРєР°С†РёСЏ: FTS5 РјРѕР¶РµС‚ РїРѕРІС‚РѕСЂРёС‚СЊ URL РёР· search_prefix РІС‹С€Рµ.
+                        // Дедупликация: FTS5 может повторить URL из search_prefix выше.
                         if !suggestions.iter().any(|s| {
                             matches!(s, OmniboxSuggestion::HistoryFts { url, .. } if url == &hit.url)
                         }) {

@@ -34,8 +34,8 @@ impl Lumen {
     }
 
     /// Reload the profile list from `ProfileRegistry` into the dropdown's
-    /// cache (DS-14). Cheap вЂ” the registry only ever holds a handful of
-    /// rows вЂ” called each time the dropdown opens so it reflects any
+    /// cache (DS-14). Cheap — the registry only ever holds a handful of
+    /// rows — called each time the dropdown opens so it reflects any
     /// external edit to `profiles.db` between sessions.
     pub(crate) fn refresh_profile_menu_entries(&mut self) {
         let entries: Vec<panels::profile_menu::ProfileEntry> = self
@@ -54,7 +54,7 @@ impl Lumen {
     }
 
     /// `true` while the active profile is the seeded Anonymous profile
-    /// (DS-16 ephemeral slice, ADR-020) вЂ” gates history writes, the
+    /// (DS-16 ephemeral slice, ADR-020) — gates history writes, the
     /// history-panel banner, and which cookie jar navigation uses.
     pub(crate) fn active_profile_is_anonymous(&self) -> bool {
         self.profile_menu
@@ -64,8 +64,8 @@ impl Lumen {
 
     /// Cookie jar used for outgoing HTTP requests on the active tab: the
     /// shared jar for every profile except Anonymous, which gets its own
-    /// ephemeral jar (DS-16) so its cookies never leak into вЂ” or persist
-    /// past вЂ” any other profile's browsing.
+    /// ephemeral jar (DS-16) so its cookies never leak into — or persist
+    /// past — any other profile's browsing.
     pub(crate) fn active_cookie_jar(&self) -> Arc<lumen_storage::CookieJar> {
         if self.active_profile_is_anonymous() {
             Arc::clone(&self.anonymous_cookie_jar)
@@ -145,9 +145,9 @@ impl Lumen {
     /// No-op when the current page has no URL (e.g. blank tab). The active tab
     /// title is used when available, otherwise the URL stands in as the title.
     ///
-    /// Also populates the AI summary/embedding (В§12.8, Step 6) via
+    /// Also populates the AI summary/embedding (§12.8, Step 6) via
     /// [`Self::ai_backend`]: with the default [`lumen_core::NullAiBackend`]
-    /// `summarise`/`embed` return empty, so `set_semantic` is simply skipped вЂ”
+    /// `summarise`/`embed` return empty, so `set_semantic` is simply skipped —
     /// no `feature = "ai"` gate needed here.
     pub(crate) fn bookmark_current_page(&mut self) {
         let url = self.current_display_url().to_owned();

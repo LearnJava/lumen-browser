@@ -66,7 +66,7 @@ impl Lumen {
         }
     }
 
-    #[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn handle_click_at_inner(&mut self, x_css: f32, y_css: f32) {
         // Dismiss validation tooltip on any non-scrollbar click.
         self.validation_tooltip = None;
@@ -76,7 +76,7 @@ impl Lumen {
         // its computed style, suppressing normal navigation / JS dispatch.
         if self.dom_inspector.visible {
             let win_w_css = self.viewport_width_css();
-            // Click inside the right-docked panel в†’ UI interaction (tab switch).
+            // Click inside the right-docked panel → UI interaction (tab switch).
             if self.dom_inspector.is_panel_click(x_css, win_w_css) {
                 if self.dom_inspector.click_tab_at(
                     x_css, y_css, win_w_css,
@@ -86,7 +86,7 @@ impl Lumen {
                 }
                 return;
             }
-            // Click on the page в†’ pin the box under cursor.
+            // Click on the page → pin the box under cursor.
             let (page_x, page_y) = self.page_point(x_css, y_css);
             if let Some(hit) = self
                 .layout_box
@@ -135,7 +135,7 @@ impl Lumen {
             return;
         }
 
-        // в”Ђв”Ђ Color picker swatch hit в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        // ── Color picker swatch hit ──────────────────────
         // Check if click lands on an open color picker swatch.
         // Compute swatch result inside a scoped borrow, then act.
         let picker_swatch_result: Option<(NodeId, [u8; 3])> = {
@@ -158,14 +158,14 @@ impl Lumen {
                 forms::set_value(&mut src.document.lock().unwrap(), pn, &css_color);
             }
             self.form_state.entry(pn).or_default().value = css_color;
-            // ADR-016 M2.2c-3: value already in the document; no post-read в†’ off-thread.
+            // ADR-016 M2.2c-3: value already in the document; no post-read → off-thread.
             self.relayout_form();
             return;
         }
         // Any click outside the picker closes it.
         self.color_picker_node = None;
 
-        // в”Ђв”Ђ Date picker hit в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        // ── Date picker hit ──────────────────────────────
         let date_hit: Option<(NodeId, forms::DatePickerHit)> = {
             let dp_node = self.date_picker_node;
             dp_node.and_then(|dn| {
@@ -198,7 +198,7 @@ impl Lumen {
                         forms::set_value(&mut src.document.lock().unwrap(), dn, &date_str);
                     }
                     self.form_state.entry(dn).or_default().value = date_str;
-                    // ADR-016 M2.2c-3: async-safe form mutation вЂ” see color picker.
+                    // ADR-016 M2.2c-3: async-safe form mutation — see color picker.
                     self.relayout_form();
                     return;
                 }
@@ -208,7 +208,7 @@ impl Lumen {
         // Any click outside the date picker closes it.
         self.date_picker_node = None;
 
-        // в”Ђв”Ђ Select dropdown option hit в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        // ── Select dropdown option hit ───────────────────
         // Check if click lands on an open <select> dropdown.
         let select_hit: Option<(NodeId, usize)> = {
             let sel_node = self.select_dropdown_node;
@@ -235,7 +235,7 @@ impl Lumen {
                         self.form_state.entry(sn).or_default().value = chosen.value.clone();
                     }
                     drop(doc);
-                    // ADR-016 M2.2c-3: async-safe <select> choice вЂ” see color picker.
+                    // ADR-016 M2.2c-3: async-safe <select> choice — see color picker.
                     self.relayout_form();
                 }
             }
@@ -244,7 +244,7 @@ impl Lumen {
         // Any click outside the dropdown closes it.
         self.select_dropdown_node = None;
 
-        // в”Ђв”Ђ Form control + link click в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        // ── Form control + link click ────────────────────
         // Single hit test shared by form dispatch and link navigation.
         //
         // BUG-437: the conversion is [`Self::page_point`], the same one the
@@ -263,7 +263,7 @@ impl Lumen {
         let frame_target = target.frame;
         let hit_result = target.page;
 
-        // Debug click log вЂ” Р°РєС‚РёРІРёСЂСѓРµС‚СЃСЏ С„Р»Р°РіРѕРј --click-log РёР»Рё LUMEN_CLICK_LOG=1.
+        // Debug click log — активируется флагом --click-log или LUMEN_CLICK_LOG=1.
         // For click log: report both the hit box node (<p>) and the inline source_node
         // (<a> text node) so the log shows what find_link_href actually searches from.
         let click_log_hit: Option<(u32, String, String, String)> =
@@ -271,7 +271,7 @@ impl Lumen {
                 hit_result.as_ref().and_then(|r| {
                     self.layout_source.as_ref().map(|src| {
                         let doc = src.document.lock().unwrap();
-                        // Use source_node for tag/class info вЂ” it reveals the inline element.
+                        // Use source_node for tag/class info — it reveals the inline element.
                         let effective_id = r.source_node;
                         let node = doc.get(effective_id);
                         let (tag, id_attr, class_attr) =
@@ -318,19 +318,19 @@ impl Lumen {
             // ADR-016 M2.2b-7: `focused_node` is set synchronously above, so
             // `:focus`/`:focus-within` re-evaluates on any later relayout. The
             // subsequent JS click dispatch reads the pre-`:focus` `hit_result`
-            // (the geometry the user clicked on вЂ” correct), and any DOM mutation
+            // (the geometry the user clicked on — correct), and any DOM mutation
             // from those handlers takes its own generation-guarded relayout, so
             // this pure restyle has no synchronous geometry read and goes off-thread.
             self.relayout_chrome();
             // Notify platform accessibility bridge so screen readers can track focus.
             self.platform_bridge.focused_node_changed(new_focused);
             // Keep JS _lumen_last_focused_nid in sync so showModal() can save/restore it.
-            // ADR-016 M2.2c-2d (16): fire-and-forget void `notify_focus_changed` С‡РµСЂРµР·
-            // `route_task_js`. `focus_idx` (owned `Option<u32>`) РІС‹С‡РёСЃР»СЏРµС‚СЃСЏ РґРѕ
-            // РјР°СЂС€СЂСѓС‚РёР·Р°С†РёРё, Р·Р°РјС‹РєР°РЅРёРµ `Send + 'static`. РџРѕРґ С„Р»Р°РіРѕРј
-            // (`LUMEN_ENGINE_THREAD=1`) СѓС…РѕРґРёС‚ off-UI-thread РѕРґРЅРёРј `task`; Р±РµР· С„Р»Р°РіР°
-            // (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ) вЂ” СЃРёРЅС…СЂРѕРЅРЅС‹Р№ РІС‹Р·РѕРІ РїРѕ UI-С…СЌРЅРґР»Сѓ, **Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ**
-            // РїСЂРµР¶РЅРµРјСѓ `js.notify_focus_changed`.
+            // ADR-016 M2.2c-2d (16): fire-and-forget void `notify_focus_changed` через
+            // `route_task_js`. `focus_idx` (owned `Option<u32>`) вычисляется до
+            // маршрутизации, замыкание `Send + 'static`. Под флагом
+            // (`LUMEN_ENGINE_THREAD=1`) уходит off-UI-thread одним `task`; без флага
+            // (по умолчанию) — синхронный вызов по UI-хэндлу, **байт-идентично**
+            // прежнему `js.notify_focus_changed`.
             let focus_idx = new_focused.map(|n| n.index() as u32);
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 js.notify_focus_changed(focus_idx);
@@ -428,15 +428,15 @@ impl Lumen {
                 y_css as i32,
                 mod_flags,
             );
-            // ADR-016 M2.2c-2d (10): read-after-eval click dispatch вЂ” СЃР°Рј
-            // `_lumen_dispatch_mouse_event('click', вЂ¦)` СѓС…РѕРґРёС‚ fire-and-forget С‡РµСЂРµР·
-            // `route_eval_js`, Р° РїРѕСЃР»РµРґСѓСЋС‰РёР№ `take_navigate_request` (РЅР°РІРёРіР°С†РёСЏ, С‡С‚Рѕ
-            // handler РјРѕРі РїРѕСЃС‚Р°РІРёС‚СЊ) вЂ” С‡РµСЂРµР· `route_query_js`. РџРѕРґ С„Р»Р°РіРѕРј
-            // (`LUMEN_ENGINE_THREAD=1`) Р±Р»РѕРєРёСЂСѓСЋС‰РёР№ `query` РІСЃС‚Р°С‘С‚ РІ РѕС‡РµСЂРµРґСЊ **РїРѕСЃР»Рµ**
-            // РѕС‚РїСЂР°РІР»РµРЅРЅРѕРіРѕ `task`, РІРѕСЃСЃС‚Р°РЅР°РІР»РёРІР°СЏ read-after-eval РїРѕСЂСЏРґРѕРє; Р±РµР· С„Р»Р°РіР°
-            // (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ) вЂ” РїСЂРµР¶РЅРёРµ СЃРёРЅС…СЂРѕРЅРЅС‹Рµ РІС‹Р·РѕРІС‹ РїРѕ UI-С…СЌРЅРґР»Сѓ, Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ
-            // (`js_ctx == None` в†’ `None` в†’ РЅР°РІРёРіР°С†РёСЏ РЅРµ СЃС‚Р°РІРёС‚СЃСЏ, РєР°Рє РїСЂРµР¶РЅСЏСЏ
-            // РІРµС‚РєР° `Some(ctx)` РЅРµ СЃРјР°С‚С‡РёР»Р°СЃСЊ).
+            // ADR-016 M2.2c-2d (10): read-after-eval click dispatch — сам
+            // `_lumen_dispatch_mouse_event('click', …)` уходит fire-and-forget через
+            // `route_eval_js`, а последующий `take_navigate_request` (навигация, что
+            // handler мог поставить) — через `route_query_js`. Под флагом
+            // (`LUMEN_ENGINE_THREAD=1`) блокирующий `query` встаёт в очередь **после**
+            // отправленного `task`, восстанавливая read-after-eval порядок; без флага
+            // (по умолчанию) — прежние синхронные вызовы по UI-хэндлу, байт-идентично
+            // (`js_ctx == None` → `None` → навигация не ставится, как прежняя
+            // ветка `Some(ctx)` не сматчилась).
             route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
             if let Some(Some(nav)) = route_query_js(
                 self.engine_thread.as_ref(),
@@ -534,7 +534,7 @@ impl Lumen {
                     forms::toggle_checkbox(&mut src.document.lock().unwrap(), id);
                 }
                 // ADR-016 M2.2c-3: the `checked` flip is already in the shared
-                // document; no geometry is read after в†’ route the reflow off-thread.
+                // document; no geometry is read after → route the reflow off-thread.
                 self.relayout_form();
             }
             forms::FormClickAction::ToggleRadio {
@@ -544,7 +544,7 @@ impl Lumen {
                 if let Some(src) = self.layout_source.as_mut() {
                     forms::toggle_checkbox(&mut src.document.lock().unwrap(), clicked);
                 }
-                // ADR-016 M2.2c-3: async-safe form mutation вЂ” see ToggleCheckbox.
+                // ADR-016 M2.2c-3: async-safe form mutation — see ToggleCheckbox.
                 self.relayout_form();
             }
             forms::FormClickAction::OpenColorPicker(id) => {
@@ -582,7 +582,7 @@ impl Lumen {
                 // method already dispatched used to reach a `click` listener on
                 // `document` that flipped `open` a second time, so a real mouse
                 // click on a `<summary>` left `<details>` exactly as it found it
-                // вЂ” and fired two `toggle` events about the change that did not
+                // — and fired two `toggle` events about the change that did not
                 // happen. That listener is gone; JS is only *told* what changed.
                 let was_open = self.layout_source.as_ref().is_some_and(|src| {
                     src.document
@@ -592,13 +592,13 @@ impl Lumen {
                 if let Some(src) = self.layout_source.as_mut() {
                     forms::toggle_details_open(&mut src.document.lock().unwrap(), id);
                 }
-                // HTML LS В§4.11.1 attribute change steps for `open` вЂ” the queued
+                // HTML LS §4.11.1 attribute change steps for `open` — the queued
                 // `toggle` event and the exclusive-accordion pass. Routing them
                 // through the shim instead of dispatching a bare `Event('toggle')`
                 // here is what makes the native click and every scripted write to
                 // `open` one mechanism.
-                // ADR-016 M2.2c-2d: fire-and-forget С‡РµСЂРµР· РјР°СЂС€СЂСѓС‚РёР·Р°С‚РѕСЂ вЂ” РїРѕРґ
-                // С„Р»Р°РіРѕРј off-UI-thread, Р±РµР· С„Р»Р°РіР° Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ.
+                // ADR-016 M2.2c-2d: fire-and-forget через маршрутизатор — под
+                // флагом off-UI-thread, без флага байт-идентично.
                 #[cfg(feature = "v8")]
                 route_eval_js(
                     self.engine_thread.as_ref(),
@@ -611,7 +611,7 @@ impl Lumen {
                 );
                 // ADR-016 M2.2c-3: <details> open flip already applied to the
                 // document (the routed `toggle` event above only notifies JS); no
-                // geometry is read after в†’ route the reflow off-thread.
+                // geometry is read after → route the reflow off-thread.
                 self.relayout_form();
             }
             forms::FormClickAction::SlideRange(id) => {
@@ -628,11 +628,11 @@ impl Lumen {
                 }
                 // ADR-016 M2.2c-3: range value applied to the document (the
                 // pre-relayout `find_box_rect` read is against the old layout to map
-                // the click x в†’ value); no post-relayout read в†’ off-thread.
+                // the click x → value); no post-relayout read → off-thread.
                 self.relayout_form();
             }
             forms::FormClickAction::SubmitForm(submit_node) => {
-                // Phase 3: HTML5 form submission algorithm integration вЂ”
+                // Phase 3: HTML5 form submission algorithm integration —
                 // constraint validation, encoding and navigation all live in
                 // `run_form_submission`, shared with script-initiated submits.
                 let form_node = self.layout_source.as_ref().and_then(|src| {
@@ -644,11 +644,11 @@ impl Lumen {
                 }
             }
             forms::FormClickAction::Nothing => {
-                // в”Ђв”Ђ Link click в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-                // No form control was activated вЂ” check if
+                // ── Link click ───────────────────────────
+                // No form control was activated — check if
                 // the clicked node is inside an <a href>.
                 // Use source_node (text node inside inline element) so find_link_href
-                // can walk up and find the <a> parent: text в†’ <a href="вЂ¦"> в†’ found.
+                // can walk up and find the <a> parent: text → <a href="…"> → found.
                 // Falls back to r.node for non-inline boxes.
                 // The `target` attribute rides along with the href (BUG-480
                 // slice 24): a page link can name an existing frame the same

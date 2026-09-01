@@ -10,15 +10,15 @@
 use crate::*;
 
 impl Lumen {
-    /// РЎРѕС…СЂР°РЅРёС‚СЊ С‚РµРєСѓС‰СѓСЋ СЃС‚СЂР°РЅРёС†Сѓ РІ bfcache Рё СЃС‚РµРє РЅР°РІРёРіР°С†РёРё,
-    /// Р·Р°С‚РµРј Р·Р°РіСЂСѓР·РёС‚СЊ `source` РєР°Рє РЅРѕРІСѓСЋ СЃС‚СЂР°РЅРёС†Сѓ.
-    /// РћС‡РёС‰Р°РµС‚ `nav_fwd` (Р°РЅР°Р»РѕРі Р±СЂР°СѓР·РµСЂР° РїСЂРё РЅР°РІРёРіР°С†РёРё РІРїРµСЂС‘Рґ РёР· СЃРµСЂРµРґРёРЅС‹ РёСЃС‚РѕСЂРёРё).
+    /// Сохранить текущую страницу в bfcache и стек навигации,
+    /// затем загрузить `source` как новую страницу.
+    /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
     pub(crate) fn navigate_to(&mut self, source: PageSource) {
-        // ADR-016 M2.2c-2d: nav dispatch (fire-and-forget) С‡РµСЂРµР· `route_task_js` +
-        // read-after-eval intercept-С‡С‚РµРЅРёРµ С‡РµСЂРµР· `route_query_js`. РџРѕРґ С„Р»Р°РіРѕРј
-        // (`LUMEN_ENGINE_THREAD=1`) dispatch СѓС…РѕРґРёС‚ off-UI-thread РѕРґРЅРёРј `task`, Р°
-        // Р±Р»РѕРєРёСЂСѓСЋС‰РёР№ `query` РІСЃС‚Р°С‘С‚ РІ РѕС‡РµСЂРµРґСЊ **РїРѕСЃР»Рµ** РЅРµРіРѕ вЂ” read-after-eval
-        // РїРѕСЂСЏРґРѕРє СЃРѕС…СЂР°РЅС‘РЅ; Р±РµР· С„Р»Р°РіР° вЂ” РїСЂРµР¶РЅРёРµ СЃРёРЅС…СЂРѕРЅРЅС‹Рµ РІС‹Р·РѕРІС‹, Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ.
+        // ADR-016 M2.2c-2d: nav dispatch (fire-and-forget) через `route_task_js` +
+        // read-after-eval intercept-чтение через `route_query_js`. Под флагом
+        // (`LUMEN_ENGINE_THREAD=1`) dispatch уходит off-UI-thread одним `task`, а
+        // блокирующий `query` встаёт в очередь **после** него — read-after-eval
+        // порядок сохранён; без флага — прежние синхронные вызовы, байт-идентично.
         {
             let url = source.url_str().unwrap_or("").to_string();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
@@ -55,7 +55,7 @@ impl Lumen {
         // be attributed to it in the health journal.
         health_log::set_current_url(&source.describe());
         self.hint.close();
-        // BUG-835: a page that has a JS runtime is parked *whole* вЂ” the runtime
+        // BUG-835: a page that has a JS runtime is parked *whole* — the runtime
         // goes into `parked_pages` alive, so back/forward restores a document
         // whose timers, listeners and closures still exist. The frozen-DOM path
         // below stays for pages without JS, where reinstalling a fresh runtime
@@ -99,7 +99,7 @@ impl Lumen {
         //
         // BUG-834: this does NOT make the document salvageable. Coming back
         // re-parses the page from its source, so the document object, its
-        // listeners, timers and closures are all gone вЂ” HTML LS В§7.4.6 calls
+        // listeners, timers and closures are all gone — HTML LS §7.4.6 calls
         // that a discarded document, which must hear `unload` and must report
         // `pagehide.persisted === false`. Only the parked and frozen paths above
         // retain anything, so `persisted` is deliberately left untouched here
@@ -118,9 +118,9 @@ impl Lumen {
                 title: self.title.clone(),
             });
         }
-        // HTML LS В§7.4.5вЂ“В§7.4.6: run the full unload sequence on the outgoing
-        // page вЂ” `beforeunload`, then `pagehide` в†’ `visibilityState = 'hidden'`
-        // в†’ `unload`. `persisted = true` signals the document was retained
+        // HTML LS §7.4.5–§7.4.6: run the full unload sequence on the outgoing
+        // page — `beforeunload`, then `pagehide` → `visibilityState = 'hidden'`
+        // → `unload`. `persisted = true` signals the document was retained
         // (parked/frozen above), which is also its salvageable state: such a
         // page gets `pagehide` but no `unload`, and its listeners can skip
         // teardown they would redo on `pageshow`. BUG-834.
@@ -152,11 +152,11 @@ impl Lumen {
         self.reload();
     }
 
-    /// РџРµСЂРµР№С‚Рё РЅР° `source`, Р·Р°РјРµРЅСЏСЏ С‚РµРєСѓС‰СѓСЋ Р·Р°РїРёСЃСЊ РёСЃС‚РѕСЂРёРё (Р±РµР· push РІ back-stack).
-    /// РђРЅР°Р»РѕРі `history.replaceState` / `location.replace()` РІ Р±СЂР°СѓР·РµСЂРµ.
+    /// Перейти на `source`, заменяя текущую запись истории (без push в back-stack).
+    /// Аналог `history.replaceState` / `location.replace()` в браузере.
     pub(crate) fn navigate_replace(&mut self, source: PageSource) {
-        // ADR-016 M2.2c-2d: СЃРј. `navigate_to` вЂ” dispatch С‡РµСЂРµР· `route_task_js`,
-        // intercept-С‡С‚РµРЅРёРµ С‡РµСЂРµР· `route_query_js` (read-after-eval РїРѕСЂСЏРґРѕРє РїРѕРґ С„Р»Р°РіРѕРј).
+        // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
+        // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
         {
             let url = source.url_str().unwrap_or("").to_string();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
@@ -196,15 +196,15 @@ impl Lumen {
         // BUG-352: `navigate_replace` doesn't route through `commit_nav_state`
         // (that call updates JS's `window.navigation`, not needed for a plain
         // `location.replace()`-style navigation), so it needs its own chrome
-        // refresh вЂ” see `commit_nav_state`'s doc comment for why this matters.
+        // refresh — see `commit_nav_state`'s doc comment for why this matters.
         self.relayout_chrome_host();
         self.reload();
     }
 
-    /// РџРµСЂРµР№С‚Рё РЅР° РїСЂРµРґС‹РґСѓС‰СѓСЋ СЃС‚СЂР°РЅРёС†Сѓ РІ РёСЃС‚РѕСЂРёРё (Alt+Left).
+    /// Перейти на предыдущую страницу в истории (Alt+Left).
     pub(crate) fn navigate_back(&mut self) {
-        // ADR-016 M2.2c-2d: СЃРј. `navigate_to` вЂ” dispatch С‡РµСЂРµР· `route_task_js`,
-        // intercept-С‡С‚РµРЅРёРµ С‡РµСЂРµР· `route_query_js` (read-after-eval РїРѕСЂСЏРґРѕРє РїРѕРґ С„Р»Р°РіРѕРј).
+        // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
+        // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
             j.eval_js("_lumen_dispatch_navigate('traverse', '', true, false)");
         });
@@ -276,9 +276,9 @@ impl Lumen {
         }
 
         // Full-document navigation: restore page and reload.
-        // HTML LS В§7.4.5вЂ“В§7.4.6: run the full unload sequence on the current
-        // page вЂ” `beforeunload`, then `pagehide` в†’ `visibilityState = 'hidden'`
-        // в†’ `unload`. BUG-834: the outgoing document is retained only on the
+        // HTML LS §7.4.5–§7.4.6: run the full unload sequence on the current
+        // page — `beforeunload`, then `pagehide` → `visibilityState = 'hidden'`
+        // → `unload`. BUG-834: the outgoing document is retained only on the
         // parked-page branch below, so that same condition IS its salvageable
         // state and decides both the `persisted` flag and whether `unload`
         // fires at all. Computed here (before the sequence) rather than read
@@ -310,14 +310,14 @@ impl Lumen {
             same_doc_state_json: if cur_state != "null" { Some(cur_state) } else { None },
             nav_key: self.current_nav_key.clone(),
         });
-        // BUG-835: a live parked page wins over every frozen/snapshot payload вЂ”
+        // BUG-835: a live parked page wins over every frozen/snapshot payload —
         // it is the only restore path that brings the document's JS state back.
         if let Some(url) = prev.source.url_str().map(str::to_owned)
             && self.has_parked_page(&url)
         {
             // Park the document being left as well, so Forward restores it alive
             // too instead of reloading it from scratch. Eligibility was already
-            // resolved above as `outgoing_parkable` вЂ” re-querying it here would
+            // resolved above as `outgoing_parkable` — re-querying it here would
             // let it disagree with the `persisted` flag just reported to the page.
             if outgoing_parkable {
                 self.park_current_page();
@@ -352,7 +352,7 @@ impl Lumen {
                     BfCachePayload::HtmlSnapshot(ref html) => {
                         let base_url = url.to_owned();
                         self.source = PageSource::Snapshot { html: html.clone(), base_url };
-                        // Restored from bfcache в†’ the next `pageshow` is `persisted=true`.
+                        // Restored from bfcache → the next `pageshow` is `persisted=true`.
                         self.pending_pageshow_persisted = true;
                         Some((entry.scroll_x, entry.scroll_y))
                     }
@@ -370,7 +370,7 @@ impl Lumen {
         // Restore scroll position from bfcache (or from nav entry if no bfcache hit).
         // U-1: reload() is now asynchronous (the page resets scroll at LoadDone),
         // so stash the offset for `apply_loaded_page` to apply instead of setting
-        // it here вЂ” a direct assignment would be clobbered when LoadDone arrives.
+        // it here — a direct assignment would be clobbered when LoadDone arrives.
         let (sx, sy) = restored_scroll.unwrap_or((prev.scroll_x, prev.scroll_y));
         self.pending_restore_scroll = Some((sx, sy));
         if let Some(traversal) = post_reload_traversal {
@@ -381,10 +381,10 @@ impl Lumen {
         self.commit_nav_state();
     }
 
-    /// РџРµСЂРµР№С‚Рё РЅР° СЃР»РµРґСѓСЋС‰СѓСЋ СЃС‚СЂР°РЅРёС†Сѓ РІ РёСЃС‚РѕСЂРёРё (Alt+Right).
+    /// Перейти на следующую страницу в истории (Alt+Right).
     pub(crate) fn navigate_forward(&mut self) {
-        // ADR-016 M2.2c-2d: СЃРј. `navigate_to` вЂ” dispatch С‡РµСЂРµР· `route_task_js`,
-        // intercept-С‡С‚РµРЅРёРµ С‡РµСЂРµР· `route_query_js` (read-after-eval РїРѕСЂСЏРґРѕРє РїРѕРґ С„Р»Р°РіРѕРј).
+        // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
+        // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
             j.eval_js("_lumen_dispatch_navigate('traverse', '', true, false)");
         });
@@ -451,7 +451,7 @@ impl Lumen {
         }
 
         // Full-document forward navigation.
-        // HTML LS В§7.4.5вЂ“В§7.4.6: mirror of `navigate_back` вЂ” the full unload
+        // HTML LS §7.4.5–§7.4.6: mirror of `navigate_back` — the full unload
         // sequence, with the parked-page branch below as the salvageable state
         // (BUG-834).
         let outgoing_parkable = next
@@ -478,7 +478,7 @@ impl Lumen {
             same_doc_state_json: if cur_state != "null" { Some(cur_state) } else { None },
             nav_key: self.current_nav_key.clone(),
         });
-        // BUG-835: mirror of `navigate_back` вЂ” a live parked page wins.
+        // BUG-835: mirror of `navigate_back` — a live parked page wins.
         if let Some(url) = next.source.url_str().map(str::to_owned)
             && self.has_parked_page(&url)
         {
@@ -517,7 +517,7 @@ impl Lumen {
                     BfCachePayload::HtmlSnapshot(ref html) => {
                         let base_url = url.to_owned();
                         self.source = PageSource::Snapshot { html: html.clone(), base_url };
-                        // Restored from bfcache в†’ the next `pageshow` is `persisted=true`.
+                        // Restored from bfcache → the next `pageshow` is `persisted=true`.
                         self.pending_pageshow_persisted = true;
                         Some((entry.scroll_x, entry.scroll_y))
                     }
@@ -532,7 +532,7 @@ impl Lumen {
         };
         // Forward entry becomes the new current: preserve its nav key.
         self.current_nav_key = next.nav_key;
-        // U-1: stash scroll offset for `apply_loaded_page` (async reload вЂ” see
+        // U-1: stash scroll offset for `apply_loaded_page` (async reload — see
         // navigate_back for rationale).
         let (sx, sy) = restored_scroll.unwrap_or((next.scroll_x, next.scroll_y));
         self.pending_restore_scroll = Some((sx, sy));
@@ -548,19 +548,19 @@ impl Lumen {
     /// forward) as a SINGLE logical step (HTML LS history traversal): the
     /// intermediate entries of a multi-step `history.go(n)` are skipped without
     /// rendering, and only the destination entry fires `popstate` (same-document)
-    /// or reloads (full-document) вЂ” exactly one observable event, delivered by the
+    /// or reloads (full-document) — exactly one observable event, delivered by the
     /// final `navigate_back` / `navigate_forward`. An out-of-range `delta` is a
     /// no-op (per spec, a step outside the history range does nothing).
     ///
     /// This is the single authority for JS-initiated traversal: `history.go` /
     /// `back` / `forward` queue a delta that the shell drains into this method, so
     /// the real `nav_back` / `nav_fwd` stacks (not the JS read-cache mirror) decide
-    /// what actually happens вЂ” eliminating the multi-step `go` drift where the JS
+    /// what actually happens — eliminating the multi-step `go` drift where the JS
     /// mirror moved its cursor but the shell stacks did not.
     ///
     /// Cross-document unification: if the shuffle passes through a
     /// full-document entry en route to a same-document destination, the
-    /// currently loaded document is stale relative to that destination вЂ”
+    /// currently loaded document is stale relative to that destination —
     /// `self.traversal_crossed_document` flags this for `navigate_back`/
     /// `navigate_forward`, which reload the correct document first and defer
     /// the `popstate`/URL update via `pending_post_reload_traversal`.

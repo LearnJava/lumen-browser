@@ -158,9 +158,9 @@ impl ContainerStore {
     }
 }
 
-/// РР·РІР»РµС‡СЊ origin (`scheme://host[:port]`) РёР· URL-СЃС‚СЂРѕРєРё (7D.2). Р”Р»СЏ file://
-/// РёР»Рё РЅРµРІР°Р»РёРґРЅС‹С… URL РІРѕР·РІСЂР°С‰Р°РµС‚ `None`. РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РєР°Рє РєР»СЋС‡
-/// `ContainerStore` РґР»СЏ cookie/storage РїР°СЂС‚РёС†РёРѕРЅРёСЂРѕРІР°РЅРёСЏ.
+/// Извлечь origin (`scheme://host[:port]`) из URL-строки (7D.2). Для file://
+/// или невалидных URL возвращает `None`. Используется как ключ
+/// `ContainerStore` для cookie/storage партиционирования.
 pub(crate) fn origin_of_url(url: &str) -> Option<String> {
     let parsed = lumen_core::url::Url::parse(url).ok()?;
     lumen_network::Origin::from_url(&parsed).ok().map(|o| o.to_string())

@@ -28,8 +28,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        // M0.1 (ADR-016): С„РёРЅР°Р»СЊРЅР°СЏ СЃРµСЃСЃРёРѕРЅРЅР°СЏ СЃРІРѕРґРєР° РІСЂРµРјС‘РЅ РєР°РґСЂРѕРІ. РџРµС‡Р°С‚Р°РµС‚СЃСЏ
-        // С‚РѕР»СЊРєРѕ РµСЃР»Рё frame-log С‡С‚Рѕ-С‚Рѕ РЅР°РєРѕРїРёР» (`LUMEN_FRAME_LOG>=1`).
+        // M0.1 (ADR-016): финальная сессионная сводка времён кадров. Печатается
+        // только если frame-log что-то накопил (`LUMEN_FRAME_LOG>=1`).
         if let Some(summary) = self.frame_stats.summary() {
             eprintln!("{summary} (session exit)");
         }
@@ -43,9 +43,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         self.on_about_to_wait(event_loop);
     }
 
-    /// Handle raw device events вЂ” used for Pointer Lock raw mouse delta.
+    /// Handle raw device events — used for Pointer Lock raw mouse delta.
     ///
-    /// W3C Pointer Lock L2 В§6.3: when locked, `DeviceEvent::MouseMotion` delivers
+    /// W3C Pointer Lock L2 §6.3: when locked, `DeviceEvent::MouseMotion` delivers
     /// relative mouse movement without OS acceleration or clipping.  Shell dispatches
     /// `mousemove`/`pointermove` with `movementX`/`movementY` to the locked element.
     fn device_event(
@@ -79,9 +79,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 dy as i32,
                 self.mod_flags(),
             );
-            // ADR-016 M2.2c-2d: fire-and-forget void eval СѓС…РѕРґРёС‚ С‡РµСЂРµР·
-            // РјР°СЂС€СЂСѓС‚РёР·Р°С‚РѕСЂ вЂ” РїРѕРґ С„Р»Р°РіРѕРј off-UI-thread, Р±РµР· С„Р»Р°РіР° Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ
-            // РїСЂРµР¶РЅРµРјСѓ `ctx.eval_js(&script)` (script РїРѕСЃС‚СЂРѕРµРЅ РґРѕ РјР°СЂС€СЂСѓС‚РёР·Р°С†РёРё).
+            // ADR-016 M2.2c-2d: fire-and-forget void eval уходит через
+            // маршрутизатор — под флагом off-UI-thread, без флага байт-идентично
+            // прежнему `ctx.eval_js(&script)` (script построен до маршрутизации).
             route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
         }
     }
@@ -104,11 +104,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // Mirror the close into JS so `leavepictureinpicture` fires
                     // and `document.pictureInPictureElement` clears (video PiP),
                     // and so Document PiP's `PictureInPictureWindow.close()`
-                    // runs too (P3-pip) вЂ” the same OS window may have been
+                    // runs too (P3-pip) — the same OS window may have been
                     // opened by either side, and each guards itself so only
                     // the truly-active one does anything. ADR-016 M2.2c-2d:
-                    // fire-and-forget void eval С‡РµСЂРµР· РјР°СЂС€СЂСѓС‚РёР·Р°С‚РѕСЂ вЂ” РїРѕРґ
-                    // С„Р»Р°РіРѕРј off-UI-thread, Р±РµР· С„Р»Р°РіР° Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ.
+                    // fire-and-forget void eval через маршрутизатор — под
+                    // флагом off-UI-thread, без флага байт-идентично.
                     #[cfg(feature = "v8")]
                     route_eval_js(
                         self.engine_thread.as_ref(),
@@ -155,7 +155,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
 
         // Document Picture-in-Picture (slice 1): same routing as video PiP
-        // above вЂ” events for this second window are fully handled here and
+        // above — events for this second window are fully handled here and
         // never fall through to the main-window logic.
         if self.doc_pip_os.as_ref().is_some_and(|p| p.window.id() == window_id) {
             match event {
@@ -212,7 +212,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
             WindowEvent::Resized(size) => {
                 // Windows fires Resized(0, 0) when the window is minimized.
-                // Skip resize + relayout entirely вЂ” the layout stays valid at
+                // Skip resize + relayout entirely — the layout stays valid at
                 // the last non-zero size and will be refreshed on restore.
                 if size.width == 0 || size.height == 0 {
                     return;
@@ -224,18 +224,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // CC-4: re-lay-out the engine-drawn chrome at the new window
                 // size.
                 self.relayout_chrome_host();
-                // HTML В§8.1.5.1, С€Р°Рі 13: ResizeObserver delivery.
+                // HTML §8.1.5.1, шаг 13: ResizeObserver delivery.
                 // JS-observers are delivered inside relayout() via deliver_layout_observers().
                 // The shell runtime.deliver_observer_records delivers Rust-level observers.
                 self.runtime
                     .deliver_observer_records(runtime::ObserverKind::Resize);
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                // РћРєРЅРѕ РїРµСЂРµС‚Р°С‰РёР»Рё РЅР° РјРѕРЅРёС‚РѕСЂ СЃ РґСЂСѓРіРёРј DPI. Surface РЅРµ РїРµСЂРµСЃРѕР·РґР°С‘Рј вЂ”
-                // winit РѕС‚РґР°СЃС‚ РЅРѕРІС‹Р№ physical inner_size С‡РµСЂРµР· РїРѕСЃР»РµРґСѓСЋС‰РёР№
-                // `WindowEvent::Resized`; Р·РґРµСЃСЊ С‚РѕР»СЊРєРѕ РѕР±РЅРѕРІР»СЏРµРј РєРѕСЌС„С„РёС†РёРµРЅС‚,
-                // РїРѕ РєРѕС‚РѕСЂРѕРјСѓ shader РґРµР»РёС‚ РєРѕРѕСЂРґРёРЅР°С‚С‹, С‡С‚РѕР±С‹ 1 CSS px РѕСЃС‚Р°Р»СЃСЏ
-                // СЂР°РІРµРЅ scale_factor device px.
+                // Окно перетащили на монитор с другим DPI. Surface не пересоздаём —
+                // winit отдаст новый physical inner_size через последующий
+                // `WindowEvent::Resized`; здесь только обновляем коэффициент,
+                // по которому shader делит координаты, чтобы 1 CSS px остался
+                // равен scale_factor device px.
                 if let Some(r) = self.renderer.as_mut() {
                     r.set_scale_factor(scale_factor);
                 }
@@ -247,12 +247,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 self.modifiers = winit_modifiers_state(&new_mods);
             }
             WindowEvent::ThemeChanged(theme) => {
-                // OS switched lightв†”dark. Update the stored preference and re-run
+                // OS switched light↔dark. Update the stored preference and re-run
                 // layout: it re-evaluates `@media (prefers-color-scheme)` and pushes
                 // the new value to JS matchMedia listeners via
                 // deliver_media_query_changes(.., self.dark_mode). ADR-016 M2.2b-4:
                 // an OS theme flip is async-safe (a whole-page restyle with no
-                // synchronous read of page geometry afterwards вЂ” matchMedia delivery
+                // synchronous read of page geometry afterwards — matchMedia delivery
                 // rides `apply_relayout_result`, and `dark_mode` is captured by the
                 // off-thread job), so route it through `relayout_chrome()`.
                 let dark = platform::dark_mode::theme_prefers_dark(Some(theme));
@@ -291,7 +291,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.hovered_nid = None;
                     // ADR-016 M2.2b-8: clearing `:hover` on cursor-leave is the
                     // same async-safe restyle as the in-window hover flip
-                    // (M2.2b-5) вЂ” no synchronous geometry read; the leave events
+                    // (M2.2b-5) — no synchronous geometry read; the leave events
                     // above target the old node, not this reflow. Route off-thread.
                     self.relayout_chrome();
                     self.request_redraw();
@@ -325,12 +325,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.refresh_frames(None);
                 }
                 self.gesture.cancel();
-                // Р”СЂР°Рі РїСЂРѕРґРѕР»Р¶Р°РµС‚СЃСЏ РґР°Р¶Рµ РєРѕРіРґР° РєСѓСЂСЃРѕСЂ РІС‹С€РµР» РёР· РѕРєРЅР° вЂ” winit
-                // РїСЂРѕРґРѕР»Р¶РёС‚ СЃР»Р°С‚СЊ CursorMoved-СЃРѕР±С‹С‚РёСЏ Р·Р° РїСЂРµРґРµР»Р°РјРё client area,
-                // РїРѕРєР° Р·Р°Р¶Р°С‚Р° РєРЅРѕРїРєР°. РЎР±СЂРѕСЃРёРј drag С‚РѕР»СЊРєРѕ РЅР° MouseInput Release
-                // РёР»Рё РµСЃР»Рё СЃРѕР±С‹С‚РёСЏ РїСЂРµРєСЂР°С‚СЏС‚СЃСЏ (РјС‹ РЅРµ РїРѕР»СѓС‡РёРј MouseInput, РЅРѕ
-                // РїРѕРІС‚РѕСЂРЅС‹Р№ CursorEntered/CursorMoved РѕР¶РёРІСЏС‚ drag вЂ” РґРѕРїСѓСЃС‚РёРјРѕ
-                // РґР»СЏ Phase 0).
+                // Драг продолжается даже когда курсор вышел из окна — winit
+                // продолжит слать CursorMoved-события за пределами client area,
+                // пока зажата кнопка. Сбросим drag только на MouseInput Release
+                // или если события прекратятся (мы не получим MouseInput, но
+                // повторный CursorEntered/CursorMoved оживят drag — допустимо
+                // для Phase 0).
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 self.on_mouse_input(event_loop, state, button)

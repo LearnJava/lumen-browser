@@ -13,22 +13,22 @@
 
 use crate::*;
 
-/// EventSink, РєРѕС‚РѕСЂС‹Р№ РїРµС‡Р°С‚Р°РµС‚ СЃРµС‚РµРІС‹Рµ СЃРѕР±С‹С‚РёСЏ РІ stdout вЂ” СЌС‚Рѕ Рё РµСЃС‚СЊ
-/// В«network logВ» Phase 0, СЂРµР°Р»РёР·СѓСЋС‰РёР№ РїСЂРёРЅС†РёРї в„–4 В«РєР°Р¶РґС‹Р№ РёСЃС…РѕРґСЏС‰РёР№ Р±Р°Р№С‚
-/// РІРёРґРµРЅВ». РџРѕР·Р¶Рµ Р·Р°РјРµРЅРёС‚СЃСЏ РЅР° СЃС‚СЂСѓРєС‚СѓСЂРёСЂРѕРІР°РЅРЅС‹Р№ UI-Р»РѕРіРіРµСЂ.
+/// EventSink, который печатает сетевые события в stdout — это и есть
+/// «network log» Phase 0, реализующий принцип №4 «каждый исходящий байт
+/// виден». Позже заменится на структурированный UI-логгер.
 pub(crate) struct StdoutEventSink;
 
 impl EventSink for StdoutEventSink {
     fn emit(&self, event: &Event) {
-        // РЎРµС‚РµРІРѕР№ Р»РѕРі РёРґС‘С‚ РІ stderr, С‡С‚РѕР±С‹ stdout dump-СЂРµР¶РёРјРѕРІ РѕСЃС‚Р°РІР°Р»СЃСЏ С‡РёСЃС‚С‹Рј
-        // (РЅР° РЅС‘Рј вЂ” С‚РѕР»СЊРєРѕ СЃРµСЂРёР°Р»РёР·РѕРІР°РЅРЅС‹Р№ СЂРµР·СѓР»СЊС‚Р°С‚ pipeline-Р°). Р’ РѕРєРѕРЅРЅРѕРј
-        // СЂРµР¶РёРјРµ СЂР°Р·РЅРёС†Р° РЅРµРІРёРґРёРјР°: РѕР±Р° РїРѕС‚РѕРєР° РїРѕРїР°РґР°СЋС‚ РІ С‚РµСЂРјРёРЅР°Р».
+        // Сетевой лог идёт в stderr, чтобы stdout dump-режимов оставался чистым
+        // (на нём — только сериализованный результат pipeline-а). В оконном
+        // режиме разница невидима: оба потока попадают в терминал.
         match event {
-            Event::RequestStarted { url, .. } => eprintln!("в†’ GET {url}"),
-            Event::RequestCompleted { url, status, .. } => eprintln!("в†ђ {status} {url}"),
-            Event::RequestBlocked { url, reason, .. } => eprintln!("вњ— {url} ({reason})"),
+            Event::RequestStarted { url, .. } => eprintln!("→ GET {url}"),
+            Event::RequestCompleted { url, status, .. } => eprintln!("← {status} {url}"),
+            Event::RequestBlocked { url, reason, .. } => eprintln!("✗ {url} ({reason})"),
             Event::RequestFailed { url, stage, reason, .. } => {
-                eprintln!("вњ— {url} ({}: {reason})", stage.as_str());
+                eprintln!("✗ {url} ({}: {reason})", stage.as_str());
             }
             Event::SubresourceHintFound { url, kind, priority } => {
                 let label = match kind {
@@ -45,13 +45,13 @@ impl EventSink for StdoutEventSink {
                     FetchPriority::Medium => "medium",
                     FetchPriority::Low => "low",
                 };
-                eprintln!("в¤· preload {label} [{prio}] {url}");
+                eprintln!("⤷ preload {label} [{prio}] {url}");
             }
             Event::FormSubmit { method, action, body, .. } => {
                 if body.is_empty() {
-                    eprintln!("вЉў form {method} {action}");
+                    eprintln!("⊢ form {method} {action}");
                 } else {
-                    eprintln!("вЉў form {method} {action} body={body}");
+                    eprintln!("⊢ form {method} {action} body={body}");
                 }
             }
             _ => {}

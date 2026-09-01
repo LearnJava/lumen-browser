@@ -12,17 +12,17 @@ use crate::*;
 /// Returns the portable directory for per-origin IndexedDB SQLite files,
 /// creating it if it does not exist.
 ///
-/// Path: `<exe_dir>/data/idb/` via [`adblock::browser_data_dir`] вЂ” the project's
+/// Path: `<exe_dir>/data/idb/` via [`adblock::browser_data_dir`] — the project's
 /// portable-data convention (user decision 2026-06-16: keep all browser data in
 /// the browser folder, never in OS dirs like `%APPDATA%`/`~/.config`).
 ///
-/// Returns `None` when directory creation fails вЂ” the caller falls back to
+/// Returns `None` when directory creation fails — the caller falls back to
 /// ephemeral in-memory IDB storage for the session.
 pub(crate) fn lumen_idb_dir() -> Option<std::path::PathBuf> {
     let dir = adblock::browser_data_dir().join("idb");
 
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("idb: РЅРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ РґРёСЂРµРєС‚РѕСЂРёСЋ {}: {e}", dir.display());
+        eprintln!("idb: не удалось создать директорию {}: {e}", dir.display());
         return None;
     }
     Some(dir)
@@ -43,9 +43,9 @@ pub(crate) fn ls_store_for_base(
 /// The `sessionStorage` partition for `base` (BUG-836).
 ///
 /// Same origin keying as [`ls_store_for_base`]; the difference is the map it
-/// draws from вЂ” `ss_storage` is per *tab* (cleared when a tab is opened, carried
+/// draws from — `ss_storage` is per *tab* (cleared when a tab is opened, carried
 /// in the tab snapshot), so the store survives navigation within the tab and
-/// nothing else, as HTML LS В§12.2 requires.
+/// nothing else, as HTML LS §12.2 requires.
 pub(crate) fn ss_store_for_base(
     base: &ResourceBase,
     ss_storage: &mut HashMap<String, Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
@@ -58,7 +58,7 @@ pub(crate) fn ss_store_for_base(
 
 /// Origin key (`scheme://host[:port]`) used to partition Web Storage.
 ///
-/// `None` for a `file:` base вЂ” an opaque origin gets no storage at all.
+/// `None` for a `file:` base — an opaque origin gets no storage at all.
 pub(crate) fn storage_origin_for_base(base: &ResourceBase) -> Option<String> {
     match base {
         ResourceBase::Url(u) => lumen_core::url::Url::parse(u).ok().map(|parsed| {
@@ -74,7 +74,7 @@ pub(crate) fn storage_origin_for_base(base: &ResourceBase) -> Option<String> {
 /// Returns `None` for `file:` bases (no origin storage).
 /// When `idb_dir` is `Some`, opens or creates a dedicated SQLite file
 /// `{idb_dir}/{sha256_hex(eTLD+1)[:16]}.db`; when `None` uses an ephemeral
-/// in-memory store (tests / headless вЂ” no cross-reload persistence).
+/// in-memory store (tests / headless — no cross-reload persistence).
 pub(crate) fn idb_store_for_base(
     base: &ResourceBase,
     idb_dir: Option<&std::path::Path>,
@@ -86,7 +86,7 @@ pub(crate) fn idb_store_for_base(
     idb_store_for_url(url, idb_dir)
 }
 
-/// Core IDB store builder вЂ” shared by [`idb_store_for_base`] and the reload path.
+/// Core IDB store builder — shared by [`idb_store_for_base`] and the reload path.
 pub(crate) fn idb_store_for_url(
     url: &str,
     idb_dir: Option<&std::path::Path>,

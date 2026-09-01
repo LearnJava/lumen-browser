@@ -20,7 +20,7 @@ fn take_content_area_with_no_salvage_ids_behaves_like_a_plain_prune() {
     assert!(lumen_layout::find_box_by_node(&layout, placeholder).is_none());
 }
 
-// в”Ђв”Ђ BUG-341 S22: the pruning is reversible в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── BUG-341 S22: the pruning is reversible ──────────────────────────────
 
 /// The salvage list `relayout_chrome_host` passes to `take_content_area`.
 const S22_SALVAGE_IDS: [&str; 5] = [
@@ -63,7 +63,7 @@ fn s22_assert_identical(
 ///
 /// Exactness is the contract, not a nicety. The restored tree becomes the
 /// next pass's `prev` basis, and `incremental_build_box` moves whole clean
-/// subtrees across from it вЂ” so whatever the basis is missing or has in the
+/// subtrees across from it — so whatever the basis is missing or has in the
 /// wrong slot, the produced document is missing or has in the wrong slot
 /// too (`bug341_s22_a_restored_basis_carries_the_whole_document_forward`
 /// measures exactly that failure). Comparing `style` by `Arc` identity is
@@ -75,8 +75,8 @@ fn s22_assert_identical(
 #[test]
 fn bug341_s22_restoring_a_detachment_reproduces_the_pristine_tree() {
     let (doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
 
@@ -104,7 +104,7 @@ fn bug341_s22_restoring_a_detachment_reproduces_the_pristine_tree() {
 ///
 /// Every salvageable popover (`#findBar`, `#downloadsPanel`, the CC-10
 /// modals) is `display:none` until opened, so it has no box and
-/// `take_content_area` salvages nothing вЂ” the gate above therefore runs
+/// `take_content_area` salvages nothing — the gate above therefore runs
 /// with an empty `salvage_paths` and would not notice if the salvage half
 /// of the restore were broken. This fixture nests one popover inside
 /// another element so the recorded paths are more than one level deep and
@@ -147,11 +147,11 @@ fn bug341_s22_restoring_puts_salvaged_popovers_back_where_they_came_from() {
 ///
 /// `restore` picks the arm: `true` is production (undo the pruning, hand
 /// the pristine tree on), `false` feeds the pruned tree straight back as
-/// the basis вЂ” the mistake this slice's design makes possible.
+/// the basis — the mistake this slice's design makes possible.
 fn s22_pipeline_cycles(restore: bool) -> (u32, u32, u64) {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
 
@@ -219,7 +219,7 @@ fn s22_pipeline_cycles(restore: bool) -> (u32, u32, u64) {
 /// a pruned basis does not merely cost a rebuild, it produces a **wrong
 /// tree**. `#contentArea`'s parent is clean on an interaction cycle, so
 /// `incremental_build_box` moves that whole subtree over from `prev` in
-/// O(1) вЂ” and a `prev` missing `#contentArea` therefore yields a document
+/// O(1) — and a `prev` missing `#contentArea` therefore yields a document
 /// missing `#contentArea`, permanently, 155 boxes instead of 318. It never
 /// recovers, because the next cycle's basis is that same tree.
 ///
@@ -240,17 +240,17 @@ fn bug341_s22_a_restored_basis_carries_the_whole_document_forward() {
     assert!(
         boxes_restored > boxes_pruned,
         "a restored basis must carry the whole document forward, a pruned one must not \
-             ({boxes_restored} vs {boxes_pruned}) вЂ” equal counts mean either the restore is a \
+             ({boxes_restored} vs {boxes_pruned}) — equal counts mean either the restore is a \
              no-op or the pruning is, and this gate is then measuring nothing",
     );
     // The steady-state cycle of the production arm must still be an
     // *incremental* one: a restore that quietly failed would fall back to
-    // a full layout, which also yields the whole document вЂ” and would be
+    // a full layout, which also yields the whole document — and would be
     // the slow frame this slice exists to avoid.
     assert!(
         built_restored < 100 && reused_restored > 0,
         "the restored arm's steady-state cycle must stay incremental \
-             (built={built_restored} reused={reused_restored}) вЂ” a full-layout fallback \
+             (built={built_restored} reused={reused_restored}) — a full-layout fallback \
              builds every one of the document's boxes",
     );
 }

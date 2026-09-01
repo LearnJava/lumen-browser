@@ -67,7 +67,7 @@ impl Lumen {
                 margin_lr: (margin_left + margin_right) / 2.0,
                 scale: 100, // Default scale: 100%
                 print_backgrounds: true, // print background graphics (JS print request default)
-                landscape: false, // BUG-420: JS `window.print()` carries no orientation вЂ” always portrait.
+                landscape: false, // BUG-420: JS `window.print()` carries no orientation — always portrait.
             },
         ) {
             Ok(page_count) => {
@@ -85,8 +85,8 @@ impl Lumen {
         }
     }
 
-    /// The engine chrome's "РџРµС‡Р°С‚СЊ" button (`ChromeAction::PrintConfirm`,
-    /// [BUG-420](../../../bugs/BUG-420-FIXED.md)) вЂ” exports the active tab
+    /// The engine chrome's "Печать" button (`ChromeAction::PrintConfirm`,
+    /// [BUG-420](../../../bugs/BUG-420-FIXED.md)) — exports the active tab
     /// with `PrintPanel`'s live settings (margin preset, scale, background
     /// graphics, orientation) and closes the dialog, mirroring
     /// `handle_print_request`'s JS `window.print()` path.

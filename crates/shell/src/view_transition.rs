@@ -21,13 +21,13 @@ pub(crate) struct ViewTransitionState {
     pub(crate) duration_ms: f64,
 }
 
-/// CSS View Transitions L1 вЂ” event kind emitted by `document.startViewTransition`.
+/// CSS View Transitions L1 — event kind emitted by `document.startViewTransition`.
 #[derive(Debug)]
 #[allow(dead_code)]
 pub(crate) enum ViewTransitionEvent {
-    /// Callback is about to run вЂ” shell should snapshot the current frame.
+    /// Callback is about to run — shell should snapshot the current frame.
     Begin,
-    /// Callback finished вЂ” shell should relayout and start the cross-fade animation.
+    /// Callback finished — shell should relayout and start the cross-fade animation.
     End,
     /// Transition was cancelled (nested startViewTransition or explicit abort).
     Cancel,

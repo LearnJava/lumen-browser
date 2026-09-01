@@ -22,7 +22,7 @@ fn entry(tag: &str) -> NavEntry {
 }
 
 /// Build a full-document `NavEntry` tagged by `tag` (`same_doc_state_json:
-/// None`) вЂ” a genuine page-load boundary, as opposed to [`entry`]'s
+/// None`) — a genuine page-load boundary, as opposed to [`entry`]'s
 /// same-document `pushState` entries.
 fn full_entry(tag: &str) -> NavEntry {
     NavEntry {
@@ -78,7 +78,7 @@ fn shift_forward_once() {
 
 #[test]
 fn shift_multi_step_all_same_document_does_not_cross() {
-    // steps=2 в†’ 1 hop: pops the top of `nav_back` ("e2") and stops there
+    // steps=2 → 1 hop: pops the top of `nav_back` ("e2") and stops there
     // without ever reaching a full-document entry.
     let mut nav_back = vec![entry("e1"), entry("e2")];
     let mut nav_fwd = vec![];
@@ -93,9 +93,9 @@ fn shift_multi_step_all_same_document_does_not_cross() {
 
 #[test]
 fn shift_multi_step_through_full_document_crosses() {
-    // dest (same-doc, belongs to `full`) в†ђ full (full-doc) в†ђ mid1 в†ђ mid2
-    // в†ђ cur. steps=4 в†’ 3 hops: pops mid2, mid1 (both same-doc, no cross),
-    // then `full` (full-doc) вЂ” the loaded document is now stale for
+    // dest (same-doc, belongs to `full`) ← full (full-doc) ← mid1 ← mid2
+    // ← cur. steps=4 → 3 hops: pops mid2, mid1 (both same-doc, no cross),
+    // then `full` (full-doc) — the loaded document is now stale for
     // `dest`, the entry left on top of `nav_back` for the caller's own
     // (real destination) pop.
     let mut nav_back = vec![

@@ -52,7 +52,7 @@ impl Lumen {
     /// the newtab page with the updated tile set.
     ///
     /// `RestoreClosed` reuses the cross-restart session-restore mechanism
-    /// (`restore_session`, backed by `session_store`) вЂ” Lumen has no separate
+    /// (`restore_session`, backed by `session_store`) — Lumen has no separate
     /// per-tab "closed tabs" stack, so this reopens the last persisted session
     /// snapshot wholesale instead of undoing a single tab close.
     pub(crate) fn apply_newtab_action(&mut self, action: newtab::NewtabAction) {

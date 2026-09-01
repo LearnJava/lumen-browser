@@ -15,7 +15,7 @@ impl Lumen {
     ///
     /// `false` when the page has an open WebSocket/EventSource connection, a
     /// registered `unload`/`beforeunload` handler ([`PersistentJs::has_bfcache_freeze_blocker`]),
-    /// or the response carried `Cache-Control: no-store` (HTML LS В§8.6).
+    /// or the response carried `Cache-Control: no-store` (HTML LS §8.6).
     /// Ineligible pages fall back to the existing HTML-snapshot bfcache path
     /// (no regression).
     pub(crate) fn bfcache_eligible(&self) -> bool {
@@ -32,7 +32,7 @@ impl Lumen {
         .unwrap_or(false)
     }
 
-    /// Thaw a frozen page вЂ” restore DOM + stylesheet, reinstall a fresh JS runtime
+    /// Thaw a frozen page — restore DOM + stylesheet, reinstall a fresh JS runtime
     /// (heap resume gated on 10C.2), re-layout, restore scroll/title, fire
     /// pageshow(persisted=true). Returns false when DOM bytes fail to decode or
     /// the stylesheet was evicted (caller falls back to a normal reload).
@@ -53,7 +53,7 @@ impl Lumen {
             // true when it was stored), so it was not no-store at that point.
             cache_control_no_store: false,
             // BUG-743: the frozen entry keeps the parsed sheet, not the CSS
-            // parts it was built from вЂ” nothing to rebuild a cascade out of.
+            // parts it was built from — nothing to rebuild a cascade out of.
             dynamic_css: None,
         });
         // Ph3 V8 migration S4.
@@ -71,7 +71,7 @@ impl Lumen {
                         .origin_str()
                         .and_then(|o| self.ls_storage.get(&o).cloned());
                     // BUG-836: a page thawed out of the bfcache is a document of
-                    // this tab like any other вЂ” it must see the tab's store.
+                    // this tab like any other — it must see the tab's store.
                     let ss_store = self.source.origin_str().map(|o| {
                         Arc::clone(self.ss_storage.entry(o).or_insert_with(|| {
                             Arc::new(std::sync::Mutex::new(lumen_core::WebStorage::default()))
@@ -113,8 +113,8 @@ impl Lumen {
         {
             self.set_js_ctx(None);
         }
-        // ADR-016 M2.2c-2b: Р·РµСЂРєР°Р»РёРј РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРЅС‹Р№ (РёР»Рё СЃР±СЂРѕС€РµРЅРЅС‹Р№) С…СЌРЅРґР» + DOM
-        // РІ РґРІРёР¶РєРѕРІС‹Р№ РїРѕС‚РѕРє РїРѕСЃР»Рµ bfcache-thaw.
+        // ADR-016 M2.2c-2b: зеркалим восстановленный (или сброшенный) хэндл + DOM
+        // в движковый поток после bfcache-thaw.
         self.sync_engine_js_state();
         self.relayout();
         self.scroll_x = entry.scroll_x;
@@ -135,14 +135,14 @@ impl Lumen {
         true
     }
 
-    /// Park the current page whole вЂ” JS runtime included вЂ” so a later
+    /// Park the current page whole — JS runtime included — so a later
     /// back/forward navigation can restore a *live* document (BUG-835).
     ///
     /// Only the handles are cloned: `js_ctx` and `layout_source` stay in place
     /// until the incoming navigation replaces them, so nothing about the page
     /// being navigated away from changes here. From the moment the shell swaps
-    /// in the next page's handle, the parked runtime stops being pumped вЂ”
-    /// `route_task_js`/`route_query_js` reach only the active one вЂ” which is
+    /// in the next page's handle, the parked runtime stops being pumped —
+    /// `route_task_js`/`route_query_js` reach only the active one — which is
     /// what pauses its timers and rAF callbacks for the duration of the park.
     ///
     /// Returns `false` (and parks nothing) for a page with no JS runtime or no
@@ -180,7 +180,7 @@ impl Lumen {
         true
     }
 
-    /// Whether a live page is parked for `url` вЂ” see [`Self::park_current_page`].
+    /// Whether a live page is parked for `url` — see [`Self::park_current_page`].
     pub(crate) fn has_parked_page(&self, url: &str) -> bool {
         self.parked_pages.iter().any(|(u, _)| u == url)
     }
@@ -191,7 +191,7 @@ impl Lumen {
     ///
     /// Unlike [`Self::bfcache_thaw`] the runtime is the page's own, so its
     /// timers, listeners and closures resume exactly where the park left them.
-    /// The caller must have set `self.source` to the page being restored first вЂ”
+    /// The caller must have set `self.source` to the page being restored first —
     /// `relayout`/`commit_nav_state` read it.
     pub(crate) fn restore_parked_page(&mut self, url: &str) -> bool {
         let Some(pos) = self.parked_pages.iter().position(|(u, _)| u == url) else {

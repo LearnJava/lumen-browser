@@ -70,7 +70,7 @@ impl Lumen {
     /// (expensive) relayout, scale the retained display list by
     /// `zoom_factor / laid_out_zoom_factor` on the backend for an instant
     /// response, then arm a debounced relayout so a burst of key presses reflows
-    /// only once вЂ” `ZOOM_RELAYOUT_DEBOUNCE_MS` after the last press.
+    /// only once — `ZOOM_RELAYOUT_DEBOUNCE_MS` after the last press.
     pub(crate) fn begin_zoom_preview(&mut self) {
         let scale = zoom::preview_scale(self.zoom_factor, self.laid_out_zoom_factor);
         if let Some(r) = self.renderer.as_mut() {

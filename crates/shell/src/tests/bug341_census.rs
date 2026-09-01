@@ -10,18 +10,18 @@ use super::*;
 ///
 /// S12's detail scopes established that a hover flip touching one subtree
 /// still re-lays-out ~1700 of ~3100 boxes, and that both `build_box` and
-/// `lay_out` are close to linear in that number вЂ” but not whether those
+/// `lay_out` are close to linear in that number — but not whether those
 /// boxes genuinely changed. This prints the partition
 /// (`reused_clean` / identity / style / child-count / descendant) plus the
 /// share of style rejects that vanish once the used-value writeback fields
 /// are discounted. Run: `cargo test -p lumen-shell --profile dev-release
 /// bug341_s13_graft_reject_census -- --ignored --nocapture`.
 #[test]
-#[ignore = "manual diagnostic (BUG-341 S13) вЂ” see doc comment for run command"]
+#[ignore = "manual diagnostic (BUG-341 S13) — see doc comment for run command"]
 fn bug341_s13_graft_reject_census() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     let model = cc12_bench_model("");
@@ -108,19 +108,19 @@ fn census_describe(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> String {
 /// S16 left `build_box` as the largest stage on `CC12_KEY` with the census
 /// "38 boxes built for one typed character, against 3 on a hover frame".
 /// That number is downstream of the cascade: every re-cascaded node loses
-/// its box (`must_recompute` в‡’ not in `clean_subtrees`). This prints, for
+/// its box (`must_recompute` ⇒ not in `clean_subtrees`). This prints, for
 /// the keystroke cycle, the mutation the tracker reported, the restyle
 /// root-set derived from it, how many nodes that root-set re-cascaded, and
-/// вЂ” the load-bearing column вЂ” how many of those re-cascaded nodes ended up
+/// — the load-bearing column — how many of those re-cascaded nodes ended up
 /// with a **different** `ComputedStyle` than the one they already had.
 /// Run: `cargo test -p lumen-shell --profile dev-release
 /// bug341_s17_keystroke_restyle_census -- --ignored --nocapture`.
 #[test]
-#[ignore = "manual diagnostic (BUG-341 S17) вЂ” see doc comment for run command"]
+#[ignore = "manual diagnostic (BUG-341 S17) — see doc comment for run command"]
 fn bug341_s17_keystroke_restyle_census() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
 
@@ -204,7 +204,7 @@ fn bug341_s17_keystroke_restyle_census() {
         // ended up with a different `ComputedStyle`?
         //
         // BUG-341 S24: read off the displaced-entry record rather than by
-        // diffing this pass's map against the previous one вЂ” the two are
+        // diffing this pass's map against the previous one — the two are
         // now the same map, and `replaced_styles` holds exactly the
         // "recomputed, and here is what it had before" pairs this census
         // used to reconstruct. Nodes with no previous entry (freshly
@@ -257,7 +257,7 @@ fn bug341_s17_keystroke_restyle_census() {
 /// the omnibox chain. Both then handed the copy to `mark_subtree_dirty`,
 /// which marked all 318 boxes dirty, and to `graft_geometry`, which compared
 /// each of them against the very box it had just been copied from and
-/// cleared the bit again вЂ” two full walks per frame to re-derive a fact the
+/// cleared the bit again — two full walks per frame to re-derive a fact the
 /// box-build stage already knew (`graft_geometry` was 0.4-1.0 ms of a ~2.6 ms
 /// keystroke cycle).
 ///
@@ -266,16 +266,16 @@ fn bug341_s17_keystroke_restyle_census() {
 /// (S8's lesson), and this fixture's machine noise is wider than the whole
 /// effect. `visited` is the number of boxes the graft really compared; it
 /// must collapse to the chain the keystroke rebuilt, not the document.
-/// Correctness вЂ” that the skipped subtrees really are identical, and that a
-/// skipped claim never reaches `lay_out` looking clean when it should not вЂ”
+/// Correctness — that the skipped subtrees really are identical, and that a
+/// skipped claim never reaches `lay_out` looking clean when it should not —
 /// is gated separately in `lumen-layout`'s
 /// `mutation_incremental_restyle_*_matches_full` differential tests, which
 /// compare geometry against a full pass.
 #[test]
 fn bug341_s18_reused_subtrees_are_not_re_walked_by_the_graft() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
@@ -298,7 +298,7 @@ fn bug341_s18_reused_subtrees_are_not_re_walked_by_the_graft() {
     assert!(
         last.visited <= 5,
         "{} boxes were compared against their own copies on a hover flip whose box tree came \
-             wholesale out of the previous cycle вЂ” before S18 this was the whole 318-box \
+             wholesale out of the previous cycle — before S18 this was the whole 318-box \
              document, and it must now be only the handful the box-build stage really rebuilt. \
              Census: {last:?}",
         last.visited,
@@ -323,7 +323,7 @@ fn bug341_s18_reused_subtrees_are_not_re_walked_by_the_graft() {
     );
     assert!(
         key_last.visited < 100,
-        "{} boxes were compared on a keystroke cycle that rebuilds ~28 of 318 вЂ” the graft is \
+        "{} boxes were compared on a keystroke cycle that rebuilds ~28 of 318 — the graft is \
              still walking subtrees the box-build stage copied verbatim. Census: {key_last:?}. If \
              chrome.html gains structure that genuinely rebuilds a large region on every \
              keystroke, record the count that structure accounts for; do not turn this into a \
@@ -336,11 +336,11 @@ fn bug341_s18_reused_subtrees_are_not_re_walked_by_the_graft() {
 /// rebuilds actually are.
 ///
 /// S17 drove the cascade down to a single recomputed element, yet the box
-/// tree still rebuilds ~28 boxes вЂ” so the residual is no longer about which
+/// tree still rebuilds ~28 boxes — so the residual is no longer about which
 /// nodes are invalidated but about the **unit of reuse**. `clean_subtrees`
 /// licenses cloning a whole element subtree, and a subtree containing one
 /// content-dirty node is not clonable, so every ancestor of `#omniInput`
-/// rebuilds вЂ” and each rebuild re-walks all of its own children.
+/// rebuilds — and each rebuild re-walks all of its own children.
 ///
 /// This prints the built list itself (per-node, classified) plus the
 /// per-ancestor breakdown: how many child slots each rebuilt ancestor has,
@@ -349,13 +349,13 @@ fn bug341_s18_reused_subtrees_are_not_re_walked_by_the_graft() {
 /// --profile dev-release bug341_s18_keystroke_box_build_census --
 /// --ignored --nocapture`.
 #[test]
-#[ignore = "manual diagnostic (BUG-341 S18) вЂ” see doc comment for run command"]
+#[ignore = "manual diagnostic (BUG-341 S18) — see doc comment for run command"]
 fn bug341_s18_keystroke_box_build_census() {
     use std::collections::HashSet;
 
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
 
@@ -444,7 +444,7 @@ fn bug341_s18_keystroke_box_build_census() {
             );
 
             // Partition the built list: which of them are on the
-            // un-clonable chain, which are non-elements (never eligible вЂ”
+            // un-clonable chain, which are non-elements (never eligible —
             // `clean_subtrees` records elements only), which are elements
             // the cascade re-ran, and which are left unexplained.
             let (mut on_chain, mut non_elem, mut recascaded, mut other) =
@@ -468,7 +468,7 @@ fn bug341_s18_keystroke_box_build_census() {
                 ("clean-but-built", &other),
             ] {
                 eprintln!(
-                    "[s18-census] {label}: {} вЂ” {}",
+                    "[s18-census] {label}: {} — {}",
                     list.len(),
                     list.iter()
                         .map(|&n| census_describe(&doc, n))
@@ -542,17 +542,17 @@ fn bug341_s18_keystroke_box_build_census() {
 /// the three the queue names: the reuse copy taken out of `prev` inside
 /// `build_box_or_reuse`, the index walk over `prev` that feeds it, and the
 /// pipeline's own `layout.clone()` that persists the next cycle's `prev`
-/// вЂ” each with the number of boxes it touched, so a later run can tell
+/// — each with the number of boxes it touched, so a later run can tell
 /// "the copy got cheaper" from "the region got smaller".
 ///
 /// Run: `cargo test -p lumen-shell --profile dev-release
 /// bug341_s19_copy_census -- --ignored --nocapture`.
 #[test]
-#[ignore = "manual diagnostic (BUG-341 S19) вЂ” see doc comment for run command"]
+#[ignore = "manual diagnostic (BUG-341 S19) — see doc comment for run command"]
 fn bug341_s19_copy_census() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
@@ -650,7 +650,7 @@ fn bug341_s19_copy_census() {
 ///
 /// The queue named two items for this slice (the pipeline's `layout.clone()`
 /// and `precompute_counters` rebuilding its `CounterMap` from scratch). This
-/// census exists to check that claim before a line is changed вЂ” the sixth
+/// census exists to check that claim before a line is changed — the sixth
 /// slice in a row to do so, and the fifth where the planned premise was not
 /// where the time was. It prints, per scenario and per cycle:
 ///
@@ -669,7 +669,7 @@ fn bug341_s19_copy_census() {
 ///   can be told from the traversal that fills it. Replayed rather than
 ///   timed in place: per-node timers around ~2500 hash operations would cost
 ///   a sizeable fraction of the stage they are measuring. **Since S24 the
-///   `styles` replay is a measure of removed cost, not incurred cost** вЂ” the
+///   `styles` replay is a measure of removed cost, not incurred cost** — the
 ///   pass carries that map rather than filling it, which the `carried=`
 ///   column reports (passes lived through, whether the pass had to sweep,
 ///   and how many entries it displaced);
@@ -681,11 +681,11 @@ fn bug341_s19_copy_census() {
 /// bug341_s20_stage_census -- --ignored --nocapture`. Add
 /// `LUMEN_PROFILE_TREE=1` for the engine's own stage split alongside it.
 #[test]
-#[ignore = "manual diagnostic (BUG-341 S20) вЂ” see doc comment for run command"]
+#[ignore = "manual diagnostic (BUG-341 S20) — see doc comment for run command"]
 fn bug341_s20_stage_census() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
@@ -819,7 +819,7 @@ fn bug341_s20_stage_census() {
 /// The replay reproduces exactly the inserts `counters::walk` performs: an
 /// `Arc` clone plus insert per element into `styles`, a counter-stack
 /// snapshot plus insert per element into `nodes`, and one insert per clean
-/// node into `clean_subtrees` вЂ” over the real sizes, so "the map costs X of
+/// node into `clean_subtrees` — over the real sizes, so "the map costs X of
 /// the stage's Y" is an honest attribution rather than a guess. `nodes` is
 /// not exposed, but it holds one entry per element, which is `styles`' size.
 fn census_report_counter_map(counters: &lumen_layout::CounterMap) {
@@ -838,7 +838,7 @@ fn census_report_counter_map(counters: &lumen_layout::CounterMap) {
     let styles_ns = t.elapsed().as_nanos() as u64;
 
     // BUG-341 S23: only nodes with a counter actually in scope store a
-    // snapshot, so this replays the map's real size вЂ” zero on `chrome.html`,
+    // snapshot, so this replays the map's real size — zero on `chrome.html`,
     // which declares no counters. Before S23 it was one empty-map clone per
     // element, and reading the count off `styles` hid exactly that.
     let snapshots = counters.counter_snapshot_count();
@@ -864,13 +864,13 @@ fn census_report_counter_map(counters: &lumen_layout::CounterMap) {
     // pays, and no earlier census separated it from `compute_style`. Uses
     // the same map, so the probe sequence and load factor are production's.
     // BUG-341 S26: the reuse path, split into the two things it does per
-    // element вЂ” the hash lookup that finds the entry, and the `Arc::clone`
+    // element — the hash lookup that finds the entry, and the `Arc::clone`
     // that takes it. The first attempt at this replay measured them together
     // and read as "the hash barely matters": `Arc::clone` touches the
     // refcount word of a 3.2 KB `ComputedStyle`, one cold cache line per
     // element and 2.6 MB of working set per pass, which swamped the hash on
     // both sides of the comparison being made. Split, it is the clone that
-    // costs 2-4Г— the lookup вЂ” and the walk never reads the style it is
+    // costs 2-4× the lookup — and the walk never reads the style it is
     // counting a reference to.
     let ids: Vec<lumen_dom::NodeId> = styles.keys().copied().collect();
     let t = std::time::Instant::now();
@@ -895,7 +895,7 @@ fn census_report_counter_map(counters: &lumen_layout::CounterMap) {
         "[s20-census]   CounterMap: carried passes={} swept={} displaced={} | \
              styles={} ({:.3}ms replay AVOIDED) snapshots={} ({:.3}ms replay) \
              clean_subtrees={} ({:.3}ms replay) reuse_lookups={} \
-             (lookup {:.3}ms / arc_clone {:.3}ms) вЂ” total replay {:.3}ms",
+             (lookup {:.3}ms / arc_clone {:.3}ms) — total replay {:.3}ms",
         styles.passes_lived(),
         styles.swept_last_pass(),
         counters.replaced_styles().len(),
@@ -916,7 +916,7 @@ fn census_report_counter_map(counters: &lumen_layout::CounterMap) {
 /// expensive first, with inclusive and self time.
 ///
 /// Self time subtracts the *direct* descendants that are themselves in the
-/// log вЂ” a built box's children are either built (logged, subtracted here)
+/// log — a built box's children are either built (logged, subtracted here)
 /// or moved in wholesale (O(1), nothing to subtract). Inclusive time on a
 /// container that rayon fanned out also covers the join wait, so a container
 /// whose self time is large is worth a second look before it is believed.
@@ -939,7 +939,7 @@ fn census_report_built_boxes(doc: &lumen_dom::Document, times: &[(lumen_dom::Nod
     let total: u64 = times.iter().map(|&(_, ns)| ns).sum();
     let self_total: i64 = rows.iter().map(|&(_, _, s)| s).sum();
     eprintln!(
-        "[s20-census]   built {} boxes, ОЈinclusive={:.3}ms ОЈself={:.3}ms",
+        "[s20-census]   built {} boxes, Σinclusive={:.3}ms Σself={:.3}ms",
         times.len(),
         total as f64 / 1e6,
         self_total as f64 / 1e6,
@@ -958,7 +958,7 @@ fn census_report_built_boxes(doc: &lumen_dom::Document, times: &[(lumen_dom::Nod
 /// per incremental pass, by whom, and how the rebuild's time splits.
 ///
 /// The queue named `CascadeIndex::build` the largest remaining item of the
-/// S20 census (0.12-0.21ms every pass, on both scenarios) вЂ” but that number
+/// S20 census (0.12-0.21ms every pass, on both scenarios) — but that number
 /// came from `take_cascade_index_stats`, which was **thread-local** while
 /// the code it counts is not: `build_box` fans flex/grid containers out over
 /// rayon workers, and every worker's `StyleEnvSnapshot::install` drops the
@@ -970,7 +970,7 @@ fn census_report_built_boxes(doc: &lumen_dom::Document, times: &[(lumen_dom::Nod
 /// - rebuild count and total nanoseconds, split into the four phases of
 ///   `CascadeIndex::build` (top-level `RuleIndex`, the per-block indexes,
 ///   the `@media`/`@supports` activity evaluation, the two sheet-wide
-///   predicate scans) вЂ” so "re-index the sheet" can be told apart from
+///   predicate scans) — so "re-index the sheet" can be told apart from
 ///   "re-evaluate the media queries";
 /// - the same figures for a pass run with the box-build fan-out suppressed
 ///   (`prev_index`-driven, so simply an incremental pass) versus a full
@@ -981,17 +981,17 @@ fn census_report_built_boxes(doc: &lumen_dom::Document, times: &[(lumen_dom::Nod
 /// Run: `cargo test -p lumen-shell --profile dev-release
 /// bug341_s21_cascade_index_census -- --ignored --nocapture`.
 #[test]
-#[ignore = "manual diagnostic (BUG-341 S21) вЂ” see doc comment for run command"]
+#[ignore = "manual diagnostic (BUG-341 S21) — see doc comment for run command"]
 fn bug341_s21_cascade_index_census() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
 
     eprintln!(
-        "[s21-census] sheet: rules={} media_blocks={} (ОЈ{} rules) layers={} supports={} scope={}",
+        "[s21-census] sheet: rules={} media_blocks={} (Σ{} rules) layers={} supports={} scope={}",
         sheet.rules.len(),
         sheet.media_rules.len(),
         sheet.media_rules.iter().map(|m| m.rules.len()).sum::<usize>(),
@@ -1094,7 +1094,7 @@ fn bug341_s21_cascade_index_census() {
     let full_ns = t.elapsed().as_nanos() as u64;
     let idx = lumen_layout::style::take_cascade_index_stats();
     eprintln!(
-        "[s21-census] FULL pass={:.3}ms | index rebuilds={} {:.3}ms (ОЈ over all threads)",
+        "[s21-census] FULL pass={:.3}ms | index rebuilds={} {:.3}ms (Σ over all threads)",
         full_ns as f64 / 1e6,
         idx.builds,
         idx.build_ns as f64 / 1e6,
@@ -1102,7 +1102,7 @@ fn bug341_s21_cascade_index_census() {
 }
 
 /// BUG-341 S27 census: the nodes a walk would have to enter if it only
-/// followed the *spine* вЂ” every ancestor of a dirty root or a
+/// followed the *spine* — every ancestor of a dirty root or a
 /// content-mutated node, plus those nodes' own subtrees.
 ///
 /// This is the exact size of the traversal the slice proposes, computed
@@ -1125,7 +1125,7 @@ fn census_spine_size(
         }
     }
     // A dirty root re-cascades its whole subtree, so those nodes are
-    // entered too вЂ” they are the part of the walk the slice cannot remove.
+    // entered too — they are the part of the walk the slice cannot remove.
     let mut forced = 0usize;
     for &root in dirty_roots {
         forced += census_subtree_nodes(doc, root);
@@ -1149,7 +1149,7 @@ fn census_bare_traversal(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> us
 }
 
 /// BUG-341 S27 census replay: the recursion plus one map restamp per
-/// element вЂ” the cheapest traversal that can still keep the S24 pass
+/// element — the cheapest traversal that can still keep the S24 pass
 /// ordinal exact, and therefore the candidate that changes no invariant.
 fn census_restamp_traversal(
     doc: &lumen_dom::Document,
@@ -1173,16 +1173,16 @@ fn census_restamp_traversal(
 ///
 /// S26 proved the traversal is the stage (50-70% of the pass) and removed
 /// it for the cycle whose delta names nobody. This asks the general
-/// question вЂ” on a cycle that *does* name somebody, how many of the nodes
+/// question — on a cycle that *does* name somebody, how many of the nodes
 /// it enters could no dirty root and no content mutation possibly reach.
 /// Run: `cargo test -p lumen-shell --profile dev-release
 /// bug341_s27_walk_census -- --ignored --nocapture`.
 #[test]
-#[ignore = "manual census (BUG-341 S27) вЂ” see doc comment for run command"]
+#[ignore = "manual census (BUG-341 S27) — see doc comment for run command"]
 fn bug341_s27_walk_census() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
@@ -1280,7 +1280,7 @@ fn bug341_s27_walk_census() {
                 cs.skipped_subtrees,
                 counters.styles().len(),
                 // BUG-341 S28: the S27 restamp count, not printed by this census
-                // before now вЂ” the S26 dense-keying note priced ~4200 NodeId lookups
+                // before now — the S26 dense-keying note priced ~4200 NodeId lookups
                 // per pass; `visited` + `confirmed` is what that traversal costs today.
                 cs.confirmed,
                 cs.confirm_misses,
@@ -1296,10 +1296,10 @@ fn bug341_s27_walk_census() {
 /// BUG-341 S30 census: how much of `lay_out_flex`'s residual double-layout
 /// (the "Fix scope note"/layout-result-cache idea, still unimplemented after
 /// S1-S29 closed the *cascade* gap) is real redundant work a `(node,
-/// constraints)`-keyed memoization cache could actually remove вЂ” measured
-/// *before* building that cache, per `docs/perf-method.md` В§1.
+/// constraints)`-keyed memoization cache could actually remove — measured
+/// *before* building that cache, per `docs/perf-method.md` §1.
 ///
-/// Runs a full (non-incremental) `layout_measured_hyp` pass per cycle вЂ”
+/// Runs a full (non-incremental) `layout_measured_hyp` pass per cycle —
 /// the S8 lesson: profile the path you'd actually change. `lay_out_flex`'s
 /// Step-1 probe and final placement pass are both inside this path, and the
 /// incremental cascade S3-S29 built does not touch `lay_out` itself once a
@@ -1307,10 +1307,10 @@ fn bug341_s27_walk_census() {
 /// Run: `cargo test -p lumen-shell --profile dev-release
 /// bug341_s30_flex_key_census -- --ignored --nocapture`.
 #[test]
-#[ignore = "manual census (BUG-341 S30) вЂ” see doc comment for run command"]
+#[ignore = "manual census (BUG-341 S30) — see doc comment for run command"]
 fn bug341_s30_flex_key_census() {
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
 
@@ -1351,18 +1351,18 @@ fn bug341_s30_flex_key_census() {
 // BUG-341 S32 built a general `(node, constraints)`-keyed layout-result
 // cache and measured its real wall-clock effect here
 // (`bug341_s32_layout_result_cache_share`, since removed along with the
-// mechanism it measured вЂ” see `lumen_layout::box_tree`'s `CV_AUTO_TOUCHED`
+// mechanism it measured — see `lumen_layout::box_tree`'s `CV_AUTO_TOUCHED`
 // doc comment for the full history and numbers). S33 replaced the general
 // cache with a targeted, zero-overhead probe-reuse fix scoped to
 // `lay_out_grid` and confirmed via `grep` that `crates/chrome/` contains
-// no `display: grid` anywhere вЂ” so neither the removed general cache nor
+// no `display: grid` anywhere — so neither the removed general cache nor
 // the new targeted fix was ever reachable from *this* fixture, and this
 // A/B harness had nothing left to measure a difference on at the time.
 // S34 then removed `SavedItemSizing` (the style-mutation dance this
 // comment pointed at as "the real next lever") in favor of
 // `UsedSizeOverride`, restoring flex-item style-`Arc` stability across a
 // Step-1 probe and final placement pass for 77.5% of repeat-key calls
-// (S35's honest, override-aware re-measurement of S34's number) вЂ” the
+// (S35's honest, override-aware re-measurement of S34's number) — the
 // precondition S32's cache needed but did not have. S36 resurrects the
 // general cache with `UsedSizeOverride` folded into its key (see
 // `LayoutResultKey`'s own doc comment) and re-measures below.
@@ -1370,8 +1370,8 @@ fn bug341_s30_flex_key_census() {
 /// BUG-341 S36: real wall-clock effect of the resurrected layout-result
 /// cache (`lumen_layout::box_tree::set_layout_result_cache`) on the same
 /// real chrome document/fixture S30-S35 used to measure the cache's
-/// premise, reported honestly per `docs/perf-method.md` В§1 ("key match is
-/// not the same as wall-clock win вЂ” measure the real thing before
+/// premise, reported honestly per `docs/perf-method.md` §1 ("key match is
+/// not the same as wall-clock win — measure the real thing before
 /// trusting the count"). S35 established a 77.5%-of-repeats ceiling for
 /// this fixture; this measures whether that ceiling is now enough to make
 /// the general cache net-positive, or whether clone cost still eats the
@@ -1379,10 +1379,10 @@ fn bug341_s30_flex_key_census() {
 /// Run: `cargo test -p lumen-shell --profile dev-release
 /// bug341_s36_layout_result_cache_share -- --ignored --nocapture`.
 #[test]
-#[ignore = "manual perf measurement (BUG-341 S36) вЂ” see doc comment for run command"]
+#[ignore = "manual perf measurement (BUG-341 S36) — see doc comment for run command"]
 fn bug341_s36_layout_result_cache_share() {
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     const WARMUP: usize = 10;
@@ -1410,7 +1410,7 @@ fn bug341_s36_layout_result_cache_share() {
             lumen_layout::set_interactive_state(hover, None, None);
 
             // Cache OFF, then cache ON, on the *same* document state this
-            // cycle вЂ” an A/B pair per cycle (docs/perf-method.md's own
+            // cycle — an A/B pair per cycle (docs/perf-method.md's own
             // "interleaved A/B compared on min" rule), not two separate
             // sequential blocks that would also capture drift/contention
             // as if it were the cache's own effect.
@@ -1446,7 +1446,7 @@ fn bug341_s36_layout_result_cache_share() {
     }
 }
 
-/// Number of element nodes in `id`'s subtree, inclusive вЂ” the "how wide is
+/// Number of element nodes in `id`'s subtree, inclusive — the "how wide is
 /// this dirty root" column of the S17 census.
 fn census_subtree_elements(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> usize {
     let node = doc.get(id);
@@ -1459,19 +1459,19 @@ fn census_subtree_elements(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> 
 /// (`#sbTabs`' first two children) instead of toggling `SIDEBAR`/`None`.
 /// S3 documented the toggle as a conservative-invalidation worst case
 /// (`:hover` invalidates every ancestor of both the old and new target
-/// when transitioning from "nothing hovered" вЂ” see BUG-341 "S3"); this is
+/// when transitioning from "nothing hovered" — see BUG-341 "S3"); this is
 /// the representative case real mouse movement over already-hovered
 /// chrome looks like, and where the incremental cascade is expected to
 /// pay off the most. Not a pass/fail gate (no separate budget exists for
-/// this shape yet) вЂ” a recorded measurement, run alongside CC-12's own
+/// this shape yet) — a recorded measurement, run alongside CC-12's own
 /// number for comparison. Run: `cargo test -p lumen-shell --profile
 /// dev-release bug341_s5_incremental_pipeline_share -- --ignored --nocapture`.
 #[test]
-#[ignore = "manual perf measurement (BUG-341 S5) вЂ” see doc comment for run command"]
+#[ignore = "manual perf measurement (BUG-341 S5) — see doc comment for run command"]
 fn bug341_s5_incremental_pipeline_share() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     let model = cc12_bench_model("");
@@ -1502,7 +1502,7 @@ fn bug341_s5_incremental_pipeline_share() {
 
 /// BUG-341 S3: standalone measurement of the incremental cascade's
 /// `precompute_counters` wall-time saving on the real chrome document, for
-/// a *representative* hover interaction вЂ” the pointer moving between two
+/// a *representative* hover interaction — the pointer moving between two
 /// sibling tab rows (`sbTabs`' first two children after `bind_model`
 /// populates 6 tabs, same fixture CC-12 uses). Not wired into
 /// `layout_measured_hyp`/`layout_mutation_incremental` yet (that pipeline
@@ -1515,25 +1515,25 @@ fn bug341_s5_incremental_pipeline_share() {
 /// (`SIDEBAR`/`None` toggle each cycle): `restyle_root_set_for_state_change`
 /// treats a transition where nothing was previously hovered as "every
 /// ancestor of the new target flipped its `:hover` boolean" (correct per
-/// CSS Selectors L4 В§4.3 вЂ” `:hover` matches ancestors too), which forces a
+/// CSS Selectors L4 §4.3 — `:hover` matches ancestors too), which forces a
 /// conservative full-subtree invalidation from close to the document root.
-/// That is real, correct behaviour of the v1 model (brief В§4 explicitly
+/// That is real, correct behaviour of the v1 model (brief §4 explicitly
 /// allows v1 to over-approximate), but it means CC-12's specific
 /// on/off-toggle interaction shape is close to a worst case for this
-/// model, not the common case вЂ” sibling-to-sibling hover motion (this
+/// model, not the common case — sibling-to-sibling hover motion (this
 /// test) is what most real mouse movement over already-hovered chrome
 /// looks like, and is where the model is supposed to pay off. Recorded
 /// here as the honest, representative number; see BUG-341 for the
 /// SIDEBAR/None-toggle number as a documented worst case instead of a
 /// silently-omitted one.
 ///
-/// `#[ignore]`d like CC-12 itself вЂ” a wall-clock number isn't a pass/fail
+/// `#[ignore]`d like CC-12 itself — a wall-clock number isn't a pass/fail
 /// gate here (no pipeline consumes the incremental path yet), it is a
-/// recorded measurement (brief В§5 S3: "measure `precompute_counters` share
+/// recorded measurement (brief §5 S3: "measure `precompute_counters` share
 /// drop"). Run: `cargo test -p lumen-shell --profile dev-release
 /// bug341_s3_incremental_cascade_precompute_share -- --ignored --nocapture`.
 #[test]
-#[ignore = "manual perf measurement (BUG-341 S3) вЂ” see doc comment for run command"]
+#[ignore = "manual perf measurement (BUG-341 S3) — see doc comment for run command"]
 fn bug341_s3_incremental_cascade_precompute_share() {
     use lumen_layout::counters::{
         incremental_precompute_counters, precompute_counters, set_incremental_restyle, RestyleDelta,
@@ -1585,7 +1585,7 @@ fn bug341_s3_incremental_cascade_precompute_share() {
     for i in 0..WARMUP + SAMPLES {
         lumen_layout::set_interactive_state(Some(tab_b), None, None);
         // BUG-341 S24: the cache is consumed by the pass, so each sample
-        // gets its own copy of the same baseline вЂ” built outside the timed
+        // gets its own copy of the same baseline — built outside the timed
         // region, exactly like the `prev` tree copy the S4 bench below makes.
         let delta = RestyleDelta {
             prev_styles: baseline.styles().clone(),
@@ -1606,7 +1606,7 @@ fn bug341_s3_incremental_cascade_precompute_share() {
     eprintln!("{}", incr_summary.display_with("BUG341_S3_INCREMENTAL_PRECOMPUTE"));
 
     // Correctness: same hover target, must match the full cascade exactly
-    // regardless of the wall-time saving (brief В§4 correctness gate).
+    // regardless of the wall-time saving (brief §4 correctness gate).
     lumen_layout::set_interactive_state(Some(tab_b), None, None);
     let full_after = precompute_counters(&doc, &sheet, viewport, &flat, false);
     lumen_layout::clear_interactive_state();
@@ -1627,15 +1627,15 @@ fn bug341_s3_incremental_cascade_precompute_share() {
     );
 }
 
-/// BUG-341 S4 вЂ” real-machine measurement companion to the S3 test above:
+/// BUG-341 S4 — real-machine measurement companion to the S3 test above:
 /// wall-clock `build_box` (full rebuild every call) vs
 /// `incremental_build_box` (whole-subtree reuse for the untouched region)
 /// on the same CC-12 chrome-preview hover transition. Feeds the S4
-/// recorded measurement (brief В§5 S4: "measure `build_box` share drop").
+/// recorded measurement (brief §5 S4: "measure `build_box` share drop").
 /// Run: `cargo test -p lumen-shell --profile dev-release
 /// bug341_s4_incremental_box_build_share -- --ignored --nocapture`.
 #[test]
-#[ignore = "manual perf measurement (BUG-341 S4) вЂ” see doc comment for run command"]
+#[ignore = "manual perf measurement (BUG-341 S4) — see doc comment for run command"]
 fn bug341_s4_incremental_box_build_share() {
     use lumen_layout::box_tree::{incremental_build_box, set_incremental_box_build};
     use lumen_layout::counters::{
@@ -1665,7 +1665,7 @@ fn bug341_s4_incremental_box_build_share() {
 
     // Baseline snapshot + box tree: tab_a hovered (the "prev" for reuse).
     // `incremental_build_box` with the flag off degrades to a plain full
-    // `build_box` (private to `lumen_layout`, not reachable from here) вЂ”
+    // `build_box` (private to `lumen_layout`, not reachable from here) —
     // used here as the full-rebuild reference/timing throughout. The very
     // first call has no real "prev" yet, so pass an unused placeholder
     // (never consulted while the flag is off).
@@ -1694,7 +1694,7 @@ fn bug341_s4_incremental_box_build_share() {
     for i in 0..WARMUP + SAMPLES {
         lumen_layout::set_interactive_state(Some(tab_b), None, None);
         let map = precompute_counters(&doc, &sheet, viewport, &flat, false);
-        // BUG-341 S19: each iteration gets its own `prev` вЂ” the incremental
+        // BUG-341 S19: each iteration gets its own `prev` — the incremental
         // path moves the reusable subtrees out of it, so a shared one would
         // be empty from the second sample on. The copy is outside the timed
         // region, exactly like the cascade above it.
@@ -1746,7 +1746,7 @@ fn bug341_s4_incremental_box_build_share() {
     eprintln!("{}", incr_summary.display_with("BUG341_S4_INCREMENTAL_BUILD_BOX"));
 
     // Correctness: same hover target, must match a full rebuild exactly
-    // regardless of the wall-time saving (brief В§4 correctness gate).
+    // regardless of the wall-time saving (brief §4 correctness gate).
     lumen_layout::set_interactive_state(Some(tab_b), None, None);
     let full_after_map = precompute_counters(&doc, &sheet, viewport, &flat, false);
     let full_after_tree = incremental_build_box(
@@ -1756,7 +1756,7 @@ fn bug341_s4_incremental_box_build_share() {
     let incr_tree = last_incr_tree.expect("at least one sample");
 
     // Structural sanity check only (node id + `BoxKind` discriminant +
-    // child count) вЂ” NOT full field/`Debug` equality: `ComputedStyle`
+    // child count) — NOT full field/`Debug` equality: `ComputedStyle`
     // carries a `custom_props: HashMap<String, String>` (CSS custom
     // properties, heavily used by this design-system chrome doc), and
     // `HashMap`'s `Debug` prints entries in iteration order, which two

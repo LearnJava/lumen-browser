@@ -9,31 +9,31 @@ use crate::*;
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn on_redraw_requested(&mut self) {
-        // HTML В§8.1.5.1 В«Update the renderingВ» вЂ” spec-correct order:
-        //   1.   scroll              в†ђ advance_scroll_anim + advance_momentum
-        //   1.5  scroll-driven anims в†ђ deliver_scroll_progress в†’ ScrollTimeline.currentTime
+        // HTML §8.1.5.1 «Update the rendering» — spec-correct order:
+        //   1.   scroll              ← advance_scroll_anim + advance_momentum
+        //   1.5  scroll-driven anims ← deliver_scroll_progress → ScrollTimeline.currentTime
         //   2.   CSS Animations + Transitions tick  (spec: update animations before rAF)
-        //   3.   rAF callbacks       в†ђ runtime.run_rendering_step + JS run_animation_frame
-        //   4.   layout invalidation в†ђ relayout() if dom_dirty after rAF
-        //        в†’ deliver_layout_observers() (ResizeObserver + IntersectionObserver)
-        //   5.   paint timing        в†ђ PerformanceObserver 'paint' entries
-        //   6.   paint               в†ђ r.render(...)
+        //   3.   rAF callbacks       ← runtime.run_rendering_step + JS run_animation_frame
+        //   4.   layout invalidation ← relayout() if dom_dirty after rAF
+        //        → deliver_layout_observers() (ResizeObserver + IntersectionObserver)
+        //   5.   paint timing        ← PerformanceObserver 'paint' entries
+        //   6.   paint               ← r.render(...)
         //
         // Scroll before CSS/rAF so callbacks read current scroll position.
-        // CSS animations/transitions before rAF: spec В§8.1.5.1 step В«update
-        // animations and send eventsВ» precedes В«run animation frame callbacksВ».
+        // CSS animations/transitions before rAF: spec §8.1.5.1 step «update
+        // animations and send events» precedes «run animation frame callbacks».
         let timestamp_ms =
             self.epoch.elapsed().as_secs_f64() * 1000.0;
 
-        // Р”РёР°РіРЅРѕСЃС‚РёРєР° РєР°РґСЂР° (LUMEN_FRAME_LOG=1): РїРѕР»РЅРѕРµ РІСЂРµРјСЏ
-        // RedrawRequested (С€Р°РіРё 1вЂ“6). Paint-С„Р°Р·Р° РѕС‚РґРµР»СЊРЅРѕ Р»РѕРіРёСЂСѓРµС‚СЃСЏ
-        // Р±СЌРєРµРЅРґРѕРј СЃС‚СЂРѕРєРѕР№ `[frame] paint вЂ¦`.
+        // Диагностика кадра (LUMEN_FRAME_LOG=1): полное время
+        // RedrawRequested (шаги 1–6). Paint-фаза отдельно логируется
+        // бэкендом строкой `[frame] paint …`.
         let frame_log_t0 =
             lumen_paint::frame_log_enabled().then(std::time::Instant::now);
 
-        // Warm-frame bench (LUMEN_BENCH): С‚Р°Р№РјРµСЂ РІСЃРµРіРѕ RedrawRequested,
-        // РІРєР»СЋС‡Р°СЏ skip-РїСѓС‚СЊ вЂ” РЅР° РЅС‘Рј РєР°Рє СЂР°Р· Рё РјРµСЂСЏРµС‚СЃСЏ С†РµРЅР° СЂРµС€РµРЅРёСЏ
-        // В«РЅРµ СЂРёСЃРѕРІР°С‚СЊВ» (СЃРј. crates/shell/src/bench_frames.rs).
+        // Warm-frame bench (LUMEN_BENCH): таймер всего RedrawRequested,
+        // включая skip-путь — на нём как раз и меряется цена решения
+        // «не рисовать» (см. crates/shell/src/bench_frames.rs).
         let bench_t0 = bench_frames::active().then(std::time::Instant::now);
 
         // Step 1: scroll update.
@@ -49,7 +49,7 @@ impl Lumen {
         // call when off); scroll_y is read into a local before routing so
         // the closure does not re-borrow `self`.
         //
-        // BUG-821: this is also CSSOM-View В§14 В«run the scroll stepsВ» вЂ”
+        // BUG-821: this is also CSSOM-View §14 «run the scroll steps» —
         // the one place that sees *every* page-scroll movement, whatever
         // started it (wheel, keys, scrollbar drag, touch momentum,
         // find-in-page, `window.scrollTo`). The `scroll` event is bound
@@ -60,11 +60,11 @@ impl Lumen {
         //
         // BUG-822: `scrollend` is the same step's second half. It is due
         // once the sequence has *stopped*, so it is gated on nothing
-        // still driving the position вЂ” a smooth animation, touch
+        // still driving the position — a smooth animation, touch
         // momentum, or a scrollbar thumb held under the cursor. An
         // instant scroll (`window.scrollTo`, find-in-page, a key jump
         // that lands immediately) is `moved && settled` and gets both
-        // events in this one frame, which CSSOM-View В§14 allows; an
+        // events in this one frame, which CSSOM-View §14 allows; an
         // animated one gets `scroll` per frame and a single `scrollend`
         // on the update that finished it, because `advance_scroll_anim`
         // /`advance_momentum` clear their animation on the very frame
@@ -87,40 +87,40 @@ impl Lumen {
                 }
             });
         }
-        // ADR-008 В§10E.4: after scroll, evict CPU-decoded images beyond gate zone.
+        // ADR-008 §10E.4: after scroll, evict CPU-decoded images beyond gate zone.
         self.try_discard_offscreen_images();
-        // Step 1.6: content-visibility: auto (BB-4) вЂ” РїСЂРѕРїСѓС‰РµРЅРЅС‹Р№ СѓР·РµР»
-        // РІРѕС€С‘Р» РІ СЂР°СЃС€РёСЂРµРЅРЅС‹Р№ viewport в†’ ratchet relevant + relayout.
+        // Step 1.6: content-visibility: auto (BB-4) — пропущенный узел
+        // вошёл в расширенный viewport → ratchet relevant + relayout.
         self.maybe_expand_cv_relevant();
-        // Step 1.65 (BUG-852): Рё Р·РґРµСЃСЊ Р¶Рµ вЂ” РµРґРёРЅСЃС‚РІРµРЅРЅР°СЏ С‚РѕС‡РєР° РІС‹РґР°С‡Рё
-        // `contentvisibilityautostatechange`. CSS Contain L2 В§4.1
-        // РѕРїСЂРµРґРµР»СЏРµС‚ СЂРµР»РµРІР°РЅС‚РЅРѕСЃС‚СЊ РІРЅСѓС‚СЂРё В«update the renderingВ» Рё
-        // РїСЂРѕСЃРёС‚ РїРѕСЃС‚Р°РІРёС‚СЊ СЃРѕР±С‹С‚РёРµ Р·Р°РґР°С‡РµР№; РѕС‡РµСЂРµРґСЊ РЅР°РїРѕР»РЅСЏСЋС‚ С‡РµС‚С‹СЂРµ
-        // РІС‹Р·РѕРІР° `refresh_cv_state` (Р·Р°РіСЂСѓР·РєР°, СЂРµР»РµР№Р°СѓС‚, РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёРµ,
-        // ratchet РІС‹С€Рµ), Р° JS-РєРѕРЅС‚РµРєСЃС‚ Рє СЌС‚РѕРјСѓ С€Р°РіСѓ СѓР¶Рµ РµСЃС‚СЊ РЅР° РІСЃРµС…
-        // РїСѓС‚СЏС… вЂ” РЅР° РґРІСѓС… РёР· РЅРёС… РІ РјРѕРјРµРЅС‚ СЃР°РјРѕРіРѕ `refresh_cv_state` РµС‰С‘
-        // РЅРµС‚.
+        // Step 1.65 (BUG-852): и здесь же — единственная точка выдачи
+        // `contentvisibilityautostatechange`. CSS Contain L2 §4.1
+        // определяет релевантность внутри «update the rendering» и
+        // просит поставить событие задачей; очередь наполняют четыре
+        // вызова `refresh_cv_state` (загрузка, релейаут, восстановление,
+        // ratchet выше), а JS-контекст к этому шагу уже есть на всех
+        // путях — на двух из них в момент самого `refresh_cv_state` ещё
+        // нет.
         #[cfg(feature = "v8")]
         self.deliver_cv_state_changes();
-        // Step 1.7 (BUG-735): РєР°СЂС‚РёРЅРєРё, РґРµРєРѕРґРёСЂРѕРІР°РЅРЅС‹Рµ streaming/
-        // РґРёРЅР°РјРёС‡РµСЃРєРёРј РїСѓС‚С‘Рј СЃ РїСЂРѕС€Р»РѕРіРѕ РєР°РґСЂР°, РѕС‚РґР°СЋС‚ DOM-Сѓ СЃРІРѕРё
-        // intrinsic-СЂР°Р·РјРµСЂС‹ (РєРѕР°Р»РµСЃС†РёСЂРѕРІР°РЅРЅРѕ: РѕРґРЅР° РїР°С‡РєР° вЂ” РѕРґРёРЅ СЂРµР»РµР№Р°СѓС‚).
+        // Step 1.7 (BUG-735): картинки, декодированные streaming/
+        // динамическим путём с прошлого кадра, отдают DOM-у свои
+        // intrinsic-размеры (коалесцированно: одна пачка — один релейаут).
         self.apply_stream_intrinsic_sizes();
 
-        // Fast-scroll РґРµРіСЂР°РґР°С†РёСЏ (EXPERIMENT.md В§2 СЃСЂРµР· 2, РїСЂРёРЅС†РёРї
-        // РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ 2026-07-10: С‡РµРј Р±С‹СЃС‚СЂРµРµ СЃРєСЂРѕР»Р», С‚РµРј РјРµРЅСЊС€Рµ
-        // РїРѕР»СЊР·РѕРІР°С‚РµР»СЋ РІР°Р¶РЅРѕ СЃРѕРґРµСЂР¶РёРјРѕРµ). РџСЂРё Р±С‹СЃС‚СЂРѕРј СЃРєСЂРѕР»Р»Рµ
-        // Р·Р°РјРѕСЂР°Р¶РёРІР°СЋС‚СЃСЏ РРЎРўРћР§РќРРљР РёР·РјРµРЅРµРЅРёР№ РєРѕРЅС‚РµРЅС‚Р° вЂ” С‚РёРєРё
-        // CSS-Р°РЅРёРјР°С†РёР№/transitions (Step 2), GIF (Step 2.5) Рё
-        // video-GIF (Step 2.6). Display list СЃС‚Р°РЅРѕРІРёС‚СЃСЏ
-        // scroll-СЃС‚Р°Р±РёР»СЊРЅС‹Рј, Рё РєР°РґСЂ СЃРєСЂРѕР»Р»Р° СѓС…РѕРґРёС‚ РІ page-compose HIT
-        // (~2 РјСЃ) РІРјРµСЃС‚Рѕ РјРѕРЅРѕР»РёС‚РЅРѕР№ РїРµСЂРµСЂРёСЃРѕРІРєРё. РђРЅРёРјР°С†РёРё time-based:
-        // РїСЂРё РІС‹С…РѕРґРµ РёР· СЂРµР¶РёРјР° РѕРЅРё СЃР°РјРё РґРѕРіРѕРЅСЏСЋС‚ С‚РµРєСѓС‰РµРµ РІСЂРµРјСЏ,
-        // В«РїР°СѓР·Р°В» РІРёРґРЅР° С‚РѕР»СЊРєРѕ РІРѕ РІСЂРµРјСЏ Р±С‹СЃС‚СЂРѕР№ РїСЂРѕРєСЂСѓС‚РєРё.
-        // Р“РёСЃС‚РµСЂРµР·РёСЃ РїРѕ EMA-СЃРєРѕСЂРѕСЃС‚Рё: РІС…РѕРґ в‰Ґ48 CSS px/РєР°РґСЂ (РїРѕР»РЅС‹Р№
-        // wheel-notch Р·Р° РєР°РґСЂ), РІС‹С…РѕРґ <12. Р Р°Р·РѕРІР°СЏ РїСЂРѕРєСЂСѓС‚РєР° РєРѕР»С‘СЃРёРєРѕРј
-        // РґР°С‘С‚ РѕРґРЅСѓ-РґРІРµ Р·Р°РјРѕСЂРѕР¶РµРЅРЅС‹С… РїР°СЂС‹ РєР°РґСЂРѕРІ, РїР»Р°РІРЅС‹Р№ С‚СЂРµРєРїР°Рґ РЅРµ
-        // РІС…РѕРґРёС‚ РІ СЂРµР¶РёРј РІРѕРІСЃРµ. LUMEN_NO_FAST_SCROLL_DEGRADE=1 вЂ” РІС‹РєР».
+        // Fast-scroll деградация (EXPERIMENT.md §2 срез 2, принцип
+        // пользователя 2026-07-10: чем быстрее скролл, тем меньше
+        // пользователю важно содержимое). При быстром скролле
+        // замораживаются ИСТОЧНИКИ изменений контента — тики
+        // CSS-анимаций/transitions (Step 2), GIF (Step 2.5) и
+        // video-GIF (Step 2.6). Display list становится
+        // scroll-стабильным, и кадр скролла уходит в page-compose HIT
+        // (~2 мс) вместо монолитной перерисовки. Анимации time-based:
+        // при выходе из режима они сами догоняют текущее время,
+        // «пауза» видна только во время быстрой прокрутки.
+        // Гистерезис по EMA-скорости: вход ≥48 CSS px/кадр (полный
+        // wheel-notch за кадр), выход <12. Разовая прокрутка колёсиком
+        // даёт одну-две замороженных пары кадров, плавный трекпад не
+        // входит в режим вовсе. LUMEN_NO_FAST_SCROLL_DEGRADE=1 — выкл.
         let scroll_step = (self.scroll_y - self.last_frame_scroll_y).abs();
         self.last_frame_scroll_y = self.scroll_y;
         self.scroll_velocity = 0.6 * self.scroll_velocity + 0.4 * scroll_step;
@@ -134,26 +134,26 @@ impl Lumen {
         if freeze_content_ticks
             && (self.anim_frame.is_some() || !self.animated_gifs.is_empty())
         {
-            // Р—Р°РјРѕСЂРѕР¶РµРЅРЅС‹Рј РёСЃС‚РѕС‡РЅРёРєР°Рј РЅСѓР¶РµРЅ Р¶РёРІРѕР№ С†РёРєР» РєР°РґСЂРѕРІ: РЅР°
-            // РєР°РґСЂРµ, РіРґРµ СЃРєРѕСЂРѕСЃС‚СЊ СѓРїР°РґС‘С‚ РЅРёР¶Рµ РїРѕСЂРѕРіР°, С‚РёРєРё
-            // РІРѕР·РѕР±РЅРѕРІСЏС‚СЃСЏ Рё Р°РЅРёРјР°С†РёРё РїСЂРѕРґРѕР»Р¶Р°С‚СЃСЏ.
+            // Замороженным источникам нужен живой цикл кадров: на
+            // кадре, где скорость упадёт ниже порога, тики
+            // возобновятся и анимации продолжатся.
             self.request_redraw();
         }
 
-        // BUG-405 СЃСЂРµР· 34 (РїСѓРЅРєС‚ 68 РѕСЃС‚Р°С‚РєР°): СЂР°Р·Р±РёРІРєР° РєР°РґСЂР° РїРѕ С€Р°РіР°Рј
-        // `RedrawRequested`. `[frame] total` РјРµСЂСЏРµС‚ РІРµСЃСЊ handler, Р°
-        // `[frame:wgpu] total` вЂ” С‚РѕР»СЊРєРѕ РїР°СЃСЃ РєРѕРјРїРѕР·РёС‚РѕСЂР°; РЅР° РєР°РґСЂРµ
-        // РџРћРџРђР”РђРќРРЇ РїРѕР»РѕСЃС‹ РјРµР¶РґСѓ РЅРёРјРё 3.6 РёР· 4.3 РјСЃ, Рё Сѓ РЅРёС… РЅРµ Р±С‹Р»Рѕ
-        // РЅРё РѕРґРЅРѕР№ СЃС‚Р°С‚СЊРё. РњРµС‚РєРё Р±РµСЂСѓС‚СЃСЏ С‚РѕР»СЊРєРѕ РїСЂРё `LUMEN_FRAME_LOG`
-        // (С‚Р° Р¶Рµ `Option<Instant>`, С‡С‚Рѕ Рё Сѓ `total`), РїРѕСЌС‚РѕРјСѓ С€С‚Р°С‚РЅС‹Р№
-        // РїСѓС‚СЊ РЅРµ РїР»Р°С‚РёС‚ Р·Р° РЅРёС… РЅРёС‡РµРіРѕ.
+        // BUG-405 срез 34 (пункт 68 остатка): разбивка кадра по шагам
+        // `RedrawRequested`. `[frame] total` меряет весь handler, а
+        // `[frame:wgpu] total` — только пасс композитора; на кадре
+        // ПОПАДАНИЯ полосы между ними 3.6 из 4.3 мс, и у них не было
+        // ни одной статьи. Метки берутся только при `LUMEN_FRAME_LOG`
+        // (та же `Option<Instant>`, что и у `total`), поэтому штатный
+        // путь не платит за них ничего.
         let mut marks = [0.0_f64; 6];
         if let Some(t0) = frame_log_t0 {
             marks[0] = t0.elapsed().as_secs_f64() * 1e3;
         }
 
-        // Step 1.5: CSS Scroll-Driven Animations вЂ” update ScrollTimeline.currentTime.
-        // Spec В§8.1.5.1 step В«update scroll-linked animationsВ» precedes CSS animations.
+        // Step 1.5: CSS Scroll-Driven Animations — update ScrollTimeline.currentTime.
+        // Spec §8.1.5.1 step «update scroll-linked animations» precedes CSS animations.
         // Compute root-viewport block/inline progress and deliver to JS.
         {
             let (p_y, p_x) = if let Some(lb) = &self.layout_box {
@@ -191,8 +191,8 @@ impl Lumen {
         // Step 2: CSS Animations + Transitions tick (spec order: before rAF).
         // Both schedulers are ticked once per frame and merged into a single
         // AnimationFrame. Transition values override @keyframes when both apply.
-        // РџСЂРё fast-scroll С‚РёРє РїСЂРѕРїСѓСЃРєР°РµС‚СЃСЏ: anim_frame РѕСЃС‚Р°С‘С‚СЃСЏ СЃ РїСЂРѕС€Р»С‹РјРё
-        // Р·РЅР°С‡РµРЅРёСЏРјРё в†’ РїРµСЂРµСЃРѕР±СЂР°РЅРЅС‹Р№ anim_dl РёРґРµРЅС‚РёС‡РµРЅ в†’ РєР»СЋС‡ РїРѕР»РѕСЃС‹ СЃС‚Р°Р±РёР»РµРЅ.
+        // При fast-scroll тик пропускается: anim_frame остаётся с прошлыми
+        // значениями → пересобранный anim_dl идентичен → ключ полосы стабилен.
         if !freeze_content_ticks
             && let (Some(lb), Some(src)) = (&self.layout_box, &self.layout_source)
         {
@@ -218,7 +218,7 @@ impl Lumen {
         }
 
         // Step 2b (CC-11, docs/tasks/p1-css-chrome.md): the chrome
-        // document's own Animations + Transitions tick вЂ” separate
+        // document's own Animations + Transitions tick — separate
         // schedulers from the page's (see
         // Self::chrome_animation_scheduler doc comment for why),
         // same merge-and-request-redraw pattern. Not gated on
@@ -249,11 +249,11 @@ impl Lumen {
                 if c_frame.overrides.is_empty() { None } else { Some(c_frame) };
         }
 
-        // Step 2.5: GIF animation вЂ” update GPU textures for frames that changed.
+        // Step 2.5: GIF animation — update GPU textures for frames that changed.
         // Uses the same `epoch` as rAF timestamps so GIF timing is consistent
         // with CSS animations and JS. Runs before rAF so JS can read correct img.
-        // РџСЂРё fast-scroll РєР°РґСЂС‹ GIF РЅРµ РѕР±РЅРѕРІР»СЏСЋС‚СЃСЏ (register_image Р±Р°РјРїР°РµС‚
-        // content_generation Рё СѓР±РёРІР°Р» Р±С‹ РєР»СЋС‡ РїРѕР»РѕСЃС‹ РєР°Р¶РґС‹Р№ С‚РёРє).
+        // При fast-scroll кадры GIF не обновляются (register_image бампает
+        // content_generation и убивал бы ключ полосы каждый тик).
         if !freeze_content_ticks && !self.animated_gifs.is_empty() {
             let elapsed_ms = self.epoch.elapsed().as_millis() as u64;
 
@@ -277,7 +277,7 @@ impl Lumen {
                 if let Some(r) = self.renderer.as_mut()
                     && let Err(e) = r.register_image(url.clone(), Arc::new(image))
                 {
-                    eprintln!("GIF РєР°РґСЂ {url}[{idx}]: РЅРµ Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅ: {e}");
+                    eprintln!("GIF кадр {url}[{idx}]: не зарегистрирован: {e}");
                 }
                 self.gif_last_frame.insert(url, idx);
             }
@@ -298,8 +298,8 @@ impl Lumen {
             }
         }
 
-        // Step 2.6: Video GIF animation вЂ” drain pending loads, advance frames.
-        // Р—Р°РјРѕСЂРѕР¶РµРЅРѕ РїСЂРё fast-scroll РїРѕ С‚РѕР№ Р¶Рµ РїСЂРёС‡РёРЅРµ, С‡С‚Рѕ Рё Step 2.5.
+        // Step 2.6: Video GIF animation — drain pending loads, advance frames.
+        // Заморожено при fast-scroll по той же причине, что и Step 2.5.
         if !freeze_content_ticks {
             let video_elapsed_ms = self.epoch.elapsed().as_millis() as u64;
             self.tick_video_gifs(video_elapsed_ms);
@@ -318,25 +318,25 @@ impl Lumen {
         // into a single batch (snapshot-pattern in JS shim). When RedrawRequested fires
         // faster than vsync (e.g. from scroll), we defer the batch without losing the
         // "pending" signal so it fires on the next eligible frame.
-        // Pass -1.0 в†’ JS captures performance.now() at batch start (DOMHighResTimeStamp).
-        // Pass 0.0 in deterministic mode в†’ frozen timestamp per HTML В§8.1.5.1.
-        // ADR-016 M2.2c-2d: СЃРЅРёРјР°РµРј РїСЂСЏРјС‹Рµ `self.js_ctx`-РѕР±СЂР°С‰РµРЅРёСЏ rAF-Р±Р°С‚С‡Р°
-        // (`has_raf_pending` read в†’ `route_query_js`, `run_animation_frame` void
-        // в†’ `route_task_js`). РџРѕРґ С„Р»Р°РіРѕРј (`LUMEN_ENGINE_THREAD=1`) С‡С‚РµРЅРёСЏ вЂ”
-        // Р±Р»РѕРєРёСЂСѓСЋС‰РёР№ `query`, Р±Р°С‚С‡ вЂ” `task` РІ РѕС‡РµСЂРµРґСЊ РјРµР¶РґСѓ РЅРёРјРё (РїРѕСЂСЏРґРѕРє
-        // has_raf_pending в†’ take_raf_pending в†’ run_animation_frame СЃРѕС…СЂР°РЅС‘РЅ, Р°
-        // РїРѕСЃР»РµРґСѓСЋС‰РёР№ Step 4 `take_dom_dirty`-query РІСЃС‚Р°С‘С‚ РїРѕСЃР»Рµ Р±Р°С‚С‡-`task`);
-        // Р±РµР· С„Р»Р°РіР° (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ) вЂ” РїСЂРµР¶РЅРёРµ СЃРёРЅС…СЂРѕРЅРЅС‹Рµ РІС‹Р·РѕРІС‹, Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ.
+        // Pass -1.0 → JS captures performance.now() at batch start (DOMHighResTimeStamp).
+        // Pass 0.0 in deterministic mode → frozen timestamp per HTML §8.1.5.1.
+        // ADR-016 M2.2c-2d: снимаем прямые `self.js_ctx`-обращения rAF-батча
+        // (`has_raf_pending` read → `route_query_js`, `run_animation_frame` void
+        // → `route_task_js`). Под флагом (`LUMEN_ENGINE_THREAD=1`) чтения —
+        // блокирующий `query`, батч — `task` в очередь между ними (порядок
+        // has_raf_pending → take_raf_pending → run_animation_frame сохранён, а
+        // последующий Step 4 `take_dom_dirty`-query встаёт после батч-`task`);
+        // без флага (по умолчанию) — прежние синхронные вызовы, байт-идентично.
         let raf_due = timestamp_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS;
         if self.engine_thread.is_some() {
-            // ADR-016 M2.3 (flag on): async rAF pump вЂ” never block the
+            // ADR-016 M2.3 (flag on): async rAF pump — never block the
             // redraw on the JS turn. `pump_raf_engine_thread` fires the
             // batch off-thread (guarded so at most one 200 ms turn is in
             // flight, regardless of scroll cadence) and, when a completed
             // turn left the DOM dirty, submits an **async** relayout whose
             // result lands via `poll_engine_commit`. Step 5's
             // `display_list.is_empty()` read may then latch paint-timing a
-            // frame late (acceptable under the async contract) вЂ” the
+            // frame late (acceptable under the async contract) — the
             // decisive win is that scroll no longer stalls behind the turn.
             if self.pump_raf_engine_thread(raf_due, timestamp_ms) {
                 self.request_redraw();
@@ -361,13 +361,13 @@ impl Lumen {
             }
             // BUG-271: callbacks that remain queued (animation loop or deferred
             // batch) are fired by the `about_to_wait` rAF pump on a WaitUntil timer
-            // вЂ” NOT by an unconditional `request_redraw` here. A pure rAF loop that
+            // — NOT by an unconditional `request_redraw` here. A pure rAF loop that
             // never mutates the DOM must not force a 60 fps repaint cycle; loops that
             // do mutate get a relayout + real paint from the pump.
 
-            // Step 4: layout invalidation вЂ” РµСЃР»Рё rAF-callback РёР·РјРµРЅРёР» DOM
-            // (setAttribute/textContent/appendChild/etc.), РґРµР»Р°РµРј relayout
-            // РїСЂРµР¶РґРµ С‡РµРј РєСЂР°СЃРёС‚СЊ, С‡С‚РѕР±С‹ paint РѕС‚СЂР°Р¶Р°Р» Р°РєС‚СѓР°Р»СЊРЅС‹Р№ DOM.
+            // Step 4: layout invalidation — если rAF-callback изменил DOM
+            // (setAttribute/textContent/appendChild/etc.), делаем relayout
+            // прежде чем красить, чтобы paint отражал актуальный DOM.
             // relayout() also delivers ResizeObserver + IntersectionObserver.
             // Step 5 below reads `display_list.is_empty()` synchronously
             // (PerformancePaintTiming), so this reflow is the synchronous
@@ -381,23 +381,23 @@ impl Lumen {
             }
         }
 
-        // Launch->first-frame metric (В§4 score table): fires on the
+        // Launch->first-frame metric (§4 score table): fires on the
         // first frame that has page content, present happens at the
-        // end of this same handler (В±1 frame accuracy is enough).
+        // end of this same handler (±1 frame accuracy is enough).
         bench_frames::log_first_frame_once(self.display_list.len());
 
         if let Some(t0) = frame_log_t0 {
             marks[3] = t0.elapsed().as_secs_f64() * 1e3;
         }
 
-        // Step 5: PerformancePaintTiming (W3C Paint Timing В§2).
+        // Step 5: PerformancePaintTiming (W3C Paint Timing §2).
         // Delivered once per page load; subsequent frames skip this block.
         // first-paint = first frame with any painted pixel (non-default bg).
         // first-contentful-paint = first frame with text, image, canvas, etc.
         // Phase 0: both fire on the first non-empty display list since
         // a page load. A page load resets both flags in apply_loaded_page.
         // ADR-016 M2.2c-2d: the `is_some()` gate is preserved (the delivered
-        // flags must only latch when a JS context exists вЂ” byte-identical to
+        // flags must only latch when a JS context exists — byte-identical to
         // the former `if let Some(js)`); the actual paint-timing calls are
         // fire-and-forget void, routed off-UI-thread under the flag.
         #[cfg(feature = "v8")]
@@ -417,34 +417,34 @@ impl Lumen {
             }
         }
 
-        // BUG-405 СЃСЂРµР· 37: РїРѕРґСЃС‚Р°С‚СЊРё С€Р°РіР° 6. РЎС‚Р°С‚СЊСЏ `build` РєР°РґСЂР°
-        // РџРћРџРђР”РђРќРРЇ (0.22вЂ“0.32 РјСЃ РїРѕ СЃСЂРµР·Сѓ 34) вЂ” РІС‚РѕСЂР°СЏ РїРѕ РІРµР»РёС‡РёРЅРµ
-        // РїРѕСЃР»Рµ РєРѕРјРїРѕР·РёС‚РЅРѕРіРѕ РїР°СЃСЃР° Рё РІС…РѕРґРёР»Р° С‚СѓРґР° РѕРґРЅРёРј С‡РёСЃР»РѕРј.
-        // `chrome` вЂ” СЂР°СЃРєР»Р°РґРєР° С…СЂРѕРјР° РїРѕ РєР»РёРї-РїРѕР»РѕСЃР°Рј РІРѕРєСЂСѓРі СЃС‚СЂР°РЅРёС†С‹,
-        // `sbar` вЂ” РїРѕР»РѕСЃР° РїСЂРѕРєСЂСѓС‚РєРё, `panels` вЂ” РІСЃРµ РѕСЃС‚Р°Р»СЊРЅС‹Рµ
-        // overlay-СЃС‚СЂРѕРёС‚РµР»Рё, РѕСЃС‚Р°С‚РѕРє РґРѕ `marks[4]` вЂ” С…РІРѕСЃС‚
-        // (split-view, РёРЅСЃРїРµРєС‚РѕСЂ, canvas-bg).
+        // BUG-405 срез 37: подстатьи шага 6. Статья `build` кадра
+        // ПОПАДАНИЯ (0.22–0.32 мс по срезу 34) — вторая по величине
+        // после композитного пасса и входила туда одним числом.
+        // `chrome` — раскладка хрома по клип-полосам вокруг страницы,
+        // `sbar` — полоса прокрутки, `panels` — все остальные
+        // overlay-строители, остаток до `marks[4]` — хвост
+        // (split-view, инспектор, canvas-bg).
         let mut bmarks = [0.0_f64; 3];
-        // РЎРєРѕР»СЊРєРѕ РєРѕРјР°РЅРґ С…СЂРѕРј СЃС‚РѕРёС‚ С€РµР»Р»Сѓ: (РґР»РёРЅР° СЃРЅРёРјРєР° chrome_dl,
-        // РЅРµРїСѓСЃС‚С‹С… РїРѕР»РѕСЃ, РёС‚РѕРі РїРѕСЃР»Рµ СЂР°СЃРєР»Р°РґРєРё). РҐСЂРѕРј РєРѕРїРёСЂСѓРµС‚СЃСЏ РІ
-        // РљРђР–Р”РЈР® РїРѕР»РѕСЃСѓ С†РµР»РёРєРѕРј, РїРѕСЌС‚РѕРјСѓ РёС‚РѕРі РєСЂР°С‚РµРЅ РґР»РёРЅРµ СЃРЅРёРјРєР° вЂ” Рё
-        // РёРјРµРЅРЅРѕ СЌС‚РѕС‚ РјРЅРѕР¶РёС‚РµР»СЊ РїР»Р°С‚РёС‚ РїРѕС‚РѕРј РїРµСЂРµРїРёСЃСЊ РїР°СЃСЃР° (СЃСЂРµР· 36:
-        // 132 РєРѕРјР°РЅРґС‹ overlay, РёР· РЅРёС… РјРµРЅСЏРµС‚СЃСЏ РѕРґРЅР°).
+        // Сколько команд хром стоит шеллу: (длина снимка chrome_dl,
+        // непустых полос, итог после раскладки). Хром копируется в
+        // КАЖДУЮ полосу целиком, поэтому итог кратен длине снимка — и
+        // именно этот множитель платит потом перепись пасса (срез 36:
+        // 132 команды overlay, из них меняется одна).
         let mut chrome_mix = (0_usize, 0_usize, 0_usize);
 
         // Step 6 (paint): build display list buffers and call renderer.
-        // Page-РїРѕР»РѕСЃР°: РёСЃС…РѕРґРЅС‹Р№ display list + highlight-FillRect-С‹
-        // РїРµСЂРµРґ СЃРІРѕРёРјРё DrawText (РєРѕРіРґР° find РѕС‚РєСЂС‹С‚). РџСЂРѕРєСЂСѓС‡РёРІР°РµС‚СЃСЏ.
-        // Overlay-РїРѕР»РѕСЃР°: find-bar + scrollbar вЂ” viewport-locked.
-        // Р‘РµР· find вЂ” page = self.display_list, overlay = С‚РѕР»СЊРєРѕ scrollbar.
-        // Resolved chrome palette for the active theme вЂ” passed to every
+        // Page-полоса: исходный display list + highlight-FillRect-ы
+        // перед своими DrawText (когда find открыт). Прокручивается.
+        // Overlay-полоса: find-bar + scrollbar — viewport-locked.
+        // Без find — page = self.display_list, overlay = только scrollbar.
+        // Resolved chrome palette for the active theme — passed to every
         // themed overlay panel so they follow the light/dark setting.
         // DS-14: the active profile's accent overrides the theme's own
-        // accent preset вЂ” profile (level 0) outranks the Appearance
-        // setting for this one field, matching "РїРµСЂРµРєР»СЋС‡РµРЅРёРµ РїСЂРѕС„РёР»РµР№
-        // РјРµРЅСЏРµС‚ ... accent РІСЃРµРіРѕ С…СЂРѕРјР°" in the DS-14 brief.
+        // accent preset — profile (level 0) outranks the Appearance
+        // setting for this one field, matching "переключение профилей
+        // меняет ... accent всего хрома" in the DS-14 brief.
         // DS-15: profile visual signatures (level-0 nested-frame rule).
-        // Name cloned up front вЂ” the border draw below needs it after
+        // Name cloned up front — the border draw below needs it after
         // several intervening `&mut self` overlay-builder calls, past
         // where a borrow of `self.profile_menu` would still be live.
         let active_profile_name: Option<String> =
@@ -474,7 +474,7 @@ impl Lumen {
                 );
                 // CC-9/CC-15-6: the find bar itself is drawn by the
                 // engine chrome (`#findBar`, bound in
-                // `Self::relayout_chrome_host`) вЂ” the legacy overlay
+                // `Self::relayout_chrome_host`) — the legacy overlay
                 // builder was deleted with the rollback flag. The
                 // highlighted-page overlay above is page content, not
                 // chrome, and stays unconditional.
@@ -484,14 +484,14 @@ impl Lumen {
             };
 
         // CC-4 (docs/tasks/p1-css-chrome.md): the engine-drawn chrome
-        // paints first вЂ” every legacy panel/scrollbar/find-bar/tab-bar/
+        // paints first — every legacy panel/scrollbar/find-bar/tab-bar/
         // toolbar built below still lands on top of it, painter's order
-        // (brief: "РѕСЃС‚Р°Р»СЊРЅРѕРµ РїРѕРєР° legacy РїРѕРІРµСЂС…"). Painted through 4
+        // (brief: "остальное пока legacy поверх"). Painted through 4
         // clip "frame" strips around the page-host rect (top/bottom/
         // left/right), not one plain copy: `#contentArea`'s ancestors
         // (`body{background:var(--surface-1); height:100vh}`) still emit
         // a full-window background box even with `#contentArea` itself
-        // pruned out of the layout tree (`relayout_chrome_host`) вЂ” an
+        // pruned out of the layout tree (`relayout_chrome_host`) — an
         // unclipped copy would paint that full-window background *over*
         // the real page, which renders separately (as `content`, so it
         // draws *under* `overlay_buf`) at exactly that rect. Clipping to
@@ -502,7 +502,7 @@ impl Lumen {
         // (`chrome_layout` stays `None`).
         // CC-11: patch chrome_dl with compositor-offloadable overrides
         // (opacity/transform/color/background-color) from the tick
-        // above вЂ” same to_compositor_frame() mechanism the page uses
+        // above — same to_compositor_frame() mechanism the page uses
         // for anim_dl (Step 6 below), rebuilt here since chrome_dl
         // itself is a cached snapshot from the last
         // relayout_chrome_host pass and isn't otherwise touched by
@@ -532,19 +532,19 @@ impl Lumen {
             let win_w = self.viewport_width_css();
             let win_h = self.window_height_css();
             // CC-7: `#omniInput` editing stays owned by the legacy
-            // `address_bar` state machine вЂ” no native `<input>` caret
+            // `address_bar` state machine — no native `<input>` caret
             // exists (`crates/chrome/src/model.rs` only binds the
             // *value*), so it's hand-painted here, on top of the
             // chrome document just painted above. Same simplified
             // "flush right of the field" placement `build_inline_field`
-            // used for the old overlay caret (`address_bar.rs`) вЂ” not
+            // used for the old overlay caret (`address_bar.rs`) — not
             // per-glyph-measured, and it never needed to be while
             // `AddressBarState` only supports append/backspace at the
             // end of the string. Hidden while a dropdown suggestion is
             // selected, mirroring the same overlay behavior.
             //
             // BUG-405 срез 50: computed up front, not inside the build
-            // branch below вЂ” it is part of `ChromeOverlayFrameCache`'s key
+            // branch below — it is part of `ChromeOverlayFrameCache`'s key
             // (a caret blink/selection change must miss the cache exactly
             // like a real `chrome_dl` change would).
             let caret_plan = if self.address_bar.is_open()
@@ -567,9 +567,9 @@ impl Lumen {
             };
             // BUG-405 срез 50 (п.85 "вариант (б)"): `chrome_dl` is provably
             // unchanged whenever `relayout_chrome_host` hasn't run since this
-            // cache was built (`chrome_layout_generation` вЂ” bumped
+            // cache was built (`chrome_layout_generation` — bumped
             // unconditionally by every pass, a safe superset of "content
-            // changed", see its own doc comment) вЂ” reuse the assembled
+            // changed", see its own doc comment) — reuse the assembled
             // segment with one `Vec` clone instead of re-copying `chrome_dl`
             // into up to 4 clip strips (`chrome_mix`'s multiplier). Never a
             // candidate while a chrome CSS transition/animation is live
@@ -604,11 +604,11 @@ impl Lumen {
             bmarks[0] = t0.elapsed().as_secs_f64() * 1e3;
         }
 
-        // Scrollbar РІСЃС‚Р°С‘С‚ РїРµСЂРµРґ find-bar РІ overlay-Р±СѓС„РµСЂРµ: СЂРёСЃСѓРµС‚СЃСЏ
-        // РїРµСЂРІС‹Рј = РЅР°С…РѕРґРёС‚СЃСЏ РїРѕРґ find-bar-РѕРј РІ painter's order. РћРЅРё РЅРµ
-        // РїРµСЂРµСЃРµРєР°СЋС‚СЃСЏ РїРѕ x (bar Р·Р°РЅРёРјР°РµС‚ Р»РµРІРµРµ `ww - 12`, scrollbar
-        // СЃРїСЂР°РІР° РѕС‚ `ww - 8`), С‚Р°Рє С‡С‚Рѕ С„Р°РєС‚РёС‡РµСЃРєРѕРіРѕ overdraw РЅРµС‚.
-        // --no-scrollbar РїРѕРґР°РІР»СЏРµС‚ РїРѕР»РѕСЃСѓ РґР»СЏ screenshot-РїР°Р№РїР»Р°Р№РЅР°.
+        // Scrollbar встаёт перед find-bar в overlay-буфере: рисуется
+        // первым = находится под find-bar-ом в painter's order. Они не
+        // пересекаются по x (bar занимает левее `ww - 12`, scrollbar
+        // справа от `ww - 8`), так что фактического overdraw нет.
+        // --no-scrollbar подавляет полосу для screenshot-пайплайна.
         if !self.no_scrollbar {
             let scrollbar_cmds = scrollbar::build_scrollbar_overlay(
                 self.scroll_y,
@@ -679,7 +679,7 @@ impl Lumen {
             }
         }
 
-        // <dialog> modal overlay (L-2) вЂ” ::backdrop + centered dialog above page.
+        // <dialog> modal overlay (L-2) — ::backdrop + centered dialog above page.
         if let Some(lb) = &self.layout_box {
             let doc =
                 self.layout_source.as_ref().map(|s| s.document.lock().unwrap());
@@ -703,13 +703,13 @@ impl Lumen {
             }
         }
 
-        // Compositor offload: РµСЃР»Рё РµСЃС‚СЊ Р°РєС‚РёРІРЅС‹Рµ Р°РЅРёРјР°С†РёРё СЃ opacity/transform/
-        // color/background-color вЂ” РїРµСЂРµСЃРѕР±РёСЂР°РµРј display list РёР· layout_box СЃ
-        // overrides, РјРёРЅСѓСЏ relayout (BUG-231 СЂР°СЃРїСЂРѕСЃС‚СЂР°РЅРёР» offload РЅР° С†РІРµС‚Р°).
-        // Static/animated split (EXPERIMENT.md В§2): РІРјРµСЃС‚Рµ СЃРѕ СЃРїРёСЃРєРѕРј СЃС‚СЂРѕСЏС‚СЃСЏ
-        // РґРёР°РїР°Р·РѕРЅС‹ Р°РЅРёРјРёСЂСѓРµРјС‹С… СЃРµРіРјРµРЅС‚РѕРІ вЂ” СЃРєСЂРѕР»Р»-РєРѕРјРїРѕР·РёС‚РѕСЂ РєСЌС€РёСЂСѓРµС‚ РїРѕР»РѕСЃСѓ
-        // РїРѕ СЃС‚Р°С‚РёРєРµ, СЃРµРіРјРµРЅС‚С‹ СЂРёСЃСѓРµС‚ РїРѕРІРµСЂС…. РџРѕР·РґРЅРµР№С€РёРµ append-С‹ РІ anim_dl
-        // (cue, squiggles) РёРґСѓС‚ РІ РєРѕРЅРµС† СЃРїРёСЃРєР° Рё РґРёР°РїР°Р·РѕРЅС‹ РЅРµ СЃРґРІРёРіР°СЋС‚.
+        // Compositor offload: если есть активные анимации с opacity/transform/
+        // color/background-color — пересобираем display list из layout_box с
+        // overrides, минуя relayout (BUG-231 распространил offload на цвета).
+        // Static/animated split (EXPERIMENT.md §2): вместе со списком строятся
+        // диапазоны анимируемых сегментов — скролл-композитор кэширует полосу
+        // по статике, сегменты рисует поверх. Позднейшие append-ы в anim_dl
+        // (cue, squiggles) идут в конец списка и диапазоны не сдвигают.
         // FRAME-7: the focused `<input>`'s caret rides the same per-NodeId
         // override map as CSS-animation offload — computed up front (before
         // `frame`/`lb` are borrowed) since it needs `&self`, not the
@@ -803,15 +803,15 @@ impl Lumen {
         // рендера, хром остаётся хвостом и там же, а не где-то в середине.
         let overlay_len_after_prepend_phase = overlay_buf.len();
 
-        // Hint overlay: viewport-locked Р±РµР№РґР¶Рё kbd-РЅР°РІРёРіР°С†РёРё.
-        // Р”РѕР±Р°РІР»СЏСЋС‚СЃСЏ РїРѕСЃР»РµРґРЅРёРјРё в†’ СЂРёСЃСѓСЋС‚СЃСЏ РїРѕРІРµСЂС… scrollbar/tooltip.
+        // Hint overlay: viewport-locked бейджи kbd-навигации.
+        // Добавляются последними → рисуются поверх scrollbar/tooltip.
         if self.hint.is_active() {
             let mut hint_cmds = hints::build_hints_overlay(&self.hint, scroll_x, scroll_y);
             overlay_buf.append(&mut hint_cmds);
         }
 
         // CC-10/CC-15-6: the legacy download-panel overlay lived here,
-        // gated off the rollback flag вЂ” `#downloadsPanel` in the engine
+        // gated off the rollback flag — `#downloadsPanel` in the engine
         // chrome (`bind_downloads`, CC-9) is the only renderer now.
 
         // DevTools JS console panel: bottom overlay, toggled by F12.
@@ -935,7 +935,7 @@ impl Lumen {
         }
 
         // Shields floating panel (7C.4): top-right overlay anchored below
-        // the tab bar. Refresh blocked counts before rendering вЂ” kept
+        // the tab bar. Refresh blocked counts before rendering — kept
         // unconditional (CC-10) since `chrome_model_snapshot`'s
         // `#statTrackers` binding (CC-9) reads `blocked_total_count()`
         // and this is the only call site that refreshes it; only the
@@ -944,7 +944,7 @@ impl Lumen {
             self.shields.refresh();
         }
 
-        // Note viewer overlay (В§12.2, GG-2): floating annotation panel.
+        // Note viewer overlay (§12.2, GG-2): floating annotation panel.
         if self.note_viewer.visible {
             let win_size = self.window.as_ref().map_or((1024, 720), |w| {
                 let s = w.inner_size();
@@ -958,7 +958,7 @@ impl Lumen {
         // Rendered before the tab bar so tab bar always draws on top.
         if self.workspace_panel.visible {
             let win_w = self.viewport_width_css();
-            // Full window height including tab bar вЂ” bar is docked at bottom.
+            // Full window height including tab bar — bar is docked at bottom.
             let win_h = self.viewport_height_css()
                 + toolbar::CHROME_H
                 + panels::workspace_panel::SWITCHER_HEIGHT;
@@ -981,7 +981,7 @@ impl Lumen {
             overlay_buf.append(&mut a11y_cmds);
         }
 
-        // Keyboard shortcuts panel (В§D-4): centred floating overlay.
+        // Keyboard shortcuts panel (§D-4): centred floating overlay.
         if self.shortcuts_panel.visible {
             let win_w = self.viewport_width_css();
             let win_h = self.viewport_height_css();
@@ -990,7 +990,7 @@ impl Lumen {
             self.shortcuts_panel.build_panel(&mut overlay_buf, kp_x, kp_y, &pal);
         }
 
-        // В§12.3 Read-later panel: right-docked overlay.
+        // §12.3 Read-later panel: right-docked overlay.
         if self.read_later_panel.visible {
             let win_w = self.viewport_width_css();
             let tab_h = toolbar::CHROME_H;
@@ -1004,24 +1004,24 @@ impl Lumen {
         }
 
         // CC-15-3: the legacy tab-bar/toolbar paint block (viewport-
-        // locked strip at y=0..TAB_BAR_HEIGHT) lived here вЂ” removed
+        // locked strip at y=0..TAB_BAR_HEIGHT) lived here — removed
         // along with `tabs::strip::build_tab_bar`/`build_tab_tooltip`/
         // `build_layout_toggle_btn`/`build_settings_btn` and
         // `toolbar::build_toolbar`. Under the engine-drawn chrome
         // (CC-4) it never ran.
 
-        // Profile switcher dropdown (DS-14): BUG-403 вЂ” kept as a
+        // Profile switcher dropdown (DS-14): BUG-403 — kept as a
         // legacy overlay always (CC-15-1, `docs/tasks/p1-css-chrome.md`
-        // В§CC-15-1 decision), not migrated to `ChromeModel`/`bind_model`
+        // §CC-15-1 decision), not migrated to `ChromeModel`/`bind_model`
         // like the CC-9/CC-10 panels. Its hit-test (below, in the
-        // `MouseInput` handler) was already unconditional вЂ” this render
+        // `MouseInput` handler) was already unconditional — this render
         // call must match, or a click toggles `profile_menu.visible`
         // with nothing ever drawn (the actual BUG-403 symptom) while
         // the invisible popover still eats clicks under it. Anchored
         // via `page_offset()` rather than the legacy-only
         // `toolbar::CHROME_H` constant so the dropdown lines up with
         // the engine-drawn toolbar's *measured* bottom edge, not an
-        // assumed one вЂ” the same class of drift BUG-404 flags for
+        // assumed one — the same class of drift BUG-404 flags for
         // `flush_pointer_moves`.
         if !self.focus.active && self.profile_menu.visible {
             let (_, page_y_offset) = self.page_offset();
@@ -1034,7 +1034,7 @@ impl Lumen {
             overlay_buf.append(&mut pm_cmds);
         }
 
-        // CC-4: tab context menu вЂ” drawn above the tab strip.
+        // CC-4: tab context menu — drawn above the tab strip.
         if self.tab_context_menu.is_open() {
             let win_w = self.viewport_width_css();
             let win_h = self.window_height_css();
@@ -1046,7 +1046,7 @@ impl Lumen {
             overlay_buf.append(&mut menu_cmds);
         }
 
-        // P3-spell СЃСЂРµР· 3: page spell suggestion menu вЂ” drawn above the
+        // P3-spell срез 3: page spell suggestion menu — drawn above the
         // page and tab strip like the tab context menu.
         if self.page_context_menu.is_open() {
             let win_w = self.viewport_width_css();
@@ -1065,7 +1065,7 @@ impl Lumen {
             overlay_buf.append(&mut focus_cmds);
         }
 
-        // Picture-in-picture window (task #21) вЂ” drawn last so it floats
+        // Picture-in-picture window (task #21) — drawn last so it floats
         // above all other chrome.
         if self.pip.active {
             let mut pip_cmds = panels::pip_window::build_panel(&self.pip, &pal);
@@ -1099,12 +1099,12 @@ impl Lumen {
             }
         }
 
-        // P3-webvtt СЃСЂРµР· 4: Р°РєС‚РёРІРЅС‹Рµ WebVTT-cue РїРѕРІРµСЂС… video-Р±РѕРєСЃРѕРІ.
-        // РљРѕРјР°РЅРґС‹ РґРѕР±Р°РІР»СЏСЋС‚СЃСЏ РІ page-РїРѕР»РѕСЃСѓ (СЃРєСЂРѕР»Р»СЏС‚СЃСЏ СЃРѕ СЃС‚СЂР°РЅРёС†РµР№);
-        // РїСЂРё Р°РєС‚РёРІРЅРѕРј compositor-offload вЂ” РІ anim_dl. Р’СЂРµРјСЏ
-        // РІРѕСЃРїСЂРѕРёР·РІРµРґРµРЅРёСЏ Р±РµСЂС‘С‚СЃСЏ РёР· СЂРµР°Р»СЊРЅРѕРіРѕ playback-РєР»РѕРєР° РІРёРґРµРѕ
-        // (`VideoGifStore`); РґР»СЏ РЅРµ-GIF/РЅРµ-Р·Р°РїСѓС‰РµРЅРЅС‹С… РІРёРґРµРѕ вЂ” С„РѕР»Р±СЌРє РЅР°
-        // РІСЂРµРјСЏ РѕС‚ СЃС‚Р°СЂС‚Р° РЅР°РІРёРіР°С†РёРё.
+        // P3-webvtt срез 4: активные WebVTT-cue поверх video-боксов.
+        // Команды добавляются в page-полосу (скроллятся со страницей);
+        // при активном compositor-offload — в anim_dl. Время
+        // воспроизведения берётся из реального playback-клока видео
+        // (`VideoGifStore`); для не-GIF/не-запущенных видео — фолбэк на
+        // время от старта навигации.
         if !self.page_tracks.is_empty() {
             let mut video_rects = Vec::new();
             if let Some(lb) = &self.layout_box {
@@ -1147,18 +1147,18 @@ impl Lumen {
                         page_buf = Some(buf);
                     }
                 }
-                // Cue СЃРјРµРЅСЏСЋС‚СЃСЏ РІСЂРµРјРµРЅРµРј вЂ” РґРµСЂР¶РёРј С†РёРєР» РїРµСЂРµСЂРёСЃРѕРІРєРё,
-                // РїРѕРєР° СЃС‚СЂР°РЅРёС†Р° СЃ СЃСѓР±С‚РёС‚СЂР°РјРё Р°РєС‚РёРІРЅР°.
+                // Cue сменяются временем — держим цикл перерисовки,
+                // пока страница с субтитрами активна.
                 self.request_redraw();
             }
         }
 
-        // P3-spell СЃСЂРµР· 2+3: РєСЂР°СЃРЅРѕРµ squiggly-РїРѕРґС‡С‘СЂРєРёРІР°РЅРёРµ РѕС€РёР±РѕС‡РЅС‹С…
-        // СЃР»РѕРІ РІ С„РѕРєСѓСЃРЅРѕРј СЂРµРґР°РєС‚РёСЂСѓРµРјРѕРј РїРѕР»Рµ вЂ” <input>/<textarea> РёР»Рё
-        // С…РѕСЃС‚ contenteditable. РџСЂРѕРІРµСЂСЏРµС‚СЃСЏ РєР°Р¶РґС‹Р№ DrawText РІРЅСѓС‚СЂРё
-        // Р±РѕРєСЃР° РїРѕР»СЏ; placeholder РїСЂРѕРїСѓСЃРєР°РµС‚СЃСЏ. РЎР»РѕРІР° РёР·
-        // РїРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРѕРіРѕ СЃР»РѕРІР°СЂСЏ Рё В«РџСЂРѕРїСѓС‰РµРЅРЅС‹РµВ» РЅР° СЃРµСЃСЃРёСЋ вЂ”
-        // СЃС‡РёС‚Р°СЋС‚СЃСЏ РІРµСЂРЅС‹РјРё.
+        // P3-spell срез 2+3: красное squiggly-подчёркивание ошибочных
+        // слов в фокусном редактируемом поле — <input>/<textarea> или
+        // хост contenteditable. Проверяется каждый DrawText внутри
+        // бокса поля; placeholder пропускается. Слова из
+        // пользовательского словаря и «Пропущенные» на сессию —
+        // считаются верными.
         if let (Some(nid), Some(dicts)) = (self.focused_node, SPELL_DICTS.get())
             && !dicts.is_empty()
             && let Some((target_nid, placeholder, _kind)) = self.spell_target(nid)
@@ -1472,7 +1472,7 @@ impl Lumen {
         // DS-15: Anonymous profile draws a thin red inset outline
         // around the whole window (design ref: `box-shadow: inset 0
         // 0 0 2px var(--accent)` on `.app-frame`). Appended last of
-        // all chrome overlays so it sits above every panel/modal вЂ”
+        // all chrome overlays so it sits above every panel/modal —
         // web content itself is never touched, only the chrome layer.
         if active_profile_name.as_deref().is_some_and(panels::profile_menu::is_anonymous) {
             let win_w = self.viewport_width_css();
@@ -1542,11 +1542,11 @@ impl Lumen {
         //
         // CC-4 (docs/tasks/p1-css-chrome.md): both offsets come from the
         // engine-drawn chrome's `#contentArea` rect (the brief's
-        // "#page-host") вЂ” the same [`Self::page_offset`] every input path
+        // "#page-host") — the same [`Self::page_offset`] every input path
         // reads, so a click lands on the element actually painted there.
         let (page_x_offset, page_y_offset) = self.page_offset();
 
-        // CSS Backgrounds В§3.11.1: clear the whole surface to the canvas
+        // CSS Backgrounds §3.11.1: clear the whole surface to the canvas
         // background (the root element's propagated background color) so the
         // page background fills the viewport even when the page box is smaller
         // than the window. Computed before borrowing the renderer mutably.
@@ -1558,9 +1558,9 @@ impl Lumen {
         if let Some(t0) = frame_log_t0 {
             marks[4] = t0.elapsed().as_secs_f64() * 1e3;
         }
-        // Р”Р»РёРЅР° overlay-Р±СѓС„РµСЂР° РЅР° РІС…РѕРґРµ РІ СЂРµРЅРґРµСЂРµСЂ: РїРµСЂРµРїРёСЃСЊ РїР°СЃСЃР°
-        // (СЃСЂРµР· 36) СЃС‡РёС‚Р°Р»Р° РµС‘ РёР·РЅСѓС‚СЂРё paint, Р·РґРµСЃСЊ РѕРЅР° РЅСѓР¶РЅР° СЂСЏРґРѕРј СЃ
-        // СЂР°СЃРєР»Р°РґРєРѕР№ С…СЂРѕРјР°, С‡С‚РѕР±С‹ РІРёРґРµС‚СЊ РґРѕР»СЋ С…СЂРѕРјР° РІ overlay.
+        // Длина overlay-буфера на входе в рендерер: перепись пасса
+        // (срез 36) считала её изнутри paint, здесь она нужна рядом с
+        // раскладкой хрома, чтобы видеть долю хрома в overlay.
         let overlay_len = overlay_buf.len();
         // BUG-405 срез 57 (п.85): хром остаётся хвостом `overlay_buf` ровно
         // когда после снимка `overlay_len_after_prepend_phase` в буфер
@@ -1572,10 +1572,10 @@ impl Lumen {
             (overlay_len == overlay_len_after_prepend_phase && *chrome_len <= overlay_len)
                 .then(|| (overlay_len - chrome_len, digests.clone()))
         });
-        // BUG-405 СЃСЂРµР· 34: СЃРЅРёРјРѕРє СЃС‡С‘С‚С‡РёРєР° РїРµС‡Р°С‚Рё РїРѕС„Р°Р·РЅРѕРіРѕ Р»РѕРіР° вЂ” РµРіРѕ
-        // РґРµР»СЊС‚Р° Р·Р° РєР°РґСЂ Рё РµСЃС‚СЊ С†РµРЅР° РёРЅСЃС‚СЂСѓРјРµРЅС‚Р° РІРЅСѓС‚СЂРё `paint`.
+        // BUG-405 срез 34: снимок счётчика печати пофазного лога — его
+        // дельта за кадр и есть цена инструмента внутри `paint`.
         let log_nanos_at_paint = frame_log_nanos();
-        // BUG-405 СЃСЂРµР· 37: С‚Рµ Р¶Рµ РґРµР»СЊС‚Р°-СЃРЅРёРјРєРё РґР»СЏ РїРѕРґСЃС‚Р°С‚РµР№ СЂРµРЅРґРµСЂРµСЂР°.
+        // BUG-405 срез 37: те же дельта-снимки для подстатей рендерера.
         let phase_at_paint = frame_phase_ms();
         // BUG-405 slice 44: same delta-snapshot for the pre-`ComposeMarks`
         // gap (`PRE_MARKS_NANOS`) — see `pre_marks_nanos` doc comment.
@@ -1587,12 +1587,12 @@ impl Lumen {
         // `tail_nanos` doc comment.
         let tail_at_paint = tail_nanos();
 
-        // BUG-405 СЃСЂРµР· 37: С†РµРЅР° РћР‘РЃР РўРљР СЃС‚СЂР°РЅРёС†С‹, РїР»Р°С‚РёРјР°СЏ РІРЅСѓС‚СЂРё РѕРєРЅР°
-        // `paint`, РЅРѕ СЃРЅР°СЂСѓР¶Рё РІСЃРµС… СЃС‡С‘С‚С‡РёРєРѕРІ СЂРµРЅРґРµСЂРµСЂР°. Р¤Р°СЃС‚-РїР°СЃ
-        // `supports_page_offset` СѓРјРµРµС‚ СЂРёСЃРѕРІР°С‚СЊ СЃРїРёСЃРѕРє РїРѕ СЃСЃС‹Р»РєРµ, РЅРѕ
-        // РµРіРѕ РѕС‚РІРµС‡Р°РµС‚ `true` С‚РѕР»СЊРєРѕ femtovg вЂ” РЅР° С€С‚Р°С‚РЅРѕРј wgpu-Р±СЌРєРµРЅРґРµ
-        // Р±РµСЂС‘С‚СЃСЏ РІРµС‚РєР° РЅРёР¶Рµ, Рё РѕРЅР° РєРѕРїРёСЂСѓРµС‚ РІРµСЃСЊ display list РєР°Р¶РґС‹Р№
-        // РєР°РґСЂ. Р‘РµР· СЌС‚РѕР№ РѕС‚СЃРµС‡РєРё С†РµРЅР° РєРѕРїРёРё СЃРёРґРµР»Р° Р±С‹ РІ РЅРµРІСЏР·РєРµ.
+        // BUG-405 срез 37: цена ОБЁРТКИ страницы, платимая внутри окна
+        // `paint`, но снаружи всех счётчиков рендерера. Фаст-пас
+        // `supports_page_offset` умеет рисовать список по ссылке, но
+        // его отвечает `true` только femtovg — на штатном wgpu-бэкенде
+        // берётся ветка ниже, и она копирует весь display list каждый
+        // кадр. Без этой отсечки цена копии сидела бы в невязке.
         let mut wrap_ms = 0.0_f64;
         // BUG-405 slice 44: shell-side setup between `marks[4]` and the
         // actual `render`/`render_with_anim` call — overlay/counter
@@ -1602,11 +1602,11 @@ impl Lumen {
         // covered a piece of it); set right before each of the three call
         // sites below, so it never includes the render call itself.
         let mut setup_ms = 0.0_f64;
-        // BUG-405 СЃСЂРµР· 39: РІРµСЂСЃРёСЏ СЃРїРёСЃРєР° РґР»СЏ СЂРµРЅРґРµСЂРµСЂР°. РќРµРЅСѓР»РµРІР°СЏ СЂРѕРІРЅРѕ
-        // С‚РѕРіРґР°, РєРѕРіРґР° РІ СЂРµРЅРґРµСЂРµСЂ СѓС…РѕРґРёС‚ retained-СЃРїРёСЃРѕРє СЃС‚СЂР°РЅРёС†С‹ вЂ” Сѓ
-        // РїСЂРѕРёР·РІРѕРґРЅС‹С… СЃРїРёСЃРєРѕРІ (Р°РЅРёРјР°С†РёРѕРЅРЅР°СЏ РїР°С‚С‡-РєРѕРїРёСЏ `anim_dl`,
-        // РїРѕРґСЃРІРµС‚РєР° РїРѕРёСЃРєР° `page_buf`, split-view, РѕР±С‘СЂРЅСѓС‚Р°СЏ РєРѕРїРёСЏ
-        // С„РѕР»Р±СЌРєР°) РІРµСЂСЃРёРё РЅРµС‚, Рё РјРµРјРѕРёР·Р°С†РёСЏ СЃРІС‘СЂС‚РєРё РґР»СЏ РЅРёС… РІС‹РєР»СЋС‡РµРЅР°.
+        // BUG-405 срез 39: версия списка для рендерера. Ненулевая ровно
+        // тогда, когда в рендерер уходит retained-список страницы — у
+        // производных списков (анимационная патч-копия `anim_dl`,
+        // подсветка поиска `page_buf`, split-view, обёрнутая копия
+        // фолбэка) версии нет, и мемоизация свёртки для них выключена.
         let retained_epoch = if anim_dl.is_none() && page_buf.is_none() {
             self.display_list_epoch
         } else {
@@ -1623,7 +1623,7 @@ impl Lumen {
                     setup_ms = t0.elapsed().as_secs_f64() * 1e3 - marks[4];
                 }
                 if let Err(err) = r.render(&combined, &overlay_buf, 0.0, 0.0) {
-                    eprintln!("РћС€РёР±РєР° СЂРµРЅРґРµСЂР° (split): {err:?}");
+                    eprintln!("Ошибка рендера (split): {err:?}");
                 }
             } else {
                 // Normal single-pane mode: shift page below tab bar (and right of
@@ -1632,26 +1632,26 @@ impl Lumen {
                     .as_deref()
                     .or(page_buf.as_deref())
                     .unwrap_or(&self.display_list);
-                // ADR-016 M0.4 fast path: РєРѕРіРґР° РµРґРёРЅСЃС‚РІРµРЅРЅР°СЏ РѕР±С‘СЂС‚РєР° РІРѕРєСЂСѓРі
-                // СЃС‚СЂР°РЅРёС†С‹ вЂ” С„РёРєСЃРёСЂРѕРІР°РЅРЅС‹Р№ page-offset (РЅРµС‚ inspector-РѕРІРµСЂР»РµСЏ,
-                // РєРѕС‚РѕСЂС‹Р№ РѕР±СЏР·Р°РЅ РµС…Р°С‚СЊ Р’РќРЈРўР Р page-С‚СЂР°РЅСЃС„РѕСЂРјР°), Р° Р±СЌРєРµРЅРґ СѓРјРµРµС‚
-                // РЅР°РєР»Р°РґС‹РІР°С‚СЊ СЃРјРµС‰РµРЅРёРµ СЃР°Рј, СЂРёСЃСѓРµРј display-list РџРћ РЎРЎР«Р›РљР•.
-                // Р Р°РЅСЊС€Рµ РєР°Р¶РґС‹Р№ РєР°РґСЂ (РІ С‚.С‡. РЅР° РєР°Р¶РґРѕРј РєР°РґСЂРµ РёРЅРµСЂС†РёРѕРЅРЅРѕРіРѕ
-                // СЃРєСЂРѕР»Р»Р°) СЃСЋРґР° РєРѕРїРёСЂРѕРІР°Р»СЃСЏ РІРµСЃСЊ СЃРїРёСЃРѕРє СЂР°РґРё РѕРґРЅРѕРіРѕ
-                // `PushTransform` вЂ” O(n) РіР»СѓР±РѕРєРёР№ РєР»РѕРЅ РєРѕРјР°РЅРґ.
-                // Anim-split РґРёР°РїР°Р·РѕРЅС‹ С„Р°СЃС‚-РїР°СЃСѓ РЅРµ РјРµС€Р°СЋС‚: femtovg РёС…
-                // РёРіРЅРѕСЂРёСЂСѓРµС‚ Рё СЂРёСЃСѓРµС‚ РјРѕРЅРѕР»РёС‚РѕРј (РєРѕРЅС‚РµРЅС‚ СЃРїРёСЃРєР° С‚РѕС‚ Р¶Рµ), Р°
-                // wgpu-СЂРµРЅРґРµСЂРµСЂ (BUG-405 СЃСЂРµР· 38 вЂ” РѕРЅ С‚РѕР¶Рµ РѕС‚РІРµС‡Р°РµС‚
-                // supports_page_offset=true) Р±РµСЂС‘С‚ РёС… РєР°Рє РµСЃС‚СЊ: Р±РµР· РѕР±С‘СЂС‚РєРё
-                // РёРЅРґРµРєСЃС‹ РєРѕРјР°РЅРґ РќР• СЃРґРІРёРЅСѓС‚С‹, РїРѕСЌС‚РѕРјСѓ РґРёР°РїР°Р·РѕРЅС‹ РёРґСѓС‚ РІ
-                // СЂРµРЅРґРµСЂРµСЂ Р±РµР· В«+1В» С„РѕР»Р±СЌРєР° РЅРёР¶Рµ.
+                // ADR-016 M0.4 fast path: когда единственная обёртка вокруг
+                // страницы — фиксированный page-offset (нет inspector-оверлея,
+                // который обязан ехать ВНУТРИ page-трансформа), а бэкенд умеет
+                // накладывать смещение сам, рисуем display-list ПО ССЫЛКЕ.
+                // Раньше каждый кадр (в т.ч. на каждом кадре инерционного
+                // скролла) сюда копировался весь список ради одного
+                // `PushTransform` — O(n) глубокий клон команд.
+                // Anim-split диапазоны фаст-пасу не мешают: femtovg их
+                // игнорирует и рисует монолитом (контент списка тот же), а
+                // wgpu-рендерер (BUG-405 срез 38 — он тоже отвечает
+                // supports_page_offset=true) берёт их как есть: без обёртки
+                // индексы команд НЕ сдвинуты, поэтому диапазоны идут в
+                // рендерер без «+1» фолбэка ниже.
                 if inspector_box_dl.is_empty()
                     && r.supports_page_offset()
                     && !page_offset_fast_disabled()
                 {
                     r.set_page_offset(page_x_offset, page_y_offset);
-                    // Р¤Р°СЃС‚-РїР°СЃ РѕС‚РґР°С‘С‚ `base` РїРѕ СЃСЃС‹Р»РєРµ вЂ” СЌС‚Рѕ Рё РµСЃС‚СЊ С‚РѕС‚
-                    // СЃРїРёСЃРѕРє, Рє РєРѕС‚РѕСЂРѕРјСѓ РѕС‚РЅРѕСЃРёС‚СЃСЏ РІРµСЂСЃРёСЏ.
+                    // Фаст-пас отдаёт `base` по ссылке — это и есть тот
+                    // список, к которому относится версия.
                     r.set_content_epoch(retained_epoch);
                     let ranges: &[std::ops::Range<usize>] =
                         if anim_dl.is_some() { &anim_ranges } else { &[] };
@@ -1665,17 +1665,17 @@ impl Lumen {
                         scroll_x,
                         ranges,
                     ) {
-                        eprintln!("РћС€РёР±РєР° СЂРµРЅРґРµСЂР°: {err:?}");
+                        eprintln!("Ошибка рендера: {err:?}");
                     }
                 } else {
-                    // Fallback: Р°РєС‚РёРІРµРЅ inspector-РѕРІРµСЂР»РµР№ РёР»Рё Р±СЌРєРµРЅРґ РЅРµ
-                    // РїРѕРґРґРµСЂР¶РёРІР°РµС‚ page-offset вЂ” РѕР±РѕСЂР°С‡РёРІР°РµРј РєРѕРЅС‚РµРЅС‚ РІ
-                    // `PushTransform`, РєР°Рє СЂР°РЅСЊС€Рµ. Anim-split РґРёР°РїР°Р·РѕРЅС‹
-                    // (static/animated split СЃРєСЂРѕР»Р»-РєРѕРјРїРѕР·РёС‚РѕСЂР° wgpu-РїСѓС‚Рё)
-                    // РїСЂРѕРєРёРґС‹РІР°СЋС‚СЃСЏ С‡РµСЂРµР· render_with_anim.
+                    // Fallback: активен inspector-оверлей или бэкенд не
+                    // поддерживает page-offset — оборачиваем контент в
+                    // `PushTransform`, как раньше. Anim-split диапазоны
+                    // (static/animated split скролл-композитора wgpu-пути)
+                    // прокидываются через render_with_anim.
                     r.set_page_offset(0.0, 0.0);
-                    // Р¤РѕР»Р±СЌРє СЃРѕР±РёСЂР°РµС‚ РќРћР’Р«Р™ СЃРїРёСЃРѕРє РєР°Р¶РґС‹Р№ РєР°РґСЂ вЂ”
-                    // РІРµСЂСЃРёРё Сѓ РЅРµРіРѕ РЅРµС‚ (BUG-405 СЃСЂРµР· 39).
+                    // Фолбэк собирает НОВЫЙ список каждый кадр —
+                    // версии у него нет (BUG-405 срез 39).
                     r.set_content_epoch(0);
                     let t_wrap = frame_log_t0.map(|t0| t0.elapsed());
                     let mut shifted: lumen_paint::DisplayList =
@@ -1690,8 +1690,8 @@ impl Lumen {
                     // Inspector box-model overlay rides inside the page transform.
                     shifted.extend_from_slice(&inspector_box_dl);
                     shifted.push(lumen_paint::DisplayCommand::PopTransform);
-                    // Split-РґРёР°РїР°Р·РѕРЅС‹ РІР°Р»РёРґРЅС‹ С‚РѕР»СЊРєРѕ РєРѕРіРґР° base == anim_dl;
-                    // +1 вЂ” СЃРґРІРёРі РЅР° prepended PushTransform СЃС‚СЂР°РЅРёС†С‹.
+                    // Split-диапазоны валидны только когда base == anim_dl;
+                    // +1 — сдвиг на prepended PushTransform страницы.
                     let shifted_ranges: Vec<std::ops::Range<usize>> =
                         if anim_dl.is_some() {
                             anim_ranges
@@ -1714,7 +1714,7 @@ impl Lumen {
                         scroll_x,
                         &shifted_ranges,
                     ) {
-                        eprintln!("РћС€РёР±РєР° СЂРµРЅРґРµСЂР°: {err:?}");
+                        eprintln!("Ошибка рендера: {err:?}");
                     }
                 }
             }
@@ -1729,16 +1729,16 @@ impl Lumen {
                 self.scroll_y,
                 self.display_list.len(),
             );
-            // BUG-405 СЃСЂРµР· 34: С€Р°РіРё handler-Р° РєР°Рє РРќРўР•Р Р’РђР›Р« РјРµР¶РґСѓ
-            // РјРµС‚РєР°РјРё. `scroll` вЂ” С€Р°РіРё 1/1.6/1.7 РїР»СЋСЃ РїРѕСЂРѕРі
-            // fast-scroll, `sda` вЂ” С€Р°Рі 1.5, `anim` вЂ” 2/2b/2.5/2.6,
-            // `js` вЂ” 3/3.1/4/5 (rAF, СЂРµР»РµР№Р°СѓС‚ РїРѕ РіСЂСЏР·РЅРѕРјСѓ DOM,
-            // paint-timing), `build` вЂ” СЃР±РѕСЂРєР° overlay/chrome/anim-DL
-            // С€Р°РіР° 6 Р”Рћ РѕР±СЂР°С‰РµРЅРёСЏ Рє СЂРµРЅРґРµСЂРµСЂСѓ, `paint` вЂ” СЃР°Рј РІС‹Р·РѕРІ
-            // СЂРµРЅРґРµСЂРµСЂР° (С‚Рѕ, С‡С‚Рѕ РёР·РЅСѓС‚СЂРё РїРµС‡Р°С‚Р°РµС‚ `[frame:wgpu]`).
-            // `log` вЂ” СЃРєРѕР»СЊРєРѕ РёР· `paint` СЃСЉРµР»Р° РїРµС‡Р°С‚СЊ СЃР°РјРѕРіРѕ РїРѕС„Р°Р·РЅРѕРіРѕ
-            // Р±Р»РѕРєР° СЂРµРЅРґРµСЂРµСЂР° (РЅР° РїРѕРїР°РґР°РЅРёРё РѕРЅР° РєСЂСѓРїРЅРµРµ РІСЃРµР№ СЂР°Р±РѕС‚С‹
-            // РєР°РґСЂР°); С‡РµСЃС‚РЅР°СЏ С†РµРЅР° РєР°РґСЂР° = total в€’ log.
+            // BUG-405 срез 34: шаги handler-а как ИНТЕРВАЛЫ между
+            // метками. `scroll` — шаги 1/1.6/1.7 плюс порог
+            // fast-scroll, `sda` — шаг 1.5, `anim` — 2/2b/2.5/2.6,
+            // `js` — 3/3.1/4/5 (rAF, релейаут по грязному DOM,
+            // paint-timing), `build` — сборка overlay/chrome/anim-DL
+            // шага 6 ДО обращения к рендереру, `paint` — сам вызов
+            // рендерера (то, что изнутри печатает `[frame:wgpu]`).
+            // `log` — сколько из `paint` съела печать самого пофазного
+            // блока рендерера (на попадании она крупнее всей работы
+            // кадра); честная цена кадра = total − log.
             let log_ms = (frame_log_nanos() - log_nanos_at_paint) as f64 / 1e6;
             eprintln!(
                 "[frame]   top: scroll {:.2} sda {:.2} anim {:.2} js {:.2} \
@@ -1751,11 +1751,11 @@ impl Lumen {
                 marks[5] - marks[4],
                 log_ms,
             );
-            // BUG-405 СЃСЂРµР· 37: РїРѕРґСЃС‚Р°С‚СЊРё `build` РїР»СЋСЃ РїСЂРёР·РЅР°Рє РєР°РґСЂР°.
-            // `band` Р±РµСЂС‘С‚СЃСЏ СЃС‡С‘С‚С‡РёРєРѕРј, Р° РЅРµ СЃС‚СЂРѕРєРѕР№ `page-compose
-            // HIT` (РѕРЅР° РїРµС‡Р°С‚Р°РµС‚СЃСЏ С‚РѕР»СЊРєРѕ РЅР° СѓСЂРѕРІРЅРµ 2, С‡СЊСЏ РЅР°РґР±Р°РІРєР°
-            // РєСЂСѓРїРЅРµРµ СЃР°РјРѕРіРѕ РєР°РґСЂР° РїРѕРїР°РґР°РЅРёСЏ вЂ” РїСѓРЅРєС‚ 71), РїРѕСЌС‚РѕРјСѓ
-            // СЂР°Р·Р±РёРІРєСѓ РјРѕР¶РЅРѕ СЃРЅРёРјР°С‚СЊ РЅР° СѓСЂРѕРІРЅРµ 1.
+            // BUG-405 срез 37: подстатьи `build` плюс признак кадра.
+            // `band` берётся счётчиком, а не строкой `page-compose
+            // HIT` (она печатается только на уровне 2, чья надбавка
+            // крупнее самого кадра попадания — пункт 71), поэтому
+            // разбивку можно снимать на уровне 1.
             eprintln!(
                 "[frame]   build: chrome {:.2} sbar {:.2} panels {:.2} \
                          tail {:.2} | chrome {}x{}={} cmds, overlay {} | band {}",
@@ -1769,9 +1769,9 @@ impl Lumen {
                 overlay_len,
                 compose_outcome_label(),
             );
-            // Р Р°Р·Р±РёРІРєР° СЃС‚Р°С‚СЊРё `paint`. РџРµС‡Р°С‚Р°РµС‚СЃСЏ РџРћРЎР›Р• С‚Р°Р№РјРµСЂР° РєР°РґСЂР°,
-            // РїРѕСЌС‚РѕРјСѓ РІ РёР·РјРµСЂСЏРµРјРѕРµ РѕРєРЅРѕ РЅРµ РїРѕРїР°РґР°РµС‚ вЂ” РІ РѕС‚Р»РёС‡РёРµ РѕС‚
-            // РїРѕС„Р°Р·РЅРѕРіРѕ Р±Р»РѕРєР° СѓСЂРѕРІРЅСЏ 2 (РїСѓРЅРєС‚ 71).
+            // Разбивка статьи `paint`. Печатается ПОСЛЕ таймера кадра,
+            // поэтому в измеряемое окно не попадает — в отличие от
+            // пофазного блока уровня 2 (пункт 71).
             let ph = frame_phase_ms();
             let d = |i: usize| ph[i] - phase_at_paint[i];
             // BUG-405 slice 44: gap before `ComposeMarks::new()` starts —
@@ -1811,9 +1811,9 @@ impl Lumen {
                 (marks[5] - marks[4] - named).max(0.0),
             );
             // ADR-016 M0.5: classify this frame against the previous one
-            // via the split fingerprint (content hash вџ‚ scroll/page
+            // via the split fingerprint (content hash ⟂ scroll/page
             // offset). Split-view bakes scroll into the display list, so
-            // the content/offset split does not apply there вЂ” skip it.
+            // the content/offset split does not apply there — skip it.
             // Costs an O(n) content hash, but only under LUMEN_FRAME_LOG.
             if self.split_view.is_none() {
                 let base: &[lumen_paint::DisplayCommand] = anim_dl
@@ -1837,7 +1837,7 @@ impl Lumen {
                 }
                 // ADR-016 M3.2.0: classify the frame against the retained
                 // overscan band (blit / blit+expose / repaint) using the
-                // scroll-independent content hash. Measurement only вЂ” the
+                // scroll-independent content hash. Measurement only — the
                 // femtovg backend does not yet own the content surface, so
                 // this just reports the band mix real scrolling would hit
                 // before the GL blit path (M3.2.1) acts on it. Record the

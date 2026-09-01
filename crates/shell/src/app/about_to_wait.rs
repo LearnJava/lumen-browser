@@ -6,15 +6,15 @@
 
 use crate::*;
 
-/// Р‘СЋРґР¶РµС‚ idle-РѕРєРЅР° РґР»СЏ `requestIdleCallback`-РѕРІ, РїРµСЂРµРґР°РІР°РµРјС‹Р№ РІ
-/// `EventLoop::run_idle_callbacks` РЅР° РєР°Р¶РґРѕРј `about_to_wait`. Phase 0 РЅРµ Р·РЅР°РµС‚
-/// СЂРµР°Р»СЊРЅРѕРіРѕ РІСЂРµРјРµРЅРё РґРѕ СЃР»РµРґСѓСЋС‰РµРіРѕ vsync, РїРѕСЌС‚РѕРјСѓ РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ С„РёРєСЃРёСЂРѕРІР°РЅРЅС‹Р№
-/// 10 ms вЂ” С‚РѕС‚ Р¶Рµ РґРµС„РѕР»С‚, С‡С‚Рѕ Сѓ Chromium РїСЂРё РѕС‚СЃСѓС‚СЃС‚РІРёРё СЏРІРЅРѕРіРѕ measurement-Р°
-/// idle-РѕРєРЅР°. Idle-callback-Рё С‚СЂР°РєС‚СѓСЋС‚ СЌС‚Рѕ РєР°Рє В«СѓСЃРїРµР№ Р·Р° ~10 msВ».
+/// Бюджет idle-окна для `requestIdleCallback`-ов, передаваемый в
+/// `EventLoop::run_idle_callbacks` на каждом `about_to_wait`. Phase 0 не знает
+/// реального времени до следующего vsync, поэтому используется фиксированный
+/// 10 ms — тот же дефолт, что у Chromium при отсутствии явного measurement-а
+/// idle-окна. Idle-callback-и трактуют это как «успей за ~10 ms».
 const IDLE_BUDGET_MS: f64 = 10.0;
 
 impl Lumen {
-    #[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn on_about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Warm-frame bench (LUMEN_BENCH=hover:N | scroll:N). Drives redraws
         // itself instead of waiting for a human, then exits. Placed first so a
@@ -48,8 +48,8 @@ impl Lumen {
             if now_s - self.last_mem_report_s >= 10.0 {
                 self.last_mem_report_s = now_s;
                 let wf_bytes: usize = self.web_fonts.iter().map(|f| f.bytes.len()).sum();
-                // BUG-272 СЃСЂРµР· 19: lazy GIFs hold encoded bytes + ~one decoded frame,
-                // not all N frames вЂ” `resident_bytes` reflects the real footprint.
+                // BUG-272 срез 19: lazy GIFs hold encoded bytes + ~one decoded frame,
+                // not all N frames — `resident_bytes` reflects the real footprint.
                 let gif_bytes: usize = self
                     .animated_gifs
                     .values()
@@ -57,7 +57,7 @@ impl Lumen {
                     .sum();
                 let (img_n, img_b) = image_cache::IMAGE_CACHE.debug_stats();
                 let (pf_n, pf_b) = prefetch::PREFETCH_CACHE.debug_stats();
-                // ADR-016 M2.2c-2d (20): direct `self.js_ctx` read в†’ `route_query_js`.
+                // ADR-016 M2.2c-2d (20): direct `self.js_ctx` read → `route_query_js`.
                 // Flag-off (default) `js.map(...).unwrap_or((-1,-1))` = the old
                 // `map_or((-1,-1), ...)`; under the flag it is a blocking `query`.
                 let js_heap = self.drain_query_js(|j| j.debug_js_heap()).unwrap_or((-1, -1));
@@ -73,45 +73,45 @@ impl Lumen {
                     js_heap.0 as f64 / 1e6, js_heap.1 as f64 / 1e6,
                     self.renderer.as_ref().map_or(String::new(), |r| r.debug_mem_report()),
                 );
-                // M0.1 (ADR-016): РїРµСЂРёРѕРґРёС‡РµСЃРєР°СЏ СЃРІРѕРґРєР° РІСЂРµРјС‘РЅ РєР°РґСЂРѕРІ вЂ” Р±Р°Р·РѕРІС‹Рµ
-                // С‡РёСЃР»Р°, РЅР° РєРѕС‚РѕСЂС‹Рµ Р±СѓРґСѓС‚ СЃСЃС‹Р»Р°С‚СЊСЃСЏ РїРѕСЃР»РµРґСѓСЋС‰РёРµ СЃС‚Р°РґРёРё MT-СЂРµРЅРґРµСЂР°.
+                // M0.1 (ADR-016): периодическая сводка времён кадров — базовые
+                // числа, на которые будут ссылаться последующие стадии MT-рендера.
                 if let Some(summary) = self.frame_stats.summary() {
                     eprintln!("{summary}");
                 }
                 // ADR-016 M2.0: periodic UI-thread relayout-cost summary alongside
-                // the frame summary вЂ” the baseline M2's engine-thread move improves.
+                // the frame summary — the baseline M2's engine-thread move improves.
                 if let Some(summary) = self.engine_stats.summary() {
                     eprintln!("{}", summary.display_with("ENGINE_SUMMARY"));
                 }
             }
         }
-        // HTML В§8.1.4.2 В«Processing modelВ»: РјРµР¶РґСѓ СЃРѕР±С‹С‚РёСЏРјРё event-loop-Р°
-        // РґСЂРµРЅРёСЂСѓРµРј РЅР°РєРѕРїРёРІС€РёРµСЃСЏ task-Рё. РљР°Р¶РґС‹Р№ step РІС‹РїРѕР»РЅСЏРµС‚ РѕРґРЅСѓ task +
-        // microtask checkpoint. Р”СЂРµРЅРёСЂСѓРµРј РІСЃРµ pending tasks Р·Р° РѕРґРёРЅ РїСЂРѕС…РѕРґ,
-        // С‡С‚РѕР±С‹ UI РЅРµ РѕС‚СЃС‚Р°РІР°Р». Р•СЃР»Рё task Р·Р°РїР»Р°РЅРёСЂСѓРµС‚ РЅРѕРІСѓСЋ task вЂ” РѕРЅР°
-        // РІС‹РїРѕР»РЅРёС‚СЃСЏ РЅР° СЃР»РµРґСѓСЋС‰РµРј about_to_wait (РєР°Рє Рё `setTimeout(..., 0)`
-        // РІ Р±СЂР°СѓР·РµСЂРµ).
+        // HTML §8.1.4.2 «Processing model»: между событиями event-loop-а
+        // дренируем накопившиеся task-и. Каждый step выполняет одну task +
+        // microtask checkpoint. Дренируем все pending tasks за один проход,
+        // чтобы UI не отставал. Если task запланирует новую task — она
+        // выполнится на следующем about_to_wait (как и `setTimeout(..., 0)`
+        // в браузере).
         let mut steps = 0;
         let mut reached_idle = true;
         while self.runtime.step() == runtime::StepResult::Ran {
             steps += 1;
             if steps >= 256 {
-                // Р—Р°С‰РёС‚Р° РѕС‚ runaway: РµСЃР»Рё С‡С‚Рѕ-С‚Рѕ СЂРµРєСѓСЂСЃРёРІРЅРѕ РїР»Р°РЅРёСЂСѓРµС‚ task РІ
-                // СЌС‚Сѓ Р¶Рµ РёС‚РµСЂР°С†РёСЋ, РЅРµ Р±Р»РѕРєРёСЂСѓРµРј UI Р±РѕР»СЊС€Рµ С‡РµРј РЅР° 256 task-РѕРІ;
-                // РѕСЃС‚Р°С‚РѕРє РѕР±СЂР°Р±РѕС‚Р°РµС‚СЃСЏ РІ СЃР»РµРґСѓСЋС‰РµРј about_to_wait.
+                // Защита от runaway: если что-то рекурсивно планирует task в
+                // эту же итерацию, не блокируем UI больше чем на 256 task-ов;
+                // остаток обработается в следующем about_to_wait.
                 reached_idle = false;
                 break;
             }
         }
 
-        // W3C `requestIdleCallback` В§3: РїРѕСЃР»Рµ РґСЂРµРЅР°Р¶Р° РѕС‡РµСЂРµРґРё task-РѕРІ event-loop
-        // СЃРѕРѕР±С‰Р°РµС‚ В«idle windowВ». Phase 0 РЅРµ Р·РЅР°РµС‚ СЂРµР°Р»СЊРЅРѕРіРѕ Р±СЋРґР¶РµС‚Р° (РЅРµС‚
-        // РїСЂРёРІСЏР·РєРё Рє vsync), РїРѕСЌС‚РѕРјСѓ РїРµСЂРµРґР°С‘Рј С„РёРєСЃРёСЂРѕРІР°РЅРЅС‹Рµ `IDLE_BUDGET_MS`
-        // РєРѕРіРґР° РґРѕС€Р»Рё РґРѕ StepResult::Idle. Р•СЃР»Рё СѓРїС‘СЂР»РёСЃСЊ РІ cap=256 вЂ” РµСЃС‚СЊ РµС‰С‘
-        // pending tasks, РЅРµ idle: РїРµСЂРµРґР°С‘Рј 0 ms, С‡С‚РѕР±С‹ СЃСЂР°Р±РѕС‚Р°Р»Рё С‚РѕР»СЊРєРѕ
-        // timeout-callback-Рё (`request_idle_callback(..., timeout_ms)`).
-        // Р‘РµР· СЌС‚РѕРіРѕ РІС‹Р·РѕРІР° registered idle-callback-Рё РЅРµ РїРѕР»СѓС‡Р°СЋС‚ С€Р°РЅСЃР°
-        // РѕС‚СЂР°Р±РѕС‚Р°С‚СЊ РІ РїСЂРёРЅС†РёРїРµ.
+        // W3C `requestIdleCallback` §3: после дренажа очереди task-ов event-loop
+        // сообщает «idle window». Phase 0 не знает реального бюджета (нет
+        // привязки к vsync), поэтому передаём фиксированные `IDLE_BUDGET_MS`
+        // когда дошли до StepResult::Idle. Если упёрлись в cap=256 — есть ещё
+        // pending tasks, не idle: передаём 0 ms, чтобы сработали только
+        // timeout-callback-и (`request_idle_callback(..., timeout_ms)`).
+        // Без этого вызова registered idle-callback-и не получают шанса
+        // отработать в принципе.
         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
         let remaining_ms = if reached_idle { IDLE_BUDGET_MS } else { 0.0 };
         self.runtime.run_idle_callbacks(remaining_ms, now_ms);
@@ -125,24 +125,24 @@ impl Lumen {
         // deadline and the rAF-pump deadline (set below), so neither wakeup
         // source can starve the other.
         let mut next_wakeup: Option<std::time::Instant> = None;
-        // BUG-480 СЃСЂРµР· 1: РїР°РјРї sub-РґРѕРєСѓРјРµРЅС‚РѕРІ <iframe>. РҐСЌРЅРґР»С‹ С„СЂРµР№РјРѕРІ Р¶РёРІСѓС‚
-        // С‚РѕР»СЊРєРѕ РЅР° UI-СЃС‚РѕСЂРѕРЅРµ (РІ EngineJsState РёС… РЅРµС‚), РїРѕСЌС‚РѕРјСѓ РїСЂСЏРјС‹Рµ РІС‹Р·РѕРІС‹
-        // Р±РµР· route_*: V8PersistentJs СЃР°Рј С‚СѓРЅРЅРµР»РёСЂСѓРµС‚ РЅР° JS-РїРѕС‚РѕРє (ADR-014).
-        // Р’РЅРµ РіРµР№С‚Р° `js_present`: Сѓ С„СЂРµР№РјР° РјРѕР¶РµС‚ Р±С‹С‚СЊ СЃРєСЂРёРїС‚ РїСЂРё СЃС‚СЂР°РЅРёС†Рµ Р±РµР·
-        // РµРґРёРЅРѕРіРѕ СЃРєСЂРёРїС‚Р°. rAF С„СЂРµР№РјРѕРІ РЅРµ С‚РёРєР°РµС‚СЃСЏ (СЃСЂРµР· 1 вЂ” СЃРј. Р±Р°Рі-С„Р°Р№Р»).
-        // РРЅРґРµРєСЃ С…СЌРЅРґР»Р° РµРґРµС‚ СЂСЏРґРѕРј СЃ СЂР°РЅС‚Р°Р№РјРѕРј (СЃСЂРµР· 17): С„СЂРµР№Рј Р±РµР· СЃРєСЂРёРїС‚РѕРІ
-        // РІ СЌС‚РѕС‚ СЃРїРёСЃРѕРє РЅРµ РїРѕРїР°РґР°РµС‚, РїРѕСЌС‚РѕРјСѓ РїРѕР·РёС†РёСЏ РІ РЅС‘Рј РЅРµ СЂР°РІРЅР° РїРѕР·РёС†РёРё РІ
-        // `self.frames`, Р° РїСЂРѕРєСЂСѓС‚РєР° Р°РґСЂРµСЃСѓРµС‚СЃСЏ РёРјРµРЅРЅРѕ РІС‚РѕСЂРѕР№.
+        // BUG-480 срез 1: памп sub-документов <iframe>. Хэндлы фреймов живут
+        // только на UI-стороне (в EngineJsState их нет), поэтому прямые вызовы
+        // без route_*: V8PersistentJs сам туннелирует на JS-поток (ADR-014).
+        // Вне гейта `js_present`: у фрейма может быть скрипт при странице без
+        // единого скрипта. rAF фреймов не тикается (срез 1 — см. баг-файл).
+        // РРЅРґРµРєСЃ хэндла едет рядом с рантаймом (срез 17): фрейм без скриптов
+        // в этот список не попадает, поэтому позиция в нём не равна позиции в
+        // `self.frames`, а прокрутка адресуется именно второй.
         let frame_js_handles: Vec<(usize, Arc<dyn PersistentJs>)> = self
             .frames
             .iter()
             .enumerate()
             .filter_map(|(i, f)| f.js.clone().map(|js| (i, js)))
             .collect();
-        // BUG-480 СЃСЂРµР· 17: `window.scrollTo`/`scrollBy` РёР· СЃРєСЂРёРїС‚Р° СЃР°РјРѕРіРѕ
-        // СЂРµР±С‘РЅРєР°. РљР°Р¶РґС‹Р№ С„СЂРµР№Рј РєРѕРїРёС‚ Р·Р°РїСЂРѕСЃС‹ РІ РЎР’РћР‘Рњ СЂР°РЅС‚Р°Р№РјРµ, Рё РґРѕ СЃСЂРµР·Р° 17
-        // РёС… РЅРµ РґСЂРµРЅРёСЂРѕРІР°Р» РЅРёРєС‚Рѕ вЂ” СЃС‚СЂР°РЅРёС‡РЅС‹Р№ РґСЂРµРЅР°Р¶ РЅРёР¶Рµ Р·РЅР°РµС‚ С‚РѕР»СЊРєРѕ
-        // `self.js_ctx`. РџСЂРёРјРµРЅСЏСЋС‚СЃСЏ РїРѕСЃР»Рµ С†РёРєР»Р°: С‚Р°Рј РЅСѓР¶РµРЅ `&mut self`.
+        // BUG-480 срез 17: `window.scrollTo`/`scrollBy` из скрипта самого
+        // ребёнка. Каждый фрейм копит запросы в СВОБМ рантайме, и до среза 17
+        // их не дренировал никто — страничный дренаж ниже знает только
+        // `self.js_ctx`. Применяются после цикла: там нужен `&mut self`.
         let mut frame_scrolls: Vec<(usize, f32)> = Vec::new();
         // BUG-480 срез 20: `form.submit()`/`requestSubmit()` из скрипта самого
         // ребёнка — второй вход в отправку его формы.
@@ -159,10 +159,10 @@ impl Lumen {
             fjs.pump_workers();
             fjs.pump_broadcast_channels();
             fjs.pump_shared_workers();
-            // BUG-480 СЃСЂРµР· 4: РґРѕСЃС‚Р°РІРєР° РєСЂРѕСЃСЃ-С„СЂРµР№РјРѕРІС‹С… postMessage РІРѕ С„СЂРµР№Рј.
+            // BUG-480 срез 4: доставка кросс-фреймовых postMessage во фрейм.
             fjs.pump_frame_messages();
-            // РќР°РІРёРіР°С†РёСЏ РёР· С„СЂРµР№РјР° РѕС‚РєР»РѕРЅСЏРµС‚СЃСЏ (СЃСЂРµР· 1) вЂ” РґСЂРµРЅРёРј, С‡С‚РѕР±С‹ Р·Р°РїСЂРѕСЃ
-            // РЅРµ РєРѕРїРёР»СЃСЏ Рё РЅРµ СЃСЂР°Р±РѕС‚Р°Р» РїРѕР·Р¶Рµ РёР· РґСЂСѓРіРѕРіРѕ РјРµСЃС‚Р°.
+            // Навигация из фрейма отклоняется (срез 1) — дреним, чтобы запрос
+            // не копился и не сработал позже из другого места.
             //
             // BUG-480 срез 20: кроме `form.submit()`/`requestSubmit()` — это
             // не навигация «куда попало», а второй вход в ту же отправку формы
@@ -173,9 +173,9 @@ impl Lumen {
             {
                 frame_submits.push((*idx, form, submitter));
             }
-            // Р“Р»Р°РґРєРёР№ (`behavior: 'smooth'`) РїСЂРёРјРµРЅСЏРµС‚СЃСЏ РјРіРЅРѕРІРµРЅРЅРѕ: СЃРІРѕРµР№
-            // Р°РЅРёРјР°С†РёРё Сѓ РїСЂРѕРєСЂСѓС‚РєРё С„СЂРµР№РјР° РЅРµС‚, Р° С‚РёРєР°С‚СЊ РµС‘ Р±С‹Р»Рѕ Р±С‹ РЅРµРіРґРµ вЂ”
-            // rAF РїРѕРґ-РґРѕРєСѓРјРµРЅС‚РѕРІ РЅРµ РёРґС‘С‚ (СЃСЂРµР· 1). РћС‚РєР»РѕРЅРµРЅРёРµ Р·Р°РїРёСЃР°РЅРѕ РІ
+            // Гладкий (`behavior: 'smooth'`) применяется мгновенно: своей
+            // анимации у прокрутки фрейма нет, а тикать её было бы негде —
+            // rAF под-документов не идёт (срез 1). Отклонение записано в
             // bugs/BUG-480-OPEN.md.
             for (target_y, _smooth) in fjs.take_page_scroll_requests() {
                 frame_scrolls.push((*idx, target_y));
@@ -218,14 +218,14 @@ impl Lumen {
         // clone under the flag.
         //
         // ADR-016 M2.3: under the flag, skip the whole pump while a rAF turn is
-        // still running on the engine thread вЂ” its `route_query_js` reads would
+        // still running on the engine thread — its `route_query_js` reads would
         // otherwise block behind the in-flight `run_animation_frame` task and
         // freeze the parked loop. The timer/nav work simply runs one pass later
         // (the engine thread + `lumen-js` thread are busy anyway). Off the flag
         // `raf_turn_inflight()` is always `false`, so the gate is byte-identical.
         if self.js_present && !self.raf_turn_inflight() {
             // BUG-839: subresource loads the network layer recorded since the
-            // last step. Drained only when there is a runtime to hand them to вЂ”
+            // last step. Drained only when there is a runtime to hand them to —
             // most of a page's images finish before its JS context exists, and
             // taking the rows early would throw them away. What bounds the
             // queue instead is `resource_timing::clear()` on navigation, so a
@@ -238,12 +238,12 @@ impl Lumen {
                     j.deliver_resource_timings(&json);
                 });
             }
-            // ADR-016 M2.2c-2d: per-tick pump-Р±Р°С‚С‡ (fire-and-forget void) С‡РµСЂРµР·
-            // `route_task_js`. РџРѕРґ С„Р»Р°РіРѕРј (`LUMEN_ENGINE_THREAD=1`) СѓС…РѕРґРёС‚ off-UI-thread
-            // РѕРґРЅРёРј `task` (РїРѕСЂСЏРґРѕРє РІС‹Р·РѕРІРѕРІ РІРЅСѓС‚СЂРё СЃРѕС…СЂР°РЅС‘РЅ), Р° РїРѕСЃР»РµРґСѓСЋС‰РёРµ
-            // `route_query_js`-С‡С‚РµРЅРёСЏ nav/timer РІСЃС‚Р°СЋС‚ РІ РѕС‡РµСЂРµРґСЊ **РїРѕСЃР»Рµ** РЅРµРіРѕ вЂ”
-            // read-after-write РїРѕСЂСЏРґРѕРє РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅ, РєР°Рє РґР»СЏ routed `eval_js` РІ 2b/2c.
-            // Р‘РµР· С„Р»Р°РіР° (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ) вЂ” СЃРёРЅС…СЂРѕРЅРЅС‹Рµ РїСЂСЏРјС‹Рµ РІС‹Р·РѕРІС‹, Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ.
+            // ADR-016 M2.2c-2d: per-tick pump-батч (fire-and-forget void) через
+            // `route_task_js`. Под флагом (`LUMEN_ENGINE_THREAD=1`) уходит off-UI-thread
+            // одним `task` (порядок вызовов внутри сохранён), а последующие
+            // `route_query_js`-чтения nav/timer встают в очередь **после** него —
+            // read-after-write порядок восстановлен, как для routed `eval_js` в 2b/2c.
+            // Без флага (по умолчанию) — синхронные прямые вызовы, байт-идентично.
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
                 j.tick_timers();
                 j.pump_websockets();
@@ -251,17 +251,17 @@ impl Lumen {
                 j.pump_workers();
                 j.pump_broadcast_channels();
                 j.pump_shared_workers();
-                // BUG-480 СЃСЂРµР· 4: РґРѕСЃС‚Р°РІРєР° РєСЂРѕСЃСЃ-С„СЂРµР№РјРѕРІС‹С… postMessage РІ СЃС‚СЂР°РЅРёС†Сѓ.
+                // BUG-480 срез 4: доставка кросс-фреймовых postMessage в страницу.
                 j.pump_frame_messages();
             });
-            // ADR-016 M2.2c-2c (РѕСЃС‚Р°С‚РѕРє): value-returning nav/timer С‡С‚РµРЅРёСЏ С‡РµСЂРµР·
-            // `route_query_js` (С‚РѕС‚ Р¶Рµ РїР°С‚С‚РµСЂРЅ, С‡С‚Рѕ `take_dom_dirty`/`take_raf_pending`
-            // РІС‹С€Рµ). РџРѕРґ С„Р»Р°РіРѕРј (`LUMEN_ENGINE_THREAD=1`) С‡РёС‚Р°СЋС‚СЃСЏ Р±Р»РѕРєРёСЂСѓСЋС‰РёРј `query`
-            // вЂ” РІ РѕС‡РµСЂРµРґРё РїРѕСЃР»Рµ СѓР¶Рµ РѕС‚РїСЂР°РІР»РµРЅРЅС‹С… `task`, РІРѕСЃСЃС‚Р°РЅР°РІР»РёРІР°СЏ read-after-eval
-            // РїРѕСЂСЏРґРѕРє, РѕСЃС‚Р°РІР»РµРЅРЅС‹Р№ СЃРёРЅС…СЂРѕРЅРЅС‹Рј РІ 2b; Р±РµР· С„Р»Р°РіР° (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ) вЂ” `js.map`,
-            // Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ РїСЂРµР¶РЅРµРјСѓ РїСЂСЏРјРѕРјСѓ `js.<read>()`. `flatten` СЃС…Р»РѕРїС‹РІР°РµС‚
-            // `Option<Option<_>>` (РІРЅРµС€РЅРёР№ = В«РµСЃС‚СЊ Р»Рё JS-РєРѕРЅС‚РµРєСЃС‚В», РІРЅСѓС‚СЂРµРЅРЅРёР№ = СЃР°Рј
-            // СЂРµР·СѓР»СЊС‚Р°С‚ С‡С‚РµРЅРёСЏ) РІ `Option<_>`.
+            // ADR-016 M2.2c-2c (остаток): value-returning nav/timer чтения через
+            // `route_query_js` (тот же паттерн, что `take_dom_dirty`/`take_raf_pending`
+            // выше). Под флагом (`LUMEN_ENGINE_THREAD=1`) читаются блокирующим `query`
+            // — в очереди после уже отправленных `task`, восстанавливая read-after-eval
+            // порядок, оставленный синхронным в 2b; без флага (по умолчанию) — `js.map`,
+            // байт-идентично прежнему прямому `js.<read>()`. `flatten` схлопывает
+            // `Option<Option<_>>` (внешний = «есть ли JS-контекст», внутренний = сам
+            // результат чтения) в `Option<_>`.
             if let Some(nav) =
                 route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| j.take_navigate_request())
                     .flatten()
@@ -282,9 +282,9 @@ impl Lumen {
                 next_wakeup = Some(wakeup);
             }
         }
-        // BUG-480 СЃСЂРµР· 1: С‚Р°Р№РјРµСЂС‹ С„СЂРµР№РјРѕРІ СѓС‡Р°СЃС‚РІСѓСЋС‚ РІ WaitUntil РЅР°СЂР°РІРЅРµ СЃ
-        // С‚Р°Р№РјРµСЂР°РјРё СЃС‚СЂР°РЅРёС†С‹, РёРЅР°С‡Рµ setTimeout СЂРµР±С‘РЅРєР° СЃСЂР°Р±Р°С‚С‹РІР°РµС‚ СЃ Р·Р°РґРµСЂР¶РєРѕР№
-        // РґРѕ СЃР»РµРґСѓСЋС‰РµРіРѕ РїСЂРѕР±СѓР¶РґРµРЅРёСЏ РїРѕ С‡СѓР¶РѕРјСѓ РёСЃС‚РѕС‡РЅРёРєСѓ.
+        // BUG-480 срез 1: таймеры фреймов участвуют в WaitUntil наравне с
+        // таймерами страницы, иначе setTimeout ребёнка срабатывает с задержкой
+        // до следующего пробуждения по чужому источнику.
         for (_, fjs) in &frame_js_handles {
             if let Some(wakeup_epoch_ms) = fjs.take_timer_wakeup() {
                 let now_epoch_ms = std::time::SystemTime::now()
@@ -300,14 +300,14 @@ impl Lumen {
                 });
             }
         }
-        // BUG-480 СЃСЂРµР· 8: РєРѕРЅРІРµСЂС‚С‹ РјРѕСЃС‚Р° (РєСЂРѕСЃСЃ-С„СЂРµР№РјРѕРІС‹Рµ postMessage,
-        // С„Р°СЃР°РґРЅС‹Рµ СЃРѕР±С‹С‚РёСЏ/RunScript) РЅРµ СѓС‡Р°СЃС‚РІСѓСЋС‚ РІ WaitUntil СЃР°РјРё РїРѕ СЃРµР±Рµ вЂ”
-        // РїРѕСЃС‚Р°РІР»РµРЅРЅС‹Р№ РїРѕСЃР»Рµ Р·Р°С‚РёС…Р°РЅРёСЏ СЃС‚СЂР°РЅРёС†С‹ РєРѕРЅРІРµСЂС‚ Р¶РґР°Р» Р±С‹ СЃР»СѓС‡Р°Р№РЅРѕРіРѕ
-        // РїСЂРѕР±СѓР¶РґРµРЅРёСЏ С†РёРєР»Р° (СЃРјРѕРєРё СЃСЂРµР·РѕРІ 6вЂ“8 СЌС‚Рѕ Р»РѕРІРёР»Рё СЃС‚Р°Р±РёР»СЊРЅРѕ). РџРѕРєР°
-        // С…РѕС‚СЊ РѕРґРёРЅ Р¶РёРІРѕР№ РєРѕРЅС‚РµРєСЃС‚ РёРјРµРµС‚ РєРѕРЅРІРµСЂС‚ В«РґР»СЏ СЃРµР±СЏВ», РґРµСЂР¶РёРј РєРѕСЂРѕС‚РєРёР№
-        // poll-РґРµРґР»Р°Р№РЅ: РїРѕР»СѓС‡Р°С‚РµР»СЊ СЂР°Р·Р±РµСЂС‘С‚ СЏС‰РёРє РЅР° Р±Р»РёР¶Р°Р№С€РµРј С‚РёРєРµ РїСѓРјРїС‹.
-        // Р§РёСЃС‚С‹Рµ С‡С‚РµРЅРёСЏ, Р±РµР· РїРѕР±РѕС‡РЅС‹С… СЌС„С„РµРєС‚РѕРІ; РїРѕРґ РґРІРёР¶РєРѕРІС‹Рј РїРѕС‚РѕРєРѕРј СЃС‚СЂР°РЅРёС†Р°
-        // РѕРїСЂР°С€РёРІР°РµС‚СЃСЏ С‚РµРј Р¶Рµ route_query_js-РєР°РЅР°Р»РѕРј, С‡С‚Рѕ РѕСЃС‚Р°Р»СЊРЅС‹Рµ С‡С‚РµРЅРёСЏ.
+        // BUG-480 срез 8: конверты моста (кросс-фреймовые postMessage,
+        // фасадные события/RunScript) не участвуют в WaitUntil сами по себе —
+        // поставленный после затихания страницы конверт ждал бы случайного
+        // пробуждения цикла (смоки срезов 6–8 это ловили стабильно). Пока
+        // хоть один живой контекст имеет конверт «для себя», держим короткий
+        // poll-дедлайн: получатель разберёт ящик на ближайшем тике пумпы.
+        // Чистые чтения, без побочных эффектов; под движковым потоком страница
+        // опрашивается тем же route_query_js-каналом, что остальные чтения.
         let transport_pending = frame_js_handles.iter().any(|(_, fjs)| fjs.frame_transport_pending())
             || match self.engine_thread.as_ref() {
                 Some(et) => {
@@ -327,32 +327,32 @@ impl Lumen {
             let poll = std::time::Instant::now() + std::time::Duration::from_millis(2);
             next_wakeup = Some(next_wakeup.map_or(poll, |t| t.min(poll)));
         }
-        // BUG-271: rAF pump вЂ” fire pending requestAnimationFrame batches from
+        // BUG-271: rAF pump — fire pending requestAnimationFrame batches from
         // the parked event loop WITHOUT forcing a repaint. A page that keeps an
         // rAF loop alive without touching DOM/canvas used to drive an
         // unconditional `request_redraw` chain in `RedrawRequested`: full
         // display-list rebuild + GPU paint at 60 fps (~1 busy core on a static
         // page, see bugs/BUG-271-OPEN.md). Spec-wise a callback runs before the
-        // *next* repaint вЂ” but when nothing was invalidated there is no repaint
+        // *next* repaint — but when nothing was invalidated there is no repaint
         // to sync with, so batches fire here on a WaitUntil timer instead,
         // sharing the vsync gate (`last_raf_batch_ms`, RAF_MIN_INTERVAL_MS)
-        // with `RedrawRequested` step 3.1 so the combined rate stays в‰¤60 Hz.
+        // with `RedrawRequested` step 3.1 so the combined rate stays ≤60 Hz.
         // If a callback mutates the DOM we relayout and request a real paint,
         // so rAF-driven animations keep their 60 fps repaint cadence.
-        // ADR-016 M2.2c-2d: СЃРЅРёРјР°РµРј РїРѕСЃР»РµРґРЅРёРµ РїСЂСЏРјС‹Рµ `self.js_ctx`-РѕР±СЂР°С‰РµРЅРёСЏ rAF-РїР°РјРїР°
-        // (`has_raf_pending` read в†’ `route_query_js`, `run_animation_frame` void в†’
-        // `route_task_js`). РџРѕРґ С„Р»Р°РіРѕРј (`LUMEN_ENGINE_THREAD=1`) С‡С‚РµРЅРёСЏ вЂ” Р±Р»РѕРєРёСЂСѓСЋС‰РёР№
-        // `query`, Р±Р°С‚С‡ rAF вЂ” `task` РІ РѕС‡РµСЂРµРґСЊ **РјРµР¶РґСѓ** РЅРёРјРё, С‚Р°Рє С‡С‚Рѕ РїРѕСЂСЏРґРѕРє
-        // has_raf_pending в†’ take_raf_pending в†’ run_animation_frame в†’ take_dom_dirty
-        // СЃРѕС…СЂР°РЅС‘РЅ; Р±РµР· С„Р»Р°РіР° (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ) вЂ” РїСЂРµР¶РЅРёРµ СЃРёРЅС…СЂРѕРЅРЅС‹Рµ РІС‹Р·РѕРІС‹, Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ
-        // (РїСЂРё РѕС‚СЃСѓС‚СЃС‚РІСѓСЋС‰РµРј С…СЌРЅРґР»Рµ `route_query_js` в†’ `None` в†’ `unwrap_or(false)`,
-        // РєР°Рє РїСЂРµР¶РЅСЏСЏ РІРµС‚РєР° `js_ctx == None`).
+        // ADR-016 M2.2c-2d: снимаем последние прямые `self.js_ctx`-обращения rAF-пампа
+        // (`has_raf_pending` read → `route_query_js`, `run_animation_frame` void →
+        // `route_task_js`). Под флагом (`LUMEN_ENGINE_THREAD=1`) чтения — блокирующий
+        // `query`, батч rAF — `task` в очередь **между** ними, так что порядок
+        // has_raf_pending → take_raf_pending → run_animation_frame → take_dom_dirty
+        // сохранён; без флага (по умолчанию) — прежние синхронные вызовы, байт-идентично
+        // (при отсутствующем хэндле `route_query_js` → `None` → `unwrap_or(false)`,
+        // как прежняя ветка `js_ctx == None`).
         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
         if self.engine_thread.is_some() {
-            // ADR-016 M2.3 (flag on): async parked-loop rAF pump вЂ” the
+            // ADR-016 M2.3 (flag on): async parked-loop rAF pump — the
             // counterpart of `RedrawRequested` Step 3.1/4. `pump_raf_engine_thread`
             // fires the batch off-thread (at most one turn in flight) and submits
-            // an async relayout on a completed DOM-dirty turn, all lock-free вЂ”
+            // an async relayout on a completed DOM-dirty turn, all lock-free —
             // never a blocking engine `query` that would stall the parked loop
             // behind the JS turn.
             let raf_due = now_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS;
@@ -388,7 +388,7 @@ impl Lumen {
                 false
             };
             if raf_dom_dirty {
-                // rAF callback changed the DOM вЂ” rebuild layout and paint for real.
+                // rAF callback changed the DOM — rebuild layout and paint for real.
                 self.relayout_raf_dirty();
                 self.request_redraw();
             }
@@ -460,7 +460,7 @@ impl Lumen {
         }
         // ADR-016 M2.2: while an off-thread job is in flight (submitted but not yet
         // applied), the parked winit loop would not wake on its own to pick up the
-        // commit вЂ” arm a short poll deadline. Bounded by the always-landing newest
+        // commit — arm a short poll deadline. Bounded by the always-landing newest
         // job (coalescing) so this clears promptly. A future slice can replace this
         // with an `EventLoopProxy` wake on commit.
         if self.engine_thread.is_some()
@@ -471,7 +471,7 @@ impl Lumen {
         }
         match next_wakeup {
             Some(wakeup) => event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup)),
-            // BUG-271: no pending deadline вЂ” park the loop for real. Without
+            // BUG-271: no pending deadline — park the loop for real. Without
             // this reset a stale `WaitUntil` whose instant is already in the
             // past keeps waking the loop immediately (Poll-like spin): after
             // the last JS timer fired, `take_timer_wakeup()` returned `None`,
@@ -481,28 +481,28 @@ impl Lumen {
             None => event_loop.set_control_flow(ControlFlow::Wait),
         }
 
-        // в”Ђв”Ђ Canvas 2D: upload dirty <canvas> bitmaps to the renderer в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        // ── Canvas 2D: upload dirty <canvas> bitmaps to the renderer ──────────
         // JS Canvas 2D draws into per-node CPU buffers (lumen_canvas::Context2D).
         // Each frame we drain the dirty buffers and register them under the same
         // `canvas:{nid}` key the display list emits, then request a repaint.
-        // ADR-016 M2.2c-2d: canvas drain (value-returning) С‡РµСЂРµР· `route_query_js`
-        // (С‚РѕС‚ Р¶Рµ РїР°С‚С‚РµСЂРЅ, С‡С‚Рѕ nav/timer/nav-update РІС‹С€Рµ). РџРѕРґ С„Р»Р°РіРѕРј
-        // (`LUMEN_ENGINE_THREAD=1`) вЂ” Р±Р»РѕРєРёСЂСѓСЋС‰РёР№ `query`, РІСЃС‚Р°СЋС‰РёР№ РІ РѕС‡РµСЂРµРґСЊ
-        // **РїРѕСЃР»Рµ** СѓР¶Рµ РѕС‚РїСЂР°РІР»РµРЅРЅРѕРіРѕ pump-`task` (read-after-write СЃРѕС…СЂР°РЅС‘РЅ);
-        // Р±РµР· С„Р»Р°РіР° (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ) вЂ” `js.map(read)`, Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ РїСЂРµР¶РЅРµРјСѓ
-        // `js_ctx.map(flush_canvas_updates)`. `unwrap_or_default` РЅР° `None` (РЅРµС‚
-        // С…СЌРЅРґР»Р° / СЃРѕСЃС‚РѕСЏРЅРёРµ РЅРµ Р·РµСЂРєР°Р»РёСЂРѕРІР°РЅРѕ / РїРѕС‚РѕРє Р·Р°РІРµСЂС€С‘РЅ) РґР°С‘С‚ РїСѓСЃС‚РѕР№ РґСЂРµРЅР°Р¶.
+        // ADR-016 M2.2c-2d: canvas drain (value-returning) через `route_query_js`
+        // (тот же паттерн, что nav/timer/nav-update выше). Под флагом
+        // (`LUMEN_ENGINE_THREAD=1`) — блокирующий `query`, встающий в очередь
+        // **после** уже отправленного pump-`task` (read-after-write сохранён);
+        // без флага (по умолчанию) — `js.map(read)`, байт-идентично прежнему
+        // `js_ctx.map(flush_canvas_updates)`. `unwrap_or_default` на `None` (нет
+        // хэндла / состояние не зеркалировано / поток завершён) даёт пустой дренаж.
         // ADR-016 M2.3: `drain_query_js` defers this blocking read while a rAF
         // turn is inflight (would freeze the parked loop behind it); off the flag
         // it is byte-identical to the former direct `route_query_js`.
         let canvas_updates = self.drain_query_js(|j| j.flush_canvas_updates()).unwrap_or_default();
         if !canvas_updates.is_empty() {
             if let Some(r) = self.renderer.as_mut() {
-                // BUG-428: РєР»СЋС‡ `canvas:{nid}` СЃС‚СЂРѕРёС‚ РѕР±С‰РёР№ СЃ headless-РїСѓС‚С‘Рј
-                // `canvas_updates_as_images` вЂ” РѕРґРёРЅ РёСЃС‚РѕС‡РЅРёРє РёСЃС‚РёРЅС‹ С„РѕСЂРјР°С‚Р°.
+                // BUG-428: ключ `canvas:{nid}` строит общий с headless-путём
+                // `canvas_updates_as_images` — один источник истины формата.
                 for (key, image) in canvas_updates_as_images(canvas_updates) {
                     if let Err(e) = r.register_image(key.clone(), image) {
-                        eprintln!("Canvas: РЅРµ Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅ {key}: {e}");
+                        eprintln!("Canvas: не зарегистрирован {key}: {e}");
                     }
                 }
             }
@@ -511,23 +511,23 @@ impl Lumen {
             }
         }
 
-        // в”Ђв”Ђ History API: pushState/replaceState URL updates в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        // ── History API: pushState/replaceState URL updates ───────────────────
         // Drain URL-update notifications from history.pushState/replaceState.
         // pushState adds a same-document back-stack entry; replaceState updates
         // the displayed URL only.  Neither triggers a page load.
-        // ADR-016 M2.2c-2d: history pushState/replaceState drain С‡РµСЂРµР·
-        // `route_query_js` вЂ” СЃРѕР±РёСЂР°РµРј `updates` РґРѕ `&mut self`-РјСѓС‚Р°С†РёР№ СЃС‚РµРєР°
-        // РЅР°РІРёРіР°С†РёРё. РџРѕРґ С„Р»Р°РіРѕРј вЂ” `query` РїРѕСЃР»Рµ pump-`task`; Р±РµР· С„Р»Р°РіР° вЂ”
-        // Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ РїСЂРµР¶РЅРµРјСѓ `js.take_history_url_updates()`; `None` в†’
-        // `unwrap_or_default` = РїСѓСЃС‚РѕР№ РґСЂРµРЅР°Р¶ (РєР°Рє РІРµС‚РєР° `js_ctx == None`).
+        // ADR-016 M2.2c-2d: history pushState/replaceState drain через
+        // `route_query_js` — собираем `updates` до `&mut self`-мутаций стека
+        // навигации. Под флагом — `query` после pump-`task`; без флага —
+        // байт-идентично прежнему `js.take_history_url_updates()`; `None` →
+        // `unwrap_or_default` = пустой дренаж (как ветка `js_ctx == None`).
         #[cfg(feature = "v8")]
         {
             let updates = self.drain_query_js(|j| j.take_history_url_updates()).unwrap_or_default();
             for (is_push, url, new_state_json) in updates {
                 if is_push {
                     // pushState: save current state to nav_back as same-doc entry.
-                    // BUG-829: before the first pushState `display_url` is None вЂ”
-                    // the document URL lives in `source` вЂ” so the entry used to be
+                    // BUG-829: before the first pushState `display_url` is None —
+                    // the document URL lives in `source` — so the entry used to be
                     // stored with no URL at all and `fire_popstate` handed JS an
                     // empty string, which `_lumen_deliver_popstate` reads as "keep
                     // the current URL". Traversing back therefore restored the
@@ -560,14 +560,14 @@ impl Lumen {
             }
         }
 
-        // в”Ђв”Ђ History API: history.go(n) / back / forward traversal в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        // ── History API: history.go(n) / back / forward traversal ─────────────
         // Drain JS-initiated traversal deltas and apply them to the real
         // nav_back/nav_fwd stacks (single authority). Collect first so the
         // immutable `js_ctx` borrow is released before the `&mut self` calls.
-        // ADR-016 M2.2c-2d: history.go/back/forward traversal drain С‡РµСЂРµР·
-        // `route_query_js` вЂ” С‚Рµ Р¶Рµ РіР°СЂР°РЅС‚РёРё (query РїРѕСЃР»Рµ pump-`task` РїРѕРґ С„Р»Р°РіРѕРј;
-        // Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ `js_ctx.map(take_history_traversals)` Р±РµР· РЅРµРіРѕ), `None` в†’
-        // РїСѓСЃС‚РѕР№ РґСЂРµРЅР°Р¶. РЎРѕР±РёСЂР°РµРј РґРѕ `&mut self`-РјСѓС‚Р°С†РёР№ (`navigate_by`).
+        // ADR-016 M2.2c-2d: history.go/back/forward traversal drain через
+        // `route_query_js` — те же гарантии (query после pump-`task` под флагом;
+        // байт-идентично `js_ctx.map(take_history_traversals)` без него), `None` →
+        // пустой дренаж. Собираем до `&mut self`-мутаций (`navigate_by`).
         #[cfg(feature = "v8")]
         {
             let traversals = self.drain_query_js(|j| j.take_history_traversals()).unwrap_or_default();
@@ -576,7 +576,7 @@ impl Lumen {
             }
         }
 
-        // в”Ђв”Ђ Navigation API: run pending intercept handler в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        // ── Navigation API: run pending intercept handler ──────────────────────
         if let Some(pending) = &mut self.pending_intercepted {
             let started = match pending {
                 PendingIntercepted::Push { handler_started, .. }
@@ -585,12 +585,12 @@ impl Lumen {
                 | PendingIntercepted::Forward { handler_started, .. } => *handler_started,
             };
             if !started {
-                // ADR-016 M2.2c-2b: РёР·РѕР»РёСЂРѕРІР°РЅРЅС‹Р№ fire-and-forget void-РІС‹Р·РѕРІ
-                // (СЃР»РµРґРѕРј вЂ” С‚РѕР»СЊРєРѕ РјСѓС‚Р°С†РёСЏ `pending`, Р±РµР· СЃРёРЅС…СЂРѕРЅРЅРѕРіРѕ С‡С‚РµРЅРёСЏ JS),
-                // РїРѕСЌС‚РѕРјСѓ РјР°СЂС€СЂСѓС‚РёР·РёСЂСѓРµРј РµРіРѕ off-UI-thread РїСЂРё РІРєР»СЋС‡С‘РЅРЅРѕРј РґРІРёР¶РєРѕРІРѕРј
-                // РїРѕС‚РѕРєРµ; РїСЂРё РІС‹РєР»СЋС‡РµРЅРЅРѕРј (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ) вЂ” Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅС‹Р№
-                // СЃРёРЅС…СЂРѕРЅРЅС‹Р№ `js.eval_js`. Disjoint-borrow РїРѕР»РµР№ `engine_thread`/
-                // `js_ctx` СѓР¶РёРІР°РµС‚СЃСЏ СЃ Р°РєС‚РёРІРЅС‹Рј `&mut self.pending_intercepted`.
+                // ADR-016 M2.2c-2b: изолированный fire-and-forget void-вызов
+                // (следом — только мутация `pending`, без синхронного чтения JS),
+                // поэтому маршрутизируем его off-UI-thread при включённом движковом
+                // потоке; при выключенном (по умолчанию) — байт-идентичный
+                // синхронный `js.eval_js`. Disjoint-borrow полей `engine_thread`/
+                // `js_ctx` уживается с активным `&mut self.pending_intercepted`.
                 route_eval_js(
                     self.engine_thread.as_ref(),
                     self.js_ctx.as_ref(),
@@ -615,17 +615,17 @@ impl Lumen {
             }
         }
 
-        // в”Ђв”Ђ Navigation API: drain queued navigation requests в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        // ── Navigation API: drain queued navigation requests ─────────────────
         // Shell is the single authority for `navigation.navigate()` / `back()` /
         // `forward()` / `traverseTo()`. Each entry is `(action_code, url, key, data)`.
         #[cfg(feature = "v8")]
         {
-            // ADR-016 M2.2c-2c (РѕСЃС‚Р°С‚РѕРє): nav-update drain С‡РµСЂРµР· `route_query_js`
-            // (С‚РѕС‚ Р¶Рµ РїР°С‚С‚РµСЂРЅ, С‡С‚Рѕ nav/timer РІ `about_to_wait`). РџРѕРґ С„Р»Р°РіРѕРј вЂ”
-            // Р±Р»РѕРєРёСЂСѓСЋС‰РёР№ `query` РїРѕСЃР»Рµ СѓР¶Рµ РѕС‚РїСЂР°РІР»РµРЅРЅС‹С… `task`; Р±РµР· С„Р»Р°РіР° вЂ”
-            // Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ РїСЂРµР¶РЅРµРјСѓ `js_ctx.map(take_nav_updates)`. `None`
-            // (РЅРµС‚ UI-С…СЌРЅРґР»Р° / СЃРѕСЃС‚РѕСЏРЅРёРµ РЅРµ Р·РµСЂРєР°Р»РёСЂРѕРІР°РЅРѕ / РїРѕС‚РѕРє Р·Р°РІРµСЂС€С‘РЅ) в†’
-            // `unwrap_or_default` РґР°С‘С‚ РїСѓСЃС‚РѕР№ РґСЂРµРЅР°Р¶, РєР°Рє Рё РїСЂРµР¶РЅСЏСЏ РІРµС‚РєР° `None`.
+            // ADR-016 M2.2c-2c (остаток): nav-update drain через `route_query_js`
+            // (тот же паттерн, что nav/timer в `about_to_wait`). Под флагом —
+            // блокирующий `query` после уже отправленных `task`; без флага —
+            // байт-идентично прежнему `js_ctx.map(take_nav_updates)`. `None`
+            // (нет UI-хэндла / состояние не зеркалировано / поток завершён) →
+            // `unwrap_or_default` даёт пустой дренаж, как и прежняя ветка `None`.
             let navs = self.drain_query_js(|j| j.take_nav_updates()).unwrap_or_default();
             for (action_code, url, key, data) in navs {
                 match action_code {
@@ -697,10 +697,10 @@ impl Lumen {
             }
         }
 
-        // в”Ђв”Ђ Automation commands (SDC-1b/SDC-2) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        // ── Automation commands (SDC-1b/SDC-2) ──────────────────────────────────────
         // Drain external commands (BiDi/MCP/graphic_tests) and route to shell actions.
         // Each request already carries the reply sender for its specific caller
-        // (SDC-2) вЂ” no more fan-out through one shared, unread channel.
+        // (SDC-2) — no more fan-out through one shared, unread channel.
         let automation_cmds: Vec<AutomationRequest> = self.automation_rx.try_iter().collect();
         for (cmd, reply_tx) in automation_cmds {
             match cmd {
@@ -731,7 +731,7 @@ impl Lumen {
                     }
                 }
                 AutomationCommand::Type(target, text) => {
-                    // Same target resolution as `Click` вЂ” and the same honest
+                    // Same target resolution as `Click` — and the same honest
                     // failure when it resolves to nothing. Reporting `Ack` for
                     // an unresolvable target was half of BUG-436's "succeeds
                     // but does nothing" signature.
@@ -770,11 +770,11 @@ impl Lumen {
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::Eval(js) => {
-                    // ADR-016 M2.2c-2c: value-returning `eval_js_value` С‡РµСЂРµР·
-                    // `route_query_js`. РџРѕРґ С„Р»Р°РіРѕРј С‡С‚РµРЅРёРµ СѓРїРѕСЂСЏРґРѕС‡РµРЅРѕ Р·Р° СѓР¶Рµ
-                    // РѕС‚РїСЂР°РІР»РµРЅРЅС‹РјРё `task`; Р±РµР· С„Р»Р°РіР° Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ: `Some(js_ctx)`
-                    // в†’ `Some(result)`, РѕС‚СЃСѓС‚СЃС‚РІРёРµ С…СЌРЅРґР»Р° в†’ `None` в†’ В«JS context
-                    // not availableВ».
+                    // ADR-016 M2.2c-2c: value-returning `eval_js_value` через
+                    // `route_query_js`. Под флагом чтение упорядочено за уже
+                    // отправленными `task`; без флага байт-идентично: `Some(js_ctx)`
+                    // → `Some(result)`, отсутствие хэндла → `None` → «JS context
+                    // not available».
                     match route_query_js(
                         self.engine_thread.as_ref(),
                         self.js_ctx.as_ref(),
@@ -866,21 +866,21 @@ impl Lumen {
                     // BUG-295 (`network.setOfflineStatus`): process-global flag
                     // consulted at the one `fetch_with_redirect` chokepoint every
                     // fetch path (navigation, JS `fetch()`/XHR, subresources)
-                    // already funnels through вЂ” no per-request wiring needed here.
+                    // already funnels through — no per-request wiring needed here.
                     lumen_network::set_global_offline(offline);
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::SetUserAgent(ua) => {
                     // BUG-295 (`emulation.setUserAgentOverride`): empty string
                     // clears the override (see `LiveWindowSession::set_user_agent`
-                    // / `BidiState::user_agent_for` вЂ” `None` collapses to `""`
+                    // / `BidiState::user_agent_for` — `None` collapses to `""`
                     // before reaching this command).
                     let override_value = if ua.is_empty() { None } else { Some(ua.clone()) };
                     lumen_network::set_global_ua_override(override_value.clone());
                     #[cfg(feature = "v8")]
                     {
                         // Applies to the *next* navigation (install_dom reads the
-                        // global at DOM-bootstrap time вЂ” see
+                        // global at DOM-bootstrap time — see
                         // `v8_runtime::set_global_user_agent_override`'s doc).
                         lumen_js::v8_runtime::set_global_user_agent_override(override_value);
                         // Also re-inject into the *current* page right now: BiDi
@@ -888,7 +888,7 @@ impl Lumen {
                         // immediately `script.evaluate` `navigator.userAgent` on
                         // the already-loaded default context, with no navigation
                         // in between. Clearing (`ua.is_empty()`) is intentionally
-                        // not re-applied here вЂ” the current page keeps whatever
+                        // not re-applied here — the current page keeps whatever
                         // it last had; only the *next* navigation reverts to the
                         // real WEB_API_SHIM default.
                         if !ua.is_empty() {
@@ -904,12 +904,12 @@ impl Lumen {
                 }
                 AutomationCommand::SetTimezone(timezone_id) => {
                     // BUG-295 (`browser.setTimezoneOverride`): unlike UA
-                    // override there is no HTTP-layer counterpart вЂ” timezone
+                    // override there is no HTTP-layer counterpart — timezone
                     // only affects JS-visible `Intl`/`Date` behavior.
                     #[cfg(feature = "v8")]
                     {
                         // Applies to the *next* navigation (install_dom reads
-                        // the global at DOM-bootstrap time вЂ” see
+                        // the global at DOM-bootstrap time — see
                         // `v8_runtime::set_global_timezone_override`'s doc).
                         lumen_js::v8_runtime::set_global_timezone_override(timezone_id.clone());
                         // Also re-inject into the *current* page right now,
@@ -917,7 +917,7 @@ impl Lumen {
                         // override then immediately `script.evaluate` on the
                         // already-loaded default context, with no navigation
                         // in between. Clearing (`None`) is intentionally not
-                        // re-applied here вЂ” only the *next* navigation clears
+                        // re-applied here — only the *next* navigation clears
                         // the marker (matches `SetUserAgent`'s accepted gap).
                         if let Some(tz) = &timezone_id {
                             let script = lumen_js::v8_runtime::timezone_override_script(tz);
@@ -968,7 +968,7 @@ impl Lumen {
             }
         }
 
-        // Re-check queued `Wait` requests once per frame вЂ” never block the
+        // Re-check queued `Wait` requests once per frame — never block the
         // event loop on a wait (see `PendingWait` doc comment for why).
         if !self.pending_waits.is_empty() {
             let now = std::time::Instant::now();
@@ -981,7 +981,7 @@ impl Lumen {
                     // error (BUG-308's `load_failed` early-out), not because a
                     // document actually loaded. Reporting `Ack` there is
                     // exactly the "navigate/wait both say success but the
-                    // previous document is still showing" bug вЂ” surface the
+                    // previous document is still showing" bug — surface the
                     // real failure instead, the same way a wait timeout does.
                     let settled_error = matches!(
                         pending.cond,
@@ -1008,14 +1008,14 @@ impl Lumen {
         }
 
         // Ph3 pointer-events-l3: flush any `CursorMoved` samples queued this
-        // tick as one coalesced `pointermove` вЂ” Pointer Events L3 В§4.1. Runs
+        // tick as one coalesced `pointermove` — Pointer Events L3 §4.1. Runs
         // once per `about_to_wait` iteration (roughly once per frame); a fast
         // mouse can queue several samples between paints, all folded into a
         // single dispatch with the rest exposed via `getCoalescedEvents()`.
         #[cfg(feature = "v8")]
         self.flush_pointer_moves();
 
-        // в”Ђв”Ђ Native input injection (ADR-007 В§8C) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        // ── Native input injection (ADR-007 §8C) ─────────────────────────────
         // Drain injected commands and route through the same dispatch path as
         // real OS events so events have isTrusted=true.
         let injected: Vec<input::InputCommand> = self.input_rx.drain();
@@ -1046,7 +1046,7 @@ impl Lumen {
             }
         }
 
-        // Pointer Events L3 В§4.1: flush pointer-move samples buffered this
+        // Pointer Events L3 §4.1: flush pointer-move samples buffered this
         // tick (real `CursorMoved` + injected `MouseMove`) as one coalesced
         // `pointermove`/`mousemove` dispatch. Safety-net flush point: press/
         // release/enter/leave dispatch sites flush eagerly for ordering, but a
@@ -1089,7 +1089,7 @@ impl Lumen {
             }
         }
 
-        // В§12.3 Read-later: drain completed background page fetches and persist.
+        // §12.3 Read-later: drain completed background page fetches and persist.
         while let Ok((url, title, html)) = self.read_later_rx.try_recv() {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1101,8 +1101,8 @@ impl Lumen {
         }
 
         // Web Notifications API: deliver pending OS notifications queued by JS.
-        // ADR-016 M2.2d: value-drain С‡РµСЂРµР· `route_query_js` (РїРѕРґ С„Р»Р°РіРѕРј вЂ” off-UI-thread
-        // `query`; Р±РµР· С„Р»Р°РіР° вЂ” Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ РїСЂРµР¶РЅРµРјСѓ `js.take_notification_requests()`).
+        // ADR-016 M2.2d: value-drain через `route_query_js` (под флагом — off-UI-thread
+        // `query`; без флага — байт-идентично прежнему `js.take_notification_requests()`).
         for (title, body) in self.drain_query_js(|j| j.take_notification_requests()).unwrap_or_default()
         {
             notification::show_os_notification(&title, &body);
@@ -1111,14 +1111,14 @@ impl Lumen {
         // window.open() popup requests: each entry opens a new tab and navigates it
         // to the requested URL.  Executed after the page render so the current tab
         // stays visible while the new tab loads.
-        // ADR-016 M2.2d: value-drain С‡РµСЂРµР· `route_query_js`.
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         {
             let popups = self.drain_query_js(|j| j.take_window_open_requests()).unwrap_or_default();
             for (url, _target, _width, _height) in popups {
                 // BUG-293: resolve `file://` popups to a `PageSource::File` (load
                 // from disk) rather than the http-only network path. Read the
                 // opener's scheme from `self.source` BEFORE `open_new_tab()`
-                // resets it, so the webв†’file security check sees the real opener.
+                // resets it, so the web→file security check sees the real opener.
                 let resolved = if url.is_empty() {
                     Ok(PageSource::Url("about:blank".to_owned()))
                 } else {
@@ -1127,13 +1127,13 @@ impl Lumen {
                 self.open_new_tab();
                 match resolved {
                     Ok(source) => self.navigate_to(source),
-                    Err(reason) => eprintln!("window.open Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅ: {reason}"),
+                    Err(reason) => eprintln!("window.open заблокирован: {reason}"),
                 }
             }
         }
 
         // Fullscreen API: apply OS fullscreen on requestFullscreen() / exitFullscreen().
-        // ADR-016 M2.2d: value-drain С‡РµСЂРµР· `route_query_js`.
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "v8")]
         for (enter, nid) in self.drain_query_js(|j| j.take_fullscreen_requests()).unwrap_or_default()
         {
@@ -1160,9 +1160,9 @@ impl Lumen {
         // a toggle is pending.
         self.poll_fullscreen_resize();
 
-        // Pointer Lock API (W3C Pointer Lock L2 В§4): apply pending OS cursor grab.
-        // JS calls requestPointerLock() / exitPointerLock() в†’ queues a grab change
-        // в†’ shell applies it here via winit.  Locked falls back to Confined on
+        // Pointer Lock API (W3C Pointer Lock L2 §4): apply pending OS cursor grab.
+        // JS calls requestPointerLock() / exitPointerLock() → queues a grab change
+        // → shell applies it here via winit.  Locked falls back to Confined on
         // platforms (e.g. Wayland) that don't support true cursor lock.
         #[cfg(feature = "v8")]
         if let (Some(grab), Some(window)) = (
@@ -1179,7 +1179,7 @@ impl Lumen {
             }
         }
 
-        // CC-7 / P3-pip: Video and Document Picture-in-Picture вЂ” open/close the
+        // CC-7 / P3-pip: Video and Document Picture-in-Picture — open/close the
         // real OS floating window. Drained from the process-global queue fed
         // by `_lumen_pip_enter` / `_lumen_pip_exit` / `_lumen_pip_request_window`
         // (see `lumen_js::pip_bindings`).
@@ -1203,7 +1203,7 @@ impl Lumen {
             }
         }
 
-        // Document Picture-in-Picture (slice 1) вЂ” open/close the real OS floating
+        // Document Picture-in-Picture (slice 1) — open/close the real OS floating
         // window. Drained from the process-global queue fed by
         // `_lumen_docpip_request_window` / `_lumen_docpip_close` (see
         // `lumen_js::documentpip_bindings`).
@@ -1229,17 +1229,17 @@ impl Lumen {
         }
 
         // Print API: window.print() exports current document as PDF (W-2).
-        // ADR-016 M2.2d: value-drain С‡РµСЂРµР· `route_query_js`.
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "v8")]
         for req in self.drain_query_js(|j| j.take_print_requests()).unwrap_or_default()
         {
             self.handle_print_request(&req);
         }
 
-        // Focus management (HTML LS В§6.6.3): apply focus changes requested by JS via
-        // _lumen_request_focus / _lumen_request_blur вЂ” `element.focus()`/`blur()`
+        // Focus management (HTML LS §6.6.3): apply focus changes requested by JS via
+        // _lumen_request_focus / _lumen_request_blur — `element.focus()`/`blur()`
         // (BUG-381) as well as the older showModal() / close() pair.
-        // ADR-016 M2.2d: value-drain С‡РµСЂРµР· `route_query_js`.
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "v8")]
         {
             let focus_reqs = self.drain_query_js(|j| j.take_focus_requests()).unwrap_or_default();
@@ -1272,7 +1272,7 @@ impl Lumen {
         }
 
         // CSS View Transitions API: drain snapshot/animation events from JS.
-        // ADR-016 M2.2d: value-drain С‡РµСЂРµР· `route_query_js`.
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "v8")]
         {
             let events = self.drain_query_js(|j| j.take_view_transition_events()).unwrap_or_default();
@@ -1287,7 +1287,7 @@ impl Lumen {
                         });
                     }
                     ViewTransitionEvent::End => {
-                        // Callback finished вЂ” relayout picks up DOM mutations,
+                        // Callback finished — relayout picks up DOM mutations,
                         // then the render step blends old_dl (fading out) over
                         // the new display list.
                         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
@@ -1300,7 +1300,7 @@ impl Lumen {
                         }
                     }
                     ViewTransitionEvent::Cancel => {
-                        // Transition was cancelled вЂ” abort the animation.
+                        // Transition was cancelled — abort the animation.
                         self.view_transition = None;
                     }
                 }
@@ -1308,7 +1308,7 @@ impl Lumen {
         }
 
         // DevTools console: drain JS console.log/warn/error messages into the panel.
-        // ADR-016 M2.2d: value-drain С‡РµСЂРµР· `route_query_js`.
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         {
             let msgs = self.drain_query_js(|j| j.take_console_messages()).unwrap_or_default();
             if !msgs.is_empty() {
@@ -1330,16 +1330,16 @@ impl Lumen {
 
         // JS scroll requests: drain programmatic scrolls queued by scrollTo/scrollBy/
         // scrollIntoView.  Scroll position is applied directly to the existing layout
-        // tree (no CSS re-computation needed вЂ” scroll only affects paint offsets), the
+        // tree (no CSS re-computation needed — scroll only affects paint offsets), the
         // display list is rebuilt cheaply, and JS scroll-state cache is updated so
         // subsequent scrollTop/scrollLeft reads return the new values.
-        // ADR-016 M2.2d: value-drain (`take_scroll_requests`) С‡РµСЂРµР· `route_query_js`,
-        // write-back (`update_scroll_states` + `fire_element_scroll`) С‡РµСЂРµР·
-        // `route_task_js` вЂ” СЃРЅРёРјР°РµРј РїСЂСЏРјС‹Рµ `self.js_ctx`-РѕР±СЂР°С‰РµРЅРёСЏ. РџРѕРґ С„Р»Р°РіРѕРј
-        // (`LUMEN_ENGINE_THREAD=1`) РґСЂРµРЅР°Р¶ РёРґС‘С‚ Р±Р»РѕРєРёСЂСѓСЋС‰РёРј `query`, Р° РїРѕСЃР»РµРґСѓСЋС‰Р°СЏ
-        // write-back-`task` РІСЃС‚Р°С‘С‚ РІ РѕС‡РµСЂРµРґСЊ **РїРѕСЃР»Рµ** РЅРµРіРѕ (read-after-write РїРѕСЂСЏРґРѕРє
-        // СЃРѕС…СЂР°РЅС‘РЅ); Р±РµР· С„Р»Р°РіР° (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ) вЂ” РїСЂРµР¶РЅРёРµ СЃРёРЅС…СЂРѕРЅРЅС‹Рµ `js.<method>()`,
-        // Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ.
+        // ADR-016 M2.2d: value-drain (`take_scroll_requests`) через `route_query_js`,
+        // write-back (`update_scroll_states` + `fire_element_scroll`) через
+        // `route_task_js` — снимаем прямые `self.js_ctx`-обращения. Под флагом
+        // (`LUMEN_ENGINE_THREAD=1`) дренаж идёт блокирующим `query`, а последующая
+        // write-back-`task` встаёт в очередь **после** него (read-after-write порядок
+        // сохранён); без флага (по умолчанию) — прежние синхронные `js.<method>()`,
+        // байт-идентично.
         #[cfg(feature = "v8")]
         {
             let scroll_reqs = self.drain_query_js(|j| j.take_scroll_requests()).unwrap_or_default();
@@ -1357,17 +1357,17 @@ impl Lumen {
                 if changed {
                     // Rebuild display list with the updated scroll offsets.
                     let mut new_dl = paint_ordered(lb);
-                    // BUG-480 СЃСЂРµР· 14: paint_ordered РїРµСЂРµСЃРѕР±РёСЂР°РµС‚ СЃРїРёСЃРѕРє РёР·
-                    // layout Рё Рѕ С„СЂРµР№РјР°С… РЅРµ Р·РЅР°РµС‚ вЂ” Р±РµР· РІРєР»РµР№РєРё СЃРѕРґРµСЂР¶РёРјРѕРµ
-                    // С„СЂРµР№РјР° РёСЃС‡РµР·Р»Рѕ Р±С‹ РЅР° РїРµСЂРІРѕРј Р¶Рµ СЃРєСЂРѕР»Р»Рµ РєРѕРЅС‚РµР№РЅРµСЂР°.
+                    // BUG-480 срез 14: paint_ordered пересобирает список из
+                    // layout и о фреймах не знает — без вклейки содержимое
+                    // фрейма исчезло бы на первом же скролле контейнера.
                     crate::frames::splice_frame_content(&mut new_dl, &self.frames);
                     let root_id = lb.node.index() as u32;
                     self.tile_grid.update_from_diff(&self.display_list, &new_dl);
-                    // Cache directly вЂ” lb mutably borrows self.layout_box; only self.display_list_cache is touched here.
+                    // Cache directly — lb mutably borrows self.layout_box; only self.display_list_cache is touched here.
                     let dl_hash = lumen_paint::hash_commands(&new_dl);
                     self.display_list_cache.insert(root_id, new_dl.clone(), dl_hash, None);
-                    // РџСЂСЏРјР°СЏ Р·Р°РїРёСЃСЊ РїРѕР»РµР№: `layout_box` Р·РґРµСЃСЊ Р·Р°РёРјСЃС‚РІРѕРІР°РЅ
-                    // РјСѓС‚Р°Р±РµР»СЊРЅРѕ, `&mut self` С†РµР»РёРєРѕРј РІР·СЏС‚СЊ РЅРµР»СЊР·СЏ.
+                    // Прямая запись полей: `layout_box` здесь заимствован
+                    // мутабельно, `&mut self` целиком взять нельзя.
                     self.display_list = new_dl;
                     self.display_list_epoch = next_dl_epoch(self.display_list_epoch);
                     // Sync JS cache so scrollTop/scrollLeft reads are accurate, then fire
@@ -1381,8 +1381,8 @@ impl Lumen {
                         for nid in scrolled_nids {
                             j.fire_element_scroll(nid);
                             // BUG-822: a programmatic container scroll is
-                            // applied in full right here вЂ” there is no
-                            // per-container animation to wait for вЂ” so the
+                            // applied in full right here — there is no
+                            // per-container animation to wait for — so the
                             // sequence has already ended and `scrollend`
                             // follows `scroll` in the same frame.
                             j.fire_element_scrollend(nid);
@@ -1397,8 +1397,8 @@ impl Lumen {
 
         // Page-level scroll requests from JS window.scrollTo / window.scrollBy.
         // Smooth requests go through the rAF-based animation; instant ones set
-        // scroll_y directly (CSS Scroll Behavior L1 В§3).
-        // ADR-016 M2.2d: value-drain С‡РµСЂРµР· `route_query_js`.
+        // scroll_y directly (CSS Scroll Behavior L1 §3).
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "v8")]
         for (target_y, smooth) in self.drain_query_js(|j| j.take_page_scroll_requests()).unwrap_or_default()
         {
@@ -1412,12 +1412,12 @@ impl Lumen {
         // DOM GC idle tick: drain dead node IDs and purge JS-side per-node caches.
         // Runs every 30 s to free _lumen_listeners / _input_values entries for
         // nodes that were detached from the tree and have no live JS references.
-        // ADR-016 M2.2d: dead-node computation РѕСЃС‚Р°С‘С‚СЃСЏ РЅР° UI-РїРѕС‚РѕРєРµ (РЅСѓР¶РЅС‹
-        // `layout_source`-РґРѕРєСѓРјРµРЅС‚ + `&mut gc_tick`), Р° СЃР°Рј `gc_collect` вЂ” С‡РёСЃС‚С‹Р№ void вЂ”
-        // СѓС…РѕРґРёС‚ С‡РµСЂРµР· `route_task_js`. Р“РµР№С‚ `Some(_js)` СЃРѕС…СЂР°РЅС‘РЅ, С‡С‚РѕР±С‹ `gc_tick.poll`
-        // С‚РёРєР°Р» С‚РѕР»СЊРєРѕ РїСЂРё РЅР°Р»РёС‡РёРё JS-РєРѕРЅС‚РµРєСЃС‚Р°, РєР°Рє РїСЂРµР¶РґРµ (Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ С„Р»Р°Рі-РѕС„С„).
+        // ADR-016 M2.2d: dead-node computation остаётся на UI-потоке (нужны
+        // `layout_source`-документ + `&mut gc_tick`), а сам `gc_collect` — чистый void —
+        // уходит через `route_task_js`. Гейт `Some(_js)` сохранён, чтобы `gc_tick.poll`
+        // тикал только при наличии JS-контекста, как прежде (байт-идентично флаг-офф).
         // ADR-016 M2.2c-2d (20): JS-presence gate reads `self.js_present` instead of
-        // borrowing the `Arc` вЂ” kept in lockstep by `set_js_ctx`, so byte-identical.
+        // borrowing the `Arc` — kept in lockstep by `set_js_ctx`, so byte-identical.
         if self.js_present
             && let Some(ls) = self.layout_source.as_ref()
         {
@@ -1458,9 +1458,9 @@ impl Lumen {
             }
         }
 
-        // РџРѕСЃС‚-РґСЂРµРЅР°Р¶РЅС‹Р№ check: reload, Р·Р°РїР»Р°РЅРёСЂРѕРІР°РЅРЅС‹Р№ С‡РµСЂРµР· queue_task
-        // (UserInteraction source), РёСЃРїРѕР»РЅСЏРµС‚СЃСЏ РїРѕСЃР»Рµ microtask checkpoint.
-        // `take` Р°С‚РѕРјР°СЂРЅРѕ СЃР±СЂР°СЃС‹РІР°РµС‚ С„Р»Р°Рі, С‡С‚РѕР±С‹ reload РІС‹Р·РІР°Р»СЃСЏ С‚РѕР»СЊРєРѕ СЂР°Р·.
+        // Пост-дренажный check: reload, запланированный через queue_task
+        // (UserInteraction source), исполняется после microtask checkpoint.
+        // `take` атомарно сбрасывает флаг, чтобы reload вызвался только раз.
         if self.pending_reload.take() {
             self.reload();
         }
@@ -1472,17 +1472,17 @@ impl Lumen {
             match nav {
                 JsNavigateRequest::Push(url) => {
                     click_log::log_js_nav("pushState/location.href", &url);
-                    // BUG-293: same file://-resolution + webв†’file guard as popups.
+                    // BUG-293: same file://-resolution + web→file guard as popups.
                     match resolve_js_navigation(&url, &self.source) {
                         Ok(source) => self.navigate_to(source),
-                        Err(reason) => eprintln!("РќР°РІРёРіР°С†РёСЏ Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅР°: {reason}"),
+                        Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
                     }
                 }
                 JsNavigateRequest::Replace(url) => {
                     click_log::log_js_nav("replaceState/location.replace", &url);
                     match resolve_js_navigation(&url, &self.source) {
                         Ok(source) => self.navigate_replace(source),
-                        Err(reason) => eprintln!("РќР°РІРёРіР°С†РёСЏ Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅР°: {reason}"),
+                        Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
                     }
                 }
                 JsNavigateRequest::Reload => {
@@ -1507,7 +1507,7 @@ impl Lumen {
 /// A queued `AutomationCommand::Wait` request (SDC-1b), re-checked once per
 /// frame in `about_to_wait` rather than blocking the event loop.
 pub(crate) struct PendingWait {
-    /// Condition to poll вЂ” see [`check_pending_wait_condition`].
+    /// Condition to poll — see [`check_pending_wait_condition`].
     pub(crate) cond: WaitCondition,
     /// When this wait gives up and replies `AutomationReply::Error`.
     pub(crate) deadline: std::time::Instant,

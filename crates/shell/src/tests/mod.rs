@@ -15,12 +15,12 @@ mod page_pipeline;
 mod page_resources;
 mod scripts_and_frames;
 
-// в”Ђв”Ђ BUG-436: typed characters reach the JS dispatch intact в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── BUG-436: typed characters reach the JS dispatch intact ───────────────
 
 #[test]
 fn escaped_char_is_safe_inside_single_quoted_js_literal() {
     // Every call site interpolates into `'...'`, so an apostrophe must not
-    // close the literal вЂ” it used to, and the whole dispatch script was
+    // close the literal — it used to, and the whole dispatch script was
     // dropped as a syntax error.
     assert_eq!(escape_js_string_char('\''), r"\'");
     assert_eq!(escape_js_string_char('\\'), r"\\");
@@ -72,7 +72,7 @@ fn popstate_eval_source_escapes_both_arguments() {
     assert!(src.contains(r#""{\"s\":\"a'b\\\\c\"}""#), "state: {src}");
 }
 
-// в”Ђв”Ђ ADR-023: engine-thread default flip + rollback precedence в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── ADR-023: engine-thread default flip + rollback precedence ────────────
 
 #[test]
 fn engine_thread_on_by_default_when_no_vars_set() {
@@ -106,7 +106,7 @@ fn engine_thread_opt_out_only_honours_exact_one() {
     assert!(engine_thread_enabled_from(Some(""), None));
 }
 
-// в”Ђв”Ђ DS-1: design-token generator output sanity в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── DS-1: design-token generator output sanity ───────────────────────────
 
 #[test]
 fn theme_tokens_radius_lg_matches_prototype() {
@@ -126,7 +126,7 @@ fn theme_tokens_profile_anonymous_matches_prototype() {
     );
 }
 
-// в”Ђв”Ђ CC-12: chrome perf gate вЂ” mutate в†’ restyle в†’ relayout в†’ paint cycle в”Ђ
+// ── CC-12: chrome perf gate — mutate → restyle → relayout → paint cycle ─
 
 /// Builds a populated `ChromeModel` (6 tabs, 3 workspaces) so the bound
 /// document approaches the ~400-node ballpark CC-12's brief measures
@@ -173,7 +173,7 @@ fn cc12_bench_shrunk_model(omnibox_value: &str) -> lumen_chrome::ChromeModel {
 
 /// BUG-341 S5: persisted state `cc12_bench_cycle` carries across
 /// iterations, mirroring exactly what `Lumen::relayout_chrome_host`
-/// itself now persists (`chrome_prev_*` fields) вЂ” a standalone struct
+/// itself now persists (`chrome_prev_*` fields) — a standalone struct
 /// here since this bench has no `Lumen` instance to hang them on.
 #[derive(Default)]
 struct Cc12IncrementalState {
@@ -190,22 +190,22 @@ struct Cc12IncrementalState {
 }
 
 /// One `relayout_chrome_host`-equivalent pass, timed exactly like the
-/// mutate (`bind_model`) в†’ restyle+relayout в†’ persist-for-next-cycle в†’
-/// paint (`paint_ordered`, display-list build вЂ” CC-12's "paint" stops
-/// here, same as the rest of the engine's layoutв†’paint terminology; GPU
+/// mutate (`bind_model`) → restyle+relayout → persist-for-next-cycle →
+/// paint (`paint_ordered`, display-list build — CC-12's "paint" stops
+/// here, same as the rest of the engine's layout→paint terminology; GPU
 /// submit/present is a separate stage this cycle never reaches) sequence
 /// `Lumen::relayout_chrome_host` runs on every chrome interaction.
 ///
-/// BUG-341 S6: mirrors `relayout_chrome_host`'s own eligibility check вЂ”
+/// BUG-341 S6: mirrors `relayout_chrome_host`'s own eligibility check —
 /// the incremental path is taken whenever a previous pristine tree/
 /// cascade cache exists, deriving its cascade dirty-root-set from
 /// `bind_model_tracked`'s real diff (unioned with the interactive-state
 /// root-set) instead of requiring the whole `ChromeModel` to be
-/// bit-identical (S5's limit вЂ” that's what kept `CC12_KEY`'s per-cycle
+/// bit-identical (S5's limit — that's what kept `CC12_KEY`'s per-cycle
 /// omnibox-text change on the full-layout path). Falls back to
 /// `layout_measured_hyp_with_counters` only on the first cycle. `state`'s
 /// persist of the fresh tree/cascade cache is deliberately inside the timed
-/// region вЂ” that per-cycle cost is real production overhead, not a
+/// region — that per-cycle cost is real production overhead, not a
 /// benchmark artifact. BUG-341 S22 turned the tree half of it from a
 /// whole-tree `clone()` into a move.
 #[allow(clippy::too_many_arguments)]
@@ -247,7 +247,7 @@ fn cc12_bench_cycle(
             let delta = lumen_layout::counters::RestyleDelta {
                 prev_styles: std::mem::take(&mut state.prev_cascade_styles),
                 dirty_roots,
-                // BUG-341 S16 вЂ” mirrors `relayout_chrome_host` exactly, so
+                // BUG-341 S16 — mirrors `relayout_chrome_host` exactly, so
                 // the bench measures the production reuse decision.
                 content_dirty: lumen_layout::counters::ContentDirty::Nodes(&touched.content),
             };
@@ -264,7 +264,7 @@ fn cc12_bench_cycle(
     };
     // BUG-341 S8: split the timed region so the incremental design's own
     // per-cycle bookkeeping (two deep clones of the whole document) is
-    // visible separately from the layout work it is meant to be saving вЂ”
+    // visible separately from the layout work it is meant to be saving —
     // the S8 re-analysis found that bookkeeping to be ~12-13ms of the
     // cycle, which no stage profile inside `lumen-layout` can show.
     let t_layout = t0.elapsed().as_secs_f64() * 1000.0;
@@ -275,7 +275,7 @@ fn cc12_bench_cycle(
     let _dl = paint_ordered(&layout);
     let t_paint = t3.elapsed().as_secs_f64() * 1000.0;
     // BUG-341 S22: a **move**, not a `clone()`. Production stopped copying
-    // the tree here too вЂ” `relayout_chrome_host` hands the next pass its
+    // the tree here too — `relayout_chrome_host` hands the next pass its
     // own live tree with `take_content_area`'s removals undone
     // (`restore_content_area`). This bench has never modelled the pruning,
     // so the move is the whole of the change here; production additionally
@@ -297,7 +297,7 @@ fn cc12_bench_cycle(
     (ms, bb)
 }
 
-/// Boxes in `b`'s subtree, inclusive вЂ” census only.
+/// Boxes in `b`'s subtree, inclusive — census only.
 fn census_count_boxes(b: &lumen_layout::LayoutBox) -> u64 {
     1 + b.children.iter().map(census_count_boxes).sum::<u64>()
 }

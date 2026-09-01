@@ -12,19 +12,19 @@
 
 use crate::*;
 
-/// A page kept *alive* for back/forward restoration (HTML LS В§7.4.6, "salvageable
+/// A page kept *alive* for back/forward restoration (HTML LS §7.4.6, "salvageable
 /// document" / bfcache).
 ///
 /// The frozen bfcache path ([`Lumen::bfcache_thaw`]) serializes the DOM and
 /// installs a **fresh** JS runtime over it, which loses every timer, closure and
-/// event listener the page had вЂ” the restored document is inert, and that is
+/// event listener the page had — the restored document is inert, and that is
 /// exactly what [BUG-835](../../../bugs/BUG-835-FIXED.md) measured: after
 /// `history.back()` no script of the restored page ever ran again. Since each
 /// `V8JsRuntime` owns its own OS thread and isolate,
 /// keeping the whole handle alive is both possible and cheap to reason about:
 /// nothing pumps a parked runtime (`route_task_js` only ever reaches the active
 /// `js_ctx`), so its timers and animation frames are paused for exactly as long
-/// as the page is in the back/forward cache вЂ” which is the spec's model.
+/// as the page is in the back/forward cache — which is the spec's model.
 ///
 /// Parked entries are capped at [`PARKED_PAGES_MAX`]; a page with no JS runtime
 /// at all is not parked here but frozen the old way, where a fresh runtime over
@@ -32,7 +32,7 @@ use crate::*;
 pub(crate) struct ParkedPage {
     /// The page's live JS runtime, unpumped while parked.
     pub(crate) js: Arc<dyn PersistentJs>,
-    /// DOM shared with `js` вЂ” the same `Arc` the runtime holds.
+    /// DOM shared with `js` — the same `Arc` the runtime holds.
     pub(crate) document: Arc<Mutex<Document>>,
     /// Stylesheet snapshot the page was laid out with.
     pub(crate) stylesheet: Arc<lumen_css_parser::Stylesheet>,
@@ -53,7 +53,7 @@ pub(crate) struct ParkedPage {
 /// smaller than the HTML-snapshot [`BfCache`] capacity.
 pub(crate) const PARKED_PAGES_MAX: usize = 2;
 
-/// Frozen state of a background tab вЂ” moved in/out of `Lumen` on tab switch.
+/// Frozen state of a background tab — moved in/out of `Lumen` on tab switch.
 ///
 /// All per-page fields from `Lumen` live here while the tab is not active.
 /// The active tab's state always lives directly in the `Lumen` struct fields.
@@ -72,7 +72,7 @@ pub(crate) struct PageSnapshot {
     pub(crate) transition_scheduler: TransitionScheduler,
     pub(crate) starting_style_tracker: StartingStyleTracker,
     pub(crate) prev_styles: HashMap<NodeId, ComputedStyle>,
-    /// BUG-341 S7: mirrors `Lumen::page_prev_cascade_styles` вЂ” must travel
+    /// BUG-341 S7: mirrors `Lumen::page_prev_cascade_styles` — must travel
     /// with `layout_box` (same producer, same invalidation rule) so a tab
     /// switch back to this snapshot cannot resurrect a cache that no longer
     /// matches the restored tree.
@@ -80,7 +80,7 @@ pub(crate) struct PageSnapshot {
     pub(crate) page_prev_interactive: (Option<NodeId>, Option<NodeId>, Option<NodeId>),
     pub(crate) anim_frame: Option<lumen_layout::AnimationFrame>,
     pub(crate) layout_box: Option<lumen_layout::LayoutBox>,
-    /// P3-webvtt СЃСЂРµР· 3: cues СЃС‚СЂР°РЅРёС†С‹ вЂ” РїРµСЂРµРµР·Р¶Р°СЋС‚ РІРјРµСЃС‚Рµ СЃ РІРєР»Р°РґРєРѕР№.
+    /// P3-webvtt срез 3: cues страницы — переезжают вместе с вкладкой.
     pub(crate) page_tracks: tracks::PageTracks,
     pub(crate) find: find::FindState,
     pub(crate) address_bar: address_bar::AddressBarState,
@@ -112,7 +112,7 @@ pub(crate) struct PageSnapshot {
     /// Parsed stylesheets of frozen bfcache pages, keyed by URL.
     /// Kept shell-side because `Stylesheet` is not serializable.
     pub(crate) frozen_styles: HashMap<String, lumen_css_parser::Stylesheet>,
-    /// Mirrors [`Lumen::parked_pages`] вЂ” travels with the tab so a parked page
+    /// Mirrors [`Lumen::parked_pages`] — travels with the tab so a parked page
     /// can never be restored into a different tab.
     pub(crate) parked_pages: Vec<(String, ParkedPage)>,
     pub(crate) nav_back: Vec<NavEntry>,
@@ -120,12 +120,12 @@ pub(crate) struct PageSnapshot {
     pub(crate) form_state: forms::FormState,
     pub(crate) validation_tooltip: Option<(Rect, String)>,
     pub(crate) color_picker_node: Option<NodeId>,
-    /// NodeId of the `<input type="date/вЂ¦">` whose calendar picker is open in this tab snapshot.
+    /// NodeId of the `<input type="date/…">` whose calendar picker is open in this tab snapshot.
     pub(crate) date_picker_node: Option<NodeId>,
     /// NodeId of the `<select>` whose dropdown is open in this tab snapshot.
     pub(crate) select_dropdown_node: Option<NodeId>,
     pub(crate) ls_storage: HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
-    /// Mirrors [`Lumen::ss_storage`] вЂ” travels with the tab so `sessionStorage`
+    /// Mirrors [`Lumen::ss_storage`] — travels with the tab so `sessionStorage`
     /// written by one of its documents is there for the next one, and for no
     /// other tab (BUG-836).
     pub(crate) ss_storage: HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
@@ -133,7 +133,7 @@ pub(crate) struct PageSnapshot {
     /// tab's `idb_dir` when saving a snapshot; restored on tab switch-back.
     pub(crate) idb_dir: Option<std::path::PathBuf>,
     pub(crate) sw_backend: Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
-    /// ADR-016 M2.2c-2b: `Arc` (РЅРµ `Box`) вЂ” РѕР±С‰РёР№ С‚РёРї С…СЌРЅРґР»Р° СЃ Р°РєС‚РёРІРЅРѕР№ РІРєР»Р°РґРєРѕР№.
+    /// ADR-016 M2.2c-2b: `Arc` (не `Box`) — общий тип хэндла с активной вкладкой.
     pub(crate) js_ctx: Option<Arc<dyn PersistentJs>>,
     pub(crate) first_paint_delivered: bool,
     pub(crate) first_contentful_paint_delivered: bool,
@@ -146,7 +146,7 @@ pub(crate) struct PageSnapshot {
     pub(crate) nav_start: Option<std::time::Instant>,
     pub(crate) animated_gifs: HashMap<String, lumen_image::AnimatedGif>,
     pub(crate) gif_last_frame: HashMap<String, usize>,
-    /// GIF-backed `<video>` frame keys: `"video:{nid}"` в†’ current frame index.
+    /// GIF-backed `<video>` frame keys: `"video:{nid}"` → current frame index.
     /// Parallel to `animated_gifs` but keyed by node ID, not URL.
     pub(crate) video_gif_last_frame: HashMap<u32, usize>,
     /// Decoded animated GIF frames for `<video>` nodes (keyed by nid).
@@ -156,16 +156,16 @@ pub(crate) struct PageSnapshot {
     pub(crate) zoom_factor: f32,
     /// Virtual URL shown in the address bar when `history.pushState` /
     /// `history.replaceState` changed the displayed URL without a page load.
-    /// `None` в†’ use `source.url_str()`.  Reset to `None` on any full navigation.
+    /// `None` → use `source.url_str()`.  Reset to `None` on any full navigation.
     pub(crate) display_url: Option<String>,
     /// Serialised JS state object for the current history entry, mirrored from
     /// the JS side so the shell can store it in `NavEntry` when pushState fires.
     /// Initialised to `"null"` (the default initial `history.state`).
     pub(crate) current_history_state_json: String,
-    /// Original page source preserved while Reader View (В§D-3) is active.
+    /// Original page source preserved while Reader View (§D-3) is active.
     /// `None` = this tab is not in reader mode.
     pub(crate) reader_original_source: Option<PageSource>,
-    /// TLS certificate data for the current page (В§D-1).
+    /// TLS certificate data for the current page (§D-1).
     ///
     /// Populated when a successful HTTPS connection is made; `None` for HTTP pages
     /// or when cert extraction is not yet wired (Phase 0 uses stubs).

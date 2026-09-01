@@ -11,7 +11,7 @@ use crate::*;
 
 impl Lumen {
     /// Finds a layout box with a resize grip at position (x, y) in the layout tree.
-    /// Returns `(node_id, allow_width, allow_height)` вЂ” the latter two are the box's
+    /// Returns `(node_id, allow_width, allow_height)` — the latter two are the box's
     /// `resize` value resolved to physical axes (CC-CSS-4: `Resize::allowed_axes`,
     /// writing-mode aware), so the caller knows which dimension(s) a drag from this
     /// grip is allowed to change. Returns `None` if no grip is found.

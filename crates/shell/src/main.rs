@@ -1,29 +1,29 @@
-﻿//! Lumen shell вЂ” С‚РѕС‡РєР° РІС…РѕРґР° Р±СЂР°СѓР·РµСЂР°.
+﻿//! Lumen shell — точка входа браузера.
 //!
-//! Р РµР¶РёРјС‹ Р·Р°РїСѓСЃРєР°:
-//! - `lumen` вЂ” РѕС‚РєСЂС‹С‚СЊ РїСѓСЃС‚РѕРµ РѕРєРЅРѕ.
-//! - `lumen <path.html>` вЂ” СЂР°СЃРїР°СЂСЃРёС‚СЊ С„Р°Р№Р», layout, paint, РЅР°СЂРёСЃРѕРІР°С‚СЊ РІ РѕРєРЅРµ.
-//! - `lumen <http(s)://...>` вЂ” Р·Р°РіСЂСѓР·РёС‚СЊ СЃС‚СЂР°РЅРёС†Сѓ РїРѕ СЃРµС‚Рё, layout, paint.
-//! - `lumen --dump-source <path-or-url>` вЂ” РїРµС‡Р°С‚СЊ РґРµРєРѕРґРёСЂРѕРІР°РЅРЅРѕРіРѕ HTML РІ stdout.
-//! - `lumen --dump-layout <path-or-url>` вЂ” РїРµС‡Р°С‚СЊ layout-РґРµСЂРµРІР° РІ stdout.
-//! - `lumen --dump-display-list <path-or-url>` вЂ” РїРµС‡Р°С‚СЊ display list РІ stdout.
-//! - `lumen --print-to-pdf <out.pdf> <path-or-url>` вЂ” СЃРѕС…СЂР°РЅРёС‚СЊ СЃС‚СЂР°РЅРёС†Сѓ РєР°Рє PDF (A4).
-//! - `lumen --screenshot <out.png> <path-or-url>` вЂ” РґРµС‚РµСЂРјРёРЅРёСЂРѕРІР°РЅРЅС‹Р№ CPU-СЃРЅРёРјРѕРє СЃС‚СЂР°РЅРёС†С‹ РІ PNG.
-//! - `lumen --trace-nav <out.json> <path-or-url>` вЂ” С‚Р°Р№РјР»Р°Р№РЅ РѕРґРЅРѕР№ РЅР°РІРёРіР°С†РёРё РІ Chrome-trace С„РѕСЂРјР°С‚Рµ (Perfetto/chrome://tracing).
-//! - `lumen --devtools-port <N>` вЂ” Р·Р°РїСѓСЃС‚РёС‚СЊ DevTools WebSocket СЃРµСЂРІРµСЂ РЅР° РїРѕСЂС‚Сѓ N.
-//! - `lumen --bidi-port <N>` вЂ” Р·Р°РїСѓСЃС‚РёС‚СЊ WebDriver BiDi WebSocket СЃРµСЂРІРµСЂ РЅР° РїРѕСЂС‚Сѓ N
-//!   (SDC-2: РµСЃР»Рё СЃРѕРІРјРµС‰С‘РЅ СЃ РѕС‚РєСЂС‹С‚С‹Рј РѕРєРЅРѕРј вЂ” СЂРµР°Р»СЊРЅС‹Рµ navigate/eval/captureScreenshot).
-//! - `lumen --mcp [url]` вЂ” MCP-СЃРµСЂРІРµСЂ (stdio) РґР»СЏ AI-Р°РіРµРЅС‚РѕРІ (Claude, Browser UseвЂ¦), headless.
-//! - `lumen --mcp-port <N> [url]` вЂ” MCP-СЃРµСЂРІРµСЂ РЅР° TCP РїРѕСЂС‚Сѓ N (РѕС‚Р»Р°РґРєР° С‡РµСЂРµР· netcat), headless.
-//! - `lumen --mcp-live-port <N> <path-or-url>` вЂ” MCP-СЃРµСЂРІРµСЂ РЅР° TCP РїРѕСЂС‚Сѓ N РїСЂРѕС‚РёРІ Р–РР’РћР“Рћ
-//!   РѕРєРЅР° (SDC-2, `LiveWindowSession`): `screenshot`/`eval` РІРѕР·РІСЂР°С‰Р°СЋС‚ СЂРµР°Р»СЊРЅС‹Р№ СЂРµР·СѓР»СЊС‚Р°С‚.
+//! Режимы запуска:
+//! - `lumen` — открыть пустое окно.
+//! - `lumen <path.html>` — распарсить файл, layout, paint, нарисовать в окне.
+//! - `lumen <http(s)://...>` — загрузить страницу по сети, layout, paint.
+//! - `lumen --dump-source <path-or-url>` — печать декодированного HTML в stdout.
+//! - `lumen --dump-layout <path-or-url>` — печать layout-дерева в stdout.
+//! - `lumen --dump-display-list <path-or-url>` — печать display list в stdout.
+//! - `lumen --print-to-pdf <out.pdf> <path-or-url>` — сохранить страницу как PDF (A4).
+//! - `lumen --screenshot <out.png> <path-or-url>` — детерминированный CPU-снимок страницы в PNG.
+//! - `lumen --trace-nav <out.json> <path-or-url>` — таймлайн одной навигации в Chrome-trace формате (Perfetto/chrome://tracing).
+//! - `lumen --devtools-port <N>` — запустить DevTools WebSocket сервер на порту N.
+//! - `lumen --bidi-port <N>` — запустить WebDriver BiDi WebSocket сервер на порту N
+//!   (SDC-2: если совмещён с открытым окном — реальные navigate/eval/captureScreenshot).
+//! - `lumen --mcp [url]` — MCP-сервер (stdio) для AI-агентов (Claude, Browser Use…), headless.
+//! - `lumen --mcp-port <N> [url]` — MCP-сервер на TCP порту N (отладка через netcat), headless.
+//! - `lumen --mcp-live-port <N> <path-or-url>` — MCP-сервер на TCP порту N против ЖИВОГО
+//!   окна (SDC-2, `LiveWindowSession`): `screenshot`/`eval` возвращают реальный результат.
 //!
-//! Dump-СЂРµР¶РёРјС‹ РЅРµ СЃРѕР·РґР°СЋС‚ РѕРєРЅР° Рё РЅРµ РёРЅРёС†РёР°Р»РёР·РёСЂСѓСЋС‚ wgpu вЂ” pipeline РїСЂРѕРіРѕРЅСЏРµС‚СЃСЏ
-//! РґРѕ РЅСѓР¶РЅРѕР№ С„Р°Р·С‹, СЂРµР·СѓР»СЊС‚Р°С‚ СЃРµСЂРёР°Р»РёР·СѓРµС‚СЃСЏ Рё РїРёС€РµС‚СЃСЏ РІ stdout. РџРѕР»РµР·РЅРѕ РґР»СЏ CI
-//! (Р±РµР· GPU), РѕС‚Р»Р°РґРєРё СЃР»РѕР¶РЅС‹С… СЃС‚СЂР°РЅРёС† Рё СЃСЂР°РІРЅРµРЅРёСЏ РІС‹РІРѕРґР° РјРµР¶РґСѓ РІРµСЂСЃРёСЏРјРё.
+//! Dump-режимы не создают окна и не инициализируют wgpu — pipeline прогоняется
+//! до нужной фазы, результат сериализуется и пишется в stdout. Полезно для CI
+//! (без GPU), отладки сложных страниц и сравнения вывода между версиями.
 //!
-//! Р’РЅРµС€РЅРёРµ CSS: `<link rel="stylesheet" href="...">` Р·Р°РіСЂСѓР¶Р°РµС‚СЃСЏ СЃ РґРёСЃРєР° РёР»Рё
-//! РїРѕ СЃРµС‚Рё вЂ” РІ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё РѕС‚ С‚РѕРіРѕ, РєР°РєРёРј СЃРїРѕСЃРѕР±РѕРј Р·Р°РіСЂСѓР¶РµРЅР° СЃС‚СЂР°РЅРёС†Р°.
+//! Внешние CSS: `<link rel="stylesheet" href="...">` загружается с диска или
+//! по сети — в зависимости от того, каким способом загружена страница.
 
 mod adblock;
 mod address_bar;
@@ -301,11 +301,11 @@ fn main() -> ExitCode {
     set_console_utf8();
     // BUG-770: install the non-blocking stderr sink before anything can print.
     // A parent that captures stderr as a pipe and stops reading it used to
-    // block whichever thread called `eprintln!` next вЂ” with the UI thread that
+    // block whichever thread called `eprintln!` next — with the UI thread that
     // froze the whole window mid-run. No-op unless stderr really is a pipe.
     diag_stderr::install();
     let code = run_cli();
-    // PERF-12: closes the startup accounting вЂ” see `startup_trace::log_exit`.
+    // PERF-12: closes the startup accounting — see `startup_trace::log_exit`.
     // Before `diag_stderr::flush`, so the line survives the bounded wait below.
     startup_trace::log_exit();
     // The writer thread is detached, so the tail of the log would be lost when

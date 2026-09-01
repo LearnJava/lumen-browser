@@ -8,11 +8,11 @@
 use crate::*;
 
 impl Lumen {
-    /// Р—Р°РјРµРЅСЏРµС‚ display list СЃС‚СЂР°РЅРёС†С‹, Р±Р°РјРїР°СЏ РµРіРѕ РІРµСЂСЃРёСЋ (BUG-405 СЃСЂРµР· 39).
+    /// Заменяет display list страницы, бампая его версию (BUG-405 срез 39).
     ///
-    /// Р•РґРёРЅСЃС‚РІРµРЅРЅС‹Р№ СЃРїРѕСЃРѕР± РїСЂРёСЃРІРѕРёС‚СЊ [`Self::display_list`]: СЂРµРЅРґРµСЂРµСЂ СЂРµС€Р°РµС‚ РїРѕ
-    /// РІРµСЂСЃРёРё, РјРѕР¶РЅРѕ Р»Рё РїРµСЂРµРёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ СЃРІС‘СЂС‚РєСѓ РєР°РґСЂРѕРІС‹С… С…СЌС€РµР№, РїРѕСЌС‚РѕРјСѓ Р·Р°РїРёСЃСЊ
-    /// РјРёРјРѕ СЌС‚РѕРіРѕ РјРµС‚РѕРґР° РїРѕРєР°Р·Р°Р»Р° Р±С‹ СѓСЃС‚Р°СЂРµРІС€РёРµ РїРёРєСЃРµР»Рё.
+    /// Единственный способ присвоить [`Self::display_list`]: рендерер решает по
+    /// версии, можно ли переиспользовать свёртку кадровых хэшей, поэтому запись
+    /// мимо этого метода показала бы устаревшие пиксели.
     pub(crate) fn set_display_list(&mut self, mut dl: DisplayList) {
         // BUG-480 срез 14: содержимое под-документов фреймов вклеивается на
         // КАЖДОЙ записи списка, а не один раз на загрузку — список страницы
@@ -26,36 +26,36 @@ impl Lumen {
         self.bump_display_list_epoch();
     }
 
-    /// Р‘Р°РјРїР°РµС‚ РІРµСЂСЃРёСЋ [`Self::display_list`] (BUG-405 СЃСЂРµР· 39).
+    /// Бампает версию [`Self::display_list`] (BUG-405 срез 39).
     ///
-    /// РћС‚РґРµР»СЊРЅРѕ РѕС‚ [`Self::set_display_list`] РґР»СЏ С‚СЂС‘С… РјРµСЃС‚, РіРґРµ Р·Р°РёРјСЃС‚РІРѕРІР°РЅРёСЏ
-    /// РЅРµ РґР°СЋС‚ РІР·СЏС‚СЊ `&mut self` С†РµР»РёРєРѕРј: РїСЂР°РІРєР° СЃРїРёСЃРєР° РЅР° РјРµСЃС‚Рµ Рё РґРІР° РјРµСЃС‚Р°,
-    /// РіРґРµ `self.layout_source`/`self.layout_box` СѓР¶Рµ Р·Р°РЅСЏС‚С‹ вЂ” С‚Р°Рј РїРѕР»Рµ РїРёС€РµС‚СЃСЏ
-    /// РЅР°РїСЂСЏРјСѓСЋ, Р° РІРµСЂСЃРёСЏ Р±Р°РјРїР°РµС‚СЃСЏ СЌС‚РёРј РІС‹Р·РѕРІРѕРј СЂСЏРґРѕРј.
+    /// Отдельно от [`Self::set_display_list`] для трёх мест, где заимствования
+    /// не дают взять `&mut self` целиком: правка списка на месте и два места,
+    /// где `self.layout_source`/`self.layout_box` уже заняты — там поле пишется
+    /// напрямую, а версия бампается этим вызовом рядом.
     pub(crate) fn bump_display_list_epoch(&mut self) {
         self.display_list_epoch = next_dl_epoch(self.display_list_epoch);
     }
 
-    /// BUG-743: РїРµСЂРµСЃРѕР±СЂР°С‚СЊ РєР°СЃРєР°Рґ, РµСЃР»Рё РЅР°Р±РѕСЂ РёРЅР»Р°Р№РЅРѕРІС‹С… `<style>` РёР·РјРµРЅРёР»СЃСЏ
-    /// СЃ РїРѕСЃР»РµРґРЅРµР№ СЃР±РѕСЂРєРё. Р’РѕР·РІСЂР°С‰Р°РµС‚ `true`, РµСЃР»Рё Р»РёСЃС‚ Р·Р°РјРµРЅС‘РЅ.
+    /// BUG-743: пересобрать каскад, если набор инлайновых `<style>` изменился
+    /// с последней сборки. Возвращает `true`, если лист заменён.
     ///
-    /// РўР°Р±Р»РёС†Р° СЃС‚РёР»РµР№ СЃС‚СЂР°РЅРёС†С‹ СЃРѕР±РёСЂР°РµС‚СЃСЏ РѕРґРёРЅ СЂР°Р· Р·Р° РЅР°РІРёРіР°С†РёСЋ вЂ” РЅР° СЌС‚Р°РїРµ
-    /// СЂР°Р·Р±РѕСЂР°, СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ РІС‹РїРѕР»РЅРµРЅРёСЏ СЃРёРЅС…СЂРѕРЅРЅС‹С… СЃРєСЂРёРїС‚РѕРІ. Р’СЃС‘, С‡С‚Рѕ РІСЃС‚Р°РІР»СЏРµС‚
-    /// `<style>` РїРѕР·Р¶Рµ (РѕР±СЂР°Р±РѕС‚С‡РёРє `load`, `setTimeout`, rAF, РїСЂРѕРјРёСЃ вЂ” С‚Рѕ РµСЃС‚СЊ
-    /// Р»СЋР±РѕР№ CSS-in-JS), РґРѕ СЌС‚РѕРіРѕ РѕСЃС‚Р°РІР°Р»РѕСЃСЊ РІРЅРµ РєР°СЃРєР°РґР° РЅР°РІСЃРµРіРґР°. Р—РґРµСЃСЊ
-    /// РґРµС€С‘РІС‹Р№ РѕС‚РїРµС‡Р°С‚РѕРє ([`inline_style_fingerprint`]) СЃРІРµСЂСЏРµС‚СЃСЏ РЅР° РєР°Р¶РґРѕРј
-    /// СЂРµР»РµР№Р°СѓС‚Рµ, Р° РїРѕР»РЅР°СЏ РїРµСЂРµСЃР±РѕСЂРєР° (СЃРєР»РµР№РєР° РёР· [`DynamicCssBase`] + РїР°СЂСЃ)
-    /// РїСЂРѕРёСЃС…РѕРґРёС‚ С‚РѕР»СЊРєРѕ РєРѕРіРґР° Р±Р»РѕРєРё РґРµР№СЃС‚РІРёС‚РµР»СЊРЅРѕ РёР·РјРµРЅРёР»РёСЃСЊ.
+    /// Таблица стилей страницы собирается один раз за навигацию — на этапе
+    /// разбора, сразу после выполнения синхронных скриптов. Всё, что вставляет
+    /// `<style>` позже (обработчик `load`, `setTimeout`, rAF, промис — то есть
+    /// любой CSS-in-JS), до этого оставалось вне каскада навсегда. Здесь
+    /// дешёвый отпечаток ([`inline_style_fingerprint`]) сверяется на каждом
+    /// релейауте, а полная пересборка (склейка из [`DynamicCssBase`] + парс)
+    /// происходит только когда блоки действительно изменились.
     ///
-    /// РЎРµС‚СЊ РЅРµ С‚СЂРѕРіР°РµС‚СЃСЏ: `@import` РІРЅСѓС‚СЂРё *РЅРѕРІРѕРіРѕ* Р»РёСЃС‚Р° РѕСЃС‚Р°РЅРµС‚СЃСЏ
-    /// РЅРµСЂР°Р·СЂРµС€С‘РЅРЅС‹Рј, `@font-face` РёР· РЅРµРіРѕ РЅРµ РїРѕРґРіСЂСѓР·РёС‚СЃСЏ вЂ” СЂРµР»РµР№Р°СѓС‚ РЅРµ РјРµСЃС‚Рѕ
-    /// РґР»СЏ Р·Р°РіСЂСѓР·РѕРє. РћР±С‹С‡РЅС‹Р№ CSS-in-JS РЅРё С‚РѕРіРѕ, РЅРё РґСЂСѓРіРѕРіРѕ РЅРµ РёСЃРїРѕР»СЊР·СѓРµС‚.
+    /// Сеть не трогается: `@import` внутри *нового* листа останется
+    /// неразрешённым, `@font-face` из него не подгрузится — релейаут не место
+    /// для загрузок. Обычный CSS-in-JS ни того, ни другого не использует.
     pub(crate) fn refresh_dynamic_css(&mut self) -> bool {
         let Some(src) = self.layout_source.as_mut() else {
             return false;
         };
-        // Р Р°Р·РґРµР»СЊРЅС‹Рµ Р·Р°РёРјСЃС‚РІРѕРІР°РЅРёСЏ РїРѕР»РµР№: `document` С‡РёС‚Р°РµС‚СЃСЏ, РїРѕРєР° `stylesheet`
-        // Рё `dynamic_css` РґРµСЂР¶Р°С‚СЃСЏ РЅР° Р·Р°РїРёСЃСЊ.
+        // Раздельные заимствования полей: `document` читается, пока `stylesheet`
+        // и `dynamic_css` держатся на запись.
         let LayoutSource { document, stylesheet, dynamic_css, .. } = src;
         let Some(base) = dynamic_css.as_mut() else {
             return false;
@@ -76,30 +76,30 @@ impl Lumen {
         css.push_str(&base.linked);
         let sheet = lumen_css_parser::parse(&css);
         eprintln!(
-            "CSS РїРµСЂРµСЃРѕР±СЂР°РЅ РїРѕСЃР»Рµ РїСЂР°РІРєРё <style>: {} РїСЂР°РІРёР»",
+            "CSS пересобран после правки <style>: {} правил",
             sheet.rules.len()
         );
         *stylesheet = Arc::new(sheet);
         base.inline_fp = fp;
-        // РРЅРєСЂРµРјРµРЅС‚Р°Р»СЊРЅС‹Р№ СЂРµСЃС‚Р°Р№Р» (BUG-341 S7) РїРµСЂРµРёСЃРїРѕР»СЊР·СѓРµС‚ СЃС‚РёР»Рё РїСЂРѕС€Р»РѕРіРѕ
-        // РїСЂРѕС…РѕРґР° вЂ” РїСЂРѕС‚РёРІ РЅРѕРІРѕРіРѕ Р»РёСЃС‚Р° РѕРЅРё РЅРµРґРµР№СЃС‚РІРёС‚РµР»СЊРЅС‹.
+        // Инкрементальный рестайл (BUG-341 S7) переиспользует стили прошлого
+        // прохода — против нового листа они недействительны.
         self.page_prev_cascade_styles = None;
         true
     }
 
-    /// РџРѕРІС‚РѕСЂРЅС‹Р№ layout+paint РїСЂРё РёР·РјРµРЅРµРЅРёРё СЂР°Р·РјРµСЂР° viewport.
-    /// РСЃРїРѕР»СЊР·СѓРµС‚ СЃРѕС…СЂР°РЅС‘РЅРЅС‹Р№ `LayoutSource`; РїР°СЂСЃРёРЅРі РЅРµ РїРѕРІС‚РѕСЂСЏРµС‚СЃСЏ.
+    /// Повторный layout+paint при изменении размера viewport.
+    /// Использует сохранённый `LayoutSource`; парсинг не повторяется.
     pub(crate) fn relayout(&mut self) {
         self.refresh_dynamic_css();
         let Some(viewport) = self.relayout_viewport() else { return };
-        // ADR-016 M2.2: a synchronous relayout is authoritative вЂ” advance the
+        // ADR-016 M2.2: a synchronous relayout is authoritative — advance the
         // applied generation to `job_generation` so any off-thread commit still
         // in flight (older generation) is dropped by `poll_engine_commit`'s
         // guard, and no poll-wakeup is armed for a job that no longer matters.
         self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
         self.engine_applied_generation = self.engine_job_generation;
         // ADR-016 M2.0: time the whole UI-thread relayout (style + layout +
-        // display-list build + JS-observer delivery) вЂ” the work M2 moves to an
+        // display-list build + JS-observer delivery) — the work M2 moves to an
         // engine thread. Only under `LUMEN_FRAME_LOG`, so a normal run pays
         // nothing. Recorded after `apply_relayout_result` so the state it reports
         // (display list / styled nodes) is the freshly-applied one.
@@ -108,14 +108,14 @@ impl Lumen {
         // Set interactive hover/focus/active state for this layout pass so that
         // :hover / :focus / :active / :focus-within CSS rules evaluate correctly.
         lumen_layout::set_interactive_state(self.hovered_nid, self.focused_node, self.active_nid);
-        // Forced Colors Mode (CSS Color Adjust L1 В§3) вЂ” a11y preference drives
+        // Forced Colors Mode (CSS Color Adjust L1 §3) — a11y preference drives
         // the forced system palette and the `(forced-colors: active)` media
         // feature for this layout pass.
         lumen_layout::set_forced_colors(self.a11y_store.forced_colors());
-        // content-visibility: auto (BB-4) вЂ” relevance-РїСЂРѕРІРµСЂРєР° РїСЂРѕС‚РёРІ С‚РµРєСѓС‰РµРіРѕ
-        // scroll-РїРѕР»РѕР¶РµРЅРёСЏ + ratchet-РЅР°Р±РѕСЂР°. РЎР±СЂРѕСЃ Рє РґРµС„РѕР»С‚Р°Рј РїРѕСЃР»Рµ РїСЂРѕС…РѕРґР°,
-        // С‡С‚РѕР±С‹ layout РґСЂСѓРіРёС… РґРѕРєСѓРјРµРЅС‚РѕРІ (sidebar, С„РѕРЅРѕРІС‹Р№ РїР°СЂСЃ) РЅРµ СѓРЅР°СЃР»РµРґРѕРІР°Р»
-        // С‡СѓР¶РѕР№ scroll/relevant.
+        // content-visibility: auto (BB-4) — relevance-проверка против текущего
+        // scroll-положения + ratchet-набора. Сброс к дефолтам после прохода,
+        // чтобы layout других документов (sidebar, фоновый парс) не унаследовал
+        // чужой scroll/relevant.
         lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
         lumen_layout::set_cv_relevant(self.cv_relevant.clone());
         let (new_dl, lb) = relayout_page(src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts);
@@ -139,15 +139,15 @@ impl Lumen {
     /// [`Self::relayout`] otherwise (the default, so behavior is byte-identical
     /// unless `LUMEN_ENGINE_THREAD=1`).
     ///
-    /// "Async-safe" means the caller changed only *chrome* geometry вЂ” a docked
+    /// "Async-safe" means the caller changed only *chrome* geometry — a docked
     /// panel's side/width, the workspace bar, vertical/tree tabs, sidebar
     /// visibility, the AI / accessibility side panels (M2.2b-3), or a mouse-click
-    /// *close* of the AI / sidebar / accessibility panels (M2.2b-6) вЂ” or triggered a
+    /// *close* of the AI / sidebar / accessibility panels (M2.2b-6) — or triggered a
     /// whole-page *restyle* with no geometry read of its own (an OS/settings theme
     /// flip, M2.2b-4; an interactive `:hover`/`:active` pseudo-class flip, M2.2b-5,
     /// including the `:hover` clear on cursor-leave, M2.2b-8; a `:focus`/`:focus-within`
-    /// change from a JS focus request or a click, M2.2b-7; a web-font FOUTв†’FOIT swap,
-    /// M2.2b-8) вЂ” or opened the web sidebar's error-placeholder panel (M2.2b-8) вЂ”
+    /// change from a JS focus request or a click, M2.2b-7; a web-font FOUT→FOIT swap,
+    /// M2.2b-8) — or opened the web sidebar's error-placeholder panel (M2.2b-8) —
     /// and is in either case **not** followed by a synchronous read
     /// of page layout geometry. The reflowed content may
     /// therefore land a few frames later via [`Self::poll_engine_commit`], the
@@ -167,15 +167,15 @@ impl Lumen {
     ///
     /// "Async-safe" here means the caller already mutated the shared layout
     /// `Document` (a checkbox/radio `checked` flip, a `<details>` open toggle, a
-    /// range-slider value change, вЂ¦) directly on the UI thread and is **not**
+    /// range-slider value change, …) directly on the UI thread and is **not**
     /// followed by a synchronous read of page layout geometry. The mutation is
     /// therefore visible in the immutable `Arc<Mutex<Document>>` snapshot the
     /// off-thread job captures, and the reflowed content lands a few frames later
-    /// via [`Self::poll_engine_commit`] вЂ” the same contract as the debounced zoom
+    /// via [`Self::poll_engine_commit`] — the same contract as the debounced zoom
     /// (M2.2a) and the chrome-inset toggles ([`Self::relayout_chrome`], M2.2b).
     ///
     /// Sites that read geometry synchronously right after the mutation (caret
-    /// placement, `scrollIntoView`, hit-test) cannot use this вЂ” they belong to the
+    /// placement, `scrollIntoView`, hit-test) cannot use this — they belong to the
     /// blocking-readback path (`EngineThread::readback`, M2.2c-1) instead.
     pub(crate) fn relayout_form(&mut self) {
         if !self.submit_relayout_job() {
@@ -191,35 +191,35 @@ impl Lumen {
     /// [`Self::apply_relayout_result`] (updates `self.display_list` /
     /// `self.layout_box` / scroll clamps). Returns `false` when no previous
     /// layout is available (first load) or when `layout_source` / viewport are
-    /// not ready вЂ” the caller falls back to [`Self::relayout`].
+    /// not ready — the caller falls back to [`Self::relayout`].
     ///
     /// BUG-341 S7: when [`Self::page_prev_cascade_styles`] is `Some` (the last
     /// cycle to touch `self.layout_box` was this same restyle path) *and* the
     /// page-side JS DOM-mutation tracker ([`PersistentJs::take_dom_touched`])
     /// reports an attributed summary, this takes the incremental-cascade path
     /// ([`lumen_layout::box_tree::layout_mutation_incremental_restyle`])
-    /// instead of the plain graft-only one вЂ” mirroring
+    /// instead of the plain graft-only one — mirroring
     /// `Lumen::relayout_chrome_host`'s BUG-341 S6 wiring. `dirty_roots` unions
     /// the interactive-state delta (hover/focus/active, vs.
     /// `self.page_prev_interactive`) with the DOM-mutation delta
     /// (`touched.nodes`); `content_dirty` is `Nothing` only when `touched.nodes`
     /// is empty (a pure interactive-state cycle) and `Untracked` otherwise, the
     /// same precondition `RestyleDelta::content_dirty` documents. An `unattributed` summary
-    /// (untracked mutation primitive вЂ” Shadow DOM attach, `execCommand`, вЂ¦) or a
+    /// (untracked mutation primitive — Shadow DOM attach, `execCommand`, …) or a
     /// missing/invalidated cache falls back to today's `layout_mutation_incremental`
     /// (full cascade, still correct, just without the cascade-skip win).
     ///
     /// `self.layout_box` is **moved out** (not cloned) to avoid copying the
     /// potentially large tree; `apply_relayout_result` moves the fresh tree
     /// back in, so field is always `Some` after a successful call.
-    #[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn try_relayout_raf_incremental(&mut self) -> bool {
         let Some(viewport) = self.relayout_viewport() else {
             return false;
         };
-        // BUG-743: СЃРјРµРЅР° С‚Р°Р±Р»РёС†С‹ СЃС‚РёР»РµР№ РјРѕР¶РµС‚ Р·Р°РґРµС‚СЊ Р»СЋР±РѕР№ СѓР·РµР» РґРµСЂРµРІР° вЂ”
-        // РіРµРѕРјРµС‚СЂРёСЋ РїСЂРѕС€Р»РѕРіРѕ РїСЂРѕС…РѕРґР° РїРµСЂРµРёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РЅРµР»СЊР·СЏ, РїСѓСЃС‚СЊ РІС‹Р·С‹РІР°СЋС‰РёР№
-        // СЃРґРµР»Р°РµС‚ РїРѕР»РЅС‹Р№ [`Self::relayout`].
+        // BUG-743: смена таблицы стилей может задеть любой узел дерева —
+        // геометрию прошлого прохода переиспользовать нельзя, пусть вызывающий
+        // сделает полный [`Self::relayout`].
         if self.refresh_dynamic_css() {
             return false;
         }
@@ -261,7 +261,7 @@ impl Lumen {
                 &doc, prev_active, new_interactive.2, &state_index,
             ));
             // BUG-341 S17: `DomTouched` records node ids without attribute
-            // names, so every page-side mutation stays `Unattributed` вЂ” the
+            // names, so every page-side mutation stays `Unattributed` — the
             // pre-S17 widen-to-parent behaviour, unchanged.
             let node_index = lumen_layout::style::restyle_node_index(&doc, &src.stylesheet);
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_node_change(
@@ -275,7 +275,7 @@ impl Lumen {
             // writes) and has an `unattributed` escape hatch, so it cannot
             // claim a complete per-node content record the way
             // `bind_model_tracked` can. Anything but "nothing touched at all"
-            // must therefore stay `Untracked` вЂ” this is exactly S4's
+            // must therefore stay `Untracked` — this is exactly S4's
             // `dom_content_stable` semantics, unchanged. Giving the page path a
             // real content set means completing `DomTouched` for content first.
             let content_dirty = if touched.nodes.is_empty() {
@@ -285,7 +285,7 @@ impl Lumen {
             };
             let delta = lumen_layout::counters::RestyleDelta { prev_styles, dirty_roots, content_dirty };
             lumen_layout::counters::set_incremental_restyle(true);
-            // BUG-341 S15 вЂ” see the twin call in `relayout_chrome_host`: the
+            // BUG-341 S15 — see the twin call in `relayout_chrome_host`: the
             // box-build reuse rides on the same content precondition computed
             // just above.
             lumen_layout::box_tree::set_incremental_box_build(true);
@@ -305,7 +305,7 @@ impl Lumen {
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
         self.apply_relayout_result(new_dl, new_lb, viewport);
-        // `apply_relayout_result` unconditionally clears the cache вЂ” restore it
+        // `apply_relayout_result` unconditionally clears the cache — restore it
         // here, after `lb` has already landed in `self.layout_box`, only when
         // this cycle actually produced a matching one.
         if let Some(styles) = fresh_cascade_styles {
@@ -324,7 +324,7 @@ impl Lumen {
     /// (engine-side under the flag) and mutated the DOM, so the shared
     /// `Arc<Mutex<Document>>` already carries the mutation the off-thread job's
     /// snapshot will observe (invariant 1). The caller only requests a redraw
-    /// afterwards вЂ” it does **not** read page geometry synchronously вЂ” so the
+    /// afterwards — it does **not** read page geometry synchronously — so the
     /// reflow may land a few frames later via [`Self::poll_engine_commit`], the same
     /// async contract as the debounced zoom (M2.2a) and the form-input toggles
     /// ([`Self::relayout_form`]). The `RedrawRequested` counterpart *does* read a
@@ -344,7 +344,7 @@ impl Lumen {
 
     /// ADR-016 M2.3: `true` while a `run_animation_frame` batch dispatched to the
     /// engine thread has not yet completed (engine thread present + inflight flag
-    /// set). While inflight the UI thread must not enqueue new blocking JS work вЂ”
+    /// set). While inflight the UI thread must not enqueue new blocking JS work —
     /// it would serialize the winit thread behind the (possibly 200 ms) turn,
     /// freezing scroll. Always `false` off the flag (no engine thread).
     pub(crate) fn raf_turn_inflight(&self) -> bool {
@@ -357,7 +357,7 @@ impl Lumen {
     /// ADR-016 M2.3: consume (clear + return) the rAF-pending flag lock-free via
     /// the cached UI-side atomic. `false` when no flag is cached (JS-less tab /
     /// off the flag). No engine `query`, so it never blocks behind an in-flight
-    /// turn вЂ” unlike [`route_query_js`]`(вЂ¦ take_raf_pending)`.
+    /// turn — unlike [`route_query_js`]`(… take_raf_pending)`.
     pub(crate) fn take_raf_pending_lockfree(&self) -> bool {
         self.raf_pending_flag
             .as_ref()
@@ -369,7 +369,7 @@ impl Lumen {
     /// `about_to_wait` loop issues several blocking `route_query_js` drains each
     /// pass (canvas bitmaps, history/pushState, traversals, navigation updates);
     /// under the flag every one of them would otherwise FIFO-serialize behind the
-    /// in-flight (up to ~200 ms) `run_animation_frame` task and freeze the loop вЂ”
+    /// in-flight (up to ~200 ms) `run_animation_frame` task and freeze the loop —
     /// exactly the stall M2.3 removes. Skipping a drain merely defers it to the
     /// next pass after the turn finishes (the short rAF wakeup keeps the loop
     /// warm). Off the flag `raf_turn_inflight()` is always `false`, so this is
@@ -437,7 +437,7 @@ impl Lumen {
     /// (caller requests a redraw).
     pub(crate) fn pump_raf_engine_thread(&mut self, raf_due: bool, timestamp_ms: f64) -> bool {
         // A turn still running hasn't finished its DOM mutations and holds the
-        // engine FIFO вЂ” leave both the dirty check and the next fire to a later
+        // engine FIFO — leave both the dirty check and the next fire to a later
         // pass (the flag is not cleared, so the pending signal survives).
         if self.raf_turn_inflight() {
             return false;
@@ -451,7 +451,7 @@ impl Lumen {
         }
         // Drain gate: the first non-inflight pass after a turn completes is
         // reserved for the deferred `drain_query_js` queues (which run this pass,
-        // engine now free) вЂ” hold off firing the next turn until the following
+        // engine now free) — hold off firing the next turn until the following
         // pass so a continuous rAF loop can't starve notifications/popups/console.
         if self.raf_drain_gate {
             self.raf_drain_gate = false;
@@ -474,9 +474,9 @@ impl Lumen {
     ///
     /// This is the `RedrawRequested` Step 4 site: a `requestAnimationFrame` callback
     /// mutated the DOM and the very next Step 5 reads `self.display_list.is_empty()`
-    /// to latch PerformancePaintTiming (W3C Paint Timing В§2). That read must see the
-    /// freshly-reflowed display list, so вЂ” unlike the async [`Self::relayout_form`] /
-    /// [`Self::relayout_raf_dirty`] вЂ” the relayout cannot be deferred to a later
+    /// to latch PerformancePaintTiming (W3C Paint Timing §2). That read must see the
+    /// freshly-reflowed display list, so — unlike the async [`Self::relayout_form`] /
+    /// [`Self::relayout_raf_dirty`] — the relayout cannot be deferred to a later
     /// commit. [`Self::readback_relayout_job`] computes the layout **on the engine
     /// thread** (which owns the mutable `Document` + `js_ctx` under the flag) and
     /// blocks for exactly that one commit, applying it synchronously so Step 5 sees
@@ -493,7 +493,7 @@ impl Lumen {
     /// Derive the CSS layout viewport for a relayout (shared by the synchronous
     /// [`Self::relayout`] and the off-thread [`Self::submit_relayout_job`]).
     ///
-    /// Returns `None` вЂ” skip relayout вЂ” when there is no `LayoutSource`/renderer
+    /// Returns `None` — skip relayout — when there is no `LayoutSource`/renderer
     /// yet or the content region is degenerate (minimized window). Applies the
     /// live chrome inset (RP-2), `<meta viewport initial-scale>` and the user
     /// zoom, matching scroll clamping and the content `PushTransform`.
@@ -529,11 +529,11 @@ impl Lumen {
     /// scroll clamping and JS-observer delivery. Kept identical for both callers
     /// so an off-thread relayout is byte-for-byte equivalent to a synchronous one.
     pub(crate) fn apply_relayout_result(&mut self, mut new_dl: DisplayList, lb: lumen_layout::LayoutBox, viewport: Size) {
-        // BUG-480 СЃСЂРµР· 13: РєРѕРЅС‚РµРЅС‚РЅС‹Р№ РІСЊСЋРїРѕСЂС‚ РїРѕРґ-РґРѕРєСѓРјРµРЅС‚РѕРІ СЃР»РµРґСѓРµС‚ Р·Р°
-        // СЂР°Р·РјРµСЂРѕРј РёС… host-Р±РѕРєСЃР° вЂ” Р·РЅР°С‡РёС‚ Р·Р° РєР°Р¶РґС‹Рј relayout (СЂРµСЃР°Р№Р·, Р·СѓРј,
-        // Р»СЋР±РѕРµ РґРІРёР¶РµРЅРёРµ РІС‘СЂСЃС‚РєРё РЅР°Рґ С„СЂРµР№РјРѕРј). РџСЂРѕС…РѕРґ СЃР°Рј РіРµР№С‚РёС‚СЃСЏ РЅР°
-        // В«СЂР°Р·РјРµСЂ РЅРµ РјРµРЅСЏР»СЃСЏВ» Рё РЅР° РїСѓСЃС‚РѕРј СЃРїРёСЃРєРµ С„СЂРµР№РјРѕРІ СЃС‚РѕРёС‚ РЅРѕР»СЊ. Р”Рћ
-        // Р·Р°РёРјСЃС‚РІРѕРІР°РЅРёСЏ `layout_source`: С‚Р°Рј Р±РµСЂС‘С‚СЃСЏ `&self` РЅР° РІСЃСЋ С„СѓРЅРєС†РёСЋ.
+        // BUG-480 срез 13: контентный вьюпорт под-документов следует за
+        // размером их host-бокса — значит за каждым relayout (ресайз, зум,
+        // любое движение вёрстки над фреймом). Проход сам гейтится на
+        // «размер не менялся» и на пустом списке фреймов стоит ноль. ДО
+        // заимствования `layout_source`: там берётся `&self` на всю функцию.
         let frame_state = self.frame_interactive();
         crate::frames::sync_frame_viewports(&mut self.frames, &lb, frame_state);
         let Some(src) = self.layout_source.as_ref() else { return };
@@ -548,8 +548,8 @@ impl Lumen {
         // Cache display list directly (avoid &mut self while layout_source is borrowed).
         let _dl_hash = lumen_paint::hash_commands(&new_dl);
         self.display_list_cache.insert(lb.node.index() as u32, new_dl.clone(), _dl_hash, None);
-        // РџРѕР»СЏ РїРёС€СѓС‚СЃСЏ РЅР°РїСЂСЏРјСѓСЋ (РЅРµ С‡РµСЂРµР· `set_display_list`): `layout_source`
-        // Р·РґРµСЃСЊ Р·Р°РёРјСЃС‚РІРѕРІР°РЅ, `&mut self` С†РµР»РёРєРѕРј РІР·СЏС‚СЊ РЅРµР»СЊР·СЏ.
+        // Поля пишутся напрямую (не через `set_display_list`): `layout_source`
+        // здесь заимствован, `&mut self` целиком взять нельзя.
         self.display_list = new_dl;
         self.display_list_epoch = next_dl_epoch(self.display_list_epoch);
         // Sync transitions: compare prev styles with new layout before replacing.
@@ -561,7 +561,7 @@ impl Lumen {
                 self.transition_scheduler.sync(*node, old_style, new_style, now_s);
             }
         }
-        // @starting-style (CSS Transitions L2 В§3.4): newly visible nodes (not in
+        // @starting-style (CSS Transitions L2 §3.4): newly visible nodes (not in
         // prev_styles) use @starting-style rules as the before-change style so that
         // entry transitions start from the declared starting values.
         if !src.stylesheet.starting_style_rules.is_empty() {
@@ -584,7 +584,7 @@ impl Lumen {
                         }
                     }
                 }
-                // MutexGuard dropped вЂ” apply entry transitions outside the lock.
+                // MutexGuard dropped — apply entry transitions outside the lock.
                 for (node, starting_style) in &entry_styles {
                     if let Some(new_style) = new_styles.get(node) {
                         self.transition_scheduler.sync(
@@ -598,7 +598,7 @@ impl Lumen {
             }
         }
         self.prev_styles = new_styles;
-        // BUG-341 S7: invalidate the restyle-cascade cache by default вЂ” every
+        // BUG-341 S7: invalidate the restyle-cascade cache by default — every
         // producer routes through here, but only `try_relayout_raf_incremental`'s
         // restyle sub-path knows how to recompute a cache that actually matches
         // `lb`, and re-validates it right after this call returns. Every other
@@ -610,12 +610,12 @@ impl Lumen {
         self.refresh_cv_state();
         // Promote nodes with will-change: transform/opacity/filter to GPU layers so
         // animation ticks can update only the layer matrix, bypassing relayout.
-        // CSS: will-change вЂ” P4 wires ComputedStyle.will_change to promote_layer calls here.
+        // CSS: will-change — P4 wires ComputedStyle.will_change to promote_layer calls here.
         if let (Some(lb_ref), Some(r)) = (self.layout_box.as_ref(), self.renderer.as_mut()) {
             promote_will_change_layers(lb_ref, r.as_mut());
         }
         // ADR-016 M0.3: the fresh display list is now laid out at the current
-        // zoom, so any transform-first zoom preview is complete вЂ” clear the
+        // zoom, so any transform-first zoom preview is complete — clear the
         // debounce and reset the backend to 1:1. Done for every relayout
         // (resize, DOM mutation, tab switch), not just the debounced zoom one,
         // so a relayout from another source also lands the pending zoom.
@@ -640,18 +640,18 @@ impl Lumen {
             // Lazy-load requests drained while `self` is borrowed immutably;
             // fetched after the borrow ends (fetch needs `&mut self`).
             let mut lazy_reqs: Vec<(u32, String)> = Vec::new();
-            // ADR-016 M2.2c-2d: layout-geometry push (`update_layout_rects` Рё Co.)
-            // is the last mixed read+write UIв†’JS site in the relayout path. The
-            // whole ordered sequence вЂ” rects/styles/viewport push в†’ observer &
-            // matchMedia & lazy-image delivery в†’ `take_lazy_image_requests` read в†’
-            // scroll-state push вЂ” moves into ONE `route_query_js` closure returning
+            // ADR-016 M2.2c-2d: layout-geometry push (`update_layout_rects` и Co.)
+            // is the last mixed read+write UI→JS site in the relayout path. The
+            // whole ordered sequence — rects/styles/viewport push → observer &
+            // matchMedia & lazy-image delivery → `take_lazy_image_requests` read →
+            // scroll-state push — moves into ONE `route_query_js` closure returning
             // `lazy_reqs`, so under the flag it runs atomically **in order** on the
             // engine thread (the value read after the void pushes keeps its
             // read-after-write ordering) and blocks only for that one result. The
-            // `self.js_present` gate mirrors the old `if let Some(js)` вЂ” the
+            // `self.js_present` gate mirrors the old `if let Some(js)` — the
             // (side-effect-free) geometry collection runs only when a JS context
             // exists, byte-identical with the flag off. All captured data is owned
-            // (`HashMap`/`Vec`) в†’ the closure is `Send + 'static`.
+            // (`HashMap`/`Vec`) → the closure is `Send + 'static`.
             if self.js_present
                 && let Some(lb_ref) = self.layout_box.as_ref()
             {
@@ -675,7 +675,7 @@ impl Lumen {
                     js.update_custom_properties(customs);
                     js.update_viewport_size(vw, vh);
                     js.deliver_layout_observers();
-                    // CSS MQ L4 В§4.2: re-evaluate matchMedia() lists against the new
+                    // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
                     // viewport. `dark_mode` mirrors the OS `prefers-color-scheme`,
                     // read from winit at window creation / refreshed on ThemeChanged.
                     js.deliver_media_query_changes(vw, vh, dark_mode, reduced_motion);
@@ -693,17 +693,17 @@ impl Lumen {
                 self.fetch_and_register_lazy_images(lazy_reqs);
             }
         }
-        // BUG-730: images the page added after load land here вЂ” this is the one
+        // BUG-730: images the page added after load land here — this is the one
         // post-layout point every relayout producer routes through, so a
         // script-appended `<img>` is picked up whichever path relaid it out.
         self.spawn_dynamic_image_loads(viewport);
-        // BUG-735: Рё РїРѕ С‚РѕР№ Р¶Рµ РїСЂРёС‡РёРЅРµ вЂ” СЃРІРµР¶РµРїРµСЂРµСЃС‚СЂРѕРµРЅРЅРѕРµ РїРѕРґРґРµСЂРµРІРѕ РјРѕРіР»Рѕ
-        // РїСЂРёРЅРµСЃС‚Рё РќРћР’Р«Р™ `<img>` СЃ СѓР¶Рµ РґРµРєРѕРґРёСЂРѕРІР°РЅРЅС‹Рј `src` (React РїРµСЂРµСЂРёСЃРѕРІР°Р»
-        // Р±Р»РѕРє: СѓР·РµР» РґСЂСѓРіРѕР№, РєР°СЂС‚РёРЅРєР° С‚Р° Р¶Рµ). Р’С‚РѕСЂРѕРіРѕ `ImageDecoded` РґР»СЏ РЅРµРіРѕ РЅРµ
-        // Р±СѓРґРµС‚ вЂ” Р·Р°РїСЂРѕСЃ РґРµРґСѓРїР»РёС†РёСЂРѕРІР°РЅ РїРѕ URL, вЂ” РїРѕСЌС‚РѕРјСѓ СЂР°Р·РјРµСЂС‹ РµРјСѓ СЂР°Р·РґР°С‘С‚
-        // РїСЂРѕС…РѕРґ `apply_stream_intrinsic_sizes`, Рё Р·РґРµСЃСЊ РјС‹ РµРіРѕ Р·Р°РєР°Р·С‹РІР°РµРј.
-        // РџСѓСЃС‚РѕР№ РєР°СЂС‚Рµ Р·Р°РєР°Р·С‹РІР°С‚СЊ РЅРµС‡РµРіРѕ; СЃР°Рј РїСЂРѕС…РѕРґ no-op, РµСЃР»Рё РґРѕРїРёСЃС‹РІР°С‚СЊ
-        // РЅРµС‡РµРіРѕ, С‚Р°Рє С‡С‚Рѕ В«СЂРµР»РµР№Р°СѓС‚ в†’ РїСЂРѕС…РѕРґ в†’ СЂРµР»РµР№Р°СѓС‚В» РЅРµ Р·Р°С†РёРєР»РёРІР°РµС‚СЃСЏ.
+        // BUG-735: и по той же причине — свежеперестроенное поддерево могло
+        // принести НОВЫЙ `<img>` с уже декодированным `src` (React перерисовал
+        // блок: узел другой, картинка та же). Второго `ImageDecoded` для него не
+        // будет — запрос дедуплицирован по URL, — поэтому размеры ему раздаёт
+        // проход `apply_stream_intrinsic_sizes`, и здесь мы его заказываем.
+        // Пустой карте заказывать нечего; сам проход no-op, если дописывать
+        // нечего, так что «релейаут → проход → релейаут» не зацикливается.
         self.stream_image_sizes_dirty |= !self.stream_image_sizes.is_empty();
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
@@ -711,12 +711,12 @@ impl Lumen {
     }
 
     /// ADR-016 M2.2: build the immutable-snapshot relayout job that the engine
-    /// thread runs off the UI thread вЂ” shared by the fire-and-forget
+    /// thread runs off the UI thread — shared by the fire-and-forget
     /// [`Self::submit_relayout_job`] (latest-wins) and the blocking
     /// [`Self::readback_relayout_job`] (request/reply), so both produce a
     /// byte-identical [`EngineCommit`] for the same DOM state.
     ///
-    /// Returns `None` вЂ” nothing to lay out вЂ” when there is no `LayoutSource`/renderer
+    /// Returns `None` — nothing to lay out — when there is no `LayoutSource`/renderer
     /// or the viewport is degenerate. On success bumps `engine_job_generation` and
     /// returns `(generation, job)`; the caller decides whether to `submit` it
     /// (deferred, latest-wins) or `readback` it (blocking). Because the generation is
@@ -731,15 +731,15 @@ impl Lumen {
         &mut self,
     ) -> Option<(u64, impl FnOnce() -> EngineCommit + Send + 'static)> {
         let viewport = self.relayout_viewport()?;
-        // BUG-743: СЃРЅРёРјРѕРє Р»РёСЃС‚Р° РґР»СЏ РґРІРёР¶РєРѕРІРѕРіРѕ РїРѕС‚РѕРєР° Р±РµСЂС‘С‚СЃСЏ Р·РґРµСЃСЊ, РїРѕСЌС‚РѕРјСѓ
-        // РїРѕР·РґРЅРёР№ РґРёРЅР°РјРёС‡РµСЃРєРёР№ `<style>` РґРѕР»Р¶РµРЅ РїРѕРїР°СЃС‚СЊ РІ РєР°СЃРєР°Рґ РґРѕ РєР»РѕРЅРёСЂРѕРІР°РЅРёСЏ.
+        // BUG-743: снимок листа для движкового потока берётся здесь, поэтому
+        // поздний динамический `<style>` должен попасть в каскад до клонирования.
         self.refresh_dynamic_css();
         let src = self.layout_source.as_ref()?;
         self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
         let generation = self.engine_job_generation;
         // Immutable snapshots captured by the job (ADR-016 invariant 1). The
         // stylesheet is now an `Arc` in `LayoutSource` (M2.2b), so the job clones
-        // only the handle вЂ” no per-submit deep clone of the whole `Stylesheet`.
+        // only the handle — no per-submit deep clone of the whole `Stylesheet`.
         let document = Arc::clone(&src.document);
         let stylesheet = Arc::clone(&src.stylesheet);
         let hp = Arc::clone(&self.hyp_provider);
@@ -753,7 +753,7 @@ impl Lumen {
         let cv_relevant = self.cv_relevant.clone();
         let job = move || {
             let t0 = std::time::Instant::now();
-            // Interactive state is thread-local вЂ” set it on THIS (engine) thread.
+            // Interactive state is thread-local — set it on THIS (engine) thread.
             lumen_layout::set_interactive_state(hovered, focused, active);
             lumen_layout::set_forced_colors(forced_colors);
             lumen_layout::set_cv_scroll(cv_x, cv_y);
@@ -777,14 +777,14 @@ impl Lumen {
     /// ADR-016 M2.2: route a relayout to the persistent engine thread (off the
     /// UI thread). Returns `true` if a job was submitted; `false` when the engine
     /// thread is absent (`LUMEN_ENGINE_THREAD` off) or there is nothing to lay out
-    /// вЂ” the caller then falls back to the synchronous [`Self::relayout`].
+    /// — the caller then falls back to the synchronous [`Self::relayout`].
     ///
     /// Only for **async-safe** triggers: no caller may read layout geometry
     /// synchronously after this returns, because the commit lands a few frames
     /// later via [`Self::poll_engine_commit`]. Callers are the debounced
     /// transform-first zoom (M0.3), the chrome-inset toggles ([`Self::relayout_chrome`],
     /// M2.2b), the form-input toggles ([`Self::relayout_form`], M2.2c-3) and the
-    /// `about_to_wait` rAF DOM-dirty flush ([`Self::relayout_raf_dirty`], M2.2c-3) вЂ”
+    /// `about_to_wait` rAF DOM-dirty flush ([`Self::relayout_raf_dirty`], M2.2c-3) —
     /// none reads geometry synchronously afterward.
     pub(crate) fn submit_relayout_job(&mut self) -> bool {
         if self.engine_thread.is_none() {
@@ -798,10 +798,10 @@ impl Lumen {
 
     /// ADR-016 M2.2c-3: run a relayout **on the engine thread but block** for its
     /// commit (request/reply via [`engine_thread::EngineThread::readback`]), then
-    /// apply it synchronously вЂ” for sites that read a layout product in the same
+    /// apply it synchronously — for sites that read a layout product in the same
     /// tick. Returns `true` if the readback ran and was applied; `false` when the
     /// engine thread is absent (`LUMEN_ENGINE_THREAD` off), there is nothing to lay
-    /// out, or the thread was shutting down (`readback` в†’ `None`) вЂ” the caller then
+    /// out, or the thread was shutting down (`readback` → `None`) — the caller then
     /// falls back to the synchronous [`Self::relayout`].
     ///
     /// The sole caller today is the `RedrawRequested` rAF DOM-dirty flush
@@ -809,7 +809,7 @@ impl Lumen {
     /// `self.display_list.is_empty()` for PerformancePaintTiming. Unlike
     /// [`Self::submit_relayout_job`] the commit is **not** deposited in the
     /// latest-wins slot; it comes straight back and is applied here, so like the
-    /// synchronous [`Self::relayout`] this is authoritative вЂ” `engine_applied_generation`
+    /// synchronous [`Self::relayout`] this is authoritative — `engine_applied_generation`
     /// advances to the just-bumped `engine_job_generation`, dropping any older
     /// in-flight async commit in [`Self::poll_engine_commit`]'s guard.
     pub(crate) fn readback_relayout_job(&mut self) -> bool {
@@ -838,7 +838,7 @@ impl Lumen {
     /// ADR-016 M2.2: consume the newest off-thread layout result, if the engine
     /// thread produced one, and apply it on the UI thread. A no-op when the engine
     /// thread is off or nothing is ready. The commit is dropped when its
-    /// `generation` no longer matches `engine_job_generation` вЂ” a newer job or a
+    /// `generation` no longer matches `engine_job_generation` — a newer job or a
     /// synchronous `relayout()` has superseded it (generation-guard, invariant 2).
     pub(crate) fn poll_engine_commit(&mut self) {
         // Take the commit and release the `engine_thread` borrow before the
@@ -847,7 +847,7 @@ impl Lumen {
             return;
         };
         if commit.generation != self.engine_job_generation {
-            return; // superseded вЂ” drop the stale result.
+            return; // superseded — drop the stale result.
         }
         self.engine_applied_generation = commit.generation;
         let EngineCommit { content, layout_box, viewport, compute_ms, .. } = commit;
@@ -866,28 +866,28 @@ impl Lumen {
         }
     }
 
-    /// ADR-016 M2.2c-2d (21): РЅР°Р·РЅР°С‡РёС‚СЊ JS-С…СЌРЅРґР» Р°РєС‚РёРІРЅРѕР№ РІРєР»Р°РґРєРё, РґРµСЂР¶Р°
-    /// [`Self::js_present`] РІ СЃРІСЏР·РєРµ СЃ С„Р°РєС‚РёС‡РµСЃРєРёРј РІР»Р°РґРµР»СЊС†РµРј `Arc`.
+    /// ADR-016 M2.2c-2d (21): назначить JS-хэндл активной вкладки, держа
+    /// [`Self::js_present`] в связке с фактическим владельцем `Arc`.
     ///
-    /// **Р­С‚Рѕ РµРґРёРЅСЃС‚РІРµРЅРЅР°СЏ С‚РѕС‡РєР° РІР»Р°РґРµРЅРёСЏ С…СЌРЅРґР»РѕРј.** РљСѓРґР° СЃР°РґРёС‚СЃСЏ `Arc` Р·Р°РІРёСЃРёС‚ РѕС‚
-    /// С‚РѕРіРѕ, РїРѕРґРЅСЏС‚ Р»Рё РґРІРёР¶РєРѕРІС‹Р№ РїРѕС‚РѕРє:
-    /// - РїРѕС‚РѕРє РµСЃС‚СЊ (`LUMEN_ENGINE_THREAD=1`) в†’ `Arc` **РїРµСЂРµРµР·Р¶Р°РµС‚ РЅР° РґРІРёР¶РєРѕРІС‹Р№
-    ///   РїРѕС‚РѕРє** РІ [`EngineJsState::js`] С‡РµСЂРµР· [`engine_thread::EngineThread::task`],
-    ///   Р° UI-СЃС‚РѕСЂРѕРЅРЅРёР№ [`Self::js_ctx`] РѕСЃС‚Р°С‘С‚СЃСЏ `None`. РњР°СЂС€СЂСѓС‚РёР·Р°С‚РѕСЂС‹
-    ///   ([`route_task_js`]/[`route_query_js`]/[`route_eval_js`]) РїРѕРґ С„Р»Р°РіРѕРј Рё С‚Р°Рє
-    ///   РёРіРЅРѕСЂРёСЂСѓСЋС‚ РїРµСЂРµРґР°РЅРЅС‹Р№ UI-РєР»РѕРЅ Рё С‡РёС‚Р°СЋС‚ `state.js`, РїРѕСЌС‚РѕРјСѓ РІСЃРµ call-site'С‹
-    ///   РѕСЃС‚Р°СЋС‚СЃСЏ РєРѕСЂСЂРµРєС‚РЅС‹, Р° СЃР°Рј СЂР°РЅС‚Р°Р№Рј РІСЃС‘ СЂР°РІРЅРѕ Р¶РёРІС‘С‚ РЅР° СЃРІРѕС‘Рј `lumen-js`-РїРѕС‚РѕРєРµ
-    ///   (ADR-014) вЂ” СЌС‚Рѕ РїРµСЂРµРЅРѕСЃ РІР»Р°РґРµРЅРёСЏ С…СЌРЅРґР»РѕРј, Р° РЅРµ СЂР°Р·РґРµР»РµРЅРёРµ РјСѓС‚Р°Р±РµР»СЊРЅРѕРіРѕ
-    ///   СЃРѕСЃС‚РѕСЏРЅРёСЏ (РёРЅРІР°СЂРёР°РЅС‚ 1);
-    /// - РїРѕС‚РѕРєР° РЅРµС‚ (С„Р»Р°Рі РІС‹РєР»СЋС‡РµРЅ, РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ, Р»РёР±Рѕ spawn РЅРµ СѓРґР°Р»СЃСЏ) в†’ `Arc`
-    ///   С…СЂР°РЅРёС‚СЃСЏ РІ UI-СЃС‚РѕСЂРѕРЅРЅРµРј [`Self::js_ctx`] РєР°Рє РїСЂРµР¶РґРµ вЂ” **Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ**.
+    /// **Это единственная точка владения хэндлом.** Куда садится `Arc` зависит от
+    /// того, поднят ли движковый поток:
+    /// - поток есть (`LUMEN_ENGINE_THREAD=1`) → `Arc` **переезжает на движковый
+    ///   поток** в [`EngineJsState::js`] через [`engine_thread::EngineThread::task`],
+    ///   а UI-сторонний [`Self::js_ctx`] остаётся `None`. Маршрутизаторы
+    ///   ([`route_task_js`]/[`route_query_js`]/[`route_eval_js`]) под флагом и так
+    ///   игнорируют переданный UI-клон и читают `state.js`, поэтому все call-site'ы
+    ///   остаются корректны, а сам рантайм всё равно живёт на своём `lumen-js`-потоке
+    ///   (ADR-014) — это перенос владения хэндлом, а не разделение мутабельного
+    ///   состояния (инвариант 1);
+    /// - потока нет (флаг выключен, по умолчанию, либо spawn не удался) → `Arc`
+    ///   хранится в UI-стороннем [`Self::js_ctx`] как прежде — **байт-идентично**.
     ///
-    /// [`Self::js_present`] РѕС‚РґРµР»СЏРµС‚ СЂРµС€РµРЅРёРµ В«РµСЃС‚СЊ Р»Рё JS?В» РѕС‚ С‚РѕРіРѕ, РєР°РєР°СЏ СЃС‚РѕСЂРѕРЅР°
-    /// РґРµСЂР¶РёС‚ `Arc`: РІСЃРµ РіРµР№С‚С‹ (`if self.js_present`) С‡РёС‚Р°СЋС‚ РµРіРѕ, РїРѕСЌС‚РѕРјСѓ РѕСЃС‚Р°СЋС‚СЃСЏ
-    /// РІРµСЂРЅС‹ РІ РѕР±РѕРёС… СЂРµР¶РёРјР°С… С„Р»Р°РіР°.
+    /// [`Self::js_present`] отделяет решение «есть ли JS?» от того, какая сторона
+    /// держит `Arc`: все гейты (`if self.js_present`) читают его, поэтому остаются
+    /// верны в обоих режимах флага.
     pub(crate) fn set_js_ctx(&mut self, handle: Option<Arc<dyn PersistentJs>>) {
         // BUG-839: the document is committed at this point, so per-step
-        // Resource Timing delivery may resume вЂ” whatever is still queued, and
+        // Resource Timing delivery may resume — whatever is still queued, and
         // everything that arrives from here on, belongs to this runtime. The
         // *clear* is deliberately not here (it runs where the load starts): by
         // the time this is reached, `source.load` has already fetched the
@@ -912,33 +912,33 @@ impl Lumen {
         }
     }
 
-    /// ADR-016 M2.2c-2b: Р·РµСЂРєР°Р»РёС‚ СЂР°Р·РґРµР»СЏРµРјС‹Р№ `Document` Р°РєС‚РёРІРЅРѕР№ РІРєР»Р°РґРєРё РІ
-    /// РїРµСЂСЃРёСЃС‚РµРЅС‚РЅРѕРµ СЃРѕСЃС‚РѕСЏРЅРёРµ [`EngineJsState`] РґРІРёР¶РєРѕРІРѕРіРѕ РїРѕС‚РѕРєР°.
+    /// ADR-016 M2.2c-2b: зеркалит разделяемый `Document` активной вкладки в
+    /// персистентное состояние [`EngineJsState`] движкового потока.
     ///
-    /// No-op, РєРѕРіРґР° РґРІРёР¶РєРѕРІРѕРіРѕ РїРѕС‚РѕРєР° РЅРµС‚ (`LUMEN_ENGINE_THREAD` РІС‹РєР»СЋС‡РµРЅ, РїРѕ
-    /// СѓРјРѕР»С‡Р°РЅРёСЋ) вЂ” С‚РѕРіРґР° РїРѕРІРµРґРµРЅРёРµ shell Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ. Р’С‹Р·С‹РІР°РµС‚СЃСЏ РїСЂРё РєР°Р¶РґРѕР№
-    /// СЃРјРµРЅРµ СЃС‚СЂР°РЅРёС†С‹ (РїРѕСЃР»Рµ [`Self::set_js_ctx`] + СѓСЃС‚Р°РЅРѕРІРєРё `layout_source`),
-    /// С‡С‚РѕР±С‹ `task`/`query`-РІС‹Р·РѕРІС‹ РІРёРґРµР»Рё Р°РєС‚СѓР°Р»СЊРЅС‹Р№ DOM. `Arc`-РєР»РѕРЅ РґС‘С€РµРІ.
+    /// No-op, когда движкового потока нет (`LUMEN_ENGINE_THREAD` выключен, по
+    /// умолчанию) — тогда поведение shell байт-идентично. Вызывается при каждой
+    /// смене страницы (после [`Self::set_js_ctx`] + установки `layout_source`),
+    /// чтобы `task`/`query`-вызовы видели актуальный DOM. `Arc`-клон дёшев.
     ///
-    /// Р’Р»Р°РґРµРЅРёРµ JS-С…СЌРЅРґР»РѕРј СЃСЋРґР° Р±РѕР»СЊС€Рµ РЅРµ РІС…РѕРґРёС‚ вЂ” СЃ M2.2c-2d (21) РµРіРѕ РїРµСЂРµРЅРѕСЃРёС‚
-    /// СЃР°Рј [`Self::set_js_ctx`]; Р·РґРµСЃСЊ РѕСЃС‚Р°С‘С‚СЃСЏ С‚РѕР»СЊРєРѕ Р·РµСЂРєР°Р»Рѕ `document`
-    /// (В«СЃРёРґРµРЅСЊРµВ» Р±СѓРґСѓС‰РµРіРѕ РІР»Р°РґРµРЅРёСЏ DOM РґРІРёР¶РєРѕРІС‹Рј РїРѕС‚РѕРєРѕРј, M2.2c-3).
+    /// Владение JS-хэндлом сюда больше не входит — с M2.2c-2d (21) его переносит
+    /// сам [`Self::set_js_ctx`]; здесь остаётся только зеркало `document`
+    /// («сиденье» будущего владения DOM движковым потоком, M2.2c-3).
     pub(crate) fn sync_engine_js_state(&self) {
         let Some(engine) = self.engine_thread.as_ref() else { return };
         let document = self.layout_source.as_ref().map(|ls| Arc::clone(&ls.document));
         engine.task(move |state| state.document = document);
     }
 
-    /// ADR-016 M2.2c-2d (21): РёР·РІР»РµС‡СЊ JS-С…СЌРЅРґР» Р°РєС‚РёРІРЅРѕР№ РІРєР»Р°РґРєРё РґР»СЏ СЃРЅР°РїС€РѕС‚Р°
+    /// ADR-016 M2.2c-2d (21): извлечь JS-хэндл активной вкладки для снапшота
     /// (`save_page_snapshot`).
     ///
-    /// РџРѕРґ С„Р»Р°РіРѕРј (`LUMEN_ENGINE_THREAD=1`) `Arc` Р¶РёРІС‘С‚ РІ [`EngineJsState::js`] РЅР°
-    /// РґРІРёР¶РєРѕРІРѕРј РїРѕС‚РѕРєРµ, РїРѕСЌС‚РѕРјСѓ РµРіРѕ РІС‹РЅРёРјР°РµС‚ Р±Р»РѕРєРёСЂСѓСЋС‰РёР№ `query`, `take`-Р°СЋС‰РёР№ РµРіРѕ
-    /// РёР· СЃРѕСЃС‚РѕСЏРЅРёСЏ (РІСЃС‚Р°С‘С‚ РІ РѕС‡РµСЂРµРґСЊ РїРѕСЃР»Рµ СѓР¶Рµ РѕС‚РїСЂР°РІР»РµРЅРЅС‹С… `task`, С‚Р°Рє С‡С‚Рѕ РІРёРґРёС‚
-    /// РїРѕСЃР»РµРґРЅРёР№ Р·РµСЂРєР°Р»РёСЂРѕРІР°РЅРЅС‹Р№ С…СЌРЅРґР»); Р±РµР· С„Р»Р°РіР° (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ) вЂ” `take` РїСЂСЏРјРѕ РёР·
-    /// UI-СЃС‚РѕСЂРѕРЅРЅРµРіРѕ [`Self::js_ctx`], **Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ** РїСЂРµР¶РЅРµРјСѓ `self.js_ctx.take()`.
-    /// Р’РѕР·РІСЂР°С‰С‘РЅРЅС‹Р№ `Arc` РєР»Р°РґС‘С‚СЃСЏ РІ [`PageSnapshot::js_ctx`] Рё РѕСЃС‚Р°С‘С‚СЃСЏ СЂРµР°Р»СЊРЅС‹Рј
-    /// С…СЌРЅРґР»РѕРј РґР°Р¶Рµ РїРѕРґ С„Р»Р°РіРѕРј (bg-tab GC Рё restore С‡РёС‚Р°СЋС‚ РµРіРѕ РЅР°РїСЂСЏРјСѓСЋ).
+    /// Под флагом (`LUMEN_ENGINE_THREAD=1`) `Arc` живёт в [`EngineJsState::js`] на
+    /// движковом потоке, поэтому его вынимает блокирующий `query`, `take`-ающий его
+    /// из состояния (встаёт в очередь после уже отправленных `task`, так что видит
+    /// последний зеркалированный хэндл); без флага (по умолчанию) — `take` прямо из
+    /// UI-стороннего [`Self::js_ctx`], **байт-идентично** прежнему `self.js_ctx.take()`.
+    /// Возвращённый `Arc` кладётся в [`PageSnapshot::js_ctx`] и остаётся реальным
+    /// хэндлом даже под флагом (bg-tab GC и restore читают его напрямую).
     pub(crate) fn take_js_ctx(&mut self) -> Option<Arc<dyn PersistentJs>> {
         match self.engine_thread.as_ref() {
             Some(engine) => engine.query(|state| state.js.take()).flatten(),
@@ -969,8 +969,8 @@ impl Lumen {
     }
 }
 
-/// РџРѕРІС‚РѕСЂРЅС‹Р№ layout+paint РїРѕ СЃРѕС…СЂР°РЅС‘РЅРЅРѕРјСѓ `LayoutSource` СЃ РЅРѕРІС‹Рј viewport.
-/// Р’РѕР·РІСЂР°С‰Р°РµС‚ `(DisplayList, LayoutBox)` вЂ” LayoutBox РЅСѓР¶РµРЅ РґР»СЏ animation scheduler.
+/// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
+/// Возвращает `(DisplayList, LayoutBox)` — LayoutBox нужен для animation scheduler.
 /// `dark_mode` is forwarded to `layout_measured_hyp` so `@media (prefers-color-scheme: dark)`
 /// rules take effect on relayout (e.g. after OS theme change or window resize).
 pub(crate) fn relayout_page(
@@ -983,16 +983,16 @@ pub(crate) fn relayout_page(
     compute_layout(&src.document, &src.stylesheet, viewport, hp, dark_mode, web_fonts)
 }
 
-/// РџСЂРѕС†РµСЃСЃ-РіР»РѕР±Р°Р»СЊРЅС‹Рµ РјРµС‚СЂРёРєРё СЃРёСЃС‚РµРјРЅС‹С… С€СЂРёС„С‚РѕРІ РґР»СЏ РёР·РјРµСЂРёС‚РµР»СЏ: CSS
-/// generic-СЃРµРјРµР№СЃС‚РІР° + РєРѕРЅРєСЂРµС‚РЅС‹Рµ СЃРёСЃС‚РµРјРЅС‹Рµ СЃРµРјРµР№СЃС‚РІР° РїРѕ РёРјРµРЅРё (BUG-128).
+/// Процесс-глобальные метрики системных шрифтов для измерителя: CSS
+/// generic-семейства + конкретные системные семейства по имени (BUG-128).
 ///
-/// РЎС‚СЂРѕРёС‚СЃСЏ РѕРґРёРЅ СЂР°Р· РїРѕРІРµСЂС… РѕР±С‰РµРіРѕ СЃРёСЃС‚РµРјРЅРѕРіРѕ РёРЅРґРµРєСЃР°
-/// ([`lumen_font::shared_system_index`]) Рё РїРµСЂРµРёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РІСЃРµРјРё
-/// РїРµСЂРµСЃР±РѕСЂРєР°РјРё РёР·РјРµСЂРёС‚РµР»СЏ: СЃР°Рј СЃРєР°РЅ РґРёСЂРµРєС‚РѕСЂРёР№ С€СЂРёС„С‚РѕРІ СЃС‚СЂР°РЅРёС†Р° РґРµР»Р°РµС‚ РІ
-/// Р»СЋР±РѕРј СЃР»СѓС‡Р°Рµ (СЂРµРЅРґРµСЂ СЂРµР·РѕР»РІРёС‚ face-С‹ С‡РµСЂРµР· С‚РѕС‚ Р¶Рµ РёРЅРґРµРєСЃ), Р° С‡С‚РµРЅРёРµ Рё
-/// РїР°СЂСЃРёРЅРі РІС‹Р±СЂР°РЅРЅС‹С… С„Р°Р№Р»РѕРІ РЅРµ РґРѕР»Р¶РЅРѕ РїРѕРІС‚РѕСЂСЏС‚СЊСЃСЏ РЅР° РєР°Р¶РґС‹Р№ relayout.
-/// Р›РµРЅРёРІС‹Р№ РєСЌС€ РєРѕРЅРєСЂРµС‚РЅС‹С… СЃРµРјРµР№СЃС‚РІ Р¶РёРІС‘С‚ Р·РґРµСЃСЊ Р¶Рµ, РїРѕСЌС‚РѕРјСѓ `font-family:
-/// Arial` С‡РёС‚Р°РµС‚СЃСЏ СЃ РґРёСЃРєР° РѕРґРёРЅ СЂР°Р· РЅР° РїСЂРѕС†РµСЃСЃ, Р° РЅРµ РЅР° РєР°Р¶РґС‹Р№ СЂРµР»СЌР№Р°СѓС‚.
+/// Строится один раз поверх общего системного индекса
+/// ([`lumen_font::shared_system_index`]) и переиспользуется всеми
+/// пересборками измерителя: сам скан директорий шрифтов страница делает в
+/// любом случае (рендер резолвит face-ы через тот же индекс), а чтение и
+/// парсинг выбранных файлов не должно повторяться на каждый relayout.
+/// Ленивый кэш конкретных семейств живёт здесь же, поэтому `font-family:
+/// Arial` читается с диска один раз на процесс, а не на каждый релэйаут.
 pub(crate) fn system_font_faces() -> Arc<lumen_paint::SystemFaceSet> {
     static SHARED: std::sync::OnceLock<Arc<lumen_paint::SystemFaceSet>> =
         std::sync::OnceLock::new();
@@ -1005,19 +1005,19 @@ pub(crate) fn system_font_faces() -> Arc<lumen_paint::SystemFaceSet> {
         .clone()
 }
 
-/// РР·РјРµСЂРёС‚РµР»СЊ РґР»СЏ СЃС‚СЂР°РЅРёС†С‹: bundled Inter + @font-face-СЃРµРјСЊРё + СЃРёСЃС‚РµРјРЅС‹Рµ
-/// face-С‹ (generic-СЃРµРјРµР№СЃС‚РІР° Рё РєРѕРЅРєСЂРµС‚РЅС‹Рµ СЃРµРјРµР№СЃС‚РІР° РїРѕ РёРјРµРЅРё).
+/// Измеритель для страницы: bundled Inter + @font-face-семьи + системные
+/// face-ы (generic-семейства и конкретные семейства по имени).
 ///
-/// Р•РґРёРЅР°СЏ С‚РѕС‡РєР° СЃР±РѕСЂРєРё РґР»СЏ РІСЃРµС… layout-РїСѓС‚РµР№ (РїРѕР»РЅС‹Р№ / РёРЅРєСЂРµРјРµРЅС‚Р°Р»СЊРЅС‹Р№ /
-/// restyle) вЂ” РёРЅР°С‡Рµ СЃРёСЃС‚РµРјРЅС‹Рµ СЃРµРјРµР№СЃС‚РІР° РјРµСЂСЏСЋС‚СЃСЏ РїРѕ-СЂР°Р·РЅРѕРјСѓ РІ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё РѕС‚
-/// С‚РѕРіРѕ, РµСЃС‚СЊ Р»Рё РЅР° СЃС‚СЂР°РЅРёС†Рµ web-С€СЂРёС„С‚С‹.
-#[allow(clippy::expect_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+/// Единая точка сборки для всех layout-путей (полный / инкрементальный /
+/// restyle) — иначе системные семейства меряются по-разному в зависимости от
+/// того, есть ли на странице web-шрифты.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn page_measurer(
     font: &lumen_font::Font<'static>,
     web_fonts: &[LoadedWebFont],
 ) -> lumen_paint::MultiFontMeasurer {
     let mut measurer = lumen_paint::MultiFontMeasurer::new(font)
-        .expect("MultiFontMeasurer РёР· bundled Inter");
+        .expect("MultiFontMeasurer из bundled Inter");
     for wf in web_fonts {
         measurer.register_family_with_ranges(
             &wf.family,
@@ -1029,17 +1029,17 @@ pub(crate) fn page_measurer(
     measurer
 }
 
-/// РЇРґСЂРѕ style+layout+display-list РїРѕ immutable-СЃРЅР°РїС€РѕС‚Сѓ РґРѕРєСѓРјРµРЅС‚Р° Рё СЃС‚РёР»РµР№.
+/// Ядро style+layout+display-list по immutable-снапшоту документа и стилей.
 ///
-/// Р’С‹РЅРµСЃРµРЅРѕ РёР· [`relayout_page`], С‡С‚РѕР±С‹ РѕРґРЅСѓ Рё С‚Сѓ Р¶Рµ СЂР°Р±РѕС‚Сѓ РјРѕР¶РЅРѕ Р±С‹Р»Рѕ РІС‹Р·РІР°С‚СЊ Рё
-/// РЅР° UI-РїРѕС‚РѕРєРµ (СЃРёРЅС…СЂРѕРЅРЅС‹Р№ `relayout()`), Рё РЅР° РґРІРёР¶РєРѕРІРѕРј РїРѕС‚РѕРєРµ (ADR-016 M2.2,
-/// [`Lumen::submit_relayout_job`]) вЂ” РІС‚РѕСЂРѕРјСѓ `LayoutSource` РЅРµРґРѕСЃС‚СѓРїРµРЅ, Сѓ РЅРµРіРѕ РЅР°
-/// СЂСѓРєР°С… С‚РѕР»СЊРєРѕ `Arc`-СЃРЅРёРјРєРё `document`/`stylesheet`. РРЅС‚РµСЂР°РєС‚РёРІРЅРѕРµ СЃРѕСЃС‚РѕСЏРЅРёРµ
-/// (`:hover`/`:focus`/`forced-colors`/`content-visibility` scroll) вЂ” thread-local
-/// (`lumen_layout::set_*`), РїРѕСЌС‚РѕРјСѓ РІС‹Р·С‹РІР°СЋС‰Р°СЏ СЃС‚РѕСЂРѕРЅР° РѕР±СЏР·Р°РЅР° РІС‹СЃС‚Р°РІРёС‚СЊ РµРіРѕ РЅР°
-/// **С‚РѕРј Р¶Рµ** РїРѕС‚РѕРєРµ РґРѕ РІС‹Р·РѕРІР° Рё СЃР±СЂРѕСЃРёС‚СЊ РїРѕСЃР»Рµ.
-#[allow(clippy::expect_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
-#[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+/// Вынесено из [`relayout_page`], чтобы одну и ту же работу можно было вызвать и
+/// на UI-потоке (синхронный `relayout()`), и на движковом потоке (ADR-016 M2.2,
+/// [`Lumen::submit_relayout_job`]) — второму `LayoutSource` недоступен, у него на
+/// руках только `Arc`-снимки `document`/`stylesheet`. Интерактивное состояние
+/// (`:hover`/`:focus`/`forced-colors`/`content-visibility` scroll) — thread-local
+/// (`lumen_layout::set_*`), поэтому вызывающая сторона обязана выставить его на
+/// **том же** потоке до вызова и сбросить после.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn compute_layout(
     document: &Mutex<Document>,
     stylesheet: &lumen_css_parser::Stylesheet,
@@ -1048,9 +1048,9 @@ pub(crate) fn compute_layout(
     dark_mode: bool,
     web_fonts: &[LoadedWebFont],
 ) -> (DisplayList, lumen_layout::LayoutBox) {
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    // PH3-19: РёР·РјРµСЂРёС‚РµР»СЊ РІРєР»СЋС‡Р°РµС‚ РЅР°РєРѕРїР»РµРЅРЅС‹Рµ web-С€СЂРёС„С‚С‹ (FOUT relayout);
-    // BUG-128: Рё СЃРёСЃС‚РµРјРЅС‹Рµ face-С‹.
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    // PH3-19: измеритель включает накопленные web-шрифты (FOUT relayout);
+    // BUG-128: и системные face-ы.
     let measurer = page_measurer(&font, web_fonts);
     let doc = document.lock().unwrap();
     let layout = lumen_layout::layout_measured_hyp(&doc, stylesheet, viewport, &measurer, hp, dark_mode);
@@ -1059,7 +1059,7 @@ pub(crate) fn compute_layout(
     (dl, layout)
 }
 
-/// ADR-016 M4: incremental variant of [`relayout_page`] вЂ” uses
+/// ADR-016 M4: incremental variant of [`relayout_page`] — uses
 /// [`lumen_layout::layout_mutation_incremental`] to skip geometry re-computation
 /// for subtrees whose [`lumen_layout::ComputedStyle`] is unchanged, while
 /// preserving full cascade and post-layout passes. `prev` is the previously
@@ -1075,13 +1075,13 @@ pub(crate) fn relayout_page_incremental(
     compute_layout_incremental(&src.document, &src.stylesheet, viewport, hp, dark_mode, web_fonts, prev)
 }
 
-/// ADR-016 M4: incremental variant of [`compute_layout`] вЂ” runs the full
+/// ADR-016 M4: incremental variant of [`compute_layout`] — runs the full
 /// cascade but reuses geometry from `prev` for unchanged subtrees.
 ///
 /// Same caller contract as [`compute_layout`]: thread-local interactive state
 /// must be set before the call and cleared afterwards.
-#[allow(clippy::expect_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
-#[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn compute_layout_incremental(
     document: &Mutex<Document>,
     stylesheet: &lumen_css_parser::Stylesheet,
@@ -1091,7 +1091,7 @@ pub(crate) fn compute_layout_incremental(
     web_fonts: &[LoadedWebFont],
     prev: &lumen_layout::LayoutBox,
 ) -> (DisplayList, lumen_layout::LayoutBox) {
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     let measurer = page_measurer(&font, web_fonts);
     let doc = document.lock().unwrap();
     let layout = lumen_layout::layout_mutation_incremental(
@@ -1102,12 +1102,12 @@ pub(crate) fn compute_layout_incremental(
     (dl, layout)
 }
 
-/// BUG-341 S7: restyle-aware variant of [`relayout_page_incremental`] вЂ” uses
+/// BUG-341 S7: restyle-aware variant of [`relayout_page_incremental`] — uses
 /// [`lumen_layout::box_tree::layout_mutation_incremental_restyle`] instead of
 /// [`lumen_layout::layout_mutation_incremental`], skipping cascade work (not
 /// just geometry) for subtrees `delta.dirty_roots` proves untouched. Only
 /// safe when `delta.prev_styles` is the exact `CounterMap::styles()` the
-/// previous cycle over this same document produced вЂ” see
+/// previous cycle over this same document produced — see
 /// `layout_mutation_incremental_restyle`'s own doc comment for the full
 /// precondition; [`Lumen::page_prev_cascade_styles`] being `Some` is the
 /// caller-side half of that contract. Returns the fresh `CounterMap` so the
@@ -1119,7 +1119,7 @@ pub(crate) fn relayout_page_incremental_restyle(
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
     web_fonts: &[LoadedWebFont],
-    // BUG-341 S19: consumed вЂ” the reusable subtrees are moved out of it into
+    // BUG-341 S19: consumed — the reusable subtrees are moved out of it into
     // the tree returned. See `layout_mutation_incremental_restyle`.
     prev: lumen_layout::LayoutBox,
     delta: lumen_layout::counters::RestyleDelta<'_>,
@@ -1129,11 +1129,11 @@ pub(crate) fn relayout_page_incremental_restyle(
     )
 }
 
-/// BUG-341 S7: restyle-aware variant of [`compute_layout_incremental`] вЂ” see
+/// BUG-341 S7: restyle-aware variant of [`compute_layout_incremental`] — see
 /// [`relayout_page_incremental_restyle`].
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::expect_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
-#[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn compute_layout_incremental_restyle(
     document: &Mutex<Document>,
     stylesheet: &lumen_css_parser::Stylesheet,
@@ -1141,12 +1141,12 @@ pub(crate) fn compute_layout_incremental_restyle(
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
     web_fonts: &[LoadedWebFont],
-    // BUG-341 S19: consumed вЂ” the reusable subtrees are moved out of it into
+    // BUG-341 S19: consumed — the reusable subtrees are moved out of it into
     // the tree returned. See `layout_mutation_incremental_restyle`.
     prev: lumen_layout::LayoutBox,
     delta: lumen_layout::counters::RestyleDelta<'_>,
 ) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     let measurer = page_measurer(&font, web_fonts);
     let doc = document.lock().unwrap();
     let (layout, counters) = lumen_layout::box_tree::layout_mutation_incremental_restyle(
@@ -1157,42 +1157,42 @@ pub(crate) fn compute_layout_incremental_restyle(
     (dl, layout, counters)
 }
 
-/// CSS Containment L3 В§4.4 (BB-4) вЂ” shell-СЃРѕР±С‹С‚РёРµ: СЌР»РµРјРµРЅС‚ СЃ
-/// `content-visibility: auto` СЃРјРµРЅРёР» skipped-СЃРѕСЃС‚РѕСЏРЅРёРµ РјРµР¶РґСѓ layout-РїСЂРѕС…РѕРґР°РјРё.
-/// `skipped == true` вЂ” РїРѕРґРґРµСЂРµРІРѕ РІС‹РїР°Р»Рѕ РёР· СЂР°СЃС€РёСЂРµРЅРЅРѕРіРѕ viewport Рё РїСЂРѕРїСѓС‰РµРЅРѕ;
-/// `false` вЂ” СѓР·РµР» СЃС‚Р°Р» relevant Рё РµРіРѕ СЃРѕРґРµСЂР¶РёРјРѕРµ СЃРЅРѕРІР° РІС‹Р»РѕР¶РµРЅРѕ.
-/// Phase 2: P3 РґРѕСЃС‚Р°РІР»СЏРµС‚ РєР°Рє `contentvisibilityautostatechange` РІ JS.
+/// CSS Containment L3 §4.4 (BB-4) — shell-событие: элемент с
+/// `content-visibility: auto` сменил skipped-состояние между layout-проходами.
+/// `skipped == true` — поддерево выпало из расширенного viewport и пропущено;
+/// `false` — узел стал relevant и его содержимое снова выложено.
+/// Phase 2: P3 доставляет как `contentvisibilityautostatechange` в JS.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct ContentVisibilityChange {
-    /// DOM-СѓР·РµР» СЌР»РµРјРµРЅС‚Р° СЃ `content-visibility: auto`.
+    /// DOM-узел элемента с `content-visibility: auto`.
     pub(crate) node: NodeId,
-    /// РќРѕРІРѕРµ СЃРѕСЃС‚РѕСЏРЅРёРµ: `true` вЂ” СЃРѕРґРµСЂР¶РёРјРѕРµ РїСЂРѕРїСѓС‰РµРЅРѕ, `false` вЂ” РІС‹Р»РѕР¶РµРЅРѕ.
+    /// Новое состояние: `true` — содержимое пропущено, `false` — выложено.
     pub(crate) skipped: bool,
 }
 
-/// РЎРѕР±СЂР°С‚СЊ `(node, top_y)` **РІСЃРµС…** `content-visibility: auto` Р±РѕРєСЃРѕРІ РІ РїРѕСЂСЏРґРєРµ
-/// РґРµСЂРµРІР°. top_y вЂ” СЃС‚СЂР°РЅРёС†Р°-РєРѕРѕСЂРґРёРЅР°С‚С‹ Р±РѕРєСЃР°. РЎРєР°РЅ РїРѕ РґРµСЂРµРІСѓ (Р° РЅРµ thread-local)
-/// вЂ” СЂР°Р±РѕС‚Р°РµС‚ Рё РґР»СЏ layout-Р°, РІС‹РїРѕР»РЅРµРЅРЅРѕРіРѕ РІ С„РѕРЅРѕРІРѕРј РїРѕС‚РѕРєРµ Р·Р°РіСЂСѓР·РєРё СЃС‚СЂР°РЅРёС†С‹.
+/// Собрать `(node, top_y)` **всех** `content-visibility: auto` боксов в порядке
+/// дерева. top_y — страница-координаты бокса. Скан по дереву (а не thread-local)
+/// — работает и для layout-а, выполненного в фоновом потоке загрузки страницы.
 ///
-/// BUG-852: СЂР°РЅСЊС€Рµ СЌС‚Р° С„СѓРЅРєС†РёСЏ СЃРѕР±РёСЂР°Р»Р° С‚РѕР»СЊРєРѕ Р±РѕРєСЃС‹ СЃ РїСѓСЃС‚С‹Рј СЃРїРёСЃРєРѕРј РґРµС‚РµР№ Рё
-/// Р·РІР°Р»Р° РёС… В«РїСЂРѕРїСѓС‰РµРЅРЅС‹РјРёВ». РЎРѕРІРїР°РґРµРЅРёРµ РЅРµС‚РѕС‡РЅРѕРµ РІ РѕР±Рµ СЃС‚РѕСЂРѕРЅС‹: РїСѓСЃС‚РѕР№
-/// `<div style="content-visibility:auto">` вЂ” Р° РёРјРµРЅРЅРѕ С‚Р°РєРѕР№ СЃС‚СЂРѕРёС‚
-/// `content-visibility-auto-state-changed-first-observation.html` вЂ” РІС‹РіР»СЏРґРµР»
-/// РїСЂРѕРїСѓС‰РµРЅРЅС‹Рј, РіРґРµ Р±С‹ РѕРЅ РЅРё СЃС‚РѕСЏР», Р° layout РїСЂРѕ РЅРµРіРѕ РІРѕРѕР±С‰Рµ РЅРµ СЃРїСЂР°С€РёРІР°Р»
-/// (`cv_should_skip` РІС‹Р·С‹РІР°РµС‚СЃСЏ С‚РѕР»СЊРєРѕ РїСЂРё `!children.is_empty()`). РЎРѕСЃС‚РѕСЏРЅРёРµ
-/// С‚РµРїРµСЂСЊ СЃС‡РёС‚Р°РµС‚ [`Lumen::refresh_cv_state`] РїРѕ СЃР°РјРѕРјСѓ РїСЂР°РІРёР»Сѓ СЂРµР»РµРІР°РЅС‚РЅРѕСЃС‚Рё.
+/// BUG-852: раньше эта функция собирала только боксы с пустым списком детей и
+/// звала их «пропущенными». Совпадение неточное в обе стороны: пустой
+/// `<div style="content-visibility:auto">` — а именно такой строит
+/// `content-visibility-auto-state-changed-first-observation.html` — выглядел
+/// пропущенным, где бы он ни стоял, а layout про него вообще не спрашивал
+/// (`cv_should_skip` вызывается только при `!children.is_empty()`). Состояние
+/// теперь считает [`Lumen::refresh_cv_state`] по самому правилу релевантности.
 ///
-/// **Р”РµРґСѓРїР»РёРєР°С†РёСЏ РїРѕ СѓР·Р»Сѓ РѕР±СЏР·Р°С‚РµР»СЊРЅР°, Рё РµС‘ РѕС‚СЃСѓС‚СЃС‚РІРёРµ вЂ” РЅРµ РјРµР»РѕС‡СЊ.** РђРЅРѕРЅРёРјРЅС‹Р№
-/// Р±РѕРєСЃ (`InlineRun` РґР»СЏ inline-СЃРѕРґРµСЂР¶РёРјРѕРіРѕ, `InlineBlockRow`, РѕР±С‘СЂС‚РєРё С‚Р°Р±Р»РёС†)
-/// РЅРµ РёРјРµРµС‚ СЃРІРѕРµРіРѕ СЌР»РµРјРµРЅС‚Р° Рё РЅРµСЃС‘С‚ СЃС‚РёР»СЊ СЂРѕРґРёС‚РµР»СЏ, РІРєР»СЋС‡Р°СЏ
-/// `content-visibility: auto`, вЂ” С‚Рѕ РµСЃС‚СЊ `<div style="content-visibility:auto">
-/// <span>x</span></div>` РґР°С‘С‚ Р”Р’Рђ Р±РѕРєСЃР° СЃ СЌС‚РёРј Р·РЅР°С‡РµРЅРёРµРј. Р‘РµР· РґРµРґСѓРїР»РёРєР°С†РёРё
-/// `diff_cv_state` СЃСЂР°РІРЅРёР» Р±С‹ РІС‚РѕСЂРѕР№ РёР· РЅРёС… СЃ РµС‰С‘ РЅРµ РѕР±РЅРѕРІР»С‘РЅРЅС‹Рј `prev` Рё
-/// РІС‹РґР°Р» Р±С‹ СЃС‚СЂР°РЅРёС†Сѓ **РґРІР°** СЃРѕР±С‹С‚РёСЏ РЅР° РѕРґРЅРѕ РёР·РјРµРЅРµРЅРёРµ, СЂРѕРІРЅРѕ С‚Рѕ, С‡С‚Рѕ
-/// `content-visibility-auto-state-changed-first-observation.html` Р·Р°РїСЂРµС‰Р°РµС‚
-/// (В«already observedВ»). РџРµСЂРІС‹Р№ Р±РѕРєСЃ РІ РїРѕСЂСЏРґРєРµ РґРµСЂРµРІР° вЂ” СЃР°Рј СЌР»РµРјРµРЅС‚, Р°РЅРѕРЅРёРјРЅС‹Р№
-/// РІСЃРµРіРґР° РµРіРѕ РїРѕС‚РѕРјРѕРє. Layout СЂРµС€Р°РµС‚ С‚Сѓ Р¶Рµ Р·Р°РґР°С‡Сѓ С‚РµРј Р¶Рµ СЃРїРѕСЃРѕР±РѕРј:
-/// `CV_SKIPPED` РґРµРґСѓРїР»РёС†РёСЂСѓРµС‚СЃСЏ РїРѕ СѓР·Р»Сѓ.
+/// **Дедупликация по узлу обязательна, и её отсутствие — не мелочь.** Анонимный
+/// бокс (`InlineRun` для inline-содержимого, `InlineBlockRow`, обёртки таблиц)
+/// не имеет своего элемента и несёт стиль родителя, включая
+/// `content-visibility: auto`, — то есть `<div style="content-visibility:auto">
+/// <span>x</span></div>` даёт ДВА бокса с этим значением. Без дедупликации
+/// `diff_cv_state` сравнил бы второй из них с ещё не обновлённым `prev` и
+/// выдал бы страницу **два** события на одно изменение, ровно то, что
+/// `content-visibility-auto-state-changed-first-observation.html` запрещает
+/// («already observed»). Первый бокс в порядке дерева — сам элемент, анонимный
+/// всегда его потомок. Layout решает ту же задачу тем же способом:
+/// `CV_SKIPPED` дедуплицируется по узлу.
 pub(crate) fn collect_cv_auto(b: &lumen_layout::LayoutBox, out: &mut Vec<(NodeId, f32)>) {
     fn walk(
         b: &lumen_layout::LayoutBox,
@@ -1211,17 +1211,17 @@ pub(crate) fn collect_cv_auto(b: &lumen_layout::LayoutBox, out: &mut Vec<(NodeId
     walk(b, &mut std::collections::HashSet::new(), out);
 }
 
-/// Р”РёС„С„ skipped-СЃРѕСЃС‚РѕСЏРЅРёСЏ РјРµР¶РґСѓ РґРІСѓРјСЏ РїСЂРѕС…РѕРґР°РјРё в†’ СЃРѕР±С‹С‚РёСЏ
+/// Дифф skipped-состояния между двумя проходами → события
 /// [`ContentVisibilityChange`].
 ///
-/// CSS Contain L2 В§4.1: СЃРѕР±С‹С‚РёРµ РґРѕР»Р¶РЅРѕ РїСЂРёС…РѕРґРёС‚СЊ Рё РЅР° **РїРµСЂРІРѕРµ** РЅР°Р±Р»СЋРґРµРЅРёРµ
-/// СЌР»РµРјРµРЅС‚Р°, РІ РѕР±Рµ СЃС‚РѕСЂРѕРЅС‹ вЂ” `skipped: false` РґР»СЏ СЌР»РµРјРµРЅС‚Р° РІРѕ РІСЊСЋРїРѕСЂС‚Рµ РЅРµ РјРµРЅРµРµ
-/// РѕР±СЏР·Р°С‚РµР»РµРЅ, С‡РµРј `skipped: true` РґР»СЏ СЌР»РµРјРµРЅС‚Р° РїРѕРґ РЅРёРј. РџРѕСЌС‚РѕРјСѓ СѓР·РµР», РєРѕС‚РѕСЂРѕРіРѕ
-/// РІ `prev` РЅРµС‚ РІРѕРІСЃРµ, РІСЃРµРіРґР° РїРѕСЂРѕР¶РґР°РµС‚ СЃРѕР±С‹С‚РёРµ СЃРѕ СЃРІРѕРёРј С‚РµРєСѓС‰РёРј СЃРѕСЃС‚РѕСЏРЅРёРµРј, Р°
-/// СѓР·РµР», РєРѕС‚РѕСЂС‹Р№ РёР· РґРµСЂРµРІР° РёСЃС‡РµР·, вЂ” РЅРёРєР°РєРѕРіРѕ: РѕС‚СЃРѕРµРґРёРЅС‘РЅРЅС‹Р№ СЌР»РµРјРµРЅС‚ РјРѕР»С‡РёС‚
+/// CSS Contain L2 §4.1: событие должно приходить и на **первое** наблюдение
+/// элемента, в обе стороны — `skipped: false` для элемента во вьюпорте не менее
+/// обязателен, чем `skipped: true` для элемента под ним. Поэтому узел, которого
+/// в `prev` нет вовсе, всегда порождает событие со своим текущим состоянием, а
+/// узел, который из дерева исчез, — никакого: отсоединённый элемент молчит
 /// (`content-visibility-auto-state-changed-removed.html`).
 ///
-/// `next` вЂ” РІ РїРѕСЂСЏРґРєРµ РґРµСЂРµРІР°, С‡С‚РѕР±С‹ РїРѕСЂСЏРґРѕРє СЃРѕР±С‹С‚РёР№ РЅРµ Р·Р°РІРёСЃРµР» РѕС‚ РѕР±С…РѕРґР° С…РµС€Р°.
+/// `next` — в порядке дерева, чтобы порядок событий не зависел от обхода хеша.
 pub(crate) fn diff_cv_state(
     prev: &std::collections::HashMap<NodeId, bool>,
     next: &[(NodeId, bool)],

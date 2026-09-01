@@ -13,8 +13,8 @@
 
 use crate::*;
 
-/// РџРѕР»РЅР°СЏ РІС‹СЃРѕС‚Р° РєРѕРЅС‚РµРЅС‚Р° РІ CSS px вЂ” `max(rect.y + rect.height)` РїРѕ РІСЃРµРј
-/// rect-РЅРµСЃСѓС‰РёРј РєРѕРјР°РЅРґР°Рј display list-Р°. РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ clamping-Р° scroll_y.
+/// Полная высота контента в CSS px — `max(rect.y + rect.height)` по всем
+/// rect-несущим командам display list-а. Используется для clamping-а scroll_y.
 pub(crate) fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
     use lumen_paint::DisplayCommand;
     let mut max_y = 0.0_f32;
@@ -75,8 +75,8 @@ pub(crate) fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
     max_y
 }
 
-/// РџРѕР»РЅР°СЏ С€РёСЂРёРЅР° РєРѕРЅС‚РµРЅС‚Р° РІ CSS px вЂ” `max(rect.x + rect.width)` РїРѕ РІСЃРµРј
-/// rect-РЅРµСЃСѓС‰РёРј РєРѕРјР°РЅРґР°Рј display list-Р°. РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ clamping-Р° scroll_x.
+/// Полная ширина контента в CSS px — `max(rect.x + rect.width)` по всем
+/// rect-несущим командам display list-а. Используется для clamping-а scroll_x.
 pub(crate) fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
     use lumen_paint::DisplayCommand;
     let mut max_x = 0.0_f32;
@@ -139,7 +139,7 @@ pub(crate) fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
 
 /// Build a minimal placeholder display list for a hibernated tab in split view.
 ///
-/// Shows a dark grey background with the URL text вЂ” used when the hibernated
+/// Shows a dark grey background with the URL text — used when the hibernated
 /// tab's full display list has been evicted from memory.
 pub(crate) fn build_split_placeholder(url: &str) -> lumen_paint::DisplayList {
     use lumen_layout::{Color, FontStyle, FontWeight};
@@ -148,7 +148,7 @@ pub(crate) fn build_split_placeholder(url: &str) -> lumen_paint::DisplayList {
     let bg = Color { r: 30, g: 30, b: 35, a: 255 };
     let fg = Color { r: 180, g: 180, b: 190, a: 255 };
     vec![
-        // Background fill вЂ” large enough to cover any viewport half.
+        // Background fill — large enough to cover any viewport half.
         DisplayCommand::FillRect {
             rect: lumen_core::geom::Rect { x: 0.0, y: 0.0, width: 4096.0, height: 4096.0 },
             color: bg,
@@ -173,15 +173,15 @@ pub(crate) fn build_split_placeholder(url: &str) -> lumen_paint::DisplayList {
     ]
 }
 
-/// РЎС‚СЂРѕРёС‚ display list СЃ РїСЂР°РІРёР»СЊРЅС‹Рј painting order (CSS 2.1 Appendix E, z-index stacking).
+/// Строит display list с правильным painting order (CSS 2.1 Appendix E, z-index stacking).
 pub(crate) fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
     let tree = StackingTree::build(layout);
     let order = PaintOrder::from_tree(&tree);
     build_display_list_ordered(layout, &tree, &order).0
 }
 
-/// РЎР»РµРґСѓСЋС‰Р°СЏ РІРµСЂСЃРёСЏ display list-Р°; `0` РїСЂРѕРїСѓСЃРєР°РµС‚СЃСЏ вЂ” РѕРЅ Р·Р°СЂРµР·РµСЂРІРёСЂРѕРІР°РЅ Р·Р°
-/// В«РІРµСЂСЃРёСЏ РЅРµРёР·РІРµСЃС‚РЅР°В» (BUG-405 СЃСЂРµР· 39).
+/// Следующая версия display list-а; `0` пропускается — он зарезервирован за
+/// «версия неизвестна» (BUG-405 срез 39).
 pub(crate) fn next_dl_epoch(cur: u64) -> u64 {
     match cur.wrapping_add(1) {
         0 => 1,

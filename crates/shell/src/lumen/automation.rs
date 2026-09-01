@@ -18,28 +18,28 @@ impl Lumen {
         ///
         /// `NodeId`/`Selector` rects come out of the layout tree in *page*
         /// (document) space; `handle_click_at` expects *OS window* space (what
-        /// a real OS mouse event reports вЂ” see `page_point`, which converts the
+        /// a real OS mouse event reports — see `page_point`, which converts the
         /// other way: `page = window - tab_bar/panel_offset + scroll`). This
         /// applies the inverse (`window = page - scroll + tab_bar/panel_offset`)
         /// so a click lands on the resolved element instead of wherever
         /// page-space coordinates happen to fall in window space (off by the
-        /// tab-bar height and current scroll вЂ” silently "worked" only by
+        /// tab-bar height and current scroll — silently "worked" only by
         /// coincidence when scroll was 0 and the target sat within the
         /// tab-bar-height band).
         ///
         /// `Target::Point` gets a *different* correction: BiDi/MCP callers
         /// (`input.performActions` pointer coordinates) supply pixels in the
-        /// rendered *content-viewport* space вЂ” the same space `captureScreenshot`
+        /// rendered *content-viewport* space — the same space `captureScreenshot`
         /// renders (no scroll subtraction needed, since it's relative to the
-        /// already-scrolled visible viewport, not absolute document position) вЂ”
+        /// already-scrolled visible viewport, not absolute document position) —
         /// so only the tab-bar/toolbar/panel offset is added, not scroll. Confirmed
         /// by hand: without this, `input.performActions` clicks landed above the
         /// target by exactly `toolbar::CHROME_H` (real pixel offset validated with
-        /// a manual BiDi clickв†’navigate scenario; DS-9 widened the offset from
+        /// a manual BiDi click→navigate scenario; DS-9 widened the offset from
         /// the tab-bar-only height to include the new toolbar row).
         ///
         /// CC-14: the offset itself is [`Self::page_offset`], not a hardcoded
-        /// `(left_dock width, toolbar::CHROME_H)` pair вЂ” the content area's
+        /// `(left_dock width, toolbar::CHROME_H)` pair — the content area's
         /// real origin is `chrome_page_host_rect`'s, which can differ from the
         /// legacy toolbar/sidebar geometry (e.g. the web/AI sidebar occupies
         /// chrome layout width but is not a `left_dock()` entry at all,
@@ -74,7 +74,7 @@ impl Lumen {
 
         /// Find DOM nodes by CSS selector for `AutomationCommand::Query` (SDC-2).
         ///
-        /// Returns an empty vector if no page is loaded or nothing matches вЂ”
+        /// Returns an empty vector if no page is loaded or nothing matches —
         /// mirrors `InProcessSession::query`'s behavior for the same case.
         pub(crate) fn query_automation_nodes(&self, selector: &str) -> Vec<lumen_driver::NodeRef> {
             let Some(lb) = self.layout_box.as_ref() else { return Vec::new() };
@@ -115,7 +115,7 @@ impl Lumen {
         /// Box-model snapshot of the whole page for `AutomationCommand::LayoutSnapshot`
         /// (DEVX-14, wires `resource://layout` to the live window).
         ///
-        /// Empty if no page is loaded вЂ” mirrors `InProcessSession::layout_snapshot`'s
+        /// Empty if no page is loaded — mirrors `InProcessSession::layout_snapshot`'s
         /// behavior on the equivalent state.
         pub(crate) fn automation_layout_snapshot(&self) -> Vec<BoxModel> {
             let Some(lb) = self.layout_box.as_ref() else { return Vec::new() };
@@ -127,7 +127,7 @@ impl Lumen {
         }
 
         /// Network request log for `AutomationCommand::NetworkLog` (DEVX-14,
-        /// wires `resource://network` to the live window) вЂ” reads the same
+        /// wires `resource://network` to the live window) — reads the same
         /// shared `NetworkLog` the DevTools network panel renders from,
         /// regardless of whether that panel is currently open.
         ///
@@ -147,19 +147,19 @@ impl Lumen {
         }
 
         /// Poll an `AutomationCommand::Wait` condition against current shell
-        /// state (SDC-1b). Never blocks вЂ” called once per frame from
+        /// state (SDC-1b). Never blocks — called once per frame from
         /// `about_to_wait` via `self.pending_waits` until it returns `true` or
         /// the wait's deadline passes.
         ///
         /// `NetworkIdle` and `Stable` are conservative approximations (no
         /// in-flight-request counter or cross-frame rect history exists yet in
-        /// the shell вЂ” same simplification `InProcessSession::check_wait_condition`
+        /// the shell — same simplification `InProcessSession::check_wait_condition`
         /// uses headless): `NetworkIdle` falls back to `DocumentReady`, and
         /// `Stable` only checks that the selector currently matches an element.
         ///
         /// `DocumentReady` reads the real `document.readyState` from the JS
         /// runtime (P2-wpt S1) rather than approximating via `self.layout_box`
-        /// вЂ” the layout box exists as soon as the *previous* page's box tree
+        /// — the layout box exists as soon as the *previous* page's box tree
         /// is still around (it is not reset on ordinary navigation, only on
         /// `reset_to_blank_tab`), so it was `true` immediately on repeat
         /// navigations even before the new page finished loading.
@@ -168,39 +168,39 @@ impl Lumen {
         /// `self.nav_start.is_none()`: on the non-blocking streaming
         /// navigation path (`reload`/`navigate_to` with a window already
         /// open), `self.js_ctx` still holds the *previous* page's context
-        /// until `apply_loaded_page` installs the new one вЂ” reading
+        /// until `apply_loaded_page` installs the new one — reading
         /// `document.readyState` without this gate would see the old page's
         /// already-`"complete"` state and report ready immediately,
         /// reproducing the exact bug this fixes. `nav_start` is set at the
         /// start of every navigation and only cleared once
         /// `apply_loaded_page` (which also installs the fresh JS context and
-        /// fires the real `load` event) has run вЂ” see `RenderDone` handling.
+        /// fires the real `load` event) has run — see `RenderDone` handling.
         /// (`nav_start` is only cleared under `#[cfg(feature = "v8")]`,
         /// so the gate is scoped to the branch that actually has a JS
-        /// context вЂ” the `layout_box` fallback below stays independent of it
+        /// context — the `layout_box` fallback below stays independent of it
         /// for JS-less builds/tabs, matching the pre-S1 behavior there.)
         pub(crate) fn check_wait_condition(&self, cond: &WaitCondition) -> bool {
             match cond {
                 WaitCondition::DocumentReady | WaitCondition::NetworkIdle => {
                     // A settled navigation error (network/HTTP failure) is "done
-                    // loading" вЂ” resolve immediately instead of hanging until the
+                    // loading" — resolve immediately instead of hanging until the
                     // wait's deadline (BUG-308). Without this, a nav that ends in
                     // `LoadError` with no JS context and no prior `layout_box`
-                    // (e.g. `about:blank` в†’ an anti-bot 403) never satisfies
+                    // (e.g. `about:blank` → an anti-bot 403) never satisfies
                     // either readiness branch below, so `wait{document_ready}`
                     // blocks for minutes. Still gated on `nav_start.is_none()` so
                     // a stale flag from a superseded nav can't win a race.
                     if self.nav_start.is_none() && self.load_failed {
                         return true;
                     }
-                    // ADR-016: eval С‡РµСЂРµР· `route_query_js`, С‚РѕС‚ Р¶Рµ РїР°С‚С‚РµСЂРЅ, С‡С‚Рѕ
-                    // `WaitCondition::JsIdle` РЅРёР¶Рµ.
+                    // ADR-016: eval через `route_query_js`, тот же паттерн, что
+                    // `WaitCondition::JsIdle` ниже.
                     match route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
                         j.eval_js_value("document.readyState")
                     }) {
                         Some(Ok(json)) => self.nav_start.is_none() && json == "\"complete\"",
                         // No JS context at all (v8 disabled, or a
-                        // JS-less blank tab) вЂ” fall back to the coarser
+                        // JS-less blank tab) — fall back to the coarser
                         // layout signal so `Wait` doesn't hang forever on a
                         // readiness signal that will never arrive. Still gated
                         // on `nav_start.is_none()` (found while diagnosing
@@ -210,7 +210,7 @@ impl Lumen {
                         // see `js_ctx` as the *old* tab's `None`, and report
                         // ready from the *previous* page's already-populated
                         // `layout_box` before the new page had even started
-                        // loading вЂ” the same "stale state wins the race"
+                        // loading — the same "stale state wins the race"
                         // pattern BUG-296 fixed for session restore.
                         _ => self.nav_start.is_none() && self.layout_box.is_some(),
                     }
@@ -229,9 +229,9 @@ impl Lumen {
                     let Ok(doc) = source.document.lock() else { return false };
                     !lumen_layout::selector_query::find_all_by_selector(lb, &doc, selector).is_empty()
                 }
-                // ADR-016 M2.2c-2d: РїРѕСЃР»РµРґРЅРµРµ РїСЂСЏРјРѕРµ `self.js_ctx`-С‡С‚РµРЅРёРµ РІ wait-poll вЂ”
-                // `has_raf_pending` С‡РµСЂРµР· `route_query_js` (РїРѕРґ С„Р»Р°РіРѕРј вЂ” Р±Р»РѕРєРёСЂСѓСЋС‰РёР№
-                // `query`; РІРЅРµС€РЅРёР№ `None` = В«Р±РµР· JSВ» в†’ idle, РєР°Рє РїСЂРµР¶РЅРёР№ `is_none_or`).
+                // ADR-016 M2.2c-2d: последнее прямое `self.js_ctx`-чтение в wait-poll —
+                // `has_raf_pending` через `route_query_js` (под флагом — блокирующий
+                // `query`; внешний `None` = «без JS» → idle, как прежний `is_none_or`).
                 WaitCondition::JsIdle => {
                     !route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |c| {
                         c.has_raf_pending()
@@ -253,13 +253,13 @@ impl Lumen {
         /// Render the currently loaded page's content area to PNG bytes
         /// (`AutomationCommand::Screenshot`, SDC-1b).
         ///
-        /// Renders `self.display_list` вЂ” the page content only, not the browser
-        /// chrome (tab strip/panels) вЂ” through the deterministic CPU rasterizer
+        /// Renders `self.display_list` — the page content only, not the browser
+        /// chrome (tab strip/panels) — through the deterministic CPU rasterizer
         /// (same renderer as `--screenshot`/`--ipc-server`), at the current
         /// window's content viewport size and scroll offset.
         ///
         /// BUG-729: the image set comes from `self.image_cache`, whose keys are
-        /// the very strings `register_image` gets вЂ” i.e. exactly what the
+        /// the very strings `register_image` gets — i.e. exactly what the
         /// display list's `DrawImage`/`LazyImageSlot`/background-image commands
         /// look up. Passing an empty slice here (the SDC-1b behaviour) made
         /// *every* picture on the page rasterize as the grey placeholder, so an
@@ -317,7 +317,7 @@ pub(crate) fn collect_automation_text(doc: &lumen_dom::Document, id: lumen_dom::
 
 /// Convert a `lumen_a11y::AXNode` into the driver's public `A11yNode` reply
 /// type (SDC-2 `A11yTree` support). Mirrors `lumen_driver`'s own private
-/// conversion in `session.rs`/`winit_session.rs` вЂ” kept local here since the
+/// conversion in `session.rs`/`winit_session.rs` — kept local here since the
 /// shell has no dependency the other direction.
 pub(crate) fn automation_ax_node(ax: &lumen_a11y::AXNode) -> lumen_driver::A11yNode {
     let state = lumen_driver::A11yState {

@@ -19,7 +19,7 @@ impl Lumen {
     ///
     /// Called after `save_page_snapshot()` to prepare `self` for a fresh tab
     /// before loading a URL or showing an empty page.
-    #[allow(clippy::unwrap_used)]  // СѓРЅР°СЃР»РµРґРѕРІР°РЅРѕ, docs/lint-policy.md В§10
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn reset_to_blank_tab(&mut self) {
         self.set_display_list(Vec::new());
         self.title = None;
@@ -39,7 +39,7 @@ impl Lumen {
         self.hint = hints::HintState::default();
         self.scroll_y = 0.0;
         self.scroll_x = 0.0;
-        // ADR-016 M3.2: the retained scroll band belongs to the old page вЂ” drop
+        // ADR-016 M3.2: the retained scroll band belongs to the old page — drop
         // it so the next frame repaints instead of blitting stale pixels.
         self.scroll_cache.invalidate();
         self.content_height = 0.0;
@@ -73,9 +73,9 @@ impl Lumen {
         self.select_dropdown_node = None;
         self.ls_storage = HashMap::new();
         // BUG-836: a new tab is a new browsing context, so it starts with empty
-        // session storage вЂ” this reset is the *only* place it may be cleared.
+        // session storage — this reset is the *only* place it may be cleared.
         self.ss_storage = HashMap::new();
-        // idb_dir is session-level вЂ” intentionally not reset here.
+        // idb_dir is session-level — intentionally not reset here.
         self.sw_backend = Arc::new(std::sync::Mutex::new(
             lumen_storage::store::InMemoryStorage::new(),
         ));
@@ -102,7 +102,7 @@ impl Lumen {
         self.momentum_anim = None;
         self.forward_momentum_stop();
         self.scroll_drag = None;
-        // ADR-016 M2.2c-2b: РѕС‡РёС‰Р°РµРј С…СЌРЅРґР» + DOM РІ РґРІРёР¶РєРѕРІРѕРј РїРѕС‚РѕРєРµ РґР»СЏ С‡РёСЃС‚РѕР№ РІРєР»Р°РґРєРё.
+        // ADR-016 M2.2c-2b: очищаем хэндл + DOM в движковом потоке для чистой вкладки.
         self.sync_engine_js_state();
     }
 
@@ -160,7 +160,7 @@ impl Lumen {
                 let placeholder_dl = build_split_placeholder(&meta.url);
                 (placeholder_dl, 0.0, 0.0, 0.0, 0.0)
             } else {
-                // Blank/new tab вЂ” show empty pane.
+                // Blank/new tab — show empty pane.
                 (vec![], 0.0, 0.0, 0.0, 0.0)
             };
 
@@ -177,7 +177,7 @@ impl Lumen {
     /// Close the tab at `idx`. If it was the last tab, exits the app instead.
     pub(crate) fn close_tab(&mut self, idx: usize, event_loop: &winit::event_loop::ActiveEventLoop) {
         if self.tab_strip.len() == 1 {
-            // Last tab вЂ” exit.
+            // Last tab — exit.
             event_loop.exit();
             return;
         }
@@ -196,7 +196,7 @@ impl Lumen {
             if let Some(snap) = self.bg_tabs.remove(&new_id) {
                 self.restore_page_snapshot(snap);
             } else if self.hibernated_tabs.contains_key(&new_id) {
-                // Target tab is hibernated вЂ” restore from SQLite.
+                // Target tab is hibernated — restore from SQLite.
                 self.restore_hibernated_tab(new_id);
             }
         } else {
@@ -236,13 +236,13 @@ impl Lumen {
                 // the group metadata so a future restore can recover it.
                 use tabs::groups::GroupColor;
                 let color = GroupColor::from_index((self.tab_strip.groups.len() % 8) as u8);
-                let gid = self.tab_strip.create_group("Р“СЂСѓРїРїР°", color);
+                let gid = self.tab_strip.create_group("Группа", color);
                 self.tab_strip.assign_to_group(idx, gid);
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs() as i64)
                     .unwrap_or(0);
-                let _ = self.tab_groups.create("Р“СЂСѓРїРїР°", color.index(), now);
+                let _ = self.tab_groups.create("Группа", color.index(), now);
                 self.request_redraw();
             }
             MenuAction::ToggleGroupCollapse => {
@@ -375,7 +375,7 @@ impl Lumen {
         self.tab_strip.set_tab_container(idx, kind);
         // Pre-warm a store id for the active tab's origin so cookie/storage
         // dispatch can partition by container id without a later allocation
-        // step. Best-effort only вЂ” non-active tabs are wired up the same way
+        // step. Best-effort only — non-active tabs are wired up the same way
         // the next time their page loads.
         if idx == self.tab_strip.active
             && let Some(url) = self.source.url_str()
@@ -400,15 +400,15 @@ impl Lumen {
         let old_active = self.tab_strip.active;
         let old_id = self.tab_strip.tabs[old_active].id;
         self.tab_strip.set_tab_state(old_active, TabState::BackgroundRecent);
-        // T0 в†’ T1: fire visibilitychange(hidden=true) before parking.
-        // ADR-016 M2.2d (18): СЃРЅРёРјР°РµРј РїСЂСЏРјРѕРµ `self.js_ctx`-РѕР±СЂР°С‰РµРЅРёРµ park-СЃР°Р№С‚Р° вЂ”
-        // fire-and-forget void С‡РµСЂРµР· `route_task_js` (disjoint borrow РїРѕР»РµР№
-        // `engine_thread`/`js_ctx`). РџРѕРґ С„Р»Р°РіРѕРј (`LUMEN_ENGINE_THREAD=1`) СѓС…РѕРґРёС‚
-        // `task`-РѕРј РЅР° РґРІРёР¶РєРѕРІС‹Р№ РїРѕС‚РѕРє, РіРґРµ `state.js` РµС‰С‘ Р·РµСЂРєР°Р»РёС‚ СѓС…РѕРґСЏС‰СѓСЋ РІ С„РѕРЅ
-        // РІРєР»Р°РґРєСѓ (СЂРµ-Р·РµСЂРєР°Р»РёСЂРѕРІР°РЅРёРµ `sync_engine_js_state` РІСЃС‚Р°РЅРµС‚ РІ РѕС‡РµСЂРµРґСЊ РїРѕР·Р¶Рµ,
-        // РїСЂРё Р·Р°РіСЂСѓР·РєРµ/РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёРё РЅРѕРІРѕР№) вЂ” pause РёСЃРїРѕР»РЅСЏРµС‚СЃСЏ РЅР° РІРµСЂРЅРѕРј С…СЌРЅРґР»Рµ.
-        // Р‘РµР· С„Р»Р°РіР° (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ) вЂ” СЃРёРЅС…СЂРѕРЅРЅС‹Р№ РІС‹Р·РѕРІ РїРѕ UI-С…СЌРЅРґР»Сѓ, Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ
-        // РїСЂРµР¶РЅРµРјСѓ `js.pause_event_loop()`.
+        // T0 → T1: fire visibilitychange(hidden=true) before parking.
+        // ADR-016 M2.2d (18): снимаем прямое `self.js_ctx`-обращение park-сайта —
+        // fire-and-forget void через `route_task_js` (disjoint borrow полей
+        // `engine_thread`/`js_ctx`). Под флагом (`LUMEN_ENGINE_THREAD=1`) уходит
+        // `task`-ом на движковый поток, где `state.js` ещё зеркалит уходящую в фон
+        // вкладку (ре-зеркалирование `sync_engine_js_state` встанет в очередь позже,
+        // при загрузке/восстановлении новой) — pause исполняется на верном хэндле.
+        // Без флага (по умолчанию) — синхронный вызов по UI-хэндлу, байт-идентично
+        // прежнему `js.pause_event_loop()`.
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
             j.pause_event_loop();
         });
@@ -431,7 +431,7 @@ impl Lumen {
         self.tab_strip.update_last_activated(idx, now_ms);
         // BUG-411: re-point the process-global ad-block toggle at the shields
         // state of the host now in front. This used to read `TabEntry::adblock`
-        // вЂ” a field the legacy in-tab checkbox wrote and CC-15 removed, leaving
+        // — a field the legacy in-tab checkbox wrote and CC-15 removed, leaving
         // it permanently `false`, so every tab switch silently disabled
         // filtering for the rest of the session. The restored navigation
         // handler below re-syncs on the host once the restored page loads.
@@ -442,13 +442,13 @@ impl Lumen {
         if let Some(snap) = self.bg_tabs.remove(&new_id) {
             // T1/T2: fast in-memory restore.
             self.restore_page_snapshot(snap);
-            // T1 в†’ T0: fire visibilitychange(hidden=false) after restore.
-            // ADR-016 M2.2d (18): СЃРЅРёРјР°РµРј РїСЂСЏРјРѕРµ `self.js_ctx`-РѕР±СЂР°С‰РµРЅРёРµ unpark-СЃР°Р№С‚Р° вЂ”
-            // fire-and-forget void С‡РµСЂРµР· `route_task_js`. `restore_page_snapshot` РІС‹С€Рµ
-            // СѓР¶Рµ РІС‹Р·РІР°Р» `sync_engine_js_state()` (Р·РµСЂРєР°Р»РёС‚ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРЅС‹Р№ С…СЌРЅРґР»
-            // `task`-РѕРј), Р° СЌС‚РѕС‚ `task` РІСЃС‚Р°С‘С‚ РІ РѕС‡РµСЂРµРґСЊ **РїРѕСЃР»Рµ** РЅРµРіРѕ вЂ” РїРѕРґ С„Р»Р°РіРѕРј
-            // unpause+GC РёСЃРїРѕР»РЅСЏСЋС‚СЃСЏ РЅР° РІРµСЂРЅРѕРј (РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРЅРѕРј) С…СЌРЅРґР»Рµ. Р‘РµР· С„Р»Р°РіР° вЂ”
-            // СЃРёРЅС…СЂРѕРЅРЅРѕ РїРѕ UI-С…СЌРЅРґР»Сѓ, Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РЅРѕ РїСЂРµР¶РЅРёРј `js.<method>()`.
+            // T1 → T0: fire visibilitychange(hidden=false) after restore.
+            // ADR-016 M2.2d (18): снимаем прямое `self.js_ctx`-обращение unpark-сайта —
+            // fire-and-forget void через `route_task_js`. `restore_page_snapshot` выше
+            // уже вызвал `sync_engine_js_state()` (зеркалит восстановленный хэндл
+            // `task`-ом), а этот `task` встаёт в очередь **после** него — под флагом
+            // unpause+GC исполняются на верном (восстановленном) хэндле. Без флага —
+            // синхронно по UI-хэндлу, байт-идентично прежним `js.<method>()`.
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
                 j.unpause_event_loop();
                 // GC tuning (10L): reset threshold to active level so the heap
@@ -457,16 +457,16 @@ impl Lumen {
             });
         } else if self.t2_store.exists(new_id as i64).unwrap_or(false) {
             // T2 crash-recovery: bg_tabs was lost (process restart) but SQLite
-            // checkpoint exists вЂ” restore scroll + form state from it.
+            // checkpoint exists — restore scroll + form state from it.
             self.restore_t2_tab(new_id);
         } else if self.hibernated_tabs.contains_key(&new_id) {
-            // T3: restore from SQLite вЂ” Document::from_bytes() + relayout.
+            // T3: restore from SQLite — Document::from_bytes() + relayout.
             self.restore_hibernated_tab(new_id);
         }
-        // Otherwise the tab is blank (never loaded) вЂ” leave reset state.
+        // Otherwise the tab is blank (never loaded) — leave reset state.
 
         // DS-17: the synthetic TabList's `selected` state is rebuilt fresh
-        // from `self.tab_strip.active` every time вЂ” without this, switching
+        // from `self.tab_strip.active` every time — without this, switching
         // to an already-loaded tab (no navigation, so nothing else rebuilds
         // the AX tree) left the OS bridge reporting the *previous* tab as
         // selected until the next full page load.
@@ -480,7 +480,7 @@ impl Lumen {
     /// `browser_settings`.
     ///
     /// CC-15-3: the legacy tab-bar layout-toggle button was the only caller of
-    /// `set_tab_layout` outside the settings panel's snapshot apply вЂ” removing
+    /// `set_tab_layout` outside the settings panel's snapshot apply — removing
     /// its paint/hit-test would have silently dropped persistence from the two
     /// remaining toggle entry points (`KeyCommand::ToggleVerticalTabs`,
     /// `PaletteAction::ToggleVerticalTabs`), which never persisted on their

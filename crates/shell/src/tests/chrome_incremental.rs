@@ -3,7 +3,7 @@
 
 use super::*;
 
-// в”Ђв”Ђ CC-9: #contentArea pruning salvages #findBar/#downloadsPanel в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── CC-9: #contentArea pruning salvages #findBar/#downloadsPanel ────────
 
 #[test]
 fn take_content_area_salvages_find_bar_and_downloads_panel() {
@@ -46,7 +46,7 @@ fn take_content_area_salvages_find_bar_and_downloads_panel() {
 
     // Salvaged boxes must land at #contentArea's former slot, in document
     // order, as direct children of #contentArea's former parent (<body>)
-    // вЂ” not nested under some other unrelated box.
+    // — not nested under some other unrelated box.
     let body_box = lumen_layout::find_box_by_node(&layout, doc.body().expect("fixture has <body>"))
         .expect("<body> must have a layout box");
     let before = doc.find_by_id("before").expect("fixture has #before");
@@ -55,13 +55,13 @@ fn take_content_area_salvages_find_bar_and_downloads_panel() {
     assert_eq!(order, vec![before, find_bar, downloads_panel, after]);
 }
 
-// в”Ђв”Ђ CC-11: chrome document gets its own Animation/Transition scheduler в”Ђв”Ђ
+// ── CC-11: chrome document gets its own Animation/Transition scheduler ──
 
 #[test]
 fn chrome_transition_scheduler_stays_independent_of_page_scheduler_for_same_node_id() {
     // chrome_doc and the page Document each number NodeIds from 0
     // independently (see Lumen::chrome_animation_scheduler's doc
-    // comment) вЂ” this proves two separate TransitionScheduler instances
+    // comment) — this proves two separate TransitionScheduler instances
     // don't let one tree's transition state leak into the other's frame
     // when driven with a colliding NodeId. A single shared scheduler
     // would fail this test (the page's transition would also appear in
@@ -79,7 +79,7 @@ fn chrome_transition_scheduler_stays_independent_of_page_scheduler_for_same_node
     let mut new = old.clone();
     new.opacity = 1.0;
 
-    // Only the page's #box transitions opacity 0 в†’ 1 at t=0; chrome's own
+    // Only the page's #box transitions opacity 0 → 1 at t=0; chrome's own
     // node with the same NodeId is never synced (nothing changed there).
     page_sched.sync(node, &old, &new, 0.0);
     let chrome_frame = chrome_sched.tick(0.5);
@@ -98,21 +98,21 @@ fn chrome_transition_scheduler_stays_independent_of_page_scheduler_for_same_node
 /// CC-12 (docs/tasks/p1-css-chrome.md): perf gate for the chrome
 /// document's full restyle-on-every-interaction cost. Deliberately
 /// headless/CPU-only rather than driven through the live `LUMEN_BENCH`
-/// harness (`bench_frames.rs`) вЂ” that harness measures a whole GPU frame,
-/// but the brief's "РјСѓС‚Р°С†РёСЏ в†’ СЂРµСЃС‚Р°Р№Р» в†’ СЂРµР»СЌР№Р°СѓС‚ в†’ paint" cycle is
+/// harness (`bench_frames.rs`) — that harness measures a whole GPU frame,
+/// but the brief's "мутация → рестайл → релэйаут → paint" cycle is
 /// exactly `Lumen::relayout_chrome_host`'s body, which never touches the
 /// GPU (paint here means display-list build, not rasterization). Timing
 /// it directly gives a deterministic, GPU-independent number instead of
 /// bench_frames.rs's own cautionary tale (its doc comment: a whole-frame
 /// sample folded an unrelated cost into the number it was aimed at).
 ///
-/// `#[ignore]`d like `LUMEN_BENCH` itself is opt-in вЂ” a wall-clock budget
+/// `#[ignore]`d like `LUMEN_BENCH` itself is opt-in — a wall-clock budget
 /// assert doesn't belong in the default `cargo test -p lumen-shell` gate
 /// (shared-runner contention would make it flaky there); run explicitly:
 /// `cargo test -p lumen-shell --profile dev-release cc12_chrome_perf_gate -- --ignored --nocapture`.
 ///
-/// Was red (measured p50 в‰€ 580-630ms, ~300Г— over the 2ms budget) before
-/// BUG-341's fixes вЂ” see [BUG-341](../../../bugs/BUG-341-OPEN.md) for the
+/// Was red (measured p50 ≈ 580-630ms, ~300× over the 2ms budget) before
+/// BUG-341's fixes — see [BUG-341](../../../bugs/BUG-341-OPEN.md) for the
 /// full history: `lay_out_flex`'s double layout pass (fixed, ~86ms),
 /// `bind_model`'s list rebuilds churning NodeIds every call (fixed), the
 /// S3 incremental cascade + S5 pipeline wiring below (this bench now
@@ -120,16 +120,16 @@ fn chrome_transition_scheduler_stays_independent_of_page_scheduler_for_same_node
 /// `relayout_chrome_host` does). CC12_HOVER's own SIDEBAR/`None` toggle
 /// is a documented S3 worst case (`:hover` invalidates every ancestor of
 /// both the old and new target on a "nothing hovered" transition, which
-/// this fixture hits every other cycle) вЂ” see BUG-341 "S3" for why a
+/// this fixture hits every other cycle) — see BUG-341 "S3" for why a
 /// representative sibling-to-sibling hover move fares much better, and
 /// `bug341_s5_incremental_pipeline_share` below for that number. Still
-/// red at S5 вЂ” see BUG-341 "S5" for the re-measured numbers.
+/// red at S5 — see BUG-341 "S5" for the re-measured numbers.
 #[test]
-#[ignore = "manual perf gate (CC-12) вЂ” see BUG-341; doc comment has the run command"]
+#[ignore = "manual perf gate (CC-12) — see BUG-341; doc comment has the run command"]
 fn cc12_chrome_perf_gate_hover_and_keystroke_cycles() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     let hover_target = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
@@ -172,13 +172,13 @@ fn cc12_chrome_perf_gate_hover_and_keystroke_cycles() {
 
     assert!(
         hover_summary.p95_ms < BUDGET_MS,
-        "hover-flip p95 {:.3}ms exceeds {BUDGET_MS}ms budget вЂ” see BUG-341 \"S5\" for \
+        "hover-flip p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see BUG-341 \"S5\" for \
              the current numbers and the open follow-up (S6) needed to close this",
         hover_summary.p95_ms,
     );
     assert!(
         key_summary.p95_ms < BUDGET_MS,
-        "keystroke p95 {:.3}ms exceeds {BUDGET_MS}ms budget вЂ” see BUG-341 \"S5\" for \
+        "keystroke p95 {:.3}ms exceeds {BUDGET_MS}ms budget — see BUG-341 \"S5\" for \
              the current numbers and the open follow-up (S6) needed to close this",
         key_summary.p95_ms,
     );
@@ -190,18 +190,18 @@ fn cc12_chrome_perf_gate_hover_and_keystroke_cycles() {
 /// This is the test whose absence let two independent defects sit in the
 /// incremental-layout path unnoticed through slices S1-S7, while every
 /// differential test stayed green (they assert `incremental == full`
-/// *output*, which a graft that reuses nothing also satisfies вЂ” just
+/// *output*, which a graft that reuses nothing also satisfies — just
 /// slowly). Both are described in BUG-341 "S8": `kind_layout_eq` was
 /// missing 6 of `BoxKind`'s 20 variants (every SVG kind among them, and
 /// chrome is built out of SVG icons), and `graft_geometry` returned before
-/// recursing whenever one node's style differed вЂ” which the root box does
+/// recursing whenever one node's style differed — which the root box does
 /// on every single cycle, because `lay_out` writes the used viewport
 /// `height` back into it. Either one alone drove reuse to zero.
 ///
 /// Asserting the *count* rather than the output is the point: a reuse
 /// regression is invisible in geometry and only shows up as wall-clock,
-/// where machine noise (В±10-15% on this project's reference machine) hides
-/// it. Keep this test exact вЂ” "most boxes clean" is not a useful contract.
+/// where machine noise (±10-15% on this project's reference machine) hides
+/// it. Keep this test exact — "most boxes clean" is not a useful contract.
 #[test]
 fn graft_geometry_reuses_whole_chrome_tree_when_nothing_changed() {
     use lumen_layout::incremental::{graft_geometry, mark_subtree_dirty, DirtyBits};
@@ -217,8 +217,8 @@ fn graft_geometry_reuses_whole_chrome_tree_when_nothing_changed() {
     }
 
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     lumen_chrome::bind_model(&mut doc, &cc12_bench_model(""));
@@ -236,7 +236,7 @@ fn graft_geometry_reuses_whole_chrome_tree_when_nothing_changed() {
     assert!(total > 100, "chrome document should produce a non-trivial box tree, got {total}");
     assert_eq!(
         clean, total,
-        "graft_geometry reused only {clean}/{total} boxes of an unchanged chrome document вЂ”              every box must be reusable when nothing changed (BUG-341 S8). A drop here means some              `BoxKind` variant is missing from `kind_layout_eq`, or a layout pass writes a used              value back into `ComputedStyle` that the freshly-built tree cannot match.",
+        "graft_geometry reused only {clean}/{total} boxes of an unchanged chrome document —              every box must be reusable when nothing changed (BUG-341 S8). A drop here means some              `BoxKind` variant is missing from `kind_layout_eq`, or a layout pass writes a used              value back into `ComputedStyle` that the freshly-built tree cannot match.",
     );
     assert!(all_clean, "graft_geometry must report the whole tree clean when nothing changed");
 }
@@ -249,21 +249,21 @@ fn graft_geometry_reuses_whole_chrome_tree_when_nothing_changed() {
 /// `width`/`height`/`box_sizing` with the resolved used value, and the
 /// post-layout passes rewrite more. The freshly-built tree carries none of
 /// that, so a naive style comparison called 81 of this document's 318 boxes
-/// "changed" вЂ” every one of them differing *only* in those fields вЂ” and
+/// "changed" — every one of them differing *only* in those fields — and
 /// dragged 41 ancestors along, because a graft reject propagates upwards.
 /// 122 boxes re-laid-out per interaction, none of them actually changed.
 ///
 /// Gated on the **count**, like its S8 predecessor above and for the same
 /// reason: geometry is identical either way, so only wall-clock would show
-/// this, and machine noise (В±10-15%) hides it. The
-/// `reject_style_used_value_only` assert is the load-bearing one вЂ” it fails
+/// this, and machine noise (±10-15%) hides it. The
+/// `reject_style_used_value_only` assert is the load-bearing one — it fails
 /// the moment a layout pass starts writing a used value the graft cannot
 /// account for, whatever the stylesheet happens to contain.
 #[test]
 fn bug341_s13_hover_flip_reuses_boxes_the_layout_pass_only_wrote_used_values_into() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     let model = cc12_bench_model("");
@@ -273,7 +273,7 @@ fn bug341_s13_hover_flip_reuses_boxes_the_layout_pass_only_wrote_used_values_int
     lumen_layout::incremental::set_graft_diagnostics(true);
     // BUG-341 S18: with whole-subtree box reuse on, the graft is handed the
     // document as one `REUSED_SUBTREE` claim and honours it without
-    // comparing a single box вЂ” correct, and exactly what S18 is for, but it
+    // comparing a single box — correct, and exactly what S18 is for, but it
     // would turn this census into "1 box visited, 1 reused". Turning reuse
     // off keeps this gate measuring what it was written to measure: whether
     // the *comparison*, when it does run, is fooled by the used values the
@@ -291,14 +291,14 @@ fn bug341_s13_hover_flip_reuses_boxes_the_layout_pass_only_wrote_used_values_int
     assert_eq!(
         last.reject_style_used_value_only, 0,
         "{} boxes were refused reuse purely because the previous layout pass wrote used \
-             values back into their styles (BUG-341 S13) вЂ” the graft must compare against the \
+             values back into their styles (BUG-341 S13) — the graft must compare against the \
              cascade result, not against the laid-out tree's polluted styles. Full census: {last:?}",
         last.reject_style_used_value_only,
     );
     assert_eq!(
         last.reused_clean, last.visited,
         "a hover flip that changes no computed style must leave the whole chrome document \
-             reusable, got {}/{} вЂ” census: {last:?}. If chrome.html gains a rule that really does \
+             reusable, got {}/{} — census: {last:?}. If chrome.html gains a rule that really does \
              restyle on `#sidebar:hover`, this number legitimately drops: replace the equality \
              with the count that rule accounts for, do not loosen it to a percentage.",
         last.reused_clean,
@@ -310,7 +310,7 @@ fn bug341_s13_hover_flip_reuses_boxes_the_layout_pass_only_wrote_used_values_int
 /// not rebuild the box tree either.
 ///
 /// After S13/S14 the chrome document's dirty set on a `#sidebar`/`None`
-/// toggle is empty and `graft_geometry` reuses all 318 boxes вЂ” yet the tree
+/// toggle is empty and `graft_geometry` reuses all 318 boxes — yet the tree
 /// was still built from scratch every cycle, only to be grafted straight
 /// back onto the previous geometry (`build_box` was 2.2-2.5 ms of a
 /// ~3.7 ms cycle, the largest item left). S4's `clean_subtrees` mechanism
@@ -327,8 +327,8 @@ fn bug341_s13_hover_flip_reuses_boxes_the_layout_pass_only_wrote_used_values_int
 #[test]
 fn bug341_s15_hover_flip_reuses_the_box_tree_instead_of_rebuilding_it() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     let model = cc12_bench_model("");
@@ -342,7 +342,7 @@ fn bug341_s15_hover_flip_reuses_the_box_tree_instead_of_rebuilding_it() {
         let hover = if i % 2 == 0 { sidebar } else { None };
         let (_, bb) =
             cc12_bench_cycle(&mut doc, &sheet, &model, viewport, &measurer, &hyp, hover, &mut state);
-        // Cycle 0 has no `prev` вЂ” it is the full-rebuild reference.
+        // Cycle 0 has no `prev` — it is the full-rebuild reference.
         if i == 0 {
             first_full_built = bb.built;
         }
@@ -361,7 +361,7 @@ fn bug341_s15_hover_flip_reuses_the_box_tree_instead_of_rebuilding_it() {
     assert!(
         last.built < 10,
         "{} boxes were rebuilt on a cycle whose cascade dirty set is empty (full rebuild is \
-             {first_full_built}) вЂ” the S4 `clean_subtrees` reuse is not reaching them. Census: \
+             {first_full_built}) — the S4 `clean_subtrees` reuse is not reaching them. Census: \
              {last:?}",
         last.built,
     );
@@ -373,8 +373,8 @@ fn bug341_s15_hover_flip_reuses_the_box_tree_instead_of_rebuilding_it() {
 /// This is `CC12_KEY`: one typed character changes the `#omniInput`
 /// `value` attribute and nothing else. S15 made hover frames reuse all 318
 /// boxes, but reuse was licensed by a single document-wide
-/// `dom_content_stable` boolean, so this cycle вЂ” the one real content
-/// change in the fixture вЂ” still rebuilt every box, `build_box` being
+/// `dom_content_stable` boolean, so this cycle — the one real content
+/// change in the fixture — still rebuilt every box, `build_box` being
 /// 1.9-2.3 ms of a ~3.1-3.8 ms cycle. The boolean is now a per-node
 /// `ContentDirty::Nodes` set fed by `bind_model_tracked`.
 ///
@@ -391,8 +391,8 @@ fn bug341_s15_hover_flip_reuses_the_box_tree_instead_of_rebuilding_it() {
 #[test]
 fn bug341_s16_keystroke_rebuilds_only_the_omnibox_chain() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
 
@@ -418,12 +418,12 @@ fn bug341_s16_keystroke_rebuilds_only_the_omnibox_chain() {
     assert!(
         last.reused > 0,
         "a keystroke must let the ~99% of the document it never came near be cloned from the \
-             previous cycle, got {last:?} вЂ” this is exactly what the document-wide \
+             previous cycle, got {last:?} — this is exactly what the document-wide \
              `dom_content_stable` boolean prevented up to S15",
     );
     assert!(
         last.built * 4 < first_full_built,
-        "{} of {first_full_built} boxes were rebuilt for a one-character omnibox change вЂ” \
+        "{} of {first_full_built} boxes were rebuilt for a one-character omnibox change — \
              the per-node content-dirty set is not narrowing anything. Census: {last:?}. If \
              chrome.html gains a rule that genuinely restyles a large region on `#omniInput`, \
              raise this to the count that rule accounts for; do not turn it into a percentage \
@@ -436,21 +436,21 @@ fn bug341_s16_keystroke_rebuilds_only_the_omnibox_chain() {
 /// spine above them, not a walk of the whole previous tree.
 ///
 /// The reuse unit became a *move* in S19 (the subtrees are taken out of the
-/// previous tree instead of deep-copied out of it вЂ” see
+/// previous tree instead of deep-copied out of it — see
 /// `lumen-layout`'s `bug341_s19_reuse_takes_the_subtree_out_of_prev_
 /// instead_of_copying_it` for that half), and carving the index that way
 /// stops at each reusable subtree's root instead of hashing every box the
 /// way S4's `index_by_node` did. This is the production-document counter for
 /// it: on a keystroke, chrome's 318 boxes are found through ~19.
 ///
-/// A counter, not wall-clock вЂ” an index that walks the whole tree again
+/// A counter, not wall-clock — an index that walks the whole tree again
 /// produces the identical result, and 0.02 ms on this fixture is far inside
 /// the machine noise the whole cycle sits in.
 #[test]
 fn bug341_s19_reuse_index_walks_the_spine_not_the_previous_tree() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
 
@@ -475,12 +475,12 @@ fn bug341_s19_reuse_index_walks_the_spine_not_the_previous_tree() {
     );
     assert!(
         last.reused >= 5,
-        "a keystroke must still take whole subtrees out of the previous tree вЂ” {last:?}",
+        "a keystroke must still take whole subtrees out of the previous tree — {last:?}",
     );
     assert!(
         last.prev_index_visited < 50,
         "{} boxes of the previous tree were walked to find {} reusable subtrees on a keystroke \
-             that rebuilds ~28 of 318 вЂ” the index is being built over the whole tree again \
+             that rebuilds ~28 of 318 — the index is being built over the whole tree again \
              (S4's `index_by_node`), not carved out of the spine. Census: {last:?}. If \
              chrome.html gains structure that genuinely rebuilds a large region on every \
              keystroke, record the count that structure accounts for; do not turn this into a \
@@ -497,11 +497,11 @@ fn bug341_s19_reuse_index_walks_the_spine_not_the_previous_tree() {
 /// are eight or more of them, sized against a full pass where each child
 /// costs a cascade and a box build. On the incremental path since S15/S19 a
 /// child that is in the reuse index costs a `Mutex` lock and a move, and on
-/// a chrome interaction nearly every one of them is вЂ” so the threshold, read
+/// a chrome interaction nearly every one of them is — so the threshold, read
 /// off `dom_children.len()`, was dispatching a worker per subtree the pass
 /// was about to move in O(1). Measured at ~1 ms of a 2.5 ms keystroke cycle
 /// (BUG-341 "S20"), spread across `body`, `.main-col` and `.omnibox-wrap`,
-/// whose own work is ~4 Вµs each.
+/// whose own work is ~4 µs each.
 ///
 /// Both arms are asserted, and the full-pass one matters as much as the
 /// incremental one: the cheapest way to make this test's headline number
@@ -514,8 +514,8 @@ fn bug341_s19_reuse_index_walks_the_spine_not_the_previous_tree() {
 #[test]
 fn bug341_s20_keystroke_moves_subtrees_without_dispatching_workers() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
 
@@ -536,18 +536,18 @@ fn bug341_s20_keystroke_moves_subtrees_without_dispatching_workers() {
 
     assert!(
         first_full.fanouts > 0,
-        "the first (full) cycle must still parallelise its large containers вЂ” M4.1's \
+        "the first (full) cycle must still parallelise its large containers — M4.1's \
              parallel selector matching is what the threshold exists for, and narrowing the \
              *incremental* estimate must not have reached the full path. Census: {first_full:?}",
     );
     assert!(
         last.reused >= 5,
         "a keystroke must still take whole subtrees out of the previous tree, otherwise this \
-             test is asserting about a cycle that has no moves to skip dispatching for вЂ” {last:?}",
+             test is asserting about a cycle that has no moves to skip dispatching for — {last:?}",
     );
     assert_eq!(
         last.fanouts, 0,
-        "a keystroke dispatched {} rayon fan-out(s) while reusing {} whole subtrees вЂ” the \
+        "a keystroke dispatched {} rayon fan-out(s) while reusing {} whole subtrees — the \
              threshold is counting children the pass will move rather than children it will \
              build. Census: {last:?}. If chrome.html ever gains a container that genuinely \
              rebuilds eight or more element children on a keystroke, record that container and \
@@ -558,8 +558,8 @@ fn bug341_s20_keystroke_moves_subtrees_without_dispatching_workers() {
 
 /// BUG-341 S21 regression gate: an interaction must not re-index the sheet.
 ///
-/// The cascade's `CascadeIndex` вЂ” the top-level `RuleIndex` plus one per
-/// `@layer`/`@media`/`@supports` block plus two sheet-wide predicate scans вЂ”
+/// The cascade's `CascadeIndex` — the top-level `RuleIndex` plus one per
+/// `@layer`/`@media`/`@supports` block plus two sheet-wide predicate scans —
 /// was keyed by the stylesheet's **address**, which the allocator hands back
 /// the moment a sheet is freed. To keep that key honest every layout pass
 /// dropped the cache before its first `compute_style`, and so did every
@@ -574,15 +574,15 @@ fn bug341_s20_keystroke_moves_subtrees_without_dispatching_workers() {
 /// yields byte-identical styles, so no differential test in this track can
 /// see it, and 0.2 ms is well inside machine noise.
 ///
-/// Both arms. The cold pass must still build one вЂ” a cache that is never
+/// Both arms. The cold pass must still build one — a cache that is never
 /// populated also never rebuilds, and would serve an empty index (i.e. no
 /// rule matches anything, which the `dirty_roots` assertion below and every
 /// pixel test would catch, but not this counter).
 #[test]
 fn bug341_s21_interaction_cycles_do_not_reindex_the_stylesheet() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
@@ -599,7 +599,7 @@ fn bug341_s21_interaction_cycles_do_not_reindex_the_stylesheet() {
     let cold = lumen_layout::style::take_cascade_index_stats();
     assert!(
         cold.builds >= 1,
-        "the first pass must index the sheet вЂ” a cache that stays empty would hand every \
+        "the first pass must index the sheet — a cache that stays empty would hand every \
              node an index that matches nothing. Census: {cold:?}",
     );
 
@@ -631,7 +631,7 @@ fn bug341_s21_interaction_cycles_do_not_reindex_the_stylesheet() {
 }
 
 /// BUG-341 S24 regression gate: interaction cycles must *carry* the cascade
-/// cache, not rebuild it вЂ” and must not sweep it either.
+/// cache, not rebuild it — and must not sweep it either.
 ///
 /// A hover cycle reused all 828 of the previous pass's styles and then
 /// inserted all 828 into a fresh map, which the pipeline cloned wholesale so
@@ -643,20 +643,20 @@ fn bug341_s21_interaction_cycles_do_not_reindex_the_stylesheet() {
 /// for ever while every differential test stayed green.
 ///
 /// Both arms, and the second is the load-bearing one. The cheapest way to
-/// satisfy "never rebuild" is to never evict either вЂ” and an entry that
+/// satisfy "never rebuild" is to never evict either — and an entry that
 /// outlives the pass that wrote it breaks the property the whole reuse rule
 /// rests on: *an entry exists iff the immediately preceding pass visited
 /// that node*. Absence is what forces a recompute for a node that was
 /// detached and re-attached, or moved to a new parent, whose style was
 /// computed under a different inherited chain. So the gate also asserts that
-/// the steady state never sweeps (the sweep is O(document) вЂ” putting it back
+/// the steady state never sweeps (the sweep is O(document) — putting it back
 /// on every pass would undo the slice while keeping every test green) and
 /// that a pass which really does drop nodes evicts exactly them.
 #[test]
 fn bug341_s24_interaction_cycles_carry_the_cascade_cache_instead_of_rebuilding_it() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
@@ -671,7 +671,7 @@ fn bug341_s24_interaction_cycles_carry_the_cascade_cache_instead_of_rebuilding_i
     assert_eq!(
         state.prev_cascade_styles.passes_lived(),
         0,
-        "the first pass is a full cascade вЂ” it has no cache to carry",
+        "the first pass is a full cascade — it has no cache to carry",
     );
     let cold_len = state.prev_cascade_styles.len();
     assert!(cold_len > 100, "chrome must cascade a non-trivial node count, got {cold_len}");
@@ -686,7 +686,7 @@ fn bug341_s24_interaction_cycles_carry_the_cascade_cache_instead_of_rebuilding_i
         );
         assert!(
             !state.prev_cascade_styles.swept_last_pass(),
-            "keystroke cycle {i} swept the cascade cache вЂ” a full scan of {} entries for a \
+            "keystroke cycle {i} swept the cascade cache — a full scan of {} entries for a \
                  pass that removed nothing puts back exactly the per-pass O(document) work this \
                  slice removed. Either `visited` is not counting one visit per element, or the \
                  flat tree really does reach a node twice (then this gate needs the count, not a \
@@ -700,7 +700,7 @@ fn bug341_s24_interaction_cycles_carry_the_cascade_cache_instead_of_rebuilding_i
         );
         assert!(
             !state.prev_cascade_styles.swept_last_pass(),
-            "hover cycle {i} swept the cascade cache вЂ” see the keystroke assertion above",
+            "hover cycle {i} swept the cascade cache — see the keystroke assertion above",
         );
     }
     assert_eq!(
@@ -708,9 +708,9 @@ fn bug341_s24_interaction_cycles_carry_the_cascade_cache_instead_of_rebuilding_i
         4,
         "the interaction cycles that really cascade must have written into one and the same \
              map. A lower number means some pass handed the pipeline a freshly built map instead \
-             of the one it was given вЂ” byte-identical styles at the cost S24 removed. Four and \
+             of the one it was given — byte-identical styles at the cost S24 removed. Four and \
              not eight since BUG-341 S26: the four hover cycles present an empty delta, and a \
-             pass that skips its walk deliberately leaves the ordinal alone вЂ” it visited nobody, \
+             pass that skips its walk deliberately leaves the ordinal alone — it visited nobody, \
              so 'the immediately preceding pass to visit this node' is still the keystroke \
              before it, which is exactly what keeps the entries reusable. \
              `bug341_s26_hover_cycles_do_not_re_walk_the_cascade` gates that half.",
@@ -724,7 +724,7 @@ fn bug341_s24_interaction_cycles_carry_the_cascade_cache_instead_of_rebuilding_i
 
     // Arm two: a cycle that really does drop nodes must evict them. The
     // sidebar's tab list is rebuilt from the model, so a shorter model
-    // detaches rows вЂ” their entries must not survive into the next pass.
+    // detaches rows — their entries must not survive into the next pass.
     let before_removal = state.prev_cascade_styles.len();
     let _ = cc12_bench_cycle(
         &mut doc, &sheet, &cc12_bench_shrunk_model(&typed), viewport, &measurer, &hyp, None,
@@ -755,8 +755,8 @@ fn bug341_s24_interaction_cycles_carry_the_cascade_cache_instead_of_rebuilding_i
 /// left the general case open: a keystroke names one dirty root and one
 /// content-mutated node, yet the walk still entered all 1 740 nodes of the
 /// chrome document to re-cascade one of them. Everything it did to the
-/// other 1 739 was a restatement of its input вЂ” reuse the carried style,
-/// report clean, record a `clean_subtrees` entry вЂ” all of which the delta
+/// other 1 739 was a restatement of its input — reuse the carried style,
+/// report clean, record a `clean_subtrees` entry — all of which the delta
 /// already implies for any subtree holding neither of those two nodes.
 ///
 /// A counter gate, not wall-clock and not differential, for the S8 reason:
@@ -766,7 +766,7 @@ fn bug341_s24_interaction_cycles_carry_the_cascade_cache_instead_of_rebuilding_i
 /// Four arms, and the last three are the load-bearing ones:
 ///
 /// * the cold pass must still walk everything,
-/// * the keystroke must still re-cascade the node it changed вЂ” driving the
+/// * the keystroke must still re-cascade the node it changed — driving the
 ///   visit count to zero by never cascading passes arm two and renders a
 ///   stale document,
 /// * every element inside a skipped subtree must be found in the carried
@@ -775,19 +775,19 @@ fn bug341_s24_interaction_cycles_carry_the_cascade_cache_instead_of_rebuilding_i
 /// * the cache must survive the skipping: the S24 ordinal contract is "an
 ///   entry exists iff the immediately preceding pass visited that node", so
 ///   a skip that walks away without restamping gets its whole subtree swept
-///   at `finish_pass` and re-cascaded next cycle вЂ” same output, one
+///   at `finish_pass` and re-cascaded next cycle — same output, one
 ///   document-sized recompute per interaction.
 #[test]
 fn bug341_s27_a_keystroke_walks_its_own_chain_not_the_document() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
 
     let mut state = Cc12IncrementalState::default();
     let mut typed = String::new();
-    // Cold pass вЂ” a full cascade, which must walk the whole document.
+    // Cold pass — a full cascade, which must walk the whole document.
     let _ = cc12_bench_cycle(
         &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None, &mut state,
     );
@@ -811,14 +811,14 @@ fn bug341_s27_a_keystroke_walks_its_own_chain_not_the_document() {
             key.visited * 4 < cold.visited,
             "keystroke cycle {i} entered {} of the document's {} nodes. Its delta names one \
                  dirty root and one content-mutated node, so nothing outside their ancestor \
-                 chains can be reached вЂ” every other node was entered only to hand back what the \
+                 chains can be reached — every other node was entered only to hand back what the \
                  delta already said about it.",
             key.visited,
             cold.visited,
         );
         assert!(
             key.skipped_subtrees > 0,
-            "keystroke cycle {i} skipped no subtree at all вЂ” the spine was built and never \
+            "keystroke cycle {i} skipped no subtree at all — the spine was built and never \
                  consulted",
         );
         assert!(
@@ -832,7 +832,7 @@ fn bug341_s27_a_keystroke_walks_its_own_chain_not_the_document() {
             key.confirm_misses, 0,
             "keystroke cycle {i}: {} element(s) inside a skipped subtree had no entry in the \
                  carried cache. The skip rests on the claim that the previous pass cascaded every \
-                 one of them вЂ” a miss means a node was left with no style, which is a rebuilt box \
+                 one of them — a miss means a node was left with no style, which is a rebuilt box \
                  at best and a wrong inherited chain at worst.",
             key.confirm_misses,
         );
@@ -841,7 +841,7 @@ fn bug341_s27_a_keystroke_walks_its_own_chain_not_the_document() {
             "keystroke cycle {i} swept the cache although no node left the document. A \
                  skipped subtree still owes the S24 pass ordinal; skipping without restamping \
                  makes `finish_pass` read the whole subtree as gone, and the next cycle \
-                 re-cascades it вЂ” identical output, one document-sized recompute per keystroke.",
+                 re-cascades it — identical output, one document-sized recompute per keystroke.",
         );
         assert_eq!(
             state.prev_cascade_styles.len(),
@@ -857,8 +857,8 @@ fn bug341_s27_a_keystroke_walks_its_own_chain_not_the_document() {
 /// nothing changed must not walk the document to find that out.
 ///
 /// The census that opened this slice split the incremental pass by stage for
-/// the first time and found the cascade *traversal* вЂ” not `compute_style`,
-/// which by then ran once per keystroke and never on a hover вЂ” to be 50-75 %
+/// the first time and found the cascade *traversal* — not `compute_style`,
+/// which by then ran once per keystroke and never on a hover — to be 50-75 %
 /// of the whole pass on both CC-12 scenarios. On a hover flip, S14 had
 /// already emptied the root set and S16 reported no content mutation, so the
 /// walk entered all 1 740 nodes of the chrome document, reused all 828
@@ -875,15 +875,15 @@ fn bug341_s27_a_keystroke_walks_its_own_chain_not_the_document() {
 #[test]
 fn bug341_s26_hover_cycles_do_not_re_walk_the_cascade() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
 
     let mut state = Cc12IncrementalState::default();
     let mut typed = String::new();
-    // Cold pass вЂ” a full cascade, which must walk everything.
+    // Cold pass — a full cascade, which must walk everything.
     let _ = cc12_bench_cycle(
         &mut doc, &sheet, &cc12_bench_model(&typed), viewport, &measurer, &hyp, None, &mut state,
     );
@@ -895,7 +895,7 @@ fn bug341_s26_hover_cycles_do_not_re_walk_the_cascade() {
     );
 
     for i in 0..4 {
-        // Arm 2 вЂ” a keystroke really mutates the omnibox, so the cascade
+        // Arm 2 — a keystroke really mutates the omnibox, so the cascade
         // stage must still run.
         typed.push('a');
         let _ = cc12_bench_cycle(
@@ -905,7 +905,7 @@ fn bug341_s26_hover_cycles_do_not_re_walk_the_cascade() {
         let key = lumen_layout::counters::take_cascade_stats();
         assert!(
             key.visited > 0 && key.recomputed > 0,
-            "keystroke cycle {i} skipped the cascade entirely (visited={} recomputed={}) вЂ” \
+            "keystroke cycle {i} skipped the cascade entirely (visited={} recomputed={}) — \
                  the omnibox's own value attribute changed, so a node really does need \
                  re-cascading. Zeroing the visit counter by never cascading passes arm one and \
                  renders a stale document.",
@@ -913,7 +913,7 @@ fn bug341_s26_hover_cycles_do_not_re_walk_the_cascade() {
             key.recomputed,
         );
 
-        // Arm 1 вЂ” a hover flip on the sidebar: S14 leaves the root set
+        // Arm 1 — a hover flip on the sidebar: S14 leaves the root set
         // empty and the model is unchanged, so the delta states outright
         // that nothing changed.
         let hover = if i % 2 == 0 { sidebar } else { None };
@@ -926,7 +926,7 @@ fn bug341_s26_hover_cycles_do_not_re_walk_the_cascade() {
             hov.visited, 0,
             "hover cycle {i} walked {} node(s) although its delta named no dirty root and no \
                  content mutation. Every element would take the reuse branch and every node \
-                 report itself clean вЂ” the stage's whole output on such a cycle is a restatement \
+                 report itself clean — the stage's whole output on such a cycle is a restatement \
                  of its input, and it was the largest single item in the pass.",
             hov.visited,
         );
@@ -937,7 +937,7 @@ fn bug341_s26_hover_cycles_do_not_re_walk_the_cascade() {
 /// `display` off the cascade cache, not cascade the child again.
 ///
 /// Deciding which formatting context a child joins asked `compute_style`
-/// up to three times per element child вЂ” `is_inline_content`,
+/// up to three times per element child — `is_inline_content`,
 /// `is_inline_block` and the `display:none` re-probe inside the
 /// inline-collect loop each ran a full cascade. `precompute_counters` had
 /// already cascaded every one of those nodes against the same parent style,
@@ -945,7 +945,7 @@ fn bug341_s26_hover_cycles_do_not_re_walk_the_cascade() {
 /// whatever the probe answers, so the probes were pure re-derivation: 14
 /// per keystroke cycle and 2 per hover cycle, 0.21-0.25 ms of a 0.63 ms
 /// keystroke and 0.07-0.08 ms of a 0.29 ms hover. Two of chrome's most
-/// expensive cascades sat in that count вЂ” `<html>`, which carries the
+/// expensive cascades sat in that count — `<html>`, which carries the
 /// whole design system's custom properties, was re-cascaded on every hover
 /// frame purely to be told it is not inline.
 ///
@@ -954,7 +954,7 @@ fn bug341_s26_hover_cycles_do_not_re_walk_the_cascade() {
 ///
 /// Both arms, and the second is load-bearing: the cheapest way to drive
 /// "cascades" to zero is to stop asking about `display` at all, which puts
-/// every child in the wrong formatting context вЂ” a wrong tree, not a slow
+/// every child in the wrong formatting context — a wrong tree, not a slow
 /// frame. `display_probes` is the count of questions asked, and it must
 /// stay above zero. What the answers must *be* is gated in `lumen-layout`
 /// (`bug341_s25_display_probes_read_the_cascade_instead_of_re_running_it`),
@@ -962,8 +962,8 @@ fn bug341_s26_hover_cycles_do_not_re_walk_the_cascade() {
 #[test]
 fn bug341_s25_the_box_build_stage_reads_display_off_the_cascade_cache() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
@@ -1013,7 +1013,7 @@ fn bug341_s25_the_box_build_stage_reads_display_off_the_cascade_cache() {
         );
         assert_eq!(
             hov.display_probe_cascades, 0,
-            "hover cycle {i} вЂ” see the keystroke assertion above. Census: {hov:?}",
+            "hover cycle {i} — see the keystroke assertion above. Census: {hov:?}",
         );
         assert!(hov.display_probes > 0, "hover cycle {i} asked nothing. Census: {hov:?}");
     }
@@ -1022,17 +1022,17 @@ fn bug341_s25_the_box_build_stage_reads_display_off_the_cascade_cache() {
 /// BUG-341 S14 regression gate: a hover flip no rule in the sheet can
 /// react to must re-cascade nothing at all.
 ///
-/// This is CC-12's own `#sidebar`/`None` toggle вЂ” the shape S3 documented
+/// This is CC-12's own `#sidebar`/`None` toggle — the shape S3 documented
 /// as its worst case and every slice since then worked around. `:hover`
 /// genuinely does flip on every ancestor of `#sidebar` up to the document
-/// root (CSS Selectors L4 В§4.3), so the pre-S14 root-set contained the root
-/// and forced a whole-document re-cascade вЂ” 6.8-8.4 ms of a ~12 ms cycle,
+/// root (CSS Selectors L4 §4.3), so the pre-S14 root-set contained the root
+/// and forced a whole-document re-cascade — 6.8-8.4 ms of a ~12 ms cycle,
 /// producing byte-identical styles for all 318 boxes (S13's census proved
 /// the "identical" half).
 ///
 /// Two asserts, in this order on purpose. The first is the *ground truth*:
 /// the two cascades really are equal, independently of any narrowing code.
-/// The second is the **count gate** вЂ” the root-set is empty вЂ” which is the
+/// The second is the **count gate** — the root-set is empty — which is the
 /// only thing that can fail if the narrowing silently stops narrowing: a
 /// mechanism that reuses nothing still reproduces the full cascade exactly
 /// (S8's lesson), just slowly. If `chrome.html` ever gains a rule that
@@ -1057,13 +1057,13 @@ fn bug341_s14_hover_flip_no_rule_can_react_to_recascades_nothing() {
     let index = restyle_state_index(&doc, &sheet);
     assert!(
         !index.is_conservative(),
-        "chrome.html has no dynamic `:has()` and the chrome document has no shadow roots вЂ” \
+        "chrome.html has no dynamic `:has()` and the chrome document has no shadow roots — \
              if either changes, the per-node narrowing turns itself off and CC-12's hover cycle \
              silently returns to a whole-document re-cascade",
     );
     assert!(
         index.state_compound_count() > 10,
-        "chrome.html has dozens of `:hover` rules; scanning found only {} вЂ” the narrowing \
+        "chrome.html has dozens of `:hover` rules; scanning found only {} — the narrowing \
              would be trivially (and uselessly) correct on an empty compound list",
         index.state_compound_count(),
     );
@@ -1087,7 +1087,7 @@ fn bug341_s14_hover_flip_no_rule_can_react_to_recascades_nothing() {
     assert!(
         dirty_roots.is_empty(),
         "hovering #sidebar flips `:hover` on {} node(s) the restyle root-set still keeps, but \
-             no selector in chrome.html can observe any of them (asserted above) вЂ” BUG-341 S14",
+             no selector in chrome.html can observe any of them (asserted above) — BUG-341 S14",
         dirty_roots.len(),
     );
 
@@ -1121,20 +1121,20 @@ fn bug341_s14_hover_flip_no_rule_can_react_to_recascades_nothing() {
 /// node's own subtree. The census (`bug341_s17_keystroke_restyle_census`)
 /// found that cost 12 re-cascaded elements, all 12 producing a
 /// byte-identical `ComputedStyle`, and each losing its box on the way
-/// (`must_recompute` в‡’ not in `clean_subtrees`).
+/// (`must_recompute` ⇒ not in `clean_subtrees`).
 ///
 /// Three asserts, in this order on purpose. First the *ground truth*,
 /// computed with no incremental machinery at all: the two full cascades
 /// really are equal, so nothing in `chrome.html` reacts to the `value`
-/// write. Then the **count gate** вЂ” the root-set is `{#omniInput}` and the
-/// cascade recomputes exactly one element вЂ” which is the only thing that
+/// write. Then the **count gate** — the root-set is `{#omniInput}` and the
+/// cascade recomputes exactly one element — which is the only thing that
 /// can fail silently: a mechanism that narrows nothing still reproduces the
 /// full cascade (S8's lesson), just slowly. Last, that the incremental
 /// cascade run under the narrowed root-set equals the full one.
 ///
 /// If `chrome.html` ever gains a sibling rule that can match `#omniInput`,
 /// the count assert flips and the honest fix is to record the number that
-/// rule accounts for вЂ” not to loosen this into a percentage.
+/// rule accounts for — not to loosen this into a percentage.
 #[test]
 fn bug341_s17_keystroke_recascades_the_input_not_the_omnibox() {
     use lumen_layout::counters::{
@@ -1180,8 +1180,8 @@ fn bug341_s17_keystroke_recascades_the_input_not_the_omnibox() {
     let node_index = restyle_node_index(&doc, &sheet);
     assert!(
         !node_index.is_conservative(),
-        "chrome.html has no `:has()`/`:nth-child(of вЂ¦)` and the chrome document has no shadow \
-             roots вЂ” if any of that changes, the per-node narrowing turns itself off and CC-12's \
+        "chrome.html has no `:has()`/`:nth-child(of …)` and the chrome document has no shadow \
+             roots — if any of that changes, the per-node narrowing turns itself off and CC-12's \
              keystroke cycle silently returns to re-cascading the whole `.omnibox`",
     );
     let dirty_roots =
@@ -1216,38 +1216,38 @@ fn bug341_s17_keystroke_recascades_the_input_not_the_omnibox() {
     );
 }
 
-// в”Ђв”Ђ BUG-405 slice 49: does `predict_same` really predict `chrome_dl` byte identity в”Ђв”Ђ
+// ── BUG-405 slice 49: does `predict_same` really predict `chrome_dl` byte identity ──
 
 /// BUG-405 slice 48's census (`scripts/chrome_dl_repeat_census.py`, driven over
 /// MCP) could only ever produce `predict=false`: `new_tab`/`navigate` are the
 /// only automation events that reach `relayout_chrome_host`, and both always
 /// touch `bind_model`'s content, so `touched.is_empty()` is never true in that
-/// sample. The one shape that *would* hit `predict=true` in real use в€’ two
+/// sample. The one shape that *would* hit `predict=true` in real use − two
 /// consecutive `relayout_chrome_host` passes with the exact same hover target
 /// (a mouse jittering inside a still-hovered button, or any call reached for
-/// an unrelated reason while hover happens not to have moved) в€’ needs a real
+/// an unrelated reason while hover happens not to have moved) − needs a real
 /// `CursorMoved` (`crates/shell/src/lumen/cursor_moved.rs`) or a real chrome
 /// click (`dispatch_chrome_action`), neither reachable through MCP's
 /// hit-test-free `click` (see CLAUDE.md's "hovered/active nid ... cannot be
 /// exercised by any automation surface" gotcha).
 ///
-/// `relayout_chrome_host` itself cannot be unit-tested directly either вЂ” it
+/// `relayout_chrome_host` itself cannot be unit-tested directly either — it
 /// early-returns without a real `self.renderer`, and building a `Lumen` (246
-/// fields: JS runtime, network stack, tab manager, вЂ¦) for one diagnostic test
+/// fields: JS runtime, network stack, tab manager, …) for one diagnostic test
 /// is out of proportion to what this slice can safely reach. So this
 /// reproduces the *identical* four-input formula
 /// (`touched.is_empty() && interactive_stable && viewport_stable &&
 /// forced_colors_stable`) and the *identical* building blocks
 /// `relayout_chrome_host`/`cc12_bench_cycle` use
 /// (`bind_model_tracked`/`set_interactive_state`/`layout_measured_hyp`/
-/// `paint_ordered`/`hash_display_list`) at the doc/sheet level в€’ the same
-/// level every other `bug341_s*` gate in this file already tests at в€’ instead
+/// `paint_ordered`/`hash_display_list`) at the doc/sheet level − the same
+/// level every other `bug341_s*` gate in this file already tests at − instead
 /// of going through `Lumen`.
 #[test]
 fn bug405_slice49_chrome_dl_predict_same_holds_for_a_steady_state_hover_repeat() {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
     let model = cc12_bench_model("");
@@ -1267,7 +1267,7 @@ fn bug405_slice49_chrome_dl_predict_same_holds_for_a_steady_state_hover_repeat()
     // `relayout_chrome_host` invoked again with the SAME hover target and an
     // unchanged model. `touched` stays empty (nothing in `model` changed
     // since cycle 0) and `new_interactive == chrome_prev_interactive` holds
-    // because the hover target is identical в€’ both are the real preconditions
+    // because the hover target is identical − both are the real preconditions
     // `predict_same` checks, not stand-ins for them.
     let touched1 = lumen_chrome::bind_model_tracked(&mut doc, &model);
     lumen_layout::set_interactive_state(Some(sidebar), None, None);
@@ -1276,7 +1276,7 @@ fn bug405_slice49_chrome_dl_predict_same_holds_for_a_steady_state_hover_repeat()
     let hash1 = lumen_paint::hash_display_list(&[], &dl1, 0.0, 0.0, 0, 0);
     lumen_layout::clear_interactive_state();
 
-    // `viewport_stable`/`forced_colors_stable` are trivially true here в€’
+    // `viewport_stable`/`forced_colors_stable` are trivially true here −
     // neither viewport nor Forced-Colors Mode is touched by this fixture,
     // which mirrors the real precondition: either one flipping already
     // forces `relayout_chrome_host`'s full-layout fallback, a separate path
@@ -1285,15 +1285,15 @@ fn bug405_slice49_chrome_dl_predict_same_holds_for_a_steady_state_hover_repeat()
     let predict_same = touched1.is_empty() && interactive_stable;
     assert!(
         predict_same,
-        "reproduction must land on predict=true в€’ the exact case срез 48's MCP census (0/55 \
+        "reproduction must land on predict=true − the exact case срез 48's MCP census (0/55 \
              predict=true calls) could not reach; touched1={touched1:?}",
     );
 
     let actual_same = hash0 == hash1;
     assert!(
         actual_same,
-        "BUG-405 Рї.85: predict_same=true but chrome_dl bytes differ (hash0={hash0} hash1={hash1}) \
-             в€’ this is the dangerous direction (predict=true, actual=false) a content_epoch \
+        "BUG-405 п.85: predict_same=true but chrome_dl bytes differ (hash0={hash0} hash1={hash1}) \
+             − this is the dangerous direction (predict=true, actual=false) a content_epoch \
              skip-path for chrome_dl would need to rule out on the ONE shape срез 48's census left \
              unmeasured. If this ever fails, the skip-path proposed in `bugs/BUG-405-FIXED.md`'s \
              'Остаток' would have shown stale chrome on screen for a plain hover-hold.",
@@ -1364,40 +1364,40 @@ fn bug405_slice50_chrome_overlay_cache_hit_matches_fresh_build_and_key_changes_m
 // -- BUG-405 срез 51: re-measure the net win at strips_used=4 --
 
 /// Срез 50's "Остаток" promised a re-measurement on a multi-band layout
-/// (sidebar + narrow window, all four overlay strips active) вЂ” the
+/// (sidebar + narrow window, all four overlay strips active) — the
 /// `chrome_mix` multiplier its `bench-text-scroll.html` stand never
-/// exercised (window maximized there в†’ only the top strip is
+/// exercised (window maximized there → only the top strip is
 /// non-degenerate, `strips_used=[1]`).
 ///
 /// A live-window census for that layout turns out to be unreachable through
 /// the existing MCP automation surface: `AutomationCommand::Click` resolves
 /// its `Target` (`Point`/`NodeId`/`Selector`, `crates/shell/src/lumen/
 /// automation.rs::resolve_automation_target`) purely against
-/// `self.layout_box`/`self.layout_source` вЂ” the PAGE document вЂ” and then
+/// `self.layout_box`/`self.layout_source` — the PAGE document — and then
 /// calls `Lumen::handle_click_at` directly. That is a different path from a
 /// real winit `MouseInput` event, which checks `self.point_over_chrome`
 /// FIRST and dispatches to `chrome_hit_test`/`dispatch_chrome_action`
 /// before ever reaching page hit-testing
 /// (`crates/shell/src/app/window_event/mouse_input.rs`). No chrome control
-/// вЂ” the vertical-tabs toggle (`Ctrl+B`, no chrome UI equivalent either),
-/// `data-action="open-web-sidebar"`, `data-action="open-ai-sidebar"` вЂ” is
+/// — the vertical-tabs toggle (`Ctrl+B`, no chrome UI equivalent either),
+/// `data-action="open-web-sidebar"`, `data-action="open-ai-sidebar"` — is
 /// reachable from a census script driving the live window over MCP, and
 /// none of these toggles persist across a fresh launch to be pre-seeded via
 /// config. So this slice measures the same pure function directly instead
-/// вЂ” no live window, GPU or MCP needed at all, same reasoning as срез 49's
+/// — no live window, GPU or MCP needed at all, same reasoning as срез 49's
 /// "a whole `Lumen` for one diagnostic is disproportionate".
 ///
 /// Host/window numbers are copied from `bug405_slice50_...`'s correctness
 /// fixture, which already happens to leave a margin on all four sides
-/// (`strips_used == 4`, asserted below) вЂ” that test just never timed
+/// (`strips_used == 4`, asserted below) — that test just never timed
 /// anything.
 ///
-/// `#[ignore]`d like срез 50's sibling gates вЂ” run explicitly:
+/// `#[ignore]`d like срез 50's sibling gates — run explicitly:
 /// `cargo test -p lumen-shell --profile dev-release bug405_slice51 -- --ignored --nocapture`.
 #[test]
-#[ignore = "manual perf gate (BUG-405 срез 51) вЂ” doc comment has the run command"]
+#[ignore = "manual perf gate (BUG-405 срез 51) — doc comment has the run command"]
 fn bug405_slice51_chrome_overlay_cache_net_win_at_four_active_strips() {
-    // ~130 commands в€’ `build: chrome` census (срез 50) logged `cmds=130` at
+    // ~130 commands − `build: chrome` census (срез 50) logged `cmds=130` at
     // strips_used=1 on the real chrome document, so this fixture's `chrome_dl`
     // matches that order of magnitude instead of the single-`FillRect` toy
     // срез 50's correctness test used (fine for byte-equality, too small for
@@ -1419,7 +1419,7 @@ fn bug405_slice51_chrome_overlay_cache_net_win_at_four_active_strips() {
         chrome_overlay_segment(&chrome_dl, host, win_w, win_h, caret, 1, true, None);
     assert_eq!(
         strips_used, 4,
-        "fixture must exercise all four strips вЂ” the chrome_mix multiplier this slice measures",
+        "fixture must exercise all four strips — the chrome_mix multiplier this slice measures",
     );
     let cache = cache.expect("cold build must produce a cache to remember");
 
@@ -1428,7 +1428,7 @@ fn bug405_slice51_chrome_overlay_cache_net_win_at_four_active_strips() {
 
     let mut hit_stats = lumen_paint::FrameStats::new();
     let mut rebuild_stats = lumen_paint::FrameStats::new();
-    // Interleaved HIT-then-rebuild each round (docs/perf-method.md) вЂ” both
+    // Interleaved HIT-then-rebuild each round (docs/perf-method.md) — both
     // arms see the same cache/allocator warmth instead of one racing first.
     for i in 0..WARMUP + SAMPLES {
         let t0 = std::time::Instant::now();
@@ -1457,7 +1457,7 @@ fn bug405_slice51_chrome_overlay_cache_net_win_at_four_active_strips() {
     eprintln!("{}", rebuild_summary.display_with("BUG405_S51_REBUILD_4STRIP"));
     let saved = (1.0 - hit_summary.min_ms / rebuild_summary.min_ms) * 100.0;
     // срез 50 measured -20% on the live stand at strips_used=1 (one strip's
-    // worth of `chrome_dl` copied either way) вЂ” compare this number against
+    // worth of `chrome_dl` copied either way) — compare this number against
     // that baseline, not against 0%.
     eprintln!("cache-on saves {saved:.1}% at strips_used=4 (by min of {SAMPLES} interleaved samples)");
 }
@@ -1465,7 +1465,7 @@ fn bug405_slice51_chrome_overlay_cache_net_win_at_four_active_strips() {
 // -- BUG-405 срез 52: is strips_used=4 even reachable on the real chrome layout? --
 
 /// Builds the real chrome `(host_rect, chrome_dl)` pair `relayout_chrome_host`
-/// itself would produce вЂ” срез 49's level (no live `Lumen`/renderer needed):
+/// itself would produce — срез 49's level (no live `Lumen`/renderer needed):
 /// the actual `(doc, sheet)` asset, a `ChromeModel` with every panel that can
 /// widen a strip turned on, run through the same `layout_measured_hyp`/
 /// `take_content_area` pair production uses, `dl` built AFTER pruning like
@@ -1474,18 +1474,18 @@ fn bug405_slice51_chrome_overlay_cache_net_win_at_four_active_strips() {
 /// already covers.
 fn bug405_slice52_real_chrome_overlay_fixture() -> (Rect, lumen_paint::DisplayList, (f32, f32)) {
     let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
-    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter РЅРµ РїР°СЂСЃРёС‚СЃСЏ");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer РёР· bundled Inter");
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let hyp = KnuthLiangHyphenation::new();
     let viewport = Size::new(1280.0, 800.0);
 
-    // Every panel that can widen a strip, turned on at once вЂ” the real-UI
+    // Every panel that can widen a strip, turned on at once — the real-UI
     // analogue of срез 51's "all four margins" intent: vertical sidebar
     // (left), `#rightSidebar` (right). `#findBar`/`#downloadsPanel` are
     // turned on too, but CC-9's own doc comment on `relayout_chrome_host`
     // says both are salvaged out of `#contentArea` BEFORE `page_host_rect` is
     // computed, i.e. they overlay the content area rather than resizing it,
-    // so they should not be able to add a strip even in principle вЂ” the
+    // so they should not be able to add a strip even in principle — the
     // `strips_used` assertion below exists to confirm that reading holds,
     // not to assume it.
     let mut model = cc12_bench_model("");
@@ -1516,7 +1516,7 @@ fn bug405_slice52_real_chrome_overlay_fixture() -> (Rect, lumen_paint::DisplayLi
     .expect("#contentArea must have a box to prune");
 
     // Same order as `relayout_chrome_host`: `dl` is built from `layout`
-    // AFTER `#contentArea` is pruned out of it вЂ” this is the real
+    // AFTER `#contentArea` is pruned out of it — this is the real
     // `chrome_dl`, not срез 51's synthetic 130-`FillRect` stand-in.
     let chrome_dl = paint_ordered(&layout);
     (host_rect, chrome_dl, (viewport.width, viewport.height))
@@ -1525,16 +1525,16 @@ fn bug405_slice52_real_chrome_overlay_fixture() -> (Rect, lumen_paint::DisplayLi
 /// Срез 51's own remainder flagged this: it measured the `chrome_mix`
 /// multiplier at `strips_used=4` on a HAND-PICKED `Rect` (copied from срез
 /// 50's correctness fixture, which "just happens" to leave a margin on all
-/// four sides) вЂ” not on any host rect the real chrome layout ever produces.
+/// four sides) — not on any host rect the real chrome layout ever produces.
 ///
 /// Reading `assets/chrome/chrome.html`'s own CSS answers this ahead of the
 /// test running: `.body-row{flex:1}` (the flex row holding `#contentArea` +
 /// `#rightSidebar`) fills 100% of the height left under `.toolbar`, and
-/// nothing downstream of it is shorter than its container вЂ” there is no
+/// nothing downstream of it is shorter than its container — there is no
 /// element anywhere in the asset that could leave a gap between
 /// `#contentArea`'s bottom edge and the window's. `strips_used` should
 /// therefore cap at 3 (top toolbar + left vertical-sidebar + right
-/// `#rightSidebar`), never reach 4 вЂ” срез 51's `chrome_mix` scenario names a
+/// `#rightSidebar`), never reach 4 — срез 51's `chrome_mix` scenario names a
 /// shape the real UI cannot produce.
 #[test]
 fn bug405_slice52_real_chrome_layout_caps_at_three_active_strips() {
@@ -1549,20 +1549,20 @@ fn bug405_slice52_real_chrome_layout_caps_at_three_active_strips() {
         strips_used, 3,
         "the asset's CSS (`.body-row{{flex:1}}` leaves no vertical gap below #contentArea) predicts a \
          structural ceiling of 3 non-degenerate strips (top/left/right) on the real chrome layout, never \
-         срез 51's 4 вЂ” if this fails, either the asset changed to add a bottom-shrinking element (a new \
+         срез 51's 4 — if this fails, either the asset changed to add a bottom-shrinking element (a new \
          strip is genuinely reachable, срез 51's number is back in play) or this reasoning was wrong \
          (investigate before trusting either arm's percentage)",
     );
 }
 
 /// The net win at the real `strips_used` ceiling (срез 52's correctness gate
-/// above measures it at 3, not срез 51's synthetic 4) вЂ” real `host_rect` and
+/// above measures it at 3, not срез 51's synthetic 4) — real `host_rect` and
 /// real `chrome_dl` (actual command count from the real chrome layout, not
 /// срез 51's 130-`FillRect` stand-in). `#[ignore]`d like срез 51's sibling
-/// gate вЂ” run explicitly:
+/// gate — run explicitly:
 /// `cargo test -p lumen-shell --profile dev-release bug405_slice52 -- --ignored --nocapture`.
 #[test]
-#[ignore = "manual perf gate (BUG-405 срез 52) вЂ” doc comment has the run command"]
+#[ignore = "manual perf gate (BUG-405 срез 52) — doc comment has the run command"]
 fn bug405_slice52_chrome_overlay_cache_net_win_on_real_layout() {
     let (host_rect, chrome_dl, (win_w, win_h)) = bug405_slice52_real_chrome_overlay_fixture();
     let (_, strips_used, _, cache) =
@@ -1574,7 +1574,7 @@ fn bug405_slice52_chrome_overlay_cache_net_win_on_real_layout() {
 
     let mut hit_stats = lumen_paint::FrameStats::new();
     let mut rebuild_stats = lumen_paint::FrameStats::new();
-    // Same interleaved-per-round shape as срез 51 (docs/perf-method.md) вЂ” both
+    // Same interleaved-per-round shape as срез 51 (docs/perf-method.md) — both
     // arms see the same cache/allocator warmth instead of one racing first.
     for i in 0..WARMUP + SAMPLES {
         let t0 = std::time::Instant::now();
