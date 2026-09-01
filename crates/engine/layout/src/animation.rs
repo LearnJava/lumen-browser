@@ -117,6 +117,7 @@ impl AnimationFrame {
                     transform: style.transform.clone(),
                     color: style.color,
                     background_color: style.background_color,
+                    ..Default::default()
                 });
             }
         }
@@ -137,6 +138,14 @@ pub struct CompositorOverride {
     pub color: Option<Color>,
     /// Animated `background-color` — replaces the box's background fill colour.
     pub background_color: Option<Color>,
+    /// FRAME-7: char-index text cursor to paint as a caret bar inside a
+    /// focused typeable `<input>`. Not animation-related — this map is reused
+    /// as the per-`NodeId` carrier because it is already threaded through
+    /// `fill_buckets`/`emit_box_self` into `emit_form_control_indicator`
+    /// without touching layout/cascade, exactly what a caret needs. Shell
+    /// populates it from `FormControlState::cursor` at display-list-build
+    /// time; layout crate itself never sets it.
+    pub caret: Option<usize>,
 }
 
 /// Per-frame compositor overrides — output of `AnimationFrame::to_compositor_frame`.

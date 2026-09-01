@@ -106,6 +106,27 @@ impl Lumen {
         c.min(len)
     }
 
+    /// FRAME-7: the focused page-level `<input>`'s char-index cursor, if a
+    /// caret bar should be painted this frame — `None` when nothing typeable
+    /// is focused. Read-only (unlike `field_cursor`): a paint pass must never
+    /// write `form_state` as a side effect of building the display list.
+    /// Untouched-but-focused reads as end-of-value, mirroring `field_cursor`'s
+    /// own default so a field never touched by Left/Right/Home/End still
+    /// shows its caret at the end, exactly where typing would land.
+    pub(crate) fn focused_input_caret(&self) -> Option<(lumen_dom::NodeId, usize)> {
+        let nid = self.focused_node?;
+        let (kind, current) = self.typeable_field(nid)?;
+        if kind != TypeableField::Input {
+            // FRAME-7: a `<textarea>` caret needs multi-line InlineRun
+            // line/glyph geometry, not the single-line box math this
+            // input-only path assumes — a separate, larger slice.
+            return None;
+        }
+        let len = char_len(&current);
+        let cursor = self.form_state.get(&nid).and_then(|s| s.cursor).unwrap_or(len);
+        Some((nid, cursor.min(len)))
+    }
+
     /// Move the focused field's text cursor by `delta` chars (Left = `-1`,
     /// Right = `+1`), clamped to `[0, value length]`. `true` iff a typeable
     /// field was focused (regardless of whether the cursor was already at the

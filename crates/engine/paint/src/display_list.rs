@@ -5438,3 +5438,7 @@ mod background_and_layers;
 #[cfg(test)]
 #[path = "display_list/tests/ordered_build_scroll.rs"]
 mod ordered_build_scroll;
+
+#[cfg(test)]
+#[path = "display_list/tests/form_controls_caret.rs"]
+mod form_controls_caret;

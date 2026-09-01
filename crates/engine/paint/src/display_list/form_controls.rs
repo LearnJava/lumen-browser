@@ -94,6 +94,51 @@ fn emit_input_value_text(
     out.push(DisplayCommand::PopClip);
 }
 
+/// FRAME-7: paint the text-entry cursor bar inside a focused `<input>`
+/// (HTML LS §4.10.5.1) at the tracked char-index position `char_index`.
+///
+/// Geometry mirrors [`emit_input_value_text`] (same content box, same 2px
+/// inset) so the bar lines up with the text it sits inside. Horizontal
+/// placement uses the same per-glyph advance approximation as that
+/// function's centered-label path — this crate has no real `TextMeasurer` —
+/// so the bar can drift from the true glyph edge on proportional fonts;
+/// acceptable for a 1px caret, not for text layout. Password masking needs
+/// no special case: the masked and plain text have the same char count, so
+/// the advance is identical either way. Clipped to the content box like the
+/// text, so a cursor past the field's (unscrolled) visible width is hidden
+/// rather than drawn outside the border — this engine has no horizontal
+/// scroll for overflowing input text at all yet.
+fn emit_input_caret(b: &LayoutBox, value: &str, char_index: usize, out: &mut Vec<DisplayCommand>) {
+    let s = &b.style;
+    let bl = s.border_left_width;
+    let bt = s.border_top_width;
+    let br = s.border_right_width;
+    let bb = s.border_bottom_width;
+    let inset = 2.0_f32;
+    let content_x = b.rect.x + bl + inset;
+    let content_y = b.rect.y + bt;
+    let content_w = (b.rect.width - bl - br - inset * 2.0).max(1.0);
+    let content_h = (b.rect.height - bt - bb).max(1.0);
+    let font_size = s.font_size;
+
+    let chars_before = char_index.min(value.chars().count());
+    let caret_x = content_x + font_size * 0.5 * chars_before as f32;
+    // CSS UI L4 §6.3 `caret-color: auto` (`None`) follows the text color —
+    // already true for `forced-colors`/`color-scheme` overrides applied
+    // earlier in the cascade (see `style/adjust.rs`), so this is the same
+    // resolution rule applied one more time at paint.
+    let color = s.caret_color.unwrap_or(s.color);
+
+    out.push(DisplayCommand::PushClipRect {
+        rect: Rect::new(content_x, content_y, content_w, content_h),
+    });
+    out.push(DisplayCommand::FillRect {
+        rect: Rect::new(caret_x, content_y, 1.0, content_h),
+        color,
+    });
+    out.push(DisplayCommand::PopClip);
+}
+
 /// Paint an empty text input's `placeholder` attribute as a grey hint
 /// (HTML rendering §15.5.5). Left-aligned, vertically centered and clipped to
 /// the content box, mirroring `emit_input_value_text` but with a fixed grey
@@ -196,7 +241,12 @@ pub(crate) fn push_thick_segment(out: &mut Vec<[f32; 2]>, a: [f32; 2], b: [f32; 
     out.extend_from_slice(&[a1, a2, b1, a2, b2, b1]);
 }
 
-pub(crate) fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut Vec<DisplayCommand>) {
+pub(crate) fn emit_form_control_indicator(
+    b: &LayoutBox,
+    kind: &FormControlKind,
+    ov: Option<&CompositorOverride>,
+    out: &mut Vec<DisplayCommand>,
+) {
     // CSS Basic UI L4 §4.2 — `appearance: none` (and the legacy `-webkit-`/
     // `-moz-` aliases, normalised to `Appearance::None` at parse time) removes
     // the native "primitive appearance" of a form control: the checkbox tick,
@@ -264,6 +314,14 @@ pub(crate) fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind,
                         emit_input_placeholder_text(b, placeholder, placeholder_style.as_deref(), out);
                     } else {
                         emit_input_value_text(b, value_text, input_type, false, out);
+                    }
+                    // FRAME-7: the shell only sets `ov.caret` for the currently
+                    // focused typeable field, so no further gating by input_type
+                    // is needed here — a Date/Time/etc. input (which paints
+                    // through this same arm but has no cursor tracking) never
+                    // gets a caret override in the first place.
+                    if let Some(idx) = ov.and_then(|o| o.caret) {
+                        emit_input_caret(b, value_text, idx, out);
                     }
                     return;
                 }
