@@ -34,6 +34,24 @@ flate2.workspace = true
 # Graduation: permanent когда AVIF станет обязательным форматом в pipeline.
 # Требует cmake + nasm — подключается через feature "avif".
 image = { version = "0.25", default-features = false, features = ["avif"], optional = true }
+# ADR-027 (LIB-4): renders external SVG (`<img src=*.svg>`, `background-image:
+# url(*.svg)`) — the own SVG-to-DisplayList path (`lumen-layout`/`lumen-paint`)
+# draws zero `linearGradient`/`radialGradient`, `clipPath`, `mask`, `filter`,
+# `pattern` or `marker` (ADR-027's own measurement).
+# Trait-anchor: lumen_core::ext::ImageDecoder (single call site: svg::decode_svg,
+# dispatched from decode_raw exactly like every other format here).
+# Pinned to 0.44.0, not latest (0.48): its `tiny-skia` is 0.11.4, the exact
+# version `lumen-paint`'s `cpu-render` feature already carries — a newer resvg
+# would duplicate tiny-skia at a second version in every binary linking both.
+# `text`/`system-fonts` stay off: text rendering needs a `fontdb::Database`,
+# and seeding one from the host OS would make identical SVG bytes rasterize
+# differently machine to machine (the graphic-test gate assumes the opposite).
+# `raster-images` is required for nested `<image>` (decodes embedded
+# JPEG/PNG/GIF/WebP at render time) and pulls its own `gif`/`image-webp`/
+# `zune-jpeg` versions distinct from this crate's — acceptable duplication of
+# small leaf decoders to keep the important one, tiny-skia, unified.
+# Graduation: permanent — SVG is a spec format like the others in this file.
+resvg = { version = "=0.44.0", default-features = false, features = ["raster-images"] }
 workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 # Политики проекта как машинные проверки — [workspace.lints] в корневом

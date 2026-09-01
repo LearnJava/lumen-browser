@@ -10,6 +10,7 @@ mod gif;
 pub mod avif;
 pub mod jxl;
 pub mod heic;
+pub mod svg;
 pub mod decode_cache;
 
 pub use decode_cache::{ImageDecodeCache, ImageHandle, ImageKey};
@@ -20,6 +21,7 @@ pub use gif::{decode_gif, decode_gif_animated, AnimatedGif, GifError, GifLoopCou
 pub use avif::{AvifError, AvifImageDecoder, decode_avif, is_avif};
 pub use jxl::{JxlError, decode_jxl, is_jxl};
 pub use heic::{HeicError, decode_heic, is_heic};
+pub use svg::{decode_svg, SvgError};
 
 /// PNG-сигнатура: `89 50 4E 47 0D 0A 1A 0A` (PNG §5.2).
 pub const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -58,9 +60,8 @@ pub fn supported_mime_types() -> &'static [&'static str] {
 /// ASCII whitespace the bytes must start with `<svg`, `<!DOCTYPE svg` or an
 /// XML prolog (`<?xml`) followed by a `<svg` tag within the first 4096 bytes
 /// (the prolog alone is not enough — XHTML starts the same way). Matching is
-/// ASCII-case-insensitive. `lumen-image` only detects SVG; rasterization
-/// happens upstream (the shell renders SVG through the normal layout/paint
-/// pipeline), so [`decode`] still returns `UnknownFormat` for SVG bytes.
+/// ASCII-case-insensitive. Used to dispatch to [`decode_svg`] the same way
+/// every other format's signature check dispatches here.
 #[must_use]
 pub fn is_svg(bytes: &[u8]) -> bool {
     let starts_with_ci = |hay: &[u8], needle: &[u8]| -> bool {
@@ -106,6 +107,7 @@ pub fn decode_to(bytes: &[u8], target: lumen_core::ColorSpace) -> Result<Image, 
 /// - [`ImageError::Gif`] — GIF-сигнатура (GIF87a/GIF89a) совпала, но декодирование не удалось.
 /// - [`ImageError::Webp`] — WebP-сигнатура (RIFF/WEBP) совпала, но декодирование не удалось.
 /// - [`ImageError::Avif`] — AVIF ftyp-бокс обнаружен, но декодирование не удалось.
+/// - [`ImageError::Svg`] — SVG-сигнатура распознана, но `usvg` не смог разобрать документ.
 /// - [`ImageError::Jxl`] — JPEG XL сигнатура обнаружена, но декодирование не поддерживается.
 /// - [`ImageError::Heic`] — HEIC/HEIF ftyp-бокс обнаружен, но декодирование не поддерживается.
 pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
@@ -137,6 +139,9 @@ fn decode_raw(bytes: &[u8]) -> Result<Image, ImageError> {
         let (width, height, data) = decode_avif(bytes).map_err(ImageError::Avif)?;
         return Ok(Image { width, height, format: PixelFormat::Rgba8, data, icc_profile: None });
     }
+    if is_svg(bytes) {
+        return decode_svg(bytes).map_err(ImageError::Svg);
+    }
     if is_jxl(bytes) {
         return Err(ImageError::Jxl(decode_jxl(bytes).unwrap_err()));
     }
@@ -159,6 +164,8 @@ pub enum ImageError {
     Gif(GifError),
     /// AVIF ftyp-бокс обнаружен (brand=avif/avis), но декодирование не удалось.
     Avif(AvifError),
+    /// SVG-сигнатура распознана, но `usvg` не смог разобрать документ.
+    Svg(SvgError),
     /// JPEG XL сигнатура распознана, но декодирование не поддерживается (Phase 0).
     Jxl(JxlError),
     /// HEIC/HEIF ftyp-бокс обнаружен, но декодирование не поддерживается (Phase 1).
@@ -174,6 +181,7 @@ impl core::fmt::Display for ImageError {
             Self::Webp(e) => write!(f, "WebP: {e}"),
             Self::Gif(e) => write!(f, "GIF: {e}"),
             Self::Avif(e) => write!(f, "AVIF: {e}"),
+            Self::Svg(e) => write!(f, "SVG: {e}"),
             Self::Jxl(e) => write!(f, "JPEG XL: {e}"),
             Self::Heic(e) => write!(f, "HEIC/HEIF: {e}"),
         }

@@ -134,7 +134,6 @@ mod source_view;
 mod spellcheck;
 mod startup_trace;
 mod storage_stores;
-mod svg_image;
 pub mod surface;
 mod runtime;
 mod scripts;
