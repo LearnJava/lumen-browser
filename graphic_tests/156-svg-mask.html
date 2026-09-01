@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TEST-156: inline SVG &lt;mask&gt; element (LIB-9)</title>
+    <style>
+        body {
+            background: #ff00ff;
+            width: 1024px;
+            height: 720px;
+            margin: 0;
+            padding: 0;
+        }
+        .__f {
+            background: white;
+            width: 1022px;
+            height: 718px;
+            margin: 1px;
+            padding: 20px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .row {
+            display: flex;
+            gap: 20px;
+        }
+        .col {
+            width: 200px;
+        }
+        .label {
+            margin-top: 6px;
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="__f">
+        <!-- LIB-9: SVG <mask> element content, resolved from the DOM
+             (mask="url(#id)" or CSS mask:/mask-image:), rendered through
+             PushMaskLayer/PopMaskLayer (CSS Masking L1 §5) — the remainder of
+             LIB-5, which only wired gradients. Own SVG renderer had zero
+             <mask> support before this. -->
+        <div class="row">
+            <div class="col">
+                <svg width="200" height="120" viewBox="0 0 200 120">
+                    <defs>
+                        <mask id="m-half">
+                            <rect x="0" y="0" width="100" height="120" fill="white"/>
+                        </mask>
+                    </defs>
+                    <rect x="0" y="0" width="200" height="120" fill="#0000ff" mask="url(#m-half)"/>
+                </svg>
+                <div class="label">rect masked to left half</div>
+            </div>
+            <div class="col">
+                <svg width="200" height="120" viewBox="0 0 200 120">
+                    <defs>
+                        <mask id="m-circle">
+                            <circle cx="100" cy="60" r="35" fill="white"/>
+                        </mask>
+                    </defs>
+                    <circle cx="100" cy="60" r="55" fill="#008000" mask="url(#m-circle)"/>
+                </svg>
+                <div class="label">circle masked by smaller circle</div>
+            </div>
+            <div class="col">
+                <svg width="200" height="120" viewBox="0 0 200 120">
+                    <defs>
+                        <mask id="m-h">
+                            <rect x="20" y="10" width="30" height="100" fill="white"/>
+                            <rect x="20" y="10" width="160" height="30" fill="white"/>
+                            <rect x="150" y="10" width="30" height="100" fill="white"/>
+                        </mask>
+                    </defs>
+                    <rect x="0" y="0" width="200" height="120" fill="#ff8800" mask="url(#m-h)"/>
+                </svg>
+                <div class="label">multi-shape mask content ("H")</div>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col">
+                <svg width="200" height="120" viewBox="0 0 200 120">
+                    <defs>
+                        <!-- Default masking mode is luminance (SVG Masking L1
+                             §8.3): mid-gray (#808080, ~50% luma) at full
+                             alpha reveals the shape at ~50% opacity. -->
+                        <mask id="m-luma">
+                            <rect x="0" y="0" width="200" height="120" fill="#808080"/>
+                        </mask>
+                    </defs>
+                    <rect x="0" y="0" width="200" height="120" fill="#cc0000" mask="url(#m-luma)"/>
+                </svg>
+                <div class="label">mask-type: luminance (default) — half-visible</div>
+            </div>
+            <div class="col">
+                <svg width="200" height="120" viewBox="0 0 200 120">
+                    <defs>
+                        <!-- Same mid-gray content, but mask-type="alpha" reads
+                             only the alpha channel — fully opaque gray means
+                             mask value 1.0, so the shape is fully revealed
+                             (contrast with the luminance panel to its left). -->
+                        <mask id="m-alpha" mask-type="alpha">
+                            <rect x="0" y="0" width="200" height="120" fill="#808080"/>
+                        </mask>
+                    </defs>
+                    <rect x="0" y="0" width="200" height="120" fill="#cc0000" mask="url(#m-alpha)"/>
+                </svg>
+                <div class="label">mask-type: alpha — fully visible</div>
+            </div>
+            <div class="col">
+                <svg width="200" height="120" viewBox="0 0 200 120">
+                    <defs>
+                        <mask id="m-css">
+                            <ellipse cx="100" cy="60" rx="90" ry="45" fill="white"/>
+                        </mask>
+                    </defs>
+                    <!-- CSS `mask:` shorthand (not the presentation
+                         attribute) must resolve the same `<mask>` element. -->
+                    <path d="M10 10 L190 10 L190 110 L10 110 Z" fill="#6600cc" style="mask: url(#m-css)"/>
+                </svg>
+                <div class="label">path masked via CSS <code>mask:</code></div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

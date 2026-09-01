@@ -547,3 +547,90 @@ fn svg_use_clones_in_flex_keep_position_across_relayout() {
         );
     }
 }
+
+// ── LIB-9: `<mask>` element resolution ───────────────────────────────────────
+
+#[test]
+fn svg_mask_resolves_element_reference() {
+    let tree = do_layout(r#"<svg width="100" height="100">
+        <defs><mask id="m"><rect x="0" y="0" width="50" height="50" fill="white"/></mask></defs>
+        <rect x="0" y="0" width="50" height="50" mask="url(#m)"/>
+    </svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    let BoxKind::SvgShape { svg_mask, .. } = &shape.kind else { panic!("not SvgShape") };
+    let mask = svg_mask.as_ref().expect("mask=\"url(#m)\" should resolve to the <mask> element");
+    assert_eq!(mask.content.len(), 1, "mask's single <rect> child becomes one resolved box");
+    // SVG Masking L1 §8.3 default masking mode for a `<mask>` element source.
+    assert_eq!(mask.mode, lumen_layout::MaskMode::Luminance);
+}
+
+#[test]
+fn svg_mask_type_alpha_overrides_default_luminance() {
+    let tree = do_layout(r#"<svg width="100" height="100">
+        <defs><mask id="m" mask-type="alpha"><rect x="0" y="0" width="50" height="50" fill="white"/></mask></defs>
+        <rect x="0" y="0" width="50" height="50" mask="url(#m)"/>
+    </svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    let BoxKind::SvgShape { svg_mask, .. } = &shape.kind else { panic!("not SvgShape") };
+    let mask = svg_mask.as_ref().expect("mask should resolve");
+    assert_eq!(mask.mode, lumen_layout::MaskMode::Alpha);
+}
+
+#[test]
+fn svg_mask_unresolved_reference_is_none() {
+    // `#missing` names no element — falls back to "no mask resolved" rather
+    // than panicking or leaving a dangling reference.
+    let tree = do_layout(r#"<svg width="100" height="100"><rect x="0" y="0" width="50" height="50" mask="url(#missing)"/></svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    let BoxKind::SvgShape { svg_mask, .. } = &shape.kind else { panic!("not SvgShape") };
+    assert!(svg_mask.is_none());
+}
+
+#[test]
+fn svg_mask_reference_to_non_mask_element_is_none() {
+    // `#notamask` resolves, but is not a `<mask>` tag — must not be treated
+    // as one (the id could legitimately belong to a gradient, a `<use>`
+    // target, or any other element the author reused `mask: url(#id)` on by
+    // mistake).
+    let tree = do_layout(r#"<svg width="100" height="100">
+        <defs><rect id="notamask" x="0" y="0" width="10" height="10"/></defs>
+        <rect x="0" y="0" width="50" height="50" mask="url(#notamask)"/>
+    </svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    let BoxKind::SvgShape { svg_mask, .. } = &shape.kind else { panic!("not SvgShape") };
+    assert!(svg_mask.is_none());
+}
+
+#[test]
+fn svg_mask_empty_mask_element_is_none() {
+    // A `<mask>` with no drawable children resolves to "no mask" — the shape
+    // paints normally, matching the codebase's existing convention that an
+    // unavailable mask source composites as unmasked (see `PushMaskImage`'s
+    // "unregistered source → alpha=1.0" fallback), not as fully hidden.
+    let tree = do_layout(r#"<svg width="100" height="100">
+        <defs><mask id="m"></mask></defs>
+        <rect x="0" y="0" width="50" height="50" mask="url(#m)"/>
+    </svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    let BoxKind::SvgShape { svg_mask, .. } = &shape.kind else { panic!("not SvgShape") };
+    assert!(svg_mask.is_none());
+}
+
+#[test]
+fn svg_mask_content_is_laid_out_in_document_coordinates() {
+    // The mask's own `<rect>` child must go through the same viewBox scaling
+    // as any other SVG shape (`lay_out_svg_element_position` recurses into
+    // `svg_mask.content`) — not stay at its unlaid-out `Rect::ZERO`.
+    let tree = do_layout(r#"<svg width="100" height="100">
+        <defs><mask id="m"><rect x="5" y="5" width="20" height="20" fill="white"/></mask></defs>
+        <rect x="0" y="0" width="50" height="50" mask="url(#m)"/>
+    </svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    let BoxKind::SvgShape { svg_mask, .. } = &shape.kind else { panic!("not SvgShape") };
+    let mask = svg_mask.as_ref().expect("mask should resolve");
+    let mask_rect = mask.content[0].rect;
+    assert!(
+        (mask_rect.x - 5.0).abs() < 0.5 && (mask_rect.y - 5.0).abs() < 0.5,
+        "mask content laid out at document coords, got {:?}", mask_rect,
+    );
+}

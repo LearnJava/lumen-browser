@@ -1149,6 +1149,7 @@ mod tests {
                 shape: SvgShapeKind::Path { d: "M0 0 L10 10".to_owned() },
                 svg_transform: SvgTransform::translate(3.0, 4.0),
                 svg_paint_matrix: SvgTransform::identity(),
+                svg_mask: None,
             },
             BoxKind::SvgText {
                 text: "hi".to_owned(),
@@ -1172,11 +1173,13 @@ mod tests {
                 shape: SvgShapeKind::Circle { cx: 0.0, cy: 0.0, r: 1.0 },
                 svg_transform: SvgTransform::identity(),
                 svg_paint_matrix: SvgTransform::identity(),
+                svg_mask: None,
             },
             &BoxKind::SvgShape {
                 shape: SvgShapeKind::Circle { cx: 0.0, cy: 0.0, r: 2.0 },
                 svg_transform: SvgTransform::identity(),
                 svg_paint_matrix: SvgTransform::identity(),
+                svg_mask: None,
             },
         ));
     }
@@ -1193,11 +1196,13 @@ mod tests {
             shape: SvgShapeKind::Circle { cx: 1.0, cy: 1.0, r: 5.0 },
             svg_transform: SvgTransform::identity(),
             svg_paint_matrix: SvgTransform::identity(),
+            svg_mask: None,
         };
         let laid_out = BoxKind::SvgShape {
             shape: SvgShapeKind::Circle { cx: 1.0, cy: 1.0, r: 5.0 },
             svg_transform: SvgTransform::identity(),
             svg_paint_matrix: SvgTransform { matrix: [2.0, 0.0, 0.0, 2.0, 40.0, 12.0] },
+            svg_mask: None,
         };
         assert!(kind_layout_eq(&fresh, &laid_out));
     }

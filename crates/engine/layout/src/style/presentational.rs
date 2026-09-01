@@ -108,6 +108,11 @@ pub(in crate::style) fn apply_svg_presentational_hints(
         "baseline-shift",
         "color",
         "opacity",
+        // LIB-9 — `mask="url(#id)"` presentation attribute (CSS Masking L1
+        // §4.8 shorthand); routes through the same `"mask"` handler as the
+        // CSS property, so `resolve_svg_mask` (`box_tree/svg.rs`) sees it
+        // via `style.mask_layers` regardless of which form authored it.
+        "mask",
     ];
     let node_ref = doc.get(node);
     for &attr in ATTRS {

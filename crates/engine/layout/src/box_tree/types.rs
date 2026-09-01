@@ -229,6 +229,28 @@ pub struct InlineFrag {
     pub bidi_level: u8,
 }
 
+/// LIB-9 — resolved `<mask>` element content, attached to a masked
+/// [`BoxKind::SvgShape`] by `resolve_svg_mask` (`box_tree/svg.rs`). Kept off
+/// `ComputedStyle` (unlike the `SvgPaint::Gradient` LIB-5 resolved gradients
+/// live on) because it carries a nested `Vec<LayoutBox>` — `ComputedStyle`
+/// lives in the `style` module, which `box_tree` depends on, not the other
+/// way round, so a `LayoutBox`-shaped payload can only live here.
+#[derive(Debug, Clone)]
+pub struct SvgMaskContent {
+    /// The `<mask>` element's child shapes, resolved the same way as any
+    /// other SVG subtree (`collect_svg_shapes_impl`) and laid out in the
+    /// masked element's own coordinate system by
+    /// `lay_out_svg_element_position` (SVG Masking L1 §8.3 default
+    /// `maskContentUnits="userSpaceOnUse"`).
+    pub content: Vec<LayoutBox>,
+    /// SVG Masking L1 §8.3 `mask-type` read off the `<mask>` element —
+    /// `Luminance` (spec default for an SVG `<mask>` source) unless the
+    /// element sets `mask-type="alpha"`. Independent of `MaskLayer::mode`
+    /// (CSS `mask-mode`), which governs the unrelated raster-image/gradient
+    /// mask path and defaults to `Alpha` for those sources.
+    pub mode: crate::style::MaskMode,
+}
+
 #[derive(Debug, Clone)]
 pub enum BoxKind {
     /// Block-уровневый бокс (элемент или корень документа).
@@ -399,6 +421,16 @@ pub enum BoxKind {
         /// (inline-block wrap, incremental relayout) always recomposes from the
         /// pristine element transform rather than a previous pass's result.
         svg_paint_matrix: SvgTransform,
+        /// LIB-9 — resolved `<mask>` element reference (`mask`/`mask-image:
+        /// url(#id)`, or the `mask="url(#id)"` presentation attribute) when
+        /// `#id` names a same-document `<mask>` element. `None` when there is
+        /// no mask, or the reference does not resolve to a `<mask>` element
+        /// (falls back to the existing raster-image/gradient
+        /// `PushMaskImage`/`PushMask*Gradient` path via
+        /// `ComputedStyle::mask_layers`, unchanged). Resolved once at
+        /// box-tree construction time (`resolve_svg_mask`,
+        /// `box_tree/svg.rs`) — paint has no `Document` to resolve it from.
+        svg_mask: Option<Box<SvgMaskContent>>,
     },
     /// SVG text element (`<text>`, `<tspan>`, `<textPath>`).
     /// `LayoutBox.rect` is the text bounding box in *document coordinates*.

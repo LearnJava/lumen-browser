@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-01",
  "counts": {
-  "open": 364,
+  "open": 365,
   "fixed": 526,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 890,
+ "total_bugs": 891,
  "phases": [
   {
    "id": "P0",
@@ -6115,9 +6115,9 @@
       {
        "id": "LIB-9",
        "title": "LIB-9: SVG mask через PushMaskLayer",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Остаток LIB-5: SVG `<mask>` (`mask=\"url(#id)\"` на живом SVG-элементе, ссылающемся на `<mask>` с произвольным содержимым — не градиентная CSS `mask-image`, которая уже работает через `PushMaskImage`/`PushMaskGradient*`). Разблокирующая находка LIB-5: `DisplayCommand::PushMaskLayer`/`PopMaskLayer` (display_list.rs) — «рендерь содержимое между Push/Pop в офскрин-слой, применяй как альфа-маску» — уже целиком реализованы в cpu_raster.rs/femtovg_backend.rs/renderer.rs (комментарий в коде: «CSS Masking L1 §5»), но их не строит НИ ОДИН emit-путь: это готовый, но неиспользуемый механизм. Работа — только на emit-стороне (`box_tree/svg.rs`/`display_list/background_mask.rs`): резолвить `<mask>` по id (тот же паттерн, что `<use>`/градиенты), эмитить `PushMaskLayer` → display-команды содержимого маски (переиспользовать существующий SVG-shape-walk) → `PopMaskLayer`. Рендер-бэкенды трогать не нужно — только их первый настоящий вызывающий."
+       "note": "ЗАКРЫТ (частично, срез «SvgShape + CPU-путь»; wgpu-рендер немаскирован — вынесено в BUG-936) 2026-09-01 (ветка `p1-lib9-svg-mask`): остаток LIB-5 — SVG `<mask>` (`mask=\"url(#id)\"`/CSS `mask:` на живом SVG-shape-элементе rect/circle/ellipse/line/path/polygon/polyline, ссылающемся на `<mask>` с произвольным содержимым). Постановка «инфраструктура PushMaskLayer/PopMaskLayer уже целиком реализована во всех трёх бэкендах» оказалась НЕВЕРНОЙ при проверке: femtovg имел лишь scissor-заглушку, cpu_raster.rs не обрабатывал команды вовсе (падали в `_ => {}`) — реализовано по-настоящему только в wgpu. Взято: DOM-резолвинг в новом поле `BoxKind::SvgShape::svg_mask: Option<Box<SvgMaskContent>>` (`box_tree/svg.rs::resolve_svg_mask`, тот же паттерн, что LIB-5 для градиентов; поле — не на `LayoutBox`/`ComputedStyle`, чтобы не трогать сотню site конструкторов и не создавать цикл `style`↔`box_tree`), layout-проброс координат маски через `lay_out_svg_element_position`, paint-эмиссия изолирующего `PushOpacity{1.0}` + собственная заливка формы + `PushMaskLayer`/контент маски/`PopMaskLayer`/`PopOpacity` (`svg_text_decoration.rs::emit_svg_shape_masked`), presentational-атрибут `mask` добавлен в `apply_svg_presentational_hints`, `mask-type` читается с `<mask>`-элемента (luminance по умолчанию per SVG Masking L1 §8.3, а не alpha от `match-source`). `cpu_raster.rs` получил настоящую реализацию (`LayerComposite::MaskLayer`, читает alpha/luminance прямо из отрендеренного слоя без MaskSpec-заглушки) — обязательное условие CPU-снапшот-гейта, подтверждено визуально (`--screenshot` совпадает с Edge на всех 6 панелях `graphic_tests/156-svg-mask.html`). **НЕ закрыто**: (1) wgpu живое окно рендерит БЕЗ видимого эффекта маски несмотря на верный display-list и рабочий CPU-путь — найден, диагностирован (backend-независимо, Vulkan и DX12 идентичны), не устранён, заведён [BUG-936](bugs/BUG-936-OPEN.md), тест зарегистрирован в `KNOWN_DEBTORS` (10.02%); (2) `mask` на `<g>`-группах вне области (падает на прежнее поведение — не регрессия); (3) femtovg остаётся scissor-заглушкой (ADR-017: фолбэк, не дефолт). 6 unit-тестов резолвинга (`svg_layout.rs`), полный `graphic_tests/run.py --continue-on-fail` — 0 регрессий (дельта vs main пуста)."
       },
       {
        "id": "LIB-6",
@@ -8785,6 +8785,13 @@
    "status": "open",
    "title": "ADR-016 M4-инкрементальный путь для rAF-DOM-мутаций (`try_relayout_raf_incremental`) не выполняется на дефолтной сборке: `&&`-короткое замыкание в `relayout_raf…",
    "component": "shell (`crates/shell/src/relayout.rs` — `relayout_raf_dirty`/`relayout_raf_dirty_readback`)",
+   "date": null,
+   "debtor": true
+  },
+  "BUG-936": {
+   "status": "open",
+   "title": "`PushMaskLayer`/`PopMaskLayer` (CSS Masking L1 §5) wgpu-композит не даёт видимого эффекта маски в живом окне — контент рендерится немаскированным, хотя display-…",
+   "component": "paint (`crates/engine/paint/src/renderer.rs` — `MaskLayerComposite`)",
    "date": null,
    "debtor": true
   },
@@ -13641,6 +13648,9 @@
   ],
   "paint (`crates/engine/paint/src/cpu_raster.rs` — `gaussian_blur`: `radius` не ограничен размером слоя; `box_blur_h`/`box_blur_v` — прайминг аккумулятора `for i in -r..=r`, O(r) на строку/столбец)": [
    "BUG-850"
+  ],
+  "paint (`crates/engine/paint/src/renderer.rs` — `MaskLayerComposite`)": [
+   "BUG-936"
   ],
   "paint (`crates/engine/paint/src/renderer.rs` — wgpu `render_impl`, `PushScrollLayer`/`FillRect`/`sync_scissor_to_stack`/`bind_and_draw!`/`run_draw_ops!`)": [
    "BUG-931"

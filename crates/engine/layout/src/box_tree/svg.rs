@@ -577,6 +577,67 @@ fn resolve_svg_paint_url(doc: &Document, paint: &mut SvgPaint) {
         .unwrap_or(SvgPaint::None);
 }
 
+/// LIB-9 — resolves `style.mask_layers`' top layer into `<mask>` element
+/// content when its `url(#id)` names a same-document `<mask>` element.
+/// `None` when there is no mask layer, the source isn't a fragment `url()`,
+/// or `#id` doesn't resolve to a `<mask>` tag — those keep going through the
+/// existing raster-image/gradient `PushMaskImage`/`PushMask*Gradient` path
+/// unchanged (`style.mask_layers` itself is never touched here).
+///
+/// Only the top (first) layer is considered, mirroring
+/// `rendered_mask_layers`'s existing single-layer fallback for the
+/// image/gradient path in `lumen-paint` — combining a `<mask>`-element
+/// reference with `mask-composite` layering is out of scope.
+#[allow(clippy::too_many_arguments)]
+fn resolve_svg_mask(
+    doc: &Document,
+    sheet: &Stylesheet,
+    style: &ComputedStyle,
+    viewport: Size,
+    own_svg_size: Size,
+    flat: &FlatTree,
+    dark_mode: bool,
+    use_stack: &[NodeId],
+) -> Option<Box<SvgMaskContent>> {
+    let layer = style.mask_layers.first()?;
+    let BackgroundImage::Url(url) = &layer.image else { return None };
+    let id = url.strip_prefix('#')?;
+    let mask_id = doc.find_by_id(id)?;
+    // Cycle guard: a `<mask>` whose content (directly or via a descendant)
+    // references itself would otherwise recurse forever through
+    // `collect_svg_shapes_impl` → `process_svg_node` → `resolve_svg_mask`.
+    // Reuses `<use>`'s own cycle-detection stack (`use_stack`) instead of
+    // adding a second one.
+    if use_stack.contains(&mask_id) {
+        return None;
+    }
+    let tag = doc.get(mask_id).element_name()?.local.as_str().to_owned();
+    if !tag.eq_ignore_ascii_case("mask") {
+        return None;
+    }
+    // SVG Masking L1 §8.3 — an SVG `<mask>` element's own default masking
+    // mode is luminance, unlike a CSS raster/gradient mask source
+    // (`match-source` resolves to alpha for those — `MaskLayer::mode` /
+    // `MaskMode::default()` is for THAT case, not this one).
+    let mode = match doc.get(mask_id).get_attr("mask-type") {
+        Some(v) if v.trim().eq_ignore_ascii_case("alpha") => crate::style::MaskMode::Alpha,
+        _ => crate::style::MaskMode::Luminance,
+    };
+    let mut new_stack = use_stack.to_vec();
+    new_stack.push(mask_id);
+    let mut content = Vec::new();
+    // SVG Masking L1 §8.3 default `maskContentUnits="userSpaceOnUse"`: the
+    // mask's content shares the masked element's own coordinate system, so
+    // it is resolved with the same `inherited` style context `<use>` passes
+    // its clone target (`style`, the masked element's own computed style) —
+    // not the ambient `inherited` this element itself was cascaded from.
+    collect_svg_shapes_impl(doc, sheet, mask_id, style, viewport, own_svg_size, flat, &mut content, dark_mode, &new_stack);
+    if content.is_empty() {
+        return None;
+    }
+    Some(Box::new(SvgMaskContent { content, mode }))
+}
+
 /// Parses the SVG `viewBox="min-x min-y width height"` attribute.
 /// Returns `None` if the attribute is absent or malformed.
 pub(crate) fn parse_view_box(doc: &Document, id: NodeId) -> Option<ViewBox> {
@@ -1050,6 +1111,7 @@ fn process_svg_node(
 
     match name.local.as_str() {
         "rect" => {
+            let svg_mask = resolve_svg_mask(doc, sheet, &style, viewport, own_svg_size, flat, dark_mode, use_stack);
             out.push(LayoutBox {
                 node: child_id, rect: Rect::ZERO, style,
                 kind: BoxKind::SvgShape {
@@ -1063,6 +1125,7 @@ fn process_svg_node(
                     },
                     svg_transform: svg_transform.clone(),
                     svg_paint_matrix: SvgTransform::identity(),
+                    svg_mask,
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
                 origin: BoxOrigin { node: Some(child_id), role: BoxRole::Element },
@@ -1071,6 +1134,7 @@ fn process_svg_node(
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "circle" => {
+            let svg_mask = resolve_svg_mask(doc, sheet, &style, viewport, own_svg_size, flat, dark_mode, use_stack);
             out.push(LayoutBox {
                 node: child_id, rect: Rect::ZERO, style,
                 kind: BoxKind::SvgShape {
@@ -1081,6 +1145,7 @@ fn process_svg_node(
                     },
                     svg_transform: svg_transform.clone(),
                     svg_paint_matrix: SvgTransform::identity(),
+                    svg_mask,
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
                 origin: BoxOrigin { node: Some(child_id), role: BoxRole::Element },
@@ -1088,6 +1153,7 @@ fn process_svg_node(
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "ellipse" => {
+            let svg_mask = resolve_svg_mask(doc, sheet, &style, viewport, own_svg_size, flat, dark_mode, use_stack);
             out.push(LayoutBox {
                 node: child_id, rect: Rect::ZERO, style,
                 kind: BoxKind::SvgShape {
@@ -1099,6 +1165,7 @@ fn process_svg_node(
                     },
                     svg_transform: svg_transform.clone(),
                     svg_paint_matrix: SvgTransform::identity(),
+                    svg_mask,
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
                 origin: BoxOrigin { node: Some(child_id), role: BoxRole::Element },
@@ -1106,6 +1173,7 @@ fn process_svg_node(
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
         "line" => {
+            let svg_mask = resolve_svg_mask(doc, sheet, &style, viewport, own_svg_size, flat, dark_mode, use_stack);
             out.push(LayoutBox {
                 node: child_id, rect: Rect::ZERO, style,
                 kind: BoxKind::SvgShape {
@@ -1117,6 +1185,7 @@ fn process_svg_node(
                     },
                     svg_transform: svg_transform.clone(),
                     svg_paint_matrix: SvgTransform::identity(),
+                    svg_mask,
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
                 origin: BoxOrigin { node: Some(child_id), role: BoxRole::Element },
@@ -1125,9 +1194,10 @@ fn process_svg_node(
         }
         "path" => {
             let d = doc.get(child_id).get_attr("d").unwrap_or("").to_string();
+            let svg_mask = resolve_svg_mask(doc, sheet, &style, viewport, own_svg_size, flat, dark_mode, use_stack);
             out.push(LayoutBox {
                 node: child_id, rect: Rect::ZERO, style,
-                kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone(), svg_paint_matrix: SvgTransform::identity() },
+                kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone(), svg_paint_matrix: SvgTransform::identity(), svg_mask },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
                 origin: BoxOrigin { node: Some(child_id), role: BoxRole::Element },
             });
@@ -1276,9 +1346,10 @@ fn process_svg_node(
             let close = name.local.eq_ignore_ascii_case("polygon");
             let points = parse_svg_points(doc.get(child_id).get_attr("points").unwrap_or(""));
             if let Some(d) = points_to_path_d(&points, close) {
+                let svg_mask = resolve_svg_mask(doc, sheet, &style, viewport, own_svg_size, flat, dark_mode, use_stack);
                 out.push(LayoutBox {
                     node: child_id, rect: Rect::ZERO, style,
-                    kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone(), svg_paint_matrix: SvgTransform::identity() },
+                    kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone(), svg_paint_matrix: SvgTransform::identity(), svg_mask },
                     children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
                 origin: BoxOrigin { node: Some(child_id), role: BoxRole::Element },
                 });
@@ -1438,10 +1509,18 @@ fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy
     // be misread as the element transform on the second pass, drifting the shape
     // out of its clip. Pure translate/scale (b=c=0) leaves paint on its existing
     // axis-aligned `b.rect` fast path.
-    if let BoxKind::SvgShape { svg_paint_matrix, .. } = &mut b.kind {
+    if let BoxKind::SvgShape { svg_paint_matrix, svg_mask, .. } = &mut b.kind {
         let mut m_doc = SvgTransform { matrix: [sx, 0.0, 0.0, sy, ox, oy] };
         m_doc.compose(&composed);
         *svg_paint_matrix = m_doc;
+        // LIB-9 — the `<mask>` element's content shares the masked shape's own
+        // coordinate system (SVG Masking L1 §8.3 default
+        // `maskContentUnits="userSpaceOnUse"`), so it is laid out with the same
+        // viewport (ox, oy, sx, sy) and the shape's own `composed` transform —
+        // mirroring how a `<g>` group lays out its children above.
+        if let Some(mask) = svg_mask {
+            lay_out_svg_children_positions(&mut mask.content, ox, oy, sx, sy, &composed);
+        }
     }
 }
 
