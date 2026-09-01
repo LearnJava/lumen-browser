@@ -481,6 +481,63 @@ pub fn find_layout_box(root: &LayoutBox, node: NodeId) -> Option<&LayoutBox> {
     None
 }
 
+/// FRAME-7 (remainder item 1): caret bar rect for a focused `<textarea>`,
+/// computed straight from the layout box tree rather than the painted
+/// display list — cursor movement (Left/Right/Home/End) does not force a
+/// relayout, but it also does not move any glyph, so re-reading `field_box`'s
+/// (cached, still valid) geometry each frame is correct.
+///
+/// `field_box` is the `<textarea>`'s `FormControl` box. Its value is ordinary
+/// inline content (BUG-441), laid out as a child `InlineRun` box only once the
+/// control has a runtime ("dirty") value — an untouched, freshly focused
+/// textarea still shows its default DOM content and has no such child yet, so
+/// this falls back to the box's own content edge (border + padding) for line
+/// 0. Multi-line placement walks `value`'s `\n`-split *logical* lines, not the
+/// `InlineRun`'s real *visual* lines — a `pre-wrap` line that word-wraps into
+/// more than one visual row is not accounted for (the same tolerance for
+/// approximation `emit_input_caret` already documents for `<input>`).
+pub fn textarea_caret_rect(
+    field_box: &LayoutBox,
+    value: &str,
+    cursor: usize,
+    measure: &dyn Fn(&str) -> f32,
+) -> Rect {
+    let s = &field_box.style;
+    let inline_run = field_box
+        .children
+        .iter()
+        .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }));
+    let (content_x, content_y) = match inline_run {
+        Some(ir) => (ir.rect.x, ir.rect.y),
+        None => (
+            field_box.rect.x + s.border_left_width + s.padding_left.px(),
+            field_box.rect.y + s.border_top_width + s.padding_top.px(),
+        ),
+    };
+    let raw_line_h = s.font_size * s.line_height;
+    let line_h = if s.line_height_step > 0.0 {
+        (raw_line_h / s.line_height_step).ceil() * s.line_height_step
+    } else {
+        raw_line_h
+    };
+
+    let mut remaining = cursor;
+    let mut line_idx = 0usize;
+    let mut prefix = String::new();
+    for (i, line) in value.split('\n').enumerate() {
+        line_idx = i;
+        let n = line.chars().count();
+        if remaining <= n {
+            prefix = line.chars().take(remaining).collect();
+            break;
+        }
+        remaining -= n + 1; // +1 for the '\n' consumed between logical lines
+        prefix.clear();
+    }
+
+    Rect::new(content_x + measure(&prefix), content_y + line_idx as f32 * line_h, 1.0, line_h)
+}
+
 /// Walk `doc` and collect all NodeIds with `data-lumen-modal` attribute
 /// (set by `dialog.showModal()`, cleared by `close()` and Escape handler).
 /// Returns them in DOM order (first opened first).
@@ -2548,5 +2605,97 @@ mod tests {
         let anchor = Rect::new(10.0, 10.0, 120.0, 22.0);
         let dl = build_date_picker(anchor, 0.0, 1024.0, 2026, 6);
         assert!(!dl.is_empty(), "date picker display list should not be empty");
+    }
+
+    // ── FRAME-7 (remainder item 1): <textarea> caret geometry ───────────────
+
+    fn make_field_lb(node: NodeId, rect: Rect, children: Vec<LayoutBox>) -> LayoutBox {
+        LayoutBox {
+            node,
+            rect,
+            style: std::sync::Arc::new(ComputedStyle::root()),
+            kind: BoxKind::Block,
+            children,
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: DirtyBits::CLEAN,
+            origin: lumen_layout::BoxOrigin { node: Some(node), role: lumen_layout::BoxRole::Element },
+        }
+    }
+
+    fn make_inline_run_lb(node: NodeId, rect: Rect) -> LayoutBox {
+        LayoutBox {
+            node,
+            rect,
+            style: std::sync::Arc::new(ComputedStyle::root()),
+            kind: BoxKind::InlineRun { segments: vec![], lines: vec![], first_line_style: None },
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: DirtyBits::CLEAN,
+            origin: lumen_layout::BoxOrigin { node: Some(node), role: lumen_layout::BoxRole::AnonymousInlineRun },
+        }
+    }
+
+    /// 8px/char stand-in measurer — the real one is a bundled-font
+    /// `FontMeasurer`, not available to this crate's unit tests.
+    fn char_width_measure(s: &str) -> f32 {
+        s.chars().count() as f32 * 8.0
+    }
+
+    #[test]
+    fn textarea_caret_rect_empty_value_falls_back_to_content_edge() {
+        let node = NodeId::from_index(1);
+        let field = make_field_lb(node, Rect::new(10.0, 20.0, 100.0, 50.0), vec![]);
+        let rect = textarea_caret_rect(&field, "", 0, &char_width_measure);
+        // No InlineRun child (untouched textarea) → border+padding content
+        // edge, both zero on `ComputedStyle::root()`.
+        assert_eq!(rect.x, 10.0);
+        assert_eq!(rect.y, 20.0);
+        assert_eq!(rect.height, 16.0 * 1.2);
+    }
+
+    #[test]
+    fn textarea_caret_rect_multiline_lands_on_second_logical_line() {
+        let node = NodeId::from_index(1);
+        let field = make_field_lb(node, Rect::new(0.0, 0.0, 100.0, 50.0), vec![]);
+        // "ab\ncd", cursor=4 → one char into the second logical line ("c").
+        let rect = textarea_caret_rect(&field, "ab\ncd", 4, &char_width_measure);
+        let line_h = 16.0 * 1.2;
+        assert_eq!(rect.x, 8.0); // one char ("c") at 8px/char
+        assert_eq!(rect.y, line_h);
+        assert_eq!(rect.height, line_h);
+    }
+
+    #[test]
+    fn textarea_caret_rect_end_of_value() {
+        let node = NodeId::from_index(1);
+        let field = make_field_lb(node, Rect::new(0.0, 0.0, 100.0, 50.0), vec![]);
+        let rect = textarea_caret_rect(&field, "ab\ncd", 5, &char_width_measure);
+        let line_h = 16.0 * 1.2;
+        assert_eq!(rect.x, 16.0); // "cd" fully consumed, 2 chars
+        assert_eq!(rect.y, line_h);
+    }
+
+    #[test]
+    fn textarea_caret_rect_prefers_inline_run_child_origin() {
+        let node = NodeId::from_index(1);
+        // The FormControl box's own border-box has no border/padding set
+        // here either, but a real InlineRun child (present once the value
+        // is "dirty"/runtime) must still win over the fallback — its
+        // `.rect` already reflects the true layout-resolved content origin,
+        // which a hand-rolled border+padding sum would not for e.g.
+        // percentage padding.
+        let inline_run = make_inline_run_lb(node, Rect::new(7.0, 9.0, 90.0, 40.0));
+        let field = make_field_lb(node, Rect::new(0.0, 0.0, 100.0, 50.0), vec![inline_run]);
+        let rect = textarea_caret_rect(&field, "x", 0, &char_width_measure);
+        assert_eq!(rect.x, 7.0);
+        assert_eq!(rect.y, 9.0);
     }
 }

@@ -127,6 +127,25 @@ impl Lumen {
         Some((nid, cursor.min(len)))
     }
 
+    /// FRAME-7 (remainder item 1): the focused page-level `<textarea>`'s
+    /// char-index cursor and current value, if a caret bar should be painted
+    /// this frame — `None` when nothing typeable/textarea is focused.
+    /// Read-only, like `focused_input_caret`. Kept as a separate query rather
+    /// than folding into `focused_input_caret`: the two paint through
+    /// entirely different mechanisms (`CompositorOverride` vs. a shell-side
+    /// overlay — see `redraw_requested.rs` and `forms::textarea_caret_rect`),
+    /// so a caller must already know which one it wants.
+    pub(crate) fn focused_textarea_caret(&self) -> Option<(lumen_dom::NodeId, usize, String)> {
+        let nid = self.focused_node?;
+        let (kind, current) = self.typeable_field(nid)?;
+        if kind != TypeableField::Textarea {
+            return None;
+        }
+        let len = char_len(&current);
+        let cursor = self.form_state.get(&nid).and_then(|s| s.cursor).unwrap_or(len);
+        Some((nid, cursor.min(len), current))
+    }
+
     /// Move the focused field's text cursor by `delta` chars (Left = `-1`,
     /// Right = `+1`), clamped to `[0, value length]`. `true` iff a typeable
     /// field was focused (regardless of whether the cursor was already at the
