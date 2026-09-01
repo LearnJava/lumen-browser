@@ -1,8 +1,7 @@
 //! Sequential focus navigation order (HTML Standard §6.6.6) — which DOM
 //! nodes Tab/Shift+Tab reach and in what order (FRAME-7 срез 2: page-level
-//! Tab focus; frame-interior navigation stays a remainder, see
-//! `STATUS-P1.md`'s FRAME-7 row — the frame is "interactively blind" for the
-//! same reason it has no `:focus`/`:hover` yet).
+//! Tab focus; срез 4: the same walk reused, non-wrapping, for a frame's OWN
+//! document — see [`next_focus_target_no_wrap`] and `crate::lumen::focus_tab`).
 //!
 //! Pure tree walk over a `Document` + its `FlatTree` (composed order, so
 //! Shadow DOM content participates) — no layout dependency, so it says
@@ -108,6 +107,36 @@ pub(crate) fn next_focus_target(
     Some(order[next_idx])
 }
 
+/// Like [`next_focus_target`] but does not wrap: `None` once `current` is the
+/// last (`forward`) / first (backward) entry, or `root`'s document has no
+/// focusable node at all (FRAME-7 срез 4).
+///
+/// A frame's own document is a NESTED browsing context (HTML Standard
+/// §6.6.6) — wrapping at its own boundary would trap Tab inside a frame that
+/// has any focusable field at all, when the correct behaviour is to hand
+/// focus back to the CONTAINER's order once the frame's own is exhausted.
+/// `crate::lumen::focus_tab::advance_frame_focus` falls back to
+/// `advance_page_focus` exactly when this returns `None`.
+pub(crate) fn next_focus_target_no_wrap(
+    doc: &Document,
+    flat_tree: &FlatTree,
+    root: NodeId,
+    current: Option<NodeId>,
+    forward: bool,
+) -> Option<NodeId> {
+    let order = build_focus_order(doc, flat_tree, root);
+    if order.is_empty() {
+        return None;
+    }
+    let pos = current.and_then(|c| order.iter().position(|&id| id == c));
+    match (pos, forward) {
+        (Some(i), true) => order.get(i + 1).copied(),
+        (Some(i), false) => (i > 0).then(|| order[i - 1]),
+        (None, true) => order.first().copied(),
+        (None, false) => order.last().copied(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +230,46 @@ mod tests {
         let doc = parse("<body><p>text only</p></body>");
         let flat = lumen_dom::build_flat_tree(&doc);
         assert_eq!(next_focus_target(&doc, &flat, doc.root(), None, true), None);
+    }
+
+    #[test]
+    fn no_wrap_stops_at_either_end() {
+        let doc = parse("<body><input id=a><input id=b><input id=c></body>");
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let (a, b, c) = (
+            find(&doc, "a").unwrap(),
+            find(&doc, "b").unwrap(),
+            find(&doc, "c").unwrap(),
+        );
+        assert_eq!(
+            next_focus_target_no_wrap(&doc, &flat, doc.root(), Some(a), true),
+            Some(b)
+        );
+        assert_eq!(
+            next_focus_target_no_wrap(&doc, &flat, doc.root(), Some(c), true),
+            None
+        );
+        assert_eq!(
+            next_focus_target_no_wrap(&doc, &flat, doc.root(), Some(a), false),
+            None
+        );
+        assert_eq!(
+            next_focus_target_no_wrap(&doc, &flat, doc.root(), None, true),
+            Some(a)
+        );
+        assert_eq!(
+            next_focus_target_no_wrap(&doc, &flat, doc.root(), None, false),
+            Some(c)
+        );
+    }
+
+    #[test]
+    fn no_wrap_no_focusable_elements_returns_none() {
+        let doc = parse("<body><p>text only</p></body>");
+        let flat = lumen_dom::build_flat_tree(&doc);
+        assert_eq!(
+            next_focus_target_no_wrap(&doc, &flat, doc.root(), None, true),
+            None
+        );
     }
 }

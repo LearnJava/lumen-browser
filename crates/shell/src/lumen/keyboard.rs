@@ -485,17 +485,29 @@ impl Lumen {
         }
 
         // Tab / Shift+Tab: page-wide sequential focus navigation (FRAME-7
-        // срез 2, HTML Standard §6.6.6). Must run before the global
-        // keybinding table below: the table binds only Ctrl+Tab (tab
+        // срез 2, HTML Standard §6.6.6), and — since срез 4 — the frame's OWN
+        // order first when focus is already inside one. Must run before the
+        // global keybinding table below: the table binds only Ctrl+Tab (tab
         // switching, `KeyCommand::NextTab`), so a plain/Shift Tab reaching it
-        // resolves to no command at all and did nothing before this slice.
+        // resolves to no command at all and did nothing before срез 2.
         // Always consumed regardless of outcome — a page must never be able
         // to make Tab fall through to some other action.
         if (self.modifiers.is_empty() || self.modifiers == ModifiersState::SHIFT)
             && code == KeyCode::Tab
             && !key_event.repeat
         {
-            if self.advance_page_focus(self.modifiers.is_empty()) {
+            let forward = self.modifiers.is_empty();
+            // Frame's own order first (срез 4); `advance_page_focus` is the
+            // fallback that leaves the frame once IT reports exhausted —
+            // `self.focused_node` still addresses the `<iframe>` host, so
+            // that call lands on the right page-level sibling either way.
+            let moved = match self.focused_frame {
+                Some((idx, _)) => {
+                    self.advance_frame_focus(idx, forward) || self.advance_page_focus(forward)
+                }
+                None => self.advance_page_focus(forward),
+            };
+            if moved {
                 self.request_redraw();
             }
             return;
