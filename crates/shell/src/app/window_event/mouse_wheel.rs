@@ -8,7 +8,7 @@ use crate::*;
 
 impl Lumen {
     pub(crate) fn on_mouse_wheel(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
-        // DevTools inspector intercepts the wheel while visible (§7E.2):
+        // DevTools inspector intercepts the wheel while visible (В§7E.2):
         // scroll the active tab's property list. The Network tab is
         // page-wide and scrolls even without a pinned element.
         if self.dom_inspector.visible
@@ -61,7 +61,7 @@ impl Lumen {
             self.request_redraw();
             return;
         }
-        // §12.3 Read-later panel intercepts the wheel while visible.
+        // В§12.3 Read-later panel intercepts the wheel while visible.
         if self.read_later_panel.visible {
             let lines = match delta {
                 MouseScrollDelta::LineDelta(_, l) => l,
@@ -94,7 +94,7 @@ impl Lumen {
                 MouseScrollDelta::LineDelta(_, l) => l,
                 MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
             };
-            // winit: wheel up → lines > 0 → scroll content up (scroll_y -=).
+            // winit: wheel up в†’ lines > 0 в†’ scroll content up (scroll_y -=).
             self.bookmark_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
             self.request_redraw();
             return;
@@ -109,7 +109,7 @@ impl Lumen {
             self.request_redraw();
             return;
         }
-        // Keyboard shortcuts panel intercepts the wheel while visible (§D-4).
+        // Keyboard shortcuts panel intercepts the wheel while visible (В§D-4).
         if self.shortcuts_panel.visible {
             let lines = match delta {
                 MouseScrollDelta::LineDelta(_, l) => l,
@@ -119,7 +119,7 @@ impl Lumen {
             self.request_redraw();
             return;
         }
-        // Certificate viewer panel intercepts the wheel while visible (§D-1).
+        // Certificate viewer panel intercepts the wheel while visible (В§D-1).
         if self.cert_panel.visible {
             let lines = match delta {
                 MouseScrollDelta::LineDelta(_, l) => l,
@@ -146,13 +146,13 @@ impl Lumen {
             self.request_redraw();
             return;
         }
-        // winit отдаёт два типа дельты:
-        // - LineDelta(cols, lines): mouse wheel notch, нет momentum.
-        // - PixelDelta({x, y}): тачпад, device px, делим на DPR.
-        //   Отслеживаем velocity для momentum при TouchPhase::Ended.
-        // Y: winit y > 0 — wheel up → scroll_y -= delta.
-        // X: winit x > 0 — wheel left → scroll_x -= delta.
-        // Shift+вертикальный wheel → горизонтальный скролл.
+        // winit РѕС‚РґР°С‘С‚ РґРІР° С‚РёРїР° РґРµР»СЊС‚С‹:
+        // - LineDelta(cols, lines): mouse wheel notch, РЅРµС‚ momentum.
+        // - PixelDelta({x, y}): С‚Р°С‡РїР°Рґ, device px, РґРµР»РёРј РЅР° DPR.
+        //   РћС‚СЃР»РµР¶РёРІР°РµРј velocity РґР»СЏ momentum РїСЂРё TouchPhase::Ended.
+        // Y: winit y > 0 вЂ” wheel up в†’ scroll_y -= delta.
+        // X: winit x > 0 вЂ” wheel left в†’ scroll_x -= delta.
+        // Shift+РІРµСЂС‚РёРєР°Р»СЊРЅС‹Р№ wheel в†’ РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅС‹Р№ СЃРєСЂРѕР»Р».
         let dpr = self
             .renderer
             .as_ref()
@@ -167,7 +167,7 @@ impl Lumen {
 
         match delta {
             MouseScrollDelta::LineDelta(cols, lines) => {
-                // Mouse wheel: дискретные тики, momentum не нужен.
+                // Mouse wheel: РґРёСЃРєСЂРµС‚РЅС‹Рµ С‚РёРєРё, momentum РЅРµ РЅСѓР¶РµРЅ.
                 self.momentum_anim = None;
                 self.forward_momentum_stop();
                 self.touchpad_vel = (0.0, 0.0);
@@ -191,14 +191,14 @@ impl Lumen {
                         }
                     }
                     self.request_redraw();
-                } else if self.try_scroll_frame(dy_css) {
-                    // BUG-480 срез 17: колесо над содержимым фрейма
-                    // крутит его под-документ, а не страницу. Проверяется
-                    // ДО overflow-контейнеров: фрейм — ближайший к курсору
-                    // скроллер, а контейнеры в этом списке — всегда боксы
-                    // РЎРўР РђРќРР¦Р«, то есть предки хоста фрейма.
+                } else if self.try_scroll_frame(dx_css, dy_css) {
+                    // BUG-480 СЃСЂРµР· 17: РєРѕР»РµСЃРѕ РЅР°Рґ СЃРѕРґРµСЂР¶РёРјС‹Рј С„СЂРµР№РјР°
+                    // РєСЂСѓС‚РёС‚ РµРіРѕ РїРѕРґ-РґРѕРєСѓРјРµРЅС‚, Р° РЅРµ СЃС‚СЂР°РЅРёС†Сѓ. РџСЂРѕРІРµСЂСЏРµС‚СЃСЏ
+                    // Р”Рћ overflow-РєРѕРЅС‚РµР№РЅРµСЂРѕРІ: С„СЂРµР№Рј вЂ” Р±Р»РёР¶Р°Р№С€РёР№ Рє РєСѓСЂСЃРѕСЂСѓ
+                    // СЃРєСЂРѕР»Р»РµСЂ, Р° РєРѕРЅС‚РµР№РЅРµСЂС‹ РІ СЌС‚РѕРј СЃРїРёСЃРєРµ вЂ” РІСЃРµРіРґР° Р±РѕРєСЃС‹
+                    // РЎРўР РђРќРР¦Р«, С‚Рѕ РµСЃС‚СЊ РїСЂРµРґРєРё С…РѕСЃС‚Р° С„СЂРµР№РјР°.
                 } else if self.try_scroll_overflow_container(dx_css, dy_css) {
-                    // Wheel was consumed by an overflow container — do not
+                    // Wheel was consumed by an overflow container вЂ” do not
                     // scroll the page.
                 } else {
                     if dx_css != 0.0 { self.scroll_x_by(dx_css); }
@@ -207,8 +207,8 @@ impl Lumen {
                     // right here, which made it a property of the mouse
                     // wheel rather than of the position. It is now fired
                     // from the RedrawRequested scroll step for every
-                    // movement — including the frames of the smooth
-                    // animation this wheel notch just started — so a
+                    // movement вЂ” including the frames of the smooth
+                    // animation this wheel notch just started вЂ” so a
                     // second dispatch here would only duplicate it (and
                     // would still fire at the very bottom, where the
                     // wheel changes nothing).
@@ -221,16 +221,16 @@ impl Lumen {
 
                 match phase {
                     TouchPhase::Ended | TouchPhase::Cancelled => {
-                        // Палец снят: запускаем momentum если есть
-                        // скорость (фаза Ended) или сбрасываем (Cancelled).
+                        // РџР°Р»РµС† СЃРЅСЏС‚: Р·Р°РїСѓСЃРєР°РµРј momentum РµСЃР»Рё РµСЃС‚СЊ
+                        // СЃРєРѕСЂРѕСЃС‚СЊ (С„Р°Р·Р° Ended) РёР»Рё СЃР±СЂР°СЃС‹РІР°РµРј (Cancelled).
                         if phase == TouchPhase::Ended {
                             let (vx, vy) = self.touchpad_vel;
                             if vx.abs() + vy.abs() >= momentum_anim::MIN_VELOCITY_PX_MS {
                                 let now = self.epoch.elapsed().as_secs_f64() * 1000.0;
                                 self.momentum_anim =
                                     Some(momentum_anim::MomentumAnim::new(vy, vx, now));
-                                // ADR-016 M1.3: рендер-поток продолжит
-                                // инерцию сам, если UI-поток застопорится.
+                                // ADR-016 M1.3: СЂРµРЅРґРµСЂ-РїРѕС‚РѕРє РїСЂРѕРґРѕР»Р¶РёС‚
+                                // РёРЅРµСЂС†РёСЋ СЃР°Рј, РµСЃР»Рё UI-РїРѕС‚РѕРє Р·Р°СЃС‚РѕРїРѕСЂРёС‚СЃСЏ.
                                 self.forward_momentum_start(vy, vx);
                                 self.request_redraw();
                             }
@@ -238,7 +238,7 @@ impl Lumen {
                         self.touchpad_vel = (0.0, 0.0);
                     }
                     TouchPhase::Started => {
-                        // Новый жест: сбросить momentum и velocity.
+                        // РќРѕРІС‹Р№ Р¶РµСЃС‚: СЃР±СЂРѕСЃРёС‚СЊ momentum Рё velocity.
                         self.momentum_anim = None;
                         self.forward_momentum_stop();
                         self.touchpad_vel = (0.0, 0.0);
@@ -255,8 +255,8 @@ impl Lumen {
                                     (sv.right.scroll_y + dy_css).clamp(0.0, max);
                             }
                             self.request_redraw();
-                        } else if self.try_scroll_frame(dy_css) {
-                            // BUG-480 срез 17: тот же адресат, что и у колеса.
+                        } else if self.try_scroll_frame(dx_css, dy_css) {
+                            // BUG-480 СЃСЂРµР· 17: С‚РѕС‚ Р¶Рµ Р°РґСЂРµСЃР°С‚, С‡С‚Рѕ Рё Сѓ РєРѕР»РµСЃР°.
                         } else if self.try_scroll_overflow_container(dx_css, dy_css) {
                             // Touchpad gesture started over overflow container.
                         } else {
@@ -265,12 +265,12 @@ impl Lumen {
                         }
                     }
                     TouchPhase::Moved => {
-                        // Палец движется: обновляем scroll и velocity (EWMA).
+                        // РџР°Р»РµС† РґРІРёР¶РµС‚СЃСЏ: РѕР±РЅРѕРІР»СЏРµРј scroll Рё velocity (EWMA).
                         let now = self.epoch.elapsed().as_secs_f64() * 1000.0;
                         let dt = (now - self.touchpad_vel_time_ms).max(1.0);
                         self.touchpad_vel_time_ms = now;
-                        // EWMA alpha = 0.6: быстро следует за движением,
-                        // сглаживает дрожание.
+                        // EWMA alpha = 0.6: Р±С‹СЃС‚СЂРѕ СЃР»РµРґСѓРµС‚ Р·Р° РґРІРёР¶РµРЅРёРµРј,
+                        // СЃРіР»Р°Р¶РёРІР°РµС‚ РґСЂРѕР¶Р°РЅРёРµ.
                         const ALPHA: f32 = 0.6;
                         let inst_x = dx_css / dt as f32;
                         let inst_y = dy_css / dt as f32;
@@ -290,8 +290,8 @@ impl Lumen {
                                     (sv.right.scroll_y + dy_css).clamp(0.0, max);
                             }
                             self.request_redraw();
-                        } else if self.try_scroll_frame(dy_css) {
-                            // BUG-480 срез 17: тот же адресат, что и у колеса.
+                        } else if self.try_scroll_frame(dx_css, dy_css) {
+                            // BUG-480 СЃСЂРµР· 17: С‚РѕС‚ Р¶Рµ Р°РґСЂРµСЃР°С‚, С‡С‚Рѕ Рё Сѓ РєРѕР»РµСЃР°.
                         } else if self.try_scroll_overflow_container(dx_css, dy_css) {
                             // Touchpad move over overflow container.
                         } else {

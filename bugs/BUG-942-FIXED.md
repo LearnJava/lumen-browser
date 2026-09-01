@@ -1,4 +1,4 @@
-# BUG-937 — Mojibake baked into `crates/shell/` string literals and comments (CP1251-as-UTF-8 double encoding)
+# BUG-942 — Mojibake baked into `crates/shell/` string literals and comments (CP1251-as-UTF-8 double encoding)
 
 **Статус:** FIXED 2026-09-01
 **Компонент:** shell (90 файлов под `crates/shell/`, включая рантайм-строки `println!`/`eprintln!`)

@@ -474,6 +474,7 @@ fn splice_handle(src: &str, host_rect: Rect, content_dl: DisplayList) -> crate::
         images: Vec::new(),
         image_keys: Vec::new(),
         scroll_y: 0.0,
+        scroll_x: 0.0,
     }
 }
 
@@ -863,6 +864,52 @@ fn frame_max_scroll_is_painted_height_minus_viewport() {
     assert_eq!(crate::frames::frame_max_scroll(&empty), 0.0);
 }
 
+/// Хэндл фрейма 300×200, содержимое шириной `content_w` (FRAME-3 срез 1) —
+/// горизонтальный аналог [`scrollable_handle`].
+fn wide_handle(content_w: f32) -> crate::frames::FrameHandle {
+    let host_rect = Rect::new(40.0, 120.0, 300.0, 200.0);
+    let content = vec![lumen_paint::DisplayCommand::FillRect {
+        rect: Rect::new(0.0, 0.0, content_w, 200.0),
+        color: lumen_layout::Color { r: 1, g: 2, b: 3, a: 255 },
+    }];
+    splice_handle("child.html", host_rect, content)
+}
+
+/// Горизонтальный аналог [`frame_max_scroll_is_painted_height_minus_viewport`]
+/// (FRAME-3 срез 1).
+#[test]
+fn frame_max_scroll_x_is_painted_width_minus_viewport() {
+    assert!((crate::frames::frame_max_scroll_x(&wide_handle(700.0)) - 400.0).abs() < 0.5);
+    assert_eq!(crate::frames::frame_max_scroll_x(&wide_handle(50.0)), 0.0);
+    let mut empty = wide_handle(700.0);
+    empty.content_dl = Vec::new();
+    assert_eq!(crate::frames::frame_max_scroll_x(&empty), 0.0);
+}
+
+/// Горизонтальный аналог [`scroll_frame_to_clamps_and_reports_movement`]
+/// (FRAME-3 срез 1).
+#[test]
+fn scroll_frame_to_x_clamps_and_reports_movement() {
+    let mut frames = vec![wide_handle(700.0)];
+    assert_eq!(crate::frames::scroll_frame_to_x(&mut frames, 0, 150.0), Some(150.0));
+    assert_eq!(
+        crate::frames::scroll_frame_to_x(&mut frames, 0, 150.0),
+        None,
+        "та же позиция — движения нет"
+    );
+    assert_eq!(
+        crate::frames::scroll_frame_to_x(&mut frames, 0, 9999.0),
+        Some(400.0),
+        "зажим по правому краю содержимого"
+    );
+    assert_eq!(
+        crate::frames::scroll_frame_to_x(&mut frames, 0, 9999.0),
+        None,
+        "у правого края колесо фрейм не двигает — остаток уходит странице"
+    );
+    assert_eq!(crate::frames::scroll_frame_to_x(&mut frames, 0, -50.0), Some(0.0));
+}
+
 /// Прокрутка зажимается пределом, а «не сдвинулось» отличается от
 /// «сдвинулось»: на этом ответе держится и отправка `scroll` ребёнку, и
 /// передача остатка колеса странице.
@@ -901,23 +948,85 @@ fn splice_frame_content_offsets_child_by_its_scroll() {
         },
     ]);
     handle.scroll_y = 120.0;
+    // FRAME-3 срез 1: горизонталь — та же сдвижка, что и вертикаль.
+    handle.scroll_x = 15.0;
     crate::frames::splice_frame_content(&mut dl, &[handle]);
 
     match &dl[at] {
         lumen_paint::DisplayCommand::PushClipRect { rect } => assert!(
-            (rect.y - host_rect.y).abs() < 0.01,
+            (rect.y - host_rect.y).abs() < 0.01 && (rect.x - host_rect.x).abs() < 0.01,
             "клип не двигается прокруткой ребёнка: {rect:?}"
         ),
         other => panic!("ожидался PushClipRect, получено {other:?}"),
     }
     match &dl[at + 1] {
         lumen_paint::DisplayCommand::PushTransform { matrix } => {
-            let expected =
-                lumen_layout::Mat4::translation_2d(host_rect.x, host_rect.y - 120.0);
-            assert_eq!(matrix.0, expected.0, "содержимое уезжает вверх на прокрутку");
+            let expected = lumen_layout::Mat4::translation_2d(
+                host_rect.x - 15.0,
+                host_rect.y - 120.0,
+            );
+            assert_eq!(matrix.0, expected.0, "содержимое уезжает на прокрутку по обеим осям");
         }
         other => panic!("ожидался PushTransform, получено {other:?}"),
     }
+}
+
+/// Горизонтальный аналог
+/// [`pointer_target_in_scrolled_frame_hits_visible_block_with_viewport_point`]
+/// (FRAME-3 срез 1) — колонки вместо полос, `scroll_x` вместо `scroll_y`.
+#[test]
+fn pointer_target_in_horizontally_scrolled_frame_hits_visible_column() {
+    let (page_doc, page_layout) = laid_out(
+        r#"<html><body style="margin:0">
+             <iframe src="c.html" width="300" height="200"
+                     style="border:0;position:absolute;left:40px;top:120px"></iframe>
+           </body></html>"#,
+        Size::new(1024.0, 720.0),
+    );
+    let host = collect_iframes(&page_doc)[0].node;
+    let host_rect = crate::frames::host_content_rect(
+        crate::forms::find_layout_box(&page_layout, host).expect("бокс <iframe>"),
+    );
+    // Ребёнок — ряд из трёх колонок по 100 в ширину, разложенных абсолютно
+    // (без завязки на inline-layout): клик в одну и ту же точку окна обязан
+    // менять адресата вместе с горизонтальной прокруткой.
+    let (child_doc, child_layout) = laid_out(
+        r#"<html><body style="margin:0">
+             <div id="a" style="position:absolute;left:0;top:0;width:100px;height:200px;background:#f00"></div>
+             <div id="b" style="position:absolute;left:100px;top:0;width:100px;height:200px;background:#0f0"></div>
+             <div id="c" style="position:absolute;left:200px;top:0;width:100px;height:200px;background:#00f"></div>
+           </body></html>"#,
+        Size::new(host_rect.width, host_rect.height),
+    );
+    let (a, c) = (
+        child_doc.find_by_id("a").expect("колонка A"),
+        child_doc.find_by_id("c").expect("колонка C"),
+    );
+    let mut handle = splice_handle("c.html", host_rect, Vec::new());
+    handle.host = host;
+    handle.doc = Arc::new(Mutex::new(child_doc));
+    handle.layout = Some(child_layout);
+
+    // Точка (40+30, 120+30) — 30 пикселей вглубь содержимого фрейма по X.
+    let point = Point::new(70.0, 150.0);
+    let mut frames = vec![handle];
+    let t = crate::frames::pointer_target(&frames, &page_layout, point);
+    let hit = t.frame.expect("точка внутри фрейма");
+    assert_eq!(hit.hit.map(|h| h.node), Some(a), "без прокрутки — первая колонка");
+
+    frames[0].scroll_x = 200.0;
+    let t = crate::frames::pointer_target(&frames, &page_layout, point);
+    let hit = t.frame.expect("точка внутри фрейма");
+    assert_eq!(
+        hit.hit.map(|h| h.node),
+        Some(c),
+        "после прокрутки на 200 под той же точкой окна — третья колонка"
+    );
+    assert!(
+        (hit.client.x - 30.0).abs() < 0.5,
+        "координаты события остаются вьюпортными: {:?}",
+        hit.client
+    );
 }
 
 /// В прокрученном фрейме hit-тест и координаты события — РАЗНЫЕ системы.
@@ -987,17 +1096,19 @@ fn pointer_target_in_scrolled_frame_hits_visible_block_with_viewport_point() {
 /// содержимое ребёнка могло стать ниже, а хост — выше.
 #[test]
 fn sync_frame_viewports_clamps_stale_scroll() {
-    // Содержимое 600 при вьюпорте 200 — предел 400. Список непустой, поэтому
-    // проход его не пересобирает, и предел в тесте настоящий, а не нулевой
-    // (с нулём зажим «до 0» проходил бы и при сломанной арифметике).
+    // Содержимое 700×600 при вьюпорте 300×200 — предел 400 по обеим осям.
+    // Список непустой, поэтому проход его не пересобирает, и предел в тесте
+    // настоящий, а не нулевой (с нулём зажим «до 0» проходил бы и при
+    // сломанной арифметике).
     let tall = vec![lumen_paint::DisplayCommand::FillRect {
-        rect: Rect::new(0.0, 0.0, 300.0, 600.0),
+        rect: Rect::new(0.0, 0.0, 700.0, 600.0),
         color: lumen_layout::Color { r: 1, g: 2, b: 3, a: 255 },
     }];
 
     let (page_layout, mut handle, _) = page_with_live_frame();
     handle.content_dl = tall.clone();
     handle.scroll_y = 500.0;
+    handle.scroll_x = 500.0;
     let mut frames = vec![handle];
     crate::frames::sync_frame_viewports(&mut frames, &page_layout, Default::default());
     assert!(
@@ -1005,13 +1116,20 @@ fn sync_frame_viewports_clamps_stale_scroll() {
         "прокрутка за пределом возвращается К КРАЮ содержимого, а не к нулю: {}",
         frames[0].scroll_y
     );
+    assert!(
+        (frames[0].scroll_x - 400.0).abs() < 0.5,
+        "то же самое для горизонтали (FRAME-3 срез 1): {}",
+        frames[0].scroll_x
+    );
 
     let (page_layout, mut handle, _) = page_with_live_frame();
     handle.content_dl = tall;
     handle.scroll_y = 100.0;
+    handle.scroll_x = 100.0;
     let mut frames = vec![handle];
     crate::frames::sync_frame_viewports(&mut frames, &page_layout, Default::default());
     assert_eq!(frames[0].scroll_y, 100.0, "прокрутка в пределах — не трогаем");
+    assert_eq!(frames[0].scroll_x, 100.0, "то же для горизонтали — не трогаем");
 }
 
 // ── формы под-документа (BUG-480 срез 18) ───────────────────────────────────
@@ -1411,16 +1529,19 @@ fn post_load_image_discovery_dispatches_only_the_new_src() {
 fn frame_page_origin_sums_host_rects_and_subtracts_each_scroll() {
     let mut outer = splice_handle("outer.html", Rect::new(40.0, 120.0, 300.0, 200.0), Vec::new());
     outer.scroll_y = 30.0;
+    outer.scroll_x = 8.0;
     let mut inner = splice_handle("inner.html", Rect::new(10.0, 50.0, 200.0, 100.0), Vec::new());
     inner.depth = 1;
     inner.parent_doc = Some(Arc::clone(&outer.doc));
     inner.scroll_y = 5.0;
+    inner.scroll_x = 3.0;
     let frames = vec![outer, inner];
 
-    // Глубина 0: сам host-бокс минус собственная прокрутка ребёнка.
-    assert_eq!(crate::frames::frame_page_origin(&frames, 0), Some((40.0, 90.0)));
-    // Глубина 1: (10, 50 − 5) внутри хозяина + (40, 120 − 30) хозяина.
-    assert_eq!(crate::frames::frame_page_origin(&frames, 1), Some((50.0, 135.0)));
+    // Глубина 0: сам host-бокс минус собственная прокрутка ребёнка (обе оси —
+    // FRAME-3 срез 1).
+    assert_eq!(crate::frames::frame_page_origin(&frames, 0), Some((32.0, 90.0)));
+    // Глубина 1: (10 − 3, 50 − 5) внутри хозяина + (40 − 8, 120 − 30) хозяина.
+    assert_eq!(crate::frames::frame_page_origin(&frames, 1), Some((39.0, 135.0)));
 }
 
 /// Пока host-бокса нет (layout ещё не посчитан), переводить нечего — и это

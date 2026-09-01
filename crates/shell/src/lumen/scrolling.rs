@@ -151,20 +151,20 @@ impl Lumen {
         }
     }
 
-    /// Прокрутить под-документ фрейма под курсором на `dy` CSS px
-    /// (BUG-480 срез 17).
+    /// Прокрутить под-документ фрейма под курсором на `(dx, dy)` CSS px
+    /// (BUG-480 срез 17; горизонталь — FRAME-3 срез 1).
     ///
-    /// `true` — колесо ПОГЛОЩЕНО фреймом; страница тогда не двигается вовсе,
-    /// как и при попадании в overflow-контейнер. `false` — точка не во фрейме
-    /// ЛИБО фрейм уже на своём краю: тогда остаток делится дальше по цепочке
-    /// (CSS Overscroll Behavior L1 §3, значение по умолчанию `auto`), то есть
-    /// достигнув низа под-документа колесо продолжает крутить страницу — ровно
-    /// то, чего ждёт человек.
-    ///
-    /// Горизонталь сюда не приходит: у под-документа нет своей горизонтальной
-    /// прокрутки, и `dx` всегда уходит странице.
-    pub(crate) fn try_scroll_frame(&mut self, dy: f32) -> bool {
-        if dy == 0.0 || self.frames.is_empty() {
+    /// `true` — колесо ПОГЛОЩЕНО фреймом хотя бы по одной оси; страница тогда
+    /// не двигается вовсе, как и при попадании в overflow-контейнер (та же
+    /// грубая гранулярность: остаток по оси, упёршейся в край, для этого
+    /// notch-а просто теряется, а не докатывается странице — см.
+    /// `try_scroll_overflow_container`). `false` — точка не во фрейме ЛИБО
+    /// фрейм уже на своём краю по обеим осям: тогда весь жест уходит дальше
+    /// по цепочке (CSS Overscroll Behavior L1 §3, значение по умолчанию
+    /// `auto`), то есть достигнув края под-документа колесо продолжает
+    /// крутить страницу — ровно то, чего ждёт человек.
+    pub(crate) fn try_scroll_frame(&mut self, dx: f32, dy: f32) -> bool {
+        if (dx == 0.0 && dy == 0.0) || self.frames.is_empty() {
             return false;
         }
         let Some(cursor) = self.cursor_position else { return false };
@@ -173,8 +173,14 @@ impl Lumen {
         // Спуск идёт до САМОГО ГЛУБОКОГО фрейма под точкой: колесо адресует
         // ближайший к курсору скроллер, как и у вложенных overflow-контейнеров.
         let Some(hit) = target.frame else { return false };
-        let want = self.frames[hit.frame].scroll_y + dy;
-        self.apply_frame_scroll(hit.frame, want)
+        let want_y = self.frames[hit.frame].scroll_y + dy;
+        let want_x = self.frames[hit.frame].scroll_x + dx;
+        // Обе оси независимы: `apply_frame_scroll{,_x}` — no-op (`false`) без
+        // редро/ребилда, если ось уже на пределе, так что порядок вызовов не
+        // маскирует движение другой оси.
+        let moved_y = self.apply_frame_scroll(hit.frame, want_y);
+        let moved_x = self.apply_frame_scroll_x(hit.frame, want_x);
+        moved_y || moved_x
     }
 
     /// Поставить под-документ фрейма `idx` в абсолютную позицию `y`
@@ -216,6 +222,71 @@ impl Lumen {
         }
         self.request_redraw();
         true
+    }
+
+    /// Поставить под-документ фрейма `idx` в абсолютную ГОРИЗОНТАЛЬНУЮ
+    /// позицию `x` (FRAME-3 срез 1) — колёсный аналог [`Self::apply_frame_scroll`],
+    /// без JS-моста: `window.scrollX` ребёнка захардкожен в 0 (см. doc-comment
+    /// на `FrameHandle::scroll_x`), так что `scroll`/`scrollend` здесь не
+    /// шлётся — симметрично тому, что `scroll_x_by` странице их тоже не шлёт.
+    pub(crate) fn apply_frame_scroll_x(&mut self, idx: usize, x: f32) -> bool {
+        if frames::scroll_frame_to_x(&mut self.frames, idx, x).is_none() {
+            return false;
+        }
+        let rebuilt = self
+            .layout_box
+            .as_ref()
+            .map(paint_ordered);
+        if let Some(new_dl) = rebuilt {
+            self.tile_grid.update_from_diff(&self.display_list, &new_dl);
+            self.set_display_list(new_dl);
+        }
+        self.request_redraw();
+        true
+    }
+
+    /// Прокрутить под-документ ФОКУСНОГО фрейма клавиатурой на `(dx, dy)`
+    /// CSS px (FRAME-3 срез 2) — клавиатурный аналог [`Self::try_scroll_frame`].
+    /// У клавиши нет курсора, поэтому целевой фрейм — `self.focused_frame`
+    /// (то же поле, что уже маршрутизирует движение каретки — срез с кареткой
+    /// внутри фрейма, `keyboard.rs`), а не `pointer_target`.
+    ///
+    /// `true` — фрейм поглотил жест хотя бы по одной оси; `false` — фокуса
+    /// во фрейме нет, либо фрейм уже на своём краю по обеим запрошенным
+    /// осям (CSS Overscroll Behavior L1 §3, default `auto`): тогда клавиша
+    /// должна продолжить листать страницу как раньше.
+    pub(crate) fn try_scroll_focused_frame(&mut self, dx: f32, dy: f32) -> bool {
+        if (dx == 0.0 && dy == 0.0) || self.frames.is_empty() {
+            return false;
+        }
+        let Some((idx, _)) = self.focused_frame else { return false };
+        let want_y = self.frames[idx].scroll_y + dy;
+        let want_x = self.frames[idx].scroll_x + dx;
+        // Обе оси независимы — тот же порядок вызовов, что у `try_scroll_frame`.
+        let moved_y = self.apply_frame_scroll(idx, want_y);
+        let moved_x = self.apply_frame_scroll_x(idx, want_x);
+        moved_y || moved_x
+    }
+
+    /// Поставить под-документ ФОКУСНОГО фрейма в АБСОЛЮТНУЮ вертикальную
+    /// позицию (FRAME-3 срез 2) — клавиатурный аналог для `Home`/`End`,
+    /// зеркало [`Self::try_scroll_focused_frame`] по абсолютной, а не
+    /// относительной позиции. `f32::INFINITY` = «в самый низ», как у
+    /// [`Self::scroll_active_pane_to`].
+    ///
+    /// `true`/`false` — та же CSS Overscroll Behavior L1 §3 семантика: `false`
+    /// либо без фокуса во фрейме, либо позиция не изменилась (уже на краю).
+    pub(crate) fn try_scroll_focused_frame_to(&mut self, y: f32) -> bool {
+        if self.frames.is_empty() {
+            return false;
+        }
+        let Some((idx, _)) = self.focused_frame else { return false };
+        let target = if y.is_infinite() {
+            frames::frame_max_scroll(&self.frames[idx])
+        } else {
+            y
+        };
+        self.apply_frame_scroll(idx, target)
     }
 
     /// BUG-338: bring `target_rect` (a target element's absolute border-box
