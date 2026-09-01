@@ -1144,8 +1144,62 @@ function _lumen_parse_style(s) {
     });
     return obj;
 }
+// CSSOM §6.7.2 "serialize a CSS declaration block" collapses these four
+// TRBL longhand groups into their shorthand when all four are present with
+// equal literal values (BUG-473) — `!important` priority tracking, the
+// `all` shorthand and shorthand-VALUE parsing (`style.margin = '1px 2px'`)
+// are a separate, much larger CSSOM engine gap and stay out of scope here.
+var _LUMEN_TRBL_SHORTHANDS = {
+    'margin':       ['margin-top', 'margin-right', 'margin-bottom', 'margin-left'],
+    'padding':      ['padding-top', 'padding-right', 'padding-bottom', 'padding-left'],
+    'border-width': ['border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width'],
+    'border-style': ['border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style'],
+    'border-color': ['border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color'],
+};
+
+// CSS 2.1 §8.3 TRBL shorthand collapsing: 1 value if all equal, 2 if only
+// left==right, 3 if left==right but top!=bottom, else all 4.
+function _lumen_trbl_collapse(top, right, bottom, left) {
+    if (right !== left) return top + ' ' + right + ' ' + bottom + ' ' + left;
+    if (top !== bottom) return top + ' ' + right + ' ' + bottom;
+    if (top !== right) return top + ' ' + right;
+    return top;
+}
+
+// Returns the collapsed shorthand value for `shorthand` if ALL of its
+// longhands are present in `obj` with equal literal values, else undefined.
+function _lumen_shorthand_value(obj, shorthand) {
+    var longhands = _LUMEN_TRBL_SHORTHANDS[shorthand];
+    if (!longhands) return undefined;
+    for (var i = 0; i < longhands.length; i++) {
+        if (!Object.prototype.hasOwnProperty.call(obj, longhands[i])) return undefined;
+    }
+    return _lumen_trbl_collapse(obj[longhands[0]], obj[longhands[1]], obj[longhands[2]], obj[longhands[3]]);
+}
+
 function _lumen_serialize_style(obj) {
-    return Object.keys(obj).map(function(k) { return k + ': ' + obj[k]; }).join('; ');
+    var keys = Object.keys(obj);
+    var shorthandOf = {};   // longhand key -> owning shorthand name, only for collapsible groups
+    var shorthandVal = {};  // shorthand name -> collapsed value
+    Object.keys(_LUMEN_TRBL_SHORTHANDS).forEach(function(sh) {
+        var v = _lumen_shorthand_value(obj, sh);
+        if (v === undefined) return;
+        shorthandVal[sh] = v;
+        _LUMEN_TRBL_SHORTHANDS[sh].forEach(function(lh) { shorthandOf[lh] = sh; });
+    });
+    var emittedShorthand = {};
+    var parts = [];
+    keys.forEach(function(k) {
+        var sh = shorthandOf[k];
+        if (sh) {
+            if (emittedShorthand[sh]) return;
+            emittedShorthand[sh] = true;
+            parts.push(sh + ': ' + shorthandVal[sh]);
+        } else {
+            parts.push(k + ': ' + obj[k]);
+        }
+    });
+    return parts.length ? parts.join('; ') + ';' : '';
 }
 function _lumen_camel_to_kebab(prop) {
     return prop.replace(/([A-Z])/g, function(m) { return '-' + m.toLowerCase(); });
@@ -1154,9 +1208,10 @@ function _lumen_camel_to_kebab(prop) {
 // CSS Color L4 / CSSOM §6.7.3 (BUG-465): these longhands take a bare
 // `<color>` value, so their specified value can be validated+canonicalized
 // via `_lumen_css_canonical_color` on assignment. Deliberately NOT every
-// `*-color` property — `border-color` is a 1-4-value shorthand (needs the
-// general shorthand-expansion machinery tracked by BUG-473, not plain
-// `<color>` parsing), so it is left on the naive pass-through path below.
+// `*-color` property — `border-color` is a 1-4-value shorthand, collapsed
+// on read/serialize by `_lumen_shorthand_value` above but not validated as
+// a `<color>` on assignment (its longhands are, individually), so it stays
+// on the naive pass-through path below.
 var _LUMEN_COLOR_PROPERTIES = {
     'color': 1, 'background-color': 1, 'border-top-color': 1,
     'border-bottom-color': 1, 'border-left-color': 1, 'border-right-color': 1,
@@ -1171,7 +1226,11 @@ function _lumen_make_style(nid) {
     function setParsed(obj) { _lumen_set_attr(nid, 'style', _lumen_serialize_style(obj)); }
     var handler = {
         getPropertyValue: function(prop) {
-            return getParsed()[_lumen_camel_to_kebab(String(prop))] || '';
+            var key = _lumen_camel_to_kebab(String(prop));
+            var obj = getParsed();
+            if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
+            var shorthand = _lumen_shorthand_value(obj, key);
+            return shorthand !== undefined ? shorthand : '';
         },
         setProperty: function(prop, val) {
             var key = _lumen_camel_to_kebab(String(prop));
@@ -1201,8 +1260,12 @@ function _lumen_make_style(nid) {
         },
     };
     Object.defineProperty(handler, 'cssText', {
-        get: function() { var s = _lumen_get_attr(nid, 'style'); return s !== undefined ? s : ''; },
-        set: function(v) { _lumen_set_attr(nid, 'style', String(v)); },
+        // CSSOM §6.7.2: cssText always reflects the current declarations'
+        // serialization, not raw stored text — so it collapses shorthands
+        // and normalizes formatting even for a style attribute that came
+        // straight from HTML markup and was never touched via JS (BUG-473).
+        get: function() { return _lumen_serialize_style(getParsed()); },
+        set: function(v) { setParsed(_lumen_parse_style(String(v))); },
         enumerable: true, configurable: true,
     });
     return new Proxy(handler, {
