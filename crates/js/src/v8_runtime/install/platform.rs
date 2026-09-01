@@ -188,6 +188,46 @@ pub(crate) fn install_element_geometry(
     Ok(())
 }
 
+/// Point-to-node hit testing backing `document.elementFromPoint`/
+/// `elementsFromPoint` (CSSOM View §3, BUG-464/BUG-477).
+///
+/// Reuses `lumen_paint::hit_test`/`hit_test_all` — the same stacking-aware
+/// algorithm (z-index groups, transform inversion, `pointer-events`/`display`
+/// filtering) that already backs click/cursor dispatch in the shell — against
+/// a `LayoutBox` snapshot pushed alongside `layout_rects`, so a result agrees
+/// with whatever `getBoundingClientRect` already reports for the same point.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub(crate) fn install_point_hit_test(
+    scope: &mut v8::PinScope<'_, '_>,
+    ctx: v8::Local<'_, v8::Context>,
+    store: &mut Vec<OwnedNativeFn>,
+    hit_test_tree: Arc<Mutex<Option<Arc<lumen_layout::LayoutBox>>>>,
+) -> JsResult<()> {
+    {
+        let tree = Arc::clone(&hit_test_tree);
+        reg!(scope, ctx, store, "_lumen_element_from_point", move |x: f64, y: f64| -> Option<u32> {
+            let root = tree.lock().unwrap().clone()?;
+            lumen_paint::hit_test(lumen_core::geom::Point::new(x as f32, y as f32), &root)
+                .map(|r| r.node.index() as u32)
+        });
+    }
+    {
+        let tree = Arc::clone(&hit_test_tree);
+        reg!(scope, ctx, store, "_lumen_elements_from_point", move |x: f64, y: f64| -> Vec<u32> {
+            let Some(root) = tree.lock().unwrap().clone() else { return Vec::new(); };
+            let hits = lumen_paint::hit_test_all(lumen_core::geom::Point::new(x as f32, y as f32), &root);
+            let mut seen = std::collections::HashSet::new();
+            hits.into_iter()
+                .filter_map(|r| {
+                    let idx = r.node.index() as u32;
+                    seen.insert(idx).then_some(idx)
+                })
+                .collect()
+        });
+    }
+    Ok(())
+}
+
 /// `window.matchMedia` evaluation (CSS Media Queries L4 §4.2).
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_match_media(

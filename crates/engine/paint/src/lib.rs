@@ -351,7 +351,7 @@ pub use overlay_partition::{
 };
 pub use fingerprint::GpuFingerprint;
 pub use invariants::{count_paint_violations, PaintViolationCounts};
-pub use hit_test::{hit_test, HitTestResult};
+pub use hit_test::{hit_test, hit_test_all, HitTestResult};
 pub use layer_cache::{LayerCache, LayerKey};
 #[cfg(feature = "backend-wgpu")]
 pub use renderer::{

@@ -446,6 +446,9 @@ fn build_page_cascade(
 pub(crate) struct JsLayoutSnapshot {
     /// `node index -> [x, y, w, h]` border boxes.
     pub(crate) rects: std::collections::HashMap<u32, [f32; 4]>,
+    /// `LayoutBox` tree for `document.elementFromPoint`/`elementsFromPoint`
+    /// (BUG-464/BUG-477) — same tree `rects` was collected from.
+    pub(crate) tree: Arc<LayoutBox>,
     /// `node index -> property -> serialized computed value`.
     pub(crate) styles: std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
     /// `node index -> custom property -> value`.
@@ -459,6 +462,7 @@ pub(crate) struct JsLayoutSnapshot {
 pub(crate) fn collect_js_layout_snapshot(root: &LayoutBox, viewport: Size) -> JsLayoutSnapshot {
     JsLayoutSnapshot {
         rects: lumen_layout::collect_layout_rects(root),
+        tree: Arc::new(root.clone()),
         styles: lumen_layout::collect_computed_styles(root),
         customs: lumen_layout::collect_custom_properties(root),
         viewport: (viewport.width, viewport.height),

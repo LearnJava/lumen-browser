@@ -6863,6 +6863,17 @@ var document = {
         if (bodyNid === null) return null;
         return new _CaretPosition(_lumen_make_element(bodyNid), 0);
     },
+    // CSSOM View §3: elementFromPoint(x, y) — topmost element hit by the point,
+    // or null if nothing is hit (e.g. outside the viewport). Backed by the same
+    // stacking-aware hit test the shell uses for click/cursor dispatch.
+    elementFromPoint: function(x, y) {
+        return _lumen_make_element(_lumen_u2n(_lumen_element_from_point(Number(x), Number(y))));
+    },
+    // CSSOM View §3: elementsFromPoint(x, y) — every element hit by the point,
+    // topmost first, deduplicated. Empty array if nothing is hit.
+    elementsFromPoint: function(x, y) {
+        return _lumen_elements_from_point(Number(x), Number(y)).map(_lumen_make_element);
+    },
 };
 
 var alert    = function(m) { _lumen_console_log('[alert] ' + String(m)); };

@@ -126,6 +126,14 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `getBoundingClientRect`, `ResizeObserver`, and `IntersectionObserver`.
     #[allow(dead_code)] // called only from #[cfg(feature = "v8")] blocks
     fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>);
+    /// Push a fresh `LayoutBox` tree snapshot for `document.elementFromPoint`/
+    /// `elementsFromPoint` (BUG-464/BUG-477).
+    ///
+    /// Called alongside [`Self::update_layout_rects`], same tree the shell
+    /// just built — so a hit test agrees with the geometry `getBoundingClientRect`
+    /// already reports.
+    #[allow(dead_code)] // called only from #[cfg(feature = "v8")] blocks
+    fn update_hit_test_tree(&self, tree: Arc<lumen_layout::LayoutBox>);
     /// Update the current viewport dimensions in the JS runtime.
     ///
     /// Called after every resize and on initial load.
@@ -706,6 +714,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>) {
         self.rt.update_layout_rects(rects);
+    }
+    fn update_hit_test_tree(&self, tree: Arc<lumen_layout::LayoutBox>) {
+        self.rt.update_hit_test_tree(tree);
     }
     fn update_viewport_size(&self, width: f32, height: f32) {
         self.rt.update_viewport_size(width, height);

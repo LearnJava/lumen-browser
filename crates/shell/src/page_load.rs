@@ -524,11 +524,13 @@ impl Lumen {
                         },
                     );
                     let rects = collect_layout_rects(lb_ref);
+                    let hit_test_tree = Arc::new(lb_ref.clone());
                     let styles = collect_computed_styles(lb_ref);
                     let customs = collect_custom_properties(lb_ref);
                     let (vw, vh) = (viewport.width, viewport.height);
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                         js.update_layout_rects(rects);
+                        js.update_hit_test_tree(hit_test_tree);
                         js.update_computed_styles(styles);
                         js.update_custom_properties(customs);
                         js.update_viewport_size(vw, vh);
@@ -1145,11 +1147,13 @@ impl Lumen {
                 },
             );
             let rects = collect_layout_rects(lb_ref);
+            let hit_test_tree = Arc::new(lb_ref.clone());
             let styles = collect_computed_styles(lb_ref);
             let customs = collect_custom_properties(lb_ref);
             let (vw, vh) = (viewport.width, viewport.height);
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 js.update_layout_rects(rects);
+                js.update_hit_test_tree(hit_test_tree);
                 js.update_computed_styles(styles);
                 js.update_custom_properties(customs);
                 js.update_viewport_size(vw, vh);
@@ -1363,7 +1367,8 @@ impl Lumen {
         let initial_lazy_reqs: Vec<(u32, String)> = if self.js_present {
             let owned_pairs: Vec<(u32, String)> =
                 page.lazy_pairs.iter().map(|(n, u)| (*n, u.clone())).collect();
-            let geom: Option<(HashMap<u32, [f32; 4]>, f32, f32)> = if !owned_pairs.is_empty() {
+            type LazyImageGeom = (HashMap<u32, [f32; 4]>, Arc<lumen_layout::LayoutBox>, f32, f32);
+            let geom: Option<LazyImageGeom> = if !owned_pairs.is_empty() {
                 self.layout_box.as_ref().map(|lb_ref| {
                     let viewport = self.renderer.as_ref().map_or_else(
                         || Size::new(1024.0, 720.0),
@@ -1372,7 +1377,7 @@ impl Lumen {
                             Size::new(s.width, s.height)
                         },
                     );
-                    (collect_layout_rects(lb_ref), viewport.width, viewport.height)
+                    (collect_layout_rects(lb_ref), Arc::new(lb_ref.clone()), viewport.width, viewport.height)
                 })
             } else {
                 None
@@ -1381,8 +1386,9 @@ impl Lumen {
                 let pairs: Vec<(u32, &str)> =
                     owned_pairs.iter().map(|(n, u)| (*n, u.as_str())).collect();
                 js.register_lazy_images(&pairs);
-                if let Some((rects, vw, vh)) = geom {
+                if let Some((rects, hit_test_tree, vw, vh)) = geom {
                     js.update_layout_rects(rects);
+                    js.update_hit_test_tree(hit_test_tree);
                     js.update_viewport_size(vw, vh);
                     js.deliver_layout_observers();
                     js.deliver_lazy_images();

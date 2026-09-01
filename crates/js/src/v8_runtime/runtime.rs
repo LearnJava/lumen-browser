@@ -69,6 +69,13 @@ pub struct V8JsRuntime {
     /// Layout bounding rects updated after each relayout by the shell.
     /// Maps `NodeId` index (u32) → `[x, y, width, height]` in viewport-relative CSS px.
     pub(super) layout_rects: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
+    /// `LayoutBox` tree snapshot for `document.elementFromPoint`/`elementsFromPoint`
+    /// (CSSOM View §3, BUG-464/BUG-477), updated after each relayout by the shell
+    /// alongside [`Self::layout_rects`] — same tree, same coordinate frame, same
+    /// cadence, so a hit test agrees with whatever `getBoundingClientRect` already
+    /// reports for the same point. `Arc` avoids cloning the whole tree per lookup;
+    /// `None` before the first layout.
+    pub(super) hit_test_tree: Arc<Mutex<Option<Arc<lumen_layout::LayoutBox>>>>,
     /// Current viewport size `[width, height]` in CSS px.
     pub(super) viewport_size: Arc<Mutex<[f32; 2]>>,
     /// Lazy image load requests queued by `_lumen_request_lazy_image_load` from JS.
@@ -230,6 +237,7 @@ impl V8JsRuntime {
             dom_touched: Arc::new(Mutex::new(DomTouched::default())),
             raf_pending: Arc::new(AtomicBool::new(false)),
             layout_rects: Arc::new(Mutex::new(HashMap::new())),
+            hit_test_tree: Arc::new(Mutex::new(None)),
             viewport_size: Arc::new(Mutex::new([0.0, 0.0])),
             lazy_img_requests: Arc::new(Mutex::new(Vec::new())),
             scroll_states: Arc::new(Mutex::new(HashMap::new())),
@@ -500,6 +508,13 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::update_layout_rects`].
     pub fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>) {
         *self.layout_rects.lock().unwrap_or_else(|e| e.into_inner()) = rects;
+    }
+
+    /// Replace the `LayoutBox` tree snapshot backing `elementFromPoint`/
+    /// `elementsFromPoint` (BUG-464/BUG-477). Called alongside
+    /// [`Self::update_layout_rects`] wherever the shell pushes fresh geometry.
+    pub fn update_hit_test_tree(&self, tree: Arc<lumen_layout::LayoutBox>) {
+        *self.hit_test_tree.lock().unwrap_or_else(|e| e.into_inner()) = Some(tree);
     }
 
     /// Update the current viewport dimensions.

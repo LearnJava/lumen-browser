@@ -523,6 +523,7 @@ fn layout_frame_document(
     };
     if let Some(js) = js {
         js.update_layout_rects(rects);
+        js.update_hit_test_tree(Arc::new(frame_layout.clone()));
         js.update_computed_styles(styles);
         js.update_viewport_size(viewport.width, viewport.height);
     }
