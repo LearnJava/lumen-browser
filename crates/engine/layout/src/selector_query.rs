@@ -473,7 +473,12 @@ fn px_str(v: f32) -> String {
 }
 
 /// Serialises a [`Color`] as `"rgb(r, g, b)"` or `"rgba(r, g, b, a)"`.
-fn color_to_css(c: Color) -> String {
+///
+/// `pub(crate)`: also reused by `style::parse::color::canonical_specified_color`
+/// (BUG-465) for inline-`style` `<color>` reflection — same canonical CSSOM
+/// §6.7.3 rgb()/rgba() serialization as `getComputedStyle()`, one source of
+/// truth for the format.
+pub(crate) fn color_to_css(c: Color) -> String {
     if c.a == 255 {
         format!("rgb({}, {}, {})", c.r, c.g, c.b)
     } else {

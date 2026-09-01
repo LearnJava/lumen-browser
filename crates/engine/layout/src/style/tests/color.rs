@@ -1370,3 +1370,40 @@ fn hex_color_with_non_ascii_does_not_panic() {
     assert_eq!(parse_color("#0f0"), Some(rgba(0, 255, 0, 255)));
     assert_eq!(parse_color("#0f08").unwrap().a, 136);
 }
+
+/// BUG-465: `CSSStyleDeclaration` `<color>` specified-value serialization —
+/// hex/legacy-functional syntax canonicalizes to `rgb()`/`rgba()`, keyword
+/// syntax (named/system/`currentcolor`/`transparent`/CSS-wide keywords) stays
+/// a keyword, and a syntactically invalid `<color>` is rejected outright.
+#[test]
+fn canonical_specified_color_hex_and_functional_forms_become_rgb() {
+    assert_eq!(canonical_specified_color("#f00"), Some("rgb(255, 0, 0)".to_string()));
+    assert_eq!(canonical_specified_color("#ffffff"), Some("rgb(255, 255, 255)".to_string()));
+    assert_eq!(canonical_specified_color("#1000"), Some("rgba(17, 0, 0, 0)".to_string()));
+    assert_eq!(canonical_specified_color("rgb(0%, 0%, 1%)"), Some("rgb(0, 0, 3)".to_string()));
+    assert_eq!(canonical_specified_color("rgb(0, 0, 256)"), Some("rgb(0, 0, 255)".to_string()));
+    assert_eq!(canonical_specified_color("hsl(0, 100%, 50%)"), Some("rgb(255, 0, 0)".to_string()));
+}
+
+#[test]
+fn canonical_specified_color_keeps_keyword_syntax_as_keyword() {
+    assert_eq!(canonical_specified_color("red"), Some("red".to_string()));
+    assert_eq!(canonical_specified_color("AQUA"), Some("aqua".to_string()));
+    assert_eq!(canonical_specified_color("currentColor"), Some("currentcolor".to_string()));
+    assert_eq!(canonical_specified_color("transparent"), Some("transparent".to_string()));
+    assert_eq!(canonical_specified_color("Canvas"), Some("canvas".to_string()));
+    // CSS-wide keywords apply to every property, not just `<color>`-typed
+    // ones — kept verbatim (lowercased) rather than rejected.
+    assert_eq!(canonical_specified_color("inherit"), Some("inherit".to_string()));
+    assert_eq!(canonical_specified_color("initial"), Some("initial".to_string()));
+    assert_eq!(canonical_specified_color("unset"), Some("unset".to_string()));
+    assert_eq!(canonical_specified_color("revert"), Some("revert".to_string()));
+}
+
+#[test]
+fn canonical_specified_color_rejects_invalid_syntax() {
+    assert_eq!(canonical_specified_color(""), None);
+    assert_eq!(canonical_specified_color("#00000"), None);
+    assert_eq!(canonical_specified_color("#0000fg"), None);
+    assert_eq!(canonical_specified_color("invalidValue"), None);
+}

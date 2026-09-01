@@ -1798,7 +1798,6 @@ pub(crate) fn chrome_overlay_cache_disabled() -> bool {
 /// does not reproduce the exact pre-срез-57 instruction count, only the
 /// pre-срез-57 cost of `fold_overlay` itself — the one number this lever
 /// exists to isolate.
-
 pub(crate) fn chrome_overlay_digest_reuse_disabled() -> bool {
     static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_CHROME_DIGEST_REUSE").is_ok_and(|v| v == "1"))

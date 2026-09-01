@@ -240,11 +240,23 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
     // One-argument form: CSS.supports(conditionText) → parse + evaluate.
-    reg!(scope, ctx, store, 
+    reg!(scope, ctx, store,
         "_lumen_css_supports_cond",
         |condition: String| -> bool {
             lumen_css_parser::parse_supports_condition(&condition)
                 .evaluate(lumen_css_parser::SUPPORTED_PROPERTIES)
+        }
+    );
+
+    // Canonical `<color>` serialization for inline-`style` color properties
+    // (CSSOM §6.7.3, BUG-465) — used by `_lumen_make_style`'s `setProperty` in
+    // web_api_shim_mid.js to validate+canonicalize `el.style['color'] = …`
+    // and friends. Returns `None` for a syntactically invalid `<color>`, so
+    // the shim can reject the assignment instead of storing it verbatim.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_color",
+        |value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_color(&value)
         }
     );
 

@@ -1151,6 +1151,18 @@ function _lumen_camel_to_kebab(prop) {
     return prop.replace(/([A-Z])/g, function(m) { return '-' + m.toLowerCase(); });
 }
 
+// CSS Color L4 / CSSOM §6.7.3 (BUG-465): these longhands take a bare
+// `<color>` value, so their specified value can be validated+canonicalized
+// via `_lumen_css_canonical_color` on assignment. Deliberately NOT every
+// `*-color` property — `border-color` is a 1-4-value shorthand (needs the
+// general shorthand-expansion machinery tracked by BUG-473, not plain
+// `<color>` parsing), so it is left on the naive pass-through path below.
+var _LUMEN_COLOR_PROPERTIES = {
+    'color': 1, 'background-color': 1, 'border-top-color': 1,
+    'border-bottom-color': 1, 'border-left-color': 1, 'border-right-color': 1,
+    'outline-color': 1, 'text-decoration-color': 1,
+};
+
 function _lumen_make_style(nid) {
     function getParsed() {
         var s = _lumen_get_attr(nid, 'style');
@@ -1162,8 +1174,23 @@ function _lumen_make_style(nid) {
             return getParsed()[_lumen_camel_to_kebab(String(prop))] || '';
         },
         setProperty: function(prop, val) {
+            var key = _lumen_camel_to_kebab(String(prop));
+            var strVal = String(val);
             var obj = getParsed();
-            obj[_lumen_camel_to_kebab(String(prop))] = String(val);
+            if (strVal === '') {
+                // CSSOM §6.7.4: setProperty(prop, "") removes the property.
+                delete obj[key];
+                setParsed(obj);
+                return;
+            }
+            if (_LUMEN_COLOR_PROPERTIES.hasOwnProperty(key)) {
+                var canon = _lumen_css_canonical_color(strVal);
+                if (canon === null || canon === undefined) return; // invalid <color>: no-op
+                obj[key] = canon;
+                setParsed(obj);
+                return;
+            }
+            obj[key] = strVal;
             setParsed(obj);
         },
         removeProperty: function(prop) {

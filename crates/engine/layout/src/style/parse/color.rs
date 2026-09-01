@@ -41,6 +41,41 @@ pub fn parse_color(s: &str) -> Option<Color> {
     parse_css_color_fn(s).map(ColorFloat::to_srgb_color)
 }
 
+/// CSSOM specified-value serialization for a `<color>` assigned through
+/// `CSSStyleDeclaration.setProperty`/`el.style[prop] = …` (CSS Color L4 §4.2,
+/// CSSOM §6.7.3). Unlike [`parse_color`], which resolves everything down to
+/// an opaque `Color`, this keeps keyword-syntax input (named colors,
+/// `currentcolor`, `transparent`, system-color keywords, and the CSS-wide
+/// keywords `inherit`/`initial`/`unset`/`revert`/`revert-layer`, which are
+/// valid on any property and are not `<color>` syntax at all) serialized as
+/// the keyword itself, lowercased — only hex/legacy-functional notation
+/// (`rgb()`/`rgba()`/`hsl()`/`hsla()`/`hwb()`/…) canonicalizes to the
+/// `rgb()`/`rgba()` functional form. Returns `None` when `s` is not a valid
+/// `<color>` (nor a CSS-wide keyword) at all, so the caller can reject the
+/// assignment instead of storing an unparsed string — the gap measured in
+/// WPT `css/CSS2/syntax/colors-007.html` (BUG-465).
+pub fn canonical_specified_color(s: &str) -> Option<String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if matches!(lower.as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer")
+        || lower == "currentcolor"
+        || named_color(&lower).is_some()
+        || SystemColor::parse(&lower).is_some()
+    {
+        return Some(lower);
+    }
+    if let Some(c) = parse_hex_color(trimmed) {
+        return Some(crate::selector_query::color_to_css(c));
+    }
+    if let Some(c) = parse_function_color(trimmed) {
+        return Some(crate::selector_query::color_to_css(c));
+    }
+    None
+}
+
 /// CSS Quirks Mode §3.4 «hashless hex color quirk».
 ///
 /// В quirks-mode значение `<color>`, не парсящееся стандартным `parse_color`,
