@@ -1,24 +1,41 @@
 //! Lumen URL — структурированный тип.
 //!
-//! Парсит вход в поля (scheme/host/port/path/query/fragment) согласно
-//! упрощённой грамматике RFC 3986 §3, ограниченной нашим scope: схемы
-//! `http`, `https`, `file`, `data`. Хранит исходные Unicode-байты host
-//! как есть; ASCII-форма (Punycode) доступна через [`Url::host_ascii`] —
-//! по соглашению из decisions log она нужна только в network-слое
-//! (DNS, TLS SNI, Host header). Адресная строка показывает оригинал.
+//! LIB-6 (ADR-027, docs/conformance/2026-08-31.md): scheme/host/path/query/
+//! fragment splitting, percent-encoding normalization, dot-segment removal
+//! and relative-reference resolution are the WHATWG URL Standard's state
+//! machine — a spec decides what's correct here, not us — so [`WhatwgUrl`]
+//! (the `url` crate) is the parsing engine (`inner` field below). The own
+//! hand-rolled parser this replaced passed only 41.95% of
+//! `tests/wpt/url/resources/urltestdata.json` (`cargo test -p lumen-core
+//! --test url_conformance_census -- --ignored --nocapture`), concentrated in
+//! two entirely missing algorithm branches (IPv6 `[...]` literals, forbidden/
+//! control host code point handling) rather than isolated IDNA/percent-
+//! encoding gaps.
 //!
-//! Это swap-point из §11 плана: тонкая обёртка над String заменена
-//! на структуру с явными полями, потребители (network, shell) обращаются
-//! к полям через аксессоры, никто из них больше не парсит URL ad-hoc.
+//! **[`Url::host`] deliberately does NOT come from `inner`.** The WHATWG
+//! parser always ASCII/IDNA-normalizes (Punycode + lowercase) the host it
+//! stores, discarding the original text — but the address bar's IDN
+//! homograph-spoof guard (`crates/shell/src/address_bar.rs::
+//! guard_display_text`, DS-6) substring-replaces the *exact* text the user
+//! typed or the exact serialization shown on screen, and needs the original
+//! Unicode/original-case substring to find it. `host()` therefore keeps its
+//! own best-effort raw extraction ([`raw_host_from_input`]) — mirroring
+//! `inner`'s accept/reject decision (so `Url::parse`/[`Url::resolve`] reject
+//! exactly what the spec rejects) but not its normalization. `serialized`
+//! (backing [`Url::as_str`]/[`Display`]) is rebuilt from `inner`'s
+//! spec-correct scheme/port/path/query/fragment with this raw host spliced
+//! back in, for the same reason — the address bar shows the Unicode form.
+//!
+//! ASCII-form host (Punycode, DNS/TLS SNI/`Host:` header) is
+//! [`Url::host_ascii`] — unrelated to `inner`'s own normalization, still
+//! powered by `crate::idn`/`crate::punycode` (LIB-6: this stays ours, it is
+//! the product decision of *what to show the user*, not a parsing question).
 //!
 //! Сознательно не реализуем здесь:
-//! - WHATWG URL Standard полностью (percent-decoding, IDNA UTS #46);
-//! - userinfo (`user:pass@`) — отбрасываем при парсинге, в http(s) deprecated.
-//!
-//! `.`/`..` dot-segment нормализация в path (RFC 3986 §5.2.4) реализована —
-//! см. [`remove_dot_segments`] — и применяется в [`Url::parse`] для схем с
-//! authority (`http`/`https`/`file`/`ws`/`wss`), включая пути, дописанные
-//! [`Url::resolve`] (который всегда идёт через `parse`).
+//! - IDNA UTS #46 mapping/validation for [`Url::host`] (zero-width
+//!   collapsing, ideographic full stop, confusable normalization) — the raw
+//!   substring is kept as-is; [`crate::idn::display_host`] does its own,
+//!   unrelated homograph/mixed-script detection on top of it.
 
 // Долг по документации: файл написан до включения `missing_docs` и пока не
 // покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
@@ -27,104 +44,56 @@
 
 use crate::error::{Error, Result};
 use std::fmt;
+use url::Url as WhatwgUrl;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Url {
-    scheme: String,
+    /// Raw, unnormalized host substring (Unicode, original case) — see the
+    /// module doc for why this cannot come from `inner`.
     host: String,
-    port: Option<u16>,
-    path: String,
-    query: Option<String>,
-    fragment: Option<String>,
+    /// `scheme://host(raw)[:port]path[?query][#fragment]` — same shape as
+    /// `inner.as_str()` except the host is the raw substring above.
     serialized: String,
+    /// WHATWG-conformant backing: source of scheme/port/path/query/fragment
+    /// and of `.join()` for [`Url::resolve`].
+    inner: WhatwgUrl,
 }
 
 impl Url {
-    /// Распарсить URL. Минимально требуется непустая `scheme:`.
-    /// Для всех известных нам схем ожидаем `scheme://`.
+    /// Распарсить URL по WHATWG URL Standard (через `inner`). `host()` на
+    /// результате — raw substring из `s`, не ASCII/IDNA-нормализованный.
     pub fn parse(s: &str) -> Result<Self> {
-        if s.is_empty() {
-            return Err(Error::InvalidUrl("empty URL".into()));
-        }
-
-        let (scheme, rest) = split_scheme(s)?;
-
-        // hier-part: для http/https/file требуем authority через `//`.
-        // Для `data:` (и любых других unknown схем) — отдаём всё как path.
-        let has_authority = rest.starts_with("//");
-
-        let (host, port, path_start) = if has_authority {
-            let after_slashes = &rest[2..];
-            let auth_end = after_slashes
-                .find(['/', '?', '#'])
-                .unwrap_or(after_slashes.len());
-            let authority = &after_slashes[..auth_end];
-            let (host, port) = parse_authority(authority, &scheme)?;
-            (host, port, &after_slashes[auth_end..])
-        } else {
-            (String::new(), None, rest)
-        };
-
-        let (path, after_path) = split_at_any(path_start, &['?', '#']);
-        let mut path = path.to_owned();
-        if has_authority {
-            path = remove_dot_segments(&path);
-        }
-        if has_authority && path.is_empty() {
-            path.push('/');
-        }
-
-        let (query, after_query) = if let Some(after_q) = after_path.strip_prefix('?') {
-            let (q, rest) = split_at_any(after_q, &['#']);
-            (Some(q.to_owned()), rest)
-        } else {
-            (None, after_path)
-        };
-
-        let fragment = after_query.strip_prefix('#').map(str::to_owned);
-
-        let serialized = serialize(
-            &scheme,
-            &host,
-            port,
-            &path,
-            query.as_deref(),
-            fragment.as_deref(),
-        );
-
-        Ok(Self {
-            scheme,
-            host,
-            port,
-            path,
-            query,
-            fragment,
-            serialized,
-        })
+        let inner =
+            WhatwgUrl::parse(s).map_err(|e| Error::InvalidUrl(format!("{s:?}: {e}")))?;
+        let host = raw_host_from_input(s);
+        let serialized = serialize(&inner, &host);
+        Ok(Self { host, serialized, inner })
     }
 
     pub fn scheme(&self) -> &str {
-        &self.scheme
+        self.inner.scheme()
     }
 
+    /// Raw (unnormalized) host — Unicode, original case, exactly as it
+    /// appeared in the parsed input. See the module doc.
     pub fn host(&self) -> &str {
         &self.host
     }
 
     pub fn port(&self) -> Option<u16> {
-        self.port
+        self.inner.port()
     }
 
     pub fn path(&self) -> &str {
-        &self.path
+        self.inner.path()
     }
 
     pub fn query(&self) -> Option<&str> {
-        self.query.as_deref()
+        self.inner.query()
     }
 
     pub fn fragment(&self) -> Option<&str> {
-        self.fragment.as_deref()
+        self.inner.fragment()
     }
 
     pub fn as_str(&self) -> &str {
@@ -133,7 +102,7 @@ impl Url {
 
     /// Порт с учётом дефолтов известных схем.
     pub fn effective_port(&self) -> Option<u16> {
-        self.port.or_else(|| default_port(&self.scheme))
+        self.inner.port_or_known_default()
     }
 
     /// Host в ASCII-форме (Punycode) — для DNS, TLS SNI, Host header.
@@ -149,78 +118,29 @@ impl Url {
 
     /// Path + `?query` (без fragment) — для HTTP request line.
     pub fn path_and_query(&self) -> String {
-        match &self.query {
-            Some(q) => format!("{}?{}", self.path, q),
-            None => self.path.clone(),
+        match self.inner.query() {
+            Some(q) => format!("{}?{}", self.inner.path(), q),
+            None => self.inner.path().to_owned(),
         }
     }
 
-    /// Разрешить относительный или абсолютный `reference` относительно `self`.
-    /// Упрощённый алгоритм RFC 3986 §5.3; `.`/`..` dot-segments в получившемся
-    /// пути схлопываются через [`Url::parse`] (все ветки этой функции строят
-    /// результат через него).
+    /// Разрешить относительный или абсолютный `reference` относительно
+    /// `self`, через WHATWG "basic URL parser with base" (`inner.join`).
+    /// Host — своя raw-экстракция из `reference`, если тот несёт собственный
+    /// host (абсолютный или protocol-relative `//host/...`), иначе
+    /// наследуется от `self.host` неизменным (как и в WHATWG-алгоритме).
     pub fn resolve(&self, reference: &str) -> Result<Self> {
-        if has_scheme(reference) {
-            return Self::parse(reference);
-        }
-        if let Some(rest) = reference.strip_prefix("//") {
-            return Self::parse(&format!("{}://{}", self.scheme, rest));
-        }
-        let base_authority = self.authority_for_serialize();
-        if reference.starts_with('/') {
-            return Self::parse(&format!(
-                "{}://{}{}",
-                self.scheme, base_authority, reference
-            ));
-        }
-        if reference.is_empty() {
-            return Ok(self.clone());
-        }
-        if let Some(frag) = reference.strip_prefix('#') {
-            let mut next = self.clone();
-            next.fragment = Some(frag.to_owned());
-            next.serialized = serialize(
-                &next.scheme,
-                &next.host,
-                next.port,
-                &next.path,
-                next.query.as_deref(),
-                next.fragment.as_deref(),
-            );
-            return Ok(next);
-        }
-        if let Some(after_q) = reference.strip_prefix('?') {
-            let (q, frag) = split_at_any(after_q, &['#']);
-            let fragment = frag.strip_prefix('#').map(str::to_owned);
-            let mut next = self.clone();
-            next.query = Some(q.to_owned());
-            next.fragment = fragment;
-            next.serialized = serialize(
-                &next.scheme,
-                &next.host,
-                next.port,
-                &next.path,
-                next.query.as_deref(),
-                next.fragment.as_deref(),
-            );
-            return Ok(next);
-        }
-        let dir = self
-            .path
-            .rfind('/')
-            .map(|i| &self.path[..=i])
-            .unwrap_or("/");
-        Self::parse(&format!(
-            "{}://{}{}{}",
-            self.scheme, base_authority, dir, reference
-        ))
-    }
-
-    fn authority_for_serialize(&self) -> String {
-        match self.port {
-            Some(p) => format!("{}:{}", self.host, p),
-            None => self.host.clone(),
-        }
+        let joined = self
+            .inner
+            .join(reference)
+            .map_err(|e| Error::InvalidUrl(format!("{reference:?}: {e}")))?;
+        let host = if has_scheme(reference) || reference.starts_with("//") {
+            raw_host_from_input(reference)
+        } else {
+            self.host.clone()
+        };
+        let serialized = serialize(&joined, &host);
+        Ok(Self { host, serialized, inner: joined })
     }
 }
 
@@ -230,10 +150,10 @@ impl fmt::Display for Url {
     }
 }
 
-// ── Парсинг ──────────────────────────────────────────────────────────────────
+// ── Raw host extraction (display-only, see module doc) ─────────────────────
 
+/// scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":"
 fn has_scheme(s: &str) -> bool {
-    // scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":"
     let mut chars = s.chars();
     match chars.next() {
         Some(c) if c.is_ascii_alphabetic() => {}
@@ -250,131 +170,101 @@ fn has_scheme(s: &str) -> bool {
     false
 }
 
-#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
-fn split_scheme(s: &str) -> Result<(String, &str)> {
-    if !has_scheme(s) {
-        return Err(Error::InvalidUrl(format!("missing scheme: {s:?}")));
-    }
-    let colon = s.find(':').expect("has_scheme guaranteed `:`");
-    let scheme = s[..colon].to_ascii_lowercase();
-    Ok((scheme, &s[colon + 1..]))
+/// WHATWG basic URL parser steps 1–2: trim leading/trailing C0 control or
+/// space, then remove every embedded ASCII tab/CR/LF. Applied before our own
+/// raw host extraction so it agrees with what `inner` actually parsed.
+fn preprocess(s: &str) -> String {
+    let trimmed = s.trim_matches(|c: char| (c as u32) <= 0x20);
+    trimmed.chars().filter(|&c| !matches!(c, '\t' | '\n' | '\r')).collect()
 }
 
-fn parse_authority(authority: &str, scheme: &str) -> Result<(String, Option<u16>)> {
-    // Отбрасываем userinfo (`user:pass@`) — для http(s) deprecated.
+/// Schemes whose "special authority ignore slashes state" (WHATWG §4) skips
+/// extra `/`/`\` right after the scheme's own `//` rather than reading them
+/// as an empty-authority delimiter — verified against the `url` crate:
+/// `http:////path`/`http://\path` both resolve to host "path". `file` is
+/// deliberately excluded: it runs its own "file host state", which reads
+/// straight-to-empty-host-then-path on a third slash instead
+/// (`file:///tmp/x` -> host "", path "/tmp/x", also verified against the
+/// crate — the crate's own `has_host()` is even `false` there, not `true`
+/// with an empty string, though the WHATWG serializer still shows `//`;
+/// [`serialize`] reads that decision off `inner.as_str()` instead of
+/// re-deriving it for exactly this reason).
+fn ignores_extra_authority_slashes(scheme: &str) -> bool {
+    matches!(scheme, "http" | "https" | "ws" | "wss" | "ftp")
+}
+
+/// Best-effort raw (unnormalized) host substring for display — see module
+/// doc. Not a validator: `Url::parse`/`resolve` already rejected anything
+/// `inner` (the WHATWG parser) rejects before this ever runs.
+fn raw_host_from_input(s: &str) -> String {
+    let s = preprocess(s);
+    let (scheme, rest): (&str, &str) = if has_scheme(&s) {
+        match s.find(':') {
+            Some(colon) => (&s[..colon], &s[colon + 1..]),
+            None => ("", &s[..]),
+        }
+    } else {
+        ("", &s[..])
+    };
+    let Some(mut after_slashes) = rest.strip_prefix("//") else {
+        return String::new();
+    };
+    // "special authority ignore slashes state" (WHATWG §4): for a special
+    // scheme, any further leading `/`/`\` right after the scheme's own `//`
+    // is skipped, not treated as an empty-authority delimiter — verified
+    // against the `url` crate itself: `http:////path` and `http://\path`
+    // both resolve to host "path", not an empty host.
+    if ignores_extra_authority_slashes(&scheme.to_ascii_lowercase()) {
+        after_slashes = after_slashes.trim_start_matches(['/', '\\']);
+    }
+    let auth_end = after_slashes.find(['/', '?', '#']).unwrap_or(after_slashes.len());
+    let authority = &after_slashes[..auth_end];
+    // Userinfo (`user:pass@`) — не наше дело хранить, отбрасываем как и раньше.
     let host_port = match authority.rfind('@') {
         Some(i) => &authority[i + 1..],
         None => authority,
     };
-
-    if host_port.is_empty() {
-        // `file://path` имеет пустой host — это нормально.
-        if scheme == "file" {
-            return Ok((String::new(), None));
+    if let Some(after_bracket) = host_port.strip_prefix('[') {
+        // IPv6 literal — host несёт скобки целиком, порт (если есть) идёт после `]`.
+        match after_bracket.find(']') {
+            Some(end) => host_port[..=end + 1].to_owned(),
+            None => host_port.to_owned(),
         }
-        return Err(Error::InvalidUrl(format!("empty host in {scheme}://")));
-    }
-
-    match host_port.rfind(':') {
-        Some(i) => {
-            let host = host_port[..i].to_owned();
-            let port_str = &host_port[i + 1..];
-            if port_str.is_empty() {
-                Ok((host, None))
-            } else {
-                let port = port_str
-                    .parse::<u16>()
-                    .map_err(|_| Error::InvalidUrl(format!("invalid port: {port_str:?}")))?;
-                Ok((host, Some(port)))
-            }
-        }
-        None => Ok((host_port.to_owned(), None)),
-    }
-}
-
-/// RFC 3986 §5.2.4 remove_dot_segments — схлопывает `.`/`..` в path.
-/// Оперирует только компонентом path (без query/fragment).
-fn remove_dot_segments(path: &str) -> String {
-    let mut input = path;
-    let mut output = String::new();
-    while !input.is_empty() {
-        if let Some(rest) = input.strip_prefix("../") {
-            input = rest;
-        } else if let Some(rest) = input.strip_prefix("./") {
-            input = rest;
-        } else if input.starts_with("/./") {
-            input = &input[2..];
-        } else if input == "/." {
-            input = "/";
-        } else if input.starts_with("/../") {
-            input = &input[3..];
-            remove_last_segment(&mut output);
-        } else if input == "/.." {
-            input = "/";
-            remove_last_segment(&mut output);
-        } else if input == "." || input == ".." {
-            input = "";
-        } else {
-            let start = usize::from(input.starts_with('/'));
-            let seg_end = input[start..]
-                .find('/')
-                .map(|i| i + start)
-                .unwrap_or(input.len());
-            output.push_str(&input[..seg_end]);
-            input = &input[seg_end..];
+    } else {
+        match host_port.rfind(':') {
+            Some(i) => host_port[..i].to_owned(),
+            None => host_port.to_owned(),
         }
     }
-    output
 }
 
-/// Убрать последний сегмент и предшествующий `/` (если есть) из output-буфера.
-fn remove_last_segment(output: &mut String) {
-    match output.rfind('/') {
-        Some(i) => output.truncate(i),
-        None => output.clear(),
-    }
-}
+/// `scheme://host(raw)[:port]path[?query][#fragment]` — `inner`'s own
+/// fields except the host, which is `raw_host` (see module doc for why).
+fn serialize(inner: &WhatwgUrl, raw_host: &str) -> String {
+    // `inner.has_host()` is false for an EMPTY authority (`foo://`,
+    // `file:///tmp/x`) — but `inner.as_str()` still shows `//` for those
+    // (verified against the crate itself), so read the "show slashes"
+    // decision straight off its own serialization instead of re-deriving it.
+    let after_scheme = &inner.as_str()[inner.scheme().len() + 1..];
+    let show_authority_slashes = after_scheme.starts_with("//");
 
-fn split_at_any<'a>(s: &'a str, chars: &[char]) -> (&'a str, &'a str) {
-    match s.find(|c: char| chars.contains(&c)) {
-        Some(i) => (&s[..i], &s[i..]),
-        None => (s, ""),
-    }
-}
-
-fn default_port(scheme: &str) -> Option<u16> {
-    match scheme {
-        "http" | "ws"  => Some(80),
-        "https" | "wss" => Some(443),
-        _ => None,
-    }
-}
-
-fn serialize(
-    scheme: &str,
-    host: &str,
-    port: Option<u16>,
-    path: &str,
-    query: Option<&str>,
-    fragment: Option<&str>,
-) -> String {
-    let mut out = String::with_capacity(scheme.len() + host.len() + path.len() + 8);
-    out.push_str(scheme);
+    let mut out = String::with_capacity(inner.as_str().len());
+    out.push_str(inner.scheme());
     out.push(':');
-    if !host.is_empty() || scheme == "http" || scheme == "https" || scheme == "file" {
+    if show_authority_slashes {
         out.push_str("//");
-        out.push_str(host);
-        if let Some(p) = port {
+        out.push_str(raw_host);
+        if let Some(p) = inner.port() {
             out.push(':');
             out.push_str(&p.to_string());
         }
     }
-    out.push_str(path);
-    if let Some(q) = query {
+    out.push_str(inner.path());
+    if let Some(q) = inner.query() {
         out.push('?');
         out.push_str(q);
     }
-    if let Some(f) = fragment {
+    if let Some(f) = inner.fragment() {
         out.push('#');
         out.push_str(f);
     }
@@ -498,7 +388,10 @@ mod tests {
 
     #[test]
     fn empty_host_fails_for_http() {
-        assert!(Url::parse("http:///path").is_err());
+        // A genuinely empty host (after userinfo, not right after the
+        // scheme's own `//` — see `triple_slash_special_scheme_ignores_
+        // extra_slash` below for why `http:///path` does NOT hit this path).
+        assert!(Url::parse("http://user:pass@/path").is_err());
     }
 
     #[test]
@@ -616,5 +509,65 @@ mod tests {
         assert_eq!(r.as_str(), "http://localhost:8080/abs");
         let r2 = base.resolve("rel.html").unwrap();
         assert_eq!(r2.as_str(), "http://localhost:8080/dir/rel.html");
+    }
+
+    // ── LIB-6: regressions the WHATWG-conformant `inner` now closes ────────
+
+    #[test]
+    fn ipv6_literal_host_with_port() {
+        let u = Url::parse("http://[::1]:8080/x").unwrap();
+        assert_eq!(u.host(), "[::1]");
+        assert_eq!(u.port(), Some(8080));
+        assert_eq!(u.path(), "/x");
+    }
+
+    #[test]
+    fn ipv6_literal_without_brackets_now_rejected() {
+        // Own hand-rolled parser used to accept this ("too-permissive",
+        // the largest LIB-0 failure class: 199/512) — the colons were parsed
+        // as a bogus `host:port:garbage` split instead of a rejected literal.
+        assert!(Url::parse("http://2001::1").is_err());
+        assert!(Url::parse("http://[1::2]:3:4").is_err());
+    }
+
+    #[test]
+    fn forbidden_host_code_points_stripped_not_stored() {
+        // WHATWG preprocessing removes ASCII tab/newline from the whole
+        // input before parsing — the raw host must reflect that too, not
+        // store the literal control characters (LIB-0: field-mismatch host,
+        // 101/512).
+        let u = Url::parse("http://exa\tmple.\norg/").unwrap();
+        assert_eq!(u.host(), "example.org");
+    }
+
+    #[test]
+    fn empty_host_allowed_for_non_special_scheme() {
+        // LIB-0 "unexpected-failure: empty host rejected" (40/512): unlike
+        // http(s), a non-special scheme's authority may have an empty host.
+        assert!(Url::parse("foo://").is_ok());
+    }
+
+    #[test]
+    fn triple_slash_special_scheme_ignores_extra_slash() {
+        // WHATWG "special authority ignore slashes state": the third `/` is
+        // skipped, not read as an empty-authority delimiter — verified
+        // against the `url` crate itself (`http:///path` -> host "path",
+        // path "/", NOT an empty-host error). The pre-LIB-6 test asserting
+        // this rejects was based on a misreading of the spec, not a real
+        // requirement; the leniency is real and every major browser applies
+        // it identically.
+        let u = Url::parse("http:///path").unwrap();
+        assert_eq!(u.host(), "path");
+        assert_eq!(u.path(), "/");
+        assert_eq!(u.as_str(), "http://path/");
+    }
+
+    #[test]
+    fn empty_authority_keeps_slashes_in_serialization() {
+        // `has_host()` is false for an empty non-special authority, but the
+        // WHATWG serializer still shows `//` — `as_str()` must match `inner`.
+        let u = Url::parse("foo://").unwrap();
+        assert_eq!(u.host(), "");
+        assert_eq!(u.as_str(), "foo://");
     }
 }

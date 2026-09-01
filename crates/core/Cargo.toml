@@ -19,6 +19,20 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # Why this dependency (tracy-client): opt-in visual profiler, provisional,
 # feature-gated — see the workspace Cargo.toml comment above the version pin.
 tracy-client = { workspace = true, optional = true }
+# Why this dependency (url): permanent (ADR-027 — the WHATWG URL Standard's
+# host/path/query/fragment splitting is a spec state machine, not a decision
+# we own). Trait-anchor: `crate::url::Url`, this crate's own swap-point type
+# (LIB-6, docs/conformance/2026-08-31.md: own hand-rolled parser passed only
+# 41.95% of urltestdata.json — two entire missing algorithm branches, IPv6
+# bracket literals and forbidden/control host code point handling, not
+# isolated gaps). `Url` still does NOT re-export this crate's types: `host()`
+# stays our own raw, unnormalized (Unicode, original-case) substring — the
+# address bar's IDN spoof guard (`crates/shell/src/address_bar.rs::
+# guard_display_text`, DS-6) substring-replaces the exact text the user
+# typed, which this crate's ASCII/IDNA-normalized `host_str()` cannot give
+# back. `lumen-core::idn`/`lumen-core::punycode` (the *display* decision of
+# Unicode vs. Punycode) stay ours per LIB-6's own text.
+url = "2"
 
 [dev-dependencies]
 # Why this dependency (serde_json, dev-only): LIB-0 conformance census
