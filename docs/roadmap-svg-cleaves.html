@@ -57,8 +57,8 @@
 {
  "generated": "2026-09-01",
  "counts": {
-  "open": 365,
-  "fixed": 526,
+  "open": 363,
+  "fixed": 528,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -6110,10 +6110,17 @@
       },
       {
        "id": "LIB-7",
-       "title": "LIB-7: ре-триаж багов после замен",
+       "title": "LIB-7: ре-триаж багов после замен (частично: url+svg+text-level-semantics)",
+       "status": "done",
+       "size": "M",
+       "note": "ЗАКРЫТ (частично, срезы «url после LIB-6» + «svg после LIB-5/LIB-9» + «html/semantics/text-level-semantics после LIB-3»; css/css-fonts и css/css-text не прогнаны — вынесены в LIB-10) 2026-09-01 (ветка `p1-lib7-retriage`), чистая ре-триаж-задача без изменений в `crates/`. **url** (`run_report.py --all --root url --recursive`, 3:43, 44 id): 40/44 harness OK, 2447/7511 сабтестов, против базы 2026-08-09 (39/44, 1742/7451) — заметный рост, но **не от LIB-6**: LIB-6 заменил только `crates/core/src/url.rs` (Rust-навигация/сеть), а JS-видимый `URL`/`URLSearchParams`/`<a>` целиком идёт через отдельный рукописный парсер в JS-шиме (`crates/js/src/shim/url_parse_shim.js`'s `_lumen_parse_url`, вызывается из `dom.rs`), который `crates/core::url::Url` не использует и не вызывает — подтверждено прямым чтением. Рост цифр — эффект несвязанных правок за 5 недель между базой и этим срезом, не расследован (вне охвата этой задачи). [BUG-693](bugs/BUG-693-OPEN.md)/[BUG-694](bugs/BUG-694-OPEN.md)/[BUG-695](bugs/BUG-695-OPEN.md) LIB-6 не касается, остаются OPEN без правок текста. **svg** (`--root svg --recursive --processes=4`, 9:52, ранее 861 id / 472 harness-тестируемых → в этом прогоне 693 harness-тестируемых, знаменатель разъехался с базой 2026-08-06 необъяснимо — не расследовано, вероятно пересборка общего `MANIFEST.json` другими сессиями между датами): 503/693 harness OK, 463/2215 сабтестов против базы 421/472, 397/2068 — на глобальном уровне почти без изменений, доминирующий блокер как и был [BUG-685](bugs/BUG-685-OPEN.md) (HTML-парсер не отдаёт foreign content, поэтому разметочный `<svg>` не долетает до `SVG*Element`-DOM) — LIB-5/LIB-9 в этот путь не заходят, не влияют. **Важное методологическое уточнение**: reftest-исполнитель в этом харнессе — настоящее пиксельное сравнение (TEST-4/TEST-5 закрыты 2026-08-19, подтверждено сэмплом WPT-RUN-5 9 PASS/44 FAIL на 53 id), а не заглушка — `FAIL`/`PASS` с `0/0` сабтестов у reftest-файлов это норма формата (у reftest нет сабтестов), не признак нерабочего сравнения. На срезе reftest-файлов, попадающих в буквальный скоуп LIB-5/LIB-9 (заливки/маски): `mask-percentage.html`, `href-gradient-element.html`, `inline-svg-resize-viewport-dependent-mask.html` — PASS (согласуется со сданным скоупом); `symbol-in-mask.html` и `display-none-mask.html` — FAIL, вне списка «НЕ закрыто» LIB-9, не root-caused в рамках этой задачи, флаг для следующего, кто возьмётся за SVG-маски. **html/semantics/text-level-semantics** (`--root html/semantics/text-level-semantics --recursive --processes=4`, 0:58): изолированной базы ДО LIB-3 не существовало (подкаталог прогонялся только в составе слитого 14-каталожного среза `WPT-VENDOR-html-semantics-misc`, 2026-08-04, без разбивки по подкаталогам) — этот прогон сам стал первой изолированной цифрой: 13/34 harness OK, 22/27 сабтестов. Доминирующий кластер отказов — reftest на `<bdi>`/`<bdo>` (bidi-переупорядочивание) — подтверждено НЕ относящимся к LIB-3: LIB-3 заменил только OpenType-шейпер (`gsub`/`gpos`, лигатуры/сложные скрипты), bidi-алгоритм (UAX #9) реализован отдельно в `layout/bidi.rs` и уже ✅ по `CSS-SPECS.md`; отказы `<bdi>`/`<bdo>` похожи на пробел в HTML-элементных дефолтах (auto-направление/override), не в самом алгоритме — вне скоупа LIB-3, не расследовано дальше. **Не закрыто**: css/css-fonts (831 файл) и css/css-text (2809 файлов) никогда не имели отдельного прогона даже ДО LIB-2/LIB-3 (только нерепрезентативный урезанный пробный прогон всего `css/`-зонтика) — сравнивать не с чем, нужен отдельный первый прогон → LIB-10."
+      },
+      {
+       "id": "LIB-10",
+       "title": "LIB-10: первый прогон css-fonts/css-text (остаток LIB-7)",
        "status": "planned",
        "size": "M",
-       "note": "Ре-триаж багов после КАЖДОЙ замены, не в конце дорожки: прогнать те же категории WPT, что и до неё (css/css-fonts, css/css-text, html/semantics/text-level после LIB-3; svg после LIB-5; url после LIB-6) и сравнить построчно. Каждый задетый баг из BUGS.md получает один из трёх исходов: FIXED с датой и ссылкой на срез; сужение описания до реального остатка; перенос в ROADMAP задачей (правило 2026-08-28). Ожидание честное: прямых закрытий немного, основной эффект — снятие класса «этого нет вообще», из-за которого семейства тестов не доходят до проверки."
+       "note": "Остаток LIB-7: первый прогон `css/css-fonts` (831 файл) и `css/css-text` (2809 файлов) — ни разу не прогонялись отдельно (только урезанная проба всего `css/`-зонтика, `docs/wpt-vendor-notes/css.md`), поэтому сравнивать LIB-2/LIB-3 (замена шейпера) не с чем; этот прогон сам становится базой. Держать в уме методологическую поправку из LIB-7: reftest в этом харнессе — реальное пиксельное сравнение (не заглушка), `FAIL`/`PASS` с `0/0` сабтестов у reftest-файлов — норма формата."
       },
       {
        "id": "LIB-8",
@@ -6373,20 +6380,6 @@
    "status": "open",
    "title": "`document.elementFromPoint`/`elementsFromPoint` (CSSOM View §3) не реализованы вовсе. 10 файлов `css/CSS2/*` — 8 как чистый FAIL (`TypeError`), 2 как TIMEOUT (в…",
    "component": "js (`crates/js/src/dom.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-465": {
-   "status": "open",
-   "title": "Цветовые значения из `CSSStyleDeclaration`/`getComputedStyle` не сериализуются в канонический вид `rgb(r, g, b)` (CSS Color §4.2/CSSOM §6.7.3) — возвращается ис…",
-   "component": "css-parser/layout",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-466": {
-   "status": "open",
-   "title": "Margin collapsing \"через\" пустой блок (CSS2.1 §8.3.1) не реализован — margin родителя и следующего элемента не схлопываются в один при пустом промежуточном блок…",
-   "component": "layout (block formatting context)",
    "date": null,
    "debtor": false
   },
@@ -12438,6 +12431,13 @@
    "date": "2026-09-01",
    "debtor": true
   },
+  "BUG-465": {
+   "status": "fixed",
+   "title": "Заявка называла `getComputedStyle()`/`CSSStyleDeclaration` разом — ревизия сузила: `getComputedStyle()` уже сериализует канонически (`selector_query::color_to_c…",
+   "component": "js/css-parser/layout (`CSSStyleDeclaration` specified-value reflection)",
+   "date": "2026-09-01",
+   "debtor": false
+  },
   "BUG-463": {
    "status": "fixed",
    "title": "WAAPI `element.animate()`/`getAnimations()` жили на `_LUMEN_WRAPPER_MEMBERS` — общем прототипе, который висит на цепочке НИЖЕ `Element.prototype` (BUG-849), поэ…",
@@ -12449,6 +12449,13 @@
    "status": "fixed",
    "title": "paint (wgpu — путь отрисовки вновь открывшейся полосы при scroll-blit, `crates/engine/paint/src/renderer.rs`)",
    "component": "COPY_DST`, пиксельно нейтрально), интерливед живой A/B 3 пары — надбавка min 16.87 мс с битами против 18.58 без. Инструмент — `band_copy_cost_census` (`#[ignore]`-тест `lumen-paint`); цена меряется НАКЛОНОМ по числу копий в submit-е, а прокси через `LoadOp::Clear` отвергнут (65 ГБ/с = fast-clear метаданными). Остаток пополнен п. 60 (пропорциональна ли цена промаха числу перерисованных строк при неизменной цели — не измерено, первый шаг среза 29) и п. 61 (ping-pong требует второй полосы +18.6 МиБ, кольцевой адресации — нет).",
+   "date": "2026-09-01",
+   "debtor": false
+  },
+  "BUG-466": {
+   "status": "fixed",
+   "title": "Margin collapsing \"через\" пустой блок (CSS2.1 §8.3.1) не было реализовано — margin родителя и следующего элемента не схлопывались в один при пустом промежуточно…",
+   "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs`)",
    "date": "2026-09-01",
    "debtor": false
   }
@@ -12512,7 +12519,6 @@
    "BUG-114",
    "BUG-196",
    "BUG-213",
-   "BUG-465",
    "BUG-500"
   ],
   "css-parser/layout (`ComputedStyle` — no field exists)": [
@@ -13229,6 +13235,9 @@
   "js/css-parser (`crates/js/src/dom.rs::CSS.supports`, `crates/engine/css-parser/src/parser.rs::SupportsCondition::evaluate`)": [
    "BUG-501"
   ],
+  "js/css-parser/layout (`CSSStyleDeclaration` specified-value reflection)": [
+   "BUG-465"
+  ],
   "js/dom": [
    "BUG-306"
   ],
@@ -13399,6 +13408,9 @@
    "BUG-738",
    "BUG-740"
   ],
+  "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs`)": [
+   "BUG-466"
+  ],
   "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)": [
    "BUG-355"
   ],
@@ -13434,9 +13446,6 @@
   ],
   "layout (`style.rs` cascade, `rule_index.rs`)": [
    "BUG-284"
-  ],
-  "layout (block formatting context)": [
-   "BUG-466"
   ],
   "layout (float positioning, CSS2.1 §9.5.1)": [
    "BUG-469"
