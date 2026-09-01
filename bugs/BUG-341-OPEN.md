@@ -1,6 +1,6 @@
 # BUG-341: `lay_out_flex` double-lays-out every item — general engine bug, ~300× over CC-12's 2ms chrome perf-gate budget
 
-**Статус:** OPEN — **на паузе с 2026-08-03 после S36** (see below; not a silent relaxation, an explicit user decision).
+**Статус:** OPEN — **на паузе с 2026-09-01 после S37** (see below; not a silent relaxation, an explicit user decision).
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_flex`) — **general flexbox algorithm bug, affects any nested-flexbox page**, not just chrome. Surfaced via the chrome document (`crates/shell/src/main.rs::relayout_chrome_host`, `docs/tasks/p1-css-chrome.md`) because CC-12 was the first hard perf budget + realistic flex-nesting-depth bench to exist.
 **Найден:** P1, CC-12 (перф-гейт хрома) 2026-07-25 — новый тест `crates/shell/src/main.rs::tests::cc12_chrome_perf_gate_hover_and_keystroke_cycles`. Root-caused: P1, 2026-07-25.
 
@@ -4610,6 +4610,75 @@ engine-independent of the flex/grid specifics that motivated S1-S35), or
 (b) treating the general-cache approach as exhausted for this codebase's
 current shape and looking for a different lever entirely.
 
+## S37 — the fixed cost is the clone, by three orders of magnitude: key
+construction and the `HashMap` lookup are both noise
+
+Resumed 2026-09-01 on explicit user request (P3), picking up exactly the
+question S36 left unattempted. Isolated microbench per `docs/perf-method.md`'s
+"ask price from a separate microbench before operating the whole path" rule
+(§2), rather than a fourth wall-clock A/B on the whole `lay_out_cache_checked`
+path — the question was about one internal piece of a mechanism already
+measured three times (S32/S33/S36), not about the mechanism's overall effect.
+
+**Fixture:** a synthetic 20-item flex row (`.row > .item*20`, each item two
+text-bearing spans) — 102 `LayoutBox` nodes total after `build_box`+`lay_out`,
+representative of one `lay_out_flex` item's subtree depth/fan-out, not the
+whole ~2300-node chrome document S32/S36 measured wall-clock on. New test
+`bug341_s37_cache_fixed_cost_breakdown`
+(`box_tree/tests/bug341_differential.rs`), `cargo test -p lumen-layout
+--profile dev-release
+box_tree::tests::bug341_differential::bug341_s37_cache_fixed_cost_breakdown --
+--ignored --nocapture`, dev-release, single run (a microbench isolated from
+the rest of the engine has none of the machine-contention noise the full A/B
+protocol guards against — see `docs/perf-method.md` §4 — so one run already
+shows a three-orders-of-magnitude gap, no interleaving needed to trust it):
+
+```
+[s37] subtree_nodes=102 N=50000 N_SUBTREE=5000
+[s37] key_construction        5.1 ns/call
+[s37] hashmap_lookup        266.3 ns/call (200-entry map, 50% hit)
+[s37] arc_style_clone        15.7 ns/call
+[s37] subtree_clone      175294.4 ns/call  (1718.57 ns/node)
+```
+
+Re-run once more immediately after (this time sharing the machine with a concurrent `clippy`/build) to check the finding survives contention, not just this one process's absolute numbers: `hashmap_lookup` 506.9ns, `subtree_clone` 556 783.9ns (5458.67ns/node) — every absolute number moved 2–3× with the load, but the *ratio* did not: clone still dominates lookup by ~1100× and key construction by ~72 000×, an even wider margin than the quiet run. The qualitative finding is robust to machine noise; only the absolute ns/node figure above should be treated as load-dependent.
+
+**Key construction (5.1ns) and the `HashMap` lookup (266.3ns) are both
+negligible next to the subtree clone (175 294.4ns — 660× the lookup, 34 000×
+the key build).** This confirms S32's original attribution (91% of insertions
+never read back, so the clone is pure waste on those) with a hard number
+instead of a percentage: on this fixture the clone alone costs more than
+S36's entire measured overhead of enabling the cache on some per-cycle
+samples. `Arc::clone(&b.style)` (15.7ns, a refcount bump) is not the problem
+either — it is `b.clone()`, the recursive walk of every descendant's
+`Vec<LayoutBox>`, at ≈1.7μs per node.
+
+**This answers S36's option (a) negatively as posed:** the fixed cost is not
+spread across three comparable pieces where trimming key-construction or
+switching hash algorithms would move the needle — it is concentrated almost
+entirely in one place, the deep clone, and cutting *that* means either (i) not
+cloning eagerly on every cacheable miss (defer the clone to a confirmed
+second hit on the same key — S33's own lesson applies here too: verify the
+real repeat shape, "exactly twice" vs "three or more", before picking an
+insertion policy, since S33 found the wrong one zeroes the only real hit
+instead of trimming waste), or (ii) changing what is stored so a hit does not
+need an owned, independently-mutable copy at all (e.g. an `Rc`/`Arc`-shared
+subtree the hit path repositions without cloning out of — but `lay_out_flex`
+already mutates the box it receives in place after this call returns in some
+call sites, so a shared subtree would need those call sites audited for
+whether they still hold a unique reference by the time they mutate, not
+assumed). **Neither is a same-slice fix** — both are a materially different
+cache shape from S32/S36's straightforward "clone on insert, `Arc::ptr_eq` on
+hit" mechanism, not a parameter tune of it.
+
+**Not attempted:** building either redesign (i)/(ii) above, or re-measuring
+whether a lazily-inserted or `Rc`-shared cache clears net-positive on the real
+`CC12_HOVER`/`CC12_KEY` wall-clock gate S36 used. Standing pause terms
+unchanged: BUG-341 is not abandoned, resume only on explicit user request;
+whoever resumes next has a concrete, numbered target (cut the ≈1.7μs/node
+clone, not the 5–266ns key/lookup pair) instead of S36's three-way "which one
+dominates" question.
+
 ## Repro
 
 ```bash
@@ -4626,7 +4695,15 @@ cargo test -p lumen-shell --profile dev-release bug341_s21_cascade_index_census 
 cargo test -p lumen-shell --profile dev-release bug341_s27_walk_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s30_flex_key_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s36_layout_result_cache_share -- --ignored --nocapture
+cargo test -p lumen-layout --profile dev-release box_tree::tests::bug341_differential::bug341_s37_cache_fixed_cost_breakdown -- --ignored --nocapture
 ```
+
+S37 added `bug341_s37_cache_fixed_cost_breakdown`, a new isolated microbench
+in `lumen-layout` itself (`box_tree/tests/bug341_differential.rs`) rather than
+a `lumen-shell`-side census — the question was about one internal piece of
+the S36 cache mechanism, not about a document-shaped pass over the chrome
+fixture, so it needed no chrome document or `lumen-shell` at all. See its own
+section above for the breakdown.
 
 S34 re-used `bug341_s30_flex_key_census` unchanged (no new shell-side test) —
 the census it already prints (`repeat_key_same_style`) is exactly what this
