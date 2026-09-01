@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-01",
  "counts": {
-  "open": 361,
-  "fixed": 529,
+  "open": 359,
+  "fixed": 530,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 890,
+ "total_bugs": 889,
  "phases": [
   {
    "id": "P0",
@@ -6174,10 +6174,10 @@
       },
       {
        "id": "FRAME-7",
-       "title": "FRAME-7: каретка, Tab-фокус и выделение внутри поля (остаток FRAME-2)",
+       "title": "FRAME-7: каретка `<textarea>`+фрейм, Tab-фокус внутри фрейма, выделение (срез 1 — каретка страничного input, срез 2 — Tab-фокус страницы — landed)",
        "status": "planned",
        "size": "L",
-       "note": "Остаток FRAME-2 после среза «позиция курсора» (2026-09-01). Видимая каретка на странице И во фрейме одним куском: `caret_color` разбирается/каскадируется, но ни один потребитель в `lumen-paint` его не читает — единственная каретка в движке нарисована руками для омнибокса хрома (`chrome_ui.rs`, к странице/фрейму отношения не имеет); естественная точка встраивания — `display_list/form_controls.rs::emit_input_value_text`, по образцу того, как `CompositorAnimFrame`-оверрайды уже прокинуты через `fill_buckets`/`walk_with_anim` per-`NodeId`-картой без изменения layout/каскада. Перевод фокуса клавишей Tab — не существует вовсе, ни на странице, ни во фрейме (нужен порядок фокусируемости по HTML LS §6.6/`tabindex`, обход, пропуск disabled/inert — с нуля, не расширение существующего). Выделение текста (drag мышью, Shift+стрелки) и его подсветка внутри `<input>`/`<textarea>`: `selectionStart`/`selectionEnd`/`selectionDirection` — существующая JS-тень в `web_api_shim_tail_b.js`, отключённая от Rust-курсора, который завела предыдущая часть задачи. Помнить: `--screenshot`/`--dump-display-list`/живое окно строят display list тремя разными путями (см. гочту CLAUDE.md про `PushMaskLayer`/BUG-936) — визуальная каретка должна попасть во все три."
+       "note": "Срез 1 (2026-09-02) landed каретку СТРАНИЧНОГО `<input>`: `CompositorOverride::caret: Option<usize>` (новое поле, layout crate `animation.rs`) протянуто через `fill_buckets`/`emit_box_self`/`emit_form_control_indicator` в новую `form_controls.rs::emit_input_caret` — тот самый механизм, которым уже ходят opacity/transform/color-оверрайды анимаций, без изменения layout/каскада. Заполняется `Lumen::focused_input_caret()` (`lumen/text_input.rs`) в точке сборки `anim_dl` живого окна (`redraw_requested.rs`) — условие сборки ослаблено с «есть активная CSS-анимация» до «есть анимация ИЛИ каретка», иначе статичная страница без анимаций никогда не проходила бы через anim-путь. `--screenshot`/`--dump-display-list` используют тот же `fill_buckets`, но их вызов (`paint_ordered`) не проброшен — не нужно: у них нет цикла событий клавиатуры, `form_state.cursor` там всегда `None`. x-позиция — то же приближение `font_size*0.5*char` что и центрирование label кнопки (реального TextMeasurer в paint-крейте нет); `caret-color:auto` резолвится в цвет текста (уже верно с `adjust.rs:254`, только не потреблялось). Срез 2 (2026-09-01) landed постраничную последовательную Tab-навигацию (HTML LS §6.6.6): новый чистый модуль `crates/shell/src/focus_nav.rs` (`build_focus_order`/`next_focus_target`, 6 юнит-тестов) обходит композитное (`FlatTree`) дерево документа и сортирует фокусируемые узлы — сначала положительный `tabindex` по возрастанию (при равенстве — порядок в дереве), затем `tabindex=\"0\"`/имплицитно-фокусируемые (`<a href>`, `<button>`/`<select>`/`<textarea>`/не-`hidden` `<input>` без `disabled`, `<iframe>`, `contenteditable`) в порядке дерева; `tabindex=\"-1\"`, `disabled` и `hidden`-поддерево исключены целиком (DOM-атрибутная модель — то же приближение, что уже держит `lumen_a11y::AXState`, без чтения ComputedStyle). Склейка с состоянием — `lumen/focus_tab.rs::advance_page_focus`, вызывается из `keyboard.rs` ДО глобальной keybinding-таблицы (та вяжет только Ctrl+Tab на переключение вкладок — голый/Shift+Tab резолвился в `None` и ничего не делал): двигает `focused_node`, при уходе из фрейма (`focused_frame`) уведомляет его так же, как уход кликом (`notify_frame_focus` — теперь `pub(crate)` — и `refresh_frames`), затем те же `relayout_chrome`/`platform_bridge.focused_node_changed`/JS `notify_focus_changed`, что и `click.rs`. Живая клавиатурная проверка не сделана — та же причина, что у среза 1 (FRAME-2 note): ни `--mcp-live-port`'s `type`, ни BiDi `input.performActions`'s `key`-подмножество не посылают сырые нажатия клавиш, только печатаемый текст (`replay_input_actions` в `bidi-server/src/protocol.rs` конкатенирует `keyDown.value` и зовёт `type_text`). **Остаток**: (1) каретка `<textarea>` — принципиально другой путь: значение красится как обычный `InlineRun` через `emit_inline_run`, не через `form_controls.rs`, нужна геометрия строк/глифов, а не однострочная box-математика; (2) каретка ВНУТРИ фрейма — блокирована отдельным пробелом: `frames::layout_frame_document` вообще не вызывает `set_interactive_state`, фрейм «интерактивно слеп» для CSS `:focus` так же, как для `:hover`, к тому же `rebuild_frame_display_lists` перестраивает `content_dl` только при `relaid[i]`, а движение курсора без правки текста этого не форсирует; (3) Tab-фокус ВНУТРИ фрейма — блокирован тем же пробелом, что и (2): нажатие Tab при фокусе внутри фрейма лишь покидает фрейм на уровне страницы (`focus_tab.rs` уже это умеет — `before_frame`-ветка), но не переключает фокус МЕЖДУ полями самого фрейма — тому нужен composed-order обход ЕГО документа, которого сейчас нет; (4) выделение текста (drag мышью, Shift+стрелки) и подсветка внутри `<input>`/`<textarea>` — существующая JS-тень `selectionStart`/`selectionEnd`/`selectionDirection` в `web_api_shim_tail_b.js` по-прежнему отключена от Rust-курсора."
       },
       {
        "id": "FRAME-3",
@@ -6415,20 +6415,6 @@
    "status": "open",
    "title": "CSS Font Loading API практически не реализована: глобальные `FontFace`/`FontFaceSet`/`FontFaceSetLoadEvent` отсутствуют вовсе, `document.fonts` — урезанный read…",
    "component": "js (`crates/js/src/dom.rs:6770` — `_lumen_get_fonts()`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-468": {
-   "status": "open",
-   "title": "После JS-мутации `container.style.width` процентные `margin`/`padding` потомка (CSS2.1 §8.3/§10.2) не пересчитываются относительно новой ширины — измеряется 0 в…",
-   "component": "layout (процентная резолюция против containing block)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-469": {
-   "status": "open",
-   "title": "Блок нулевой ширины (новый formatting context) между float'ами не позиционируется в нулевой-ширины \"щель\" — измеряется offset (0, 0) вместо ожидаемой позиции в…",
-   "component": "layout (float positioning, CSS2.1 §9.5.1)",
    "date": null,
    "debtor": false
   },
@@ -12486,6 +12472,13 @@
    "component": "js (`crates/js/src/v8_runtime/install/platform.rs`, `crates/engine/paint/src/hit_test.rs`)",
    "date": "2026-09-01",
    "debtor": false
+  },
+  "BUG-469": {
+   "status": "fixed",
+   "title": "Явная (в т.ч. процентная) `width` float'а резолвилась против ЛОКАЛЬНОГО зазора между уже расставленными float'ами (`probe_avail`/`avail_w`) вместо полной contai…",
+   "component": "layout (float positioning, CSS2.1 §9.5.1)",
+   "date": "2026-09-01",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -13478,9 +13471,6 @@
   ],
   "layout (ruby box layout)": [
    "BUG-535"
-  ],
-  "layout (процентная резолюция против containing block)": [
-   "BUG-468"
   ],
   "layout (разобран на подбаги)": [
    "BUG-725"

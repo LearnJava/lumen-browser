@@ -43,7 +43,7 @@ impl Lumen {
     /// `document.activeElement` ушедшего остался бы указывать на свой узел, и
     /// два под-документа одновременно считали бы себя сфокусированными.
     #[allow(unused_variables)] // хэндл читается только под feature = "v8"
-    fn notify_frame_focus(
+    pub(crate) fn notify_frame_focus(
         &mut self,
         before: Option<(usize, NodeId)>,
         after: Option<(usize, NodeId)>,

@@ -484,6 +484,23 @@ impl Lumen {
             }
         }
 
+        // Tab / Shift+Tab: page-wide sequential focus navigation (FRAME-7
+        // срез 2, HTML Standard §6.6.6). Must run before the global
+        // keybinding table below: the table binds only Ctrl+Tab (tab
+        // switching, `KeyCommand::NextTab`), so a plain/Shift Tab reaching it
+        // resolves to no command at all and did nothing before this slice.
+        // Always consumed regardless of outcome — a page must never be able
+        // to make Tab fall through to some other action.
+        if (self.modifiers.is_empty() || self.modifiers == ModifiersState::SHIFT)
+            && code == KeyCode::Tab
+            && !key_event.repeat
+        {
+            if self.advance_page_focus(self.modifiers.is_empty()) {
+                self.request_redraw();
+            }
+            return;
+        }
+
         let Some(cmd) = keybinding_for(code, self.modifiers) else {
             return;
         };

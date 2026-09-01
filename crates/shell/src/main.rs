@@ -43,6 +43,7 @@ mod doc_extract;
 mod display_list_metrics;
 mod dump_mode;
 mod event_sink;
+mod focus_nav;
 mod frame_pacing;
 mod js_escape;
 mod layout_metrics;
