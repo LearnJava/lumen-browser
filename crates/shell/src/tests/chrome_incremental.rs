@@ -1322,13 +1322,13 @@ fn bug405_slice50_chrome_overlay_cache_hit_matches_fresh_build_and_key_changes_m
 
     // Cold: no cache yet -- must build fresh and hand back something to
     // remember.
-    let (framed0, strips0, cache0) =
+    let (framed0, strips0, _digests0, cache0) =
         chrome_overlay_segment(&chrome_dl, host, win_w, win_h, caret, 1, true, None);
     let cache0 = cache0.expect("cold call must produce a cache to remember");
 
     // Same generation/host/viewport/caret, cache present -- must be a HIT:
     // no new cache (nothing changed to remember), bytes identical to cycle 0.
-    let (framed1, strips1, cache1) =
+    let (framed1, strips1, _digests1, cache1) =
         chrome_overlay_segment(&chrome_dl, host, win_w, win_h, caret, 1, true, Some(&cache0));
     assert!(cache1.is_none(), "unchanged key must reuse the existing cache, not rebuild one");
     assert_eq!(framed1, framed0, "HIT must be byte-identical to the fresh build it reuses");
@@ -1343,7 +1343,7 @@ fn bug405_slice50_chrome_overlay_cache_hit_matches_fresh_build_and_key_changes_m
         ("caret", 1, host, (win_w, win_h), None),
     ];
     for (label, gen_, host2, vp2, caret2) in cases {
-        let (_, _, new_cache) =
+        let (_, _, _, new_cache) =
             chrome_overlay_segment(&chrome_dl, host2, vp2.0, vp2.1, caret2, gen_, true, Some(&cache0));
         assert!(
             new_cache.is_some(),
@@ -1355,7 +1355,7 @@ fn bug405_slice50_chrome_overlay_cache_hit_matches_fresh_build_and_key_changes_m
     // cache_enabled=false must never consult (or update) the cache, even
     // when one that would otherwise match is passed in -- the
     // LUMEN_NO_CHROME_OVERLAY_CACHE=1 A/B lever's whole point.
-    let (framed_disabled, _, cache_disabled) =
+    let (framed_disabled, _, _, cache_disabled) =
         chrome_overlay_segment(&chrome_dl, host, win_w, win_h, caret, 1, false, Some(&cache0));
     assert_eq!(framed_disabled, framed0, "disabled arm must still build the correct bytes");
     assert!(cache_disabled.is_none(), "disabled arm must not remember a cache either");
@@ -1415,7 +1415,7 @@ fn bug405_slice51_chrome_overlay_cache_net_win_at_four_active_strips() {
         lumen_layout::Color { r: 0, g: 120, b: 220, a: 220 },
     ));
 
-    let (_, strips_used, cache) =
+    let (_, strips_used, _, cache) =
         chrome_overlay_segment(&chrome_dl, host, win_w, win_h, caret, 1, true, None);
     assert_eq!(
         strips_used, 4,
@@ -1432,14 +1432,14 @@ fn bug405_slice51_chrome_overlay_cache_net_win_at_four_active_strips() {
     // arms see the same cache/allocator warmth instead of one racing first.
     for i in 0..WARMUP + SAMPLES {
         let t0 = std::time::Instant::now();
-        let (framed, _, new_cache) =
+        let (framed, _, _, new_cache) =
             chrome_overlay_segment(&chrome_dl, host, win_w, win_h, caret, 1, true, Some(&cache));
         let hit_ms = t0.elapsed().as_secs_f32() * 1000.0;
         assert!(new_cache.is_none(), "must stay a HIT for the whole loop");
         std::hint::black_box(&framed);
 
         let t1 = std::time::Instant::now();
-        let (framed2, strips2, _) =
+        let (framed2, strips2, _, _) =
             chrome_overlay_segment(&chrome_dl, host, win_w, win_h, caret, 1, false, None);
         let rebuild_ms = t1.elapsed().as_secs_f32() * 1000.0;
         assert_eq!(strips2, 4);
@@ -1539,7 +1539,7 @@ fn bug405_slice52_real_chrome_overlay_fixture() -> (Rect, lumen_paint::DisplayLi
 #[test]
 fn bug405_slice52_real_chrome_layout_caps_at_three_active_strips() {
     let (host_rect, chrome_dl, (win_w, win_h)) = bug405_slice52_real_chrome_overlay_fixture();
-    let (_, strips_used, _) = chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, false, None);
+    let (_, strips_used, _, _) = chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, false, None);
     eprintln!(
         "BUG405_S52 host_rect={host_rect:?} viewport=({win_w}, {win_h}) strips_used={strips_used} \
          cmds={}",
@@ -1565,7 +1565,7 @@ fn bug405_slice52_real_chrome_layout_caps_at_three_active_strips() {
 #[ignore = "manual perf gate (BUG-405 срез 52) вЂ” doc comment has the run command"]
 fn bug405_slice52_chrome_overlay_cache_net_win_on_real_layout() {
     let (host_rect, chrome_dl, (win_w, win_h)) = bug405_slice52_real_chrome_overlay_fixture();
-    let (_, strips_used, cache) =
+    let (_, strips_used, _, cache) =
         chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, true, None);
     let cache = cache.expect("cold build must produce a cache to remember");
 
@@ -1578,14 +1578,14 @@ fn bug405_slice52_chrome_overlay_cache_net_win_on_real_layout() {
     // arms see the same cache/allocator warmth instead of one racing first.
     for i in 0..WARMUP + SAMPLES {
         let t0 = std::time::Instant::now();
-        let (framed, _, new_cache) =
+        let (framed, _, _, new_cache) =
             chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, true, Some(&cache));
         let hit_ms = t0.elapsed().as_secs_f32() * 1000.0;
         assert!(new_cache.is_none(), "must stay a HIT for the whole loop");
         std::hint::black_box(&framed);
 
         let t1 = std::time::Instant::now();
-        let (framed2, strips2, _) =
+        let (framed2, strips2, _, _) =
             chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, false, None);
         let rebuild_ms = t1.elapsed().as_secs_f32() * 1000.0;
         assert_eq!(strips2, strips_used);
@@ -1635,7 +1635,7 @@ fn bug405_slice52_chrome_overlay_cache_net_win_on_real_layout() {
 #[ignore = "manual perf gate (BUG-405 срез 55) — doc comment has the run command"]
 fn bug405_slice55_fold_overlay_cost_is_mostly_chrome_segment() {
     let (host_rect, chrome_dl, (win_w, win_h)) = bug405_slice52_real_chrome_overlay_fixture();
-    let (chrome_segment, strips_used, _) =
+    let (chrome_segment, strips_used, _, _) =
         chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, false, None);
     assert_eq!(strips_used, 3, "must match срез 52's real-layout ceiling");
 
@@ -1731,7 +1731,7 @@ fn bug405_slice55_fold_overlay_cost_is_mostly_chrome_segment() {
 #[ignore = "manual perf gate (BUG-405 срез 56) — doc comment has the run command"]
 fn bug405_slice56_fold_overlay_cost_holds_with_real_command_order() {
     let (host_rect, chrome_dl, (win_w, win_h)) = bug405_slice52_real_chrome_overlay_fixture();
-    let (chrome_segment, strips_used, _) =
+    let (chrome_segment, strips_used, _, _) =
         chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, false, None);
     assert_eq!(strips_used, 3, "must match срез 52's real-layout ceiling");
 
@@ -1787,5 +1787,149 @@ fn bug405_slice56_fold_overlay_cost_holds_with_real_command_order() {
         chrome_segment.len(),
         full_summary.min_ms,
         volatile_summary.min_ms,
+    );
+}
+
+// -- BUG-405 срез 57: thread ChromeOverlayFrameCache's digest into fold_overlay --
+
+/// Срез 56 fixed the reuse mechanism's shape (a `(start, len)` range
+/// recomputed from the actual composition, not a fixed prefix/suffix slot).
+/// This slice implements it: `ChromeOverlayFrameCache` now also remembers
+/// `fold_overlay(&framed)` (`chrome_ui.rs`'s `digests` field), and
+/// `fold_overlay_with_reuse` (`lumen_paint::display_list`) hashes only the
+/// commands OUTSIDE the declared range, splicing in the cached tail
+/// unchanged.
+///
+/// Correctness gate: on the real command order (scrollbar first, chrome
+/// second — срез 56), reusing the chrome segment's cached digest must give
+/// BIT-IDENTICAL output to a full `fold_overlay` — a false hit here means a
+/// wrong pixel comparison downstream (`overlay_cache_step`/the frame hash),
+/// not just a slower frame.
+#[test]
+fn bug405_slice57_fold_overlay_with_reuse_matches_full_fold_on_real_order() {
+    let (host_rect, chrome_dl, (win_w, win_h)) = bug405_slice52_real_chrome_overlay_fixture();
+    let (chrome_segment, strips_used, digests0, cache) =
+        chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, true, None);
+    assert_eq!(strips_used, 3, "must match срез 52's real-layout ceiling");
+    let cache = cache.expect("cold build must produce a cache to remember");
+
+    // Second call, same key -- must be a HIT, and its digest must equal the
+    // cold build's own fold (not just same length).
+    let (chrome_segment2, _, chrome_digests, new_cache) =
+        chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, true, Some(&cache));
+    assert!(new_cache.is_none(), "unchanged key must stay a HIT");
+    assert_eq!(chrome_segment2, chrome_segment, "HIT must reuse the exact same bytes");
+    assert_eq!(chrome_digests, digests0, "HIT digest must equal the cold build's own fold");
+
+    let scrollbar_cmds = scrollbar::build_scrollbar_overlay(400.0, 4000.0, win_w, win_h);
+    let mut full_overlay = scrollbar_cmds.clone();
+    full_overlay.extend(chrome_segment2.iter().cloned());
+    let chrome_start = scrollbar_cmds.len();
+
+    let expected = lumen_paint::display_list::fold_overlay(&full_overlay);
+    let actual = lumen_paint::display_list::fold_overlay_with_reuse(
+        &full_overlay,
+        Some(&(chrome_start, chrome_digests)),
+    );
+    assert_eq!(
+        actual, expected,
+        "reused digest must be bit-identical to a full recompute -- a mismatch here would silently \
+         feed a wrong per-command hash into overlay_cache_step/the frame hash, i.e. a false cache HIT \
+         (wrong pixel forever, not just a slow frame)",
+    );
+}
+
+/// A `(start, digests)` whose length does not fit `overlay.len()` -- a stale
+/// hint from a shorter/longer buffer than the one it was computed for,
+/// exactly what `overlay_len_after_prepend_phase` in `redraw_requested.rs`
+/// guards against by construction, but this is the last line of defence
+/// inside `fold_overlay_with_reuse` itself -- must fall back to a full
+/// recompute, not panic or silently misalign.
+#[test]
+fn bug405_slice57_fold_overlay_with_reuse_falls_back_on_length_mismatch() {
+    let overlay = vec![
+        lumen_paint::DisplayCommand::FillRect {
+            rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+            color: lumen_layout::Color { r: 1, g: 2, b: 3, a: 255 },
+        },
+        lumen_paint::DisplayCommand::FillRect {
+            rect: Rect::new(10.0, 0.0, 10.0, 10.0),
+            color: lumen_layout::Color { r: 4, g: 5, b: 6, a: 255 },
+        },
+    ];
+    let expected = lumen_paint::display_list::fold_overlay(&overlay);
+
+    // Stale hint: claims a tail of 5 digests, buffer only has 2 commands.
+    let stale = (0usize, vec![1u64, 2, 3, 4, 5]);
+    let actual = lumen_paint::display_list::fold_overlay_with_reuse(&overlay, Some(&stale));
+    assert_eq!(actual, expected, "length mismatch must fall back to a full recompute");
+}
+
+/// End-to-end perf gate: the actual win `fold_overlay_with_reuse` gives on
+/// the real command order, chrome digest supplied the way
+/// `redraw_requested.rs` now supplies it (a `ChromeOverlayFrameCache` HIT).
+/// Comparable to срезы 55/56's headline number, but measuring the REAL
+/// entry point instead of the "best case" `full_overlay[chrome_len..]`
+/// slice those two used as a stand-in before this mechanism existed.
+///
+/// `cargo test -p lumen-shell --profile dev-release bug405_slice57 -- --ignored --nocapture`.
+#[test]
+#[ignore = "manual perf gate (BUG-405 срез 57) — doc comment has the run command"]
+fn bug405_slice57_fold_overlay_with_reuse_net_win_on_real_order() {
+    let (host_rect, chrome_dl, (win_w, win_h)) = bug405_slice52_real_chrome_overlay_fixture();
+    let (chrome_segment, strips_used, _, cache) =
+        chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, true, None);
+    assert_eq!(strips_used, 3, "must match срез 52's real-layout ceiling");
+    let cache = cache.expect("cold build must produce a cache to remember");
+
+    let scrollbar_cmds = scrollbar::build_scrollbar_overlay(400.0, 4000.0, win_w, win_h);
+    let mut full_overlay = scrollbar_cmds.clone();
+    full_overlay.extend(chrome_segment.iter().cloned());
+    let chrome_start = scrollbar_cmds.len();
+
+    const WARMUP: usize = 20;
+    const SAMPLES: usize = 500;
+    let mut full_stats = lumen_paint::FrameStats::new();
+    let mut reuse_stats = lumen_paint::FrameStats::new();
+    // Interleaved each round (docs/perf-method.md) — both arms see the same
+    // allocator/cache warmth instead of one racing first.
+    for i in 0..WARMUP + SAMPLES {
+        let t0 = std::time::Instant::now();
+        let digests_full = lumen_paint::display_list::fold_overlay(&full_overlay);
+        let full_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        std::hint::black_box(&digests_full);
+
+        // The real entry point: a fresh HIT lookup (as `redraw_requested.rs`
+        // does every frame) feeds its digest into `fold_overlay_with_reuse`.
+        let t1 = std::time::Instant::now();
+        let (_, _, chrome_digests, new_cache) =
+            chrome_overlay_segment(&chrome_dl, host_rect, win_w, win_h, None, 1, true, Some(&cache));
+        assert!(new_cache.is_none(), "must stay a HIT for the whole loop");
+        let digests_reused = lumen_paint::display_list::fold_overlay_with_reuse(
+            &full_overlay,
+            Some(&(chrome_start, chrome_digests)),
+        );
+        let reuse_ms = t1.elapsed().as_secs_f32() * 1000.0;
+        std::hint::black_box(&digests_reused);
+
+        if i >= WARMUP {
+            full_stats.record(full_ms);
+            reuse_stats.record(reuse_ms);
+        }
+    }
+
+    let full_summary = full_stats.summary().expect("samples collected");
+    let reuse_summary = reuse_stats.summary().expect("samples collected");
+    eprintln!("{}", full_summary.display_with("BUG405_S57_FOLD_FULL"));
+    eprintln!("{}", reuse_summary.display_with("BUG405_S57_FOLD_REUSE"));
+    let saved = (1.0 - reuse_summary.min_ms / full_summary.min_ms) * 100.0;
+    eprintln!(
+        "chrome-digest reuse saves {saved:.1}% of fold_overlay's cost on the real entry point \
+         ({} chrome cmds vs {} scrollbar cmds, min of {SAMPLES} interleaved samples, \
+         full={:.4}ms reuse={:.4}ms)",
+        chrome_segment.len(),
+        scrollbar_cmds.len(),
+        full_summary.min_ms,
+        reuse_summary.min_ms,
     );
 }

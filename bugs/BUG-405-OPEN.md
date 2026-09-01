@@ -6192,3 +6192,98 @@ prepend-строитель overlay) — а не константный слот 
   `ChromeOverlayFrameCache` в `overlay_cache_step`) всё ещё не сделан —
   теперь с верной формой контракта.
 * Источники 3–9 остатка среза 54 по-прежнему вне п.85, без изменений.
+
+
+## Срез 57 (2026-09-01): фикс п.85 — дайджест `ChromeOverlayFrameCache` пробрасывается в `fold_overlay`, минуя пересчёт HIT-сегмента
+
+Срез 56 закрыл вопрос формы фикса (диапазон `(start, len)`, объявляемый
+вызывающим и пересчитываемый каждый кадр, а не константный слот
+префикса/суффикса) — этот срез реализует его.
+
+### Изменения
+
+* `ChromeOverlayFrameCache` (`chrome_ui.rs`) хранит новое поле `digests:
+  Vec<u64>` — `fold_overlay(&framed)`, посчитанный ОДИН раз при постройке.
+  `chrome_overlay_segment` возвращает его четвёртым элементом кортежа: на
+  HIT — клон `cache.digests` (без пересчёта), на построении — свежий фолд
+  (та же цена, что раньше платилась только один раз за generation).
+* `lumen_paint::display_list::fold_overlay_with_reuse(overlay, reuse)` —
+  новая функция рядом с `fold_overlay`: при `Some((start, digests))` и
+  `start + digests.len() == overlay.len()` хэширует `hash_one_command`-ом
+  только `overlay[..start]`, хвост берёт из `digests` без обхода;
+  несовпадение длины — тихий откат на полный `fold_overlay` (не паника).
+* `RenderBackend` (`backend.rs`) получил новый метод-сеттер
+  `set_overlay_digest_reuse(Option<(usize, Vec<u64>)>)` с no-op дефолтом —
+  та же форма контракта, что `set_content_epoch`/`set_page_offset`
+  (shell объявляет ПЕРЕД `render`/`render_with_anim`, не параметром самого
+  рендера). `WgpuBackend`/`Renderer` пробрасывают его в поле
+  `overlay_digest_reuse`, которое `render_with_anim` читает вместо
+  безусловного `fold_overlay(overlay)`. Остальные бэкенды (vello/femtovg/
+  cpu/compare) не тронуты — дефолт трейта им ничего не меняет.
+* `redraw_requested.rs`: диапазон вычисляется БЕЗ обхода композиции —
+  срез 56 показал, что хром остаётся ХВОСТОМ `overlay_buf` независимо от
+  того, сколько препенд-билдеров (scrollbar/tooltip/pickers/dialog/
+  view-transition) сработали в этом кадре, так что достаточно одного
+  сравнения длин: снимок `overlay_buf.len()` сразу ПОСЛЕ последнего
+  препенд-билдера (`overlay_len_after_prepend_phase`) и сравнение с длиной
+  ПЕРЕД рендером (`overlay_len`) — если они равны, ни один из
+  append-билдеров (hint/console/network/privacy/inspector/…) ничего не
+  дописал, и хром провably лежит в `overlay_buf[overlay_len -
+  chrome_len..]`. Несовпадение — `None`, старое поведение (полный
+  пересчёт), не риск неверного диапазона.
+* `LUMEN_NO_CHROME_DIGEST_REUSE=1` — новый A/B-рычаг
+  (`chrome_overlay_digest_reuse_disabled`), независимый от
+  `LUMEN_NO_CHROME_OVERLAY_CACHE` (тот решает, пересобирать ли сам
+  `chrome_dl`→`framed`; этот — пересчитывать ли дайджест результата).
+
+### Корректность
+
+Два новых теста (не `#[ignore]`, часть обычного гейта):
+`bug405_slice57_fold_overlay_with_reuse_matches_full_fold_on_real_order` —
+на РЕАЛЬНОМ порядке команд (scrollbar первым, хром вторым — срез 56)
+`fold_overlay_with_reuse` с дайджестом из HIT даёт побитово то же самое,
+что полный `fold_overlay`; `bug405_slice57_fold_overlay_with_reuse_falls_back_on_length_mismatch`
+— несостыковка длины откатывается на полный пересчёт, не падает и не
+подставляет чужой дайджест.
+
+### Замер (реальная точка входа: HIT `chrome_overlay_segment` → `fold_overlay_with_reuse`)
+
+```
+cargo test -p lumen-shell --profile dev-release --features backend-wgpu bug405_slice57 -- --ignored --nocapture
+BUG405_S57_FOLD_FULL  count=500 min=0.41ms p50=0.78ms p95=1.28ms p99=2.38ms max=39.20ms
+BUG405_S57_FOLD_REUSE count=500 min=0.16ms p50=0.40ms p95=0.60ms p99=1.09ms max=2.37ms
+chrome-digest reuse saves 60.6% of fold_overlay's cost on the real entry point
+  (882 chrome cmds vs 2 scrollbar cmds, min of 500 interleaved samples)
+```
+
+60.6%, не срезов 55/56's 99.9–100% "лучшего случая" — та цифра мерила
+изолированный `fold_overlay` над готовым срезом массива, эта мерит ВЕСЬ
+реальный путь, включая HIT-лукап `chrome_overlay_segment` (сравнение
+ключа + `c.framed.clone()` — клон всего 882-командного `DisplayList`,
+который производится КАЖДЫЙ кадр независимо от этого среза, срез 50) —
+разница между 100% и 60.6% это цена клона `framed`, не остаточная
+стоимость дайджеста. Итог для `fold_overlay` конкретно: 0.41→0.16мс на
+кадр попадания (min), т.е. статья `послекэша`/её преемник практически
+устранена для типичного скролл-кадра.
+
+### Гейты
+
+* `cargo check -p lumen-paint --features backend-wgpu` / `cargo check -p
+  lumen-shell --features backend-wgpu` — чисто.
+* `cargo clippy -p lumen-paint --features backend-wgpu --all-targets -- -D
+  warnings` / то же для `lumen-shell` — чисто.
+* `cargo test -p lumen-shell --features backend-wgpu -- chrome` — 27
+  passed (было 25 + 2 новых корректностных геймта среза 57), 6 ignored
+  (было 5 + новый перф-гейт среза 57), 0 failed.
+* Правка меняет ТОЛЬКО механизм подсчёта дайджеста (значения дайджестов
+  побитово те же, гейт выше) — рендер-путь и пиксели не тронуты,
+  `dump_golden.py`/CPU-снапшоты не нужны.
+
+### Остаток
+
+* Источники 3–9 остатка среза 54 по-прежнему вне п.85, без изменений.
+* Механизм рассчитан на общий случай «хром — хвост `overlay_buf`»
+  (типичный скролл-кадр); на кадре, где сработал хотя бы один
+  append-билдер (hint/console/network/privacy/inspector/…), диапазон
+  признаётся невалидным и `fold_overlay` считает всё заново, как раньше —
+  не регрессия, просто эти кадры фикс не ускоряет.

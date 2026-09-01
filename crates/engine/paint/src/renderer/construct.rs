@@ -1007,6 +1007,7 @@ impl Renderer {
             last_content_key: None,
             content_epoch: 0,
             content_fold_memo: None,
+            overlay_digest_reuse: None,
             layer_cache: crate::layer_cache::LayerCache::new(),
             composite_pipeline: OnceCell::new(),
             rrect_clip_pipeline: OnceCell::new(),

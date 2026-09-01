@@ -1307,6 +1307,13 @@ pub struct Renderer {
     /// страховка: они ловят подмену списка, о которой shell не сказал, но не
     /// ловят правку на месте (её обязана поймать версия).
     pub(crate) content_fold_memo: Option<ContentFoldMemo>,
+    /// Готовые дайджесты для хвоста `overlay` объявленные shell-ом на этот
+    /// кадр (BUG-405 срез 57) — `(start, digests)`, где `digests[i]` обязан
+    /// быть [`crate::display_list::hash_one_command`] от `overlay[start + i]`.
+    /// Контракт — [`RenderBackend::set_overlay_digest_reuse`](crate::backend::RenderBackend::set_overlay_digest_reuse).
+    /// `None` — считать [`crate::display_list::fold_overlay`] целиком, как до
+    /// среза.
+    pub(crate) overlay_digest_reuse: Option<(usize, Vec<u64>)>,
     /// GPU layer cache with LRU eviction (ADR-008 Phase 2).
     /// Tracks layer textures by stacking context ID + size for off-viewport eviction.
     pub(crate) layer_cache: crate::layer_cache::LayerCache,

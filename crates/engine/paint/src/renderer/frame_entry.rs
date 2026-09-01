@@ -31,6 +31,13 @@ impl Renderer {
         self.content_epoch = epoch;
     }
 
+    /// Объявляет готовые дайджесты хвоста `overlay` ближайшего кадра
+    /// (BUG-405 срез 57). Контракт вызывающего —
+    /// [`RenderBackend::set_overlay_digest_reuse`].
+    pub fn set_overlay_digest_reuse(&mut self, reuse: Option<(usize, Vec<u64>)>) {
+        self.overlay_digest_reuse = reuse;
+    }
+
     /// Свёртка content-части с прошлого кадра, если её законно переиспользовать
     /// (BUG-405 срез 39); `None` — считать заново.
     ///
@@ -152,12 +159,18 @@ impl Renderer {
         // кадре — единственная статья, которой различаются плечи `frame-hash`,
         // поэтому она печатается рядом с его временем.
         let mut fold_reused = false;
-        // BUG-405 срез 47: overlay-дайджест ([`crate::display_list::fold_overlay`])
-        // считается здесь ОДИН раз и переиспользуется ниже в `compose_page` →
-        // `overlay_cache_step`, которая раньше пересчитывала тот же дайджест
-        // заново (статья `послекэша`, срез 44). `None` на плече `dual_hash_disabled()`
-        // — та ветка сознательно воспроизводит поведение до среза 35 (два
+        // BUG-405 срез 47: overlay-дайджест считается здесь ОДИН раз и
+        // переиспользуется ниже в `compose_page` → `overlay_cache_step`,
+        // которая раньше пересчитывала тот же дайджест заново (статья
+        // `послекэша`, срез 44). `None` на плече `dual_hash_disabled()` —
+        // та ветка сознательно воспроизводит поведение до среза 35 (два
         // раздельных обхода) и не должна получать переиспользуемый дайджест.
+        //
+        // BUG-405 срез 57: сам дайджест теперь тоже не обязан обходить
+        // overlay целиком — [`crate::display_list::fold_overlay_with_reuse`]
+        // сплайсит готовые дайджесты `self.overlay_digest_reuse` (обычно
+        // хвост-хром из `ChromeOverlayFrameCache`) вместо `hash_one_command`
+        // по ним, если shell объявил диапазон валидным этим кадром.
         let mut overlay_digests: Option<Vec<u64>> = None;
         let (base_hash, band_key_base) = if dual_hash_disabled() {
             // Плечо A/B: два раздельных обхода, как до среза 35.
@@ -177,7 +190,10 @@ impl Renderer {
             // слеп ни к одному из них.
             let reuse = self.content_fold_reuse(content, skip);
             fold_reused = reuse.is_some();
-            let digests = crate::display_list::fold_overlay(overlay);
+            let digests = crate::display_list::fold_overlay_with_reuse(
+                overlay,
+                self.overlay_digest_reuse.as_ref(),
+            );
             let (hashes, folds) =
                 crate::display_list::hash_display_list_dual_memo_with_overlay_digests(
                     content,

@@ -1678,6 +1678,13 @@ pub(crate) struct ChromeOverlayFrameCache {
     /// The assembled segment itself — clip strips around `chrome_dl` plus the
     /// caret fill, ready to be prepended to `overlay_buf` with one clone.
     pub(crate) framed: lumen_paint::DisplayList,
+    /// [`lumen_paint::display_list::fold_overlay`] of `framed`, computed once
+    /// when this cache was built (BUG-405 срез 57, п.85). On a HIT this lets
+    /// the caller reuse the digest of every reused command instead of
+    /// rehashing it — `fold_overlay` reading the whole `overlay_buf` every
+    /// frame was measured (срезы 55/56) as ~100% of `fold_overlay`'s cost on
+    /// a typical scroll frame, almost entirely spent on this segment.
+    pub(crate) digests: Vec<u64>,
 }
 
 /// BUG-405 срез 50: reuse-or-build decision behind [`ChromeOverlayFrameCache`],
@@ -1686,8 +1693,10 @@ pub(crate) struct ChromeOverlayFrameCache {
 /// diagnostic test disproportionate, and the same reasoning applies here.
 ///
 /// Returns the assembled segment, the strip count (for the `chrome_mix`
-/// diagnostic), and, when a NEW cache should be remembered, `Some` of it.
-/// `None` in that third slot means "leave `Lumen::chrome_overlay_frame_cache`
+/// diagnostic), its digest (BUG-405 срез 57 — always valid for the returned
+/// `DisplayList`, cloned from the cache on a HIT, freshly folded on a
+/// build), and, when a NEW cache should be remembered, `Some` of it. `None`
+/// in that fourth slot means "leave `Lumen::chrome_overlay_frame_cache`
 /// exactly as it is" вЂ” true both on a HIT (the existing cache is still the
 /// right one to keep) and when `cache_enabled` is `false` (nothing to
 /// remember, and the caller does not clear a stale entry either вЂ” the next
@@ -1702,16 +1711,17 @@ pub(crate) fn chrome_overlay_segment(
     generation: u64,
     cache_enabled: bool,
     cache: Option<&ChromeOverlayFrameCache>,
-) -> (lumen_paint::DisplayList, usize, Option<ChromeOverlayFrameCache>) {
+) -> (lumen_paint::DisplayList, usize, Vec<u64>, Option<ChromeOverlayFrameCache>) {
     if cache_enabled && let Some(c) = cache.filter(|c| {
         c.generation == generation
             && c.host_rect == host
             && c.viewport == (win_w, win_h)
             && c.caret == caret_plan
     }) {
-        return (c.framed.clone(), c.strips_used, None);
+        return (c.framed.clone(), c.strips_used, c.digests.clone(), None);
     }
     let (framed, strips_used) = build_chrome_overlay_strips(chrome_dl, host, win_w, win_h, caret_plan);
+    let digests = lumen_paint::display_list::fold_overlay(&framed);
     let new_cache = cache_enabled.then(|| ChromeOverlayFrameCache {
         generation,
         host_rect: host,
@@ -1719,8 +1729,9 @@ pub(crate) fn chrome_overlay_segment(
         caret: caret_plan,
         strips_used,
         framed: framed.clone(),
+        digests: digests.clone(),
     });
-    (framed, strips_used, new_cache)
+    (framed, strips_used, digests, new_cache)
 }
 
 /// BUG-405 срез 50: the actual clip-strip + caret build, unchanged from the
@@ -1771,6 +1782,26 @@ fn build_chrome_overlay_strips(
 pub(crate) fn chrome_overlay_cache_disabled() -> bool {
     static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_CHROME_OVERLAY_CACHE").is_ok_and(|v| v == "1"))
+}
+
+/// `true` if reusing the chrome segment's digests
+/// ([`RenderBackend::set_overlay_digest_reuse`](lumen_paint::backend::RenderBackend::set_overlay_digest_reuse))
+/// is disabled (`LUMEN_NO_CHROME_DIGEST_REUSE=1`) — BUG-405 срез 57 A/B
+/// lever (`docs/perf-method.md`), same shape as [`chrome_overlay_cache_disabled`].
+/// Independent of it: the overlay cache decides whether `chrome_dl` is
+/// re-copied into strips, this lever decides whether the RESULT's digest is
+/// rehashed by `fold_overlay` regardless. Isolates exactly the mechanism
+/// срез 57 measured (`fold_overlay` vs `fold_overlay_with_reuse` on the same
+/// overlay) — `chrome_overlay_segment` still folds `framed` on every miss
+/// either way (so [`ChromeOverlayFrameCache`] always has a digest ready for
+/// the NEXT frame's HIT, regardless of this lever), so disabling reuse here
+/// does not reproduce the exact pre-срез-57 instruction count, only the
+/// pre-срез-57 cost of `fold_overlay` itself — the one number this lever
+/// exists to isolate.
+
+pub(crate) fn chrome_overlay_digest_reuse_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_CHROME_DIGEST_REUSE").is_ok_and(|v| v == "1"))
 }
 
 /// CC-10: which modal `Lumen::chrome_modal_ancestor` resolved a `CloseModal`
