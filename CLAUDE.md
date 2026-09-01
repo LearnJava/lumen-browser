@@ -318,6 +318,10 @@ Full list with phases — [docs/plan/knowledge.md](docs/plan/knowledge.md) §12.
 - **`cargo-fuzz`/libFuzzer cannot run on native Windows** — PE/COFF has no equivalent of the `__start___sancov_*` section-boundary symbols libFuzzer needs, so this is structural, not a toolchain version problem. Use WSL (toolchain installed and verified 2026-08-19, recipe in [`fuzz/README.md`](fuzz/README.md)) or `gh workflow run fuzz.yml`.
 - **On Linux, `graphic_tests/dump_golden.py` reports 6 of its 12 checks as mismatches no matter what you changed** — the binary path is hardcoded as `target/<profile>/lumen.exe` and the committed references were generated on Windows, so text metrics differ. Prove display-list neutrality there by an A/B of the dumps themselves (capture, `git stash`, rebuild, capture, `diff -rq`), and never `--update` the references from Linux.
 
+### Core (URL)
+
+- **`lumen_core::url::Url::host()` is deliberately NOT backed by the vendored `url` crate** (LIB-6, 2026-09-01) — it stays a raw best-effort string extraction so the address bar's IDN-spoof guard (`address_bar.rs::guard_display_text`) matches exactly what the user typed. Do not "fix" it to call `inner.host()`/`inner.host_str()`; that would let a WHATWG-normalized host diverge from the typed text and reopen the spoof the guard exists to catch. Everything else on `Url` (scheme/path/query/fragment parsing) does go through `url` 2.5.8.
+
 ### Driving the browser
 
 - **Any paint/scroll number is meaningless without the wgpu backend it was measured on** — check the `[wgpu] adapter: … (…, Vulkan|Dx12)` line in the run's stderr. Same machine, same adapter: one scroll of `lenta.ru` costs 116 ms/frame on DX12 against 53 ms on Vulkan, which looks exactly like a huge engine regression. The backend is chosen at startup and cached in `<exe_dir>/data/paint/backend_probe.txt`, so two checkouts of the same commit can differ; `WGPU_BACKEND=vulkan|dx12|gl` pins it.
