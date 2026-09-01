@@ -1,25 +1,33 @@
 # sccache — кэширует результаты компиляции между сборками (в том числе чистыми).
 # Особенно полезен при пересборке после git clean или смене веток.
 #
-# ОТКЛЮЧЕНО 2026-08-19 при пине тулчейна на 1.97.0 (rust-toolchain.toml).
-# sccache 0.15.0 несовместим с 1.97.0: КАЖДЫЙ вызов компилятора через обёртку
-# падает с
+# ТРЕБУЕТСЯ sccache >= 0.17.0. Версия 0.15.0 несовместима с тулчейном 1.97.0:
+# КАЖДЫЙ вызов компилятора через обёртку падал с
 #   process didn't exit successfully: `sccache ... rustc.exe ...`
 #   (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
-# на крейтах с длинной командной строкой. Ловится и на clippy-driver
-# (lumen-driver), и на обычном rustc (`cargo test -p lumen-layout`) — то есть
-# ломается сборка вообще, а не только линт. Проверено A/B: те же команды с
-# `RUSTC_WRAPPER=` проходят, workspace-clippy без обёртки зелёный целиком
-# (13 мин на чистом target).
+# на крейтах с длинной командной строкой — и на clippy-driver, и на обычном
+# rustc, то есть ломалась сборка вообще, а не только линт. Из-за этого обёртка
+# была ОТКЛЮЧЕНА 2026-08-19 (пин тулчейна был важнее) и ВОЗВРАЩЕНА 2026-09-01
+# после `cargo install sccache --version 0.17.0`: оба падавших сценария зелёные
+# (`cargo test -p lumen-layout` после `cargo clean -p lumen-layout` — 3729 тестов,
+# 35 компиляций через обёртку, 0 сбоев; `cargo clippy -p lumen-driver
+# --all-targets -- -D warnings` — exit 0). Кэш работает, не только «не падает»:
+# повторный clean+build внешних зависимостей даёт 100% hit. Замеры —
+# docs/build-speed.md §7.
 #
-# Выбор был «либо пин 1.97.0, либо sccache»; пин важнее — плавающий "stable"
-# давал разные линты у разработчика и в CI. Вернуть обёртку можно, когда
-# sccache обновится до версии, совместимой с 1.97.0: раскомментировать
-# `rustc-wrapper` ниже и прогнать `cargo test -p lumen-layout` (падало на нём).
-# Что теряем — docs/build-speed.md §3; в CI обёртка и так была отключена
-# (`RUSTC_WRAPPER: ""` в .github/workflows/ci.yml), так что CI это не меняет.
+# Если обёртку придётся снова выключить — не оставляй это комментарием здесь,
+# оформляй ADR (docs/decisions/), потому что это уже осознанный отказ от меры,
+# заявленной в §1 docs/build-speed.md как несущей.
+#
+# Свои крейты workspace сборка не кэширует: в dev/dev-release включён
+# `incremental = true`, а инкрементальные компиляции sccache объявляет
+# non-cacheable («Non-cacheable reasons: incremental»). Выигрыш — на
+# зависимостях, то есть на свежем worktree и после `cargo clean`.
+#
+# В CI обёртка отключена (`RUSTC_WRAPPER: ""` в .github/workflows/*.yml) —
+# на раннерах sccache нет; это не меняется.
 [build]
-# rustc-wrapper = "sccache"
+rustc-wrapper = "sccache"
 
 # Порт sccache-сервера. Дефолтный 4226 попадает в зарезервированный Windows
 # диапазон port exclusion (winnat/Hyper-V/WSL), из-за чего сервер не стартует
