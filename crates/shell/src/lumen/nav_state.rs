@@ -34,14 +34,24 @@ impl Lumen {
                 None => serde_json::Value::Null,
             }
         }
+        // FRAME-4: a `frame_target` entry is a subframe navigation step, not
+        // a page one — per spec `window.navigation` only ever sees entries of
+        // its OWN Document, so these are skipped here rather than reported
+        // as bogus duplicate-URL entries. `idx` (the current entry's position)
+        // is counted over the FILTERED list for the same reason.
         let mut entries: Vec<serde_json::Value> = Vec::new();
+        let mut idx = 0usize;
         for e in &self.nav_back {
+            if e.frame_target.is_some() {
+                continue;
+            }
             entries.push(serde_json::json!({
                 "url": e.source.url_str().unwrap_or(""),
                 "key": e.nav_key,
                 "id": format!("id-{}", e.nav_key.strip_prefix("nav-").unwrap_or("0")),
                 "state": state_value(e.same_doc_state_json.as_deref()),
             }));
+            idx += 1;
         }
         let cur_url = self.source.url_str().unwrap_or("");
         let cur_key = self.current_nav_key.clone();
@@ -51,8 +61,10 @@ impl Lumen {
             "id": format!("id-{}", cur_key.strip_prefix("nav-").unwrap_or("0")),
             "state": state_value(Some(&self.current_history_state_json)),
         }));
-        let idx = self.nav_back.len();
         for e in &self.nav_fwd {
+            if e.frame_target.is_some() {
+                continue;
+            }
             entries.push(serde_json::json!({
                 "url": e.source.url_str().unwrap_or(""),
                 "key": e.nav_key,

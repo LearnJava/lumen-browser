@@ -199,13 +199,55 @@ impl Lumen {
     /// новый (вместе с хэндлами своих вложенных фреймов) добавлен в конец
     /// списка. Поэтому пересчитываются вьюпорты ВСЕХ фреймов, а не одного:
     /// «пересчитай фрейм номер N» после навигации — вопрос без адресата.
+    ///
+    /// FRAME-4: навигация фрейма ВЕРХНЕГО УРОВНЯ (`parent_doc.is_none()`)
+    /// заводит запись в joint session history страницы — `Alt+Left` после
+    /// клика по ссылке внутри такого фрейма отменяет именно эту навигацию, а
+    /// не перезагружает страницу целиком. Вложенные фреймы в срез не входят:
+    /// адрес до перехода не запоминается, история их не видит. Сама подмена
+    /// документа вынесена в [`Self::replace_frame_document`] — тем же путём
+    /// идёт и обратная навигация по истории ([`Self::traverse_frame`]),
+    /// которой новый push уже не нужен: он случился здесь, при первой
+    /// навигации.
     pub(crate) fn navigate_frame_to(&mut self, idx: usize, href: &str, nav_base: &ResourceBase) {
+        // Снимок identity+адреса ДО замены хэндла: после неё `idx` уже не
+        // адресует этот фрейм (см. doc `replace_frame_document`).
+        let history_step = self
+            .frames
+            .get(idx)
+            .filter(|h| h.parent_doc.is_none())
+            .map(|h| (h.host, h.url.clone()));
+        if !self.replace_frame_document(idx, href, nav_base) {
+            return;
+        }
+        let Some((host, prev_url)) = history_step else { return };
+        self.nav_back.push(NavEntry {
+            source: self.source.clone(),
+            scroll_x: self.scroll_x,
+            scroll_y: self.scroll_y,
+            display_url: self.display_url.clone(),
+            same_doc_state_json: None,
+            nav_key: self.current_nav_key.clone(),
+            frame_target: Some((host, prev_url)),
+        });
+        // Новая навигация обнуляет forward — тот же контракт, что у
+        // `navigate_to` для страницы (HTML LS §7.2.1).
+        self.nav_fwd.clear();
+        self.commit_nav_state();
+    }
+
+    /// Общее тело подмены под-документа фрейма `idx`: и для обычной
+    /// навигации по ссылке/форме ([`Self::navigate_frame_to`]), и для шага
+    /// истории ([`Self::traverse_frame`]) — ЧТО происходит с хэндлами и
+    /// вьюпортами от источника не зависит, разнится только запись в историю
+    /// (у второго её нет — сам шаг историю не расширяет).
+    fn replace_frame_document(&mut self, idx: usize, href: &str, nav_base: &ResourceBase) -> bool {
         let Some(env) = self.frame_env.clone() else {
             eprintln!("iframe: навигация '{href}' без окружения загрузки страницы — пропуск");
-            return;
+            return false;
         };
         let Some(page_doc) = self.layout_source.as_ref().map(|s| Arc::clone(&s.document)) else {
-            return;
+            return false;
         };
         // НЕ `self.js_ctx`: с ADR-023 движковый поток включён по умолчанию и
         // держит хэндл у себя, оставляя это поле пустым — см.
@@ -221,7 +263,7 @@ impl Lumen {
             &env,
             page_js.as_ref(),
         ) {
-            return;
+            return false;
         }
         // Индекс фрейма под курсором указывал на выброшенный хэндл (срез 16 —
         // та же причина, по которой его сбрасывает смена страницы). Срез 23:
@@ -232,6 +274,29 @@ impl Lumen {
         self.focused_frame = None;
         self.active_frame = None;
         self.refresh_frames(None);
+        true
+    }
+
+    /// FRAME-4: применить ОДИН шаг истории — вернуть фрейм верхнего уровня с
+    /// host-узлом `host` к документу `target_url`.
+    ///
+    /// Вызывается ТОЛЬКО из `navigate_back`/`navigate_forward` (`navigation.rs`)
+    /// после того, как они уже сняли со стека запись с `frame_target`: это
+    /// отмена/повтор уже случившейся навигации, а не новая — сам шаг новую
+    /// запись не заводит. Возвращает адрес фрейма ДО перехода (вызывающая
+    /// сторона кладёт его на противоположный стек, чтобы шаг можно было
+    /// отыграть назад), либо `None`, если фрейм с таким host-узлом верхнего
+    /// уровня уже не существует — запись истории в этом случае просто
+    /// гасится, без видимого эффекта.
+    pub(crate) fn traverse_frame(&mut self, host: NodeId, target_url: &str) -> Option<String> {
+        let idx = self
+            .frames
+            .iter()
+            .position(|h| h.host == host && h.parent_doc.is_none())?;
+        let prev_url = self.frames[idx].url.clone();
+        let nav_base = self.frames[idx].base.clone();
+        self.replace_frame_document(idx, target_url, &nav_base)
+            .then_some(prev_url)
     }
 
     /// Фрагментная навигация ВНУТРИ под-документа: `:target`, `location` и

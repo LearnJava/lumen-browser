@@ -18,6 +18,7 @@ fn entry(tag: &str) -> NavEntry {
         display_url: Some(tag.to_string()),
         same_doc_state_json: Some(format!("\"{tag}\"")),
         nav_key: format!("nav-{tag}"),
+        frame_target: None,
     }
 }
 

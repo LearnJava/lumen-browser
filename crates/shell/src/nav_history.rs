@@ -25,6 +25,14 @@ pub(crate) struct NavEntry {
     /// Used by `navigation.traverseTo(key)` and reported via
     /// `_lumen_navigation_entries_json` so JS can correlate entries.
     pub(crate) nav_key: String,
+    /// FRAME-4: marks this entry as a TOP-LEVEL frame navigation step rather
+    /// than a page navigation. `Some((host, url))` — traversing this entry
+    /// re-navigates the `<iframe>` whose host element is `host` (in the page
+    /// document) to `url`, leaving the page's own `source`/`display_url`
+    /// (still cloned into this entry, unchanged) untouched. `None` for every
+    /// ordinary page entry. Nested frames (`parent_doc.is_some()`) are out of
+    /// scope — `host` is only ever looked up among top-level frames.
+    pub(crate) frame_target: Option<(NodeId, String)>,
 }
 
 impl NavEntry {
