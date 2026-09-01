@@ -10,7 +10,7 @@
 
 | Мера | Где | Эффект (замерен ранее) |
 |---|---|---|
-| ✅ sccache (`rustc-wrapper`) | `.cargo/config.toml` | тёплый кэш ~2× (6.4с→3.0с); кэш `D:\sccache-cache`, лимит 50 GiB |
+| ✅ sccache (`rustc-wrapper`), **требуется ≥ 0.17.0** | `.cargo/config.toml` | тёплый кэш ~2× (6.4с→3.0с); кэш `D:\sccache-cache`, лимит 50 GiB. Был отключён 2026-08-19…2026-09-01 (0.15.0 не работает с тулчейном 1.97.0), см. §3.8 |
 | ✅ rust-lld вместо link.exe | `.cargo/config.toml` | линковка 2–5× быстрее |
 | ✅ `[profile.dev] opt-level = 1` + deps `opt-level = 3` | `Cargo.toml` | быстрый инкремент своего кода, быстрый рантайм зависимостей |
 | ✅ Профиль `dev-release` (cgu=8, без LTO) | `Cargo.toml` | 2–3× быстрее `--release` |
@@ -205,6 +205,45 @@ per-worktree и per-профиль — и это не решается без о
 старый можно не удалять — места на диске не жалко, это ~220 МБ).
 Риск: запись вне репозитория (`$CARGO_HOME`), сделано только с явного согласия пользователя.
 
+### 3.8 ✅ sccache требует версию ≥ 0.17.0 (обёртка отключена 2026-08-19, возвращена 2026-09-01)
+
+**Проблема.** При пине тулчейна на 1.97.0 (`rust-toolchain.toml`, 2026-08-19) sccache **0.15.0** стал
+ронять КАЖДЫЙ вызов компилятора через обёртку:
+
+```
+process didn't exit successfully: `sccache ... rustc.exe ...`
+(exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+```
+
+на крейтах с длинной командной строкой. Ловилось и на `clippy-driver` (`-p lumen-driver`), и на обычном
+`rustc` (`cargo test -p lumen-layout`) — то есть ломалась сборка вообще, а не только линт. Выбор стоял
+«либо пин 1.97.0, либо sccache»; пин был важнее (плавающий `"stable"` давал разные линты у разработчика
+и в CI), и обёртку закомментировали.
+
+**Проверка возврата 2026-09-01.** `cargo install sccache --version 0.17.0 --locked` (сборка самой
+sccache — 19м44с), затем ровно те два сценария, на которых падало:
+
+| Сценарий | Результат |
+|---|---|
+| `cargo clean -p lumen-layout` + `cargo test -p lumen-layout` | **зелёный**, exit 0, 3м41с; 3651 + 77 + 1 тестов прошли, 0 упало; sccache: 59 compile requests, 35 компиляций, 0 compilation failures, ни одного `0xc0000409` |
+| `cargo clippy -p lumen-driver --all-targets -- -D warnings` | **зелёный**, exit 0, 2м11с |
+| Повтор `cargo clean -p rustybuzz -p ttf-parser -p unicode-bidi` + `cargo build -p lumen-layout` | **cache hit 100%** — кэш реально работает, а не просто «не падает» |
+
+Обёртка возвращена (`rustc-wrapper = "sccache"` в `.cargo/config.toml`), в §1 добавлено требование к версии.
+
+**Граница выигрыша.** Свои крейты workspace **не кэшируются**: в `dev`/`dev-release` включён
+`incremental = true` (§4.3), а инкрементальные компиляции sccache объявляет non-cacheable
+(`Non-cacheable reasons: incremental` — 3 из 5 запросов на пересборке одного `lumen-layout`).
+Выигрыш даёт кэш зависимостей, то есть свежий worktree и сборка после `cargo clean`.
+
+**Если обёртку придётся выключить снова** — оформлять ADR в `docs/decisions/`, а не комментарием в
+`.cargo/config.toml`: это осознанный отказ от меры, заявленной в §1 как несущая. Отключение 2026-08-19
+было оформлено только комментарием в конфиге — и §1 этого файла две недели утверждал обратное
+(строка «✅ sccache» осталась не тронутой), что и есть цена такого оформления.
+
+**CI это не меняет:** на раннерах sccache нет, обёртка там заглушена `RUSTC_WRAPPER: ""`
+(`.github/workflows/ci.yml`, `fuzz.yml`, `perf-gate.yml`).
+
 ---
 
 ## 4. Ярус 2 — stable, требует правок кода/структуры
@@ -326,6 +365,7 @@ Cargo пайплайнит по `.rmeta`: правка **тела** функци
 | 2026-07-12 | 4.1 BT-1 на font/js/image/paint/network/layout/a11y | — | — | — | 1 `all`-бинарь на крейт (было 5/4/4/3/2/2/2) | 22 интеграционных бинаря → 7, −15 линковок. `cargo test --no-run` для a11y/network подтвердил единственный `Executable tests\all.rs`; полный S4-цикл по каждому крейту не гонялся (дорого, эффект структурно эквивалентен BT-1 driver 14×) |
 | 2026-07-12 | 4.2 фич-диета wgpu: `dx12+wgsl+std`, дефолт off | — | — | — | — | Структурный замер (`cargo tree -e no-dev`): 349→341 уникальных крейта, −8: ash, glow 0.16, gpu-alloc(+types), gpu-descriptor(+types), khronos-egl, spirv. `ash` — самый дорогой (Vulkan build.rs). Стоп-часный S3 не гонялся (дорого, per-flags холодный sccache шумит; эффект структурно очевиден — как в строке 4.1). `check -p lumen-paint --features backend-wgpu` / `lumen-shell` / `lumen-driver` / `lumen-js --features webgpu` — зелёные |
 | 2026-07-13 | 3.4 workspace-hack (cargo-hakari 0.9.38) | — | — | — | — | A/B shell→driver: `cargo check -p lumen-shell` (2м50с, первый холодный прогон в worktree); затем `cargo check -p lumen-driver` = **7.92с, только lumen-paint + lumen-driver пересобрались** (55 внешних dep унифицированы, не трогаются). `cargo hakari verify` зелёный. Конфиг: `x86_64-pc-windows-msvc`, resolver="3", dep-format-version="4". |
+| 2026-09-01 | 3.8 возврат обёртки на sccache 0.17.0 | — | — | `clean -p lumen-layout` + `test -p lumen-layout` = **3м41с, exit 0** (3651+77+1 тестов, 0 упало; 35 компиляций через обёртку, 0 сбоев) | `clippy -p lumen-driver --all-targets -- -D warnings` = **2м11с, exit 0** | Оба сценария, на которых падала 0.15.0 (`0xc0000409`), зелёные на 0.17.0. Кэш проверен отдельно: повтор `clean -p rustybuzz -p ttf-parser -p unicode-bidi` + `build -p lumen-layout` → **100% hit**. Свои крейты не кэшируются (`Non-cacheable reasons: incremental`, 3 из 5 запросов) — это следствие 4.3, выигрыш только на зависимостях. Замеры в корневом чекауте, тёплый `target/`. Порт 4444 из `[env]` в этот раз без Windows-резервов |
 
 Готча замера: `[env] SCCACHE_SERVER_PORT` из `.cargo/config.toml` (на 2026-08-11 — `4444`) действует только на cargo-процессы — CLI-вызовы `sccache --show-stats`/`--zero-stats` без того же `SCCACHE_SERVER_PORT` уходят на другой сервер (дефолтный порт) и показывают нули. Само значение порта плавает: Windows-резервы (`netsh interface ipv4 show excludedportrange protocol=tcp`) меняются между перезагрузками, и прежний `4150` к 2026-08-11 попал внутрь диапазона 4134–4233 — любая сборка падала на `Server startup failed: A Windows port exclusion is blocking use of the configured port` (os error 10013). Лечится подбором порта вне всех диапазонов, см. комментарий в `.cargo/config.toml`.
 
