@@ -351,7 +351,7 @@ MECHANISMS = [
         "`getBoundingClientRect` does)",
     ),
     Mechanism(
-        "font-loading-api", "BUG-467 (+BUG-591)",
+        "font-loading-api", "FONTLOAD (BUG-467, +BUG-591)",
         [r"document\.fonts\.[A-Za-z]+ is not a function",
          r"FontFace(?:Set|SetLoadEvent)? is not defined"],
         "CSS Font Loading is a stub: `document.fonts` has no `load`/`check`, "
@@ -1018,6 +1018,56 @@ def _compression_read_marker(text, test_id=None):
     return not _CS_CLOSE_RE.search(body)
 
 
+#: The element halves and the event halves of the two image mechanisms below,
+#: plus the exclusion that keeps them honest. A handler wired to
+#: `t.unreached_func(...)` / `assert_unreached(...)` is an assertion that the
+#: event must NOT arrive: the test does not wait on it, and claiming the file
+#: for "the event never fires" would report the opposite of what it asserts.
+#: Measured on the reattribution itself (slice 30): widening the event half to
+#: the `error` spelling moved 13 ids off `csp-no-violation-event`, and reading
+#: them showed two shapes mixed together — `img-src-targeting.html` really does
+#: finish from `onerror` (the image is supposed to be blocked), while
+#: `script-src-1_1.html` finishes from `window.onload` and its `onerror` is an
+#: `assert_unreached`. Only the first is this mechanism.
+_IMG_ELEMENT_RE = re.compile(r"new Image\(|<img|createElement\(['\"]img['\"]\)")
+_IMG_SOURCE_ELEMENT_RE = re.compile(
+    r"<\s*input[^>]*type\s*=\s*['\"]?image|"
+    r"type\s*=\s*['\"]image['\"][^>]*>|"
+    r"<\s*image\b|createElementNS\s*\([^)]*['\"]image['\"]")
+#: The markup spelling is deliberately narrower than `\bonload\s*=`: a bare
+#: `onload = function () {...}` is the *window*'s handler (that is how
+#: `content-security-policy/script-src/inlineTests.js` ends its tests) and has
+#: nothing to do with the image on the page. Requiring the quote after `=`
+#: keeps the attribute form and drops the assignment form.
+_IMG_EVENT_RE = re.compile(
+    r"\.onload|\.onerror|\.complete\b|naturalWidth|"
+    r"\son(?:load|error)\s*=\s*['\"]|"
+    r"addEventListener\(\s*['\"](?:load|error)['\"]")
+_UNREACHED_RE = re.compile(r"unreached")
+
+
+def _awaits_element_event(body, element_re):
+    """True iff the text builds such an element AND waits on its load/error.
+
+    "Waits" is per line and excludes the `unreached` spelling — see the note on
+    `_IMG_ELEMENT_RE`.
+    """
+    if not element_re.search(body):
+        return False
+    return any(_IMG_EVENT_RE.search(line) and not _UNREACHED_RE.search(line)
+               for line in body.splitlines())
+
+
+def _img_no_load_event_marker(text, test_id=None):
+    body = "\n".join(text) if isinstance(text, list) else text
+    return _awaits_element_event(body, _IMG_ELEMENT_RE)
+
+
+def _image_source_no_load_event_marker(text, test_id=None):
+    body = "\n".join(text) if isinstance(text, list) else text
+    return _awaits_element_event(body, _IMG_SOURCE_ELEMENT_RE)
+
+
 #: The `fetch/metadata` templates all funnel through one helper name, and the
 #: element is what decides whether a request happens at all.
 _INDUCE_RE = re.compile(r"function\s+induceRequest\s*\(|\binduceRequest\s*\(")
@@ -1252,13 +1302,42 @@ SOURCE_MARKERS = [
         mode="all",
     ),
     Mechanism(
-        "img-no-load-event", "BUG-630",
-        [r"new Image\(|<img|createElement\(['\"]img['\"]\)",
-         r"\.onload|\.complete\b|naturalWidth|"
-         r"addEventListener\(['\"]load['\"]"],
+        # Slice 30 widened the second half twice. The *error* spellings were
+        # missing outright, and they are what three residual ids wait on and
+        # nothing else: `null-image-source.html` and
+        # `img-fallback-baseline-alignment.html` arm only `img.onerror` on an
+        # `<img src="">` — HTML LS §4.8.3 requires an `error` there — and
+        # measuring the load half says nothing about them (`--variant
+        # img-empty-src`: the page stays alive for 15 ticks and neither event
+        # arrives, while the server is never asked for anything). The second
+        # widening is the attribute form `onload="..."`, which the dotted
+        # pattern cannot see: `bypass-cache-revalidation.html` writes its
+        # images with `innerHTML` and gets the handler in as markup.
+        "img-no-load-event", "GAP-LOADEV (BUG-630)", [],
         "`<img>` dispatches neither `load` nor `error` and exposes no "
         "`complete`/`naturalWidth`",
-        mode="all",
+        predicate=_img_no_load_event_marker,
+    ),
+    Mechanism(
+        # The two image sources that are not `<img>`. BUG-848 (fetching them
+        # at all) is FIXED and slice 30 re-measured it as fixed — the probe's
+        # own server is asked for both an `<input type=image>` src and an SVG
+        # `<image>` href (`--variant input-image-src`, `--variant
+        # svg-image-href`) — but the *event* half never followed: neither
+        # element fires `load` or `error` in either spelling. That is the
+        # whole of the two `jpegxl` ids and of
+        # `content-visibility-input-image.html`, all three of which await the
+        # event before their first assertion. Separate from
+        # `element-subresource-never-requested` (BUG-848/BUG-825) because that
+        # one keys on `fetch/metadata`'s `induceRequest` helper and these
+        # reach the element the ordinary way, and separate from
+        # `img-no-load-event` because the element is a different one — the
+        # note has to stay true of what it claims.
+        "image-source-no-load-event", "GAP-LOADEV (BUG-630)", [],
+        "an `<input type=image>` / SVG `<image>` is fetched (BUG-848 is "
+        "fixed) and then dispatches neither `load` nor `error`, so the test "
+        "never reaches its first assertion",
+        predicate=_image_source_no_load_event_marker,
     ),
     Mechanism(
         "embed-object-no-load", "BUG-798",
@@ -1809,6 +1888,132 @@ SOURCE_MARKERS = [
         [r"pre-insertion-validation-hierarchy\.js"],
         "the shared pre-insertion helper: `insertBefore` never throws "
         "`NotFoundError` for a reference node that is not a child",
+    ),
+    # ── slice 30 ───────────────────────────────────────────────────────
+    Mechanism(
+        # No container is decodable except an animated GIF — `video_bindings.rs`
+        # says so in its own module docstring, and `canPlayType` answers `""`
+        # for `video/mp4`, `video/webm` and `video/ogg` alike (`--variant
+        # video-formats`). Resource selection therefore ends in the spec's
+        # dedicated media source failure steps *without a request*: the probe's
+        # server is never asked for the file (`--variant video-src-events`,
+        # `[server saw: nothing]`), `networkState` settles at 3 and `error.code`
+        # at 4. A test that waits for `play`/`canplay`/`loadedmetadata` can only
+        # time out. The `error` half arrives, so a test waiting on *that* is not
+        # this mechanism — hence the wait patterns name the playback events
+        # only.
+        "media-no-decodable-format", "GAP-MEDIADECODE",
+        [r"<\s*(?:video|audio)\b|createElement\(['\"](?:video|audio)['\"]\)|"
+         r"new Audio\(",
+         r"['\"](?:play|playing|canplay|canplaythrough|loadedmetadata|"
+         r"loadeddata|timeupdate|ended)['\"]|\.play\(\)|autoplay"],
+        "no media container is decodable (only animated GIF), so resource "
+        "selection ends in MEDIA_ERR_SRC_NOT_SUPPORTED with no request at "
+        "all, and a wait for `play`/`canplay`/`loadedmetadata` never settles",
+        mode="all",
+    ),
+    Mechanism(
+        # `document.fonts` is an object, and that is the whole of it: `check`,
+        # `load` and `addEventListener` are all `undefined`, so the `on*`
+        # property this test uses is an inert expando (`--variant
+        # fontface-events`; `document.fonts.ready` does resolve, which is why
+        # `fonts-ready` above is a different mechanism). Same key and ref as
+        # the output-stage entry.
+        "font-loading-api", "FONTLOAD (BUG-467, +BUG-591)",
+        [r"document\.fonts\.(?:onloadingdone|onloadingerror|onloading|check|"
+         r"load|addEventListener)|new FontFace\(|FontFaceSetLoadEvent"],
+        "`document.fonts` has no `check`/`load`/`addEventListener` and no "
+        "`FontFace` constructor, so a wait on `loadingdone` is a wait on an "
+        "expando",
+    ),
+    Mechanism(
+        # The canvas has no origin-clean flag at all (BUG-941): a cross-origin
+        # image draws and reads back, `getImageData`/`toDataURL` throw nothing.
+        # Both sides of the rule are asserted by the residual — `image-crossorigin`
+        # expects the throw, `drawimage_svg_image_with_foreign_object_does_not_taint`
+        # expects its absence — and the mechanism owns both, because what is
+        # missing is the flag rather than either answer.
+        "canvas-origin-clean-missing", "GAP-CANVASORIGIN (BUG-941)",
+        [r"getImageData\s*\(|toDataURL\s*\(",
+         r"crossOrigin|crossorigin|SecurityError|\btaint"],
+        "the canvas carries no origin-clean flag: a cross-origin draw is "
+        "readable back and neither `getImageData` nor `toDataURL` ever "
+        "throws `SecurityError`",
+        mode="all",
+    ),
+    Mechanism(
+        # BUG-938: the bitmap store is filled once, by the pipeline's parse
+        # pass, so an image the script made or re-pointed draws nothing and
+        # `createImageBitmap` on it rejects with «image not yet decoded».
+        # Below `img-no-load-event` on purpose — a page that also waits for
+        # `load` never reaches its `drawImage`, and the event is the first
+        # blocker. That is also why this row claims **0** ids in the
+        # 2026-08-20/21 snapshot: its one candidate,
+        # `bypass-cache-revalidation.html`, waits for `load` first. The row is
+        # kept because the order is the point — it starts claiming exactly
+        # when GAP-LOADEV lands, and until then it must not.
+        "canvas-draw-script-image", "BUG-938",
+        [r"drawImage\s*\(",
+         r"createElement\(['\"]img['\"]\)|new Image\(|"
+         r"innerHTML\s*=[^;]*<img|\.src\s*="],
+        "`drawImage(<img>)` paints nothing for an image created or "
+        "re-pointed from script — the bitmap store is written once, by the "
+        "document's parse pass",
+        mode="all",
+    ),
+    Mechanism(
+        # Same key and ref as the subtest-stage entry: `createImageBitmap`
+        # refuses a `<canvas>` source outright, and the tests that open with
+        # it register no subtest at all, so the subtest stage cannot see them
+        # (`offscreencanvas.filter.w.html`: the replay collects zero).
+        "createimagebitmap-source", "BUG-880",
+        [r"createImageBitmap\s*\(\s*(?:pattern|[A-Za-z_$][\w$]*[Cc]anvas|"
+         r"c\b|canvas)"],
+        "`createImageBitmap(canvas)` rejects with `unsupported source type`, "
+        "so a page that opens with it never registers a test",
+    ),
+    Mechanism(
+        # `drawElementImage`/`captureElementImage` are a tentative proposal
+        # (`*.tentative.html`), not HTML LS, and the engine has neither. No bug
+        # is filed and none should be: the row exists so the four ids stop
+        # reading as an unexplained residual.
+        "draw-element-image-tentative", "нет (tentative, вне HTML LS)",
+        [r"drawElementImage|captureElementImage"],
+        "the tentative `drawElementImage`/`captureElementImage` entry points "
+        "do not exist (`undefined`), and neither does a spec for them yet",
+    ),
+    Mechanism(
+        # `loading=lazy` on a media element is a proposal too — HTML LS gives
+        # `loading` to `<img>` and `<iframe>` only, and the engine implements
+        # it for exactly those two (`page_pipeline.rs::lazy_pairs`,
+        # `frames.rs:1130`). On a `<video>` the attribute is inert, so
+        # `loadstart` fires below the viewport and the test's first
+        # `assert_false` is already lost (`--variant video-lazy`,
+        # `--variant replay-video-lazy-to-eager`).
+        "media-loading-lazy", "нет (loading для медиа — предложение вне HTML LS)",
+        [r"<\s*video\b|createElement\(['\"]video['\"]\)",
+         r"loading\s*=\s*['\"]?lazy|\.loading\s*=\s*['\"]lazy"],
+        "`loading=lazy` is implemented for `<img>`/`<iframe>` and is inert on "
+        "a media element, so a below-viewport `<video>` starts loading at once",
+        mode="all",
+    ),
+    Mechanism(
+        # BUG-940: `<audio>` never got `currentSrc` — `<video>` has it, from
+        # the BUG-825 fix, and the two elements are two different shims.
+        # Claims 0 ids in the snapshot, and deliberately does not reach for
+        # the one id that measures the defect
+        # (`media-elements/location-of-the-media-resource/currentSrc.html`,
+        # which spells the element as `['audio','video'].forEach`): there the
+        # audio half FAILs synchronously on `undefined` while the *verdict* —
+        # TIMEOUT — is decided by the video half waiting for a `loadstart`
+        # that an empty `src` never produces (`--variant video-empty-src`:
+        # `error` arrives, `loadstart` does not). Claiming the file here would
+        # name the wrong owner for that row.
+        "audio-currentsrc-missing", "BUG-940",
+        [r"(?:audio|Audio)[^;\n]*\.currentSrc|"
+         r"currentSrc[^;\n]*(?:audio|Audio)"],
+        "`audio.currentSrc` is `undefined` at every step of the resource "
+        "selection algorithm, while `video.currentSrc` is complete",
     ),
 ]
 
@@ -2619,7 +2824,7 @@ SUBTEST_MARKERS = [
     # arrives, for a parser image or a script-made one, although the server
     # serves both (`--variant img-onload-attr`).
     SubtestMarker(
-        "img-no-load-event", "BUG-630",
+        "img-no-load-event", "GAP-LOADEV (BUG-630)",
         name=r"integrity check (?:passed|failed)",
         test=r"/import-maps/no-referencing-script-integrity",
         note="the `import()` under test is started from an `onload=` "
@@ -4520,6 +4725,147 @@ def selftest():
                          "promise_test(() => induceRequest('x.json'));</script>")
         check(classify_source("/fm/fetch.html", tmp, {}) is None,
               "a fetch-induced request must stay unclassified")
+
+        # ── slice 30: replaced content ─────────────────────────────────
+        os.makedirs(os.path.join(tmp, "s30"), exist_ok=True)
+
+        def _write_s30(name, body):
+            with open(os.path.join(tmp, "s30", name), "w",
+                      encoding="utf-8") as handle:
+                handle.write(body)
+
+        # The error half of the `<img>` path: `null-image-source.html` arms
+        # nothing but `onerror`, which the pre-slice-30 marker could not see.
+        _write_s30("img-error.html",
+                   "<img id=a src=''>\n<script>\n"
+                   "async_test(function (t) {\n"
+                   "  var img = document.getElementById('a');\n"
+                   "  img.onerror = t.step_func_done(function () {});\n"
+                   "});\n</script>")
+        check(classify_source("/s30/img-error.html", tmp, {})
+              == "img-no-load-event",
+              "an <img> onerror wait was not claimed")
+        # The attribute spelling, which `bypass-cache-revalidation.html` gets
+        # in through `innerHTML`.
+        _write_s30("img-attr.html",
+                   "<div id=d></div>\n<script>\n"
+                   "d.innerHTML = \"<img src='x.png' onload='resolve()'>\";\n"
+                   "</script>")
+        check(classify_source("/s30/img-attr.html", tmp, {})
+              == "img-no-load-event",
+              "an onload= attribute on an <img> was not claimed")
+        # …and the exclusion that keeps the widening from eating
+        # `csp-no-violation-event`: a handler that asserts the event must NOT
+        # arrive is not a wait. Both spellings of the page's own completion
+        # (`onload = function ...` at global scope) are outside the element
+        # too, so this file must stay unclassified.
+        _write_s30("img-unreached.html",
+                   "<script>\nvar t2 = async_test('x');\n"
+                   "onload = function () { t2.done(); };\n</script>\n"
+                   "<img src='doesnotexist.jpg' "
+                   "onerror='t2.step(function () { "
+                   "assert_unreached(\"handler ran\") });'>")
+        check(classify_source("/s30/img-unreached.html", tmp, {}) is None,
+              "an <img> handler asserting `unreached` must not be claimed")
+        # The two non-<img> sources: they are fetched (BUG-848 is fixed) and
+        # then say nothing.
+        _write_s30("input-image.html",
+                   "<input id=i type=image src='dice.png'>\n<script>\n"
+                   "promise_test(async () => {\n"
+                   "  await new Promise(r => "
+                   "i.addEventListener('load', r));\n});\n</script>")
+        check(classify_source("/s30/input-image.html", tmp, {})
+              == "image-source-no-load-event",
+              "an <input type=image> load wait was not claimed")
+        _write_s30("svg-image.html",
+                   "<svg><image id=g href='x.jxl'></image></svg>\n<script>\n"
+                   "promise_test(async () => {\n"
+                   "  await new Promise(r => "
+                   "g.addEventListener('load', r));\n});\n</script>")
+        check(classify_source("/s30/svg-image.html", tmp, {})
+              == "image-source-no-load-event",
+              "an SVG <image> load wait was not claimed")
+        # No container decodes, so a wait for a playback event cannot settle —
+        # while a wait for `error` is served and must not be claimed here.
+        _write_s30("video-play.html",
+                   "<script>\npromise_test(async t => {\n"
+                   "  const video = document.createElement('video');\n"
+                   "  video.autoplay = true;\n  video.src = 'v.py';\n"
+                   "  await new Promise(r => "
+                   "video.addEventListener('play', r));\n});\n</script>")
+        check(classify_source("/s30/video-play.html", tmp, {})
+              == "media-no-decodable-format",
+              "a wait for a media playback event was not claimed")
+        # Without `autoplay`, so the event names carry the match on their own
+        # (a mutation that empties the event list is invisible on the page
+        # above, which also says `autoplay`).
+        _write_s30("video-canplay.html",
+                   "<script>\nasync_test(t => {\n"
+                   "  const v = document.createElement('video');\n"
+                   "  v.src = 'v.py';\n"
+                   "  v.addEventListener('canplay', t.step_func_done());\n"
+                   "});\n</script>")
+        check(classify_source("/s30/video-canplay.html", tmp, {})
+              == "media-no-decodable-format",
+              "a bare canplay wait was not claimed")
+        _write_s30("video-error.html",
+                   "<script>\nasync_test(t => {\n"
+                   "  const video = document.createElement('video');\n"
+                   "  video.src = 'v.py';\n"
+                   "  video.onerror = t.step_func_done();\n});\n</script>")
+        check(classify_source("/s30/video-error.html", tmp, {})
+              != "media-no-decodable-format",
+              "a wait for the media `error` event must not be claimed — it "
+              "is the one media event this engine does deliver")
+        # `loading=lazy` on a media element, which HTML LS does not define and
+        # the engine implements for <img>/<iframe> only.
+        _write_s30("video-lazy.html",
+                   "<script>\nasync_test(t => {\n"
+                   "  const video = document.createElement('video');\n"
+                   "  video.loading = 'lazy';\n  video.src = 'A4.webm';\n"
+                   "  video.addEventListener('loadstart', () => {});\n"
+                   "});\n</script>")
+        check(classify_source("/s30/video-lazy.html", tmp, {})
+              == "media-loading-lazy",
+              "a below-viewport lazy <video> was not claimed")
+        # The canvas has no origin-clean flag; both directions of the rule are
+        # the same missing flag.
+        _write_s30("taint.html",
+                   "<script>\nasync_test(t => {\n"
+                   "  const c = document.createElement('canvas');\n"
+                   "  const ctx = c.getContext('2d');\n"
+                   "  ctx.drawImage(img, 0, 0);\n"
+                   "  assert_throws_dom('SecurityError', "
+                   "() => ctx.getImageData(0, 0, 4, 4));\n});\n"
+                   "// img.crossOrigin = 'anonymous'\n</script>")
+        check(classify_source("/s30/taint.html", tmp, {})
+              == "canvas-origin-clean-missing",
+              "a canvas origin-clean assertion was not claimed")
+        # A plain readback with no cross-origin question in it is not this
+        # mechanism — that is the whole of `canvas-with-padding.html`, which
+        # slice 30 leaves unclassified rather than guess.
+        _write_s30("plain-readback.html",
+                   "<canvas id=c></canvas>\n<script>\ntest(function () {\n"
+                   "  document.getElementById('c').getContext('2d')"
+                   ".getImageData(0, 0, 1, 1);\n});\n</script>")
+        check(classify_source("/s30/plain-readback.html", tmp, {}) is None,
+              "a same-origin canvas readback must stay unclassified")
+        # `createImageBitmap(canvas)` refuses its source, and the pages that
+        # open with it register no subtest for the subtest stage to read.
+        _write_s30("cib.html",
+                   "<script>\nvar patternCanvas = "
+                   "document.createElement('canvas');\n"
+                   "createImageBitmap(patternCanvas).then(consume);\n"
+                   "</script>")
+        check(classify_source("/s30/cib.html", tmp, {})
+              == "createimagebitmap-source",
+              "a createImageBitmap(canvas) opening was not claimed")
+        _write_s30("dei.html",
+                   "<script>\ntest(() => {\n"
+                   "  ctx.drawElementImage(el, 0, 0);\n});\n</script>")
+        check(classify_source("/s30/dei.html", tmp, {})
+              == "draw-element-image-tentative",
+              "a tentative drawElementImage entry point was not claimed")
 
         # Stage 1b (WPT-RUN-6 slice 23): the ids measured to hang standalone.
         # The table is the probe's, so the first two checks guard the join
