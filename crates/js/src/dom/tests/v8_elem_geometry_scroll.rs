@@ -138,6 +138,62 @@ fn offset_left_top_falls_back_to_body_when_no_positioned_ancestor() {
     assert_eq!(top, lumen_core::JsValue::Number(7.0));
 }
 
+/// BUG-482: `offsetParent` itself (not just the origin `offsetLeft`/`offsetTop`
+/// measure from) — same fixture as `offset_left_top_relative_to_positioned_ancestor`.
+#[test]
+fn offset_parent_returns_nearest_positioned_ancestor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let doc_arc = make_doc();
+    let (div_nid, span_nid) = {
+        let doc = doc_arc.lock().unwrap();
+        (
+            super::super::find_element_by_tag(&doc, "div").unwrap().index() as u32,
+            super::super::find_element_by_tag(&doc, "span").unwrap().index() as u32,
+        )
+    };
+    rt.update_layout_rects(
+        [(div_nid, [8.0, 8.0, 300.0, 200.0]), (span_nid, [24.0, 20.0, 50.0, 20.0])]
+            .into_iter()
+            .collect(),
+    );
+    rt.update_computed_styles(
+        [(div_nid, [("position".to_string(), "relative".to_string())].into_iter().collect())]
+            .into_iter()
+            .collect(),
+    );
+    let is_div = rt
+        .eval(
+            "document.getElementsByClassName('highlight')[0].offsetParent === \
+             document.getElementById('main')",
+        )
+        .unwrap();
+    assert_eq!(is_div, lumen_core::JsValue::Bool(true));
+}
+
+/// CSSOM View §5 step 1: `null` for the root element, `<body>` itself, and a
+/// `position: fixed` element.
+#[test]
+fn offset_parent_null_for_root_body_and_fixed() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval("document.documentElement.offsetParent").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Null);
+    let r = rt.eval("document.body.offsetParent").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Null);
+
+    let doc_arc = make_doc();
+    let span_nid = {
+        let doc = doc_arc.lock().unwrap();
+        super::super::find_element_by_tag(&doc, "span").unwrap().index() as u32
+    };
+    rt.update_computed_styles(
+        [(span_nid, [("position".to_string(), "fixed".to_string())].into_iter().collect())]
+            .into_iter()
+            .collect(),
+    );
+    let r = rt.eval("document.getElementsByClassName('highlight')[0].offsetParent").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Null);
+}
+
 /// CSSOM View §5 step 1: `<body>` itself is a special case, always zero
 /// regardless of its own `offsetParent` walk.
 #[test]
@@ -153,6 +209,52 @@ fn offset_left_top_zero_for_body_itself() {
     assert_eq!(left, lumen_core::JsValue::Number(0.0));
     let top = rt.eval("document.body.offsetTop").unwrap();
     assert_eq!(top, lumen_core::JsValue::Number(0.0));
+}
+
+// ── BUG-482: document.scrollingElement (CSSOM View §5.2) ───────────────────
+
+#[test]
+fn scrolling_element_is_document_element_in_no_quirks_mode() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let is_html = rt.eval("document.scrollingElement === document.documentElement").unwrap();
+    assert_eq!(is_html, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn scrolling_element_defaults_to_body_in_quirks_mode() {
+    let doc = make_doc();
+    doc.lock().unwrap().set_mode(lumen_dom::DocumentMode::Quirks);
+    let rt = v8_runtime_with_dom(doc);
+    let is_body = rt.eval("document.scrollingElement === document.body").unwrap();
+    assert_eq!(is_body, lumen_core::JsValue::Bool(true));
+}
+
+/// A body is "potentially scrollable" (and so loses `scrollingElement` to
+/// `null`) only once NEITHER it nor the root element is left at the default
+/// fully-visible overflow on both axes.
+#[test]
+fn scrolling_element_is_null_in_quirks_mode_when_body_potentially_scrollable() {
+    let doc = make_doc();
+    doc.lock().unwrap().set_mode(lumen_dom::DocumentMode::Quirks);
+    let rt = v8_runtime_with_dom(doc);
+    let doc_arc = make_doc();
+    let (html_nid, body_nid) = {
+        let doc = doc_arc.lock().unwrap();
+        (
+            super::super::find_element_by_tag(&doc, "html").unwrap().index() as u32,
+            super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32,
+        )
+    };
+    rt.update_computed_styles(
+        [
+            (html_nid, [("overflow-y".to_string(), "scroll".to_string())].into_iter().collect()),
+            (body_nid, [("overflow-y".to_string(), "scroll".to_string())].into_iter().collect()),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let r = rt.eval("document.scrollingElement").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Null);
 }
 
 /// BUG-475: CSSOM View defines `scrollWidth`/`scrollHeight` for every element,

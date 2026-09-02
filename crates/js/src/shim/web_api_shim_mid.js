@@ -4559,6 +4559,25 @@ function _lumen_offset_origin(nid) {
     return [r[0] + bl, r[1] + bt];
 }
 
+// BUG-482: does `nid` have a non-visible computed overflow on either axis? An
+// empty string (no computed-style entry) means "no box" / default, which
+// counts as 'visible', not as non-visible.
+function _lumen_overflow_not_visible(nid, prop) {
+    var v = _lumen_get_computed_style(nid, prop);
+    return !!v && v !== 'visible';
+}
+
+// CSSOM View §5.2 "potentially scrollable": in quirks mode, `document.body`
+// is potentially scrollable only when NEITHER it nor the root element is
+// left at the fully-visible overflow default on both axes — used by
+// `document.scrollingElement` below.
+function _lumen_body_potentially_scrollable(bodyNid, htmlNid) {
+    function nonVisible(nid) {
+        return _lumen_overflow_not_visible(nid, 'overflow-x') || _lumen_overflow_not_visible(nid, 'overflow-y');
+    }
+    return nonVisible(htmlNid) && nonVisible(bodyNid);
+}
+
 // BUG-849: the wrapper's whole interface used to be built PER NODE — the object
 // literal below (~130 accessors and methods), the `Object.defineProperty` block
 // after it, and one `on<type>` accessor pair for every name in
@@ -5221,6 +5240,12 @@ var _LUMEN_WRAPPER_MEMBERS = {
             if (_lumen_is_body(nid)) return 0;
             var r = _lumen_get_bounding_rect(nid); if (!r) return 0;
             return r[1] - _lumen_offset_origin(nid)[1];
+        },
+        // BUG-482: the element itself, not just the origin it measures from —
+        // same `_lumen_offset_parent_nid` walk BUG-476 built for offsetLeft/Top.
+        get offsetParent() { var nid = this.__nid__;
+            var pid = _lumen_offset_parent_nid(nid);
+            return pid === null || pid === undefined ? null : _lumen_make_element(pid);
         },
         get clientWidth()  { var nid = this.__nid__; var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0; },
         get clientHeight() { var nid = this.__nid__; var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0; },
@@ -6695,6 +6720,19 @@ var document = {
     get body()   {
         var bid = _lumen_u2n(_lumen_get_body());
         return bid !== null ? _lumen_make_element(bid) : null;
+    },
+    // BUG-482 (CSSOM View §5.2): the root element in no-quirks mode; in
+    // quirks mode, the body element unless it is "potentially scrollable"
+    // (both it and the root have non-default overflow), in which case `null`.
+    get scrollingElement() {
+        var hid = _lumen_u2n(_lumen_get_html_element());
+        if (_lumen_get_document_compat_mode() !== 'BackCompat') {
+            return hid !== null ? _lumen_make_element(hid) : null;
+        }
+        var bid = _lumen_u2n(_lumen_get_body());
+        if (bid === null) return null;
+        if (hid !== null && _lumen_body_potentially_scrollable(bid, hid)) return null;
+        return _lumen_make_element(bid);
     },
     // HTML LS 3.1.4 (BUG-703): the head element. Missing entirely until now —
     // webpack's chunk loader ends in `document.head.appendChild(script)`, so on
