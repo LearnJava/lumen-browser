@@ -371,6 +371,52 @@ fn fire_window_scroll_dispatches_event() {
     assert_eq!(result, lumen_core::JsValue::Bool(true), "window scroll event should fire");
 }
 
+// ── BUG-481: window.visualViewport (Visual Viewport API) ───────────────────
+
+#[test]
+fn visual_viewport_exists_and_extends_event_target() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval("typeof window.visualViewport === 'object'").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+    let r = rt.eval("typeof visualViewport.addEventListener === 'function'").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+    let r = rt.eval("'onresize' in visualViewport && 'onscroll' in visualViewport").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn visual_viewport_width_height_track_viewport_size() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.update_viewport_size(800.0, 600.0);
+    let w = rt.eval("visualViewport.width").unwrap();
+    assert_eq!(w, lumen_core::JsValue::Number(800.0));
+    let h = rt.eval("visualViewport.height").unwrap();
+    assert_eq!(h, lumen_core::JsValue::Number(600.0));
+}
+
+/// `pageTop` must track `window.scrollY` (BUG-481's originating regression:
+/// `scrollIntoView-fixed-outside-of-viewport.html` asserts the two stay equal
+/// across a page scroll).
+#[test]
+fn visual_viewport_page_top_tracks_page_scroll() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.set_page_scroll_y(10.0);
+    let top = rt.eval("visualViewport.pageTop").unwrap();
+    assert_eq!(top, lumen_core::JsValue::Number(10.0));
+    let scroll_y = rt.eval("window.scrollY").unwrap();
+    assert_eq!(top, scroll_y);
+}
+
+/// No pinch-zoom is modeled, so offset/scale stay at their unzoomed defaults.
+#[test]
+fn visual_viewport_offset_and_scale_default_unzoomed() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval("visualViewport.offsetLeft === 0 && visualViewport.offsetTop === 0 && visualViewport.pageLeft === 0").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+    let r = rt.eval("visualViewport.scale").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(1.0));
+}
+
 // ── CSS Scroll Snap L2 snapchanging/snapchanged events ─────────────────────
 
 #[test]
