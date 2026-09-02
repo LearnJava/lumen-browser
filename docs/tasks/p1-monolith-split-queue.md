@@ -660,11 +660,77 @@ column-rules/visibility (6278…6561, 284) → form-controls-эмиссия (656
 snapshots/*.snap` — второй набор эталонов рядом с CPU PNG, см. BUG-816 в
 CLAUDE.md).
 
-### Группы LB/NW/CP/DM — второй эшелон (не переписаны)
+### Группа LB — `crates/engine/layout/src/lib.rs` (19 251 строка)
+
+Перепись SPLIT-LB0 закрыта (`python scripts/split_census.py
+crates/engine/layout/src/lib.rs`, затем `--inner 1547 19252` на теле
+`mod tests`): 111 top-level item'ов, лексер сходится (итоговая глубина 0,
+сумма спанов 19 233 + 19 строк файловой шапки до первого item'а = 19 252).
+`lib.rs` — корень крейта `lumen-layout`, поэтому в отличие от ST/BT/RN/DL
+(обычные модули со «своим каталогом» `<module>/`) у него нет естественного
+подкаталога — сиблинг-файлы живут прямо в `src/`, тем же приёмом, что уже
+применён DM-1 для `dom/lib.rs` (`forms.rs`, `selection.rs`, … рядом с
+`lib.rs`, без вложенности).
+
+**Карта файла резко асимметрична.** Продакшен-часть — 1546 строк (use-шапка
+1…19, 36 `mod`-деклараций 22…57, 30 `use`-блоков 58…162, затем
+`SelectionHighlight`/`TextMeasurer`/`ClickableKind`+`ClickableElement`+
+`collect_clickable_*`/`StickyBox`+`collect_sticky_*`/`SnapPoint`+
+`SnapContainer`+`collect_snap_*`+`find_snap_target`+`find_snapped_nodes`/
+`ScrollContainer`+`collect_scroll_containers*`/контент-хелперы
+`collect_computed_styles`/`collect_custom_properties`/`collect_layout_rects`/
+`find_box_by_node`/`set_scroll_position`/view-transition-хелперы/
+`find_scroll_container_at`+`find_scroll_container_for_node`, 163…1546) —
+**уже под потолком 2000 строк и батча не требует**, тот же случай, что
+хвост DM-1 оставил в `dom/lib.rs`. Весь остальной файл — один инлайновый
+`mod tests` (1547…19252, **17 706 строк, 92 % файла**), 141 внутренняя
+секция по баннерам `--inner`, в основном мелкие (50…460 строк) блоки тестов
+одного CSS-свойства/псевдокласса/фичи, никакой продакшен-код за пределами
+`mod tests` не лежит (в отличие от DL, где `emit_text_with_highlights`
+нашёлся ПОСЛЕ тестового модуля — здесь такого хвоста нет, `mod tests`
+закрывается на последней строке файла).
+
+**Батч-план** (LB-1…LB-10, порядок хвост→голова — приём SH/ST/JS/BT/RN/DL,
+вырезка не сдвигает ещё не взятые анкеры выше по файлу). Секции сгруппированы
+окнами ≈1700…2000 строк по непрерывным баннерам (без тематической
+перестановки — тот же принцип, что DL-2/DL-3, где один батч тоже накрывал
+несколько несвязанных именем секций). Анкеры пересчитывать в начале каждого
+батча — в группах DL/ST дрейф от параллельных мержей был системным
+(+1…+72 строки на каждом шаге). Общая шапка `mod tests` (1547…2011, 465
+строк — общие fixtures/builder-хелперы, вероятно читаемые бо́льшей частью
+секций через `super::*`) идёт в LB-10 — последним батчем, тем же приёмом,
+что DL-6 «голова `mod tests`»: пока она не вынесена, `mod tests` не может
+быть распущен, и девять уже вынесенных сиблингов продолжают читать общие
+хелперы как `super::tests::*`, переключаясь на прямой sibling-путь только
+на LB-10. Ожидать те же формы находок, что нашла группа DL: перекрёстные
+`pub(crate)`-зависимости между соседними батчами (DL-2/DL-3/DL-5), общий
+хелпер в шапке, ещё не вынесенной (DL-2), и возможный кросс-секционный вызов
+внутри одного тематического окна.
+
+| ID | Анкер (строки lib.rs) | Регион | Цель |
+|---|---|---:|---|
+| LB-1 | `// ── CSS Counters resolution (CSS Lists L3 §6.4)` (17258) … конец файла: details/summary, collect_clickable_elements ×2, line-clamp, sticky position algorithm, CSS Scroll Snap, scroll-margin/scroll-padding snap offset (BB-7), scroll container tests, text-wrap: balance/pretty, find_scroll_container_at/for_node (BUG-338), collect_view_transition_names/groups, CSS Overscroll Behavior L1 scroll chain stop, BUG-728 (не-inline потомок inline-элемента) | 1 995 | `tests/scroll_interaction_misc.rs` |
+| LB-2 | `// ── CSS Grid L2 Subgrid` (15327) … до конца секции «CSS Intrinsic Sizing L3»: collect_image_requests, collect_background_image_requests, BUG-101 image-set()/cross-fade(), CSS Generated Content content:url(), CSS Positioned Layout position, UA stylesheet, ::before/::after generation (в т.ч. inline-путь collect_inline_segments), Half-leading (CSS 2.1 §10.8.1), Multi-column layout, ::marker box (BUG-011), float+clear (CSS 2.1 §9.5), margin collapsing (CSS 2.1 §8.3.1), CSS Intrinsic Sizing L3 | 1 931 | `tests/layout_generation_misc.rs` |
+| LB-3 | `// ──────────────── :current / :past / :future` (13434) … до конца секции «BUG-801 auto-placement»: Canvas background propagation, HTML presentational hints (bgcolor/text, body/font color, font size/face, img hspace/vspace/border/align), table layout (BUG-006), colspan/rowspan, CSS Grid Layout tests, grid content distribution, grid named areas, grid-auto-flow:dense, BUG-801 | 1 893 | `tests/table_grid_presentational.rs` |
+| LB-4 | `// ──────── CSS Easing L1 — TimingFunction parser` (11559) … до конца секции «:fullscreen/:modal/:popover-open»: CSS Transitions/Animations L1 (name/duration-delay/timing-function/iteration-count/direction/fill-mode/play-state/defaults), CSS Text typography (tab-size/caret-color/overflow-wrap/word-break/hyphens), will-change/pointer-events/user-select/scroll-behavior, background-*, parse_gradient_stops, conic-gradient parsing, place-items/align-*/justify-* (Box Alignment L3), CSS Quirks Mode (UA table rule, hashless hex color, html viewport height), :fullscreen/:modal/:popover-open | 1 875 | `tests/animation_gradient_quirks.rs` |
+| LB-5 | `// ──────── clip-path / transform / filter` (9884) … до конца секции «transform-origin/perspective/list-style-*/transition-*»: backdrop-filter, gap/aspect-ratio, CSS Multi-column L1, env(), CSS Scroll Snap L1, CSS Overscroll Behavior L1, collect_snap_containers/find_snap_target, find_snapped_nodes (Scroll Snap L2 events), mask-*/scrollbar-*, CSS Masking L1 §4.9 (multi-layer masks + `mask` shorthand), scrollbar-gutter layout algorithm | 1 675 | `tests/filter_transform_snap_mask.rs` |
+| LB-6 | `// ── CSS Container Style Queries — nested and/or/not…` (8041) … до конца секции «@media queries»: CSS Container Queries L1, `<img>`/`<video>`/`<iframe>`/`<picture>`+srcset replaced-element layout, CSS-wide keywords (Cascade L4 §7), `@property` syntax-валидация, CSS counters (Lists L3 §3), `@media` queries (Media Queries L4) | 1 843 | `tests/container_queries_replaced.rs` |
+| LB-7 | `// ── outline (CSS Basic UI L4 §5)` (6095) … до конца секции «CSS Container Style Queries (Phase 0)»: text-emphasis, visibility, overflow, cursor, box-shadow, text-shadow, border-radius, text-overflow, selector matching back-tracking edge cases, font-variant-caps, font-stretch, accent-color, `:has()`, direction (Writing Modes L3), CSS Containment L3 enforcement, CSS Container Style Queries Phase 0 | 1 946 | `tests/visual_props_pseudo_selectors.rs` |
+| LB-8 | `// ── Relative units: em / rem / %` (4321) … до конца секции «opacity»: text-align, width/height, min-/max-width/height (§10.4), borders, box-sizing, `:is()`/`:where()`, case-insensitive `[attr=val i]`, `!important` (Cascade L4 §8.1), viewport units, font-style, font-weight, text-transform, text-indent, letter-spacing, word-spacing, font-family, white-space:nowrap, opacity | 1 774 | `tests/box_sizing_text_props.rs` |
+| LB-9 | `// ── :placeholder-shown (CSS Selectors L4 §15.1)` (2380) … до конца секции «Функциональные pseudo: :nth-*, :*-of-type, :not»: `:required`/`:optional`, `:read-only`/`:read-write`, `:disabled`/`:enabled`, `:checked`/`:indeterminate`/`:default`, `:lang()`, `:dir()`, `:link`/`:visited`/`:any-link`, `:scope`, `:target`, `:target-within`, `:in-range`/`:out-of-range`, `:valid`/`:invalid`, inline-flow tests, функциональные pseudo | 1 941 | `tests/state_pseudo_classes.rs` |
+| LB-10 | голова `mod tests`: общие fixtures/builder-хелперы (1547) … до конца секции «Interactive pseudo-classes: :hover/:focus/:active»: line wrapping tests, расширенные селекторы | 833 | Снимает обёртку `mod tests` целиком (приём DL-6) → `tests/fixtures_and_core_selectors.rs`; девять уже вынесенных сиблингов переключаются с `super::tests::*` на прямой путь |
+
+Целевой каталог для всех десяти — `crates/engine/layout/src/tests/`, декларация
+в `lib.rs`: `#[cfg(test)] #[path = "tests/<name>.rs"] mod <name>;` (тот же
+`#[path]`-приём, что DL применил для `display_list/tests/*.rs`, адаптированный
+под то, что у корня крейта нет собственного подкаталога вида `<module>/`).
+Продакшен-хвост (163…1546) остаётся в `lib.rs` как есть — он уже под
+потолком, отдельный батч под него заводить не нужно.
+
+### Группы NW/CP/PR/DM — второй эшелон (не переписаны)
 
 | ID | Файл | Первый шаг |
 |---|---|---|
-| LB-0 | `layout/lib.rs` (19 155) | перепись → нарезка. Группы под этот файл в исходном плане не было — пробел, замеченный при назначении дорожки P1 2026-08-26, хотя файл шестой по величине в переписи |
 | PR-2 | `paint/backends/femtovg_backend.rs` (7 955) | по командам: path/text/image/blend |
 | NW-0 | `network/lib.rs` (9 799) | HTTP/1.1-ядро → `http1/{request,response,chunked}.rs`; в lib.rs оставить сборку transport |
 | CP-1 | `css-parser/parser.rs` (9 192) | тестовый модуль (с ~5098) → `tests/`; затем `parser/{selectors,at_rules,declarations}` |
