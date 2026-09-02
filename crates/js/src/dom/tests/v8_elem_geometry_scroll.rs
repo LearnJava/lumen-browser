@@ -66,6 +66,95 @@ fn scroll_top_left_via_update_scroll_states() {
     assert_eq!(sh, lumen_core::JsValue::Number(2000.0));
 }
 
+/// BUG-476: `offsetLeft`/`offsetTop` must be relative to the nearest
+/// positioned ancestor (`offsetParent`), not the viewport — measured from
+/// that ancestor's *padding* edge (its border-box origin plus its own border
+/// widths), CSSOM View §5. `div#main` (the `offsetParent`, `position:
+/// relative`, 6px left / 3px top border) sits at viewport (8, 8); its padding
+/// edge is therefore at (14, 11). `span.highlight` (the target, an ordinary
+/// static descendant) sits at viewport (24, 20) — offsetLeft/offsetTop must
+/// report the difference: 10 and 9.
+#[test]
+fn offset_left_top_relative_to_positioned_ancestor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let doc_arc = make_doc();
+    let (div_nid, span_nid) = {
+        let doc = doc_arc.lock().unwrap();
+        (
+            super::super::find_element_by_tag(&doc, "div").unwrap().index() as u32,
+            super::super::find_element_by_tag(&doc, "span").unwrap().index() as u32,
+        )
+    };
+    rt.update_layout_rects(
+        [(div_nid, [8.0, 8.0, 300.0, 200.0]), (span_nid, [24.0, 20.0, 50.0, 20.0])]
+            .into_iter()
+            .collect(),
+    );
+    rt.update_computed_styles(
+        [(
+            div_nid,
+            [
+                ("position".to_string(), "relative".to_string()),
+                ("border-left-width".to_string(), "6px".to_string()),
+                ("border-top-width".to_string(), "3px".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    let left = rt.eval("document.getElementsByClassName('highlight')[0].offsetLeft").unwrap();
+    assert_eq!(left, lumen_core::JsValue::Number(10.0));
+    let top = rt.eval("document.getElementsByClassName('highlight')[0].offsetTop").unwrap();
+    assert_eq!(top, lumen_core::JsValue::Number(9.0));
+}
+
+/// The same fixture with no `position` set anywhere: `div#main` is skipped
+/// (statically positioned) and the walk keeps going up to `<body>`, which the
+/// algorithm always accepts as an `offsetParent` — CSSOM View §5 does not
+/// require a positioned `<body>`. With `<body>` at the viewport origin,
+/// `offsetLeft`/`offsetTop` on the target reduce to its own viewport
+/// position.
+#[test]
+fn offset_left_top_falls_back_to_body_when_no_positioned_ancestor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let doc_arc = make_doc();
+    let (body_nid, span_nid) = {
+        let doc = doc_arc.lock().unwrap();
+        (
+            super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32,
+            super::super::find_element_by_tag(&doc, "span").unwrap().index() as u32,
+        )
+    };
+    rt.update_layout_rects(
+        [(body_nid, [0.0, 0.0, 800.0, 600.0]), (span_nid, [5.0, 7.0, 50.0, 20.0])]
+            .into_iter()
+            .collect(),
+    );
+    let left = rt.eval("document.getElementsByClassName('highlight')[0].offsetLeft").unwrap();
+    assert_eq!(left, lumen_core::JsValue::Number(5.0));
+    let top = rt.eval("document.getElementsByClassName('highlight')[0].offsetTop").unwrap();
+    assert_eq!(top, lumen_core::JsValue::Number(7.0));
+}
+
+/// CSSOM View §5 step 1: `<body>` itself is a special case, always zero
+/// regardless of its own `offsetParent` walk.
+#[test]
+fn offset_left_top_zero_for_body_itself() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let doc_arc = make_doc();
+    let nid = {
+        let doc = doc_arc.lock().unwrap();
+        super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+    };
+    rt.update_layout_rects([(nid, [50.0, 60.0, 800.0, 600.0])].into_iter().collect());
+    let left = rt.eval("document.body.offsetLeft").unwrap();
+    assert_eq!(left, lumen_core::JsValue::Number(0.0));
+    let top = rt.eval("document.body.offsetTop").unwrap();
+    assert_eq!(top, lumen_core::JsValue::Number(0.0));
+}
+
 /// BUG-475: CSSOM View defines `scrollWidth`/`scrollHeight` for every element,
 /// not just designated `overflow: scroll`/`auto` containers. An element with
 /// no entry in the scroll-state map (never a scroll container) must still
