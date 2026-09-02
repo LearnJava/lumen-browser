@@ -46,8 +46,8 @@ pub fn parse_color(s: &str) -> Option<Color> {
 /// CSSOM §6.7.3). Unlike [`parse_color`], which resolves everything down to
 /// an opaque `Color`, this keeps keyword-syntax input (named colors,
 /// `currentcolor`, `transparent`, system-color keywords, and the CSS-wide
-/// keywords `inherit`/`initial`/`unset`/`revert`/`revert-layer`, which are
-/// valid on any property and are not `<color>` syntax at all) serialized as
+/// keywords `inherit`/`initial`/`unset`/`revert`/`revert-layer`/`revert-rule`,
+/// which are valid on any property and are not `<color>` syntax at all) serialized as
 /// the keyword itself, lowercased — only hex/legacy-functional notation
 /// (`rgb()`/`rgba()`/`hsl()`/`hsla()`/`hwb()`/…) canonicalizes to the
 /// `rgb()`/`rgba()` functional form. Returns `None` when `s` is not a valid
@@ -60,8 +60,10 @@ pub fn canonical_specified_color(s: &str) -> Option<String> {
         return None;
     }
     let lower = trimmed.to_ascii_lowercase();
-    if matches!(lower.as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer")
-        || lower == "currentcolor"
+    if matches!(
+        lower.as_str(),
+        "inherit" | "initial" | "unset" | "revert" | "revert-layer" | "revert-rule"
+    ) || lower == "currentcolor"
         || named_color(&lower).is_some()
         || SystemColor::parse(&lower).is_some()
     {

@@ -56,8 +56,9 @@ Three more files in this category attribute elsewhere: `env-parsing.html` (5)
 and `indexed-env.tentative.html` (4) fail on the generic inline-`style`
 rejection gap ([BUG-484](BUG-484-OPEN.md) — malformed `env(...)` accepted by
 `element.style` instead of rejected, a JS-layer issue independent of this
-one), `env-revert-rule.html` (1) fails on the unrelated missing
-`revert-rule` keyword ([BUG-487](BUG-487-OPEN.md)), and
+one), `env-revert-rule.html` (1) fails because `revert-rule` inside an
+`env()` fallback is substituted textually before the cascade sees it, so the
+cascade-level fix in [BUG-487](BUG-487-FIXED.md) does not reach it, and
 `env-in-custom-properties.tentative.html` (2) dies earlier on bare
 identifier access ([BUG-384](BUG-384-FIXED.md)).
 
