@@ -57,8 +57,8 @@
 {
  "generated": "2026-09-02",
  "counts": {
-  "open": 375,
-  "fixed": 538,
+  "open": 371,
+  "fixed": 542,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -6156,46 +6156,46 @@
        "note": "**ЗАКРЫТ** (ветка `p1-split-lb0`, один срез, без переноса кода): перепись `crates/engine/layout/src/lib.rs` методом `scripts/split_census.py` — 19 251 строка (не 19 155 из переписи 2026-08-23 — файл вырос), 111 top-level item'ов, лексер сходится (глубина 0). Карта резко асимметрична: продакшен-часть 1…1546 (use-шапка + 36 `mod`-деклараций + 30 `use`-блоков + `SelectionHighlight`/`TextMeasurer`/clickable/sticky/snap/scroll-container-хелперы) уже под потолком 2000 строк и отдельного батча не требует — тот же случай, что хвост DM-1 оставил в `dom/lib.rs`; весь остаток — один инлайновый `mod tests` (1547…19252, 17 706 строк, 92 % файла, 141 внутренняя секция по `--inner`, в основном мелкие тесты одного CSS-свойства/псевдокласса). Батч-план LB-1…LB-10 (хвост→голова, окна ≈1700…2000 строк по непрерывным баннерам, голова `mod tests` — общие fixtures — в LB-10 последним батчем, приём DL-6) — таблица §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md). Целевой каталог — `crates/engine/layout/src/tests/` (у корня крейта нет своего подкаталога вида `<module>/`, сиблинги живут прямо в `src/`, приём DM-1)"
       },
       {
-       "id": "SPLIT-LB1",
+       "id": "SPLIT-LB1 ✅ DONE 2026-09-02",
        "title": "SPLIT-LB1: scroll/sticky/snap/view-transition тесты из layout/lib.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "`layout/lib.rs`: регион 17258…19252 (1 995 строк) — CSS Counters resolution/details-summary/collect_clickable_elements/line-clamp/sticky position/CSS Scroll Snap/scroll-margin-padding snap offset (BB-7)/scroll container tests/text-wrap balance-pretty/find_scroll_container_at/for_node (BUG-338)/view-transition names+groups/Overscroll Behavior scroll chain stop/BUG-728. Анкер пересчитать заново. Метод и полная карта — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "**ЗАКРЫТ 2026-09-02** (ветка `p1-split-lb1`, один срез): анкер пересчитан заново — регион 17258…19250 (1 993 строки, не 1 995 из переписи SPLIT-LB0 — тот же дрейф, что у DL/ST/SH). CSS Counters resolution/details-summary/collect_clickable_elements/line-clamp/sticky position/CSS Scroll Snap/scroll-margin-padding snap offset (BB-7)/scroll container tests/text-wrap balance-pretty/find_scroll_container_at/for_node (BUG-338)/view-transition names+groups/Overscroll Behavior scroll chain stop/BUG-728 вынесены целиком в `tests/scroll_interaction_misc.rs` (1 995 строк с одноуровневым де-индентом, тело сверено diff'ом побайтово против региона lib.rs, 0 расхождений). Подключено как `#[cfg(test)] #[path = \"scroll_interaction_misc.rs\"] mod scroll_interaction_misc;` **внутри** `mod tests { ... }` (путь относительно неявной директории вложенного inline-модуля — БЕЗ повторного префикса `tests/`, иначе rustc ищет `tests/tests/…`). `lib.rs` 19 251 → 17 261 строка (ещё выше потолка 2000 — продакшен-хвост 1…1546 плюс девять оставшихся батчей LB-2…LB-10). `cargo test -p lumen-layout --lib` 3651/3651 до/после (счётчик не уменьшился, 107 тестов — перенесённая секция), `cargo clippy -p lumen-layout --all-targets -- -D warnings` чист, `cargo clippy --workspace --all-targets -- -D warnings` (финальный гейт) чист, `bash scripts/scoped-test.sh` зелёный целиком (BUG-805 в этот раз не проявился). `LUMEN_PROFILE=dev-release python graphic_tests/dump_golden.py` 12/12 без дельт (тестовый код, display list не мог измениться). `scripts/check_file_sizes.py --update` — `lib.rs` ушёл из списка нарушителей строкой (новый файл 1995 строк — под порогом 2000, отдельной записи не требует). Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа LB»"
       },
       {
-       "id": "SPLIT-LB2",
+       "id": "SPLIT-LB2 ✅ DONE 2026-09-02",
        "title": "SPLIT-LB2: генерация контента/layout-разное из layout/lib.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "`layout/lib.rs`: регион 15327…17257 (1 931 строка) — CSS Grid L2 Subgrid/collect_image_requests/collect_background_image_requests/BUG-101 image-set()-cross-fade()/Generated Content content:url()/Positioned Layout/UA stylesheet/::before-::after generation (в т.ч. inline-путь)/Half-leading/Multi-column layout/::marker box (BUG-011)/float+clear/margin collapsing/Intrinsic Sizing L3. Анкер пересчитать заново. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "**ЗАКРЫТ 2026-09-02** (ветка `p1-split-lb2`, один срез): регион (1 930 строк) — CSS Grid L2 Subgrid/collect_image_requests/collect_background_image_requests/BUG-101 image-set()-cross-fade()/Generated Content content:url()/Positioned Layout/UA stylesheet/::before-::after generation (в т.ч. inline-путь)/Half-leading/Multi-column layout/::marker box (BUG-011)/float+clear/margin collapsing/Intrinsic Sizing L3 вынесены в `tests/layout_generation_misc.rs` тем же приёмом, что LB1 (`#[path]`-модуль внутри inline `mod tests`, дедент базового отступа). `cargo test -p lumen-layout --lib` без изменения счётчика (регион целиком тестовый), финальный `cargo clippy --workspace --all-targets -- -D warnings` чист. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
       },
       {
-       "id": "SPLIT-LB3",
+       "id": "SPLIT-LB3 ✅ DONE 2026-09-02",
        "title": "SPLIT-LB3: table/grid/presentational-hints тесты из layout/lib.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "`layout/lib.rs`: регион 13434…15326 (1 893 строки) — :current/:past/:future/Canvas background propagation/HTML presentational hints (bgcolor-text, body-font color, font size-face, img hspace-vspace-border-align)/table layout (BUG-006)/colspan-rowspan/CSS Grid Layout tests/grid content distribution/grid named areas/grid-auto-flow:dense/BUG-801. Анкер пересчитать заново. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "**ЗАКРЫТ 2026-09-02** (ветка `p1-split-lb3`, один срез): анкер совпал с планом день в день, без дрейфа — регион 13434…15326 (1 893 строки) — :current/:past/:future/Canvas background propagation/HTML presentational hints (bgcolor-text, body-font color, font size-face, img hspace-vspace-border-align)/table layout (BUG-006)/colspan-rowspan/CSS Grid Layout tests/grid content distribution/grid named areas/grid-auto-flow:dense/BUG-801 вынесены в `tests/table_grid_presentational.rs` тем же приёмом, что LB1/LB2 (`#[path]`-модуль внутри inline `mod tests`, дедент базового отступа), сверка побайтово — 0 расхождений на всех 1893 строках. Кросс-зависимость (форма DL-2/DL-3): хелпер `html_and_body` переведён в `pub(crate)` — используется и в новом файле, и в оставшемся `:fullscreen/:modal/:popover-open` регионе `lib.rs`. `lib.rs` 15334 → 13445 строка. `cargo test -p lumen-layout --lib` 3651/3651 до/после (регион целиком тестовый), финальный `cargo clippy --workspace --all-targets -- -D warnings` чист, `LUMEN_PROFILE=dev-release python graphic_tests/dump_golden.py` 12/12 без дельт. `scripts/scoped-test.sh` не гонялся при разработке (BUG-805 висит на lumen-network) — прогнан целиком и зелёным при завершении задачи. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
       },
       {
-       "id": "SPLIT-LB4",
+       "id": "SPLIT-LB4 ✅ DONE 2026-09-02",
        "title": "SPLIT-LB4: animation/gradient/quirks-mode тесты из layout/lib.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "`layout/lib.rs`: регион 11559…13433 (1 875 строк) — CSS Easing L1 TimingFunction parser/Transitions-Animations L1 (name/duration-delay/timing-function/iteration-count/direction/fill-mode/play-state/defaults)/Text typography (tab-size/caret-color/overflow-wrap/word-break/hyphens)/will-change-pointer-events-user-select-scroll-behavior/background-*/parse_gradient_stops/conic-gradient parsing/place-items-align-justify (Box Alignment L3)/CSS Quirks Mode/:fullscreen-:modal-:popover-open. Анкер пересчитать заново. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "**ЗАКРЫТ 2026-09-02** (ветка `p1-split-lb4`, один срез): анкер пересчитан заново (постановка 11559, факт 11560 — дрейф +1) и сошёлся с планом (1874 строки против заявленных 1875). Регион CSS Easing L1 TimingFunction/Transitions-Animations L1/Text typography (tab-size/caret-color/overflow-wrap/word-break/hyphens)/will-change-pointer-events-user-select-scroll-behavior/background-*/parse_gradient_stops/conic-gradient/place-items-align-justify/CSS Quirks Mode/:fullscreen-:modal-:popover-open вынесен целиком в `tests/animation_gradient_quirks.rs` (1876 строк, под потолком 2000) тем же приёмом, что LB1-3 (`#[cfg(test)] #[path = \"…\"] mod …;` внутри `mod tests`, без префикса `tests/`, дедент на 4 пробела, `use super::*;` в шапке). Регион не содержал ни одной helper-функции без `#[test]` (все 165 top-level `fn` — тесты) и ни одной ссылки `super::super::`, поэтому кросс-батчевых зависимостей не найдено. Сверка body-in-body (`diff` против `git show HEAD`) — 0 расхождений. `cargo test -p lumen-layout --lib` 3651/3651 (967 `#[test]` до = 802 в `lib.rs` + 165 в новом файле после), `cargo clippy -p lumen-layout --all-targets -- -D warnings` чист, нисходящий `cargo check -p lumen-shell` чистый, `scripts/check_file_sizes.py` без дельт (файл уменьшился, не вырос). `lib.rs` 13446 → 11576. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа LB»"
       },
       {
-       "id": "SPLIT-LB5",
+       "id": "SPLIT-LB5 ✅ DONE 2026-09-02",
        "title": "SPLIT-LB5: filter/transform/snap/mask тесты из layout/lib.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "`layout/lib.rs`: регион 9884…11558 (1 675 строк) — clip-path-transform-filter/backdrop-filter/gap-aspect-ratio/Multi-column L1/env()/Scroll Snap L1/Overscroll Behavior L1/collect_snap_containers-find_snap_target/find_snapped_nodes/mask-*-scrollbar-*/Masking L1 §4.9/scrollbar-gutter algorithm/transform-origin-perspective-list-style-transition. Анкер пересчитать заново. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "**ЗАКРЫТ 2026-09-02** (ветка `p1-split-lb5`, один срез): анкер пересчитан заново (постановка 9884, факт 9885 — дрейф +1) и почти сошёлся с планом (1674 строки против заявленных 1675). Регион clip-path/transform/filter/backdrop-filter/gap-aspect-ratio/CSS Multi-column L1/env()/CSS Scroll Snap L1/CSS Overscroll Behavior L1/collect_snap_containers-find_snap_target/find_snapped_nodes/mask-*-scrollbar-*/CSS Masking L1 §4.9/scrollbar-gutter algorithm/transform-origin-perspective-list-style-transition вынесен целиком в `tests/filter_transform_snap_mask.rs` (1676 строк, под потолком 2000) тем же приёмом, что LB1-4. Найдена ОДНА кросс-батчевая зависимость: helper `first_p_style` (единственный non-`#[test]` `fn` региона) читается уже вынесенными соседями `animation_gradient_quirks.rs` (LB-4) и `layout_generation_misc.rs` (LB-2) — сделан `pub(crate)` и ре-экспортирован `pub(crate) use filter_transform_snap_mask::first_p_style;` рядом с объявлением `mod` в `lib.rs`, чтобы `use super::*;` в сиблингах его видел (сиблинги не наследуют приватность друг друга, только от общего предка). Сверка body-in-body (`diff` против `git show HEAD`) — 0 расхождений кроме этого `pub(crate)`. `cargo test -p lumen-layout` 3651/3651 (802 `#[test]` до = 643 в `lib.rs` + 159 в новом файле после), `cargo clippy -p lumen-layout --all-targets -- -D warnings` чист, `scripts/check_file_sizes.py` без дельт (файл уменьшился, не вырос). `lib.rs` 11576 → 9908. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа LB»"
       },
       {
-       "id": "SPLIT-LB6",
+       "id": "SPLIT-LB6 ✅ DONE 2026-09-02",
        "title": "SPLIT-LB6: container queries/replaced elements тесты из layout/lib.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "`layout/lib.rs`: регион 8041…9883 (1 843 строки) — Container Style Queries (nested and/or/not)/Container Queries L1/<img>-<video>-<iframe>-<picture>+srcset replaced-element layout/CSS-wide keywords/@property syntax-валидация/CSS counters/@media queries. Анкер пересчитать заново. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "**ЗАКРЫТ 2026-09-02** (ветка `p1-split-lb6`, один срез): анкер пересчитан заново (постановка 8041, факт 8042 — дрейф +1). Регион CSS Container Style Queries (nested and/or/not)/CSS Container Queries L1/<img>-<video>-<iframe>-<picture>+srcset replaced-element layout/CSS-wide keywords (Cascade L4 §7)/@property syntax-валидация/CSS counters (Lists L3 §3)/@media queries вынесен целиком в `tests/container_queries_replaced.rs` (1844 строки, под потолком 2000) тем же приёмом, что LB1-5 (`#[cfg(test)] #[path = \"…\"] mod …;` внутри `mod tests`, без префикса `tests/`, `use super::*;` в шапке). Найдены ТРИ кросс-батчевых хелпера (`first_image_child`, `nested_p_style`, `lay_with_viewport`, единственные non-`#[test]` `fn` региона, кроме внутренних приватных) — сделаны `pub(crate)` и ре-экспортированы `pub(crate) use container_queries_replaced::{first_image_child, lay_with_viewport, nested_p_style};` рядом с объявлением `mod` в `lib.rs`. `cargo test -p lumen-layout --lib` 3657/3657 (643 `#[test]` до = 509 в `lib.rs` + 134 в новом файле после), `cargo clippy --workspace --all-targets -- -D warnings` чист, `scripts/scoped-test.sh` зелёный (BUG-805 не задет), `scripts/check_file_sizes.py` без дельт (файл уменьшился, не вырос). `lib.rs` 9908 → 8071. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа LB»"
       },
       {
        "id": "SPLIT-LB7",
@@ -6974,31 +6974,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-482": {
-   "status": "open",
-   "title": "`HTMLElement.offsetParent`/`document.scrollingElement` отсутствуют вовсе (`grep` — ноль совпадений); `document.compatMode` (`dom.rs:4826`) — константа `'CSS1Com…",
-   "component": "js (`crates/js/src/dom.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-483": {
-   "status": "open",
-   "title": "`window.getComputedStyle()` возвращает `Proxy` без `has`-ловушки — `property in getComputedStyle(el)` даёт `false` для ЛЮБОГО свойства (даже реализованных), хот…",
-   "component": "js (`crates/js/src/dom.rs:12772-12805`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-484": {
    "status": "open",
    "title": "Инлайновый `element.style`-сеттер (`_lumen_make_style`) никогда не пропускает значение через реальный CSS-парсер — просто сохраняет сырую строку: невалидные зна…",
    "component": "js (`crates/js/src/dom.rs:4264-4302`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-487": {
-   "status": "open",
-   "title": "CSS-wide keyword `revert-rule` (CSS Cascade L5) не реализован вовсе — `revert-layer`, соседний keyword, работает. Декларация со значением `revert-rule` не откат…",
-   "component": "css-parser (нет обработки нигде в `css-parser`/`layout`)",
    "date": null,
    "debtor": false
   },
@@ -9400,13 +9379,6 @@
    "status": "open",
    "title": "Остаток [BUG-475](bugs/BUG-475-FIXED.md): `scrollWidth`/`scrollHeight` для элемента, который не является designated scroll container (`overflow: scroll`/`auto`)…",
    "component": "layout/js (`_lumen_get_scroll_state` fallback, `web_api_shim_mid.js`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-961": {
-   "status": "open",
-   "title": "`browsingContext.navigate` занимает 30-40с и падает по таймауту под оркестрацией `wptrunner`, для страницы, которая грузится и завершается меньше чем за 1с при…",
-   "component": "tests/wpt/ Python tooling (`tools/wptrunner/wptrunner/executors/executorlumen.py`, `run_smoke.py`/`TestRunnerManager` — не изолировано точнее)",
    "date": null,
    "debtor": false
   },
@@ -13175,6 +13147,34 @@
    "component": "js (`crates/js/src/dom.rs`)",
    "date": "2026-09-02",
    "debtor": false
+  },
+  "BUG-482": {
+   "status": "fixed",
+   "title": "`HTMLElement.offsetParent`/`document.scrollingElement` отсутствуют вовсе (`grep` — ноль совпадений); `document.compatMode` (`dom.rs:4826`) — константа `'CSS1Com…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js`)",
+   "date": "2026-09-02",
+   "debtor": false
+  },
+  "BUG-483": {
+   "status": "fixed",
+   "title": "`window.getComputedStyle()` возвращает `Proxy` без `has`-ловушки — `property in getComputedStyle(el)` даёт `false` для ЛЮБОГО свойства (даже реализованных), хот…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js`)",
+   "date": "2026-09-02",
+   "debtor": false
+  },
+  "BUG-961": {
+   "status": "fixed",
+   "title": "`browsingContext.navigate` занимает 30-40с и падает по таймауту на страницах, что грузятся и завершаются меньше чем за 1с при прямом управлении — воспроизводило…",
+   "component": "wpt-tooling (`tools/wptrunner/wptrunner/browsers/lumen.py`)",
+   "date": "2026-09-02",
+   "debtor": false
+  },
+  "BUG-487": {
+   "status": "fixed",
+   "title": "CSS-wide keyword `revert-rule` (CSS Cascade L5) не реализован вовсе — `revert-layer`, соседний keyword, работает. Декларация со значением `revert-rule` не откат…",
+   "component": "css-parser (нет обработки нигде в `css-parser`/`layout`)",
+   "date": "2026-09-02",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -13462,9 +13462,6 @@
   "js (`crates/js/src/dom.rs:12772-12802`, `WEB_API_SHIM`)": [
    "BUG-490"
   ],
-  "js (`crates/js/src/dom.rs:12772-12805`)": [
-   "BUG-483"
-  ],
   "js (`crates/js/src/dom.rs:12772` — `window.getComputedStyle`)": [
    "BUG-539"
   ],
@@ -13660,7 +13657,6 @@
   "js (`crates/js/src/dom.rs`)": [
    "BUG-462",
    "BUG-481",
-   "BUG-482",
    "BUG-485"
   ],
   "js (`crates/js/src/dom.rs`, `WEB_API_SHIM` — ноль совпадений по всем трём именам во всём воркспейсе)": [
@@ -13729,7 +13725,8 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js`)": [
    "BUG-463",
    "BUG-474",
-   "BUG-476"
+   "BUG-476",
+   "BUG-482"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js`) + layout (`collect_scroll_containers`, `layout/src/lib.rs:1121`)": [
    "BUG-475"
@@ -13745,6 +13742,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_lumen_is_focusable`, `HTMLElement.prototype.focus`)": [
    "BUG-951"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_tail_b.js`)": [
+   "BUG-483"
   ],
   "js (`crates/js/src/sw_worker.rs` — шим глобального скоупа service worker)": [
    "BUG-748"
@@ -14458,14 +14458,14 @@
   "test/snapshot (`snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)": [
    "BUG-297"
   ],
-  "tests/wpt/ Python tooling (`tools/wptrunner/wptrunner/executors/executorlumen.py`, `run_smoke.py`/`TestRunnerManager` — не изолировано точнее)": [
-   "BUG-961"
-  ],
   "tooling (`scripts/scroll_perf.py`)": [
    "BUG-332"
   ],
   "tooling (`tools/wptrunner/wptrunner/browsers/lumen.py::LumenBrowser.executor_browser`)": [
    "BUG-498"
+  ],
+  "wpt-tooling (`tools/wptrunner/wptrunner/browsers/lumen.py`)": [
+   "BUG-961"
   ],
   "wptrunner-интеграция (`browsers/lumen.py` `env_options`)": [
    "BUG-301"
