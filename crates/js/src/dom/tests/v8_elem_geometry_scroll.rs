@@ -207,6 +207,124 @@ fn scroll_by_adds_to_current_position() {
     assert!((reqs[0].2 - 80.0).abs() < 0.1);
 }
 
+// ── BUG-479: `scroll()` alias, `scrollIntoView` options, Promise return ────
+
+#[test]
+fn element_scroll_is_alias_for_scroll_to() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let doc_arc = make_doc();
+    let nid = {
+        let doc = doc_arc.lock().unwrap();
+        super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+    };
+    rt.update_scroll_states([(nid, [0.0, 0.0, 800.0, 2000.0])].into_iter().collect());
+    rt.eval("document.body.scroll(100, 200)").unwrap();
+    let reqs = rt.take_scroll_requests();
+    assert_eq!(reqs.len(), 1);
+    assert!((reqs[0].1 - 100.0).abs() < 0.1);
+    assert!((reqs[0].2 - 200.0).abs() < 0.1);
+}
+
+#[test]
+fn scroll_to_and_scroll_by_return_a_promise() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let doc_arc = make_doc();
+    let nid = {
+        let doc = doc_arc.lock().unwrap();
+        super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+    };
+    rt.update_scroll_states([(nid, [0.0, 0.0, 800.0, 2000.0])].into_iter().collect());
+    let v = rt
+        .eval("document.body.scrollTo(1, 1) instanceof Promise")
+        .unwrap();
+    assert_eq!(v, lumen_core::JsValue::Bool(true));
+    let v = rt
+        .eval("document.body.scrollBy(1, 1) instanceof Promise")
+        .unwrap();
+    assert_eq!(v, lumen_core::JsValue::Bool(true));
+}
+
+/// The promise settles once the queued request's own `scrollend` lands —
+/// not before (BUG-479: previously there was no promise to observe at all).
+#[test]
+fn element_scroll_to_promise_resolves_on_scrollend() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let doc_arc = make_doc();
+    let nid = {
+        let doc = doc_arc.lock().unwrap();
+        super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+    };
+    rt.update_scroll_states([(nid, [0.0, 0.0, 800.0, 2000.0])].into_iter().collect());
+    rt.eval(
+        "var __r = 'pending'; \
+         document.body.scrollTo(100, 200).then(function() { __r = 'resolved'; });",
+    )
+    .unwrap();
+    assert_eq!(rt.eval("__r").unwrap(), lumen_core::JsValue::String("pending".into()));
+    rt.fire_element_scrollend(nid);
+    assert_eq!(rt.eval("__r").unwrap(), lumen_core::JsValue::String("resolved".into()));
+}
+
+/// A no-op scroll (nothing to move — no scroll container at all here) must
+/// not hang its promise forever: native only fires `scroll`/`scrollend` for
+/// an actual position change, so the returned promise falls back to
+/// resolving once it observes the sampled position hasn't moved across one
+/// rendering-update round trip (`_lumen_scroll_settle_promise`).
+#[test]
+fn element_scroll_to_promise_resolves_via_raf_fallback_when_nothing_moves() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var __r = 'pending'; \
+         document.body.scrollTo(0, 0).then(function() { __r = 'resolved'; });",
+    )
+    .unwrap();
+    assert_eq!(rt.eval("__r").unwrap(), lumen_core::JsValue::String("pending".into()));
+    rt.eval("_lumen_run_raf_callbacks(0)").unwrap();
+    assert_eq!(rt.eval("__r").unwrap(), lumen_core::JsValue::String("pending".into()), "one frame is not enough");
+    rt.eval("_lumen_run_raf_callbacks(16)").unwrap();
+    assert_eq!(rt.eval("__r").unwrap(), lumen_core::JsValue::String("resolved".into()));
+}
+
+#[test]
+fn scroll_into_view_block_end_aligns_bottom_edge() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let nid = match rt.eval("document.getElementById('main').__nid__").unwrap() {
+        lumen_core::JsValue::Number(n) => n as u32,
+        other => panic!("expected a numeric nid, got {other:?}"),
+    };
+    let body_nid = {
+        let doc = make_doc();
+        let doc = doc.lock().unwrap();
+        super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+    };
+    // Container (body) viewport-relative box: 0,0 400x300, currently at
+    // scroll (0, 50). Target sits at container-relative (0, 500), 20px tall
+    // — content-space Y = 500 + 50 = 550, so 'end' should land the container
+    // at scroll_y = 550 + 20 - 300 = 270.
+    rt.update_scroll_states([(body_nid, [0.0, 50.0, 400.0, 3000.0])].into_iter().collect());
+    let mut rects = std::collections::HashMap::new();
+    rects.insert(body_nid, [0.0_f32, 0.0, 400.0, 300.0]);
+    rects.insert(nid, [0.0_f32, 500.0, 100.0, 20.0]);
+    rt.update_layout_rects(rects);
+    rt.eval("document.getElementById('main').scrollIntoView({block: 'end'})").unwrap();
+    let reqs = rt.take_scroll_requests();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].0, body_nid);
+    assert!((reqs[0].2 - 270.0).abs() < 0.1, "expected scroll_y 270, got {}", reqs[0].2);
+}
+
+#[test]
+fn scroll_into_view_invalid_block_throws_type_error() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let err = rt
+        .eval("document.getElementById('main').scrollIntoView({block: 'bogus'})")
+        .unwrap_err();
+    assert!(
+        format!("{err:?}").contains("not a valid enum value"),
+        "expected the ScrollLogicalPosition enum-validation error, got {err:?}"
+    );
+}
+
 // ── scroll events ─────────────────────────────────────────────────────────
 
 #[test]

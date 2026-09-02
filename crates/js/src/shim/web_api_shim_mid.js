@@ -5249,38 +5249,74 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var s = _lumen_get_scroll_state(nid); if (s) return s[3];
             var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0;
         },
+        // BUG-479: `scroll` is `scrollTo`'s CSSOM View §4 alias (`window`
+        // already had it — the element side never did). Both return a
+        // Promise per the spec's "Scrolling with a promise" revision, settled
+        // through `_lumen_scroll_settle_promise` (`web_api_shim_head.js`).
         scrollTo: function(x, y) { var nid = this.__nid__;
             if (typeof x === 'object' && x !== null) { y = x.top || 0; x = x.left || 0; }
             _lumen_request_scroll(nid, +x, +y);
+            return _lumen_scroll_settle_promise(this, function() {
+                var s = _lumen_get_scroll_state(nid); return s ? [s[0], s[1]] : [0, 0];
+            });
         },
+        scroll: function(x, y) { return this.scrollTo(x, y); },
         scrollBy: function(x, y) { var nid = this.__nid__;
             if (typeof x === 'object' && x !== null) { y = x.top || 0; x = x.left || 0; }
             var s = _lumen_get_scroll_state(nid);
             _lumen_request_scroll(nid, (s ? s[0] : 0) + (+x), (s ? s[1] : 0) + (+y));
+            return _lumen_scroll_settle_promise(this, function() {
+                var s2 = _lumen_get_scroll_state(nid); return s2 ? [s2[0], s2[1]] : [0, 0];
+            });
         },
-        scrollIntoView: function() { var nid = this.__nid__;
+        // BUG-479: took no parameter at all — `block`/`inline`/`behavior`
+        // (or the legacy boolean `alignToTop`) are now parsed and actually
+        // drive the alignment maths (`_lumen_align_scroll`,
+        // `web_api_shim_head.js`), instead of always pinning the element's
+        // top-left corner to the container's. That old always-top-left
+        // shortcut also only computed the right offset when the container
+        // happened to be at scroll position 0 (see the git history of this
+        // function for the derivation) — `contentX`/`contentY` below fold the
+        // container's CURRENT scroll back in, so 'start' is correct at any
+        // starting scroll position, not just zero.
+        scrollIntoView: function(arg) { var nid = this.__nid__;
+            var opts = _lumen_parse_scroll_into_view_opts(arg);
             // Scroll the nearest ancestor scroll container to make this element visible.
             var r = _lumen_get_bounding_rect(nid);
-            if (!r) return;
+            if (!r) return Promise.resolve();
             var parent = _lumen_u2n(_lumen_get_parent(nid));
             while (parent !== null && parent !== undefined) {
                 var ps = _lumen_get_scroll_state(parent);
                 if (ps) {
                     var pr = _lumen_get_bounding_rect(parent);
-                    if (pr) { _lumen_request_scroll(parent, r[0] - pr[0], r[1] - pr[1]); }
-                    return;
+                    if (pr) {
+                        var contentX = (r[0] - pr[0]) + ps[0];
+                        var contentY = (r[1] - pr[1]) + ps[1];
+                        var newX = _lumen_align_scroll(contentX, r[2], pr[2], ps[0], opts.inline);
+                        var newY = _lumen_align_scroll(contentY, r[3], pr[3], ps[1], opts.block);
+                        _lumen_request_scroll(parent, newX, newY);
+                        var parentEl = _lumen_make_element(parent);
+                        if (parentEl) {
+                            return _lumen_scroll_settle_promise(parentEl, function() {
+                                var s = _lumen_get_scroll_state(parent); return s ? [s[0], s[1]] : [0, 0];
+                            });
+                        }
+                    }
+                    return Promise.resolve();
                 }
                 parent = _lumen_u2n(_lumen_get_parent(parent));
             }
             // CSSOM-View §14: the viewport is the last scrolling box of the
             // chain, so an element with no scrollable ancestor scrolls the PAGE
             // (BUG-821, second facet — this used to fall off the loop and do
-            // nothing at all, which is most elements on most pages). Layout
-            // rects are document coordinates, so `r[1]` is already the page
-            // offset that puts the element's top edge at the top of the
-            // viewport — the `block: 'start'` default. The arguments stay
-            // ignored here as they are for the container branch (BUG-479).
-            _lumen_request_page_scroll(r[1], 0);
+            // nothing at all, which is most elements on most pages). `window`
+            // has no tracked horizontal scroll position (`scrollX` is a
+            // hardcoded 0 — a separate gap), so only the block axis moves here.
+            var pageY = _lumen_align_scroll(
+                r[1] + _lumen_get_page_scroll_y(), r[3],
+                _lumen_get_viewport_size()[1], _lumen_get_page_scroll_y(), opts.block);
+            _lumen_request_page_scroll(pageY, opts.behavior === 'smooth' ? 1 : 0);
+            return _lumen_scroll_settle_promise(window, function() { return [0, _lumen_get_page_scroll_y()]; });
         },
         // ── Focus-related IDL reflection (HTML LS §6.6, BUG-381) ─────────────
         // `tabIndex` reflects the `tabindex` content attribute; with the

@@ -242,6 +242,65 @@ fn window_scroll_alias_works() {
     assert!((reqs[0].0 - 400.0).abs() < 0.1);
 }
 
+// ── BUG-479: `window.scrollTo`/`scroll`/`scrollBy` return a Promise ────────
+
+#[test]
+fn window_scroll_methods_return_a_promise() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert_eq!(
+        rt.eval("window.scrollTo(0, 1) instanceof Promise").unwrap(),
+        lumen_core::JsValue::Bool(true)
+    );
+    assert_eq!(
+        rt.eval("window.scroll(0, 1) instanceof Promise").unwrap(),
+        lumen_core::JsValue::Bool(true)
+    );
+    assert_eq!(
+        rt.eval("window.scrollBy(0, 1) instanceof Promise").unwrap(),
+        lumen_core::JsValue::Bool(true)
+    );
+}
+
+/// Mirrors `element_scroll_to_promise_resolves_on_scrollend`
+/// (`v8_elem_geometry_scroll.rs`) for the page: the promise settles once
+/// `fire_window_scrollend` — the same call `on_redraw_requested` makes once
+/// the requested page scroll actually lands — runs.
+#[test]
+fn window_scroll_to_promise_resolves_on_scrollend() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var __r = 'pending'; \
+         window.scrollTo(0, 500).then(function() { __r = 'resolved'; });",
+    )
+    .unwrap();
+    assert_eq!(rt.eval("__r").unwrap(), lumen_core::JsValue::String("pending".into()));
+    rt.fire_window_scrollend();
+    assert_eq!(rt.eval("__r").unwrap(), lumen_core::JsValue::String("resolved".into()));
+}
+
+/// A `window.scrollTo` that requests the position the page is already at
+/// fires neither `scroll` nor `scrollend` (`page_scrollend_due`'s `moved`
+/// gate) — the returned promise must still settle, via the same one-round-trip
+/// no-op fallback the element path relies on.
+#[test]
+fn window_scroll_to_noop_promise_resolves_via_raf_fallback() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var __r = 'pending'; \
+         window.scrollTo(0, 0).then(function() { __r = 'resolved'; });",
+    )
+    .unwrap();
+    assert_eq!(rt.eval("__r").unwrap(), lumen_core::JsValue::String("pending".into()));
+    rt.eval("_lumen_run_raf_callbacks(0)").unwrap();
+    assert_eq!(
+        rt.eval("__r").unwrap(),
+        lumen_core::JsValue::String("pending".into()),
+        "one frame is not enough"
+    );
+    rt.eval("_lumen_run_raf_callbacks(16)").unwrap();
+    assert_eq!(rt.eval("__r").unwrap(), lumen_core::JsValue::String("resolved".into()));
+}
+
 #[test]
 fn window_scroll_x_is_zero() {
     let rt = v8_runtime_with_dom(make_doc());

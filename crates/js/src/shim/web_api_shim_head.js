@@ -1,6 +1,97 @@
 
 function _lumen_u2n(v) { return v !== undefined ? v : null; }
 
+// BUG-479: shared plumbing for the Promise-returning scroll methods
+// (`Element`/`window` `scrollTo`/`scrollBy`/`scrollIntoView`, CSSOM View
+// Module's "Scrolling with a promise"). The engine only dispatches
+// `scroll`/`scrollend` when a queued scroll request actually moves the
+// position (element containers: `set_scroll_position` finding the node still
+// counts as "moved" even at a clamped no-op edge, so the listener alone is
+// enough there; the page path is stricter and drops the events entirely for
+// a no-op `window.scrollTo`), so a promise that only waited for `scrollend`
+// could hang forever on a request that settles without ever moving anything.
+// `sample()` returns this call's `[x, y]` scroll position; two chained
+// `requestAnimationFrame`s put the fallback check after the rendering update
+// that drains the just-queued request (and dispatches its `scroll`/`scrollend`
+// pair, if any) has run — see `about_to_wait.rs`'s scroll-request drain and
+// `on_redraw_requested`'s step-1 comment for why one round trip is enough.
+// If the position moved at all by then, a real sequence is underway (an
+// instant scroll's `scrollend` already resolved the promise via the listener
+// by this point; a smooth animation keeps moving and is left to its own
+// `scrollend`) — the fallback only ever fires for the genuine no-op case.
+function _lumen_scroll_settle_promise(target, sample) {
+    return new Promise(function(resolve) {
+        var done = false;
+        var before = sample();
+        function finish() {
+            if (done) return;
+            done = true;
+            target.removeEventListener('scrollend', onEnd);
+            resolve();
+        }
+        function onEnd() { finish(); }
+        target.addEventListener('scrollend', onEnd);
+        if (typeof requestAnimationFrame !== 'function') { finish(); return; }
+        requestAnimationFrame(function() {
+            requestAnimationFrame(function() {
+                if (done) return;
+                var now = sample();
+                if (now[0] === before[0] && now[1] === before[1]) { finish(); }
+            });
+        });
+    });
+}
+
+// BUG-479: shared alignment maths for `scrollIntoView({block|inline})` —
+// CSSOM View Module's "scroll an element into view" §6 step 3, one axis at a
+// time. `contentPos`/`targetSize` are the target's position/extent in the
+// container's UNSCROLLED content space (i.e. what its scroll offset would
+// have to equal for the target's start edge to sit at the container's start
+// edge); `clientSize` is the container's own (scroll-independent) box size;
+// `curScroll` is only read for `'nearest'`, to test whether the target is
+// already visible at the CURRENT offset.
+function _lumen_align_scroll(contentPos, targetSize, clientSize, curScroll, align) {
+    switch (align) {
+        case 'end': return contentPos + targetSize - clientSize;
+        case 'center': return contentPos + targetSize / 2 - clientSize / 2;
+        case 'nearest': {
+            var visStart = contentPos - curScroll;
+            var visEnd = visStart + targetSize;
+            if (visStart >= 0 && visEnd <= clientSize) return curScroll;
+            return visStart < 0 ? contentPos : contentPos + targetSize - clientSize;
+        }
+        case 'start':
+        default: return contentPos;
+    }
+}
+
+// BUG-479: normalises `scrollIntoView`'s argument — legacy boolean
+// (`alignToTop`), a `ScrollIntoViewOptions` dict, or omitted — into
+// `{block, inline, behavior}` with the spec's defaults, validating enum
+// members the way WebIDL enum coercion would (an unrecognised value is a
+// TypeError, not a silent fallback to the default).
+function _lumen_parse_scroll_into_view_opts(arg) {
+    if (arg === false) return { block: 'end', inline: 'nearest', behavior: 'auto' };
+    if (arg === undefined || arg === true || typeof arg !== 'object' || arg === null) {
+        return { block: 'start', inline: 'nearest', behavior: 'auto' };
+    }
+    var positions = ['start', 'center', 'end', 'nearest'];
+    var behaviors = ['auto', 'instant', 'smooth'];
+    var block = arg.block === undefined ? 'start' : String(arg.block);
+    var inline = arg.inline === undefined ? 'nearest' : String(arg.inline);
+    var behavior = arg.behavior === undefined ? 'auto' : String(arg.behavior);
+    if (positions.indexOf(block) === -1) {
+        throw new TypeError("Failed to execute 'scrollIntoView': The provided value '" + block + "' is not a valid enum value of type ScrollLogicalPosition.");
+    }
+    if (positions.indexOf(inline) === -1) {
+        throw new TypeError("Failed to execute 'scrollIntoView': The provided value '" + inline + "' is not a valid enum value of type ScrollLogicalPosition.");
+    }
+    if (behaviors.indexOf(behavior) === -1) {
+        throw new TypeError("Failed to execute 'scrollIntoView': The provided value '" + behavior + "' is not a valid enum value of type ScrollBehavior.");
+    }
+    return { block: block, inline: inline, behavior: behavior };
+}
+
 // BUG-391: DOM LS §4.2.6 / §4.9 — querySelector(All)/matches/closest must throw
 // a SyntaxError DOMException for a selector that is invalid or that the engine
 // does not recognise, instead of silently reporting «nothing matched». The
