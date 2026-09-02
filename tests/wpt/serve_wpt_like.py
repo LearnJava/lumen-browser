@@ -4,12 +4,25 @@
 `docs/probe-method.md` §2 requires a probe to run against a real http origin, not
 `file://`. A bare `python -m http.server` over `tests/wpt/` gets the file bytes
 right but serves `/resources/testharnessreport.js` *unsubstituted* — the real
-route (`environment.py::get_routes`) concatenates `executors/message-queue.js`
-with `wptrunner/testharnessreport.js` and fills in `%(output)d` /
+route (`environment.py::get_routes`) fills in `%(output)d` /
 `%(timeout_multiplier)s` / `%(explicit_timeout)s` / `%(debug)s`. Without that
 substitution the file is a syntax error (`Unexpected token '%'`), which reads
 exactly like a synchronously-hung page regardless of what the test under probe
 actually does (WPT-RUN-6 slice 37's gotcha — CLAUDE.md "WPT harness").
+
+Serves Lumen's own product-specific `tests/wpt/resources/testharnessreport.js`
+alone (no `message-queue.js` prefix), matching what `browsers/lumen.py`'s
+`env_options()` actually substitutes into a real corpus run via its
+`"testharnessreport"` override (the BUG-301 fix, see that file's own
+comment) — **not** wptrunner's generic `executors/message-queue.js` +
+`testrunner/testharnessreport.js` pairing this script served before slice 39
+of WPT-RUN-6 (`bugs/BUG-961-OPEN.md` "Побочно найдено"). That generic pairing
+pushes results onto `window.__wptrunner_message_queue`, which nothing here
+drains, so a probe against it never sees `window.__lumen_wpt_results` —
+harmless for a probe that only reads console output (BUG-961's own manual
+repro), but silently wrong for one that reuses `LumenTestharnessExecutor`'s
+own poll loop (`executorlumen.py::POLL_EXPRESSION`), which is exactly what
+`verify_bug961_orchestration.py` does.
 
 This script reproduces only that one route; everything else is a plain static
 file server rooted at `tests/wpt/` (the WPT doc root in this checkout), which is
@@ -47,8 +60,10 @@ import socketserver
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-WPTRUNNER = os.path.join(os.path.dirname(HERE), "..", "tools", "wptrunner", "wptrunner")
-WPTRUNNER = os.path.normpath(WPTRUNNER)
+#: Lumen's own product-specific report script (`browsers/lumen.py::env_options()`'s
+#: `"testharnessreport"` override) — see module docstring for why this, not
+#: wptrunner's generic `testharnessreport.js`.
+_LUMEN_TESTHARNESSREPORT = os.path.join(HERE, "resources", "testharnessreport.js")
 
 # Same defaults `run_report.py`'s corpus runs use: no pause-after-test, no
 # multiplier, no debugger, no --debug-test.
@@ -61,13 +76,9 @@ _FORMAT_ARGS = {
 
 
 def _build_testharnessreport():
-    message_queue = os.path.join(WPTRUNNER, "executors", "message-queue.js")
-    report_template = os.path.join(WPTRUNNER, "testharnessreport.js")
-    with open(message_queue, encoding="utf-8") as f:
-        mq_text = f.read()
-    with open(report_template, encoding="utf-8") as f:
+    with open(_LUMEN_TESTHARNESSREPORT, encoding="utf-8") as f:
         report_text = f.read() % _FORMAT_ARGS
-    return (mq_text + "\n" + report_text).encode("utf-8")
+    return report_text.encode("utf-8")
 
 
 _MARKER_SCRIPT = b"""
