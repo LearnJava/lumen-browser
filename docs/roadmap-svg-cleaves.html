@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-02",
  "counts": {
-  "open": 376,
-  "fixed": 534,
+  "open": 375,
+  "fixed": 538,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 910,
+ "total_bugs": 913,
  "phases": [
   {
    "id": "P0",
@@ -6114,46 +6114,116 @@
        "note": "**ЗАКРЫТ 2026-09-02** (ветка `p1-split-dl14`, один срез): анкер пересчитан заново — `fn emphasis_mark_str` план 3822 → факт 3894 (лифт над `///`-докой census'ом, тот же +72 накопленный сдвиг, что нашла DL-13), объём региона 474 строки (не 513 из плана — census-переписи расходятся с фактом на каждом батче группы). Регион самодостаточен по теме (текстовые фраги/emphasis-марки/inline-run), вынесен целиком в `display_list/text_run.rs` (480 строк, под потолком 2000) без внутреннего разреза. Сверка body-in-body (`diff` против `git show HEAD`) — 0 расхождений кроме одной сознательной правки видимости: `emit_inline_run` → `pub(crate)`, потому что соседи `walk.rs` (2 вызова) и `svg_text_decoration.rs` (1 вызов) зовут её напрямую — виден им через собственный `use super::*;` каждого, без правки тела ни в вызывающих файлах. `emit_first_line_background` осталась приватной — единственный вызыватель (`emit_inline_run`) переехал вместе с ней; `first_line_content_rect` (сосед региона, единственный вызыватель которой — вынесенная `emit_first_line_background` — читает его в обратную сторону, ребёнок → родитель) остаётся в `display_list.rs` без правки видимости — потомок видит приватный item родителя через `use super::*;` без исключений (тот же приём, что демонстрировали все предыдущие батчи DL). Единственная правка вне вырезанного региона — док-ссылка `[\\`emit_first_line_background\\`]` в оставшейся в родителе доке `first_line_content_rect` переведена на путь `[\\`text_run::emit_first_line_background\\`]` (обычный `use` под неё заводить не стали — тело регион не читает, только доккомментарий, а неиспользуемый `use` не пройдёт `-D warnings`). `display_list.rs` 4544 → 4073, `cargo test -p lumen-paint --lib --features backend-wgpu` 1192/1192 до/после (регион целиком продакшен-код, без единого `#[test]`), `cargo test -p lumen-paint --test all --features backend-wgpu` 34/34 без диффов, `cargo clippy -p lumen-paint --all-targets --features backend-wgpu -- -D warnings` чист, нисходящая `cargo build -p lumen-shell --profile dev-release --features backend-wgpu` чистая, `python graphic_tests/dump_golden.py` 12/12 без дельт. `scripts/check_file_sizes.py --update` (только строка `display_list.rs` сдвинулась в базовой линии — `text_run.rs` меньше порога попадания в файл). `SYMBOLS.md` не регенерировался (гитигнорен с 2026-08-31). `scripts/scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)) — тесты гонялись адресно. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа DL»"
       },
       {
-       "id": "SPLIT-DL15",
+       "id": "SPLIT-DL15 ✅ DONE 2026-09-02",
        "title": "SPLIT-DL15: serialize+builder+print из paint/display_list.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "`paint/display_list.rs`: serialize + builder-семейство + print-конвейер — `fn serialize_display_list` (2694) … до `fn clip_path_to_shape`, 1 128 строк → `display_list/serialize.rs` (453) + `display_list/builder.rs` (366) + `display_list/print.rs` (309). Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "**ЗАКРЫТ 2026-09-02** (ветка `p1-split-dl15`, один срез): анкер пересчитан заново — `fn serialize_display_list` план 2694 → факт 2766 (+72 накопленный сдвиг, тот же класс, что нашли DL-13/DL-14), объём региона 1080 строк (не 1128 из плана), разрезан на три файла ровно по границам `mod`-семейств: `display_list/serialize.rs` (458 — `serialize_display_list`+`filter_fn_name`/`outline_style_name`/`blend_mode_name`), `display_list/builder.rs` (372 — `build_display_list*`-семейство+`SplitTracker`+`ordered_with_anim_internal`), `display_list/print.rs` (267 — `build_print_display_list`+margin-box+page-breaks+bucket/span). Сверка body-in-body (`diff` против `git show HEAD` по всем трём кускам) — 0 расхождений кроме сознательных правок видимости. **Самый разветвлённый батч группы DL по числу правок видимости (18)** — этот регион держит бо́льшую часть крейта-публичного API paint (`build_display_list*`/`serialize_display_list`/`build_print_display_list`/`split_at_page_breaks`/`strip_background_graphics` уже были `pub`, реэкспортированы `pub use` из `display_list.rs`, чтобы путь `lumen_paint::display_list::X` не изменился — тот же приём, что `is_image_set` в DL-13). Внутренние помощники стали `pub(crate)`, потому что читаются пятью уже вынесенными соседями (`box_layer.rs`/`walk.rs`/`scrollbars.rs`/`text_run.rs`/`background_mask.rs`) через их собственный `use super::*;`: `map_blend_mode`/`overflow_clips`/`clip_path_to_rect` (несколько соседей каждый), `ELLIPSIS_EM` (`text_run.rs`), `ScBucket`+все 4 поля/`BucketField`/`RawSpan`+все 5 полей/`record_span`/`SplitTracker`+все 5 полей (`box_layer.rs` — читает и пишет поля бакетов напрямую, не только через `record_span`). **Находка не из census'а: `RawSpan`'и поля пришлось делать `pub(crate)` не из-за соседей, а из-за собственного СОСЕДНЕГО файла `builder.rs`** — `build_display_list_ordered_dpr` читает `rs.sc`/`rs.field`/`rs.range`/`rs.origin`/`rs.fragment` напрямую при флаше бакетов; пока это было одним файлом, приватные поля работали, разрез на `builder.rs`+`print.rs` тут же дал 6×`E0616`. **Вторая находка — направление наоборот, ребёнок нужен родителю:** `resolve_shape_center` вызывается из `clip_path_to_shape`, которая остаётся в `display_list.rs` (следующий, ещё не вынесенный регион) — обычно поток `use super::*` идёт от родителя к потомку, здесь родителю понадобился приватный item потомка, поэтому `resolve_shape_center` → `pub(crate)` + `use print::resolve_shape_center;` в хабе (без этого только родитель бы не собрался — типичный «дочерний» приём тут не работает, direction matters). `display_list.rs` 4073 → 3022, `cargo test -p lumen-paint --lib --features backend-wgpu` 1192/1192 до/после, `--test all --features backend-wgpu` 34/34 без диффов, `cargo clippy -p lumen-paint --all-targets --features backend-wgpu -- -D warnings` чист, нисходящая `cargo build -p lumen-shell --profile dev-release --features backend-wgpu` чистая (4m39s), `python graphic_tests/dump_golden.py` (LUMEN_PROFILE=dev-release) 12/12 без дельт. `scripts/check_file_sizes.py --update` (только строка `display_list.rs` сдвинулась в базовой линии — три новых файла под порогом попадания). `SYMBOLS.md` не регенерировался (гитигнорен с 2026-08-31; публичная поверхность крейта не изменилась — все `pub`-item'ы региона реэкспортированы теми же именами по тому же пути). `scripts/scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)) — тесты гонялись адресно. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа DL»"
       },
       {
-       "id": "SPLIT-DL16",
+       "id": "SPLIT-DL16 ✅ DONE 2026-09-02",
        "title": "SPLIT-DL16: fingerprint.rs из paint/display_list.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "`paint/display_list.rs`: хэши/diff/fingerprint — `struct HashFmt` (1552) … до `fn union_all_rects`, 1 142 строки → `display_list/fingerprint.rs`. Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "**ЗАКРЫТ 2026-09-02** (ветка `p1-split-dl16`, один срез): анкер пересчитан заново — `struct HashFmt` план 1552 → факт 1553 (+1, тот же класс дрейфа от несвязанных мержей, что нашли все предыдущие батчи DL), объём региона 1212 строк (не 1142 из плана — фактический census отличался от переписи), регион самодостаточен по теме (хэши display list + frame diff/fingerprint), вынесен целиком в `display_list/fingerprint.rs` (1214 строк, под потолком 2000) без внутреннего разреза. Сверка body-in-body (`diff` против `git show HEAD`) — 0 расхождений кроме одной сознательной правки видимости. **Направление «родителю нужен приватный item потомка» (тот же приём, что DL-15 `resolve_shape_center`):** `get_command_rect` вызывается из `cull_display_list`, которая остаётся в `display_list.rs` ВЫШЕ вырезанного региона — единственный случай в этом батче, где родитель читает потомка, а не наоборот; `get_command_rect` → `pub(crate)` + плоский `use fingerprint::get_command_rect;` в хабе (не реэкспортируется дальше — вызывателей вне `display_list.rs` нет). Пять `pub`-функций хешера уже были частью публичного API крейта (`hash_display_list`/`hash_content` реэкспортированы в `lib.rs`; `hash_display_list_skipping`/`hash_display_list_dual`/`fold_content_dual`/`fold_overlay`/`fold_overlay_with_reuse`/`hash_display_list_dual_memo`/`hash_display_list_dual_memo_with_overlay_digests`/`anim_split_compose_plan`/`DiffResult`/`diff_display_lists`/`FrameDelta`/`FrameFingerprint` — не реэкспортированы в `lib.rs`, но читаются другими крейтовыми модулями/самим `lumen-shell` по пути `lumen_paint::display_list::X`, в т.ч. `crates/shell/src/{chrome_ui.rs,tests/chrome_incremental.rs}` через `lumen_paint::display_list::fold_overlay`/`fold_overlay_with_reuse`) — все реэкспортированы `pub use fingerprint::{...};` из хаба, путь `lumen_paint::display_list::X` не изменился. `hash_command_into`/`hash_one_command` (уже были `pub(crate)`, зовут `tile_grid.rs`/`femtovg_backend.rs`/`backend.rs`/`frame_entry.rs`/`display_list_cache.rs`/`band_compose.rs` через `crate::display_list::X`) — `pub(crate) use fingerprint::{...};`. **Находка не из census'а:** четыре хеш-хелпера (`HashFmt`/`h_f32`/`h_rect`/`h_color`/`h_str`) не имеют production-вызывателей вне своего файла — используются только тестовым соседом `display_list/tests/svg_table_and_hash.rs` (через `use super::*;`), поэтому реэкспорт этих пяти помечен `#[cfg(test)]` (тот же приём, что три `SCROLLBAR_*`-константы DL-11 и `walk::depth_order_by_z` DL-9) — без атрибута сборка не под тестами ловит `unused_imports` под `-D warnings`. `h_radii` остался приватным — вызывателей вне региона нет. `display_list.rs` 3022 → 1823 (не 1820 — блок реэкспортов длиннее одной строки), `fingerprint.rs` 1214 строк. `cargo test -p lumen-paint --lib --features backend-wgpu` 1192/1192 до/после (регион целиком продакшен-код, без единого `#[test]`), `cargo test -p lumen-paint --test all --features backend-wgpu` 34/34 без диффов, `cargo clippy -p lumen-paint --all-targets --features backend-wgpu -- -D warnings` чист, нисходящая `cargo build -p lumen-shell --profile dev-release --features backend-wgpu` чистая (4m22s, 5 варнингов dead-code в `invariants.rs` не связаны с правкой), `python graphic_tests/dump_golden.py` (LUMEN_PROFILE=dev-release) 12/12 без дельт. `scripts/check_file_sizes.py --update` — `display_list.rs` вышел из-под потолка 2000 строк и удалён из базовой линии (та же ситуация, что DL-14: `fingerprint.rs` тоже под порогом попадания в файл). `SYMBOLS.md` не регенерировался (гитигнорен с 2026-08-31). `scripts/scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)) — тесты гонялись адресно. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа DL»"
       },
       {
-       "id": "SPLIT-DL17",
+       "id": "SPLIT-DL17 ✅ DONE 2026-09-02",
        "title": "SPLIT-DL17: geometry.rs из paint/display_list.rs",
-       "status": "ready",
+       "status": "done",
        "size": "S",
-       "note": "`paint/display_list.rs`: provenance/geometry-хелперы — `struct ProvenanceIndex` (1107) … до `fn contains_backdrop_filter`, 445 строк → `display_list/geometry.rs`. Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "**ЗАКРЫТ 2026-09-02** (ветка `p1-split-dl17`, один срез): анкер пересчитан заново — `struct ProvenanceIndex` план 1107 → факт 1108 (+1, тот же класс дрейфа, что нашли все предыдущие батчи DL), объём региона 445 строк — совпал с планом (`ProvenanceIndex`/`ProvenanceSpan` + `object_fit_name`/`position_component_name`/`fit_image_rect`/`fit_with_ratio`/`MixedSegment`/`split_mixed_runs`/`space_axis_geometry`/`bg_tile_geometry`/`fit_image_quad`/`border_style_short`/`cull_display_list`/`contains_backdrop_filter`), вынесен целиком в `display_list/geometry.rs` (451 строка, под потолком 2000) без внутреннего разреза. Сверка body-in-body (`diff` против `git show HEAD`) — 0 расхождений кроме трёх сознательных правок видимости. Шесть `pub`-item'ов региона (`ProvenanceIndex`/`ProvenanceSpan`/`fit_image_rect`/`fit_image_quad`/`cull_display_list`/`contains_backdrop_filter`) уже были частью публичного API крейта (читаются `lumen-driver`/`crate::renderer`/`crate::cpu_raster`/`crate::backends::femtovg_backend` по пути `lumen_paint::display_list::X` или `lumen_paint::X`) — реэкспортированы `pub use geometry::{...};` из хаба, путь не изменился. Три `pub(crate)`-хелпера (`MixedSegment`/`split_mixed_runs`, cfg `any(backend-wgpu, cpu-render, backend-femtovg)`; `bg_tile_geometry`, cfg `any(backend-femtovg, cpu-render)`; `space_axis_geometry`, без cfg) читаются напрямую по короткому крейтовому пути `crate::display_list::X` из `renderer.rs`/`cpu_raster.rs`/`backends/femtovg_backend.rs` (не потомки `display_list`) — `pub(crate) use geometry::{...};` с теми же cfg-атрибутами, что и на определении (иначе сборка без фичи ловит несуществующий реэкспорт). **Находка не из census'а: три приватные функции сериализации (`object_fit_name`/`position_component_name`/`border_style_short`) читает только СОСЕДНИЙ ещё не вынесенный `display_list/serialize.rs` (DL-15), не потомок `geometry.rs`** — та же форма межсиблинговой зависимости, что у DL-13 `mask_clip_paint_rect`: решена переводом всех трёх в `pub(crate)` + плоским `use geometry::{...};` в родителе `display_list.rs`, видимым обоим сиблингам через их собственный `use super::*;`. `fit_with_ratio` (приватный хелпер `fit_image_rect`, вызывателей вне региона нет) остался приватным без реэкспорта. Стало ясно, что `use fingerprint::get_command_rect;` в хабе (был подписан комментарием «нужен для `cull_display_list`, above the DL-16 region») теперь нужен потомку `geometry.rs`, а не самому хабу — комментарий переформулирован под новый адрес. `display_list.rs` 1823 → 1388 (не выходил из-под потолка 2000 — уже был под ним после DL-16), `geometry.rs` 451 строка. `cargo test -p lumen-paint --lib --features backend-wgpu` 1192/1192 до/после (регион целиком продакшен-код, без единого `#[test]`), `cargo test -p lumen-paint --test all --features backend-wgpu` 34/34 без диффов, `cargo check -p lumen-paint --features cpu-render` и `--features backend-femtovg` без ошибок (только предсуществующие dead-code warnings), `cargo clippy -p lumen-paint --all-targets --features backend-wgpu -- -D warnings` чист, нисходящая `cargo build -p lumen-shell --profile dev-release --features backend-wgpu` чистая (4m23s, 5 варнингов dead-code в `invariants.rs` не связаны с правкой — та же готча, что DL-16), `python graphic_tests/dump_golden.py` (LUMEN_PROFILE=dev-release) 12/12 без дельт. `scripts/check_file_sizes.py --update` — базовая линия не изменилась (`display_list.rs` уже был ниже порога 2000 после DL-16, `geometry.rs` тоже под порогом попадания в файл). `SYMBOLS.md` не регенерировался (гитигнорен с 2026-08-31; публичная поверхность крейта не изменилась). `scripts/scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)) — тесты гонялись адресно. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа DL»"
       },
       {
-       "id": "SPLIT-DL18",
+       "id": "SPLIT-DL18 ✅ DONE 2026-09-02",
        "title": "SPLIT-DL18: commands.rs из paint/display_list.rs",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "`paint/display_list.rs`: `enum DisplayCommand`+`impl`+`type DisplayList` (337…1106), 770 строк → `display_list/commands.rs` — центральный тип, часть публичного API крейта, ADR-008 hibernation-snapshots (не переименовывать). Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "**ЗАКРЫТ 2026-09-02** (ветка `p1-split-dl18`, один срез): анкер без дрейфа — регион 337…1106 (770 строк) совпал с планом день в день, `enum DisplayCommand`+`impl`+`type DisplayList` вынесены целиком в `display_list/commands.rs` (775 строк, под потолком 2000). Центральный тип, часть публичного API крейта (ADR-008 hibernation-snapshots) — имя и путь `lumen_paint::display_list::{DisplayCommand, DisplayList}` не менялись, реэкспорт `pub use commands::{DisplayCommand, DisplayList};` из хаба. Сверка body-in-body (`diff` против `git show HEAD`) — 0 расхождений. `cargo test -p lumen-paint` 1054/1054 до/после (регион целиком продакшен-код, без единого `#[test]`), `cargo clippy -p lumen-paint --all-targets -- -D warnings` чист, `cargo check -p lumen-paint --features cpu-render` и `--features backend-femtovg` без ошибок, `cargo clippy --workspace --all-targets -- -D warnings` (финальный гейт) чист, `bash scripts/scoped-test.sh` зелёный целиком (BUG-805 в этот раз не проявился). `scripts/check_file_sizes.py` — база не изменилась (оба файла уже были под порогом 2000 после DL17). `display_list.rs` 621 строка. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа DL»"
       },
       {
-       "id": "SPLIT-DL19",
+       "id": "SPLIT-DL19 ✅ DONE 2026-09-02",
        "title": "SPLIT-DL19: paint_types.rs из paint/display_list.rs",
-       "status": "ready",
+       "status": "done",
        "size": "S",
-       "note": "`paint/display_list.rs`: типы примитивов — `enum FilterMode` (46) … до конца `impl ResolvedClipShape`, 291 строка → `display_list/paint_types.rs`; use-шапка остаётся в хабе. Головной регион группы, берётся последним. Метод — §4 группы DL [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "**ЗАКРЫТ 2026-09-02** (ветка `p1-split-dl19`, один срез): анкер практически без дрейфа — регион 47…336 (290 строк, не 291 из плана — тот же off-by-one census-артефакт, что у DL-1/DL-3/DL-14: census отдаёт номер пустой строки перед доккомментарием, а не номер самого доккомментария). Пять типов примитивов (`FilterMode`+`impl`, `BlendMode`+`impl`, `MaskMode`, `CornerRadii`+`impl`, `ResolvedClipShape`+`impl`) вынесены целиком в `display_list/paint_types.rs` (296 строк, под потолком 2000) без внутреннего разреза — регион самодостаточен по теме, ни одной внутренней межрегиональной зависимости не нашлось (единственный тип, читаемый остающимся в хабе кодом, — `ResolvedClipShape`, потребитель `clip_path_to_shape` сразу за регионом). Сверка body-in-body (`diff` против `git show HEAD`) — 0 расхождений. Все пять типов уже были `pub` в доноре — часть публичного API крейта: `BlendMode`/`CornerRadii` уже реэкспортированы из `lib.rs` (`lumen_paint::{BlendMode, CornerRadii}`, используются вплоть до `crates/shell/src/panels/*`); `MaskMode`/`ResolvedClipShape` читаются по короткому крейтовому пути `crate::display_list::{MaskMode, ResolvedClipShape}` из `cpu_raster.rs`/`renderer.rs`/`backends/femtovg_backend.rs`/`overlay_partition.rs`/`renderer/paint_primitives.rs` (не потомки `display_list`, обычный `pub` тут обязателен). **Находка не из census'а: `FilterMode` не имеет ни одного production-вызывателя нигде в workspace** — единственный потребитель, кроме собственного `impl`, это тестовый сосед `display_list/tests/svg_table_and_hash.rs`; тем не менее видимость не понижена (правило «ноль изменений поведения» — это была видимость уже в доноре, а не находка, требующая правки). Все пять реэкспортированы одним блоком `pub use paint_types::{BlendMode, CornerRadii, FilterMode, MaskMode, ResolvedClipShape};` из хаба — путь `lumen_paint::display_list::X` не изменился. `display_list.rs` 621 → 333, `paint_types.rs` 296 строк, `cargo test -p lumen-paint --lib --features backend-wgpu` 1192/1192 до/после (регион целиком продакшен-код, без единого `#[test]`), `cargo test -p lumen-paint --test all --features backend-wgpu` 34/34 без диффов, `cargo check -p lumen-paint --features cpu-render` и `--features backend-femtovg` без ошибок, `cargo clippy -p lumen-paint --all-targets --features backend-wgpu -- -D warnings` чист, нисходящая `cargo build -p lumen-shell --profile dev-release --features backend-wgpu` чистая (4m42s, 5 варнингов dead-code в `invariants.rs` не связаны с правкой — та же готча, что DL-16/DL-17), `python graphic_tests/dump_golden.py` (LUMEN_PROFILE=dev-release) 12/12 без дельт. `scripts/check_file_sizes.py --update` — база не изменилась (оба файла уже были под порогом 2000 после DL18). `SYMBOLS.md` не регенерировался (гитигнорен с 2026-08-31; публичная поверхность крейта не изменилась). `scripts/scoped-test.sh` не гонялся ([BUG-805](bugs/BUG-805-OPEN.md)) — тесты гонялись адресно. **Группа DL (DL-1…DL-19) закрыта этим батчем** — `display_list.rs` 19 698 → 333 строки, 98.3 % файла разложено по модулям. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4 «Группа DL»"
       },
       {
        "id": "SPLIT-LB0",
-       "title": "SPLIT-LB0: перепись layout/lib.rs",
+       "title": "SPLIT-LB0: перепись layout/lib.rs, батч-план LB-1…LB-10",
+       "status": "done",
+       "size": "S",
+       "note": "**ЗАКРЫТ** (ветка `p1-split-lb0`, один срез, без переноса кода): перепись `crates/engine/layout/src/lib.rs` методом `scripts/split_census.py` — 19 251 строка (не 19 155 из переписи 2026-08-23 — файл вырос), 111 top-level item'ов, лексер сходится (глубина 0). Карта резко асимметрична: продакшен-часть 1…1546 (use-шапка + 36 `mod`-деклараций + 30 `use`-блоков + `SelectionHighlight`/`TextMeasurer`/clickable/sticky/snap/scroll-container-хелперы) уже под потолком 2000 строк и отдельного батча не требует — тот же случай, что хвост DM-1 оставил в `dom/lib.rs`; весь остаток — один инлайновый `mod tests` (1547…19252, 17 706 строк, 92 % файла, 141 внутренняя секция по `--inner`, в основном мелкие тесты одного CSS-свойства/псевдокласса). Батч-план LB-1…LB-10 (хвост→голова, окна ≈1700…2000 строк по непрерывным баннерам, голова `mod tests` — общие fixtures — в LB-10 последним батчем, приём DL-6) — таблица §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md). Целевой каталог — `crates/engine/layout/src/tests/` (у корня крейта нет своего подкаталога вида `<module>/`, сиблинги живут прямо в `src/`, приём DM-1)"
+      },
+      {
+       "id": "SPLIT-LB1",
+       "title": "SPLIT-LB1: scroll/sticky/snap/view-transition тесты из layout/lib.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`layout/lib.rs`: регион 17258…19252 (1 995 строк) — CSS Counters resolution/details-summary/collect_clickable_elements/line-clamp/sticky position/CSS Scroll Snap/scroll-margin-padding snap offset (BB-7)/scroll container tests/text-wrap balance-pretty/find_scroll_container_at/for_node (BUG-338)/view-transition names+groups/Overscroll Behavior scroll chain stop/BUG-728. Анкер пересчитать заново. Метод и полная карта — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-LB2",
+       "title": "SPLIT-LB2: генерация контента/layout-разное из layout/lib.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`layout/lib.rs`: регион 15327…17257 (1 931 строка) — CSS Grid L2 Subgrid/collect_image_requests/collect_background_image_requests/BUG-101 image-set()-cross-fade()/Generated Content content:url()/Positioned Layout/UA stylesheet/::before-::after generation (в т.ч. inline-путь)/Half-leading/Multi-column layout/::marker box (BUG-011)/float+clear/margin collapsing/Intrinsic Sizing L3. Анкер пересчитать заново. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-LB3",
+       "title": "SPLIT-LB3: table/grid/presentational-hints тесты из layout/lib.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`layout/lib.rs`: регион 13434…15326 (1 893 строки) — :current/:past/:future/Canvas background propagation/HTML presentational hints (bgcolor-text, body-font color, font size-face, img hspace-vspace-border-align)/table layout (BUG-006)/colspan-rowspan/CSS Grid Layout tests/grid content distribution/grid named areas/grid-auto-flow:dense/BUG-801. Анкер пересчитать заново. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-LB4",
+       "title": "SPLIT-LB4: animation/gradient/quirks-mode тесты из layout/lib.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`layout/lib.rs`: регион 11559…13433 (1 875 строк) — CSS Easing L1 TimingFunction parser/Transitions-Animations L1 (name/duration-delay/timing-function/iteration-count/direction/fill-mode/play-state/defaults)/Text typography (tab-size/caret-color/overflow-wrap/word-break/hyphens)/will-change-pointer-events-user-select-scroll-behavior/background-*/parse_gradient_stops/conic-gradient parsing/place-items-align-justify (Box Alignment L3)/CSS Quirks Mode/:fullscreen-:modal-:popover-open. Анкер пересчитать заново. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-LB5",
+       "title": "SPLIT-LB5: filter/transform/snap/mask тесты из layout/lib.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`layout/lib.rs`: регион 9884…11558 (1 675 строк) — clip-path-transform-filter/backdrop-filter/gap-aspect-ratio/Multi-column L1/env()/Scroll Snap L1/Overscroll Behavior L1/collect_snap_containers-find_snap_target/find_snapped_nodes/mask-*-scrollbar-*/Masking L1 §4.9/scrollbar-gutter algorithm/transform-origin-perspective-list-style-transition. Анкер пересчитать заново. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-LB6",
+       "title": "SPLIT-LB6: container queries/replaced elements тесты из layout/lib.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`layout/lib.rs`: регион 8041…9883 (1 843 строки) — Container Style Queries (nested and/or/not)/Container Queries L1/<img>-<video>-<iframe>-<picture>+srcset replaced-element layout/CSS-wide keywords/@property syntax-валидация/CSS counters/@media queries. Анкер пересчитать заново. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-LB7",
+       "title": "SPLIT-LB7: визуальные свойства/псевдоклассы тесты из layout/lib.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`layout/lib.rs`: регион 6095…8040 (1 946 строк) — outline/text-emphasis/visibility/overflow/cursor/box-shadow/text-shadow/border-radius/text-overflow/selector back-tracking edge cases/font-variant-caps/font-stretch/accent-color/:has()/direction/Containment L3/Container Style Queries Phase 0. Анкер пересчитать заново. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-LB8",
+       "title": "SPLIT-LB8: box-model/текстовые свойства тесты из layout/lib.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`layout/lib.rs`: регион 4321…6094 (1 774 строки) — relative units/text-align/width-height/min-max width-height/borders/box-sizing/:is()-:where()/case-insensitive [attr=val i]/!important/viewport units/font-style/font-weight/text-transform/text-indent/letter-spacing/word-spacing/font-family/white-space:nowrap/opacity. Анкер пересчитать заново. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-LB9",
+       "title": "SPLIT-LB9: состояние-псевдоклассы тесты из layout/lib.rs",
+       "status": "ready",
+       "size": "M",
+       "note": "`layout/lib.rs`: регион 2380…4320 (1 941 строка) — :placeholder-shown/:required-:optional/:read-only-:read-write/:disabled-:enabled/:checked-:indeterminate-:default/:lang()/:dir()/:link-:visited-:any-link/:scope/:target/:target-within/:in-range-:out-of-range/:valid-:invalid/inline-flow/функциональные pseudo (:nth-*, :*-of-type, :not). Анкер пересчитать заново. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+      },
+      {
+       "id": "SPLIT-LB10",
+       "title": "SPLIT-LB10: голова mod tests, закрытие группы LB",
        "status": "ready",
        "size": "S",
-       "note": "Перепись `crates/engine/layout/src/lib.rs` (19 155 строк) и нарезка на батчи. Файл значится в переписи 2026-08-23 шестым по величине, но группы батчей под него в плане нет — пробел, замеченный при назначении дорожки P1 2026-08-26. Метод — §1, результат — новая группа батчей в §4 [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
+       "note": "`layout/lib.rs`: голова `mod tests` (1547…2379, 833 строки) — общие fixtures-builder-хелперы + line wrapping tests + расширенные селекторы + Interactive pseudo-classes (:hover-:focus-:active). Снимает обёртку `mod tests` целиком (приём DL-6): девять уже вынесенных сиблингов переключаются с `super::tests::*` на прямой sibling-путь. Последний батч группы LB — закрывает её. Анкер пересчитать заново. Детали — §4 «Группа LB» [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md)"
       },
       {
        "id": "SPLIT-NW0",
@@ -6890,20 +6960,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-475": {
-   "status": "open",
-   "title": "`scrollWidth`/`scrollHeight`/`scrollTop`/`scrollLeft` — 0 на любом элементе, у которого `overflow` не `scroll`/`auto`: `collect_scroll_containers` заводит запис…",
-   "component": "js (`crates/js/src/dom.rs:6196-6205`) + layout (`collect_scroll_containers`, `layout/src/lib.rs:1121`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-476": {
-   "status": "open",
-   "title": "`offsetLeft`/`offsetTop` отдают viewport-абсолютные координаты (`_lumen_get_bounding_rect(nid)[0]/[1]`) вместо смещения относительно `offsetParent` (CSSOM View…",
-   "component": "js (`crates/js/src/dom.rs:6190-6193`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-478": {
    "status": "open",
    "title": "`Element.prototype.getClientRects()` отсутствует вовсе — метод с этим именем есть только на `Range` (`dom.rs:6947`). 12 сабтестов + 1 файл TIMEOUT. Найден P2, W…",
@@ -6911,23 +6967,9 @@
    "date": null,
    "debtor": false
   },
-  "BUG-479": {
-   "status": "open",
-   "title": "Скролл-API `Element`/`Window` — узкая x/y-заглушка: нет алиаса `scroll()` (только `scrollTo`/`scrollBy`/`scrollIntoView`), `scrollIntoView` полностью игнорирует…",
-   "component": "js (`crates/js/src/dom.rs:6206-6227`, `:11619-11632`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-480": {
    "status": "open",
    "title": "`<iframe>` не имеет отдельного browsing context — `contentWindow`/`contentDocument` отсутствуют в шиме вовсе (`grep` — ноль совпадений); гэп упоминался походя в…",
-   "component": "js (`crates/js/src/dom.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-481": {
-   "status": "open",
-   "title": "`window.visualViewport` не реализован вовсе — `grep` ноль совпадений. 4 сабтеста `scrollIntoView-fixed-outside-of-viewport.html`. Найден P2, WPT-RUN-3 срез 4, 2…",
    "component": "js (`crates/js/src/dom.rs`)",
    "date": null,
    "debtor": false
@@ -9351,6 +9393,27 @@
    "status": "open",
    "title": "`requestAnimationFrame`/`cancelAnimationFrame` отсутствуют целиком на `DedicatedWorkerGlobalScope` (`grep requestAnimationFrame crates/js/src/worker.rs` — 0 сов…",
    "component": "js (`crates/js/src/worker.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-960": {
+   "status": "open",
+   "title": "Остаток [BUG-475](bugs/BUG-475-FIXED.md): `scrollWidth`/`scrollHeight` для элемента, который не является designated scroll container (`overflow: scroll`/`auto`)…",
+   "component": "layout/js (`_lumen_get_scroll_state` fallback, `web_api_shim_mid.js`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-961": {
+   "status": "open",
+   "title": "`browsingContext.navigate` занимает 30-40с и падает по таймауту под оркестрацией `wptrunner`, для страницы, которая грузится и завершается меньше чем за 1с при…",
+   "component": "tests/wpt/ Python tooling (`tools/wptrunner/wptrunner/executors/executorlumen.py`, `run_smoke.py`/`TestRunnerManager` — не изолировано точнее)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-962": {
+   "status": "open",
+   "title": "Остаток [BUG-479](bugs/BUG-479-FIXED.md): `scrollIntoView`'s новая `block`/`inline`-математика выравнивает по голому border-box таргета — CSS `scroll-margin-*`…",
+   "component": "js (`web_api_shim_mid.js::Element.scrollIntoView`, `_lumen_align_scroll`)",
    "date": null,
    "debtor": false
   },
@@ -13084,6 +13147,34 @@
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js`)",
    "date": "2026-09-02",
    "debtor": false
+  },
+  "BUG-475": {
+   "status": "fixed",
+   "title": "`scrollWidth`/`scrollHeight`/`scrollTop`/`scrollLeft` — 0 на любом элементе, у которого `overflow` не `scroll`/`auto`: `collect_scroll_containers` заводит запис…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js`) + layout (`collect_scroll_containers`, `layout/src/lib.rs:1121`)",
+   "date": "2026-09-02",
+   "debtor": false
+  },
+  "BUG-476": {
+   "status": "fixed",
+   "title": "`offsetLeft`/`offsetTop` отдают viewport-абсолютные координаты (`_lumen_get_bounding_rect(nid)[0]/[1]`) вместо смещения относительно `offsetParent` (CSSOM View…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js`)",
+   "date": "2026-09-02",
+   "debtor": false
+  },
+  "BUG-479": {
+   "status": "fixed",
+   "title": "Скролл-API `Element`/`Window` — узкая x/y-заглушка: нет алиаса `scroll()` на `Element` (только `scrollTo`/`scrollBy`/`scrollIntoView`), `scrollIntoView` полност…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js`, `web_api_shim_tail_mc.js`, `web_api_shim_head.js`)",
+   "date": "2026-09-02",
+   "debtor": false
+  },
+  "BUG-481": {
+   "status": "fixed",
+   "title": "`window.visualViewport` не реализован вовсе — `grep` ноль совпадений. 4 сабтеста `scrollIntoView-fixed-outside-of-viewport.html`. Найден P2, WPT-RUN-3 срез 4, 2…",
+   "component": "js (`crates/js/src/dom.rs`)",
+   "date": "2026-09-02",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -13422,15 +13513,6 @@
   "js (`crates/js/src/dom.rs:6125` — единственный геттер `get images()` в литерале `document`)": [
    "BUG-892"
   ],
-  "js (`crates/js/src/dom.rs:6190-6193`)": [
-   "BUG-476"
-  ],
-  "js (`crates/js/src/dom.rs:6196-6205`) + layout (`collect_scroll_containers`, `layout/src/lib.rs:1121`)": [
-   "BUG-475"
-  ],
-  "js (`crates/js/src/dom.rs:6206-6227`, `:11619-11632`)": [
-   "BUG-479"
-  ],
   "js (`crates/js/src/dom.rs:6530` — ветка не-JS `type`; флага «already started» в шиме нет, повторной подготовки при новом подключении тоже)": [
    "BUG-882"
   ],
@@ -13646,10 +13728,17 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js`)": [
    "BUG-463",
-   "BUG-474"
+   "BUG-474",
+   "BUG-476"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js`) + layout (`collect_scroll_containers`, `layout/src/lib.rs:1121`)": [
+   "BUG-475"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js`, `_lumen_make_dataset`)": [
    "BUG-496"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js`, `web_api_shim_tail_mc.js`, `web_api_shim_head.js`)": [
+   "BUG-479"
   ],
   "js (`crates/js/src/shim/web_api_shim_tail.js` — `_PERF_SUPPORTED_ENTRY_TYPES`)": [
    "BUG-948"
@@ -13737,6 +13826,9 @@
   ],
   "js (`grep -rn \"valueAsNumber\\": [
    "BUG-893"
+  ],
+  "js (`web_api_shim_mid.js::Element.scrollIntoView`, `_lumen_align_scroll`)": [
+   "BUG-962"
   ],
   "js (live DOM bindings)": [
    "BUG-279"
@@ -13962,6 +14054,9 @@
   ],
   "layout/dom (не локализовано — нужна перепись структур)": [
    "BUG-683"
+  ],
+  "layout/js (`_lumen_get_scroll_state` fallback, `web_api_shim_mid.js`)": [
+   "BUG-960"
   ],
   "layout/js (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`, `crates/js/src/v8_runtime.rs::_lumen_get_computed_style`)": [
    "BUG-499"
@@ -14362,6 +14457,9 @@
   ],
   "test/snapshot (`snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)": [
    "BUG-297"
+  ],
+  "tests/wpt/ Python tooling (`tools/wptrunner/wptrunner/executors/executorlumen.py`, `run_smoke.py`/`TestRunnerManager` — не изолировано точнее)": [
+   "BUG-961"
   ],
   "tooling (`scripts/scroll_perf.py`)": [
    "BUG-332"
