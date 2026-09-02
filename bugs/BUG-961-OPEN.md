@@ -4,22 +4,23 @@ under 1s when driven directly
 
 **Статус:** OPEN
 **Дата:** 2026-09-02
-**Компонент:** `tests/wpt/` Python tooling (`tools/wptrunner/wptrunner/executors/executorlumen.py`,
-`run_smoke.py`/`TestRunnerManager`) — **not yet isolated to a specific
-function**, see "Что нужно" below. Ruled out: `lumen-bidi-server`,
-`lumen-driver`, `mozprocess.ProcessReader`'s Python-side line handling
-(срез 40). **Not ruled out as of срез 40:** the engine itself, specifically
-contention between `executorlumen.py`'s polling/evaluate calls and the V8
-main thread while it formats the large array for `console.log` — срез 39's
-"ruled out: engine" conclusion rested on comparing against a raw
-`--dump-layout` run (no testharness.js, no polling) and a bare-BiDi-client
-run that measured `navigate` completion, not console.log-arrival; neither
-is a clean control for "engine busy handling wptrunner's own harness
-traffic concurrently". See срез 40's note on item 1 below.
+**Компонент:** not yet isolated — **срез 41 refuted both prior candidates**
+(`executorlumen.py`/`TestRunnerManager` orchestration, and engine
+contention specific to that orchestration's polling): a bare
+`webdriver.bidi.client.BidiSession` with zero wptrunner code, hitting only
+the live `wptserve` route, reproduces the same ~30-32s stall. Ruled out:
+`lumen-bidi-server`, `lumen-driver` (both just surface a 30s
+`RecvTimeoutError`, not the source), `mozprocess.ProcessReader`'s
+Python-side line handling (срез 40), `TestRunnerManager`/`executorlumen.py`
+orchestration (срез 41). **Open as of срез 41:** whether the variable is
+wptserve's live dynamic `AnyHtmlHandler` route vs. a static copy (срез 39
+point 2's control used the latter, never validated against the former), or
+whether срез 39 point 2's original "<1s" result itself does not hold up
+against current `main` — see срез 41's re-scoped item 1.
 **Найден:** P2, WPT-RUN-6 срез 39, 2026-09-02, investigating why
 `/console/console-log-large-array.any.html` (and its `.any.worker.html`
-twin) sit in `timeout_audit.py`'s `unclassified` bucket. Continued срез 40,
-2026-09-02.
+twin) sit in `timeout_audit.py`'s `unclassified` bucket. Continued срезы 40,
+41, 2026-09-02.
 
 ## Симптом
 
@@ -191,18 +192,91 @@ Python-side output handling. The remaining candidate is genuine engine-side
 contention specific to `executorlumen.py`'s orchestration (item 1 below is
 now the only open path).
 
+## WPT-RUN-6 срез 41: reproduces WITHOUT `executorlumen.py`/`TestRunnerManager`
+— и WITHOUT any wptrunner code at all
+
+Item 1 above asked for two things: (a) reproduce through
+`LumenTestharnessExecutor`/`LumenBidiProtocol` directly, bypassing
+`TestRunnerManager`'s multiprocess scheduling but keeping
+`executorlumen.py`'s own code (`_reset_and_mark`, `POLL_EXPRESSION`); (b)
+measure console.log-**arrival**, not `navigate`-completion. Script:
+`tests/wpt/verify_bug961_orchestration.py` (committed this slice). It builds
+the same real `wptrunner.environment.TestEnvironment`/`wptserve` instance
+`run_report.py` uses, then runs two variants against it:
+
+- **Variant A** — `LumenBrowser` + `LumenTestharnessExecutor`/
+  `LumenBidiProtocol`, imported unmodified from `executorlumen.py`/
+  `browsers/lumen.py`, calling `executor._run_testharness(url, timeout)`
+  directly. No `TestRunnerManager`, no multiprocessing, no health-check
+  polling loop around it.
+- **Variant B** — a **bare** `webdriver.bidi.client.BidiSession` (zero
+  `executorlumen.py` code — no `_reset_and_mark`, no `POLL_EXPRESSION`,
+  just `session.start()` + `browsing_context.navigate(wait="complete")`),
+  against the **same live `wptserve` instance**, i.e. the real
+  `AnyHtmlHandler`-generated `.any.html` response, not a hand-copied file.
+
+Result — **both reproduce the ~30-32s stall**:
+
+```
+[probe] variant A RESULT: ExecutorException after 32.0s: ('ERROR',
+'browsingContext.navigate(...) failed: unknown error (navigate: automation
+command timed out)')
+[probe] variant B RESULT: exception after 32.0s: UnknownErrorException(unknown
+error, navigate: automation command timed out, )
+```
+
+Variant A's raw browser log (item (b) above — arrival, not just
+`navigate`-completion) shows all three scripts loaded by t=2.26s
+(`Загружен скрипт: .../console-log-large-array.any.js`) and then **31
+seconds of complete silence** before the array's `console.log` output
+appears at t=33.13s — i.e. the console.log genuinely does eventually print
+(the page is not wedged), confirming item (b): the stall is real
+script-execution time between "scripts loaded" and "array logged", not an
+artifact of `navigate` returning early while logging was still pending.
+Variant B was torn down by the probe's `finally: browser.stop()` right after
+the automation-level timeout fired, so it has no console.log-arrival
+timestamp of its own, but the same 32.0s `navigate: automation command timed
+out` shape (`crates/driver/src/automation.rs:85`'s `RecvTimeoutError::Timeout`,
+surfaced through `crates/driver/src/live_session.rs:39`'s 30s
+`DEFAULT_TIMEOUT` and `crates/bidi-server/src/protocol.rs:962`'s
+`NAVIGATE_LOAD_TIMEOUT_MS`) is the same failure both variants hit.
+
+**This answers item 1, but not the way срез 40 expected.** Variant B has
+*zero* `executorlumen.py`/wptrunner code in the loop — it is exactly the
+same shape as срез 39 point 2's "bare BiDi client" control, which measured
+under 1 second. The one thing that differs between that control and this
+slice's Variant B is **what serves the page**: срез 39 point 2 served a
+hand-copied/curl-fetched byte-identical file through a separate static
+server (`serve_wpt_like.py` cannot itself serve `.any.html` — there is no
+such file on disk, only `console-log-large-array.any.js`; wptserve's
+`AnyHtmlHandler` route builds the wrapper HTML dynamically), while this
+slice's Variant B hits wptserve's **own live dynamic route** for the same
+test id. So the срез 39/40 "orchestration" and "engine contention with
+executorlumen.py's polling" hypotheses are both refuted by this slice —
+neither is present in Variant B and it still stalls — but the byte-identical
+content claim in срез 39 point 2 was never actually validated against the
+live route itself, only against a copy served a different way. Which of
+those two candidates (real vs. copied content/response-shape) is the actual
+variable is still open — see item 1 below, now re-scoped.
+
 ## Что нужно
 
-1. Reproduce with `LumenTestharnessExecutor`/`LumenBidiProtocol`'s own
-   classes directly (bypass `TestRunnerManager` but keep `executorlumen.py`'s
-   exact code, including `_reset_and_mark`'s preceding poll and the real
-   `capabilities` dict) — narrows whether the stall is in `executorlumen.py`
-   itself (e.g. a poll/evaluate call contending with the page's own V8
-   thread while it formats the giant array) or in wptrunner's surrounding
-   multiprocess scheduling. Make sure this reproduction measures
-   console.log-arrival time, not just `navigate` completion — slice 39's
-   bare-BiDi-client comparison measured the latter, which does not
-   necessarily prove the async array-logging had already finished.
+1. **(re-scoped from срез 40's item 1, now that orchestration is refuted)**
+   Control срез 39 point 2's "<1s" result against *today's* `main` (several
+   merges have landed since срез 39/40 — SPLIT-DL19, SPLIT-LB0, BUG-481,
+   among others — so a plain regression since then has not been excluded)
+   by re-running Variant B's exact bare-`BidiSession` code but pointed at a
+   hand-copied/static-served `.any.html` (not wptserve's live route) for
+   this same test id, on the current binary. Two outcomes: still <1s ⇒ the
+   live `AnyHtmlHandler` route vs. a static copy is the real variable (next
+   step: `curl -v` both responses and diff headers/transfer-encoding —
+   chunked vs. `Content-Length`, keep-alive, anything `Streaming
+   завершён`-relevant in the fetch pipeline); also stalls ⇒ срез 39 point
+   2's original "<1s" measurement was itself wrong or has regressed since,
+   and the investigation should stop chasing content-serving differences
+   and instead profile the live-window BiDi/engine-thread path directly
+   (`perf`/flamegraph on the `lumen` process during the 31s silent window)
+   instead of reasoning from log gaps.
 
 ## Как проверить фикс
 
