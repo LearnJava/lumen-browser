@@ -1,22 +1,26 @@
-# BUG-961: `browsingContext.navigate` takes 30-40s and then TIMEOUTs under
-`wptrunner`'s own orchestration, for a page that loads and completes in
-under 1s when driven directly
+# BUG-961: `browsingContext.navigate` takes 30-40s and then TIMEOUTs — a
+genuine ~32s engine/BiDi-path stall, reproducible with a bare `BidiSession`
+and a plain static file server, no wptrunner/wptserve involved
 
 **Статус:** OPEN
 **Дата:** 2026-09-02
 **Компонент:** not yet isolated — **срез 41 refuted both prior candidates**
 (`executorlumen.py`/`TestRunnerManager` orchestration, and engine
-contention specific to that orchestration's polling): a bare
-`webdriver.bidi.client.BidiSession` with zero wptrunner code, hitting only
-the live `wptserve` route, reproduces the same ~30-32s stall. Ruled out:
+contention specific to that orchestration's polling), and **срез 42
+refuted content-serving** (live `AnyHtmlHandler` route vs. a static copy —
+both stall identically) as well as the standing assumption that this page
+"completes in under 1s when driven directly": a byte-identical static copy,
+served by a plain `http.server` with zero relation to wptserve or
+wptrunner, reproduces the same ~32s stall on current `main`. Ruled out:
 `lumen-bidi-server`, `lumen-driver` (both just surface a 30s
 `RecvTimeoutError`, not the source), `mozprocess.ProcessReader`'s
 Python-side line handling (срез 40), `TestRunnerManager`/`executorlumen.py`
-orchestration (срез 41). **Open as of срез 41:** whether the variable is
-wptserve's live dynamic `AnyHtmlHandler` route vs. a static copy (срез 39
-point 2's control used the latter, never validated against the former), or
-whether срез 39 point 2's original "<1s" result itself does not hold up
-against current `main` — see срез 41's re-scoped item 1.
+orchestration (срез 41), wptserve's live route vs. a static copy (срез 42).
+**Open as of срез 42:** what the `lumen` process is actually blocked on
+during the 31s silent window — needs process-level profiling
+(`/proc/<pid>/wchan` sampling, no `perf` on this box) or a `git`-bisect
+between срез 39's date and now for the regression window — see срез 42's
+"Что нужно" item 2.
 **Найден:** P2, WPT-RUN-6 срез 39, 2026-09-02, investigating why
 `/console/console-log-large-array.any.html` (and its `.any.worker.html`
 twin) sit in `timeout_audit.py`'s `unclassified` bucket. Continued срезы 40,
@@ -259,24 +263,74 @@ live route itself, only against a copy served a different way. Which of
 those two candidates (real vs. copied content/response-shape) is the actual
 variable is still open — see item 1 below, now re-scoped.
 
+## WPT-RUN-6 срез 42: content-serving hypothesis refuted — a byte-identical
+static copy, served by a server with zero relation to `wptserve`, stalls
+the same ~32s on current `main`
+
+Item 1 above asked to control срез 39 point 2's "<1s" result against
+*today's* `main` by re-running the bare-`BidiSession` shape against a
+static-served copy of the exact live-route bytes, not wptserve's own
+dynamic route. Script: `tests/wpt/verify_bug961_slice42_static.py`
+(committed this slice). It fetches the live `AnyHtmlHandler`-generated
+response for `/console/console-log-large-array.any.html` via `urllib`
+(396 bytes, byte-for-byte what a real corpus run receives — no hand-copying
+or curl transcription that could silently diverge), serves those exact
+bytes from a **separate, independent `http.server` instance** (own port,
+own process thread, `/resources/testharnessreport.js` substituted the same
+way `serve_wpt_like.py` does so the script doesn't hit an unsubstituted
+`%(...)s` syntax error — CLAUDE.md's WPT-harness gotcha), and then runs two
+bare-`BidiSession` variants back to back: **Variant C** against the static
+copy, **Variant D** as a same-process control replay of срез 41's Variant B
+(wptserve's own live route).
+
+Result — **both stall ~32s, no difference**:
+
+```
+[probe] variant C (static copy) RESULT: exception after 32.0s: UnknownErrorException(...)
+[probe] variant D (live route) RESULT: exception after 32.0s: UnknownErrorException(...)
+```
+
+Variant C's raw browser log shows the identical shape срез 41 measured on
+Variant A/B: all three scripts (`testharness.js`, the `.any.js` file,
+`testharnessreport.js`) loaded by t=2.31s, then **30.7s of complete
+silence**, then the array's `console.log` output appears at t=33.05s — on a
+server that has never talked to wptserve and shares nothing with it but the
+byte content. This rules out the live `AnyHtmlHandler` route vs. a static
+copy as the variable (item 1's first outcome) — **срез 39 point 2's
+original "<1s" bare-client measurement does not hold up against current
+`main`**, confirming item 1's second outcome instead. Whatever content-shape
+difference срез 39 measured, it is not what is stalling this test today;
+the stall is reproducible with nothing more than
+a lumen binary, a static file server, and a `navigate(wait="complete")`
+call — no wptrunner, no wptserve, no `executorlumen.py`, no orchestration
+of any kind. The remaining open question is a genuine regression
+window between срез 39 (2026-09-02, same calendar day, several merges
+apart — SPLIT-DL19, SPLIT-LB0, BUG-481 named as candidates in срез 41)
+and now, or срез 39 point 2's original measurement itself being wrong
+(e.g. testing a different/cached response, or `wait="complete"` behaving
+differently against a hand-copied file vs. the two servers used here).
+
 ## Что нужно
 
-1. **(re-scoped from срез 40's item 1, now that orchestration is refuted)**
-   Control срез 39 point 2's "<1s" result against *today's* `main` (several
-   merges have landed since срез 39/40 — SPLIT-DL19, SPLIT-LB0, BUG-481,
-   among others — so a plain regression since then has not been excluded)
-   by re-running Variant B's exact bare-`BidiSession` code but pointed at a
-   hand-copied/static-served `.any.html` (not wptserve's live route) for
-   this same test id, on the current binary. Two outcomes: still <1s ⇒ the
-   live `AnyHtmlHandler` route vs. a static copy is the real variable (next
-   step: `curl -v` both responses and diff headers/transfer-encoding —
-   chunked vs. `Content-Length`, keep-alive, anything `Streaming
-   завершён`-relevant in the fetch pipeline); also stalls ⇒ срез 39 point
-   2's original "<1s" measurement was itself wrong or has regressed since,
-   and the investigation should stop chasing content-serving differences
-   and instead profile the live-window BiDi/engine-thread path directly
-   (`perf`/flamegraph on the `lumen` process during the 31s silent window)
-   instead of reasoning from log gaps.
+1. **(closed by срез 42 — content-serving is not the variable)**
+2. Profile the `lumen` process itself during the 31s silent window to find
+   what it is actually blocked on — `perf`/`gdb` are not viable here (no
+   `perf` binary on this box; `gdb` only attaches to its own child per
+   `ptrace_scope`, not an already-running process spawned by wptrunner's
+   browser-lifecycle code). The documented fallback for this box
+   (`docs/probe-method.md` / this repo's own convention) is
+   `/proc/<pid>/wchan` and `/proc/<pid>/stack` polled at short intervals
+   during the stall — get the `lumen` pid either by spawning it directly
+   with `subprocess.Popen` (bypassing `LumenBrowser`'s process management)
+   or by reading it off the `pid:NNNNN` prefix wptrunner's own logger emits
+   per line, then sample `/proc/<pid>/task/*/wchan` for every thread every
+   ~200ms through the 31s window to see which thread is parked and on what
+   (a futex/condvar wait names the specific lock; a `poll`/`epoll_wait`
+   parked on a socket names a different, network-side culprit). Bisecting
+   `git log` between срез 39's date and now for the three named candidate
+   merges (SPLIT-DL19, SPLIT-LB0, BUG-481) is the cheaper first move if the
+   `/proc` sampling is inconclusive — a bisect needs no new tooling, just
+   rebuilds at each candidate commit and a re-run of this slice's probe.
 
 ## Как проверить фикс
 
