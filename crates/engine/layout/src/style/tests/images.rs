@@ -118,6 +118,74 @@ use super::*;
         assert!(s.background_layers.is_empty());
     }
 
+    // -------- background-position-x / -y (CSS Backgrounds L4 §3.5, BUG-495) --------
+
+    #[test]
+    fn background_position_x_sets_only_x_axis() {
+        // Longhand touches only its own axis — y stays at the layer default (0%).
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position-x: 25%; }",
+            &[0],
+        );
+        assert_eq!(s.background_layers[0].position.x, PositionComponent::Percent(0.25));
+        assert_eq!(s.background_layers[0].position.y, PositionComponent::Percent(0.0));
+    }
+
+    #[test]
+    fn background_position_y_sets_only_y_axis() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position-y: 20px; }",
+            &[0],
+        );
+        assert_eq!(s.background_layers[0].position.x, PositionComponent::Percent(0.0));
+        assert_eq!(s.background_layers[0].position.y, PositionComponent::Px(20.0));
+    }
+
+    #[test]
+    fn background_position_x_keywords() {
+        let left = cascade_at("<div></div>", "div { background-position-x: left; }", &[0]);
+        assert_eq!(left.background_layers[0].position.x, PositionComponent::Percent(0.0));
+        let right = cascade_at("<div></div>", "div { background-position-x: right; }", &[0]);
+        assert_eq!(right.background_layers[0].position.x, PositionComponent::Percent(1.0));
+        let center = cascade_at("<div></div>", "div { background-position-x: center; }", &[0]);
+        assert_eq!(center.background_layers[0].position.x, PositionComponent::Percent(0.5));
+    }
+
+    #[test]
+    fn background_position_x_rejects_vertical_keyword() {
+        // `top`/`bottom` are not valid on the horizontal longhand.
+        let s = cascade_at("<div></div>", "div { background-position-x: top; }", &[0]);
+        assert!(s.background_layers.is_empty());
+    }
+
+    #[test]
+    fn background_position_x_comma_list_cycles_layers() {
+        // Two `background-image` layers, one `background-position-x` value — cycles.
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-image: url(a.png), url(b.png); background-position-x: 10%, 90%; }",
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 2);
+        assert_eq!(s.background_layers[0].position.x, PositionComponent::Percent(0.10));
+        assert_eq!(s.background_layers[1].position.x, PositionComponent::Percent(0.90));
+    }
+
+    #[test]
+    fn background_position_x_set_after_shorthand_overrides_axis() {
+        // Longhand applied after the shorthand wins on its own axis only
+        // (standard cascade behaviour — later declaration wins).
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: 25% 75%; background-position-x: 40%; }",
+            &[0],
+        );
+        assert_eq!(s.background_layers[0].position.x, PositionComponent::Percent(0.40));
+        assert_eq!(s.background_layers[0].position.y, PositionComponent::Percent(0.75));
+    }
+
     // -------- image-rendering (CSS Images L3 §6.1) --------
 
     #[test]
