@@ -517,6 +517,10 @@ impl Lumen {
                 #[cfg(feature = "v8")]
                 if self.js_present
                     && let Some(lb_ref) = self.layout_box.as_ref()
+                    && let Some(doc_guard) = self
+                        .layout_source
+                        .as_ref()
+                        .and_then(|ls| ls.document.lock().ok())
                 {
                     let viewport = self.renderer.as_ref().map_or_else(
                         || Size::new(1024.0, 720.0),
@@ -525,9 +529,10 @@ impl Lumen {
                             Size::new(s.width, s.height)
                         },
                     );
-                    let rects = collect_layout_rects(lb_ref);
+                    let rects = collect_layout_rects(lb_ref, &doc_guard);
                     let hit_test_tree = Arc::new(lb_ref.clone());
-                    let styles = collect_computed_styles(lb_ref);
+                    let styles = collect_computed_styles(lb_ref, &doc_guard);
+                    drop(doc_guard);
                     let customs = collect_custom_properties(lb_ref);
                     let (vw, vh) = (viewport.width, viewport.height);
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
@@ -1147,6 +1152,10 @@ impl Lumen {
         #[cfg(feature = "v8")]
         if self.js_present
             && let Some(lb_ref) = self.layout_box.as_ref()
+            && let Some(doc_guard) = self
+                .layout_source
+                .as_ref()
+                .and_then(|ls| ls.document.lock().ok())
         {
             let viewport = self.renderer.as_ref().map_or_else(
                 || Size::new(1024.0, 720.0),
@@ -1155,9 +1164,10 @@ impl Lumen {
                     Size::new(s.width, s.height)
                 },
             );
-            let rects = collect_layout_rects(lb_ref);
+            let rects = collect_layout_rects(lb_ref, &doc_guard);
             let hit_test_tree = Arc::new(lb_ref.clone());
-            let styles = collect_computed_styles(lb_ref);
+            let styles = collect_computed_styles(lb_ref, &doc_guard);
+            drop(doc_guard);
             let customs = collect_custom_properties(lb_ref);
             let (vw, vh) = (viewport.width, viewport.height);
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
@@ -1389,15 +1399,25 @@ impl Lumen {
                 page.lazy_pairs.iter().map(|(n, u)| (*n, u.clone())).collect();
             type LazyImageGeom = (HashMap<u32, [f32; 4]>, Arc<lumen_layout::LayoutBox>, f32, f32);
             let geom: Option<LazyImageGeom> = if !owned_pairs.is_empty() {
-                self.layout_box.as_ref().map(|lb_ref| {
-                    let viewport = self.renderer.as_ref().map_or_else(
-                        || Size::new(1024.0, 720.0),
-                        |r| {
-                            let s = r.viewport_size();
-                            Size::new(s.width, s.height)
-                        },
-                    );
-                    (collect_layout_rects(lb_ref), Arc::new(lb_ref.clone()), viewport.width, viewport.height)
+                self.layout_box.as_ref().and_then(|lb_ref| {
+                    self.layout_source
+                        .as_ref()
+                        .and_then(|ls| ls.document.lock().ok())
+                        .map(|doc_guard| {
+                            let viewport = self.renderer.as_ref().map_or_else(
+                                || Size::new(1024.0, 720.0),
+                                |r| {
+                                    let s = r.viewport_size();
+                                    Size::new(s.width, s.height)
+                                },
+                            );
+                            (
+                                collect_layout_rects(lb_ref, &doc_guard),
+                                Arc::new(lb_ref.clone()),
+                                viewport.width,
+                                viewport.height,
+                            )
+                        })
                 })
             } else {
                 None

@@ -487,6 +487,44 @@ fn link_ancestor(
     }
 }
 
+/// DOM element ancestors of an `InlineSegment`/`InlineFrag::source_node` that the
+/// box tree never gives their own `LayoutBox` (BUG-488): plain inline elements
+/// (`<span>`, `<em>`, …) are flattened into the enclosing `InlineRun`'s segments,
+/// so `collect_computed_styles`/`collect_layout_rects` — which key their output by
+/// walking `LayoutBox.node`, not DOM structure — never see the element's own
+/// `NodeId` at all.
+///
+/// Returns every element strictly between `source_node` and `stop_at` (both
+/// exclusive), innermost first, plus `source_node` itself when it names an
+/// element rather than a text node (`content_to_inline_segments`'s generated-text
+/// segments use `source_node = owner_id`, the element being styled — its own
+/// generated content must count toward its own box). `stop_at` is normally the
+/// `InlineRun`'s own `node` (the containing block/inline-block), which already
+/// gets an entry from the ordinary per-`LayoutBox` walk.
+fn inline_element_ancestors(
+    doc: &lumen_dom::Document,
+    source_node: lumen_dom::NodeId,
+    stop_at: lumen_dom::NodeId,
+) -> Vec<lumen_dom::NodeId> {
+    let mut out = Vec::new();
+    let mut cur = if matches!(doc.get(source_node).data, lumen_dom::NodeData::Element { .. }) {
+        source_node
+    } else {
+        match doc.get(source_node).parent {
+            Some(p) => p,
+            None => return out,
+        }
+    };
+    while cur != stop_at {
+        out.push(cur);
+        cur = match doc.get(cur).parent {
+            Some(p) => p,
+            None => break,
+        };
+    }
+    out
+}
+
 /// Get the text content of the first text-node descendant (for hint labels).
 fn first_text_content(
     doc: &lumen_dom::Document,
@@ -1235,11 +1273,20 @@ fn content_height(b: &LayoutBox) -> f32 {
 ///
 /// Text nodes are in the map too, but with a much smaller entry — see
 /// [`INLINE_SEGMENT_PROPERTIES`] for which properties and why.
+///
+/// Plain inline elements (`<span>`, `<em>`, …) are in the map too (BUG-488):
+/// they own no `LayoutBox` of their own, so their entry is approximated from
+/// the nearest descendant `InlineSegment`'s already-cascaded style via
+/// [`inline_element_ancestors`] — exact for every inherited property unless an
+/// element *between* the element and that segment overrides it, and exact for
+/// `display` (always `inline`, or the flattening in `collect_inline_segments`
+/// would not have happened).
 pub fn collect_computed_styles(
     root: &LayoutBox,
+    doc: &lumen_dom::Document,
 ) -> std::collections::HashMap<u32, std::collections::HashMap<String, String>> {
     let mut out = std::collections::HashMap::new();
-    collect_computed_styles_rec(root, &mut out);
+    collect_computed_styles_rec(doc, root, &mut out);
     out
 }
 
@@ -1261,6 +1308,7 @@ pub fn collect_computed_styles(
 pub const INLINE_SEGMENT_PROPERTIES: [&str; 3] = ["visibility", "white-space", "text-transform"];
 
 fn collect_computed_styles_rec(
+    doc: &lumen_dom::Document,
     b: &LayoutBox,
     out: &mut std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
 ) {
@@ -1277,10 +1325,17 @@ fn collect_computed_styles_rec(
             }
             out.entry(seg.source_node.index() as u32)
                 .or_insert_with(|| selector_query::inline_segment_style_map(&seg.style));
+            // BUG-488: publish the full property map for every plain inline
+            // element this segment is nested inside — see `collect_computed_styles`'s
+            // doc comment for the approximation this relies on.
+            for anc in inline_element_ancestors(doc, seg.source_node, b.node) {
+                out.entry(anc.index() as u32)
+                    .or_insert_with(|| computed_style_to_map(&seg.style));
+            }
         }
     }
     for child in &b.children {
-        collect_computed_styles_rec(child, out);
+        collect_computed_styles_rec(doc, child, out);
     }
 }
 
@@ -1369,13 +1424,27 @@ fn collect_custom_properties_rec(
 /// engine. Both maps must be published together and from every path that
 /// produces a layout tree — publishing from the relayout path alone left a
 /// freshly loaded page answering `""` / all-zeros (BUG-382).
-pub fn collect_layout_rects(root: &LayoutBox) -> std::collections::HashMap<u32, [f32; 4]> {
+///
+/// Plain inline elements (`<span>`, `<em>`, …) are in the map too (BUG-488):
+/// their rect is the union of every laid-out `InlineFrag` nested inside them
+/// (line y-position via the same `font_size * line_height` uniform-line-height
+/// model `selection.rs` uses), reached by walking DOM ancestors of each frag's
+/// `source_node` up to the owning `InlineRun`'s own container via
+/// [`inline_element_ancestors`].
+pub fn collect_layout_rects(
+    root: &LayoutBox,
+    doc: &lumen_dom::Document,
+) -> std::collections::HashMap<u32, [f32; 4]> {
     let mut out = std::collections::HashMap::new();
-    collect_layout_rects_rec(root, &mut out);
+    collect_layout_rects_rec(doc, root, &mut out);
     out
 }
 
-fn collect_layout_rects_rec(b: &LayoutBox, out: &mut std::collections::HashMap<u32, [f32; 4]>) {
+fn collect_layout_rects_rec(
+    doc: &lumen_dom::Document,
+    b: &LayoutBox,
+    out: &mut std::collections::HashMap<u32, [f32; 4]>,
+) {
     // A single `NodeId` can own more than one box: an element with inline content
     // gets an anonymous block/line box for that content, and the box tree keeps the
     // element's own `NodeId` on it. The recursion visits the principal box before
@@ -1385,8 +1454,36 @@ fn collect_layout_rects_rec(b: &LayoutBox, out: &mut std::collections::HashMap<u
     let r = &b.rect;
     out.entry(b.node.index() as u32)
         .or_insert([r.x, r.y, r.width, r.height]);
+    // BUG-488: plain inline elements (`<span>`, `<em>`, …) own no `LayoutBox` of
+    // their own — accumulate the union of every laid-out `InlineFrag` nested
+    // inside them, keyed by DOM ancestor via `inline_element_ancestors`. Line
+    // y-position uses the same `font_size * line_height` uniform-line-height
+    // model `selection.rs` uses to turn `lines[line_idx]` into a pixel rect.
+    if let BoxKind::InlineRun { lines, .. } = &b.kind {
+        let line_h = b.style.font_size * b.style.line_height;
+        for (line_idx, line) in lines.iter().enumerate() {
+            let line_y = b.rect.y + line_idx as f32 * line_h;
+            for frag in line {
+                let fx1 = b.rect.x + frag.x;
+                let fy1 = line_y;
+                let fx2 = fx1 + frag.width;
+                let fy2 = fy1 + line_h;
+                for anc in inline_element_ancestors(doc, frag.source_node, b.node) {
+                    out.entry(anc.index() as u32)
+                        .and_modify(|cur| {
+                            let cx1 = cur[0].min(fx1);
+                            let cy1 = cur[1].min(fy1);
+                            let cx2 = (cur[0] + cur[2]).max(fx2);
+                            let cy2 = (cur[1] + cur[3]).max(fy2);
+                            *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
+                        })
+                        .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
+                }
+            }
+        }
+    }
     for child in &b.children {
-        collect_layout_rects_rec(child, out);
+        collect_layout_rects_rec(doc, child, out);
     }
 }
 
@@ -1618,6 +1715,26 @@ mod tests {
         layout(&doc, &sheet, Size::new(800.0, 600.0))
     }
 
+    /// Like `lay_full`, but also returns the `Document` — needed by callers of
+    /// `collect_layout_rects`/`collect_computed_styles` (BUG-488), which walk
+    /// DOM ancestry to attribute inline-element boxes.
+    fn lay_full_with_doc(html: &str, css: &str) -> (lumen_dom::Document, LayoutBox) {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        (doc, root)
+    }
+
+    /// Like `lay_full_with_doc`, but lays out with `Fixed8` instead of `layout()`'s
+    /// no-op measurer — needed by any test asserting on the *width* of wrapped
+    /// text (`layout()` never measures a glyph, so every text frag is 0-wide).
+    fn lay_full_measured_with_doc(html: &str, css: &str) -> (lumen_dom::Document, LayoutBox) {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        (doc, root)
+    }
+
     /// BUG-382: an element with inline content owns two boxes with the same
     /// `NodeId` — its principal block box and the anonymous run holding the text.
     /// Both snapshot collectors must answer with the principal one; the earlier
@@ -1625,7 +1742,7 @@ mod tests {
     /// the line height and `getComputedStyle().width` was `auto`.
     #[test]
     fn snapshot_collectors_keep_the_principal_box() {
-        let root = lay_full(
+        let (doc, root) = lay_full_with_doc(
             "<html><body><div id=a>x</div></body></html>",
             "body{margin:0} #a{width:50px;height:20px}",
         );
@@ -1651,7 +1768,7 @@ mod tests {
             .expect("principal box");
         assert_eq!(principal.rect.height, 20.0, "specified height must win");
 
-        let rects = collect_layout_rects(&root);
+        let rects = collect_layout_rects(&root, &doc);
         assert_eq!(
             rects[&div_nid],
             [
@@ -1663,12 +1780,48 @@ mod tests {
             "rect snapshot must describe the element's own box"
         );
 
-        let styles = collect_computed_styles(&root);
+        let styles = collect_computed_styles(&root, &doc);
         assert_eq!(
             styles[&div_nid].get("width").map(String::as_str),
             Some("50px"),
             "style snapshot must describe the element's own box"
         );
+    }
+
+    /// BUG-488: a plain inline-level element (`<span>`, `<em>`, …) owns no
+    /// `LayoutBox` of its own — its content is flattened into the enclosing
+    /// `InlineRun`'s segments, so neither collector's key set ever contained
+    /// the inline element's own `NodeId`. `getComputedStyle()`/
+    /// `getBoundingClientRect()` on such an element answered `""` / an
+    /// all-zero rect regardless of content, indistinguishable from "element
+    /// doesn't exist".
+    #[test]
+    fn snapshot_collectors_cover_plain_inline_elements() {
+        let (doc, root) = lay_full_measured_with_doc(
+            "<html><body><div>before <span id=s style=\"color:red\">hi</span> after</div></body></html>",
+            "body{margin:0}",
+        );
+        let span_nid = find_first_dom_node_by_selector(&doc, "#s")
+            .expect("span must be findable in the DOM")
+            .index() as u32;
+
+        let rects = collect_layout_rects(&root, &doc);
+        let rect = rects
+            .get(&span_nid)
+            .expect("inline element must have a rect entry");
+        assert!(rect[2] > 0.0, "span must have a nonzero width: {rect:?}");
+        assert!(rect[3] > 0.0, "span must have a nonzero height: {rect:?}");
+
+        let styles = collect_computed_styles(&root, &doc);
+        let style = styles
+            .get(&span_nid)
+            .expect("inline element must have a computed-style entry");
+        assert_eq!(
+            style.get("color").map(String::as_str),
+            Some("rgb(255, 0, 0)"),
+            "inline element's own declared style must be visible"
+        );
+        assert_eq!(style.get("display").map(String::as_str), Some("inline"));
     }
 
     /// BUG-732: `getComputedStyle(el).getPropertyValue('--x')` answered `""`
