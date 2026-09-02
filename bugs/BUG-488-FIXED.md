@@ -1,6 +1,6 @@
 # BUG-488: `getComputedStyle()`/`getBoundingClientRect()` return nothing for plain inline-level elements (`<span>`, `<em>`, `<a>`, …)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-02
 **Дата:** 2026-08-02
 **Компонент:** layout (`crates/engine/layout/src/lib.rs::collect_computed_styles`/
 `collect_layout_rects`, `crates/engine/layout/src/box_tree.rs` — inline
@@ -76,3 +76,45 @@ attributing a `""`/zero-rect failure to something else.
 Committed `.ini` under `tests/wpt/metadata/css/css-display/` for the files
 in this slice fully explained by this bug (see slice write-up in
 `docs/wpt-status.md`).
+
+## Срез 2026-09-02 (P3) — FIXED
+
+Both collectors now walk DOM ancestry, not just `LayoutBox.children`. A new
+helper `inline_element_ancestors(doc, source_node, stop_at)`
+(`crates/engine/layout/src/lib.rs`) walks from an `InlineSegment`/`InlineFrag`'s
+`source_node` up through `Document` parents to the owning `InlineRun`'s own
+`node` (the containing block/inline-block, exclusive), collecting every plain
+inline element in between (innermost first).
+
+- `collect_computed_styles_rec` publishes, for every such ancestor, the full
+  property map of the nearest nested segment's already-cascaded style
+  (`computed_style_to_map(&seg.style)`) — exact for every inherited property
+  and for `display` (always `inline`, or the DOM element would not have been
+  flattened into a segment at all), approximate only when an element strictly
+  between the ancestor and the segment overrides a non-inherited property.
+- `collect_layout_rects_rec` publishes, for every such ancestor, the union of
+  every laid-out `InlineFrag` nested inside it across all lines — line
+  y-position via the same `font_size * line_height` uniform-line-height model
+  `selection.rs` already uses.
+
+Both `collect_computed_styles`/`collect_layout_rects` now take `&Document` —
+propagated through every call site in `lumen-shell` (`frames.rs`,
+`hibernation.rs`, `page_load.rs`, `page_pipeline.rs`, `relayout.rs`) and
+`lumen-driver` (`session.rs`), each of which already held (or now takes) the
+document lock at the call site.
+
+New regression test `snapshot_collectors_cover_plain_inline_elements`
+(`lumen-layout::lib.rs` test module) — laid out with a real (`Fixed8`)
+measurer, since the no-measurer `layout()` test helper never assigns text a
+nonzero width and would pass trivially for the wrong reason.
+
+`lumen-driver`'s pre-existing `inline_element_has_no_snapshot_entry_but_its_text_node_does`
+asserted the old (buggy) absence of an entry as a "regression guard for the
+bridge itself" — updated to `inline_element_and_its_text_node_report_the_same_style`,
+asserting the element and its text node now agree instead of the element
+having nothing.
+
+Pixel-neutral by construction: the fix only adds keys to the two JS-snapshot
+maps consumed by `getComputedStyle()`/`getBoundingClientRect()` — it does not
+touch `LayoutBox`, the box tree, or anything the paint/display-list path
+reads.

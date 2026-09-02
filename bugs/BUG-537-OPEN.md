@@ -93,7 +93,7 @@ properties one WPT-failure at a time.
 (`style.rs:3593` field, `style.rs:15679-15681` `parse_aspect_ratio_value`
 call site). Live probe (`--mcp-live-port`) on a **block-level** `<div
 style="aspect-ratio: 2 / 1; width: 100px;">` — deliberately avoiding
-[BUG-488](BUG-488-OPEN.md)'s inline-element gap — in the same
+[BUG-488](BUG-488-FIXED.md)'s inline-element gap — in the same
 `getComputedStyle` call as `width`/`display`/`color` (all three resolve
 correctly: `100px`/`block`/`rgb(0, 0, 0)`) shows `aspect-ratio` alone
 comes back `""` via both `getPropertyValue('aspect-ratio')` and the
