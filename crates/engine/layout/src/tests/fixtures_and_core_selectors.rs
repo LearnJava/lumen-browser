@@ -132,7 +132,7 @@ use super::*;
             "rect snapshot must describe the element's own box"
         );
 
-        let styles = collect_computed_styles(&root, &doc);
+        let styles = collect_computed_styles(&root, &doc, None);
         assert_eq!(
             styles[&div_nid].get("width").map(String::as_str),
             Some("50px"),
@@ -164,7 +164,7 @@ use super::*;
         assert!(rect[2] > 0.0, "span must have a nonzero width: {rect:?}");
         assert!(rect[3] > 0.0, "span must have a nonzero height: {rect:?}");
 
-        let styles = collect_computed_styles(&root, &doc);
+        let styles = collect_computed_styles(&root, &doc, None);
         let style = styles
             .get(&span_nid)
             .expect("inline element must have a computed-style entry");
@@ -174,6 +174,66 @@ use super::*;
             "inline element's own declared style must be visible"
         );
         assert_eq!(style.get("display").map(String::as_str), Some("inline"));
+    }
+
+    /// BUG-489: a `display: contents` element owns no `LayoutBox` at all —
+    /// `flatten_contents` removes it from the tree entirely and splices its
+    /// children into its place, so unlike a plain inline element (BUG-488)
+    /// there is no surviving box, and no descendant to approximate its style
+    /// from either (non-inherited properties set directly on it, like
+    /// `width`/`margin-left` here, never show up on a child). Its cascade
+    /// result is still cached in the `CounterMap` `precompute_counters`
+    /// builds for every element regardless of `display`; `collect_computed_styles`
+    /// must fall back to it when handed one.
+    #[test]
+    fn snapshot_collectors_cover_display_contents_elements() {
+        let doc = lumen_html_parser::parse(
+            "<html><body><div id=c style=\"display:contents;width:200px;margin-left:10%\"></div></body></html>",
+        );
+        let sheet = lumen_css_parser::parse("body{margin:0}");
+        let (root, counters) =
+            layout_measured_with_counters(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        let c_nid = find_first_dom_node_by_selector(&doc, "#c")
+            .expect("div must be findable in the DOM")
+            .index() as u32;
+
+        // `None` reproduces today's (broken) behaviour for callers with no
+        // fresh `CounterMap` — the element must stay entirely absent.
+        let styles_without_counters = collect_computed_styles(&root, &doc, None);
+        assert!(
+            !styles_without_counters.contains_key(&c_nid),
+            "without a CounterMap the element must have no entry at all"
+        );
+
+        let styles = collect_computed_styles(&root, &doc, Some(&counters));
+        let style = styles
+            .get(&c_nid)
+            .expect("display:contents element must have a computed-style entry");
+        assert_eq!(style.get("display").map(String::as_str), Some("contents"));
+        // Resolved value must be the *computed* value, not a used value derived
+        // from a (nonexistent) box — CSSOM §resolved-values carves out no
+        // exception for `display: contents`.
+        assert_eq!(style.get("width").map(String::as_str), Some("200px"));
+        assert_eq!(style.get("margin-left").map(String::as_str), Some("10%"));
+    }
+
+    /// BUG-489: the document's own root element cannot have its box eliminated
+    /// (nothing sits above it to splice its children into), so CSS Display L3
+    /// §2.7 blockifies a `display: contents` root to `block` at the cascade
+    /// stage — `<html>` never becomes a `BoxKind::Contents` box in the first
+    /// place, unlike every other `display:contents` element.
+    #[test]
+    fn root_element_display_contents_is_blockified() {
+        let (doc, root) = lay_full_measured_with_doc(
+            "<html style=\"display:contents\"><body>x</body></html>",
+            "",
+        );
+        let html_nid = doc.document_element().expect("document must have a root element");
+        let styles = collect_computed_styles(&root, &doc, None);
+        let style = styles
+            .get(&(html_nid.index() as u32))
+            .expect("root element must have a computed-style entry");
+        assert_eq!(style.get("display").map(String::as_str), Some("block"));
     }
 
     /// BUG-732: `getComputedStyle(el).getPropertyValue('--x')` answered `""`

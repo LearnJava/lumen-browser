@@ -83,7 +83,7 @@ pub use animation::{
 pub use box_tree::{
     apply_container_styles, apply_intrinsic_size, build_iframe_document, canvas_background_color,
     collect_background_image_requests, collect_image_requests, is_open_details, layout, layout_measured,
-    layout_measured_hyp, layout_measured_hyp_with_counters, layout_mutation_incremental,
+    layout_measured_hyp, layout_measured_hyp_with_counters, layout_measured_with_counters, layout_mutation_incremental,
     layout_streaming_incremental,
     lay_out_incremental, BoxKind, BoxOrigin, BoxRole, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
     PseudoKind, SvgMaskContent, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift, ViewBox,
@@ -1281,12 +1281,41 @@ fn content_height(b: &LayoutBox) -> f32 {
 /// element *between* the element and that segment overrides it, and exact for
 /// `display` (always `inline`, or the flattening in `collect_inline_segments`
 /// would not have happened).
+///
+/// `display: contents` elements are in the map too when `counters` is `Some`
+/// (BUG-489): `flatten_contents` eliminates such an element's own `LayoutBox`
+/// from the tree entirely (its children are spliced into its place), so —
+/// unlike a plain inline element — there is no surviving box anywhere to
+/// approximate its style from, and no descendant carries it either (a
+/// `display:contents` element can wrap block-level children, own
+/// non-inherited properties, and any `display` value). Its real, distinct
+/// cascade result is still cached in `counters` — [`precompute_counters`]
+/// resolves every element's style up front, regardless of `display` — so it
+/// is looked up there instead of recomputed. `counters` is `None` at call
+/// sites that reuse an already-built `LayoutBox` without a matching fresh
+/// [`CounterMap`] (e.g. `relayout_scoped`'s incremental pass); such sites keep
+/// today's behaviour (an empty entry) for this one element shape.
 pub fn collect_computed_styles(
     root: &LayoutBox,
     doc: &lumen_dom::Document,
+    counters: Option<&CounterMap>,
 ) -> std::collections::HashMap<u32, std::collections::HashMap<String, String>> {
     let mut out = std::collections::HashMap::new();
     collect_computed_styles_rec(doc, root, &mut out);
+    if let Some(counters) = counters {
+        for i in 0..doc.len() {
+            let idx = i as u32;
+            if out.contains_key(&idx) {
+                continue;
+            }
+            let id = lumen_dom::NodeId::from_index(i);
+            if let Some(style) = counters.style_arc(id)
+                && style.display == Display::Contents
+            {
+                out.insert(idx, computed_style_to_map(&style));
+            }
+        }
+    }
     out
 }
 

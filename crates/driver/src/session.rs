@@ -381,7 +381,8 @@ impl InProcessSession {
         let measurer = lumen_paint::FontMeasurer::new(&font)
             .map_err(|e| Error::Other(format!("ошибка метрик Inter: {e}")))?;
 
-        let layout_root = lumen_layout::layout_measured(&doc_guard, sheet, self.viewport, &measurer);
+        let (layout_root, counters) =
+            lumen_layout::layout_measured_with_counters(&doc_guard, sheet, self.viewport, &measurer);
         let flat_tree = lumen_dom::build_flat_tree(&doc_guard);
         drop(doc_guard);
 
@@ -392,7 +393,7 @@ impl InProcessSession {
         // resolves the display list's `src` keys.
         self.load_background_images(&layout_root);
 
-        self.commit_layout(&layout_root, doc);
+        self.commit_layout(&layout_root, doc, Some(&counters));
 
         Ok((layout_root, flat_tree))
     }
@@ -405,8 +406,19 @@ impl InProcessSession {
     /// [`Self::relayout_scoped`] (DEVX-12: subtree-only incremental relayout of
     /// an already-existing tree) — extracted so the two paths can never drift
     /// on how a `LayoutBox` becomes a committed display list.
+    ///
+    /// `counters` is the [`lumen_layout::CounterMap`] the fresh cascade produced
+    /// (`layout_and_commit`'s path) or `None` (`relayout_scoped`'s incremental
+    /// path never re-runs the cascade, so it has none to hand over) — passed to
+    /// `collect_computed_styles` so a `display: contents` element's own resolved
+    /// style (BUG-489) is available when a fresh cascade exists.
     #[cfg_attr(not(feature = "v8"), allow(unused_variables))]
-    fn commit_layout(&mut self, layout_root: &LayoutBox, doc: &Arc<Mutex<Document>>) {
+    fn commit_layout(
+        &mut self,
+        layout_root: &LayoutBox,
+        doc: &Arc<Mutex<Document>>,
+        counters: Option<&lumen_layout::CounterMap>,
+    ) {
         // BUG-382: hand the fresh layout to the JS runtime. `getComputedStyle()` and
         // `getBoundingClientRect()` answer from a snapshot the embedder pushes, never
         // by querying the layout engine — without this call every property read back
@@ -417,7 +429,7 @@ impl InProcessSession {
         if let Some(rt) = self.js_runtime.as_ref() {
             if let Ok(doc_guard) = doc.lock() {
                 rt.update_layout_rects(lumen_layout::collect_layout_rects(layout_root, &doc_guard));
-                rt.update_computed_styles(lumen_layout::collect_computed_styles(layout_root, &doc_guard));
+                rt.update_computed_styles(lumen_layout::collect_computed_styles(layout_root, &doc_guard, counters));
             }
             rt.update_custom_properties(lumen_layout::collect_custom_properties(layout_root));
             rt.update_viewport_size(self.viewport.width, self.viewport.height);
@@ -1301,7 +1313,7 @@ impl BrowserSession for InProcessSession {
         let owned_state = self.state.take().ok_or_else(|| {
             Error::Other("сессия не инициализирована — вызовите navigate() первым".into())
         })?;
-        self.commit_layout(&owned_state.layout_root, &owned_state.doc);
+        self.commit_layout(&owned_state.layout_root, &owned_state.doc, None);
         self.state = Some(owned_state);
         Ok(())
     }

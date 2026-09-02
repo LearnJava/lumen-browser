@@ -18,10 +18,10 @@
 3614	crates/js/src/worker.rs
 3435	crates/chrome/src/model.rs
 3006	crates/shell/src/forms.rs
-2938	crates/driver/src/session.rs
+2950	crates/driver/src/session.rs
 2850	crates/js/src/offscreen_canvas.rs
 2762	crates/network/src/h3/conn_connect.rs
 2637	crates/js/src/subtle_crypto.rs
 2365	crates/js/src/video_bindings.rs
-2256	crates/shell/src/frames.rs
+2257	crates/shell/src/frames.rs
 2067	crates/js/src/web_audio.rs

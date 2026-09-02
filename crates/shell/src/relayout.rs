@@ -665,7 +665,7 @@ impl Lumen {
             {
                 let rects = collect_layout_rects(lb_ref, &doc_guard);
                 let hit_test_tree = Arc::new(lb_ref.clone());
-                let styles = collect_computed_styles(lb_ref, &doc_guard);
+                let styles = collect_computed_styles(lb_ref, &doc_guard, None);
                 drop(doc_guard);
                 let customs = collect_custom_properties(lb_ref);
                 let (vw, vh) = (viewport.width, viewport.height);

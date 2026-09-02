@@ -152,8 +152,8 @@ use entry::{is_invisible_control, strip_invisible_controls};
 use entry::{apply_font_size_adjust, font_size_adjust_used};
 pub use entry::{
     build_iframe_document, canvas_background_color, lay_out_incremental, layout, layout_measured,
-    layout_measured_hyp, layout_measured_hyp_with_counters, layout_mutation_incremental,
-    layout_mutation_incremental_restyle, layout_streaming_incremental,
+    layout_measured_hyp, layout_measured_hyp_with_counters, layout_measured_with_counters,
+    layout_mutation_incremental, layout_mutation_incremental_restyle, layout_streaming_incremental,
 };
 
 mod inline_build;

@@ -467,7 +467,7 @@ pub(crate) fn collect_js_layout_snapshot(
     JsLayoutSnapshot {
         rects: lumen_layout::collect_layout_rects(root, doc),
         tree: Arc::new(root.clone()),
-        styles: lumen_layout::collect_computed_styles(root, doc),
+        styles: lumen_layout::collect_computed_styles(root, doc, None),
         customs: lumen_layout::collect_custom_properties(root),
         viewport: (viewport.width, viewport.height),
     }
