@@ -64,6 +64,8 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "background-image",
     "background-origin",
     "background-position",
+    "background-position-x",
+    "background-position-y",
     "background-repeat",
     "background-size",
     "baseline-shift",

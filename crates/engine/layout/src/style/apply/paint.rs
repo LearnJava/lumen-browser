@@ -35,6 +35,7 @@ use crate::style::{
     OutlineColor,
     OutlineStyle,
     PointerEvents,
+    PositionComponent,
     PrintColorAdjust,
     ScrollbarGutter,
     ScrollbarWidth,
@@ -46,6 +47,7 @@ use crate::style::{
     parse_box_shadow_one,
     parse_cursor_kw,
     parse_length_q,
+    parse_position_component,
     split_top_level_commas,
 };
 use crate::style::parse::box_sides::{
@@ -448,6 +450,41 @@ pub(in crate::style) fn apply_decl_paint(
             let n = positions.len();
             for (i, layer) in style.background_layers.iter_mut().enumerate() {
                 layer.position = positions[i % n];
+            }
+        }
+        "background-position-x" => {
+            // CSS Backgrounds L4 §3.5 — standalone horizontal longhand,
+            // `[ center | left | right | <length-percentage> ]#`. Edge-relative
+            // offset form (`right -10px`) and `x-start`/`x-end` logical
+            // keywords are not yet supported — same deferral as the
+            // tri-/quad-form of `<position>` noted on `ObjectPosition::parse`.
+            let xs: Vec<PositionComponent> = split_top_level_commas(val.trim())
+                .iter()
+                .filter_map(|s| parse_position_component(s.trim(), em_basis, viewport, false))
+                .collect();
+            if xs.is_empty() { return true; }
+            if style.background_layers.is_empty() {
+                style.background_layers.push(BackgroundLayer::default());
+            }
+            let n = xs.len();
+            for (i, layer) in style.background_layers.iter_mut().enumerate() {
+                layer.position.x = xs[i % n];
+            }
+        }
+        "background-position-y" => {
+            // CSS Backgrounds L4 §3.5 — standalone vertical longhand, mirrors
+            // `background-position-x` above.
+            let ys: Vec<PositionComponent> = split_top_level_commas(val.trim())
+                .iter()
+                .filter_map(|s| parse_position_component(s.trim(), em_basis, viewport, true))
+                .collect();
+            if ys.is_empty() { return true; }
+            if style.background_layers.is_empty() {
+                style.background_layers.push(BackgroundLayer::default());
+            }
+            let n = ys.len();
+            for (i, layer) in style.background_layers.iter_mut().enumerate() {
+                layer.position.y = ys[i % n];
             }
         }
         "will-change" => {

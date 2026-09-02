@@ -19,9 +19,9 @@ use crate::style::{
     ContainFlags, ContentVisibility,
     CssColor,
     Cursor, Direction, Display, FilterFn, FloatSide, FontStretch, FontStyle, FontWeight,
-    FontVariantCaps, FontVariantEmoji, Isolation, Length, LengthOrAuto, MixBlendMode, Overflow,
+    FontVariantCaps, FontVariantEmoji, Isolation, Length, LengthOrAuto, MixBlendMode, ObjectPosition, Overflow,
     OutlineColor,
-    OutlineStyle, PointerEvents, Position, TextAlign, TextDecorationLine, TextDecorationStyle,
+    OutlineStyle, PointerEvents, Position, PositionComponent, TextAlign, TextDecorationLine, TextDecorationStyle,
     TextEmphasisStyle, TextOverflow, TextTransform, TransformFn, Visibility, WhiteSpace,
     WhiteSpaceCollapse,
     ComputedStyle,
@@ -527,6 +527,40 @@ fn background_layers_to_css(layers: &[BackgroundLayer]) -> String {
         .join(", ")
 }
 
+/// Serialises one axis of a `background-position`/`object-position` value —
+/// `Px` as `"<n>px"`, `Percent` (stored as a `0.0..=1.0` fraction) as `"<n>%"`.
+fn position_component_to_css(c: PositionComponent) -> String {
+    match c {
+        PositionComponent::Px(v) => px_str(v),
+        PositionComponent::Percent(p) => {
+            let pct = p * 100.0;
+            if pct.fract() == 0.0 {
+                format!("{}%", pct as i64)
+            } else {
+                format!("{}%", pct)
+            }
+        }
+    }
+}
+
+/// Serialises `style.background_layers`' per-layer `position.x`/`.y` for the
+/// standalone `background-position-x`/`-y` longhands (CSS Backgrounds L4
+/// §3.5) — comma-joined, topmost (index 0) first, matching every other
+/// multi-layer longhand's serialization order.
+fn background_position_axis_to_css(
+    layers: &[BackgroundLayer],
+    axis: impl Fn(&BackgroundLayer) -> PositionComponent,
+) -> String {
+    if layers.is_empty() {
+        return position_component_to_css(ObjectPosition::background_initial().x);
+    }
+    layers
+        .iter()
+        .map(|l| position_component_to_css(axis(l)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Serialises a [`Length`] to its CSS representation.
 fn length_to_css(l: &Length) -> String {
     match l {
@@ -787,6 +821,10 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("background-color".into(), style.background_color.as_ref()
         .map_or_else(|| "rgba(0, 0, 0, 0)".into(), css_color_to_css));
     m.insert("background-image".into(), background_layers_to_css(&style.background_layers));
+    m.insert("background-position-x".into(),
+        background_position_axis_to_css(&style.background_layers, |l| l.position.x));
+    m.insert("background-position-y".into(),
+        background_position_axis_to_css(&style.background_layers, |l| l.position.y));
 
     // `border-color` shorthand — CSSOM `getPropertyValue` on a shorthand only
     // resolves when every longhand it covers serializes to the same value
@@ -1734,6 +1772,34 @@ mod tests {
     fn computed_map_background_image_url() {
         let m = div_computed_map("<div>x</div>", "div { background-image: url(a.png); }");
         assert_eq!(m.get("background-image").map(String::as_str), Some("url(\"a.png\")"));
+    }
+
+    // ── computed_style_to_map: BUG-495 additions ─────────────────────────────
+
+    #[test]
+    fn computed_map_background_position_xy_default_top_left() {
+        // No layer at all — falls back to the `background-position` initial
+        // value (`0% 0%`), same as an explicit single default layer would.
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("background-position-x").map(String::as_str), Some("0%"));
+        assert_eq!(m.get("background-position-y").map(String::as_str), Some("0%"));
+    }
+
+    #[test]
+    fn computed_map_background_position_x_percent_and_px() {
+        let m = div_computed_map("<div>x</div>", "div { background-position-x: 25%; }");
+        assert_eq!(m.get("background-position-x").map(String::as_str), Some("25%"));
+        let m = div_computed_map("<div>x</div>", "div { background-position-y: 10px; }");
+        assert_eq!(m.get("background-position-y").map(String::as_str), Some("10px"));
+    }
+
+    #[test]
+    fn computed_map_background_position_x_multi_layer_joins_commas() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { background-image: url(a.png), url(b.png); background-position-x: 10%, 90%; }",
+        );
+        assert_eq!(m.get("background-position-x").map(String::as_str), Some("10%, 90%"));
     }
 
     #[test]
