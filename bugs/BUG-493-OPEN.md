@@ -55,7 +55,7 @@ getComputedStyle(window.__d).outlineWidth  // → "1px" (correct, once relayout 
 
 `d.style.outlineWidth = '...'` itself is confirmed working in all three cases
 (`_lumen_make_style`'s `setProperty` path, not the separate `[PutForwards=
-cssText]` gap — [BUG-494](../bugs/BUG-494-OPEN.md)) — the only variable is
+cssText]` gap — [BUG-494](../bugs/BUG-494-FIXED.md), fixed 2026-09-02) — the only variable is
 whether a relayout happened to run between the mutation and the read.
 
 ## Симптом
