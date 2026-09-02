@@ -25,5 +25,5 @@
 2762	crates/network/src/h3/conn_connect.rs
 2637	crates/js/src/subtle_crypto.rs
 2365	crates/js/src/video_bindings.rs
-2189	crates/shell/src/frames.rs
+2256	crates/shell/src/frames.rs
 2067	crates/js/src/web_audio.rs

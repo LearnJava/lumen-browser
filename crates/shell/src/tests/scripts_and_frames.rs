@@ -480,6 +480,8 @@ fn splice_handle(src: &str, host_rect: Rect, content_dl: DisplayList) -> crate::
         font_registry: lumen_font::FontRegistry::new(),
         web_fonts: Vec::new(),
         animated_gifs: Vec::new(),
+        lazy_requests: Vec::new(),
+        pending_lazy: Vec::new(),
     }
 }
 
@@ -1710,6 +1712,77 @@ fn stream_image_discovery_dedups_and_skips_lazy() {
         }
     }
     assert_eq!(dispatched, vec!["a.png".to_owned()], "lazy пропущен, дубль a.png схлопнут");
+}
+
+// ── FRAME-5 срез 2: ленивая дозагрузка картинок внутри фрейма ──────────────
+
+/// Без JS-контекста или без своих lazy-`<img>` фрейму нечего наблюдать —
+/// `harvest_frame_lazy_requests` обязана тихо вернуть пустой список, а не
+/// запнуться об `Option::unwrap`.
+#[test]
+fn harvest_frame_lazy_requests_empty_without_js_or_requests() {
+    assert_eq!(crate::frames::harvest_frame_lazy_requests(None, &[]), Vec::new());
+    let req = lumen_layout::ImageRequest {
+        node_id: NodeId::from_index(0),
+        url: "lazy.png".to_owned(),
+        has_explicit_width: true,
+        has_explicit_height: true,
+        is_lazy: true,
+        fetch_priority: None,
+    };
+    // `js: None` (фрейм без скриптов, срез 1) — тот же ранний выход.
+    assert_eq!(crate::frames::harvest_frame_lazy_requests(None, &[req]), Vec::new());
+}
+
+/// `fetch_frame_lazy_images` дренирует `pending_lazy`, качает+декодирует
+/// каждый URL тем же путём, что срез 15 у eager-картинок ребёнка (ключ —
+/// разрешённый адрес, не сырой `src`), и складывает пиксели И в
+/// `FrameHandle::images` (подхватывается слиянием при первой загрузке,
+/// `page_pipeline.rs`), И в возвращаемое значение (регистрирует релейаут,
+/// `Lumen::register_frame_lazy_images`).
+#[test]
+fn fetch_frame_lazy_images_fetches_decodes_and_folds_into_frame() {
+    let dir = std::env::temp_dir().join("lumen_frame_lazy_images_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("lazy.png"), super::page_resources::tiny_png(4, 2)).unwrap();
+
+    let mut handle = splice_handle("child.html", Rect::new(0.0, 0.0, 300.0, 150.0), Vec::new());
+    handle.base = crate::ResourceBase::File(dir.join("index.html"));
+    // `has_explicit_*: true` — не задевает intrinsic-size-путь (лочит
+    // `handle.doc`, отдельная забота, а не эта); фикстура проверяет ровно
+    // фетч+декод+регистрацию.
+    handle.lazy_requests = vec![lumen_layout::ImageRequest {
+        node_id: NodeId::from_index(0),
+        url: "lazy.png".to_owned(),
+        has_explicit_width: true,
+        has_explicit_height: true,
+        is_lazy: true,
+        fetch_priority: None,
+    }];
+    handle.pending_lazy = vec![(0, "lazy.png".to_owned())];
+
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let loaded = crate::frame_lazy::fetch_frame_lazy_images(
+        &mut handle,
+        &sink,
+        None,
+        lumen_core::ColorSpace::Srgb,
+    );
+
+    assert!(handle.pending_lazy.is_empty(), "запрос обязан быть дренирован");
+    assert_eq!(loaded.images.len(), 1);
+    assert_eq!(loaded.animated_gifs.len(), 0);
+    let (key, image) = &loaded.images[0];
+    assert!(key.ends_with("lazy.png") && key != "lazy.png", "ключ — разрешённый адрес: {key}");
+    assert_eq!(image.width, 4, "пиксели настоящие, 4x2");
+    // Сложено в handle.images тем же ключом — подхватит слияние страницы.
+    assert_eq!(handle.images.len(), 1);
+    assert_eq!(&handle.images[0].0, key);
 }
 
 #[test]

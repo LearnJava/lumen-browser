@@ -181,6 +181,10 @@ impl Lumen {
             }
             None => frames::sync_frame_viewports(&mut self.frames, &page_layout, interactive),
         }
+        // FRAME-5 срез 2: same as `Lumen::apply_relayout_result` — this path
+        // has no page-commit step for a freshly lazy-loaded frame image to
+        // ride into the renderer, so register it explicitly.
+        self.register_frame_lazy_images();
         self.layout_box = Some(page_layout);
         let rebuilt = self.layout_box.as_ref().map(paint_ordered);
         if let Some(new_dl) = rebuilt {

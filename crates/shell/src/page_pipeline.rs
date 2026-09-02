@@ -862,6 +862,17 @@ pub(crate) fn parse_and_layout(
     // только что созданы, ни курсора над ними, ни фокуса в них ещё не было.
     crate::frames::sync_frame_viewports(&mut frames, &layout, Default::default());
 
+    // FRAME-5 срез 2: above-the-fold `<img loading="lazy">` inside a frame —
+    // `sync_frame_viewports` just harvested proximity hits from each frame's
+    // own `IntersectionObserver` into `FrameHandle::pending_lazy`; turn them
+    // into pixels now (network+decode only, safe off the UI thread — nothing
+    // here touches `Lumen::renderer`). Folded straight into `h.images`/
+    // `h.animated_gifs`, so the merge loop below picks them up like any other
+    // frame image — no separate registration path for the initial load.
+    for h in &mut frames {
+        crate::frame_lazy::fetch_frame_lazy_images(h, sink, cookie_jar.clone(), target);
+    }
+
     // CSS Backgrounds L3 §3.10 — собираем `background-image: url(...)` уже
     // после layout-а (картинки фона не влияют на расчёт коробок). Декодируем
     // и добавляем к `images` тем же ключом, что эмиттер кладёт в
