@@ -1,30 +1,35 @@
-# BUG-961: `browsingContext.navigate` takes 30-40s and then TIMEOUTs — a
-genuine ~32s engine/BiDi-path stall, reproducible with a bare `BidiSession`
-and a plain static file server, no wptrunner/wptserve involved
+# BUG-961: `browsingContext.navigate` takes 30-40s and then TIMEOUTs — an
+apparently intermittent ~32s engine/BiDi-path stall, reproducible with a
+bare `BidiSession` and a plain static file server, no wptrunner/wptserve
+involved — but not on every run of the identical repro
 
 **Статус:** OPEN
 **Дата:** 2026-09-02
 **Компонент:** not yet isolated — **срез 41 refuted both prior candidates**
 (`executorlumen.py`/`TestRunnerManager` orchestration, and engine
-contention specific to that orchestration's polling), and **срез 42
-refuted content-serving** (live `AnyHtmlHandler` route vs. a static copy —
-both stall identically) as well as the standing assumption that this page
-"completes in under 1s when driven directly": a byte-identical static copy,
-served by a plain `http.server` with zero relation to wptserve or
-wptrunner, reproduces the same ~32s stall on current `main`. Ruled out:
-`lumen-bidi-server`, `lumen-driver` (both just surface a 30s
-`RecvTimeoutError`, not the source), `mozprocess.ProcessReader`'s
+contention specific to that orchestration's polling), **срез 42 refuted
+content-serving** (live `AnyHtmlHandler` route vs. a static copy — both
+stall identically), and **срез 44 refuted the launch mechanism**
+(`mozprocess.ProcessHandler`'s env merging or `preexec_fn`/process-group)
+that срез 43 initially looked like it had isolated: the exact same minimal
+repro (plain `subprocess.Popen`, no `LumenBrowser`, no `mozprocess`)
+completed in ~1.1-1.2s six times in a row (срез 43) and then stalled ~32s
+once under a controlled A/B re-run (срез 44), before returning to <1.3s on
+three more repeats of срез 43's own script right after. **The stall itself
+now looks intermittent, not deterministically tied to any one launch path
+or content-serving mechanism tested across срезы 39-44** — see срез 44's
+"Что нужно" item 3 for the still-missing evidence (a hit-rate over N fresh
+runs, and a `wchan` sample captured *during* an actual stall — every срез
+43 run completed too fast to sample anything). Ruled out as the *sole or
+required* cause: `lumen-bidi-server`, `lumen-driver` (both just surface a
+30s `RecvTimeoutError`, not the source), `mozprocess.ProcessReader`'s
 Python-side line handling (срез 40), `TestRunnerManager`/`executorlumen.py`
-orchestration (срез 41), wptserve's live route vs. a static copy (срез 42).
-**Open as of срез 42:** what the `lumen` process is actually blocked on
-during the 31s silent window — needs process-level profiling
-(`/proc/<pid>/wchan` sampling, no `perf` on this box) or a `git`-bisect
-between срез 39's date and now for the regression window — see срез 42's
-"Что нужно" item 2.
+orchestration (срез 41), wptserve's live route vs. a static copy (срез 42),
+`mozprocess.ProcessHandler`'s env merging and `preexec_fn` (срез 44).
 **Найден:** P2, WPT-RUN-6 срез 39, 2026-09-02, investigating why
 `/console/console-log-large-array.any.html` (and its `.any.worker.html`
-twin) sit in `timeout_audit.py`'s `unclassified` bucket. Continued срезы 40,
-41, 2026-09-02.
+twin) sit in `timeout_audit.py`'s `unclassified` bucket. Continued срезы
+40-44, 2026-09-02.
 
 ## Симптом
 
@@ -310,27 +315,95 @@ and now, or срез 39 point 2's original measurement itself being wrong
 (e.g. testing a different/cached response, or `wait="complete"` behaving
 differently against a hand-copied file vs. the two servers used here).
 
+## WPT-RUN-6 срез 43: direct `subprocess.Popen` (no `LumenBrowser`, no
+`mozprocess`) — first sample says «no stall», repeated sampling says
+«unreliable single-shot conclusion»
+
+Item 2's first move: spawn `lumen --bidi-port <port>` with a plain
+`subprocess.Popen` — bypassing `LumenBrowser`'s process management (and
+therefore `mozprocess.ProcessHandler`) entirely, not just
+`TestRunnerManager`/`executorlumen.py` as срез 41 already did — and sample
+`/proc/<pid>/task/*/wchan` through the run. Script:
+`tests/wpt/verify_bug961_slice43_wchan.py` (committed this slice).
+
+First run: `navigate returned OK in 1.19s`. No stall, no 31s silent window,
+`wchan` samples show nothing but ordinary `futex_wait`/`epoll_wait`/
+`inet_csk_accept` parks across all threads. Re-run 5 times back to back —
+**every one completed in ~1.1s**, no exceptions. Taken alone this would
+close item 2 by pointing at `LumenBrowser`/`mozprocess.ProcessHandler`
+itself (env merging, `preexec_fn`, pipe buffering — see срез 44) as the
+necessary ingredient for the stall, on top of срез 41's Variant B (bare
+`BidiSession`, but still launched via `LumenBrowser`) and срез 42's Variant
+C/D — neither of which used a raw `Popen`.
+
+## WPT-RUN-6 срез 44: that conclusion does not survive a repeat — the same
+direct-`Popen` shape stalls too, so single-shot A/B is not sufficient
+evidence for this bug
+
+Isolated the one remaining structural difference between срез 43's script
+and a `LumenBrowser`-driven launch: `mozprocess.processhandler.Process.
+__init__` (`tests/wpt/.venv/lib/python3.14/site-packages/mozprocess/
+processhandler.py:118-126`) unconditionally sets
+`preexec_fn = lambda: os.setpgid(0, 0)` (new process group for the child)
+unless `ignore_children=True`, which `LumenBrowser`/`WebDriverBrowser` never
+pass. Env merging was already ruled out — `WebDriverBrowser.env` is
+`{**os.environ, **env}` (`browsers/base.py:324`), not a stripped dict.
+Script: `tests/wpt/verify_bug961_slice44_setpgid.py` (committed this
+slice) — Variant P (plain `Popen`, срез 43's exact shape) vs. Variant G
+(same, plus the identical `setpgidfn` `preexec_fn`), back to back, same
+process.
+
+Result — **both variants stalled ~32s**, including Variant P, which is
+structurally the same probe срез 43 ran 6 times (1 + 5 repeats) at ~1.1-1.2s
+with zero failures:
+
+```
+[Variant P (plain Popen, no preexec_fn)] navigate FAILED: … (after 32.2s)
+[Variant G (setpgid preexec_fn, mozprocess-identical)] navigate FAILED: … (after 32.2s)
+```
+
+Re-running срез 43's own script again immediately after (same binary, same
+box, nothing else changed) went back to **1.07-1.20s across 3 more runs** —
+i.e. the *same* minimal repro (`Popen`, no `preexec_fn`, static file server,
+bare `BidiSession`, `navigate(wait="complete")`) produced both a clean
+under-1.3s completion (срез 43, 6/6) and a 32s stall (срез 44 Variant P,
+1/1) on the same machine within the same working session.
+**`preexec_fn`/process-group is refuted as the variable** — Variant P and
+Variant G stalled identically, matching each other, not the setpgid
+hypothesis.
+
+This means every A/B conclusion in this bug's history so far (срез 41's
+"reproduces without orchestration", срез 42's "content-serving is not the
+variable", срез 43's initial "direct Popen avoids it") was drawn from a
+**single sample per condition** — sufficient to prove a mechanism is not
+*required* to reproduce the stall (a single reproduction under a leaner
+shape is real evidence), but **not sufficient to prove a mechanism
+prevents it**, since the stall itself now looks intermittent rather than
+tied to any one launch path tested so far. `uptime` during срез 44's run
+showed load average 2.0-2.3 on an 8-core box (no other build/lumen process
+visible in `ps --sort=-pcpu` besides ordinary desktop apps) — not obviously
+saturated, but not controlled for either; no run in срезы 39-44 has logged
+system load alongside its result.
+
 ## Что нужно
 
 1. **(closed by срез 42 — content-serving is not the variable)**
-2. Profile the `lumen` process itself during the 31s silent window to find
-   what it is actually blocked on — `perf`/`gdb` are not viable here (no
-   `perf` binary on this box; `gdb` only attaches to its own child per
-   `ptrace_scope`, not an already-running process spawned by wptrunner's
-   browser-lifecycle code). The documented fallback for this box
-   (`docs/probe-method.md` / this repo's own convention) is
-   `/proc/<pid>/wchan` and `/proc/<pid>/stack` polled at short intervals
-   during the stall — get the `lumen` pid either by spawning it directly
-   with `subprocess.Popen` (bypassing `LumenBrowser`'s process management)
-   or by reading it off the `pid:NNNNN` prefix wptrunner's own logger emits
-   per line, then sample `/proc/<pid>/task/*/wchan` for every thread every
-   ~200ms through the 31s window to see which thread is parked and on what
-   (a futex/condvar wait names the specific lock; a `poll`/`epoll_wait`
-   parked on a socket names a different, network-side culprit). Bisecting
-   `git log` between срез 39's date and now for the three named candidate
-   merges (SPLIT-DL19, SPLIT-LB0, BUG-481) is the cheaper first move if the
-   `/proc` sampling is inconclusive — a bisect needs no new tooling, just
-   rebuilds at each candidate commit and a re-run of this slice's probe.
+2. **(мехнизм запуска — mozprocess/`preexec_fn`/env — refuted by срез 44;
+   the remaining open question is reproducibility itself, item 3 below)**
+3. Get a real hit-rate instead of another single-shot A/B: run срез 43's
+   minimal repro (or срез 44's Variant P) **N≥10 times in a fresh process
+   each time** (not looped inside one Python script — rule out interpreter-
+   level state leaking between variants), record pass/fail and, on every
+   stall, capture the `/proc/<pid>/task/*/wchan` samples srez 43's
+   `_WchanSampler` already implements (not yet exercised against an actual
+   stall — every срез 43 run completed too fast to sample anything
+   interesting) plus `uptime`'s load average at launch time. A wchan sample
+   taken *during* a real stall is the one piece of evidence this
+   investigation still lacks; a hit-rate number turns "sometimes stalls"
+   into something a bisect (срез 42's still-untried fallback — SPLIT-DL19,
+   SPLIT-LB0, BUG-481 as candidates between срез 39's date and now) can
+   actually be scored against, since a bisect run that "passes" once no
+   longer means the candidate commit is clean.
 
 ## Как проверить фикс
 
