@@ -721,9 +721,15 @@ crates/engine/layout/src/lib.rs`, затем `--inner 1547 19252` на теле
 | LB-10 | голова `mod tests`: общие fixtures/builder-хелперы (1547) … до конца секции «Interactive pseudo-classes: :hover/:focus/:active»: line wrapping tests, расширенные селекторы | 833 | Снимает обёртку `mod tests` целиком (приём DL-6) → `tests/fixtures_and_core_selectors.rs`; девять уже вынесенных сиблингов переключаются с `super::tests::*` на прямой путь |
 
 Целевой каталог для всех десяти — `crates/engine/layout/src/tests/`, декларация
-в `lib.rs`: `#[cfg(test)] #[path = "tests/<name>.rs"] mod <name>;` (тот же
-`#[path]`-приём, что DL применил для `display_list/tests/*.rs`, адаптированный
-под то, что у корня крейта нет собственного подкаталога вида `<module>/`).
+**внутри** `mod tests { ... }` (обёртка снимается только в LB-10):
+`#[cfg(test)] #[path = "<name>.rs"] mod <name>;` — **БЕЗ префикса `tests/`**
+в пути. Найдено на LB-1: `mod tests` — inline-модуль без своего файла, поэтому
+его неявная директория для дочерних модулей уже `src/tests/`; добавление
+префикса `tests/` в `#[path]` даёт `src/tests/tests/<name>.rs` и rustc падает
+с «couldn't read … os error 3». Тот же приём, что DL применил для
+`display_list/tests/*.rs`, но там `mod display_list` был файловым модулем
+(`display_list.rs`), поэтому префикс был нужен — здесь его нет ровно потому,
+что мы ещё внутри inline `mod tests`, а не на уровне `lib.rs`.
 Продакшен-хвост (163…1546) остаётся в `lib.rs` как есть — он уже под
 потолком, отдельный батч под него заводить не нужно.
 
