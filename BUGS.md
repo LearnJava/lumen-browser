@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-956)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-958)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -400,6 +400,8 @@
 | [BUG-953](bugs/BUG-953-OPEN.md) | OPEN (ДОРАБОТКА → `GAP-POLICYREPORT`, [ROADMAP.md](ROADMAP.md)) | js (`crates/js/src/reporting_api.rs`) | `ReportingObserver` реализован, но ни один Rust- или шим-файл не генерирует `document-policy-violation`/`permissions-policy-violation` отчёт — сверки фичи с политикой нет вовсе, ни для одной фичи. Найден P2 2026-09-01 (WPT-RUN-6 срез 32, `document-policy/reporting/sync-xhr-report-only.html`) |
 | [BUG-954](bugs/BUG-954-OPEN.md) | OPEN | dom (`crates/engine/dom/src/lib.rs` — `Document::append_child`/`insert_before`/`insert_after`), js (`crates/js/src/v8_runtime/install/dom_core.rs`) | `appendChild`/`insertBefore` не бросают `HierarchyRequestError` на вставке узла в собственного потомка (DOM §4.2.3) — единственная защита это `debug_assert!`, компилируемый в пустоту в `dev-release`/`release` (нет `debug-assertions` override). Вставка тихо создаёт настоящий цикл в дереве и вешает движок целиком, без паники и без строки в логе. Найден P2 2026-09-02 (WPT-RUN-6 срез 33, `select-add.html`) |
 | [BUG-955](bugs/BUG-955-OPEN.md) | OPEN | js (`crates/js/src/video_bindings.rs::startFetch`, `crates/js/src/audio_element.rs::startLoad`) | `<video src="">` бросает `error`, но не `loadstart` (ранний `return` перед `queueEvent('loadstart')`); `<audio src="">` не бросает вообще ничего (`if (!HAS_PROVIDER \|\| !url) return;` берёт `url` как булево). Второй экземпляр того же дефекта в другом шиме. Найден P2 2026-09-02 (WPT-RUN-6 срез 33, `currentSrc.html`) |
+| [BUG-956](bugs/BUG-956-OPEN.md) | OPEN | js (`crates/js/src/v8_runtime/install/dom_core.rs` — `_lumen_exec_command`, ветка `"insertText"`) | `execCommand('insertText', …)` тихо ничего не делает вне contenteditable-выделения — `.focus()` на `<input>`/`<textarea>`/`<div contenteditable>` не создаёт `doc.get_selection().anchor`, ветка `insertText` пропускается целиком, но всё равно возвращает `true`. Найден P2 2026-09-02 (WPT-RUN-6 срез 34, `uievents/textInput/api.html`) |
+| [BUG-957](bugs/BUG-957-OPEN.md) | OPEN | js (`crates/js/src/frame_bridge.rs::winFacade`) | `iframe.contentWindow`/`window.parent`/`.top`/`.frameElement` — фасад окна фрейма (`winFacade`) собран как голый `{}` без `addEventListener`/`removeEventListener`/`dispatchEvent`; любой вызов бросает `TypeError`. Не объясняет TIMEOUT id, на котором найден (`testharness.js`'s `Test.prototype.step` ловит исключение и ставит `FAIL`, не TIMEOUT) — заведён как самостоятельный дефект. Найден P2 2026-09-02 (WPT-RUN-6 срез 34, `frameset-element-synthetic-errorevent.html`) |
 
 ---
 
