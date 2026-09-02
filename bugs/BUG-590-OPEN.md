@@ -33,3 +33,21 @@ doesn't route to it at all.
 Both gaps are local to this one test file's 4 failing subtests; the rest of
 the file (checking that returning a string from the handler does or doesn't
 cancel the navigation) wasn't reached because the handler never fired.
+
+**WPT-RUN-6 срез 38 (2026-09-02):** classifies one more TIMEOUT id,
+`uievents/legacy-domevents-tests/approved/dispatchEvent.click.checkbox.html`.
+That test's `TestEvent` handler calls `document.createEvent("MouseEvent")`
+*inside* a `test()` callback (so `testharness.js` catches the `TypeError`
+and fails only that subtest) but then calls `TARGET.dispatchEvent(e)`
+*outside* the callback, in the raw `TestEvent` function body — a
+native-event listener invoked by `BUTTON.click()`. Measured live
+(`--mcp-live-port` + `tests/wpt/serve_wpt_like.py`, reduced to a
+`document.createEvent` call inside a native `click` listener): the
+`TypeError` prints nowhere (no `script error:`, no `[JS error]`) and script
+execution resumes on the next top-level statement — the same swallow
+[BUG-871](bugs/BUG-871-OPEN.md) already describes for `message` listeners,
+here for a native click dispatch instead. `TARGET.dispatchEvent(e)` with `e`
+left `undefined` never runs, `TARGET` never gets its `click`, and the
+harness never reaches `done()`. `legacy-create-event-missing` marker added
+to `tests/wpt/timeout_audit.py::SOURCE_MARKERS`; script —
+`tests/wpt/verify_slice38_gaps.py`.

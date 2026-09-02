@@ -2385,6 +2385,31 @@ SOURCE_MARKERS = [
             "/css/css-writing-modes/forms/select-size-scrolling-and-sizing.optional.html",
         ),
     ),
+    # WPT-RUN-6 slice 38. `document.createEvent` is missing entirely (already
+    # BUG-590, filed 2026-08-04) — the throw is not inside a `test()`/
+    # `promise_test()` body, so `testharness.js` cannot catch it: the legacy
+    # idiom is `var e = document.createEvent(...); e.initFooEvent(...);
+    # target.dispatchEvent(e)` written as *plain* script between two `test()`
+    # calls, so the `TypeError` aborts the enclosing native-event listener
+    # callback outright and the `dispatchEvent(e)` line after it never runs.
+    # Measured live (`--mcp-live-port` + `serve_wpt_like.py`,
+    # `dispatchEvent.click.checkbox.html`'s exact shape reduced to a
+    # `document.createEvent` call inside an `addEventListener("click", …)`
+    # callback fired by native `.click()`): the `TypeError` prints nowhere —
+    # no `script error:`, no `[JS error]` — and script execution resumes
+    # normally on the *next* top-level statement, exactly like the
+    # `message`-listener half of this shape (BUG-871) but for a native click
+    # dispatch instead of `message`. `explicit_done` never reached, no bug
+    # filed for the swallow itself (BUG-871 already names the general shape;
+    # this id's own explanation is the missing API, BUG-590).
+    Mechanism(
+        "legacy-create-event-missing", "BUG-590",
+        [r"document\.createEvent\s*\(", r"\.init[A-Za-z]+Event\s*\("],
+        "`document.createEvent`/`init*Event` are missing entirely — the "
+        "`TypeError` fires inside a native-event listener callback, where it "
+        "is silently swallowed (BUG-871's shape) and the rest of the "
+        "dispatch chain the test relies on never runs",
+    ),
 ]
 
 #: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched
@@ -2431,6 +2456,22 @@ WORKER_SOURCE_MARKERS = [
         [r"\bset(?:Timeout|Interval)\s*\("],
         "the worker arms a timer, but worker timers are flushed only when a "
         "message is dispatched to that worker and `setInterval` never repeats",
+    ),
+    Mechanism(
+        # `DedicatedWorkerGlobalScope` never gets `requestAnimationFrame`/
+        # `cancelAnimationFrame` at all (`grep requestAnimationFrame
+        # crates/js/src/worker.rs` — 0 matches; the page-side implementation,
+        # `web_api_shim_mid_b.js`, is never installed in a worker). The call
+        # throws synchronously inside `self.onmessage`, the throw is invisible
+        # (same shape as `worker-navigator-missing`/BUG-776 above), and the
+        # page's `worker.onmessage` never fires. Measured live (WPT-RUN-6
+        # slice 37, `--mcp-live-port` + `serve_wpt_like.py`): the harness
+        # completes instantly for a control page and never for this one.
+        "worker-raf-missing", "BUG-959",
+        [r"\brequestAnimationFrame\s*\("],
+        "the worker calls `requestAnimationFrame`, which "
+        "`DedicatedWorkerGlobalScope` never defines — it throws before the "
+        "reply `postMessage` and the page waits forever",
     ),
 ]
 
