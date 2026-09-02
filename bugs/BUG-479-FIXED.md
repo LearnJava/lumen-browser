@@ -119,7 +119,7 @@ resolution via the rAF fallback (element and window), `block: 'end'`
 alignment landing at the expected absolute scroll_y, and the `TypeError` on
 an invalid `block` enum member.
 
-**Residual, filed separately as [BUG-961](bugs/BUG-961-OPEN.md):**
+**Residual, filed separately as [BUG-962](bugs/BUG-962-OPEN.md):**
 `scroll-margin-*` is not folded into `scrollIntoView`'s alignment target —
 there is no JS-facing accessor for an element's resolved scroll-margin at
 all today, so `scrollIntoView-scrollMargin.html` still fails. Also
