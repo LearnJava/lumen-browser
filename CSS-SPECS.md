@@ -33,7 +33,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Cascading L3 | [css3-cascade](https://www.w3.org/TR/css3-cascade/) | ✅ | specificity, inheritance, !important |
 | CSS Color L3 | [css3-color](https://www.w3.org/TR/css3-color/) | ✅ | named/hex/rgb/rgba/hsl/hsla; currentColor |
 | CSS Box Model L3 | [css3-box](https://www.w3.org/TR/css3-box/) | ✅ | all margin/padding/box-sizing |
-| CSS Backgrounds & Borders L3 | [css3-background](https://www.w3.org/TR/css3-background/) | ✅ | borders/radius/box-shadow/bg-color/image/size/pos/repeat |
+| CSS Backgrounds & Borders L3 | [css3-background](https://www.w3.org/TR/css3-background/) | 🟡 | borders/radius/box-shadow/bg-color/image/size/pos/repeat; `border-image` (source/slice/width/outset/repeat + shorthand) entirely missing — no parsing, no 9-slice paint algorithm (BUG-492, ревизия P3 2026-09-03) |
 | CSS Fonts L3 | [css3-fonts](https://www.w3.org/TR/css3-fonts/) | ✅ | font-size/weight/style/family/variant; @font-face parsing |
 | CSS Flexible Box L1 | [css3-flexbox](https://www.w3.org/TR/css3-flexbox/) | ✅ | all flex properties; align-*/justify-content |
 | CSS Transforms L1 | [css-transforms-1](https://www.w3.org/TR/css-transforms-1/) | ✅ | translate/rotate/scale/skew/matrix; transform-origin |
