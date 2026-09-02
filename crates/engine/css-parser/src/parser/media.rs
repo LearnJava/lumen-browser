@@ -23,6 +23,11 @@ pub struct MediaQuery {
     /// Comma-separated OR-список. При пустом `clauses` query всегда
     /// матчит (`@media all`).
     pub clauses: Vec<MediaQueryClause>,
+    /// Исходный текст между `@media`/`@import`-URL и `{`/`;`, до trim.
+    /// Заполняется [`parse_media_query`]. Источник `CSSMediaRule.media.
+    /// mediaText`/`conditionText` (CSSOM View §6.2) — сериализация из
+    /// структурного `clauses` не нужна, раз есть точный исходный текст.
+    pub raw: String,
 }
 
 /// Одна clause в media query — AND-список feature/media-type условий
@@ -370,7 +375,7 @@ pub fn parse_media_query(s: &str) -> MediaQuery {
         return MediaQuery::default();
     }
     let clauses = s.split(',').map(parse_media_clause).collect();
-    MediaQuery { clauses }
+    MediaQuery { clauses, raw: s.to_string() }
 }
 
 pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {

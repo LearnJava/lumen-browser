@@ -179,6 +179,20 @@ use super::*;
         assert!(s.contains("[type") && s.contains("text"), "got: {s}");
     }
 
+    #[test]
+    fn to_css_str_attribute_closes_bracket() {
+        // CSSOM `selectorText` (§6.5.2) round-trips through this — a value
+        // selector missing its trailing `]` produced invalid CSS text.
+        let sel = parse_selector_list("[type=\"text\"]");
+        assert_eq!(sel[0].to_css_str(), "[type=\"text\"]");
+    }
+
+    #[test]
+    fn to_css_str_has_serializes_relative_selector_list() {
+        let sel = parse_selector_list(":has(img, > p)");
+        assert_eq!(sel[0].to_css_str(), ":has(img, > p)");
+    }
+
     // ── existing test helpers ──────────────────────────────────────────────────
 
     /// Удобный конструктор для тестов: ComplexSelector из одной compound с

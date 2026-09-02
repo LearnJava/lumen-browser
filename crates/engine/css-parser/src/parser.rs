@@ -53,6 +53,24 @@ pub struct Rule {
     pub declarations: Vec<Declaration>,
 }
 
+impl Rule {
+    /// `CSSStyleRule.selectorText` (CSSOM §6.5.2) — the rule's selector list
+    /// serialised back to CSS text. Re-serialises from the structured
+    /// [`ComplexSelector`] list rather than preserving original source
+    /// whitespace, same as every browser's CSSOM (CSSOM §6.5.2 defines
+    /// `selectorText`'s getter as a serialization, not a source-text echo).
+    pub fn selector_text(&self) -> String {
+        sels_to_css_str(&self.selectors)
+    }
+
+    /// `CSSStyleRule.style.cssText` (CSSOM §6.7.2) for this rule's own
+    /// declaration block — `"prop: value; prop2: value2 !important;"`, one
+    /// space after the colon, one trailing space before `!important`.
+    pub fn style_css_text(&self) -> String {
+        self.declarations.iter().map(Declaration::to_css_text).collect::<Vec<_>>().join(" ")
+    }
+}
+
 /// Process-unique identity of one `Stylesheet`'s **content**.
 ///
 /// Exists so that a consumer caching something derived from a sheet (the
@@ -174,6 +192,34 @@ pub struct Stylesheet {
     /// layout (`expand_custom_functions`, style.rs). Conditional group rules
     /// inside the body (`@media`, `@container`) are not yet supported.
     pub function_rules: Vec<FunctionRule>,
+    /// Source order of top-level plain style rules and `@media` blocks, as
+    /// tags only (`Style`/`Media`) — the Nth `Style` tag refers to `rules[N]`
+    /// among style tags seen so far, same for `Media`/`media_rules`. Exists
+    /// because `rules` and `media_rules` are separate `Vec`s with no shared
+    /// index space, so nothing else records which came first in the source
+    /// (`p { } @media { } div { }` would otherwise be indistinguishable from
+    /// `@media { } p { } div { }` once parsing is done). Feeds
+    /// [`Stylesheet::cssom_rules`] — `document.styleSheets[i].cssRules`
+    /// (CSSOM §6.5) needs original order, other consumers (the cascade) do
+    /// not care and keep reading `rules`/`media_rules` directly. Only these
+    /// two kinds are tracked for now — CSSOM-1's `cssRules` does not yet
+    /// expose `@import`/`@font-face`/`@supports`/etc. as `CSSRule` objects.
+    pub top_level_order: Vec<TopLevelRuleKind>,
+}
+
+/// Tag for [`Stylesheet::top_level_order`] — see that field's doc comment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopLevelRuleKind {
+    Style,
+    Media,
+}
+
+/// One top-level rule as `document.styleSheets[i].cssRules` sees it — see
+/// [`Stylesheet::cssom_rules`].
+#[derive(Debug, Clone, Copy)]
+pub enum CssomRuleRef<'a> {
+    Style(&'a Rule),
+    Media(&'a MediaRule),
 }
 
 impl Default for Stylesheet {
@@ -202,6 +248,7 @@ impl Default for Stylesheet {
             font_palette_values: Vec::new(),
             color_profiles: Vec::new(),
             function_rules: Vec::new(),
+            top_level_order: Vec::new(),
         }
     }
 }
@@ -234,6 +281,7 @@ impl Clone for Stylesheet {
             font_palette_values: self.font_palette_values.clone(),
             color_profiles: self.color_profiles.clone(),
             function_rules: self.function_rules.clone(),
+            top_level_order: self.top_level_order.clone(),
         }
     }
 }
@@ -259,6 +307,7 @@ impl PartialEq for Stylesheet {
             && self.font_palette_values == other.font_palette_values
             && self.color_profiles == other.color_profiles
             && self.function_rules == other.function_rules
+            && self.top_level_order == other.top_level_order
     }
 }
 
@@ -306,6 +355,7 @@ impl Stylesheet {
             font_palette_values,
             color_profiles,
             function_rules,
+            top_level_order,
         } = other;
         self.rules.extend(rules);
         self.properties.extend(properties);
@@ -324,7 +374,45 @@ impl Stylesheet {
         self.font_palette_values.extend(font_palette_values);
         self.color_profiles.extend(color_profiles);
         self.function_rules.extend(function_rules);
+        // Plain concatenation is correct here (no index rebasing needed):
+        // `top_level_order` only ever stores tags, not indices, and
+        // `rules`/`media_rules` are extended in this same call — the two
+        // vecs grow together, so a reader counting tags of each kind from
+        // the start of the (now-longer) list still lands on the right
+        // `rules[N]`/`media_rules[N]` after the merge. See the field's doc.
+        self.top_level_order.extend(top_level_order);
         self.mark_mutated();
+    }
+
+    /// `document.styleSheets[i].cssRules` (CSSOM §6.5) in original source
+    /// order — interleaves [`Self::rules`] and [`Self::media_rules`] using
+    /// [`Self::top_level_order`]. Silently drops a tag whose backing vec ran
+    /// short instead of panicking; that can only happen if some caller wrote
+    /// to `top_level_order`/`rules`/`media_rules` directly instead of through
+    /// [`Self::merge_from`], which the workspace-mutation gate
+    /// (`every_stylesheet_mutation_in_the_workspace_announces_itself`)
+    /// already forbids outside this file.
+    pub fn cssom_rules(&self) -> Vec<CssomRuleRef<'_>> {
+        let mut out = Vec::with_capacity(self.top_level_order.len());
+        let mut style_idx = 0usize;
+        let mut media_idx = 0usize;
+        for kind in &self.top_level_order {
+            match kind {
+                TopLevelRuleKind::Style => {
+                    if let Some(r) = self.rules.get(style_idx) {
+                        out.push(CssomRuleRef::Style(r));
+                    }
+                    style_idx += 1;
+                }
+                TopLevelRuleKind::Media => {
+                    if let Some(r) = self.media_rules.get(media_idx) {
+                        out.push(CssomRuleRef::Media(r));
+                    }
+                    media_idx += 1;
+                }
+            }
+        }
+        out
     }
 }
 
@@ -422,6 +510,7 @@ impl<'a> Parser<'a> {
         let mut container_rules: Vec<ContainerRule> = Vec::new();
         let mut color_profiles: Vec<ColorProfileRule> = Vec::new();
         let mut function_rules: Vec<FunctionRule> = Vec::new();
+        let mut top_level_order: Vec<TopLevelRuleKind> = Vec::new();
         let mut anon_counter: usize = 0;
         loop {
             self.skip_ws_and_comments();
@@ -436,7 +525,10 @@ impl<'a> Parser<'a> {
                     for outcome in outcomes {
                         match outcome {
                             AtRuleOutcome::Property(p) => properties.push(p),
-                            AtRuleOutcome::Media(m) => media_rules.push(m),
+                            AtRuleOutcome::Media(m) => {
+                                media_rules.push(m);
+                                top_level_order.push(TopLevelRuleKind::Media);
+                            }
                             AtRuleOutcome::Import(i) => imports.push(i),
                             AtRuleOutcome::FontFace(f) => font_faces.push(f),
                             AtRuleOutcome::FontPaletteValues(fp) => {
@@ -481,11 +573,22 @@ impl<'a> Parser<'a> {
                     let before = self.pos;
                     if let Some((rule, nested, nested_at)) = self.parse_rule() {
                         rules.push(rule);
-                        rules.extend(nested); // CSS Nesting L1: flat-expanded nested rules
+                        top_level_order.push(TopLevelRuleKind::Style);
+                        // CSS Nesting L1: flat-expanded nested rules, each its own
+                        // top-level `cssRules` entry right after the parent (best
+                        // approximation available — this engine does not keep a
+                        // nested rule as a child of its parent's own `cssRules`).
+                        for r in nested {
+                            rules.push(r);
+                            top_level_order.push(TopLevelRuleKind::Style);
+                        }
                         // CSS Nesting L1 §5: nested at-rules bubble up into the stylesheet.
                         for at in nested_at {
                             match at {
-                                AtRuleOutcome::Media(m) => media_rules.push(m),
+                                AtRuleOutcome::Media(m) => {
+                                    media_rules.push(m);
+                                    top_level_order.push(TopLevelRuleKind::Media);
+                                }
                                 AtRuleOutcome::Supports(s) => supports_rules.push(s),
                                 AtRuleOutcome::LayerNames(names) => {
                                     for n in names {
@@ -536,6 +639,7 @@ impl<'a> Parser<'a> {
             container_rules,
             color_profiles,
             function_rules,
+            top_level_order,
         }
     }
 
