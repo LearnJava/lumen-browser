@@ -1,6 +1,6 @@
 # BUG-489: `getComputedStyle()` returns nothing for a `display: contents` element itself
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-02
 **Дата:** 2026-08-02
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs::flatten_contents`,
 `crates/engine/layout/src/lib.rs::collect_computed_styles`/
@@ -65,3 +65,45 @@ element's own resolved style).
 Committed `.ini` under `tests/wpt/metadata/css/css-display/` for the
 attributed subtests in `display-contents-computed-style.html`,
 `display-contents-parsing-001.html`, `display-contents-focusable-001.html`.
+
+## Fix (2026-09-02)
+
+Unlike [BUG-488](BUG-488-FIXED.md) (a plain inline element — the nearest
+nested segment's style is a usable approximation), a `display: contents`
+element has neither a surviving box nor a descendant whose style would
+match: it can own non-inherited properties directly (`width`,
+`margin-left`, …) and wrap block-level children, so approximation from a
+child is not applicable — the real cascade result is needed.
+
+That result is already cached: `precompute_counters` builds a
+`CounterMap` entry for every element regardless of `display`. The fix
+threads that map to the collector instead of recomputing anything:
+`layout_measured_with_counters`/`layout_measured_hyp_with_counters` hand
+the fresh `CounterMap` back to the caller alongside the `LayoutBox`, and
+`collect_computed_styles` takes a new `counters: Option<&CounterMap>`
+parameter — when `Some`, every element whose counter-cached style has
+`display: contents` and no existing map entry gets one built from that
+cached style. Call sites that reuse an already-built `LayoutBox` without a
+matching fresh `CounterMap` (`relayout_scoped`'s incremental path,
+hibernation, `page_load.rs`/`page_pipeline.rs`/`relayout.rs`) pass `None`
+and keep today's behaviour for this one element shape — no regression,
+same scope as before.
+
+Separately: CSS Display L3 §2.7 blockifies the root element — its own box
+can never be eliminated (nothing above it to splice children into), so
+`display: contents` on the document element now computes to `block` in
+`cascade.rs` (after the declaration loop, so it sees the final `display`),
+matching what already happened implicitly at the box-tree level (the root
+element's `BoxKind::Contents` was never processed by `flatten_contents`,
+which only runs over a parent's children list).
+
+New end-to-end test `crates/driver/tests/cases/bug489_display_contents_computed_style.rs`
+reproduces the exact repro shape from the vendored
+`css/css-display/display-contents-computed-style.html`. New unit tests
+`snapshot_collectors_cover_display_contents_elements` and
+`root_element_display_contents_is_blockified` in `lumen-layout::lib.rs`.
+
+Gates: `cargo test -p lumen-layout` 3660/3660, `cargo test -p lumen-driver`
+282/282 (whole crate), `cargo test -p lumen-shell` 1717/1717, `cargo clippy
+-p lumen-layout -p lumen-driver -p lumen-shell --all-targets -- -D
+warnings` clean.
