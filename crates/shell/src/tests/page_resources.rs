@@ -521,6 +521,68 @@ fn collect_link_hrefs_ignores_non_stylesheet() {
     assert!(hrefs.is_empty());
 }
 
+/// CSSOM-1 срез 2: `<style>` и `<link rel=stylesheet>` перемешаны — реестр
+/// обязан выйти в порядке документа, а не сгруппированным по тегу (как дал
+/// бы раздельный обход `walk_style_blocks` + `collect_link_hrefs`), и
+/// каждый элемент — со своим независимо распарсенным листом, не куском
+/// смерженного каскада.
+#[test]
+fn stylesheet_node_registry_preserves_document_order_across_tags() {
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+    let dir = std::env::temp_dir().join("lumen_cssom1_slice2_registry_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("mid.css"), "b { color: blue; }").unwrap();
+
+    let doc = lumen_html_parser::parse(
+        r#"<html><head>
+                <style>a { color: red; }</style>
+                <link rel="stylesheet" href="mid.css">
+                <style>c { color: green; }</style>
+            </head><body></body></html>"#,
+    );
+    let base = ResourceBase::File(dir.join("page.html"));
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+
+    let entries = build_stylesheet_node_registry(&doc, &base, &sink, None);
+
+    assert_eq!(entries.len(), 3, "one entry per <style>/<link>, in document order");
+    assert_eq!(entries[0].sheet.rules.len(), 1);
+    assert_eq!(entries[0].sheet.rules[0].selector_text(), "a");
+    assert_eq!(entries[1].sheet.rules[0].selector_text(), "b");
+    assert_eq!(entries[2].sheet.rules[0].selector_text(), "c");
+    // Три разных узла — иначе срез 3 не сможет ответить на `element.sheet`.
+    assert_ne!(entries[0].node, entries[1].node);
+    assert_ne!(entries[1].node, entries[2].node);
+    assert!(entries.iter().all(|e| !e.disabled));
+}
+
+/// Лист, чей `<link>` не загрузился, не попадает в реестр вовсе — окружающие
+/// `<style>` при этом не теряются (не одна цепочка, независимые элементы).
+#[test]
+fn stylesheet_node_registry_drops_unfetchable_link() {
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+    let doc = lumen_html_parser::parse(
+        r#"<html><head>
+                <style>a { color: red; }</style>
+                <link rel="stylesheet" href="cssom1-slice2-no-such-file.css">
+            </head><body></body></html>"#,
+    );
+    let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+
+    let entries = build_stylesheet_node_registry(&doc, &base, &sink, None);
+
+    assert_eq!(entries.len(), 1, "the missing link contributes no entry");
+    assert_eq!(entries[0].sheet.rules[0].selector_text(), "a");
+}
+
 #[test]
 fn extract_title_basic() {
     let doc = lumen_html_parser::parse(

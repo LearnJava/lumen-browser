@@ -63,20 +63,53 @@
 
 ---
 
-## Срез 2 (следующий) — реестр «узел → Stylesheet» на Document
+## Срез 2 (сделан, 2026-09-03) — реестр «узел → Stylesheet»
 
-Цель: `Document` получает поле вида
-`stylesheet_nodes: Vec<(NodeId, Arc<Stylesheet>, DisabledFlag)>`
-(порядок = порядок появления узлов в дереве), заполняемое в
-`crates/shell/src/stylesheets.rs`/`page_pipeline.rs` рядом с существующим
-`load_linked_stylesheets`/`build_page_cascade` — те продолжают строить единый
-cascade-sheet, это отдельный (более дешёвый) параллельный парсинг per-node.
-Здесь же обновляется `stylesheet_link_fingerprint`/`inline_style_fingerprint`
-routing уже существует (BUG-443) — новый путь не должен его дублировать.
+Цель была: `Document` получает поле вида
+`stylesheet_nodes: Vec<(NodeId, Arc<Stylesheet>, DisabledFlag)>`. **Место
+хранения пересмотрено при реализации**: не `Document` (`lumen-dom`) — это
+потребовало бы нового `lumen-dom → lumen-css-parser` зависимого ребра, а
+CLAUDE.md/REVIEW.md держат `dom`/`css-parser` сиблингами одного яруса
+(`lumen-core → dom/font/parsers → layout → paint → shell`), и прецедент уже
+есть: `Document::fonts` — свой DOM-нативный `FontFace`, не
+`lumen_css_parser::FontFaceRule`. Вместо этого реестр — параллельное поле
+`LayoutSource`/`ParsedPage`/`PageCascade` в `crates/shell`, ровно там же, где
+уже живёт единый `stylesheet: Arc<Stylesheet>`; `crates/js` и так зависит от
+обоих (`lumen-dom` и `lumen-css-parser`), так что срезу 3 это ничего не
+стоит — он читает `LayoutSource::stylesheet_nodes` тем же путём, каким
+`computed_styles`/`custom_properties` уже идут из shell в `V8JsRuntime`
+(`update_computed_styles`-подобный метод, срез 3).
 
-Из скоупа среза 2: `disabled`, `media`/`@import` conditional-активность на
-уровне отдельного `<link>` (эти поля заводятся, но логика включения/отключения
-— срез 4/CSSOM-3).
+Сделано:
+- `StylesheetNodeEntry { node, sheet: Arc<Stylesheet>, disabled: bool }` +
+  `build_stylesheet_node_registry()` (`crates/shell/src/stylesheets.rs`):
+  один комбинированный обход дерева (не два раздельных, как
+  `walk_style_blocks`/`collect_link_hrefs`) — иначе `<style>` и `<link>`
+  вышли бы сгруппированными по тегу, а не в истинном порядке документа.
+  `<link>`-тело читается через тот же `fetch_stylesheet_text`/
+  `PREFETCH_CACHE`, что уже прогрет `load_linked_stylesheets` — без второго
+  сетевого запроса, только лишний парс CSS на элемент.
+- Вызывается внутри `build_page_cascade`, поэтому пересобирается вместе с
+  каскадом (до скриптов и повторно после — если скрипты тронули
+  `<style>`/`<link>`, тот же гейт BUG-443/`stylesheet_link_fingerprint`/
+  `inline_style_fingerprint`, который уже есть, ничего дублировать не
+  пришлось).
+- Прокинуто через `PageCascade` → `ParsedPage` → `LayoutSource`
+  (`Arc<Vec<StylesheetNodeEntry>>`, тот же cheap-clone паттерн, что у
+  `stylesheet`). Пути восстановления (`bfcache.rs` × 2, `docking.rs`,
+  `hibernation.rs`) получают пустой реестр — они и `dynamic_css: None` по
+  той же причине: исходные `<style>`/`<link>` там не сохраняются.
+- Медиа-гейт (`link_media_matches`) сюда не подключён: принадлежность листа
+  `document.styleSheets` не зависит от текущего совпадения `media` (CSSOM);
+  это осталось только в `collect_link_hrefs` для каскада.
+- Тесты: `crates/shell/src/tests/page_resources.rs`
+  (`stylesheet_node_registry_preserves_document_order_across_tags`,
+  `stylesheet_node_registry_drops_unfetchable_link`).
+
+Из скоупа среза 2 (как и было): `disabled` всегда `false`, `media`/`@import`
+conditional-активность отдельного `<link>` — логика включения/отключения
+остаётся срезу 4/CSSOM-3. Поля реестра сейчас нигде не читаются
+(`#[allow(dead_code)]`) — потребитель появится в срезе 3.
 
 ## Срез 3 — JS-биндинги, только для чтения
 

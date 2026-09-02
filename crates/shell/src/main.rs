@@ -210,8 +210,8 @@ use crate::window_metrics::{FullscreenPoll, content_layout_viewport, decide_full
 use crate::page_state::{PARKED_PAGES_MAX, PageSnapshot, ParkedPage};
 use crate::subresources::{decode_image, fetch_and_decode_images, fetch_image_bytes};
 use crate::stylesheets::{
-    inline_css_imports, link_media_matches, load_linked_stylesheets, print_media_context,
-    screen_media_context,
+    StylesheetNodeEntry, build_stylesheet_node_registry, inline_css_imports, link_media_matches,
+    load_linked_stylesheets, print_media_context, screen_media_context,
 };
 #[cfg(test)]
 use crate::stylesheets::{collect_link_hrefs, contains_ignore_ascii_case};
