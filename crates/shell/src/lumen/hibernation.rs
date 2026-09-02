@@ -187,6 +187,8 @@ impl Lumen {
         let layout_source = LayoutSource {
             document: Arc::clone(&document_arc),
             stylesheet: Arc::new(stylesheet),
+            // CSSOM-1 срез 2: как dynamic_css ниже — не переживает hibernate/restore.
+            stylesheet_nodes: Arc::new(Vec::new()),
             html_source: None,
             // Tab hibernation (T3→T0) restore — original Cache-Control is not
             // preserved across the hibernate/restore round-trip; treat as

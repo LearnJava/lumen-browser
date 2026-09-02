@@ -52,6 +52,7 @@ pub(crate) fn render_bytes(
     let layout_source = LayoutSource {
         document: Arc::clone(&parsed.document),
         stylesheet: Arc::new(parsed.stylesheet),
+        stylesheet_nodes: Arc::new(parsed.stylesheet_nodes),
         html_source: Some(parsed.html_source),
         cache_control_no_store,
         dynamic_css: Some(parsed.dynamic_css),
@@ -237,6 +238,8 @@ pub(crate) struct ParsedPage {
     /// mutate the document without rebuilding the entire page.
     pub(crate) document: Arc<Mutex<Document>>,
     pub(crate) stylesheet: lumen_css_parser::Stylesheet,
+    /// CSSOM-1 срез 2: см. [`PageCascade::stylesheet_nodes`].
+    pub(crate) stylesheet_nodes: Vec<StylesheetNodeEntry>,
     pub(crate) layout: LayoutBox,
     pub(crate) title: Option<String>,
     pub(crate) rule_count: usize,
@@ -291,6 +294,11 @@ pub(crate) struct LayoutSource {
     /// cloning the whole `Stylesheet` on every submit. Replaced wholesale on
     /// reload/thaw, never mutated in place.
     pub(crate) stylesheet: Arc<lumen_css_parser::Stylesheet>,
+    /// CSSOM-1 срез 2: см. [`PageCascade::stylesheet_nodes`]. Ещё не читается
+    /// нигде — срез 3 подключит JS-байндинги `document.styleSheets` поверх
+    /// него.
+    #[allow(dead_code)]
+    pub(crate) stylesheet_nodes: Arc<Vec<StylesheetNodeEntry>>,
     /// Decoded HTML source captured after encoding detection. Used by bfcache
     /// to restore the page without a network round-trip.
     #[allow(dead_code)]
@@ -324,6 +332,10 @@ pub(crate) struct PageCascade {
     pub(crate) link_outcomes: Vec<(NodeId, bool)>,
     /// Parsed cascade.
     pub(crate) sheet: lumen_css_parser::Stylesheet,
+    /// CSSOM-1 срез 2: один [`StylesheetNodeEntry`] на `<style>`/`<link
+    /// rel=stylesheet>`, в порядке документа — параллельно [`Self::sheet`],
+    /// не участвует в каскаде/layout.
+    pub(crate) stylesheet_nodes: Vec<StylesheetNodeEntry>,
     /// `@font-face local()` faces plus the system font index.
     pub(crate) font_registry: lumen_font::FontRegistry,
     /// `@font-face url()` sources not fetched yet (loaded in the background).
@@ -393,6 +405,14 @@ fn build_page_cascade(
         lumen_css_parser::parse(&css)
     };
 
+    // CSSOM-1 срез 2: параллельный per-элементный реестр — не участвует в
+    // каскаде выше, читает те же `<link>`-байты из уже прогретого
+    // PREFETCH_CACHE (см. doc-комментарий build_stylesheet_node_registry).
+    let stylesheet_nodes = {
+        let _s = lumen_core::trace::span("cssom-node-sheets", "parse");
+        build_stylesheet_node_registry(doc, base, sink, cookie_jar.clone())
+    };
+
     // PH3-19: @font-face загрузка разделена на два прохода.
     // local()-источники загружаются синхронно (из системного индекса, быстро).
     // url()-источники — только собираем в pending_web_fonts; фоновый поток
@@ -434,7 +454,9 @@ fn build_page_cascade(
         }
     }
 
-    Ok(PageCascade { dynamic_css, link_outcomes, sheet, font_registry, pending_web_fonts, measurer })
+    Ok(PageCascade {
+        dynamic_css, link_outcomes, sheet, stylesheet_nodes, font_registry, pending_web_fonts, measurer,
+    })
 }
 
 /// What a JS runtime has to be handed before it can answer `getComputedStyle`,
@@ -805,7 +827,7 @@ pub(crate) fn parse_and_layout(
     // right after them if they touched `<style>`/`<link>`), so there is nothing
     // left to fetch or parse here — only to hand out.
     let PageCascade {
-        dynamic_css, link_outcomes, sheet, font_registry, pending_web_fonts, measurer,
+        dynamic_css, link_outcomes, sheet, stylesheet_nodes, font_registry, pending_web_fonts, measurer,
     } = cascade;
 
     // BUG-804: HTML LS §4.6.7 «process the linked resource» — каждый
@@ -908,6 +930,7 @@ pub(crate) fn parse_and_layout(
     Ok(ParsedPage {
         document: doc_arc,
         stylesheet: sheet,
+        stylesheet_nodes,
         layout,
         title,
         rule_count,

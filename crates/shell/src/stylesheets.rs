@@ -255,6 +255,129 @@ pub(crate) fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool
         .any(|w| w.eq_ignore_ascii_case(needle))
 }
 
+/// Один `<style>`/`<link rel=stylesheet>`, отдельно распарсенный — единица,
+/// которую `document.styleSheets`/`element.sheet` (CSSOM-1 срез 3) читают по
+/// одной на элемент, в отличие от единого смерженного [`PageCascade::sheet`].
+/// См. «Архитектурный пробел» в `docs/tasks/p1-cssom-1-stylesheets.md`.
+///
+/// Поля ещё не читаются нигде (срез 2 только строит реестр) — срез 3
+/// подключит JS-байндинги `document.styleSheets` поверх них.
+#[allow(dead_code)]
+pub(crate) struct StylesheetNodeEntry {
+    /// Узел-владелец (`<style>` или `<link>`).
+    pub(crate) node: NodeId,
+    /// Собственный распарсенный лист этого элемента — независим от
+    /// смерженного каскадного листа страницы.
+    pub(crate) sheet: Arc<lumen_css_parser::Stylesheet>,
+    /// `CSSStyleSheet.disabled`. Пока всегда `false` — реальный учёт флага
+    /// отложен на CSSOM-1 срез 4.
+    pub(crate) disabled: bool,
+}
+
+/// Один `<style>`/`<link rel=stylesheet>` в порядке документа, ещё без
+/// разобранного текста — промежуточное значение
+/// [`build_stylesheet_node_registry`].
+enum StylesheetOwner {
+    Style(NodeId),
+    Link(NodeId, String),
+}
+
+/// Строит [`StylesheetNodeEntry`] по одному на `<style>`/`<link
+/// rel=stylesheet>`, в порядке документа — реестр, который срез 3 отдаёт как
+/// `document.styleSheets`.
+///
+/// Парсит текст каждого элемента отдельно от смерженного листа
+/// [`build_page_cascade`]: тело `<link>` берётся из того же
+/// `PREFETCH_CACHE`, что уже прогрет каскадом (`fetch_stylesheet_text`), так
+/// что цена — лишний разбор CSS на элемент, не лишняя сеть. `media` здесь
+/// осознанно не проверяется — принадлежность листа `document.styleSheets` не
+/// зависит от того, матчит ли сейчас его `media` (CSSOM); этот гейт остаётся
+/// только в [`collect_link_hrefs`] для каскада. Лист, чей `<link>` не
+/// загрузился, в реестр не попадает — `element.sheet` для него останется
+/// `null` на стороне JS (срез 3), как и для реального провала загрузки.
+pub(crate) fn build_stylesheet_node_registry(
+    doc: &Document,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+) -> Vec<StylesheetNodeEntry> {
+    let mut owners = Vec::new();
+    collect_stylesheet_owners(doc, doc.root(), &mut owners);
+
+    let mut out = Vec::with_capacity(owners.len());
+    for owner in owners {
+        match owner {
+            StylesheetOwner::Style(id) => {
+                let text = style_element_text(doc, id);
+                out.push(StylesheetNodeEntry {
+                    node: id,
+                    sheet: Arc::new(lumen_css_parser::parse(&text)),
+                    disabled: false,
+                });
+            }
+            StylesheetOwner::Link(id, href) => {
+                if let Some((text, _)) =
+                    fetch_stylesheet_text(&href, base, sink, cookie_jar.clone())
+                {
+                    out.push(StylesheetNodeEntry {
+                        node: id,
+                        sheet: Arc::new(lumen_css_parser::parse(&text)),
+                        disabled: false,
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Рекурсивная половина [`build_stylesheet_node_registry`] — один обход,
+/// а не два (как у `walk_style_blocks`/`collect_link_hrefs`), чтобы `<style>`
+/// и `<link>` вышли в истинном порядке документа, а не сгруппированными по
+/// тегу.
+fn collect_stylesheet_owners(doc: &Document, id: NodeId, out: &mut Vec<StylesheetOwner>) {
+    let node = doc.get(id);
+    if let NodeData::Element { name, attrs } = &node.data {
+        if name.local == "style" {
+            out.push(StylesheetOwner::Style(id));
+            return;
+        }
+        if name.local == "link" {
+            let rel = attrs
+                .iter()
+                .find(|a| a.name.local == "rel")
+                .map(|a| a.value.as_str())
+                .unwrap_or("");
+            let href = attrs
+                .iter()
+                .find(|a| a.name.local == "href")
+                .map(|a| a.value.as_str())
+                .unwrap_or("");
+            if rel.split_ascii_whitespace().any(|r| r.eq_ignore_ascii_case("stylesheet"))
+                && !href.is_empty()
+            {
+                out.push(StylesheetOwner::Link(id, href.to_owned()));
+            }
+            return;
+        }
+    }
+    for &child in &node.children {
+        collect_stylesheet_owners(doc, child, out);
+    }
+}
+
+/// Текст прямых текстовых детей одного `<style>`-узла (без обхода вглубь —
+/// как [`walk_style_blocks`], но для одного узла, а не всех сразу).
+fn style_element_text(doc: &Document, id: NodeId) -> String {
+    let mut out = String::new();
+    for &child in &doc.get(id).children {
+        if let NodeData::Text(s) = &doc.get(child).data {
+            out.push_str(s);
+        }
+    }
+    out
+}
+
 /// Собрать `(узел, href)` каждого `<link rel=stylesheet>`, который попадёт в
 /// каскад.
 ///

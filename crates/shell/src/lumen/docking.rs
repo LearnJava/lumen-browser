@@ -201,6 +201,9 @@ impl Lumen {
         let src = LayoutSource {
             document: doc_arc,
             stylesheet: Arc::new(sheet),
+            // CSSOM-1 срез 2: sidebar-панель не строит per-узловой реестр —
+            // document.styleSheets в ней не нужен.
+            stylesheet_nodes: Arc::new(Vec::new()),
             html_source: None,
             // Sidebar panel, not the main navigable page — not bfcache-tracked.
             cache_control_no_store: false,

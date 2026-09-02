@@ -48,6 +48,10 @@ impl Lumen {
         self.layout_source = Some(LayoutSource {
             document: Arc::clone(&doc_arc),
             stylesheet: Arc::new(stylesheet),
+            // CSSOM-1 срез 2: как и dynamic_css ниже, per-узловой реестр не
+            // хранится в замороженной записи — восстановленная страница
+            // отвечает на document.styleSheets пустым списком.
+            stylesheet_nodes: Arc::new(Vec::new()),
             html_source: None,
             // The page was eligible for a full freeze (bfcache_eligible() was
             // true when it was stored), so it was not no-store at that point.
@@ -204,6 +208,8 @@ impl Lumen {
         self.layout_source = Some(LayoutSource {
             document: Arc::clone(&parked.document),
             stylesheet: parked.stylesheet,
+            // CSSOM-1 срез 2: см. ветку выше — не хранится в parked-записи.
+            stylesheet_nodes: Arc::new(Vec::new()),
             html_source: parked.html_source,
             // Restored pages have no live response headers; treated as cacheable,
             // exactly as `bfcache_thaw` does.
