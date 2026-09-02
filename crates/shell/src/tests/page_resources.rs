@@ -276,8 +276,14 @@ fn frame_subresources_fetch_links_and_imgs_with_outcomes() {
         out.decoded_images[0].0
     );
     assert_eq!(out.decoded_images[0].1.width, 4, "пиксели настоящие, 4x2");
-    assert_eq!(out.image_keys.len(), 2, "в карте и битая картинка");
+    // FRAME-5 срез 2: lazy.png тоже получает ключ (не байты) — иначе его
+    // placeholder-заглушка в display list ребёнка не была бы переписана
+    // `rekey_frame_images`, и уже загруженная позже картинка не нашла бы
+    // адресата.
+    assert_eq!(out.image_keys.len(), 3, "в карте битая и ленивая картинки тоже");
     assert!(out.image_keys.iter().all(|(raw, key)| raw != key), "ключ отличается от src");
+    assert_eq!(out.lazy_requests.len(), 1, "собран, но не загружен — сеть его не видела");
+    assert_eq!(out.lazy_requests[0].url, "lazy.png");
     // Intrinsic-размеры дописаны в дерево ребёнка: без них `<img>` без
     // атрибутов лёг бы нулевым боксом внутри фрейма.
     let img = out.images[0].0;
@@ -290,7 +296,11 @@ fn frame_subresources_fetch_links_and_imgs_with_outcomes() {
 
 /// Настоящий PNG `w`×`h` (непрозрачный) для фикстур: `decode_image` обязан его
 /// разобрать, поэтому строка «bytes» тут больше не годится.
-fn tiny_png(w: u32, h: u32) -> Vec<u8> {
+///
+/// `pub(crate)`, а не module-private: FRAME-5 срез 2 (`scripts_and_frames.rs`)
+/// нужен тот же настоящий PNG для теста ленивой дозагрузки фрейма — заводить
+/// вторую копию ради одного файла было бы просто дублированием.
+pub(crate) fn tiny_png(w: u32, h: u32) -> Vec<u8> {
     let img = lumen_image::Image {
         width: w,
         height: h,

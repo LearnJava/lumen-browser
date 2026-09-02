@@ -536,6 +536,10 @@ impl Lumen {
         // заимствования `layout_source`: там берётся `&self` на всю функцию.
         let frame_state = self.frame_interactive();
         crate::frames::sync_frame_viewports(&mut self.frames, &lb, frame_state);
+        // FRAME-5 срез 2: fetch+register whatever lazy `<img>` just entered a
+        // frame's own proximity margin — a mere relayout has no page-commit
+        // step to piggy-back on, unlike the initial load (`page_pipeline.rs`).
+        self.register_frame_lazy_images();
         let Some(src) = self.layout_source.as_ref() else { return };
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);

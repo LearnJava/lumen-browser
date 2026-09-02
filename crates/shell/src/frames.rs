@@ -358,6 +358,14 @@ pub(crate) struct FrameSubresourceOutcomes {
     /// сама анимация отбрасывалась, и `Lumen::animated_gifs` (карта СТРАНИЦЫ) о
     /// ней не знала. Тикает по [`FrameHandle::animated_gifs`].
     pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedGif)>,
+    /// FRAME-5 срез 2: `<img loading="lazy">` requests of the child, collected
+    /// but NOT fetched — mirrors `ParsedPage::lazy_pairs` at the page level.
+    /// `image_keys` above already carries a `(raw_src, frame_image_key)` entry
+    /// for each of these too, so [`rekey_frame_images`] rewrites their
+    /// not-yet-loaded placeholder `DrawImage` the same way it rewrites an
+    /// eager one — the registration key is stable from the first paint, only
+    /// the pixels behind it arrive later.
+    pub(crate) lazy_requests: Vec<lumen_layout::ImageRequest>,
 }
 
 /// Запросить подресурсы парсерных элементов под-документа фрейма (BUG-480
@@ -382,12 +390,13 @@ pub(crate) struct FrameSubresourceOutcomes {
 /// декодировал: рисовать их было некому, пока содержимое фрейма не попадало на
 /// экран (срез 14).
 ///
-/// `loading="lazy"` не запрашивается вовсе: прокси вьюпорта у фреймов нет, так
-/// же как срез 1 пропускает сами `loading=lazy`-iframe. Полноценная доставка
-/// ленивых картинок ребёнка (FRAME-6, не сделано) требует доступа к рендереру
-/// и image-кэшу СТРАНИЦЫ (`Lumen::renderer`/`image_cache`) — их нет ни у этой
-/// функции, ни у `sync_frame_viewports`, которая знает реальный вьюпорт
-/// фрейма, но получает только `&mut [FrameHandle]`.
+/// `loading="lazy"` не запрашивается ЗДЕСЬ — эта функция лишь СОБИРАЕТ такие
+/// запросы (`lazy_requests` в возвращаемом значении) без сети, как страница
+/// собирает `ParsedPage::lazy_pairs`. Доставка — FRAME-5 срез 2,
+/// `crate::frame_lazy`: вьюпорт под-документа появляется только у
+/// [`sync_frame_viewports`]/[`layout_frame_document`] (эта функция не знает
+/// ни его, ни JS-контекста ребёнка), а рендерер/image-кэш СТРАНИЦЫ — только у
+/// `&mut Lumen`, за пределами и этой функции, и `sync_frame_viewports`.
 pub(crate) fn fetch_frame_subresources(
     doc: &mut Document,
     base: &ResourceBase,
@@ -410,11 +419,10 @@ pub(crate) fn fetch_frame_subresources(
     let (linked, links) = load_linked_stylesheets(doc, base, sink, cookie_jar.clone(), media_ctx);
     css.push_str(&linked);
 
-    let requests: Vec<lumen_layout::ImageRequest> =
+    let (requests, lazy_requests): (Vec<lumen_layout::ImageRequest>, Vec<lumen_layout::ImageRequest>) =
         lumen_layout::collect_image_requests(doc, viewport)
             .into_iter()
-            .filter(|req| !req.is_lazy)
-            .collect();
+            .partition(|req| !req.is_lazy);
     // Фаза 1 (параллельно): сеть + декодирование, `doc` не трогаем — форма
     // `fetch_and_decode_images` страницы.
     let decoded = parallel_map(&requests, |_, req| {
@@ -456,7 +464,14 @@ pub(crate) fn fetch_frame_subresources(
             decoded_images.push((key, image));
         }
     }
-    FrameSubresourceOutcomes { links, images, css, decoded_images, image_keys, animated_gifs }
+    // FRAME-5 срез 2: lazy `<img>` get a registration key too (no fetch), so
+    // their not-yet-loaded placeholder is already rewritten by
+    // `rekey_frame_images` at first paint — see doc-comment on
+    // `FrameSubresourceOutcomes::lazy_requests`.
+    for req in &lazy_requests {
+        image_keys.push((req.url.clone(), frame_image_key(base, &req.url)));
+    }
+    FrameSubresourceOutcomes { links, images, css, decoded_images, image_keys, animated_gifs, lazy_requests }
 }
 
 /// Ключ регистрации картинки под-документа фрейма (BUG-480 срез 15):
@@ -469,7 +484,7 @@ pub(crate) fn fetch_frame_subresources(
 /// побеждала бы картинка страницы, причём молча. Разрешённый адрес разводит их
 /// и, наоборот, СХЛОПЫВАЕТ действительно один и тот же файл — тогда декод
 /// разделяется, как и задумано кэшем.
-fn frame_image_key(base: &ResourceBase, raw_src: &str) -> String {
+pub(crate) fn frame_image_key(base: &ResourceBase, raw_src: &str) -> String {
     base.resolve_str(raw_src)
 }
 
@@ -743,6 +758,36 @@ fn layout_frame_document(
     frame_layout
 }
 
+/// FRAME-5 срез 2: re-register the frame's lazy `<img>` set with its OWN
+/// `IntersectionObserver` shim and drain whatever entered the proximity
+/// margin since the last call. `register_lazy_images` is idempotent per node
+/// id (`_lazy_io_urls[nid] === undefined` guard, `web_api_shim_tail_mc.js`),
+/// so calling it again on every relayout is harmless — the observer itself is
+/// what tracks "already fired".
+///
+/// Must run AFTER [`layout_frame_document`] has pushed fresh rects/viewport
+/// into `js` — `deliver_layout_observers()` is what fires the observer's
+/// entries, and it reads that geometry. `pub(crate)`, not module-private:
+/// `Lumen::apply_frame_scroll` (`lumen/scrolling.rs`) also calls it — a
+/// scrolled-into-view lazy `<img>` needs the SAME re-check as a relayout,
+/// geometry unchanged but scroll position (already pushed by
+/// `set_page_scroll_y` there) is what moved.
+pub(crate) fn harvest_frame_lazy_requests(
+    js: Option<&Arc<dyn PersistentJs>>,
+    lazy_requests: &[lumen_layout::ImageRequest],
+) -> Vec<(u32, String)> {
+    let Some(js) = js else { return Vec::new() };
+    if lazy_requests.is_empty() {
+        return Vec::new();
+    }
+    let pairs: Vec<(u32, &str)> =
+        lazy_requests.iter().map(|r| (r.node_id.index() as u32, r.url.as_str())).collect();
+    js.register_lazy_images(&pairs);
+    js.deliver_layout_observers();
+    js.deliver_lazy_images();
+    js.take_lazy_image_requests()
+}
+
 /// КОНТЕНТНЫЙ бокс host-элемента `<iframe>`/`<frame>` в layout родителя —
 /// вьюпорт под-документа по HTML LS §4.8.5 и одновременно место, куда
 /// вклеивается его display list (срез 14).
@@ -886,6 +931,10 @@ pub(crate) fn sync_frame_viewports(
             frames[i].viewport = size;
             frames[i].interactive = state;
             relaid[i] = true;
+            // FRAME-5 срез 2: fresh rects/viewport are in `js` now — proximity
+            // check against them for lazy `<img>` of this frame.
+            let pending = harvest_frame_lazy_requests(frames[i].js.as_ref(), &frames[i].lazy_requests);
+            frames[i].pending_lazy.extend(pending);
             // FRAME-1: `resize` — событие ребёнку по HTML LS §7.4.4, счётчик
             // страницы ([`crate::app::window_event`]'s `WindowEvent::Resized`)
             // для его собственного вьюпорта. `update_viewport_size` внутри
@@ -967,6 +1016,11 @@ pub(crate) fn relayout_frame_content(
     frames[idx].layout = Some(layout);
     frames[idx].interactive = state;
     frames[idx].content_dl.clear();
+    // FRAME-5 срез 2: this frame's viewport/interactive state are unchanged
+    // (only its tree mutated), so the `sync_frame_viewports` call below will
+    // skip it on the "nothing changed" gate — harvest here or not at all.
+    let pending = harvest_frame_lazy_requests(frames[idx].js.as_ref(), &frames[idx].lazy_requests);
+    frames[idx].pending_lazy.extend(pending);
     sync_frame_viewports(frames, page_layout, interactive);
 }
 
@@ -1759,6 +1813,8 @@ fn spawn_frame(
         font_registry,
         web_fonts,
         animated_gifs: subresources.animated_gifs,
+        lazy_requests: subresources.lazy_requests,
+        pending_lazy: Vec::new(),
     });
     handles
 }
@@ -2117,6 +2173,17 @@ pub(crate) struct FrameHandle {
     /// пути для фреймов, потому что ключи уже уникальны на всю страницу
     /// ([`frame_image_key`]).
     pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedGif)>,
+    /// FRAME-5 срез 2: `<img loading="lazy">` requests of this frame's own
+    /// document ([`FrameSubresourceOutcomes::lazy_requests`], fixed at
+    /// creation — the child's markup does not change). Re-registered with the
+    /// child's `IntersectionObserver` shim on every real layout pass
+    /// ([`harvest_frame_lazy_requests`]).
+    pub(crate) lazy_requests: Vec<lumen_layout::ImageRequest>,
+    /// `(node id, url)` pairs the child's own `IntersectionObserver` has
+    /// fired since [`crate::frame_lazy::fetch_frame_lazy_images`] last
+    /// drained it — harvested by [`harvest_frame_lazy_requests`] inside
+    /// [`sync_frame_viewports`]/[`relayout_frame_content`].
+    pub(crate) pending_lazy: Vec<(u32, String)>,
 }
 
 // ── скролл под-документа (BUG-480 срез 17) ──────────────────────────────────

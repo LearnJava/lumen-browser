@@ -324,6 +324,14 @@ impl Lumen {
                 js.fire_window_scrollend();
             }
         }
+        // FRAME-5 срез 2: a scrolled-into-view lazy `<img>` is the main
+        // real-world case loading="lazy" exists for — geometry is unchanged
+        // (that is what makes this scroll, not a relayout), only scroll
+        // position moved, which `set_page_scroll_y` above already pushed.
+        let pending =
+            frames::harvest_frame_lazy_requests(self.frames[idx].js.as_ref(), &self.frames[idx].lazy_requests);
+        self.frames[idx].pending_lazy.extend(pending);
+        self.register_frame_lazy_images();
         self.request_redraw();
         true
     }
