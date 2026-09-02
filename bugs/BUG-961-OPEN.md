@@ -1,7 +1,8 @@
-# BUG-961: `browsingContext.navigate` takes 30-40s and then TIMEOUTs — an
-apparently intermittent ~32s engine/BiDi-path stall, reproducible with a
-bare `BidiSession` and a plain static file server, no wptrunner/wptserve
-involved — but not on every run of the identical repro
+# BUG-961: `browsingContext.navigate` takes 30-40s and then TIMEOUTs — a
+~32s stall reproducible on almost every run through the real wptrunner
+`LumenBrowser`/`mozprocess` launch path, but almost never through a bare
+`subprocess.Popen` replaying the identical BiDi traffic — the launch
+mechanism срез 44 thought it had refuted looks like the actual variable
 
 **Статус:** OPEN
 **Дата:** 2026-09-02
@@ -9,33 +10,43 @@ involved — but not on every run of the identical repro
 (`executorlumen.py`/`TestRunnerManager` orchestration, and engine
 contention specific to that orchestration's polling), **срез 42 refuted
 content-serving** (live `AnyHtmlHandler` route vs. a static copy — both
-stall identically), and **срез 44 refuted the launch mechanism**
+stall identically) **but srez 42's own two variants went through
+wptrunner's real `product.get_browser_cls("lumen")`/`browser.start()`
+launch (`mozprocess`-based), not a bare `Popen`** — a distinction срез 46
+(below) shows matters. Срез 43 built a *minimal* repro instead (plain
+`subprocess.Popen`, no `LumenBrowser`, no `mozprocess`) that completed in
+~1.1-1.2s six times in a row, then stalled ~32s once under a controlled A/B
+re-run (срез 44), which срез 44 read as refuting the launch mechanism
 (`mozprocess.ProcessHandler`'s env merging or `preexec_fn`/process-group)
-that срез 43 initially looked like it had isolated: the exact same minimal
-repro (plain `subprocess.Popen`, no `LumenBrowser`, no `mozprocess`)
-completed in ~1.1-1.2s six times in a row (срез 43) and then stalled ~32s
-once under a controlled A/B re-run (срез 44), before returning to <1.3s on
-three more repeats of срез 43's own script right after, and **срез 45
-measured a real hit-rate on that same minimal repro: 0/30 fresh-process
-runs stalled**, including 17 runs at срез 44's own reported "load 2.0-2.3"
-band — refuting system load in that band as a sufficient cause. **The
-stall itself now looks intermittent, not deterministically tied to any one
-launch path, content-serving mechanism or load level tested across срезы
-39-45**, with a true hit rate considerably below 1/10 on the bare-Popen
-shape — see срез 45's "Что нужно" item 3 for the still-missing evidence (a
-`wchan` sample captured *during* an actual stall — 36 consecutive
-fresh-process runs of this shape across срезы 43/45 have all completed too
-fast to sample anything). Ruled out as the *sole or required* cause:
-`lumen-bidi-server`, `lumen-driver` (both just surface a 30s
-`RecvTimeoutError`, not the source), `mozprocess.ProcessReader`'s
-Python-side line handling (срез 40), `TestRunnerManager`/`executorlumen.py`
-orchestration (срез 41), wptserve's live route vs. a static copy (срез 42),
-`mozprocess.ProcessHandler`'s env merging and `preexec_fn` (срез 44),
-system load in the 2.0-2.3 band (срез 45).
+since the minimal shape reproduced the stall too — but that read one
+sample per condition. **Срез 45 then measured a real hit-rate on the
+minimal Popen repro: 0/30 fresh-process runs stalled** (later срез 46 added
+150 more, still 0 — 187 total runs of this shape, 1 stall), including 17
+runs at срез 44's own reported "load 2.0-2.3" band, refuting system load in
+that band as a sufficient cause on its own. **Срез 46 then re-ran срез 42's
+own script — same test, same BiDi call, but launched through the real
+`LumenBrowser`/`mozprocess` path instead of a bare `Popen` — and got 5
+stalls out of 5 completed variant-runs across 3 fresh trials** (2 trials
+2/2, 1 trial's variant C stalled before the outer command was killed by a
+tooling timeout on variant D). **The launch mechanism срез 44 called
+refuted is therefore the leading candidate again**: the bare-`Popen` shape
+that срезы 43/45/46 pushed to 187 clean runs never goes through
+`mozprocess`/`LumenBrowser` at all, so its near-0% hit rate is consistent
+with `mozprocess` (or something `LumenBrowser.start()` does that a raw
+`Popen` doesn't — env merging, `preexec_fn`, process-group setup,
+`mozprocess.ProcessReader`'s reader thread) being necessary for the stall,
+not with the stall being launch-independent. No `wchan` sample has been
+captured yet — срез 42's script has no sampler; срез 43's sampler was only
+ever wired to the *minimal* Popen shape, which barely reproduces. Ruled out
+as the *sole or required* cause: `lumen-bidi-server`, `lumen-driver` (both
+just surface a 30s `RecvTimeoutError`, not the source), content-serving
+(live route vs. static copy — срез 42, still true, both stall identically
+under the real launch path), system load in the 2.0-2.3 band alone (срез
+45).
 **Найден:** P2, WPT-RUN-6 срез 39, 2026-09-02, investigating why
 `/console/console-log-large-array.any.html` (and its `.any.worker.html`
 twin) sit in `timeout_audit.py`'s `unclassified` bucket. Continued срезы
-40-45, 2026-09-02.
+40-46, 2026-09-02.
 
 ## Симптом
 
@@ -433,22 +444,76 @@ runs, not 30, to have good odds of landing on one. No wchan evidence to add
 from this slice — every one of the 30 runs was too fast for the sampler to
 see anything but ordinary `futex_wait`/`epoll_wait` parks.
 
+## WPT-RUN-6 срез 46: matched-N re-run of both shapes — bare-Popen stays at
+0/225, the real `LumenBrowser`/`mozprocess` launch path hits 5/5
+
+Item 3's own suggestion, both halves. First, 150 more fresh-process runs of
+срез 45's minimal bare-Popen repro (`verify_bug961_slice45_hitrate.py`,
+unmodified, two batches of 75 — the first batch's driving `Bash` call hit a
+tooling timeout after completing 75/150 and was restarted with a longer
+budget rather than resumed, so both batches' logs are kept under
+`.tmp/bug961-slice46/` and `.tmp/bug961-slice46-batch2/`, gitignored):
+**0/150 stalled**, both batches, all runs completing in 1.5-2.1s. Combined
+with срезы 43 (6) + 45 (30), that is **186 consecutive clean runs of the
+bare-Popen shape against 1 confirmed stall (срез 44)** — the true hit rate
+for this specific shape is now bounded well under 1%.
+
+Second — the matched-N re-run item 3 flagged as still owed: срез 42's own
+script (`verify_bug961_slice42_static.py`, unmodified), which boots the
+real `wptrunner` `TestEnvironment` and launches the browser through
+`product.get_browser_cls("lumen")`/`browser.start()` — wptrunner's actual
+`LumenBrowser`, `mozprocess`-based, the exact mechanism срез 44 concluded
+was refuted — run 3 times, each a fresh interpreter process (`python
+tests/wpt/verify_bug961_slice42_static.py`, no args, ~35-70s per trial
+since each boots its own wptserve instance and launches 2 browser
+processes, variant C then variant D):
+
+```
+trial 1: variant C (static copy) STALL 32.0s   variant D (live route) STALL 32.0s
+trial 2: variant C (static copy) STALL 32.0s   variant D (live route) STALL 32.0s
+trial 3: variant C (static copy) STALL 32.0s   variant D (live route) — run killed by a
+                                                Bash-tool 2-minute default timeout while
+                                                variant D was still in flight, no result
+```
+
+**5 stalls out of 5 completed variant-runs, 0 clean.** No orphaned `lumen`/
+`wptserve`/`python` process was left behind by the killed trial 3
+(`ps aux` checked immediately after — clean).
+
+This flips срез 44's conclusion: срез 44's "refutation" of the launch
+mechanism rested on ONE bare-Popen stall sample, read as proof the stall
+reproduces independently of `mozprocess`/`LumenBrowser`. Срезы 45/46 now
+show that same bare-Popen shape barely reproduces at all (≤1/186), while
+srez 42's shape — identical BiDi traffic, identical test id, the only
+change being the launch path (`LumenBrowser`/`mozprocess.ProcessHandler`
+via `product.get_browser_cls()` instead of a raw `subprocess.Popen`) —
+reproduces on effectively every trial. The launch mechanism (env merging,
+`preexec_fn`/process-group setup, or `mozprocess.ProcessReader`'s reader
+thread racing the child) is the leading candidate again, not a refuted one.
+
+No `wchan` sample has been captured yet in either shape at this slice:
+срез 42's script has no sampler (it predates срез 43's `_WchanSampler`),
+and срез 43's sampler was only ever wired into the shape that barely
+stalls. The two need to be combined — srez 42's `_bare_control` (real
+`LumenBrowser`/`mozprocess` launch) instrumented with срез 43's
+`_WchanSampler`, sampling both the browser's own PID tree and (mozprocess
+uses a reader thread) the interpreter's own threads — which at this hit
+rate should catch a live stall on close to the first attempt.
+
 ## Что нужно
 
-1. **(closed by срез 42 — content-serving is not the variable)**
-2. **(мехнизм запуска — mozprocess/`preexec_fn`/env — refuted by срез 44;
-   срез 45 additionally refutes system load in the 2.0-2.3 band as
-   sufficient)**
-3. **(hit-rate measured by срез 45: 0/30 on the minimal Popen repro, i.e.
-   considerably below 1/10 — reopened as "capture a wchan sample during an
-   actual stall", since 30 fresh-process runs were not enough to catch one.
-   Two ways forward, either substantially more runs of `verify_bug961_
-   slice45_hitrate.py --runs 100` (or higher) left going in the background,
-   or go back to a shape more likely to reproduce — срезы 41/42's ~3/3 hit
-   rate under the live-wptserve/static-copy shapes vs. this slice's 0/30
-   under the bare-Popen shape hints the launch vector might matter after
-   all despite срез 44's single-sample refutation; that comparison itself
-   deserves a matched-N re-run before trusting either side's small sample.**
+1. **(closed by срез 42 — content-serving is not the variable, reconfirmed
+   срез 46)**
+2. **(reopened by срез 46 — the launch mechanism looked refuted by срез 44's
+   single sample, but a matched-N re-run shows the real `LumenBrowser`/
+   `mozprocess` launch path stalls 5/5 while the bare-Popen shape stalls
+   ≤1/186. Next: instrument srez 42's actual launch path with срез 43's
+   `_WchanSampler` — sample the `lumen` process tree and mozprocess's
+   reader thread during a variant C/D navigate call — to finally get a
+   `wchan` trace from a real stall instead of another timing comparison.)**
+3. **(superseded by item 2 — the hit-rate question this item asked is
+   answered: it is not a property of the minimal repro's rare intermittency,
+   it is the launch path. No further bare-Popen hit-rate runs needed.)**
 
 ## Как проверить фикс
 
