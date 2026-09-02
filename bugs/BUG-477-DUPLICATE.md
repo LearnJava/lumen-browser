@@ -33,7 +33,7 @@ yet — returns body at offset 0" (`dom.rs:10513`) — consistent with the same
 underlying gap: there is no point→node hit-testing primitive exposed to JS at
 all, so every API built on it (`elementFromPoint`, `elementsFromPoint`,
 `caretPositionFromPoint`, and by extension `document.caretRangeFromPoint`,
-[BUG-474](BUG-474-OPEN.md)) is either missing or a stub.
+[BUG-474](BUG-474-FIXED.md)) is either missing or a stub.
 
 ## Масштаб находки
 

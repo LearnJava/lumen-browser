@@ -6345,6 +6345,12 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
         intersectsNode:   function() { return false; },
     };
     r.START_TO_START = 0; r.START_TO_END = 1; r.END_TO_START = 2; r.END_TO_END = 3;
+    // BUG-474: without this, every Range minted here (createRange, Selection
+    // ranges, caretRangeFromPoint, `new Range()`) is a plain object and fails
+    // `instanceof Range` — WPT asserts that on the very first caretRangeFromPoint
+    // subtest. `Range` is a hoisted function declaration, so it is safe to
+    // reference here even though its own statement appears later in this file.
+    Object.setPrototypeOf(r, Range.prototype);
     return r;
 }
 
@@ -6925,6 +6931,15 @@ var document = {
         var bodyNid = _lumen_u2n(_lumen_get_body());
         if (bodyNid === null) return null;
         return new _CaretPosition(_lumen_make_element(bodyNid), 0);
+    },
+    // CSSOM View §7 (BUG-474): caretRangeFromPoint(x, y) — returns a collapsed
+    // Range at the caret position for a point, or null. Same Phase-0 caveat as
+    // caretPositionFromPoint above (no layout hit-testing yet): always resolves
+    // to body offset 0 when a body exists, ignoring x/y and viewport bounds.
+    caretRangeFromPoint: function(x, y) {
+        var bodyNid = _lumen_u2n(_lumen_get_body());
+        if (bodyNid === null) return null;
+        return _lumen_make_range(bodyNid, 0, bodyNid, 0);
     },
     // CSSOM View §3: elementFromPoint(x, y) — topmost element hit by the point,
     // or null if nothing is hit (e.g. outside the viewport). Backed by the same
