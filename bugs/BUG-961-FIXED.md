@@ -629,10 +629,27 @@ exact same shape and should be fixed by the same change).
 3. **(superseded by item 2 — the hit-rate question this item asked is
    answered: it is not a property of the minimal repro's rare intermittency,
    it is the launch path. No further bare-Popen hit-rate runs needed.)**
-4. Re-run the full WPT corpus (or at least `timeout_audit.py`'s
-   `unclassified` bucket) now that this fix is in, to measure how many other
-   ids it was silently costing 30s+ each — not done in this slice, scope is
-   one WPT-RUN-6 task, not the whole corpus.
+4. **(CLOSED by срез 48 — measured.)** Re-ran all 40 ids `timeout_audit.py`
+   classified `unclassified` in the WPT-RUN-5 snapshot through the real
+   `LumenBrowser`/`mozprocess` launch path, once with срез 47's fix
+   (`bufsize=io.DEFAULT_BUFFER_SIZE`) and once with it reverted
+   (`bufsize=0`, the pre-fix behavior) — same 40 ids, same binary, same
+   `run_smoke.run()` call, only the one kwarg differed
+   (`tests/wpt/verify_slice48_residual.py`, throwaway per its own docstring,
+   not committed). Per-id harness status changed in exactly **2 of 40**:
+   `console/console-log-large-array.any.html` (unfixed: `TIMEOUT, ... —
+   TestRunner hit external timeout`; fixed: `OK`, 1/1 — this is the bug's
+   own repro shape, a long no-newline console line) and
+   `html/canvas/element/manual/context-attributes/canvas-with-padding.html`
+   (unfixed: harness-level `TIMEOUT` despite 1/1 subtests passing; fixed:
+   `OK` 1/1 — a near-the-timeout-boundary case, consistent with the same
+   per-byte syscall tax pushing an already-slow test just over 10s). The
+   other 38 ids reported the identical harness status (`OK`/`TIMEOUT`/`ERROR`,
+   same subtest counts) in both runs — their TIMEOUTs (14 of 40 remain
+   `TIMEOUT` even with the fix) have a different root cause each and are out
+   of scope for this slice. **Answer to this item: BUG-961 explains 2 of the
+   40 `unclassified` ids from WPT-RUN-5, not the bulk of the bucket** — the
+   other 38 need per-id triage, one WPT-RUN-6 slice at a time.
 
 ## Как проверить фикс
 
