@@ -270,6 +270,102 @@ use super::*;
         );
     }
 
+    // ─── revert-rule (CSS Cascade L5 §revert-rule-keyword, BUG-487) ──────────
+
+    #[test]
+    fn revert_rule_rolls_back_to_previous_rule() {
+        // Second `p` rule's own `color: red` is overridden by its own
+        // `color: revert-rule` — rolls back to the FIRST rule (green), not to
+        // the `red` declared earlier within the same rule.
+        let s = cascade_at(
+            "<p>x</p>",
+            "p { color: green; } \
+             p { color: red; color: revert-rule; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn revert_rule_uses_cascade_order_not_appearance_order() {
+        // The highest-specificity rule (`.r.r.r`) wins and reverts; removing
+        // its own `color` declarations exposes the next-highest-specificity
+        // rule in CASCADE order (`.r.r`, green), even though `.r.r` appears
+        // textually AFTER the reverting rule.
+        let s = cascade_at(
+            r#"<p class="r">x</p>"#,
+            ".r { color: red; } \
+             .r.r.r { color: red; color: revert-rule; } \
+             .r.r { color: green; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn revert_rule_chain_walks_back_multiple_rules() {
+        // Three consecutive rules each declare `z-index: -1;
+        // z-index: revert-rule` — each must fully unwind (both its own
+        // declarations dropped) before the next is checked, landing on the
+        // second rule's `2`, not the first rule's `1`.
+        let s = cascade_at(
+            "<p>x</p>",
+            "p { z-index: 1; } \
+             p { z-index: 2; } \
+             p { z-index: -1; z-index: revert-rule; } \
+             p { z-index: -1; z-index: revert-rule; } \
+             p { z-index: -1; z-index: revert-rule; }",
+            &[0],
+        );
+        assert_eq!(s.z_index, Some(2));
+    }
+
+    #[test]
+    fn revert_rule_in_custom_property() {
+        // Same rollback mechanism applies to custom properties: `--a` unwinds
+        // one rule (to the middle rule's `green`), `--b` unwinds two (to the
+        // first rule's `green`).
+        let s = cascade_at(
+            "<p>x</p>",
+            "p { --a: red; --b: green; } \
+             p { --a: green; --b: revert-rule; } \
+             p { --a: revert-rule; --b: revert-rule; }",
+            &[0],
+        );
+        assert_eq!(s.custom_props.get("--a").map(String::as_str), Some("green"));
+        assert_eq!(s.custom_props.get("--b").map(String::as_str), Some("green"));
+    }
+
+    #[test]
+    fn revert_rule_important_reverts_to_earlier_normal_rule() {
+        // An `!important revert-rule` still wins the cascade over a later
+        // normal rule (importance sorts first); reverting it falls back to
+        // that later normal rule regardless of source order.
+        let s = cascade_at(
+            "<p>x</p>",
+            "p { color: revert-rule !important; } \
+             p { color: green; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn revert_rule_can_chain_into_revert_layer() {
+        // `revert-rule` in the highest layer unwinds to reveal a
+        // `revert-layer` in a lower layer, which must itself be resolved
+        // (not left as a literal stuck value) — falls all the way back to
+        // the lowest layer's plain green.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer a { p { color: green; } } \
+             @layer b { p { color: red; } p { color: revert-layer; } } \
+             @layer c { p { color: revert-rule; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
     // ─── revert (CSS Cascade L4 §7.4) ────────────────────────────────────────
 
     #[test]

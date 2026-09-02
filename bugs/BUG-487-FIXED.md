@@ -1,6 +1,6 @@
 # BUG-487: `revert-rule` CSS-wide keyword not implemented
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-02
 **Дата:** 2026-08-02
 **Компонент:** css-parser (no `revert-rule` handling found anywhere in
 `crates/engine/css-parser/src` or `crates/engine/layout/src`)
@@ -104,3 +104,62 @@ fallback value (`background-color: env(test, revert-rule)`) rather than a
 direct declaration or a `var()` fallback — a third distinct syntactic
 position for the same missing keyword. `.ini`:
 `tests/wpt/metadata/css/css-env/env-revert-rule.html.ini`.
+
+## Срез 2026-09-02 (P3) — cascade-level fix landed
+
+`revert-rule` is, like its sibling `revert-layer`, intentionally NOT a
+`CssWideKeyword` (it depends on which *rule* the winning declaration came
+from, so it cannot be applied per-declaration). It is now resolved in
+`crates/engine/layout/src/style/cascade.rs` by folding it into the existing
+`revert-layer` pre-pass over the cascade-sorted `matched` set: the two loops
+were merged into one that, each round, finds the winning declaration for
+every property and — if its value is `revert-layer` — drops every
+declaration of that property from the winning *layer* (existing behavior),
+or — if `revert-rule` — drops every declaration of that property from the
+winning *rule* (new; grouped by the same `rule_idx`/`gidx` already tracked
+per `matched` entry, which an inline `style=""` attribute shares as a single
+synthetic index across all its declarations). The loop repeats because
+resolving one keyword can reveal the *other* as the new winner
+(`revert-rule-revert-layer.html` chains both in both directions) — a single
+non-interleaved pass would leave a literal `revert-layer`/`revert-rule`
+stuck as the applied value. `color.rs::canonical_specified_color` and
+`font_size.rs::parse_font_shorthand`'s CSS-wide-keyword guard list also
+gained `revert-rule` alongside the existing `revert`/`revert-layer`, for
+consistency (setProperty round-trip / `font` shorthand not misreading the
+keyword as a value).
+
+Verified with 6 new unit tests in
+`crates/engine/layout/src/style/tests/cascade.rs` (`revert_rule_*`) mirroring
+the WPT assertions directly against the production cascade code path:
+basic rollback to the previous rule, cascade-order-not-appearance-order,
+a 3-deep `revert-rule` chain, custom properties, `!important` interaction,
+and chaining into `revert-layer`. `cargo test -p lumen-layout` — lib unit
+suite 3658/3658 (3652 pre-existing + 6 new), `cases` integration suite
+77/77, no failures anywhere; `cargo clippy -p lumen-layout --all-targets --
+-D warnings` clean.
+
+Closes the 6 files/14 subtests originally attributed to this bug plus the
+4-subtest `css/css-nesting` slice-19 finding (18 subtests across
+`revert-rule-basic.html`, `revert-rule-custom-property.html`,
+`revert-rule-important.html` (all 3 — the earlier "mixed with BUG-384" read
+no longer applies now that BUG-384 is fixed; re-reading the live test file
+shows no unrelated named-access assertions), `revert-rule-layer.html`,
+`revert-rule-revert-layer.html`, `nesting-revert-rule.html`) — their `.ini`
+expectation overrides are deleted.
+
+**Not closed by this slice** (kept as `.ini` FAIL, separate mechanisms):
+`revert-rule-shadow.html` (12 subtests — Shadow DOM `:host`/`::slotted`/
+`::part()` cascade specifics are unverified against this fix and shadow
+trees have independent, unrelated gaps — slotting doesn't work at all,
+BUG-876/877/878 — that would mask several of these regardless);
+`revert-rule-in-fallback.html`/`revert-rule-to-var.html` (`var()` fallback,
+still masked by BUG-501 per the original finding); `env-revert-rule.html`,
+`attr-revert-rule.html`, `if-function-revert-rule.html` (the keyword only
+appears inside `env()`/`attr()`/`if()`, i.e. after substitution — the
+cascade-level `matched`-array prepass here operates on the raw, unsubstituted
+`decl.value` and never sees it); `revert-rule-keyframes.html`/
+`revert-rule-keyframes-dynamic.html` (`revert-rule` as a `@keyframes` value
+resolves through the animation engine's own "underlying value" mechanism,
+not the style cascade at all). A follow-up bug for the var()/env()/attr()/
+if()/keyframes-substitution paths, if wanted, is a fresh finding — this
+bug's own scope (declaration-level `revert-rule`) is fully closed.

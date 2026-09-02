@@ -326,7 +326,7 @@ pub(in crate::style) fn parse_font_shorthand(val: &str) -> Option<FontShorthand>
     if matches!(
         lower.as_str(),
         "caption" | "icon" | "menu" | "message-box" | "small-caption" | "status-bar"
-            | "inherit" | "initial" | "unset" | "revert" | "revert-layer"
+            | "inherit" | "initial" | "unset" | "revert" | "revert-layer" | "revert-rule"
     ) {
         return None;
     }
