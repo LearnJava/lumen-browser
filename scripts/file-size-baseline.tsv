@@ -18,7 +18,6 @@
 3637	crates/js/src/frame_bridge.rs
 3614	crates/js/src/worker.rs
 3435	crates/chrome/src/model.rs
-3022	crates/engine/paint/src/display_list.rs
 3006	crates/shell/src/forms.rs
 2935	crates/driver/src/session.rs
 2850	crates/js/src/offscreen_canvas.rs
