@@ -1,7 +1,10 @@
 # BUG-492: `border-image` (CSS Backgrounds and Borders Level 3) entirely
 unimplemented — not just `border-image-width`
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md)
+**Тип:** доработка — функциональность (`border-image`: 5 лонгхендов + шорткод +
+алгоритм 9-slice рендеринга border-image) отсутствует целиком, включая сам
+paint-алгоритм, а не сломана точечно; см. ревизию P3 2026-09-03 ниже
 **Дата:** 2026-08-02
 **Компонент:** css-parser / layout (`crates/engine/layout/src/style.rs::apply_declaration`)
 **Найден:** WPT-RUN-3 срез 8 (`ROADMAP.md`) — массовый прогон `css/css-borders`
@@ -82,3 +85,34 @@ under `tests/wpt/metadata/css/css-borders/`, header referencing both this bug
 and BUG-463. Срез 9 added `.ini` under `tests/wpt/metadata/css/css-backgrounds/`
 for 25 more files (1646 subtests) — one file (`discrete-no-interpolation.html`)
 shares its header with BUG-463.
+
+## Ревизия P3 2026-09-03: переклассифицирован в ДОРАБОТКА → CSS-SPECS.md
+
+Investigated as the next top-down `STATUS-P3.md` item (BUGS.md:57, after BUG-341
+was skipped as user-paused, BUG-480/BUG-490 were skipped as already-tagged
+ДОРАБОТКА). Both conditions of the ДОРАБОТКА test (`docs/probe-method.md` §8)
+hold: (1) the capability is absent outright — `grep -rn "border-image\|border_image"
+crates/` returns zero matches anywhere in the workspace, confirmed again this
+session; (2) the fix needs designing, not a point patch — the whole longhand
+family (`border-image-source`/`-slice`/`-width`/`-outset`/`-repeat` + shorthand)
+needs new parsing/`ComputedStyle` fields, and critically a **9-slice image paint
+algorithm that does not exist anywhere in `lumen-paint`** (slicing a source image
+into 9 regions, scaling/stretching/repeating/rounding each independently per
+`border-image-repeat`) — this is new rendering-engine design, not a missing
+match-arm. 1646 subtests across 25 files in `css/css-backgrounds` is also, per
+§8's cost-of-getting-it-wrong note, exactly the shape of finding that re-opens
+under a new bug number every WPT slice if left as a plain `OPEN` P3 row.
+
+Unlike CSSOM-N/FRAME-style API gaps, this gap already has a home: P4 owns CSS
+property implementation via `CSS-SPECS.md` (`CLAUDE.md` developer-assignments
+table), and that file already tracks the sibling spec module. Filed there
+instead of a new `ROADMAP.md` task (user decision 2026-09-03): `CSS Backgrounds
+& Borders L3`'s Tier-0 module row downgraded ✅→🟡 with a note pointing back to
+this bug. A matching row in the granular `[T0] Borders & Outlines` property
+table was attempted but reverted: inserting a mid-file row shifts every line
+below it, and `STATUS-P4.md` carries ~18 line-number pointers into that exact
+region that `scripts/remap_status_pointers.py` cannot auto-fix (its anchor
+regex doesn't match property rows wrapped in backticks) — the Tier-0 module
+note is the only edit safe from that blast radius; P4 can add the granular row
+when picking this up. Status flipped to `OPEN (ДОРАБОТКА → CSS-SPECS.md)`; row
+removed from `STATUS-P3.md`.
