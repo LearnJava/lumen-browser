@@ -477,6 +477,9 @@ fn splice_handle(src: &str, host_rect: Rect, content_dl: DisplayList) -> crate::
         scroll_y: 0.0,
         scroll_x: 0.0,
         scroll_containers: Vec::new(),
+        font_registry: lumen_font::FontRegistry::new(),
+        web_fonts: Vec::new(),
+        animated_gifs: Vec::new(),
     }
 }
 
@@ -643,6 +646,52 @@ fn rekey_frame_images_rewrites_own_images_and_spares_nested_placeholder() {
     assert_eq!(srcs[0], "http://h/a/pic.png", "своя картинка получает разрешённый ключ");
     assert_eq!(srcs[1], "nested.html", "заглушка вложенного фрейма остаётся адресуемой");
     assert_eq!(srcs[2], "other.png", "чего нет в карте — не трогаем");
+}
+
+/// FRAME-5: `DrawBackgroundImage.src` и `DrawCrossFade.{src_a,src_b}`
+/// переписываются тем же ключом, что и `DrawImage` — без заглушечного
+/// исключения (только `<img>`-заглушка вложенного фрейма его требует).
+#[test]
+fn rekey_frame_images_rewrites_background_image_and_cross_fade() {
+    let mut dl = vec![
+        lumen_paint::DisplayCommand::DrawBackgroundImage {
+            rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+            origin_rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+            src: "bg.png".to_owned(),
+            size: lumen_layout::BackgroundSize::default(),
+            position: lumen_layout::ObjectPosition::default(),
+            repeat: lumen_layout::BackgroundRepeat::default(),
+            image_rendering: lumen_layout::ImageRendering::default(),
+        },
+        lumen_paint::DisplayCommand::DrawCrossFade {
+            dest: Rect::new(0.0, 0.0, 10.0, 10.0),
+            src_a: "a.png".to_owned(),
+            src_b: "untouched.png".to_owned(),
+            progress: 0.5,
+        },
+    ];
+    let mut parent = splice_handle("child.html", Rect::new(0.0, 0.0, 100.0, 100.0), Vec::new());
+    parent.image_keys = vec![
+        ("bg.png".to_owned(), "http://h/a/bg.png".to_owned()),
+        ("a.png".to_owned(), "http://h/a/a.png".to_owned()),
+    ];
+    let frames = vec![parent];
+
+    crate::frames::rekey_frame_images(&mut dl, &frames, 0);
+
+    match &dl[0] {
+        lumen_paint::DisplayCommand::DrawBackgroundImage { src, .. } => {
+            assert_eq!(src, "http://h/a/bg.png");
+        }
+        other => panic!("ожидался DrawBackgroundImage, получено {other:?}"),
+    }
+    match &dl[1] {
+        lumen_paint::DisplayCommand::DrawCrossFade { src_a, src_b, .. } => {
+            assert_eq!(src_a, "http://h/a/a.png", "своя сторона переписывается");
+            assert_eq!(src_b, "untouched.png", "чего нет в карте — не трогаем");
+        }
+        other => panic!("ожидался DrawCrossFade, получено {other:?}"),
+    }
 }
 
 // ── pointer_target (BUG-480 срез 16) ───────────────────────────────────────

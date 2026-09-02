@@ -878,8 +878,13 @@ pub(crate) fn parse_and_layout(
     // (`frames::frame_image_key`), поэтому со своими ключами страницы они не
     // сталкиваются, а все существующие точки регистрации (`apply_loaded_page`,
     // `reload`, `pending_images`, CPU-кэш снимков) подхватывают их без правок.
+    let mut animated_gifs = animated_gifs;
     for h in &frames {
         images.extend(h.images.iter().map(|(k, i)| (k.clone(), Arc::clone(i))));
+        // FRAME-5: то же слияние, что у `images` выше — под-документов GIF
+        // тикает в `RedrawRequested` через `Lumen::animated_gifs` (карта
+        // СТРАНИЦЫ), ключи уже уникальны на всю страницу (`frame_image_key`).
+        animated_gifs.extend(h.animated_gifs.iter().cloned());
     }
 
     let rule_count = sheet.rules.len();
