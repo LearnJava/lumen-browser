@@ -2458,6 +2458,40 @@ SOURCE_MARKERS = [
             "/css/css-values/calc-rounds-to-integer.html",
         ),
     ),
+    # WPT-RUN-6 slice 52. `getComputedStyle(el, pseudoElt)` ignores its second
+    # argument entirely (already-open BUG-490, `web_api_shim_tail_b.js`:
+    # "Pseudo-elements are not yet supported (ignored)"), so
+    # `getComputedStyle(document.documentElement,
+    # "::view-transition-new(target)").objectViewBox` resolves against
+    # `documentElement` itself and reads back `""` — not `"none"`, not
+    # `undefined`. Measured live (`--mcp-live-port`, the test's exact shape
+    # reduced): `assert_in_array(viewbox, ["none", undefined])` throws.
+    # The throw happens inside `new Promise(async (resolve, reject) => {
+    # ...; transition.finished.then(resolve, reject); })` — an **async**
+    # executor. Calling an async function never lets a synchronous throw
+    # inside it escape to the caller (the function converts it into a
+    # rejected, immediately-discarded return value instead), so the
+    # `Promise` constructor's own exception handling — which only ever sees
+    # a normal return from an async executor — never calls `reject`, and
+    # `resolve`/`reject` are consequently never invoked by anything. The
+    # outer promise hangs forever: a transferable JS-idiom trap (any
+    # `new Promise(async (resolve, reject) => {...})` swallows every
+    # exception thrown before a path that explicitly calls
+    # `resolve`/`reject`), stacked on top of the already-known BUG-490 gap.
+    # No new bug filed — BUG-490 already owns the pseudo-element whitelist
+    # gap; fixing it turns this into a real PASS run, not just a FAIL.
+    Mechanism(
+        "computed-style-pseudo-ignored", "BUG-490",
+        [], "`getComputedStyle(el, pseudoElt)` ignores `pseudoElt` and reads "
+        "back the element's own style, so an `assert_in_array` on a "
+        "pseudo-only property throws inside a `new Promise(async "
+        "(resolve, reject) => {...})` executor — an exception there never "
+        "reaches `reject`, so the promise never settles",
+        predicate=_exact_id_marker(
+            "/css/css-view-transitions/"
+            "pseudo-computed-style-stays-in-sync-with-new-element.html",
+        ),
+    ),
 ]
 
 #: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched
