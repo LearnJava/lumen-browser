@@ -4618,6 +4618,11 @@ var _LUMEN_WRAPPER_MEMBERS = {
         set className(v)     { var nid = this.__nid__; _lumen_set_attr(nid, 'class', String(v)); },
         get classList()      { return _lumen_wrapper_slot(this, '__classList__', _lumen_make_class_list); },
         get style()          { return _lumen_wrapper_slot(this, '__style__', _lumen_make_style); },
+        // Web IDL [PutForwards=cssText] on `style` (BUG-494): a bare-string
+        // assignment must forward to `.style.cssText`, not silently no-op
+        // (sloppy mode) or throw (strict mode, since `style` would otherwise
+        // be getter-only).
+        set style(v)         { this.style.cssText = String(v); },
         // HTML LS 3.2.6.6 (BUG-703): lazily built, then cached for the wrapper's
         // lifetime so `el.dataset === el.dataset` holds as it does in a browser.
         get dataset()        { var nid = this.__nid__;

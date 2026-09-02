@@ -1,11 +1,29 @@
 # BUG-494: `element.style = "css text"` (whole-string assignment) is a
 silent no-op — missing Web IDL `[PutForwards=cssText]` forwarding
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-02
 **Дата:** 2026-08-02
-**Компонент:** js shim (`crates/js/src/dom.rs:5613`, `_lumen_make_style`
-Proxy at `dom.rs:4264`)
+**Компонент:** js shim (`crates/js/src/shim/web_api_shim_mid.js` —
+`_LUMEN_WRAPPER_MEMBERS`; the file/line pointers below predate SPLIT-JS3,
+2026-08-28, which moved the shim text out of `dom.rs`)
 **Найден:** WPT-RUN-3 срез 8 (`ROADMAP.md`) — массовый прогон `css/css-borders`
+
+## Фикс (2026-09-02, P3)
+
+Added `set style(v) { this.style.cssText = String(v); }` next to the existing
+`get style()` in `_LUMEN_WRAPPER_MEMBERS` (`web_api_shim_mid.js`) — Web IDL
+`[PutForwards=cssText]`: a bare-string assignment now forwards to the
+already-correct `cssText` setter inside `_lumen_make_style`'s Proxy handler.
+Fixes both the sloppy-mode silent no-op and the strict-mode `TypeError`
+(same root cause: a getter-only accessor) in one change, including the
+`numeric-testcommon.js` reset pattern (`inline-style-assign` mechanism) that
+was TIMEOUT-ing 23 vendored files. Live-verified via `--dump-layout`:
+`d.style = '...'` now round-trips through `getAttribute('style')` and
+`style.cssText`, in both sloppy and strict mode. BUG-493 (same test page,
+`getComputedStyle()` same-tick staleness) is unaffected and stays open.
+Gates: `cargo clippy -p lumen-js --features v8-backend --all-targets -- -D
+warnings` clean, `cargo test -p lumen-js --features v8-backend` 3414/3414
+lib + 83/83 `cases`.
 
 ## Механизм
 
