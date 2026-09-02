@@ -1262,6 +1262,27 @@ def _popstate_traversal_marker(text, test_id=None):
     return False
 
 
+#: `Mechanism.matches` runs every pattern against one *line* at a time (see
+#: its docstring), so a call split across lines — `open(\n  "url")`, the shape
+#: `iframe_sandbox_allow_top_navigation_by_user_activation_*.html` uses —
+#: defeats even a `\s*`-widened regex: there is no physical newline left
+#: inside a single line string to match across. `open-freezes-opener` reads
+#: the joined source instead for exactly that reason (slice 36).
+_OPEN_CALL_RE = re.compile(
+    r"(?:^|[^.\w])open\(\s*['\"]|\bwindow\.open\(|"
+    r"\.target\s*=\s*['\"]_blank|target=['\"]_blank")
+_OPEN_WAIT_RE = re.compile(
+    r"addEventListener\(\s*['\"](?:message|storage)['\"]|"
+    r"\bonmessage\s*=|\bonstorage\s*=")
+
+
+def _open_freezes_opener_marker(text, test_id=None):
+    """True for a test that calls `open()`/uses a `target=_blank` activation
+    and waits for a `message`/`storage` event — BUG-883's shape — regardless
+    of whether the call and the listener each sit on one line or several."""
+    return bool(_OPEN_CALL_RE.search(text)) and bool(_OPEN_WAIT_RE.search(text))
+
+
 SOURCE_MARKERS = [
 
     # First on purpose: see `_audio_src_marker` — the page stops dead at the
@@ -1370,18 +1391,15 @@ SOURCE_MARKERS = [
     # missing channel of BUG-797 is a barrier the test never reaches. Both
     # spellings count — these tests are written `const w = open(...)` — and
     # `xhr.open(`/`indexedDB.open(` are excluded by requiring no `.` before
-    # the name.
+    # the name. Reads the joined source via a predicate, not per-line patterns
+    # (slice 36) — see `_open_freezes_opener_marker`.
     Mechanism(
-        "open-freezes-opener", "BUG-883",
-        [r"(?:^|[^.\w])open\(['\"]|\bwindow\.open\(|"
-         r"\.target\s*=\s*['\"]_blank|target=['\"]_blank",
-         r"addEventListener\(['\"](?:message|storage)['\"]|"
-         r"\bonmessage\s*=|\bonstorage\s*="],
+        "open-freezes-opener", "BUG-883", [],
         "`open()` (and a `target=_blank` activation) replaces the calling "
         "document instead of creating an auxiliary context — the opener's "
         "timers never run again, so the answer it is waiting for cannot be "
         "heard",
-        mode="all",
+        predicate=_open_freezes_opener_marker,
     ),
     Mechanism(
         "history-popstate-no-url", "BUG-886", [],
@@ -5762,6 +5780,15 @@ def selftest():
             handle.write("<script>open('resources/child.html');</script>")
         check(classify_source("/win/nowait.html", tmp, {}) is None,
               "an open() with no cross-window wait must not be claimed")
+        # Slice 36: the call and its listener each split across two lines —
+        # `iframe_sandbox_allow_top_navigation_by_user_activation_*.html`'s
+        # exact shape — must still be claimed.
+        with open(os.path.join(tmp, "win", "multiline.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>let w = open(\n  'resources/child.html'\n);\n"
+                         "window.addEventListener(\n  'message',\n"
+                         "  t.step_func_done()\n);</script>")
+        check(classify_source("/win/multiline.html", tmp, {}) == "open-freezes-opener",
+              "an open()/addEventListener call split across lines was not claimed")
 
         # Sixth stage, `script-created-iframe-never-loads`. The ordering case
         # is the existing `setattr.html` check above: the same shape, but with
