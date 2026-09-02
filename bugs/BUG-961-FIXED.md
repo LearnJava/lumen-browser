@@ -693,6 +693,38 @@ item 4 above; the rest are OK/ERROR in both A/B runs — a different question
 than "why does this TIMEOUT") still need per-id triage, one WPT-RUN-6 slice
 at a time.
 
+## WPT-RUN-6 срез 50: `svg/linking/scripted/a.ping-functionality.html` does
+NOT hang live — a real GAP found (`ping` unimplemented), but not the cause
+
+Live probe (`serve_wpt_like.py` port 8998 + `--mcp-live-port` 8999, same
+recipe as срез 49): the harness completes cleanly in ~9s
+(`PROBE harness-complete status=0 tests=3 …:1|…:1|…:1` — all three subtests
+FAIL, none TIMEOUT), well inside the 10s corpus budget. No hang reproduces.
+
+Root cause of the FAILs: hyperlink auditing (`ping` attribute, HTML LS
+§4.6.9) sends no request at all, for either HTML `<a>`/`<area>` (the content
+attribute IS reflected as an IDL string —
+`_lumen_install_reflection(HTMLAnchorElement.prototype, [['ping', 'ping',
+'string'], ...])`, `web_api_shim_tail_b.js:1092`/`1104` — but nothing sends
+a request on click) or SVG `<a>` (no IDL reflection at all, since SVG
+elements never get `HTMLAnchorElement.prototype` — `anchor.ping` throws
+synchronously on a plain getter read). `rg ping crates --type rust` and a
+grep of every shim file turn up zero hyperlink-auditing call sites — the
+mechanism does not exist, not a bug in an existing one. Filed as
+[BUG-963](BUG-963-OPEN.md).
+
+This does **not** explain the corpus TIMEOUT, though: same pattern as
+`console-log-large-array`/`canvas-with-padding` (срез 48, item 4) — the test
+itself resolves quickly and deterministically under a live probe, so the
+TIMEOUT recorded in the WPT-RUN-5 snapshot is most likely another instance
+of the launch-path artifact this bug's own root cause names (`mozprocess`
+orchestration), not an engine hang on this test's own code path. Not
+reclassified in `timeout_audit.py` — the browser's own printed output during
+a real corpus run carries no signature for this (the failure is silent, no
+console line), so there is nothing for a `MECHANISMS` pattern to match; the
+"39 unclassified" count stands. Remaining 38 residual ids still need
+per-id triage.
+
 ## Как проверить фикс
 
 `tests/wpt/run_report.py --root console --all --recursive --offset 4 --limit
