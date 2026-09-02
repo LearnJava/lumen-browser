@@ -66,6 +66,25 @@ fn scroll_top_left_via_update_scroll_states() {
     assert_eq!(sh, lumen_core::JsValue::Number(2000.0));
 }
 
+/// BUG-475: CSSOM View defines `scrollWidth`/`scrollHeight` for every element,
+/// not just designated `overflow: scroll`/`auto` containers. An element with
+/// no entry in the scroll-state map (never a scroll container) must still
+/// answer at least its padding/border-box size, not 0.
+#[test]
+fn scroll_width_height_fall_back_to_bounding_rect_for_non_scroll_container() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let doc_arc = make_doc();
+    let nid = {
+        let doc = doc_arc.lock().unwrap();
+        super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+    };
+    rt.update_layout_rects([(nid, [0.0, 0.0, 100.0, 60.0])].into_iter().collect());
+    let sw = rt.eval("document.body.scrollWidth").unwrap();
+    assert_eq!(sw, lumen_core::JsValue::Number(100.0));
+    let sh = rt.eval("document.body.scrollHeight").unwrap();
+    assert_eq!(sh, lumen_core::JsValue::Number(60.0));
+}
+
 #[test]
 fn scroll_to_queues_request() {
     let rt = v8_runtime_with_dom(make_doc());

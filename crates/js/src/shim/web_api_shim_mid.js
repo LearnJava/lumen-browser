@@ -5177,8 +5177,23 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var s = _lumen_get_scroll_state(nid); return s ? s[1] : 0;
         },
         set scrollTop(v) { var nid = this.__nid__; _lumen_request_scroll(nid, _lumen_get_scroll_state(nid) ? _lumen_get_scroll_state(nid)[0] : 0, +v); },
-        get scrollWidth()  { var nid = this.__nid__; var s = _lumen_get_scroll_state(nid); return s ? s[2] : 0; },
-        get scrollHeight() { var nid = this.__nid__; var s = _lumen_get_scroll_state(nid); return s ? s[3] : 0; },
+        // CSSOM View §Extensions to the Element interface: scrollWidth/scrollHeight
+        // are defined for EVERY element, not just designated scroll containers
+        // (`overflow: scroll`/`auto`) — they must return at least the element's
+        // padding-box size. `_lumen_get_scroll_state` only has an entry for actual
+        // scroll containers (BUG-475); everything else falls back to the border-box
+        // size from `_lumen_get_bounding_rect` (border box ⊇ padding box, so this
+        // still satisfies the "at least padding-box" floor, same relationship
+        // `content_width`/`content_height` already use as the scroll-container
+        // minimum in `lumen_layout::collect_scroll_containers`).
+        get scrollWidth()  { var nid = this.__nid__;
+            var s = _lumen_get_scroll_state(nid); if (s) return s[2];
+            var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0;
+        },
+        get scrollHeight() { var nid = this.__nid__;
+            var s = _lumen_get_scroll_state(nid); if (s) return s[3];
+            var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0;
+        },
         scrollTo: function(x, y) { var nid = this.__nid__;
             if (typeof x === 'object' && x !== null) { y = x.top || 0; x = x.left || 0; }
             _lumen_request_scroll(nid, +x, +y);
