@@ -1025,50 +1025,69 @@ pub fn compute_style(
     // CSS Cascade L5 §6.4.6 — `revert-layer`: a declaration whose value is
     // `revert-layer` rolls the cascaded value back to what it would be if all
     // declarations of that property in the *current* cascade layer (same
-    // importance) were removed. We resolve it as a pre-pass over the already
-    // cascade-sorted `matched` set: for every property whose winning
-    // declaration (the last occurrence in sort order) is `revert-layer`, drop
-    // every declaration of that property belonging to the winning layer, then
-    // repeat — a lower layer may itself contain `revert-layer`. The normal
-    // last-wins apply loop below then yields the reverted value automatically;
-    // when nothing remains the property keeps its inherited/initial value.
+    // importance) were removed. CSS Cascade L5 §revert-rule-keyword (BUG-487)
+    // — `revert-rule` rolls the value back to what it would be if the one
+    // style rule (or the inline `style` attribute, which shares a single
+    // synthetic rule index for all its declarations) that contributed the
+    // winning declaration didn't exist, regardless of layer/origin/importance.
+    // Both are resolved as a pre-pass over the already cascade-sorted
+    // `matched` set: for every property whose winning declaration (the last
+    // occurrence in sort order) is `revert-layer`/`revert-rule`, drop every
+    // declaration of that property belonging to the winning layer/rule
+    // respectively, then repeat. Repetition matters for two reasons: a lower
+    // layer may itself contain `revert-layer`, and resolving one keyword can
+    // reveal the *other* as the new winner (`revert-rule-revert-layer.html`
+    // chains both), so every round rechecks for both. The normal last-wins
+    // apply loop below then yields the reverted value automatically; when
+    // nothing remains the property keeps its inherited/initial value.
     //
-    // `revert-layer` is intentionally NOT a `CssWideKeyword`: it depends on the
-    // declaration's own layer, so it cannot be applied per-declaration like
-    // `inherit`/`initial`. Shorthand↔longhand reverts across layers are a known
-    // limitation (grouping is by exact property name).
+    // Neither `revert-layer` nor `revert-rule` is a `CssWideKeyword`: one
+    // depends on the declaration's own layer, the other on its own rule, so
+    // neither can be applied per-declaration like `inherit`/`initial`.
+    // Shorthand↔longhand reverts across layers/rules are a known limitation
+    // (grouping is by exact property name).
     //
     // BUG-341 S10: the loop below allocates a lowercased `String` key per
     // matched declaration plus a `HashMap` just to discover, on essentially
-    // every element of every real page, that nothing declares `revert-layer`.
-    // One allocation-free scan first (measured: 1.4 ms per chrome layout pass,
-    // ~7% of the cascade stage).
-    while matched
-        .iter()
-        .any(|&(_, _, _, _, _, _, decl)| decl.value.trim().eq_ignore_ascii_case("revert-layer"))
-    {
+    // every element of every real page, that nothing declares `revert-layer`/
+    // `revert-rule`. One allocation-free scan first (measured: 1.4 ms per
+    // chrome layout pass, ~7% of the cascade stage).
+    while matched.iter().any(|&(_, _, _, _, _, _, decl)| {
+        let v = decl.value.trim();
+        v.eq_ignore_ascii_case("revert-layer") || v.eq_ignore_ascii_case("revert-rule")
+    }) {
         use std::collections::HashMap;
         // Winner per property = last occurrence in the cascade-sorted vec.
-        // (lp, important, is_revert_layer)
-        let mut winners: HashMap<String, (i32, bool, bool)> = HashMap::new();
-        for &(imp, _inline, lp, _, _, _, decl) in &matched {
+        // (lp, important, rule_idx, is_revert_layer, is_revert_rule)
+        let mut winners: HashMap<String, (i32, bool, usize, bool, bool)> = HashMap::new();
+        for &(imp, _inline, lp, _, rule_idx, _, decl) in &matched {
             let key = decl.property.to_ascii_lowercase();
-            let is_revert = decl.value.trim().eq_ignore_ascii_case("revert-layer");
-            winners.insert(key, (lp, imp, is_revert));
+            let v = decl.value.trim();
+            let is_revert_layer = v.eq_ignore_ascii_case("revert-layer");
+            let is_revert_rule = v.eq_ignore_ascii_case("revert-rule");
+            winners.insert(key, (lp, imp, rule_idx, is_revert_layer, is_revert_rule));
         }
-        let targets: Vec<(String, i32, bool)> = winners
-            .into_iter()
-            .filter(|&(_, (_, _, is_revert))| is_revert)
-            .map(|(k, (lp, imp, _))| (k, lp, imp))
+        let layer_targets: Vec<(String, i32, bool)> = winners
+            .iter()
+            .filter(|&(_, &(_, _, _, is_revert_layer, _))| is_revert_layer)
+            .map(|(k, &(lp, imp, _, _, _))| (k.clone(), lp, imp))
             .collect();
-        if targets.is_empty() {
+        let rule_targets: Vec<(String, usize)> = winners
+            .iter()
+            .filter(|&(_, &(_, _, _, _, is_revert_rule))| is_revert_rule)
+            .map(|(k, &(_, _, rule_idx, _, _))| (k.clone(), rule_idx))
+            .collect();
+        if layer_targets.is_empty() && rule_targets.is_empty() {
             break;
         }
-        matched.retain(|&(imp, _inline, lp, _, _, _, decl)| {
+        matched.retain(|&(imp, _inline, lp, _, rule_idx, _, decl)| {
             let key = decl.property.to_ascii_lowercase();
-            !targets
+            let hit_layer = layer_targets
                 .iter()
-                .any(|(tk, tlp, timp)| *tk == key && *tlp == lp && *timp == imp)
+                .any(|(tk, tlp, timp)| *tk == key && *tlp == lp && *timp == imp);
+            let hit_rule =
+                rule_targets.iter().any(|(tk, tridx)| *tk == key && *tridx == rule_idx);
+            !(hit_layer || hit_rule)
         });
     }
 
@@ -1227,10 +1246,12 @@ pub fn compute_style(
     }
 
     for (_, _, _, _, _, _, decl) in &matched {
-        // CSS Cascade L5 §6.4.6: a `revert-layer` declaration that survived the
-        // pre-pass was overridden by a higher layer for the same property, so it
-        // has no effect — skip it instead of letting it fail property parsing.
-        if decl.value.trim().eq_ignore_ascii_case("revert-layer") {
+        // CSS Cascade L5 §6.4.6 / §revert-rule-keyword: a `revert-layer`/
+        // `revert-rule` declaration that survived the pre-pass was overridden
+        // by a higher layer/rule for the same property, so it has no effect —
+        // skip it instead of letting it fail property parsing.
+        let dv = decl.value.trim();
+        if dv.eq_ignore_ascii_case("revert-layer") || dv.eq_ignore_ascii_case("revert-rule") {
             continue;
         }
         // CSS Values L4 §7.7: expand attr() typed references before applying.
