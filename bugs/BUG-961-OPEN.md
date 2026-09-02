@@ -15,21 +15,27 @@ that срез 43 initially looked like it had isolated: the exact same minimal
 repro (plain `subprocess.Popen`, no `LumenBrowser`, no `mozprocess`)
 completed in ~1.1-1.2s six times in a row (срез 43) and then stalled ~32s
 once under a controlled A/B re-run (срез 44), before returning to <1.3s on
-three more repeats of срез 43's own script right after. **The stall itself
-now looks intermittent, not deterministically tied to any one launch path
-or content-serving mechanism tested across срезы 39-44** — see срез 44's
-"Что нужно" item 3 for the still-missing evidence (a hit-rate over N fresh
-runs, and a `wchan` sample captured *during* an actual stall — every срез
-43 run completed too fast to sample anything). Ruled out as the *sole or
-required* cause: `lumen-bidi-server`, `lumen-driver` (both just surface a
-30s `RecvTimeoutError`, not the source), `mozprocess.ProcessReader`'s
+three more repeats of срез 43's own script right after, and **срез 45
+measured a real hit-rate on that same minimal repro: 0/30 fresh-process
+runs stalled**, including 17 runs at срез 44's own reported "load 2.0-2.3"
+band — refuting system load in that band as a sufficient cause. **The
+stall itself now looks intermittent, not deterministically tied to any one
+launch path, content-serving mechanism or load level tested across срезы
+39-45**, with a true hit rate considerably below 1/10 on the bare-Popen
+shape — see срез 45's "Что нужно" item 3 for the still-missing evidence (a
+`wchan` sample captured *during* an actual stall — 36 consecutive
+fresh-process runs of this shape across срезы 43/45 have all completed too
+fast to sample anything). Ruled out as the *sole or required* cause:
+`lumen-bidi-server`, `lumen-driver` (both just surface a 30s
+`RecvTimeoutError`, not the source), `mozprocess.ProcessReader`'s
 Python-side line handling (срез 40), `TestRunnerManager`/`executorlumen.py`
 orchestration (срез 41), wptserve's live route vs. a static copy (срез 42),
-`mozprocess.ProcessHandler`'s env merging and `preexec_fn` (срез 44).
+`mozprocess.ProcessHandler`'s env merging and `preexec_fn` (срез 44),
+system load in the 2.0-2.3 band (срез 45).
 **Найден:** P2, WPT-RUN-6 срез 39, 2026-09-02, investigating why
 `/console/console-log-large-array.any.html` (and its `.any.worker.html`
 twin) sit in `timeout_audit.py`'s `unclassified` bucket. Continued срезы
-40-44, 2026-09-02.
+40-45, 2026-09-02.
 
 ## Симптом
 
@@ -385,25 +391,64 @@ visible in `ps --sort=-pcpu` besides ordinary desktop apps) — not obviously
 saturated, but not controlled for either; no run in срезы 39-44 has logged
 system load alongside its result.
 
+## WPT-RUN-6 срез 45: item 3's hit-rate run — 0/30 stalls, including 17
+runs at срез 44's own "load 2.0-2.3" load-average band
+
+Ran срез 43's own script (`verify_bug961_slice43_wchan.py`, unmodified) 30
+times total, **each in a fresh `python` interpreter process**
+(`subprocess.run([sys.executable, ...])`, not a loop inside one script —
+item 3's explicit requirement to rule out interpreter-level state leaking
+between attempts). Driver: `tests/wpt/verify_bug961_slice45_hitrate.py`
+(committed this slice) — records pass/fail parsed from each child's own
+stdout, `/proc/loadavg` sampled immediately before every spawn, and keeps
+each run's full stdout/stderr (incl. срез 43's `_WchanSampler` summary,
+whenever the sampler collects enough to print one) in a per-run log under
+`.tmp/` (gitignored, not committed — this is a measurement, not a fixture).
+
+Result — **0/30 stalled**, all 30 completed in 1.5-2.1s wall-clock
+(`navigate returned OK` in 1.0-1.3s):
+
+```
+[hitrate] SUMMARY: 0/10 stalled, 10/10 OK, 0/10 unknown   (batch 1, .tmp/bug961-slice45/)
+[hitrate] SUMMARY: 0/20 stalled, 20/20 OK, 0/20 unknown   (batch 2, .tmp/bug961-slice45-batch2/)
+```
+
+`/proc/loadavg` at launch ranged 1.36-2.45 across the 30 runs (batch 2 runs
+4-20 specifically sat at 2.11-2.45 1-minute load — the same band срез 44
+reported, "load average 2.0-2.3", for its one stall). **This refutes system
+load in that band as sufficient on its own**: 17 runs landed inside or
+above срез 44's exact load window and every one of them completed cleanly,
+so "load ~2-2.3" cannot be the deciding variable срез 44's single sample
+pointed at — it was, at most, coincidental with that one stall.
+
+This also sharpens what "intermittent" means here: срез 43 (6/6 clean) +
+this slice (30/30 clean) is **36 consecutive clean runs** of the exact same
+minimal shape against 1 confirmed stall (срез 44) and 5 stalls total across
+срезы 41/42/44 (each under a *different* shape — live wptserve route,
+static copy, this same Popen shape once). The true hit rate for this
+specific minimal repro looks considerably below 1/10 — a wchan sample taken
+*during* an actual stall (item 3's other ask) still has not been captured,
+and at this hit rate a targeted capture attempt needs O(100) fresh-process
+runs, not 30, to have good odds of landing on one. No wchan evidence to add
+from this slice — every one of the 30 runs was too fast for the sampler to
+see anything but ordinary `futex_wait`/`epoll_wait` parks.
+
 ## Что нужно
 
 1. **(closed by срез 42 — content-serving is not the variable)**
 2. **(мехнизм запуска — mozprocess/`preexec_fn`/env — refuted by срез 44;
-   the remaining open question is reproducibility itself, item 3 below)**
-3. Get a real hit-rate instead of another single-shot A/B: run срез 43's
-   minimal repro (or срез 44's Variant P) **N≥10 times in a fresh process
-   each time** (not looped inside one Python script — rule out interpreter-
-   level state leaking between variants), record pass/fail and, on every
-   stall, capture the `/proc/<pid>/task/*/wchan` samples srez 43's
-   `_WchanSampler` already implements (not yet exercised against an actual
-   stall — every срез 43 run completed too fast to sample anything
-   interesting) plus `uptime`'s load average at launch time. A wchan sample
-   taken *during* a real stall is the one piece of evidence this
-   investigation still lacks; a hit-rate number turns "sometimes stalls"
-   into something a bisect (срез 42's still-untried fallback — SPLIT-DL19,
-   SPLIT-LB0, BUG-481 as candidates between срез 39's date and now) can
-   actually be scored against, since a bisect run that "passes" once no
-   longer means the candidate commit is clean.
+   срез 45 additionally refutes system load in the 2.0-2.3 band as
+   sufficient)**
+3. **(hit-rate measured by срез 45: 0/30 on the minimal Popen repro, i.e.
+   considerably below 1/10 — reopened as "capture a wchan sample during an
+   actual stall", since 30 fresh-process runs were not enough to catch one.
+   Two ways forward, either substantially more runs of `verify_bug961_
+   slice45_hitrate.py --runs 100` (or higher) left going in the background,
+   or go back to a shape more likely to reproduce — срезы 41/42's ~3/3 hit
+   rate under the live-wptserve/static-copy shapes vs. this slice's 0/30
+   under the bare-Popen shape hints the launch vector might matter after
+   all despite срез 44's single-sample refutation; that comparison itself
+   deserves a matched-N re-run before trusting either side's small sample.**
 
 ## Как проверить фикс
 
