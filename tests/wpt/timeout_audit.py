@@ -2312,6 +2312,28 @@ SOURCE_MARKERS = [
             "/html/semantics/embedded-content/media-elements/"
             "location-of-the-media-resource/currentSrc.html"),
     ),
+
+    # WPT-RUN-6 slice 34. See `verify_slice34_gaps.py`'s module docstring —
+    # two of the three candidates it read did NOT survive measurement
+    # (`video_crash_empty_src.html`'s hypothesis was refuted outright; the
+    # `frameset-element-synthetic-*.html` pair found a real bug, BUG-957,
+    # that `testharness.js`'s own exception handling turns into a clean FAIL
+    # rather than the observed TIMEOUT — so neither of those three ids gets
+    # a marker here, and they stay in the residual for the next slice).
+    Mechanism(
+        # Live probe (`--variant exec-command-insert-text`): `.focus()` on
+        # an `<input>`/`<textarea>`/`<div contenteditable>` does not create
+        # `doc.get_selection().anchor` for any of the three — `_lumen_exec_
+        # command`'s `"insertText"` arm (`dom_core.rs`) is `if let Some(pos)
+        # = sel.anchor { … }`, so the whole branch is skipped for all three,
+        # yet the function still returns `true`. No text is inserted, no
+        # `input` event fires, on any of the three tags.
+        "exec-command-insert-text-noop", "BUG-956",
+        [], "`execCommand('insertText', …)` is a silent no-op outside a "
+        "contenteditable selection `.focus()` never creates — it still "
+        "returns `true`, and no `input` event ever fires",
+        predicate=_exact_id_marker("/uievents/textInput/api.html"),
+    ),
 ]
 
 #: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched
