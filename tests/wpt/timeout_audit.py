@@ -2428,6 +2428,36 @@ SOURCE_MARKERS = [
         "is silently swallowed (BUG-871's shape) and the rest of the "
         "dispatch chain the test relies on never runs",
     ),
+    # WPT-RUN-6 slice 51. `getComputedStyle()` is a hand-written ~64-property
+    # whitelist (`selector_query.rs::computed_style_to_map`, BUG-472, already
+    # filed 2026-08-02) — any property outside it silently returns `""`
+    # instead of the actual computed value. Measured live (`--mcp-live-port`
+    # + `serve_wpt_like.py`, calling the file's own `verifySupport(el, prop,
+    # valPattern)` for all 18 properties it exercises): every single one
+    # returns `false` because `getComputedStyle(el)[prop]` reads back `""`
+    # both before and after `style.setProperty` — none of
+    # animation-timing-function/column-span/counter-increment/counter-reset/
+    # counter-set/font-feature-settings/grid-row/grid-template-rows/
+    # hyphenate-limit-chars/hyphenate-limit-lines/initial-letter/max-lines/
+    # order/orphans/text-combine-upright/transition-timing-function/widows/
+    # z-index is in the whitelist. `runTests()` bails out of every iteration
+    # via `if (!verifySupport(...)) return;` before ever calling `test()`, so
+    # zero subtests register — matches the snapshot's `subtests: []` exactly.
+    # With nothing registered and no explicit_done, `testharness.js` still
+    # waits out its own internal ~10s file-level timeout (the same mechanism
+    # slice 40's comment in `resources/testharnessreport.js` names) before
+    # completing with `TIMEOUT`. No new bug filed — BUG-472 already owns the
+    # whitelist gap; fixing it should turn this into a real PASS/FAIL run,
+    # not just clear the TIMEOUT.
+    Mechanism(
+        "computed-style-whitelist-empty", "BUG-472",
+        [], "`getComputedStyle()`'s hand-written property whitelist returns "
+        "`\"\"` for a property it doesn't cover, so a `verifySupport()`-style "
+        "feature-detection loop reads no change and never registers a test",
+        predicate=_exact_id_marker(
+            "/css/css-values/calc-rounds-to-integer.html",
+        ),
+    ),
 ]
 
 #: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched
