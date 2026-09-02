@@ -6,6 +6,13 @@
 **Компонент:** js (`crates/js/src/dom.rs`)
 **Найден:** WPT-RUN-3 срез 3 (`ROADMAP.md`) — массовый прогон `css/cssom`
 
+**CSSOM-1 закрыта 2026-09-03** (`docs/tasks/p1-cssom-1-stylesheets.md`): читающая половина этого отчёта
+реализована — `document.styleSheets`, `<style>`/`<link>.sheet`, `CSSStyleSheet`/`CSSRule`/`CSSRuleList`/
+`CSSStyleRule`/`CSSMediaRule` как глобалы, `selectorText`/`style.cssText`/`media.mediaText`, только чтение.
+Записывающая половина (`insertRule`/`deleteRule`, `new CSSStyleSheet()`, `adoptedStyleSheets`) остаётся
+отдельной задачей CSSOM-5 ([BUG-897](BUG-897-OPEN.md)); симптомы ниже, где они называют только чтение,
+больше не воспроизводятся — где называют `insertRule`/конструктор, воспроизводятся по-прежнему.
+
 ## Симптом
 
 ```

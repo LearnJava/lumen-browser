@@ -5,6 +5,12 @@
 **Компонент:** js (`crates/js/src/dom.rs` — `WEB_API_SHIM`) + shell/layout (публикация разобранных таблиц в JS-рантайм)
 **Найден:** P3 при закрытии [BUG-732](BUG-732-FIXED.md), 2026-08-10
 
+**CSSOM-1 закрыта 2026-09-03** (`docs/tasks/p1-cssom-1-stylesheets.md`): `document.styleSheets`,
+`<style>`/`<link>.sheet`, `StyleSheetList`/`CSSStyleSheet`/`CSSRuleList`/`CSSStyleRule`/`CSSMediaRule`
+now exist, backed by `LayoutSource::stylesheet_nodes` published into `V8JsRuntime::stylesheet_nodes` —
+the exact plumbing this file asked for, read-only. Remaining scope (a mutable path a script could use
+to add/remove rules) is CSSOM-5 ([BUG-897](BUG-897-OPEN.md)).
+
 ## Симптом
 
 `typeof document.styleSheets === 'undefined'` на любой странице (проба
