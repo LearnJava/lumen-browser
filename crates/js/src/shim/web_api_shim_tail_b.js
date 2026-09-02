@@ -1405,6 +1405,24 @@ _lumen_install_reflection(HTMLStyleElement.prototype, [
     ['type',           'type',           'string'],
 ]);
 
+// CSSOM §4.3 (CSSOM-1 срез 3): `<style>`/`<link rel=stylesheet>.sheet` — the
+// per-element `CSSStyleSheet`, or `null` when this element has no entry in
+// the registry (never inserted, or its `<link>` failed to load — same
+// simplification the registry itself makes, see
+// `docs/tasks/p1-cssom-1-stylesheets.md`).
+function _lumen_element_sheet_getter() {
+    var nid = _lumen_reflect_nid(this);
+    if (nid === -1) return null;
+    var idx = _lumen_stylesheet_owner_nids().indexOf(nid);
+    return idx === -1 ? null : _lumen_make_css_style_sheet(idx);
+}
+Object.defineProperty(HTMLStyleElement.prototype, 'sheet', {
+    get: _lumen_element_sheet_getter, enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLLinkElement.prototype, 'sheet', {
+    get: _lumen_element_sheet_getter, enumerable: true, configurable: true,
+});
+
 _lumen_install_reflection(HTMLIFrameElement.prototype, [
     ['src',            'src',            'url'],
     ['srcdoc',         'srcdoc',         'string'],

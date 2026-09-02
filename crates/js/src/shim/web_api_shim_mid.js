@@ -6495,6 +6495,221 @@ function Range() { return _lumen_make_range(0, 0, 0, 0); }
 Range.prototype.START_TO_START = 0; Range.prototype.START_TO_END = 1;
 Range.prototype.END_TO_START  = 2; Range.prototype.END_TO_END  = 3;
 
+// ── CSSOM (CSSOM-1 срез 3, read-only) ─────────────────────────────────────
+// `document.styleSheets`, `<style>`/`<link>.sheet` (getter added on
+// `HTMLStyleElement`/`HTMLLinkElement`.prototype in web_api_shim_tail_b.js),
+// `CSSStyleSheet.cssRules`, `CSSStyleRule.selectorText`/`style.cssText`,
+// `CSSMediaRule.media.mediaText`. Every object below addresses Rust-side
+// state by index (sheet index in the registry, rule index within
+// `cssom_rules()`) and re-reads it on every property access — the same
+// "class-object with state" pattern `_lumen_make_range` above uses, per
+// `docs/tasks/p1-cssom-1-stylesheets.md`. Writing (`insertRule`/`deleteRule`,
+// a mutable `CSSStyleDeclaration`, `new CSSStyleSheet()`) is CSSOM-1 срез 4/
+// CSSOM-2 — every constructor here throws like `NamedNodeMap`/`DOMStringMap`
+// above, and rule/sheet identity is NOT preserved across repeated reads
+// (`sheet.cssRules[0] !== sheet.cssRules[0]`) since nothing here is cached.
+
+function CSSStyleSheet() { throw new TypeError('Illegal constructor'); }
+globalThis.CSSStyleSheet = CSSStyleSheet;
+function CSSRuleList() { throw new TypeError('Illegal constructor'); }
+globalThis.CSSRuleList = CSSRuleList;
+function StyleSheetList() { throw new TypeError('Illegal constructor'); }
+globalThis.StyleSheetList = StyleSheetList;
+function MediaList() { throw new TypeError('Illegal constructor'); }
+globalThis.MediaList = MediaList;
+function CSSRule() { throw new TypeError('Illegal constructor'); }
+CSSRule.STYLE_RULE = 1; CSSRule.prototype.STYLE_RULE = 1;
+CSSRule.MEDIA_RULE = 4; CSSRule.prototype.MEDIA_RULE = 4;
+globalThis.CSSRule = CSSRule;
+function CSSStyleRule() { throw new TypeError('Illegal constructor'); }
+Object.setPrototypeOf(CSSStyleRule.prototype, CSSRule.prototype);
+globalThis.CSSStyleRule = CSSStyleRule;
+function CSSMediaRule() { throw new TypeError('Illegal constructor'); }
+Object.setPrototypeOf(CSSMediaRule.prototype, CSSRule.prototype);
+globalThis.CSSMediaRule = CSSMediaRule;
+
+// Generic index-only live-list Proxy: `itemsFn()` returns the current array
+// of already-built member objects, `protoObj` decides which interface the
+// result claims (`instanceof`). The CSS-rule/stylesheet-list twin of
+// `_lumen_make_nid_collection` above, which is node-id-specific and calls
+// `_lumen_make_element` internally — these lists' members are already-built
+// rule/sheet objects, not node ids.
+function _lumen_make_indexed_list(itemsFn, protoObj) {
+    var proto = Object.create(protoObj);
+    return new Proxy(proto, {
+        get: function(target, prop) {
+            var list = itemsFn();
+            if (prop === 'length') return list.length;
+            if (prop === 'item') return function(i) { i = i >>> 0; return i < list.length ? list[i] : null; };
+            if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
+                var i = parseInt(prop, 10);
+                return i < list.length ? list[i] : undefined;
+            }
+            return target[prop];
+        },
+        has: function(target, prop) {
+            var list = itemsFn();
+            if (prop === 'length' || prop === 'item') return true;
+            if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) return parseInt(prop, 10) < list.length;
+            return prop in target;
+        },
+        ownKeys: function() {
+            var list = itemsFn(), keys = [];
+            for (var i = 0; i < list.length; i++) keys.push(String(i));
+            return keys;
+        },
+        getOwnPropertyDescriptor: function(target, prop) {
+            var list = itemsFn();
+            if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
+                var i = parseInt(prop, 10);
+                if (i < list.length) return { value: list[i], writable: false, enumerable: true, configurable: true };
+            }
+            return undefined;
+        },
+    });
+}
+
+// A read-only `MediaList` over a fixed media-query text (`stylesheet.media`/
+// `CSSMediaRule.media`) — CSSOM-1 срез 3 does not track live media-query
+// edits (`appendMedium`/`deleteMedium` are no-ops), only the `mediaText`
+// (CSSOM View §6.2) callers actually read in the WPT slices BUG-471 cites.
+function _lumen_make_media_list(text) {
+    var t = text || '';
+    var m = Object.create(MediaList.prototype);
+    Object.defineProperty(m, 'mediaText', {
+        get: function() { return t; }, enumerable: true, configurable: true,
+    });
+    Object.defineProperty(m, 'length', {
+        get: function() { return t === '' ? 0 : 1; }, enumerable: true, configurable: true,
+    });
+    m.item = function(i) { return (i === 0 && t !== '') ? t : null; };
+    m.appendMedium = function() {};
+    m.deleteMedium = function() {};
+    m.toString = function() { return t; };
+    return m;
+}
+
+// A read-only `CSSStyleDeclaration`-shaped object for `CSSStyleRule.style`
+// (CSSOM §7.3) — `cssText` only for now; indexed/named property access and
+// mutation are CSSOM-2's `crates/js/src/dom.rs::_lumen_make_style`, not this.
+function _lumen_make_css_style_declaration_readonly(cssText) {
+    var d = {};
+    Object.defineProperty(d, 'cssText', {
+        get: function() { return cssText; }, enumerable: true, configurable: true,
+    });
+    return d;
+}
+
+function _lumen_make_css_rule_list(itemsFn) {
+    return _lumen_make_indexed_list(itemsFn, CSSRuleList.prototype);
+}
+
+// A style rule (`CSSStyleRule`), built from the JSON `_lumen_stylesheet_rule_json`/
+// `_lumen_stylesheet_media_child_json` return — `{selectorText, styleCssText}`.
+// `parentRule` is `null` for a top-level rule, the enclosing `CSSMediaRule`
+// wrapper for a rule nested inside `@media`.
+function _lumen_build_css_style_rule(data, sheetIdx, parentRule) {
+    var r = Object.create(CSSStyleRule.prototype);
+    Object.defineProperties(r, {
+        type:         { get: function() { return CSSRule.STYLE_RULE; }, enumerable: true, configurable: true },
+        selectorText: { get: function() { return data.selectorText; }, enumerable: true, configurable: true },
+        cssText:      { get: function() { return data.selectorText + ' { ' + data.styleCssText + ' }'; }, enumerable: true, configurable: true },
+        style:        { get: function() { return _lumen_make_css_style_declaration_readonly(data.styleCssText); }, enumerable: true, configurable: true },
+        parentStyleSheet: { get: function() { return _lumen_make_css_style_sheet(sheetIdx); }, enumerable: true, configurable: true },
+        parentRule:   { get: function() { return parentRule; }, enumerable: true, configurable: true },
+    });
+    return r;
+}
+
+// One nested style rule inside a `@media` block (`sheetIdx`'s top-level rule
+// `ruleIdx`, child `childIdx`) — `parentRule` is that block's own
+// `CSSMediaRule` wrapper, rebuilt fresh (matches the "no identity across
+// reads" simplification documented at the top of this section).
+function _lumen_make_css_media_child_rule(sheetIdx, ruleIdx, childIdx) {
+    var raw = _lumen_stylesheet_media_child_json(sheetIdx, ruleIdx, childIdx);
+    if (raw === null || raw === undefined) return null;
+    return _lumen_build_css_style_rule(JSON.parse(raw), sheetIdx, _lumen_make_css_rule(sheetIdx, ruleIdx));
+}
+
+// One top-level rule of sheet `sheetIdx` (`CSSStyleRule` or `CSSMediaRule`,
+// per the JSON payload's `kind`).
+function _lumen_make_css_rule(sheetIdx, ruleIdx) {
+    var raw = _lumen_stylesheet_rule_json(sheetIdx, ruleIdx);
+    if (raw === null || raw === undefined) return null;
+    var data = JSON.parse(raw);
+    if (data.kind !== 'media') return _lumen_build_css_style_rule(data, sheetIdx, null);
+    var mr = Object.create(CSSMediaRule.prototype);
+    function childRules() {
+        var n = _lumen_stylesheet_media_child_count(sheetIdx, ruleIdx);
+        var out = [];
+        for (var i = 0; i < n; i++) out.push(_lumen_make_css_media_child_rule(sheetIdx, ruleIdx, i));
+        return out;
+    }
+    Object.defineProperties(mr, {
+        type:     { get: function() { return CSSRule.MEDIA_RULE; }, enumerable: true, configurable: true },
+        media:    { get: function() { return _lumen_make_media_list(data.mediaText); }, enumerable: true, configurable: true },
+        cssRules: { get: function() { return _lumen_make_css_rule_list(childRules); }, enumerable: true, configurable: true },
+        rules:    { get: function() { return this.cssRules; }, enumerable: true, configurable: true },
+        cssText:  { get: function() {
+            var body = childRules().map(function(r) { return r.cssText; }).join(' ');
+            return '@media ' + data.mediaText + ' { ' + body + ' }';
+        }, enumerable: true, configurable: true },
+        parentStyleSheet: { get: function() { return _lumen_make_css_style_sheet(sheetIdx); }, enumerable: true, configurable: true },
+        parentRule: { get: function() { return null; }, enumerable: true, configurable: true },
+    });
+    return mr;
+}
+
+// A `CSSStyleSheet` addressing registry index `sheetIdx` (see
+// `_lumen_stylesheet_owner_nids`/`V8JsRuntime::stylesheet_nodes`).
+function _lumen_make_css_style_sheet(sheetIdx) {
+    var s = Object.create(CSSStyleSheet.prototype);
+    function ownerNode() {
+        var nids = _lumen_stylesheet_owner_nids();
+        return sheetIdx < nids.length ? _lumen_make_element(nids[sheetIdx]) : null;
+    }
+    function cssRuleList() {
+        return _lumen_make_css_rule_list(function() {
+            var n = _lumen_stylesheet_rule_count(sheetIdx);
+            var out = [];
+            for (var i = 0; i < n; i++) out.push(_lumen_make_css_rule(sheetIdx, i));
+            return out;
+        });
+    }
+    Object.defineProperties(s, {
+        type:     { get: function() { return 'text/css'; }, enumerable: true, configurable: true },
+        disabled: { get: function() { return _lumen_stylesheet_disabled(sheetIdx); }, enumerable: true, configurable: true },
+        ownerNode: { get: ownerNode, enumerable: true, configurable: true },
+        href: { get: function() {
+            var el = ownerNode();
+            return (el && el.tagName === 'LINK') ? el.href : null;
+        }, enumerable: true, configurable: true },
+        title: { get: function() {
+            var el = ownerNode();
+            return el ? (el.getAttribute('title') || null) : null;
+        }, enumerable: true, configurable: true },
+        media: { get: function() {
+            var el = ownerNode();
+            return _lumen_make_media_list(el ? (el.getAttribute('media') || '') : '');
+        }, enumerable: true, configurable: true },
+        parentStyleSheet: { get: function() { return null; }, enumerable: true, configurable: true },
+        ownerRule:        { get: function() { return null; }, enumerable: true, configurable: true },
+        cssRules: { get: cssRuleList, enumerable: true, configurable: true },
+        rules:    { get: function() { return this.cssRules; }, enumerable: true, configurable: true },
+    });
+    return s;
+}
+
+// `document.styleSheets` — a live `StyleSheetList` over the registry.
+function _lumen_make_style_sheet_list() {
+    return _lumen_make_indexed_list(function() {
+        var nids = _lumen_stylesheet_owner_nids();
+        var out = [];
+        for (var i = 0; i < nids.length; i++) out.push(_lumen_make_css_style_sheet(i));
+        return out;
+    }, StyleSheetList.prototype);
+}
+
 // ── Selection singleton (WHATWG Selection API §3) ─────────────────────────
 // All access to the selection state goes through the Rust bindings.
 
@@ -6989,6 +7204,13 @@ var document = {
     },
     get fonts() {
         return _lumen_get_fonts();
+    },
+    // CSSOM §4.3 (CSSOM-1 срез 3, read-only): the document's per-<style>/
+    // <link rel=stylesheet> sheets, in document order. Backed by a registry
+    // maintained in Rust (`crates/shell`), not by this document's merged
+    // cascade sheet — see `docs/tasks/p1-cssom-1-stylesheets.md`.
+    get styleSheets() {
+        return _lumen_make_style_sheet_list();
     },
     // ── Selection API ─────────────────────────────────────────────────────
     getSelection:  function() { return _lumen_selection; },

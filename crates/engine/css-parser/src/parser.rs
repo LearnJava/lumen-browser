@@ -416,6 +416,28 @@ impl Stylesheet {
     }
 }
 
+/// One `<style>`/`<link rel=stylesheet>` DOM node paired with its own parsed
+/// sheet — the per-element granularity `document.styleSheets`/`element.sheet`
+/// (CSSOM-1) need, as opposed to a page's single merged cascade [`Stylesheet`].
+///
+/// `node` is a raw node-id index rather than `lumen_dom::NodeId`: this crate
+/// must not depend on `lumen_dom` (siblings in the architecture layering —
+/// see the "Архитектурный пробел" section of
+/// `docs/tasks/p1-cssom-1-stylesheets.md`), and every consumer of this type
+/// already crosses that same node-id-as-`u32` boundary at the JS binding
+/// layer. Built by `crates/shell/src/stylesheets.rs::build_stylesheet_node_registry`,
+/// read by `crates/js`'s CSSOM-1 срез 3 natives.
+#[derive(Debug, Clone)]
+pub struct StylesheetNodeEntry {
+    /// Owner `<style>`/`<link>` node id.
+    pub node: u32,
+    /// This element's own parsed sheet — independent of the page's merged
+    /// cascade sheet.
+    pub sheet: std::sync::Arc<Stylesheet>,
+    /// `CSSStyleSheet.disabled`. Always `false` until CSSOM-1 срез 4.
+    pub disabled: bool,
+}
+
 pub fn parse(input: &str) -> Stylesheet {
     Parser::new(input).parse_stylesheet()
 }

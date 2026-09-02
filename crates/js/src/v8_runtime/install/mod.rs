@@ -21,11 +21,13 @@ mod dom_core;
 mod net;
 mod platform;
 mod storage;
+mod stylesheets;
 
 pub(super) use dom_core::*;
 pub(super) use net::*;
 pub(super) use platform::*;
 pub(super) use storage::*;
+pub(super) use stylesheets::*;
 
 /// Регистрация натива под именем `$name` — та же синтаксическая форма площадки,
 /// что была у локального `reg!` внутри `install_dom`, плюс приставка контекста.

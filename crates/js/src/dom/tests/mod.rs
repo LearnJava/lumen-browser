@@ -206,3 +206,6 @@ mod v8_idle_message_clipboard;
 
 #[cfg(feature = "v8-backend")]
 mod v8_webworker;
+
+#[cfg(feature = "v8-backend")]
+mod v8_cssom_stylesheets;

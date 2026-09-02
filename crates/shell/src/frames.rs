@@ -1666,6 +1666,11 @@ fn spawn_frame(
         // BUG-443: a sub-document is laid out only after this call returns
         // (`layout_frame_document`), so there is no parse-time layout to offer.
         None,
+        // CSSOM-1 срез 3: sub-documents don't build the per-node stylesheet
+        // registry yet (mirrors the empty `stylesheet_nodes` bfcache/docking/
+        // hibernation already fall back to) — a frame's `document.styleSheets`
+        // reads as empty until a future slice wires this up.
+        Vec::new(),
     );
     // Навигация из скриптов ребёнка (location.href= и т.п.) вне среза 1:
     // отклоняем с логом, не заваливая страницу.
