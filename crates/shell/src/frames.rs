@@ -352,6 +352,12 @@ pub(crate) struct FrameSubresourceOutcomes {
     /// не собирался вовсе (фреймы не лежали в layout); теперь его парсит и
     /// использует `load_frame_sub_documents` сразу после этого прохода.
     pub(crate) css: String,
+    /// FRAME-5: многокадровые GIF-анимации ребёнка — `(ключ регистрации,
+    /// анимация)`, форма `LoadedPage::animated_gifs`. До этого среза наружу шёл
+    /// только первый кадр ([`fetch_frame_subresources`] это документировал явно) —
+    /// сама анимация отбрасывалась, и `Lumen::animated_gifs` (карта СТРАНИЦЫ) о
+    /// ней не знала. Тикает по [`FrameHandle::animated_gifs`].
+    pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedGif)>,
 }
 
 /// Запросить подресурсы парсерных элементов под-документа фрейма (BUG-480
@@ -374,8 +380,14 @@ pub(crate) struct FrameSubresourceOutcomes {
 /// (иначе `<img>` без атрибутов лёг бы нулевым боксом) и пиксели наружу для
 /// регистрации в рендерере. До среза брались только байты, которые никто не
 /// декодировал: рисовать их было некому, пока содержимое фрейма не попадало на
-/// экран (срез 14). `loading="lazy"` не запрашивается вовсе: прокси вьюпорта у
-/// фреймов нет, так же как срез 1 пропускает сами `loading=lazy`-iframe.
+/// экран (срез 14).
+///
+/// `loading="lazy"` не запрашивается вовсе: прокси вьюпорта у фреймов нет, так
+/// же как срез 1 пропускает сами `loading=lazy`-iframe. Полноценная доставка
+/// ленивых картинок ребёнка (FRAME-6, не сделано) требует доступа к рендереру
+/// и image-кэшу СТРАНИЦЫ (`Lumen::renderer`/`image_cache`) — их нет ни у этой
+/// функции, ни у `sync_frame_viewports`, которая знает реальный вьюпорт
+/// фрейма, но получает только `&mut [FrameHandle]`.
 pub(crate) fn fetch_frame_subresources(
     doc: &mut Document,
     base: &ResourceBase,
@@ -418,6 +430,7 @@ pub(crate) fn fetch_frame_subresources(
     let mut images = Vec::with_capacity(requests.len());
     let mut decoded_images = Vec::new();
     let mut image_keys = Vec::with_capacity(requests.len());
+    let mut animated_gifs = Vec::new();
     for (req, (key, img)) in requests.iter().zip(decoded) {
         image_keys.push((req.url.clone(), key.clone()));
         // BUG-269, как у страницы: intrinsic нужен, если автор не задал ХОТЯ БЫ
@@ -426,10 +439,14 @@ pub(crate) fn fetch_frame_subresources(
         let first = match &img {
             None => None,
             Some(crate::image_cache::DecodedImage::Static(i)) => Some(Arc::clone(i)),
-            // Многокадровый GIF: во фрейм идёт первый кадр. Тиканья анимации у
-            // под-документов нет (`Lumen::animated_gifs` — карта страницы),
-            // поэтому сама анимация наружу не отдаётся.
-            Some(crate::image_cache::DecodedImage::Animated { first, .. }) => Some(Arc::clone(first)),
+            // FRAME-5: многокадровый GIF — первый кадр идёт в `decoded_images`
+            // как раньше, но теперь вся анимация ЕДЕТ ДАЛЬШЕ (было: «наружу не
+            // отдаётся» — сама `gif` отбрасывалась) под тем же ключом, чтобы
+            // `redraw_requested` мог тикать её так же, как страничные GIF.
+            Some(crate::image_cache::DecodedImage::Animated { first, gif }) => {
+                animated_gifs.push((key.clone(), (**gif).clone()));
+                Some(Arc::clone(first))
+            }
         };
         images.push((req.node_id, first.is_some()));
         if let Some(image) = first {
@@ -439,8 +456,7 @@ pub(crate) fn fetch_frame_subresources(
             decoded_images.push((key, image));
         }
     }
-
-    FrameSubresourceOutcomes { links, images, css, decoded_images, image_keys }
+    FrameSubresourceOutcomes { links, images, css, decoded_images, image_keys, animated_gifs }
 }
 
 /// Ключ регистрации картинки под-документа фрейма (BUG-480 срез 15):
@@ -455,6 +471,66 @@ pub(crate) fn fetch_frame_subresources(
 /// разделяется, как и задумано кэшем.
 fn frame_image_key(base: &ResourceBase, raw_src: &str) -> String {
     base.resolve_str(raw_src)
+}
+
+/// FRAME-5: fetch + decode `background-image: url(...)`/`cross-fade()` of a
+/// frame's OWN layout tree — the same picker the page uses
+/// ([`fetch_and_decode_background_images`]), keyed by [`frame_image_key`] so a
+/// frame and the page (or two frames) referencing the same relative path do
+/// not collide in the shared image registry, mirroring how
+/// [`fetch_frame_subresources`] already keys `<img>`.
+///
+/// Runs against the layout tree ([`collect_background_image_requests`] reads
+/// `LayoutBox::style.background_layers`, not the DOM), so — unlike `<img>`/
+/// `<link>` (fetched pre-layout, срез 11) — the caller must have a layout
+/// already. `spawn_frame` calls this once, right after its own synchronous
+/// initial layout: like the page (`parse_and_layout` calls
+/// [`fetch_and_decode_background_images`] exactly once too, BUG-939), a
+/// `background-image` set or changed by a later relayout/mutation is not
+/// picked up — a known limitation shared with the page, not a regression.
+///
+/// Returns `(images, raw_to_key)`: `images` is the `LoadedPage::images`-shaped
+/// list to fold into [`FrameHandle::images`]; `raw_to_key` extends
+/// [`FrameHandle::image_keys`] so [`rekey_frame_images`] rewrites
+/// `DrawBackgroundImage`/`DrawCrossFade` sources the same way it already
+/// rewrites `DrawImage`.
+#[allow(clippy::type_complexity)]
+fn fetch_frame_background_images(
+    layout: &lumen_layout::LayoutBox,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    target: lumen_core::ColorSpace,
+) -> (Vec<(String, Arc<lumen_image::Image>)>, Vec<(String, String)>) {
+    let urls = lumen_layout::collect_background_image_requests(layout, 1.0);
+    let decoded = parallel_map(&urls, |_, url| {
+        let bytes = match fetch_image_bytes(url, base, sink, cookie_jar.clone()) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("iframe: пропуск bg-картинки {url}: {e}");
+                return None;
+            }
+        };
+        let image = match lumen_image::decode_to(&bytes, target) {
+            Ok(i) => i,
+            Err(e) => {
+                eprintln!("iframe: не декодируется bg-картинка {url}: {e}");
+                return None;
+            }
+        };
+        eprintln!(
+            "iframe: загружена bg-картинка: {url} ({}×{}, {:?})",
+            image.width, image.height, image.format
+        );
+        Some((url.clone(), frame_image_key(base, url), Arc::new(image)))
+    });
+    let mut images = Vec::new();
+    let mut raw_to_key = Vec::new();
+    for (raw, key, image) in decoded.into_iter().flatten() {
+        raw_to_key.push((raw, key.clone()));
+        images.push((key, image));
+    }
+    (images, raw_to_key)
 }
 
 /// Доставить исходы подресурсов фрейма ([`fetch_frame_subresources`]) его
@@ -487,19 +563,90 @@ fn deliver_frame_subresource_events(js: &Arc<dyn PersistentJs>, sub: &FrameSubre
 }
 
 /// Измеритель для layout под-документа фрейма: bundled Inter + системные
-/// face-ы, как у страницы ([`page_measurer`]), но без `@font-face`-шрифтов
-/// ребёнка — собственного прохода `url()`-загрузки у фрейма пока нет.
+/// face-ы, как у страницы ([`page_measurer`]), плюс `@font-face`-шрифты ребёнка
+/// (FRAME-5) — `local()` из `font_registry`, `url()` из уже скачанных
+/// `web_fonts` ([`load_frame_fonts`]).
+///
+/// Вызывается на КАЖДОМ пересчёте layout ребёнка (как страница пересобирает
+/// свой измеритель на каждом relayout в `compute_layout`), но без сети:
+/// `font_registry`/`web_fonts` посчитаны один раз в `spawn_frame` и просто
+/// читаются здесь — иначе `sync_frame_viewports` бил бы по сети на каждый
+/// ресайз/скролл страницы.
 ///
 /// `None` — шрифт не разобрался; вызывающая сторона тогда просто не считает
 /// geometry (лог в stderr), а не валит загрузку страницы.
-fn frame_measurer() -> Option<lumen_paint::MultiFontMeasurer> {
+fn frame_measurer(
+    font_faces: &[lumen_css_parser::FontFaceRule],
+    font_registry: &lumen_font::FontRegistry,
+    web_fonts: &[LoadedWebFont],
+) -> Option<lumen_paint::MultiFontMeasurer> {
     match lumen_font::Font::parse(INTER_FONT) {
-        Ok(font) => Some(page_measurer(&font, &[])),
+        Ok(font) => {
+            let mut measurer = page_measurer(&font, web_fonts);
+            for rule in font_faces {
+                if !rule.family.is_empty()
+                    && let Some(bytes) = font_registry.face_bytes_for_family(&rule.family)
+                {
+                    let ranges = rule
+                        .unicode_range
+                        .as_deref()
+                        .map(lumen_font::parse_unicode_ranges)
+                        .unwrap_or_default();
+                    measurer.register_family_with_ranges(&rule.family, bytes, ranges);
+                }
+            }
+            Some(measurer)
+        }
         Err(e) => {
             eprintln!("iframe: сбой измерителя шрифта, geometry ребёнка не посчитана: {e}");
             None
         }
     }
+}
+
+/// Синхронно грузит `@font-face` ребёнка (FRAME-5): `local()` — уже
+/// синхронно внутри [`load_font_faces`] (системный индекс в памяти), `url()` —
+/// блокирующим fetch здесь же, тем же приёмом, что [`fetch_frame_subresources`]
+/// уже применяет к картинкам ребёнка.
+///
+/// В отличие от страницы (PH3-19: async fetch + `FontLoaded` + FOUT-relayout,
+/// чтобы не держать первый paint), у фрейма загрузка и так уже синхронная до
+/// первого layout (срезы 11/12 — картинки и стили). Заводить отдельный
+/// async+relayout канал ради одних лишь шрифтов было бы непропорционально
+/// M-размеру этой задачи; расплата — фрейм с медленным веб-шрифтом чуть дольше
+/// показывает первый paint, а не мигает FOUT (в обмен де-факто лучший UX).
+fn load_frame_fonts(
+    font_faces: &[lumen_css_parser::FontFaceRule],
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+) -> (lumen_font::FontRegistry, Vec<LoadedWebFont>) {
+    let (registry, pending) = load_font_faces(font_faces, base, sink, cookie_jar.clone());
+    let web_fonts = pending
+        .into_iter()
+        .filter_map(|pf| {
+            let raw = fetch_image_bytes(&pf.url, base, sink, cookie_jar.clone()).ok()?;
+            let bytes = match lumen_font::maybe_decode_font(&raw) {
+                Ok(Some(d)) => d,
+                Ok(None) => raw,
+                Err(e) => {
+                    eprintln!("iframe @font-face «{}»: WOFF-декод провалился: {e}", pf.family);
+                    return None;
+                }
+            };
+            if lumen_font::Font::parse(&bytes).is_err() {
+                eprintln!("iframe @font-face «{}»: невалидный sfnt {}", pf.family, pf.url);
+                return None;
+            }
+            let unicode_range = pf
+                .unicode_range_str
+                .as_deref()
+                .map(lumen_font::parse_unicode_ranges)
+                .unwrap_or_default();
+            Some(LoadedWebFont { family: pf.family, weight: pf.weight, style: pf.style, unicode_range, bytes })
+        })
+        .collect();
+    (registry, web_fonts)
 }
 
 /// Посчитать cascade + layout под-документа фрейма на заданном вьюпорте и
@@ -659,7 +806,6 @@ pub(crate) fn sync_frame_viewports(
     if frames.is_empty() {
         return;
     }
-    let mut measurer: Option<lumen_paint::MultiFontMeasurer> = None;
     // «Layout пересчитан на этом проходе» — гейт для пересборки display list:
     // перерисовывать нужно и сам фрейм, и каждого его предка (его содержимое
     // вклеено в их списки).
@@ -717,16 +863,22 @@ pub(crate) fn sync_frame_viewports(
             if !viewport_changed && frames[i].interactive == state && frames[i].layout.is_some() {
                 continue;
             }
-            if measurer.is_none() {
-                measurer = frame_measurer();
-            }
-            let Some(m) = measurer.as_ref() else { return };
+            // FRAME-5: no longer memoized across frames — each frame can carry
+            // its own `@font-face` set (`frames[i].sheet.font_faces`), so a
+            // measurer built for frame A would silently miss frame B's fonts.
+            let Some(measurer) = frame_measurer(
+                &frames[i].sheet.font_faces,
+                &frames[i].font_registry,
+                &frames[i].web_fonts,
+            ) else {
+                continue;
+            };
             let layout = layout_frame_document(
                 &frames[i].doc,
                 &frames[i].sheet,
                 size,
                 frames[i].js.as_ref(),
-                m,
+                &measurer,
                 state,
             );
             frames[i].scroll_containers = lumen_layout::collect_scroll_containers(&layout);
@@ -794,7 +946,13 @@ pub(crate) fn relayout_frame_content(
     page_layout: &lumen_layout::LayoutBox,
     interactive: FrameInteractive,
 ) {
-    let Some(measurer) = frame_measurer() else { return };
+    let Some(measurer) = frame_measurer(
+        &frames[idx].sheet.font_faces,
+        &frames[idx].font_registry,
+        &frames[idx].web_fonts,
+    ) else {
+        return;
+    };
     let size = frames[idx].viewport;
     let state = interactive.for_frame(idx);
     let layout = layout_frame_document(
@@ -894,22 +1052,48 @@ pub(crate) fn rebuild_frame_display_lists(frames: &mut [FrameHandle], relaid: &[
 /// вместо содержимого внука. Совпасть `src` картинки и `src` фрейма могут
 /// только в патологической разметке (`<img>` и `<iframe>` на один адрес), где
 /// правильнее сохранить фрейм.
+///
+/// FRAME-5: `DrawBackgroundImage.src` и `DrawCrossFade.{src_a,src_b}` идут той
+/// же переадресацией — `image_keys` теперь несёт и записи из
+/// [`fetch_frame_background_images`], не только `<img>` — а заглушечная
+/// проверка выше их не касается: `splice_one_frame` ищет заглушку вложенного
+/// фрейма только среди `DrawImage`.
 pub(crate) fn rekey_frame_images(dl: &mut DisplayList, frames: &[FrameHandle], idx: usize) {
     if frames[idx].image_keys.is_empty() {
         return;
     }
+    let find_key = |src: &str| -> Option<String> {
+        frames[idx].image_keys.iter().find(|(raw, _)| raw == src).map(|(_, key)| key.clone())
+    };
     for cmd in dl.iter_mut() {
-        let DisplayCommand::DrawImage { src, .. } = cmd else { continue };
-        if frames.iter().any(|h| {
-            h.parent_doc
-                .as_ref()
-                .is_some_and(|pd| Arc::ptr_eq(pd, &frames[idx].doc))
-                && &h.host_src == src
-        }) {
-            continue;
-        }
-        if let Some((_, key)) = frames[idx].image_keys.iter().find(|(raw, _)| raw == src) {
-            *src = key.clone();
+        match cmd {
+            DisplayCommand::DrawImage { src, .. } => {
+                if frames.iter().any(|h| {
+                    h.parent_doc
+                        .as_ref()
+                        .is_some_and(|pd| Arc::ptr_eq(pd, &frames[idx].doc))
+                        && &h.host_src == src
+                }) {
+                    continue;
+                }
+                if let Some(key) = find_key(src) {
+                    *src = key;
+                }
+            }
+            DisplayCommand::DrawBackgroundImage { src, .. } => {
+                if let Some(key) = find_key(src) {
+                    *src = key;
+                }
+            }
+            DisplayCommand::DrawCrossFade { src_a, src_b, .. } => {
+                if let Some(key) = find_key(src_a) {
+                    *src_a = key;
+                }
+                if let Some(key) = find_key(src_b) {
+                    *src_b = key;
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -1463,15 +1647,20 @@ fn spawn_frame(
     // вместо честных нулей (см. frame_bridge.rs: «layout содержимого
     // фрейма — отдельный срез»). Вьюпорт — [`FRAME_UA_DEFAULT_SIZE`]
     // (реальный размер host-бокса ещё не известен на этом шаге).
-    // Измеритель собран как у страницы ([`page_measurer`]), но без
-    // @font-face ребёнка (`web_fonts: &[]` — задел следующего среза).
+    // Измеритель собран как у страницы ([`page_measurer`]), плюс
+    // @font-face ребёнка (FRAME-5, [`load_frame_fonts`]).
     // Каскад ребёнка разбирается один раз и переезжает в хэндл: срез 13
     // пересчитывает layout под реальный host-бокс, и повторный разбор
     // того же текста на каждом relayout был бы чистой тратой. Сам layout
     // тоже едет в хэндл (срез 14): по нему рисуется содержимое фрейма и в
     // нём ищется host-бокс вложенного фрейма.
     let frame_sheet = lumen_css_parser::parse(&subresources.css);
-    let frame_layout = frame_measurer().map(|measurer| {
+    // FRAME-5: синхронно (см. doc-comment `load_frame_fonts`) — тем же
+    // приёмом, что срез 11 уже применяет к картинкам и таблицам стилей
+    // ребёнка выше в этой функции.
+    let (font_registry, web_fonts) =
+        load_frame_fonts(&frame_sheet.font_faces, &child_base, sink, cookie_jar.clone());
+    let frame_layout = frame_measurer(&frame_sheet.font_faces, &font_registry, &web_fonts).map(|measurer| {
         layout_frame_document(
             &child_doc_arc,
             &frame_sheet,
@@ -1483,6 +1672,16 @@ fn spawn_frame(
             FrameNodeState::default(),
         )
     });
+    // FRAME-5: CSS Backgrounds L3 §3.10 — собираем `background-image: url(...)`
+    // ребёнка уже после его layout-а (см. doc-comment
+    // `fetch_frame_background_images` — картинки фона не влияют на расчёт
+    // коробок, тот же порядок, что и у страницы в `parse_and_layout`).
+    let (bg_images, bg_image_keys) = frame_layout
+        .as_ref()
+        .map(|layout| {
+            fetch_frame_background_images(layout, &child_base, sink, cookie_jar.clone(), env.target)
+        })
+        .unwrap_or_default();
     // Lifecycle ребёнка: DOMContentLoaded сразу после parse+inline-скриптов
     // (тот же порядок, что у top-level в parse_and_layout); window load —
     // следом, НО после исходов подресурсов (срез 11): «load» документа
@@ -1544,11 +1743,22 @@ fn spawn_frame(
         interactive: FrameNodeState::default(),
         host_rect: None,
         host_src: info.src.clone().unwrap_or_default(),
-        images: subresources.decoded_images,
-        image_keys: subresources.image_keys,
+        images: {
+            let mut images = subresources.decoded_images;
+            images.extend(bg_images);
+            images
+        },
+        image_keys: {
+            let mut image_keys = subresources.image_keys;
+            image_keys.extend(bg_image_keys);
+            image_keys
+        },
         scroll_y: 0.0,
         scroll_x: 0.0,
         scroll_containers: frame_scroll_containers,
+        font_registry,
+        web_fonts,
+        animated_gifs: subresources.animated_gifs,
     });
     handles
 }
@@ -1852,14 +2062,16 @@ pub(crate) struct FrameHandle {
     /// Значение атрибута `src` host-элемента — половина ключа, по которому
     /// [`splice_one_frame`] узнаёт команду-заглушку в display list родителя.
     pub(crate) host_src: String,
-    /// Декодированные картинки под-документа (BUG-480 срез 15).
+    /// Декодированные картинки под-документа (BUG-480 срез 15) — `<img>` плюс,
+    /// с FRAME-5, `background-image`/`cross-fade()` ([`fetch_frame_background_images`]).
     ///
     /// Едут в `LoadedPage::images` страницы: регистрация в рендерере (и в
     /// CPU-кэше снимков) идёт единым списком, поэтому ни одной новой точки
     /// регистрации срез не заводит — все существующие подхватывают их сами.
     pub(crate) images: Vec<(String, Arc<lumen_image::Image>)>,
     /// `(сырой src, ключ регистрации)` картинок под-документа — карта для
-    /// [`rekey_frame_images`] (BUG-480 срез 15).
+    /// [`rekey_frame_images`] (BUG-480 срез 15, FRAME-5 добавил в неё
+    /// background-картинки).
     pub(crate) image_keys: Vec<(String, String)>,
     /// Прокрутка под-документа по вертикали, CSS px (BUG-480 срез 17).
     ///
@@ -1890,6 +2102,21 @@ pub(crate) struct FrameHandle {
     /// колеса читал бы геометрию от предыдущего прохода) — `collect_scroll_containers`
     /// того же движка, что уже строит `Lumen::scroll_containers` для страницы.
     pub(crate) scroll_containers: Vec<lumen_layout::ScrollContainer>,
+    /// FRAME-5: реестр `local()` `@font-face`-семей ребёнка ([`load_frame_fonts`]) —
+    /// повторно читается на каждом пересчёте [`frame_measurer`] в
+    /// [`sync_frame_viewports`]/[`relayout_frame_content`], без сети.
+    pub(crate) font_registry: lumen_font::FontRegistry,
+    /// FRAME-5: `url()` `@font-face`-семьи ребёнка, уже скачанные и
+    /// декодированные [`load_frame_fonts`] в `spawn_frame` — сестра
+    /// [`Self::font_registry`], тот же повторный, но безсетевой читатель.
+    pub(crate) web_fonts: Vec<LoadedWebFont>,
+    /// FRAME-5: многокадровые GIF-анимации под-документа — форма
+    /// [`FrameSubresourceOutcomes::animated_gifs`]. Едут в `Lumen::animated_gifs`
+    /// (карту СТРАНИЦЫ) вместе со [`Self::images`], тем же слиянием в
+    /// `page_pipeline.rs` — тиканье в `RedrawRequested` не заводит отдельного
+    /// пути для фреймов, потому что ключи уже уникальны на всю страницу
+    /// ([`frame_image_key`]).
+    pub(crate) animated_gifs: Vec<(String, lumen_image::AnimatedGif)>,
 }
 
 // ── скролл под-документа (BUG-480 срез 17) ──────────────────────────────────
