@@ -17,6 +17,18 @@ function _lumen_computed_property(nid, name) {
 window.getComputedStyle = function(element, pseudoElt) {
     var nid = element && element.__nid__ != null ? element.__nid__ : null;
     // Cache: keyed by nid, invalidated on next call (live object semantics).
+    // BUG-483 ч.2: `length`/`item(i)`/`Symbol.iterator` used to be hardcoded
+    // (length always 0, item() always '', no iterator at all) instead of
+    // reflecting the actual per-node resolved property set — the standard
+    // `for (let p of getComputedStyle(el))` idiom threw `TypeError: not
+    // iterable` synchronously. `_lumen_get_computed_style_entries` is the same
+    // [name, value] snapshot `computedStyleMap()` already iterates (BUG-387),
+    // so this backs all three off it instead of duplicating a Rust binding.
+    var entries = null;
+    function resolveEntries() {
+        if (entries === null) entries = nid != null ? JSON.parse(_lumen_get_computed_style_entries(nid)) : [];
+        return entries;
+    }
     var handler = {
         get: function(target, prop) {
             if (prop === 'getPropertyValue') {
@@ -24,8 +36,24 @@ window.getComputedStyle = function(element, pseudoElt) {
                     return _lumen_computed_property(nid, String(name));
                 };
             }
-            if (prop === 'length') return 0;
-            if (prop === 'item') return function() { return ''; };
+            if (prop === 'length') return resolveEntries().length;
+            if (prop === 'item') {
+                return function(i) {
+                    var list = resolveEntries();
+                    return (i >= 0 && i < list.length) ? list[i][0] : '';
+                };
+            }
+            if (prop === Symbol.iterator) {
+                return function() {
+                    var list = resolveEntries();
+                    var i = 0;
+                    return {
+                        next: function() {
+                            return i < list.length ? { value: list[i++][0], done: false } : { value: undefined, done: true };
+                        }
+                    };
+                };
+            }
             if (prop === 'cssText') return '';
             if (typeof prop === 'string' && !/^\d+$/.test(prop)) {
                 // camelCase → kebab-case conversion for convenience. A custom
@@ -44,7 +72,7 @@ window.getComputedStyle = function(element, pseudoElt) {
         // as "unsupported". Mirrors `get`'s non-empty-string heuristic, same
         // one `StylePropertyMapReadOnly.prototype.has` already uses.
         has: function(target, prop) {
-            if (prop === 'getPropertyValue' || prop === 'length' || prop === 'item' || prop === 'cssText') {
+            if (prop === 'getPropertyValue' || prop === 'length' || prop === 'item' || prop === 'cssText' || prop === Symbol.iterator) {
                 return true;
             }
             if (typeof prop === 'string' && !/^\d+$/.test(prop)) {
