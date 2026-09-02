@@ -2334,6 +2334,39 @@ SOURCE_MARKERS = [
         "returns `true`, and no `input` event ever fires",
         predicate=_exact_id_marker("/uievents/textInput/api.html"),
     ),
+
+    # WPT-RUN-6 slice 35. Live probe (`--variant css-supports-bare-decl`):
+    # `CSS.supports("writing-mode: horizontal-tb")` — the bare one-argument
+    # form, no wrapping parens — answers `false` for a property the engine
+    # genuinely supports (confirmed live: the two-argument form and the
+    # parenthesized one-argument form both answer `true` for the identical
+    # property/value). `parse_supports_atom` (css-parser/src/parser.rs)
+    # requires a leading `(` and falls through to `SupportsCondition::
+    # Unknown` — which `.evaluate()` always reports unsupported — otherwise;
+    # per CSS Conditional Rules L3 §CSS.supports(), the one-arg form must
+    # fall back to parsing the string as a bare `<declaration>` when it does
+    # not parse as a full `<supports-condition>`, and Lumen never attempts
+    # that fallback. All five `css-writing-modes/forms/*.html` files gate
+    # every `test()`/`promise_test()` call behind this exact idiom in a loop
+    # over five writing-mode values, so the bug silently zeroes out every
+    # iteration and no test is ever registered — the raw snapshot confirms
+    # zero subtests (`test_status` never fires) for all three ids below, the
+    # same shape for the other two files in the cluster
+    # (select-multiple-keyboard-selection.optional.html, text-input-block-
+    # size.optional.html — both TIMEOUT in the snapshot too, already
+    # explained by other mechanisms so absent from the residual).
+    Mechanism(
+        "css-supports-bare-declaration", "BUG-958",
+        [], "`CSS.supports(\"prop: value\")` (no wrapping parens) always "
+        "answers `false` regardless of engine support — the one-argument "
+        "form never falls back to bare-`<declaration>` parsing — so a "
+        "`test()` loop gated on it registers zero tests",
+        predicate=_exact_id_marker(
+            "/css/css-writing-modes/forms/textarea-rows-cols-sizing.html",
+            "/css/css-writing-modes/forms/select-multiple-scrolling.optional.html",
+            "/css/css-writing-modes/forms/select-size-scrolling-and-sizing.optional.html",
+        ),
+    ),
 ]
 
 #: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched
