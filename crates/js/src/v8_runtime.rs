@@ -251,6 +251,7 @@ impl V8JsRuntime {
             let page_scroll_y = Arc::clone(&self.page_scroll_y);
             let computed_styles = Arc::clone(&self.computed_styles);
             let custom_properties = Arc::clone(&self.custom_properties);
+            let stylesheet_nodes = Arc::clone(&self.stylesheet_nodes);
             let window_open_requests = Arc::clone(&self.window_open_requests);
             let console_messages = Arc::clone(&self.console_messages);
             let pending_history_url_updates = Arc::clone(&self.pending_history_url_updates);
@@ -403,6 +404,8 @@ impl V8JsRuntime {
                 Arc::clone(&computed_styles),
                 Arc::clone(&custom_properties),
             )?;
+
+            install::install_stylesheets(scope, ctx, store, Arc::clone(&stylesheet_nodes))?;
 
             install::install_shadow_dom(
                 scope,

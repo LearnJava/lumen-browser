@@ -494,6 +494,12 @@ pub(crate) fn run_scripts_with_dom(
     // `None` = the caller has no layout to offer (frame/thaw paths), which is
     // the pre-BUG-443 behaviour: a parse-time read answers `""` / a zero rect.
     parse_time_layout: Option<JsLayoutSnapshot>,
+    // CSSOM-1 срез 3: the per-`<style>`/`<link>` registry as it stands right
+    // now, pushed into the runtime before the first script line executes —
+    // same rationale as `parse_time_layout` above. Empty for the frame/thaw
+    // callers, which do not build this registry (mirrors their empty
+    // `stylesheet_nodes` in `bfcache.rs`/`docking.rs`/`hibernation.rs`).
+    stylesheet_nodes: Vec<lumen_css_parser::StylesheetNodeEntry>,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>) {
     // `scripts` / `module_scripts` are already resolved by the caller in
     // document order, including fetched external `<script src>` bodies (BUG-164).
@@ -542,6 +548,10 @@ pub(crate) fn run_scripts_with_dom(
                 if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, cache_backend, None, cross_origin_isolated) {
                     eprintln!("JS DOM init failed: {e}");
                 }
+                // CSSOM-1 срез 3: seed document.styleSheets/element.sheet
+                // before the first script line runs (BUG-443 spec order —
+                // see the parse_time_layout push below for the rationale).
+                rt.update_stylesheet_nodes(stylesheet_nodes);
                 // Must precede module evaluation: bare specifiers resolve
                 // through the map (HTML LS §8.1.6.2).
                 if let Some(map) = import_map {

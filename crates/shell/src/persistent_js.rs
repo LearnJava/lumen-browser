@@ -261,6 +261,13 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `var()`-declared value.
     #[allow(dead_code)]
     fn update_custom_properties(&self, props: HashMap<u32, Arc<HashMap<String, String>>>);
+    /// Push a fresh per-`<style>`/`<link rel=stylesheet>` node registry into
+    /// the JS runtime (CSSOM-1 срез 3). Backs `document.styleSheets`/
+    /// `element.sheet`/`CSSStyleSheet.cssRules` — published from the same
+    /// places as [`Self::update_computed_styles`], whenever the cascade
+    /// (and so this registry) is (re)built.
+    #[allow(dead_code)]
+    fn update_stylesheet_nodes(&self, entries: Vec<lumen_css_parser::StylesheetNodeEntry>);
     /// Advance `document.readyState` to `"interactive"` and fire
     /// `readystatechange` + `DOMContentLoaded` on `document`.
     ///
@@ -826,6 +833,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn update_custom_properties(&self, props: HashMap<u32, Arc<HashMap<String, String>>>) {
         self.rt.update_custom_properties(props);
+    }
+    fn update_stylesheet_nodes(&self, entries: Vec<lumen_css_parser::StylesheetNodeEntry>) {
+        self.rt.update_stylesheet_nodes(entries);
     }
     fn notify_dom_content_loaded(&self) {
         self.eval_js("_lumen_apply_ready_state('interactive')");

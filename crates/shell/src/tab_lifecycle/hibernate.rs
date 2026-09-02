@@ -137,6 +137,10 @@ pub(crate) fn restore_js_context(
         // BUG-443: the restore path lays the page out afterwards, so it has no
         // parse-time snapshot to publish either.
         None,
+        // CSSOM-1 срез 3: the restore path doesn't rebuild the per-node
+        // stylesheet registry either (same reason as `parse_time_layout`
+        // above) — empty, same fallback as bfcache/docking.
+        Vec::new(),
     );
 
     // HTML LS §8.2.3: signal DOMContentLoaded so handlers attached during

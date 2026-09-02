@@ -697,6 +697,7 @@ pub(crate) fn parse_and_layout(
         module_scripts,
         false,
         parse_time_snapshot,
+        cascade.stylesheet_nodes.clone(),
     );
     drop(run_scripts_span);
 
@@ -739,6 +740,11 @@ pub(crate) fn parse_and_layout(
             js.update_layout_rects(snapshot.rects);
             js.update_computed_styles(snapshot.styles);
             js.update_custom_properties(snapshot.customs);
+            // CSSOM-1 срез 3: re-push whenever this block runs, even though
+            // `cascade.stylesheet_nodes` only actually changed when
+            // `scripts_changed_css` triggered the rebuild above — cheap
+            // (`Vec` of `Arc` clones) and simpler than gating separately.
+            js.update_stylesheet_nodes(cascade.stylesheet_nodes.clone());
             js.update_viewport_size(snapshot.viewport.0, snapshot.viewport.1);
         }
     }

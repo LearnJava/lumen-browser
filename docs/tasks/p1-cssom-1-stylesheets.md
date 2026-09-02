@@ -111,34 +111,51 @@ conditional-активность отдельного `<link>` — логика 
 остаётся срезу 4/CSSOM-3. Поля реестра сейчас нигде не читаются
 (`#[allow(dead_code)]`) — потребитель появится в срезе 3.
 
-## Срез 3 — JS-биндинги, только для чтения
+## Срез 3 (сделано, 2026-09-03) — JS-биндинги, только для чтения
 
 `document.styleSheets`, `<style>/<link>.sheet`, `CSSStyleSheet.cssRules`,
 `CSSStyleRule.selectorText`/`style.cssText`, `CSSMediaRule.media.mediaText`
-как объекты, построенные над данными среза 2 + сериализацией среза 1.
+(+ вложенные правила `@media` через `CSSMediaRule.cssRules`) — объекты,
+построенные над реестром среза 2 + сериализацией среза 1.
 
-Ориентир по архитектуре (см. отчёт разведки 2026-09-03, доступен в истории
-сессии): списочные DOM-объекты в этом движке (`NodeList`/`HTMLCollection`,
-`document.images`) **не** имеют общего Rust-side "Vec-as-JS-object" хелпера —
-вся логика индексации/`length`/`item()` строится в JS поверх нативов,
-отвечающих "дай текущие id" и "опиши id N"
-(`_lumen_make_nid_collection`, `crates/js/src/shim/web_api_shim_mid.js:3859`).
-`CSSRuleList`/`StyleSheetList` следует той же схеме: натив
-`_lumen_stylesheet_rule_count(sheetId)` / `_lumen_stylesheet_rule_get(sheetId,
-idx)` (JSON), обёрнутый в `_lumen_make_nid_collection`-подобный Proxy (близкий
-твин, не по id узлов, а по индексам правил).
+Реализация:
+- `V8JsRuntime::stylesheet_nodes: Arc<Mutex<Vec<lumen_css_parser::StylesheetNodeEntry>>>`
+  + `update_stylesheet_nodes()` — тот же паттерн, что `computed_styles`/
+  `update_computed_styles`. Наполняется в `run_scripts_with_dom`
+  (`crates/shell/src/scripts.rs`, сразу после `install_dom`, до первого
+  скрипта — BUG-443 порядок) и повторно при перестройке каскада после
+  скриптов (`page_pipeline.rs`). Фреймы/bfcache/docking/hibernation получают
+  пустой реестр — тот же fallback, что срез 2 уже сделал для самого
+  `stylesheet_nodes` в `LayoutSource`.
+- Канонический тип реестра — `lumen_css_parser::StylesheetNodeEntry` (не
+  shell-локальный, как планировалось в срезе 2): `crates/js` не может
+  зависеть от `crates/shell` (наслоение), а `lumen-css-parser` — общий
+  сиблинг обоих. `crates/shell/src/stylesheets.rs::StylesheetNodeEntry`
+  теперь просто `pub(crate) use lumen_css_parser::StylesheetNodeEntry;`.
+- Rust-натив `crates/js/src/v8_runtime/install/stylesheets.rs`: 6 нативов
+  (`_lumen_stylesheet_owner_nids`/`_disabled`/`_rule_count`/`_rule_json`/
+  `_media_child_count`/`_media_child_json`), правило и media-правило
+  сериализуются в JSON через `serde_json::json!` (не строкой вручную).
+- JS: **не** переиспользует `_lumen_make_nid_collection` (тот заточен под
+  id узлов и зовёт `_lumen_make_element`) — общий Proxy-хелпер для
+  индексных списков объектов сведён в новый `_lumen_make_indexed_list`
+  (`web_api_shim_mid.js`, рядом с `_lumen_make_range`), которым пользуются
+  и `CSSRuleList`, и `StyleSheetList`. Каждый JS-объект (`CSSStyleSheet`/
+  `CSSStyleRule`/`CSSMediaRule`) адресует Rust-состояние по индексу и
+  перечитывает натив на каждый доступ — образец `_lumen_make_range`
+  подтвердился. Идентичность объектов НЕ сохраняется между чтениями
+  (`sheet.cssRules[0] !== sheet.cssRules[0]`) — задокументированная
+  упрощение, кэш обёрток по (sheetIdx, ruleIdx) остался вне среза 3.
+- `<style>`/`<link>.sheet` — геттер на прототипе
+  (`web_api_shim_tail_b.js`, рядом с `_lumen_install_reflection` для этих
+  тегов), НЕ на общей `_LUMEN_WRAPPER_MEMBERS` (BUG-920-класс дефекта).
+- Тесты: `crates/js/src/dom/tests/v8_cssom_stylesheets.rs` (7 тестов,
+  V8JsRuntime напрямую, без реального `<link>`-фетча).
 
-Класс-объект с состоянием (id таблицы стилей, не весь снапшот) — по образцу
-`Range` (`_lumen_make_range`, `crates/js/src/shim/web_api_shim_mid.js:6372`):
-JS-объект хранит только адресуемый Rust-стороной идентификатор, каждый метод
-дёргает свежий натив.
-
-Документ передаётся в install-функцию по значению (`Arc<Mutex<Document>>` как
-аргумент, не `thread_local!`) — см. `install_document_fonts`
-(`crates/js/src/v8_runtime/install/dom_core.rs:91`) как образец; `thread_local`
-допустим только если значение читается заново при каждом вызове натива через
-свой accessor (образец — `NAMED_ACCESS_DOC`,
-`crates/js/src/v8_runtime/named_access.rs:30`), не однократно на install.
+Вне скоупа (остаётся срезу 4 / CSSOM-2): `insertRule`/`deleteRule`,
+`new CSSStyleSheet()`, мутируемый `CSSStyleDeclaration` (`style.cssText`
+только для чтения), `stylesheet.disabled` запись, фреймы/сериализация
+`@import`/`@font-face`/`@supports` как `CSSRule`.
 
 ## Срез 4 (= CSSOM-5/BUG-897, отдельная ROADMAP-строка) — запись
 

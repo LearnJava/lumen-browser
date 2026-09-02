@@ -260,19 +260,13 @@ pub(crate) fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool
 /// одной на элемент, в отличие от единого смерженного [`PageCascade::sheet`].
 /// См. «Архитектурный пробел» в `docs/tasks/p1-cssom-1-stylesheets.md`.
 ///
-/// Поля ещё не читаются нигде (срез 2 только строит реестр) — срез 3
-/// подключит JS-байндинги `document.styleSheets` поверх них.
-#[allow(dead_code)]
-pub(crate) struct StylesheetNodeEntry {
-    /// Узел-владелец (`<style>` или `<link>`).
-    pub(crate) node: NodeId,
-    /// Собственный распарсенный лист этого элемента — независим от
-    /// смерженного каскадного листа страницы.
-    pub(crate) sheet: Arc<lumen_css_parser::Stylesheet>,
-    /// `CSSStyleSheet.disabled`. Пока всегда `false` — реальный учёт флага
-    /// отложен на CSSOM-1 срез 4.
-    pub(crate) disabled: bool,
-}
+/// Канонический тип — [`lumen_css_parser::StylesheetNodeEntry`]: `crates/js`
+/// читает тот же реестр (`V8JsRuntime::update_stylesheet_nodes`), а
+/// `lumen-js` не может зависеть от `lumen-shell` (наслоение), поэтому тип
+/// живёт в общем для обоих сиблинге — `lumen-css-parser`. Реэкспорт здесь
+/// оставляет имя `StylesheetNodeEntry` рабочим для существующих импортов
+/// (`main.rs`, `page_pipeline.rs`) без правки их `use`.
+pub(crate) use lumen_css_parser::StylesheetNodeEntry;
 
 /// Один `<style>`/`<link rel=stylesheet>` в порядке документа, ещё без
 /// разобранного текста — промежуточное значение
@@ -310,7 +304,7 @@ pub(crate) fn build_stylesheet_node_registry(
             StylesheetOwner::Style(id) => {
                 let text = style_element_text(doc, id);
                 out.push(StylesheetNodeEntry {
-                    node: id,
+                    node: id.index() as u32,
                     sheet: Arc::new(lumen_css_parser::parse(&text)),
                     disabled: false,
                 });
@@ -320,7 +314,7 @@ pub(crate) fn build_stylesheet_node_registry(
                     fetch_stylesheet_text(&href, base, sink, cookie_jar.clone())
                 {
                     out.push(StylesheetNodeEntry {
-                        node: id,
+                        node: id.index() as u32,
                         sheet: Arc::new(lumen_css_parser::parse(&text)),
                         disabled: false,
                     });

@@ -101,6 +101,11 @@ pub struct V8JsRuntime {
     /// every node under a `:root`-declared set shares one allocation instead of
     /// carrying its own copy of every variable (BUG-732).
     pub(super) custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
+    /// Per-`<style>`/`<link rel=stylesheet>` node registry (CSSOM-1 срез 3),
+    /// updated alongside [`Self::computed_styles`] — see
+    /// `docs/tasks/p1-cssom-1-stylesheets.md`. Backs `document.styleSheets`/
+    /// `element.sheet`/`CSSStyleSheet.cssRules`.
+    pub(super) stylesheet_nodes: Arc<Mutex<Vec<lumen_css_parser::StylesheetNodeEntry>>>,
     /// Pending popup window requests queued by JS `window.open()`.
     pub(super) window_open_requests: Arc<Mutex<Vec<crate::dom::PopupRequest>>>,
     /// Console messages queued by `console.log/warn/error` calls in JS.
@@ -247,6 +252,7 @@ impl V8JsRuntime {
             page_scroll_end_pending: Arc::new(Mutex::new(false)),
             computed_styles: Arc::new(Mutex::new(HashMap::new())),
             custom_properties: Arc::new(Mutex::new(HashMap::new())),
+            stylesheet_nodes: Arc::new(Mutex::new(Vec::new())),
             window_open_requests: Arc::new(Mutex::new(Vec::new())),
             console_messages: Arc::new(Mutex::new(Vec::new())),
             pending_history_url_updates: Arc::new(Mutex::new(Vec::new())),
@@ -666,6 +672,16 @@ impl V8JsRuntime {
             .custom_properties
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = props;
+    }
+
+    /// Push a fresh per-`<style>`/`<link rel=stylesheet>` node registry into
+    /// the JS runtime (CSSOM-1 срез 3) — `document.styleSheets`/
+    /// `element.sheet`/`CSSStyleSheet.cssRules` read this.
+    pub fn update_stylesheet_nodes(&self, entries: Vec<lumen_css_parser::StylesheetNodeEntry>) {
+        *self
+            .stylesheet_nodes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = entries;
     }
 
     /// Update `document.hidden` / `document.visibilityState` and fire
