@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 mod antidetect_surface_api;
+mod bug489_display_contents_computed_style;
 mod compare_backends;
 mod idl_reflection;
 mod inner_text_getter;

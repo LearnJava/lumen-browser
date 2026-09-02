@@ -743,10 +743,11 @@ fn layout_frame_document(
     let (frame_layout, rects, styles) = {
         let d = doc.lock().unwrap();
         lumen_layout::set_interactive_state(state.hovered, state.focused, state.active);
-        let frame_layout = lumen_layout::layout_measured(&d, sheet, viewport, measurer);
+        let (frame_layout, counters) =
+            lumen_layout::layout_measured_with_counters(&d, sheet, viewport, measurer);
         lumen_layout::clear_interactive_state();
         let rects = lumen_layout::collect_layout_rects(&frame_layout, &d);
-        let styles = lumen_layout::collect_computed_styles(&frame_layout, &d);
+        let styles = lumen_layout::collect_computed_styles(&frame_layout, &d, Some(&counters));
         (frame_layout, rects, styles)
     };
     if let Some(js) = js {

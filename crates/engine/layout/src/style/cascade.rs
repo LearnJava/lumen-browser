@@ -34,7 +34,7 @@ use crate::style::{
     ua_font_size_factor, ua_font_style, ua_font_weight, ua_link_color, ua_vertical_align,
     ua_white_space, validate_against_syntax, with_front_cascade_index, AlignValue, Appearance,
     BackfaceVisibility, BorderStyle, BoxSizing, BreakValue, ClearSide,
-    ComputedStyle, ContainFlags, ContainerType, Content, ContentVisibility, CssColor,
+    ComputedStyle, ContainFlags, ContainerType, Content, ContentVisibility, CssColor, Display,
     FieldSizing, FlexBasis, FlexDirection, FlexWrap, FloatSide,
     FontPalette, FontSizeBasis, FontWeight, GridAutoFlow, GridLine, GridTrackSize, Isolation,
     Length, LengthOrAuto, MasonryAutoFlow, MixBlendMode, ObjectFit, ObjectPosition, OffsetRotate,
@@ -1298,6 +1298,14 @@ pub fn compute_style(
             effective_decl
         };
         apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, inherited, ua_baseline_ref, is_quirks, dark_mode);
+    }
+
+    // CSS Display L3 §2.7 — blockification: the root element's own box can
+    // never be eliminated (there is nothing above it to splice its children
+    // into), so a `display: contents` document element computes to `block`
+    // instead. Runs after the cascade loop so it sees the final `display`.
+    if style.display == Display::Contents && doc.document_element() == Some(node) {
+        style.display = Display::Block;
     }
 
     // CSS Color 4 §6.2 — post-pass: resolve any CssColor::System variants in

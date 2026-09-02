@@ -87,6 +87,20 @@ pub fn layout_measured(
     layout_measured_hyp(doc, sheet, viewport, measurer, &null_hp, false)
 }
 
+/// Like [`layout_measured`], but also returns the [`CounterMap`] (BUG-489) —
+/// a caller that feeds the result to [`collect_computed_styles`] needs it so
+/// that collector can publish the resolved style of `display: contents`
+/// elements, whose own `LayoutBox` `flatten_contents` eliminates from the tree.
+pub fn layout_measured_with_counters(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    measurer: &dyn TextMeasurer,
+) -> (LayoutBox, CounterMap) {
+    let null_hp = NullHyphenationProvider;
+    layout_measured_hyp_with_counters(doc, sheet, viewport, measurer, &null_hp, false)
+}
+
 /// Layout with a real hyphenation provider (for `hyphens: auto`).
 /// `dark_mode` drives `@media (prefers-color-scheme: dark)` matching throughout
 /// the cascade — shell reads the value from `Lumen.dark_mode` (OS preference via winit).
