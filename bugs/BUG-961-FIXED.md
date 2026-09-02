@@ -1,12 +1,15 @@
 # BUG-961: `browsingContext.navigate` takes 30-40s and then TIMEOUTs — a
 ~32s stall reproducible on almost every run through the real wptrunner
 `LumenBrowser`/`mozprocess` launch path, but almost never through a bare
-`subprocess.Popen` replaying the identical BiDi traffic — the launch
-mechanism срез 44 thought it had refuted looks like the actual variable
+`subprocess.Popen` replaying the identical BiDi traffic — root cause:
+`mozprocess`'s unbuffered stdout pipe (`bufsize=0`) degrades `readline()` to
+one syscall per byte on a long no-newline line
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-02 (срез 47)
 **Дата:** 2026-09-02
-**Компонент:** not yet isolated — **срез 41 refuted both prior candidates**
+**Компонент:** `tools/wptrunner/wptrunner/browsers/lumen.py` (WPT test
+tooling, P2's own domain — not an engine bug) — **срез 41 refuted both prior
+candidates**
 (`executorlumen.py`/`TestRunnerManager` orchestration, and engine
 contention specific to that orchestration's polling), **срез 42 refuted
 content-serving** (live `AnyHtmlHandler` route vs. a static copy — both
@@ -500,24 +503,141 @@ stalls. The two need to be combined — srez 42's `_bare_control` (real
 uses a reader thread) the interpreter's own threads — which at this hit
 rate should catch a live stall on close to the first attempt.
 
+## WPT-RUN-6 срез 47: root cause found and fixed — `mozprocess`'s unbuffered
+(`bufsize=0`) stdout/stderr pipe makes `readline()` read ONE BYTE PER SYSCALL
+for this test's 20MB no-newline line
+
+Item 2's own suggestion: instrumented срез 42's actual launch path (real
+`LumenBrowser`/`mozprocess.ProcessHandler`, via `product.get_browser_cls()`)
+with срез 43's `_WchanSampler`, sampling BOTH process trees — the `lumen`
+process itself, and (new this slice) the calling Python interpreter, since
+`mozprocess.ProcessReader`'s reader threads run there, not inside `lumen`.
+Script: `tests/wpt/verify_bug961_slice47_wchan_real_launch.py` (committed
+this slice, reuses срез 42's `_build_kwargs`/`_make_static_server` and срез
+43's `_WchanSampler` by direct import — no copy-paste).
+
+Reproduced on the first attempt (matches срез 46's 5/5 hit rate). Wchan trace
+for the full ~32s stall:
+
+```
+lumen process tree (pid=43889): every lumen/V8/IO thread at futex_wait or
+  do_epoll_wait — ordinary idle parks — EXCEPT:
+  tid=43931 comm='lumen-v8' wchan='anon_pipe_write.cold' count=203 span=[0.61s..31.86s]
+    (blocked writing to a pipe for essentially the ENTIRE stall)
+
+interpreter process (pid=43824, where mozprocess's reader threads live):
+  tid=43890 comm='ProcessReaderSt' wchan='0' (RUNNING, not parked in the
+    kernel) count=206 span=[0.60s..31.88s]
+    (CPU-busy for essentially the entire stall, not blocked in a read syscall)
+```
+
+`lumen-v8` blocked on a pipe **write** while the Python-side reader thread is
+CPU-busy rather than blocked on a pipe **read** is the opposite of what a
+slow-consumer-blocks-producer scenario normally looks like at this sampling
+granularity — it means the reader is spending its time in userspace/syscall
+overhead, not waiting for bytes, while the writer just can't get room in the
+pipe buffer fast enough. That points at the reader's *own* read loop being
+the bottleneck, not real network/IO waiting or engine computation.
+
+Traced to `mozprocess.processhandler.Process.__init__`
+(`mozprocess/processhandler.py:97`): default **`bufsize=0`**, passed to
+`subprocess.Popen` unchanged. Neither `browsers/base.py::WebDriverBrowser
+._run_server` nor (pre-fix) `browsers/lumen.py::LumenBrowser._run_server`
+override it, so every `lumen` launch through `mozprocess` — i.e. every real
+wptrunner corpus run — got raw, unbuffered `stdout`/`stderr` pipes.
+`io.FileIO.readline()` on such a stream has no buffer to search and falls
+back to `io.RawIOBase`'s generic implementation: **one `read(1)` syscall per
+byte** until a `\n` or EOF. `mozprocess.ProcessReader._read_stream`
+(`processhandler.py:1076`) calls exactly `stream.readline()` on this raw
+pipe. `console-log-large-array.any.js` logs a ~20MB array with **no embedded
+newline until the very end** — the worst possible shape for this code path.
+
+Isolated with ZERO lumen/wptrunner/mozprocess code in the loop (per
+`docs/probe-method.md`'s "your own server, not the page and not the browser
+log" rule) in `tests/wpt/verify_bug961_slice47b_bufsize0_readline.py`: a
+plain `os.pipe()`, a writer thread pushing a 20 000 004-byte line with no
+newline until the end, `readline()` timed on the read end opened two ways —
+
+```
+[probe] buffered io.BufferedReader (buffering=131072): readline() of 20000005 bytes took 0.024s
+[probe] unbuffered io.FileIO (bufsize=0):              readline() of 20000005 bytes took 30.086s
+[probe] ratio unbuffered/buffered: 1241.0x
+```
+
+**30.086s for the unbuffered case — matching this bug's observed ~30-32s
+stall almost exactly, with nothing but stock `os`/`io`/`threading` involved.**
+This also explains срез 43/45/46's ≤1/187 bare-`Popen` hit rate for free:
+`subprocess.Popen(..., bufsize=1, universal_newlines=False)` (binary mode)
+is silently promoted by `subprocess.py` to `io.DEFAULT_BUFFER_SIZE` ("line
+buffering isn't supported in binary mode"), giving an ordinary
+`io.BufferedReader` whose `readline()` is O(n) total, not O(n) syscalls —
+that shape was never going to reproduce this, regardless of sample count.
+
+**Fix** (`tools/wptrunner/wptrunner/browsers/lumen.py`, Lumen's own product
+plugin — not vendored harness code, same status as the already-documented
+`create_output_handler` override): pass an explicit
+`bufsize=io.DEFAULT_BUFFER_SIZE` to every `mozprocess.ProcessHandler(...)`
+call this module makes. `ProcessHandler.__init__` forwards unrecognized
+kwargs straight into `Process.__init__` via `self.keywordargs`
+(`processhandler.py:822-849`), so this needed no vendor patch and no
+reapply-per-venv step (unlike the pywebsocket3 patch, CLAUDE.md's WPT-harness
+gotcha) — just an explicit kwarg at the one call site this product's plugin
+controls. The bidi (non-`--ipc-server`) launch path had no override at all
+before this slice (`_run_server` unconditionally called
+`super()._run_server()`), so it gained a full `_run_server_bidi` override
+replicating `WebDriverBrowser._run_server` with that one added kwarg; the
+`--ipc-server` path already had its own override and just needed the kwarg
+added.
+
+**Verified fixed**: re-ran срез 42's own script unmodified after the fix —
+both variants that stalled 5/5 across срез 46's 3 trials now complete in
+under 1.1s on 2 consecutive re-runs:
+
+```
+[probe] variant C (static copy) RESULT: navigate(wait=complete) returned in 0.96s
+[probe] variant D (live route) RESULT: navigate(wait=complete) returned in 0.92s
+[probe] variant C (static copy) RESULT: navigate(wait=complete) returned in 1.02s
+[probe] variant D (live route) RESULT: navigate(wait=complete) returned in 0.96s
+```
+
+And the real acceptance command from "Как проверить фикс" below now passes
+clean, no `--timeout-multiplier` needed:
+
+```
+0:11.82 TEST_END: Test OK. Subtests passed 1/1. Unexpected 0
+tests: 1/1 harness OK; subtests: 1/1 passed
+```
+
+**Масштаб**: this fix applies to every corpus run through the real
+`LumenBrowser`/`mozprocess` launch path (i.e. all of them) — any test whose
+output contains a long line with a late or absent newline was paying this
+same unbounded-syscall tax, not just this one console.log test. Unknown how
+many of `timeout_audit.py`'s other `unclassified`/TIMEOUT ids this explains;
+worth a full corpus re-run to remeasure now that this is fixed (out of scope
+for this slice — see "Масштаб находки" above, still not independently
+re-verified for the `.any.worker.html` twin either, though it shares the
+exact same shape and should be fixed by the same change).
+
 ## Что нужно
 
 1. **(closed by срез 42 — content-serving is not the variable, reconfirmed
    срез 46)**
-2. **(reopened by срез 46 — the launch mechanism looked refuted by срез 44's
-   single sample, but a matched-N re-run shows the real `LumenBrowser`/
-   `mozprocess` launch path stalls 5/5 while the bare-Popen shape stalls
-   ≤1/186. Next: instrument srez 42's actual launch path with срез 43's
-   `_WchanSampler` — sample the `lumen` process tree and mozprocess's
-   reader thread during a variant C/D navigate call — to finally get a
-   `wchan` trace from a real stall instead of another timing comparison.)**
+2. **(CLOSED by срез 47 — root cause found: `mozprocess`'s unbuffered stdout
+   pipe degrades `readline()` to one syscall per byte on a long no-newline
+   line. Fixed in `browsers/lumen.py`, verified against both the direct
+   repro and the real acceptance command.)**
 3. **(superseded by item 2 — the hit-rate question this item asked is
    answered: it is not a property of the minimal repro's rare intermittency,
    it is the launch path. No further bare-Popen hit-rate runs needed.)**
+4. Re-run the full WPT corpus (or at least `timeout_audit.py`'s
+   `unclassified` bucket) now that this fix is in, to measure how many other
+   ids it was silently costing 30s+ each — not done in this slice, scope is
+   one WPT-RUN-6 task, not the whole corpus.
 
 ## Как проверить фикс
 
-Once the mechanism is found: `tests/wpt/run_report.py --root console --all
---recursive --offset 4 --limit 1 --binary target/dev-release/lumen` (no
-`--timeout-multiplier` override — default 1×, 10s budget) should PASS, since
-the underlying computation genuinely only needs well under 1s.
+`tests/wpt/run_report.py --root console --all --recursive --offset 4 --limit
+1 --binary target/dev-release/lumen` (no `--timeout-multiplier` override —
+default 1×, 10s budget) — **verified PASSing above (срез 47)**, since the
+underlying computation genuinely only needs well under 1s once the pipe is
+buffered.

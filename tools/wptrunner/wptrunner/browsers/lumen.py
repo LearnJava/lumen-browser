@@ -21,12 +21,16 @@ only known once the process has actually started, so it cannot be baked into
 the static `executor_kwargs()` dict below.
 """
 
+import errno
+import io
 import os
 import time
+import traceback
 
 import mozprocess
 
 from .base import ExecutorBrowser, OutputHandler, WebDriverBrowser, get_timeout_multiplier, require_arg  # noqa: F401
+from ..environment import wait_for_service
 from ..executors import executor_kwargs as base_executor_kwargs
 from ..executors.executorlumen import LumenRefTestExecutor, LumenTestharnessExecutor  # noqa: F401
 
@@ -222,7 +226,7 @@ class LumenBrowser(WebDriverBrowser):
 
     def _run_server(self, group_metadata, **kwargs):
         if not self.ipc_mode:
-            return super()._run_server(group_metadata, **kwargs)
+            return self._run_server_bidi(group_metadata, **kwargs)
         # `--ipc-port` is documented as informational only
         # (`crates/shell/src/main.rs::extract_ipc_server`) — the shell always
         # lets the OS pick the real port and prints it, so the base class's
@@ -233,7 +237,9 @@ class LumenBrowser(WebDriverBrowser):
         cmd = self.make_command()
         self._output_handler = self.create_output_handler(cmd)
         self._proc = mozprocess.ProcessHandler(
-            cmd, processOutputLine=self._output_handler, env=self.env, storeOutput=False)
+            cmd, processOutputLine=self._output_handler, env=self.env, storeOutput=False,
+            # BUG-961: see `_run_server_bidi`'s comment — same fix, same reason.
+            bufsize=io.DEFAULT_BUFFER_SIZE)
         self.logger.info("Starting Lumen --ipc-server: %s" % " ".join(cmd))
         self._proc.run()
         self._output_handler.after_process_start(self._proc.pid)
@@ -248,6 +254,79 @@ class LumenBrowser(WebDriverBrowser):
         finally:
             self._output_handler.start(group_metadata=group_metadata, **kwargs)
         self.logger.info("Lumen --ipc-server started successfully.")
+
+    def _run_server_bidi(self, group_metadata, **kwargs):
+        """Same launch as `WebDriverBrowser._run_server` (`base.py`), with ONE
+        change: an explicit buffered `bufsize` on the `mozprocess.ProcessHandler`
+        call, instead of `mozprocess.processhandler.Process`'s own default
+        (`bufsize=0`, i.e. raw/unbuffered stdout+stderr pipes,
+        `mozprocess/processhandler.py:97`).
+
+        BUG-961 (срез 47, confirmed by `verify_bug961_slice47b_bufsize0_readline.py`
+        with zero lumen/wptrunner code involved — a bare `os.pipe()` writing one
+        20MB line with no embedded newline): `io.FileIO.readline()` on an
+        UNBUFFERED raw stream has no buffer to search, so it falls back to
+        `io.RawIOBase`'s generic implementation, which reads ONE BYTE PER
+        SYSCALL until it sees `\\n`. `mozprocess.ProcessReader._read_stream`
+        (`processhandler.py:1076`) calls exactly `stream.readline()` on that
+        raw pipe. For a single ~20MB line (e.g.
+        `console/console-log-large-array.any.js`'s `console.log` of a huge
+        array — no `\\n` until the very end), that is ~20 million Python-level
+        1-byte reads inside ONE `.readline()` call: measured 30.09s for a
+        20 000 005-byte line, vs. 0.024s with a normal buffered reader
+        (1241×) — a bare-pipe measurement matching this bug's observed ~30-32s
+        `browsingContext.navigate` stall almost exactly, with no engine,
+        wptrunner-orchestration, or content-serving explanation needed (all
+        three were tested and refuted across срезы 39-46). A `subprocess.Popen`
+        NOT going through `mozprocess` (срез 43/45/46's bare-Popen repro,
+        ≤1/187 stall rate) does not hit this: `bufsize=1` in binary mode is
+        silently promoted by `subprocess.py` to `io.DEFAULT_BUFFER_SIZE`
+        ("line buffering isn't supported in binary mode"), giving an ordinary
+        `io.BufferedReader` whose `readline()` is O(n) total, not O(n) syscalls.
+
+        `mozprocess.ProcessHandler.__init__` forwards unrecognized kwargs
+        (`self.keywordargs`) straight into `Process.__init__`
+        (`processhandler.py:822-849`'s `run()`: `args.update(self.keywordargs)`),
+        so passing `bufsize=` here reaches `subprocess.Popen` exactly the way
+        srez 47b's isolated repro did — no vendor patch, no reapply-per-venv
+        step (unlike the pywebsocket3 patch, CLAUDE.md's WPT-harness gotcha).
+        """
+        assert self.init_deadline is not None
+        cmd = self.make_command()
+        self._output_handler = self.create_output_handler(cmd)
+
+        self._proc = mozprocess.ProcessHandler(
+            cmd,
+            processOutputLine=self._output_handler,
+            env=self.env,
+            storeOutput=False,
+            bufsize=io.DEFAULT_BUFFER_SIZE)
+
+        self.logger.info("Starting WebDriver: %s" % " ".join(cmd))
+        try:
+            self._proc.run()
+        except OSError as e:
+            if e.errno == errno.ENOENT:
+                raise OSError(
+                    "WebDriver executable not found: %s" % self.webdriver_binary) from e
+            raise
+        self._output_handler.after_process_start(self._proc.pid)
+
+        try:
+            wait_for_service(
+                self.logger,
+                self.host,
+                self.port,
+                timeout=self.init_deadline - time.time(),
+                server_process=self._proc,
+            )
+        except Exception:
+            self.logger.error(f"WebDriver was not accessible within {self.init_timeout} seconds.")
+            self.logger.error(traceback.format_exc())
+            raise
+        finally:
+            self._output_handler.start(group_metadata=group_metadata, **kwargs)
+        self.logger.info("Webdriver started successfully.")
 
     @property
     def token(self):
