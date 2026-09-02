@@ -17,6 +17,19 @@ pub struct Declaration {
     pub important: bool,
 }
 
+impl Declaration {
+    /// One `"prop: value;"` / `"prop: value !important;"` line, the shape
+    /// `CSSStyleDeclaration.cssText` (CSSOM §7.3) joins with a space between
+    /// declarations.
+    pub fn to_css_text(&self) -> String {
+        if self.important {
+            format!("{}: {} !important;", self.property, self.value)
+        } else {
+            format!("{}: {};", self.property, self.value)
+        }
+    }
+}
+
 impl<'a> Parser<'a> {
     pub(crate) fn parse_declaration_block(&mut self) -> Vec<Declaration> {
         let mut decls = Vec::new();

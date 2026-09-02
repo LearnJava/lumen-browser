@@ -581,7 +581,7 @@ pub(crate) fn attr_to_css_str(attr: &AttrSelector) -> String {
             if attr.case_insensitive {
                 format!("[{}{}\"{}\" i]", attr.name, op_str, v)
             } else {
-                format!("[{}{}\"{}\"", attr.name, op_str, v)
+                format!("[{}{}\"{}\"]", attr.name, op_str, v)
             }
         }
     }
@@ -605,6 +605,25 @@ pub(crate) fn sels_to_css_str(sels: &[ComplexSelector]) -> String {
     sels.iter().map(ComplexSelector::to_css_str).collect::<Vec<_>>().join(", ")
 }
 
+/// Serialise `:has()`'s relative-selector-list back to CSS text. Each item's
+/// leading combinator (`>`/`+`/`~`) is printed only when explicit — implicit
+/// descendant (`None`, or the redundant `Some(Combinator::Descendant)`) has
+/// no token of its own, matching how `:has(img)` (not `:has( img)`) is written.
+pub(crate) fn relative_sels_to_css_str(rels: &[RelativeSelector]) -> String {
+    rels.iter()
+        .map(|rs| {
+            let prefix = match rs.combinator {
+                Some(Combinator::Child) => "> ",
+                Some(Combinator::NextSibling) => "+ ",
+                Some(Combinator::LaterSibling) => "~ ",
+                Some(Combinator::Descendant) | None => "",
+            };
+            format!("{prefix}{}", rs.selector.to_css_str())
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 pub(crate) fn pc_to_css_str(pc: &PseudoClass) -> String {
     match pc {
         PseudoClass::FirstChild => ":first-child".into(),
@@ -615,14 +634,20 @@ pub(crate) fn pc_to_css_str(pc: &PseudoClass) -> String {
         PseudoClass::FirstOfType => ":first-of-type".into(),
         PseudoClass::LastOfType => ":last-of-type".into(),
         PseudoClass::OnlyOfType => ":only-of-type".into(),
-        PseudoClass::NthChild(spec, _) => format!(":nth-child({})", nth_to_css_str(spec)),
-        PseudoClass::NthLastChild(spec, _) => format!(":nth-last-child({})", nth_to_css_str(spec)),
+        PseudoClass::NthChild(spec, of) => match of {
+            Some(list) => format!(":nth-child({} of {})", nth_to_css_str(spec), sels_to_css_str(list)),
+            None => format!(":nth-child({})", nth_to_css_str(spec)),
+        },
+        PseudoClass::NthLastChild(spec, of) => match of {
+            Some(list) => format!(":nth-last-child({} of {})", nth_to_css_str(spec), sels_to_css_str(list)),
+            None => format!(":nth-last-child({})", nth_to_css_str(spec)),
+        },
         PseudoClass::NthOfType(spec) => format!(":nth-of-type({})", nth_to_css_str(spec)),
         PseudoClass::NthLastOfType(spec) => format!(":nth-last-of-type({})", nth_to_css_str(spec)),
         PseudoClass::Not(sels) => format!(":not({})", sels_to_css_str(sels)),
         PseudoClass::Is(sels) => format!(":is({})", sels_to_css_str(sels)),
         PseudoClass::Where(sels) => format!(":where({})", sels_to_css_str(sels)),
-        PseudoClass::Has(_) => ":has(…)".into(),
+        PseudoClass::Has(rels) => format!(":has({})", relative_sels_to_css_str(rels)),
         PseudoClass::PlaceholderShown => ":placeholder-shown".into(),
         PseudoClass::Required => ":required".into(),
         PseudoClass::Optional => ":optional".into(),

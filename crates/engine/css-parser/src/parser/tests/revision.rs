@@ -43,6 +43,28 @@ fn merging_rules_in_changes_the_revision_and_carries_every_field() {
 }
 
 #[test]
+fn rule_selector_and_style_text_serialize_for_cssom() {
+    let sheet = parse("p.a , div { color: red; font-weight: bold !important }");
+    let rule = &sheet.rules[0];
+    assert_eq!(rule.selector_text(), "p.a, div");
+    assert_eq!(rule.style_css_text(), "color: red; font-weight: bold !important;");
+}
+
+#[test]
+fn cssom_rules_preserves_source_order_across_style_and_media() {
+    let sheet = parse("p { color: red } @media print { div { color: blue } } a { color: green }");
+    let kinds: Vec<_> = sheet
+        .cssom_rules()
+        .iter()
+        .map(|r| match r {
+            CssomRuleRef::Style(_) => "style",
+            CssomRuleRef::Media(_) => "media",
+        })
+        .collect();
+    assert_eq!(kinds, ["style", "media", "style"]);
+}
+
+#[test]
 fn mark_mutated_mints_a_new_revision() {
     let mut sheet = parse("p { color: red }");
     let before = sheet.revision();
@@ -71,7 +93,7 @@ fn every_stylesheet_mutation_in_the_workspace_announces_itself() {
         "rules", "properties", "media_rules", "imports", "font_faces", "layer_order",
         "layers", "supports_rules", "keyframes", "counter_styles", "page_rules",
         "scope_rules", "starting_style_rules", "container_rules", "font_palette_values",
-        "color_profiles", "function_rules",
+        "color_profiles", "function_rules", "top_level_order",
     ];
     const MUTATORS: &[&str] = &[
         "push(", "extend(", "append(", "insert(", "clear(", "remove(", "retain(",
