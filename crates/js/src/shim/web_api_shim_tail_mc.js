@@ -97,6 +97,34 @@ window.scrollBy = function(x, y) {
     return _lumen_scroll_settle_promise(window, function() { return [0, _lumen_get_page_scroll_y()]; });
 };
 
+// ── window.visualViewport (Visual Viewport API) ─────────────────────────────
+// width/height/pageTop are backed by the same natives as the scroll API just
+// above. No pinch-zoom or meta-viewport scale clamping is implemented, so
+// offsetLeft/offsetTop/pageLeft stay 0 and scale stays 1 — the object exists
+// so pages that merely reference `window.visualViewport` stop throwing
+// ReferenceError/TypeError, regardless of whether the underlying zoom is
+// modeled (BUG-481). `onresize`/`onscroll`/`onscrollend` are declared (not
+// wired to any dispatch) so `'onresize' in visualViewport` reads true, the
+// same convention as the `window.onscroll` declaration above (BUG-822/834).
+function VisualViewport() {
+    EventTarget.call(this);
+    this.onresize = null;
+    this.onscroll = null;
+    this.onscrollend = null;
+}
+VisualViewport.prototype = Object.create(EventTarget.prototype);
+VisualViewport.prototype.constructor = VisualViewport;
+Object.defineProperties(VisualViewport.prototype, {
+    width:      { get: function() { return _lumen_get_viewport_size()[0]; } },
+    height:     { get: function() { return _lumen_get_viewport_size()[1]; } },
+    offsetLeft: { get: function() { return 0; } },
+    offsetTop:  { get: function() { return 0; } },
+    pageLeft:   { get: function() { return 0; } },
+    pageTop:    { get: function() { return _lumen_get_page_scroll_y(); } },
+    scale:      { get: function() { return 1; } }
+});
+window.visualViewport = new VisualViewport();
+
 // ── window.CSS (CSS Object Model L1 §5 + CSS Conditional Rules L3 §6) ────────
 // CSS.supports(property, value) — two-argument form.
 // CSS.supports(conditionText) — one-argument form.
