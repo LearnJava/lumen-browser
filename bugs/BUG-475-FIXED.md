@@ -98,7 +98,7 @@ true CSS Overflow "scrollable overflow area" — the same negative-margin test
 also asserts an *exact* `scrollWidth`/`scrollHeight` value for a
 non-scroll-container element whose content overflows its own padding box
 (e.g. `.inner`'s `margin: -100px`), which border-box alone cannot produce.
-Filed separately as [BUG-959](BUG-959-OPEN.md) (needs a per-box
+Filed separately as [BUG-960](BUG-960-OPEN.md) (needs a per-box
 scrollable-overflow-region algorithm — CSS Overflow §Scrollable Overflow —
 architecturally bigger than this fix). The 8 `.ini` files referencing this
 bug under `tests/wpt/metadata/css/cssom-view/` are intentionally left
