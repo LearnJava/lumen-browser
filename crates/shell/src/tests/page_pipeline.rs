@@ -1118,6 +1118,31 @@ fn computed_style_in_operator_reports_known_properties() {
     assert_eq!(probe_attr(&page, "data-float-val"), "left");
 }
 
+/// BUG-483 ч.2: `getComputedStyle()`'s `length`/`item(i)` were hardcoded
+/// (`length` always `0`, `item()` always `''`) and there was no
+/// `Symbol.iterator` at all, so the standard `for (let p of
+/// getComputedStyle(el))` idiom threw `TypeError: ... is not iterable`
+/// synchronously instead of enumerating the resolved property set the
+/// `get`/`has` traps already answer individual lookups against.
+#[cfg(feature = "v8")]
+#[test]
+fn computed_style_is_iterable_with_real_length_and_item() {
+    let page = parse_and_layout_for_test(
+        "<html><body><div id=t style='float:left'>t</div>\
+         <script>var e=document.getElementById('t');var cs=getComputedStyle(e);\
+         document.documentElement.setAttribute('data-len-positive',cs.length>0);\
+         document.documentElement.setAttribute('data-item0-is-string',typeof cs.item(0)==='string');\
+         var names=[];for(var p of cs){names.push(p);}\
+         document.documentElement.setAttribute('data-iter-count-matches',names.length===cs.length);\
+         document.documentElement.setAttribute('data-iter-has-float',names.indexOf('float')>=0);\
+         </script></body></html>",
+    );
+    assert_eq!(probe_attr(&page, "data-len-positive"), "true");
+    assert_eq!(probe_attr(&page, "data-item0-is-string"), "true");
+    assert_eq!(probe_attr(&page, "data-iter-count-matches"), "true");
+    assert_eq!(probe_attr(&page, "data-iter-has-float"), "true");
+}
+
 /// BUG-473: `CSSStyleDeclaration.cssText`/`getPropertyValue` used to
 /// serialize declarations by naive `k+': '+v` concatenation — no trailing
 /// `;`, no TRBL-longhand-to-shorthand collapsing, and (via the old raw-text
