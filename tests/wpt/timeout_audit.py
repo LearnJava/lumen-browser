@@ -595,6 +595,17 @@ _SELFCLOSED_SCRIPT_RE = re.compile(r"<script\b[^>]*/\s*>", re.IGNORECASE)
 _CDATA_SCRIPT_RE = re.compile(r"<script\b[^>]*>\s*(?://[^\n]*\n\s*)?<!\[CDATA\[",
                               re.IGNORECASE)
 
+#: `<style>...<script>...</script>...</style>` — a `<script>` element nested
+#: *inside* `<style>`, valid only because an XML parser gives `<style>` no
+#: special content model. The HTML tree builder treats `<style>` as RAWTEXT:
+#: everything up to the next literal `</style>` is swallowed as the style
+#: element's text verbatim, `<script>` included, so the nested script is never
+#: a node and never runs (WPT-RUN-6 slice 49, confirmed live: `style.textContent`
+#: contains the two `<script>` tags as literal text, `window.t` stays
+#: `undefined`, `tests.length` stays 0, harness-complete never fires).
+_SCRIPT_IN_STYLE_RE = re.compile(r"<style\b[^>]*>(?:(?!</style>).)*?<script\b",
+                                 re.IGNORECASE | re.DOTALL)
+
 
 def _xml_document_script_marker(text, test_id=None):
     """BUG-786 marker: an XML document whose scripts HTML parsing loses.
@@ -603,9 +614,9 @@ def _xml_document_script_marker(text, test_id=None):
     `lumen_html_parser::parse` on every response and only stamps
     `document.contentType` from the header afterwards. BUG-786 measured the
     `<style><![CDATA[` half of the damage; the script half is what makes the
-    test TIMEOUT rather than merely render wrong, and it comes in three shapes,
-    each measured separately by `tests/wpt/verify_document_and_record_gaps.py`
-    (WPT-RUN-6 slice 16):
+    test TIMEOUT rather than merely render wrong, and it comes in four shapes,
+    the first three measured separately by
+    `tests/wpt/verify_document_and_record_gaps.py` (WPT-RUN-6 slice 16):
 
     * prefixed `<h:script src>` — never becomes a script element, so the file's
       `testharness.js` is not even *requested* (the corpus log of every
@@ -616,7 +627,13 @@ def _xml_document_script_marker(text, test_id=None):
       `testharness.js` and then neither `testharnessreport.js` nor the test
       body exists);
     * `<![CDATA[` at the head of an inline script — `script error: JS runtime
-      error: Unexpected token '<'`, which BUG-591 then swallows.
+      error: Unexpected token '<'`, which BUG-591 then swallows;
+    * a `<script>` nested inside `<style>` — legal only under XML parsing,
+      swallowed whole as `<style>`'s RAWTEXT content under the HTML tree
+      builder (`_SCRIPT_IN_STYLE_RE`, WPT-RUN-6 slice 49 — confirmed live on
+      `html/semantics/document-metadata/the-style-element/
+      style-load-mutate-while-parsing.xhtml`, whose entire test body is two
+      `<script>` elements written this way).
 
     The same markup inside a `.html` file is not evidence: there a conforming
     browser parses as HTML too, so the test would not be written this way.
@@ -629,7 +646,8 @@ def _xml_document_script_marker(text, test_id=None):
         return False
     return bool(_PREFIXED_SCRIPT_RE.search(text)
                 or _SELFCLOSED_SCRIPT_RE.search(text)
-                or _CDATA_SCRIPT_RE.search(text))
+                or _CDATA_SCRIPT_RE.search(text)
+                or _SCRIPT_IN_STYLE_RE.search(text))
 
 
 #: A window-level `error` / `unhandledrejection` wait: `window.onerror = fn`,
@@ -4248,6 +4266,31 @@ def selftest():
                          "</body></html>")
         check(classify_source("/a/xml-audio.xhtml", tmp, {}) == "audio-src-deadlock",
               "the parser-driven audio deadlock must still sort first")
+
+        # Fourth shape (slice 49): a plain (non-self-closed, non-CDATA)
+        # <script> nested inside <style>, legal only under XML parsing —
+        # confirmed live on the real id this shape was measured against
+        # (`style-load-mutate-while-parsing.xhtml`): `style.textContent`
+        # contains the `<script>` tags as literal text, `window.t` stays
+        # `undefined`, harness-complete never fires.
+        with open(os.path.join(tmp, "a", "script-in-style.xhtml"), "w", encoding="utf-8") as handle:
+            handle.write('<html xmlns="http://www.w3.org/1999/xhtml"><head>\n'
+                         '<script src="/resources/testharness.js"></script>\n'
+                         "<style>\nbody { color: red; }\n"
+                         "<script>window.t = async_test(t => {});</script>\n"
+                         "</style></head><body/></html>")
+        check(classify_source("/a/script-in-style.xhtml", tmp, {}) == "xml-document-scripts-lost",
+              "a <script> nested inside <style> in an XHTML document was not claimed")
+        # Same bytes in a `.html` file: a conforming browser treats <style> as
+        # RAWTEXT there too (this is not an XML-only rule), so the identical
+        # markup is not evidence of anything — the extension check must still
+        # gate it out.
+        with open(os.path.join(tmp, "a", "script-in-style.html"), "w", encoding="utf-8") as handle:
+            handle.write("<style>\nbody { color: red; }\n"
+                         "<script>window.t = async_test(t => {});</script>\n"
+                         "</style>")
+        check(classify_source("/a/script-in-style.html", tmp, {}) is None,
+              "the same nested-script-in-style markup in an HTML file must not be claimed")
 
         # Stage 2, slice 16: a UTF-16 test file. Decoded as UTF-8 its markers
         # are separated by replacement bytes and nothing can ever match.

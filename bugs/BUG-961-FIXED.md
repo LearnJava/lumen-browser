@@ -651,6 +651,48 @@ exact same shape and should be fixed by the same change).
    40 `unclassified` ids from WPT-RUN-5, not the bulk of the bucket** — the
    other 38 need per-id triage, one WPT-RUN-6 slice at a time.
 
+## WPT-RUN-6 срез 49: one of the 38 residual ids explained by an EXISTING
+marker (BUG-786/GAP-XMLDOC) — the classifier just did not cover this shape yet
+
+`html/semantics/document-metadata/the-style-element/
+style-load-mutate-while-parsing.xhtml`'s entire test body is two `<script>`
+elements written **nested inside its `<style>` element** — a legitimate XML
+idiom (an XML parser gives `<style>` no special content model, so its
+`<script>` children are ordinary elements that execute on insertion) that
+only works because the test is served as `.xhtml`. Live probe (served through
+`tests/wpt/serve_wpt_like.py`, driven via `--mcp-live-port`, no wptrunner code
+in the loop): `document.readyState` reaches `"complete"`, but
+`document.querySelector('style').textContent` contains both `<script>` tags
+as **literal text** (`\n   <script>\n   window.t = async_test(...`), `typeof
+window.t` is `"undefined"`, `tests.length` is `0`, and
+`window.__lumen_wpt_results` never gets set — the harness never completes,
+matching the corpus TIMEOUT exactly. Root cause: the HTML tree builder
+treats `<style>` as RAWTEXT (`GAP-XMLDOC`, same underlying gap [BUG-786](BUG-786-OPEN.md)
+already tracks: no XML parsing path, `crates/shell/src/main.rs` runs the HTML
+parser on every response regardless of content type), so everything between
+`<style>` and the next literal `</style>` — nested `<script>` included — is
+swallowed as inert text and never becomes a real element.
+
+This is a fourth shape of the same mechanism `tests/wpt/timeout_audit.py`'s
+`xml-document-scripts-lost` marker (`_xml_document_script_marker`) already
+covers for three other shapes (prefixed `<h:script>`, self-closing
+`<script src="..."/>`, CDATA-wrapped inline script) — the predicate just
+never checked for a `<script>` nested inside `<style>`. Added
+`_SCRIPT_IN_STYLE_RE` and wired it into the same predicate (two new selftest
+cases: the real shape classified in an `.xhtml` file, the identical bytes
+correctly left unclassified in a `.html` file, since `<style>` is RAWTEXT
+under HTML parsing too — a conforming browser would not treat the nested
+`<script>` as an element there either). Verified against the real corpus
+snapshot's 40-id `residual_ids` list from срез 48's baseline
+(`.tmp/timeout_audit_slice48_baseline.json`): exactly this one id drops out,
+no other id's classification changes — **unclassified 40 → 39**. No new bug
+filed (BUG-786/GAP-XMLDOC already owns the mechanism).
+
+Remaining 39 (14 of which are real TIMEOUTs even with срез 47's fix, per
+item 4 above; the rest are OK/ERROR in both A/B runs — a different question
+than "why does this TIMEOUT") still need per-id triage, one WPT-RUN-6 slice
+at a time.
+
 ## Как проверить фикс
 
 `tests/wpt/run_report.py --root console --all --recursive --offset 4 --limit
