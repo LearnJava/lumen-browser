@@ -883,6 +883,29 @@ pub(crate) struct Lumen {
     /// alongside `frame_text_cursor` on navigation/tab reset — see that
     /// field's doc comment.
     pub(crate) frame_text_selection_anchor: HashMap<(usize, NodeId), usize>,
+    /// `<input type="color">` ВНУТРИ содержимого фрейма, чей picker-оверлей
+    /// открыт (FRAME-6), keyed the same way [`Self::frame_text_cursor`] is —
+    /// `NodeId` уникален лишь внутри своего документа. Зеркало страничного
+    /// [`Self::color_picker_node`], только с индексом фрейма: рисуется тем же
+    /// [`forms::build_color_picker`], но с anchor, переведённым в координаты
+    /// СТРАНИЦЫ через [`crate::frames::frame_page_origin`] — тот же приём,
+    /// каким [`crate::lumen::frame_form_submit::Lumen::show_frame_validation_tooltip`]
+    /// уже переводит подсказку валидации. Cleared alongside `frame_text_cursor`
+    /// on navigation/tab reset, plus on frame navigation ([`crate::lumen::frame_links::Lumen::on_frame_nav_done`]).
+    pub(crate) frame_color_picker: Option<(usize, NodeId)>,
+    /// `<input type="date/datetime-local/time/month/week">` ВНУТРИ содержимого
+    /// фрейма, чей calendar picker открыт (FRAME-6). Зеркало страничного
+    /// [`Self::date_picker_node`] — see [`Self::frame_color_picker`] for the
+    /// keying/anchor rationale.
+    pub(crate) frame_date_picker: Option<(usize, NodeId)>,
+    /// Calendar year currently displayed in the open frame date picker.
+    pub(crate) frame_date_picker_year: i32,
+    /// Calendar month currently displayed in the open frame date picker (1-based).
+    pub(crate) frame_date_picker_month: u8,
+    /// `<select>` ВНУТРИ содержимого фрейма, чей dropdown открыт (FRAME-6).
+    /// Зеркало страничного [`Self::select_dropdown_node`] — see
+    /// [`Self::frame_color_picker`] for the keying/anchor rationale.
+    pub(crate) frame_select_dropdown: Option<(usize, NodeId)>,
     /// Mouse-drag text selection in progress (FRAME-7 остаток) — armed by
     /// [`super::text_drag_select::Lumen::begin_text_drag_select`] right after
     /// a left-button press lands on a typeable field's focus, updated by

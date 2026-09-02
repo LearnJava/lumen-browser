@@ -1198,6 +1198,13 @@ impl Lumen {
         self.date_picker_year = 0;
         self.date_picker_month = 0;
         self.select_dropdown_node = None;
+        // FRAME-6: same reset, frame-scoped overlays — see `frame_text_cursor`
+        // above for why the page's own document load invalidates them too.
+        self.frame_color_picker = None;
+        self.frame_date_picker = None;
+        self.frame_date_picker_year = 0;
+        self.frame_date_picker_month = 0;
+        self.frame_select_dropdown = None;
         // Reset paint timing guards so new page fires fresh PerformancePaintTiming entries.
         self.first_paint_delivered = false;
         self.first_contentful_paint_delivered = false;

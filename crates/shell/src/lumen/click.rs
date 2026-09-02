@@ -165,6 +165,28 @@ impl Lumen {
         // Any click outside the picker closes it.
         self.color_picker_node = None;
 
+        // ── Frame color picker swatch hit (FRAME-6) ───────
+        // Зеркало страничной проверки выше, но anchor ищется в layout
+        // РЕБЁНКА и переводится в координаты страницы `frame_overlay_anchor`
+        // (`frame_forms.rs`) — оверлей рисуется viewport-locked поверх всего,
+        // как и страничный, так что `x_css`/`y_css` сравниваются напрямую.
+        let frame_picker_swatch_result: Option<(usize, NodeId, [u8; 3])> = self
+            .frame_color_picker
+            .and_then(|(idx, pn)| {
+                let anchor = self.frame_overlay_anchor(idx, pn)?;
+                let color = forms::hit_color_swatch(anchor, scroll_y, x_css, y_css)?;
+                Some((idx, pn, color))
+            });
+        if let Some((idx, pn, color)) = frame_picker_swatch_result {
+            self.frame_color_picker = None;
+            let css_color = forms::swatch_to_css_color(color);
+            self.with_frame_doc(idx, |doc| forms::set_value(doc, pn, &css_color));
+            self.refresh_frames(Some(idx));
+            return;
+        }
+        // Any click outside the frame picker closes it.
+        self.frame_color_picker = None;
+
         // ── Date picker hit ──────────────────────────────
         let date_hit: Option<(NodeId, forms::DatePickerHit)> = {
             let dp_node = self.date_picker_node;
@@ -208,6 +230,53 @@ impl Lumen {
         // Any click outside the date picker closes it.
         self.date_picker_node = None;
 
+        // ── Frame date picker hit (FRAME-6) ───────────────
+        let frame_date_hit: Option<(usize, NodeId, forms::DatePickerHit)> =
+            self.frame_date_picker.and_then(|(idx, dn)| {
+                let anchor = self.frame_overlay_anchor(idx, dn)?;
+                let vp_w2 = self.viewport_width_css();
+                let hit = forms::hit_date_picker(
+                    anchor, scroll_y, vp_w2,
+                    self.frame_date_picker_year, self.frame_date_picker_month,
+                    x_css, y_css,
+                );
+                Some((idx, dn, hit))
+            });
+        if let Some((idx, dn, hit)) = frame_date_hit {
+            match hit {
+                forms::DatePickerHit::Prev => {
+                    let (ny, nm) = forms::advance_month(
+                        self.frame_date_picker_year, self.frame_date_picker_month, -1,
+                    );
+                    self.frame_date_picker_year = ny;
+                    self.frame_date_picker_month = nm;
+                    self.request_redraw();
+                    return;
+                }
+                forms::DatePickerHit::Next => {
+                    let (ny, nm) = forms::advance_month(
+                        self.frame_date_picker_year, self.frame_date_picker_month, 1,
+                    );
+                    self.frame_date_picker_year = ny;
+                    self.frame_date_picker_month = nm;
+                    self.request_redraw();
+                    return;
+                }
+                forms::DatePickerHit::Day(day) => {
+                    self.frame_date_picker = None;
+                    let date_str = forms::format_date_value(
+                        self.frame_date_picker_year, self.frame_date_picker_month, day,
+                    );
+                    self.with_frame_doc(idx, |doc| forms::set_value(doc, dn, &date_str));
+                    self.refresh_frames(Some(idx));
+                    return;
+                }
+                forms::DatePickerHit::None => {}
+            }
+        }
+        // Any click outside the frame date picker closes it.
+        self.frame_date_picker = None;
+
         // ── Select dropdown option hit ───────────────────
         // Check if click lands on an open <select> dropdown.
         let select_hit: Option<(NodeId, usize)> = {
@@ -243,6 +312,43 @@ impl Lumen {
         }
         // Any click outside the dropdown closes it.
         self.select_dropdown_node = None;
+
+        // ── Frame select dropdown option hit (FRAME-6) ────
+        let frame_select_hit: Option<(usize, NodeId, usize)> =
+            self.frame_select_dropdown.and_then(|(idx, sn)| {
+                let anchor = self.frame_overlay_anchor(idx, sn)?;
+                let opts_count = self
+                    .frames
+                    .get(idx)
+                    .and_then(|h| h.doc.lock().ok())
+                    .map(|doc| forms::collect_select_options(&doc, sn).len())
+                    .unwrap_or(0);
+                let vp_h = self.viewport_height_css();
+                let vp_w2 = self.viewport_width_css();
+                let opt_idx =
+                    forms::hit_select_option(anchor, opts_count, scroll_y, vp_w2, vp_h, x_css, y_css)?;
+                Some((idx, sn, opt_idx))
+            });
+        if let Some((idx, sn, opt_idx)) = frame_select_hit {
+            self.frame_select_dropdown = None;
+            // Scoped so the `MutexGuard` (and the `self.frames` borrow behind
+            // it) drop before `refresh_frames` needs `&mut self` again.
+            let changed = self.frames.get(idx).is_some_and(|handle| {
+                let Ok(mut doc) = handle.doc.lock() else { return false };
+                let opts = forms::collect_select_options(&doc, sn);
+                if opts.get(opt_idx).is_some_and(|o| o.disabled) {
+                    return false;
+                }
+                forms::apply_select_choice(&mut doc, &opts, opt_idx);
+                true
+            });
+            if changed {
+                self.refresh_frames(Some(idx));
+            }
+            return;
+        }
+        // Any click outside the frame dropdown closes it.
+        self.frame_select_dropdown = None;
 
         // ── Form control + link click ────────────────────
         // Single hit test shared by form dispatch and link navigation.
