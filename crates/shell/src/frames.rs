@@ -745,8 +745,8 @@ fn layout_frame_document(
         lumen_layout::set_interactive_state(state.hovered, state.focused, state.active);
         let frame_layout = lumen_layout::layout_measured(&d, sheet, viewport, measurer);
         lumen_layout::clear_interactive_state();
-        let rects = lumen_layout::collect_layout_rects(&frame_layout);
-        let styles = lumen_layout::collect_computed_styles(&frame_layout);
+        let rects = lumen_layout::collect_layout_rects(&frame_layout, &d);
+        let styles = lumen_layout::collect_computed_styles(&frame_layout, &d);
         (frame_layout, rects, styles)
     };
     if let Some(js) = js {

@@ -459,11 +459,15 @@ pub(crate) struct JsLayoutSnapshot {
 }
 
 /// Snapshot a laid-out tree into the tables the JS runtime reads (BUG-443).
-pub(crate) fn collect_js_layout_snapshot(root: &LayoutBox, viewport: Size) -> JsLayoutSnapshot {
+pub(crate) fn collect_js_layout_snapshot(
+    root: &LayoutBox,
+    doc: &Document,
+    viewport: Size,
+) -> JsLayoutSnapshot {
     JsLayoutSnapshot {
-        rects: lumen_layout::collect_layout_rects(root),
+        rects: lumen_layout::collect_layout_rects(root, doc),
         tree: Arc::new(root.clone()),
-        styles: lumen_layout::collect_computed_styles(root),
+        styles: lumen_layout::collect_computed_styles(root, doc),
         customs: lumen_layout::collect_custom_properties(root),
         viewport: (viewport.width, viewport.height),
     }
@@ -619,6 +623,7 @@ pub(crate) fn parse_and_layout(
             &layout_page(
                 &doc, &cascade.sheet, &cascade.measurer, viewport, hp, dark_mode, media_print,
             ),
+            &doc,
             viewport,
         ))
     };
@@ -705,6 +710,7 @@ pub(crate) fn parse_and_layout(
                     &layout_page(
                         &d, &cascade.sheet, &cascade.measurer, viewport, hp, dark_mode, media_print,
                     ),
+                    &d,
                     viewport,
                 )
             };

@@ -658,10 +658,15 @@ impl Lumen {
             // (`HashMap`/`Vec`) → the closure is `Send + 'static`.
             if self.js_present
                 && let Some(lb_ref) = self.layout_box.as_ref()
+                && let Some(doc_guard) = self
+                    .layout_source
+                    .as_ref()
+                    .and_then(|ls| ls.document.lock().ok())
             {
-                let rects = collect_layout_rects(lb_ref);
+                let rects = collect_layout_rects(lb_ref, &doc_guard);
                 let hit_test_tree = Arc::new(lb_ref.clone());
-                let styles = collect_computed_styles(lb_ref);
+                let styles = collect_computed_styles(lb_ref, &doc_guard);
+                drop(doc_guard);
                 let customs = collect_custom_properties(lb_ref);
                 let (vw, vh) = (viewport.width, viewport.height);
                 let dark_mode = self.dark_mode;

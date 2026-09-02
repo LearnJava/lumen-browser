@@ -121,19 +121,21 @@ fn detached_element_falls_back_to_text_content() {
     assert_eq!(ok, "true", "a box-less element must answer textContent");
 }
 
-/// Regression guard for the bridge itself: an inline element owns no box, so the
-/// engine publishes no computed style for it — the style that governs its text
-/// lives on the **text node**. Getting this backwards is how slice 2's first
-/// attempt lost `<b>world</b>` from `#blocks` entirely.
+/// Regression guard for the bridge itself: before BUG-488, an inline element owned
+/// no box and the engine published no computed style for it at all — the style
+/// that governs its text lived only on the **text node**, and getting this
+/// backwards is how slice 2's first attempt lost `<b>world</b>` from `#blocks`
+/// entirely. BUG-488 gave inline elements their own (approximated) entry too, so
+/// the guard now checks the two agree instead of checking the element has none.
 #[test]
-fn inline_element_has_no_snapshot_entry_but_its_text_node_does() {
+fn inline_element_and_its_text_node_report_the_same_style() {
     let mut session = InProcessSession::new();
     session.navigate_html(PAGE).expect("navigate_html");
 
     let inline_element = session
         .eval("_lumen_get_computed_style(document.querySelector('#blocks b').__nid__, 'visibility')")
         .expect("eval inline element style");
-    assert_eq!(inline_element, "\"\"", "an inline element must have no entry");
+    assert_eq!(inline_element, "\"visible\"", "BUG-488: inline element must carry an entry too");
 
     let inline_text = session
         .eval(
@@ -141,7 +143,7 @@ fn inline_element_has_no_snapshot_entry_but_its_text_node_does() {
                document.querySelector('#blocks b').firstChild.__nid__, 'visibility')",
         )
         .expect("eval inline text style");
-    assert_eq!(inline_text, "\"visible\"", "its text node must carry the style");
+    assert_eq!(inline_text, "\"visible\"", "its text node must still carry the style");
 
     // And the block that does own a box keeps its full ~55-property entry.
     let block = session

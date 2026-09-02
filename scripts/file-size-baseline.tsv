@@ -4,7 +4,7 @@
 # Число может ехать ВНИЗ свободно, ВВЕРХ — только осознанно, тем же
 # коммитом, что и рост, и с объяснением в теле коммита.
 
-13446	crates/engine/layout/src/lib.rs
+11729	crates/engine/layout/src/lib.rs
 10217	crates/network/src/lib.rs
 9192	crates/engine/css-parser/src/parser.rs
 7955	crates/engine/paint/src/backends/femtovg_backend.rs
@@ -19,7 +19,7 @@
 3614	crates/js/src/worker.rs
 3435	crates/chrome/src/model.rs
 3006	crates/shell/src/forms.rs
-2935	crates/driver/src/session.rs
+2938	crates/driver/src/session.rs
 2850	crates/js/src/offscreen_canvas.rs
 2762	crates/network/src/h3/conn_connect.rs
 2637	crates/js/src/subtle_crypto.rs

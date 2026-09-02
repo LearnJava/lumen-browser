@@ -44,7 +44,7 @@ root `<html>` element (which the UA stylesheet in this test also sets to
 `display: contents`, expecting it to compute to `block` per the "root
 elements are blockified" rule) — all three read back `""` instead of a
 real value. The other 2 subtests of the same file query a **descendant** of
-a `display:contents` container instead ([BUG-488](BUG-488-OPEN.md) — plain
+a `display:contents` container instead ([BUG-488](BUG-488-FIXED.md) — plain
 inline elements, unrelated mechanism, isolated separately).
 
 `display-contents-parsing-001.html` and `display-contents-focusable-001.html`
