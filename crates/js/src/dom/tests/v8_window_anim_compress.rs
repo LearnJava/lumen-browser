@@ -63,6 +63,24 @@ fn caret_position_from_point_has_get_client_rects() {
                  })()"));
 }
 
+// ── document.caretRangeFromPoint tests (BUG-474) ───────────────────────────
+
+#[test]
+fn caret_range_from_point_exists() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt, "typeof document.caretRangeFromPoint === 'function'"));
+}
+
+#[test]
+fn caret_range_from_point_returns_range_instance_with_zero_offsets() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt,
+        "(function() { \
+                   var r = document.caretRangeFromPoint(); \
+                   return r instanceof Range && r.startOffset === 0 && r.endOffset === 0 \
+                       && r.collapsed === true; \
+                 })()"));
+}
 
 // ── _lumen_gc_collect tests ────────────────────────────────────────────────
 
