@@ -687,6 +687,56 @@ impl Lumen {
             }
         }
 
+        // FRAME-6: same three overlays, anchored to a control inside a
+        // frame's OWN sub-document rather than the page's. `frame_overlay_anchor`
+        // (`frame_forms.rs`) does the layout lookup in the frame's own tree
+        // (`NodeId` only resolves there) plus the `frame_page_origin`
+        // translation into page coordinates the page's plain `find_box_rect`
+        // above does not need. Mutually exclusive with the page-side overlays
+        // above by construction — `handle_click_at_inner` (`click.rs`) closes
+        // every one of the six fields on any click that does not land inside
+        // its own popup.
+        if let Some((fidx, picker_node)) = self.frame_color_picker
+            && let Some(anchor) = self.frame_overlay_anchor(fidx, picker_node)
+        {
+            let mut picker = forms::build_color_picker(anchor, self.scroll_y, vp_w);
+            picker.append(&mut overlay_buf);
+            overlay_buf = picker;
+        }
+        if let Some((fidx, dp_node)) = self.frame_date_picker
+            && let Some(anchor) = self.frame_overlay_anchor(fidx, dp_node)
+        {
+            let mut dp = forms::build_date_picker(
+                anchor, self.scroll_y, vp_w,
+                self.frame_date_picker_year, self.frame_date_picker_month,
+            );
+            dp.append(&mut overlay_buf);
+            overlay_buf = dp;
+        }
+        if let Some((fidx, sel_node)) = self.frame_select_dropdown
+            && let Some(anchor) = self.frame_overlay_anchor(fidx, sel_node)
+            && let Some(handle) = self.frames.get(fidx)
+            && let Some(lb) = handle.layout.as_ref()
+        {
+            let base_select_style = forms::find_layout_box(lb, sel_node)
+                .filter(|b| b.style.appearance == lumen_layout::Appearance::BaseSelect)
+                .map(|b| b.style.clone());
+            if let Ok(doc) = handle.doc.lock() {
+                let opts = forms::collect_select_options(&doc, sel_node);
+                let vp_h = self.viewport_height_css();
+                let mut dd = if let Some(sel_style) = &base_select_style {
+                    forms::build_base_select_dropdown(
+                        anchor, &doc, &handle.sheet, sel_style, &opts,
+                        self.scroll_y, vp_w, vp_h, self.dark_mode,
+                    )
+                } else {
+                    forms::build_select_dropdown(anchor, &opts, self.scroll_y, vp_w, vp_h)
+                };
+                dd.append(&mut overlay_buf);
+                overlay_buf = dd;
+            }
+        }
+
         // <dialog> modal overlay (L-2) — ::backdrop + centered dialog above page.
         if let Some(lb) = &self.layout_box {
             let doc =

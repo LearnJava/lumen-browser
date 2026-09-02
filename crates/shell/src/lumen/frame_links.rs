@@ -314,6 +314,12 @@ impl Lumen {
         self.hovered_frame = None;
         self.focused_frame = None;
         self.active_frame = None;
+        // FRAME-6: same staleness — an overlay anchored to a node of the
+        // discarded document would, after replacement, look up whatever node
+        // happens to share its index in the NEW one.
+        self.frame_color_picker = None;
+        self.frame_date_picker = None;
+        self.frame_select_dropdown = None;
         self.refresh_frames(None);
     }
 

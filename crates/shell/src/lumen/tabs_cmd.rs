@@ -71,6 +71,12 @@ impl Lumen {
         self.date_picker_year = 0;
         self.date_picker_month = 0;
         self.select_dropdown_node = None;
+        // FRAME-6: same reset, frame-scoped overlays — see `frame_text_cursor` above.
+        self.frame_color_picker = None;
+        self.frame_date_picker = None;
+        self.frame_date_picker_year = 0;
+        self.frame_date_picker_month = 0;
+        self.frame_select_dropdown = None;
         self.ls_storage = HashMap::new();
         // BUG-836: a new tab is a new browsing context, so it starts with empty
         // session storage — this reset is the *only* place it may be cleared.

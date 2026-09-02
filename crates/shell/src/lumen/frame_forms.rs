@@ -63,19 +63,44 @@ impl Lumen {
                 }
                 false
             }
-            // Оверлеи (`<select>`, палитра, календарь, файловый диалог) в срез
-            // не входят и молча ничего не делают, потому что упираются в СВОЙ
-            // механизм, а не в этот: всплывающие окна рисуются по
-            // прямоугольнику из layout СТРАНИЦЫ (`self.layout_box`) и
-            // адресуются одним `NodeId` без фрейма. Лог, а не тишина: иначе
-            // клик по `<select>` внутри фрейма выглядит как потерянное событие.
-            forms::FormClickAction::OpenSelectDropdown(_)
-            | forms::FormClickAction::OpenColorPicker(_)
-            | forms::FormClickAction::OpenDatePicker(_)
-            | forms::FormClickAction::OpenFilePicker(_) => {
-                eprintln!(
-                    "iframe: элемент управления {action:?} внутри фрейма пока не поддержан (BUG-480 срез 18)"
-                );
+            // Оверлеи (`<select>`, палитра, календарь, файловый диалог) —
+            // FRAME-6: те же три поля `Lumen`, что у страницы
+            // (`color_picker_node`/`date_picker_node`/`select_dropdown_node`),
+            // только `(индекс фрейма, NodeId)` — see `Lumen::frame_color_picker`
+            // doc comment (`state.rs`) for why. Открытие само по себе не меняет
+            // дерево ребёнка — `changed` остаётся `false`, как у страничных
+            // веток в `click.rs::handle_click_at_inner`; попадание в сам
+            // оверлей разбирается ТАМ ЖЕ, где страничное — в начале функции,
+            // до hit-теста, потому что оверлей рисуется viewport-locked поверх
+            // всего, а не внутри фрейма.
+            forms::FormClickAction::OpenColorPicker(id) => {
+                self.frame_color_picker = Some((idx, id));
+                self.request_redraw();
+                false
+            }
+            forms::FormClickAction::OpenDatePicker(id) => {
+                let (y, m) = self
+                    .frames
+                    .get(idx)
+                    .and_then(|h| h.doc.lock().ok())
+                    .and_then(|doc| {
+                        let val = doc.control_value(id).into_owned();
+                        forms::parse_date_value(&val).map(|(y, m, _)| (y, m))
+                    })
+                    .unwrap_or_else(forms::today_year_month);
+                self.frame_date_picker = Some((idx, id));
+                self.frame_date_picker_year = y;
+                self.frame_date_picker_month = m;
+                self.request_redraw();
+                false
+            }
+            forms::FormClickAction::OpenSelectDropdown(id) => {
+                self.frame_select_dropdown = Some((idx, id));
+                self.request_redraw();
+                false
+            }
+            forms::FormClickAction::OpenFilePicker(id) => {
+                self.open_frame_file_picker(idx, id);
                 false
             }
             forms::FormClickAction::Nothing => false,
@@ -192,5 +217,72 @@ impl Lumen {
             self.set_display_list(new_dl);
         }
         self.request_redraw();
+    }
+
+    /// Прямоугольник контрола `node` под-документа фрейма `idx` в координатах
+    /// СТРАНИЦЫ (FRAME-6) — тот же приём, что уже возит подсказку валидации
+    /// ([`super::frame_form_submit::Lumen::show_frame_validation_tooltip`]):
+    /// бокс ищется в layout РЕБЁНКА (`NodeId` уникален лишь внутри своего
+    /// документа), затем переводится [`frames::frame_page_origin`].
+    /// `build_color_picker`/`build_date_picker`/`build_select_dropdown`
+    /// (`forms.rs`) сами вычитают `self.scroll_y` при отрисовке — ровно так
+    /// же, как уже делает `build_validation_tooltip` для страничного anchor.
+    pub(crate) fn frame_overlay_anchor(&self, idx: usize, node: NodeId) -> Option<Rect> {
+        let rect = self.frames.get(idx).and_then(|h| {
+            let lb = h.layout.as_ref()?;
+            forms::find_box_rect(lb, node)
+        })?;
+        let (ox, oy) = frames::frame_page_origin(&self.frames, idx)?;
+        Some(Rect {
+            x: rect.x + ox,
+            y: rect.y + oy,
+            width: rect.width,
+            height: rect.height,
+        })
+    }
+
+    /// OS-диалог `<input type="file">` ВНУТРИ под-документа фрейма (FRAME-6).
+    ///
+    /// Зеркало [`Lumen::open_file_picker`] страницы (`file_picker.rs`), но
+    /// токен регистрируется на origin РЕБЁНКА, не через
+    /// `lumen_js::file_input::active_document_origin()`: тот глобал держит
+    /// origin, с которым `install_dom` устанавливал биндинги ПОСЛЕДНИМ (у
+    /// него нет памяти «для какого документа»), а на странице с фреймом это
+    /// не обязательно origin документа, из которого кликнули. `origin_for_url`
+    /// — та же функция, которой сам `install_dom` вычисляет `page_origin`
+    /// перед `install_file_input_bindings_v8` (`crates/js/src/v8_runtime.rs`),
+    /// так что для ЭТОГО фрейма она даёт байт-в-байт то значение, которым его
+    /// собственные read-биндинги были установлены, независимо от того, что
+    /// сейчас лежит в глобале.
+    pub(crate) fn open_frame_file_picker(&mut self, idx: usize, id: NodeId) {
+        let Some((accept, multiple)) = self.frames.get(idx).and_then(|h| {
+            let doc = h.doc.lock().ok()?;
+            let n = doc.get(id);
+            Some((
+                n.get_attr("accept").unwrap_or("").to_string(),
+                n.get_attr("multiple").is_some(),
+            ))
+        }) else {
+            return;
+        };
+        let entries = platform::file_dialog::open_file_dialog(&accept, multiple);
+        if entries.is_empty() {
+            // Пользователь отменил — событие не летит (HTML LS §4.10.5.1.16.3 шаг 3).
+            return;
+        }
+        #[cfg(feature = "v8")]
+        {
+            let Some(handle) = self.frames.get(idx) else { return };
+            let Some(js) = handle.js.clone() else { return };
+            let origin = lumen_js::file_input::origin_for_url(&handle.url);
+            let tokens: Vec<String> = entries
+                .iter()
+                .map(|e| lumen_js::file_input::register_file_token(&e.path, &origin))
+                .collect();
+            let json = platform::file_dialog::entries_to_json_with_tokens(&entries, &tokens);
+            js.eval_js(&format!("_lumen_deliver_file_list({}, {})", id.index(), json));
+        }
+        #[cfg(not(feature = "v8"))]
+        let _ = entries;
     }
 }
