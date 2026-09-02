@@ -4514,6 +4514,51 @@ function _lumen_rendered_text(nid) {
     return _lumen_get_text_content(nid);
 }
 
+// BUG-476: is `nid` the HTML body element — offsetLeft/offsetTop are zero for
+// it regardless of offsetParent (CSSOM View §5 step 1).
+function _lumen_is_body(nid) {
+    var body = document.body;
+    return !!body && nid === body.__nid__;
+}
+
+// CSSOM View §5 `offsetParent` algorithm: nearest ancestor that is either
+// positioned (computed `position` != `static`), the `<body>`, or a
+// `<td>`/`<th>`/`<table>`. `null` for the root element, `<body>` itself, or a
+// `position: fixed` element (which cannot have an offsetParent up the tree).
+function _lumen_offset_parent_nid(nid) {
+    var docEl = document.documentElement;
+    if (docEl && nid === docEl.__nid__) return null;
+    if (_lumen_is_body(nid)) return null;
+    if (_lumen_get_computed_style(nid, 'position') === 'fixed') return null;
+    var pid = _lumen_u2n(_lumen_get_parent(nid));
+    while (pid !== null && pid !== undefined) {
+        // An empty string (no computed-style entry for this node) means
+        // "static", not "positioned" — never treat a style-less node as an
+        // offsetParent candidate.
+        var pos = _lumen_get_computed_style(pid, 'position');
+        if (pos && pos !== 'static') return pid;
+        if (_lumen_is_body(pid)) return pid;
+        var tag = (_lumen_get_tag_name(pid) || '').toUpperCase();
+        if (tag === 'TD' || tag === 'TH' || tag === 'TABLE') return pid;
+        pid = _lumen_u2n(_lumen_get_parent(pid));
+    }
+    return null;
+}
+
+// The point offsetLeft/offsetTop measure FROM: the offsetParent's padding
+// edge (its border-box origin plus its own border widths), or the viewport
+// origin `[0, 0]` when there is no offsetParent — border widths are always
+// published in computed-style px, so a plain `parseFloat` resolves them.
+function _lumen_offset_origin(nid) {
+    var parent = _lumen_offset_parent_nid(nid);
+    if (parent === null) return [0, 0];
+    var r = _lumen_get_bounding_rect(parent);
+    if (!r) return [0, 0];
+    var bl = parseFloat(_lumen_get_computed_style(parent, 'border-left-width')) || 0;
+    var bt = parseFloat(_lumen_get_computed_style(parent, 'border-top-width')) || 0;
+    return [r[0] + bl, r[1] + bt];
+}
+
 // BUG-849: the wrapper's whole interface used to be built PER NODE — the object
 // literal below (~130 accessors and methods), the `Object.defineProperty` block
 // after it, and one `on<type>` accessor pair for every name in
@@ -5165,8 +5210,18 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // which shadows the prototype one and drives the media loader.
         get offsetWidth()  { var nid = this.__nid__; var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0; },
         get offsetHeight() { var nid = this.__nid__; var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0; },
-        get offsetLeft()   { var nid = this.__nid__; var r = _lumen_get_bounding_rect(nid); return r ? r[0] : 0; },
-        get offsetTop()    { var nid = this.__nid__; var r = _lumen_get_bounding_rect(nid); return r ? r[1] : 0; },
+        // BUG-476: relative to offsetParent's padding edge (CSSOM View §5), not
+        // the viewport — see `_lumen_offset_origin` below.
+        get offsetLeft()   { var nid = this.__nid__;
+            if (_lumen_is_body(nid)) return 0;
+            var r = _lumen_get_bounding_rect(nid); if (!r) return 0;
+            return r[0] - _lumen_offset_origin(nid)[0];
+        },
+        get offsetTop()    { var nid = this.__nid__;
+            if (_lumen_is_body(nid)) return 0;
+            var r = _lumen_get_bounding_rect(nid); if (!r) return 0;
+            return r[1] - _lumen_offset_origin(nid)[1];
+        },
         get clientWidth()  { var nid = this.__nid__; var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0; },
         get clientHeight() { var nid = this.__nid__; var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0; },
         get scrollLeft() { var nid = this.__nid__;
