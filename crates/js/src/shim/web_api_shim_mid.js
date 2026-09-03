@@ -1143,6 +1143,19 @@ function _lumen_make_class_list(nid) {
 // key/value pair, same as any other unrecognized property. `border-style`
 // has no canon function yet (no longhand grammar), so it stays on this
 // pass-through path, same as before.
+//
+// Срез 10: a plain (non-shorthand) declaration now runs through the same
+// per-property canon-or-reject dispatch (`_lumen_canonicalize_longhand`,
+// defined below the property tables) that `setProperty` already used —
+// previously a markup-authored `style="margin-top: 0"` or `style="float:
+// LEFT"` stored the raw source text verbatim (`"0"`, `"LEFT"`) forever,
+// since only the JS-driven `setProperty` path canonicalized. CSSOM §5.4
+// "parse a CSS declaration block" drops a declaration whose value doesn't
+// match its property's grammar rather than storing it raw, so an invalid
+// plain declaration is skipped here exactly like `setProperty`'s early
+// `return` — it never reaches `obj`. A property with no registered grammar
+// (most of them — this only covers the tables above) passes through
+// unchanged, same as before this slice.
 function _lumen_parse_style(s) {
     var obj = {};
     if (!s) return obj;
@@ -1171,7 +1184,9 @@ function _lumen_parse_style(s) {
                 return;
             }
         }
-        obj[prop] = val;
+        var canon = _lumen_canonicalize_longhand(prop, val);
+        if (canon === null || canon === undefined) return; // invalid declaration: dropped, not stored
+        obj[prop] = canon;
     });
     return obj;
 }
@@ -1423,6 +1438,22 @@ var _LUMEN_SIZING_LENGTH_PROPERTIES = {
 // same shape as the TRBL shorthand path. `overflow-block`/`overflow-inline`
 // (the logical-axis equivalents) stay out of scope — the engine has no such
 // properties at all yet, `crates/engine/layout/src` has zero hits for either.
+//
+// Срез 10: seven more pure keyword-enum longhands, same table, same generic
+// canonicalization — no new Rust function needed, each already has a
+// `parse(s: &str) -> Option<Self>` in `crates/engine/layout/src/style/
+// values/{box_model,misc}.rs` (`Position`, `Isolation`, `MixBlendMode`,
+// `PointerEvents`) or a bare `match` in `style/apply/text.rs` (`text-align`,
+// `direction`, `text-transform`). List is what the engine's own parser
+// accepts, not the full spec grammar: `text-align` has no `justify`/
+// `match-parent` (engine's `apply_decl_text` match has no arm for either —
+// an unmatched value there keeps the previous computed value, same no-op
+// contract this canonicalizer gives on write); `pointer-events` keeps all
+// SVG aliases (`visiblepainted`/`visiblefill`/`visiblestroke`/`painted`/
+// `fill`/`stroke`/`all`) as their own accepted+round-tripped tokens, same as
+// `overflow-x`'s `clip` above — CSSOM read-back is the *specified* value,
+// not the resolved `PointerEvents::Visible` all three `visible*` aliases
+// parse to.
 var _LUMEN_KEYWORD_PROPERTIES = {
     'clear':       ['none', 'left', 'right', 'both', 'inline-start', 'inline-end'],
     'float':       ['none', 'left', 'right', 'inline-start', 'inline-end'],
@@ -1430,7 +1461,51 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'box-sizing':  ['border-box', 'content-box'],
     'overflow-x':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
     'overflow-y':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
+    'position':    ['static', 'relative', 'absolute', 'fixed', 'sticky'],
+    'isolation':   ['auto', 'isolate'],
+    'mix-blend-mode': [
+        'normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten',
+        'color-dodge', 'color-burn', 'hard-light', 'soft-light',
+        'difference', 'exclusion', 'hue', 'saturation', 'color',
+        'luminosity', 'plus-lighter',
+    ],
+    'pointer-events': [
+        'auto', 'none', 'visible', 'visiblepainted', 'visiblefill',
+        'visiblestroke', 'painted', 'fill', 'stroke', 'all',
+    ],
+    'text-align':     ['start', 'end', 'left', 'center', 'right'],
+    'direction':      ['ltr', 'rtl'],
+    'text-transform': ['none', 'uppercase', 'lowercase', 'capitalize'],
+    'user-select':    ['auto', 'text', 'none', 'contain', 'all'],
 };
+
+// Срез 10: single dispatch point for "canonicalize (or reject) a plain
+// longhand value", shared by `setProperty` and `_lumen_parse_style`'s
+// per-declaration loop above — previously each had its own copy of this
+// if-chain, and only `setProperty`'s copy existed, which is why a
+// markup-authored declaration never got validated at all. Returns the
+// canonical string, or `null`/`undefined` if `key` has a registered grammar
+// and `strVal` doesn't match it. A `key` with no registered grammar passes
+// `strVal` through unchanged — most properties have no grammar here yet.
+function _lumen_canonicalize_longhand(key, strVal) {
+    if (_LUMEN_COLOR_PROPERTIES.hasOwnProperty(key)) {
+        return _lumen_css_canonical_color(strVal);
+    }
+    if (_LUMEN_LENGTH_PROPERTIES.hasOwnProperty(key)) {
+        var grammar = _LUMEN_LENGTH_PROPERTIES[key];
+        return _lumen_css_canonical_length(strVal, grammar.allowAuto, grammar.nonNegative);
+    }
+    if (_LUMEN_LINE_WIDTH_PROPERTIES.hasOwnProperty(key)) {
+        return _lumen_css_canonical_line_width(strVal);
+    }
+    if (_LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key)) {
+        return _lumen_css_canonical_sizing_length(strVal);
+    }
+    if (_LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key)) {
+        return _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
+    }
+    return strVal;
+}
 
 function _lumen_make_style(nid) {
     function getParsed() {
@@ -1480,39 +1555,18 @@ function _lumen_make_style(nid) {
                 setParsed(obj);
                 return;
             }
-            if (_LUMEN_COLOR_PROPERTIES.hasOwnProperty(key)) {
-                var canon = _lumen_css_canonical_color(strVal);
-                if (canon === null || canon === undefined) return; // invalid <color>: no-op
+            // Срез 10: color/length/line-width/sizing/keyword grammars all
+            // go through the shared `_lumen_canonicalize_longhand` dispatch
+            // (also used by `_lumen_parse_style` above) instead of one
+            // repeated if-block per table.
+            if (_LUMEN_COLOR_PROPERTIES.hasOwnProperty(key) ||
+                _LUMEN_LENGTH_PROPERTIES.hasOwnProperty(key) ||
+                _LUMEN_LINE_WIDTH_PROPERTIES.hasOwnProperty(key) ||
+                _LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key) ||
+                _LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key)) {
+                var canon = _lumen_canonicalize_longhand(key, strVal);
+                if (canon === null || canon === undefined) return; // invalid value: no-op
                 obj[key] = canon;
-                setParsed(obj);
-                return;
-            }
-            if (_LUMEN_LENGTH_PROPERTIES.hasOwnProperty(key)) {
-                var grammar = _LUMEN_LENGTH_PROPERTIES[key];
-                var canonLen = _lumen_css_canonical_length(strVal, grammar.allowAuto, grammar.nonNegative);
-                if (canonLen === null || canonLen === undefined) return; // invalid <length-percentage>: no-op
-                obj[key] = canonLen;
-                setParsed(obj);
-                return;
-            }
-            if (_LUMEN_LINE_WIDTH_PROPERTIES.hasOwnProperty(key)) {
-                var canonWidth = _lumen_css_canonical_line_width(strVal);
-                if (canonWidth === null || canonWidth === undefined) return; // invalid <line-width>: no-op
-                obj[key] = canonWidth;
-                setParsed(obj);
-                return;
-            }
-            if (_LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key)) {
-                var canonSizing = _lumen_css_canonical_sizing_length(strVal);
-                if (canonSizing === null || canonSizing === undefined) return; // invalid sizing value: no-op
-                obj[key] = canonSizing;
-                setParsed(obj);
-                return;
-            }
-            if (_LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key)) {
-                var canonKw = _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
-                if (canonKw === null || canonKw === undefined) return; // invalid keyword: no-op
-                obj[key] = canonKw;
                 setParsed(obj);
                 return;
             }
