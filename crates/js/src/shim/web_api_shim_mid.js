@@ -1364,6 +1364,11 @@ var _LUMEN_2V_SHORTHANDS = {
     'place-content':  ['align-content', 'justify-content'],
     'place-items':    ['align-items', 'justify-items'],
     'place-self':     ['align-self', 'justify-self'],
+    // Срез 17: CSS Overscroll Behavior L1 §2 `overscroll-behavior: <value>{1,2}`
+    // — same "1 value or 2, first sets X, second (if present) sets Y" shape
+    // as the six pairs above, confirmed against `style/apply/motion.rs`'s own
+    // `"overscroll-behavior"` arm (`parts.first()` → x, `parts.get(1)` → y).
+    'overscroll-behavior': ['overscroll-behavior-x', 'overscroll-behavior-y'],
 };
 
 // Срез 15: per-shorthand canon function for `_LUMEN_2V_SHORTHANDS`. The six
@@ -1384,6 +1389,7 @@ var _LUMEN_2V_SHORTHAND_CANON = {
     'place-content':  function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-content']); },
     'place-items':    function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-items']); },
     'place-self':     function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-self']); },
+    'overscroll-behavior': function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['overscroll-behavior-x']); },
 };
 
 // Same CSS-wide-keyword whole-value fan-out as `_lumen_expand_trbl_shorthand`/
@@ -1674,6 +1680,21 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'justify-content': ['auto', 'normal', 'stretch', 'start', 'flex-start', 'self-start', 'end', 'flex-end', 'self-end', 'center', 'baseline', 'first baseline', 'last baseline', 'space-between', 'space-around', 'space-evenly'],
     'justify-items':   ['auto', 'normal', 'stretch', 'start', 'flex-start', 'self-start', 'end', 'flex-end', 'self-end', 'center', 'baseline', 'first baseline', 'last baseline', 'space-between', 'space-around', 'space-evenly'],
     'justify-self':    ['auto', 'normal', 'stretch', 'start', 'flex-start', 'self-start', 'end', 'flex-end', 'self-end', 'center', 'baseline', 'first baseline', 'last baseline', 'space-between', 'space-around', 'space-evenly'],
+    // Срез 17: `overscroll-behavior-x`/`-y` (CSS Overscroll Behavior L1 §2,
+    // `parse_overscroll_behavior` in `style/parse/box_sides.rs` — strict
+    // `auto|contain|none` match, `None` on anything else, no leniency to
+    // mirror) and `scroll-snap-stop` (CSS Scroll Snap L1 §7, the bare
+    // `match` in `style/apply/motion.rs`'s `"scroll-snap-stop"` arm —
+    // `normal|always`). The shorthand `overscroll-behavior` is wired
+    // through `_LUMEN_2V_SHORTHANDS` below, reusing this same list — no new
+    // expand/collapse functions needed, that machinery was generalized off
+    // `_lumen_expand_overflow_shorthand` back in срез 15 for exactly this
+    // shape (1-2 keyword tokens, first sets one longhand, second the other,
+    // defaulting to the first when omitted — `style/apply/motion.rs`'s own
+    // `overscroll-behavior` arm confirms the same x-then-y order).
+    'overscroll-behavior-x': ['auto', 'contain', 'none'],
+    'overscroll-behavior-y': ['auto', 'contain', 'none'],
+    'scroll-snap-stop': ['normal', 'always'],
 };
 
 // CSS Scrollbars L1 §2 (CSSOM-2/BUG-484, срез 11): `scrollbar-color: auto |
