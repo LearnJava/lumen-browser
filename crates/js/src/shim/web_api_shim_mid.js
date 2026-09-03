@@ -1132,6 +1132,17 @@ function _lumen_make_class_list(nid) {
 
 // ── CSSStyleDeclaration (inline style) ───────────────────────────────────────
 
+// BUG-964: a TRBL shorthand token (`margin: 10px 20px`, whether authored
+// straight in markup or round-tripped through our own `_lumen_serialize_style`
+// collapse) is expanded into its four longhand keys right here, using the
+// same `_LUMEN_TRBL_SHORTHAND_CANON`/`_lumen_expand_trbl_shorthand` machinery
+// `setProperty` uses for a JS-assigned shorthand. This keeps `obj` always
+// longhand-keyed for the four covered groups, so a later per-longhand read
+// (`style.marginTop`) never has to find a shorthand key it doesn't know how
+// to decompose. An invalid token falls back to storing the raw shorthand
+// key/value pair, same as any other unrecognized property. `border-style`
+// has no canon function yet (no longhand grammar), so it stays on this
+// pass-through path, same as before.
 function _lumen_parse_style(s) {
     var obj = {};
     if (!s) return obj;
@@ -1140,7 +1151,19 @@ function _lumen_parse_style(s) {
         if (idx < 0) return;
         var prop = decl.slice(0, idx).trim();
         var val  = decl.slice(idx + 1).trim();
-        if (prop) obj[prop] = val;
+        if (!prop) return;
+        if (_LUMEN_TRBL_SHORTHAND_CANON.hasOwnProperty(prop)) {
+            var expanded = _lumen_expand_trbl_shorthand(_LUMEN_TRBL_SHORTHAND_CANON[prop], val);
+            if (expanded !== null) {
+                var longhands = _LUMEN_TRBL_SHORTHANDS[prop];
+                obj[longhands[0]] = expanded.top;
+                obj[longhands[1]] = expanded.right;
+                obj[longhands[2]] = expanded.bottom;
+                obj[longhands[3]] = expanded.left;
+                return;
+            }
+        }
+        obj[prop] = val;
     });
     return obj;
 }
