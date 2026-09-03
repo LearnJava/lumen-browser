@@ -1398,7 +1398,8 @@ SOURCE_MARKERS = [
     Mechanism(
         "embed-object-no-load", "BUG-798",
         [r"<embed|<object|createElement\(['\"](?:embed|object)['\"]\)",
-         r"\.onload|\.onerror|addEventListener\(['\"](?:load|error)['\"]"],
+         r"\.onload|\.onerror|addEventListener\(['\"](?:load|error)['\"]"
+         r"|\bonload\s*=|\bonerror\s*="],
         "`<embed>`/`<object>` have no resource-loading path at all, so neither "
         "`load` nor `error` ever fires on them",
         mode="all",
@@ -2556,6 +2557,57 @@ SOURCE_MARKERS = [
         "promise never settles",
         predicate=_exact_id_marker(
             "/css/css-cascade/scope-implicit-external.html",
+        ),
+    ),
+    # WPT-RUN-6 slice 55. `_lumen_resource_pending` models the spec's
+    # "already started" flag as a one-shot map entry: `createElement`
+    # tracks a script, its first connection deletes the entry and prepares
+    # it, and nothing else ever calls `_lumen_script_prepare` for that nid
+    # again. The 2026 HTML PR (whatwg/html#10188) added a second trigger —
+    # mutating `.src` on an already-connected, non-parser-inserted script
+    # whose `src` was previously non-empty must re-run "prepare a script" —
+    # which has no implementation at all: `src` is a plain reflected URL
+    # attribute with no side-effecting setter. Measured live
+    # (`tests/wpt/verify_slice55_gaps.py` + `serve_wpt_like.py --dump`):
+    # the second `GET resources/flag-setter.js?different` is never issued,
+    # so `script.onload` never fires and the awaited promise hangs until
+    # the harness's own internal timeout. New bug filed (BUG-968).
+    Mechanism(
+        "script-src-mutation-not-prepared", "BUG-968",
+        [], "mutating `.src` on an already-prepared, already-connected "
+        "`<script>` never re-runs \"prepare a script\" — no second fetch, "
+        "no second execution, so a `.onload` awaited after the mutation "
+        "never fires",
+        predicate=_exact_id_marker(
+            "/html/semantics/scripting-1/the-script-element/"
+            "change-src-attr-prepare-a-script.html",
+        ),
+    ),
+    # WPT-RUN-6 slice 55. `pick_from_srcset` (`picture.rs`) computes
+    # `source_size_px` from the `sizes` attribute purely to select a `Nw`
+    # candidate by effective density, then always returns
+    # `intrinsic_width: None` — the density-correction half of HTML LS
+    # §4.8.4.3.7 (used width = decoded bitmap width / effective density,
+    # which algebraically collapses to `source_size_px` for a
+    # spec-compliant author) is simply never computed anywhere in the
+    # pipeline, so a `width: auto` `<img>` sized via `sizes`+`srcset` lays
+    # out at the raw decoded bitmap size instead. Measured live: the page
+    # uses `setup({explicit_done: true})`, so the synchronous
+    # `assert_equals` throwing before its own `done()` call turns into a
+    # harness-level TIMEOUT rather than a prompt FAIL, even though the one
+    # registered subtest's own status is already FAIL. New bug filed
+    # (BUG-969).
+    Mechanism(
+        "srcset-density-correction-missing", "BUG-969",
+        [], "an `<img>` sized via `sizes`+`srcset`'s `Nw` descriptors never "
+        "gets its density-corrected used width computed, so `width: auto` "
+        "falls back to the raw decoded bitmap size — the resulting "
+        "`assert_equals` throws before this `explicit_done`-mode test's "
+        "own `done()` call, which reports as harness TIMEOUT rather than "
+        "FAIL",
+        predicate=_exact_id_marker(
+            "/html/semantics/embedded-content/the-img-element/sizes/"
+            "implicit-sizes-ignores-width.html",
         ),
     ),
 ]
@@ -4274,6 +4326,14 @@ def selftest():
             handle.write('<object data="x.svg">fallback</object>')
         check(classify_source("/a/object-plain.html", tmp, {}) is None,
               "an <object> nobody waits on must not be claimed")
+        # WPT-RUN-6 slice 55: the HTML-attribute spelling of the wait
+        # (`onload="go()"`) missed the marker entirely — the second pattern
+        # only matched the scripted forms (`.onload =`/`addEventListener`).
+        # `outer-svg-intrinsic-size-002.html` is exactly this shape.
+        with open(os.path.join(tmp, "a", "object-attr.html"), "w", encoding="utf-8") as handle:
+            handle.write('<object data="x.svg" onload="go()"></object>')
+        check(classify_source("/a/object-attr.html", tmp, {}) == "embed-object-no-load",
+              "an <object onload=...> attribute-form wait was not claimed")
         # A sandboxed frame cannot be reached through `contentWindow`, so the
         # parent waits for its message instead — the shape of every
         # `iframe_sandbox_*` test.
