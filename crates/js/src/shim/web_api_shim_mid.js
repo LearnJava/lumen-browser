@@ -1163,6 +1163,14 @@ function _lumen_parse_style(s) {
                 return;
             }
         }
+        if (prop === 'overflow') {
+            var ov = _lumen_expand_overflow_shorthand(val);
+            if (ov !== null) {
+                obj['overflow-x'] = ov.x;
+                obj['overflow-y'] = ov.y;
+                return;
+            }
+        }
         obj[prop] = val;
     });
     return obj;
@@ -1243,6 +1251,36 @@ function _lumen_expand_trbl_shorthand(canonFn, strVal) {
     return { top: top, right: right, bottom: bottom, left: left };
 }
 
+// CSSOM-2 (BUG-484, срез 9): `overflow` shorthand — CSS Overflow L3 §2
+// grammar `[visible|hidden|clip|scroll|auto]{1,2}`, first token sets
+// overflow-x, second (if present) overflow-y, defaulting to the first when
+// omitted. Same expand/collapse shape as the TRBL shorthands above, but one
+// axis pair instead of four sides, so it gets its own pair of helpers rather
+// than forcing a two-longhand shorthand into `_LUMEN_TRBL_SHORTHANDS`'s
+// fixed four-side layout. Keyword list is shared with the `overflow-x`/
+// `overflow-y` longhands in `_LUMEN_KEYWORD_PROPERTIES` below.
+function _lumen_expand_overflow_shorthand(strVal) {
+    var tokens = strVal.trim().split(/\s+/).filter(function(t) { return t.length > 0; });
+    if (tokens.length < 1 || tokens.length > 2) return null;
+    var canon = [];
+    for (var i = 0; i < tokens.length; i++) {
+        var c = _lumen_css_canonical_keyword(tokens[i], _LUMEN_KEYWORD_PROPERTIES['overflow-x']);
+        if (c === null || c === undefined) return null;
+        canon.push(c);
+    }
+    return { x: canon[0], y: canon.length > 1 ? canon[1] : canon[0] };
+}
+
+// Returns the collapsed `overflow` value if both longhands are present in
+// `obj` — a single keyword when they're equal (CSS Overflow L3's
+// serialization collapses to the shorter form), else `"x y"`.
+function _lumen_overflow_shorthand_value(obj) {
+    if (!Object.prototype.hasOwnProperty.call(obj, 'overflow-x') ||
+        !Object.prototype.hasOwnProperty.call(obj, 'overflow-y')) return undefined;
+    var x = obj['overflow-x'], y = obj['overflow-y'];
+    return x === y ? x : x + ' ' + y;
+}
+
 function _lumen_serialize_style(obj) {
     var keys = Object.keys(obj);
     var shorthandOf = {};   // longhand key -> owning shorthand name, only for collapsible groups
@@ -1253,6 +1291,12 @@ function _lumen_serialize_style(obj) {
         shorthandVal[sh] = v;
         _LUMEN_TRBL_SHORTHANDS[sh].forEach(function(lh) { shorthandOf[lh] = sh; });
     });
+    var ovVal = _lumen_overflow_shorthand_value(obj);
+    if (ovVal !== undefined) {
+        shorthandVal['overflow'] = ovVal;
+        shorthandOf['overflow-x'] = 'overflow';
+        shorthandOf['overflow-y'] = 'overflow';
+    }
     var emittedShorthand = {};
     var parts = [];
     keys.forEach(function(k) {
@@ -1370,14 +1414,22 @@ var _LUMEN_SIZING_LENGTH_PROPERTIES = {
 // (e.g. `visibility: collapse` IS in this list — the engine recognizes it —
 // but `border-style`'s `hidden`/`groove`/`ridge`/`inset`/`outset` are not,
 // since `BorderStyle` has no variants for them, `style/values/box_model.rs`).
-// `overflow`/`overflow-x`/`overflow-y` are deliberately absent — `overflow`
-// is a 1-or-2-token shorthand, and none of the three have a canonicalizer
-// wired here yet (separate slice, same shape as the TRBL shorthand path).
+// `overflow-x`/`overflow-y` (срез 9) list matches `style.rs::parse_overflow_kw`
+// exactly (`visible`/`hidden`/`clip`/`scroll`/`auto` — CSS Overflow L3's
+// `no-display`/`no-content` are unimplemented by the engine, so they stay
+// rejected same as any other unrecognized keyword). The `overflow` shorthand
+// itself is NOT in this table — it is a 1-or-2-token grammar, wired through
+// `_lumen_expand_overflow_shorthand`/`_lumen_overflow_shorthand_value` above,
+// same shape as the TRBL shorthand path. `overflow-block`/`overflow-inline`
+// (the logical-axis equivalents) stay out of scope — the engine has no such
+// properties at all yet, `crates/engine/layout/src` has zero hits for either.
 var _LUMEN_KEYWORD_PROPERTIES = {
     'clear':       ['none', 'left', 'right', 'both', 'inline-start', 'inline-end'],
     'float':       ['none', 'left', 'right', 'inline-start', 'inline-end'],
     'visibility':  ['visible', 'hidden', 'collapse'],
     'box-sizing':  ['border-box', 'content-box'],
+    'overflow-x':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
+    'overflow-y':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
 };
 
 function _lumen_make_style(nid) {
@@ -1392,7 +1444,12 @@ function _lumen_make_style(nid) {
             var obj = getParsed();
             if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
             var shorthand = _lumen_shorthand_value(obj, key);
-            return shorthand !== undefined ? shorthand : '';
+            if (shorthand !== undefined) return shorthand;
+            if (key === 'overflow') {
+                var ovShorthand = _lumen_overflow_shorthand_value(obj);
+                if (ovShorthand !== undefined) return ovShorthand;
+            }
+            return '';
         },
         setProperty: function(prop, val) {
             var key = _lumen_camel_to_kebab(String(prop));
@@ -1412,6 +1469,14 @@ function _lumen_make_style(nid) {
                 obj[trblLonghands[1]] = expanded.right;
                 obj[trblLonghands[2]] = expanded.bottom;
                 obj[trblLonghands[3]] = expanded.left;
+                setParsed(obj);
+                return;
+            }
+            if (key === 'overflow') {
+                var ovExpanded = _lumen_expand_overflow_shorthand(strVal);
+                if (ovExpanded === null) return; // invalid shorthand value: whole declaration dropped
+                obj['overflow-x'] = ovExpanded.x;
+                obj['overflow-y'] = ovExpanded.y;
                 setParsed(obj);
                 return;
             }
