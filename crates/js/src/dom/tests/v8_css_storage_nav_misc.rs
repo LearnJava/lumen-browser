@@ -31,9 +31,20 @@ fn css_supports_two_arg_known_property() {
 }
 
 #[test]
-fn css_supports_two_arg_unknown_property() {
+fn css_supports_two_arg_unknown_standard_property() {
     let rt = v8_runtime_with_dom(make_doc());
-    assert!(!bool_eval(&rt, "CSS.supports('--custom-var', '1')"));
+    assert!(!bool_eval(&rt, "CSS.supports('not-a-real-property', '1')"));
+}
+
+// BUG-502 gap 1: the two-argument form never got the BUG-501 custom-property
+// wildcard (CSS Variables L1 §2 — a custom property accepts any value), so
+// `CSS.supports('--my-angle', 'calc(sign(...))')` stayed false for every
+// registered custom property regardless of value.
+#[test]
+fn css_supports_two_arg_custom_property_always_true() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt, "CSS.supports('--custom-var', '1')"));
+    assert!(bool_eval(&rt, "CSS.supports('--my-angle', 'calc(sign(20rem - 20px) * 180deg)')"));
 }
 
 #[test]
