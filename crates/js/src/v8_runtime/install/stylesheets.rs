@@ -14,7 +14,11 @@ use lumen_css_parser::{CssomRuleRef, MediaRule, Rule};
 
 /// `CSSStyleRule.selectorText`/`style.cssText` as a JSON object — the shape
 /// `_lumen_make_css_rule` (JS) parses to build the wrapper.
-fn style_rule_json(r: &Rule) -> serde_json::Value {
+///
+/// `pub(super)`: also used by `constructed_stylesheets.rs` (CSSOM-5) — a
+/// constructed sheet's rules are the same [`Rule`]/[`MediaRule`] shape as an
+/// owned one, just addressed through a different registry.
+pub(super) fn style_rule_json(r: &Rule) -> serde_json::Value {
     serde_json::json!({
         "kind": "style",
         "selectorText": r.selector_text(),
@@ -25,7 +29,9 @@ fn style_rule_json(r: &Rule) -> serde_json::Value {
 /// `CSSMediaRule.media.mediaText` as a JSON object — nested rules are read
 /// through the separate `_lumen_stylesheet_media_child_*` natives below, not
 /// embedded here, so this payload stays O(1) regardless of the rule's body.
-fn media_rule_json(r: &MediaRule) -> serde_json::Value {
+///
+/// `pub(super)`: see [`style_rule_json`]'s doc comment.
+pub(super) fn media_rule_json(r: &MediaRule) -> serde_json::Value {
     serde_json::json!({
         "kind": "media",
         "mediaText": r.query.raw.trim(),

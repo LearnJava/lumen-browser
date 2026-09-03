@@ -6,6 +6,7 @@
 //! приватное поле видно только в своём модуле и его потомках.
 
 use super::*;
+use super::install::{AdoptedStylesheets, ConstructedStylesheets};
 
 // ── Public handle ─────────────────────────────────────────────────────────────
 
@@ -106,6 +107,17 @@ pub struct V8JsRuntime {
     /// `docs/tasks/p1-cssom-1-stylesheets.md`. Backs `document.styleSheets`/
     /// `element.sheet`/`CSSStyleSheet.cssRules`.
     pub(super) stylesheet_nodes: Arc<Mutex<Vec<lumen_css_parser::StylesheetNodeEntry>>>,
+    /// CSSOM-5 срез 1 (BUG-897): JS-constructed stylesheets (`new
+    /// CSSStyleSheet()`), addressed by construction-order index — see
+    /// `install::constructed_stylesheets` for why this is a registry of its
+    /// own rather than a `stylesheet_nodes` entry (no owning DOM node).
+    pub(super) constructed_stylesheets: ConstructedStylesheets,
+    /// CSSOM-5 срез 1: `document.adoptedStyleSheets`/`shadowRoot.
+    /// adoptedStyleSheets` — ordered lists of `constructed_stylesheets`
+    /// indices, keyed by an opaque scope id the JS side chooses (a sentinel
+    /// for the document, a shadow root's own node id for its own list — see
+    /// `install::constructed_stylesheets`'s module doc comment).
+    pub(super) adopted_stylesheets: AdoptedStylesheets,
     /// CSSOM-4/BUG-493: the page's current stylesheet, pushed by the embedder
     /// via [`Self::update_stylesheet`] so a same-tick `getComputedStyle`/
     /// geometry read can force a synchronous flush (see
@@ -269,6 +281,8 @@ impl V8JsRuntime {
             computed_styles: Arc::new(Mutex::new(HashMap::new())),
             custom_properties: Arc::new(Mutex::new(HashMap::new())),
             stylesheet_nodes: Arc::new(Mutex::new(Vec::new())),
+            constructed_stylesheets: Arc::new(Mutex::new(Vec::new())),
+            adopted_stylesheets: Arc::new(Mutex::new(HashMap::new())),
             flush_stylesheet: Arc::new(Mutex::new(None)),
             style_never_flushed: Arc::new(AtomicBool::new(true)),
             window_open_requests: Arc::new(Mutex::new(Vec::new())),

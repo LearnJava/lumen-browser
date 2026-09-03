@@ -2094,6 +2094,13 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
         get textContent() { return _lumen_get_text_content(nid); },
         set textContent(v){ _lumen_set_text_content(nid, String(v)); },
         get style()       { return _style; },
+        // CSSOM-5 срез 1 (BUG-897/BUG-877): keyed by this shadow root's own
+        // `nid`, in Rust state — unlike a plain expando, this survives
+        // `host.shadowRoot` rebuilding a fresh `sr` object literal on every
+        // read (this wrapper has no persistent identity, everything else on
+        // it is a live getter for the same reason).
+        get adoptedStyleSheets() { return _lumen_make_adopted_style_sheets_array(nid); },
+        set adoptedStyleSheets(value) { _lumen_set_adopted_style_sheets_validated(nid, value); },
         // Scoped to this shadow tree's descendants — see BUG-291.
         querySelector:    function(sel) {
             var n = _lumen_u2n(_lumen_query_selector_scoped(nid, _lumen_sel(sel)));
@@ -7288,7 +7295,7 @@ function Range() { return _lumen_make_range(0, 0, 0, 0); }
 Range.prototype.START_TO_START = 0; Range.prototype.START_TO_END = 1;
 Range.prototype.END_TO_START  = 2; Range.prototype.END_TO_END  = 3;
 
-// ── CSSOM (CSSOM-1 срез 3, read-only) ─────────────────────────────────────
+// ── CSSOM (CSSOM-1 срез 3, read-only; CSSOM-5 срез 1 adds the write half) ──
 // `document.styleSheets`, `<style>`/`<link>.sheet` (getter added on
 // `HTMLStyleElement`/`HTMLLinkElement`.prototype in web_api_shim_tail_b.js),
 // `CSSStyleSheet.cssRules`, `CSSStyleRule.selectorText`/`style.cssText`,
@@ -7296,13 +7303,28 @@ Range.prototype.END_TO_START  = 2; Range.prototype.END_TO_END  = 3;
 // state by index (sheet index in the registry, rule index within
 // `cssom_rules()`) and re-reads it on every property access — the same
 // "class-object with state" pattern `_lumen_make_range` above uses, per
-// `docs/tasks/p1-cssom-1-stylesheets.md`. Writing (`insertRule`/`deleteRule`,
-// a mutable `CSSStyleDeclaration`, `new CSSStyleSheet()`) is CSSOM-1 срез 4/
-// CSSOM-2 — every constructor here throws like `NamedNodeMap`/`DOMStringMap`
-// above, and rule/sheet identity is NOT preserved across repeated reads
-// (`sheet.cssRules[0] !== sheet.cssRules[0]`) since nothing here is cached.
+// `docs/tasks/p1-cssom-1-stylesheets.md`. Rule/sheet identity is NOT
+// preserved across repeated reads (`sheet.cssRules[0] !== sheet.cssRules[0]`)
+// since nothing here is cached. `insertRule`/`deleteRule` remain unimplemented
+// (BUG-897/CSSOM-5 — deferred, same as CSSOM-1/2 left them).
+//
+// `new CSSStyleSheet()`/`.replaceSync()`/`.replace()`/`document.
+// adoptedStyleSheets`/`shadowRoot.adoptedStyleSheets` (CSSOM-5 срез 1,
+// BUG-897) are the write half, built further below
+// (`_lumen_make_constructed_style_sheet`) over a SEPARATE Rust-side registry
+// (`crates/js/src/v8_runtime/install/constructed_stylesheets.rs`) — a
+// constructed sheet has no owning DOM node, so it cannot share the
+// `stylesheet_nodes` index space this file's read half addresses. Neither
+// registry feeds the layout cascade yet — assigning `adoptedStyleSheets` or
+// calling `replaceSync` changes what CSSOM reports but not what is painted;
+// see that Rust module's doc comment for why.
 
-function CSSStyleSheet() { throw new TypeError('Illegal constructor'); }
+function CSSStyleSheet(options) {
+    if (!new.target) throw new TypeError("Constructor CSSStyleSheet requires 'new'");
+    var idx = _lumen_construct_stylesheet();
+    if (options && options.disabled) _lumen_constructed_set_disabled(idx, true);
+    return _lumen_make_constructed_style_sheet(idx);
+}
 globalThis.CSSStyleSheet = CSSStyleSheet;
 function CSSRuleList() { throw new TypeError('Illegal constructor'); }
 globalThis.CSSRuleList = CSSRuleList;
@@ -7501,6 +7523,146 @@ function _lumen_make_style_sheet_list() {
         for (var i = 0; i < nids.length; i++) out.push(_lumen_make_css_style_sheet(i));
         return out;
     }, StyleSheetList.prototype);
+}
+
+// ── CSSOM-5 срез 1: constructed stylesheets + adoptedStyleSheets ──────────
+// Mirrors the `_lumen_build_css_style_rule`/`_lumen_make_css_rule` family
+// above, but reads the separate constructed-sheet registry (`idx` here is a
+// construction-order index, not a `stylesheet_nodes` position) and its
+// `parentStyleSheet` always builds a constructed sheet, never an owned one.
+
+function _lumen_build_constructed_css_style_rule(data, idx, parentRule) {
+    var r = Object.create(CSSStyleRule.prototype);
+    Object.defineProperties(r, {
+        type:         { get: function() { return CSSRule.STYLE_RULE; }, enumerable: true, configurable: true },
+        selectorText: { get: function() { return data.selectorText; }, enumerable: true, configurable: true },
+        cssText:      { get: function() { return data.selectorText + ' { ' + data.styleCssText + ' }'; }, enumerable: true, configurable: true },
+        style:        { get: function() { return _lumen_make_css_style_declaration_readonly(data.styleCssText); }, enumerable: true, configurable: true },
+        parentStyleSheet: { get: function() { return _lumen_make_constructed_style_sheet(idx); }, enumerable: true, configurable: true },
+        parentRule:   { get: function() { return parentRule; }, enumerable: true, configurable: true },
+    });
+    return r;
+}
+
+function _lumen_make_constructed_css_media_child_rule(idx, ruleIdx, childIdx) {
+    var raw = _lumen_constructed_media_child_json(idx, ruleIdx, childIdx);
+    if (raw === null || raw === undefined) return null;
+    return _lumen_build_constructed_css_style_rule(JSON.parse(raw), idx, _lumen_make_constructed_css_rule(idx, ruleIdx));
+}
+
+function _lumen_make_constructed_css_rule(idx, ruleIdx) {
+    var raw = _lumen_constructed_rule_json(idx, ruleIdx);
+    if (raw === null || raw === undefined) return null;
+    var data = JSON.parse(raw);
+    if (data.kind !== 'media') return _lumen_build_constructed_css_style_rule(data, idx, null);
+    var mr = Object.create(CSSMediaRule.prototype);
+    function childRules() {
+        var n = _lumen_constructed_media_child_count(idx, ruleIdx);
+        var out = [];
+        for (var i = 0; i < n; i++) out.push(_lumen_make_constructed_css_media_child_rule(idx, ruleIdx, i));
+        return out;
+    }
+    Object.defineProperties(mr, {
+        type:     { get: function() { return CSSRule.MEDIA_RULE; }, enumerable: true, configurable: true },
+        media:    { get: function() { return _lumen_make_media_list(data.mediaText); }, enumerable: true, configurable: true },
+        cssRules: { get: function() { return _lumen_make_css_rule_list(childRules); }, enumerable: true, configurable: true },
+        rules:    { get: function() { return this.cssRules; }, enumerable: true, configurable: true },
+        cssText:  { get: function() {
+            var body = childRules().map(function(r) { return r.cssText; }).join(' ');
+            return '@media ' + data.mediaText + ' { ' + body + ' }';
+        }, enumerable: true, configurable: true },
+        parentStyleSheet: { get: function() { return _lumen_make_constructed_style_sheet(idx); }, enumerable: true, configurable: true },
+        parentRule: { get: function() { return null; }, enumerable: true, configurable: true },
+    });
+    return mr;
+}
+
+// A constructed `CSSStyleSheet` (`new CSSStyleSheet()`), addressing registry
+// index `idx` — the JS-only twin of `_lumen_make_css_style_sheet` above.
+// `ownerNode`/`href`/`title` are always `null`: a constructed sheet is never
+// associated with a `<style>`/`<link>` element (CSSOM §2.1). `_lumenSheetIdx`
+// is a non-enumerable own property, not a closure variable, because
+// `document.adoptedStyleSheets`'s setter (below) needs to read a sheet's
+// identity back out of an arbitrary value handed to it.
+function _lumen_make_constructed_style_sheet(idx) {
+    var s = Object.create(CSSStyleSheet.prototype);
+    Object.defineProperty(s, '_lumenSheetIdx', { value: idx, enumerable: false, configurable: false, writable: false });
+    function cssRuleList() {
+        return _lumen_make_css_rule_list(function() {
+            var n = _lumen_constructed_rule_count(idx);
+            var out = [];
+            for (var i = 0; i < n; i++) out.push(_lumen_make_constructed_css_rule(idx, i));
+            return out;
+        });
+    }
+    Object.defineProperties(s, {
+        type: { get: function() { return 'text/css'; }, enumerable: true, configurable: true },
+        disabled: {
+            get: function() { return _lumen_constructed_disabled(idx); },
+            set: function(v) { _lumen_constructed_set_disabled(idx, !!v); },
+            enumerable: true, configurable: true,
+        },
+        ownerNode:        { get: function() { return null; }, enumerable: true, configurable: true },
+        href:             { get: function() { return null; }, enumerable: true, configurable: true },
+        title:            { get: function() { return null; }, enumerable: true, configurable: true },
+        media:            { get: function() { return _lumen_make_media_list(''); }, enumerable: true, configurable: true },
+        parentStyleSheet: { get: function() { return null; }, enumerable: true, configurable: true },
+        ownerRule:        { get: function() { return null; }, enumerable: true, configurable: true },
+        cssRules:         { get: cssRuleList, enumerable: true, configurable: true },
+        rules:            { get: function() { return this.cssRules; }, enumerable: true, configurable: true },
+    });
+    s.replaceSync = function(text) {
+        _lumen_constructed_replace_sync(idx, text === undefined || text === null ? '' : String(text));
+    };
+    s.replace = function(text) {
+        try {
+            s.replaceSync(text);
+            return Promise.resolve(s);
+        } catch (e) {
+            return Promise.reject(e);
+        }
+    };
+    return s;
+}
+
+// Sentinel scope key for `document.adoptedStyleSheets`
+// (`_lumen_set_adopted_stylesheets`/`_lumen_get_adopted_stylesheets`, Rust
+// side stores whatever key it is given, no meaning attached to any value).
+// A shadow root uses its own node id as the scope key instead (see
+// `_lumen_make_shadow_root`), so this only needs to avoid colliding with a
+// real node id, which never reaches `u32::MAX`.
+var _LUMEN_ADOPTED_DOCUMENT_SCOPE = 4294967295;
+
+// CSSOM §4.6 "set a new stylesheet list": every element must be a
+// `CSSStyleSheet` this realm itself constructed (own property tag, not just
+// `instanceof` — an owned/read-only sheet from `document.styleSheets` passes
+// `instanceof` but was never constructed, so it has no `_lumenSheetIdx` and
+// is rejected here as not adoptable, matching the spirit of the spec's
+// "constructor document" check without modelling it fully).
+function _lumen_adopted_sheet_ids(value) {
+    if (value === null || typeof value === 'undefined' || typeof value.length !== 'number') {
+        throw new TypeError("Failed to set the 'adoptedStyleSheets' property: value is not iterable.");
+    }
+    var ids = [];
+    for (var i = 0; i < value.length; i++) {
+        var sheet = value[i];
+        if (!(sheet instanceof CSSStyleSheet) || typeof sheet._lumenSheetIdx !== 'number') {
+            throw new TypeError("Failed to set the 'adoptedStyleSheets' property: Failed to convert value to 'CSSStyleSheet'.");
+        }
+        ids.push(sheet._lumenSheetIdx);
+    }
+    return ids;
+}
+
+function _lumen_make_adopted_style_sheets_array(scopeId) {
+    var ids = _lumen_get_adopted_stylesheets(scopeId);
+    var arr = ids.map(function(id) { return _lumen_make_constructed_style_sheet(id); });
+    return Object.freeze(arr);
+}
+
+function _lumen_set_adopted_style_sheets_validated(scopeId, value) {
+    var ids = _lumen_adopted_sheet_ids(value);
+    _lumen_set_adopted_stylesheets(scopeId, ids);
 }
 
 // ── Selection singleton (WHATWG Selection API §3) ─────────────────────────
@@ -8004,6 +8166,16 @@ var document = {
     // cascade sheet — see `docs/tasks/p1-cssom-1-stylesheets.md`.
     get styleSheets() {
         return _lumen_make_style_sheet_list();
+    },
+    // CSSOM §4.6 (CSSOM-5 срез 1, BUG-897): backed by Rust-side state keyed
+    // by `_LUMEN_ADOPTED_DOCUMENT_SCOPE`, not a plain JS property — see
+    // `_lumen_adopted_sheet_ids` for why assigning anything but a list of
+    // this realm's own `new CSSStyleSheet()` instances throws.
+    get adoptedStyleSheets() {
+        return _lumen_make_adopted_style_sheets_array(_LUMEN_ADOPTED_DOCUMENT_SCOPE);
+    },
+    set adoptedStyleSheets(value) {
+        _lumen_set_adopted_style_sheets_validated(_LUMEN_ADOPTED_DOCUMENT_SCOPE, value);
     },
     // ── Selection API ─────────────────────────────────────────────────────
     getSelection:  function() { return _lumen_selection; },
