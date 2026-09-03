@@ -1137,7 +1137,7 @@ function _lumen_make_class_list(nid) {
 // collapse) is expanded into its four longhand keys right here, using the
 // same `_LUMEN_TRBL_SHORTHAND_CANON`/`_lumen_expand_trbl_shorthand` machinery
 // `setProperty` uses for a JS-assigned shorthand. This keeps `obj` always
-// longhand-keyed for the four covered groups, so a later per-longhand read
+// longhand-keyed for the covered groups, so a later per-longhand read
 // (`style.marginTop`) never has to find a shorthand key it doesn't know how
 // to decompose. An invalid token falls back to storing the raw shorthand
 // key/value pair, same as any other unrecognized property. `border-style`
@@ -1180,6 +1180,7 @@ var _LUMEN_TRBL_SHORTHANDS = {
     'border-width': ['border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width'],
     'border-style': ['border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style'],
     'border-color': ['border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color'],
+    'inset':        ['top', 'right', 'bottom', 'left'],
 };
 
 // CSS 2.1 §8.3 TRBL shorthand collapsing: 1 value if all equal, 2 if only
@@ -1219,6 +1220,7 @@ var _LUMEN_TRBL_SHORTHAND_CANON = {
     'padding':      function(v) { return _lumen_css_canonical_length(v, false, true); },
     'border-width': function(v) { return _lumen_css_canonical_line_width(v); },
     'border-color': function(v) { return _lumen_css_canonical_color(v); },
+    'inset':        function(v) { return _lumen_css_canonical_length(v, true, false); },
 };
 
 // Splits `strVal` on CSS whitespace, canonicalizes each of the 1-4 tokens via
@@ -1287,13 +1289,13 @@ var _LUMEN_COLOR_PROPERTIES = {
 // longhands — margin-*/inset-*(top/right/bottom/left) accept the `auto`
 // keyword and negative values, padding-* accepts neither. Validated and
 // canonicalized via `_lumen_css_canonical_length` on assignment, same role
-// as `_LUMEN_COLOR_PROPERTIES` above. The `margin`/`padding` shorthands
-// themselves (`style.margin = "1px 2px"`) go through the separate
-// `_LUMEN_TRBL_SHORTHAND_CANON` expansion path above. `inset` has no
-// shorthand keyword at all yet, in either direction (read-collapse or
-// write-expand) — it was never added to `_LUMEN_TRBL_SHORTHANDS`, unlike
-// its `top`/`right`/`bottom`/`left` longhands, which this table already
-// validates individually. The CSS Logical equivalents
+// as `_LUMEN_COLOR_PROPERTIES` above. The `margin`/`padding`/`inset`
+// shorthands themselves (`style.inset = "1px 2px"`) go through the separate
+// `_LUMEN_TRBL_SHORTHAND_CANON` expansion path above (срез 8) — `inset`
+// shares its longhands' grammar exactly (`allowAuto: true, nonNegative:
+// false`, same as `top`/`right`/`bottom`/`left`), so no new canon function
+// was needed, only a `_LUMEN_TRBL_SHORTHANDS`/`_LUMEN_TRBL_SHORTHAND_CANON`
+// entry. The CSS Logical equivalents
 // (margin-inline/block-start/end, padding-inline/block-start/end,
 // inset-inline/block-start/end — fourth slice) share this same table: the
 // Rust side (`crates/engine/layout/src/style/apply/layout.rs`) resolves
