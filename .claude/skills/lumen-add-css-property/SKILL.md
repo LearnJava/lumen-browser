@@ -134,7 +134,7 @@ cargo test --workspace
 ```bash
 git add crates/engine/layout/src/style.rs \
         crates/engine/layout/tests/ \
-        CLAUDE.md lumen-plan.md
+        SUBSYSTEMS.md CSS-SPECS.md CAPABILITIES.md lumen-plan.md
 git commit -m "$(cat <<'EOF'
 Добавить CSS свойство <name> в lumen-layout
 

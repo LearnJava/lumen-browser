@@ -26,7 +26,7 @@ that no ADR/policy file states — decide it there first.
 
 - **The rendering engine is ours.** Wrapping Chromium/WebKit/Gecko is out of scope, permanently. — [ADR-001](decisions/ADR-001-custom-rendering-engine.md)
 - **The JS engine is vendored, and it is V8 (`rusty_v8`) only.** QuickJS/`rquickjs` is gone from the workspace — never target it. — [ADR-018](decisions/ADR-018-v8-cutover.md)
-- Engine-independent JS fixes belong in the shared shim (`crates/js/src/shim/*.js`), not duplicated per feature module — but note that per-feature shims (`xhr.rs`, `worker.rs`, …) install their own JS a page-shim fix never reaches. — [CLAUDE.md](../CLAUDE.md) §Engine invariants
+- Engine-independent JS fixes belong in the shared shim (`crates/js/src/shim/*.js`), not duplicated per feature module — but note that per-feature shims (`xhr.rs`, `worker.rs`, …) install their own JS a page-shim fix never reaches. — [subsystems/js.md](../subsystems/js.md) §Invariants
 - Own-vs-vendored is decided **per sub-decision, by decision ownership**: ours where we decide what correct means (layout, cascade, paint order, browsing contexts), vendored where a committee already decided (file format, Unicode table, OpenType lookup, URL state machine). Test: *if we disagree with the reference implementation, are we wrong by definition?* — [ADR-027](decisions/ADR-027-own-vs-vendored-boundary.md), [ADR-028](decisions/ADR-028-vendoring-is-per-decision.md)
 - Permanently forbidden dependencies — `html5ever`, `cssparser`, `stylo`, `taffy`, `hyper`, `hickory-resolver`, `encoding_rs`, `adblock`, `readability`, `tokio`, `egui`/`iced`/`Slint`. Those *are* the engine. — [tech-stack.md §5](plan/tech-stack.md)
 - Every new `[dependencies]` entry carries its justification in the commit body (category, trait-anchor, graduation criterion). — [ADR-002](decisions/ADR-002-dependency-policy.md)
@@ -44,11 +44,11 @@ that no ADR/policy file states — decide it there first.
 ## Storage
 
 - Persistent browser storage is SQLite, partitioned into several DBs by lifecycle/write-frequency; a KV store (redb) only for a **measured** blob cache. — [ADR-003](decisions/ADR-003-sqlite-storage.md), [ADR-012](decisions/ADR-012-storage-partitioning.md)
-- User data lives in the browser folder (`<exe_dir>/data/`, `browser_data_dir()`) — never `%APPDATA%`/`~/.config`/`lumen_cache_dir()`. — user decision 2026-06-16, [CLAUDE.md](../CLAUDE.md)
+- User data lives in the browser folder (`<exe_dir>/data/`, `browser_data_dir()`) — never `%APPDATA%`/`~/.config`/`lumen_cache_dir()`. — user decision 2026-06-16, [subsystems/core.md](../subsystems/core.md)
 
 ## Rendering
 
-- `--screenshot` (CPU, `cpu_raster.rs`) and the live window (wgpu, `renderer.rs`) are **independent implementations of every `DisplayCommand`**, not two callers of one renderer. A new command must be implemented in both, and a match on one proves nothing about the other. — [CLAUDE.md](../CLAUDE.md) §Driving the browser, [ADR-028](decisions/ADR-028-vendoring-is-per-decision.md)
+- `--screenshot` (CPU, `cpu_raster.rs`) and the live window (wgpu, `renderer.rs`) are **independent implementations of every `DisplayCommand`**, not two callers of one renderer. A new command must be implemented in both, and a match on one proves nothing about the other. — [graphic-tests.md](graphic-tests.md) §Traps that look like engine regressions, [ADR-028](decisions/ADR-028-vendoring-is-per-decision.md)
 - **The render backend is selected automatically at runtime, not by a cargo feature.** `backend_factory.rs`: `LUMEN_BACKEND` → else wgpu, whose API is probe-selected Vulkan→GL→DX12 (`backend_probe.rs`, cached in `<exe_dir>/data/paint/backend_probe.txt`) → else femtovg on init failure. The cargo features decide only what is *compiled*, which is why the shell's `default` carries **both** backends: dropping `backend-femtovg` from it removes the fallback rather than selecting wgpu. — [ADR-017](decisions/ADR-017-wgpu-default-backend.md), [ADR-010](decisions/ADR-010-render-backend-abstraction.md)
 - Deterministic output is a hard requirement of the test gates: identical bytes must rasterize identically on any machine. Nothing may seed rendering from host state (e.g. SVG `text`/`system-fonts` stay off for exactly this reason). — [graphic-tests.md](graphic-tests.md), [subsystems/image.md](../subsystems/image.md)
 - Paint consumes layout output; it does not mutate layout state. — [architecture.md §3](plan/architecture.md)
@@ -57,7 +57,7 @@ that no ADR/policy file states — decide it there first.
 ## Threading
 
 - The engine thread is on by default; `Lumen::js_ctx` is therefore `None` in a live window — reach the runtime through `route_task_js`/`route_query_js`/`clone_js_ctx`, never by reading the field. — [ADR-023](decisions/ADR-023-engine-thread-default.md)
-- The JS runtime lives on its own thread behind a handle + command channel. Install-time state must be captured **by value** into the native's closure — a `thread_local!` set by the installer reads back its default inside the native. — [ADR-014](decisions/ADR-014-js-runtime-thread.md), [CLAUDE.md](../CLAUDE.md)
+- The JS runtime lives on its own thread behind a handle + command channel. Install-time state must be captured **by value** into the native's closure — a `thread_local!` set by the installer reads back its default inside the native. — [ADR-014](decisions/ADR-014-js-runtime-thread.md), [subsystems/js.md](../subsystems/js.md) §Invariants
 - Snapshot message passing between UI/render threads, staged M0–M4. — [ADR-016](decisions/ADR-016-multithreaded-render-pipeline.md)
 
 ## Automation surface
@@ -71,7 +71,7 @@ that no ADR/policy file states — decide it there first.
 - `unsafe` only at FFI boundaries, every block carrying `// SAFETY:`. — `[gate: clippy::undocumented_unsafe_blocks = deny]`
 - `///` on every public item. — `[gate: missing_docs = deny]` (pre-existing debt behind file-scoped `#![allow]`, [lint-policy.md §10](lint-policy.md))
 - A new `.rs` file is ≤2000 lines; an over-size file does not grow unnoticed. — `[gate: scripts/check_file_sizes.py, CI job file-size]`
-- No hardcoded version string — everything derives from `CARGO_PKG_VERSION`. One deliberate exception: the `navigator.userAgent` literal in `crates/js/src/shim/web_api_shim_mid_b.js`. — [CLAUDE.md](../CLAUDE.md) §Versioning
+- No hardcoded version string — everything derives from `CARGO_PKG_VERSION`. One deliberate exception: the `navigator.userAgent` literal in `crates/js/src/shim/web_api_shim_mid_b.js`. — [plan/phases.md](plan/phases.md) §Политика версий и фаз
 - Every member crate carries `[lints] workspace = true`, or it silently escapes all of the above. — [lint-policy.md](lint-policy.md)
 
 ## Cross-cutting traps that read as invariants
@@ -79,10 +79,10 @@ that no ADR/policy file states — decide it there first.
 These are not decisions — they are places where a correct-looking local change is silently wrong.
 
 - Changing the stylesheet set from Rust must move `inline_style_fingerprint` or `stylesheet_link_fingerprint`, or the cascade is never rebuilt. — [BUG-443](../bugs/BUG-443-FIXED.md)
-- Anything added to a JS prototype must be non-enumerable. — [CLAUDE.md](../CLAUDE.md)
-- A callback the shim makes on the page's behalf is queued as a task, never dispatched inline. — [CLAUDE.md](../CLAUDE.md)
-- Nothing tag-specific belongs in `_LUMEN_WRAPPER_MEMBERS` — it shadows every interface prototype. — [CLAUDE.md](../CLAUDE.md)
-- A fourth writer of the page display list must splice frame content in, like the three existing ones. — [CLAUDE.md](../CLAUDE.md)
+- Anything added to a JS prototype must be non-enumerable. — [subsystems/js.md](../subsystems/js.md) §Invariants
+- A callback the shim makes on the page's behalf is queued as a task, never dispatched inline. — [subsystems/js.md](../subsystems/js.md) §Invariants
+- Nothing tag-specific belongs in `_LUMEN_WRAPPER_MEMBERS` — it shadows every interface prototype. — [subsystems/js.md](../subsystems/js.md) §Invariants
+- A fourth writer of the page display list must splice frame content in, like the three existing ones. — [subsystems/js.md](../subsystems/js.md) §Invariants
 
 ---
 

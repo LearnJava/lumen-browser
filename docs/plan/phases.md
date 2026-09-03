@@ -1,5 +1,15 @@
 > **Справочник.** Высокоуровневый план фаз (Phase 0 — Phase N). Актуальный прогресс — в `CAPABILITIES.md` и `STATUS-PN.md`. Этот файл читать только при планировании новой фазы.
 
+## Где проект сейчас
+
+**Фаза 2 — v0.5 «Interactive», завершена**; версия приложения **v0.5.0**. Фаза 0 (прототип) закрыта 2026-05-26, фаза 1 «Reader» в основном завершена. Фаза 2 дала: встроенный JS-движок (сначала QuickJS, заменён на V8 в S12b, 2026-08-04 — `subsystems/js.md`), Canvas 2D, CSS Grid, Shadow DOM, дерево доступности, формы, поиск по странице, DevTools/CDP, слой знаний.
+
+## Политика версий и фаз
+
+**Единственный источник версии — `[workspace.package] version` в `Cargo.toml`.** Все машиночитаемые строки версии (User-Agent, Sec-CH-UA, CDP `Browser.getVersion`, заголовок окна, стартовый баннер) выводятся из `CARGO_PKG_VERSION` — **номер версии в коде не хардкодить**. Единственное место ручного бампа — литерал `navigator.userAgent` в `crates/js/src/shim/web_api_shim_mid_b.js` (до SPLIT-JS3, 2026-08-28, он лежал в `crates/js/src/dom.rs`).
+
+Соответствие версия↔фаза: фаза 1 → v0.1, **фаза 2 → v0.5** (цель на момент завершения фазы), фаза 3 → v1.0. Внутри фазы версия растёт к целевой; выход на фазу 3 → 1.0.0. Метку фазы держать синхронной в `README.md`, этом файле, `CLAUDE.md` и стартовом баннере шелла.
+
 ## 16. Фазы разработки (реалистично)
 
 ### Фаза 0 — Прототип (3 месяца) ✅ закрыта 2026-05-26
@@ -42,7 +52,7 @@
 - Базовый adblock, DoH.
 - **Tab session export / import** (§12.7) — простая фича, экономит много боли.
 - Пакеты под Linux/macOS/Windows.
-- **Browser fundamentals — критичные подсистемы, обнаруженные при аудите против Chromium / Firefox / Servo / Ladybird** (полный список с обоснованиями — в [CLAUDE.md](CLAUDE.md) → roadmap «Browser fundamentals»):
+- **Browser fundamentals — критичные подсистемы, обнаруженные при аудите против Chromium / Firefox / Servo / Ladybird** (полный список с обоснованиями — в [ROADMAP.md](../../ROADMAP.md), трек «Browser fundamentals»):
   - **HTML event loop + microtasks + rendering steps + observers** (`[P4]`) — контракт shell-а, не JS-движка. Без него ни Promise.then, ни ResizeObserver/IntersectionObserver/MutationObserver/PerformanceObserver, ни rAF не работают.
   - **Stacking contexts + правильный CSS Painting Order** (`[P1+P2]`, CSS 2.1 Appendix E) — сейчас paint в порядке DOM-обхода, z-index работает случайно. P1 — модель stacking-ов в layout; P2 — paint-side traversal.
   - **Compositor thread + property trees** (`[P2+P1]`) — TransformTree/ScrollTree/EffectTree/ClipTree на отдельном thread, off-main-thread scroll. Расширяет существующий план `compositor` крейта архитектурой. P2 — compositor pipeline + GPU; P1 — property trees от style/layout.
@@ -83,7 +93,7 @@
   - Focus mode (§12.6).
 - **`<meta viewport>` parsing + page zoom (Ctrl+/Ctrl-).** Без этого мобильная вёрстка всегда «как desktop», и нет ручного управления масштабом.
 - **Кастомизация UI** — drag&drop панелей, темы (§12.10).
-- **Browser fundamentals — Phase 2** (полный список — в [CLAUDE.md](CLAUDE.md) → roadmap «Browser fundamentals»):
+- **Browser fundamentals — Phase 2** (полный список — в [ROADMAP.md](../../ROADMAP.md), трек «Browser fundamentals»):
   - **Shadow DOM + custom elements + `<template>` + `<slot>`** (`[P1+P4]`) — Web Components. Без них половина современных сайтов сломается. P1 — cascade + composed tree + template/slot tree-builder; P4 — JS bindings + lifecycle.
   - **Accessibility tree + platform bridges** (`[P1+P4]`) — обязательно для NVDA / Orca / VoiceOver. «Русский first-class» требует. P1 — tree construction из DOM/layout + ARIA + focus model; P4 — platform bridges (UIA / AT-SPI / NSAccessibility) + focus dispatch.
   - **Forms runtime** (`[P1+P4]`) — Constraint Validation API, submission algorithm, file picker, autofill UI поверх существующего storage. P1 — ValidityState + validation pseudo-classes + submission algorithm; P4 — native pickers + autofill popup + validation tooltip.
@@ -117,7 +127,7 @@
 - WPT pass rate ≥ 60%.
 - **Опциональный AI-модуль (§12.5):** `lumen-ai` крейт за feature-флагом. Семантический поиск, суммаризация, RAG над собственной историей. Bundle без AI остаётся basic-вариантом.
 - **Семантические закладки (§12.8)** — опционально, требует AI.
-- **Browser fundamentals — Phase 3+** (полный список — в [CLAUDE.md](CLAUDE.md) → roadmap «Browser fundamentals»):
+- **Browser fundamentals — Phase 3+** (полный список — в [ROADMAP.md](../../ROADMAP.md), трек «Browser fundamentals»):
   - **WebSockets (RFC 6455) + Server-Sent Events + Fetch API runtime с AbortController** (`[P3]`).
   - **HTTP auth (Basic + Digest)** (`[P3]`, готово) — `HttpClient::with_credentials` + RFC 7617/7616 в `lumen-network::auth`. Negotiate/NTLM + client certificates (mTLS) — отложены.
   - **OCSP stapling + CT log enforcement + invalid cert UI** (`[P3]`).

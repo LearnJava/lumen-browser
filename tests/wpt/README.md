@@ -694,6 +694,13 @@ ssl_ctx.verify_mode = client_cert_
 socket_ = ssl_ctx.wrap_socket(socket_, server_side=True)
 ```
 
+**The patch lives only inside `tests/wpt/.venv/`, which is not committed**
+(`.venv/.gitignore` is a bare `*`), so it is not something the repo carries for
+you: re-apply it on every freshly created venv **and in every worktree pool slot
+that runs WPT**. Without it any `run_report.py` run dies before the first test
+with `OSError: Servers failed to start: wss:18889`, which reads like a port
+conflict rather than a missing patch.
+
 Without this patch, revert `tests/wpt/config.json`'s `"wss": [...]` to
 `[null]` to keep other categories runnable — but note `websockets/
 constants.sub.js` (and any future `.sub.js` that unconditionally embeds
