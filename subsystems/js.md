@@ -1094,6 +1094,11 @@ the time — read dates.
   - URL reflections + late src (slice 9): facade `src`/`href` store verbatim and resolve against the sub-document's base (first `<base href>` vs document URL); `_lumen_f_set_attr` queues RunScript after a successful `src` on `<script>`, so «appendChild, then `s.src = …`» works like src-before-insert; «already started» is set only when preparation actually began (`_lumen_frame_script_will_start` mirrors `_lumen_script_prepare`'s early exits), so an element inserted empty still receives the late-src delivery.
   - Reverse resource-event delivery (slice 10): resource events (`load`/`error` from `_lumen_resource_fire`) in a frame context mirror to the PARENT's isolate as `FrameEventKind::Resource` envelopes (native `_lumen_f_queue_parent_resource` via the shim's `_lumen_frame_mirror_resource`, gated on a live parent slot, `FrameDocSlots::self_doc`, and nid being an own-document element). The recipient resolves the sender's binding bid from `PendingFrameEvent::source_doc` at drain time and drops envelopes without an accessible binding. Facade elements gained `addEventListener`/`removeEventListener` (WeakMap listener map inside the bridge shim closure — facades are not real EventTargets); delivery builds a fresh trusted Event with `target`/`currentTarget` on the interned facade and calls listeners first, then the `on<type>` property. This closes slice 9's tail: `s.onload` assigned by the parent on an inserted script's facade now fires. Deviations: child→immediate-parent edge only, async on the pump tick, fresh event object per recipient, only `_lumen_resource_fire` events mirror.
   - Access control (`shell::frame_access_allowed`): opaque sandbox denies everything; `about:` inherits parent origin; else origin compare with default-port normalization; file↔file allowed (documented deviation). Cross-origin/opaque get a window facade without `.document`; `contentDocument` is `null`.
+  - **The `frameElem` Element facade has no `.attributes` (`NamedNodeMap`) at all** — reading it off a
+    same-origin child-frame element is plain `undefined`, so `.attributes.length`/iterating it throws
+    `TypeError` ([BUG-970](../bugs/BUG-970-OPEN.md)). `getAttribute`/`setAttribute`/`hasAttribute`/
+    `removeAttribute` all work; only the enumerable collection view is missing. A probe reading this off
+    `iframe.contentWindow`/`window[n]` should use `getAttribute` per name instead.
   - Not wired yet: subresource fetch/response-body reads for inserted nodes and frames, frame layout/paint/rAF, `document.open/write/close`, navigation/replacement/removal, sibling postMessage edges, bfcache of frames. Dynamic (script-inserted) iframes never load — BUG-885.
 
 - **Gamepad API** (`crates/js/src/gamepad.rs`, W3C Gamepad Level 2 §4, P1 2026-06-03).
@@ -2085,3 +2090,12 @@ runtime or the shim. Read them before a JS/Web-API change.
   `load`/`error`). `<link>` survives this only because the shell separately rewalks the whole document
   tree for hrefs on every cascade pass (`collect_link_hrefs`) — `<style>`/`<script>`/`<track>`/`<source>`
   have no such full-tree fallback.
+- **`_lumen_resource_pending` prepares a `<script>` at most once, ever — mutating `.src` afterwards is a
+  silent no-op.** The map doubles as the spec's per-element "already started" flag: the entry is deleted
+  the first time the element becomes connected, and nothing re-adds it. That was a faithful model of the
+  *original* algorithm, but whatwg/html#10188 (2026) added a second trigger — mutating `.src` on an
+  already-connected, non-parser-inserted script whose `src` was previously non-empty must re-run "prepare
+  a script" — which has no implementation at all: `src` is a plain reflected URL attribute with no
+  side-effecting setter ([BUG-968](../bugs/BUG-968-OPEN.md)). A probe waiting on `.onload` after
+  reassigning an already-loaded script's `.src` hangs; it is not testing whether the *new* URL fetches
+  correctly, it is testing whether Lumen fetches it at all, which it currently does not.
