@@ -60,7 +60,7 @@ Multiple Claude Code sessions may work simultaneously. Full workflow for task li
 
 **Step 2: During work** — see "Worktree isolation" section below
 
-**Step 3: Task completion (7 mandatory steps)** — see "Task completion checklist" section below. Step 5 of that checklist (`git push origin main`) is not optional or batchable — push right after the merge commit, in the same sitting, not at some later "wrap-up" point.
+**Step 3: Task completion** — run `/lumen-task-finish`; the invariant it must leave behind is in "Task completion" below. The push is not optional or batchable — it happens right after the merge commit, in the same sitting, not at some later "wrap-up" point.
 
 **If work is cancelled:**
 - Free the slot: `bash scripts/worktree-pool.sh release p<N>-work` (it refuses while unmerged commits exist — that is the point; delete the branch below only if you really mean to drop that work)
@@ -165,48 +165,36 @@ git branch -D p<N>-task-name      # -d refuses for the same stale-main reason
 
 ---
 
-## Task completion checklist (7 steps, all mandatory)
+## Task completion
 
-**When the task itself is done. Steps 1–3 have already run per commit under the rule above; here
-they cover whatever the final commit left. Missing a step leaves stale branches behind.**
+**Run `/lumen-task-finish`. It is the executable protocol — do not hand-run the steps beside it.**
 
-```bash
-# 1. Verify code is production-ready
-cargo clippy -p <crate> -- -D warnings
-cargo test -p <crate>
+The skill owns the order and the details this page used to duplicate: which gate runs at what scope,
+the doc-sync matrix, merging when the root checkout is dirty, the `BUG-805` gate workaround, freeing
+the slot. Hand-running `cargo clippy -p` / `cargo test -p` right before invoking it pays twice for
+the same crates — the skill says so in its own header, and the checklist that used to stand here
+told you to do exactly that.
 
-# 2. Merge branch to main with --no-ff (in a throwaway worktree if the root is dirty)
-git checkout main
-git merge --no-ff p<N>-task-name -m "Merge p<N>-task-name: описание"
+Manual fallback is fine when the skill is unavailable, but then read it as the source
+(`.claude/skills/lumen-task-finish/SKILL.md`) rather than reproducing a second list here.
 
-# 3. Push to remote
-git push origin main
+### What must be true when the task is closed
 
-# 4. Update STATUS-PN.md on main
-# — delete the completed task's pointer line (history lives in git log)
-git add STATUS-PN.md
-git commit -m "P<N>: отметить task-name как завершённую"
-git push origin main
+The list is the *invariant*, not the procedure — the skill is what achieves it. Each line is here
+because skipping it has cost the project something measurable:
 
-# 5. Free the pool slot, then delete the branch
-#    (a slot still holding the branch makes `branch -d` fail:
-#     "cannot delete branch ... used by worktree at ...")
-bash scripts/worktree-pool.sh release p<N>-work
-git branch -d p<N>-task-name
-
-# 6. Pool slot: already freed in step 5 — the slot and its warm target/ stay.
-#    Ad-hoc worktree (not a pool slot): delete it, it blocks other sessions.
-git worktree remove .claude/worktrees/<task-name>
-
-# 7. Delete the remote task branch, if one was ever pushed.
-git push origin --delete p<N>-task-name
-```
-
-**Why all 7 are mandatory:** Skipping delete-branch (step 5) or leaving an ad-hoc worktree behind
-(step 6) leaves stale branches and directories that accumulate. Skipping the STATUS update (step 4)
-loses task history. Skipping step 7 leaves the remote littered — 29 stale remote branches had piled
-up by 2026-08-18, the oldest from June. Both cause confusion in parallel sessions and merge
-conflicts. As of 2026-05-28, 37 stale local branches had accumulated due to incomplete cleanup.
+- **The gate ran.** Workspace clippy + `scripts/scoped-test.sh`, once, synchronously.
+- **Docs moved with the code** — [`doc-sync.md`](doc-sync.md) matrix; at minimum the `STATUS-PN.md`
+  pointer line of the finished task is deleted (history lives in `git log`).
+- **The branch is merged `--no-ff` and pushed.** Never by committing on `main` directly — that is
+  forbidden above, including for a docs-only "just the STATUS line" commit. Put the STATUS edit in
+  the task branch and let the merge carry it.
+- **The pool slot is freed, then the branch deleted.** A slot still holding the branch makes
+  `git branch -d` fail with `cannot delete branch ... used by worktree at ...`. The slot itself and
+  its warm `target/` stay; only an *ad-hoc* worktree is removed.
+- **The remote branch is deleted** if one was ever pushed. 29 stale remote branches had piled up by
+  2026-08-18, the oldest from June; 37 stale local ones by 2026-05-28. They cause duplicate work and
+  merge conflicts in parallel sessions.
 
 ### The local gate is NOT replaced by CI (yet)
 

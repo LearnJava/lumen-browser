@@ -161,7 +161,9 @@ ROADMAP.md (one line per task, status ≠ done)   ← master task list for P1/P2
   Manual arithmetic (`NN ≥ L → +K`) is still correct but was measured at 194 pointers for P3 alone.
 - **On completion:** delete the STATUS-PN.md line → delete (or `## Status: MERGED`) the task file →
   set `ROADMAP.md` status to `done` (run `python scripts/gen_roadmap.py`) → mark
-  `CAPABILITIES.md`/`CSS-SPECS.md`/`BUGS.md`. (Full list — §«Task completion checklist».)
+  `CAPABILITIES.md`/`CSS-SPECS.md`/`BUGS.md`. (Full matrix — [`doc-sync.md`](doc-sync.md); the
+  closing procedure itself is `/lumen-task-finish`, see [`git-workflow.md`](git-workflow.md)
+  §Task completion.)
 - Brief format + template: [`tasks/README.md`](tasks/README.md). The schema above is **not** repeated
   there — this section is its only statement.
 
