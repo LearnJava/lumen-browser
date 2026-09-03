@@ -407,7 +407,11 @@ pub(crate) fn install_scroll_state(
     // mutation (e.g. `overflow` flipping to `clip`) that clamps this
     // container's scroll offset must be visible to a same-tick read.
     // `flush.scroll_states` is the same Arc `update_scroll_states` writes —
-    // no separate parameter needed.
+    // no separate parameter needed. Cloned out before `flush` itself is moved
+    // into the `_lumen_get_scroll_state` closure below — `_lumen_request_scroll`
+    // (BUG-975) needs its own handle on the same cache plus `computed_styles`.
+    let ss_for_request = Arc::clone(&flush.scroll_states);
+    let cs_for_request = Arc::clone(&flush.computed_styles);
     {
         let ss = Arc::clone(&flush.scroll_states);
         reg!(scope, ctx, store, "_lumen_get_scroll_state", move |nid: u32| -> Option<Vec<f64>> {
@@ -418,11 +422,39 @@ pub(crate) fn install_scroll_state(
                 .map(|s| vec![f64::from(s[0]), f64::from(s[1]), f64::from(s[2]), f64::from(s[3])])
         });
     }
-    // Queues a programmatic scroll request.  Shell drains via `take_scroll_requests()`.
+    // Queues a programmatic scroll request.  Shell drains via `take_scroll_requests()`
+    // (`about_to_wait`'s idle tick) and reclamps for real against the live layout
+    // tree — that stays the source of truth. BUG-975: until that tick runs, a
+    // synchronous `scrollLeft`/`scrollTop` read in the SAME script turn saw the
+    // stale pre-request value, because `_lumen_get_scroll_state` only ever reads
+    // `scroll_states` and nothing feeds this queue into it early. Optimistically
+    // mirror the request into `scroll_states` here too, so a same-tick read sees
+    // it immediately; the shell's next tick overwrites this with the authoritative
+    // clamped value regardless; applying the same value twice is idempotent. Left
+    // unclamped against `scrollWidth`/`scrollHeight` (indices 2/3) — that pair is
+    // the content-size *magnitude*, not the `[min, max]` endpoints
+    // `set_scroll_position` clamps against (which can be negative, e.g.
+    // `writing-mode: vertical-rl`), and this cache carries no min/max — but
+    // `overflow: clip` pins an axis to 0 unconditionally regardless of requested
+    // value or geometry, which `computed_styles` already lets us honor exactly.
+    // Only updates an entry that already exists (a node this cache has never seen
+    // establishes no expectation for `_lumen_get_scroll_state` to correct).
     {
         let ps = Arc::clone(&pending_scrolls);
         reg!(scope, ctx, store, "_lumen_request_scroll", move |nid: u32, x: f64, y: f64| {
             ps.lock().unwrap().push((nid, x as f32, y as f32));
+            let mut states = ss_for_request.lock().unwrap();
+            if let Some(s) = states.get_mut(&nid) {
+                let styles = cs_for_request.lock().unwrap();
+                let overflow = styles.get(&nid);
+                let is_clip = |prop: &str| {
+                    overflow
+                        .and_then(|m| m.get(prop))
+                        .is_some_and(|v| v == "clip")
+                };
+                s[0] = if is_clip("overflow-x") { 0.0 } else { x as f32 };
+                s[1] = if is_clip("overflow-y") { 0.0 } else { y as f32 };
+            }
         });
     }
     // Queues a page-level scroll request from window.scrollTo/scrollBy.
