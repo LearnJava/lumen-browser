@@ -2492,6 +2492,38 @@ SOURCE_MARKERS = [
             "pseudo-computed-style-stays-in-sync-with-new-element.html",
         ),
     ),
+    # WPT-RUN-6 slice 53. `setBaseAndExtent(aN, aO, fN, fO)`
+    # (`web_api_shim_mid.js:7564`) forwards both node ids straight to the
+    # native `_lumen_set_selection` binding (`dom_core.rs:1013`) with no
+    # tree-scope check at all — no adjustment when `anchorNode`/`focusNode`
+    # belong to different node trees (light DOM vs. a shadow tree). Measured
+    # live (`--mcp-live-port`, `.tmp/s53-diag.html`): `anchorNode === b`
+    # reads correctly but `focusNode` stays the raw shadow root instead of
+    # collapsing into the anchor's tree per Selection API §4.3. The real
+    # test's `DOMContentLoaded` listener is a bare arrow, not wrapped in
+    # `t.step(...)`, so the resulting `AssertionError` on
+    # `assert_equals(sel.focusNode, b)` surfaces as an uncaught exception —
+    # harness ERROR, subtest stuck at TIMEOUT — instead of a normal FAIL.
+    # New bug filed (BUG-966); this is the third of slice 52's four
+    # candidates left `unclassified` — the other two
+    # (`css-view-transitions/elements-at-point.html`,
+    # `resize-observer/scrollbars-2.html`) were re-measured against their
+    # real, unmodified files (not a reduction) in slice 53 and both complete
+    # cleanly (PASS / FAIL respectively) within 15s — no engine defect found,
+    # stay unclassified without a marker (matches the slice 37 MathML
+    # precedent: a TIMEOUT the current code gives no reason for).
+    Mechanism(
+        "selection-cross-tree-scope-focus", "BUG-966",
+        [], "`setBaseAndExtent` stores `focusNode` verbatim even when it "
+        "belongs to a different node tree than `anchorNode` (no Selection "
+        "API §4.3 boundary-point adjustment), so an `assert_equals` on the "
+        "expected collapsed `focusNode` throws inside a `DOMContentLoaded` "
+        "listener that isn't wrapped in `t.step()` — the uncaught exception "
+        "becomes a harness ERROR with the subtest stuck at TIMEOUT",
+        predicate=_exact_id_marker(
+            "/selection/selection-nested-video.html",
+        ),
+    ),
 ]
 
 #: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched
