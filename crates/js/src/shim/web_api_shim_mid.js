@@ -1226,13 +1226,9 @@ var _LUMEN_COLOR_PROPERTIES = {
 // as `_LUMEN_COLOR_PROPERTIES` above. Deliberately NOT the `margin`/
 // `padding`/`inset` shorthands themselves (`style.margin = "1px 2px"`) —
 // shorthand-VALUE parsing/expansion is separate, larger scope (see the
-// comment on `_LUMEN_TRBL_SHORTHANDS` above), and `width`/`height` (intrinsic
-// sizing keywords — `min-content`/`max-content`/`fit-content(<length>)` —
-// need `length_to_css` to preserve the `fit-content()` argument on
-// serialization first, `crate::selector_query::length_to_css` currently
-// collapses it to the bare keyword) and the CSS Logical equivalents
-// (margin-block/inline-*, padding-block/inline-*, inset-block/inline-*) are
-// not covered yet — each is its own future slice.
+// comment on `_LUMEN_TRBL_SHORTHANDS` above), and the CSS Logical
+// equivalents (margin-block/inline-*, padding-block/inline-*,
+// inset-block/inline-*) are not covered yet — each is its own future slice.
 var _LUMEN_LENGTH_PROPERTIES = {
     'margin-top':    { allowAuto: true,  nonNegative: false },
     'margin-right':  { allowAuto: true,  nonNegative: false },
@@ -1258,6 +1254,19 @@ var _LUMEN_LENGTH_PROPERTIES = {
 var _LUMEN_LINE_WIDTH_PROPERTIES = {
     'border-top-width': 1, 'border-right-width': 1,
     'border-bottom-width': 1, 'border-left-width': 1,
+};
+
+// CSS Sizing L3 §4 (CSSOM-2/BUG-484, third slice): `width`/`height` accept
+// the same `<length-percentage>` grammar as `_LUMEN_LENGTH_PROPERTIES` plus
+// `auto` and the intrinsic-sizing keywords `min-content`/`max-content`/
+// `fit-content(<length-percentage>)`. Validated and canonicalized via
+// `_lumen_css_canonical_sizing_length` — kept out of
+// `_LUMEN_LENGTH_PROPERTIES` because that grammar has no room for the
+// intrinsic keywords and `canonical_specified_length`'s `"auto"` handling is
+// margin/inset-specific (rejects a negative sizing length that margin/inset
+// would accept).
+var _LUMEN_SIZING_LENGTH_PROPERTIES = {
+    'width': 1, 'height': 1,
 };
 
 function _lumen_make_style(nid) {
@@ -1303,6 +1312,13 @@ function _lumen_make_style(nid) {
                 var canonWidth = _lumen_css_canonical_line_width(strVal);
                 if (canonWidth === null || canonWidth === undefined) return; // invalid <line-width>: no-op
                 obj[key] = canonWidth;
+                setParsed(obj);
+                return;
+            }
+            if (_LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key)) {
+                var canonSizing = _lumen_css_canonical_sizing_length(strVal);
+                if (canonSizing === null || canonSizing === undefined) return; // invalid sizing value: no-op
+                obj[key] = canonSizing;
                 setParsed(obj);
                 return;
             }

@@ -423,6 +423,35 @@ pub fn canonical_specified_line_width(s: &str) -> Option<String> {
     canonical_specified_length(v, false, true)
 }
 
+/// CSSOM-2 (BUG-484, third slice): validates and canonicalizes a sizing
+/// specified value (CSS Sizing L3 §4 — `<length-percentage [0,∞]> | auto |
+/// min-content | max-content | fit-content(<length-percentage [0,∞]>)`) for
+/// the `width`/`height` inline-`style` longhands. Same role as
+/// [`canonical_specified_length`], but reuses [`parse_sizing_length`] for the
+/// intrinsic-sizing keywords instead of `parse_length_q` directly — that
+/// function's own `"auto" => None` case is ambiguous between "valid auto" and
+/// "invalid syntax" (its callers in `style/apply/layout.rs` don't need to
+/// tell the two apart, an unset sizing field already defaults to auto), so
+/// `auto` is matched here first and never reaches it.
+///
+/// `fit-content(<length>)`'s inner argument is not separately checked for a
+/// negative literal — the same simplification `length_literal_is_negative`
+/// already makes for `calc()`, see its doc comment.
+pub fn canonical_specified_sizing_length(s: &str) -> Option<String> {
+    let v = s.trim();
+    if v.is_empty() {
+        return None;
+    }
+    if v.eq_ignore_ascii_case("auto") {
+        return Some("auto".to_string());
+    }
+    let len = parse_sizing_length(v, false)?;
+    if length_literal_is_negative(&len) {
+        return None;
+    }
+    Some(crate::selector_query::length_to_css(&len))
+}
+
 /// Extracts the sign of a `Length`'s underlying numeric literal, for
 /// [`canonical_specified_length`]'s `non_negative` grammar check. `Calc` and
 /// the intrinsic-sizing keywords have no single literal to check — treated
