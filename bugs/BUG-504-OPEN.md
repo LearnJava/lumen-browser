@@ -100,3 +100,38 @@ all yet), others may be genuinely separate.
 
 Committed `.ini` under `tests/wpt/metadata/css/css-overflow/` for the 20 files
 above, `expected: FAIL` per affected subtest.
+
+## Срез 2026-09-03 (P3): transform contribution landed
+
+Implemented exactly the "Что нужно" fix above for the **verified root cause
+(transform)** group. `content_width`/`content_height`
+(`crates/engine/layout/src/lib.rs`) now consult a new helper,
+`child_scrollable_bounds`, which returns a child's border-box corners after
+applying its forward transform matrix (`forward_box_transform`, the same
+matrix paint uses to emit `PushTransform`) when the child carries one, or the
+plain `c.rect` unchanged otherwise (zero-cost fast path for the untransformed
+common case — the vast majority of boxes). `LayoutBox::rect` itself is left
+untouched, so flow geometry is unaffected; only the scrollable-overflow fold
+changes. Confirmed against the exact repro snippet from this file's
+"Механизм" section (`translateX(200px)` on a 50×50 child in a 100×100
+`overflow:auto` container) via new regression tests
+(`collect_scroll_containers_transform_grows_scroll_width`/`_height` in
+`crates/engine/layout/src/tests/scroll_interaction_misc.rs`) — `scrollWidth`
+now reports `250` (was `0` above the container's own size), matching the
+spec value from the snippet's comment. A third regression test
+(`collect_scroll_containers_no_transform_unaffected`) guards the
+untransformed fast path against regressing to the old plain-`rect` numbers.
+`cargo test -p lumen-layout`: 3683/3683 (workspace-wide, not just the new
+tests) — no existing geometry test shifted, confirming the fast path is
+truly a no-op for untransformed children. This lands via `collect_scroll_containers`
+(consumed by both `scrollWidth`/`scrollHeight`'s JS getters via
+`_lumen_get_scroll_state` and `set_scroll_position`'s clamp range), so both
+read and scroll-clamp surfaces pick up the fix together.
+
+**Not attempted — remains the bug's open scope:** the **"same symptom, not
+yet individually root-caused"** group (11 files: abspos-without-transform,
+clip-margin RTL, scrollbar-gutter space reservation, single-axis clamping).
+None of these involve a child `transform`, so this slice's fix does not
+touch them; each still needs its own root-cause pass per the file's original
+"Масштаб находки" split. Status remains `OPEN` — only the transform
+component of this bug's original 20-file finding is closed.

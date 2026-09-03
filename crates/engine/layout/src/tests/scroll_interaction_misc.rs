@@ -1163,6 +1163,64 @@ fn collect_scroll_containers_overflow_hidden_excluded() {
 }
 
 #[test]
+fn collect_scroll_containers_transform_grows_scroll_width() {
+    // BUG-504: a child that only overflows via `transform` must still grow
+    // scrollWidth — CSS Overflow L3 §3.4 treats transform as contributing
+    // to the scrollable overflow rectangle, even though it never moves the
+    // child's own flow `rect`. 100px container, 50px child translated 200px
+    // right → painted right edge at 250px, well past the untransformed 100px.
+    let root = lay_full(
+        "<div id=\"s\"><div id=\"child\"></div></div>",
+        "#s { overflow: auto; width: 100px; height: 100px; } \
+         #child { width: 50px; height: 50px; transform: translateX(200px); }",
+    );
+    let containers = collect_scroll_containers(&root);
+    assert_eq!(containers.len(), 1);
+    assert!(
+        (containers[0].scroll_width - 250.0).abs() < 0.5,
+        "expected scroll_width≈250 (100 container is not enough, transform pushes child to \
+         x=200..250), got {}",
+        containers[0].scroll_width
+    );
+}
+
+#[test]
+fn collect_scroll_containers_transform_grows_scroll_height() {
+    // Same as above, vertical axis: translateY(300px) on a 50px child inside
+    // a 100px container should push scroll_height to ≈350.
+    let root = lay_full(
+        "<div id=\"s\"><div id=\"child\"></div></div>",
+        "#s { overflow: auto; width: 100px; height: 100px; } \
+         #child { width: 50px; height: 50px; transform: translateY(300px); }",
+    );
+    let containers = collect_scroll_containers(&root);
+    assert_eq!(containers.len(), 1);
+    assert!(
+        (containers[0].scroll_height - 350.0).abs() < 0.5,
+        "expected scroll_height≈350, got {}",
+        containers[0].scroll_height
+    );
+}
+
+#[test]
+fn collect_scroll_containers_no_transform_unaffected() {
+    // Regression guard: an untransformed child must still compute exactly as
+    // before — the child_scrollable_bounds fast path (`c.rect` passthrough)
+    // must not perturb the plain flow case.
+    let root = lay_full(
+        "<div id=\"s\"><div style=\"height:200px\"></div></div>",
+        "#s { overflow: auto; width: 100px; height: 50px; }",
+    );
+    let containers = collect_scroll_containers(&root);
+    assert_eq!(containers.len(), 1);
+    assert!(
+        (containers[0].scroll_height - 200.0).abs() < 0.5,
+        "expected scroll_height≈200 (untransformed child), got {}",
+        containers[0].scroll_height
+    );
+}
+
+#[test]
 fn set_scroll_position_clamps_to_zero() {
     let mut root = lay_full(
         "<div id=\"s\"><p>d</p></div>",

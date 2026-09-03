@@ -1239,25 +1239,56 @@ pub fn overscroll_should_propagate(
     !blocked
 }
 
+/// A child's border-box, expanded by its own CSS `transform` (BUG-504).
+///
+/// CSS Overflow L3 §3.4: `transform` doesn't move a box for flow purposes
+/// (`LayoutBox::rect` stays untouched), but it *does* contribute to the
+/// scrollable overflow rectangle — a translated/rotated/scaled child can
+/// force a scroll container to grow its scroll range even though the
+/// child's flow position and size are unaffected. Returns `c.rect` itself
+/// when the child carries no transform (the common case, zero-cost).
+fn child_scrollable_bounds(c: &LayoutBox) -> lumen_core::geom::Rect {
+    let Some(m) = forward_box_transform(c) else {
+        return c.rect;
+    };
+    let (x0, y0) = (c.rect.x, c.rect.y);
+    let (x1, y1) = (c.rect.x + c.rect.width, c.rect.y + c.rect.height);
+    let corners = [
+        m.transform_point_2d(x0, y0),
+        m.transform_point_2d(x1, y0),
+        m.transform_point_2d(x0, y1),
+        m.transform_point_2d(x1, y1),
+    ];
+    let min_x = corners.iter().fold(f32::INFINITY, |acc, p| acc.min(p.0));
+    let max_x = corners.iter().fold(f32::NEG_INFINITY, |acc, p| acc.max(p.0));
+    let min_y = corners.iter().fold(f32::INFINITY, |acc, p| acc.min(p.1));
+    let max_y = corners.iter().fold(f32::NEG_INFINITY, |acc, p| acc.max(p.1));
+    lumen_core::geom::Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
 /// Compute the content scroll-width of a box: rightmost child edge relative to container left.
 ///
-/// Returns max(b.rect.width, children's right edge - b.rect.x).
+/// Returns max(b.rect.width, children's right edge - b.rect.x), where a
+/// transformed child's edge is taken from its post-transform bounds
+/// ([`child_scrollable_bounds`]) rather than its flow `rect` (BUG-504).
 /// Used to compute the max scroll offset for horizontal scrolling.
 fn content_width(b: &LayoutBox) -> f32 {
     b.children.iter().fold(b.rect.width, |acc, c| {
-        let c_right = c.rect.x + c.rect.width - b.rect.x;
-        acc.max(c_right)
+        let bounds = child_scrollable_bounds(c);
+        acc.max(bounds.x + bounds.width - b.rect.x)
     })
 }
 
 /// Compute the content scroll-height of a box: bottommost child edge relative to container top.
 ///
-/// Returns max(b.rect.height, children's bottom edge - b.rect.y).
+/// Returns max(b.rect.height, children's bottom edge - b.rect.y), where a
+/// transformed child's edge is taken from its post-transform bounds
+/// ([`child_scrollable_bounds`]) rather than its flow `rect` (BUG-504).
 /// Used to compute the max scroll offset for vertical scrolling.
 fn content_height(b: &LayoutBox) -> f32 {
     b.children.iter().fold(b.rect.height, |acc, c| {
-        let c_bottom = c.rect.y + c.rect.height - b.rect.y;
-        acc.max(c_bottom)
+        let bounds = child_scrollable_bounds(c);
+        acc.max(bounds.y + bounds.height - b.rect.y)
     })
 }
 
