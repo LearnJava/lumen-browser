@@ -1334,10 +1334,33 @@ fn bug341_s30_flex_key_census() {
             // `bug341_s40_in_place_reuse_share` instead.
             lumen_layout::box_tree::set_layout_in_place_reuse(false);
             lumen_layout::box_tree::set_layout_key_census(true);
+            lumen_layout::box_tree::set_flex_column_census(true);
             let (_layout, _counters) = lumen_layout::layout_measured_hyp_with_counters(
                 &doc, &sheet, viewport, &measurer, &hyp, false,
             );
             let census = lumen_layout::box_tree::take_layout_key_census();
+            // BUG-341 S41: the same pass, counted from the other end — not "how
+            // many calls could a cache have served" (S30-S40, answered and
+            // closed at 3.1%) but "how many second calls are still made, and
+            // why". `double` is the residual the bug is named for; its split
+            // says whether the remaining path S40's "Not attempted" names
+            // (stop calling full `lay_out` for an intrinsic height) is worth
+            // building at all.
+            let fc = lumen_layout::box_tree::take_flex_column_census();
+            eprintln!(
+                "[s41-double] {scenario} cycle={i} needed={} memo_served={} probed={} \
+                 replayed={} double={} ({:.1}% of probed) dirty={} size={} (grew={}) cross={}",
+                fc.needed,
+                fc.memo_served,
+                fc.probed,
+                fc.replayed,
+                fc.double,
+                100.0 * fc.double as f64 / fc.probed.max(1) as f64,
+                fc.double_dirty,
+                fc.double_size,
+                fc.double_size_grew,
+                fc.double_cross,
+            );
             eprintln!(
                 "[s30-census] {scenario} cycle={i} calls={} repeat_key_calls={} ({:.1}%) repeat_key_same_style={} ({:.1}% of repeats) repeat_key_same_style_and_override={} ({:.1}% of repeats, {:.1}% of same_style)",
                 census.calls,
