@@ -418,3 +418,95 @@ untouched by any slice), plus the original clip-margin RTL and single-axis
 clamping files. `scrollbar-gutter-vertical-{lr,rl}-001.html` are now closed
 (bar the same DEBTOR subtest class as the other two files). Status stays
 `OPEN`.
+
+## Срез 2026-09-03 (P3, часть 6): `overflow-rtl-scroll-left.html` root-caused and fixed — not a content_width defect
+
+Root-caused `overflow-rtl-scroll-left.html` from the "clip-margin RTL/single-axis
+clamping" remainder. **This one was not `content_width`'s fault at all** — a
+direct `lumen_layout` unit probe (`collect_scroll_containers` on the exact
+`direction: rtl; width: 300px` container with a `width: 500px` child)
+returned `scroll_width == 500` correctly, matching CSS Overflow L3's spec
+value, both before and after this slice. The actual defect was one level up,
+in the shell's JS-state seeding: `apply_loaded_page`
+(`crates/shell/src/page_load.rs`) is where BUG-382 (2026-07) fixed
+`getBoundingClientRect()`/`getComputedStyle()` answering `""`/all-zeros on a
+freshly loaded page by pushing `update_layout_rects`/`update_computed_styles`
+unconditionally right after layout, before any page script can run — but
+that fix's push closure never included `update_scroll_states`, so
+`scrollWidth`/`scrollHeight`/`scrollTop`/`scrollLeft` (which read
+`_lumen_get_scroll_state`'s per-node cache, `web_api_shim_mid.js`) kept
+answering the fallback border-box size (`_lumen_get_bounding_rect`, 300 for
+this container) until an unrelated relayout (resize, DOM mutation, a wheel
+scroll) happened to race ahead of the first script and populate the cache —
+exactly BUG-382's "works in one load out of four" shape, just for the scroll
+half of the geometry push instead of the rects/styles half. `relayout()`
+(`crates/shell/src/relayout.rs`) and the wheel-scroll path
+(`try_scroll_overflow_container`, `crates/shell/src/lumen/scrolling.rs`)
+already called `update_scroll_states` correctly; only the initial-load seed
+site was missing it.
+
+**Found via:** a live `--mcp-live-port` probe reading `scrollWidth` from a
+fresh navigation with `wait: stable` and no prior mutation consistently
+returned `300` (the container's own border-box width) across 10 retries with
+0.5s spacing — ruling out a race and pointing at a missing push rather than a
+late one. Cross-checked against a `lumen_layout`-only unit test (no shell, no
+JS) confirming `content_width`/`collect_scroll_containers` compute the
+correct `500` from the post-layout box tree, isolating the defect to the
+shell↔JS wiring.
+
+**Fix:** `apply_loaded_page`'s existing JS-seed block (`page_load.rs`, the
+`#[cfg(feature = "v8")]` block already collecting rects/styles per BUG-382)
+now also computes `scroll_states` via the same
+`collect_scroll_containers(lb_ref)` → `(node.index(), [scroll_x, scroll_y,
+scroll_width, scroll_height])` mapping `relayout()` already uses, and passes
+it to `js.update_scroll_states(scroll_states)` in the same `route_task_js`
+closure — so scroll geometry is seeded atomically with rects/styles/viewport
+on every page load, not just after the next unrelated relayout.
+
+**Regression coverage:** `collect_scroll_containers_rtl_overflow_grows_scroll_width`
+(`crates/engine/layout/src/tests/scroll_interaction_misc.rs`) locks in the
+correct `content_width` RTL computation itself (guards against a future
+regression in the layout half, even though it was never the bug this slice
+found). The shell-wiring fix (the actual defect) has no unit-level regression
+test — `apply_loaded_page` has no existing mock-`PersistentJs` test harness
+in `crates/shell/src/tests/`, and building one from scratch for a single
+push-site was judged out of proportion to this slice; verified instead by a
+live `--mcp-live-port` before/after (`scrollWidth` 300→500 immediately after
+`wait: stable`, no mutation) and a full run of the WPT file's own assertions
+via `eval` (`offsetWidth`/`offsetHeight`/`scrollWidth`/`scrollHeight`/
+`scrollLeft` before and after the `height: 0px` mutation — all match the
+file's `assert_equals` expectations). `cargo test -p lumen-layout --lib`:
+3712/3712 passed, 1 ignored (pre-existing), 0 failed. `cargo clippy -p
+lumen-shell --all-targets -- -D warnings`: clean.
+
+`.ini` deleted (`tests/wpt/metadata/css/css-overflow/overflow-rtl-scroll-left.html.ini`)
+— the file's single `test()` now fully passes, no `expected: FAIL` entries
+remain.
+
+**Remaining scope, revised:** 5 files — the 4
+`scrollbar-gutter-propagation-*.html` files (still blocked on a *different*
+bug: all four read `window.innerWidth`/`outerWidth`, which do not exist in
+the engine at all — [BUG-529](BUG-529-OPEN.md) — so they cannot pass
+regardless of any scrollbar-gutter fix; verified via `grep -rn "innerWidth"
+crates/js/src/shim/*.js` returning zero matches), plus
+`overflow-clip-clamps-and-ignores-scroll-offsets-vertical-rl.html` (a
+genuinely separate, deeper defect: it needs `scrollLeft` to accept and report
+*negative* values under `overflow: hidden` + `writing-mode: vertical-rl`,
+but `set_scroll_position`'s clamp — `x.clamp(0.0, (sw - clip_w).max(0.0))`,
+`crates/engine/layout/src/lib.rs` — has `0.0` hardcoded as the universal
+floor, no direction/writing-mode-aware negative range; out of this slice's
+scope, needs its own design pass). Two files from the original "same
+symptom" list were re-examined and found to likely share the seeding-gap
+root cause just fixed here (`overflow-clip-scroll-size.html`'s initial
+`scrollWidth` reads, `single-axis-scroll-apis-programmatic.html`'s pre-scroll
+assertions) but were not individually re-verified this slice — a future
+session should re-run them live before assuming they are closed, since
+`overflow-clip-scroll-size.html` in particular uses `overflow: clip`, which
+`collect_scroll_containers_inner` still excludes from `is_scroll_x`/
+`is_scroll_y` entirely (only `Scroll | Auto | Hidden` register), so its
+`scrollWidth` reads may hit a **different**, still-open gap: CSSOM View
+defines `scrollWidth`/`scrollHeight` for every element as `max(padding-box,
+scrollable-overflow-extent)` regardless of the `overflow` value, but the
+shim's fallback path (`_lumen_get_bounding_rect`) only ever returns the
+border-box, never consulting `content_width`/`content_height` for a
+non-registered container.
