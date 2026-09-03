@@ -1,6 +1,6 @@
 # BUG-515: `window.devicePixelRatio` undefined on the default (single-)window
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-04 (P3)
 **Дата:** 2026-08-03
 **Компонент:** js (`crates/js/src/dom.rs` — `WEB_API_SHIM` never sets
 `devicePixelRatio` on the global; the only place that name is assigned is
@@ -39,7 +39,28 @@ creation, independent of `window_management.rs`; a static `1` is a
 spec-conformant floor (matches this engine's fixed, non-HiDPI-aware
 rendering pipeline) until a real per-monitor DPI signal is threaded through.
 
+## Fix (2026-09-04, P3)
+
+The only production site assigning `devicePixelRatio` was
+`window_management.rs`'s opt-in `getScreenDetails()` path — an ordinary page
+that never calls it saw `undefined` forever. Added an unconditional
+`globalThis.devicePixelRatio = 1` to `web_api_shim_tail_mc.js` (right after
+the `innerWidth`/`outerWidth` block BUG-529 added), guarded by a
+`typeof === 'undefined'` check so the `getScreenDetails()` path can still
+override it once a real per-monitor DPI signal exists. Regression test:
+`device_pixel_ratio_defined_without_get_screen_details`
+(`crates/js/src/dom/tests/v8_elem_geometry_scroll.rs`) — asserts both the
+bare `devicePixelRatio` identifier and `window.devicePixelRatio` equal `1`
+from a freshly constructed runtime, the same runtime-construction path the
+WPT test exercises.
+
+`cargo test -p lumen-js --features v8-backend`: 3434/3434. `cargo clippy
+--workspace --all-targets -- -D warnings`: clean. `scripts/scoped-test.sh`
+(closure of `lumen-js`'s reverse dependencies): all green, 0 failed.
+
 ## .ini
 
-Committed `.ini` under `tests/wpt/metadata/css/css-device-adapt/` for
-`viewport-should-not-affect-devicePixelRatio.html`, `expected: FAIL`.
+Removed `tests/wpt/metadata/css/css-device-adapt/
+viewport-should-not-affect-devicePixelRatio.html.ini` — no live WPT run (no
+`.venv` in this pool slot), closure is analytical: the unit test above
+reproduces the file's single `assert_equals` exactly.

@@ -87,6 +87,16 @@ Object.defineProperties(window, {
     outerWidth:  { get: function() { return _lumen_get_viewport_size()[0]; }, enumerable: true },
     outerHeight: { get: function() { return _lumen_get_viewport_size()[1]; }, enumerable: true }
 });
+
+// ── window.devicePixelRatio (CSSOM View §4) ─────────────────────────────────
+// BUG-515: was undefined on an ordinary page — the only assignment lived in
+// the opt-in getScreenDetails() path (window_management.rs), which never
+// runs unless a page calls it. Fixed 1 is spec-conformant here: this engine's
+// rendering pipeline is not HiDPI-aware, so there is no real per-monitor
+// ratio to report yet.
+if (typeof globalThis.devicePixelRatio === 'undefined') {
+    globalThis.devicePixelRatio = 1;
+}
 // BUG-479: both now return a Promise (CSSOM View's "Scrolling with a
 // promise" revision) settled through `_lumen_scroll_settle_promise`
 // (`web_api_shim_head.js`) — resolves once the requested scroll's own
