@@ -1218,6 +1218,27 @@ var _LUMEN_COLOR_PROPERTIES = {
     'outline-color': 1, 'text-decoration-color': 1,
 };
 
+// CSS Box §8 / CSSOM §Change-a-computed-value (CSSOM-2/BUG-484, first slice):
+// plain `<length-percentage>` longhands — margin-* additionally accepts the
+// `auto` keyword and negative values, padding-* accepts neither. Validated
+// and canonicalized via `_lumen_css_canonical_length` on assignment, same
+// role as `_LUMEN_COLOR_PROPERTIES` above. Deliberately NOT the `margin`/
+// `padding` shorthands themselves (`style.margin = "1px 2px"`) — shorthand-
+// VALUE parsing/expansion is separate, larger scope (see the comment on
+// `_LUMEN_TRBL_SHORTHANDS` above), and not every box-model length longhand
+// (border-*-width, inset-*, the CSS Logical properties) is covered yet —
+// each is its own future slice.
+var _LUMEN_LENGTH_PROPERTIES = {
+    'margin-top':    { allowAuto: true,  nonNegative: false },
+    'margin-right':  { allowAuto: true,  nonNegative: false },
+    'margin-bottom': { allowAuto: true,  nonNegative: false },
+    'margin-left':   { allowAuto: true,  nonNegative: false },
+    'padding-top':    { allowAuto: false, nonNegative: true },
+    'padding-right':  { allowAuto: false, nonNegative: true },
+    'padding-bottom': { allowAuto: false, nonNegative: true },
+    'padding-left':   { allowAuto: false, nonNegative: true },
+};
+
 function _lumen_make_style(nid) {
     function getParsed() {
         var s = _lumen_get_attr(nid, 'style');
@@ -1246,6 +1267,14 @@ function _lumen_make_style(nid) {
                 var canon = _lumen_css_canonical_color(strVal);
                 if (canon === null || canon === undefined) return; // invalid <color>: no-op
                 obj[key] = canon;
+                setParsed(obj);
+                return;
+            }
+            if (_LUMEN_LENGTH_PROPERTIES.hasOwnProperty(key)) {
+                var grammar = _LUMEN_LENGTH_PROPERTIES[key];
+                var canonLen = _lumen_css_canonical_length(strVal, grammar.allowAuto, grammar.nonNegative);
+                if (canonLen === null || canonLen === undefined) return; // invalid <length-percentage>: no-op
+                obj[key] = canonLen;
                 setParsed(obj);
                 return;
             }

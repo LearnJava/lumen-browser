@@ -562,7 +562,11 @@ fn background_position_axis_to_css(
 }
 
 /// Serialises a [`Length`] to its CSS representation.
-fn length_to_css(l: &Length) -> String {
+///
+/// `pub(crate)`: also reused by `style::values::length::canonical_specified_length`
+/// (CSSOM-2/BUG-484) for inline-`style` `<length-percentage>` reflection —
+/// same canonical serialization as `getComputedStyle()`, one source of truth.
+pub(crate) fn length_to_css(l: &Length) -> String {
     match l {
         Length::Px(v) => px_str(*v),
         Length::Em(v) => format!("{}em", v),

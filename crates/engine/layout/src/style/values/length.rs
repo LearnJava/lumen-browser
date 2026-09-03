@@ -357,3 +357,59 @@ pub(in crate::style) fn parse_length_q(s: &str, is_quirks: bool) -> Option<Lengt
 pub fn parse_length(s: &str) -> Option<Length> {
     parse_length_q(s, true)
 }
+
+/// CSSOM-2 (BUG-484): validates and canonicalizes a `<length-percentage>`
+/// specified value for the JS `element.style` object
+/// (`crates/js/src/shim/web_api_shim_mid.js::_lumen_make_style`), following
+/// the same shape as [`crate::style::canonical_specified_color`]. Returns
+/// `None` on invalid syntax so the caller performs a CSSOM §Change-a-
+/// computed-value no-op instead of storing the raw string verbatim.
+///
+/// Always parses in standards mode (`is_quirks = false`) — unlike the legacy
+/// `width=`/`height=` HTML attributes, the CSSOM `.style` setter is not
+/// quirks-aware, so a bare unitless number (other than `0`) is rejected
+/// (this is the headline example in BUG-484: `e.style['margin-top'] = "60"`
+/// must not set the property).
+///
+/// `allow_auto` — margin longhands accept the `auto` keyword, padding does
+/// not. `non_negative` — padding/sizing longhands reject a negative
+/// literal per their grammar (`<length-percentage [0,∞]>`), margin does not.
+///
+/// `calc()`/`min()`/`max()`/`clamp()` values are accepted but passed through
+/// unchanged rather than canonicalized: `crate::selector_query::length_to_css`
+/// has no serializer for `Length::Calc` (it doesn't reconstruct calc() text),
+/// so canonicalizing here would corrupt the expression instead of just
+/// leaving it non-canonical. Full calc() serialization is separate scope
+/// (BUG-484 срез 15/30).
+pub fn canonical_specified_length(s: &str, allow_auto: bool, non_negative: bool) -> Option<String> {
+    let v = s.trim();
+    if v.is_empty() {
+        return None;
+    }
+    if allow_auto && v.eq_ignore_ascii_case("auto") {
+        return Some("auto".to_string());
+    }
+    if looks_like_function_call(v) {
+        return parse_math_function_value(v).map(|_| v.to_string());
+    }
+    let len = parse_length_q(v, false)?;
+    if non_negative && length_literal_is_negative(&len) {
+        return None;
+    }
+    Some(crate::selector_query::length_to_css(&len))
+}
+
+/// Extracts the sign of a `Length`'s underlying numeric literal, for
+/// [`canonical_specified_length`]'s `non_negative` grammar check. `Calc` and
+/// the intrinsic-sizing keywords have no single literal to check — treated
+/// as non-negative (a `calc()` value's sign isn't known without resolving it,
+/// and this function is never reached for calc() anyway, see above).
+fn length_literal_is_negative(l: &Length) -> bool {
+    match l {
+        Length::Px(v) | Length::Em(v) | Length::Rem(v) | Length::Ch(v) | Length::Ex(v)
+        | Length::Percent(v) | Length::Vh(v) | Length::Vw(v) | Length::Vmin(v) | Length::Vmax(v)
+        | Length::Cqw(v) | Length::Cqh(v) | Length::Cqi(v) | Length::Cqb(v)
+        | Length::Cqmin(v) | Length::Cqmax(v) => *v < 0.0,
+        Length::Calc(_) | Length::MinContent | Length::MaxContent | Length::FitContent(_) => false,
+    }
+}
