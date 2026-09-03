@@ -65,7 +65,7 @@ pub(in crate::style) fn apply_declaration(
         // CSS Environment Variables L1: env() раскрывается ПОСЛЕ var(),
         // потому что custom property может содержать `env(...)` — порядок
         // зафиксирован в `expand_vars_and_env`, общей с pre-pass-ом font-size.
-        match expand_vars_and_env(&decl.value, &style.custom_props) {
+        match expand_vars_and_env(&decl.value, &style.custom_props, em_basis, viewport) {
             Some(v) => {
                 expanded = v;
                 expanded.as_str()

@@ -311,7 +311,7 @@ fn evaluate_style_feature(feature: &str, ctx: &ContainerContext) -> bool {
 /// or recursion past `VAR_EXPAND_MAX_DEPTH`).
 fn resolve_container_custom_prop(ctx: &ContainerContext, name: &str) -> Option<String> {
     let raw = ctx.custom_props.get(name)?;
-    expand_vars(raw, &ctx.custom_props, 0)
+    expand_vars(raw, &ctx.custom_props, 0, ctx.font_size, ctx.viewport)
 }
 
 /// Normalizes a custom-property value for `style()` query comparison.

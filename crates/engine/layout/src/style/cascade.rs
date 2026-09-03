@@ -1276,14 +1276,14 @@ pub fn compute_style(
             && effective_decl.value.contains("--")
         {
             let pre = if effective_decl.value.contains("var(") {
-                match expand_vars(&effective_decl.value, &style.custom_props, 0) {
+                match expand_vars(&effective_decl.value, &style.custom_props, 0, em_basis, viewport) {
                     Some(v) => v,
                     None => continue,
                 }
             } else {
                 effective_decl.value.clone()
             };
-            match expand_custom_functions(&pre, &sheet.function_rules, &style.custom_props, 0) {
+            match expand_custom_functions(&pre, &sheet.function_rules, &style.custom_props, 0, em_basis, viewport) {
                 Some(v) => {
                     func_buf = Declaration {
                         property: effective_decl.property.clone(),

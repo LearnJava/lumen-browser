@@ -667,7 +667,7 @@ impl Lumen {
                 let hit_test_tree = Arc::new(lb_ref.clone());
                 let styles = collect_computed_styles(lb_ref, &doc_guard, None);
                 drop(doc_guard);
-                let customs = collect_custom_properties(lb_ref);
+                let customs = collect_custom_properties(lb_ref, viewport);
                 let (vw, vh) = (viewport.width, viewport.height);
                 let dark_mode = self.dark_mode;
                 let reduced_motion = self.a11y_store.reduced_motion();

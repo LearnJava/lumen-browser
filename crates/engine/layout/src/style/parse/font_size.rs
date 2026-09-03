@@ -48,7 +48,7 @@ pub(in crate::style) fn apply_font_size(
     // computed value time — она просто не применяется.
     let expanded;
     let raw: &str = if decl.value.contains("var(") || decl.value.contains("env(") {
-        expanded = expand_vars_and_env(&decl.value, &style.custom_props)?;
+        expanded = expand_vars_and_env(&decl.value, &style.custom_props, parent_fs, viewport)?;
         expanded.as_str()
     } else {
         decl.value.as_str()

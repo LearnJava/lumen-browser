@@ -628,6 +628,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `calc()` | ✅ | arithmetic |
 | `min()`/`max()`/`clamp()` | ✅ | comparison |
 | `var()` | ✅ | recursive + fallback + calc() + env() + cycle guard (see T1 Custom Properties) |
+| `ident()` | 🟡 | CSS Values L5 (draft) §4.2, permitted only as `var()`'s first argument: `<string>` + numeric args (bare number or `calc()`) build a `<custom-ident>` name (BUG-500, `substitute.rs::eval_ident_call`); the `var()`-fallback-equals-CSS-wide-keyword re-cascade nuance is the separate, already-documented BUG-487 residual, not specific to `ident()` |
 | `url()` | ✅ | |
 | `svh`/`dvh`/`lvh`/`svw`/`dvw`/`lvw` | ✅ | = vh/vw (Phase 0 fixed viewport) |
 | `svmin`/`dvmin`/`lvmin`/`svmax`/`dvmax`/`lvmax` | ✅ | = vmin/vmax |
