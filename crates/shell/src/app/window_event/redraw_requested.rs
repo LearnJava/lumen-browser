@@ -377,6 +377,12 @@ impl Lumen {
             })
             .unwrap_or(false)
             {
+                // FRAME-8: тот же сигнал, что уже показал relayout-у мутацию
+                // страничного DOM — довесок, не отдельный опрос. Синхронный
+                // путь (`self.engine_thread.is_none()`) уже гарантирован веткой
+                // выше; под движковым потоком это место не выполняется вовсе
+                // (см. doc-comment `frame_dynamic.rs`).
+                self.poll_dynamic_frames();
                 self.relayout_raf_dirty_readback();
             }
         }

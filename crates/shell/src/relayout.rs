@@ -446,6 +446,13 @@ impl Lumen {
         // continuous rAF-DOM loop still relayouts each cycle.
         let mut submitted = false;
         if self.take_dom_dirty_lockfree() {
+            // FRAME-8: под движковым потоком (default, ADR-023) это —
+            // единственное место, где страничный `dom_dirty` потребляется:
+            // синхронные ветки `about_to_wait`/`RedrawRequested` для того же
+            // сигнала — байт-идентичный fallback, живой только при
+            // `LUMEN_NO_ENGINE_THREAD=1`. Довесок к уже добытому флагу, не
+            // отдельный опрос — см. doc-comment `frame_dynamic.rs`.
+            self.poll_dynamic_frames();
             self.relayout_raf_dirty();
             submitted = true;
         }

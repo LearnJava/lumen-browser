@@ -798,6 +798,18 @@ pub(crate) struct Lumen {
     /// [`Lumen::on_frame_nav_done`]. Заменяется вместе с [`Self::frames`]:
     /// `host_doc` внутри слота адресует документ, которого больше не будет.
     pub(crate) frame_nav_requests: Vec<crate::frames::FrameNavRequest>,
+    /// FRAME-8: host-элементы `(document, NodeId)`, чья первичная загрузка
+    /// (вставлена скриптом ПОСЛЕ первичного прохода) уже отправлена на
+    /// фоновый поток, но ещё не получила `LoadEvent::FrameNewLoadDone`.
+    /// Бронь на время полёта — без неё повторный [`Lumen::poll_dynamic_frames`]
+    /// до ответа запустил бы вторую загрузку того же host-узла. Заменяется
+    /// вместе с [`Self::frames`], тем же порядком, что и [`Self::frame_nav_requests`].
+    pub(crate) pending_new_frames: Vec<(Arc<Mutex<Document>>, NodeId)>,
+    /// FRAME-8: запросы загрузки новых фреймов, снятые сканом
+    /// ([`Lumen::poll_dynamic_frames`]), но ещё не отправленные на фоновый
+    /// поток — [`Lumen::dispatch_pending_frame_loads`] опустошает эту очередь
+    /// на СЛЕДУЮЩЕМ тике `about_to_wait`, не в момент скана.
+    pub(crate) pending_frame_load_dispatch: Vec<crate::lumen::frame_dynamic::PendingFrameLoad>,
     /// Shared GIF-video store — same Arc used by JS native bindings (PH3-12).
     ///
     /// The shell owns the Arc; JS bindings hold clones captured at context

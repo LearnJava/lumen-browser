@@ -485,6 +485,9 @@ impl Lumen {
                 self.frame_env = page.frame_env;
                 // FRAME-4 срез 3: см. тот же сброс в `apply_loaded_page`.
                 frames::clear_frame_nav_requests(&mut self.frame_nav_requests);
+                // FRAME-8: см. тот же сброс в `apply_loaded_page`.
+                self.pending_new_frames.clear();
+                self.pending_frame_load_dispatch.clear();
                 // BUG-480 срез 16: индекс в этом списке — единственное, чем
                 // адресован фрейм под курсором, поэтому пережить его замену он
                 // не может: указывал бы на чужой хэндл.
@@ -1115,6 +1118,10 @@ impl Lumen {
         // всё ещё летит, и так уйдёт в `apply_frame_navigation`'s "old_doc
         // отсутствует" ветку; чистка здесь — только против утечки памяти.
         frames::clear_frame_nav_requests(&mut self.frame_nav_requests);
+        // FRAME-8: та же причина — брони старой страницы адресуют документы,
+        // которых больше нет.
+        self.pending_new_frames.clear();
+        self.pending_frame_load_dispatch.clear();
         // BUG-480 срез 16: см. тот же сброс в резервном пути reload'а выше.
         self.hovered_frame = None;
         // BUG-480 срез 14: список страницы пишется ПОСЛЕ замены фреймов, а не
@@ -1680,6 +1687,21 @@ pub(crate) enum LoadEvent {
         host: NodeId,
         old_doc: Arc<Mutex<Document>>,
         generation: u64,
+        handles: Vec<frames::FrameHandle>,
+    },
+    /// FRAME-8: первичная загрузка ОДНОГО host-элемента, которого не видел
+    /// первичный проход `frames::load_frame_sub_documents`, — вставлен
+    /// скриптом позже, либо получил `src` тогда же. Тот же фоновый путь, что
+    /// у [`Self::FrameNavDone`] (`frames::run_new_frame_load`), но это
+    /// ДОБАВЛЕНИЕ хэндла, не замена — `host` раньше был в дереве без него.
+    /// `host_doc`+`host` — ключ брони `Lumen::pending_new_frames`; `is_top` —
+    /// снятая на момент отправки принадлежность («страница» или конкретный
+    /// документ фрейма), нужна применяющей стороне ровно как
+    /// `frames::scan_dynamic_frames`.
+    FrameNewLoadDone {
+        host_doc: Arc<Mutex<Document>>,
+        host: NodeId,
+        is_top: bool,
         handles: Vec<frames::FrameHandle>,
     },
 }

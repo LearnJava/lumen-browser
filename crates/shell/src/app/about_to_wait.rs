@@ -16,6 +16,12 @@ const IDLE_BUDGET_MS: f64 = 10.0;
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn on_about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // FRAME-8: спавнит фоновые потоки для того, что скан прошлого тика
+        // поставил в очередь — до какой-либо накачки JS в ЭТОМ тике, ровно
+        // на дистанции в один полный проход event loop от места, где скан
+        // вызывается (`pump_raf_engine_thread`). См. doc-comment
+        // `Lumen::dispatch_pending_frame_loads`.
+        self.dispatch_pending_frame_loads();
         // Warm-frame bench (LUMEN_BENCH=hover:N | scroll:N). Drives redraws
         // itself instead of waiting for a human, then exits. Placed first so a
         // benched process never falls through into the idle paths below.
@@ -198,6 +204,13 @@ impl Lumen {
         // другого входа — сам вьюпорт здесь не тронут) и пересобирает
         // display list страницы — та же функция, что уже применяет
         // нативное переключение элемента формы (срез 18).
+        // FRAME-8: тот же сигнал, что выше показал per-фреймовый dom_dirty —
+        // проверяем ДО refresh_frames (тот не трогает состав self.frames, а
+        // только пересчитывает уже живые), один раз на все затронутые фреймы,
+        // а не по одному опросу на каждый.
+        if !frame_dirty.is_empty() {
+            self.poll_dynamic_frames();
+        }
         for idx in frame_dirty {
             self.refresh_frames(Some(idx));
         }
@@ -388,6 +401,12 @@ impl Lumen {
                 false
             };
             if raf_dom_dirty {
+                // FRAME-8: этот `take_dom_dirty()` — единственное потребление
+                // страничного флага за этот тик (см. `raf_dom_dirty` выше) —
+                // `redraw_requested.rs`'s собственная проверка того же флага
+                // после него увидела бы уже `false`. Довесок здесь же, до
+                // relayout, а не отдельный опрос.
+                self.poll_dynamic_frames();
                 // rAF callback changed the DOM — rebuild layout and paint for real.
                 self.relayout_raf_dirty();
                 self.request_redraw();
@@ -421,6 +440,11 @@ impl Lumen {
             if fjs.take_dom_dirty() {
                 frame_raf_dirty.push(*idx);
             }
+        }
+        // FRAME-8: см. тот же довесок у `frame_dirty` выше — rAF ребёнка
+        // мутирует его DOM ровно как любой другой его обработчик.
+        if !frame_raf_dirty.is_empty() {
+            self.poll_dynamic_frames();
         }
         // BUG-480 срез 25: тот же путь пересчёта, что у мутаций родителя/себя
         // выше — `refresh_frames` без гейта «размер/интерактив не менялись»
