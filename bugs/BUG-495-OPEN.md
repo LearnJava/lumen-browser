@@ -1,6 +1,10 @@
 # BUG-495: `background-position-x`/`background-position-y` standalone longhands entirely unimplemented
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md)
+**Тип:** доработка — остаток (edge-relative offset форма и `x-start`/`x-end`/
+`y-start`/`y-end`) требует нового представления «anchor edge + offset» в
+`PositionComponent`, разделяемом пятью потребителями `<position>`; см.
+ревизию P3 2026-09-03 ниже
 **Дата:** 2026-08-02
 **Компонент:** css-parser/layout (`crates/engine/layout/src/style.rs::apply_declaration`,
 `selector_query.rs::computed_style_to_map`)
@@ -162,3 +166,42 @@ BUG-493, не к остатку этого бага.
 `OPEN` (не DEBTOR — собственный edge-offset пробел ещё не оценён живым
 прогоном, а прогон затруднён тем, что BUG-493 маскирует почти весь
 computed-value сигнал).
+
+## Ревизия P3 2026-09-03: переклассифицирован в ДОРАБОТКА → CSS-SPECS.md
+
+Взят как следующий top-down пункт `STATUS-P3.md` (BUGS.md:59, после BUG-341
+пропущен как приостановленный пользователем, BUG-480/BUG-490/BUG-491 —
+как уже помеченные ДОРАБОТКА). Оба условия теста ДОРАБОТКА
+(`docs/probe-method.md` §8) выполнены:
+
+1. **Функциональности нет вовсе.** Чтение `PositionComponent`
+   (`crates/engine/layout/src/style/values/flexgrid.rs:522`) подтверждает
+   ровно два варианта — `Px(f32)`/`Percent(f32)`; представления «anchor
+   edge + offset» (нужного, чтобы вернуть `calc(100% + 10px)` для
+   `right -10px` или `-20%` для `left -20%`, как того требует
+   `test_computed_value` в `background-position-x-computed.html`) нет
+   нигде в типе.
+2. **Объём — общий тип, а не одно свойство.** `parse_position_component`/
+   `ObjectPosition::parse` — единая функция на ВСЕХ потребителей
+   `<position>` в движке (подтверждено грепом `parse_position_component`/
+   `ObjectPosition::parse` по `crates/engine/layout/src`):
+   `background-position` шорткод и оба лонгхенда (`style/apply/paint.rs`),
+   `object-position` (`style/apply/layout.rs`), `transform-origin`/
+   `perspective-origin` (`style/apply/motion.rs`). Расширение требует не
+   match-arm, а нового варианта в разделяемом enum + пересчёта `resolve()`
+   (сейчас `free_space * percent` ИЛИ `px`, нужно `free_space * percent +
+   px` одновременно) + серийализации по формату `calc()`, которую спека
+   требует для смешанных anchor+offset значений (см. три формы ожидаемого
+   вывода в тестовых assertions: голый `-20%`, `calc(100% + 10px)`,
+   `calc(100% - 10px)` — знак зависит от anchor'а и требует точного
+   соответствия сериализации Typed OM, не просто печати числа).
+
+Точечного P3-фикса на этом остатке нет — расширение `PositionComponent`
+меняет разделяемый тип, используемый пятью потребителями сразу, что
+требует проектирования (форма варианта, формат сериализации), не
+локальной правки одного файла. Тот же прецедент, что BUG-491/492
+(2026-09-03 ранее в этой же сессии P3): заведено не в `ROADMAP.md`, а в
+`CSS-SPECS.md` — P4 и так владеет этим файлом как очередью CSS-свойств, а
+`<position>`-синтаксис относится к CSS Values L4/L5 (уже 🟡-модуль).
+Статус переведён в `OPEN (ДОРАБОТКА → CSS-SPECS.md)`; строка снята с
+`STATUS-P3.md`.
