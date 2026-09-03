@@ -27,7 +27,7 @@ use crate::style::{
     LengthOrAuto,
     MixBlendMode, ObjectFit, ObjectPosition, Overflow, OutlineColor, OverscrollBehavior,
     OutlineStyle, PointerEvents, Position, PositionComponent, PrintColorAdjust, Quotes,
-    ScrollbarWidth, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign,
+    ScrollbarGutter, ScrollbarWidth, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign,
     TextDecorationLine, TextDecorationStyle,
     TextEmphasisStyle, TextOverflow, TextShadow, TextTransform, TimingFunction, TransformFn,
     VerticalAlign, Visibility, WhiteSpace,
@@ -1275,6 +1275,19 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextOverflow::Clip => "clip",
         TextOverflow::Ellipsis => "ellipsis",
     }.into());
+    // CSS Overflow L4 §13.4 / compat `-webkit-line-clamp` (BUG-505): both
+    // names read the same underlying field — the engine implements only the
+    // reduced `none | <integer>` grammar, not the full `line-clamp`
+    // shorthand (`max-lines`/`block-ellipsis`/`continue`/`-webkit-legacy`
+    // longhands are unimplemented, see BUG-505).
+    m.insert("-webkit-line-clamp".into(), match style.line_clamp {
+        None => "none".to_string(),
+        Some(n) => n.to_string(),
+    });
+    m.insert("line-clamp".into(), match style.line_clamp {
+        None => "none".to_string(),
+        Some(n) => n.to_string(),
+    });
     m.insert("text-indent".into(), length_to_css(&style.text_indent));
     m.insert("vertical-align".into(), vertical_align_to_css(&style.vertical_align));
 
@@ -1286,6 +1299,18 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("scrollbar-color".into(), match style.scrollbar_color {
         None => "auto".to_string(),
         Some((thumb, track)) => format!("{} {}", color_to_css(thumb), color_to_css(track)),
+    });
+    m.insert("scrollbar-gutter".into(), match style.scrollbar_gutter {
+        ScrollbarGutter::Auto => "auto",
+        ScrollbarGutter::Stable => "stable",
+        ScrollbarGutter::StableBothEdges => "stable both-edges",
+    }.into());
+    // CSS Overflow L3 §overflow-clip-margin: initial value is `0px`; the
+    // engine supports only the bare `<length>` grammar so far, not the full
+    // `[<visual-box> | <length>]{1,2}` combination (BUG-505).
+    m.insert("overflow-clip-margin".into(), match &style.overflow_clip_margin {
+        None => "0px".to_string(),
+        Some(l) => length_to_css(l),
     });
     m.insert("z-index".into(), match style.z_index {
         None => "auto".into(),
@@ -2684,5 +2709,50 @@ mod tests {
         assert_eq!(m.get("vertical-align").map(String::as_str), Some("25%"));
         let m = div_computed_map("<div>x</div>", "div { vertical-align: 4px; }");
         assert_eq!(m.get("vertical-align").map(String::as_str), Some("4px"));
+    }
+
+    // ── computed_style_to_map: BUG-505 additions ─────────────────────────────
+
+    #[test]
+    fn computed_map_line_clamp_defaults_to_none() {
+        // Both names were absent entirely before BUG-505, so `getComputedStyle`
+        // answered "" instead of the property's own initial value.
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("line-clamp").map(String::as_str), Some("none"));
+        assert_eq!(m.get("-webkit-line-clamp").map(String::as_str), Some("none"));
+    }
+
+    #[test]
+    fn computed_map_line_clamp_reports_integer() {
+        let m = div_computed_map("<div>x</div>", "div { -webkit-line-clamp: 3; }");
+        assert_eq!(m.get("line-clamp").map(String::as_str), Some("3"));
+        assert_eq!(m.get("-webkit-line-clamp").map(String::as_str), Some("3"));
+    }
+
+    #[test]
+    fn computed_map_scrollbar_gutter_defaults_to_auto() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("scrollbar-gutter").map(String::as_str), Some("auto"));
+    }
+
+    #[test]
+    fn computed_map_scrollbar_gutter_reports_stable_both_edges() {
+        let m = div_computed_map("<div>x</div>", "div { scrollbar-gutter: stable both-edges; }");
+        assert_eq!(m.get("scrollbar-gutter").map(String::as_str), Some("stable both-edges"));
+        // CSS Overflow L4 §3.3 double-bar grammar: token order doesn't matter.
+        let m = div_computed_map("<div>x</div>", "div { scrollbar-gutter: both-edges stable; }");
+        assert_eq!(m.get("scrollbar-gutter").map(String::as_str), Some("stable both-edges"));
+    }
+
+    #[test]
+    fn computed_map_overflow_clip_margin_defaults_to_zero() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("overflow-clip-margin").map(String::as_str), Some("0px"));
+    }
+
+    #[test]
+    fn computed_map_overflow_clip_margin_reports_length() {
+        let m = div_computed_map("<div>x</div>", "div { overflow-clip-margin: 10px; }");
+        assert_eq!(m.get("overflow-clip-margin").map(String::as_str), Some("10px"));
     }
 }

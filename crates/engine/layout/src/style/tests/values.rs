@@ -1512,3 +1512,35 @@ use super::*;
         );
         assert_eq!(s.width, None);
     }
+
+    // ── `scrollbar-gutter` (BUG-505): `stable && both-edges?`, order-independent ──
+
+    #[test]
+    fn scrollbar_gutter_parses_all_three_forms() {
+        assert_eq!(ScrollbarGutter::parse("auto"), Some(ScrollbarGutter::Auto));
+        assert_eq!(ScrollbarGutter::parse("stable"), Some(ScrollbarGutter::Stable));
+        assert_eq!(
+            ScrollbarGutter::parse("stable both-edges"),
+            Some(ScrollbarGutter::StableBothEdges)
+        );
+    }
+
+    #[test]
+    fn scrollbar_gutter_accepts_both_edges_stable_reversed() {
+        // CSS Overflow L4 §3.3's `&&` combinator doesn't fix token order —
+        // confirmed by WPT `scrollbar-gutter-valid.html`'s
+        // `"both-edges stable"` case, which must parse identically to
+        // `"stable both-edges"`.
+        assert_eq!(
+            ScrollbarGutter::parse("both-edges stable"),
+            Some(ScrollbarGutter::StableBothEdges)
+        );
+    }
+
+    #[test]
+    fn scrollbar_gutter_rejects_invalid_combinations() {
+        assert_eq!(ScrollbarGutter::parse("both-edges"), None);
+        assert_eq!(ScrollbarGutter::parse("stable both"), None);
+        assert_eq!(ScrollbarGutter::parse("auto stable"), None);
+        assert_eq!(ScrollbarGutter::parse(""), None);
+    }

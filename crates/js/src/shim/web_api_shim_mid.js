@@ -1837,6 +1837,56 @@ function _lumen_css_canonical_scroll_offset(strVal, allowAuto, nonNegative) {
     return _lumen_css_canonical_length(v, allowAuto, nonNegative);
 }
 
+// CSS Overflow L4 §propdef-text-overflow (BUG-505): `clip | ellipsis |
+// <string>` — a single token, either of the two keywords or a quoted
+// string (the custom truncation marker). The engine's own parser
+// (`style/apply/text.rs`) implements only `clip`/`ellipsis` so far — the
+// `<string>` form is validated/round-tripped here at the CSSOM layer per
+// spec even though the cascade doesn't act on it yet (Phase 0), same shape
+// as other longhands whose visual effect trails their CSSOM validation.
+function _lumen_css_canonical_text_overflow(strVal) {
+    var v = strVal.trim();
+    if (/^clip$/i.test(v)) return 'clip';
+    if (/^ellipsis$/i.test(v)) return 'ellipsis';
+    if (/^"([^"\\]|\\.)*"$/.test(v) || /^'([^'\\]|\\.)*'$/.test(v)) return v;
+    return null;
+}
+
+// CSS Overflow L4 §webkit-line-clamp (compat alias, BUG-505): `none |
+// <integer [1,∞]>` — the full grammar for the legacy `-webkit-`-prefixed
+// form. The standard `line-clamp` shorthand additionally accepts
+// `<'block-ellipsis'>`/`-webkit-legacy`/`auto` and multi-token combos (CSS
+// Overflow L4 §13.1) that the engine doesn't implement — validating
+// `line-clamp` with this same reduced grammar would reject values authors
+// are allowed to round-trip verbatim today (e.g. `auto`), so it stays
+// unvalidated until that fuller grammar lands (see BUG-505's revision
+// note).
+function _lumen_css_canonical_webkit_line_clamp(strVal) {
+    var v = strVal.trim();
+    if (/^none$/i.test(v)) return 'none';
+    if (/^[0-9]+$/.test(v)) {
+        var n = parseInt(v, 10);
+        if (n >= 1) return String(n);
+    }
+    return null;
+}
+
+// CSS Overflow L4 §3.3 `scrollbar-gutter` (BUG-505): `auto | stable &&
+// both-edges?` — a closed, three-form grammar; the two-token form's order
+// doesn't matter per the `&&` combinator (`"both-edges stable"` canonicalizes
+// to `"stable both-edges"`, per WPT `scrollbar-gutter-valid.html`).
+function _lumen_css_canonical_scrollbar_gutter(strVal) {
+    var v = strVal.trim().toLowerCase();
+    if (v === 'auto') return 'auto';
+    if (v === 'stable') return 'stable';
+    var tokens = _lumen_split_top_level_ws(v);
+    if (tokens.length === 2 &&
+        tokens.indexOf('stable') !== -1 && tokens.indexOf('both-edges') !== -1) {
+        return 'stable both-edges';
+    }
+    return null;
+}
+
 // CSS Cascade L4 §7.1: these five tokens are valid specified values for
 // EVERY property, not just the ones with a registered grammar below.
 // `_LUMEN_COLOR_PROPERTIES`' `_lumen_css_canonical_color` already
@@ -1896,6 +1946,15 @@ function _lumen_canonicalize_longhand(key, strVal) {
     }
     if (key === 'scroll-snap-align') {
         return _lumen_css_canonical_scroll_snap_align(strVal);
+    }
+    if (key === 'text-overflow') {
+        return _lumen_css_canonical_text_overflow(strVal);
+    }
+    if (key === '-webkit-line-clamp') {
+        return _lumen_css_canonical_webkit_line_clamp(strVal);
+    }
+    if (key === 'scrollbar-gutter') {
+        return _lumen_css_canonical_scrollbar_gutter(strVal);
     }
     return strVal;
 }
@@ -1973,7 +2032,10 @@ function _lumen_make_style(nid) {
                 _LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key) ||
                 key === 'scrollbar-color' ||
                 key === 'scroll-snap-type' ||
-                key === 'scroll-snap-align') {
+                key === 'scroll-snap-align' ||
+                key === 'text-overflow' ||
+                key === '-webkit-line-clamp' ||
+                key === 'scrollbar-gutter') {
                 var canon = _lumen_canonicalize_longhand(key, strVal);
                 if (canon === null || canon === undefined) return; // invalid value: no-op
                 obj[key] = canon;
