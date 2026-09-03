@@ -673,7 +673,7 @@ impl Lumen {
                 let reduced_motion = self.a11y_store.reduced_motion();
                 // Keep JS scroll-state cache in sync so scrollTop/scrollLeft reads
                 // immediately after relayout return the correct clamped values.
-                let scroll_states: HashMap<u32, [f32; 4]> = collect_scroll_containers(lb_ref)
+                let scroll_states: HashMap<u32, [f32; 4]> = collect_scroll_containers_for_js_state(lb_ref)
                     .iter()
                     .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                     .collect();

@@ -1161,22 +1161,47 @@ pub struct ScrollContainer {
 ///
 /// Returns one `ScrollContainer` per LayoutBox whose overflow-x or overflow-y
 /// is `Scroll` or `Auto`. Shell calls this after each layout pass to build
-/// the scroll hit-test map.
+/// the wheel-event hit-test map — `hidden`/`clip` containers are deliberately
+/// excluded here (not wheel-scrollable, CSS Overflow L3 §3.3/§3.4), see
+/// [`collect_scroll_containers_for_js_state`] for the JS-visible counterpart.
 ///
 /// # CSS: overflow
 /// P4 wires: after adding `overflow: scroll` parsing, this function will naturally
 /// include those boxes (LayoutBox.style.overflow_x/y already parsed by P4).
 pub fn collect_scroll_containers(root: &LayoutBox) -> Vec<ScrollContainer> {
     let mut out = Vec::new();
-    collect_scroll_containers_inner(root, &mut out);
+    collect_scroll_containers_inner(root, &mut out, false);
     out
 }
 
-fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>) {
+/// Same enumeration as [`collect_scroll_containers`], but also includes
+/// `overflow: hidden`/`clip` containers.
+///
+/// CSSOM View defines `scrollLeft`/`scrollTop`/`scrollWidth`/`scrollHeight`
+/// for any element establishing a scroll container, not only the
+/// wheel-scrollable ones: `hidden` is still programmatically scrollable
+/// (`set_scroll_position` already honors it) and `clip` still reports a
+/// nonzero scrollable-overflow size even though it rejects every scroll
+/// write. Before this split, the shell fed the *wheel-routable* list
+/// (`collect_scroll_containers`) straight into `update_scroll_states`, so a
+/// `hidden`/`clip` container's real, correctly-clamped `scroll_x`/`scroll_y`
+/// (set by [`set_scroll_position`]) never reached the JS-visible cache and
+/// every read fell back to the shim's zero default (BUG-504, part 7). Use
+/// this function at every call site that feeds `update_scroll_states`;
+/// wheel/hit-test call sites must keep using [`collect_scroll_containers`].
+pub fn collect_scroll_containers_for_js_state(root: &LayoutBox) -> Vec<ScrollContainer> {
+    let mut out = Vec::new();
+    collect_scroll_containers_inner(root, &mut out, true);
+    out
+}
+
+fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>, include_non_wheel: bool) {
     use style::Overflow;
     let s = &b.style;
-    let is_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto);
-    let is_scroll_y = matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto);
+    let is_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto)
+        || (include_non_wheel && matches!(s.overflow_x, Overflow::Hidden | Overflow::Clip));
+    let is_scroll_y = matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto)
+        || (include_non_wheel && matches!(s.overflow_y, Overflow::Hidden | Overflow::Clip));
     if is_scroll_x || is_scroll_y {
         let clip = padding_box(b);
         let scroll_width = content_width(b);
@@ -1193,7 +1218,7 @@ fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>
         });
     }
     for child in &b.children {
-        collect_scroll_containers_inner(child, out);
+        collect_scroll_containers_inner(child, out, include_non_wheel);
     }
 }
 

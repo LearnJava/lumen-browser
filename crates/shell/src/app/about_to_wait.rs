@@ -1374,7 +1374,7 @@ impl Lumen {
                     self.display_list_epoch = next_dl_epoch(self.display_list_epoch);
                     // Sync JS cache so scrollTop/scrollLeft reads are accurate, then fire
                     // non-bubbling scroll events on each scrolled container.
-                    let states: HashMap<u32, [f32; 4]> = collect_scroll_containers(lb)
+                    let states: HashMap<u32, [f32; 4]> = collect_scroll_containers_for_js_state(lb)
                         .iter()
                         .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                         .collect();

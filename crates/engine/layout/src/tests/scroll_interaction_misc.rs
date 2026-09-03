@@ -1162,6 +1162,58 @@ fn collect_scroll_containers_overflow_hidden_excluded() {
     assert_eq!(containers.len(), 0, "overflow:hidden should not be a scroll container");
 }
 
+// BUG-504 part 8: `collect_scroll_containers` (wheel-routable) and
+// `collect_scroll_containers_for_js_state` (JS-visible scrollLeft/Top/Width/
+// Height) must diverge on `hidden`/`clip` — see the doc comment on the latter
+// for why a single shared list broke `hidden`/`clip` JS-visible scroll state.
+
+#[test]
+fn collect_scroll_containers_for_js_state_includes_hidden() {
+    let root = lay_full(
+        "<div id=\"s\"><p>c</p></div>",
+        "#s { overflow: hidden; width: 100px; height: 50px; }",
+    );
+    assert_eq!(collect_scroll_containers(&root).len(), 0, "still not wheel-routable");
+    let js_containers = collect_scroll_containers_for_js_state(&root);
+    assert_eq!(js_containers.len(), 1, "hidden must be JS-visible");
+}
+
+#[test]
+fn collect_scroll_containers_for_js_state_includes_clip() {
+    let root = lay_full(
+        "<div id=\"s\"><div id=\"child\"></div></div>",
+        "#s { overflow: clip; width: 100px; height: 50px; } \
+         #child { width: 300px; height: 30px; }",
+    );
+    assert_eq!(collect_scroll_containers(&root).len(), 0, "clip is not wheel-routable");
+    let js_containers = collect_scroll_containers_for_js_state(&root);
+    assert_eq!(js_containers.len(), 1, "clip must be JS-visible");
+    assert!(
+        (js_containers[0].scroll_width - 300.0).abs() < 0.5,
+        "clip still reports the real scrollable-overflow size, only writes are rejected \
+         (that half is set_scroll_position's job, not collection's), got {}",
+        js_containers[0].scroll_width
+    );
+}
+
+#[test]
+fn collect_scroll_containers_for_js_state_reflects_programmatic_scroll_on_hidden() {
+    // Mirrors the WPT repro this bug is chasing: `overflow:hidden` must be
+    // programmatically scrollable (`set_scroll_position` already allows it,
+    // BUG-504 part 7) AND that offset must reach the JS-visible collection —
+    // before this split, `hidden` was invisible to it entirely.
+    let mut root = lay_full(
+        "<div id=\"s\"><div id=\"child\"></div></div>",
+        "#s { overflow: hidden; width: 100px; height: 50px; } \
+         #child { width: 300px; height: 30px; }",
+    );
+    let node = collect_scroll_containers_for_js_state(&root)[0].node;
+    assert!(set_scroll_position(&mut root, node, 40.0, 0.0));
+    let js_containers = collect_scroll_containers_for_js_state(&root);
+    assert_eq!(js_containers.len(), 1);
+    assert_eq!(js_containers[0].scroll_x, 40.0);
+}
+
 #[test]
 fn collect_scroll_containers_transform_grows_scroll_width() {
     // BUG-504: a child that only overflows via `transform` must still grow

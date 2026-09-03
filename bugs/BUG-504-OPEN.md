@@ -626,3 +626,72 @@ files — the same 4 `scrollbar-gutter-propagation-*.html` (BUG-529) plus
 needs the `collect_scroll_containers`-vs-JS-state split above (and
 BUG-523) before it can pass live, even though its layout-engine half is now
 correct and unit-tested. Status stays `OPEN`.
+
+## Срез 2026-09-03 (P3, часть 8): JS-visible/wheel-routable scroll-container split landed
+
+Took the "collect_scroll_containers-vs-JS-state split" part 7 scoped out.
+**Correction to part 7's citation:** "(BUG-529)" next to the 4
+`scrollbar-gutter-propagation-*.html` files was wrong — `BUG-529` is
+`window.innerWidth`/`innerHeight`/`outerWidth`/`outerHeight` missing
+entirely, an unrelated gap (those tests do reference `window.innerWidth` in
+their assertions, so BUG-529 is a genuine *prerequisite* for them, but it is
+not "the bug" tracking the propagation mechanism itself — no such bug is
+filed; the propagation files' remaining gap is the CSS Overflow L4
+viewport-gutter-propagation mechanism, still unfiled and out of this slice).
+
+**Implemented:** `collect_scroll_containers` (`crates/engine/layout/src/lib.rs`)
+enumerates only `Scroll`/`Auto` containers — correct for its wheel-routing/
+hit-testing callers, but the shell was ALSO using it to build every payload
+handed to `update_scroll_states`, which sets the JS-visible
+`scrollLeft`/`scrollTop`/`scrollWidth`/`scrollHeight` cache. `hidden`/`clip`
+containers are absent from that list, so even though `set_scroll_position`
+(part 7) correctly clamps and stores their offset in the `LayoutBox` tree,
+the JS shim never saw it — every read fell back to the shim's zero default.
+
+Added `collect_scroll_containers_for_js_state`, identical enumeration plus
+`Hidden`/`Clip`, and switched every `update_scroll_states`-feeding call site
+to it: `page_load.rs`'s initial seed, `relayout.rs`'s post-relayout push,
+`about_to_wait.rs`'s programmatic-scroll-request drain, and — found only
+while auditing every caller, not part of the site list part 7 named —
+`lumen/scrolling.rs`'s two wheel-scroll paths
+(`try_scroll_overflow_container`, `try_scroll_frame_overflow_container`).
+Those two matter because `update_scroll_states` **replaces** the cache
+wholesale rather than merging: they used to rebuild it from the
+wheel-routable `scroll_containers` field, which would have silently erased
+any `hidden`/`clip` container's JS-visible state a previous relayout had
+just populated, the moment the next wheel notch fired anywhere on the page —
+a regression this slice's own fix would have introduced if left unfixed.
+Wheel-routing itself (`self.scroll_containers`, `frames[idx].scroll_containers`,
+`FrameHandle` construction in `frames.rs`) is untouched — those must stay
+`Scroll`/`Auto`-only, per the existing (and still passing)
+`collect_scroll_containers_overflow_hidden_excluded` guard.
+
+**Regression coverage:** 3 new tests in `scroll_interaction_misc.rs` —
+`collect_scroll_containers_for_js_state_includes_hidden`,
+`..._includes_clip` (also asserts `clip`'s `scroll_width` still reports the
+real overflow size, only writes are rejected — that half is
+`set_scroll_position`'s job), `..._reflects_programmatic_scroll_on_hidden`
+(mirrors the WPT repro's first three assertions: `overflow:hidden` +
+`scrollTo` + a JS-visible read). `cargo test -p lumen-layout --lib`:
+3738/3738 (3735 pre-existing + 3 new, 1 `#[ignore]`d as before).
+`cargo clippy -p lumen-layout --all-targets -- -D warnings` and
+`cargo clippy -p lumen-shell --all-targets -- -D warnings`: clean (two
+`redundant_closure` catches in the new `scrolling.rs` code fixed inline).
+
+**What this does and does not close:** the WPT file's first block —
+`overflow:hidden`, `scrollTo(-40, 50)`, read `scrollLeft`/`scrollTop` back —
+is exactly the gap this slice closes (confirmed by the new unit test
+mirroring that exact sequence). The file's second half — `scroller.style.
+overflow = 'clip'` followed by a **synchronous** read of the now-clamped
+`scrollLeft`/`scrollTop`, no wait in between — is not: a style mutation from
+JS does not synchronously re-run relayout/`update_scroll_states` in this
+engine (no synchronous style/layout flush before a JS geometry read is a
+known, separate architectural gap — BUG-468/BUG-493/CSSOM-4, "not to be
+reinvestigated per-file"), so the clamp-to-0-on-clip behavior this bug's
+part 7 built into `set_scroll_position` only becomes JS-visible on the
+*next* relayout, not immediately. Live WPT verification not performed this
+slice (no `tests/wpt/.venv` in this pool slot, same constraint as parts 4/5).
+Remaining scope unchanged in count (5 files) — this slice narrows *why* each
+is still open rather than closing one: propagation files need BUG-529 +
+an unfiled viewport-gutter-propagation mechanism; the vertical-rl clip file
+needs the CSSOM-4 sync-flush architecture, out of P3's point-fix scope.

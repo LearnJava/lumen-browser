@@ -23,6 +23,6 @@
 2637	crates/js/src/subtle_crypto.rs
 2608	crates/engine/layout/src/selector_query.rs
 2365	crates/js/src/video_bindings.rs
-2300	crates/engine/layout/src/tests/scroll_interaction_misc.rs
+2352	crates/engine/layout/src/tests/scroll_interaction_misc.rs
 2262	crates/shell/src/frames.rs
 2067	crates/js/src/web_audio.rs
