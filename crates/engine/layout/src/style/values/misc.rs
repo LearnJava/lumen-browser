@@ -141,9 +141,11 @@ impl ScrollbarGutter {
         if lc == "stable" {
             return Some(Self::Stable);
         }
-        // `stable both-edges` — двухтокеновая форма.
+        // `stable && both-edges?` — double-bar grammar, order-independent
+        // (CSS Overflow L4 §3.3, confirmed by WPT
+        // `scrollbar-gutter-valid.html`'s `"both-edges stable"` case).
         let tokens: Vec<&str> = lc.split_whitespace().collect();
-        if tokens == ["stable", "both-edges"] {
+        if tokens == ["stable", "both-edges"] || tokens == ["both-edges", "stable"] {
             return Some(Self::StableBothEdges);
         }
         None
