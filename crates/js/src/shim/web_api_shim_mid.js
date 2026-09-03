@@ -1140,9 +1140,9 @@ function _lumen_make_class_list(nid) {
 // longhand-keyed for the covered groups, so a later per-longhand read
 // (`style.marginTop`) never has to find a shorthand key it doesn't know how
 // to decompose. An invalid token falls back to storing the raw shorthand
-// key/value pair, same as any other unrecognized property. `border-style`
-// has no canon function yet (no longhand grammar), so it stays on this
-// pass-through path, same as before.
+// key/value pair, same as any other unrecognized property. Срез 13 gave
+// `border-style` a canon function (see `_LUMEN_TRBL_SHORTHAND_CANON` below),
+// so it now goes through this same expansion path too.
 //
 // Срез 10: a plain (non-shorthand) declaration now runs through the same
 // per-property canon-or-reject dispatch (`_lumen_canonicalize_longhand`,
@@ -1235,13 +1235,15 @@ function _lumen_shorthand_value(obj, shorthand) {
 // invalid token drops the WHOLE declaration — CSS rejects a shorthand value
 // wholesale if any component fails, mirroring `setProperty`'s existing
 // no-op-on-invalid behavior for single longhands. Only the shorthands that
-// already have a validated per-longhand grammar are wired here —
-// `border-style` has none yet and stays on the naive pass-through path,
-// same as its longhands.
+// already have a validated per-longhand grammar are wired here. Срез 13:
+// `border-style` joined once its longhands got a keyword grammar (see
+// `_LUMEN_KEYWORD_PROPERTIES` below) — its canon fn reuses that same
+// `border-top-style` keyword list rather than duplicating it.
 var _LUMEN_TRBL_SHORTHAND_CANON = {
     'margin':       function(v) { return _lumen_css_canonical_length(v, true, false); },
     'padding':      function(v) { return _lumen_css_canonical_length(v, false, true); },
     'border-width': function(v) { return _lumen_css_canonical_line_width(v); },
+    'border-style': function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['border-top-style']); },
     'border-color': function(v) { return _lumen_css_canonical_color(v); },
     'inset':        function(v) { return _lumen_css_canonical_length(v, true, false); },
 };
@@ -1450,8 +1452,11 @@ var _LUMEN_SIZING_LENGTH_PROPERTIES = {
 // (`crates/engine/layout/src/style.rs::parse_overflow_kw` and neighbors),
 // NOT the full CSS spec grammar where the engine doesn't implement it yet
 // (e.g. `visibility: collapse` IS in this list — the engine recognizes it —
-// but `border-style`'s `hidden`/`groove`/`ridge`/`inset`/`outset` are not,
-// since `BorderStyle` has no variants for them, `style/values/box_model.rs`).
+// but `border-style`'s `hidden`/`groove`/`ridge`/`inset`/`outset` are NOT
+// (срез 13), since `BorderStyle` has no variants for them,
+// `style/values/box_model.rs` — the five values it does list
+// (`none`/`solid`/`dashed`/`dotted`/`double`) are the full grammar
+// `parse_border_style_kw` (`style/parse/box_sides.rs`) accepts.
 // `overflow-x`/`overflow-y` (срез 9) list matches `style.rs::parse_overflow_kw`
 // exactly (`visible`/`hidden`/`clip`/`scroll`/`auto` — CSS Overflow L3's
 // `no-display`/`no-content` are unimplemented by the engine, so they stay
@@ -1516,6 +1521,23 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'ruby-position': ['over', 'under', 'alternate'],
     'ruby-align':    ['start', 'center', 'space-between', 'space-around'],
     'ruby-merge':    ['separate', 'merge', 'auto'],
+    // Срез 13: `border-*-style` longhands, physical and logical alike (the
+    // logical ones resolve through the same `parse_border_style_kw` as their
+    // physical counterparts, `crates/engine/layout/src/style/apply/paint.rs`
+    // — identical grammar, same pattern as the border-*-width logical
+    // longhands, срез 2/4). List is the five keywords the engine's own
+    // parser accepts — see the срез-7-note edit above for why `hidden`/
+    // `groove`/`ridge`/`inset`/`outset` are excluded. The `border-style`
+    // shorthand itself is wired separately, through
+    // `_LUMEN_TRBL_SHORTHAND_CANON` (it reuses `border-top-style`'s list).
+    'border-top-style':    ['none', 'solid', 'dashed', 'dotted', 'double'],
+    'border-right-style':  ['none', 'solid', 'dashed', 'dotted', 'double'],
+    'border-bottom-style': ['none', 'solid', 'dashed', 'dotted', 'double'],
+    'border-left-style':   ['none', 'solid', 'dashed', 'dotted', 'double'],
+    'border-inline-start-style': ['none', 'solid', 'dashed', 'dotted', 'double'],
+    'border-inline-end-style':   ['none', 'solid', 'dashed', 'dotted', 'double'],
+    'border-block-start-style':  ['none', 'solid', 'dashed', 'dotted', 'double'],
+    'border-block-end-style':    ['none', 'solid', 'dashed', 'dotted', 'double'],
 };
 
 // CSS Scrollbars L1 §2 (CSSOM-2/BUG-484, срез 11): `scrollbar-color: auto |
@@ -1574,10 +1596,9 @@ function _lumen_css_canonical_scrollbar_color(strVal) {
 // Срез 12 extended the same bypass to the TRBL/`overflow` shorthand paths
 // (`_lumen_expand_trbl_shorthand`/`_lumen_expand_overflow_shorthand` above)
 // — `margin: initial` now fans the keyword out to all four longhands
-// instead of being rejected. `border-style` stays out of reach of this
-// bypass on the shorthand path — it has no entry in
-// `_LUMEN_TRBL_SHORTHAND_CANON` at all yet (no longhand grammar, срез 7/9),
-// so its shorthand never reaches `_lumen_expand_trbl_shorthand`.
+// instead of being rejected. Срез 13 gave `border-style` an entry in
+// `_LUMEN_TRBL_SHORTHAND_CANON`, so `border-style: initial` now reaches
+// `_lumen_expand_trbl_shorthand` and gets the same fan-out too.
 var _LUMEN_CSS_WIDE_KEYWORDS = ['initial', 'inherit', 'unset', 'revert', 'revert-layer', 'revert-rule'];
 
 // Срез 10: single dispatch point for "canonicalize (or reject) a plain
