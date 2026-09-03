@@ -1742,6 +1742,56 @@ function _lumen_css_canonical_scrollbar_color(strVal) {
     return thumb + ' ' + track;
 }
 
+// CSS Scroll Snap L1 §3.1 (CSSOM-2/BUG-484, срез 18): `scroll-snap-type:
+// none | [ x | y | block | inline | both ] [ mandatory | proximity ]?` —
+// same "one longhand, several tokens" shape as `scrollbar-color` above, so
+// it gets its own canon function rather than a `_LUMEN_KEYWORD_PROPERTIES`
+// entry (that table is strictly one token). Each token is validated through
+// the native `_lumen_css_canonical_keyword` the flat keyword grammars use,
+// so casing behaves identically. Unlike the lenient `parse_scroll_snap_type`
+// in `style/parse/box_sides.rs` (cascade side — silently ignores unknown
+// tokens and keeps the defaults), this REJECTS the whole value on any
+// unrecognized or out-of-order token, per CSSOM §5.4 "parse a CSS
+// declaration block".
+var _LUMEN_SCROLL_SNAP_TYPE_AXIS = ['x', 'y', 'block', 'inline', 'both'];
+var _LUMEN_SCROLL_SNAP_TYPE_STRICTNESS = ['mandatory', 'proximity'];
+function _lumen_css_canonical_scroll_snap_type(strVal) {
+    var v = strVal.trim();
+    if (v.length === 0) return null;
+    if (/^none$/i.test(v)) return 'none';
+    var tokens = _lumen_split_top_level_ws(v);
+    if (tokens.length < 1 || tokens.length > 2) return null;
+    var axis = _lumen_css_canonical_keyword(tokens[0], _LUMEN_SCROLL_SNAP_TYPE_AXIS);
+    if (axis === null || axis === undefined) return null;
+    if (tokens.length === 1) return axis;
+    var strictness = _lumen_css_canonical_keyword(tokens[1], _LUMEN_SCROLL_SNAP_TYPE_STRICTNESS);
+    if (strictness === null || strictness === undefined) return null;
+    return axis + ' ' + strictness;
+}
+
+// CSS Scroll Snap L1 §6.1 (CSSOM-2/BUG-484, срез 18): `scroll-snap-align: [
+// none | start | end | center ]{1,2}` — first token is the block-axis
+// keyword, second (if present) the inline-axis one. The specified-value
+// serialization keeps whatever token count was actually given (not expanded
+// to two on a single-token value): the spec's "repeat to two" rule lives in
+// the COMPUTED-value section, and that expansion already happens on the
+// cascade side (`motion.rs`'s `parse_scroll_snap_align`, 1-token branch) —
+// duplicating it here would apply it twice.
+var _LUMEN_SCROLL_SNAP_ALIGN_KEYWORDS = ['none', 'start', 'end', 'center'];
+function _lumen_css_canonical_scroll_snap_align(strVal) {
+    var v = strVal.trim();
+    if (v.length === 0) return null;
+    var tokens = _lumen_split_top_level_ws(v);
+    if (tokens.length < 1 || tokens.length > 2) return null;
+    var out = [];
+    for (var i = 0; i < tokens.length; i++) {
+        var kw = _lumen_css_canonical_keyword(tokens[i], _LUMEN_SCROLL_SNAP_ALIGN_KEYWORDS);
+        if (kw === null || kw === undefined) return null;
+        out.push(kw);
+    }
+    return out.join(' ');
+}
+
 // CSS Cascade L4 §7.1: these five tokens are valid specified values for
 // EVERY property, not just the ones with a registered grammar below.
 // `_LUMEN_COLOR_PROPERTIES`' `_lumen_css_canonical_color` already
@@ -1791,6 +1841,12 @@ function _lumen_canonicalize_longhand(key, strVal) {
     }
     if (key === 'scrollbar-color') {
         return _lumen_css_canonical_scrollbar_color(strVal);
+    }
+    if (key === 'scroll-snap-type') {
+        return _lumen_css_canonical_scroll_snap_type(strVal);
+    }
+    if (key === 'scroll-snap-align') {
+        return _lumen_css_canonical_scroll_snap_align(strVal);
     }
     return strVal;
 }
@@ -1865,7 +1921,9 @@ function _lumen_make_style(nid) {
                 _LUMEN_LINE_WIDTH_PROPERTIES.hasOwnProperty(key) ||
                 _LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key) ||
                 _LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key) ||
-                key === 'scrollbar-color') {
+                key === 'scrollbar-color' ||
+                key === 'scroll-snap-type' ||
+                key === 'scroll-snap-align') {
                 var canon = _lumen_canonicalize_longhand(key, strVal);
                 if (canon === null || canon === undefined) return; // invalid value: no-op
                 obj[key] = canon;
