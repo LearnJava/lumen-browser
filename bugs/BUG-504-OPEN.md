@@ -776,3 +776,71 @@ and-ignores-scroll-offsets-vertical-rl.html`, unrelated to this mechanism —
 still needs the CSSOM-4 synchronous style/layout flush architecture (part 8's
 finding), out of P3's point-fix scope. Remaining scope: 1 file. Status stays
 `OPEN`.
+
+## Срез 2026-09-04 (P3, часть 10): CSSOM-4 landed since part 9 — half the
+remaining gap closed, the other half turned out to be a separate bug
+
+CSSOM-4 (BUG-493) merged to `main` after part 9 was written (`0cc7571ac`,
+after `e71a486d2`), so the "needs the CSSOM-4 architecture" note above is
+stale — the architecture now exists. `_lumen_get_scroll_state`
+(`crates/js/src/v8_runtime/install/platform.rs::install_scroll_state`) did
+not call `FlushHandles::maybe_flush()` at all, unlike
+`_lumen_get_bounding_rect`/`getComputedStyle`, which is why the vertical-rl
+file's second half (`overflow` flipping to `clip`, then a same-tick read)
+still saw the pre-mutation cache.
+
+**Wiring `maybe_flush()` in was not a mechanical copy of the geometry/style
+case, though.** `maybe_flush`'s fresh layout tree
+(`lumen_layout::layout_measured_with_counters`) starts every scroll
+container at `scroll_x`/`scroll_y == 0.0` — the box-tree construction
+default (`crates/engine/layout/src/box_tree/build.rs`, unconditional at
+every construction site). A normal relayout never shows this because
+`graft_geometry` clones prior laid-out subtrees (scroll offset included)
+for anything unchanged; this one-off flush tree is built without going
+through that step at all. Calling `collect_scroll_containers_for_js_state`
+straight on the fresh tree would have zeroed every scrolled container's
+`scrollLeft`/`scrollTop` on ANY same-tick style-triggered flush — not just
+the `overflow: clip` transition this bug is about, a regression for
+`getBoundingClientRect`/`getComputedStyle` reads of descendants inside a
+scrolled container too (their fresh-tree geometry would be computed at the
+wrong scroll offset). Fixed by reapplying the pre-flush `scroll_states`
+cache onto the fresh tree via `lumen_layout::set_scroll_position` (already
+public, already does exactly the right clamp-to-fresh-extent and
+clamp-to-0-under-`clip` math — the same function `set_scroll_position`'s own
+JS-request path uses) before collecting `layout_rects`/`scroll_states` from
+it. `FlushHandles` gained a `scroll_states` field (`Arc<Mutex<HashMap<u32,
+[f32; 4]>>>`, the same one `V8JsRuntime::update_scroll_states` writes — the
+`install_scroll_state` call site now takes `flush: FlushHandles` instead of
+a redundant separate `scroll_states` parameter, keeping under clippy's
+`too_many_arguments`). Two regression tests
+(`crates/js/src/dom/tests/v8_bug504_scroll_flush.rs`): an UNRELATED
+same-tick style mutation (a sibling's `.style.color`) no longer zeroes a
+scrolled container's `scrollLeft`/`scrollTop` — confirmed to actually catch
+the regression (temporarily neutered the reapply loop, both new tests
+failed as expected, reverted). `cargo test -p lumen-js --features
+v8-backend`: 3436/3436 lib tests pass (2 pre-existing `v8_webworker`
+failures unrelated, already red on `main` before this slice — not touched).
+`cargo clippy -p lumen-js --features v8-backend --all-targets -- -D
+warnings`: clean.
+
+**This did not close the file.** Live probe
+(`tests/wpt/verify_bug504_vertical_rl_clip.py`, `--mcp-live-port` +
+`console.log` markers mirroring the WPT file's five assertions instead of
+`assert_equals`, which would have thrown on the first failure and hidden
+the rest) shows the file's FIRST two assertions fail —
+`scroller.scrollTo(-40, 50)` followed by an immediate, same-tick read of
+`scrollLeft`/`scrollTop` returns `[0, 0]`, not `[-40, 50]`, on a plain
+`overflow: hidden` container, before `overflow: clip` ever enters the
+picture. Root cause: `_lumen_request_scroll` (the native `scrollTo`/
+`scrollBy`/`scrollLeft=`/`scrollTop=` all funnel through) only pushes onto
+`pending_scrolls`, drained asynchronously by the shell next tick — no
+flush, CSSOM-4-style or otherwise, ever consults that queue, and a pure
+scroll request touches neither DOM nor style, so it doesn't even set
+`dom_dirty` to trigger one. This is a genuinely different, deeper gap than
+"needs CSSOM-4" — filed separately as
+[BUG-975](bugs/BUG-975-OPEN.md) rather than reinvestigated here, since it's
+architecturally its own decision (how to make a scroll write synchronously
+visible without a full relayout per request) and provably affects other
+files (`css/cssom-view/elementScroll.html`) independent of this one.
+Remaining scope unchanged in count (1 file) but now correctly attributed:
+blocked on BUG-975, not on CSSOM-4 (which is done). Status stays `OPEN`.
