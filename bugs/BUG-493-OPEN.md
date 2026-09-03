@@ -352,3 +352,41 @@ CSS feature produced the value being read. 8 files / 8 subtests this slice.
 `.ini` already correctly `expected: FAIL` under
 `tests/wpt/metadata/css/CSS2/normal-flow/` (unmodified, filed against
 BUG-468 originally, mechanism identical).
+
+## Срез (`css/css-backgrounds`, P3 2026-09-03) — surfaced while revising BUG-495, not a new mechanism
+
+BUG-495 (`background-position-x`/`-y` standalone longhands) landed its base
+parse/apply/serialize wiring the same day; a P3 revision ran a live WPT
+check on the 4 attributed files to see whether the residual (edge-offset
+form) was small enough for a DEBTOR classification. Instead the check
+surfaced this bug wearing a `background-position-x`/`-y` costume:
+`parsing/background-position-{x,y}-computed.html` (19 subtests each) pass
+only 1/19 — the one subtest (`'left'`/`'top'`) whose expected computed value
+(`'0%'`) happens to equal the node's untouched pre-mutation default, exactly
+срез 12's `offsetWidth` pattern transposed onto `getComputedStyle()`. Direct
+probe (`--mcp-port`, `tools/call` `eval`) confirms the boundary precisely:
+
+```js
+// same synchronous eval call — set then immediately read:
+t.style['background-position-x'] = 'center';
+getComputedStyle(t)['background-position-x']   // → "0%" (stale default)
+
+// set in one eval call, read in a SEPARATE eval call (crosses the
+// InProcessSession post-eval relayout boundary, DEVX-9):
+t.style['background-position-x'] = 'center';   // eval #1
+getComputedStyle(t)['background-position-x']   // eval #2 → "50%" (correct)
+```
+
+The 2 `animations/background-position-{x,y}-interpolation.html` files (112
+subtests each, 224 total) are unaffected and now pass 112/112 live — those
+read the interpolated value via `interpolation-testcommon.js`'s timing hooks
+(a real frame/relayout boundary between the mutation and the read), not a
+same-tick `test()` body, so this bug's boundary condition doesn't apply to
+them. `.ini` updated as part of the BUG-495 revision: both interpolation
+files' `.ini` deleted (fully green), both computed files' `.ini` kept with
+the accidental-pass subtest (`'left'`/`'top'`) removed from the FAIL list —
+the other 18 subtests per file stay correctly `expected: FAIL` under this
+bug, not BUG-495. No action taken on this bug itself (P3 does not fix
+ДОРАБОТКА-classified rows); recorded here per the doc-sync rule that a
+residual found while working a different bug belongs in the bug that
+actually tracks it.
