@@ -4679,6 +4679,171 @@ whoever resumes next has a concrete, numbered target (cut the ≈1.7μs/node
 clone, not the 5–266ns key/lookup pair) instead of S36's three-way "which one
 dominates" question.
 
+## S38 — deferred-insertion cache built (redesign (i)): halves the
+regression (~27-35% → ~5-13% slower than no cache) but still net-negative;
+root cause is not clone cost anymore, it is a second one this slice found —
+delaying the first hit delays the recursion short-circuit a hit provides
+
+Branch `p3-bug341-s38`. Resumed on explicit user request ("продолжить
+BUG-341 S38 — цель: клон поддерева в кэше layout-result"), picking up S37's
+option (i): defer the subtree clone to a key's confirmed second sighting
+instead of paying it on every miss.
+
+**Census before the fix, per `docs/perf-method.md`'s standing rule not to let
+a repeat-shape finding from one target transfer unchecked to another:** S33
+rejected exactly this idea for the CSS-Grid probe/final case because that
+case's only repeats are always exactly two occurrences (deferring to the
+second sighting would have zeroed its only hit). Whether the same holds for
+*this* cache's actual target — the flex-item redundancy CC-12 exists to
+measure — was never checked; S33's finding was about a different target
+(CSS Grid's probe/final pair), and repeat shape is a property of the target,
+not of the mechanism, so it had to be re-measured rather than assumed.
+
+**Census (measurement only, no mechanism change yet):** two new
+`LayoutKeyCensus` fields (`keys_seen_once`/`_twice`/`_three_plus`,
+`crates/engine/layout/src/box_tree/diagnostics.rs`) derived from
+`LAYOUT_KEY_SEEN`'s final per-key occurrence counts, printed by
+`bug341_s30_flex_key_census` (`crates/shell/src/tests/bug341_census.rs`).
+Measured on the same real chrome document/fixture S30-S37 used (`cargo test
+-p lumen-shell --profile dev-release bug341_s30_flex_key_census -- --ignored
+--nocapture`, dev-release):
+
+```
+[s38-shape] KEY/HOVER, each cycle: distinct_keys=271 once=25 (9.2%) twice=12 (4.4%) three_plus=234 (86.3%)
+```
+
+**The opposite shape from S33's grid case:** here 86.3% of distinct keys
+repeat three or more times in a single pass, versus only 4.4% exactly twice —
+so deferring the clone to the second sighting still serves the
+third-and-later occurrences that dominate this fixture's redundancy, while
+skipping the clone entirely on the 9.2% of keys never seen again at all
+(close to S32's own ~91%-never-read-back finding, measured against a
+different cache generation). This census result is what authorized building
+the mechanism, not an assumption carried over from S37.
+
+**Mechanism:** `LayoutResultCacheMode` (`Off`/`Eager`/`Lazy`,
+`crates/engine/layout/src/box_tree/diagnostics.rs`) replaces the old
+boolean on/off flag; `Eager` is S36's unchanged mechanism (kept, not
+replaced, for the A/B). `Lazy` adds `LAYOUT_RESULT_CACHE_SEEN`, a second
+thread-local map from `LayoutResultKey` to the style `Arc` seen at a key's
+first sighting — an `Arc::clone` (a refcount bump, ~15.7ns per S37's own
+microbench), never a full subtree clone. On a miss in `Lazy` mode
+(`lay_out_cache_checked`, `crates/engine/layout/src/box_tree/layout_dispatch.rs`):
+if the key has no marker, or its marker's style is not `ptr_eq` to the
+current call's style, record/overwrite the marker (deferred, no clone) and
+recompute normally; if the marker's style *does* match, the repeat is
+confirmed — materialize into the real `LAYOUT_RESULT_CACHE` (the clone,
+paid now for the first time) and remove the marker. A third sighting with
+the same key/style then finds the materialized entry and hits, same as
+`Eager`. `LayoutResultCacheStats` gained a `deferred` field (misses that
+only recorded a marker, no clone) so a pass's stats distinguish "confirmed
+and materialized" misses from "still deferred" ones.
+
+**Correctness:** 6 new differential tests in `lumen-layout`
+(`box_tree::tests::bug341_differential`, `layout_result_cache_lazy_*`
+prefix) — three mirror `Eager`'s existing geometry-parity checks (nested
+column flex, style-mutates-between-calls, refuses a content-visibility:auto
+subtree) under `Lazy` instead, plus three new to the deferred mechanism
+itself: `layout_result_cache_lazy_defers_first_sighting_and_hits_from_third_call`
+(three back-to-back calls: call 1 defers — `deferred: 1`, call 2 confirms
+and materializes — a real miss, `deferred` stays at 1 not 2 — call 3 hits),
+`layout_result_cache_lazy_never_hits_on_exactly_two_occurrences` (the
+mechanism's own known trade-off, checked directly rather than assumed: a
+key seen exactly twice gets zero hits, by design, not by accident — the
+mirror image of S33's original concern, now verified true of *this*
+mechanism instead of inferred from the old one), and
+`layout_result_cache_lazy_resets_the_streak_when_style_changes_between_sightings`
+(a marker recorded for style A must not confirm a repeat when the second
+sighting's style is B, a distinct `Arc` with identical field values — proves
+the check is real pointer identity, not a coincidence of the fixture never
+mutating style). `cargo test -p lumen-layout --lib`: 3675 passed, 0 failed,
+1 ignored (S38's 6 new tests, plus S36's original tests updated for the new
+`LayoutResultCacheStats.deferred` field). `cargo clippy -p lumen-layout
+--all-targets -- -D warnings` and `-p lumen-shell --all-targets -- -D
+warnings`: both clean. No display-list-affecting code touched (the cache's
+own differential tests already assert cached-vs-uncached geometry agreement,
+and the mechanism stays disabled by default), so no graphic-tests/CPU-snapshot
+regen needed per `docs/graphic-tests.md`'s rule for changes that cannot move
+pixels.
+
+**Measured** (new `bug341_s38_layout_result_cache_lazy_share`,
+`crates/shell/src/tests/bug341_census.rs` — same real chrome document,
+interleaved-per-cycle protocol as S36's own harness, extended to a third arm
+(`Off`/`Eager`/`Lazy`) rather than two; `cargo test -p lumen-shell --profile
+dev-release bug341_s38_layout_result_cache_lazy_share -- --ignored
+--nocapture`, dev-release, reproduced twice on a machine at two different
+load levels to check the direction survives, not just the absolute numbers):
+
+```
+Run 1 (busier machine):
+BUG341_S38_KEY_CACHE_OFF   min=32.50ms p50=60.21ms
+BUG341_S38_KEY_CACHE_EAGER min=41.55ms p50=69.05ms   (+27.8% min vs OFF)
+BUG341_S38_KEY_CACHE_LAZY  min=33.04ms p50=71.35ms   (+1.7% min vs OFF)
+BUG341_S38_HOVER_CACHE_OFF   min=28.51ms
+BUG341_S38_HOVER_CACHE_EAGER min=38.50ms  (+35.0% min vs OFF)
+BUG341_S38_HOVER_CACHE_LAZY  min=32.13ms  (+12.7% min vs OFF)
+
+Run 2 (quieter machine):
+BUG341_S38_KEY_CACHE_OFF   min=14.33ms
+BUG341_S38_KEY_CACHE_EAGER min=18.18ms  (+26.9% min vs OFF)
+BUG341_S38_KEY_CACHE_LAZY  min=15.06ms  (+5.1% min vs OFF)
+BUG341_S38_HOVER_CACHE_OFF   min=12.68ms
+BUG341_S38_HOVER_CACHE_EAGER min=15.75ms  (+24.2% min vs OFF)
+BUG341_S38_HOVER_CACHE_LAZY  min=13.46ms  (+6.1% min vs OFF)
+```
+
+Both runs agree on direction and rough magnitude despite a >2× difference in
+absolute times (machine load, not the mechanism): `Lazy` cuts `Eager`'s
+regression by roughly 4-5× (e.g. HOVER +35.0%→+12.7%, +24.2%→+6.1%), a real
+and reproducible improvement, matching S37's clone-cost attribution — but
+`Lazy` is still slower than no cache at every percentile in both runs (not
+just min), so this is not the net-positive result S37's concrete target was
+hoping to reach.
+
+**Why `Lazy` doesn't cross zero — a second fixed cost S37 didn't isolate:**
+`Eager`'s per-call totals (`hits=3900 misses=13860`, both runs, both
+scenarios) versus `Lazy`'s (`hits=3720 misses=26460 deferred=17340`) show
+`Lazy` recording **1.7× as many total calls** into
+`lay_out_cache_checked` as `Eager` for the *same* document/scenario/cycle
+count. This is not measurement noise — it is structural: a cache hit does
+not just skip recomputing one box, it skips the box's entire recursive
+descent (`translate_subtree` repositions an already-built subtree instead of
+calling `lay_out_inner`, which is the only call site that recurses into
+children). `Eager` can hit as early as a key's *second* sighting, so it
+starts short-circuiting subtree recursion sooner; `Lazy` cannot hit before
+the *third* sighting by construction, so every key's second sighting still
+pays a full recursive recompute of its entire subtree — work `Eager` would
+already have skipped at that point. S37 isolated the per-call fixed cost
+(key/lookup/clone) in a microbench that measured one call in isolation and
+correctly found the clone dominates *that* comparison — but a microbench of
+one call cannot see this second cost, which only exists as an emergent
+property of deferring a hit across a real recursive tree walk. **The
+transferable lesson (added to `docs/perf-method.md`): deferring a cache's
+insertion also defers its first hit, and a hit's benefit is not just "skip
+recomputing this value" — if the cached value is the root of a subtree,
+a hit's benefit also includes every recursive call the hit avoids re-entering,
+which a single-call microbench cannot see and a multi-generation deferral
+policy directly trades away.**
+
+**Left disabled by default**, same as `Eager` — `set_layout_result_cache_lazy`'s
+mode flag defaults to `Off`, not wired into any pipeline; `Eager`'s existing
+`set_layout_result_cache` is unchanged and coexists with it (both share
+`LAYOUT_RESULT_CACHE`, only the miss-handling policy differs). Standing
+pause terms unchanged: BUG-341 is not abandoned, resume only on explicit
+user request. **Not attempted:** a hybrid that keeps `Lazy`'s
+skip-the-clone-on-singletons property while still hitting as early as
+`Eager` does (e.g. storing a cheap positional summary on first sighting that
+a second sighting could reposition without a full subtree clone, closer to
+S37's un-pursued redesign (ii) — an `Rc`/`Arc`-shared subtree a hit
+repositions in place rather than clones out of); this slice's own finding
+(the recursion-short-circuit cost, not the clone cost) suggests (ii) is now
+the more promising remaining direction, not a second attempt at (i)'s own
+insertion-timing knob. **Recommendation for whoever resumes:** the census
+infrastructure (`keys_seen_once`/`twice`/`three_plus`) and both cache modes
+(`Eager`/`Lazy`) are in place as instrumented, working, disabled-by-default
+mechanisms — the next slice's job is redesign (ii) itself (share, don't
+clone, on a hit), not another insertion-policy variant of (i).
+
 ## Repro
 
 ```bash
@@ -4696,7 +4861,15 @@ cargo test -p lumen-shell --profile dev-release bug341_s27_walk_census -- --igno
 cargo test -p lumen-shell --profile dev-release bug341_s30_flex_key_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s36_layout_result_cache_share -- --ignored --nocapture
 cargo test -p lumen-layout --profile dev-release box_tree::tests::bug341_differential::bug341_s37_cache_fixed_cost_breakdown -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s38_layout_result_cache_lazy_share -- --ignored --nocapture
 ```
+
+S38 added `bug341_s38_layout_result_cache_lazy_share` (three-arm
+Off/Eager/Lazy A/B, same fixture/protocol as S36's own harness) and reused
+`bug341_s30_flex_key_census` unchanged for the occurrence-count histogram —
+that census already had the per-key `(count, style, override)` data this
+slice needed, it just was not yet folded into the printed/returned census
+struct; see this file's own S38 section above for both sets of numbers.
 
 S37 added `bug341_s37_cache_fixed_cost_breakdown`, a new isolated microbench
 in `lumen-layout` itself (`box_tree/tests/bug341_differential.rs`) rather than
