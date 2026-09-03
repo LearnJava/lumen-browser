@@ -1309,43 +1309,66 @@ fn child_scrollable_bounds(c: &LayoutBox) -> lumen_core::geom::Rect {
     lumen_core::geom::Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
 }
 
-/// Compute the content scroll-width of a box: rightmost child edge relative to the padding edge.
+/// The horizontal scrollable-overflow span of a box, as `(min_x, max_x)`
+/// relative to the padding edge (`pb.x` = 0).
 ///
-/// Returns max(padding-box width, children's right edge - padding-box left
-/// edge), where a transformed child's edge is taken from its post-transform
-/// bounds ([`child_scrollable_bounds`]) rather than its flow `rect`, and a
-/// child whose bounds don't overlap the padding box on either axis at all is
-/// excluded entirely — CSS Overflow L3 §3.3: "blocks wholly outside padding
-/// edges [do] not contribute to overflow" (BUG-504). Used to compute the max
-/// scroll offset for horizontal scrolling.
-fn content_width(b: &LayoutBox) -> f32 {
+/// `max_x` is the existing rightward-extension edge (children's right edge
+/// minus the padding-box left edge, floored at `pb.width`); `min_x` is its
+/// mirror on the other side — 0.0 unless a child's scrollable bounds
+/// ([`child_scrollable_bounds`]) start left of the padding edge, which
+/// happens for in-flow content whose block-progression direction is
+/// physically right-to-left (`writing-mode: vertical-rl`, CSS Overflow L3
+/// §3.3/§3.4 — the box's normal-flow child is positioned flush with the
+/// *right* edge by the writing-mode-aware block layout pass and extends left
+/// under it, not right). A child whose bounds don't overlap the padding box
+/// on either axis at all is excluded entirely — CSS Overflow L3 §3.3:
+/// "blocks wholly outside padding edges [do] not contribute to overflow"
+/// (BUG-504). [`set_scroll_position`] clamps against this range directly;
+/// [`content_width`] reduces it to the single-number `scrollWidth` magnitude.
+fn scrollable_extent_x(b: &LayoutBox) -> (f32, f32) {
     let pb = padding_box(b);
-    b.children.iter().fold(pb.width, |acc, c| {
+    let (mut min_x, mut max_x) = (0.0_f32, pb.width);
+    for c in &b.children {
         let bounds = child_scrollable_bounds(c);
         if !contributes_to_scrollable_overflow(c, &bounds, &pb) {
-            return acc;
+            continue;
         }
-        acc.max(bounds.x + bounds.width - pb.x)
-    })
+        min_x = min_x.min(bounds.x - pb.x);
+        max_x = max_x.max(bounds.x + bounds.width - pb.x);
+    }
+    (min_x, max_x)
 }
 
-/// Compute the content scroll-height of a box: bottommost child edge relative to the padding edge.
-///
-/// Returns max(padding-box height, children's bottom edge - padding-box top
-/// edge), where a transformed child's edge is taken from its post-transform
-/// bounds ([`child_scrollable_bounds`]) rather than its flow `rect`, and a
-/// child whose bounds don't overlap the padding box on either axis at all is
-/// excluded entirely — same rule as [`content_width`] (BUG-504). Used to
-/// compute the max scroll offset for vertical scrolling.
-fn content_height(b: &LayoutBox) -> f32 {
+/// The vertical counterpart of [`scrollable_extent_x`] — `(min_y, max_y)`
+/// relative to the padding edge (`pb.y` = 0).
+fn scrollable_extent_y(b: &LayoutBox) -> (f32, f32) {
     let pb = padding_box(b);
-    b.children.iter().fold(pb.height, |acc, c| {
+    let (mut min_y, mut max_y) = (0.0_f32, pb.height);
+    for c in &b.children {
         let bounds = child_scrollable_bounds(c);
         if !contributes_to_scrollable_overflow(c, &bounds, &pb) {
-            return acc;
+            continue;
         }
-        acc.max(bounds.y + bounds.height - pb.y)
-    })
+        min_y = min_y.min(bounds.y - pb.y);
+        max_y = max_y.max(bounds.y + bounds.height - pb.y);
+    }
+    (min_y, max_y)
+}
+
+/// Compute the content scroll-width of a box (`scrollWidth`'s magnitude):
+/// the full horizontal span of [`scrollable_extent_x`], regardless of which
+/// side it extends toward.
+fn content_width(b: &LayoutBox) -> f32 {
+    let (min_x, max_x) = scrollable_extent_x(b);
+    max_x - min_x
+}
+
+/// Compute the content scroll-height of a box (`scrollHeight`'s magnitude):
+/// the full vertical span of [`scrollable_extent_y`], regardless of which
+/// side it extends toward.
+fn content_height(b: &LayoutBox) -> f32 {
+    let (min_y, max_y) = scrollable_extent_y(b);
+    max_y - min_y
 }
 
 // ──────────────── collect_computed_styles ────────────────
@@ -1618,8 +1641,23 @@ fn collect_layout_rects_rec(
 /// Update the scroll position of a node in the layout tree.
 ///
 /// Walks the tree to find the box with `node`, clamps `(x, y)` to the valid
-/// scroll range `[0, scroll_width - clip_width] × [0, scroll_height - clip_height]`,
-/// then updates `LayoutBox.scroll_x / scroll_y`. Returns `true` if found.
+/// scroll range and updates `LayoutBox.scroll_x / scroll_y`. Returns `true`
+/// if found.
+///
+/// The range is `[min_x, max_x - clip_width] × [min_y, max_y - clip_height]`,
+/// where `(min_x, max_x)`/`(min_y, max_y)` come from [`scrollable_extent_x`]/
+/// [`scrollable_extent_y`] — `min_x`/`min_y` are 0.0 in the common case but
+/// go negative when in-flow content extends left/up of the padding edge
+/// (`writing-mode: vertical-rl`, BUG-504). `clip_w`/`clip_h` are the
+/// *padding*-box size (not `LayoutBox::rect`'s border-box — a nonzero border
+/// previously let the clamp's upper bound run `2 × border` short of the true
+/// maximum). Per axis, `overflow: clip` (CSS Overflow L3 §3.4, "disables the
+/// scrolling machinery outright") overrides the computed range entirely and
+/// pins the offset to exactly `0.0`, regardless of content size or the
+/// requested `x`/`y` — `clip` still establishes a scroll container's
+/// geometry (`scrollWidth` etc. via [`content_width`]) but accepts no scroll
+/// offset at all, unlike `hidden`/`scroll`/`auto` which are still
+/// programmatically scrollable.
 ///
 /// Shell calls this on wheel events after determining the target scroll container
 /// via `collect_scroll_containers()` + hit testing against the pointer position.
@@ -1637,12 +1675,19 @@ pub fn find_box_by_node(root: &LayoutBox, node: lumen_dom::NodeId) -> Option<&La
 
 pub fn set_scroll_position(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32, y: f32) -> bool {
     if root.node == node {
-        let sw = content_width(root);
-        let sh = content_height(root);
-        let clip_w = root.rect.width;
-        let clip_h = root.rect.height;
-        root.scroll_x = x.clamp(0.0, (sw - clip_w).max(0.0));
-        root.scroll_y = y.clamp(0.0, (sh - clip_h).max(0.0));
+        let pb = padding_box(root);
+        root.scroll_x = if root.style.overflow_x == style::Overflow::Clip {
+            0.0
+        } else {
+            let (min_x, max_x) = scrollable_extent_x(root);
+            x.clamp(min_x, (max_x - pb.width).max(min_x))
+        };
+        root.scroll_y = if root.style.overflow_y == style::Overflow::Clip {
+            0.0
+        } else {
+            let (min_y, max_y) = scrollable_extent_y(root);
+            y.clamp(min_y, (max_y - pb.height).max(min_y))
+        };
         return true;
     }
     for child in &mut root.children {
