@@ -94,7 +94,9 @@ P5's mandate is **audit + cheap safe cleanup + filing tasks** — never solo ref
 - **Workspace-clippy.** P5 is the only role that runs `cargo clippy --workspace` *as its own task* — the full sweep is its whole point; it catches cross-crate breakage that per-crate checks hide after multi-session merges. Every role also meets it once per task inside `/lumen-task-finish`'s gate ([`commands.md`](commands.md) §Cargo output rules); what is P5-specific is running it standalone and on demand.
 - **Branch prefix:** `p5-health-<date>` or `p5-<topic>`. Worktree mandatory, same as P1–P4.
 
-Full role definition: `STATUS-P5.md`.
+The mandate is **this** section. `STATUS-P5.md` holds the operational half — alias→action table,
+the recurring-sweep queue and the per-sweep workflow — in the sectioned format the orchestrator
+needs (see the exception under §Task tracking schema).
 
 ---
 
@@ -126,10 +128,17 @@ ROADMAP.md (one line per task, status ≠ done)   ← master task list for P1/P2
    │     `// CSS:` / `// BUG-NNN` handoff rather than a list row.
    │     NOTHING else — no headers, tables, descriptions, completed tasks, In progress/Recent.
    │     (history lives in git log; readiness in ROADMAP status / CAPABILITIES.md / BUGS.md)
+   │     ONE exception, and it is load-bearing: STATUS-P5.md (see below).
    │
    └─ docs/tasks/<id>.md   ← detailed brief, ONLY for an unimplemented task
 ```
 
+- **`STATUS-P5.md` is a deliberate exception — do not "fix" it into pointer lines.** P5's work is
+  recurrent, not a queue that empties, so the file keeps the old sectioned format (`## In progress`,
+  `## Next` with a table, the alias→action table). This is not drift: `scripts/orchestrator.py`
+  (`has_tasks`, §"Поддерживает два формата") parses **both** formats, and P5's scheduling depends on
+  the `## Next` table being there — emptying the file would make `has_tasks("P5")` return False and
+  silently stop the role from ever being scheduled. Change the parser first if this must change.
 - **The order inside `STATUS-PN.md` is binding — work it strictly top-down.** It is a dependency
   order, not a wish list: a lower line is frequently the symptom of a higher one, so picking a task
   out of order produces a fix layered on a live defect. Take line 1; if it cannot be started, tell
