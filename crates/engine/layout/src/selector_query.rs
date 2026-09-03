@@ -23,13 +23,14 @@ use crate::style::{
     CssColor,
     Cursor, Direction, Display, FillRule, FilterFn, FloatSide, ForcedColorAdjust, FontStretch,
     FontStyle, FontWeight,
-    FontVariantCaps, FontVariantEmoji, Isolation, IterationCount, Length, LengthOrAuto,
-    MixBlendMode, ObjectPosition, Overflow, OutlineColor, OverscrollBehavior,
+    FontVariantCaps, FontVariantEmoji, ImageRendering, Isolation, IterationCount, Length,
+    LengthOrAuto,
+    MixBlendMode, ObjectFit, ObjectPosition, Overflow, OutlineColor, OverscrollBehavior,
     OutlineStyle, PointerEvents, Position, PositionComponent, PrintColorAdjust, Quotes,
     ScrollbarWidth, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign,
     TextDecorationLine, TextDecorationStyle,
     TextEmphasisStyle, TextOverflow, TextShadow, TextTransform, TimingFunction, TransformFn,
-    Visibility, WhiteSpace,
+    VerticalAlign, Visibility, WhiteSpace,
     WhiteSpaceCollapse, WritingMode,
     ComputedStyle,
 };
@@ -547,6 +548,26 @@ fn position_component_to_css(c: PositionComponent) -> String {
                 format!("{}%", pct)
             }
         }
+    }
+}
+
+/// Serialises `style.vertical_align` — CSS 2.1 §10.8.1 keywords as their
+/// lowercase-hyphenated form, `Length`/`Percent` as `<n>px`/`<n>%` (the
+/// latter stored as a raw percentage number, same convention as
+/// [`length_to_css`]'s `Length::Percent`, not the `0.0..=1.0` fraction
+/// [`PositionComponent`] uses).
+fn vertical_align_to_css(va: &VerticalAlign) -> String {
+    match va {
+        VerticalAlign::Baseline => "baseline".into(),
+        VerticalAlign::Sub => "sub".into(),
+        VerticalAlign::Super => "super".into(),
+        VerticalAlign::Top => "top".into(),
+        VerticalAlign::TextTop => "text-top".into(),
+        VerticalAlign::Middle => "middle".into(),
+        VerticalAlign::Bottom => "bottom".into(),
+        VerticalAlign::TextBottom => "text-bottom".into(),
+        VerticalAlign::Length(px) => px_str(*px),
+        VerticalAlign::Percent(p) => format!("{p}%"),
     }
 }
 
@@ -1108,6 +1129,27 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("background-position-y".into(),
         background_position_axis_to_css(&style.background_layers, |l| l.position.y));
 
+    // ── Replaced elements (CSS Images L3) ──────────────────────────
+    m.insert("object-fit".into(), match style.object_fit {
+        ObjectFit::Fill => "fill",
+        ObjectFit::Contain => "contain",
+        ObjectFit::Cover => "cover",
+        ObjectFit::None => "none",
+        ObjectFit::ScaleDown => "scale-down",
+    }.into());
+    m.insert("object-position".into(), format!(
+        "{} {}",
+        position_component_to_css(style.object_position.x),
+        position_component_to_css(style.object_position.y),
+    ));
+    m.insert("image-rendering".into(), match style.image_rendering {
+        ImageRendering::Auto => "auto",
+        ImageRendering::Smooth => "smooth",
+        ImageRendering::HighQuality => "high-quality",
+        ImageRendering::CrispEdges => "crisp-edges",
+        ImageRendering::Pixelated => "pixelated",
+    }.into());
+
     // `border-color` shorthand — CSSOM `getPropertyValue` on a shorthand only
     // resolves when every longhand it covers serializes to the same value
     // (matches real UA behaviour: differing per-side colors read back as "").
@@ -1234,6 +1276,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextOverflow::Ellipsis => "ellipsis",
     }.into());
     m.insert("text-indent".into(), length_to_css(&style.text_indent));
+    m.insert("vertical-align".into(), vertical_align_to_css(&style.vertical_align));
 
     // ── Overflow / stacking ───────────────────────────────────────
     m.insert("overflow-x".into(), overflow_to_css(style.overflow_x).into());
@@ -2604,5 +2647,42 @@ mod tests {
             "div { writing-mode: vertical-rl; inline-size: 120px; }",
         );
         assert_eq!(m.get("inline-size"), None);
+    }
+
+    // ── computed_style_to_map: CSSOM-3 slice 3 (BUG-537 family) ──────────────
+
+    #[test]
+    fn computed_map_object_fit_and_position_defaults() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("object-fit").map(String::as_str), Some("fill"));
+        assert_eq!(m.get("object-position").map(String::as_str), Some("50% 50%"));
+        assert_eq!(m.get("image-rendering").map(String::as_str), Some("auto"));
+    }
+
+    #[test]
+    fn computed_map_object_fit_and_position_set() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { object-fit: cover; object-position: left 20px; image-rendering: pixelated; }",
+        );
+        assert_eq!(m.get("object-fit").map(String::as_str), Some("cover"));
+        assert_eq!(m.get("object-position").map(String::as_str), Some("0% 20px"));
+        assert_eq!(m.get("image-rendering").map(String::as_str), Some("pixelated"));
+    }
+
+    #[test]
+    fn computed_map_vertical_align_keyword_default_and_set() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("vertical-align").map(String::as_str), Some("baseline"));
+        let m = div_computed_map("<div>x</div>", "div { vertical-align: text-top; }");
+        assert_eq!(m.get("vertical-align").map(String::as_str), Some("text-top"));
+    }
+
+    #[test]
+    fn computed_map_vertical_align_percent_and_length() {
+        let m = div_computed_map("<div>x</div>", "div { vertical-align: 25%; }");
+        assert_eq!(m.get("vertical-align").map(String::as_str), Some("25%"));
+        let m = div_computed_map("<div>x</div>", "div { vertical-align: 4px; }");
+        assert_eq!(m.get("vertical-align").map(String::as_str), Some("4px"));
     }
 }
