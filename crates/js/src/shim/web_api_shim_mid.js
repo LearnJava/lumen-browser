@@ -1218,16 +1218,21 @@ var _LUMEN_COLOR_PROPERTIES = {
     'outline-color': 1, 'text-decoration-color': 1,
 };
 
-// CSS Box §8 / CSSOM §Change-a-computed-value (CSSOM-2/BUG-484, first slice):
-// plain `<length-percentage>` longhands — margin-* additionally accepts the
-// `auto` keyword and negative values, padding-* accepts neither. Validated
-// and canonicalized via `_lumen_css_canonical_length` on assignment, same
-// role as `_LUMEN_COLOR_PROPERTIES` above. Deliberately NOT the `margin`/
-// `padding` shorthands themselves (`style.margin = "1px 2px"`) — shorthand-
-// VALUE parsing/expansion is separate, larger scope (see the comment on
-// `_LUMEN_TRBL_SHORTHANDS` above), and not every box-model length longhand
-// (border-*-width, inset-*, the CSS Logical properties) is covered yet —
-// each is its own future slice.
+// CSS Box §8 / CSS Position §6 / CSSOM §Change-a-computed-value
+// (CSSOM-2/BUG-484, first+second slice): plain `<length-percentage>`
+// longhands — margin-*/inset-*(top/right/bottom/left) accept the `auto`
+// keyword and negative values, padding-* accepts neither. Validated and
+// canonicalized via `_lumen_css_canonical_length` on assignment, same role
+// as `_LUMEN_COLOR_PROPERTIES` above. Deliberately NOT the `margin`/
+// `padding`/`inset` shorthands themselves (`style.margin = "1px 2px"`) —
+// shorthand-VALUE parsing/expansion is separate, larger scope (see the
+// comment on `_LUMEN_TRBL_SHORTHANDS` above), and `width`/`height` (intrinsic
+// sizing keywords — `min-content`/`max-content`/`fit-content(<length>)` —
+// need `length_to_css` to preserve the `fit-content()` argument on
+// serialization first, `crate::selector_query::length_to_css` currently
+// collapses it to the bare keyword) and the CSS Logical equivalents
+// (margin-block/inline-*, padding-block/inline-*, inset-block/inline-*) are
+// not covered yet — each is its own future slice.
 var _LUMEN_LENGTH_PROPERTIES = {
     'margin-top':    { allowAuto: true,  nonNegative: false },
     'margin-right':  { allowAuto: true,  nonNegative: false },
@@ -1237,6 +1242,22 @@ var _LUMEN_LENGTH_PROPERTIES = {
     'padding-right':  { allowAuto: false, nonNegative: true },
     'padding-bottom': { allowAuto: false, nonNegative: true },
     'padding-left':   { allowAuto: false, nonNegative: true },
+    'top':    { allowAuto: true, nonNegative: false },
+    'right':  { allowAuto: true, nonNegative: false },
+    'bottom': { allowAuto: true, nonNegative: false },
+    'left':   { allowAuto: true, nonNegative: false },
+};
+
+// CSS Backgrounds L3 §4.2 (CSSOM-2/BUG-484, second slice): `<line-width>` =
+// `<length [0,∞]> | thin | medium | thick` — the border-*-width longhands.
+// Validated and canonicalized via `_lumen_css_canonical_line_width`, which
+// (unlike `_LUMEN_LENGTH_PROPERTIES`'s grammar) also accepts the three
+// keywords and serializes them as themselves, per
+// `border-width-valid.html` (`border-right-width: "thin"` round-trips as
+// `"thin"`, not the UA px equivalent used for layout).
+var _LUMEN_LINE_WIDTH_PROPERTIES = {
+    'border-top-width': 1, 'border-right-width': 1,
+    'border-bottom-width': 1, 'border-left-width': 1,
 };
 
 function _lumen_make_style(nid) {
@@ -1275,6 +1296,13 @@ function _lumen_make_style(nid) {
                 var canonLen = _lumen_css_canonical_length(strVal, grammar.allowAuto, grammar.nonNegative);
                 if (canonLen === null || canonLen === undefined) return; // invalid <length-percentage>: no-op
                 obj[key] = canonLen;
+                setParsed(obj);
+                return;
+            }
+            if (_LUMEN_LINE_WIDTH_PROPERTIES.hasOwnProperty(key)) {
+                var canonWidth = _lumen_css_canonical_line_width(strVal);
+                if (canonWidth === null || canonWidth === undefined) return; // invalid <line-width>: no-op
+                obj[key] = canonWidth;
                 setParsed(obj);
                 return;
             }
