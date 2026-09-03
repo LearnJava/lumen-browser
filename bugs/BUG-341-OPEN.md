@@ -1,6 +1,19 @@
 # BUG-341: `lay_out_flex` double-lays-out every item — general engine bug, ~300× over CC-12's 2ms chrome perf-gate budget
 
-**Статус:** OPEN — **на паузе с 2026-09-01 после S37** (see below; not a silent relaxation, an explicit user decision).
+**Статус:** OPEN — **на паузе; последний срез S40 (2026-09-03)**. Пауза — явное решение пользователя, не тихое послабление.
+
+**Читать шапку с поправкой на S40.** Заголовок («~300× over budget») описывает
+состояние на 2026-07-25 и устарел уже после частичной правки того же дня (6-7×).
+На 2026-09-03 гейт CC-12 зелёный 4 прогона из 4 (p95 1.13-1.50 мс при бюджете
+2 мс) — см. §S40. Прескрипция «правильная общая правка — layout-result cache»
+из «Fix scope note» ниже **отменена измерениями**: кэш строили и мерили четыре
+раза (S32 eager, S33 снят, S36 повторно, S38 lazy) — все net-negative; S39
+объяснил почему (абсолютные координаты в `LayoutBox` → hit обязан
+перепозиционировать поддерево), S40 закрыл оставшийся вариант «share, не clone»
+измерением (3.1% hit-rate). Оставшийся архитектурный дефект — сама повторная
+рекурсивная раскладка в `lay_out_flex`, и путь к ней один: перестать звать
+полный `lay_out` там, где нужна только intrinsic-высота, а не переиспользовать
+результат.
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_flex`) — **general flexbox algorithm bug, affects any nested-flexbox page**, not just chrome. Surfaced via the chrome document (`crates/shell/src/main.rs::relayout_chrome_host`, `docs/tasks/p1-css-chrome.md`) because CC-12 was the first hard perf budget + realistic flex-nesting-depth bench to exist.
 **Найден:** P1, CC-12 (перф-гейт хрома) 2026-07-25 — новый тест `crates/shell/src/main.rs::tests::cc12_chrome_perf_gate_hover_and_keystroke_cycles`. Root-caused: P1, 2026-07-25.
 
@@ -4844,6 +4857,297 @@ infrastructure (`keys_seen_once`/`twice`/`three_plus`) and both cache modes
 mechanisms — the next slice's job is redesign (ii) itself (share, don't
 clone, on a hit), not another insertion-policy variant of (i).
 
+## S39 — the audit S38's redesign (ii) named as its own precondition: nothing
+in this engine treats a layout result as immutable, so a shared subtree is only
+free to serve at an identical origin — measured at 75.2% of otherwise-safe
+repeats
+
+Branch `p3-bug341-s39`. Resumed on explicit user request. S38 closed by
+recommending redesign (ii) — "store an `Rc`/`Arc`-shared subtree a hit
+repositions in place rather than clones out of" — and named, without
+resolving it, the precondition that redesign needs: *"`lay_out_flex` already
+mutates the box it receives in place after this call returns in some call
+sites, so a shared subtree would need those call sites audited for whether
+they still hold a unique reference by the time they mutate, not assumed."*
+This slice is that audit, plus the census the audit turned out to make
+decisive. **No mechanism was built and no production behavior changed** — the
+only code change is one new census field.
+
+### The audit (read-only): 26 production call sites of `lay_out` /
+`lay_out_with_used_size`
+
+`crates/engine/layout/src/box_tree/` — `bfc.rs` 1, `container_anchor.rs` 2,
+`entry.rs` 3, `flex.rs` 5, `grid.rs` 5, `layout_dispatch.rs` 6,
+`multicol_abspos.rs` 4, `table.rs` 1 (plus 26 in `tests/`, excluded). Four
+findings, none of them local to `lay_out_flex`:
+
+1. **`LayoutBox` rects are absolute, not parent-relative.** `lay_out_inner`
+   writes `b.rect.x = start_x + margin_left` (`layout_dispatch.rs`), and every
+   descendant's rect is likewise in document space. This is the fact the rest
+   of the audit turns on: a subtree's stored geometry is only valid at the
+   origin it was computed for.
+2. **Repositioning an already-laid-out subtree is a normal, frequent
+   operation — 8 production sites.** `shift_tree` (`shapes_floats.rs:37`, a
+   recursive `rect.x/y += d` walk over every descendant) is called from
+   `flex.rs:640`, `flex.rs:684`, `container_anchor.rs:216`,
+   `container_anchor.rs:285`, `multicol_abspos.rs:502`,
+   `layout_dispatch.rs:1915`; `incremental::translate_subtree` (the same walk)
+   from `grid.rs:709` and from the cache/incremental paths at
+   `layout_dispatch.rs:112` and `:251`. **Two of the eight are inside
+   `lay_out_flex` itself** — the cross-axis alignment shift and the
+   align-content line shift, applied to items *after* their final placement
+   pass, i.e. to precisely the boxes this cache exists to serve.
+3. **Direct post-layout rect writes are also normal.** `flex.rs` ~845 sets
+   `item.rect.height = stretch_h` and `item.rect.y = …` on already-laid-out
+   items (align-items stretch / cross placement); `grid.rs` ~723 onward does
+   the same for grid items after Step 5, including for the subtree it reuses
+   from its own probe; `table.rs` normalises every non-rowspan cell's height
+   to the row height after the cells are laid out.
+4. **`table.rs:145` still runs the capture-mutate-restore dance S34 removed
+   from flex** — `Arc::make_mut(&mut b.children[i].style).width.take()` before
+   `lay_out`, restored after. It is one of the "other in-place `Arc::make_mut`
+   writers" S34's own note listed as remaining, and it breaks style-`Arc`
+   identity for table cells exactly the way `SavedItemSizing` used to for flex
+   items.
+
+Above all of it, `entry.rs` runs four whole-tree passes *after* the root
+`lay_out` returns — `apply_first_line_pseudo_styles`,
+`apply_container_styles` (which re-lays out children under `@container`
+rules), `apply_anchor_positions` (a `shift_tree` per anchored box) and
+`split_first_line_boxes`. **There is no point in this pipeline at which a
+laid-out box is immutable**, so "the call sites still hold a unique reference
+by the time they mutate" is not a property that can be established by
+narrowing the audit — the mutation is the design.
+
+### What that does to redesign (ii)
+
+Serving a shared subtree at a *different* origin means running
+`translate_subtree` over it, i.e. mutating every node in it. Under
+`Rc`/`Arc` sharing that mutation is a `make_mut`, which deep-copies the whole
+subtree — **the exact ≈1.7 μs/node clone S37 priced and (ii) exists to
+avoid.** Sharing is therefore free only for a hit whose `(start_x, start_y)`
+equals the cached entry's; for every other hit it degenerates to S36's
+`Eager` mechanism with an extra refcount bump. S38's recommendation is not
+wrong, but it is conditional on a number nobody had measured, so this slice
+measured it before any mechanism could be written against the assumption.
+
+### The census
+
+New `LayoutKeyCensus` field `repeat_key_same_style_override_and_origin`
+(`crates/engine/layout/src/box_tree/diagnostics.rs`): of the repeats S35's
+`repeat_key_same_style_and_override` already counts as safe to serve, how many
+also land at the identical `(start_x, start_y)`. `LAYOUT_KEY_SEEN`'s entry
+gained the origin in `to_bits` form and `record_layout_key_occurrence` two new
+parameters, threaded from `lay_out_inner`'s own `start_x`/`start_y`. The
+origin is deliberately **not** part of the census key — a cache serves a
+repeat at a new position by translating it, so folding the origin into the key
+would measure a different, stricter mechanism than the one under discussion.
+Same real chrome document/fixture and runner as S30–S38 (`cargo test -p
+lumen-shell --profile dev-release bug341_s30_flex_key_census -- --ignored
+--nocapture`, dev-release):
+
+```
+[s30-census] KEY/HOVER, every cycle: calls=1038 repeat_key_calls=767 (73.9%)
+    repeat_key_same_style=608 (79.3% of repeats)
+    repeat_key_same_style_and_override=606 (79.0% of repeats, 99.7% of same_style)
+[s39-origin] same_style_and_override=606 same_origin_too=456
+    (75.2% of same_style_and_override, 59.5% of repeats)
+```
+
+Identical across all 10 cycles and both scenarios.
+
+**75.2% of the safe repeats need no repositioning at all** — for those, a
+shared subtree is servable with a refcount bump and nothing else, which is the
+result (ii) needed and did not have. The remaining 24.8% are the ones for
+which sharing buys nothing over `Eager`.
+
+**Drift note, reported rather than smoothed over:** these are not S35's
+numbers. S35 measured `calls=1544 repeat_key_calls=1260 (81.6%)
+repeat_key_same_style=979 (77.7%)`; this run reads `calls=1038
+repeat_key_calls=767 (73.9%) repeat_key_same_style=608 (79.3%)`. The fixture
+and the census code are unchanged — what moved is the engine between S35 and
+now (`FLEX_COLUMN_PROBE_HEIGHTS`, the BUG-802 per-pass memo of `lay_out_flex`'s
+column Step-1 probe, removes whole probe calls that S35 still counted). The
+*ratio* S34/S35 established survives (79.3% vs 77.7% same-style on repeat);
+the absolute call count does not, and any future slice comparing against
+S30–S35's raw counts must re-baseline rather than assume.
+
+### The insert side is not what (ii) fixes — stated, not measured
+
+Worth being explicit, because the two redesigns are easy to conflate: (ii)
+attacks the **serve**-side clone, and only there. On the **insert** side,
+copy-on-write does not remove the clone, it relocates it — the live box is
+mutated after layout (finding 2/3 above), so `make_mut` fires and copies the
+subtree at the first post-layout mutation instead of at insert time, the same
+one clone per entry. S32's "91% of insertions are never read back, so the
+clone is pure waste" therefore survives (ii) untouched; it is S38's `Lazy`
+(redesign (i)) that attacks it, at the cost S38 measured (a deferred first hit
+also defers the recursion short-circuit). **Neither redesign subsumes the
+other, and neither has been shown net-positive on wall-clock** — a mechanism
+that cleared the gate would need both halves, and that is a claim for a future
+slice to measure, not one this slice makes.
+
+Local precedent worth noting for whoever builds it: `lay_out_grid`'s Step-4/5
+probe reuse (S33, `grid.rs:566`/`:709`) is already the owned-clone-plus-
+translate shape, and it was accepted as a win there — one clone traded against
+one full recursive re-layout. That trade is favourable per *item*; what S32/
+S36/S38 keep measuring is that it stops being favourable when paid on every
+cacheable box in a ~2300-node document.
+
+### Gates
+
+`cargo clippy -p lumen-layout --all-targets -- -D warnings` and `-p
+lumen-shell --all-targets -- -D warnings`: both clean. `cargo test -p
+lumen-layout --lib`: 3754 passed, 0 failed, 1 ignored. No display-list-
+affecting code touched — the change adds a diagnostic counter and two
+parameters to a diagnostic function, so no graphic-tests/CPU-snapshot regen is
+needed per `docs/graphic-tests.md`'s rule for changes that cannot move pixels.
+(Note for anyone reproducing the lint gate: `--profile dev-release` fails
+`clippy` on this crate with three pre-existing `never used` errors from
+`invariants.rs`, whose callers are `#[cfg(debug_assertions)]` — unrelated to
+this slice; the project's standing gate command uses the default profile.)
+
+### Not attempted
+
+Building (ii). Measuring what share of *inserted* boxes are actually mutated
+after layout (`shift_tree` early-returns on a zero delta, so some are not —
+that number bounds how much of the insert-side clone CoW would defer rather
+than pay). And the one change that would make sharing free at *any* origin
+rather than only at an identical one — making `LayoutBox` rects
+parent-relative, with absolute coordinates resolved at paint time. That is an
+engine-wide data-model change touching paint, hit-testing, scrolling and every
+consumer of `rect`, i.e. ADR-shaped work, not a slice; it is recorded here as
+the structural alternative the audit exposed, not as a recommendation.
+
+**What S40 did with this** (same session, below): built the mechanism the
+75.2% points at — but in its cheapest possible form. If a repeat needs no
+repositioning, it needs no *storage* either: the box already holds the result.
+S40 replaced "share a stored subtree" with "skip the recomputation", and then
+found the 75.2% does not transfer to it — see that section.
+
+## S40 — the mechanism the S39 census pointed at, built: reuse *in place*
+instead of sharing or cloning. Correct, hits cost nothing — and only 3.1% of
+calls are hits, because S39's same-origin repeats are mostly different box
+*instances*, not the same box asked twice
+
+Branch `p3-bug341-s39` (same session as S39). S39 established that a stored
+result is only free to serve at an identical origin, and that 75.2% of the
+otherwise-safe repeats arrive at one. This slice took that to its conclusion:
+**a repeat that needs no repositioning needs no storage either.** The box being
+asked to lay out again is the same box that already holds the answer, still in
+the tree where the earlier call left it — so the reuse is a `return`, not a
+copy. That removes every cost the previous four attempts died on at once: no
+clone on insert (S32's 91%-never-read-back waste), none on serve (S37's
+≈1.7 μs/node), no deferred first hit (S38's recursion-short-circuit cost).
+
+**Mechanism** (`LayoutInPlaceKey`/`LayoutInPlaceWitness`,
+`crates/engine/layout/src/box_tree/diagnostics.rs`, checked at
+`lay_out_cache_checked`): a key strictly stronger than `LayoutResultKey` —
+same constraints plus `(start_x, start_y)` and the box's `BoxRole` variant
+(one DOM node owns several boxes, so `node` alone does not identify one) —
+mapped to a **fixed-size witness**, never a subtree: the box's address, its
+style `Arc`, and the rect the recorded call produced. A hit requires all
+three. The memo is cleared at both ends of an outermost pass by
+`LayoutPassGuard`, exactly like `FLEX_COLUMN_PROBE_HEIGHTS`, so an entry can
+never outlive the pass that produced it — a later frame, a changed cascade, or
+one of `entry.rs`'s four post-layout passes never sees a stale one.
+
+Each witness check corresponds to a specific finding from S39's audit, and
+each is proven load-bearing by its own test rather than argued for: `box_ptr`
+because `lay_out_grid` assigns whole new boxes into `children[i]`, `style`
+because `Arc::make_mut` writers still exist (`table.rs:145` among them), and
+`out_rect` because eight production sites reposition an already-laid-out
+subtree — two of them inside `lay_out_flex` itself.
+
+**Correctness:** 6 new differential tests in `lumen-layout`
+(`box_tree::tests::bug341_differential`, `in_place_reuse_*`): geometry parity
+with the mechanism off on nested column flex, on wrapped row flex, and on
+grid+table; the hit path proven live (two verbatim calls inside one pass →
+exactly 1 hit, tree bit-identical to a plain single pass); and three miss
+guards, one per witness field — a differing origin must miss *and* land where
+a fresh call at that origin lands (S39's finding as a regression test), a
+`shift_tree`d box must miss and be recomputed back to its own origin, and a
+diverged style `Arc` must miss. Plus the `content-visibility: auto` refusal.
+`cargo test -p lumen-layout --lib`: 3762 passed, 0 failed, 1 ignored. `cargo
+clippy -p lumen-layout --all-targets -- -D warnings` and `-p lumen-shell`:
+both clean. `python graphic_tests/dump_golden.py` (dev-release): all 12
+`--dump-layout`/`--dump-display-list` dumps match the committed golden
+byte-for-byte.
+
+**Measured** (`bug341_s40_in_place_reuse_share`, same real chrome document and
+interleaved-per-cycle protocol as S36/S38, `--profile dev-release`, run twice):
+
+```
+Run 1:
+BUG341_S40_KEY_REUSE_OFF   min=11.96ms p50=16.91ms p95=23.79ms
+BUG341_S40_KEY_REUSE_ON    min=13.01ms p50=16.84ms p95=20.03ms
+BUG341_S40_HOVER_REUSE_OFF min=12.18ms p50=16.74ms p95=23.79ms
+BUG341_S40_HOVER_REUSE_ON  min=12.17ms p50=16.45ms p95=21.43ms
+Run 2:
+BUG341_S40_KEY_REUSE_OFF   min=12.59ms p50=15.39ms p95=20.18ms
+BUG341_S40_KEY_REUSE_ON    min=11.52ms p50=15.36ms p95=20.91ms
+BUG341_S40_HOVER_REUSE_OFF min=10.05ms p50=14.48ms p95=19.64ms
+BUG341_S40_HOVER_REUSE_ON  min=11.99ms p50=14.74ms p95=20.90ms
+[s40-reuse] both scenarios, both runs: hits=1020 recorded=31860 refused=0
+                                       hit_rate=3.1%
+```
+
+**The two runs disagree on the sign of the difference on `min`** (KEY: +8.8%
+then −8.5%; HOVER: flat then +19%), which per `docs/perf-method.md` §4 means
+neutral, not a win and not a regression. The reason is the hit rate: **3.1%**,
+17 hits per pass against 531 recordings.
+
+**Why 3.1% and not S39's 75.2% — the finding this slice actually contributes.**
+S39's census keys on `(node, available_width, available_height)` and asks
+whether a repeat's origin matches the previous occurrence's. S40's key adds the
+box's identity, and that is what collapses the number: **most of those
+same-origin repeats are different `LayoutBox` instances that happen to share a
+`NodeId`** — an element's principal box and an anonymous wrapper, a node's box
+and the working copies `lay_out_multicol_children` lays out in its own `work`
+vector — not the same box being asked to lay out twice. Serving those requires
+producing a second copy, which is the cache, which S32/S36/S38 measured
+net-negative three times. **So the 75.2% ceiling S39 reported is not reachable
+by in-place reuse, and the part of it that is reachable is 3.1%.** That is the
+loop closed: of S39's two candidate readings of its own number, the optimistic
+one is now excluded by measurement rather than left open.
+
+**Left off by default** (`set_layout_in_place_reuse`, default `false`) —
+neutral wall-clock does not earn a place in the hottest path in the engine.
+Kept wired and tested rather than deleted (unlike S33's disposal of the
+proven-net-negative general cache) for one specific reason: it is the only
+reuse shape whose *hit* costs nothing, so any future change that raises the
+hit rate — chiefly, removing the same-node-different-instance churn the
+paragraph above names — can re-measure it by flipping one flag instead of
+rebuilding the mechanism.
+
+### Where this leaves CC-12, measured rather than assumed
+
+`cc12_chrome_perf_gate_hover_and_keystroke_cycles`, dev-release, 4 consecutive
+rounds on this session's machine, budget 2 ms:
+
+```
+CC12_HOVER p95 = 1.13 / 1.14 / 1.19 / 1.29 ms
+CC12_KEY   p95 = 1.18 / 1.50 / 1.50 / 1.35 ms
+```
+
+**Green 4/4 on both arms**, versus S27's "KEY in budget 3 of 6 rounds". The
+architectural redundancy this bug is named for is still real — `lay_out_flex`
+still lays some items out twice, and a full non-incremental pass over the
+chrome document still costs ~15 ms — but the budget CC-12 exists to enforce is
+met with margin on the incremental path the shell actually runs. Per S29's own
+precedent this is a machine-dependent statement, not a claim that the bug is
+fixed; it is recorded here so the next resume starts from a measurement rather
+than from the ~300×-over-budget framing in this file's title, which has been
+obsolete since the 2026-07-25 partial fix.
+
+**Not attempted:** removing the same-node-different-instance churn (the one
+change S40's own measurement identifies as what would make its hit rate
+interesting); the intrinsic *content-height* probe that would let
+`lay_out_flex` stop calling full `lay_out` for column items with
+`flex-basis: auto/content` — the one Step-1 case the 2026-07-25 partial fix
+could not eliminate, and the only remaining path to removing the double layout
+rather than reusing its result.
+
 ## Repro
 
 ```bash
@@ -4862,7 +5166,21 @@ cargo test -p lumen-shell --profile dev-release bug341_s30_flex_key_census -- --
 cargo test -p lumen-shell --profile dev-release bug341_s36_layout_result_cache_share -- --ignored --nocapture
 cargo test -p lumen-layout --profile dev-release box_tree::tests::bug341_differential::bug341_s37_cache_fixed_cost_breakdown -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s38_layout_result_cache_lazy_share -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s40_in_place_reuse_share -- --ignored --nocapture
 ```
+
+S40 added `bug341_s40_in_place_reuse_share` (two-arm OFF/ON A/B, same fixture
+and interleaved protocol as S36/S38's own harnesses) plus six
+`in_place_reuse_*` differential tests in `lumen-layout`'s
+`box_tree::tests::bug341_differential` (ordinary `cargo test -p lumen-layout
+--lib`, not `--ignored`). It also pinned `bug341_s30_flex_key_census` to
+`set_layout_in_place_reuse(false)` so the S30-S39 call counts stay comparable
+with the ones recorded in those sections, which were all measured before the
+mechanism existed.
+
+S39 extended `bug341_s30_flex_key_census`'s existing census rather than adding
+a test: it now also prints `[s39-origin]`, the share of style+override-safe
+repeats that also arrive at the identical `(start_x, start_y)`.
 
 S38 added `bug341_s38_layout_result_cache_lazy_share` (three-arm
 Off/Eager/Lazy A/B, same fixture/protocol as S36's own harness) and reused

@@ -76,20 +76,22 @@ use table::{lay_out_table, lay_out_table_row, table_intrinsic_content_width};
 
 mod diagnostics;
 pub use diagnostics::{
-    BoxBuildStats, BoxCopyStats, LayoutKeyCensus, LayoutResultCacheStats,
-    incremental_box_build_enabled, layout_result_cache_enabled, set_box_build_diagnostics,
-    set_box_time_diagnostics, set_incremental_box_build, set_layout_key_census,
+    BoxBuildStats, BoxCopyStats, LayoutInPlaceStats, LayoutKeyCensus, LayoutResultCacheStats,
+    incremental_box_build_enabled, layout_in_place_reuse_enabled, layout_result_cache_enabled,
+    set_box_build_diagnostics, set_box_time_diagnostics, set_incremental_box_build,
+    set_layout_in_place_reuse, set_layout_key_census,
     set_layout_result_cache, set_layout_result_cache_lazy, take_box_build_log,
     take_box_build_stats, take_box_build_time_log, take_box_copy_stats, take_box_probe_ns,
-    take_layout_key_census, take_layout_result_cache_stats,
+    take_layout_in_place_stats, take_layout_key_census, take_layout_result_cache_stats,
 };
 use diagnostics::{
     BOX_BUILD_STATS, BOX_BUILD_TIME_LOG, BOX_CLONE_BOXES, BOX_CLONE_NS, BOX_TIME_LOG_ON,
     CV_AUTO_TOUCHED, FlexProbeKey, FLEX_COLUMN_PROBE_HEIGHTS, INDEFINITE_HEIGHT_CONSULTED,
     LAYOUT_RESULT_CACHE, LAYOUT_RESULT_CACHE_SEEN, LAYOUT_RESULT_CACHE_STATS,
-    LayoutPassGuard, LayoutResultCacheMode, LayoutResultEntry, LayoutResultKey,
+    LayoutInPlaceKey, LayoutPassGuard, LayoutResultCacheMode, LayoutResultEntry, LayoutResultKey,
     UsedSizeOverrideBits, add_box_build_stats, box_build_diagnostics_on,
-    cacheable_for_layout_result_cache, count_boxes, layout_result_cache_mode, note_box_built,
+    cacheable_for_layout_result_cache, count_boxes, layout_in_place_hit,
+    layout_result_cache_mode, note_box_built, record_layout_in_place,
     note_display_probe, note_prev_index, note_style_miss, record_layout_key_occurrence,
     resolve_block_size,
 };
