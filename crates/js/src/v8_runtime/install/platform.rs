@@ -280,10 +280,20 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
     // One-argument form: CSS.supports(conditionText) → parse + evaluate.
+    // CSSOM `supports(conditionText)`: if conditionText parses/evaluates as
+    // a <supports-condition> directly, use that; otherwise retry with
+    // conditionText wrapped in parens — the common `CSS.supports('prop:value')`
+    // idiom is a bare <declaration>, not itself a valid <supports-condition>
+    // (BUG-501 gap 1).
     reg!(scope, ctx, store,
         "_lumen_css_supports_cond",
         |condition: String| -> bool {
-            lumen_css_parser::parse_supports_condition(&condition)
+            let direct = lumen_css_parser::parse_supports_condition(&condition)
+                .evaluate(lumen_css_parser::SUPPORTED_PROPERTIES);
+            if direct {
+                return true;
+            }
+            lumen_css_parser::parse_supports_condition(&format!("({condition})"))
                 .evaluate(lumen_css_parser::SUPPORTED_PROPERTIES)
         }
     );

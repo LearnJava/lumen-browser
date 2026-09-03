@@ -232,6 +232,12 @@ impl SupportsCondition {
     /// [`SUPPORTED_FONT_FORMAT`]). `Unknown` → `false`.
     pub fn evaluate(&self, known_properties: &[&str]) -> bool {
         match self {
+            // CSS Variables L1 §2: a custom property accepts any token
+            // sequence as its value, so once a UA implements custom
+            // properties at all, `@supports (--x: <anything>)` must always
+            // be considered supported — it is never present in
+            // `known_properties` (a hand-written list of standard names).
+            Self::Decl { property, .. } if property.starts_with("--") => true,
             Self::Decl { property, .. } => known_properties
                 .iter()
                 .any(|p| p.eq_ignore_ascii_case(property)),
