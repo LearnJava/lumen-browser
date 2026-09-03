@@ -1203,6 +1203,35 @@ fn collect_scroll_containers_transform_grows_scroll_height() {
 }
 
 #[test]
+fn collect_scroll_containers_rtl_overflow_grows_scroll_width() {
+    // BUG-504 (`overflow-rtl-scroll-left.html`): regression guard for
+    // `content_width` under `direction: rtl` — a 500px child in a 300px RTL
+    // container must still report `scroll_width == 500`, same as the LTR
+    // case, since `content_width`'s fold only cares about the child's
+    // rightmost edge relative to the padding edge, not which direction the
+    // overflow visually hangs off. This function was never the actual bug
+    // (confirmed correct by this test); the real defect was `apply_loaded_page`
+    // (`crates/shell/src/page_load.rs`) never seeding the JS-side
+    // `_lumen_get_scroll_state` cache on initial page load, so `scrollWidth`
+    // read the fallback border-box size (300) until an unrelated relayout
+    // raced ahead of the first script — same shape as BUG-382, for scroll
+    // state instead of rects/styles.
+    let root = lay_full(
+        "<div id=\"s\"><div id=\"child\"></div></div>",
+        "#s { direction: rtl; overflow: auto; width: 300px; height: 200px; } \
+         #child { width: 500px; height: 200px; }",
+    );
+    let containers = collect_scroll_containers(&root);
+    assert_eq!(containers.len(), 1);
+    assert!(
+        (containers[0].scroll_width - 500.0).abs() < 0.5,
+        "expected scroll_width≈500 under RTL, got {}",
+        containers[0].scroll_width
+    );
+    assert!((containers[0].scroll_x - 0.0).abs() < 0.5, "default scroll_x must stay 0");
+}
+
+#[test]
 fn collect_scroll_containers_no_transform_unaffected() {
     // Regression guard: an untransformed child must still compute exactly as
     // before — the child_scrollable_bounds fast path (`c.rect` passthrough)

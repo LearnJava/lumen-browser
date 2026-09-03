@@ -1149,6 +1149,21 @@ impl Lumen {
         // ADR-016 M2.2c-2d: routed through `route_task_js` like the other seeds; the
         // owned `HashMap`s make the closure `Send + 'static`, and the `js_present`
         // gate keeps the (side-effect-free) collection JS-gated.
+        //
+        // BUG-504 (`overflow-rtl-scroll-left.html`): the same gap as BUG-382, just
+        // for `scrollWidth`/`scrollHeight`/`scrollTop`/`scrollLeft` — those read
+        // `_lumen_get_scroll_state`'s per-node cache (`crate::PersistentJs::
+        // update_scroll_states`), which BUG-382's fix never seeded here, only inside
+        // `relayout()`'s path and the wheel-scroll path (`try_scroll_overflow_
+        // container`). A freshly loaded page with an overflow container therefore
+        // answered `scrollWidth`/`scrollHeight` with the fallback border-box size
+        // (`_lumen_get_bounding_rect`) instead of the real scrollable-overflow extent
+        // until some unrelated relayout raced ahead of the first script — verified via
+        // `content_width`/`collect_scroll_containers` being computed *correctly*
+        // (confirmed by a direct `lumen_layout` unit probe returning the spec value)
+        // while a live `--mcp-live-port` read immediately after `wait: stable` still
+        // returned the container's own width. Same `collect_scroll_containers` +
+        // `update_scroll_states` pairing `relayout()` already uses (`relayout.rs`).
         #[cfg(feature = "v8")]
         if self.js_present
             && let Some(lb_ref) = self.layout_box.as_ref()
@@ -1170,12 +1185,17 @@ impl Lumen {
             drop(doc_guard);
             let customs = collect_custom_properties(lb_ref, viewport);
             let (vw, vh) = (viewport.width, viewport.height);
+            let scroll_states: HashMap<u32, [f32; 4]> = collect_scroll_containers(lb_ref)
+                .iter()
+                .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+                .collect();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 js.update_layout_rects(rects);
                 js.update_hit_test_tree(hit_test_tree);
                 js.update_computed_styles(styles);
                 js.update_custom_properties(customs);
                 js.update_viewport_size(vw, vh);
+                js.update_scroll_states(scroll_states);
             });
         }
         self.title = page.title.clone();
