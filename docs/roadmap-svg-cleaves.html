@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-09-03",
+ "generated": "2026-09-04",
  "counts": {
-  "open": 370,
-  "fixed": 553,
+  "open": 372,
+  "fixed": 554,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 923,
+ "total_bugs": 926,
  "phases": [
   {
    "id": "P0",
@@ -6476,9 +6476,9 @@
       {
        "id": "FRAME-8",
        "title": "FRAME-8: фрейм, которым распоряжается скрипт",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Фрейм, которым распоряжается скрипт, не грузится никогда: ни вставленный через `createElement` с `appendChild`, ни парсерный, которому `src` присвоили из JS, ни с `src` в `about:blank`, ни вовсе без атрибута — ни HTTP-запроса, ни `load`, ни исполнения скриптов ребёнка. Работает единственная форма — фрейм, которого парсер увидел с готовым URL. Все три формы измерены отдельно; практическое следствие для проб: фреймы писать в разметку с финальным URL. Перенесено в дорожку ре-триажем WPT-RUN-6 2026-09-02 — у шелла нет пути «поднять под-документ по требованию скрипта», это не дефект существующего.",
+       "note": "Фрейм, которым распоряжается скрипт, не грузится никогда: ни вставленный через `createElement` с `appendChild`, ни парсерный, которому `src` присвоили из JS, ни с `src` в `about:blank`, ни вовсе без атрибута — ни HTTP-запроса, ни `load`, ни исполнения скриптов ребёнка. Работает единственная форма — фрейм, которого парсер увидел с готовым URL. Все три формы измерены отдельно; практическое следствие для проб: фреймы писать в разметку с финальным URL. Перенесено в дорожку ре-триажем WPT-RUN-6 2026-09-02 — у шелла нет пути «поднять под-документ по требованию скрипта», это не дефект существующего. **Закрыта 2026-09-04:** HTML LS §4.8.5 запускается при вставке узла и при смене `src`, а не один раз при разборе — добавлен скан по сигналу `dom_dirty` (`crates/shell/src/frame_dynamic_load.rs` — сравнение дерева с `self.frames`; `crates/shell/src/lumen/frame_dynamic.rs` — диспетчеризация), подключённый во все точки потребления флага, включая движковый поток, включённый по умолчанию с ADR-023 (`relayout.rs::pump_raf_engine_thread`). Новый хост грузится тем же `spawn_frame`, что и первичный проход; смена `src` уже загруженного фрейма переиспользует `navigate_frame_to` целиком. Побочная находка: синхронный спавн нового V8-изолята изнутри `pump_raf_engine_thread` наблюдаемо вешал процесс без единого паник-сообщения (не диагностировано до конца, заведено [BUG-976](bugs/BUG-976-OPEN.md)) — обойдено отсрочкой спавна фонового потока на один полный тик event loop (`Lumen::dispatch_pending_frame_loads`). Проверено `verify_window_history_jsurl_gaps.py --variant frame-parser/frame-late-src` (оба режима движкового потока), без регрессий на существующей навигации (`frame-navigate`/`frame-parentage`) и статичной загрузке (`nbc-iframe`/`nbc-frame`/`nbc-parser`); `dump_golden.py` 12/12 (display-list нейтрально).",
        "bugs": [
         "BUG-885"
        ]
@@ -7119,13 +7119,6 @@
    "status": "open",
    "title": "Функция `env()` (CSS Environment Variables L1, безопасные зоны/`safe-area-inset-*`, отгружена везде) не реализована в парсинге стилей/каскаде вовсе. 5 файлов/22…",
    "component": "css-parser (функция не распознаётся нигде, `grep -rn '\"env\"' crates/` — ноль CSS-релевантных совпадений)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-515": {
-   "status": "open",
-   "title": "`window.devicePixelRatio` не определён на одиночном окне по умолчанию — проставляется только опциональным multi-window API `getScreenDetails()`. 1 файл/1 сабтес…",
-   "component": "js (`crates/js/src/dom.rs` — `devicePixelRatio` никогда не проставляется на глобал вне `window_management.rs`)",
    "date": null,
    "debtor": false
   },
@@ -9408,6 +9401,27 @@
    "status": "open",
    "title": "`history.back/forward/go(n)` резолвят цель по стеку `nav_back`/`nav_fwd` НА МОМЕНТ ДРЕЙНА очереди (раз за тик event loop), а не на момент самого вызова — очеред…",
    "component": "shell (`navigation.rs::navigate_by`, `about_to_wait.rs`'s `take_history_traversals` drain) / js (`_lumen_history_go`/`_lumen_history_traverse` — только сырой relative delta)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-974": {
+   "status": "open",
+   "title": "Процентные `padding`/`margin` flex-элемента в строчном контейнере резолвятся против его собственного разрешённого главного размера, а не против контентной ширин…",
+   "component": "layout (`box_tree/flex.rs::lay_out_flex`, строчная ветка)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-975": {
+   "status": "open",
+   "title": "Программная запись скролла (`scrollTo`/`scrollBy`/`scrollLeft=`/`scrollTop=`) не видна синхронному чтению в том же тике: `_lumen_request_scroll` только кладёт з…",
+   "component": "js (`crates/js/src/v8_runtime/install/platform.rs::install_scroll_state`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-976": {
+   "status": "open",
+   "title": "Создание НОВОГО V8-изолята (`spawn_frame` → `run_scripts_with_dom`) на ad-hoc `std::thread::spawn`-потоке, запущенное СИНХРОННО изнутри `pump_raf_engine_thread`…",
+   "component": "shell (`crates/shell/src/relayout.rs::pump_raf_engine_thread`) / js (`rusty_v8` isolate creation)",
    "date": null,
    "debtor": false
   },
@@ -13274,6 +13288,13 @@
    "component": "js (`web_api_shim_mid_b.js::_lumen_navigate_or_fragment`, `_lumen_set_location_hash`)",
    "date": "2026-09-03",
    "debtor": false
+  },
+  "BUG-515": {
+   "status": "fixed",
+   "title": "`window.devicePixelRatio` не определён на одиночном окне по умолчанию — проставляется только опциональным multi-window API `getScreenDetails()`. 1 файл/1 сабтес…",
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_mc.js` — `Window`-шим)",
+   "date": "2026-09-04",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -13703,9 +13724,6 @@
   "js (`crates/js/src/dom.rs` — `createImageBitmap`, сообщение `unsupported source type`; глобального `ImageBitmap` нет)": [
    "BUG-880"
   ],
-  "js (`crates/js/src/dom.rs` — `devicePixelRatio` никогда не проставляется на глобал вне `window_management.rs`)": [
-   "BUG-515"
-  ],
   "js (`crates/js/src/dom.rs` — `document.scrollingElement` нигде не определён)": [
    "BUG-525"
   ],
@@ -13838,6 +13856,7 @@
    "BUG-483"
   ],
   "js (`crates/js/src/shim/web_api_shim_tail_mc.js` — `Window`-шим)": [
+   "BUG-515",
    "BUG-529"
   ],
   "js (`crates/js/src/sw_worker.rs` — шим глобального скоупа service worker)": [
@@ -13869,6 +13888,9 @@
   ],
   "js (`crates/js/src/v8_runtime/install/platform.rs::_lumen_get_scroll_state`) / driver (`crates/driver/src/session.rs::relayout`)": [
    "BUG-965"
+  ],
+  "js (`crates/js/src/v8_runtime/install/platform.rs::install_scroll_state`)": [
+   "BUG-975"
   ],
   "js (`crates/js/src/v8_runtime/install/platform.rs`, `crates/engine/paint/src/hit_test.rs`)": [
    "BUG-464"
@@ -14062,6 +14084,9 @@
   ],
   "layout (`box_tree/flex.rs::lay_out_flex`)": [
    "BUG-460"
+  ],
+  "layout (`box_tree/flex.rs::lay_out_flex`, строчная ветка)": [
+   "BUG-974"
   ],
   "layout (`crates/engine/layout/src/box_tree.rs:2262` — `collect_requests_inner` матчит только `name.local == \"img\"`) + js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_link_hint_kind`/`_lumen_link_hint_prepare`)": [
    "BUG-848"
@@ -14477,6 +14502,9 @@
   ],
   "shell (`crates/shell/src/page_pipeline.rs::parse_and_layout` — порядок фаз; `crates/shell/src/scripts.rs::run_scripts_with_dom` — публикация снимка)": [
    "BUG-443"
+  ],
+  "shell (`crates/shell/src/relayout.rs::pump_raf_engine_thread`) / js (`rusty_v8` isolate creation)": [
+   "BUG-976"
   ],
   "shell (`crates/shell/src/relayout.rs` — `relayout_raf_dirty`/`relayout_raf_dirty_readback`)": [
    "BUG-935"
