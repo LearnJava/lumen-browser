@@ -695,3 +695,84 @@ Remaining scope unchanged in count (5 files) — this slice narrows *why* each
 is still open rather than closing one: propagation files need BUG-529 +
 an unfiled viewport-gutter-propagation mechanism; the vertical-rl clip file
 needs the CSSOM-4 sync-flush architecture, out of P3's point-fix scope.
+
+## Срез 2026-09-03 (P3, часть 9): viewport-gutter-propagation механика landed — 4 из 5 оставшихся файлов закрыты
+
+Часть 8 назвала недостающий механизм: `scrollbar-gutter` on `:root` must
+reserve its gutter against the **viewport**, not just against `:root`'s own
+children — the existing `scrollbar_gutter_inline`/`_block` machinery only
+ever narrows a scrolling box's *content* box for its *children* (BUG-341's
+`content_x`/`content_width`/`children_available_height` call sites), and
+nothing calls it for the outermost box against the raw viewport dimensions
+at all.
+
+**Implemented:** new `propagate_viewport_scrollbar_gutter` (`box_tree/entry.rs`),
+called once from each non-incremental layout entry point (`layout`,
+`layout_measured_hyp_with_counters`) right after the box tree is built and
+before the top-level `lay_out` call. It reads `:root`'s (`<html>`'s) *own*
+`scrollbar_gutter`/`overflow` — per CSS Overflow L4, the initial `overflow:
+visible` on the root propagates to the viewport as `auto` (a page is always
+scrollable), so eligibility maps `Visible → Auto` on a scratch copy of the
+style before deferring to the same `scrollbar_gutter_inline`/`_block`/
+`_inline_start`/`_block_start` functions every other scrolling element
+already uses — computes `(w_reserve, x_shift, h_reserve, y_shift)`, resets
+`<html>`'s own `scrollbar_gutter` to `Auto` (so the normal per-element pass
+doesn't reserve the *same* gutter a second time between `<html>` and
+`<body>`), and feeds the four numbers into the outermost `lay_out` call's
+`(x, y, width, height)` arguments in place of the previous unconditional
+`(0.0, 0.0, viewport.width, Some(viewport.height))`. Only `:root`'s own
+declared value counts — `scrollbar-gutter` on `<body>` or deeper must NOT
+propagate (`scrollbar-gutter-propagation-006.html`'s whole point), which
+falls out naturally since the function only ever inspects the `<html>` box.
+
+Deliberately wired only into the two non-incremental entry points, not
+`layout_streaming_incremental`/`layout_mutation_incremental_restyle`:
+`Arc::make_mut`-ing `<html>`'s style on every incremental pass would hand it
+a fresh `Arc` regardless of whether the author's declaration actually
+changed, risking the cascade-cache/graft style-pointer reuse BUG-341's
+incremental machinery depends on for *any* page with `scrollbar-gutter` on
+`:root` — a perf regression out of proportion to this fix, and untested by
+any of these WPT files (all one-shot `test()`, none `async_test` mutating
+`:root` after load).
+
+**Regression coverage:** 3 new tests in `filter_transform_snap_mask.rs`
+(`scrollbar_gutter_root_stable_propagates_to_viewport_width` — `<html>` and
+`<body>` both narrower by exactly one gutter unit and equal to each other,
+proving no double reservation; `..._both_edges_shifts_viewport_start_edge` —
+double reservation (776 = 800 − 2×12) plus the start-edge shift (12px), the
+viewport-level mirror of `scrollbar_gutter_stable_both_edges_shifts_child_
+start_edge`; `scrollbar_gutter_body_only_does_not_propagate_to_viewport` —
+`scrollbar-gutter` on `<body>` alone leaves `<html>` at the full 800px,
+regression-pinning propagation-006's premise). `cargo test -p lumen-layout`:
+3746/3746 (was 3743, +3). `cargo clippy -p lumen-layout --all-targets -- -D
+warnings` clean. `dump_golden.py` 12/12 byte-identical — none of the 12
+golden pages declare `scrollbar-gutter` on `:root`, so the new code path's
+early-return (`ScrollbarGutter::Auto`) is a pure no-op for all of them.
+
+**Live verification** (no `tests/wpt/.venv` in this pool slot, same
+constraint as parts 4/5/8): `tests/wpt/verify_scrollbar_gutter_propagation.py`
+(new, `--mcp-live-port` + `console.log` markers, no venv needed) reimplements
+propagation-001's and -007's exact `assert_*` calls as plain JS. Both come
+back green: 001 (`root.offsetWidth=1012 < window.innerWidth=1024`,
+`body.offsetWidth=1012` matches root, `body.clientWidth=1012` matches
+`offsetWidth`, `content.offsetWidth=1012` matches body) and — unexpectedly,
+since part 8 flagged it as a *possibly* separate "classic vs overlay
+scrollbar" DEBTOR class — 007 too (`root.clientWidth=1012 <
+window.outerWidth=1024`, same chain matching through `content`): Lumen has
+no distinct "space actually occupied by a rendered classic scrollbar"
+concept separate from the gutter reservation itself, so `clientWidth` and
+`offsetWidth` coincide here and the test's premise is satisfied without
+needing that distinction modeled. 002/003 share 001's exact code path
+(`propagate_viewport_scrollbar_gutter` doesn't inspect actual overflow
+amount or the `Visible`-vs-`Auto` distinction after eligibility mapping) —
+confirmed via `--dump-layout` on a page mirroring 003's explicit
+`overflow: auto` (`1012px`, identical to 001's `1024 − 12`), not
+re-implemented as a second live JS probe.
+
+`.ini` for all four files removed (`tests/wpt/metadata/css/css-overflow/
+scrollbar-gutter-propagation-{001,002,003,007}.html.ini`) — each file has
+exactly one `test()`, now passing. **Not closed:** `overflow-clip-clamps-
+and-ignores-scroll-offsets-vertical-rl.html`, unrelated to this mechanism —
+still needs the CSSOM-4 synchronous style/layout flush architecture (part 8's
+finding), out of P3's point-fix scope. Remaining scope: 1 file. Status stays
+`OPEN`.

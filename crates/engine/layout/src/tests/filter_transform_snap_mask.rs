@@ -1668,6 +1668,54 @@ fn scrollbar_gutter_block_stable_reduces_child_height_overflow_hidden() {
     assert!((p.rect.height - 188.0).abs() < 0.01, "p child={}", p.rect.height);
 }
 
+// ──────── scrollbar-gutter propagation from `:root` to the viewport ────────
+
+/// `scrollbar-gutter` on `:root` (`<html>`) reserves its gutter against the
+/// **viewport**, not just its own children — `document.documentElement`
+/// itself comes out narrower, and `<body>` must NOT be narrowed a *second*
+/// time between `<html>` and `<body>` (BUG-504, `scrollbar-gutter-propagation-*`).
+#[test]
+fn scrollbar_gutter_root_stable_propagates_to_viewport_width() {
+    let root = lay_full("<p>x</p>", "html { scrollbar-gutter: stable; } body { margin: 0; }");
+    let html_box = first_element_child(&root);
+    let body_box = first_element_child(html_box);
+    assert!((html_box.rect.width - 788.0).abs() < 0.01, "html={}", html_box.rect.width);
+    assert!(
+        (body_box.rect.width - html_box.rect.width).abs() < 0.01,
+        "body={} html={} (body must not be narrowed a second time)",
+        body_box.rect.width,
+        html_box.rect.width
+    );
+}
+
+/// `stable both-edges` on `:root` mirrors the same double-reservation and
+/// start-edge shift that a plain scrolling element gets
+/// (`scrollbar_gutter_stable_both_edges_shifts_child_start_edge`), applied to
+/// `<html>` against the viewport instead of a child against its container.
+#[test]
+fn scrollbar_gutter_root_stable_both_edges_shifts_viewport_start_edge() {
+    let root = lay_full(
+        "<p>x</p>",
+        "html { scrollbar-gutter: stable both-edges; } body { margin: 0; }",
+    );
+    let html_box = first_element_child(&root);
+    assert!((html_box.rect.width - 776.0).abs() < 0.01, "html={}", html_box.rect.width);
+    assert!((html_box.rect.x - 12.0).abs() < 0.01, "html.x={}", html_box.rect.x);
+}
+
+/// `scrollbar-gutter` declared on `<body>` (or deeper) must NOT propagate to
+/// the viewport — only `:root`'s own value counts (WPT
+/// `scrollbar-gutter-propagation-006.html`).
+#[test]
+fn scrollbar_gutter_body_only_does_not_propagate_to_viewport() {
+    let root = lay_full(
+        "<p>x</p>",
+        "body { scrollbar-gutter: stable; overflow-y: scroll; margin: 0; }",
+    );
+    let html_box = first_element_child(&root);
+    assert!((html_box.rect.width - 800.0).abs() < 0.01, "html={}", html_box.rect.width);
+}
+
 // ──────── transform-origin / perspective / list-style-* / transition-* ────────
 
 #[test]
