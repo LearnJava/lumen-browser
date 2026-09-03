@@ -2524,6 +2524,40 @@ SOURCE_MARKERS = [
             "/selection/selection-nested-video.html",
         ),
     ),
+    # WPT-RUN-6 slice 54. A `<style>` obtained via `<template>.content.
+    # cloneNode(true)` and then appended into the live tree misses all three
+    # triggers that would fetch its `@import` and fire `load`/`error`
+    # (`web_api_shim_mid.js` §4.14): `cloneNode` never calls
+    # `_lumen_resource_track` (only `createElement` does, line 7882/7901),
+    # `_lumen_style_children_changed` (line 8818) only fires when the
+    # *mutated* node is itself a tracked `<style>`, and the one-shot
+    # `_lumen_style_blocks_scan()` (line 8829) already ran before this
+    # insertion happens. The Rust side (`relayout.rs::refresh_dynamic_css`)
+    # does reparse the block and see the `@import`, but by design never
+    # touches the network from relayout — so the import is parsed and then
+    # discarded on both sides. Measured live
+    # (`tests/wpt/verify_slice54_gaps.py` + ad hoc `cloneNode` diagnostics):
+    # only one `GET .../scope.css` for the whole page (the sibling `<link>`
+    # subtest's), `CSS пересобран после правки <style>: 0 правил` for the
+    # `<style>` one, no `load`/`error` ever fires — the awaited promise never
+    # settles. New bug filed (BUG-967); the sibling subtest ("through link
+    # element") does not hang (its `<link>` fires `load` normally) but FAILs
+    # a different assertion (`@scope` implicit-root leak past its boundary
+    # for an externally-loaded sheet) — noted in BUG-967 as a second, distinct
+    # defect, not classified here since it isn't a TIMEOUT.
+    Mechanism(
+        "style-clone-import-not-fetched", "BUG-967",
+        [], "a `<style>` element built from `<template>.content."
+        "cloneNode(true)` and appended into the live tree is invisible to "
+        "every trigger that would fetch its `@import` or fire `load`/"
+        "`error` (`cloneNode` doesn't register it as a tracked resource, "
+        "it isn't itself the mutated node for the children-changed hook, "
+        "and the one-shot post-parse scan already ran) — the awaited "
+        "promise never settles",
+        predicate=_exact_id_marker(
+            "/css/css-cascade/scope-implicit-external.html",
+        ),
+    ),
 ]
 
 #: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched
