@@ -61,9 +61,21 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, false, None);
     propagate_canvas_background(doc, &mut root);
+    let (gw, gx, gh, gy) = propagate_viewport_scrollbar_gutter(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     let null_hp = NullHyphenationProvider;
-    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), None, viewport, init_pcb, &null_hp, false);
+    lay_out(
+        &mut root,
+        gx,
+        gy,
+        viewport.width - gw,
+        Some(viewport.height - gh),
+        None,
+        viewport,
+        init_pcb,
+        &null_hp,
+        false,
+    );
     apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, false);
     // CSS Container Queries L1: second pass applies @container rules + re-layout.
     apply_container_styles(&mut root, doc, sheet, viewport, None, &null_hp, false);
@@ -155,6 +167,7 @@ pub fn layout_measured_hyp_with_counters(
         build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None)
     };
     propagate_canvas_background(doc, &mut root);
+    let (gw, gx, gh, gy) = propagate_viewport_scrollbar_gutter(doc, &mut root);
     // CSS Fonts L5 §4 — resolve `font-size-adjust` against the real font x-height
     // before measurement, so both line wrapping and paint use the scaled size.
     apply_font_size_adjust(&mut root, measurer);
@@ -162,7 +175,18 @@ pub fn layout_measured_hyp_with_counters(
     {
         let _prof = lumen_core::profile::scope("lay_out");
         lumen_core::tracy_zone!("lay_out");
-        lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp, false);
+        lay_out(
+            &mut root,
+            gx,
+            gy,
+            viewport.width - gw,
+            Some(viewport.height - gh),
+            Some(measurer),
+            viewport,
+            init_pcb,
+            hp,
+            false,
+        );
     }
     {
         let _prof = lumen_core::profile::scope("post_layout_passes");
@@ -601,6 +625,74 @@ pub fn canvas_background_color(root: &LayoutBox) -> Option<crate::style::Color> 
         .find(|c| matches!(c.kind, BoxKind::Block | BoxKind::FlowRoot))?;
     let color = html.style.background_color?.to_color_opt()?;
     (color.a == 255).then_some(color)
+}
+
+/// CSS Overflow L4 §"scrollbar-gutter propagation" — `scrollbar-gutter` on the
+/// root element (`:root`, i.e. `<html>`) reserves its gutter against the
+/// **viewport**, unlike the same property on any other element
+/// (`scrollbar_gutter_inline`/`_block`, which reserve space between a box and
+/// its own children). Concretely: `document.documentElement.offsetWidth` must
+/// come out narrower than `window.innerWidth` by the gutter unit, while
+/// `<body>` (and everything under it) keeps exactly `<html>`'s own
+/// `offsetWidth` — no *second*, interior reservation between `<html>` and
+/// `<body>` the way a plain scrolling element would apply to its children.
+/// Only `:root`'s own declared value counts: a `scrollbar-gutter` on `<body>`
+/// (or deeper) must NOT propagate to the viewport (WPT
+/// `scrollbar-gutter-propagation-006.html`), so this only ever reads the
+/// `<html>` box's own style.
+///
+/// Because the initial value of `overflow` is `visible` and the CSS Overflow
+/// spec's UA note has `visible` on the root propagate to the viewport as
+/// `auto` (a page is always scrollable regardless), eligibility here maps
+/// `Visible` to `Auto` on a scratch copy of `<html>`'s style before deferring
+/// to the same `scrollbar_gutter_inline`/`_block` eligibility gate every other
+/// element uses — unlike a plain element, `:root` does not need an explicit
+/// `overflow: auto/scroll/hidden` to reserve its gutter (WPT
+/// `-propagation-001`/`-002` declare no `overflow` at all).
+///
+/// Returns `(inline_reserve, inline_start_shift, block_reserve,
+/// block_start_shift)` — CSS px to subtract from the top-level `lay_out`
+/// call's available width/height and to add to its start `x`/`y`, mirroring
+/// exactly what `content_x`/`content_width`/`children_available_height` do
+/// for any other scrolling element. As a side effect, `<html>`'s own
+/// `scrollbar_gutter` is reset to `Auto` whenever a non-zero reservation is
+/// returned, so the normal per-element machinery does not reserve the *same*
+/// gutter a second time, between `<html>` and `<body>`.
+///
+/// Deliberately wired only into the non-incremental entry points ([`layout`],
+/// [`layout_measured_hyp_with_counters`]) — every navigation goes through one
+/// of these for its first layout pass. The incremental restyle/mutation paths
+/// ([`layout_streaming_incremental`], [`layout_mutation_incremental_restyle`])
+/// are left untouched: `Arc::make_mut`-ing `<html>`'s style here would give it
+/// a fresh `Arc` on every call regardless of whether the author's declaration
+/// changed, which risks defeating the cascade-cache/graft style-pointer reuse
+/// BUG-341's incremental machinery depends on for *any* page with a
+/// `scrollbar-gutter` on `:root` — a perf regression out of proportion to
+/// this fix, and untested by any of these WPT files (all one-shot `test()`,
+/// not `async_test` mutating `:root` after load).
+fn propagate_viewport_scrollbar_gutter(doc: &Document, root: &mut LayoutBox) -> (f32, f32, f32, f32) {
+    let Some(html_idx) = root.children.iter().position(|c| is_html_element_named(doc, c.node, "html")) else {
+        return (0.0, 0.0, 0.0, 0.0);
+    };
+    let html_box = &mut root.children[html_idx];
+    if matches!(html_box.style.scrollbar_gutter, ScrollbarGutter::Auto) {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    let mut viewport_style = (*html_box.style).clone();
+    if viewport_style.overflow_x == Overflow::Visible {
+        viewport_style.overflow_x = Overflow::Auto;
+    }
+    if viewport_style.overflow_y == Overflow::Visible {
+        viewport_style.overflow_y = Overflow::Auto;
+    }
+    let w_reserve = scrollbar_gutter_inline(&viewport_style);
+    let x_shift = scrollbar_gutter_inline_start(&viewport_style);
+    let h_reserve = scrollbar_gutter_block(&viewport_style);
+    let y_shift = scrollbar_gutter_block_start(&viewport_style);
+    if w_reserve > 0.0 || h_reserve > 0.0 {
+        Arc::make_mut(&mut html_box.style).scrollbar_gutter = ScrollbarGutter::Auto;
+    }
+    (w_reserve, x_shift, h_reserve, y_shift)
 }
 
 fn is_html_element_named(doc: &Document, id: NodeId, want: &str) -> bool {
