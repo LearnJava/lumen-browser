@@ -91,7 +91,7 @@ P5's mandate is **audit + cheap safe cleanup + filing tasks** — never solo ref
   - visual/logic bug → `OPEN` line in `BUGS.md` (next BUG-NNN)
   - duplication / needed refactor → `ROADMAP.md` row + a pointer line (`ROADMAP.md:NN` or code `file:line`) in `STATUS-P1.md`/`STATUS-P2.md`
   - dangling `// CSS:` handoff → `crates/...:line` pointer line in `STATUS-P4.md`
-- **Workspace-clippy exception.** P5 is the only role allowed `cargo clippy --workspace` (see Cargo output rules) — the full sweep is its whole point; it catches cross-crate breakage that per-crate checks hide after multi-session merges.
+- **Workspace-clippy.** P5 is the only role that runs `cargo clippy --workspace` *as its own task* — the full sweep is its whole point; it catches cross-crate breakage that per-crate checks hide after multi-session merges. Every role also meets it once per task inside `/lumen-task-finish`'s gate ([`commands.md`](commands.md) §Cargo output rules); what is P5-specific is running it standalone and on demand.
 - **Branch prefix:** `p5-health-<date>` or `p5-<topic>`. Worktree mandatory, same as P1–P4.
 
 Full role definition: `STATUS-P5.md`.
