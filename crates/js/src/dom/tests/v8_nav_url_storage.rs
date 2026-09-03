@@ -234,6 +234,28 @@ fn location_hash_setter_same_value_noop() {
     assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(0.0));
 }
 
+/// BUG-971: a forward same-document fragment navigation must fire `popstate`
+/// (HTML LS §7.4.6), not just `hashchange` — unlike `hashchange`, `popstate`
+/// dispatch is synchronous, no `_lumen_tick_timers()` turn needed.
+#[test]
+fn location_hash_setter_fires_popstate() {
+    let rt = v8_runtime_with_url("https://example.com/page");
+    rt.eval("var n=0; window.addEventListener('popstate', function(){ n++; }); location.hash='x';")
+        .unwrap();
+    assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(1.0));
+}
+
+/// BUG-971: same-value assignment is a no-op for `hashchange` too (see
+/// `location_hash_setter_same_value_noop`), so it must not fire a spurious
+/// `popstate` either.
+#[test]
+fn location_hash_setter_same_value_no_popstate() {
+    let rt = v8_runtime_with_url("https://example.com/page#sec");
+    rt.eval("var n=0; window.addEventListener('popstate', function(){ n++; }); location.hash='sec';")
+        .unwrap();
+    assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(0.0));
+}
+
 #[test]
 fn location_hash_setter_no_navigate_request() {
     let rt = v8_runtime_with_url("https://example.com/page");
@@ -450,6 +472,18 @@ fn location_href_fragment_fires_hashchange() {
         rt.eval("fired").unwrap(),
         lumen_core::JsValue::String("https://example.com/page#x".into())
     );
+}
+
+/// BUG-971: `_lumen_navigate_or_fragment` (the path `location.href =`/
+/// `.assign()`/`.replace()` and an `<a href="#x">`'s default click
+/// activation all funnel through) must fire `popstate` too, not only
+/// `hashchange` — synchronous, unlike `hashchange`.
+#[test]
+fn location_href_fragment_fires_popstate() {
+    let rt = v8_runtime_with_url("https://example.com/page");
+    rt.eval("var n=0; window.addEventListener('popstate', function(){ n++; }); location.href='#x';")
+        .unwrap();
+    assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(1.0));
 }
 
 #[test]

@@ -2610,6 +2610,48 @@ SOURCE_MARKERS = [
             "implicit-sizes-ignores-width.html",
         ),
     ),
+    # WPT-RUN-6 slice 56. `_lumen_navigate_or_fragment` (forward same-document
+    # fragment navigation: `location.hash =`/`location.href =`/the default
+    # activation of `<a href="#x">`) updates `location`, pushes a history
+    # entry and fires `hashchange` — never `PopStateEvent`. Only the
+    # shell-driven traversal path (`history.back/forward/go`,
+    # `_lumen_deliver_popstate`) dispatches `popstate`. Measured live with two
+    # minimal, `testharness.js`-free pages: `history.length` grows 1 → 2 → 3
+    # across two forward pushes (the entries are real), but `onpopstate`
+    # fires exactly once, on the one `history.back()` call. New bug filed
+    # (BUG-971).
+    Mechanism(
+        "fragment-nav-no-popstate", "BUG-971",
+        [], "a forward same-document fragment navigation (`location.hash =`, "
+        "`location.href =`, or clicking `<a href=\"#x\">`) never dispatches "
+        "`popstate` — only `history.back()`/`forward()`/`go()` does",
+        predicate=_exact_id_marker(
+            "/html/browsers/browsing-the-web/overlapping-navigations-and-"
+            "traversals/anchor-fragment-history-back-on-click.html",
+        ),
+    ),
+    # WPT-RUN-6 slice 56. Scroll To Text Fragment (`:~:text=`) does not exist
+    # anywhere in the workspace: no URL fragment-directive parsing, no
+    # text-search over the rendered DOM, no `hidden="until-found"` state, no
+    # `beforematch` dispatch (`onbeforematch` is reflected as a generic
+    # global event-handler content attribute but nothing ever fires it).
+    # Measured live (`serve_wpt_like.py`): the page sets
+    # `location.hash = ':~:text=abc,-def'` and awaits a `toggle` event on a
+    # `<details>` that should open only because of the match — the match
+    # never happens, so `toggle` never fires and the harness hangs until its
+    # own timeout. Filed as a ДОРАБОТКА (BUG-972 → STTF-1 in ROADMAP.md), not
+    # a plain P3 bug — the gap spans URL parsing, DOM text search, a new
+    # hidden-state model and a new event, not a point fix.
+    Mechanism(
+        "scroll-to-text-fragment-missing", "BUG-972",
+        [], "the `:~:text=` fragment directive is never parsed or matched, "
+        "so a page waiting on the resulting `beforematch`/reveal (e.g. a "
+        "`<details>` `toggle`) hangs forever",
+        predicate=_exact_id_marker(
+            "/scroll-to-text-fragment/find-range-from-text-directive-"
+            "no-reveal.html",
+        ),
+    ),
 ]
 
 #: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched

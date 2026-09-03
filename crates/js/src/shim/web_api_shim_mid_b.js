@@ -178,7 +178,9 @@ Object.defineProperty(globalThis, 'location', {
 });
 // HTML LS Location.hash setter: same-document fragment navigation.
 // Mutates only the fragment of the current URL; updates location + history
-// without a page reload and fires `hashchange`. Internal updates use the
+// without a page reload and fires `popstate` then `hashchange` (HTML LS
+// §7.4.6, same rule as `_lumen_navigate_or_fragment` below — BUG-971: this
+// dedicated path used to skip `popstate` too). Internal updates use the
 // `_lumen_loc_hash` backing var directly to avoid re-triggering this path.
 function _lumen_set_location_hash(v) {
     var frag = String(v || '');
@@ -190,12 +192,20 @@ function _lumen_set_location_hash(v) {
     _lumen_location_update(newHref);
     _lumen_history_push('null', newHref);
     _lumen_history_push_url(newHref, 'null');
+    _lumen_dispatch_popstate(null);
     _lumen_fire_hashchange(oldHref, newHref);
 }
 // HTML LS navigation entry point for location.href= / assign() / replace().
 // If the resolved target differs from the current URL only in its fragment,
 // performs a same-document fragment navigation (no reload): updates location,
-// pushes/replaces a same-document history entry, and fires `hashchange`.
+// pushes/replaces a same-document history entry, and fires `popstate` then
+// `hashchange` (HTML LS §7.4.6 — a forward same-document navigation to a new
+// current entry fires `popstate` exactly like a shell-driven traversal does;
+// only `pushState`/`replaceState` themselves are excluded from that, per
+// spec. BUG-971: this branch used to fire `hashchange` alone, so a page
+// waiting on `popstate` from a fragment-only `location.hash =`/`.href =` or
+// an `<a href="#x">` click never saw it — only `history.back/forward/go`
+// (`_lumen_deliver_popstate`) did).
 // Otherwise falls through to a full navigation via `_lumen_navigate`.
 function _lumen_navigate_or_fragment(rawUrl, replace) {
     var url = String(rawUrl || '');
@@ -218,6 +228,7 @@ function _lumen_navigate_or_fragment(rawUrl, replace) {
                 _lumen_history_push('null', resolved);
                 _lumen_history_push_url(resolved, 'null');
             }
+            _lumen_dispatch_popstate(null);
             _lumen_fire_hashchange(oldHref, resolved);
             return;
         }
@@ -820,6 +831,22 @@ function _lumen_run_raf_callbacks(timestamp_ms) {
 
 var _popstate_listeners = [];
 
+// Dispatches one `popstate` event carrying `state` to `window.onpopstate` and
+// every listener registered via `addEventListener('popstate', ...)`. Shared
+// by the two paths HTML LS §7.4.6 requires it on: shell-driven traversal
+// (`_lumen_deliver_popstate`, below) and forward same-document fragment
+// navigation (`_lumen_navigate_or_fragment`, BUG-971) — `pushState`/
+// `replaceState` themselves stay excluded, per spec.
+function _lumen_dispatch_popstate(state) {
+    var ev = new PopStateEvent('popstate', { state: state, bubbles: true });
+    if (typeof window.onpopstate === 'function') {
+        try { window.onpopstate(ev); } catch (e) { _lumen_report_exception(e); }
+    }
+    for (var i = 0; i < _popstate_listeners.length; i++) {
+        try { _popstate_listeners[i](ev); } catch (e) { _lumen_report_exception(e); }
+    }
+}
+
 // Called by the shell (via eval_js) when the user navigates back/forward to a
 // same-document (pushState) history entry.  Updates location and fires popstate.
 // state_json is already valid JSON; url may be empty (means keep current).
@@ -841,13 +868,7 @@ function _lumen_deliver_popstate(state_json, url) {
     var newHash = newHref.indexOf('#') >= 0 ? newHref.slice(newHref.indexOf('#')) : '';
     var s;
     try { s = JSON.parse(state_json); } catch(e) { s = null; }
-    var ev = new PopStateEvent('popstate', { state: s, bubbles: true });
-    if (typeof window.onpopstate === 'function') {
-        try { window.onpopstate(ev); } catch(e) { _lumen_report_exception(e); }
-    }
-    for (var i = 0; i < _popstate_listeners.length; i++) {
-        try { _popstate_listeners[i](ev); } catch(e) { _lumen_report_exception(e); }
-    }
+    _lumen_dispatch_popstate(s);
     if (target && oldHash !== newHash) {
         _lumen_fire_hashchange(oldHref, newHref);
     }
