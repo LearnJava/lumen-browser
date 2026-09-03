@@ -19,6 +19,7 @@ mod file_picker;
 mod find_bar;
 mod focus_tab;
 mod form_submit;
+mod frame_dynamic;
 mod frame_form_submit;
 mod frame_forms;
 mod frame_links;

@@ -259,6 +259,9 @@ impl Lumen {
             LoadEvent::FrameNavDone { host_doc, host, old_doc, generation, handles } => {
                 self.on_frame_nav_done(&host_doc, host, &old_doc, generation, handles);
             }
+            LoadEvent::FrameNewLoadDone { host_doc, host, is_top, handles } => {
+                self.on_frame_new_load_done(&host_doc, host, is_top, handles);
+            }
         }
     }
 }

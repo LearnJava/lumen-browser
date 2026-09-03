@@ -1550,7 +1550,7 @@ pub(crate) fn load_frame_sub_documents(
 /// результат навигации, а не свою разметку.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 #[allow(clippy::unwrap_used)] // короткий лок дерева; poisoned mutex = паника потока загрузки, docs/lint-policy.md §10
-fn spawn_frame(
+pub(crate) fn spawn_frame(
     info: &lumen_dom::IframeInfo,
     dest: Option<(&str, &ResourceBase)>,
     parent: &Arc<Mutex<Document>>,
