@@ -3,7 +3,12 @@ unimplemented (`corner-shape`, `border-shape`, `box-shadow-{offset,color,blur,
 spread,position}`, `border-*-radius` pair shorthands, `border-clip`, `hairline`
 keyword)
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md)
+**Тип:** доработка — весь черновой модуль CSS Borders and Box Decorations Level 4
+(`corner-shape`/`border-shape` + их лонгхенды и шорткоды, `box-shadow-*` компонентные
+лонгхенды, парные `border-*-radius` шорткоды, `border-clip`, keyword `hairline`)
+отсутствует целиком, включая рендеринг-алгоритмы (notch/bevel/round corner clipping),
+а не сломан точечно; см. ревизию P3 2026-09-03 ниже
 **Дата:** 2026-08-02
 **Компонент:** css-parser / layout (`crates/engine/layout/src/style.rs::apply_declaration`,
 `crates/engine/layout/src/selector_query.rs::computed_style_to_map`)
@@ -121,3 +126,38 @@ surface (a still-draft CSSWG module) — not cross-cutting like BUG-472/477/483
 Committed `.ini` under `tests/wpt/metadata/css/css-borders/` for the files in
 this slice fully or partially explained by this bug (see slice write-up in
 `docs/wpt-status.md`).
+
+## Ревизия P3 2026-09-03: переклассифицирован в ДОРАБОТКА → CSS-SPECS.md
+
+Investigated as the next top-down `STATUS-P3.md` item after BUG-341 (user-paused,
+skip confirmed by user), BUG-480/BUG-490 (already-tagged ДОРАБОТКА, skipped),
+BUG-492/BUG-493 (already reclassified out of the P3 queue). Both conditions of
+the ДОРАБОТКА test (`docs/probe-method.md` §8) hold: (1) the capability is absent
+outright — re-confirmed this session, `grep -rni` across `crates/css-parser/src/`,
+`crates/engine/layout/src/`, `crates/engine/paint/src/` for `corner-shape`,
+`border-shape`, `box-shadow-offset`, `border-top-radius`, `border-clip`, `hairline`
+returns zero real hits (only the unrelated `hairline_aa` rasterizer-internal
+symbol name, as already noted in `## Механизм` above); (2) the size is a whole
+spec-module family, not a single member — `corner-shape` alone is 8 physical/
+logical longhands + edge/corner-pair shorthands + the `border-shape` shorthand,
+plus five separate `box-shadow-*` component longhands, plus 8 `border-*-radius`
+pair shorthands, plus `border-clip`, plus a `<line-width>` keyword. Implementing
+`corner-shape`/`border-shape` also needs a new corner-clipping paint algorithm
+(notch/bevel/round/squircle corner geometry) that does not exist anywhere in
+`lumen-paint` today — same shape of finding as [BUG-492](BUG-492-OPEN.md)'s
+9-slice `border-image` paint gap, which set this precedent.
+
+Unlike CSSOM-N/FRAME-style API gaps, this belongs to P4's existing CSS property
+queue (`CLAUDE.md` developer-assignments table: "P4 — CSS properties ONLY").
+Following the BUG-492 precedent (filed to `CSS-SPECS.md` rather than a new
+`ROADMAP.md` task, since that file already tracks the sibling module and CSS
+properties already have a P4 priority queue): the Tier-0 "CSS Backgrounds &
+Borders L3" module row's Notes cell gets an appended note pointing at this bug,
+rather than a new module row — `css-borders-4` is still a CSSWG *draft*, and
+inserting a new row (or a new granular row in the "[T0] Borders & Outlines"
+property table) risks the same line-shift hazard BUG-492 hit against
+`STATUS-P4.md`'s line-number pointers, so only the Notes-cell append is made
+here; P4 can add a dedicated Tier row when this draft graduates or is picked up.
+Status flipped to `OPEN (ДОРАБОТКА → CSS-SPECS.md)`. No `STATUS-P3.md` pointer
+existed for this row to remove (BUGS.md:56 was not in the pointer list —
+pre-existing drift, not introduced by this revision).
