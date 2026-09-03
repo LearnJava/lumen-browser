@@ -315,6 +315,18 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // Canonical `<line-width>` serialization for inline-`style`
+    // border-*-width longhands (CSS Backgrounds L3 §4.2, CSSOM-2/BUG-484
+    // second slice) — same role as `_lumen_css_canonical_length` above, but
+    // the grammar additionally allows the `thin`/`medium`/`thick` keywords
+    // (which serialize as themselves, not as a resolved px value).
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_line_width",
+        |value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_line_width(&value)
+        }
+    );
+
     // Queues a lazy image load request.  Called by `_lumen_deliver_lazy_images()` in JS
     // when an image registered via `_lumen_init_lazy_images` enters the lazy-load margin.
     // Shell drains via `QuickJsRuntime::take_lazy_image_requests` after each layout.

@@ -399,6 +399,30 @@ pub fn canonical_specified_length(s: &str, allow_auto: bool, non_negative: bool)
     Some(crate::selector_query::length_to_css(&len))
 }
 
+/// CSSOM-2 (BUG-484, second slice): validates and canonicalizes a
+/// `<line-width>` specified value (CSS Backgrounds L3 §4.2 / Basic UI L4
+/// §5.2 — `<length [0,∞]> | thin | medium | thick`) for the `border-*-width`
+/// longhands. Same role as [`canonical_specified_length`], but the grammar
+/// additionally allows the three keywords, which serialize as themselves
+/// (lowercased) rather than resolving to a pixel value — WPT's
+/// `border-width-valid.html` asserts `border-right-width: "thin"` round-trips
+/// as `"thin"`, not `"1px"` (the UA px equivalents used elsewhere for layout,
+/// `parse_line_width`, resolve them eagerly and would corrupt this
+/// serialization if reused here). Always non-negative, never accepts `auto`.
+pub fn canonical_specified_line_width(s: &str) -> Option<String> {
+    let v = s.trim();
+    if v.eq_ignore_ascii_case("thin") {
+        return Some("thin".to_string());
+    }
+    if v.eq_ignore_ascii_case("medium") {
+        return Some("medium".to_string());
+    }
+    if v.eq_ignore_ascii_case("thick") {
+        return Some("thick".to_string());
+    }
+    canonical_specified_length(v, false, true)
+}
+
 /// Extracts the sign of a `Length`'s underlying numeric literal, for
 /// [`canonical_specified_length`]'s `non_negative` grammar check. `Calc` and
 /// the intrinsic-sizing keywords have no single literal to check — treated
