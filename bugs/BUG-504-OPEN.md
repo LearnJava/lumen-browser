@@ -510,3 +510,119 @@ scrollable-overflow-extent)` regardless of the `overflow` value, but the
 shim's fallback path (`_lumen_get_bounding_rect`) only ever returns the
 border-box, never consulting `content_width`/`content_height` for a
 non-registered container.
+
+## Срез 2026-09-03 (P3, часть 7): negative scroll range + `overflow: clip` — engine half landed, JS-visible half still blocked
+
+Took the "own design pass" the previous slice deferred, for the exact
+`overflow-clip-clamps-and-ignores-scroll-offsets-vertical-rl.html` repro.
+**Correction to part 3's remaining-scope note above:** it claimed
+`collect_scroll_containers_inner`'s gate was `Scroll | Auto | Hidden` —
+re-checked against the live code this slice, it is still `Scroll | Auto`
+only (`crates/engine/layout/src/lib.rs`); `Hidden` was never added there.
+Part 3's own fix (`overflow-y`/`-x: hidden` eligible for `stable` gutter
+reservation) landed in the *sibling* function `scrollbar_gutter_inline`/
+`_block` (`box_tree/predicates.rs`), not this one — the note conflated the
+two.
+
+**Root cause of the negative-range gap:** `content_width`/`content_height`
+(`crates/engine/layout/src/lib.rs`) only ever folded in a child's *right*/
+*bottom* edge (`bounds.x + bounds.width - pb.x`) — there was no code path
+that could grow the scrollable-overflow region to the *left*/*above* the
+padding edge at all. Confirmed via `--dump-layout` on the WPT file's exact
+markup: under `writing-mode: vertical-rl` the vertical-writing-mode block
+layout path positions an only in-flow child flush with the container's
+*right* padding edge (block-start is physically on the right for
+`vertical-rl`) and lets it extend left — a 300px child in a 100px container
+sits at `x = -191` relative to an 8px-offset ancestor, i.e. entirely left of
+the padding box. The old formula's `bounds.x + bounds.width - pb.x` for this
+child evaluates to `100` (no rightward overflow at all), so
+`content_width` returned exactly `pb.width` (100) — zero detected overflow —
+and every scroll clamp collapsed to `[0, 0]`.
+
+**Fix:** `content_width`/`content_height` are now built on top of two new
+functions, `scrollable_extent_x`/`scrollable_extent_y`, which track a
+`(min, max)` pair relative to the padding edge instead of a single `max` —
+`min` starts at `0.0` and is pulled negative by any contributing child whose
+bounds start left of/above the padding edge, exactly mirroring the existing
+`max` logic on the other side. `content_width`/`content_height` reduce this
+to the old single-number magnitude (`max - min`) for their existing callers
+(`ScrollContainer.scroll_width`/`height`, i.e. JS `scrollWidth`/
+`scrollHeight`), so both stay backward-compatible generalizations — in the
+common all-rightward-overflow case `min` stays `0.0` and the numbers are
+byte-identical to before (confirmed by the full `cargo test -p lumen-layout`
+run below not shifting a single pre-existing assertion).
+`set_scroll_position` now clamps directly against `(min_x, max_x - clip_w)`/
+`(min_y, max_y - clip_h)` instead of `(0.0, sw - clip_w)`, so a scroll
+container whose content extends left/up can accept a negative offset there
+too.
+
+**Two more defects fixed in the same function, found while touching it:**
+1. `set_scroll_position`'s `clip_w`/`clip_h` read `root.rect.width`/`height`
+   directly — the **border**-box size — while `content_width`/`content_height`
+   (since part 2 of this bug) are computed relative to the **padding** box.
+   A container with a nonzero border therefore had its maximum scroll offset
+   clamped `2 × border` short of the true value (border ≥ half the overflow
+   could even clamp the max *below* the min, rejecting every scroll request
+   outright). Fixed by computing `padding_box(root)` once and using its
+   `width`/`height` for both axes' upper bound.
+2. `overflow: clip` was never distinguished from `hidden`/`scroll`/`auto` by
+   this function at all — CSS Overflow L3 §3.4 says `clip` "disables the
+   scrolling machinery outright", so a `clip` axis must report exactly `0`
+   and reject every scroll request, not just clamp to a (possibly nonzero)
+   range. `set_scroll_position` now checks `style.overflow_x`/`overflow_y ==
+   Overflow::Clip` per axis and forces `0.0` unconditionally when so,
+   bypassing the extent computation entirely for that axis.
+
+**Regression coverage:** 5 new tests in `scroll_interaction_misc.rs`:
+`set_scroll_position_vertical_rl_allows_negative_scroll_x` (mirrors the WPT
+file's exact geometry — 300px child, 100px `vertical-rl` container,
+`scrollTo(-40, 50)` → `(-40, 50)`; over-scroll clamps to `(-200, 200)`, the
+mirror image of the plain rightward-overflow case),
+`set_scroll_position_overflow_clip_forces_zero_and_rejects_writes`,
+`set_scroll_position_overflow_clip_clamps_existing_offset_back_to_zero`,
+`set_scroll_position_max_scroll_uses_padding_box_not_border_box` (40px
+border, 300px content in a 200px container — asserts the max clamps to 100,
+not the old 60). `cargo test -p lumen-layout --lib`: 3716/3716 (workspace's
+existing 3711 unaffected — including the RTL/transform/abspos tests from
+earlier slices of this bug, none of which shifted a single number).
+`cargo clippy -p lumen-layout --all-targets -- -D warnings`: clean.
+
+**Live WPT verification: fix confirmed correct at the engine level, but the
+file still cannot pass live — a second, independent gap blocks it.** A live
+`--mcp-live-port` probe against the exact WPT markup, reading `scrollLeft`/
+`scrollTop` through the real JS shim (not a unit test), still returns `[0,
+0]` after every step, unchanged by this slice's fix. Root cause isolated:
+`update_scroll_states`'s payload (what `_lumen_get_scroll_state` — and
+therefore the `scrollLeft`/`scrollTop`/`scrollWidth`/`scrollHeight` getters —
+actually reads) is built from `collect_scroll_containers`, whose `Scroll |
+Auto`-only eligibility gate is *also*, and correctly, what the shell uses to
+route mouse-wheel events (confirmed deliberate and tested:
+`collect_scroll_containers_overflow_hidden_excluded` in this same test file
+asserts `hidden` must NOT be wheel-scrollable, which matches real browsers).
+Reusing one function for both purposes means a `hidden`/`clip` container's
+scroll offset — which `set_scroll_position` now computes correctly, and
+which the shell's `about_to_wait.rs` scroll-request drain applies straight
+to the `LayoutBox` tree by node id regardless of `collect_scroll_containers`
+(confirmed: that call is unconditional on overflow value, not gated by the
+same list) — is written to the *engine* state correctly but never reaches
+the *JS-visible* `scroll_states` cache, so every read answers the shim's
+zero fallback. Fixing this needs a decoupled JS-state collection (or an
+eligibility flag split between "wheel-routable" and "JS-visible", since the
+two must diverge for `hidden`/`clip`) threaded through `page_load.rs`'s
+initial seed, `relayout.rs`'s `update_scroll_containers()`, and
+`about_to_wait.rs`'s post-drain re-push — a real design task, not a
+point fix, and out of this slice's scope. **Also co-blocking the same file
+regardless:** the already-filed [BUG-523](BUG-523-OPEN.md) — `scrollTo`/
+`scrollLeft=` are queue-based (`_lumen_request_scroll` → drained on the next
+`about_to_wait` tick), so a synchronous read immediately after a write sees
+the pre-write value even once the JS-state gap above is fixed; the live
+probe this slice used explicit waits between steps specifically to rule
+this out as a confound, and still saw `[0, 0]`, confirming the JS-state gap
+is a genuinely separate blocker, not just BUG-523 showing through.
+
+**Remaining scope, unchanged in count but now more precisely understood:** 5
+files — the same 4 `scrollbar-gutter-propagation-*.html` (BUG-529) plus
+`overflow-clip-clamps-and-ignores-scroll-offsets-vertical-rl.html`, which
+needs the `collect_scroll_containers`-vs-JS-state split above (and
+BUG-523) before it can pass live, even though its layout-engine half is now
+correct and unit-tested. Status stays `OPEN`.

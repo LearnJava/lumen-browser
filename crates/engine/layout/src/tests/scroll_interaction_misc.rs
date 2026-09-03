@@ -1357,6 +1357,154 @@ fn set_scroll_position_returns_false_for_unknown_node() {
     assert!(!found, "should return false for unknown node");
 }
 
+/// Recursively finds the first box matching `pred` — used by the tests below
+/// to locate a scroll container whose overflow value (`hidden`/`clip`)
+/// excludes it from [`collect_scroll_containers`] (which only registers
+/// `Scroll`/`Auto`), so they can't get a `NodeId` the way the tests above do.
+fn find_box_where<'a>(
+    b: &'a LayoutBox,
+    pred: &impl Fn(&LayoutBox) -> bool,
+) -> Option<&'a LayoutBox> {
+    if pred(b) {
+        return Some(b);
+    }
+    b.children.iter().find_map(|c| find_box_where(c, pred))
+}
+
+#[test]
+fn set_scroll_position_vertical_rl_allows_negative_scroll_x() {
+    // BUG-504 (WPT `overflow-clip-clamps-and-ignores-scroll-offsets-vertical-rl.html`):
+    // under `writing-mode: vertical-rl` the block-progression direction is
+    // physically right-to-left, so the vertical-writing-mode block layout
+    // path positions an only in-flow child flush with the container's
+    // *right* padding edge and lets it extend left — the scrollable
+    // overflow lands on the negative-x side. `scrollable_extent_x` used to
+    // only ever grow the positive (rightward) edge, so `content_width`
+    // reported no overflow at all here (300px child entirely "left" of a
+    // formula that only looked right) and every scroll request clamped to
+    // 0. A 300px child in a 100px container must allow `scrollLeft` down to
+    // -200 (300-100).
+    let mut root = lay_full(
+        "<div id=\"s\"><div id=\"c\"></div></div>",
+        "#s { writing-mode: vertical-rl; overflow: hidden; width: 100px; height: 100px; } \
+         #c { width: 300px; height: 300px; }",
+    );
+    let node = find_box_where(&root, &|b| b.style.writing_mode == style::WritingMode::VerticalRl)
+        .expect("vertical-rl box")
+        .node;
+
+    let found = set_scroll_position(&mut root, node, -40.0, 50.0);
+    assert!(found);
+    let b = find_box_by_node(&root, node).expect("box still there");
+    assert!((b.scroll_x - -40.0).abs() < 0.5, "expected scroll_x=-40, got {}", b.scroll_x);
+    assert!((b.scroll_y - 50.0).abs() < 0.5, "expected scroll_y=50, got {}", b.scroll_y);
+
+    // Range floor: -200 == -(300-100), further negative still clamps there;
+    // positive y still clamps at 200 == 300-100, same as the plain LTR case.
+    set_scroll_position(&mut root, node, -1000.0, 1000.0);
+    let b2 = find_box_by_node(&root, node).expect("box still there");
+    assert!(
+        (b2.scroll_x - -200.0).abs() < 0.5,
+        "expected scroll_x clamped to -200, got {}",
+        b2.scroll_x
+    );
+    assert!(
+        (b2.scroll_y - 200.0).abs() < 0.5,
+        "expected scroll_y clamped to 200, got {}",
+        b2.scroll_y
+    );
+}
+
+#[test]
+fn set_scroll_position_overflow_clip_forces_zero_and_rejects_writes() {
+    // BUG-504 (same WPT file): `overflow: clip` disables the scrolling
+    // machinery outright (CSS Overflow L3 §3.4) — unlike `hidden`, which
+    // stays programmatically scrollable, a `clip` axis must report exactly
+    // 0 and ignore every scroll request, not just clamp to a shrunken range.
+    let mut root = lay_full(
+        "<div id=\"s\"><div id=\"c\"></div></div>",
+        "#s { overflow: clip; width: 100px; height: 100px; } \
+         #c { width: 300px; height: 300px; }",
+    );
+    let node = find_box_where(&root, &|b| b.style.overflow_x == style::Overflow::Clip)
+        .expect("clip box")
+        .node;
+
+    set_scroll_position(&mut root, node, -40.0, 50.0);
+    let b = find_box_by_node(&root, node).expect("box still there");
+    assert_eq!(b.scroll_x, 0.0, "overflow:clip must reject scroll requests (x)");
+    assert_eq!(b.scroll_y, 0.0, "overflow:clip must reject scroll requests (y)");
+}
+
+#[test]
+fn set_scroll_position_overflow_clip_clamps_existing_offset_back_to_zero() {
+    // BUG-504 (same WPT file, part 2 of the scenario): a container that
+    // already carries a nonzero scroll offset (established while it was
+    // still `overflow: hidden`) must have it clamped back to 0 once
+    // `set_scroll_position` next runs against it under `overflow: clip` —
+    // exercised here by driving the same `LayoutBox` through both overflow
+    // values directly (the style-mutation → relayout → re-seed path that
+    // would carry this in the live shell is a separate, JS/shell-side
+    // concern, not this function's).
+    let mut root = lay_full(
+        "<div id=\"s\"><div id=\"c\"></div></div>",
+        "#s { writing-mode: vertical-rl; overflow: hidden; width: 100px; height: 100px; } \
+         #c { width: 300px; height: 300px; }",
+    );
+    let node = find_box_where(&root, &|b| b.style.writing_mode == style::WritingMode::VerticalRl)
+        .expect("vertical-rl box")
+        .node;
+    set_scroll_position(&mut root, node, -40.0, 50.0);
+    let b = find_box_by_node(&root, node).expect("box still there");
+    assert!((b.scroll_x - -40.0).abs() < 0.5, "sanity: hidden allows -40");
+
+    let mut clipped = lay_full(
+        "<div id=\"s\"><div id=\"c\"></div></div>",
+        "#s { writing-mode: vertical-rl; overflow: clip; width: 100px; height: 100px; } \
+         #c { width: 300px; height: 300px; }",
+    );
+    let clip_node =
+        find_box_where(&clipped, &|b| b.style.writing_mode == style::WritingMode::VerticalRl)
+            .expect("vertical-rl box")
+            .node;
+    // Any request — even repeating the previously-accepted -40/50 — is a
+    // no-op once the axis reports `clip`.
+    set_scroll_position(&mut clipped, clip_node, -40.0, 50.0);
+    let c = find_box_by_node(&clipped, clip_node).expect("box still there");
+    assert_eq!(c.scroll_x, 0.0);
+    assert_eq!(c.scroll_y, 0.0);
+}
+
+#[test]
+fn set_scroll_position_max_scroll_uses_padding_box_not_border_box() {
+    // Regression guard: `set_scroll_position`'s clamp used to subtract
+    // `LayoutBox::rect`'s BORDER-box width from `content_width`'s
+    // padding-box-relative magnitude, so a container with a nonzero border
+    // capped its maximum scroll offset `2 × border` short of the true
+    // value (here it would have clamped to 60 instead of 100, and with a
+    // border ≥ half the overflow it could clamp the max *below* the min,
+    // rejecting every scroll request outright). 300px content in a
+    // 200px-wide container with a 40px left border (240px border-box, 200px
+    // padding-box, no padding declared): max scrollLeft must be 100
+    // (300-200), not 300-240=60.
+    let mut root = lay_full(
+        "<div id=\"s\"><div id=\"c\"></div></div>",
+        "#s { overflow: scroll; width: 200px; height: 50px; border-style: solid; \
+         border-width: 0 0 0 40px; } \
+         #c { width: 300px; height: 10px; }",
+    );
+    let containers = collect_scroll_containers(&root);
+    assert_eq!(containers.len(), 1);
+    let node = containers[0].node;
+    set_scroll_position(&mut root, node, 1000.0, 0.0);
+    let b = find_box_by_node(&root, node).expect("box still there");
+    assert!(
+        (b.scroll_x - 100.0).abs() < 0.5,
+        "expected scroll_x clamped to 100 (padding-box max), got {}",
+        b.scroll_x
+    );
+}
+
 // ── text-wrap: balance / pretty ─────────────────────────────────────────
 
 fn twrap_find_run(b: &LayoutBox) -> Option<&LayoutBox> {
