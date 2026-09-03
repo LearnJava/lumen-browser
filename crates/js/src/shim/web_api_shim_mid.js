@@ -1219,41 +1219,64 @@ var _LUMEN_COLOR_PROPERTIES = {
 };
 
 // CSS Box §8 / CSS Position §6 / CSSOM §Change-a-computed-value
-// (CSSOM-2/BUG-484, first+second slice): plain `<length-percentage>`
+// (CSSOM-2/BUG-484, first+second+fourth slice): plain `<length-percentage>`
 // longhands — margin-*/inset-*(top/right/bottom/left) accept the `auto`
 // keyword and negative values, padding-* accepts neither. Validated and
 // canonicalized via `_lumen_css_canonical_length` on assignment, same role
 // as `_LUMEN_COLOR_PROPERTIES` above. Deliberately NOT the `margin`/
 // `padding`/`inset` shorthands themselves (`style.margin = "1px 2px"`) —
 // shorthand-VALUE parsing/expansion is separate, larger scope (see the
-// comment on `_LUMEN_TRBL_SHORTHANDS` above), and the CSS Logical
-// equivalents (margin-block/inline-*, padding-block/inline-*,
-// inset-block/inline-*) are not covered yet — each is its own future slice.
+// comment on `_LUMEN_TRBL_SHORTHANDS` above). The CSS Logical equivalents
+// (margin-inline/block-start/end, padding-inline/block-start/end,
+// inset-inline/block-start/end — fourth slice) share this same table: the
+// Rust side (`crates/engine/layout/src/style/apply/layout.rs`) resolves
+// each through `set_margin_side`/`set_padding_side`, the identical grammar
+// as its physical counterpart, so no new canonicalization function is
+// needed — only the `margin-inline`/`margin-block`/`padding-inline`/
+// `padding-block`/`inset-inline`/`inset-block` two-value SHORTHANDS stay
+// out of scope, same reason as the physical shorthands above.
 var _LUMEN_LENGTH_PROPERTIES = {
     'margin-top':    { allowAuto: true,  nonNegative: false },
     'margin-right':  { allowAuto: true,  nonNegative: false },
     'margin-bottom': { allowAuto: true,  nonNegative: false },
     'margin-left':   { allowAuto: true,  nonNegative: false },
+    'margin-inline-start': { allowAuto: true,  nonNegative: false },
+    'margin-inline-end':   { allowAuto: true,  nonNegative: false },
+    'margin-block-start':  { allowAuto: true,  nonNegative: false },
+    'margin-block-end':    { allowAuto: true,  nonNegative: false },
     'padding-top':    { allowAuto: false, nonNegative: true },
     'padding-right':  { allowAuto: false, nonNegative: true },
     'padding-bottom': { allowAuto: false, nonNegative: true },
     'padding-left':   { allowAuto: false, nonNegative: true },
+    'padding-inline-start': { allowAuto: false, nonNegative: true },
+    'padding-inline-end':   { allowAuto: false, nonNegative: true },
+    'padding-block-start':  { allowAuto: false, nonNegative: true },
+    'padding-block-end':    { allowAuto: false, nonNegative: true },
     'top':    { allowAuto: true, nonNegative: false },
     'right':  { allowAuto: true, nonNegative: false },
     'bottom': { allowAuto: true, nonNegative: false },
     'left':   { allowAuto: true, nonNegative: false },
+    'inset-inline-start': { allowAuto: true, nonNegative: false },
+    'inset-inline-end':   { allowAuto: true, nonNegative: false },
+    'inset-block-start':  { allowAuto: true, nonNegative: false },
+    'inset-block-end':    { allowAuto: true, nonNegative: false },
 };
 
-// CSS Backgrounds L3 §4.2 (CSSOM-2/BUG-484, second slice): `<line-width>` =
-// `<length [0,∞]> | thin | medium | thick` — the border-*-width longhands.
-// Validated and canonicalized via `_lumen_css_canonical_line_width`, which
-// (unlike `_LUMEN_LENGTH_PROPERTIES`'s grammar) also accepts the three
-// keywords and serializes them as themselves, per
-// `border-width-valid.html` (`border-right-width: "thin"` round-trips as
-// `"thin"`, not the UA px equivalent used for layout).
+// CSS Backgrounds L3 §4.2 (CSSOM-2/BUG-484, second+fourth slice):
+// `<line-width>` = `<length [0,∞]> | thin | medium | thick` — the
+// border-*-width longhands, physical and logical alike (the logical ones
+// resolve through the same `resolve_box_length` as their physical
+// counterparts, `crates/engine/layout/src/style/apply/paint.rs`). Validated
+// and canonicalized via `_lumen_css_canonical_line_width`, which (unlike
+// `_LUMEN_LENGTH_PROPERTIES`'s grammar) also accepts the three keywords and
+// serializes them as themselves, per `border-width-valid.html`
+// (`border-right-width: "thin"` round-trips as `"thin"`, not the UA px
+// equivalent used for layout).
 var _LUMEN_LINE_WIDTH_PROPERTIES = {
     'border-top-width': 1, 'border-right-width': 1,
     'border-bottom-width': 1, 'border-left-width': 1,
+    'border-inline-start-width': 1, 'border-inline-end-width': 1,
+    'border-block-start-width': 1, 'border-block-end-width': 1,
 };
 
 // CSS Sizing L3 §4 (CSSOM-2/BUG-484, third slice): `width`/`height` accept
