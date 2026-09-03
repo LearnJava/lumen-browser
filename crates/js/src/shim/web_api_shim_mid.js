@@ -1184,6 +1184,15 @@ function _lumen_parse_style(s) {
                 return;
             }
         }
+        if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(prop)) {
+            var longhands2v = _LUMEN_2V_SHORTHANDS[prop];
+            var expanded2v = _lumen_expand_2v_shorthand(_LUMEN_LENGTH_PROPERTIES[longhands2v[0]], val);
+            if (expanded2v !== null) {
+                obj[longhands2v[0]] = expanded2v.start;
+                obj[longhands2v[1]] = expanded2v.end;
+                return;
+            }
+        }
         var canon = _lumen_canonicalize_longhand(prop, val);
         if (canon === null || canon === undefined) return; // invalid declaration: dropped, not stored
         obj[prop] = canon;
@@ -1321,6 +1330,65 @@ function _lumen_overflow_shorthand_value(obj) {
     return x === y ? x : x + ' ' + y;
 }
 
+// CSSOM-2 (BUG-484, срез 14): the six CSS Logical L1 §6 two-value
+// shorthands — `margin-inline`/`margin-block`/`padding-inline`/
+// `padding-block`/`inset-inline`/`inset-block` — deferred at слой 4 ("same
+// reason as the physical TRBL shorthands", i.e. no shorthand-VALUE parsing
+// existed yet for anything). Grammar is `<value>{1,2}`: first token sets
+// the *-start longhand, second (if present) the *-end longhand, defaulting
+// to the first when omitted — CSS Logical L1's own §6 phrasing of the same
+// "1 value or 2" shape `_lumen_expand_overflow_shorthand` already
+// implements for axis pairs, so this reuses that shape rather than
+// stretching `_LUMEN_TRBL_SHORTHANDS`'s fixed four-side layout (which has
+// no notion of a two-member group) or duplicating the overflow pair for
+// six different property pairs. Each shorthand's canon function is NOT a
+// new table — every pair already has its length grammar recorded once in
+// `_LUMEN_LENGTH_PROPERTIES` (both members of a pair share `allowAuto`/
+// `nonNegative`, since e.g. `margin-inline-start` and `margin-inline-end`
+// are the same grammar by construction), so `_lumen_expand_2v_shorthand`
+// below reads it off the *-start longhand instead of a second hardcoded
+// copy.
+var _LUMEN_2V_SHORTHANDS = {
+    'margin-inline':  ['margin-inline-start', 'margin-inline-end'],
+    'margin-block':   ['margin-block-start', 'margin-block-end'],
+    'padding-inline': ['padding-inline-start', 'padding-inline-end'],
+    'padding-block':  ['padding-block-start', 'padding-block-end'],
+    'inset-inline':   ['inset-inline-start', 'inset-inline-end'],
+    'inset-block':    ['inset-block-start', 'inset-block-end'],
+};
+
+// Same CSS-wide-keyword whole-value fan-out as `_lumen_expand_trbl_shorthand`/
+// `_lumen_expand_overflow_shorthand` (срез 12) — e.g. `margin-inline: initial`
+// sets both *-start/*-end to `"initial"` rather than being rejected by the
+// length grammar, which doesn't recognize the keyword.
+function _lumen_expand_2v_shorthand(grammar, strVal) {
+    var lowerVal = strVal.trim().toLowerCase();
+    if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1) {
+        return { start: lowerVal, end: lowerVal };
+    }
+    var tokens = strVal.trim().split(/\s+/).filter(function(t) { return t.length > 0; });
+    if (tokens.length < 1 || tokens.length > 2) return null;
+    var canon = [];
+    for (var i = 0; i < tokens.length; i++) {
+        var c = _lumen_css_canonical_length(tokens[i], grammar.allowAuto, grammar.nonNegative);
+        if (c === null || c === undefined) return null;
+        canon.push(c);
+    }
+    return { start: canon[0], end: canon.length > 1 ? canon[1] : canon[0] };
+}
+
+// Returns the collapsed value for a `_LUMEN_2V_SHORTHANDS` entry if both its
+// longhands are present in `obj` — a single value when they're equal, else
+// `"start end"`. Same collapse shape as `_lumen_overflow_shorthand_value`.
+function _lumen_2v_shorthand_value(obj, shorthand) {
+    var longhands = _LUMEN_2V_SHORTHANDS[shorthand];
+    if (!longhands) return undefined;
+    if (!Object.prototype.hasOwnProperty.call(obj, longhands[0]) ||
+        !Object.prototype.hasOwnProperty.call(obj, longhands[1])) return undefined;
+    var start = obj[longhands[0]], end = obj[longhands[1]];
+    return start === end ? start : start + ' ' + end;
+}
+
 function _lumen_serialize_style(obj) {
     var keys = Object.keys(obj);
     var shorthandOf = {};   // longhand key -> owning shorthand name, only for collapsible groups
@@ -1337,6 +1405,14 @@ function _lumen_serialize_style(obj) {
         shorthandOf['overflow-x'] = 'overflow';
         shorthandOf['overflow-y'] = 'overflow';
     }
+    Object.keys(_LUMEN_2V_SHORTHANDS).forEach(function(sh) {
+        var v = _lumen_2v_shorthand_value(obj, sh);
+        if (v === undefined) return;
+        shorthandVal[sh] = v;
+        var lh = _LUMEN_2V_SHORTHANDS[sh];
+        shorthandOf[lh[0]] = sh;
+        shorthandOf[lh[1]] = sh;
+    });
     var emittedShorthand = {};
     var parts = [];
     keys.forEach(function(k) {
@@ -1385,9 +1461,9 @@ var _LUMEN_COLOR_PROPERTIES = {
 // Rust side (`crates/engine/layout/src/style/apply/layout.rs`) resolves
 // each through `set_margin_side`/`set_padding_side`, the identical grammar
 // as its physical counterpart, so no new canonicalization function is
-// needed — only the `margin-inline`/`margin-block`/`padding-inline`/
-// `padding-block`/`inset-inline`/`inset-block` two-value SHORTHANDS stay
-// out of scope, same reason as the physical shorthands above.
+// needed. The `margin-inline`/`margin-block`/`padding-inline`/
+// `padding-block`/`inset-inline`/`inset-block` two-value SHORTHANDS
+// themselves are wired separately, via `_LUMEN_2V_SHORTHANDS` (срез 14).
 var _LUMEN_LENGTH_PROPERTIES = {
     'margin-top':    { allowAuto: true,  nonNegative: false },
     'margin-right':  { allowAuto: true,  nonNegative: false },
@@ -1655,6 +1731,10 @@ function _lumen_make_style(nid) {
                 var ovShorthand = _lumen_overflow_shorthand_value(obj);
                 if (ovShorthand !== undefined) return ovShorthand;
             }
+            if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) {
+                var v2v = _lumen_2v_shorthand_value(obj, key);
+                if (v2v !== undefined) return v2v;
+            }
             return '';
         },
         setProperty: function(prop, val) {
@@ -1683,6 +1763,15 @@ function _lumen_make_style(nid) {
                 if (ovExpanded === null) return; // invalid shorthand value: whole declaration dropped
                 obj['overflow-x'] = ovExpanded.x;
                 obj['overflow-y'] = ovExpanded.y;
+                setParsed(obj);
+                return;
+            }
+            if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) {
+                var longhands2v = _LUMEN_2V_SHORTHANDS[key];
+                var expanded2v = _lumen_expand_2v_shorthand(_LUMEN_LENGTH_PROPERTIES[longhands2v[0]], strVal);
+                if (expanded2v === null) return; // invalid shorthand value: whole declaration dropped
+                obj[longhands2v[0]] = expanded2v.start;
+                obj[longhands2v[1]] = expanded2v.end;
                 setParsed(obj);
                 return;
             }
