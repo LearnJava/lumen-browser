@@ -594,7 +594,7 @@ use super::*;
         custom.insert("--x".to_string(), "red".to_string());
         // Только литерал — никакого реального var() — должен остаться как есть.
         assert_eq!(
-            expand_vars("\"var(--x)\"", &custom, 0).as_deref(),
+            expand_vars("\"var(--x)\"", &custom, 0, 16.0, Size::new(0.0, 0.0)).as_deref(),
             Some("\"var(--x)\"")
         );
     }
@@ -628,7 +628,10 @@ use super::*;
     fn expand_vars_pure_passthrough() {
         // Нет var() — должен вернуть точно такую же строку.
         let custom = HashMap::new();
-        assert_eq!(expand_vars("10px solid red", &custom, 0).as_deref(), Some("10px solid red"));
+        assert_eq!(
+            expand_vars("10px solid red", &custom, 0, 16.0, Size::new(0.0, 0.0)).as_deref(),
+            Some("10px solid red")
+        );
     }
 
     #[test]
@@ -636,5 +639,75 @@ use super::*;
         // Сломанный синтаксис — declaration treated as invalid.
         let mut custom = HashMap::new();
         custom.insert("--x".to_string(), "red".to_string());
-        assert_eq!(expand_vars("color: var(--x", &custom, 0), None);
+        assert_eq!(expand_vars("color: var(--x", &custom, 0, 16.0, Size::new(0.0, 0.0)), None);
+    }
+
+    // ── BUG-500: `ident()` (CSS Values L5 draft), permitted only as the
+    // first argument of `var()` — builds a custom-property name from a
+    // string plus zero or more numeric arguments. Mirrors
+    // `var-ident-function.html`'s five subtests directly against
+    // `expand_vars`, at the em-basis (16px, no explicit `font-size` on the
+    // WPT file's `#target`) the real `calc(1em - 1px)` subtest needs.
+
+    #[test]
+    fn expand_vars_var_ident_name_with_calc_arg_resolves() {
+        // `ident("--myprop" calc(3 * sign(1em - 1px)))` → `--myprop3` at a
+        // 16px em-basis: `sign(16px - 1px)` = `sign(15px)` = 1, `3 * 1` = 3.
+        let mut custom = HashMap::new();
+        custom.insert("--myprop3".to_string(), "PASS".to_string());
+        assert_eq!(
+            expand_vars(
+                "var(ident(\"--myprop\" calc(3 * sign(1em - 1px))), FAIL2)",
+                &custom,
+                0,
+                16.0,
+                Size::new(0.0, 0.0),
+            )
+            .as_deref(),
+            Some("PASS")
+        );
+    }
+
+    #[test]
+    fn expand_vars_var_ident_bare_number_arg() {
+        // A bare `<number>` argument (no `calc()` wrapper) is valid too.
+        let mut custom = HashMap::new();
+        custom.insert("--foo3".to_string(), "PASS".to_string());
+        assert_eq!(
+            expand_vars("var(ident(\"--foo\" 3))", &custom, 0, 16.0, Size::new(0.0, 0.0)).as_deref(),
+            Some("PASS")
+        );
+    }
+
+    #[test]
+    fn expand_vars_var_ident_invalid_name_no_fallback_is_none() {
+        // `ident("nodash")` evaluates to `nodash` — not a valid custom-ident
+        // (no `--` prefix), so it can never match a registered custom
+        // property. No fallback ⇒ invalid at computed-value time.
+        let custom = HashMap::new();
+        assert_eq!(
+            expand_vars("var(ident(\"nodash\"))", &custom, 0, 16.0, Size::new(0.0, 0.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn expand_vars_var_ident_invalid_name_falls_back() {
+        let custom = HashMap::new();
+        assert_eq!(
+            expand_vars("var(ident(\"nodash\"), PASS)", &custom, 0, 16.0, Size::new(0.0, 0.0))
+                .as_deref(),
+            Some("PASS")
+        );
+    }
+
+    #[test]
+    fn expand_vars_var_ident_malformed_call_is_none() {
+        // Missing leading string — `ident()`'s own grammar is violated, the
+        // same class as a syntactically broken `var()`: no fallback rescue.
+        let custom = HashMap::new();
+        assert_eq!(
+            expand_vars("var(ident(3), PASS)", &custom, 0, 16.0, Size::new(0.0, 0.0)),
+            None
+        );
     }

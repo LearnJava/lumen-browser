@@ -246,7 +246,7 @@ use super::*;
             "<html><body><div id=a>x</div></body></html>",
             ":root{--base:8px;--gap:var(--base)} #a{--own:2px;--broken:var(--nope)}",
         );
-        let props = collect_custom_properties(&root);
+        let props = collect_custom_properties(&root, lumen_core::geom::Size::new(1024.0, 720.0));
         let div_nid = {
             fn find(b: &LayoutBox, out: &mut Option<u32>) {
                 if b.style.custom_props.contains_key("--own") && out.is_none() {
@@ -283,7 +283,7 @@ use super::*;
             "<html><body><div id=a><p>x</p></div></body></html>",
             ":root{--base:8px}",
         );
-        let props = collect_custom_properties(&root);
+        let props = collect_custom_properties(&root, lumen_core::geom::Size::new(1024.0, 720.0));
         assert!(props.len() > 1, "every node inherits --base");
         let mut maps = props.values();
         let first = maps.next().expect("at least one node");

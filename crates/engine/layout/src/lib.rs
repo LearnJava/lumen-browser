@@ -1390,8 +1390,17 @@ fn collect_computed_styles_rec(
 /// `:root` variables, thousands of nodes) that is the whole snapshot again,
 /// several times over. Here each *distinct* map is resolved exactly once and
 /// every node inheriting it gets the same `Arc` (BUG-732).
+///
+/// `viewport` and each node's own resolved `font_size` are the `em`/`vw`/`vh`
+/// basis for a `var(ident(...), ...)` (BUG-500) numeric argument. Since the
+/// resolved map is cached by the source allocation's identity, not by
+/// `font_size`, a value that depends on `1em` and is shared by two nodes with
+/// different font-sizes resolves against whichever of them is visited first —
+/// the same trade-off BUG-732's own memoization already makes for every other
+/// substitution, just newly reachable through this one draft function.
 pub fn collect_custom_properties(
     root: &LayoutBox,
+    viewport: lumen_core::geom::Size,
 ) -> std::collections::HashMap<u32, std::sync::Arc<std::collections::HashMap<String, String>>> {
     let mut out = std::collections::HashMap::new();
     // Keyed by the address of the source allocation — identity, never read.
@@ -1399,12 +1408,13 @@ pub fn collect_custom_properties(
         usize,
         std::sync::Arc<std::collections::HashMap<String, String>>,
     > = std::collections::HashMap::new();
-    collect_custom_properties_rec(root, &mut out, &mut resolved);
+    collect_custom_properties_rec(root, viewport, &mut out, &mut resolved);
     out
 }
 
 fn collect_custom_properties_rec(
     b: &LayoutBox,
+    viewport: lumen_core::geom::Size,
     out: &mut std::collections::HashMap<
         u32,
         std::sync::Arc<std::collections::HashMap<String, String>>,
@@ -1422,11 +1432,13 @@ fn collect_custom_properties_rec(
             Some(m) => std::sync::Arc::clone(m),
             None => {
                 let raw = b.style.custom_props.shared();
+                let em_basis = b.style.font_size;
                 let m = std::sync::Arc::new(
                     raw.iter()
                         .map(|(name, value)| {
                             let computed =
-                                crate::style::expand_vars_and_env(value, &raw).unwrap_or_default();
+                                crate::style::expand_vars_and_env(value, &raw, em_basis, viewport)
+                                    .unwrap_or_default();
                             (name.clone(), computed.trim().to_string())
                         })
                         .collect::<std::collections::HashMap<String, String>>(),
@@ -1438,7 +1450,7 @@ fn collect_custom_properties_rec(
         out.entry(b.node.index() as u32).or_insert(map);
     }
     for child in &b.children {
-        collect_custom_properties_rec(child, out, resolved);
+        collect_custom_properties_rec(child, viewport, out, resolved);
     }
 }
 

@@ -1,6 +1,6 @@
 # BUG-500: `ident()` (CSS Values and Units Level 5, draft) entirely unimplemented
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-03
 **Дата:** 2026-08-02
 **Компонент:** css-parser / layout (`crates/engine/css-parser/src/parser.rs`,
 `crates/engine/layout/src/style.rs::expand_vars`)
@@ -45,3 +45,43 @@ L5) with no other WPT coverage found in this slice.
 `var-ident-function.html`'s `.ini` cites [BUG-384](BUG-384-FIXED.md) as the
 directly-observed cause (that's what the actual FAIL messages show) and
 notes BUG-500 as the deeper, currently-invisible gap underneath it.
+
+## Fix (2026-09-03)
+
+Implemented in `crates/engine/layout/src/style/substitute.rs`, in the one
+position the spec permits (CSS Values L5 §4.2): `expand_vars` now recognises
+`var(ident(<string> <numeric-arg>*), fallback)` as the first argument to
+`var()`. `eval_ident_call` concatenates the string literal with each numeric
+argument rounded to the nearest integer — a bare `<number>`/`<integer>` token
+or a `calc()`/math-function expression resolved through the existing
+`crate::style::calc` engine against the calling element's `em_basis`/
+`viewport` (the only two bases meaningful in this position; a percentage has
+no defined basis here and makes the whole call invalid). A malformed
+`ident()` call (missing/unquoted leading string, non-numeric trailing
+argument) makes the containing `var()` invalid at computed-value time without
+consulting the fallback — the same rule a syntactically broken `var()`
+already follows.
+
+Threading `em_basis`/`viewport` into `expand_vars` required adding both
+parameters to `expand_vars_and_env`/`expand_custom_functions`/
+`collect_custom_properties` and updating every call site: `style/apply.rs`,
+`style/cascade.rs`, `style/container.rs`, `style/parse/font_size.rs`,
+`lib.rs`, `crates/driver/src/session.rs`, and
+`crates/shell/src/{hibernation,page_load,page_pipeline,relayout}.rs`. Pure
+plumbing — behavior for any `var()` call without `ident()` is unchanged.
+
+5 new unit tests in `style/tests/restyle.rs` mirror all 5 subtests of
+`var-ident-function.html`, including the exact `calc(3 * sign(1em - 1px))`
+example from the spec at a 16px em-basis.
+
+**Not closed:** the file's 5th subtest (`var(ident("nodash"), inherit)`,
+expecting a re-cascade through the parent) needs a separate mechanism — a
+CSS-wide keyword surviving `var()` fallback substitution re-triggers normal
+cascading — that is not specific to `ident()` and applies to any `var()`
+fallback. This is the same residual [BUG-487](BUG-487-FIXED.md) already
+left explicitly open ("var()/env()/attr()/if()-fallback ... out of scope for
+that slice"), not new scope for this bug.
+
+Gates: `cargo test -p lumen-layout` 3680/3680 (0 failed, 1 ignored, incl. the
+5 new `expand_vars_var_ident_*` tests); `cargo clippy -p lumen-layout
+-p lumen-driver -p lumen-shell --all-targets -- -D warnings` clean.

@@ -8,8 +8,11 @@
 
 use std::collections::HashMap;
 
+use lumen_core::geom::Size;
 use lumen_css_parser::FunctionRule;
 use lumen_dom::{Document, NodeId};
+
+use crate::style::calc::parse_math_function_value;
 
 /// Глубина рекурсии при разворачивании `var()` — защита от циклов вида
 /// `--a: var(--b); --b: var(--a)`. CSS spec не задаёт точного предела;
@@ -28,9 +31,11 @@ const VAR_EXPAND_MAX_DEPTH: u32 = 32;
 pub(crate) fn expand_vars_and_env(
     value: &str,
     custom: &HashMap<String, String>,
+    em_basis: f32,
+    viewport: Size,
 ) -> Option<String> {
     let after_var = if value.contains("var(") {
-        expand_vars(value, custom, 0)?
+        expand_vars(value, custom, 0, em_basis, viewport)?
     } else {
         value.to_string()
     };
@@ -50,7 +55,19 @@ pub(crate) fn expand_vars_and_env(
 /// При успехе — возвращает строку с подставленными значениями. Все
 /// substitution-ы делаются как plain string replacement; типы значений
 /// проверит уже сам `apply_declaration` после expand.
-pub(in crate::style) fn expand_vars(value: &str, custom: &HashMap<String, String>, depth: u32) -> Option<String> {
+///
+/// `em_basis`/`viewport` — используются только при `var(ident(...), ...)`
+/// (BUG-500, CSS Values L5 draft `ident()`, разрешённый спекой ИСКЛЮЧИТЕЛЬНО
+/// как первый аргумент `var()`): его числовые аргументы могут быть
+/// `calc()`-выражениями с относительными единицами (`1em`), которым нужен тот
+/// же basis, что и остальным длинам этого элемента.
+pub(in crate::style) fn expand_vars(
+    value: &str,
+    custom: &HashMap<String, String>,
+    depth: u32,
+    em_basis: f32,
+    viewport: Size,
+) -> Option<String> {
     if depth > VAR_EXPAND_MAX_DEPTH {
         return None;
     }
@@ -61,17 +78,147 @@ pub(in crate::style) fn expand_vars(value: &str, custom: &HashMap<String, String
     let after_open = &value[start + 4..]; // skip "var("
     let (args, after_close) = parse_balanced_to_close(after_open)?;
     let (name, fallback) = split_var_args(args);
-    if !name.starts_with("--") {
+    let resolved_ident_name;
+    let effective_name: &str = if let Some(inner) = ident_call_inner(name) {
+        resolved_ident_name = eval_ident_call(inner, em_basis, viewport)?;
+        resolved_ident_name.as_str()
+    } else if name.starts_with("--") {
+        name
+    } else {
         return None;
-    }
-    let resolved = if let Some(v) = custom.get(name) {
-        expand_vars(v.trim(), custom, depth + 1)?
+    };
+    let resolved = if let Some(v) = custom.get(effective_name) {
+        expand_vars(v.trim(), custom, depth + 1, em_basis, viewport)?
     } else {
         let fb = fallback?;
-        expand_vars(fb.trim(), custom, depth + 1)?
+        expand_vars(fb.trim(), custom, depth + 1, em_basis, viewport)?
     };
     let combined = format!("{prefix}{resolved}{after_close}");
-    expand_vars(&combined, custom, depth + 1)
+    expand_vars(&combined, custom, depth + 1, em_basis, viewport)
+}
+
+/// Recognises `name` (the trimmed first argument of a `var(...)` call) as a
+/// complete `ident(<inner>)` call — CSS Values L5 §4.2's one permitted
+/// position for `ident()` — and returns `<inner>`. `name` always has
+/// balanced parens on its own (`split_var_args` only splits on a top-level
+/// comma, which by construction can't appear before its own parens close),
+/// so a prefix/suffix match is sufficient to confirm the whole string is one
+/// call, not just checking it starts with the function name.
+fn ident_call_inner(name: &str) -> Option<&str> {
+    if name.len() >= 7 && name.as_bytes()[..6].eq_ignore_ascii_case(b"ident(") && name.ends_with(')') {
+        Some(&name[6..name.len() - 1])
+    } else {
+        None
+    }
+}
+
+/// CSS Values L5 (draft) §4.2 `ident()`: builds a `<custom-ident>`-shaped
+/// string from a leading `<string>` followed by zero or more numeric
+/// arguments (bare `<number>`/`<integer>` tokens or `calc()`/math-function
+/// expressions), concatenating the string with each argument's
+/// rounded-to-integer decimal form, in order, with no separator —
+/// `ident("--myprop" calc(3 * sign(1em - 1px)))` → `"--myprop3"`. Returns
+/// `None` on any malformed argument (missing/unquoted leading string, a
+/// trailing argument that isn't numeric) — the caller (`expand_vars`) treats
+/// that the same as any other syntactically invalid `var()` name: the whole
+/// declaration is invalid, the fallback is not consulted (CSS Variables L1
+/// §3.3 draws that line at the `var()` argument's own grammar, not at
+/// whether the referenced name exists).
+fn eval_ident_call(inner: &str, em_basis: f32, viewport: Size) -> Option<String> {
+    let tokens = split_ident_args(inner);
+    let (first, rest) = tokens.split_first()?;
+    let mut out = parse_ident_string_literal(first)?;
+    for tok in rest {
+        let value = eval_ident_numeric_arg(tok, em_basis, viewport)?;
+        out.push_str(&(value.round() as i64).to_string());
+    }
+    Some(out)
+}
+
+/// Evaluates one of `ident()`'s trailing numeric arguments: a bare
+/// `<number>`/`<integer>` literal, or a `calc()`/math-function expression
+/// resolved via the same [`crate::style::calc`] engine every length uses,
+/// against this call's `em_basis`/`viewport` — the only two bases `ident()`'s
+/// draft grammar has any use for here. A percentage has no defined basis in
+/// this position; `Length::resolve`'s `None` (no `percent_basis`) propagates
+/// and makes the whole `ident()` call — and so the declaration — invalid.
+fn eval_ident_numeric_arg(tok: &str, em_basis: f32, viewport: Size) -> Option<f32> {
+    if let Ok(n) = tok.parse::<f32>() {
+        return Some(n);
+    }
+    parse_math_function_value(tok)?.resolve(em_basis, None, viewport)
+}
+
+/// Splits `ident()`'s argument list on top-level ASCII whitespace — a quoted
+/// string's own internal spaces and a nested `calc()` argument's internal
+/// spaces (parens raise `depth`) are never split points.
+fn split_ident_args(s: &str) -> Vec<&str> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::new();
+    let mut depth = 0u32;
+    let mut in_string: Option<u8> = None;
+    let mut start: Option<usize> = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        match in_string {
+            Some(q) => {
+                if b == q {
+                    in_string = None;
+                }
+            }
+            None => match b {
+                b'"' | b'\'' => {
+                    in_string = Some(b);
+                    start.get_or_insert(i);
+                }
+                b'(' => {
+                    depth += 1;
+                    start.get_or_insert(i);
+                }
+                b')' => depth = depth.saturating_sub(1),
+                _ if depth == 0 && b.is_ascii_whitespace() => {
+                    if let Some(st) = start.take() {
+                        out.push(&s[st..i]);
+                    }
+                }
+                _ => {
+                    start.get_or_insert(i);
+                }
+            },
+        }
+    }
+    if let Some(st) = start {
+        out.push(&s[st..]);
+    }
+    out
+}
+
+/// Parses one CSS `<string>` token (`"..."` or `'...'`), unescaping a
+/// backslash followed by any character to that character (covers the plain
+/// `\"`/`\\` escapes `ident()`'s WPT coverage exercises — CSS §4.3.7's fuller
+/// hex-escape grammar is out of scope here). `None` if `tok` isn't a
+/// complete, matching-quoted string.
+fn parse_ident_string_literal(tok: &str) -> Option<String> {
+    let bytes = tok.as_bytes();
+    if bytes.len() < 2 {
+        return None;
+    }
+    let quote = bytes[0];
+    if quote != b'"' && quote != b'\'' || bytes[bytes.len() - 1] != quote {
+        return None;
+    }
+    let body = &tok[1..tok.len() - 1];
+    let mut out = String::with_capacity(body.len());
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(next) = chars.next() {
+                out.push(next);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    Some(out)
 }
 
 /// Recursion guard for `--name(args)` custom function call expansion
@@ -98,11 +245,14 @@ const FUNCTION_CALL_MAX_DEPTH: u32 = 16;
 /// Deferred (CSS Functions and Mixins L1, not yet implemented): `returns`
 /// type-checking, conditional group rules inside the function body
 /// (`@media`, `@container`), named/keyword arguments.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::style) fn expand_custom_functions(
     value: &str,
     functions: &[FunctionRule],
     custom: &HashMap<String, String>,
     depth: u32,
+    em_basis: f32,
+    viewport: Size,
 ) -> Option<String> {
     if depth > FUNCTION_CALL_MAX_DEPTH {
         return None;
@@ -122,8 +272,8 @@ pub(in crate::style) fn expand_custom_functions(
             Some(a) => a.trim().to_string(),
             None => param.default.clone()?,
         };
-        let expanded_arg = expand_vars(&raw_arg, custom, depth + 1)
-            .and_then(|v| expand_custom_functions(&v, functions, custom, depth + 1))?;
+        let expanded_arg = expand_vars(&raw_arg, custom, depth + 1, em_basis, viewport)
+            .and_then(|v| expand_custom_functions(&v, functions, custom, depth + 1, em_basis, viewport))?;
         local.insert(param.name.clone(), expanded_arg);
     }
 
@@ -134,16 +284,16 @@ pub(in crate::style) fn expand_custom_functions(
             continue;
         }
         if let Some(local_name) = decl.property.strip_prefix("--") {
-            let v = expand_vars(&decl.value, &local, depth + 1)
-                .and_then(|v| expand_custom_functions(&v, functions, &local, depth + 1))?;
+            let v = expand_vars(&decl.value, &local, depth + 1, em_basis, viewport)
+                .and_then(|v| expand_custom_functions(&v, functions, &local, depth + 1, em_basis, viewport))?;
             local.insert(format!("--{local_name}"), v);
         }
     }
-    let resolved = expand_vars(result_raw?, &local, depth + 1)
-        .and_then(|v| expand_custom_functions(&v, functions, &local, depth + 1))?;
+    let resolved = expand_vars(result_raw?, &local, depth + 1, em_basis, viewport)
+        .and_then(|v| expand_custom_functions(&v, functions, &local, depth + 1, em_basis, viewport))?;
 
     let combined = format!("{}{}{}", &value[..start], resolved, after_close);
-    expand_custom_functions(&combined, functions, custom, depth + 1)
+    expand_custom_functions(&combined, functions, custom, depth + 1, em_basis, viewport)
 }
 
 /// Finds the first `--<ident>(` call-site (CSS Functions and Mixins L1
