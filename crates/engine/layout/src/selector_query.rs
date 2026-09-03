@@ -584,7 +584,7 @@ pub(crate) fn length_to_css(l: &Length) -> String {
         Length::Cqb(v) => format!("{}cqb", v),
         Length::Cqmin(v) => format!("{}cqmin", v),
         Length::Cqmax(v) => format!("{}cqmax", v),
-        Length::Calc(_) => "calc(...)".into(),
+        Length::Calc(node) => crate::style::calc_node_to_css(node),
         Length::MinContent => "min-content".into(),
         Length::MaxContent => "max-content".into(),
         Length::FitContent(None) => "fit-content".into(),

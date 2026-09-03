@@ -474,6 +474,128 @@ use super::*;
         assert!(parse_length("calc()").is_none());
     }
 
+    // ──────────────── CSSOM-2 срез 16 (BUG-484): calc() canonicalization ──────────
+
+    #[test]
+    fn calc_canon_same_unit_sum_folds() {
+        assert_eq!(
+            canonical_specified_length("calc(10px + 5px)", false, false),
+            Some("calc(15px)".to_string())
+        );
+    }
+
+    #[test]
+    fn calc_canon_same_unit_diff_folds_to_zero() {
+        // BUG-484 срез 21: `calc(50% - 50%)` should simplify to `calc(0%)`.
+        assert_eq!(
+            canonical_specified_length("calc(50% - 50%)", false, false),
+            Some("calc(0%)".to_string())
+        );
+    }
+
+    #[test]
+    fn calc_canon_unary_minus_folds() {
+        assert_eq!(
+            canonical_specified_length("calc(-10px)", false, false),
+            Some("calc(-10px)".to_string())
+        );
+    }
+
+    #[test]
+    fn calc_canon_number_mul_folds() {
+        // `10px * 2 + 5px` — Mul folds first (20px), then the same-unit Add.
+        assert_eq!(
+            canonical_specified_length("calc(10px * 2 + 5px)", false, false),
+            Some("calc(25px)".to_string())
+        );
+    }
+
+    #[test]
+    fn calc_canon_parens_override_precedence_folds() {
+        assert_eq!(
+            canonical_specified_length("calc((10px + 5px) * 2)", false, false),
+            Some("calc(30px)".to_string())
+        );
+    }
+
+    #[test]
+    fn calc_canon_mixed_unit_sum_not_folded_but_reserialized() {
+        // Different units can't fold without a resolved basis (same
+        // limitation as `resolve()`) — stays a `calc()` expression, in the
+        // author's original operand order (no cross-type sort, see
+        // `calc_node_to_css`'s doc comment).
+        assert_eq!(
+            canonical_specified_length("calc(2em + 3%)", false, false),
+            Some("calc(2em + 3%)".to_string())
+        );
+    }
+
+    #[test]
+    fn calc_canon_preserves_necessary_parens() {
+        // `10em - (5em + 3%)`: the right operand of `-` is itself additive
+        // and can't fold (mixed units) — the parens are structurally
+        // required (`a - b + c` would be a different value) and must survive
+        // serialization.
+        let canon = canonical_specified_length("calc(10em - (5em + 3%))", false, false);
+        assert_eq!(canon, Some("calc(10em - (5em + 3%))".to_string()));
+    }
+
+    #[test]
+    fn calc_canon_is_idempotent() {
+        let once = canonical_specified_length("calc(10em - (5em + 3%))", false, false).unwrap();
+        let twice = canonical_specified_length(&once, false, false).unwrap();
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn calc_canon_min_max_keep_their_own_wrapper() {
+        // `min()`/`max()` are their own standalone CSS math function (CSS
+        // Values L4 §10.6), not calc-exclusive syntax — they round-trip as
+        // themselves, never folded down into a `calc(...)`-wrapped literal
+        // even when every argument shares a unit.
+        assert_eq!(
+            canonical_specified_length("min(30px, 10px, 20px)", false, false),
+            Some("min(30px, 10px, 20px)".to_string())
+        );
+        assert_eq!(
+            canonical_specified_length("max(30px, 10px, 20px)", false, false),
+            Some("max(30px, 10px, 20px)".to_string())
+        );
+    }
+
+    #[test]
+    fn calc_canon_min_max_simplify_their_arguments() {
+        // The wrapper survives, but each argument is still independently
+        // simplified — same-unit arithmetic inside a `min()` argument folds.
+        assert_eq!(
+            canonical_specified_length("min(10px + 5px, 20px)", false, false),
+            Some("min(15px, 20px)".to_string())
+        );
+    }
+
+    #[test]
+    fn calc_canon_clamp_keeps_its_own_wrapper() {
+        assert_eq!(
+            canonical_specified_length("clamp(10px, 50px, 30px)", false, false),
+            Some("clamp(10px, 50px, 30px)".to_string())
+        );
+    }
+
+    #[test]
+    fn calc_canon_func_not_folded_but_valid() {
+        // `abs()` isn't constant-folded (see `simplify`'s doc comment), but
+        // still serializes to valid, resolvable CSS via `calc_node_to_css`.
+        assert_eq!(
+            canonical_specified_length("calc(100px - abs(-20px))", false, false),
+            Some("calc(100px - abs(-20px))".to_string())
+        );
+    }
+
+    #[test]
+    fn calc_canon_invalid_still_rejected() {
+        assert_eq!(canonical_specified_length("calc(10px + 5px", false, false), None);
+    }
+
     // ──────────────── CSS Values L4 §10.6: min() / max() / clamp() ────────────────
 
     #[test]

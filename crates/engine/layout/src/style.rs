@@ -166,6 +166,10 @@ use parse::color::{named_color, parse_color_legacy};
 // обращения `lumen_layout::style::<Имя>` из шести крейтов), поэтому реэкспорт
 // обязателен даже там, где вызывателя внутри `style.rs` уже нет (правило §2.1).
 pub use calc::{CalcNode, MathFn, RoundStrategy};
+// CSSOM-2 срез 16: internal-only serializer, not crate-public API like the
+// three re-exports above — `selector_query::length_to_css`'s `Length::Calc`
+// arm is its only caller.
+pub(crate) use calc::calc_node_to_css;
 pub use values::length::{
     canonical_specified_length, canonical_specified_line_width, canonical_specified_sizing_length,
     parse_length, Length, LengthOrAuto,
