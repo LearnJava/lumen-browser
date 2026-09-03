@@ -300,6 +300,21 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // Canonical `<length-percentage>` serialization for inline-`style`
+    // margin-*/padding-* longhands (CSS Box §8, CSSOM-2/BUG-484) — same role
+    // as `_lumen_css_canonical_color` above but for lengths: rejects a
+    // syntactically invalid value (e.g. unitless non-zero numbers in
+    // standards mode) instead of storing it verbatim, and canonicalizes the
+    // accepted form (`"0"` → `"0px"`). `allow_auto`/`non_negative` encode the
+    // per-property grammar difference (margin allows `auto` and negative
+    // values, padding allows neither).
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_length",
+        |value: String, allow_auto: bool, non_negative: bool| -> Option<String> {
+            lumen_layout::style::canonical_specified_length(&value, allow_auto, non_negative)
+        }
+    );
+
     // Queues a lazy image load request.  Called by `_lumen_deliver_lazy_images()` in JS
     // when an image registered via `_lumen_init_lazy_images` enters the lazy-load margin.
     // Shell drains via `QuickJsRuntime::take_lazy_image_requests` after each layout.

@@ -166,7 +166,7 @@ use parse::color::{named_color, parse_color_legacy};
 // обращения `lumen_layout::style::<Имя>` из шести крейтов), поэтому реэкспорт
 // обязателен даже там, где вызывателя внутри `style.rs` уже нет (правило §2.1).
 pub use calc::{CalcNode, MathFn, RoundStrategy};
-pub use values::length::{parse_length, Length, LengthOrAuto};
+pub use values::length::{canonical_specified_length, parse_length, Length, LengthOrAuto};
 // SPLIT-ST16. Типы значений — типографика/текст, цвет, бокс-модель, тайминг —
 // уехали в `style::values::{typography,color,box_model,timing}`. Все четыре
 // группы — публичная поверхность крейта (`pub mod style` в `lib.rs`; `box_tree.rs`,
