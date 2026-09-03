@@ -81,6 +81,38 @@ fn lay_out_cache_checked(
     // BUG-802: this wrapper is the one entry point every layout pass starts
     // from, so it is where a pass is delimited for the probe-height memo.
     let _pass = LayoutPassGuard::enter();
+    // BUG-341 S40: the same box, at the same origin, with the same inputs,
+    // already holds the answer — skip the whole recursive descent instead of
+    // recomputing it into a copy. See `LayoutInPlaceKey`'s doc comment for why
+    // this is a different mechanism from S32/S36/S38's layout-result cache and
+    // not another policy variant of it.
+    let in_place_key = (layout_in_place_reuse_enabled()
+        && cacheable_for_layout_result_cache(b))
+    .then(|| LayoutInPlaceKey {
+        node: b.node,
+        role: std::mem::discriminant(&b.origin.role),
+        start_x_bits: start_x.to_bits(),
+        start_y_bits: start_y.to_bits(),
+        width_bits: available_width.to_bits(),
+        height_bits: available_height.map(f32::to_bits),
+        viewport_w_bits: viewport.width.to_bits(),
+        viewport_h_bits: viewport.height.to_bits(),
+        pcb_x_bits: pcb.x.to_bits(),
+        pcb_y_bits: pcb.y.to_bits(),
+        pcb_w_bits: pcb.width.to_bits(),
+        pcb_h_bits: pcb.height.to_bits(),
+        in_block_flow,
+        measurer_ptr: measurer
+            .map(|m| m as *const dyn TextMeasurer as *const () as usize)
+            .unwrap_or(0),
+        hp_ptr: hp as *const dyn HyphenationProvider as *const () as usize,
+        used_size_override: UsedSizeOverrideBits::from(used_size_override.as_ref()),
+    });
+    if let Some(key) = in_place_key.as_ref()
+        && layout_in_place_hit(b, key)
+    {
+        return;
+    }
     if layout_result_cache_enabled() && cacheable_for_layout_result_cache(b) {
         let key = LayoutResultKey {
             node: b.node,
@@ -184,13 +216,30 @@ fn lay_out_cache_checked(
                 c.set(v);
             });
         }
+        // BUG-341 S40: both mechanisms can be active at once (the cache is
+        // `Off` in production, so in practice only this branch's `else` runs) —
+        // record the in-place witness on this path too, so enabling the cache
+        // for an A/B does not silently disable in-place reuse.
+        if let Some(key) = in_place_key {
+            record_layout_in_place(b, key, touched_here);
+        }
         return;
     }
+    // BUG-341 S40: track `content-visibility: auto` across this subtree the
+    // same way the cache branch above does — a subtree whose result depends on
+    // the scroll offset must not be recorded as reusable. The flag is restored
+    // to "outer OR here" so an ancestor's own recording sees it too.
+    let outer_cv_touched = CV_AUTO_TOUCHED.with(|c| c.replace(false));
     lay_out_inner(
         b, start_x, start_y, available_width, available_height,
         measurer, viewport, pcb, hp, in_block_flow, None, AlignValue::Auto,
         used_size_override,
     );
+    let cv_touched_here = CV_AUTO_TOUCHED.with(|c| c.get());
+    CV_AUTO_TOUCHED.with(|c| c.set(outer_cv_touched || cv_touched_here));
+    if let Some(key) = in_place_key {
+        record_layout_in_place(b, key, cv_touched_here);
+    }
 }
 
 /// CSS 2.1 §9.5 — same as [`lay_out`] but threads `outer_floats`: the float
@@ -252,7 +301,7 @@ fn lay_out_inner(
         return;
     }
 
-    record_layout_key_occurrence(b.node, available_width, available_height, &b.style, used_size_override.as_ref());
+    record_layout_key_occurrence(b.node, start_x, start_y, available_width, available_height, &b.style, used_size_override.as_ref());
 
     // CSS Values L4 §5.1.1 — publish this box's real `ch`/`ex` metrics (advance of
     // the "0" glyph and the x-height at the used font-size) so `Length::{Ch,Ex}`

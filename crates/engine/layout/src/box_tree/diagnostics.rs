@@ -56,6 +56,22 @@ pub struct LayoutKeyCensus {
     /// asked for: the fraction of same-style repeats that are *also* safe by
     /// this additional check, before any cache mechanism is written.
     pub repeat_key_same_style_and_override: u32,
+    /// BUG-341 S39 — of [`Self::repeat_key_same_style_and_override`], the ones
+    /// whose `(start_x, start_y)` also matches the origin recorded the
+    /// *previous* time this key was seen. This is the precondition S38's
+    /// recommended redesign (ii) ("store an `Rc`/`Arc`-shared subtree a hit
+    /// repositions instead of cloning out of") silently assumes: a
+    /// `LayoutBox`'s rects are **absolute**, not parent-relative
+    /// (`lay_out_inner` writes `b.rect.x = start_x + margin_left`), so serving
+    /// a shared subtree at a *different* origin means rewriting every
+    /// descendant's rect — `translate_subtree`, the same O(nodes) mutating
+    /// walk the hit path already runs. Under sharing that mutation forces a
+    /// copy-on-write of the whole subtree, i.e. exactly the deep clone S37
+    /// priced at ≈1.7 μs/node and (ii) exists to avoid. Sharing is therefore
+    /// only free for hits at an *identical* origin, and this field is how many
+    /// of the otherwise-safe repeats those are — measured before the mechanism
+    /// is written, per `docs/perf-method.md` §1.
+    pub repeat_key_same_style_override_and_origin: u32,
     /// BUG-341 S38 — distinct keys seen exactly once this pass (no repeat at
     /// all, so a deferred-insertion cache would never clone or store them).
     pub keys_seen_once: u32,
@@ -106,14 +122,15 @@ impl From<Option<&UsedSizeOverride>> for UsedSizeOverrideBits {
 }
 
 /// One [`LAYOUT_KEY_SEEN`] entry: occurrence count, the style `Arc` from the
-/// most recent occurrence, and that occurrence's `UsedSizeOverride` snapshot
-/// (S30 only needed the count, S31 added the style compare, S35 adds the
-/// override compare) — factored out per clippy's `type_complexity`.
-type LayoutCensusSeenEntry = (u32, Arc<ComputedStyle>, UsedSizeOverrideBits);
+/// most recent occurrence, that occurrence's `UsedSizeOverride` snapshot, and
+/// its `(start_x, start_y)` origin in `to_bits` form (S30 only needed the
+/// count, S31 added the style compare, S35 the override compare, S39 the
+/// origin compare) — factored out per clippy's `type_complexity`.
+type LayoutCensusSeenEntry = (u32, Arc<ComputedStyle>, UsedSizeOverrideBits, (u32, u32));
 
 thread_local! {
     static LAYOUT_KEY_CENSUS_ON: Cell<bool> = const { Cell::new(false) };
-    static LAYOUT_KEY_CENSUS: Cell<LayoutKeyCensus> = const { Cell::new(LayoutKeyCensus { calls: 0, repeat_key_calls: 0, repeat_key_same_style: 0, repeat_key_same_style_and_override: 0, keys_seen_once: 0, keys_seen_twice: 0, keys_seen_three_plus: 0 }) };
+    static LAYOUT_KEY_CENSUS: Cell<LayoutKeyCensus> = const { Cell::new(LayoutKeyCensus { calls: 0, repeat_key_calls: 0, repeat_key_same_style: 0, repeat_key_same_style_and_override: 0, repeat_key_same_style_override_and_origin: 0, keys_seen_once: 0, keys_seen_twice: 0, keys_seen_three_plus: 0 }) };
     static LAYOUT_KEY_SEEN: RefCell<HashMap<LayoutCensusKey, LayoutCensusSeenEntry>> = RefCell::new(HashMap::new());
 }
 
@@ -160,9 +177,16 @@ pub fn take_layout_key_census() -> LayoutKeyCensus {
 /// since the last time this key was recorded". `used_size_override` (S35) is
 /// compared by value via [`UsedSizeOverrideBits`], since it is never behind
 /// an `Arc` and two calls legitimately construct equal-but-distinct override
-/// values.
+/// values. `start_x`/`start_y` (S39) are compared by the same exact-bit rule as
+/// the constraints — they are deliberately *not* part of the key (a cache
+/// serves a repeat at a new position by translating it), only of the
+/// per-occurrence record, so that
+/// [`LayoutKeyCensus::repeat_key_same_style_override_and_origin`] can report
+/// how many otherwise-safe repeats need no translation at all.
 pub(crate) fn record_layout_key_occurrence(
     node: NodeId,
+    start_x: f32,
+    start_y: f32,
     available_width: f32,
     available_height: Option<f32>,
     style: &Arc<ComputedStyle>,
@@ -173,20 +197,23 @@ pub(crate) fn record_layout_key_occurrence(
     }
     let key = (node, available_width.to_bits(), available_height.map(f32::to_bits));
     let override_bits = UsedSizeOverrideBits::from(used_size_override);
-    let (repeat, same_style, same_override) = LAYOUT_KEY_SEEN.with(|m| {
+    let origin_bits = (start_x.to_bits(), start_y.to_bits());
+    let (repeat, same_style, same_override, same_origin) = LAYOUT_KEY_SEEN.with(|m| {
         let mut seen = m.borrow_mut();
         match seen.get_mut(&key) {
-            Some((count, prev_style, prev_override)) => {
+            Some((count, prev_style, prev_override, prev_origin)) => {
                 *count += 1;
                 let same_style = Arc::ptr_eq(prev_style, style);
                 let same_override = *prev_override == override_bits;
+                let same_origin = *prev_origin == origin_bits;
                 *prev_style = Arc::clone(style);
                 *prev_override = override_bits;
-                (true, same_style, same_override)
+                *prev_origin = origin_bits;
+                (true, same_style, same_override, same_origin)
             }
             None => {
-                seen.insert(key, (1, Arc::clone(style), override_bits));
-                (false, false, false)
+                seen.insert(key, (1, Arc::clone(style), override_bits, origin_bits));
+                (false, false, false, false)
             }
         }
     });
@@ -199,6 +226,9 @@ pub(crate) fn record_layout_key_occurrence(
                 v.repeat_key_same_style += 1;
                 if same_override {
                     v.repeat_key_same_style_and_override += 1;
+                    if same_origin {
+                        v.repeat_key_same_style_override_and_origin += 1;
+                    }
                 }
             }
         }
@@ -336,6 +366,7 @@ impl LayoutPassGuard {
         });
         if depth == 1 {
             FLEX_COLUMN_PROBE_HEIGHTS.with(|m| m.borrow_mut().clear());
+            clear_layout_in_place_memo();
         }
         Self
     }
@@ -350,6 +381,7 @@ impl Drop for LayoutPassGuard {
         });
         if depth == 0 {
             FLEX_COLUMN_PROBE_HEIGHTS.with(|m| m.borrow_mut().clear());
+            clear_layout_in_place_memo();
         }
     }
 }
@@ -838,6 +870,195 @@ pub(crate) fn note_box_built(id: NodeId) {
     {
         log.push(id);
     }
+}
+
+/// BUG-341 S40 — the inputs a `lay_out_inner` call is fully determined by,
+/// *including* its origin. This is deliberately a stricter key than
+/// [`LayoutResultKey`]: that one omits `(start_x, start_y)` because a cache
+/// serves a repeat at a new position by translating the stored subtree into
+/// place, and S32/S36/S38 all measured that translation-plus-clone as costing
+/// more than it saves. S39's audit found why the clone is unavoidable there —
+/// a `LayoutBox` stores absolute rects, so a result is only valid at the
+/// origin it was computed for — and S39's census found that 75.2% of the
+/// otherwise-safe repeats need no translation at all, because they arrive at
+/// the *identical* origin.
+///
+/// That is the case this key isolates, and for it no storage mechanism is
+/// needed at all: the box being asked to lay out again is the same box that
+/// already holds the answer, still sitting in the tree where the earlier call
+/// left it. The reuse is therefore a *skip*, not a copy — no subtree clone on
+/// insert (S32's 91%-never-read-back waste), none on serve (S37's
+/// ≈1.7 μs/node), and no deferred first hit (S38's recursion-short-circuit
+/// cost). What is stored per entry is a fixed-size witness, never a subtree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct LayoutInPlaceKey {
+    pub(crate) node: NodeId,
+    /// One DOM node can own several boxes (an element's principal box plus the
+    /// anonymous wrappers around its inline children — ADR-025 §1), so `node`
+    /// alone does not identify a box. Compared by variant only: `BoxRole`'s
+    /// payload (`PseudoKind`) is already reflected in the box's `style` `Arc`,
+    /// which the witness checks by pointer identity.
+    pub(crate) role: std::mem::Discriminant<BoxRole>,
+    pub(crate) start_x_bits: u32,
+    pub(crate) start_y_bits: u32,
+    pub(crate) width_bits: u32,
+    pub(crate) height_bits: Option<u32>,
+    pub(crate) viewport_w_bits: u32,
+    pub(crate) viewport_h_bits: u32,
+    pub(crate) pcb_x_bits: u32,
+    pub(crate) pcb_y_bits: u32,
+    pub(crate) pcb_w_bits: u32,
+    pub(crate) pcb_h_bits: u32,
+    pub(crate) in_block_flow: bool,
+    pub(crate) measurer_ptr: usize,
+    pub(crate) hp_ptr: usize,
+    pub(crate) used_size_override: UsedSizeOverrideBits,
+}
+
+/// Proof that the box a [`LayoutInPlaceKey`] was recorded for is still the box
+/// in front of us, and still holds the result that call produced. Fixed size —
+/// this mechanism never stores a subtree.
+///
+/// All three checks are load-bearing, and none subsumes the others:
+///
+/// * `box_ptr` — the same allocation. Layout runs over `&mut LayoutBox`es
+///   living in their parents' `children` vectors; `lay_out_grid`'s Step-5
+///   probe reuse assigns a whole new box into such a slot (`children[i] =
+///   reused`), so an address can outlive the box that was recorded at it.
+/// * `style` — `Arc` pointer identity, the same check S31 established for the
+///   cache. `Arc::make_mut` writers (`apply_font_size_adjust_to_style`,
+///   `apply_container_rules`, `lay_out_table_row`'s width dance) diverge a
+///   box's style in place; a diverged style means the recorded result is not
+///   what this call would produce.
+/// * `out_rect` — the geometry the recorded call left behind. S39's audit
+///   found eight production sites that reposition an already-laid-out subtree
+///   (`shift_tree`/`translate_subtree`, two of them inside `lay_out_flex`
+///   itself) plus several that overwrite an item's `rect` directly for
+///   alignment or row-height normalisation. Every one of those changes
+///   `b.rect`, so comparing it against the recorded output is what makes those
+///   mutations invalidate the entry instead of silently outdating it.
+struct LayoutInPlaceWitness {
+    style: Arc<ComputedStyle>,
+    box_ptr: usize,
+    out_rect: [u32; 4],
+}
+
+/// Per-pass tally of [`LayoutInPlaceKey`] outcomes — the counter the S40 gates
+/// assert on, since reuse is invisible in output by construction (a pass that
+/// reuses nothing produces exactly the same tree, only slower — the S8 lesson).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LayoutInPlaceStats {
+    /// Calls served by skipping `lay_out_inner` entirely — and with it, the
+    /// whole recursive descent into the box's children.
+    pub hits: u32,
+    /// Calls that had to compute, and were recorded for a later repeat.
+    pub recorded: u32,
+    /// Calls that computed but were refused a recording because the subtree
+    /// consulted `content-visibility: auto` (see `CV_AUTO_TOUCHED`).
+    pub refused: u32,
+}
+
+thread_local! {
+    static LAYOUT_IN_PLACE_ON: Cell<bool> = const { Cell::new(false) };
+    static LAYOUT_IN_PLACE: RefCell<HashMap<LayoutInPlaceKey, LayoutInPlaceWitness>> =
+        RefCell::new(HashMap::new());
+    static LAYOUT_IN_PLACE_STATS: Cell<LayoutInPlaceStats> =
+        const { Cell::new(LayoutInPlaceStats { hits: 0, recorded: 0, refused: 0 }) };
+}
+
+/// Enables/disables BUG-341 S40 in-place layout reuse on the current thread.
+///
+/// **Off by default, and measured that way deliberately.** The mechanism is
+/// correct (six differential tests) and, unlike S32/S36/S38's cache, its hits
+/// are free — but S40's A/B on the real chrome document found only a 3.1% hit
+/// rate, because the repeats S39's census counted as same-origin are mostly
+/// *different box instances* of the same node rather than the same box asked
+/// twice. 531 recordings per pass buy 17 hits, and two interleaved runs
+/// disagree on the sign of the wall-clock difference — i.e. neutral. It stays
+/// wired and tested rather than deleted because it is the one reuse shape
+/// whose hit costs nothing, so a future change that raises the hit rate (e.g.
+/// removing the box-instance churn) can re-measure it by flipping this flag
+/// instead of rebuilding the mechanism.
+pub fn set_layout_in_place_reuse(on: bool) {
+    LAYOUT_IN_PLACE_ON.with(|c| c.set(on));
+    LAYOUT_IN_PLACE.with(|m| m.borrow_mut().clear());
+}
+
+/// Whether BUG-341 S40 in-place layout reuse is active on this thread.
+pub fn layout_in_place_reuse_enabled() -> bool {
+    LAYOUT_IN_PLACE_ON.with(|c| c.get())
+}
+
+/// Returns the accumulated [`LayoutInPlaceStats`] and resets the tally.
+pub fn take_layout_in_place_stats() -> LayoutInPlaceStats {
+    LAYOUT_IN_PLACE_STATS.with(|c| c.replace(LayoutInPlaceStats::default()))
+}
+
+/// Clears the per-pass reuse memo. Called from [`LayoutPassGuard`] at both
+/// ends of an outermost pass, exactly like `FLEX_COLUMN_PROBE_HEIGHTS` — an
+/// entry is only ever valid inside the pass that produced it, which is what
+/// keeps a later pass (a changed cascade, a new frame, one of `entry.rs`'s
+/// four post-layout passes) from ever seeing a stale one.
+pub(crate) fn clear_layout_in_place_memo() {
+    LAYOUT_IN_PLACE.with(|m| m.borrow_mut().clear());
+}
+
+/// `to_bits` snapshot of a rect, for the exact-equality witness compare.
+fn rect_bits(r: &Rect) -> [u32; 4] {
+    [r.x.to_bits(), r.y.to_bits(), r.width.to_bits(), r.height.to_bits()]
+}
+
+/// True when `b` already holds the result `key` describes — see
+/// [`LayoutInPlaceWitness`] for why all three checks are needed. On `true` the
+/// caller must return without calling `lay_out_inner`: the box, and the whole
+/// subtree below it, already is the answer.
+pub(crate) fn layout_in_place_hit(b: &LayoutBox, key: &LayoutInPlaceKey) -> bool {
+    let hit = LAYOUT_IN_PLACE.with(|m| {
+        m.borrow().get(key).is_some_and(|w| {
+            w.box_ptr == b as *const LayoutBox as usize
+                && Arc::ptr_eq(&w.style, &b.style)
+                && w.out_rect == rect_bits(&b.rect)
+        })
+    });
+    if hit {
+        LAYOUT_IN_PLACE_STATS.with(|c| {
+            let mut v = c.get();
+            v.hits += 1;
+            c.set(v);
+        });
+    }
+    hit
+}
+
+/// Records `b`'s just-computed state against `key`. `cv_touched` refuses the
+/// recording for a subtree that consulted `content-visibility: auto`: that
+/// decision depends on the scroll offset and a cross-frame ratchet, neither of
+/// which is in the key or in `style`, so the same inputs can legitimately
+/// produce a different result — the same exclusion S32 established for the
+/// cache, for the same reason.
+pub(crate) fn record_layout_in_place(b: &LayoutBox, key: LayoutInPlaceKey, cv_touched: bool) {
+    LAYOUT_IN_PLACE_STATS.with(|c| {
+        let mut v = c.get();
+        if cv_touched {
+            v.refused += 1;
+        } else {
+            v.recorded += 1;
+        }
+        c.set(v);
+    });
+    if cv_touched {
+        return;
+    }
+    LAYOUT_IN_PLACE.with(|m| {
+        m.borrow_mut().insert(
+            key,
+            LayoutInPlaceWitness {
+                style: Arc::clone(&b.style),
+                box_ptr: b as *const LayoutBox as usize,
+                out_rect: rect_bits(&b.rect),
+            },
+        );
+    });
 }
 
 /// Folds `d` into the current thread's [`BoxBuildStats`] tally.

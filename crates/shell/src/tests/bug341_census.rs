@@ -1327,6 +1327,12 @@ fn bug341_s30_flex_key_census() {
             };
             lumen_chrome::bind_model(&mut doc, &model);
             lumen_layout::set_interactive_state(hover, None, None);
+            // BUG-341 S40: this census counts *real* `lay_out_inner` calls, and
+            // S40's in-place reuse removes some of them. Pinned off here so the
+            // numbers stay comparable with S30-S39's, which were all measured
+            // before the mechanism existed; S40's own effect is measured by
+            // `bug341_s40_in_place_reuse_share` instead.
+            lumen_layout::box_tree::set_layout_in_place_reuse(false);
             lumen_layout::box_tree::set_layout_key_census(true);
             let (_layout, _counters) = lumen_layout::layout_measured_hyp_with_counters(
                 &doc, &sheet, viewport, &measurer, &hyp, false,
@@ -1342,6 +1348,22 @@ fn bug341_s30_flex_key_census() {
                 census.repeat_key_same_style_and_override,
                 100.0 * census.repeat_key_same_style_and_override as f64 / census.repeat_key_calls.max(1) as f64,
                 100.0 * census.repeat_key_same_style_and_override as f64 / census.repeat_key_same_style.max(1) as f64,
+            );
+            // BUG-341 S39: of the repeats already safe by style+override, how
+            // many also land at the *identical* `(start_x, start_y)`. A
+            // `LayoutBox` stores absolute rects, so serving a shared (not
+            // cloned) subtree at a different origin means mutating every
+            // descendant — copy-on-write, i.e. the deep clone S38's
+            // recommended redesign (ii) exists to avoid. Only the share
+            // counted here is free for a share-don't-clone mechanism.
+            eprintln!(
+                "[s39-origin] {scenario} cycle={i} same_style_and_override={} same_origin_too={} ({:.1}% of same_style_and_override, {:.1}% of repeats)",
+                census.repeat_key_same_style_and_override,
+                census.repeat_key_same_style_override_and_origin,
+                100.0 * census.repeat_key_same_style_override_and_origin as f64
+                    / census.repeat_key_same_style_and_override.max(1) as f64,
+                100.0 * census.repeat_key_same_style_override_and_origin as f64
+                    / census.repeat_key_calls.max(1) as f64,
             );
             // BUG-341 S38: per-key occurrence-count histogram — S33's "clone
             // only on second sighting" policy was rejected for the CSS-Grid
@@ -1571,6 +1593,82 @@ fn census_subtree_elements(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> 
     let node = doc.get(id);
     let own = usize::from(matches!(node.data, lumen_dom::NodeData::Element { .. }));
     own + node.children.iter().map(|&c| census_subtree_elements(doc, c)).sum::<usize>()
+}
+
+/// BUG-341 S40: real wall-clock effect of in-place layout reuse
+/// (`lumen_layout::box_tree::set_layout_in_place_reuse`, **on by default**) on
+/// the same real chrome document/fixture S30-S39 measured, with the same
+/// interleaved-per-cycle A/B protocol S36/S38 used, so the number is
+/// comparable with theirs rather than with a fresh harness.
+///
+/// Unlike the S32/S36/S38 layout-result cache this replaces in role, a hit
+/// here copies nothing: the box already holds the result, so the hit is a
+/// `return`. See `LayoutInPlaceKey`'s doc comment for why that is a different
+/// mechanism and not another insertion-policy variant.
+/// Run: `cargo test -p lumen-shell --profile dev-release
+/// bug341_s40_in_place_reuse_share -- --ignored --nocapture`.
+#[test]
+#[ignore = "manual perf measurement (BUG-341 S40) — see doc comment for run command"]
+fn bug341_s40_in_place_reuse_share() {
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1280.0, 800.0);
+    const WARMUP: usize = 10;
+    const SAMPLES: usize = 60;
+
+    for scenario in ["KEY", "HOVER"] {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+        let mut typed = String::new();
+
+        let mut off_stats = lumen_paint::FrameStats::new();
+        let mut on_stats = lumen_paint::FrameStats::new();
+        let mut hits = 0u64;
+        let mut recorded = 0u64;
+        let mut refused = 0u64;
+
+        for i in 0..WARMUP + SAMPLES {
+            let (model, hover) = if scenario == "KEY" {
+                typed.push('a');
+                (cc12_bench_model(&typed), None)
+            } else {
+                (cc12_bench_model(""), if i % 2 == 0 { sidebar } else { None })
+            };
+            lumen_chrome::bind_model(&mut doc, &model);
+            lumen_layout::set_interactive_state(hover, None, None);
+
+            lumen_layout::box_tree::set_layout_in_place_reuse(false);
+            let t = std::time::Instant::now();
+            let _ = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+            let off_ns = t.elapsed().as_nanos();
+
+            lumen_layout::box_tree::set_layout_in_place_reuse(true);
+            let _ = lumen_layout::box_tree::take_layout_in_place_stats();
+            let t = std::time::Instant::now();
+            let _ = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+            let on_ns = t.elapsed().as_nanos();
+            let s = lumen_layout::box_tree::take_layout_in_place_stats();
+
+            if i >= WARMUP {
+                off_stats.record(off_ns as f32 / 1e6);
+                on_stats.record(on_ns as f32 / 1e6);
+                hits += s.hits as u64;
+                recorded += s.recorded as u64;
+                refused += s.refused as u64;
+            }
+            lumen_layout::clear_interactive_state();
+        }
+        let off_summary = off_stats.summary().expect("samples collected");
+        let on_summary = on_stats.summary().expect("samples collected");
+        eprintln!("{}", off_summary.display_with(&format!("BUG341_S40_{scenario}_REUSE_OFF")));
+        eprintln!("{}", on_summary.display_with(&format!("BUG341_S40_{scenario}_REUSE_ON")));
+        eprintln!(
+            "[s40-reuse] {scenario} hits={hits} recorded={recorded} refused={refused} \
+             hit_rate={:.1}% of computed-or-served",
+            100.0 * hits as f64 / (hits + recorded + refused).max(1) as f64,
+        );
+    }
 }
 
 /// BUG-341 S5: like `cc12_chrome_perf_gate_hover_and_keystroke_cycles`'s
