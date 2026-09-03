@@ -135,3 +135,67 @@ None of these involve a child `transform`, so this slice's fix does not
 touch them; each still needs its own root-cause pass per the file's original
 "Масштаб находки" split. Status remains `OPEN` — only the transform
 component of this bug's original 20-file finding is closed.
+
+## Срез 2026-09-03 (P3, часть 2): `overflow-outside-padding.html` root-caused and fixed
+
+Root-caused the first file of the "not yet individually root-caused" group
+above. `content_width`/`content_height` (`crates/engine/layout/src/lib.rs`)
+had two independent defects, both exposed by this file's asymmetric-border,
+abspos-heavy layout:
+
+1. **Floor used the border-box, not the padding box.** `scrollWidth`/
+   `scrollHeight` are defined (CSS Overflow L3 §3.3) relative to the padding
+   edge, but the floor was plain `b.rect.width`/`height` (border-box,
+   `LayoutBox::rect`'s documented contract). A container with a non-zero
+   border (this test's `.container` has `border-width: 0 0 50px 80px`) has a
+   border-box strictly larger than its padding-box, so `scrollWidth` read
+   280 instead of the spec's 200 even with *no* overflowing content at all.
+2. **Absolutely/fixed positioned descendants that land wholly outside the
+   padding edges still contributed in full**, instead of being excluded per
+   CSS Overflow L3 §3.3 ("blocks wholly outside padding edges should not
+   contribute to overflow"). The test's six `.target` boxes (`position:
+   absolute; width/height: 1000px`) are each pushed via a single physical
+   inset (`top`/`right`/`bottom`/`left: -1000px`) to sit just past one edge
+   of a 200×200 container — touching it, not inside it. Because
+   `content_width`/`content_height` folded in every child's bounds
+   unconditionally, each of these boxes blew `scrollWidth` up to ~1000+px.
+
+Fix: a new shared `padding_box(b)` helper (also now used by
+`collect_scroll_containers_inner`'s `clip_rect`, replacing its inline
+border-subtraction so the floor and the viewport rect can never drift apart
+again) replaces the border-box floor and origin in both functions. A new
+`contributes_to_scrollable_overflow(child, bounds, padding_box)` gate skips a
+child entirely (not just clamps it) when **and only when** it is
+`position: absolute`/`fixed` *and* its (transform-adjusted) bounds have zero
+overlap with the padding box on the X axis, the Y axis, or both
+(`rects_overlap`, strict inequalities — touching at a boundary counts as no
+overlap, matching this test's boxes landing exactly on the padding edge).
+The gate is conditioned on the child's `position` specifically because CSS
+Overflow L3 §3.4 makes the opposite rule for `transform`: an in-flow box
+pushed entirely outside by `transform` must still count in full (the
+transform-contribution fix from part 1 above, and its two regression tests,
+are deliberately left unconditional and unaffected by this slice —
+re-verified: both still pass unchanged).
+
+Regression tests added to `crates/engine/layout/src/tests/scroll_interaction_misc.rs`:
+`collect_scroll_containers_abspos_wholly_outside_padding_excluded` (mirrors
+this file's exact repro: 1000×1000 abspos child at `top: -1000px` inside a
+100×100 container — `scrollWidth`/`scrollHeight` must stay at 100, not grow
+from the child's horizontal overlap alone), `_abspos_overlapping_child_still_contributes`
+(guard: an abspos child overlapping on both axes must still grow
+`scrollWidth` normally), and `_scroll_width_floor_is_padding_box_not_border_box`
+(200px content + 80px left border → `scrollWidth` must read 200, not 280).
+`cargo test -p lumen-layout`: 3686/3686 (workspace's existing 3683 unaffected,
+including the two transform-contribution tests from part 1).
+
+**Live WPT verification not performed this slice** — the sandbox this
+session ran in refused to bind the `--mcp-port` TCP socket (`os error
+10013`, access denied) needed to drive a headless probe, so the fix is
+verified by unit tests that reproduce the exact geometry (offsets, border
+widths, expected `scrollWidth` values) of the WPT file's six subtests, not
+by a live run of the file itself.
+
+**Remaining scope unchanged:** 10 files (abspos-without-transform is now
+closed; clip-margin RTL, scrollbar-gutter space reservation, single-axis
+clamping remain) — each still needs its own root-cause pass. Status stays
+`OPEN`.

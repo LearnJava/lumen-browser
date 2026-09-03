@@ -1221,6 +1221,76 @@ fn collect_scroll_containers_no_transform_unaffected() {
 }
 
 #[test]
+fn collect_scroll_containers_abspos_wholly_outside_padding_excluded() {
+    // BUG-504 (WPT `overflow-outside-padding.html`): CSS Overflow L3 §3.3 — an
+    // absolutely positioned descendant landing wholly outside the padding
+    // edges on *either* axis contributes nothing at all, even on the axis
+    // where it partially overlaps. A 1000x1000 child pinned via `top:
+    // -1000px` sits directly above a 100x100 container: its bottom edge
+    // lands exactly on the container's padding-top edge (zero overlap on Y)
+    // despite overlapping horizontally, so scrollWidth/scrollHeight must
+    // stay at the container's own padding-box size, not the child's extent.
+    let root = lay_full(
+        "<div id=\"s\"><div id=\"child\"></div></div>",
+        "#s { position: relative; overflow: auto; width: 100px; height: 100px; } \
+         #child { position: absolute; width: 1000px; height: 1000px; top: -1000px; }",
+    );
+    let containers = collect_scroll_containers(&root);
+    assert_eq!(containers.len(), 1);
+    assert!(
+        (containers[0].scroll_width - 100.0).abs() < 0.5,
+        "expected scroll_width=100 (child wholly above container, no Y overlap → excluded), got {}",
+        containers[0].scroll_width
+    );
+    assert!(
+        (containers[0].scroll_height - 100.0).abs() < 0.5,
+        "expected scroll_height=100 (child wholly above container, no Y overlap → excluded), got {}",
+        containers[0].scroll_height
+    );
+}
+
+#[test]
+fn collect_scroll_containers_abspos_overlapping_child_still_contributes() {
+    // Regression guard for the exclusion above: an abspos child that
+    // genuinely overlaps the padding box on both axes must still grow
+    // scrollWidth normally — only a child wholly outside on some axis is
+    // excluded.
+    let root = lay_full(
+        "<div id=\"s\"><div id=\"child\"></div></div>",
+        "#s { position: relative; overflow: auto; width: 100px; height: 100px; } \
+         #child { position: absolute; width: 50px; height: 50px; top: 0; left: 80px; }",
+    );
+    let containers = collect_scroll_containers(&root);
+    assert_eq!(containers.len(), 1);
+    assert!(
+        (containers[0].scroll_width - 130.0).abs() < 0.5,
+        "expected scroll_width=130 (child at x=80..130 overlaps container, extends past right \
+         edge), got {}",
+        containers[0].scroll_width
+    );
+}
+
+#[test]
+fn collect_scroll_containers_scroll_width_floor_is_padding_box_not_border_box() {
+    // BUG-504 (WPT `overflow-outside-padding.html`): scrollWidth's floor must
+    // be the padding-box size (CSS Overflow L3 §3.3), not the border-box
+    // size — a 200px-wide content box with an 80px left border has a 280px
+    // border box but only a 200px padding box (no padding declared).
+    let root = lay_full(
+        "<div id=\"s\"></div>",
+        "#s { overflow: auto; width: 200px; height: 200px; border-style: solid; \
+         border-width: 0 0 50px 80px; }",
+    );
+    let containers = collect_scroll_containers(&root);
+    assert_eq!(containers.len(), 1);
+    assert!(
+        (containers[0].scroll_width - 200.0).abs() < 0.5,
+        "expected scroll_width=200 (padding-box width, border-left excluded), got {}",
+        containers[0].scroll_width
+    );
+}
+
+#[test]
 fn set_scroll_position_clamps_to_zero() {
     let mut root = lay_full(
         "<div id=\"s\"><p>d</p></div>",
