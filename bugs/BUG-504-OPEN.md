@@ -199,3 +199,86 @@ by a live run of the file itself.
 closed; clip-margin RTL, scrollbar-gutter space reservation, single-axis
 clamping remain) — each still needs its own root-cause pass. Status stays
 `OPEN`.
+
+## Срез 2026-09-03 (P3, часть 3): `scrollbar-gutter-001.html` root-caused and fixed
+
+Root-caused the "scrollbar-gutter space reservation" component of the
+remaining group. `scrollbar_gutter_inline`/`scrollbar_gutter_block`
+(`crates/engine/layout/src/box_tree/predicates.rs`) had two independent
+defects, both exposed by `css/css-overflow/scrollbar-gutter-001.html`'s 15
+overflow×gutter combinations:
+
+1. **`overflow-y`/`overflow-x: hidden` was never eligible for `stable`
+   reservation.** Both functions only matched `Scroll | Auto`, but
+   `hidden` still establishes a scroll container per CSS Overflow L3 §3.3
+   (programmatically scrollable via script even though the UA never paints
+   a scrollbar for it) — `scrollbar-gutter: stable` must reserve its gutter
+   the same as `scroll`/`auto`. Fix: both match arms now include
+   `Overflow::Hidden`. `visible`/`clip` stay excluded (`visible` never
+   establishes a scroll container; `clip` explicitly disables the scrolling
+   machinery outright, CSS Overflow L3 §3.4, so neither can ever show a
+   scrollbar).
+2. **`stable both-edges` only narrowed the content box, never shifted it.**
+   `scrollbar_gutter_inline` already subtracted `2 × unit` from
+   `content_width` for `StableBothEdges`, but `content_x` (`lay_out`'s
+   local content-box origin, `crates/engine/layout/src/box_tree/layout_dispatch.rs`)
+   was never offset — children stayed flush against the same inline-start
+   edge as plain `stable`'s end-edge-only reservation, instead of starting
+   one gutter unit further in as the spec's "mirrored" gutter requires.
+   Fix: new `scrollbar_gutter_inline_start` helper (returns one unit for
+   `StableBothEdges`, `0.0` for `Stable`/`Auto`) added into `content_x`'s
+   computation.
+
+6 new/updated regression tests in `scroll_interaction_misc.rs`'s sibling
+`filter_transform_snap_mask.rs` module (the crate's existing home for
+`scrollbar_gutter_*` unit tests): `..._overflow_hidden` (width, both axes),
+`..._no_reduction_overflow_{visible,clip}` (negative guards),
+`..._both_edges_shifts_child_start_edge`, `..._single_edge_no_start_shift`.
+`cargo test -p lumen-layout`: 3692/3692.
+
+**Live WPT verification:** `tests/wpt/run_smoke.py` against
+`scrollbar-gutter-001.html` went from 11/15 subtests passing (4 genuine
+fails) to **14/15** — the 6 subtests the two defects above accounted for
+(`overflow {auto,scroll,hidden}, scrollbar-gutter stable` +
+`… stable both-edges`) all now pass; `.ini` updated to drop those 6
+`expected: FAIL` entries (from 7 down to 1). The one remaining failure,
+`overflow scroll, scrollbar-gutter auto`, is **not** this bug's gap — it's
+Lumen's overlay-scrollbar architecture (`scrollbar_gutter_inline`'s own doc
+comment): with `scrollbar-gutter: auto`, Lumen's overlay scrollbar never
+consumes layout space regardless of `overflow-y: scroll`'s persistent
+scrollbar, so `content.offsetWidth == container.offsetWidth` by design,
+whereas the WPT assertion assumes a classic (space-consuming) OS scrollbar.
+Fixing that would mean abandoning overlay scrollbars project-wide — left as
+`expected: FAIL`, KNOWN_DEBTOR, not a candidate for its own bug filing.
+
+**Checked for regression, found none:** `scrollbar-gutter-rtl-001.html`,
+`-vertical-lr-001.html`, `-vertical-rl-001.html` and the four
+`scrollbar-gutter-propagation-{001,002,003,007}.html` files were re-run live
+against the fixed binary — all still fail **exactly** the same subtests
+their committed `.ini` already expects (0 unexpected in every case), so
+none of them regressed or accidentally got fixed. For the vertical-writing-
+mode pair specifically, the raw per-subtest log shows the *same* 7
+width-based fails as before my fix (not the position-based fails
+`scrollbar-gutter-001`/`-rtl-001` show) — confirming this is a **separate**,
+not-yet-root-caused defect: `scrollbar_gutter_inline`/`_block` reduce
+physical `content_width`/height unconditionally, never accounting for
+`writing-mode: vertical-*` swapping which physical dimension is the inline
+vs. block axis, so the gutter fix above never engages for `width`
+declarations that are actually block-size under vertical writing modes.
+`scrollbar-gutter-rtl-001.html` shows the width part now fixed but a new
+distinct fail shape (`assert_less_than: content position … expected less
+than N but got N`) — `scrollbar_gutter_inline_start`'s direction gate
+(`Direction::Rtl` → `0.0`, this slice's deliberate scope cut) means the
+start-edge shift never applies under RTL, where the physical start edge is
+the right, not the left this box-tree pass assumes throughout (not just in
+this helper — no existing code path in `layout_dispatch.rs` maps
+inline-start to a physical side by direction at all).
+
+**Remaining scope, revised:** 9 files — `scrollbar-gutter-rtl-001.html`,
+`-vertical-lr-001.html`, `-vertical-rl-001.html`, the 4
+`scrollbar-gutter-propagation-*.html` files (viewport-level gutter
+propagation, untouched by this slice — separate mechanism from a single
+box's own reservation) — plus the original clip-margin RTL and single-axis
+clamping files, each still needing its own root-cause pass. `scrollbar-
+gutter-001.html` is fully closed (bar the DEBTOR subtest). Status stays
+`OPEN`.

@@ -1441,6 +1441,46 @@ fn scrollbar_gutter_stable_both_edges_double_reduction() {
     assert!((p.rect.width - 176.0).abs() < 0.01, "p child={}", p.rect.width);
 }
 
+/// `stable both-edges` must not just narrow the child but also shift it past
+/// the mirrored start-edge gutter — plain `stable`'s end-edge-only reservation
+/// leaves the child flush against the same start edge, but `both-edges`
+/// spec-requires the content to start further in (WPT
+/// `scrollbar-gutter-001.html` asserts `container.offsetLeft <
+/// content.offsetLeft`, BUG-504).
+#[test]
+fn scrollbar_gutter_stable_both_edges_shifts_child_start_edge() {
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { width: 200px; overflow-y: scroll; scrollbar-gutter: stable both-edges; }",
+    );
+    let div = first_element_child(&root);
+    let p = first_element_child(div);
+    assert!(
+        (p.rect.x - (div.rect.x + 12.0)).abs() < 0.01,
+        "div.x={} p.x={}",
+        div.rect.x,
+        p.rect.x
+    );
+}
+
+/// Plain `stable` (end-edge-only) must NOT shift the child's start edge —
+/// only `both-edges` mirrors the gutter onto the start.
+#[test]
+fn scrollbar_gutter_stable_single_edge_no_start_shift() {
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { width: 200px; overflow-y: scroll; scrollbar-gutter: stable; }",
+    );
+    let div = first_element_child(&root);
+    let p = first_element_child(div);
+    assert!(
+        (p.rect.x - div.rect.x).abs() < 0.01,
+        "div.x={} p.x={}",
+        div.rect.x,
+        p.rect.x
+    );
+}
+
 /// `scrollbar-width: thin` uses 6 px gutter instead of 12.
 #[test]
 fn scrollbar_gutter_stable_thin_reduces_by_6() {
@@ -1527,6 +1567,58 @@ fn scrollbar_gutter_block_width_none_no_reduction() {
     );
     let p = first_element_child(first_element_child(&root));
     assert!((p.rect.height - 200.0).abs() < 0.01, "p child={}", p.rect.height);
+}
+
+/// `overflow-y: hidden` still establishes a scroll container (CSS Overflow L3
+/// §3.3 — programmatically scrollable via script even without a painted
+/// scrollbar), so `scrollbar-gutter: stable` reserves its gutter the same as
+/// `scroll`/`auto`. WPT `css/css-overflow/scrollbar-gutter-001.html` "overflow
+/// hidden, scrollbar-gutter stable" (BUG-504).
+#[test]
+fn scrollbar_gutter_stable_reduces_child_width_overflow_hidden() {
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { width: 200px; overflow-y: hidden; scrollbar-gutter: stable; }",
+    );
+    let p = first_element_child(first_element_child(&root));
+    assert!((p.rect.width - 188.0).abs() < 0.01, "p child={}", p.rect.width);
+}
+
+/// `overflow-y: visible` never establishes a scroll container, so
+/// `scrollbar-gutter: stable` has no effect regardless.
+#[test]
+fn scrollbar_gutter_stable_no_reduction_overflow_visible() {
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { width: 200px; overflow-y: visible; scrollbar-gutter: stable; }",
+    );
+    let p = first_element_child(first_element_child(&root));
+    assert!((p.rect.width - 200.0).abs() < 0.01, "p child={}", p.rect.width);
+}
+
+/// `overflow: clip` explicitly disables the scrolling machinery (CSS Overflow
+/// L3 §3.4) — it can never show a scrollbar, so `scrollbar-gutter: stable`
+/// must not reserve a gutter for it either.
+#[test]
+fn scrollbar_gutter_stable_no_reduction_overflow_clip() {
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { width: 200px; overflow: clip; scrollbar-gutter: stable; }",
+    );
+    let p = first_element_child(first_element_child(&root));
+    assert!((p.rect.width - 200.0).abs() < 0.01, "p child={}", p.rect.width);
+}
+
+/// Block-axis mirror of `scrollbar_gutter_stable_reduces_child_width_overflow_hidden`:
+/// `overflow-x: hidden` + `scrollbar-gutter: stable` reserves the block-axis gutter.
+#[test]
+fn scrollbar_gutter_block_stable_reduces_child_height_overflow_hidden() {
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { height: 200px; overflow-x: hidden; scrollbar-gutter: stable; } p { height: 100%; }",
+    );
+    let p = first_element_child(first_element_child(&root));
+    assert!((p.rect.height - 188.0).abs() < 0.01, "p child={}", p.rect.height);
 }
 
 // ──────── transform-origin / perspective / list-style-* / transition-* ────────

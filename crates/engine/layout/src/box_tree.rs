@@ -97,7 +97,7 @@ use diagnostics::{
 mod predicates;
 use predicates::{
     is_audio_element, is_canvas_element, is_iframe_element, is_image_element, is_picture_element,
-    is_video_element, scrollbar_gutter_block, scrollbar_gutter_inline,
+    is_video_element, scrollbar_gutter_block, scrollbar_gutter_inline, scrollbar_gutter_inline_start,
 };
 
 // EE-3: when true, `lay_out` checks `b.dirty.is_clean()` and skips clean subtrees.

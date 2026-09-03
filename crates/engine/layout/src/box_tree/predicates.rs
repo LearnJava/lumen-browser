@@ -28,13 +28,23 @@ const SCROLLBAR_GUTTER_THIN: f32 = 6.0;
 /// prevent layout shift when the scrollbar appears or disappears.
 ///
 /// Returns the CSS px width to subtract from `content_width` before laying out children.
-/// Only non-zero when `overflow-y` is `scroll` or `auto` AND `scrollbar-gutter` is `stable`
-/// or `stable both-edges` AND `scrollbar-width` is not `none`.
+/// Only non-zero when `overflow-y` is `scroll`, `auto` or `hidden` AND `scrollbar-gutter`
+/// is `stable` or `stable both-edges` AND `scrollbar-width` is not `none`. `hidden`
+/// establishes a scroll container per CSS Overflow L3 §3.3 (still programmatically
+/// scrollable via script even though the UA never paints a scrollbar for it), so
+/// `stable` reserves its gutter the same as `scroll`/`auto` — WPT
+/// `css/css-overflow/scrollbar-gutter-001.html` "overflow hidden, scrollbar-gutter
+/// stable" asserts exactly this. `visible` and `clip` are excluded: `visible` never
+/// establishes a scroll container, and `clip` explicitly disables the scrolling
+/// machinery outright (CSS Overflow L3 §3.4), so neither can ever show a scrollbar.
 ///
 // CSS: scrollbar-width, scrollbar-gutter — P4: verify SCROLLBAR_GUTTER_* match
 // SCROLLBAR_WIDTH / SCROLLBAR_WIDTH_THIN in lumen_paint::display_list.
 pub(crate) fn scrollbar_gutter_inline(s: &ComputedStyle) -> f32 {
-    let can_scroll_y = matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto);
+    let can_scroll_y = matches!(
+        s.overflow_y,
+        Overflow::Scroll | Overflow::Auto | Overflow::Hidden
+    );
     if !can_scroll_y {
         return 0.0;
     }
@@ -53,6 +63,34 @@ pub(crate) fn scrollbar_gutter_inline(s: &ComputedStyle) -> f32 {
     }
 }
 
+/// CSS Scrollbars L1 §6.2 — inline-start-edge offset for `scrollbar-gutter:
+/// stable both-edges`.
+///
+/// `scrollbar_gutter_inline` already removes `2 × unit` from `content_width`
+/// for `both-edges`, but that alone only narrows the content box — it leaves
+/// children flush against the same inline-start edge as `stable`'s
+/// end-edge-only reservation. `both-edges` mirrors the gutter onto the start
+/// edge too, so children must additionally start `unit` further in. Returns
+/// `0.0` for `Stable`/`Auto` (their reservation is end-edge-only, no shift)
+/// and for `Overflow::Visible`/`Overflow::Clip` (same eligibility as
+/// `scrollbar_gutter_inline`). WPT `css/css-overflow/scrollbar-gutter-001.html`
+/// "overflow …, scrollbar-gutter stable both-edges" asserts
+/// `container.offsetLeft < content.offsetLeft` for exactly this reason.
+///
+/// RTL is out of scope here (physical left is the inline-*end* edge when
+/// `direction: rtl`, which this box-tree pass does not otherwise account for
+/// when placing children) — returns `0.0` for `Direction::Rtl` pending that
+/// broader fix, tracked as the remaining scope of BUG-504's scrollbar-gutter
+/// slice (`scrollbar-gutter-rtl-001.html`).
+pub(crate) fn scrollbar_gutter_inline_start(s: &ComputedStyle) -> f32 {
+    if s.direction == Direction::Rtl || s.scrollbar_gutter != ScrollbarGutter::StableBothEdges {
+        return 0.0;
+    }
+    // Reuse `scrollbar_gutter_inline`'s eligibility (overflow-y scrollability
+    // + scrollbar-width) and halve its both-edges total back to one unit.
+    scrollbar_gutter_inline(s) / 2.0
+}
+
 /// CSS Scrollbars L1 §6.2 — block-axis (vertical) scrollbar gutter reservation.
 ///
 /// Returns the CSS px height to subtract from available content height when a
@@ -62,9 +100,13 @@ pub(crate) fn scrollbar_gutter_inline(s: &ComputedStyle) -> f32 {
 ///
 // CSS: scrollbar-width, scrollbar-gutter — the block-axis gutter reduces the
 // content height handed to children (see `children_available_height`), mirroring
-// the inline-axis `scrollbar_gutter_inline` reduction of `content_width`.
+// the inline-axis `scrollbar_gutter_inline` reduction of `content_width`. Includes
+// `hidden` for the same reason `scrollbar_gutter_inline` does — see its doc comment.
 pub(crate) fn scrollbar_gutter_block(s: &ComputedStyle) -> f32 {
-    let can_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto);
+    let can_scroll_x = matches!(
+        s.overflow_x,
+        Overflow::Scroll | Overflow::Auto | Overflow::Hidden
+    );
     if !can_scroll_x {
         return 0.0;
     }
