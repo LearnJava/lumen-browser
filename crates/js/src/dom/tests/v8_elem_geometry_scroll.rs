@@ -537,6 +537,20 @@ fn window_inner_and_outer_size_track_viewport_size() {
     assert_eq!(oh, lumen_core::JsValue::Number(600.0));
 }
 
+// ── BUG-515: window.devicePixelRatio ────────────────────────────────────────
+
+#[test]
+fn device_pixel_ratio_defined_without_get_screen_details() {
+    let rt = v8_runtime_with_dom(make_doc());
+    // Fixed 1 (non-HiDPI-aware pipeline); the property must exist at all —
+    // previously it stayed `undefined` unless a page called
+    // `navigator.getScreenDetails()` first (BUG-515's opt-in-only shim gap).
+    let dpr = rt.eval("devicePixelRatio").unwrap();
+    assert_eq!(dpr, lumen_core::JsValue::Number(1.0));
+    let dpr_on_window = rt.eval("window.devicePixelRatio").unwrap();
+    assert_eq!(dpr_on_window, lumen_core::JsValue::Number(1.0));
+}
+
 // ── CSS Scroll Snap L2 snapchanging/snapchanged events ─────────────────────
 
 #[test]
