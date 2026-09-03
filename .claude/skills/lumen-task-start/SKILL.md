@@ -35,14 +35,12 @@ git branch
 
 ## Шаг 2 — Определи программиста и доменную зону
 
-Из CLAUDE.md (таблица «Распределение задач»):
-- P1 — `lumen-html-parser`, `lumen-css-parser`, `lumen-layout`
-- P2 — `lumen-font`, `lumen-paint`, `lumen-image`
-- P3 — `lumen-network`, `lumen-storage`, `lumen-core`
-- P4 — `lumen-shell`, JS, AI, UI-фичи
+Роли, их домены и крейты — [docs/dev-roles.md](../../../docs/dev-roles.md)
+(единственный источник; таблица в CLAUDE.md была удалена 2026-09-03 вместе с
+дублирующим списком, который расходился с ней по крейтам).
 
 Если пользователь указал «ты программист N» — проверь, что задача помечена
-`[PN]` в roadmap CLAUDE.md. Если нет — уточни.
+`[PN]` в `ROADMAP.md`. Если нет — уточни.
 
 ## Шаг 3 — Займи слот пула веткой задачи
 

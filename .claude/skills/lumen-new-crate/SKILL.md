@@ -27,7 +27,7 @@ $ARGUMENTS — имя крейта без префикса `lumen-`, напри�
 - **`crates/engine/`** — крейты движка (парсинг, layout, paint, font, image, encoding, DOM)
 - **`crates/`** — верхнеуровневые крейты (shell, core, network, storage, bench)
 
-Таблица принадлежности по программистам (CLAUDE.md):
+Таблица принадлежности по программистам — [docs/dev-roles.md](../../../docs/dev-roles.md) (там же актуальные крейты ролей):
 - P1 → `crates/engine/` (парсеры, layout)
 - P2 → `crates/engine/` (font, paint, image)
 - P3 → `crates/` (network, storage, knowledge)
@@ -78,7 +78,7 @@ description = "Lumen: <одна строка что делает крейт>"
 
 [dependencies]
 # Добавляй только то, что реально нужно сейчас.
-# Новая external dep = "Why this dependency:" в коммите + обновление CLAUDE.md.
+# Новая external dep = "Why this dependency:" в коммите + строка в docs/plan/tech-stack.md §5.
 lumen-core.workspace = true
 
 # Политики проекта как машинные проверки — [workspace.lints] в корневом
@@ -155,7 +155,7 @@ cargo test -p lumen-<name>
 ## Шаг 8 — Коммит
 
 ```bash
-git add crates/ Cargo.toml Cargo.lock CLAUDE.md lumen-plan.md
+git add crates/ Cargo.toml Cargo.lock docs/plan/tech-stack.md lumen-plan.md
 git commit -m "$(cat <<'EOF'
 Создать крейт lumen-<name>: <однострочное зачем>
 

@@ -92,8 +92,15 @@ In the **same commit** as the implementation:
 3. Update `graphic_tests/COVERAGE.md` — add a row for the property.
 4. If creating a new test file — use the magenta frame pattern: `body { background: #ff00ff; }` + `.__f` wrapper div with `margin: 1px; width: 1022px; height: 718px; background: <PAGE_BG>;`. See "Magenta frame in all tests" above.
 5. Add an entry to `TESTS` in `graphic_tests/run.py`.
+6. **If the property affects paint/rasterization, regenerate the deterministic CPU snapshot references in the same commit:** `SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render cases::snapshot_cpu`, then check the changed PNGs are correct rather than garbage. Skipping this drifts `graphic_tests/snapshots/cpu/` on unrelated pages and red-lights `scoped-test.sh` for whoever commits next — the recurring BUG-118 / BUG-149 / BUG-297 / BUG-316 staleness.
 
 Current coverage — `graphic_tests/COVERAGE.md`.
+
+### The PNGs are not the only golden set
+
+A change to the *geometry or order* of emitted commands also drifts the **textual** display-list snapshots in `crates/engine/paint/tests/snapshots/*.snap` — regenerate with `UPDATE_SNAPSHOTS=1 cargo test -p lumen-paint --test all <name>` and read the diff (it is three lines, so a wrong rect is obvious). Those are a plain `cargo test -p lumen-paint` away, i.e. they red-light step 1 of the task checklist for **every** role that touches paint, not just the graphic gate: BUG-816 left `main` red for a day that way.
+
+So a paint-affecting change has three independent golden sets to keep honest: the Edge pixel diff (`run.py`), the deterministic CPU PNGs (`graphic_tests/snapshots/cpu/`) and the textual `.snap` files.
 
 ---
 
@@ -111,6 +118,17 @@ It is **not** the right gate for changes that cannot alter the display list — 
 If you claim a change is display-list-neutral, **show it**: an empty `dump_golden.py` diff (or unchanged `--dump-display-list` on the affected pages) is the evidence. Without that evidence, run the full pipeline — "it's only a refactor" is exactly how pixel regressions land.
 
 **Since BUG-128 (2026-08-04) the dump goldens depend on the machine's installed fonts.** `--dump-layout`/`--dump-display-list` run through the shell's real `FontProvider`, and a CSS generic family (`serif`, `sans-serif`, `monospace`, …) — including the generic tail of a list like `Arial, sans-serif` — now resolves to a system face, so text widths in the goldens encode *this* machine's fonts (Windows: Times New Roman / Arial / Consolas). The deterministic CPU snapshot gate is **not** affected: `lumen-driver` renders and measures without a `FontProvider`, so `graphic_tests/snapshots/cpu/` stays reproducible everywhere. If the golden gate ever moves to a machine without the Windows core fonts, expect width-only diffs on pages that use generic families, and re-baseline there rather than "fixing" the engine.
+
+## Traps that look like engine regressions
+
+- **`gdigrab` captures the whole desktop, not just the Lumen window.** Any OS focus change during a run silently corrupts every screenshot from that point on, and it fails as a wall of unrelated-looking high-diff FAILs rather than as an error — typing into the assistant chat mid-run did it on 2026-07-28: 72 of 149 tests "failed" at 85–93 % diff, the screenshots being pictures of the chat window. Re-run clean before diagnosing many simultaneous large-diff failures as an engine regression. Backgrounding the run fails loudly instead, at TEST-00.
+- **`--screenshot` and the live window can render the same page differently.** `--screenshot` goes through `cpu_raster.rs`, the live window (`--mcp-live-port`, what `run.py` drives) through `renderer.rs` — they are independent implementations of every `DisplayCommand`, not two callers of one renderer. `PushMaskLayer`/`PopMaskLayer` is a concrete case: correct on `--screenshot`, no visible effect in the live window ([BUG-936](../bugs/BUG-936-OPEN.md)). A `--screenshot` match against Edge does not prove the live/GPU path is correct — check both before trusting a paint change.
+- **Any paint or scroll timing number is meaningless without the wgpu backend it was measured on** — check the `[wgpu] adapter: … (…, Vulkan|Dx12)` line in the run's stderr. Same machine, same adapter: one scroll of a heavy page cost 116 ms/frame on DX12 against 53 ms on Vulkan, which reads exactly like a huge engine regression. The backend is chosen at startup and cached in `<exe_dir>/data/paint/backend_probe.txt`, so two checkouts of the same commit can differ; `WGPU_BACKEND=vulkan|dx12|gl` pins it.
+- **On Linux, `dump_golden.py` reports 6 of its 12 checks as mismatches no matter what you changed** — the binary path is hardcoded as `target/<profile>/lumen.exe` and the committed references were generated on Windows, so text metrics differ. Prove display-list neutrality there by an A/B of the dumps themselves (capture, `git stash`, rebuild, capture, `diff -rq`), and never `--update` the references from Linux.
+
+## Reftest font
+
+`assets/fonts/Ahem.ttf` (3-Clause BSD, `assets/fonts/LICENSE-Ahem.txt`) is the deterministic reftest font (TEST-5), vendored unmodified from `tests/wpt/fonts/Ahem.ttf`. Every glyph is a 1em solid square, which is what makes a reftest's expectation exact rather than font-dependent. It is picked up by lumen-font's asset-dir scan like any other bundled family — there is no dedicated registration code to update.
 
 ## Telling a backend debt from an engine-wide debt
 

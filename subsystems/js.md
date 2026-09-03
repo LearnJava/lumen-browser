@@ -2022,3 +2022,56 @@ the time — read dates.
   - `<style>`/`<link>.sheet` is a prototype getter in `web_api_shim_tail_b.js` next to `_lumen_install_reflection`, **not** on the shared `_LUMEN_WRAPPER_MEMBERS` table (that shadowing shape is the BUG-920 class of defect).
   - Tests: `crates/js/src/dom/tests/v8_cssom_stylesheets.rs` (7 tests, `V8JsRuntime` directly, no real `<link>` fetch).
   - Out of scope (CSSOM-5, [BUG-897](../bugs/BUG-897-OPEN.md)): `insertRule`/`deleteRule`, `new CSSStyleSheet()`, a writable `CSSStyleDeclaration`, `stylesheet.disabled` writes, `@import`/`@font-face`/`@supports` as `CSSRule`.
+
+### Engine/shim traps (moved out of `CLAUDE.md` 2026-09-03)
+
+These were loaded on every session regardless of the task; they only matter when you touch the JS
+runtime or the shim. Read them before a JS/Web-API change.
+
+- **A per-feature shim outside `WEB_API_SHIM*` is its own `rt.eval` that a page-shim fix never reaches.**
+  `xhr.rs`, `audio_element.rs`, `video_bindings.rs`, `web_audio.rs`, `worker.rs`,
+  `broadcast_channel.rs`, … each install their own JS. The same defect has been fixed three times in
+  different modules for exactly this reason (relative-URL resolution in `fetch`, then XHR, then
+  `sendBeacon`). Before assuming a fix landed everywhere, grep the other shims for the same shape.
+- **`_LUMEN_WRAPPER_MEMBERS` (`crates/js/src/dom.rs`) sits on a prototype BELOW the interface
+  prototypes**, so anything declared there outranks every `_lumen_install_reflection` row and every
+  hand-written `HTML*Element.prototype` accessor. A tag-specific member in that shared table silently
+  swallows the same-named IDL attribute of every other interface — that is how `meta.content` answered
+  `undefined` while `getAttribute('content')` worked. Nothing tag-specific belongs in it. The same
+  shadowing shape is live on `iframe.src` ([BUG-920](../bugs/BUG-920-OPEN.md)).
+- **A `thread_local!` set inside an `install_*_v8` function and read inside one of the natives it
+  registers reads back its DEFAULT** — the installer and the native's invocation run on different OS
+  threads (measured: `ThreadId(2)` vs `ThreadId(3)`). Compute the value once before
+  `rt.register_native` and capture it **by value** in a `move` closure, the way `offscreen_canvas.rs`
+  does; never round-trip install-time state through a thread-local.
+- **A JSON payload crossing the engine↔shim boundary must be encoded the way the receiver reads it.**
+  `fire_popstate` embedded a JSON object bare into a call whose shim side ran `JSON.parse` on it, so
+  *every* traversal delivered `state: null` — and it went unnoticed for months because `null` is the one
+  value that round-trips through that confusion unchanged. A working `null` proves nothing about any
+  other value.
+- **Queue a callback the shim makes on the page's behalf as a task, do not dispatch it inline.** WPT
+  arms its `EventWatcher` *after* the triggering call, so a synchronous event is actively worse than
+  none (measured −2 subtests synchronously against +1 as a task). The deliberate exception is
+  `statechange` in `web_audio.rs`: this engine pumps timers only when it redraws, so on a static page a
+  task waits up to a second.
+- **Anything added to a JS prototype must be non-enumerable** — `web-animations`'
+  `style-change-events.html` builds one subtest per `Object.keys(Animation.prototype)` entry, so an
+  enumerable helper invents failing subtests named after engine internals.
+- **`Lumen::js_ctx` is `None` in a live window.** Since ADR-023 the engine thread is on by default and
+  `set_js_ctx` deposits the handle in *its* state, so code reading `self.js_ctx` directly silently does
+  nothing. Go through `route_task_js`/`route_query_js`, or `Lumen::clone_js_ctx` when a router's single
+  `FnOnce` will not do. A sub-document's runtime is reachable by neither — call `eval_js`/
+  `eval_js_value` on the frame handle.
+- **`lock_document_bounded` is the only bounded-wait lock in `crates/js`**, and it exists because a
+  window `load` handler runs *concurrently* with the UI thread's own pass over the document (measured:
+  3.9 ms of contention). Any new `try_lock` on a JS-visible path inherits that race — a name lookup
+  that declines instead of waiting turns into a `ReferenceError` in `load` handlers and nowhere else.
+- **Anything that changes the stylesheet set from Rust must move `inline_style_fingerprint` or
+  `stylesheet_link_fingerprint`** (`doc_extract.rs`) — since [BUG-443](../bugs/BUG-443-FIXED.md) the
+  cascade is built *before* the document's scripts and rebuilt only on a fingerprint mismatch, so a new
+  path that adds a `<style>`/`<link>` without touching either is invisible to the rebuild.
+- **`--screenshot`, `--dump-display-list` and the live window each write the page's display list by
+  their own path**, and frame content is spliced in on *every* write. A fourth path added without the
+  splice silently shows the grey `<iframe>` placeholder (that is how `--screenshot` shipped without it).
+  The pixel goldens do not cover frames at all: `lumen-driver` builds its own display list and
+  `run.py`'s pages contain no `<iframe>`.
