@@ -266,6 +266,7 @@ impl V8JsRuntime {
                 stylesheet: Arc::clone(&self.flush_stylesheet),
                 dom_dirty: Arc::clone(&dom_dirty),
                 never_flushed: Arc::clone(&self.style_never_flushed),
+                scroll_states: Arc::clone(&scroll_states),
             };
             let window_open_requests = Arc::clone(&self.window_open_requests);
             let console_messages = Arc::clone(&self.console_messages);
@@ -401,10 +402,10 @@ impl V8JsRuntime {
                 scope,
                 ctx,
                 store,
-                Arc::clone(&scroll_states),
                 Arc::clone(&pending_scrolls),
                 Arc::clone(&pending_page_scrolls),
                 Arc::clone(&page_scroll_y),
+                flush_handles.clone(),
             )?;
 
             install::install_window_open(scope, ctx, store, Arc::clone(&window_open_requests))?;

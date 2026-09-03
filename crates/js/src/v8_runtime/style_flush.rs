@@ -42,6 +42,14 @@ pub(crate) struct FlushHandles {
     pub(crate) stylesheet: Arc<Mutex<Option<Arc<lumen_css_parser::Stylesheet>>>>,
     pub(crate) dom_dirty: Arc<AtomicBool>,
     pub(crate) never_flushed: Arc<AtomicBool>,
+    /// BUG-504 part 10: `scrollLeft`/`scrollTop`/`scrollWidth`/`scrollHeight`
+    /// JS-visible cache, keyed like `layout_rects`. Reapplied onto the fresh
+    /// flush tree from its own pre-flush contents (see `maybe_flush`) rather
+    /// than left at the freshly-built tree's `scroll_x`/`scroll_y == 0.0`
+    /// default, so a same-tick read after a scroll-affecting style mutation
+    /// (e.g. `overflow` flipping to `clip`) sees the correctly reclamped
+    /// value instead of silently losing a prior scroll position.
+    pub(crate) scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
 }
 
 /// Bundled font for the flush's own measurer — the same file every other
@@ -95,8 +103,31 @@ impl FlushHandles {
             return;
         };
         let viewport = lumen_core::geom::Size::new(vw, vh);
-        let (layout_root, counters) =
+        let (mut layout_root, counters) =
             lumen_layout::layout_measured_with_counters(&doc_guard, &sheet, viewport, &measurer);
+        // BUG-504 part 10: the fresh tree above starts every scroll container
+        // at `scroll_x`/`scroll_y == 0.0` (box-tree construction default) —
+        // unlike a real relayout, this one-off flush tree never goes through
+        // `graft_geometry`'s clone-unchanged-subtrees step, which is what
+        // normally carries a prior scroll offset forward. Reapply the
+        // pre-flush cache's offsets through `set_scroll_position`, which
+        // clamps to the fresh (possibly now-different) scrollable extent and
+        // zeroes out containers whose `overflow` just became `clip` — the
+        // exact same rule a same-tick `scrollLeft`/`scrollTop` read after
+        // e.g. `el.style.overflow = 'clip'` must observe.
+        let prev_scroll = self
+            .scroll_states
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        for (&nid, s) in &prev_scroll {
+            lumen_layout::set_scroll_position(
+                &mut layout_root,
+                lumen_dom::NodeId::from_index(nid as usize),
+                s[0],
+                s[1],
+            );
+        }
         *self
             .layout_rects
             .lock()
@@ -111,6 +142,13 @@ impl FlushHandles {
             .lock()
             .unwrap_or_else(|e| e.into_inner()) =
             lumen_layout::collect_custom_properties(&layout_root, viewport);
+        *self
+            .scroll_states
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = lumen_layout::collect_scroll_containers_for_js_state(&layout_root)
+            .iter()
+            .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+            .collect();
         self.never_flushed.store(false, Ordering::Relaxed);
     }
 }
