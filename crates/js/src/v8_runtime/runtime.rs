@@ -106,6 +106,22 @@ pub struct V8JsRuntime {
     /// `docs/tasks/p1-cssom-1-stylesheets.md`. Backs `document.styleSheets`/
     /// `element.sheet`/`CSSStyleSheet.cssRules`.
     pub(super) stylesheet_nodes: Arc<Mutex<Vec<lumen_css_parser::StylesheetNodeEntry>>>,
+    /// CSSOM-4/BUG-493: the page's current stylesheet, pushed by the embedder
+    /// via [`Self::update_stylesheet`] so a same-tick `getComputedStyle`/
+    /// geometry read can force a synchronous flush (see
+    /// [`crate::v8_runtime::FlushHandles`]) instead of answering from a
+    /// snapshot pushed only after the whole script/turn finishes. `None`
+    /// until the first push — natives then behave exactly as before this
+    /// field existed.
+    pub(super) flush_stylesheet: Arc<Mutex<Option<Arc<lumen_css_parser::Stylesheet>>>>,
+    /// CSSOM-4/BUG-493: `true` until the first synchronous flush succeeds.
+    /// Lets the very first style/geometry read of a page force one even
+    /// though [`Self::dom_dirty`] — set only by a JS mutation — is still
+    /// `false` at that point (the "static markup + parse-time `<script>`"
+    /// shape BUG-493 documents as its dominant symptom). After the first
+    /// success, `dom_dirty` alone (peeked, never cleared by the flush) gates
+    /// every later one.
+    pub(super) style_never_flushed: Arc<AtomicBool>,
     /// Pending popup window requests queued by JS `window.open()`.
     pub(super) window_open_requests: Arc<Mutex<Vec<crate::dom::PopupRequest>>>,
     /// Console messages queued by `console.log/warn/error` calls in JS.
@@ -253,6 +269,8 @@ impl V8JsRuntime {
             computed_styles: Arc::new(Mutex::new(HashMap::new())),
             custom_properties: Arc::new(Mutex::new(HashMap::new())),
             stylesheet_nodes: Arc::new(Mutex::new(Vec::new())),
+            flush_stylesheet: Arc::new(Mutex::new(None)),
+            style_never_flushed: Arc::new(AtomicBool::new(true)),
             window_open_requests: Arc::new(Mutex::new(Vec::new())),
             console_messages: Arc::new(Mutex::new(Vec::new())),
             pending_history_url_updates: Arc::new(Mutex::new(Vec::new())),
@@ -527,6 +545,19 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::update_viewport_size`].
     pub fn update_viewport_size(&self, width: f32, height: f32) {
         *self.viewport_size.lock().unwrap_or_else(|e| e.into_inner()) = [width, height];
+    }
+
+    /// Push the page's current stylesheet for CSSOM-4/BUG-493's synchronous
+    /// flush-on-read. Call once after CSS parsing — before running the
+    /// page's own scripts on first navigation, so even a top-level
+    /// `<script>` that runs at initial parse time has something to flush
+    /// against — and again whenever the stylesheet is re-parsed, mirroring
+    /// [`Self::update_viewport_size`]'s shape.
+    pub fn update_stylesheet(&self, sheet: Arc<lumen_css_parser::Stylesheet>) {
+        *self
+            .flush_stylesheet
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(sheet);
     }
 
     /// Drain lazy image load requests queued by JS.
