@@ -1,7 +1,7 @@
 # BUG-510: CSS tokenizer's whitespace skip uses Unicode `White_Space`
 instead of the CSS Syntax 5-character definition
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-03
 **Дата:** 2026-08-02
 **Компонент:** css-parser (`crates/engine/css-parser/src/parser.rs::skip_ws_and_comments`)
 **Найден:** WPT-RUN-3 срез 18 (`ROADMAP.md`) — массовый прогон `css/css-syntax`
@@ -43,3 +43,24 @@ containing a literal U+000B or U+0085 byte is affected, not just this test.
 
 Committed `.ini` under `tests/wpt/metadata/css/css-syntax/` for
 `whitespace.html` (2 subtests `expected: FAIL`, the other 29 pass).
+
+## Срез 2026-09-03 (P3): fixed
+
+`skip_ws_and_comments` (`crates/engine/css-parser/src/parser.rs`) now matches
+the CSS Syntax 5-character set explicitly (`matches!(c, '\t' | '\n' | '\x0C'
+| '\r' | ' ')`) instead of `char::is_whitespace()`. Confirmed via the exact
+mechanism the WPT test probes: a new regression test,
+`valid_selector_list_rejects_non_css_whitespace_as_combinator`
+(`crates/engine/css-parser/src/parser/tests/selectors.rs`), asserts
+`is_valid_selector_list(".a\u{000B}b")`/`".a\u{0085}b"` are now `false` —
+the compound-selector parse breaks on the un-skipped byte instead of treating
+it as a descendant combinator, matching the test's "isn't valid in a selector
+at all" tolerance branch. `cargo test -p lumen-css-parser`: 360/360.
+`cargo clippy -p lumen-css-parser --all-targets -- -D warnings`: clean.
+
+**Live WPT verification not performed** — no `tests/wpt/.venv` in this pool
+slot. `.ini` deleted (`tests/wpt/metadata/css/css-syntax/whitespace.html.ini`)
+— the file's only 2 `expected: FAIL` entries directly encode this bug's
+mechanism, which the fix eliminates at the tokenizer level (the single shared
+`skip_ws_and_comments` all selector/value parsing goes through), so no
+uncertainty remains for a future session to re-derive.

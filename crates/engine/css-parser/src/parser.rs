@@ -487,7 +487,11 @@ impl<'a> Parser<'a> {
     fn skip_ws_and_comments(&mut self) {
         loop {
             while let Some(c) = self.peek() {
-                if c.is_whitespace() {
+                // CSS Syntax §4.2 "whitespace": exactly these 5 ASCII
+                // characters, not Rust's Unicode `White_Space` (which also
+                // matches e.g. U+000B VT / U+0085 NEL, wrongly acting as a
+                // descendant combinator — BUG-510).
+                if matches!(c, '\t' | '\n' | '\x0C' | '\r' | ' ') {
                     self.consume();
                 } else {
                     break;
