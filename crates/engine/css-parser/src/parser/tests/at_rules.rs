@@ -611,6 +611,25 @@ use super::*;
     }
 
     #[test]
+    fn at_supports_evaluate_custom_property_always_supported() {
+        // BUG-501 gap 2: a `--`-prefixed custom property must always
+        // evaluate as supported, regardless of `known_properties`.
+        let cond = parse_supports_condition("(--my-var: revert-rule)");
+        assert!(cond.evaluate(&[]));
+        assert!(cond.evaluate(&["display", "color"]));
+    }
+
+    #[test]
+    fn at_supports_evaluate_custom_property_in_combinators() {
+        let and = parse_supports_condition("(--x: 1) and (display: grid)");
+        assert!(and.evaluate(&["display"]));
+        assert!(!and.evaluate(&[])); // display still unsupported here
+
+        let or = parse_supports_condition("(unknown: x) or (--y: 1)");
+        assert!(or.evaluate(&[]));
+    }
+
+    #[test]
     fn at_supports_evaluate_and() {
         let cond = parse_supports_condition("(display: grid) and (color: red)");
         assert!(cond.evaluate(&["display", "color"]));

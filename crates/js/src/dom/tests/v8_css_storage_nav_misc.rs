@@ -66,6 +66,40 @@ fn css_supports_case_insensitive() {
     assert!(bool_eval(&rt, "CSS.supports('Display', 'block')"));
 }
 
+// ── BUG-501: one-arg parens-fallback + custom-property support ──────────
+
+#[test]
+fn css_supports_one_arg_bare_declaration_no_parens() {
+    // CSSOM `supports(conditionText)` fallback: a bare `prop: value` (no
+    // wrapping parens) is not itself a valid <supports-condition>, so the
+    // spec requires retrying with `(conditionText)` before giving up.
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt, "CSS.supports('display:grid')"));
+    assert!(bool_eval(&rt, "CSS.supports('margin: 1px')"));
+}
+
+#[test]
+fn css_supports_one_arg_bare_declaration_unknown_property_still_false() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(!bool_eval(&rt, "CSS.supports('unknown-prop:x')"));
+}
+
+#[test]
+fn css_supports_one_arg_custom_property_parenthesized() {
+    // CSS Variables L1 §2: a custom property accepts any value, so once
+    // custom properties are implemented at all, `@supports (--x: …)` must
+    // always be considered supported.
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt, "CSS.supports('(--x: revert-rule)')"));
+}
+
+#[test]
+fn css_supports_one_arg_custom_property_bare() {
+    // Both gaps compound: no parens AND a custom property.
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt, "CSS.supports('--x:revert-rule')"));
+}
+
 #[test]
 fn css_escape_plain_word() {
     let rt = v8_runtime_with_dom(make_doc());
