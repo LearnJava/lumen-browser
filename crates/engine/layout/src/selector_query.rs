@@ -30,7 +30,7 @@ use crate::style::{
     TextDecorationLine, TextDecorationStyle,
     TextEmphasisStyle, TextOverflow, TextShadow, TextTransform, TimingFunction, TransformFn,
     Visibility, WhiteSpace,
-    WhiteSpaceCollapse,
+    WhiteSpaceCollapse, WritingMode,
     ComputedStyle,
 };
 
@@ -1525,6 +1525,11 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         PrintColorAdjust::Economy => "economy",
         PrintColorAdjust::Exact => "exact",
     }.into());
+    // `color-adjust` is the legacy alias of `print-color-adjust` (CSS Color
+    // Adjustment L1 §3) — the cascade already parses both names onto the
+    // same `print_color_adjust` field (`style/apply/{css_wide,paint}.rs`),
+    // so the resolved value is identical.
+    m.insert("color-adjust".into(), m["print-color-adjust"].clone());
 
     // ── SVG paint properties (SVG2 §11) ──────────────────────────────
     m.insert("fill".into(), svg_paint_to_css(&style.svg_fill));
@@ -1570,6 +1575,50 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         RubyMerge::Merge => "merge",
         RubyMerge::Auto => "auto",
     }.into());
+
+    // ── CSS Logical Properties L1 (CSSOM-3 срез 2) ───────────────────
+    // Resolved value of a logical longhand is the resolved value of its
+    // flow-relative physical twin (already computed above). Phase 0 layout
+    // (`style::logical::resolve_logical_properties`) only resolves
+    // horizontal-tb/LTR onto physical fields — gate the same way here rather
+    // than fabricate a mapping the layout side never applied.
+    if style.writing_mode == WritingMode::HorizontalTb && style.direction == Direction::Ltr {
+        const LOGICAL_LONGHANDS: &[(&str, &str)] = &[
+            ("inline-size", "width"), ("min-inline-size", "min-width"), ("max-inline-size", "max-width"),
+            ("block-size", "height"), ("min-block-size", "min-height"), ("max-block-size", "max-height"),
+            ("inset-inline-start", "left"), ("inset-inline-end", "right"),
+            ("inset-block-start", "top"), ("inset-block-end", "bottom"),
+            ("margin-inline-start", "margin-left"), ("margin-inline-end", "margin-right"),
+            ("margin-block-start", "margin-top"), ("margin-block-end", "margin-bottom"),
+            ("padding-inline-start", "padding-left"), ("padding-inline-end", "padding-right"),
+            ("padding-block-start", "padding-top"), ("padding-block-end", "padding-bottom"),
+            ("border-inline-start-width", "border-left-width"), ("border-inline-end-width", "border-right-width"),
+            ("border-block-start-width", "border-top-width"), ("border-block-end-width", "border-bottom-width"),
+            ("border-inline-start-style", "border-left-style"), ("border-inline-end-style", "border-right-style"),
+            ("border-block-start-style", "border-top-style"), ("border-block-end-style", "border-bottom-style"),
+            ("border-inline-start-color", "border-left-color"), ("border-inline-end-color", "border-right-color"),
+            ("border-block-start-color", "border-top-color"), ("border-block-end-color", "border-bottom-color"),
+        ];
+        for (logical, physical) in LOGICAL_LONGHANDS {
+            if let Some(v) = m.get(*physical).cloned() {
+                m.insert((*logical).into(), v);
+            }
+        }
+
+        // Two-value logical shorthands (CSS Logical L1 §6): collapse to one
+        // component when start/end agree, otherwise "start end" — same rule
+        // already used above for `contain-intrinsic-size`.
+        fn two_value(m: &HashMap<String, String>, a: &str, b: &str) -> String {
+            let (va, vb) = (m.get(a).cloned().unwrap_or_default(), m.get(b).cloned().unwrap_or_default());
+            if va == vb { va } else { format!("{va} {vb}") }
+        }
+        m.insert("margin-inline".into(), two_value(&m, "margin-left", "margin-right"));
+        m.insert("margin-block".into(), two_value(&m, "margin-top", "margin-bottom"));
+        m.insert("padding-inline".into(), two_value(&m, "padding-left", "padding-right"));
+        m.insert("padding-block".into(), two_value(&m, "padding-top", "padding-bottom"));
+        m.insert("inset-inline".into(), two_value(&m, "left", "right"));
+        m.insert("inset-block".into(), two_value(&m, "top", "bottom"));
+    }
 
     m
 }
@@ -2327,6 +2376,13 @@ mod tests {
     }
 
     #[test]
+    fn computed_map_color_adjust_mirrors_print_color_adjust_alias() {
+        let m = div_computed_map("<div>x</div>", "div { color-adjust: exact; }");
+        assert_eq!(m.get("print-color-adjust").map(String::as_str), Some("exact"));
+        assert_eq!(m.get("color-adjust").map(String::as_str), Some("exact"));
+    }
+
+    #[test]
     fn computed_map_svg_paint_properties() {
         let m = div_computed_map(
             "<div>x</div>",
@@ -2461,5 +2517,92 @@ mod tests {
     fn computed_map_border_spacing_two_values_when_differ() {
         let m = div_computed_map("<div>x</div>", "div { border-spacing: 10px 20px; }");
         assert_eq!(m.get("border-spacing").map(String::as_str), Some("10px 20px"));
+    }
+
+    // ──────────────── CSSOM-3 срез 2: CSS Logical Properties L1 ────────────────
+
+    #[test]
+    fn computed_map_logical_sizing_mirrors_physical() {
+        let m = div_computed_map("<div>x</div>", "div { inline-size: 120px; block-size: 80px; }");
+        assert_eq!(m.get("inline-size").map(String::as_str), Some("120px"));
+        assert_eq!(m.get("block-size").map(String::as_str), Some("80px"));
+        assert_eq!(m.get("width").map(String::as_str), Some("120px"));
+        assert_eq!(m.get("height").map(String::as_str), Some("80px"));
+    }
+
+    #[test]
+    fn computed_map_logical_margin_padding_start_end_mirror_physical() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { margin-inline-start: 5px; margin-inline-end: 6px; \
+             padding-block-start: 7px; padding-block-end: 8px; }",
+        );
+        assert_eq!(m.get("margin-inline-start").map(String::as_str), Some("5px"));
+        assert_eq!(m.get("margin-left").map(String::as_str), Some("5px"));
+        assert_eq!(m.get("margin-inline-end").map(String::as_str), Some("6px"));
+        assert_eq!(m.get("margin-right").map(String::as_str), Some("6px"));
+        assert_eq!(m.get("padding-block-start").map(String::as_str), Some("7px"));
+        assert_eq!(m.get("padding-top").map(String::as_str), Some("7px"));
+        assert_eq!(m.get("padding-block-end").map(String::as_str), Some("8px"));
+        assert_eq!(m.get("padding-bottom").map(String::as_str), Some("8px"));
+    }
+
+    #[test]
+    fn computed_map_logical_inset_mirrors_physical() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { position: absolute; inset-inline-start: 1px; inset-inline-end: 2px; \
+             inset-block-start: 3px; inset-block-end: 4px; }",
+        );
+        assert_eq!(m.get("inset-inline-start").map(String::as_str), Some("1px"));
+        assert_eq!(m.get("left").map(String::as_str), Some("1px"));
+        assert_eq!(m.get("inset-inline-end").map(String::as_str), Some("2px"));
+        assert_eq!(m.get("right").map(String::as_str), Some("2px"));
+        assert_eq!(m.get("inset-block-start").map(String::as_str), Some("3px"));
+        assert_eq!(m.get("top").map(String::as_str), Some("3px"));
+        assert_eq!(m.get("inset-block-end").map(String::as_str), Some("4px"));
+        assert_eq!(m.get("bottom").map(String::as_str), Some("4px"));
+    }
+
+    #[test]
+    fn computed_map_logical_border_width_style_color_mirror_physical() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { border-inline-start-width: 2px; border-inline-start-style: dashed; \
+             border-inline-start-color: red; }",
+        );
+        assert_eq!(m.get("border-inline-start-width").map(String::as_str), Some("2px"));
+        assert_eq!(m.get("border-left-width").map(String::as_str), Some("2px"));
+        assert_eq!(m.get("border-inline-start-style").map(String::as_str), Some("dashed"));
+        assert_eq!(m.get("border-left-style").map(String::as_str), Some("dashed"));
+        assert_eq!(m.get("border-inline-start-color").map(String::as_str), Some("rgb(255, 0, 0)"));
+        assert_eq!(m.get("border-left-color").map(String::as_str), Some("rgb(255, 0, 0)"));
+    }
+
+    #[test]
+    fn computed_map_logical_two_value_shorthand_collapses_when_equal() {
+        let m = div_computed_map("<div>x</div>", "div { margin-inline: 10px; }");
+        assert_eq!(m.get("margin-inline").map(String::as_str), Some("10px"));
+    }
+
+    #[test]
+    fn computed_map_logical_two_value_shorthand_keeps_both_when_differ() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { margin-inline-start: 10px; margin-inline-end: 20px; }",
+        );
+        assert_eq!(m.get("margin-inline").map(String::as_str), Some("10px 20px"));
+    }
+
+    #[test]
+    fn computed_map_logical_properties_absent_outside_horizontal_tb_ltr() {
+        // Phase 0 (`resolve_logical_properties`) only resolves logical props
+        // onto physical fields for horizontal-tb/LTR — the CSSOM mirror gates
+        // the same way rather than serve a made-up value for vertical modes.
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { writing-mode: vertical-rl; inline-size: 120px; }",
+        );
+        assert_eq!(m.get("inline-size"), None);
     }
 }
