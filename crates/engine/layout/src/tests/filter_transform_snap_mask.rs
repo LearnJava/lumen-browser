@@ -1563,16 +1563,22 @@ fn scrollbar_gutter_block_stable_reduces_child_height() {
     assert!((p.rect.height - 188.0).abs() < 0.01, "p child={}", p.rect.height);
 }
 
-/// `both-edges` is undefined for the block axis: only one gutter unit reserved
-/// (unlike the inline axis, which doubles it). 200 − 12 = 188.
+/// `both-edges` doubles the block-axis gutter too, same as the inline axis —
+/// see `scrollbar_gutter_block`'s doc comment (corrected BUG-504 remainder,
+/// part 5: WPT `scrollbar-gutter-vertical-{lr,rl}-001.html` requires the
+/// doubling to hold on the axis where it's actually the block axis). This
+/// `div` is `horizontal-tb` (default), so `scrollbar_gutter_block` is only
+/// exercised here as `layout_dispatch.rs`'s cross-axis leak (§ predicates.rs
+/// doc comment) — the writing-mode-correct exercise of this doubling lives in
+/// `vertical.rs`'s own test module. 200 − 2×12 = 176.
 #[test]
-fn scrollbar_gutter_block_both_edges_single_reduction() {
+fn scrollbar_gutter_block_both_edges_double_reduction() {
     let root = lay(
         "<div><p>x</p></div>",
         "div { height: 200px; overflow-x: scroll; scrollbar-gutter: stable both-edges; } p { height: 100%; }",
     );
     let p = first_element_child(first_element_child(&root));
-    assert!((p.rect.height - 188.0).abs() < 0.01, "p child={}", p.rect.height);
+    assert!((p.rect.height - 176.0).abs() < 0.01, "p child={}", p.rect.height);
 }
 
 /// `scrollbar-width: thin` uses a 6 px block-axis gutter. 200 − 6 = 194.

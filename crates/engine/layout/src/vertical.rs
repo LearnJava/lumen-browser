@@ -151,9 +151,21 @@ pub(crate) fn lay_out_vertical_block(
         frame_horiz,
     );
 
-    // Inline-axis content extent (physical height for children to use).
-    let content_inline = (inline_size - frame_vert).max(0.0);
-    let content_y = b.rect.y + border_top + padding_top;
+    // CSS Scrollbars L1 §6.2: the block axis is physically horizontal in a
+    // vertical writing mode, so `scrollbar-gutter: stable`'s reservation for
+    // the block-axis (horizontal) scrollbar reduces the *inline* dimension —
+    // physical height — not width; `scrollbar_gutter_block`/`_block_start`
+    // are the ones that key off `overflow-x`, matching this axis (the
+    // `_inline` pair, keyed off `overflow-y`, would be wrong here — that
+    // pair applies only under `writing-mode: horizontal-tb`, the branch this
+    // function is never reached from). Own border-box height (`b.rect.height`
+    // above) is left unreduced — only the content area handed to children
+    // shrinks, same contract as `children_available_height` in
+    // `layout_dispatch.rs`.
+    let content_inline =
+        (inline_size - frame_vert - crate::box_tree::scrollbar_gutter_block(&s)).max(0.0);
+    let content_y =
+        b.rect.y + border_top + padding_top + crate::box_tree::scrollbar_gutter_block_start(&s);
 
     // Block-axis content cursor (physical x for stacking).
     let is_rtl = matches!(
@@ -755,6 +767,109 @@ mod tests {
             (inner.rect.height - 100.0).abs() < 0.5,
             "inner #inner physical height should be 100, got {}",
             inner.rect.height,
+        );
+    }
+
+    // BUG-504 remainder (part 5): `scrollbar-gutter` under a vertical writing
+    // mode. The block axis is physically horizontal there, so it is
+    // `overflow-x` (not `overflow-y`) that triggers the reservation, and the
+    // dimension it reserves is physical height (the inline dimension), not
+    // width. WPT `css/css-overflow/scrollbar-gutter-vertical-{lr,rl}-001.html`.
+
+    #[test]
+    fn vertical_lr_scrollbar_gutter_stable_reduces_child_inline_size() {
+        let root = lay(
+            "<div id=v><div class=c></div></div>",
+            "#v { writing-mode: vertical-lr; height: 200px; width: 200px; \
+                  overflow-x: auto; scrollbar-gutter: stable; } \
+             .c { height: 100%; }",
+        );
+        let v = find_vertical_block(&root).expect("vertical block missing");
+        let c = first_non_skip_child(v).expect("child missing");
+        assert!(
+            (c.rect.height - 188.0).abs() < 0.5,
+            "expected 200 - 12 gutter unit = 188, got {}",
+            c.rect.height,
+        );
+        assert!(
+            (c.rect.y - v.rect.y).abs() < 0.5,
+            "plain `stable` reserves the end edge only — child top must stay \
+             flush with the container's, got child.y={} container.y={}",
+            c.rect.y,
+            v.rect.y,
+        );
+    }
+
+    #[test]
+    fn vertical_lr_scrollbar_gutter_stable_both_edges_shifts_and_double_reduces() {
+        // `both-edges` mirrors the gutter onto the block-start (physical top)
+        // edge too: double the reduction (24, not 12) and the child starts one
+        // unit further down — WPT's "… stable both-edges" subtest asserts both
+        // facts, plus a cross-check that this reduction exceeds plain `stable`'s.
+        let root = lay(
+            "<div id=v><div class=c></div></div>",
+            "#v { writing-mode: vertical-lr; height: 200px; width: 200px; \
+                  overflow-x: auto; scrollbar-gutter: stable both-edges; } \
+             .c { height: 100%; }",
+        );
+        let v = find_vertical_block(&root).expect("vertical block missing");
+        let c = first_non_skip_child(v).expect("child missing");
+        assert!(
+            (c.rect.height - 176.0).abs() < 0.5,
+            "expected 200 - 2*12 gutter unit = 176, got {}",
+            c.rect.height,
+        );
+        assert!(
+            c.rect.y > v.rect.y + 0.5,
+            "`both-edges` must shift the child's top edge down, got \
+             child.y={} container.y={}",
+            c.rect.y,
+            v.rect.y,
+        );
+    }
+
+    #[test]
+    fn vertical_rl_scrollbar_gutter_stable_both_edges_matches_vertical_lr() {
+        // The gutter's physical top/bottom placement doesn't depend on the
+        // block-flow direction (`vertical-lr` vs `vertical-rl` only affects the
+        // *other*, block/width axis) — same numbers as the `vertical-lr` case.
+        let root = lay(
+            "<div id=v><div class=c></div></div>",
+            "#v { writing-mode: vertical-rl; height: 200px; width: 200px; \
+                  overflow-x: auto; scrollbar-gutter: stable both-edges; } \
+             .c { height: 100%; }",
+        );
+        let v = find_vertical_block(&root).expect("vertical block missing");
+        let c = first_non_skip_child(v).expect("child missing");
+        assert!(
+            (c.rect.height - 176.0).abs() < 0.5,
+            "expected 176, got {}",
+            c.rect.height,
+        );
+        assert!(
+            c.rect.y > v.rect.y + 0.5,
+            "expected shifted top edge, got child.y={} container.y={}",
+            c.rect.y,
+            v.rect.y,
+        );
+    }
+
+    #[test]
+    fn vertical_lr_scrollbar_gutter_auto_no_reduction() {
+        // Default `scrollbar-gutter: auto` — Lumen's overlay scrollbars never
+        // reserve layout space, so the child fills the full inline extent.
+        let root = lay(
+            "<div id=v><div class=c></div></div>",
+            "#v { writing-mode: vertical-lr; height: 200px; width: 200px; \
+                  overflow-x: auto; } \
+             .c { height: 100%; }",
+        );
+        let v = find_vertical_block(&root).expect("vertical block missing");
+        let c = first_non_skip_child(v).expect("child missing");
+        assert!(
+            (c.rect.height - 200.0).abs() < 0.5,
+            "expected no reduction (200), got {}",
+            c.rect.height,
         );
     }
 }
