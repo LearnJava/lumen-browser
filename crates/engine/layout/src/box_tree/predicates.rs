@@ -77,18 +77,25 @@ pub(crate) fn scrollbar_gutter_inline(s: &ComputedStyle) -> f32 {
 /// "overflow …, scrollbar-gutter stable both-edges" asserts
 /// `container.offsetLeft < content.offsetLeft` for exactly this reason.
 ///
-/// RTL is out of scope here (physical left is the inline-*end* edge when
-/// `direction: rtl`, which this box-tree pass does not otherwise account for
-/// when placing children) — returns `0.0` for `Direction::Rtl` pending that
-/// broader fix, tracked as the remaining scope of BUG-504's scrollbar-gutter
-/// slice (`scrollbar-gutter-rtl-001.html`).
+/// `both-edges` shifts the same physical amount regardless of direction — a
+/// gutter is reserved on both physical sides, so the start edge always moves
+/// in by one unit no matter which logical edge is "start". Plain `stable`
+/// differs: in LTR it reserves the gutter on the physical *right* (inline-end),
+/// so the physical-left origin never moves — but in RTL the inline-end is the
+/// physical *left*, so the gutter sits where children start from and the
+/// whole content box must shift right by the full unit instead. WPT
+/// `css/css-overflow/scrollbar-gutter-rtl-001.html` asserts exactly this:
+/// `container.offsetLeft < content.offsetLeft` for plain `stable` once
+/// `direction: rtl` is in effect, not just for `stable both-edges`.
 pub(crate) fn scrollbar_gutter_inline_start(s: &ComputedStyle) -> f32 {
-    if s.direction == Direction::Rtl || s.scrollbar_gutter != ScrollbarGutter::StableBothEdges {
-        return 0.0;
+    match s.scrollbar_gutter {
+        // Symmetric reservation — direction-independent.
+        ScrollbarGutter::StableBothEdges => scrollbar_gutter_inline(s) / 2.0,
+        // Single-edge reservation lands on the physical-left origin only
+        // under RTL (inline-end == physical left there).
+        ScrollbarGutter::Stable if s.direction == Direction::Rtl => scrollbar_gutter_inline(s),
+        _ => 0.0,
     }
-    // Reuse `scrollbar_gutter_inline`'s eligibility (overflow-y scrollability
-    // + scrollbar-width) and halve its both-edges total back to one unit.
-    scrollbar_gutter_inline(s) / 2.0
 }
 
 /// CSS Scrollbars L1 §6.2 — block-axis (vertical) scrollbar gutter reservation.

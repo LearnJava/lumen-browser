@@ -282,3 +282,71 @@ box's own reservation) — plus the original clip-margin RTL and single-axis
 clamping files, each still needing its own root-cause pass. `scrollbar-
 gutter-001.html` is fully closed (bar the DEBTOR subtest). Status stays
 `OPEN`.
+
+## Срез 2026-09-03 (P3, часть 4): `scrollbar-gutter-rtl-001.html` root-caused and fixed
+
+Root-caused the RTL component flagged as out-of-scope at the end of part 3.
+`scrollbar_gutter_inline_start` (`crates/engine/layout/src/box_tree/predicates.rs`)
+bailed to `0.0` for **any** `direction: rtl` container regardless of
+`scrollbar-gutter` value — a blanket scope cut, not a considered case split.
+The two `scrollbar-gutter` values actually behave differently under RTL:
+
+- **`stable` (single-edge):** in LTR the gutter sits on the physical right
+  (inline-end there), so the physical-left origin never moves — only
+  `content_width` narrows. Under RTL, inline-end is the physical *left*, so
+  the gutter now sits exactly where children start from: the whole content
+  box must shift right by the **full** unit, not stay put. The old
+  RTL-blanket-zero made this case (and only this one) genuinely wrong.
+- **`stable both-edges`:** reserves a gutter on *both* physical sides
+  symmetrically, so the start-edge shift (half the total narrowing, one
+  unit) is the same physical amount regardless of which logical edge is
+  "start" — this case never needed a direction branch at all; the RTL
+  bail-out was overly broad and zeroed out a shift that should have been
+  identical to the already-correct LTR one.
+
+Fix: `scrollbar_gutter_inline_start` now matches on `scrollbar_gutter`
+directly — `StableBothEdges` keeps the old direction-independent
+`scrollbar_gutter_inline(s) / 2.0`; `Stable` returns `0.0` in LTR (unchanged)
+and the **full** `scrollbar_gutter_inline(s)` in RTL; anything else (`Auto`)
+stays `0.0`. `content_width`'s narrowing itself was already direction-
+independent (`scrollbar_gutter_inline` never branched on `direction`), so
+only the start-edge shift needed the fix — confirmed by a live
+`--dump-layout` of a two-container repro (`direction:rtl`, one `stable`, one
+`stable both-edges`, both `width:200px` `overflow-y:scroll`): both containers'
+content box now starts at `container.x + 12` (was `container.x + 0` before
+the fix, verified by re-running the same dump against the pre-fix binary),
+matching the WPT file's `assert_less_than(container.offsetLeft,
+content.offsetLeft)` shape for both gutter values.
+
+Two new regression tests in `scroll_interaction_misc.rs`'s sibling
+`filter_transform_snap_mask.rs`: `scrollbar_gutter_stable_rtl_shifts_child_start_edge`
+(mirrors the existing LTR `..._single_edge_no_start_shift` negative case, but
+under `direction: rtl` asserts the shift now happens) and
+`scrollbar_gutter_stable_both_edges_rtl_shifts_child_start_edge` (same
+shift amount as the existing LTR both-edges test, guarding the direction-
+independent branch against a future regression). `cargo test -p
+lumen-layout`: 3696/3696 (existing 3694 unaffected, both new tests pass);
+`cargo clippy -p lumen-layout --all-targets -- -D warnings` clean.
+
+**Live WPT verification not performed this slice** — no `tests/wpt/.venv`
+exists in this session's worktree (a fresh pool slot, not the one the
+`os error 10013` sandbox limitation from part 2 was reported in) and
+provisioning one was out of scope for a single-file fix. Verified instead by
+(1) the two unit tests above reproducing the exact geometry the WPT
+assertions check, and (2) a live `--dump-layout` render of a repro mirroring
+the WPT file's container structure, both showing the predicted `container.x
++ 12` shift. `.ini` updated analytically: of the 7 `expected: FAIL` entries,
+6 (`stable`/`stable both-edges` × `auto`/`scroll`/`hidden` overflow) are
+predicted PASS now that both assertions each subtest makes (width narrowing,
+which already worked, and position shift, which this slice fixes) hold; the
+7th (`overflow scroll, scrollbar-gutter auto`) is untouched by this slice —
+same overlay-scrollbar architecture DEBTOR already carried by the LTR file
+(`scrollbar-gutter-001.html`'s own remaining failure), not a direction-
+specific gap. A future session with a working WPT venv should re-run this
+file to confirm the analytical prediction rather than re-deriving it.
+
+**Remaining scope, revised:** 8 files — `-vertical-lr-001.html`,
+`-vertical-rl-001.html`, the 4 `scrollbar-gutter-propagation-*.html` files,
+plus the original clip-margin RTL and single-axis clamping files.
+`scrollbar-gutter-rtl-001.html` is now closed (bar the same DEBTOR subtest
+class as the LTR file). Status stays `OPEN`.
