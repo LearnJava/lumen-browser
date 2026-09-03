@@ -270,10 +270,19 @@ pub(crate) fn install_css_supports_and_lazy_images(
     // ── CSS.supports() backing (CSS Conditional Rules L3 §6) ──────────────────
     // Two-argument form: CSS.supports(property, value) → check property name.
     // Intentionally ignores value in Phase 0 (property-name check is sufficient
-    // for the feature-detection patterns real sites use).
-    reg!(scope, ctx, store, 
+    // for the feature-detection patterns real sites use). CSS Variables L1 §2:
+    // a custom property (`--x`) accepts any token sequence as its value, so
+    // once a UA implements custom properties at all it must always answer
+    // supported for one — same wildcard rule BUG-501 already applied to the
+    // one-argument `SupportsCondition::evaluate` path (BUG-502 gap 1: this
+    // two-argument path never got it, so `CSS.supports('--my-angle', …)`
+    // stayed `false` for every registered custom property).
+    reg!(scope, ctx, store,
         "_lumen_css_supports_prop",
         |prop: String, _value: String| -> bool {
+            if prop.starts_with("--") {
+                return true;
+            }
             lumen_css_parser::SUPPORTED_PROPERTIES
                 .iter()
                 .any(|p| p.eq_ignore_ascii_case(&prop))
