@@ -104,7 +104,7 @@ Full protocol, worktree pool, 7-step completion checklist — [`docs/git-workflo
 Full rules — [`docs/conventions.md`](docs/conventions.md). Lint status and the per-crate debt behind `#[allow]` — [`docs/lint-policy.md`](docs/lint-policy.md); a rule a lint can check belongs there, not in prose here.
 
 - **Rust pinned to 1.97.0**, edition 2024, resolver "3", MSVC on Windows. **sccache must be ≥ 0.17.0** — an older one kills every `rustc`/`clippy-driver` invocation with `0xc0000409`.
-- `cargo clippy -p <crate> --all-targets -- -D warnings` must pass before every commit. Always `-p <crate>`, never `--workspace` (exception: P5).
+- `cargo clippy -p <crate> --all-targets -- -D warnings` must pass before every commit. `-p <crate>` while working; `--workspace` only in the final gate (`/lumen-task-finish`) and P5's sweep — [`docs/commands.md`](docs/commands.md) §Cargo output rules.
 - Machine-checked, so not negotiable: no `panic!`/`unwrap()`/`expect()` in production · `// SAFETY:` on every `unsafe` block (one comment does not cover two) · `///` on every public item · a new `.rs` file ≤ 2000 lines and a file already over it must not grow.
 - **A new crate must carry `[lints] workspace = true`** or it silently escapes every project lint.
 - Names: `snake_case` functions/fields, `PascalCase` types, `SCREAMING_SNAKE` constants.

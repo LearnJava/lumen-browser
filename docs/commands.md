@@ -137,7 +137,9 @@ grep "LayoutBox" SYMBOLS.md
 
 ## Cargo output rules
 
-Always use `-p <crate>`, never `--workspace`. **Exception: P5** (code-health role) may run `cargo clippy --workspace` as part of its periodic sweep — that full pass is the role's purpose. No other role uses `--workspace`.
+Scope by *when*, not by role. **During work — always `-p <crate>`, never `--workspace`.** Two cases run the full pass, and only these two: the final gate inside `/lumen-task-finish` (step 1, see "Gate discipline" above — it doubles as the cross-crate build check that lets the test step stay scoped) and P5's periodic health sweep, where the full pass is the role's purpose.
+
+Do not read this as "never `--workspace`" — that phrasing predated the finish skill and contradicted the gate discipline rule 53 lines above it.
 
 - **Success** — one line: `cargo check OK`, `Clippy clean`, `All tests passed (23/23)`.
 - **Build/clippy failure** — show each full `error[...]` block (message + file:line + code + help lines), skip all `warning[...]` blocks entirely.
