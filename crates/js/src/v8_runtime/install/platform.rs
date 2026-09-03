@@ -394,17 +394,24 @@ pub(crate) fn install_scroll_state(
     scope: &mut v8::PinScope<'_, '_>,
     ctx: v8::Local<'_, v8::Context>,
     store: &mut Vec<OwnedNativeFn>,
-    scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
     pending_page_scrolls: Arc<Mutex<Vec<(f32, bool)>>>,
     page_scroll_y: Arc<Mutex<f32>>,
+    flush: FlushHandles,
 ) -> JsResult<()> {
     // ── scroll state (for scrollTop/scrollLeft/scrollWidth/scrollHeight) ─────────
     // Returns [scroll_x, scroll_y, scroll_width, scroll_height] for an overflow container,
     // or undefined if the node is not a scroll container.
+    // BUG-504 part 10: force a synchronous style+layout flush first, same
+    // rationale as `_lumen_get_bounding_rect` (CSSOM-4/BUG-493) — a style
+    // mutation (e.g. `overflow` flipping to `clip`) that clamps this
+    // container's scroll offset must be visible to a same-tick read.
+    // `flush.scroll_states` is the same Arc `update_scroll_states` writes —
+    // no separate parameter needed.
     {
-        let ss = Arc::clone(&scroll_states);
+        let ss = Arc::clone(&flush.scroll_states);
         reg!(scope, ctx, store, "_lumen_get_scroll_state", move |nid: u32| -> Option<Vec<f64>> {
+            flush.maybe_flush();
             ss.lock()
                 .unwrap()
                 .get(&nid)
