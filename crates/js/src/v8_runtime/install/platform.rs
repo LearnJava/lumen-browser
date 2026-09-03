@@ -338,6 +338,20 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // Canonical keyword-enum serialization for inline-`style` longhands whose
+    // whole grammar is a fixed keyword list (CSSOM-2/BUG-484 срез 7 — `clear`,
+    // `float`, `visibility`, `box-sizing`) — same role as the canonicalizers
+    // above, but generic over the keyword set instead of one per property:
+    // `_LUMEN_KEYWORD_PROPERTIES` in the shim passes the allowed list per
+    // call. `overflow`/`overflow-x`/`-y` are NOT wired through this — the
+    // shorthand needs 1-or-2-token expansion, out of scope here.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_keyword",
+        |value: String, allowed: Vec<String>| -> Option<String> {
+            lumen_layout::style::canonical_specified_keyword(&value, &allowed)
+        }
+    );
+
     // Queues a lazy image load request.  Called by `_lumen_deliver_lazy_images()` in JS
     // when an image registered via `_lumen_init_lazy_images` enters the lazy-load margin.
     // Shell drains via `QuickJsRuntime::take_lazy_image_requests` after each layout.

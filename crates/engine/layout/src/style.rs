@@ -527,6 +527,23 @@ fn parse_overflow_kw(s: &str) -> Option<Overflow> {
     }
 }
 
+/// CSSOM-2 (BUG-484, срез 7): validates and canonicalizes a specified value
+/// against a fixed keyword grammar (`clear`, `float`, `visibility`,
+/// `box-sizing` — CSS syntax keywords are ASCII case-insensitive, so a
+/// case-insensitive match against `allowed` is correct even where the
+/// internal cascade parser these longhands otherwise go through happens to
+/// be case-sensitive, e.g. `parse_overflow_kw` above). Returns the matching
+/// entry of `allowed` (already lowercase canonical form), or `None` if `s`
+/// doesn't match any of them. Not used for `overflow`/`overflow-x`/`-y` —
+/// `overflow` is a two-token shorthand, out of scope for this flat grammar.
+pub fn canonical_specified_keyword(s: &str, allowed: &[String]) -> Option<String> {
+    let v = s.trim();
+    allowed
+        .iter()
+        .find(|kw| kw.eq_ignore_ascii_case(v))
+        .cloned()
+}
+
 
 
 
