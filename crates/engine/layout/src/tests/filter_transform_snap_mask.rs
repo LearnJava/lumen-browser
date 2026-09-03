@@ -1481,6 +1481,47 @@ fn scrollbar_gutter_stable_single_edge_no_start_shift() {
     );
 }
 
+/// Under `direction: rtl`, plain `stable`'s single-edge gutter lands on the
+/// physical *left* (inline-end there), so unlike the LTR case the child's
+/// start edge DOES shift — by the full unit, not half (WPT
+/// `css/css-overflow/scrollbar-gutter-rtl-001.html` "overflow scroll,
+/// scrollbar-gutter stable": `container.offsetLeft < content.offsetLeft`).
+#[test]
+fn scrollbar_gutter_stable_rtl_shifts_child_start_edge() {
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { width: 200px; overflow-y: scroll; scrollbar-gutter: stable; direction: rtl; }",
+    );
+    let div = first_element_child(&root);
+    let p = first_element_child(div);
+    assert!(
+        (p.rect.x - (div.rect.x + 12.0)).abs() < 0.01,
+        "div.x={} p.x={}",
+        div.rect.x,
+        p.rect.x
+    );
+}
+
+/// `stable both-edges` shifts the start edge by one unit regardless of
+/// direction — the reservation is symmetric on both physical sides, so RTL
+/// must behave identically to the existing LTR
+/// `scrollbar_gutter_stable_both_edges_shifts_child_start_edge` case.
+#[test]
+fn scrollbar_gutter_stable_both_edges_rtl_shifts_child_start_edge() {
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { width: 200px; overflow-y: scroll; scrollbar-gutter: stable both-edges; direction: rtl; }",
+    );
+    let div = first_element_child(&root);
+    let p = first_element_child(div);
+    assert!(
+        (p.rect.x - (div.rect.x + 12.0)).abs() < 0.01,
+        "div.x={} p.x={}",
+        div.rect.x,
+        p.rect.x
+    );
+}
+
 /// `scrollbar-width: thin` uses 6 px gutter instead of 12.
 #[test]
 fn scrollbar_gutter_stable_thin_reduces_by_6() {
