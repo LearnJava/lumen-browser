@@ -27,7 +27,7 @@
   - **Software rasterizer для тестов** (`tiny-skia`, opt-in под `cfg(test)`) — детерминизм пикселей между Windows/macOS/Linux CI.
   - **Тестовая пирамида уровни 2-3 включены** (§15): структурные ассерты + in-process snapshot вместо текущей ffmpeg/gdigrab-схемы. Уровень 4 (vs Edge) переезжает в ночной job.
   - **Миграция `graphic_tests/`**: каждый из 22 текущих HTML-тестов получает (а) Rust-тест в `crates/lumen-driver/tests/` со структурными ассертами по `COVERAGE.md`, (б) PNG-эталон в `graphic_tests/snapshots/`.
-- ⬜ **Tab lifecycle архитектурные инварианты** (§11.4, [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)) — **обязательно до Phase 1 finalize**, иначе ретрофит 5-10×:
+- ⬜ **Tab lifecycle архитектурные инварианты** (§11.4, [ADR-008](../decisions/ADR-008-tab-lifecycle-memory-tiers.md)) — **обязательно до Phase 1 finalize**, иначе ретрофит 5-10×:
   - **Invariant 1: DOM arena** — `lumen-dom` audit: убедиться что node graph на `NodeId(u32)` без `Rc<RefCell>`; добавить `bincode::serialize` для DOM snapshot; clippy lint запрещает `Rc<RefCell>` в node-модулях (трек 10B).
   - **Invariant 2: JsRuntime suspend/resume API** — расширить trait в `lumen-core::ext::JsRuntime` методами `pause()` / `unpause()` / `suspend()` / `resume()`; имплементация для `rquickjs` через `JS_WriteObject`/`JS_ReadObject` (трек 10C).
   - **Invariant 3: pure layout + paint** — audit `lumen-layout` и `lumen-paint::display_list` на отсутствие `static MUT` / `lazy_static` / `OnceCell` внутри hot path; cross-tab кэши (glyph atlas, image decode) — отдельные крейты с explicit eviction (трек 10D).
@@ -68,7 +68,7 @@
   - **Per-context isolation по умолчанию** — каждая `BrowserSession` изолирована (cookies/storage/cache/viewport/UA/fingerprint).
   - **Deterministic mode** — `set_clock` / `set_rng_seed` / `freeze_fingerprint` для repeatable-тестов. Опирается на §9.5 anti-fingerprinting инфраструктуру.
   - **A11y tree first-class** — крейт `lumen-a11y` (P1) поднимается до уровня semantic locator surface; `BrowserSession::query(Role/Name/Text)` использует его, а не DOM-селекторы.
-- **Tab lifecycle Phase 1** (§11.4, [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)):
+- **Tab lifecycle Phase 1** (§11.4, [ADR-008](../decisions/ADR-008-tab-lifecycle-memory-tiers.md)):
   - **`TabState` enum + state machine T0-T4** (трек 10A) — состояния, transitions, per-user конфиг таймаутов.
   - **`MemoryPressureSource` trait** ✅ + три OS-impls (Win32 / Linux PSI / macOS `host_statistics64`) (трек 10H).
   - **Image decode cache LRU + viewport-gating** (трек 10E) — главный источник экономии T0: `ImageHandle` индирекция вместо прямых `DecodedImage` ссылок; decode только viewport ± 2 экрана; scroll-discard.
@@ -107,7 +107,7 @@
   - **`lumen-bidi-server` крейт** — WebDriver BiDi subset over WebSocket. Цель: `playwright.connect('ws://localhost:9222/session')` работает из коробки. Запуск через `lumen --bidi-port N`.
   - **Ship BiDi-gaps как built-in** — то, чего нет в W3C Working Draft (см. Playwright #32577, Cypress #30447): full response body access, `resourceType`, locale/timezone/offline emulation, per-context UA + extra headers, viewport-before-popup, per-context preload scripts, full download lifecycle, cookie change events, per-origin storage clear, дешёвая network interception. Документировать gap-mapping в `subsystems/lumen-bidi-server.md`.
   - **Espresso/Computer-use bridge для тестировщиков** — заранее закладывается accessibility-tree query API через MCP, аналогичный Playwright `getByRole`, чтобы тесты не зависели от CSS-классов и переживали DOM-рефакторы.
-- **Tab lifecycle Phase 2** (§11.4, [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)):
+- **Tab lifecycle Phase 2** (§11.4, [ADR-008](../decisions/ADR-008-tab-lifecycle-memory-tiers.md)):
   - **T2 (JS heap snapshot)** — async-save в SQLite при T1→T2 (трек 10I); async-load с indeterminate UI hint при > 100ms; zstd compression; cap 5 MB/tab disk.
   - **T3 (full hibernation)** — DOM serialization через `bincode + deflate` в SQLite (трек 10J); в RAM остаётся только `TabMetadata` (URL, title, scroll, favicon) <200 KB/tab.
   - **GPU layer LRU + texture recycling** (трек 10F) — `wgpu::Texture` pool для off-viewport stacking contexts.

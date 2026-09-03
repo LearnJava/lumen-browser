@@ -64,7 +64,10 @@ rule through a different mechanism.
 ## Docs that must move with the code (same commit)
 
 - New capability → `CAPABILITIES.md` (✅/🟡/⬜) + relevant `subsystems/<crate>.md`.
-- Bug fix → `BUGS.md` entry flips `OPEN` → `FIXED <date>`.
+- Bug fix → the row **moves** from `BUGS.md` to `BUGS-FIXED.md` with `FIXED <date>`, and
+  `bugs/BUG-NNN-OPEN.md` is renamed to `-FIXED.md`. Since 2026-08-31 a closed row is not flipped in
+  place. Moving a row shifts every `STATUS-PN.md` pointer below it, so the same commit must carry
+  `python scripts/remap_status_pointers.py --apply` — flag a bug-fix PR that skips either half.
 - New/changed CSS property → `CSS-SPECS.md` status + `CAPABILITIES.md`.
 - Architectural decision → new `docs/decisions/ADR-NNN.md` from the template, index updated.
 - Flag a PR that changes behavior covered by one of these files but doesn't touch it.

@@ -225,7 +225,8 @@ disallowed-types = [
 export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
 
 # 1. Сколько срабатываний даст правило ДО включения (P5 — единственная роль,
-#    которой можно --workspace; см. CLAUDE.md §Commands)
+#    которой гоняет --workspace отдельной задачей; см. docs/commands.md
+#    §Cargo output rules)
 cargo clippy --workspace --all-targets --message-format=short -- -W clippy::<lint> \
   > .tmp/lint-<lint>.log 2>&1
 grep -c "<текст сообщения правила>" .tmp/lint-<lint>.log

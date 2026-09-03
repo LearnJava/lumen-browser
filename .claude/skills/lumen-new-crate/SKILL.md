@@ -97,7 +97,7 @@ workspace = true
 //! <Однострочное описание крейта.>
 ```
 
-**Правило политики зависимостей (CLAUDE.md §Политика зависимостей):**
+**Правило политики зависимостей** (`CLAUDE.md` §Code conventions, «No new dependency without justification»; полностью — `docs/plan/tech-stack.md` §5):
 Если в `[dependencies]` появляется что-то кроме lumen-* крейтов — обязателен
 комментарий в commit-body:
 > **Why this dependency:** <обоснование, почему свой код категорически неуместен>

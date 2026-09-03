@@ -23,9 +23,12 @@ Branch names: short kebab-case. **Developer sessions (P1–P5) must prefix the b
 - **One logical step = one commit.** Don't batch unrelated changes.
 - **Before commit:** at minimum `cargo check` must pass. Prefer full tests + clippy.
 - **Commit message in Russian.** Short subject (under 80 chars), blank line, body explains *why* (not *what* — that's in the diff).
-- **Trailer always at the end:**
+- **Trailer always at the end**, naming the model that actually authored the commit — not a pinned
+  string. Four different values were in circulation by 2026-09-03 (this file said `Opus 4.7 (1M
+  context)`, three skills said `Sonnet 4.6`, one said `Opus 5`, while `git log` showed `Sonnet 5`);
+  a hardcoded name here just adds a fifth.
   ```
-  Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+  Co-Authored-By: Claude <model> <noreply@anthropic.com>
   ```
 - **Stage specific files** (`git add path1 path2`), not `git add -A` / `.` — prevents accidental inclusion of secrets or archives.
 
@@ -108,7 +111,7 @@ git worktree remove <path>
 
 A dirty `main` worktree blocks all other sessions — git refuses `checkout main` with `fatal: 'main' is already used by worktree at <path>`.
 
-**Zombie worktree** (path doesn't match branch, e.g. `.claude/worktrees/css-foo/` on `[main]`): `git -C <path> checkout -B zombie-stale-wip && git -C <path> commit -m "wip"` — frees main. Full procedure with patch archive — `.claude/docs/zombie-worktree.md`.
+**Zombie worktree** (path doesn't match branch, e.g. `.claude/worktrees/css-foo/` on `[main]`): `git -C <path> checkout -B zombie-stale-wip && git -C <path> commit -m "wip"` — frees main. Archive the work first if it matters (`git -C <path> diff > .tmp/zombie-<name>.patch`), since the branch name says nobody owns it.
 
 ---
 

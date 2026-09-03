@@ -89,7 +89,7 @@ Trait-anchor у каждого — в `lumen-core::ext`. Подключаем п
 - **Trait-anchor обязателен.** Перед добавлением dep в `Cargo.toml` сначала появляется trait в `lumen-core::ext` и default-имплементация (наша, заглушечная или wrapped-around готового crate). Это гарантирует, что замена в будущем — drop-in, без переписывания потребителей.
 - **Подключение «по событию», не превентивно.** Не добавляем `icu4x` пока bidi реально не понадобится; не добавляем `quinn` пока HTTP/3 не на повестке.
 - **Annual review.** Раз в год — проход по provisional-списку: какие graduation criteria сработали → завести задачу на свой код; какие нет → продлить.
-- **Расширение списка — через DECISIONS.md.** Каждое добавление в provisional — новая запись в [DECISIONS.md](DECISIONS.md) с обоснованием и graduation criterion.
+- **Расширение списка — через DECISIONS.md.** Каждое добавление в provisional — новая запись в [DECISIONS.md](../../DECISIONS.md) с обоснованием и graduation criterion.
 
 ### Что НЕ берём как зависимости (даже временно — ядро Lumen)
 

@@ -146,7 +146,7 @@
 
 ### 6.11 Automation API (lumen-driver)
 
-Полное обоснование архитектурных решений — [ADR-006](docs/decisions/ADR-006-automation-api.md).
+Полное обоснование архитектурных решений — [ADR-006](../decisions/ADR-006-automation-api.md).
 
 Automation — **first-class поверхность движка**, не пристройка debug-протокола. Один внутренний trait `BrowserSession` в крейте `lumen-driver`, три транспорта поверх него (in-process Rust / MCP / WebDriver BiDi). Это даёт три эффекта одновременно:
 

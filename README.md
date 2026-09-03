@@ -18,7 +18,7 @@
 
 ## Текущее состояние
 
-**Phase 2 — v0.5 «Interactive» (завершена), версия приложения v0.5.0.** Phase 0 (прототип) закрыта, Phase 1 «Reader» в основном выполнена. Интерактивный слой реализован: QuickJS, Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, формы, find-in-page, DevTools/CDP, knowledge layer; часть фич Phase 3 (IndexedDB, Service Workers, WebSockets, WOFF2, печать в PDF) уже подтянута вперёд.
+**Phase 2 — v0.5 «Interactive» (завершена), версия приложения v0.5.0.** Phase 0 (прототип) закрыта, Phase 1 «Reader» в основном выполнена. Интерактивный слой реализован: JS-движок (изначально QuickJS, заменён на V8 в S12b, 2026-08-04), Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, формы, find-in-page, DevTools/CDP, knowledge layer; часть фич Phase 3 (IndexedDB, Service Workers, WebSockets, WOFF2, печать в PDF) уже подтянута вперёд.
 
 > Актуальный статус реализации — в [`CAPABILITIES.md`](CAPABILITIES.md). Список ниже — ранние вехи прототипа (Phase 0); полный набор возможностей давно шире.
 
@@ -207,7 +207,7 @@ cargo build --release
 Движок Phase 2 многое уже умеет (полный список и текущие пробелы — в [`CAPABILITIES.md`](CAPABILITIES.md), [`BUGS.md`](BUGS.md) и `CSS-SPECS.md`). Крупные нереализованные блоки:
 
 - HTML parser — без полного набора HTML5 insertion modes; lenient к ошибкам.
-- JS-движок — V8 (`rusty_v8`) с 2026-07-14 (ADR-018), JIT-компиляция; единственный движок, доступный из `lumen-shell`, с 2026-08-04 (S12b-F1 снял shell-фичу `quickjs`). `rquickjs` пока остаётся зависимостью `lumen-js` (сносится срезами S12b-F2..F4), но больше не собирается в бинарь браузера. Обычная сборка `cargo build -p lumen-shell` без флагов уже получает самый быстрый вариант (wgpu + V8).
+- JS-движок — V8 (`rusty_v8`) с 2026-07-14 (ADR-018), JIT-компиляция; **единственный движок в проекте** с 2026-08-04: срезы S12b-F1…F4 сняли shell-фичу `quickjs` и вынесли `rquickjs` из workspace целиком (в `Cargo.lock` его больше нет). Обычная сборка `cargo build -p lumen-shell` без флагов уже получает самый быстрый вариант (wgpu + V8).
 - Хром браузера (тулбар, вкладки, панели) — с 2026-07-28 (CC-14, ADR-021) рендерится собственным движком из `assets/chrome/*` вместо ручного Rust-кода. Окно rollback'а (`LUMEN_LEGACY_CHROME=1`) закрыто в тот же день срезом CC-15-6 вместе с прежним рендерером — как и с QuickJS, флаг живёт ровно до удаления старого пути.
 - Сетевой стек — HTTP/1.1 + HTTP/2; HTTP/3 (QUIC) — позже.
 - Часть CSS-свойств и WPT-покрытие ещё в работе (см. `CSS-SPECS.md`).
