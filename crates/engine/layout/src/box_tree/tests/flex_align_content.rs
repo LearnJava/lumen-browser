@@ -1258,3 +1258,61 @@ fn svg_use_scale_transform_does_not_scale_viewport_origin() {
     assert!((rect.width - 30.0).abs() < 0.2 && (rect.height - 30.0).abs() < 0.2, "scaled tile size 30×30: got {}×{}", rect.width, rect.height);
 }
 
+
+#[test]
+fn flex_column_item_horizontal_margin_counted_once() {
+    // BUG-341 S41: a column flex item's horizontal margins were charged twice.
+    // `lay_out_flex` handed `lay_out_inner` the item's *border-box* cross size
+    // as its `available_width`, and `lay_out_inner` takes that argument to be
+    // the margin box's share and subtracts the item's own margins from it
+    // again. Container content width 200, margins 20+10 → the item's border box
+    // is 170 wide at x=20, exactly as the same box would be in block flow; it
+    // used to come out 140 wide, at the correct x (so the gap was on the right
+    // edge only, which is why it survived: nothing shifted, things were narrow).
+    let html = r#"<div id="flex"><div id="a"></div></div>"#;
+    let css = "body{margin:0} #flex{display:flex;flex-direction:column;width:200px;height:300px}\
+               #a{margin-left:20px;margin-right:10px;height:50px}";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let a = super::find_by_id_all(&root, &doc, "a").expect("a");
+    assert_eq!(a.rect.x, 20.0, "a.x {}", a.rect.x);
+    assert_eq!(a.rect.width, 170.0, "a.width {} (expected 200-20-10)", a.rect.width);
+}
+
+#[test]
+fn flex_column_stretch_item_matches_block_flow_width() {
+    // BUG-341 S41, the same defect stated as the invariant it broke: a
+    // stretched column flex item and a plain block child of the same-width
+    // container must get the same border-box width. Percentage margins take the
+    // same path, so they are checked here rather than in a second test.
+    let html = r#"<div id="flex"><div id="a"></div></div><div id="blk"><div id="b"></div></div>"#;
+    let css = "body{margin:0} #flex{display:flex;flex-direction:column;width:400px}\
+               #blk{width:400px}\
+               #a,#b{margin:0 5%;height:20px}";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let a = super::find_by_id_all(&root, &doc, "a").expect("a");
+    let b = super::find_by_id_all(&root, &doc, "b").expect("b");
+    assert_eq!(a.rect.width, b.rect.width, "flex item {} vs block {}", a.rect.width, b.rect.width);
+    assert_eq!(a.rect.x, b.rect.x, "flex item x {} vs block x {}", a.rect.x, b.rect.x);
+}
+
+#[test]
+fn flex_column_aligned_item_keeps_fit_content_width() {
+    // BUG-341 S41 guard on the other arm: an `align-self`-narrowed item still
+    // gets its fit-content border box, not fit-content minus its margins. The
+    // item's max-content width is 60 (a 60px-wide child), so with `center` it
+    // stays 60 wide and is centred in the 200px container's 180px of margin-box
+    // space: x = 10 (margin) + (180-60)/2 = 70.
+    let html = r#"<div id="flex"><div id="a"><div id="in"></div></div></div>"#;
+    let css = "body{margin:0} #flex{display:flex;flex-direction:column;width:200px;align-items:center}\
+               #a{margin:0 10px} #in{width:60px;height:20px}";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let a = super::find_by_id_all(&root, &doc, "a").expect("a");
+    assert_eq!(a.rect.width, 60.0, "a.width {}", a.rect.width);
+    assert_eq!(a.rect.x, 70.0, "a.x {}", a.rect.x);
+}

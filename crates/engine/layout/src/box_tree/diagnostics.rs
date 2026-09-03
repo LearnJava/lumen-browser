@@ -1061,6 +1061,85 @@ pub(crate) fn record_layout_in_place(b: &LayoutBox, key: LayoutInPlaceKey, cv_to
     });
 }
 
+/// BUG-341 S41 census: what is left of `lay_out_flex`'s column-direction
+/// double layout after BUG-802's probe replay, split by the reason the replay
+/// was refused.
+///
+/// The bug's title names the double layout, and every slice from S32 on
+/// attacked it by *reusing a result* — five mechanisms, all measured neutral or
+/// negative (S40 closed that branch with a 3.1% ceiling). The remaining path
+/// S40's "Not attempted" names is the opposite one: stop making the second
+/// call. This census measures how much of that there is to stop, and which of
+/// the three refusal reasons carries it — before any mechanism is built, per
+/// `docs/perf-method.md` §1.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FlexColumnCensus {
+    /// Column-direction flex items that needed a Step-1 base size at all.
+    pub needed: u32,
+    /// Of those, served from [`FLEX_COLUMN_PROBE_HEIGHTS`] — no layout ran.
+    pub memo_served: u32,
+    /// Of those, a real Step-1 `lay_out` call.
+    pub probed: u32,
+    /// Items whose final placement pass replayed the probe (`shift_tree`)
+    /// instead of laying out again — BUG-802's win, one layout for the item.
+    pub replayed: u32,
+    /// **The residual double layout.** Items that ran a real Step-1 probe *and*
+    /// a full final placement layout: two recursive layouts of one subtree.
+    pub double: u32,
+    /// Of [`Self::double`], refused because the probe itself was not replayable
+    /// (`content-visibility: auto` or an indefinite-height consultation).
+    pub double_dirty: u32,
+    /// Of [`Self::double`], refused because flex grow/shrink resolved a main
+    /// size differing from the probed one, cross size unchanged — the bucket a
+    /// height-independent subtree could serve without laying out again.
+    pub double_size: u32,
+    /// Of [`Self::double`], refused because the item's used cross size is not
+    /// the container's full content width (`align-self`, an auto cross margin).
+    pub double_cross: u32,
+    /// Of [`Self::double_size`], the ones where the resolved main size is
+    /// *larger* than the probed content height (the item grew).
+    pub double_size_grew: u32,
+}
+
+thread_local! {
+    static FLEX_COLUMN_CENSUS_ON: Cell<bool> = const { Cell::new(false) };
+    static FLEX_COLUMN_CENSUS: Cell<FlexColumnCensus> = const { Cell::new(FlexColumnCensus {
+        needed: 0, memo_served: 0, probed: 0, replayed: 0, double: 0,
+        double_dirty: 0, double_size: 0, double_cross: 0, double_size_grew: 0,
+    }) };
+}
+
+/// Enables/disables the BUG-341 S41 column-probe census on the current thread.
+pub fn set_flex_column_census(on: bool) {
+    FLEX_COLUMN_CENSUS_ON.with(|c| c.set(on));
+}
+
+/// Whether the BUG-341 S41 census is recording on this thread. `lay_out_flex`
+/// checks this before allocating the per-item bookkeeping only the census
+/// reads, so an off census costs one `Cell` read per container.
+pub(crate) fn flex_column_census_on() -> bool {
+    FLEX_COLUMN_CENSUS_ON.with(|c| c.get())
+}
+
+/// Returns the accumulated [`FlexColumnCensus`] and resets the tally.
+pub fn take_flex_column_census() -> FlexColumnCensus {
+    FLEX_COLUMN_CENSUS.with(|c| c.replace(FlexColumnCensus::default()))
+}
+
+/// Applies `f` to the current thread's [`FlexColumnCensus`] tally when the
+/// census is on. A no-op otherwise — the call sites in `lay_out_flex` sit on
+/// the hottest path in the engine and must cost one `Cell` read when off.
+pub(crate) fn note_flex_column(f: impl FnOnce(&mut FlexColumnCensus)) {
+    if !flex_column_census_on() {
+        return;
+    }
+    FLEX_COLUMN_CENSUS.with(|c| {
+        let mut v = c.get();
+        f(&mut v);
+        c.set(v);
+    });
+}
+
 /// Folds `d` into the current thread's [`BoxBuildStats`] tally.
 pub(crate) fn add_box_build_stats(d: BoxBuildStats) {
     BOX_BUILD_STATS.with(|s| {

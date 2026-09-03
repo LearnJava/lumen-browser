@@ -35,6 +35,62 @@ pub(crate) struct UsedSizeOverride {
     pub(crate) box_sizing: Option<BoxSizing>,
 }
 
+/// The **margin-box** cross width a column flex item is laid out at — the value
+/// `lay_out_flex` hands `lay_out_inner` as its `available_width`, in both the
+/// Step-1 probe and the final placement pass (BUG-341 S41).
+///
+/// Two things make this one function rather than two copies of the formula.
+/// It has to produce bit-identical results at both call sites, since the probe
+/// replay's guard is an exact `to_bits` comparison of the two — a re-derivation
+/// that rounds differently would silently disable the replay. And it is a
+/// margin *box*: `lay_out_inner` treats `available_width` as the space the
+/// item's margin box gets and subtracts the item's own margins from it, so
+/// handing it the border-box size the alignment arms compute charged those
+/// margins twice (a 200px column with `margin: 0 10px` produced a 160px item
+/// instead of 180px).
+///
+/// `s` is the *container's* style — `align-items` is read from it whenever the
+/// item leaves `align-self: auto`.
+fn column_item_avail_cross(
+    item: &LayoutBox,
+    s: &ComputedStyle,
+    content_width: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> f32 {
+    let is = &item.style;
+    let iem = is.font_size;
+    let m_l = is.margin_left.resolve_or_zero(iem, content_width, viewport);
+    let m_r = is.margin_right.resolve_or_zero(iem, content_width, viewport);
+    // Поперечная ось колоночного контейнера — ГОРИЗОНТАЛЬ. До 2026-08-17 её не
+    // было вовсе: элемент всегда растягивался на всю ширину контейнера, поэтому
+    // ни `align-items: center`, ни `margin-left/right: auto` не двигали его с
+    // левого края (живой случай — карточка формы входа `tbank.ru/login/`
+    // внутри колоночной обёртки страницы).
+    let avail_cross = (content_width - m_l - m_r).max(0.0);
+    let auto_cross = matches!(is.margin_left, LengthOrAuto::Auto)
+        || matches!(is.margin_right, LengthOrAuto::Auto);
+    let cross_align = if matches!(is.align_self, AlignValue::Auto) {
+        s.align_items
+    } else {
+        is.align_self
+    };
+    let aligned_cross = matches!(
+        cross_align,
+        AlignValue::Start | AlignValue::End | AlignValue::Center
+    );
+    // Выровненный (не растянутый) элемент занимает по поперечной оси свой
+    // fit-content, а не всю ширину — иначе двигать нечего.
+    let used_cross = if auto_cross || aligned_cross {
+        let max_c = max_content_outer_width(item, measurer, viewport);
+        let min_c = min_content_outer_width(item, measurer, viewport);
+        max_c.min(avail_cross).max(min_c).min(avail_cross).max(0.0)
+    } else {
+        avail_cross
+    };
+    used_cross + m_l + m_r
+}
+
 /// CSS Flexbox L1 §9 — multi-line flex layout.
 ///
 /// Алгоритм:
@@ -158,6 +214,42 @@ pub(crate) fn lay_out_flex(
     // which is part of any box's style (the same exclusion
     // `cacheable_for_layout_result_cache` makes for the subgrid half).
     let memo_usable = is_column && !crate::style::cq_context_active();
+    // BUG-341 S41 — per item, whether a *real* Step-1 `lay_out` ran for it this
+    // call. `column_probe[k] == None` cannot answer that: it is also `None` for
+    // an item served from the memo (no layout at all) and the census's whole
+    // question is how often the two full layouts happen to the same item.
+    // Allocated only while the census is recording — the vector is dead weight
+    // on the production path otherwise.
+    let census_on = flex_column_census_on();
+    let mut probe_ran: Vec<Option<f32>> =
+        if census_on { vec![None; item_idxs.len()] } else { Vec::new() };
+    // BUG-341 S41 — the margin-box cross width each column item will actually
+    // be laid out at, resolved *before* Step 1 so the probe can run at that
+    // width instead of at the container's full content width.
+    //
+    // This is the second half of removing the residual double layout, and the
+    // one that reaches the items the first half does not. Cross sizing never
+    // depended on the probe: both inputs are intrinsic
+    // (`max_content_outer_width`/`min_content_outer_width` read style and
+    // contents, never `rect` — the property BUG-802's memo comment already
+    // relies on) and the alignment is pure style. Running the probe at the
+    // container width and the final pass at a narrower aligned width made the
+    // two calls genuinely different, so the replay had to be refused and the
+    // subtree laid out twice — 17 of the 21 residual double layouts on the
+    // chrome document. Resolving the width first makes them the same call.
+    //
+    // It is also the more correct measurement: CSS Flexbox §9.2 wants a
+    // content-based flex base size measured against the item's *own* cross
+    // size, not the container's.
+    let mut probe_cross: Vec<f32> =
+        if is_column { vec![0.0; item_idxs.len()] } else { Vec::new() };
+    if is_column {
+        for (k, &i) in item_idxs.iter().enumerate() {
+            probe_cross[k] = column_item_avail_cross(
+                &children[i], s, content_width, measurer, viewport,
+            );
+        }
+    }
     for (k, &i) in item_idxs.iter().enumerate() {
         let needs_prelayout = {
             let is = &children[i].style;
@@ -176,8 +268,15 @@ pub(crate) fn lay_out_flex(
             }
         };
         if needs_prelayout {
+            if is_column {
+                note_flex_column(|c| c.needed += 1);
+            }
+            // BUG-341 S41: keyed on the width the probe actually runs at, not
+            // the container's — two column containers of different widths, or
+            // one item aligned and one stretched, must not collide.
+            let probe_width = if is_column { probe_cross[k] } else { content_width };
             let memoized = if memo_usable && cacheable_for_layout_result_cache(&children[i]) {
-                let key: FlexProbeKey = (children[i].node, content_width.to_bits());
+                let key: FlexProbeKey = (children[i].node, probe_width.to_bits());
                 FLEX_COLUMN_PROBE_HEIGHTS.with(|m| {
                     m.borrow().get(&key).and_then(|(style, h)| {
                         Arc::ptr_eq(style, &children[i].style).then_some(*h)
@@ -193,7 +292,12 @@ pub(crate) fn lay_out_flex(
                 // all intrinsic (style plus contents, never `rect`) — so the
                 // remembered height is the whole of what this probe was for.
                 probed_main[k] = Some(h);
+                note_flex_column(|c| c.memo_served += 1);
             } else if is_column {
+                note_flex_column(|c| c.probed += 1);
+                if census_on {
+                    probe_ran[k] = Some(probe_width);
+                }
                 // The two flags are the correctness guard the replay needs: the
                 // probe runs with an indefinite containing-block height and at a
                 // temporary main-axis position, so a subtree that consulted
@@ -202,7 +306,7 @@ pub(crate) fn lay_out_flex(
                 // `INDEFINITE_HEIGHT_CONSULTED` / `CV_AUTO_TOUCHED`.
                 let outer_cv = CV_AUTO_TOUCHED.with(|c| c.replace(false));
                 let outer_ih = INDEFINITE_HEIGHT_CONSULTED.with(|c| c.replace(false));
-                lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb, hp, false);
+                lay_out(&mut children[i], content_x, content_y, probe_width, None, measurer, viewport, pcb, hp, false);
                 let cv_here = CV_AUTO_TOUCHED.with(|c| c.get());
                 let ih_here = INDEFINITE_HEIGHT_CONSULTED.with(|c| c.get());
                 CV_AUTO_TOUCHED.with(|c| c.set(outer_cv || cv_here));
@@ -220,7 +324,7 @@ pub(crate) fn lay_out_flex(
                 // so whatever a percentage block size resolved to is the same
                 // for each.
                 if !cv_here && memo_usable && cacheable_for_layout_result_cache(&children[i]) {
-                    let key: FlexProbeKey = (children[i].node, content_width.to_bits());
+                    let key: FlexProbeKey = (children[i].node, probe_width.to_bits());
                     let entry = (Arc::clone(&children[i].style), children[i].rect.height);
                     FLEX_COLUMN_PROBE_HEIGHTS.with(|m| {
                         m.borrow_mut().insert(key, entry);
@@ -575,12 +679,12 @@ pub(crate) fn lay_out_flex(
 
             if is_column {
                 let inner_main = (outer_main - m_t - m_b).max(0.0);
-                // Поперечная ось колоночного контейнера — ГОРИЗОНТАЛЬ. До
-                // 2026-08-17 её не было вовсе: элемент всегда растягивался на
-                // всю ширину контейнера, поэтому ни `align-items: center`, ни
-                // `margin-left/right: auto` не двигали его с левого края
-                // (живой случай — карточка формы входа `tbank.ru/login/`
-                // внутри колоночной обёртки страницы).
+                // The cross-axis space for the item's alignment arithmetic
+                // below. The width the item is *laid out* at is
+                // `probe_cross[k]`, resolved before Step 1 by
+                // `column_item_avail_cross` and already used by the probe —
+                // recomputing it here would risk the two disagreeing in the
+                // last bit and silently disabling the replay (BUG-341 S41).
                 let avail_cross = (content_width - m_l - m_r).max(0.0);
                 let auto_cross_l = matches!(item_s.margin_left, LengthOrAuto::Auto);
                 let auto_cross_r = matches!(item_s.margin_right, LengthOrAuto::Auto);
@@ -589,19 +693,7 @@ pub(crate) fn lay_out_flex(
                 } else {
                     item_s.align_self
                 };
-                let aligned_cross = matches!(
-                    cross_align,
-                    AlignValue::Start | AlignValue::End | AlignValue::Center
-                );
-                // Выровненный (не растянутый) элемент занимает по поперечной
-                // оси свой fit-content, а не всю ширину — иначе двигать нечего.
-                let used_cross = if auto_cross_l || auto_cross_r || aligned_cross {
-                    let max_c = max_content_outer_width(&children[i], measurer, viewport);
-                    let min_c = min_content_outer_width(&children[i], measurer, viewport);
-                    max_c.min(avail_cross).max(min_c).min(avail_cross).max(0.0)
-                } else {
-                    avail_cross
-                };
+                let item_avail_cross = probe_cross[k];
                 // `inner_main` is the item's resolved *border-box* main size (it is
                 // derived from the preliminary border-box height and the flex
                 // grow/shrink result). Force border-box before re-layout so the value
@@ -609,22 +701,55 @@ pub(crate) fn lay_out_flex(
                 // for a content-box item (which double-counts the border). Mirrors the
                 // cross-axis stretch path below.
                 // BUG-802: the Step-1 probe above already laid this exact subtree
-                // out — at `content_y` instead of `content_y + main_cursor`, with
-                // an indefinite height instead of the resolved `inner_main`, and
-                // with `content_width` instead of `used_cross`. When the last two
-                // differences are *no* difference (the item neither grew nor
-                // shrank, and its cross size is the full content width — no auto
-                // margin, no `align-self` narrowing it to fit-content), and the
-                // probe was clean of the two position/height-sensitive markers,
-                // the final pass would recompute the identical subtree. Replay it
-                // and move it into place instead: this is what turns the ×2 per
-                // nesting level into ×1. Exact bit equality, not an epsilon — an
-                // approximate match would replay geometry that differs from what
-                // the second layout would have produced.
+                // out — at `content_y` instead of `content_y + main_cursor`, and
+                // with an indefinite height instead of the resolved `inner_main`.
+                // When that is *no* difference (the item neither grew nor shrank)
+                // and the probe was clean of the two position/height-sensitive
+                // markers, the final pass would recompute the identical subtree.
+                // Replay it and move it into place instead: this is what turns
+                // the ×2 per nesting level into ×1. Exact bit equality, not an
+                // epsilon — an approximate match would replay geometry that
+                // differs from what the second layout would have produced.
+                //
+                // BUG-341 S41: the third condition this used to carry — "and the
+                // item's cross size is the container's full content width" — is
+                // gone because it can no longer fail. The probe now runs at
+                // `probe_cross[k]`, the same width this pass lays the item out
+                // at, so an aligned or margined item is no longer a different
+                // call from its own probe. That condition was refusing 17 of the
+                // 21 residual double layouts on the chrome document, none of
+                // them for a real difference.
                 let replayable = column_probe[k].is_some_and(|probed| {
                     probed.to_bits() == inner_main.to_bits()
-                        && used_cross.to_bits() == content_width.to_bits()
                 });
+                // BUG-341 S41 — the census this slice exists to take: of the
+                // items that really ran a Step-1 probe, how many go on to a
+                // second full layout here, and which of the three refusal
+                // reasons sent them there. `double_cross` is now structurally
+                // unreachable — it compares the width the probe was actually
+                // handed against the one used here — and stays in the tally as
+                // the regression check for exactly that.
+                if let Some(probed_at) = probe_ran.get(k).copied().flatten() {
+                    let cross_differs = probed_at.to_bits() != item_avail_cross.to_bits();
+                    let probed = probed_main[k];
+                    note_flex_column(|c| {
+                        if replayable {
+                            c.replayed += 1;
+                            return;
+                        }
+                        c.double += 1;
+                        if column_probe[k].is_none() {
+                            c.double_dirty += 1;
+                        } else if cross_differs {
+                            c.double_cross += 1;
+                        } else {
+                            c.double_size += 1;
+                            if probed.is_some_and(|p| inner_main > p) {
+                                c.double_size_grew += 1;
+                            }
+                        }
+                    });
+                }
                 if replayable {
                     // The shift is the difference between the two calls' *box*
                     // origins, not the bare `main_cursor`: `lay_out_inner` lands
@@ -649,7 +774,7 @@ pub(crate) fn lay_out_flex(
                         &mut children[i],
                         content_x,
                         content_y + main_cursor,
-                        used_cross,
+                        item_avail_cross,
                         Some(inner_main),
                         measurer,
                         viewport,
