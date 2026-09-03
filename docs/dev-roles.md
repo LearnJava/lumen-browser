@@ -162,7 +162,8 @@ ROADMAP.md (one line per task, status ≠ done)   ← master task list for P1/P2
 - **On completion:** delete the STATUS-PN.md line → delete (or `## Status: MERGED`) the task file →
   set `ROADMAP.md` status to `done` (run `python scripts/gen_roadmap.py`) → mark
   `CAPABILITIES.md`/`CSS-SPECS.md`/`BUGS.md`. (Full list — §«Task completion checklist».)
-- Full rules + template: [`docs/tasks/README.md`](docs/tasks/README.md).
+- Brief format + template: [`tasks/README.md`](tasks/README.md). The schema above is **not** repeated
+  there — this section is its only statement.
 
 ---
 
