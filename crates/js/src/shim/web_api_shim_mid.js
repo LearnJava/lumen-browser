@@ -1359,6 +1359,25 @@ var _LUMEN_SIZING_LENGTH_PROPERTIES = {
     'width': 1, 'height': 1,
 };
 
+// CSSOM-2 (BUG-484, срез 7): plain keyword-enum longhands — the whole
+// grammar is a fixed list of case-insensitive keywords, validated and
+// canonicalized via `_lumen_css_canonical_keyword`. Lists mirror what
+// `lumen-layout`'s own cascade parser accepts for each property
+// (`crates/engine/layout/src/style.rs::parse_overflow_kw` and neighbors),
+// NOT the full CSS spec grammar where the engine doesn't implement it yet
+// (e.g. `visibility: collapse` IS in this list — the engine recognizes it —
+// but `border-style`'s `hidden`/`groove`/`ridge`/`inset`/`outset` are not,
+// since `BorderStyle` has no variants for them, `style/values/box_model.rs`).
+// `overflow`/`overflow-x`/`overflow-y` are deliberately absent — `overflow`
+// is a 1-or-2-token shorthand, and none of the three have a canonicalizer
+// wired here yet (separate slice, same shape as the TRBL shorthand path).
+var _LUMEN_KEYWORD_PROPERTIES = {
+    'clear':       ['none', 'left', 'right', 'both', 'inline-start', 'inline-end'],
+    'float':       ['none', 'left', 'right', 'inline-start', 'inline-end'],
+    'visibility':  ['visible', 'hidden', 'collapse'],
+    'box-sizing':  ['border-box', 'content-box'],
+};
+
 function _lumen_make_style(nid) {
     function getParsed() {
         var s = _lumen_get_attr(nid, 'style');
@@ -1420,6 +1439,13 @@ function _lumen_make_style(nid) {
                 var canonSizing = _lumen_css_canonical_sizing_length(strVal);
                 if (canonSizing === null || canonSizing === undefined) return; // invalid sizing value: no-op
                 obj[key] = canonSizing;
+                setParsed(obj);
+                return;
+            }
+            if (_LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key)) {
+                var canonKw = _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
+                if (canonKw === null || canonKw === undefined) return; // invalid keyword: no-op
+                obj[key] = canonKw;
                 setParsed(obj);
                 return;
             }
