@@ -102,13 +102,21 @@ pub(crate) fn scrollbar_gutter_inline_start(s: &ComputedStyle) -> f32 {
 ///
 /// Returns the CSS px height to subtract from available content height when a
 /// horizontal scrollbar's gutter must be reserved (`overflow-x: scroll/auto` +
-/// `scrollbar-gutter: stable`). `both-edges` is not defined for the block axis
-/// by the spec, so only one gutter unit is reserved regardless.
+/// `scrollbar-gutter: stable`). `both-edges` mirrors the gutter onto the
+/// opposite (block-start, physical top) edge too, exactly like
+/// `scrollbar_gutter_inline` does for the inline axis — WPT
+/// `css/css-overflow/scrollbar-gutter-vertical-{lr,rl}-001.html` asserts the
+/// `both-edges` content box is strictly shorter than plain `stable`'s, which
+/// only holds if `both-edges` reserves `2 × unit`, not `unit` (contrary to an
+/// earlier, incorrect reading of the spec here).
 ///
 // CSS: scrollbar-width, scrollbar-gutter — the block-axis gutter reduces the
-// content height handed to children (see `children_available_height`), mirroring
-// the inline-axis `scrollbar_gutter_inline` reduction of `content_width`. Includes
-// `hidden` for the same reason `scrollbar_gutter_inline` does — see its doc comment.
+// content height handed to children (see `children_available_height` in
+// `layout_dispatch.rs`, and `content_inline` in `vertical.rs` for vertical
+// writing modes, where the block axis is physically horizontal and this
+// function is the one that applies), mirroring the inline-axis
+// `scrollbar_gutter_inline` reduction of `content_width`. Includes `hidden`
+// for the same reason `scrollbar_gutter_inline` does — see its doc comment.
 pub(crate) fn scrollbar_gutter_block(s: &ComputedStyle) -> f32 {
     let can_scroll_x = matches!(
         s.overflow_x,
@@ -124,7 +132,32 @@ pub(crate) fn scrollbar_gutter_block(s: &ComputedStyle) -> f32 {
     };
     match s.scrollbar_gutter {
         ScrollbarGutter::Auto => 0.0,
-        ScrollbarGutter::Stable | ScrollbarGutter::StableBothEdges => unit,
+        ScrollbarGutter::Stable => unit,
+        ScrollbarGutter::StableBothEdges => unit * 2.0,
+    }
+}
+
+/// CSS Scrollbars L1 §6.2 — block-start-edge offset for `scrollbar-gutter:
+/// stable both-edges` on the block axis (see `scrollbar_gutter_block`).
+///
+/// Mirrors `scrollbar_gutter_inline_start`: `scrollbar_gutter_block` alone
+/// only narrows the content box, leaving children flush against the same
+/// physical-top edge a horizontal scrollbar's classic bottom-only gutter
+/// would. `both-edges` mirrors the reservation onto the top edge too, so
+/// children must start `unit` further down. Returns `0.0` for
+/// `Stable`/`Auto` (end-edge-only reservation, no shift — WPT asserts
+/// `container.offsetTop == content.offsetTop` for plain `stable`) and for
+/// `Overflow::Visible`/`Overflow::Clip` (via `scrollbar_gutter_block`'s own
+/// eligibility gate). Neither vertical-writing-mode test file this was
+/// written against (`scrollbar-gutter-vertical-{lr,rl}-001.html`) exercises
+/// `direction: rtl`, so unlike `scrollbar_gutter_inline_start` this has no
+/// direction branch — add one (keyed on `s.direction`, not the block-flow
+/// `vertical-lr`/`vertical-rl` distinction, which only affects the *other*
+/// axis) if a future WPT file needs it.
+pub(crate) fn scrollbar_gutter_block_start(s: &ComputedStyle) -> f32 {
+    match s.scrollbar_gutter {
+        ScrollbarGutter::StableBothEdges => scrollbar_gutter_block(s) / 2.0,
+        _ => 0.0,
     }
 }
 

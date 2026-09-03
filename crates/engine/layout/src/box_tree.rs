@@ -95,9 +95,14 @@ use diagnostics::{
 };
 
 mod predicates;
-use predicates::{
+// `pub(crate)`, not private: `vertical.rs` (crate root sibling of `box_tree`,
+// not a submodule) needs `scrollbar_gutter_block`/`_block_start` — the block
+// axis is physically horizontal under a vertical writing mode, so those (not
+// the `_inline` pair) are the ones that apply there.
+pub(crate) use predicates::{
     is_audio_element, is_canvas_element, is_iframe_element, is_image_element, is_picture_element,
-    is_video_element, scrollbar_gutter_block, scrollbar_gutter_inline, scrollbar_gutter_inline_start,
+    is_video_element, scrollbar_gutter_block, scrollbar_gutter_block_start, scrollbar_gutter_inline,
+    scrollbar_gutter_inline_start,
 };
 
 // EE-3: when true, `lay_out` checks `b.dirty.is_clean()` and skips clean subtrees.

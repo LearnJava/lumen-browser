@@ -350,3 +350,71 @@ file to confirm the analytical prediction rather than re-deriving it.
 plus the original clip-margin RTL and single-axis clamping files.
 `scrollbar-gutter-rtl-001.html` is now closed (bar the same DEBTOR subtest
 class as the LTR file). Status stays `OPEN`.
+
+## Срез 2026-09-03 (P3, часть 5): `scrollbar-gutter-vertical-{lr,rl}-001.html` root-caused and fixed
+
+Root-caused the vertical-writing-mode component flagged at the end of part 3.
+`scrollbar_gutter_inline`/`scrollbar_gutter_block` (`box_tree/predicates.rs`)
+reduce physical `content_width`/`content_height` unconditionally, but
+`lay_out_vertical_block` (`vertical.rs`, the layout path for
+`writing-mode: vertical-lr`/`vertical-rl`) never consulted either helper at
+all — under a vertical writing mode the **block** axis is physically
+horizontal (lines stack left-to-right) and the **inline** axis is physically
+vertical, so it is `scrollbar_gutter_block`/`_block_start` (keyed on
+`overflow-x`, matching a horizontal-scrollbar reservation of *height*) that
+apply there, not the `_inline` pair the horizontal-writing-mode path uses —
+and `vertical.rs` called neither.
+
+Fix: `pub(crate) use` promotion of `scrollbar_gutter_block`/
+`scrollbar_gutter_block_start` out of `box_tree`'s private `mod predicates`
+(needed since `vertical.rs` is a crate-root sibling module, not a
+`box_tree` submodule), then `lay_out_vertical_block`'s `content_inline`
+(physical height handed to children) and `content_y` (physical top origin)
+now subtract `scrollbar_gutter_block(&s)` / add
+`scrollbar_gutter_block_start(&s)` respectively — mirroring exactly how
+`children_available_height`/`content_x` already consult the `_inline` pair
+on the horizontal-writing-mode path. `scrollbar_gutter_block` itself also
+had its own pre-existing `both-edges` bug fixed in this slice: it previously
+returned a single `unit` for `StableBothEdges` (comment claimed
+"`both-edges` is not defined for the block axis"), but the two vertical WPT
+files' `assert_less_than(content.offsetHeight, reference.offsetHeight)`
+subtest requires the doubled `2 × unit` reservation, same as the inline
+axis — the single-reduction reading was wrong per spec, not an intentional
+axis asymmetry. A sibling `scrollbar_gutter_block_start` helper (mirrors
+`scrollbar_gutter_inline_start`) was added for the `both-edges` top-edge
+shift; unlike its inline counterpart it has no `direction` branch yet since
+neither vertical WPT file here exercises `direction: rtl`.
+
+Confirmed live via `--dump-layout` on a two-container repro (`writing-mode:
+vertical-lr`, one `overflow-x:auto; scrollbar-gutter:stable`, one `…:stable
+both-edges`, both `height:200px`): plain `stable` child height 200→188
+(unit=12) with child.y unchanged from container.y (no shift, correct for
+single-edge reservation); `both-edges` child height 200→176 (2×unit) with
+child.y = container.y + 12 (shifted, correct for symmetric reservation).
+5 new regression tests in `vertical.rs`'s own `tests` module
+(`vertical_lr_scrollbar_gutter_stable_reduces_child_inline_size`,
+`vertical_lr_scrollbar_gutter_stable_both_edges_shifts_and_double_reduces`,
+`vertical_rl_scrollbar_gutter_stable_both_edges_matches_vertical_lr`,
+`vertical_lr_scrollbar_gutter_auto_no_reduction`) plus a corrected existing
+`filter_transform_snap_mask.rs` test
+(`scrollbar_gutter_block_both_edges_double_reduction`, was asserting the old
+wrong single-reduction number). `cargo test -p lumen-layout`: 3698/3698;
+`cargo clippy -p lumen-layout --all-targets -- -D warnings` clean.
+
+**Live WPT verification not performed this slice** — no `tests/wpt/.venv`
+in this pool slot (same gap as part 4). `.ini` for both files updated
+analytically: 6 of 7 `expected: FAIL` entries predicted PASS (all four
+`overflow {auto,scroll,hidden}` values crossed with `stable`/`stable
+both-edges`); the 7th (`overflow scroll, scrollbar-gutter auto`) is
+untouched — same overlay-scrollbar architecture DEBTOR already carried by
+the LTR/RTL files. `vertical-lr-001.html` and `vertical-rl-001.html` share
+byte-identical test bodies (only `writing-mode` and the title differ, `diff`
+confirmed), so both `.ini` files get the same prediction.
+
+**Remaining scope, revised:** 6 files — the 4
+`scrollbar-gutter-propagation-*.html` files (viewport-level gutter
+propagation, a separate mechanism from a single box's own reservation, still
+untouched by any slice), plus the original clip-margin RTL and single-axis
+clamping files. `scrollbar-gutter-vertical-{lr,rl}-001.html` are now closed
+(bar the same DEBTOR subtest class as the other two files). Status stays
+`OPEN`.
