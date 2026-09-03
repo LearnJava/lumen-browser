@@ -1250,7 +1250,21 @@ var _LUMEN_TRBL_SHORTHAND_CANON = {
 // `canonFn`, and maps them to {top, right, bottom, left} per CSS 2.1 §8.3.
 // Returns null if the token count is out of [1,4] or any token fails its
 // grammar.
+//
+// Срез 12: CSS Cascade L4 §7.1 — when a CSS-wide keyword is a shorthand's
+// SOLE component value, it is expanded to the longhands it corresponds to,
+// each longhand receiving that same keyword as its value (not run through
+// `canonFn`, whose length/color/line-width grammars don't recognize the
+// keywords at all and would reject the whole declaration — this is the gap
+// `_LUMEN_CSS_WIDE_KEYWORDS`'s doc comment used to call out as unaddressed).
+// Checked on the whole trimmed value before tokenizing, so a multi-token
+// value like `"initial 2px"` (invalid regardless) still falls through to the
+// per-token path below and gets rejected there.
 function _lumen_expand_trbl_shorthand(canonFn, strVal) {
+    var lowerVal = strVal.trim().toLowerCase();
+    if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1) {
+        return { top: lowerVal, right: lowerVal, bottom: lowerVal, left: lowerVal };
+    }
     var tokens = strVal.trim().split(/\s+/).filter(function(t) { return t.length > 0; });
     if (tokens.length < 1 || tokens.length > 4) return null;
     var canon = [];
@@ -1274,7 +1288,16 @@ function _lumen_expand_trbl_shorthand(canonFn, strVal) {
 // than forcing a two-longhand shorthand into `_LUMEN_TRBL_SHORTHANDS`'s
 // fixed four-side layout. Keyword list is shared with the `overflow-x`/
 // `overflow-y` longhands in `_LUMEN_KEYWORD_PROPERTIES` below.
+//
+// Срез 12: same CSS-wide-keyword whole-value fan-out as
+// `_lumen_expand_trbl_shorthand` above — `overflow: initial` sets both
+// `overflow-x`/`overflow-y` to `"initial"` rather than being rejected by the
+// keyword-list grammar `_lumen_css_canonical_keyword` doesn't special-case.
 function _lumen_expand_overflow_shorthand(strVal) {
+    var lowerVal = strVal.trim().toLowerCase();
+    if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1) {
+        return { x: lowerVal, y: lowerVal };
+    }
     var tokens = strVal.trim().split(/\s+/).filter(function(t) { return t.length > 0; });
     if (tokens.length < 1 || tokens.length > 2) return null;
     var canon = [];
@@ -1548,9 +1571,13 @@ function _lumen_css_canonical_scrollbar_color(strVal) {
 // (срез 11) — previously `style.position = "initial"` was rejected as an
 // unrecognized `position` keyword, which is wrong: `initial` is valid CSS
 // for any property, this engine's actual support for it notwithstanding.
-// Deliberately NOT extended to the TRBL/`overflow` shorthand paths above —
-// `margin: initial` would need to fan the keyword out to all four
-// longhands, a distinct (and still unaddressed) piece of the same gap.
+// Срез 12 extended the same bypass to the TRBL/`overflow` shorthand paths
+// (`_lumen_expand_trbl_shorthand`/`_lumen_expand_overflow_shorthand` above)
+// — `margin: initial` now fans the keyword out to all four longhands
+// instead of being rejected. `border-style` stays out of reach of this
+// bypass on the shorthand path — it has no entry in
+// `_LUMEN_TRBL_SHORTHAND_CANON` at all yet (no longhand grammar, срез 7/9),
+// so its shorthand never reaches `_lumen_expand_trbl_shorthand`.
 var _LUMEN_CSS_WIDE_KEYWORDS = ['initial', 'inherit', 'unset', 'revert', 'revert-layer', 'revert-rule'];
 
 // Срез 10: single dispatch point for "canonicalize (or reject) a plain
