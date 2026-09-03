@@ -136,20 +136,15 @@ git worktree remove .claude/worktrees/<kebab-name>
 | [ph3-bfcache.md](ph3-bfcache.md) | Back/forward cache (bfcache) |
 | [ph3-extensions.md](ph3-extensions.md) | Extensions (minimal native format) |
 | [ph3-permission-download-ui.md](ph3-permission-download-ui.md) | Permission prompt UI + Download UI |
-| [ph3-spell-check.md](ph3-spell-check.md) | Spell check (Hunspell) |
 | [ph3-print-pipeline.md](ph3-print-pipeline.md) | Print pipeline (pagination + vector PDF + preview) |
 | [ph3-color-management.md](ph3-color-management.md) | Color management (Display P3 / Rec2020 / wide gamut) |
-| [ph3-variable-fonts.md](ph3-variable-fonts.md) | Variable fonts (axes runtime) |
 | [ph3-woff2-webfonts.md](ph3-woff2-webfonts.md) | WebFonts (@font-face + WOFF2) |
-| [ph3-http3.md](ph3-http3.md) | HTTP/3 (QUIC) |
 | [ph3-tls-security-hardening.md](ph3-tls-security-hardening.md) | TLS/security hardening (OCSP+CT+cert UI, Negotiate/NTLM+mTLS) |
 | [ph3-gpu-process-sandbox.md](ph3-gpu-process-sandbox.md) | GPU process / sandbox |
 | [ph3-gc-js-dom.md](ph3-gc-js-dom.md) | GC integration JS ↔ DOM (cross-boundary cycles) |
 | [ph3-v8-migration.md](ph3-v8-migration.md) | Migrate JS engine to V8 (rusty_v8) |
-| [p1-s12b-cleanup-queue.md](p1-s12b-cleanup-queue.md) | Очередь S12b — добивание rquickjs из `crates/js` (43 батча по сессии, P1) |
 | [p1-monolith-split-queue.md](p1-monolith-split-queue.md) | Очередь SPLIT — разрезание монолитных файлов >2000 строк (батчи по сессии, P1) |
 | [ph3-cdp-shim.md](ph3-cdp-shim.md) | lumen-cdp-shim (Chrome DevTools Protocol subset) |
-| [ph3-ai-module.md](ph3-ai-module.md) | AI module (lumen-ai) + semantic bookmarks |
 
 ### Фаза 3 — декомпозированный backlog (заведён 2026-07-05, все на P1)
 
@@ -161,24 +156,17 @@ git worktree remove .claude/worktrees/<kebab-name>
 |---|---|---|
 | [ph3-subgrid.md](ph3-subgrid.md) | CSS Subgrid | ~0% (верификация + графтест) |
 | [ph3-text-wrap.md](ph3-text-wrap.md) | text-wrap: balance/pretty | ~0% (верификация + графтест) |
-| [ph3-anchor-positioning.md](ph3-anchor-positioning.md) | CSS Anchor Positioning L1 | ~10% (функция `anchor()` в inset) |
 | [ph3-scope.md](ph3-scope.md) | CSS @scope | ~15% (scope proximity в каскаде) |
 | [ph3-content-visibility.md](ph3-content-visibility.md) | content-visibility + contain-intrinsic-size | ~15% (above-viewport skip) |
 | [ph3-fragmentation.md](ph3-fragmentation.md) | break-inside / widows / orphans | ~45% (весь break-inside) |
 | [ph3-initial-letter.md](ph3-initial-letter.md) | initial-letter (буквица) | ~40% (cap-height/raised/RTL) |
-| [ph3-writing-mode-vertical.md](ph3-writing-mode-vertical.md) | writing-mode вертикаль | ~45% (paint text-orientation) |
-| [ph3-webcrypto.md](ph3-webcrypto.md) | Web Crypto полный набор | ~65% (RSA/Ed25519/PBKDF2/HKDF/CBC/CTR) |
 | [ph3-structured-clone.md](ph3-structured-clone.md) | structuredClone + Transferable | ~70% (циклы, typed arrays, transfer) |
 | [ph3-element-internals-state.md](ph3-element-internals-state.md) | ElementInternals :state() | ~35% (`:state()` в css-parser+match) |
-| [ph3-pointer-events-l3.md](ph3-pointer-events-l3.md) | Pointer Events L3 coalesced/predicted | ~80% (буферизация в shell) |
-| [ph3-compression-streams.md](ph3-compression-streams.md) | Compression Streams (gzip/deflate) | ~10% (доводки; brotli вне спеки) |
 | [ph3-webtransport.md](ph3-webtransport.md) | WebTransport | ~95% (заблокирован живым QUIC IO / P3-h3) |
 | [ph3-early-hints.md](ph3-early-hints.md) | Priority Hints + 103 Early Hints | ~80% (1xx в read_head + fetchpriority) |
 | [ph3-push-api.md](ph3-push-api.md) | Push API | ~75% (persist + реальная доставка WebPush) |
 | [ph3-webgl2.md](ph3-webgl2.md) | WebGL2 подмножество | ~65% (webgl2-контекст + present framebuffer) |
 | [ph3-avif.md](ph3-avif.md) | AVIF / JPEG XL | ~60% (дефолт-декод AVIF + jxl-oxide) |
-| [ph3-picture-in-picture.md](ph3-picture-in-picture.md) | Picture-in-Picture API | ~30% (Document PiP native window) |
-| [ph3-select-base.md](ph3-select-base.md) | Кастомизируемый `<select>` (base-select) | ~95% (почти с нуля) |
 | [ph3-view-transitions-mpa.md](ph3-view-transitions-mpa.md) | View Transitions для MPA | ~60% (@view-transition + snapshot между документами) |
 | [rp9-print-stylesheet-filter.md](rp9-print-stylesheet-filter.md) | RP-9: фильтр print-таблиц | ~15% (@import media=print аудит) |
 

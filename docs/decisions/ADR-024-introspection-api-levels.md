@@ -172,7 +172,7 @@ MCP `initialize` parameter and a BiDi `session.new` capability. Tracked as
   first `DEVX` slice.
 - [ADR-018](ADR-018-v8-cutover.md), [ADR-021](ADR-021-css-chrome-engine.md) —
   the flag-strategy idiom (explicit rollback lever) reused by `DEVX-15`.
-- [`docs/tasks/p1-introspection-track.md`](../tasks/p1-introspection-track.md) —
-  `DEVX-7…16` briefs and dependency order.
+- `ROADMAP.md` `DEVX-7…16` rows — all `done` (per-slice history; the tracking
+  brief was deleted after the track closed, [`doc-sync.md`](../doc-sync.md)).
 - [`docs/automation.md`](../automation.md) — the surface catalogue this ADR
   assigns levels to.

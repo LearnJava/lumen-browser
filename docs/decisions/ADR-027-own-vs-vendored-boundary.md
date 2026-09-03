@@ -89,7 +89,7 @@ The rewritten §5 is the normative text; this ADR is the reasoning behind it.
 
 | Alternative | Why rejected |
 |---|---|
-| Keep §5 as written | It is already false in three places and is being cited to block decisions on a premise the code has disproved. [`docs/tasks/rp5-external-svg-images.md`](../tasks/rp5-external-svg-images.md) rejected `resvg` on the grounds that «движок уже рисует SVG-контуры/градиенты/`<use>`» — the gradient half of that sentence was never true |
+| Keep §5 as written | It is already false in three places and is being cited to block decisions on a premise the code has disproved. `RP-5` (`ROADMAP.md`, closed 2026-07-02) rejected `resvg` on the grounds that «движок уже рисует SVG-контуры/градиенты/`<use>`» — the gradient half of that sentence was never true, and the decision was reversed by `LIB-4` (2026-09-01), which adopted `resvg`/`usvg` for external SVG |
 | Keep the boundary but move individual crates case by case | That is what has been happening: PNG, DEFLATE and `tiny-skia` moved without the list being updated. Without a criterion the list drifts out of sync again |
 | Write everything ourselves, including a full shaper | Measured cost: a completed task (`U-2`) yielded 2 of 8 GSUB and 2 of 9 GPOS lookup types. Reaching parity is years of work on data tables that carry no Lumen-specific decision |
 | Take a whole engine (Servo components, Chromium) | Discards ~420k lines of working own pipeline — network, HTML parser, DOM, CSS cascade, layout, paint — and with it the reason the project exists |
