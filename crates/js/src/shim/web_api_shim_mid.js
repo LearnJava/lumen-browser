@@ -1477,7 +1477,81 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'direction':      ['ltr', 'rtl'],
     'text-transform': ['none', 'uppercase', 'lowercase', 'capitalize'],
     'user-select':    ['auto', 'text', 'none', 'contain', 'all'],
+    // Срез 11: `scrollbar-width` (CSS Scrollbars L1 §3, `ScrollbarWidth::parse`
+    // in `style/values/misc.rs` — exact `auto|thin|none` match, no extra
+    // keywords) and the three `ruby-*` longhands (CSS Ruby L1 §4,
+    // `style/apply/text.rs`'s bare `match` arms). `ruby-position` excludes
+    // spec-valid `inter-character` — `ruby.rs`'s own doc comment says the
+    // engine parses only `over`/`under`/`alternate`, `inter-character` is
+    // unmatched and silently keeps the previous value, same no-op contract
+    // as `text-align`'s excluded `justify`/`match-parent` (срез 7 note
+    // above). `alternate` IS included — the engine's match has an arm for
+    // it (resolves to `Over`), and CSSOM's specified-value model must keep
+    // the literal token, not the resolved one (same reasoning as
+    // `pointer-events`' SVG aliases, срез 10).
+    'scrollbar-width': ['auto', 'thin', 'none'],
+    'ruby-position': ['over', 'under', 'alternate'],
+    'ruby-align':    ['start', 'center', 'space-between', 'space-around'],
+    'ruby-merge':    ['separate', 'merge', 'auto'],
 };
+
+// CSS Scrollbars L1 §2 (CSSOM-2/BUG-484, срез 11): `scrollbar-color: auto |
+// <color>{2}` (thumb then track) — a single longhand storing two tokens, so
+// it fits none of the flat per-property tables above (not a TRBL/overflow
+// shorthand either: it has no separate longhands to expand into). Each
+// color token is validated+canonicalized through the same
+// `_lumen_css_canonical_color` the color-typed longhands and TRBL
+// `border-color` already use, so hex→`rgb()` canonicalization and
+// named-color/`currentcolor` passthrough behave identically here.
+// Splits on top-level whitespace, ignoring whitespace nested inside
+// `(...)` — a plain `/\s+/` split breaks the moment a token is itself a
+// function color: the CANONICAL form `_lumen_css_canonical_color` emits
+// for a hex/named color is `rgb(255, 0, 0)`, which contains its own
+// internal space after the comma, so re-parsing that already-canonical
+// text (every `getParsed()` call does, via `_lumen_parse_style`) would
+// otherwise split it into bogus extra tokens and reject the round-trip.
+function _lumen_split_top_level_ws(s) {
+    var tokens = [];
+    var depth = 0, cur = '';
+    for (var i = 0; i < s.length; i++) {
+        var ch = s[i];
+        if (ch === '(') depth++;
+        if (ch === ')') depth--;
+        if (/\s/.test(ch) && depth === 0) {
+            if (cur.length) { tokens.push(cur); cur = ''; }
+        } else {
+            cur += ch;
+        }
+    }
+    if (cur.length) tokens.push(cur);
+    return tokens;
+}
+
+function _lumen_css_canonical_scrollbar_color(strVal) {
+    var v = strVal.trim();
+    if (v.length === 0) return null;
+    if (/^auto$/i.test(v)) return 'auto';
+    var tokens = _lumen_split_top_level_ws(v);
+    if (tokens.length !== 2) return null;
+    var thumb = _lumen_css_canonical_color(tokens[0]);
+    if (thumb === null || thumb === undefined) return null;
+    var track = _lumen_css_canonical_color(tokens[1]);
+    if (track === null || track === undefined) return null;
+    return thumb + ' ' + track;
+}
+
+// CSS Cascade L4 §7.1: these five tokens are valid specified values for
+// EVERY property, not just the ones with a registered grammar below.
+// `_LUMEN_COLOR_PROPERTIES`' `_lumen_css_canonical_color` already
+// special-cased them (so `color: initial` worked since BUG-465); this
+// generic bypass extends the same acceptance to every other grammar table
+// (срез 11) — previously `style.position = "initial"` was rejected as an
+// unrecognized `position` keyword, which is wrong: `initial` is valid CSS
+// for any property, this engine's actual support for it notwithstanding.
+// Deliberately NOT extended to the TRBL/`overflow` shorthand paths above —
+// `margin: initial` would need to fan the keyword out to all four
+// longhands, a distinct (and still unaddressed) piece of the same gap.
+var _LUMEN_CSS_WIDE_KEYWORDS = ['initial', 'inherit', 'unset', 'revert', 'revert-layer', 'revert-rule'];
 
 // Срез 10: single dispatch point for "canonicalize (or reject) a plain
 // longhand value", shared by `setProperty` and `_lumen_parse_style`'s
@@ -1486,8 +1560,14 @@ var _LUMEN_KEYWORD_PROPERTIES = {
 // markup-authored declaration never got validated at all. Returns the
 // canonical string, or `null`/`undefined` if `key` has a registered grammar
 // and `strVal` doesn't match it. A `key` with no registered grammar passes
-// `strVal` through unchanged — most properties have no grammar here yet.
+// `strVal` through unchanged (лишь лишний `.toLowerCase()` для одного из
+// пяти CSS-wide-ключевых-слов, срез 11) — most properties have no grammar
+// here yet.
 function _lumen_canonicalize_longhand(key, strVal) {
+    var lowerVal = strVal.trim().toLowerCase();
+    if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1) {
+        return lowerVal;
+    }
     if (_LUMEN_COLOR_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_color(strVal);
     }
@@ -1503,6 +1583,9 @@ function _lumen_canonicalize_longhand(key, strVal) {
     }
     if (_LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
+    }
+    if (key === 'scrollbar-color') {
+        return _lumen_css_canonical_scrollbar_color(strVal);
     }
     return strVal;
 }
@@ -1563,7 +1646,8 @@ function _lumen_make_style(nid) {
                 _LUMEN_LENGTH_PROPERTIES.hasOwnProperty(key) ||
                 _LUMEN_LINE_WIDTH_PROPERTIES.hasOwnProperty(key) ||
                 _LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key) ||
-                _LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key)) {
+                _LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key) ||
+                key === 'scrollbar-color') {
                 var canon = _lumen_canonicalize_longhand(key, strVal);
                 if (canon === null || canon === undefined) return; // invalid value: no-op
                 obj[key] = canon;
