@@ -1178,16 +1178,7 @@ fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>
     let is_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto);
     let is_scroll_y = matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto);
     if is_scroll_x || is_scroll_y {
-        let bl = s.border_left_width;
-        let bt = s.border_top_width;
-        let br = s.border_right_width;
-        let bb = s.border_bottom_width;
-        let clip = lumen_core::geom::Rect::new(
-            b.rect.x + bl,
-            b.rect.y + bt,
-            (b.rect.width - bl - br).max(0.0),
-            (b.rect.height - bt - bb).max(0.0),
-        );
+        let clip = padding_box(b);
         let scroll_width = content_width(b);
         let scroll_height = content_height(b);
         out.push(ScrollContainer {
@@ -1239,6 +1230,58 @@ pub fn overscroll_should_propagate(
     !blocked
 }
 
+/// A box's padding-box rectangle, in the same document-relative coordinate
+/// space as [`LayoutBox::rect`] (border-box).
+///
+/// CSS Overflow L3 §3.3/§3.4 defines `scrollWidth`/`scrollHeight` and the
+/// scrollable-overflow region relative to the padding edge, not the border
+/// edge — the two coincide only when all border widths are zero. Shared by
+/// [`collect_scroll_containers_inner`]'s clip rect and by
+/// [`content_width`]/[`content_height`]'s floor and origin (BUG-504).
+fn padding_box(b: &LayoutBox) -> lumen_core::geom::Rect {
+    let s = &b.style;
+    let bl = s.border_left_width;
+    let bt = s.border_top_width;
+    let br = s.border_right_width;
+    let bb = s.border_bottom_width;
+    lumen_core::geom::Rect::new(
+        b.rect.x + bl,
+        b.rect.y + bt,
+        (b.rect.width - bl - br).max(0.0),
+        (b.rect.height - bt - bb).max(0.0),
+    )
+}
+
+/// Whether two axis-aligned rectangles share any positive-area overlap.
+/// Strict inequalities: rectangles that only touch along an edge (zero-area
+/// intersection) count as non-overlapping.
+fn rects_overlap(a: &lumen_core::geom::Rect, b: &lumen_core::geom::Rect) -> bool {
+    a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+}
+
+/// Whether a child must be folded into its container's scrollable-overflow
+/// computation.
+///
+/// CSS Overflow L3 §3.3: an absolutely/fixed positioned descendant whose
+/// border box does not overlap the containing block's padding box on *both*
+/// axes ("wholly outside the padding edges") contributes nothing at all —
+/// not even on the axis where it does overlap (BUG-504,
+/// `overflow-outside-padding.html`). This exclusion is specific to
+/// out-of-flow boxes placed via `top`/`right`/`bottom`/`left`: an in-flow
+/// box pushed outside by `transform` must still count in full (§3.4,
+/// already covered by [`child_scrollable_bounds`]) — that provision is
+/// unconditional, so only abspos/fixed children are ever excluded here.
+fn contributes_to_scrollable_overflow(
+    c: &LayoutBox,
+    bounds: &lumen_core::geom::Rect,
+    padding_box: &lumen_core::geom::Rect,
+) -> bool {
+    if !matches!(c.style.position, style::Position::Absolute | style::Position::Fixed) {
+        return true;
+    }
+    rects_overlap(bounds, padding_box)
+}
+
 /// A child's border-box, expanded by its own CSS `transform` (BUG-504).
 ///
 /// CSS Overflow L3 §3.4: `transform` doesn't move a box for flow purposes
@@ -1266,29 +1309,42 @@ fn child_scrollable_bounds(c: &LayoutBox) -> lumen_core::geom::Rect {
     lumen_core::geom::Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
 }
 
-/// Compute the content scroll-width of a box: rightmost child edge relative to container left.
+/// Compute the content scroll-width of a box: rightmost child edge relative to the padding edge.
 ///
-/// Returns max(b.rect.width, children's right edge - b.rect.x), where a
-/// transformed child's edge is taken from its post-transform bounds
-/// ([`child_scrollable_bounds`]) rather than its flow `rect` (BUG-504).
-/// Used to compute the max scroll offset for horizontal scrolling.
+/// Returns max(padding-box width, children's right edge - padding-box left
+/// edge), where a transformed child's edge is taken from its post-transform
+/// bounds ([`child_scrollable_bounds`]) rather than its flow `rect`, and a
+/// child whose bounds don't overlap the padding box on either axis at all is
+/// excluded entirely — CSS Overflow L3 §3.3: "blocks wholly outside padding
+/// edges [do] not contribute to overflow" (BUG-504). Used to compute the max
+/// scroll offset for horizontal scrolling.
 fn content_width(b: &LayoutBox) -> f32 {
-    b.children.iter().fold(b.rect.width, |acc, c| {
+    let pb = padding_box(b);
+    b.children.iter().fold(pb.width, |acc, c| {
         let bounds = child_scrollable_bounds(c);
-        acc.max(bounds.x + bounds.width - b.rect.x)
+        if !contributes_to_scrollable_overflow(c, &bounds, &pb) {
+            return acc;
+        }
+        acc.max(bounds.x + bounds.width - pb.x)
     })
 }
 
-/// Compute the content scroll-height of a box: bottommost child edge relative to container top.
+/// Compute the content scroll-height of a box: bottommost child edge relative to the padding edge.
 ///
-/// Returns max(b.rect.height, children's bottom edge - b.rect.y), where a
-/// transformed child's edge is taken from its post-transform bounds
-/// ([`child_scrollable_bounds`]) rather than its flow `rect` (BUG-504).
-/// Used to compute the max scroll offset for vertical scrolling.
+/// Returns max(padding-box height, children's bottom edge - padding-box top
+/// edge), where a transformed child's edge is taken from its post-transform
+/// bounds ([`child_scrollable_bounds`]) rather than its flow `rect`, and a
+/// child whose bounds don't overlap the padding box on either axis at all is
+/// excluded entirely — same rule as [`content_width`] (BUG-504). Used to
+/// compute the max scroll offset for vertical scrolling.
 fn content_height(b: &LayoutBox) -> f32 {
-    b.children.iter().fold(b.rect.height, |acc, c| {
+    let pb = padding_box(b);
+    b.children.iter().fold(pb.height, |acc, c| {
         let bounds = child_scrollable_bounds(c);
-        acc.max(bounds.y + bounds.height - b.rect.y)
+        if !contributes_to_scrollable_overflow(c, &bounds, &pb) {
+            return acc;
+        }
+        acc.max(bounds.y + bounds.height - pb.y)
     })
 }
 
