@@ -2,7 +2,7 @@
 
 ### 15.1 Пирамида тестов
 
-Lumen использует пять уровней с разной стоимостью и зоной ответственности. Чем выше уровень — тем дороже и реже запуск, тем шире зона покрытия. Реализация автоматизации через `lumen-driver` (§6.11, [ADR-006](docs/decisions/ADR-006-automation-api.md)) — обязательная база для уровней 2-4.
+Lumen использует пять уровней с разной стоимостью и зоной ответственности. Чем выше уровень — тем дороже и реже запуск, тем шире зона покрытия. Реализация автоматизации через `lumen-driver` (§6.11, [ADR-006](../decisions/ADR-006-automation-api.md)) — обязательная база для уровней 2-4.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -105,7 +105,7 @@ GitHub Actions: Linux / macOS / Windows, debug + release, `cargo test` (уров
 
 **Time-axis baseline:** cold start ≤ 300 ms на `samples/page.html`, ≤ 500 ms на `samples/heavy.html`.
 
-**RAM-axis baseline (расширено [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)):**
+**RAM-axis baseline (расширено [ADR-008](../decisions/ADR-008-tab-lifecycle-memory-tiers.md)):**
 
 | Метрика | Baseline |
 |---|---|
@@ -116,7 +116,7 @@ GitHub Actions: Linux / macOS / Windows, debug + release, `cargo test` (уров
 | T2 → T0 restore | ≤ 200 ms |
 | T3 → T0 restore | ≤ 1500 ms |
 
-**Правило (binding по [ADR-006](docs/decisions/ADR-006-automation-api.md), [ADR-007](docs/decisions/ADR-007-anti-detection-stack.md), [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)):** PR фейлится в CI при **любом** из условий:
+**Правило (binding по [ADR-006](../decisions/ADR-006-automation-api.md), [ADR-007](../decisions/ADR-007-anti-detection-stack.md), [ADR-008](../decisions/ADR-008-tab-lifecycle-memory-tiers.md)):** PR фейлится в CI при **любом** из условий:
 
 - > 5% регресс time-median или time-p95.
 - > 5% регресс peak_rss или steady_state_rss.

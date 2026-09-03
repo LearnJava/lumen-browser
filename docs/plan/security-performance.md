@@ -108,7 +108,7 @@
 - Tracking регрессий по коммитам (графики) — не найдено; `bench/compare.py`
   сравнивает текущий прогон с `bench/baseline.json` (порог, не история).
 
-### 11.4 Memory budget per tab — пятитайерная модель ([ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md))
+### 11.4 Memory budget per tab — пятитайерная модель ([ADR-008](../decisions/ADR-008-tab-lifecycle-memory-tiers.md))
 
 Главный продуктовый дифференциатор Lumen наряду с приватностью — **RAM-нагрузка на вкладку**. Цель: 50 открытых вкладок в Lumen занимают ~400 MB, в Chrome — 6-10 GB. Достигается за счёт явной модели жизненного цикла вкладки с пятью tier'ами и тремя структурными инвариантами на подсистемы.
 

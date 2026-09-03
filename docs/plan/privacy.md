@@ -51,7 +51,7 @@
 
 ### 9.5 Anti-fingerprinting / Anti-detection privacy stack
 
-Полное архитектурное обоснование и red lines — [ADR-007](docs/decisions/ADR-007-anti-detection-stack.md).
+Полное архитектурное обоснование и red lines — [ADR-007](../decisions/ADR-007-anti-detection-stack.md).
 
 **Принцип:** пользователь имеет право посещать публичный сайт со своего устройства. Lumen — user agent в интересах пользователя, не сайта-оператора. Privacy-stack устанавливается **по умолчанию для всех** (как в Firefox Strict / Brave / Tor), не как opt-in «stealth mode». Побочный эффект — устойчивость к anti-bot системам (Cloudflare/DataDome/Akamai/PerimeterX/Kasada/Imperva), которые иначе ложно-помечают любой не-Chrome браузер.
 
