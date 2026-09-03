@@ -1213,6 +1213,8 @@ var _LUMEN_TRBL_SHORTHANDS = {
     'border-style': ['border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style'],
     'border-color': ['border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color'],
     'inset':        ['top', 'right', 'bottom', 'left'],
+    'scroll-margin':  ['scroll-margin-top', 'scroll-margin-right', 'scroll-margin-bottom', 'scroll-margin-left'],
+    'scroll-padding': ['scroll-padding-top', 'scroll-padding-right', 'scroll-padding-bottom', 'scroll-padding-left'],
 };
 
 // CSS 2.1 §8.3 TRBL shorthand collapsing: 1 value if all equal, 2 if only
@@ -1255,6 +1257,8 @@ var _LUMEN_TRBL_SHORTHAND_CANON = {
     'border-style': function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['border-top-style']); },
     'border-color': function(v) { return _lumen_css_canonical_color(v); },
     'inset':        function(v) { return _lumen_css_canonical_length(v, true, false); },
+    'scroll-margin':  function(v) { return _lumen_css_canonical_scroll_offset(v, false, false); },
+    'scroll-padding': function(v) { return _lumen_css_canonical_scroll_offset(v, true, true); },
 };
 
 // Splits `strVal` on CSS whitespace, canonicalizes each of the 1-4 tokens via
@@ -1535,6 +1539,25 @@ var _LUMEN_LENGTH_PROPERTIES = {
     'inset-block-end':    { allowAuto: true, nonNegative: false },
 };
 
+// CSS Scroll Snap L1 §8 (CSSOM-2/BUG-484, срез 19): kept out of
+// `_LUMEN_LENGTH_PROPERTIES` because that table's grammar allows percentages
+// (`_lumen_css_canonical_length` does support `%`) — wrong here, see
+// `_lumen_css_canonical_scroll_offset`'s doc comment above. Logical
+// equivalents (`scroll-margin-inline-start` and siblings) are not CSS Scroll
+// Snap L1 properties and the engine has none of them (`motion.rs` has zero
+// hits for either), so they stay out of scope, same reasoning as
+// `overflow-block`/`overflow-inline` above.
+var _LUMEN_SCROLL_OFFSET_PROPERTIES = {
+    'scroll-margin-top':    { allowAuto: false, nonNegative: false },
+    'scroll-margin-right':  { allowAuto: false, nonNegative: false },
+    'scroll-margin-bottom': { allowAuto: false, nonNegative: false },
+    'scroll-margin-left':   { allowAuto: false, nonNegative: false },
+    'scroll-padding-top':    { allowAuto: true, nonNegative: true },
+    'scroll-padding-right':  { allowAuto: true, nonNegative: true },
+    'scroll-padding-bottom': { allowAuto: true, nonNegative: true },
+    'scroll-padding-left':   { allowAuto: true, nonNegative: true },
+};
+
 // CSS Backgrounds L3 §4.2 (CSSOM-2/BUG-484, second+fourth slice):
 // `<line-width>` = `<length [0,∞]> | thin | medium | thick` — the
 // border-*-width longhands, physical and logical alike (the logical ones
@@ -1792,6 +1815,28 @@ function _lumen_css_canonical_scroll_snap_align(strVal) {
     return out.join(' ');
 }
 
+// CSS Scroll Snap L1 §8 (CSSOM-2/BUG-484, срез 19): `scroll-margin-*`/
+// `scroll-padding-*` resolve eagerly to px at cascade-apply time via
+// `resolve_box_length` (`style/apply/motion.rs`), which rejects percentages
+// outright ("% в Phase 0 не поддержан (нужна containing-block-width)" —
+// `style/parse/box_sides.rs`) — unlike `margin`/`padding`, whose
+// `LengthOrAuto` storage defers percent resolution to layout time
+// (`set_margin_side`) and so genuinely supports it. Accepting `%` here would
+// canonicalize a specified value the cascade then silently drops on apply,
+// same trap the plain `_LUMEN_LENGTH_PROPERTIES` grammar would walk into if
+// reused unchanged. `scroll-margin` is `<length>` (no `[0,∞]` bound, negative
+// allowed, no `auto`); `scroll-padding` is `auto | <length-percentage
+// [0,∞]>` — `resolve_box_length` doesn't special-case the `auto` token
+// either, but that's a harmless no-op here: an unresolved declaration leaves
+// the field at its `0.0` default, which is exactly what `auto` (the
+// property's own initial value) means.
+function _lumen_css_canonical_scroll_offset(strVal, allowAuto, nonNegative) {
+    var v = strVal.trim();
+    if (v.length === 0) return null;
+    if (v.charAt(v.length - 1) === '%') return null;
+    return _lumen_css_canonical_length(v, allowAuto, nonNegative);
+}
+
 // CSS Cascade L4 §7.1: these five tokens are valid specified values for
 // EVERY property, not just the ones with a registered grammar below.
 // `_LUMEN_COLOR_PROPERTIES`' `_lumen_css_canonical_color` already
@@ -1835,6 +1880,10 @@ function _lumen_canonicalize_longhand(key, strVal) {
     }
     if (_LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_sizing_length(strVal);
+    }
+    if (_LUMEN_SCROLL_OFFSET_PROPERTIES.hasOwnProperty(key)) {
+        var scrollGrammar = _LUMEN_SCROLL_OFFSET_PROPERTIES[key];
+        return _lumen_css_canonical_scroll_offset(strVal, scrollGrammar.allowAuto, scrollGrammar.nonNegative);
     }
     if (_LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
@@ -1920,6 +1969,7 @@ function _lumen_make_style(nid) {
                 _LUMEN_LENGTH_PROPERTIES.hasOwnProperty(key) ||
                 _LUMEN_LINE_WIDTH_PROPERTIES.hasOwnProperty(key) ||
                 _LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key) ||
+                _LUMEN_SCROLL_OFFSET_PROPERTIES.hasOwnProperty(key) ||
                 _LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key) ||
                 key === 'scrollbar-color' ||
                 key === 'scroll-snap-type' ||

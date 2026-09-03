@@ -6,6 +6,12 @@
 **Компонент:** js (`crates/js/src/dom.rs:4264-4302` — `_lumen_make_style`)
 **Найден:** WPT-RUN-3 срез 5 (`ROADMAP.md`) — массовый прогон `css/css-box`
 
+**CSSOM-2 закрыта 2026-09-03** (19 срезов, [ROADMAP.md](../ROADMAP.md) CSSOM-2): все три формы дефекта
+из раздела «Симптом» ниже закрыты — отклонение невалидных значений, разворачивание TRBL/двузначных
+шорткатов в лонгхенды, канонизация при чтении (включая CSS Logical, keyword-грамматики, `calc()`) для
+всей length/keyword/scroll-offset поверхности инлайнового `style`. Подробности по срезам — в
+`ROADMAP.md`'s строке CSSOM-2, не здесь (этот файл остаётся записью WPT-прогонов, обнаруживших дефект).
+
 ## Механизм
 
 `_lumen_make_style(nid)` (`dom.rs:4264`) implements `CSSStyleDeclaration` for
