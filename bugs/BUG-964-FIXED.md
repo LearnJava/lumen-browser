@@ -1,6 +1,6 @@
 # BUG-964: TRBL shorthand collapse on `style` write loses individual longhand reads when all four sides diverge
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-03 (P1, CSSOM-2 срез 6)
 **Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_serialize_style`/`_lumen_shorthand_value`/`_lumen_parse_style`)
 **Найден:** P1 2026-09-03, попутно при CSSOM-2 (первый срез, margin-*/padding-* `<length-percentage>` валидация)
 
@@ -72,3 +72,37 @@ losslessly reconstruct which longhand `!important`/omitted state produced
 it), but changes what `element.getAttribute('style')`/`outerHTML` show
 after a longhand-only mutation session — needs a design decision, not a
 quick patch.
+
+## FIXED 2026-09-03 (P1, CSSOM-2 срез 6)
+
+Implemented (a), not the simpler (b): `_lumen_parse_style` now expands any
+TRBL shorthand token (`_LUMEN_TRBL_SHORTHAND_CANON`'s four covered groups —
+margin/padding/border-width/border-color) into its four longhand keys right
+at parse time, whether the source is raw markup text or our own
+`_lumen_serialize_style` round-trip, reusing the same
+`_lumen_expand_trbl_shorthand` machinery `setProperty` already used for a
+JS-assigned shorthand. `obj` is now always longhand-keyed for those four
+groups, so the collapse↔parse round-trip is lossless and a subsequent
+per-longhand read never has to decompose a shorthand key it doesn't
+recognize. (a) was chosen over (b) because it also fixes an independent,
+older gap — `<div style="margin: 10px">.style.marginTop` returned `''`
+even with no JS mutation at all, since `_lumen_parse_style` never expanded
+author-written shorthand text — and it keeps `getAttribute('style')`/
+`outerHTML` showing the same collapsed shorthand form after a JS mutation
+session that they always did (a concern (b) would not have preserved). An
+invalid token (e.g. `-2px` in `padding`) falls back to the prior
+pass-through behavior — the raw shorthand key/value is stored as-is, same
+as any unrecognized property, no declaration-wide drop. `border-style` has
+no canon function yet (no longhand grammar exists), so it is unaffected,
+same pass-through as before.
+
+Confirmed via live probe (`--mcp-port`+`eval`, `.tmp/probe_bug964.py`):
+diverging sides (original repro) — `marginBottom` now `-3px` instead of
+`''`; equal-value shorthand (slice-5-widened repro) — `marginTop` now
+`10px` instead of `''`; markup-authored `style="margin: 7px 8px"` — all
+four longhands read correctly; a 4-token diverging shorthand round-trips
+through `cssText`; `border-width: thin 2px thick` (regression check)
+unaffected; an invalid markup declaration (`padding: 1px -2px 3px`) does
+not crash and keeps its raw text. Pixel-neutral by construction — the
+change is confined to JS `style` attribute string parsing, no layout/paint
+path touched.
