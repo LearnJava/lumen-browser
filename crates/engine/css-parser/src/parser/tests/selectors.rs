@@ -61,6 +61,17 @@ use super::*;
     }
 
     #[test]
+    fn valid_selector_list_rejects_non_css_whitespace_as_combinator() {
+        // BUG-510: только 5 ASCII-символов (TAB/LF/FF/CR/SPACE) — CSS
+        // whitespace (CSS Syntax §4.2). U+000B VERTICAL TAB и U+0085 NEXT
+        // LINE раньше ошибочно распознавались Rust'овским
+        // `char::is_whitespace()` и работали как descendant-комбинатор.
+        for sel in [".a\u{000B}b", ".a\u{0085}b"] {
+            assert!(!is_valid_selector_list(sel), "expected invalid: {sel:?}");
+        }
+    }
+
+    #[test]
     fn valid_selector_list_rejects_unknown_pseudo() {
         // Драйвер бага: WPT-паттерн feature-detection
         // `assert_throws_dom('SyntaxError', () => el.matches(':halfscreen'))`.
