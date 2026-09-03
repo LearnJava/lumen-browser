@@ -13,16 +13,23 @@ use lumen_dom::{Document, NodeId};
 use lumen_core::ColorSpace;
 
 use crate::box_tree::{BoxKind, LayoutBox};
+use crate::ruby::{RubyAlign, RubyMerge, RubyPosition};
 use crate::style::{
-    matches_complex, AlignValue, BackgroundImage, BackgroundLayer, BorderStyle, BoxSizing,
-    ClearSide, Color,
-    ContainFlags, ContentVisibility,
+    matches_complex, AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState,
+    BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin,
+    BackgroundRepeat, BackgroundSize, BgSizeAxis, BorderStyle, BoxShadow, BoxSizing,
+    ClearSide, Color, ColorScheme,
+    ContainFlags, Content, ContentItem, ContentVisibility,
     CssColor,
-    Cursor, Direction, Display, FilterFn, FloatSide, FontStretch, FontStyle, FontWeight,
-    FontVariantCaps, FontVariantEmoji, Isolation, Length, LengthOrAuto, MixBlendMode, ObjectPosition, Overflow,
-    OutlineColor,
-    OutlineStyle, PointerEvents, Position, PositionComponent, TextAlign, TextDecorationLine, TextDecorationStyle,
-    TextEmphasisStyle, TextOverflow, TextTransform, TransformFn, Visibility, WhiteSpace,
+    Cursor, Direction, Display, FillRule, FilterFn, FloatSide, ForcedColorAdjust, FontStretch,
+    FontStyle, FontWeight,
+    FontVariantCaps, FontVariantEmoji, Isolation, IterationCount, Length, LengthOrAuto,
+    MixBlendMode, ObjectPosition, Overflow, OutlineColor, OverscrollBehavior,
+    OutlineStyle, PointerEvents, Position, PositionComponent, PrintColorAdjust, Quotes,
+    ScrollbarWidth, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign,
+    TextDecorationLine, TextDecorationStyle,
+    TextEmphasisStyle, TextOverflow, TextShadow, TextTransform, TimingFunction, TransformFn,
+    Visibility, WhiteSpace,
     WhiteSpaceCollapse,
     ComputedStyle,
 };
@@ -692,6 +699,276 @@ fn filter_fn_to_css(f: &FilterFn) -> String {
     }
 }
 
+/// Quotes and escapes a raw string as a CSS `<string>` token — `"` and `\`
+/// are backslash-escaped, matching the serialization CSSOM §6.7.2 asks for
+/// on any property whose computed value contains free text (`content`,
+/// `quotes`).
+fn css_string_literal(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn mix_blend_mode_to_css(v: MixBlendMode) -> &'static str {
+    match v {
+        MixBlendMode::Normal => "normal",
+        MixBlendMode::Multiply => "multiply",
+        MixBlendMode::Screen => "screen",
+        MixBlendMode::Overlay => "overlay",
+        MixBlendMode::Darken => "darken",
+        MixBlendMode::Lighten => "lighten",
+        MixBlendMode::ColorDodge => "color-dodge",
+        MixBlendMode::ColorBurn => "color-burn",
+        MixBlendMode::HardLight => "hard-light",
+        MixBlendMode::SoftLight => "soft-light",
+        MixBlendMode::Difference => "difference",
+        MixBlendMode::Exclusion => "exclusion",
+        MixBlendMode::Hue => "hue",
+        MixBlendMode::Saturation => "saturation",
+        MixBlendMode::Color => "color",
+        MixBlendMode::Luminosity => "luminosity",
+        MixBlendMode::PlusLighter => "plus-lighter",
+    }
+}
+
+fn background_repeat_to_css(r: BackgroundRepeat) -> &'static str {
+    match r {
+        BackgroundRepeat::Repeat => "repeat",
+        BackgroundRepeat::NoRepeat => "no-repeat",
+        BackgroundRepeat::RepeatX => "repeat-x",
+        BackgroundRepeat::RepeatY => "repeat-y",
+        BackgroundRepeat::Round => "round",
+        BackgroundRepeat::Space => "space",
+    }
+}
+
+fn background_attachment_to_css(a: BackgroundAttachment) -> &'static str {
+    match a {
+        BackgroundAttachment::Scroll => "scroll",
+        BackgroundAttachment::Fixed => "fixed",
+        BackgroundAttachment::Local => "local",
+    }
+}
+
+fn background_origin_to_css(o: BackgroundOrigin) -> &'static str {
+    match o {
+        BackgroundOrigin::BorderBox => "border-box",
+        BackgroundOrigin::PaddingBox => "padding-box",
+        BackgroundOrigin::ContentBox => "content-box",
+    }
+}
+
+fn background_clip_to_css(c: BackgroundClip) -> &'static str {
+    match c {
+        BackgroundClip::BorderBox => "border-box",
+        BackgroundClip::PaddingBox => "padding-box",
+        BackgroundClip::ContentBox => "content-box",
+        BackgroundClip::Text => "text",
+    }
+}
+
+fn bg_size_axis_to_css(a: BgSizeAxis) -> String {
+    match a {
+        BgSizeAxis::Auto => "auto".into(),
+        BgSizeAxis::Px(v) => px_str(v),
+        BgSizeAxis::Percent(p) => {
+            let pct = p * 100.0;
+            if pct.fract() == 0.0 { format!("{}%", pct as i64) } else { format!("{}%", pct) }
+        }
+    }
+}
+
+fn background_size_to_css(s: BackgroundSize) -> String {
+    match s {
+        BackgroundSize::Auto => "auto".into(),
+        BackgroundSize::Cover => "cover".into(),
+        BackgroundSize::Contain => "contain".into(),
+        BackgroundSize::Length(w, h) => format!("{} {}", bg_size_axis_to_css(w), bg_size_axis_to_css(h)),
+    }
+}
+
+/// Serialises one keyword-valued per-layer background longhand across every
+/// layer of `style.background_layers`, comma-joined topmost-first — the same
+/// multi-layer serialization order every other background longhand in
+/// [`computed_style_to_map`] uses (`background-image`/`background-position-x/y`).
+/// An empty layer list (no `background-*` declared at all) falls back to the
+/// property's own initial keyword, matching [`background_position_axis_to_css`]'s
+/// empty-layers handling.
+fn background_layer_field_to_css<T: Copy>(
+    layers: &[BackgroundLayer],
+    initial: T,
+    extract: impl Fn(&BackgroundLayer) -> T,
+    to_css: impl Fn(T) -> &'static str,
+) -> String {
+    if layers.is_empty() {
+        return to_css(initial).into();
+    }
+    layers.iter().map(|l| to_css(extract(l)).to_string()).collect::<Vec<_>>().join(", ")
+}
+
+fn fill_rule_to_css(r: FillRule) -> &'static str {
+    match r {
+        FillRule::NonZero => "nonzero",
+        FillRule::EvenOdd => "evenodd",
+    }
+}
+
+fn stroke_linecap_to_css(c: StrokeLinecap) -> &'static str {
+    match c {
+        StrokeLinecap::Butt => "butt",
+        StrokeLinecap::Round => "round",
+        StrokeLinecap::Square => "square",
+    }
+}
+
+fn stroke_linejoin_to_css(j: StrokeLinejoin) -> &'static str {
+    match j {
+        StrokeLinejoin::Miter => "miter",
+        StrokeLinejoin::Round => "round",
+        StrokeLinejoin::Bevel => "bevel",
+    }
+}
+
+/// Serialises an [`SvgPaint`] value. `Url` stores only the bare fragment id
+/// (the leading `#` is stripped at parse time, `style/apply/paint.rs::svg_paint_url_id`),
+/// so it is re-added here to round-trip back to a valid `url(#id)` token.
+fn svg_paint_to_css(p: &SvgPaint) -> String {
+    match p {
+        SvgPaint::None => "none".into(),
+        SvgPaint::CurrentColor => "currentcolor".into(),
+        SvgPaint::Color(c) => color_to_css(*c),
+        SvgPaint::Url(id) => format!("url(#{id})"),
+        // Computed-value serialization for an SVG paint server reference has
+        // no source text to reconstruct from (same "computed, not stored
+        // verbatim" gap as `background_layers_to_css`'s non-Url image variants).
+        SvgPaint::Gradient(_) => "none".into(),
+    }
+}
+
+fn step_position_to_css(p: StepPosition) -> &'static str {
+    match p {
+        StepPosition::JumpStart => "jump-start",
+        StepPosition::JumpEnd => "jump-end",
+        StepPosition::JumpNone => "jump-none",
+        StepPosition::JumpBoth => "jump-both",
+    }
+}
+
+fn timing_function_to_css(f: &TimingFunction) -> String {
+    match f {
+        TimingFunction::Linear => "linear".into(),
+        TimingFunction::CubicBezier(a, b, c, d) => format!("cubic-bezier({a}, {b}, {c}, {d})"),
+        TimingFunction::Steps(n, pos) => format!("steps({n}, {})", step_position_to_css(*pos)),
+        TimingFunction::LinearStops(points) => {
+            let body = points
+                .iter()
+                .map(|p| {
+                    let out = p.output;
+                    if out.fract() == 0.0 { format!("{}", out as i64) } else { format!("{out}") }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("linear({body})")
+        }
+    }
+}
+
+/// Comma-joins a `Vec<TimingFunction>` — `animation-timing-function` and
+/// `transition-timing-function` both cycle a list across the sibling
+/// `animation-name`/`transition-property` list (CSS Animations L1 §4.3,
+/// CSS Transitions L1 §3), so the computed value is always the full list,
+/// never a single function, even for a page that declared just one.
+fn timing_function_list_to_css(v: &[TimingFunction]) -> String {
+    if v.is_empty() {
+        return timing_function_to_css(&TimingFunction::default());
+    }
+    v.iter().map(timing_function_to_css).collect::<Vec<_>>().join(", ")
+}
+
+/// Comma-joins a seconds list (`transition-duration`/`-delay`,
+/// `animation-duration`/`-delay`) as `"<n>s"` tokens.
+fn seconds_list_to_css(v: &[f32]) -> String {
+    if v.is_empty() {
+        return "0s".into();
+    }
+    v.iter()
+        .map(|s| if s.fract() == 0.0 { format!("{}s", *s as i64) } else { format!("{s}s") })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn box_shadow_list_to_css(v: &[BoxShadow]) -> String {
+    if v.is_empty() {
+        return "none".into();
+    }
+    v.iter()
+        .map(|s| {
+            let color = s.color.map_or_else(|| "currentcolor".into(), color_to_css);
+            let mut out = format!(
+                "{} {} {} {} {color}",
+                px_str(s.offset_x), px_str(s.offset_y), px_str(s.blur), px_str(s.spread),
+            );
+            if s.inset {
+                out.push_str(" inset");
+            }
+            out
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn text_shadow_list_to_css(v: &[TextShadow]) -> String {
+    if v.is_empty() {
+        return "none".into();
+    }
+    v.iter()
+        .map(|s| {
+            let color = s.color.map_or_else(|| "currentcolor".into(), color_to_css);
+            format!("{} {} {} {color}", px_str(s.offset_x), px_str(s.offset_y), px_str(s.blur))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Serialises one `content: ...` fragment (CSS Content L3 §3).
+fn content_item_to_css(item: &ContentItem) -> String {
+    match item {
+        ContentItem::String(s) => css_string_literal(s),
+        ContentItem::Attr(name) => format!("attr({name})"),
+        ContentItem::Url(u) => format!("url({})", css_string_literal(u)),
+        ContentItem::Counter { name, style } => match style {
+            Some(s) => format!("counter({name}, {s})"),
+            None => format!("counter({name})"),
+        },
+        ContentItem::Counters { name, separator, style } => match style {
+            Some(s) => format!("counters({name}, {}, {s})", css_string_literal(separator)),
+            None => format!("counters({name}, {})", css_string_literal(separator)),
+        },
+        ContentItem::OpenQuote => "open-quote".into(),
+        ContentItem::CloseQuote => "close-quote".into(),
+        ContentItem::NoOpenQuote => "no-open-quote".into(),
+        ContentItem::NoCloseQuote => "no-close-quote".into(),
+    }
+}
+
+fn content_to_css(c: &Content) -> String {
+    match c {
+        Content::Normal => "normal".into(),
+        Content::None => "none".into(),
+        Content::Items(items) => items.iter().map(content_item_to_css).collect::<Vec<_>>().join(" "),
+    }
+}
+
+fn quotes_to_css(q: &Quotes) -> String {
+    match q {
+        Quotes::Auto => "auto".into(),
+        Quotes::None => "none".into(),
+        Quotes::Pairs(pairs) => pairs
+            .iter()
+            .flat_map(|(open, close)| [css_string_literal(open), css_string_literal(close)])
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
 /// Serialises the three properties [`crate::INLINE_SEGMENT_PROPERTIES`] names,
 /// in the same string form [`computed_style_to_map`] uses for them.
 ///
@@ -1013,25 +1290,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     });
 
     // ── Compositing ───────────────────────────────────────────────
-    m.insert("mix-blend-mode".into(), match style.mix_blend_mode {
-        MixBlendMode::Normal => "normal",
-        MixBlendMode::Multiply => "multiply",
-        MixBlendMode::Screen => "screen",
-        MixBlendMode::Overlay => "overlay",
-        MixBlendMode::Darken => "darken",
-        MixBlendMode::Lighten => "lighten",
-        MixBlendMode::ColorDodge => "color-dodge",
-        MixBlendMode::ColorBurn => "color-burn",
-        MixBlendMode::HardLight => "hard-light",
-        MixBlendMode::SoftLight => "soft-light",
-        MixBlendMode::Difference => "difference",
-        MixBlendMode::Exclusion => "exclusion",
-        MixBlendMode::Hue => "hue",
-        MixBlendMode::Saturation => "saturation",
-        MixBlendMode::Color => "color",
-        MixBlendMode::Luminosity => "luminosity",
-        MixBlendMode::PlusLighter => "plus-lighter",
-    }.into());
+    m.insert("mix-blend-mode".into(), mix_blend_mode_to_css(style.mix_blend_mode).into());
     m.insert("isolation".into(), match style.isolation {
         Isolation::Auto => "auto",
         Isolation::Isolate => "isolate",
@@ -1114,6 +1373,203 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
              if cis_w == cis_h { cis_w.clone() } else { format!("{cis_w} {cis_h}") });
     m.insert("contain-intrinsic-width".into(), cis_w);
     m.insert("contain-intrinsic-height".into(), cis_h);
+
+    // ── Border shorthands (CSSOM-3 срез 1) ──────────────────────────
+    // `border-width`/`border-style` mirror `border-color` above: a shorthand
+    // resolves only when all four sides agree, otherwise `""` — matches real
+    // UA `getPropertyValue` behaviour on a per-side-differing shorthand.
+    m.insert("border-width".into(), {
+        let (t, r, b, l) = (
+            px_str(style.border_top_width), px_str(style.border_right_width),
+            px_str(style.border_bottom_width), px_str(style.border_left_width),
+        );
+        if t == r && r == b && b == l { t } else { String::new() }
+    });
+    m.insert("border-style".into(), {
+        let (t, r, b, l) = (
+            border_style_to_css(style.border_top_style), border_style_to_css(style.border_right_style),
+            border_style_to_css(style.border_bottom_style), border_style_to_css(style.border_left_style),
+        );
+        if t == r && r == b && b == l { t.to_string() } else { String::new() }
+    });
+
+    // ── Background per-layer longhands (CSS Backgrounds L3 §3.5-3.8) ────
+    m.insert("background-attachment".into(), background_layer_field_to_css(
+        &style.background_layers, BackgroundAttachment::default(), |l| l.attachment, background_attachment_to_css,
+    ));
+    m.insert("background-origin".into(), background_layer_field_to_css(
+        &style.background_layers, BackgroundOrigin::default(), |l| l.origin, background_origin_to_css,
+    ));
+    m.insert("background-clip".into(), background_layer_field_to_css(
+        &style.background_layers, BackgroundClip::default(), |l| l.clip, background_clip_to_css,
+    ));
+    m.insert("background-repeat".into(), background_layer_field_to_css(
+        &style.background_layers, BackgroundRepeat::default(), |l| l.repeat, background_repeat_to_css,
+    ));
+    m.insert("background-size".into(), if style.background_layers.is_empty() {
+        background_size_to_css(BackgroundSize::default())
+    } else {
+        style.background_layers.iter().map(|l| background_size_to_css(l.size)).collect::<Vec<_>>().join(", ")
+    });
+    // CSS Compositing L1 §3 — per-layer, unlike top-level `mix-blend-mode`
+    // (compositing of the element as a whole against its backdrop).
+    m.insert("background-blend-mode".into(), background_layer_field_to_css(
+        &style.background_layers, MixBlendMode::Normal, |l| l.blend_mode, mix_blend_mode_to_css,
+    ));
+
+    // ── Shadows (CSS Backgrounds L3 §7.1, CSS Text Decoration L3 §2.5) ──
+    m.insert("box-shadow".into(), box_shadow_list_to_css(&style.box_shadow));
+    m.insert("text-shadow".into(), text_shadow_list_to_css(&style.text_shadow));
+
+    // ── Perspective ──────────────────────────────────────────────────
+    m.insert("perspective-origin".into(), format!(
+        "{} {}",
+        position_component_to_css(style.perspective_origin.0),
+        position_component_to_css(style.perspective_origin.1),
+    ));
+
+    // ── Transitions / animations (CSS Transitions L1 §3, CSS Animations L1 §4.3) ─
+    m.insert("transition-duration".into(), seconds_list_to_css(&style.transition_durations));
+    m.insert("transition-delay".into(), seconds_list_to_css(&style.transition_delays));
+    m.insert("transition-timing-function".into(), timing_function_list_to_css(&style.transition_timing_functions));
+    m.insert("transition-property".into(), if style.transition_properties.is_empty() {
+        "all".into()
+    } else {
+        style.transition_properties.join(", ")
+    });
+    m.insert("animation-duration".into(), seconds_list_to_css(&style.animation_durations));
+    m.insert("animation-delay".into(), seconds_list_to_css(&style.animation_delays));
+    m.insert("animation-timing-function".into(), timing_function_list_to_css(&style.animation_timing_functions));
+    m.insert("animation-name".into(), if style.animation_names.is_empty() {
+        "none".into()
+    } else {
+        style.animation_names.join(", ")
+    });
+    m.insert("animation-iteration-count".into(), {
+        let counts = if style.animation_iteration_counts.is_empty() {
+            vec![IterationCount::default()]
+        } else {
+            style.animation_iteration_counts.clone()
+        };
+        counts.iter().map(|c| match c {
+            IterationCount::Infinite => "infinite".to_string(),
+            IterationCount::Finite(n) => if n.fract() == 0.0 { format!("{}", *n as i64) } else { format!("{n}") },
+        }).collect::<Vec<_>>().join(", ")
+    });
+    m.insert("animation-direction".into(), {
+        let dirs = if style.animation_directions.is_empty() {
+            vec![AnimationDirection::default()]
+        } else {
+            style.animation_directions.clone()
+        };
+        dirs.iter().map(|d| match d {
+            AnimationDirection::Normal => "normal",
+            AnimationDirection::Reverse => "reverse",
+            AnimationDirection::Alternate => "alternate",
+            AnimationDirection::AlternateReverse => "alternate-reverse",
+        }).collect::<Vec<_>>().join(", ")
+    });
+    m.insert("animation-fill-mode".into(), {
+        let modes = if style.animation_fill_modes.is_empty() {
+            vec![AnimationFillMode::default()]
+        } else {
+            style.animation_fill_modes.clone()
+        };
+        modes.iter().map(|f| match f {
+            AnimationFillMode::None => "none",
+            AnimationFillMode::Forwards => "forwards",
+            AnimationFillMode::Backwards => "backwards",
+            AnimationFillMode::Both => "both",
+        }).collect::<Vec<_>>().join(", ")
+    });
+    m.insert("animation-play-state".into(), {
+        let states = if style.animation_play_states.is_empty() {
+            vec![AnimationPlayState::default()]
+        } else {
+            style.animation_play_states.clone()
+        };
+        states.iter().map(|s| match s {
+            AnimationPlayState::Running => "running",
+            AnimationPlayState::Paused => "paused",
+        }).collect::<Vec<_>>().join(", ")
+    });
+
+    // ── Overscroll behaviour (CSS Overscroll Behavior §3) ───────────
+    m.insert("overscroll-behavior-x".into(), match style.overscroll_behavior_x {
+        OverscrollBehavior::Auto => "auto",
+        OverscrollBehavior::Contain => "contain",
+        OverscrollBehavior::None => "none",
+    }.into());
+    m.insert("overscroll-behavior-y".into(), match style.overscroll_behavior_y {
+        OverscrollBehavior::Auto => "auto",
+        OverscrollBehavior::Contain => "contain",
+        OverscrollBehavior::None => "none",
+    }.into());
+
+    // ── Color adjustment (CSS Color Adjustment L1) ──────────────────
+    m.insert("color-scheme".into(), match style.color_scheme {
+        ColorScheme::Normal => "normal",
+        ColorScheme::Light => "light",
+        ColorScheme::Dark => "dark",
+        ColorScheme::LightDark => "light dark",
+        ColorScheme::DarkLight => "dark light",
+        ColorScheme::OnlyLight => "only light",
+        ColorScheme::OnlyDark => "only dark",
+    }.into());
+    m.insert("forced-color-adjust".into(), match style.forced_color_adjust {
+        ForcedColorAdjust::Auto => "auto",
+        ForcedColorAdjust::None => "none",
+        ForcedColorAdjust::PreserveParentColor => "preserve-parent-color",
+    }.into());
+    m.insert("print-color-adjust".into(), match style.print_color_adjust {
+        PrintColorAdjust::Economy => "economy",
+        PrintColorAdjust::Exact => "exact",
+    }.into());
+
+    // ── SVG paint properties (SVG2 §11) ──────────────────────────────
+    m.insert("fill".into(), svg_paint_to_css(&style.svg_fill));
+    m.insert("fill-opacity".into(), format!("{}", style.svg_fill_opacity));
+    m.insert("fill-rule".into(), fill_rule_to_css(style.svg_fill_rule).into());
+    m.insert("stroke".into(), svg_paint_to_css(&style.svg_stroke));
+    m.insert("stroke-opacity".into(), format!("{}", style.svg_stroke_opacity));
+    m.insert("stroke-width".into(), px_str(style.svg_stroke_width));
+    m.insert("stroke-linecap".into(), stroke_linecap_to_css(style.svg_stroke_linecap).into());
+    m.insert("stroke-linejoin".into(), stroke_linejoin_to_css(style.svg_stroke_linejoin).into());
+    m.insert("stroke-miterlimit".into(), format!("{}", style.svg_stroke_miterlimit));
+    m.insert("stroke-dashoffset".into(), px_str(style.svg_stroke_dashoffset));
+    m.insert("stroke-dasharray".into(), if style.svg_stroke_dasharray.is_empty() {
+        "none".into()
+    } else {
+        style.svg_stroke_dasharray.iter().map(|v| px_str(*v)).collect::<Vec<_>>().join(", ")
+    });
+
+    // ── Generated content (CSS Generated Content L3) ────────────────
+    m.insert("content".into(), content_to_css(&style.content));
+    m.insert("quotes".into(), quotes_to_css(&style.quotes));
+
+    // ── Scrollbars (CSS Scrollbars L1 §2) ────────────────────────────
+    m.insert("scrollbar-width".into(), match style.scrollbar_width {
+        ScrollbarWidth::Auto => "auto",
+        ScrollbarWidth::Thin => "thin",
+        ScrollbarWidth::None => "none",
+    }.into());
+
+    // ── Ruby (CSS Ruby L1 §4-6) ───────────────────────────────────────
+    m.insert("ruby-position".into(), match style.ruby_position {
+        RubyPosition::Over => "over",
+        RubyPosition::Under => "under",
+    }.into());
+    m.insert("ruby-align".into(), match style.ruby_align {
+        RubyAlign::Start => "start",
+        RubyAlign::Center => "center",
+        RubyAlign::SpaceBetween => "space-between",
+        RubyAlign::SpaceAround => "space-around",
+    }.into());
+    m.insert("ruby-merge".into(), match style.ruby_merge {
+        RubyMerge::Separate => "separate",
+        RubyMerge::Merge => "merge",
+        RubyMerge::Auto => "auto",
+    }.into());
 
     m
 }
@@ -1745,6 +2201,178 @@ mod tests {
         let m = div_computed_map("<div>x</div>", "div { contain-intrinsic-height: 80px; }");
         assert_eq!(m.get("contain-intrinsic-width").map(String::as_str), Some("none"));
         assert_eq!(m.get("contain-intrinsic-size").map(String::as_str), Some("none 80px"));
+    }
+
+    // ──────────────── CSSOM-3 срез 1: extended computed-style coverage ────────────────
+
+    #[test]
+    fn computed_map_border_width_style_shorthands() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { border-width: 2px; border-style: dashed; }",
+        );
+        assert_eq!(m.get("border-width").map(String::as_str), Some("2px"));
+        assert_eq!(m.get("border-style").map(String::as_str), Some("dashed"));
+
+        // Differing per-side values → shorthand resolves to "", matching
+        // border-color's already-established behaviour above.
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { border-top-width: 1px; border-right-width: 2px; border-bottom-width: 3px; border-left-width: 4px; }",
+        );
+        assert_eq!(m.get("border-width").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn computed_map_background_per_layer_longhands() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { background-attachment: fixed; background-origin: content-box; \
+             background-clip: padding-box; background-repeat: repeat-x; \
+             background-size: 50% 10px; background-blend-mode: multiply; }",
+        );
+        assert_eq!(m.get("background-attachment").map(String::as_str), Some("fixed"));
+        assert_eq!(m.get("background-origin").map(String::as_str), Some("content-box"));
+        assert_eq!(m.get("background-clip").map(String::as_str), Some("padding-box"));
+        assert_eq!(m.get("background-repeat").map(String::as_str), Some("repeat-x"));
+        assert_eq!(m.get("background-size").map(String::as_str), Some("50% 10px"));
+        assert_eq!(m.get("background-blend-mode").map(String::as_str), Some("multiply"));
+    }
+
+    #[test]
+    fn computed_map_background_per_layer_longhands_default_without_layers() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("background-attachment").map(String::as_str), Some("scroll"));
+        assert_eq!(m.get("background-origin").map(String::as_str), Some("padding-box"));
+        assert_eq!(m.get("background-clip").map(String::as_str), Some("border-box"));
+        assert_eq!(m.get("background-repeat").map(String::as_str), Some("repeat"));
+        assert_eq!(m.get("background-size").map(String::as_str), Some("auto"));
+        assert_eq!(m.get("background-blend-mode").map(String::as_str), Some("normal"));
+    }
+
+    #[test]
+    fn computed_map_box_shadow_and_text_shadow() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { box-shadow: 1px 2px 3px 4px red inset; text-shadow: 5px 6px 7px blue; }",
+        );
+        assert_eq!(
+            m.get("box-shadow").map(String::as_str),
+            Some("1px 2px 3px 4px rgb(255, 0, 0) inset"),
+        );
+        assert_eq!(
+            m.get("text-shadow").map(String::as_str),
+            Some("5px 6px 7px rgb(0, 0, 255)"),
+        );
+
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("box-shadow").map(String::as_str), Some("none"));
+        assert_eq!(m.get("text-shadow").map(String::as_str), Some("none"));
+    }
+
+    #[test]
+    fn computed_map_transition_and_animation_lists() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { transition-duration: 1s, 200ms; transition-timing-function: linear, ease; \
+             animation-duration: 2s; animation-timing-function: steps(4, jump-end); \
+             animation-iteration-count: infinite; animation-direction: alternate; \
+             animation-fill-mode: both; animation-play-state: paused; }",
+        );
+        assert_eq!(m.get("transition-duration").map(String::as_str), Some("1s, 0.2s"));
+        assert_eq!(
+            m.get("transition-timing-function").map(String::as_str),
+            Some("linear, cubic-bezier(0.25, 0.1, 0.25, 1)"),
+        );
+        assert_eq!(m.get("animation-duration").map(String::as_str), Some("2s"));
+        assert_eq!(
+            m.get("animation-timing-function").map(String::as_str),
+            Some("steps(4, jump-end)"),
+        );
+        assert_eq!(m.get("animation-iteration-count").map(String::as_str), Some("infinite"));
+        assert_eq!(m.get("animation-direction").map(String::as_str), Some("alternate"));
+        assert_eq!(m.get("animation-fill-mode").map(String::as_str), Some("both"));
+        assert_eq!(m.get("animation-play-state").map(String::as_str), Some("paused"));
+    }
+
+    #[test]
+    fn computed_map_transition_defaults_without_declaration() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("transition-duration").map(String::as_str), Some("0s"));
+        assert_eq!(m.get("transition-property").map(String::as_str), Some("all"));
+        assert_eq!(m.get("animation-name").map(String::as_str), Some("none"));
+        assert_eq!(m.get("animation-iteration-count").map(String::as_str), Some("1"));
+        assert_eq!(m.get("animation-play-state").map(String::as_str), Some("running"));
+    }
+
+    #[test]
+    fn computed_map_overscroll_behavior() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { overscroll-behavior-x: contain; overscroll-behavior-y: none; }",
+        );
+        assert_eq!(m.get("overscroll-behavior-x").map(String::as_str), Some("contain"));
+        assert_eq!(m.get("overscroll-behavior-y").map(String::as_str), Some("none"));
+    }
+
+    #[test]
+    fn computed_map_color_scheme_family() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { color-scheme: light dark; forced-color-adjust: none; print-color-adjust: exact; }",
+        );
+        assert_eq!(m.get("color-scheme").map(String::as_str), Some("light dark"));
+        assert_eq!(m.get("forced-color-adjust").map(String::as_str), Some("none"));
+        assert_eq!(m.get("print-color-adjust").map(String::as_str), Some("exact"));
+    }
+
+    #[test]
+    fn computed_map_svg_paint_properties() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { fill: none; stroke: url(#grad); stroke-width: 3px; fill-rule: evenodd; \
+             stroke-linecap: round; stroke-linejoin: bevel; stroke-dasharray: 1px 2px; }",
+        );
+        assert_eq!(m.get("fill").map(String::as_str), Some("none"));
+        assert_eq!(m.get("stroke").map(String::as_str), Some("url(#grad)"));
+        assert_eq!(m.get("stroke-width").map(String::as_str), Some("3px"));
+        assert_eq!(m.get("fill-rule").map(String::as_str), Some("evenodd"));
+        assert_eq!(m.get("stroke-linecap").map(String::as_str), Some("round"));
+        assert_eq!(m.get("stroke-linejoin").map(String::as_str), Some("bevel"));
+        assert_eq!(m.get("stroke-dasharray").map(String::as_str), Some("1px, 2px"));
+    }
+
+    #[test]
+    fn computed_map_content_and_quotes() {
+        // `attr(data-x)` is deliberately not exercised here: `content`'s
+        // `attr()` (a bare string substitution, CSS2.1 §12.2) shares a name
+        // with the newer typed `attr()` substitution `cascade.rs` expands
+        // pre-`apply_declaration` (CSS Values L4 §7.7) — that pre-pass drops
+        // the whole declaration when the referenced attribute is absent,
+        // which is a distinct, pre-existing gap from the map coverage this
+        // test targets.
+        let m = div_computed_map(
+            "<div>x</div>",
+            r#"div { content: "a" counter(x); quotes: "«" "»"; }"#,
+        );
+        assert_eq!(m.get("content").map(String::as_str), Some(r#""a" counter(x)"#));
+        assert_eq!(m.get("quotes").map(String::as_str), Some(r#""«" "»""#));
+
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("content").map(String::as_str), Some("normal"));
+        assert_eq!(m.get("quotes").map(String::as_str), Some("auto"));
+    }
+
+    #[test]
+    fn computed_map_scrollbar_width_and_ruby() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { scrollbar-width: thin; ruby-position: under; ruby-align: center; ruby-merge: merge; }",
+        );
+        assert_eq!(m.get("scrollbar-width").map(String::as_str), Some("thin"));
+        assert_eq!(m.get("ruby-position").map(String::as_str), Some("under"));
+        assert_eq!(m.get("ruby-align").map(String::as_str), Some("center"));
+        assert_eq!(m.get("ruby-merge").map(String::as_str), Some("merge"));
     }
 
     #[test]
