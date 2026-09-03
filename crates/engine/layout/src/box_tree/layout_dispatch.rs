@@ -131,20 +131,50 @@ fn lay_out_cache_checked(
         let touched_here = CV_AUTO_TOUCHED.with(|c| c.get());
         CV_AUTO_TOUCHED.with(|c| c.set(outer_touched || touched_here));
         if !touched_here {
-            LAYOUT_RESULT_CACHE.with(|c| {
-                c.borrow_mut().insert(
-                    key,
-                    LayoutResultEntry {
-                        style: Arc::clone(&b.style),
-                        start_x,
-                        start_y,
-                        result: b.clone(),
-                    },
-                );
-            });
+            // BUG-341 S38: `Eager` always materializes (S36's original
+            // policy); `Lazy` defers the subtree clone until a key's second
+            // sighting confirms style-stability, per `LayoutResultCacheMode`'s
+            // doc comment — the clone S37 measured at ~1.7μs/node is wasted
+            // on the ~9% of keys this fixture's own census found never
+            // recur at all.
+            let deferred = match layout_result_cache_mode() {
+                LayoutResultCacheMode::Lazy => {
+                    let confirmed_repeat = LAYOUT_RESULT_CACHE_SEEN.with(|c| {
+                        c.borrow().get(&key).map(|prev_style| Arc::ptr_eq(prev_style, &b.style)).unwrap_or(false)
+                    });
+                    if confirmed_repeat {
+                        LAYOUT_RESULT_CACHE_SEEN.with(|c| {
+                            c.borrow_mut().remove(&key);
+                        });
+                        false
+                    } else {
+                        LAYOUT_RESULT_CACHE_SEEN.with(|c| {
+                            c.borrow_mut().insert(key, Arc::clone(&b.style));
+                        });
+                        true
+                    }
+                }
+                LayoutResultCacheMode::Eager | LayoutResultCacheMode::Off => false,
+            };
+            if !deferred {
+                LAYOUT_RESULT_CACHE.with(|c| {
+                    c.borrow_mut().insert(
+                        key,
+                        LayoutResultEntry {
+                            style: Arc::clone(&b.style),
+                            start_x,
+                            start_y,
+                            result: b.clone(),
+                        },
+                    );
+                });
+            }
             LAYOUT_RESULT_CACHE_STATS.with(|c| {
                 let mut v = c.get();
                 v.misses += 1;
+                if deferred {
+                    v.deferred += 1;
+                }
                 c.set(v);
             });
         } else {

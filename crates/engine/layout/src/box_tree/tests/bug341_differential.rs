@@ -817,10 +817,23 @@ fn box_build_text_mutation_reuses_everything_but_the_mutated_chain() {
 // comment). Mirrors S32's own five differential tests, plus one new test
 // for the override-collision hazard S36 exists to close.
 
-/// Lays out `html`/`css` once with the cache enabled and once with it off;
-/// asserts every box's rect matches within 0.5px and returns the cache
-/// stats from the cached run.
+/// Lays out `html`/`css` once with the `Eager` cache enabled and once with
+/// it off; asserts every box's rect matches within 0.5px and returns the
+/// cache stats from the cached run. See [`cached_vs_uncached_geometry_lazy`]
+/// for the BUG-341 S38 `Lazy`-mode sibling.
 fn cached_vs_uncached_geometry(html: &str, css: &str, vp: Size) -> super::super::LayoutResultCacheStats {
+    cached_vs_uncached_geometry_mode(html, css, vp, false)
+}
+
+/// BUG-341 S38 — same as [`cached_vs_uncached_geometry`] but with the
+/// `Lazy` insertion policy instead of `Eager`. Geometry must be identical
+/// either way: `Lazy` only changes *when* a hit becomes available, never
+/// what a hit or a miss computes.
+fn cached_vs_uncached_geometry_lazy(html: &str, css: &str, vp: Size) -> super::super::LayoutResultCacheStats {
+    cached_vs_uncached_geometry_mode(html, css, vp, true)
+}
+
+fn cached_vs_uncached_geometry_mode(html: &str, css: &str, vp: Size, lazy: bool) -> super::super::LayoutResultCacheStats {
     use lumen_dom::build_flat_tree;
     use crate::counters::{build_counter_style_registry, precompute_counters};
     use crate::style::ComputedStyle;
@@ -841,10 +854,18 @@ fn cached_vs_uncached_geometry(html: &str, css: &str, vp: Size) -> super::super:
     let mut cached = super::super::build_box(
         &doc, &sheet, doc.root(), &root_style, vp, &flat, &counters, &registry, false, None,
     );
-    super::super::set_layout_result_cache(true);
+    if lazy {
+        super::super::set_layout_result_cache_lazy(true);
+    } else {
+        super::super::set_layout_result_cache(true);
+    }
     super::super::lay_out(&mut cached, 0.0, 0.0, vp.width, Some(vp.height), None, vp, init_pcb, &null_hp, false);
     let stats = super::super::take_layout_result_cache_stats();
-    super::super::set_layout_result_cache(false);
+    if lazy {
+        super::super::set_layout_result_cache_lazy(false);
+    } else {
+        super::super::set_layout_result_cache(false);
+    }
 
     fn collect_rects(b: &super::super::LayoutBox, out: &mut Vec<(lumen_dom::NodeId, super::super::Rect)>) {
         out.push((b.node, b.rect));
@@ -954,7 +975,7 @@ fn layout_result_cache_hits_on_verbatim_repeat_call() {
     let stats = super::super::take_layout_result_cache_stats();
     super::super::set_layout_result_cache(false);
 
-    assert_eq!(stats, super::super::LayoutResultCacheStats { hits: 1, misses: 1, poisoned: 0 });
+    assert_eq!(stats, super::super::LayoutResultCacheStats { hits: 1, misses: 1, poisoned: 0, deferred: 0 });
     assert!(
         (div.rect.x - baseline_div.rect.x).abs() < 0.5
             && (div.rect.y - baseline_div.rect.y).abs() < 0.5
@@ -1091,6 +1112,218 @@ fn layout_result_cache_key_distinguishes_used_size_override_from_plain_probe() {
         "the used-size override must actually apply, not fall through to the probe's cached \
          un-overridden width — got {:?}",
         item.rect,
+    );
+}
+
+// ── BUG-341 S38: `Lazy` layout-result cache differential tests ─────────────
+//
+// S37 found the per-miss fixed cost is ~99% one thing (the subtree clone,
+// ~1.7μs/node — key construction and the `HashMap` lookup are both noise by
+// comparison), and that most misses were never read back. `Lazy` defers
+// that clone to a key's *confirmed* second sighting instead of paying it on
+// every miss like `Eager` (S36). Correctness tests below prove the deferral
+// itself is sound — first-sighting misses stay deferred (no clone), a
+// confirmed second sighting materializes, and a third+ sighting then hits —
+// plus the one negative case S33 warned about (a key that repeats exactly
+// twice gets zero hits under this policy, by design, not by accident).
+
+#[test]
+fn layout_result_cache_lazy_matches_uncached_on_nested_column_flex() {
+    let html = r#"<div class="outer"><div class="mid"><div class="inner">
+            some reasonably long text content so intrinsic sizing has real work to do
+        </div></div></div>"#;
+    let css = r#"
+            .outer { display: flex; flex-direction: column; width: 400px; }
+            .mid { display: flex; flex-direction: column; }
+            .inner { display: flex; flex-direction: column; }
+        "#;
+    let stats = cached_vs_uncached_geometry_lazy(html, css, Size::new(800.0, 600.0));
+    assert_eq!(stats.poisoned, 0, "no content-visibility:auto in this fixture, should never poison");
+}
+
+#[test]
+fn layout_result_cache_lazy_matches_uncached_when_style_mutates_between_calls() {
+    let html = r#"<div class="row"><div class="item">hello there</div></div>"#;
+    let css = r#"
+            .row { display: flex; width: 400px; }
+            .item { flex-basis: auto; width: 120px; }
+        "#;
+    let stats = cached_vs_uncached_geometry_lazy(html, css, Size::new(800.0, 600.0));
+    assert_eq!(stats.poisoned, 0, "no content-visibility:auto in this fixture, should never poison");
+}
+
+#[test]
+fn layout_result_cache_lazy_refuses_to_cache_a_content_visibility_auto_subtree() {
+    crate::content_visibility::set_cv_scroll(0.0, 0.0);
+    crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+    let html = r#"<div class="outer"><div class="cv">short text</div></div>"#;
+    let css = r#"
+            .outer { display: flex; flex-direction: column; width: 400px; }
+            .cv { content-visibility: auto; }
+        "#;
+    let stats = cached_vs_uncached_geometry_lazy(html, css, Size::new(800.0, 600.0));
+    assert_eq!(stats.hits, 0, "a content-visibility:auto subtree must never be served from cache");
+    assert!(stats.poisoned > 0, "the .cv node's own call must be recorded as poisoned, not silently cached");
+    crate::content_visibility::take_cv_skipped();
+}
+
+/// BUG-341 S38's central mechanism test: three back-to-back calls on the
+/// same box with unchanged style/constraints. The first sighting must
+/// record a marker without cloning (`deferred == 1`), the second must
+/// confirm the repeat and materialize (a real clone, `deferred` stays at 1
+/// not 2), and only the third may actually hit.
+#[test]
+fn layout_result_cache_lazy_defers_first_sighting_and_hits_from_third_call() {
+    use crate::counters::{build_counter_style_registry, precompute_counters};
+    use crate::style::ComputedStyle;
+    use lumen_dom::build_flat_tree;
+
+    let html = "<div>hello there</div>";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse("div { width: 200px; }");
+    let flat = build_flat_tree(&doc);
+    let root_style = ComputedStyle::root();
+    let vp = Size::new(800.0, 600.0);
+    let counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+    let registry = build_counter_style_registry(&sheet);
+    let null_hp = lumen_core::ext::NullHyphenationProvider;
+    let init_pcb = super::super::Rect::new(0.0, 0.0, vp.width, vp.height);
+
+    let mut tree = super::super::build_box(
+        &doc, &sheet, doc.root(), &root_style, vp, &flat, &counters, &registry, false, None,
+    );
+    let div = tree.children.last_mut().expect("html > body > div");
+    let div = div.children.last_mut().expect("body > div");
+
+    let mut baseline_tree = super::super::build_box(
+        &doc, &sheet, doc.root(), &root_style, vp, &flat, &counters, &registry, false, None,
+    );
+    let baseline_div = baseline_tree.children.last_mut().expect("html > body > div");
+    let baseline_div = baseline_div.children.last_mut().expect("body > div");
+    super::super::lay_out(baseline_div, 60.0, 70.0, 200.0, None, None, vp, init_pcb, &null_hp, false);
+
+    super::super::set_layout_result_cache_lazy(true);
+    super::super::lay_out(div, 0.0, 0.0, 200.0, None, None, vp, init_pcb, &null_hp, false);
+    super::super::lay_out(div, 30.0, 40.0, 200.0, None, None, vp, init_pcb, &null_hp, false);
+    super::super::lay_out(div, 60.0, 70.0, 200.0, None, None, vp, init_pcb, &null_hp, false);
+    let stats = super::super::take_layout_result_cache_stats();
+    super::super::set_layout_result_cache_lazy(false);
+
+    assert_eq!(
+        stats,
+        super::super::LayoutResultCacheStats { hits: 1, misses: 2, poisoned: 0, deferred: 1 },
+        "call 1 must defer (marker only, no clone), call 2 must confirm-and-materialize \
+         (a real miss, not deferred), call 3 must hit — got {stats:?}",
+    );
+    assert!(
+        (div.rect.x - baseline_div.rect.x).abs() < 0.5
+            && (div.rect.y - baseline_div.rect.y).abs() < 0.5
+            && (div.rect.width - baseline_div.rect.width).abs() < 0.5
+            && (div.rect.height - baseline_div.rect.height).abs() < 0.5,
+        "the third call's hit must translate the cached subtree to match an uncached call at \
+         the same origin: cached {:?} vs baseline {:?}",
+        div.rect, baseline_div.rect,
+    );
+}
+
+/// BUG-341 S38's known, deliberate trade-off (S33's original warning,
+/// checked against this mechanism directly rather than assumed): a key seen
+/// exactly twice never hits under `Lazy`, because the clone that would have
+/// served a second-call hit is exactly what this policy defers. This is not
+/// a regression — S38's own census (`docs/perf-method.md`) found this
+/// fixture's real repeat shape is dominated by 3+-occurrence keys (86.3%),
+/// not exactly-twice ones (4.4%), which is why the trade-off is taken here
+/// even though S33 rejected it for a different target where the shape was
+/// reversed.
+#[test]
+fn layout_result_cache_lazy_never_hits_on_exactly_two_occurrences() {
+    use crate::counters::{build_counter_style_registry, precompute_counters};
+    use crate::style::ComputedStyle;
+    use lumen_dom::build_flat_tree;
+
+    let html = "<div>hello there</div>";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse("div { width: 200px; }");
+    let flat = build_flat_tree(&doc);
+    let root_style = ComputedStyle::root();
+    let vp = Size::new(800.0, 600.0);
+    let counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+    let registry = build_counter_style_registry(&sheet);
+    let null_hp = lumen_core::ext::NullHyphenationProvider;
+    let init_pcb = super::super::Rect::new(0.0, 0.0, vp.width, vp.height);
+
+    let mut tree = super::super::build_box(
+        &doc, &sheet, doc.root(), &root_style, vp, &flat, &counters, &registry, false, None,
+    );
+    let div = tree.children.last_mut().expect("html > body > div");
+    let div = div.children.last_mut().expect("body > div");
+
+    super::super::set_layout_result_cache_lazy(true);
+    super::super::lay_out(div, 0.0, 0.0, 200.0, None, None, vp, init_pcb, &null_hp, false);
+    super::super::lay_out(div, 30.0, 40.0, 200.0, None, None, vp, init_pcb, &null_hp, false);
+    let stats = super::super::take_layout_result_cache_stats();
+    super::super::set_layout_result_cache_lazy(false);
+
+    assert_eq!(
+        stats,
+        super::super::LayoutResultCacheStats { hits: 0, misses: 2, poisoned: 0, deferred: 1 },
+        "exactly two occurrences must produce zero hits under Lazy — the second call \
+         confirms-and-materializes but there is no third call left to serve — got {stats:?}",
+    );
+}
+
+/// BUG-341 S38 — a first sighting's marker must not survive a style change:
+/// if the second sighting's style differs from the first (by `Arc`
+/// identity, the same correctness check `Eager`'s hit path already uses),
+/// that is a fresh streak, not a confirmed repeat, so it must defer again
+/// (not materialize) rather than caching a result under a marker recorded
+/// for a different style. Four calls: style A (defer), style B — a new
+/// `Arc` with identical field values, so only pointer identity distinguishes
+/// it (defer again, streak reset), style B again (confirm, materialize),
+/// style B again (hit).
+#[test]
+fn layout_result_cache_lazy_resets_the_streak_when_style_changes_between_sightings() {
+    use crate::counters::{build_counter_style_registry, precompute_counters};
+    use crate::style::ComputedStyle;
+    use lumen_dom::build_flat_tree;
+    use std::sync::Arc;
+
+    let html = "<div>hello there</div>";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse("div { width: 200px; }");
+    let flat = build_flat_tree(&doc);
+    let root_style = ComputedStyle::root();
+    let vp = Size::new(800.0, 600.0);
+    let counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+    let registry = build_counter_style_registry(&sheet);
+    let null_hp = lumen_core::ext::NullHyphenationProvider;
+    let init_pcb = super::super::Rect::new(0.0, 0.0, vp.width, vp.height);
+
+    let mut tree = super::super::build_box(
+        &doc, &sheet, doc.root(), &root_style, vp, &flat, &counters, &registry, false, None,
+    );
+    let div = tree.children.last_mut().expect("html > body > div");
+    let div = div.children.last_mut().expect("body > div");
+
+    super::super::set_layout_result_cache_lazy(true);
+    super::super::lay_out(div, 0.0, 0.0, 200.0, None, None, vp, init_pcb, &null_hp, false);
+    // A new `Arc` wrapping an identical value: distinct only by pointer
+    // identity, the same shape `SavedItemSizing`'s old `Arc::make_mut` dance
+    // produced (S31's original finding) and the exact thing the marker's
+    // `ptr_eq` check exists to reject.
+    div.style = Arc::new((*div.style).clone());
+    super::super::lay_out(div, 0.0, 0.0, 200.0, None, None, vp, init_pcb, &null_hp, false);
+    super::super::lay_out(div, 0.0, 0.0, 200.0, None, None, vp, init_pcb, &null_hp, false);
+    super::super::lay_out(div, 0.0, 0.0, 200.0, None, None, vp, init_pcb, &null_hp, false);
+    let stats = super::super::take_layout_result_cache_stats();
+    super::super::set_layout_result_cache_lazy(false);
+
+    assert_eq!(
+        stats,
+        super::super::LayoutResultCacheStats { hits: 1, misses: 3, poisoned: 0, deferred: 2 },
+        "call 1 (style A) defers, call 2 (style B, new Arc) must reset the streak and defer \
+         again rather than materialize under A's marker, call 3 (style B) confirms and \
+         materializes, call 4 (style B) hits — got {stats:?}",
     );
 }
 

@@ -56,6 +56,22 @@ pub struct LayoutKeyCensus {
     /// asked for: the fraction of same-style repeats that are *also* safe by
     /// this additional check, before any cache mechanism is written.
     pub repeat_key_same_style_and_override: u32,
+    /// BUG-341 S38 — distinct keys seen exactly once this pass (no repeat at
+    /// all, so a deferred-insertion cache would never clone or store them).
+    pub keys_seen_once: u32,
+    /// BUG-341 S38 — distinct keys seen exactly twice this pass. S33 found
+    /// the CSS-Grid-specific hit case was always exactly this shape, which is
+    /// why "clone only on the second sighting, serve on the third" would have
+    /// zeroed that case's only hit. This field is the same question asked of
+    /// the flex-item redundancy this census's fixture actually exercises,
+    /// per `docs/perf-method.md`'s standing rule not to let a repeat-shape
+    /// finding from one target transfer unchecked to another.
+    pub keys_seen_twice: u32,
+    /// BUG-341 S38 — distinct keys seen three or more times this pass. A
+    /// "clone on second sighting, serve from the third onward" policy can
+    /// only ever produce a hit for a key counted here, never one counted in
+    /// [`Self::keys_seen_twice`].
+    pub keys_seen_three_plus: u32,
 }
 
 /// `(node, available_width bits, available_height bits)` — the census key a
@@ -97,7 +113,7 @@ type LayoutCensusSeenEntry = (u32, Arc<ComputedStyle>, UsedSizeOverrideBits);
 
 thread_local! {
     static LAYOUT_KEY_CENSUS_ON: Cell<bool> = const { Cell::new(false) };
-    static LAYOUT_KEY_CENSUS: Cell<LayoutKeyCensus> = const { Cell::new(LayoutKeyCensus { calls: 0, repeat_key_calls: 0, repeat_key_same_style: 0, repeat_key_same_style_and_override: 0 }) };
+    static LAYOUT_KEY_CENSUS: Cell<LayoutKeyCensus> = const { Cell::new(LayoutKeyCensus { calls: 0, repeat_key_calls: 0, repeat_key_same_style: 0, repeat_key_same_style_and_override: 0, keys_seen_once: 0, keys_seen_twice: 0, keys_seen_three_plus: 0 }) };
     static LAYOUT_KEY_SEEN: RefCell<HashMap<LayoutCensusKey, LayoutCensusSeenEntry>> = RefCell::new(HashMap::new());
 }
 
@@ -110,10 +126,27 @@ pub fn set_layout_key_census(on: bool) {
     LAYOUT_KEY_CENSUS.with(|c| c.set(LayoutKeyCensus::default()));
 }
 
-/// Returns the accumulated [`LayoutKeyCensus`] and resets the tally.
+/// Returns the accumulated [`LayoutKeyCensus`] and resets the tally. The
+/// per-key occurrence histogram (BUG-341 S38: `keys_seen_once`/`_twice`/
+/// `_three_plus`) is derived from [`LAYOUT_KEY_SEEN`]'s final counts here,
+/// the one point both still hold their pass-end state before either is
+/// cleared.
 pub fn take_layout_key_census() -> LayoutKeyCensus {
+    let (once, twice, three_plus) = LAYOUT_KEY_SEEN.with(|m| {
+        m.borrow().values().fold((0u32, 0u32, 0u32), |(once, twice, three_plus), (count, ..)| {
+            match count {
+                1 => (once + 1, twice, three_plus),
+                2 => (once, twice + 1, three_plus),
+                _ => (once, twice, three_plus + 1),
+            }
+        })
+    });
     LAYOUT_KEY_SEEN.with(|m| m.borrow_mut().clear());
-    LAYOUT_KEY_CENSUS.with(|c| c.replace(LayoutKeyCensus::default()))
+    let mut census = LAYOUT_KEY_CENSUS.with(|c| c.replace(LayoutKeyCensus::default()));
+    census.keys_seen_once = once;
+    census.keys_seen_twice = twice;
+    census.keys_seen_three_plus = three_plus;
+    census
 }
 
 /// Records one real `lay_out_inner` invocation for the S30/S31/S35 census —
@@ -380,23 +413,90 @@ pub(crate) struct LayoutResultEntry {
     pub(crate) result: LayoutBox,
 }
 
-thread_local! {
-    pub(crate) static LAYOUT_RESULT_CACHE_ON: Cell<bool> = const { Cell::new(false) };
-    pub(crate) static LAYOUT_RESULT_CACHE: RefCell<HashMap<LayoutResultKey, LayoutResultEntry>> = RefCell::new(HashMap::new());
+/// BUG-341 S38 — which insertion policy [`lay_out_cache_checked`] applies on
+/// a cache miss. S37 measured the per-call fixed cost as ~99% one thing, the
+/// full subtree clone paid on every miss (`b.clone()`, ~1.7μs/node) —
+/// negligible next to key construction (5.1ns) or the `HashMap` lookup
+/// (266.3ns) — and found ~91% of S32-era insertions were never read back,
+/// i.e. that clone was pure waste on most misses. `Lazy` defers the clone to
+/// a key's *confirmed* second sighting (same node/constraints/style as the
+/// first) instead of paying it on every miss unconditionally like `Eager`
+/// (S36's mechanism, kept for comparison) — but per
+/// `docs/perf-method.md`'s standing rule, this policy is only correct if the
+/// real repeat shape supports it: S33 rejected exactly this idea for the
+/// CSS-Grid probe/final case because that case's repeats are always exactly
+/// two occurrences (deferring to the second sighting would have zeroed its
+/// only hit). BUG-341 S38's own census of this cache's actual flex-item
+/// target found the opposite shape — of 271 distinct keys in one real
+/// chrome-document pass, only 4.4% repeat exactly twice while 86.3% repeat
+/// three or more times — so deferring the clone to the second sighting still
+/// serves the third-and-later occurrences that dominate this fixture's
+/// redundancy, while skipping the clone entirely on the 9.2% of keys that
+/// are never seen again at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum LayoutResultCacheMode {
+    /// No cache — plain `lay_out_inner` on every call.
+    #[default]
+    Off,
+    /// S36 — clone and store on every miss, unconditionally.
+    Eager,
+    /// S38 — clone and store only once a key's second sighting confirms the
+    /// repeat is real; see this type's own doc comment.
+    Lazy,
 }
 
-/// Enables/disables the BUG-341 S36 layout-result cache and clears its
-/// state — call once before a full (non-incremental) layout pass.
+thread_local! {
+    pub(crate) static LAYOUT_RESULT_CACHE_MODE: Cell<LayoutResultCacheMode> = const { Cell::new(LayoutResultCacheMode::Off) };
+    pub(crate) static LAYOUT_RESULT_CACHE: RefCell<HashMap<LayoutResultKey, LayoutResultEntry>> = RefCell::new(HashMap::new());
+    /// BUG-341 S38 — `Lazy` mode's marker for "this key was seen exactly
+    /// once so far this pass": the style `Arc` from that first sighting
+    /// (a refcount bump, not a subtree clone) so the second sighting can
+    /// check the same `ptr_eq` correctness precondition `Eager` checks on
+    /// every hit, before paying for the clone. Never holds a key that is
+    /// also present in [`LAYOUT_RESULT_CACHE`] — a key graduates out of this
+    /// map into that one the moment its second sighting confirms the style
+    /// is unchanged.
+    pub(crate) static LAYOUT_RESULT_CACHE_SEEN: RefCell<HashMap<LayoutResultKey, Arc<ComputedStyle>>> = RefCell::new(HashMap::new());
+}
+
+/// Enables/disables the BUG-341 S36 layout-result cache in `Eager` mode
+/// (clone-and-store on every miss) and clears its state — call once before a
+/// full (non-incremental) layout pass. See [`set_layout_result_cache_lazy`]
+/// for the S38 alternative policy.
 pub fn set_layout_result_cache(on: bool) {
-    LAYOUT_RESULT_CACHE_ON.with(|c| c.set(on));
+    set_layout_result_cache_mode(if on { LayoutResultCacheMode::Eager } else { LayoutResultCacheMode::Off });
+}
+
+/// Enables/disables the BUG-341 S38 layout-result cache in `Lazy` mode
+/// (clone-and-store only from a key's confirmed second sighting) and clears
+/// its state — call once before a full (non-incremental) layout pass. See
+/// [`LayoutResultCacheMode`]'s doc comment for why this policy exists
+/// alongside [`set_layout_result_cache`]'s `Eager` one rather than replacing
+/// it.
+pub fn set_layout_result_cache_lazy(on: bool) {
+    set_layout_result_cache_mode(if on { LayoutResultCacheMode::Lazy } else { LayoutResultCacheMode::Off });
+}
+
+fn set_layout_result_cache_mode(mode: LayoutResultCacheMode) {
+    LAYOUT_RESULT_CACHE_MODE.with(|c| c.set(mode));
     LAYOUT_RESULT_CACHE.with(|m| m.borrow_mut().clear());
+    LAYOUT_RESULT_CACHE_SEEN.with(|m| m.borrow_mut().clear());
     CV_AUTO_TOUCHED.with(|c| c.set(false));
     LAYOUT_RESULT_CACHE_STATS.with(|c| c.set(LayoutResultCacheStats::default()));
 }
 
-/// Whether the BUG-341 S36 layout-result cache is currently enabled.
+/// Whether the BUG-341 S36/S38 layout-result cache is currently enabled, in
+/// either policy.
 pub fn layout_result_cache_enabled() -> bool {
-    LAYOUT_RESULT_CACHE_ON.with(|c| c.get())
+    LAYOUT_RESULT_CACHE_MODE.with(|c| c.get() != LayoutResultCacheMode::Off)
+}
+
+/// The BUG-341 S38 policy currently in effect — [`lay_out_cache_checked`]'s
+/// miss branch reads this to decide whether to clone-and-store
+/// unconditionally (`Eager`) or defer to a confirmed second sighting
+/// (`Lazy`). Never called while [`layout_result_cache_enabled`] is `false`.
+pub(crate) fn layout_result_cache_mode() -> LayoutResultCacheMode {
+    LAYOUT_RESULT_CACHE_MODE.with(|c| c.get())
 }
 
 /// BUG-341 S36 — per-pass tally of what the cache-checked wrapper did,
@@ -412,10 +512,17 @@ pub struct LayoutResultCacheStats {
     /// Calls that missed, were computed normally, and were *not* cached
     /// because the computation touched `content-visibility: auto`.
     pub poisoned: u32,
+    /// BUG-341 S38 — `Lazy` mode only: misses that recorded a cheap
+    /// first-sighting marker ([`LAYOUT_RESULT_CACHE_SEEN`], no subtree
+    /// clone) instead of materializing into the real cache. Always `0` in
+    /// `Eager` mode. `misses - deferred` is the count of misses that *did*
+    /// pay the clone (confirmed second sighting or later, or `Eager`'s
+    /// unconditional store).
+    pub deferred: u32,
 }
 
 thread_local! {
-    pub(crate) static LAYOUT_RESULT_CACHE_STATS: Cell<LayoutResultCacheStats> = const { Cell::new(LayoutResultCacheStats { hits: 0, misses: 0, poisoned: 0 }) };
+    pub(crate) static LAYOUT_RESULT_CACHE_STATS: Cell<LayoutResultCacheStats> = const { Cell::new(LayoutResultCacheStats { hits: 0, misses: 0, poisoned: 0, deferred: 0 }) };
 }
 
 /// Returns the accumulated [`LayoutResultCacheStats`] and resets the tally.

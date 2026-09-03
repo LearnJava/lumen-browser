@@ -1343,6 +1343,23 @@ fn bug341_s30_flex_key_census() {
                 100.0 * census.repeat_key_same_style_and_override as f64 / census.repeat_key_calls.max(1) as f64,
                 100.0 * census.repeat_key_same_style_and_override as f64 / census.repeat_key_same_style.max(1) as f64,
             );
+            // BUG-341 S38: per-key occurrence-count histogram — S33's "clone
+            // only on second sighting" policy was rejected for the CSS-Grid
+            // probe/final case because that case's only repeats are exactly
+            // two occurrences; this answers the same question for the
+            // flex-item redundancy this fixture actually exercises, per
+            // docs/perf-method.md's rule not to let that finding transfer
+            // unchecked to a different target.
+            let distinct_keys = census.keys_seen_once + census.keys_seen_twice + census.keys_seen_three_plus;
+            eprintln!(
+                "[s38-shape] {scenario} cycle={i} distinct_keys={distinct_keys} once={} ({:.1}%) twice={} ({:.1}%) three_plus={} ({:.1}%)",
+                census.keys_seen_once,
+                100.0 * census.keys_seen_once as f64 / distinct_keys.max(1) as f64,
+                census.keys_seen_twice,
+                100.0 * census.keys_seen_twice as f64 / distinct_keys.max(1) as f64,
+                census.keys_seen_three_plus,
+                100.0 * census.keys_seen_three_plus as f64 / distinct_keys.max(1) as f64,
+            );
             lumen_layout::clear_interactive_state();
         }
     }
@@ -1442,6 +1459,108 @@ fn bug341_s36_layout_result_cache_share() {
             "[s36-cache] {scenario} hits={total_hits} misses={total_misses} poisoned={total_poisoned} \
                  hit_rate={:.1}%",
             100.0 * total_hits as f64 / (total_hits + total_misses).max(1) as f64,
+        );
+    }
+}
+
+/// BUG-341 S38: same real chrome document/protocol as S36's own
+/// `bug341_s36_layout_result_cache_share`, extended to a third arm — the
+/// `Lazy` insertion policy (`set_layout_result_cache_lazy`) that defers the
+/// subtree clone S37 isolated as the per-miss fixed cost's dominant term to
+/// a key's confirmed second sighting, instead of `Eager`'s (S36)
+/// unconditional clone-on-every-miss. S38's own key-occurrence census found
+/// this fixture's real repeat shape is dominated by 3+-occurrence keys
+/// (86.3% of distinct keys, vs. 4.4% exactly-twice) — the shape `Lazy`
+/// needs to recoup most of `Eager`'s hits while skipping the clone on the
+/// 9.2% of keys never seen again at all.
+/// Run: `cargo test -p lumen-shell --profile dev-release
+/// bug341_s38_layout_result_cache_lazy_share -- --ignored --nocapture`.
+#[test]
+#[ignore = "manual perf measurement (BUG-341 S38) — see doc comment for run command"]
+fn bug341_s38_layout_result_cache_lazy_share() {
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1280.0, 800.0);
+    const WARMUP: usize = 10;
+    const SAMPLES: usize = 60;
+
+    for scenario in ["KEY", "HOVER"] {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+        let mut typed = String::new();
+
+        let mut off_stats = lumen_paint::FrameStats::new();
+        let mut eager_stats = lumen_paint::FrameStats::new();
+        let mut lazy_stats = lumen_paint::FrameStats::new();
+        let mut eager_hits = 0u64;
+        let mut eager_misses = 0u64;
+        let mut lazy_hits = 0u64;
+        let mut lazy_misses = 0u64;
+        let mut lazy_deferred = 0u64;
+
+        for i in 0..WARMUP + SAMPLES {
+            let (model, hover) = if scenario == "KEY" {
+                typed.push('a');
+                (cc12_bench_model(&typed), None)
+            } else {
+                (cc12_bench_model(""), if i % 2 == 0 { sidebar } else { None })
+            };
+            lumen_chrome::bind_model(&mut doc, &model);
+            lumen_layout::set_interactive_state(hover, None, None);
+
+            // Three-arm interleaved A/B/C per cycle on the *same* document
+            // state (docs/perf-method.md's "interleaved A/B compared on
+            // min" rule, extended to three arms rather than two) — OFF,
+            // EAGER (S36), LAZY (S38), same order every cycle since the
+            // rotation rule (docs/perf-method.md §4) is about eliminating a
+            // *fixed-position* bias across repeated circles, and all three
+            // arms already share the same position across all 70 circles.
+            let t = std::time::Instant::now();
+            let _ = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+            let off_ns = t.elapsed().as_nanos();
+
+            lumen_layout::box_tree::set_layout_result_cache(true);
+            let t = std::time::Instant::now();
+            let _ = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+            let eager_ns = t.elapsed().as_nanos();
+            let e_stats = lumen_layout::box_tree::take_layout_result_cache_stats();
+            lumen_layout::box_tree::set_layout_result_cache(false);
+
+            lumen_layout::box_tree::set_layout_result_cache_lazy(true);
+            let t = std::time::Instant::now();
+            let _ = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+            let lazy_ns = t.elapsed().as_nanos();
+            let l_stats = lumen_layout::box_tree::take_layout_result_cache_stats();
+            lumen_layout::box_tree::set_layout_result_cache_lazy(false);
+
+            if i >= WARMUP {
+                off_stats.record(off_ns as f32 / 1e6);
+                eager_stats.record(eager_ns as f32 / 1e6);
+                lazy_stats.record(lazy_ns as f32 / 1e6);
+                eager_hits += e_stats.hits as u64;
+                eager_misses += e_stats.misses as u64;
+                lazy_hits += l_stats.hits as u64;
+                lazy_misses += l_stats.misses as u64;
+                lazy_deferred += l_stats.deferred as u64;
+            }
+            lumen_layout::clear_interactive_state();
+        }
+        let off_summary = off_stats.summary().expect("samples collected");
+        let eager_summary = eager_stats.summary().expect("samples collected");
+        let lazy_summary = lazy_stats.summary().expect("samples collected");
+        eprintln!("{}", off_summary.display_with(&format!("BUG341_S38_{scenario}_CACHE_OFF")));
+        eprintln!("{}", eager_summary.display_with(&format!("BUG341_S38_{scenario}_CACHE_EAGER")));
+        eprintln!("{}", lazy_summary.display_with(&format!("BUG341_S38_{scenario}_CACHE_LAZY")));
+        eprintln!(
+            "[s38-cache] {scenario} eager hits={eager_hits} misses={eager_misses} hit_rate={:.1}%",
+            100.0 * eager_hits as f64 / (eager_hits + eager_misses).max(1) as f64,
+        );
+        eprintln!(
+            "[s38-cache] {scenario} lazy hits={lazy_hits} misses={lazy_misses} deferred={lazy_deferred} \
+                 hit_rate={:.1}% (of misses, deferred={:.1}%)",
+            100.0 * lazy_hits as f64 / (lazy_hits + lazy_misses).max(1) as f64,
+            100.0 * lazy_deferred as f64 / lazy_misses.max(1) as f64,
         );
     }
 }
