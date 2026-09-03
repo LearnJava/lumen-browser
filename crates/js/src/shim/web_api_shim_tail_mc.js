@@ -74,6 +74,19 @@ Object.defineProperties(window, {
     pageYOffset: { get: function() { return _lumen_get_page_scroll_y(); }, enumerable: true },
     pageXOffset: { get: function() { return 0; }, enumerable: true }
 });
+
+// ── window.innerWidth/innerHeight/outerWidth/outerHeight (CSSOM View §5.3) ──
+// inner* is the CSS-pixel viewport size, already computed for scroll/layout
+// via _lumen_get_viewport_size(). BUG-529: these were absent from the shim
+// entirely. There is no window chrome model in this single-window shell, so
+// outer* aliases the same size (the same simplification already used for
+// other window-chrome-less properties, e.g. visualViewport above).
+Object.defineProperties(window, {
+    innerWidth:  { get: function() { return _lumen_get_viewport_size()[0]; }, enumerable: true },
+    innerHeight: { get: function() { return _lumen_get_viewport_size()[1]; }, enumerable: true },
+    outerWidth:  { get: function() { return _lumen_get_viewport_size()[0]; }, enumerable: true },
+    outerHeight: { get: function() { return _lumen_get_viewport_size()[1]; }, enumerable: true }
+});
 // BUG-479: both now return a Promise (CSSOM View's "Scrolling with a
 // promise" revision) settled through `_lumen_scroll_settle_promise`
 // (`web_api_shim_head.js`) — resolves once the requested scroll's own

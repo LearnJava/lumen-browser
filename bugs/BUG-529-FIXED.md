@@ -1,7 +1,7 @@
 # BUG-529: `window.innerWidth`/`innerHeight`/`outerWidth`/`outerHeight` do
 not exist at all
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-03
 **Дата:** 2026-08-03
 **Компонент:** js (`crates/js/src/dom.rs` — `Window` shim)
 **Найден:** WPT-RUN-3 срез 24 (`ROADMAP.md`) — массовый прогон `css/css-scrollbars`
@@ -31,10 +31,25 @@ subtests this slice: `scrollbar-color-001/002.html`,
 almost certainly latent in many other already-triaged categories that
 happened to route around it (worth a future re-check once fixed).
 
-## Фикс (не сделан)
+## Фикс
 
-Add `innerWidth`/`innerHeight` (CSS pixel viewport size, already available
-via `_lumen_get_viewport_size()`) and `outerWidth`/`outerHeight` (window
-chrome size — can alias to the same viewport size in this single-window
-shell, same simplification already used elsewhere for window-chrome-less
-properties) getters to the `Window` shim in `crates/js/src/dom.rs`.
+**FIXED 2026-09-03 (P3).** Added `innerWidth`/`innerHeight`/`outerWidth`/
+`outerHeight` getters to the `Window` shim
+(`crates/js/src/shim/web_api_shim_tail_mc.js`, right next to the existing
+`scrollX`/`scrollY` `Object.defineProperties` block — the shim's text moved
+out of `dom.rs` into per-file `.js` consts in SPLIT-JS3, after this bug was
+filed). `inner*` reads the CSS-pixel viewport size already available via
+`_lumen_get_viewport_size()`; there is no window-chrome model in this
+single-window shell, so `outer*` aliases the same viewport size, the same
+simplification already used for `visualViewport` a few lines above.
+
+Regression test: `window_inner_and_outer_size_track_viewport_size`
+(`crates/js/src/dom/tests/v8_elem_geometry_scroll.rs`), asserting all four
+properties track `rt.update_viewport_size(800.0, 600.0)`.
+`cargo test -p lumen-js --features v8-backend` and
+`cargo clippy -p lumen-js --features v8-backend --all-targets -- -D
+warnings` both clean.
+
+Directly unblocks the `css/css-scrollbars` idiom this bug names, and is a
+named prerequisite for 4 of the 5 files remaining under
+[BUG-504](BUG-504-OPEN.md) (`scrollbar-gutter-propagation-*.html`).
