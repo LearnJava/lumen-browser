@@ -163,13 +163,18 @@ pub(crate) fn install_element_geometry(
     store: &mut Vec<OwnedNativeFn>,
     layout_rects: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     viewport_size: Arc<Mutex<[f32; 2]>>,
+    flush: FlushHandles,
 ) -> JsResult<()> {
     // ── element geometry (for getBoundingClientRect / ResizeObserver / IntersectionObserver) ──
     // Returns [x, y, width, height] for the given NodeId in viewport-relative CSS px,
     // or undefined if the node has no layout box (display:none, not laid out yet, etc.).
+    // CSSOM-4/BUG-493: force a synchronous style+layout flush first, so a
+    // node mutated/created earlier in this same script turn reports its
+    // up-to-date rect instead of a stale/absent snapshot.
     {
         let lr = Arc::clone(&layout_rects);
         reg!(scope, ctx, store, "_lumen_get_bounding_rect", move |nid: u32| -> Option<Vec<f64>> {
+            flush.maybe_flush();
             lr.lock()
                 .unwrap()
                 .get(&nid)
@@ -524,12 +529,18 @@ pub(crate) fn install_computed_styles(
     store: &mut Vec<OwnedNativeFn>,
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
     custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
+    flush: FlushHandles,
 ) -> JsResult<()> {
     // ── Computed styles (window.getComputedStyle) ────────────────────────────────
     // Returns the resolved CSS value for `prop` on node `nid`, or "" if unknown.
+    // CSSOM-4/BUG-493: force a synchronous style+layout flush first, so a
+    // value mutated earlier in this same script turn reads back up to date
+    // instead of the pre-mutation (or entirely absent) snapshot.
     {
         let cs = Arc::clone(&computed_styles);
+        let flush = flush.clone();
         reg!(scope, ctx, store, "_lumen_get_computed_style", move |nid: u32, prop: String| -> String {
+            flush.maybe_flush();
             cs.lock()
                 .unwrap()
                 .get(&nid)
@@ -545,6 +556,7 @@ pub(crate) fn install_computed_styles(
     {
         let cp = Arc::clone(&custom_properties);
         reg!(scope, ctx, store, "_lumen_get_custom_property", move |nid: u32, prop: String| -> String {
+            flush.maybe_flush();
             cp.lock()
                 .unwrap()
                 .get(&nid)
@@ -586,6 +598,7 @@ pub(crate) fn install_crypto_and_typed_om(
     dom_touched: Arc<Mutex<DomTouched>>,
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
     custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
+    flush: FlushHandles,
 ) -> JsResult<()> {
     // ── Web Crypto API ──────────────────────────────────────────────────────
     {
@@ -866,6 +879,9 @@ pub(crate) fn install_crypto_and_typed_om(
         let cs = Arc::clone(&computed_styles);
         let cp = Arc::clone(&custom_properties);
         reg!(scope, ctx, store, "_lumen_get_computed_style_entries", move |nid: u32| -> String {
+            // CSSOM-4/BUG-493: same same-tick staleness as `getComputedStyle`
+            // itself — `computedStyleMap()` reads the identical snapshot.
+            flush.maybe_flush();
             let mut pairs: Vec<(String, String)> = Vec::new();
             if let Ok(map) = cs.lock()
                 && let Some(m) = map.get(&nid)

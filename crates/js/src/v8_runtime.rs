@@ -80,12 +80,14 @@ mod install;
 mod command;
 mod named_access;
 mod promise_reject;
+mod style_flush;
 mod thread;
 
 pub use named_access::ensure_v8_platform;
 pub(crate) use command::DOM_EXCEPTION_POLYFILL;
 use command::{V8Command, V8Inner, V8_CMD_QUEUE_BOUND};
 use named_access::set_named_access_document;
+use style_flush::FlushHandles;
 use thread::v8_thread_main;
 mod overrides;
 mod runtime;
@@ -252,6 +254,19 @@ impl V8JsRuntime {
             let computed_styles = Arc::clone(&self.computed_styles);
             let custom_properties = Arc::clone(&self.custom_properties);
             let stylesheet_nodes = Arc::clone(&self.stylesheet_nodes);
+            // CSSOM-4/BUG-493: bundled handles a same-tick accessor native
+            // needs to force a synchronous style+layout flush before reading
+            // `computed_styles`/`layout_rects`/`custom_properties`.
+            let flush_handles = FlushHandles {
+                doc: Arc::clone(&doc),
+                layout_rects: Arc::clone(&layout_rects),
+                computed_styles: Arc::clone(&computed_styles),
+                custom_properties: Arc::clone(&custom_properties),
+                viewport_size: Arc::clone(&viewport_size),
+                stylesheet: Arc::clone(&self.flush_stylesheet),
+                dom_dirty: Arc::clone(&dom_dirty),
+                never_flushed: Arc::clone(&self.style_never_flushed),
+            };
             let window_open_requests = Arc::clone(&self.window_open_requests);
             let console_messages = Arc::clone(&self.console_messages);
             let pending_history_url_updates = Arc::clone(&self.pending_history_url_updates);
@@ -368,6 +383,7 @@ impl V8JsRuntime {
                 store,
                 Arc::clone(&layout_rects),
                 Arc::clone(&viewport_size),
+                flush_handles.clone(),
             )?;
 
             install::install_point_hit_test(scope, ctx, store, Arc::clone(&hit_test_tree))?;
@@ -403,6 +419,7 @@ impl V8JsRuntime {
                 store,
                 Arc::clone(&computed_styles),
                 Arc::clone(&custom_properties),
+                flush_handles.clone(),
             )?;
 
             install::install_stylesheets(scope, ctx, store, Arc::clone(&stylesheet_nodes))?;
@@ -449,6 +466,7 @@ impl V8JsRuntime {
                 Arc::clone(&dom_touched),
                 Arc::clone(&computed_styles),
                 Arc::clone(&custom_properties),
+                flush_handles,
             )?;
 
             // Inject the page URL + cross-origin-isolation state as JS globals so

@@ -373,7 +373,7 @@ impl InProcessSession {
     fn layout_and_commit(
         &mut self,
         doc: &Arc<Mutex<Document>>,
-        sheet: &lumen_css_parser::Stylesheet,
+        sheet: &Arc<lumen_css_parser::Stylesheet>,
     ) -> Result<(LayoutBox, lumen_dom::FlatTree)> {
         let doc_guard = Self::lock_arc_doc(doc)?;
         let font = lumen_font::Font::parse(INTER_FONT)
@@ -393,7 +393,7 @@ impl InProcessSession {
         // resolves the display list's `src` keys.
         self.load_background_images(&layout_root);
 
-        self.commit_layout(&layout_root, doc, Some(&counters));
+        self.commit_layout(&layout_root, doc, Some(&counters), sheet);
 
         Ok((layout_root, flat_tree))
     }
@@ -418,6 +418,7 @@ impl InProcessSession {
         layout_root: &LayoutBox,
         doc: &Arc<Mutex<Document>>,
         counters: Option<&lumen_layout::CounterMap>,
+        sheet: &Arc<lumen_css_parser::Stylesheet>,
     ) {
         // BUG-382: hand the fresh layout to the JS runtime. `getComputedStyle()` and
         // `getBoundingClientRect()` answer from a snapshot the embedder pushes, never
@@ -433,6 +434,11 @@ impl InProcessSession {
             }
             rt.update_custom_properties(lumen_layout::collect_custom_properties(layout_root, self.viewport));
             rt.update_viewport_size(self.viewport.width, self.viewport.height);
+            // CSSOM-4/BUG-493: push the stylesheet the JS runtime needs to force a
+            // synchronous style+layout flush on a same-tick `getComputedStyle`/
+            // geometry read (`FlushHandles::maybe_flush`) — without this, every
+            // driver-path read stays on the pre-CSSOM-4 stale-snapshot behaviour.
+            rt.update_stylesheet(Arc::clone(sheet));
         }
 
         // Build property trees (PH1-7): four parallel trees (Transform / Scroll /
@@ -1313,7 +1319,7 @@ impl BrowserSession for InProcessSession {
         let owned_state = self.state.take().ok_or_else(|| {
             Error::Other("сессия не инициализирована — вызовите navigate() первым".into())
         })?;
-        self.commit_layout(&owned_state.layout_root, &owned_state.doc, None);
+        self.commit_layout(&owned_state.layout_root, &owned_state.doc, None, &owned_state.stylesheet);
         self.state = Some(owned_state);
         Ok(())
     }
