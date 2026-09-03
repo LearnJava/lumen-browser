@@ -646,7 +646,10 @@ fn lay_out_inner(
         b.rect.x = start_x + margin_left + shift;
     }
 
-    let content_x = b.rect.x + padding_left + s.border_left_width;
+    // CSS Scrollbars L1 §6.2: `scrollbar-gutter: stable both-edges` mirrors the
+    // gutter onto the inline-start edge too, so children start `unit` further
+    // in — not just narrower, as plain `stable`'s end-edge-only gutter does.
+    let content_x = b.rect.x + padding_left + s.border_left_width + scrollbar_gutter_inline_start(&s);
     let content_y = b.rect.y + padding_top + s.border_top_width;
     let mut content_width = (b.rect.width
         - padding_left - padding_right
