@@ -61,6 +61,28 @@ import sys
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 TESTS_ROOT = os.path.join(REPO_ROOT, "tests", "wpt")
 
+
+def on_disk_path(ref: str) -> str:
+    """Where a site-absolute reference lives in the checkout, URL semantics.
+
+    A browser resolves `/../../foo` from a root-relative path by clamping every
+    `..` that would go above the root — it never escapes the doc root, unlike
+    `os.path.join(TESTS_ROOT, ref.lstrip("/"))`, which walks `..` as real
+    filesystem segments and lands outside `tests/wpt/` entirely. That mismatch
+    made a genuinely vendored file (`window.open("/../../clear-site-data/…")`,
+    `speculation-rules/prefetch/clear-prefetch-cache-after-clear-site-data-cache.https.html`)
+    report as still missing (`WPT-RUN-11` slice 2).
+    """
+    parts: "list[str]" = []
+    for seg in ref.lstrip("/").split("/"):
+        if seg == "..":
+            if parts:
+                parts.pop()
+        elif seg not in ("", "."):
+            parts.append(seg)
+    return os.path.join(TESTS_ROOT, *parts) if parts else TESTS_ROOT
+
+
 # src="/..." / href="/..." / url(/...) — the three attribute/CSS-function
 # shapes that carry a resource reference in these test files. Quotes are
 # optional for url(...) per CSS syntax.
@@ -170,7 +192,7 @@ class RefGraph:
         for ref in self.direct_refs(path):
             if ref in ROUTED_NOT_VENDORED:
                 continue
-            on_disk = os.path.join(TESTS_ROOT, ref.lstrip("/"))
+            on_disk = on_disk_path(ref)
             if not os.path.isfile(on_disk):
                 found.add(ref)
             elif ref.endswith(self.exts):
@@ -244,7 +266,7 @@ def main() -> int:
         for ref in graph.direct_refs(path):
             if ref in ROUTED_NOT_VENDORED:
                 continue
-            on_disk = os.path.join(TESTS_ROOT, ref.lstrip("/"))
+            on_disk = on_disk_path(ref)
             if not os.path.isfile(on_disk):
                 missing.add(ref)
             elif not args.direct_only and ref.endswith(exts):
