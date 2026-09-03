@@ -12,7 +12,8 @@ depends on `lumen-ai` only under its own `ai` Cargo feature
 [ADR-019](../docs/decisions/ADR-019-ai-module-embedding-backend.md) for the
 backend choice (Ollama HTTP first, `candle` deferred).
 
-Full step-by-step plan — [`docs/tasks/ph3-ai-module.md`](../docs/tasks/ph3-ai-module.md).
+All 7 steps below shipped 2026-07-15 (`P3-ai`, `ROADMAP.md`, `done`); the tracking
+brief was deleted after the track closed.
 
 ## Done
 
@@ -79,8 +80,7 @@ Full step-by-step plan — [`docs/tasks/ph3-ai-module.md`](../docs/tasks/ph3-ai-
   index has no matches — never panics or blocks on a missing index.
 - `lumen-ai` gained a new internal workspace dependency on `lumen-knowledge`
   (no cycle: `lumen-knowledge` does not depend on `lumen-ai`) — needed to
-  call `DefaultKnowledgeStore::search_semantic` directly, per the
-  architecture diagram in `docs/tasks/ph3-ai-module.md`.
+  call `DefaultKnowledgeStore::search_semantic` directly.
 - Tests use fixed-vector/echo-context mock backends (no real Ollama
   process): grounds response in nearest hit, limits context to `top_k`,
   falls back to empty context on embedding failure or empty index, returns
@@ -116,10 +116,9 @@ Full step-by-step plan — [`docs/tasks/ph3-ai-module.md`](../docs/tasks/ph3-ai-
   semantic-only ones.
 - Does **not** wire `Lumen::ai_backend`/`AiPanel` to a real `RagEngine`, and
   does not populate `DefaultKnowledgeStore`'s semantic index from browsing
-  history — [`docs/tasks/ph3-ai-module.md`](../docs/tasks/ph3-ai-module.md)'s
-  Step 6 bullet list (the actual spec this step was implemented against) does
-  not include that wiring; it was only speculatively mentioned in this file's
-  previous Deferred note. Still open — see Deferred below.
+  history — the step's own spec did not include that wiring; it was only
+  speculatively mentioned in this file's previous Deferred note. Still open —
+  see Deferred below.
 
 ### Step 7 — omnibox `@ai` prefix (2026-07-15)
 - New `OmniboxPrefix::Ai` / `OmniboxSuggestion::Ai { answer }` (`address_bar.rs`)

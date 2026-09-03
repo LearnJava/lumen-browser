@@ -204,7 +204,7 @@ pub struct ProvenanceSpan {
 
 - [ADR-024](ADR-024-introspection-api-levels.md) — the levels that decide what
   part of this becomes wire-visible and when.
-- [`docs/tasks/p1-introspection-track.md`](../tasks/p1-introspection-track.md) —
-  `DEVX-7` (provenance) and `DEVX-8b` (paint invariants) implement this ADR.
+- `ROADMAP.md` `DEVX-7` (provenance) and `DEVX-8b` (paint invariants) implement
+  this ADR — both `done`; the tracking brief was deleted after the track closed.
 - BUG-341 (paused by user decision 2026-07-28) — `incremental.rs` is the pass
   with the strongest preservation obligation; this ADR does not resume it.
