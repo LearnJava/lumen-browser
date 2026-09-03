@@ -1146,9 +1146,11 @@ function _lumen_parse_style(s) {
 }
 // CSSOM §6.7.2 "serialize a CSS declaration block" collapses these four
 // TRBL longhand groups into their shorthand when all four are present with
-// equal literal values (BUG-473) — `!important` priority tracking, the
-// `all` shorthand and shorthand-VALUE parsing (`style.margin = '1px 2px'`)
-// are a separate, much larger CSSOM engine gap and stay out of scope here.
+// equal literal values (BUG-473). Shorthand-VALUE parsing on assignment
+// (`style.margin = '1px 2px'`) is wired below for the groups that have a
+// validated per-longhand grammar — see `_LUMEN_TRBL_SHORTHAND_CANON`.
+// `!important` priority tracking and the `all` shorthand remain a separate,
+// larger CSSOM engine gap and stay out of scope here.
 var _LUMEN_TRBL_SHORTHANDS = {
     'margin':       ['margin-top', 'margin-right', 'margin-bottom', 'margin-left'],
     'padding':      ['padding-top', 'padding-right', 'padding-bottom', 'padding-left'],
@@ -1175,6 +1177,45 @@ function _lumen_shorthand_value(obj, shorthand) {
         if (!Object.prototype.hasOwnProperty.call(obj, longhands[i])) return undefined;
     }
     return _lumen_trbl_collapse(obj[longhands[0]], obj[longhands[1]], obj[longhands[2]], obj[longhands[3]]);
+}
+
+// CSSOM-2 (BUG-484): shorthand-VALUE parsing — `style.margin = "1px 2px"`
+// expands into the four longhands per CSS 2.1 §8.3 (1 value: all sides, 2:
+// top/bottom + right/left, 3: top, right/left, bottom, 4: top right bottom
+// left), each token individually validated+canonicalized through the same
+// grammar as its longhand (`_lumen_css_canonical_length`/
+// `_lumen_css_canonical_line_width`/`_lumen_css_canonical_color`). Any
+// invalid token drops the WHOLE declaration — CSS rejects a shorthand value
+// wholesale if any component fails, mirroring `setProperty`'s existing
+// no-op-on-invalid behavior for single longhands. Only the shorthands that
+// already have a validated per-longhand grammar are wired here —
+// `border-style` has none yet and stays on the naive pass-through path,
+// same as its longhands.
+var _LUMEN_TRBL_SHORTHAND_CANON = {
+    'margin':       function(v) { return _lumen_css_canonical_length(v, true, false); },
+    'padding':      function(v) { return _lumen_css_canonical_length(v, false, true); },
+    'border-width': function(v) { return _lumen_css_canonical_line_width(v); },
+    'border-color': function(v) { return _lumen_css_canonical_color(v); },
+};
+
+// Splits `strVal` on CSS whitespace, canonicalizes each of the 1-4 tokens via
+// `canonFn`, and maps them to {top, right, bottom, left} per CSS 2.1 §8.3.
+// Returns null if the token count is out of [1,4] or any token fails its
+// grammar.
+function _lumen_expand_trbl_shorthand(canonFn, strVal) {
+    var tokens = strVal.trim().split(/\s+/).filter(function(t) { return t.length > 0; });
+    if (tokens.length < 1 || tokens.length > 4) return null;
+    var canon = [];
+    for (var i = 0; i < tokens.length; i++) {
+        var c = canonFn(tokens[i]);
+        if (c === null || c === undefined) return null;
+        canon.push(c);
+    }
+    var top    = canon[0];
+    var right  = canon.length > 1 ? canon[1] : canon[0];
+    var bottom = canon.length > 2 ? canon[2] : canon[0];
+    var left   = canon.length > 3 ? canon[3] : right;
+    return { top: top, right: right, bottom: bottom, left: left };
 }
 
 function _lumen_serialize_style(obj) {
@@ -1209,9 +1250,9 @@ function _lumen_camel_to_kebab(prop) {
 // `<color>` value, so their specified value can be validated+canonicalized
 // via `_lumen_css_canonical_color` on assignment. Deliberately NOT every
 // `*-color` property — `border-color` is a 1-4-value shorthand, collapsed
-// on read/serialize by `_lumen_shorthand_value` above but not validated as
-// a `<color>` on assignment (its longhands are, individually), so it stays
-// on the naive pass-through path below.
+// on read/serialize by `_lumen_shorthand_value` above; its own assignment
+// path is `_LUMEN_TRBL_SHORTHAND_CANON`, which validates each token with
+// this same `_lumen_css_canonical_color` before expanding to longhands.
 var _LUMEN_COLOR_PROPERTIES = {
     'color': 1, 'background-color': 1, 'border-top-color': 1,
     'border-bottom-color': 1, 'border-left-color': 1, 'border-right-color': 1,
@@ -1223,10 +1264,13 @@ var _LUMEN_COLOR_PROPERTIES = {
 // longhands — margin-*/inset-*(top/right/bottom/left) accept the `auto`
 // keyword and negative values, padding-* accepts neither. Validated and
 // canonicalized via `_lumen_css_canonical_length` on assignment, same role
-// as `_LUMEN_COLOR_PROPERTIES` above. Deliberately NOT the `margin`/
-// `padding`/`inset` shorthands themselves (`style.margin = "1px 2px"`) —
-// shorthand-VALUE parsing/expansion is separate, larger scope (see the
-// comment on `_LUMEN_TRBL_SHORTHANDS` above). The CSS Logical equivalents
+// as `_LUMEN_COLOR_PROPERTIES` above. The `margin`/`padding` shorthands
+// themselves (`style.margin = "1px 2px"`) go through the separate
+// `_LUMEN_TRBL_SHORTHAND_CANON` expansion path above. `inset` has no
+// shorthand keyword at all yet, in either direction (read-collapse or
+// write-expand) — it was never added to `_LUMEN_TRBL_SHORTHANDS`, unlike
+// its `top`/`right`/`bottom`/`left` longhands, which this table already
+// validates individually. The CSS Logical equivalents
 // (margin-inline/block-start/end, padding-inline/block-start/end,
 // inset-inline/block-start/end — fourth slice) share this same table: the
 // Rust side (`crates/engine/layout/src/style/apply/layout.rs`) resolves
@@ -1313,6 +1357,17 @@ function _lumen_make_style(nid) {
             if (strVal === '') {
                 // CSSOM §6.7.4: setProperty(prop, "") removes the property.
                 delete obj[key];
+                setParsed(obj);
+                return;
+            }
+            if (_LUMEN_TRBL_SHORTHAND_CANON.hasOwnProperty(key)) {
+                var expanded = _lumen_expand_trbl_shorthand(_LUMEN_TRBL_SHORTHAND_CANON[key], strVal);
+                if (expanded === null) return; // invalid shorthand value: whole declaration dropped
+                var trblLonghands = _LUMEN_TRBL_SHORTHANDS[key];
+                obj[trblLonghands[0]] = expanded.top;
+                obj[trblLonghands[1]] = expanded.right;
+                obj[trblLonghands[2]] = expanded.bottom;
+                obj[trblLonghands[3]] = expanded.left;
                 setParsed(obj);
                 return;
             }

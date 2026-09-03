@@ -48,6 +48,17 @@ readback assertions once CSSOM-2 covers those properties, and any script
 pattern that sets sides one at a time (common when computed from four
 separate values) rather than via the shorthand.
 
+**Widened by CSSOM-2 slice 5 (2026-09-03, shorthand-VALUE parsing on
+assignment):** the trigger is no longer "all four sides diverge" — a single
+`style.margin = "10px"` assignment now sets all four longhands at once via
+`_LUMEN_TRBL_SHORTHAND_CANON`/`_lumen_expand_trbl_shorthand`, even when all
+four values are EQUAL, and `_lumen_serialize_style` collapses equal values
+just as eagerly as divergent ones. So `e.style.margin = "10px";
+e.style.marginTop` now also returns `""` instead of `"10px"` — every
+`margin`/`padding`/`border-width`/`border-color` shorthand assignment hits
+this, not just the individually-set-four-different-values pattern the
+original repro described.
+
 ## Что нужно
 
 Either (a) `_lumen_parse_style` must expand a shorthand token found in the
