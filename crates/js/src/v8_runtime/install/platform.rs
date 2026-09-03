@@ -327,6 +327,17 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // Canonical sizing serialization for inline-`style` `width`/`height`
+    // (CSS Sizing L3 §4, CSSOM-2/BUG-484 third slice) — same role as
+    // `_lumen_css_canonical_length` above, but the grammar additionally
+    // allows `min-content`/`max-content`/`fit-content(<length-percentage>)`.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_sizing_length",
+        |value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_sizing_length(&value)
+        }
+    );
+
     // Queues a lazy image load request.  Called by `_lumen_deliver_lazy_images()` in JS
     // when an image registered via `_lumen_init_lazy_images` enters the lazy-load margin.
     // Shell drains via `QuickJsRuntime::take_lazy_image_requests` after each layout.
