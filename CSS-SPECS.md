@@ -75,7 +75,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Overflow L3 (scroll) | [css-overflow-3](https://www.w3.org/TR/css-overflow-3/) | 🟡 | scrollable containers; overflow:scroll rendering | **#22** |
 | CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last ✅ 2026-06-08; hyphens:auto ✅ (P1 2026-05-29, KnuthLiangHyphenation); white-space-collapse ✅ + break-spaces ✅ (p4-white-space-collapse 2026-07-04); line-break CJK ✅ (p4-line-break-cjk 2026-07-29); text-wrap-style ✅ | **#23** |
 | CSS Transforms L2 | [css-transforms-2](https://www.w3.org/TR/css-transforms-2/) | 🟡 | individual translate/rotate/scale ✅ 2026-05-26; 3D matrix primitive + perspective-correct rendering ✅ 2026-05-29 (P2); 3D function parsing ✅ (translate3d/rotateX/matrix3d…, property_trees.rs:773); `backface-visibility` culling ✅ (p4-backface-culling); `perspective`/`perspective-origin` projection wiring 🟡 (P4) | **#24** |
-| CSS Values L4/L5 | [css-values-4](https://www.w3.org/TR/css-values-4/) | 🟡 | env(); attr() with type; cq* units | **#25** |
+| CSS Values L4/L5 | [css-values-4](https://www.w3.org/TR/css-values-4/) | 🟡 | env(); attr() with type; cq* units; `<position>` tri-/quad-value edge-relative offset form (`right -10px`/`left -20%`) and `x-start`/`x-end`/`y-start`/`y-end` keywords not implemented — `PositionComponent` (shared by `background-position` shorthand + `-x`/`-y` longhands, `object-position`, `transform-origin`, `perspective-origin`, `mask-position`) has only `Px`/`Percent`, no anchor+offset representation (BUG-495, ревизия P3 2026-09-03) | **#25** |
 
 ### Tier 3 — Spec compliance (affect specific use-cases)
 
