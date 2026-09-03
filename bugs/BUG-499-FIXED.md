@@ -1,7 +1,7 @@
 # BUG-499: `getComputedStyle().getPropertyValue('--custom-prop')` always returns
 `""` — custom properties are never serialised into the computed-style cache
 
-**Статус:** OPEN
+**Статус:** FIXED (закрыто ревизией) 2026-09-03
 **Дата:** 2026-08-02
 **Компонент:** layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)
 + js (`crates/js/src/v8_runtime.rs::_lumen_get_computed_style`)
@@ -107,3 +107,37 @@ directly on the registered custom property's own name (not a standard
 property substituted via `var()`) — the exact mechanism this bug documents.
 `.ini` under `tests/wpt/metadata/css/css-properties-values-api/` for both
 files.
+
+## Ревизия P3 2026-09-03: закрыто без правки кода
+
+Заявленный дефект уже устранён — побочным эффектом [BUG-732](BUG-732-FIXED.md)
+(FIXED 2026-08-10, «шесть базовых DOM/CSSOM-API отсутствуют в шиме»), который
+явно перечисляет среди шести симптомов: «`getComputedStyle(el).getPropertyValue("--x")`
+отдавал `""`». Custom properties публикуются отдельным снимком
+(`collect_custom_properties` → `update_custom_properties`, натив
+`_lumen_get_custom_property`), а шим (`web_api_shim_tail_b.js::_lumen_computed_property`)
+роутит любое `--`-префиксное имя туда, а не в `_lumen_get_computed_style` — этот
+баг диагностировал ровно последний код (до BUG-732 у роутинга не было), но не
+переисследовал вопрос после того, как BUG-732 его закрыл заодно, под другим
+номером.
+
+Юнит-тест `dom::tests::v8_computedstyle::get_computed_style_custom_property`
+уже кроет сценарий заявки и проходит на чистом `main` без правок
+(`cargo test -p lumen-js --features v8-backend get_computed_style_custom` — 1/1 OK).
+Живая проба (`--mcp-port`, `<div style="--x: 20px; width: var(--x);">`,
+отдельный `eval()` после `navigate()`) подтверждает — причём снимок оказался
+БОГАЧЕ, чем эта заявка требовала: не только листовое значение читается верно,
+но и цепочка `var()`-в-`var()` между custom properties резолвится полностью
+(`--a: var(--b); --b: 10px` → `getPropertyValue('--a')` = `"10px"`, не сырой
+`"var(--b)"`):
+
+```js
+getComputedStyle(t1).getPropertyValue('width')  // → "20px"
+getComputedStyle(t1).getPropertyValue('--x')    // → "20px" (была бы "" до BUG-732)
+getComputedStyle(t2).getPropertyValue('--a')    // → "10px" (var-в-var тоже резолвится)
+getComputedStyle(t1).getPropertyValue('--nope') // → ""     (необъявленная — по спеке)
+```
+
+Код не менялся, закрытие — устранение расхождения статуса. `.ini`-файлы,
+перечисленные выше, не пересматривались — это отдельный вопрос живого WPT-прогона
+(вне скоупа этой ревизии).
