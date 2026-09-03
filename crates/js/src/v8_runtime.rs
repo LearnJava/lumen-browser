@@ -254,6 +254,8 @@ impl V8JsRuntime {
             let computed_styles = Arc::clone(&self.computed_styles);
             let custom_properties = Arc::clone(&self.custom_properties);
             let stylesheet_nodes = Arc::clone(&self.stylesheet_nodes);
+            let constructed_stylesheets = Arc::clone(&self.constructed_stylesheets);
+            let adopted_stylesheets = Arc::clone(&self.adopted_stylesheets);
             // CSSOM-4/BUG-493: bundled handles a same-tick accessor native
             // needs to force a synchronous style+layout flush before reading
             // `computed_styles`/`layout_rects`/`custom_properties`.
@@ -424,6 +426,14 @@ impl V8JsRuntime {
             )?;
 
             install::install_stylesheets(scope, ctx, store, Arc::clone(&stylesheet_nodes))?;
+
+            install::install_constructed_stylesheets(
+                scope,
+                ctx,
+                store,
+                Arc::clone(&constructed_stylesheets),
+                Arc::clone(&adopted_stylesheets),
+            )?;
 
             install::install_shadow_dom(
                 scope,

@@ -211,6 +211,9 @@ mod v8_webworker;
 mod v8_cssom_stylesheets;
 
 #[cfg(feature = "v8-backend")]
+mod v8_cssom5_constructed_stylesheets;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug493_sync_flush;
 
 #[cfg(feature = "v8-backend")]
