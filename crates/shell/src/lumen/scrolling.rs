@@ -126,7 +126,16 @@ impl Lumen {
                 self.set_display_list(new_dl);
             }
             self.update_scroll_containers();
-            let states: std::collections::HashMap<_, _> = self.scroll_containers.iter()
+            // `update_scroll_states` fully REPLACES the JS-visible cache (not a
+            // merge) — feeding it `self.scroll_containers` (wheel-routable
+            // Scroll|Auto only) would silently drop any hidden/clip container's
+            // state a prior relayout had pushed via
+            // `collect_scroll_containers_for_js_state`. Rebuild the JS-visible
+            // superset here too (BUG-504 part 8).
+            let states: std::collections::HashMap<_, _> = self.layout_box.as_ref()
+                .map(lumen_layout::collect_scroll_containers_for_js_state)
+                .unwrap_or_default()
+                .iter()
                 .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                 .collect();
             // ADR-016 M2.2c-2d (16): overflow-container scroll fire-and-forget void
@@ -239,7 +248,13 @@ impl Lumen {
         // FRAME-1), а не `route_task_js`, который адресует ТОЛЬКО контекст
         // страницы.
         if let Some(js) = self.frames[idx].js.clone() {
-            let states: std::collections::HashMap<_, _> = self.frames[idx].scroll_containers.iter()
+            // Same full-replace hazard as `try_scroll_overflow_container`
+            // (BUG-504 part 8): rebuild the JS-visible superset instead of
+            // reusing the wheel-routable `scroll_containers` list.
+            let states: std::collections::HashMap<_, _> = self.frames[idx].layout.as_ref()
+                .map(lumen_layout::collect_scroll_containers_for_js_state)
+                .unwrap_or_default()
+                .iter()
                 .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                 .collect();
             let target_nid = target_node.index() as u32;

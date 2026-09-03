@@ -1185,7 +1185,7 @@ impl Lumen {
             drop(doc_guard);
             let customs = collect_custom_properties(lb_ref, viewport);
             let (vw, vh) = (viewport.width, viewport.height);
-            let scroll_states: HashMap<u32, [f32; 4]> = collect_scroll_containers(lb_ref)
+            let scroll_states: HashMap<u32, [f32; 4]> = collect_scroll_containers_for_js_state(lb_ref)
                 .iter()
                 .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                 .collect();
