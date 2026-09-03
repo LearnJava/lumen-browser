@@ -1186,7 +1186,7 @@ function _lumen_parse_style(s) {
         }
         if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(prop)) {
             var longhands2v = _LUMEN_2V_SHORTHANDS[prop];
-            var expanded2v = _lumen_expand_2v_shorthand(_LUMEN_LENGTH_PROPERTIES[longhands2v[0]], val);
+            var expanded2v = _lumen_expand_2v_shorthand(_LUMEN_2V_SHORTHAND_CANON[prop], val);
             if (expanded2v !== null) {
                 obj[longhands2v[0]] = expanded2v.start;
                 obj[longhands2v[1]] = expanded2v.end;
@@ -1355,13 +1355,51 @@ var _LUMEN_2V_SHORTHANDS = {
     'padding-block':  ['padding-block-start', 'padding-block-end'],
     'inset-inline':   ['inset-inline-start', 'inset-inline-end'],
     'inset-block':    ['inset-block-start', 'inset-block-end'],
+    // CSS Box Alignment L3 §8/§9/§10 (срез 15): `place-content: <align-content>
+    // [<justify-content>]?`, `place-items`/`place-self` the same shape for
+    // their own longhand pairs. Rust already implements all three shorthands
+    // identically (`crates/engine/layout/src/style/apply/layout.rs` —
+    // `place-items`/`place-self`/`place-content`), so no new layout code is
+    // needed, only this table entry plus a canon function below.
+    'place-content':  ['align-content', 'justify-content'],
+    'place-items':    ['align-items', 'justify-items'],
+    'place-self':     ['align-self', 'justify-self'],
+};
+
+// Срез 15: per-shorthand canon function for `_LUMEN_2V_SHORTHANDS`. The six
+// CSS Logical shorthands above share one length grammar recorded once per
+// pair in `_LUMEN_LENGTH_PROPERTIES` (read off the `*-start` longhand); the
+// three `place-*` shorthands are keyword-enum instead, validated through
+// `_lumen_css_canonical_keyword` against the same list as their first
+// longhand in `_LUMEN_KEYWORD_PROPERTIES` (added this slice) — not a new
+// list, `align-content`/`align-items`/`align-self` already need to exist
+// there for the plain longhand assignment path (`style.alignContent = …`).
+var _LUMEN_2V_SHORTHAND_CANON = {
+    'margin-inline':  function(v) { var g = _LUMEN_LENGTH_PROPERTIES['margin-inline-start'];  return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
+    'margin-block':   function(v) { var g = _LUMEN_LENGTH_PROPERTIES['margin-block-start'];   return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
+    'padding-inline': function(v) { var g = _LUMEN_LENGTH_PROPERTIES['padding-inline-start']; return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
+    'padding-block':  function(v) { var g = _LUMEN_LENGTH_PROPERTIES['padding-block-start'];  return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
+    'inset-inline':   function(v) { var g = _LUMEN_LENGTH_PROPERTIES['inset-inline-start'];   return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
+    'inset-block':    function(v) { var g = _LUMEN_LENGTH_PROPERTIES['inset-block-start'];    return _lumen_css_canonical_length(v, g.allowAuto, g.nonNegative); },
+    'place-content':  function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-content']); },
+    'place-items':    function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-items']); },
+    'place-self':     function(v) { return _lumen_css_canonical_keyword(v, _LUMEN_KEYWORD_PROPERTIES['align-self']); },
 };
 
 // Same CSS-wide-keyword whole-value fan-out as `_lumen_expand_trbl_shorthand`/
 // `_lumen_expand_overflow_shorthand` (срез 12) — e.g. `margin-inline: initial`
 // sets both *-start/*-end to `"initial"` rather than being rejected by the
 // length grammar, which doesn't recognize the keyword.
-function _lumen_expand_2v_shorthand(grammar, strVal) {
+//
+// Срез 15: `canonFn` is a plain per-token canonicalizer (not a length-grammar
+// object as before) — the six CSS Logical shorthands (срез 14) and the new
+// `place-content`/`place-items`/`place-self` pair (this slice) have
+// different underlying grammars (length vs keyword-enum), so the shape must
+// take the canon function itself, mirroring `_LUMEN_TRBL_SHORTHAND_CANON`'s
+// per-shorthand function table rather than hardcoding one grammar kind. See
+// `_LUMEN_2V_SHORTHAND_CANON` below for where each shorthand's function
+// comes from.
+function _lumen_expand_2v_shorthand(canonFn, strVal) {
     var lowerVal = strVal.trim().toLowerCase();
     if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1) {
         return { start: lowerVal, end: lowerVal };
@@ -1370,7 +1408,7 @@ function _lumen_expand_2v_shorthand(grammar, strVal) {
     if (tokens.length < 1 || tokens.length > 2) return null;
     var canon = [];
     for (var i = 0; i < tokens.length; i++) {
-        var c = _lumen_css_canonical_length(tokens[i], grammar.allowAuto, grammar.nonNegative);
+        var c = canonFn(tokens[i]);
         if (c === null || c === undefined) return null;
         canon.push(c);
     }
@@ -1614,6 +1652,28 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'border-inline-end-style':   ['none', 'solid', 'dashed', 'dotted', 'double'],
     'border-block-start-style':  ['none', 'solid', 'dashed', 'dotted', 'double'],
     'border-block-end-style':    ['none', 'solid', 'dashed', 'dotted', 'double'],
+    // CSS Box Alignment L3 (срез 15): all six align-/justify- longhands
+    // share ONE list, mirroring `AlignValue::parse`
+    // (`crates/engine/layout/src/style/values/flexgrid.rs`) — the engine
+    // uses the identical enum+parser for all six properties (verified via
+    // `grep -n "AlignValue::parse" style/apply/layout.rs`: every call site
+    // is a bare `AlignValue::parse(val)`, no per-property restriction), so
+    // per the established convention (срез 7's note above) the JS-side list
+    // mirrors what the shared parser actually accepts rather than each
+    // property's own spec subgrammar. This means e.g. `auto` and
+    // `self-start`/`self-end` validate (and round-trip literally, per
+    // CSSOM's specified-value model) on `align-content` too, even though
+    // CSS Box Alignment L3 §8.2 doesn't grant `align-content` those tokens —
+    // narrower per-property lists would need the engine to actually reject
+    // them, which it does not. `safe`/`unsafe` overflow-alignment prefixes
+    // and the `left`/`right` physical keywords are out of scope — `AlignValue`
+    // has no variants for either.
+    'align-content':   ['auto', 'normal', 'stretch', 'start', 'flex-start', 'self-start', 'end', 'flex-end', 'self-end', 'center', 'baseline', 'first baseline', 'last baseline', 'space-between', 'space-around', 'space-evenly'],
+    'align-items':     ['auto', 'normal', 'stretch', 'start', 'flex-start', 'self-start', 'end', 'flex-end', 'self-end', 'center', 'baseline', 'first baseline', 'last baseline', 'space-between', 'space-around', 'space-evenly'],
+    'align-self':      ['auto', 'normal', 'stretch', 'start', 'flex-start', 'self-start', 'end', 'flex-end', 'self-end', 'center', 'baseline', 'first baseline', 'last baseline', 'space-between', 'space-around', 'space-evenly'],
+    'justify-content': ['auto', 'normal', 'stretch', 'start', 'flex-start', 'self-start', 'end', 'flex-end', 'self-end', 'center', 'baseline', 'first baseline', 'last baseline', 'space-between', 'space-around', 'space-evenly'],
+    'justify-items':   ['auto', 'normal', 'stretch', 'start', 'flex-start', 'self-start', 'end', 'flex-end', 'self-end', 'center', 'baseline', 'first baseline', 'last baseline', 'space-between', 'space-around', 'space-evenly'],
+    'justify-self':    ['auto', 'normal', 'stretch', 'start', 'flex-start', 'self-start', 'end', 'flex-end', 'self-end', 'center', 'baseline', 'first baseline', 'last baseline', 'space-between', 'space-around', 'space-evenly'],
 };
 
 // CSS Scrollbars L1 §2 (CSSOM-2/BUG-484, срез 11): `scrollbar-color: auto |
@@ -1768,7 +1828,7 @@ function _lumen_make_style(nid) {
             }
             if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) {
                 var longhands2v = _LUMEN_2V_SHORTHANDS[key];
-                var expanded2v = _lumen_expand_2v_shorthand(_LUMEN_LENGTH_PROPERTIES[longhands2v[0]], strVal);
+                var expanded2v = _lumen_expand_2v_shorthand(_LUMEN_2V_SHORTHAND_CANON[key], strVal);
                 if (expanded2v === null) return; // invalid shorthand value: whole declaration dropped
                 obj[longhands2v[0]] = expanded2v.start;
                 obj[longhands2v[1]] = expanded2v.end;
