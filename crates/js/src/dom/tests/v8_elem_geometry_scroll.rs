@@ -519,6 +519,24 @@ fn visual_viewport_offset_and_scale_default_unzoomed() {
     assert_eq!(r, lumen_core::JsValue::Number(1.0));
 }
 
+// ── BUG-529: window.innerWidth/innerHeight/outerWidth/outerHeight ──────────
+
+#[test]
+fn window_inner_and_outer_size_track_viewport_size() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.update_viewport_size(800.0, 600.0);
+    let w = rt.eval("window.innerWidth").unwrap();
+    assert_eq!(w, lumen_core::JsValue::Number(800.0));
+    let h = rt.eval("window.innerHeight").unwrap();
+    assert_eq!(h, lumen_core::JsValue::Number(600.0));
+    // No window chrome is modeled in this single-window shell, so outer*
+    // aliases the same viewport size as inner* (BUG-529's documented fix).
+    let ow = rt.eval("window.outerWidth").unwrap();
+    assert_eq!(ow, lumen_core::JsValue::Number(800.0));
+    let oh = rt.eval("window.outerHeight").unwrap();
+    assert_eq!(oh, lumen_core::JsValue::Number(600.0));
+}
+
 // ── CSS Scroll Snap L2 snapchanging/snapchanged events ─────────────────────
 
 #[test]
