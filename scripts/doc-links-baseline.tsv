@@ -1,0 +1,189 @@
+# Известные битые относительные ссылки в markdown.
+# Перезаписывается `python scripts/check_doc_links.py --update`.
+# Новая ссылка, которой здесь нет, роняет гейт; починенную --update уберёт.
+# файл	цель	класс	где цель на самом деле
+.claude/agents/css-rust-architect.md	file.md	missing	
+BUGS-FIXED.md	bugs/BUG-250-FIXED.md	missing	
+BUGS-FIXED.md	bugs/BUG-444-OPEN.md	stale-status-suffix	bugs/BUG-444-FIXED.md
+BUGS-FIXED.md	bugs/BUG-456-OPEN.md	stale-status-suffix	bugs/BUG-456-FIXED.md
+BUGS-FIXED.md	bugs/BUG-459-OPEN.md	stale-status-suffix	bugs/BUG-459-FIXED.md
+BUGS-FIXED.md	bugs/BUG-460-OPEN.md	stale-status-suffix	bugs/BUG-460-FIXED.md
+BUGS-FIXED.md	bugs/BUG-479-OPEN.md	stale-status-suffix	bugs/BUG-479-FIXED.md
+BUGS-FIXED.md	bugs/BUG-529-OPEN.md	stale-status-suffix	bugs/BUG-529-FIXED.md
+BUGS-FIXED.md	bugs/BUG-932-OPEN.md	stale-status-suffix	bugs/BUG-932-FIXED.md
+BUGS.md	bugs/BUG-452-OPEN.md	stale-status-suffix	bugs/BUG-452-FIXED.md
+BUGS.md	bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
+BUGS.md	bugs/BUG-464-OPEN.md	stale-status-suffix	bugs/BUG-464-FIXED.md
+BUGS.md	bugs/BUG-477-OPEN.md	stale-status-suffix	bugs/BUG-477-DUPLICATE.md
+CAPABILITIES.md	bugs/BUG-529-OPEN.md	stale-status-suffix	bugs/BUG-529-FIXED.md
+ROADMAP.md	bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
+ROADMAP.md	bugs/BUG-464-OPEN.md	stale-status-suffix	bugs/BUG-464-FIXED.md
+ROADMAP.md	bugs/BUG-477-OPEN.md	stale-status-suffix	bugs/BUG-477-DUPLICATE.md
+ROADMAP.md	bugs/BUG-481-OPEN.md	stale-status-suffix	bugs/BUG-481-FIXED.md
+ROADMAP.md	bugs/BUG-482-OPEN.md	stale-status-suffix	bugs/BUG-482-FIXED.md
+ROADMAP.md	bugs/BUG-483-OPEN.md	stale-status-suffix	bugs/BUG-483-FIXED.md
+ROADMAP.md	bugs/BUG-487-OPEN.md	stale-status-suffix	bugs/BUG-487-FIXED.md
+ROADMAP.md	bugs/BUG-499-OPEN.md	stale-status-suffix	bugs/BUG-499-FIXED.md
+ROADMAP.md	bugs/BUG-501-OPEN.md	stale-status-suffix	bugs/BUG-501-FIXED.md
+ROADMAP.md	bugs/BUG-502-OPEN.md	stale-status-suffix	bugs/BUG-502-FIXED.md
+ROADMAP.md	bugs/BUG-529-OPEN.md	stale-status-suffix	bugs/BUG-529-FIXED.md
+ROADMAP.md	bugs/BUG-803-OPEN.md	stale-status-suffix	bugs/BUG-803-FIXED.md
+ROADMAP.md	bugs/BUG-850-OPEN.md	stale-status-suffix	bugs/BUG-850-FIXED.md
+ROADMAP.md	docs/tasks/p2-wpt-status-sync.md	missing	
+bugs/BUG-237-OPEN.md	BUG-199-OPEN.md	stale-status-suffix	bugs/BUG-199-FIXED.md
+bugs/BUG-277-FIXED.md	BUG-247-OPEN.md	missing	
+bugs/BUG-277-FIXED.md	BUG-249-FIXED.md	missing	
+bugs/BUG-277-FIXED.md	BUG-635-OPEN.md	stale-status-suffix	bugs/BUG-635-FIXED.md
+bugs/BUG-300-FIXED.md	BUG-301-OPEN.md	stale-status-suffix	bugs/BUG-301-FIXED.md
+bugs/BUG-301-FIXED.md	BUG-309-OPEN.md	stale-status-suffix	bugs/BUG-309-FIXED.md
+bugs/BUG-303-FIXED.md	BUG-459-OPEN.md	stale-status-suffix	bugs/BUG-459-FIXED.md
+bugs/BUG-306-OPEN.md	BUG-307-OPEN.md	stale-status-suffix	bugs/BUG-307-FIXED.md
+bugs/BUG-310-FIXED.md	BUG-302-OPEN.md	stale-status-suffix	bugs/BUG-302-FIXED.md
+bugs/BUG-314-FIXED.md	BUG-305-OPEN.md	stale-status-suffix	bugs/BUG-305-FIXED.md
+bugs/BUG-315-FIXED.md	BUG-309-OPEN.md	stale-status-suffix	bugs/BUG-309-FIXED.md
+bugs/BUG-315-FIXED.md	BUG-310-OPEN.md	stale-status-suffix	bugs/BUG-310-FIXED.md
+bugs/BUG-316-FIXED.md	BUG-297-OPEN.md	stale-status-suffix	bugs/BUG-297-FIXED.md
+bugs/BUG-316-FIXED.md	BUG-311-OPEN.md	stale-status-suffix	bugs/BUG-311-FIXED.md
+bugs/BUG-317-FIXED.md	BUG-318-OPEN.md	stale-status-suffix	bugs/BUG-318-FIXED.md
+bugs/BUG-341-OPEN.md	BUG-349-OPEN.md	stale-status-suffix	bugs/BUG-349-FIXED.md
+bugs/BUG-347-FIXED.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
+bugs/BUG-348-FIXED.md	BUG-428-OPEN.md	stale-status-suffix	bugs/BUG-428-FIXED.md
+bugs/BUG-367-FIXED.md	BUG-358-OPEN.md	stale-status-suffix	bugs/BUG-358-FIXED.md
+bugs/BUG-368-FIXED.md	BUG-351-OPEN.md	stale-status-suffix	bugs/BUG-351-FIXED.md
+bugs/BUG-368-FIXED.md	BUG-358-OPEN.md	stale-status-suffix	bugs/BUG-358-FIXED.md
+bugs/BUG-381-FIXED.md	BUG-383-OPEN.md	stale-status-suffix	bugs/BUG-383-FIXED.md
+bugs/BUG-382-FIXED.md	BUG-381-OPEN.md	stale-status-suffix	bugs/BUG-381-FIXED.md
+bugs/BUG-383-FIXED.md	BUG-368-OPEN.md	stale-status-suffix	bugs/BUG-368-FIXED.md
+bugs/BUG-383-FIXED.md	BUG-381-OPEN.md	stale-status-suffix	bugs/BUG-381-FIXED.md
+bugs/BUG-384-FIXED.md	BUG-499-OPEN.md	stale-status-suffix	bugs/BUG-499-FIXED.md
+bugs/BUG-405-FIXED.md	bugs/BUG-934-OPEN.md	wrong-relative-path	bugs/BUG-934-OPEN.md
+bugs/BUG-406-OPEN.md	BUG-274-OPEN.md	stale-status-suffix	bugs/BUG-274-FIXED.md
+bugs/BUG-413-FIXED.md	BUG-368-OPEN.md	stale-status-suffix	bugs/BUG-368-FIXED.md
+bugs/BUG-415-FIXED.md	BUG-358-OPEN.md	stale-status-suffix	bugs/BUG-358-FIXED.md
+bugs/BUG-418-FIXED.md	BUG-348-OPEN.md	stale-status-suffix	bugs/BUG-348-FIXED.md
+bugs/BUG-420-FIXED.md	BUG-421-OPEN.md	stale-status-suffix	bugs/BUG-421-FIXED.md
+bugs/BUG-423-FIXED.md	BUG-427-OPEN.md	stale-status-suffix	bugs/BUG-427-FIXED.md
+bugs/BUG-425-FIXED.md	BUG-460-OPEN.md	stale-status-suffix	bugs/BUG-460-FIXED.md
+bugs/BUG-426-FIXED.md	BUG-421-OPEN.md	stale-status-suffix	bugs/BUG-421-FIXED.md
+bugs/BUG-426-FIXED.md	BUG-422-OPEN.md	stale-status-suffix	bugs/BUG-422-FIXED.md
+bugs/BUG-428-FIXED.md	BUG-429-OPEN.md	stale-status-suffix	bugs/BUG-429-FIXED.md
+bugs/BUG-437-FIXED.md	BUG-381-OPEN.md	stale-status-suffix	bugs/BUG-381-FIXED.md
+bugs/BUG-437-FIXED.md	BUG-383-OPEN.md	stale-status-suffix	bugs/BUG-383-FIXED.md
+bugs/BUG-437-FIXED.md	BUG-436-OPEN.md	stale-status-suffix	bugs/BUG-436-FIXED.md
+bugs/BUG-439-FIXED.md	BUG-383-OPEN.md	stale-status-suffix	bugs/BUG-383-FIXED.md
+bugs/BUG-441-FIXED.md	BUG-383-OPEN.md	stale-status-suffix	bugs/BUG-383-FIXED.md
+bugs/BUG-443-FIXED.md	BUG-270-FIXED.md	missing	
+bugs/BUG-443-FIXED.md	BUG-529-OPEN.md	stale-status-suffix	bugs/BUG-529-FIXED.md
+bugs/BUG-449-FIXED.md	BUG-453-OPEN.md	stale-status-suffix	bugs/BUG-453-FIXED.md
+bugs/BUG-452-FIXED.md	BUG-382-OPEN.md	stale-status-suffix	bugs/BUG-382-FIXED.md
+bugs/BUG-453-FIXED.md	BUG-407-OPEN.md	stale-status-suffix	bugs/BUG-407-FIXED.md
+bugs/BUG-456-FIXED.md	BUG-455-OPEN.md	stale-status-suffix	bugs/BUG-455-FIXED.md
+bugs/BUG-456-FIXED.md	BUG-932-OPEN.md	stale-status-suffix	bugs/BUG-932-FIXED.md
+bugs/BUG-462-FIXED.md	BUG-358-OPEN.md	stale-status-suffix	bugs/BUG-358-FIXED.md
+bugs/BUG-472-OPEN.md	BUG-465-OPEN.md	stale-status-suffix	bugs/BUG-465-FIXED.md
+bugs/BUG-474-FIXED.md	BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
+bugs/BUG-479-FIXED.md	bugs/BUG-962-OPEN.md	wrong-relative-path	bugs/BUG-962-OPEN.md
+bugs/BUG-481-FIXED.md	bugs/BUG-875-OPEN.md	wrong-relative-path	bugs/BUG-875-OPEN.md
+bugs/BUG-482-FIXED.md	BUG-529-OPEN.md	stale-status-suffix	bugs/BUG-529-FIXED.md
+bugs/BUG-484-OPEN.md	BUG-483-OPEN.md	stale-status-suffix	bugs/BUG-483-FIXED.md
+bugs/BUG-487-FIXED.md	BUG-501-OPEN.md	stale-status-suffix	bugs/BUG-501-FIXED.md
+bugs/BUG-493-OPEN.md	BUG-499-OPEN.md	stale-status-suffix	bugs/BUG-499-FIXED.md
+bugs/BUG-496-FIXED.md	BUG-482-OPEN.md	stale-status-suffix	bugs/BUG-482-FIXED.md
+bugs/BUG-503-OPEN.md	BUG-499-OPEN.md	stale-status-suffix	bugs/BUG-499-FIXED.md
+bugs/BUG-504-OPEN.md	BUG-529-OPEN.md	stale-status-suffix	bugs/BUG-529-FIXED.md
+bugs/BUG-522-OPEN.md	BUG-368-OPEN.md	stale-status-suffix	bugs/BUG-368-FIXED.md
+bugs/BUG-536-OPEN.md	BUG-483-OPEN.md	stale-status-suffix	bugs/BUG-483-FIXED.md
+bugs/BUG-554-OPEN.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
+bugs/BUG-556-OPEN.md	BUG-476-OPEN.md	stale-status-suffix	bugs/BUG-476-FIXED.md
+bugs/BUG-590-OPEN.md	bugs/BUG-871-OPEN.md	wrong-relative-path	bugs/BUG-871-OPEN.md
+bugs/BUG-604-OPEN.md	BUG-351-OPEN.md	stale-status-suffix	bugs/BUG-351-FIXED.md
+bugs/BUG-618-OPEN.md	BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
+bugs/BUG-630-OPEN.md	BUG-368-OPEN.md	stale-status-suffix	bugs/BUG-368-FIXED.md
+bugs/BUG-631-FIXED.md	BUG-249-FIXED.md	missing	
+bugs/BUG-655-OPEN.md	BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
+bugs/BUG-671-OPEN.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
+bugs/BUG-671-OPEN.md	BUG-368-OPEN.md	stale-status-suffix	bugs/BUG-368-FIXED.md
+bugs/BUG-671-OPEN.md	BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
+bugs/BUG-676-OPEN.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
+bugs/BUG-676-OPEN.md	BUG-464-OPEN.md	stale-status-suffix	bugs/BUG-464-FIXED.md
+bugs/BUG-676-OPEN.md	BUG-477-OPEN.md	stale-status-suffix	bugs/BUG-477-DUPLICATE.md
+bugs/BUG-678-OPEN.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
+bugs/BUG-678-OPEN.md	BUG-354-OPEN.md	stale-status-suffix	bugs/BUG-354-FIXED.md
+bugs/BUG-682-OPEN.md	BUG-358-OPEN.md	stale-status-suffix	bugs/BUG-358-FIXED.md
+bugs/BUG-684-OPEN.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
+bugs/BUG-693-OPEN.md	BUG-346-OPEN.md	stale-status-suffix	bugs/BUG-346-FIXED.md
+bugs/BUG-744-OPEN.md	BUG-743-OPEN.md	stale-status-suffix	bugs/BUG-743-FIXED.md
+bugs/BUG-778-FIXED.md	BUG-792-OPEN.md	stale-status-suffix	bugs/BUG-792-FIXED.md
+bugs/BUG-797-OPEN.md	docs/perf-method.md	wrong-relative-path	docs/perf-method.md
+bugs/BUG-800-FIXED.md	BUG-792-OPEN.md	stale-status-suffix	bugs/BUG-792-FIXED.md
+bugs/BUG-801-FIXED.md	BUG-803-OPEN.md	stale-status-suffix	bugs/BUG-803-FIXED.md
+bugs/BUG-804-FIXED.md	BUG-459-OPEN.md	stale-status-suffix	bugs/BUG-459-FIXED.md
+bugs/BUG-821-FIXED.md	BUG-479-OPEN.md	stale-status-suffix	bugs/BUG-479-FIXED.md
+bugs/BUG-823-FIXED.md	BUG-792-OPEN.md	stale-status-suffix	bugs/BUG-792-FIXED.md
+bugs/BUG-828-FIXED.md	BUG-716-OPEN.md	stale-status-suffix	bugs/BUG-716-FIXED.md
+bugs/BUG-845-FIXED.md	BUG-844-OPEN.md	stale-status-suffix	bugs/BUG-844-FIXED.md
+bugs/BUG-929-OPEN.md	BUG-452-OPEN.md	stale-status-suffix	bugs/BUG-452-FIXED.md
+bugs/BUG-962-OPEN.md	bugs/BUG-479-FIXED.md	wrong-relative-path	bugs/BUG-479-FIXED.md
+docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/gpos.rs	missing	
+docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/gsub.rs	missing	
+docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/otlayout.rs	missing	
+docs/decisions/ADR-027-own-vs-vendored-boundary.md	../../crates/engine/font/src/shape.rs	missing	
+docs/decisions/TEMPLATE.md	ADR-NNN-title.md	missing	
+docs/plan/tech-stack.md	crates/core/src/ext.rs	missing	
+docs/roadmap-trees.md	roadmap-svg-columns.html	missing	
+docs/roadmap-trees.md	roadmap-svg-gitgraph.html	missing	
+docs/tasks/README.md	ph3-color-management.md	missing	
+docs/tasks/README.md	ph3-contenteditable-selection.md	missing	
+docs/tasks/README.md	ph3-element-internals-state.md	missing	
+docs/tasks/README.md	ph3-navigation-history-api.md	missing	
+docs/tasks/README.md	ph3-print-pipeline.md	missing	
+docs/tasks/README.md	ph3-service-workers.md	missing	
+docs/tasks/README.md	ph3-web-animations-api.md	missing	
+docs/tasks/README.md	ph3-websockets-sse-fetch.md	missing	
+docs/tasks/README.md	ph3-woff2-webfonts.md	missing	
+docs/tasks/ph3-ai-module.md	p2-knowledge-stemmer-hnsw.md	missing	
+docs/tasks/ph3-tier2-web-apis.md	ph3-navigation-history-api.md	missing	
+docs/tasks/ph3-tier2-web-apis.md	ph3-service-workers.md	missing	
+docs/tasks/ph3-tier2-web-apis.md	ph3-web-animations-api.md	missing	
+docs/tasks/ph3-tier2-web-apis.md	ph3-websockets-sse-fetch.md	missing	
+docs/wpt-status.md	../bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
+docs/wpt-status.md	../bugs/BUG-464-OPEN.md	stale-status-suffix	bugs/BUG-464-FIXED.md
+docs/wpt-status.md	../bugs/BUG-477-OPEN.md	stale-status-suffix	bugs/BUG-477-DUPLICATE.md
+docs/wpt-status.md	../bugs/BUG-482-OPEN.md	stale-status-suffix	bugs/BUG-482-FIXED.md
+docs/wpt-status.md	wpt-vendor-notes/<slug>.md	missing	
+docs/wpt-vendor-notes/css.md	../../bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
+docs/wpt-vendor-notes/css.md	../../bugs/BUG-464-OPEN.md	stale-status-suffix	bugs/BUG-464-FIXED.md
+docs/wpt-vendor-notes/css.md	../../bugs/BUG-465-OPEN.md	stale-status-suffix	bugs/BUG-465-FIXED.md
+docs/wpt-vendor-notes/css.md	../../bugs/BUG-466-OPEN.md	stale-status-suffix	bugs/BUG-466-FIXED.md
+docs/wpt-vendor-notes/css.md	../../bugs/BUG-468-OPEN.md	stale-status-suffix	bugs/BUG-468-DUPLICATE.md
+docs/wpt-vendor-notes/css.md	../../bugs/BUG-469-OPEN.md	stale-status-suffix	bugs/BUG-469-FIXED.md
+docs/wpt-vendor-notes/css.md	../../bugs/BUG-473-OPEN.md	stale-status-suffix	bugs/BUG-473-FIXED.md
+docs/wpt-vendor-notes/css.md	../../bugs/BUG-477-OPEN.md	stale-status-suffix	bugs/BUG-477-DUPLICATE.md
+docs/wpt-vendor-notes/css.md	../../bugs/BUG-483-OPEN.md	stale-status-suffix	bugs/BUG-483-FIXED.md
+docs/wpt-vendor-notes/css.md	../../bugs/BUG-496-OPEN.md	stale-status-suffix	bugs/BUG-496-FIXED.md
+docs/wpt-vendor-notes/css.md	../../bugs/BUG-497-OPEN.md	stale-status-suffix	bugs/BUG-497-DUPLICATE.md
+docs/wpt-vendor-notes/css.md	../../bugs/BUG-499-OPEN.md	stale-status-suffix	bugs/BUG-499-FIXED.md
+docs/wpt-vendor-notes/css.md	../../bugs/BUG-501-OPEN.md	stale-status-suffix	bugs/BUG-501-FIXED.md
+docs/wpt-vendor-notes/css.md	../../bugs/BUG-502-OPEN.md	stale-status-suffix	bugs/BUG-502-FIXED.md
+docs/wpt-vendor-notes/dom.md	../../bugs/BUG-482-OPEN.md	stale-status-suffix	bugs/BUG-482-FIXED.md
+docs/wpt-vendor-notes/inert.md	../../bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
+docs/wpt-vendor-notes/intersection-observer.md	../../bugs/BUG-482-OPEN.md	stale-status-suffix	bugs/BUG-482-FIXED.md
+docs/wpt-vendor-notes/long-animation-frame.md	../../bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
+docs/wpt-vendor-notes/permissions-policy.md	../../bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
+docs/wpt-vendor-notes/quirks.md	../../bugs/BUG-482-OPEN.md	stale-status-suffix	bugs/BUG-482-FIXED.md
+docs/wpt-vendor-notes/quirks.md	../../bugs/BUG-501-OPEN.md	stale-status-suffix	bugs/BUG-501-FIXED.md
+docs/wpt-vendor-notes/scroll-to-text-fragment.md	../../bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
+docs/wpt-vendor-notes/selection.md	../../bugs/BUG-462-OPEN.md	stale-status-suffix	bugs/BUG-462-FIXED.md
+docs/wpt-vendor-notes/shadow-dom.md	../../bugs/BUG-464-OPEN.md	stale-status-suffix	bugs/BUG-464-FIXED.md
+docs/wpt-vendor-notes/shadow-dom.md	../../bugs/BUG-477-OPEN.md	stale-status-suffix	bugs/BUG-477-DUPLICATE.md
+docs/wpt-vendor-notes/svg.md	../../bugs/BUG-464-OPEN.md	stale-status-suffix	bugs/BUG-464-FIXED.md
+docs/wpt-vendor-notes/svg.md	../../bugs/BUG-477-OPEN.md	stale-status-suffix	bugs/BUG-477-DUPLICATE.md
+docs/wpt-vendor-notes/viewport-segments.md	../../bugs/BUG-481-OPEN.md	stale-status-suffix	bugs/BUG-481-FIXED.md
+docs/wpt-vendor-notes/visual-viewport.md	../../bugs/BUG-481-OPEN.md	stale-status-suffix	bugs/BUG-481-FIXED.md
+docs/wpt-vendor-notes/webidl.md	../../bugs/BUG-529-OPEN.md	stale-status-suffix	bugs/BUG-529-FIXED.md
+docs/wpt-vendor-notes/webrtc-extensions.md	../bugs/BUG-721-OPEN.md	stale-status-suffix	bugs/BUG-721-FIXED.md
+docs/wpt-vendor-notes/webrtc-identity.md	../bugs/BUG-721-OPEN.md	stale-status-suffix	bugs/BUG-721-FIXED.md
+docs/wpt-vendor-notes/webrtc-priority.md	../bugs/BUG-721-OPEN.md	stale-status-suffix	bugs/BUG-721-FIXED.md
+docs/wpt-vendor-notes/webrtc-svc.md	../bugs/BUG-721-OPEN.md	stale-status-suffix	bugs/BUG-721-FIXED.md
+docs/wpt-vendor-notes/webrtc.md	../bugs/BUG-721-OPEN.md	stale-status-suffix	bugs/BUG-721-FIXED.md
+subsystems/shell.md	../bugs/BUG-529-OPEN.md	stale-status-suffix	bugs/BUG-529-FIXED.md
