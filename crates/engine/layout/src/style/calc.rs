@@ -171,6 +171,326 @@ impl CalcNode {
             }
         }
     }
+
+    /// CSS Values L4 §10 (CSSOM-2 срез 16, BUG-484): recursively folds
+    /// same-unit arithmetic in the parsed calc() tree, bottom-up, so the
+    /// CSSOM specified-value serializer ([`calc_node_to_css`]) round-trips a
+    /// simplified form instead of the raw author text — e.g.
+    /// `calc(50% - 50%)` collapses to a single `Length::Percent(0.0)` leaf,
+    /// `calc(-10px)` (parsed as unary-minus `0 - 10px`) collapses to
+    /// `Length::Px(-10.0)`. Mixed-unit terms (`calc(2em + 3%)`) can't fold —
+    /// combining them needs a resolved basis, the same limitation
+    /// [`Self::resolve`] already has for cross-unit sums — and stay a tree
+    /// node with each side simplified independently.
+    ///
+    /// `Func` (trig/round/mod/…) node args are simplified but the function
+    /// itself is never evaluated: folding e.g. `abs(-20px)` into a literal
+    /// would need the same unit-preservation plumbing without a clear
+    /// canonicalization payoff (no BUG-484 slice exercises calc-wrapped
+    /// scientific functions), so it is left as a tree node — still
+    /// serializes to valid, resolvable CSS via [`calc_node_to_css`], just
+    /// not folded to a single value.
+    pub fn simplify(self) -> CalcNode {
+        match self {
+            CalcNode::Length(_) | CalcNode::Number(_) => self,
+            CalcNode::Add(a, b) => fold_add(a.simplify(), b.simplify()),
+            CalcNode::Sub(a, b) => fold_sub(a.simplify(), b.simplify()),
+            CalcNode::Mul(a, b) => fold_mul(a.simplify(), b.simplify()),
+            CalcNode::Div(a, b) => fold_div(a.simplify(), b.simplify()),
+            CalcNode::Min(args) => fold_extremum(args, true),
+            CalcNode::Max(args) => fold_extremum(args, false),
+            CalcNode::Clamp(mn, val, mx) => {
+                fold_clamp(mn.simplify(), val.simplify(), mx.simplify())
+            }
+            CalcNode::Func(func, args) => {
+                CalcNode::Func(func, args.into_iter().map(CalcNode::simplify).collect())
+            }
+        }
+    }
+}
+
+/// Tags each numeric `Length` variant so [`fold_add`]/[`fold_sub`]/
+/// [`fold_extremum`]/[`fold_clamp`] can check "same unit" without a 16-arm
+/// discriminant match at every call site. `None` for the four variants that
+/// never appear as a calc leaf — `calc_num_to_node` only ever produces the
+/// fifteen numeric variants below; `Length::Calc`/`MinContent`/`MaxContent`/
+/// `FitContent` are keyword/nested-expression forms with no single magnitude
+/// to fold.
+fn length_unit_value(l: &Length) -> Option<(u8, f32)> {
+    Some(match l {
+        Length::Px(v) => (0, *v),
+        Length::Em(v) => (1, *v),
+        Length::Rem(v) => (2, *v),
+        Length::Ch(v) => (3, *v),
+        Length::Ex(v) => (4, *v),
+        Length::Percent(v) => (5, *v),
+        Length::Vh(v) => (6, *v),
+        Length::Vw(v) => (7, *v),
+        Length::Vmin(v) => (8, *v),
+        Length::Vmax(v) => (9, *v),
+        Length::Cqw(v) => (10, *v),
+        Length::Cqh(v) => (11, *v),
+        Length::Cqi(v) => (12, *v),
+        Length::Cqb(v) => (13, *v),
+        Length::Cqmin(v) => (14, *v),
+        Length::Cqmax(v) => (15, *v),
+        Length::Calc(_) | Length::MinContent | Length::MaxContent | Length::FitContent(_) => {
+            return None;
+        }
+    })
+}
+
+/// Rebuilds a `Length` of the same variant as `template` with a new
+/// magnitude — the write half of [`length_unit_value`].
+fn length_with_value(template: &Length, v: f32) -> Length {
+    match template {
+        Length::Px(_) => Length::Px(v),
+        Length::Em(_) => Length::Em(v),
+        Length::Rem(_) => Length::Rem(v),
+        Length::Ch(_) => Length::Ch(v),
+        Length::Ex(_) => Length::Ex(v),
+        Length::Percent(_) => Length::Percent(v),
+        Length::Vh(_) => Length::Vh(v),
+        Length::Vw(_) => Length::Vw(v),
+        Length::Vmin(_) => Length::Vmin(v),
+        Length::Vmax(_) => Length::Vmax(v),
+        Length::Cqw(_) => Length::Cqw(v),
+        Length::Cqh(_) => Length::Cqh(v),
+        Length::Cqi(_) => Length::Cqi(v),
+        Length::Cqb(_) => Length::Cqb(v),
+        Length::Cqmin(_) => Length::Cqmin(v),
+        Length::Cqmax(_) => Length::Cqmax(v),
+        // Unreachable in practice — every call site first goes through
+        // `length_unit_value`, which already returns `None` for these four.
+        // Kept exhaustive rather than `unreachable!()`: cheaper than a panic
+        // path in prod code for a case that can only be a logic error here,
+        // not attacker/page-controlled input (docs/conventions.md — no
+        // panic!/unwrap in production code).
+        Length::Calc(_) | Length::MinContent | Length::MaxContent | Length::FitContent(_) => {
+            template.clone()
+        }
+    }
+}
+
+fn fold_add(a: CalcNode, b: CalcNode) -> CalcNode {
+    match (&a, &b) {
+        (CalcNode::Number(x), CalcNode::Number(y)) => return CalcNode::Number(x + y),
+        (CalcNode::Length(la), CalcNode::Length(lb)) => {
+            if let (Some((ta, va)), Some((tb, vb))) = (length_unit_value(la), length_unit_value(lb))
+                && ta == tb
+            {
+                return CalcNode::Length(length_with_value(la, va + vb));
+            }
+        }
+        // `0 + x` / `x + 0` — identity fold. Handles the unary-minus parse
+        // artifact (`calc(-10px)` parses as `Sub(Number(0), Length(Px(10)))`,
+        // simplified below in `fold_sub`) and a literal `calc(0 + 10px)`
+        // alike, without pretending a bare `0` and `10px` share a CSS
+        // numeric type in general.
+        (CalcNode::Number(x), CalcNode::Length(_)) if *x == 0.0 => return b,
+        (CalcNode::Length(_), CalcNode::Number(y)) if *y == 0.0 => return a,
+        _ => {}
+    }
+    CalcNode::Add(Box::new(a), Box::new(b))
+}
+
+fn fold_sub(a: CalcNode, b: CalcNode) -> CalcNode {
+    match (&a, &b) {
+        (CalcNode::Number(x), CalcNode::Number(y)) => return CalcNode::Number(x - y),
+        (CalcNode::Length(la), CalcNode::Length(lb)) => {
+            if let (Some((ta, va)), Some((tb, vb))) = (length_unit_value(la), length_unit_value(lb))
+                && ta == tb
+            {
+                return CalcNode::Length(length_with_value(la, va - vb));
+            }
+        }
+        // Unary minus, see `fold_add`'s comment — `0 - 10px` → `-10px`.
+        (CalcNode::Number(x), CalcNode::Length(lb)) if *x == 0.0 => {
+            if let Some((_, vb)) = length_unit_value(lb) {
+                return CalcNode::Length(length_with_value(lb, -vb));
+            }
+        }
+        (CalcNode::Length(_), CalcNode::Number(y)) if *y == 0.0 => return a,
+        _ => {}
+    }
+    CalcNode::Sub(Box::new(a), Box::new(b))
+}
+
+fn fold_mul(a: CalcNode, b: CalcNode) -> CalcNode {
+    match (&a, &b) {
+        (CalcNode::Number(x), CalcNode::Number(y)) => return CalcNode::Number(x * y),
+        (CalcNode::Number(n), CalcNode::Length(l)) | (CalcNode::Length(l), CalcNode::Number(n)) => {
+            if let Some((_, v)) = length_unit_value(l) {
+                return CalcNode::Length(length_with_value(l, v * n));
+            }
+        }
+        _ => {}
+    }
+    CalcNode::Mul(Box::new(a), Box::new(b))
+}
+
+fn fold_div(a: CalcNode, b: CalcNode) -> CalcNode {
+    // Division by a literal 0 stays an unfolded tree node — `resolve()`
+    // already turns it into `None` (invalid) at use time; folding it here
+    // would just mean picking a representation for "invalid" prematurely.
+    if let CalcNode::Number(n) = &b
+        && *n != 0.0
+    {
+        match &a {
+            CalcNode::Number(x) => return CalcNode::Number(x / n),
+            CalcNode::Length(l) => {
+                if let Some((_, v)) = length_unit_value(l) {
+                    return CalcNode::Length(length_with_value(l, v / n));
+                }
+            }
+            _ => {}
+        }
+    }
+    CalcNode::Div(Box::new(a), Box::new(b))
+}
+
+/// `Min`/`Max`/`Clamp` only get their *arguments* simplified (e.g.
+/// `min(10px + 5px, 20px)` → `min(15px, 20px)`) — the function itself is
+/// never collapsed to a literal even when every argument ends up the same
+/// unit. Unlike `Add`/`Sub`, `min()`/`max()`/`clamp()` are their own
+/// standalone CSS math functions (CSS Values L4 §10.6), not calc-exclusive
+/// arithmetic syntax, and real engines round-trip `min(30px, 10px, 20px)` as
+/// itself rather than folding it down to `calc(10px)` — an author who wrote
+/// `min(...)` gets `min(...)` back, just with its own arguments canonicalized.
+fn fold_extremum(args: Vec<CalcNode>, is_min: bool) -> CalcNode {
+    let args: Vec<CalcNode> = args.into_iter().map(CalcNode::simplify).collect();
+    if is_min { CalcNode::Min(args) } else { CalcNode::Max(args) }
+}
+
+/// See [`fold_extremum`] — same "simplify the arguments, keep the wrapper"
+/// rule for `clamp(min, val, max)`.
+fn fold_clamp(mn: CalcNode, val: CalcNode, mx: CalcNode) -> CalcNode {
+    CalcNode::Clamp(Box::new(mn), Box::new(val), Box::new(mx))
+}
+
+/// CSSOM-2 срез 16 (BUG-484): serializes an already-[`simplify`](CalcNode::simplify)d
+/// calc tree back to CSS text — the counterpart `parse_math_function_value`
+/// lacked (`crate::selector_query::length_to_css`'s `Length::Calc` arm used
+/// to just emit the placeholder `"calc(...)"`, see that function's history).
+/// Precedence-aware: only wraps a child in parens when the grammar requires
+/// it (`(a + b) * c`; `a - (b + c)` — the right operand of the
+/// non-commutative `-`/`/` needs parens exactly when it is itself
+/// additive/multiplicative, since our tree is always built left-associative
+/// by the parser and such a shape can only arise from an explicit paren in
+/// the source).
+///
+/// `Func` (trig/round/mod/…) args that came from an angle unit (`45deg`)
+/// were already converted to a bare radian `Number` by the lexer
+/// (`calc_num_to_node`) — the original unit text is gone by the time this
+/// runs, so e.g. `sin(45deg)` serializes as `sin(0.7853982)`. Numerically
+/// equivalent and syntactically valid (CSS trig functions accept a unitless
+/// number as radians), just not byte-identical to the author's text; no
+/// BUG-484 slice exercises this path (its calc-in-function examples are
+/// `cubic-bezier()`/`steps()` — a different, still-unimplemented
+/// `TimingFunction` serializer, not this one).
+///
+/// The top-level `calc(...)` wrapper is added only for node kinds that need
+/// one to be valid CSS on their own (arithmetic nodes, or a bare
+/// leaf — the only way a leaf/arithmetic node reaches `Length::Calc` at all
+/// is through literal `calc(...)` syntax, `parse_function_call`'s other
+/// branches produce `Min`/`Max`/`Clamp`/`Func` directly). `Min`/`Max`/
+/// `Clamp`/`Func` already print their own valid top-level form
+/// (`min(...)`/`clamp(...)`/`sin(...)`/…) and must NOT get a second,
+/// synthetic `calc(...)` around them — CSS Values L4 §10.6 defines them as
+/// standalone math functions, not calc-exclusive syntax, and a bare
+/// `min(30px, 10px)` specified value is not textually `calc(min(30px,
+/// 10px))`. (An explicit `calc(min(...))` in the source already collapses to
+/// the bare `Min` node at parse time — `parse_function_call`'s `"calc"` arm
+/// unwraps a single-argument body — so this function never actually sees the
+/// difference between the two spellings.)
+pub(crate) fn calc_node_to_css(node: &CalcNode) -> String {
+    match node {
+        CalcNode::Min(_) | CalcNode::Max(_) | CalcNode::Clamp(..) | CalcNode::Func(..) => {
+            ser(node, 0)
+        }
+        _ => format!("calc({})", ser(node, 0)),
+    }
+}
+
+/// Binding-power tiers for the minimal-parens pretty-printer: atomic nodes
+/// (leaves, `min()`/`max()`/`clamp()`/function calls — their own `(...)`
+/// already disambiguates) never need wrapping; `+`/`-` bind loosest (tier
+/// 1), `*`/`/` tighter (tier 2). `min_prec` is the precedence the caller
+/// requires of this subtree; `wrap` parenthesizes when the node's own tier
+/// falls short of it.
+fn ser(node: &CalcNode, min_prec: u8) -> String {
+    match node {
+        CalcNode::Length(l) => crate::selector_query::length_to_css(l),
+        CalcNode::Number(n) => format_calc_number(*n),
+        CalcNode::Add(a, b) => wrap(format!("{} + {}", ser(a, 1), ser(b, 1)), 1, min_prec),
+        // Right operand forced to tier 2: `a - (b + c)` ≠ `a - b + c`, so an
+        // additive right child (tier 1) must be parenthesized; a
+        // multiplicative one (tier 2) already binds tight enough to print bare.
+        CalcNode::Sub(a, b) => wrap(format!("{} - {}", ser(a, 1), ser(b, 2)), 1, min_prec),
+        CalcNode::Mul(a, b) => wrap(format!("{} * {}", ser(a, 2), ser(b, 2)), 2, min_prec),
+        // Right operand forced to tier 3 (nothing at tier 2 or below prints
+        // bare): `a / (b * c)` ≠ `a / b * c`, and such a tree can only come
+        // from an explicit paren in the source (the parser's term loop is
+        // strictly left-associative), so it must round-trip with one.
+        CalcNode::Div(a, b) => wrap(format!("{} / {}", ser(a, 2), ser(b, 3)), 2, min_prec),
+        CalcNode::Min(args) => format!("min({})", ser_args(args)),
+        CalcNode::Max(args) => format!("max({})", ser_args(args)),
+        CalcNode::Clamp(mn, val, mx) => {
+            format!("clamp({}, {}, {})", ser(mn, 0), ser(val, 0), ser(mx, 0))
+        }
+        CalcNode::Func(func, args) => ser_func(*func, args),
+    }
+}
+
+fn wrap(s: String, my_prec: u8, min_prec: u8) -> String {
+    if my_prec < min_prec { format!("({s})") } else { s }
+}
+
+fn ser_args(args: &[CalcNode]) -> String {
+    args.iter().map(|a| ser(a, 0)).collect::<Vec<_>>().join(", ")
+}
+
+/// `MathFn` name lookup plus `round()`'s leading strategy keyword — the
+/// reverse of `parse_function_call`/`parse_round_strategy`. `Nearest` never
+/// serializes explicitly: it is `round()`'s default (the parser only
+/// recognizes a strategy keyword when followed by a comma), so omitting it
+/// is the canonical form, same as CSS Easing's alias folding for
+/// `step-start`/`steps(N, end)` elsewhere in the CSSOM-2 series.
+fn ser_func(func: MathFn, args: &[CalcNode]) -> String {
+    let name = match func {
+        MathFn::Sin => "sin",
+        MathFn::Cos => "cos",
+        MathFn::Tan => "tan",
+        MathFn::Asin => "asin",
+        MathFn::Acos => "acos",
+        MathFn::Atan => "atan",
+        MathFn::Atan2 => "atan2",
+        MathFn::Pow => "pow",
+        MathFn::Sqrt => "sqrt",
+        MathFn::Exp => "exp",
+        MathFn::Log => "log",
+        MathFn::Hypot => "hypot",
+        MathFn::Abs => "abs",
+        MathFn::Sign => "sign",
+        MathFn::Mod => "mod",
+        MathFn::Rem => "rem",
+        MathFn::Round(_) => "round",
+    };
+    let prefix = match func {
+        MathFn::Round(RoundStrategy::Up) => "up, ",
+        MathFn::Round(RoundStrategy::Down) => "down, ",
+        MathFn::Round(RoundStrategy::ToZero) => "to-zero, ",
+        _ => "",
+    };
+    format!("{name}({prefix}{})", ser_args(args))
+}
+
+/// Formats a unitless calc-tree number. Mirrors how `length_to_css` formats
+/// every non-`px` `Length` variant's magnitude (`{v}`) — only `Length::Px`
+/// gets `px_str`'s integer-stripping treatment there, and `{v}`'s `Display`
+/// for `f32` already omits a trailing `.0` on whole numbers.
+fn format_calc_number(n: f32) -> String {
+    format!("{n}")
 }
 
 /// Резолвит научную math-функцию. Валидация арности уже сделана парсером —
@@ -315,7 +635,14 @@ pub(in crate::style) fn parse_math_function_value(s: &str) -> Option<Length> {
     if pos != tokens.len() {
         return None;
     }
-    Some(Length::Calc(Box::new(node)))
+    // CSSOM-2 срез 16: fold same-unit arithmetic up front so a later
+    // `calc_node_to_css` serialization (or a repeat `resolve()`) works from
+    // the simplified tree. Always stays `Length::Calc`-wrapped even when
+    // fully collapsed to a single leaf (`calc(12pt)` keeps its `calc(...)`
+    // wrapper, see `calc_with_pt_unit`/`calc_with_svh_unit` in
+    // `style/tests/values.rs`) — simplification only folds arithmetic, it
+    // doesn't unwrap an author-written `calc()` back into a bare value.
+    Some(Length::Calc(Box::new(node.simplify())))
 }
 
 // ──────────────── calc() лексер + парсер ────────────────

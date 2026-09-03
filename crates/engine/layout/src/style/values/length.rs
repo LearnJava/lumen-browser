@@ -375,12 +375,14 @@ pub fn parse_length(s: &str) -> Option<Length> {
 /// not. `non_negative` — padding/sizing longhands reject a negative
 /// literal per their grammar (`<length-percentage [0,∞]>`), margin does not.
 ///
-/// `calc()`/`min()`/`max()`/`clamp()` values are accepted but passed through
-/// unchanged rather than canonicalized: `crate::selector_query::length_to_css`
-/// has no serializer for `Length::Calc` (it doesn't reconstruct calc() text),
-/// so canonicalizing here would corrupt the expression instead of just
-/// leaving it non-canonical. Full calc() serialization is separate scope
-/// (BUG-484 срез 15/30).
+/// `calc()`/`min()`/`max()`/`clamp()` values are validated AND canonicalized
+/// (CSSOM-2 срез 16, BUG-484) — `parse_math_function_value` folds same-unit
+/// arithmetic (`crate::style::calc::CalcNode::simplify`) and
+/// `crate::selector_query::length_to_css`'s `Length::Calc` arm reconstructs
+/// calc() text from the (simplified) tree, so e.g. `calc(50% - 50%)`
+/// canonicalizes to `"calc(0%)"`. Mixed-unit sums (`calc(2em + 3%)`) can't
+/// fold to a single value and stay a `calc(...)` expression, but still
+/// re-serialize through the same path (whitespace/paren normalization).
 pub fn canonical_specified_length(s: &str, allow_auto: bool, non_negative: bool) -> Option<String> {
     let v = s.trim();
     if v.is_empty() {
@@ -390,7 +392,8 @@ pub fn canonical_specified_length(s: &str, allow_auto: bool, non_negative: bool)
         return Some("auto".to_string());
     }
     if looks_like_function_call(v) {
-        return parse_math_function_value(v).map(|_| v.to_string());
+        let len = parse_math_function_value(v)?;
+        return Some(crate::selector_query::length_to_css(&len));
     }
     let len = parse_length_q(v, false)?;
     if non_negative && length_literal_is_negative(&len) {
