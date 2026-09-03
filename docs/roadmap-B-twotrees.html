@@ -76,11 +76,11 @@
  "generated": "2026-09-03",
  "counts": {
   "open": 368,
-  "fixed": 545,
+  "fixed": 546,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 913,
+ "total_bugs": 914,
  "phases": [
   {
    "id": "P0",
@@ -5564,7 +5564,7 @@
        "title": "CSSOM-2: парсинг, валидация и сериализация inline `style`",
        "status": "planned",
        "size": "L",
-       "note": "Inline-`style` как настоящий `CSSStyleDeclaration` (`crates/js/src/dom.rs::_lumen_make_style`): сейчас сеттер кладёт строку как есть — нет отклонения невалидного значения, нет разворачивания шорткатов в лонгхэнды, нет канонизации при чтении, `cssText` не собирается. 16 прогонов категорий WPT (`css-variables`, `css-logical`, `css-easing`, `css-color-hdr`, `css-rhythm`, `compositing`, `css-scrollbars`, `css-ruby`, `css-transitions`, `css-scroll-snap`, `css-align`, `css-fonts`, `css-text`, `css-flexbox`, `css-ui`, `css-page`) упёрлись в одни и те же три-четыре формы дефекта — их перечень в файле бага и есть спецификация приёмки",
+       "note": "Inline-`style` как настоящий `CSSStyleDeclaration` (`crates/js/src/shim/web_api_shim_mid.js::_lumen_make_style`): сейчас сеттер кладёт строку как есть — нет отклонения невалидного значения, нет разворачивания шорткатов в лонгхэнды, нет канонизации при чтении, `cssText` не собирается. 16 прогонов категорий WPT (`css-variables`, `css-logical`, `css-easing`, `css-color-hdr`, `css-rhythm`, `compositing`, `css-scrollbars`, `css-ruby`, `css-transitions`, `css-scroll-snap`, `css-align`, `css-fonts`, `css-text`, `css-flexbox`, `css-ui`, `css-page`) упёрлись в одни и те же три-четыре формы дефекта — их перечень в файле бага и есть спецификация приёмки. Срез 1 (2026-09-03): `<length-percentage>` валидация+канонизация для `margin-top/right/bottom/left` (+`auto`, +отрицательные) и `padding-top/right/bottom/left` (без `auto`, только неотрицательные) через новый `lumen_layout::style::canonical_specified_length` (мирроринг `canonical_specified_color`/BUG-465) — закрывает заглавный пример бага (`e.style.marginTop = \"60\"` теперь отклоняется) и часть канонизации (`\"0\"` → `\"0px\"`). Остальные length-лонгхенды (width/height/inset-*/border-*-width/CSS Logical), шорткат-VALUE парсинг (`style.margin = \"1px 2px\"`) и полная канонизация `calc()` — вне среза, следующие срезы. Срез 2 (2026-09-03): физический inset `top/right/bottom/left` (+`auto`, +отрицательные — та же грамматика что margin) добавлен в `_LUMEN_LENGTH_PROPERTIES`; `border-top/right/bottom/left-width` получил отдельный `lumen_layout::style::canonical_specified_line_width` (`<length [0,∞]> | thin | medium | thick` — ключевые слова сериализуются как есть, не резолвятся в px, чтобы не сломать `border-width-valid.html`'s `border-right-width: \"thin\"` round-trip). `width`/`height` намеренно остались вне среза: у них та же грамматика в теории, но `fit-content(<length>)` при наивном подключении канонизации терял бы аргумент (`crate::selector_query::length_to_css` сериализует `Length::FitContent(_)` в голое `\"fit-content\"`, без скобок) — нужна отдельная правка сериализатора первой. Срез 3 (2026-09-03): `crate::selector_query::length_to_css` починен — `Length::FitContent(Some(arg))` сериализует `fit-content(<arg>)` с аргументом (было: терял его, коллапсировал в голое `\"fit-content\"`), `FitContent(None)` остаётся голым `\"fit-content\"`. На этой починке `width`/`height` подключены новым `lumen_layout::style::canonical_specified_sizing_length` (грамматика CSS Sizing L3 §4 — `<length-percentage [0,∞]> | auto | min-content | max-content | fit-content(<length-percentage>)`, отдельная от `canonical_specified_length` функция, а не переиспользование с `allow_auto`: `parse_sizing_length`'s `\"auto\" => None` неотличим от невалидного синтаксиса, `auto` поэтому перехвачен до вызова) в `_LUMEN_SIZING_LENGTH_PROPERTIES`, отдельно от `_LUMEN_LENGTH_PROPERTIES` (та грамматика не вмещает intrinsic-keywords). Подтверждено пробой (`--dump-display-list`): `\"60\"` (unitless) отклоняется, `\"0\"` → `\"0px\"`, `-10px`/`-5px` отклоняются, `min-content`/`max-content`/голый `fit-content` и `fit-content(200px)` (аргумент сохраняется) канонизируются верно. Срез 4 (2026-09-03): CSS Logical эквиваленты подключены без новых Rust-функций — `margin-inline-start/end`, `margin-block-start/end`, `padding-inline-start/end`, `padding-block-start/end`, `inset-inline-start/end`, `inset-block-start/end` добавлены в `_LUMEN_LENGTH_PROPERTIES`, `border-inline-start/end-width`, `border-block-start/end-width` — в `_LUMEN_LINE_WIDTH_PROPERTIES`: Rust-сторона (`crates/engine/layout/src/style/apply/layout.rs`/`paint.rs`) уже резолвит каждое логическое свойство через тот же `set_margin_side`/`set_padding_side`/`resolve_box_length`, что и его физический аналог, поэтому грамматика (allowAuto/nonNegative) идентична один в один. Двузначные шорткаты `margin-inline`/`margin-block`/`padding-inline`/`padding-block`/`inset-inline`/`inset-block` намеренно вне среза — та же причина, что у физических TRBL-шорткатов. Подтверждено пробой (`--dump-display-list`): unitless `\"60\"` отклоняется на всех логических лонгхендах, `\"0\"` → `\"0px\"`, отрицательные отклоняются у padding/border-width и принимаются у margin/inset, `auto` принимается у margin/inset и отклоняется у padding, `thin`/числовое значение у border-*-width канонизируются верно. Остаются: шорткат-VALUE парсинг (`style.margin = \"1px 2px\"`), полная канонизация `calc()`. Попутно найден BUG-964 (TRBL-коллапс теряет чтение лонгхенда, когда все четыре стороны выставлены разными значениями)",
        "bugs": [
         "BUG-484"
        ]
@@ -7042,13 +7042,6 @@
    "status": "open",
    "title": "`background-position-x`/`background-position-y` (отдельные лонгхенды CSS Backgrounds/Borders Level 4) не реализованы вовсе — только шорткод `background-position…",
    "component": "css-parser/layout (`crates/engine/layout/src/style/apply/paint.rs::apply_declaration`, `selector_query.rs::computed_style_to_map`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-499": {
-   "status": "open",
-   "title": "`getComputedStyle().getPropertyValue('--custom-prop')` всегда возвращает `\"\"` — карта computed-style никогда не сериализует `ComputedStyle::custom_props`, незав…",
-   "component": "layout/js (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`, `crates/js/src/v8_runtime.rs::_lumen_get_computed_style`)",
    "date": null,
    "debtor": false
   },
@@ -9394,6 +9387,13 @@
    "status": "open",
    "title": "Hyperlink auditing (`ping`-атрибут, HTML LS §4.6.9) не отправляет ни одного запроса по клику ни для HTML `<a>`/`<area>` (контент-атрибут отражён как IDL-строка,…",
    "component": "js (нет call-site — механизм отсутствует целиком)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-964": {
+   "status": "open",
+   "title": "TRBL shorthand-коллапс (BUG-473) на запись обнуляет чтение отдельного лонгхенда: если все четыре стороны одной collapsible-группы (margin/padding/border-width/-…",
+   "component": "js (`web_api_shim_mid.js::_lumen_serialize_style`/`_lumen_shorthand_value`/`_lumen_parse_style`)",
    "date": null,
    "debtor": false
   },
@@ -13204,6 +13204,13 @@
    "component": "js shim (`crates/js/src/shim/web_api_shim_mid.js` — `_LUMEN_WRAPPER_MEMBERS`)",
    "date": "2026-09-02",
    "debtor": false
+  },
+  "BUG-499": {
+   "status": "fixed",
+   "title": "`getComputedStyle().getPropertyValue('--custom-prop')` всегда возвращает `\"\"` — карта computed-style никогда не сериализует `ComputedStyle::custom_props`, незав…",
+   "component": "layout/js (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`, `crates/js/src/v8_runtime.rs::_lumen_get_computed_style`)",
+   "date": "2026-09-03",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -13854,6 +13861,9 @@
   ],
   "js (`web_api_shim_mid.js::Element.scrollIntoView`, `_lumen_align_scroll`)": [
    "BUG-962"
+  ],
+  "js (`web_api_shim_mid.js::_lumen_serialize_style`/`_lumen_shorthand_value`/`_lumen_parse_style`)": [
+   "BUG-964"
   ],
   "js (live DOM bindings)": [
    "BUG-279"
