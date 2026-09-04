@@ -437,24 +437,35 @@ pub(crate) fn install_scroll_state(
     // `writing-mode: vertical-rl`), and this cache carries no min/max — but
     // `overflow: clip` pins an axis to 0 unconditionally regardless of requested
     // value or geometry, which `computed_styles` already lets us honor exactly.
-    // Only updates an entry that already exists (a node this cache has never seen
-    // establishes no expectation for `_lumen_get_scroll_state` to correct).
+    // BUG-975 (part 2): inserts a fresh entry when the node has none yet, not
+    // just updates an existing one — the "update only" gate broke the very
+    // first synchronous scroll on a page (`scrollTo` on line 1, before any
+    // layout ever ran): `scroll_states` was completely empty, so the write was
+    // dropped, and the read right after it forced `FlushHandles::maybe_flush`'s
+    // *first* flush, which seeds every real scroll container fresh from layout
+    // with no knowledge of the just-dropped request. A bogus insert for a node
+    // that ISN'T actually a scroll container is harmless: `maybe_flush` doesn't
+    // merge `scroll_states`, it *replaces* the whole map from
+    // `collect_scroll_containers_for_js_state`'s fresh enumeration, so a
+    // placeholder entry for a non-container node is discarded wholesale on the
+    // very next flush, same as before this change; and until that flush runs,
+    // nothing reads `scroll_states` except through `_lumen_get_scroll_state`,
+    // which always flushes first.
     {
         let ps = Arc::clone(&pending_scrolls);
         reg!(scope, ctx, store, "_lumen_request_scroll", move |nid: u32, x: f64, y: f64| {
             ps.lock().unwrap().push((nid, x as f32, y as f32));
             let mut states = ss_for_request.lock().unwrap();
-            if let Some(s) = states.get_mut(&nid) {
-                let styles = cs_for_request.lock().unwrap();
-                let overflow = styles.get(&nid);
-                let is_clip = |prop: &str| {
-                    overflow
-                        .and_then(|m| m.get(prop))
-                        .is_some_and(|v| v == "clip")
-                };
-                s[0] = if is_clip("overflow-x") { 0.0 } else { x as f32 };
-                s[1] = if is_clip("overflow-y") { 0.0 } else { y as f32 };
-            }
+            let styles = cs_for_request.lock().unwrap();
+            let overflow = styles.get(&nid);
+            let is_clip = |prop: &str| {
+                overflow
+                    .and_then(|m| m.get(prop))
+                    .is_some_and(|v| v == "clip")
+            };
+            let s = states.entry(nid).or_insert([0.0, 0.0, 0.0, 0.0]);
+            s[0] = if is_clip("overflow-x") { 0.0 } else { x as f32 };
+            s[1] = if is_clip("overflow-y") { 0.0 } else { y as f32 };
         });
     }
     // Queues a page-level scroll request from window.scrollTo/scrollBy.
