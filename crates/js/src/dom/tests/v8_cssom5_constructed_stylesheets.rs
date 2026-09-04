@@ -185,7 +185,7 @@ fn document_adopted_fingerprint_ignores_shadow_scope() {
     let rt = v8_runtime_with_dom(make_doc());
     let before = rt.document_adopted_fingerprint();
     // Trailing `.length` read — see the comment on
-    // `document_adopted_fingerprint_changes_on_assignment` (BUG-977).
+    // `document_adopted_fingerprint_changes_on_assignment` (BUG-978).
     rt.eval(
         "var host = document.createElement('div'); \
          document.body.appendChild(host); \

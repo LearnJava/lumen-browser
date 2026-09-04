@@ -1,4 +1,4 @@
-# BUG-977 — `eval()`, отдав сконструированный `CSSStyleSheet` (или что-то, ссылающееся на его `cssRules`) как completion value, роняет изолят OOM'ом
+# BUG-978 — `eval()`, отдав сконструированный `CSSStyleSheet` (или что-то, ссылающееся на его `cssRules`) как completion value, роняет изолят OOM'ом
 
 **Статус:** OPEN
 **Компонент:** js (`crates/js/src/v8_runtime/value.rs::from_v8_bounded` — обход значения, возвращённого `eval()`) вместе с `crates/js/src/shim/web_api_shim_mid.js` (`_lumen_make_constructed_style_sheet`/CSSOM-1 `cssRules`/`parentStyleSheet` — обёртки без кэша)
