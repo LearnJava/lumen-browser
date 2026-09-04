@@ -2572,6 +2572,14 @@ SOURCE_MARKERS = [
     # the second `GET resources/flag-setter.js?different` is never issued,
     # so `script.onload` never fires and the awaited promise hangs until
     # the harness's own internal timeout. New bug filed (BUG-968).
+    #
+    # WPT-RUN-6 slice 57 confirmed the same mechanism from the other
+    # direction: `execution-timing/023.html` appends a `<script>` with no
+    # `src` at all (so "prepare a script" runs a no-op at connection time —
+    # the pending entry is still consumed) and only sets `.src` afterwards,
+    # expecting that first assignment to fetch and run. Measured live
+    # (`tests/wpt/verify_slice57_gaps.py`): `harness-complete status=2`
+    # (TIMEOUT), same `.onload`-never-fires shape.
     Mechanism(
         "script-src-mutation-not-prepared", "BUG-968",
         [], "mutating `.src` on an already-prepared, already-connected "
@@ -2581,6 +2589,8 @@ SOURCE_MARKERS = [
         predicate=_exact_id_marker(
             "/html/semantics/scripting-1/the-script-element/"
             "change-src-attr-prepare-a-script.html",
+            "/html/semantics/scripting-1/the-script-element/"
+            "execution-timing/023.html",
         ),
     ),
     # WPT-RUN-6 slice 55. `pick_from_srcset` (`picture.rs`) computes

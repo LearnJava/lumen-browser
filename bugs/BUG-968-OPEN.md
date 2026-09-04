@@ -71,19 +71,36 @@ element each time) will silently never execute past the first swap — this is
 a real, if less common, alternative to the usual "one `createElement` per
 load" idiom the rest of `_lumen_resource_track` already covers.
 
+**Also the "no `src` at connection time, `.src` set for the first time
+afterwards" case — not a narrower variant, the same one-shot gate.**
+Corrected 2026-09-04 (WPT-RUN-6 срез 57): the note originally here claimed
+this shape was "already covered by the connection-time trigger", which reads
+`_lumen_resource_try_prepare`'s single call to `_lumen_script_prepare` as
+running again once `src` becomes non-empty — it does not, that call already
+fired once at connection (with `src` empty, so it took the inline/no-op
+branch) and nothing re-enters it later. Confirmed live: `execution-timing/
+023.html` appends a `<script>` with no `src`/no body via `testlib.addScript`,
+then on `load` sets `.src = 'scripts/include-1.js'` and awaits `.onload` —
+`tests/wpt/verify_slice57_gaps.py` measured `harness-complete status=2`
+(TIMEOUT), the identical `.onload`-never-fires shape as the already-valid-src
+case above, on `_lumen_script_prepare`'s own "at most once in its lifetime"
+read in §Механизм. The fix below already covers this case too — it needs no
+separate condition, only for the guard on *when* to re-enter
+`_lumen_script_prepare` not to special-case "was previously non-empty".
+
 ## Что нужно
 
 Give `.src` (and, per the same PR, `.type`) a side-effecting setter on
 non-parser-inserted, already-connected `<script>` elements that re-enters
-`_lumen_script_prepare` when the *previous* `src` was non-empty (only the
-"previously had no such attribute → now has one" case is already covered by
-the connection-time trigger). Needs its own bookkeeping distinct from
+`_lumen_script_prepare` whenever `src` is mutated after the element's
+connection-time prepare has already run — whether that earlier `src` was
+empty or valid. Needs its own bookkeeping distinct from
 `_lumen_resource_pending`, since that map's whole point is "prepared exactly
-once" — this is deliberately a *second* legitimate prepare, not a re-entry
-bug to guard against.
+once" — this is deliberately a *second* (or later) legitimate prepare, not a
+re-entry bug to guard against.
 
 ## Классификация WPT-RUN-6
 
 Attributed via
-`_exact_id_marker("/html/semantics/scripting-1/the-script-element/change-src-attr-prepare-a-script.html")`
+`_exact_id_marker("/html/semantics/scripting-1/the-script-element/change-src-attr-prepare-a-script.html", "/html/semantics/scripting-1/the-script-element/execution-timing/023.html")`
 in `tests/wpt/timeout_audit.py` (marker `script-src-mutation-not-prepared`).

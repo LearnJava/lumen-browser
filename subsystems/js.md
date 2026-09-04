@@ -2100,11 +2100,15 @@ runtime or the shim. Read them before a JS/Web-API change.
   tree for hrefs on every cascade pass (`collect_link_hrefs`) — `<style>`/`<script>`/`<track>`/`<source>`
   have no such full-tree fallback.
 - **`_lumen_resource_pending` prepares a `<script>` at most once, ever — mutating `.src` afterwards is a
-  silent no-op.** The map doubles as the spec's per-element "already started" flag: the entry is deleted
-  the first time the element becomes connected, and nothing re-adds it. That was a faithful model of the
-  *original* algorithm, but whatwg/html#10188 (2026) added a second trigger — mutating `.src` on an
-  already-connected, non-parser-inserted script whose `src` was previously non-empty must re-run "prepare
-  a script" — which has no implementation at all: `src` is a plain reflected URL attribute with no
-  side-effecting setter ([BUG-968](../bugs/BUG-968-OPEN.md)). A probe waiting on `.onload` after
-  reassigning an already-loaded script's `.src` hangs; it is not testing whether the *new* URL fetches
-  correctly, it is testing whether Lumen fetches it at all, which it currently does not.
+  silent no-op, including the very first time `.src` is ever set on a script that had none at connection.**
+  The map doubles as the spec's per-element "already started" flag: the entry is deleted the first time the
+  element becomes connected, and nothing re-adds it — so a script appended with no `src`/no body consumes
+  that one-shot trigger as a no-op just as thoroughly as one that already fetched something. That was a
+  faithful model of the *original* algorithm, but whatwg/html#10188 (2026) added a second trigger — mutating
+  `.src` on an already-connected, non-parser-inserted script after its connection-time prepare has already
+  run must re-run "prepare a script", whatever that earlier `src` was — which has no implementation at all:
+  `src` is a plain reflected URL attribute with no side-effecting setter ([BUG-968](../bugs/BUG-968-OPEN.md),
+  confirmed on both shapes — WPT-RUN-6 срез 55's already-valid-`src` case and срез 57's never-had-a-`src`
+  case). A probe waiting on `.onload` after (re)assigning a connected script's `.src` hangs; it is not
+  testing whether the *new* URL fetches correctly, it is testing whether Lumen fetches it at all, which it
+  currently does not, no matter how many times `.src` is set or what it was set to before.
