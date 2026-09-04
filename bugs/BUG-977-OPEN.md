@@ -113,3 +113,24 @@ python tests/wpt/verify_bug504_vertical_rl_clip.py --binary <АБСОЛЮТНЫ�
 
 Первая проверка (`after_scrollTo_hidden`) теперь зелёная (BUG-975 часть 2);
 оставшиеся четыре — этот баг.
+
+## Residual found working BUG-506 (P3, 2026-09-04)
+
+Тот же no-op `FlushHandles::maybe_flush` на `--bidi-port`-пути бьёт не
+только `_lumen_request_scroll`'s `is_clip`-проверку — общая
+`getComputedStyle()`/`HTMLStyleElement.sheet` под живым окном ловят его
+тоже, без единого upstream'а `overflow`/`clip`. Живой прогон 5 файлов
+`css/css-logical` из [BUG-506](BUG-506-OPEN.md) (реальный wptrunner-
+пайплайн, `LumenTestharnessExecutor` через `--bidi-port`) показывает:
+`addDiv(t)`-вставленный `<div>`, прочитанный тем же ходом через
+`getComputedStyle`, отдаёт `""` для любого свойства (не только
+геометрии) — `computed_styles` не содержит записи для узла вовсе, тот же
+механизм, что и здесь, только через другой native (`_lumen_get_computed_
+style` вместо `_lumen_request_scroll`). Второй вход в ту же дыру:
+`extraStyle.sheet` (`HTMLStyleElement.sheet`) остаётся `null` сразу после
+`document.head.appendChild()` тем же ходом — `testcommon.js`'s
+`addStyle()` падает `TypeError: Cannot read properties of null (reading
+'insertRule')`. Подтверждает, что CSSOM-7 закрывает не только
+scroll/clip-кейс, а весь класс «живой шелл не флашит стиль/layout
+синхронно перед JS-чтением» — см. также остаточную запись в
+[BUG-493](BUG-493-OPEN.md).

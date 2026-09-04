@@ -96,3 +96,89 @@ rooted relative path" gap.
 Committed `.ini` under `tests/wpt/metadata/css/css-logical/` for all 5
 files, `expected: FAIL` per subtest (harness itself completes `OK`, only
 individual subtests fail).
+
+## Срез P3 2026-09-04: the original mechanism no longer reproduces — real blocker is CSSOM-4/BUG-493's shell gap
+
+Re-measured all 5 files against the exact real wptrunner pipeline (not a
+reimplementation): `verify_bug506_cross_dir_script.py` (modeled on
+`verify_bug961_orchestration.py`) builds the same `TestEnvironment`
+(real `wptserve`, real `.any.js`/`AnyHtmlHandler` routing) and drives
+`LumenTestharnessExecutor._run_testharness` — imported unmodified from
+`executorlumen.py` — against a freshly built `dev-release` binary, no
+`TestRunnerManager` involved. Ran twice per file: variant A is the real
+executor path, variant B a bare `BidiSession.navigate(wait="complete")`
+followed by a *separate* `script.evaluate`, isolating whether the
+executor's own poll loop matters at all.
+
+**`addDiv is not defined`/`addStyle is not defined` does not occur on any
+of the 5 files, in either variant.** `typeof window.addDiv` reads back
+`"function"` and the harness itself completes `status=0` (OK) every time
+— the helper fetch itself was also confirmed directly (`urllib.request`
+against the exact cross-directory URL `wptserve` serves it at,
+`/css/css-animations/support/testcommon.js`, 7511 bytes, contains
+`function addDiv`). Whatever produced the original symptom (WPT-RUN-3
+срез 12, 2026-08-02) has been resolved as a side effect of unrelated work
+in the ~1 month since — the shell's script-loading/prefetch pipeline has
+seen multiple slices since (BUG-171 prefetch cache, streaming pipeline
+changes) that plausibly closed the race window; not worth archaeology now
+that it's gone.
+
+**All 5 files still fail today, but every failure is now attributable to
+a single, already-tracked, different defect: CSSOM-4/BUG-493's shell
+coverage gap.** `bugs/BUG-493-OPEN.md`'s CSSOM-4 slice (2026-09-03)
+made `FlushHandles::maybe_flush` force a synchronous style+layout
+recompute before `_lumen_get_computed_style`/`_lumen_get_bounding_rect`/
+`_lumen_get_custom_property` read their snapshot maps — **but only for
+`InProcessSession`** (headless/`--mcp-port`); the doc comment on
+`crates/js/src/v8_runtime/style_flush.rs` says outright "the interactive
+shell never calls `update_stylesheet`, so `FlushHandles::stylesheet`
+stays `None` there and `maybe_flush` is a no-op". Every real wptrunner
+run launches Lumen via `--bidi-port` (`tools/wptrunner/wptrunner/
+browsers/lumen.py::make_command`) — the live/interactive path, not
+`InProcessSession` — so this gap is live on literally every WPT test
+Lumen runs, not just this file's 5. [BUG-977](BUG-977-OPEN.md)/CSSOM-7
+already tracks one narrow instance of it (`_lumen_request_scroll`'s
+`is_clip` check); what this slice adds is that the *general* case —
+plain `getComputedStyle()` and `HTMLStyleElement.sheet` on a
+freshly-mutated node, no scroll/clip involved — hits the exact same
+no-op `maybe_flush` wall:
+
+- `animation-001.html` (24 subtests) and the `logical-shorthand-…
+  .tentative.html` file (1 subtest): `addDiv(t)` appends a new `<div>`
+  in the same synchronous script turn `getComputedStyle(div).<prop>`
+  reads it back — `computed_styles` has no entry yet for that node id
+  (no relayout has run since it was inserted), so every property reads
+  back `""` instead of its real computed value. This reclassifies one
+  subtest, `Logical properties are NOT stored as physical properties`
+  (checks `KeyframeEffect.getKeyframes()` structure only, no
+  `getComputedStyle` call) — it does **not** hit the gap and now
+  genuinely `PASS`es; the committed `.ini` incorrectly still listed it
+  `expected: FAIL` and has been corrected.
+- `animation-002.html`/`animation-003.tentative.html`/`animation-004.html`
+  (15+1+16 subtests): `addStyle(t, rules)` (`support/testcommon.js:139`)
+  does `document.head.appendChild(extraStyle); … extraStyle.sheet
+  .insertRule(...)` in the same synchronous turn — `.sheet` is still
+  `null` (the `CSSStyleSheet` object HTML LS §"create a stylesheet"
+  associates with a connected `<style>` element hasn't been created yet,
+  same missing-synchronous-recompute cause), so every subtest throws
+  `TypeError: Cannot read properties of null (reading 'insertRule')`
+  instead of `ReferenceError: addDiv is not defined`. Subtest names/count
+  are unchanged from the original filing — only the failure message
+  differs — so the existing `.ini`s for these 3 files needed no `[…]`
+  block changes, only the stale root-cause comment.
+
+**Blocker reattributed from "unclear" to CSSOM-4/BUG-493** (owner: the
+P1-owned CSSOM roadmap track). This is not a point fix for P3 — it is
+the same architectural hole BUG-977/CSSOM-7 already exists for, just
+observed through two different native entry points
+(`_lumen_get_computed_style`/`HTMLStyleElement.sheet` vs
+`_lumen_request_scroll`). Extending `FlushHandles`/an equivalent
+synchronous recompute to the live shell (`crates/shell/src/relayout.rs`)
+is what unblocks all 57 subtests across these 5 files at once, plus an
+unknown amount of the rest of the WPT corpus that this session did not
+survey (any test that mutates the DOM/style then reads it back
+synchronously, in the same script turn, under a *live-window* run — which
+is every real Lumen WPT run, not a `--mcp-port` one).
+
+Probe script kept as `tests/wpt/verify_bug506_cross_dir_script.py` for
+re-verification once CSSOM-4/BUG-493's shell coverage lands.

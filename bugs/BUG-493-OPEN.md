@@ -390,3 +390,25 @@ bug, not BUG-495. No action taken on this bug itself (P3 does not fix
 ДОРАБОТКА-classified rows); recorded here per the doc-sync rule that a
 residual found while working a different bug belongs in the bug that
 actually tracks it.
+
+## Residual found working BUG-506 (P3, 2026-09-04)
+
+[BUG-506](BUG-506-OPEN.md)'s originally-filed symptom (a cross-directory
+external `<script src>` never executing before dependent inline code) no
+longer reproduces, but re-measuring its 5 `css/css-logical` files against
+the real wptrunner pipeline (`--bidi-port`, the ONLY mode any real
+Lumen WPT run uses — `InProcessSession`/`--mcp-port` is a probe-only path)
+shows all 5 still fail, now on this exact gap: `getComputedStyle()`
+returning `""` for a `<div>` `addDiv(t)` just inserted in the same script
+turn (`animation-001.html` + the `logical-shorthand-…tentative.html`
+file), and — a second entry point into the identical missing-synchronous-
+recompute cause — `HTMLStyleElement.sheet` still `null` right after
+`document.head.appendChild()` in the same turn, throwing
+`TypeError: Cannot read properties of null (reading 'insertRule')` out of
+`testcommon.js`'s `addStyle()` (`animation-002/003/004`). Confirms this
+bug's "no synchronous flush" gap is live on `--bidi-port`, not just the
+`InProcessSession` path this file's own repros use — see
+[BUG-977](BUG-977-OPEN.md)/CSSOM-7 for the shell-coverage half of this
+(it already tracks one narrow instance, `_lumen_request_scroll`'s
+`is_clip` check; this residual generalizes it to plain
+`getComputedStyle()`/`.sheet` with no scroll/clip involved at all).
