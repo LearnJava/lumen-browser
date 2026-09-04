@@ -282,6 +282,136 @@ pub use permissions_policy::{
 
 use pool::PoolKey;
 
+/// Разобрать `data:` URL (RFC 2397, уточнённое HTML Standard §"data: URL
+/// processor") на content-type и тело, без обращения к сети.
+///
+/// `url.path_and_query()` — это ровно "URL serializer с exclude fragment"
+/// из спеки: путь и query у cannot-be-a-base URL склеены через `?`, если
+/// query был (WHATWG "cannot-be-a-base-URL path state" уходит в query
+/// state на первом же непроцентированном `?` в исходной строке — склейка
+/// восстанавливает его на прежнем месте), а fragment уже отброшен `Url`.
+/// Дальше ищем первую запятую вручную, как того требует сама data-схема.
+fn parse_data_url(url: &Url) -> Result<(String, Vec<u8>)> {
+    let opaque = url.path_and_query();
+    let comma = opaque
+        .find(',')
+        .ok_or_else(|| Error::Network("data: URL missing comma".to_owned()))?;
+    let mut mime = opaque[..comma].trim_matches(|c: char| c.is_ascii_whitespace());
+    let is_base64 = mime.len() >= 7 && mime[mime.len() - 7..].eq_ignore_ascii_case(";base64");
+    if is_base64 {
+        mime = mime[..mime.len() - 7].trim_matches(|c: char| c.is_ascii_whitespace());
+    }
+    let content_type =
+        if mime.is_empty() { "text/plain;charset=US-ASCII".to_owned() } else { mime.to_owned() };
+    let decoded = percent_decode_bytes(&opaque[comma + 1..]);
+    let body = if is_base64 {
+        // Forgiving-base64 (WHATWG "forgiving-base64 decode"): ASCII-пробелы
+        // в теле — обычное явление (data URL, перенесённый построчно в CSS/
+        // HTML-атрибут) и не являются ошибкой, в отличие от прочего мусора.
+        let ascii = String::from_utf8_lossy(&decoded);
+        let stripped: String = ascii.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+        base64_decode(&stripped)?
+    } else {
+        decoded
+    };
+    Ok((content_type, body))
+}
+
+/// Percent-decode (RFC 3986 §2.1) в сырые байты — без интерпретации как
+/// UTF-8: тело `data:` URL опаковое, декодируется как байты, а не текст.
+/// Байт, начинающий `%`, без двух валидных hex-цифр после — не ошибка,
+/// проходит как есть (та же леность, что у остального URL-парсинга here).
+fn percent_decode_bytes(s: &str) -> Vec<u8> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let (hi, lo) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2]));
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Одна hex-цифра ASCII-байта в значение 0..=15.
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Decode base64 (RFC 4648 §4) в сырые байты — обратная операция к
+/// [`base64_encode`]. Требует корректный `=`-паддинг (0 или не больше двух
+/// хвостовых `=`) и длину, кратную 4; невалидный алфавит или форма —
+/// `Err`, а не молчаливое усечение (data: URL с битым base64 должен упасть,
+/// а не отдать обрезанное изображение).
+fn base64_decode(s: &str) -> Result<Vec<u8>> {
+    fn val(b: u8) -> Option<u8> {
+        match b {
+            b'A'..=b'Z' => Some(b - b'A'),
+            b'a'..=b'z' => Some(b - b'a' + 26),
+            b'0'..=b'9' => Some(b - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !bytes.len().is_multiple_of(4) {
+        return Err(Error::Network("data: URL invalid base64 length".to_owned()));
+    }
+    let pad = bytes.iter().rev().take_while(|&&b| b == b'=').count();
+    if pad > 2 {
+        return Err(Error::Network("data: URL invalid base64 padding".to_owned()));
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+    for (chunk_idx, chunk) in bytes.chunks(4).enumerate() {
+        let is_last = chunk_idx == bytes.len() / 4 - 1;
+        let mut vals = [0u8; 4];
+        let mut chunk_pad = 0usize;
+        for (i, &b) in chunk.iter().enumerate() {
+            if b == b'=' {
+                if !is_last {
+                    return Err(Error::Network("data: URL invalid base64 padding".to_owned()));
+                }
+                chunk_pad += 1;
+            } else if chunk_pad > 0 {
+                // Non-pad character after `=` inside the same chunk — padding
+                // must be a trailing run, not interleaved with data.
+                return Err(Error::Network("data: URL invalid base64 padding".to_owned()));
+            } else {
+                vals[i] = val(b)
+                    .ok_or_else(|| Error::Network("data: URL invalid base64 character".to_owned()))?;
+            }
+        }
+        let n = ((vals[0] as u32) << 18)
+            | ((vals[1] as u32) << 12)
+            | ((vals[2] as u32) << 6)
+            | (vals[3] as u32);
+        out.push((n >> 16) as u8);
+        if chunk_pad < 2 {
+            out.push((n >> 8) as u8);
+        }
+        if chunk_pad < 1 {
+            out.push(n as u8);
+        }
+    }
+    Ok(out)
+}
+
 /// Проверяет, что схема URL поддерживается транспортом (http/https) и
 /// извлекает всё, что нужно для connect: ASCII-форму host (Punycode для
 /// IDN — RFC 7230 §5.4, RFC 6066 §3), effective port (80/443 по схеме) и
@@ -2008,6 +2138,22 @@ fn fetch_with_redirect(
 ) -> Result<(Response, Url)> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
+    }
+
+    // DATAURL-1: `data:` не идёт в сеть вообще — до HSTS/require_http_scheme
+    // и до RequestFilter/Started, тем же путём, каким этот hop поступил бы,
+    // будь он редиректом на `data:`. Ни один байт не улетал, поэтому, как и
+    // bad scheme у `require_http_scheme` ниже, никаких Started/Completed/
+    // Blocked событий — фильтру и mixed-content тут нечего оценивать: нет
+    // ни сети, ни хоста, ни возможности утечки по HTTP. Это единственная
+    // точка входа для содержимого `data:` — картинки, стили, шрифты, скрипты
+    // и навигация приходят сюда через один и тот же `fetch_with_redirect`.
+    if url.scheme() == "data" {
+        let (content_type, body) = parse_data_url(url)?;
+        return Ok((
+            Response { status: 200, headers: vec![("content-type".to_owned(), content_type)], body },
+            url.clone(),
+        ));
     }
 
     // HSTS upgrade: до require_http_scheme (RFC 6797 §8.3 — канонизация URI
@@ -9598,5 +9744,144 @@ mod proxy_tests {
     fn base64_encode_user_pass() {
         let encoded = base64_encode("user:pass");
         assert_eq!(encoded, "dXNlcjpwYXNz");
+    }
+
+    #[test]
+    fn base64_decode_roundtrips_with_encode() {
+        for s in ["", "a", "ab", "abc", "user:pass", "Hello, World!"] {
+            let encoded = base64_encode(s);
+            let decoded = base64_decode(&encoded).unwrap();
+            assert_eq!(decoded, s.as_bytes());
+        }
+    }
+
+    #[test]
+    fn base64_decode_rejects_bad_length() {
+        assert!(base64_decode("abcde").is_err());
+    }
+
+    #[test]
+    fn base64_decode_rejects_bad_alphabet() {
+        assert!(base64_decode("ab!=").is_err());
+    }
+
+    #[test]
+    fn base64_decode_rejects_interior_padding() {
+        assert!(base64_decode("A=BC").is_err());
+    }
+
+    #[test]
+    fn base64_decode_rejects_padding_before_last_chunk() {
+        assert!(base64_decode("AA==YWJj").is_err());
+    }
+
+    #[test]
+    fn percent_decode_bytes_basic() {
+        assert_eq!(percent_decode_bytes("Hello%2C%20World%21"), b"Hello, World!");
+    }
+
+    #[test]
+    fn percent_decode_bytes_passes_through_lone_percent() {
+        // A trailing `%` with no (or invalid) hex digits after it is not an
+        // error — it passes through unchanged, same leniency the rest of the
+        // URL parsing in this crate already takes.
+        assert_eq!(percent_decode_bytes("100%"), b"100%");
+        assert_eq!(percent_decode_bytes("100%2"), b"100%2");
+        assert_eq!(percent_decode_bytes("100%zz"), b"100%zz");
+    }
+
+    #[test]
+    fn data_url_base64() {
+        let url = Url::parse("data:text/plain;base64,SGVsbG8=").unwrap();
+        let (content_type, body) = parse_data_url(&url).unwrap();
+        assert_eq!(content_type, "text/plain");
+        assert_eq!(body, b"Hello");
+    }
+
+    #[test]
+    fn data_url_percent_encoded() {
+        let url = Url::parse("data:text/plain,Hello%2C%20World%21").unwrap();
+        let (content_type, body) = parse_data_url(&url).unwrap();
+        assert_eq!(content_type, "text/plain");
+        assert_eq!(body, b"Hello, World!");
+    }
+
+    #[test]
+    fn data_url_default_mediatype() {
+        // RFC 2397: absent mediatype defaults to text/plain;charset=US-ASCII.
+        let url = Url::parse("data:,hello").unwrap();
+        let (content_type, body) = parse_data_url(&url).unwrap();
+        assert_eq!(content_type, "text/plain;charset=US-ASCII");
+        assert_eq!(body, b"hello");
+    }
+
+    #[test]
+    fn data_url_base64_with_empty_mediatype() {
+        let url = Url::parse("data:;base64,SGVsbG8=").unwrap();
+        let (content_type, body) = parse_data_url(&url).unwrap();
+        assert_eq!(content_type, "text/plain;charset=US-ASCII");
+        assert_eq!(body, b"Hello");
+    }
+
+    #[test]
+    fn data_url_empty_body() {
+        let url = Url::parse("data:text/plain,").unwrap();
+        let (content_type, body) = parse_data_url(&url).unwrap();
+        assert_eq!(content_type, "text/plain");
+        assert!(body.is_empty());
+    }
+
+    #[test]
+    fn data_url_missing_comma_fails() {
+        let url = Url::parse("data:text/plain").unwrap();
+        assert!(parse_data_url(&url).is_err());
+    }
+
+    #[test]
+    fn data_url_bad_base64_fails() {
+        let url = Url::parse("data:text/plain;base64,not-valid-base64!!!").unwrap();
+        assert!(parse_data_url(&url).is_err());
+    }
+
+    #[test]
+    fn data_url_base64_with_whitespace_is_forgiving() {
+        // Real-world data: URLs are frequently wrapped across multiple lines
+        // in CSS/HTML source; the base64 payload picks up newlines/spaces.
+        let url = Url::parse("data:image/png;base64,aGVs\nbG8=").unwrap();
+        let (content_type, body) = parse_data_url(&url).unwrap();
+        assert_eq!(content_type, "image/png");
+        assert_eq!(body, b"hello");
+    }
+
+    #[test]
+    fn data_url_query_char_preserved_in_body() {
+        // A literal `?` inside the (non-base64) data must survive — the
+        // WHATWG URL parser would otherwise split it off as a query
+        // component; `path_and_query()` must splice it back before the
+        // comma search runs.
+        let url = Url::parse("data:text/plain,a?b=c").unwrap();
+        let (content_type, body) = parse_data_url(&url).unwrap();
+        assert_eq!(content_type, "text/plain");
+        assert_eq!(body, b"a?b=c");
+    }
+
+    #[test]
+    fn fetch_subresource_data_url_returns_body_without_network() {
+        // Port 0 in the URL would fail to connect — proving this never
+        // touches the network. Covers the "one path for every subresource
+        // type" requirement: images, CSS, fonts and scripts all call
+        // `fetch_subresource`.
+        let client = HttpClient::new();
+        let url = Url::parse("data:text/css,body%7Bcolor:red%7D").unwrap();
+        let body = client.fetch_subresource(&url, RequestDestination::Style).unwrap();
+        assert_eq!(body, b"body{color:red}");
+    }
+
+    #[test]
+    fn fetch_page_data_url_returns_body_without_network() {
+        let client = HttpClient::new();
+        let url = Url::parse("data:text/html,%3Ch1%3Ehi%3C%2Fh1%3E").unwrap();
+        let page = client.fetch_page(&url).unwrap();
+        assert_eq!(page.body, b"<h1>hi</h1>");
     }
 }
