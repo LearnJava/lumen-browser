@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-04",
  "counts": {
-  "open": 373,
+  "open": 374,
   "fixed": 554,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 927,
+ "total_bugs": 928,
  "phases": [
   {
    "id": "P0",
@@ -5444,7 +5444,8 @@
         "BUG-970",
         "BUG-971",
         "BUG-972",
-        "BUG-973"
+        "BUG-973",
+        "BUG-978"
        ]
       },
       {
@@ -9457,6 +9458,13 @@
    "status": "open",
    "title": "В интерактивном (не headless) окне синхронное переключение `overflow` на `clip` не видно зануляющей проверке `_lumen_request_scroll`, если скролл того же элемен…",
    "component": "js (`crates/js/src/v8_runtime/install/platform.rs::install_scroll_state` — `_lumen_request_scroll`'s `is_clip`) / js (`crates/js/src/v8_runtime/style_flush.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-978": {
+   "status": "open",
+   "title": "`contentWindow`/именованный доступ к окну — фиксированный список из ~11 IDL-имён, а не живой мост к реальному глобальному объекту фрейма: любой global, который…",
+   "component": "js (`crates/js/src/frame_bridge.rs::winFacade`)",
    "date": null,
    "debtor": false
   },
