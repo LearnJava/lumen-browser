@@ -131,6 +131,44 @@ fn direct_scroll_left_top_assignment_is_visible_to_synchronous_read() {
     );
 }
 
+/// BUG-975 (part 2): the narrowed remaining case — a scroll request on the
+/// very first synchronous line of a script, before `scroll_states` has ANY
+/// entry at all (no seed, unlike every test above — this is deliberately
+/// the one test in this file that skips `update_scroll_states`, to reproduce
+/// "never flushed yet" instead of "already has a stale entry"). The read
+/// right after the request forces `FlushHandles::maybe_flush`'s first-ever
+/// flush, which must pick up the request instead of silently resetting the
+/// container to its freshly-computed default of `[0, 0]`.
+#[test]
+fn scroll_to_before_any_flush_is_visible_to_synchronous_read() {
+    let (doc, _main_nid) = make_scroll_doc();
+    let rt = V8JsRuntime::new().unwrap();
+    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+        .unwrap();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse(
+        "#main { width: 20px; height: 20px; overflow: auto; } \
+         .content { width: 200px; height: 200px; }",
+    )));
+    rt.update_viewport_size(800.0, 600.0);
+    let r = rt
+        .eval(
+            "(function() {
+                var main = document.getElementById('main');
+                main.scrollTo(20, 30);
+                return [main.scrollLeft, main.scrollTop];
+            })()",
+        )
+        .unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::Array(vec![
+            lumen_core::JsValue::Number(20.0),
+            lumen_core::JsValue::Number(30.0),
+        ])
+    );
+}
+
 /// `overflow: clip` (CSS Overflow L3 §3.4) rejects every scroll offset
 /// outright — the one clamp rule the optimistic write can honor exactly
 /// without live layout data, since it comes straight from `computed_styles`,

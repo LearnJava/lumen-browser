@@ -844,3 +844,14 @@ visible without a full relayout per request) and provably affects other
 files (`css/cssom-view/elementScroll.html`) independent of this one.
 Remaining scope unchanged in count (1 file) but now correctly attributed:
 blocked on BUG-975, not on CSSOM-4 (which is done). Status stays `OPEN`.
+
+**Срез P3 2026-09-04 (часть 12):** BUG-975 part 2 landed — the
+first-line-of-script scroll-request gap is fixed. The remaining file's
+blocker is reattributed once more: live-probing the same repro after that
+fix shows the FIRST assertion now genuinely passes (`[-40, 50]`), but the
+other four (the `overflow: clip` ones) reveal a third, distinct root cause
+— `_lumen_request_scroll`'s clip-zero check reads `computed_styles`, which
+the interactive shell only refreshes asynchronously, so a same-turn
+`style.overflow = 'clip'` isn't visible to a same-turn scroll write/read.
+Filed as [BUG-977](bugs/BUG-977-OPEN.md). Remaining scope unchanged (1
+file), blocker moves from BUG-975 to BUG-977. Status stays `OPEN`.
