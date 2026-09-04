@@ -145,6 +145,11 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
         let slot = Arc::clone(&latest);
         let join = thread::Builder::new()
             .name("lumen-engine".to_owned())
+            // BUG-987: layout рекурсивно спускается по дереву боксов на
+            // глубину DOM; штатный стек std::thread (2 МБ) переполняется на
+            // глубоких страницах (fandom+OneTrust и др.). 128 МБ резерва —
+            // запас до итеративного обхода (см. BUGS.md BUG-987).
+            .stack_size(128 * 1024 * 1024)
             .spawn(move || engine_thread_main(&rx, &slot, initial))?;
         Ok(Self { tx, latest, join: Some(join) })
     }
