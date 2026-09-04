@@ -1693,6 +1693,39 @@ the time — read dates.
     a queued task ([BUG-648](../bugs/BUG-648-OPEN.md)), and every per-phase milestone is
     collapsed onto `fetchStart`.
 
+- **CSS Font Loading API: `FontFace`/`document.fonts` (FONTLOAD-1, 2026-09-05,
+  `crates/js/src/shim/web_api_shim_mid.js`).** Replaced the old ad hoc
+  `_lumen_get_fonts()` (rebuilt a fresh plain object from native JSON on
+  every `document.fonts` access — no identity, no `add`/`delete`/`has`) with
+  a real `FontFace` constructor and a `document.fonts` singleton that is a
+  genuine `setlike<FontFace>`. Three things worth knowing before touching it.
+  **(1)** Identity is cached the same way `el.style`/`el.dataset` are —
+  `_lumen_wrapper_slot(document, '__fonts__', _lumen_make_font_face_set)` —
+  so the CSS-connected members are read from native exactly once, at first
+  `document.fonts` access; there is no reactivity to a later `<style>`/CSSOM
+  change (that needs the live-cascade foundation BUG-471/CSSOM-4 would add).
+  **(2)** `loading`/`loadingdone`/`loadingerror` are driven by a module-level
+  `WeakMap<FontFace, FontFaceSet[]>` (`_lumen_font_face_owners`) populated by
+  `FontFaceSet.add()`, not by the set polling its members — `FontFace.load()`
+  calls `_lumen_font_face_load_start`/`_load_end`, which look the face up in
+  the map and notify every owning set. A `FontFace` never added to a set
+  loads silently, same as the spec. **(3)** `document.fonts.ready`/`.status`
+  deliberately count only loads started through `FontFace.load()`/
+  `document.fonts.load()`, never a CSS-declared `url()` source's native
+  status — that native status never leaves "loading" today (`crates/shell`'s
+  `FontLoaded` event updates the render font registry, not
+  `Document::fonts_mut()`), so wiring it into `ready` would turn every
+  existing `document.fonts.ready.then(...)` layout gate already relied on
+  throughout css-fonts/css-sizing/css-ruby into a promise that never
+  resolves. `FontFace.load()` validates bytes through a new native,
+  `_lumen_font_validate_bytes` (`crates/js/src/v8_runtime/install/dom_core.rs`,
+  wraps `lumen_font::{maybe_decode_font, Font::parse}`), fed by the shim's
+  own `fetch()`/`arrayBuffer()` rather than a second native network path.
+  Not done, and tracked as the task's own remaining slices in
+  [`bugs/BUG-467-OPEN.md`](../bugs/BUG-467-OPEN.md): CSS-connected
+  reactivity, descriptor grammar validation, and wiring a script-constructed
+  `FontFace` into `lumen_font::FontRegistry`/actual rendering.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.

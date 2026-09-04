@@ -168,6 +168,18 @@ pub(crate) fn install_document_fonts(
             doc.fonts().has_family(&family)
         });
     }
+    // ── FontFace.load() bytes validation (FONTLOAD-1) ─────────────────────────
+    // The shim's `FontFace.load()` fetches a `url()` source itself (reusing
+    // `fetch()`/`arrayBuffer()`) and hands the raw bytes here to decide
+    // resolve-vs-reject — this is the CSS Font Loading "parse a font" gate,
+    // not a render-registry registration (a script-constructed `FontFace`
+    // does not yet affect actual text rendering, see the shim's own header
+    // comment on `document.fonts`/FONTLOAD's remaining slices).
+    reg!(scope, ctx, store, "_lumen_font_validate_bytes", |bytes: Vec<u8>| -> bool {
+        let decoded = lumen_font::maybe_decode_font(&bytes).ok().flatten();
+        let data: &[u8] = decoded.as_deref().unwrap_or(&bytes);
+        lumen_font::Font::parse(data).is_ok()
+    });
     Ok(())
 }
 
