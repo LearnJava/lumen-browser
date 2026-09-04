@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-04",
  "counts": {
-  "open": 377,
+  "open": 378,
   "fixed": 554,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 931,
+ "total_bugs": 932,
  "phases": [
   {
    "id": "P0",
@@ -5447,7 +5447,8 @@
         "BUG-973",
         "BUG-979",
         "BUG-980",
-        "BUG-981"
+        "BUG-981",
+        "BUG-982"
        ]
       },
       {
@@ -9488,6 +9489,13 @@
    "status": "open",
    "title": "Read/dispatch-цикл BiDi-соединения отвечает `Pong` на входящий `Ping` только внутри `read_text_frame`, а не пока выполняется `dispatch()` — команда `browsingCon…",
    "component": "bidi-server (`crates/bidi-server/src/transport.rs::handle`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-982": {
+   "status": "open",
+   "title": "`fetch_with_redirect` уже вычисляет верный финальный URL после HTTP-редиректов (`let (resp, _final_url) = …` — подчёркивание не линт, значение реально выбрасыва…",
+   "component": "network (`crates/network/src/lib.rs::HttpClient::fetch_request_impl`) / core (`crates/core/src/ext.rs::JsFetchResult`)",
    "date": null,
    "debtor": false
   },
