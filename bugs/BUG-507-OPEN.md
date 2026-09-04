@@ -1,6 +1,14 @@
 # BUG-507: CSS Exclusions (`wrap-flow`/`wrap-through`) entirely unimplemented
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md)
+**Тип:** доработка — не точечный дефект. В отличие от BUG-491/492/495/505
+(черновые модули, где реализация всё ещё вероятна), `wrap-flow`/`wrap-through`
+не шли ни в одном evergreen-браузере (только экспериментальный IE10/11), а
+CSSWG больше не продвигает `css-exclusions` как модуль — его shape-часть давно
+выделена в отдельный, живой `css-shapes-1`, который в Lumen уже реализован
+(`CSS-SPECS.md`, 🟡). Переклассифицировано P3 2026-09-04: добавлена запись в
+раздел «Out of scope 🚫» `CSS-SPECS.md`, снято с очереди `STATUS-P3.md`.
+`.ini` (см. ниже) уже коммичены — точечной правки кода не требуется.
 **Дата:** 2026-08-02
 **Компонент:** css-parser/layout — property not recognized anywhere
 (`grep -rn "wrap-flow\|wrap-through" crates/` returns zero hits)
