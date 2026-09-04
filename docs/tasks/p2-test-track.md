@@ -503,6 +503,36 @@ exit 0. Новых багов генератора не найдено — об�
 Осталось непокрытых **~145** категорий (296 `done`-категорий WPT-VENDOR на сегодня − 151 = 145).
 Для следующей сессии — тот же цикл дальше.
 
+### TEST-3: срез 3 (2026-09-04)
+
+Продолжение того же цикла: **+36 категорий** (151 → 187 с baseline) — `file-system-access`,
+`focus`, `forced-colors-mode`, `geolocation`, `inert`, `input-events`, `jpegxl`, `js`,
+`js-self-profiling`, `longtask-timing`, `mediacapture-image`, `mediacapture-insertable-streams`,
+`mediacapture-record`, `notifications`, `orientation-event`, `payment-request`, `png`,
+`pointerlock`, `presentation-api`, `quirks`, `reporting`, `resize-observer`, `sanitizer-api`,
+`scroll-to-text-fragment`, `secure-payment-confirmation`, `shape-detection`, `speech-api`,
+`subresource-integrity`, `visual-viewport`, `wai-aria`, `web-based-payment-handler`,
+`web-bundle`, `web-share`, `webdriver`, `webrtc-encoded-transform`, `worklets`. Тот же рецепт,
+0 регрессий на всех 36 после финального прогона.
+
+`input-events` не прошёл с первого раза. Первый `--update-expected` + `--check` (бинарь ещё без
+фикса [BUG-986](bugs/BUG-986-FIXED.md), который влился параллельно этой же сессии, P3) упёрся в
+паникующий `Document::get()` на чужом `NodeId` (`crates/engine/dom/src/lib.rs:706`) на
+`input-events-get-target-ranges-deleting-in-list-items.tentative.html?Delete,ul` — паника рвёт
+BiDi-сессию, следующий тест в том же окне ловит `ERROR`, `--check` сразу после
+`--update-expected` дал нестабильный результат (318 «регрессий», артефакт краша, не реальных
+изменений). После слияния фикса BUG-986 и пересборки бинаря краш **воспроизвёлся снова**, тем же
+`NodeId`/той же длиной арены, но с другим call site — теперь диагностика `#[track_caller]` из
+самого фикса назвала точное место, `crates/shell/src/lumen/text_input.rs:98` (`self.focused_node`
+не сбрасывается на навигацию, `typeable_field` делает непроверенный `doc.get`) — заведено отдельно,
+[BUG-995](bugs/BUG-995-OPEN.md). Baseline для `input-events` перегенерирован на пересобранном
+бинаре (`--update-expected` затем `--check`, 0 регрессий, exit 0): краш зафиксирован в нём как
+`expected: ERROR` — гейт зелёный, но это учтённый, а не спрятанный краш; фикс BUG-995 всплывёт как
+unexpected pass и потребует новой перегенерации.
+
+Осталось непокрытых **109** категорий (296 `done`-категорий WPT-VENDOR на сегодня − 187 = 109).
+Для следующей сессии — тот же цикл дальше.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
