@@ -36,14 +36,17 @@ use winit::window::Window;
 /// При `LUMEN_BACKEND=vello` создаёт `VelloBackend` (RB-7 заглушка, ADR-010).
 ///
 /// # ADR-016 M1: рендер-поток
-/// Если задан `LUMEN_RENDER_THREAD=1`, настоящий бэкенд создаётся и живёт на
-/// выделенном рендер-потоке, а окну возвращается [`ThreadedRenderBackend`]-прокси
-/// (present уходит с UI-потока). Выбор бэкенда для потока следует тому же
-/// `LUMEN_BACKEND`, что и однопоточный путь: `femtovg` → потоковый femtovg,
-/// иначе (дефолт/`wgpu`) → потоковый wgpu (THREAD-1: дефолтный бэкенд ADR-017,
-/// M1 изначально работал только под non-default femtovg). При сбое создания
-/// бэкенда на потоке — автоматический откат на обычный однопоточный путь.
-/// Значение по умолчанию — однопоточный in-process бэкенд.
+/// Рендер-поток включён по умолчанию (ADR-029, THREAD-1 срез 2) — настоящий
+/// бэкенд создаётся и живёт на выделенном рендер-потоке, а окну возвращается
+/// [`ThreadedRenderBackend`]-прокси (present уходит с UI-потока).
+/// `LUMEN_NO_RENDER_THREAD=1` откатывает на прежний однопоточный in-process
+/// путь; `LUMEN_RENDER_THREAD=0` тоже выключает (совместимость с прежним
+/// явным вызовом), а `LUMEN_RENDER_THREAD=1` продолжает работать и теперь
+/// просто совпадает с дефолтом — см. [`render_thread_enabled`]. Выбор
+/// бэкенда для потока следует тому же `LUMEN_BACKEND`, что и однопоточный
+/// путь: `femtovg` → потоковый femtovg, иначе (дефолт/`wgpu`) → потоковый
+/// wgpu. При сбое создания бэкенда на потоке — автоматический откат на
+/// обычный однопоточный путь.
 ///
 /// # Errors
 /// Возвращает `Err` если GPU-адаптер недоступен или инициализация всех бэкендов
@@ -161,15 +164,30 @@ fn create_threaded_wgpu(
     Ok(Box::new(proxy))
 }
 
-/// Читает `LUMEN_RENDER_THREAD` — `1`/`true`/`on` включают рендер-поток.
+/// Рендер-поток включён по умолчанию (ADR-029). `LUMEN_NO_RENDER_THREAD=1`
+/// — откат на однопоточный in-process путь; `LUMEN_RENDER_THREAD=0`/`false`/
+/// `off`/`no` тоже выключает (совместимость с прежним явным вызовом);
+/// `LUMEN_RENDER_THREAD=1` продолжает работать и теперь просто совпадает
+/// с дефолтом. Тот же приём отката, что ADR-023 для движкового потока.
 fn render_thread_enabled() -> bool {
-    matches!(
-        std::env::var("LUMEN_RENDER_THREAD")
+    let opt_out = matches!(
+        std::env::var("LUMEN_NO_RENDER_THREAD")
             .unwrap_or_default()
             .trim()
             .to_ascii_lowercase()
             .as_str(),
         "1" | "true" | "on" | "yes"
+    );
+    if opt_out {
+        return false;
+    }
+    !matches!(
+        std::env::var("LUMEN_RENDER_THREAD")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "0" | "false" | "off" | "no"
     )
 }
 
