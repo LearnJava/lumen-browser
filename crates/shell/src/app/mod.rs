@@ -217,6 +217,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if size.width == 0 || size.height == 0 {
                     return;
                 }
+                // BUG-996: a top-level window Windows considers unresponsive
+                // (e.g. mid a multi-second relayout) gets `WM_SIZE` probed
+                // and re-delivered by the shell/DWM hang detector with the
+                // SAME size it already has. Without this guard each redundant
+                // event re-ran a full synchronous relayout, which on a heavy
+                // page (OneTrust cascade swap on fandom.com: 2731 rules, no
+                // incrementality) blocked the pump long enough to look
+                // unresponsive again — a self-sustaining loop that never let
+                // the window settle. A real size change always differs from
+                // the last one actually applied, so this cannot skip one.
+                if self.last_resized_physical == Some((size.width, size.height)) {
+                    return;
+                }
+                self.last_resized_physical = Some((size.width, size.height));
                 if let Some(r) = self.renderer.as_mut() {
                     r.resize(size.width, size.height);
                 }
