@@ -121,6 +121,7 @@ Details, flags, the debtor ratchet and how to regenerate each golden set — [`d
 
 - **Anything that can move pixels** (paint/display list, layout geometry, a CSS property, font/text/image) needs the full `python graphic_tests/run.py --continue-on-fail` — ~20 min, foreground, focused window. Everything else is gated by `scripts/scoped-test.sh` + `python graphic_tests/dump_golden.py`; claiming display-list neutrality requires *showing* an empty `dump_golden.py` diff.
 - **Three golden sets drift independently** — the Edge pixel diff, the deterministic CPU PNGs (`graphic_tests/snapshots/cpu/`) and the textual display-list snapshots (`crates/engine/paint/tests/snapshots/*.snap`). A paint change regenerates the affected ones **in the same commit**, or it red-lights someone else's gate later.
+- **Live testing of real sites launches `--maximized`** (user, 2026-09-04) — a smaller window changes the CSS viewport, so it under-measures the page's real work and hides viewport-dependent defects. Exceptions: `graphic_tests/run.py` keeps its calibrated `--deterministic --viewport 1024x720` (every golden was captured there), and perf/census fixtures whose point is a fixed viewport — [`docs/automation.md`](docs/automation.md) §Flags.
 - **Hard rules:** never edit a test page to work around an engine limit · never change a threshold (0.5 % for every test) · no screenshots committed.
 
 ---

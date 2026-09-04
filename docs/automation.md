@@ -69,6 +69,20 @@ Token generation/comparison: `lumen_core::auth` (`generate_token`, `tokens_match
 Determinism: `--deterministic` · `--rng-seed N` · `--monotonic-clock` (DEVX-16, fixed 2026-08-02: `DetConfig` now reaches the V8 runtime in full through `V8JsRuntime::set_deterministic_mode(on, rng_seed, monotonic_clock)` — `--rng-seed N` overrides the URL-hash-derived `Math.random` seed, `--monotonic-clock` makes `Date.now()`/`performance.now()` advance by 1 ms per call, off one shared counter, instead of staying frozen at 0. QuickJS's rollback path is unchanged — no new functionality there per policy) · `--viewport WxH` (DEVX-1: pins the window's CSS content viewport, overriding `--deterministic`'s 1280×800 default — used by `graphic_tests/run.py`'s default live window to combine determinism with the pipeline's calibrated 1024×720).
 Misc: `--maximized` (window opens full-screen — live perf audit) · `--no-scrollbar` (cleaner screenshot crops) · `--activity-log` / `--click-log` · `--health-log` (PERF-6 session-health journal → `health.log`; also on with `--activity-log`) · `--import-session` · `--network-service` · `--proxy` · `--tor`.
 
+**Rule: any live testing of real sites launches `--maximized`** (user, 2026-09-04). A
+non-maximized window changes the CSS viewport and therefore the layout/paint/JS work
+the page actually does relative to what a user sees — a smaller window under-measures
+and can hide viewport-dependent defects. `scripts/perf_audit.py`'s live mode already
+hardcodes `--maximized`; any new site-testing script (audits, live health/compat
+checks, manual live-window sessions) follows the same default. **Graphic tests are the
+one exception** — `graphic_tests/run.py`'s live window keeps its calibrated
+`--deterministic --viewport 1024x720` (unmaximized on purpose, see above): every PNG/
+`.snap` golden was captured at that size, and maximizing it would re-baseline the
+entire pixel gate for no reason. Controlled perf/census fixtures (`scripts/*_census.py`,
+`scroll_perf.py`, `mt_stall_bench.py`, …) are a second, narrower exception when the
+measurement's own point is a fixed, swept, or reproducible viewport — see
+`docs/perf-method.md` §4 on holding conditions constant across an A/B.
+
 ## MCP (`crates/mcp`) — the richest scripting surface
 
 `--mcp-live-port N <src>` runs MCP JSON-RPC over TCP against the **live window**. All 8 legacy tools wired: `navigate`, `new_tab` (opens a tab, makes it active, navigates — used by the live perf audit to give every site its own tab), `wait` (conditions: `document_ready` / `visible` / `stable` / `network_idle` / `js_idle`), `click`, `type`, `scroll`, `eval` (JS), `query` (CSS selector → DOM nodes). All 6 resources wired: `resource://screenshot` (PNG, CPU path), `resource://a11y_tree`, `resource://layout` (box model JSON), `resource://console`, `resource://network`, `resource://x-display-list` (DEVX-14, see below).
@@ -116,7 +130,7 @@ Snapshot-test env vars: `SNAPSHOT_VS_EDGE_STRICT=1` (hard-gate `crates/driver/te
 | `LUMEN_BACKEND` | Renderer: empty = probe (wgpu first), `femtovg`, `wgpu` |
 | `WGPU_BACKEND` / `LUMEN_NO_BACKEND_PROBE` | Force / skip GPU backend probe |
 | `LUMEN_NO_ENGINE_THREAD=1` | **Rollback** for the off-thread layout engine thread, which is **on by default since ADR-023** (was opt-in `LUMEN_ENGINE_THREAD=1`, ADR-016 M2.2). `LUMEN_ENGINE_THREAD=0` also disables it; a leftover `=1` still works and now just agrees with the default |
-| `LUMEN_RENDER_THREAD` | Render thread on/off |
+| `LUMEN_NO_RENDER_THREAD=1` | **Rollback** for the off-UI-thread rasterization/present thread, which is **on by default since ADR-029** (was opt-in `LUMEN_RENDER_THREAD=1`, ADR-016 M1). `LUMEN_RENDER_THREAD=0` also disables it; a leftover `=1` still works and now just agrees with the default |
 | `LUMEN_PRESENT` | Present mode override |
 | `LUMEN_TEXTURE_POOL_MB=<N>` | Byte budget of the wgpu offscreen-layer pool's free list (default 64; `0` removes the cap = pre-BUG-272-slice-21 behaviour). A/B memory measurements on one binary |
 | `LUMEN_NO_FRAME_SKIP` / `LUMEN_NO_SCROLL_COMPOSITOR` / `LUMEN_NO_ANIM_SPLIT` / `LUMEN_NO_BBOX_SCISSOR` / `LUMEN_NO_BBOX_BACKDROP` / `LUMEN_NO_IMAGE_MIPS` / `LUMEN_NO_BAND_BIAS` / `LUMEN_NO_SVG_AA` / `LUMEN_NO_ROT_AA` / `LUMEN_NO_ROT_CLIP` | Disable one paint optimization each — **the paint-regression bisection kit** (crates/engine/paint/src/renderer.rs), driven automatically by `run.py --paint-bisect NN` (DEVX-4) |
