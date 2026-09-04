@@ -29,6 +29,7 @@ pub mod automation;
 pub mod context;
 pub mod determinism;
 pub mod explain;
+mod font_faces;
 pub mod isolation;
 pub mod live_session;
 pub mod scope;

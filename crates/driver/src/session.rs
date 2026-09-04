@@ -320,6 +320,31 @@ impl InProcessSession {
 
         let doc = Arc::new(Mutex::new(lumen_html_parser::parse(&source)));
 
+        // FONTLOAD-3: populate `document.fonts` from the STATIC (pre-script)
+        // page's `@font-face` rules, BEFORE scripts run — must happen ahead of
+        // the script step below, not after it: `document.fonts`'s JS wrapper
+        // caches its `FontFaceSet` snapshot on first touch
+        // (`_lumen_wrapper_slot(this, '__fonts__', ...)`,
+        // `crates/js/src/shim/web_api_shim_mid.js`), so a synchronous top-level
+        // script read (the exact WPT pattern this unblocks — `document.fonts.
+        // ready.then(...)` before any `test()` registers, `bugs/BUG-467-OPEN.md`
+        // "gap 0") would freeze the set empty for the page's whole life if
+        // native population happened afterward instead. A separate early parse
+        // (rather than reusing the `sheet` parsed below, after scripts) keeps
+        // the existing script-then-layout stylesheet untouched — a script that
+        // inserts its own `<style>`/`@font-face` before layout still reaches
+        // the layout cascade exactly as before; it just isn't reflected in
+        // `document.fonts` (same one-shot-snapshot limitation already
+        // documented for CSS-connected reactivity, not a new regression: today
+        // nothing populates `document.fonts` here at all). See `crate::
+        // font_faces` for why this conversion isn't shared with shell.
+        {
+            let mut doc_guard = Self::lock_arc_doc(&doc)?;
+            let early_css = extract_style_blocks(&doc_guard);
+            let early_font_faces = lumen_css_parser::parse(&early_css).font_faces;
+            crate::font_faces::populate_document_fonts(&mut doc_guard, &early_font_faces);
+        }
+
         // DEVX-5 slice 2: (re-)install a fresh V8 runtime against this navigation's
         // `doc`, mirroring the shell's per-navigate `V8JsRuntime::new()` +
         // `install_dom()` (`crates/shell/src/main.rs`). Best-effort: a V8/install

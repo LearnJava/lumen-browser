@@ -230,6 +230,18 @@ headless pipeline without winit/wgpu/ffmpeg.
   uses — automation and navigation must not disagree about a host's policy — with `FingerprintProfile::Tor` selecting the in-memory variant.
   Gate: `session::tests::build_http_client_wires_hsts` asserts `HttpClient::has_hsts()` on the real factory output.
 
+- **Done (`document.fonts` population — FONTLOAD-3, 2026-09-05):** `InProcessSession::run_pipeline`
+  (`session.rs`) now populates `Document::fonts` from static `@font-face` rules via the new
+  `crate::font_faces` module, BEFORE the page's own scripts run (not after — `document.fonts`'s JS
+  wrapper caches its `FontFaceSet` snapshot on first touch, so a synchronous top-level script read
+  needs population ahead of that touch, per `bugs/BUG-467-OPEN.md`). Every entry starts `Unloaded`:
+  `InProcessSession` has no `FontRegistry`/`SystemFontIndex`, unlike shell's `page_pipeline.rs`
+  (which resolves `local()` immediately). Deliberately not shared with shell's
+  `subresources.rs::rule_to_font_face` — `lumen-dom`/`lumen-css-parser` are sibling leaf crates,
+  no natural shared home for the ~15-line conversion. Does **not** affect WPT `run_report.py` pass
+  rate — that path drives a separately-spawned `lumen.exe` (`crates/shell`) over BiDi, not
+  `InProcessSession` at all (a correction to FONTLOAD-2's framing).
+
 ## Deferred
 
 - `WinitSession::eval` built with `--no-default-features` (feature `v8` off) still errors —
