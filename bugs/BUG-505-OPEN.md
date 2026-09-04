@@ -217,3 +217,67 @@ Remaining scope after this slice: ~52 files (was 60) — the `-webkit-box`/
 extension and `overflow` shorthand's own computed-style path
 (`overflow-computed.html`/`overflow-shorthand-001.html`, not investigated
 this slice).
+
+## Срез 2 (2026-09-04, P3) — grammar for line-clamp/max-lines/block-ellipsis/continue
+
+Picked up the "Grammar found, not yet implemented" list from срез 1 above.
+All four are pure CSSOM specified-value validation (`div.style[prop] =
+value` / `getPropertyValue`) — none of the four vendored WPT files for this
+group is a `-computed.html` file, so no ComputedStyle field or layout effect
+is required for these tests, same "validate without rendering" shape as
+`text-overflow`'s `<string>` form (срез 1).
+
+**Fixed this slice** (`web_api_shim_mid.js`, four new canonical functions
+wired into `_lumen_canonicalize_longhand`):
+- `block-ellipsis`: `no-ellipsis | ellipsis | <string>`, single token only.
+- `continue`: `normal | discard | collapse | -webkit-legacy`, single token
+  only (no combos, confirmed by `continue-invalid.html` rejecting every
+  two-token pairing including two legacy-compatible keywords together).
+- `max-lines`: real grammar (confirmed by the WPT file, not by its own
+  meta-assert which says `none | <integer>` and is wrong) is `<integer
+  [1,∞]> || auto` — `'none'` itself is invalid; the two-token combo
+  canonicalizes integer-first regardless of input order.
+- `line-clamp` (unprefixed shorthand, validated separately from
+  `-webkit-line-clamp`'s reduced grammar): `none | [<integer [1,∞]> ||
+  <'block-ellipsis'>] -webkit-legacy?`. Key finding: the integer component
+  reuses `max-lines`'s own two-token `<integer> || auto` grammar verbatim
+  (`'8 auto'` round-trips unchanged, `'auto 11'` reorders to `'11 auto'` —
+  exactly what `_lumen_css_canonical_max_lines` already does, so
+  `_lumen_css_canonical_line_clamp` calls it for its integer/`auto`
+  component instead of reimplementing it). Serialization quirks confirmed
+  against `line-clamp-valid.html`: `'ellipsis'` alone (no integer/`auto`
+  component) canonicalizes to the bare keyword `'auto'` — a third
+  non-compositional value alongside `none` — and a plain `ellipsis`
+  block-ellipsis token is dropped when an integer/`auto` component is
+  present (`'8 ellipsis'` → `'8'`), while `no-ellipsis` and `<string>` are
+  kept (`'7 no-ellipsis'` stays, `'9 " etc., etc. "'` stays).
+- New quote-aware tokenizer `_lumen_split_top_level_ws_quoted` — the
+  existing `_lumen_split_top_level_ws` only tracks paren depth, not quotes,
+  so it would wrongly split `'" etc., etc. " 12'` on the spaces inside the
+  string; needed because, unlike `block-ellipsis`'s single-token grammar
+  (which just regex-matches the whole trimmed value, no tokenizing needed),
+  `line-clamp` genuinely combines a quoted-string token with others.
+- Verified by hand-transcribing every `test_valid_value`/`test_invalid_value`
+  call from all four `parsing/{block-ellipsis,continue,max-lines,
+  line-clamp}-{valid,invalid}.html` files (65 cases total: 14 + 13 + 13 + 25)
+  into a standalone Node `vm` harness that loads the real shim file and
+  calls the four functions directly — 65/65 match the WPT-expected
+  serialization. No live wptrunner pass taken (no `.venv` in this slot);
+  `scripts/scoped-test.sh` (Rust side, unaffected by this JS-only change)
+  is green.
+- `-webkit-line-clamp`'s doc-comment updated — it no longer says `line-clamp`
+  "stays unvalidated", since this slice gives it its own, separate
+  validation function.
+
+**Untouched, unambiguously out of scope for CSSOM-only validation:**
+`webkit-box-computed.html` (needs `display`'s actual computed-value
+algorithm to special-case `-webkit-box`/`-webkit-inline-box` when paired
+with `-webkit-line-clamp`/`line-clamp` — real layout/cascade design work,
+not a validation-table entry) and the `::scroll-marker` cluster (~40 files,
+selector-grammar + box-generation + interaction model, unchanged from срез
+1's assessment).
+
+Remaining scope after this slice: ~44 files (was ~52) — `webkit-box-
+computed.html` (1), the `::scroll-marker` cluster (~40), plus `overflow-
+clip-margin`'s box-keyword+`calc()` grammar extension and `overflow`
+shorthand's own computed-style path (2, not investigated this slice).

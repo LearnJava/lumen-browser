@@ -1853,14 +1853,11 @@ function _lumen_css_canonical_text_overflow(strVal) {
 }
 
 // CSS Overflow L4 §webkit-line-clamp (compat alias, BUG-505): `none |
-// <integer [1,∞]>` — the full grammar for the legacy `-webkit-`-prefixed
-// form. The standard `line-clamp` shorthand additionally accepts
-// `<'block-ellipsis'>`/`-webkit-legacy`/`auto` and multi-token combos (CSS
-// Overflow L4 §13.1) that the engine doesn't implement — validating
-// `line-clamp` with this same reduced grammar would reject values authors
-// are allowed to round-trip verbatim today (e.g. `auto`), so it stays
-// unvalidated until that fuller grammar lands (see BUG-505's revision
-// note).
+// <integer [1,∞]>` — the reduced grammar for the legacy `-webkit-`-prefixed
+// form only. The standard `line-clamp` shorthand has its own, fuller
+// grammar (`_lumen_css_canonical_line_clamp` below, BUG-505 срез 2) and is
+// deliberately validated separately — `-webkit-line-clamp` never accepts
+// `auto`/`<'block-ellipsis'>`/`-webkit-legacy` combos.
 function _lumen_css_canonical_webkit_line_clamp(strVal) {
     var v = strVal.trim();
     if (/^none$/i.test(v)) return 'none';
@@ -1885,6 +1882,167 @@ function _lumen_css_canonical_scrollbar_gutter(strVal) {
         return 'stable both-edges';
     }
     return null;
+}
+
+// Like `_lumen_split_top_level_ws`, but also treats a quoted string
+// (single or double, with `\`-escapes) as one token even if it contains
+// spaces — needed for `line-clamp`'s `<'block-ellipsis'>` string component
+// (BUG-505 срез 2), e.g. `'" etc., etc. " 12'` must split to two tokens,
+// not five.
+function _lumen_split_top_level_ws_quoted(s) {
+    var tokens = [];
+    var depth = 0, cur = '', quote = null;
+    for (var i = 0; i < s.length; i++) {
+        var ch = s[i];
+        if (quote) {
+            cur += ch;
+            if (ch === '\\' && i + 1 < s.length) { cur += s[++i]; continue; }
+            if (ch === quote) quote = null;
+            continue;
+        }
+        if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue; }
+        if (ch === '(') depth++;
+        if (ch === ')') depth--;
+        if (/\s/.test(ch) && depth === 0) {
+            if (cur.length) { tokens.push(cur); cur = ''; }
+        } else {
+            cur += ch;
+        }
+    }
+    if (cur.length) tokens.push(cur);
+    return tokens;
+}
+
+// CSS Overflow L4 §propdef-block-ellipsis (BUG-505 срез 2): `no-ellipsis |
+// ellipsis | <string>` — single token only, no combos (confirmed by
+// `block-ellipsis-invalid.html`: `'none auto'`, `'ellipsis "string"'` etc.
+// are all rejected). No ComputedStyle field backs this yet, so it's
+// specified-value validation only (same shape as `text-overflow`'s
+// `<string>` form) — `block-ellipsis-computed.html` doesn't exist in the
+// vendored WPT set, so no computed-style path is needed for this slice.
+function _lumen_css_canonical_block_ellipsis(strVal) {
+    var v = strVal.trim();
+    if (/^no-ellipsis$/i.test(v)) return 'no-ellipsis';
+    if (/^ellipsis$/i.test(v)) return 'ellipsis';
+    if (/^"([^"\\]|\\.)*"$/.test(v) || /^'([^'\\]|\\.)*'$/.test(v)) return v;
+    return null;
+}
+
+// CSS Overflow L4 §propdef-continue (BUG-505 срез 2): `normal | discard |
+// collapse`, plus the legacy `-webkit-legacy` token — single token only, no
+// combos (`continue-invalid.html` rejects every two-token pairing,
+// including `-webkit-legacy` combined with any of the other three).
+function _lumen_css_canonical_continue(strVal) {
+    var v = strVal.trim().toLowerCase();
+    if (v === 'normal' || v === 'discard' || v === 'collapse' || v === '-webkit-legacy') return v;
+    return null;
+}
+
+// CSS Overflow L4 §propdef-max-lines (BUG-505 срез 2): despite its own
+// meta-assert saying `none | <integer>`, the actual WPT grammar (confirmed
+// by `max-lines-{valid,invalid}.html`) is `<integer [1,∞]> || auto` —
+// `'none'` itself is invalid, and the two-token combo canonicalizes with
+// the integer first regardless of input order (`'auto 8'` → `'8 auto'`).
+function _lumen_css_canonical_max_lines(strVal) {
+    var v = strVal.trim().toLowerCase();
+    if (v === 'auto') return 'auto';
+    if (/^[0-9]+$/.test(v)) {
+        var n = parseInt(v, 10);
+        return n >= 1 ? String(n) : null;
+    }
+    var tokens = _lumen_split_top_level_ws(v);
+    if (tokens.length === 2) {
+        var intTok = null, autoTok = false;
+        for (var i = 0; i < tokens.length; i++) {
+            if (tokens[i] === 'auto' && !autoTok) {
+                autoTok = true;
+            } else if (/^[0-9]+$/.test(tokens[i]) && intTok === null) {
+                intTok = tokens[i];
+            } else {
+                return null;
+            }
+        }
+        if (autoTok && intTok !== null) {
+            var n2 = parseInt(intTok, 10);
+            if (n2 >= 1) return intTok + ' auto';
+        }
+    }
+    return null;
+}
+
+// CSS Overflow L4 §propdef-line-clamp (BUG-505 срез 2): `none | [<integer
+// [1,∞]> || <'block-ellipsis'>] -webkit-legacy?`, where the integer
+// component actually reuses `max-lines`'s own two-token `<integer> ||
+// auto` grammar (confirmed by `line-clamp-valid.html`: `'8 auto'` round-
+// trips unchanged and `'auto 11'` reorders to `'11 auto'`, exactly
+// `_lumen_css_canonical_max_lines`'s own behavior). Serialization quirks,
+// all confirmed against the WPT file (don't re-derive from scratch):
+// - `'ellipsis'` alone (no integer component) canonicalizes to the bare
+//   keyword `'auto'` — a third, non-compositional value alongside `none`.
+// - An `ellipsis` block-ellipsis token is DROPPED when an integer/`auto`
+//   component is present (it's the implied default there) — `'no-ellipsis'`
+//   and `<string>` are not, since they're not the default.
+function _lumen_css_canonical_line_clamp(strVal) {
+    var v = strVal.trim();
+    if (v.length === 0) return null;
+    if (/^none$/i.test(v)) return 'none';
+
+    var tokens = _lumen_split_top_level_ws_quoted(v);
+    if (tokens.length === 0) return null;
+
+    var legacy = false;
+    if (tokens[tokens.length - 1].toLowerCase() === '-webkit-legacy') {
+        legacy = true;
+        tokens = tokens.slice(0, -1);
+    }
+    if (tokens.length === 0) return null; // '-webkit-legacy' alone is invalid
+
+    for (var i = 0; i < tokens.length; i++) {
+        if (/^none$/i.test(tokens[i])) return null; // 'none' cannot combine
+    }
+
+    var maxLinesTokens = [];
+    var ellipsisToken = null;
+    for (var j = 0; j < tokens.length; j++) {
+        var t = tokens[j];
+        if (/^[0-9]+$/.test(t) || /^auto$/i.test(t)) {
+            maxLinesTokens.push(t);
+        } else if (/^no-ellipsis$/i.test(t) || /^ellipsis$/i.test(t) ||
+                   /^"([^"\\]|\\.)*"$/.test(t) || /^'([^'\\]|\\.)*'$/.test(t)) {
+            if (ellipsisToken !== null) return null;
+            ellipsisToken = t;
+        } else {
+            return null;
+        }
+    }
+    if (maxLinesTokens.length > 2) return null;
+
+    var maxLinesCanon = null;
+    if (maxLinesTokens.length > 0) {
+        maxLinesCanon = _lumen_css_canonical_max_lines(maxLinesTokens.join(' '));
+        if (maxLinesCanon === null) return null;
+    }
+
+    var ellipsisCanon = null;
+    if (ellipsisToken !== null) {
+        if (/^ellipsis$/i.test(ellipsisToken)) ellipsisCanon = 'ellipsis';
+        else if (/^no-ellipsis$/i.test(ellipsisToken)) ellipsisCanon = 'no-ellipsis';
+        else ellipsisCanon = ellipsisToken;
+    }
+
+    if (maxLinesCanon === null && ellipsisCanon === null) return null;
+
+    if (maxLinesCanon === null && ellipsisCanon === 'ellipsis') {
+        return legacy ? 'auto -webkit-legacy' : 'auto';
+    }
+
+    var out = [];
+    if (maxLinesCanon !== null) out.push(maxLinesCanon);
+    if (ellipsisCanon !== null && !(maxLinesCanon !== null && ellipsisCanon === 'ellipsis')) {
+        out.push(ellipsisCanon);
+    }
+    if (legacy) out.push('-webkit-legacy');
+    return out.join(' ');
 }
 
 // CSS Cascade L4 §7.1: these five tokens are valid specified values for
@@ -1955,6 +2113,18 @@ function _lumen_canonicalize_longhand(key, strVal) {
     }
     if (key === 'scrollbar-gutter') {
         return _lumen_css_canonical_scrollbar_gutter(strVal);
+    }
+    if (key === 'block-ellipsis') {
+        return _lumen_css_canonical_block_ellipsis(strVal);
+    }
+    if (key === 'continue') {
+        return _lumen_css_canonical_continue(strVal);
+    }
+    if (key === 'max-lines') {
+        return _lumen_css_canonical_max_lines(strVal);
+    }
+    if (key === 'line-clamp') {
+        return _lumen_css_canonical_line_clamp(strVal);
     }
     return strVal;
 }
