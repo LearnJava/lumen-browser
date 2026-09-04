@@ -379,7 +379,7 @@ fn idb_abort_reverts_upgrade_schema_and_version() {
                 third.onsuccess = function(e) {
                     var d = e.target.result;
                     out.push('version=' + d.version);
-                    out.push('stores=' + d.objectStoreNames.join('/'));
+                    out.push('stores=' + Array.prototype.join.call(d.objectStoreNames, '/'));
                 };
                 _lumen_idb_flush();
                 out.join(',')
@@ -387,6 +387,39 @@ fn idb_abort_reverts_upgrade_schema_and_version() {
     assert_eq!(
         r,
         lumen_core::JsValue::String("open-error,version=1,stores=keep".into())
+    );
+}
+
+// BUG-990: `objectStoreNames`/`indexNames` are `DOMStringList` (Indexed DB
+// §3.2), not `Array` — the typical schema-upgrade prologue calls `.contains()`,
+// which a plain array literal doesn't have.
+#[test]
+fn idb_object_store_names_and_index_names_expose_dom_string_list() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(r#"
+                var out = [];
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) {
+                    var db = e.target.result;
+                    out.push('has-before=' + db.objectStoreNames.contains('s'));
+                    var store = db.createObjectStore('s');
+                    store.createIndex('by_x', 'x');
+                    out.push('has-after=' + db.objectStoreNames.contains('s'));
+                    out.push('missing=' + db.objectStoreNames.contains('nope'));
+                    out.push('item0=' + db.objectStoreNames.item(0));
+                    out.push('item1=' + db.objectStoreNames.item(1));
+                    out.push('idx-has=' + store.indexNames.contains('by_x'));
+                    out.push('idx-len=' + store.indexNames.length);
+                };
+                req.onsuccess = function() {};
+                _lumen_idb_flush();
+                out.join(',')
+            "#).unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String(
+            "has-before=false,has-after=true,missing=false,item0=s,item1=null,idx-has=true,idx-len=1".into()
+        )
     );
 }
 
