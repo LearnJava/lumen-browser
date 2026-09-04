@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-04",
  "counts": {
-  "open": 372,
+  "open": 373,
   "fixed": 554,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 926,
+ "total_bugs": 927,
  "phases": [
   {
    "id": "P0",
@@ -5608,11 +5608,21 @@
        ]
       },
       {
+       "id": "CSSOM-7",
+       "title": "CSSOM-7: синхронный style-флаш для живого окна (BUG-977)",
+       "status": "planned",
+       "size": "M",
+       "note": "Симметричный аналог CSSOM-4 (BUG-493) для ИНТЕРАКТИВНОГО (не headless) окна: `_lumen_request_scroll`'s `is_clip`-проверка (`crates/js/src/v8_runtime/install/platform.rs::install_scroll_state`) читает `computed_styles`, который живой шелл обновляет только асинхронно после реального relayout (`crates/shell/src/relayout.rs:690`) — синхронный флаш `FlushHandles::maybe_flush` (`crates/js/src/v8_runtime/style_flush.rs`) устроен только для headless-путей (`update_stylesheet`-вызывающих `InProcessSession`), в живом шелле `stylesheet` никогда не заполняется и флаш — осознанный no-op. Симптом: скрипт, синхронно переключающий `overflow` на `clip` и в том же ходе запрашивающий/читающий скролл того же узла, в живом окне не видит зануления (headless-путь не задет). Точечный обход не годится — раскопка P3 2026-09-04 (агентом-исследователем) подтвердила, что инлайн-`style`-атрибут узла хранится как сырая JS-сериализованная строка (`crates/js/src/shim/web_api_shim_mid.js::_lumen_serialize_style`) без Rust-парсера одиночного объявления, и чтение только его проигнорировало бы `overflow: clip`, пришедший из класса/внешнего листа — второй, рассогласованный источник истины вместо архитектурного фикса. Нужен собственный синхронный путь пересчёта style/computed_styles для живого шелла (решение по dark-mode/forced-colors/web-fonts thread-locals, риск пересечения с движковым потоком ADR-016 — см. BUG-976) — вне точечного P3-фикса",
+       "bugs": [
+        "BUG-977"
+       ]
+      },
+      {
        "id": "CSSOM-5",
        "title": "CSSOM-5: конструируемые таблицы стилей и adoptedStyleSheets",
        "status": "planned",
        "size": "M",
-       "note": "Записывающая половина CSSOM (читающая — CSSOM-1): `new CSSStyleSheet()` — `ReferenceError`, `document.adoptedStyleSheets` до присваивания `undefined` вместо пустого `FrozenArray`, а присваивание принимает что угодно, включая массив с `null`, не бросает и не даёт эффекта — это обычное поле объекта, а не аксессор; на теневом корне то же. Заведено ре-триажем WPT-RUN-6 2026-09-02: BUG-897 описывает не дефект, а отсутствующую половину той же модели, что CSSOM-1. От неё зависит GAP-CSSMOD.",
+       "note": "Записывающая половина CSSOM (читающая — CSSOM-1): `new CSSStyleSheet()` — `ReferenceError`, `document.adoptedStyleSheets` до присваивания `undefined` вместо пустого `FrozenArray`, а присваивание принимает что угодно, включая массив с `null`, не бросает и не даёт эффекта — это обычное поле объекта, а не аксессор; на теневом корне то же. Заведено ре-триажем WPT-RUN-6 2026-09-02: BUG-897 описывает не дефект, а отсутствующую половину той же модели, что CSSOM-1. От неё зависит GAP-CSSMOD. Срез 1 (2026-09-04): `new CSSStyleSheet()`/`.replaceSync()`/`.replace()`/`.cssRules` реализованы поверх ОТДЕЛЬНОГО реестра (`crates/js/src/v8_runtime/install/constructed_stylesheets.rs`) — у сконструированного листа нет владеющего DOM-узла, поэтому он не может делить индексное пространство с `stylesheet_nodes` (CSSOM-1). `document.adoptedStyleSheets`/`shadowRoot.adoptedStyleSheets` теперь настоящий валидируемый список (Rust-side состояние, ключ — scope id: сентинел для документа, `nid` для теневого корня — попутно переживает пересоздание обёртки `_lumen_make_shadow_root` на каждом чтении, BUG-877, но только для этого свойства): присваивание не-`CSSStyleSheet`/не-сконструированного элемента (включая читающие обёртки `document.styleSheets`, которые проходят `instanceof`, но не были сконструированы) бросает `TypeError`, а не молча принимает что угодно. `insertRule`/`deleteRule` вне среза (тот же принцип, что у CSSOM-1/2). Каскад НЕ подключён: движковая раскладка стилей строится исключительно из текста `<style>`/`<link>` документа (`crates/shell/src/relayout.rs::refresh_dynamic_css`), канала JS-рантайм→shell для контента сконструированного/adopted листа нет, а его постройка требует аккуратного пересечения движкового потока ADR-016 (синхронный кросс-поточный вызов не из того места уже один раз молча вешал процесс, BUG-976) — отдельный срез. 9 новых тестов (`crates/js/src/dom/tests/v8_cssom5_constructed_stylesheets.rs`), `cargo test -p lumen-js --features v8-backend`: 3444 passed / 1 pre-existing flake (`frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_dirty`, проходит в изоляции).",
        "bugs": [
         "BUG-897"
        ]
@@ -9440,6 +9450,13 @@
    "status": "open",
    "title": "Создание НОВОГО V8-изолята (`spawn_frame` → `run_scripts_with_dom`) на ad-hoc `std::thread::spawn`-потоке, запущенное СИНХРОННО изнутри `pump_raf_engine_thread`…",
    "component": "shell (`crates/shell/src/relayout.rs::pump_raf_engine_thread`) / js (`rusty_v8` isolate creation)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-977": {
+   "status": "open",
+   "title": "В интерактивном (не headless) окне синхронное переключение `overflow` на `clip` не видно зануляющей проверке `_lumen_request_scroll`, если скролл того же элемен…",
+   "component": "js (`crates/js/src/v8_runtime/install/platform.rs::install_scroll_state` — `_lumen_request_scroll`'s `is_clip`) / js (`crates/js/src/v8_runtime/style_flush.rs`)",
    "date": null,
    "debtor": false
   },

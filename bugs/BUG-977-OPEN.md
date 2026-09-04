@@ -1,6 +1,7 @@
 # BUG-977: `overflow: clip`, установленный тем же синхронным скриптом, не зануляет уже запрошенный скролл в ЖИВОМ окне
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → [CSSOM-7](../ROADMAP.md))
+**Тип:** ДОРАБОТКА — симметричный синхронный style/layout-флаш для живого (не headless) шелла, тот же класс задачи, что CSSOM-4/BUG-493, но для другого исполнителя флаша.
 **Компонент:** js (`crates/js/src/v8_runtime/install/platform.rs::install_scroll_state` — `_lumen_request_scroll`'s `is_clip` check) / js (`crates/js/src/v8_runtime/style_flush.rs::FlushHandles::maybe_flush`)
 **Найден:** P3, 2026-09-04, при живой проверке фикса [BUG-975](bugs/BUG-975-OPEN.md) части 2 (`tests/wpt/verify_bug504_vertical_rl_clip.py`, интерактивное окно `--mcp-live-port`).
 
@@ -84,6 +85,25 @@ CSSOM-4/BUG-493, просто до сих пор не задокументиро
 отдельная работа в `style_flush.rs`'s doc-комментарии (решение по
 dark-mode/forced-colors/web-fonts thread-locals, риск дедлока с движковым
 потоком при вызове из нативы). Не точечный P3-фикс.
+
+## Ревизия P3 2026-09-04
+
+Проверена и отклонена дешёвая альтернатива предложенной правке: читать
+инлайн `style`-атрибут узла напрямую из `flush.doc` (живой DOM,
+`Arc<Mutex<lumen_dom::Document>>`), минуя `computed_styles`, раз симптом
+специфичен именно для `el.style.overflow = '...'`. Раскопка показала, что
+`style`-атрибут в Rust-структуре узла — сырая строка, уже
+JS-сериализованная шимом (`_lumen_serialize_style`,
+`crates/js/src/shim/web_api_shim_mid.js:1440`), а Rust-парсера одиночного
+инлайн-объявления в `lumen_css_parser` нет — пришлось бы либо дублировать
+JS-логику разбора на Rust, либо звать обратно в JS. Хуже: такое чтение
+видело бы только инлайн-мутацию и молча пропустило бы `overflow: clip`,
+пришедший из CSS-класса/внешнего листа — второй, рассогласованный с
+`computed_styles` источник истины вместо архитектурного фикса. Переведён в
+ДОРАБОТКА → [CSSOM-7](../ROADMAP.md); дедлока между потоками при чтении
+`doc` из этой native-функции не обнаружено (`route_query_js` уже дропает
+`doc_guard` до пересечения на JS-поток, `crates/shell/src/relayout.rs:676`),
+это не было препятствием.
 
 ## Repro
 
