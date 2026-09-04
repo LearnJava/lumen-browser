@@ -10,8 +10,11 @@ is not deterministic across machines/CI).
 
 `host-cert.pem`/`host-key.pem` are one self-signed leaf certificate (100-year
 expiry — this project's offline-only rule rules out ACME/live reissuance) for
-`CN=127.0.0.1` with SAN `IP:127.0.0.1, DNS:web-platform.test, DNS:127.0.0.1`
-(matches `browsers/lumen.py::env_options`'s `browser_host`). `ca-cert.pem` is
+`CN=127.0.0.1` with SAN `IP:127.0.0.1, DNS:web-platform.test, DNS:127.0.0.1`.
+This no longer matches `browsers/lumen.py::env_options`'s `browser_host`
+verbatim (`WPT-RUN-10`, 2026-09-04, moved it to `"localhost"`) — not
+regenerated for that, because the mismatch is moot: see the trust note below,
+the cert is rejected before hostname matching would even run. `ca-cert.pem` is
 a copy of the same cert — `wptcommandline`'s `pregenerated` ssl type requires
 a CA cert path to exist, but nothing in this executor (`LumenBrowser` has no
 `webdriver_binary`-side trust-store injection) actually consumes it, so a

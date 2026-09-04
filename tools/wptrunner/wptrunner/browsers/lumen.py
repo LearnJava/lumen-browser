@@ -106,13 +106,32 @@ def env_options():
     # `wptserve`'s own default (`browser_host = "web-platform.test"`,
     # `serve.py`) requires that hostname (and a long list of
     # `*.web-platform.test` subdomains) resolve via the OS resolver — normally
-    # satisfied by adding entries to `/etc/hosts` (`wpt make-hosts-file`).
-    # This project's "no live network / fully offline" rule (P2-wpt task doc)
-    # rules out relying on that machine-wide setup step, and BiDi automation
-    # doesn't exercise WPT's cross-origin subdomain tests anyway (S4/S5 scope
-    # is same-origin `dom/` tests) — a literal IP needs no resolution at all,
-    # sidestepping the `[Errno 11001] getaddrinfo failed` this produced
-    # against the default hostname (found while implementing S4).
+    # satisfied by adding entries to `/etc/hosts` (`wpt make-hosts-file`), a
+    # machine-wide setup step this project's "no live network / fully
+    # offline" rule (P2-wpt task doc) rules out relying on.
+    #
+    # `browser_host: "localhost"` (WPT-RUN-10, ROADMAP.md; user decision
+    # 2026-09-04, path 2 of 3 in `docs/tasks/p2-wpt-runner-throughput.md`):
+    # `wptserve` builds its subdomain family (`www`, `www1`, `www2`, two IDN
+    # labels) as a **prefix** on `browser_host`, so a literal IP (the prior
+    # value, `127.0.0.1`) turned every subdomain into an unresolvable
+    # `www1.127.0.0.1` — 1 892 automatable ids named only their own
+    # subdomain and got 0 % score, 69.4 % TIMEOUT (`tests/wpt/host_audit.py`).
+    # `*.localhost` resolves under RFC 6761 (glibc NSS, `systemd-resolved`
+    # included) with no `/etc/hosts` edit, so the subdomain family comes back
+    # to life without touching the machine. Two known gaps this does NOT
+    # close, deliberately left for a future task: the alternate-domain tests
+    # (`not-web-platform.test`, 305 ids) still get nothing, since that name
+    # isn't a suffix of `browser_host` under any choice here; and the
+    # Windows half of the corpus still runs on the old `127.0.0.1` value
+    # (Windows' `*.localhost` resolution is not validated here), so the two
+    # machines' pass-rates stay non-comparable on this slice until Windows
+    # picks up the same change. `*.localhost` resolves to `::1` first on
+    # this glibc/NSS setup, but `wptserve` only binds an IPv4 socket — this
+    # is not a dead end: `lumen_network`'s connect path already tries every
+    # resolved address in order (`lib.rs`, direct-connect loop) and falls
+    # through to the `127.0.0.1` address if `::1` refuses, so no engine
+    # change was needed here.
     #
     # `testharnessreport`: override the report script `wptserve` serves at
     # `/resources/testharnessreport.js`. `TestEnvironment.get_routes`
@@ -138,7 +157,7 @@ def env_options():
     # script restores the `__lumen_wpt_results` contract the executor
     # expects.
     return {
-        "browser_host": "127.0.0.1",
+        "browser_host": "localhost",
         "bind_address": True,
         "testharnessreport": [_LUMEN_TESTHARNESSREPORT],
     }
