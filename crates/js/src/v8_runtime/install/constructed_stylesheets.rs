@@ -21,16 +21,22 @@
 //! survives `_lumen_make_shadow_root` rebuilding a fresh wrapper object on
 //! every `host.shadowRoot` read (BUG-877) — for this one property only.
 //!
-//! **Neither registry feeds the layout cascade yet.** The cascade is built
-//! exclusively from the DOM tree's own `<style>`/`<link>` text
-//! (`crates/shell/src/relayout.rs::refresh_dynamic_css`,
-//! `crates/shell/src/page_pipeline.rs::build_page_cascade`) — there is no
-//! JS-runtime-to-shell channel a constructed sheet's content or an adopted
-//! list could travel over, and building one has to cross the ADR-016 engine
-//! thread carefully (a synchronous cross-thread call from the wrong place
-//! silently hung the process once already, BUG-976). Assigning
-//! `adoptedStyleSheets` or calling `replaceSync` today changes what CSSOM
-//! reports back but not what is painted. Follow-up, not this срез.
+//! **Срез 2 (BUG-897): `document.adoptedStyleSheets` feeds the cascade.**
+//! [`document_adopted_fingerprint`]/[`document_adopted_stylesheet`] let the
+//! shell pull the document scope's enabled sheets, in list order, and merge
+//! them into the page cascade (`crates/shell/src/relayout.rs::refresh_dynamic_css`,
+//! `crates/shell/src/page_pipeline.rs::parse_and_layout`). This is a
+//! plain `Mutex` read, not a call into V8 — the registries are already
+//! `Arc<Mutex<_>>`, so there is no isolate/`Platform` contention to repeat
+//! BUG-976 (that hang was about spawning a *new* `Isolate` synchronously
+//! from the engine thread, not about locking already-shared state).
+//!
+//! Shadow-root scopes are **not** read here — only [`DOCUMENT_ADOPTED_SCOPE`].
+//! Lumen has no shadow-scoped cascade at all yet (`extract_style_blocks`
+//! doesn't descend into shadow trees either), so a shadow root's own
+//! `<style>` and its `adoptedStyleSheets` are in the same boat. `replaceSync`
+//! content for a shadow-root-adopted sheet still updates CSSOM (`.cssRules`)
+//! but never reaches paint. Follow-up, not this срез.
 
 use super::reg;
 #[allow(unused_imports)]
@@ -62,6 +68,72 @@ pub(crate) type ConstructedStylesheets = Arc<Mutex<Vec<ConstructedStylesheet>>>;
 /// `scope id -> ordered list of constructed-sheet indices` — an opaque key
 /// the JS side chooses; see the module doc comment.
 pub(crate) type AdoptedStylesheets = Arc<Mutex<HashMap<u32, Vec<u32>>>>;
+
+/// CSSOM-5 срез 2 (BUG-897): document-scope key into [`AdoptedStylesheets`],
+/// matching `_LUMEN_ADOPTED_DOCUMENT_SCOPE` on the JS side
+/// (`web_api_shim_mid.js`). The two accessors below hide this sentinel so a
+/// shell-side caller never needs to know the JS convention.
+pub(crate) const DOCUMENT_ADOPTED_SCOPE: u32 = u32::MAX;
+
+/// Cheap per-relayout change detector for `document.adoptedStyleSheets`:
+/// changes whenever the scope's list is reassigned (different length/order/
+/// members) or any member sheet's content (`replaceSync`/`.replace()`, via
+/// [`Stylesheet::revision`]) or `disabled` flag changes. Locks both
+/// registries but clones nothing — the same shape as
+/// `crates/shell/src/doc_extract.rs::inline_style_fingerprint`, the dynamic-
+/// `<style>` sibling this feeds the same cascade-rebuild decision as.
+pub(crate) fn document_adopted_fingerprint(
+    sheets: &ConstructedStylesheets,
+    adopted: &AdoptedStylesheets,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let ids = adopted
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&DOCUMENT_ADOPTED_SCOPE)
+        .cloned()
+        .unwrap_or_default();
+    let guard = sheets.lock().unwrap_or_else(|e| e.into_inner());
+    for id in &ids {
+        id.hash(&mut h);
+        if let Some(entry) = guard.get(*id as usize) {
+            entry.sheet.revision().hash(&mut h);
+            entry.disabled.hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+/// Merged content of `document.adoptedStyleSheets`'s enabled sheets, in list
+/// order (CSSOM §4.6 — the adopted list cascades after the document's own
+/// style sheets; [`Stylesheet::merge_from`] appends, so the caller merging
+/// this onto the end of its own sheet gets that order for free). `None` when
+/// the list is empty or every member is disabled, so a caller doesn't need
+/// to special-case "nothing to merge" against an empty [`Stylesheet`].
+pub(crate) fn document_adopted_stylesheet(
+    sheets: &ConstructedStylesheets,
+    adopted: &AdoptedStylesheets,
+) -> Option<lumen_css_parser::Stylesheet> {
+    let ids = adopted
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&DOCUMENT_ADOPTED_SCOPE)
+        .cloned()
+        .unwrap_or_default();
+    let guard = sheets.lock().unwrap_or_else(|e| e.into_inner());
+    let mut merged = lumen_css_parser::Stylesheet::default();
+    let mut any = false;
+    for id in ids {
+        let Some(entry) = guard.get(id as usize) else { continue };
+        if entry.disabled {
+            continue;
+        }
+        merged.merge_from((*entry.sheet).clone());
+        any = true;
+    }
+    any.then_some(merged)
+}
 
 /// `new CSSStyleSheet()`, `.replaceSync()`/`.replace()`, `.cssRules`,
 /// `document.adoptedStyleSheets`/`shadowRoot.adoptedStyleSheets` (CSSOM-5

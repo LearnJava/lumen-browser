@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-04",
  "counts": {
-  "open": 373,
+  "open": 374,
   "fixed": 554,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 927,
+ "total_bugs": 928,
  "phases": [
   {
    "id": "P0",
@@ -5622,7 +5622,7 @@
        "title": "CSSOM-5: конструируемые таблицы стилей и adoptedStyleSheets",
        "status": "planned",
        "size": "M",
-       "note": "Записывающая половина CSSOM (читающая — CSSOM-1): `new CSSStyleSheet()` — `ReferenceError`, `document.adoptedStyleSheets` до присваивания `undefined` вместо пустого `FrozenArray`, а присваивание принимает что угодно, включая массив с `null`, не бросает и не даёт эффекта — это обычное поле объекта, а не аксессор; на теневом корне то же. Заведено ре-триажем WPT-RUN-6 2026-09-02: BUG-897 описывает не дефект, а отсутствующую половину той же модели, что CSSOM-1. От неё зависит GAP-CSSMOD. Срез 1 (2026-09-04): `new CSSStyleSheet()`/`.replaceSync()`/`.replace()`/`.cssRules` реализованы поверх ОТДЕЛЬНОГО реестра (`crates/js/src/v8_runtime/install/constructed_stylesheets.rs`) — у сконструированного листа нет владеющего DOM-узла, поэтому он не может делить индексное пространство с `stylesheet_nodes` (CSSOM-1). `document.adoptedStyleSheets`/`shadowRoot.adoptedStyleSheets` теперь настоящий валидируемый список (Rust-side состояние, ключ — scope id: сентинел для документа, `nid` для теневого корня — попутно переживает пересоздание обёртки `_lumen_make_shadow_root` на каждом чтении, BUG-877, но только для этого свойства): присваивание не-`CSSStyleSheet`/не-сконструированного элемента (включая читающие обёртки `document.styleSheets`, которые проходят `instanceof`, но не были сконструированы) бросает `TypeError`, а не молча принимает что угодно. `insertRule`/`deleteRule` вне среза (тот же принцип, что у CSSOM-1/2). Каскад НЕ подключён: движковая раскладка стилей строится исключительно из текста `<style>`/`<link>` документа (`crates/shell/src/relayout.rs::refresh_dynamic_css`), канала JS-рантайм→shell для контента сконструированного/adopted листа нет, а его постройка требует аккуратного пересечения движкового потока ADR-016 (синхронный кросс-поточный вызов не из того места уже один раз молча вешал процесс, BUG-976) — отдельный срез. 9 новых тестов (`crates/js/src/dom/tests/v8_cssom5_constructed_stylesheets.rs`), `cargo test -p lumen-js --features v8-backend`: 3444 passed / 1 pre-existing flake (`frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_dirty`, проходит в изоляции).",
+       "note": "Записывающая половина CSSOM (читающая — CSSOM-1): `new CSSStyleSheet()` — `ReferenceError`, `document.adoptedStyleSheets` до присваивания `undefined` вместо пустого `FrozenArray`, а присваивание принимает что угодно, включая массив с `null`, не бросает и не даёт эффекта — это обычное поле объекта, а не аксессор; на теневом корне то же. Заведено ре-триажем WPT-RUN-6 2026-09-02: BUG-897 описывает не дефект, а отсутствующую половину той же модели, что CSSOM-1. От неё зависит GAP-CSSMOD. Срез 1 (2026-09-04): `new CSSStyleSheet()`/`.replaceSync()`/`.replace()`/`.cssRules` реализованы поверх ОТДЕЛЬНОГО реестра (`crates/js/src/v8_runtime/install/constructed_stylesheets.rs`) — у сконструированного листа нет владеющего DOM-узла, поэтому он не может делить индексное пространство с `stylesheet_nodes` (CSSOM-1). `document.adoptedStyleSheets`/`shadowRoot.adoptedStyleSheets` теперь настоящий валидируемый список (Rust-side состояние, ключ — scope id: сентинел для документа, `nid` для теневого корня — попутно переживает пересоздание обёртки `_lumen_make_shadow_root` на каждом чтении, BUG-877, но только для этого свойства): присваивание не-`CSSStyleSheet`/не-сконструированного элемента (включая читающие обёртки `document.styleSheets`, которые проходят `instanceof`, но не были сконструированы) бросает `TypeError`, а не молча принимает что угодно. `insertRule`/`deleteRule` вне среза (тот же принцип, что у CSSOM-1/2). Каскад НЕ подключён: движковая раскладка стилей строится исключительно из текста `<style>`/`<link>` документа (`crates/shell/src/relayout.rs::refresh_dynamic_css`), канала JS-рантайм→shell для контента сконструированного/adopted листа нет, а его постройка требует аккуратного пересечения движкового потока ADR-016 (синхронный кросс-поточный вызов не из того места уже один раз молча вешал процесс, BUG-976) — отдельный срез. 9 новых тестов (`crates/js/src/dom/tests/v8_cssom5_constructed_stylesheets.rs`), `cargo test -p lumen-js --features v8-backend`: 3444 passed / 1 pre-existing flake (`frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_dirty`, проходит в изоляции). Срез 2 (2026-09-04): `document.adoptedStyleSheets` подключён к каскаду. `V8JsRuntime::document_adopted_fingerprint`/`document_adopted_stylesheet` (`constructed_stylesheets.rs`) дают дешёвый отпечаток и мёрдж только document-scope списка (сентинел `DOCUMENT_ADOPTED_SCOPE`, обычный `Mutex`-рид, без пересечения ADR-016 — BUG-976 был про синхронный спавн НОВОГО изолята, а не про блокировку уже разделяемого состояния); `crates/shell/src/relayout.rs::refresh_dynamic_css` и `page_pipeline.rs::parse_and_layout` сверяют отпечаток на каждом релейауте и перестраивают лист только при изменении, тем же принципом, что и `inline_style_fingerprint` (BUG-743). Тени по-прежнему вне среза — у Lumen нет теневого каскада вообще. Побочно найден и заведён отдельно [BUG-978](bugs/BUG-978-OPEN.md): `eval()`, вернувший сконструированный лист как completion value, валит изолят OOM'ом (детектор циклов `from_v8` не ловит нестабильные identity-хеши несёшированных обёрток `cssRules`/`parentStyleSheet`) — воспроизводится на голом срезе 1, не регрессия среза 2, тесты обошли (последнее выражение eval — безопасное скалярное чтение). +7 тестов (16 всего в файле), `cargo test -p lumen-js --features v8-backend`: 3456 passed / 0 failed. `insertRule`/`deleteRule` остаются вне среза.",
        "bugs": [
         "BUG-897"
        ]
@@ -9457,6 +9457,13 @@
    "status": "open",
    "title": "В интерактивном (не headless) окне синхронное переключение `overflow` на `clip` не видно зануляющей проверке `_lumen_request_scroll`, если скролл того же элемен…",
    "component": "js (`crates/js/src/v8_runtime/install/platform.rs::install_scroll_state` — `_lumen_request_scroll`'s `is_clip`) / js (`crates/js/src/v8_runtime/style_flush.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-978": {
+   "status": "open",
+   "title": "`eval()`, вернувший сконструированный `CSSStyleSheet` (с непустым `cssRules`) как completion value скрипта, валит изолят фатальным V8 OOM за ~60-100с: цикл `she…",
+   "component": "js (`crates/js/src/v8_runtime/value.rs::from_v8_bounded`) / js-shim (`crates/js/src/shim/web_api_shim_mid.js` — обёртки `cssRules`/`parentStyleSheet` конструируемого листа без кэша)",
    "date": null,
    "debtor": false
   },
@@ -13932,6 +13939,9 @@
   ],
   "js (`crates/js/src/v8_runtime/runtime.rs` — `pending_page_scrolls`/`page_scroll_y`; `install/platform.rs:349`)": [
    "BUG-949"
+  ],
+  "js (`crates/js/src/v8_runtime/value.rs::from_v8_bounded`) / js-shim (`crates/js/src/shim/web_api_shim_mid.js` — обёртки `cssRules`/`parentStyleSheet` конструируемого листа без кэша)": [
+   "BUG-978"
   ],
   "js (`crates/js/src/video_bindings.rs` — `appendCues()` строит cue из пяти полей; `crates/js/src/text_track_store.rs::tracks_json` и натив `__lumen_vtt_parse` — оба сериализуют `VttCue` без `settings`; `crates/engine/dom/src/vtt.rs` — `VttCueSettings` разбирается и никуда не уезжает)": [
    "BUG-902"

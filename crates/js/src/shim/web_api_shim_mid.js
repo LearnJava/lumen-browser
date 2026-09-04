@@ -7484,10 +7484,12 @@ Range.prototype.END_TO_START  = 2; Range.prototype.END_TO_END  = 3;
 // (`_lumen_make_constructed_style_sheet`) over a SEPARATE Rust-side registry
 // (`crates/js/src/v8_runtime/install/constructed_stylesheets.rs`) — a
 // constructed sheet has no owning DOM node, so it cannot share the
-// `stylesheet_nodes` index space this file's read half addresses. Neither
-// registry feeds the layout cascade yet — assigning `adoptedStyleSheets` or
-// calling `replaceSync` changes what CSSOM reports but not what is painted;
-// see that Rust module's doc comment for why.
+// `stylesheet_nodes` index space this file's read half addresses.
+// `document.adoptedStyleSheets` feeds the layout cascade since CSSOM-5 срез
+// 2 (same BUG-897) — assigning it or calling `replaceSync` on a member sheet
+// now changes what is painted, not just what CSSOM reports.
+// `shadowRoot.adoptedStyleSheets` does not yet: Lumen has no shadow-scoped
+// cascade at all, see that Rust module's doc comment for why.
 
 function CSSStyleSheet(options) {
     if (!new.target) throw new TypeError("Constructor CSSStyleSheet requires 'new'");
