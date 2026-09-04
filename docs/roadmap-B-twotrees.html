@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-04",
  "counts": {
-  "open": 374,
+  "open": 375,
   "fixed": 554,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 928,
+ "total_bugs": 929,
  "phases": [
   {
    "id": "P0",
@@ -5444,7 +5444,8 @@
         "BUG-970",
         "BUG-971",
         "BUG-972",
-        "BUG-973"
+        "BUG-973",
+        "BUG-979"
        ]
       },
       {
@@ -9464,6 +9465,13 @@
    "status": "open",
    "title": "`eval()`, вернувший сконструированный `CSSStyleSheet` (с непустым `cssRules`) как completion value скрипта, валит изолят фатальным V8 OOM за ~60-100с: цикл `she…",
    "component": "js (`crates/js/src/v8_runtime/value.rs::from_v8_bounded`) / js-shim (`crates/js/src/shim/web_api_shim_mid.js` — обёртки `cssRules`/`parentStyleSheet` конструируемого листа без кэша)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-979": {
+   "status": "open",
+   "title": "`contentWindow`/именованный доступ к окну — фиксированный список из ~11 IDL-имён, а не живой мост к реальному глобальному объекту фрейма: любой global, который…",
+   "component": "js (`crates/js/src/frame_bridge.rs::winFacade`)",
    "date": null,
    "debtor": false
   },

@@ -2662,6 +2662,70 @@ SOURCE_MARKERS = [
             "no-reveal.html",
         ),
     ),
+    # WPT-RUN-6 slice 58. Two marker-only follow-ups against bugs already
+    # filed without an `_exact_id_marker` entry (both flagged as such in
+    # slice 57's docstring):
+    #
+    # `apply_the_modifiers.html`/`steps_for_selecting_the_payment_handler.html`
+    # (BUG-646 §Симптом): neither has `-manual` in its filename, so
+    # `run_report.py` doesn't exclude it, but both are actually manual tests
+    # — `promise_test` calls are wired to `onclick` button handlers only,
+    # nothing runs automatically, `testharness.js` never completes and
+    # wptrunner hits its own external budget.
+    Mechanism(
+        "payment-request-manual-test-no-autorun", "BUG-646",
+        [], "test file has no `-manual` suffix so the runner doesn't skip "
+        "it, but its `promise_test`s are wired to button `onclick` handlers "
+        "only — nothing runs automatically, so `testharness.js` never "
+        "completes",
+        predicate=_exact_id_marker(
+            "/payment-method-basic-card/apply_the_modifiers.html",
+            "/payment-method-basic-card/steps_for_selecting_the_payment_handler.html",
+        ),
+    ),
+    # `po-mark-measure.any.html` (BUG-648 §Симптом, item 2): explicitly
+    # listed among the TIMEOUTs caused by `PerformanceObserver` notifying
+    # synchronously in-line at entry-creation time instead of through a
+    # queued task — the same defect as `buffered-does-not-sync-invoke.html`.
+    Mechanism(
+        "perf-observer-sync-notify", "BUG-648",
+        [], "`PerformanceObserver` delivery runs synchronously inline at "
+        "entry-creation time (`performance.mark`/`.measure` call "
+        "`_perf_observer_notify` directly) instead of through a queued "
+        "task, so a test relying on the queued-task ordering hangs",
+        predicate=_exact_id_marker(
+            "/performance-timeline/po-mark-measure.any.html",
+        ),
+    ),
+    # WPT-RUN-6 slice 58. `winFacade` (`frame_bridge.rs`, the object behind
+    # `contentWindow`/named-window access) is a fixed ~11-name IDL whitelist,
+    # not a live view of the frame's own JS global object — same-origin
+    # access to any global the framed page's own script defines (functions,
+    # vars) answers `undefined` instead of forwarding across the isolate
+    # boundary. Related to but distinct from BUG-957 (missing `EventTarget`
+    # methods only) — see BUG-979 for the generalization. Measured live
+    # (`serve_wpt_like.py`): all four `async_test`s in
+    # `MediaRecorder-destroy-script-execution.html` do
+    # `subFrameX.window.prepareForTest(...)`, where `prepareForTest` is a
+    # plain global the framed support page declares — `TypeError:
+    # …prepareForTest is not a function`, uncaught (none of the four
+    # `onload` assignments is `t.step`-wrapped), so none of the four tests
+    # ever reaches `.done()`. `harness-complete` only fires at ≈10.5s
+    # wall-clock — hangs until the harness's own internal timeout, not the
+    # fast-completion "corpus TIMEOUT doesn't reproduce live" shape
+    # (BUG-961/BUG-963). New bug filed (BUG-979).
+    Mechanism(
+        "frame-facade-missing-page-globals", "BUG-979",
+        [], "`contentWindow`/named-window access answers a fixed IDL-name "
+        "whitelist, not a live view of the frame's actual global object — "
+        "any global the framed page's own script defines (not just "
+        "`EventTarget` methods, cf. BUG-957) is unreachable, so "
+        "`frameWindow.someGlobalFn()` throws `TypeError: …is not a "
+        "function`",
+        predicate=_exact_id_marker(
+            "/mediacapture-record/MediaRecorder-destroy-script-execution.html",
+        ),
+    ),
 ]
 
 #: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched
