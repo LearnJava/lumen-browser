@@ -5,7 +5,14 @@ unimplemented (`text-overflow`, `line-clamp`/`-webkit-line-clamp`/`max-lines`,
 `::scroll-marker`/`::scroll-marker-group`/`::scroll-button()`,
 `scroll-target-group`)
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md)
+**Тип:** доработка — остаток (~32 файла `scroll-markers/`) требует генерации боксов для
+`::scroll-marker`/`::scroll-marker-group`/`::scroll-button()` и модели интеракции
+(click-to-scroll, focus/hover/activation, группировка scroll-snap-целей под
+`scroll-target-group`, взаимодействие с container queries/iframe) — черновой модуль
+CSS Overflow L5 (Carousel), тот же прецедент, что BUG-491/492. Переклассифицировано
+P3 2026-09-04 после шести срезов, закрывших все точечные части (свойства/грамматика/
+computed-value/селекторы) — см. срезы 1-6 ниже и запись в BUGS.md.
 **Дата:** 2026-08-02
 **Компонент:** css-parser / layout (`crates/engine/layout/src/style.rs::apply_declaration`,
 selector matching for `::scroll-marker`/`::scroll-button`)
