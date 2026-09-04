@@ -2788,6 +2788,35 @@ SOURCE_MARKERS = [
             "/xhr/cors-expose-star.sub.any.html",
         ),
     ),
+    # WPT-RUN-6 slice 61. `transport::handle`'s read/dispatch loop
+    # (`crates/bidi-server/src/transport.rs`) answers WebSocket Ping only
+    # inside `read_text_frame`, which it is not calling while `dispatch()`
+    # runs a `navigate` — so a command that blocks ~20s or more (here, the
+    # page running the BUG-980 fully-synchronous-XHR idiom against
+    # `checkReport.sub.js`'s 20-second-polling `report.py` endpoint) can
+    # straddle `wptrunner`'s own BiDi client's Ping/pong liveness window
+    # (`websockets.connect` library defaults, confirmed in-venv:
+    # `ping_interval=20`, `ping_timeout=20`) and get the *client* to tear
+    # down the connection — `ExecutorException: ('ERROR',
+    # 'browsingContext.navigate(...) failed: unknown error (WebSocket
+    # connection closed)')` — even though the browser process is alive and
+    # working the entire time (confirmed: `process_output` keeps arriving
+    # past the instant the client reports the socket dead, same
+    # `browser_pid`, no restart). Timing-dependent, not deterministic per
+    # id (docs/probe-method.md §9): an isolated/solo rerun of either file
+    # can complete without hitting it. New bug filed (BUG-981).
+    Mechanism(
+        "bidi-ping-starved-by-blocking-dispatch", "BUG-981",
+        [], "`transport::handle` only answers WebSocket Ping inside "
+        "`read_text_frame`, not while `dispatch()` blocks on a slow "
+        "command, so a ~20s+ blocking `navigate` can outlast the "
+        "wptrunner BiDi client's own Ping/pong liveness timeout and get "
+        "the connection torn down client-side mid-command",
+        predicate=_exact_id_marker(
+            "/content-security-policy/frame-ancestors/report-blocked-frame.sub.html",
+            "/content-security-policy/frame-ancestors/report-only-frame.sub.html",
+        ),
+    ),
 ]
 
 #: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched

@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-04",
  "counts": {
-  "open": 376,
+  "open": 377,
   "fixed": 554,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 930,
+ "total_bugs": 931,
  "phases": [
   {
    "id": "P0",
@@ -5446,7 +5446,8 @@
         "BUG-972",
         "BUG-973",
         "BUG-979",
-        "BUG-980"
+        "BUG-980",
+        "BUG-981"
        ]
       },
       {
@@ -9480,6 +9481,13 @@
    "status": "open",
    "title": "`send()` выполняет весь цикл запрос/ответ синхронно внутри самого вызова (комментарий в коде так и говорит: «Execute synchronously»): все переходы `readyState`…",
    "component": "js (`crates/js/src/xhr.rs::XMLHttpRequest.prototype.send`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-981": {
+   "status": "open",
+   "title": "Read/dispatch-цикл BiDi-соединения отвечает `Pong` на входящий `Ping` только внутри `read_text_frame`, а не пока выполняется `dispatch()` — команда `browsingCon…",
+   "component": "bidi-server (`crates/bidi-server/src/transport.rs::handle`)",
    "date": null,
    "debtor": false
   },
