@@ -321,3 +321,66 @@ fontload3_document_fonts_population.rs`): синхронный top-level скр�
 т.е. потенциально несут ТОТ ЖЕ класс дефекта, что этот срез только что
 исправил для `InProcessSession`) — это отдельный, ещё не измеренный кусок
 работы над `crates/shell`, не покрытый этим срезом.
+
+## FONTLOAD-4 (P1, 2026-09-05, ветка `p1-fontload4-shell-font-population`) — тот же тайминг-риск в `crates/shell`, реальный WPT-путь
+
+Проверила ровно то, что FONTLOAD-3 оставила непроверенным. Пробный тест
+(`parse_and_layout` на странице `<style>@font-face{...local('Arial')}</style>`
++ синхронный top-level `<script>document.documentElement.setAttribute(
+'data-sync', String(document.fonts.size))</script>`) до фикса дал `sync=0` —
+подтверждает, что дефект существует и в `crates/shell`, не только в
+`InProcessSession`: `page_pipeline.rs` заполнял `document.fonts` строго
+ПОСЛЕ `run_scripts_with_dom` (код, унаследованный с FONTLOAD-1/2, строка
+~881), а JS-обёртка `document.fonts` кэширует свой `FontFaceSet`-снимок на
+первое касание (`_lumen_wrapper_slot`, `web_api_shim_mid.js`) — ровно тот же
+механизм, что FONTLOAD-3 уже описала для `InProcessSession`.
+
+Фикс: блок заполнения `document.fonts` перенесён в `page_pipeline.rs` с
+конца функции (после скриптов, после возможной пересборки каскада) на место
+сразу после первой (pre-script) сборки `cascade` — до `run_scripts_with_dom`.
+В отличие от `crates/driver` (там пришлось заводить отдельный ранний парсинг
+`@font-face`, `crates/driver/src/font_faces.rs`), `crates/shell` уже строит
+pre-script `cascade` для другой цели (BUG-443 — чтобы parse-time скрипт видел
+реальный computed style/geometry), так что переиспользован тот же `cascade.
+sheet.font_faces`/`cascade.font_registry` без нового прохода по CSS. После
+фикса проба даёт `sync=1`; оставлена постоянным тестом
+`crates/shell/src/tests/page_pipeline.rs::
+fontload4_document_fonts_sync_read_sees_font_face_rules`.
+
+**Измерение на реальном WPT-пути** (в отличие от FONTLOAD-3, `crates/shell`
+— это именно то, что гоняет `run_report.py`/`wptrunner` через BiDi, так что
+здесь pass rate обязан был сдвинуться, и сдвинулся): `run_report.py --all
+--root css/css-font-loading` (dev-release, Windows) — 17/27 harness OK без
+изменений, сабтесты **6/55 → 8/55**. Новые UNEXPECTED-PASS:
+`fontfaceset-clear-css-connected`, `fontfaceset-delete-css-connected`, обе
+половины `fontfacesetloadevent-constructor`, `historical.html`,
+`nonexistent-file-url.html`.
+
+**`.ini`-baseline этой категории намеренно не тронут.** `--update-expected`
+немедленно вскрывает не связанный с шрифтами долг: `css/css-font-loading` —
+одна из «21 категории, которой после фикса выборки по манифесту (WPT-RUN-7
+срез 4) требуется перегенерация baseline» (`ROADMAP.md`, строка WPT-RUN-7).
+Манифест теперь корректно находит новые id (`fontface-descriptor-updates.
+html`, `fontface-from-arraybuffer.html`, `fontface-override-descriptors.
+html`, `fontface-size-adjust-descriptor.html`, `fontfaceset-clear-css-
+connected-2.html`, `fontfaceset-delete-css-connected-2.html`) — настоящие
+reftest-файлы с `-ref.html`-компаньоном, которые этот раннер не умеет
+исполнять как testharness и которые `--check` рапортует как `REGRESSION:
+expected None, got MISSING (crash before test_start)`. Смешивать этот
+несвязанный сигнал с фиксом тайминга в одном коммите неверно — перегенерация
+baseline для всей категории остаётся владельцу WPT-RUN-7.
+
+Заодно исправлен дрейф в шапке-комментарии `crates/js/src/shim/
+web_api_shim_mid.js` («FontFace and FontFaceSet»): она всё ещё утверждала,
+что «on the driver/WPT path `document.fonts` is never populated at all» —
+устарело уже после FONTLOAD-3 (которая как раз это исправила для
+`InProcessSession`), просто не была обновлена тогда.
+
+`cargo test -p lumen-shell --bin lumen` 1723/1723 (было 1722, без
+регрессий, +1 новый тест), `cargo clippy -p lumen-shell --all-targets --
+-D warnings` чист.
+
+**Не входит в срез:** реактивность CSS-connected сета на CSSOM-изменения
+(gap 1 из FONTLOAD-1/2, оба пути — `crates/shell` и `crates/driver`) — тот
+же больший фундамент BUG-471/CSSOM-4, что и раньше; перегенерация `.ini`
+baseline `css/css-font-loading` под WPT-RUN-7 срез 4 (см. выше).

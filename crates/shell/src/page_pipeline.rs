@@ -633,6 +633,38 @@ pub(crate) fn parse_and_layout(
     // whether the scripts touched either. Cheap: two tree walks, no fetching.
     let css_sources_before = (inline_style_fingerprint(&doc), stylesheet_link_fingerprint(&doc));
 
+    // FONTLOAD-4: populate `document.fonts` from the STATIC (pre-script)
+    // cascade's `@font-face` rules, BEFORE scripts run — must happen ahead of
+    // `run_scripts_with_dom` below, not after it (the ordering this block had
+    // since FONTLOAD-1/2): `document.fonts`'s JS wrapper caches its
+    // `FontFaceSet` snapshot on first touch (`_lumen_wrapper_slot(this,
+    // '__fonts__', ...)`, `crates/js/src/shim/web_api_shim_mid.js`), so a
+    // synchronous top-level script read — the exact
+    // `document.fonts.ready.then(...)`-before-any-`test()` WPT pattern
+    // `bugs/BUG-467-OPEN.md` "gap 0" describes — froze the set empty for the
+    // page's whole life, same class of defect FONTLOAD-3 fixed for
+    // `InProcessSession` (`crates/driver/src/font_faces.rs`), reproduced here
+    // for the shell/`run_report.py` path by a probe script reading
+    // `document.fonts.size` synchronously (always `0`, even for a resolvable
+    // `local()` face). Uses the pre-script cascade already built above, not a
+    // separate early parse like driver's — shell already has one; a script
+    // that inserts its own `<style>`/`@font-face` before layout still reaches
+    // the layout cascade exactly as before, it just isn't reflected in
+    // `document.fonts` (same one-shot-snapshot limitation already documented
+    // for CSS-connected reactivity, not a new regression).
+    for rule in &cascade.sheet.font_faces {
+        let mut font_face = rule_to_font_face(rule);
+        // local() rules already resolved — mark Loaded; url() rules stay Loading.
+        let has_local = rule.sources.iter().any(|s| {
+            s.kind == lumen_css_parser::FontFaceSourceKind::Local
+                && cascade.font_registry.face_bytes_for_family(&rule.family).is_some()
+        });
+        if has_local {
+            font_face.status = lumen_dom::FontFaceStatus::Loaded;
+        }
+        doc.fonts_mut().add(font_face);
+    }
+
     // The pre-script layout exists only to be read by scripts, so a page with
     // none pays nothing for it. Its geometry is what the document has *now*:
     // no images decoded yet, no web fonts registered — exactly what a real
@@ -875,25 +907,6 @@ pub(crate) fn parse_and_layout(
         }
         arg.push_str("]);");
         js.eval_js(&arg);
-    }
-
-
-    // Populate document.fonts with FontFace objects from @font-face rules.
-    // local() — immediately Loaded; url() — Loading (будет Loaded по FontLoaded).
-    {
-        let mut d = doc_arc.lock().unwrap();
-        for rule in &sheet.font_faces {
-            let mut font_face = rule_to_font_face(rule);
-            // local() rules already resolved — mark Loaded; url() rules stay Loading.
-            let has_local = rule.sources.iter().any(|s| {
-                s.kind == lumen_css_parser::FontFaceSourceKind::Local
-                    && font_registry.face_bytes_for_family(&rule.family).is_some()
-            });
-            if has_local {
-                font_face.status = lumen_dom::FontFaceStatus::Loaded;
-            }
-            d.fonts_mut().add(font_face);
-        }
     }
 
     let font_provider = Arc::new(font_registry);
