@@ -156,8 +156,19 @@ def all_vendored_test_ids(root: str = "dom/nodes", recursive: bool = False) -> l
     phantom regression on every later `--check` (found scanning ~110
     categories at once in WPT-RUN-7: `print/crashtests/reload-crash.html`,
     `avif/animated-avif-timeout-ref.html`, two under `cssom/crashtests/`,
-    `gif/reset-no-gce-ref.html`). An id absent from the manifest is kept
-    (fail open) rather than dropped.
+    `gif/reset-no-gce-ref.html`).
+
+    An id the manifest does not know at all is dropped too, but *only* when
+    the manifest does cover `root` (some id under `/<root>/` exists) — the
+    fail-open case that matters is a whole category the manifest has never
+    seen, not a stray page inside one it has. Keeping such an id was worse
+    than a phantom regression: a `-ref.html` reference page is not a
+    resolvable test path for wptrunner, so when it is the *only* selected id
+    the whole run dies before the first test with `CRITICAL Unable to find
+    any tests at the path(s)` and exit 64 — `avif`, `gif`, `html-longdesc`
+    and `annotation-protocol` each aborted this way in WPT-RUN-7 slice 4.
+    Every dropped id is printed to stderr, so a genuinely stale manifest
+    shows up as a note instead of a silent hole.
     """
     subdir = os.path.join(run_smoke.TESTS_ROOT, *root.split("/"))
     if not recursive:
@@ -170,22 +181,53 @@ def all_vendored_test_ids(root: str = "dom/nodes", recursive: bool = False) -> l
         dirnames[:] = sorted(d for d in dirnames if d not in ("support", "resources"))
         rel_dir = os.path.relpath(dirpath, run_smoke.TESTS_ROOT).replace(os.sep, "/")
         for fn in sorted(filenames):
+            # Ask the manifest what this source file expands to, whatever its
+            # extension, before falling back to deriving an id from the name.
+            # The manifest is the only place that knows (a) which generated
+            # shapes a source emits — `.any.js`/`.window.js` are not the only
+            # ones, `web-extensions/` is entirely `*.extension.js` ->
+            # `*.extension.html` and a suffix list missed all six of its real
+            # testharness tests — (b) that a `// META: global=...` comment can
+            # restrict or multiply the globals wptserve generates
+            # (`tools/serve/serve.py`: `push-api/push-event.https.any.js`
+            # emits only `*.any.window-module.html?...`), and (c) that a plain
+            # `.html` test can exist *only* as query variants: every
+            # `websockets/**/*.html` is `?default`/`?wss`/`?wpt_flags=h2` and
+            # never the bare path, so the name-derived id was unrunnable for
+            # 123 of them. Non-test files resolve to `support` ids and are
+            # dropped by the RUNNABLE_ITEM_TYPES filter below.
+            expanded = ids_by_path.get(f"{rel_dir}/{fn}")
+            if expanded is not None:
+                ids.extend(expanded)
+                continue
             if fn.endswith((".any.js", ".window.js")):
-                # Prefer the manifest's own expansion (handles `// META:
-                # global=...` restricting/multiplying which globals actually
-                # get generated) — fall back to the single-guess heuristic
-                # only for a source the manifest doesn't know about at all.
-                expanded = ids_by_path.get(f"{rel_dir}/{fn}")
-                if expanded:
-                    ids.extend(expanded)
-                    continue
                 out = fn[: -len(".js")] + ".html"
             elif fn.endswith((".html", ".htm")) and "-manual" not in fn:
                 out = fn
             else:
                 continue
             ids.append(f"/{rel_dir}/{out}")
-    return [i for i in ids if item_types.get(i, "testharness") in RUNNABLE_ITEM_TYPES]
+    # Fail open only for a category the manifest has never seen at all (see
+    # docstring) — inside a covered one, an unknown id is a reference/support
+    # page that would abort the whole run.
+    root_covered = any(i.startswith(f"/{root}/") for i in item_types)
+    selected, unknown = [], []
+    for i in ids:
+        item_type = item_types.get(i)
+        if item_type is None:
+            (selected if not root_covered else unknown).append(i)
+        elif item_type in RUNNABLE_ITEM_TYPES:
+            selected.append(i)
+    if unknown:
+        shown = ", ".join(sorted(unknown)[:5])
+        more = f" (+{len(unknown) - 5} more)" if len(unknown) > 5 else ""
+        print(
+            f"note: dropped {len(unknown)} path(s) under /{root}/ absent from the "
+            f"vendored manifest (reference/support pages, or a manifest older "
+            f"than the vendored tree): {shown}{more}",
+            file=sys.stderr,
+        )
+    return selected
 
 
 def load_wptreport(path: str) -> dict:

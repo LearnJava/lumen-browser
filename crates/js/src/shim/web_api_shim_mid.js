@@ -7322,7 +7322,26 @@ var console = {
     debug: function() { _lumen_console_log(  Array.prototype.join.call(arguments, ' ')); },
 };
 
-// ── FontFace and FontFaceSet (CSS Fonts Module Level 4 §11) ─────────────────
+// ── FontFace and FontFaceSet (CSS Fonts Module Level 4 §11 / CSS Font Loading) ─
+// FONTLOAD-1 (2026-09-04): a real `FontFace` constructor and a `document.fonts`
+// that behaves like the spec's setlike<FontFace> — stable object identity,
+// add/delete/clear/has/keys/values/entries/forEach, and a `.load()` that
+// actually fetches url() sources and validates them via the sfnt parser
+// (`_lumen_font_validate_bytes`, `crates/engine/font`). Two things this slice
+// deliberately leaves for a later one, both real engine gaps, not oversights:
+// (1) **CSS-connected faces are a one-time snapshot.** They are read from
+//     native once, when `document.fonts` is first touched — a later
+//     `<style>`/CSSOM change that adds or removes an `@font-face` rule is not
+//     reflected (needs the same live-cascade foundation BUG-471/CSSOM-4 does).
+// (2) **A CSS-declared `url()` face's native status never advances past
+//     "loading"** — `crates/shell`'s `FontLoaded` event updates the render
+//     font registry but not `Document::fonts_mut()` — so `document.fonts`'s
+//     own `.ready`/`.status` intentionally track only script-driven loads
+//     (`FontFace.load()` / `document.fonts.load()`), never the passive CSS
+//     one. Wiring the CSS side in would turn every
+//     `document.fonts.ready.then(...)` layout gate already used throughout
+//     css-fonts/css-sizing/css-ruby into a promise that never resolves —
+//     a regression, not a fix.
 
 function _lumen_parse_font_face_json(jsonStr) {
     try {
@@ -7332,72 +7351,381 @@ function _lumen_parse_font_face_json(jsonStr) {
     }
 }
 
-function _lumen_get_fonts() {
+function _lumen_font_bytes_view(data) {
+    if (data instanceof Uint8Array) return data;
+    if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(data)) {
+        return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    }
+    return new Uint8Array(data);
+}
+
+function _lumen_strip_css_string_quotes(s) {
+    var m = /^"([\s\S]*)"$/.exec(s) || /^'([\s\S]*)'$/.exec(s);
+    return m ? m[1] : s;
+}
+
+// Best-effort `<font-face-src-list>` reader: pulls every `url(...)`/
+// `local(...)` term out in order, ignoring `format(...)`/`tech(...)` hints
+// this slice does not act on. Good enough for every source this category's
+// tests construct; a `<font-face-src-list>` with unusual whitespace/escapes
+// inside the url/local token is not this parser's target.
+function _lumen_parse_font_face_sources(source) {
+    if (source && (source instanceof ArrayBuffer ||
+        (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(source)))) {
+        return [{ kind: 'binary', data: source }];
+    }
+    var str = String(source);
+    var out = [];
+    var re = /(url|local)\(\s*(?:"([^"]*)"|'([^']*)'|([^'")\s]*))\s*\)/g;
+    var m;
+    while ((m = re.exec(str)) !== null) {
+        var value = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : m[4]);
+        out.push({ kind: m[1], value: value });
+    }
+    return out;
+}
+
+// Which FontFaceSet(s) a FontFace currently belongs to — drives the
+// `loading`/`loadingdone`/`loadingerror` events a set fires around its own
+// members' loads (CSS Font Loading §11.2, "document font face set").
+var _lumen_font_face_owners = new WeakMap();
+
+function _lumen_font_face_load_start(face) {
+    var owners = _lumen_font_face_owners.get(face);
+    if (!owners) return;
+    for (var i = 0; i < owners.length; i++) owners[i]._onFaceLoadStart(face);
+}
+function _lumen_font_face_load_end(face, ok) {
+    var owners = _lumen_font_face_owners.get(face);
+    if (!owners) return;
+    for (var i = 0; i < owners.length; i++) owners[i]._onFaceLoadEnd(face, ok);
+}
+
+function _lumen_font_face_try_one_source(src, onOk, onFail) {
+    if (src.kind === 'binary') {
+        var ok;
+        try { ok = _lumen_font_validate_bytes(_lumen_font_bytes_view(src.data)); } catch (e) { ok = false; }
+        if (ok) onOk();
+        else onFail(new DOMException('Invalid font data', 'SyntaxError'));
+        return;
+    }
+    if (src.kind === 'local') {
+        // No native local-installed-font lookup is wired to script yet — a
+        // local() source always behaves like "font not found" (spec:
+        // reject with NetworkError), same as a real browser with no such
+        // font installed.
+        onFail(new DOMException('Could not find local font', 'NetworkError'));
+        return;
+    }
+    fetch(src.value).then(function(resp) {
+        if (!resp.ok) throw new DOMException('Failed to fetch font: ' + resp.status, 'NetworkError');
+        return resp.arrayBuffer();
+    }).then(function(buf) {
+        var bytes = _lumen_font_bytes_view(buf);
+        if (_lumen_font_validate_bytes(bytes)) onOk();
+        else onFail(new DOMException('Invalid font data', 'SyntaxError'));
+    }).catch(function(e) {
+        onFail(e instanceof DOMException ? e : new DOMException('Failed to fetch font', 'NetworkError'));
+    });
+}
+
+function _lumen_font_face_try_sources(sources, idx, done) {
+    if (idx >= sources.length) {
+        done(false, new DOMException('No valid font sources', sources.length === 0 ? 'SyntaxError' : 'NetworkError'));
+        return;
+    }
+    _lumen_font_face_try_one_source(sources[idx], function() {
+        done(true);
+    }, function(lastErr) {
+        _lumen_font_face_try_sources(sources, idx + 1, function(ok, err) {
+            done(ok, ok ? undefined : (err || lastErr));
+        });
+    });
+}
+
+var FontFace = (function() {
+    function FontFace(family, source, descriptors) {
+        if (arguments.length < 2) throw new TypeError('FontFace constructor requires a family and a source');
+        descriptors = descriptors || {};
+        this._family = String(family);
+        this._style = descriptors.style !== undefined ? String(descriptors.style) : 'normal';
+        this._weight = descriptors.weight !== undefined ? String(descriptors.weight) : 'normal';
+        this._stretch = descriptors.stretch !== undefined ? String(descriptors.stretch) : 'normal';
+        this._unicodeRange = descriptors.unicodeRange !== undefined ? String(descriptors.unicodeRange) : 'U+0-10FFFF';
+        this._featureSettings = descriptors.featureSettings !== undefined ? String(descriptors.featureSettings) : 'normal';
+        this._variationSettings = descriptors.variationSettings !== undefined ? String(descriptors.variationSettings) : 'normal';
+        this._display = descriptors.display !== undefined ? String(descriptors.display) : 'auto';
+        this._sources = _lumen_parse_font_face_sources(source);
+        this._status = 'unloaded';
+        this._cssConnected = false;
+        this._resolveLoaded = null;
+        this._rejectLoaded = null;
+        var self = this;
+        this._loadedPromise = new Promise(function(resolve, reject) {
+            self._resolveLoaded = resolve;
+            self._rejectLoaded = reject;
+        });
+    }
+    FontFace.prototype.load = function() {
+        if (this._status === 'loading' || this._status === 'loaded') {
+            return this._loadedPromise;
+        }
+        this._status = 'loading';
+        var self = this;
+        this._loadedPromise = new Promise(function(resolve, reject) {
+            self._resolveLoaded = resolve;
+            self._rejectLoaded = reject;
+        });
+        _lumen_font_face_load_start(self);
+        _lumen_font_face_try_sources(self._sources, 0, function(ok, err) {
+            if (ok) {
+                self._status = 'loaded';
+                _lumen_font_face_load_end(self, true);
+                self._resolveLoaded(self);
+            } else {
+                self._status = 'error';
+                _lumen_font_face_load_end(self, false);
+                self._rejectLoaded(err);
+            }
+        });
+        return this._loadedPromise;
+    };
+    Object.defineProperties(FontFace.prototype, {
+        family: {
+            get: function() { return this._family; },
+            set: function(v) { this._family = String(v); },
+            enumerable: true, configurable: true,
+        },
+        style: {
+            get: function() { return this._style; },
+            set: function(v) { this._style = String(v); },
+            enumerable: true, configurable: true,
+        },
+        weight: {
+            get: function() { return this._weight; },
+            set: function(v) { this._weight = String(v); },
+            enumerable: true, configurable: true,
+        },
+        stretch: {
+            get: function() { return this._stretch; },
+            set: function(v) { this._stretch = String(v); },
+            enumerable: true, configurable: true,
+        },
+        unicodeRange: {
+            get: function() { return this._unicodeRange; },
+            set: function(v) { this._unicodeRange = String(v); },
+            enumerable: true, configurable: true,
+        },
+        featureSettings: {
+            get: function() { return this._featureSettings; },
+            set: function(v) { this._featureSettings = String(v); },
+            enumerable: true, configurable: true,
+        },
+        variationSettings: {
+            get: function() { return this._variationSettings; },
+            set: function(v) { this._variationSettings = String(v); },
+            enumerable: true, configurable: true,
+        },
+        display: {
+            get: function() { return this._display; },
+            set: function(v) { this._display = String(v); },
+            enumerable: true, configurable: true,
+        },
+        status: { get: function() { return this._status; }, enumerable: true, configurable: true },
+        loaded: { get: function() { return this._loadedPromise; }, enumerable: true, configurable: true },
+    });
+    return FontFace;
+})();
+
+function FontFaceSetLoadEvent(type, eventInitDict) {
+    Event.call(this, type, eventInitDict);
+    eventInitDict = eventInitDict || {};
+    this.fontfaces = eventInitDict.fontfaces ? eventInitDict.fontfaces.slice() : [];
+}
+FontFaceSetLoadEvent.prototype = Object.create(Event.prototype);
+FontFaceSetLoadEvent.prototype.constructor = FontFaceSetLoadEvent;
+
+// `new FontFaceSet(...)` must throw — the interface declares no constructor
+// operation (historical.html). The one real instance, `document.fonts`, is
+// built with `Object.create(FontFaceSet.prototype)`, bypassing this throw
+// the same way `Response.redirect()`/`rawResponse` do (BUG-370) for a spec
+// object with no public constructor.
+function FontFaceSet() {
+    throw new TypeError('Illegal constructor');
+}
+FontFaceSet.prototype = Object.create(EventTarget.prototype);
+FontFaceSet.prototype.constructor = FontFaceSet;
+
+// Pragmatic `font` shorthand reader for `FontFaceSet.load(font, text)`: finds
+// the first `<font-size>`-shaped token (a keyword or a number-led one, an
+// optional `/<line-height>` included) and treats everything after it as the
+// comma-separated family list — the shorthand's mandatory tail per the CSS
+// Fonts grammar. Style/variant/weight/stretch keywords that may precede the
+// size are not parsed out individually; matching in `FontFaceSet.load` is by
+// family name only, which is what every test in this slice's target set
+// exercises.
+function _lumen_parse_font_shorthand_families(fontStr) {
+    var s = String(fontStr).trim();
+    var sizeKeyword = /^(xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger)$/i;
+    var sizeToken = /^[\d.]+[a-z%]*(\/[\d.]+[a-z%]*)?$/i;
+    var tokens = s.split(/\s+/);
+    var idx = -1;
+    for (var i = 0; i < tokens.length; i++) {
+        if (sizeToken.test(tokens[i]) || sizeKeyword.test(tokens[i])) { idx = i; break; }
+    }
+    if (idx === -1) return [];
+    var familyPart = tokens.slice(idx + 1).join(' ');
+    if (!familyPart) return [];
+    return familyPart.split(',').map(function(f) {
+        return _lumen_strip_css_string_quotes(f.trim()).toLowerCase();
+    });
+}
+
+// Wraps one native CSS-connected @font-face snapshot (family/style/weight/…/
+// src/status JSON from `_lumen_fonts_get`) into a real `FontFace` instance so
+// identity, `instanceof`, and `.load()` all behave the same as a
+// script-constructed one. A native status of "loaded" (a resolved `local()`
+// source, resolved at cascade build time) maps straight through; anything
+// else — including the native "loading" a `url()` source never leaves today
+// (see this section's header, gap 2) — is surfaced as "unloaded" so that an
+// explicit, script-driven `.load()` call can still genuinely fetch and
+// validate it instead of returning a promise nothing will ever settle.
+function _lumen_wrap_css_font_face(json) {
+    var face = Object.create(FontFace.prototype);
+    face._family = json.family;
+    face._style = json.style;
+    face._weight = json.weight;
+    face._stretch = json.stretch || 'normal';
+    face._unicodeRange = json.unicodeRange || 'U+0-10FFFF';
+    face._featureSettings = 'normal';
+    face._variationSettings = 'normal';
+    face._display = 'auto';
+    face._sources = _lumen_parse_font_face_sources(json.src || '');
+    face._cssConnected = true;
+    if (json.status === 'loaded') {
+        face._status = 'loaded';
+        face._loadedPromise = Promise.resolve(face);
+        face._resolveLoaded = function() {};
+        face._rejectLoaded = function() {};
+    } else {
+        face._status = 'unloaded';
+        face._resolveLoaded = null;
+        face._rejectLoaded = null;
+        face._loadedPromise = new Promise(function(resolve, reject) {
+            face._resolveLoaded = resolve;
+            face._rejectLoaded = reject;
+        });
+    }
+    return face;
+}
+
+Object.defineProperties(FontFaceSet.prototype, {
+    size: { get: function() { return this._members.size; }, enumerable: true, configurable: true },
+    ready: { get: function() { return this._readyPromise; }, enumerable: true, configurable: true },
+    status: { get: function() { return this._pending > 0 ? 'loading' : 'loaded'; }, enumerable: true, configurable: true },
+});
+FontFaceSet.prototype.has = function(v) { return this._members.has(v); };
+FontFaceSet.prototype.add = function(v) {
+    if (!(v instanceof FontFace)) throw new TypeError('FontFaceSet.add expects a FontFace');
+    if (!this._members.has(v)) {
+        this._members.add(v);
+        var owners = _lumen_font_face_owners.get(v);
+        if (!owners) { owners = []; _lumen_font_face_owners.set(v, owners); }
+        if (owners.indexOf(this) === -1) owners.push(this);
+    }
+    return this;
+};
+// CSS-connected faces cannot be removed by script (CSS Font Loading §11.2,
+// `fontfaceset-delete-css-connected`/`fontfaceset-clear-css-connected`).
+FontFaceSet.prototype.delete = function(v) {
+    if (!this._members.has(v) || v._cssConnected) return false;
+    this._members.delete(v);
+    var owners = _lumen_font_face_owners.get(v);
+    if (owners) {
+        var idx = owners.indexOf(this);
+        if (idx !== -1) owners.splice(idx, 1);
+    }
+    return true;
+};
+FontFaceSet.prototype.clear = function() {
+    var self = this;
+    var toRemove = [];
+    this._members.forEach(function(f) { if (!f._cssConnected) toRemove.push(f); });
+    toRemove.forEach(function(f) { self.delete(f); });
+};
+FontFaceSet.prototype.keys = function() { return this._members.keys(); };
+FontFaceSet.prototype.values = function() { return this._members.values(); };
+FontFaceSet.prototype.entries = function() { return this._members.entries(); };
+FontFaceSet.prototype.forEach = function(callback, thisArg) {
+    var self = this;
+    this._members.forEach(function(v) { callback.call(thisArg, v, v, self); });
+};
+if (typeof Symbol !== 'undefined' && Symbol.iterator) {
+    FontFaceSet.prototype[Symbol.iterator] = function() { return this._members.values(); };
+}
+// CSS Font Loading §4.3 "load a given family/text": finds every member whose
+// family matches the shorthand's family list and forces each through
+// `.load()`, resolving with the ones that actually succeeded (a family with
+// no matching member simply resolves to `[]`, per `empty-family-load.html`).
+FontFaceSet.prototype.load = function(font, text) {
+    void text; // reserved for family/text-driven unicode-range filtering; not needed by this slice's tests
+    var families = _lumen_parse_font_shorthand_families(font);
+    var matches = [];
+    this._members.forEach(function(f) {
+        if (families.indexOf(f._family.toLowerCase()) !== -1) matches.push(f);
+    });
+    var loaded = [];
+    var promises = matches.map(function(f) {
+        return f.load().then(function() { loaded.push(f); }, function() {});
+    });
+    return Promise.all(promises).then(function() { return loaded; });
+};
+
+function _lumen_make_font_face_set() {
+    var set = Object.create(FontFaceSet.prototype);
+    EventTarget.call(set);
+    set._members = new Set();
+    set._pending = 0;
+    set._doneOk = [];
+    set._doneFail = [];
+    set._readyResolveFn = null;
+    set._readyPromise = Promise.resolve(set);
+    set._onFaceLoadStart = function(face) {
+        void face;
+        if (this._pending === 0) {
+            var self = this;
+            this._readyPromise = new Promise(function(resolve) { self._readyResolveFn = resolve; });
+            queueMicrotask(function() {
+                self.dispatchEvent(new FontFaceSetLoadEvent('loading', { fontfaces: [] }));
+            });
+        }
+        this._pending++;
+    };
+    set._onFaceLoadEnd = function(face, ok) {
+        this._pending--;
+        if (ok) this._doneOk.push(face); else this._doneFail.push(face);
+        if (this._pending <= 0) {
+            this._pending = 0;
+            var okFaces = this._doneOk; this._doneOk = [];
+            var failFaces = this._doneFail; this._doneFail = [];
+            var resolveReady = this._readyResolveFn;
+            var self = this;
+            queueMicrotask(function() {
+                if (okFaces.length) self.dispatchEvent(new FontFaceSetLoadEvent('loadingdone', { fontfaces: okFaces }));
+                if (failFaces.length) self.dispatchEvent(new FontFaceSetLoadEvent('loadingerror', { fontfaces: failFaces }));
+                if (resolveReady) resolveReady(self);
+            });
+        }
+    };
     var size = _lumen_fonts_size();
-    var faces = [];
     for (var i = 0; i < size; i++) {
         var jsonStr = _lumen_fonts_get(i);
-        if (jsonStr) {
-            var obj = _lumen_parse_font_face_json(jsonStr);
-            if (obj) {
-                faces.push(obj);
-            }
-        }
+        if (!jsonStr) continue;
+        var json = _lumen_parse_font_face_json(jsonStr);
+        if (!json) continue;
+        set._members.add(_lumen_wrap_css_font_face(json));
     }
-    var fontSet = {
-        _faces: faces,
-        ready: Promise.resolve(),
-        get length() { return this._faces.length; },
-        item: function(index) {
-            return this._faces[index] || null;
-        },
-        // Iterate over FontFace objects
-        entries: function() {
-            var self = this;
-            var idx = 0;
-            return {
-                next: function() {
-                    if (idx < self._faces.length) {
-                        return { value: [idx, self._faces[idx]], done: false };
-                    }
-                    return { done: true };
-                }
-            };
-        },
-        forEach: function(callback, thisArg) {
-            for (var i = 0; i < this._faces.length; i++) {
-                callback.call(thisArg, this._faces[i], i, this);
-            }
-        },
-        [Symbol.iterator]: function() {
-            var idx = 0;
-            var faces = this._faces;
-            return {
-                next: function() {
-                    if (idx < faces.length) {
-                        return { value: faces[idx++], done: false };
-                    }
-                    return { done: true };
-                }
-            };
-        },
-    };
-    // Symbol.iterator might not be available in all JS engines
-    if (typeof Symbol !== 'undefined' && typeof Symbol.iterator !== 'undefined') {
-        fontSet[Symbol.iterator] = function() {
-            var idx = 0;
-            var faces = this._faces;
-            return {
-                next: function() {
-                    if (idx < faces.length) {
-                        return { value: faces[idx++], done: false };
-                    }
-                    return { done: true };
-                }
-            };
-        };
-    }
-    return fontSet;
+    return set;
 }
 
 // ── Range (WHATWG DOM §4.5) ────────────────────────────────────────────────
@@ -8395,7 +8723,7 @@ var document = {
         return !evt.defaultPrevented;
     },
     get fonts() {
-        return _lumen_get_fonts();
+        return _lumen_wrapper_slot(this, '__fonts__', _lumen_make_font_face_set);
     },
     // CSSOM §4.3 (CSSOM-1 срез 3, read-only): the document's per-<style>/
     // <link rel=stylesheet> sheets, in document order. Backed by a registry
