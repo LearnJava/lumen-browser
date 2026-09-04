@@ -465,3 +465,130 @@ warnings.
 cluster (~40) — unchanged from срез 2's assessment, still the only
 materially large remaining piece. Remaining scope after this slice: ~41
 files (was ~42).
+
+## Срез 5 (2026-09-04, P3) — `display: -webkit-box`/`-webkit-inline-box`
+computed-value quirk (`webkit-box-computed.html`)
+
+Picked up срез 2's last documented item: `getComputedStyle().display`'s
+special case for the WHATWG Compat §2.1 legacy `-webkit-box`/`-webkit-
+inline-box` keywords (CSS Overflow L4 §continue) — confirmed against every
+`test_display_computed` case in `webkit-box-computed.html`: `display:
+-webkit-box`/`-webkit-inline-box` normally compute AS SPECIFIED (the
+literal keyword round-trips), but when `-webkit-box-orient` is `vertical`
+**and** the box is actually clamping — either `-webkit-line-clamp`/
+`line-clamp` resolves to a definite integer (not `none`/`auto`) or
+`continue` is `discard` — the computed value becomes `flow-root` (for
+`-webkit-box`) / `inline-block` (for `-webkit-inline-box`) instead. The
+file's own comment and its `-webkit-flex`/`flex`/`inline-flex` cases pin
+down that this is narrower than "any legacy webkit flex alias": those
+already alias straight to `flex`/`inline-flex` and do NOT get the quirk
+even under the identical orient+clamp combination.
+
+**Genuinely new work, not a validation-table entry** (as срез 1/2 already
+flagged when deferring this): none of `-webkit-box`/`-webkit-inline-box`
+(as a `display` value), `-webkit-box-orient`, or `continue` had ANY Rust
+representation before this slice — `grep -rniE "webkit-box|box-orient"
+crates/engine/layout crates/js` was zero hits, and `continue` was pure
+JS-shim CSSOM string validation (срез 2) with no `ComputedStyle` field.
+`-webkit-line-clamp`/`line-clamp` already had a real field (`line_clamp`,
+BUG-505 pre-history) that needed no changes — its `Some(n)`/`None` shape
+already matches "definite integer" vs "none/auto" exactly.
+
+**Added:**
+- `Display::WebkitBox`/`WebkitInlineBox` (`style/values/typography.rs`) —
+  new variants, deliberately distinct from `Flex`/`InlineFlex` so the quirk
+  can be scoped to literally-specified `-webkit-box`/`-webkit-inline-box`.
+  Parsed in `apply/layout.rs`'s `"display"` arm; `-webkit-flex`/`-webkit-
+  inline-flex` parse as plain aliases straight to `Display::Flex`/
+  `InlineFlex` (own arms, no new variant) per the file's own alias
+  assertions. Layout treatment: Phase 0, both fall through to the generic
+  `BoxKind::Block` default (same as every other unhandled `Display` value)
+  — no legacy-flexbox algorithm, confirmed to be **exactly** the box kind
+  these elements already got before this slice (see A/B below).
+- `WebkitBoxOrient` (`Horizontal`(default)/`Vertical`) and `CssContinue`
+  (`Normal`(default)/`Discard`/`Collapse`/`WebkitLegacy`) — new enums +
+  `ComputedStyle` fields (`box_orient`/`continue_value`, both non-inherited),
+  parsed in `apply/text.rs` next to `line_clamp` (`"-webkit-box-orient"`/
+  `"continue"` arms), `css_wide.rs` inherit/initial handling, `SUPPORTED_
+  PROPERTIES` (`css-parser/src/lib.rs` — needed for `CSS.supports()`, which
+  four of this WPT file's own test blocks gate on: `line-clamp`/`continue`
+  weren't in that list at all despite `line-clamp` already having a real
+  field since срез 2, an existing coverage gap fixed alongside), and the JS
+  shim's `_LUMEN_KEYWORD_PROPERTIES` (`-webkit-box-orient`; `continue` was
+  already gated since срез 2/4).
+- `webkit_box_computed_display` (`selector_query.rs`) — the quirk itself,
+  replacing the old flat `match style.display {...}` in `computed_style_
+  to_map`'s `"display"` entry: computes `is_clamping = box_orient ==
+  Vertical && (line_clamp.is_some() || continue_value == Discard)` once,
+  then only `WebkitBox`/`WebkitInlineBox` branch on it: `flow-root`/
+  `inline-block` when clamping, else the literal keyword. Every other
+  `Display` variant is untouched pass-through.
+- `-webkit-box-orient`/`continue` also got their own `computed_style_to_
+  map` entries (round-trip, not just feeding the quirk) and a `snapshot.rs`
+  arm for the two new `Display` variants (the crate's other exhaustive
+  match on `Display`, alongside `computed_style_to_map` — both required by
+  the compiler, confirmed no *other* file has a third exhaustive match:
+  `cargo check --workspace --all-targets` after the change is clean with
+  zero non-exhaustive-match errors anywhere else in the workspace).
+
+**Real risk investigated and ruled out, not just assumed:** two
+`graphic_tests` pages (`48-line-clamp.html`, `1000000-final.html`) already
+use `display: -webkit-box` + `-webkit-box-orient: vertical` +
+`-webkit-line-clamp` for real line-clamp truncation rendering — before this
+slice, `-webkit-box` was an *unrecognized* `display` token that silently
+left `style.display` at its previous value (`Block`, the UA default for
+`<div>`, since nothing else set it), so these pages already rendered as
+`BoxKind::Block`. Read through every place `Display` participates in box-
+kind selection (`box_tree/build.rs`'s item-container/table/grid/flex
+groups, `is_inline_content`/`is_atomic_inline_level` in `inline_build.rs`,
+the auto-margin/shrink-to-fit exclusion lists in `layout_dispatch.rs`,
+`box_tree/flex.rs`'s own item-content dispatch) — `WebkitBox`/
+`WebkitInlineBox` match none of them, so both fall to the same generic
+`else { BoxKind::Block }` default as before; line-clamp truncation itself
+(`apply_line_clamp`, `layout_dispatch.rs:864`) is keyed purely on
+`s.line_clamp`, never on `s.display`, so it was and remains unaffected
+either way. Confirmed empirically, not just by code reading, since this
+repo's Linux dev box can't run the gdigrab-based `graphic_tests/run.py`
+pixel pipeline (`docs/graphic-tests.md`'s documented Linux caveat — same
+constraint срез 3/4 hit): built `dev-release` for both this slice's code
+and `git stash`-restored pre-slice `main`, ran `--dump-layout`/`--dump-
+display-list` on both pages against both builds. `--dump-display-list`
+diff is **empty** for both pages (byte-identical). `--dump-layout` diff
+shows only the new `display=-webkit-box` debug annotation appearing next
+to each `.box` element (`snapshot.rs` now prints the more accurate
+`Display` value where before `Display::Block` printed nothing) — every
+`rect=(...)` geometry line is otherwise byte-identical between the two
+builds. Pixel-neutral, confirmed rather than assumed.
+
+12 new regression tests (`selector_query.rs`), transcribing the WPT file's
+own matrix (default/orient-alone/clamp-none/clamp-without-vertical-orient/
+explicit-horizontal-orient/vertical-orient+clamp/vertical-orient+continue-
+discard/continue-discard-without-vertical-orient/continue-none/-webkit-
+inline-box/the three flex-alias non-cases), all against the real cascade
+pipeline (`div_computed_map`, not a direct function call) — 12/12 pass.
+`cargo test -p lumen-layout --lib` 3799/3799 (was 3786 at срез 4).
+`cargo check --workspace --all-targets` clean. `cargo clippy -p lumen-
+layout`/`-p lumen-css-parser --all-targets -- -D warnings`: `lumen-css-
+parser` clean; `lumen-layout` itself still blocked by the same pre-existing
+Linux toolchain-mismatch this bug's срез 3/4 already documented (system
+`rustc`/`clippy-driver` 1.98.0 vs the repo's pinned 1.97.0, no `rustup` to
+pin it down — reproduces on `main` in files this slice never touched, e.g.
+`lumen-image`'s `chunks_exact` lint). `RUSTC_WRAPPER="" bash scripts/
+scoped-test.sh` green except the same two pre-existing Windows-path-only
+`lumen-shell` failures срез 3/4 already documented (`bug440_get_form_
+submission_resolves_to_the_target_file`, `resolve_file_base_drive_letter_
+is_not_a_scheme` — hardcoded `D:/tmp` assertions, fail on Linux regardless
+of branch; re-confirmed present on `main` too via the A/B above).
+
+**Untouched, unchanged from срез 2-4's assessment:** the `::scroll-marker`
+cluster (~40 files: `::scroll-marker`/`::scroll-marker-group`/
+`::scroll-button()`/`scroll-target-group` selector recognition + box
+generation + interaction model). This is now the **only** remaining piece
+of this bug's original 60-file scope — срез 1 already called it "a
+materially larger follow-up... should be scoped as its own task once the
+selector recognition + basic box generation lands", which still holds:
+CSS Overflow L5 is a young draft spec, `grep -rni "scroll-marker\|
+scroll-button\|scroll-target-group" crates/ --include=*.rs --include=*.js`
+is still zero hits, and nothing in this bug's five slices has touched
+selector-grammar/pseudo-element recognition at all. Remaining scope after
+this slice: ~40 files (was ~41) — all `::scroll-marker`.

@@ -35,10 +35,10 @@ use crate::style::{
     AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline,
     Appearance, BackfaceVisibility, BackgroundLayer, BorderCollapse, BorderStyle, BoxShadow,
     BoxSizing, BreakValue, ClearSide, ClipPath, Color, ColorScheme, ContainerType, ContainFlags,
-    Content, ContentVisibility, CssColor, Cursor, CustomProps, default_font_family, Direction,
-    Display, EmptyCells, FieldSizing, FillRule, FilterFn, FlexBasis, FlexDirection, FlexWrap,
-    FloatSide, FontFeatureSetting, FontOpticalSizing, FontPalette, FontSizeAdjust, FontStretch,
-    FontStyle, FontVariantCaps, FontVariantEmoji, FontVariationSetting, FontWeight,
+    Content, ContentVisibility, CssColor, CssContinue, Cursor, CustomProps, default_font_family,
+    Direction, Display, EmptyCells, FieldSizing, FillRule, FilterFn, FlexBasis, FlexDirection,
+    FlexWrap, FloatSide, FontFeatureSetting, FontOpticalSizing, FontPalette, FontSizeAdjust,
+    FontStretch, FontStyle, FontVariantCaps, FontVariantEmoji, FontVariationSetting, FontWeight,
     ForcedColorAdjust, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, Hyphens, ImageRendering,
     InterpolateSizeMode, Isolation, IterationCount, Length, LengthOrAuto, LineBreak,
     ListStylePosition, ListStyleType, MaskLayer, MasonryAutoFlow, MixBlendMode, ObjectFit,
@@ -50,7 +50,8 @@ use crate::style::{
     TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle, TextOrientation,
     TextOverflow, TextShadow, TextTransform, TextUnderlinePosition, TextWrapMode, TextWrapStyle,
     TimingFunction, TouchAction, TransformFn, TransformStyle, UnicodeBidi, UserSelect,
-    VerticalAlign, Visibility, WhiteSpace, WhiteSpaceCollapse, WordBreak, WritingMode,
+    VerticalAlign, Visibility, WebkitBoxOrient, WhiteSpace, WhiteSpaceCollapse, WordBreak,
+    WritingMode,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -707,6 +708,16 @@ pub struct ComputedStyle {
     /// наследуется. Phase 0: parsing + storage; реальное применение (truncate
     /// inline-flow после N-й строки и добавить ellipsis) — отдельная задача.
     pub line_clamp: Option<u32>,
+    /// WHATWG Compat §2.1 — `-webkit-box-orient`. Не наследуется. Initial
+    /// `Horizontal`. Phase 0: используется только для computed-value quirk
+    /// `display: -webkit-box`/`-webkit-inline-box` (см. `webkit_box_computed_
+    /// display`, `selector_query.rs`) — реального legacy-flexbox layout нет.
+    pub box_orient: WebkitBoxOrient,
+    /// CSS Overflow L4 §continue — `continue`. Не наследуется. Initial
+    /// `Normal`. Phase 0: parsing + storage, участвует в том же computed-
+    /// value quirk что и `box_orient`; фрагментационное поведение
+    /// (`discard`/`collapse`) не реализовано.
+    pub continue_value: CssContinue,
     /// CSS Fragmentation L3 §3.3 — `orphans`: минимальное число строк в конце
     /// фрагмента перед page/column break (сколько строк должно остаться «внизу»
     /// после разрыва). Inherited. Initial: 2. Phase 0: parsing + storage;
@@ -1186,6 +1197,8 @@ impl ComputedStyle {
             text_wrap_mode: TextWrapMode::Wrap,
             text_wrap_style: TextWrapStyle::Auto,
             line_clamp: None,
+            box_orient: WebkitBoxOrient::Horizontal,
+            continue_value: CssContinue::Normal,
             orphans: 2,
             widows: 2,
             contain: ContainFlags::NONE,

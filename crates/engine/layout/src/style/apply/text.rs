@@ -17,6 +17,7 @@ use crate::style::{
     ComputedStyle,
     Content,
     CssColor,
+    CssContinue,
     Direction,
     FontOpticalSizing,
     FontSizeAdjust,
@@ -44,6 +45,7 @@ use crate::style::{
     TextWrapStyle,
     UserSelect,
     VerticalAlign,
+    WebkitBoxOrient,
     WhiteSpace,
     WhiteSpaceCollapse,
     WordBreak,
@@ -381,6 +383,28 @@ pub(in crate::style) fn apply_decl_text(
                 if n > 0 { Some(n) } else { None }
             } else {
                 style.line_clamp
+            };
+        }
+        "-webkit-box-orient" => {
+            // WHATWG Compat §2.1 — Phase 0: только для `display: -webkit-box`
+            // computed-value quirk (`webkit_box_computed_display`,
+            // `selector_query.rs`), не для реального legacy-flexbox layout.
+            style.box_orient = match val.trim() {
+                "horizontal" => WebkitBoxOrient::Horizontal,
+                "vertical" => WebkitBoxOrient::Vertical,
+                _ => style.box_orient,
+            };
+        }
+        "continue" => {
+            // CSS Overflow L4 §continue: `normal | discard | collapse |
+            // -webkit-legacy`, один токен (BUG-505 срез 2 нашёл грамматику,
+            // этот срез добавляет реальное ComputedStyle-поле).
+            style.continue_value = match val.trim() {
+                "normal" => CssContinue::Normal,
+                "discard" => CssContinue::Discard,
+                "collapse" => CssContinue::Collapse,
+                "-webkit-legacy" => CssContinue::WebkitLegacy,
+                _ => style.continue_value,
             };
         }
         "text-shadow" => {

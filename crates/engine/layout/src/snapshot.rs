@@ -195,6 +195,8 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
         Display::TableCell => out.push_str(" display=table-cell"),
         Display::TableCaption => out.push_str(" display=table-caption"),
         Display::ListItem => out.push_str(" display=list-item"),
+        Display::WebkitBox => out.push_str(" display=-webkit-box"),
+        Display::WebkitInlineBox => out.push_str(" display=-webkit-inline-box"),
     }
     if let Some(w) = &s.width {
         let _ = write!(out, " w={}", fmt_len(w));

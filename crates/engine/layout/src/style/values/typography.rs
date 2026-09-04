@@ -49,6 +49,18 @@ pub enum Display {
     TableCaption,
     /// CSS 2.1 — `display: list-item`. Generates principal block + marker box.
     ListItem,
+    /// WHATWG Compat §2.1 — legacy `display: -webkit-box`. Distinct from
+    /// `Flex` even though both are legacy/authored as flex-like containers:
+    /// unlike `-webkit-flex`/`flex` (which alias straight to `Display::Flex`),
+    /// `-webkit-box` keeps its own computed-value identity because CSS
+    /// Overflow L4 §continue gives it a display-computed-value quirk that
+    /// `-webkit-flex`/`flex` do NOT get (see `webkit_box_computed_display`,
+    /// `selector_query.rs`). Phase 0: parsed/stored, treated as `Block` in
+    /// layout — no legacy flexbox algorithm.
+    WebkitBox,
+    /// Same as `WebkitBox` but for `-webkit-inline-box` (treated as `Inline`
+    /// in layout — Phase 0, see `WebkitBox`).
+    WebkitInlineBox,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -232,6 +244,30 @@ pub enum TextOverflow {
     #[default]
     Clip,
     Ellipsis,
+}
+
+/// WHATWG Compat §2.1 — `-webkit-box-orient`. Legacy flexbox axis, needed
+/// here only for the `display: -webkit-box`/`-webkit-inline-box` computed-
+/// value quirk (CSS Overflow L4 §continue) — not for a real legacy-flexbox
+/// layout algorithm. Not inherited, initial `Horizontal`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WebkitBoxOrient {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
+/// CSS Overflow L4 §continue — the `continue` property. Not inherited,
+/// initial `Normal`. Phase 0: parsed/stored for the `display: -webkit-box`
+/// computed-value quirk (`discard` case) and CSSOM round-tripping; the
+/// actual fragmentation behavior (`discard`/`collapse`) is not implemented.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CssContinue {
+    #[default]
+    Normal,
+    Discard,
+    Collapse,
+    WebkitLegacy,
 }
 
 /// CSS Overflow L3 — `overflow`. Не наследуется.

@@ -108,6 +108,9 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "bottom",
     "box-shadow",
     "box-sizing",
+    // WHATWG Compat §2.1 — only for the `display: -webkit-box` computed-
+    // value quirk (BUG-505 срез 5), matches `apply_decl_text`.
+    "-webkit-box-orient",
     "break-after",
     "break-before",
     "break-inside",
@@ -139,6 +142,10 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "container-type",
     "content",
     "content-visibility",
+    // CSS Overflow L4 §continue (BUG-505 срез 5): parsed/stored, used by
+    // the `display: -webkit-box` computed-value quirk; fragmentation
+    // (`discard`/`collapse`) itself deferred, matches `apply_decl_text`.
+    "continue",
     "counter-increment",
     "counter-reset",
     "counter-set",
@@ -206,6 +213,8 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "left",
     "letter-spacing",
     "line-break",
+    "line-clamp",
+    "-webkit-line-clamp",
     "line-height",
     "line-height-step",
     "list-style",
