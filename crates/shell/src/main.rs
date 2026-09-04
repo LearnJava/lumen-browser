@@ -300,16 +300,6 @@ fn set_console_utf8() {
     }
 }
 
-/// BUG-987 (probe): `LUMEN_STACK_MB=<N>` переносит `run_cli` на поток с
-/// увеличенным стеком, чтобы отличить конечную глубокую рекурсию от
-/// бесконечной при `has overflowed its stack`. Отсутствие/0 — обычный запуск
-/// на штатном стеке процесса. Probe-only: убрать при закрытии BUG-987.
-fn probe_stack_mb() -> Option<usize> {
-    std::env::var("LUMEN_STACK_MB")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-}
-
 fn main() -> ExitCode {
     #[cfg(target_os = "windows")]
     set_console_utf8();
@@ -318,24 +308,7 @@ fn main() -> ExitCode {
     // block whichever thread called `eprintln!` next — with the UI thread that
     // froze the whole window mid-run. No-op unless stderr really is a pipe.
     diag_stderr::install();
-    // BUG-987 (probe): см. `probe_stack_mb`. Имя потока — "main", чтобы
-    // сообщение о переполнении выглядело как в живом прогоне корпуса.
-    let code = match probe_stack_mb() {
-        Some(mb) if mb > 0 => {
-            match std::thread::Builder::new()
-                .name("main".to_owned())
-                .stack_size(mb * 1024 * 1024)
-                .spawn(run_cli)
-            {
-                Ok(handle) => handle.join().unwrap_or(ExitCode::FAILURE),
-                Err(err) => {
-                    eprintln!("BUG-987 probe: не удалось поднять поток со стеком {mb} МБ: {err}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        _ => run_cli(),
-    };
+    let code = run_cli();
     // PERF-12: closes the startup accounting — see `startup_trace::log_exit`.
     // Before `diag_stderr::flush`, so the line survives the bounded wait below.
     startup_trace::log_exit();

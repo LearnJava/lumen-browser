@@ -131,18 +131,7 @@ pub(crate) fn run_window_mode(
 
     // Streaming pipeline: окно создаётся немедленно, загрузка стартует
     // после `resumed` в background-потоке. До прихода данных рисуем пустую страницу.
-    // BUG-987 (probe): LUMEN_STACK_MB переносит run_cli на поток с увеличенным
-    // стеком (main.rs) — winit по умолчанию требует main-поток, для пробы
-    // включаем any_thread. Probe-only: убрать при закрытии BUG-987.
-    let mut event_loop_builder = EventLoop::<LoadEvent>::with_user_event();
-    #[cfg(target_os = "windows")]
-    {
-        use winit::platform::windows::EventLoopBuilderExtWindows;
-        if std::env::var_os("LUMEN_STACK_MB").is_some() {
-            event_loop_builder.with_any_thread(true);
-        }
-    }
-    let event_loop = match event_loop_builder.build() {
+    let event_loop = match EventLoop::<LoadEvent>::with_user_event().build() {
         Ok(el) => el,
         Err(err) => {
             eprintln!("Не удалось создать event loop: {err}");

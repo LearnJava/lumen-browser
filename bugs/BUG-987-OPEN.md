@@ -84,8 +84,54 @@ thread '<unknown>' (23468) has overflowed its stack
 фиксе. Артефакты пробы: `.tmp/bug987/` (probe*.err/out, deep*.html,
 otCommonStyles.css).
 
+## Фикс P3 2026-09-04 (этап 1 — стеки)
+
+По решению пользователя — поэтапно: стеки сейчас, итеративный обход —
+отдельной задачей ([LAYOUT-1](ROADMAP.md)).
+
+- `crates/shell/build.rs` (новый): `cargo:rustc-link-arg=/STACK:134217728` —
+  PE-резерв стека main-потока 1 МБ → 128 МБ. Закрывает все режимы, где
+  обходы идут на главном потоке: синхронный relayout после правки `<style>`
+  (случай fandom), style-снимки, сериализаторы `--dump-*`/`--print-to-pdf`/
+  `--screenshot`.
+- `crates/shell/src/engine_thread.rs`: `thread::Builder::stack_size(128 MiB)`
+  у потока `lumen-engine` (off-thread layout, ADR-016 M2.2) — был штатный
+  2 МБ.
+
+Проверка (бинарь `target/dev-release/lumen.exe`, штатный стек, без
+`LUMEN_STACK_MB`):
+
+| Страница | Режим | До | После |
+|---|---|---|---|
+| `<div>`×150 | `--dump-layout` | overflow | ok |
+| `<div>`×800 | `--dump-layout` | overflow | ok |
+| `<div>`×5000 | `--dump-layout` | overflow | ok (25 МБ вывода) |
+| `<div>`×5000 | `--screenshot` | overflow | ok (PNG 17 КБ) |
+| fandom.com живой | окно | overflow ~65 с (своп OneTrust) | жив, своп пережит |
+
+`SizeOfStackReserve` проверен по PE-заголовку (128 МБ), профиль dev-release.
+
+### Остаток A: релейаут после свопа листа не оседает минутами
+
+После того как крэш снят, вскрылся следующий слой: на живом fandom.com своп
+листа OneTrust (`CSS пересобран… 2731 правил`) запускает релейаут, который
+жжёт ~2 ядра и не завершается за 4.5+ минут (лог замер, снимок процесса
+стабилен ~1.33 ГБ, сетевых действий нет). Это **не** глубина (см. ниже) —
+это производительность каскада/рестайла после правки `<style>`: полный
+проход по 2731 правилам × DOM без инкрементальности (`refresh_dynamic_css`
+сбрасывает `page_prev_cascade_styles = None`), родственная зона BUG-341
+(инкрементальный рестайл, пауза по решению 2026-07-28). Заведён как
+[BUG-995](bugs/BUG-995-OPEN.md).
+
+### Остаток B: рекурсия и жирные кадры остались (LAYOUT-1)
+
+Стеки — заплата до итеративного обхода: рекурсивные спуски по дереву боксов
+тратят ~1–7 КБ стека на уровень и остаются в layout-dispatch, style-обходах и
+сериализаторах. Итеративный обход/де-жирнение кадров заведено как
+[LAYOUT-1](ROADMAP.md) (P1, lumen-layout).
+
 ## Сырые данные
 
 `.tmp/perf-audit/20260904-*/live.stderr.{5,8}.log`, разбор —
-`.tmp/observe/OBSERVATION-2026-09-04.md` §3; проба P3 2026-09-04 —
-`.tmp/bug987/` (см. выше).
+`.tmp/observe/OBSERVATION-2026-09-04.md` §3; проба и проверка фикса P3
+2026-09-04 — `.tmp/bug987/` (probe*/fix*/deep*.html, otCommonStyles.css).
