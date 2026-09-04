@@ -63,6 +63,68 @@ OUT_ROOT = REPO_ROOT / ".tmp" / "perf-audit"
 ERROR_RE = re.compile(r"error|panic|failed|не распознан|unsupported", re.IGNORECASE)
 # Строки верхнего уровня дерева LUMEN_PROFILE_TREE=1 (без начального отступа)
 PROFILE_LINE_RE = re.compile(r"^\S.*\d+(?:\.\d+)?\s*ms", re.MULTILINE)
+# Сообщения консоли сетевой природы (ресурс не загрузился) — не JS-ошибки страницы
+NET_CONSOLE_RE = re.compile(
+    r"failed to load resource|net::|err_[a-z_]+|failed to fetch|blocked by", re.IGNORECASE
+)
+# Главный документ в сетевом логе печатается «← <статус> <url>», сбои — «✗ <url> (stage: reason)»
+LOG_STATUS_RE = re.compile(r"←\s+(\d{3})\s+(\S+)")
+
+_SIG_NORM_RE = re.compile(r"0x[0-9a-f]+|\d+(?:\.\d+)?")
+
+
+def error_sig(line: str) -> str:
+    """Нормализованная сигнатура строки (регистр/цифры/хеши не различаем)."""
+    return " ".join(_SIG_NORM_RE.sub("N", line.lower()).split())
+
+
+def count_sigs(lines: list[str]) -> dict[str, dict]:
+    """Сигнатура -> {count, sample}: настоящее число повторений без потери текста."""
+    out: dict[str, dict] = {}
+    for ln in lines:
+        sig = error_sig(ln)
+        slot = out.setdefault(sig, {"count": 0, "sample": ln})
+        slot["count"] += 1
+    return out
+
+
+def main_http_status(text: str, url: str) -> int | None:
+    """HTTP-статус главного документа по сетевому логу (← N url).
+
+    Ищем последний статус именно URL сайта (с учётом http→https и конечного
+    слэша); при редиректе на другой хост — по его пути; иначе последний статус.
+    """
+    pairs = [(int(m.group(1)), m.group(2).rstrip("/")) for m in LOG_STATUS_RE.finditer(text)]
+    if not pairs:
+        return None
+    norm = url.rstrip("/")
+    norm_https = norm.replace("http://", "https://", 1)
+    for code, target in reversed(pairs):
+        if target == norm or target == norm_https:
+            return code
+    host = norm.split("://", 1)[-1].split("/", 1)[0]
+    for code, target in reversed(pairs):
+        if target.startswith("http") and host in target:
+            return code
+    return pairs[-1][0]
+
+
+def network_failures(text: str, url: str) -> list[str]:
+    """Сетевые сбои главного документа: ✗-строки, чей хост совпадает с сайтом.
+
+    Ресурсы с других хостов (CDN, реклама) в расчёт не берём — они не объясняют
+    «страница так и не стала готовой».
+    """
+    ref_host = url.split("://", 1)[-1].split("/", 1)[0].lower()
+    out = []
+    for ln in text.splitlines():
+        ln = ln.strip()
+        if not ln.startswith("✗") or "://" not in ln:
+            continue
+        host = ln.split("://", 1)[-1].split("(", 1)[0].split("/", 1)[0].lower().split(":", 1)[0]
+        if host == ref_host and ln not in out:
+            out.append(ln)
+    return out
 
 
 def find_exe(cli_exe: str | None) -> Path:
@@ -179,7 +241,8 @@ def run_stage(
         "rc": rc,
         "timed_out": timed_out,
         "stdout_bytes": len(stdout),
-        "error_lines": error_lines[:8],
+        "error_lines": error_lines,  # полный список, без среза (BUG-992)
+        "error_sigs": count_sigs(error_lines),
         "stderr_text": stderr_text,
         **proc_stats,  # peak_mb / cpu_s (Windows)
     }
@@ -202,7 +265,7 @@ def audit_site(exe: Path, slug: str, url: str, out_dir: Path, timeout: int) -> d
     """Три замера одного сайта; вернуть запись results.json."""
     rec: dict = {"slug": slug, "url": url}
 
-    keys = ("wall_s", "rc", "timed_out", "stdout_bytes", "error_lines", "peak_mb", "cpu_s")
+    keys = ("wall_s", "rc", "timed_out", "stdout_bytes", "error_lines", "error_sigs", "peak_mb", "cpu_s")
 
     src = run_stage(exe, ["--dump-source", url], out_dir / f"{slug}.source.stderr.log", timeout)
     rec["source"] = {k: src[k] for k in keys if k in src}
@@ -239,6 +302,13 @@ def audit_site(exe: Path, slug: str, url: str, out_dir: Path, timeout: int) -> d
         and rec["screenshot"]["png_size"] is not None
     )
     rec["status"] = "OK" if ok else ("TIMEOUT" if shot["timed_out"] else "FAIL")
+    # «Сайт не пустил» (401/403) и сетевые сбои — отдельные исходы, не отказы движка
+    if rec["http_status"] in (401, 403):
+        rec["status"] = "SITE_REFUSED"
+    elif rec["status"] == "TIMEOUT" and network_failures(
+        src["stderr_text"] + lay["stderr_text"], url
+    ):
+        rec["status"] = "NET_FAIL"
     return rec
 
 
@@ -400,6 +470,71 @@ class HungMonitor(threading.Thread):
                     self._streak = 0.0
 
 
+class RamMonitor(threading.Thread):
+    """Фоновый замер рабочего набора и CPU живого процесса (Windows, шаг 1 с).
+
+    Счётчики процесса — накопительные за жизнь: однажды достигнутый пик рабочего
+    набора не падает, процессорное время только растёт. Здесь считается честное
+    на сайт: peak_mb — максимум мгновенного рабочего набора внутри окна сайта,
+    cpu_s — дельта процессорного времени от старта сайта (BUG-992).
+    """
+
+    def __init__(self) -> None:
+        super().__init__(daemon=True)
+        self._lock = threading.Lock()
+        self._popen: subprocess.Popen | None = None
+        self._stop = False
+        self._cur_mb = 0.0
+        self._peak_mb = 0.0
+        self._cpu_start: float | None = None
+        self._cpu_end: float | None = None
+        if sys.platform == "win32":
+            self.start()
+
+    def watch(self, popen: subprocess.Popen) -> None:
+        with self._lock:
+            self._popen = popen
+
+    def begin_site(self) -> None:
+        """Сбросить per-site счётчики и зафиксировать стартовую точку CPU."""
+        with self._lock:
+            st = _win_proc_stats(self._popen) if self._popen else {}
+            self._cur_mb = st.get("cur_mb", 0.0)
+            self._peak_mb = self._cur_mb
+            self._cpu_start = st.get("cpu_s")
+            self._cpu_end = self._cpu_start
+
+    def site_stats(self) -> dict:
+        with self._lock:
+            d = {"cur_mb": round(self._cur_mb, 1), "peak_mb": round(max(self._peak_mb, self._cur_mb), 1)}
+            if self._cpu_start is not None and self._cpu_end is not None:
+                d["cpu_s"] = round(max(0.0, self._cpu_end - self._cpu_start), 2)
+            return d
+
+    def stop(self) -> None:
+        self._stop = True
+
+    def run(self) -> None:
+        step = 1.0
+        while not self._stop:
+            time.sleep(step)
+            with self._lock:
+                popen = self._popen
+            if popen is None or popen.poll() is not None:
+                continue
+            st = _win_proc_stats(popen)
+            if not st:
+                continue
+            with self._lock:
+                self._cur_mb = st.get("cur_mb", 0.0)
+                self._peak_mb = max(self._peak_mb, self._cur_mb)
+                cpu = st.get("cpu_s")
+                if cpu is not None:
+                    if self._cpu_start is None:
+                        self._cpu_start = cpu
+                    self._cpu_end = cpu
+
+
 class LiveBrowser:
     """Одно GUI-окно lumen на весь прогон + перезапуск при смерти."""
 
@@ -407,6 +542,7 @@ class LiveBrowser:
         self.exe, self.out_dir, self.timeout = exe, out_dir, timeout
         self.restarts = 0
         self.hung = HungMonitor()
+        self.ram = RamMonitor()
         self._spawn()
 
     def _spawn(self) -> None:
@@ -419,20 +555,30 @@ class LiveBrowser:
         )
         self.mcp = Mcp(port, self.timeout, self.log_path)
         self.hung.watch_pid(self.proc.pid)
+        self.ram.watch(self.proc)
 
-    def stderr_errors_since(self, pos: int) -> tuple[list[str], int]:
-        """Ошибко-подобные строки stderr с позиции pos (per-site атрибуция) + новая позиция."""
+    def stderr_since(self, pos: int) -> str:
+        """Сырой фрагмент stderr с позиции pos: сетевой лог (← status, ✗ сбой), сообщения движка."""
+        try:
+            with self.log_path.open("rb") as f:
+                f.seek(pos)
+                return f.read().decode("utf-8", errors="replace")
+        except OSError:
+            return ""
+
+    def stderr_errors_since(self, pos: int) -> tuple[list[str], dict, int]:
+        """Ошибко-подобные строки stderr с позиции pos: полный список без среза,
+        сигнатуры с числом повторений и новая позиция (per-site атрибуция)."""
         try:
             with self.log_path.open("rb") as f:
                 f.seek(pos)
                 chunk = f.read()
         except OSError:
-            return [], pos
-        lines = []
-        for ln in chunk.decode("utf-8", errors="replace").splitlines():
-            if ERROR_RE.search(ln) and ln.strip() not in lines:
-                lines.append(ln.strip())
-        return lines[:8], pos + len(chunk)
+            return [], {}, pos
+        text = chunk.decode("utf-8", errors="replace")
+        raw = [ln.strip() for ln in text.splitlines() if ERROR_RE.search(ln)]
+        unique = list(dict.fromkeys(raw))
+        return unique, count_sigs(raw), pos + len(chunk)
 
     def restart(self) -> None:
         """Убить зависшее/мёртвое окно и поднять новое (сам факт — находка)."""
@@ -446,6 +592,7 @@ class LiveBrowser:
 
     def close(self) -> None:
         self.hung.stop()
+        self.ram.stop()
         try:
             self.proc.terminate()
             self.proc.wait(timeout=5)
@@ -460,6 +607,7 @@ def audit_site_live(
     rec: dict = {"slug": slug, "url": url, "restarted": False}
     log_pos = br.log_path.stat().st_size if br.log_path.exists() else 0
     br.hung.begin_site()
+    br.ram.begin_site()
     t0 = time.monotonic()
     try:
         # Новая вкладка на сайт (MCP-инструмент new_tab: open_new_tab +
@@ -487,7 +635,17 @@ def audit_site_live(
             rec["restarted"] = True
             rec["stderr_errors"] = []
             return rec
-        rec["status"] = "TIMEOUT"
+        # До document_ready не дошли: отделить «сайт не пустил» (401/403) и
+        # сетевые сбои от настоящих отказов движка (BUG-992).
+        chunk = br.stderr_since(log_pos)
+        rec["net_failures"] = network_failures(chunk, url)
+        rec["http_status"] = main_http_status(chunk, url)
+        if rec["http_status"] in (401, 403):
+            rec["status"] = "SITE_REFUSED"
+        elif rec["net_failures"]:
+            rec["status"] = "NET_FAIL"
+        else:
+            rec["status"] = "TIMEOUT"
     except (OSError, json.JSONDecodeError, socket.timeout) as e:  # окно умерло/зависло
         rec["status"] = "DEAD"
         rec["error"] = str(e)[:200]
@@ -506,7 +664,9 @@ def audit_site_live(
         time.sleep(dwell)  # пользователь смотрит на отрисованный сайт
         for direction in (+1, -1):  # визуальная проверка скролла
             for _ in range(scroll_ticks):
-                br.mcp.tool("scroll", {"target": {"css": "body"}, "delta": {"x": 0, "y": direction * 600}})
+                # MCP parse_target больше не принимает {"css": …} (2026-08-17) —
+                # только селектор строкой, иначе скролл падает и теряется хвост
+                br.mcp.tool("scroll", {"target": {"selector": "body"}, "delta": {"x": 0, "y": direction * 600}})
                 time.sleep(0.15)
 
         contents = br.mcp.resource("resource://screenshot")
@@ -519,16 +679,33 @@ def audit_site_live(
         entries = json.loads(console[0].get("text", "[]")) if console else []
         errors = [e.get("message", "") for e in entries if e.get("level") == "Error"]
         rec["console_total"] = len(entries)
-        rec["console_errors"] = errors[:8]
-
-        rec.update(_win_proc_stats(br.proc))
+        net_errs = [m for m in errors if NET_CONSOLE_RE.search(m)]
+        js_errs = [m for m in errors if not NET_CONSOLE_RE.search(m)]
+        # Полные списки + сигнатуры с числом повторений: обрезка на 8 искажала
+        # частоты, по которым ранжируются баги (BUG-992)
+        rec["console_errors"] = js_errs
+        rec["console_network_errors"] = net_errs
+        rec["console_error_sigs"] = count_sigs(js_errs)
     except (OSError, RuntimeError, json.JSONDecodeError, socket.timeout) as e:
         rec.setdefault("error", str(e)[:200])
         if br.proc.poll() is not None or isinstance(e, OSError):
             br.restart()
             rec["restarted"] = True
-    rec["stderr_errors"], _ = br.stderr_errors_since(log_pos)
+    chunk = br.stderr_since(log_pos)
+    rec.setdefault("net_failures", network_failures(chunk, url))
+    rec["http_status"] = main_http_status(chunk, url)
+    if rec["status"] == "OK" and not rec.get("png_size"):
+        # Готовность есть, кадра нет — отдельный исход, а не тихое поле (BUG-992)
+        rec["status"] = "OK_NO_PNG"
+        rec.setdefault("no_png_reason", rec.get("error", "resource://screenshot не вернул кадр"))
+    rec["stderr_errors"], rec["stderr_error_sigs"], _ = br.stderr_errors_since(log_pos)
+    rec.update(br.ram.site_stats())
     rec.update(br.hung.site_stats())
+    # Накопительные итоги процесса — явными именами, не как «на сайт» (BUG-992)
+    proc_total = _win_proc_stats(br.proc)
+    if proc_total:
+        rec["proc_peak_mb_total"] = proc_total.get("peak_mb")
+        rec["proc_cpu_s_total"] = proc_total.get("cpu_s")
     return rec
 
 
@@ -540,8 +717,8 @@ def summary_md_live(results: list[dict], exe: Path, commit: str, restarts: int) 
         f"- Бинарь: `{exe}` (GUI, один процесс, дефолтный рендер-бэкенд)",
         f"- Коммит движка: `{commit}`",
         "",
-        "| slug | статус | готовность, с | RAM тек, МБ | RAM пик, МБ | не отвечает, с | JS-ошибки | первая ошибка |",
-        "|---|---|---|---|---|---|---|---|",
+        "| slug | статус | готовность, с | RAM тек, МБ | RAM пик, МБ | CPU сайт, с | не отвечает, с | JS-ошибки | первая ошибка |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for r in results:
         all_errs = (r.get("console_errors") or []) + (r.get("stderr_errors") or [])
@@ -551,9 +728,17 @@ def summary_md_live(results: list[dict], exe: Path, commit: str, restarts: int) 
             restarted += " (без вкладки)"
         lines.append(
             f"| {r['slug']} | {r['status']}{restarted} | {r.get('ready_s', '—')} "
-            f"| {r.get('cur_mb', '—')} | {r.get('peak_mb', '—')} "
+            f"| {r.get('cur_mb', '—')} | {r.get('peak_mb', '—')} | {r.get('cpu_s', '—')} "
             f"| {r.get('hung_total_s', '')} | {len(all_errs) or ''} | {err} |"
         )
+    lines += [
+        "",
+        "Статусы: OK — дошли до document_ready и снят скриншот; OK_NO_PNG — страница готова, кадр не получен;",
+        "SITE_REFUSED — главный документ вернул 401/403; NET_FAIL — сетевой сбой главного документа",
+        "(DNS/TLS/соединение/блок); TIMEOUT — движок не довёл страницу до готовности; HUNG/DEAD — окно зависло/упало.",
+        "peak_mb/cpu_s — на сайт (максимум/дельта замеров); накопительные итоги процесса —",
+        "proc_peak_mb_total/proc_cpu_s_total в results.json.",
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -675,8 +860,15 @@ def main() -> None:
         md += compare(results, Path(args.compare))
     (out_dir / "summary.md").write_text(md, encoding="utf-8")
     print("\n" + md)
-    failed = [r["slug"] for r in results if r["status"] != "OK"]
-    print(f"Готово: {len(results) - len(failed)}/{len(results)} OK" + (f", проблемы: {', '.join(failed)}" if failed else ""))
+    ok_slugs = [r["slug"] for r in results if r["status"] in ("OK", "OK_NO_PNG")]
+    outside = ("SITE_REFUSED", "NET_FAIL")
+    refused = [r["slug"] for r in results if r["status"] in outside]
+    problems = [r["slug"] for r in results if r["status"] not in ("OK", "OK_NO_PNG", *outside)]
+    print(
+        f"Готово: {len(ok_slugs)}/{len(results)} дошли до document_ready"
+        + (f", закрыты сайтом/сетью ({', '.join(refused)})" if refused else "")
+        + (f", проблемы движка ({', '.join(problems)})" if problems else "")
+    )
 
 
 if __name__ == "__main__":
