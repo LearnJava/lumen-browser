@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-04",
  "counts": {
-  "open": 380,
+  "open": 388,
   "fixed": 554,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 934,
+ "total_bugs": 942,
  "phases": [
   {
    "id": "P0",
@@ -2039,7 +2039,7 @@
        "id": "css-specs-t4",
        "title": "CSS модули — Tier 4 (Advanced/future)",
        "status": "active",
-       "note": "7✅ 14🟡 0⬜ 0🚫 из 21 модулей CSS-SPECS.md (Tier 4)"
+       "note": "7✅ 15🟡 0⬜ 0🚫 из 22 модулей CSS-SPECS.md (Tier 4)"
       }
      ]
     },
@@ -6789,6 +6789,53 @@
      "bugs": [
       "BUG-972"
      ]
+    },
+    {
+     "id": "THREAD",
+     "title": "Потоковая модель: доделать ADR-016 до дефолтной сборки",
+     "status": "planned",
+     "size": "L",
+     "note": "Дорожка «Потоковая модель: доделать ADR-016 до дефолтной сборки» (заведена 2026-09-04 наблюдением за живым прогоном 100 сайтов со стороны ОС). Мандат ADR-016 расписал пять потоков и все стадии M0–M4.1 были влиты к 2026-07-13, но до дефолтной сборки доехала только M2 (движковый поток, ADR-023 флипнул дефолт 2026-07-28). **M1 (рендер-поток) остался за флагом `LUMEN_RENDER_THREAD=1` И написан только под `backend-femtovg`, тогда как дефолтный бэкенд — wgpu (ADR-017)** — то есть в отгружаемой конфигурации рендер-потока нет физически, растеризация и present идут на UI-потоке (`crates/shell/src/app/window_event/redraw_requested.rs:1689`, вызов внутри winit-обработчика). Измерено на прогоне 2026-09-04: окно не качало очередь сообщений 46 % времени наблюдения (641 сэмпл из 1403), 42 эпизода, медиана 11.6 с, максимум 104 с; при этом главный поток в зависших сэмплах ЖЖЁТ 734 мс CPU в секунду против 172 мс в нормальных — он работает, а не ждёт на замке (ожидание процессор не тратит). Пять сайтов прогона получили статус HUNG именно так. Дорожка не про совместимость: она не закрывает ни одного Web API, но снимает целый класс симптомов (зависания, HUNG, часть перезапусков) и, главное, до неё любой прогон корпуса меряет не сайты, а зависания.",
+     "tasks": [
+      {
+       "id": "THREAD-0",
+       "title": "THREAD-0: водопад загрузки на корпусе — из чего состоят 20 с",
+       "status": "ready",
+       "size": "S",
+       "note": "Померить, из чего состоят 20 секунд загрузки, прежде чем что-либо параллелить. Медиана `ready_s` по успешным сайтам прогона 2026-09-04 — 21.2 с, максимум 218 с, но состав этого времени неизвестен: ожидание сети, исполнение JS, полные пересчёты раскладки подряд — не различены. Инструмент уже есть и код менять не надо: `lumen --trace-nav out.json <url>` (PERF-1) рисует водопад по фазам (`fetch-document`→`parse-html`→`fetch-*`/`layout`→`paint`→`first-paint`) в Chrome Trace Event Format, плюс `scripts/perf_metrics.py` (PERF-2) агрегирует по корпусу. Взять 10 сайтов из `docs/perf/corpus-top100-foreign.txt` с разбросом по `ready_s` (от wikipedia 5 с до flipkart 218 с). Отдельно — пять HUNG-сайтов (duckduckgo, microsoft, baidu, github, etsy): именно они, а не 29 TIMEOUT, кандидаты в «дорогая раскладка», потому что у всех 29 таймаутов в ошибке стоит сетевой сбой или смерть окна, и ни одного «раскладка не успела». DoD: таблица «сайт → фазы» и ответ, что доминирует; без неё выбор между «убрать работу с UI-потока» и «параллелить работу» делается вслепую."
+      },
+      {
+       "id": "THREAD-1",
+       "title": "THREAD-1: растеризация с UI-потока на дефолтном wgpu",
+       "status": "planned",
+       "size": "L",
+       "note": "Снять растеризацию и present с UI-потока для дефолтного бэкенда wgpu — доделать ADR-016 M1 там, где он реально используется. Сейчас `create_backend` (`crates/shell/src/backend_factory.rs:39-73`) поднимает рендер-поток только при `LUMEN_RENDER_THREAD=1` и только под `backend-femtovg`; при сборке без этой фичи печатает «рендер-поток недоступен, откат на in-process», а wgpu-путь ветки не имеет вовсе. Ограничение M1.1 (winit отдаёт window handle только на главном потоке, GL-контекст открепляется через `make_not_current` и переносится) сформулировано под femtovg/GL — для wgpu поверхность создаётся иначе, и переносимость надо решать заново, а не копировать. Инварианты синхронизации берутся готовыми из ADR-016 §Decision: неизменяемые снимки через сообщения, latest-wins с глубиной 1, рендер никогда не ждёт движок, скролл не ждёт растеризацию, простой значит простой (парковка на condvar, инвариант BUG-271). Приёмка — не wall-clock: доля времени, когда окно не качает очередь (сейчас 46 %), и p99 прокачки `WM_NULL` (сейчас 3 с при p50 0.2 мс); мерить тем же сэмплером, что снял базу — `.tmp/observe/watch_lumen.ps1`. Пиксельная нейтральность обязательна: полный `graphic_tests/run.py`."
+      },
+      {
+       "id": "THREAD-2",
+       "title": "THREAD-2: убрать блокирующие readback UI↔движковый поток",
+       "status": "planned",
+       "size": "M",
+       "note": "Убрать блокирующие чтения UI-потока у движкового потока. M2 увёз раскладку, каскад и JS с UI-потока, но результат забирается обратно синхронным `query`, и UI стоит ждёт — комментарии «под флагом читаются блокирующим `query`» стоят в `about_to_wait.rs` (255, 272, 357, 514, 1365), `cursor_moved.rs:413`, `redraw_requested.rs` (48, 180, 325), механизм — `EngineThread::readback` (`engine_bridge.rs`). ADR-014 зафиксировал ту же форму для JS: «`run` blocks the caller, so the UI thread still waits for JS exactly as before» — уехало исполнение, не уехало ожидание. Разбирать по одному вызывающему: часть чтений нужна синхронно по построению (`PerformancePaintTiming` читает `display_list.is_empty()` в Step 5 `RedrawRequested`), часть можно перевести на «отправил задание — рисуй предыдущий кадр». Зависит от THREAD-1 в приёмке (пока кадр рисуется на UI-потоке, выигрыш от снятия ожиданий не отделить от него), но не в реализации."
+      }
+     ]
+    },
+    {
+     "id": "DATAURL-1",
+     "title": "DATAURL-1: схема `data:` для подресурсов",
+     "status": "ready",
+     "size": "M",
+     "note": "Схема `data:` не поддержана на пути подресурсов: `Пропуск картинки data:image/png;base64,…: network error: unsupported scheme: data`. В `crates/network/src/lib.rs` ветки на `data` нет вообще (грепом `Scheme::Data`/`starts_with(\"data:\")` — ноль совпадений), поэтому любой встроенный в разметку ресурс отбрасывается сетевым слоем как неизвестная схема. Живой прогон 100 сайтов 2026-09-04 поймал это на девяти сайтах — самая массовая единичная поломка ресурсов в прогоне; типовой случай — 1×1 прозрачный PNG-плейсхолдер ленивой загрузки, из-за чего страница остаётся без всех картинок, которые он подменяет. Объём: разбор `data:[<mediatype>][;base64],<data>` (RFC 2397) в сетевом слое с отдачей тела и content-type без сетевого запроса; проверить, что путь общий для картинок, CSS, шрифтов и скриптов, а не только для `<img>`. Не путать с `unsupported scheme: file` (BUG-291, другой адресат) и со схемой в фрейме (BUG-885)."
+    },
+    {
+     "id": "AUDIT-1",
+     "title": "AUDIT-1: три режима прогона и статусы вместо бинарного OK",
+     "status": "ready",
+     "size": "M",
+     "note": "Перф-аудит: три раздельных режима прогона и статусы вместо бинарного `OK`. Сейчас один режим смешивает три разных измерения в одном процессе (вкладка на сайт, ничего не закрывается), из-за чего к сороковому сайту меряется усталость процесса, а не сайт: пик рабочего набора доходил до 6552 МБ, окно тащило 3–6 ГБ. Нужны: **A — совместимость** (процесс на сайт: старт, загрузка, память, JS-ошибки, рендер — числа сравнимы между сайтами); **B — стабильность** (один процесс на 100 сайтов: ровно то, что ловит накопление, утечки, деградацию и падения); **C — сессия** (20 вкладок, скролл, назад-вперёд, попап, фрейм, закрытие — поведение браузера как браузера). Не смешивать: сегодняшний прогон это B, а читается как A. Второе: `OK` слишком слабый критерий — он значит «DOM готов», а пользователь при этом видит белый экран; ввести `OK` / `DEGRADED` / `BROKEN_RENDER` / `TIMEOUT` / `HUNG` / `DEAD` и определять успех как навигация + готовность + отрисованный контент + отсутствие фатальной JS-ошибки. Батчи по 15–20 сайтов для режима B. Предпосылка достоверности статуса `BROKEN_RENDER` — [BUG-993](bugs/BUG-993-OPEN.md) (два признака белого экрана противоречат друг другу), метрик на сайт — [BUG-992](bugs/BUG-992-OPEN.md). Владелец тулинга исторически P2.",
+     "bugs": [
+      "BUG-992"
+     ]
     }
    ],
    "date": "36–48 мес"
@@ -7083,7 +7130,7 @@
   "BUG-506": {
    "status": "open",
    "title": "Внешний `<script src=\"../other-category/support/helper.js\">` (относительный путь через границу каталога) не выполняется до зависимого инлайн-кода под реальным w…",
-   "component": "неясно — вероятно порядок загрузки скриптов в шелле или тайминг, специфичный для wptrunner/BiDi-навигации",
+   "component": "js (`crates/js/src/v8_runtime/style_flush.rs::FlushHandles::maybe_flush`, no-op на `--bidi-port`)",
    "date": null,
    "debtor": false
   },
@@ -9492,6 +9539,62 @@
    "status": "open",
    "title": "`fetch_with_redirect` уже вычисляет верный финальный URL после HTTP-редиректов (`let (resp, _final_url) = …` — подчёркивание не линт, значение реально выбрасыва…",
    "component": "network (`crates/network/src/lib.rs::HttpClient::fetch_request_impl`) / core (`crates/core/src/ext.rs::JsFetchResult`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-986": {
+   "status": "open",
+   "title": "`&self.nodes[id.index()]` паникует `index out of bounds` на `NodeId` из чужого документа: за три прогона корпуса 2026-09-04 пять паник, индекс ВСЕГДА больше дли…",
+   "component": "dom (`crates/engine/dom/src/lib.rs:706` — `Document::get`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-987": {
+   "status": "open",
+   "title": "`thread 'main' has overflowed its stack` на страницах с OneTrust/cookielaw (два независимых прогона, один и тот же сайт — детерминированно) и `thread '<unknown>…",
+   "component": "не локализовано (стек переполняется, паники с местом нет)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-988": {
+   "status": "open",
+   "title": "Рабочий поток уходит в бесконечный спин на ЦЕЛОЕ ЯДРО и переживает навигации: `tid 17048` создан 16:10:12 на costco.com, жёг 984 мс CPU в секунду (медиана; выше…",
+   "component": "не локализовано (поток опознан по времени рождения)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-989": {
+   "status": "open",
+   "title": "Встроенный блокировщик отклоняет ГЛАВНЫЙ документ навигации, а не подресурс: `Ошибка загрузки https://www.temu.com/: network error: blocked: easylist` — сайт не…",
+   "component": "network (`crates/network/src/lib.rs`, матчинг easylist) / shell (`adblock.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-990": {
+   "status": "open",
+   "title": "`IDBDatabase.objectStoreNames` отдан как массив/литерал вместо `DOMStringList`, поэтому у него нет `contains()` — типовой пролог апгрейда схемы `if (!db.objectS…",
+   "component": "js (IndexedDB-шим, `crates/js/src/shim/*.js`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-991": {
+   "status": "open",
+   "title": "`health.log` (PERF-6) открывается на ПЕРЕЗАПИСЬ: каждый новый процесс стирает журнал предыдущего. Прогон 100 сайтов 2026-09-04 перезапускал окно девять раз, и в…",
+   "component": "shell (`crates/shell/src/health_log.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-992": {
+   "status": "open",
+   "title": "Перф-аудит кладёт в запись сайта НАКОПИТЕЛЬНЫЕ счётчики процесса: `peak_mb` = `PeakWorkingSetSize` (никогда не уменьшается) и `cpu_s` = kernel+user из `GetProce…",
+   "component": "tooling (`scripts/perf_audit.py:130-139`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-993": {
+   "status": "open",
+   "title": "Два признака «страница ничего не нарисовала» противоречат друг другу В ОБЕ СТОРОНЫ, значит минимум один врёт и неизвестно который. Прогон 2026-09-04: 38 из 88 с…",
+   "component": "paint (путь снимка `resource://screenshot` → `cpu_raster.rs`) против shell (эвристика `broken_render`, `health_log.rs`)",
    "date": null,
    "debtor": false
   },
@@ -13495,6 +13598,9 @@
   "dom (`crates/engine/dom/src/lib.rs:119` — `enum Namespace`), js (`crates/js/src/v8_runtime.rs:2372-2394` — натив `_lumen_create_element_ns`)": [
    "BUG-830"
   ],
+  "dom (`crates/engine/dom/src/lib.rs:706` — `Document::get`)": [
+   "BUG-986"
+  ],
   "dom (`crates/engine/dom/src/vtt.rs::parse_vtt` — разбиение на блоки только по пустым строкам; проверка подписи `header.as_bytes()[6].is_ascii_whitespace()`)": [
    "BUG-903"
   ],
@@ -13572,6 +13678,9 @@
   ],
   "js (DOM child-node bindings, `crates/js/src/dom.rs`)": [
    "BUG-291"
+  ],
+  "js (IndexedDB-шим, `crates/js/src/shim/*.js`)": [
+   "BUG-990"
   ],
   "js (JS environment bootstrap, `WEB_API_SHIM`)": [
    "BUG-280"
@@ -13974,6 +14083,9 @@
   "js (`crates/js/src/v8_runtime/runtime.rs` — `pending_page_scrolls`/`page_scroll_y`; `install/platform.rs:349`)": [
    "BUG-949"
   ],
+  "js (`crates/js/src/v8_runtime/style_flush.rs::FlushHandles::maybe_flush`, no-op на `--bidi-port`)": [
+   "BUG-506"
+  ],
   "js (`crates/js/src/v8_runtime/value.rs::from_v8_bounded`) / js-shim (`crates/js/src/shim/web_api_shim_mid.js` — обёртки `cssRules`/`parentStyleSheet` конструируемого листа без кэша)": [
    "BUG-978"
   ],
@@ -14334,6 +14446,9 @@
   "network (`crates/network/src/lib.rs::read_head`, `crates/network/src/h2/conn.rs`)": [
    "BUG-679"
   ],
+  "network (`crates/network/src/lib.rs`, матчинг easylist) / shell (`adblock.rs`)": [
+   "BUG-989"
+  ],
   "network (`crates/network/src/sse.rs:393` — переподключение только по завершению чтения соединения) + js (`crates/js/src/dom.rs:7521`, `:7538` — ветки `open`/`close` в `_lumen_sse_pump_one`)": [
    "BUG-844"
   ],
@@ -14487,6 +14602,9 @@
   "paint (wgpu `renderer.rs`, `BeginStickyLayer`)": [
    "BUG-336"
   ],
+  "paint (путь снимка `resource://screenshot` → `cpu_raster.rs`) против shell (эвристика `broken_render`, `health_log.rs`)": [
+   "BUG-993"
+  ],
   "paint/cpu_raster": [
    "BUG-052"
   ],
@@ -14533,6 +14651,9 @@
   ],
   "shell (`crates/shell/src/chrome_ui.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`, `app/window_event/mouse_input.rs`)": [
    "BUG-461"
+  ],
+  "shell (`crates/shell/src/health_log.rs`)": [
+   "BUG-991"
   ],
   "shell (`crates/shell/src/lumen/automation.rs::resolve_automation_target`, `crates/shell/src/lumen/click.rs::handle_click_at`)": [
    "BUG-934"
@@ -14686,8 +14807,11 @@
   "не локализован (кандидаты: shell/network — куки и JS-редирект SSO; layout — inline-бокс сайдбара)": [
    "BUG-791"
   ],
-  "неясно — вероятно порядок загрузки скриптов в шелле или тайминг, специфичный для wptrunner/BiDi-навигации": [
-   "BUG-506"
+  "не локализовано (поток опознан по времени рождения)": [
+   "BUG-988"
+  ],
+  "не локализовано (стек переполняется, паники с местом нет)": [
+   "BUG-987"
   ]
  }
 }
