@@ -9,6 +9,20 @@ use super::reg;
 #[allow(unused_imports)]
 use super::super::*;
 
+/// BUG-986: скрипт передал `NodeId`, которого нет в арене этого документа
+/// (устаревший идентификатор, переживший навигацию, или из чужой вкладки).
+/// Раньше такой вызов ронял процесс паникой `index out of bounds` в
+/// `Document::get`; теперь — пишем в stderr (живой аудит читает
+/// `live.stderr.*.log`) и пропускаем операцию. Строка помечена `[BUG-986]`,
+/// чтобы следующий прогон корпуса назвал источник чужих идентификаторов
+/// по логу, без `RUST_BACKTRACE=1`.
+fn log_foreign_node_id(doc: &lumen_dom::Document, what: &str, id: u32) {
+    eprintln!(
+        "[BUG-986] {what}: NodeId {id} вне арены документа (len {}) — операция пропущена",
+        doc.len()
+    );
+}
+
 /// `document.documentElement`/`body`/`head` and other document-level reads.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_document_meta(
@@ -536,6 +550,9 @@ pub(crate) fn install_node_properties(
             move |node_id: u32| -> String {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
+                if !doc.contains_id(nid) {
+                    return String::new();
+                }
                 collect_text_content(&doc, nid)
             }
         );
@@ -547,6 +564,10 @@ pub(crate) fn install_node_properties(
             move |node_id: u32, text: String| {
                 let mut doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
+                if !doc.contains_id(nid) {
+                    log_foreign_node_id(&doc, "_lumen_set_text_content", node_id);
+                    return;
+                }
                 set_text_content(&mut doc, nid, &text);
                 // BUG-341 S7: record `nid` itself (not just its parent) —
                 // a text/childList change here can flip `:empty` for `nid`.
@@ -562,6 +583,9 @@ pub(crate) fn install_node_properties(
                 // (was a Phase-0 stub that returned plain `textContent`).
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
+                if !doc.contains_id(nid) {
+                    return String::new();
+                }
                 let mut out = String::new();
                 serialize_children(&doc, nid, &mut out);
                 out
@@ -578,6 +602,10 @@ pub(crate) fn install_node_properties(
                 // as a single text node — no element/comment structure at all).
                 let mut doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
+                if !doc.contains_id(nid) {
+                    log_foreign_node_id(&doc, "_lumen_set_inner_html", node_id);
+                    return;
+                }
                 // HTML LS §4.12.3 / DOM Parsing: у `<template>` разметка уходит
                 // в его content-фрагмент, а не в сам элемент. На этом стоит
                 // весь класс библиотек, собирающих DOM из шаблонов (Solid, lit,
@@ -618,6 +646,9 @@ pub(crate) fn install_node_properties(
                 // close tag for elements; escaped data for text/comment).
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
+                if !doc.contains_id(nid) {
+                    return String::new();
+                }
                 let mut out = String::new();
                 serialize_node(&doc, nid, &mut out);
                 out
@@ -659,11 +690,13 @@ pub(crate) fn install_tree_navigation(
             move |node_id: u32| -> Vec<u32> {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
-                doc.get(nid)
-                    .children
-                    .iter()
-                    .map(|c| c.index() as u32)
-                    .collect()
+                // BUG-986: bubble/dispatch walks call this per ancestor — on a
+                // stale id degrade to an empty list instead of killing the
+                // window mid-dispatch (owa crash, 2026-09-04).
+                let Some(node) = doc.try_get(nid) else {
+                    return Vec::new();
+                };
+                node.children.iter().map(|c| c.index() as u32).collect()
             }
         );
         let d = Arc::clone(&doc);
@@ -672,7 +705,9 @@ pub(crate) fn install_tree_navigation(
             move |node_id: u32| -> Option<u32> {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
-                doc.get(nid).parent.map(|p| p.index() as u32)
+                // BUG-986: returning None ends the bubble walk at the stale
+                // node — graceful, no process death.
+                doc.try_get(nid).and_then(|n| n.parent).map(|p| p.index() as u32)
             }
         );
     }
@@ -790,6 +825,14 @@ pub(crate) fn install_tree_mutation(
                 let mut doc = d.lock().unwrap();
                 let parent = NodeId::from_index(parent_id as usize);
                 let child = NodeId::from_index(child_id as usize);
+                // BUG-986: appendChild was the native on the panic stack in all
+                // three live runs of 2026-09-04 (amazon WAF challenge, owa,
+                // bing) — a stale/foreign id must not kill the window.
+                if !doc.contains_id(parent) || !doc.contains_id(child) {
+                    log_foreign_node_id(&doc, "_lumen_append_child parent", parent_id);
+                    log_foreign_node_id(&doc, "_lumen_append_child child", child_id);
+                    return;
+                }
                 doc.append_child(parent, child);
                 // BUG-341 S7: record the container — covers `parent`'s own
                 // `:empty`/nth-child-of-its-parent state plus the reconciled
@@ -807,6 +850,11 @@ pub(crate) fn install_tree_mutation(
             move |_parent_id: u32, child_id: u32| {
                 let mut doc = d.lock().unwrap();
                 let child = NodeId::from_index(child_id as usize);
+                // BUG-986: same stale-id guard as `_lumen_append_child`.
+                if !doc.contains_id(child) {
+                    log_foreign_node_id(&doc, "_lumen_remove_child", child_id);
+                    return;
+                }
                 // Read the authoritative parent from the DOM (not the
                 // JS-supplied `_parent_id`) before detaching.
                 let parent = doc.get(child).parent;
@@ -944,6 +992,12 @@ pub(crate) fn install_shadow_dom(
                 let mut doc = d.lock().unwrap();
                 let child = NodeId::from_index(child_id as usize);
                 let reference = NodeId::from_index(reference_id as usize);
+                // BUG-986: same stale-id guard as `_lumen_append_child`.
+                if !doc.contains_id(child) || !doc.contains_id(reference) {
+                    log_foreign_node_id(&doc, "_lumen_insert_before child", child_id);
+                    log_foreign_node_id(&doc, "_lumen_insert_before reference", reference_id);
+                    return;
+                }
                 let parent = doc.get(reference).parent;
                 doc.insert_before(child, reference);
                 if let Some(parent) = parent {
