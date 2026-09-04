@@ -1671,3 +1671,66 @@ use super::*;
         assert_eq!(ScrollbarGutter::parse("auto stable"), None);
         assert_eq!(ScrollbarGutter::parse(""), None);
     }
+
+    // ── `scroll-marker-group`/`scroll-target-group` (BUG-505 срез 6, CSS
+    // Overflow L5) ──
+
+    #[test]
+    fn scroll_marker_group_parses_none_and_bare_placement() {
+        assert_eq!(ScrollMarkerGroup::parse("none"), Some(None));
+        assert_eq!(
+            ScrollMarkerGroup::parse("before"),
+            Some(Some(ScrollMarkerGroup {
+                placement: ScrollMarkerGroupPlacement::Before,
+                mode: None,
+            }))
+        );
+        assert_eq!(
+            ScrollMarkerGroup::parse("after"),
+            Some(Some(ScrollMarkerGroup {
+                placement: ScrollMarkerGroupPlacement::After,
+                mode: None,
+            }))
+        );
+    }
+
+    #[test]
+    fn scroll_marker_group_parses_placement_plus_mode() {
+        // Order-dependent — direction always comes first (tentative
+        // tabs/links extension, github.com/w3c/csswg-drafts/issues/12122).
+        assert_eq!(
+            ScrollMarkerGroup::parse("before tabs"),
+            Some(Some(ScrollMarkerGroup {
+                placement: ScrollMarkerGroupPlacement::Before,
+                mode: Some(ScrollMarkerGroupMode::Tabs),
+            }))
+        );
+        assert_eq!(
+            ScrollMarkerGroup::parse("after links"),
+            Some(Some(ScrollMarkerGroup {
+                placement: ScrollMarkerGroupPlacement::After,
+                mode: Some(ScrollMarkerGroupMode::Links),
+            }))
+        );
+    }
+
+    #[test]
+    fn scroll_marker_group_rejects_reversed_order_and_bad_tokens() {
+        // WPT `scroll-markers-invalid{,.tentative}.html`'s own matrix.
+        assert_eq!(ScrollMarkerGroup::parse("before before"), None);
+        assert_eq!(ScrollMarkerGroup::parse("after before"), None);
+        assert_eq!(ScrollMarkerGroup::parse("after tab"), None);
+        assert_eq!(ScrollMarkerGroup::parse("after link"), None);
+        assert_eq!(ScrollMarkerGroup::parse("links after"), None);
+        assert_eq!(ScrollMarkerGroup::parse("tabs before"), None);
+        assert_eq!(ScrollMarkerGroup::parse("10"), None);
+        assert_eq!(ScrollMarkerGroup::parse("default"), None);
+    }
+
+    #[test]
+    fn scroll_target_group_parses_none_and_auto() {
+        assert_eq!(ScrollTargetGroup::parse("none"), Some(ScrollTargetGroup::None));
+        assert_eq!(ScrollTargetGroup::parse("auto"), Some(ScrollTargetGroup::Auto));
+        assert_eq!(ScrollTargetGroup::parse("10"), None);
+        assert_eq!(ScrollTargetGroup::parse("all"), None);
+    }

@@ -32,6 +32,21 @@ use super::*;
             "::picker(select)",
             "::highlight(name)",
             "::slotted(.a)",
+            // BUG-505 срез 6 — CSS Overflow L5 §scroll-marker/scroll-buttons.
+            "::scroll-marker",
+            "::scroll-marker-group",
+            "::scroll-button(up)",
+            "::scroll-button(down)",
+            "::scroll-button(left)",
+            "::scroll-button(right)",
+            "::scroll-button(block-start)",
+            "::scroll-button(inline-start)",
+            "::scroll-button(inline-end)",
+            "::scroll-button(block-end)",
+            "::scroll-button(*)",
+            "::scroll-button(up):focus",
+            "::scroll-button(up):disabled",
+            "::scroll-button(up):enabled",
             "div::first-line",
             "p::before:hover",
             "p::before:is(:hover, :focus)",
@@ -88,6 +103,40 @@ use super::*;
             ":host-context(.a)",
         ] {
             assert!(!is_valid_selector_list(sel), "expected invalid: {sel:?}");
+        }
+    }
+
+    #[test]
+    fn valid_selector_list_rejects_bad_scroll_button_forms() {
+        // BUG-505 срез 6, WPT `scroll-buttons-invalid.html`'s own matrix.
+        for sel in [
+            "::scroll-button",
+            "::scroll-button)",
+            "::scroll-button(",
+            "::scroll-button()",
+            "::scroll-button('up')",
+            "::scroll-button(up, down)",
+            "::scroll-button(north)",
+            "::scroll-button(5051)",
+        ] {
+            assert!(!is_valid_selector_list(sel), "expected invalid: {sel:?}");
+        }
+    }
+
+    #[test]
+    fn scroll_button_argument_whitespace_canonicalizes() {
+        // WPT `scroll-buttons-valid.html`: leading/trailing whitespace inside
+        // the argument is trimmed on serialization, same as any other
+        // functional pseudo-element argument.
+        for (raw, canon) in [
+            ("::scroll-button( up)", "::scroll-button(up)"),
+            ("::scroll-button(up )", "::scroll-button(up)"),
+            ("::scroll-button( *)", "::scroll-button(*)"),
+            ("::scroll-button(* )", "::scroll-button(*)"),
+        ] {
+            let list = Parser::new(raw).parse_selector_list_strict().expect("should parse");
+            assert_eq!(list.len(), 1);
+            assert_eq!(list[0].to_css_str(), canon, "raw: {raw:?}");
         }
     }
 

@@ -592,3 +592,156 @@ scroll-button\|scroll-target-group" crates/ --include=*.rs --include=*.js`
 is still zero hits, and nothing in this bug's five slices has touched
 selector-grammar/pseudo-element recognition at all. Remaining scope after
 this slice: ~40 files (was ~41) — all `::scroll-marker`.
+
+## Срез 6 (2026-09-04, P3) — `::scroll-marker`/`::scroll-marker-group`/
+`::scroll-button()` selector-grammar recognition + the `scroll-marker-
+group`/`scroll-target-group` supporting properties
+
+Picked up the first half of срез 1's own scoping split for the
+`::scroll-marker` cluster: "recognize as valid pseudo-elements in the
+selector grammar... actually generating the marker/button boxes and their
+interaction model is a materially larger follow-up... should be scoped as
+its own task once the selector recognition + basic box generation lands."
+This slice does exactly the first half — selector-grammar recognition plus
+the two CSS properties that gate a scroll-marker-group's placement/
+grouping — and deliberately does **not** attempt box generation, snap-
+target iteration, or the click/hover/focus interaction model (still a
+separate, materially larger follow-up; see "Untouched" below).
+
+Scoped down from the original 60-file write-up's ~40-file remainder by
+reading the actual vendored WPT files first (`tests/wpt/css/css-overflow/
+parsing/{scroll-buttons,scroll-markers,scroll-target-group}-*.html`,
+`getComputedStyle-scroll-button.html`) rather than re-deriving grammar from
+the spec: only 8 of those ~40 files are pure selector-grammar/property-
+parsing exercises with no box-generation dependency — the other ~32
+(`scroll-markers/*.html`, `scroll-marker-group-{hover,hover-from-marker,
+display-none}.html`, `getComputedStyle-scroll-button.html`) all assert on
+actual generated boxes, snap-target grouping, or activation/hover/focus
+behavior and stay out of scope.
+
+**Selector grammar** (`crates/engine/css-parser/src/parser/selectors.rs`):
+- `PseudoElementKind::ScrollMarker`/`ScrollMarkerGroup` — simple pseudo-
+  elements, same shape as `::marker`/`::placeholder` (no argument, `_ =>
+  true` in `pseudo_element_is_valid`).
+- `PseudoElementKind::ScrollButton(String)` — functional pseudo-element,
+  same parsing shape as `::picker(select)`/`::highlight(name)`
+  (`parse_functional_pseudo_element`'s `"scroll-button"` arm), except the
+  argument can also be the bare `*` token (not an ident) — its own small
+  branch before falling back to `parse_ident`. Argument validity (`up`/
+  `down`/`left`/`right`/`block-start`/`inline-start`/`inline-end`/
+  `block-end`/`*`, confirmed exhaustively by `scroll-buttons-{valid,
+  invalid}.html`'s own matrix — `north`/`5051`/quoted-string/comma-list/
+  empty all rejected) is checked in `pseudo_element_is_valid`, mirroring
+  `::picker`'s `arg == "select"` check.
+- `::scroll-button()` is a focusable, potentially-disabled control (CSS
+  Overflow L5 §scroll-buttons) — `compound_selector_is_valid`'s trailing-
+  pseudo-class check gained a `ScrollButton`-specific carve-out allowing
+  `:disabled`/`:enabled` after it (on top of the existing generic
+  `is_user_action_pseudo_class` allowance, which already covers `:focus`
+  for every pseudo-element), confirmed by `scroll-buttons-valid.html`'s own
+  `:focus`/`:disabled`/`:enabled` matrix for all eight directions.
+- `pseudo_element_name()` (`crates/engine/layout/src/style/pseudo.rs`, the
+  single kind↔name source of truth the matcher and `CascadeIndex::
+  pseudo_subjects` both go through) gained the three new names — required
+  by the compiler (exhaustive match), and means a stylesheet rule actually
+  targeting one of these three pseudo-elements is now syntactically
+  recognized end-to-end, even though nothing ever generates a matching box
+  (same Phase-0 shape `::before`/`::after` had before `inject_pseudo`
+  existed) — `querySelector('::scroll-marker')` no longer throws
+  `SyntaxError`, it now correctly returns `null` (valid selector, no match),
+  same as `::before` always has.
+
+**`scroll-marker-group`/`scroll-target-group` properties** — both needed a
+real `ComputedStyle` field, not just JS-shim CSSOM validation
+(`block-ellipsis`/`continue`'s срез-2 shape), because both have a
+`-computed.html` WPT file that exercises `getComputedStyle()`, CSS-wide
+keywords (`initial`/`inherit`/`unset`/`revert`), and CSSOM enumeration —
+none of which a validation-only property can answer:
+- `ScrollTargetGroup` (`style/values/misc.rs`) — plain `none | auto`, fits
+  the existing `ScrollbarWidth`-shaped `#[derive(Default)] enum` +
+  `parse`/`to_css` pattern exactly; validated via a one-line
+  `_LUMEN_KEYWORD_PROPERTIES` entry in the JS shim (no custom canon
+  function needed).
+- `ScrollMarkerGroup`/`ScrollMarkerGroupPlacement`/`ScrollMarkerGroupMode`
+  (same file) — `none | [before|after] [tabs|links]?`, order-dependent
+  (confirmed by `scroll-markers-invalid{,.tentative}.html`: `links after`/
+  `tabs before`/`after tab`(typo)/`after, tabs`(comma) all rejected —
+  direction must come first, comma-separated forms are invalid, and the
+  `tabs`/`links` component is itself a tentative, not-yet-stable extension,
+  github.com/w3c/csswg-drafts/issues/12122). The property's own `none`
+  initial value is modeled as `Option<ScrollMarkerGroup>` being `None` —
+  there's no `before`/`after` to place when the value is `none`, so
+  `ScrollMarkerGroup::parse` returns the unusual `Option<Option<Self>>`
+  (outer = parse success, inner = the property's own value space) rather
+  than this module's usual bare `Option<Self>`. New JS-shim canon function
+  `_lumen_css_canonical_scroll_marker_group` (`web_api_shim_mid.js`), added
+  to both `_lumen_canonicalize_longhand`'s dispatch and — remembering срез
+  4's own gate-list bug — the `setProperty` allow-list gate in the same
+  commit, not a follow-up.
+- Both wired through the full property pipeline other BUG-505 slices
+  established: `apply_declaration` arm (`style/apply/layout.rs`), CSS-wide-
+  keyword arm (`style/apply/css_wide.rs`), the three `ComputedStyle`
+  literal-construction sites (`computed.rs`'s struct field + `root()`,
+  `cascade.rs`'s per-element baseline), and a `computed_style_to_map` entry
+  (`selector_query.rs`) — `_lumen_get_computed_style_entries` (the native
+  binding backing `getComputedStyle()`'s `Array.from()`/`for...of`
+  enumeration, `BUG-483 ч.2`) reads straight off that map, so no separate
+  work was needed for the WPT files' "shows up in CSSStyleDeclaration
+  enumeration"/".cssText" assertions.
+
+**Verification:** 15/15 hand-transcribed cases from `scroll-markers-
+{invalid,computed}{,.tentative}.html`'s `scroll-marker-group` matrix
+(8 invalid + 7 valid/computed) traced against `_lumen_css_canonical_
+scroll_marker_group` via a standalone Node harness that extracts and evals
+the real shim function (срез 2's method, not a reimplementation) — 15/15
+match. `cargo test -p lumen-layout --lib` 3808/3808 (was 3799 at срез 5, +9
+new: 6 `ScrollMarkerGroup` + 3 `ScrollTargetGroup` parse/computed-map
+tests). `cargo test -p lumen-css-parser --lib` 362/362 (+3 new: the invalid-
+form matrix, the whitespace-canonicalization round-trip, plus the extended
+`valid_selector_list_accepts_ordinary_selectors` list covering all nine
+`::scroll-button(<direction>)` forms + `:focus`/`:disabled`/`:enabled`).
+`RUSTC_WRAPPER="" bash scripts/scoped-test.sh` green except the same two
+pre-existing Windows-path-only `lumen-shell` failures срез 3-5 already
+documented (`bug440_get_form_submission_resolves_to_the_target_file`,
+`resolve_file_base_drive_letter_is_not_a_scheme` — hardcoded `D:/tmp`
+assertions, fail on Linux regardless of branch). `cargo clippy -p lumen-
+css-parser --all-targets -- -D warnings` clean; `-p lumen-layout` still
+blocked by the same pre-existing Linux toolchain-mismatch срез 3-5 already
+documented (system `rustc`/`clippy-driver` 1.98.0 vs the repo's pinned
+1.97.0, no `rustup` to pin it down — reproduces on `main` in files this
+slice never touched, `lumen-image`'s `chunks_exact` lint); `cargo check
+--workspace --all-targets` is clean. Display-list neutrality confirmed
+empirically, not assumed: `--dump-layout`/`--dump-display-list` A/B (this
+slice's `dev-release` build vs `git stash`-restored pre-slice `main`, same
+build) across **all 162** `graphic_tests/*.html` pages — `diff -rq` on both
+dump sets is empty. Expected, since neither new property has any consumer
+yet and none of the three new pseudo-elements ever matches a real element
+(no box-generation code was touched), but shown rather than assumed per
+this repo's own rule.
+
+**`.ini` bookkeeping deliberately left untouched**, same as every prior
+slice of this bug (`git show --stat` on all five срез-1–5 commits: zero
+`.ini` changes despite several of them fully closing a file) — flipping
+`expected: FAIL` → removed requires a live wptrunner re-run to certify "0
+unexpected", which this dev slot doesn't have (срез 1's own note: no
+`.venv`, live `--mcp-live-port` eval hits an unrelated engine issue). The
+8 files this slice's own testing gives high confidence are now fully
+passing: `parsing/scroll-buttons-{invalid,valid}.html`, `parsing/
+scroll-markers-{invalid,computed}{,.tentative}.html`, `parsing/
+scroll-target-group-{invalid,computed}.html` — left for the next WPT-RUN
+mass-run pass to confirm and flip.
+
+**Untouched, genuinely out of scope** (per this slice's own opening split):
+box generation for all three pseudo-elements (nothing calls `compute_
+pseudo_element_style`/`inject_pseudo`-equivalent for any of them — they
+parse and match nothing, same as `::before` before layout wired it),
+scroll-snap-target iteration for `::scroll-marker-group`/`scroll-target-
+group`'s actual grouping semantics, `::scroll-button()`'s click-to-scroll
+behavior and hit-testing, `getComputedStyle(el, pseudoElt)`'s second-
+argument resolution for any of the three (`getComputedStyle-scroll-
+button.html` — needs real box generation to answer correctly, not just
+selector recognition), and the `scroll-markers/` directory's ~32 remaining
+files (event targeting, disposal, focus/hover/activation, container-query
+interaction, iframe interaction). Remaining scope after this slice: ~32
+files (was ~40) — all in `scroll-markers/`, requiring the box-generation +
+interaction-model work срез 1 originally flagged as its own task.

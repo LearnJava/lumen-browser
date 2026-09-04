@@ -585,6 +585,12 @@ pub(in crate::style) fn apply_css_wide_keyword(
         "text-overflow" => {
             style.text_overflow = if inh_only_inherit { inherited.text_overflow } else { init.text_overflow };
         }
+        "scroll-marker-group" => {
+            style.scroll_marker_group = if inh_only_inherit { inherited.scroll_marker_group } else { init.scroll_marker_group };
+        }
+        "scroll-target-group" => {
+            style.scroll_target_group = if inh_only_inherit { inherited.scroll_target_group } else { init.scroll_target_group };
+        }
         "-webkit-line-clamp" | "line-clamp" => {
             style.line_clamp = if inh_only_inherit { inherited.line_clamp } else { init.line_clamp };
         }

@@ -367,6 +367,23 @@ pub enum PseudoElementKind {
     /// `::picker-icon` (HTML «Customizable Select») — the disclosure/arrow icon
     /// on the `base-select` trigger button.
     PickerIcon,
+    /// `::scroll-marker` (CSS Overflow L5 §scroll-marker) — the navigational
+    /// marker box CSS can generate for a scroll-snap-target element (BUG-505
+    /// срез 6: selector-grammar recognition only — no box materializes yet,
+    /// same Phase-0 shape `::before`/`::after` had before layout wired them).
+    ScrollMarker,
+    /// `::scroll-marker-group` (CSS Overflow L5 §scroll-marker-group) — the
+    /// container box for a scroll container's `::scroll-marker` children.
+    /// Not to be confused with the `scroll-marker-group` *property* (own
+    /// `ComputedStyle` field, `style/apply/layout.rs`) that places this
+    /// pseudo-element `before`/`after` its originating element.
+    ScrollMarkerGroup,
+    /// `::scroll-button(<direction>)` (CSS Overflow L5 §scroll-buttons) — a
+    /// scroll container's directional scroll-by-one-page button. Argument is
+    /// one of `up`/`down`/`left`/`right`/`block-start`/`inline-start`/
+    /// `inline-end`/`block-end`/`*` (lower-cased); validity of the argument
+    /// itself is checked by `pseudo_element_is_valid`, not here.
+    ScrollButton(String),
     /// Неизвестный pseudo-element (например, `::custom-pseudo` или typo).
     /// Хранится имя для диагностики.
     Unknown(String),
@@ -709,6 +726,9 @@ pub(crate) fn pe_to_css_str(pe: &PseudoElementKind) -> String {
         PseudoElementKind::Picker(name) => format!("::picker({name})"),
         PseudoElementKind::Checkmark => "::checkmark".into(),
         PseudoElementKind::PickerIcon => "::picker-icon".into(),
+        PseudoElementKind::ScrollMarker => "::scroll-marker".into(),
+        PseudoElementKind::ScrollMarkerGroup => "::scroll-marker-group".into(),
+        PseudoElementKind::ScrollButton(dir) => format!("::scroll-button({dir})"),
         PseudoElementKind::Unknown(name) => format!("::{name}"),
     }
 }
@@ -898,10 +918,19 @@ pub(crate) fn compound_selector_is_valid(compound: &CompoundSelector) -> bool {
                 seen_pe = Some(pe);
             }
             SimpleSelector::PseudoClass(pc) => {
-                if let Some(prev) = seen_pe
-                    && !(pseudo_element_allows_user_action(prev) && is_user_action_pseudo_class(pc))
-                {
-                    return false;
+                if let Some(prev) = seen_pe {
+                    let allowed = (pseudo_element_allows_user_action(prev)
+                        && is_user_action_pseudo_class(pc))
+                        // `::scroll-button()` is a focusable, potentially
+                        // disabled control (CSS Overflow L5 §scroll-buttons)
+                        // — `:disabled`/`:enabled` are valid trailing
+                        // pseudo-classes for it specifically, confirmed by
+                        // `scroll-buttons-valid.html`'s own matrix.
+                        || (matches!(prev, PseudoElementKind::ScrollButton(_))
+                            && matches!(pc, PseudoClass::Disabled | PseudoClass::Enabled));
+                    if !allowed {
+                        return false;
+                    }
                 }
                 if !pseudo_class_is_valid(pc) {
                     return false;
@@ -967,6 +996,15 @@ pub(crate) fn pseudo_element_is_valid(pe: &PseudoElementKind) -> bool {
         PseudoElementKind::Unknown(_) => false,
         // `::picker()` определён спекой только для аргумента `select`.
         PseudoElementKind::Picker(arg) => arg == "select",
+        // `::scroll-button()` (CSS Overflow L5 §scroll-buttons): the closed
+        // set of physical/logical directions plus the `*` wildcard —
+        // confirmed exhaustively by `scroll-buttons-{valid,invalid}.html`
+        // (`north`/`5051`/empty/multi-value all rejected here).
+        PseudoElementKind::ScrollButton(dir) => matches!(
+            dir.as_str(),
+            "up" | "down" | "left" | "right" | "block-start" | "inline-start"
+                | "inline-end" | "block-end" | "*"
+        ),
         // `::slotted` без аргумента — синтаксически невозможен по грамматике.
         PseudoElementKind::Slotted(None) => false,
         PseudoElementKind::Slotted(Some(list)) => {
@@ -1289,6 +1327,8 @@ impl<'a> Parser<'a> {
                 "placeholder" => PseudoElementKind::Placeholder,
                 "checkmark" => PseudoElementKind::Checkmark,
                 "picker-icon" => PseudoElementKind::PickerIcon,
+                "scroll-marker" => PseudoElementKind::ScrollMarker,
+                "scroll-marker-group" => PseudoElementKind::ScrollMarkerGroup,
                 _ => PseudoElementKind::Unknown(name),
             };
             return Some(SimpleSelector::PseudoElement(pe));
@@ -1561,6 +1601,26 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 Some(PseudoElementKind::Picker(arg.to_ascii_lowercase()))
+            }
+            "scroll-button" => {
+                // CSS Overflow L5 §scroll-buttons: `::scroll-button(<direction>
+                // | *)` — the argument is either a direction ident or the
+                // literal `*` (not an ident, needs its own branch). A quoted
+                // string (`'up'`), a bare number, or a comma-separated list
+                // all fail to produce a single trailing `)` and are rejected
+                // below, same as `arg.is_empty()` for `::scroll-button()`.
+                self.skip_ws_and_comments();
+                let arg = if self.peek() == Some('*') {
+                    self.consume();
+                    "*".to_string()
+                } else {
+                    self.parse_ident().unwrap_or_default().to_ascii_lowercase()
+                };
+                self.skip_ws_and_comments();
+                if self.peek() != Some(')') || arg.is_empty() {
+                    return None;
+                }
+                Some(PseudoElementKind::ScrollButton(arg))
             }
             _ => None,
         }

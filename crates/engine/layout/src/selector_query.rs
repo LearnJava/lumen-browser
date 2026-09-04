@@ -1401,6 +1401,14 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
             overflow_clip_margin_serialize(*box_kw, css, is_zero)
         }
     });
+    // CSS Overflow L5 §scroll-marker-group-property (BUG-505 срез 6): `None`
+    // = initial `none`; otherwise the placement(+mode) round-trips through
+    // `ScrollMarkerGroup::to_css`.
+    m.insert("scroll-marker-group".into(), match style.scroll_marker_group {
+        None => "none".to_string(),
+        Some(v) => v.to_css(),
+    });
+    m.insert("scroll-target-group".into(), style.scroll_target_group.to_css().into());
     m.insert("z-index".into(), match style.z_index {
         None => "auto".into(),
         Some(n) => n.to_string(),
@@ -2975,6 +2983,42 @@ mod tests {
     fn computed_map_overflow_clip_margin_reports_length() {
         let m = div_computed_map("<div>x</div>", "div { overflow-clip-margin: 10px; }");
         assert_eq!(m.get("overflow-clip-margin").map(String::as_str), Some("10px"));
+    }
+
+    // BUG-505 срез 6 — CSS Overflow L5 `scroll-marker-group`/`scroll-target-group`.
+    #[test]
+    fn computed_map_scroll_marker_group_defaults_to_none() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("scroll-marker-group").map(String::as_str), Some("none"));
+    }
+
+    #[test]
+    fn computed_map_scroll_marker_group_reports_placement_and_mode() {
+        let m = div_computed_map("<div>x</div>", "div { scroll-marker-group: before; }");
+        assert_eq!(m.get("scroll-marker-group").map(String::as_str), Some("before"));
+        let m = div_computed_map("<div>x</div>", "div { scroll-marker-group: after tabs; }");
+        assert_eq!(m.get("scroll-marker-group").map(String::as_str), Some("after tabs"));
+    }
+
+    #[test]
+    fn computed_map_scroll_marker_group_rejects_invalid_value() {
+        // Invalid values never reach the cascade (CSSOM validation drops the
+        // declaration before it gets here) — this exercises the Rust-side
+        // parser's own rejection independently of the JS shim gate.
+        let m = div_computed_map("<div>x</div>", "div { scroll-marker-group: before before; }");
+        assert_eq!(m.get("scroll-marker-group").map(String::as_str), Some("none"));
+    }
+
+    #[test]
+    fn computed_map_scroll_target_group_defaults_to_none() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("scroll-target-group").map(String::as_str), Some("none"));
+    }
+
+    #[test]
+    fn computed_map_scroll_target_group_reports_auto() {
+        let m = div_computed_map("<div>x</div>", "div { scroll-target-group: auto; }");
+        assert_eq!(m.get("scroll-target-group").map(String::as_str), Some("auto"));
     }
 
     // BUG-505 срез 4: `overflow-clip-margin`'s `<visual-box>` component,

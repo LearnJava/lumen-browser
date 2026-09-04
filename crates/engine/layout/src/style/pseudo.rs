@@ -53,6 +53,9 @@ pub(in crate::style) fn pseudo_element_name(kind: &PseudoElementKind) -> &str {
         PseudoElementKind::Picker(_) => "picker",
         PseudoElementKind::Checkmark => "checkmark",
         PseudoElementKind::PickerIcon => "picker-icon",
+        PseudoElementKind::ScrollMarker => "scroll-marker",
+        PseudoElementKind::ScrollMarkerGroup => "scroll-marker-group",
+        PseudoElementKind::ScrollButton(_) => "scroll-button",
         PseudoElementKind::Unknown(s) => s.as_str(),
     }
 }
