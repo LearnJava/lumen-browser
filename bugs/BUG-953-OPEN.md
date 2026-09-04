@@ -35,6 +35,22 @@ Policy.
 `document-policy/reporting/*`/`permissions-policy/reporting/*` тест),
 проверено только на этих двух id.
 
+## Живой пробой (2026-09-04, WPT-RUN-6 срез 59)
+
+Первое живое измерение — до этого находка была статической (грепом, без
+прогона). `run_report.py --all --root document-policy/experimental-features
+--recursive` через настоящий `wptrunner`+`wptserve` (не
+`serve_wpt_like.py` — `network-efficiency-guardrails-json.tentative.html`
+зависит от `?pipe=gzip`, которого этот скрипт не поддерживает,
+`docs/probe-method.md`): все три файла каталога реально висят по 10 с
+(`TEST_TIMEOUT`, ни одного PASS). Все три ждут один и тот же
+`document-policy-violation` через `ReportingObserver`, что подтверждает
+механизм этого бага на трёх новых id:
+`network-efficiency-guardrails.tentative.html`,
+`network-efficiency-guardrails-report-only.tentative.html`,
+`network-efficiency-guardrails-json.tentative.html`. Классифицировано в
+`timeout_audit.py` маркером `document-policy-violation-report-missing`.
+
 ## Направление починки
 
 Отдельная задача проектирования (`GAP-POLICYREPORT`): разбор заголовка
