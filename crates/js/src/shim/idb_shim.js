@@ -198,6 +198,19 @@ function _idb_error(name, message) {
     return e;
 }
 
+// Indexed DB §3.2 exposes `objectStoreNames`/`indexNames` as a `DOMStringList`
+// (length + item() + contains()), not an Array — sites call `.contains()`,
+// which a plain Array literal doesn't have (BUG-990). `names` is a plain
+// sorted array snapshot; the object built here is a fresh live-value wrapper
+// around it, not a shared reference back into caller state.
+function _idb_string_list(names) {
+    var list = { length: names.length };
+    for (var i = 0; i < names.length; i++) list[i] = names[i];
+    list.item = function(index) { return (index >= 0 && index < this.length) ? this[index] : null; };
+    list.contains = function(str) { return names.indexOf(String(str)) >= 0; };
+    return list;
+}
+
 // --- IDBKeyRange (Indexed DB §3.1.5) -----------------------------------------
 
 function IDBKeyRange(lower, upper, lowerOpen, upperOpen) {
@@ -356,7 +369,7 @@ function IDBTransaction(db, storeNames, mode, durability) {
     this.db = db;
     this.mode = mode || 'readonly';
     this.durability = durability || 'default';
-    this.objectStoreNames = storeNames.slice().sort();
+    this._storeNames = storeNames.slice().sort();
     this.error = null;
     this.oncomplete = null;
     this.onabort = null;
@@ -380,9 +393,12 @@ function IDBTransaction(db, storeNames, mode, durability) {
     this._isUpgrade = false;
     this._snapshot = null;
 }
+Object.defineProperty(IDBTransaction.prototype, 'objectStoreNames', {
+    get: function() { return _idb_string_list(this._storeNames); }
+});
 IDBTransaction.prototype.objectStore = function(name) {
     if (this._finished) throw _idb_error('InvalidStateError', 'transaction has finished');
-    if (this.objectStoreNames.indexOf(name) < 0) throw _idb_error('NotFoundError', 'store not in transaction scope');
+    if (this._storeNames.indexOf(name) < 0) throw _idb_error('NotFoundError', 'store not in transaction scope');
     if (!this._stores[name]) {
         var sd = this.db._data.stores[name];
         if (!sd) throw _idb_error('NotFoundError', 'no object store named ' + name);
@@ -538,8 +554,8 @@ function _idb_txn_snapshot(txn) {
     if (txn._isUpgrade) {
         for (var n in data.stores) stores[n] = { ref: data.stores[n], snap: _idb_clone_store(data.stores[n]) };
     } else {
-        for (var i = 0; i < txn.objectStoreNames.length; i++) {
-            var name = txn.objectStoreNames[i];
+        for (var i = 0; i < txn._storeNames.length; i++) {
+            var name = txn._storeNames[i];
             var st = data.stores[name];
             if (st) stores[name] = { ref: st, snap: _idb_clone_store(st) };
         }
@@ -737,7 +753,7 @@ function _idb_unpark(name) {
     return true;
 }
 Object.defineProperty(IDBDatabase.prototype, 'objectStoreNames', {
-    get: function() { return Object.keys(this._data.stores).sort(); }
+    get: function() { return _idb_string_list(Object.keys(this._data.stores).sort()); }
 });
 IDBDatabase.prototype.createObjectStore = function(name, options) {
     if (!this._upgradeTxn) throw _idb_error('InvalidStateError', 'createObjectStore allowed only during a versionchange transaction');
@@ -758,7 +774,7 @@ IDBDatabase.prototype.createObjectStore = function(name, options) {
         indexes: {}
     };
     this._data.stores[name] = store;
-    if (this._upgradeTxn.objectStoreNames.indexOf(name) < 0) this._upgradeTxn.objectStoreNames.push(name);
+    if (this._upgradeTxn._storeNames.indexOf(name) < 0) this._upgradeTxn._storeNames.push(name);
     return new IDBObjectStore(store, this._upgradeTxn);
 };
 IDBDatabase.prototype.deleteObjectStore = function(name) {
@@ -813,7 +829,7 @@ function IDBObjectStore(store, txn) {
     this.autoIncrement = store.autoIncrement;
 }
 Object.defineProperty(IDBObjectStore.prototype, 'indexNames', {
-    get: function() { return Object.keys(this._store.indexes).sort(); }
+    get: function() { return _idb_string_list(Object.keys(this._store.indexes).sort()); }
 });
 
 // Binary search over the store's key-sorted records array.
