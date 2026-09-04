@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-04",
  "counts": {
-  "open": 378,
+  "open": 380,
   "fixed": 554,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 932,
+ "total_bugs": 934,
  "phases": [
   {
    "id": "P0",
@@ -5448,7 +5448,7 @@
         "BUG-979",
         "BUG-980",
         "BUG-981",
-        "BUG-982"
+        "BUG-984"
        ]
       },
       {
@@ -9494,6 +9494,20 @@
   },
   "BUG-982": {
    "status": "open",
+   "title": "`innerHTML`/`outerHTML`-сеттеры и `insertAdjacentHTML` теряют **ведущий** прогон пробелов фрагмента: `d.innerHTML=' abc'` даёт `textContent==='abc'`, `d.innerHT…",
+   "component": "js (`crates/js/src/v8_runtime/dom_helpers.rs::parse_html_fragment`) / engine (`crates/engine/html-parser`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-983": {
+   "status": "open",
+   "title": "Токенайзер переводит в text-only режим только четыре тега: RAWTEXT `<script>`/`<style>`, RCDATA `<title>`/`<textarea>`. По HTML LS §13.2.6.4.7 RAWTEXT — это ещё…",
+   "component": "engine (`crates/engine/html-parser/src/tokenizer.rs:561` — `is_raw_text_element`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-984": {
+   "status": "open",
    "title": "`fetch_with_redirect` уже вычисляет верный финальный URL после HTTP-редиректов (`let (resp, _final_url) = …` — подчёркивание не линт, значение реально выбрасыва…",
    "component": "network (`crates/network/src/lib.rs::HttpClient::fetch_request_impl`) / core (`crates/core/src/ext.rs::JsFetchResult`)",
    "date": null,
@@ -13523,6 +13537,9 @@
   "encoding": [
    "BUG-162"
   ],
+  "engine (`crates/engine/html-parser/src/tokenizer.rs:561` — `is_raw_text_element`)": [
+   "BUG-983"
+  ],
   "font": [
    "BUG-059",
    "BUG-060",
@@ -13956,6 +13973,9 @@
   ],
   "js (`crates/js/src/v8_runtime.rs` — уровень изолята)": [
    "BUG-716"
+  ],
+  "js (`crates/js/src/v8_runtime/dom_helpers.rs::parse_html_fragment`) / engine (`crates/engine/html-parser`)": [
+   "BUG-982"
   ],
   "js (`crates/js/src/v8_runtime/install/platform.rs::_lumen_css_supports_prop`)": [
    "BUG-502"

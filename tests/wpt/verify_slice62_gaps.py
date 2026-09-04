@@ -72,7 +72,7 @@ exception and one new bug:
   also explains why `fetch()`'s `Response.url`/`.redirected` and
   `XMLHttpRequest.responseURL` are wrong after any redirect — three
   independent JS-visible symptoms, one root cause. Filed as
-  [BUG-982](../../bugs/BUG-982-OPEN.md). Not a TIMEOUT; stays unclassified,
+  [BUG-984](../../bugs/BUG-984-OPEN.md). Not a TIMEOUT; stays unclassified,
   no marker.
 - All other 19 ids: outcome matches the earlier slice's finding exactly
   (FAIL-not-hang or full PASS, as already documented) — no new information,
