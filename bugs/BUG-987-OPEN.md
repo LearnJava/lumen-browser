@@ -121,7 +121,7 @@ otCommonStyles.css).
 проход по 2731 правилам × DOM без инкрементальности (`refresh_dynamic_css`
 сбрасывает `page_prev_cascade_styles = None`), родственная зона BUG-341
 (инкрементальный рестайл, пауза по решению 2026-07-28). Заведён как
-[BUG-995](bugs/BUG-995-OPEN.md).
+[BUG-996](bugs/BUG-996-OPEN.md).
 
 ### Остаток B: рекурсия и жирные кадры остались (LAYOUT-1)
 
