@@ -1727,19 +1727,29 @@ the time — read dates.
   resolve that one face's `_loadedPromise` directly — bypassing
   `_onFaceLoadStart`/`_onFaceLoadEnd` entirely, precisely to avoid the
   shared-counter risk above. `crates/driver` (the WPT/`run_report.py` path)
-  has no `FontLoaded` equivalent and never calls `Document::fonts_mut()` at
-  all, so this only ever fires for the live window. `FontFace.load()`
+  has no `FontLoaded` equivalent, so per-instance CSS `url()` resolution only
+  ever fires for the live window (`crates/shell`) — but `crates/driver` DOES
+  populate the CSS-connected set itself (see next paragraph), just not this
+  per-instance status flip. `FontFace.load()`
   validates bytes through a new native,
   `_lumen_font_validate_bytes` (`crates/js/src/v8_runtime/install/dom_core.rs`,
   wraps `lumen_font::{maybe_decode_font, Font::parse}`), fed by the shim's
   own `fetch()`/`arrayBuffer()` rather than a second native network path.
-  Not done, and tracked as the task's own remaining slices in
+  **FONTLOAD-3/FONTLOAD-4 (2026-09-05)** closed the "never populated at all"
+  gap on both paths that read this JS wrapper — `crates/driver/src/
+  session.rs` (`crate::font_faces::populate_document_fonts`) and
+  `crates/shell/src/page_pipeline.rs` (`rule_to_font_face`) both now fill
+  `Document::fonts` from the page's static `@font-face` rules BEFORE the
+  page's own scripts run, not after: this wrapper's `_lumen_wrapper_slot`
+  cache means a population that ran after the scripts had already touched
+  `document.fonts` once would freeze the JS-side set empty for the rest of
+  the page's life — the exact `document.fonts.ready.then(...)`-before-any-
+  `test()` WPT pattern this whole track exists for. Not done, and tracked as
+  the task's own remaining slices in
   [`bugs/BUG-467-OPEN.md`](../bugs/BUG-467-OPEN.md): CSS-connected
-  reactivity AND initial population on the driver/WPT path (`document.fonts`
-  is never populated there at all — a bigger gap than "stale", `crates/driver`
-  also runs page scripts before parsing `<style>` blocks, so fixing this
-  needs a pipeline-ordering decision, not just a resync), descriptor grammar
-  validation, and wiring a script-constructed `FontFace` into
+  reactivity to a later `<style>`/CSSOM change (on either path — needs the
+  live-cascade foundation BUG-471/CSSOM-4), descriptor grammar validation,
+  and wiring a script-constructed `FontFace` into
   `lumen_font::FontRegistry`/actual rendering.
 
 ## Deferred

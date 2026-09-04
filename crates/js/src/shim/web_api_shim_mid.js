@@ -7343,15 +7343,23 @@ var console = {
 // WPT/`run_report.py` path) has no `FontLoaded` equivalent at all — this
 // only ever fires for the live window, not a WPT run.
 //
+// FONTLOAD-3 (2026-09-05) closed the driver-side half of the "never
+// populated at all" gap: `crates/driver/src/session.rs` now calls
+// `Document::fonts_mut()` too (`crates/driver/src/font_faces.rs`), from the
+// static pre-script cascade, same as shell. FONTLOAD-4 (2026-09-05) fixed the
+// remaining timing risk FONTLOAD-3's own writeup flagged but didn't check for
+// shell: `crates/shell/src/page_pipeline.rs` used to populate
+// `document.fonts` *after* `run_scripts_with_dom`, so a synchronous
+// top-level script (the exact `document.fonts.ready.then(...)`-before-any-
+// `test()` pattern this whole track exists for) froze the JS-side snapshot
+// empty for the page's whole life — population now runs against the
+// pre-script cascade, ahead of the scripts, mirroring driver's ordering.
+//
 // Still open, both real engine gaps, not oversights:
 // (1) **CSS-connected faces are a one-time snapshot.** They are read from
 //     native once, when `document.fonts` is first touched — a later
 //     `<style>`/CSSOM change that adds or removes an `@font-face` rule is not
-//     reflected. And on the driver/WPT path `document.fonts` is never
-//     populated at all — `crates/driver/src/session.rs` has no call to
-//     `Document::fonts_mut()`, unlike `crates/shell/src/page_pipeline.rs`;
-//     every css-font-loading WPT file that reads `document.fonts.size`
-//     synchronously sees `0`, not just a stale value.
+//     reflected, on either path.
 // (2) **The set's `.ready`/`.status` still track only script-driven loads**
 //     (`FontFace.load()` / `document.fonts.load()`), never a passive CSS
 //     one — wiring a CSS-connected completion into the shared pending

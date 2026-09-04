@@ -1195,3 +1195,20 @@ fn script_inserted_style_still_reaches_the_first_layout() {
     }
     assert!(found.is_some(), "script-inserted <style> did not reach the layout");
 }
+
+/// FONTLOAD-4: a synchronous top-level script's `document.fonts.size` sees
+/// the page's `@font-face` rules immediately, not `0`. Before this fix,
+/// population ran *after* `run_scripts_with_dom`, but the JS wrapper caches
+/// its `FontFaceSet` snapshot on first touch — a script this early froze the
+/// set empty for the page's whole life (same class of defect FONTLOAD-3
+/// fixed for `InProcessSession`).
+#[cfg(feature = "v8")]
+#[test]
+fn fontload4_document_fonts_sync_read_sees_font_face_rules() {
+    let page = parse_and_layout_for_test(
+        "<html><head><style>@font-face{font-family:'Probe';src:local('Arial')}</style></head>\
+         <body><script>document.documentElement.setAttribute('data-sync',String(document.fonts.size));</script>\
+         </body></html>",
+    );
+    assert_eq!(probe_attr(&page, "data-sync"), "1");
+}
