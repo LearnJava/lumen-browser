@@ -136,6 +136,15 @@ pub(crate) struct DynamicCssBase {
     pub(crate) linked: String,
     /// Хэш инлайновых `<style>`, из которых собран текущий лист.
     pub(crate) inline_fp: u64,
+    /// CSSOM-5 срез 2 (BUG-897): последний увиденный
+    /// `PersistentJs::document_adopted_fingerprint()` — тот же принцип, что
+    /// у [`Self::inline_fp`], но для `document.adoptedStyleSheets`.
+    /// `build_page_cascade` ставит сюда `0` как временный placeholder — на
+    /// этом шаге JS ещё не запущен, реального значения взять неоткуда; сразу
+    /// после `run_scripts_with_dom` `parse_and_layout` перезаписывает поле
+    /// настоящим фингерпринтом, до того как этот `PageCascade` попадёт в
+    /// `LayoutSource` и станет виден `refresh_dynamic_css`.
+    pub(crate) adopted_fp: u64,
 }
 
 fn walk_style_blocks(doc: &Document, id: NodeId, out: &mut String) {

@@ -729,6 +729,20 @@ impl V8JsRuntime {
             .unwrap_or_else(|e| e.into_inner()) = entries;
     }
 
+    /// CSSOM-5 срез 2 (BUG-897): cheap change detector for
+    /// `document.adoptedStyleSheets` — see
+    /// `install::constructed_stylesheets::document_adopted_fingerprint`.
+    pub fn document_adopted_fingerprint(&self) -> u64 {
+        super::install::document_adopted_fingerprint(&self.constructed_stylesheets, &self.adopted_stylesheets)
+    }
+
+    /// CSSOM-5 срез 2: merged content of `document.adoptedStyleSheets`'s
+    /// enabled sheets — see
+    /// `install::constructed_stylesheets::document_adopted_stylesheet`.
+    pub fn document_adopted_stylesheet(&self) -> Option<lumen_css_parser::Stylesheet> {
+        super::install::document_adopted_stylesheet(&self.constructed_stylesheets, &self.adopted_stylesheets)
+    }
+
     /// Update `document.hidden` / `document.visibilityState` and fire
     /// `visibilitychange` on both `document` and `window`.
     /// Mirrors [`crate::QuickJsRuntime::set_document_visibility`].

@@ -268,6 +268,18 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// (and so this registry) is (re)built.
     #[allow(dead_code)]
     fn update_stylesheet_nodes(&self, entries: Vec<lumen_css_parser::StylesheetNodeEntry>);
+    /// CSSOM-5 срез 2 (BUG-897): cheap change detector for
+    /// `document.adoptedStyleSheets` — changes whenever the list or any
+    /// member sheet's content/`disabled` flag changes. Read by
+    /// `refresh_dynamic_css`/`parse_and_layout` to decide whether the page
+    /// cascade needs the adopted content re-merged.
+    #[allow(dead_code)]
+    fn document_adopted_fingerprint(&self) -> u64;
+    /// CSSOM-5 срез 2: merged content of `document.adoptedStyleSheets`'s
+    /// enabled sheets, in list order. `None` when nothing is adopted (or
+    /// everything adopted is disabled).
+    #[allow(dead_code)]
+    fn document_adopted_stylesheet(&self) -> Option<lumen_css_parser::Stylesheet>;
     /// Advance `document.readyState` to `"interactive"` and fire
     /// `readystatechange` + `DOMContentLoaded` on `document`.
     ///
@@ -836,6 +848,12 @@ impl PersistentJs for V8PersistentJs {
     }
     fn update_stylesheet_nodes(&self, entries: Vec<lumen_css_parser::StylesheetNodeEntry>) {
         self.rt.update_stylesheet_nodes(entries);
+    }
+    fn document_adopted_fingerprint(&self) -> u64 {
+        self.rt.document_adopted_fingerprint()
+    }
+    fn document_adopted_stylesheet(&self) -> Option<lumen_css_parser::Stylesheet> {
+        self.rt.document_adopted_stylesheet()
     }
     fn notify_dom_content_loaded(&self) {
         self.eval_js("_lumen_apply_ready_state('interactive')");
