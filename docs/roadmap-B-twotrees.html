@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-05",
  "counts": {
-  "open": 391,
-  "fixed": 556,
+  "open": 390,
+  "fixed": 558,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 947,
+ "total_bugs": 948,
  "phases": [
   {
    "id": "P0",
@@ -362,7 +362,7 @@
     {
      "id": "LAYOUT-1",
      "title": "LAYOUT-1: итеративный обход по глубине вместо рекурсии",
-     "status": "planned",
+     "status": "done",
      "size": "L",
      "note": "Итеративный обход дерева боксов/DOM вместо рекурсии в layout/style-проходах и сериализаторах. Замер BUG-987 (2026-09-04): рекурсивные спуски тратят ~1–7 КБ стека на уровень вложенности — штатных 1–2 МБ не хватает уже на ~150–800 уровнях (`--dump-layout` падает на `<div>`×150), реальные страницы (fandom.com + OneTrust, корпус топ-100) роняют процесс `has overflowed its stack`. Временно снято увеличением стеков (P3, BUG-987): PE `/STACK:134217728` у main и `stack_size(128 MiB)` у `lumen-engine` — но рекурсия и жирные кадры остались, порог просто поднят до десятков тысяч уровней. Объём: layout-dispatch (`box_tree/layout_dispatch.rs`: lay_out → lay_out_cache_checked → lay_out_inner → lay_out_for_vertical и соседи), style-обходы, сериализаторы dump/print-режимов и style-снимки (`collect_computed_styles_rec`, `collect_layout_rects_rec` и т.п.) — перевести на явный стек либо де-жирнить кадры до ≲200 Б/уровень. Приёмка: `--dump-layout`/`--screenshot` на `<div>`×20000 без увеличенных стеков; живой fandom.com.",
      "bugs": [
@@ -5476,7 +5476,7 @@
        "title": "WPT-RUN-7: expectations на все 289 категорий (живой гейт регрессий)",
        "status": "active",
        "size": "L",
-       "note": "Довести охват expectations с 25 категорий до всех 289 `done`-категорий WPT-VENDOR. Система готова (TEST-3: `tests/wpt/expectations.py` + `run_report.py --update-expected`/`--check`), но пока baseline есть у 25 из 289, гейт `--check` по остальным ~264 мёртв: регрессия там не отловится ничем. Цена бездействия уже измерена — по ходу TEST-3 нашлись 4 битых `.ini`, из-за которых 4 категории (759 id) не прогонялись ни разу, а `--check` по ним молча возвращал успех. Обязательный порядок: после `--update-expected` немедленно прогонять `--check` и убеждаться в exit 0 — генератор валидирует свой вывод тем же парсером, но проверка сквозная. Baseline, который нельзя перегенерировать, не удалять. Срез 1 (2026-09-04): +103 категории (32 → 135 с baseline), `--check` подтверждён на всех 0 регрессий; попутно найдены и исправлены 2 бага генератора (`docs/tasks/p2-test-track.md#test-3-срез-1-2026-09-04`) — субтест с `\\r`/`\\n` в имени ложно вечно регрессировал, а угаданный (не из манифеста) id `.any.js`/`.window.js`-варианта с нестандартным `// META: global=` ложно вечно пропадал. Срез 2 (2026-09-04): +16 категорий (135 → 151 с baseline: `accname`, `ai`, `animation-worklet`, `bluetooth`, `client-hints`, `clipboard-apis`, `compute-pressure`, `cookiestore`, `density-size-correction`, `device-bound-session-credentials`, `digital-credentials`, `document-picture-in-picture`, `domparsing`, `domxpath`, `dpub-aam`, `element-timing`), `--check` подтверждён на всех 0 регрессий, без новых багов генератора. Срез 3 (2026-09-04): +36 категорий (151 → 187 с baseline: `file-system-access`, `focus`, `forced-colors-mode`, `geolocation`, `inert`, `input-events`, `jpegxl`, `js`, `js-self-profiling`, `longtask-timing`, `mediacapture-image`, `mediacapture-insertable-streams`, `mediacapture-record`, `notifications`, `orientation-event`, `payment-request`, `png`, `pointerlock`, `presentation-api`, `quirks`, `reporting`, `resize-observer`, `sanitizer-api`, `scroll-to-text-fragment`, `secure-payment-confirmation`, `shape-detection`, `speech-api`, `subresource-integrity`, `visual-viewport`, `wai-aria`, `web-based-payment-handler`, `web-bundle`, `web-share`, `webdriver`, `webrtc-encoded-transform`, `worklets`), `--check` подтверждён на всех 36 (0 регрессий). `input-events` дважды упёрся в BUG-986-класс краш (`Document::get` на чужом `NodeId`): на старом бинаре — паника без диагностики вызывающего, нестабильный `--check`; после пересборки на фиксе [BUG-986](bugs/BUG-986-FIXED.md) (влит параллельно, P3) краш воспроизвёлся СНОВА, но в другом call site (`text_input.rs:98`, не накрытый тем фиксом) — baseline перегенерирован на пересобранном бинаре, `--check` теперь стабильно зелёный (краш зафиксирован как `expected: ERROR`, не спрятан), находка заведена отдельным багом [BUG-995](bugs/BUG-995-OPEN.md). Осталось непокрытых 109 категорий (296 `done` WPT-VENDOR − 187)"
+       "note": "Довести охват expectations с 25 категорий до всех 289 `done`-категорий WPT-VENDOR. Система готова (TEST-3: `tests/wpt/expectations.py` + `run_report.py --update-expected`/`--check`), но пока baseline есть у 25 из 289, гейт `--check` по остальным ~264 мёртв: регрессия там не отловится ничем. Цена бездействия уже измерена — по ходу TEST-3 нашлись 4 битых `.ini`, из-за которых 4 категории (759 id) не прогонялись ни разу, а `--check` по ним молча возвращал успех. Обязательный порядок: после `--update-expected` немедленно прогонять `--check` и убеждаться в exit 0 — генератор валидирует свой вывод тем же парсером, но проверка сквозная. Baseline, который нельзя перегенерировать, не удалять. Срез 1 (2026-09-04): +103 категории (32 → 135 с baseline), `--check` подтверждён на всех 0 регрессий; попутно найдены и исправлены 2 бага генератора (`docs/tasks/p2-test-track.md#test-3-срез-1-2026-09-04`) — субтест с `\\r`/`\\n` в имени ложно вечно регрессировал, а угаданный (не из манифеста) id `.any.js`/`.window.js`-варианта с нестандартным `// META: global=` ложно вечно пропадал. Срез 2 (2026-09-04): +16 категорий (135 → 151 с baseline: `accname`, `ai`, `animation-worklet`, `bluetooth`, `client-hints`, `clipboard-apis`, `compute-pressure`, `cookiestore`, `density-size-correction`, `device-bound-session-credentials`, `digital-credentials`, `document-picture-in-picture`, `domparsing`, `domxpath`, `dpub-aam`, `element-timing`), `--check` подтверждён на всех 0 регрессий, без новых багов генератора. Срез 3 (2026-09-04): +36 категорий (151 → 187 с baseline: `file-system-access`, `focus`, `forced-colors-mode`, `geolocation`, `inert`, `input-events`, `jpegxl`, `js`, `js-self-profiling`, `longtask-timing`, `mediacapture-image`, `mediacapture-insertable-streams`, `mediacapture-record`, `notifications`, `orientation-event`, `payment-request`, `png`, `pointerlock`, `presentation-api`, `quirks`, `reporting`, `resize-observer`, `sanitizer-api`, `scroll-to-text-fragment`, `secure-payment-confirmation`, `shape-detection`, `speech-api`, `subresource-integrity`, `visual-viewport`, `wai-aria`, `web-based-payment-handler`, `web-bundle`, `web-share`, `webdriver`, `webrtc-encoded-transform`, `worklets`), `--check` подтверждён на всех 36 (0 регрессий). `input-events` дважды упёрся в BUG-986-класс краш (`Document::get` на чужом `NodeId`): на старом бинаре — паника без диагностики вызывающего, нестабильный `--check`; после пересборки на фиксе [BUG-986](bugs/BUG-986-FIXED.md) (влит параллельно, P3) краш воспроизвёлся СНОВА, но в другом call site (`text_input.rs:98`, не накрытый тем фиксом) — baseline перегенерирован на пересобранном бинаре, `--check` теперь стабильно зелёный (краш зафиксирован как `expected: ERROR`, не спрятан), находка заведена отдельным багом [BUG-995](bugs/BUG-995-OPEN.md). Срез 4 (2026-09-05): пакет из 18 дешёвых категорий сломал цикл не на движке, а на САМОЙ ВЫБОРКЕ тестов — три дефекта `all_vendored_test_ids`, все от того, что id угадывался по имени файла, а манифест был только фильтром типа: (1) неизвестная манифесту страница (`-ref.html`) оставалась «fail open» и, будучи единственным выбранным id, роняла весь прогон категории до первого теста (`CRITICAL Unable to find any tests`, exit 64) — `avif`, `gif`, `html-longdesc`, `annotation-protocol`; (2) захардкоженный список `.any.js`/`.window.js` не знал `.extension.js`, и шесть настоящих тестов `web-extensions` не выбирались никогда («no tests selected» — тихая дыра); (3) тест, существующий только как query-вариант (все `websockets/**/*.html` — `?default`/`?wss`/`?wpt_flags=h2`), не выбирался: 123 неисполнимых id вместо 290 настоящих. Фикс один: спрашивать разворот у манифеста при любом расширении, эвристика по имени — только для неизвестного манифесту источника; пины `tests/wpt/verify_wpt_run7_slice4_selection.py`. Замер по 187 категориям с baseline: −9512 id, которые не могли исполниться никогда (9101 из них в `css`), +750 настоящих; **21 категория получает новые тесты и требует перегенерации baseline** (`--check` по ним сейчас красный — долг среза 4). Baseline 187 → 198 категорий (217 `.ini`: `deprecation-reporting`, `fledge`, `intervention-reporting`, `scheduler`, `storage`, `user-timing`, `web-extensions`, `web-locks`, `webtransport`, `webusb`); `ecmascript` зелена на 100 % и каталога не получает вовсе — учёт по наличию каталога такие категории недосчитывает. 11 категорий пакета baseline получить НЕ МОГУТ (манифест знает их целиком как reftest/manual/crashtest/support, а `webgpu` вендорена без единого тестового файла): `annotation-model`, `annotation-protocol`, `annotation-vocab`, `avif`, `cssom`, `dpub-aria`, `gif`, `graphics-aam`, `html-longdesc`, `print`, `webgpu` — перепроверять незачем. `webidl` не закоммичен: `global-object-implicit-this-value-cross-realm.html` всегда TIMEOUT, но число доехавших подтестов плавает (0/6, 0/6, 1/6), и один гейт одновременно рапортует регрессию и неожиданный PASS — [BUG-999](bugs/BUG-999-OPEN.md), вывод шире категории: подтестовый baseline вечно-TIMEOUT-теста невоспроизводим в принципе. Осталось непокрытых ~98 категорий (296 `done` WPT-VENDOR − 198), из них 11 покрыть нечем"
       },
       {
        "id": "WPT-RUN-8",
@@ -9570,13 +9570,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-987": {
-   "status": "open",
-   "title": "`thread 'main' has overflowed its stack` на страницах с OneTrust/cookielaw (два независимых прогона, один и тот же сайт — детерминированно) и `thread '<unknown>…",
-   "component": "не локализовано (стек переполняется, паники с местом нет)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-988": {
    "status": "open",
    "title": "Рабочий поток уходит в бесконечный спин на ЦЕЛОЕ ЯДРО и переживает навигации: `tid 17048` создан 16:10:12 на costco.com, жёг 984 мс CPU в секунду (медиана; выше…",
@@ -9626,13 +9619,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-996": {
-   "status": "open",
-   "title": "После свопа листа OneTrust (`CSS пересобран… 2731 правил`) живой fandom.com уходит в релейаут, который жжёт ~2 ядра и не оседает за 4.5+ минут (лог замер: сетев…",
-   "component": "не локализовано (shell: `relayout.rs::refresh_dynamic_css` + полный рестайл после правки `<style>`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-997": {
    "status": "open",
    "title": "Регресс-тест BUG-418 детерминированно красный на `main` (воспроизведено в изоляции, `--features v8-backend`, без правок): триггер, которым он провоцировал паник…",
@@ -9644,6 +9630,13 @@
    "status": "open",
    "title": "Кросс-документный `history.back()`/`forward()`, вызванный со стороны страницы (`eval`), не доводит `document_ready` (таймаут 5с и 40с — тот же исход), а следующ…",
    "component": "js (`crates/js/src/dom.rs` — `_lumen_history_go`/`_lumen_history_traverse`) / shell (`navigation.rs::navigate_by`, кросс-документный путь BUG-835)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-999": {
+   "status": "open",
+   "title": "`/webidl/ecmascript-binding/global-object-implicit-this-value-cross-realm.html` **всегда** TIMEOUT, но число доехавших подтестов плавает: три изолированных прог…",
+   "component": "не локализован (общая точка блокировки — ожидание `load` у программно вставленного `<iframe src>`, `tests/wpt/webidl/ecmascript-binding/support/create-realm.js`; кандидаты — доставка `load` вложенному browsing context и создание самого контекста)",
    "date": null,
    "debtor": false
   },
@@ -13531,6 +13524,20 @@
    "component": "dom (`crates/engine/dom/src/lib.rs:706` — `Document::get`)",
    "date": "2026-09-04",
    "debtor": false
+  },
+  "BUG-996": {
+   "status": "fixed",
+   "title": "После свопа листа OneTrust (`CSS пересобран… 2731 правил`) живой fandom.com уходит в релейаут, который жжёт ~2 ядра и не оседает за 4.5+ минут (лог замер: сетев…",
+   "component": "shell (`crates/shell/src/app/mod.rs::window_event`, ветка `WindowEvent::Resized`)",
+   "date": "2026-09-05",
+   "debtor": false
+  },
+  "BUG-987": {
+   "status": "fixed",
+   "title": "`thread 'main' has overflowed its stack` на страницах с OneTrust/cookielaw (два независимых прогона, один и тот же сайт — детерминированно) и `thread '<unknown>…",
+   "component": "не локализовано (стек переполняется, паники с местом нет)",
+   "date": "2026-09-04",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14721,6 +14728,9 @@
   "shell (90 файлов под `crates/shell/`)": [
    "BUG-942"
   ],
+  "shell (`crates/shell/src/app/mod.rs::window_event`, ветка `WindowEvent::Resized`)": [
+   "BUG-996"
+  ],
   "shell (`crates/shell/src/chrome_ui.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`, `app/window_event/mouse_input.rs`)": [
    "BUG-461"
   ],
@@ -14882,8 +14892,8 @@
   "не локализован (кандидаты: shell/network — куки и JS-редирект SSO; layout — inline-бокс сайдбара)": [
    "BUG-791"
   ],
-  "не локализовано (shell: `relayout.rs::refresh_dynamic_css` + полный рестайл после правки `<style>`)": [
-   "BUG-996"
+  "не локализован (общая точка блокировки — ожидание `load` у программно вставленного `<iframe src>`, `tests/wpt/webidl/ecmascript-binding/support/create-realm.js`; кандидаты — доставка `load` вложенному browsing context и создание самого контекста)": [
+   "BUG-999"
   ],
   "не локализовано (поток опознан по времени рождения)": [
    "BUG-988"
