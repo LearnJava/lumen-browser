@@ -133,3 +133,49 @@ family, not yet individually re-counted per file. `.ini` under
 11 more files (`stretch/*`, `keyword-sizes-on-inline-block.html`, etc), all
 the `document.fonts.ready.then(() => checkLayout(...))` idiom. `.ini` under
 `tests/wpt/metadata/css/css-sizing/`, file-level `expected: TIMEOUT`.
+
+## FONTLOAD-1 (P1, 2026-09-05, ветка `p1-fontload1-fontface-api`) — первый срез доработки
+
+Реализованы: глобальный конструктор `FontFace` (family/style/weight/stretch/
+unicodeRange/featureSettings/variationSettings/display, `status`, `loaded`,
+`.load()` — реально фетчит `url()`-источники через `fetch()`/`arrayBuffer()`
+и валидирует байты через `_lumen_font_validate_bytes`, новый натив поверх
+`lumen_font::{maybe_decode_font, Font::parse}`); `document.fonts` стал
+настоящим `setlike<FontFace>` — стабильная идентичность объектов (был
+`_lumen_get_fonts()`, пересобиравший plain-object на каждое обращение),
+`size`/`has`/`add`/`delete`/`clear`/`keys`/`values`/`entries`/`forEach`/
+`load(font, text)`/`ready`/`status`, события `loading`/`loadingdone`/
+`loadingerror` (`FontFaceSetLoadEvent`); `new FontFaceSet(...)` теперь
+бросает `TypeError` (`historical.html`). Замер до/после (`run_report.py --all
+--root css/css-font-loading`, dev-release, Windows): 18/27 → 17/27 harness OK
+(разница — уже заведённый [BUG-995](BUG-995-OPEN.md) на `fontface-loadingevent.html`,
+которая раньше умирала ReferenceError'ом раньше своей клавиатурной части и
+теперь доходит до нативного краша: не регрессия этого среза, воспроизведён
+уже в бейзлайне ДО правки), 0/54 → 6/55 subtests PASS.
+
+Два gap'а НЕ закрыты этим срезом, оба зафиксированы в заголовочном комментарии
+секции (`crates/js/src/shim/web_api_shim_mid.js`, «FontFace and FontFaceSet»):
+
+1. **CSS-connected `document.fonts` — одноразовый снимок.** `<style>`/CSSOM
+   изменение после первого обращения к `document.fonts` не отражается —
+   нужен тот же фундамент живого каскада, что и BUG-471/CSSOM-4. Не проходят
+   по этой причине: `fontfaceset-update-after-stylesheet-change`,
+   `fontfaceset-has` (вторая половина), `fontfaceset-load-css-connected`
+   (что тут прошёл — совпадение: `.load()` на "WebFont" фейлится сам по себе).
+2. **Нативный `status` CSS-декларированного `url()`-лица никогда не
+   становится `Loaded`** (`crates/shell`'s `FontLoaded` не трогает
+   `Document::fonts_mut()`) — `document.fonts.ready`/`.status` намеренно
+   считают только script-driven загрузки (`FontFace.load()`/
+   `document.fonts.load()`), не пассивную CSS. Иначе каждый существующий
+   `document.fonts.ready.then(...)`-гейт в css-fonts/css-sizing/css-ruby
+   (см. срезы 31/33 выше) стал бы вечно висящим промисом — регресс, не фикс.
+
+Остаток: descriptor-значения (`unicodeRange`/`featureSettings`/…) принимаются
+без разбора грамматики (просто `String(v)`) — `fontface-descriptor-updates*`,
+`fontface-override-descriptors*`, `fontface-size-adjust-descriptor` (рефтесты,
+не относятся к этому срезу, падают из-за неразобранных дескрипторов, влияющих
+на реальный рендеринг, который скрипт-сконструированный `FontFace` в этом
+срезе тоже не подключает к `lumen_font::FontRegistry`/рендереру — отдельный,
+более крупный кусок FONTLOAD). Следующий срез — на выбор владельца FONTLOAD:
+реактивность CSS-connected сета (закрывает больше id) или подключение
+загруженного шрифта к рендерингу (закрывает FOUT/FOIT-класс тестов).

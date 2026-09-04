@@ -23,20 +23,15 @@ fn document_fonts_exists() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
+// FONTLOAD-1 (2026-09-05): `document.fonts` became a real setlike<FontFace> —
+// `size`, not `length`; no `item()` (that was never part of the spec surface,
+// only this shim's old ad hoc snapshot object had it). Coverage below matches
+// CSS Font Loading §11.2, not the removed shape.
 #[test]
-fn document_fonts_has_length_property() {
+fn document_fonts_has_size_property() {
     let rt = v8_runtime_with_dom(make_doc());
     let result = rt.eval(r#"
-                typeof document.fonts.length === 'number'
-            "#).unwrap();
-    assert_eq!(result, lumen_core::JsValue::Bool(true));
-}
-
-#[test]
-fn document_fonts_has_item_method() {
-    let rt = v8_runtime_with_dom(make_doc());
-    let result = rt.eval(r#"
-                typeof document.fonts.item === 'function'
+                typeof document.fonts.size === 'number'
             "#).unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
@@ -51,10 +46,71 @@ fn document_fonts_has_foreach_method() {
 }
 
 #[test]
+fn document_fonts_has_setlike_methods() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                typeof document.fonts.has === 'function' &&
+                typeof document.fonts.add === 'function' &&
+                typeof document.fonts.delete === 'function' &&
+                typeof document.fonts.clear === 'function' &&
+                typeof document.fonts.keys === 'function' &&
+                typeof document.fonts.values === 'function' &&
+                typeof document.fonts.entries === 'function' &&
+                typeof document.fonts.load === 'function'
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
 fn document_fonts_empty_by_default() {
     let rt = v8_runtime_with_dom(make_doc());
     let result = rt.eval(r#"
-                document.fonts.length === 0 && document.fonts.item(0) === null
+                document.fonts.size === 0
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn document_fonts_is_the_same_object_every_access() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                document.fonts === document.fonts
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn new_font_face_set_throws_illegal_constructor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                (function() {
+                    try { new FontFaceSet([]); return false; }
+                    catch (e) { return e instanceof TypeError; }
+                })()
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn font_face_constructor_exposes_descriptors() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var f = new FontFace('MyFont', 'url(a.woff)', { weight: '700', style: 'italic' });
+                f.family === 'MyFont' && f.weight === '700' && f.style === 'italic' &&
+                f.status === 'unloaded' && typeof f.loaded.then === 'function'
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn document_fonts_add_and_has_and_delete_round_trip() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var f = new FontFace('MyFont', 'url(a.woff)');
+                document.fonts.add(f);
+                var hadIt = document.fonts.has(f) && document.fonts.size === 1;
+                document.fonts.delete(f);
+                hadIt && !document.fonts.has(f) && document.fonts.size === 0
             "#).unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
