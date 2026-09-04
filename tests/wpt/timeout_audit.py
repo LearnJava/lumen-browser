@@ -2767,6 +2767,27 @@ SOURCE_MARKERS = [
             "/mediacapture-record/MediaRecorder-destroy-script-execution.html",
         ),
     ),
+    # WPT-RUN-6 slice 60. `XMLHttpRequest.send()` (`xhr.rs`) runs the entire
+    # request/response cycle synchronously inside the call itself — every
+    # readyState transition (HEADERS_RECEIVED/LOADING/DONE) and progress
+    # event fires before `send()` returns to caller JS. A test that attaches
+    # `onreadystatechange` *after* calling `send()` (the ordering XHR §4.5.6's
+    # own examples use, and this file's idiom in all three subtests) attaches
+    # to a request that has already finished and will never fire again — the
+    # handler is never called, so the harness hangs until its own timeout.
+    # Confirmed live (`--mcp-live-port`, `eval`): `readyState` reads back `4`
+    # on the very next line after `send()`, and a handler attached only after
+    # that point never observes any state. New bug filed (BUG-980).
+    Mechanism(
+        "xhr-send-runs-synchronously", "BUG-980",
+        [], "`XMLHttpRequest.send()` executes the whole request/response "
+        "cycle synchronously and fires every readyState transition before "
+        "returning, so a handler attached after `send()` (XHR §4.5.6's own "
+        "idiom) is attached to an already-finished request and never fires",
+        predicate=_exact_id_marker(
+            "/xhr/cors-expose-star.sub.any.html",
+        ),
+    ),
 ]
 
 #: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched

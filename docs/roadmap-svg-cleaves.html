@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-04",
  "counts": {
-  "open": 375,
+  "open": 376,
   "fixed": 554,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 929,
+ "total_bugs": 930,
  "phases": [
   {
    "id": "P0",
@@ -5427,7 +5427,8 @@
         "BUG-971",
         "BUG-972",
         "BUG-973",
-        "BUG-979"
+        "BUG-979",
+        "BUG-980"
        ]
       },
       {
@@ -9454,6 +9455,13 @@
    "status": "open",
    "title": "`contentWindow`/именованный доступ к окну — фиксированный список из ~11 IDL-имён, а не живой мост к реальному глобальному объекту фрейма: любой global, который…",
    "component": "js (`crates/js/src/frame_bridge.rs::winFacade`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-980": {
+   "status": "open",
+   "title": "`send()` выполняет весь цикл запрос/ответ синхронно внутри самого вызова (комментарий в коде так и говорит: «Execute synchronously»): все переходы `readyState`…",
+   "component": "js (`crates/js/src/xhr.rs::XMLHttpRequest.prototype.send`)",
    "date": null,
    "debtor": false
   },
