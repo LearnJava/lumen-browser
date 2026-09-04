@@ -40,7 +40,7 @@ use crate::style::{
     Length, LengthOrAuto, MasonryAutoFlow, MixBlendMode, ObjectFit, ObjectPosition, OffsetRotate,
     OutlineColor, OutlineStyle, Overflow, OverscrollBehavior, PointerEvents, Position,
     PositionComponent, PrintColorAdjust, Resize, ScrollSnapAlign, ScrollSnapStop, ScrollSnapType,
-    ScrollbarGutter, ShapeOutside, TextAlignLast, TextOverflow, TouchAction, TransformStyle,
+    ScrollTargetGroup, ScrollbarGutter, ShapeOutside, TextAlignLast, TextOverflow, TouchAction, TransformStyle,
     UnicodeBidi, VerticalAlign, WebkitBoxOrient, WhiteSpace, SHADOW_HOST_SCOPE, SHADOW_SHEETS,
 };
 
@@ -305,6 +305,8 @@ pub fn compute_style(
         overflow_block: Overflow::Visible,
         overflow_inline: Overflow::Visible,
         overflow_clip_margin: None,
+        scroll_marker_group: None,
+        scroll_target_group: ScrollTargetGroup::None,
         text_overflow: TextOverflow::Clip,
         opacity: 1.0,
         outline_width: 3.0,

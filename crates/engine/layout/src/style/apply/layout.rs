@@ -37,6 +37,8 @@ use crate::style::{
     ObjectPosition,
     Position,
     Resize,
+    ScrollMarkerGroup,
+    ScrollTargetGroup,
     ShapeOutside,
     parse_aspect_ratio_value,
     parse_auto_repeat,
@@ -452,6 +454,19 @@ pub(in crate::style) fn apply_decl_layout(
             // `<length>` only (Phase 0 leftover).
             if let Some(parsed) = parse_overflow_clip_margin(val) {
                 style.overflow_clip_margin = Some(parsed);
+            }
+        }
+        "scroll-marker-group" => {
+            // CSS Overflow L5 §scroll-marker-group-property (BUG-505 срез 6):
+            // `none | [before|after] [tabs|links]?`.
+            if let Some(parsed) = ScrollMarkerGroup::parse(val) {
+                style.scroll_marker_group = parsed;
+            }
+        }
+        "scroll-target-group" => {
+            // CSS Overflow L5 §scroll-target-group: `none | auto`.
+            if let Some(v) = ScrollTargetGroup::parse(val) {
+                style.scroll_target_group = v;
             }
         }
         "shape-outside" => {

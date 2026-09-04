@@ -44,8 +44,9 @@ use crate::style::{
     ListStylePosition, ListStyleType, MaskLayer, MasonryAutoFlow, MixBlendMode, ObjectFit,
     ObjectPosition, OffsetRotate, OutlineColor, OutlineStyle, Overflow, OverflowClipMarginBox, OverflowWrap,
     OverscrollBehavior, PointerEvents, Position, PositionComponent, PrintColorAdjust, Quotes,
-    Resize, ScrollbarGutter, ScrollbarWidth, ScrollBehavior, ScrollSnapAlign, ScrollSnapStop,
-    ScrollSnapType, ShapeOutside, StrokeLinecap, StrokeLinejoin, SvgPaint, SvgPaintOrder,
+    Resize, ScrollMarkerGroup, ScrollTargetGroup, ScrollbarGutter, ScrollbarWidth, ScrollBehavior,
+    ScrollSnapAlign, ScrollSnapStop, ScrollSnapType, ShapeOutside, StrokeLinecap, StrokeLinejoin,
+    SvgPaint, SvgPaintOrder,
     TextAlign, TextAlignLast, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle,
     TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle, TextOrientation,
     TextOverflow, TextShadow, TextTransform, TextUnderlinePosition, TextWrapMode, TextWrapStyle,
@@ -317,6 +318,12 @@ pub struct ComputedStyle {
     /// supported the `<length>` half of `[<visual-box> || <length [0,∞]>]`).
     /// `None` means unset (initial). Не наследуется.
     pub overflow_clip_margin: Option<(OverflowClipMarginBox, Length)>,
+    /// CSS Overflow L5 §scroll-marker-group-property (BUG-505 срез 6).
+    /// `None` = initial `none`. Не наследуется.
+    pub scroll_marker_group: Option<ScrollMarkerGroup>,
+    /// CSS Overflow L5 §scroll-target-group. `ScrollTargetGroup::None` =
+    /// initial `none` (BUG-505 срез 6). Не наследуется.
+    pub scroll_target_group: ScrollTargetGroup,
     /// CSS UI L4 §10.1 — text-overflow. Не наследуется.
     pub text_overflow: TextOverflow,
     /// CSS Color L3 §3.2 — opacity (0.0..=1.0). Не наследуется. Работает
@@ -1065,6 +1072,8 @@ impl ComputedStyle {
             overflow_block: Overflow::Visible,
             overflow_inline: Overflow::Visible,
             overflow_clip_margin: None,
+            scroll_marker_group: None,
+            scroll_target_group: ScrollTargetGroup::None,
             text_overflow: TextOverflow::Clip,
             opacity: 1.0,
             outline_width: 3.0,

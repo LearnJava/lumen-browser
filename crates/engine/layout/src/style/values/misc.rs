@@ -194,6 +194,112 @@ impl OverflowClipMarginBox {
     }
 }
 
+/// CSS Overflow L5 §scroll-target-group — `none | auto`. Not to be confused
+/// with `scroll-marker-group`: this property opts an element's descendant
+/// scroll-snap targets into an implicit `::scroll-marker` group, it doesn't
+/// place a pseudo-element.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollTargetGroup {
+    #[default]
+    None,
+    Auto,
+}
+
+impl ScrollTargetGroup {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "auto" => Some(Self::Auto),
+            _ => None,
+        }
+    }
+
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Auto => "auto",
+        }
+    }
+}
+
+/// `before`/`after` half of `scroll-marker-group`'s value (BUG-505 срез 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollMarkerGroupPlacement {
+    Before,
+    After,
+}
+
+/// The experimental `tabs`/`links` interaction-mode component (tentative,
+/// github.com/w3c/csswg-drafts/issues/12122 — not in the stable spec text).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollMarkerGroupMode {
+    Tabs,
+    Links,
+}
+
+/// CSS Overflow L5 §scroll-marker-group-property. Grammar: `none | [ before
+/// | after ] [ tabs | links ]?` — order-dependent (the direction keyword
+/// must come first; `links after`/`tabs before` are invalid, confirmed by
+/// WPT `scroll-markers-invalid{,.tentative}.html`), unlike `scrollbar-
+/// gutter`'s order-independent `&&` combinator above. The property's own
+/// `none` initial value is represented by the *absence* of this type
+/// (`ComputedStyle::scroll_marker_group: Option<Self>`), not a variant of
+/// it — there's nothing to place `before`/`after` when the value is `none`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollMarkerGroup {
+    pub placement: ScrollMarkerGroupPlacement,
+    pub mode: Option<ScrollMarkerGroupMode>,
+}
+
+impl ScrollMarkerGroup {
+    /// Parses the whole property value, `none` included. `Some(None)` for
+    /// `none`, `Some(Some(value))` for a valid placement(+mode), `None` for
+    /// anything invalid — the double `Option` mirrors the property's own
+    /// value space (initial-as-absence) rather than reusing this module's
+    /// usual bare-`Option<Self>` `parse` convention.
+    pub fn parse(s: &str) -> Option<Option<Self>> {
+        let lc = s.trim().to_ascii_lowercase();
+        if lc == "none" {
+            return Some(None);
+        }
+        let tokens: Vec<&str> = lc.split_whitespace().collect();
+        match tokens.as_slice() {
+            [side] => Self::parse_placement(side)
+                .map(|placement| Some(Self { placement, mode: None })),
+            [side, mode] => {
+                let placement = Self::parse_placement(side)?;
+                let mode = match *mode {
+                    "tabs" => ScrollMarkerGroupMode::Tabs,
+                    "links" => ScrollMarkerGroupMode::Links,
+                    _ => return None,
+                };
+                Some(Some(Self { placement, mode: Some(mode) }))
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_placement(s: &str) -> Option<ScrollMarkerGroupPlacement> {
+        match s {
+            "before" => Some(ScrollMarkerGroupPlacement::Before),
+            "after" => Some(ScrollMarkerGroupPlacement::After),
+            _ => None,
+        }
+    }
+
+    pub fn to_css(self) -> String {
+        let side = match self.placement {
+            ScrollMarkerGroupPlacement::Before => "before",
+            ScrollMarkerGroupPlacement::After => "after",
+        };
+        match self.mode {
+            None => side.to_string(),
+            Some(ScrollMarkerGroupMode::Tabs) => format!("{side} tabs"),
+            Some(ScrollMarkerGroupMode::Links) => format!("{side} links"),
+        }
+    }
+}
+
 /// CSS Lists L3 §2.1 — markers для list items.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum ListStyleType {

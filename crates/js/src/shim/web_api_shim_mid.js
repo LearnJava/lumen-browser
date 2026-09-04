@@ -1671,6 +1671,10 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     // the literal token, not the resolved one (same reasoning as
     // `pointer-events`' SVG aliases, срез 10).
     'scrollbar-width': ['auto', 'thin', 'none'],
+    // CSS Overflow L5 §scroll-target-group (BUG-505 срез 6): plain `none |
+    // auto` — fits this table directly, unlike `scroll-marker-group` below
+    // (order-dependent two-token grammar, own canon function).
+    'scroll-target-group': ['none', 'auto'],
     'ruby-position': ['over', 'under', 'alternate'],
     'ruby-align':    ['start', 'center', 'space-between', 'space-around'],
     'ruby-merge':    ['separate', 'merge', 'auto'],
@@ -1923,6 +1927,31 @@ function _lumen_split_top_level_ws_quoted(s) {
     return tokens;
 }
 
+// CSS Overflow L5 §scroll-marker-group-property (BUG-505 срез 6): `none |
+// [ before | after ] [ tabs | links ]?` — order-dependent (the direction
+// keyword must come first: `links after`/`tabs before` are invalid), unlike
+// `scrollbar-gutter`'s order-independent `&&` combinator above. The
+// `tabs`/`links` component is a tentative extension confirmed by WPT
+// `scroll-markers-{invalid,computed}.tentative.html`
+// (github.com/w3c/csswg-drafts/issues/12122). Backed by a real Rust
+// `ComputedStyle` field (`scroll_marker_group`, `style/values/misc.rs`)
+// since — unlike `block-ellipsis`/`continue` below — this property has a
+// `-computed.html` test.
+function _lumen_css_canonical_scroll_marker_group(strVal) {
+    var v = strVal.trim().toLowerCase();
+    if (v === 'none') return 'none';
+    var tokens = _lumen_split_top_level_ws(v);
+    if (tokens.length === 1 && (tokens[0] === 'before' || tokens[0] === 'after')) {
+        return tokens[0];
+    }
+    if (tokens.length === 2 &&
+        (tokens[0] === 'before' || tokens[0] === 'after') &&
+        (tokens[1] === 'tabs' || tokens[1] === 'links')) {
+        return tokens[0] + ' ' + tokens[1];
+    }
+    return null;
+}
+
 // CSS Overflow L4 §propdef-block-ellipsis (BUG-505 срез 2): `no-ellipsis |
 // ellipsis | <string>` — single token only, no combos (confirmed by
 // `block-ellipsis-invalid.html`: `'none auto'`, `'ellipsis "string"'` etc.
@@ -2139,6 +2168,9 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (key === 'overflow-clip-margin') {
         return _lumen_css_canonical_overflow_clip_margin(strVal);
     }
+    if (key === 'scroll-marker-group') {
+        return _lumen_css_canonical_scroll_marker_group(strVal);
+    }
     return strVal;
 }
 
@@ -2233,7 +2265,12 @@ function _lumen_make_style(nid) {
                 key === 'continue' ||
                 key === 'max-lines' ||
                 key === 'line-clamp' ||
-                key === 'overflow-clip-margin') {
+                key === 'overflow-clip-margin' ||
+                // BUG-505 срез 6: `scroll-marker-group`'s own canon function
+                // (`scroll-target-group` needs no separate arm — it's a
+                // plain `_LUMEN_KEYWORD_PROPERTIES` entry above, already
+                // covered by that check in this same condition).
+                key === 'scroll-marker-group') {
                 var canon = _lumen_canonicalize_longhand(key, strVal);
                 if (canon === null || canon === undefined) return; // invalid value: no-op
                 obj[key] = canon;
