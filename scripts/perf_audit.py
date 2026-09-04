@@ -1,18 +1,35 @@
 #!/usr/bin/env python3
-"""Перф-аудит корпуса реальных сайтов (дорожка PERF, ROADMAP.md).
+"""Перф-аудит корпуса реальных сайтов (дорожка PERF, ROADMAP.md, AUDIT-1).
 
-Режим по умолчанию — ЖИВОЙ: один запуск lumen.exe с GUI-окном
-(`--mcp-live-port`), каждый сайт корпуса открывается в НОВОЙ вкладке
-(MCP-инструмент `new_tab` — вкладка становится активной; к концу
-прогона в окне 14 вкладок, как в реальной сессии) — видно, как рендерится
-каждый сайт (визуальный анализ), а RAM одного процесса замеряется
-кумулятивно по мере накопления вкладок. На сайт собираются:
-время до document_ready, RAM тек/пик, JS-ошибки консоли, CPU-скриншот
-(resource://screenshot). Зависший сайт фиксируется как TIMEOUT, мёртвое
-окно — как DEAD с перезапуском браузера (сам перезапуск — находка).
+Живой прогон с GUI-окном (`--mcp-live-port`) — три РЕЖИМА (`--mode`), каждый
+измеряет своё, не смешивать в одном выводе (BUG-992 — «сегодняшний прогон
+это B, а читается как A»):
 
-Режим --phases — headless-разложение по фазам: три замера на сайт
-одним бинарём:
+  --mode stability (B, default) — один процесс на весь корпус: ровно то, что
+    ловит накопление RAM, утечки, деградацию и падения между сайтами. Каждый
+    сайт — НОВАЯ вкладка (MCP `new_tab`), вкладки не закрываются (намеренно).
+    Прогонять партиями по 15-20 сайтов (`--only`) — иначе к сороковому сайту
+    таблица меряет усталость процесса, а не сайты.
+  --mode compat (A) — свежий процесс lumen НА КАЖДЫЙ сайт: числа сопоставимы
+    между сайтами, потому что ни один не наследует RAM/вкладки предыдущего.
+    Дороже по времени (запуск процесса на сайт), зато честная кросс-сайтовая
+    метрика (старт, готовность, память, JS-ошибки, рендер).
+  --mode session (C) — одна сессия: `--session-tabs` вкладок (default 20),
+    затем скролл/назад-вперёд/попап (через `eval`: history.back/forward(),
+    window.open())/проверка фрейма/приближённое закрытие. Ограничение: MCP
+    (`crates/mcp/src/server.rs`) не даёт `switch_tab`/`close_tab` — только
+    последняя открытая вкладка управляема, «закрытие» это навигация НА
+    about:blank последней вкладки, а не закрытие всех N.
+
+На сайт собираются: время до document_ready, RAM тек/пик, JS-ошибки консоли,
+CPU-скриншот (resource://screenshot). Статус — по единой таксономии
+(`classify_status`): OK / DEGRADED / BROKEN_RENDER / TIMEOUT / HUNG / DEAD,
+плюс внешние SITE_REFUSED (401/403) / NET_FAIL (сеть). BROKEN_RENDER —
+подозрение (health-log эвристика ИЛИ повтор кадра в прогоне), точность
+ограничена BUG-993 (эвристика и путь снимка расходятся в обе стороны).
+
+Режим --phases — headless-разложение по фазам, точечный разбор ОДНОГО сайта
+(не заменяет ни один из трёх режимов выше), три замера одним бинарём:
 
   1. --dump-source      -> t_source      (сеть + декодирование + парсинг HTML)
   2. --dump-layout      -> t_layout      (+ каскад + layout + JS; LUMEN_PROFILE_TREE=1)
@@ -28,8 +45,9 @@
 /lumen-perf-audit (.claude/skills/lumen-perf-audit/SKILL.md).
 
 Примеры:
-  python scripts/perf_audit.py                          # живой прогон корпуса с GUI
-  python scripts/perf_audit.py --dwell 8                # дольше показывать каждый сайт
+  python scripts/perf_audit.py                          # режим B (stability), весь корпус
+  python scripts/perf_audit.py --mode compat --only lenta,rbc  # режим A, пара сайтов
+  python scripts/perf_audit.py --mode session --session-tabs 10
   python scripts/perf_audit.py --phases --only lenta    # headless-разложение по фазам
   python scripts/perf_audit.py --compare docs/perf/runs/2026-07-17.json
   LUMEN_EXE=path/to/lumen.exe python scripts/perf_audit.py
@@ -39,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
@@ -125,6 +144,72 @@ def network_failures(text: str, url: str) -> list[str]:
         if host == ref_host and ln not in out:
             out.append(ln)
     return out
+
+
+HEALTH_LOG_PATH = REPO_ROOT / "health.log"
+
+
+def read_health_events(path: Path, pos: int) -> tuple[list[dict], int]:
+    """Новые строки `health.log` (JSONL) с позиции pos; битые строки пропускаются."""
+    try:
+        with path.open("rb") as f:
+            f.seek(pos)
+            chunk = f.read()
+    except OSError:
+        return [], pos
+    events = []
+    for ln in chunk.decode("utf-8", errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            events.append(json.loads(ln))
+        except json.JSONDecodeError:
+            continue
+    return events, pos + len(chunk)
+
+
+def classify_status(
+    *,
+    dead: bool,
+    hung: bool,
+    http_status: int | None,
+    net_failure: bool,
+    ready: bool,
+    broken_render: bool,
+    have_png: bool,
+    js_error_count: int,
+) -> str:
+    """Единая таксономия исхода сайта (AUDIT-1) для всех трёх режимов прогона.
+
+    Успех определяется как навигация + готовность + отрисованный контент +
+    отсутствие JS-ошибок, а не бинарным document_ready:
+
+    - DEAD/HUNG — окно упало / перестало качать очередь сообщений необратимо.
+    - SITE_REFUSED/NET_FAIL — сайт/сеть не пустили (401/403, DNS/TLS/соединение)
+      — не отказ движка, вынесены за пределы шестёрки исходов.
+    - TIMEOUT — не дошли до document_ready и это не отказ сайта/сети.
+    - BROKEN_RENDER — готовность есть, но признаки говорят «ничего не
+      нарисовано» (health-log эвристика ИЛИ дублирующийся кадр в прогоне).
+      Достоверность этого исхода ограничена BUG-993 (эвристика и путь снимка
+      противоречат друг другу в обе стороны) — читать как «подозрение», не факт.
+    - DEGRADED — готовность и хоть какой-то кадр есть, но верификация кадра
+      недоступна (нет PNG) или страница кричит JS-ошибками в консоль.
+    - OK — готовность, кадр, ни одной консольной JS-ошибки.
+    """
+    if dead:
+        return "DEAD"
+    if hung:
+        return "HUNG"
+    if http_status in (401, 403):
+        return "SITE_REFUSED"
+    if not ready:
+        return "NET_FAIL" if net_failure else "TIMEOUT"
+    if broken_render:
+        return "BROKEN_RENDER"
+    if not have_png or js_error_count > 0:
+        return "DEGRADED"
+    return "OK"
 
 
 def find_exe(cli_exe: str | None) -> Path:
@@ -549,13 +634,20 @@ class LiveBrowser:
         port = _free_port()
         self.log_path = self.out_dir / f"live.stderr.{self.restarts}.log"
         log = self.log_path.open("wb")
+        env = os.environ.copy()
+        env["LUMEN_HEALTH_LOG"] = "1"  # engine truncates health.log on init — per-process, not per-site
         self.proc = subprocess.Popen(
             [str(self.exe), "--mcp-live-port", str(port), "--maximized", "about:blank"],
-            stdout=subprocess.DEVNULL, stderr=log, cwd=str(REPO_ROOT),
+            stdout=subprocess.DEVNULL, stderr=log, cwd=str(REPO_ROOT), env=env,
         )
         self.mcp = Mcp(port, self.timeout, self.log_path)
         self.hung.watch_pid(self.proc.pid)
         self.ram.watch(self.proc)
+        self.health_log_pos = 0
+
+    def health_events_since(self, pos: int) -> tuple[list[dict], int]:
+        """Новые записи health.log (broken_render/panic/…) с позиции pos."""
+        return read_health_events(HEALTH_LOG_PATH, pos)
 
     def stderr_since(self, pos: int) -> str:
         """Сырой фрагмент stderr с позиции pos: сетевой лог (← status, ✗ сбой), сообщения движка."""
@@ -601,11 +693,25 @@ class LiveBrowser:
 
 
 def audit_site_live(
-    br: LiveBrowser, slug: str, url: str, out_dir: Path, timeout: int, dwell: float, scroll_ticks: int
+    br: LiveBrowser,
+    slug: str,
+    url: str,
+    out_dir: Path,
+    timeout: int,
+    dwell: float,
+    scroll_ticks: int,
+    png_hash_counts: dict[str, int] | None = None,
 ) -> dict:
-    """Один сайт в живом окне: навигация → готовность → скролл → скриншот → консоль → RAM."""
+    """Один сайт в живом окне: навигация → готовность → скролл → скриншот → консоль → RAM.
+
+    Итоговый `status` — по единой таксономии AUDIT-1 (`classify_status`), а не
+    бинарному document_ready.
+    """
     rec: dict = {"slug": slug, "url": url, "restarted": False}
     log_pos = br.log_path.stat().st_size if br.log_path.exists() else 0
+    health_pos = br.health_log_pos
+    ready = False
+    net_failure = False
     br.hung.begin_site()
     br.ram.begin_site()
     t0 = time.monotonic()
@@ -623,7 +729,7 @@ def audit_site_live(
         rec["nav_ack_s"] = round(time.monotonic() - t0, 2)
         br.mcp.tool("wait", {"condition": "document_ready", "timeout_ms": timeout * 1000})
         rec["ready_s"] = round(time.monotonic() - t0, 2)
-        rec["status"] = "OK"
+        ready = True
     except RuntimeError as e:  # error-ответ (чаще всего таймаут wait)
         rec["error"] = str(e)[:200]
         if "own_tab" not in rec or "command timed out" in rec.get("tab_error", "") + str(e):
@@ -640,12 +746,7 @@ def audit_site_live(
         chunk = br.stderr_since(log_pos)
         rec["net_failures"] = network_failures(chunk, url)
         rec["http_status"] = main_http_status(chunk, url)
-        if rec["http_status"] in (401, 403):
-            rec["status"] = "SITE_REFUSED"
-        elif rec["net_failures"]:
-            rec["status"] = "NET_FAIL"
-        else:
-            rec["status"] = "TIMEOUT"
+        net_failure = bool(rec["net_failures"])
     except (OSError, json.JSONDecodeError, socket.timeout) as e:  # окно умерло/зависло
         rec["status"] = "DEAD"
         rec["error"] = str(e)[:200]
@@ -672,8 +773,13 @@ def audit_site_live(
         contents = br.mcp.resource("resource://screenshot")
         if contents and contents[0].get("data"):
             png = out_dir / f"{slug}.png"
-            png.write_bytes(base64.b64decode(contents[0]["data"]))
+            png_bytes = base64.b64decode(contents[0]["data"])
+            png.write_bytes(png_bytes)
             rec["png_size"] = png_size(png)
+            if png_hash_counts is not None:
+                h = hashlib.md5(png_bytes).hexdigest()  # noqa: S324 — дедуп кадров, не крипто
+                png_hash_counts[h] = png_hash_counts.get(h, 0) + 1
+                rec["png_hash"] = h
 
         console = br.mcp.resource("resource://console")
         entries = json.loads(console[0].get("text", "[]")) if console else []
@@ -693,11 +799,8 @@ def audit_site_live(
             rec["restarted"] = True
     chunk = br.stderr_since(log_pos)
     rec.setdefault("net_failures", network_failures(chunk, url))
+    net_failure = net_failure or bool(rec["net_failures"])
     rec["http_status"] = main_http_status(chunk, url)
-    if rec["status"] == "OK" and not rec.get("png_size"):
-        # Готовность есть, кадра нет — отдельный исход, а не тихое поле (BUG-992)
-        rec["status"] = "OK_NO_PNG"
-        rec.setdefault("no_png_reason", rec.get("error", "resource://screenshot не вернул кадр"))
     rec["stderr_errors"], rec["stderr_error_sigs"], _ = br.stderr_errors_since(log_pos)
     rec.update(br.ram.site_stats())
     rec.update(br.hung.site_stats())
@@ -706,6 +809,25 @@ def audit_site_live(
     if proc_total:
         rec["proc_peak_mb_total"] = proc_total.get("peak_mb")
         rec["proc_cpu_s_total"] = proc_total.get("cpu_s")
+
+    health_events, br.health_log_pos = br.health_events_since(health_pos)
+    rec["broken_render_signal"] = any(e.get("kind") == "broken_render" for e in health_events)
+    rec["suspected_duplicate_frame"] = bool(
+        png_hash_counts is not None and rec.get("png_hash") and png_hash_counts[rec["png_hash"]] > 1
+    )
+    js_error_count = len(rec.get("console_errors") or [])
+    rec["status"] = classify_status(
+        dead=False,
+        hung=False,
+        http_status=rec.get("http_status"),
+        net_failure=net_failure,
+        ready=ready,
+        broken_render=rec["broken_render_signal"] or rec["suspected_duplicate_frame"],
+        have_png=bool(rec.get("png_size")),
+        js_error_count=js_error_count,
+    )
+    if rec["status"] == "DEGRADED" and not rec.get("png_size"):
+        rec.setdefault("no_png_reason", rec.get("error", "resource://screenshot не вернул кадр"))
     return rec
 
 
@@ -733,9 +855,12 @@ def summary_md_live(results: list[dict], exe: Path, commit: str, restarts: int) 
         )
     lines += [
         "",
-        "Статусы: OK — дошли до document_ready и снят скриншот; OK_NO_PNG — страница готова, кадр не получен;",
+        "Статусы (AUDIT-1): OK — готовность + кадр + ноль JS-ошибок консоли; DEGRADED — готовность есть,",
+        "но кадр не подтверждён или есть JS-ошибки; BROKEN_RENDER — готовность есть, но признаки говорят",
+        "«ничего не нарисовано» (эвристика health-log ИЛИ повтор кадра в прогоне — читать как подозрение,",
+        "точность ограничена BUG-993); TIMEOUT — не дошли до готовности не по вине сайта/сети;",
         "SITE_REFUSED — главный документ вернул 401/403; NET_FAIL — сетевой сбой главного документа",
-        "(DNS/TLS/соединение/блок); TIMEOUT — движок не довёл страницу до готовности; HUNG/DEAD — окно зависло/упало.",
+        "(DNS/TLS/соединение/блок); HUNG/DEAD — окно зависло/упало необратимо.",
         "peak_mb/cpu_s — на сайт (максимум/дельта замеров); накопительные итоги процесса —",
         "proc_peak_mb_total/proc_cpu_s_total в results.json.",
     ]
@@ -795,6 +920,141 @@ def compare(results: list[dict], prev_path: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
+def iter_stability(exe: Path, sites: list, out_dir: Path, timeout: int, dwell: float, scroll_ticks: int, stats: dict):
+    """Режим B (стабильность): один процесс на весь корпус — ровно то, что
+    ловит накопление, утечки, деградацию и падения между сайтами. Прогонять
+    корпус партиями по 15-20 сайтов (`--only`) — так удобнее читать таблицу
+    и падение на N-м сайте не теряет разбор предыдущей партии."""
+    png_hash_counts: dict[str, int] = {}
+    br = LiveBrowser(exe, out_dir, timeout)
+    try:
+        for slug, url in sites:
+            yield audit_site_live(br, slug, url, out_dir, timeout, dwell, scroll_ticks, png_hash_counts)
+    finally:
+        stats["restarts"] = br.restarts
+        br.close()
+
+
+def iter_compat(exe: Path, sites: list, out_dir: Path, timeout: int, dwell: float, scroll_ticks: int, stats: dict):
+    """Режим A (совместимость): свежий процесс на каждый сайт — числа
+    сопоставимы между сайтами, потому что ни один не наследует RAM/вкладки
+    предыдущего (в отличие от режима B, где это накопление — сама суть)."""
+    png_hash_counts: dict[str, int] = {}
+    total_restarts = 0
+    for slug, url in sites:
+        br = LiveBrowser(exe, out_dir, timeout)
+        try:
+            yield audit_site_live(br, slug, url, out_dir, timeout, dwell, scroll_ticks, png_hash_counts)
+        finally:
+            total_restarts += br.restarts
+            br.close()
+    stats["restarts"] = total_restarts
+
+
+def iter_session(exe: Path, sites: list, out_dir: Path, timeout: int, dwell: float, scroll_ticks: int, tab_count: int, stats: dict):
+    """Режим C (сессия): одна сессия — N вкладок, скролл, назад/вперёд и попап
+    (через `eval`: `history.back/forward()`, `window.open()`), проверка
+    фрейма, приближённое закрытие.
+
+    Ограничение тулинга: MCP (`crates/mcp/src/server.rs`) не даёт `switch_tab`
+    ни `close_tab` — только последняя открытая вкладка активна и управляема.
+    «Закрытие» поэтому реализовано как навигация последней активной вкладки на
+    `about:blank`; остальные N-1 вкладок сессии программно не закрываются —
+    задокументированный пробел, не тихая недоработка (см. `note` записи
+    `_session_close_last_tab`).
+    """
+    png_hash_counts: dict[str, int] = {}
+    picked = sites[:tab_count] if tab_count else sites
+    br = LiveBrowser(exe, out_dir, timeout)
+    try:
+        for slug, url in picked:
+            rec = audit_site_live(br, slug, url, out_dir, timeout, dwell, scroll_ticks, png_hash_counts)
+            rec["session_step"] = "tab_open"
+            yield rec
+
+        nav_a = picked[0][1] if picked else "about:blank"
+        nav_b = picked[min(1, len(picked) - 1)][1] if picked else "about:blank"
+        # history.back()/forward() идут через JS (eval), а не через шелл-навигацию —
+        # готовность после них не всегда даёт тот же document_ready-переход, что
+        # обычная навигация (известный класс гэпов вокруг history.*, см.
+        # docs/engine-gaps.md), поэтому таймаут короткий и неуспех не считается
+        # фатальным для остальных шагов сессии — settle-пауза ниже гарантирует,
+        # что к следующему шагу (frame) JS-контекст стабилен независимо от исхода.
+        back_fwd = {"slug": "_session_back_forward", "url": nav_b, "restarted": False, "session_step": "back_forward"}
+        t0 = time.monotonic()
+        try:
+            br.mcp.tool("navigate", {"url": nav_a})
+            br.mcp.tool("wait", {"condition": "document_ready", "timeout_ms": timeout * 1000})
+            br.mcp.tool("navigate", {"url": nav_b})
+            br.mcp.tool("wait", {"condition": "document_ready", "timeout_ms": timeout * 1000})
+        except RuntimeError as e:
+            back_fwd["setup_error"] = str(e)[:200]
+        try:
+            br.mcp.tool("eval", {"code": "history.back()"})
+            br.mcp.tool("wait", {"condition": "document_ready", "timeout_ms": 5000})
+            back_fwd["back_ok"] = True
+        except RuntimeError as e:
+            back_fwd["back_ok"] = False
+            back_fwd["error"] = str(e)[:200]
+        time.sleep(1.0)
+        try:
+            br.mcp.tool("eval", {"code": "history.forward()"})
+            br.mcp.tool("wait", {"condition": "document_ready", "timeout_ms": 5000})
+            back_fwd["forward_ok"] = True
+        except RuntimeError as e:
+            back_fwd["forward_ok"] = False
+            back_fwd.setdefault("error", str(e)[:200])
+        time.sleep(1.0)  # settle перед следующим шагом (frame), см. комментарий выше
+        back_fwd["elapsed_s"] = round(time.monotonic() - t0, 2)
+        back_fwd["status"] = "OK" if back_fwd.get("back_ok") and back_fwd.get("forward_ok") else "DEGRADED"
+        yield back_fwd
+
+        popup = {"slug": "_session_popup", "url": "", "restarted": False, "session_step": "popup"}
+        try:
+            r = br.mcp.tool("eval", {"code": "typeof window.open('about:blank') !== 'undefined'"})
+            popup["opened"] = bool(r.get("result"))
+            popup["status"] = "OK" if popup["opened"] else "DEGRADED"
+        except RuntimeError as e:
+            popup["opened"] = False
+            popup["error"] = str(e)[:200]
+            popup["status"] = "DEGRADED"
+        yield popup
+
+        frame = {"slug": "_session_frame", "url": "", "restarted": False, "session_step": "frame"}
+        try:
+            r = br.mcp.tool("eval", {"code": "document.querySelectorAll('iframe').length"})
+            frame["iframe_count"] = r.get("result")
+            frame["status"] = "OK"
+        except RuntimeError as e:
+            frame["iframe_count"] = None
+            frame["error"] = str(e)[:200]
+            frame["status"] = "DEGRADED"
+        yield frame
+
+        close_rec = {"slug": "_session_close_last_tab", "url": "about:blank", "restarted": False, "session_step": "close"}
+        before = br.ram.site_stats()
+        try:
+            br.mcp.tool("navigate", {"url": "about:blank"})
+            br.mcp.tool("wait", {"condition": "document_ready", "timeout_ms": 10000})
+            close_rec["status"] = "OK"
+        except RuntimeError as e:
+            close_rec["status"] = "DEGRADED"
+            close_rec["error"] = str(e)[:200]
+        time.sleep(1.0)
+        after = br.ram.site_stats()
+        close_rec["cur_mb_before"] = before.get("cur_mb")
+        close_rec["cur_mb_after"] = after.get("cur_mb")
+        close_rec["note"] = (
+            f"{len(picked)} вкладок открыто за сессию; программно закрыта (навигацией на about:blank) "
+            "только последняя активная — MCP не даёт switch_tab/close_tab, остальные остаются открытыми "
+            "(известное ограничение тулинга)"
+        )
+        yield close_rec
+    finally:
+        stats["restarts"] = br.restarts
+        br.close()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--corpus", default=str(DEFAULT_CORPUS), help="файл корпуса (slug url)")
@@ -802,7 +1062,13 @@ def main() -> None:
     ap.add_argument("--exe", help="путь к lumen.exe (иначе $LUMEN_EXE / target/*)")
     ap.add_argument("--timeout", type=int, default=240, help="таймаут одной стадии/навигации, с (default 240)")
     ap.add_argument("--compare", help="results.json предыдущего прогона для дельта-таблицы")
-    ap.add_argument("--phases", action="store_true", help="headless-разложение по фазам вместо живого окна")
+    ap.add_argument("--phases", action="store_true", help="headless-разложение по фазам вместо живого окна (точечный разбор одного сайта)")
+    ap.add_argument(
+        "--mode", choices=("stability", "compat", "session"), default="stability",
+        help="режим живого прогона (AUDIT-1): stability=B (один процесс на корпус, default), "
+             "compat=A (свежий процесс на сайт, числа сопоставимы), session=C (одна сессия: вкладки/скролл/назад-вперёд/попап/фрейм)",
+    )
+    ap.add_argument("--session-tabs", type=int, default=20, help="--mode session: сколько сайтов открыть вкладками (default 20)")
     ap.add_argument("--dwell", type=float, default=3.0, help="live: секунд показывать каждый сайт (default 3)")
     ap.add_argument("--scroll-ticks", type=int, default=4, help="live: щелчков скролла вниз/вверх (default 4)")
     args = ap.parse_args()
@@ -816,11 +1082,11 @@ def main() -> None:
         ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=str(REPO_ROOT)
     ).stdout.strip()
 
-    mode = "phases" if args.phases else "live"
+    mode = "phases" if args.phases else args.mode
     print(f"Аудит {len(sites)} сайтов ({mode}), бинарь {exe}, таймаут {args.timeout}с")
     print(f"Результаты: {out_dir}")
-    results = []
-    br = None if args.phases else LiveBrowser(exe, out_dir, args.timeout)
+    results: list[dict] = []
+    stats = {"restarts": 0}
 
     def flush_results() -> None:
         """Промежуточное сохранение — падение на N-м сайте не теряет предыдущие."""
@@ -834,36 +1100,44 @@ def main() -> None:
             encoding="utf-8",
         )
 
-    try:
+    if args.phases:
         for i, (slug, url) in enumerate(sites, 1):
             print(f"[{i}/{len(sites)}] {slug} {url} ... ", end="", flush=True)
-            if args.phases:
-                rec = audit_site(exe, slug, url, out_dir, args.timeout)
-                note = f"total={rec['screenshot']['wall_s']}s dominant={dominant_phase(rec)}"
-            else:
-                rec = audit_site_live(br, slug, url, out_dir, args.timeout, args.dwell, args.scroll_ticks)
-                n_err = len(rec.get('console_errors', [])) + len(rec.get('stderr_errors', []))
-                hung = f" hung={rec['hung_total_s']}s" if rec.get('hung_total_s') else ""
-                note = (f"ready={rec.get('ready_s', '—')}s ram={rec.get('cur_mb', '—')}MB{hung} "
-                        f"err={n_err}"
-                        + (" RESTARTED" if rec["restarted"] else ""))
+            rec = audit_site(exe, slug, url, out_dir, args.timeout)
+            note = f"total={rec['screenshot']['wall_s']}s dominant={dominant_phase(rec)}"
             results.append(rec)
             print(f"{rec['status']} {note}")
             flush_results()
-    finally:
-        if br is not None:
-            br.close()
+    else:
+        if mode == "stability":
+            gen = iter_stability(exe, sites, out_dir, args.timeout, args.dwell, args.scroll_ticks, stats)
+        elif mode == "compat":
+            gen = iter_compat(exe, sites, out_dir, args.timeout, args.dwell, args.scroll_ticks, stats)
+        else:
+            gen = iter_session(exe, sites, out_dir, args.timeout, args.dwell, args.scroll_ticks, args.session_tabs, stats)
+        # Закрытие процесса(-ов) идёт в finally самого генератора (LiveBrowser
+        # держится внутри iter_*) — не нужен отдельный try/finally здесь.
+        for i, rec in enumerate(gen, 1):
+            n_err = len(rec.get("console_errors", [])) + len(rec.get("stderr_errors", []))
+            hung = f" hung={rec['hung_total_s']}s" if rec.get("hung_total_s") else ""
+            note = (f"ready={rec.get('ready_s', '—')}s ram={rec.get('cur_mb', '—')}MB{hung} "
+                    f"err={n_err}"
+                    + (" RESTARTED" if rec.get("restarted") else ""))
+            results.append(rec)
+            print(f"[{i}] {rec['slug']} {rec.get('url', '')} -> {rec['status']} {note}")
+            flush_results()
 
     md = (summary_md(results, exe, commit) if args.phases
-          else summary_md_live(results, exe, commit, br.restarts))
+          else summary_md_live(results, exe, commit, stats["restarts"]))
     if args.compare:
         md += compare(results, Path(args.compare))
     (out_dir / "summary.md").write_text(md, encoding="utf-8")
     print("\n" + md)
-    ok_slugs = [r["slug"] for r in results if r["status"] in ("OK", "OK_NO_PNG")]
     outside = ("SITE_REFUSED", "NET_FAIL")
+    healthy = ("OK", "DEGRADED") if not args.phases else ("OK", "OK_NO_PNG")
+    ok_slugs = [r["slug"] for r in results if r["status"] in healthy]
     refused = [r["slug"] for r in results if r["status"] in outside]
-    problems = [r["slug"] for r in results if r["status"] not in ("OK", "OK_NO_PNG", *outside)]
+    problems = [r["slug"] for r in results if r["status"] not in (*healthy, *outside)]
     print(
         f"Готово: {len(ok_slugs)}/{len(results)} дошли до document_ready"
         + (f", закрыты сайтом/сетью ({', '.join(refused)})" if refused else "")
