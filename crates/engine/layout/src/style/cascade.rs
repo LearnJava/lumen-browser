@@ -237,6 +237,8 @@ pub fn compute_style(
         text_decoration_skip_ink: inherited.text_decoration_skip_ink,
         accent_color: inherited.accent_color,
         color_scheme: inherited.color_scheme,
+        // CSS Color HDR L1 §2: dynamic-range-limit is inherited. BUG-508.
+        dynamic_range_limit: inherited.dynamic_range_limit,
         // CSS Color Adjustment L1 §4: forced-color-adjust IS inherited.
         forced_color_adjust: inherited.forced_color_adjust,
         // CSS Variables L1: все custom properties inherited.

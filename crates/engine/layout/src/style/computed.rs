@@ -36,7 +36,7 @@ use crate::style::{
     Appearance, BackfaceVisibility, BackgroundLayer, BorderCollapse, BorderStyle, BoxShadow,
     BoxSizing, BreakValue, ClearSide, ClipPath, Color, ColorScheme, ContainerType, ContainFlags,
     Content, ContentVisibility, CssColor, CssContinue, Cursor, CustomProps, default_font_family,
-    Direction, Display, EmptyCells, FieldSizing, FillRule, FilterFn, FlexBasis, FlexDirection,
+    Direction, Display, DynamicRangeLimit, EmptyCells, FieldSizing, FillRule, FilterFn, FlexBasis, FlexDirection,
     FlexWrap, FloatSide, FontFeatureSetting, FontOpticalSizing, FontPalette, FontSizeAdjust,
     FontStretch, FontStyle, FontVariantCaps, FontVariantEmoji, FontVariationSetting, FontWeight,
     ForcedColorAdjust, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, Hyphens, ImageRendering,
@@ -358,6 +358,10 @@ pub struct ComputedStyle {
     /// CSS Color Adjustment L1 §4 — `forced-color-adjust`. NOT inherited. Initial: `Auto`.
     /// Phase 0: parse + store; применение при Forced Colors Mode — P2.
     pub forced_color_adjust: ForcedColorAdjust,
+    /// CSS Color HDR L1 §2 — `dynamic-range-limit`. Inherited. Initial:
+    /// `no-limit` (`DynamicRangeLimit::default()`). BUG-508. Phase 0: parse
+    /// + store + interpolate — no HDR display pipeline, no rendering effect.
+    pub dynamic_range_limit: DynamicRangeLimit,
     /// CSS Variables L1 — custom properties (`--name`). Все custom properties
     /// inherited (спека: `all custom properties are inherited by default`).
     /// Ключ — полное имя с ведущими `--`, значение — сырой текст из source.
@@ -1083,6 +1087,7 @@ impl ComputedStyle {
             accent_color: None,
             color_scheme: ColorScheme::Normal,
             forced_color_adjust: ForcedColorAdjust::Auto,
+            dynamic_range_limit: DynamicRangeLimit::default(),
             custom_props: CustomProps::default(),
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),

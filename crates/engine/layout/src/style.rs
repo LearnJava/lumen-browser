@@ -195,6 +195,10 @@ pub use values::typography::{
     WhiteSpaceCollapse, BoxShadow, text_font_features,
 };
 pub use values::color::{Color, ColorFloat, CssColor, SystemColor};
+// BUG-508 — CSS Color HDR L1 `dynamic-range-limit`: own module (not folded
+// into an existing values:: group), since it's a standalone spec unrelated
+// to the color/box-model/typography groups above.
+pub use values::dynamic_range_limit::{DynamicRangeLimit, DynamicRangeLimitKeyword, DynamicRangeLimitMix};
 pub use values::box_model::{
     BorderCollapse, BorderStyle, BoxSizing, BreakValue, ClearSide, EmptyCells, FillRule,
     FloatSide, Isolation, MixBlendMode, OutlineColor, OutlineStyle, PaintOrderSlot, Position,
