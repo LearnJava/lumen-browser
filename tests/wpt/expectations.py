@@ -273,6 +273,16 @@ def classify(results: list, test_ids: list) -> dict:
     deviates is informational: an unexpected PASS narrows the ratchet
     (should tighten the committed `.ini`), any other status swap (e.g.
     FAIL -> ERROR) is a side note, not a gate failure.
+
+    A subtest whose name `_expressible_heading` rejects (embedded `\r`/`\n`)
+    is skipped here exactly like `build_expected_ini` skips it on write: that
+    function can never commit an `expected:` line for it, so comparing its
+    always-default (PASS) expectation against a genuinely-failing actual
+    result would flag a *permanent, unfixable* regression on every future
+    `--check` — found in WPT-RUN-7 on `mimesniff/mime-types/parsing.any.html`
+    (13 such subtests). Silently dropping it, not merely downgrading it to
+    "other", matches the writer's own silence — there is no baseline state
+    this could ever compare clean against.
     """
     regressions, improvements, other = [], [], []
 
@@ -298,7 +308,7 @@ def classify(results: list, test_ids: list) -> dict:
         if "expected" in r:
             classify_one(r["test"], None, r["expected"], r["status"])
         for st in r.get("subtests", []):
-            if "expected" in st:
+            if "expected" in st and _expressible_heading(st.get("name", "")):
                 classify_one(r["test"], st.get("name"), st["expected"], st["status"])
 
     # A selected id is a bare file id (`all_vendored_test_ids`/`curated_test_ids`
