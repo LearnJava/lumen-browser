@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-04",
  "counts": {
-  "open": 388,
+  "open": 389,
   "fixed": 554,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 942,
+ "total_bugs": 943,
  "phases": [
   {
    "id": "P0",
@@ -9598,6 +9598,13 @@
    "date": null,
    "debtor": false
   },
+  "BUG-994": {
+   "status": "open",
+   "title": "У коллекций DOM нет `item()`: `document.getElementsByTagName(...).item is not a function`, `a.item is not a function`. Коллекция ведёт себя как массив — индексн…",
+   "component": "js (`crates/js/src/dom.rs` — фабрики коллекций `getElementsByTagName`/`getElementsByClassName`/`querySelectorAll`/`children`)",
+   "date": null,
+   "debtor": false
+  },
   "BUG-001": {
    "status": "fixed",
    "title": "display:none on inline elements not working",
@@ -13935,6 +13942,9 @@
   ],
   "js (`crates/js/src/dom.rs` — у `document` есть `createTextNode`/`createComment`/`createProcessingInstruction`, `createCDATASection` нет ни в шиме, ни в arena-DOM)": [
    "BUG-863"
+  ],
+  "js (`crates/js/src/dom.rs` — фабрики коллекций `getElementsByTagName`/`getElementsByClassName`/`querySelectorAll`/`children`)": [
+   "BUG-994"
   ],
   "js (`crates/js/src/dom.rs` — фрагментный парсер `innerHTML`)": [
    "BUG-744"
