@@ -19,9 +19,14 @@
 //!   `$script,image,stylesheet,font,xmlhttprequest,subdocument,media,other`
 //!   (and `~`-negated forms) restrict a rule to matching request types;
 //!   `$third-party` / `$~third-party` (`first-party`) restrict by party.
-//!   `domain=` and other modifiers (`important`, `match-case`, `csp=`,
-//!   `redirect=`, …) are parsed-and-ignored — the rule keeps its type/party
-//!   scope, never narrows on an unmodelled modifier (no over-allow).
+//!   `domain=` and unmodelled per-request-type keywords (`popup`, `ping`, …)
+//!   are parsed-and-ignored for subresource matching — the rule keeps
+//!   blocking every resource type, never narrows on an unmodelled modifier
+//!   (no over-allow) — but both also disqualify the rule from ever matching a
+//!   top-level document navigation (BUG-989: dropping e.g. `domain=` must not
+//!   silently turn a referrer-conditional ad rule into a full site block).
+//!   Other modifiers (`important`, `match-case`, `csp=`, `redirect=`, …) are
+//!   plain noise.
 
 use std::collections::{HashMap, HashSet};
 
@@ -94,8 +99,9 @@ fn type_option_bit(key: &str) -> Option<u16> {
 
 /// Parsed `$`-options constraining when a [`FilterEntry`] applies.
 ///
-/// Both fields default to "applies always": `types == None` matches every
-/// resource type, `third_party == None` matches first- and third-party alike.
+/// Both `types`/`third_party` default to "applies always": `types == None`
+/// matches every resource type, `third_party == None` matches first- and
+/// third-party alike.
 #[derive(Debug, Clone, Copy)]
 struct RuleOptions {
     /// Allowed resource-type mask, or `None` for "any type".
@@ -103,12 +109,20 @@ struct RuleOptions {
     /// `Some(true)` — only third-party requests, `Some(false)` — only
     /// first-party, `None` — either.
     third_party: Option<bool>,
+    /// `true` when the rule carries a `domain=` referrer condition or a
+    /// recognised-but-unmodelled per-request-type keyword (`popup`, `ping`,
+    /// …). Deliberately kept separate from `types`/`third_party`: it must
+    /// NOT narrow which subresources the rule matches (`domain_option_ignored_not_narrowing`,
+    /// `unmodelled_option_does_not_narrow` — dropping an unmodelled condition
+    /// keeps blocking everything, same as before), it only disqualifies the
+    /// rule from the top-level-navigation exemption below (BUG-989).
+    narrows_beyond_domain: bool,
 }
 
 impl RuleOptions {
     /// Options that match every request (no `$`-restrictions).
     fn all() -> Self {
-        Self { types: None, third_party: None }
+        Self { types: None, third_party: None, narrows_beyond_domain: false }
     }
 
     /// Returns `true` if `ctx` satisfies the type and party restrictions.
@@ -129,9 +143,19 @@ impl RuleOptions {
         // them here removes the over-block where a narrow easylist regex
         // (`/^https?:\/\/[0-9a-z]{5,}\.com\/.*/$script,xhr,domain=…`) matched a
         // bare `example.com`/`github.com` document because its unknown resource
-        // type conservatively satisfied the type mask (BUG-292). Untyped rules
-        // (plain `||host^`) still apply — a domain block covers its document.
-        if ctx.is_top_level && self.types.is_some() {
+        // type conservatively satisfied the type mask (BUG-292).
+        //
+        // `narrows_beyond_domain` extends the same exemption to rules whose
+        // *only* `$`-option is one we parse-and-ignore for subresource
+        // matching (`domain=`, `popup`, `ping`, …): those describe something
+        // narrower than "the whole domain, unconditionally" too, so silently
+        // dropping the condition must not let them block a direct top-level
+        // navigation either (BUG-989 — `||temu.com^$popup,domain=…`,
+        // `||imgur.com^$domain=…`, `||soundcloud.com^$ping` all blocked plain
+        // navigation to the site instead of just the ad/tracking hit they were
+        // written for). Untyped, condition-free rules (plain `||host^`) still
+        // apply — a domain block covers its document.
+        if ctx.is_top_level && (self.types.is_some() || self.narrows_beyond_domain) {
             return false;
         }
         if let (Some(mask), Some(rt)) = (self.types, ctx.resource_type)
@@ -148,14 +172,26 @@ impl RuleOptions {
     }
 }
 
+/// EasyList per-request-type keywords this filter does not model with a
+/// dedicated [`ResourceType`] bit (no request in this engine is ever tagged
+/// with them). Recognising them (without a mask bit) keeps `parse_options`
+/// from treating them as generic ignored noise — see [`RuleOptions::narrows_beyond_domain`].
+const UNMODELLED_TYPE_KEYWORDS: &[&str] = &[
+    "popup", "popunder", "ping", "websocket", "webrtc", "document", "elemhide",
+    "generichide", "genericblock",
+];
+
 /// Parse the option string after `$` into a [`RuleOptions`].
 ///
 /// Positive type options form an allow-list (`$script,image` → only those);
 /// if only negated types are present, the rule applies to all *except* them
 /// (`$~image` → everything but images). `third-party`/`first-party` (and the
-/// `3p`/`1p` aliases) set the party restriction. `domain=` and any unmodelled
-/// modifier are ignored — never narrowing the rule (avoids silently allowing
-/// requests a Phase-1 build would have blocked).
+/// `3p`/`1p` aliases) set the party restriction. `domain=` and unmodelled
+/// per-request-type keywords (`popup`, `ping`, …) set
+/// [`RuleOptions::narrows_beyond_domain`] but otherwise stay ignored — never
+/// narrowing which subresources the rule matches (avoids silently allowing
+/// requests a Phase-1 build would have blocked). Any other modifier
+/// (`important`, `match-case`, `csp=`, `redirect=`, …) is plain noise.
 fn parse_options(opts: &str) -> RuleOptions {
     if opts.is_empty() {
         return RuleOptions::all();
@@ -165,6 +201,7 @@ fn parse_options(opts: &str) -> RuleOptions {
     let mut has_pos = false;
     let mut has_neg = false;
     let mut third_party: Option<bool> = None;
+    let mut narrows_beyond_domain = false;
 
     for raw in opts.split(',') {
         let opt = raw.trim();
@@ -193,8 +230,10 @@ fn parse_options(opts: &str) -> RuleOptions {
         } else if key == "first-party" || key == "1p" {
             // `first-party` ⇒ not third-party; `~first-party` ⇒ third-party.
             third_party = Some(neg);
+        } else if key == "domain" || UNMODELLED_TYPE_KEYWORDS.contains(&key) {
+            narrows_beyond_domain = true;
         }
-        // Unmodelled modifier (important, match-case, popup, …): ignored.
+        // Remaining modifier (important, match-case, csp=, redirect=, …): noise.
     }
 
     let types = if has_pos {
@@ -204,7 +243,7 @@ fn parse_options(opts: &str) -> RuleOptions {
     } else {
         None
     };
-    RuleOptions { types, third_party }
+    RuleOptions { types, third_party, narrows_beyond_domain }
 }
 
 /// A single parsed filter rule.
@@ -736,6 +775,52 @@ mod tests {
         // exempting only typed rules keeps intentional domain blocking working.
         let f = filter("||malware.net^");
         assert!(f.should_block_ctx(&url("https://malware.net/"), &ctx_top_level()).is_some());
+    }
+
+    #[test]
+    fn top_level_navigation_not_blocked_by_domain_option_rule() {
+        // BUG-989 (imgur.com): `$domain=` alone carries no recognised type,
+        // so it used to fall into the "untyped, always applies" bucket and
+        // block a direct top-level navigation to the whole site — even though
+        // the rule was written to fire only when imgur.com is embedded from
+        // one of the listed referrers.
+        let f = filter("||imgur.com^$domain=ghostbin.me|up-load.io");
+        assert!(
+            f.should_block_ctx(&url("https://imgur.com/"), &ctx_top_level()).is_none(),
+            "domain=-conditional rule must not block a top-level document navigation"
+        );
+        // Subresource matching is untouched — domain= still doesn't narrow.
+        assert!(
+            f.should_block_ctx(&url("https://imgur.com/x.png"),
+                &ctx_type(ResourceType::Image)).is_some(),
+            "domain=-conditional rule must still block a matching subresource"
+        );
+    }
+
+    #[test]
+    fn top_level_navigation_not_blocked_by_unmodelled_type_rule() {
+        // BUG-989 (soundcloud.com/temu.com): `$ping`/`$popup` are recognised
+        // EasyList request-type keywords this filter doesn't model with a
+        // `ResourceType` bit — they used to be dropped as generic noise,
+        // degrading into an unconditional domain block that also caught
+        // top-level navigation.
+        let f = filter("||soundcloud.com^$ping");
+        assert!(
+            f.should_block_ctx(&url("https://soundcloud.com/"), &ctx_top_level()).is_none(),
+            "$ping rule must not block a top-level document navigation"
+        );
+        let f2 = filter("||temu.com^$popup,domain=pornproxy.art");
+        assert!(
+            f2.should_block_ctx(&url("https://www.temu.com/"), &ctx_top_level()).is_none(),
+            "$popup,domain= rule must not block a top-level document navigation"
+        );
+        // Unmodelled-type rules still block subresources unconditionally —
+        // same "no over-allow" contract as `unmodelled_option_does_not_narrow`.
+        assert!(
+            f.should_block_ctx(&url("https://soundcloud.com/beacon"),
+                &ctx_type(ResourceType::XmlHttpRequest)).is_some(),
+            "$ping rule must still block a matching subresource"
+        );
     }
 
     #[test]
