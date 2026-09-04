@@ -99,3 +99,7 @@ last_session.db-wal
 
 # Личные правки настроек Claude Code (общие лежат в .claude/settings.json).
 /.claude/settings.local.json
+
+# Сторонний тулинг, случайно оказавшийся в рабочем дереве — не часть lumen-browser.
+/.kilo/
+/.freebuff/
