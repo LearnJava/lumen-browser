@@ -100,6 +100,22 @@ impl FontFaceSet {
     pub fn clear(&mut self) {
         self.faces.clear();
     }
+
+    /// Flip every face `predicate` selects to [`FontFaceStatus::Loaded`].
+    ///
+    /// FONTLOAD-2 (`bugs/BUG-467-OPEN.md` gap 2): a CSS-declared `url()`
+    /// face's status previously never left `Loading`/`Unloaded` — the
+    /// background fetch that resolves it (`LoadEvent::FontLoaded`,
+    /// `crates/shell/src/app/user_event.rs`) updated the render font
+    /// registry but never this collection. Called from that handler once
+    /// the fetch completes.
+    pub fn mark_loaded(&mut self, mut predicate: impl FnMut(&FontFace) -> bool) {
+        for face in &mut self.faces {
+            if predicate(face) {
+                face.status = FontFaceStatus::Loaded;
+            }
+        }
+    }
 }
 
 impl Document {

@@ -179,3 +179,64 @@ unicodeRange/featureSettings/variationSettings/display, `status`, `loaded`,
 более крупный кусок FONTLOAD). Следующий срез — на выбор владельца FONTLOAD:
 реактивность CSS-connected сета (закрывает больше id) или подключение
 загруженного шрифта к рендерингу (закрывает FOUT/FOIT-класс тестов).
+
+## FONTLOAD-2 (P1, 2026-09-05, ветка `p1-fontload2-css-font-loaded-status`) — второй срез: разведка + узкий безопасный фикс
+
+Перед выбором среза — переисследование обоих gap'ов FONTLOAD-1 (агентом
+code-explorer + ручная проверка), результат существенно уточняет их объём:
+
+**Переоценка gap 1 (реактивность).** Формулировка «одноразовый снимок»
+занижает масштаб: `crates/driver` (путь `run_report.py`/весь WPT-прогон)
+**вообще никогда** не вызывает `Document::fonts_mut()` — grep
+`fonts_mut\(\)|\.fonts\(\)` по `crates/driver/` даёт ноль совпадений.
+`document.fonts.size` для КАЖДОГО WPT-файла `css/css-font-loading` равен `0`
+с первой строки скрипта, а не устаревает после мутации — это баг №0,
+отдельный от реактивности, и без него реактивность нечем тестировать штатным
+набором. Хуже: `crates/driver/src/session.rs::run_pipeline` выполняет
+скрипты страницы (стр. ~333–343) **до** парсинга `<style>`-блоков в
+`Stylesheet` (стр. ~346–347, `BUG-429` намеренно оставил такой порядок —
+скрипт мог создать DOM-узлы, которым нужен финальный layout). Заполнение
+`document.fonts` до первого чтения скриптом требует либо перестановки этого
+порядка (риск для BUG-429), либо отдельного раннего прохода только по
+`@font-face`-правилам статичного `<head>` — тянет за собой архитектурное
+решение, не одну функцию. `CSSOM-4`/`FlushHandles::maybe_flush`
+(`crates/js/src/v8_runtime/style_flush.rs`) — верно применимый паттерн для
+*дальнейшей* реактивности после первого заполнения (тот же `Arc<Stylesheet>`,
+тот же охват `InProcessSession`), но сам не решает gap 0.
+
+**Переоценка gap 2 (`status` никогда не `Loaded`).** Одного нативного флага
+недостаточно: `document.fonts` в JS — статичный снимок, `_lumen_wrap_css_font_face`
+читает нативный `status` РОВНО ОДИН РАЗ, в момент первого касания
+`document.fonts`. Если скрипт (типичный паттерн — `document.fonts.ready.then(...)`
+до завершения фонового `url()`-фетча) уже построил снимок раньше, чем шрифт
+догрузился, — правка одного нативного поля без пуша в JS ничего не меняет,
+сколько раз потом ни читай `document.fonts`. Нужен реальный push
+native→JS (`route_eval_js`), не просто мутация `Document::fonts`.
+
+**Что сделано этим срезом** (только shell/live-путь — `crates/driver` не
+трогается, WPT pass-rate `css/css-font-loading` этим срезом не двигается,
+т.к. WPT туда не доходит по gap 0 выше):
+- `FontFaceSet::mark_loaded` (`crates/engine/dom/src/font_faces.rs`) —
+  предикат-based флип статуса в `Loaded`.
+- `LoadEvent::FontLoaded`-обработчик (`crates/shell/src/app/user_event.rs`)
+  теперь (а) флипает статус подходящего по family/weight/style
+  CSS-connected `FontFace` нативно, (б) шлёт `_lumen_notify_css_font_loaded(family)`
+  через `route_eval_js` (ADR-016-совместимый маршрут).
+- `_lumen_notify_css_font_loaded` (`crates/js/src/shim/web_api_shim_mid.js`) —
+  если `document.fonts` уже построен, находит непомеченный CSS-connected
+  член с совпадающими дескрипторами и резолвит **только его собственные**
+  `.status`/`.loaded` (`_resolveLoaded`), НЕ трогая общий `_pending`-счётчик
+  сета — прямой вызов `_onFaceLoadEnd` без парного `_onFaceLoadStart` мог бы
+  увести `_pending` в отрицательные значения и преждевременно зарезолвить
+  `document.fonts.ready`, пока параллельный script-driven `.load()` другого
+  лица ещё выполняется (тот самый регресс, которого боялся исходный
+  комментарий FONTLOAD-1). `document.fonts.ready`/`.status` set-уровня
+  остаются осознанно только script-driven — без изменений.
+
+**Не закрыто, требует отдельного среза:**
+- gap 0/1 выше (заполнение `document.fonts` в `crates/driver` + порядок
+  скрипт/CSS-парсинг) — крупнее, чем «доработка», возможно стоит отдельного
+  под-бага, а не безусловно следующего среза FONTLOAD.
+- set-уровневые `ready`/`loading`/`loadingdone` для CSS-connected лиц (нужен
+  сигнал о **начале** фонового фетча, не только о завершении, плюс отдельный
+  «слот» на лицо в pending-счётчике вместо общего int).

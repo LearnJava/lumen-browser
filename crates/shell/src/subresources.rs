@@ -198,7 +198,7 @@ pub(crate) fn load_font_faces(
 
 /// Парсит `font-weight` дескриптор @font-face: ключевые слова + числа.
 /// Диапазоны (`400 700`) — берём первое значение. Default: 400.
-fn parse_font_weight(s: Option<&str>) -> u16 {
+pub(crate) fn parse_font_weight(s: Option<&str>) -> u16 {
     let Some(s) = s else { return 400 };
     match s.trim() {
         "normal" => 400,
