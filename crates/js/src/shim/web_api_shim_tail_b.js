@@ -3167,6 +3167,62 @@ function _wa_lerp_transform(from, to, t) {
     return out.join(' ');
 }
 
+// CSS Color HDR L1 §2 `dynamic-range-limit` — weighted-mix lerp mirroring
+// `DynamicRangeLimit::interpolate` (BUG-508, style/values/dynamic_range_limit.rs):
+// parse each side to `[standard, constrained, no-limit]` fractions, lerp
+// componentwise, serialize back to canonical text. Only flat (possibly
+// multi-component) `dynamic-range-limit-mix()`/bare-keyword forms are
+// expected here — this runs on already-specified keyframe values, not
+// arbitrary author `calc()`/nested input, so no `calc()` support is needed.
+// NOT exercised live yet — BUG-508's ДОРАБОТКА note: nothing calls this
+// through a real relayout boundary today (BUG-493).
+function _wa_drl_components(v) {
+    v = String(v).trim();
+    if (v === 'standard') return [1, 0, 0];
+    if (v === 'constrained') return [0, 1, 0];
+    if (v === 'no-limit') return [0, 0, 1];
+    var m = v.match(/^dynamic-range-limit-mix\((.*)\)$/);
+    if (!m) return null;
+    var out = [0, 0, 0], total = 0;
+    var parts = m[1].split(',');
+    for (var i = 0; i < parts.length; i++) {
+        var toks = parts[i].trim().split(/\s+/);
+        if (toks.length !== 2) return null;
+        var pct = parseFloat(toks[1]);
+        var comp = _wa_drl_components(toks[0]);
+        if (!comp || isNaN(pct)) return null;
+        out[0] += comp[0] * pct; out[1] += comp[1] * pct; out[2] += comp[2] * pct;
+        total += pct;
+    }
+    if (total <= 0) return null;
+    return [out[0] / total, out[1] / total, out[2] / total];
+}
+function _wa_drl_fmt_pct(v) {
+    v = Math.round(v * 10000) / 10000;
+    return (v % 1 === 0 ? v.toFixed(0) : String(v)) + '%';
+}
+// Canonical `standard, constrained, no-limit` order, matching the Rust side.
+function _wa_drl_serialize(c) {
+    var EPS = 1e-6, names = ['standard', 'constrained', 'no-limit'];
+    var nonzero = c.filter(function(x) { return Math.abs(x) > EPS; }).length;
+    if (nonzero <= 1) {
+        for (var i = 0; i < 3; i++) if (Math.abs(c[i]) > EPS) return names[i];
+        return 'no-limit';
+    }
+    var parts = [];
+    for (var i = 0; i < 3; i++) if (c[i] > EPS) parts.push(names[i] + ' ' + _wa_drl_fmt_pct(c[i] * 100));
+    return 'dynamic-range-limit-mix(' + parts.join(', ') + ')';
+}
+function _wa_lerp_dynamic_range_limit(a, b, t) {
+    var ca = _wa_drl_components(a), cb = _wa_drl_components(b);
+    if (!ca || !cb) return t < 0.5 ? a : b;
+    return _wa_drl_serialize([
+        ca[0] + (cb[0] - ca[0]) * t,
+        ca[1] + (cb[1] - ca[1]) * t,
+        ca[2] + (cb[2] - ca[2]) * t,
+    ]);
+}
+
 // Interpolate a single CSS property value between two string values.
 function _wa_interp_prop(prop, from, to, t) {
     if (from === to) return from;
@@ -3176,6 +3232,7 @@ function _wa_interp_prop(prop, from, to, t) {
         if (!isNaN(fa2) && !isNaN(fb2)) return String(+(fa2+(fb2-fa2)*t).toFixed(6));
     }
     if (prop === 'transform') return _wa_lerp_transform(from, to, t);
+    if (prop === 'dynamicRangeLimit') return _wa_lerp_dynamic_range_limit(from, to, t);
     return _wa_lerp_scalar(from, to, t);
 }
 

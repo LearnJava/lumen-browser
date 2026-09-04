@@ -1686,6 +1686,8 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         ForcedColorAdjust::None => "none",
         ForcedColorAdjust::PreserveParentColor => "preserve-parent-color",
     }.into());
+    // CSS Color HDR L1 §2 — dynamic-range-limit. BUG-508.
+    m.insert("dynamic-range-limit".into(), style.dynamic_range_limit.to_css());
     m.insert("print-color-adjust".into(), match style.print_color_adjust {
         PrintColorAdjust::Economy => "economy",
         PrintColorAdjust::Exact => "exact",

@@ -22,6 +22,7 @@ use crate::style::{
     ColorScheme,
     ComputedStyle,
     CssColor,
+    DynamicRangeLimit,
     FillRule,
     ForcedColorAdjust,
     ImageRendering,
@@ -191,6 +192,12 @@ pub(in crate::style) fn apply_decl_paint(
                 "preserve-parent-color" => ForcedColorAdjust::PreserveParentColor,
                 _ => style.forced_color_adjust,
             };
+        }
+        "dynamic-range-limit" => {
+            // CSS Color HDR L1 §2: keyword | dynamic-range-limit-mix(...). BUG-508.
+            if let Some(v) = DynamicRangeLimit::parse(val, em_basis, viewport, is_quirks) {
+                style.dynamic_range_limit = v;
+            }
         }
         "image-rendering" => {
             // CSS Images L3 §6.1: enum-keyword. Inherited.

@@ -122,6 +122,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Scroll Snap L2 | [css-scroll-snap-2](https://www.w3.org/TR/css-scroll-snap-2/) | 🟡 | snapchanging/snapchanged events: SnapChangeEvent (snapTargetBlock/Inline) + лэйаут-резолв снапнутых узлов (find_snapped_nodes/SnapTargets) + QuickJsRuntime::fire_snap_changing/changed; shell-диспатч при scroll-snap завершении — Phase 1 2026-06-10 | **#59** |
 | CSS Ruby L1 | [css-ruby-1](https://www.w3.org/TR/css-ruby-1/) | 🟡 | `ruby-position`/`ruby-align`/`ruby-merge` ✅ 2026-07-04 (p4-ruby-css-props: parse → inherited ComputedStyle fields → `RubyBox::from_style` drives `lay_out_ruby`: align distribution + separate/merge pairing); `<ruby>` box-tree inline integration ⬜ (module has no pipeline callers — P1) | **#60** |
 | MathML Core (CSS props) | [mathml-core](https://www.w3.org/TR/mathml-core/) | 🟡 | `math-style`/`math-depth` ✅ 2026-07-04 (p4-mathml-css-props: parse → inherited ComputedStyle fields, `auto-add`/`add(n)`/`<integer>` resolved to computed integer vs inherited → `lay_out_mathml`: compact mfrac scaling + script scale from depth delta, `MATH_SCRIPT_SCALE` 0.71/level); `<math>` box-tree integration ⬜ (module has no pipeline callers — P1); `font-size: math` ⬜ | **#61** |
+| CSS Color HDR L1 | [css-color-hdr](https://drafts.csswg.org/css-color-hdr/) | 🟡 | `dynamic-range-limit` ✅ 2026-09-04 (BUG-508: keyword + `dynamic-range-limit-mix()` incl. arbitrary nesting, parse → `ComputedStyle::dynamic_range_limit` → inherited → `getComputedStyle()` canonical serialization); no HDR display pipeline exists in Lumen, so the value has no rendering effect. `computed.html`/`inheritance.html` residual live FAILs are the pre-existing BUG-493 same-tick `getComputedStyle` cache gap, not this property. `DynamicRangeLimit::interpolate` exists (componentwise lerp, mirrored in the Web Animations JS shim) but is NOT wired into the native CSS Animations/Transitions engine (Phase-0 5-property animatable cap, `crate::animation`) or exercised by `element.animate()` in the live shell — `interpolation.html`'s live "64/64 pass" is a BUG-493 vacuous same-tick pass, not real verification (ДОРАБОТКА, see `bugs/BUG-508-OPEN.md`) | **#62** |
 
 ### Out of scope 🚫
 
@@ -694,6 +695,12 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `color-contrast()` | ✅ | `parse_color_contrast` (style.rs); WCAG 2.1 ratio pick; `to AA/AA-large/AAA/AAA-large`/`<number>` targets 2026-07-05 |
 | Relative color syntax `oklch(from ...)` | ✅ | `parse_relative_color` + `relative_origin_channels` (srgb/hsl/lab/lch/oklab/oklch), style.rs:19917 (p4-relative-color 2026-06-13) |
 | `@color-profile` | 🟡 | parsed+stored + `color(--name ...)` recognized; real ICC transform deferred (p4-color-profile 2026-07-15, see T3 At-Rules table above) |
+
+### [T4] Color HDR L1
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| `dynamic-range-limit` | 🟡 | keyword (`standard`/`constrained`/`no-limit`) + `dynamic-range-limit-mix()` (arbitrary nesting, flattened/normalized per spec §2.1) ✅ 2026-09-04 (BUG-508); inherited, initial `no-limit`. `DynamicRangeLimit::interpolate` exists (mirrored in the Web Animations JS shim) but isn't wired into the native animation engine yet — ДОРАБОТКА, see `bugs/BUG-508-OPEN.md`. No HDR display pipeline — no rendering effect |
 
 ---
 

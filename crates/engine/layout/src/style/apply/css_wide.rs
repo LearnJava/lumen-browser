@@ -308,6 +308,11 @@ pub(in crate::style) fn apply_css_wide_keyword(
         "color-scheme" => {
             style.color_scheme = if inh { inherited.color_scheme } else { init.color_scheme };
         }
+        "dynamic-range-limit" => {
+            // CSS Color HDR L1 §2: inherited. BUG-508.
+            style.dynamic_range_limit =
+                if inh { inherited.dynamic_range_limit } else { init.dynamic_range_limit };
+        }
         "line-break" => {
             style.line_break = if inh { inherited.line_break } else { init.line_break };
         }

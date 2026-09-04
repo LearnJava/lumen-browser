@@ -152,6 +152,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "cursor",
     "direction",
     "display",
+    "dynamic-range-limit",
     "empty-cells",
     "fill",
     "fill-opacity",
