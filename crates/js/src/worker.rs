@@ -1419,6 +1419,20 @@ const WORKER_SHIM: &str = r#"(function() {
   // Also expose on the window snapshot created by WEB_API_SHIM.
   if (typeof window !== 'undefined') window.Worker = Worker;
 
+  // Exposed for `_lumen_bfcache_blocked()` (web_api_shim_mid_b.js, BUG-988): a
+  // dedicated Worker runs on its own OS thread with no channel telling it its
+  // page went into the back/forward cache — `park_current_page` only stops the
+  // *runtime* from being pumped, the Worker keeps ticking regardless. Denying
+  // the whole-runtime park for a page with a live Worker mirrors the existing
+  // WebSocket/EventSource treatment, so such a page falls back to the
+  // fresh-runtime-on-restore path, which does tear the old Worker down.
+  globalThis._lumen_has_active_worker = function() {
+    for (var k in _workerRegistry) {
+      if (Object.prototype.hasOwnProperty.call(_workerRegistry, k)) return true;
+    }
+    return false;
+  };
+
   // Also expose the serialization helper for use in tests and advanced callers.
   globalThis._lumenSerializeWithTransfers = _lumenSerializeWithTransfers;
 
