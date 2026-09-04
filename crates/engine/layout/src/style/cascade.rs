@@ -34,14 +34,14 @@ use crate::style::{
     ua_font_size_factor, ua_font_style, ua_font_weight, ua_link_color, ua_vertical_align,
     ua_white_space, validate_against_syntax, with_front_cascade_index, AlignValue, Appearance,
     BackfaceVisibility, BorderStyle, BoxSizing, BreakValue, ClearSide,
-    ComputedStyle, ContainFlags, ContainerType, Content, ContentVisibility, CssColor, Display,
-    FieldSizing, FlexBasis, FlexDirection, FlexWrap, FloatSide,
+    ComputedStyle, ContainFlags, ContainerType, Content, ContentVisibility, CssColor, CssContinue,
+    Display, FieldSizing, FlexBasis, FlexDirection, FlexWrap, FloatSide,
     FontPalette, FontSizeBasis, FontWeight, GridAutoFlow, GridLine, GridTrackSize, Isolation,
     Length, LengthOrAuto, MasonryAutoFlow, MixBlendMode, ObjectFit, ObjectPosition, OffsetRotate,
     OutlineColor, OutlineStyle, Overflow, OverscrollBehavior, PointerEvents, Position,
     PositionComponent, PrintColorAdjust, Resize, ScrollSnapAlign, ScrollSnapStop, ScrollSnapType,
     ScrollbarGutter, ShapeOutside, TextAlignLast, TextOverflow, TouchAction, TransformStyle,
-    UnicodeBidi, VerticalAlign, WhiteSpace, SHADOW_HOST_SCOPE, SHADOW_SHEETS,
+    UnicodeBidi, VerticalAlign, WebkitBoxOrient, WhiteSpace, SHADOW_HOST_SCOPE, SHADOW_SHEETS,
 };
 
 /// BUG-341 S18 — process-wide tally of full [`compute_style`] runs.
@@ -457,6 +457,9 @@ pub fn compute_style(
         text_wrap_style: inherited.text_wrap_style,
         // CSS Overflow L4 — line-clamp не наследуется. Initial = none.
         line_clamp: None,
+        // WHATWG Compat / CSS Overflow L4 §continue — оба не наследуются.
+        box_orient: WebkitBoxOrient::Horizontal,
+        continue_value: CssContinue::Normal,
         // CSS Fragmentation L3 §3.3 — orphans / widows наследуются. Initial = 2.
         orphans: inherited.orphans,
         widows: inherited.widows,

@@ -186,13 +186,13 @@ pub use values::length::{
 // `lumen_layout::style::<Имя>`), поэтому реэкспорт обязателен даже там, где
 // вызывателя внутри `style.rs` уже нет (правило §2.1).
 pub use values::typography::{
-    ColorScheme, Cursor, Direction, Display, FontFeatureSetting, FontOpticalSizing, FontStretch,
-    FontStyle, FontVariantCaps, FontVariantEmoji, FontVariationSetting, FontWeight,
+    ColorScheme, CssContinue, Cursor, Direction, Display, FontFeatureSetting, FontOpticalSizing,
+    FontStretch, FontStyle, FontVariantCaps, FontVariantEmoji, FontVariationSetting, FontWeight,
     ForcedColorAdjust, Overflow, TextAlign, TextAlignLast, TextDecorationLine,
     TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextShadow, TextTransform,
-    TextUnderlinePosition, UnicodeBidi, Visibility, WhiteSpace, WhiteSpaceCollapse, BoxShadow,
-    text_font_features,
+    TextUnderlinePosition, UnicodeBidi, Visibility, WebkitBoxOrient, WhiteSpace,
+    WhiteSpaceCollapse, BoxShadow, text_font_features,
 };
 pub use values::color::{Color, ColorFloat, CssColor, SystemColor};
 pub use values::box_model::{

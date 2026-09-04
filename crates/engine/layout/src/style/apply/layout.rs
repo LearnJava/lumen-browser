@@ -109,6 +109,17 @@ pub(in crate::style) fn apply_decl_layout(
                 "table-cell" => Display::TableCell,
                 "table-caption" => Display::TableCaption,
                 "list-item" => Display::ListItem,
+                // WHATWG Compat §2.1 — legacy `-webkit-box`/`-webkit-inline-box`
+                // keep their own computed-value identity (BUG-505 срез 5,
+                // `webkit_box_computed_display`, `selector_query.rs`);
+                // `-webkit-flex`/`-webkit-inline-flex` are plain compat
+                // aliases for the standard `flex`/`inline-flex` and get no
+                // such quirk (confirmed by `webkit-box-computed.html`'s own
+                // `-webkit-flex`/`-webkit-inline-flex` cases).
+                "-webkit-box" => Display::WebkitBox,
+                "-webkit-inline-box" => Display::WebkitInlineBox,
+                "-webkit-flex" => Display::Flex,
+                "-webkit-inline-flex" => Display::InlineFlex,
                 _ => style.display,
             };
         }

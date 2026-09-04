@@ -1639,6 +1639,9 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     // their physical `overflow-x`/`overflow-y` counterparts above.
     'overflow-block':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
     'overflow-inline': ['visible', 'hidden', 'clip', 'scroll', 'auto'],
+    // WHATWG Compat §2.1 (BUG-505 срез 5) — feeds the `display: -webkit-box`
+    // computed-value quirk (`webkit_box_computed_display`, `selector_query.rs`).
+    '-webkit-box-orient': ['horizontal', 'vertical'],
     'position':    ['static', 'relative', 'absolute', 'fixed', 'sticky'],
     'isolation':   ['auto', 'isolate'],
     'mix-blend-mode': [

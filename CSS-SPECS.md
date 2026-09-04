@@ -186,6 +186,9 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `float` | ✅ | left/right/none — FloatContext placement; shrink-to-fit width |
 | `clear` | ✅ | left/right/both — FloatContext.clear_y() clearance |
 | `-webkit-line-clamp` / `line-clamp` | ✅ | parsed + layout algorithm: truncate lines, ellipsis, priority over text-overflow |
+| `-webkit-box-orient` | 🟡 | WHATWG Compat §2.1 legacy flexbox axis; Phase 0 — parsed/stored only to feed `display: -webkit-box`'s computed-value quirk below, no real legacy-flexbox layout algorithm (BUG-505 срез 5) |
+| `continue` | 🟡 | CSS Overflow L4 §continue: `normal \| discard \| collapse \| -webkit-legacy`, parsed/stored; feeds the `display: -webkit-box` quirk below, fragmentation behavior (`discard`/`collapse`) itself not implemented (BUG-505 срез 5) |
+| `display: -webkit-box` / `-webkit-inline-box` | 🟡 | WHATWG Compat §2.1 keywords, `-webkit-flex`/`-webkit-inline-flex` alias straight to `flex`/`inline-flex`; `display`'s computed value resolves to `flow-root`/`inline-block` when `-webkit-box-orient: vertical` is paired with a definite `line-clamp`/`-webkit-line-clamp` or `continue: discard` (CSS Overflow L4 §continue), else round-trips as specified; treated as `Block`/generic in layout, no legacy-flexbox algorithm (BUG-505 срез 5) |
 | `contain-intrinsic-size` | ✅ | parsed + applied under `contain: size` — `contain_intrinsic_width`/`_height` supply the placeholder inline/block size (style.rs:15843); 3 layout tests |
 
 ### [T0] Borders & Outlines

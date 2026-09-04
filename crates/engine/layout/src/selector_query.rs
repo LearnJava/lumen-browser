@@ -20,7 +20,7 @@ use crate::style::{
     BackgroundRepeat, BackgroundSize, BgSizeAxis, BorderStyle, BoxShadow, BoxSizing,
     ClearSide, Color, ColorScheme,
     ContainFlags, Content, ContentItem, ContentVisibility,
-    CssColor,
+    CssColor, CssContinue,
     Cursor, Direction, Display, FillRule, FilterFn, FloatSide, ForcedColorAdjust, FontStretch,
     FontStyle, FontWeight,
     FontVariantCaps, FontVariantEmoji, ImageRendering, Isolation, IterationCount, Length,
@@ -31,7 +31,7 @@ use crate::style::{
     ScrollbarGutter, ScrollbarWidth, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign,
     TextDecorationLine, TextDecorationStyle,
     TextEmphasisStyle, TextOverflow, TextShadow, TextTransform, TimingFunction, TransformFn,
-    VerticalAlign, Visibility, WhiteSpace,
+    VerticalAlign, Visibility, WebkitBoxOrient, WhiteSpace,
     WhiteSpaceCollapse, WritingMode,
     ComputedStyle,
 };
@@ -1046,18 +1046,24 @@ pub fn inline_segment_style_map(style: &ComputedStyle) -> HashMap<String, String
     m
 }
 
-/// Serialises a [`ComputedStyle`] to a CSS property → resolved-value map.
-///
-/// Values are formatted as `window.getComputedStyle()` returns them:
-/// pixel lengths as `"<n>px"`, colours as `"rgb(r, g, b)"` or `"rgba(r, g, b, a)"`,
-/// keywords as lower-case CSS identifiers.
-///
-/// Covers ~55 most-queried properties. Less-used properties are omitted.
-pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
-    let mut m: HashMap<String, String> = HashMap::with_capacity(64);
-
-    // ── Display / layout mode ─────────────────────────────────────
-    m.insert("display".into(), match style.display {
+/// CSS Overflow L4 §continue / WHATWG Compat §2.1 — `display`'s computed-
+/// value special case for `-webkit-box`/`-webkit-inline-box` (BUG-505 срез
+/// 5, confirmed against `css/css-overflow/parsing/webkit-box-computed.html`):
+/// normally `display: -webkit-box`/`-webkit-inline-box` compute AS SPECIFIED
+/// (the literal keyword round-trips), but when `-webkit-box-orient` is
+/// `vertical` AND the box is actually clamping — either `-webkit-line-clamp`/
+/// `line-clamp` resolves to a definite integer (not `none`/`auto`), or
+/// `continue` is `discard` — the computed value becomes `flow-root` (for
+/// `-webkit-box`) / `inline-block` (for `-webkit-inline-box`) instead. This
+/// quirk is deliberately narrower than "any legacy webkit flex alias": WPT's
+/// own test asserts `-webkit-flex`/`flex` do NOT get it even under the exact
+/// same orient+clamp combination — those already alias straight to
+/// `Display::Flex`/`InlineFlex` at parse time (`style/apply/layout.rs`) and
+/// never reach this function as a `WebkitBox`/`WebkitInlineBox` variant.
+fn webkit_box_computed_display(style: &ComputedStyle) -> &'static str {
+    let is_clamping = style.box_orient == WebkitBoxOrient::Vertical
+        && (style.line_clamp.is_some() || style.continue_value == CssContinue::Discard);
+    match style.display {
         Display::Block => "block",
         Display::Inline => "inline",
         Display::InlineBlock => "inline-block",
@@ -1079,7 +1085,23 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         Display::Contents => "contents",
         Display::ListItem => "list-item",
         Display::FlowRoot => "flow-root",
-    }.into());
+        Display::WebkitBox => if is_clamping { "flow-root" } else { "-webkit-box" },
+        Display::WebkitInlineBox => if is_clamping { "inline-block" } else { "-webkit-inline-box" },
+    }
+}
+
+/// Serialises a [`ComputedStyle`] to a CSS property → resolved-value map.
+///
+/// Values are formatted as `window.getComputedStyle()` returns them:
+/// pixel lengths as `"<n>px"`, colours as `"rgb(r, g, b)"` or `"rgba(r, g, b, a)"`,
+/// keywords as lower-case CSS identifiers.
+///
+/// Covers ~55 most-queried properties. Less-used properties are omitted.
+pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
+    let mut m: HashMap<String, String> = HashMap::with_capacity(64);
+
+    // ── Display / layout mode ─────────────────────────────────────
+    m.insert("display".into(), webkit_box_computed_display(style).into());
 
     m.insert("visibility".into(), match style.visibility {
         Visibility::Visible => "visible",
@@ -1313,6 +1335,18 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         None => "none".to_string(),
         Some(n) => n.to_string(),
     });
+    // WHATWG Compat §2.1 / CSS Overflow L4 §continue (BUG-505 срез 5) — feed
+    // `webkit_box_computed_display`'s condition, plus their own round-trip.
+    m.insert("-webkit-box-orient".into(), match style.box_orient {
+        WebkitBoxOrient::Horizontal => "horizontal",
+        WebkitBoxOrient::Vertical => "vertical",
+    }.into());
+    m.insert("continue".into(), match style.continue_value {
+        CssContinue::Normal => "normal",
+        CssContinue::Discard => "discard",
+        CssContinue::Collapse => "collapse",
+        CssContinue::WebkitLegacy => "-webkit-legacy",
+    }.into());
     m.insert("text-indent".into(), length_to_css(&style.text_indent));
     m.insert("vertical-align".into(), vertical_align_to_css(&style.vertical_align));
 
@@ -2782,6 +2816,138 @@ mod tests {
         let m = div_computed_map("<div>x</div>", "div { -webkit-line-clamp: 3; }");
         assert_eq!(m.get("line-clamp").map(String::as_str), Some("3"));
         assert_eq!(m.get("-webkit-line-clamp").map(String::as_str), Some("3"));
+    }
+
+    #[test]
+    fn computed_map_webkit_box_orient_and_continue_default() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("-webkit-box-orient").map(String::as_str), Some("horizontal"));
+        assert_eq!(m.get("continue").map(String::as_str), Some("normal"));
+    }
+
+    #[test]
+    fn computed_map_webkit_box_orient_and_continue_set() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { -webkit-box-orient: vertical; continue: discard; }",
+        );
+        assert_eq!(m.get("-webkit-box-orient").map(String::as_str), Some("vertical"));
+        assert_eq!(m.get("continue").map(String::as_str), Some("discard"));
+    }
+
+    // ── computed_style_to_map: BUG-505 срез 5, `display: -webkit-box` quirk
+    // (CSS Overflow L4 §continue / WHATWG Compat §2.1) — matrix transcribed
+    // from `css/css-overflow/parsing/webkit-box-computed.html`.
+
+    #[test]
+    fn webkit_box_display_computes_as_specified_without_orient_or_clamp() {
+        let m = div_computed_map("<div>x</div>", "div { display: -webkit-box; }");
+        assert_eq!(m.get("display").map(String::as_str), Some("-webkit-box"));
+    }
+
+    #[test]
+    fn webkit_box_display_unaffected_by_orient_alone() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { display: -webkit-box; -webkit-box-orient: vertical; }",
+        );
+        assert_eq!(m.get("display").map(String::as_str), Some("-webkit-box"));
+    }
+
+    #[test]
+    fn webkit_box_display_unaffected_by_vertical_orient_plus_clamp_none() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: none; }",
+        );
+        assert_eq!(m.get("display").map(String::as_str), Some("-webkit-box"));
+    }
+
+    #[test]
+    fn webkit_box_display_unaffected_by_clamp_without_vertical_orient() {
+        // Default box-orient is horizontal — clamp alone doesn't trigger the quirk.
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { display: -webkit-box; -webkit-line-clamp: 3; }",
+        );
+        assert_eq!(m.get("display").map(String::as_str), Some("-webkit-box"));
+    }
+
+    #[test]
+    fn webkit_box_display_unaffected_by_explicit_horizontal_orient_plus_clamp() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { display: -webkit-box; -webkit-box-orient: horizontal; -webkit-line-clamp: 3; }",
+        );
+        assert_eq!(m.get("display").map(String::as_str), Some("-webkit-box"));
+    }
+
+    #[test]
+    fn webkit_box_display_becomes_flow_root_with_vertical_orient_and_clamp() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }",
+        );
+        assert_eq!(m.get("display").map(String::as_str), Some("flow-root"));
+    }
+
+    #[test]
+    fn webkit_inline_box_display_becomes_inline_block_with_vertical_orient_and_clamp() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { display: -webkit-inline-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }",
+        );
+        assert_eq!(m.get("display").map(String::as_str), Some("inline-block"));
+    }
+
+    #[test]
+    fn webkit_box_display_becomes_flow_root_with_continue_discard() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { display: -webkit-box; -webkit-box-orient: vertical; continue: discard; }",
+        );
+        assert_eq!(m.get("display").map(String::as_str), Some("flow-root"));
+    }
+
+    #[test]
+    fn webkit_box_display_unaffected_by_continue_discard_without_vertical_orient() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { display: -webkit-box; continue: discard; }",
+        );
+        assert_eq!(m.get("display").map(String::as_str), Some("-webkit-box"));
+    }
+
+    #[test]
+    fn webkit_box_display_unaffected_by_continue_none() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { display: -webkit-box; -webkit-box-orient: vertical; continue: none; }",
+        );
+        assert_eq!(m.get("display").map(String::as_str), Some("-webkit-box"));
+    }
+
+    #[test]
+    fn webkit_flex_alias_ignores_the_webkit_box_quirk() {
+        // WPT explicitly asserts `-webkit-flex`/`flex`/`inline-flex` do NOT
+        // get the quirk even under the identical orient+clamp combination
+        // that turns `-webkit-box` into `flow-root` — they alias straight
+        // to `Display::Flex` at parse time and never become `WebkitBox`.
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { display: flex; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }",
+        );
+        assert_eq!(m.get("display").map(String::as_str), Some("flex"));
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { display: -webkit-flex; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }",
+        );
+        assert_eq!(m.get("display").map(String::as_str), Some("flex"));
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { display: -webkit-inline-flex; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }",
+        );
+        assert_eq!(m.get("display").map(String::as_str), Some("inline-flex"));
     }
 
     #[test]
