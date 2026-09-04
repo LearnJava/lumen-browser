@@ -56,6 +56,61 @@ import run_suite  # noqa: E402
 REPO_ROOT = run_smoke.REPO_ROOT
 DEFAULT_OUT = os.path.join(REPO_ROOT, ".tmp", "wpt-report.html")
 
+# Manifest item types this project's executors can actually produce a
+# testharness-shaped result for (LumenTestharnessExecutor over BiDi; the
+# TEST-4 reftest executor is not wired into run_report.py yet — see
+# docs/tasks/p2-test-track.md). Everything else (`crashtest`, `reftest`,
+# `print-reftest`, `manual`, `visual`, `support`, ...) never emits
+# `test_start`, so wptrunner reports it as MISSING — permanently, on every
+# run — which `expectations.classify()` then flags as a REGRESSION forever.
+RUNNABLE_ITEM_TYPES = {"testharness", "test262"}
+
+_manifest_index_cache = None
+
+
+def _manifest_index() -> tuple:
+    """`(item_types, ids_by_path)`, both derived from one pass over the
+    vendored manifest (`tools/manifest/manifest.load`, via `expectations`'s
+    already-cached loader — no second copy of that loading code):
+
+    - `item_types`: `test id -> manifest item_type`, for filtering
+      `all_vendored_test_ids`'s recursive walk down to types this project
+      can actually run (see `RUNNABLE_ITEM_TYPES`). An id absent from this
+      map (manifest load failed, or an id the manifest doesn't know) is
+      treated as runnable by the caller — fail open, so a stale/incomplete
+      map only under-filters, never silently drops a real test.
+    - `ids_by_path`: `source path -> [test id, ...]`, for resolving what a
+      `.any.js`/`.window.js`/`.worker.js` source actually expands to. A
+      `// META: global=...` comment can restrict or multiply the globals
+      wptserve generates (`tools/serve/serve.py`), so guessing a single
+      `<name>.any.html` from the filename is wrong whenever the source
+      doesn't emit that particular global — found in WPT-RUN-7 on
+      `push-api/push-event.https.any.js`, which emits only
+      `*.any.window-module.html?includeAppServerKey=...` variants, no plain
+      `.any.html` at all; the guessed id then never gets a result, and
+      `expectations.classify()` flags it MISSING forever.
+    """
+    global _manifest_index_cache
+    if _manifest_index_cache is None:
+        manifest_path = os.path.join(run_smoke.METADATA_ROOT, "MANIFEST.json")
+        item_types, ids_by_path = {}, {}
+        m = expectations.wpt_manifest.load(run_smoke.TESTS_ROOT, manifest_path)
+        if m is not None:
+            for item_type, path, items in m:
+                rel_path = path.replace(os.sep, "/")
+                for item in items:
+                    # `support`-type ids are bare relative paths, no leading
+                    # `/` (e.g. `.venv/.gitignore`) — every other item_type
+                    # already uses the URL-style `/root/...` id that
+                    # `all_vendored_test_ids` builds, so normalize the one
+                    # outlier instead of leaving a silent lookup miss (which
+                    # would defeat the very filter this map exists for).
+                    key = item.id if item.id.startswith("/") else f"/{item.id}"
+                    item_types[key] = item_type
+                    ids_by_path.setdefault(rel_path, []).append(key)
+        _manifest_index_cache = (item_types, ids_by_path)
+    return _manifest_index_cache
+
 # Test-level statuses that mean "the harness itself completed cleanly" —
 # individual subtest failures are reported separately, this only reflects
 # whether the test *finished* rather than erroring/timing out/crashing.
@@ -91,25 +146,46 @@ def all_vendored_test_ids(root: str = "dom/nodes", recursive: bool = False) -> l
     only caller) also has 30 top-level `.htm` files never part of its
     documented 168-file scope (see above) — widening the extension there
     would silently inflate that pinned number instead of adding a new one.
+
+    The recursive walk also drops any id the vendored manifest classifies as
+    a non-`testharness`/`test262` type (see `RUNNABLE_ITEM_TYPES`) — a
+    filename-only walk can't tell a `crashtest`/`reftest`/`-ref.html`
+    reference page apart from a real test just by extension, and selecting
+    one anyway means it always comes back MISSING (no `test_start` is ever
+    emitted for it), which `expectations.classify()` reports as a permanent
+    phantom regression on every later `--check` (found scanning ~110
+    categories at once in WPT-RUN-7: `print/crashtests/reload-crash.html`,
+    `avif/animated-avif-timeout-ref.html`, two under `cssom/crashtests/`,
+    `gif/reset-no-gce-ref.html`). An id absent from the manifest is kept
+    (fail open) rather than dropped.
     """
     subdir = os.path.join(run_smoke.TESTS_ROOT, *root.split("/"))
     if not recursive:
         return sorted(
             f"/{root}/" + os.path.basename(p) for p in glob.glob(os.path.join(subdir, "*.html"))
         )
+    item_types, ids_by_path = _manifest_index()
     ids = []
     for dirpath, dirnames, filenames in os.walk(subdir):
         dirnames[:] = sorted(d for d in dirnames if d not in ("support", "resources"))
         rel_dir = os.path.relpath(dirpath, run_smoke.TESTS_ROOT).replace(os.sep, "/")
         for fn in sorted(filenames):
             if fn.endswith((".any.js", ".window.js")):
+                # Prefer the manifest's own expansion (handles `// META:
+                # global=...` restricting/multiplying which globals actually
+                # get generated) — fall back to the single-guess heuristic
+                # only for a source the manifest doesn't know about at all.
+                expanded = ids_by_path.get(f"{rel_dir}/{fn}")
+                if expanded:
+                    ids.extend(expanded)
+                    continue
                 out = fn[: -len(".js")] + ".html"
             elif fn.endswith((".html", ".htm")) and "-manual" not in fn:
                 out = fn
             else:
                 continue
             ids.append(f"/{rel_dir}/{out}")
-    return ids
+    return [i for i in ids if item_types.get(i, "testharness") in RUNNABLE_ITEM_TYPES]
 
 
 def load_wptreport(path: str) -> dict:
