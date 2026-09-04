@@ -576,6 +576,12 @@ pub(in crate::style) fn apply_css_wide_keyword(
         "overflow-y" => {
             style.overflow_y = if inh_only_inherit { inherited.overflow_y } else { init.overflow_y };
         }
+        "overflow-block" => {
+            style.overflow_block = if inh_only_inherit { inherited.overflow_block } else { init.overflow_block };
+        }
+        "overflow-inline" => {
+            style.overflow_inline = if inh_only_inherit { inherited.overflow_inline } else { init.overflow_inline };
+        }
         "text-overflow" => {
             style.text_overflow = if inh_only_inherit { inherited.text_overflow } else { init.text_overflow };
         }

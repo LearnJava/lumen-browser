@@ -1364,6 +1364,26 @@ use super::*;
         assert_eq!(oy, Overflow::Auto);
     }
 
+    // BUG-505 срез 3: `clip` is exempt from forcing the sibling `visible`
+    // axis to `auto` — `css/css-overflow/parsing/overflow-computed.html`
+    // asserts `'clip visible'`/`'visible clip'` both round-trip unchanged.
+    #[test]
+    fn overflow_axis_coercion_clip_does_not_force_auto() {
+        let (ox, oy) = coerce_overflow_axes(Overflow::Clip, Overflow::Visible);
+        assert_eq!(ox, Overflow::Clip);
+        assert_eq!(oy, Overflow::Visible);
+        let (ox, oy) = coerce_overflow_axes(Overflow::Visible, Overflow::Clip);
+        assert_eq!(ox, Overflow::Visible);
+        assert_eq!(oy, Overflow::Clip);
+    }
+
+    #[test]
+    fn overflow_axis_coercion_clip_clip_unchanged() {
+        let (ox, oy) = coerce_overflow_axes(Overflow::Clip, Overflow::Clip);
+        assert_eq!(ox, Overflow::Clip);
+        assert_eq!(oy, Overflow::Clip);
+    }
+
     // === CSS Values L4 §7.7 attr() typed substitution ===
 
     fn make_doc_with_div(html: &str) -> (lumen_dom::Document, lumen_dom::NodeId) {

@@ -292,9 +292,18 @@ pub(in crate::style) fn apply_forced_colors_mode(
 }
 
 /// CSS Overflow L3 §2.1: coerce mismatched overflow axes.
-/// If one axis is `visible` and the other is not, `visible` becomes `auto`.
+///
+/// "If one longhand is `visible` and the other is not, computed values are
+/// the same as specified, except `visible` computes to `auto`" — but only
+/// when the other axis is neither `visible` NOR `clip` (spec note directly
+/// under the `overflow` propdef table). BUG-505 срез 3: the previous version
+/// missed the `clip` exemption entirely, so e.g. `overflow: clip visible`
+/// wrongly forced the `visible` sibling to `auto` (`clip auto` instead of
+/// the spec/WPT-expected unchanged `clip visible`,
+/// `css/css-overflow/parsing/overflow-computed.html`).
 pub(in crate::style) fn coerce_overflow_axes(ox: Overflow, oy: Overflow) -> (Overflow, Overflow) {
-    let new_ox = if ox == Overflow::Visible && oy != Overflow::Visible { Overflow::Auto } else { ox };
-    let new_oy = if oy == Overflow::Visible && ox != Overflow::Visible { Overflow::Auto } else { oy };
+    let forces_auto = |other: Overflow| other != Overflow::Visible && other != Overflow::Clip;
+    let new_ox = if ox == Overflow::Visible && forces_auto(oy) { Overflow::Auto } else { ox };
+    let new_oy = if oy == Overflow::Visible && forces_auto(ox) { Overflow::Auto } else { oy };
     (new_ox, new_oy)
 }

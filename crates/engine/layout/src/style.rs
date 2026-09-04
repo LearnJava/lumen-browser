@@ -151,6 +151,10 @@ pub(in crate::style) use pseudo::pseudo_element_name;
 // Пост-каскадная `resolve_logical_properties` дописана в созданный ST-7
 // `style::logical` тем же батчем; её единственный вызыватель — `compute_style`.
 use logical::resolve_logical_properties;
+// CSS Overflow L3 §logical (BUG-505) — same shape as `resolve_logical_properties`
+// above: private `use` here, reachable from `style::cascade` (a descendant module)
+// via `crate::style::resolve_overflow_logical_properties`.
+use logical::resolve_overflow_logical_properties;
 // Реэкспорт со старого пути: `resolve_logical_property` — публичный API крейта
 // (`pub mod style` в `lib.rs`), вызывателей внутри `style.rs` у неё нет, поэтому
 // без реэкспорта путь `lumen_layout::style::resolve_logical_property` пропал бы.

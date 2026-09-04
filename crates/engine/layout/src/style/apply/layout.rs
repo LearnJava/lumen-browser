@@ -421,6 +421,20 @@ pub(in crate::style) fn apply_decl_layout(
                 style.overflow_y = o;
             }
         }
+        "overflow-block" => {
+            // CSS Overflow L3 §logical / BUG-505: flow-relative axis, mapped
+            // to `overflow_x`/`overflow_y` post-cascade by
+            // `resolve_overflow_logical_properties` (`style/logical.rs`),
+            // once the final `writing-mode` is known.
+            if let Some(o) = parse_overflow_kw(val.trim()) {
+                style.overflow_block = o;
+            }
+        }
+        "overflow-inline" => {
+            if let Some(o) = parse_overflow_kw(val.trim()) {
+                style.overflow_inline = o;
+            }
+        }
         "overflow-clip-margin" => {
             // CSS Overflow L3: <visual-box> | <length>. Phase 0: поддерживаем только <length>.
             style.overflow_clip_margin = parse_length(val);

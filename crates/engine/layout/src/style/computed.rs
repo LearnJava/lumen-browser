@@ -300,6 +300,16 @@ pub struct ComputedStyle {
     /// CSS Overflow L3 — отдельные поля для X и Y. Не наследуются.
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
+    /// CSS Overflow L3 §logical (BUG-505) — специфицированные значения
+    /// `overflow-block`/`overflow-inline` до разрешения в физическую пару
+    /// `overflow_x`/`overflow_y` по `writing_mode`
+    /// (`resolve_overflow_logical_properties`, `style/logical.rs`). Не
+    /// наследуются, как и физическая пара. Default `Visible` совпадает с
+    /// initial value — тот же эвристический приём «поле != default
+    /// означает явную установку», что у остальных логических свойств в
+    /// этом файле (см. `margin_inline_start` и соседей).
+    pub overflow_block: Overflow,
+    pub overflow_inline: Overflow,
     /// CSS Overflow L3 §overflow-clip-margin — расширяет clip region при overflow:clip.
     /// Default: 0px. Не наследуется.
     pub overflow_clip_margin: Option<Length>,
@@ -1038,6 +1048,8 @@ impl ComputedStyle {
             text_shadow: Vec::new(),
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
+            overflow_block: Overflow::Visible,
+            overflow_inline: Overflow::Visible,
             overflow_clip_margin: None,
             text_overflow: TextOverflow::Clip,
             opacity: 1.0,

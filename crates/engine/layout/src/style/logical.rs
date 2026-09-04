@@ -9,7 +9,7 @@
 //! SPLIT-ST13 из `crates/engine/layout/src/style.rs` (анкер, следовавший
 //! непосредственно за регионом ST-13's `style/adjust.rs`) без правок тела.
 
-use crate::style::{ComputedStyle, Length, LengthOrAuto};
+use crate::style::{ComputedStyle, Length, LengthOrAuto, Overflow, WritingMode};
 
 /// Resolve CSS Logical Properties based on writing-mode.
 ///
@@ -139,6 +139,44 @@ pub(in crate::style) fn resolve_logical_properties(style: &mut ComputedStyle) {
     }
     if style.border_block_end_width > 0.0 && style.border_bottom_width == 0.0 {
         style.border_bottom_width = style.border_block_end_width;
+    }
+}
+
+/// CSS Overflow L3 §logical (BUG-505) — resolve `overflow-block`/
+/// `overflow-inline` to the physical `overflow_x`/`overflow_y` pair.
+///
+/// Unlike `resolve_logical_property`'s two-axis-per-property split
+/// (`margin-inline-start` and friends), `overflow-block`/`overflow-inline`
+/// each map wholly onto one physical axis — but *which* axis flips with
+/// `writing-mode`: in `horizontal-tb` the block axis is vertical
+/// (`overflow-block` → `overflow-y`), in every vertical mode
+/// (`vertical-rl`/`vertical-lr`/`sideways-rl`/`sideways-lr`) the block axis
+/// is physically horizontal, so the mapping swaps (`overflow-block` →
+/// `overflow-x`) — confirmed against `css/css-overflow/logical-overflow-
+/// 001.html`. Same "physical field still at its default" presence
+/// heuristic as `resolve_logical_properties` above (a later, lower-priority
+/// physical declaration cannot be told apart from "never set" — accepted
+/// simplification shared by every logical property in this module). Must
+/// run before `coerce_overflow_axes` (`cascade.rs`) so the visible-vs-auto
+/// adjustment sees the fully resolved physical pair, not a stale one.
+pub(in crate::style) fn resolve_overflow_logical_properties(style: &mut ComputedStyle) {
+    let vertical_wm = matches!(
+        style.writing_mode,
+        WritingMode::VerticalRl
+            | WritingMode::VerticalLr
+            | WritingMode::SidewaysRl
+            | WritingMode::SidewaysLr
+    );
+    let (block_target, inline_target) = if vertical_wm {
+        (&mut style.overflow_x, &mut style.overflow_y)
+    } else {
+        (&mut style.overflow_y, &mut style.overflow_x)
+    };
+    if style.overflow_block != Overflow::Visible && *block_target == Overflow::Visible {
+        *block_target = style.overflow_block;
+    }
+    if style.overflow_inline != Overflow::Visible && *inline_target == Overflow::Visible {
+        *inline_target = style.overflow_inline;
     }
 }
 

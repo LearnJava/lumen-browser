@@ -29,7 +29,7 @@ use crate::style::{
     apply_ua_text_decoration, apply_webkit_scrollbar_pseudos, coerce_overflow_axes,
     complex_has_host, default_display, ensure_cascade_index, expand_attr_val,
     expand_custom_functions, expand_vars, forced_colors_active, matches_complex,
-    matches_slotted_complex, node_in_scope, resolve_logical_properties,
+    matches_slotted_complex, node_in_scope, resolve_logical_properties, resolve_overflow_logical_properties,
     resolve_system_colors_in_style, strip_ua_appearance_box_styling, ua_font_family,
     ua_font_size_factor, ua_font_style, ua_font_weight, ua_link_color, ua_vertical_align,
     ua_white_space, validate_against_syntax, with_front_cascade_index, AlignValue, Appearance,
@@ -302,6 +302,8 @@ pub fn compute_style(
         box_shadow: Vec::new(),
         overflow_x: Overflow::Visible,
         overflow_y: Overflow::Visible,
+        overflow_block: Overflow::Visible,
+        overflow_inline: Overflow::Visible,
         overflow_clip_margin: None,
         text_overflow: TextOverflow::Clip,
         opacity: 1.0,
@@ -1324,6 +1326,14 @@ pub fn compute_style(
     if forced_colors_active() {
         apply_forced_colors_mode(doc, node, &mut style, dark_mode);
     }
+
+    // CSS Overflow L3 §logical (BUG-505) — resolve `overflow-block`/
+    // `overflow-inline` to `overflow_x`/`overflow_y` before the axis-pair
+    // adjustment below, so the adjustment sees the final physical pair, not
+    // a stale one. Must run before `resolve_logical_properties` too, since
+    // that call has no knowledge of overflow's writing-mode-dependent
+    // axis swap.
+    resolve_overflow_logical_properties(&mut style);
 
     // CSS Overflow L3 §2.1: if one axis is `visible` and the other is not,
     // the `visible` axis becomes `auto` (both axes must agree on visibility).

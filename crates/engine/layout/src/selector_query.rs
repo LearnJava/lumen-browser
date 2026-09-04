@@ -1294,6 +1294,33 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // ── Overflow / stacking ───────────────────────────────────────
     m.insert("overflow-x".into(), overflow_to_css(style.overflow_x).into());
     m.insert("overflow-y".into(), overflow_to_css(style.overflow_y).into());
+    // CSS Overflow L3 §propdef-overflow (BUG-505 срез 3): the shorthand's
+    // own computed-value serialization — a single keyword when both axes
+    // (already coerced by `coerce_overflow_axes`) agree, else `"x y"`, same
+    // collapse rule the CSSOM `.style.overflow` specified-value path already
+    // uses in the JS shim (`_lumen_overflow_shorthand_value`).
+    m.insert("overflow".into(), if style.overflow_x == style.overflow_y {
+        overflow_to_css(style.overflow_x).to_string()
+    } else {
+        format!("{} {}", overflow_to_css(style.overflow_x), overflow_to_css(style.overflow_y))
+    });
+    // CSS Overflow L3 §logical (BUG-505 срез 3): flow-relative axes read
+    // back the already-resolved physical value on the axis they map to —
+    // `overflow-block` → `overflow-y`/`overflow-x` depending on whether
+    // `writing-mode` is horizontal or vertical (`css/css-overflow/logical-
+    // overflow-001.html`), same swap `resolve_overflow_logical_properties`
+    // (`style/logical.rs`) applies pre-cascade.
+    let vertical_wm = matches!(
+        style.writing_mode,
+        WritingMode::VerticalRl | WritingMode::VerticalLr | WritingMode::SidewaysRl | WritingMode::SidewaysLr
+    );
+    let (overflow_block, overflow_inline) = if vertical_wm {
+        (style.overflow_x, style.overflow_y)
+    } else {
+        (style.overflow_y, style.overflow_x)
+    };
+    m.insert("overflow-block".into(), overflow_to_css(overflow_block).into());
+    m.insert("overflow-inline".into(), overflow_to_css(overflow_inline).into());
     // CSS Scrollbars L1 §3 — `auto | <color>{2}`. The field is `None` for
     // `auto`, so an unstyled page answers `"auto"`, not `""` (BUG-388).
     m.insert("scrollbar-color".into(), match style.scrollbar_color {
@@ -2754,5 +2781,59 @@ mod tests {
     fn computed_map_overflow_clip_margin_reports_length() {
         let m = div_computed_map("<div>x</div>", "div { overflow-clip-margin: 10px; }");
         assert_eq!(m.get("overflow-clip-margin").map(String::as_str), Some("10px"));
+    }
+
+    // BUG-505 срез 3: `overflow` shorthand computed-value serialization
+    // (`css/css-overflow/parsing/overflow-computed.html`,
+    // `overflow-shorthand-001.html`) — collapses to one keyword when both
+    // axes agree, else `"x y"`, reading the axis-coerced values.
+    #[test]
+    fn computed_map_overflow_shorthand_collapses_equal_axes() {
+        let m = div_computed_map("<div>x</div>", "div { overflow: hidden; }");
+        assert_eq!(m.get("overflow").map(String::as_str), Some("hidden"));
+    }
+
+    #[test]
+    fn computed_map_overflow_shorthand_reports_pair() {
+        let m = div_computed_map("<div>x</div>", "div { overflow-x: hidden; overflow-y: scroll; }");
+        assert_eq!(m.get("overflow").map(String::as_str), Some("hidden scroll"));
+    }
+
+    #[test]
+    fn computed_map_overflow_shorthand_reflects_axis_coercion() {
+        // overflow-x: visible + overflow-y: hidden → overflow-x computes to
+        // `auto` (CSS Overflow L3 §2.1), so the shorthand reports "auto hidden",
+        // not the raw specified "visible hidden".
+        let m = div_computed_map("<div>x</div>", "div { overflow-x: visible; overflow-y: hidden; }");
+        assert_eq!(m.get("overflow-x").map(String::as_str), Some("auto"));
+        assert_eq!(m.get("overflow").map(String::as_str), Some("auto hidden"));
+    }
+
+    // BUG-505 срез 3: `overflow-block`/`overflow-inline` (CSS Overflow L3
+    // §logical) map to `overflow-y`/`overflow-x` under `horizontal-tb` and
+    // swap to `overflow-x`/`overflow-y` under a vertical writing mode
+    // (`css/css-overflow/logical-overflow-001.html`).
+    #[test]
+    fn computed_map_overflow_logical_horizontal_tb() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { overflow-block: hidden; overflow-inline: scroll; }",
+        );
+        assert_eq!(m.get("overflow-x").map(String::as_str), Some("scroll"));
+        assert_eq!(m.get("overflow-y").map(String::as_str), Some("hidden"));
+        assert_eq!(m.get("overflow-block").map(String::as_str), Some("hidden"));
+        assert_eq!(m.get("overflow-inline").map(String::as_str), Some("scroll"));
+    }
+
+    #[test]
+    fn computed_map_overflow_logical_vertical_rl_swaps_axes() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { writing-mode: vertical-rl; overflow-block: hidden; overflow-inline: scroll; }",
+        );
+        assert_eq!(m.get("overflow-x").map(String::as_str), Some("hidden"));
+        assert_eq!(m.get("overflow-y").map(String::as_str), Some("scroll"));
+        assert_eq!(m.get("overflow-block").map(String::as_str), Some("hidden"));
+        assert_eq!(m.get("overflow-inline").map(String::as_str), Some("scroll"));
     }
 }
