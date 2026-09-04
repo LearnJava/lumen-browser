@@ -37,7 +37,8 @@ impl Lumen {
     }
 
     /// BUG-743: пересобрать каскад, если набор инлайновых `<style>` изменился
-    /// с последней сборки. Возвращает `true`, если лист заменён.
+    /// с последней сборки, или CSSOM-5 срез 2 (BUG-897) — если изменился
+    /// `document.adoptedStyleSheets`. Возвращает `true`, если лист заменён.
     ///
     /// Таблица стилей страницы собирается один раз за навигацию — на этапе
     /// разбора, сразу после выполнения синхронных скриптов. Всё, что вставляет
@@ -45,12 +46,22 @@ impl Lumen {
     /// любой CSS-in-JS), до этого оставалось вне каскада навсегда. Здесь
     /// дешёвый отпечаток ([`inline_style_fingerprint`]) сверяется на каждом
     /// релейауте, а полная пересборка (склейка из [`DynamicCssBase`] + парс)
-    /// происходит только когда блоки действительно изменились.
+    /// происходит только когда блоки действительно изменились. Тот же принцип
+    /// у `document.adoptedStyleSheets`: `PersistentJs::document_adopted_fingerprint`
+    /// — дешёвая проверка на каждом релейауте, сам мёрдж — только при различии.
     ///
     /// Сеть не трогается: `@import` внутри *нового* листа останется
     /// неразрешённым, `@font-face` из него не подгрузится — релейаут не место
     /// для загрузок. Обычный CSS-in-JS ни того, ни другого не использует.
     pub(crate) fn refresh_dynamic_css(&mut self) -> bool {
+        // Читается ДО заимствования `self.layout_source` — разные поля
+        // `self`, но так проще: `js_ctx` нужен дважды (тут и ниже, для
+        // самого мёрджа), а `layout_source` — только внутри этого вызова.
+        let adopted_fp = self
+            .js_ctx
+            .as_ref()
+            .map(|js| js.document_adopted_fingerprint())
+            .unwrap_or(0);
         let Some(src) = self.layout_source.as_mut() else {
             return false;
         };
@@ -64,7 +75,7 @@ impl Lumen {
             return false;
         };
         let fp = inline_style_fingerprint(&doc);
-        if fp == base.inline_fp {
+        if fp == base.inline_fp && adopted_fp == base.adopted_fp {
             return false;
         }
         let inline = extract_style_blocks(&doc);
@@ -74,13 +85,19 @@ impl Lumen {
         css.push_str(&base.imports_prefix);
         css.push_str(&inline);
         css.push_str(&base.linked);
-        let sheet = lumen_css_parser::parse(&css);
+        let mut sheet = lumen_css_parser::parse(&css);
+        if let Some(js) = self.js_ctx.as_ref()
+            && let Some(adopted) = js.document_adopted_stylesheet()
+        {
+            sheet.merge_from(adopted);
+        }
         eprintln!(
             "CSS пересобран после правки <style>: {} правил",
             sheet.rules.len()
         );
         *stylesheet = Arc::new(sheet);
         base.inline_fp = fp;
+        base.adopted_fp = adopted_fp;
         // Инкрементальный рестайл (BUG-341 S7) переиспользует стили прошлого
         // прохода — против нового листа они недействительны.
         self.page_prev_cascade_styles = None;

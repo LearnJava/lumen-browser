@@ -4,6 +4,11 @@
 //! (`v8_cssom_stylesheets.rs`). See
 //! `crates/js/src/v8_runtime/install/constructed_stylesheets.rs` for what is
 //! and is not wired up yet (no cascade application in this срез).
+//!
+//! Срез 2 tests below exercise `V8JsRuntime::document_adopted_fingerprint`/
+//! `document_adopted_stylesheet` directly — the shell-side merge into the
+//! page cascade (`crates/shell/src/relayout.rs`) has no JS runtime of its
+//! own to unit-test against here.
 
 use super::*;
 use crate::v8_runtime::V8JsRuntime;
@@ -132,4 +137,93 @@ fn shadow_root_adopted_style_sheets_survives_rebuild() {
         )
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Number(1.0));
+}
+
+#[test]
+fn document_adopted_fingerprint_changes_on_assignment() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let before = rt.document_adopted_fingerprint();
+    // Trailing `.length` read keeps eval's completion value a plain number —
+    // letting a constructed-sheet-bearing value fall out of eval() walks
+    // `from_v8` into `cssRules`/`parentStyleSheet` getters that fabricate a
+    // fresh, uncached wrapper on every read (BUG-994), which defeats the
+    // identity-hash cycle guard and OOMs the isolate. Unrelated to this
+    // срез's cascade wiring — see BUG-994.
+    rt.eval(
+        "var s = new CSSStyleSheet(); s.replaceSync('p{}'); \
+         document.adoptedStyleSheets = [s]; document.adoptedStyleSheets.length",
+    )
+    .unwrap();
+    let after = rt.document_adopted_fingerprint();
+    assert_ne!(before, after);
+}
+
+#[test]
+fn document_adopted_fingerprint_changes_on_replace_sync() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("var s = new CSSStyleSheet(); document.adoptedStyleSheets = [s];")
+        .unwrap();
+    let before = rt.document_adopted_fingerprint();
+    rt.eval("s.replaceSync('p { color: red; }');").unwrap();
+    let after = rt.document_adopted_fingerprint();
+    assert_ne!(before, after);
+}
+
+#[test]
+fn document_adopted_fingerprint_changes_on_disabled_toggle() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("var s = new CSSStyleSheet(); document.adoptedStyleSheets = [s];")
+        .unwrap();
+    let before = rt.document_adopted_fingerprint();
+    rt.eval("s.disabled = true;").unwrap();
+    let after = rt.document_adopted_fingerprint();
+    assert_ne!(before, after);
+}
+
+#[test]
+fn document_adopted_fingerprint_ignores_shadow_scope() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let before = rt.document_adopted_fingerprint();
+    // Trailing `.length` read — see the comment on
+    // `document_adopted_fingerprint_changes_on_assignment` (BUG-978).
+    rt.eval(
+        "var host = document.createElement('div'); \
+         document.body.appendChild(host); \
+         var sr = host.attachShadow({mode:'open'}); \
+         var s = new CSSStyleSheet(); s.replaceSync('a{}'); \
+         sr.adoptedStyleSheets = [s]; sr.adoptedStyleSheets.length",
+    )
+    .unwrap();
+    let after = rt.document_adopted_fingerprint();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn document_adopted_stylesheet_is_none_when_empty() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(rt.document_adopted_stylesheet().is_none());
+}
+
+#[test]
+fn document_adopted_stylesheet_merges_enabled_members_in_order() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var a = new CSSStyleSheet(); a.replaceSync('p{color:red;}'); \
+         var b = new CSSStyleSheet(); b.replaceSync('p{color:blue;}'); \
+         document.adoptedStyleSheets = [a, b]; document.adoptedStyleSheets.length",
+    )
+    .unwrap();
+    let sheet = rt.document_adopted_stylesheet().unwrap();
+    assert_eq!(sheet.rules.len(), 2);
+}
+
+#[test]
+fn document_adopted_stylesheet_skips_disabled_members() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var a = new CSSStyleSheet(); a.replaceSync('p{}'); a.disabled = true; \
+         document.adoptedStyleSheets = [a]; document.adoptedStyleSheets.length",
+    )
+    .unwrap();
+    assert!(rt.document_adopted_stylesheet().is_none());
 }

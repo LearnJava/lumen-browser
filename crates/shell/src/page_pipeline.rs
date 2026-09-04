@@ -396,6 +396,8 @@ fn build_page_cascade(
             imports_prefix,
             linked,
             inline_fp: inline_style_fingerprint(doc),
+            // CSSOM-5 срез 2: placeholder — see the field's doc comment.
+            adopted_fp: 0,
         };
         (css, dyn_css, link_outcomes)
     };
@@ -718,6 +720,20 @@ pub(crate) fn parse_and_layout(
     }
     #[cfg(feature = "v8")]
     if let Some(js) = &js_ctx {
+        // CSSOM-5 срез 2 (BUG-897): a parse-time synchronous script may
+        // already have assigned `document.adoptedStyleSheets` — fold its
+        // content into the cascade before this block's snapshot (and the
+        // real layout further down) read `cascade.sheet`. Assigning the
+        // property doesn't mutate any DOM node, so `dom_dirty` never sees
+        // it — this rides its own fingerprint instead.
+        let adopted_fp = js.document_adopted_fingerprint();
+        let adopted_changed = adopted_fp != cascade.dynamic_css.adopted_fp;
+        if adopted_changed {
+            if let Some(adopted) = js.document_adopted_stylesheet() {
+                cascade.sheet.merge_from(adopted);
+            }
+            cascade.dynamic_css.adopted_fp = adopted_fp;
+        }
         // Nothing to re-derive if the scripts changed neither the cascade nor
         // the tree: the snapshot pushed before they ran is still current, and
         // this is the one place a whole layout pass can be skipped. The flag is
@@ -726,7 +742,7 @@ pub(crate) fn parse_and_layout(
         let dom_touched = js
             .dom_dirty_flag()
             .is_none_or(|f| f.load(std::sync::atomic::Ordering::Relaxed));
-        if scripts_changed_css || dom_touched {
+        if scripts_changed_css || dom_touched || adopted_changed {
             let snapshot = {
                 let d = doc_arc.lock().unwrap();
                 collect_js_layout_snapshot(
