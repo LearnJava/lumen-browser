@@ -9,15 +9,19 @@ subdomains), so that a test can check what happens across an origin boundary.
 Upstream that works because the standard setup step (`wpt make-hosts-file`,
 appended to `/etc/hosts`) points every one of those names at 127.0.0.1.
 
-Lumen's runner never did that step: `browsers/lumen.py::env_options` pins
-`browser_host` to the literal `127.0.0.1` precisely to avoid needing a
+Lumen's runner never did that step: until `WPT-RUN-10`, `browsers/lumen.py::env_options`
+pinned `browser_host` to the literal `127.0.0.1` precisely to avoid needing a
 machine-wide hosts file (the pilot's scope was same-origin `dom/` tests, where
-it is free). At corpus scale it is not free. `wptserve` builds the subdomain
+it is free). At corpus scale it was not free. `wptserve` builds the subdomain
 family by *prefixing* the browser host, so with an IP it hands the browser
 `www1.127.0.0.1` and `www2.127.0.0.1` — names with no resolution anywhere —
 and the alternate family stays `not-web-platform.test`, which resolves only if
 a hosts file says so. A test that reaches for another origin therefore does not
 fail on the engine's behaviour; it waits for a load that can never start.
+`WPT-RUN-10` (ROADMAP.md) moved `browser_host` to `"localhost"`, which fixes
+the own-subdomain family (`*.localhost` resolves under RFC 6761 with no
+machine change) but not the alternate-domain family — that gap is left open,
+see `env_options`'s comment.
 
 What this script measures, in three independent pieces:
 
@@ -213,14 +217,23 @@ def configured_domains() -> dict:
     builder — the point is what the *server* believes, and hardcoding the
     subdomain list here would be a second copy of it that can drift."""
     sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
+    sys.path.insert(0, os.path.join(REPO_ROOT, "tools", "wptrunner"))
+    sys.path.insert(0, os.path.join(REPO_ROOT, "tools", "webdriver"))
     import logging
 
     from serve.serve import ConfigBuilder  # noqa: PLC0415  (optional dependency)
+    # `browser_host` read straight off the product plugin instead of a second
+    # hardcoded literal here — this exact drift (this script said `127.0.0.1`
+    # for two more commits after `WPT-RUN-10` moved the real value to
+    # `localhost`) is what the docstring above already warns about for the
+    # subdomain list; the same argument applies to the value it's built from.
+    from wptrunner.browsers import lumen as lumen_plugin  # noqa: PLC0415
 
     with open(CONFIG_PATH, encoding="utf-8") as fh:
         override = json.load(fh)
     builder = ConfigBuilder(logging.getLogger("host_audit"),
-                            browser_host="127.0.0.1", bind_address=True,
+                            browser_host=lumen_plugin.env_options()["browser_host"],
+                            bind_address=True,
                             ports=override["ports"])
     with builder as config:
         return {family: dict(domains) for family, domains in config.all_domains.items()}
