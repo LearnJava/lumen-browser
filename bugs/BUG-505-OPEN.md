@@ -281,3 +281,91 @@ Remaining scope after this slice: ~44 files (was ~52) — `webkit-box-
 computed.html` (1), the `::scroll-marker` cluster (~40), plus `overflow-
 clip-margin`'s box-keyword+`calc()` grammar extension and `overflow`
 shorthand's own computed-style path (2, not investigated this slice).
+
+## Срез 3 (2026-09-04, P3) — overflow shorthand + overflow-block/overflow-inline
+computed-style path, plus a real coerce_overflow_axes bug found along the way
+
+Picked up `overflow-computed.html`/`overflow-shorthand-001.html` from срез 2's
+remaining scope. Both files exercise `getComputedStyle(el).overflow` (the
+shorthand) and `.overflowX`/`.overflowY` — the CSSOM-2 specified-value side
+(`div.style.overflow`) was already fully implemented (`_lumen_expand_
+overflow_shorthand`/`_lumen_overflow_shorthand_value`, wired into
+`_lumen_make_style`), but `getComputedStyle()` reads straight through the
+native `_lumen_get_computed_style` binding with no JS-side shorthand
+collapsing at all, so `computed_style_to_map` (Rust) needed the missing
+entries.
+
+**Real bug found and fixed:** `coerce_overflow_axes` (`style/adjust.rs`) —
+the existing CSS Overflow L3 §2.1 axis-coercion function ("if one axis is
+`visible` and the other isn't, `visible` becomes `auto`") was missing the
+spec's `clip` exemption entirely: the rule only fires when the *other* axis
+is neither `visible` **nor `clip`**, but the old code treated `clip` the
+same as `hidden`/`scroll`/`auto`, so `overflow: clip visible` wrongly
+computed to `clip auto` instead of the spec/WPT-expected unchanged
+`clip visible` (`overflow-computed.html`'s `'clip visible'`/`'visible clip'`
+cases, both asserting no change). Fixed with a `forces_auto` closure
+excluding `Clip` alongside `Visible`; 2 new regression tests
+(`overflow_axis_coercion_clip_does_not_force_auto`,
+`overflow_axis_coercion_clip_clip_unchanged`, `style/tests/values.rs`) plus
+hand-verification against all 23 `test_computed_value("overflow", ...)`
+cases in the WPT file. No graphic-tests page uses `overflow: clip` in any
+combination (`grep -rn "overflow[a-z-]*:\s*clip\b" graphic_tests/*.html` →
+zero hits), confirmed display-list-neutral by an A/B of `--dump-layout`/
+`--dump-display-list` on the 6 overflow-adjacent pages (`git stash` the
+change, rebuild, re-dump, `diff -rq` → empty) per this repo's Linux
+`dump_golden.py` caveat.
+
+**`overflow` shorthand's computed-value path:** new `"overflow"` entry in
+`computed_style_to_map` (`selector_query.rs`) — collapses to one keyword
+when the (already axis-coerced) `overflow_x`/`overflow_y` agree, else
+`"x y"`, same collapse rule the CSSOM specified-value path already used.
+
+**`overflow-block`/`overflow-inline` (CSS Overflow L3 §logical) implemented
+from scratch** — these were genuinely unimplemented (no `ComputedStyle`
+field, no parser arm, confirmed by a fresh `grep` before starting). Two new
+`ComputedStyle` fields (`overflow_block`/`overflow_inline`, default
+`Visible`, same "field != default means explicitly set" heuristic every
+other logical property in `style/logical.rs` already uses), a new
+`apply_declaration` arm each (`style/apply/layout.rs`, delegating to the
+existing `parse_overflow_kw`), `css_wide.rs` initial/inherit/unset handling,
+and a new post-cascade resolution pass
+`resolve_overflow_logical_properties` (`style/logical.rs`) mapping them onto
+`overflow_x`/`overflow_y` — **which physical axis depends on
+`writing-mode`**: `overflow-block` → `overflow-y` under `horizontal-tb` but
+→ `overflow-x` under any vertical mode (`vertical-rl`/`vertical-lr`/
+`sideways-rl`/`sideways-lr`), the swap confirmed against
+`css/css-overflow/logical-overflow-001.html`'s own two `writing-mode`
+sub-tests. This pass runs *before* `coerce_overflow_axes` in `cascade.rs`
+(reordered — it used to run before `resolve_logical_properties`, now runs
+before that too) so the axis-pair adjustment sees the final physical pair,
+not a stale one. `computed_style_to_map` gained matching `"overflow-block"`/
+`"overflow-inline"` entries (reading back the resolved physical value on
+whichever axis it mapped to), and the JS shim's CSSOM-2 validation table
+(`_LUMEN_KEYWORD_PROPERTIES`, `web_api_shim_mid.js`) gained both keys with
+the same 5-keyword grammar as `overflow-x`/`overflow-y` — two stale comments
+elsewhere in the same file claiming "the engine has no such properties at
+all" were updated to point at the new entries instead of left dangling.
+
+7 new regression tests total (`style/tests/values.rs`, `selector_query.rs`),
+`cargo test -p lumen-layout` 3772/3772 (was 3718 at срез 2 — the crate's
+headline count also picked up unrelated tests added by other sessions
+between срез 2 and this slice). `cargo test -p lumen-shell` scoped run clean
+modulo two pre-existing Windows-path-only failures identical on `main`
+(`page_pipeline::bug440_get_form_submission_resolves_to_the_target_file`,
+`page_pipeline::resolve_file_base_drive_letter_is_not_a_scheme` — both
+assert against a hardcoded `D:/tmp` Windows path, fail on Linux regardless
+of this change). `cargo clippy -p lumen-layout` itself is currently
+unrunnable on this Linux dev box regardless of branch — pre-existing
+`chunks_exact`/`dead_code` errors from a newer-than-pinned system
+`rustc`/`clippy` (1.98.0 vs the repo's pinned 1.97.0, no `rustup` installed
+to pin it down); reproduced identically on `main` with `--no-deps`, in files
+this slice never touched (`box_tree/svg.rs`, `style/parse/counters.rs`,
+`invariants.rs`) — `cargo check -p lumen-layout` is clean.
+
+**Untouched, unchanged from срез 2's assessment:** `webkit-box-
+computed.html` (1), the `::scroll-marker` cluster (~40), `overflow-clip-
+margin`'s box-keyword+`calc()` grammar extension (1). Remaining scope after
+this slice: ~42 files (was ~44) — `overflow-computed.html`/`overflow-
+shorthand-001.html` are done; the `coerce_overflow_axes` fix and the new
+`overflow-block`/`overflow-inline` support weren't separately counted files
+in the original 60, so the file count moves by exactly the 2 files closed.

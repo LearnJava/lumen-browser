@@ -1545,8 +1545,9 @@ var _LUMEN_LENGTH_PROPERTIES = {
 // `_lumen_css_canonical_scroll_offset`'s doc comment above. Logical
 // equivalents (`scroll-margin-inline-start` and siblings) are not CSS Scroll
 // Snap L1 properties and the engine has none of them (`motion.rs` has zero
-// hits for either), so they stay out of scope, same reasoning as
-// `overflow-block`/`overflow-inline` above.
+// hits for either), so they stay out of scope — the same "engine has no such
+// property yet" reasoning `overflow-block`/`overflow-inline` used to be an
+// example of, before BUG-505 срез 3 gave them their own Rust support.
 var _LUMEN_SCROLL_OFFSET_PROPERTIES = {
     'scroll-margin-top':    { allowAuto: false, nonNegative: false },
     'scroll-margin-right':  { allowAuto: false, nonNegative: false },
@@ -1607,8 +1608,8 @@ var _LUMEN_SIZING_LENGTH_PROPERTIES = {
 // itself is NOT in this table — it is a 1-or-2-token grammar, wired through
 // `_lumen_expand_overflow_shorthand`/`_lumen_overflow_shorthand_value` above,
 // same shape as the TRBL shorthand path. `overflow-block`/`overflow-inline`
-// (the logical-axis equivalents) stay out of scope — the engine has no such
-// properties at all yet, `crates/engine/layout/src` has zero hits for either.
+// (the logical-axis equivalents) landed BUG-505 срез 3 — see their own
+// entries in `_LUMEN_KEYWORD_PROPERTIES` below, same grammar.
 //
 // Срез 10: seven more pure keyword-enum longhands, same table, same generic
 // canonicalization — no new Rust function needed, each already has a
@@ -1632,6 +1633,12 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'box-sizing':  ['border-box', 'content-box'],
     'overflow-x':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
     'overflow-y':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
+    // BUG-505 срез 3: `overflow-block`/`overflow-inline` (CSS Overflow L3
+    // §logical) landed in the Rust cascade this slice
+    // (`crates/engine/layout/src/style/apply/layout.rs`) — same grammar as
+    // their physical `overflow-x`/`overflow-y` counterparts above.
+    'overflow-block':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
+    'overflow-inline': ['visible', 'hidden', 'clip', 'scroll', 'auto'],
     'position':    ['static', 'relative', 'absolute', 'fixed', 'sticky'],
     'isolation':   ['auto', 'isolate'],
     'mix-blend-mode': [
