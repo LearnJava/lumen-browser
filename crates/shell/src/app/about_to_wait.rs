@@ -267,23 +267,18 @@ impl Lumen {
                 // BUG-480 срез 4: доставка кросс-фреймовых postMessage в страницу.
                 j.pump_frame_messages();
             });
-            // ADR-016 M2.2c-2c (остаток): value-returning nav/timer чтения через
-            // `route_query_js` (тот же паттерн, что `take_dom_dirty`/`take_raf_pending`
-            // выше). Под флагом (`LUMEN_ENGINE_THREAD=1`) читаются блокирующим `query`
-            // — в очереди после уже отправленных `task`, восстанавливая read-after-eval
-            // порядок, оставленный синхронным в 2b; без флага (по умолчанию) — `js.map`,
-            // байт-идентично прежнему прямому `js.<read>()`. `flatten` схлопывает
-            // `Option<Option<_>>` (внешний = «есть ли JS-контекст», внутренний = сам
-            // результат чтения) в `Option<_>`.
-            if let Some(nav) =
-                route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| j.take_navigate_request())
-                    .flatten()
-            {
+            // ADR-016 M2.2c-2c/THREAD-2: value-returning nav/timer чтения через
+            // `drain_query_js` (тот же non-blocking-when-busy паттерн, что канва/
+            // scroll/история ниже). Под флагом (`LUMEN_ENGINE_THREAD=1`) читаются
+            // `query`, отложенным на пасс, пока движковый поток занят rAF-тёрном
+            // ИЛИ ещё не применённым relayout-job'ом (иначе `query` FIFO-serialize
+            // за его хвостом — то, что THREAD-2 убирает); без флага (по умолчанию)
+            // — прежний прямой `js.<read>()`, байт-идентично.
+            if let Some(nav) = self.drain_query_js(|j| j.take_navigate_request()).flatten() {
                 self.pending_js_navigate = Some(nav);
             }
             if let Some(wakeup_epoch_ms) =
-                route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| j.take_timer_wakeup())
-                    .flatten()
+                self.drain_query_js(|j| j.take_timer_wakeup()).flatten()
             {
                 let now_epoch_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -320,22 +315,13 @@ impl Lumen {
         // хоть один живой контекст имеет конверт «для себя», держим короткий
         // poll-дедлайн: получатель разберёт ящик на ближайшем тике пумпы.
         // Чистые чтения, без побочных эффектов; под движковым потоком страница
-        // опрашивается тем же route_query_js-каналом, что остальные чтения.
+        // опрашивается через `drain_query_js` (THREAD-2: тем же non-blocking-
+        // when-busy каналом, что остальные чтения — деградирует до прежнего
+        // `js.map(read)` без движкового потока, байт-идентично).
         let transport_pending = frame_js_handles.iter().any(|(_, fjs)| fjs.frame_transport_pending())
-            || match self.engine_thread.as_ref() {
-                Some(et) => {
-                    route_query_js(
-                        Some(et),
-                        self.js_ctx.as_ref(),
-                        |j| j.frame_transport_pending(),
-                    )
-                    .unwrap_or(false)
-                }
-                None => self
-                    .js_ctx
-                    .as_ref()
-                    .is_some_and(|j| j.frame_transport_pending()),
-            };
+            || self
+                .drain_query_js(|j| j.frame_transport_pending())
+                .unwrap_or(false);
         if transport_pending {
             let poll = std::time::Instant::now() + std::time::Duration::from_millis(2);
             next_wakeup = Some(next_wakeup.map_or(poll, |t| t.min(poll)));
@@ -352,14 +338,13 @@ impl Lumen {
         // with `RedrawRequested` step 3.1 so the combined rate stays ≤60 Hz.
         // If a callback mutates the DOM we relayout and request a real paint,
         // so rAF-driven animations keep their 60 fps repaint cadence.
-        // ADR-016 M2.2c-2d: снимаем последние прямые `self.js_ctx`-обращения rAF-пампа
-        // (`has_raf_pending` read → `route_query_js`, `run_animation_frame` void →
-        // `route_task_js`). Под флагом (`LUMEN_ENGINE_THREAD=1`) чтения — блокирующий
-        // `query`, батч rAF — `task` в очередь **между** ними, так что порядок
-        // has_raf_pending → take_raf_pending → run_animation_frame → take_dom_dirty
-        // сохранён; без флага (по умолчанию) — прежние синхронные вызовы, байт-идентично
-        // (при отсутствующем хэндле `route_query_js` → `None` → `unwrap_or(false)`,
-        // как прежняя ветка `js_ctx == None`).
+        // ADR-016 M2.2c-2d проектировала этот памп на блокирующий `route_query_js`
+        // (`has_raf_pending`) вперемешку с `route_task_js` (`run_animation_frame`);
+        // M2.3 заменила её ниже полностью lock-free веткой (`pump_raf_engine_thread`
+        // + `raf_pending_lockfree`) до того, как блокирующий вариант был влит —
+        // под флагом (`LUMEN_ENGINE_THREAD=1`) исполняется ТОЛЬКО код по `if`
+        // ниже, не текст этого комментария. Без флага (по умолчанию) — ветка
+        // `else` с прежними синхронными вызовами, байт-идентично.
         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
         if self.engine_thread.is_some() {
             // ADR-016 M2.3 (flag on): async parked-loop rAF pump — the

@@ -381,21 +381,50 @@ impl Lumen {
             .is_some_and(|f| f.swap(false, std::sync::atomic::Ordering::Relaxed))
     }
 
-    /// ADR-016 M2.3: value-returning JS drain that is **deferred** (returns
-    /// `None`) while a rAF turn is in flight on the engine thread. The parked
-    /// `about_to_wait` loop issues several blocking `route_query_js` drains each
-    /// pass (canvas bitmaps, history/pushState, traversals, navigation updates);
-    /// under the flag every one of them would otherwise FIFO-serialize behind the
-    /// in-flight (up to ~200 ms) `run_animation_frame` task and freeze the loop —
-    /// exactly the stall M2.3 removes. Skipping a drain merely defers it to the
-    /// next pass after the turn finishes (the short rAF wakeup keeps the loop
-    /// warm). Off the flag `raf_turn_inflight()` is always `false`, so this is
-    /// byte-identical to calling [`route_query_js`] directly.
+    /// ADR-016 THREAD-2: pure decision behind [`Self::drain_query_js`]'s defer
+    /// guard, split out so it is unit-testable without an engine thread. `true`
+    /// means "do not call `query` this pass" — either a rAF turn is still
+    /// running (`raf_turn_inflight`) or a submitted relayout `Run` job has not
+    /// been applied yet (`job_generation != applied_generation`, the same
+    /// mismatch [`Lumen`]'s `about_to_wait` already polls every 4 ms until it
+    /// clears). Both are `Task`/`Run` messages queued on the same
+    /// `EngineThread` channel as `query`'s own request (`engine_thread.rs`'s
+    /// `run_batch` drains and executes a batch in FIFO order), so either one
+    /// executing when `query` would be sent means `query` blocks for its full
+    /// remaining duration, not just the short rAF-turn case `raf_turn_inflight`
+    /// alone used to catch.
+    fn should_defer_query(
+        raf_turn_inflight: bool,
+        job_generation: u64,
+        applied_generation: u64,
+    ) -> bool {
+        raf_turn_inflight || job_generation != applied_generation
+    }
+
+    /// ADR-016 M2.3 + THREAD-2: value-returning JS drain that is **deferred**
+    /// (returns `None`) while a rAF turn or a submitted relayout job is in
+    /// flight on the engine thread (see [`Self::should_defer_query`]). The
+    /// parked `about_to_wait` loop issues several blocking `route_query_js`
+    /// drains each pass (canvas bitmaps, history/pushState, traversals,
+    /// navigation updates); under the flag every one of them would otherwise
+    /// FIFO-serialize behind whichever `Run`/`Task` the engine thread is
+    /// currently executing — a rAF turn (up to ~200 ms) or a full off-thread
+    /// relayout — and freeze the loop, exactly the stall M2.3/THREAD-2 remove.
+    /// Skipping a drain merely defers it to the next pass once the in-flight
+    /// job finishes: the rAF-turn case keeps the loop warm via its own short
+    /// wakeup, the relayout case via the existing 4 ms
+    /// `engine_job_generation != engine_applied_generation` poll in
+    /// `about_to_wait`. Off the flag both conditions are always `false`, so
+    /// this is byte-identical to calling [`route_query_js`] directly.
     pub(crate) fn drain_query_js<R: Send + 'static>(
         &self,
         read: impl FnOnce(&Arc<dyn PersistentJs>) -> R + Send + 'static,
     ) -> Option<R> {
-        if self.raf_turn_inflight() {
+        if Self::should_defer_query(
+            self.raf_turn_inflight(),
+            self.engine_job_generation,
+            self.engine_applied_generation,
+        ) {
             return None;
         }
         route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), read)
@@ -1277,4 +1306,42 @@ pub(crate) fn meta_initial_scale(src: &LayoutSource) -> f32 {
         .ok()
         .and_then(|doc| doc.viewport_meta().map(|m| m.initial_scale))
         .unwrap_or(1.0)
+}
+
+#[cfg(test)]
+mod thread2_defer_query_tests {
+    use super::Lumen;
+
+    // ADR-016 THREAD-2: `should_defer_query` is the pure decision behind
+    // `Lumen::drain_query_js`'s defer guard — exercised directly here because
+    // `drain_query_js` itself needs a live `Lumen`/engine thread to call.
+
+    #[test]
+    fn does_not_defer_when_idle() {
+        assert!(!Lumen::should_defer_query(false, 3, 3));
+    }
+
+    #[test]
+    fn defers_while_raf_turn_inflight() {
+        assert!(Lumen::should_defer_query(true, 3, 3));
+    }
+
+    #[test]
+    fn defers_while_relayout_job_unapplied() {
+        // job_generation (4) ahead of applied_generation (3): a submitted
+        // `Run` has not landed yet — the case `raf_turn_inflight` alone missed.
+        assert!(Lumen::should_defer_query(false, 4, 3));
+    }
+
+    #[test]
+    fn resumes_once_relayout_job_applied() {
+        // `poll_engine_commit` advanced `applied_generation` to match — the
+        // engine thread is free again, `query` is safe to call.
+        assert!(!Lumen::should_defer_query(false, 4, 4));
+    }
+
+    #[test]
+    fn defers_when_both_conditions_hold() {
+        assert!(Lumen::should_defer_query(true, 4, 3));
+    }
 }
