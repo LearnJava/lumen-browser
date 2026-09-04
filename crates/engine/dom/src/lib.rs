@@ -702,12 +702,62 @@ impl Document {
         self.shadow_roots.contains_key(&id)
     }
 
+    /// Whether `id` indexes this document's node arena.
+    ///
+    /// The arena never shrinks (`Node`s are detached, not freed), so a valid
+    /// id is any `0 .. self.nodes.len()`. An id that fails this check belongs
+    /// to a *different* document — the caller is holding a stale/foreign
+    /// handle (BUG-986), not a node that was freed.
+    pub fn contains_id(&self, id: NodeId) -> bool {
+        id.index() < self.nodes.len()
+    }
+
+    /// Bounds-checked [`Self::get`]: `None` when `id` does not belong to this
+    /// document's arena (stale handle from another document, BUG-986).
+    ///
+    /// Prefer this over [`Self::get`] at any boundary where `id` originates
+    /// from script-controlled state (JS natives, event dispatch, snapshots) —
+    /// a browser engine must degrade on a foreign id, never crash on it.
+    pub fn try_get(&self, id: NodeId) -> Option<&Node> {
+        self.nodes.get(id.index())
+    }
+
+    /// Bounds-checked [`Self::get_mut`]; see [`Self::try_get`].
+    pub fn try_get_mut(&mut self, id: NodeId) -> Option<&mut Node> {
+        self.nodes.get_mut(id.index())
+    }
+
+    /// Panics with a self-describing message when `id` is outside this
+    /// document's arena — [`std::panic::Location`] names the calling native
+    /// in the log (no `RUST_BACKTRACE=1` needed on a live run, BUG-986).
+    #[track_caller]
     pub fn get(&self, id: NodeId) -> &Node {
+        if !self.contains_id(id) {
+            // `foreign_id_panic` is `-> !`, so the index below is in-bounds.
+            self.foreign_id_panic(id);
+        }
         &self.nodes[id.index()]
     }
 
+    #[track_caller]
     pub fn get_mut(&mut self, id: NodeId) -> &mut Node {
+        if !self.contains_id(id) {
+            self.foreign_id_panic(id);
+        }
         &mut self.nodes[id.index()]
+    }
+
+    #[cold]
+    #[track_caller]
+    #[allow(clippy::panic)]  // BUG-986: см. docs/lint-policy.md §10 (реестр)
+    fn foreign_id_panic(&self, id: NodeId) -> ! {
+        panic!(
+            "BUG-986: NodeId {} вне арены документа (len {}) — устаревший/чужой идентификатор, \
+             переживший навигацию или пересёкший границу вкладки; вызывающий: {}",
+            id.index(),
+            self.nodes.len(),
+            std::panic::Location::caller()
+        )
     }
 
     pub fn len(&self) -> usize {
@@ -1698,6 +1748,51 @@ mod tests {
         let doc = Document::new();
         assert_eq!(doc.len(), 1);
         assert!(matches!(doc.get(doc.root()).data, NodeData::Document));
+    }
+
+    // ── BUG-986: NodeId из чужого документа не должен ронять процесс ────────
+
+    #[test]
+    fn contains_id_false_for_foreign_node_id() {
+        let mut doc = Document::new();
+        let a = doc.create_element(QualName::html("a"));
+        // Id из «более крупного» документа (индекс 238 при 3 узлах — форма
+        // паники из живых прогонов 2026-09-04: len 39 → index 238).
+        let foreign = NodeId::from_index(238);
+        assert!(doc.contains_id(a));
+        assert!(doc.contains_id(doc.root()));
+        assert!(!doc.contains_id(foreign));
+        assert!(!doc.contains_id(NodeId::from_index(usize::MAX)));
+    }
+
+    #[test]
+    fn try_get_returns_none_for_foreign_node_id() {
+        let doc = Document::new();
+        let foreign = NodeId::from_index(238);
+        assert!(doc.try_get(doc.root()).is_some());
+        assert!(doc.try_get(foreign).is_none());
+    }
+
+    #[test]
+    fn try_get_mut_returns_none_for_foreign_node_id() {
+        let mut doc = Document::new();
+        let foreign = NodeId::from_index(238);
+        assert!(doc.try_get_mut(doc.root()).is_some());
+        assert!(doc.try_get_mut(foreign).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "BUG-986")]
+    fn get_panics_with_bug986_diagnostic_on_foreign_id() {
+        let doc = Document::new();
+        let _ = doc.get(NodeId::from_index(238));
+    }
+
+    #[test]
+    #[should_panic(expected = "BUG-986")]
+    fn get_mut_panics_with_bug986_diagnostic_on_foreign_id() {
+        let mut doc = Document::new();
+        let _ = doc.get_mut(NodeId::from_index(238));
     }
 
     #[test]
