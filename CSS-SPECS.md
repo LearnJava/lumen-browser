@@ -139,6 +139,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | SVG Fill & Stroke | [fill-stroke-3](https://www.w3.org/TR/fill-stroke-3/) | SVG renderer not in scope Phase 0 |
 | CSS Round Display | [css-round-display-1](https://www.w3.org/TR/css-round-display-1/) | Wearable/embedded display; not applicable |
 | CSS TV/Mobile/Print Profiles | — | Non-browser profiles |
+| CSS Exclusions and Shapes L1 (`wrap-flow`/`wrap-through`) | [css-exclusions-1](https://drafts.csswg.org/css-exclusions/) | Editor's Draft never shipped in any evergreen browser (only an experimental IE10/11 implementation); CSSWG itself split the still-live shape half of this module into [css-shapes-1](https://www.w3.org/TR/css-shapes-1/), already implemented above. Vendored `css/css-exclusions` (8 files) tracked via committed `.ini` (BUG-507) |
 
 ---
 
