@@ -1067,6 +1067,31 @@ fn bfcache_blocked_true_when_onbeforeunload_property_set() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// BUG-988: a live `Worker` runs on its own OS thread that nothing pumps and
+// nothing tells "the page went away" — `park_current_page` used to keep the
+// whole runtime (Worker included) alive indefinitely instead of dropping it
+// like any other ineligible page, so the thread kept ticking its own
+// timers/messages long after the page that created it was gone.
+#[test]
+fn bfcache_blocked_true_when_worker_active() {
+    let rt = V8JsRuntime::new().unwrap();
+    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+    let r = rt
+        .eval("new Worker('data:text/javascript,'); _lumen_bfcache_blocked()")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn bfcache_blocked_false_after_worker_terminated() {
+    let rt = V8JsRuntime::new().unwrap();
+    rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+    let r = rt
+        .eval("var w = new Worker('data:text/javascript,'); w.terminate(); _lumen_bfcache_blocked()")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(false));
+}
+
 // BUG-564: `document.fonts.ready` used to be `undefined`, so any script
 // awaiting font loading (`document.fonts.ready.then(...)`) threw
 // synchronously instead of getting a Promise.

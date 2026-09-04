@@ -1275,6 +1275,14 @@ function _lumen_unload_document(persisted) {
 // `unload`/`beforeunload` have no dedicated `addEventListener` case, so
 // listeners land in the generic `_other_win_listeners` bucket; `onunload`/
 // `onbeforeunload` are plain assignable properties, checked directly.
+// A live `Worker` (BUG-988) runs on its own OS thread that nothing pumps and
+// nothing tells "the page went away" — `park_current_page` keeps the whole
+// runtime, Worker included, alive indefinitely (evicted only once a *later*
+// page also becomes park-eligible, which may never happen), so the thread
+// keeps ticking its own timers/messages long after the page that created it
+// is gone. `_lumen_has_active_worker` is defined in `WORKER_SHIM`
+// (crates/js/src/worker.rs); guarded by `typeof` because the v8-backend
+// feature (and thus Worker support) is optional.
 // Called from the shell via `PersistentJs::has_bfcache_freeze_blocker`.
 function _lumen_bfcache_blocked() {
     if (_ws_instances.some(function(w) { return w.readyState === 1; })) return true;
@@ -1283,6 +1291,7 @@ function _lumen_bfcache_blocked() {
     if (typeof window.onunload === 'function') return true;
     if (_other_win_listeners['beforeunload'] && _other_win_listeners['beforeunload'].length > 0) return true;
     if (_other_win_listeners['unload'] && _other_win_listeners['unload'].length > 0) return true;
+    if (typeof _lumen_has_active_worker === 'function' && _lumen_has_active_worker()) return true;
     return false;
 }
 
