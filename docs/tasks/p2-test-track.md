@@ -482,6 +482,27 @@ baseline из-за таймаута (см. выше).
 на сегодня, а не 289 — счёт в описании задачи чуть отстал от вендоринга; 296 − 135 = 161). Для
 следующей сессии — тот же цикл (`--update-expected` пакетами → `--check` сразу же, не откладывая).
 
+### TEST-3: срез 2 (2026-09-04)
+
+Продолжение того же цикла на следующем пакете: **+16 категорий** (135 → 151 с baseline) —
+`accname`, `ai`, `animation-worklet`, `bluetooth`, `client-hints`, `clipboard-apis`,
+`compute-pressure`, `cookiestore`, `density-size-correction`, `device-bound-session-credentials`,
+`digital-credentials`, `document-picture-in-picture`, `domparsing`, `domxpath`, `dpub-aam`,
+`element-timing`. Тот же рецепт: `--update-expected --all --root <cat> --recursive`, затем
+`--check` на каждой сразу же — 0 регрессий, 0 неожиданных PASS, 0 прочих отклонений на всех 16,
+exit 0. Новых багов генератора не найдено — оба бага среза 1 (`\r`/`\n` в имени субтеста,
+угаданный id `.any.js`/`.window.js`-варианта) уже покрывали этот пакет.
+
+Разброс `harness OK` в пакете большой и это ожидаемо, не сигнал регресса: `ai` — 0/168 (API целиком
+не реализовано, категория явно `tentative`), `accname`/`dpub-aam` — субтесты 0/484 и 0/39 при
+100% `harness OK` (страницы грузятся и не крашат раннер, но сама accessibility-семантика вне
+скоупа рендер-движка), `domparsing`/`element-timing` — почти полный `harness OK` (49/52, 52/52) с
+частичным прохождением сабтестов. Baseline фиксирует именно эту смесь как текущий контракт —
+`--check` следит за отклонением от неё, не за абсолютным счётом.
+
+Осталось непокрытых **~145** категорий (296 `done`-категорий WPT-VENDOR на сегодня − 151 = 145).
+Для следующей сессии — тот же цикл дальше.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
