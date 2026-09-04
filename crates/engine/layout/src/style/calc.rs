@@ -645,6 +645,29 @@ pub(in crate::style) fn parse_math_function_value(s: &str) -> Option<Length> {
     Some(Length::Calc(Box::new(node.simplify())))
 }
 
+/// Recursively checks whether `node` references a `Length::Percent` leaf
+/// anywhere in its tree — used by properties typed `<length>` rather than
+/// `<length-percentage>` (BUG-505 срез 4, `overflow-clip-margin`), whose
+/// grammar disallows `%` even inside `calc()` (WPT
+/// `overflow-clip-margin.html`'s `calc(100% - 0.5em)` /
+/// `calc(100% - 50px)` / `border-box calc(0.5em - 100%)` invalid cases).
+pub(in crate::style) fn calc_node_contains_percent(node: &CalcNode) -> bool {
+    match node {
+        CalcNode::Length(Length::Percent(_)) => true,
+        CalcNode::Length(_) | CalcNode::Number(_) => false,
+        CalcNode::Add(a, b) | CalcNode::Sub(a, b) | CalcNode::Mul(a, b) | CalcNode::Div(a, b) => {
+            calc_node_contains_percent(a) || calc_node_contains_percent(b)
+        }
+        CalcNode::Min(args) | CalcNode::Max(args) => args.iter().any(calc_node_contains_percent),
+        CalcNode::Clamp(mn, val, mx) => {
+            calc_node_contains_percent(mn)
+                || calc_node_contains_percent(val)
+                || calc_node_contains_percent(mx)
+        }
+        CalcNode::Func(_, args) => args.iter().any(calc_node_contains_percent),
+    }
+}
+
 // ──────────────── calc() лексер + парсер ────────────────
 
 #[derive(Debug, Clone, PartialEq)]

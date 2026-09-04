@@ -152,6 +152,48 @@ impl ScrollbarGutter {
     }
 }
 
+/// CSS Overflow L3 §overflow-clip-margin — the `<visual-box>` component of
+/// the property's `[<visual-box> || <length [0,∞]>]` grammar (BUG-505
+/// срез 4). Initial `padding-box`, same as `background-origin`'s box triplet
+/// (`BackgroundOrigin`, `style/values/background.rs`) — a separate enum
+/// rather than reusing that one, matching this codebase's existing "one
+/// small enum per property" convention for the identical
+/// content-box/padding-box/border-box triplet (`BackgroundClip`, `MaskClip`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OverflowClipMarginBox {
+    /// `content-box` — clip region extends from the content edge.
+    ContentBox,
+    /// `padding-box` (initial) — clip region extends from the padding edge.
+    #[default]
+    PaddingBox,
+    /// `border-box` — clip region extends from the border edge.
+    BorderBox,
+}
+
+impl OverflowClipMarginBox {
+    /// Parses a single `<visual-box>` keyword. `None` for anything else,
+    /// including `margin-box` (not part of this property's grammar, per
+    /// WPT `overflow-clip-margin.html`'s `test_invalid_value(...,
+    /// 'margin-box')`).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "content-box" => Some(Self::ContentBox),
+            "padding-box" => Some(Self::PaddingBox),
+            "border-box" => Some(Self::BorderBox),
+            _ => None,
+        }
+    }
+
+    /// Serializes back to its CSS keyword.
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::ContentBox => "content-box",
+            Self::PaddingBox => "padding-box",
+            Self::BorderBox => "border-box",
+        }
+    }
+}
+
 /// CSS Lists L3 §2.1 — markers для list items.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum ListStyleType {

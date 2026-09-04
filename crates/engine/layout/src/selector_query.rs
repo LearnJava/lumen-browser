@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use lumen_css_parser::{parse_selector_list, ComplexSelector};
 use lumen_dom::{Document, NodeId};
-use lumen_core::ColorSpace;
+use lumen_core::{ColorSpace, Size};
 
 use crate::box_tree::{BoxKind, LayoutBox};
 use crate::ruby::{RubyAlign, RubyMerge, RubyPosition};
@@ -25,7 +25,8 @@ use crate::style::{
     FontStyle, FontWeight,
     FontVariantCaps, FontVariantEmoji, ImageRendering, Isolation, IterationCount, Length,
     LengthOrAuto,
-    MixBlendMode, ObjectFit, ObjectPosition, Overflow, OutlineColor, OverscrollBehavior,
+    MixBlendMode, ObjectFit, ObjectPosition, Overflow, overflow_clip_margin_serialize,
+    OutlineColor, OverscrollBehavior,
     OutlineStyle, PointerEvents, Position, PositionComponent, PrintColorAdjust, Quotes,
     ScrollbarGutter, ScrollbarWidth, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign,
     TextDecorationLine, TextDecorationStyle,
@@ -618,6 +619,30 @@ pub(crate) fn length_to_css(l: &Length) -> String {
         Length::FitContent(None) => "fit-content".into(),
         Length::FitContent(Some(arg)) => format!("fit-content({})", length_to_css(arg)),
     }
+}
+
+/// The length half of `overflow-clip-margin`'s computed-value serialization
+/// (BUG-505 срез 4): a `Length::Calc` tree resolves to a plain px number
+/// when its basis is fully known — em is always known at computed-value
+/// time (`style.font_size`), and `%` was already rejected at parse time
+/// (`parse_overflow_clip_margin_length`), so the only way `resolve` fails
+/// here is an unresolvable relative unit this property's WPT coverage never
+/// exercises (`ch`/`ex`/`cq*` outside a layout pass) — falls back to the
+/// unresolved `calc(...)` text in that case. `Size::ZERO` stands in for the
+/// viewport: `vh`/`vw`/`vmin`/`vmax` inside this property's `calc()` are
+/// the same known Phase 0 gap as everywhere else `length_to_css` is used
+/// for a computed value (no viewport threaded through this function).
+/// Non-`Calc` lengths pass straight to [`length_to_css`], same as before
+/// this slice. Returns the serialized text plus whether it is exactly zero,
+/// for `overflow_clip_margin_serialize`'s elision rule.
+fn overflow_clip_margin_computed_length(length: &Length, font_size: f32) -> (String, bool) {
+    if let Length::Calc(node) = length
+        && let Some(px) = node.resolve(font_size, None, Size::ZERO)
+    {
+        return (px_str(px), px == 0.0);
+    }
+    let is_zero = matches!(length, Length::Px(v) if *v == 0.0);
+    (length_to_css(length), is_zero)
 }
 
 /// Serialises a [`LengthOrAuto`] — `Auto` becomes `"auto"`.
@@ -1332,12 +1357,15 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         ScrollbarGutter::Stable => "stable",
         ScrollbarGutter::StableBothEdges => "stable both-edges",
     }.into());
-    // CSS Overflow L3 §overflow-clip-margin: initial value is `0px`; the
-    // engine supports only the bare `<length>` grammar so far, not the full
-    // `[<visual-box> | <length>]{1,2}` combination (BUG-505).
+    // CSS Overflow L3 §overflow-clip-margin (BUG-505 срез 4): initial value
+    // is `padding-box 0px`, which per `overflow_clip_margin_serialize`'s
+    // elision rules serializes as bare `"0px"`.
     m.insert("overflow-clip-margin".into(), match &style.overflow_clip_margin {
         None => "0px".to_string(),
-        Some(l) => length_to_css(l),
+        Some((box_kw, l)) => {
+            let (css, is_zero) = overflow_clip_margin_computed_length(l, style.font_size);
+            overflow_clip_margin_serialize(*box_kw, css, is_zero)
+        }
     });
     m.insert("z-index".into(), match style.z_index {
         None => "auto".into(),
@@ -2781,6 +2809,50 @@ mod tests {
     fn computed_map_overflow_clip_margin_reports_length() {
         let m = div_computed_map("<div>x</div>", "div { overflow-clip-margin: 10px; }");
         assert_eq!(m.get("overflow-clip-margin").map(String::as_str), Some("10px"));
+    }
+
+    // BUG-505 срез 4: `overflow-clip-margin`'s `<visual-box>` component,
+    // confirmed against WPT `overflow-clip-margin-computed.html`.
+
+    #[test]
+    fn computed_map_overflow_clip_margin_box_alone_elides_zero_length() {
+        let m = div_computed_map("<div>x</div>", "div { overflow-clip-margin: content-box; }");
+        assert_eq!(m.get("overflow-clip-margin").map(String::as_str), Some("content-box"));
+        let m = div_computed_map("<div>x</div>", "div { overflow-clip-margin: border-box 0px; }");
+        assert_eq!(m.get("overflow-clip-margin").map(String::as_str), Some("border-box"));
+    }
+
+    #[test]
+    fn computed_map_overflow_clip_margin_box_and_length_reorder_canonical() {
+        let m = div_computed_map("<div>x</div>", "div { overflow-clip-margin: 10px content-box; }");
+        assert_eq!(m.get("overflow-clip-margin").map(String::as_str), Some("content-box 10px"));
+    }
+
+    #[test]
+    fn computed_map_overflow_clip_margin_padding_box_elides_keyword() {
+        let m = div_computed_map("<div>x</div>", "div { overflow-clip-margin: padding-box 10px; }");
+        assert_eq!(m.get("overflow-clip-margin").map(String::as_str), Some("10px"));
+    }
+
+    #[test]
+    fn computed_map_overflow_clip_margin_resolves_calc_of_absolute_units() {
+        // `calc(100px - 50px)` — both operands absolute, resolves to a
+        // plain px number at computed-value time (unlike the specified
+        // value, which keeps the `calc(...)` text).
+        let m = div_computed_map("<div>x</div>", "div { overflow-clip-margin: calc(100px - 50px); }");
+        assert_eq!(m.get("overflow-clip-margin").map(String::as_str), Some("50px"));
+    }
+
+    #[test]
+    fn computed_map_overflow_clip_margin_resolves_calc_with_em() {
+        // Default computed font-size is 16px, so `0.5em` resolves to 8px —
+        // WPT `overflow-clip-margin-computed.html`'s own case (108px at its
+        // default font-size, same 16px root).
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { overflow-clip-margin: calc(0.5em + 100px); }",
+        );
+        assert_eq!(m.get("overflow-clip-margin").map(String::as_str), Some("108px"));
     }
 
     // BUG-505 срез 3: `overflow` shorthand computed-value serialization

@@ -857,8 +857,17 @@ pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&
                 // CSS Overflow L3: overflow-clip-margin расширяет clip region для overflow:clip.
                 let is_overflow_clip_x = matches!(b.style.overflow_x, Overflow::Clip);
                 let is_overflow_clip_y = matches!(b.style.overflow_y, Overflow::Clip);
+                // BUG-505 срез 4: `overflow_clip_margin` now also carries a
+                // `<visual-box>` component (`content-box`/`padding-box`/
+                // `border-box`) alongside the length — box-relative clip-edge
+                // placement is left for a follow-up (this margin expansion
+                // has always measured from the padding edge, `cr`'s own
+                // starting point above; the box keyword's effect on *where*
+                // the base clip edge sits is untouched by this slice, same
+                // "parsing/computed-style only" scoping the property's other
+                // Phase 0 gaps use).
                 if (is_overflow_clip_x || is_overflow_clip_y)
-                    && let Some(margin) = &s.overflow_clip_margin
+                    && let Some((_box_kw, margin)) = &s.overflow_clip_margin
                     && let Some(margin_px) = margin.resolve(s.font_size, Some(pw.max(ph)), Size::new(pw, ph))
                 {
                     if is_overflow_clip_x {
