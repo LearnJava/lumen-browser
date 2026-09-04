@@ -41,8 +41,8 @@ use crate::style::{
     parse_aspect_ratio_value,
     parse_auto_repeat,
     parse_grid_template_areas,
-    parse_length,
     parse_length_q,
+    parse_overflow_clip_margin,
     parse_overflow_kw,
     parse_sizing_length,
 };
@@ -436,8 +436,12 @@ pub(in crate::style) fn apply_decl_layout(
             }
         }
         "overflow-clip-margin" => {
-            // CSS Overflow L3: <visual-box> | <length>. Phase 0: поддерживаем только <length>.
-            style.overflow_clip_margin = parse_length(val);
+            // CSS Overflow L3 §overflow-clip-margin (BUG-505 срез 4): full
+            // `[<visual-box> || <length [0,∞]>]` grammar — was bare
+            // `<length>` only (Phase 0 leftover).
+            if let Some(parsed) = parse_overflow_clip_margin(val) {
+                style.overflow_clip_margin = Some(parsed);
+            }
         }
         "shape-outside" => {
             style.shape_outside = match val.trim() {

@@ -2133,6 +2133,9 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (key === 'line-clamp') {
         return _lumen_css_canonical_line_clamp(strVal);
     }
+    if (key === 'overflow-clip-margin') {
+        return _lumen_css_canonical_overflow_clip_margin(strVal);
+    }
     return strVal;
 }
 
@@ -2212,7 +2215,22 @@ function _lumen_make_style(nid) {
                 key === 'scroll-snap-align' ||
                 key === 'text-overflow' ||
                 key === '-webkit-line-clamp' ||
-                key === 'scrollbar-gutter') {
+                key === 'scrollbar-gutter' ||
+                // BUG-505 срез 4: `block-ellipsis`/`continue`/`max-lines`/
+                // `line-clamp` (срез 2) had a canon function registered in
+                // `_lumen_canonicalize_longhand` but were never added to
+                // *this* gate, so `div.style[prop] = value` (the actual
+                // path every WPT `test_valid_value`/`test_invalid_value`
+                // case in this bug's vendored files exercises) fell through
+                // to the raw-passthrough branch below and never called the
+                // canon function at all — срез 2's "65/65 match" was
+                // against a standalone Node harness calling the four
+                // functions directly, not this real pipeline.
+                key === 'block-ellipsis' ||
+                key === 'continue' ||
+                key === 'max-lines' ||
+                key === 'line-clamp' ||
+                key === 'overflow-clip-margin') {
                 var canon = _lumen_canonicalize_longhand(key, strVal);
                 if (canon === null || canon === undefined) return; // invalid value: no-op
                 obj[key] = canon;

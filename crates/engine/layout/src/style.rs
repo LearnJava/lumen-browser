@@ -176,7 +176,8 @@ pub use calc::{CalcNode, MathFn, RoundStrategy};
 pub(crate) use calc::calc_node_to_css;
 pub use values::length::{
     canonical_specified_length, canonical_specified_line_width, canonical_specified_sizing_length,
-    parse_length, Length, LengthOrAuto,
+    canonical_specified_overflow_clip_margin, overflow_clip_margin_serialize, parse_length,
+    parse_overflow_clip_margin, Length, LengthOrAuto,
 };
 // SPLIT-ST16. Типы значений — типографика/текст, цвет, бокс-модель, тайминг —
 // уехали в `style::values::{typography,color,box_model,timing}`. Все четыре
@@ -216,8 +217,8 @@ pub use values::timing::{
 // там, где вызывателя внутри `style.rs` уже нет (правило §2.1).
 pub use values::misc::{
     Appearance, Content, ContentItem, FieldSizing, Hyphens, LineBreak, ListStylePosition,
-    ListStyleType, OverflowWrap, PointerEvents, Quotes, Resize, ScrollbarGutter, ScrollbarWidth,
-    TouchAction, WordBreak,
+    ListStyleType, OverflowClipMarginBox, OverflowWrap, PointerEvents, Quotes, Resize,
+    ScrollbarGutter, ScrollbarWidth, TouchAction, WordBreak,
 };
 pub use container::{
     apply_container_rules, evaluate_container_condition, ContainFlags, ContainerContext,

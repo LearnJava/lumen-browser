@@ -12,7 +12,8 @@
 
 use lumen_core::geom::Size;
 
-use crate::style::calc::{looks_like_function_call, parse_math_function_value};
+use crate::style::calc::{calc_node_contains_percent, looks_like_function_call, parse_math_function_value};
+use crate::style::values::misc::OverflowClipMarginBox;
 use crate::style::{CalcNode, CONTAINER_CQ, FONT_CH_EX, ROOT_FONT_SIZE};
 
 /// CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
@@ -468,4 +469,131 @@ fn length_literal_is_negative(l: &Length) -> bool {
         | Length::Cqmin(v) | Length::Cqmax(v) => *v < 0.0,
         Length::Calc(_) | Length::MinContent | Length::MaxContent | Length::FitContent(_) => false,
     }
+}
+
+/// Split `s` on top-level ASCII whitespace, keeping parenthesised groups
+/// (`calc(...)`) intact. Local near-duplicate of
+/// `style::parse::image::split_top_level_ws` (BUG-505 срез 4) — that one
+/// lives in a sibling module tree with no shared ownership over this kind
+/// of tokenizer, same "small enough to duplicate rather than couple
+/// unrelated modules" call the JS shim's `_lumen_split_top_level_ws_quoted`
+/// already made for the same concern (`bugs/BUG-505-OPEN.md` срез 2).
+fn split_top_level_ws(s: &str) -> Vec<&str> {
+    let bytes = s.as_bytes();
+    let mut tokens = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            b' ' | b'\t' | b'\n' | b'\r' if depth == 0 => {
+                let tok = s[start..i].trim();
+                if !tok.is_empty() {
+                    tokens.push(tok);
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let tok = s[start..].trim();
+    if !tok.is_empty() {
+        tokens.push(tok);
+    }
+    tokens
+}
+
+/// The `<length>` half of [`parse_overflow_clip_margin`]'s grammar — rejects
+/// a percentage (literal, or nested anywhere inside a `calc()` tree) since
+/// the property is typed `<length [0,∞]>`, not `<length-percentage>`, and a
+/// literal top-level negative (same `non_negative` leniency
+/// [`canonical_specified_length`] gives calc() — a negative *inside*
+/// `calc()` isn't known without resolving it, so it's left alone).
+fn parse_overflow_clip_margin_length(tok: &str) -> Option<Length> {
+    if looks_like_function_call(tok) {
+        let len = parse_math_function_value(tok)?;
+        if let Length::Calc(node) = &len
+            && calc_node_contains_percent(node)
+        {
+            return None;
+        }
+        return Some(len);
+    }
+    let len = parse_length_q(tok, false)?;
+    if matches!(len, Length::Percent(_)) || length_literal_is_negative(&len) {
+        return None;
+    }
+    Some(len)
+}
+
+/// CSS Overflow L3 §overflow-clip-margin (BUG-505 срез 4): `[<visual-box> ||
+/// <length [0,∞]>]` — both components optional and order-independent, but
+/// at least one required; default box `padding-box`, default length `0px`.
+/// Was bare `<length>`-only before this slice (`style/apply/layout.rs`'s
+/// Phase 0 leftover), confirmed against every `test_valid_value`/
+/// `test_invalid_value` case in WPT `overflow-clip-margin.html` — including
+/// the `'50px 50px'` (two lengths) and `'margin-box'`/`'inset(10px)'`
+/// (not part of this grammar) invalid cases, both rejected here by "at
+/// most one of each component".
+pub fn parse_overflow_clip_margin(s: &str) -> Option<(OverflowClipMarginBox, Length)> {
+    let v = s.trim();
+    if v.is_empty() {
+        return None;
+    }
+    let tokens = split_top_level_ws(v);
+    if tokens.is_empty() || tokens.len() > 2 {
+        return None;
+    }
+
+    let mut box_kw: Option<OverflowClipMarginBox> = None;
+    let mut length: Option<Length> = None;
+    for tok in &tokens {
+        if let Some(b) = OverflowClipMarginBox::parse(tok) {
+            if box_kw.replace(b).is_some() {
+                return None; // two box keywords
+            }
+            continue;
+        }
+        let len = parse_overflow_clip_margin_length(tok)?;
+        if length.replace(len).is_some() {
+            return None; // two length components
+        }
+    }
+
+    Some((box_kw.unwrap_or_default(), length.unwrap_or(Length::Px(0.0))))
+}
+
+/// Shared serialization for [`canonical_specified_overflow_clip_margin`] and
+/// `selector_query::computed_style_to_map`'s `"overflow-clip-margin"` entry
+/// — one source of truth for the elision rules confirmed against WPT
+/// `overflow-clip-margin{,-computed}.html`: the default `padding-box`
+/// keyword never prints (length alone), and a zero length paired with an
+/// explicit non-default box elides too (box keyword alone). `length_css` is
+/// pre-serialized by the caller because the two callers serialize a `Calc`
+/// length differently — the specified-value path keeps `calc(...)` text
+/// ([`crate::selector_query::length_to_css`]), the computed-value path
+/// resolves it to a plain px number when the basis is known (em is always
+/// known at computed-value time; % was already rejected at parse time, see
+/// [`parse_overflow_clip_margin_length`]).
+pub fn overflow_clip_margin_serialize(
+    box_kw: OverflowClipMarginBox,
+    length_css: String,
+    length_is_zero: bool,
+) -> String {
+    match box_kw {
+        OverflowClipMarginBox::PaddingBox => length_css,
+        _ if length_is_zero => box_kw.to_css().to_string(),
+        _ => format!("{} {}", box_kw.to_css(), length_css),
+    }
+}
+
+/// CSSOM-2 (BUG-505 срез 4): validates and canonicalizes an
+/// `overflow-clip-margin` specified value for the JS `element.style` object,
+/// same role as [`canonical_specified_length`].
+pub fn canonical_specified_overflow_clip_margin(s: &str) -> Option<String> {
+    let (box_kw, length) = parse_overflow_clip_margin(s)?;
+    let is_zero = matches!(length, Length::Px(v) if v == 0.0);
+    let css = crate::selector_query::length_to_css(&length);
+    Some(overflow_clip_margin_serialize(box_kw, css, is_zero))
 }

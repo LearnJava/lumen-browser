@@ -42,7 +42,7 @@ use crate::style::{
     ForcedColorAdjust, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, Hyphens, ImageRendering,
     InterpolateSizeMode, Isolation, IterationCount, Length, LengthOrAuto, LineBreak,
     ListStylePosition, ListStyleType, MaskLayer, MasonryAutoFlow, MixBlendMode, ObjectFit,
-    ObjectPosition, OffsetRotate, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
+    ObjectPosition, OffsetRotate, OutlineColor, OutlineStyle, Overflow, OverflowClipMarginBox, OverflowWrap,
     OverscrollBehavior, PointerEvents, Position, PositionComponent, PrintColorAdjust, Quotes,
     Resize, ScrollbarGutter, ScrollbarWidth, ScrollBehavior, ScrollSnapAlign, ScrollSnapStop,
     ScrollSnapType, ShapeOutside, StrokeLinecap, StrokeLinejoin, SvgPaint, SvgPaintOrder,
@@ -310,9 +310,12 @@ pub struct ComputedStyle {
     /// этом файле (см. `margin_inline_start` и соседей).
     pub overflow_block: Overflow,
     pub overflow_inline: Overflow,
-    /// CSS Overflow L3 §overflow-clip-margin — расширяет clip region при overflow:clip.
-    /// Default: 0px. Не наследуется.
-    pub overflow_clip_margin: Option<Length>,
+    /// CSS Overflow L3 §overflow-clip-margin — расширяет clip region при
+    /// overflow:clip. `(box, length)`, default `(padding-box, 0px)`
+    /// (BUG-505 срез 4: was a bare `Option<Length>` — Phase 0 only
+    /// supported the `<length>` half of `[<visual-box> || <length [0,∞]>]`).
+    /// `None` means unset (initial). Не наследуется.
+    pub overflow_clip_margin: Option<(OverflowClipMarginBox, Length)>,
     /// CSS UI L4 §10.1 — text-overflow. Не наследуется.
     pub text_overflow: TextOverflow,
     /// CSS Color L3 §3.2 — opacity (0.0..=1.0). Не наследуется. Работает

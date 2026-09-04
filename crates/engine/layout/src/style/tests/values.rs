@@ -1384,6 +1384,113 @@ use super::*;
         assert_eq!(oy, Overflow::Clip);
     }
 
+    // BUG-505 срез 4: `overflow-clip-margin`'s full `[<visual-box> ||
+    // <length [0,∞]>]` grammar, hand-traced against every `test_valid_value`/
+    // `test_invalid_value` case in WPT `overflow-clip-margin.html`.
+
+    #[test]
+    fn overflow_clip_margin_bare_length() {
+        let (b, l) = parse_overflow_clip_margin("10px").expect("valid");
+        assert_eq!(b, OverflowClipMarginBox::PaddingBox);
+        assert_eq!(l, Length::Px(10.0));
+    }
+
+    #[test]
+    fn overflow_clip_margin_box_alone_defaults_length_zero() {
+        for (kw, expect) in [
+            ("content-box", OverflowClipMarginBox::ContentBox),
+            ("padding-box", OverflowClipMarginBox::PaddingBox),
+            ("border-box", OverflowClipMarginBox::BorderBox),
+        ] {
+            let (b, l) = parse_overflow_clip_margin(kw).expect("valid");
+            assert_eq!(b, expect);
+            assert_eq!(l, Length::Px(0.0));
+        }
+    }
+
+    #[test]
+    fn overflow_clip_margin_order_independent_combo() {
+        let (b1, l1) = parse_overflow_clip_margin("content-box 10px").expect("valid");
+        let (b2, l2) = parse_overflow_clip_margin("10px content-box").expect("valid");
+        assert_eq!(b1, OverflowClipMarginBox::ContentBox);
+        assert_eq!(b2, OverflowClipMarginBox::ContentBox);
+        assert_eq!(l1, Length::Px(10.0));
+        assert_eq!(l2, Length::Px(10.0));
+    }
+
+    #[test]
+    fn overflow_clip_margin_rejects_two_lengths_or_two_boxes() {
+        assert!(parse_overflow_clip_margin("50px 50px").is_none());
+        assert!(parse_overflow_clip_margin("content-box border-box").is_none());
+    }
+
+    #[test]
+    fn overflow_clip_margin_rejects_unrelated_box_keyword() {
+        assert!(parse_overflow_clip_margin("margin-box").is_none());
+        assert!(parse_overflow_clip_margin("inset(10px)").is_none());
+    }
+
+    #[test]
+    fn overflow_clip_margin_rejects_percent_bare_and_in_calc() {
+        assert!(parse_overflow_clip_margin("50%").is_none());
+        assert!(parse_overflow_clip_margin("calc(100% - 0.5em)").is_none());
+        assert!(parse_overflow_clip_margin("calc(100% - 50px)").is_none());
+        assert!(parse_overflow_clip_margin("border-box calc(0.5em - 100%)").is_none());
+    }
+
+    #[test]
+    fn overflow_clip_margin_accepts_calc_without_percent() {
+        // Same-unit `calc()` folds via `CalcNode::simplify` but stays
+        // `Length::Calc`-wrapped (never unwraps to a bare `Length::Px`) —
+        // `calc(0.5em - 100px)` mixes units and can't fold at all, so it's
+        // valid even though its sign is unknown without resolving `em`.
+        assert!(parse_overflow_clip_margin("calc(0.5em - 100px)").is_some());
+        let (b, l) = parse_overflow_clip_margin("calc(100px - 50px)").expect("valid");
+        assert_eq!(b, OverflowClipMarginBox::PaddingBox);
+        assert!(matches!(l, Length::Calc(_)));
+    }
+
+    #[test]
+    fn overflow_clip_margin_canonical_serialization() {
+        // Elision rules confirmed against every `test_valid_value` case:
+        // `padding-box` (default) never prints; a zero length paired with
+        // an explicit non-default box elides instead.
+        let cases: &[(&str, &str)] = &[
+            ("10px", "10px"),
+            ("content-box", "content-box"),
+            ("content-box 10px", "content-box 10px"),
+            ("10px content-box", "content-box 10px"),
+            ("0px content-box", "content-box"),
+            ("padding-box", "0px"),
+            ("padding-box 0px", "0px"),
+            ("padding-box 10px", "10px"),
+            ("10px padding-box", "10px"),
+            ("border-box", "border-box"),
+            ("border-box 0px", "border-box"),
+            ("border-box 10px", "border-box 10px"),
+            ("10px border-box", "border-box 10px"),
+            ("calc(100px - 50px)", "calc(50px)"),
+            ("calc(100px - 100px)", "calc(0px)"),
+            ("padding-box calc(0.5em - 100px)", "calc(0.5em - 100px)"),
+            ("padding-box calc(100px - 100px)", "calc(0px)"),
+            ("border-box calc(0.5em - 100px)", "border-box calc(0.5em - 100px)"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                canonical_specified_overflow_clip_margin(input).as_deref(),
+                Some(*expected),
+                "input: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn overflow_clip_margin_canonical_rejects_invalid() {
+        for v in ["margin-box", "inset(10px)", "50px 50px", "50%", "calc(100% - 0.5em)"] {
+            assert_eq!(canonical_specified_overflow_clip_margin(v), None, "input: {v}");
+        }
+    }
+
     // === CSS Values L4 §7.7 attr() typed substitution ===
 
     fn make_doc_with_div(html: &str) -> (lumen_dom::Document, lumen_dom::NodeId) {

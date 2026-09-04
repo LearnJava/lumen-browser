@@ -369,3 +369,99 @@ this slice: ~42 files (was ~44) — `overflow-computed.html`/`overflow-
 shorthand-001.html` are done; the `coerce_overflow_axes` fix and the new
 `overflow-block`/`overflow-inline` support weren't separately counted files
 in the original 60, so the file count moves by exactly the 2 files closed.
+
+## Срез 4 (2026-09-04, P3) — overflow-clip-margin's full `[<visual-box> ||
+<length [0,∞]>]` grammar, plus a real gate-list bug found in срез 2's four
+canon functions
+
+Picked up `overflow-clip-margin`'s box-keyword+`calc()` grammar extension,
+срез 2's last-remaining item. The property was `Option<Length>`-only
+(`ComputedStyle::overflow_clip_margin`) — Phase 0 supported just the bare
+`<length>` half of the grammar, not the `<visual-box>` component
+(`content-box | padding-box | border-box`) or the property's actual
+percentage-forbidding `<length [0,∞]>` type (a raw `%`, or one nested
+anywhere inside `calc()`, is invalid per spec — this is *not* the usual
+`<length-percentage>` shape most of this file's other length properties
+have).
+
+**New types/functions** (`style/values/misc.rs`, `style/values/length.rs`,
+`style/calc.rs`):
+- `OverflowClipMarginBox` — the `content-box`/`padding-box`(default)/
+  `border-box` triplet, same one-enum-per-property convention as
+  `BackgroundClip`/`MaskClip` (deliberately not reused — those enums are a
+  different property's grammar, this codebase doesn't share box-keyword
+  enums across properties).
+- `calc_node_contains_percent` (`calc.rs`) — recursive check for a
+  `Length::Percent` leaf anywhere in a `calc()` tree; the first thing in
+  this codebase that needed to *reject* a percent-typed calc leaf rather
+  than resolve it.
+- `parse_overflow_clip_margin`/`canonical_specified_overflow_clip_margin`/
+  `overflow_clip_margin_serialize` (`length.rs`) — parses the 1-2-token
+  order-independent grammar (own small `split_top_level_ws` — a documented
+  near-duplicate of `style::parse::image`'s, same "small enough to
+  duplicate rather than couple unrelated modules" call срез 2's JS
+  tokenizer made) and serializes with the elision rules confirmed against
+  every `test_valid_value`/`test_computed_value` case in
+  `overflow-clip-margin{,-computed}.html`: the default `padding-box` never
+  prints (length alone), and a zero length paired with an explicit
+  `content-box`/`border-box` elides too (box keyword alone).
+
+**Computed-value calc() resolution** (`selector_query.rs`): unlike the
+specified-value path (which keeps `calc(...)` text via `length_to_css`),
+`overflow-clip-margin-computed.html` expects `calc(0.5em + 100px)` to
+resolve to a plain `"108px"` — CSS Values L4: absolute-and-em-only `calc()`
+always resolves at computed-value time (em is always known by then; `%` was
+already rejected at parse time, so it's never the blocker). New
+`overflow_clip_margin_computed_length` calls `CalcNode::resolve` with the
+element's real `font_size` and `Size::ZERO` for the viewport — `vh`/`vw`/
+`cq*` inside this property's `calc()` stay unresolved (falls back to calc
+text) since no viewport is threaded through `computed_style_to_map`, the
+same Phase 0 gap every other computed length in this file already has;
+not exercised by the vendored WPT file (only `em` appears).
+
+**Real bug found in срез 2's four canon functions, fixed alongside:**
+`block-ellipsis`/`continue`/`max-lines`/`line-clamp` had canonicalization
+functions registered in `_lumen_canonicalize_longhand`
+(`web_api_shim_mid.js`), but `_lumen_make_style`'s `setProperty` — the
+function `div.style[prop] = value` actually calls via the Proxy `set` trap,
+i.e. the exact path every `test_valid_value`/`test_invalid_value` case in
+the vendored WPT files exercises — gates that dispatch behind an explicit
+`if (_LUMEN_COLOR_PROPERTIES.hasOwnProperty(key) || ... )` allow-list that
+never got the four new keys added. So `div.style['block-ellipsis'] =
+'anything'` fell straight through to the raw-passthrough branch and never
+called the canon function at all — срез 2's "65/65 match" was verified
+against a standalone Node `vm` harness calling the four functions directly,
+not this real pipeline. Added all four keys to the gate (plus
+`overflow-clip-margin`, this slice's own new entry, which would have had
+the identical silent-no-op bug otherwise).
+
+**Paint** (`display_list/walk.rs`): `overflow_clip_margin`'s consumer
+(clip-region expansion for `overflow: clip`) already existed and continues
+to measure the margin from the padding edge exactly as before — the new
+`<visual-box>` component is parsed and stored but not yet wired into *where*
+the base clip edge sits (documented inline as a follow-up; no graphic_tests
+page uses `overflow-clip-margin` at all, confirmed by `grep -l
+"overflow-clip-margin" graphic_tests/*.html` → empty, so there is nothing in
+the visual corpus for a box-keyword rendering change to move — the existing
+`overflow_clip_margin_expands_clip_region` paint test still exercises only
+the length half and is unaffected by this slice).
+
+14 new tests (`style/tests/values.rs`, `selector_query.rs`),
+`cargo test -p lumen-layout --lib` 3786/3786 (was 3772 at срез 3),
+`cargo test -p lumen-paint --lib overflow_clip` 3/3.
+`RUSTC_WRAPPER="" bash scripts/scoped-test.sh` (lumen-js/lumen-layout/
+lumen-paint + reverse deps) green except the same two pre-existing
+Windows-path-only `lumen-shell` failures срез 3 already documented
+(`bug440_get_form_submission_resolves_to_the_target_file`,
+`resolve_file_base_drive_letter_is_not_a_scheme` — hardcoded `D:/tmp`
+assertions, fail on Linux regardless of branch). `cargo clippy -p
+lumen-layout` remains unrunnable on this Linux dev box for the same
+pre-existing toolchain-mismatch reason срез 3 hit (`chunks_exact`, 1.98.0 vs
+pinned 1.97.0) — reproduces on `main` in files this slice never touched;
+`cargo check -p lumen-layout -p lumen-paint --all-targets` is clean, no new
+warnings.
+
+**Untouched:** `webkit-box-computed.html` (1), the `::scroll-marker`
+cluster (~40) — unchanged from срез 2's assessment, still the only
+materially large remaining piece. Remaining scope after this slice: ~41
+files (was ~42).

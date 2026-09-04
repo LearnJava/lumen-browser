@@ -362,6 +362,19 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // Canonical `overflow-clip-margin` serialization for inline-`style`
+    // (CSS Overflow L3 §overflow-clip-margin, BUG-505 срез 4) — same role as
+    // `_lumen_css_canonical_length` above, but the grammar is
+    // `[<visual-box> || <length [0,∞]>]` (an optional box keyword plus an
+    // optional length, order-independent, no percentage anywhere — even
+    // nested inside `calc()`) rather than a bare `<length-percentage>`.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_overflow_clip_margin",
+        |value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_overflow_clip_margin(&value)
+        }
+    );
+
     // Canonical keyword-enum serialization for inline-`style` longhands whose
     // whole grammar is a fixed keyword list (CSSOM-2/BUG-484 срез 7 — `clear`,
     // `float`, `visibility`, `box-sizing`) — same role as the canonicalizers
