@@ -35,12 +35,15 @@ use winit::window::Window;
 /// При `LUMEN_BACKEND=femtovg` создаёт `FemtovgBackend` напрямую (без fallback на wgpu).
 /// При `LUMEN_BACKEND=vello` создаёт `VelloBackend` (RB-7 заглушка, ADR-010).
 ///
-/// # ADR-016 M1 (spike): рендер-поток
+/// # ADR-016 M1: рендер-поток
 /// Если задан `LUMEN_RENDER_THREAD=1`, настоящий бэкенд создаётся и живёт на
 /// выделенном рендер-потоке, а окну возвращается [`ThreadedRenderBackend`]-прокси
-/// (present уходит с UI-потока). При сбое создания бэкенда на потоке (например,
-/// GL-контекст не создался вне главного потока) — автоматический откат на обычный
-/// однопоточный путь. Значение по умолчанию — однопоточный in-process бэкенд.
+/// (present уходит с UI-потока). Выбор бэкенда для потока следует тому же
+/// `LUMEN_BACKEND`, что и однопоточный путь: `femtovg` → потоковый femtovg,
+/// иначе (дефолт/`wgpu`) → потоковый wgpu (THREAD-1: дефолтный бэкенд ADR-017,
+/// M1 изначально работал только под non-default femtovg). При сбое создания
+/// бэкенда на потоке — автоматический откат на обычный однопоточный путь.
+/// Значение по умолчанию — однопоточный in-process бэкенд.
 ///
 /// # Errors
 /// Возвращает `Err` если GPU-адаптер недоступен или инициализация всех бэкендов
@@ -50,25 +53,47 @@ pub fn create_backend(
     font_bytes: Vec<u8>,
     target_color_space: ColorSpace,
 ) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
-    // ADR-016 M1.2: опциональный рендер-поток за env-флагом (дефолт — выключен).
-    // На femtovg бэкенд создаётся на ГЛАВНОМ потоке (winit отдаёт window handle
-    // только там — M1.1 spike), контекст открепляется (`make_not_current`) и
-    // переносится на рендер-поток, где привязывается обратно (`make_current`).
+    // ADR-016 M1: опциональный рендер-поток за env-флагом (дефолт — выключен).
+    // Настоящий бэкенд создаётся на ГЛАВНОМ потоке (winit отдаёт window handle
+    // только там — M1.1 spike, подтверждено для wgpu: `create_surface` в
+    // `Renderer::new_async` требует того же). femtovg (GL, `!Send`-контекст)
+    // открепляется (`make_not_current`) и привязывается заново на рендер-потоке
+    // (`make_current`); wgpu (`Surface`/`Device`/`Queue` — `Send`, см.
+    // `wgpu_backend_is_send`) просто переезжает на поток целиком, без
+    // detach/attach.
     if render_thread_enabled() {
-        #[cfg(feature = "backend-femtovg")]
-        {
+        let requested = std::env::var("LUMEN_BACKEND").unwrap_or_default();
+        let explicit_femtovg = requested.trim().eq_ignore_ascii_case("femtovg");
+        if explicit_femtovg {
+            #[cfg(feature = "backend-femtovg")]
             match create_threaded_femtovg(Arc::clone(&window), font_bytes.clone()) {
                 Ok(b) => return Ok(b),
                 Err(e) => eprintln!(
-                    "LUMEN_RENDER_THREAD=1: рендер-поток не стартовал ({e}), откат на in-process"
+                    "LUMEN_RENDER_THREAD=1: femtovg рендер-поток не стартовал ({e}), \
+                     откат на in-process"
                 ),
             }
+            #[cfg(not(feature = "backend-femtovg"))]
+            eprintln!(
+                "LUMEN_RENDER_THREAD=1: собрано без backend-femtovg, рендер-поток недоступен, \
+                 откат на in-process"
+            );
+        } else {
+            #[cfg(feature = "backend-wgpu")]
+            match create_threaded_wgpu(Arc::clone(&window), font_bytes.clone(), target_color_space)
+            {
+                Ok(b) => return Ok(b),
+                Err(e) => eprintln!(
+                    "LUMEN_RENDER_THREAD=1: wgpu рендер-поток не стартовал ({e}), \
+                     откат на in-process"
+                ),
+            }
+            #[cfg(not(feature = "backend-wgpu"))]
+            eprintln!(
+                "LUMEN_RENDER_THREAD=1: собрано без backend-wgpu, рендер-поток недоступен, \
+                 откат на in-process"
+            );
         }
-        #[cfg(not(feature = "backend-femtovg"))]
-        eprintln!(
-            "LUMEN_RENDER_THREAD=1: собрано без backend-femtovg, рендер-поток недоступен, \
-             откат на in-process"
-        );
     }
     create_backend_inprocess(window, font_bytes, target_color_space)
 }
@@ -101,6 +126,37 @@ fn create_threaded_femtovg(
         backend.attach_gl_context()?;
         Ok(Box::new(backend) as Box<dyn RenderBackend>)
     };
+    let proxy = ThreadedRenderBackend::new(ctor)?;
+    Ok(Box::new(proxy))
+}
+
+/// ADR-016 M1 / THREAD-1: создаёт `WgpuBackend` на текущем (главном) потоке и
+/// передаёт его целиком рендер-потоку через [`ThreadedRenderBackend`].
+///
+/// В отличие от [`create_threaded_femtovg`] здесь нет detach/attach — wgpu's
+/// `Surface`/`Device`/`Queue` не привязаны к потоку (`WgpuBackend: Send`,
+/// тест `wgpu_backend_is_send` в `crates/engine/paint`), поэтому уже готовый
+/// бэкенд просто перемещается в замыкание-конструктор. Создание должно
+/// произойти на главном потоке по той же причине, что и у femtovg:
+/// `wgpu::Instance::create_surface` (`Renderer::new_async`) читает
+/// window/display handle через `winit`, который отдаёт валидный handle только
+/// на потоке, создавшем окно (M1.1 spike).
+///
+/// # Errors
+/// Возвращает `Err`, если `WgpuBackend::new` не смог получить GPU-адаптер/
+/// создать поверхность, или рендер-поток не прошёл handshake (тогда
+/// вызывающая сторона откатывается на однопоточный in-process путь).
+#[cfg(feature = "backend-wgpu")]
+fn create_threaded_wgpu(
+    window: Arc<Window>,
+    font_bytes: Vec<u8>,
+    target_color_space: ColorSpace,
+) -> Result<Box<dyn RenderBackend>, String> {
+    let backend = WgpuBackend::new(window, font_bytes, target_color_space)
+        .map_err(|e| e.to_string())?;
+    // Замыкание захватывает уже полностью готовый Send-бэкенд — рендер-поток
+    // лишь принимает владение, никакой привязки контекста не требуется.
+    let ctor = move || Ok(Box::new(backend) as Box<dyn RenderBackend>);
     let proxy = ThreadedRenderBackend::new(ctor)?;
     Ok(Box::new(proxy))
 }
