@@ -53,6 +53,20 @@ pub(crate) struct Lumen {
     pub(crate) event_sink: Arc<dyn EventSink>,
     pub(crate) modifiers: ModifiersState,
     pub(crate) window: Option<Arc<Window>>,
+    /// Physical size of the last `WindowEvent::Resized` that actually ran a
+    /// relayout (BUG-996). Windows re-delivers `WM_SIZE` for a top-level
+    /// window the shell considers unresponsive (DWM/ghost-window hang probes:
+    /// `SendMessageTimeoutW`/`IsIconic`/`GetWindowTextW` polling) — with the
+    /// *same* size the window already has. A relayout on OneTrust's fandom.com
+    /// cascade already runs 5-6s (2731 rules, no incrementality after a
+    /// `<style>` swap, BUG-341-adjacent); each redundant same-size relayout
+    /// blocks the message pump for another 5-6s, which triggers Windows to
+    /// consider the window hung again and re-deliver `Resized` — a
+    /// self-sustaining loop that never lets the pump catch up (observed: 32
+    /// full relayouts / 220s, zero timer/rAF ticks in between). Comparing
+    /// against the last *applied* size (not just skipping a `None` on
+    /// startup) breaks the loop at its root instead of only shortening it.
+    pub(crate) last_resized_physical: Option<(u32, u32)>,
     /// Detected target `ColorSpace` for the active display.
     /// Populated at startup from the OS (Windows WCS/DXGI/EDID query).
     /// Defaults to `ColorSpace::Srgb` when the display profile is unknown or

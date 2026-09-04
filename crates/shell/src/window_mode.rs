@@ -214,6 +214,7 @@ pub(crate) fn run_window_mode(
         event_sink,
         modifiers: ModifiersState::empty(),
         window: None,
+        last_resized_physical: None,
         display_color_profile: platform::display_color_profile::PlatformDisplayColorProfile::new(),
         renderer: None,
         chrome_doc: Some(lumen_chrome::parse_document(chrome_preview::HTML)),
