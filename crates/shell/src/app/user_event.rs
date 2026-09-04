@@ -104,6 +104,31 @@ impl Lumen {
                         Arc::clone(&self.page_font_registry) as Arc<dyn lumen_core::FontProvider>,
                     ));
                 }
+                // FONTLOAD-2 (BUG-467-OPEN gap 2): flip the matching
+                // CSS-connected `FontFace`'s native status now that its
+                // background fetch is done, and — if `document.fonts` was
+                // already touched by a script — push the same update into
+                // its live JS object. Per-instance `FontFace.status`/`.loaded`
+                // only; deliberately does not touch the set's shared
+                // `ready`/pending bookkeeping (`_lumen_notify_css_font_loaded`
+                // in the shim), which stays script-load-driven only — see
+                // that function's own comment for why.
+                if let Some(src) = self.layout_source.as_ref() {
+                    let mut doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
+                    doc.fonts_mut().mark_loaded(|face| {
+                        face.family == family
+                            && crate::subresources::parse_font_weight(Some(&face.weight)) == weight
+                            && lumen_core::FontStyle::parse_keyword(&face.style) == Some(style)
+                    });
+                }
+                route_eval_js(
+                    self.engine_thread.as_ref(),
+                    self.js_ctx.as_ref(),
+                    format!(
+                        "_lumen_notify_css_font_loaded('{}');",
+                        escape_js_string(&family)
+                    ),
+                );
                 self.web_fonts.push(LoadedWebFont { family, weight, style, unicode_range, bytes });
                 // Relayout with the now-registered web font (FOUT → FOIT swap).
                 // ADR-016 M2.2b-8: the swap is a whole-page restyle (font metrics

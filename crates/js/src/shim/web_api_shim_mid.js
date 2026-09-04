@@ -7333,15 +7333,34 @@ var console = {
 //     native once, when `document.fonts` is first touched — a later
 //     `<style>`/CSSOM change that adds or removes an `@font-face` rule is not
 //     reflected (needs the same live-cascade foundation BUG-471/CSSOM-4 does).
-// (2) **A CSS-declared `url()` face's native status never advances past
-//     "loading"** — `crates/shell`'s `FontLoaded` event updates the render
-//     font registry but not `Document::fonts_mut()` — so `document.fonts`'s
-//     own `.ready`/`.status` intentionally track only script-driven loads
-//     (`FontFace.load()` / `document.fonts.load()`), never the passive CSS
-//     one. Wiring the CSS side in would turn every
-//     `document.fonts.ready.then(...)` layout gate already used throughout
-//     css-fonts/css-sizing/css-ruby into a promise that never resolves —
-//     a regression, not a fix.
+// FONTLOAD-2 (2026-09-05) closed the interactive-shell half of (2): the
+// shell's `FontLoaded` event (`crates/shell/src/app/user_event.rs`) now
+// flips the matching CSS-connected face's native status and, if
+// `document.fonts` was already touched, calls `_lumen_notify_css_font_loaded`
+// below to resolve that specific `FontFace`'s own `.status`/`.loaded` —
+// deliberately per-instance only, see that function's comment for why the
+// set's shared `.ready`/`.status` still don't move. `crates/driver` (the
+// WPT/`run_report.py` path) has no `FontLoaded` equivalent at all — this
+// only ever fires for the live window, not a WPT run.
+//
+// Still open, both real engine gaps, not oversights:
+// (1) **CSS-connected faces are a one-time snapshot.** They are read from
+//     native once, when `document.fonts` is first touched — a later
+//     `<style>`/CSSOM change that adds or removes an `@font-face` rule is not
+//     reflected. And on the driver/WPT path `document.fonts` is never
+//     populated at all — `crates/driver/src/session.rs` has no call to
+//     `Document::fonts_mut()`, unlike `crates/shell/src/page_pipeline.rs`;
+//     every css-font-loading WPT file that reads `document.fonts.size`
+//     synchronously sees `0`, not just a stale value.
+// (2) **The set's `.ready`/`.status` still track only script-driven loads**
+//     (`FontFace.load()` / `document.fonts.load()`), never a passive CSS
+//     one — wiring a CSS-connected completion into the shared pending
+//     counter risks resolving `ready` while an unrelated concurrent
+//     script-driven `.load()` is still in flight (the counter has no
+//     per-face slot, only a running total). Every existing
+//     `document.fonts.ready.then(...)` layout gate throughout
+//     css-fonts/css-sizing/css-ruby depends on this staying script-driven
+//     only — a regression here is a correctness bug, not a missed feature.
 
 function _lumen_parse_font_face_json(jsonStr) {
     try {
@@ -7726,6 +7745,42 @@ function _lumen_make_font_face_set() {
         set._members.add(_lumen_wrap_css_font_face(json));
     }
     return set;
+}
+
+// FONTLOAD-2: pushed from the shell's background @font-face `url()` fetch
+// completing (`crates/shell/src/app/user_event.rs`'s `LoadEvent::FontLoaded`
+// handler, via `route_eval_js`). Native `Document::fonts` already has this
+// face's status flipped to "loaded" by the time this runs (same handler,
+// before the eval); this only has JS-visible work to do if `document.fonts`
+// was already built — an untouched one reads the fresh status on its own
+// first, still-pending build, no push needed. Resolves the matching
+// CSS-connected `FontFace`'s own `.status`/`.loaded` only — see this
+// section's header comment for why the set's shared `.ready`/`.status`
+// deliberately do not move here.
+function _lumen_notify_css_font_loaded(family) {
+    var set = document.__fonts__;
+    if (!set) return;
+    var jsonList = _lumen_fonts_get_by_family(family);
+    for (var i = 0; i < jsonList.length; i++) {
+        var json = _lumen_parse_font_face_json(jsonList[i]);
+        if (!json || json.status !== 'loaded') continue;
+        set._members.forEach(function(face) {
+            if (!face._cssConnected || face._status === 'loaded') return;
+            if (face._family !== json.family || face._style !== json.style ||
+                face._weight !== json.weight ||
+                (face._stretch || 'normal') !== (json.stretch || 'normal') ||
+                (face._unicodeRange || 'U+0-10FFFF') !== (json.unicodeRange || 'U+0-10FFFF')) {
+                return;
+            }
+            face._status = 'loaded';
+            if (face._resolveLoaded) {
+                var resolve = face._resolveLoaded;
+                face._resolveLoaded = null;
+                face._rejectLoaded = null;
+                resolve(face);
+            }
+        });
+    }
 }
 
 // ── Range (WHATWG DOM §4.5) ────────────────────────────────────────────────

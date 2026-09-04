@@ -73,7 +73,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-09-04",
+ "generated": "2026-09-05",
  "counts": {
   "open": 391,
   "fixed": 556,
@@ -347,6 +347,16 @@
        "size": "M",
        "note": "Фаза 3: backend_factory.rs — пустой LUMEN_BACKEND пробует wgpu (через probe) первым, femtovg = fallback (явный LUMEN_BACKEND=femtovg не трогать); новая ADR, разворачивающая финал ADR-010 («remove wgpu as default»); doc-sync (CAPABILITIES.md, subsystems/paint.md, README.md, docs/decisions/README.md); финальный гейт = полный graphic_tests-прогон с пустым LUMEN_BACKEND против femtovg-базлайна; требует vkgl+bug276 (ph0 — для не-Windows)"
       }
+     ]
+    },
+    {
+     "id": "FONTLOAD",
+     "title": "FONTLOAD: CSS Font Loading API (FontFace/FontFaceSet)",
+     "status": "in progress",
+     "size": "L",
+     "note": "Дорожка «CSS Font Loading API», выделена из BUG-467 по правилу «нереализованная функциональность — задача ROADMAP, а не баг» (решение 2026-08-28). Найдено WPT-RUN-3 срез 2, расширено срезом 17 (`css/css-font-loading`, 21 файл/0 из 79 сабтестов), срезами 26/31/33 (`css-ruby`/`css-fonts`/`css-sizing`, тот же `document.fonts.ready`/`.load` идиом). **FONTLOAD-1 (P1, 2026-09-05, `p1-fontload1-fontface-api`):** реальный конструктор `FontFace` + `document.fonts` как настоящий `setlike<FontFace>` (стабильная идентичность, `size`/`has`/`add`/`delete`/`clear`/`keys`/`values`/`entries`/`forEach`/`load()`/`ready`/`status`, события `loading`/`loadingdone`/`loadingerror`, `FontFaceSetLoadEvent`, `new FontFaceSet()` бросает `TypeError`); `.load()` реально фетчит `url()`-источники и валидирует байты через новый натив `_lumen_font_validate_bytes` (`lumen_font::Font::parse`). `css/css-font-loading`: 18/27→17/27 harness OK (разница — уже открытый BUG-995, не регрессия этого среза), 0/54→6/55 сабтестов. Не закрыто (см. `bugs/BUG-467-OPEN.md`, срез FONTLOAD-1): CSS-connected сет — одноразовый снимок, не реагирует на изменение `<style>`/CSSOM (нужен фундамент BUG-471/CSSOM-4); нативный `status` CSS-декларированного `url()`-лица никогда не становится `Loaded`, поэтому `ready`/`.status` намеренно считают только script-driven загрузки; значения дескрипторов (`unicodeRange` и т.п.) не разбираются грамматикой; скрипт-сконструированный `FontFace` не подключён к `lumen_font::FontRegistry`/рендерингу (FOUT/FOIT). **FONTLOAD-2 (P1, 2026-09-05, `p1-fontload2-css-font-loaded-status`):** переисследование уточнило оба gap'а FONTLOAD-1 — `crates/driver` (весь WPT-путь) вообще не заполняет `document.fonts` (не только не реагирует на изменения, а и не populated изначально), поэтому WPT pass-rate этим срезом не двигается; узкий безопасный фикс сделан только для live-окна (`crates/shell`) — `FontLoaded`-событие теперь флипает нативный `status` CSS-connected лица и, если `document.fonts` уже построен, резолвит именно ЭТОГО `FontFace`'а `.status`/`.loaded` через `_lumen_notify_css_font_loaded` (`route_eval_js`), не трогая set-уровневый `ready`/pending — детали и почему в `bugs/BUG-467-OPEN.md`, срез FONTLOAD-2. Полный перечень отсутствующих членов и упавших файлов — в bugs/BUG-467-OPEN.md",
+     "bugs": [
+      "BUG-467"
      ]
     },
     {
@@ -6525,16 +6535,6 @@
         "BUG-885"
        ]
       }
-     ]
-    },
-    {
-     "id": "FONTLOAD",
-     "title": "FONTLOAD: CSS Font Loading API (FontFace/FontFaceSet)",
-     "status": "planned",
-     "size": "L",
-     "note": "Дорожка «CSS Font Loading API» (владелец — P1), выделена из BUG-467 по правилу «нереализованная функциональность — задача ROADMAP, а не баг» (решение 2026-08-28). Глобальные конструкторы `FontFace`/`FontFaceSet`/`FontFaceSetLoadEvent` не определены вовсе (`grep` по `crates/js/src/dom.rs`/`v8_runtime.rs` — ноль совпадений вне комментариев), `document.fonts` (`_lumen_get_fonts()`, `crates/js/src/dom.rs:6770`) — статичный read-only снимок только с `length`/`item`/`entries`/`forEach`/`Symbol.iterator`, без `size`/`add`/`delete`/`clear`/`has`/`keys`/`load`/`ready`/`addEventListener`/`onloading*`. Найдено WPT-RUN-3 срез 2 (только `.ready`, вызывает TIMEOUT до регистрации первого `test()`), расширено срезом 17 (`css/css-font-loading`, 21 файл/0 из 79 сабтестов), срезами 26/31/33 (`css-ruby`/`css-fonts`/`css-sizing`, тот же `document.fonts.ready`/`.load` идиом). Полный перечень отсутствующих членов и упавших файлов — в bugs/BUG-467-OPEN.md",
-     "bugs": [
-      "BUG-467"
      ]
     },
     {

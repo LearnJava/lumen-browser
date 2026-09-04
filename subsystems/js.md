@@ -1710,21 +1710,37 @@ the time — read dates.
   calls `_lumen_font_face_load_start`/`_load_end`, which look the face up in
   the map and notify every owning set. A `FontFace` never added to a set
   loads silently, same as the spec. **(3)** `document.fonts.ready`/`.status`
-  deliberately count only loads started through `FontFace.load()`/
-  `document.fonts.load()`, never a CSS-declared `url()` source's native
-  status — that native status never leaves "loading" today (`crates/shell`'s
-  `FontLoaded` event updates the render font registry, not
-  `Document::fonts_mut()`), so wiring it into `ready` would turn every
-  existing `document.fonts.ready.then(...)` layout gate already relied on
-  throughout css-fonts/css-sizing/css-ruby into a promise that never
-  resolves. `FontFace.load()` validates bytes through a new native,
+  (the SET's aggregate) deliberately count only loads started through
+  `FontFace.load()`/`document.fonts.load()`, never a CSS-declared `url()`
+  source's native status — wiring a passive CSS completion into the shared
+  `_pending` counter risks resolving `ready` while an unrelated concurrent
+  script-driven `.load()` is still in flight (the counter has no per-face
+  slot, only a running total), which would turn every existing
+  `document.fonts.ready.then(...)` layout gate already relied on throughout
+  css-fonts/css-sizing/css-ruby into a promise that never resolves. FONTLOAD-2
+  (2026-09-05, interactive shell only) DOES resolve the PER-INSTANCE
+  `FontFace.status`/`.loaded` for a CSS-connected `url()` face once its
+  background fetch completes — `crates/shell/src/app/user_event.rs`'s
+  `FontLoaded` handler flips the matching face's native status
+  (`FontFaceSet::mark_loaded`) and, if `document.fonts` was already built,
+  calls `_lumen_notify_css_font_loaded(family)` via `route_eval_js` to
+  resolve that one face's `_loadedPromise` directly — bypassing
+  `_onFaceLoadStart`/`_onFaceLoadEnd` entirely, precisely to avoid the
+  shared-counter risk above. `crates/driver` (the WPT/`run_report.py` path)
+  has no `FontLoaded` equivalent and never calls `Document::fonts_mut()` at
+  all, so this only ever fires for the live window. `FontFace.load()`
+  validates bytes through a new native,
   `_lumen_font_validate_bytes` (`crates/js/src/v8_runtime/install/dom_core.rs`,
   wraps `lumen_font::{maybe_decode_font, Font::parse}`), fed by the shim's
   own `fetch()`/`arrayBuffer()` rather than a second native network path.
   Not done, and tracked as the task's own remaining slices in
   [`bugs/BUG-467-OPEN.md`](../bugs/BUG-467-OPEN.md): CSS-connected
-  reactivity, descriptor grammar validation, and wiring a script-constructed
-  `FontFace` into `lumen_font::FontRegistry`/actual rendering.
+  reactivity AND initial population on the driver/WPT path (`document.fonts`
+  is never populated there at all — a bigger gap than "stale", `crates/driver`
+  also runs page scripts before parsing `<style>` blocks, so fixing this
+  needs a pipeline-ordering decision, not just a resync), descriptor grammar
+  validation, and wiring a script-constructed `FontFace` into
+  `lumen_font::FontRegistry`/actual rendering.
 
 ## Deferred
 
