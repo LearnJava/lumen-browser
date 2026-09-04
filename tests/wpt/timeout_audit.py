@@ -1905,6 +1905,47 @@ SOURCE_MARKERS = [
         "inside it registers anything",
         predicate=_shared_worker_module_marker,
     ),
+    # WPT-RUN-6 slice 59. Static-read gap from slice 32 (BUG-953), confirmed
+    # live for the first time: measured via the real `wptrunner`+`wptserve`
+    # stack (`run_report.py --all --root document-policy/experimental-features`,
+    # not `serve_wpt_like.py` — the `.tentative.json` variant needs `?pipe=gzip`,
+    # a feature that script does not implement), all three files in the
+    # directory genuinely TIMEOUT (10s each). Every one awaits a
+    # `document-policy-violation` report from a `ReportingObserver`
+    # (`{types: ['document-policy-violation']}`); `ReportingObserver` itself
+    # works (`crates/js/src/reporting_api.rs`, Phase 0 — construct/observe/
+    # disconnect/takeRecords all wired), but nothing in the workspace ever
+    # calls `_lumen_deliver_report` with that type (`grep -rn
+    # _lumen_deliver_report crates/` outside `reporting_api.rs` — zero hits):
+    # Document-Policy header parsing, per-fetch feature-vs-policy comparison
+    # and report construction are entirely unimplemented (BUG-953's own
+    # §Причина). `resolve()` inside the `new Promise` executor is therefore
+    # never called and `await report` hangs until the harness's own external
+    # timeout. Placed before the `cssom-stylesheets-missing` regex below on
+    # purpose: two of the three ids also reference `document.styleSheets[0]`
+    # inside their own `check_report_format` (to read the sheet's `href` for
+    # the report's expected `sourceFile`), which made that regex claim them
+    # first and misattribute the hang to the CSSOM gap instead of the actual
+    # cause — `SOURCE_MARKERS` is first-match-wins in list order
+    # (`classify_source`), so the more specific, live-measured `_exact_id_marker`
+    # has to come first. Not a new bug — BUG-953/GAP-POLICYREPORT already
+    # covers the mechanism; this only supplies the first live measurement and
+    # three concrete ids.
+    Mechanism(
+        "document-policy-violation-report-missing", "BUG-953",
+        [], "a `ReportingObserver({types: ['document-policy-violation']})` "
+        "awaits a report that never arrives — Document-Policy header "
+        "parsing and violation detection are unimplemented, so nothing "
+        "ever calls `_lumen_deliver_report` with that type",
+        predicate=_exact_id_marker(
+            "/document-policy/experimental-features/"
+            "network-efficiency-guardrails.tentative.html",
+            "/document-policy/experimental-features/"
+            "network-efficiency-guardrails-report-only.tentative.html",
+            "/document-policy/experimental-features/"
+            "network-efficiency-guardrails-json.tentative.html",
+        ),
+    ),
     # WPT-RUN-6 slice 29. Four silent reads, all measured live
     # (`verify_cssom_svg_interface_gaps.py`): the page asks the object model
     # a question, gets `undefined`, and — since these tests compare rather
