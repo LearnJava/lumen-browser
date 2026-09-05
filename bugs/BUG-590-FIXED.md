@@ -1,7 +1,7 @@
 # BUG-590: `document.createEvent` missing entirely; `beforeunload` dispatched via `dispatchEvent()` doesn't invoke the handler
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs` — grep for `createEvent` returns zero hits; `onbeforeunload`/`beforeunload` listener dispatch path)
+**Статус:** FIXED 2026-09-05
+**Компонент:** js (`crates/js/src/shim/web_api_shim_head.js`, `web_api_shim_mid.js`)
 **Найден:** P2, WPT-VENDOR-html-browsers, 2026-08-04
 
 ## Симптом
@@ -51,3 +51,37 @@ left `undefined` never runs, `TARGET` never gets its `click`, and the
 harness never reaches `done()`. `legacy-create-event-missing` marker added
 to `tests/wpt/timeout_audit.py::SOURCE_MARKERS`; script —
 `tests/wpt/verify_slice38_gaps.py`.
+
+## Причина устранена
+
+`document.createEvent(interface)` added (DOM §2.2 legacy factory) — a
+lower-case interface-name switch (`_lumen_legacy_event_ctor` in
+`web_api_shim_head.js`) covering `Event`/`CustomEvent`/`UIEvent`/
+`MouseEvent`/`KeyboardEvent`/`FocusEvent`/`HashChangeEvent`/`StorageEvent`/
+`MessageEvent`/`DragEvent`/`CompositionEvent`/`BeforeUnloadEvent`, throwing a
+`NotSupportedError` `DOMException` for anything else. The returned event
+starts with an empty type; `Event.prototype.initEvent(type, bubbles,
+cancelable)` (also new) fills it in, per spec forcing `isTrusted` back to
+`false`.
+
+Gap (2) from the original report — "`window.dispatchEvent(new
+CustomEvent("beforeunload"))` never runs the handler" — did not reproduce
+under a live-window probe (`--mcp-live-port`): the generic
+`window.dispatchEvent` `on<type>` branch (BUG-392) already invokes
+`onbeforeunload` for any event type, `beforeunload` included, and no code
+path sets `defaultPrevented` from a returned string unless
+`_lumen_fire_beforeunload` (the real navigation-unload path) is the caller —
+which a script-authored `CustomEvent` never is. All 4 non-iframe subtests
+of `beforeunload-canceling.html` pass once `createEvent` alone is fixed.
+
+`legacy-create-event-missing`'s other id (`dispatchEvent.click.checkbox.html`,
+srez 38 above) is unaffected by this fix for its own TIMEOUT reason: the
+`document.createEvent("MouseEvent")` call itself no longer throws, but the
+exception-swallow this file's listener depends on for signalling failure is
+[BUG-871](bugs/BUG-871-OPEN.md), a separate open defect.
+
+Tests: `crates/driver/tests/cases/bug590_create_event_beforeunload.rs`
+(`InProcessSession::eval`, 6 cases — interface mapping, unknown-interface
+`NotSupportedError`, `initEvent` retargeting, the three CustomEvent
+subtests, and a regression guard on `_lumen_fire_beforeunload`, which this
+fix does not touch).

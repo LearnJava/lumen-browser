@@ -106,7 +106,7 @@ Linux, `dev-release`, пин `35be3b44`, 5 мин 07 с на 4 процесса.
 
 | Баг | Что видно в прогоне `dom` |
 |---|---|
-| [BUG-590](../../bugs/BUG-590-OPEN.md) `document.createEvent` | 69 сабтестов + 2 harness ERROR (`Event-constants`, `Event-propagation`, `EventTarget-dispatchEvent`, `Event-initEvent`, `Event-cancelBubble`) |
+| [BUG-590](../../bugs/BUG-590-FIXED.md) `document.createEvent` | 69 сабтестов + 2 harness ERROR (`Event-constants`, `Event-propagation`, `EventTarget-dispatchEvent`, `Event-initEvent`, `Event-cancelBubble`) |
 | [BUG-577](../../bugs/BUG-577-OPEN.md) `Event.composedPath()` | 2 harness ERROR (`EventTarget-constructible.any`, `window-composed-path`) |
 | [BUG-478](../../bugs/BUG-478-OPEN.md) `Element.getClientRects` | `Event-dispatch-redispatch`, `scrolling/input-text-scroll-event-when-using-arrow-keys` |
 | [BUG-482](../../bugs/BUG-482-OPEN.md) `document.scrollingElement` | почти весь `events/scrolling/` — 13 ERROR вида `Cannot read properties of undefined (reading 'scrollTo'/'scrollLeft'/'style')` |

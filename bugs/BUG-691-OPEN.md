@@ -16,7 +16,7 @@ api.html` и `uievents/ui_event_pseudo_target.html`:
    не существует вовсе — `new TextEvent('textInput')` бросает
    `ReferenceError: TextEvent is not defined`, а не `TypeError` (тест ожидает,
    что интерфейс существует, но напрямую не конструируется — `assert_throws_js
-   (TypeError, …)`). Отдельно от `document.createEvent` ([BUG-590](BUG-590-OPEN.md),
+   (TypeError, …)`). Отдельно от `document.createEvent` ([BUG-590](BUG-590-FIXED.md),
    тоже отсутствует целиком): даже если бы `createEvent('TextEvent')` работал,
    `Object.getPrototypeOf(e) === window.TextEvent.prototype` всё равно упал бы
    на отсутствующем глобале. 1 файл, 6 сабтестов (`No constructor`,
@@ -40,7 +40,7 @@ FAIL/TIMEOUT сабтестов — переподтверждение уже о
 [BUG-574](BUG-574-OPEN.md) (`Node.contains` отсутствует, ломает
 `test_driver.click()`/`send_keys()` — 34 сабтеста), [BUG-622](BUG-622-OPEN.md)
 (`document.defaultView` отсутствует → «Browsing context for element was
-detached» на всех тестах с `<iframe>` — 52 сабтеста), [BUG-590](BUG-590-OPEN.md)
+detached» на всех тестах с `<iframe>` — 52 сабтеста), [BUG-590](BUG-590-FIXED.md)
 (`document.createEvent` отсутствует целиком — 18 сабтестов) и
 [BUG-384](BUG-384-FIXED.md) (именованный доступ `window.<id>` не реализован,
 `ReferenceError: square is not defined` в `order-of-events/mouse-events/
