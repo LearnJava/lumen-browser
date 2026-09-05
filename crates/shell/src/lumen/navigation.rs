@@ -144,6 +144,12 @@ impl Lumen {
         self.nav_fwd.clear();
         self.display_url = None;
         self.current_history_state_json = String::from("null");
+        // BUG-995: the outgoing document is being unloaded, so any focus it
+        // held is gone (HTML LS §7.4.5 unloading removes focus) — leaving
+        // `focused_node`/`focused_frame` pointing at a NodeId from that
+        // document's arena panics the next keystroke once the arena is freed.
+        self.focused_node = None;
+        self.focused_frame = None;
         // Assign a fresh key to the incoming page before it becomes current.
         self.nav_key_counter += 1;
         self.current_nav_key = format!("nav-{}", self.nav_key_counter);
@@ -193,6 +199,10 @@ impl Lumen {
         self.nav_fwd.clear();
         self.display_url = None;
         self.current_history_state_json = String::from("null");
+        // BUG-995: see `navigate_to` — the outgoing document's focus does
+        // not survive the navigation.
+        self.focused_node = None;
+        self.focused_frame = None;
         self.source = source;
         // BUG-352: `navigate_replace` doesn't route through `commit_nav_state`
         // (that call updates JS's `window.navigation`, not needed for a plain

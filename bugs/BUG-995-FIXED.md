@@ -1,6 +1,6 @@
 # BUG-995 — `focused_node` переживает навигацию: `Document::get()` крашит процесс в `text_input.rs`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-05
 **Заведён:** 2026-09-04 (P2, WPT-RUN-7 срез 3 — генерация expectations baseline для `input-events`)
 **Область:** `crates/shell/src/lumen/text_input.rs` (`typeable_field`), `crates/shell/src/lumen/keyboard.rs`
 (вызывающие), `crates/shell/src/lumen/navigation.rs` (`navigate_to`/`navigate_replace` не сбрасывают `focused_node`)
@@ -88,3 +88,36 @@ baseline для этого файла.
 `.tmp/wpt-run7-slice3/input-events.run1.log` (прогон до фикса BUG-986, паника в
 `dom/lib.rs:706` без диагностики вызывающего) и повторный прогон после пересборки на
 `f0a6847c0` — тот же файл/id, теперь с точным call site.
+
+## Фикс (P3, 2026-09-05)
+
+Реализованы оба конца «Предлагаемого направления»:
+
+- **(а)** `navigate_to`/`navigate_replace` (`crates/shell/src/lumen/navigation.rs`)
+  сбрасывают `focused_node`/`focused_frame` в `None` в момент, когда исходящий
+  документ уже точно выгружается (рядом с очисткой `nav_fwd`/`display_url`) —
+  навигация снимает фокус (HTML LS §7.4.5). `focused_frame` сброшен туда же:
+  top-level навигация уносит с собой и все под-документы фреймов, так что пара
+  `(idx, NodeId)` внутри него так же устаревает, как и `focused_node`.
+- **(б)** `typeable_field` (`text_input.rs`) и его зеркало для фреймов
+  `frame_typeable_field` (`frame_text_input.rs`) перешли с непроверенного
+  `doc.get(nid)` на `doc.try_get(nid)?` — по образцу `dom_core.rs` из BUG-986.
+  Это закрывает и путь, не накрытый пунктом (а): переживший навигацию фокус
+  через `navigate_back`/`navigate_forward` (эти функции `navigation.rs` тоже
+  никогда не присваивали `focused_node`, но за пределами репро этого бага) —
+  теперь такой узел просто не находится, а не роняет процесс.
+
+`cargo clippy --workspace --all-targets -- -D warnings` чисто, `scripts/scoped-test.sh`
+зелёный кроме заранее известного и не связанного [BUG-997](BUG-997-OPEN.md).
+
+**Живая репродукция не удалась в этой сессии** (не блокирует фикс, но стоит
+знать для следующей попытки): панику изначально дал реальный winit
+`KeyboardInput`/`InputCommand::TypeText` (не реклинкует фокус перед вводом), а
+доступный в песочнице путь — BiDi `input.performActions`/MCP-инструмент
+`type` — реализован через `AutomationCommand::Type`, который ВСЕГДА кликает по
+цели перед вводом (`crates/shell/src/app/about_to_wait.rs`) и тем самым сам
+переустанавливает `focused_node` на валидный для текущего документа id —
+гонку через этот путь не воспроизвести. Полноценная живая проверка требует
+либо полного прогона `run_report.py --root input-events --recursive` (в этой
+песочнице упал на `ssl.wrap_socket` — Python 3.14 убрал API, которым пользуется
+`tests/wpt/.venv`), либо инжекции OS-уровня клавиш в реальное окно.

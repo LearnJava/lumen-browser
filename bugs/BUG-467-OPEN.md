@@ -148,7 +148,7 @@ unicodeRange/featureSettings/variationSettings/display, `status`, `loaded`,
 `loadingerror` (`FontFaceSetLoadEvent`); `new FontFaceSet(...)` теперь
 бросает `TypeError` (`historical.html`). Замер до/после (`run_report.py --all
 --root css/css-font-loading`, dev-release, Windows): 18/27 → 17/27 harness OK
-(разница — уже заведённый [BUG-995](BUG-995-OPEN.md) на `fontface-loadingevent.html`,
+(разница — уже заведённый [BUG-995](BUG-995-FIXED.md) на `fontface-loadingevent.html`,
 которая раньше умирала ReferenceError'ом раньше своей клавиатурной части и
 теперь доходит до нативного краша: не регрессия этого среза, воспроизведён
 уже в бейзлайне ДО правки), 0/54 → 6/55 subtests PASS.

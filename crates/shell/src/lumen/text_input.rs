@@ -95,7 +95,11 @@ impl Lumen {
     /// it is only the default the field started from.
     pub(crate) fn typeable_field(&self, nid: lumen_dom::NodeId) -> Option<(TypeableField, String)> {
         let doc = self.layout_source.as_ref()?.document.lock().ok()?;
-        let node = doc.get(nid);
+        // BUG-995: `nid` is `self.focused_node`, which can outlive the
+        // document it was focused in (navigation doesn't clear it) — a
+        // bare `doc.get` would panic on a NodeId from an arena that no
+        // longer exists.
+        let node = doc.try_get(nid)?;
         if node.get_attr("disabled").is_some() || node.get_attr("readonly").is_some() {
             return None;
         }

@@ -525,7 +525,7 @@ BiDi-сессию, следующий тест в том же окне лови�
 `NodeId`/той же длиной арены, но с другим call site — теперь диагностика `#[track_caller]` из
 самого фикса назвала точное место, `crates/shell/src/lumen/text_input.rs:98` (`self.focused_node`
 не сбрасывается на навигацию, `typeable_field` делает непроверенный `doc.get`) — заведено отдельно,
-[BUG-995](bugs/BUG-995-OPEN.md). Baseline для `input-events` перегенерирован на пересобранном
+[BUG-995](bugs/BUG-995-FIXED.md). Baseline для `input-events` перегенерирован на пересобранном
 бинаре (`--update-expected` затем `--check`, 0 регрессий, exit 0): краш зафиксирован в нём как
 `expected: ERROR` — гейт зелёный, но это учтённый, а не спрятанный краш; фикс BUG-995 всплывёт как
 unexpected pass и потребует новой перегенерации.

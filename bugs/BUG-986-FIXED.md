@@ -112,7 +112,7 @@ outlook/bing: `input-events/input-events-get-target-ranges-deleting-in-list-item
 (`?Delete,ol` → `?Delete,ul`) с точным call site `crates/shell/src/lumen/
 text_input.rs:98:24` — вызывающий не JS-натив из слоя 2 этого фикса, а shell-код,
 читающий `self.focused_node` без сброса на навигацию. Заведено отдельным багом —
-[BUG-995](bugs/BUG-995-OPEN.md), фикс выше его не накрывает.
+[BUG-995](bugs/BUG-995-FIXED.md), фикс выше его не накрывает.
 
 ## Сырые данные
 
