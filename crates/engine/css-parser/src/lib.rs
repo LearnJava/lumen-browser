@@ -268,6 +268,8 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "overflow-y",
     "overflow-wrap",
     "overscroll-behavior",
+    "overscroll-behavior-block",
+    "overscroll-behavior-inline",
     "overscroll-behavior-x",
     "overscroll-behavior-y",
     "padding",

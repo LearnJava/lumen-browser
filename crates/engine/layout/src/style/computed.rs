@@ -542,6 +542,16 @@ pub struct ComputedStyle {
     /// CSS Overscroll Behavior L1 §2 — `overscroll-behavior-x`. Не наследуется.
     pub overscroll_behavior_x: OverscrollBehavior,
     pub overscroll_behavior_y: OverscrollBehavior,
+    /// CSS Overscroll Behavior L1 §2 — специфицированные значения
+    /// `overscroll-behavior-block`/`overscroll-behavior-inline` до
+    /// разрешения в физическую пару `overscroll_behavior_x`/`_y` по
+    /// `writing_mode` (`resolve_overscroll_behavior_logical_properties`,
+    /// `style/logical.rs`). Не наследуются, как и физическая пара. Default
+    /// `Auto` совпадает с initial value — тот же эвристический приём, что у
+    /// `overflow_block`/`overflow_inline` (BUG-505) и остальных логических
+    /// свойств в этом файле.
+    pub overscroll_behavior_block: OverscrollBehavior,
+    pub overscroll_behavior_inline: OverscrollBehavior,
     /// CSS Text L3 §10.1 — `tab-size: <integer> | <length>`. Inherited.
     /// В пикселях если length; для integer хранится как число × 8 (default
     /// 8 spaces — стандартный default). Default 8 spaces = 64px при 8px-space.
@@ -1168,6 +1178,8 @@ impl ComputedStyle {
             scroll_padding_left: 0.0,
             overscroll_behavior_x: OverscrollBehavior::Auto,
             overscroll_behavior_y: OverscrollBehavior::Auto,
+            overscroll_behavior_block: OverscrollBehavior::Auto,
+            overscroll_behavior_inline: OverscrollBehavior::Auto,
             // CSS Text typography defaults.
             tab_size: 64.0,  // 8 spaces × 8px-space-width default.
             caret_color: None,  // `auto`.

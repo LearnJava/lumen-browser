@@ -1675,6 +1675,23 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         OverscrollBehavior::Contain => "contain",
         OverscrollBehavior::None => "none",
     }.into());
+    // CSS Overscroll Behavior L1 §2 (BUG-516): flow-relative axes read back
+    // the already-resolved physical value on the axis they map to, same
+    // swap as `overflow-block`/`-inline` above.
+    fn overscroll_behavior_to_css(v: OverscrollBehavior) -> &'static str {
+        match v {
+            OverscrollBehavior::Auto => "auto",
+            OverscrollBehavior::Contain => "contain",
+            OverscrollBehavior::None => "none",
+        }
+    }
+    let (overscroll_behavior_block, overscroll_behavior_inline) = if vertical_wm {
+        (style.overscroll_behavior_x, style.overscroll_behavior_y)
+    } else {
+        (style.overscroll_behavior_y, style.overscroll_behavior_x)
+    };
+    m.insert("overscroll-behavior-block".into(), overscroll_behavior_to_css(overscroll_behavior_block).into());
+    m.insert("overscroll-behavior-inline".into(), overscroll_behavior_to_css(overscroll_behavior_inline).into());
 
     // ── Color adjustment (CSS Color Adjustment L1) ──────────────────
     m.insert("color-scheme".into(), match style.color_scheme {
@@ -2534,6 +2551,34 @@ mod tests {
         );
         assert_eq!(m.get("overscroll-behavior-x").map(String::as_str), Some("contain"));
         assert_eq!(m.get("overscroll-behavior-y").map(String::as_str), Some("none"));
+    }
+
+    // BUG-516: `overscroll-behavior-block`/`overscroll-behavior-inline` (CSS
+    // Overscroll Behavior L1 §2) map to `overscroll-behavior-y`/`-x` under
+    // `horizontal-tb` and swap to `-x`/`-y` under a vertical writing mode,
+    // same shape as `overflow-block`/`-inline` (BUG-505).
+    #[test]
+    fn computed_map_overscroll_behavior_logical_horizontal_tb() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { overscroll-behavior-block: contain; overscroll-behavior-inline: none; }",
+        );
+        assert_eq!(m.get("overscroll-behavior-x").map(String::as_str), Some("none"));
+        assert_eq!(m.get("overscroll-behavior-y").map(String::as_str), Some("contain"));
+        assert_eq!(m.get("overscroll-behavior-block").map(String::as_str), Some("contain"));
+        assert_eq!(m.get("overscroll-behavior-inline").map(String::as_str), Some("none"));
+    }
+
+    #[test]
+    fn computed_map_overscroll_behavior_logical_vertical_rl_swaps_axes() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { writing-mode: vertical-rl; overscroll-behavior-block: contain; overscroll-behavior-inline: none; }",
+        );
+        assert_eq!(m.get("overscroll-behavior-x").map(String::as_str), Some("contain"));
+        assert_eq!(m.get("overscroll-behavior-y").map(String::as_str), Some("none"));
+        assert_eq!(m.get("overscroll-behavior-block").map(String::as_str), Some("contain"));
+        assert_eq!(m.get("overscroll-behavior-inline").map(String::as_str), Some("none"));
     }
 
     #[test]
