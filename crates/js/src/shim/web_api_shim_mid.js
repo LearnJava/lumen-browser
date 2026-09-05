@@ -2342,7 +2342,7 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
             return n !== null ? _lumen_make_element(n) : null;
         },
         querySelectorAll: function(sel) {
-            return _lumen_query_selector_all_scoped(nid, _lumen_sel(sel)).map(_lumen_make_element);
+            return _lumen_static_node_list(_lumen_query_selector_all_scoped(nid, _lumen_sel(sel)));
         },
         getElementById:   function(id) {
             var n = _lumen_u2n(_lumen_get_element_by_id(String(id)));
@@ -2370,8 +2370,12 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
             return _lumen_dispatch(nid, evt);
         },
     };
+    // DOM §4.2.6 ParentNode.children — element-only live HTMLCollection
+    // (BUG-310's own fix, missed here: this used to hand back ALL children
+    // via a plain array, so a text-node child leaked into `.children` and
+    // `.item()`/`.namedItem()` were both missing — BUG-994).
     Object.defineProperty(sr, 'children', {
-        get: function() { return _lumen_get_children(nid).map(_lumen_make_element); },
+        get: function() { return _lumen_make_html_collection(nid); },
         enumerable: false, configurable: true,
     });
     return sr;
@@ -2419,7 +2423,7 @@ function _lumen_make_document_fragment(nid) {
             return n !== null ? _lumen_make_element(n) : null;
         },
         querySelectorAll:     function(sel) {
-            return _lumen_query_selector_all_scoped(nid, _lumen_sel(sel)).map(_lumen_make_element);
+            return _lumen_static_node_list(_lumen_query_selector_all_scoped(nid, _lumen_sel(sel)));
         },
         appendChild:          function(c) {
             if (c && c.__nid__ !== undefined) {
@@ -2508,7 +2512,10 @@ function _lumen_make_document_fragment(nid) {
         enumerable: false, configurable: true,
     });
     Object.defineProperty(frag, 'childNodes', {
-        get: function() { return _lumen_get_children(nid).map(_lumen_make_element); },
+        get: function() {
+            var nids = _lumen_get_children(nid);
+            return _lumen_make_nid_collection(function() { return nids; }, NodeList.prototype, true);
+        },
         enumerable: false, configurable: true,
     });
     return frag;
@@ -3391,10 +3398,10 @@ function _lumen_build_detached_document(proto, contentType) {
     };
     doc.querySelectorAll = function(sel) {
         var root = _detached_root_nid();
-        if (root === null) { return []; }
+        if (root === null) { return _lumen_static_node_list([]); }
         var s = _lumen_sel(sel);
         var hits = _lumen_node_matches_selector(root, s) ? [root] : [];
-        return hits.concat(_lumen_query_selector_all_scoped(root, s)).map(_lumen_make_element);
+        return _lumen_static_node_list(hits.concat(_lumen_query_selector_all_scoped(root, s)));
     };
     // Walked rather than routed through the selector engine: an `id` or a tag
     // name is arbitrary text, not a selector, and escaping it into one would
@@ -3421,21 +3428,21 @@ function _lumen_build_detached_document(proto, contentType) {
             if (pred(n)) { out.push(n); }
             return false;
         });
-        return out.map(_lumen_make_element);
+        return out;
     }
     doc.getElementsByTagName = function(qualifiedName) {
-        return _detached_by_predicate(_lumen_tag_name_predicate(qualifiedName));
+        return _lumen_static_html_collection(_detached_by_predicate(_lumen_tag_name_predicate(qualifiedName)));
     };
     doc.getElementsByTagNameNS = function(namespace, localName) {
-        return _detached_by_predicate(_lumen_tag_ns_predicate(namespace, localName));
+        return _lumen_static_html_collection(_detached_by_predicate(_lumen_tag_ns_predicate(namespace, localName)));
     };
     doc.getElementsByClassName = function(names) {
         var root = _detached_root_nid();
-        if (root === null) { return []; }
+        if (root === null) { return _lumen_static_html_collection([]); }
         var sel = _lumen_class_selector(names);
-        if (sel === null) { return []; }
+        if (sel === null) { return _lumen_static_html_collection([]); }
         var hits = _lumen_node_matches_selector(root, sel) ? [root] : [];
-        return hits.concat(_lumen_query_selector_all_scoped(root, sel)).map(_lumen_make_element);
+        return _lumen_static_html_collection(hits.concat(_lumen_query_selector_all_scoped(root, sel)));
     };
     // HTML LS 3.1.5 document.title. Getter - the child text content of the
     // title element, stripped and collapsed. Setter - retarget the existing
@@ -4790,14 +4797,34 @@ function HTMLCollection() { throw new TypeError('Illegal constructor'); }
 // NodeList marker prototype (DOM Standard §4.2.10.1). Separate interface from
 // HTMLCollection above because HTML LS §3.1.5 requires `getElementsByName` to
 // hand back a NodeList specifically — a collection answering `instanceof
-// HTMLCollection` fails that half of the interface (BUG-412). Only the surface
-// the collection Proxy below can back is provided: `length`, indices, `item`,
-// `forEach` and iteration; `entries`/`keys`/`values` are not implemented.
+// HTMLCollection` fails that half of the interface (BUG-412).
 function NodeList() { throw new TypeError('Illegal constructor'); }
 NodeList.prototype.forEach = function(cb, thisArg) {
     if (typeof cb !== 'function') throw new TypeError('callback is not a function');
     for (var i = 0; i < this.length; i++) cb.call(thisArg, this[i], i, this);
 };
+// DOM §4.2.10.1: `entries()`/`keys()`/`values()` and `Symbol.iterator` (spec:
+// the default iterator is `values()`) — built on nothing but `length` and
+// indexed access, which every proxy this file hands out already answers
+// through its `get` trap, so `this[i]`/`this.length` below re-enter that trap
+// rather than reading a snapshot (BUG-994).
+function _lumen_index_iterator(list, kind) {
+    var i = 0;
+    var it = {
+        next: function() {
+            if (i >= list.length) { return { value: undefined, done: true }; }
+            var idx = i++;
+            var value = kind === 'keys' ? idx : kind === 'entries' ? [idx, list[idx]] : list[idx];
+            return { value: value, done: false };
+        },
+    };
+    it[Symbol.iterator] = function() { return it; };
+    return it;
+}
+NodeList.prototype.entries = function() { return _lumen_index_iterator(this, 'entries'); };
+NodeList.prototype.keys    = function() { return _lumen_index_iterator(this, 'keys'); };
+NodeList.prototype.values  = function() { return _lumen_index_iterator(this, 'values'); };
+NodeList.prototype[Symbol.iterator] = function() { return _lumen_index_iterator(this, 'values'); };
 
 // BUG-328: the `name`-attribute half of `namedItem`/`ownKeys` (below) only
 // applies to elements in the HTML namespace (DOM §4.2.10.2) — an element
@@ -4890,9 +4917,13 @@ function _lumen_make_html_collection(owner_nid) {
 // `HTMLFormControlsCollection` (BUG-383) shares it instead of re-implementing
 // indexed and named access. `noNamed` drops the named half (`namedItem`,
 // `list['someName']`, named own-keys): that is HTMLCollection behaviour
-// (DOM §4.2.10.2), while a NodeList exposes indices alone (BUG-412).
-function _lumen_make_nid_collection(idsFn, protoObj, noNamed) {
+// (DOM §4.2.10.2), while a NodeList exposes indices alone (BUG-412). `mapFn`
+// (default `_lumen_make_element`) builds the JS value for a member id — only
+// `document.childNodes` needs a different one (`_lumen_make_node`, BUG-321:
+// a doctype child must come back as a `DocumentType`, not an element).
+function _lumen_make_nid_collection(idsFn, protoObj, noNamed, mapFn) {
     var proto = Object.create(protoObj);
+    var toValue = mapFn || _lumen_make_element;
     function ids() { return idsFn(); }
     return new Proxy(proto, {
         get: function(target, prop) {
@@ -4901,7 +4932,7 @@ function _lumen_make_nid_collection(idsFn, protoObj, noNamed) {
                 return function(i) {
                     var list = ids();
                     i = i >>> 0;
-                    return i < list.length ? _lumen_make_element(list[i]) : null;
+                    return i < list.length ? toValue(list[i]) : null;
                 };
             }
             if (prop === 'namedItem' && !noNamed) {
@@ -4910,7 +4941,7 @@ function _lumen_make_nid_collection(idsFn, protoObj, noNamed) {
             if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
                 var list = ids();
                 var idx = parseInt(prop, 10);
-                return idx < list.length ? _lumen_make_element(list[idx]) : undefined;
+                return idx < list.length ? toValue(list[idx]) : undefined;
             }
             if (!noNamed && typeof prop === 'string' && prop !== 'constructor') {
                 var named = _lumen_html_collection_named(ids(), prop);
@@ -4950,7 +4981,7 @@ function _lumen_make_nid_collection(idsFn, protoObj, noNamed) {
                 var list = ids();
                 var idx = parseInt(prop, 10);
                 if (idx < list.length) {
-                    return { value: _lumen_make_element(list[idx]), writable: false, enumerable: true, configurable: true };
+                    return { value: toValue(list[idx]), writable: false, enumerable: true, configurable: true };
                 }
                 return undefined;
             }
@@ -4963,6 +4994,28 @@ function _lumen_make_nid_collection(idsFn, protoObj, noNamed) {
             return undefined;
         },
     });
+}
+
+// Wraps a FIXED array of node ids, captured once by the caller, as a static
+// NodeList (DOM §4.2.10.1) — `querySelectorAll`'s own snapshot semantics
+// (BUG-994: these used to come back as plain arrays, so `list.item is not a
+// function` broke every site calling the standard accessor instead of `[]`).
+// `idsFn` always returns the same captured array, so nothing here re-queries
+// the tree — the "static, not live" behaviour is unchanged, only the missing
+// interface (`item`, `entries`/`keys`/`values`/`Symbol.iterator` via
+// `NodeList.prototype`) is added.
+function _lumen_static_node_list(nids) {
+    return _lumen_make_nid_collection(function() { return nids; }, NodeList.prototype, true);
+}
+
+// Same as `_lumen_static_node_list` but for `getElementsByTagName(NS)` /
+// `getElementsByClassName`, which DOM §4.5/§4.9 spell out as HTMLCollection
+// rather than NodeList — hence `namedItem`/named access via
+// `HTMLCollection.prototype` (BUG-994). Still a snapshot of `nids`, not a
+// live collection; see the callers' own comments for that pre-existing,
+// separately-tracked simplification.
+function _lumen_static_html_collection(nids) {
+    return _lumen_make_nid_collection(function() { return nids; }, HTMLCollection.prototype);
 }
 
 function _lumen_make_element(nid) {
@@ -5251,13 +5304,14 @@ function _lumen_tag_ns_predicate(namespace, localName) {
     };
 }
 
-// Filters a tree-ordered list of raw node ids by `pred` and wraps the survivors.
-// Static array, not a live HTMLCollection — the same simplification
-// `querySelectorAll`/`getElementsByClassName` already make.
+// Filters a tree-ordered list of raw node ids by `pred`. Callers wrap the
+// surviving ids into the collection shape their own interface requires
+// (`_lumen_static_html_collection` for `getElementsByTagName(NS)` — BUG-994);
+// this function stays a plain id filter so it has no interface to get wrong.
 function _lumen_collect_matching(nids, pred) {
     var out = [];
     for (var i = 0; i < nids.length; i++) {
-        if (pred(nids[i])) out.push(_lumen_make_element(nids[i]));
+        if (pred(nids[i])) out.push(nids[i]);
     }
     return out;
 }
@@ -6188,14 +6242,15 @@ var _LUMEN_WRAPPER_MEMBERS = {
             return n !== null ? _lumen_make_element(n) : null;
         },
         querySelectorAll: function(sel) { var nid = this.__nid__;
-            return _lumen_query_selector_all_scoped(nid, _lumen_sel(sel)).map(_lumen_make_element);
+            return _lumen_static_node_list(_lumen_query_selector_all_scoped(nid, _lumen_sel(sel)));
         },
         // DOM LS §4.9: getElementsByClassName(names), scoped to this element's
-        // descendants (BUG-302). Static array, not a live HTMLCollection.
+        // descendants (BUG-302). Static HTMLCollection, not a live one
+        // (BUG-994: was a plain array, missing `item()`/`namedItem()`).
         getElementsByClassName: function(names) { var nid = this.__nid__;
             var sel = _lumen_class_selector(names);
-            if (sel === null) return [];
-            return _lumen_query_selector_all_scoped(nid, sel).map(_lumen_make_element);
+            if (sel === null) return _lumen_static_html_collection([]);
+            return _lumen_static_html_collection(_lumen_query_selector_all_scoped(nid, sel));
         },
         // DOM LS §4.5: getElementsByTagName(qualifiedName) /
         // getElementsByTagNameNS(namespace, localName), scoped to this element's
@@ -6205,14 +6260,14 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // through the native walker; the name matching itself is spec-shaped and
         // lives in the predicates above.
         getElementsByTagName: function(qualifiedName) { var nid = this.__nid__;
-            return _lumen_collect_matching(
+            return _lumen_static_html_collection(_lumen_collect_matching(
                 _lumen_query_selector_all_scoped(nid, '*'),
-                _lumen_tag_name_predicate(qualifiedName));
+                _lumen_tag_name_predicate(qualifiedName)));
         },
         getElementsByTagNameNS: function(namespace, localName) { var nid = this.__nid__;
-            return _lumen_collect_matching(
+            return _lumen_static_html_collection(_lumen_collect_matching(
                 _lumen_query_selector_all_scoped(nid, '*'),
-                _lumen_tag_ns_predicate(namespace, localName));
+                _lumen_tag_ns_predicate(namespace, localName)));
         },
         matches: function(sel) { var nid = this.__nid__;
             return _lumen_node_matches_selector(nid, _lumen_sel(sel));
@@ -6937,9 +6992,13 @@ _lumen_canvas_define_dim('height', 1, 150);
     // element/text/comment wrapper (only `document`/`DocumentFragment`/detached
     // `CharacterData` had it) — `Node-childNodes.html`, `Node.hasChildNodes()`
     // (added above) and everything that walks a live subtree via `.childNodes`
-    // threw or silently reported an empty tree.
+    // threw or silently reported an empty tree. Wrapped as a NodeList
+    // (BUG-994: was a plain array, missing `item()`/iteration).
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'childNodes', {
-        get: function() { var nid = this.__nid__; return _lumen_get_children(nid).map(_lumen_make_element); },
+        get: function() { var nid = this.__nid__;
+            var nids = _lumen_get_children(nid);
+            return _lumen_make_nid_collection(function() { return nids; }, NodeList.prototype, true);
+        },
         enumerable: false, configurable: true,
     });
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'firstChild', {
@@ -8511,10 +8570,14 @@ var document = {
     get ownerDocument() { return null; },
     // DOM §4.9: the document's child nodes (top-level comments, the doctype and
     // the root element) in tree order, wrapped kind-aware so the doctype child
-    // is a DocumentType node (BUG-321). Static array (same simplification as
-    // querySelectorAll). For a standard page `childNodes[1]` is the doctype.
+    // is a DocumentType node (BUG-321). Static NodeList — same snapshot
+    // `querySelectorAll` takes, now presenting `item()`/iteration (BUG-994)
+    // instead of a plain array. For a standard page `childNodes[1]` is the
+    // doctype.
     get childNodes() {
-        return _lumen_get_children(_lumen_root_nid).map(_lumen_make_node);
+        var nids = _lumen_get_children(_lumen_root_nid);
+        return _lumen_make_nid_collection(
+            function() { return nids; }, NodeList.prototype, true, _lumen_make_node);
     },
     // BUG-327: DOM §4.4 Node.hasChildNodes() — the `document` singleton isn't
     // wired to `Document.prototype` (so it doesn't inherit the one just added
@@ -8641,36 +8704,39 @@ var document = {
         var n = _lumen_u2n(_lumen_query_selector(_lumen_sel(sel)));
         return n !== null ? _lumen_make_element(n) : null;
     },
+    // DOM §4.3.2: a static NodeList — same snapshot semantics as before
+    // (BUG-994: was a plain array, so `list.item is not a function`).
     querySelectorAll:  function(sel) {
-        return _lumen_query_selector_all(_lumen_sel(sel)).map(_lumen_make_element);
+        return _lumen_static_node_list(_lumen_query_selector_all(_lumen_sel(sel)));
     },
-    // DOM LS §4.5: getElementsByTagName(qualifiedName) — a static array, not a
-    // live HTMLCollection (same simplification `querySelectorAll` above makes).
-    // Found missing (broke `testharness.js`'s own `test_timeout()`/
+    // DOM LS §4.5: getElementsByTagName(qualifiedName) — a static
+    // HTMLCollection (same "not live" simplification `querySelectorAll` above
+    // makes, now with `item()`/`namedItem()` instead of a plain array —
+    // BUG-994). Found missing (broke `testharness.js`'s own `test_timeout()`/
     // `get_script_url()`, which call it unconditionally) while implementing
     // P2-wpt S4; BUG-416 then replaced the original «hand the tag to the
     // selector engine as a type selector» body, which matched the local name by
     // exact string equality and so answered nothing at all for
     // `getElementsByTagName('DIV')` and mis-parsed a non-identifier name.
     getElementsByTagName: function(qualifiedName) {
-        return _lumen_collect_matching(
+        return _lumen_static_html_collection(_lumen_collect_matching(
             _lumen_query_selector_all('*'),
-            _lumen_tag_name_predicate(qualifiedName));
+            _lumen_tag_name_predicate(qualifiedName)));
     },
     // DOM LS §4.5: getElementsByTagNameNS(namespace, localName) — the
     // namespace-aware sibling, missing from the document as well as the element
     // until BUG-416.
     getElementsByTagNameNS: function(namespace, localName) {
-        return _lumen_collect_matching(
+        return _lumen_static_html_collection(_lumen_collect_matching(
             _lumen_query_selector_all('*'),
-            _lumen_tag_ns_predicate(namespace, localName));
+            _lumen_tag_ns_predicate(namespace, localName)));
     },
     // DOM LS §4.5: getElementsByClassName(names) — document-global variant.
-    // Static array, not a live HTMLCollection (same simplification as above).
+    // Static HTMLCollection, not a live one (same simplification as above).
     getElementsByClassName: function(names) {
         var sel = _lumen_class_selector(names);
-        if (sel === null) return [];
-        return _lumen_query_selector_all(sel).map(_lumen_make_element);
+        if (sel === null) return _lumen_static_html_collection([]);
+        return _lumen_static_html_collection(_lumen_query_selector_all(sel));
     },
     // HTML LS §3.1.5: getElementsByName(elementName) — the HTML-namespace
     // elements whose `name` attribute equals the argument, in tree order
