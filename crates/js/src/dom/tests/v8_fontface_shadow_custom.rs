@@ -298,6 +298,154 @@ fn css_connected_face_is_excluded_from_scripted_registration() {
     assert!(rt.take_pending_scripted_font_faces().is_empty());
 }
 
+// FONTLOAD-7 (`bugs/BUG-467-OPEN.md`): `unicodeRange`/`featureSettings`/
+// `variationSettings` now parse and canonicalize instead of bare `String(v)`;
+// `ascentOverride`/`descentOverride`/`lineGapOverride`/`sizeAdjust` are new
+// properties with the asymmetric validation timing WPT's
+// `fontface-override-descriptor-getter-setter.sub.html` proves: invalid at
+// construction is accepted silently and only surfaces via `.load()`
+// rejecting with `SyntaxError`, while the setter throws synchronously.
+
+#[test]
+fn font_face_unicode_range_canonicalizes_at_construction() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            r#"
+                var f = new FontFace('T', 'url(a.woff)', { unicodeRange: 'U+0020-007F' });
+                f.unicodeRange
+            "#,
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("U+20-7F".into()));
+}
+
+#[test]
+fn font_face_feature_settings_elides_default_value_on_canonicalize() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            r#"
+                var f = new FontFace('T', 'url(a.woff)', { featureSettings: "'liga' 1" });
+                f.featureSettings
+            "#,
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("\"liga\"".into()));
+}
+
+#[test]
+fn font_face_variation_settings_normalizes_quotes_and_keeps_value() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            r#"
+                var f = new FontFace('T', 'url(a.woff)', { variationSettings: "'wght' 850" });
+                f.variationSettings
+            "#,
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("\"wght\" 850".into()));
+}
+
+#[test]
+fn font_face_unicode_range_setter_throws_syntax_error_on_invalid() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            r#"
+                (function() {
+                    var f = new FontFace('T', 'url(a.woff)');
+                    try { f.unicodeRange = 'not-a-range'; return false; }
+                    catch (e) { return e instanceof DOMException && e.name === 'SyntaxError'; }
+                })()
+            "#,
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn font_face_ascent_override_default_is_normal_and_accepts_percentage() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            r#"
+                var f1 = new FontFace('T1', 'url(a.woff)');
+                var f2 = new FontFace('T2', 'url(a.woff)', { ascentOverride: '50%' });
+                JSON.stringify([f1.ascentOverride, f2.ascentOverride])
+            "#,
+        )
+        .unwrap();
+    assert_eq!(
+        result,
+        lumen_core::JsValue::String(r#"["normal","50%"]"#.into())
+    );
+}
+
+#[test]
+fn font_face_ascent_override_setter_throws_syntax_error_on_invalid() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            r#"
+                (function() {
+                    var f = new FontFace('T', 'url(a.woff)');
+                    try { f.ascentOverride = '10px'; return false; }
+                    catch (e) { return e instanceof DOMException && e.name === 'SyntaxError'; }
+                })()
+            "#,
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn font_face_ascent_override_invalid_at_construction_accepted_but_load_rejects() {
+    let rt = v8_runtime_with_dom(make_doc());
+    // Invalid value ('-50%', a negative percentage) must NOT throw here —
+    // only `.load()` validates grammar for constructor-supplied descriptors.
+    let ctor = rt
+        .eval(
+            r#"
+                var f = new FontFace('T', 'url(a.woff)', { ascentOverride: '-50%' });
+                f.ascentOverride
+            "#,
+        )
+        .unwrap();
+    assert_eq!(ctor, lumen_core::JsValue::String("-50%".into()));
+    rt.eval(
+        r#"
+            var _errName = null, _errStatus = null;
+            f.load().catch(function(e) { _errName = e.name; _errStatus = f.status; });
+        "#,
+    )
+    .unwrap();
+    let result = rt.eval("JSON.stringify([_errName, _errStatus])").unwrap();
+    assert_eq!(
+        result,
+        lumen_core::JsValue::String(r#"["SyntaxError","error"]"#.into())
+    );
+}
+
+#[test]
+fn font_face_size_adjust_default_and_rejects_normal_keyword() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            r#"
+                (function() {
+                    var f = new FontFace('T', 'url(a.woff)');
+                    if (f.sizeAdjust !== '100%') return 'bad-default';
+                    try { f.sizeAdjust = 'normal'; return 'did-not-throw'; }
+                    catch (e) { return e instanceof DOMException && e.name === 'SyntaxError' ? 'ok' : 'wrong-error'; }
+                })()
+            "#,
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("ok".into()));
+}
+
 // ── Shadow DOM JS bindings ────────────────────────────────────────────────
 
 #[test]

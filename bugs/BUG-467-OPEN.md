@@ -522,3 +522,105 @@ clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` и
 
 **Не входит в срез:** реактивность CSS-connected сета (gap 1, BUG-471/CSSOM-4);
 descriptor grammar; unregister-путь для лица, покинувшего все `FontFaceSet`.
+
+## FONTLOAD-7 (P1, 2026-09-05, ветка `p1-fontload7-descriptor-grammar`) — descriptor grammar
+
+Закрыла остаток, который FONTLOAD-1/6 оставили нетронутым: `unicodeRange`/
+`featureSettings`/`variationSettings` принимались как голый `String(v)`, без
+разбора грамматики и без канонической сериализации; `ascentOverride`/
+`descentOverride`/`lineGapOverride`/`sizeAdjust` не существовали на `FontFace`
+вовсе.
+
+Ре-скоупинг агентом-исследователем перед срезом разрезал изначально
+широкую формулировку «descriptor grammar» на три разных по форме куска:
+(A) грамматика/сериализация `unicodeRange`/`featureSettings`/
+`variationSettings` — чистый JS getter/setter, без нативного шва;
+(B) новые свойства `ascentOverride`/`descentOverride`/`lineGapOverride`/
+`sizeAdjust` — тот же класс работы, репетативный по 3-4 почти идентичным
+дескрипторам; (C) фактическое подключение всех семи значений к рендерингу
+(glyph-range сегментация по `unicodeRange`, синтез метрик по override-
+дескрипторам) — два reftest'а (`fontface-override-descriptors.html`,
+`fontface-size-adjust-descriptor.html`) и один смешанный
+(`fontface-descriptor-updates.html`) требуют этого, но ни на script-
+constructed, ни на CSS-connected пути нет ни одного потребителя ни одного из
+семи значений в `crates/engine/font`/`crates/engine/layout` — грамматика и
+рендеринг разведены по прежней логике FONTLOAD-1 vs FONTLOAD-6 (JS API
+корректность отдельно от «доходит до рендера»). Взяты A+B, C оставлена
+следующему, более крупному срезу FONTLOAD.
+
+Реализовано (`crates/js/src/shim/web_api_shim_mid.js`, перед конструктором
+`FontFace`): `_lumen_font_face_parse_unicode_range`/`_parse_feature_settings`/
+`_parse_variation_settings`/`_parse_percent_descriptor` — чистые JS-парсеры
+(не нативный биндинг: у `lumen-layout` есть спека-совместимые
+`parse_font_feature_settings`/`parse_font_variation_settings`
+(`crates/engine/layout/src/style/parse/font.rs`), но им не хватает
+канонизирующего сериалайзера и они рассчитаны на cascade-семантику
+«отклонить всё объявление», а не на посимвольную сериализацию getter'а;
+переписывать их с нуля в JS оказалось дешевле и без риска для слоения
+крейтов, чем тянуть новый нативный шов ради строковой трансформации).
+
+Два разных контракта валидации, оба подтверждены чтением реальных WPT-тестов
+(`tests/wpt/css/css-font-loading/`), не по интуиции:
+
+1. **`unicodeRange`/`featureSettings`/`variationSettings` канонизируются
+   СРАЗУ в конструкторе** — `fontface-descriptor-updates-2.html` строит
+   `new FontFace(..., {unicodeRange: "U+0020-007F"})` и тут же (до любого
+   сеттера) читает `face.unicodeRange === "U+20-7F"`; аналогично
+   `featureSettings: "'liga' 1"` → `'"liga"'` (значение `1` — дефолт,
+   опускается сериализатором) и `variationSettings: "'wght' 850"` →
+   `'"wght" 850'` (подтверждено отдельно и
+   `fontface-font-variation-settings-persisted-js-api.html`).
+2. **Четыре override-дескриptora следуют асимметричному контракту**
+   (`fontface-override-descriptor-getter-setter.sub.html`, 24 сабтеста):
+   невалидное значение В КОНСТРУКТОРЕ (`{ascentOverride: '-50%'}` или
+   `'10px'`) принимается молча, без throw, и превращает `.load()` в
+   `SyntaxError`-реджект с `status → 'error'`; ТО ЖЕ значение через СЕТТЕР
+   бросает `SyntaxError` синхронно. Оба сценария используют одну и ту же
+   parse-функцию, возвращающую `{ok:false}` вместо throw — конструктор просто
+   не проверяет результат, сеттер и `.load()` проверяют.
+
+`FontFace.prototype.load` получил проверку `_lumen_font_face_validate_
+descriptors` перед стартом сетевого фетча — если хоть один из семи
+дескрипторов (не только override-четвёрка — для единообразия проверяются и
+canonicalize-при-конструкции дескрипторы, хотя тестами это не покрыто:
+конструктор либо канонизирует валидное значение, либо падает обратно на
+`String(v)`, так что маршрут остаётся тем же) невалиден, промис реджектится
+`SyntaxError` и `_lumen_font_face_load_start` не зовётся вовсе (нечего
+разбирать в pending-счётчике сета — фетч так и не стартовал).
+
+`_lumen_wrap_css_font_face` получил дефолты новых полей
+(`'normal'`×3/`'100%'`) — CSS-connected путь их не парсит из реальных
+`@font-face`-правил (тот же пре-существующий пробел, что уже документирован
+для `featureSettings`/`variationSettings`/`display`: `FontFaceRule`,
+`crates/engine/css-parser/src/parser/at_rules.rs`, вообще не заводит поля под
+эти дескрипторы — грамматика `@font-face`-стороны настолько же
+нереализована, насколько была script-стороны, отдельный, не взятый в этот
+срез пробел).
+
+8 новых юнит-тестов (`crates/js/src/dom/tests/v8_fontface_shadow_custom.rs`):
+канонизация `unicodeRange`/`featureSettings`/`variationSettings` при
+конструкции, `SyntaxError` от сеттера `unicodeRange`/`ascentOverride` на
+невалидном значении, дефолт+валидный процент `ascentOverride`, асимметрия
+«невалидно в конструкторе → `.load()` реджектит `SyntaxError`+`status:
+'error'`» (двумя `rt.eval` — промис реджектится микротаском между вызовами,
+тот же приём, что уже использует `crypto_subtle_digest_sha256_with_pump`),
+`sizeAdjust` дефолт `'100%'` и отказ от `'normal'` (эта комбинация не
+покрыта ни одним тестом из вендоренного набора — `sizeAdjust` фигурирует
+только в reftest'е `fontface-size-adjust-descriptor.html`, вне A+B).
+
+`cargo test -p lumen-js --features v8-backend -- v8_fontface_shadow_custom`
+53/53 (8 новых), `cargo test -p lumen-js --features v8-backend` 3477/3479 (2
+непричастных предсуществующих флейка — BUG-997
+(`native_binding_panic_does_not_abort_process`, детерминированно красный на
+`main`) и `frame_bridge::tests::inaccessible_bridge_mutation_does_not_mark_
+dirty` (известный флейк полного параллельного прогона, документирован в
+`bugs/BUG-481-FIXED.md`)), `cargo clippy -p lumen-js --all-targets --features
+v8-backend -- -D warnings` чист.
+
+**Не входит в срез:** подключение любого из семи дескрипторов к рендерингу
+(glyph-range сегментация по `unicodeRange`, синтез метрик по override-
+дескрипторам/`sizeAdjust`) — три reftest'а `fontface-descriptor-updates.html`/
+`fontface-override-descriptors.html`/`fontface-size-adjust-descriptor.html`,
+самый крупный оставшийся кусок FONTLOAD; грамматика `@font-face`-дескрипторов
+на CSS-стороне (`FontFaceRule`); реактивность CSS-connected сета (gap 1,
+BUG-471/CSSOM-4).
