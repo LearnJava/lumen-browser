@@ -607,13 +607,15 @@ fn frame_measurer(
                         .as_deref()
                         .map(lumen_font::parse_unicode_ranges)
                         .unwrap_or_default();
-                    // CSS Fonts L4 §14 (FONTLOAD-11, BUG-467): ascent/descent-override.
+                    // CSS Fonts L4 §14 (FONTLOAD-11/12, BUG-467): ascent/descent-override, size-adjust.
                     let ascent_override = rule.ascent_override.as_deref()
                         .and_then(lumen_font::parse_metric_override_percent);
                     let descent_override = rule.descent_override.as_deref()
                         .and_then(lumen_font::parse_metric_override_percent);
+                    let size_adjust = rule.size_adjust.as_deref()
+                        .and_then(lumen_font::parse_metric_override_percent);
                     measurer.register_family_with_overrides(
-                        &rule.family, bytes, ranges, ascent_override, descent_override,
+                        &rule.family, bytes, ranges, ascent_override, descent_override, size_adjust,
                     );
                 }
             }
@@ -665,14 +667,16 @@ fn load_frame_fonts(
                 .as_deref()
                 .map(lumen_font::parse_unicode_ranges)
                 .unwrap_or_default();
-            // CSS Fonts L4 §14 (FONTLOAD-11, BUG-467): ascent/descent-override.
+            // CSS Fonts L4 §14 (FONTLOAD-11/12, BUG-467): ascent/descent-override, size-adjust.
             let ascent_override = pf.ascent_override_str.as_deref()
                 .and_then(lumen_font::parse_metric_override_percent);
             let descent_override = pf.descent_override_str.as_deref()
                 .and_then(lumen_font::parse_metric_override_percent);
+            let size_adjust = pf.size_adjust_str.as_deref()
+                .and_then(lumen_font::parse_metric_override_percent);
             Some(LoadedWebFont {
                 family: pf.family, weight: pf.weight, style: pf.style, unicode_range,
-                ascent_override, descent_override, bytes,
+                ascent_override, descent_override, size_adjust, bytes,
             })
         })
         .collect();

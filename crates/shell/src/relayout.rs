@@ -1087,6 +1087,7 @@ pub(crate) fn page_measurer(
             wf.unicode_range.clone(),
             wf.ascent_override,
             wf.descent_override,
+            wf.size_adjust,
         );
     }
     measurer.set_system_faces(system_font_faces());

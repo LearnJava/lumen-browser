@@ -762,15 +762,22 @@ fn face_metrics(
 /// владения между двумя источниками [`MultiFontMeasurer::primary_metrics`],
 /// чтобы вызывающий код не заботился, откуда взялись метрики.
 enum PrimaryFontMetrics<'a> {
-    /// `ascent_override`/`descent_override` — CSS Fonts L4 §14 descriptors of
-    /// the owning `@font-face` slot (FONTLOAD-11, BUG-467), fraction of
-    /// font-size or `None` for `normal`/absent. System faces never carry
-    /// these (only `@font-face` has the descriptor), hence `Shared` below
-    /// has none.
+    /// `ascent_override`/`descent_override`/`size_adjust` — CSS Fonts L4 §14
+    /// descriptors of the owning `@font-face` slot (FONTLOAD-11/12,
+    /// BUG-467). `ascent_override`/`descent_override` are a fraction of
+    /// font-size or `None` for `normal`/absent; `size_adjust` is a fraction
+    /// applied to `font_size_px` BEFORE either override or the face's real
+    /// metric is computed (`None` = 100%, no adjustment) — this is what
+    /// makes overrides scale together with `size-adjust` (CSS Fonts L4
+    /// §14.4: size-adjust premultiplies the font-size that the override
+    /// percentages and the face's own metrics are computed against). System
+    /// faces never carry any of these (only `@font-face` has the
+    /// descriptors), hence `Shared` below has none.
     Owned {
         metrics: &'a OwnedFontMetrics,
         ascent_override: Option<f32>,
         descent_override: Option<f32>,
+        size_adjust: Option<f32>,
     },
     Shared(Arc<OwnedFontMetrics>),
 }
@@ -778,16 +785,22 @@ enum PrimaryFontMetrics<'a> {
 impl PrimaryFontMetrics<'_> {
     fn ascent_px(&self, font_size_px: f32) -> f32 {
         match self {
-            Self::Owned { metrics, ascent_override, .. } => ascent_override
-                .map_or_else(|| metrics.ascent_px(font_size_px), |pct| font_size_px * pct),
+            Self::Owned { metrics, ascent_override, size_adjust, .. } => {
+                let adjusted_px = font_size_px * size_adjust.unwrap_or(1.0);
+                ascent_override
+                    .map_or_else(|| metrics.ascent_px(adjusted_px), |pct| adjusted_px * pct)
+            }
             Self::Shared(m) => m.ascent_px(font_size_px),
         }
     }
 
     fn descent_px(&self, font_size_px: f32) -> f32 {
         match self {
-            Self::Owned { metrics, descent_override, .. } => descent_override
-                .map_or_else(|| metrics.descent_px(font_size_px), |pct| font_size_px * pct),
+            Self::Owned { metrics, descent_override, size_adjust, .. } => {
+                let adjusted_px = font_size_px * size_adjust.unwrap_or(1.0);
+                descent_override
+                    .map_or_else(|| metrics.descent_px(adjusted_px), |pct| adjusted_px * pct)
+            }
             Self::Shared(m) => m.descent_px(font_size_px),
         }
     }
@@ -809,6 +822,12 @@ struct FontFaceSlot {
     ascent_override: Option<f32>,
     /// `descent-override` дескриптор, та же семантика, что у `ascent_override`.
     descent_override: Option<f32>,
+    /// `size-adjust` дескриптор (CSS Fonts L4 §14.4, FONTLOAD-12) — доля,
+    /// на которую масштабируется `font-size` ПЕРЕД тем, как из него считаются
+    /// ширины глифов и ascent/descent этого face-а (в т.ч. база для
+    /// `ascent_override`/`descent_override` выше). `None` — дескриптор
+    /// отсутствует/невалиден, эквивалентно `100%` (без масштабирования).
+    size_adjust: Option<f32>,
 }
 
 /// Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты.
@@ -886,16 +905,18 @@ impl MultiFontMeasurer {
         bytes: Vec<u8>,
         unicode_ranges: Vec<UnicodeRange>,
     ) {
-        self.register_family_with_overrides(family, bytes, unicode_ranges, None, None);
+        self.register_family_with_overrides(family, bytes, unicode_ranges, None, None, None);
     }
 
     /// Регистрирует @font-face шрифт с `unicode-range` ограничением и
-    /// метрик-override дескрипторами (CSS Fonts L4 §14, FONTLOAD-11).
+    /// метрик-override дескрипторами (CSS Fonts L4 §14, FONTLOAD-11/12).
     ///
     /// `ascent_override`/`descent_override`: доля `font-size` (`"90%"` →
     /// `Some(0.9)`, см. [`lumen_font::parse_metric_override_percent`]),
     /// `None` — `normal`/дескриптор отсутствует, применяются реальные
-    /// ascent/descent выбранного face-а.
+    /// ascent/descent выбранного face-а. `size_adjust`: та же доля, но
+    /// масштабирует `font-size` ДО вычисления и override, и реальных метрик
+    /// (CSS Fonts L4 §14.4) — `None` эквивалентно `100%`.
     ///
     /// [`register_family`]: Self::register_family
     pub fn register_family_with_overrides(
@@ -905,9 +926,16 @@ impl MultiFontMeasurer {
         unicode_ranges: Vec<UnicodeRange>,
         ascent_override: Option<f32>,
         descent_override: Option<f32>,
+        size_adjust: Option<f32>,
     ) {
         if let Ok(metrics) = OwnedFontMetrics::from_bytes(&bytes) {
-            let slot = FontFaceSlot { metrics, unicode_ranges, ascent_override, descent_override };
+            let slot = FontFaceSlot {
+                metrics,
+                unicode_ranges,
+                ascent_override,
+                descent_override,
+                size_adjust,
+            };
             self.faces
                 .entry(family.to_ascii_lowercase())
                 .or_default()
@@ -960,6 +988,7 @@ impl MultiFontMeasurer {
                     metrics: &slot.metrics,
                     ascent_override: slot.ascent_override,
                     descent_override: slot.descent_override,
+                    size_adjust: slot.size_adjust,
                 });
             }
             if let Some(m) = self.system_metrics(&lower) {
@@ -985,6 +1014,7 @@ impl MultiFontMeasurer {
             unicode_ranges: Vec::new(),
             ascent_override: None,
             descent_override: None,
+            size_adjust: None,
         };
         self.faces
             .entry(family.to_ascii_lowercase())
@@ -1008,7 +1038,10 @@ impl TextMeasurer for MultiFontMeasurer {
                     if !codepoint_in_ranges(cp, &slot.unicode_ranges) {
                         continue;
                     }
-                    if let Some(w) = slot.metrics.try_char_width(ch, font_size_px) {
+                    // CSS Fonts L4 §14.4 (FONTLOAD-12): `size-adjust` премультиплицирует
+                    // font-size, из которого считается ширина глифа этого face-а.
+                    let adjusted_px = font_size_px * slot.size_adjust.unwrap_or(1.0);
+                    if let Some(w) = slot.metrics.try_char_width(ch, adjusted_px) {
                         return w;
                     }
                 }
@@ -1040,7 +1073,9 @@ impl TextMeasurer for MultiFontMeasurer {
                     if !codepoint_in_ranges(cp, &slot.unicode_ranges) {
                         continue;
                     }
-                    if let Some(w) = slot.metrics.try_char_width_varied(ch, font_size_px, axes) {
+                    // CSS Fonts L4 §14.4 (FONTLOAD-12): см. `char_width_with_families`.
+                    let adjusted_px = font_size_px * slot.size_adjust.unwrap_or(1.0);
+                    if let Some(w) = slot.metrics.try_char_width_varied(ch, adjusted_px, axes) {
                         return w;
                     }
                 }
@@ -1466,6 +1501,7 @@ mod multi_font_tests {
             Vec::new(),
             Some(1.0), // 100%
             None,
+            None,
         );
         let families = vec!["overridden".to_string()];
         assert_eq!(m.ascent_px_with_families(20.0, &families), 20.0);
@@ -1481,6 +1517,7 @@ mod multi_font_tests {
             Vec::new(),
             None,
             Some(0.5), // 50%
+            None,
         );
         let families = vec!["overridden".to_string()];
         assert_eq!(m.descent_px_with_families(20.0, &families), 10.0);
@@ -1494,7 +1531,9 @@ mod multi_font_tests {
         let mut plain = MultiFontMeasurer::new(&font).unwrap();
         plain.register_family_with_ranges("plain", INTER.to_vec(), Vec::new());
         let mut overridden = MultiFontMeasurer::new(&font).unwrap();
-        overridden.register_family_with_overrides("plain", INTER.to_vec(), Vec::new(), None, None);
+        overridden.register_family_with_overrides(
+            "plain", INTER.to_vec(), Vec::new(), None, None, None,
+        );
         let families = vec!["plain".to_string()];
         assert_eq!(
             plain.ascent_px_with_families(16.0, &families),
@@ -1519,6 +1558,7 @@ mod multi_font_tests {
             Vec::new(),
             Some(1.0),
             None,
+            None,
         );
         let mut baseline = MultiFontMeasurer::new(&font).unwrap();
         baseline.register_family("mono-baseline", mono_bytes);
@@ -1530,6 +1570,105 @@ mod multi_font_tests {
             baseline.descent_px_with_families(16.0, &baseline_families),
             "descent без собственного override должен остаться реальной метрикой face-а"
         );
+    }
+
+    // ── `size-adjust` дескриптор (CSS Fonts L4 §14.4, FONTLOAD-12) ─────────
+
+    #[test]
+    fn size_adjust_scales_ascent_and_descent_like_a_bigger_font_size() {
+        // CSS Fonts L4 §14.4 + size-adjust-01.html (WPT): `size-adjust: 150%`
+        // at font-size N must render like the SAME face at font-size N*1.5 —
+        // not like a separate multiplier bolted onto the real metric.
+        let mono_bytes = std::fs::read(MONO_PATH).expect("bundled JetBrains Mono должен читаться");
+        let font = inter_font();
+        let mut adjusted = MultiFontMeasurer::new(&font).unwrap();
+        adjusted.register_family_with_overrides(
+            "mono-size-adjust",
+            mono_bytes.clone(),
+            Vec::new(),
+            None,
+            None,
+            Some(1.5), // 150%
+        );
+        let mut baseline = MultiFontMeasurer::new(&font).unwrap();
+        baseline.register_family("mono-baseline", mono_bytes);
+        let adjusted_families = vec!["mono-size-adjust".to_string()];
+        let baseline_families = vec!["mono-baseline".to_string()];
+        assert_eq!(
+            adjusted.ascent_px_with_families(20.0, &adjusted_families),
+            baseline.ascent_px_with_families(30.0, &baseline_families),
+        );
+        assert_eq!(
+            adjusted.descent_px_with_families(20.0, &adjusted_families),
+            baseline.descent_px_with_families(30.0, &baseline_families),
+        );
+    }
+
+    #[test]
+    fn size_adjust_scales_char_width_like_a_bigger_font_size() {
+        let mono_bytes = std::fs::read(MONO_PATH).expect("bundled JetBrains Mono должен читаться");
+        let font = inter_font();
+        let mut adjusted = MultiFontMeasurer::new(&font).unwrap();
+        adjusted.register_family_with_overrides(
+            "mono-size-adjust",
+            mono_bytes.clone(),
+            Vec::new(),
+            None,
+            None,
+            Some(2.0), // 200%
+        );
+        let mut baseline = MultiFontMeasurer::new(&font).unwrap();
+        baseline.register_family("mono-baseline", mono_bytes);
+        let adjusted_families = vec!["mono-size-adjust".to_string()];
+        let baseline_families = vec!["mono-baseline".to_string()];
+        assert_eq!(
+            adjusted.char_width_with_families('X', 10.0, &adjusted_families),
+            baseline.char_width_with_families('X', 20.0, &baseline_families),
+        );
+    }
+
+    #[test]
+    fn size_adjust_none_matches_100_percent() {
+        // `None` (дескриптор отсутствует/невалиден) должен вести себя как
+        // явные `100%`, а не как отдельный, третий режим.
+        let font = inter_font();
+        let mut none_variant = MultiFontMeasurer::new(&font).unwrap();
+        none_variant.register_family_with_overrides(
+            "plain", INTER.to_vec(), Vec::new(), None, None, None,
+        );
+        let mut hundred_variant = MultiFontMeasurer::new(&font).unwrap();
+        hundred_variant.register_family_with_overrides(
+            "plain", INTER.to_vec(), Vec::new(), None, None, Some(1.0),
+        );
+        let families = vec!["plain".to_string()];
+        assert_eq!(
+            none_variant.ascent_px_with_families(16.0, &families),
+            hundred_variant.ascent_px_with_families(16.0, &families),
+        );
+        assert_eq!(
+            none_variant.char_width_with_families('X', 16.0, &families),
+            hundred_variant.char_width_with_families('X', 16.0, &families),
+        );
+    }
+
+    #[test]
+    fn size_adjust_composes_with_ascent_override() {
+        // font-size-adjust-metrics-override.html (WPT): when both are present,
+        // the override percentage applies to the size-adjust-scaled font-size,
+        // not the raw one — so ascent-override:100% under size-adjust:150% at
+        // font-size 20px must resolve to 30px, not 20px.
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family_with_overrides(
+            "both",
+            INTER.to_vec(),
+            Vec::new(),
+            Some(1.0), // ascent-override: 100%
+            None,
+            Some(1.5), // size-adjust: 150%
+        );
+        let families = vec!["both".to_string()];
+        assert_eq!(m.ascent_px_with_families(20.0, &families), 30.0);
     }
 
     // ── resolve_font_stretch (CSS Fonts L4 §5.2) ────────────────────────────
