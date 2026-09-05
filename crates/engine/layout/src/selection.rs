@@ -29,7 +29,7 @@ fn caret_in_box(
     measurer: &dyn TextMeasurer,
 ) -> Option<DomPosition> {
     if let BoxKind::InlineRun { lines, .. } = &b.kind {
-        let line_h = b.style.font_size * b.style.line_height;
+        let line_h = b.used_line_height;
         if line_h > 0.0 && !lines.is_empty() {
             let rel_y = y - b.rect.y;
             if rel_y >= 0.0 && rel_y < line_h * lines.len() as f32 {
@@ -112,7 +112,7 @@ fn collect_selection_rects(
     out: &mut Vec<Rect>,
 ) {
     if let BoxKind::InlineRun { lines, .. } = &b.kind {
-        let line_h = b.style.font_size * b.style.line_height;
+        let line_h = b.used_line_height;
         for (line_idx, line) in lines.iter().enumerate() {
             let line_y = b.rect.y + line_idx as f32 * line_h;
             for frag in line {
@@ -236,7 +236,17 @@ mod tests {
     struct Fixed10;
     impl TextMeasurer for Fixed10 {
         fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
 
     fn make_frag(text: &str, x: f32, source_node: NodeId, source_char_offset: u32) -> InlineFrag {
         let width = text.chars().count() as f32 * 10.0;
@@ -264,6 +274,7 @@ mod tests {
             origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(1),
             rect,
+            used_line_height: style.font_size * style.line_height,
             style,
             kind: BoxKind::InlineRun {
                 segments: vec![],

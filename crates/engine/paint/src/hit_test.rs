@@ -262,7 +262,7 @@ fn find_inline_source(b: &LayoutBox, point: Point) -> NodeId {
     let BoxKind::InlineRun { lines, .. } = &b.kind else {
         return b.node;
     };
-    let line_h = b.style.font_size * b.style.line_height;
+    let line_h = b.used_line_height;
     if line_h <= 0.0 || lines.is_empty() {
         return b.node;
     }

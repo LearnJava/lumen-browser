@@ -222,6 +222,7 @@ pub(in crate::style) fn apply_decl_text(
                 // line-height: initial `normal` ≈ 1.2 relative (как в root()).
                 style.line_height = 1.2;
                 style.line_height_is_relative = true;
+                style.line_height_is_normal = true;
                 if let Some(lh) = parts.line_height.as_deref()
                     && lh != "normal"
                 {

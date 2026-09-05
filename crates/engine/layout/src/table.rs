@@ -615,6 +615,7 @@ mod tests {
             origin: crate::box_tree::BoxOrigin::default(),
             node: lumen_dom::NodeId::from_index(0),
             rect: lumen_core::geom::Rect::ZERO,
+            used_line_height: 16.0 * 1.2,
             style: std::sync::Arc::new(crate::style::ComputedStyle::root()),
             kind,
             children: Vec::new(),

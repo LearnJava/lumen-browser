@@ -1282,3 +1282,110 @@ override`/`descent-override`/`line-gap-override`); (D) feature/variation-
 settings дескриптора как дефолта CSS-свойства + шейпинг вне variable-font-
 пути; femtovg-паритет для (A); реактивность CSS-connected сета
 (BUG-471/CSSOM-4).
+
+## FONTLOAD-14 (P1, 2026-09-05, ветка `p1-fontload14-line-height-normal`) — модель `line-height: normal`: архитектура построена, реальные метрики НЕ активированы (регрессия против Edge)
+
+Взят по прямому решению владельца (3 среза подряд откладывали модель
+`line-height: normal` под риском IFC-1 — на 4-й раз запрошено явное
+решение, а не очередной перенос). Результат — **измеренный отрицательный
+ответ**: реальные font-метрики (`ascent + descent [+ lineGap]`) в общем
+текстовом потоке проигрывают Edge заметнее, чем плоское приближение `1.2`,
+которое они должны были заменить. Слайс оставляет архитектуру (choke point,
+флаг «это было явно `normal`») на месте для следующего захода, но НЕ
+включает реальные метрики как используемое значение — производительность и
+рендеринг идентичны состоянию до среза.
+
+**Архитектура (влита, поведенчески нейтральна):**
+1. `ComputedStyle::line_height_is_normal: bool` (`style/computed.rs`) —
+   отличает `normal` от явного unitless `<number>`: оба сегодня приводят к
+   `line_height = 1.2, line_height_is_relative = true`, но только `normal`
+   должен когда-нибудь резолвиться через реальные метрики face-а. Проведён
+   тем же путём, что `line_height_is_relative`: `apply_line_height_value`
+   (`style/parse/font_size.rs`, явно разобрана ветка `"normal"`, раньше
+   молча падала мимо `val.parse::<f32>()`/`parse_length` — no-op, значение
+   бралось из наследования), `font`-shorthand (`style/apply/text.rs`),
+   `apply_css_wide_keyword` (`style/apply/css_wide.rs`), псевдоэлементы
+   (`style/pseudo.rs` — наследование + `merge_pseudo_inherited`),
+   quirks-правила (`style/quirks.rs` — `apply_quirks_table_reset`/
+   `apply_quirks_line_height`, у обоих раньше даже `line_height_is_relative`
+   не выставлялся explicit — теперь выставлен вместе с `is_normal`, попутный
+   мелкий фикс), cascade-наследование (`style/cascade.rs`).
+2. `LayoutBox::used_line_height: f32` (`box_tree/types.rs`) — используемая
+   line-height в px, единая точка вместо дублированного `style.font_size *
+   style.line_height` в ~10 местах (`box_tree/layout_dispatch.rs`,
+   `box_tree/pseudo_text.rs`, `selection.rs`, `text_iter.rs`, `lib.rs`
+   (`collect_layout_rects`, BUG-488), `vertical.rs`, paint's
+   `display_list/text_run.rs`/`hit_test.rs`, shell's `forms.rs` — все
+   переключены на чтение поля). Намеренно НЕ в `style` (который
+   `Arc`-shared с cascade-кэшем, BUG-341 S12) — `normal` дефолтный, поэтому
+   запись туда заставила бы `Arc::make_mut` глубоко копировать стиль
+   практически каждого бокса документа. Резолвится один раз за проход
+   whole-tree-обходом `box_tree::entry::resolve_used_line_height`, который
+   идёт сразу за `apply_font_size_adjust` (та же тройка точек входа:
+   `layout_measured_hyp`, `layout_streaming_incremental`, S26-функция) — до
+   `graft_geometry`, чтобы инкрементальные grafted-поддеревья тоже получили
+   свежее значение (graft копирует geometry/kind, но не `style`/used-value
+   поля — тот же прецедент, что уже документирован у font-size-adjust).
+   `used_line_height_px()` (`box_tree/entry.rs`) — единственное место,
+   которое следующему срезу нужно поменять.
+3. Мехническая правка ~140 construction sites `LayoutBox { ... }` (новое
+   обязательное поле) — компилятор-драйвен по E0063, дефолт в каждом —
+   `style.font_size * style.line_height` (тот же результат, что было бы без
+   поля).
+
+**Найдено и НЕ включено (главный результат среза):** `used_line_height_px`
+изначально резолвила `normal` как `ascent_px + descent_px + line_gap_px`
+(реальные метрики face-а, `line_gap_px` — accessor FONTLOAD-13). Полный
+`graphic_tests/run.py --continue-on-fail` с этой формулой активной дал
+регрессию TEST-83 (BUG-128, известный debtor: 3.87%→7.25%, выше допуска
+baseline+2.0%) — при том что `ascent_px + descent_px` без line-gap даёт
+ЧИСЛЕННО ТУ ЖЕ регрессию на TEST-02 (0.68%, тот же порядок числа, что уже
+зафиксировала IFC-1 для `InlineBlockRow` strut на TEST-02/04/21/56), т.е.
+line-gap не виноват — у используемых в тестах шрифтов он и так `0`.
+Корень: `OwnedFontMetrics::ascent_px` (`crates/engine/paint/src/lib.rs`)
+нормирует ascent относительно `ascent_units + descent_units`, а
+`descent_px`/`line_gap_px` — относительно `units_per_em`; для реальных
+шрифтов typo ascent+descent не обязан точно совпадать с `units_per_em`, так
+что сумма трёх методов складывает несовместимые нормировки, и её реальный
+смысл мутный. `InlineBlockRow` strut (уже провалидирован против Edge на
+0%) использует ту же пару `ascent_px`/`descent_px` — но там это проверка
+ОТНОСИТЕЛЬНОГО выравнивания пустого бокса по базовой линии, а не
+АБСОЛЮТНОЙ высоты межстрочного расстояния текстового потока; несовпадение,
+терпимое в первом случае, не терпимо во втором. Вероятная причина по
+существу: Edge/DirectWrite на Windows считает `normal`, скорее всего, не по
+`OS/2.sTypoAscender`/`sTypoDescender` (что читает `OwnedFontMetrics`), а по
+`usWinAscent`/`usWinDescent` (обычно заметно выше) или с UA-стороны
+добавляет собственный floor — не исследовано этим срезом.
+
+**Дано следующему срезу:** `used_line_height_px()`
+(`box_tree/entry.rs:used_line_height_px`) — единственная функция, которую
+нужно поменять; `m: &dyn TextMeasurer` уже параметр (сейчас `let _ = m`).
+Доказательная база (какая формула НЕ работает и почему) записана в doc-
+комментарии функции, чтобы не переизмерять с нуля. 50 mock-`TextMeasurer` в
+тестах (`box_tree/tests/*.rs`, `tests/fixtures_and_core_selectors.rs`,
+`field_sizing.rs`, `incremental.rs`, `page.rs`, `selection.rs`, +
+`lumen-paint`/`lumen-js`/`lumen-shell` тестовые файлы) получили явный
+`line_gap_px() -> size * 0.2` — восстанавливает `1.2` для случая, когда
+реальные метрики снова станут живыми; сейчас не используется (`is_normal`
+не ветвится), но не мешает и избавляет следующий срез от повторного обхода
+всех mock'ов.
+
+**Не входит:** сама РАБОЧАЯ модель `line-height: normal` (см. выше —
+измеренно не подошла, нужна другая формула); WPT `line-gap-override.html`;
+femtovg-паритет; реактивность CSS-connected сета (BUG-471/CSSOM-4).
+
+Тесты: `cargo test -p lumen-layout` 3822/3822 (+77 `--test all`), `cargo
+test -p lumen-paint` 1043/1043 (+29 `--test all`), `cargo test -p
+lumen-shell --bin lumen --features v8` 1726/1726 — все без регрессий.
+`cargo clippy -p lumen-layout -p lumen-paint --all-targets -- -D warnings`
+и `cargo clippy -p lumen-shell --bin lumen --all-targets --features v8 -- -D
+warnings` чисты. (`lumen-js`: один посторонний флейк
+`native_binding_panic_does_not_abort_process`, известный, не связан —
+BUG-997.)
+
+Гейт — полный пиксельный прогон (поле в `LayoutBox`, потенциально
+затрагивает paint): `dump_golden.py` 12/12 байт-в-байт; `run.py
+--continue-on-fail` — дельта против прошлого прогона (commit c17be9d4d,
+FONTLOAD-13) **«Изменений нет»**, идентичный список 8/156 FAIL
+(02/04/18/21/56/150/151/155 — те же самые с FONTLOAD-13, не новые) и 50
+known-debtor. `graphic_tests/results/20260905-172448.json`.

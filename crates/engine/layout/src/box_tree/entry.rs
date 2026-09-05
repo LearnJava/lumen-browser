@@ -171,6 +171,11 @@ pub fn layout_measured_hyp_with_counters(
     // CSS Fonts L5 §4 — resolve `font-size-adjust` against the real font x-height
     // before measurement, so both line wrapping and paint use the scaled size.
     apply_font_size_adjust(&mut root, measurer);
+    // FONTLOAD-14 (BUG-467): resolve `line-height: normal` from real font
+    // metrics — after font-size-adjust (so it sees the adjusted size), before
+    // `lay_out` (paint/hit-test/selection read `LayoutBox::used_line_height`
+    // without a measurer of their own).
+    resolve_used_line_height(&mut root, measurer);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     {
         let _prof = lumen_core::profile::scope("lay_out");
@@ -275,6 +280,11 @@ pub fn layout_streaming_incremental(
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None);
     propagate_canvas_background(doc, &mut root);
     apply_font_size_adjust(&mut root, measurer);
+    // FONTLOAD-14 (BUG-467): see `layout_measured_hyp` — runs on the fresh
+    // tree, before `graft_geometry`, so grafted-clean subtrees keep this
+    // pass's freshly-resolved value (graft never copies `used_line_height`
+    // from `prev`).
+    resolve_used_line_height(&mut root, measurer);
     // Every freshly-built box needs layout; graft clears the bit on reusable
     // subtrees so the incremental pass only re-lays-out new/changed content.
     crate::incremental::mark_subtree_dirty(&mut root);
@@ -426,6 +436,8 @@ pub fn layout_mutation_incremental_restyle(
         let _prof = lumen_core::profile::scope("post_build_tree_walks");
         propagate_canvas_background(doc, &mut root);
         apply_font_size_adjust(&mut root, measurer);
+        // FONTLOAD-14 (BUG-467): see `layout_measured_hyp` / `layout_streaming_incremental`.
+        resolve_used_line_height(&mut root, measurer);
     }
     {
         let _prof = lumen_core::profile::scope("graft_geometry");
@@ -534,6 +546,65 @@ pub(crate) fn apply_font_size_adjust(b: &mut LayoutBox, m: &dyn TextMeasurer) {
     }
     for child in &mut b.children {
         apply_font_size_adjust(child, m);
+    }
+}
+
+/// CSS2 §10.8.1 — used line-height in px for `style`. Single choke point for
+/// what was previously the `font_size * line_height` computation duplicated
+/// across ~10 call sites (`layout_dispatch.rs`, `pseudo_text.rs`,
+/// `selection.rs`, `text_iter.rs`, `lib.rs`, `vertical.rs`, paint's
+/// `text_run.rs`/`hit_test.rs`, shell's `forms.rs`) — all of them now read
+/// [`LayoutBox::used_line_height`], written once per layout pass by
+/// [`resolve_used_line_height`].
+///
+/// FONTLOAD-14 (BUG-467) built this choke point specifically to let
+/// `line-height: normal` resolve against real font metrics (`ascent +
+/// descent [+ lineGap]`, `m` is unused for that reason right now — kept as a
+/// parameter so the next slice doesn't have to re-thread it through every
+/// caller) instead of the flat `1.2` approximation, but measurement against
+/// Edge (`graphic_tests/run.py --continue-on-fail`, 2026-09-05) showed the
+/// opposite of what CSS Fonts L4 §14.3's line-gap accessor (FONTLOAD-13)
+/// suggested: `ascent_px + descent_px` alone regresses TEST-02/04/18/21/56/
+/// 83/150/151/155 past the 0.5% threshold (TEST-02 at 0.68%, matching the
+/// InlineBlockRow strut's own IFC-1 finding almost exactly), and adding
+/// `line_gap_px` on top changes nothing (these fonts declare `line_gap = 0`).
+/// `OwnedFontMetrics::ascent_px` (`crates/engine/paint/src/lib.rs`) also
+/// normalises ascent against `ascent+descent` while `descent_px`/
+/// `line_gap_px` normalise against `units_per_em` — inconsistent denominators
+/// that make even the sum's intent murky. The strut comparison this formula
+/// was modeled on (`BoxKind::InlineBlockRow` in this file's `layout_dispatch`
+/// sibling) tests *relative* baseline alignment of an empty box, which
+/// tolerates the mismatch; general text line spacing is an *absolute* height
+/// that does not. Not included in this slice: matching Edge/DirectWrite's
+/// actual `normal` algorithm (Windows text likely uses `OS/2.usWinAscent`/
+/// `usWinDescent`, which run taller than the `sTypoAscender`/`sTypoDescender`
+/// pair `OwnedFontMetrics` reads, or a UA-side floor) — needs its own
+/// investigation. `line_height_is_normal` and this function stay as the
+/// architecture for that slice to land in without re-touching every
+/// consumer. `<number>`/`<length>` values are unaffected either way — the
+/// ratio already carries the used value (see `style::apply_line_height_value`
+/// and `apply_font_size_adjust_to_style`'s inverse correction for absolute
+/// line-heights).
+pub(crate) fn used_line_height_px(style: &ComputedStyle, m: &dyn TextMeasurer) -> f32 {
+    let _ = m;
+    style.font_size * style.line_height
+}
+
+/// Whole-tree pass writing [`LayoutBox::used_line_height`] from real font
+/// metrics (FONTLOAD-14, BUG-467) — see [`used_line_height_px`]. Runs
+/// alongside [`apply_font_size_adjust`] (same call sites, same ordering
+/// requirement: after `build_box`/`apply_font_size_adjust` so it reads the
+/// post-adjustment `font_size`, before `lay_out`/`graft_geometry` so every
+/// box — reused or freshly laid out — already carries the resolved value).
+///
+/// Deliberately does NOT touch `b.style` (see `LayoutBox::used_line_height`'s
+/// doc comment for why: `style` is `Arc`-shared with the cascade cache, and
+/// `normal` is the default `line-height` — writing into it would force
+/// `Arc::make_mut` to deep-copy nearly every box in the document).
+pub(crate) fn resolve_used_line_height(b: &mut LayoutBox, m: &dyn TextMeasurer) {
+    b.used_line_height = used_line_height_px(&b.style, m);
+    for child in &mut b.children {
+        resolve_used_line_height(child, m);
     }
 }
 

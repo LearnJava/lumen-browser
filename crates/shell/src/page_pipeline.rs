@@ -212,6 +212,7 @@ impl LoadedPage {
             layout_box: lumen_layout::LayoutBox {
                 node: NodeId::from_index(0),
                 rect: Rect::ZERO,
+                used_line_height: 16.0 * 1.2,
                 style: std::sync::Arc::new(lumen_layout::style::ComputedStyle::root()),
                 kind: lumen_layout::BoxKind::Block,
                 children: Vec::new(),
