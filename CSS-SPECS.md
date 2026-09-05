@@ -141,6 +141,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Round Display | [css-round-display-1](https://www.w3.org/TR/css-round-display-1/) | Wearable/embedded display; not applicable |
 | CSS TV/Mobile/Print Profiles | — | Non-browser profiles |
 | CSS Exclusions and Shapes L1 (`wrap-flow`/`wrap-through`) | [css-exclusions-1](https://drafts.csswg.org/css-exclusions/) | Editor's Draft never shipped in any evergreen browser (only an experimental IE10/11 implementation); CSSWG itself split the still-live shape half of this module into [css-shapes-1](https://www.w3.org/TR/css-shapes-1/), already implemented above. Vendored `css/css-exclusions` (8 files) tracked via committed `.ini` (BUG-507) |
+| CSS Linked Parameters L1 (`link-parameters`/`param()`) | [css-link-params-1](https://drafts.csswg.org/css-link-params-1/) | Very early-stage CSSWG Editor's Draft, not shipped in any evergreen browser, not on any shipping-priority list. Vendored `css/css-link-params` (2 files/7 subtests) tracked via committed `.ini` (BUG-511) |
 
 ---
 
