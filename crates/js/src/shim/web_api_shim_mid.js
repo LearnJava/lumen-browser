@@ -2310,74 +2310,21 @@ function _lumen_make_style(nid) {
 }
 
 // ── ShadowRoot wrapper ────────────────────────────────────────────────────────
-// Wraps a shadow-root NodeId as a DocumentFragment-like ShadowRoot object.
-// `mode`     : 'open' | 'closed' (stored for the `.mode` property)
-// `host_nid` : NodeId of the shadow host element
+// Builds a shadow-root NodeId into a real `ShadowRoot` instance. `ShadowRoot`
+// itself (extends `DocumentFragment.prototype`) is defined further down, once
+// `DocumentFragment.prototype`'s own chain to `Node.prototype` is wired up —
+// see BUG-676. `mode` : 'open' | 'closed'; `host_nid` : NodeId of the host.
 
 function _lumen_make_shadow_root(nid, mode, host_nid) {
-    var _style = _lumen_make_style(nid);
-    var sr = {
-        __nid__:          nid,
-        __isShadowRoot__: true,
-        mode:             mode,
-        get host()        { return _lumen_make_element(host_nid); },
-        // DOM §4.4 Node.baseURI (BUG-377) — own copy for the same reason as the
-        // DocumentFragment wrapper above: a plain literal, no prototype chain.
-        get baseURI()     { return _lumen_document_base_url(); },
-        get innerHTML()   { return _lumen_get_inner_html(nid); },
-        set innerHTML(v)  { _lumen_set_inner_html(nid, String(v)); },
-        get textContent() { return _lumen_get_text_content(nid); },
-        set textContent(v){ _lumen_set_text_content(nid, String(v)); },
-        get style()       { return _style; },
-        // CSSOM-5 срез 1 (BUG-897/BUG-877): keyed by this shadow root's own
-        // `nid`, in Rust state — unlike a plain expando, this survives
-        // `host.shadowRoot` rebuilding a fresh `sr` object literal on every
-        // read (this wrapper has no persistent identity, everything else on
-        // it is a live getter for the same reason).
-        get adoptedStyleSheets() { return _lumen_make_adopted_style_sheets_array(nid); },
-        set adoptedStyleSheets(value) { _lumen_set_adopted_style_sheets_validated(nid, value); },
-        // Scoped to this shadow tree's descendants — see BUG-291.
-        querySelector:    function(sel) {
-            var n = _lumen_u2n(_lumen_query_selector_scoped(nid, _lumen_sel(sel)));
-            return n !== null ? _lumen_make_element(n) : null;
-        },
-        querySelectorAll: function(sel) {
-            return _lumen_static_node_list(_lumen_query_selector_all_scoped(nid, _lumen_sel(sel)));
-        },
-        getElementById:   function(id) {
-            var n = _lumen_u2n(_lumen_get_element_by_id(String(id)));
-            return n !== null ? _lumen_make_element(n) : null;
-        },
-        appendChild:      function(c) {
-            if (c && c.__nid__ !== undefined) {
-                _lumen_append_child(nid, c.__nid__);
-                _lumen_ce_maybe_connected(c);
-            }
-            return c;
-        },
-        removeChild:      function(c) {
-            if (c && c.__nid__ !== undefined) {
-                _lumen_remove_child(nid, c.__nid__);
-                _lumen_ce_maybe_disconnected(c);
-            }
-            return c;
-        },
-        addEventListener:    function(type, fn) { _lumen_add_listener(nid, type, fn); },
-        removeEventListener: function(type, fn) { _lumen_rm_listener(nid, type, fn); },
-        dispatchEvent:       function(evt) {
-            if (!evt) return true;
-            evt.target = this; evt.currentTarget = this;
-            return _lumen_dispatch(nid, evt);
-        },
-    };
-    // DOM §4.2.6 ParentNode.children — element-only live HTMLCollection
-    // (BUG-310's own fix, missed here: this used to hand back ALL children
-    // via a plain array, so a text-node child leaked into `.children` and
-    // `.item()`/`.namedItem()` were both missing — BUG-994).
-    Object.defineProperty(sr, 'children', {
-        get: function() { return _lumen_make_html_collection(nid); },
-        enumerable: false, configurable: true,
-    });
+    var sr = Object.create(ShadowRoot.prototype);
+    Object.defineProperty(sr, '__nid__',
+        { value: nid, enumerable: false, writable: false, configurable: false });
+    Object.defineProperty(sr, '__isShadowRoot__',
+        { value: true, enumerable: false, writable: false, configurable: false });
+    Object.defineProperty(sr, '__host_nid__',
+        { value: host_nid, enumerable: false, writable: false, configurable: false });
+    Object.defineProperty(sr, '__mode__',
+        { value: mode, enumerable: false, writable: false, configurable: false });
     return sr;
 }
 
@@ -2626,10 +2573,12 @@ Node.prototype.hasChildNodes = function() { return this.childNodes.length > 0; }
 // `Document`, so one accessor on the shared prototype serves elements, text,
 // comments, doctypes, attributes and detached CharacterData alike — everything
 // `_lumen_build_element`/`_lumen_make_character_data`/`_lumen_make_doctype`
-// hands out chains through here (BUG-322/314). The four node-ish shapes that
+// hands out chains through here (BUG-322/314). The three node-ish shapes that
 // are plain literals with no [[Prototype]] at all (`document`, the
-// detached-document builder, the DocumentFragment and ShadowRoot wrappers)
-// carry an own copy instead; see each of them below.
+// detached-document builder and the DocumentFragment wrapper) carry an own
+// copy instead; see each of them below. `ShadowRoot` used to be a fourth one
+// but now has a real prototype chain down to here (BUG-676), so it inherits
+// this accessor instead of duplicating it.
 //
 // Value is the node document's base URL, i.e. the same HTML LS §4.2.3 answer
 // the shim's own URL-reflection machinery already computes — hence the reuse of
@@ -3014,6 +2963,103 @@ Text.prototype.constructor = Text;
 function DocumentFragment() { return _lumen_make_document_fragment(_lumen_create_fragment()); }
 DocumentFragment.prototype = Object.create(Node.prototype);
 DocumentFragment.prototype.constructor = DocumentFragment;
+
+// DOM LS §4.2.2.1 ShadowRoot extends DocumentFragment — a real `class`/
+// prototype chain (BUG-676), same defect class already fixed for
+// `Headers`/`Response` (BUG-369/BUG-370): the previous wrapper
+// (`_lumen_make_shadow_root` above) was a bare `{}`-literal, so
+// `window.ShadowRoot` didn't exist (`'ShadowRoot' in window === false`),
+// `sr instanceof window.ShadowRoot` threw `TypeError` instead of testing, and
+// every `Node.prototype`/`DocumentFragment.prototype` method (`contains`,
+// `baseURI`, ...) was simply absent instead of inherited. Not constructible
+// from script, like every other DOM interface obtained only via a factory
+// method (`attachShadow()`).
+function ShadowRoot() { throw new TypeError('Illegal constructor'); }
+ShadowRoot.prototype = Object.create(DocumentFragment.prototype);
+ShadowRoot.prototype.constructor = ShadowRoot;
+Object.defineProperty(ShadowRoot.prototype, Symbol.toStringTag,
+    { value: 'ShadowRoot', configurable: true });
+
+Object.defineProperty(ShadowRoot.prototype, 'mode', {
+    // Readonly per WebIDL — a getter and no setter, over the `__mode__` slot
+    // `_lumen_make_shadow_root` stashed on the instance.
+    get: function() { return this.__mode__; }, enumerable: true, configurable: true,
+});
+Object.defineProperty(ShadowRoot.prototype, 'host', {
+    get: function() { return _lumen_make_element(this.__host_nid__); },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(ShadowRoot.prototype, 'innerHTML', {
+    get: function() { return _lumen_get_inner_html(this.__nid__); },
+    set: function(v) { _lumen_set_inner_html(this.__nid__, String(v)); },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(ShadowRoot.prototype, 'textContent', {
+    get: function() { return _lumen_get_text_content(this.__nid__); },
+    set: function(v) { _lumen_set_text_content(this.__nid__, String(v)); },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(ShadowRoot.prototype, 'style', {
+    // Cached on first read (`_lumen_wrapper_slot`) so `sr.style === sr.style`
+    // holds, same as an ordinary element's `style` (BUG-473's own fix).
+    get: function() { return _lumen_wrapper_slot(this, '_style', _lumen_make_style); },
+    enumerable: true, configurable: true,
+});
+// CSSOM-5 срез 1 (BUG-897/BUG-877): keyed by this shadow root's own `nid` in
+// Rust state — unlike a plain expando, this survives `host.shadowRoot`
+// rebuilding a fresh wrapper object on every read (every other property here
+// is a live getter for the same reason).
+Object.defineProperty(ShadowRoot.prototype, 'adoptedStyleSheets', {
+    get: function() { return _lumen_make_adopted_style_sheets_array(this.__nid__); },
+    set: function(value) { _lumen_set_adopted_style_sheets_validated(this.__nid__, value); },
+    enumerable: true, configurable: true,
+});
+// DOM §4.2.6 ParentNode.children — element-only live HTMLCollection (BUG-994).
+Object.defineProperty(ShadowRoot.prototype, 'children', {
+    get: function() { return _lumen_make_html_collection(this.__nid__); },
+    enumerable: false, configurable: true,
+});
+// Scoped to this shadow tree's descendants — see BUG-291.
+ShadowRoot.prototype.querySelector = function(sel) {
+    var n = _lumen_u2n(_lumen_query_selector_scoped(this.__nid__, _lumen_sel(sel)));
+    return n !== null ? _lumen_make_element(n) : null;
+};
+ShadowRoot.prototype.querySelectorAll = function(sel) {
+    return _lumen_static_node_list(_lumen_query_selector_all_scoped(this.__nid__, _lumen_sel(sel)));
+};
+ShadowRoot.prototype.getElementById = function(id) {
+    var n = _lumen_u2n(_lumen_get_element_by_id(String(id)));
+    return n !== null ? _lumen_make_element(n) : null;
+};
+ShadowRoot.prototype.appendChild = function(c) {
+    if (c && c.__nid__ !== undefined) {
+        _lumen_append_child(this.__nid__, c.__nid__);
+        _lumen_ce_maybe_connected(c);
+    }
+    return c;
+};
+ShadowRoot.prototype.removeChild = function(c) {
+    if (c && c.__nid__ !== undefined) {
+        _lumen_remove_child(this.__nid__, c.__nid__);
+        _lumen_ce_maybe_disconnected(c);
+    }
+    return c;
+};
+ShadowRoot.prototype.addEventListener = function(type, fn) { _lumen_add_listener(this.__nid__, type, fn); };
+ShadowRoot.prototype.removeEventListener = function(type, fn) { _lumen_rm_listener(this.__nid__, type, fn); };
+ShadowRoot.prototype.dispatchEvent = function(evt) {
+    if (!evt) return true;
+    evt.target = this; evt.currentTarget = this;
+    return _lumen_dispatch(this.__nid__, evt);
+};
+// DOM LS §4.9 Node.cloneNode() — a ShadowRoot is explicitly not clonable: the
+// spec calls this out by name, so it must throw rather than be absent
+// (previously `sr.cloneNode` didn't exist at all — BUG-676).
+ShadowRoot.prototype.cloneNode = function() {
+    throw new DOMException(
+        "Failed to execute 'cloneNode' on 'ShadowRoot': ShadowRoot nodes are not clonable.",
+        'NotSupportedError');
+};
 
 // BUG-321: a DocumentType wrapper (`nodeType` 10) whose [[Prototype]] is
 // DocumentType.prototype, so `document.doctype instanceof DocumentType` holds.
@@ -6657,6 +6703,22 @@ var _LUMEN_WRAPPER_MEMBERS = {
         },
         assignedElements: function(opts) { var nid = this.__nid__;
             return this.assignedNodes(opts).filter(function(n) { return n.nodeType === 1; });
+        },
+        // assign(...nodes) — the imperative slot API (DOM LS §4.2.2.3), manual
+        // assignment counterpart of the name-based `assignedNodes` above.
+        // Phase 0 stub, same scope as `assignedSlot` below: this engine only
+        // ever does name-based assignment (`attachShadow({slotAssignment:
+        // 'manual'})` isn't tracked), so there is nothing to switch this slot
+        // into — but the method must still exist and validate its arguments
+        // instead of being entirely absent (BUG-676: `slotA.assign is not a
+        // function` crashed third-party code that merely feature-detects it).
+        assign: function() { var nid = this.__nid__;
+            if ((_lumen_get_tag_name(nid) || '').toUpperCase() !== 'SLOT') return;
+            for (var _ai = 0; _ai < arguments.length; _ai++) {
+                if (!arguments[_ai] || arguments[_ai].__nid__ === undefined) {
+                    throw new TypeError('assign: every argument must be a Node');
+                }
+            }
         },
         // Reflected `slot` content attribute (which shadow slot to assign this element to).
         get slot() { var nid = this.__nid__; var v = _lumen_u2n(_lumen_get_attr(nid, 'slot')); return v !== null ? v : ''; },

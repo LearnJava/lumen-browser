@@ -350,6 +350,64 @@ fn shadow_root_append_child_works() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
+// BUG-676: `ShadowRoot` used to be a bare `{}`-literal with no [[Prototype]],
+// so none of this resolved (`window.ShadowRoot` didn't exist, `instanceof`
+// threw instead of testing, `constructor.name` read `Object`).
+#[test]
+fn shadow_root_has_a_real_global_constructor_and_prototype_chain() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var host = document.createElement('div');
+                document.body.appendChild(host);
+                var sr = host.attachShadow({ mode: 'open' });
+                'ShadowRoot' in window &&
+                typeof window.ShadowRoot === 'function' &&
+                sr instanceof ShadowRoot &&
+                sr instanceof DocumentFragment &&
+                sr instanceof Node &&
+                sr.constructor.name === 'ShadowRoot' &&
+                sr.contains(sr) === true
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+// DOM LS §4.9 requires cloneNode() on a ShadowRoot to throw NotSupportedError,
+// not be absent (BUG-676).
+#[test]
+fn shadow_root_clone_node_throws_not_supported_error() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var host = document.createElement('div');
+                document.body.appendChild(host);
+                var sr = host.attachShadow({ mode: 'open' });
+                var threwRight = false;
+                try { sr.cloneNode(); }
+                catch (e) { threwRight = e instanceof DOMException && e.name === 'NotSupportedError'; }
+                threwRight
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+// BUG-676 companion: `HTMLSlotElement.prototype.assign` was missing entirely
+// next to the working `assignedNodes`/`assignedElements`.
+#[test]
+fn slot_assign_exists_and_validates_its_arguments() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var host = document.createElement('div');
+                document.body.appendChild(host);
+                var sr = host.attachShadow({ mode: 'open' });
+                var slot = document.createElement('slot');
+                sr.appendChild(slot);
+                var child = document.createElement('span');
+                sr.appendChild(child);
+                var threw = false;
+                try { slot.assign('not a node'); } catch (e) { threw = e instanceof TypeError; }
+                typeof slot.assign === 'function' && threw
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
 // ── Custom Elements registry ──────────────────────────────────────────────
 
 #[test]

@@ -1,7 +1,7 @@
 # BUG-676 — `ShadowRoot` is a plain object literal: no global constructor, no `cloneNode`, no `Node`-derived methods
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:1310-1366` — `_lumen_make_shadow_root`)
+**Статус:** FIXED 2026-09-05
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_shadow_root`; путь `dom.rs` ниже устарел, код переехал в JS-шим)
 **Найден:** P2, WPT-VENDOR-shadow-dom, 2026-08-06
 
 ## Симптом
@@ -94,3 +94,51 @@ BUG-369/589) в `crates/js/src/dom.rs`, выставить на `window`, пер
 `_lumen_make_shadow_root` на `new ShadowRoot(...)`; добавить `cloneNode()`,
 явно бросающий `NotSupportedError`. Отдельно — `HTMLSlotElement.prototype.assign()`
 рядом с существующими `assignedNodes`/`assignedElements` (`dom.rs:3445-3459`).
+
+## Fixed 2026-09-05 (P3)
+
+`crates/js/src/shim/web_api_shim_mid.js`: `ShadowRoot` — реальный
+`function ShadowRoot() { throw new TypeError('Illegal constructor'); }` с
+`ShadowRoot.prototype = Object.create(DocumentFragment.prototype)`, заведён
+сразу после того, как у `DocumentFragment.prototype` выставлена цепочка к
+`Node.prototype`, — тот же класс правки, что уже был сделан для
+`Headers`/`Response` (BUG-369/370). `_lumen_make_shadow_root` теперь строит
+инстанс через `Object.create(ShadowRoot.prototype)` вместо `{}`-литерала;
+все прежние члены (`host`, `mode`, `innerHTML`, `textContent`, `style`,
+`adoptedStyleSheets`, `children`, `querySelector(All)`, `getElementById`,
+`appendChild`/`removeChild`, `addEventListener`/`removeEventListener`/
+`dispatchEvent`) перенесены на прототип без поведенческих изменений.
+Следствия проверены живьём и тестами:
+
+* `'ShadowRoot' in window` / `typeof window.ShadowRoot === 'function'` — да;
+* `sr instanceof ShadowRoot && sr instanceof DocumentFragment && sr instanceof
+  Node` — да (реальная цепочка, не брошенный `TypeError`);
+* `sr.constructor.name === 'ShadowRoot'`;
+* `sr.contains(...)` теперь работает **бесплатно** — наследуется от
+  `Node.prototype.contains`, которого раньше было неоткуда взять при
+  плоском литерале (собственный код не понадобился);
+* `sr.baseURI` аналогично унаследован от `Node.prototype.baseURI` — своя
+  копия геттера удалена, обновлён комментарий у `Node.prototype.baseURI`
+  (было «четыре литерала без прототипа», стало три — `ShadowRoot` из
+  списка выбыл);
+* `sr.cloneNode()` явно бросает `DOMException(..., 'NotSupportedError')`
+  (DOM LS §4.9), а не отсутствует;
+* компаньон — `HTMLSlotElement.prototype.assign(...)` (в `_LUMEN_WRAPPER_MEMBERS`,
+  рядом с `assignedNodes`/`assignedElements`) существует и валидирует
+  аргументы (`TypeError`, если не `Node`); поведенчески no-op для
+  автоматического name-based назначения слотов — движок не отслеживает
+  `attachShadow({slotAssignment:'manual'})` вовсе, так что полноценный
+  «императивный slot API» (в духе `imperative-slot-api-cross-shadow-root.html`)
+  остаётся отдельным, более крупным пробелом, не покрытым этой правкой.
+
+`getRootNode` на `ShadowRoot` намеренно не добавлен — тот же класс дефекта,
+что уже отслеживается отдельно в [BUG-574](BUG-574-OPEN.md)/[BUG-599](BUG-599-OPEN.md)
+(общий пробел на `Node.prototype`, не специфичный для `ShadowRoot`).
+
+Тесты: 3 новых юнит-теста в `crates/js/src/dom/tests/v8_fontface_shadow_custom.rs`
+(`shadow_root_has_a_real_global_constructor_and_prototype_chain`,
+`shadow_root_clone_node_throws_not_supported_error`,
+`slot_assign_exists_and_validates_its_arguments`). `cargo test -p lumen-js
+--features v8-backend` — 3474 passed, 1 уже известный красный
+([BUG-997](BUG-997-OPEN.md), не связан). `cargo clippy -p lumen-js
+--all-targets --features v8-backend -- -D warnings` чисто.
