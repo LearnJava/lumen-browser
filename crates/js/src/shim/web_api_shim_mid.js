@@ -1070,60 +1070,140 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
 // DOM §7.1: one DOMTokenList over an arbitrary space-separated attribute.
 // `classList` is the `class` case; `relList` (BUG-826) is the same list over
 // `rel` plus a `supports()` of its own.
-function _lumen_make_attr_token_list(nid, attrName) {
-    function getArr() {
-        var c = _lumen_get_attr(nid, attrName);
-        return (c && c.length > 0)
-            ? c.split(/\s+/).filter(function(t) { return t.length > 0; })
-            : [];
+//
+// BUG-715: a real global/prototype (WebIDL §3.9 "legacy platform object" with
+// an indexed property GETTER but no setter) — instances used to be a bare
+// `{}`-literal factory with no `[i]` access and no prototype chain at all, so
+// `domTokenList instanceof DOMTokenList` threw `ReferenceError` and
+// `Object.getOwnPropertyDescriptor(domTokenList, "0")` was always `undefined`.
+// Methods live on the shared prototype (one per interface, not per instance,
+// same convention as `_LUMEN_WRAPPER_MEMBERS`); each instance carries only
+// `__nid__`/`__attrName__`. No constructor operation is defined for this
+// interface in the spec, so `new DOMTokenList()` throws like
+// `HTMLCollection`/`NodeList`/`ShadowRoot` already do.
+function DOMTokenList() { throw new TypeError('Illegal constructor'); }
+
+function _lumen_token_list_arr(tl) {
+    var c = _lumen_get_attr(tl.__nid__, tl.__attrName__);
+    return (c && c.length > 0)
+        ? c.split(/\s+/).filter(function(t) { return t.length > 0; })
+        : [];
+}
+function _lumen_token_list_save(tl, arr) { _lumen_set_attr(tl.__nid__, tl.__attrName__, arr.join(' ')); }
+
+DOMTokenList.prototype.contains = function(cls) { return _lumen_token_list_arr(this).indexOf(String(cls)) >= 0; };
+DOMTokenList.prototype.add = function() {
+    var arr = _lumen_token_list_arr(this);
+    for (var i = 0; i < arguments.length; i++) {
+        var cls = String(arguments[i]);
+        if (arr.indexOf(cls) < 0) arr.push(cls);
     }
-    function setArr(arr) { _lumen_set_attr(nid, attrName, arr.join(' ')); }
-    var cl = {
-        contains: function(cls) { return getArr().indexOf(String(cls)) >= 0; },
-        add: function() {
-            var arr = getArr();
-            for (var i = 0; i < arguments.length; i++) {
-                var cls = String(arguments[i]);
-                if (arr.indexOf(cls) < 0) arr.push(cls);
+    _lumen_token_list_save(this, arr);
+};
+DOMTokenList.prototype.remove = function() {
+    var arr = _lumen_token_list_arr(this);
+    for (var i = 0; i < arguments.length; i++) {
+        var cls = String(arguments[i]);
+        var idx = arr.indexOf(cls);
+        if (idx >= 0) arr.splice(idx, 1);
+    }
+    _lumen_token_list_save(this, arr);
+};
+DOMTokenList.prototype.toggle = function(cls, force) {
+    cls = String(cls);
+    var arr = _lumen_token_list_arr(this);
+    var idx = arr.indexOf(cls);
+    if (force !== undefined) {
+        if (force && idx < 0)   { arr.push(cls); _lumen_token_list_save(this, arr); return true; }
+        if (!force && idx >= 0) { arr.splice(idx, 1); _lumen_token_list_save(this, arr); return false; }
+        return !!force;
+    }
+    if (idx >= 0) { arr.splice(idx, 1); _lumen_token_list_save(this, arr); return false; }
+    arr.push(cls); _lumen_token_list_save(this, arr); return true;
+};
+DOMTokenList.prototype.replace = function(oldCls, newCls) {
+    var arr = _lumen_token_list_arr(this);
+    var idx = arr.indexOf(String(oldCls));
+    if (idx < 0) return false;
+    arr[idx] = String(newCls); _lumen_token_list_save(this, arr); return true;
+};
+DOMTokenList.prototype.item = function(i) {
+    var arr = _lumen_token_list_arr(this); i = i >>> 0; return i < arr.length ? arr[i] : null;
+};
+DOMTokenList.prototype.forEach = function(fn, thisArg) { _lumen_token_list_arr(this).forEach(fn, thisArg); };
+DOMTokenList.prototype.toString = function() { return _lumen_token_list_arr(this).join(' '); };
+Object.defineProperty(DOMTokenList.prototype, 'length', {
+    get: function() { return _lumen_token_list_arr(this).length; },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(DOMTokenList.prototype, 'value', {
+    get: function() { return _lumen_get_attr(this.__nid__, this.__attrName__) || ''; },
+    set: function(v) { _lumen_set_attr(this.__nid__, this.__attrName__, String(v)); },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(DOMTokenList.prototype, Symbol.toStringTag,
+    { value: 'DOMTokenList', configurable: true });
+globalThis.DOMTokenList = DOMTokenList;
+
+// WebIDL §3.9 legacy platform object, indexed property GETTER only (no
+// setter): `[[DefineOwnProperty]]` must fail — so `Object.defineProperty`
+// throws `TypeError` — for ANY array-index key regardless of whether it is
+// currently in range, and a plain `list[i] = x` is a silent no-op in sloppy
+// mode (the engine's own `PutValue` throws in strict mode once `[[Set]]`
+// reports failure — this trap must return `false`, not throw). Generic over
+// `getArr`, so a second interface needing the same shape does not need a
+// second Proxy (bug's own suggested shared helper).
+var _LUMEN_ARRAY_INDEX_RE = /^(?:0|[1-9][0-9]*)$/;
+function _lumen_make_indexed_readonly_proxy(target, getArr) {
+    return new Proxy(target, {
+        get: function(t, prop, receiver) {
+            if (typeof prop === 'string' && _LUMEN_ARRAY_INDEX_RE.test(prop)) {
+                var arr = getArr(t);
+                var i = Number(prop);
+                return i < arr.length ? arr[i] : undefined;
             }
-            setArr(arr);
+            return Reflect.get(t, prop, receiver);
         },
-        remove: function() {
-            var arr = getArr();
-            for (var i = 0; i < arguments.length; i++) {
-                var cls = String(arguments[i]);
-                var idx = arr.indexOf(cls);
-                if (idx >= 0) arr.splice(idx, 1);
+        has: function(t, prop) {
+            if (typeof prop === 'string' && _LUMEN_ARRAY_INDEX_RE.test(prop)) {
+                return Number(prop) < getArr(t).length;
             }
-            setArr(arr);
+            return Reflect.has(t, prop);
         },
-        toggle: function(cls, force) {
-            cls = String(cls);
-            var arr = getArr();
-            var idx = arr.indexOf(cls);
-            if (force !== undefined) {
-                if (force && idx < 0)   { arr.push(cls); setArr(arr); return true; }
-                if (!force && idx >= 0) { arr.splice(idx, 1); setArr(arr); return false; }
-                return !!force;
+        ownKeys: function(t) {
+            var arr = getArr(t), keys = [];
+            for (var i = 0; i < arr.length; i++) keys.push(String(i));
+            return keys.concat(Reflect.ownKeys(t));
+        },
+        getOwnPropertyDescriptor: function(t, prop) {
+            if (typeof prop === 'string' && _LUMEN_ARRAY_INDEX_RE.test(prop)) {
+                var arr = getArr(t);
+                var i = Number(prop);
+                if (i < arr.length) {
+                    return { value: arr[i], writable: false, enumerable: true, configurable: true };
+                }
+                return undefined;
             }
-            if (idx >= 0) { arr.splice(idx, 1); setArr(arr); return false; }
-            arr.push(cls); setArr(arr); return true;
+            return Reflect.getOwnPropertyDescriptor(t, prop);
         },
-        replace: function(oldCls, newCls) {
-            var arr = getArr();
-            var idx = arr.indexOf(String(oldCls));
-            if (idx < 0) return false;
-            arr[idx] = String(newCls); setArr(arr); return true;
+        defineProperty: function(t, prop, desc) {
+            if (typeof prop === 'string' && _LUMEN_ARRAY_INDEX_RE.test(prop)) return false;
+            return Reflect.defineProperty(t, prop, desc);
         },
-        item: function(i) { var arr = getArr(); return arr[i] !== undefined ? arr[i] : null; },
-        forEach: function(fn, thisArg) { getArr().forEach(fn, thisArg); },
-        toString: function() { return getArr().join(' '); },
-    };
-    Object.defineProperty(cl, 'length', {
-        get: function() { return getArr().length; },
-        enumerable: true, configurable: true,
+        set: function(t, prop, value, receiver) {
+            if (typeof prop === 'string' && _LUMEN_ARRAY_INDEX_RE.test(prop)) return false;
+            return Reflect.set(t, prop, value, receiver);
+        },
     });
-    return cl;
+}
+
+function _lumen_make_attr_token_list(nid, attrName) {
+    var tl = Object.create(DOMTokenList.prototype);
+    Object.defineProperty(tl, '__nid__',
+        { value: nid, enumerable: false, writable: false, configurable: false });
+    Object.defineProperty(tl, '__attrName__',
+        { value: attrName, enumerable: false, writable: false, configurable: false });
+    return _lumen_make_indexed_readonly_proxy(tl, _lumen_token_list_arr);
 }
 
 function _lumen_make_class_list(nid) {
@@ -2174,136 +2254,156 @@ function _lumen_canonicalize_longhand(key, strVal) {
     return strVal;
 }
 
-function _lumen_make_style(nid) {
-    function getParsed() {
-        var s = _lumen_get_attr(nid, 'style');
-        return _lumen_parse_style(s !== undefined ? s : '');
+// BUG-715: a real `CSSStyleDeclaration` global/prototype — the instance used
+// to be a bare `{}`-literal Proxy handler with no prototype chain at all, so
+// `element.style instanceof CSSStyleDeclaration` and
+// `Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, "cssText")`
+// (the `[PutForwards=cssText]` override pattern `put-forwards.html` exercises)
+// both threw `ReferenceError: CSSStyleDeclaration is not defined`. Methods and
+// `cssText` now live on the shared prototype, same convention as
+// `DOMTokenList` above; each instance carries only `__nid__`. Not
+// constructible from script, like every other DOM interface obtained only via
+// a factory (`element.style`).
+function CSSStyleDeclaration() { throw new TypeError('Illegal constructor'); }
+
+function _lumen_style_get_parsed(nid) {
+    var s = _lumen_get_attr(nid, 'style');
+    return _lumen_parse_style(s !== undefined ? s : '');
+}
+function _lumen_style_set_parsed(nid, obj) { _lumen_set_attr(nid, 'style', _lumen_serialize_style(obj)); }
+
+CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
+    var key = _lumen_camel_to_kebab(String(prop));
+    var obj = _lumen_style_get_parsed(this.__nid__);
+    if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
+    var shorthand = _lumen_shorthand_value(obj, key);
+    if (shorthand !== undefined) return shorthand;
+    if (key === 'overflow') {
+        var ovShorthand = _lumen_overflow_shorthand_value(obj);
+        if (ovShorthand !== undefined) return ovShorthand;
     }
-    function setParsed(obj) { _lumen_set_attr(nid, 'style', _lumen_serialize_style(obj)); }
-    var handler = {
-        getPropertyValue: function(prop) {
-            var key = _lumen_camel_to_kebab(String(prop));
-            var obj = getParsed();
-            if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
-            var shorthand = _lumen_shorthand_value(obj, key);
-            if (shorthand !== undefined) return shorthand;
-            if (key === 'overflow') {
-                var ovShorthand = _lumen_overflow_shorthand_value(obj);
-                if (ovShorthand !== undefined) return ovShorthand;
-            }
-            if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) {
-                var v2v = _lumen_2v_shorthand_value(obj, key);
-                if (v2v !== undefined) return v2v;
-            }
-            return '';
+    if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) {
+        var v2v = _lumen_2v_shorthand_value(obj, key);
+        if (v2v !== undefined) return v2v;
+    }
+    return '';
+};
+CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
+    var nid = this.__nid__;
+    var key = _lumen_camel_to_kebab(String(prop));
+    var strVal = String(val);
+    var obj = _lumen_style_get_parsed(nid);
+    if (strVal === '') {
+        // CSSOM §6.7.4: setProperty(prop, "") removes the property.
+        delete obj[key];
+        _lumen_style_set_parsed(nid, obj);
+        return;
+    }
+    if (_LUMEN_TRBL_SHORTHAND_CANON.hasOwnProperty(key)) {
+        var expanded = _lumen_expand_trbl_shorthand(_LUMEN_TRBL_SHORTHAND_CANON[key], strVal);
+        if (expanded === null) return; // invalid shorthand value: whole declaration dropped
+        var trblLonghands = _LUMEN_TRBL_SHORTHANDS[key];
+        obj[trblLonghands[0]] = expanded.top;
+        obj[trblLonghands[1]] = expanded.right;
+        obj[trblLonghands[2]] = expanded.bottom;
+        obj[trblLonghands[3]] = expanded.left;
+        _lumen_style_set_parsed(nid, obj);
+        return;
+    }
+    if (key === 'overflow') {
+        var ovExpanded = _lumen_expand_overflow_shorthand(strVal);
+        if (ovExpanded === null) return; // invalid shorthand value: whole declaration dropped
+        obj['overflow-x'] = ovExpanded.x;
+        obj['overflow-y'] = ovExpanded.y;
+        _lumen_style_set_parsed(nid, obj);
+        return;
+    }
+    if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) {
+        var longhands2v = _LUMEN_2V_SHORTHANDS[key];
+        var expanded2v = _lumen_expand_2v_shorthand(_LUMEN_2V_SHORTHAND_CANON[key], strVal);
+        if (expanded2v === null) return; // invalid shorthand value: whole declaration dropped
+        obj[longhands2v[0]] = expanded2v.start;
+        obj[longhands2v[1]] = expanded2v.end;
+        _lumen_style_set_parsed(nid, obj);
+        return;
+    }
+    // Срез 10: color/length/line-width/sizing/keyword grammars all
+    // go through the shared `_lumen_canonicalize_longhand` dispatch
+    // (also used by `_lumen_parse_style` above) instead of one
+    // repeated if-block per table.
+    if (_LUMEN_COLOR_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_LENGTH_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_LINE_WIDTH_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_SCROLL_OFFSET_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key) ||
+        key === 'scrollbar-color' ||
+        key === 'scroll-snap-type' ||
+        key === 'scroll-snap-align' ||
+        key === 'text-overflow' ||
+        key === '-webkit-line-clamp' ||
+        key === 'scrollbar-gutter' ||
+        // BUG-505 срез 4: `block-ellipsis`/`continue`/`max-lines`/
+        // `line-clamp` (срез 2) had a canon function registered in
+        // `_lumen_canonicalize_longhand` but were never added to
+        // *this* gate, so `div.style[prop] = value` (the actual
+        // path every WPT `test_valid_value`/`test_invalid_value`
+        // case in this bug's vendored files exercises) fell through
+        // to the raw-passthrough branch below and never called the
+        // canon function at all — срез 2's "65/65 match" was
+        // against a standalone Node harness calling the four
+        // functions directly, not this real pipeline.
+        key === 'block-ellipsis' ||
+        key === 'continue' ||
+        key === 'max-lines' ||
+        key === 'line-clamp' ||
+        key === 'overflow-clip-margin' ||
+        // BUG-505 срез 6: `scroll-marker-group`'s own canon function
+        // (`scroll-target-group` needs no separate arm — it's a
+        // plain `_LUMEN_KEYWORD_PROPERTIES` entry above, already
+        // covered by that check in this same condition).
+        key === 'scroll-marker-group') {
+        var canon = _lumen_canonicalize_longhand(key, strVal);
+        if (canon === null || canon === undefined) return; // invalid value: no-op
+        obj[key] = canon;
+        _lumen_style_set_parsed(nid, obj);
+        return;
+    }
+    obj[key] = strVal;
+    _lumen_style_set_parsed(nid, obj);
+};
+CSSStyleDeclaration.prototype.removeProperty = function(prop) {
+    var nid = this.__nid__;
+    var obj = _lumen_style_get_parsed(nid);
+    var key = _lumen_camel_to_kebab(String(prop));
+    var old = obj[key] || '';
+    delete obj[key]; _lumen_style_set_parsed(nid, obj); return old;
+};
+Object.defineProperty(CSSStyleDeclaration.prototype, 'cssText', {
+    // CSSOM §6.7.2: cssText always reflects the current declarations'
+    // serialization, not raw stored text — so it collapses shorthands
+    // and normalizes formatting even for a style attribute that came
+    // straight from HTML markup and was never touched via JS (BUG-473).
+    get: function() { return _lumen_serialize_style(_lumen_style_get_parsed(this.__nid__)); },
+    set: function(v) { _lumen_style_set_parsed(this.__nid__, _lumen_parse_style(String(v))); },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(CSSStyleDeclaration.prototype, Symbol.toStringTag,
+    { value: 'CSSStyleDeclaration', configurable: true });
+globalThis.CSSStyleDeclaration = CSSStyleDeclaration;
+
+function _lumen_make_style(nid) {
+    var target = Object.create(CSSStyleDeclaration.prototype);
+    Object.defineProperty(target, '__nid__',
+        { value: nid, enumerable: false, writable: false, configurable: false });
+    return new Proxy(target, {
+        get: function(t, prop, receiver) {
+            if (prop in t) return Reflect.get(t, prop, receiver);
+            return t.getPropertyValue(_lumen_camel_to_kebab(String(prop)));
         },
-        setProperty: function(prop, val) {
-            var key = _lumen_camel_to_kebab(String(prop));
-            var strVal = String(val);
-            var obj = getParsed();
-            if (strVal === '') {
-                // CSSOM §6.7.4: setProperty(prop, "") removes the property.
-                delete obj[key];
-                setParsed(obj);
-                return;
-            }
-            if (_LUMEN_TRBL_SHORTHAND_CANON.hasOwnProperty(key)) {
-                var expanded = _lumen_expand_trbl_shorthand(_LUMEN_TRBL_SHORTHAND_CANON[key], strVal);
-                if (expanded === null) return; // invalid shorthand value: whole declaration dropped
-                var trblLonghands = _LUMEN_TRBL_SHORTHANDS[key];
-                obj[trblLonghands[0]] = expanded.top;
-                obj[trblLonghands[1]] = expanded.right;
-                obj[trblLonghands[2]] = expanded.bottom;
-                obj[trblLonghands[3]] = expanded.left;
-                setParsed(obj);
-                return;
-            }
-            if (key === 'overflow') {
-                var ovExpanded = _lumen_expand_overflow_shorthand(strVal);
-                if (ovExpanded === null) return; // invalid shorthand value: whole declaration dropped
-                obj['overflow-x'] = ovExpanded.x;
-                obj['overflow-y'] = ovExpanded.y;
-                setParsed(obj);
-                return;
-            }
-            if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) {
-                var longhands2v = _LUMEN_2V_SHORTHANDS[key];
-                var expanded2v = _lumen_expand_2v_shorthand(_LUMEN_2V_SHORTHAND_CANON[key], strVal);
-                if (expanded2v === null) return; // invalid shorthand value: whole declaration dropped
-                obj[longhands2v[0]] = expanded2v.start;
-                obj[longhands2v[1]] = expanded2v.end;
-                setParsed(obj);
-                return;
-            }
-            // Срез 10: color/length/line-width/sizing/keyword grammars all
-            // go through the shared `_lumen_canonicalize_longhand` dispatch
-            // (also used by `_lumen_parse_style` above) instead of one
-            // repeated if-block per table.
-            if (_LUMEN_COLOR_PROPERTIES.hasOwnProperty(key) ||
-                _LUMEN_LENGTH_PROPERTIES.hasOwnProperty(key) ||
-                _LUMEN_LINE_WIDTH_PROPERTIES.hasOwnProperty(key) ||
-                _LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key) ||
-                _LUMEN_SCROLL_OFFSET_PROPERTIES.hasOwnProperty(key) ||
-                _LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key) ||
-                key === 'scrollbar-color' ||
-                key === 'scroll-snap-type' ||
-                key === 'scroll-snap-align' ||
-                key === 'text-overflow' ||
-                key === '-webkit-line-clamp' ||
-                key === 'scrollbar-gutter' ||
-                // BUG-505 срез 4: `block-ellipsis`/`continue`/`max-lines`/
-                // `line-clamp` (срез 2) had a canon function registered in
-                // `_lumen_canonicalize_longhand` but were never added to
-                // *this* gate, so `div.style[prop] = value` (the actual
-                // path every WPT `test_valid_value`/`test_invalid_value`
-                // case in this bug's vendored files exercises) fell through
-                // to the raw-passthrough branch below and never called the
-                // canon function at all — срез 2's "65/65 match" was
-                // against a standalone Node harness calling the four
-                // functions directly, not this real pipeline.
-                key === 'block-ellipsis' ||
-                key === 'continue' ||
-                key === 'max-lines' ||
-                key === 'line-clamp' ||
-                key === 'overflow-clip-margin' ||
-                // BUG-505 срез 6: `scroll-marker-group`'s own canon function
-                // (`scroll-target-group` needs no separate arm — it's a
-                // plain `_LUMEN_KEYWORD_PROPERTIES` entry above, already
-                // covered by that check in this same condition).
-                key === 'scroll-marker-group') {
-                var canon = _lumen_canonicalize_longhand(key, strVal);
-                if (canon === null || canon === undefined) return; // invalid value: no-op
-                obj[key] = canon;
-                setParsed(obj);
-                return;
-            }
-            obj[key] = strVal;
-            setParsed(obj);
-        },
-        removeProperty: function(prop) {
-            var obj = getParsed();
-            var key = _lumen_camel_to_kebab(String(prop));
-            var old = obj[key] || '';
-            delete obj[key]; setParsed(obj); return old;
-        },
-    };
-    Object.defineProperty(handler, 'cssText', {
-        // CSSOM §6.7.2: cssText always reflects the current declarations'
-        // serialization, not raw stored text — so it collapses shorthands
-        // and normalizes formatting even for a style attribute that came
-        // straight from HTML markup and was never touched via JS (BUG-473).
-        get: function() { return _lumen_serialize_style(getParsed()); },
-        set: function(v) { setParsed(_lumen_parse_style(String(v))); },
-        enumerable: true, configurable: true,
-    });
-    return new Proxy(handler, {
-        get: function(target, prop) {
-            if (prop in target) return target[prop];
-            return target.getPropertyValue(_lumen_camel_to_kebab(String(prop)));
-        },
-        set: function(target, prop, value) {
-            if (prop in target) { target[prop] = value; return true; }
-            target.setProperty(_lumen_camel_to_kebab(String(prop)), value);
+        set: function(t, prop, value, receiver) {
+            if (prop in t) return Reflect.set(t, prop, value, receiver);
+            t.setProperty(_lumen_camel_to_kebab(String(prop)), value);
             return true;
         },
     });

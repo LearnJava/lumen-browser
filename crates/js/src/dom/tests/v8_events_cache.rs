@@ -146,6 +146,68 @@ fn classlist_to_string() {
     assert_eq!(result, lumen_core::JsValue::String("highlight".into()));
 }
 
+// BUG-715: `DOMTokenList` used to be a bare `{}`-literal factory with no
+// global constructor at all.
+#[test]
+fn classlist_instanceof_dom_token_list() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval("document.querySelector('.highlight').classList instanceof DOMTokenList")
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+// BUG-715: WebIDL §3.9 legacy platform object indexed property getter —
+// `classList[i]` used to be `undefined` unconditionally (only `.item(i)`
+// worked).
+#[test]
+fn classlist_indexed_access() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval("document.querySelector('.highlight').classList[0]")
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("highlight".into()));
+    let oob = rt
+        .eval("document.querySelector('.highlight').classList[1]")
+        .unwrap();
+    // `from_v8_bounded` collapses both `null` and `undefined` into
+    // `JsValue::Null` (`v8_runtime/value.rs`), so `undefined` here reads back
+    // as `Null`, not `Undefined`.
+    assert_eq!(oob, lumen_core::JsValue::Null);
+}
+
+// BUG-715: the indexed property has a getter but no setter, so
+// `[[DefineOwnProperty]]` must fail (`Object.defineProperty` throws
+// `TypeError`) for any array-index key.
+#[test]
+fn classlist_define_own_property_on_index_throws() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            "(function() { \
+                 try { \
+                     Object.defineProperty(document.querySelector('.highlight').classList, '0', {value: true}); \
+                     return 'no-throw'; \
+                 } catch (e) { \
+                     return e instanceof TypeError ? 'TypeError' : 'other'; \
+                 } \
+             })()",
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("TypeError".into()));
+}
+
+// BUG-715: `Object.keys`/`Object.values` must see the indices as real own
+// enumerable properties (WebIDL `[[OwnPropertyKeys]]`/`[[GetOwnProperty]]`).
+#[test]
+fn classlist_object_keys_sees_indices() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval("JSON.stringify(Object.keys(document.querySelector('.highlight').classList))")
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("[\"0\"]".into()));
+}
+
 // ── style / CSSStyleDeclaration ──────────────────────────────────────────
 
 #[test]
@@ -211,6 +273,36 @@ fn style_css_text_roundtrip() {
         .eval("document.getElementById('main').style.getPropertyValue('font-size')")
         .unwrap();
     assert_eq!(size, lumen_core::JsValue::String("12px".into()));
+}
+
+// BUG-715: `CSSStyleDeclaration` used to be a bare Proxy-handler literal with
+// no global constructor/prototype at all.
+#[test]
+fn style_instanceof_css_style_declaration() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval("document.getElementById('main').style instanceof CSSStyleDeclaration")
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+// BUG-715: `cssText` must be a real accessor on `CSSStyleDeclaration.prototype`
+// (not per-instance) so the `[PutForwards]` override pattern WPT's
+// `ecmascript-binding/put-forwards.html` exercises can find it via
+// `Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, "cssText")`
+// and re-apply it through `.call(this, v)`.
+#[test]
+fn style_css_text_is_on_shared_prototype() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            "(function() { \
+                 var d = Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, 'cssText'); \
+                 return typeof d.get === 'function' && typeof d.set === 'function'; \
+             })()",
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
 // ── addEventListener / dispatchEvent on elements ─────────────────────────

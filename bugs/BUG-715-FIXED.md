@@ -1,7 +1,7 @@
 # BUG-715 — `DOMTokenList`/`CSSStyleDeclaration` have no global constructor and no indexed-property WebIDL shape
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:1327-1381` — `_lumen_make_class_list`; `dom.rs:1404+` — `_lumen_make_style`, `CSSStyleDeclaration`)
+**Статус:** FIXED 2026-09-05 (P3)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_class_list`/`_lumen_make_attr_token_list`; `_lumen_make_style`, `CSSStyleDeclaration`)
 **Найден:** P2, WPT-VENDOR-webidl, 2026-08-09
 
 ## Симптом
@@ -97,3 +97,59 @@ defineProperty/set trap → `TypeError` для read-only индексов) — �
 отдельно, возможно другой корень (`HTMLSelectElement` indexed setter).
 Не требует новой инфраструктуры для воспроизведения — все четыре файла
 исполняются локально без TLS/testdriver-гэпа.
+
+## Исправление (2026-09-05, P3)
+
+Пункты (1) и (2) из scope реализованы в `crates/js/src/shim/web_api_shim_mid.js`:
+
+- **`DOMTokenList`** — реальный `function DOMTokenList() { throw new
+  TypeError('Illegal constructor'); }` с методами
+  (`contains`/`add`/`remove`/`toggle`/`replace`/`item`/`forEach`/`toString`)
+  и аксессорами (`length`, `value`, `Symbol.toStringTag`) на
+  `DOMTokenList.prototype` — тот же приём, что `ShadowRoot`/`HTMLCollection`/
+  `NodeList` уже используют (общий конструктор без `new`, методы на общем
+  прототипе, а не пересоздаются на каждый инстанс). Инстанс несёт только
+  `__nid__`/`__attrName__`; `_lumen_make_attr_token_list`/
+  `_lumen_make_class_list`/`_lumen_make_rel_list` (`relList`, BUG-826)
+  используют тот же фабричный путь без изменений в вызывающем коде.
+- **`CSSStyleDeclaration`** — та же схема: `getPropertyValue`/`setProperty`/
+  `removeProperty`/`cssText` перенесены на `CSSStyleDeclaration.prototype`
+  (были инстансными замыканиями поверх `handler`-литерала), инстанс несёт
+  только `__nid__`. Это одновременно чинит `put-forwards.html`'s паттерн
+  `Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, "cssText")`
+  — раньше `cssText` был собственным свойством каждого инстанса, а не
+  прототипа.
+- **Indexed-property Proxy** — новый переиспользуемый хелпер
+  `_lumen_make_indexed_readonly_proxy(target, getArr)` (ровно то, что
+  предлагал этот баг): `get`/`has`/`ownKeys`/`getOwnPropertyDescriptor`
+  представляют `list[i]` как настоящее own-property (WebIDL §3.9
+  `[[GetOwnProperty]]`/`[[OwnPropertyKeys]]`), `defineProperty`/`set`
+  возвращают `false` для ЛЮБОГО array-index ключа (в диапазоне или нет) —
+  это даёт `Object.defineProperty(list, "0", …)` → `TypeError` и
+  `list[0] = x` → тихий no-op в sloppy/`TypeError` в strict через штатный
+  движковый `PutValue`, не через собственный `throw`. Используется в
+  `_lumen_make_attr_token_list` для `DOMTokenList`.
+- Регресс-тесты: `crates/js/src/dom/tests/v8_events_cache.rs`
+  (`classlist_instanceof_dom_token_list`, `classlist_indexed_access`,
+  `classlist_define_own_property_on_index_throws`,
+  `classlist_object_keys_sees_indices`,
+  `style_instanceof_css_style_declaration`,
+  `style_css_text_is_on_shared_prototype`). Логика Proxy-трапов
+  дополнительно прогнана вне движка — стендовый Node-харнесс с реальными
+  ассертами из `DefineOwnProperty.html`/`GetOwnProperty.html` (вырезан
+  перед коммитом, не часть репозитория) подтвердил побитовое совпадение с
+  ожиданиями теста, включая strict/sloppy-режимы `[[Set]]`.
+
+**Остаток — вне scope этого бага, отдельно от DOMTokenList/CSSStyleDeclaration.**
+Чтение реальных вендоренных файлов (`tests/wpt/webidl/ecmascript-binding/
+legacy-platform-object/{DefineOwnProperty,GetOwnProperty,OwnPropertyKeys,Set}.html`)
+показало, что пункт (3) из scope был неточным: `Set.html` вообще не
+упоминает `DOMTokenList`/`CSSStyleDeclaration` — все 11 его сабтестов о
+`childNodes`(`NodeList`)/`attributes`(`NamedNodeMap`)/`form.method`/
+`sessionStorage`. Аналогично `DefineOwnProperty.html` (0/4 на момент
+заявки) содержит ещё три сабтеста про `HTMLSelectElement` (indexed
+setter), `HTMLCollection` (`dataList.options`, named getter без setter,
+`LegacyUnenumerableNamedProperties`) и `DOMStringMap`(`dataset`, named
+setter) — независимые от этого бага дефекты/пробелы, не проверялись живым
+прогоном движка в рамках этой правки. Следующему триажу этой категории
+читать эти файлы как источник, не как «то же самое, что BUG-715».
