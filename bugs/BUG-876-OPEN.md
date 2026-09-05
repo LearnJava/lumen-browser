@@ -37,7 +37,7 @@ sd2-checked
 
 `sd2-slotchange` не напечатан ни разу. Побочно замерено: `root.childNodes`
 у shadow root отсутствует (`no-childNodes`) — литеральная природа объекта,
-[BUG-676](BUG-676-OPEN.md).
+[BUG-676](BUG-676-FIXED.md).
 
 ## Цена по WPT
 
