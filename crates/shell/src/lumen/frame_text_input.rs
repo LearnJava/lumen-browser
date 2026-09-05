@@ -35,7 +35,10 @@ impl Lumen {
     ) -> Option<(TypeableField, String)> {
         let handle = self.frames.get(idx)?;
         let doc = handle.doc.lock().ok()?;
-        let node = doc.get(nid);
+        // BUG-995: mirror of `text_input::typeable_field` — `nid` is
+        // `self.focused_frame`'s second field, which can outlive the
+        // frame document it was focused in.
+        let node = doc.try_get(nid)?;
         if node.get_attr("disabled").is_some() || node.get_attr("readonly").is_some() {
             return None;
         }
