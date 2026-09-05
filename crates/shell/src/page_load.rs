@@ -1359,11 +1359,18 @@ impl Lumen {
                             .as_deref()
                             .map(lumen_font::parse_unicode_ranges)
                             .unwrap_or_default();
+                        // CSS Fonts L4 §14 (FONTLOAD-11, BUG-467): ascent/descent-override.
+                        let ascent_override = pf.ascent_override_str.as_deref()
+                            .and_then(lumen_font::parse_metric_override_percent);
+                        let descent_override = pf.descent_override_str.as_deref()
+                            .and_then(lumen_font::parse_metric_override_percent);
                         let _ = proxy.send_event(LoadEvent::FontLoaded {
                             family: pf.family,
                             weight: pf.weight,
                             style: pf.style,
                             unicode_range,
+                            ascent_override,
+                            descent_override,
                             bytes,
                         });
                     });
@@ -1659,6 +1666,12 @@ pub(crate) enum LoadEvent {
         weight: u16,
         style: lumen_core::FontStyle,
         unicode_range: Vec<lumen_font::UnicodeRange>,
+        /// `ascent-override` дескриптор (CSS Fonts L4 §14, FONTLOAD-11) — доля
+        /// `font-size`, `None` — `normal`/отсутствует. Разобран в фоновом
+        /// потоке fetch-а, той же функцией, что и `unicode_range`.
+        ascent_override: Option<f32>,
+        /// `descent-override` дескриптор, та же семантика.
+        descent_override: Option<f32>,
         bytes: Vec<u8>,
     },
     /// Все байты получены — для финального полного pipeline.

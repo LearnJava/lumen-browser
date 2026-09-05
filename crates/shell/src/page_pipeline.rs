@@ -452,7 +452,14 @@ fn build_page_cascade(
             let ranges = rule.unicode_range.as_deref()
                 .map(lumen_font::parse_unicode_ranges)
                 .unwrap_or_default();
-            measurer.register_family_with_ranges(&rule.family, bytes, ranges);
+            // CSS Fonts L4 §14 (FONTLOAD-11, BUG-467): ascent/descent-override.
+            let ascent_override = rule.ascent_override.as_deref()
+                .and_then(lumen_font::parse_metric_override_percent);
+            let descent_override = rule.descent_override.as_deref()
+                .and_then(lumen_font::parse_metric_override_percent);
+            measurer.register_family_with_overrides(
+                &rule.family, bytes, ranges, ascent_override, descent_override,
+            );
         }
     }
 

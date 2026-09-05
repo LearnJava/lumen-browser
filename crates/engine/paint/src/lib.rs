@@ -762,21 +762,32 @@ fn face_metrics(
 /// владения между двумя источниками [`MultiFontMeasurer::primary_metrics`],
 /// чтобы вызывающий код не заботился, откуда взялись метрики.
 enum PrimaryFontMetrics<'a> {
-    Owned(&'a OwnedFontMetrics),
+    /// `ascent_override`/`descent_override` — CSS Fonts L4 §14 descriptors of
+    /// the owning `@font-face` slot (FONTLOAD-11, BUG-467), fraction of
+    /// font-size or `None` for `normal`/absent. System faces never carry
+    /// these (only `@font-face` has the descriptor), hence `Shared` below
+    /// has none.
+    Owned {
+        metrics: &'a OwnedFontMetrics,
+        ascent_override: Option<f32>,
+        descent_override: Option<f32>,
+    },
     Shared(Arc<OwnedFontMetrics>),
 }
 
 impl PrimaryFontMetrics<'_> {
     fn ascent_px(&self, font_size_px: f32) -> f32 {
         match self {
-            Self::Owned(m) => m.ascent_px(font_size_px),
+            Self::Owned { metrics, ascent_override, .. } => ascent_override
+                .map_or_else(|| metrics.ascent_px(font_size_px), |pct| font_size_px * pct),
             Self::Shared(m) => m.ascent_px(font_size_px),
         }
     }
 
     fn descent_px(&self, font_size_px: f32) -> f32 {
         match self {
-            Self::Owned(m) => m.descent_px(font_size_px),
+            Self::Owned { metrics, descent_override, .. } => descent_override
+                .map_or_else(|| metrics.descent_px(font_size_px), |pct| font_size_px * pct),
             Self::Shared(m) => m.descent_px(font_size_px),
         }
     }
@@ -792,6 +803,12 @@ struct FontFaceSlot {
     metrics: OwnedFontMetrics,
     /// `unicode-range` дескриптор. Пустой Vec = нет ограничений (применяется для всех символов).
     unicode_ranges: Vec<UnicodeRange>,
+    /// `ascent-override` дескриптор (CSS Fonts L4 §14, FONTLOAD-11) — доля
+    /// `font-size`, `None` — `normal`/отсутствует, используются реальные
+    /// метрики face-а.
+    ascent_override: Option<f32>,
+    /// `descent-override` дескриптор, та же семантика, что у `ascent_override`.
+    descent_override: Option<f32>,
 }
 
 /// Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты.
@@ -869,8 +886,28 @@ impl MultiFontMeasurer {
         bytes: Vec<u8>,
         unicode_ranges: Vec<UnicodeRange>,
     ) {
+        self.register_family_with_overrides(family, bytes, unicode_ranges, None, None);
+    }
+
+    /// Регистрирует @font-face шрифт с `unicode-range` ограничением и
+    /// метрик-override дескрипторами (CSS Fonts L4 §14, FONTLOAD-11).
+    ///
+    /// `ascent_override`/`descent_override`: доля `font-size` (`"90%"` →
+    /// `Some(0.9)`, см. [`lumen_font::parse_metric_override_percent`]),
+    /// `None` — `normal`/дескриптор отсутствует, применяются реальные
+    /// ascent/descent выбранного face-а.
+    ///
+    /// [`register_family`]: Self::register_family
+    pub fn register_family_with_overrides(
+        &mut self,
+        family: &str,
+        bytes: Vec<u8>,
+        unicode_ranges: Vec<UnicodeRange>,
+        ascent_override: Option<f32>,
+        descent_override: Option<f32>,
+    ) {
         if let Ok(metrics) = OwnedFontMetrics::from_bytes(&bytes) {
-            let slot = FontFaceSlot { metrics, unicode_ranges };
+            let slot = FontFaceSlot { metrics, unicode_ranges, ascent_override, descent_override };
             self.faces
                 .entry(family.to_ascii_lowercase())
                 .or_default()
@@ -919,7 +956,11 @@ impl MultiFontMeasurer {
         for family in families {
             let lower = family.to_ascii_lowercase();
             if let Some(slot) = self.faces.get(&lower).and_then(|slots| slots.first()) {
-                return Some(PrimaryFontMetrics::Owned(&slot.metrics));
+                return Some(PrimaryFontMetrics::Owned {
+                    metrics: &slot.metrics,
+                    ascent_override: slot.ascent_override,
+                    descent_override: slot.descent_override,
+                });
             }
             if let Some(m) = self.system_metrics(&lower) {
                 return Some(PrimaryFontMetrics::Shared(m));
@@ -942,6 +983,8 @@ impl MultiFontMeasurer {
                 descent_units: 0,
             },
             unicode_ranges: Vec::new(),
+            ascent_override: None,
+            descent_override: None,
         };
         self.faces
             .entry(family.to_ascii_lowercase())
@@ -1407,6 +1450,85 @@ mod multi_font_tests {
         assert_ne!(
             inter_ascent, mono_ascent,
             "системное имя должно мериться своим face-ом: {inter_ascent} vs {mono_ascent}"
+        );
+    }
+
+    // ── metric-override дескрипторы (FONTLOAD-11, BUG-467) ──────────────────
+
+    #[test]
+    fn ascent_override_replaces_real_metric_with_font_size_fraction() {
+        // CSS Fonts L4 §14: ascent-override — доля font-size, не face-а.
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family_with_overrides(
+            "overridden",
+            INTER.to_vec(),
+            Vec::new(),
+            Some(1.0), // 100%
+            None,
+        );
+        let families = vec!["overridden".to_string()];
+        assert_eq!(m.ascent_px_with_families(20.0, &families), 20.0);
+    }
+
+    #[test]
+    fn descent_override_replaces_real_metric_with_font_size_fraction() {
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family_with_overrides(
+            "overridden",
+            INTER.to_vec(),
+            Vec::new(),
+            None,
+            Some(0.5), // 50%
+        );
+        let families = vec!["overridden".to_string()];
+        assert_eq!(m.descent_px_with_families(20.0, &families), 10.0);
+    }
+
+    #[test]
+    fn metric_override_none_matches_register_family_with_ranges() {
+        // `None` (CSS `normal`/дескриптор отсутствует) не должен ничего
+        // менять относительно пути без overrides (FONTLOAD-10 baseline).
+        let font = inter_font();
+        let mut plain = MultiFontMeasurer::new(&font).unwrap();
+        plain.register_family_with_ranges("plain", INTER.to_vec(), Vec::new());
+        let mut overridden = MultiFontMeasurer::new(&font).unwrap();
+        overridden.register_family_with_overrides("plain", INTER.to_vec(), Vec::new(), None, None);
+        let families = vec!["plain".to_string()];
+        assert_eq!(
+            plain.ascent_px_with_families(16.0, &families),
+            overridden.ascent_px_with_families(16.0, &families)
+        );
+        assert_eq!(
+            plain.descent_px_with_families(16.0, &families),
+            overridden.descent_px_with_families(16.0, &families)
+        );
+    }
+
+    #[test]
+    fn ascent_override_alone_leaves_descent_at_real_metric() {
+        // Асимметричный override: только ascent задан — descent остаётся
+        // реальной метрикой face-а, а не тоже подменяется.
+        let mono_bytes = std::fs::read(MONO_PATH).expect("bundled JetBrains Mono должен читаться");
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family_with_overrides(
+            "mono-ascent-override",
+            mono_bytes.clone(),
+            Vec::new(),
+            Some(1.0),
+            None,
+        );
+        let mut baseline = MultiFontMeasurer::new(&font).unwrap();
+        baseline.register_family("mono-baseline", mono_bytes);
+        let overridden_families = vec!["mono-ascent-override".to_string()];
+        let baseline_families = vec!["mono-baseline".to_string()];
+        assert_eq!(m.ascent_px_with_families(16.0, &overridden_families), 16.0);
+        assert_eq!(
+            m.descent_px_with_families(16.0, &overridden_families),
+            baseline.descent_px_with_families(16.0, &baseline_families),
+            "descent без собственного override должен остаться реальной метрикой face-а"
         );
     }
 

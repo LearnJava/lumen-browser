@@ -1081,10 +1081,12 @@ pub(crate) fn page_measurer(
     let mut measurer = lumen_paint::MultiFontMeasurer::new(font)
         .expect("MultiFontMeasurer из bundled Inter");
     for wf in web_fonts {
-        measurer.register_family_with_ranges(
+        measurer.register_family_with_overrides(
             &wf.family,
             wf.bytes.clone(),
             wf.unicode_range.clone(),
+            wf.ascent_override,
+            wf.descent_override,
         );
     }
     measurer.set_system_faces(system_font_faces());

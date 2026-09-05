@@ -85,7 +85,9 @@ impl Lumen {
                     w.request_redraw();
                 }
             }
-            LoadEvent::FontLoaded { family, weight, style, unicode_range, bytes } => {
+            LoadEvent::FontLoaded {
+                family, weight, style, unicode_range, ascent_override, descent_override, bytes,
+            } => {
                 // PH3-19 FOUT swap: web-шрифт прибыл из фонового потока.
                 // Регистрируем в page_font_registry (FontProvider для renderer-а),
                 // добавляем в web_fonts (для relayout MultiFontMeasurer),
@@ -129,7 +131,9 @@ impl Lumen {
                         escape_js_string(&family)
                     ),
                 );
-                self.web_fonts.push(LoadedWebFont { family, weight, style, unicode_range, bytes });
+                self.web_fonts.push(LoadedWebFont {
+                    family, weight, style, unicode_range, ascent_override, descent_override, bytes,
+                });
                 // Relayout with the now-registered web font (FOUT → FOIT swap).
                 // ADR-016 M2.2b-8: the swap is a whole-page restyle (font metrics
                 // change) with no synchronous geometry read of its own — the same
