@@ -1,7 +1,5 @@
 BUGS.md:260
 BUGS.md:65
-BUGS.md:66
-BUGS.md:67
 BUGS.md:68
 BUGS.md:69
 BUGS.md:70
