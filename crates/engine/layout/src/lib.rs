@@ -239,6 +239,25 @@ pub trait TextMeasurer {
         font_size_px * 0.8
     }
 
+    /// [`Self::descent_px`] с учётом CSS `font-family` каскада — тот же
+    /// приём, что [`Self::char_width_with_families`]: перебирает `families`
+    /// и берёт метрики первого резолвящегося шрифта (@font-face, затем
+    /// системное имя), а не bundled-fallback (FONTLOAD-10, BUG-467).
+    ///
+    /// Реализации без доступа к нескольким шрифтам по умолчанию игнорируют
+    /// `families` и делегируют к [`Self::descent_px`].
+    fn descent_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
+        let _ = families;
+        self.descent_px(font_size_px)
+    }
+
+    /// [`Self::ascent_px`] с учётом CSS `font-family` каскада — см.
+    /// [`Self::descent_px_with_families`].
+    fn ascent_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
+        let _ = families;
+        self.ascent_px(font_size_px)
+    }
+
     /// x-height шрифта в пикселях при размере `font_size_px` — высота строчной
     /// `x` без выносных элементов (таблица OS/2 `sxHeight`).
     ///

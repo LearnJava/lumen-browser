@@ -543,8 +543,11 @@ pub(crate) fn inline_baseline(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>
             // контент, стоящий за прогоном. Отсчитывается от высоты бокса, а не
             // как `(n-1) * line_h`, чтобы не разойтись с `::first-line` и
             // `line-height-step`, которые делают строки разновысокими.
-            let half_leading = (line_h - (m.ascent_px(em) + m.descent_px(em))) / 2.0;
-            Some(b.rect.height - line_h + half_leading + m.ascent_px(em))
+            let families = &b.style.font_family;
+            let ascent = m.ascent_px_with_families(em, families);
+            let descent = m.descent_px_with_families(em, families);
+            let half_leading = (line_h - (ascent + descent)) / 2.0;
+            Some(b.rect.height - line_h + half_leading + ascent)
         }
         // Базовая линия замещаемого элемента — нижняя кромка margin box.
         BoxKind::Image { .. }
@@ -583,13 +586,15 @@ pub(crate) fn inline_baseline(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>
                     - pb)
                     .max(0.0);
                 let line_h = step_line_height(em * s.line_height, s.line_height_step);
-                let half_leading = (line_h - (m.ascent_px(em) + m.descent_px(em))) / 2.0;
+                let ascent = m.ascent_px_with_families(em, &s.font_family);
+                let descent = m.descent_px_with_families(em, &s.font_family);
+                let half_leading = (line_h - (ascent + descent)) / 2.0;
                 return Some(
                     s.border_top_width
                         + pt
                         + ((inner_h - line_h) / 2.0).max(0.0)
                         + half_leading
-                        + m.ascent_px(em),
+                        + ascent,
                 );
             }
             None

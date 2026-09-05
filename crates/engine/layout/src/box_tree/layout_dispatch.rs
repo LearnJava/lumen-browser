@@ -1542,7 +1542,9 @@ fn lay_out_inner(
                     if child_is_replaced_media
                         && matches!(child.style.vertical_align, VerticalAlign::Baseline)
                     {
-                        child_y += measurer.map_or(0.0, |m| m.descent_px(b.style.font_size));
+                        child_y += measurer.map_or(0.0, |m| {
+                            m.descent_px_with_families(b.style.font_size, &b.style.font_family)
+                        });
                     }
                 }
                 // CSS 2.1 §8.3.1: parent↔last-child bottom margin collapse. When this
@@ -1663,8 +1665,12 @@ fn lay_out_inner(
             // в Edge, и TEST-02/04/21/56 (ряды пустых inline-block) уходят в FAIL
             // на 0.68 % при пороге 0.5 %. Измерено A/B, IFC-1. Строки с текстом
             // это не задевает: у прогона своё half-leading, и оно всегда больше.
-            let strut_descent = measurer.map_or(0.0, |m| m.descent_px(b.style.font_size));
-            let strut_ascent = measurer.map_or(0.0, |m| m.ascent_px(b.style.font_size));
+            let strut_descent = measurer.map_or(0.0, |m| {
+                m.descent_px_with_families(b.style.font_size, &b.style.font_family)
+            });
+            let strut_ascent = measurer.map_or(0.0, |m| {
+                m.ascent_px_with_families(b.style.font_size, &b.style.font_family)
+            });
             // Half x-height of the row's font: locates `vertical-align: middle`
             // relative to the baseline (CSS 2.1 §10.8.1).
             let x_half = measurer.map_or(0.0, |m| m.x_height_px(b.style.font_size)) / 2.0;

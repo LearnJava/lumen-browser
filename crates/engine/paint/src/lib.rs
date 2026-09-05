@@ -503,6 +503,11 @@ struct OwnedFontMetrics {
     wdth_axis: Option<(f32, f32)>,
     /// Variable-font data for HVAR advance adjustment. `None` for static fonts.
     var_data: Option<OwnedVariableFont>,
+    /// Ascent в font units. Источник — `OS/2.sTypoAscender` (предпочтительно,
+    /// как в [`FontMeasurer::new`]), иначе `hhea.ascent`.
+    ascent_units: u16,
+    /// Descent в font units, тем же приоритетом источника, что и `ascent_units`.
+    descent_units: u16,
 }
 
 impl OwnedFontMetrics {
@@ -511,6 +516,7 @@ impl OwnedFontMetrics {
         let head = font.head()?;
         let maxp = font.maxp()?;
         let hmtx = font.hmtx()?;
+        let hhea = font.hhea()?;
         let cmap_data = font
             .table(b"cmap")
             .ok_or(FontError::TableNotFound(*b"cmap"))?
@@ -526,13 +532,37 @@ impl OwnedFontMetrics {
             axes: fvar.axes.clone(),
             hvar: font.hvar().ok(),
         });
+        // Тот же приоритет источника, что `FontMeasurer::new` (bundled-fallback):
+        // typo-метрики OS/2 предпочтительнее hhea, когда таблица есть.
+        let (ascent_units, descent_units) = match font.os2() {
+            Ok(os2) => (os2.typo_ascender.unsigned_abs(), os2.typo_descender.unsigned_abs()),
+            Err(_) => (hhea.ascent.unsigned_abs(), hhea.descent.unsigned_abs()),
+        };
         Ok(Self {
             cmap_data,
             advance_widths,
             units_per_em: head.units_per_em,
             wdth_axis,
             var_data,
+            ascent_units,
+            descent_units,
         })
+    }
+
+    /// Ascent в px — та же формула, что [`FontMeasurer::ascent_px`], чтобы
+    /// @font-face/системный face и bundled-fallback вели себя одинаково.
+    fn ascent_px(&self, font_size_px: f32) -> f32 {
+        let total = self.ascent_units as f32 + self.descent_units as f32;
+        if total > 0.0 {
+            (self.ascent_units as f32 / total) * font_size_px
+        } else {
+            font_size_px * 0.8
+        }
+    }
+
+    /// Descent в px — та же формула, что [`FontMeasurer::descent_px`].
+    fn descent_px(&self, font_size_px: f32) -> f32 {
+        self.descent_units as f32 * font_size_px / self.units_per_em as f32
     }
 
     /// Возвращает ширину символа в px. Если глиф не найден (glyph_id == 0),
@@ -726,6 +756,32 @@ fn face_metrics(
     OwnedFontMetrics::from_bytes(&bytes).ok()
 }
 
+/// Метрики выбранного "первичного" шрифта — либо ссылка на @font-face слот
+/// (живёт в `self.faces` у [`MultiFontMeasurer`]), либо разделяемый `Arc`
+/// системного набора ([`SystemFaceSet::metrics`]). Оборачивает разницу
+/// владения между двумя источниками [`MultiFontMeasurer::primary_metrics`],
+/// чтобы вызывающий код не заботился, откуда взялись метрики.
+enum PrimaryFontMetrics<'a> {
+    Owned(&'a OwnedFontMetrics),
+    Shared(Arc<OwnedFontMetrics>),
+}
+
+impl PrimaryFontMetrics<'_> {
+    fn ascent_px(&self, font_size_px: f32) -> f32 {
+        match self {
+            Self::Owned(m) => m.ascent_px(font_size_px),
+            Self::Shared(m) => m.ascent_px(font_size_px),
+        }
+    }
+
+    fn descent_px(&self, font_size_px: f32) -> f32 {
+        match self {
+            Self::Owned(m) => m.descent_px(font_size_px),
+            Self::Shared(m) => m.descent_px(font_size_px),
+        }
+    }
+}
+
 /// Один @font-face face-слот с опциональным `unicode-range` ограничением.
 ///
 /// CSS Fonts L4 §5.1: несколько @font-face с одним family name, но разными
@@ -851,6 +907,27 @@ impl MultiFontMeasurer {
         None
     }
 
+    /// Метрики первого резолвящегося шрифта из `families` — тот же приоритет,
+    /// что уже применяет [`Self::resolve_font_stretch`] (@font-face раньше
+    /// системного имени): ascent/descent берутся у ПЕРВИЧНОГО шрифта элемента
+    /// как единого целого, а не per-codepoint substitution, как у
+    /// [`Self::char_width_with_families`] — CSS line-height/baseline метрики
+    /// определяет выбранный шрифт целиком, unicode-range здесь ни при чём.
+    /// `None` — ни одна семья не резолвится, вызывающий код остаётся на
+    /// bundled-fallback (FONTLOAD-10, BUG-467).
+    fn primary_metrics(&self, families: &[String]) -> Option<PrimaryFontMetrics<'_>> {
+        for family in families {
+            let lower = family.to_ascii_lowercase();
+            if let Some(slot) = self.faces.get(&lower).and_then(|slots| slots.first()) {
+                return Some(PrimaryFontMetrics::Owned(&slot.metrics));
+            }
+            if let Some(m) = self.system_metrics(&lower) {
+                return Some(PrimaryFontMetrics::Shared(m));
+            }
+        }
+        None
+    }
+
     /// Insert a family entry with an explicit `wdth` axis range for testing.
     #[cfg(test)]
     fn insert_test_wdth_family(&mut self, family: &str, wdth_min: f32, wdth_max: f32) {
@@ -861,6 +938,8 @@ impl MultiFontMeasurer {
                 units_per_em: 1000,
                 wdth_axis: Some((wdth_min, wdth_max)),
                 var_data: None,
+                ascent_units: 0,
+                descent_units: 0,
             },
             unicode_ranges: Vec::new(),
         };
@@ -943,6 +1022,20 @@ impl TextMeasurer for MultiFontMeasurer {
 
     fn x_height_px(&self, font_size_px: f32) -> f32 {
         self.fallback.x_height_px(font_size_px)
+    }
+
+    fn descent_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
+        match self.primary_metrics(families) {
+            Some(m) => m.descent_px(font_size_px),
+            None => self.descent_px(font_size_px),
+        }
+    }
+
+    fn ascent_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
+        match self.primary_metrics(families) {
+            Some(m) => m.ascent_px(font_size_px),
+            None => self.ascent_px(font_size_px),
+        }
     }
 }
 
@@ -1231,6 +1324,90 @@ mod multi_font_tests {
         let w2 = m.char_width_with_families('X', 16.0, &["MYFONT".to_string()]);
         let w3 = m.char_width_with_families('X', 16.0, &["MyFont".to_string()]);
         assert!(w1 > 0.0 && w1 == w2 && w2 == w3, "lookup должен быть case-insensitive");
+    }
+
+    // ── ascent/descent_px_with_families (FONTLOAD-10, BUG-467) ──────────────
+
+    #[test]
+    fn ascent_descent_with_families_falls_back_to_inter_when_unregistered() {
+        let font = inter_font();
+        let m = MultiFontMeasurer::new(&font).unwrap();
+        let families = vec!["nonexistent".to_string()];
+        assert_eq!(m.ascent_px(16.0), m.ascent_px_with_families(16.0, &families));
+        assert_eq!(m.descent_px(16.0), m.descent_px_with_families(16.0, &families));
+    }
+
+    #[test]
+    fn ascent_descent_with_empty_families_uses_fallback() {
+        let font = inter_font();
+        let m = MultiFontMeasurer::new(&font).unwrap();
+        assert_eq!(m.ascent_px(16.0), m.ascent_px_with_families(16.0, &[]));
+        assert_eq!(m.descent_px(16.0), m.descent_px_with_families(16.0, &[]));
+    }
+
+    #[test]
+    fn ascent_descent_with_families_uses_registered_font_not_bundled_fallback() {
+        // JetBrains Mono has different hhea/OS2 metrics from bundled Inter —
+        // registering it must move ascent/descent away from the fallback's
+        // hardcoded values (FONTLOAD-9's bug report: before this slice,
+        // `MultiFontMeasurer::ascent_px`/`descent_px` always delegated to
+        // `self.fallback` regardless of which family was actually selected).
+        let mono_bytes = std::fs::read(MONO_PATH).expect("bundled JetBrains Mono должен читаться");
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family("registered-mono", mono_bytes);
+        let families = vec!["registered-mono".to_string()];
+        let inter_ascent = m.ascent_px(16.0);
+        let mono_ascent = m.ascent_px_with_families(16.0, &families);
+        assert_ne!(
+            inter_ascent, mono_ascent,
+            "ascent зарегистрированного @font-face должен отличаться от bundled fallback"
+        );
+        let inter_descent = m.descent_px(16.0);
+        let mono_descent = m.descent_px_with_families(16.0, &families);
+        assert_ne!(
+            inter_descent, mono_descent,
+            "descent зарегистрированного @font-face должен отличаться от bundled fallback"
+        );
+    }
+
+    #[test]
+    fn ascent_descent_with_families_picks_first_resolving_family() {
+        // CSS font stack fallback: первая семья без данных пропускается,
+        // используется первая, у которой они есть — тот же приоритет, что
+        // `resolve_font_stretch` уже применяет к `wdth`-оси.
+        let mono_bytes = std::fs::read(MONO_PATH).expect("bundled JetBrains Mono должен читаться");
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family("registered-mono", mono_bytes);
+        let direct = vec!["registered-mono".to_string()];
+        let with_missing_first = vec!["no-such-family".to_string(), "registered-mono".to_string()];
+        assert_eq!(
+            m.ascent_px_with_families(16.0, &direct),
+            m.ascent_px_with_families(16.0, &with_missing_first)
+        );
+        assert_eq!(
+            m.descent_px_with_families(16.0, &direct),
+            m.descent_px_with_families(16.0, &with_missing_first)
+        );
+    }
+
+    #[test]
+    fn ascent_descent_with_families_uses_system_face_not_inter() {
+        // BUG-128 симметрия: системное имя (не @font-face) тоже обязано
+        // мериться своим face-ом, а не bundled Inter-ом.
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        let families = vec![NAMED_FAMILY.to_string()];
+        let inter_ascent = m.ascent_px_with_families(16.0, &families);
+        m.set_system_faces(Arc::new(SystemFaceSet::from_provider(Arc::new(
+            MonoOnlyProvider::new(),
+        ))));
+        let mono_ascent = m.ascent_px_with_families(16.0, &families);
+        assert_ne!(
+            inter_ascent, mono_ascent,
+            "системное имя должно мериться своим face-ом: {inter_ascent} vs {mono_ascent}"
+        );
     }
 
     // ── resolve_font_stretch (CSS Fonts L4 §5.2) ────────────────────────────
