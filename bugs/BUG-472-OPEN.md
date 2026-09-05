@@ -161,7 +161,9 @@ files: `inheritance.html` (4 — initial-value/does-not-inherit checks for
 `-x`/`-y`). The logical `overscroll-behavior-block`/`-inline` half of these
 same two files is a *different*, deeper gap — the properties aren't
 recognized by the parser at all, not merely missing from this map — filed
-separately as [BUG-516](BUG-516-OPEN.md). `.ini` under
+separately as [BUG-516](BUG-516-FIXED.md) (fixed 2026-09-05 — the remaining
+`contain`/`none`/`chain`/does-not-inherit failures in both files, shared by
+physical and logical forms alike, are this bug, not BUG-516). `.ini` under
 `tests/wpt/metadata/css/css-overscroll-behavior/` for both files.
 
 ## Срез 22 (`css/css-color-adjust`, 2026-08-03) — `color-scheme`/`color-adjust`/`forced-color-adjust`/`print-color-adjust` all parse and store but never reach the map

@@ -1,6 +1,6 @@
 # BUG-516: `overscroll-behavior-block`/`-inline` logical longhands not recognized by the parser
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-05
 **Дата:** 2026-08-03
 **Компонент:** css-parser + layout (`grep -n "overscroll-behavior-block\|
 overscroll-behavior-inline" crates/engine/css-parser/src/lib.rs
@@ -66,3 +66,40 @@ two logical names once they resolve correctly.
 
 Committed `.ini` under `tests/wpt/metadata/css/css-overscroll-behavior/` for
 all 3 files, `expected: FAIL` per subtest.
+
+## Фикс (2026-09-05)
+
+Added `overscroll-behavior-block`/`-inline` to `SUPPORTED_PROPERTIES`
+(`css-parser/src/lib.rs`), two new `ComputedStyle` fields (default `Auto`,
+same "field != default means explicitly set" heuristic as every other
+logical property in the file), two `apply_declaration` branches
+(`style/apply/motion.rs`, next to the existing `-x`/`-y` branches — same
+`parse_overscroll_behavior`, no new value grammar), and a new
+`resolve_overscroll_behavior_logical_properties` (`style/logical.rs`),
+called from `cascade.rs` right after `resolve_overflow_logical_properties` —
+same shape and same writing-mode axis-swap as that BUG-505 function
+(`-block` → `_y` in `horizontal-tb`, → `_x` in every vertical mode).
+`selector_query.rs`'s computed-style map gained the two logical keys,
+reading back the resolved physical value with the same axis swap.
+
+**Verified live** (`run_smoke.py`, dev-release build):
+`overscroll-behavior-logical.html` 3/3 (was 0/3); `inheritance.html`
+`overscroll-behavior-block`/`-inline` "has initial value auto" now pass;
+`parsing/overscroll-behavior-computed.html` `overscroll-behavior-block`/
+`-inline` value `'auto'` now pass. All three `.ini` updated to drop the
+now-passing expectations.
+
+**Correction to the original filing's attribution**: the live rerun showed
+the *physical* `-x`/`-y` "value 'auto'" subtests in
+`overscroll-behavior-computed.html` and "has initial value auto" in
+`inheritance.html` were **also** failing before this fix — not just the
+logical half as originally split. They now pass too (unaffected by this
+diff — likely a pre-existing `.ini` staleness, not caused by this bug or
+its fix). The remaining failures in both files (`contain`/`none`/`chain`
+values, "does not inherit") fail identically for physical and logical
+forms alike — that shared remainder is [BUG-472](BUG-472-OPEN.md)
+(`getComputedStyle` resolved-value gaps, ДОРАБОТКА → CSSOM-3), not
+BUG-516; both `.ini` files were re-attributed accordingly.
+`parsing/overscroll-behavior-{valid,invalid}.html` were not touched — their
+`-block`/`-inline` subtests are governed by [BUG-484](BUG-484-OPEN.md), as
+the original filing already noted, and are unaffected by this fix.
