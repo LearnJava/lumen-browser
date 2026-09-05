@@ -415,6 +415,7 @@ pub(crate) fn fetch_frame_subresources(
         media_ctx,
         &mut std::collections::HashSet::new(),
         0,
+        crate::stylesheets::document_encoding(doc),
     );
     let (linked, links) = load_linked_stylesheets(doc, base, sink, cookie_jar.clone(), media_ctx);
     css.push_str(&linked);

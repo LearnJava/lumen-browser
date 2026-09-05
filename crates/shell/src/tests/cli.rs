@@ -70,7 +70,7 @@ fn collect_link_hrefs_multiple() {
     );
     let mut hrefs = Vec::new();
     collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
-    let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h)| h.as_str()).collect();
+    let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h, _)| h.as_str()).collect();
     assert_eq!(only_hrefs, vec!["a.css", "b.css"]);
 }
 

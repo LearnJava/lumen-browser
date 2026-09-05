@@ -1578,17 +1578,25 @@ fn feed_preload_and_emit(
                     let Ok(parsed) = Url::parse(&resolved) else {
                         return;
                     };
-                    let bytes = crate::prefetch::PREFETCH_CACHE.fetch(generation, &resolved, || {
+                    let resource = crate::prefetch::PREFETCH_CACHE.fetch(generation, &resolved, || {
                         let client = base.http_client_for_subresource(sink, cookie_jar);
                         client
-                            .fetch_subresource(&parsed, dest)
+                            .fetch_subresource_with_content_type(&parsed, dest)
+                            .map(|(body, content_type)| crate::prefetch::CachedResource {
+                                body,
+                                content_type,
+                            })
                             .map_err(|e| e.to_string())
                     });
                     if is_css
-                        && let Ok(bytes) = bytes
+                        && let Ok(resource) = resource
                     {
+                        // Progressive preview frame only — the authoritative
+                        // parse (BUG-509 fallback-encoding algorithm) happens
+                        // later in `stylesheets::fetch_stylesheet_text` once
+                        // the full document (and its own charset) is known.
                         let sheet =
-                            lumen_css_parser::parse(&String::from_utf8_lossy(&bytes[..]));
+                            lumen_css_parser::parse(&String::from_utf8_lossy(&resource.body[..]));
                         let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet), generation));
                     }
                 });

@@ -212,6 +212,83 @@ fn find_attr_value(tag_body: &[u8], name: &[u8]) -> Option<String> {
     None
 }
 
+/// CSS Syntax Level 3 "determine the fallback encoding" for an **external**
+/// stylesheet's raw bytes (spec:
+/// <https://drafts.csswg.org/css-syntax-3/#determine-the-fallback-encoding>).
+///
+/// Precedence, highest first: BOM → HTTP `Content-Type` charset → a literal
+/// `@charset "…";` at the very start of the byte stream (ASCII-only prescan,
+/// not a full parse — the stylesheet's real encoding isn't known yet, so this
+/// step cannot decode anything) → the linking `<link charset=…>` attribute
+/// (legacy, HTML LS) → the referring document's (or importing stylesheet's)
+/// own encoding → UTF-8 default.
+///
+/// A tier that names a label this crate does not decode (`Encoding::from_label`
+/// returns `None` — e.g. `windows-1250`, out of scope per
+/// `docs/plan/tech-stack.md` §5) is skipped, not treated as a hard error: a
+/// spec browser would use that encoding, but for the encodings this crate
+/// does not carry tables for, falling through to the next tier is the closest
+/// approximation available, and matches how the algorithm already treats an
+/// unrecognized/`bogus` label.
+#[must_use]
+pub fn detect_stylesheet_encoding(
+    bytes: &[u8],
+    http_content_type: Option<&str>,
+    link_charset_attr: Option<&str>,
+    referring_encoding: Option<Encoding>,
+) -> Encoding {
+    if let Some(enc) = sniff_bom(bytes) {
+        return enc;
+    }
+    if let Some(hint) = http_content_type
+        && let Some(enc) = parse_content_type(hint)
+    {
+        return enc;
+    }
+    if let Some(enc) = sniff_leading_at_charset(bytes) {
+        return enc;
+    }
+    if let Some(label) = link_charset_attr
+        && let Some(enc) = Encoding::from_label(label)
+    {
+        return enc;
+    }
+    if let Some(enc) = referring_encoding {
+        return enc;
+    }
+    Encoding::Utf8
+}
+
+/// Prescans for a literal `@charset "<label>";` at byte offset 0 — the CSS
+/// Syntax grammar for this tier is an exact ASCII byte match, not a tokenizer
+/// run, precisely because the stylesheet's real encoding isn't known yet (the
+/// bytes making up the label must be self-describing under any encoding this
+/// tier could plausibly name).
+///
+/// Returns `None` (fall through to the next tier) when the prefix doesn't
+/// match byte-for-byte, when the label isn't terminated by `";` immediately
+/// after the closing quote, or when the label isn't one `Encoding::from_label`
+/// recognizes.
+fn sniff_leading_at_charset(bytes: &[u8]) -> Option<Encoding> {
+    const PREFIX: &[u8] = b"@charset \"";
+    let rest = bytes.strip_prefix(PREFIX)?;
+    let end = rest.iter().position(|&b| b == b'"')?;
+    if rest.get(end + 1) != Some(&b';') {
+        return None;
+    }
+    let label = std::str::from_utf8(&rest[..end]).ok()?;
+    let enc = Encoding::from_label(label)?;
+    // A stylesheet whose true encoding is UTF-16 cannot survive this literal
+    // ASCII prescan intact (the interspersed 0x00 bytes break the byte-for-
+    // byte match on `@charset "`), so an @charset that DOES parse and names
+    // utf-16/utf-16be is necessarily lying about the file's real encoding —
+    // the spec forces UTF-8 in that case rather than trusting the label.
+    if matches!(enc, Encoding::Utf16Le | Encoding::Utf16Be) {
+        return Some(Encoding::Utf8);
+    }
+    Some(enc)
+}
+
 /// Парсит значение HTTP-заголовка Content-Type, ищет `charset=value`.
 fn parse_content_type(value: &str) -> Option<Encoding> {
     let lower = value.to_ascii_lowercase();
@@ -546,5 +623,140 @@ mod tests {
     fn label_utf32be_distinct() {
         assert_eq!(Encoding::from_label("utf-32be"), Some(Encoding::Utf32Be));
         assert_eq!(Encoding::from_label("UTF-32BE"), Some(Encoding::Utf32Be));
+    }
+
+    // ── determine the fallback encoding (BUG-509, CSS Syntax L3) ──
+
+    #[test]
+    fn stylesheet_bom_wins_over_everything() {
+        // wpt: page-windows-1252-http-windows-1251-css-utf8-bom.html — UTF-8
+        // BOM must win even though HTTP declares windows-1251 and a supported
+        // referring encoding is present.
+        let bytes = b"\xEF\xBB\xBF#\xC8 { visibility:hidden }";
+        assert_eq!(
+            detect_stylesheet_encoding(
+                bytes,
+                Some("text/css; charset=windows-1251"),
+                None,
+                Some(Encoding::Windows1251),
+            ),
+            Encoding::Utf8
+        );
+    }
+
+    #[test]
+    fn stylesheet_http_content_type_wins_over_at_charset() {
+        let bytes = b"@charset \"koi8-r\";\nbody{}";
+        assert_eq!(
+            detect_stylesheet_encoding(bytes, Some("text/css; charset=windows-1251"), None, None),
+            Encoding::Windows1251
+        );
+    }
+
+    #[test]
+    fn stylesheet_at_charset_wins_over_link_attribute() {
+        // wpt: page-windows-1251-css-at-charset-1250-charset-attribute-windows-1253.html
+        // (windows-1250/1253 aren't in this crate's table — from_label
+        // returns None for both — so this exercises the same precedence with
+        // a supported label instead: @charset must still beat the attribute.)
+        let bytes = b"@charset \"koi8-r\";\n#foo{}";
+        assert_eq!(
+            detect_stylesheet_encoding(bytes, None, Some("windows-1251"), None),
+            Encoding::Koi8R
+        );
+    }
+
+    #[test]
+    fn stylesheet_bogus_at_charset_falls_through_to_link_attribute() {
+        // wpt: page-windows-1251-css-at-charset-bogus-charset-attribute-windows-1250.html
+        let bytes = b"@charset \"bogus\";\n#foo{}";
+        assert_eq!(
+            detect_stylesheet_encoding(bytes, None, Some("koi8-r"), None),
+            Encoding::Koi8R
+        );
+    }
+
+    #[test]
+    fn stylesheet_unrecognized_link_attribute_falls_through_to_referring_encoding() {
+        // wpt: page-windows-1251-charset-attribute-bogus.html
+        let bytes = b"#\xC8{ visibility:hidden }";
+        assert_eq!(
+            detect_stylesheet_encoding(bytes, None, Some("bogus"), Some(Encoding::Windows1251)),
+            Encoding::Windows1251
+        );
+    }
+
+    #[test]
+    fn stylesheet_no_hint_at_all_falls_through_to_referring_encoding() {
+        // wpt: page-windows-1251-css-no-decl.html
+        let bytes = b"#\xC8{ visibility:hidden }";
+        assert_eq!(
+            detect_stylesheet_encoding(bytes, None, None, Some(Encoding::Windows1251)),
+            Encoding::Windows1251
+        );
+    }
+
+    #[test]
+    fn stylesheet_no_hint_and_no_referring_encoding_defaults_to_utf8() {
+        let bytes = b"body{color:red}";
+        assert_eq!(detect_stylesheet_encoding(bytes, None, None, None), Encoding::Utf8);
+    }
+
+    #[test]
+    fn stylesheet_invalid_http_content_type_falls_through() {
+        // wpt: page-windows-1251-css-http-bogus.html
+        let bytes = b"#\xC8{ visibility:hidden }";
+        assert_eq!(
+            detect_stylesheet_encoding(
+                bytes,
+                Some("text/css; charset=bogus"),
+                None,
+                Some(Encoding::Windows1251),
+            ),
+            Encoding::Windows1251
+        );
+    }
+
+    #[test]
+    fn sniff_leading_at_charset_matches_exact_grammar() {
+        assert_eq!(
+            sniff_leading_at_charset(b"@charset \"windows-1251\";body{}"),
+            Some(Encoding::Windows1251)
+        );
+        // No leading match at all.
+        assert_eq!(sniff_leading_at_charset(b"body{ }"), None);
+        // Unrecognized label — falls through (not Utf8-default, None means
+        // "this tier has nothing to say").
+        assert_eq!(sniff_leading_at_charset(b"@charset \"bogus\";body{}"), None);
+        // Whitespace between the closing quote and `;` breaks the exact
+        // byte-grammar match required by the spec.
+        assert_eq!(sniff_leading_at_charset(b"@charset \"windows-1251\" ;body{}"), None);
+    }
+
+    #[test]
+    fn sniff_leading_at_charset_utf16_label_forces_utf8() {
+        // wpt: page-windows-1251-css-at-charset-utf16.html /
+        // page-windows-1251-css-at-charset-utf16be.html — a stylesheet that
+        // survives the ASCII prescan while claiming utf-16/utf-16be is lying
+        // about its real encoding; the spec forces UTF-8 rather than
+        // literally re-decoding the (already-ASCII-read) bytes as UTF-16.
+        assert_eq!(
+            sniff_leading_at_charset(b"@charset \"utf-16\";\n#\xC8 { visibility:hidden }"),
+            Some(Encoding::Utf8)
+        );
+        assert_eq!(
+            sniff_leading_at_charset(b"@charset \"utf-16be\";\n#\xC8 { visibility:hidden }"),
+            Some(Encoding::Utf8)
+        );
+    }
+
+    #[test]
+    fn sniff_leading_at_charset_does_not_match_utf16_encoded_bytes() {
+        // wpt: page-windows-1251-css-at-charset-windows-1250-in-utf16.html —
+        // "@charset "windows-1250";" written as actual UTF-16LE code units
+        // (0x00 interspersed) cannot byte-match the ASCII literal prefix, so
+        // this tier must report no match at all (fall through further).
+        let utf16_prefix: &[u8] = b"@\x00c\x00h\x00a\x00r\x00s\x00e\x00t\x00";
+        assert_eq!(sniff_leading_at_charset(utf16_prefix), None);
     }
 }

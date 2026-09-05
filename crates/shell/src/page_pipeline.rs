@@ -378,6 +378,7 @@ fn build_page_cascade(
             &link_media_ctx,
             &mut std::collections::HashSet::new(),
             0,
+            crate::stylesheets::document_encoding(doc),
         );
         // BUG-743: всё, что не пришло из инлайновых <style>, откладывается
         // отдельно — так поздний динамический <style> пересобирает каскад без

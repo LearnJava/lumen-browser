@@ -57,6 +57,19 @@ pub(crate) fn print_media_context(viewport: Size, dark_mode: bool) -> lumen_css_
     }
 }
 
+/// `doc.character_set()` as an [`lumen_encoding::Encoding`] — the bottom tier
+/// of CSS Syntax L3 "determine the fallback encoding" (BUG-509): an external
+/// stylesheet whose own encoding can't be determined via BOM/HTTP/`@charset`/
+/// `<link charset>` falls back to the encoding of the document that linked
+/// it. `Document::character_set` always holds a value (defaults to `"UTF-8"`
+/// — see `Document::new`), so this only reaches the literal `Utf8` default
+/// for a label this crate doesn't carry a table for, which cannot happen
+/// today since the document's own encoding was itself set from
+/// [`lumen_encoding::detect`]'s output.
+pub(crate) fn document_encoding(doc: &Document) -> lumen_encoding::Encoding {
+    lumen_encoding::Encoding::from_label(doc.character_set()).unwrap_or(lumen_encoding::Encoding::Utf8)
+}
+
 /// Загрузить все `<link rel=stylesheet>` документа и склеить их текст.
 ///
 /// Второй элемент результата — исход по каждому элементу (`узел`, `получен
@@ -66,14 +79,22 @@ pub(crate) fn print_media_context(viewport: Size, dark_mode: bool) -> lumen_css_
 pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>, media_ctx: &lumen_css_parser::MediaContext) -> (String, Vec<(NodeId, bool)>) {
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs, media_ctx);
+    let doc_encoding = document_encoding(doc);
 
     // Загружаем все таблицы параллельно (сеть — главный тормоз), затем
     // конкатенируем строго в порядке объявления, чтобы каскад не нарушился.
     // Каждый лист резолвит собственные `@import` относительно СВОЕГО URL
     // (`sheet_base`), чтобы вложенные импорты (`<link href="/css/a.css">` →
     // `@import "b.css"` = `/css/b.css`) разрешались корректно.
-    let parts = parallel_map(&hrefs, |_, (_, href)| {
-        let (text, sheet_base) = fetch_stylesheet_text(href, base, sink, cookie_jar.clone())?;
+    let parts = parallel_map(&hrefs, |_, (_, href, charset_attr)| {
+        let (text, sheet_base, encoding) = fetch_stylesheet_text(
+            href,
+            base,
+            sink,
+            cookie_jar.clone(),
+            charset_attr.as_deref(),
+            doc_encoding,
+        )?;
         Some(inline_css_imports(
             &text,
             &sheet_base,
@@ -82,12 +103,13 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
             media_ctx,
             &mut std::collections::HashSet::new(),
             0,
+            encoding,
         ))
     });
 
     let mut css = String::new();
     let mut outcomes = Vec::with_capacity(parts.len());
-    for ((node, _), part) in hrefs.iter().zip(parts) {
+    for ((node, _, _), part) in hrefs.iter().zip(parts) {
         outcomes.push((*node, part.is_some()));
         if let Some(part) = part {
             css.push_str(&part);
@@ -101,21 +123,42 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
 ///
 /// Обрабатывает локальные пути (`file://`/относительные — читаются с диска)
 /// и `http(s)` (через prefetch-кэш, как `<link rel=stylesheet>`). Возвращает
-/// текст листа **и** его разрешённый [`ResourceBase`], чтобы вложенные
-/// `@import` резолвились относительно собственного URL листа, а не документа.
-/// При любой ошибке resolve/чтения/сети — `None` (залогировано), поэтому один
-/// битый `@import`/`<link>` не валит весь рендер.
+/// текст листа, его разрешённый [`ResourceBase`] (чтобы вложенные `@import`
+/// резолвились относительно собственного URL листа, а не документа) и
+/// кодировку, в которой лист был декодирован — она же становится
+/// `referring_encoding` для его собственных `@import` (BUG-509). При любой
+/// ошибке resolve/чтения/сети — `None` (залогировано), поэтому один битый
+/// `@import`/`<link>` не валит весь рендер.
+///
+/// `link_charset_attr`/`referring_encoding` — два нижних яруса CSS Syntax L3
+/// «determine the fallback encoding»
+/// (<https://drafts.csswg.org/css-syntax-3/#determine-the-fallback-encoding>):
+/// значение атрибута `<link charset=…>` (`None` для `@import`, у него такого
+/// атрибута нет) и кодировка ссылающегося документа/листа. Полный порядок
+/// приоритетов реализует [`lumen_encoding::detect_stylesheet_encoding`].
 fn fetch_stylesheet_text(
     href: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
-) -> Option<(String, ResourceBase)> {
+    link_charset_attr: Option<&str>,
+    referring_encoding: lumen_encoding::Encoding,
+) -> Option<(String, ResourceBase, lumen_encoding::Encoding)> {
     match base.resolve(href) {
-        ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
-            Ok(content) => {
+        ResolvedResource::File(path) => match std::fs::read(&path) {
+            Ok(bytes) => {
                 eprintln!("Загружен CSS: {}", path.display());
-                Some((content, ResourceBase::File(path)))
+                let encoding = lumen_encoding::detect_stylesheet_encoding(
+                    &bytes,
+                    None,
+                    link_charset_attr,
+                    Some(referring_encoding),
+                );
+                Some((
+                    lumen_encoding::decode(encoding, &bytes),
+                    ResourceBase::File(path),
+                    encoding,
+                ))
             }
             Err(e) => {
                 eprintln!("Пропуск CSS {}: {e}", path.display());
@@ -144,18 +187,29 @@ fn fetch_stylesheet_text(
             // concatenation here reuses identical bytes without a second fetch.
             // PERF-1: one span per stylesheet fetch.
             let mut fetch_span = lumen_core::trace::span(format!("css {url}"), "net");
-            let bytes = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
+            let resource = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
                 let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
                 client
-                    .fetch_subresource(&sub_url, RequestDestination::Style)
+                    .fetch_subresource_with_content_type(&sub_url, RequestDestination::Style)
+                    .map(|(body, content_type)| crate::prefetch::CachedResource {
+                        body,
+                        content_type,
+                    })
                     .map_err(|e| e.to_string())
             });
-            match bytes {
-                Ok(bytes) => {
-                    fetch_span.set_bytes(bytes.len());
+            match resource {
+                Ok(resource) => {
+                    fetch_span.set_bytes(resource.body.len());
+                    let encoding = lumen_encoding::detect_stylesheet_encoding(
+                        &resource.body,
+                        resource.content_type.as_deref(),
+                        link_charset_attr,
+                        Some(referring_encoding),
+                    );
                     Some((
-                        String::from_utf8_lossy(&bytes[..]).into_owned(),
+                        lumen_encoding::decode(encoding, &resource.body),
                         ResourceBase::Url(url),
+                        encoding,
                     ))
                 }
                 Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); None }
@@ -182,6 +236,7 @@ const MAX_CSS_IMPORT_DEPTH: u32 = 16;
 /// Директивы `@import …;` остаются в исходном тексте — парсер каскада
 /// собирает их в `Stylesheet::imports` и игнорирует (повторной загрузки нет),
 /// так что двойного применения не происходит.
+#[allow(clippy::too_many_arguments)] // recursive helper threading fetch context — see BUG-509
 pub(crate) fn inline_css_imports(
     css_text: &str,
     base: &ResourceBase,
@@ -190,6 +245,7 @@ pub(crate) fn inline_css_imports(
     media_ctx: &lumen_css_parser::MediaContext,
     seen: &mut std::collections::HashSet<String>,
     depth: u32,
+    referring_encoding: lumen_encoding::Encoding,
 ) -> String {
     // Быстрый путь: нет токена `@import` вовсе → лишний парс не нужен
     // (подавляющее большинство листов). Ложные срабатывания (например
@@ -218,9 +274,14 @@ pub(crate) fn inline_css_imports(
         if !seen.insert(key) {
             continue;
         }
-        let Some((text, imp_base)) =
-            fetch_stylesheet_text(&imp.url, base, sink, cookie_jar.clone())
-        else {
+        let Some((text, imp_base, imp_encoding)) = fetch_stylesheet_text(
+            &imp.url,
+            base,
+            sink,
+            cookie_jar.clone(),
+            None, // `@import` has no `<link charset>`-equivalent attribute
+            referring_encoding,
+        ) else {
             continue;
         };
         let resolved = inline_css_imports(
@@ -231,6 +292,7 @@ pub(crate) fn inline_css_imports(
             media_ctx,
             seen,
             depth + 1,
+            imp_encoding,
         );
         prefix.push_str(&resolved);
         if !prefix.ends_with('\n') {
@@ -273,7 +335,7 @@ pub(crate) use lumen_css_parser::StylesheetNodeEntry;
 /// [`build_stylesheet_node_registry`].
 enum StylesheetOwner {
     Style(NodeId),
-    Link(NodeId, String),
+    Link(NodeId, String, Option<String>),
 }
 
 /// Строит [`StylesheetNodeEntry`] по одному на `<style>`/`<link
@@ -297,6 +359,7 @@ pub(crate) fn build_stylesheet_node_registry(
 ) -> Vec<StylesheetNodeEntry> {
     let mut owners = Vec::new();
     collect_stylesheet_owners(doc, doc.root(), &mut owners);
+    let doc_encoding = document_encoding(doc);
 
     let mut out = Vec::with_capacity(owners.len());
     for owner in owners {
@@ -309,10 +372,15 @@ pub(crate) fn build_stylesheet_node_registry(
                     disabled: false,
                 });
             }
-            StylesheetOwner::Link(id, href) => {
-                if let Some((text, _)) =
-                    fetch_stylesheet_text(&href, base, sink, cookie_jar.clone())
-                {
+            StylesheetOwner::Link(id, href, charset_attr) => {
+                if let Some((text, _, _)) = fetch_stylesheet_text(
+                    &href,
+                    base,
+                    sink,
+                    cookie_jar.clone(),
+                    charset_attr.as_deref(),
+                    doc_encoding,
+                ) {
                     out.push(StylesheetNodeEntry {
                         node: id.index() as u32,
                         sheet: Arc::new(lumen_css_parser::parse(&text)),
@@ -350,7 +418,13 @@ fn collect_stylesheet_owners(doc: &Document, id: NodeId, out: &mut Vec<Styleshee
             if rel.split_ascii_whitespace().any(|r| r.eq_ignore_ascii_case("stylesheet"))
                 && !href.is_empty()
             {
-                out.push(StylesheetOwner::Link(id, href.to_owned()));
+                // BUG-509: legacy `<link charset=…>` — one tier of CSS
+                // Syntax L3 "determine the fallback encoding".
+                let charset = attrs
+                    .iter()
+                    .find(|a| a.name.local == "charset")
+                    .map(|a| a.value.clone());
+                out.push(StylesheetOwner::Link(id, href.to_owned(), charset));
             }
             return;
         }
@@ -372,13 +446,15 @@ fn style_element_text(doc: &Document, id: NodeId) -> String {
     out
 }
 
-/// Собрать `(узел, href)` каждого `<link rel=stylesheet>`, который попадёт в
-/// каскад.
+/// Собрать `(узел, href, charset-атрибут)` каждого `<link rel=stylesheet>`,
+/// который попадёт в каскад.
 ///
 /// Узел нужен BUG-804: по нему [`load_linked_stylesheets`] потом сообщает
 /// JS-стороне исход загрузки, чтобы элемент выстрелил `load`/`error`. Раньше
 /// собирались одни адреса, и связи «этот лист — этот элемент» не существовало.
-pub(crate) fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<(NodeId, String)>, media_ctx: &lumen_css_parser::MediaContext) {
+/// `charset` — легаси-атрибут `<link>` (HTML LS), один из ярусов CSS Syntax L3
+/// «determine the fallback encoding» (BUG-509).
+pub(crate) fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<(NodeId, String, Option<String>)>, media_ctx: &lumen_css_parser::MediaContext) {
     let node = doc.get(id);
     if let NodeData::Element { name, attrs } = &node.data
         && name.local == "link"
@@ -405,7 +481,11 @@ pub(crate) fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<(Node
             && !href.is_empty()
             && link_media_matches(media, media_ctx)
         {
-            out.push((id, href.to_owned()));
+            let charset = attrs
+                .iter()
+                .find(|a| a.name.local == "charset")
+                .map(|a| a.value.clone());
+            out.push((id, href.to_owned(), charset));
         }
         return;
     }
