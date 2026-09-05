@@ -267,6 +267,29 @@ pub trait TextMeasurer {
     fn x_height_px(&self, font_size_px: f32) -> f32 {
         font_size_px * 0.5
     }
+
+    /// Line-gap шрифта в пикселях при размере `font_size_px` — рекомендуемый
+    /// межстрочный зазор поверх content area (ascent + descent), источник —
+    /// `OS/2.sTypoLineGap`/`hhea.lineGap` (FONTLOAD-13, BUG-467).
+    ///
+    /// Пока не участвует в вычислении `line-height: normal` (движок использует
+    /// фиксированный множитель `1.2`, см. комментарий у `BoxKind::InlineBlockRow`
+    /// в `layout_dispatch.rs` — переход на реальные метрики поднимает строки из
+    /// одних atomic inline на pixel-diff, зафиксированный IFC-1) — это только
+    /// accessor, предпосылка для `line-gap-override` (CSS Fonts L4 §14.3).
+    /// Реализации без доступа к метрикам возвращают `0.0` (большинство шрифтов
+    /// не декларируют line-gap).
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        let _ = font_size_px;
+        0.0
+    }
+
+    /// [`Self::line_gap_px`] с учётом CSS `font-family` каскада — см.
+    /// [`Self::descent_px_with_families`].
+    fn line_gap_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
+        let _ = families;
+        self.line_gap_px(font_size_px)
+    }
 }
 
 // ─── Clickable elements iterator (for P3 click-hint overlay, §12.14 task 7B.2) ──
