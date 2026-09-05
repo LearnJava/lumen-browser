@@ -1359,10 +1359,12 @@ impl Lumen {
                             .as_deref()
                             .map(lumen_font::parse_unicode_ranges)
                             .unwrap_or_default();
-                        // CSS Fonts L4 §14 (FONTLOAD-11, BUG-467): ascent/descent-override.
+                        // CSS Fonts L4 §14 (FONTLOAD-11/12, BUG-467): ascent/descent-override, size-adjust.
                         let ascent_override = pf.ascent_override_str.as_deref()
                             .and_then(lumen_font::parse_metric_override_percent);
                         let descent_override = pf.descent_override_str.as_deref()
+                            .and_then(lumen_font::parse_metric_override_percent);
+                        let size_adjust = pf.size_adjust_str.as_deref()
                             .and_then(lumen_font::parse_metric_override_percent);
                         let _ = proxy.send_event(LoadEvent::FontLoaded {
                             family: pf.family,
@@ -1371,6 +1373,7 @@ impl Lumen {
                             unicode_range,
                             ascent_override,
                             descent_override,
+                            size_adjust,
                             bytes,
                         });
                     });
@@ -1672,6 +1675,9 @@ pub(crate) enum LoadEvent {
         ascent_override: Option<f32>,
         /// `descent-override` дескриптор, та же семантика.
         descent_override: Option<f32>,
+        /// `size-adjust` дескриптор (CSS Fonts L4 §14.4, FONTLOAD-12), та же
+        /// точка разбора, `None` = `100%`.
+        size_adjust: Option<f32>,
         bytes: Vec<u8>,
     },
     /// Все байты получены — для финального полного pipeline.
