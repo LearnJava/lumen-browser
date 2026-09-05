@@ -1322,6 +1322,11 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextOverflow::Clip => "clip",
         TextOverflow::Ellipsis => "ellipsis",
     }.into());
+    // CSS Text Size Adjustment L1 §2 (BUG-513): both spellings read the same
+    // underlying field, same convention as `-webkit-line-clamp`/`line-clamp`
+    // above. `none` never round-trips — its computed value is `100%`.
+    m.insert("text-size-adjust".into(), style.text_size_adjust.to_css());
+    m.insert("-webkit-text-size-adjust".into(), style.text_size_adjust.to_css());
     // CSS Overflow L4 §13.4 / compat `-webkit-line-clamp` (BUG-505): both
     // names read the same underlying field — the engine implements only the
     // reduced `none | <integer>` grammar, not the full `line-clamp`

@@ -49,7 +49,7 @@ use crate::style::{
     SvgPaint, SvgPaintOrder,
     TextAlign, TextAlignLast, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle,
     TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle, TextOrientation,
-    TextOverflow, TextShadow, TextTransform, TextUnderlinePosition, TextWrapMode, TextWrapStyle,
+    TextOverflow, TextShadow, TextSizeAdjust, TextTransform, TextUnderlinePosition, TextWrapMode, TextWrapStyle,
     TimingFunction, TouchAction, TransformFn, TransformStyle, UnicodeBidi, UserSelect,
     VerticalAlign, Visibility, WebkitBoxOrient, WhiteSpace, WhiteSpaceCollapse, WordBreak,
     WritingMode,
@@ -326,6 +326,12 @@ pub struct ComputedStyle {
     pub scroll_target_group: ScrollTargetGroup,
     /// CSS UI L4 §10.1 — text-overflow. Не наследуется.
     pub text_overflow: TextOverflow,
+    /// CSS Text Size Adjustment L1 §2 — `text-size-adjust` / legacy alias
+    /// `-webkit-text-size-adjust`. Наследуется. Initial `Auto`. BUG-513.
+    /// Phase 0: parse + store + interpolate — нет мобильного пайплайна
+    /// авто-инфляции текста, эффекта на рендер нет (тот же класс, что
+    /// `dynamic_range_limit`/BUG-508).
+    pub text_size_adjust: TextSizeAdjust,
     /// CSS Color L3 §3.2 — opacity (0.0..=1.0). Не наследуется. Работает
     /// как alpha всего слоя (включая фон, бордер, текст и потомков). В
     /// Phase 0 layout только хранит — paint пока не применяет alpha
@@ -1079,6 +1085,7 @@ impl ComputedStyle {
             scroll_marker_group: None,
             scroll_target_group: ScrollTargetGroup::None,
             text_overflow: TextOverflow::Clip,
+            text_size_adjust: TextSizeAdjust::default(),
             opacity: 1.0,
             outline_width: 3.0,
             outline_style: OutlineStyle::None,

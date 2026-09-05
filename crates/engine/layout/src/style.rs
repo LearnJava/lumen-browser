@@ -199,6 +199,9 @@ pub use values::color::{Color, ColorFloat, CssColor, SystemColor};
 // into an existing values:: group), since it's a standalone spec unrelated
 // to the color/box-model/typography groups above.
 pub use values::dynamic_range_limit::{DynamicRangeLimit, DynamicRangeLimitKeyword, DynamicRangeLimitMix};
+// BUG-513 — CSS Text Size Adjustment Module L1 `text-size-adjust`: own
+// module for the same reason as `dynamic_range_limit` above.
+pub use values::text_size_adjust::TextSizeAdjust;
 pub use values::box_model::{
     BorderCollapse, BorderStyle, BoxSizing, BreakValue, ClearSide, EmptyCells, FillRule,
     FloatSide, Isolation, MixBlendMode, OutlineColor, OutlineStyle, PaintOrderSlot, Position,

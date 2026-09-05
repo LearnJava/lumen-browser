@@ -10,6 +10,7 @@ pub mod length;
 pub mod misc;
 pub mod named_colors;
 pub mod scroll;
+pub mod text_size_adjust;
 pub mod timing;
 pub mod transform;
 pub mod typography;

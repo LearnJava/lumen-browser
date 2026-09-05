@@ -316,6 +316,11 @@ pub(in crate::style) fn apply_css_wide_keyword(
         "line-break" => {
             style.line_break = if inh { inherited.line_break } else { init.line_break };
         }
+        "text-size-adjust" | "-webkit-text-size-adjust" => {
+            // CSS Text Size Adjustment L1 §2: inherited. BUG-513.
+            style.text_size_adjust =
+                if inh { inherited.text_size_adjust } else { init.text_size_adjust };
+        }
 
         // ──────── Non-inherited properties ────────
         "resize" => {

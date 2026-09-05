@@ -70,6 +70,7 @@
     mod rule_index_regression;
     mod shadow_dom_selectors;
     mod state_fanout_tests;
+    mod text_size_adjust_tests;
 
     fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
         Color { r, g, b, a }
