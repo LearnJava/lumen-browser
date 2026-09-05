@@ -112,6 +112,15 @@ impl Os2 {
     /// Bit 9 — oblique. Появился в OS/2 v4 (2007); более старые face-ы могут
     /// маркировать наклонные начертания только через bit 0.
     pub const FS_OBLIQUE: u16 = 0x0200;
+    /// Bit 7 — `USE_TYPO_METRICS` (OS/2 v4+, 2007). Когда установлен,
+    /// `sTypoAscender`/`sTypoDescender`/`sTypoLineGap` — рекомендуемые
+    /// метрики межстрочного расстояния; когда нет, приложения традиционно
+    /// берут `usWinAscent`/`usWinDescent` (без отдельного line-gap) — тот же
+    /// выбор, что описывает OpenType spec recommendations раздел «Metrics»
+    /// (FONTLOAD-15, BUG-467). Старые (<v4) face-ы бит не выставляют, даже
+    /// если их дизайнер имел в виду typo-метрики — это только рекомендация,
+    /// не гарантия.
+    pub const FS_USE_TYPO_METRICS: u16 = 0x0080;
 
     /// Italic flag из `fsSelection`.
     pub fn is_italic(self) -> bool {
@@ -127,6 +136,13 @@ impl Os2 {
     /// используй `weight_class` напрямую; только как дополнительный сигнал.
     pub fn is_bold(self) -> bool {
         self.fs_selection & Self::FS_BOLD != 0
+    }
+
+    /// `USE_TYPO_METRICS` flag (см. [`Self::FS_USE_TYPO_METRICS`]) —
+    /// выбирает источник для line-spacing метрик `normal` line-height
+    /// (FONTLOAD-15, BUG-467).
+    pub fn use_typo_metrics(self) -> bool {
+        self.fs_selection & Self::FS_USE_TYPO_METRICS != 0
     }
 
     /// Возвращает stretch в процентах (от 50 до 200).
@@ -531,6 +547,20 @@ mod tests {
         let os2 = Os2::parse(&data).unwrap();
         assert_eq!(os2.width_class, 7);
         assert_eq!(os2.stretch_percent(), 125);
+    }
+
+    #[test]
+    fn use_typo_metrics_bit_unset_by_default() {
+        let data = build_os2_v0(400, 0);
+        let os2 = Os2::parse(&data).unwrap();
+        assert!(!os2.use_typo_metrics());
+    }
+
+    #[test]
+    fn use_typo_metrics_bit_detected() {
+        let data = build_os2_v0(400, Os2::FS_USE_TYPO_METRICS);
+        let os2 = Os2::parse(&data).unwrap();
+        assert!(os2.use_typo_metrics());
     }
 
     #[test]

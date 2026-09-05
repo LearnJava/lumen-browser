@@ -383,6 +383,16 @@ pub struct FontMeasurer<'a> {
     descent_units: u16,
     x_height_units: u16,
     line_gap_units: u16,
+    /// `line-height: normal` line-spacing metrics, resolved once from
+    /// `OS/2.fsSelection.USE_TYPO_METRICS` (FONTLOAD-15, BUG-467) — see
+    /// [`lumen_layout::TextMeasurer::normal_line_height_px`]. Deliberately
+    /// separate from `ascent_units`/`descent_units` above: those two use a
+    /// mismatched pair of denominators once turned into px (FONTLOAD-14's
+    /// finding), so this trio is summed and normalised by `units_per_em`
+    /// consistently instead of being derived from them.
+    normal_ascent_units: u16,
+    normal_descent_units: u16,
+    normal_line_gap_units: u16,
 }
 
 impl<'a> FontMeasurer<'a> {
@@ -409,10 +419,38 @@ impl<'a> FontMeasurer<'a> {
             .and_then(|o| o.x_height)
             .filter(|&v| v > 0)
             .map_or(units_per_em / 2, |v| v as u16);
+        let (normal_ascent_units, normal_descent_units, normal_line_gap_units) =
+            normal_line_height_units(os2.as_ref(), &hhea);
         Ok(Self {
             hmtx, cmap, units_per_em,
             ascent_units, descent_units, x_height_units, line_gap_units,
+            normal_ascent_units, normal_descent_units, normal_line_gap_units,
         })
+    }
+}
+
+/// `line-height: normal` line-spacing source selection (FONTLOAD-15,
+/// BUG-467) — shared by [`FontMeasurer::new`] and
+/// [`OwnedFontMetrics::from_bytes`] so bundled-fallback and @font-face/system
+/// faces resolve `normal` identically.
+///
+/// OpenType spec's "Recommendations for OpenType Fonts" (`OS/2` table,
+/// "Metrics" section): when `fsSelection.USE_TYPO_METRICS` (bit 7, OS/2 v4+)
+/// is set, `sTypoAscender`/`sTypoDescender`/`sTypoLineGap` are the intended
+/// line-spacing metrics; otherwise applications conventionally fall back to
+/// `usWinAscent`/`usWinDescent` (Windows-oriented, no separate gap — line
+/// spacing is just their sum). Fonts without an `OS/2` table at all fall
+/// back to `hhea`, the same source `ascent_units`/`descent_units` above
+/// already use when `OS/2` is absent.
+fn normal_line_height_units(os2: Option<&lumen_font::Os2>, hhea: &lumen_font::Hhea) -> (u16, u16, u16) {
+    match os2 {
+        Some(os2) if os2.use_typo_metrics() => (
+            os2.typo_ascender.unsigned_abs(),
+            os2.typo_descender.unsigned_abs(),
+            os2.typo_line_gap.unsigned_abs(),
+        ),
+        Some(os2) => (os2.win_ascent, os2.win_descent, 0),
+        None => (hhea.ascent.unsigned_abs(), hhea.descent.unsigned_abs(), hhea.line_gap.unsigned_abs()),
     }
 }
 
@@ -445,6 +483,13 @@ impl<'a> TextMeasurer for FontMeasurer<'a> {
 
     fn line_gap_px(&self, font_size_px: f32) -> f32 {
         self.line_gap_units as f32 * font_size_px / self.units_per_em as f32
+    }
+
+    fn normal_line_height_px(&self, font_size_px: f32) -> f32 {
+        (self.normal_ascent_units as f32 + self.normal_descent_units as f32
+            + self.normal_line_gap_units as f32)
+            * font_size_px
+            / self.units_per_em as f32
     }
 }
 
@@ -523,6 +568,12 @@ struct OwnedFontMetrics {
     /// Line-gap в font units, тем же приоритетом источника, что и
     /// `ascent_units` (FONTLOAD-13).
     line_gap_units: u16,
+    /// `line-height: normal` line-spacing metrics (FONTLOAD-15, BUG-467) —
+    /// see [`FontMeasurer`]'s field of the same name for why this trio is
+    /// separate from `ascent_units`/`descent_units`/`line_gap_units` above.
+    normal_ascent_units: u16,
+    normal_descent_units: u16,
+    normal_line_gap_units: u16,
 }
 
 impl OwnedFontMetrics {
@@ -558,6 +609,8 @@ impl OwnedFontMetrics {
             .as_ref()
             .map_or(hhea.line_gap, |o| o.typo_line_gap)
             .unsigned_abs();
+        let (normal_ascent_units, normal_descent_units, normal_line_gap_units) =
+            normal_line_height_units(os2.as_ref(), &hhea);
         Ok(Self {
             cmap_data,
             advance_widths,
@@ -567,6 +620,9 @@ impl OwnedFontMetrics {
             ascent_units,
             descent_units,
             line_gap_units,
+            normal_ascent_units,
+            normal_descent_units,
+            normal_line_gap_units,
         })
     }
 
@@ -590,6 +646,24 @@ impl OwnedFontMetrics {
     /// (FONTLOAD-13).
     fn line_gap_px(&self, font_size_px: f32) -> f32 {
         self.line_gap_units as f32 * font_size_px / self.units_per_em as f32
+    }
+
+    /// `line-height: normal` ascent-компонента в px (FONTLOAD-15, BUG-467) —
+    /// консистентно нормирована `units_per_em`, в отличие от [`Self::ascent_px`].
+    fn normal_ascent_px(&self, font_size_px: f32) -> f32 {
+        self.normal_ascent_units as f32 * font_size_px / self.units_per_em as f32
+    }
+
+    /// `line-height: normal` descent-компонента в px, та же нормировка, что
+    /// [`Self::normal_ascent_px`].
+    fn normal_descent_px(&self, font_size_px: f32) -> f32 {
+        self.normal_descent_units as f32 * font_size_px / self.units_per_em as f32
+    }
+
+    /// `line-height: normal` line-gap-компонента в px, та же нормировка, что
+    /// [`Self::normal_ascent_px`].
+    fn normal_line_gap_px(&self, font_size_px: f32) -> f32 {
+        self.normal_line_gap_units as f32 * font_size_px / self.units_per_em as f32
     }
 
     /// Возвращает ширину символа в px. Если глиф не найден (glyph_id == 0),
@@ -846,6 +920,53 @@ impl PrimaryFontMetrics<'_> {
             Self::Shared(m) => m.line_gap_px(font_size_px),
         }
     }
+
+    /// `line-height: normal` ascent-компонента (FONTLOAD-15, BUG-467) — та
+    /// же схема override/size-adjust, что [`Self::ascent_px`], но источник —
+    /// [`OwnedFontMetrics::normal_ascent_px`] (консистентно нормированный).
+    fn normal_ascent_px(&self, font_size_px: f32) -> f32 {
+        match self {
+            Self::Owned { metrics, ascent_override, size_adjust, .. } => {
+                let adjusted_px = font_size_px * size_adjust.unwrap_or(1.0);
+                ascent_override
+                    .map_or_else(|| metrics.normal_ascent_px(adjusted_px), |pct| adjusted_px * pct)
+            }
+            Self::Shared(m) => m.normal_ascent_px(font_size_px),
+        }
+    }
+
+    /// `line-height: normal` descent-компонента, та же схема, что
+    /// [`Self::normal_ascent_px`].
+    fn normal_descent_px(&self, font_size_px: f32) -> f32 {
+        match self {
+            Self::Owned { metrics, descent_override, size_adjust, .. } => {
+                let adjusted_px = font_size_px * size_adjust.unwrap_or(1.0);
+                descent_override
+                    .map_or_else(|| metrics.normal_descent_px(adjusted_px), |pct| adjusted_px * pct)
+            }
+            Self::Shared(m) => m.normal_descent_px(font_size_px),
+        }
+    }
+
+    /// `line-height: normal` line-gap-компонента, та же схема, что
+    /// [`Self::normal_ascent_px`].
+    fn normal_line_gap_px(&self, font_size_px: f32) -> f32 {
+        match self {
+            Self::Owned { metrics, line_gap_override, size_adjust, .. } => {
+                let adjusted_px = font_size_px * size_adjust.unwrap_or(1.0);
+                line_gap_override
+                    .map_or_else(|| metrics.normal_line_gap_px(adjusted_px), |pct| adjusted_px * pct)
+            }
+            Self::Shared(m) => m.normal_line_gap_px(font_size_px),
+        }
+    }
+
+    /// `line-height: normal` used value — сумма трёх компонент выше.
+    fn normal_line_height_px(&self, font_size_px: f32) -> f32 {
+        self.normal_ascent_px(font_size_px)
+            + self.normal_descent_px(font_size_px)
+            + self.normal_line_gap_px(font_size_px)
+    }
 }
 
 /// Один @font-face face-слот с опциональным `unicode-range` ограничением.
@@ -1063,6 +1184,9 @@ impl MultiFontMeasurer {
                 ascent_units: 0,
                 descent_units: 0,
                 line_gap_units: 0,
+                normal_ascent_units: 0,
+                normal_descent_units: 0,
+                normal_line_gap_units: 0,
             },
             unicode_ranges: Vec::new(),
             ascent_override: None,
@@ -1178,6 +1302,17 @@ impl TextMeasurer for MultiFontMeasurer {
         match self.primary_metrics(families) {
             Some(m) => m.line_gap_px(font_size_px),
             None => self.line_gap_px(font_size_px),
+        }
+    }
+
+    fn normal_line_height_px(&self, font_size_px: f32) -> f32 {
+        self.fallback.normal_line_height_px(font_size_px)
+    }
+
+    fn normal_line_height_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
+        match self.primary_metrics(families) {
+            Some(m) => m.normal_line_height_px(font_size_px),
+            None => self.normal_line_height_px(font_size_px),
         }
     }
 }

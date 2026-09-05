@@ -1389,3 +1389,105 @@ BUG-997.)
 FONTLOAD-13) **«Изменений нет»**, идентичный список 8/156 FAIL
 (02/04/18/21/56/150/151/155 — те же самые с FONTLOAD-13, не новые) и 50
 known-debtor. `graphic_tests/results/20260905-172448.json`.
+
+## FONTLOAD-15 (P1, 2026-09-05, ветка `p1-fontload15-line-height-normal-formula`) — нашла настоящую причину регрессии FONTLOAD-14 и активировала реальные метрики для `line-height: normal`
+
+FONTLOAD-14 оставила гипотезу «Edge/DirectWrite, вероятно, использует
+`OS/2.usWinAscent`/`usWinDescent`, а не `sTypoAscender`/`sTypoDescender`» как
+самый перспективный кандидат для следующего среза. Перед тем как её кодировать,
+этот срез проверил гипотезу арифметически на bundled Inter (единственный
+face, который резолвит детерминированный корпус — `primary_metrics` везде
+`None`): `fsSelection` Inter'а имеет бит `USE_TYPO_METRICS` (0x0080)
+установленным, и его `usWinAscent`/`usWinDescent` (1984/494 font units)
+численно РАВНЫ `sTypoAscender`/`|sTypoDescender|` (тоже 1984/494) — выбор
+источника даёт для этого шрифта нулевую разницу. Значит, гипотеза FONTLOAD-14
+не могла объяснить наблюдавшуюся регрессию сама по себе.
+
+**Настоящая причина (арифметически проверена):** FONTLOAD-14 сама
+задокументировала, что `OwnedFontMetrics::ascent_px` нормирует ascent
+относительно `ascent_units + descent_units`, а `descent_px`/`line_gap_px` —
+относительно `units_per_em`, но не сделала следующий шаг — не пересчитала,
+что это давало на практике. `units_per_em` Inter — 2048, `ascent_units`/
+`descent_units` (typo, = win) — 1984/494:
+
+- Формула FONTLOAD-14 (`ascent_px + descent_px`, разные знаменатели):
+  `(1984/(1984+494)) + (494/2048) = 0.8006 + 0.2412 = 1.0419 × font-size` —
+  **на 13% МЕНЬШЕ** прежнего плоского `1.2`, а не больше. Это и объясняет
+  регрессию: строки стали заметно теснее, весь текстовый поток переупаковался.
+- Формула этого среза (`(ascent_units + descent_units) / units_per_em`, один
+  знаменатель): `(1984+494)/2048 = 1.2100 × font-size` — всего на **0.8%
+  БОЛЬШЕ** прежнего `1.2`.
+
+Разница между «-13%» и «+0.8%» — на порядок разных по влиянию на layout,
+поэтому вывод FONTLOAD-14 «реальные метрики регрессируют» был качественно
+неверным: регрессировала не идея использовать реальные метрики, а конкретная
+реализация с рассинхронизированными знаменателями.
+
+**Реализация:**
+1. `Os2::use_typo_metrics()` (`crates/engine/font/src/os2.rs`) — новый
+   accessor для `fsSelection` бит 7 (`USE_TYPO_METRICS`, OS/2 v4+,
+   `FS_USE_TYPO_METRICS = 0x0080`). Реализует OpenType spec recommendation:
+   установлен → `sTypoAscender`/`sTypoDescender`/`sTypoLineGap`; не
+   установлен → `usWinAscent`/`usWinDescent` (без отдельного line-gap).
+   Архитектурно корректно и нужно для `@font-face`-лиц, где источники
+   реально расходятся — для bundled Inter, как показано выше, разницы нет.
+2. `TextMeasurer::normal_line_height_px(font_size_px) -> f32` и
+   `..._with_families` (`crates/engine/layout/src/lib.rs`) — новый метод
+   трейта, дефолт `1.2 × font_size_px` (тот же UA-фоллбек, на который
+   неявно полагался каждый mock `TextMeasurer` без переопределения).
+   Намеренно НЕ сумма `ascent_px + descent_px + line_gap_px` — отдельная,
+   консистентно нормированная величина.
+3. `FontMeasurer`/`OwnedFontMetrics` (`crates/engine/paint/src/lib.rs`)
+   получили параллельную тройку полей `normal_ascent_units`/
+   `normal_descent_units`/`normal_line_gap_units`, вычисляемую общей
+   функцией `normal_line_height_units(os2, hhea)` по алгоритму из п.1, и
+   методы `normal_ascent_px`/`normal_descent_px`/`normal_line_gap_px`/
+   `normal_line_height_px`, нормирующие ТОЛЬКО через `units_per_em`.
+   `ascent_units`/`descent_units`/`line_gap_units` и их `*_px`-методы не
+   тронуты — ими по-прежнему пользуется `BoxKind::InlineBlockRow`-strut
+   (`layout_dispatch.rs`), чьё IFC-1-провалидированное относительное
+   baseline-выравнивание терпит рассинхронизацию знаменателей, в отличие от
+   абсолютной line-height.
+4. `PrimaryFontMetrics` (`crates/engine/paint/src/lib.rs`) получила
+   параллельные `normal_ascent_px`/`normal_descent_px`/`normal_line_gap_px`/
+   `normal_line_height_px`, композирующие с `ascent_override`/
+   `descent_override`/`line_gap_override`/`size_adjust` (FONTLOAD-11/12/13)
+   той же схемой, что уже применена к `ascent_px`/`descent_px`/`line_gap_px`
+   — архитектурно готово для `@font-face`-лиц с override-дескрипторами, но
+   живым WPT-замером не проверено (см. «Не входит»).
+5. `used_line_height_px()` (`crates/engine/layout/src/box_tree/entry.rs`)
+   теперь реально читает `m`: `if style.line_height_is_normal {
+   m.normal_line_height_px_with_families(style.font_size,
+   &style.font_family) } else { style.font_size * style.line_height }` —
+   раньше `m` игнорировался целиком.
+
+**Проверка:** живой A/B `graphic_tests/run.py --continue-on-fail` (полный
+корпус, 156 тестов, foreground с фокусом окна — фон ломает TEST-00 magenta-
+калибровку, задокументировано `docs/graphic-tests.md`) — «Изменений нет»
+против FONTLOAD-14 baseline (commit `0814bed75`,
+`graphic_tests/results/20260905-172448.json`): идентичные 8/156 FAIL
+(02/04/18/21/56/150/151/155) и 50 known-debtor, диффы по всем 156 тестам
+совпадают вплоть до сотых процента. В частности TEST-02/04 (0.68% — то самое
+число, что FONTLOAD-14 указала как «регрессию» своей формулы) подтверждены
+проверкой против `graphic_tests/results/20260905-172448.json` как
+ПРЕДСУЩЕСТВУЮЩИЙ долг, никак не связанный с line-height: тот же 0.68% уже
+стоял в этом файле — снятом ДО активации формулы FONTLOAD-14, всё ещё с
+плоским `1.2`.
+
+Тесты: `cargo test -p lumen-font` 407/407 (+2, `use_typo_metrics_bit_*`),
+`cargo test -p lumen-layout` 3833/3833, `cargo test -p lumen-paint` 1043/1043
+— все без регрессий. `cargo test -p lumen-shell --bin lumen --features v8`
+1726/1726 без регрессий. `cargo clippy -p lumen-font -p lumen-layout -p
+lumen-paint --all-targets -- -D warnings` и `cargo clippy -p lumen-shell
+--bin lumen --all-targets --features v8 -- -D warnings` чисты.
+
+**Не входит:** WPT A/B-замер `css/css-fonts` override-категории целиком
+(включая проверку композиции `normal_line_height_px` с `ascent-override`/
+`descent-override`/`line-gap-override`, реализованной архитектурно в п.4, но
+не измеренной живым прогоном); (D) feature/variation-settings дескриптора;
+femtovg-паритет для (A); реактивность CSS-connected сета (BUG-471/CSSOM-4).
+
+Гейт — полный пиксельный прогон (layout-геометрия, line-height): `dump_golden.py`
+12/12 байт-в-байт; `run.py --continue-on-fail` — дельта против FONTLOAD-14
+(commit `0814bed75`) **«Изменений нет»**, идентичный список 8/156 FAIL и 50
+known-debtor. `graphic_tests/results/20260905-183548.json`.

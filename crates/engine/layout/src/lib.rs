@@ -272,11 +272,11 @@ pub trait TextMeasurer {
     /// межстрочный зазор поверх content area (ascent + descent), источник —
     /// `OS/2.sTypoLineGap`/`hhea.lineGap` (FONTLOAD-13, BUG-467).
     ///
-    /// Пока не участвует в вычислении `line-height: normal` (движок использует
-    /// фиксированный множитель `1.2`, см. комментарий у `BoxKind::InlineBlockRow`
-    /// в `layout_dispatch.rs` — переход на реальные метрики поднимает строки из
-    /// одних atomic inline на pixel-diff, зафиксированный IFC-1) — это только
-    /// accessor, предпосылка для `line-gap-override` (CSS Fonts L4 §14.3).
+    /// Отдельный accessor для `BoxKind::InlineBlockRow`-strut'а (относительное
+    /// baseline-выравнивание, `layout_dispatch.rs`) и предпосылка для
+    /// `line-gap-override` (CSS Fonts L4 §14.3) — НЕ источник для
+    /// `line-height: normal` (см. [`Self::normal_line_height_px`], у которого
+    /// собственная, консистентно нормированная сумма ascent+descent+line-gap).
     /// Реализации без доступа к метрикам возвращают `0.0` (большинство шрифтов
     /// не декларируют line-gap).
     fn line_gap_px(&self, font_size_px: f32) -> f32 {
@@ -289,6 +289,37 @@ pub trait TextMeasurer {
     fn line_gap_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
         let _ = families;
         self.line_gap_px(font_size_px)
+    }
+
+    /// CSS2 §10.8.1 `line-height: normal` — используемая line-height в px,
+    /// когда автор не задал явное значение. Источник — рекомендуемые
+    /// line-spacing метрики face-а (`ascent + descent [+ lineGap]`,
+    /// OpenType `OS/2.fsSelection` бит `USE_TYPO_METRICS` выбирает
+    /// `sTypoAscender`/`sTypoDescender`/`sTypoLineGap` против
+    /// `usWinAscent`/`usWinDescent` — FONTLOAD-15, BUG-467).
+    ///
+    /// Намеренно ОТДЕЛЬНЫЙ метод, а не сумма [`Self::ascent_px`] +
+    /// [`Self::descent_px`] + [`Self::line_gap_px`]: FONTLOAD-14 обнаружила,
+    /// что `OwnedFontMetrics::ascent_px` нормирует ascent относительно
+    /// `ascent_units + descent_units`, а `descent_px`/`line_gap_px` —
+    /// относительно `units_per_em`, так что их сумма использует два разных
+    /// знаменателя и не имеет чёткого смысла как абсолютная высота строки.
+    /// `normal_line_height_px` — единая, консистентно нормированная (везде
+    /// `units_per_em`) величина.
+    ///
+    /// Дефолт `1.2 × font_size_px` — тот же UA-фоллбек, что CSS2
+    /// рекомендует для шрифтов без доступных метрик, и то же значение, на
+    /// которое неявно полагался каждый mock `TextMeasurer` до появления
+    /// этого метода.
+    fn normal_line_height_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 1.2
+    }
+
+    /// [`Self::normal_line_height_px`] с учётом CSS `font-family` каскада —
+    /// см. [`Self::descent_px_with_families`].
+    fn normal_line_height_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
+        let _ = families;
+        self.normal_line_height_px(font_size_px)
     }
 }
 
