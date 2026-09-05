@@ -155,6 +155,9 @@ use logical::resolve_logical_properties;
 // above: private `use` here, reachable from `style::cascade` (a descendant module)
 // via `crate::style::resolve_overflow_logical_properties`.
 use logical::resolve_overflow_logical_properties;
+// CSS Overscroll Behavior L1 §2 (BUG-516) — same shape as
+// `resolve_overflow_logical_properties` above.
+use logical::resolve_overscroll_behavior_logical_properties;
 // Реэкспорт со старого пути: `resolve_logical_property` — публичный API крейта
 // (`pub mod style` в `lib.rs`), вызывателей внутри `style.rs` у неё нет, поэтому
 // без реэкспорта путь `lumen_layout::style::resolve_logical_property` пропал бы.
