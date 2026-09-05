@@ -1778,12 +1778,39 @@ the time — read dates.
   (`crates/shell/src/app/about_to_wait.rs`) and calls
   `page_font_registry.register_from_bytes` itself, same as a background CSS
   `@font-face` fetch does via `LoadEvent::FontLoaded`. `_cssConnected` faces
-  are explicitly excluded — they already have that path. Not done, and
-  tracked as the task's own remaining slices in
-  [`bugs/BUG-467-OPEN.md`](../bugs/BUG-467-OPEN.md): CSS-connected
-  reactivity to a later `<style>`/CSSOM change (on either path — needs the
-  live-cascade foundation BUG-471/CSSOM-4), descriptor grammar validation,
-  and an unregister path for a face that leaves every `FontFaceSet` after
+  are explicitly excluded — they already have that path. **FONTLOAD-7**
+  (2026-09-05) closed descriptor grammar validation for the constructor/
+  getter/setter surface (not rendering — see below): `unicodeRange`/
+  `featureSettings`/`variationSettings` now parse and canonicalize eagerly at
+  construction (`_lumen_font_face_parse_unicode_range`/`_parse_feature_
+  settings`/`_parse_variation_settings`, `web_api_shim_mid.js`, plain JS —
+  `lumen-layout`'s `parse_font_feature_settings`/`parse_font_variation_
+  settings` are spec-shaped but built for cascade "reject the whole
+  declaration" semantics and have no canonicalizing serializer, so
+  reimplementing in JS was cheaper than a new native shim for a pure string
+  transform). Four new properties, `ascentOverride`/`descentOverride`/
+  `lineGapOverride`/`sizeAdjust`, follow a WPT-proven asymmetric contract
+  (`fontface-override-descriptor-getter-setter.sub.html`): an invalid value
+  supplied to the constructor is accepted silently and only surfaces as a
+  `SyntaxError` rejection from a subsequent `.load()` call (checked by
+  `_lumen_font_face_validate_descriptors` before any fetch starts — a fail
+  here skips `_lumen_font_face_load_start` entirely, since no fetch begins),
+  while the SAME invalid value through the property setter throws
+  `SyntaxError` synchronously; both paths share one parse function per
+  descriptor, which returns a failure marker instead of throwing so the
+  lenient constructor and the strict setter/`.load()` can both call it. Not
+  done, and tracked as the task's own remaining slices in
+  [`bugs/BUG-467-OPEN.md`](../bugs/BUG-467-OPEN.md): none of these seven
+  descriptors reaches any rendering consumer on either path yet (no
+  `unicodeRange` glyph-range segmentation, no metrics synthesis from the
+  override descriptors — the largest remaining FONTLOAD slice, gated on
+  three WPT reftests); the CSS `@font-face` side has no grammar for any of
+  these seven descriptors either (`FontFaceRule`,
+  `crates/engine/css-parser/src/parser/at_rules.rs`, has no fields for them,
+  so `_lumen_wrap_css_font_face` still hardcodes all seven to their spec
+  defaults); CSS-connected reactivity to a later `<style>`/CSSOM change (on
+  either path — needs the live-cascade foundation BUG-471/CSSOM-4); and an
+  unregister path for a face that leaves every `FontFaceSet` after
   registering (none exists on `FontRegistry` today, same gap CSS-connected
   faces already have).
 

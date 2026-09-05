@@ -7446,6 +7446,26 @@ var console = {
 // (no unregister call exists on `FontRegistry`, same limitation CSS-connected
 // faces already have).
 //
+// FONTLOAD-7 (2026-09-05) closed the "unicodeRange/other descriptors still
+// aren't grammar-parsed" gap FONTLOAD-6 flagged, for script-constructed
+// faces: `unicodeRange`/`featureSettings`/`variationSettings` now parse and
+// canonicalize (see `_lumen_font_face_parse_*` above the `FontFace`
+// constructor) instead of the bare `String(v)` FONTLOAD-1 left; the four
+// metrics-override descriptors (`ascentOverride`/`descentOverride`/
+// `lineGapOverride`/`sizeAdjust`) are new properties entirely, with the
+// asymmetric validation timing WPT's getter/setter test proves (invalid at
+// construction → silently accepted, only `.load()` rejects with
+// `SyntaxError`; invalid through the setter → throws synchronously).
+// Deliberately narrow: no rendering consumer for any of these seven values
+// exists yet on either path (script-constructed or CSS-connected) — grammar
+// correctness only, not glyph-range segmentation or metrics synthesis, which
+// the vendored reftests (`fontface-descriptor-updates.html`,
+// `fontface-override-descriptors.html`, `fontface-size-adjust-descriptor.html`)
+// need and this slice does not attempt; CSS-connected faces still hardcode
+// all seven to their spec-default ('normal'/'100%') because `FontFaceRule`
+// (`crates/engine/css-parser`) has no fields for any of them — the *CSS*
+// `@font-face` descriptor grammar is an equally unimplemented, separate gap.
+//
 // Still open, one real engine gap, not an oversight:
 // (1) **CSS-connected faces are a one-time snapshot.** They are read from
 //     native once, when `document.fonts` is first touched — a later
@@ -7558,6 +7578,158 @@ function _lumen_font_face_try_sources(sources, idx, done) {
     });
 }
 
+// FONTLOAD-7 (BUG-467): grammar for the FontFace descriptors that FONTLOAD-1
+// left as bare `String(v)` (CSS Font Loading / CSS Fonts L4 §6-14). Three
+// descriptors (unicodeRange/featureSettings/variationSettings) canonicalize
+// eagerly — the constructor itself must already return the serialized form
+// (`fontface-descriptor-updates-2.html`: `new FontFace(..., {unicodeRange:
+// "U+0020-007F"})` reads back as "U+20-7F" before any setter runs). The four
+// metrics-override descriptors (ascentOverride/descentOverride/
+// lineGapOverride/sizeAdjust) instead follow an asymmetric contract proven by
+// `fontface-override-descriptor-getter-setter.sub.html`: an invalid value at
+// CONSTRUCTION time is accepted silently (stored raw, no throw) and only
+// surfaces as a `SyntaxError` rejection from `.load()`, while the SAME
+// invalid value through the SETTER throws `SyntaxError` synchronously. Both
+// families reject with `null`/`{ok:false}` on syntax error rather than
+// throwing, so the same parse function backs the lenient constructor path and
+// the strict setter/`.load()` paths.
+function _lumen_font_face_normalize_urange_hex(hex) {
+    return hex.toUpperCase().replace(/^0+(?=.)/, '');
+}
+// `<urange>#` (CSS Fonts L4 §3.5.5): `U+<hex>`, `U+<hex>-<hex>`, or a
+// wildcard `U+<hex prefix>??` (trailing `?` only, expands to a range).
+// Canonical form strips leading zeros in each hex component.
+function _lumen_font_face_parse_unicode_range(input) {
+    var val = String(input).trim();
+    if (val.length === 0) return null;
+    var parts = val.split(',');
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+        var token = parts[i].trim();
+        if (token.length === 0) return null;
+        var m = /^[Uu]\+([0-9A-Fa-f?]{1,6})(?:-([0-9A-Fa-f]{1,6}))?$/.exec(token);
+        if (!m) return null;
+        var startRaw = m[1];
+        var endRaw = m[2];
+        if (endRaw !== undefined) {
+            if (startRaw.indexOf('?') !== -1) return null;
+            var startNum = parseInt(startRaw, 16);
+            var endNum = parseInt(endRaw, 16);
+            if (startNum > 0x10FFFF || endNum > 0x10FFFF || startNum > endNum) return null;
+            out.push(startNum === endNum
+                ? 'U+' + _lumen_font_face_normalize_urange_hex(startRaw)
+                : 'U+' + _lumen_font_face_normalize_urange_hex(startRaw) + '-' + _lumen_font_face_normalize_urange_hex(endRaw));
+        } else if (startRaw.indexOf('?') !== -1) {
+            var qIndex = startRaw.indexOf('?');
+            var prefix = startRaw.slice(0, qIndex);
+            var suffix = startRaw.slice(qIndex);
+            if (!/^\?+$/.test(suffix) || prefix.length + suffix.length > 6) return null;
+            var lowHex = prefix + '0'.repeat(suffix.length);
+            var highHex = prefix + 'F'.repeat(suffix.length);
+            var lowNum = parseInt(lowHex, 16);
+            var highNum = parseInt(highHex, 16);
+            if (highNum > 0x10FFFF) return null;
+            out.push('U+' + _lumen_font_face_normalize_urange_hex(lowNum.toString(16)) + '-' + _lumen_font_face_normalize_urange_hex(highNum.toString(16)));
+        } else {
+            var num = parseInt(startRaw, 16);
+            if (num > 0x10FFFF) return null;
+            out.push('U+' + _lumen_font_face_normalize_urange_hex(startRaw));
+        }
+    }
+    return out.join(', ');
+}
+// `normal | <feature-tag-value>#` (CSS Fonts L3 §6.4). Canonical form quotes
+// tags with `"`, and per the WPT-observed serialization elides an explicit
+// value of `1` (the default) — `"liga" 1` round-trips as `"liga"`.
+function _lumen_font_face_parse_feature_settings(input) {
+    var val = String(input).trim();
+    if (val.toLowerCase() === 'normal') return 'normal';
+    var parts = val.split(',');
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+        var token = parts[i].trim();
+        if (token.length === 0) return null;
+        var m = /^(?:"([^"]*)"|'([^']*)')\s*(-?\d+|[Oo][Nn]|[Oo][Ff][Ff])?$/.exec(token);
+        if (!m) return null;
+        var tag = m[1] !== undefined ? m[1] : m[2];
+        if (tag.length !== 4) return null;
+        var tagOk = true;
+        for (var j = 0; j < tag.length; j++) {
+            var code = tag.charCodeAt(j);
+            if (code < 0x20 || code > 0x7E) { tagOk = false; break; }
+        }
+        if (!tagOk) return null;
+        var value = 1;
+        if (m[3] !== undefined) {
+            if (/^on$/i.test(m[3])) value = 1;
+            else if (/^off$/i.test(m[3])) value = 0;
+            else {
+                value = parseInt(m[3], 10);
+                if (!(value >= 0)) return null;
+            }
+        }
+        out.push(value === 1 ? '"' + tag + '"' : '"' + tag + '" ' + value);
+    }
+    return out.join(', ');
+}
+// `normal | [<string> <number>]#` (CSS Fonts L4 §7.4). Canonical form quotes
+// tags with `"`; the numeric value is always kept (unlike feature-settings,
+// there is no default value to elide).
+function _lumen_font_face_parse_variation_settings(input) {
+    var val = String(input).trim();
+    if (val.toLowerCase() === 'normal') return 'normal';
+    var parts = val.split(',');
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+        var token = parts[i].trim();
+        if (token.length === 0) return null;
+        var m = /^(?:"([^"]{4})"|'([^']{4})')\s+(-?\d+(?:\.\d+)?)$/.exec(token);
+        if (!m) return null;
+        var tag = m[1] !== undefined ? m[1] : m[2];
+        out.push('"' + tag + '" ' + m[3]);
+    }
+    return out.join(', ');
+}
+// `normal | <percentage>` (ascent/descent/lineGap override) or plain
+// `<percentage>` (sizeAdjust, `allowNormal=false`) — CSS Fonts L4 §14.
+// Negative percentages are syntactically valid `<percentage>` tokens but
+// invalid for these non-negative-only descriptors (WPT:
+// "Initialize ascentOverride with a negative percentage should fail").
+function _lumen_font_face_parse_percent_descriptor(input, allowNormal) {
+    var val = String(input).trim();
+    if (allowNormal && val.toLowerCase() === 'normal') return { ok: true, canonical: 'normal' };
+    var m = /^(-?\d+(?:\.\d+)?)%$/.exec(val);
+    if (!m) return { ok: false };
+    if (!(parseFloat(m[1]) >= 0)) return { ok: false };
+    return { ok: true, canonical: val };
+}
+// Descriptors whose current stored value is only grammar-checked at `.load()`
+// time (constructor accepted them unvalidated, see comment above).
+function _lumen_font_face_validate_descriptors(face) {
+    if (_lumen_font_face_parse_unicode_range(face._unicodeRange) === null) {
+        return new DOMException('The unicode-range descriptor is invalid.', 'SyntaxError');
+    }
+    if (_lumen_font_face_parse_feature_settings(face._featureSettings) === null) {
+        return new DOMException('The font-feature-settings descriptor is invalid.', 'SyntaxError');
+    }
+    if (_lumen_font_face_parse_variation_settings(face._variationSettings) === null) {
+        return new DOMException('The font-variation-settings descriptor is invalid.', 'SyntaxError');
+    }
+    if (!_lumen_font_face_parse_percent_descriptor(face._ascentOverride, true).ok) {
+        return new DOMException('The ascent-override descriptor is invalid.', 'SyntaxError');
+    }
+    if (!_lumen_font_face_parse_percent_descriptor(face._descentOverride, true).ok) {
+        return new DOMException('The descent-override descriptor is invalid.', 'SyntaxError');
+    }
+    if (!_lumen_font_face_parse_percent_descriptor(face._lineGapOverride, true).ok) {
+        return new DOMException('The line-gap-override descriptor is invalid.', 'SyntaxError');
+    }
+    if (!_lumen_font_face_parse_percent_descriptor(face._sizeAdjust, false).ok) {
+        return new DOMException('The size-adjust descriptor is invalid.', 'SyntaxError');
+    }
+    return null;
+}
+
 var FontFace = (function() {
     function FontFace(family, source, descriptors) {
         if (arguments.length < 2) throw new TypeError('FontFace constructor requires a family and a source');
@@ -7566,10 +7738,20 @@ var FontFace = (function() {
         this._style = descriptors.style !== undefined ? String(descriptors.style) : 'normal';
         this._weight = descriptors.weight !== undefined ? String(descriptors.weight) : 'normal';
         this._stretch = descriptors.stretch !== undefined ? String(descriptors.stretch) : 'normal';
-        this._unicodeRange = descriptors.unicodeRange !== undefined ? String(descriptors.unicodeRange) : 'U+0-10FFFF';
-        this._featureSettings = descriptors.featureSettings !== undefined ? String(descriptors.featureSettings) : 'normal';
-        this._variationSettings = descriptors.variationSettings !== undefined ? String(descriptors.variationSettings) : 'normal';
+        this._unicodeRange = descriptors.unicodeRange !== undefined
+            ? (_lumen_font_face_parse_unicode_range(descriptors.unicodeRange) || String(descriptors.unicodeRange))
+            : 'U+0-10FFFF';
+        this._featureSettings = descriptors.featureSettings !== undefined
+            ? (_lumen_font_face_parse_feature_settings(descriptors.featureSettings) || String(descriptors.featureSettings))
+            : 'normal';
+        this._variationSettings = descriptors.variationSettings !== undefined
+            ? (_lumen_font_face_parse_variation_settings(descriptors.variationSettings) || String(descriptors.variationSettings))
+            : 'normal';
         this._display = descriptors.display !== undefined ? String(descriptors.display) : 'auto';
+        this._ascentOverride = descriptors.ascentOverride !== undefined ? String(descriptors.ascentOverride) : 'normal';
+        this._descentOverride = descriptors.descentOverride !== undefined ? String(descriptors.descentOverride) : 'normal';
+        this._lineGapOverride = descriptors.lineGapOverride !== undefined ? String(descriptors.lineGapOverride) : 'normal';
+        this._sizeAdjust = descriptors.sizeAdjust !== undefined ? String(descriptors.sizeAdjust) : '100%';
         this._sources = _lumen_parse_font_face_sources(source);
         this._status = 'unloaded';
         this._cssConnected = false;
@@ -7585,12 +7767,18 @@ var FontFace = (function() {
         if (this._status === 'loading' || this._status === 'loaded') {
             return this._loadedPromise;
         }
-        this._status = 'loading';
         var self = this;
+        var descriptorError = _lumen_font_face_validate_descriptors(this);
+        this._status = 'loading';
         this._loadedPromise = new Promise(function(resolve, reject) {
             self._resolveLoaded = resolve;
             self._rejectLoaded = reject;
         });
+        if (descriptorError) {
+            self._status = 'error';
+            self._rejectLoaded(descriptorError);
+            return this._loadedPromise;
+        }
         _lumen_font_face_load_start(self);
         _lumen_font_face_try_sources(self._sources, 0, function(ok, err, bytes) {
             if (ok) {
@@ -7630,22 +7818,70 @@ var FontFace = (function() {
         },
         unicodeRange: {
             get: function() { return this._unicodeRange; },
-            set: function(v) { this._unicodeRange = String(v); },
+            set: function(v) {
+                var parsed = _lumen_font_face_parse_unicode_range(v);
+                if (parsed === null) throw new DOMException("Failed to set the 'unicodeRange' property on 'FontFace': the unicode-range descriptor is invalid.", 'SyntaxError');
+                this._unicodeRange = parsed;
+            },
             enumerable: true, configurable: true,
         },
         featureSettings: {
             get: function() { return this._featureSettings; },
-            set: function(v) { this._featureSettings = String(v); },
+            set: function(v) {
+                var parsed = _lumen_font_face_parse_feature_settings(v);
+                if (parsed === null) throw new DOMException("Failed to set the 'featureSettings' property on 'FontFace': the font-feature-settings descriptor is invalid.", 'SyntaxError');
+                this._featureSettings = parsed;
+            },
             enumerable: true, configurable: true,
         },
         variationSettings: {
             get: function() { return this._variationSettings; },
-            set: function(v) { this._variationSettings = String(v); },
+            set: function(v) {
+                var parsed = _lumen_font_face_parse_variation_settings(v);
+                if (parsed === null) throw new DOMException("Failed to set the 'variationSettings' property on 'FontFace': the font-variation-settings descriptor is invalid.", 'SyntaxError');
+                this._variationSettings = parsed;
+            },
             enumerable: true, configurable: true,
         },
         display: {
             get: function() { return this._display; },
             set: function(v) { this._display = String(v); },
+            enumerable: true, configurable: true,
+        },
+        ascentOverride: {
+            get: function() { return this._ascentOverride; },
+            set: function(v) {
+                var parsed = _lumen_font_face_parse_percent_descriptor(v, true);
+                if (!parsed.ok) throw new DOMException("Failed to set the 'ascentOverride' property on 'FontFace': the ascent-override descriptor is invalid.", 'SyntaxError');
+                this._ascentOverride = parsed.canonical;
+            },
+            enumerable: true, configurable: true,
+        },
+        descentOverride: {
+            get: function() { return this._descentOverride; },
+            set: function(v) {
+                var parsed = _lumen_font_face_parse_percent_descriptor(v, true);
+                if (!parsed.ok) throw new DOMException("Failed to set the 'descentOverride' property on 'FontFace': the descent-override descriptor is invalid.", 'SyntaxError');
+                this._descentOverride = parsed.canonical;
+            },
+            enumerable: true, configurable: true,
+        },
+        lineGapOverride: {
+            get: function() { return this._lineGapOverride; },
+            set: function(v) {
+                var parsed = _lumen_font_face_parse_percent_descriptor(v, true);
+                if (!parsed.ok) throw new DOMException("Failed to set the 'lineGapOverride' property on 'FontFace': the line-gap-override descriptor is invalid.", 'SyntaxError');
+                this._lineGapOverride = parsed.canonical;
+            },
+            enumerable: true, configurable: true,
+        },
+        sizeAdjust: {
+            get: function() { return this._sizeAdjust; },
+            set: function(v) {
+                var parsed = _lumen_font_face_parse_percent_descriptor(v, false);
+                if (!parsed.ok) throw new DOMException("Failed to set the 'sizeAdjust' property on 'FontFace': the size-adjust descriptor is invalid.", 'SyntaxError');
+                this._sizeAdjust = parsed.canonical;
+            },
             enumerable: true, configurable: true,
         },
         status: { get: function() { return this._status; }, enumerable: true, configurable: true },
@@ -7722,6 +7958,14 @@ function _lumen_wrap_css_font_face(json) {
     face._featureSettings = 'normal';
     face._variationSettings = 'normal';
     face._display = 'auto';
+    // FONTLOAD-7: the four metrics-override descriptors are not parsed on the
+    // CSS `@font-face` side yet (no fields on `FontFaceRule`) — same
+    // pre-existing gap as feature/variationSettings above. Native defaults
+    // keep the getters spec-shaped ('normal'/'100%') rather than `undefined`.
+    face._ascentOverride = 'normal';
+    face._descentOverride = 'normal';
+    face._lineGapOverride = 'normal';
+    face._sizeAdjust = '100%';
     face._sources = _lumen_parse_font_face_sources(json.src || '');
     face._cssConnected = true;
     if (json.status === 'loaded') {
