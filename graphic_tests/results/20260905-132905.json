@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-09-05T14:09:19",
+  "timestamp": "2026-09-05T13:29:05",
   "git": {
-    "commit": "6c4d12254",
-    "branch": "p1-fontload12-size-adjust",
-    "subject": "Р’Р»РёС‚СЊ РІРµС‚РєСѓ p1-fontload11-override-descriptors: FONTLOAD-11 вЂ” ascent/descent-override РїРѕРІРµСЂС… СЂРµР°Р»СЊРЅС‹С… РјРµС‚СЂРёРє face-Р°"
+    "commit": "a2f7666bf",
+    "branch": "p1-fontload11-override-descriptors",
+    "subject": "Р’Р»РёС‚СЊ РІРµС‚РєСѓ p1-fontload10-face-metrics: FONTLOAD-10 вЂ” ascent/descent РІС‹Р±СЂР°РЅРЅРѕРіРѕ face РґРѕСЃС‚РёРіР°СЋС‚ layout"
   },
   "crop_offset": [
     8,
@@ -12,10 +12,10 @@
   "halted_at": null,
   "summary": {
     "total": 156,
-    "passed": 102,
-    "failed": 3,
+    "passed": 98,
+    "failed": 8,
     "errors": 0,
-    "debtors": 51,
+    "debtors": 50,
     "skipped": 0
   },
   "tests": [
@@ -45,9 +45,14 @@
       "label": "color-named",
       "html": "02-color-named.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 0.6836,
+      "diff_region": {
+        "top": 124,
+        "left": 25,
+        "bottom": 304,
+        "right": 964
+      }
     },
     {
       "id": "03",
@@ -56,8 +61,13 @@
       "html": "03-color-formats.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.3255,
+      "diff_region": {
+        "top": 144,
+        "left": 25,
+        "bottom": 364,
+        "right": 884
+      }
     },
     {
       "id": "04",
@@ -65,9 +75,14 @@
       "label": "color-alpha",
       "html": "04-color-alpha.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 0.6836,
+      "diff_region": {
+        "top": 124,
+        "left": 25,
+        "bottom": 304,
+        "right": 964
+      }
     },
     {
       "id": "05",
@@ -76,8 +91,13 @@
       "html": "05-border-width.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.4001,
+      "diff_region": {
+        "top": 172,
+        "left": 25,
+        "bottom": 269,
+        "right": 879
+      }
     },
     {
       "id": "06",
@@ -86,7 +106,7 @@
       "html": "06-border-sides.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0176,
+      "diff_pct": 0.4184,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -156,8 +176,13 @@
       "html": "12-display.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.2387,
+      "diff_region": {
+        "top": 308,
+        "left": 25,
+        "bottom": 544,
+        "right": 564
+      }
     },
     {
       "id": "13",
@@ -166,8 +191,13 @@
       "html": "13-visibility-opacity.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.3499,
+      "diff_region": {
+        "top": 148,
+        "left": 25,
+        "bottom": 402,
+        "right": 964
+      }
     },
     {
       "id": "14",
@@ -220,18 +250,18 @@
       "label": "images",
       "html": "18-images.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 2.2915,
+      "status": "FAIL",
+      "diff_pct": 14.9784,
       "diff_region": {
         "top": 28,
-        "left": 28,
+        "left": 25,
         "bottom": 718,
-        "right": 905
+        "right": 908
       },
       "debtor": {
         "bug": "BUG-219",
         "baseline": 2.11,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -261,8 +291,13 @@
       "html": "20-quirks-bgcolor.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.2279,
+      "diff_region": {
+        "top": 140,
+        "left": 25,
+        "bottom": 300,
+        "right": 624
+      }
     },
     {
       "id": "21",
@@ -270,13 +305,13 @@
       "label": "border-style dashed/dotted/double",
       "html": "21-border-style.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.4635,
+      "status": "FAIL",
+      "diff_pct": 3.1468,
       "diff_region": {
         "top": 25,
         "left": 25,
         "bottom": 452,
-        "right": 800
+        "right": 804
       }
     },
     {
@@ -451,7 +486,7 @@
       "html": "34-forms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.8826,
+      "diff_pct": 2.886,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -631,10 +666,10 @@
       "html": "47-svg-basic.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.574,
+      "diff_pct": 1.4449,
       "diff_region": {
         "top": 26,
-        "left": 51,
+        "left": 29,
         "bottom": 646,
         "right": 987
       },
@@ -766,11 +801,11 @@
       "html": "55-video-placeholder.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5279,
+      "diff_pct": 0.5085,
       "diff_region": {
         "top": 124,
         "left": 122,
-        "bottom": 412,
+        "bottom": 411,
         "right": 711
       },
       "debtor": {
@@ -785,9 +820,14 @@
       "label": "CSS Compositing L1 §5 — mix-blend-mode: normal/multiply/darken/color-burn/screen/lighten/color-dodge/overlay/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity + nesting",
       "html": "56-mix-blend-mode.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 1.355,
+      "diff_region": {
+        "top": 152,
+        "left": 25,
+        "bottom": 518,
+        "right": 846
+      }
     },
     {
       "id": "57",
@@ -796,11 +836,11 @@
       "html": "57-canvas-2d.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.8622,
+      "diff_pct": 0.7979,
       "diff_region": {
         "top": 184,
         "left": 25,
-        "bottom": 402,
+        "bottom": 401,
         "right": 701
       },
       "debtor": {
@@ -1156,7 +1196,7 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.8471,
+      "diff_pct": 2.8571,
       "diff_region": {
         "top": 28,
         "left": 25,
@@ -1529,7 +1569,7 @@
       "html": "90-avif-image.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.9436,
+      "diff_pct": 0.9223,
       "diff_region": {
         "top": 22,
         "left": 22,
@@ -1674,11 +1714,11 @@
       "html": "110-accent-color.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.425,
+      "diff_pct": 1.4623,
       "diff_region": {
         "top": 25,
         "left": 25,
-        "bottom": 194,
+        "bottom": 192,
         "right": 521
       },
       "debtor": {
@@ -2244,8 +2284,13 @@
       "html": "148-isolation.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.2062,
+      "diff_region": {
+        "top": 196,
+        "left": 25,
+        "bottom": 346,
+        "right": 446
+      }
     },
     {
       "id": "149",
@@ -2274,7 +2319,7 @@
       "html": "150-font-variant-caps.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 6.9983,
+      "diff_pct": 7.1109,
       "diff_region": {
         "top": 47,
         "left": 36,
@@ -2334,7 +2379,7 @@
       "html": "154-svg-external-image-gradients.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1912,
+      "diff_pct": 0.1954,
       "diff_region": {
         "top": 32,
         "left": 21,

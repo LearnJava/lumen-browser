@@ -934,3 +934,239 @@ Inter, поэтому `primary_metrics` везде возвращает `None` �
 `line-height: normal`; (D) feature/variation-settings дескриптора как дефолта
 CSS-свойства + шейпинг вне variable-font-пути; femtovg-паритет для (A);
 реактивность CSS-connected сета (BUG-471/CSSOM-4).
+
+## FONTLOAD-11 (P1, 2026-09-05, ветка `p1-fontload11-override-descriptors`) — `ascent-override`/`descent-override` поверх реальных метрик
+
+Взят первый из пяти кандидатов, оставленных FONTLOAD-10 «на выбор
+владельца»: `ascentOverride`/`descentOverride` (CSS Fonts L4 §14) теперь
+подменяют ascent/descent, достигающие layout, вместо реальных метрик face-а.
+`lineGapOverride` и `sizeAdjust` в этот срез намеренно не входят (см. ниже).
+
+**База вычисления — исправлена ошибочная заметка FONTLOAD-10.** Тот срез
+предположил без проверки, что «override — относительно СОБСТВЕННЫХ
+типографических метрик face-а, не `font-size` напрямую» — прочтение
+`tests/wpt/css/css-fonts/ascent-descent-override.html` и его `-ref.html`
+опровергает это: Ahem's нативные ascent/descent — 80%/20% em, тест декларирует
+`ascent-override: 100%; descent-override: 50%`, а референс располагает боксы
+на `1em`/`0.5em` — то есть значение всегда доля **`font-size`**, метрики
+face-а вообще не участвуют в вычислении. `metrics-override-normal-keyword.html`
+дополнительно подтверждает, что `normal` (в т.ч. как результат каскада,
+затерев более раннее объявление) полностью отключает override — рендер
+идентичен face без дескриптора. `font-size-adjust-metrics-override.html`
+показывает, что при добавлении `size-adjust` база остаётся тем же
+использованным font-size (просто уже скорректированным `size-adjust`), не
+меняя формулу — но применение `size-adjust` само по себе вне этого среза, так
+что для (A) и (B) сейчас достаточно голого `ComputedStyle::font_size`.
+
+**Изменения:**
+1. Новый `lumen_font::parse_metric_override_percent` (`crates/engine/font/
+   src/metric_override.rs`) — парсер `normal | <percentage>` в духе уже
+   существующего `parse_unicode_ranges`: `"90%"` → `Some(0.9)` (доля, не
+   проценты), `"normal"` и любое невалидное значение (отрицательный процент,
+   отсутствующий `%`) → `None` — декларативный `@font-face` не бросает
+   исключений на кривой дескриптор (FONTLOAD-8), поэтому «невалидно» и
+   «normal»/«отсутствует» для рендеринга неразличимы: реальная метрика
+   face-а. Мирует JS-парсер `_lumen_font_face_parse_percent_descriptor`
+   (`web_api_shim_mid.js`, FONTLOAD-7), но без второй половины его контракта
+   (сохранение невалидного значения для отложенного `.load()`-реджекта) — той
+   стороне (script-driven `FontFace`) эта функция не нужна.
+2. `FontFaceSlot` (`crates/engine/paint/src/lib.rs`) получила
+   `ascent_override`/`descent_override: Option<f32>` рядом с уже существующим
+   `unicode_ranges` — то же место, где FONTLOAD-9 уже провела `unicode-range`
+   от CSS-правила до per-face структуры paint-крейта. Новый
+   `MultiFontMeasurer::register_family_with_overrides` — сестра
+   `register_family_with_ranges` с двумя дополнительными параметрами;
+   `register_family_with_ranges` теперь тонкая обёртка над ним с
+   `None, None` — существующие вызовы (5 в production-коде, ~15 в тестах)
+   не тронуты.
+3. `PrimaryFontMetrics::Owned` (тот же enum, что FONTLOAD-10 завела для
+   различия владения @font-face-слотом/системным face-ом) стал структурным
+   вариантом, несущим оба override рядом с `&OwnedFontMetrics`; `ascent_px`/
+   `descent_px` подменяют результат на `font_size_px * pct`, когда
+   соответствующий override — `Some`. `Shared` (системные face-ы) overrides
+   не несёт вообще — `ascent-override` существует только как дескриптор
+   `@font-face`, у системных имён его в принципе не бывает.
+4. Проводка через оба источника @font-face, симметрично тому, как уже
+   проведён `unicode_range`:
+   - **`local()`** — оба call site, что уже читают `rule.unicode_range`
+     (`page_pipeline.rs`, `frames.rs::frame_measurer`), рядом парсят
+     `rule.ascent_override`/`rule.descent_override` и зовут
+     `register_family_with_overrides`.
+   - **`url()`** — `PendingWebFont` (`subresources.rs`) получила сырые
+     `ascent_override_str`/`descent_override_str`; фоновый поток парсит их в
+     `Option<f32>` рядом с уже существующим парсингом `unicode_range_str`
+     (`page_load.rs`, синхронный путь фрейма — `frames.rs::load_frame_fonts`);
+     `LoadEvent::FontLoaded` и `LoadedWebFont` несут уже распарсенные
+     `Option<f32>` дальше до `page_measurer` (`relayout.rs`), которая теперь
+     тоже зовёт `register_family_with_overrides`.
+
+**Намеренно вне среза:**
+- **`lineGapOverride`** — в отличие от ascent/descent, в текущем пайплайне
+  нет ни единого потребителя line-gap вообще (`line-height: normal` — 
+  фиксированный множитель `1.2em`, FONTLOAD-10 уже это отметила): применять
+  override к несуществующей величине нечего, дескриптор по-прежнему хранится
+  непарсенным `Option<String>` на `lumen_dom::FontFace` и дальше не идёт.
+- **`sizeAdjust`** — отдельный, архитектурно больший кусок (масштабирует
+  em-квадрат face-а целиком, а не одну пару значений) — не изменилось с
+  FONTLOAD-10.
+- **WPT reftest'ы всё ещё не двигаются**: `ascent-descent-override.html`/
+  `metrics-override-normal-keyword.html` — reftest'ы на Ahem+фиксированном
+  `@font-face url()`; WPT-прогон этой категории (`tests/wpt/css/css-fonts/`)
+  не входит в этот срез (следующий шаг для владельца — живой A/B замер).
+- **femtovg-паритет и CPU-растеризатор** — те же ограничения, что
+  документировала FONTLOAD-9/10 (не live-дефолт / не рендерит `@font-face`
+  вовсе).
+
+Тесты: новый модуль `lumen_font::metric_override` — 8 юнит-тестов парсера
+(`percent_value`, `normal_keyword_is_no_override`,
+`normal_keyword_case_insensitive`, `negative_percent_rejected`,
+`missing_percent_sign_rejected`, `empty_string_rejected`,
+`zero_percent_is_valid_override`, `whitespace_trimmed`);
+`crates/engine/paint/src/lib.rs::multi_font_tests` — 4 новых
+(`ascent_override_replaces_real_metric_with_font_size_fraction`,
+`descent_override_replaces_real_metric_with_font_size_fraction`,
+`metric_override_none_matches_register_family_with_ranges` — доказывает,
+что `None` не меняет поведение относительно FONTLOAD-10 baseline,
+`ascent_override_alone_leaves_descent_at_real_metric` — асимметричный
+override не подменяет непереопределённую половину). `cargo test -p
+lumen-font -p lumen-paint` без регрессий (1034+29 тестов паинта зелёные,
+плюс doctest-набор шрифтового крейта), `cargo test -p lumen-shell --bin
+lumen --features v8` 1726/1726 без регрессий, `cargo clippy -p lumen-font
+-p lumen-paint -p lumen-shell --all-targets --features v8 -- -D warnings`
+чист. Срез трогает layout-геометрию (baseline, тот же путь, что FONTLOAD-10),
+поэтому гейт — полный пиксельный прогон: `python graphic_tests/dump_golden.py`
+12/12 байт-в-байт; `python graphic_tests/run.py --continue-on-fail` — дельта
+против прошлого прогона (commit a2f7666bf, FONTLOAD-10) **«Изменений нет»**
+(8/156 FAIL: 02/04/18/21/56/150/151/155, 50 known-debtor — идентично
+предыдущему прогону) — детерминированный корпус по-прежнему не декларирует
+ни один override-дескриптор, поэтому оба override везде `None` и код остаётся
+на прежнем `metrics.ascent_px`/`descent_px`-пути; живой pixel-diff подтверждает
+это, а не только архитектурное рассуждение.
+
+**Следующий срез — на выбор владельца FONTLOAD:** `sizeAdjust` (отдельный,
+масштабирует em-квадрат целиком); line-gap accessor вместе с моделью
+`line-height: normal` (предпосылка для `lineGapOverride`); WPT A/B-замер
+`css/css-fonts` override-категории; (D) feature/variation-settings дескриптора
+как дефолта CSS-свойства + шейпинг вне variable-font-пути; femtovg-паритет
+для (A); реактивность CSS-connected сета (BUG-471/CSSOM-4).
+
+## FONTLOAD-12 (P1, 2026-09-05, ветка `p1-fontload12-size-adjust`) — `size-adjust` премультиплицирует font-size face-а
+
+Взят `sizeAdjust` — первый из пяти кандидатов, оставленных FONTLOAD-11 «на
+выбор владельца». CSS Fonts L4 §14.4: `size-adjust` масштабирует glyph
+outlines и метрики face-а, к которым он применён, «как будто» этот face
+использовался при бо́льшем/меньшем `font-size` — WPT `size-adjust-01.html`
+делает это буквально: `size-adjust:150%` при `font-size:40px` для одного
+`@font-face` даёт референс, где те же глифы нарисованы ДРУГИМ `@font-face`
+без `size-adjust`, но с `font-size:60px` (1.5× от 40). Т.е. формула —
+`adjusted_px = font_size_px * size_adjust`, а не отдельный множитель поверх
+уже готовой ширины/ascent/descent.
+
+**Взаимодействие с override — не самостоятельная разведка, а перечитанная
+заметка FONTLOAD-11.** Тот срез уже отметил (по `font-size-adjust-metrics-
+override.html`, тест на CSS-СВОЙСТВО `font-size-adjust`, не на этот
+дескриптор): «база для override — тот же использованный font-size, просто
+уже скорректированный». Для дескриптора `size-adjust` тот же принцип
+переносится буквально: `ascent-override`/`descent-override` — доля УЖЕ
+скорректированного размера, не сырого `font-size`. Другими словами, `size-adjust`
+встаёт в вычисление ПЕРЕД и override, и реальными метриками face-а, а не
+рядом с ними.
+
+**Изменения:**
+1. `lumen_font::parse_metric_override_percent` (`crates/engine/font/src/
+   metric_override.rs`) переиспользован БЕЗ изменений кода — только doc-
+   комментарий расширен. Грамматика `size-adjust` не знает ключевого слова
+   `normal` (в отличие от override-дескрипторов), но это не требует новой
+   функции: невалидное/отсутствующее значение и так деградирует в `None`, а
+   `None` на стороне `size-adjust` читается как «100%, без масштабирования»
+   — тот же итоговый эффект, что и у корректного, но неприменимого `normal`.
+2. `FontFaceSlot`/`PrimaryFontMetrics::Owned` (`crates/engine/paint/src/
+   lib.rs`) получили третье поле `size_adjust: Option<f32>`, рядом с уже
+   существующими `ascent_override`/`descent_override`. `PrimaryFontMetrics::
+   ascent_px`/`descent_px` теперь сперва считают `adjusted_px = font_size_px
+   * size_adjust.unwrap_or(1.0)`, и уже от него берут либо override
+   (`adjusted_px * pct`), либо реальную метрику face-а
+   (`metrics.ascent_px(adjusted_px)`) — раньше оба пути читали сырой
+   `font_size_px`.
+3. `MultiFontMeasurer::register_family_with_overrides` — новый третий
+   параметр `size_adjust: Option<f32>` (сигнатура растёт до шести
+   аргументов; `register_family_with_ranges` — тонкая обёртка с
+   `None, None, None`, как и раньше). `char_width_with_families`/
+   `char_width_varied` масштабируют `font_size_px` на `slot.size_adjust`
+   ДО вызова `try_char_width`/`try_char_width_varied` — тот же приём, что
+   `PrimaryFontMetrics` применяет к ascent/descent, но на пути измерения
+   ширины глифа, а не line-box baseline.
+4. Проводка через оба источника, тем же путём, что уже прошли
+   `unicode_range`/override дескрипторы:
+   - **`local()`** — `page_pipeline.rs`, `frames.rs::frame_measurer`: рядом
+     с уже читаемыми `rule.ascent_override`/`descent_override` парсится
+     `rule.size_adjust`.
+   - **`url()`** — `PendingWebFont` (`subresources.rs`) получила
+     `size_adjust_str`; фоновый поток (`page_load.rs`) и синхронный путь
+     фрейма (`frames.rs::load_frame_fonts`) парсят её в `Option<f32>`;
+     `LoadEvent::FontLoaded` и `LoadedWebFont` несут уже распарсенное
+     значение дальше до `page_measurer` (`relayout.rs`).
+
+**Намеренно вне среза:**
+- **`lineGapOverride`** — не изменилось с FONTLOAD-11: в пайплайне по-прежнему
+  нет ни одного потребителя line-gap.
+- **WPT reftest'ы не двигаются этим срезом**: `size-adjust-01/02/03.html`,
+  `font-size-adjust-metrics-override.html` (`tests/wpt/css/css-fonts/`)
+  проверяют именно эту формулу против Ahem-подобной геометрии — этот срез им
+  нужен как фундамент, но живой A/B WPT-замер не входит (следующий шаг для
+  владельца — по образцу того, что FONTLOAD-11 тоже отложила).
+- **(D) feature/variation-settings дескриптора** и **femtovg-паритет для
+  (A)** — не тронуты, те же причины, что и раньше (не live-дефолт рендерер /
+  отдельный кусок работы).
+- **Реактивность CSS-connected сета** (BUG-471/CSSOM-4) — прежний,
+  архитектурно больший фундамент.
+
+Тесты: `lumen_font::metric_override` — 2 новых (`size_adjust_150_percent`,
+`size_adjust_out_of_grammar_keyword_degrades_to_none` — документирует, что
+переиспользование парсера безопасно: `"normal"` вне грамматики size-adjust
+деградирует в тот же `None`, что и для override); `crates/engine/paint/src/
+lib.rs::multi_font_tests` — 4 новых
+(`size_adjust_scales_ascent_and_descent_like_a_bigger_font_size`,
+`size_adjust_scales_char_width_like_a_bigger_font_size` — обе сравнивают
+adjusted-face на N px с baseline-face на N*scale px, а не проверяют голое
+число, `size_adjust_none_matches_100_percent`,
+`size_adjust_composes_with_ascent_override` — `size-adjust:150%` +
+`ascent-override:100%` на `font-size:20px` даёт `30px`, доказывая порядок
+применения). `cargo test -p lumen-font -p lumen-paint` без регрессий (10+4
+новых теста зелёные), `cargo test -p lumen-shell --bin lumen --features v8`
+1726/1726 без регрессий, `cargo clippy -p lumen-font -p lumen-paint
+--all-targets -- -D warnings` и `cargo clippy -p lumen-shell --bin lumen
+--all-targets --features v8 -- -D warnings` чисты. Замечено попутно: клиппи
+с явным `--profile dev-release` красит `lumen-layout` тремя `dead_code` на
+`crates/engine/layout/src/invariants.rs` (DEVX-8a `debug_assert!`-инварианты,
+чей единственный вызывающий код тоже под `cfg(debug_assertions)` — этот
+профиль его компилирует прочь вместе с самими проверками, оставляя функции
+без единого вызывающего). Воспроизведено и на `main` тем же прогоном —
+предсуществующий разрыв между `docs/commands.md`'s предписанным голым
+`cargo clippy -p <crate> --all-targets -- -D warnings` (без `--profile`,
+им гейт зелёный) и `--profile dev-release`, никак не относящийся к этому
+срезу; не заводился отдельным багом, т.к. сам факт уже подразумевается
+существующей заметкой CLAUDE.md про `debug_assert!`-профили — просто
+раньше никто не гонял clippy именно с этим флагом на этом крейте.
+
+Срез трогает layout-геометрию (та же формула, что FONTLOAD-11 уже применяла
+для override), поэтому гейт — полный пиксельный прогон: `python
+graphic_tests/dump_golden.py` 12/12 байт-в-байт; `python graphic_tests/
+run.py --continue-on-fail` — дельта против прошлого прогона (commit
+6c4d12254, FONTLOAD-11) **«Изменений нет»** (3/156 FAIL: 150/151/155, 51
+known-debtor — идентично предыдущему прогону) — детерминированный корпус
+по-прежнему не декларирует `size-adjust`, поэтому он везде `None` и код
+остаётся на прежнем пути; живой pixel-diff подтверждает это, а не только
+архитектурное рассуждение. `scripts/scoped-test.sh origin/main` не
+завершился за отведённые 10 минут foreground-лимита — тот же класс проблемы,
+что уже документированный BUG-805 (гейт виснет на `lumen-network`); ни один
+из трёх изменённых этим срезом крейтов (`lumen-font`/`lumen-paint`/
+`lumen-shell`) не является `lumen-network`, так что это не новая регрессия
+этого среза, а уже известный несвязанный разрыв гейта.
+
+**Следующий срез — на выбор владельца FONTLOAD:** line-gap accessor вместе с
+моделью `line-height: normal` (предпосылка для `lineGapOverride`); WPT
+A/B-замер `css/css-fonts` override-категории (`size-adjust`/`ascent-override`/
+`descent-override`); (D) feature/variation-settings дескриптора как дефолта
+CSS-свойства + шейпинг вне variable-font-пути; femtovg-паритет для (A);
+реактивность CSS-connected сета (BUG-471/CSSOM-4).
