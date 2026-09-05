@@ -200,6 +200,7 @@ pub(crate) fn load_font_faces(
                 ascent_override_str: rule.ascent_override.clone(),
                 descent_override_str: rule.descent_override.clone(),
                 size_adjust_str: rule.size_adjust.clone(),
+                line_gap_override_str: rule.line_gap_override.clone(),
                 url: url_src.value.clone(),
             });
         }
@@ -465,6 +466,9 @@ pub(crate) struct PendingWebFont {
     /// Сырая строка `size-adjust` дескриптора (CSS Fonts L4 §14.4,
     /// FONTLOAD-12), та же семантика/точка разбора, что у override-строк.
     pub(crate) size_adjust_str: Option<String>,
+    /// Сырая строка `line-gap-override` дескриптора (CSS Fonts L4 §14.3,
+    /// FONTLOAD-13), та же семантика, что у `ascent_override_str`.
+    pub(crate) line_gap_override_str: Option<String>,
     /// URL для fetch (@font-face `src: url(...)`).
     pub(crate) url: String,
 }
@@ -494,6 +498,9 @@ pub(crate) struct LoadedWebFont {
     /// `size-adjust` дескриптор (CSS Fonts L4 §14.4, FONTLOAD-12) — доля,
     /// на которую масштабируется `font-size` этого face-а, `None` = `100%`.
     pub(crate) size_adjust: Option<f32>,
+    /// `line-gap-override` дескриптор (CSS Fonts L4 §14.3, FONTLOAD-13) — та
+    /// же семантика, что `ascent_override`.
+    pub(crate) line_gap_override: Option<f32>,
     /// Декодированные sfnt-байты (TrueType / OTF после WOFF/WOFF2-распаковки).
     pub(crate) bytes: Vec<u8>,
 }

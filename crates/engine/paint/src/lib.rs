@@ -382,6 +382,7 @@ pub struct FontMeasurer<'a> {
     ascent_units: u16,
     descent_units: u16,
     x_height_units: u16,
+    line_gap_units: u16,
 }
 
 impl<'a> FontMeasurer<'a> {
@@ -391,19 +392,26 @@ impl<'a> FontMeasurer<'a> {
         let cmap = font.cmap()?;
         let hhea = font.hhea()?;
         let units_per_em = head.units_per_em;
-        let (ascent_units, descent_units) = match font.os2() {
-            Ok(os2) => (os2.typo_ascender.unsigned_abs(), os2.typo_descender.unsigned_abs()),
-            Err(_) => (hhea.ascent.unsigned_abs(), hhea.descent.unsigned_abs()),
+        let os2 = font.os2().ok();
+        let (ascent_units, descent_units) = match &os2 {
+            Some(os2) => (os2.typo_ascender.unsigned_abs(), os2.typo_descender.unsigned_abs()),
+            None => (hhea.ascent.unsigned_abs(), hhea.descent.unsigned_abs()),
         };
-        let x_height_units = font
-            .os2()
-            .ok()
+        // Line-gap: тот же приоритет источника, что ascent/descent выше
+        // (FONTLOAD-13) — OS/2 typo-метрика предпочтительнее hhea, когда
+        // таблица есть.
+        let line_gap_units = os2
+            .as_ref()
+            .map_or(hhea.line_gap, |o| o.typo_line_gap)
+            .unsigned_abs();
+        let x_height_units = os2
+            .as_ref()
             .and_then(|o| o.x_height)
             .filter(|&v| v > 0)
             .map_or(units_per_em / 2, |v| v as u16);
         Ok(Self {
             hmtx, cmap, units_per_em,
-            ascent_units, descent_units, x_height_units,
+            ascent_units, descent_units, x_height_units, line_gap_units,
         })
     }
 }
@@ -433,6 +441,10 @@ impl<'a> TextMeasurer for FontMeasurer<'a> {
 
     fn x_height_px(&self, font_size_px: f32) -> f32 {
         self.x_height_units as f32 * font_size_px / self.units_per_em as f32
+    }
+
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        self.line_gap_units as f32 * font_size_px / self.units_per_em as f32
     }
 }
 
@@ -508,6 +520,9 @@ struct OwnedFontMetrics {
     ascent_units: u16,
     /// Descent в font units, тем же приоритетом источника, что и `ascent_units`.
     descent_units: u16,
+    /// Line-gap в font units, тем же приоритетом источника, что и
+    /// `ascent_units` (FONTLOAD-13).
+    line_gap_units: u16,
 }
 
 impl OwnedFontMetrics {
@@ -534,10 +549,15 @@ impl OwnedFontMetrics {
         });
         // Тот же приоритет источника, что `FontMeasurer::new` (bundled-fallback):
         // typo-метрики OS/2 предпочтительнее hhea, когда таблица есть.
-        let (ascent_units, descent_units) = match font.os2() {
-            Ok(os2) => (os2.typo_ascender.unsigned_abs(), os2.typo_descender.unsigned_abs()),
-            Err(_) => (hhea.ascent.unsigned_abs(), hhea.descent.unsigned_abs()),
+        let os2 = font.os2().ok();
+        let (ascent_units, descent_units) = match &os2 {
+            Some(os2) => (os2.typo_ascender.unsigned_abs(), os2.typo_descender.unsigned_abs()),
+            None => (hhea.ascent.unsigned_abs(), hhea.descent.unsigned_abs()),
         };
+        let line_gap_units = os2
+            .as_ref()
+            .map_or(hhea.line_gap, |o| o.typo_line_gap)
+            .unsigned_abs();
         Ok(Self {
             cmap_data,
             advance_widths,
@@ -546,6 +566,7 @@ impl OwnedFontMetrics {
             var_data,
             ascent_units,
             descent_units,
+            line_gap_units,
         })
     }
 
@@ -563,6 +584,12 @@ impl OwnedFontMetrics {
     /// Descent в px — та же формула, что [`FontMeasurer::descent_px`].
     fn descent_px(&self, font_size_px: f32) -> f32 {
         self.descent_units as f32 * font_size_px / self.units_per_em as f32
+    }
+
+    /// Line-gap в px — та же формула, что [`FontMeasurer::line_gap_px`]
+    /// (FONTLOAD-13).
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        self.line_gap_units as f32 * font_size_px / self.units_per_em as f32
     }
 
     /// Возвращает ширину символа в px. Если глиф не найден (glyph_id == 0),
@@ -778,6 +805,7 @@ enum PrimaryFontMetrics<'a> {
         ascent_override: Option<f32>,
         descent_override: Option<f32>,
         size_adjust: Option<f32>,
+        line_gap_override: Option<f32>,
     },
     Shared(Arc<OwnedFontMetrics>),
 }
@@ -804,6 +832,20 @@ impl PrimaryFontMetrics<'_> {
             Self::Shared(m) => m.descent_px(font_size_px),
         }
     }
+
+    /// Line-gap в px (FONTLOAD-13) — та же схема override/size-adjust, что
+    /// [`Self::ascent_px`]/[`Self::descent_px`]. Пока не имеет потребителя в
+    /// layout (см. [`lumen_layout::TextMeasurer::line_gap_px`]).
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        match self {
+            Self::Owned { metrics, line_gap_override, size_adjust, .. } => {
+                let adjusted_px = font_size_px * size_adjust.unwrap_or(1.0);
+                line_gap_override
+                    .map_or_else(|| metrics.line_gap_px(adjusted_px), |pct| adjusted_px * pct)
+            }
+            Self::Shared(m) => m.line_gap_px(font_size_px),
+        }
+    }
 }
 
 /// Один @font-face face-слот с опциональным `unicode-range` ограничением.
@@ -828,6 +870,9 @@ struct FontFaceSlot {
     /// `ascent_override`/`descent_override` выше). `None` — дескриптор
     /// отсутствует/невалиден, эквивалентно `100%` (без масштабирования).
     size_adjust: Option<f32>,
+    /// `line-gap-override` дескриптор (CSS Fonts L4 §14.3, FONTLOAD-13), та
+    /// же семантика, что `ascent_override`/`descent_override`.
+    line_gap_override: Option<f32>,
 }
 
 /// Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты.
@@ -905,20 +950,24 @@ impl MultiFontMeasurer {
         bytes: Vec<u8>,
         unicode_ranges: Vec<UnicodeRange>,
     ) {
-        self.register_family_with_overrides(family, bytes, unicode_ranges, None, None, None);
+        self.register_family_with_overrides(
+            family, bytes, unicode_ranges, None, None, None, None,
+        );
     }
 
     /// Регистрирует @font-face шрифт с `unicode-range` ограничением и
-    /// метрик-override дескрипторами (CSS Fonts L4 §14, FONTLOAD-11/12).
+    /// метрик-override дескрипторами (CSS Fonts L4 §14, FONTLOAD-11/12/13).
     ///
-    /// `ascent_override`/`descent_override`: доля `font-size` (`"90%"` →
-    /// `Some(0.9)`, см. [`lumen_font::parse_metric_override_percent`]),
-    /// `None` — `normal`/дескриптор отсутствует, применяются реальные
-    /// ascent/descent выбранного face-а. `size_adjust`: та же доля, но
-    /// масштабирует `font-size` ДО вычисления и override, и реальных метрик
-    /// (CSS Fonts L4 §14.4) — `None` эквивалентно `100%`.
+    /// `ascent_override`/`descent_override`/`line_gap_override`: доля
+    /// `font-size` (`"90%"` → `Some(0.9)`, см.
+    /// [`lumen_font::parse_metric_override_percent`]), `None` —
+    /// `normal`/дескриптор отсутствует, применяются реальные метрики
+    /// выбранного face-а. `size_adjust`: та же доля, но масштабирует
+    /// `font-size` ДО вычисления и override, и реальных метрик (CSS Fonts L4
+    /// §14.4) — `None` эквивалентно `100%`.
     ///
     /// [`register_family`]: Self::register_family
+    #[allow(clippy::too_many_arguments)] // FONTLOAD-11/12/13: растёт вместе с числом override-дескрипторов CSS Fonts L4 §14
     pub fn register_family_with_overrides(
         &mut self,
         family: &str,
@@ -927,6 +976,7 @@ impl MultiFontMeasurer {
         ascent_override: Option<f32>,
         descent_override: Option<f32>,
         size_adjust: Option<f32>,
+        line_gap_override: Option<f32>,
     ) {
         if let Ok(metrics) = OwnedFontMetrics::from_bytes(&bytes) {
             let slot = FontFaceSlot {
@@ -935,6 +985,7 @@ impl MultiFontMeasurer {
                 ascent_override,
                 descent_override,
                 size_adjust,
+                line_gap_override,
             };
             self.faces
                 .entry(family.to_ascii_lowercase())
@@ -989,6 +1040,7 @@ impl MultiFontMeasurer {
                     ascent_override: slot.ascent_override,
                     descent_override: slot.descent_override,
                     size_adjust: slot.size_adjust,
+                    line_gap_override: slot.line_gap_override,
                 });
             }
             if let Some(m) = self.system_metrics(&lower) {
@@ -1010,11 +1062,13 @@ impl MultiFontMeasurer {
                 var_data: None,
                 ascent_units: 0,
                 descent_units: 0,
+                line_gap_units: 0,
             },
             unicode_ranges: Vec::new(),
             ascent_override: None,
             descent_override: None,
             size_adjust: None,
+            line_gap_override: None,
         };
         self.faces
             .entry(family.to_ascii_lowercase())
@@ -1102,6 +1156,10 @@ impl TextMeasurer for MultiFontMeasurer {
         self.fallback.x_height_px(font_size_px)
     }
 
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        self.fallback.line_gap_px(font_size_px)
+    }
+
     fn descent_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
         match self.primary_metrics(families) {
             Some(m) => m.descent_px(font_size_px),
@@ -1113,6 +1171,13 @@ impl TextMeasurer for MultiFontMeasurer {
         match self.primary_metrics(families) {
             Some(m) => m.ascent_px(font_size_px),
             None => self.ascent_px(font_size_px),
+        }
+    }
+
+    fn line_gap_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
+        match self.primary_metrics(families) {
+            Some(m) => m.line_gap_px(font_size_px),
+            None => self.line_gap_px(font_size_px),
         }
     }
 }
@@ -1502,6 +1567,7 @@ mod multi_font_tests {
             Some(1.0), // 100%
             None,
             None,
+            None,
         );
         let families = vec!["overridden".to_string()];
         assert_eq!(m.ascent_px_with_families(20.0, &families), 20.0);
@@ -1518,6 +1584,7 @@ mod multi_font_tests {
             None,
             Some(0.5), // 50%
             None,
+            None,
         );
         let families = vec!["overridden".to_string()];
         assert_eq!(m.descent_px_with_families(20.0, &families), 10.0);
@@ -1532,7 +1599,7 @@ mod multi_font_tests {
         plain.register_family_with_ranges("plain", INTER.to_vec(), Vec::new());
         let mut overridden = MultiFontMeasurer::new(&font).unwrap();
         overridden.register_family_with_overrides(
-            "plain", INTER.to_vec(), Vec::new(), None, None, None,
+            "plain", INTER.to_vec(), Vec::new(), None, None, None, None,
         );
         let families = vec!["plain".to_string()];
         assert_eq!(
@@ -1557,6 +1624,7 @@ mod multi_font_tests {
             mono_bytes.clone(),
             Vec::new(),
             Some(1.0),
+            None,
             None,
             None,
         );
@@ -1589,6 +1657,7 @@ mod multi_font_tests {
             None,
             None,
             Some(1.5), // 150%
+            None,
         );
         let mut baseline = MultiFontMeasurer::new(&font).unwrap();
         baseline.register_family("mono-baseline", mono_bytes);
@@ -1616,6 +1685,7 @@ mod multi_font_tests {
             None,
             None,
             Some(2.0), // 200%
+            None,
         );
         let mut baseline = MultiFontMeasurer::new(&font).unwrap();
         baseline.register_family("mono-baseline", mono_bytes);
@@ -1634,11 +1704,11 @@ mod multi_font_tests {
         let font = inter_font();
         let mut none_variant = MultiFontMeasurer::new(&font).unwrap();
         none_variant.register_family_with_overrides(
-            "plain", INTER.to_vec(), Vec::new(), None, None, None,
+            "plain", INTER.to_vec(), Vec::new(), None, None, None, None,
         );
         let mut hundred_variant = MultiFontMeasurer::new(&font).unwrap();
         hundred_variant.register_family_with_overrides(
-            "plain", INTER.to_vec(), Vec::new(), None, None, Some(1.0),
+            "plain", INTER.to_vec(), Vec::new(), None, None, Some(1.0), None,
         );
         let families = vec!["plain".to_string()];
         assert_eq!(
@@ -1666,9 +1736,112 @@ mod multi_font_tests {
             Some(1.0), // ascent-override: 100%
             None,
             Some(1.5), // size-adjust: 150%
+            None,
         );
         let families = vec!["both".to_string()];
         assert_eq!(m.ascent_px_with_families(20.0, &families), 30.0);
+    }
+
+    // ── `line-gap-override` дескриптор (CSS Fonts L4 §14.3, FONTLOAD-13) ───
+
+    #[test]
+    fn line_gap_override_replaces_real_metric_with_font_size_fraction() {
+        // Та же семантика, что ascent-override: доля font-size, не face-а.
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family_with_overrides(
+            "overridden",
+            INTER.to_vec(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            Some(1.0), // line-gap-override: 100%
+        );
+        let families = vec!["overridden".to_string()];
+        assert_eq!(m.line_gap_px_with_families(20.0, &families), 20.0);
+    }
+
+    #[test]
+    fn line_gap_override_none_matches_register_family_with_ranges() {
+        // `None` (CSS `normal`/дескриптор отсутствует) не должен ничего
+        // менять относительно пути без overrides (FONTLOAD-10 baseline).
+        let font = inter_font();
+        let mut plain = MultiFontMeasurer::new(&font).unwrap();
+        plain.register_family_with_ranges("plain", INTER.to_vec(), Vec::new());
+        let mut overridden = MultiFontMeasurer::new(&font).unwrap();
+        overridden.register_family_with_overrides(
+            "plain", INTER.to_vec(), Vec::new(), None, None, None, None,
+        );
+        let families = vec!["plain".to_string()];
+        assert_eq!(
+            plain.line_gap_px_with_families(16.0, &families),
+            overridden.line_gap_px_with_families(16.0, &families)
+        );
+    }
+
+    #[test]
+    fn line_gap_override_alone_leaves_ascent_and_descent_at_real_metric() {
+        // Асимметричный override: только line-gap задан — ascent/descent
+        // остаются реальными метриками face-а, а не тоже подменяются.
+        let mono_bytes = std::fs::read(MONO_PATH).expect("bundled JetBrains Mono должен читаться");
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family_with_overrides(
+            "mono-line-gap-override",
+            mono_bytes.clone(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            Some(0.5),
+        );
+        let mut baseline = MultiFontMeasurer::new(&font).unwrap();
+        baseline.register_family("mono-baseline", mono_bytes);
+        let overridden_families = vec!["mono-line-gap-override".to_string()];
+        let baseline_families = vec!["mono-baseline".to_string()];
+        assert_eq!(
+            m.ascent_px_with_families(16.0, &overridden_families),
+            baseline.ascent_px_with_families(16.0, &baseline_families),
+        );
+        assert_eq!(
+            m.descent_px_with_families(16.0, &overridden_families),
+            baseline.descent_px_with_families(16.0, &baseline_families),
+        );
+    }
+
+    #[test]
+    fn line_gap_without_override_matches_real_face_metric() {
+        // Без дескриптора line_gap_px читает реальную hhea/OS2-метрику face-а,
+        // не 0.0 по умолчанию (тот default — только для реализаций
+        // `TextMeasurer` без доступа к метрикам, FONTLOAD-13).
+        let mono_bytes = std::fs::read(MONO_PATH).expect("bundled JetBrains Mono должен читаться");
+        let mono_font = lumen_font::Font::parse(&mono_bytes).expect("валидный sfnt");
+        let direct = FontMeasurer::new(&mono_font).expect("метрики JetBrains Mono");
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family("mono-plain", mono_bytes.clone());
+        let families = vec!["mono-plain".to_string()];
+        assert_eq!(m.line_gap_px_with_families(16.0, &families), direct.line_gap_px(16.0));
+    }
+
+    #[test]
+    fn line_gap_override_composes_with_size_adjust() {
+        // Тот же принцип композиции, что `size_adjust_composes_with_ascent_override`:
+        // override — доля УЖЕ скорректированного size-adjust'ом font-size.
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family_with_overrides(
+            "both",
+            INTER.to_vec(),
+            Vec::new(),
+            None,
+            None,
+            Some(1.5), // size-adjust: 150%
+            Some(1.0), // line-gap-override: 100%
+        );
+        let families = vec!["both".to_string()];
+        assert_eq!(m.line_gap_px_with_families(20.0, &families), 30.0);
     }
 
     // ── resolve_font_stretch (CSS Fonts L4 §5.2) ────────────────────────────
