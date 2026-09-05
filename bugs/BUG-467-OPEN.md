@@ -714,3 +714,119 @@ v8_fontface_shadow_custom` 59/59 (было 53, +6, из них 3 напряму�
 делает значения ВИДИМЫМИ скрипту, но ни один из двух путей всё ещё не
 использует их при реальной раскладке/растеризации текста); реактивность
 CSS-connected сета на CSSOM-изменения (gap 1, BUG-471/CSSOM-4).
+
+## FONTLOAD-9 (P1, 2026-09-05, ветка `p1-fontload9-unicode-range-paint`) — `unicode-range` на пути рисования (wgpu)
+
+Взяла первый и самый самостоятельный кусок «подключения дескрипторов к
+рендерингу»: разведка агентом-исследователем перед срезом разбила эту задачу
+на 4 независимых по слоям под-среза — (A) per-codepoint выбор face с учётом
+`unicode-range` на пути ПАИНТА (не только измерения ширин); (B) привязка
+ascent/descent/line-gap к реально выбранному face + override-метрики поверх
+(сами метрики `@font-face`-шрифтов сейчас архитектурно не привязаны к
+выбранному face — `MultiFontMeasurer::ascent_px`/`descent_px` всегда
+делегируют в bundled-fallback); (C) `sizeAdjust` — нет ни одной точки
+применения ни в `lumen_font`, ни в `lumen_layout`/`lumen_paint`; (D)
+`featureSettings`/`variationSettings` дескриптора как дефолта для CSS-свойства
+элемента + распространение шейпинга (сейчас работает только для
+variable-шрифтов в одном бэкенде `varied_text.rs`) на статические шрифты и
+CPU-путь. (A) выбрана первой: инфраструктура (`UnicodeRange`,
+`codepoint_in_ranges`, множественные `FaceRecord` одного family) уже
+наполовину существовала со стороны измерения (`MultiFontMeasurer`,
+`lumen-paint/src/lib.rs`), её нужно было только зеркально протянуть в выбор
+face при РИСОВАНИИ.
+
+**Пересмотрено осознанное решение BUG-434.** `subsystems/font.md` фиксировало:
+«`unicode_range` не хранится на `FaceRecord`... и не нужен для выбора: cmap
+coverage — источник истины, Lumen и так фетчит каждый сабсет целиком».
+Это верно только когда файл-сабсет физически не содержит глифов вне
+заявленного диапазона (типичный кейс реальных веб-шрифтов вроде Google
+Fonts). WPT `css/css-fonts/font-face-unicode-range.html` целенаправленно даёт
+двум `@font-face` с непересекающимися диапазонами (`U+0041-0044` / uppercase
+vs `U+0061-0064` / lowercase) ОДИН И ТОТ ЖЕ файл шрифта
+(`LigatureSymbolsWithSpaces.woff`) — тест текста `ABCDEFG` (только заглавные)
+против `NOIMPACT`-правила (диапазон только строчных) обязан провалиться
+полностью, показывая обычный текст, хотя тот же самый файл физически содержит
+глифы и под заглавные тоже. Реализация «cmap coverage is the ground truth» на
+этом тесте гарантированно ошибается — заявленный дескриптор должен побеждать
+случайное покрытие cmap, а не наоборот.
+
+**Изменения:**
+1. `lumen_core::FaceRecord` (`crates/core/src/ext.rs`) — новое поле
+   `unicode_ranges: Vec<(u32, u32)>` (не `lumen_font::UnicodeRange`: `core`
+   не может зависеть от `font`, граф однонаправленный). Пустой `Vec` =
+   «без ограничений» (системные face-ы, `@font-face` без дескриптора).
+   Новая свободная функция `codepoint_in_face_ranges(cp, ranges) -> bool`
+   рядом с `match_face` — та же свободная-функция конвенция.
+2. `FontRegistry::register_from_bytes` (`crates/engine/font/src/
+   font_registry.rs`) — заявленный `unicode_range` (уже участвовавший в
+   идентичности виртуального пути с BUG-434) теперь ЕЩЁ и копируется на саму
+   запись `FaceRecord.unicode_ranges`, а не только в ключ.
+3. `SystemFontIndex`/`font_cache.rs` (кэш системного индекса на диске) —
+   `unicode_ranges: Vec::new()` на всех системных face-ах (дескриптор — только
+   у `@font-face`, системные шрифты его не несут; формат кэша не менялся,
+   системные записи всегда пусты).
+4. `lumen-paint`: `LoadedFace` (`renderer/types.rs`) получила то же поле,
+   скопированное из `FaceRecord` при загрузке (`load_face_by_record` — путь
+   и для primary face, и для BUG-434-сиблингов; параллельный прогрев
+   `prefetch_faces_parallel` тоже пришлось поправить — иначе прогретый
+   параллельно primary face терял бы диапазон, который последовательный путь
+   проставил бы верно, но прогрев его опережает).
+5. `pick_face_for_codepoint` (`renderer/glyph_raster.rs`) — теперь фильтрует
+   каждого кандидата (primary и весь fallback-скан по `self.faces`) по
+   `codepoint_in_face_ranges` ДО обращения к cmap. Пустой список (обычный
+   web-шрифт/системный face) проходит фильтр всегда — поведение без
+   дескриптора не меняется.
+
+**Намеренно вне среза:** бэкенд `femtovg` (рантайм-fallback при сбое
+инициализации wgpu либо явный `LUMEN_BACKEND=femtovg`, ADR-017 — не
+live-дефолт) делегирует выбор глифа самой библиотеке через её собственный
+`fallback_chain`/`fill_text`, а не через `pick_face_for_codepoint` — нужна
+структурно другая реализация (пре-сегментация текста по диапазонам ДО вызова
+`fill_text`, как уже делает `MultiFontMeasurer` для ширин), кандидат для
+отдельного среза. CPU-растеризатор (`cpu_raster.rs`, детерминированный путь
+`--screenshot`/graphic_tests) вообще не рендерит `@font-face`-шрифты
+(bundled Inter, либо один системный face под диагностическим
+`LUMEN_CPU_SYSTEM_FONTS` — без multi-face-каскада) — unicode-range там не
+применим до отдельной, куда большей задачи подключения web-шрифтов к
+CPU-пути; отсюда же нулевой риск для графических тестов (`docs/graphic-
+tests.md` сам называет корпус «Graphics only, no text»).
+
+Тесты: `crates/core/src/ext.rs` — 2 новых юнит-теста на
+`codepoint_in_face_ranges`; `crates/engine/font/src/font_registry.rs` — 2
+новых (`face_record_carries_declared_unicode_range`,
+`face_record_unicode_range_empty_when_descriptor_absent`); `crates/engine/
+paint/src/renderer/glyph_raster.rs` — новый модуль
+`pick_face_for_codepoint_tests`, 3 теста, включая
+`declared_range_wins_over_accidental_cmap_coverage` — прямое зеркало сценария
+WPT-теста выше (два face с одним и тем же реальным файлом `Inter-Regular.ttf`
+и непересекающимися заявленными диапазонами; без фикса тест падает, так как
+`pick_face_for_codepoint` нашёл бы глиф в «неправильном» face через cmap).
+
+`cargo test -p lumen-core` / `-p lumen-font` — без регрессий; `cargo test -p
+lumen-paint --no-default-features --features backend-wgpu --lib` 1101/1101
+(все renderer-тесты зелёные, включая 3 новых); `cargo clippy -p lumen-core
+-p lumen-font --all-targets -- -D warnings` и `cargo clippy -p lumen-paint
+--all-targets --no-default-features --features backend-wgpu -- -D warnings`
+чисты. `python scripts/check_file_sizes.py --update` — `ext.rs` (+43),
+`renderer.rs` (+8) видимы в этом коммите; остальные файлы в выводе скрипта
+(`dom/lib.rs`, `selector_query.rs`, `worker.rs`, `network/lib.rs`) — рост от
+уже слитых чужих веток, подхвачен той же регенерацией, не мой код.
+
+`python graphic_tests/run.py --continue-on-fail` в этой сессии окружения не
+даёт валидного сигнала: 155/156 FAIL с ~100% диффом, TEST-00 (калибровка)
+ERRORED на самом снимке — но дельта-отчёт показал «Изменений нет» относительно
+прогона на baseline `main` (commit acb271174) ДО этой ветки, то есть тот же
+тотальный отказ уже был на main (нет реального фокусируемого окна/захвата
+экрана в этой среде) и не связан с этим срезом; корпус в любом случае не
+рендерит текст (см. выше). `scripts/scoped-test.sh main` — 1 красный тест из
+всех затронутых крейтов, `lumen-js`'s
+`v8_perf_typedom_node::native_binding_panic_does_not_abort_process` — уже
+заведённый и открытый BUG-997, детерминированно красный на `main` независимо
+от ветки (`crates/js` этим срезом не тронут).
+
+**Следующий срез — на выбор владельца FONTLOAD:** (B) override-метрики
+ascent/descent/line-gap/size-adjust (сначала требует завести сами метрики
+`@font-face`-шрифтов в `OwnedFontMetrics`/`FaceMetrics`, которых там сегодня
+нет) — самый крупный оставшийся кусок; (D) feature/variation-settings
+дескриптора как дефолта CSS-свойства + шейпинг вне variable-font-пути;
+femtovg-паритет для (A); реактивность CSS-connected сета (BUG-471/CSSOM-4).

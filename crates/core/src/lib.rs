@@ -43,8 +43,8 @@ pub use crash::{format_crash_dump, write_crash_dump, CrashRecorder};
 pub use error::{Error, Result};
 pub use event::{Event, FetchPriority, RequestStage, SubresourceKind, TabId};
 pub use ext::{
-    match_face, BrowserSession, ClockMode, EventSink, FaceRecord, FontProvider, FontStyle,
-    NORMAL_STRETCH_PERCENT,
+    codepoint_in_face_ranges, match_face, BrowserSession, ClockMode, EventSink, FaceRecord,
+    FontProvider, FontStyle, NORMAL_STRETCH_PERCENT,
     HyphenationProvider, NullBrowserSession, NullHyphenationProvider,
     JsError, JsResult, JsRuntime, JsValue, NoopEventSink, NullJsRuntime, SuspendedHeap,
     MemoryPressureLevel, MemoryPressureSource, NullMemoryPressureSource,

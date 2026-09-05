@@ -395,7 +395,11 @@ fn synthetic_color_font_is_detected_as_color() {
 fn color_glyph_emits_one_quad_per_layer_with_palette_colors() {
     let bytes = build_color_font();
     let metrics = build_face_metrics(&bytes);
-    let faces = vec![LoadedFace { bytes: Arc::from(bytes.as_slice()), metrics }];
+    let faces = vec![LoadedFace {
+        bytes: Arc::from(bytes.as_slice()),
+        metrics,
+        unicode_ranges: Vec::new(),
+    }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
     let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
@@ -440,7 +444,11 @@ fn color_glyph_emits_one_quad_per_layer_with_palette_colors() {
 fn atlas_exhaustion_is_not_memoized_and_heals_after_reset() {
     let bytes = build_color_font();
     let metrics = build_face_metrics(&bytes);
-    let faces = vec![LoadedFace { bytes: Arc::from(bytes.as_slice()), metrics }];
+    let faces = vec![LoadedFace {
+        bytes: Arc::from(bytes.as_slice()),
+        metrics,
+        unicode_ranges: Vec::new(),
+    }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(64);
     let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
@@ -477,7 +485,11 @@ fn atlas_exhaustion_is_not_memoized_and_heals_after_reset() {
 fn custom_palette_override_reaches_the_emitted_vertices() {
     let bytes = build_color_font();
     let metrics = build_face_metrics(&bytes);
-    let faces = vec![LoadedFace { bytes: Arc::from(bytes.as_slice()), metrics }];
+    let faces = vec![LoadedFace {
+        bytes: Arc::from(bytes.as_slice()),
+        metrics,
+        unicode_ranges: Vec::new(),
+    }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
     let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
@@ -526,7 +538,11 @@ fn custom_palette_override_reaches_the_emitted_vertices() {
 fn text_run_cache_skips_color_glyph_runs() {
     let bytes = build_color_font();
     let metrics = build_face_metrics(&bytes);
-    let faces = vec![LoadedFace { bytes: Arc::from(bytes.as_slice()), metrics }];
+    let faces = vec![LoadedFace {
+        bytes: Arc::from(bytes.as_slice()),
+        metrics,
+        unicode_ranges: Vec::new(),
+    }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
     let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
@@ -568,7 +584,11 @@ fn text_run_cache_replays_identical_vertices() {
     let bytes = std::fs::read("../../../assets/fonts/Inter-Regular.ttf")
         .expect("bundled font");
     let metrics = build_face_metrics(&bytes);
-    let faces = vec![LoadedFace { bytes: Arc::from(bytes.as_slice()), metrics }];
+    let faces = vec![LoadedFace {
+        bytes: Arc::from(bytes.as_slice()),
+        metrics,
+        unicode_ranges: Vec::new(),
+    }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
     let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();

@@ -443,6 +443,32 @@ pub struct FaceRecord {
     pub stretch: u16,
     /// Путь к файлу шрифта (`.ttf` / `.otf`).
     pub path: PathBuf,
+    /// `unicode-range` дескриптор `@font-face` (CSS Fonts L4 §5.1), как
+    /// список `(start, end)` кодепоинтов включительно. Пустой `Vec` —
+    /// системные face-ы и `@font-face` без дескриптора — означает «без
+    /// ограничений», face участвует в подборе для любого кодпоинта.
+    ///
+    /// FONTLOAD-9 (BUG-467): до этого поля `pick_face_for_codepoint`
+    /// (`lumen-paint`) ориентировался только на реальное покрытие `cmap` —
+    /// решение BUG-434, задокументированное как «cmap coverage is the
+    /// ground truth». Это верно только когда файл-сабсет физически не
+    /// содержит глифов вне заявленного диапазона (типичный кейс реальных
+    /// веб-шрифтов); WPT `css/css-fonts/font-face-unicode-range.html`
+    /// намеренно даёт двум `@font-face` с непересекающимися диапазонами
+    /// ОДИН И ТОТ ЖЕ файл шрифта — единственный способ пройти тест
+    /// заявленный диапазон обязан побеждать реальное покрытие cmap, а не
+    /// наоборот. Поле хранится как `(u32, u32)`, а не `lumen_font::
+    /// UnicodeRange`: `lumen-core` не может зависеть от `lumen-font`
+    /// (граф зависимостей `core → font`, не наоборот).
+    pub unicode_ranges: Vec<(u32, u32)>,
+}
+
+/// `true`, если кодпоинт `cp` попадает хотя бы в один диапазон `ranges`
+/// (включительно с обеих сторон), ЛИБО `ranges` пуст (нет ограничения —
+/// [`FaceRecord::unicode_ranges`] пуст для системных face-ов и `@font-face`
+/// без дескриптора `unicode-range`, CSS Fonts L4 §5.1).
+pub fn codepoint_in_face_ranges(cp: u32, ranges: &[(u32, u32)]) -> bool {
+    ranges.is_empty() || ranges.iter().any(|&(start, end)| cp >= start && cp <= end)
 }
 
 /// Источник системных шрифтов. Реализация — в `lumen-font::system_fonts`.
@@ -490,6 +516,7 @@ pub trait FontProvider: Send + Sync {
                 style: FontStyle::Normal,
                 stretch: 100,
                 path,
+                unicode_ranges: Vec::new(),
             })
             .collect()
     }
@@ -770,6 +797,7 @@ mod font_provider_tests {
             style,
             stretch: 100,
             path: PathBuf::from(format!("{family}-{weight}-{style:?}.ttf")),
+            unicode_ranges: Vec::new(),
         }
     }
 
@@ -785,7 +813,22 @@ mod font_provider_tests {
             style,
             stretch,
             path: PathBuf::from(format!("{family}-{weight}-{style:?}-{stretch}.ttf")),
+            unicode_ranges: Vec::new(),
         }
+    }
+
+    #[test]
+    fn codepoint_in_face_ranges_empty_means_unrestricted() {
+        assert!(codepoint_in_face_ranges(0x41, &[]));
+        assert!(codepoint_in_face_ranges(0x1F600, &[]));
+    }
+
+    #[test]
+    fn codepoint_in_face_ranges_checks_membership() {
+        let ranges = [(0x41, 0x44), (0x400, 0x4FF)];
+        assert!(codepoint_in_face_ranges(0x42, &ranges)); // 'B', внутри первого
+        assert!(codepoint_in_face_ranges(0x410, &ranges)); // 'А', внутри второго
+        assert!(!codepoint_in_face_ranges(0x61, &ranges)); // 'a', вне обоих
     }
 
     #[test]

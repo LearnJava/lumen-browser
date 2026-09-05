@@ -4,25 +4,27 @@
 # Число может ехать ВНИЗ свободно, ВВЕРХ — только осознанно, тем же
 # коммитом, что и рост, и с объяснением в теле коммита.
 
-9602	crates/network/src/lib.rs
+9887	crates/network/src/lib.rs
 7955	crates/engine/paint/src/backends/femtovg_backend.rs
-5943	crates/engine/paint/src/renderer.rs
-5342	crates/engine/dom/src/lib.rs
+5951	crates/engine/paint/src/renderer.rs
+5437	crates/engine/dom/src/lib.rs
 5007	crates/engine/paint/src/cpu_raster.rs
-4574	crates/core/src/ext.rs
+4617	crates/core/src/ext.rs
 4408	crates/js/src/filesystem_access.rs
 4112	crates/bidi-server/src/protocol.rs
 3962	crates/engine/html-parser/src/tree_builder.rs
 3637	crates/js/src/frame_bridge.rs
-3614	crates/js/src/worker.rs
+3628	crates/js/src/worker.rs
 3435	crates/chrome/src/model.rs
+3123	crates/engine/layout/src/selector_query.rs
 3006	crates/shell/src/forms.rs
 2981	crates/driver/src/session.rs
 2850	crates/js/src/offscreen_canvas.rs
 2762	crates/network/src/h3/conn_connect.rs
-2758	crates/engine/layout/src/selector_query.rs
 2637	crates/js/src/subtle_crypto.rs
 2365	crates/js/src/video_bindings.rs
 2352	crates/engine/layout/src/tests/scroll_interaction_misc.rs
 2262	crates/shell/src/frames.rs
 2067	crates/js/src/web_audio.rs
+2035	crates/shell/src/tests/bug341_census.rs
+2011	crates/js/src/dom/tests/v8_ws_sse.rs
