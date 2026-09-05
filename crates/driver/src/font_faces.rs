@@ -40,7 +40,7 @@
 //! `bugs/BUG-467-OPEN.md`.
 
 use lumen_css_parser::{FontFaceRule, FontFaceSourceKind};
-use lumen_dom::{Document, FontFace};
+use lumen_dom::{Document, FontFace, FontFaceExtendedDescriptors};
 
 /// Converts a parsed `@font-face` rule into a DOM `FontFace`, mirroring
 /// `crates/shell/src/subresources.rs::rule_to_font_face`.
@@ -66,6 +66,15 @@ fn rule_to_font_face(rule: &FontFaceRule) -> FontFace {
         rule.unicode_range.clone(),
         src_str,
     )
+    .with_extended_descriptors(FontFaceExtendedDescriptors {
+        feature_settings: rule.feature_settings.clone(),
+        variation_settings: rule.variation_settings.clone(),
+        display: rule.display.clone(),
+        ascent_override: rule.ascent_override.clone(),
+        descent_override: rule.descent_override.clone(),
+        line_gap_override: rule.line_gap_override.clone(),
+        size_adjust: rule.size_adjust.clone(),
+    })
 }
 
 /// Adds one `FontFace` entry per `@font-face` rule in `font_faces` to

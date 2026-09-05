@@ -176,6 +176,104 @@ fn css_connected_load_completing_pairs_off_pending_and_resolves_ready() {
     assert_eq!(rt.eval("_readyResolved").unwrap(), lumen_core::JsValue::Bool(true));
 }
 
+// FONTLOAD-8 (`bugs/BUG-467-OPEN.md`): the CSS-side `@font-face` descriptor
+// grammar — `FontFaceRule` (`crates/engine/css-parser`) now carries
+// `font-feature-settings`/`font-variation-settings`/the four metrics-override
+// descriptors, threaded through `lumen_dom::FontFace::with_extended_descriptors`
+// into the native JSON `_lumen_wrap_css_font_face` reads. These exercise that
+// path directly (bypassing the CSS parser, same as `add_css_font_face` above)
+// since this crate cannot depend on `lumen-css-parser` (sibling leaf crates).
+
+fn add_css_font_face_with_extended_descriptors(
+    doc: &Arc<Mutex<Document>>,
+    family: &str,
+    descriptors: lumen_dom::FontFaceExtendedDescriptors,
+) {
+    let face = lumen_dom::FontFace::new(
+        family.to_string(),
+        "normal".to_string(),
+        "400".to_string(),
+        None,
+        None,
+        "url(a.woff)".to_string(),
+    )
+    .with_extended_descriptors(descriptors);
+    doc.lock().unwrap().fonts_mut().add(face);
+}
+
+#[test]
+fn css_connected_face_exposes_feature_and_variation_settings() {
+    let doc = make_doc();
+    add_css_font_face_with_extended_descriptors(
+        &doc,
+        "Ligatured",
+        lumen_dom::FontFaceExtendedDescriptors {
+            feature_settings: Some("\"liga\" 1".to_string()),
+            variation_settings: Some("\"wght\" 700".to_string()),
+            ..Default::default()
+        },
+    );
+    let rt = v8_runtime_with_dom(doc);
+    let result = rt
+        .eval(
+            r#"
+                var f = null;
+                document.fonts.forEach(function(face) { f = face; });
+                f.featureSettings === '"liga" 1' && f.variationSettings === '"wght" 700'
+            "#,
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn css_connected_face_exposes_override_descriptors() {
+    let doc = make_doc();
+    add_css_font_face_with_extended_descriptors(
+        &doc,
+        "Overridden",
+        lumen_dom::FontFaceExtendedDescriptors {
+            ascent_override: Some("90%".to_string()),
+            descent_override: Some("10%".to_string()),
+            line_gap_override: Some("normal".to_string()),
+            size_adjust: Some("105%".to_string()),
+            ..Default::default()
+        },
+    );
+    let rt = v8_runtime_with_dom(doc);
+    let result = rt
+        .eval(
+            r#"
+                var f = null;
+                document.fonts.forEach(function(face) { f = face; });
+                f.ascentOverride === '90%' && f.descentOverride === '10%' &&
+                f.lineGapOverride === 'normal' && f.sizeAdjust === '105%'
+            "#,
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn css_connected_face_defaults_extended_descriptors_when_absent() {
+    let doc = make_doc();
+    add_css_font_face(&doc, "Plain", lumen_dom::FontFaceStatus::Unloaded);
+    let rt = v8_runtime_with_dom(doc);
+    let result = rt
+        .eval(
+            r#"
+                var f = null;
+                document.fonts.forEach(function(face) { f = face; });
+                f.featureSettings === 'normal' && f.variationSettings === 'normal' &&
+                f.display === 'auto' && f.ascentOverride === 'normal' &&
+                f.descentOverride === 'normal' && f.lineGapOverride === 'normal' &&
+                f.sizeAdjust === '100%'
+            "#,
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
 // FONTLOAD-6 (`bugs/BUG-467-OPEN.md`): a script-constructed `FontFace` whose
 // bytes validate via `.load()` while it is a member of some `FontFaceSet` now
 // reaches `lumen_font::FontRegistry` (queued for the shell to register on the

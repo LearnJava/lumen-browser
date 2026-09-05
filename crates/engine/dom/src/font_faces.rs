@@ -31,10 +31,53 @@ pub struct FontFace {
     pub src: String,
     /// Whether this font has been successfully loaded.
     pub status: FontFaceStatus,
+    /// The font-feature-settings descriptor (optional), CSS Fonts L3 §6.4. Raw string.
+    pub feature_settings: Option<String>,
+    /// The font-variation-settings descriptor (optional), CSS Fonts L4 §7.4. Raw string.
+    pub variation_settings: Option<String>,
+    /// The font-display descriptor (optional): "auto" | "block" | "swap" | "fallback" | "optional".
+    pub display: Option<String>,
+    /// The ascent-override descriptor (optional), CSS Fonts L4 §14.1: "normal" | `<percentage>`. Raw string.
+    pub ascent_override: Option<String>,
+    /// The descent-override descriptor (optional), CSS Fonts L4 §14.2: "normal" | `<percentage>`. Raw string.
+    pub descent_override: Option<String>,
+    /// The line-gap-override descriptor (optional), CSS Fonts L4 §14.3: "normal" | `<percentage>`. Raw string.
+    pub line_gap_override: Option<String>,
+    /// The size-adjust descriptor (optional), CSS Fonts L4 §14.4: `<percentage>`. Raw string.
+    pub size_adjust: Option<String>,
+}
+
+/// The CSS Fonts L4 §6-§14 descriptors not covered by [`FontFace::new`]'s
+/// original (Level 3) parameter list. Grouped into one struct so
+/// [`FontFace::with_extended_descriptors`] stays under clippy's
+/// too-many-arguments limit — `lumen-dom` cannot take a `lumen-css-parser`
+/// `FontFaceRule` reference directly, the two are sibling leaf crates with
+/// no dependency between them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FontFaceExtendedDescriptors {
+    /// The font-feature-settings descriptor (optional). Raw string.
+    pub feature_settings: Option<String>,
+    /// The font-variation-settings descriptor (optional). Raw string.
+    pub variation_settings: Option<String>,
+    /// The font-display descriptor (optional).
+    pub display: Option<String>,
+    /// The ascent-override descriptor (optional). Raw string.
+    pub ascent_override: Option<String>,
+    /// The descent-override descriptor (optional). Raw string.
+    pub descent_override: Option<String>,
+    /// The line-gap-override descriptor (optional). Raw string.
+    pub line_gap_override: Option<String>,
+    /// The size-adjust descriptor (optional). Raw string.
+    pub size_adjust: Option<String>,
 }
 
 impl FontFace {
     /// Create a new FontFace from @font-face rule components.
+    ///
+    /// The CSS Fonts L4 §6-§14 descriptors (`font-feature-settings`,
+    /// `font-variation-settings`, `font-display`, the four metrics-override
+    /// descriptors) default to `None` here — use [`Self::with_extended_descriptors`]
+    /// to set them from a fully parsed `@font-face` rule.
     pub fn new(
         family: String,
         style: String,
@@ -51,7 +94,29 @@ impl FontFace {
             unicode_range,
             src,
             status: FontFaceStatus::Unloaded,
+            feature_settings: None,
+            variation_settings: None,
+            display: None,
+            ascent_override: None,
+            descent_override: None,
+            line_gap_override: None,
+            size_adjust: None,
         }
+    }
+
+    /// Set the CSS Fonts L4 descriptors not covered by [`Self::new`]'s
+    /// original (Level 3) parameter list — kept as a separate builder step
+    /// rather than growing `new`'s already six-argument signature further.
+    #[must_use]
+    pub fn with_extended_descriptors(mut self, descriptors: FontFaceExtendedDescriptors) -> Self {
+        self.feature_settings = descriptors.feature_settings;
+        self.variation_settings = descriptors.variation_settings;
+        self.display = descriptors.display;
+        self.ascent_override = descriptors.ascent_override;
+        self.descent_override = descriptors.descent_override;
+        self.line_gap_override = descriptors.line_gap_override;
+        self.size_adjust = descriptors.size_adjust;
+        self
     }
 }
 

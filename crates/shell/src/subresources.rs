@@ -112,6 +112,15 @@ pub(crate) fn rule_to_font_face(rule: &lumen_css_parser::FontFaceRule) -> lumen_
         rule.unicode_range.clone(),
         src_str,
     )
+    .with_extended_descriptors(lumen_dom::FontFaceExtendedDescriptors {
+        feature_settings: rule.feature_settings.clone(),
+        variation_settings: rule.variation_settings.clone(),
+        display: rule.display.clone(),
+        ascent_override: rule.ascent_override.clone(),
+        descent_override: rule.descent_override.clone(),
+        line_gap_override: rule.line_gap_override.clone(),
+        size_adjust: rule.size_adjust.clone(),
+    })
 }
 
 /// PH3-19: загружает @font-face правила, разделяя источники на два прохода:

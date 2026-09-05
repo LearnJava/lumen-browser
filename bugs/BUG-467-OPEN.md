@@ -624,3 +624,93 @@ v8-backend -- -D warnings` чист.
 самый крупный оставшийся кусок FONTLOAD; грамматика `@font-face`-дескрипторов
 на CSS-стороне (`FontFaceRule`); реактивность CSS-connected сета (gap 1,
 BUG-471/CSSOM-4).
+
+## FONTLOAD-8 (P1, 2026-09-05, ветка `p1-fontload8-atrule-descriptor-grammar`) — грамматика `@font-face`-дескрипторов на CSS-стороне
+
+Закрыла остаток, который FONTLOAD-7 оставила нетронутым: `FontFaceRule`
+(`crates/engine/css-parser/src/parser/at_rules.rs`) не имела полей под
+`font-feature-settings`/`font-variation-settings`/четыре override-дескриптора,
+поэтому CSS-connected `document.fonts.values().next().value.featureSettings`
+и Co. всегда возвращали захардкоженные дефолты
+(`'normal'`×3/`'auto'`/`'100%'`) независимо от того, что реально объявлено в
+`@font-face`-правиле разметки — тот же класс дефекта, что FONTLOAD-1/6
+исправляли для script-стороны, только тут никто вообще не читал значение.
+
+Проведена через все четыре слоя, где живёт CSS-connected `FontFace`:
+
+1. **`FontFaceRule`** (`crates/engine/css-parser`) — новые поля
+   `ascent_override`/`descent_override`/`line_gap_override`/`size_adjust`
+   (`Option<String>`, сырая строка — та же конвенция, что уже у
+   `unicode_range`/`feature_settings`/`variation_settings`); `parse_font_face_body`
+   разбирает `ascent-override`/`descent-override`/`line-gap-override`/
+   `size-adjust` тем же match-блоком, что и остальные дескрипторы.
+   Побочный эффект: `FontFaceRule` пересекла порог, на котором
+   `clippy::large_enum_variant` считает `AtRuleOutcome` разбалансированным —
+   вариант `FontFace` обёрнут в `Box` (`AtRuleOutcome::FontFace(Box<FontFaceRule>)`),
+   единственная точка чтения (`parser.rs::font_faces.push(*f)`) разыменовывает.
+2. **`lumen_dom::FontFace`** (`crates/engine/dom/src/font_faces.rs`) — те же
+   семь полей (три уже читавшихся из `FontFaceRule`, но никогда не
+   долетавших до `lumen_dom`, плюс четыре новых override/`size_adjust`).
+   `FontFace::new` не тронута (шесть параметров, десяток вызовов в тестах
+   `lib.rs`, ломать не нужно) — новые поля стартуют `None`, ставятся отдельным
+   билдер-методом `with_extended_descriptors`. Сигнатура билдера берёт не семь
+   отдельных параметров, а один новый `FontFaceExtendedDescriptors` (иначе
+   `self` + 7 = 8 аргументов, `clippy::too_many_arguments`); структура живёт в
+   `lumen_dom`, а не в `lumen_css_parser`, потому что `crates/driver/src/
+   font_faces.rs`'s собственный комментарий уже фиксирует: `lumen-dom` и
+   `lumen-css-parser` — соседние листовые крейты без связи друг с другом.
+3. **`rule_to_font_face`** (оба места — `crates/shell/src/subresources.rs` и
+   `crates/driver/src/font_faces.rs`, независимые порты по той же причине,
+   что описана в модуле `crates/driver/src/font_faces.rs`) — оба зовут
+   `.with_extended_descriptors(...)` с полями `FontFaceRule`.
+4. **Нативная сериализация** (`crates/js/src/v8_runtime/install/dom_core.rs`)
+   — `_lumen_fonts_get`/`_lumen_fonts_get_by_family` раньше вручную собирали
+   JSON с идентичным телом в обеих функциях; вынесены в общий
+   `serialize_font_face_json`, который теперь пишет все семь новых полей
+   тем же приёмом (`json_opt_string`), что уже был у `stretch`/`unicodeRange`.
+5. **JS-обёртка** (`_lumen_wrap_css_font_face`, `web_api_shim_mid.js`) —
+   вместо жёстко зашитых дефолтов читает `json.featureSettings`/
+   `json.variationSettings`/`json.display`/`json.ascentOverride`/
+   `json.descentOverride`/`json.lineGapOverride`/`json.sizeAdjust`, с тем же
+   `|| <spec-дефолт>` фоллбэком, что уже был у `stretch`/`unicodeRange`.
+
+**Намеренно без канонизации на CSS-connected пути.** Скрипт-сконструированный
+`FontFace` (FONTLOAD-7) канонизирует `unicodeRange`/`featureSettings`/
+`variationSettings` через `_lumen_font_face_parse_*` и валидирует override-
+дескрипторы в конструкторе/сеттере/`.load()`. CSS-connected путь этого не
+делает — значения идут как есть, той же raw-passthrough конвенцией, что уже
+была у `stretch`/`unicodeRange` до этого среза. Ни один WPT-тест в целевом
+наборе трека не проверяет невалидное значение именно на CSS-стороне (только
+его присутствие/отсутствие), так что канонизация здесь не давала бы
+измеримой ценности, а асимметричный контракт валидации FONTLOAD-7
+(«невалидно в конструкторе → принимается молча, `.load()` реджектит») не
+имеет естественного аналога для декларативного `@font-face` — CSS-каскад в
+принципе не бросает исключений на невалидный дескриптор, он его тихо
+игнорирует, и `FontFaceRule` в этом смысле уже ведёт себя так же (незнакомое
+имя дескриптора просто не попадает ни в один `match`-рукав).
+
+Тесты: `crates/engine/css-parser/src/parser/tests/at_rules.rs` — 3 новых
+(`at_font_face_override_descriptors`, `_absent_by_default`, расширен
+`at_font_face_all_l4_descriptors`); `crates/js/src/dom/tests/
+v8_fontface_shadow_custom.rs` — 3 новых, конструируют `lumen_dom::FontFace`
+напрямую в обход CSS-парсера (тот же приём, что уже использует
+`add_css_font_face` рядом, по той же причине: `crates/js` не может зависеть
+от `lumen-css-parser`); `crates/driver/tests/cases/
+fontload3_document_fonts_population.rs` — 2 новых, единственные в этом срезе
+сквозные (реальный CSS-парсер → `lumen_dom::FontFace` → нативный JSON → JS),
+не только JS-шимовая юнит-проверка.
+
+`cargo test -p lumen-css-parser` 367/367 (было 364, +3), `cargo test -p
+lumen-dom` — без регрессий, `cargo test -p lumen-js --features v8-backend --
+v8_fontface_shadow_custom` 59/59 (было 53, +6, из них 3 напрямую тестируют
+этот срез), `cargo test -p lumen-driver --features v8` 201/201 (было 196,
++5, из них 2 — сквозные тесты этого среза), `cargo clippy` чист для
+`lumen-css-parser`/`lumen-dom`/`lumen-driver`/`lumen-js`/`lumen-shell` (все
+`--all-targets`, `lumen-js`/`lumen-shell` с `--features v8-backend`/`v8`
+соответственно).
+
+**Не входит в срез:** подключение любого из семи дескрипторов к рендерингу
+(тот же самый крупный оставшийся кусок FONTLOAD, что и раньше — эта грамматика
+делает значения ВИДИМЫМИ скрипту, но ни один из двух путей всё ещё не
+использует их при реальной раскладке/растеризации текста); реактивность
+CSS-connected сета на CSSOM-изменения (gap 1, BUG-471/CSSOM-4).

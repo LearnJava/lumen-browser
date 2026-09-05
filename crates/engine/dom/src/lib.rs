@@ -53,7 +53,7 @@ pub use ime::{
 };
 
 mod font_faces;
-pub use font_faces::{FontFace, FontFaceSet, FontFaceStatus};
+pub use font_faces::{FontFace, FontFaceExtendedDescriptors, FontFaceSet, FontFaceStatus};
 
 mod performance;
 pub use performance::{PerformanceEntries, PerformanceEntry, PerformanceEntryType, PerformanceObserver};
