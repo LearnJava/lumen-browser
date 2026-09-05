@@ -1491,3 +1491,93 @@ femtovg-паритет для (A); реактивность CSS-connected сет
 12/12 байт-в-байт; `run.py --continue-on-fail` — дельта против FONTLOAD-14
 (commit `0814bed75`) **«Изменений нет»**, идентичный список 8/156 FAIL и 50
 known-debtor. `graphic_tests/results/20260905-183548.json`.
+
+## FONTLOAD-16 (P1, 2026-09-06, ветка `p1-fontload16-override-wpt-measurement`) — живой WPT A/B-замер override-категории: нашёл реальный архитектурный разрыв (measurement-срез, без фикса)
+
+Первый живой прогон `css/css-fonts` override-файлов через реальный WPT-путь
+(`tests/wpt/run_smoke.py` → `wptrunner` по BiDi против собранного
+`dev-release` `lumen.exe`, не headless `--dump-layout`/`--screenshot` —
+у тех нет event-loop для асинхронного `FontLoaded`, см. `WPT-VENDOR-fonts`).
+FONTLOAD-11/12/13 явно оставляли эту категорию неизмеренной.
+
+**Результат (7 id, все reftest):**
+
+| файл | вердикт | пиксельный дифф |
+|---|---|---|
+| `ascent-descent-override.html` | FAIL | 540 |
+| `line-gap-override.html` | FAIL | 873 |
+| `metrics-override-normal-keyword.html` | PASS | — (байт-в-байт) |
+| `font-size-adjust-metrics-override.html` | FAIL | 4571 |
+| `size-adjust-01.html` | FAIL | 6950 |
+| `size-adjust-02.html` | PASS | — (байт-в-байт) |
+| `size-adjust-03.html` | FAIL | 20277 |
+
+Итог: 2/7 PASS, 5/7 FAIL. Оба PASS — не доказательство корректности: оба теста
+устроены так, что ожидаемый визуальный результат — «два варианта выглядят
+ОДИНАКОВО» (`size-adjust-02`/`-03`: `font-size-adjust` должен перебивать
+`size-adjust`-дескриптор; `metrics-override-normal-keyword`: ключевое слово
+`normal` должно давать тот же результат, что и его отсутствие) — то же самое
+происходит, если оба дескриптора вообще НЕ доезжают до рендеринга, что этот
+срез и обнаружил ниже. Совпадение, не подтверждение.
+
+**Корневая причина трёх больших диффов (size-adjust, 4571–20277 px) —
+найдена на уровне кода, не предположением:** `size-adjust` (как и
+`ascent-override`/`descent-override`/`line-gap-override`) подключён
+FONTLOAD-11/12/13 только к **измерению** в layout — `MultiFontMeasurer`/
+`FontFaceSlot` (`crates/engine/paint/src/lib.rs`), которым layout пользуется
+через трейт `TextMeasurer` для ширин символов/ascent/descent/line-gap. Но
+структура, которой реально пользуется **растеризация** глифов —
+`lumen_core::FaceRecord` (`crates/core/src/ext.rs:430`, поля: `family`/
+`weight`/`style`/`stretch`/`path`/`unicode_ranges`) — не имеет ни одного из
+четырёх override-полей вообще. `FontRegistry::register_from_bytes`
+(`crates/engine/font/src/font_registry.rs:88-126`) строит `FaceRecord` из
+`(family, weight, style, unicode_range, bytes)` — сигнатура физически не
+принимает override-значения, значит они в принципе не могут дойти до
+`lumen-paint`'s `pick_face_for_codepoint`/`glyph_raster.rs`, который рисует
+глиф в его РЕАЛЬНОМ (не адаптированном) размере. Итог: layout резервирует
+место под символ по формуле `font_size_px * size_adjust` (см.
+`char_width_with_families`, `crates/engine/paint/src/lib.rs:1221`), а
+рисуется глиф исходного размера в это же место — расхождение растёт с
+длиной текста, что и объясняет порядок диффов (`size-adjust-03.html`,
+«The Quick Brown Fox» целиком через адаптированный face → 20277 px, самый
+большой из семи).
+
+**Два маленьких диффа (ascent-descent-override 540 px, line-gap-override
+873 px) этим срезом НЕ объяснены** — на порядок меньше диффов size-adjust
+(полный кадр 1024×720, локальная область теста — три однобуквенных/пустых
+inline-block'а), и `ascent_px_with_families`/`descent_px_with_families`
+(в отличие от размера глифа) действительно читают `slot.ascent_override` —
+то есть геометрия line-box'а в layout, вероятно, верна. Живая MCP-проба
+(`--mcp-live-port` + `eval`, `.tmp/probe_ahem_live.py`) для прямого замера
+`getBoundingClientRect` не удалась: `route_query_js` стабильно возвращал `None`
+→ `"JS context not available"` уже после `wait: document_ready` (не race —
+проверено с задержками 0.3/1.0/2.0 с и с запуском бинаря сразу на целевом URL
+вместо `about:blank` + `navigate`) — отдельная проблема, не раскопана в рамках
+этого среза, инструмент не подошёл. Называть точный механизм этих двух
+диффов интуицией не буду — не входит в этот срез, см. ниже.
+
+**Проверено, что НЕ является причиной:** headless `--dump-layout` на том же
+файле (`ascent-descent-override.html`) даёт совсем другую, гораздо более
+грубую картину (ширина inline-run "X" — 33.64px вместо ожидаемых 20px, т.е.
+Ahem вообще не резолвится) — это ожидаемое, задокументированное ограничение
+однослотовых headless-путей (`WPT-VENDOR-fonts`, нет event loop для
+асинхронного `FontLoaded`), не относится к живому BiDi-пути, которым реально
+шёл WPT-прогон, и не должно использоваться как модель того, что видит
+wptrunner. Оставляю здесь как предупреждение будущему срезу: не повторять
+эту ошибку диагностики.
+
+**Не входит (эта причина в новую точку рендеринга не проведена):**
+проброс `ascent_override`/`descent_override`/`line_gap_override`/`size_adjust`
+из `FontFaceSlot` в `lumen_core::FaceRecord` и далее в реальную растеризацию
+(`glyph_raster.rs`) — отдельный, архитектурно значимый срез, сравнимый по
+объёму с FONTLOAD-9 (`unicode-range` на пути рисования); точная причина двух
+малых диффов (ascent/descent/line-gap override); WPT `.ini`-baseline для этой
+категории не тронут (та же причина, что FONTLOAD-4 — вскрывает несвязанный
+долг WPT-RUN-7 среза 4); (D) feature/variation-settings дескриптора;
+femtovg-паритет для (A); реактивность CSS-connected сета (BUG-471/CSSOM-4).
+
+Гейт: изменений в `crates/` нет (чисто measurement-срез, только
+`bugs/BUG-467-OPEN.md`/`ROADMAP.md`) — `cargo clippy`/scoped-test неприменимы,
+`graphic_tests` не запускался. WPT-измерение — `tests/wpt/run_smoke.py
+--binary <dev-release lumen.exe> --reftest-screenshot=fail
+/css/css-fonts/{ascent-descent-override,line-gap-override,metrics-override-normal-keyword,font-size-adjust-metrics-override,size-adjust-01,size-adjust-02,size-adjust-03}.html`.
