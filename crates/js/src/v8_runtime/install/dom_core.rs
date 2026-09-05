@@ -100,6 +100,48 @@ pub(crate) fn install_document_meta(
     Ok(())
 }
 
+/// Escapes a string for embedding inside a manually built JSON literal
+/// (backslash and double-quote only — every caller's input is already plain
+/// ASCII-ish descriptor text, not general text needing full JSON escaping).
+fn json_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Renders an `Option<String>` field as a JSON string literal or `null`.
+fn json_opt_string(v: Option<&String>) -> String {
+    v.map_or_else(|| "null".to_string(), |s| format!(r#""{}""#, json_escape(s)))
+}
+
+/// Serializes one `lumen_dom::FontFace` (a CSS-connected `@font-face` entry)
+/// to the JSON the JS shim's `_lumen_wrap_css_font_face` expects. Shared by
+/// `_lumen_fonts_get`/`_lumen_fonts_get_by_family` — both walked the same
+/// fields by hand before FONTLOAD-8 added four more (`unicodeRange`'s
+/// duplicate escaping logic was already the same in both).
+fn serialize_font_face_json(face: &lumen_dom::FontFace) -> String {
+    let status_str = match face.status {
+        lumen_dom::FontFaceStatus::Unloaded => "unloaded",
+        lumen_dom::FontFaceStatus::Loading => "loading",
+        lumen_dom::FontFaceStatus::Loaded => "loaded",
+        lumen_dom::FontFaceStatus::Error => "error",
+    };
+    format!(
+        r#"{{"family":"{family}","style":"{style}","weight":"{weight}","stretch":{stretch},"unicodeRange":{unicode_range},"src":"{src}","status":"{status_str}","featureSettings":{feature_settings},"variationSettings":{variation_settings},"display":{display},"ascentOverride":{ascent_override},"descentOverride":{descent_override},"lineGapOverride":{line_gap_override},"sizeAdjust":{size_adjust}}}"#,
+        family = json_escape(&face.family),
+        style = json_escape(&face.style),
+        weight = json_escape(&face.weight),
+        stretch = json_opt_string(face.stretch.as_ref()),
+        unicode_range = json_opt_string(face.unicode_range.as_ref()),
+        src = json_escape(&face.src),
+        feature_settings = json_opt_string(face.feature_settings.as_ref()),
+        variation_settings = json_opt_string(face.variation_settings.as_ref()),
+        display = json_opt_string(face.display.as_ref()),
+        ascent_override = json_opt_string(face.ascent_override.as_ref()),
+        descent_override = json_opt_string(face.descent_override.as_ref()),
+        line_gap_override = json_opt_string(face.line_gap_override.as_ref()),
+        size_adjust = json_opt_string(face.size_adjust.as_ref()),
+    )
+}
+
 /// `document.fonts` (CSS Font Loading `FontFaceSet`).
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_document_fonts(
@@ -119,49 +161,12 @@ pub(crate) fn install_document_fonts(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_fonts_get", move |idx: u32| -> Option<String> {
             let doc = d.lock().unwrap();
-            doc.fonts().all().get(idx as usize).map(|face| {
-                // Serialize FontFace to JSON manually
-                let family_esc = face.family.replace('\\', "\\\\").replace('"', "\\\"");
-                let style_esc = face.style.replace('\\', "\\\\").replace('"', "\\\"");
-                let weight_esc = face.weight.replace('\\', "\\\\").replace('"', "\\\"");
-                let stretch_esc = face.stretch.as_ref().map(|s| s.replace('\\', "\\\\").replace('"', "\\\"")).unwrap_or_default();
-                let unicode_range_esc = face.unicode_range.as_ref().map(|s| s.replace('\\', "\\\\").replace('"', "\\\"")).unwrap_or_default();
-                let src_esc = face.src.replace('\\', "\\\\").replace('"', "\\\"");
-                let status_str = match face.status {
-                    lumen_dom::FontFaceStatus::Unloaded => "unloaded",
-                    lumen_dom::FontFaceStatus::Loading => "loading",
-                    lumen_dom::FontFaceStatus::Loaded => "loaded",
-                    lumen_dom::FontFaceStatus::Error => "error",
-                };
-                format!(
-                    r#"{{"family":"{family_esc}","style":"{style_esc}","weight":"{weight_esc}","stretch":{stretch_json},"unicodeRange":{unicode_json},"src":"{src_esc}","status":"{status_str}"}}"#,
-                    stretch_json = if face.stretch.is_some() { format!(r#""{}""#, stretch_esc) } else { "null".to_string() },
-                    unicode_json = if face.unicode_range.is_some() { format!(r#""{}""#, unicode_range_esc) } else { "null".to_string() }
-                )
-            })
+            doc.fonts().all().get(idx as usize).map(serialize_font_face_json)
         });
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_fonts_get_by_family", move |family: String| -> Vec<String> {
             let doc = d.lock().unwrap();
-            doc.fonts().get_by_family(&family).iter().map(|face| {
-                let family_esc = face.family.replace('\\', "\\\\").replace('"', "\\\"");
-                let style_esc = face.style.replace('\\', "\\\\").replace('"', "\\\"");
-                let weight_esc = face.weight.replace('\\', "\\\\").replace('"', "\\\"");
-                let stretch_esc = face.stretch.as_ref().map(|s| s.replace('\\', "\\\\").replace('"', "\\\"")).unwrap_or_default();
-                let unicode_range_esc = face.unicode_range.as_ref().map(|s| s.replace('\\', "\\\\").replace('"', "\\\"")).unwrap_or_default();
-                let src_esc = face.src.replace('\\', "\\\\").replace('"', "\\\"");
-                let status_str = match face.status {
-                    lumen_dom::FontFaceStatus::Unloaded => "unloaded",
-                    lumen_dom::FontFaceStatus::Loading => "loading",
-                    lumen_dom::FontFaceStatus::Loaded => "loaded",
-                    lumen_dom::FontFaceStatus::Error => "error",
-                };
-                format!(
-                    r#"{{"family":"{family_esc}","style":"{style_esc}","weight":"{weight_esc}","stretch":{stretch_json},"unicodeRange":{unicode_json},"src":"{src_esc}","status":"{status_str}"}}"#,
-                    stretch_json = if face.stretch.is_some() { format!(r#""{}""#, stretch_esc) } else { "null".to_string() },
-                    unicode_json = if face.unicode_range.is_some() { format!(r#""{}""#, unicode_range_esc) } else { "null".to_string() }
-                )
-            }).collect()
+            doc.fonts().get_by_family(&family).iter().map(|face| serialize_font_face_json(face)).collect()
         });
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_fonts_has_family", move |family: String| -> bool {

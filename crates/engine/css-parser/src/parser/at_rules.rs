@@ -307,6 +307,14 @@ pub struct FontFaceRule {
     pub feature_settings: Option<String>,
     /// `font-variation-settings: "wght" 400, "ital" 1` — CSS Fonts L4 §6 (variable fonts). Сырая строка.
     pub variation_settings: Option<String>,
+    /// `ascent-override: normal | <percentage>` — CSS Fonts L4 §14.1. Сырая строка.
+    pub ascent_override: Option<String>,
+    /// `descent-override: normal | <percentage>` — CSS Fonts L4 §14.2. Сырая строка.
+    pub descent_override: Option<String>,
+    /// `line-gap-override: normal | <percentage>` — CSS Fonts L4 §14.3. Сырая строка.
+    pub line_gap_override: Option<String>,
+    /// `size-adjust: <percentage>` — CSS Fonts L4 §14.4. Сырая строка.
+    pub size_adjust: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -330,7 +338,7 @@ pub(crate) enum AtRuleOutcome {
     Property(PropertyRule),
     Media(MediaRule),
     Import(ImportRule),
-    FontFace(FontFaceRule),
+    FontFace(Box<FontFaceRule>),
     FontPaletteValues(FontPaletteValuesRule),
     LayerNames(Vec<String>),
     LayerBlock {
@@ -730,7 +738,7 @@ impl<'a> Parser<'a> {
         if name.eq_ignore_ascii_case("font-face") {
             return self
                 .parse_font_face_body()
-                .map_or(AtRuleOutcome::None, AtRuleOutcome::FontFace);
+                .map_or(AtRuleOutcome::None, |f| AtRuleOutcome::FontFace(Box::new(f)));
         }
         if name.eq_ignore_ascii_case("font-palette-values") {
             return self
@@ -869,7 +877,9 @@ impl<'a> Parser<'a> {
     /// Парсит тело `@font-face { ... }` — обычный block declarations,
     /// но с font-face-specific descriptors (font-family / src / weight /
     /// style / stretch / display / unicode-range / variant /
-    /// feature-settings / variation-settings). Прочие имена игнорируются.
+    /// feature-settings / variation-settings / ascent-override /
+    /// descent-override / line-gap-override / size-adjust). Прочие имена
+    /// игнорируются.
     pub(crate) fn parse_font_face_body(&mut self) -> Option<FontFaceRule> {
         self.skip_ws_and_comments();
         if self.peek() != Some('{') {
@@ -889,6 +899,10 @@ impl<'a> Parser<'a> {
         let mut variant: Option<String> = None;
         let mut feature_settings: Option<String> = None;
         let mut variation_settings: Option<String> = None;
+        let mut ascent_override: Option<String> = None;
+        let mut descent_override: Option<String> = None;
+        let mut line_gap_override: Option<String> = None;
+        let mut size_adjust: Option<String> = None;
 
         for d in &declarations {
             let prop = d.property.to_ascii_lowercase();
@@ -906,6 +920,10 @@ impl<'a> Parser<'a> {
                 "font-variant" => variant = Some(d.value.trim().to_string()),
                 "font-feature-settings" => feature_settings = Some(d.value.trim().to_string()),
                 "font-variation-settings" => variation_settings = Some(d.value.trim().to_string()),
+                "ascent-override" => ascent_override = Some(d.value.trim().to_string()),
+                "descent-override" => descent_override = Some(d.value.trim().to_string()),
+                "line-gap-override" => line_gap_override = Some(d.value.trim().to_string()),
+                "size-adjust" => size_adjust = Some(d.value.trim().to_string()),
                 _ => {}
             }
         }
@@ -924,6 +942,10 @@ impl<'a> Parser<'a> {
             variant,
             feature_settings,
             variation_settings,
+            ascent_override,
+            descent_override,
+            line_gap_override,
+            size_adjust,
         })
     }
 

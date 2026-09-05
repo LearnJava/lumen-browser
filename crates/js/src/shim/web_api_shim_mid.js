@@ -7461,10 +7461,24 @@ var console = {
 // correctness only, not glyph-range segmentation or metrics synthesis, which
 // the vendored reftests (`fontface-descriptor-updates.html`,
 // `fontface-override-descriptors.html`, `fontface-size-adjust-descriptor.html`)
-// need and this slice does not attempt; CSS-connected faces still hardcode
-// all seven to their spec-default ('normal'/'100%') because `FontFaceRule`
-// (`crates/engine/css-parser`) has no fields for any of them — the *CSS*
-// `@font-face` descriptor grammar is an equally unimplemented, separate gap.
+// need and this slice does not attempt.
+//
+// FONTLOAD-8 (2026-09-05) closed the *CSS*-side half of the descriptor gap
+// FONTLOAD-7 left: `FontFaceRule` (`crates/engine/css-parser`) now has fields
+// for `font-feature-settings`/`font-variation-settings`/`ascent-override`/
+// `descent-override`/`line-gap-override`/`size-adjust`, threaded through
+// `lumen_dom::FontFace` (`with_extended_descriptors`, both `crates/shell` and
+// `crates/driver`'s `rule_to_font_face`) and the native JSON `_lumen_fonts_get`/
+// `_lumen_fonts_get_by_family` send down (`serialize_font_face_json`,
+// `crates/js/src/v8_runtime/install/dom_core.rs`). `_lumen_wrap_css_font_face`
+// below reads all seven off that JSON now, raw (same convention as the
+// pre-existing `stretch`/`unicodeRange` passthrough) — no canonicalizing
+// parse on the CSS-connected path, unlike the script-constructed
+// constructor/setters above; nothing in this track's target WPT set exercises
+// a malformed CSS-side descriptor value, only whether a declared one is
+// visible at all. Still not attempted: connecting any of the seven to
+// rendering (glyph-range segmentation, metrics synthesis) — same as FONTLOAD-7
+// left it, on both paths.
 //
 // Still open, one real engine gap, not an oversight:
 // (1) **CSS-connected faces are a one-time snapshot.** They are read from
@@ -7955,17 +7969,20 @@ function _lumen_wrap_css_font_face(json) {
     face._weight = json.weight;
     face._stretch = json.stretch || 'normal';
     face._unicodeRange = json.unicodeRange || 'U+0-10FFFF';
-    face._featureSettings = 'normal';
-    face._variationSettings = 'normal';
-    face._display = 'auto';
-    // FONTLOAD-7: the four metrics-override descriptors are not parsed on the
-    // CSS `@font-face` side yet (no fields on `FontFaceRule`) — same
-    // pre-existing gap as feature/variationSettings above. Native defaults
-    // keep the getters spec-shaped ('normal'/'100%') rather than `undefined`.
-    face._ascentOverride = 'normal';
-    face._descentOverride = 'normal';
-    face._lineGapOverride = 'normal';
-    face._sizeAdjust = '100%';
+    // FONTLOAD-8: these seven descriptors now come from the real `@font-face`
+    // rule (`FontFaceRule`/`lumen_dom::FontFace`, threaded through
+    // `_lumen_fonts_get`/`_lumen_fonts_get_by_family`). Passed through raw,
+    // same convention as `stretch`/`unicodeRange` above — no canonicalizing
+    // parse on this path, only the script-constructed constructor/setters
+    // (above) do that; no WPT test in this track's target set exercises a
+    // malformed CSS-side value here, only its presence/absence.
+    face._featureSettings = json.featureSettings || 'normal';
+    face._variationSettings = json.variationSettings || 'normal';
+    face._display = json.display || 'auto';
+    face._ascentOverride = json.ascentOverride || 'normal';
+    face._descentOverride = json.descentOverride || 'normal';
+    face._lineGapOverride = json.lineGapOverride || 'normal';
+    face._sizeAdjust = json.sizeAdjust || '100%';
     face._sources = _lumen_parse_font_face_sources(json.src || '');
     face._cssConnected = true;
     if (json.status === 'loaded') {

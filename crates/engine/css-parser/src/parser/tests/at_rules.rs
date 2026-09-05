@@ -391,6 +391,10 @@ use super::*;
                 font-variant: small-caps;
                 font-feature-settings: "liga" 1;
                 font-variation-settings: "wght" 700;
+                ascent-override: 90%;
+                descent-override: 10%;
+                line-gap-override: normal;
+                size-adjust: 105%;
             }
         "#);
         let f = &s.font_faces[0];
@@ -403,6 +407,41 @@ use super::*;
         assert_eq!(f.variant, Some("small-caps".to_string()));
         assert_eq!(f.feature_settings, Some("\"liga\" 1".to_string()));
         assert_eq!(f.variation_settings, Some("\"wght\" 700".to_string()));
+        assert_eq!(f.ascent_override, Some("90%".to_string()));
+        assert_eq!(f.descent_override, Some("10%".to_string()));
+        assert_eq!(f.line_gap_override, Some("normal".to_string()));
+        assert_eq!(f.size_adjust, Some("105%".to_string()));
+    }
+
+    #[test]
+    fn at_font_face_override_descriptors() {
+        let s = parse(r#"
+            @font-face {
+                font-family: "Overridden";
+                src: url("o.woff2");
+                ascent-override: 80%;
+                descent-override: 20%;
+                line-gap-override: 0%;
+                size-adjust: 90%;
+            }
+        "#);
+        let f = &s.font_faces[0];
+        assert_eq!(f.ascent_override, Some("80%".to_string()));
+        assert_eq!(f.descent_override, Some("20%".to_string()));
+        assert_eq!(f.line_gap_override, Some("0%".to_string()));
+        assert_eq!(f.size_adjust, Some("90%".to_string()));
+    }
+
+    #[test]
+    fn at_font_face_override_descriptors_absent_by_default() {
+        let s = parse(r#"
+            @font-face { font-family: "Plain"; src: url("p.woff2"); }
+        "#);
+        let f = &s.font_faces[0];
+        assert_eq!(f.ascent_override, None);
+        assert_eq!(f.descent_override, None);
+        assert_eq!(f.line_gap_override, None);
+        assert_eq!(f.size_adjust, None);
     }
 
     #[test]

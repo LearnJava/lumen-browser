@@ -556,7 +556,7 @@ impl<'a> Parser<'a> {
                                 top_level_order.push(TopLevelRuleKind::Media);
                             }
                             AtRuleOutcome::Import(i) => imports.push(i),
-                            AtRuleOutcome::FontFace(f) => font_faces.push(f),
+                            AtRuleOutcome::FontFace(f) => font_faces.push(*f),
                             AtRuleOutcome::FontPaletteValues(fp) => {
                                 font_palette_values.push(fp)
                             }

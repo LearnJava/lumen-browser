@@ -1804,15 +1804,25 @@ the time — read dates.
   descriptors reaches any rendering consumer on either path yet (no
   `unicodeRange` glyph-range segmentation, no metrics synthesis from the
   override descriptors — the largest remaining FONTLOAD slice, gated on
-  three WPT reftests); the CSS `@font-face` side has no grammar for any of
-  these seven descriptors either (`FontFaceRule`,
-  `crates/engine/css-parser/src/parser/at_rules.rs`, has no fields for them,
-  so `_lumen_wrap_css_font_face` still hardcodes all seven to their spec
-  defaults); CSS-connected reactivity to a later `<style>`/CSSOM change (on
-  either path — needs the live-cascade foundation BUG-471/CSSOM-4); and an
-  unregister path for a face that leaves every `FontFaceSet` after
+  three WPT reftests); CSS-connected reactivity to a later `<style>`/CSSOM
+  change (on either path — needs the live-cascade foundation BUG-471/CSSOM-4);
+  and an unregister path for a face that leaves every `FontFaceSet` after
   registering (none exists on `FontRegistry` today, same gap CSS-connected
-  faces already have).
+  faces already have). **FONTLOAD-8** (2026-09-05) closed the CSS
+  `@font-face`-side grammar gap this list used to name: `FontFaceRule`
+  (`crates/engine/css-parser/src/parser/at_rules.rs`) now has fields for all
+  seven descriptors, threaded through `lumen_dom::FontFace::
+  with_extended_descriptors` and both `rule_to_font_face` ports
+  (`crates/shell/src/subresources.rs`, `crates/driver/src/font_faces.rs`)
+  into the native JSON `_lumen_fonts_get`/`_lumen_fonts_get_by_family` now
+  build via a shared `serialize_font_face_json`
+  (`crates/js/src/v8_runtime/install/dom_core.rs`) — `_lumen_wrap_css_font_face`
+  reads all seven off that JSON instead of hardcoding spec defaults.
+  Deliberately no canonicalizing parse on this path (raw passthrough, same
+  convention `stretch`/`unicodeRange` already used): no WPT test in this
+  track's target set exercises a malformed CSS-side descriptor value, and a
+  declarative `@font-face` rule has no throw-shaped failure mode to mirror
+  the constructor/setter asymmetry above.
 
 ## Deferred
 
