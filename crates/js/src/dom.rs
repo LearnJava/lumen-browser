@@ -79,6 +79,17 @@ pub enum HistoryUrlUpdate {
     },
 }
 
+// ─── scripted font face ready for render ──────────────────────────────────────
+
+/// `(family, weight, style, decoded_sfnt_bytes)` for a script-constructed
+/// `FontFace` that became render-eligible (FONTLOAD-6, BUG-467): its bytes
+/// validated via `.load()` while it was a member of some `FontFaceSet`.
+///
+/// Queued in `pending_scripted_font_faces` during JS execution; drained by
+/// the shell in `about_to_wait` and registered into `page_font_registry`,
+/// same as a background CSS `@font-face` fetch via `LoadEvent::FontLoaded`.
+pub type ScriptedFontFaceEntry = (String, u16, lumen_core::FontStyle, Vec<u8>);
+
 // ─── Navigation API action tag ────────────────────────────────────────────────
 
 /// Discriminant embedded in `pending_navigation_updates` to tell the shell

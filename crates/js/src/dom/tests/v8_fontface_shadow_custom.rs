@@ -1,5 +1,7 @@
 //! Тесты `v8_fontface_shadow_custom`, вынесенные из `dom.rs` (дорожка SPLIT, батч JS-1).
 
+use std::path::PathBuf;
+
 use super::*;
 use crate::v8_runtime::V8JsRuntime;
 
@@ -172,6 +174,128 @@ fn css_connected_load_completing_pairs_off_pending_and_resolves_ready() {
         lumen_core::JsValue::String("loaded".into())
     );
     assert_eq!(rt.eval("_readyResolved").unwrap(), lumen_core::JsValue::Bool(true));
+}
+
+// FONTLOAD-6 (`bugs/BUG-467-OPEN.md`): a script-constructed `FontFace` whose
+// bytes validate via `.load()` while it is a member of some `FontFaceSet` now
+// reaches `lumen_font::FontRegistry` (queued for the shell to register on the
+// next frame), instead of `.load()` only ever gating its own promise.
+
+/// Real sfnt bytes (WPT/CSS-WG's Ahem) so `_lumen_font_validate_bytes`'s
+/// `lumen_font::Font::parse` genuinely accepts them — a synthetic byte string
+/// would only ever exercise the rejection path.
+fn ahem_font_bytes() -> Vec<u8> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("assets")
+        .join("fonts")
+        .join("Ahem.ttf");
+    std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
+/// Builds a `Uint8Array` literal in JS from real bytes via `atob` — avoids
+/// embedding a multi-KB decimal array literal in the test source.
+fn js_bytes_expr(bytes: &[u8]) -> String {
+    let b64 = crate::file_input::to_base64(bytes);
+    format!(
+        "(function() {{ var bin = atob(\"{b64}\"); var out = new Uint8Array(bin.length); \
+         for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }})()"
+    )
+}
+
+#[test]
+fn register_scripted_font_face_queues_valid_bytes() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let script = format!(
+        "_lumen_register_scripted_font_face('MyAhem', '700', 'italic', {})",
+        js_bytes_expr(&ahem_font_bytes())
+    );
+    let result = rt.eval(&script).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+    let queued = rt.take_pending_scripted_font_faces();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].0, "MyAhem");
+    assert_eq!(queued[0].1, 700);
+    assert_eq!(queued[0].2, lumen_core::FontStyle::Italic);
+    assert_eq!(queued[0].3, ahem_font_bytes());
+}
+
+#[test]
+fn register_scripted_font_face_rejects_garbage_bytes() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval("_lumen_register_scripted_font_face('Bogus', 'normal', 'normal', new Uint8Array([1,2,3,4]))")
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(false));
+    assert!(rt.take_pending_scripted_font_faces().is_empty());
+}
+
+#[test]
+fn script_constructed_font_face_registers_on_add_then_load() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let script = format!(
+        r#"
+            var bytes = {bytes};
+            var f = new FontFace('ScriptAhemA', bytes.buffer);
+            document.fonts.add(f);
+            typeof f.load().then === 'function'
+        "#,
+        bytes = js_bytes_expr(&ahem_font_bytes())
+    );
+    let result = rt.eval(&script).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+    let queued = rt.take_pending_scripted_font_faces();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].0, "ScriptAhemA");
+}
+
+#[test]
+fn script_constructed_font_face_registers_on_load_then_add() {
+    // `.load()` resolves a binary source synchronously (no fetch involved),
+    // but `.then()` callbacks are always deferred to a microtask — the
+    // registration itself must not depend on that microtask ever running, so
+    // this checks native state (`_status`/`_registeredForRender`) right after
+    // the synchronous `.load(); .add()` pair, not a `.then()` side effect.
+    let rt = v8_runtime_with_dom(make_doc());
+    let script = format!(
+        r#"
+            var bytes = {bytes};
+            var f = new FontFace('ScriptAhemB', bytes.buffer);
+            f.load();
+            document.fonts.add(f);
+            f._status === 'loaded' && f._registeredForRender === true
+        "#,
+        bytes = js_bytes_expr(&ahem_font_bytes())
+    );
+    let result = rt.eval(&script).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+    let queued = rt.take_pending_scripted_font_faces();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].0, "ScriptAhemB");
+}
+
+#[test]
+fn css_connected_face_is_excluded_from_scripted_registration() {
+    // Same guard would matter if a future slice ever lets a CSS-connected
+    // face's bytes reach `_loadedBytes` (today only script `binary`/`url`
+    // sources do) — assert the explicit `_cssConnected` check, not just the
+    // incidental "never got bytes" one.
+    let doc = make_doc();
+    add_css_font_face(&doc, "WebFont", lumen_dom::FontFaceStatus::Loaded);
+    let rt = v8_runtime_with_dom(doc);
+    let script = format!(
+        r#"
+            var f = document.fonts.values().next().value;
+            f._loadedBytes = {bytes};
+            document.fonts.add(f);
+            f._cssConnected === true
+        "#,
+        bytes = js_bytes_expr(&ahem_font_bytes())
+    );
+    let result = rt.eval(&script).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+    assert!(rt.take_pending_scripted_font_faces().is_empty());
 }
 
 // ── Shadow DOM JS bindings ────────────────────────────────────────────────

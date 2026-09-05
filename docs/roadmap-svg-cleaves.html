@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-05",
  "counts": {
-  "open": 390,
-  "fixed": 558,
+  "open": 389,
+  "fixed": 562,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 948,
+ "total_bugs": 951,
  "phases": [
   {
    "id": "P0",
@@ -336,7 +336,7 @@
      "title": "FONTLOAD: CSS Font Loading API (FontFace/FontFaceSet)",
      "status": "in progress",
      "size": "L",
-     "note": "Дорожка «CSS Font Loading API», выделена из BUG-467 по правилу «нереализованная функциональность — задача ROADMAP, а не баг» (решение 2026-08-28). Найдено WPT-RUN-3 срез 2, расширено срезом 17 (`css/css-font-loading`, 21 файл/0 из 79 сабтестов), срезами 26/31/33 (`css-ruby`/`css-fonts`/`css-sizing`, тот же `document.fonts.ready`/`.load` идиом). **FONTLOAD-1 (P1, 2026-09-05, `p1-fontload1-fontface-api`):** реальный конструктор `FontFace` + `document.fonts` как настоящий `setlike<FontFace>` (стабильная идентичность, `size`/`has`/`add`/`delete`/`clear`/`keys`/`values`/`entries`/`forEach`/`load()`/`ready`/`status`, события `loading`/`loadingdone`/`loadingerror`, `FontFaceSetLoadEvent`, `new FontFaceSet()` бросает `TypeError`); `.load()` реально фетчит `url()`-источники и валидирует байты через новый натив `_lumen_font_validate_bytes` (`lumen_font::Font::parse`). `css/css-font-loading`: 18/27→17/27 harness OK (разница — уже открытый BUG-995, не регрессия этого среза), 0/54→6/55 сабтестов. Не закрыто (см. `bugs/BUG-467-OPEN.md`, срез FONTLOAD-1): CSS-connected сет — одноразовый снимок, не реагирует на изменение `<style>`/CSSOM (нужен фундамент BUG-471/CSSOM-4); нативный `status` CSS-декларированного `url()`-лица никогда не становится `Loaded`, поэтому `ready`/`.status` намеренно считают только script-driven загрузки; значения дескрипторов (`unicodeRange` и т.п.) не разбираются грамматикой; скрипт-сконструированный `FontFace` не подключён к `lumen_font::FontRegistry`/рендерингу (FOUT/FOIT). **FONTLOAD-2 (P1, 2026-09-05, `p1-fontload2-css-font-loaded-status`):** переисследование уточнило оба gap'а FONTLOAD-1 — `crates/driver` (весь WPT-путь) вообще не заполняет `document.fonts` (не только не реагирует на изменения, а и не populated изначально), поэтому WPT pass-rate этим срезом не двигается; узкий безопасный фикс сделан только для live-окна (`crates/shell`) — `FontLoaded`-событие теперь флипает нативный `status` CSS-connected лица и, если `document.fonts` уже построен, резолвит именно ЭТОГО `FontFace`'а `.status`/`.loaded` через `_lumen_notify_css_font_loaded` (`route_eval_js`), не трогая set-уровневый `ready`/pending — детали и почему в `bugs/BUG-467-OPEN.md`, срез FONTLOAD-2. Полный перечень отсутствующих членов и упавших файлов — в bugs/BUG-467-OPEN.md",
+     "note": "Дорожка «CSS Font Loading API», выделена из BUG-467 по правилу «нереализованная функциональность — задача ROADMAP, а не баг» (решение 2026-08-28). Найдено WPT-RUN-3 срез 2, расширено срезом 17 (`css/css-font-loading`, 21 файл/0 из 79 сабтестов), срезами 26/31/33 (`css-ruby`/`css-fonts`/`css-sizing`, тот же `document.fonts.ready`/`.load` идиом). **FONTLOAD-1 (P1, 2026-09-05, `p1-fontload1-fontface-api`):** реальный конструктор `FontFace` + `document.fonts` как настоящий `setlike<FontFace>` (стабильная идентичность, `size`/`has`/`add`/`delete`/`clear`/`keys`/`values`/`entries`/`forEach`/`load()`/`ready`/`status`, события `loading`/`loadingdone`/`loadingerror`, `FontFaceSetLoadEvent`, `new FontFaceSet()` бросает `TypeError`); `.load()` реально фетчит `url()`-источники и валидирует байты через новый натив `_lumen_font_validate_bytes` (`lumen_font::Font::parse`). `css/css-font-loading`: 18/27→17/27 harness OK (разница — уже открытый BUG-995, не регрессия этого среза), 0/54→6/55 сабтестов. Не закрыто (см. `bugs/BUG-467-OPEN.md`, срез FONTLOAD-1): CSS-connected сет — одноразовый снимок, не реагирует на изменение `<style>`/CSSOM (нужен фундамент BUG-471/CSSOM-4); нативный `status` CSS-декларированного `url()`-лица никогда не становится `Loaded`, поэтому `ready`/`.status` намеренно считают только script-driven загрузки; значения дескрипторов (`unicodeRange` и т.п.) не разбираются грамматикой; скрипт-сконструированный `FontFace` не подключён к `lumen_font::FontRegistry`/рендерингу (FOUT/FOIT). **FONTLOAD-2 (P1, 2026-09-05, `p1-fontload2-css-font-loaded-status`):** переисследование уточнило оба gap'а FONTLOAD-1 — `crates/driver` (весь WPT-путь) вообще не заполняет `document.fonts` (не только не реагирует на изменения, а и не populated изначально), поэтому WPT pass-rate этим срезом не двигается; узкий безопасный фикс сделан только для live-окна (`crates/shell`) — `FontLoaded`-событие теперь флипает нативный `status` CSS-connected лица и, если `document.fonts` уже построен, резолвит именно ЭТОГО `FontFace`'а `.status`/`.loaded` через `_lumen_notify_css_font_loaded` (`route_eval_js`), не трогая set-уровневый `ready`/pending — детали и почему в `bugs/BUG-467-OPEN.md`, срез FONTLOAD-2. Полный перечень отсутствующих членов и упавших файлов — в bugs/BUG-467-OPEN.md. **FONTLOAD-3 (P1, 2026-09-05, `p1-fontload3-driver-font-population`):** уточнила атрибуцию gap 0 — FONTLOAD-2 назвала целью `crates/driver` как «путь WPT-прогона», но `run_report.py`/`run_suite.py` реально гоняют `wptrunner` над BiDi против отдельно запущенного `lumen.exe` (`crates/shell`), `InProcessSession` в этом пути не участвует; WPT pass rate этим срезом не двигается. Настоящий адресат — `InProcessSession`'s собственная поверхность (Rust-тесты `crates/driver/tests/`, `lumen --mcp`): `document.fonts` теперь заполняется из статичных `@font-face` до выполнения скриптов страницы (не после — JS-обёртка кэширует `FontFaceSet`-снимок на первое касание, `crates/js/src/shim/web_api_shim_mid.js`, так что более поздний фикс не помог бы синхронному top-level чтению). Не входит: тот же тайминг-риск в `crates/shell`/`page_pipeline.rs` (реальный WPT-путь) не проверен — см. bugs/BUG-467-OPEN.md, срез FONTLOAD-3. **FONTLOAD-4 (P1, 2026-09-05, `p1-fontload4-shell-font-population`):** закрыла ровно тот тайминг-риск, который FONTLOAD-3 оставила непроверенным для реального WPT-пути. Пробой (`document.fonts.size` синхронно в top-level `<script>` на странице с `@font-face`) подтверждён тот же класс дефекта: `page_pipeline.rs` заполнял `document.fonts` ПОСЛЕ `run_scripts_with_dom` (было верно на строке ~881, унаследовано с FONTLOAD-1/2), а JS-обёртка кэширует `FontFaceSet`-снимок на первое касание — синхронный ранний скрипт читал `size=0` навсегда, тот же баг, что FONTLOAD-3 исправила у `InProcessSession`. Фикс: блок заполнения перенесён перед `run_scripts_with_dom`, использует уже существующий pre-script `cascade` (в отличие от `crates/driver`, отдельный ранний парсинг не нужен — у shell он и так уже есть). Пробный тест оставлен постоянным регрессионным (`crates/shell/src/tests/page_pipeline.rs::fontload4_document_fonts_sync_read_sees_font_face_rules`). В отличие от FONTLOAD-3, этот путь — настоящий `run_report.py`/BiDi WPT-путь (`crates/shell`, не `InProcessSession`), поэтому pass rate должен был сдвинуться и сдвинулся: живой замер `run_report.py --all --root css/css-font-loading` (dev-release) — 17/27 harness OK без изменений, сабтесты 6/55→8/55 (`fontfaceset-clear-css-connected`, `fontfaceset-delete-css-connected`, обе половины `fontfacesetloadevent-constructor`, `historical`, `nonexistent-file-url` стали UNEXPECTED-PASS). `.ini`-baseline этой категории намеренно НЕ обновлён и не закоммичен: `--update-expected` тут же вскрывает не связанный с этим срезом долг WPT-RUN-7 среза 4 (эта категория — одна из «21 категории, требующей перегенерации» после фикса выборки по манифесту, `ROADMAP.md` строка WPT-RUN-7) — новые id (`fontface-descriptor-updates.html`, `fontface-from-arraybuffer.html` и др., реальные reftest-файлы с `-ref.html`-компаньоном) при `--check` дают `REGRESSION: expected None, got MISSING`, не имеющий отношения к шрифтам; смешивать два несвязанных сигнала в одном коммите неверно, перегенерация baseline остаётся владельцу WPT-RUN-7. Заодно поправлен дрейф в шапке-комментарии `crates/js/src/shim/web_api_shim_mid.js` («FontFace and FontFaceSet»): она всё ещё утверждала, что `crates/driver` вообще не заполняет `document.fonts` — устарело после FONTLOAD-3. `cargo test -p lumen-shell --bin lumen` 1723/1723 (без регрессий), `cargo clippy -p lumen-shell --all-targets -- -D warnings` чист. Не входит: реактивность CSS-connected сета на CSSOM-изменения (gap 1, оба пути) — прежний, больший фундамент BUG-471/CSSOM-4. **FONTLOAD-5 (P1, 2026-09-05, `p1-fontload5-css-connected-loading-signal`):** закрыла gap 2 — `document.fonts.ready`/`.status` теперь считают и пассивный CSS `url()`-фетч, не только script-driven загрузки. `page_pipeline.rs` метит лицо `Loading` уже на заполнении (до скриптов), шим сеет pending-счётчик сета на первом касании через отдельный флаг `_cssFetchPending` (НЕ через `_status` — так `FontFace.load()` сохраняет собственный независимый фетч). Ре-скоупинг агентом-исследователем перед срезом: из трёх кандидатов (реактивность на CSSOM — блокирована CSSOM-4; подключение к рендерингу FOUT/FOIT — требует новый js↔shell каллбэк-шов через границу слоёв, крупнее одного среза; этот сигнал) выбран этот, единственный не требующий новой архитектуры. Собственная регрессия поймана A/B WPT-замером до коммита и исправлена тем же срезом: первая версия фикса привязала счётчик к `_status`, отчего `FontFace.load()`'s короткое замыкание на уже-`loading` статус стало возвращать промис, резолвящийся только фоновым (fire-and-forget, молча роняющим неудачу) нативным фетчем — `fontfaceset-load-css-connected.html` перешёл из FAIL в TIMEOUT (harness 17/27→16/27). После развязки флага финальный замер — 17/27 harness / 8/55 сабтестов, байт-в-байт baseline (значение фикса ловят только целевые Rust/JS-юнит-тесты, не эта WPT-категория). `cargo test -p lumen-shell --bin lumen --features v8` 1725/1725 (+2), `cargo test -p lumen-js --features v8-backend` 3464/3465 (1 непричастный давний флейк BUG-997), `cargo clippy` чист для обоих. Детали — `bugs/BUG-467-OPEN.md`, срез FONTLOAD-5. **FONTLOAD-6 (P1, 2026-09-05, `p1-fontload6-scripted-fontface-registry`):** закрыла последний из трёх кандидатов FONTLOAD-5 — script-сконструированный `FontFace` теперь подключён к `lumen_font::FontRegistry`/рендерингу. Шим (`_lumen_maybe_register_scripted_font_face`) прокидывает валидированные байты источника из `FontFace.load()` в новый натив `_lumen_register_scripted_font_face` (`dom_core.rs`, тот же `lumen_font::{maybe_decode_font, Font::parse}`, что и `_lumen_font_validate_bytes`), как только лицо одновременно провалидировано и состоит хотя бы в одном `FontFaceSet` (оба порядка вызова `.load()`/`.add()` сходятся в одну проверку); натив кладёт байты в очередь `pending_scripted_font_faces` — регистрация в `FontRegistry` UI-thread-owned (ADR-016, BUG-976), поэтому JS/engine-поток не может тронуть её напрямую — shell дренирует очередь раз в кадр (`about_to_wait.rs`) и триггерит FOUT→FOIT relayout, тем же путём, что `LoadEvent::FontLoaded` для CSS-connected лиц. CSS-connected лица исключены явной проверкой `_cssConnected`. `cargo test -p lumen-js --features v8-backend -- v8_fontface_shadow_custom` 45/45 (4 новых), `cargo clippy` для `lumen-js`/`lumen-shell` чист. Не входит: реактивность CSS-connected сета (BUG-471/CSSOM-4), descriptor grammar, unregister-путь для лица, покинувшего все `FontFaceSet`. Детали — `bugs/BUG-467-OPEN.md`, срез FONTLOAD-6.",
      "bugs": [
       "BUG-467"
      ]
@@ -6819,7 +6819,7 @@
        "title": "THREAD-1: растеризация с UI-потока на дефолтном wgpu",
        "status": "done",
        "size": "L",
-       "note": "Снять растеризацию и present с UI-потока для дефолтного бэкенда wgpu — доделать ADR-016 M1 там, где он реально используется. Сейчас `create_backend` (`crates/shell/src/backend_factory.rs:39-73`) поднимает рендер-поток только при `LUMEN_RENDER_THREAD=1` и только под `backend-femtovg`; при сборке без этой фичи печатает «рендер-поток недоступен, откат на in-process», а wgpu-путь ветки не имеет вовсе. Ограничение M1.1 (winit отдаёт window handle только на главном потоке, GL-контекст открепляется через `make_not_current` и переносится) сформулировано под femtovg/GL — для wgpu поверхность создаётся иначе, и переносимость надо решать заново, а не копировать. Инварианты синхронизации берутся готовыми из ADR-016 §Decision: неизменяемые снимки через сообщения, latest-wins с глубиной 1, рендер никогда не ждёт движок, скролл не ждёт растеризацию, простой значит простой (парковка на condvar, инвариант BUG-271). Приёмка — не wall-clock: доля времени, когда окно не качает очередь (сейчас 46 %), и p99 прокачки `WM_NULL` (сейчас 3 с при p50 0.2 мс); мерить тем же сэмплером, что снял базу — `.tmp/observe/watch_lumen.ps1`. Пиксельная нейтральность обязательна: полный `graphic_tests/run.py`. Срез 1 (2026-09-04): `create_threaded_wgpu` (`backend_factory.rs`) закрывает ветку wgpu — в отличие от femtovg (`!Send` GL-контекст, detach/attach через `make_not_current`/`make_current`) `WgpuBackend` уже `Send` (тест `wgpu_backend_is_send`, `crates/engine/paint/src/backends/wgpu_backend.rs`), поэтому переносимость решена проще: бэкенд создаётся целиком на главном потоке (тот же M1.1-инвариант — `Renderer::new_async`/`instance.create_surface` читает window handle через winit, которому нужен поток создания окна; независимо подтверждено попыткой BUG-274 2026-07-28 вынести саму пробу/adapter/surface на фон — `create_surface` молча проваливается для всех кандидатов) и целиком перемещается в замыкание рендер-потока, без detach/attach. `create_backend` теперь выбирает потоковый бэкенд по тому же `LUMEN_BACKEND`, что и однопоточный путь (femtovg только при явном `LUMEN_BACKEND=femtovg`, иначе wgpu), вместо прежнего «femtovg независимо от LUMEN_BACKEND». Живой смоук (`LUMEN_RENDER_THREAD=1`, `LUMEN_FRAME_LOG=1`, `graphic_tests/01-sanity.html`): окно не падает, кадры идут (`dl 7 cmds`), фолбэк-сообщение не печатается; параллельно перепроверен нетронутый потоковый femtovg-путь — `[thr lumen-render commit N]` подтверждает работу рендер-потока. `cargo test -p lumen-shell --bin lumen`: 1717/1717 зелёных; `dump_golden.py` 12/12 пусто (дефолтный путь, флаг выключен, байт-в-байт не изменён). **Закрыта 2026-09-04, срез 2 (ADR-029):** дефолт флипнут по образцу ADR-023 — `render_thread_enabled()` включён по умолчанию, `LUMEN_NO_RENDER_THREAD=1` откат, `LUMEN_RENDER_THREAD=0` тоже выключает, не привязан к `--deterministic` (иначе `graphic_tests/run.py` никогда не гонял бы отгружаемую конфигурацию). PS1-сэмплер THREAD-0 не потерялся — нашёлся в `.tmp/observe/` корневого чекаута — перенесён в трекаемое `scripts/observe/{watch_lumen.ps1,report.py}`, чтобы больше не терялся между сессиями. Измерение тем же сэмплером на том же корпусе (`docs/perf/corpus-top100-foreign.txt`, 21/100 сайтов до намеренной остановки — включает все известные по базе зависающие сайты duckduckgo/live/microsoft): доля времени без прокачки очереди 46 %→**10 %** (92/892 сэмплов), p99 `WM_NULL` ~3с→**1.76с**, завершившихся зависаний 42 (медиана 11.6с)→11 (медиана 3.3с). Полный `graphic_tests/run.py --continue-on-fail` под флипнутым дефолтом: 156/156 тестов, дельта vs прежний прогон (флаг выключен) — «изменений нет», те же 51 known-DEBTOR при идентичном `diff_pct`, те же 3 pre-existing FAIL (150/151/155) байт-в-байт идентичны прежнему прогону — пиксельная нейтральность подтверждена, а не предположена. `cargo test -p lumen-shell --bin lumen`: 1717/1717. Побочно подтверждён уже заведённый [BUG-988](bugs/BUG-988-OPEN.md) (спин-поток) и один новый образец того же класса паники `dom/lib.rs:706` (Outlook) — не заводится отдельно, тот же известный сигнатурный класс. Полная методика и числа — [ADR-029](docs/decisions/ADR-029-render-thread-default.md). Не устранено этим срезом: THREAD-2 (блокирующий readback UI↔движковый поток) и JS/layout-обусловленные зависания главного потока — отдельные пункты дорожки THREAD."
+       "note": "Снять растеризацию и present с UI-потока для дефолтного бэкенда wgpu — доделать ADR-016 M1 там, где он реально используется. Сейчас `create_backend` (`crates/shell/src/backend_factory.rs:39-73`) поднимает рендер-поток только при `LUMEN_RENDER_THREAD=1` и только под `backend-femtovg`; при сборке без этой фичи печатает «рендер-поток недоступен, откат на in-process», а wgpu-путь ветки не имеет вовсе. Ограничение M1.1 (winit отдаёт window handle только на главном потоке, GL-контекст открепляется через `make_not_current` и переносится) сформулировано под femtovg/GL — для wgpu поверхность создаётся иначе, и переносимость надо решать заново, а не копировать. Инварианты синхронизации берутся готовыми из ADR-016 §Decision: неизменяемые снимки через сообщения, latest-wins с глубиной 1, рендер никогда не ждёт движок, скролл не ждёт растеризацию, простой значит простой (парковка на condvar, инвариант BUG-271). Приёмка — не wall-clock: доля времени, когда окно не качает очередь (сейчас 46 %), и p99 прокачки `WM_NULL` (сейчас 3 с при p50 0.2 мс); мерить тем же сэмплером, что снял базу — `.tmp/observe/watch_lumen.ps1`. Пиксельная нейтральность обязательна: полный `graphic_tests/run.py`. Срез 1 (2026-09-04): `create_threaded_wgpu` (`backend_factory.rs`) закрывает ветку wgpu — в отличие от femtovg (`!Send` GL-контекст, detach/attach через `make_not_current`/`make_current`) `WgpuBackend` уже `Send` (тест `wgpu_backend_is_send`, `crates/engine/paint/src/backends/wgpu_backend.rs`), поэтому переносимость решена проще: бэкенд создаётся целиком на главном потоке (тот же M1.1-инвариант — `Renderer::new_async`/`instance.create_surface` читает window handle через winit, которому нужен поток создания окна; независимо подтверждено попыткой BUG-274 2026-07-28 вынести саму пробу/adapter/surface на фон — `create_surface` молча проваливается для всех кандидатов) и целиком перемещается в замыкание рендер-потока, без detach/attach. `create_backend` теперь выбирает потоковый бэкенд по тому же `LUMEN_BACKEND`, что и однопоточный путь (femtovg только при явном `LUMEN_BACKEND=femtovg`, иначе wgpu), вместо прежнего «femtovg независимо от LUMEN_BACKEND». Живой смоук (`LUMEN_RENDER_THREAD=1`, `LUMEN_FRAME_LOG=1`, `graphic_tests/01-sanity.html`): окно не падает, кадры идут (`dl 7 cmds`), фолбэк-сообщение не печатается; параллельно перепроверен нетронутый потоковый femtovg-путь — `[thr lumen-render commit N]` подтверждает работу рендер-потока. `cargo test -p lumen-shell --bin lumen`: 1717/1717 зелёных; `dump_golden.py` 12/12 пусто (дефолтный путь, флаг выключен, байт-в-байт не изменён). **Закрыта 2026-09-04, срез 2 (ADR-029):** дефолт флипнут по образцу ADR-023 — `render_thread_enabled()` включён по умолчанию, `LUMEN_NO_RENDER_THREAD=1` откат, `LUMEN_RENDER_THREAD=0` тоже выключает, не привязан к `--deterministic` (иначе `graphic_tests/run.py` никогда не гонял бы отгружаемую конфигурацию). PS1-сэмплер THREAD-0 не потерялся — нашёлся в `.tmp/observe/` корневого чекаута — перенесён в трекаемое `scripts/observe/{watch_lumen.ps1,report.py}`, чтобы больше не терялся между сессиями. Измерение тем же сэмплером на том же корпусе (`docs/perf/corpus-top100-foreign.txt`, 21/100 сайтов до намеренной остановки — включает все известные по базе зависающие сайты duckduckgo/live/microsoft): доля времени без прокачки очереди 46 %→**10 %** (92/892 сэмплов), p99 `WM_NULL` ~3с→**1.76с**, завершившихся зависаний 42 (медиана 11.6с)→11 (медиана 3.3с). Полный `graphic_tests/run.py --continue-on-fail` под флипнутым дефолтом: 156/156 тестов, дельта vs прежний прогон (флаг выключен) — «изменений нет», те же 51 known-DEBTOR при идентичном `diff_pct`, те же 3 pre-existing FAIL (150/151/155) байт-в-байт идентичны прежнему прогону — пиксельная нейтральность подтверждена, а не предположена. `cargo test -p lumen-shell --bin lumen`: 1717/1717. Побочно подтверждён уже заведённый [BUG-988](bugs/BUG-988-FIXED.md) (спин-поток) и один новый образец того же класса паники `dom/lib.rs:706` (Outlook) — не заводится отдельно, тот же известный сигнатурный класс. Полная методика и числа — [ADR-029](docs/decisions/ADR-029-render-thread-default.md). Не устранено этим срезом: THREAD-2 (блокирующий readback UI↔движковый поток) и JS/layout-обусловленные зависания главного потока — отдельные пункты дорожки THREAD."
       },
       {
        "id": "THREAD-2",
@@ -9552,34 +9552,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-988": {
-   "status": "open",
-   "title": "Рабочий поток уходит в бесконечный спин на ЦЕЛОЕ ЯДРО и переживает навигации: `tid 17048` создан 16:10:12 на costco.com, жёг 984 мс CPU в секунду (медиана; выше…",
-   "component": "не локализовано (поток опознан по времени рождения)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-989": {
-   "status": "open",
-   "title": "Встроенный блокировщик отклоняет ГЛАВНЫЙ документ навигации, а не подресурс: `Ошибка загрузки https://www.temu.com/: network error: blocked: easylist` — сайт не…",
-   "component": "network (`crates/network/src/lib.rs`, матчинг easylist) / shell (`adblock.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-990": {
-   "status": "open",
-   "title": "`IDBDatabase.objectStoreNames` отдан как массив/литерал вместо `DOMStringList`, поэтому у него нет `contains()` — типовой пролог апгрейда схемы `if (!db.objectS…",
-   "component": "js (IndexedDB-шим, `crates/js/src/shim/*.js`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-991": {
-   "status": "open",
-   "title": "`health.log` (PERF-6) открывается на ПЕРЕЗАПИСЬ: каждый новый процесс стирает журнал предыдущего. Прогон 100 сайтов 2026-09-04 перезапускал окно девять раз, и в…",
-   "component": "shell (`crates/shell/src/health_log.rs`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-993": {
    "status": "open",
    "title": "Два признака «страница ничего не нарисовала» противоречат друг другу В ОБЕ СТОРОНЫ, значит минимум один врёт и неизвестно который. Прогон 2026-09-04: 38 из 88 с…",
@@ -9619,6 +9591,27 @@
    "status": "open",
    "title": "`/webidl/ecmascript-binding/global-object-implicit-this-value-cross-realm.html` **всегда** TIMEOUT, но число доехавших подтестов плавает: три изолированных прог…",
    "component": "не локализован (общая точка блокировки — ожидание `load` у программно вставленного `<iframe src>`, `tests/wpt/webidl/ecmascript-binding/support/create-realm.js`; кандидаты — доставка `load` вложенному browsing context и создание самого контекста)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1000": {
+   "status": "open",
+   "title": "`SharedWorker` не закрывается на уходе документа: соединение живёт в процесс-глобальном `HUB_V8`, никто не итерирует открытые порты страницы и не шлёт `_lumen_s…",
+   "component": "js (`crates/js/src/shared_worker.rs` — `hub_v8`/`HUB_V8`, `close_shared_worker_port_v8`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1001": {
+   "status": "open",
+   "title": "`cargo clippy -p lumen-layout --all-targets --profile dev-release -- -D warnings` красный на `origin/main` (`07e54a7fd`): три debug_assert-only функции инвариан…",
+   "component": "layout (`crates/engine/layout/src/invariants.rs` — `check_geometry`/`check_finite`/`check_containment`, DEVX-8a)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1002": {
+   "status": "open",
+   "title": "`python scripts/check_file_sizes.py` уже красный на `origin/main` (`cbb1a8876`, воспроизведено через `git stash`): 4 файла в baseline выросли без `--update` (`d…",
+   "component": "CI (`scripts/check_file_sizes.py`, job `file-size`, `docs/lint-policy.md` §5.1)",
    "date": null,
    "debtor": false
   },
@@ -13520,9 +13513,40 @@
    "component": "не локализовано (стек переполняется, паники с местом нет)",
    "date": "2026-09-04",
    "debtor": false
+  },
+  "BUG-988": {
+   "status": "fixed",
+   "title": "Рабочий поток уходит в бесконечный спин на ЦЕЛОЕ ЯДРО и переживает навигации: `tid 17048` создан 16:10:12 на costco.com, жёг 984 мс CPU в секунду (медиана; выше…",
+   "component": "js (`crates/js/src/worker.rs::WORKER_SHIM`) / shell (`crates/shell/src/lumen/bfcache.rs::park_current_page`)",
+   "date": "2026-09-05",
+   "debtor": false
+  },
+  "BUG-989": {
+   "status": "fixed",
+   "title": "Встроенный блокировщик отклонял ГЛАВНЫЙ документ навигации, а не подресурс: `Ошибка загрузки https://www.temu.com/: network error: blocked: easylist` — сайт не…",
+   "component": "network (`crates/network/src/filter/easylist.rs`)",
+   "date": "2026-09-05",
+   "debtor": false
+  },
+  "BUG-990": {
+   "status": "fixed",
+   "title": "`IDBDatabase.objectStoreNames` отдан как массив/литерал вместо `DOMStringList`, поэтому у него нет `contains()` — типовой пролог апгрейда схемы `if (!db.objectS…",
+   "component": "js (IndexedDB-шим, `crates/js/src/shim/idb_shim.js`)",
+   "date": "2026-09-05",
+   "debtor": false
+  },
+  "BUG-991": {
+   "status": "fixed",
+   "title": "`health.log` (PERF-6) открывается на ПЕРЕЗАПИСЬ: каждый новый процесс стирает журнал предыдущего. Прогон 100 сайтов 2026-09-04 перезапускал окно девять раз, и в…",
+   "component": "shell (`crates/shell/src/health_log.rs`)",
+   "date": "2026-09-05",
+   "debtor": false
   }
  },
  "unlinked": {
+  "CI (`scripts/check_file_sizes.py`, job `file-size`, `docs/lint-policy.md` §5.1)": [
+   "BUG-1002"
+  ],
   "COPY_DST`, пиксельно нейтрально), интерливед живой A/B 3 пары — надбавка min 16.87 мс с битами против 18.58 без. Инструмент — `band_copy_cost_census` (`#[ignore]`-тест `lumen-paint`); цена меряется НАКЛОНОМ по числу копий в submit-е, а прокси через `LoadOp::Clear` отвергнут (65 ГБ/с = fast-clear метаданными). Остаток пополнен п. 60 (пропорциональна ли цена промаха числу перерисованных строк при неизменной цели — не измерено, первый шаг среза 29) и п. 61 (ping-pong требует второй полосы +18.6 МиБ, кольцевой адресации — нет).": [
    "BUG-405"
   ],
@@ -13731,7 +13755,7 @@
   "js (DOM child-node bindings, `crates/js/src/dom.rs`)": [
    "BUG-291"
   ],
-  "js (IndexedDB-шим, `crates/js/src/shim/*.js`)": [
+  "js (IndexedDB-шим, `crates/js/src/shim/idb_shim.js`)": [
    "BUG-990"
   ],
   "js (JS environment bootstrap, `WEB_API_SHIM`)": [
@@ -14062,6 +14086,9 @@
   "js (`crates/js/src/shared_worker.rs:382`–`386` — `key = nm ? 'name:'+nm : 'url:'+url`, `String(name)`; `SHARED_WORKER_GLOBAL_SHIM` не заводит `globalThis.name`)": [
    "BUG-866"
   ],
+  "js (`crates/js/src/shared_worker.rs` — `hub_v8`/`HUB_V8`, `close_shared_worker_port_v8`)": [
+   "BUG-1000"
+  ],
   "js (`crates/js/src/shared_worker.rs` — хвост `_lumen_sw_report_exception` и рассылка в `run_shared_worker_thread_v8`; `crates/js/src/v8_runtime.rs::eval_and_report_via` — не разделяет фазу компиляции и фазу исполнения)": [
    "BUG-905"
   ],
@@ -14185,6 +14212,9 @@
   ],
   "js (`crates/js/src/worker.rs:227` — `worker_global_shim`)": [
    "BUG-766"
+  ],
+  "js (`crates/js/src/worker.rs::WORKER_SHIM`) / shell (`crates/shell/src/lumen/bfcache.rs::park_current_page`)": [
+   "BUG-988"
   ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"
@@ -14383,6 +14413,9 @@
   "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)": [
    "BUG-355"
   ],
+  "layout (`crates/engine/layout/src/invariants.rs` — `check_geometry`/`check_finite`/`check_containment`, DEVX-8a)": [
+   "BUG-1001"
+  ],
   "layout (`crates/engine/layout/src/lib.rs::collect_computed_styles`/`collect_layout_rects`, `box_tree.rs` inline formatting)": [
    "BUG-488"
   ],
@@ -14486,6 +14519,9 @@
   "network (HTTP client)": [
    "BUG-278"
   ],
+  "network (`crates/network/src/filter/easylist.rs`)": [
+   "BUG-989"
+  ],
   "network (`crates/network/src/h3/udp.rs:450` — `udp_round_trip`; тесты `tests::fetch_*`/`auth_*` в `crates/network/src/lib.rs`)": [
    "BUG-805"
   ],
@@ -14506,9 +14542,6 @@
   ],
   "network (`crates/network/src/lib.rs::read_head`, `crates/network/src/h2/conn.rs`)": [
    "BUG-679"
-  ],
-  "network (`crates/network/src/lib.rs`, матчинг easylist) / shell (`adblock.rs`)": [
-   "BUG-989"
   ],
   "network (`crates/network/src/sse.rs:393` — переподключение только по завершению чтения соединения) + js (`crates/js/src/dom.rs:7521`, `:7538` — ветки `open`/`close` в `_lumen_sse_pump_one`)": [
    "BUG-844"
@@ -14876,9 +14909,6 @@
   ],
   "не локализован (общая точка блокировки — ожидание `load` у программно вставленного `<iframe src>`, `tests/wpt/webidl/ecmascript-binding/support/create-realm.js`; кандидаты — доставка `load` вложенному browsing context и создание самого контекста)": [
    "BUG-999"
-  ],
-  "не локализовано (поток опознан по времени рождения)": [
-   "BUG-988"
   ]
  }
 }

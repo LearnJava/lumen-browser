@@ -450,6 +450,15 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Returns an empty vec when no canvas was drawn (HTML LS §4.12.4).
     #[allow(dead_code)]
     fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)>;
+    /// Drain script-constructed `FontFace`s that became render-eligible since
+    /// the last call (FONTLOAD-6, BUG-467): `.load()` validated their bytes
+    /// while already a member of some `FontFaceSet`. Each entry is
+    /// `(family, weight, style, decoded_sfnt_bytes)`; shell registers it into
+    /// `page_font_registry` and triggers the FOUT→FOIT relayout swap, the
+    /// same one a background CSS `@font-face` fetch triggers via
+    /// `LoadEvent::FontLoaded`.
+    #[allow(dead_code)]
+    fn take_pending_scripted_font_faces(&self) -> Vec<lumen_js::ScriptedFontFaceEntry>;
     /// Drain fullscreen requests queued by `element.requestFullscreen()` and
     /// `document.exitFullscreen()` (WHATWG Fullscreen §4).
     ///
@@ -951,6 +960,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)> {
         self.rt.flush_canvas_updates()
+    }
+    fn take_pending_scripted_font_faces(&self) -> Vec<lumen_js::ScriptedFontFaceEntry> {
+        self.rt.take_pending_scripted_font_faces()
     }
     fn take_fullscreen_requests(&self) -> Vec<(bool, u32)> {
         self.rt

@@ -140,6 +140,15 @@ pub struct V8JsRuntime {
     pub(super) console_messages: Arc<Mutex<Vec<(u8, String)>>>,
     /// `history.pushState` / `history.replaceState` URL-update notifications.
     pub(super) pending_history_url_updates: Arc<Mutex<Vec<crate::dom::HistoryUrlUpdate>>>,
+    /// FONTLOAD-6 (BUG-467): bytes of a script-constructed `FontFace` that
+    /// finished validating (`.load()`) while a member of some `FontFaceSet`.
+    /// Pushed by `_lumen_register_scripted_font_face`; drained once per frame
+    /// by the shell (`about_to_wait.rs`) into `page_font_registry`, the same
+    /// registry a background CSS `@font-face` fetch feeds via
+    /// `LoadEvent::FontLoaded`. Tuple, not a dedicated type, to match
+    /// `PersistentJs`'s existing engine-agnostic convention (see
+    /// `flush_canvas_updates`/`take_history_url_updates`).
+    pub(super) pending_scripted_font_faces: Arc<Mutex<Vec<crate::dom::ScriptedFontFaceEntry>>>,
     /// `history.go(n)` / `back` / `forward` traversal deltas.
     pub(super) pending_history_traversals: Arc<Mutex<Vec<i32>>>,
     /// Shell-backed Navigation API state (serialised JSON of nav history + index).
@@ -288,6 +297,7 @@ impl V8JsRuntime {
             window_open_requests: Arc::new(Mutex::new(Vec::new())),
             console_messages: Arc::new(Mutex::new(Vec::new())),
             pending_history_url_updates: Arc::new(Mutex::new(Vec::new())),
+            pending_scripted_font_faces: Arc::new(Mutex::new(Vec::new())),
             pending_history_traversals: Arc::new(Mutex::new(Vec::new())),
             nav_state: Arc::new(Mutex::new(String::from(r#"{"entries":[],"index":0}"#))),
             pending_navigation_updates: Arc::new(Mutex::new(Vec::new())),
@@ -771,6 +781,15 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::take_history_url_updates`].
     pub fn take_history_url_updates(&self) -> Vec<HistoryUrlUpdate> {
         std::mem::take(&mut *self.pending_history_url_updates.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Drain script-constructed `FontFace`s that became render-eligible since
+    /// the last call (FONTLOAD-6, BUG-467): `.load()` validated their bytes
+    /// while they were already a member of some `FontFaceSet`. Called once
+    /// per frame by the shell, which registers each into `page_font_registry`
+    /// and triggers the FOUT→FOIT relayout swap.
+    pub fn take_pending_scripted_font_faces(&self) -> Vec<crate::dom::ScriptedFontFaceEntry> {
+        std::mem::take(&mut *self.pending_scripted_font_faces.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// Drain all `history.go(n)`/back/forward traversal deltas queued by JS.

@@ -107,6 +107,7 @@ pub(crate) fn install_document_fonts(
     ctx: v8::Local<'_, v8::Context>,
     store: &mut Vec<OwnedNativeFn>,
     doc: Arc<Mutex<lumen_dom::Document>>,
+    pending_scripted_font_faces: Arc<Mutex<Vec<crate::dom::ScriptedFontFaceEntry>>>,
 ) -> JsResult<()> {
     // ── document.fonts (FontFaceSet) ──────────────────────────────────────────
     {
@@ -180,7 +181,50 @@ pub(crate) fn install_document_fonts(
         let data: &[u8] = decoded.as_deref().unwrap_or(&bytes);
         lumen_font::Font::parse(data).is_ok()
     });
+    // ── FONTLOAD-6: connect a script-constructed FontFace to rendering ───────
+    // `_lumen_font_validate_bytes` above only ever gated `.load()`'s promise —
+    // nothing told `lumen_font::FontRegistry` the font exists, so text styled
+    // with its family kept using fallback fonts even after `.status` became
+    // 'loaded' (BUG-467-OPEN.md, FONTLOAD-5's re-scoping note). The shim calls
+    // this once a face is both validated and a member of a `FontFaceSet`
+    // (`_lumen_maybe_register_scripted_font_face` in the JS shim); it queues
+    // decoded bytes for the shell to register on the next frame
+    // (`about_to_wait.rs`), same as a background CSS `@font-face` fetch does
+    // via `LoadEvent::FontLoaded` — this native never touches the registry
+    // itself, which is UI-thread-owned (ADR-016; BUG-976 is why not).
+    // CSS-connected faces are excluded by the shim (own registration path
+    // already exists), so this only ever sees genuinely script-constructed ones.
+    let q = Arc::clone(&pending_scripted_font_faces);
+    reg!(scope, ctx, store,
+        "_lumen_register_scripted_font_face",
+        move |family: String, weight: String, style: String, bytes: Vec<u8>| -> bool {
+            let decoded = lumen_font::maybe_decode_font(&bytes).ok().flatten();
+            let data = decoded.unwrap_or(bytes);
+            if lumen_font::Font::parse(&data).is_err() {
+                return false;
+            }
+            let weight = parse_scripted_font_weight(&weight);
+            let style = lumen_core::FontStyle::parse_keyword(&style).unwrap_or(lumen_core::FontStyle::Normal);
+            q.lock().unwrap_or_else(|e| e.into_inner()).push((family, weight, style, data));
+            true
+        }
+    );
     Ok(())
+}
+
+/// `<font-weight>` descriptor → a single `u16` for `FontRegistry`'s identity
+/// key. Mirrors `crates/shell/src/subresources.rs::parse_font_weight` (the
+/// CSS `@font-face` path's twin) — duplicated rather than shared because
+/// `crates/js` sits below `crates/shell` in the crate layering and cannot
+/// depend on it. Range syntax (variable-font `"1 999"`) collapses to its
+/// first value, same simplification FONTLOAD-1 already accepted for
+/// descriptor grammar in general.
+fn parse_scripted_font_weight(s: &str) -> u16 {
+    match s.trim() {
+        "normal" => 400,
+        "bold" => 700,
+        other => other.split_ascii_whitespace().next().and_then(|n| n.parse().ok()).unwrap_or(400),
+    }
 }
 
 /// `getElementById`/`querySelector` and the other node-lookup entry points.

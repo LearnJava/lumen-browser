@@ -273,6 +273,7 @@ impl V8JsRuntime {
             let window_open_requests = Arc::clone(&self.window_open_requests);
             let console_messages = Arc::clone(&self.console_messages);
             let pending_history_url_updates = Arc::clone(&self.pending_history_url_updates);
+            let pending_scripted_font_faces = Arc::clone(&self.pending_scripted_font_faces);
             let pending_history_traversals = Arc::clone(&self.pending_history_traversals);
             let nav_state = Arc::clone(&self.nav_state);
             let pending_navigation_updates = Arc::clone(&self.pending_navigation_updates);
@@ -289,7 +290,13 @@ impl V8JsRuntime {
 
             install::install_document_meta(scope, ctx, store, Arc::clone(&doc))?;
 
-            install::install_document_fonts(scope, ctx, store, Arc::clone(&doc))?;
+            install::install_document_fonts(
+                scope,
+                ctx,
+                store,
+                Arc::clone(&doc),
+                Arc::clone(&pending_scripted_font_faces),
+            )?;
 
             install::install_node_lookup(scope, ctx, store, Arc::clone(&doc))?;
 
