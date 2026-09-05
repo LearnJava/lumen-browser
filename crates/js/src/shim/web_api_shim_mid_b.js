@@ -5350,7 +5350,7 @@ function _CaretPosition(offsetNode, offset) {
     this.offsetNode = offsetNode;
     this.offset     = offset;
 }
-_CaretPosition.prototype.getClientRects = function() { return []; };
+_CaretPosition.prototype.getClientRects = function() { return new DOMRectList([]); };
 
 // ── window.matchMedia / MediaQueryList (CSS Media Queries L4 §4.2) ───────────
 // Pure-JS shim on top of the native binding `_lumen_match_media` (parses + matches

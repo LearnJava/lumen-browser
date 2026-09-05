@@ -4155,14 +4155,11 @@ CanvasPattern.prototype.setTransform = function(transform) {
     if (typeof t !== 'object') {
         throw new TypeError("setTransform: argument is not a DOMMatrix2DInit");
     }
-    this.__pattern_transform__ = [
-        t.a === undefined ? (t.m11 === undefined ? 1 : +t.m11) : +t.a,
-        t.b === undefined ? (t.m12 === undefined ? 0 : +t.m12) : +t.b,
-        t.c === undefined ? (t.m21 === undefined ? 0 : +t.m21) : +t.c,
-        t.d === undefined ? (t.m22 === undefined ? 1 : +t.m22) : +t.d,
-        t.e === undefined ? (t.m41 === undefined ? 0 : +t.m41) : +t.e,
-        t.f === undefined ? (t.m42 === undefined ? 0 : +t.m42) : +t.f,
-    ];
+    // BUG-522: shares the real DOMMatrix2DInit validate-and-fixup with the
+    // element context's `setTransform` below — a legacy member and its `mIJ`
+    // alias may both be given only if they agree.
+    var fixed = _dommatrix2d_validate_and_fixup(t);
+    this.__pattern_transform__ = [fixed.a, fixed.b, fixed.c, fixed.d, fixed.e, fixed.f];
 };
 _lumen_idl_tag(CanvasPattern, 'CanvasPattern');
 
@@ -4436,24 +4433,97 @@ _lumen_c2d_method('restore', function() {
     }
 });
 // Transforms
+//
+// `_ctm` is a JS-side shadow of the current transformation matrix (a 2-D
+// `[a,b,c,d,e,f]` sextuple, same convention as `DOMMatrix`/CSS `matrix()`),
+// kept purely so `getTransform()` (BUG-522) has something to read back — the
+// native only ever receives the matrix to apply, not a getter for it. It
+// lives as a plain own property of the state record returned by
+// `_lumen_c2d()`, so `save()`/`restore()` (whose snapshot loop copies every
+// key but `nid`/`canvas`) and `reset()` (whose default-copy loop does the
+// same) already push/pop/reset it for free; every method below *replaces*
+// `_ctm` with a new array rather than mutating one in place, so a pushed
+// snapshot never aliases the live state.
+//
+// `_c2d_compose(A, B)` composes "A applied to the raw coordinates first, B
+// (the existing CTM) applied second" — the same row-vector convention and
+// the same composition direction `geometry_shim.js`'s `_dm_mat4_mul` uses,
+// ported by hand to the 2-D-only shape this file needs (`p' = p·A·B`, with
+// `a,b,c,d,e,f` mapped exactly like `DOMMatrix`'s aliases: a point maps to
+// `(a·x + c·y + e, b·x + d·y + f)`).
+function _c2d_compose(A, B) {
+    return [
+        A[0] * B[0] + A[1] * B[2],
+        A[0] * B[1] + A[1] * B[3],
+        A[2] * B[0] + A[3] * B[2],
+        A[2] * B[1] + A[3] * B[3],
+        A[4] * B[0] + A[5] * B[2] + B[4],
+        A[4] * B[1] + A[5] * B[3] + B[5],
+    ];
+}
+function _c2d_all_finite() {
+    for (var i = 0; i < arguments.length; i++) { if (!isFinite(arguments[i])) { return false; } }
+    return true;
+}
+// DOMMatrix2DInit "validate and fixup" (Geometry Interfaces §6.1, the 2-D
+// subset `geometry_shim.js`'s `_dm_from_matrixinit_dict` also implements): a
+// legacy member and its `mIJ` alias may both be present only if they agree —
+// `setTransform({a: 1, m11: 2})` must throw, not silently pick one (BUG-522).
+function _dommatrix2d_validate_and_fixup(dict) {
+    function pick(legacy, modern, def) {
+        var hasL = dict[legacy] !== undefined, hasM = dict[modern] !== undefined;
+        if (hasL && hasM) {
+            if (+dict[legacy] !== +dict[modern]) {
+                throw new TypeError("DOMMatrix2DInit: '" + legacy + "' and '" + modern + "' must match");
+            }
+            return +dict[legacy];
+        }
+        if (hasL) { return +dict[legacy]; }
+        if (hasM) { return +dict[modern]; }
+        return def;
+    }
+    return {
+        a: pick('a', 'm11', 1), b: pick('b', 'm12', 0),
+        c: pick('c', 'm21', 0), d: pick('d', 'm22', 1),
+        e: pick('e', 'm41', 0), f: pick('f', 'm42', 0),
+    };
+}
 _lumen_c2d_method('translate', function(tx, ty) {
-    _lumen_canvas2d_translate(_lumen_c2d(this, 'translate').nid, +tx, +ty);
+    tx = +tx; ty = +ty;
+    if (!_c2d_all_finite(tx, ty)) { return; }
+    var st = _lumen_c2d(this, 'translate');
+    st._ctm = _c2d_compose([1, 0, 0, 1, tx, ty], st._ctm);
+    _lumen_canvas2d_translate(st.nid, tx, ty);
 });
 _lumen_c2d_method('rotate', function(angle) {
-    _lumen_canvas2d_rotate(_lumen_c2d(this, 'rotate').nid, +angle);
+    angle = +angle;
+    if (!_c2d_all_finite(angle)) { return; }
+    var st = _lumen_c2d(this, 'rotate');
+    var c = Math.cos(angle), s = Math.sin(angle);
+    st._ctm = _c2d_compose([c, s, -s, c, 0, 0], st._ctm);
+    _lumen_canvas2d_rotate(st.nid, angle);
 });
 _lumen_c2d_method('scale', function(sx, sy) {
-    _lumen_canvas2d_scale(_lumen_c2d(this, 'scale').nid, +sx, +sy);
+    sx = +sx; sy = +sy;
+    if (!_c2d_all_finite(sx, sy)) { return; }
+    var st = _lumen_c2d(this, 'scale');
+    st._ctm = _c2d_compose([sx, 0, 0, sy, 0, 0], st._ctm);
+    _lumen_canvas2d_scale(st.nid, sx, sy);
 });
 _lumen_c2d_method('transform', function(a, b, c, d, e, f) {
-    _lumen_canvas2d_transform(_lumen_c2d(this, 'transform').nid, +a, +b, +c, +d, +e, +f);
+    a = +a; b = +b; c = +c; d = +d; e = +e; f = +f;
+    if (!_c2d_all_finite(a, b, c, d, e, f)) { return; }
+    var st = _lumen_c2d(this, 'transform');
+    st._ctm = _c2d_compose([a, b, c, d, e, f], st._ctm);
+    _lumen_canvas2d_transform(st.nid, a, b, c, d, e, f);
 });
 _lumen_c2d_method('setTransform', function(a, b, c, d, e, f) {
     // `setTransform()` with no arguments resets to the identity matrix
     // (§4.12.5.1.6); passing the six undefineds through as `+undefined` sent
     // six NaNs into the native and lost the transform for good.
-    var nid = _lumen_c2d(this, 'setTransform').nid;
+    var st = _lumen_c2d(this, 'setTransform'), nid = st.nid;
     if (arguments.length === 0) {
+        st._ctm = [1, 0, 0, 1, 0, 0];
         _lumen_canvas2d_set_transform(nid, 1, 0, 0, 1, 0, 0);
         return;
     }
@@ -4462,16 +4532,29 @@ _lumen_c2d_method('setTransform', function(a, b, c, d, e, f) {
         if (m === null || typeof m !== 'object') {
             throw new TypeError("setTransform: argument is not a DOMMatrix2DInit");
         }
-        _lumen_canvas2d_set_transform(nid,
-            m.a === undefined ? 1 : +m.a, m.b === undefined ? 0 : +m.b,
-            m.c === undefined ? 0 : +m.c, m.d === undefined ? 1 : +m.d,
-            m.e === undefined ? 0 : +m.e, m.f === undefined ? 0 : +m.f);
+        var fixed = _dommatrix2d_validate_and_fixup(m);
+        if (!_c2d_all_finite(fixed.a, fixed.b, fixed.c, fixed.d, fixed.e, fixed.f)) { return; }
+        st._ctm = [fixed.a, fixed.b, fixed.c, fixed.d, fixed.e, fixed.f];
+        _lumen_canvas2d_set_transform(nid, fixed.a, fixed.b, fixed.c, fixed.d, fixed.e, fixed.f);
         return;
     }
-    _lumen_canvas2d_set_transform(nid, +a, +b, +c, +d, +e, +f);
+    a = +a; b = +b; c = +c; d = +d; e = +e; f = +f;
+    if (!_c2d_all_finite(a, b, c, d, e, f)) { return; }
+    st._ctm = [a, b, c, d, e, f];
+    _lumen_canvas2d_set_transform(nid, a, b, c, d, e, f);
 });
 _lumen_c2d_method('resetTransform', function() {
-    _lumen_canvas2d_reset_transform(_lumen_c2d(this, 'resetTransform').nid);
+    var st = _lumen_c2d(this, 'resetTransform');
+    st._ctm = [1, 0, 0, 1, 0, 0];
+    _lumen_canvas2d_reset_transform(st.nid);
+});
+// getTransform() (BUG-522) — reads the `_ctm` shadow built up by the methods
+// above and hands it back as a real DOMMatrix, so `ctx.getTransform().a`
+// etc. sees what every `translate`/`rotate`/`scale`/`transform`/
+// `setTransform` call actually did to the CTM.
+_lumen_c2d_method('getTransform', function() {
+    var ctm = _lumen_c2d(this, 'getTransform')._ctm;
+    return DOMMatrix.fromMatrix({ a: ctm[0], b: ctm[1], c: ctm[2], d: ctm[3], e: ctm[4], f: ctm[5] });
 });
 // Pixel manipulation
 _lumen_c2d_method('getImageData', function(sx, sy, sw, sh) {
@@ -4834,6 +4917,9 @@ function _lumen_canvas2d_default_state(canvasEl, nid) {
     return {
         nid: nid,
         canvas: canvasEl,
+        // Shadow CTM backing getTransform() (BUG-522) — see the comment above
+        // the transform methods (`_c2d_compose`) for why this lives here.
+        _ctm: [1, 0, 0, 1, 0, 0],
         fillStyle: '#000000',
         strokeStyle: '#000000',
         lineWidth: 1.0,
@@ -6455,11 +6541,27 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var sr_nid = _lumen_attach_shadow(nid, m);
             return _lumen_make_shadow_root(sr_nid, m, nid);
         },
+        // BUG-522: a real DOMRect instance, not a plain object literal — gives
+        // `toJSON()`, `instanceof DOMRect`, and top/right/bottom/left derived
+        // from x/y/width/height rather than frozen at call time.
         getBoundingClientRect: function() { var nid = this.__nid__;
             var r = _lumen_get_bounding_rect(nid);
-            if (!r) { return { x:0, y:0, width:0, height:0, top:0, right:0, bottom:0, left:0 }; }
-            return { x: r[0], y: r[1], width: r[2], height: r[3],
-                     top: r[1], left: r[0], right: r[0]+r[2], bottom: r[1]+r[3] };
+            if (!r) { return new DOMRect(0, 0, 0, 0); }
+            return new DOMRect(r[0], r[1], r[2], r[3]);
+        },
+        // BUG-478: single-rect fallback — one CSS box per element is spec-
+        // incomplete for a multi-fragment inline (a correct answer needs
+        // per-line fragment rects from layout's `InlineRun`/`frag[]`), but
+        // unblocks every "is not a function" failure this gap causes,
+        // including `resources/testdriver.js`'s very first call (WPT-RUN-12:
+        // every testdriver-driven action was unreachable before this).
+        getClientRects: function() {
+            return new DOMRectList([this.getBoundingClientRect()]);
+        },
+        // CSSOM View §6 getBoxQuads() — same single-box fallback as
+        // getClientRects, structurally the same gap (BUG-478).
+        getBoxQuads: function() {
+            return [DOMQuad.fromRect(this.getBoundingClientRect())];
         },
         // `src` used to live here as an own property on EVERY element (BUG-305).
         // It is now one row of the reflection table (BUG-383) installed on the
@@ -8483,10 +8585,11 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
         },
         getBoundingClientRect: function() {
             var el = _lumen_make_element(this.__start_nid__);
-            return (el && el.getBoundingClientRect) ? el.getBoundingClientRect()
-                : { top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0, x: 0, y: 0 };
+            return (el && el.getBoundingClientRect) ? el.getBoundingClientRect() : new DOMRect(0, 0, 0, 0);
         },
-        getClientRects:   function() { return [this.getBoundingClientRect()]; },
+        // BUG-478/BUG-522: a real DOMRectList, not a plain Array — matches
+        // Element.prototype.getClientRects()'s return type just below.
+        getClientRects:   function() { return new DOMRectList([this.getBoundingClientRect()]); },
         detach:           function() {},
         isPointInRange:   function() { return false; },
         comparePoint:     function() { return 0; },

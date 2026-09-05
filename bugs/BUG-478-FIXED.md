@@ -1,7 +1,7 @@
 # BUG-478: `Element.prototype.getClientRects()`/`getBoxQuads()` missing (only `Range` has `getClientRects`)
 
-**Статус:** OPEN (ДОРАБОТКА → [GAP-GEOM](../ROADMAP.md))
-**Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-GEOM` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
+**Статус:** FIXED 2026-09-05 (ветка `p1-gap-geom-geometry-interfaces`, задача [GAP-GEOM](../ROADMAP.md))
+**Тип:** нереализованная функциональность, не дефект реализованного кода — велась как задача `GAP-GEOM` в [ROADMAP.md](../ROADMAP.md). Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Дата:** 2026-08-02
 **Компонент:** js (`crates/js/src/dom.rs`)
 **Найден:** WPT-RUN-3 срез 4 (`ROADMAP.md`) — массовый прогон `css/cssom-view`
@@ -112,3 +112,26 @@ WPT-RUN-5 (до фикса BUG-591/716) исключение никуда не �
 Суммарный масштаб после слияния: 12 сабтестов `cssom-view` + 7 `getBoxQuads` +
 76 `html/semantics` + 2 `css-sizing`, плюс 14 id `testdriver-click-preconditions`,
 которые упираются в него раньше всего остального.
+
+## Исправление 2026-09-05 (P1, ветка `p1-gap-geom-geometry-interfaces`)
+
+`Element.prototype.getClientRects()` добавлен в `web_api_shim_mid.js` рядом
+с `getBoundingClientRect()`: `return new DOMRectList([this.getBoundingClientRect()]);`
+— однорректный фолбэк, ровно тот, что раздел «Что нужно» называл достаточным
+для снятия всех «is not a function» отказов. `DOMRectList` — настоящий тип
+из [BUG-522](BUG-522-FIXED.md), реализованного в той же правке (`Element
+.getClientRects()` был структурно заблокирован его отсутствием — оба бага
+закрываются одним коммитом). `getBoxQuads()` заведён тем же фолбэком через
+`DOMQuad.fromRect(this.getBoundingClientRect())`. `Range.prototype
+.getClientRects()` и `_CaretPosition.prototype.getClientRects()` переведены
+с обычного массива на `DOMRectList` для единообразия типа возврата.
+
+**Per-fragment список остаётся отдельной работой**, как и предупреждала
+исходная заявка: `contain-intrinsic-size/auto-010.html` (из BUG-551) и любой
+другой многофрагментный inline получат только один прямоугольник, пока
+`getClientRects()` не научится читать `InlineRun`/`frag[]` из layout-дерева.
+`testdriver-click-preconditions` (14 id) больше не падает на этом шаге —
+следующее звено цепочки уже отдельные баги (BUG-622 и далее).
+
+`cargo test -p lumen-js --features v8-backend` — см. [BUG-522](BUG-522-FIXED.md)
+(тот же коммит), единственный красный [BUG-997](BUG-997-OPEN.md) не связан.

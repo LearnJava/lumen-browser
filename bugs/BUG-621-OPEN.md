@@ -74,4 +74,4 @@ instead of operating on `this`.
 ведёт себя идентично. Даёт 1 id остатка снимка WPT-RUN-5
 (`html/semantics/forms/the-label-element/forward-focus-to-associated-element.html`,
 три зависших подтеста), но добраться до него тест сможет только после
-[BUG-478](BUG-478-OPEN.md) — он стартует с `test_driver.click`.
+[BUG-478](BUG-478-FIXED.md) — он стартует с `test_driver.click`.

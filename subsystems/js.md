@@ -1824,6 +1824,36 @@ the time — read dates.
   declarative `@font-face` rule has no throw-shaped failure mode to mirror
   the constructor/setter asymmetry above.
 
+- **GAP-GEOM** (2026-09-05) added the Geometry Interfaces Module as a new
+  shim piece, `crates/js/src/shim/geometry_shim.js`: `DOMPointReadOnly`/
+  `DOMPoint`, `DOMRectReadOnly`/`DOMRect`, `DOMRectList`, `DOMMatrixReadOnly`/
+  `DOMMatrix` (full 4×4 arithmetic stored row-major as `m11..m44`, a CSS
+  `<transform-list>` string parser for the constructor/`setMatrixValue()`,
+  `DOMMatrixInit` validate-and-fixup), `DOMQuad`, and `WebKitCSSMatrix` as a
+  literal alias for `DOMMatrix` (not a subclass — that is what the spec now
+  requires). Spliced into `web_api_shim()` right after
+  `WEB_API_SHIM_MID_B`, not earlier: unlike `document`, this shim's `window`
+  is a plain object literal built partway through that piece (`var window =
+  {…}`, `web_api_shim_mid_b.js`), not the real V8 global — putting the new
+  piece any earlier assigns onto the hoisted-but-still-`undefined` `window`
+  binding and throws `TypeError: Cannot set properties of undefined` the
+  moment `install_dom` runs (caught by the full `cargo test -p lumen-js`
+  run, not by `geometry_shim.js`'s own Node.js syntax/unit checks, which
+  have no such `window`). `Element.prototype.getBoundingClientRect()`
+  (`web_api_shim_mid.js`) now returns a real `DOMRect`; `getClientRects()`/
+  `getBoxQuads()` are new, with a single-rect fallback (`BUG-478`). Canvas
+  2D's `setTransform()` gained the `DOMMatrix2DInit` overload (shared
+  `_dommatrix2d_validate_and_fixup` helper, throws on a legacy/`mIJ`-alias
+  conflict) and a NaN/Infinity no-op guard on every transform method;
+  `getTransform()` reads a new JS-side shadow CTM (`_ctm`, a plain own
+  property of the state record `_lumen_c2d()` returns) rather than asking
+  the native for one — it rides `save`/`restore`/`reset` for free because
+  those already copy every key of that record but `nid`/`canvas`. Not
+  ported to `crates/js/src/offscreen_canvas.rs` (the worker-side
+  `OffscreenCanvasRenderingContext2D` — separate Rust-native implementation,
+  not this shim); its `setTransform` still only accepts six positional
+  numbers.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
