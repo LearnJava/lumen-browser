@@ -8450,6 +8450,20 @@ function _lumen_make_range(sNid, sOff, eNid, eOff) {
         },
         extractContents: function() { this.deleteContents(); return null; },
         cloneContents:   function() { return null; },
+        // DOM Parsing §5 createContextualFragment (BUG-573). Spec calls for
+        // parsing `fragmentHtml` with the range's start node as context
+        // element (affects e.g. how a bare `<td>` parses); `_lumen_parse_html_fragment`
+        // has no context-element parameter, so this parses as a body fragment
+        // like innerHTML/insertAdjacentHTML do elsewhere in this file — same
+        // approximation, not a new one.
+        createContextualFragment: function(fragmentHtml) {
+            var fragNid = _lumen_create_fragment();
+            var newIds = _lumen_parse_html_fragment(String(fragmentHtml));
+            for (var _cfi = 0; _cfi < newIds.length; _cfi++) {
+                _lumen_append_child(fragNid, newIds[_cfi]);
+            }
+            return _lumen_make_document_fragment(fragNid);
+        },
         insertNode: function(node) {
             if (!node || node.__nid__ === undefined) return;
             var p = _lumen_u2n(_lumen_get_parent(this.__start_nid__));
