@@ -355,8 +355,8 @@ pub struct ComputedStyle {
     /// CSS Color Adjustment L1 §3 — `color-scheme`. Inherited. Initial: `Normal`.
     /// Phase 0: parse + store; реальное переключение SystemColor / UA-тем — P2.
     pub color_scheme: ColorScheme,
-    /// CSS Color Adjustment L1 §4 — `forced-color-adjust`. NOT inherited. Initial: `Auto`.
-    /// Phase 0: parse + store; применение при Forced Colors Mode — P2.
+    /// CSS Color Adjustment L1 §4 — `forced-color-adjust`. Inherited. Initial: `Auto`.
+    /// Применяется в `style::adjust::apply_forced_colors_mode`.
     pub forced_color_adjust: ForcedColorAdjust,
     /// CSS Color HDR L1 §2 — `dynamic-range-limit`. Inherited. Initial:
     /// `no-limit` (`DynamicRangeLimit::default()`). BUG-508. Phase 0: parse
