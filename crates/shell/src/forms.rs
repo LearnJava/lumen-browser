@@ -522,7 +522,7 @@ pub fn textarea_caret_rect(
             field_box.rect.y + s.border_top_width + s.padding_top.px(),
         ),
     };
-    let raw_line_h = s.font_size * s.line_height;
+    let raw_line_h = field_box.used_line_height;
     let line_h = if s.line_height_step > 0.0 {
         (raw_line_h / s.line_height_step).ceil() * s.line_height_step
     } else {
@@ -638,7 +638,7 @@ pub fn textarea_selection_rects(
             field_box.rect.y + s.border_top_width + s.padding_top.px(),
         ),
     };
-    let raw_line_h = s.font_size * s.line_height;
+    let raw_line_h = field_box.used_line_height;
     let line_h = if s.line_height_step > 0.0 {
         (raw_line_h / s.line_height_step).ceil() * s.line_height_step
     } else {
@@ -719,7 +719,7 @@ pub fn textarea_char_index_at_point(
             field_box.rect.y + s.border_top_width + s.padding_top.px(),
         ),
     };
-    let raw_line_h = s.font_size * s.line_height;
+    let raw_line_h = field_box.used_line_height;
     let line_h = if s.line_height_step > 0.0 {
         (raw_line_h / s.line_height_step).ceil() * s.line_height_step
     } else {
@@ -2568,6 +2568,7 @@ mod tests {
         LayoutBox {
             node,
             rect,
+            used_line_height: 16.0 * 1.2,
             style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![],
@@ -2830,6 +2831,7 @@ mod tests {
         LayoutBox {
             node,
             rect,
+            used_line_height: 16.0 * 1.2,
             style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children,
@@ -2847,6 +2849,7 @@ mod tests {
         LayoutBox {
             node,
             rect,
+            used_line_height: 16.0 * 1.2,
             style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::InlineRun { segments: vec![], lines: vec![], first_line_style: None },
             children: vec![],

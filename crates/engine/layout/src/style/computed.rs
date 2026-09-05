@@ -98,6 +98,19 @@ pub struct ComputedStyle {
     /// of re-scaling it. Initial: `true` (`normal` is relative). Inherited with
     /// `line_height`.
     pub line_height_is_relative: bool,
+    /// CSS2 §10.8.1 / CSS Fonts L4 §14.3 — `true` when `line-height` resolved to
+    /// the `normal` keyword specifically, as opposed to an author-specified
+    /// unitless `<number>` that happens to also be relative. Both set
+    /// `line_height_is_relative = true` and start `line_height` at the same
+    /// `1.2` fallback ratio, so this is the only signal that distinguishes them.
+    /// FONTLOAD-14 (BUG-467): layout's whole-tree resolve pass
+    /// (`box_tree::entry::resolve_used_line_height`) uses this flag to replace
+    /// the `1.2` approximation with the box's real font metrics (`ascent +
+    /// descent + lineGap`) into [`LayoutBox::used_line_height`] — `line_height`
+    /// itself is left untouched (would force an `Arc::make_mut` deep-copy of
+    /// nearly every box's style, `normal` being the default). Initial: `true`.
+    /// Inherited with `line_height`.
+    pub line_height_is_normal: bool,
     /// CSS Rhythmic Sizing L1 §2 — `line-height-step` step unit in px.
     /// When `> 0`, each line box's used height is rounded up to the closest
     /// multiple of this value and the extra space is distributed as half-leading.
@@ -998,6 +1011,7 @@ impl ComputedStyle {
             effective_zoom: 1.0,
             line_height: 1.2,
             line_height_is_relative: true,
+            line_height_is_normal: true,
             line_height_step: 0.0,
             font_style: FontStyle::Normal,
             font_weight: FontWeight::NORMAL,

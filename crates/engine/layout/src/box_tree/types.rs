@@ -25,6 +25,20 @@ pub struct LayoutBox {
     /// Reads are unchanged: `Arc` derefs to `ComputedStyle`, so `b.style.field`
     /// and `&b.style` (coerced to `&ComputedStyle`) both still work.
     pub style: Arc<ComputedStyle>,
+    /// Used line-height in px (CSS2 §10.8.1) — `style.font_size *
+    /// style.line_height` for an explicit `<number>`/`<length>`, or the box's
+    /// real font metrics (`ascent + descent + lineGap`) when `line-height:
+    /// normal` (FONTLOAD-14, BUG-467). Lives on `LayoutBox` rather than
+    /// `style` deliberately: `style` is `Arc`-shared with the cascade cache
+    /// (BUG-341 S12), and `normal` being the default line-height, writing the
+    /// resolved value into it would force `Arc::make_mut` to deep-copy nearly
+    /// every box's style. Set once per layout pass by the whole-tree walk
+    /// [`box_tree::entry::resolve_used_line_height`] (measurer-driven, so it
+    /// cannot run at box-build time); defaults to the flat `font_size *
+    /// line_height` approximation at construction, for paths that build a
+    /// `LayoutBox` without ever calling into that pass (tests, ad-hoc
+    /// fixtures).
+    pub used_line_height: f32,
     pub kind: BoxKind,
     pub children: Vec<LayoutBox>,
     /// HTML `colspan` attribute (table cells only). Number of columns this cell spans.

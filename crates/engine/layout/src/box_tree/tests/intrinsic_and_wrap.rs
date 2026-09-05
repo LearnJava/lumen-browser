@@ -511,7 +511,17 @@ fn measure_text_w_empty_is_zero() {
     struct ZeroMeasurer;
     impl super::super::super::TextMeasurer for ZeroMeasurer {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     let m = ZeroMeasurer;
     assert_eq!(super::super::measure_text_w("", 16.0, 0.0, 0.0, &m), 0.0);
 }
@@ -521,7 +531,17 @@ fn measure_text_w_three_chars_no_spacing() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     // 3 chars × 8px − 0 letter-spacing = 24px
     let w = super::super::measure_text_w("abc", 16.0, 0.0, 0.0, &Fixed8);
     assert_eq!(w, 24.0);
@@ -532,7 +552,17 @@ fn try_hyp_break_finds_rightmost_fitting_split() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     // "superman" → break positions [2, 5] (su|per|man)
     // Each char = 8px; hyphen = 8px.
     // If available_w = 32px: "su-" = 3×8 = 24 ≤ 32 ✓, "super-" = 6×8 = 48 > 32
@@ -547,7 +577,17 @@ fn try_hyp_break_prefers_rightmost_break() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     // "superman" → break positions [2, 5]; available = 56px
     // "super-" = 6×8 = 48 ≤ 56 ✓ → prefer pos 5 over pos 2
     let m = Fixed8;
@@ -560,7 +600,17 @@ fn try_hyp_break_returns_none_when_nothing_fits() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     // Only 10px available; minimum "su-" = 24px
     let m = Fixed8;
     let result = super::super::try_hyp_break("superman", 10.0, 16.0, 0.0, &m, &[2, 5]);
@@ -578,7 +628,17 @@ fn wrap_inline_run_soft_hyphen_breaks_word_on_manual() {
     struct Fixed10;
     impl super::super::super::TextMeasurer for Fixed10 {
         fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
 
     let style = ComputedStyle::root();
     // Segment: "hi hy\u{AD}phen" — two words; 'hi' fills line, 'hy\u{AD}phen' needs break.
@@ -624,7 +684,17 @@ fn wrap_inline_run_hyphens_none_no_break_on_shy() {
     struct Fixed10;
     impl super::super::super::TextMeasurer for Fixed10 {
         fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
 
     let style = ComputedStyle::root();
     // Same segment, Hyphens::None → soft hyphen ignored, full word wraps to new line unbroken.
@@ -669,7 +739,17 @@ fn shy_invisible_when_word_fits_on_line() {
     struct Fixed10;
     impl super::super::super::TextMeasurer for Fixed10 {
         fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
 
     let style = ComputedStyle::root();
     // "hy\u{AD}phen" → strip → "hyphen" = 6 chars × 10px = 60px; max_width=200 → fits.
@@ -719,7 +799,17 @@ fn shy_rightmost_fitting_break_selected() {
     struct Fixed10;
     impl super::super::super::TextMeasurer for Fixed10 {
         fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
 
     let style = ComputedStyle::root();
     // Segment "xx su\u{AD}per\u{AD}man", max_width=90:
@@ -775,7 +865,17 @@ fn shy_auto_mode_respects_shy_positions() {
     struct Fixed10;
     impl super::super::super::TextMeasurer for Fixed10 {
         fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
 
     let style = ComputedStyle::root();
     // Same geometry as shy_rightmost_fitting_break_selected but with Hyphens::Auto.
@@ -827,7 +927,17 @@ fn shy_manual_no_hyphen_when_no_shy_in_word() {
     struct Fixed10;
     impl super::super::super::TextMeasurer for Fixed10 {
         fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
 
     let style = ComputedStyle::root();
     // "aa longword": "aa"=20px, "longword"=80px; max_width=50;
@@ -875,7 +985,17 @@ fn char_break_offset_all_fit() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     // "abc" = 3 chars × 8px = 24px; avail = 100 → whole word fits.
     let off = super::super::char_break_offset("abc", 100.0, 16.0, 0.0, &[], &Fixed8);
     assert_eq!(off, 3); // "abc".len() == 3
@@ -886,7 +1006,17 @@ fn char_break_offset_splits_after_second_char() {
     struct Fixed10;
     impl super::super::super::TextMeasurer for Fixed10 {
         fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     // "abcde", avail = 25px; "ab" = 20px fits, "abc" = 30px > 25 → split at 2.
     let off = super::super::char_break_offset("abcde", 25.0, 16.0, 0.0, &[], &Fixed10);
     assert_eq!(off, 2); // byte offset 2 = between 'b' and 'c'
@@ -897,7 +1027,17 @@ fn char_break_offset_emits_at_least_one_char() {
     struct Wide;
     impl super::super::super::TextMeasurer for Wide {
         fn char_width(&self, _: char, _: f32) -> f32 { 100.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     // avail = 5px, char width 100px — even first char doesn't fit.
     // Must return offset past first char to avoid infinite loop.
     let off = super::super::char_break_offset("abc", 5.0, 16.0, 0.0, &[], &Wide);
@@ -939,7 +1079,17 @@ fn overflow_wrap_break_word_splits_long_word() {
     struct Fixed10;
     impl super::super::super::TextMeasurer for Fixed10 {
         fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
 
     let style = ComputedStyle::root();
     // "Superlongword" = 13 chars × 10px = 130px; max_width = 80px.
@@ -1005,7 +1155,17 @@ fn wrap_cjk(
     struct Fixed10;
     impl super::super::super::TextMeasurer for Fixed10 {
         fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
 
     let seg = InlineSegment {
         text: text.to_string(),
@@ -1126,7 +1286,17 @@ fn word_break_break_all_breaks_at_current_position() {
     struct Fixed10;
     impl super::super::super::TextMeasurer for Fixed10 {
         fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
 
     let style = ComputedStyle::root();
     // Two words: "Hi" (20px) then "World" (50px). max_width = 60px.

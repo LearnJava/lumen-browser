@@ -1678,7 +1678,7 @@ fn collect_layout_rects_rec(
     // y-position uses the same `font_size * line_height` uniform-line-height
     // model `selection.rs` uses to turn `lines[line_idx]` into a pixel rect.
     if let BoxKind::InlineRun { lines, .. } = &b.kind {
-        let line_h = b.style.font_size * b.style.line_height;
+        let line_h = b.used_line_height;
         for (line_idx, line) in lines.iter().enumerate() {
             let line_y = b.rect.y + line_idx as f32 * line_h;
             for frag in line {

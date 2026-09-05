@@ -61,6 +61,7 @@ fn build_base_select_box(
     let trigger = LayoutBox {
         node: id,
         rect: Rect::ZERO,
+        used_line_height: trigger_style.font_size * trigger_style.line_height,
         style: Arc::new(trigger_style),
         kind: BoxKind::Block,
         children: trigger_children,
@@ -78,6 +79,7 @@ fn build_base_select_box(
     LayoutBox {
         node: id,
         rect: Rect::ZERO,
+        used_line_height: style.font_size * style.line_height,
         style: Arc::new(style.clone()),
         // FlowRoot: establishes a BFC and lays out the trigger as a block child,
         // regardless of the select's own (inline-block) UA display.
@@ -595,6 +597,7 @@ fn build_box_inner(
         return LayoutBox {
             node: id,
             rect: Rect::ZERO,
+            used_line_height: style.font_size * style.line_height,
             style,
             kind,
             children: Vec::new(),
@@ -946,10 +949,12 @@ fn build_box_inner(
                         }
                         // Whitespace between inline-blocks → collapsed space gap.
                         if had_ws && !row_items.is_empty() {
+                            let gap_style = anon_style(&style);
                             row_items.push(LayoutBox {
                                 node: id,
                                 rect: Rect::ZERO,
-                                style: Arc::new(anon_style(&style)),
+                                used_line_height: gap_style.font_size * gap_style.line_height,
+                                style: Arc::new(gap_style),
                                 kind: BoxKind::InlineSpace,
                                 children: vec![],
                                 col_span: 1,
@@ -1115,6 +1120,7 @@ fn build_box_inner(
     LayoutBox {
         node: id,
         rect: Rect::ZERO,
+        used_line_height: style.font_size * style.line_height,
         style,
         kind,
         children,

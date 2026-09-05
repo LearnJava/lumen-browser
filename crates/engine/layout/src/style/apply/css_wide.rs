@@ -61,6 +61,11 @@ pub(in crate::style) fn apply_css_wide_keyword(
             } else {
                 init.line_height_is_relative
             };
+            style.line_height_is_normal = if inh {
+                inherited.line_height_is_normal
+            } else {
+                init.line_height_is_normal
+            };
         }
         "line-height-step" => {
             style.line_height_step =

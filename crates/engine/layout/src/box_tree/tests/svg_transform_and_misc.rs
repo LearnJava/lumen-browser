@@ -946,6 +946,16 @@ fn progress_ua_style_300x16() {
 struct Fixed8Varied;
 impl super::super::TextMeasurer for Fixed8Varied {
     fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
+    }
 }
 
 #[test]
@@ -975,7 +985,17 @@ fn measure_text_w_varied_axes_use_char_width_varied() {
         ) -> f32 {
             if axes.is_empty() { 8.0 } else { 12.0 }
         }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     let axes = vec![crate::style::FontVariationSetting { tag: *b"wght", value: 700.0 }];
     // 3 chars × 12px − 0 letter-spacing = 36px
     let w = super::super::measure_text_w_varied("abc", 16.0, 0.0, 0.0, &[], &axes, &VariedMeasurer);

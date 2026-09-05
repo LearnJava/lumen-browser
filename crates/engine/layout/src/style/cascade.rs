@@ -205,6 +205,7 @@ pub fn compute_style(
         effective_zoom: inherited.effective_zoom,
         line_height: inherited.line_height,
         line_height_is_relative: inherited.line_height_is_relative,
+        line_height_is_normal: inherited.line_height_is_normal,
         line_height_step: inherited.line_height_step,
         font_style: inherited.font_style,
         font_weight: inherited.font_weight,
