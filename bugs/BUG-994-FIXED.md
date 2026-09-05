@@ -35,7 +35,7 @@ DOM §4.2.10: `HTMLCollection` обязан иметь `length`, `item(index)` �
 
 Тот же, что [BUG-715](BUG-715-OPEN.md) (`DOMTokenList`/`CSSStyleDeclaration`
 собраны ad-hoc литералами вместо интерфейсов) и
-[BUG-694](BUG-694-OPEN.md) (`URLSearchParams` без `Symbol.iterator`): объект
+[BUG-694](BUG-694-FIXED.md) (`URLSearchParams` без `Symbol.iterator`): объект
 похож на нужный интерфейс по форме, но не по поведению. Эти два остаются
 отдельными открытыми багами — не в объёме этого фикса.
 

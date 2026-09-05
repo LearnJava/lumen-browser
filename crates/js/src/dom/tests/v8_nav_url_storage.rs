@@ -1097,6 +1097,74 @@ fn usp_empty_string() {
     assert_eq!(r, lumen_core::JsValue::Number(0.0));
 }
 
+// BUG-694: `URLSearchParams` must be iterable via `for...of`/spread, and its
+// `Symbol.iterator` must be the very same function object as `entries()`.
+#[test]
+fn usp_is_iterable() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var p = new URLSearchParams('a=1&b=2'); var out = []; \
+         for (var pair of p) out.push(pair.join('=')); out.join(',')",
+    )
+    .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("a=1,b=2".into()));
+}
+
+#[test]
+fn usp_symbol_iterator_is_entries() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval("URLSearchParams.prototype[Symbol.iterator] === URLSearchParams.prototype.entries")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+// BUG-694: `entries()`/`keys()`/`values()` must return real iterator objects
+// (a `next()` method), not plain arrays.
+#[test]
+fn usp_entries_returns_real_iterator() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval("typeof new URLSearchParams('a=1').entries().next")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("function".into()));
+}
+
+// BUG-694: the copy-constructor form must copy the pairs, not leak the
+// internal `_p` storage field as a bogus query parameter.
+#[test]
+fn usp_copy_constructor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval("new URLSearchParams(new URLSearchParams('a=b')).toString()")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("a=b".into()));
+}
+
+// BUG-694: two-argument `delete(name, value)` only removes the pair matching
+// both name and value, not every pair with that name.
+#[test]
+fn usp_delete_two_arg() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval("var p = new URLSearchParams('a=b&a=d'); p.delete('a', 'b'); p.toString()")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("a=d".into()));
+}
+
+// BUG-694: two-argument `has(name, value)` matches on both name and value.
+#[test]
+fn usp_has_two_arg() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var p = new URLSearchParams('a=b'); \
+             [p.has('a', 'b'), p.has('a', 'c')].join(',')",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("true,false".into()));
+}
+
 // ── URL tests ─────────────────────────────────────────────────────────────
 
 #[test]

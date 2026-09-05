@@ -1,8 +1,9 @@
 # BUG-694 — `URLSearchParams` is not iterable and leaks its internal `_p` array through the copy-constructor
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:7974-8073` — `URLSearchParams` constructor + prototype)
+**Статус:** FIXED 2026-09-05
+**Компонент:** js (`crates/js/src/shim/url_shim.js` — `URLSearchParams` constructor + prototype; was `crates/js/src/dom.rs:7974-8073` at filing time, moved to the shim split before this fix)
 **Найден:** P2, WPT-VENDOR-url, 2026-08-09
+**Исправлен:** P3, ветка `p3-bug694-urlsearchparams-iterable`, 2026-09-05
 
 ## Симптом
 
@@ -94,3 +95,52 @@ BUG-369 — same pattern, worth fixing together); add the second parameter
 to `delete`/`has`. Independent of [BUG-693](BUG-693-OPEN.md) (the URL
 *parsing* engine) — this bug is scoped to the `URLSearchParams` object's
 own WebIDL shape and does not require the parser fix to land first.
+
+## Исправление (2026-09-05)
+
+Point #3 (the `_p=a%2Cb` leak) had already been closed as a side effect of
+[BUG-375](BUG-375-FIXED.md): `_p`/`_url` are defined via
+`Object.defineProperty(..., {enumerable: false})` in the constructor, so
+`Object.keys(existingParams)` returns `[]`, not `['_p']` — the exact
+`"_p=a%2Cb"` string from the original report no longer reproduces. What
+remained live was #1, #2 and #4, plus a *new* symptom of the same root cause:
+since `Object.keys()` on an existing `URLSearchParams` now returns nothing,
+`new URLSearchParams(existingParams)` silently produced an **empty** result
+instead of a copy — same defect (init not recognized as a source of pairs),
+different manifestation.
+
+`crates/js/src/shim/url_shim.js`:
+
+1. **Iterability.** `URLSearchParams.prototype[Symbol.iterator]` is the very
+   same function object as `entries()` (WebIDL `iterable<>`, not a copy) —
+   `for (const [k, v] of sp)` and `[...sp]` work.
+2. **Real iterators.** `entries()`/`keys()`/`values()` return an object
+   created from a shared `_USP_IterProto` with `next()` and
+   `[Symbol.iterator]() === this`, `Symbol.toStringTag = 'URLSearchParams
+   Iterator'` — the same pattern already used for `Headers` under BUG-369.
+3. **Copy-constructor.** The constructor's `Array.isArray(init)` branch was
+   generalized to "any object exposing `Symbol.iterator`" (mirroring
+   `Headers`' `fill()`), read via `Array.from(init)` and, for each entry,
+   `Array.from(entry)`. Because `URLSearchParams` instances are now iterable
+   (point 1), `new URLSearchParams(existingParams)` falls into this branch
+   automatically and copies the pairs — no `instanceof` special case needed,
+   the same mechanism also covers `Map`/any other pairs-iterable passed as
+   `init`.
+4. **Two-argument `delete`/`has`.** Both check `arguments.length > 1`; when a
+   second argument is present, only the pair matching both `name` and
+   `String(value)` is removed/matched.
+
+`URLSearchParams.prototype.size` and the string/record `init` forms are
+unaffected. Not part of this fix: making the prototype methods themselves
+non-enumerable (unlike `Headers`, `URLSearchParams`'s methods were already
+plain enumerable assignments before this bug and stay that way — out of this
+bug's scope, no WPT failure in the record depends on it).
+
+8 new unit tests in `crates/js/src/dom/tests/v8_nav_url_storage.rs`
+(`usp_is_iterable`, `usp_symbol_iterator_is_entries`,
+`usp_entries_returns_real_iterator`, `usp_copy_constructor`,
+`usp_delete_two_arg`, `usp_has_two_arg`, plus the two-argument success paths).
+`cargo test -p lumen-js --features v8-backend` — all `usp_*` tests pass; the
+only red test in the crate is the pre-existing, unrelated
+[BUG-997](BUG-997-OPEN.md). `cargo clippy -p lumen-js --all-targets
+--features v8-backend -- -D warnings` clean.
