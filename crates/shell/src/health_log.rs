@@ -1,5 +1,6 @@
 //! Session health journal — privacy-first, local-only log of *problems* the
-//! browser hit while you were using it, written as JSON Lines to `health.log`.
+//! browser hit while you were using it, written as JSON Lines to
+//! `health.<pid>.log`.
 //!
 //! PERF-6: extends the `--activity-log` surface (see [`crate::click_log`]) with a
 //! machine-parseable record of the three things that matter for prioritising bug
@@ -13,9 +14,9 @@
 //!   content-bearing DOM (white-screen / broken-render heuristic).
 //!
 //! Everything stays on the machine — nothing is uploaded (privacy.md principle).
-//! The companion analyser `scripts/health_report.py` aggregates `health.log` by
-//! host and ranks the repeat offenders, so P3 bug-fix effort follows real-world
-//! frequency instead of random discovery.
+//! The companion analyser `scripts/health_report.py` aggregates the
+//! `health.*.log` series of a run by host and ranks the repeat offenders, so
+//! P3 bug-fix effort follows real-world frequency instead of random discovery.
 //!
 //! Activation: `--activity-log` / `--click-log` (shared with the click log), the
 //! dedicated `--health-log` flag, or `LUMEN_HEALTH_LOG=1`.
@@ -32,13 +33,21 @@ use std::io::Write;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// File the journal is appended to, relative to the working directory (parity
-/// with `activity.log` from [`crate::click_log`]).
-const HEALTH_LOG_PATH: &str = "health.log";
-
 static ENABLED: OnceLock<bool> = OnceLock::new();
 /// Panic hook is installed at most once per process.
 static HOOK_INSTALLED: OnceLock<()> = OnceLock::new();
+
+/// Path of the journal for this process, relative to the working directory
+/// (parity with `activity.log` from [`crate::click_log`]). Stamped with the
+/// process id so that a session which restarts the browser several times
+/// (BUG-991 — a perf-audit run that kills and relaunches a hung window)
+/// keeps one file per process instead of each restart truncating the
+/// previous one's records away. `scripts/health_report.py` collects the
+/// `health.*.log` series of a run back into one report.
+fn log_path() -> &'static str {
+    static PATH: OnceLock<String> = OnceLock::new();
+    PATH.get_or_init(|| format!("health.{}.log", std::process::id()))
+}
 
 /// URL of the page currently open, so panics on any thread can be attributed to
 /// the page that triggered them. Updated on every navigation.
@@ -51,21 +60,17 @@ fn current_url() -> &'static Mutex<String> {
 /// so a page that paints *nothing* is suspicious rather than genuinely blank.
 const BROKEN_RENDER_DOM_MIN: usize = 20;
 
-/// Call once at startup with the parsed enable flag. Truncates `health.log` so
-/// each session starts clean and installs the panic hook when enabled.
+/// Call once at startup with the parsed enable flag. Opens this process's own
+/// `health.<pid>.log` for append and installs the panic hook when enabled.
 pub fn init(enabled: bool) {
     let _ = ENABLED.set(enabled);
     if !enabled {
         return;
     }
-    if let Ok(mut f) = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(HEALTH_LOG_PATH)
-    {
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log_path()) {
         let mut obj = base("session_start", "");
         obj.remove("url");
+        obj.insert("pid".into(), JsonValue::Number(std::process::id() as f64));
         let _ = writeln!(f, "{}", JsonValue::Object(obj));
     }
     install_panic_hook();
@@ -193,11 +198,7 @@ fn base(kind: &str, url: &str) -> BTreeMap<String, JsonValue> {
 /// Serialise one record as a JSON line and append it to the journal.
 fn append(obj: BTreeMap<String, JsonValue>) {
     let line = JsonValue::Object(obj).to_string();
-    if let Ok(mut f) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(HEALTH_LOG_PATH)
-    {
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log_path()) {
         let _ = writeln!(f, "{line}");
     }
 }
@@ -288,5 +289,16 @@ mod tests {
             trivial_dom < BROKEN_RENDER_DOM_MIN,
             "trivial pages must sit below the broken-render DOM floor"
         );
+    }
+
+    #[test]
+    fn log_path_is_stamped_with_this_process_id() {
+        // BUG-991: a run that restarts the browser several times must give each
+        // process its own file instead of the next process truncating the last
+        // one's records away.
+        let expected = format!("health.{}.log", std::process::id());
+        assert_eq!(log_path(), expected);
+        // Stable across repeated calls within the same process (OnceLock).
+        assert_eq!(log_path(), log_path());
     }
 }

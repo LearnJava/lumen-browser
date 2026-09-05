@@ -15,11 +15,16 @@
 
 ## Что записывается
 
-Движок пишет `health.log` (JSON Lines, рядом с рабочим каталогом — как
-`activity.log`) под флагом `--health-log`, `--activity-log`/`--click-log` или
-`LUMEN_HEALTH_LOG=1`. Каждая строка — самодостаточный JSON-объект с полем `kind`;
-журнал усекается при старте (каждая сессия — с чистого листа) и содержит **только
-проблемы**, а не полный лог навигации:
+Движок пишет `health.<pid>.log` (JSON Lines, рядом с рабочим каталогом — как
+`activity.log`; имя файла несёт pid процесса, BUG-991) под флагом `--health-log`,
+`--activity-log`/`--click-log` или `LUMEN_HEALTH_LOG=1`. Каждая строка —
+самодостаточный JSON-объект с полем `kind`; журнал открывается на дозапись
+(процесс пишет только в свой собственный файл, соседние `health.<pid>.log`
+других процессов не трогает) и содержит **только проблемы**, а не полный лог
+навигации. Прогон, перезапустивший окно N раз (например, живой перф-аудит,
+убивающий зависший процесс), оставляет N файлов серии — `health_report.py` без
+аргумента сам находит и склеивает всю такую серию из рабочего каталога, а не
+только последний файл:
 
 | `kind` | Когда | Поля |
 |---|---|---|
@@ -46,8 +51,8 @@ DOM (`Document::node_count`).
 1. **`console_error`/`broken_render` ловятся только в живом окне.** Хуки висят на
    frame-loop дренаже консоли и на `apply_loaded_page` — headless `--screenshot`
    их не проходит (там другой путь `render_source_to_png`). Панику panic-hook
-   ловит в любом режиме, `health.log` со `session_start` создаётся при старте
-   всегда.
+   ловит в любом режиме, `health.<pid>.log` со `session_start` создаётся при
+   старте всегда.
 2. **Белый экран через CSS-фон не ловится.** Страница, у которой единственный
    видимый контент — CSS `background-image` без текстовых/replaced боксов, даст
    `rendered_units == 0` → ложный `broken_render`. Принятое, задокументированное
@@ -63,7 +68,7 @@ DOM (`Document::node_count`).
 cargo build -p lumen-shell --profile dev-release
 # Живая сессия с журналом здоровья (браузьте как обычно):
 target/dev-release/lumen.exe --health-log https://example.com
-# Отчёт по накопленному health.log:
+# Отчёт по накопленной серии health.<pid>.log в рабочем каталоге:
 python scripts/health_report.py                 # приоритизация по частоте
 python scripts/health_report.py --top 20
 python scripts/health_report.py --kind panic    # только паники
@@ -88,3 +93,4 @@ python scripts/health_report.py --selftest      # проверка без бра
 | Дата | Commit | Заметка |
 |---|---|---|
 | 2026-07-18 | (PERF-6) | Первый срез. Движковая часть `health_log.rs` + агрегатор `health_report.py` (`--selftest` в воротах). Фикстура [`scripts/perf-fixtures/health.html`](../../scripts/perf-fixtures/health.html): 24 `display:none`-узла + `console.error` → одновременно `broken_render` и `console_error` для дымового прогона живого окна. |
+| 2026-09-05 | [BUG-991](../../bugs/BUG-991-FIXED.md) | Журнал открывался на перезапись — многосессионный прогон (перф-аудит, перезапускающий зависшее окно) стирал записи всех процессов, кроме последнего. Теперь каждый процесс пишет в свой `health.<pid>.log` на дозапись; `health_report.py` без аргумента сам находит и склеивает всю серию `health.*.log` рабочего каталога, `scripts/perf_audit.py` следит за журналом текущего процесса по его pid. |

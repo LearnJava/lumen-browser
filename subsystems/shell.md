@@ -443,6 +443,19 @@
   `render_source_to_png` path and won't emit them (panic capture and the startup
   `session_start` record still work headless). Journal:
   [`docs/perf/health.md`](../docs/perf/health.md).
+- **Done (BUG-991 — journal survives a multi-restart run, 2026-09-05):** the
+  original `health.log` opened on truncate at a fixed name, so a session that
+  restarted the browser process several times (a live perf-audit killing a
+  hung window) had each new process erase the previous one's records — a
+  100-site run that restarted nine times measured its aggregate off ~60 of the
+  100. `log_path()` now names the file after this process's own pid
+  (`health.<pid>.log`) and `init`/`append` both open it with `.append(true)`
+  instead of `.truncate(true)`, so one process never touches another's file.
+  `scripts/health_report.py` gained `discover_logs()`: with no explicit
+  argument it globs `health.*.log`/`health.log` in the working directory and
+  reads them oldest-first as one continuous stream; `scripts/perf_audit.py`'s
+  `LiveBrowser` tracks `health_log_path` from the freshly spawned child's own
+  pid instead of a single fixed path.
 - **Done (PERF-1 `--trace-nav`, 2026-07-18):** `lumen --trace-nav <out.json> <url>`
   (`run_trace_nav` + `extract_trace_nav`, mirrors `--screenshot`) runs one navigation
   through the shared headless CPU path (`render_source_to_png`) with the
