@@ -252,7 +252,7 @@ fn read_file_bytes_for_token(token: &str, origin: &str) -> Option<Vec<u8>> {
 // ── Base64 encoder (no external dependency) ───────────────────────────────────
 
 #[cfg(feature = "v8-backend")]
-fn to_base64(bytes: &[u8]) -> String {
+pub(crate) fn to_base64(bytes: &[u8]) -> String {
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {

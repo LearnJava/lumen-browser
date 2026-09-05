@@ -1761,13 +1761,31 @@ the time — read dates.
   cache means a population that ran after the scripts had already touched
   `document.fonts` once would freeze the JS-side set empty for the rest of
   the page's life — the exact `document.fonts.ready.then(...)`-before-any-
-  `test()` WPT pattern this whole track exists for. Not done, and tracked as
-  the task's own remaining slices in
+  `test()` WPT pattern this whole track exists for. **FONTLOAD-6** (2026-09-05)
+  closed the last item on that list: wiring a script-constructed `FontFace`
+  into `lumen_font::FontRegistry`/actual rendering. `_lumen_maybe_register_
+  scripted_font_face(face)` fires from two call sites — the end of
+  `FontFace.prototype.load`'s success branch and `FontFaceSet.prototype.add`
+  — and only proceeds once BOTH have happened for a given face (validated
+  bytes in `face._loadedBytes`, at least one owner in
+  `_lumen_font_face_owners`), covering either call order. It calls a new
+  native, `_lumen_register_scripted_font_face` (`dom_core.rs`), which
+  decodes/validates via the same `lumen_font::{maybe_decode_font, Font::parse}`
+  pair `_lumen_font_validate_bytes` uses and pushes `(family, weight, style,
+  bytes)` onto `V8JsRuntime::pending_scripted_font_faces` — this native
+  cannot register into `FontRegistry` directly (UI-thread-owned, ADR-016;
+  BUG-976), so the shell drains the queue once per frame
+  (`crates/shell/src/app/about_to_wait.rs`) and calls
+  `page_font_registry.register_from_bytes` itself, same as a background CSS
+  `@font-face` fetch does via `LoadEvent::FontLoaded`. `_cssConnected` faces
+  are explicitly excluded — they already have that path. Not done, and
+  tracked as the task's own remaining slices in
   [`bugs/BUG-467-OPEN.md`](../bugs/BUG-467-OPEN.md): CSS-connected
   reactivity to a later `<style>`/CSSOM change (on either path — needs the
   live-cascade foundation BUG-471/CSSOM-4), descriptor grammar validation,
-  and wiring a script-constructed `FontFace` into
-  `lumen_font::FontRegistry`/actual rendering.
+  and an unregister path for a face that leaves every `FontFaceSet` after
+  registering (none exists on `FontRegistry` today, same gap CSS-connected
+  faces already have).
 
 ## Deferred
 

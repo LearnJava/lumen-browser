@@ -457,3 +457,68 @@ test -p lumen-js --features v8-backend` 3464/3465 (1 давно известны
 агентом-исследователем оба оценены как отдельный, более крупный кусок
 FONTLOAD, требующий нового js↔shell каллбэк-шва через границу слоёв, не
 один срез.
+
+## FONTLOAD-6 (P1, 2026-09-05, ветка `p1-fontload6-scripted-fontface-registry`) — script-constructed `FontFace` → рендеринг
+
+Закрыла второй пункт, оставленный FONTLOAD-5 нетронутым: `new FontFace(family,
+source)` + `.load()`/`document.fonts.add()` валидировали байты (FONTLOAD-1) и
+резолвили промис/`.status`, но никогда не трогали
+`lumen_font::FontRegistry` — текст, стилизованный семейством script-
+сконструированного лица, продолжал рисоваться фолбэком даже после того, как
+`.status` становился `'loaded'`.
+
+Фикс в три слоя, тот же шов native↔shell↔JS, что FONTLOAD-2/5 уже
+использовали для похожей задачи (JS/engine-поток не может напрямую мутировать
+UI-thread-owned реестр/рендерер, ADR-016; BUG-976 — почему нет):
+
+1. **Шим (`crates/js/src/shim/web_api_shim_mid.js`):** `_lumen_font_face_try_one_source`
+   теперь прокидывает валидированные байты источника через цепочку
+   колбэков в `FontFace.prototype.load`, которая сохраняет их в
+   `face._loadedBytes`. Новая `_lumen_maybe_register_scripted_font_face(face)`
+   вызывается из двух мест — конца `.load()`'s success-ветки и
+   `FontFaceSet.prototype.add` — и регистрирует лицо ровно один раз
+   (`face._registeredForRender`), как только оно одновременно (а) провалидировано
+   (`_loadedBytes` есть) и (б) состоит хотя бы в одном `FontFaceSet`
+   (`_lumen_font_face_owners`). Оба порядка вызова (`.load().then(() =>
+   fonts.add(face))` и `fonts.add(face); face.load()`) сходятся в одну и ту же
+   функцию. CSS-connected лица исключены явной проверкой `_cssConnected` —
+   у них уже есть собственный путь регистрации через `LoadEvent::FontLoaded`,
+   дублировать его не нужно (и лишний повод не путать два источника одного и
+   того же шрифта в реестре).
+2. **Натив (`crates/js/src/v8_runtime/install/dom_core.rs`,
+   `_lumen_register_scripted_font_face`):** декодирует (WOFF/WOFF2/как есть)
+   и валидирует байты через уже существующие `lumen_font::{maybe_decode_font,
+   Font::parse}`, парсит `weight`/`style` дескрипторы (новый
+   `parse_scripted_font_weight` — минимальный keyword/first-number разбор,
+   зеркало `crates/shell/src/subresources.rs::parse_font_weight`, продублировано
+   потому что `crates/js` лежит ниже `crates/shell` в слоях крейтов) и кладёт
+   `(family, weight, style, decoded_bytes)` в новую очередь
+   `pending_scripted_font_faces` (`V8JsRuntime`, тот же паттерн, что
+   `pending_history_url_updates`/canvas-обновления — `Arc<Mutex<Vec<_>>>`,
+   drain раз в кадр).
+3. **Shell (`crates/shell/src/app/about_to_wait.rs`):** дренирует очередь
+   каждый `about_to_wait`, регистрирует каждую запись через
+   `page_font_registry.register_from_bytes`, обновляет `FontProvider` рендерера
+   и форсирует `relayout_chrome` + `request_redraw` — тот же путь, которым уже
+   идёт `LoadEvent::FontLoaded` для CSS-connected лиц.
+
+Намеренно узко: дескрипторы `unicodeRange`/остальные не разбираются по
+грамматике (тот же пре-существующий пробел FONTLOAD-1); лицо, удалённое из
+всех `FontFaceSet` после регистрации, остаётся в `FontRegistry` (снять запись
+нечем — у `FontRegistry` нет операции unregister, то же ограничение уже есть
+у CSS-connected лиц).
+
+Тесты (`crates/js/src/dom/tests/v8_fontface_shadow_custom.rs`):
+`register_scripted_font_face_queues_valid_bytes`/`_rejects_garbage_bytes`
+(натив напрямую, реальные байты Ahem через `atob`, не синтетическая строка —
+иначе проверялась бы только ветка отказа), `script_constructed_font_face_
+registers_on_add_then_load`/`_registers_on_load_then_add` (оба порядка
+вызова), `css_connected_face_is_excluded_from_scripted_registration` (явная
+проверка guard'а, не только «байтов и так не было»). `cargo test -p lumen-js
+--features v8-backend -- v8_fontface_shadow_custom` 45/45 (4 новых), `cargo
+clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` и
+`cargo clippy -p lumen-shell --all-targets --features v8 -- -D warnings` оба
+чисты.
+
+**Не входит в срез:** реактивность CSS-connected сета (gap 1, BUG-471/CSSOM-4);
+descriptor grammar; unregister-путь для лица, покинувшего все `FontFaceSet`.

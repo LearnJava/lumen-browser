@@ -520,6 +520,35 @@ impl Lumen {
             }
         }
 
+        // ── FONTLOAD-6: script-constructed FontFace → rendering (BUG-467) ─────
+        // A `new FontFace(...)` whose `.load()` validated while it was a member
+        // of some `FontFaceSet` never reached `lumen_font::FontRegistry` before
+        // this — text styled with its family kept using fallback fonts even
+        // after `.status` became 'loaded'. The JS native
+        // (`_lumen_register_scripted_font_face`) cannot register directly: the
+        // registry mutation itself is thread-safe (`RwLock`-backed), but the
+        // renderer refresh and relayout it must trigger are UI-thread-only
+        // (ADR-016; BUG-976 is why not to cross that from the JS/engine
+        // thread). So it only queues decoded bytes; drained here the same way
+        // canvas updates are, and registered exactly like a background CSS
+        // `@font-face` fetch's `LoadEvent::FontLoaded` handler does.
+        let scripted_fonts =
+            self.drain_query_js(|j| j.take_pending_scripted_font_faces()).unwrap_or_default();
+        if !scripted_fonts.is_empty() {
+            for (family, weight, style, bytes) in scripted_fonts {
+                self.page_font_registry.register_from_bytes(&family, weight, style, &[], bytes);
+            }
+            if let Some(r) = self.renderer.as_mut() {
+                r.set_font_provider(Some(
+                    Arc::clone(&self.page_font_registry) as Arc<dyn lumen_core::FontProvider>,
+                ));
+            }
+            self.relayout_chrome();
+            if let Some(w) = self.window.as_ref() {
+                w.request_redraw();
+            }
+        }
+
         // ── History API: pushState/replaceState URL updates ───────────────────
         // Drain URL-update notifications from history.pushState/replaceState.
         // pushState adds a same-document back-stack entry; replaceState updates

@@ -7371,6 +7371,22 @@ var console = {
 // forever would regress every `FontFace.load()`/`FontFaceSet.load()` caller,
 // not just a passive `.ready` gate.
 //
+// FONTLOAD-6 (2026-09-05) closed the gap FONTLOAD-5's own re-scoping flagged
+// as the next one: a script-constructed `FontFace` never reached
+// `lumen_font::FontRegistry`, so text using its family kept using fallback
+// fonts even once `.status` was 'loaded'. `_lumen_maybe_register_scripted_
+// font_face` below now pushes decoded bytes to the shell (queued, drained
+// once per frame in `about_to_wait.rs` — the JS/engine thread cannot mutate
+// the UI-thread-owned registry/renderer directly, ADR-016) once a face is
+// both validated and a `FontFaceSet` member, from whichever of `.load()` or
+// `.add()` happens second. Deliberately narrow: CSS-connected faces are
+// excluded (already have their own path); `unicodeRange`/other descriptors
+// still aren't grammar-parsed (FONTLOAD-1's pre-existing gap — weight/style
+// get a minimal keyword/first-number reading, not the full CSS grammar); a
+// face removed from every `FontFaceSet` after registering stays registered
+// (no unregister call exists on `FontRegistry`, same limitation CSS-connected
+// faces already have).
+//
 // Still open, one real engine gap, not an oversight:
 // (1) **CSS-connected faces are a one-time snapshot.** They are read from
 //     native once, when `document.fonts` is first touched — a later
@@ -7436,11 +7452,16 @@ function _lumen_font_face_load_end(face, ok) {
     for (var i = 0; i < owners.length; i++) owners[i]._onFaceLoadEnd(face, ok);
 }
 
+// `onOk` receives the source's raw bytes (FONTLOAD-6) so a caller can hand
+// them to `_lumen_register_scripted_font_face` once the face is also a
+// `FontFaceSet` member — `local()` never resolves to bytes, so its `onOk` is
+// unreachable and callers must treat a missing argument as "no bytes".
 function _lumen_font_face_try_one_source(src, onOk, onFail) {
     if (src.kind === 'binary') {
+        var bytes = _lumen_font_bytes_view(src.data);
         var ok;
-        try { ok = _lumen_font_validate_bytes(_lumen_font_bytes_view(src.data)); } catch (e) { ok = false; }
-        if (ok) onOk();
+        try { ok = _lumen_font_validate_bytes(bytes); } catch (e) { ok = false; }
+        if (ok) onOk(bytes);
         else onFail(new DOMException('Invalid font data', 'SyntaxError'));
         return;
     }
@@ -7457,7 +7478,7 @@ function _lumen_font_face_try_one_source(src, onOk, onFail) {
         return resp.arrayBuffer();
     }).then(function(buf) {
         var bytes = _lumen_font_bytes_view(buf);
-        if (_lumen_font_validate_bytes(bytes)) onOk();
+        if (_lumen_font_validate_bytes(bytes)) onOk(bytes);
         else onFail(new DOMException('Invalid font data', 'SyntaxError'));
     }).catch(function(e) {
         onFail(e instanceof DOMException ? e : new DOMException('Failed to fetch font', 'NetworkError'));
@@ -7469,11 +7490,11 @@ function _lumen_font_face_try_sources(sources, idx, done) {
         done(false, new DOMException('No valid font sources', sources.length === 0 ? 'SyntaxError' : 'NetworkError'));
         return;
     }
-    _lumen_font_face_try_one_source(sources[idx], function() {
-        done(true);
+    _lumen_font_face_try_one_source(sources[idx], function(bytes) {
+        done(true, undefined, bytes);
     }, function(lastErr) {
-        _lumen_font_face_try_sources(sources, idx + 1, function(ok, err) {
-            done(ok, ok ? undefined : (err || lastErr));
+        _lumen_font_face_try_sources(sources, idx + 1, function(ok, err, bytes) {
+            done(ok, ok ? undefined : (err || lastErr), bytes);
         });
     });
 }
@@ -7512,10 +7533,12 @@ var FontFace = (function() {
             self._rejectLoaded = reject;
         });
         _lumen_font_face_load_start(self);
-        _lumen_font_face_try_sources(self._sources, 0, function(ok, err) {
+        _lumen_font_face_try_sources(self._sources, 0, function(ok, err, bytes) {
             if (ok) {
                 self._status = 'loaded';
+                self._loadedBytes = bytes || null;
                 _lumen_font_face_load_end(self, true);
+                _lumen_maybe_register_scripted_font_face(self);
                 self._resolveLoaded(self);
             } else {
                 self._status = 'error';
@@ -7671,6 +7694,28 @@ Object.defineProperties(FontFaceSet.prototype, {
     ready: { get: function() { return this._readyPromise; }, enumerable: true, configurable: true },
     status: { get: function() { return this._pending > 0 ? 'loading' : 'loaded'; }, enumerable: true, configurable: true },
 });
+// FONTLOAD-6 (BUG-467): connects a script-constructed `FontFace` to actual
+// rendering. `.load()` alone (FONTLOAD-1) only ever validated bytes — nothing
+// told `lumen_font::FontRegistry` the font exists, so text styled with its
+// family kept using fallback fonts even after `.status` became 'loaded'.
+// Fires once a face is BOTH validated (has `_loadedBytes`) AND a member of
+// some `FontFaceSet` (has an owner) — the two call orders
+// `.load().then(() => fonts.add(face))` and `fonts.add(face); face.load()`
+// both reach this, from `FontFace.prototype.load`'s success branch and from
+// `FontFaceSet.prototype.add` respectively. CSS-connected faces are excluded:
+// the shell already registers those through its own `@font-face`
+// background-fetch pipeline (`LoadEvent::FontLoaded`), so this would just
+// duplicate that registration with a second, redundant path.
+function _lumen_maybe_register_scripted_font_face(face) {
+    if (face._cssConnected || face._registeredForRender) return;
+    if (face._status !== 'loaded' || !face._loadedBytes) return;
+    var owners = _lumen_font_face_owners.get(face);
+    if (!owners || owners.length === 0) return;
+    face._registeredForRender = true;
+    try {
+        _lumen_register_scripted_font_face(face._family, face._weight, face._style, face._loadedBytes);
+    } catch (e) {}
+}
 FontFaceSet.prototype.has = function(v) { return this._members.has(v); };
 FontFaceSet.prototype.add = function(v) {
     if (!(v instanceof FontFace)) throw new TypeError('FontFaceSet.add expects a FontFace');
@@ -7680,6 +7725,7 @@ FontFaceSet.prototype.add = function(v) {
         if (!owners) { owners = []; _lumen_font_face_owners.set(v, owners); }
         if (owners.indexOf(this) === -1) owners.push(this);
     }
+    _lumen_maybe_register_scripted_font_face(v);
     return this;
 };
 // CSS-connected faces cannot be removed by script (CSS Font Loading §11.2,
