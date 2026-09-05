@@ -71,4 +71,4 @@ JSON.stringify(h)           // {"_h":{"x-a":"1"}}
 
 - [BUG-369](BUG-369-FIXED.md) — тот же дефект в скоупе страницы, закрыт 2026-08-10;
   реализацию оттуда и надо переиспользовать.
-- [BUG-694](BUG-694-OPEN.md) — тот же класс на `URLSearchParams`.
+- [BUG-694](BUG-694-FIXED.md) — тот же класс на `URLSearchParams`.

@@ -248,7 +248,7 @@ Guard не выводится в публичный API, поэтому `Respons
 
 - [BUG-370](BUG-370-FIXED.md) — та же проба, `Request`/`Response`: нет Body-mixin
   на `Request`, `Response.json()`, корректного `Response.error()`/`redirect()`.
-- [BUG-694](BUG-694-OPEN.md) — ровно тот же класс на `URLSearchParams`: нет
+- [BUG-694](BUG-694-FIXED.md) — ровно тот же класс на `URLSearchParams`: нет
   `Symbol.iterator`, `entries()` отдаёт массив, копирующий конструктор кладёт
   внутреннее поле `_p` отдельным параметром.
 - [BUG-748](BUG-748-OPEN.md) — тот же класс в шиме service worker.

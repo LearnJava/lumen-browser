@@ -10,12 +10,20 @@ function URLSearchParams(init) {
     if (init === undefined || init === null) return;
     if (typeof init === 'string') {
         this._p = _usp_parse(init);
-    } else if (Array.isArray(init)) {
-        for (var i = 0; i < init.length; i++) {
-            var entry = init[i];
-            if (!Array.isArray(entry) || entry.length < 2)
+    } else if (init !== null && typeof init === 'object' && typeof init[Symbol.iterator] === 'function') {
+        // Covers both `sequence<sequence<USVString>>` and — since
+        // `URLSearchParams.prototype[Symbol.iterator]` makes every instance
+        // iterable (BUG-694) — the copy-constructor form
+        // `new URLSearchParams(existingParams)`, with no special case needed.
+        var arr = Array.from(init);
+        for (var i = 0; i < arr.length; i++) {
+            var entry = arr[i];
+            if (entry === null || typeof entry !== 'object' || typeof entry[Symbol.iterator] !== 'function')
                 throw new TypeError('URLSearchParams: each sequence entry must have 2 items');
-            this._p.push([String(entry[0]), String(entry[1])]);
+            var kv = Array.from(entry);
+            if (kv.length !== 2)
+                throw new TypeError('URLSearchParams: each sequence entry must have 2 items');
+            this._p.push([String(kv[0]), String(kv[1])]);
         }
     } else if (typeof init === 'object') {
         var keys = Object.keys(init);
@@ -63,9 +71,14 @@ URLSearchParams.prototype.append = function(name, value) {
     this._p.push([String(name), String(value)]);
     _usp_update(this);
 };
-URLSearchParams.prototype.delete = function(name) {
+URLSearchParams.prototype.delete = function(name, value) {
     var n = String(name);
-    this._p = this._p.filter(function(e) { return e[0] !== n; });
+    if (arguments.length > 1) {
+        var v = String(value);
+        this._p = this._p.filter(function(e) { return !(e[0] === n && e[1] === v); });
+    } else {
+        this._p = this._p.filter(function(e) { return e[0] !== n; });
+    }
     _usp_update(this);
 };
 URLSearchParams.prototype.get = function(name) {
@@ -78,8 +91,13 @@ URLSearchParams.prototype.getAll = function(name) {
     for (var i = 0; i < this._p.length; i++) { if (this._p[i][0] === n) out.push(this._p[i][1]); }
     return out;
 };
-URLSearchParams.prototype.has = function(name) {
+URLSearchParams.prototype.has = function(name, value) {
     var n = String(name);
+    if (arguments.length > 1) {
+        var v = String(value);
+        for (var i = 0; i < this._p.length; i++) { if (this._p[i][0] === n && this._p[i][1] === v) return true; }
+        return false;
+    }
     for (var i = 0; i < this._p.length; i++) { if (this._p[i][0] === n) return true; }
     return false;
 };
@@ -103,21 +121,35 @@ URLSearchParams.prototype.toString = function() {
 URLSearchParams.prototype.forEach = function(cb, thisArg) {
     for (var i = 0; i < this._p.length; i++) cb.call(thisArg, this._p[i][1], this._p[i][0], this);
 };
-URLSearchParams.prototype.keys = function() {
-    var p = this._p, i = 0;
-    return { next: function() { return i < p.length ? { value: p[i++][0], done: false } : { value: undefined, done: true }; },
-             Symbol_iterator: function() { return this; } };
-};
-URLSearchParams.prototype.values = function() {
-    var p = this._p, i = 0;
-    return { next: function() { return i < p.length ? { value: p[i++][1], done: false } : { value: undefined, done: true }; },
-             Symbol_iterator: function() { return this; } };
-};
-URLSearchParams.prototype.entries = function() {
-    var p = this._p, i = 0;
-    return { next: function() { return i < p.length ? { value: [p[i][0], p[i++][1]], done: false } : { value: undefined, done: true }; },
-             Symbol_iterator: function() { return this; } };
-};
+// Shared prototype of the `entries()`/`keys()`/`values()` iterator objects
+// (same pattern as `Headers`, BUG-369): a real %ArrayIteratorPrototype%-shaped
+// object with `next()` and `[Symbol.iterator]() === this`, not a plain array.
+var _USP_IterProto = {};
+Object.defineProperty(_USP_IterProto, Symbol.toStringTag, { value: 'URLSearchParams Iterator', configurable: true });
+Object.defineProperty(_USP_IterProto, Symbol.iterator, {
+    value: function() { return this; }, writable: true, configurable: true,
+});
+function _usp_make_iterator(pairs, kind) {
+    var i = 0;
+    var it = Object.create(_USP_IterProto);
+    Object.defineProperty(it, 'next', {
+        value: function() {
+            if (i >= pairs.length) return { value: undefined, done: true };
+            var p = pairs[i++];
+            var v = kind === 'key' ? p[0] : (kind === 'value' ? p[1] : [p[0], p[1]]);
+            return { value: v, done: false };
+        },
+        writable: true, configurable: true,
+    });
+    return it;
+}
+URLSearchParams.prototype.keys = function() { return _usp_make_iterator(this._p, 'key'); };
+URLSearchParams.prototype.values = function() { return _usp_make_iterator(this._p, 'value'); };
+URLSearchParams.prototype.entries = function() { return _usp_make_iterator(this._p, 'entry'); };
+// WebIDL `iterable<USVString, USVString>`: @@iterator is the very same
+// function object as entries(), not a copy (BUG-694).
+URLSearchParams.prototype[Symbol.iterator] = URLSearchParams.prototype.entries;
+Object.defineProperty(URLSearchParams.prototype, Symbol.toStringTag, { value: 'URLSearchParams', configurable: true });
 URLSearchParams.prototype.size = undefined; // defined as getter below
 Object.defineProperty(URLSearchParams.prototype, 'size', {
     get: function() { return this._p.length; }
