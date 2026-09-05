@@ -198,7 +198,9 @@ pub(crate) fn caps_synthesis(
                 // px = (big − h)·(0.5 − a) и line_h сокращается.
                 let ascent_ratio = m
                     .filter(|_| big > 0.0)
-                    .map_or(FALLBACK_ASCENT_RATIO, |m| m.ascent_px(big) / big);
+                    .map_or(FALLBACK_ASCENT_RATIO, |m| {
+                        m.ascent_px_with_families(big, &seg.style.font_family) / big
+                    });
                 let delta = big - st.font_size;
                 st.vertical_align = VerticalAlign::Length(delta * (0.5 - ascent_ratio));
             }

@@ -824,9 +824,113 @@ ERRORED на самом снимке — но дельта-отчёт показ
 заведённый и открытый BUG-997, детерминированно красный на `main` независимо
 от ветки (`crates/js` этим срезом не тронут).
 
-**Следующий срез — на выбор владельца FONTLOAD:** (B) override-метрики
-ascent/descent/line-gap/size-adjust (сначала требует завести сами метрики
-`@font-face`-шрифтов в `OwnedFontMetrics`/`FaceMetrics`, которых там сегодня
-нет) — самый крупный оставшийся кусок; (D) feature/variation-settings
-дескриптора как дефолта CSS-свойства + шейпинг вне variable-font-пути;
-femtovg-паритет для (A); реактивность CSS-connected сета (BUG-471/CSSOM-4).
+## FONTLOAD-10 (P1, 2026-09-05, ветка `p1-fontload10-face-metrics`) — реальные ascent/descent выбранного face в layout
+
+Первая часть под-среза (B): реальные ascent/descent теперь достигают
+**layout** (line-box height/baseline), не только paint-side `FaceMetrics`
+(FONTLOAD-9 подключила их только к per-codepoint выбору face на пути
+РИСОВАНИЯ). До этого среза `MultiFontMeasurer::ascent_px`/`descent_px`
+(`crates/engine/paint/src/lib.rs`) всегда делегировали в `self.fallback`
+(bundled Inter) независимо от того, какой `font-family` реально выбран для
+элемента — та же архитектурная дыра, что BUG-128 закрыла для ширин символов,
+но для ascent/descent так и осталась открытой.
+
+**Изменения:**
+1. `OwnedFontMetrics` (`crates/engine/paint/src/lib.rs`) получила
+   `ascent_units`/`descent_units` (`u16`, font units), заполняемые в
+   `from_bytes` тем же приоритетом источника, что уже применяет
+   `FontMeasurer::new` для bundled-fallback: `OS/2.sTypoAscender/sTypoDescender`
+   предпочтительнее, `hhea.ascent/descent` — fallback, когда таблицы `OS/2`
+   нет. Новые методы `ascent_px`/`descent_px` на `OwnedFontMetrics` — байт-в-
+   байт та же формула, что `FontMeasurer::ascent_px`/`descent_px` (ascent —
+   через отношение `ascent/(ascent+descent)`, descent — прямое масштабирование
+   `descent_units/units_per_em`), чтобы @font-face/системный face и bundled-
+   fallback считали одинаково, а не по двум разным правилам.
+2. `TextMeasurer` (`crates/engine/layout/src/lib.rs`) — новые
+   `ascent_px_with_families`/`descent_px_with_families`, тот же приём, что уже
+   есть у `char_width_with_families`: `_with_families`-вариант с дефолтной
+   реализацией, делегирующей к безсемейной версии (обратная совместимость для
+   любой другой реализации `TextMeasurer` в дереве — их не пришлось трогать).
+3. `MultiFontMeasurer` переопределяет оба метода: новый приватный
+   `primary_metrics(families)` возвращает метрики ПЕРВОЙ резолвящейся семьи —
+   тот же приоритет, что уже применяет `resolve_font_stretch` к `wdth`-оси
+   (@font-face слот → системное имя через `SystemFaceSet` → `None`, тогда
+   вызывающий код остаётся на `self.fallback`). Ascent/descent — метрика
+   ПЕРВИЧНОГО шрифта элемента как единого целого (CSS line-height/baseline),
+   поэтому `unicode-range` тут не при чём — в отличие от
+   `char_width_with_families`, где выбор идёт per-codepoint. Новый
+   `enum PrimaryFontMetrics<'a>` оборачивает разницу владения: `&OwnedFontMetrics`
+   у @font-face слота живёт в `self.faces`, `Arc<OwnedFontMetrics>` у системного
+   имени — отдельный клон из `SystemFaceSet::metrics`.
+4. Три вызывающих места в layout теперь передают `font_family` вместо голых
+   `ascent_px`/`descent_px`: `inline_build.rs::inline_baseline` (baseline
+   прогона InlineRun и текстового `FormControl`), `layout_dispatch.rs`
+   (sub-baseline gap заменённых медиа-элементов и strut `InlineBlockRow`),
+   `inline_wrap.rs::caps_synthesis` (baseline-компенсация синтезированных
+   small-caps).
+
+**Намеренно вне среза:**
+- **line-gap accessor** — в layout сегодня нет ни одного потребителя line-gap
+  (`line-height: normal` в этом движке — фиксированный множитель `1.2em`, не
+  `ascent+descent+lineGap` реального шрифта, см. комментарий в
+  `layout_dispatch.rs` у `InlineBlockRow`); добавлять accessor без потребителя
+  значило бы тащить мёртвый код. Остаётся кандидатом следующего среза вместе
+  с решением, нужно ли вообще менять модель `line-height: normal`.
+- **Override-дескрипторы поверх реальных метрик** (`ascentOverride`/
+  `descentOverride`/`lineGapOverride`/`sizeAdjust`) — `lumen_dom::FontFace`
+  хранит их непарсенными `Option<String>` (`"100%"`/`"normal"`,
+  `crates/engine/dom/src/font_faces.rs`), нужен процентный парсер и явное
+  решение о базе (CSS Fonts L4 §14: override — относительно СОБСТВЕННЫХ
+  типографических метрик face-а, не `font-size` напрямую) — архитектурно
+  крупнее одного среза, FONTLOAD-9-подобная разведка нужна перед началом.
+- **`sizeAdjust`** — ни одной точки применения по-прежнему нет ни в
+  `lumen_font`, ни в `lumen_layout`/`lumen_paint` (глобально масштабирует
+  em-квадрат face-а до всех остальных вычислений, поэтому логично приземлять
+  его в саму конструкцию `OwnedFontMetrics`/`FaceMetrics`, а не как отдельный
+  множитель поверх готовых `ascent_px`/`descent_px`).
+- **WPT reftest'ы не двигаются этим срезом**: `ascent-descent-override.html`,
+  `line-gap-override.html`, `metrics-override-normal-keyword.html`,
+  `font-size-adjust-metrics-override.html` (`tests/wpt/css/css-fonts/`)
+  проверяют именно override-значения против Ahem-подобной геометрии, не
+  real-metrics baseline — этот срез им нужен как ФУНДАМЕНТ (real ascent/descent
+  выбранного face), но сам их не закрывает.
+- **`femtovg`-паритет** для FONTLOAD-9 (A) и **CPU-растеризатор** — те же
+  ограничения, что документировала FONTLOAD-9 (не live-дефолт / не рендерит
+  `@font-face` вовсе), не тронуты этим срезом.
+
+Тесты: `crates/engine/paint/src/lib.rs::multi_font_tests` — 5 новых
+(`ascent_descent_with_families_falls_back_to_inter_when_unregistered`,
+`ascent_descent_with_empty_families_uses_fallback`,
+`ascent_descent_with_families_uses_registered_font_not_bundled_fallback`
+— доказывает, что зарегистрированный `@font-face` (bundled JetBrains Mono
+под новым именем) двигает ascent/descent прочь от bundled-fallback,
+`ascent_descent_with_families_picks_first_resolving_family`,
+`ascent_descent_with_families_uses_system_face_not_inter` — симметрия BUG-128
+для системных имён). `cargo test -p lumen-paint -p lumen-layout` без
+регрессий (3822+1030 тестов зелёные), `cargo clippy -p lumen-paint
+-p lumen-layout --all-targets -- -D warnings` чист; `cargo build -p
+lumen-shell --features v8` + точечные тесты `page_pipeline`/`relayout`/
+`fontload` (98/98) зелёные. Срез трогает layout-геометрию (baseline text-
+раскладки), поэтому гейт — полный пиксельный прогон, не только
+`dump_golden.py`: `python graphic_tests/dump_golden.py` 12/12 байт-в-байт;
+`python graphic_tests/run.py --continue-on-fail` — дельта против прошлого
+прогона на `main` (commit 455701a34) **«Изменений нет»**, те же 3/156 FAIL
+(150/151/155) и те же 51 known-debtor, что и на baseline — детерминированный
+корпус не резолвит ни @font-face, ни системные имена, отличные от bundled
+Inter, поэтому `primary_metrics` везде возвращает `None` и код остаётся на
+прежнем `self.fallback`-пути; живой pixel-diff это подтверждает, а не только
+архитектурное рассуждение. `scripts/scoped-test.sh origin/main` — единственный
+красный тест снова `lumen-js`'s
+`v8_perf_typedom_node::native_binding_panic_does_not_abort_process`
+(BUG-997), воспроизведён и на `main` независимо от ветки — `crates/js` этим
+срезом не тронут.
+
+**Следующий срез — на выбор владельца FONTLOAD:** override-дескрипторы
+(`ascentOverride`/`descentOverride`/`lineGapOverride`/`sizeAdjust`) поверх
+реальных метрик, приземлённых этим срезом — требует процентного парсера
+`lumen_dom::FontFace`'s `Option<String>`-полей и решения о базе вычисления
+(CSS Fonts L4 §14); `sizeAdjust` как отдельный, архитектурно больший кусок
+(масштабирует em-квадрат face-а целиком); line-gap accessor вместе с моделью
+`line-height: normal`; (D) feature/variation-settings дескриптора как дефолта
+CSS-свойства + шейпинг вне variable-font-пути; femtovg-паритет для (A);
+реактивность CSS-connected сета (BUG-471/CSSOM-4).
