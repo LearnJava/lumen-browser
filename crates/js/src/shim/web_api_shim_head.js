@@ -153,6 +153,17 @@ Event.prototype.preventDefault = function() {
 };
 Event.prototype.stopPropagation = function() { this.cancelBubble = true; };
 Event.prototype.stopImmediatePropagation = function() { this._stopImmediate = true; this.cancelBubble = true; };
+// DOM §2.2 legacy "initialize an event" — used by events minted through
+// `document.createEvent()`, which start out with an empty type and must be
+// filled in before dispatch. Reinitializes only the four legacy-settable
+// fields and, per spec, forces `isTrusted` back to false (this is always a
+// script-authored event past this point, however it was constructed).
+Event.prototype.initEvent = function(type, bubbles, cancelable) {
+    this.type = String(type || '');
+    this.bubbles = !!bubbles;
+    this.cancelable = !!cancelable;
+    this.isTrusted = false;
+};
 
 function CustomEvent(type, init) {
     Event.call(this, type, init);
@@ -160,3 +171,27 @@ function CustomEvent(type, init) {
 }
 CustomEvent.prototype = Object.create(Event.prototype);
 CustomEvent.prototype.constructor = CustomEvent;
+
+// DOM §2.2's fixed legacy interface-name table for `document.createEvent()`
+// (BUG-590), keyed lower-case since the lookup is case-insensitive. Looked up
+// lazily (called only once a script actually invokes `createEvent`), so it
+// can name constructors — `UIEvent`, `MouseEvent`, `BeforeUnloadEvent`, … —
+// declared later in files concatenated after this one; by the time any
+// script runs, the whole shim has already loaded into one scope.
+function _lumen_legacy_event_ctor(name) {
+    switch (name) {
+        case 'event': case 'events': case 'htmlevents': return Event;
+        case 'customevent': return CustomEvent;
+        case 'uievent': case 'uievents': return UIEvent;
+        case 'mouseevent': case 'mouseevents': return MouseEvent;
+        case 'keyboardevent': return KeyboardEvent;
+        case 'focusevent': return FocusEvent;
+        case 'hashchangeevent': return HashChangeEvent;
+        case 'storageevent': return StorageEvent;
+        case 'messageevent': return MessageEvent;
+        case 'dragevent': return DragEvent;
+        case 'compositionevent': case 'textevent': return CompositionEvent;
+        case 'beforeunloadevent': return BeforeUnloadEvent;
+        default: return null;
+    }
+}
