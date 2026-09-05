@@ -992,9 +992,10 @@ fn get_elements_by_tag_name_star_matches_elements_only() {
     let r = rt
         .eval(
             "var all = document.getElementsByTagName('*'); \
+                     var names = []; \
+                     for (var i = 0; i < all.length; i++) { names.push(all[i].tagName); } \
                      all.length === 6 && \
-                     all.map(function(e) { return e.tagName; }).join(',') === \
-                        'HTML,HEAD,TITLE,BODY,DIV,SPAN' && \
+                     names.join(',') === 'HTML,HEAD,TITLE,BODY,DIV,SPAN' && \
                      document.getElementById('main').getElementsByTagName('*').length === 1",
         )
         .unwrap();
