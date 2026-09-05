@@ -9287,6 +9287,18 @@ var document = {
     },
     // DOM LS §4.5: createDocumentFragment() returns an empty DocumentFragment.
     createDocumentFragment: function()    { return _lumen_make_document_fragment(_lumen_create_fragment()); },
+    // DOM §2.2 legacy event-creation factory (BUG-590). `interface` is matched
+    // case-insensitively against the spec's fixed table of legacy names; the
+    // returned event has an empty type and must be filled in with
+    // `initEvent()`/an interface-specific `init*` method before dispatch —
+    // callers that skip that step keep the event's default (empty) type.
+    createEvent: function(iface) {
+        var ctor = _lumen_legacy_event_ctor(String(iface || '').toLowerCase());
+        if (!ctor) { throw new DOMException(iface + ' is not a supported event interface', 'NotSupportedError'); }
+        var evt = Object.create(ctor.prototype);
+        ctor.call(evt, '');
+        return evt;
+    },
     // DOM LS §4.5: createProcessingInstruction(target, data). Throws
     // InvalidCharacterError if `target` is not a valid XML Name or `data`
     // contains the PI-closing sequence ?> . Returns a ProcessingInstruction
