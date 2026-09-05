@@ -557,37 +557,48 @@ pub(crate) fn apply_font_size_adjust(b: &mut LayoutBox, m: &dyn TextMeasurer) {
 /// [`LayoutBox::used_line_height`], written once per layout pass by
 /// [`resolve_used_line_height`].
 ///
-/// FONTLOAD-14 (BUG-467) built this choke point specifically to let
-/// `line-height: normal` resolve against real font metrics (`ascent +
-/// descent [+ lineGap]`, `m` is unused for that reason right now — kept as a
-/// parameter so the next slice doesn't have to re-thread it through every
-/// caller) instead of the flat `1.2` approximation, but measurement against
-/// Edge (`graphic_tests/run.py --continue-on-fail`, 2026-09-05) showed the
-/// opposite of what CSS Fonts L4 §14.3's line-gap accessor (FONTLOAD-13)
-/// suggested: `ascent_px + descent_px` alone regresses TEST-02/04/18/21/56/
-/// 83/150/151/155 past the 0.5% threshold (TEST-02 at 0.68%, matching the
-/// InlineBlockRow strut's own IFC-1 finding almost exactly), and adding
-/// `line_gap_px` on top changes nothing (these fonts declare `line_gap = 0`).
-/// `OwnedFontMetrics::ascent_px` (`crates/engine/paint/src/lib.rs`) also
-/// normalises ascent against `ascent+descent` while `descent_px`/
-/// `line_gap_px` normalise against `units_per_em` — inconsistent denominators
-/// that make even the sum's intent murky. The strut comparison this formula
-/// was modeled on (`BoxKind::InlineBlockRow` in this file's `layout_dispatch`
-/// sibling) tests *relative* baseline alignment of an empty box, which
-/// tolerates the mismatch; general text line spacing is an *absolute* height
-/// that does not. Not included in this slice: matching Edge/DirectWrite's
-/// actual `normal` algorithm (Windows text likely uses `OS/2.usWinAscent`/
-/// `usWinDescent`, which run taller than the `sTypoAscender`/`sTypoDescender`
-/// pair `OwnedFontMetrics` reads, or a UA-side floor) — needs its own
-/// investigation. `line_height_is_normal` and this function stay as the
-/// architecture for that slice to land in without re-touching every
-/// consumer. `<number>`/`<length>` values are unaffected either way — the
-/// ratio already carries the used value (see `style::apply_line_height_value`
-/// and `apply_font_size_adjust_to_style`'s inverse correction for absolute
+/// FONTLOAD-14 (BUG-467) built this choke point to let `line-height: normal`
+/// resolve against real font metrics instead of the flat `1.2`
+/// approximation, but its first attempt (`ascent_px + descent_px`) regressed
+/// TEST-02/04/18/21/56/83/150/151/155 against Edge and was reverted to the
+/// flat multiplier. Root cause (found by FONTLOAD-14, fixed here): summing
+/// `OwnedFontMetrics::ascent_px` + `descent_px` mixed two different
+/// denominators — `ascent_px` normalises against `ascent_units +
+/// descent_units`, `descent_px` against `units_per_em` — so for the bundled
+/// Inter font that sum came out to `~1.04 × font_size` (well below `1.2`,
+/// hence the regression), not the `~1.21 × font_size` a single consistent
+/// `units_per_em` denominator gives. FONTLOAD-15 (BUG-467) adds
+/// [`TextMeasurer::normal_line_height_px`] specifically to normalise all
+/// three components (`ascent`/`descent`/`line-gap`) against `units_per_em`
+/// uniformly, instead of reusing `ascent_px`/`descent_px`/`line_gap_px`
+/// (kept unchanged — `BoxKind::InlineBlockRow`'s strut in this file's
+/// `layout_dispatch` sibling depends on their current, IFC-1-validated
+/// values for *relative* baseline alignment, which tolerates the mismatch
+/// that an *absolute* line height does not).
+///
+/// FONTLOAD-14 also left an open hypothesis — that Edge/DirectWrite uses
+/// `OS/2.usWinAscent`/`usWinDescent` rather than `sTypoAscender`/
+/// `sTypoDescender` — as the more promising fix. `normal_line_height_px`
+/// implements the OpenType-recommended selection (`fsSelection`'s
+/// `USE_TYPO_METRICS` bit picks typo vs win metrics) for spec correctness
+/// and for `@font-face` faces where the two differ, but this does **not**
+/// move the needle for the deterministic pixel corpus specifically: bundled
+/// Inter (the only face the corpus ever resolves to, `primary_metrics`
+/// always `None`) sets `USE_TYPO_METRICS`, and its `win_ascent`/`win_descent`
+/// happen to equal `typo_ascender`/`|typo_descender|` exactly — the
+/// denominator fix above is what changes behaviour here, not the metric
+/// source choice.
+///
+/// `<number>`/`<length>` values are unaffected either way — the ratio
+/// already carries the used value (see `style::apply_line_height_value` and
+/// `apply_font_size_adjust_to_style`'s inverse correction for absolute
 /// line-heights).
 pub(crate) fn used_line_height_px(style: &ComputedStyle, m: &dyn TextMeasurer) -> f32 {
-    let _ = m;
-    style.font_size * style.line_height
+    if style.line_height_is_normal {
+        m.normal_line_height_px_with_families(style.font_size, &style.font_family)
+    } else {
+        style.font_size * style.line_height
+    }
 }
 
 /// Whole-tree pass writing [`LayoutBox::used_line_height`] from real font
