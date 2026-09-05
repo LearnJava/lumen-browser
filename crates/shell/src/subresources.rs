@@ -197,6 +197,8 @@ pub(crate) fn load_font_faces(
                 weight,
                 style,
                 unicode_range_str: rule.unicode_range.clone(),
+                ascent_override_str: rule.ascent_override.clone(),
+                descent_override_str: rule.descent_override.clone(),
                 url: url_src.value.clone(),
             });
         }
@@ -453,6 +455,12 @@ pub(crate) struct PendingWebFont {
     pub(crate) style: lumen_core::FontStyle,
     /// Сырая строка `unicode-range` дескриптора (None → покрывает все кодпоинты).
     pub(crate) unicode_range_str: Option<String>,
+    /// Сырая строка `ascent-override` дескриптора (CSS Fonts L4 §14,
+    /// FONTLOAD-11) — распаршивается в фоновом потоке fetch-а, тем же
+    /// приёмом, что уже применяется к `unicode_range_str`.
+    pub(crate) ascent_override_str: Option<String>,
+    /// Сырая строка `descent-override` дескриптора, та же семантика.
+    pub(crate) descent_override_str: Option<String>,
     /// URL для fetch (@font-face `src: url(...)`).
     pub(crate) url: String,
 }
@@ -474,6 +482,11 @@ pub(crate) struct LoadedWebFont {
     pub(crate) style: lumen_core::FontStyle,
     /// Диапазоны Unicode из @font-face `unicode-range` дескриптора.
     pub(crate) unicode_range: Vec<lumen_font::UnicodeRange>,
+    /// `ascent-override` дескриптор (CSS Fonts L4 §14, FONTLOAD-11) — доля
+    /// `font-size`, `None` — `normal`/отсутствует.
+    pub(crate) ascent_override: Option<f32>,
+    /// `descent-override` дескриптор, та же семантика.
+    pub(crate) descent_override: Option<f32>,
     /// Декодированные sfnt-байты (TrueType / OTF после WOFF/WOFF2-распаковки).
     pub(crate) bytes: Vec<u8>,
 }
