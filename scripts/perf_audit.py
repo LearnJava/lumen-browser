@@ -146,9 +146,6 @@ def network_failures(text: str, url: str) -> list[str]:
     return out
 
 
-HEALTH_LOG_PATH = REPO_ROOT / "health.log"
-
-
 def read_health_events(path: Path, pos: int) -> tuple[list[dict], int]:
     """Новые строки `health.log` (JSONL) с позиции pos; битые строки пропускаются."""
     try:
@@ -635,7 +632,7 @@ class LiveBrowser:
         self.log_path = self.out_dir / f"live.stderr.{self.restarts}.log"
         log = self.log_path.open("wb")
         env = os.environ.copy()
-        env["LUMEN_HEALTH_LOG"] = "1"  # engine truncates health.log on init — per-process, not per-site
+        env["LUMEN_HEALTH_LOG"] = "1"
         self.proc = subprocess.Popen(
             [str(self.exe), "--mcp-live-port", str(port), "--maximized", "about:blank"],
             stdout=subprocess.DEVNULL, stderr=log, cwd=str(REPO_ROOT), env=env,
@@ -643,11 +640,16 @@ class LiveBrowser:
         self.mcp = Mcp(port, self.timeout, self.log_path)
         self.hung.watch_pid(self.proc.pid)
         self.ram.watch(self.proc)
+        # BUG-991: the engine names its journal after its own pid and only ever
+        # appends to it, so each restart gets a fresh file instead of the next
+        # process truncating the previous one's records away — track that path
+        # per-process rather than assuming a single fixed `health.log`.
+        self.health_log_path = REPO_ROOT / f"health.{self.proc.pid}.log"
         self.health_log_pos = 0
 
     def health_events_since(self, pos: int) -> tuple[list[dict], int]:
-        """Новые записи health.log (broken_render/panic/…) с позиции pos."""
-        return read_health_events(HEALTH_LOG_PATH, pos)
+        """Новые записи health.<pid>.log (broken_render/panic/…) с позиции pos."""
+        return read_health_events(self.health_log_path, pos)
 
     def stderr_since(self, pos: int) -> str:
         """Сырой фрагмент stderr с позиции pos: сетевой лог (← status, ✗ сбой), сообщения движка."""

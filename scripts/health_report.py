@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Session-health report over `health.log` (дорожка PERF, PERF-6).
+"""Session-health report over `health.<pid>.log` (дорожка PERF, PERF-6).
 
 Читает локальный приватный «журнал здоровья сессии», который движок пишет под
 флагом `--health-log` / `--activity-log` / `LUMEN_HEALTH_LOG=1`
@@ -7,6 +7,13 @@
 приоритизацию P3-багфиксов ПО ЧАСТОТЕ ВСТРЕЧАЕМОСТИ в реальном браузинге —
 а не по случайным находкам. Аналог того, как graphic_tests ловят пиксельные
 регрессии, только здесь единица — «сколько раз это укусило пользователя».
+
+Движок именует журнал по своему pid и только дописывает в него (BUG-991) —
+один прогон, который перезапускал окно N раз, оставляет N файлов
+`health.<pid>.log`. Без явного аргумента отчёт сам находит и склеивает всю
+такую серию в рабочем каталоге (плюс устаревшее одиночное `health.log`, если
+где-то ещё лежит) — так число «X белых экранов» в отчёте не оказывается
+нижней границей по последнему процессу.
 
 Никакого нового кода в движке для самого отчёта: движок эмитит сырые записи
 JSON Lines, скрипт агрегирует. Каждая строка `health.log` — самодостаточный
@@ -27,8 +34,9 @@ JSON-объект с полем `kind`:
 читает локальный файл, ничего не отправляет.
 
 Примеры:
-  python scripts/health_report.py                    # отчёт по ./health.log
-  python scripts/health_report.py path/to/health.log
+  python scripts/health_report.py                    # серия health.*.log из ./
+  python scripts/health_report.py path/to/health.log  # один конкретный файл
+  python scripts/health_report.py "runs/2026-09-04/health.*.log"  # своя серия
   python scripts/health_report.py --top 20
   python scripts/health_report.py --json             # машинный вывод
   python scripts/health_report.py --kind panic       # только паники
@@ -38,7 +46,9 @@ JSON-объект с полем `kind`:
 from __future__ import annotations
 
 import argparse
+import glob
 import json
+import os
 import re
 import sys
 from collections import Counter, defaultdict
@@ -96,6 +106,29 @@ def normalize_detail(kind: str, detail: str) -> str:
     if kind == "panic":
         s = s.split("\\n", 1)[0]
     return s[:160]
+
+
+def discover_logs(pattern: str | None) -> list[str]:
+    """Найти файлы журнала одного прогона (BUG-991).
+
+    Без явного `pattern` собирает всю серию `health.*.log` в рабочем каталоге
+    (по одному файлу на процесс, движок дописывает в свой и не трогает чужие)
+    плюс устаревшее одиночное `health.log`, если такое ещё лежит рядом.
+    Явный `pattern` может быть путём к одному файлу или glob-маской
+    (`"runs/x/health.*.log"`) — в этом случае ищем только по ней.
+
+    Порядок — по времени изменения (старые первыми), чтобы записи читались в
+    порядке их появления, как один непрерывный журнал.
+    """
+    if pattern is None:
+        candidates = set(glob.glob("health.log")) | set(glob.glob("health.*.log"))
+    elif any(ch in pattern for ch in "*?["):
+        candidates = set(glob.glob(pattern))
+    else:
+        candidates = {pattern}
+    files = [p for p in candidates if os.path.isfile(p)]
+    files.sort(key=lambda p: os.path.getmtime(p))
+    return files
 
 
 def parse_health_log(text: str) -> list[dict]:
@@ -251,13 +284,54 @@ def run_selftest() -> int:
     only_panic = aggregate(records, kind_filter="panic")
     assert only_panic["total_problems"] == 1, only_panic
 
+    _selftest_discover_logs()
+
     print("health_report selftest: OK")
     return 0
 
 
+def _selftest_discover_logs() -> None:
+    """BUG-991: a run's `health.*.log` series must be found and ordered — the
+    old single-file `health.log` truncated everything from earlier processes
+    away, this replaces it."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        prev_cwd = os.getcwd()
+        os.chdir(tmp)
+        try:
+            # No files yet — nothing to discover, not an error.
+            assert discover_logs(None) == []
+
+            # Write in reverse pid order but stamp mtimes so process 111 (which
+            # started first) sorts before 222, matching a real restart series.
+            open("health.111.log", "w", encoding="utf-8").close()
+            os.utime("health.111.log", (1000, 1000))
+            open("health.222.log", "w", encoding="utf-8").close()
+            os.utime("health.222.log", (2000, 2000))
+            open("unrelated.log", "w", encoding="utf-8").close()
+
+            found = discover_logs(None)
+            assert found == ["health.111.log", "health.222.log"], found
+
+            # An explicit single path is not glob-expanded.
+            assert discover_logs("health.111.log") == ["health.111.log"]
+
+            # An explicit glob pattern is honoured even outside the default set.
+            assert discover_logs("health.*.log") == ["health.111.log", "health.222.log"]
+        finally:
+            os.chdir(prev_cwd)
+
+
 def main(argv: list[str]) -> int:
-    ap = argparse.ArgumentParser(description="Session-health report over health.log (PERF-6).")
-    ap.add_argument("logfile", nargs="?", default="health.log", help="path to health.log (default: ./health.log)")
+    ap = argparse.ArgumentParser(description="Session-health report over health.<pid>.log (PERF-6).")
+    ap.add_argument(
+        "logfile",
+        nargs="?",
+        default=None,
+        help="path to one health log, or a glob like 'health.*.log' "
+        "(default: every health.*.log / health.log in the working directory, oldest first)",
+    )
     ap.add_argument("--top", type=int, default=15, help="how many hosts/issues to list (default 15)")
     ap.add_argument("--kind", choices=sorted(PROBLEM_KINDS), help="restrict report to one problem kind")
     ap.add_argument("--json", action="store_true", help="emit machine-readable JSON instead of text")
@@ -267,13 +341,22 @@ def main(argv: list[str]) -> int:
     if args.selftest:
         return run_selftest()
 
-    try:
-        with open(args.logfile, "r", encoding="utf-8") as f:
-            text = f.read()
-    except OSError as e:
-        print(f"cannot read {args.logfile}: {e}", file=sys.stderr)
+    paths = discover_logs(args.logfile)
+    if not paths:
+        target = args.logfile or "health.log / health.*.log"
+        print(f"cannot find {target}", file=sys.stderr)
         print("(run the browser with --health-log to produce one)", file=sys.stderr)
         return 1
+
+    chunks = []
+    for p in paths:
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                chunks.append(f.read())
+        except OSError as e:
+            print(f"cannot read {p}: {e}", file=sys.stderr)
+            return 1
+    text = "\n".join(chunks)
 
     records = parse_health_log(text)
     agg = aggregate(records, kind_filter=args.kind)
