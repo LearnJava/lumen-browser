@@ -766,6 +766,15 @@ pub(crate) struct LoadedFace {
     /// `None` — face не распарсился при загрузке; такие face пропускаются
     /// в каскаде (эквивалент прежнего `Option<ParsedFace>` = None).
     pub(crate) metrics: Option<FaceMetrics>,
+    /// `unicode-range` дескриптор `@font-face` (CSS Fonts L4 §5.1), скопирован
+    /// из `FaceRecord::unicode_ranges` при загрузке. Пустой `Vec` — системные
+    /// face-ы и `@font-face` без дескриптора — без ограничений.
+    ///
+    /// FONTLOAD-9 (BUG-467): `pick_face_for_codepoint` фильтрует по этому
+    /// полю ДО обращения к `cmap` — заявленный диапазон обязан побеждать
+    /// случайное покрытие cmap (см. `lumen_core::codepoint_in_face_ranges`
+    /// doc-comment и BUG-434 в `subsystems/font.md`).
+    pub(crate) unicode_ranges: Vec<(u32, u32)>,
 }
 
 /// Owned-метрики face-а, независимые от лайфтайма `bytes`. Живут в

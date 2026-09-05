@@ -115,6 +115,14 @@ impl FontRegistry {
             // правила одного семейства по stretch этой схемой нельзя.
             stretch: NORMAL_STRETCH_PERCENT,
             path: virt_path.clone(),
+            // FONTLOAD-9 (BUG-467): заявленный диапазон теперь доезжает и до
+            // самой записи, не только до идентичности виртуального пути —
+            // `lumen-paint`'s `pick_face_for_codepoint` использует его, чтобы
+            // отличать декларативное ограничение от случайного покрытия cmap
+            // (WPT `font-face-unicode-range.html` даёт двум непересекающимся
+            // диапазонам ОДИН файл шрифта именно чтобы поймать реализацию,
+            // которая смотрит только на cmap).
+            unicode_ranges: unicode_range.iter().map(|r| (r.start, r.end)).collect(),
         };
 
         let key = family.to_ascii_lowercase();
@@ -320,6 +328,36 @@ mod tests {
             .collect();
         assert!(bytes.contains(&vec![1u8, 2]), "latin subset bytes must survive");
         assert!(bytes.contains(&vec![3u8, 4]), "cyrillic subset bytes must survive");
+    }
+
+    #[test]
+    fn face_record_carries_declared_unicode_range() {
+        // FONTLOAD-9 (BUG-467): до этого среза `unicode_range` участвовал
+        // только в идентичности виртуального пути (BUG-434) и терялся —
+        // `FaceRecord.unicode_ranges` был всегда пуст. `pick_face_for_codepoint`
+        // (lumen-paint) не может отличить декларативное ограничение от
+        // случайного покрытия cmap без этого поля.
+        // Family name deliberately not a real system font (Windows ships an
+        // "Impact" font — `lookup_faces` merges system + custom records, and
+        // the system record's `unicode_ranges` is always empty, so a real
+        // font name here would flakily pick the wrong record).
+        let reg = FontRegistry::new();
+        let latin = parse_unicode_ranges("U+0041-0044");
+        reg.register_from_bytes("LumenTestSubsetFamily", 400, FontStyle::Normal, &latin, vec![1, 2]);
+
+        let faces = reg.lookup_faces("LumenTestSubsetFamily");
+        let face = faces.iter().find(|f| f.weight == 400).unwrap();
+        assert_eq!(face.unicode_ranges, vec![(0x41, 0x44)]);
+    }
+
+    #[test]
+    fn face_record_unicode_range_empty_when_descriptor_absent() {
+        let reg = FontRegistry::new();
+        reg.register_from_bytes("NoRange", 400, FontStyle::Normal, &[], vec![1, 2]);
+
+        let faces = reg.lookup_faces("NoRange");
+        let face = faces.iter().find(|f| f.weight == 400).unwrap();
+        assert!(face.unicode_ranges.is_empty());
     }
 
     #[test]

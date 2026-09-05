@@ -261,8 +261,12 @@ impl Renderer {
             return;
         };
         // Кандидаты: путь + байты из провайдера (@font-face virtual path)
-        // либо None → fs::read в воркере.
-        let mut jobs: Vec<(PathBuf, Option<Arc<[u8]>>)> = Vec::new();
+        // либо None → fs::read в воркере + заявленный unicode-range записи
+        // (FONTLOAD-9) — иначе прогретый параллельно primary face потерял бы
+        // диапазон, который `load_face_by_record` (последовательный путь)
+        // проставил бы верно, но эта функция его опережает.
+        type PrefetchJob = (PathBuf, Option<Arc<[u8]>>, Vec<(u32, u32)>);
+        let mut jobs: Vec<PrefetchJob> = Vec::new();
         let mut seen_keys: std::collections::HashSet<u64> = std::collections::HashSet::new();
         let mut scheduled: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
         for cmd in content.iter().chain(overlay.iter()) {
@@ -300,7 +304,7 @@ impl Renderer {
                 {
                     let mem = provider.read_face_bytes(&rec.path);
                     scheduled.insert(rec.path.clone());
-                    jobs.push((rec.path, mem));
+                    jobs.push((rec.path, mem, rec.unicode_ranges.clone()));
                 }
                 break; // как в резолве: первый pick_face-хит завершает перебор
             }
@@ -325,7 +329,7 @@ impl Renderer {
                 s.spawn(|| {
                     loop {
                         let i = cursor.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some((path, mem)) = jobs.get(i) else {
+                        let Some((path, mem, _)) = jobs.get(i) else {
                             break;
                         };
                         // `mem` (Arc из @font-face-реестра) клонируется как
@@ -358,13 +362,13 @@ impl Renderer {
             }
         });
 
-        for ((path, _), slot) in jobs.into_iter().zip(results) {
+        for ((path, _, unicode_ranges), slot) in jobs.into_iter().zip(results) {
             let Ok(mut guard) = slot.lock() else { continue };
             let Some((bytes, metrics)) = guard.take() else {
                 continue; // битый шрифт: последовательный резолв повторит и залогирует
             };
             let id = self.faces.len();
-            self.faces.push(LoadedFace { bytes, metrics: Some(metrics) });
+            self.faces.push(LoadedFace { bytes, metrics: Some(metrics), unicode_ranges });
             self.face_id_by_path.insert(path, id);
         }
     }
@@ -406,7 +410,11 @@ impl Renderer {
             return None;
         };
         let id = self.faces.len();
-        self.faces.push(LoadedFace { bytes, metrics: Some(metrics) });
+        self.faces.push(LoadedFace {
+            bytes,
+            metrics: Some(metrics),
+            unicode_ranges: rec.unicode_ranges.clone(),
+        });
         self.face_id_by_path.insert(rec.path.clone(), id);
         Some(id)
     }

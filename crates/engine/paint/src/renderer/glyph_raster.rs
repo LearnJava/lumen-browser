@@ -791,18 +791,37 @@ pub(crate) fn push_text_glyphs_mixed(
 /// `(primary, 0)` (отрисовать .notdef из primary).
 ///
 /// Работает на owned `FaceMetrics.cmap` — без парсинга шрифтов.
+///
+/// FONTLOAD-9 (BUG-467): каждый кандидат сначала фильтруется по заявленному
+/// `unicode-range` (`LoadedFace::unicode_ranges`,
+/// [`lumen_core::codepoint_in_face_ranges`]) — пустой список (нет дескриптора)
+/// проходит фильтр всегда, поэтому системные face-ы и обычные web-шрифты не
+/// затронуты. Раньше выбор шёл ИСКЛЮЧИТЕЛЬНО по покрытию cmap (решение
+/// BUG-434, `subsystems/font.md`); это совпадает с заявленным диапазоном,
+/// только когда файл-сабсет физически не содержит глифов вне него. WPT
+/// `css/css-fonts/font-face-unicode-range.html` даёт двум `@font-face` с
+/// непересекающимися диапазонами ОДИН И ТОТ ЖЕ файл шрифта именно чтобы
+/// поймать реализацию, которая смотрит только на cmap — без этого фильтра
+/// `face-family: NOIMPACT` (диапазон `U+0061-0064`, строчные) ошибочно
+/// применялся бы и к заглавным `ABCDEFG`, потому что тот же файл содержит их
+/// глифы под именем `IMPACT`.
 fn pick_face_for_codepoint(
     cp: u32,
     primary_face_id: usize,
     faces: &[LoadedFace],
 ) -> (usize, u16) {
-    if let Some(m) = faces.get(primary_face_id).and_then(|f| f.metrics.as_ref())
+    if let Some(primary) = faces.get(primary_face_id)
+        && lumen_core::codepoint_in_face_ranges(cp, &primary.unicode_ranges)
+        && let Some(m) = primary.metrics.as_ref()
         && let Some(gid) = m.cmap.glyph_index(cp).filter(|&g| g != 0)
     {
         return (primary_face_id, gid);
     }
     for (idx, face) in faces.iter().enumerate() {
         if idx == primary_face_id {
+            continue;
+        }
+        if !lumen_core::codepoint_in_face_ranges(cp, &face.unicode_ranges) {
             continue;
         }
         if let Some(m) = face.metrics.as_ref()
@@ -923,4 +942,70 @@ fn rasterize_and_insert(
         top: bitmap.top,
         advance_native,
     })
+}
+
+#[cfg(test)]
+mod pick_face_for_codepoint_tests {
+    use super::*;
+
+    static INTER: &[u8] = include_bytes!("../../../../../assets/fonts/Inter-Regular.ttf");
+
+    fn face_with_range(ranges: Vec<(u32, u32)>) -> LoadedFace {
+        LoadedFace {
+            bytes: Arc::from(INTER),
+            metrics: build_face_metrics(INTER),
+            unicode_ranges: ranges,
+        }
+    }
+
+    /// Mirrors WPT `css/css-fonts/font-face-unicode-range.html`: two
+    /// `@font-face` rules share ONE font file (`LigatureSymbolsWithSpaces.woff`
+    /// there, `Inter-Regular.ttf` here) but declare disjoint `unicode-range`.
+    /// The descriptor must win over the fact that the shared file's `cmap`
+    /// actually covers both ranges — before FONTLOAD-9, `pick_face_for_codepoint`
+    /// looked only at `cmap` (BUG-434) and would have used either face for
+    /// either codepoint.
+    #[test]
+    fn declared_range_wins_over_accidental_cmap_coverage() {
+        let uppercase_only = face_with_range(vec![(0x41, 0x5A)]); // A-Z
+        let lowercase_only = face_with_range(vec![(0x61, 0x7A)]); // a-z
+        let faces = [uppercase_only, lowercase_only];
+
+        // primary = face 0 (A-Z only): 'a' is outside its declared range, so
+        // it must fall through to face 1 even though Inter's cmap does have
+        // a lowercase glyph in face 0's own table too.
+        let (face_id, glyph_id) = pick_face_for_codepoint('a' as u32, 0, &faces);
+        assert_eq!(face_id, 1, "'a' is outside face 0's declared range — must fall through");
+        assert_ne!(glyph_id, 0, "face 1 must resolve a real glyph for 'a'");
+
+        // Symmetric: primary = face 1 (a-z only), asking for 'A' must fall
+        // through to face 0.
+        let (face_id, glyph_id) = pick_face_for_codepoint('A' as u32, 1, &faces);
+        assert_eq!(face_id, 0, "'A' is outside face 1's declared range — must fall through");
+        assert_ne!(glyph_id, 0, "face 0 must resolve a real glyph for 'A'");
+    }
+
+    /// No `unicode-range` descriptor (empty `Vec`, the common case for both
+    /// system fonts and most `@font-face` rules) must not restrict anything —
+    /// this is the pre-FONTLOAD-9 behaviour, unchanged.
+    #[test]
+    fn unrestricted_face_matches_any_codepoint() {
+        let unrestricted = face_with_range(Vec::new());
+        let faces = [unrestricted];
+        let (face_id, glyph_id) = pick_face_for_codepoint('A' as u32, 0, &faces);
+        assert_eq!(face_id, 0);
+        assert_ne!(glyph_id, 0);
+    }
+
+    /// A codepoint outside every loaded face's declared range still falls
+    /// back to `(primary, 0)` — draws `.notdef` from the primary face,
+    /// exactly like the pre-existing missing-glyph fallback.
+    #[test]
+    fn codepoint_outside_every_range_falls_back_to_primary_notdef() {
+        let restricted = face_with_range(vec![(0x41, 0x5A)]); // A-Z only
+        let faces = [restricted];
+        let (face_id, glyph_id) = pick_face_for_codepoint('!' as u32, 0, &faces);
+        assert_eq!(face_id, 0);
+        assert_eq!(glyph_id, 0);
+    }
 }

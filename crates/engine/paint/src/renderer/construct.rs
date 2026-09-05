@@ -897,11 +897,16 @@ impl Renderer {
         let mut faces = vec![LoadedFace {
             metrics: build_face_metrics(&font_bytes),
             bytes: Arc::from(font_bytes),
+            unicode_ranges: Vec::new(),
         }];
         let push_chrome_face = |faces: &mut Vec<LoadedFace>, bytes: &'static [u8]| {
             build_face_metrics(bytes).map(|metrics| {
                 let id = faces.len();
-                faces.push(LoadedFace { metrics: Some(metrics), bytes: Arc::from(bytes) });
+                faces.push(LoadedFace {
+                    metrics: Some(metrics),
+                    bytes: Arc::from(bytes),
+                    unicode_ranges: Vec::new(),
+                });
                 id
             })
         };
