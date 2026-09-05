@@ -264,6 +264,27 @@ pub(crate) fn install_match_media(
     Ok(())
 }
 
+/// `true` when `value` contains an `env(...)` call whose parens hold nothing
+/// but whitespace (`env()`, `env(   )`) — syntactically invalid per CSS
+/// Environment Variables L1 (`env() = env( <custom-ident> , ... )`, the name
+/// is mandatory). Case-insensitive to match `ENV(` per CSS Syntax's function
+/// token rules. Plain substring scan, not a real parse: good enough to reject
+/// the one malformed shape `CSS.supports()` is spec-required to reject
+/// ([BUG-514](../../../../../../bugs/BUG-514-OPEN.md)) without pulling in
+/// `lumen_layout::style::substitute`'s `pub(crate)` balanced-paren scanner.
+fn value_has_empty_env_call(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let mut search_from = 0;
+    while let Some(rel_pos) = lower[search_from..].find("env(") {
+        let after_paren = search_from + rel_pos + "env(".len();
+        if value[after_paren..].trim_start().starts_with(')') {
+            return true;
+        }
+        search_from = after_paren;
+    }
+    false
+}
+
 /// `CSS.supports()` backing — and, sharing the region, the lazy-image load queue.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_css_supports_and_lazy_images(
@@ -282,11 +303,21 @@ pub(crate) fn install_css_supports_and_lazy_images(
     // one-argument `SupportsCondition::evaluate` path (BUG-502 gap 1: this
     // two-argument path never got it, so `CSS.supports('--my-angle', …)`
     // stayed `false` for every registered custom property).
+    //
+    // One narrow exception to "value is ignored" (BUG-514): `env()` (CSS
+    // Environment Variables L1) requires a `<custom-ident>` name argument —
+    // `env()` with nothing inside its parens is syntactically invalid, so
+    // `CSS.supports('background', 'env()')` must answer `false` even though
+    // `background` itself is supported. `env(name)`/`env(name, fallback)` —
+    // any non-empty content before the closing paren — stay `true`.
     reg!(scope, ctx, store,
         "_lumen_css_supports_prop",
-        |prop: String, _value: String| -> bool {
+        |prop: String, value: String| -> bool {
             if prop.starts_with("--") {
                 return true;
+            }
+            if value_has_empty_env_call(&value) {
+                return false;
             }
             lumen_css_parser::SUPPORTED_PROPERTIES
                 .iter()
@@ -965,4 +996,27 @@ pub(crate) fn install_crypto_and_typed_om(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::value_has_empty_env_call;
+
+    #[test]
+    fn empty_env_call_detected() {
+        assert!(value_has_empty_env_call("env()"));
+        assert!(value_has_empty_env_call("env(  )"));
+        assert!(value_has_empty_env_call("background: env()"));
+    }
+
+    #[test]
+    fn non_empty_env_call_not_flagged() {
+        assert!(!value_has_empty_env_call("env(test)"));
+        assert!(!value_has_empty_env_call("env(test, 10px)"));
+        assert!(!value_has_empty_env_call("foobar(env(test))"));
+        assert!(!value_has_empty_env_call("env(test, )"));
+        assert!(!value_has_empty_env_call("env(test,)"));
+        assert!(!value_has_empty_env_call("ENV(test)"));
+        assert!(!value_has_empty_env_call("red"));
+    }
 }
