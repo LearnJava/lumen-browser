@@ -33,7 +33,7 @@ DOM §4.2.10: `HTMLCollection` обязан иметь `length`, `item(index)` �
 
 ## Класс дефекта
 
-Тот же, что [BUG-715](BUG-715-OPEN.md) (`DOMTokenList`/`CSSStyleDeclaration`
+Тот же, что [BUG-715](BUG-715-FIXED.md) (`DOMTokenList`/`CSSStyleDeclaration`
 собраны ad-hoc литералами вместо интерфейсов) и
 [BUG-694](BUG-694-FIXED.md) (`URLSearchParams` без `Symbol.iterator`): объект
 похож на нужный интерфейс по форме, но не по поведению. Эти два остаются
