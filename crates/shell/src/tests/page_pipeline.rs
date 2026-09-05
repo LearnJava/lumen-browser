@@ -1212,3 +1212,36 @@ fn fontload4_document_fonts_sync_read_sees_font_face_rules() {
     );
     assert_eq!(probe_attr(&page, "data-sync"), "1");
 }
+
+/// FONTLOAD-5: a `url()`-sourced `@font-face` rule (nothing resolves it
+/// locally) is populated into `document.fonts` as `Loading`, not the
+/// constructor's `Unloaded` default — a synchronous top-level
+/// `document.fonts.ready.then(...)` (this whole track's target pattern) must
+/// see it as pending from its very first touch, not as "nothing to wait
+/// for" (`bugs/BUG-467-OPEN.md`).
+#[cfg(feature = "v8")]
+#[test]
+fn fontload5_url_sourced_face_is_populated_as_loading() {
+    let page = parse_and_layout_for_test(
+        "<html><head><style>@font-face{font-family:'Probe';src:url('missing.woff')}</style></head>\
+         <body><script>document.documentElement.setAttribute('data-status', document.fonts.status);\
+         </script></body></html>",
+    );
+    assert_eq!(probe_attr(&page, "data-status"), "loading");
+}
+
+/// FONTLOAD-5 guard: a rule with an unresolvable `local()` and no `url()`
+/// fallback at all is never queued for any background fetch — marking it
+/// `Loading` like the case above would leave `document.fonts.ready` pending
+/// forever instead of fixing anything, so it must stay `Unloaded`.
+#[cfg(feature = "v8")]
+#[test]
+fn fontload5_unresolvable_local_only_face_stays_unloaded() {
+    let page = parse_and_layout_for_test(
+        "<html><head><style>@font-face{font-family:'Probe';src:local('Nobody Has This Font')}\
+         </style></head><body><script>var f; document.fonts.forEach(function(x){ f = x; });\
+         document.documentElement.setAttribute('data-face-status', f.status);\
+         </script></body></html>",
+    );
+    assert_eq!(probe_attr(&page, "data-face-status"), "unloaded");
+}

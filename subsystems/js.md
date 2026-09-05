@@ -1710,14 +1710,31 @@ the time — read dates.
   calls `_lumen_font_face_load_start`/`_load_end`, which look the face up in
   the map and notify every owning set. A `FontFace` never added to a set
   loads silently, same as the spec. **(3)** `document.fonts.ready`/`.status`
-  (the SET's aggregate) deliberately count only loads started through
-  `FontFace.load()`/`document.fonts.load()`, never a CSS-declared `url()`
-  source's native status — wiring a passive CSS completion into the shared
-  `_pending` counter risks resolving `ready` while an unrelated concurrent
-  script-driven `.load()` is still in flight (the counter has no per-face
-  slot, only a running total), which would turn every existing
-  `document.fonts.ready.then(...)` layout gate already relied on throughout
-  css-fonts/css-sizing/css-ruby into a promise that never resolves. FONTLOAD-2
+  (the SET's aggregate) **since FONTLOAD-5** (2026-09-05) also count a
+  CSS-declared `url()` face's native fetch — `crates/shell/src/page_pipeline.rs`
+  marks such a face `Loading` (not the constructor's `Unloaded` default) at
+  population time, so its very first JS snapshot
+  (`_lumen_make_font_face_set`) sees `Loading` and seeds `_pending` for it
+  via a dedicated `_cssFetchPending` flag; each such face is registered into
+  `_lumen_font_face_owners` at construction too (previously only
+  `FontFaceSet.add()` did that, so a CSS-connected face had no owner to
+  notify at all). `_cssFetchPending` is deliberately **not** `_status` —
+  `FontFace.load()` still gates its own independent fetch on `_status`
+  alone, so calling `.load()` on a CSS-connected face mid-fetch still gets
+  its own real fetch+promise instead of one tied to the native background
+  fetch (fire-and-forget, drops silently on failure, `page_load.rs`) — tying
+  `.load()` to that promise turned `fontfaceset-load-css-connected.html`
+  from a WPT `FAIL` into a `TIMEOUT` during this slice's own measurement,
+  which is how the two got split apart. `_lumen_notify_css_font_loaded`
+  pairs off `_cssFetchPending` independently of whether a racing script
+  `.load()` already resolved `_status` to `'loaded'` on its own — otherwise
+  a race between the two would leave `_pending` permanently incremented.
+  Before this slice, every `document.fonts.ready.then(...)` layout gate
+  throughout css-fonts/css-sizing/css-ruby relied on staying
+  script-driven-only instead — that constraint is gone; a rule with neither
+  a resolvable `local()` nor any `url()` source at all still stays
+  `Unloaded` (nothing will ever load it, so counting it would hang `ready`
+  forever). FONTLOAD-2
   (2026-09-05, interactive shell only) DOES resolve the PER-INSTANCE
   `FontFace.status`/`.loaded` for a CSS-connected `url()` face once its
   background fetch completes — `crates/shell/src/app/user_event.rs`'s

@@ -654,13 +654,24 @@ pub(crate) fn parse_and_layout(
     // for CSS-connected reactivity, not a new regression).
     for rule in &cascade.sheet.font_faces {
         let mut font_face = rule_to_font_face(rule);
-        // local() rules already resolved — mark Loaded; url() rules stay Loading.
+        // local() rules already resolved — mark Loaded; url() rules queued
+        // for the background fetch `apply_loaded_page` spawns — mark
+        // Loading, not left at the constructor's `Unloaded` default
+        // (FONTLOAD-5, `bugs/BUG-467-OPEN.md`): a synchronous top-level
+        // `document.fonts.ready.then(...)` read (this whole track's target
+        // pattern) needs to see this face as pending, not as "nothing to
+        // wait for", or `ready` resolves before the fetch even starts. A
+        // rule with neither (unresolved local() and no url() fallback at
+        // all) stays `Unloaded` — nothing will ever load it, so marking it
+        // `Loading` would leave `ready` pending forever instead.
         let has_local = rule.sources.iter().any(|s| {
             s.kind == lumen_css_parser::FontFaceSourceKind::Local
                 && cascade.font_registry.face_bytes_for_family(&rule.family).is_some()
         });
         if has_local {
             font_face.status = lumen_dom::FontFaceStatus::Loaded;
+        } else if rule.sources.iter().any(|s| s.kind == lumen_css_parser::FontFaceSourceKind::Url) {
+            font_face.status = lumen_dom::FontFaceStatus::Loading;
         }
         doc.fonts_mut().add(font_face);
     }

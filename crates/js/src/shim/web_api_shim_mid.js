@@ -7355,20 +7355,28 @@ var console = {
 // empty for the page's whole life — population now runs against the
 // pre-script cascade, ahead of the scripts, mirroring driver's ordering.
 //
-// Still open, both real engine gaps, not oversights:
+// FONTLOAD-5 (2026-09-05) closed gap (2) below: a CSS-connected face whose
+// `url()` source is queued for the background fetch is now native-side
+// `Loading` (not `Unloaded`) from the moment `document.fonts` is first
+// populated — before any script runs, per FONTLOAD-4's ordering
+// (`crates/shell/src/page_pipeline.rs`) — so a face's very first JS
+// snapshot already counts it into the set's shared pending counter (see
+// `_lumen_make_font_face_set` below) via a dedicated `_cssFetchPending` flag,
+// paired off exactly once by `_lumen_notify_css_font_loaded`. Deliberately
+// tracked separately from `_status`/`_loadedPromise`: those stay untouched
+// until either this native completion or a script's own `.load()` call
+// resolves them, so `.load()` still gets its own independent fetch+promise
+// instead of one tied to the native background fetch, which is
+// fire-and-forget and drops silently on failure — hanging that promise
+// forever would regress every `FontFace.load()`/`FontFaceSet.load()` caller,
+// not just a passive `.ready` gate.
+//
+// Still open, one real engine gap, not an oversight:
 // (1) **CSS-connected faces are a one-time snapshot.** They are read from
 //     native once, when `document.fonts` is first touched — a later
 //     `<style>`/CSSOM change that adds or removes an `@font-face` rule is not
-//     reflected, on either path.
-// (2) **The set's `.ready`/`.status` still track only script-driven loads**
-//     (`FontFace.load()` / `document.fonts.load()`), never a passive CSS
-//     one — wiring a CSS-connected completion into the shared pending
-//     counter risks resolving `ready` while an unrelated concurrent
-//     script-driven `.load()` is still in flight (the counter has no
-//     per-face slot, only a running total). Every existing
-//     `document.fonts.ready.then(...)` layout gate throughout
-//     css-fonts/css-sizing/css-ruby depends on this staying script-driven
-//     only — a regression here is a correctness bug, not a missed feature.
+//     reflected, on either path (needs the same live-cascade foundation
+//     BUG-471/CSSOM-4 does).
 
 function _lumen_parse_font_face_json(jsonStr) {
     try {
@@ -7613,10 +7621,15 @@ function _lumen_parse_font_shorthand_families(fontStr) {
 // identity, `instanceof`, and `.load()` all behave the same as a
 // script-constructed one. A native status of "loaded" (a resolved `local()`
 // source, resolved at cascade build time) maps straight through; anything
-// else — including the native "loading" a `url()` source never leaves today
-// (see this section's header, gap 2) — is surfaced as "unloaded" so that an
-// explicit, script-driven `.load()` call can still genuinely fetch and
-// validate it instead of returning a promise nothing will ever settle.
+// else surfaces as "unloaded" so that an explicit, script-driven `.load()`
+// call still genuinely fetches and validates it independently, through its
+// own promise — `_cssFetchPending` below (FONTLOAD-5) tracks a native `url()`
+// fetch already in flight separately from `_status`/`_loadedPromise`
+// precisely so `.load()` never inherits *that* promise: the native
+// background fetch is fire-and-forget and drops silently on failure
+// (`crates/shell/src/page_load.rs`), so a script's own `.load()` tied to it
+// could hang forever instead of getting its own fetch's real
+// resolve-or-reject.
 function _lumen_wrap_css_font_face(json) {
     var face = Object.create(FontFace.prototype);
     face._family = json.family;
@@ -7634,6 +7647,7 @@ function _lumen_wrap_css_font_face(json) {
         face._loadedPromise = Promise.resolve(face);
         face._resolveLoaded = function() {};
         face._rejectLoaded = function() {};
+        face._cssFetchPending = false;
     } else {
         face._status = 'unloaded';
         face._resolveLoaded = null;
@@ -7642,6 +7656,12 @@ function _lumen_wrap_css_font_face(json) {
             face._resolveLoaded = resolve;
             face._rejectLoaded = reject;
         });
+        // FONTLOAD-5: a native 'loading' status means the background url()
+        // fetch was already in flight when this snapshot was built — the
+        // caller seeds the set's shared pending counter for it (see
+        // `_lumen_make_font_face_set`), independently of `_status` staying
+        // 'unloaded' above.
+        face._cssFetchPending = json.status === 'loading';
     }
     return face;
 }
@@ -7750,21 +7770,40 @@ function _lumen_make_font_face_set() {
         if (!jsonStr) continue;
         var json = _lumen_parse_font_face_json(jsonStr);
         if (!json) continue;
-        set._members.add(_lumen_wrap_css_font_face(json));
+        var face = _lumen_wrap_css_font_face(json);
+        set._members.add(face);
+        // FONTLOAD-5: CSS-connected faces bypass `FontFaceSet.prototype.add`
+        // (no script ever calls it for them), so without this they'd have no
+        // registered owner and `_lumen_font_face_load_start`/`_load_end`
+        // below would silently no-op for them (`owners.get(face)` undefined)
+        // — the same reason gap (2) existed before this slice.
+        var owners = _lumen_font_face_owners.get(face);
+        if (!owners) { owners = []; _lumen_font_face_owners.set(face, owners); }
+        if (owners.indexOf(set) === -1) owners.push(set);
+        // A face whose background fetch was already queued at population
+        // time (before this — or any — script ran, see `page_pipeline.rs`)
+        // has no separate "start" event to react to — seed the pending
+        // counter for it right here instead.
+        if (face._cssFetchPending) _lumen_font_face_load_start(face);
     }
     return set;
 }
 
-// FONTLOAD-2: pushed from the shell's background @font-face `url()` fetch
+// FONTLOAD-2/5: pushed from the shell's background @font-face `url()` fetch
 // completing (`crates/shell/src/app/user_event.rs`'s `LoadEvent::FontLoaded`
 // handler, via `route_eval_js`). Native `Document::fonts` already has this
 // face's status flipped to "loaded" by the time this runs (same handler,
 // before the eval); this only has JS-visible work to do if `document.fonts`
 // was already built — an untouched one reads the fresh status on its own
-// first, still-pending build, no push needed. Resolves the matching
-// CSS-connected `FontFace`'s own `.status`/`.loaded` only — see this
-// section's header comment for why the set's shared `.ready`/`.status`
-// deliberately do not move here.
+// first, still-pending build, no push needed. Pairs off the set's shared
+// pending counter first, gated by `_cssFetchPending` (FONTLOAD-5) rather
+// than `_status` — a script may have raced this with its own `.load()` call
+// (see `_lumen_wrap_css_font_face`'s comment on why that stays independent),
+// which would already have flipped `_status` to `'loaded'` and resolved
+// `_loadedPromise` on its own; the pending count must still be paired off
+// in that case, or it never reaches zero again for the rest of the page's
+// life. Resolving `_loadedPromise` itself is still skip-if-already-loaded,
+// since a script's own `.load()` may have gotten there first.
 function _lumen_notify_css_font_loaded(family) {
     var set = document.__fonts__;
     if (!set) return;
@@ -7773,13 +7812,18 @@ function _lumen_notify_css_font_loaded(family) {
         var json = _lumen_parse_font_face_json(jsonList[i]);
         if (!json || json.status !== 'loaded') continue;
         set._members.forEach(function(face) {
-            if (!face._cssConnected || face._status === 'loaded') return;
+            if (!face._cssConnected) return;
             if (face._family !== json.family || face._style !== json.style ||
                 face._weight !== json.weight ||
                 (face._stretch || 'normal') !== (json.stretch || 'normal') ||
                 (face._unicodeRange || 'U+0-10FFFF') !== (json.unicodeRange || 'U+0-10FFFF')) {
                 return;
             }
+            if (face._cssFetchPending) {
+                face._cssFetchPending = false;
+                _lumen_font_face_load_end(face, true);
+            }
+            if (face._status === 'loaded') return;
             face._status = 'loaded';
             if (face._resolveLoaded) {
                 var resolve = face._resolveLoaded;

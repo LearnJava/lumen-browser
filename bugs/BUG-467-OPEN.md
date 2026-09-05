@@ -384,3 +384,76 @@ web_api_shim_mid.js` («FontFace and FontFaceSet»): она всё ещё утв
 (gap 1 из FONTLOAD-1/2, оба пути — `crates/shell` и `crates/driver`) — тот
 же больший фундамент BUG-471/CSSOM-4, что и раньше; перегенерация `.ini`
 baseline `css/css-font-loading` под WPT-RUN-7 срез 4 (см. выше).
+
+## FONTLOAD-5 (P1, 2026-09-05, ветка `p1-fontload5-css-connected-loading-signal`) — CSS-connected лицо в общем pending-счётчике сета
+
+Закрыла gap 2, оставленный FONTLOAD-1/2 как принципиально не тронутый:
+`document.fonts.ready`/`.status` (агрегат СЕТА) считали только
+script-driven загрузки (`FontFace.load()`/`document.fonts.load()`),
+никогда — фоновый CSS `url()`-фетч. Синхронный top-level
+`document.fonts.ready.then(...)` без единого явного `.load()` — тот самый
+паттерн, ради которого весь трек и existует — резолвился немедленно, даже
+если CSS-connected лицо ещё качается в фоне.
+
+Фикс в два слоя:
+
+1. **Native (`crates/shell/src/page_pipeline.rs`):** лицо с `url()`-источником,
+   который реально ставится в очередь фонового фетча (`pending_web_fonts`),
+   теперь помечается `FontFaceStatus::Loading` уже в момент заполнения
+   `document.fonts` — ДО любых скриптов страницы (тот же порядок, что
+   FONTLOAD-4 установила). Правило с неразрешённым `local()` и без `url()`
+   вовсе остаётся `Unloaded` — иначе `ready` завис бы навечно (ничего
+   никогда его не загрузит).
+2. **Шим (`crates/js/src/shim/web_api_shim_mid.js`):** `_lumen_make_font_face_set`
+   при первом касании `document.fonts` видит нативный `Loading` и сразу
+   сеет счётчик сета (`_lumen_font_face_load_start`) — плюс регистрирует
+   владельца в `_lumen_font_face_owners` для CSS-connected лиц (раньше это
+   делал только `FontFaceSet.add()`, так что у них не было владельца
+   вовсе). Флаг ожидания (`_cssFetchPending`) заведён ОТДЕЛЬНО от
+   `_status`/`_loadedPromise` — см. регрессию ниже, почему это важно.
+   `_lumen_notify_css_font_loaded` (уже существовавшая с FONTLOAD-2) теперь
+   парно закрывает счётчик через `_cssFetchPending`, независимо от того,
+   успел ли конкурентный `.load()` скрипта уже сам зарезолвить `_status`.
+
+**Найдена и исправлена собственная регрессия среза до коммита.** Первая
+версия фикса завела статус `'loading'` прямо в `face._status` (не
+отдельным флагом) — и `FontFace.prototype.load()` короткое замыкание
+`if (status === 'loading' || 'loaded') return this._loadedPromise` начало
+возвращать промис, который резолвит ТОЛЬКО нативный фоновый фетч. Тот
+фетч — fire-and-forget и молча ничего не шлёт при неудаче
+(`page_load.rs`'а тред просто `return`ится без события). Живой замер
+(`run_report.py --all --root css/css-font-loading`, A/B до/после) поймал
+это: `fontfaceset-load-css-connected.html` (снимает `<style>`, зовёт
+`fonts.load("...WebFont")`, ждёт `result.length === 0`) до среза давал
+FAIL (0 unexpected, `expected: FAIL` в `.ini` — раньше `.load()` делал
+СВОЙ независимый фетч и резолвился/реджектился быстро), после первой
+версии фикса — TIMEOUT (harness 17/27 → 16/27, единственная реальная
+регрессия, остальные 8/55 сабтестов не сдвинулись вовсе). Решение —
+развести флаг ожидания сета (`_cssFetchPending`) и `_status`, чтобы
+`.load()` продолжал делать собственный независимый фетч даже пока нативный
+фоновый фетч того же лица ещё не завершился. Финальный замер:
+17/27 harness OK / 8/55 сабтестов — байт-в-байт то же самое, что baseline
+до среза (никакого нового `UNEXPECTED-PASS`/`FAIL` в этой категории —
+ожидаемо: ни один WPT-файл здесь не гейтится ЧИСТО на `.ready` без
+`.load()`, ценность фикса ловится только целевыми Rust/JS-юнит-тестами
+ниже, не этой WPT-категорией).
+
+Тесты: `crates/shell/src/tests/page_pipeline.rs::
+fontload5_url_sourced_face_is_populated_as_loading` +
+`fontload5_unresolvable_local_only_face_stays_unloaded` (native-статус на
+заполнении); `crates/js/src/dom/tests/v8_fontface_shadow_custom.rs::
+css_connected_loading_face_counts_as_pending_on_first_touch` +
+`css_connected_load_completing_pairs_off_pending_and_resolves_ready`
+(сет-уровневый `ready`/`.status` реально ждёт и резолвится). `cargo test -p
+lumen-shell --bin lumen --features v8` 1725/1725 (было 1723, +2), `cargo
+test -p lumen-js --features v8-backend` 3464/3465 (1 давно известный
+непричастный флейк, BUG-997 — падает и на чистом `main`), `cargo clippy`
+для обоих крейтов чист.
+
+**Не входит в срез:** реактивность CSS-connected сета на CSSOM-изменения
+(gap 1, прежний фундамент BUG-471/CSSOM-4); descriptor grammar (`unicodeRange`
+и т.п. остаются `String(v)`) и подключение script-constructed `FontFace` к
+`lumen_font::FontRegistry`/рендерингу (FOUT/FOIT) — по итогам ре-скоупинга
+агентом-исследователем оба оценены как отдельный, более крупный кусок
+FONTLOAD, требующий нового js↔shell каллбэк-шва через границу слоёв, не
+один срез.

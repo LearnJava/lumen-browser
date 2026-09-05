@@ -115,6 +115,65 @@ fn document_fonts_add_and_has_and_delete_round_trip() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
+// FONTLOAD-5 (`bugs/BUG-467-OPEN.md`): a CSS-connected `url()` face is now
+// populated `Loading` (not `Unloaded`) from the moment `document.fonts` is
+// first touched, whenever its background fetch is actually queued
+// (`crates/shell/src/page_pipeline.rs`) — these pair that native state with
+// the shim's set-level pending counter the same way
+// `crates/shell/src/app/user_event.rs`'s `LoadEvent::FontLoaded` handler and
+// `_lumen_notify_css_font_loaded` do for a real fetch.
+
+fn add_css_font_face(doc: &Arc<Mutex<Document>>, family: &str, status: lumen_dom::FontFaceStatus) {
+    let mut face = lumen_dom::FontFace::new(
+        family.to_string(),
+        "normal".to_string(),
+        "400".to_string(),
+        None,
+        None,
+        "url(a.woff)".to_string(),
+    );
+    face.status = status;
+    doc.lock().unwrap().fonts_mut().add(face);
+}
+
+#[test]
+fn css_connected_loading_face_counts_as_pending_on_first_touch() {
+    let doc = make_doc();
+    add_css_font_face(&doc, "WebFont", lumen_dom::FontFaceStatus::Loading);
+    let rt = v8_runtime_with_dom(doc);
+    let result = rt.eval("document.fonts.status === 'loading'").unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn css_connected_load_completing_pairs_off_pending_and_resolves_ready() {
+    let doc = make_doc();
+    add_css_font_face(&doc, "WebFont", lumen_dom::FontFaceStatus::Loading);
+    let rt = v8_runtime_with_dom(doc.clone());
+    rt.eval(
+        r#"
+                var _readyResolved = false;
+                document.fonts.ready.then(function() { _readyResolved = true; });
+            "#,
+    )
+    .unwrap();
+    assert_eq!(
+        rt.eval("document.fonts.status").unwrap(),
+        lumen_core::JsValue::String("loading".into())
+    );
+    assert_eq!(rt.eval("_readyResolved").unwrap(), lumen_core::JsValue::Bool(false));
+    {
+        let mut d = doc.lock().unwrap();
+        d.fonts_mut().mark_loaded(|f| f.family == "WebFont");
+    }
+    rt.eval("_lumen_notify_css_font_loaded('WebFont');").unwrap();
+    assert_eq!(
+        rt.eval("document.fonts.status").unwrap(),
+        lumen_core::JsValue::String("loaded".into())
+    );
+    assert_eq!(rt.eval("_readyResolved").unwrap(), lumen_core::JsValue::Bool(true));
+}
+
 // ── Shadow DOM JS bindings ────────────────────────────────────────────────
 
 #[test]
