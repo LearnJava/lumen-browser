@@ -46,7 +46,7 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 
 ## DOM / CSSOM surface that is simply absent
 
-- **The CSSOM is read-only**: `document.styleSheets`/`<style>`/`<link>.sheet`/`CSSStyleSheet`/the `CSSRule` hierarchy exist since CSSOM-1 (2026-09-03), but `new CSSStyleSheet()` throws, `insertRule`/`deleteRule` don't exist, and `adoptedStyleSheets` is a plain expando ([BUG-897](../bugs/BUG-897-OPEN.md) / CSSOM-5). Also missing as globals: `DOMRect`/`DOMPoint`/`DOMMatrix`, `StaticRange`, `XSLTProcessor`/`document.evaluate`, `document.forms`/`scripts`/`links`, `getClientRects` ([BUG-478](../bugs/BUG-478-OPEN.md)), `document.defaultView` ([BUG-622](../bugs/BUG-622-OPEN.md)).
+- **The CSSOM is read-only**: `document.styleSheets`/`<style>`/`<link>.sheet`/`CSSStyleSheet`/the `CSSRule` hierarchy exist since CSSOM-1 (2026-09-03), but `new CSSStyleSheet()` throws, `insertRule`/`deleteRule` don't exist, and `adoptedStyleSheets` is a plain expando ([BUG-897](../bugs/BUG-897-OPEN.md) / CSSOM-5). Also missing as globals: `StaticRange`, `XSLTProcessor`/`document.evaluate`, `document.forms`/`scripts`/`links`, `document.defaultView` ([BUG-622](../bugs/BUG-622-OPEN.md)). `DOMRect`/`DOMPoint`/`DOMMatrix`/`DOMQuad`/`getClientRects` shipped 2026-09-05 (GAP-GEOM).
 - **`Element.matches(':focus'/':focus-visible'/':focus-within')` answers `false`** even when the `:focus` *style* has been applied — the selector-matching path does not resolve dynamic pseudo-classes ([BUG-560](../bugs/BUG-560-OPEN.md)).
 - **Shadow trees do not slot**: no slottable is ever assigned, `slotchange` fires nowhere ([BUG-876](../bugs/BUG-876-OPEN.md)), `host.shadowRoot` returns a fresh wrapper per read ([BUG-877](../bugs/BUG-877-OPEN.md)), and a `<script src>` in a shadow root is never requested ([BUG-878](../bugs/BUG-878-OPEN.md)).
 
@@ -59,5 +59,5 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 
 ## WPT-specific
 
-- **`test_driver.click(element)` cannot work**: `testdriver.js` opens with `element.getClientRects()`, which does not exist, so it throws synchronously — fixing `defaultView` alone unblocks nothing. Of ~30 `test_driver_internal` actions the executor implements two (`click`, `generate_test_report`) ([BUG-810](../bugs/BUG-810-OPEN.md)).
+- **`test_driver.click(element)` still cannot work**: `testdriver.js` opens with `element.getClientRects()`, which exists since GAP-GEOM (2026-09-05) and no longer throws, but that only gets past the first line — of ~30 `test_driver_internal` actions the executor implements two (`click`, `generate_test_report`) ([BUG-810](../bugs/BUG-810-OPEN.md)), so a probe still cannot rely on the rest.
 - **`PerformanceObserver.supportedEntryTypes` lists `layout-shift` and never delivers one** ([BUG-809](../bugs/BUG-809-OPEN.md)) — the advertisement is why such tests TIMEOUT instead of failing. The list is a promise about the *type*, not about delivery: check for a call site before believing it.

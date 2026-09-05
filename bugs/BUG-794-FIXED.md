@@ -68,7 +68,7 @@ active=el, load-handler-end`. Ни одна из шести контрольны
 ## A/B на WPT
 
 9 id `css/selectors/focus-visible-*`, не использующих `test_driver`
-(остальные 42 упираются в `getClientRects`, [BUG-478](BUG-478-OPEN.md) —
+(остальные 42 упираются в `getClientRects`, [BUG-478](BUG-478-FIXED.md) —
 см. `CLAUDE.md`), `run_smoke.py`, тот же бинарник до и после:
 
 * `focus-visible-010.html`: **ERROR → OK** (harness);
