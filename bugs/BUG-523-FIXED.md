@@ -58,7 +58,7 @@ the div/window equivalents) in the same script turn fails with `expected N
 but got 0` (or whatever the previous scroll position was) — this is the
 dominant failure cluster of `css/css-scroll-anchoring` (18+ files hit the
 `Cannot set properties of undefined` variant when `document.scrollingElement`
-compounds this — see [BUG-525](BUG-525-OPEN.md) — and 8+ hit the bare
+compounds this — see [BUG-525](BUG-525-FIXED.md) — and 8+ hit the bare
 `assert_equals: expected N but got 0` form on real element scrollers).
 Likely affects any other WPT category whose tests script-drive scrolling and
 assert synchronously (`css-overflow`, `cssom-view`, `css-scroll-snap` are

@@ -24,7 +24,7 @@ implementation.
 Every `css/css-scroll-anchoring` test that actually reaches the anchoring
 behavior itself (as opposed to failing earlier on
 [BUG-523](BUG-523-FIXED.md)'s async-scrollTop gap or
-[BUG-525](BUG-525-OPEN.md)'s missing `document.scrollingElement`) would still
+[BUG-525](BUG-525-FIXED.md)'s missing `document.scrollingElement`) would still
 fail even with those two fixed: nothing in layout adjusts scroll position
 when content shifts above the visible viewport, which is the entire premise
 of the spec. Two direct `e.style['overflow-anchor'] = '...'` parsing
