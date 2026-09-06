@@ -301,6 +301,30 @@ impl Renderer {
         crate::cpu_raster::rasterize_cpu(width, height, commands, images, scroll_x, scroll_y)
     }
 
+    /// Same as [`Self::render_to_image_cpu`], but `DrawText` resolves real
+    /// `@font-face` bytes and CSS Fonts L4 §14 override descriptors through
+    /// `font_provider` when given (FONTLOAD-18) — the page's
+    /// `lumen_font::FontRegistry`, same object the live wgpu path receives via
+    /// [`Self::set_font_provider`]. `None` reproduces
+    /// [`Self::render_to_image_cpu`] exactly.
+    ///
+    /// # Errors
+    /// Returns `Err` if image creation fails or if display command processing fails.
+    #[cfg(feature = "cpu-render")]
+    pub fn render_to_image_cpu_with_fonts(
+        width: u32,
+        height: u32,
+        commands: &[crate::DisplayCommand],
+        images: &[(String, std::sync::Arc<lumen_image::Image>)],
+        scroll_x: f32,
+        scroll_y: f32,
+        font_provider: Option<&dyn lumen_core::FontProvider>,
+    ) -> Result<lumen_image::Image, Box<dyn std::error::Error>> {
+        crate::cpu_raster::rasterize_cpu_with_fonts(
+            width, height, commands, images, scroll_x, scroll_y, font_provider,
+        )
+    }
+
     /// Render a single `tile_size × tile_size` tile at tile coordinates
     /// `(tile_x, tile_y)` using the CPU rasterizer.
     ///

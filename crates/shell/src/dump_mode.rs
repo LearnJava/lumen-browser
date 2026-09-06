@@ -238,7 +238,17 @@ pub(crate) fn render_source_to_png(
         // display-list` — у себя; снимок собирает список сам и до этого среза
         // рисовал на месте фрейма серую заглушку.
         crate::frames::splice_frame_content(&mut dl, &parsed.frames);
-        let image = Renderer::render_to_image_cpu(width, height, &dl, &images, 0.0, 0.0)?;
+        // FONTLOAD-18 (BUG-467): this is the actual path `run_smoke.py`/
+        // `--screenshot`/the IPC `Screenshot` command measure (all three route
+        // through `render_source_to_png` — see `automation_server.rs`), so
+        // it's the one CPU-rasterizer entry point where a page's parsed
+        // `@font-face` faces (`parsed.font_registry`, built by
+        // `load_font_faces` a few lines above) need to actually reach glyph
+        // resolution instead of being silently dropped at this boundary.
+        let image = Renderer::render_to_image_cpu_with_fonts(
+            width, height, &dl, &images, 0.0, 0.0,
+            Some(parsed.font_registry.as_ref() as &dyn lumen_core::FontProvider),
+        )?;
         let png = lumen_image::encode_png_rgba8(&image)?;
         (png, width, height)
     };

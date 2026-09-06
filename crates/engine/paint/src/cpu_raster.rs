@@ -15,58 +15,8 @@ use crate::matrix_util::mat4_to_2d_affine;
 use crate::{DisplayCommand, CornerRadii};
 use crate::display_list::{ResolvedClipShape, bg_tile_geometry};
 use lumen_core::geom::Rect;
-use lumen_core::{FontProvider, NORMAL_STRETCH_PERCENT};
-
-/// Bundled Inter Regular — the default (and, without `LUMEN_CPU_SYSTEM_FONTS`,
-/// only) face the deterministic CPU path rasterizes. Mirrors `INTER_FONT` in
-/// `lumen-driver`; real font matching (family/weight/style/fallback) is
-/// otherwise a GPU-renderer concern, so every production snapshot path
-/// (`--screenshot`, graphic_tests goldens, the CPU snapshot test suite) always
-/// renders text with this single face and stays cross-OS bit-identical
-/// (`lumen_font::Rasterizer`, pure-Rust glyph scanline fill). See
-/// [`resolve_face_bytes`] for the opt-in escape hatch used by the LIB
-/// conformance probe (`docs/conformance-method.md`).
-const BUNDLED_FONT: &[u8] = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
-
-/// `LUMEN_CPU_SYSTEM_FONTS` opt-in, read once (same `OnceLock` pattern
-/// `text_shaper.rs` used for its now-removed `LUMEN_OWN_TEXT_SHAPING`
-/// rollback flag, LIB-3). Diagnostic-only: exists so
-/// the LIB-3 conformance re-measurement can render `docs/conformance/probes/
-/// text-shaping.html`'s Arabic/Devanagari/Hebrew/RTL checks against a real OS
-/// face instead of bundled-Inter `.notdef` tofu. Unset in every default build,
-/// CI run and graphic-test invocation, so it never touches a committed golden.
-fn cpu_system_fonts_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("LUMEN_CPU_SYSTEM_FONTS").is_some())
-}
-
-/// Resolve the sfnt bytes a `DrawText` run should rasterize with.
-///
-/// Default (flag unset): always [`BUNDLED_FONT`] — unchanged behaviour.
-/// With [`cpu_system_fonts_enabled`]: try each name in the CSS `font-family`
-/// list in order against the OS system font index
-/// ([`lumen_font::shared_system_index`]), picking the closest
-/// weight/style/stretch match per name (CSS Fonts L4 §5.2, via
-/// `FontProvider::pick_face`). Falls back to bundled Inter on an empty list,
-/// no match, or an unreadable file — this must never fail the draw.
-fn resolve_face_bytes(font_family: &[String], weight: u16, style: lumen_layout::FontStyle) -> Vec<u8> {
-    if cpu_system_fonts_enabled() {
-        let core_style = match style {
-            lumen_layout::FontStyle::Normal => lumen_core::FontStyle::Normal,
-            lumen_layout::FontStyle::Italic => lumen_core::FontStyle::Italic,
-            lumen_layout::FontStyle::Oblique => lumen_core::FontStyle::Oblique,
-        };
-        for family in font_family {
-            if let Some(record) =
-                lumen_font::shared_system_index().pick_face(family, weight, core_style, NORMAL_STRETCH_PERCENT)
-                && let Ok(bytes) = std::fs::read(&record.path)
-            {
-                return bytes;
-            }
-        }
-    }
-    BUNDLED_FONT.to_vec()
-}
+use lumen_core::FontProvider;
+use crate::cpu_font_resolve::resolve_face;
 
 /// How a pushed off-screen layer is composited back onto the layer below when
 /// its group closes (`PopOpacity` / `PopTransform`).
@@ -241,15 +191,35 @@ impl CpuLayer {
     }
 }
 
-/// Rasterize display commands to an image using tiny-skia (CPU only, deterministic).
+/// Rasterize display commands to an image using tiny-skia (CPU only,
+/// deterministic). `DrawText` always resolves fonts as before this function's
+/// [`FONTLOAD-18`](crate::cpu_font_resolve) sibling was added — see
+/// [`rasterize_cpu_with_fonts`] for the page-`@font-face`-aware entry point.
 #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn rasterize_cpu(
     width: u32,
     height: u32,
     commands: &[DisplayCommand],
     images: &[(String, std::sync::Arc<Image>)],
+    scroll_x: f32,
+    scroll_y: f32,
+) -> Result<Image, Box<dyn std::error::Error>> {
+    rasterize_cpu_with_fonts(width, height, commands, images, scroll_x, scroll_y, None)
+}
+
+/// Same as [`rasterize_cpu`], but `DrawText` resolves real `@font-face` bytes
+/// and CSS Fonts L4 §14 override descriptors through `font_provider` when
+/// given (FONTLOAD-18) — see [`crate::cpu_font_resolve::resolve_face`]. `None`
+/// reproduces [`rasterize_cpu`]'s bundled-Inter-only behaviour exactly.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+pub(crate) fn rasterize_cpu_with_fonts(
+    width: u32,
+    height: u32,
+    commands: &[DisplayCommand],
+    images: &[(String, std::sync::Arc<Image>)],
     _scroll_x: f32,
     _scroll_y: f32,
+    font_provider: Option<&dyn FontProvider>,
 ) -> Result<Image, Box<dyn std::error::Error>> {
     use tiny_skia::Pixmap;
 
@@ -533,15 +503,17 @@ pub(crate) fn rasterize_cpu(
             } => {
                 // Text uses the bundled Inter face by default (family ignored,
                 // weight/style emulated as synthetic bold/italic); a real
-                // `font_family` match against the OS font index only happens
-                // under the opt-in `LUMEN_CPU_SYSTEM_FONTS` — see
-                // `resolve_face_bytes`. Clip is the active rectangular
-                // `overflow` region, applied per glyph pixel.
+                // `font_family` match happens against `font_provider`'s
+                // registered `@font-face` faces when given (FONTLOAD-18), or
+                // against the OS font index under the opt-in
+                // `LUMEN_CPU_SYSTEM_FONTS` — see
+                // `crate::cpu_font_resolve::resolve_face`. Clip is the active
+                // rectangular `overflow` region, applied per glyph pixel.
                 let layer = layers.last_mut().expect("base layer");
                 if let Some(ink) = rasterize_text(
                     &mut layer.pm, rect, text, *font_size, color,
                     *tab_size, clip_rect.as_ref(), font_weight.0, *font_style,
-                    font_features, font_family, *text_orientation,
+                    font_features, font_family, font_provider, *text_orientation,
                 )? {
                     layer.mark(ink);
                 }
@@ -2768,18 +2740,26 @@ fn color_to_skia(color: Color) -> tiny_skia::Color {
 /// need a table held here — `lumen_font::active_text_shaper()` re-derives
 /// them from the same bytes per call, same as `build_face` already re-parses
 /// this struct once per `DrawText` run.
+///
+/// `ascent_override`/`descent_override`/`size_adjust` (FONTLOAD-18, CSS Fonts
+/// L4 §14) are `None` unless [`resolve_face`] matched a registered
+/// `@font-face` — a bare `build_face` never sets them, [`rasterize_text`]
+/// copies them in from the resolved [`lumen_core::FaceRecord`] afterwards.
 struct CpuFace<'a> {
     font: lumen_font::Font<'a>,
     units_per_em: u16,
     ascent: f32,
     descent: f32,
+    ascent_override: Option<f32>,
+    descent_override: Option<f32>,
+    size_adjust: Option<f32>,
 }
 
 /// Parse a face from `bytes` once per `DrawText` run — `bytes` comes from
-/// [`resolve_face_bytes`] (bundled Inter by default, or a system face under
-/// `LUMEN_CPU_SYSTEM_FONTS`). `None` if the buffer isn't a valid sfnt (should
-/// never happen for bundled Inter; a corrupt/unreadable system file is
-/// already filtered out by `resolve_face_bytes`'s own fallback).
+/// [`resolve_face`] (bundled Inter by default, a registered `@font-face`, or a
+/// system face under `LUMEN_CPU_SYSTEM_FONTS`). `None` if the buffer isn't a
+/// valid sfnt (should never happen for bundled Inter; a corrupt/unreadable
+/// face is already filtered out by [`resolve_face`]'s own fallback).
 fn build_face(bytes: &[u8]) -> Option<CpuFace<'_>> {
     let font = lumen_font::Font::parse(bytes).ok()?;
     let head = font.head().ok()?;
@@ -2789,6 +2769,9 @@ fn build_face(bytes: &[u8]) -> Option<CpuFace<'_>> {
         units_per_em: head.units_per_em,
         ascent: f32::from(hhea.ascent),
         descent: f32::from(hhea.descent),
+        ascent_override: None,
+        descent_override: None,
+        size_adjust: None,
     })
 }
 
@@ -2820,6 +2803,7 @@ fn rasterize_text_rotated(
     font_style: lumen_layout::FontStyle,
     font_features: &[([u8; 4], u32)],
     font_family: &[String],
+    font_provider: Option<&dyn FontProvider>,
 ) -> Result<Option<DrawBounds>, Box<dyn std::error::Error>> {
     let width = pixmap.width();
     let height = pixmap.height();
@@ -2828,7 +2812,7 @@ fn rasterize_text_rotated(
     let local_rect = Rect { x: 0.0, y: 0.0, width: rect.width, height: rect.height };
     let Some((l, t, r, b)) = rasterize_text(
         &mut local, &local_rect, text, font_size, color, tab_size, None, font_weight,
-        font_style, font_features, font_family, None,
+        font_style, font_features, font_family, font_provider, None,
     )?
     else {
         return Ok(None);
@@ -2868,7 +2852,12 @@ fn measure_run_advance(
     tab_size: f32,
     font_features: &[([u8; 4], u32)],
 ) -> f32 {
-    let advance_scale = font_size / f32::from(face.units_per_em);
+    // FONTLOAD-18 (CSS Fonts L4 §14.4): `size-adjust` premultiplies font-size
+    // before advances are computed — same formula `rasterize_text` applies,
+    // kept in sync so a whitespace-only segment advances by the same amount
+    // its sibling glyph-bearing segments do.
+    let adjusted_font_size = font_size * face.size_adjust.unwrap_or(1.0);
+    let advance_scale = adjusted_font_size / f32::from(face.units_per_em);
     let mut total = 0.0_f32;
     let mut first_segment = true;
     let segments: Vec<&str> = if tab_size > 0.0 { text.split('\t').collect() } else { vec![text] };
@@ -2923,11 +2912,15 @@ fn rasterize_text_mixed(
     font_style: lumen_layout::FontStyle,
     font_features: &[([u8; 4], u32)],
     font_family: &[String],
+    font_provider: Option<&dyn FontProvider>,
 ) -> Result<Option<DrawBounds>, Box<dyn std::error::Error>> {
-    let bytes = resolve_face_bytes(font_family, font_weight, font_style);
-    let Some(face) = build_face(&bytes) else {
+    let (bytes, face_record) = resolve_face(font_provider, font_family, font_weight, font_style);
+    let Some(mut face) = build_face(&bytes) else {
         return Ok(None);
     };
+    if let Some(record) = &face_record {
+        face.size_adjust = record.size_adjust;
+    }
     let width = pixmap.width();
     let height = pixmap.height();
     let local_rect = Rect { x: 0.0, y: 0.0, width: rect.width, height: rect.height };
@@ -2963,7 +2956,7 @@ fn rasterize_text_mixed(
                 Rect { x: rect.x, y: rect.y + y_cursor, width: rect.width, height: rect.height };
             if let Some(b) = rasterize_text(
                 pixmap, &dest_rect, &seg_text, font_size, color, tab_size, clip, font_weight,
-                font_style, font_features, font_family, None,
+                font_style, font_features, font_family, font_provider, None,
             )? {
                 mark_ink(b, &mut ink);
             }
@@ -2972,7 +2965,7 @@ fn rasterize_text_mixed(
                 .ok_or("Failed to create mixed-orientation text layer")?;
             if let Some((l, t, r, b)) = rasterize_text(
                 &mut local, &local_rect, &seg_text, font_size, color, tab_size, None, font_weight,
-                font_style, font_features, font_family, None,
+                font_style, font_features, font_family, font_provider, None,
             )? {
                 let transform =
                     tiny_skia::Transform::from_row(0.0, 1.0, -1.0, 0.0, rect.x, rect.y + y_cursor);
@@ -3035,6 +3028,7 @@ fn rasterize_text(
     font_style: lumen_layout::FontStyle,
     font_features: &[([u8; 4], u32)],
     font_family: &[String],
+    font_provider: Option<&dyn FontProvider>,
     text_orientation: Option<TextOrientation>,
 ) -> Result<Option<DrawBounds>, Box<dyn std::error::Error>> {
     if text.is_empty() || font_size <= 0.0 || color.a == 0 {
@@ -3049,26 +3043,43 @@ fn rasterize_text(
         Some(TextOrientation::Sideways) => {
             return rasterize_text_rotated(
                 pixmap, rect, text, font_size, color, tab_size, clip, font_weight, font_style,
-                font_features, font_family,
+                font_features, font_family, font_provider,
             );
         }
         Some(TextOrientation::Mixed) => {
             return rasterize_text_mixed(
                 pixmap, rect, text, font_size, color, tab_size, clip, font_weight, font_style,
-                font_features, font_family,
+                font_features, font_family, font_provider,
             );
         }
         _ => {}
     }
-    let bytes = resolve_face_bytes(font_family, font_weight, font_style);
-    let Some(face) = build_face(&bytes) else {
+    let (bytes, face_record) = resolve_face(font_provider, font_family, font_weight, font_style);
+    let Some(mut face) = build_face(&bytes) else {
         return Ok(None);
     };
-    let denom = face.ascent - face.descent;
-    let ascent_ratio = if denom != 0.0 { face.ascent / denom } else { 0.8 };
-    let baseline_y = rect.y + font_size * ascent_ratio;
-    let advance_scale = font_size / f32::from(face.units_per_em);
-    let rasterizer = lumen_font::Rasterizer::new(font_size, face.units_per_em);
+    if let Some(record) = &face_record {
+        face.ascent_override = record.ascent_override;
+        face.descent_override = record.descent_override;
+        face.size_adjust = record.size_adjust;
+    }
+    // CSS Fonts L4 §14 (FONTLOAD-18): mirrors `push_text_glyphs`
+    // (`renderer/glyph_raster.rs`) — `ascent-override`/`descent-override`
+    // replace the real hhea metrics at font-unit level (byte-identical when
+    // absent), and `size-adjust` premultiplies `font_size` before the ratio,
+    // advance scale and rasterizer size are derived from it.
+    let ascent_units = face
+        .ascent_override
+        .map_or(face.ascent, |pct| pct * f32::from(face.units_per_em));
+    let descent_units = face
+        .descent_override
+        .map_or(face.descent, |pct| -(pct * f32::from(face.units_per_em)));
+    let denom = ascent_units - descent_units;
+    let ascent_ratio = if denom != 0.0 { ascent_units / denom } else { 0.8 };
+    let adjusted_font_size = font_size * face.size_adjust.unwrap_or(1.0);
+    let baseline_y = rect.y + adjusted_font_size * ascent_ratio;
+    let advance_scale = adjusted_font_size / f32::from(face.units_per_em);
+    let rasterizer = lumen_font::Rasterizer::new(adjusted_font_size, face.units_per_em);
     let bold_offset = (font_size / 24.0).clamp(0.5, 2.0);
     let synth_bold = font_weight >= 600;
     let synth_italic = !matches!(font_style, lumen_layout::FontStyle::Normal);
@@ -3114,8 +3125,9 @@ fn rasterize_text(
         // codepoint in `bytes` resolves to glyph 0 (.notdef) — matching the
         // GPU renderer's `(primary, 0)` result when it too has no fallback
         // configured. `bytes` itself is Inter by default, or the first
-        // `font_family` match under `LUMEN_CPU_SYSTEM_FONTS`
-        // (`resolve_face_bytes`).
+        // `font_family` match against a registered `@font-face` face
+        // (FONTLOAD-18) or, failing that, the OS index under
+        // `LUMEN_CPU_SYSTEM_FONTS` (`crate::cpu_font_resolve::resolve_face`).
         let shaped = lumen_font::active_text_shaper().shape(
             &bytes,
             segment,
@@ -3869,6 +3881,101 @@ mod tests {
                 "glyph pixel at x={x} should be clipped out",
             );
         }
+    }
+
+    /// FONTLOAD-18: a `font_provider` with no `@font-face` registered for the
+    /// requested family must leave `DrawText` byte-for-byte identical to the
+    /// no-provider path — every existing golden's determinism depends on this.
+    #[test]
+    fn draw_text_with_provider_but_no_match_is_byte_identical() {
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let cmds = vec![DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
+            rect: rect(2.0, 2.0, 120.0, 40.0),
+            text: "Hi".to_string(),
+            font_size: 32.0,
+            color: black,
+            font_family: vec!["Arial".to_string()],
+            font_weight: lumen_layout::FontWeight::default(),
+            font_style: lumen_layout::FontStyle::default(),
+            font_variation_axes: Vec::new(),
+            font_features: Vec::new(),
+            font_palette: None,
+            tab_size: 0.0,
+            highlight_name: None,
+            text_orientation: None,
+        }];
+        let registry = lumen_font::FontRegistry::new();
+        let without_provider = rasterize_cpu(128, 48, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let with_empty_provider = rasterize_cpu_with_fonts(
+            128, 48, &cmds, &[], 0.0, 0.0,
+            Some(&registry as &dyn FontProvider),
+        )
+        .expect("rasterize");
+        assert_eq!(
+            without_provider.data, with_empty_provider.data,
+            "an unmatched family must not change CPU-path rendering",
+        );
+    }
+
+    /// FONTLOAD-18: a registered `@font-face` with `size-adjust` reaches the
+    /// CPU rasterizer — the same bundled Inter bytes drawn at `size-adjust: 2`
+    /// must ink noticeably more pixels than the unadjusted default (mirrors
+    /// `push_text_glyphs`'s per-glyph `size-adjust`, applied per-run here).
+    #[test]
+    fn draw_text_size_adjust_from_registered_face_widens_ink() {
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let bundled = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+        let registry = lumen_font::FontRegistry::new();
+        registry.register_from_bytes(
+            "BigWebFont",
+            400,
+            lumen_core::FontStyle::Normal,
+            &[],
+            bundled.to_vec(),
+            None,
+            None,
+            Some(2.0),
+            None,
+        );
+        let cmds = vec![DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
+            rect: rect(2.0, 2.0, 300.0, 80.0),
+            text: "Hi".to_string(),
+            font_size: 20.0,
+            color: black,
+            font_family: vec!["BigWebFont".to_string()],
+            font_weight: lumen_layout::FontWeight::default(),
+            font_style: lumen_layout::FontStyle::default(),
+            font_variation_axes: Vec::new(),
+            font_features: Vec::new(),
+            font_palette: None,
+            tab_size: 0.0,
+            highlight_name: None,
+            text_orientation: None,
+        }];
+        let count_ink = |img: &Image| {
+            let mut n = 0;
+            for y in 0..80 {
+                for x in 0..300 {
+                    let (r, g, b, _) = px(img, x, y);
+                    if r < 200 && g < 200 && b < 200 {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        let unadjusted = rasterize_cpu(300, 80, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let adjusted = rasterize_cpu_with_fonts(
+            300, 80, &cmds, &[], 0.0, 0.0,
+            Some(&registry as &dyn FontProvider),
+        )
+        .expect("rasterize");
+        assert!(
+            count_ink(&adjusted) > count_ink(&unadjusted) * 2,
+            "size-adjust: 2 must ink substantially more pixels than the default face",
+        );
     }
 
     /// `PushOpacity { 0.5 }` around an opaque blue fill blends it 50/50 with the
