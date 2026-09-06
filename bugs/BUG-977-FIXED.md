@@ -1,9 +1,9 @@
 # BUG-977: `overflow: clip`, установленный тем же синхронным скриптом, не зануляет уже запрошенный скролл в ЖИВОМ окне
 
-**Статус:** OPEN (ДОРАБОТКА → [CSSOM-7](../ROADMAP.md))
+**Статус:** FIXED 2026-09-06 (ДОРАБОТКА → [CSSOM-7](../ROADMAP.md))
 **Тип:** ДОРАБОТКА — симметричный синхронный style/layout-флаш для живого (не headless) шелла, тот же класс задачи, что CSSOM-4/BUG-493, но для другого исполнителя флаша.
-**Компонент:** js (`crates/js/src/v8_runtime/install/platform.rs::install_scroll_state` — `_lumen_request_scroll`'s `is_clip` check) / js (`crates/js/src/v8_runtime/style_flush.rs::FlushHandles::maybe_flush`)
-**Найден:** P3, 2026-09-04, при живой проверке фикса [BUG-975](bugs/BUG-975-OPEN.md) части 2 (`tests/wpt/verify_bug504_vertical_rl_clip.py`, интерактивное окно `--mcp-live-port`).
+**Компонент:** js (`crates/js/src/v8_runtime/install/platform.rs::install_scroll_state` — `_lumen_request_scroll`'s `is_clip` check) / js (`crates/js/src/v8_runtime/style_flush.rs::FlushHandles::maybe_flush`) / shell (`crates/shell/src/relayout.rs`, `page_load.rs`, `page_pipeline.rs`, `frames.rs`, `scripts.rs`, `tab_lifecycle/hibernate.rs`)
+**Найден:** P3, 2026-09-04, при живой проверке фикса [BUG-975](BUG-975-OPEN.md) части 2 (`tests/wpt/verify_bug504_vertical_rl_clip.py`, интерактивное окно `--mcp-live-port`).
 
 ## Симптом
 
@@ -134,3 +134,61 @@ style` вместо `_lumen_request_scroll`). Второй вход в ту же
 scroll/clip-кейс, а весь класс «живой шелл не флашит стиль/layout
 синхронно перед JS-чтением» — см. также остаточную запись в
 [BUG-493](BUG-493-OPEN.md).
+
+## Исправление (P1, 2026-09-06, ветка `p1-cssom7-sync-style-flush`)
+
+`PersistentJs::update_stylesheet` (форвардинг к уже существовавшему
+`V8JsRuntime::update_stylesheet`, CSSOM-4/BUG-493) заведён в трейт
+(`crates/shell/src/persistent_js.rs`) и вызван из пяти мест, где живой шелл
+уже пушит `computed_styles`/`layout_rects` в тот же `FlushHandles`:
+
+- `crates/shell/src/relayout.rs::apply_relayout_result` — каждый relayout;
+- `crates/shell/src/page_load.rs` — оба пост-загрузочных продюсера
+  (первичный коммит страницы и «LoadDone, отложенный settle»);
+- `crates/shell/src/page_pipeline.rs::parse_and_layout` — **новая** пара
+  пушей, закрывающая самое узкое окно (полностью синхронный parse-time
+  `<script>`, буквально ни одного relayout ещё не было): до первой строки
+  скрипта (`run_scripts_with_dom`'s `parse_time_stylesheet`, переиспользует
+  уже существующий hand-written `Stylesheet::clone()`, минтящий новую
+  `StylesheetRevision`) и снова сразу после скриптов, если они тронули
+  `<style>`/`<link>`/DOM (тот же блок, что уже перевызывает
+  `update_stylesheet_nodes`).
+
+Все точки — чистый `Arc::clone`/`Stylesheet::clone` + `Mutex`-запись на
+JS-потоке, той же формы, что `update_viewport_size`; ни одна не обращается к
+движковому потоку — дедлок-риска ADR-016 нет (это движковый поток блокирует
+JS-поток внутри `route_task_js`/`route_query_js`, никогда не наоборот).
+
+`crates/shell/src/frames.rs` и `crates/shell/src/tab_lifecycle/hibernate.rs`
+передают `None` для нового параметра `run_scripts_with_dom` — фреймы
+раскладываются уже после этого вызова, а восстановление после гибернации не
+строит parse-time layout, так же как и `parse_time_layout` до этого.
+
+Thread-locals (`:hover`/`:focus`/`:active`, forced-colors, dark-mode)
+остаются известной аппроксимацией, унаследованной от headless-версии этого
+же флаша: `maybe_flush()` их не выставляет ни на JS-потоке (там их вообще
+никто не устанавливает), задокументировано в doc-комментарии
+`style_flush.rs` как остаточный пробел, не блокирующий закрытие.
+
+**Проверено:**
+- `tests/wpt/verify_bug504_vertical_rl_clip.py` (§Repro) — КРАСНЫЙ (4 из 5
+  проверок отдавали незанулённые значения) → ЗЕЛЁНЫЙ (все 5).
+- Новый регресс-тест
+  `crates/shell/src/tests/page_pipeline.rs::parse_time_script_overflow_clip_zeroes_scroll_request`
+  воспроизводит тот же сценарий без живого окна — тот же приём, что у
+  BUG-443's `parse_time_script_reads_computed_style_and_rect`.
+- `cargo test -p lumen-shell --profile dev-release` — 1726/1728 (2
+  предсуществующих Windows-path-специфичных провала на Linux, вне диффа).
+- `cargo test -p lumen-js --features v8-backend` (bug493/bug504_scroll_flush/
+  bug975 — существующие CSSOM-4/504/975 регресс-тесты) без изменений
+  счётчика, все зелёные.
+- `cargo check`/`cargo build -p lumen-shell --profile dev-release` чистые.
+- `cargo clippy` целиком не пройден в этой сессии — известный дрейф
+  тулчейна (системный rustc 1.98.0 vs пин 1.97.0, `clippy::chunks_exact_to_as_chunks`
+  в `lumen-image`, вне диффа, воспроизводится на немодифицированном `main`).
+- `graphic_tests/run.py` не прогонялся — правка не трогает layout/paint/
+  display-list, только JS-видимый кэш computed-style/scroll.
+
+**Остаточное:** [BUG-506](BUG-506-OPEN.md)'s residual (getComputedStyle/
+`HTMLStyleElement.sheet` под `--bidi-port`, та же причина) должен гаситься
+этим же фиксом, но отдельно в этом срезе не перепроверялся.

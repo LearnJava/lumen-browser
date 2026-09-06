@@ -853,5 +853,5 @@ other four (the `overflow: clip` ones) reveal a third, distinct root cause
 — `_lumen_request_scroll`'s clip-zero check reads `computed_styles`, which
 the interactive shell only refreshes asynchronously, so a same-turn
 `style.overflow = 'clip'` isn't visible to a same-turn scroll write/read.
-Filed as [BUG-977](bugs/BUG-977-OPEN.md). Remaining scope unchanged (1
+Filed as [BUG-977](BUG-977-FIXED.md). Remaining scope unchanged (1
 file), blocker moves from BUG-975 to BUG-977. Status stays `OPEN`.
