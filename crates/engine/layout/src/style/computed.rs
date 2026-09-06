@@ -33,7 +33,8 @@ use lumen_core::ColorSpace;
 // втянул реэкспортом из `style/values/*`, `style/parse/*` (правило §2.1).
 use crate::style::{
     AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline,
-    Appearance, BackfaceVisibility, BackgroundLayer, BorderCollapse, BorderStyle, BoxShadow,
+    Appearance, BackfaceVisibility, BackgroundLayer, BlockStepAlign, BlockStepInsert,
+    BlockStepRound, BorderCollapse, BorderStyle, BoxShadow,
     BoxSizing, BreakValue, ClearSide, ClipPath, Color, ColorScheme, ContainerType, ContainFlags,
     Content, ContentVisibility, CssColor, CssContinue, Cursor, CustomProps, default_font_family,
     Direction, Display, DynamicRangeLimit, EmptyCells, FieldSizing, FillRule, FilterFn, FlexBasis, FlexDirection,
@@ -247,6 +248,20 @@ pub struct ComputedStyle {
     pub border_bottom_color: CssColor,
     pub border_left_color: CssColor,
     pub box_sizing: BoxSizing,
+    /// CSS Rhythmic Sizing L1 §3.2 — `block-step-size`. NOT inherited.
+    /// Initial: `none` (`None`). Phase 0: parse + store, resolved eagerly to
+    /// px (same scope as `line_height_step`) — no layout algorithm effect yet
+    /// (BUG-517).
+    pub block_step_size: Option<f32>,
+    /// CSS Rhythmic Sizing L1 §3.3 — `block-step-insert`. NOT inherited.
+    /// Initial: `MarginBox` (BUG-517).
+    pub block_step_insert: BlockStepInsert,
+    /// CSS Rhythmic Sizing L1 §3.4 — `block-step-align`. NOT inherited.
+    /// Initial: `Auto` (BUG-517).
+    pub block_step_align: BlockStepAlign,
+    /// CSS Rhythmic Sizing L1 §3.5 — `block-step-round`. NOT inherited.
+    /// Initial: `Up` (BUG-517).
+    pub block_step_round: BlockStepRound,
     /// CSS Positioned Layout L3 §3 — `position`. Не наследуется.
     /// Default `Static`. Используется для stacking context (§9.10) и layout.
     pub position: Position,
@@ -1077,6 +1092,10 @@ impl ComputedStyle {
             border_bottom_color: CssColor::CurrentColor,
             border_left_color: CssColor::CurrentColor,
             box_sizing: BoxSizing::ContentBox,
+            block_step_size: None,
+            block_step_insert: BlockStepInsert::MarginBox,
+            block_step_align: BlockStepAlign::Auto,
+            block_step_round: BlockStepRound::Up,
             position: Position::Static,
             top: LengthOrAuto::Auto,
             right: LengthOrAuto::Auto,

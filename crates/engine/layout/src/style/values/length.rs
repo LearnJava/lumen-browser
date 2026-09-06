@@ -597,3 +597,47 @@ pub fn canonical_specified_overflow_clip_margin(s: &str) -> Option<String> {
     let css = crate::selector_query::length_to_css(&length);
     Some(overflow_clip_margin_serialize(box_kw, css, is_zero))
 }
+
+/// CSS Rhythmic Sizing L1 §3.2 (BUG-517): resolves a `none | <length [0,∞]>`
+/// `block-step-size` specified value to px eagerly — same Phase 0 scope as
+/// `line_height_step` (`style/apply/text.rs`), no layout algorithm reads the
+/// result yet. Reuses [`parse_overflow_clip_margin_length`]'s grammar (no
+/// percentage anywhere, literal negative rejected, a negative `calc()`
+/// result clamped rather than rejected — the exact `<length [0,∞]>` shape
+/// this property shares with `overflow-clip-margin`).
+///
+/// `None` = invalid syntax (declaration dropped). `Some(None)` = `none`.
+/// `Some(Some(px))` = resolved length. Shared by the `block-step-size`
+/// longhand and the `block-step` shorthand's size slot.
+pub fn resolve_block_step_size(
+    s: &str,
+    font_size: f32,
+    em_basis: f32,
+    viewport: Size,
+) -> Option<Option<f32>> {
+    let v = s.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(None);
+    }
+    let len = parse_overflow_clip_margin_length(v)?;
+    let px = match &len {
+        Length::Px(v) => *v,
+        Length::Em(v) => v * font_size,
+        Length::Rem(v) => v * ROOT_FONT_SIZE,
+        _ => len.resolve(em_basis, None, viewport)?,
+    };
+    Some(Some(px.max(0.0)))
+}
+
+/// CSSOM (BUG-517): validates and canonicalizes a `block-step-size`
+/// specified value for the JS `element.style` object — same role as
+/// [`canonical_specified_overflow_clip_margin`], but for the bare
+/// `none | <length [0,∞]>` grammar (no box keyword).
+pub fn canonical_specified_block_step_size(s: &str) -> Option<String> {
+    let v = s.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some("none".to_string());
+    }
+    let len = parse_overflow_clip_margin_length(v)?;
+    Some(crate::selector_query::length_to_css(&len))
+}

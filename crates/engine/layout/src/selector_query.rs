@@ -17,7 +17,8 @@ use crate::ruby::{RubyAlign, RubyMerge, RubyPosition};
 use crate::style::{
     matches_complex, AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin,
-    BackgroundRepeat, BackgroundSize, BgSizeAxis, BorderStyle, BoxShadow, BoxSizing,
+    BackgroundRepeat, BackgroundSize, BgSizeAxis, BlockStepAlign, BlockStepInsert, BlockStepRound,
+    BorderStyle, BoxShadow, BoxSizing,
     ClearSide, Color, ColorScheme,
     ContainFlags, Content, ContentItem, ContentVisibility,
     CssColor, CssContinue,
@@ -479,6 +480,36 @@ fn px_str(v: f32) -> String {
     } else {
         format!("{}px", v)
     }
+}
+
+/// CSS Rhythmic Sizing L1 §3.1 (BUG-517) — computed-value serialization for
+/// the `block-step` shorthand: `none` when all four longhands are at their
+/// initial value, else the non-initial ones joined in `size insert align
+/// round` order (the grammar's own declaration order) with the initial ones
+/// elided. Confirmed against every `test_computed_value("block-step", …)`
+/// case in the vendored `block-step-computed.html`.
+fn block_step_shorthand_computed(style: &ComputedStyle) -> String {
+    let is_default = style.block_step_size.is_none()
+        && style.block_step_insert == BlockStepInsert::MarginBox
+        && style.block_step_align == BlockStepAlign::Auto
+        && style.block_step_round == BlockStepRound::Up;
+    if is_default {
+        return "none".to_string();
+    }
+    let mut parts = Vec::with_capacity(4);
+    if let Some(px) = style.block_step_size {
+        parts.push(px_str(px));
+    }
+    if style.block_step_insert != BlockStepInsert::MarginBox {
+        parts.push(style.block_step_insert.to_css().to_string());
+    }
+    if style.block_step_align != BlockStepAlign::Auto {
+        parts.push(style.block_step_align.to_css().to_string());
+    }
+    if style.block_step_round != BlockStepRound::Up {
+        parts.push(style.block_step_round.to_css().to_string());
+    }
+    parts.join(" ")
 }
 
 /// Serialises a [`Color`] as `"rgb(r, g, b)"` or `"rgba(r, g, b, a)"`.
@@ -1122,6 +1153,15 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         BoxSizing::ContentBox => "content-box",
         BoxSizing::BorderBox => "border-box",
     }.into());
+
+    // CSS Rhythmic Sizing L1 §3 (BUG-517) — block-step-* longhands plus the
+    // `block-step` shorthand, resolved to the same canonical order/`none`
+    // collapse `block_step_shorthand_computed` documents.
+    m.insert("block-step-size".into(), style.block_step_size.map_or("none".into(), px_str));
+    m.insert("block-step-insert".into(), style.block_step_insert.to_css().into());
+    m.insert("block-step-align".into(), style.block_step_align.to_css().into());
+    m.insert("block-step-round".into(), style.block_step_round.to_css().into());
+    m.insert("block-step".into(), block_step_shorthand_computed(style));
 
     m.insert("width".into(), style.width.as_ref().map_or("auto".into(), length_to_css));
     m.insert("height".into(), style.height.as_ref().map_or("auto".into(), length_to_css));

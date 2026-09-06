@@ -1264,6 +1264,16 @@ function _lumen_parse_style(s) {
                 return;
             }
         }
+        if (prop === 'block-step') {
+            var bs = _lumen_expand_block_step_shorthand(val);
+            if (bs !== null) {
+                obj['block-step-size'] = bs.size;
+                obj['block-step-insert'] = bs.insert;
+                obj['block-step-align'] = bs.align;
+                obj['block-step-round'] = bs.round;
+                return;
+            }
+        }
         if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(prop)) {
             var longhands2v = _LUMEN_2V_SHORTHANDS[prop];
             var expanded2v = _lumen_expand_2v_shorthand(_LUMEN_2V_SHORTHAND_CANON[prop], val);
@@ -1412,6 +1422,86 @@ function _lumen_overflow_shorthand_value(obj) {
         !Object.prototype.hasOwnProperty.call(obj, 'overflow-y')) return undefined;
     var x = obj['overflow-x'], y = obj['overflow-y'];
     return x === y ? x : x + ' ' + y;
+}
+
+// CSS Rhythmic Sizing L1 §3.1 (BUG-517): `block-step` shorthand — `[
+// <'block-step-size'> || <'block-step-insert'> || <'block-step-align'> ||
+// <'block-step-round'> ]`, order-independent, each component optional. The
+// four grammars share no token (`none`/`<length>` vs the three `*-box`
+// keywords vs `auto`/`center`/`start`/`end` vs `up`/`down`/`nearest`), so
+// each whitespace-separated piece unambiguously belongs to exactly one slot
+// — mirrors `apply_block_step_shorthand`
+// (`crates/engine/layout/src/style/apply/layout.rs`). Same CSS-wide-keyword
+// whole-value fan-out as `_lumen_expand_overflow_shorthand` above.
+// `_lumen_split_top_level_ws` (not a plain `split(/\s+/)`) keeps a `calc(...)`
+// size argument's internal spaces intact.
+function _lumen_expand_block_step_shorthand(strVal) {
+    var lowerVal = strVal.trim().toLowerCase();
+    if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1) {
+        return { size: lowerVal, insert: lowerVal, align: lowerVal, round: lowerVal };
+    }
+    var tokens = _lumen_split_top_level_ws(strVal.trim());
+    if (tokens.length === 0) return null;
+    var size, insert, align, round;
+    for (var i = 0; i < tokens.length; i++) {
+        var tok = tokens[i];
+        var insertCanon = _lumen_css_canonical_keyword(tok, _LUMEN_KEYWORD_PROPERTIES['block-step-insert']);
+        if (insertCanon !== null && insertCanon !== undefined) {
+            if (insert !== undefined) return null;
+            insert = insertCanon;
+            continue;
+        }
+        var alignCanon = _lumen_css_canonical_keyword(tok, _LUMEN_KEYWORD_PROPERTIES['block-step-align']);
+        if (alignCanon !== null && alignCanon !== undefined) {
+            if (align !== undefined) return null;
+            align = alignCanon;
+            continue;
+        }
+        var roundCanon = _lumen_css_canonical_keyword(tok, _LUMEN_KEYWORD_PROPERTIES['block-step-round']);
+        if (roundCanon !== null && roundCanon !== undefined) {
+            if (round !== undefined) return null;
+            round = roundCanon;
+            continue;
+        }
+        var sizeCanon = _lumen_css_canonical_block_step_size(tok);
+        if (sizeCanon === null || sizeCanon === undefined) return null;
+        if (size !== undefined) return null;
+        size = sizeCanon;
+    }
+    return {
+        size: size !== undefined ? size : 'none',
+        insert: insert !== undefined ? insert : 'margin-box',
+        align: align !== undefined ? align : 'auto',
+        round: round !== undefined ? round : 'up',
+    };
+}
+
+// Returns the collapsed `block-step` value if all four longhands are
+// present in `obj` — a shared CSS-wide keyword if all four carry the same
+// one (same reason `_lumen_overflow_shorthand_value` collapses `x === y`),
+// `none` when every component is at its initial value, else the non-initial
+// ones joined in `size insert align round` order (mirrors
+// `block_step_shorthand_computed`, `selector_query.rs`).
+function _lumen_block_step_shorthand_value(obj) {
+    var keys = ['block-step-size', 'block-step-insert', 'block-step-align', 'block-step-round'];
+    for (var i = 0; i < keys.length; i++) {
+        if (!Object.prototype.hasOwnProperty.call(obj, keys[i])) return undefined;
+    }
+    var size = obj['block-step-size'], insert = obj['block-step-insert'],
+        align = obj['block-step-align'], round = obj['block-step-round'];
+    if (size === insert && insert === align && align === round &&
+        _LUMEN_CSS_WIDE_KEYWORDS.indexOf(size) !== -1) {
+        return size;
+    }
+    if (size === 'none' && insert === 'margin-box' && align === 'auto' && round === 'up') {
+        return 'none';
+    }
+    var parts = [];
+    if (size !== 'none') parts.push(size);
+    if (insert !== 'margin-box') parts.push(insert);
+    if (align !== 'auto') parts.push(align);
+    if (round !== 'up') parts.push(round);
+    return parts.join(' ');
 }
 
 // CSSOM-2 (BUG-484, срез 14): the six CSS Logical L1 §6 two-value
@@ -1711,6 +1801,13 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'float':       ['none', 'left', 'right', 'inline-start', 'inline-end'],
     'visibility':  ['visible', 'hidden', 'collapse'],
     'box-sizing':  ['border-box', 'content-box'],
+    // CSS Rhythmic Sizing L1 §3 (BUG-517) — `block-step-size` is a
+    // `none | <length [0,∞]>` grammar, not a flat keyword list, so it gets
+    // its own canon function (`_lumen_css_canonical_block_step_size`,
+    // native) below instead of an entry here.
+    'block-step-insert': ['margin-box', 'padding-box', 'content-box'],
+    'block-step-align':  ['auto', 'center', 'start', 'end'],
+    'block-step-round':  ['up', 'down', 'nearest'],
     'overflow-x':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
     'overflow-y':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
     // BUG-505 срез 3: `overflow-block`/`overflow-inline` (CSS Overflow L3
@@ -2248,6 +2345,9 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (key === 'overflow-clip-margin') {
         return _lumen_css_canonical_overflow_clip_margin(strVal);
     }
+    if (key === 'block-step-size') {
+        return _lumen_css_canonical_block_step_size(strVal);
+    }
     if (key === 'scroll-marker-group') {
         return _lumen_css_canonical_scroll_marker_group(strVal);
     }
@@ -2282,6 +2382,10 @@ CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
         var ovShorthand = _lumen_overflow_shorthand_value(obj);
         if (ovShorthand !== undefined) return ovShorthand;
     }
+    if (key === 'block-step') {
+        var bsShorthand = _lumen_block_step_shorthand_value(obj);
+        if (bsShorthand !== undefined) return bsShorthand;
+    }
     if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) {
         var v2v = _lumen_2v_shorthand_value(obj, key);
         if (v2v !== undefined) return v2v;
@@ -2315,6 +2419,16 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         if (ovExpanded === null) return; // invalid shorthand value: whole declaration dropped
         obj['overflow-x'] = ovExpanded.x;
         obj['overflow-y'] = ovExpanded.y;
+        _lumen_style_set_parsed(nid, obj);
+        return;
+    }
+    if (key === 'block-step') {
+        var bsExpanded = _lumen_expand_block_step_shorthand(strVal);
+        if (bsExpanded === null) return; // invalid shorthand value: whole declaration dropped
+        obj['block-step-size'] = bsExpanded.size;
+        obj['block-step-insert'] = bsExpanded.insert;
+        obj['block-step-align'] = bsExpanded.align;
+        obj['block-step-round'] = bsExpanded.round;
         _lumen_style_set_parsed(nid, obj);
         return;
     }
@@ -2358,6 +2472,7 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         key === 'max-lines' ||
         key === 'line-clamp' ||
         key === 'overflow-clip-margin' ||
+        key === 'block-step-size' ||
         // BUG-505 срез 6: `scroll-marker-group`'s own canon function
         // (`scroll-target-group` needs no separate arm — it's a
         // plain `_LUMEN_KEYWORD_PROPERTIES` entry above, already
