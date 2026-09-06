@@ -196,6 +196,65 @@ use super::*;
         assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
     }
 
+    // ─── `@mixin` inside `@layer` (BUG-518 срез 3, `mixin-layers.html`) ──────
+
+    #[test]
+    fn css_mixin_layer_named_block_resolves() {
+        // `mixin-layers.html` "Mixins work inside layers".
+        let s = cascade_at(
+            "<div>x</div>",
+            "@layer one { @mixin --m1() { @result { color: green; } } } \
+             div { @apply --m1(); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn css_mixin_layer_anonymous_block_resolves() {
+        // `mixin-layers.html` "Mixins work inside layers (anonymous)".
+        let s = cascade_at(
+            "<div>x</div>",
+            "@layer { @mixin --m2() { @result { color: green; } } } \
+             div { @apply --m2(); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn css_mixin_layer_stronger_layer_wins_regardless_of_source_order() {
+        // `mixin-layers.html` "Mixins in stronger layer wins": layer `two` is
+        // declared later in `@layer one, two;` (fixed order) than `one`, so
+        // `--m3` in `two` wins even though it's declared FIRST in source —
+        // same inversion `at_layer_order_statement_respected` already covers
+        // for plain declarations.
+        let s = cascade_at(
+            "<div>x</div>",
+            "@layer one, two; \
+             @layer two { @mixin --m3() { @result { color: green; } } } \
+             @layer one { @mixin --m3() { @result { color: red; } } } \
+             div { @apply --m3(); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn css_mixin_layer_stronger_layer_wins_source_order_matches() {
+        // `mixin-layers.html` "Mixins in stronger layer wins (source order
+        // matching layer order)": `two` still wins, this time also declared
+        // last in source.
+        let s = cascade_at(
+            "<div>x</div>",
+            "@layer one { @mixin --m4() { @result { color: red; } } } \
+             @layer two { @mixin --m4() { @result { color: green; } } } \
+             div { @apply --m4(); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
     // ─── revert-layer (CSS Cascade L5 §6.4.6) ────────────────────────────────
 
     #[test]

@@ -59,6 +59,33 @@ pub struct MixinRule {
     /// `None` if the mixin has no `@result` (a no-op mixin — `@apply`
     /// expands to zero declarations either way).
     pub result: Option<Vec<MixinResultItem>>,
+    /// Name of the `@layer` this `@mixin` was declared directly inside
+    /// (named or the synthesized `__anon_N__` for an anonymous block),
+    /// `None` for a top-level, unlayered `@mixin`. Stamped by the parser's
+    /// `AtRuleOutcome::LayerBlock` handler once the layer's own name is
+    /// resolved — this struct itself is built with `layer: None` and knows
+    /// nothing about its enclosing `@layer` at construction time. Feeds
+    /// [`MixinRule::layer_priority`] for `@apply` name resolution (BUG-518
+    /// срез 3, `mixin-layers.html`).
+    pub layer: Option<String>,
+}
+
+impl MixinRule {
+    /// CSS Cascade L5 §6.4.5 layer ordering, applied to `@mixin` name
+    /// resolution the same way ordinary declarations already use it in
+    /// `cascade.rs` (`layer_pri`/`layer_idx`): a `@mixin` in a layer
+    /// declared later in `layer_order` beats one declared earlier, and an
+    /// unlayered `@mixin` beats every layered one (unlayered = highest
+    /// priority). Ties (same layer, or two unlayered mixins) are broken by
+    /// the caller comparing this against each candidate's position in
+    /// `sheet.mixin_rules` — last-registered wins, matching
+    /// `mixin-basic.html`'s explicit redefinition test.
+    pub fn layer_priority(&self, layer_order: &[String]) -> i32 {
+        match &self.layer {
+            None => layer_order.len() as i32,
+            Some(name) => layer_order.iter().position(|n| n == name).map_or(0, |i| i as i32),
+        }
+    }
 }
 
 /// One parameter of an `@mixin` rule: `--name [type(<syntax>)]? [: <default>]?`.
@@ -233,7 +260,7 @@ impl<'a> Parser<'a> {
         }
         self.consume(); // '{'
         let (locals, result) = self.parse_mixin_body();
-        Some(MixinRule { name, parameters, locals, result })
+        Some(MixinRule { name, parameters, locals, result, layer: None })
     }
 
     /// Parses one `@mixin` parameter: `--name`, `--name: <default>`,
@@ -552,7 +579,14 @@ pub(super) fn collect_mixin_nested_rules(sheet: &Stylesheet) -> Vec<Rule> {
                 continue;
             }
             let Some(apply) = parse_apply_call(&decl.value) else { continue };
-            let Some(mixin) = sheet.mixin_rules.iter().rev().find(|m| m.name == apply.name) else {
+            let Some(mixin) = sheet
+                .mixin_rules
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.name == apply.name)
+                .max_by_key(|(i, m)| (m.layer_priority(&sheet.layer_order), *i))
+                .map(|(_, m)| m)
+            else {
                 continue;
             };
             let Some(result) = &mixin.result else { continue };
