@@ -46,7 +46,7 @@ fn collect_text_rec(b: &LayoutBox, out: &mut Vec<TextFragment>) {
     }
 
     if let BoxKind::InlineRun { lines, .. } = &b.kind {
-        let line_h = b.style.font_size * b.style.line_height;
+        let line_h = b.used_line_height;
         for (line_idx, line) in lines.iter().enumerate() {
             let line_y = b.rect.y + line_idx as f32 * line_h;
             for frag in line {
@@ -148,6 +148,7 @@ mod tests {
             origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(1),
             rect,
+            used_line_height: 16.0 * 1.2,
             style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::InlineRun { segments: vec![], lines, first_line_style: None },
             children: vec![],
@@ -161,6 +162,7 @@ mod tests {
             origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(1),
             rect,
+            used_line_height: 16.0 * 1.2,
             style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children,
@@ -318,6 +320,7 @@ mod tests {
             origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(1),
             rect: Rect { x: 0.0, y: 0.0, width: 100.0, height: 20.0 },
+            used_line_height: 16.0 * 1.2,
             style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Skip,
             children: vec![],

@@ -209,7 +209,7 @@ style_and_transform}` (5 шт).
 скриптом, что дал `O members=16` в исходной заявке) даёт теперь число,
 сопоставимое с элементным контекстом (59) — точного равенства не требуется,
 поскольку `getTransform()`/применение `CanvasPattern.setTransform` всё ещё
-ждут `DOMMatrix` ([BUG-522](BUG-522-OPEN.md)), а `setLineDash`/`getLineDash`/
+ждут `DOMMatrix` ([BUG-522](BUG-522-FIXED.md)), а `setLineDash`/`getLineDash`/
 `isPointInPath`/`isPointInStroke` — заглушки той же формы, что и на
 элементном контексте (не новый дефект, симметрия).
 

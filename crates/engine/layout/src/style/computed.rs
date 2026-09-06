@@ -33,7 +33,8 @@ use lumen_core::ColorSpace;
 // втянул реэкспортом из `style/values/*`, `style/parse/*` (правило §2.1).
 use crate::style::{
     AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline,
-    Appearance, BackfaceVisibility, BackgroundLayer, BorderCollapse, BorderStyle, BoxShadow,
+    Appearance, BackfaceVisibility, BackgroundLayer, BlockStepAlign, BlockStepInsert,
+    BlockStepRound, BorderCollapse, BorderStyle, BoxShadow,
     BoxSizing, BreakValue, ClearSide, ClipPath, Color, ColorScheme, ContainerType, ContainFlags,
     Content, ContentVisibility, CssColor, CssContinue, Cursor, CustomProps, default_font_family,
     Direction, Display, DynamicRangeLimit, EmptyCells, FieldSizing, FillRule, FilterFn, FlexBasis, FlexDirection,
@@ -49,7 +50,7 @@ use crate::style::{
     SvgPaint, SvgPaintOrder,
     TextAlign, TextAlignLast, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle,
     TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle, TextOrientation,
-    TextOverflow, TextShadow, TextTransform, TextUnderlinePosition, TextWrapMode, TextWrapStyle,
+    TextOverflow, TextShadow, TextSizeAdjust, TextTransform, TextUnderlinePosition, TextWrapMode, TextWrapStyle,
     TimingFunction, TouchAction, TransformFn, TransformStyle, UnicodeBidi, UserSelect,
     VerticalAlign, Visibility, WebkitBoxOrient, WhiteSpace, WhiteSpaceCollapse, WordBreak,
     WritingMode,
@@ -98,6 +99,19 @@ pub struct ComputedStyle {
     /// of re-scaling it. Initial: `true` (`normal` is relative). Inherited with
     /// `line_height`.
     pub line_height_is_relative: bool,
+    /// CSS2 §10.8.1 / CSS Fonts L4 §14.3 — `true` when `line-height` resolved to
+    /// the `normal` keyword specifically, as opposed to an author-specified
+    /// unitless `<number>` that happens to also be relative. Both set
+    /// `line_height_is_relative = true` and start `line_height` at the same
+    /// `1.2` fallback ratio, so this is the only signal that distinguishes them.
+    /// FONTLOAD-14 (BUG-467): layout's whole-tree resolve pass
+    /// (`box_tree::entry::resolve_used_line_height`) uses this flag to replace
+    /// the `1.2` approximation with the box's real font metrics (`ascent +
+    /// descent + lineGap`) into [`LayoutBox::used_line_height`] — `line_height`
+    /// itself is left untouched (would force an `Arc::make_mut` deep-copy of
+    /// nearly every box's style, `normal` being the default). Initial: `true`.
+    /// Inherited with `line_height`.
+    pub line_height_is_normal: bool,
     /// CSS Rhythmic Sizing L1 §2 — `line-height-step` step unit in px.
     /// When `> 0`, each line box's used height is rounded up to the closest
     /// multiple of this value and the extra space is distributed as half-leading.
@@ -234,6 +248,20 @@ pub struct ComputedStyle {
     pub border_bottom_color: CssColor,
     pub border_left_color: CssColor,
     pub box_sizing: BoxSizing,
+    /// CSS Rhythmic Sizing L1 §3.2 — `block-step-size`. NOT inherited.
+    /// Initial: `none` (`None`). Phase 0: parse + store, resolved eagerly to
+    /// px (same scope as `line_height_step`) — no layout algorithm effect yet
+    /// (BUG-517).
+    pub block_step_size: Option<f32>,
+    /// CSS Rhythmic Sizing L1 §3.3 — `block-step-insert`. NOT inherited.
+    /// Initial: `MarginBox` (BUG-517).
+    pub block_step_insert: BlockStepInsert,
+    /// CSS Rhythmic Sizing L1 §3.4 — `block-step-align`. NOT inherited.
+    /// Initial: `Auto` (BUG-517).
+    pub block_step_align: BlockStepAlign,
+    /// CSS Rhythmic Sizing L1 §3.5 — `block-step-round`. NOT inherited.
+    /// Initial: `Up` (BUG-517).
+    pub block_step_round: BlockStepRound,
     /// CSS Positioned Layout L3 §3 — `position`. Не наследуется.
     /// Default `Static`. Используется для stacking context (§9.10) и layout.
     pub position: Position,
@@ -326,6 +354,12 @@ pub struct ComputedStyle {
     pub scroll_target_group: ScrollTargetGroup,
     /// CSS UI L4 §10.1 — text-overflow. Не наследуется.
     pub text_overflow: TextOverflow,
+    /// CSS Text Size Adjustment L1 §2 — `text-size-adjust` / legacy alias
+    /// `-webkit-text-size-adjust`. Наследуется. Initial `Auto`. BUG-513.
+    /// Phase 0: parse + store + interpolate — нет мобильного пайплайна
+    /// авто-инфляции текста, эффекта на рендер нет (тот же класс, что
+    /// `dynamic_range_limit`/BUG-508).
+    pub text_size_adjust: TextSizeAdjust,
     /// CSS Color L3 §3.2 — opacity (0.0..=1.0). Не наследуется. Работает
     /// как alpha всего слоя (включая фон, бордер, текст и потомков). В
     /// Phase 0 layout только хранит — paint пока не применяет alpha
@@ -355,8 +389,8 @@ pub struct ComputedStyle {
     /// CSS Color Adjustment L1 §3 — `color-scheme`. Inherited. Initial: `Normal`.
     /// Phase 0: parse + store; реальное переключение SystemColor / UA-тем — P2.
     pub color_scheme: ColorScheme,
-    /// CSS Color Adjustment L1 §4 — `forced-color-adjust`. NOT inherited. Initial: `Auto`.
-    /// Phase 0: parse + store; применение при Forced Colors Mode — P2.
+    /// CSS Color Adjustment L1 §4 — `forced-color-adjust`. Inherited. Initial: `Auto`.
+    /// Применяется в `style::adjust::apply_forced_colors_mode`.
     pub forced_color_adjust: ForcedColorAdjust,
     /// CSS Color HDR L1 §2 — `dynamic-range-limit`. Inherited. Initial:
     /// `no-limit` (`DynamicRangeLimit::default()`). BUG-508. Phase 0: parse
@@ -523,6 +557,16 @@ pub struct ComputedStyle {
     /// CSS Overscroll Behavior L1 §2 — `overscroll-behavior-x`. Не наследуется.
     pub overscroll_behavior_x: OverscrollBehavior,
     pub overscroll_behavior_y: OverscrollBehavior,
+    /// CSS Overscroll Behavior L1 §2 — специфицированные значения
+    /// `overscroll-behavior-block`/`overscroll-behavior-inline` до
+    /// разрешения в физическую пару `overscroll_behavior_x`/`_y` по
+    /// `writing_mode` (`resolve_overscroll_behavior_logical_properties`,
+    /// `style/logical.rs`). Не наследуются, как и физическая пара. Default
+    /// `Auto` совпадает с initial value — тот же эвристический приём, что у
+    /// `overflow_block`/`overflow_inline` (BUG-505) и остальных логических
+    /// свойств в этом файле.
+    pub overscroll_behavior_block: OverscrollBehavior,
+    pub overscroll_behavior_inline: OverscrollBehavior,
     /// CSS Text L3 §10.1 — `tab-size: <integer> | <length>`. Inherited.
     /// В пикселях если length; для integer хранится как число × 8 (default
     /// 8 spaces — стандартный default). Default 8 spaces = 64px при 8px-space.
@@ -992,6 +1036,7 @@ impl ComputedStyle {
             effective_zoom: 1.0,
             line_height: 1.2,
             line_height_is_relative: true,
+            line_height_is_normal: true,
             line_height_step: 0.0,
             font_style: FontStyle::Normal,
             font_weight: FontWeight::NORMAL,
@@ -1047,6 +1092,10 @@ impl ComputedStyle {
             border_bottom_color: CssColor::CurrentColor,
             border_left_color: CssColor::CurrentColor,
             box_sizing: BoxSizing::ContentBox,
+            block_step_size: None,
+            block_step_insert: BlockStepInsert::MarginBox,
+            block_step_align: BlockStepAlign::Auto,
+            block_step_round: BlockStepRound::Up,
             position: Position::Static,
             top: LengthOrAuto::Auto,
             right: LengthOrAuto::Auto,
@@ -1079,6 +1128,7 @@ impl ComputedStyle {
             scroll_marker_group: None,
             scroll_target_group: ScrollTargetGroup::None,
             text_overflow: TextOverflow::Clip,
+            text_size_adjust: TextSizeAdjust::default(),
             opacity: 1.0,
             outline_width: 3.0,
             outline_style: OutlineStyle::None,
@@ -1147,6 +1197,8 @@ impl ComputedStyle {
             scroll_padding_left: 0.0,
             overscroll_behavior_x: OverscrollBehavior::Auto,
             overscroll_behavior_y: OverscrollBehavior::Auto,
+            overscroll_behavior_block: OverscrollBehavior::Auto,
+            overscroll_behavior_inline: OverscrollBehavior::Auto,
             // CSS Text typography defaults.
             tab_size: 64.0,  // 8 spaces × 8px-space-width default.
             caret_color: None,  // `auto`.

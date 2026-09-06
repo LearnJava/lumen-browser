@@ -536,7 +536,15 @@ impl Lumen {
             self.drain_query_js(|j| j.take_pending_scripted_font_faces()).unwrap_or_default();
         if !scripted_fonts.is_empty() {
             for (family, weight, style, bytes) in scripted_fonts {
-                self.page_font_registry.register_from_bytes(&family, weight, style, &[], bytes);
+                // FONTLOAD-17 gap (not this slice): `new FontFace(family, source,
+                // descriptors)`'s `descriptors.{ascentOverride,descentOverride,
+                // sizeAdjust,lineGapOverride}` never reach here —
+                // `take_pending_scripted_font_faces` only carries
+                // `(family, weight, style, bytes)`. Scripted overrides pass `None`
+                // until that JS-side gap is closed.
+                self.page_font_registry.register_from_bytes(
+                    &family, weight, style, &[], bytes, None, None, None, None,
+                );
             }
             if let Some(r) = self.renderer.as_mut() {
                 r.set_font_provider(Some(

@@ -158,6 +158,7 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.font_size = parent.font_size;
     style.line_height = parent.line_height;
     style.line_height_is_relative = parent.line_height_is_relative;
+    style.line_height_is_normal = parent.line_height_is_normal;
     style.line_height_step = parent.line_height_step;
     style.font_style = parent.font_style;
     style.font_weight = parent.font_weight;
@@ -265,6 +266,7 @@ pub fn merge_pseudo_inherited(
         font_size,
         line_height,
         line_height_is_relative,
+        line_height_is_normal,
         font_style,
         font_weight,
         font_variant_caps,

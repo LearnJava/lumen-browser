@@ -241,6 +241,7 @@ fn moved_out_husk(b: &LayoutBox) -> LayoutBox {
     LayoutBox {
         node: b.node,
         rect: b.rect,
+        used_line_height: b.used_line_height,
         style: std::sync::Arc::clone(&b.style),
         origin: b.origin,
         kind: crate::box_tree::BoxKind::Skip,
@@ -804,6 +805,7 @@ mod tests {
             origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(id as usize),
             rect,
+            used_line_height: 16.0 * 1.2,
             style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![],
@@ -821,6 +823,7 @@ mod tests {
             origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(id as usize),
             rect,
+            used_line_height: 16.0 * 1.2,
             style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children,
@@ -967,7 +970,17 @@ mod tests {
         struct ZeroMeasurer;
         impl crate::TextMeasurer for ZeroMeasurer {
             fn char_width(&self, _: char, _: f32) -> f32 { 0.0 }
-        }
+        
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
+    }
+}
 
         let html = r#"<div style="height:100px"></div><div style="height:50px"></div>"#;
         let doc = parse_html(html);
@@ -1002,7 +1015,17 @@ mod tests {
         struct ZeroMeasurer;
         impl crate::TextMeasurer for ZeroMeasurer {
             fn char_width(&self, _: char, _: f32) -> f32 { 0.0 }
-        }
+        
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
+    }
+}
 
         let html = r#"<div style="height:80px"></div>"#;
         let doc = parse_html(html);
@@ -1029,7 +1052,17 @@ mod tests {
     struct FixedMeasurer;
     impl crate::TextMeasurer for FixedMeasurer {
         fn char_width(&self, _: char, size: f32) -> f32 { size * 0.5 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
 
     /// Collect (node, rect) pairs in pre-order for geometry comparison.
     fn collect_rects(b: &LayoutBox, out: &mut Vec<(NodeId, Rect)>) {
@@ -1985,6 +2018,7 @@ mod tests {
             origin: crate::box_tree::BoxOrigin::default(),
             node,
             rect: Rect::new(1.0, 2.0, 3.0, 4.0),
+            used_line_height: 16.0 * 1.2,
             style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Skip,
             children: Vec::new(),

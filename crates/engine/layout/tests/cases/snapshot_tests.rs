@@ -81,6 +81,16 @@ impl lumen_layout::TextMeasurer for Fixed8 {
     fn char_width(&self, _: char, _: f32) -> f32 {
         8.0
     }
+
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// golden snapshot below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
+    }
 }
 
 fn build_measured(html: &str, css: &str, width: f32) -> String {

@@ -470,7 +470,7 @@ fn lay_out_inner(
         && s.width.is_none()
     {
         if let (BoxKind::FormControl { kind }, Some(m)) = (&b.kind, measurer) {
-            let lh = s.font_size * s.line_height;
+            let lh = b.used_line_height;
             match kind {
                 FormControlKind::Input { value_text, .. } => {
                     Some(field_sizing_content_intrinsic("input", value_text, s.font_size, lh, m))
@@ -857,7 +857,7 @@ fn lay_out_inner(
             };
             align_lines(lines, content_width, s.text_align, s.text_align_last, s.direction);
             // CSS Rhythmic Sizing L1 §2 — round each line box up to a multiple of line-height-step.
-            let line_h = step_line_height(s.font_size * s.line_height, s.line_height_step);
+            let line_h = step_line_height(b.used_line_height, s.line_height_step);
             apply_inline_vertical_align(lines, line_h);
             // CSS Overflow L4 §3.2: -webkit-line-clamp / line-clamp — multi-line truncation.
             // Takes priority over text-overflow:ellipsis (both cannot apply simultaneously).
@@ -893,9 +893,9 @@ fn lay_out_inner(
         b.rect.height = match first_line_style.as_deref() {
             Some(fls) if !lines.is_empty() => {
                 step_line_height(fls.font_size * fls.line_height, step)
-                    + (line_count - 1) as f32 * step_line_height(s.font_size * s.line_height, step)
+                    + (line_count - 1) as f32 * step_line_height(b.used_line_height, step)
             }
-            _ => line_count as f32 * step_line_height(s.font_size * s.line_height, step),
+            _ => line_count as f32 * step_line_height(b.used_line_height, step),
         };
         return;
     }
@@ -1119,11 +1119,11 @@ fn lay_out_inner(
                     }
                     // CSS Lists L3 §2.4 — position ::marker outside or inside principal block.
                     if matches!(&child.kind, BoxKind::Marker { .. }) {
-                        let (position, em, lh, marker_text) =
+                        let (position, em, marker_text) =
                             if let BoxKind::Marker { position, text, .. } = &child.kind {
-                                (*position, child.style.font_size, child.style.line_height, text.clone())
+                                (*position, child.style.font_size, text.clone())
                             } else { unreachable!() };
-                        let line_h = em * lh;
+                        let line_h = child.used_line_height;
                         // CSS Lists L3 §2.4 — the outside marker occupies the area to the
                         // left of the principal box. The default box is `em * 1.5`; a text
                         // marker (counter glyph or `::marker { content }`) wider than that —

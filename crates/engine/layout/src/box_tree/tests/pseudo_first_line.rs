@@ -63,7 +63,17 @@ mod first_letter_drop_cap {
     struct Fixed8;
     impl super::super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
 
     fn layout(html: &str, css: &str) -> super::super::super::LayoutBox {
         super::super::super::layout_measured(
@@ -265,7 +275,17 @@ mod initial_letter {
     struct Fixed8;
     impl super::super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
 
     fn layout(html: &str, css: &str) -> super::super::super::LayoutBox {
         super::super::super::layout_measured(
@@ -378,7 +398,17 @@ fn first_line_frags_marked_after_wrap() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     let html = "<p>one two three four five</p>";
     let root = super::super::layout_measured(
         &lumen_html_parser::parse(html),
@@ -415,7 +445,17 @@ fn first_letter_style_applied_when_rule_present() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     let html = "<p>Hello world</p>";
     let css  = "p::first-letter { color: red; }";
     let root = super::super::layout_measured(
@@ -457,7 +497,17 @@ fn first_letter_no_rule_leaves_segment_unchanged() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     let html = "<p>Hello</p>";
     let css  = "p { color: blue; }";
     let root = super::super::layout_measured(
@@ -486,7 +536,17 @@ fn first_line_style_applied_to_first_line_frags() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     // 60px wide container forces wrap: "one two" (56px) fits on line 0, rest wraps.
     let html = "<p>one two three four</p>";
     let css  = "p::first-line { color: green; }";
@@ -549,7 +609,17 @@ fn bug341_s23_first_line_is_probed_only_by_a_sheet_that_uses_it() {
         struct Fixed8;
         impl super::super::super::TextMeasurer for Fixed8 {
             fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
-        }
+        
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
+    }
+}
         crate::style::set_pseudo_cascade_diagnostics(true);
         let _ = crate::style::take_pseudo_cascade_sites();
         let root = super::super::layout_measured(html, &lumen_css_parser::parse(css), vp, &Fixed8);
@@ -604,7 +674,17 @@ fn bug341_s25_display_probes_read_the_cascade_instead_of_re_running_it() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     let doc = lumen_html_parser::parse(
         "<div id=host>text <span>inline</span> <b>ib</b> <i>gone</i> <span>after</span>\
          <p>block</p></div>",
@@ -738,7 +818,17 @@ fn first_line_no_rule_frags_unchanged() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     let html = "<p>one two three four</p>";
     let css  = "p { color: blue; }";
     let root = super::super::layout_measured(
@@ -772,12 +862,32 @@ fn first_line_no_rule_frags_unchanged() {
 struct FixedW8;
 impl super::super::super::TextMeasurer for FixedW8 {
     fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
+    }
 }
 /// Char width scales with font size (half the font size per char):
 /// 16px font → 8px/char, 32px font → 16px/char.
 struct HalfEm;
 impl super::super::super::TextMeasurer for HalfEm {
     fn char_width(&self, _: char, size: f32) -> f32 { size / 2.0 }
+
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
+    }
 }
 
 /// All InlineRun boxes in tree order.
@@ -1174,7 +1284,17 @@ fn first_line_style_override_applied_to_first_line_frags() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     let css = "p::first-line { color: #ff0000; }";
     // 60px wide → "one two" (56px) on line 0, "three" wraps to line 1.
     let root = super::super::layout_measured(
@@ -1225,7 +1345,17 @@ fn first_letter_keeps_enclosing_inline_style() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     let root = super::super::layout_measured(
         &lumen_html_parser::parse("<p><em>Bravo</em> beta gamma</p>"),
         &lumen_css_parser::parse("p::first-letter { color: #ff0000; }"),
@@ -1264,7 +1394,17 @@ fn first_line_does_not_clobber_inner_bold() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     let root = super::super::layout_measured(
         &lumen_html_parser::parse("<p>one <b>two</b> three four</p>"),
         &lumen_css_parser::parse("p::first-line { color: #ff0000; }"),
@@ -1297,7 +1437,17 @@ fn first_line_no_rule_leaves_frags_unstyled() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     let root = super::super::layout_measured(
         &lumen_html_parser::parse("<p>one two three four</p>"),
         &lumen_css_parser::parse(""),

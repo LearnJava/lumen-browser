@@ -1,6 +1,14 @@
 # BUG-511: `link-parameters` CSS property not implemented at all
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md)
+**Тип:** доработка — не точечный дефект. Тот же класс, что [BUG-507](BUG-507-OPEN.md)
+(CSS Exclusions `wrap-flow`/`wrap-through`): `link-parameters` — очень раннее
+CSSWG Editor's Draft (`param()`, читающий именованные параметры с `<link>`),
+не отгруженное ни в одном evergreen-браузере и не входящее ни в один
+shipping-priority список. Переклассифицировано P3 2026-09-05: добавлена
+запись в раздел «Out of scope 🚫» `CSS-SPECS.md`, снято с очереди
+`STATUS-P3.md`. `.ini` (см. ниже) уже коммичены — точечной правки кода не
+требуется.
 **Дата:** 2026-08-03
 **Компонент:** css-parser + layout (`grep -rn "link-parameters\|link_parameters"
 crates/` — zero hits anywhere in the workspace)

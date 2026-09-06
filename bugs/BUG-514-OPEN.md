@@ -66,3 +66,58 @@ identifier access ([BUG-384](BUG-384-FIXED.md)).
 
 Committed `.ini` under `tests/wpt/metadata/css/css-env/` for the 5
 attributed files, `expected: FAIL` per subtest.
+
+## Ревизия P3 2026-09-05 — премиса устарела, найдено 3 разных корня
+
+`grep -rn '"env"' crates/` по-прежнему пуст (WebAssembly-контекст не CSS), но
+это больше не значит «`env()` не распознаётся»: `env()`/`var()`-substitution
+давно реализована в `crates/engine/layout/src/style/substitute.rs`
+(`expand_env_vars`, разворачивание fallback, вложенный `calc()`/`var()`,
+глубина рекурсии, 5 юнит-тестов `filter_transform_snap_mask.rs`), `@supports`
+уже не проверяет значение деклараций вовсе (`SupportsCondition::evaluate`
+всегда `true` для известного имени свойства — тот же wildcard, что для
+`var()`), а `CSS-SPECS.md:114` числит модуль ✅. Живой прогон (`run_smoke.py`,
+собранный `dev-release`) подтверждает: 1 из 5 файлов уже проходит
+(`unknown-env-names-override-previous.tentative.html`, `.ini` удалён), а
+остаток (4 файла/21 сабтест) распадается на **три независимых, не связанных
+с "env() не реализован" причины**, установленные прямой живой пробой
+(`--mcp-live-port`, `LUMEN_NO_ENGINE_THREAD=1`), а не по интуиции:
+
+1. **`syntax.tentative.html` (18 сабтестов)** — каждый кейс создаёт `<div>`
+   через `document.createElement`, ставит `elem.style.cssText`, читает
+   `getComputedStyle(elem)` в том же тике скрипта. Проба показала: даже
+   БАЗОВЫЙ кейс без единого `env()` (`div.style.cssText = ''`, ожидание —
+   цвет из `<style>`) и вообще любое свойство (`display`/`color` на только
+   что созданном узле) отдают `""` — классический
+   [BUG-493](BUG-493-OPEN.md)/CSSOM-4 (`getComputedStyle` не форсирует
+   flush, недавно созданный узел не виден). Реатрибутировано на BUG-493.
+2. **`at-supports.tentative.html` + `fallback-nested-var.tentative.html`
+   (по 1 сабтесту)** — оба читают
+   `getComputedStyle(document.body).backgroundColor`. Прямая проба нашла
+   ТРЕТИЙ, ранее не заведённый баг, не имеющий отношения к `env()`:
+   canvas-background-propagation (`box_tree/entry.rs::propagate_canvas_background`)
+   безусловно вычищает `background-color`/`background-layers` из
+   `body`'s собственного `Arc<ComputedStyle>` (не копия — тот же объект,
+   что видит CSSOM), поэтому `getComputedStyle(body).backgroundColor`
+   отвечает `transparent` для ЛЮБОГО `body { background-color: ... }`,
+   вне зависимости от `env()`/`@supports`. Заведено отдельно —
+   [BUG-1007](BUG-1007-OPEN.md) (не point-fixed здесь: наивное «не
+   перемещать, а копировать» ломает полупрозрачные цвета двойным
+   композитингом — canvas-clear + собственная перерисовка `body`;
+   корректный фикс требует отдельного paint-only маркера на `LayoutBox`,
+   не на `ComputedStyle`, вне объёма этой заявки).
+3. **`supports-script.tentative.html` (1 сабтест)** — не CSSOM-маскировка:
+   реальный, узкий, ФИКСНУТЫЙ здесь дефект. `CSS.supports("background",
+   "env()")` (пустые скобки, без обязательного `<custom-ident>`) отвечал
+   `true` — двухаргументная форма `_lumen_css_supports_prop`
+   (`crates/js/src/v8_runtime/install/platform.rs`) намеренно игнорирует
+   `value` целиком (Phase-0 упрощение для feature-detection). Добавлена
+   узкая проверка `value_has_empty_env_call` — только детектирует пустые
+   `env()` (нет общей ревалидации значения, не расширяет объём Phase-0
+   упрощения), 2 юнит-теста. Живой прогон подтвердил:
+   `supports-script.tentative.html` теперь проходит, `.ini` удалён.
+
+Точечного P3-фикса для `env()` самого по себе не требовалось — он уже
+реализован. Остаток (19 сабтестов) не блокируется этой заявкой: 18 —
+BUG-493/CSSOM-4 (P1-трек), 2 — BUG-1007 (отдельная заявка, нужен
+`LayoutBox`-level маркер, вне точечного фикса).

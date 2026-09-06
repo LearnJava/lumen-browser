@@ -138,8 +138,9 @@ pub(crate) fn read_index_cache(dirs: &[PathBuf]) -> Option<HashMap<String, Vec<F
         let stretch: u16 = parts.next()?.parse().ok()?;
         let path = PathBuf::from(parts.next()?);
         let key = family.to_ascii_lowercase();
-        // Системный индекс не кэширует unicode-range (это @font-face-дескриптор,
-        // системные шрифты его не несут) — FONTLOAD-9.
+        // Системный индекс не кэширует unicode-range/override-дескрипторы
+        // (это @font-face-дескрипторы, системные шрифты их не несут) —
+        // FONTLOAD-9/FONTLOAD-17.
         index.entry(key).or_default().push(FaceRecord {
             family,
             weight,
@@ -147,6 +148,10 @@ pub(crate) fn read_index_cache(dirs: &[PathBuf]) -> Option<HashMap<String, Vec<F
             stretch,
             path,
             unicode_ranges: Vec::new(),
+            ascent_override: None,
+            descent_override: None,
+            size_adjust: None,
+            line_gap_override: None,
         });
     }
 
@@ -235,6 +240,10 @@ mod tests {
                 stretch: 100,
                 path: PathBuf::from("/fake/Inter-Regular.ttf"),
                 unicode_ranges: Vec::new(),
+                ascent_override: None,
+                descent_override: None,
+                size_adjust: None,
+                line_gap_override: None,
             }],
         );
         m

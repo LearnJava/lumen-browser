@@ -863,6 +863,32 @@ fn overscroll_behavior_individual_axis() {
     assert_eq!(s.overscroll_behavior_y, OverscrollBehavior::Auto);
 }
 
+// BUG-516: `overscroll-behavior-block`/`-inline` — logical longhands, must
+// resolve to the physical `_x`/`_y` pair through `resolve_overscroll_
+// behavior_logical_properties` (`style/logical.rs`), same shape as
+// `overflow-block`/`-inline` (BUG-505).
+#[test]
+fn overscroll_behavior_logical_horizontal_tb() {
+    let root = lay(
+        "<p>x</p>",
+        "p { overscroll-behavior-block: contain; overscroll-behavior-inline: none; }",
+    );
+    let s = first_p_style(&root);
+    assert_eq!(s.overscroll_behavior_y, OverscrollBehavior::Contain);
+    assert_eq!(s.overscroll_behavior_x, OverscrollBehavior::None);
+}
+
+#[test]
+fn overscroll_behavior_logical_vertical_rl_swaps_axes() {
+    let root = lay(
+        "<p>x</p>",
+        "p { writing-mode: vertical-rl; overscroll-behavior-block: contain; overscroll-behavior-inline: none; }",
+    );
+    let s = first_p_style(&root);
+    assert_eq!(s.overscroll_behavior_x, OverscrollBehavior::Contain);
+    assert_eq!(s.overscroll_behavior_y, OverscrollBehavior::None);
+}
+
 #[test]
 fn scroll_snap_not_inherited() {
     let root = lay(

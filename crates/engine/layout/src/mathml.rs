@@ -425,6 +425,7 @@ fn make_anonymous_box_with_style(style: std::sync::Arc<ComputedStyle>) -> Layout
     LayoutBox {
         node: NodeId::from_index(0),
         rect: Rect::ZERO,
+        used_line_height: style.font_size * style.line_height,
         style,
         kind: BoxKind::Block,
         children: vec![],

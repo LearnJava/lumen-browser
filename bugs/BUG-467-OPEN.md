@@ -1170,3 +1170,508 @@ A/B-замер `css/css-fonts` override-категории (`size-adjust`/`ascen
 `descent-override`); (D) feature/variation-settings дескриптора как дефолта
 CSS-свойства + шейпинг вне variable-font-пути; femtovg-паритет для (A);
 реактивность CSS-connected сета (BUG-471/CSSOM-4).
+
+## FONTLOAD-13 (P1, 2026-09-05, ветка `p1-fontload13-line-gap-line-height-normal`) — line-gap accessor (предпосылка для `lineGapOverride`)
+
+Взят первый из кандидатов, оставленных FONTLOAD-11/12: реальный `line-gap`
+accessor. Три предыдущих среза (10/11/12) подряд откладывали его с одной и
+той же причиной — «в пайплайне нет ни одного потребителя line-gap, `line-
+height: normal` в этом движке — фиксированный множитель `1.2em`». Это
+осталось верным и после этого среза: `s.line_height = 1.2` (`style/apply/
+text.rs`, `style/quirks.rs`, `Default` в `style/computed.rs`) не тронут.
+
+**Почему не тронут — не забывчивость, а измеренный риск.** Комментарий у
+`BoxKind::InlineBlockRow` (`layout_dispatch.rs`, IFC-1) уже задокументировал
+цену перехода на реальные метрики face-а для strut: `line-height: normal` у
+настоящего шрифта — `ascent + descent + lineGap`, но добавление half-leading
+от этой суммы вместо от `1.2em` поднимает строки из одних atomic inline на
+~1.3px относительно Edge и переводит TEST-02/04/21/56 (ряды пустых inline-
+block) в FAIL на 0.68% при пороге 0.5% — измерено A/B тем срезом. Пуск
+`lineGapOverride` в живой WPT-эффект (`tests/wpt/css/css-fonts/line-gap-
+override.html`: `<br>`-разделённые строки текста, не atomic-inline ряд)
+означало бы переносить `line_height` из font-агностичного `ComputedStyle`
+(вычисляется до резолва face-а) в font-осведомлённый layout-путь для
+GENERAL text flow — на порядок больше по площади и риску, чем добавление
+ещё одного override-дескриптора рядом с уже консьюмируемым ascent/descent.
+Это осталось будущей работой, а не решено этим срезом.
+
+**Изменения — только accessor, без нового живого потребителя в layout:**
+1. `lumen_layout::TextMeasurer` (`crates/engine/layout/src/lib.rs`) получил
+   `line_gap_px`/`line_gap_px_with_families` — новые методы трейта с
+   default-реализацией (`0.0`, как у большинства шрифтов без line-gap),
+   тем же приёмом, что `x_height_px`/`descent_px_with_families`. Default
+   делает добавление обратно совместимым — ни один из mock-`TextMeasurer`
+   в тестах layout-крейта не тронут.
+2. `FontMeasurer`/`OwnedFontMetrics` (`crates/engine/paint/src/lib.rs`)
+   получили `line_gap_units: u16`, читается в `FontMeasurer::new`/
+   `OwnedFontMetrics::from_bytes` тем же приоритетом источника, что уже
+   применяется к ascent/descent: `OS/2.sTypoLineGap`, иначе `hhea.lineGap`
+   (обе таблицы уже парсились `lumen_font::os2`/`hhea`, просто поле не
+   читалось никем — FONTLOAD-10 это отмечала). `line_gap_px` — та же
+   формула деления на `units_per_em`, что `descent_px`.
+3. `line_gap_override: Option<f32>` проведён РОВНО тем же путём, что
+   `ascent_override`/`descent_override`/`size_adjust` в FONTLOAD-11/12:
+   `FontFaceSlot`, `PrimaryFontMetrics::Owned`,
+   `MultiFontMeasurer::register_family_with_overrides` (седьмой параметр —
+   `#[allow(clippy::too_many_arguments)]`, тот же прецедент, что уже есть в
+   `lumen-canvas`/`lumen-layout::anchor.rs`), `local()`- и `url()`-пути
+   (`page_pipeline.rs`, `frames.rs::frame_measurer`/`load_frame_fonts`,
+   `subresources.rs::PendingWebFont`/`LoadedWebFont`, `page_load.rs`
+   (фоновый парсинг + `LoadEvent::FontLoaded`), `app/user_event.rs`,
+   `relayout.rs::page_measurer`). CSS-парсинг (`at_rules.rs`) и
+   DOM-хранение (`lumen_dom::FontFace`) дескриптора `line-gap-override` уже
+   существовали до этого среза (нужны были для JS `FontFace.lineGapOverride`,
+   не для paint-пайплайна) — этот срез не трогает ни один, ни другой.
+4. Композиция с `size-adjust` — тот же принцип, что у ascent/descent-
+   override (FONTLOAD-12): override — доля УЖЕ скорректированного
+   `size-adjust`'ом `font-size`.
+
+**Намеренно вне среза:**
+- **Сама модель `line-height: normal`** — остаётся `1.2em`, реальные
+  ascent+descent+lineGap не используются нигде в layout. Решение о переходе
+  (и о том, распределяется ли line-gap симметрично half-above/half-below
+  или asymmetric снизу) — отдельная, архитектурно большая задача, требующая
+  собственного полного корпус-A/B (по прецеденту IFC-1), не входит.
+- **`InlineBlockRow` strut НЕ получил line-gap** — этот путь уже явно
+  документирован как «content area БЕЗ half-leading, осознанное
+  расхождение со спекой» (тот же комментарий IFC-1); добавление line-gap
+  туда воспроизвело бы РОВНО тот риск, которого strut сознательно избегает,
+  ради узкого частного случая (ряды atomic inline), не входящего в WPT-тест
+  `line-gap-override.html` (тот проверяет обычный текстовый поток).
+- **WPT `line-gap-override.html`/`line-gap-override-ref.html` не двигаются
+  этим срезом** — те же причины, что и «модель не тронута» выше.
+- **femtovg-паритет и CPU-растеризатор** — не тронуты, те же причины, что
+  документировали FONTLOAD-9/10 (не live-дефолт рендерер / не рендерит
+  @font-face вовсе).
+- **Реактивность CSS-connected сета** (BUG-471/CSSOM-4) — прежний,
+  архитектурно больший фундамент.
+
+Тесты: `crates/engine/paint/src/lib.rs::multi_font_tests` — 5 новых
+(`line_gap_override_replaces_real_metric_with_font_size_fraction`,
+`line_gap_override_none_matches_register_family_with_ranges`,
+`line_gap_override_alone_leaves_ascent_and_descent_at_real_metric` —
+асимметричный override не подменяет ascent/descent,
+`line_gap_without_override_matches_real_face_metric` — без дескриптора
+`line_gap_px` читает реальную hhea/OS2-метрику face-а через
+`MultiFontMeasurer`, а не остаётся на `0.0`-дефолте трейта,
+`line_gap_override_composes_with_size_adjust` — та же композиция, что
+`size_adjust_composes_with_ascent_override`). `cargo test -p lumen-font -p
+lumen-paint` без регрессий (1043+29 тестов паинта зелёные, включая 5
+новых), `cargo test -p lumen-layout` 3822/3822 без регрессий (default-метод
+трейта не задел ни один mock), `cargo test -p lumen-shell --bin lumen
+--features v8` 1726/1726 без регрессий, `cargo clippy -p lumen-font -p
+lumen-layout -p lumen-paint --all-targets -- -D warnings` и `cargo clippy -p
+lumen-shell --bin lumen --all-targets --features v8 -- -D warnings` чисты.
+
+Срез трогает файлы font/paint-метрик, поэтому гейт — полный пиксельный
+прогон, несмотря на то что ни один новый accessor не имеет живого
+потребителя в layout (доказательство, а не только рассуждение):
+`python graphic_tests/dump_golden.py` 12/12 байт-в-байт; `python
+graphic_tests/run.py --continue-on-fail` — дельта против прошлого прогона
+(commit c17be9d4d, FONTLOAD-12) **«Изменений нет»** (8/156 FAIL:
+02/04/18/21/56/150/151/155, 50 known-debtor — идентичный список обоим
+прогонам).
+
+**Следующий срез — на выбор владельца FONTLOAD:** решение о модели
+`line-height: normal` (переход на реальные ascent+descent+lineGap для
+GENERAL text flow, а не только InlineBlockRow strut) — требует
+архитектурного изменения (line-height из font-агностичного `ComputedStyle`
+в font-осведомлённый layout-путь) и отдельного полного корпус-A/B; WPT A/B-
+замер `css/css-fonts` override-категории целиком (`size-adjust`/`ascent-
+override`/`descent-override`/`line-gap-override`); (D) feature/variation-
+settings дескриптора как дефолта CSS-свойства + шейпинг вне variable-font-
+пути; femtovg-паритет для (A); реактивность CSS-connected сета
+(BUG-471/CSSOM-4).
+
+## FONTLOAD-14 (P1, 2026-09-05, ветка `p1-fontload14-line-height-normal`) — модель `line-height: normal`: архитектура построена, реальные метрики НЕ активированы (регрессия против Edge)
+
+Взят по прямому решению владельца (3 среза подряд откладывали модель
+`line-height: normal` под риском IFC-1 — на 4-й раз запрошено явное
+решение, а не очередной перенос). Результат — **измеренный отрицательный
+ответ**: реальные font-метрики (`ascent + descent [+ lineGap]`) в общем
+текстовом потоке проигрывают Edge заметнее, чем плоское приближение `1.2`,
+которое они должны были заменить. Слайс оставляет архитектуру (choke point,
+флаг «это было явно `normal`») на месте для следующего захода, но НЕ
+включает реальные метрики как используемое значение — производительность и
+рендеринг идентичны состоянию до среза.
+
+**Архитектура (влита, поведенчески нейтральна):**
+1. `ComputedStyle::line_height_is_normal: bool` (`style/computed.rs`) —
+   отличает `normal` от явного unitless `<number>`: оба сегодня приводят к
+   `line_height = 1.2, line_height_is_relative = true`, но только `normal`
+   должен когда-нибудь резолвиться через реальные метрики face-а. Проведён
+   тем же путём, что `line_height_is_relative`: `apply_line_height_value`
+   (`style/parse/font_size.rs`, явно разобрана ветка `"normal"`, раньше
+   молча падала мимо `val.parse::<f32>()`/`parse_length` — no-op, значение
+   бралось из наследования), `font`-shorthand (`style/apply/text.rs`),
+   `apply_css_wide_keyword` (`style/apply/css_wide.rs`), псевдоэлементы
+   (`style/pseudo.rs` — наследование + `merge_pseudo_inherited`),
+   quirks-правила (`style/quirks.rs` — `apply_quirks_table_reset`/
+   `apply_quirks_line_height`, у обоих раньше даже `line_height_is_relative`
+   не выставлялся explicit — теперь выставлен вместе с `is_normal`, попутный
+   мелкий фикс), cascade-наследование (`style/cascade.rs`).
+2. `LayoutBox::used_line_height: f32` (`box_tree/types.rs`) — используемая
+   line-height в px, единая точка вместо дублированного `style.font_size *
+   style.line_height` в ~10 местах (`box_tree/layout_dispatch.rs`,
+   `box_tree/pseudo_text.rs`, `selection.rs`, `text_iter.rs`, `lib.rs`
+   (`collect_layout_rects`, BUG-488), `vertical.rs`, paint's
+   `display_list/text_run.rs`/`hit_test.rs`, shell's `forms.rs` — все
+   переключены на чтение поля). Намеренно НЕ в `style` (который
+   `Arc`-shared с cascade-кэшем, BUG-341 S12) — `normal` дефолтный, поэтому
+   запись туда заставила бы `Arc::make_mut` глубоко копировать стиль
+   практически каждого бокса документа. Резолвится один раз за проход
+   whole-tree-обходом `box_tree::entry::resolve_used_line_height`, который
+   идёт сразу за `apply_font_size_adjust` (та же тройка точек входа:
+   `layout_measured_hyp`, `layout_streaming_incremental`, S26-функция) — до
+   `graft_geometry`, чтобы инкрементальные grafted-поддеревья тоже получили
+   свежее значение (graft копирует geometry/kind, но не `style`/used-value
+   поля — тот же прецедент, что уже документирован у font-size-adjust).
+   `used_line_height_px()` (`box_tree/entry.rs`) — единственное место,
+   которое следующему срезу нужно поменять.
+3. Мехническая правка ~140 construction sites `LayoutBox { ... }` (новое
+   обязательное поле) — компилятор-драйвен по E0063, дефолт в каждом —
+   `style.font_size * style.line_height` (тот же результат, что было бы без
+   поля).
+
+**Найдено и НЕ включено (главный результат среза):** `used_line_height_px`
+изначально резолвила `normal` как `ascent_px + descent_px + line_gap_px`
+(реальные метрики face-а, `line_gap_px` — accessor FONTLOAD-13). Полный
+`graphic_tests/run.py --continue-on-fail` с этой формулой активной дал
+регрессию TEST-83 (BUG-128, известный debtor: 3.87%→7.25%, выше допуска
+baseline+2.0%) — при том что `ascent_px + descent_px` без line-gap даёт
+ЧИСЛЕННО ТУ ЖЕ регрессию на TEST-02 (0.68%, тот же порядок числа, что уже
+зафиксировала IFC-1 для `InlineBlockRow` strut на TEST-02/04/21/56), т.е.
+line-gap не виноват — у используемых в тестах шрифтов он и так `0`.
+Корень: `OwnedFontMetrics::ascent_px` (`crates/engine/paint/src/lib.rs`)
+нормирует ascent относительно `ascent_units + descent_units`, а
+`descent_px`/`line_gap_px` — относительно `units_per_em`; для реальных
+шрифтов typo ascent+descent не обязан точно совпадать с `units_per_em`, так
+что сумма трёх методов складывает несовместимые нормировки, и её реальный
+смысл мутный. `InlineBlockRow` strut (уже провалидирован против Edge на
+0%) использует ту же пару `ascent_px`/`descent_px` — но там это проверка
+ОТНОСИТЕЛЬНОГО выравнивания пустого бокса по базовой линии, а не
+АБСОЛЮТНОЙ высоты межстрочного расстояния текстового потока; несовпадение,
+терпимое в первом случае, не терпимо во втором. Вероятная причина по
+существу: Edge/DirectWrite на Windows считает `normal`, скорее всего, не по
+`OS/2.sTypoAscender`/`sTypoDescender` (что читает `OwnedFontMetrics`), а по
+`usWinAscent`/`usWinDescent` (обычно заметно выше) или с UA-стороны
+добавляет собственный floor — не исследовано этим срезом.
+
+**Дано следующему срезу:** `used_line_height_px()`
+(`box_tree/entry.rs:used_line_height_px`) — единственная функция, которую
+нужно поменять; `m: &dyn TextMeasurer` уже параметр (сейчас `let _ = m`).
+Доказательная база (какая формула НЕ работает и почему) записана в doc-
+комментарии функции, чтобы не переизмерять с нуля. 50 mock-`TextMeasurer` в
+тестах (`box_tree/tests/*.rs`, `tests/fixtures_and_core_selectors.rs`,
+`field_sizing.rs`, `incremental.rs`, `page.rs`, `selection.rs`, +
+`lumen-paint`/`lumen-js`/`lumen-shell` тестовые файлы) получили явный
+`line_gap_px() -> size * 0.2` — восстанавливает `1.2` для случая, когда
+реальные метрики снова станут живыми; сейчас не используется (`is_normal`
+не ветвится), но не мешает и избавляет следующий срез от повторного обхода
+всех mock'ов.
+
+**Не входит:** сама РАБОЧАЯ модель `line-height: normal` (см. выше —
+измеренно не подошла, нужна другая формула); WPT `line-gap-override.html`;
+femtovg-паритет; реактивность CSS-connected сета (BUG-471/CSSOM-4).
+
+Тесты: `cargo test -p lumen-layout` 3822/3822 (+77 `--test all`), `cargo
+test -p lumen-paint` 1043/1043 (+29 `--test all`), `cargo test -p
+lumen-shell --bin lumen --features v8` 1726/1726 — все без регрессий.
+`cargo clippy -p lumen-layout -p lumen-paint --all-targets -- -D warnings`
+и `cargo clippy -p lumen-shell --bin lumen --all-targets --features v8 -- -D
+warnings` чисты. (`lumen-js`: один посторонний флейк
+`native_binding_panic_does_not_abort_process`, известный, не связан —
+BUG-997.)
+
+Гейт — полный пиксельный прогон (поле в `LayoutBox`, потенциально
+затрагивает paint): `dump_golden.py` 12/12 байт-в-байт; `run.py
+--continue-on-fail` — дельта против прошлого прогона (commit c17be9d4d,
+FONTLOAD-13) **«Изменений нет»**, идентичный список 8/156 FAIL
+(02/04/18/21/56/150/151/155 — те же самые с FONTLOAD-13, не новые) и 50
+known-debtor. `graphic_tests/results/20260905-172448.json`.
+
+## FONTLOAD-15 (P1, 2026-09-05, ветка `p1-fontload15-line-height-normal-formula`) — нашла настоящую причину регрессии FONTLOAD-14 и активировала реальные метрики для `line-height: normal`
+
+FONTLOAD-14 оставила гипотезу «Edge/DirectWrite, вероятно, использует
+`OS/2.usWinAscent`/`usWinDescent`, а не `sTypoAscender`/`sTypoDescender`» как
+самый перспективный кандидат для следующего среза. Перед тем как её кодировать,
+этот срез проверил гипотезу арифметически на bundled Inter (единственный
+face, который резолвит детерминированный корпус — `primary_metrics` везде
+`None`): `fsSelection` Inter'а имеет бит `USE_TYPO_METRICS` (0x0080)
+установленным, и его `usWinAscent`/`usWinDescent` (1984/494 font units)
+численно РАВНЫ `sTypoAscender`/`|sTypoDescender|` (тоже 1984/494) — выбор
+источника даёт для этого шрифта нулевую разницу. Значит, гипотеза FONTLOAD-14
+не могла объяснить наблюдавшуюся регрессию сама по себе.
+
+**Настоящая причина (арифметически проверена):** FONTLOAD-14 сама
+задокументировала, что `OwnedFontMetrics::ascent_px` нормирует ascent
+относительно `ascent_units + descent_units`, а `descent_px`/`line_gap_px` —
+относительно `units_per_em`, но не сделала следующий шаг — не пересчитала,
+что это давало на практике. `units_per_em` Inter — 2048, `ascent_units`/
+`descent_units` (typo, = win) — 1984/494:
+
+- Формула FONTLOAD-14 (`ascent_px + descent_px`, разные знаменатели):
+  `(1984/(1984+494)) + (494/2048) = 0.8006 + 0.2412 = 1.0419 × font-size` —
+  **на 13% МЕНЬШЕ** прежнего плоского `1.2`, а не больше. Это и объясняет
+  регрессию: строки стали заметно теснее, весь текстовый поток переупаковался.
+- Формула этого среза (`(ascent_units + descent_units) / units_per_em`, один
+  знаменатель): `(1984+494)/2048 = 1.2100 × font-size` — всего на **0.8%
+  БОЛЬШЕ** прежнего `1.2`.
+
+Разница между «-13%» и «+0.8%» — на порядок разных по влиянию на layout,
+поэтому вывод FONTLOAD-14 «реальные метрики регрессируют» был качественно
+неверным: регрессировала не идея использовать реальные метрики, а конкретная
+реализация с рассинхронизированными знаменателями.
+
+**Реализация:**
+1. `Os2::use_typo_metrics()` (`crates/engine/font/src/os2.rs`) — новый
+   accessor для `fsSelection` бит 7 (`USE_TYPO_METRICS`, OS/2 v4+,
+   `FS_USE_TYPO_METRICS = 0x0080`). Реализует OpenType spec recommendation:
+   установлен → `sTypoAscender`/`sTypoDescender`/`sTypoLineGap`; не
+   установлен → `usWinAscent`/`usWinDescent` (без отдельного line-gap).
+   Архитектурно корректно и нужно для `@font-face`-лиц, где источники
+   реально расходятся — для bundled Inter, как показано выше, разницы нет.
+2. `TextMeasurer::normal_line_height_px(font_size_px) -> f32` и
+   `..._with_families` (`crates/engine/layout/src/lib.rs`) — новый метод
+   трейта, дефолт `1.2 × font_size_px` (тот же UA-фоллбек, на который
+   неявно полагался каждый mock `TextMeasurer` без переопределения).
+   Намеренно НЕ сумма `ascent_px + descent_px + line_gap_px` — отдельная,
+   консистентно нормированная величина.
+3. `FontMeasurer`/`OwnedFontMetrics` (`crates/engine/paint/src/lib.rs`)
+   получили параллельную тройку полей `normal_ascent_units`/
+   `normal_descent_units`/`normal_line_gap_units`, вычисляемую общей
+   функцией `normal_line_height_units(os2, hhea)` по алгоритму из п.1, и
+   методы `normal_ascent_px`/`normal_descent_px`/`normal_line_gap_px`/
+   `normal_line_height_px`, нормирующие ТОЛЬКО через `units_per_em`.
+   `ascent_units`/`descent_units`/`line_gap_units` и их `*_px`-методы не
+   тронуты — ими по-прежнему пользуется `BoxKind::InlineBlockRow`-strut
+   (`layout_dispatch.rs`), чьё IFC-1-провалидированное относительное
+   baseline-выравнивание терпит рассинхронизацию знаменателей, в отличие от
+   абсолютной line-height.
+4. `PrimaryFontMetrics` (`crates/engine/paint/src/lib.rs`) получила
+   параллельные `normal_ascent_px`/`normal_descent_px`/`normal_line_gap_px`/
+   `normal_line_height_px`, композирующие с `ascent_override`/
+   `descent_override`/`line_gap_override`/`size_adjust` (FONTLOAD-11/12/13)
+   той же схемой, что уже применена к `ascent_px`/`descent_px`/`line_gap_px`
+   — архитектурно готово для `@font-face`-лиц с override-дескрипторами, но
+   живым WPT-замером не проверено (см. «Не входит»).
+5. `used_line_height_px()` (`crates/engine/layout/src/box_tree/entry.rs`)
+   теперь реально читает `m`: `if style.line_height_is_normal {
+   m.normal_line_height_px_with_families(style.font_size,
+   &style.font_family) } else { style.font_size * style.line_height }` —
+   раньше `m` игнорировался целиком.
+
+**Проверка:** живой A/B `graphic_tests/run.py --continue-on-fail` (полный
+корпус, 156 тестов, foreground с фокусом окна — фон ломает TEST-00 magenta-
+калибровку, задокументировано `docs/graphic-tests.md`) — «Изменений нет»
+против FONTLOAD-14 baseline (commit `0814bed75`,
+`graphic_tests/results/20260905-172448.json`): идентичные 8/156 FAIL
+(02/04/18/21/56/150/151/155) и 50 known-debtor, диффы по всем 156 тестам
+совпадают вплоть до сотых процента. В частности TEST-02/04 (0.68% — то самое
+число, что FONTLOAD-14 указала как «регрессию» своей формулы) подтверждены
+проверкой против `graphic_tests/results/20260905-172448.json` как
+ПРЕДСУЩЕСТВУЮЩИЙ долг, никак не связанный с line-height: тот же 0.68% уже
+стоял в этом файле — снятом ДО активации формулы FONTLOAD-14, всё ещё с
+плоским `1.2`.
+
+Тесты: `cargo test -p lumen-font` 407/407 (+2, `use_typo_metrics_bit_*`),
+`cargo test -p lumen-layout` 3833/3833, `cargo test -p lumen-paint` 1043/1043
+— все без регрессий. `cargo test -p lumen-shell --bin lumen --features v8`
+1726/1726 без регрессий. `cargo clippy -p lumen-font -p lumen-layout -p
+lumen-paint --all-targets -- -D warnings` и `cargo clippy -p lumen-shell
+--bin lumen --all-targets --features v8 -- -D warnings` чисты.
+
+**Не входит:** WPT A/B-замер `css/css-fonts` override-категории целиком
+(включая проверку композиции `normal_line_height_px` с `ascent-override`/
+`descent-override`/`line-gap-override`, реализованной архитектурно в п.4, но
+не измеренной живым прогоном); (D) feature/variation-settings дескриптора;
+femtovg-паритет для (A); реактивность CSS-connected сета (BUG-471/CSSOM-4).
+
+Гейт — полный пиксельный прогон (layout-геометрия, line-height): `dump_golden.py`
+12/12 байт-в-байт; `run.py --continue-on-fail` — дельта против FONTLOAD-14
+(commit `0814bed75`) **«Изменений нет»**, идентичный список 8/156 FAIL и 50
+known-debtor. `graphic_tests/results/20260905-183548.json`.
+
+## FONTLOAD-16 (P1, 2026-09-06, ветка `p1-fontload16-override-wpt-measurement`) — живой WPT A/B-замер override-категории: нашёл реальный архитектурный разрыв (measurement-срез, без фикса)
+
+Первый живой прогон `css/css-fonts` override-файлов через реальный WPT-путь
+(`tests/wpt/run_smoke.py` → `wptrunner` по BiDi против собранного
+`dev-release` `lumen.exe`, не headless `--dump-layout`/`--screenshot` —
+у тех нет event-loop для асинхронного `FontLoaded`, см. `WPT-VENDOR-fonts`).
+FONTLOAD-11/12/13 явно оставляли эту категорию неизмеренной.
+
+**Результат (7 id, все reftest):**
+
+| файл | вердикт | пиксельный дифф |
+|---|---|---|
+| `ascent-descent-override.html` | FAIL | 540 |
+| `line-gap-override.html` | FAIL | 873 |
+| `metrics-override-normal-keyword.html` | PASS | — (байт-в-байт) |
+| `font-size-adjust-metrics-override.html` | FAIL | 4571 |
+| `size-adjust-01.html` | FAIL | 6950 |
+| `size-adjust-02.html` | PASS | — (байт-в-байт) |
+| `size-adjust-03.html` | FAIL | 20277 |
+
+Итог: 2/7 PASS, 5/7 FAIL. Оба PASS — не доказательство корректности: оба теста
+устроены так, что ожидаемый визуальный результат — «два варианта выглядят
+ОДИНАКОВО» (`size-adjust-02`/`-03`: `font-size-adjust` должен перебивать
+`size-adjust`-дескриптор; `metrics-override-normal-keyword`: ключевое слово
+`normal` должно давать тот же результат, что и его отсутствие) — то же самое
+происходит, если оба дескриптора вообще НЕ доезжают до рендеринга, что этот
+срез и обнаружил ниже. Совпадение, не подтверждение.
+
+**Корневая причина трёх больших диффов (size-adjust, 4571–20277 px) —
+найдена на уровне кода, не предположением:** `size-adjust` (как и
+`ascent-override`/`descent-override`/`line-gap-override`) подключён
+FONTLOAD-11/12/13 только к **измерению** в layout — `MultiFontMeasurer`/
+`FontFaceSlot` (`crates/engine/paint/src/lib.rs`), которым layout пользуется
+через трейт `TextMeasurer` для ширин символов/ascent/descent/line-gap. Но
+структура, которой реально пользуется **растеризация** глифов —
+`lumen_core::FaceRecord` (`crates/core/src/ext.rs:430`, поля: `family`/
+`weight`/`style`/`stretch`/`path`/`unicode_ranges`) — не имеет ни одного из
+четырёх override-полей вообще. `FontRegistry::register_from_bytes`
+(`crates/engine/font/src/font_registry.rs:88-126`) строит `FaceRecord` из
+`(family, weight, style, unicode_range, bytes)` — сигнатура физически не
+принимает override-значения, значит они в принципе не могут дойти до
+`lumen-paint`'s `pick_face_for_codepoint`/`glyph_raster.rs`, который рисует
+глиф в его РЕАЛЬНОМ (не адаптированном) размере. Итог: layout резервирует
+место под символ по формуле `font_size_px * size_adjust` (см.
+`char_width_with_families`, `crates/engine/paint/src/lib.rs:1221`), а
+рисуется глиф исходного размера в это же место — расхождение растёт с
+длиной текста, что и объясняет порядок диффов (`size-adjust-03.html`,
+«The Quick Brown Fox» целиком через адаптированный face → 20277 px, самый
+большой из семи).
+
+**Два маленьких диффа (ascent-descent-override 540 px, line-gap-override
+873 px) этим срезом НЕ объяснены** — на порядок меньше диффов size-adjust
+(полный кадр 1024×720, локальная область теста — три однобуквенных/пустых
+inline-block'а), и `ascent_px_with_families`/`descent_px_with_families`
+(в отличие от размера глифа) действительно читают `slot.ascent_override` —
+то есть геометрия line-box'а в layout, вероятно, верна. Живая MCP-проба
+(`--mcp-live-port` + `eval`, `.tmp/probe_ahem_live.py`) для прямого замера
+`getBoundingClientRect` не удалась: `route_query_js` стабильно возвращал `None`
+→ `"JS context not available"` уже после `wait: document_ready` (не race —
+проверено с задержками 0.3/1.0/2.0 с и с запуском бинаря сразу на целевом URL
+вместо `about:blank` + `navigate`) — отдельная проблема, не раскопана в рамках
+этого среза, инструмент не подошёл. Называть точный механизм этих двух
+диффов интуицией не буду — не входит в этот срез, см. ниже.
+
+**Проверено, что НЕ является причиной:** headless `--dump-layout` на том же
+файле (`ascent-descent-override.html`) даёт совсем другую, гораздо более
+грубую картину (ширина inline-run "X" — 33.64px вместо ожидаемых 20px, т.е.
+Ahem вообще не резолвится) — это ожидаемое, задокументированное ограничение
+однослотовых headless-путей (`WPT-VENDOR-fonts`, нет event loop для
+асинхронного `FontLoaded`), не относится к живому BiDi-пути, которым реально
+шёл WPT-прогон, и не должно использоваться как модель того, что видит
+wptrunner. Оставляю здесь как предупреждение будущему срезу: не повторять
+эту ошибку диагностики.
+
+**Не входит (эта причина в новую точку рендеринга не проведена):**
+проброс `ascent_override`/`descent_override`/`line_gap_override`/`size_adjust`
+из `FontFaceSlot` в `lumen_core::FaceRecord` и далее в реальную растеризацию
+(`glyph_raster.rs`) — отдельный, архитектурно значимый срез, сравнимый по
+объёму с FONTLOAD-9 (`unicode-range` на пути рисования); точная причина двух
+малых диффов (ascent/descent/line-gap override); WPT `.ini`-baseline для этой
+категории не тронут (та же причина, что FONTLOAD-4 — вскрывает несвязанный
+долг WPT-RUN-7 среза 4); (D) feature/variation-settings дескриптора;
+femtovg-паритет для (A); реактивность CSS-connected сета (BUG-471/CSSOM-4).
+
+Гейт: изменений в `crates/` нет (чисто measurement-срез, только
+`bugs/BUG-467-OPEN.md`/`ROADMAP.md`) — `cargo clippy`/scoped-test неприменимы,
+`graphic_tests` не запускался. WPT-измерение — `tests/wpt/run_smoke.py
+--binary <dev-release lumen.exe> --reftest-screenshot=fail
+/css/css-fonts/{ascent-descent-override,line-gap-override,metrics-override-normal-keyword,font-size-adjust-metrics-override,size-adjust-01,size-adjust-02,size-adjust-03}.html`.
+
+## FONTLOAD-17 (P1, 2026-09-06, ветка `p1-fontload17-override-facerecord-raster`) — проброс overrides в FaceRecord/glyph_raster.rs (wgpu) сделан и безопасен; WPT-числа не сдвинулись — найдена причина
+
+Сделан фикс, который FONTLOAD-16 оставила «не входит»: все четыре CSS Fonts L4
+§14 дескриптора (`ascent-override`/`descent-override`/`size-adjust`/
+`line-gap-override`) теперь доезжают из `FontFaceRule`/`FontFaceSlot` до
+`lumen_core::FaceRecord` (4 новых поля; `Eq` убран из derive — `f32` его не
+даёт) и далее в `lumen-paint`'s `LoadedFace`/`push_text_glyphs`
+(`crates/engine/paint/src/renderer/glyph_raster.rs`, **wgpu-бэкенд**):
+
+- `FontRegistry::register_from_bytes` расширен 4 параметрами
+  (`#[allow(clippy::too_many_arguments)]`, тот же прецедент, что
+  `MultiFontMeasurer::register_family_with_overrides`); три реальных
+  вызывающих места обновлены — `local()`-ветка `load_font_faces`
+  (`subresources.rs`, парсит те же `rule.*_override` строки, что
+  `page_pipeline.rs` уже парсит для layout-измерителя),
+  `LoadEvent::FontLoaded` (`user_event.rs`, значения уже были в событии из
+  FONTLOAD-11/12/13 — просто не доезжали дальше) и scripted-FontFace-ветка
+  (`about_to_wait.rs`, здесь честно `None` — `new FontFace(family, source,
+  descriptors)`'s `descriptors.*Override`/`sizeAdjust` не долетают вообще,
+  отдельный, незакрытый в этом срезе гэп).
+- `push_text_glyphs`: `size-adjust` премультиплицирует эффективный font-size
+  **на глиф**, а не на весь run — `pick_face_for_codepoint` внутри одного
+  run-а может резолвить разные символы в разные face-ы с разным size-adjust
+  (ровно кейс `size-adjust-01.html`: `large-font` покрывает только
+  `unicode-range: U+20,U+41-5A`, остальные символы run-а падают на
+  `sans-serif` без адъюста). Это меняет atlas size-bin/display-scale ПОГЛИФНО
+  — `TextRunStep::Glyph` получил собственное поле `display_scale` (раньше
+  кэш run-а держал один `display_scale` на весь план), иначе повторный
+  прогон из `TextRunCache` клал бы чужой масштаб.
+- `baseline_y`: `ascent-override`/`descent-override` primary-face подменяют
+  hhea `ascent`/`descent` (на уровне font units — тот же приём, что
+  `size_adjust`, сохраняет формулу байт-в-байт при отсутствии override) в
+  той самой `ascent/(ascent−descent)`-формуле, что раньше игнорировала
+  overrides целиком, хотя layout-сторона (`PrimaryFontMetrics` в
+  `crates/engine/paint/src/lib.rs`) их уже учитывала для line-box высоты —
+  ровно разрыв, который FONTLOAD-16 назвала (но не объяснила) для двух
+  малых диффов.
+- `line_gap_override` доезжает до `FaceRecord` (публичное поле, доступно
+  любому потребителю `FontProvider`), но НЕ до `LoadedFace`/растеризации —
+  там для него по-прежнему нет потребителя, та же ситуация, что у
+  layout-стороны `line_gap_px` (FONTLOAD-13: «доезжает до записи, не до
+  потребителя»).
+
+**Гейт:** `cargo clippy -p lumen-core -p lumen-font -p lumen-paint
+-p lumen-shell --all-targets -- -D warnings` — чисто (без `--profile
+dev-release`: тот профиль глушит `debug_assertions`, а часть
+`lumen-layout`'s `invariants.rs` живёт только под ними — не путать с
+регрессией, это никак не связано с этим срезом). `cargo test` по
+`lumen-core`/`lumen-font`/`lumen-paint --features backend-wgpu`/`lumen-shell`
+(font-related) — всё зелёное, включая
+`sticky_colr_font::text_run_cache_replays_identical_vertices` (главный риск
+от нового поля в `TextRunStep::Glyph`). **`graphic_tests/run.py
+--continue-on-fail`** (обязателен — срез двигает пиксели текста): дельта
+против предыдущего прогона — «Изменений нет», байт-в-байт то же самое, что
+доказывает нулевой регресс no-override-пути (ни один существующий golden не
+использует эти дескрипторы).
+
+**Повторный WPT A/B-замер теми же 7 id, что FONTLOAD-16 (после сборки
+`dev-release` с этим фиксом) дал ИДЕНТИЧНЫЕ диффы**: 540/4571/873/6950/20277
+px и оба те же PASS (`metrics-override-normal-keyword`, `size-adjust-02`) —
+байт-в-байт то же, что до среза. **Причина — не в этом фиксе, а в том, что
+`tests/wpt/run_smoke.py`'s reftest в принципе не может увидеть код
+`glyph_raster.rs`**: комментарий `executorlumen.py` (`RefTestImplementation`)
+прямо называет причину — живой wgpu-путь недетерминирован между Vulkan/DX12
+(разная антиалиасинг/блендинг на одной машине, BUG-405 срез 14), поэтому
+reftest использует `render_source_to_png` — детерминированный CPU-путь
+`cpu_raster.rs` (`lumen --ipc-server`, `_REQ_SCREENSHOT`). А `cpu_raster.rs`
+**вообще не резолвит @font-face** — его собственный doc-комментарий у
+`resolve_face_bytes` прямым текстом говорит: «real font matching
+(family/weight/style/fallback) is otherwise a GPU-renderer concern»; функция
+не принимает `FontProvider` и всегда рисует bundled Inter (либо системный
+face по имени под диагностическим `LUMEN_CPU_SYSTEM_FONTS`, тоже мимо
+`FontRegistry`). CPU-путь физически не может нести `size-adjust`/overrides —
+там нет даже базового @font-face byte-резолва, не то что unicode-range
+(FONTLOAD-9) или overrides (этот срез). FONTLOAD-16's «закрывает 3 из 5» было
+предсказанием по коду wgpu-пути, не подтверждённым замером через реально
+задействованный CPU-путь — тот же класс ошибки, что «`--screenshot` (CPU) и
+живое окно (wgpu) — независимые реализации» в CLAUDE.md Known gotchas, только
+на уровне ЦЕЛОГО font-resolution пайплайна, а не одной команды рисования.
+
+**Итог:** фикс этого среза реален, безопасен и нужен — единственный путь, где
+@font-face вообще рисуется настоящими байтами face-а (живое окно). Он не
+регрессирует ни один golden и не может ни улучшить, ни ухудшить WPT
+pass-rate этой категории, потому что WPT её не видит. **Не входит:**
+@font-face byte-резолв в `cpu_raster.rs` (unicode-range + все 4 override) —
+на порядок больше этого среза, единственный реальный путь сдвинуть WPT
+pass-rate `css/css-fonts` override-категории; причина двух малых диффов
+теперь объяснена НА УРОВНЕ WGPU-ПУТИ (ascent/descent-override не доезжали до
+baseline) — сохраняю формулировку «не раскопано» применительно к CPU-пути:
+там оба диффа объясняются гораздо более грубой причиной (нет @font-face
+вообще, не только нет overrides); `.ini`-baseline (тот же долг WPT-RUN-7
+среза 4); (D) feature/variation-settings; femtovg-паритет для (A);
+реактивность CSS-connected сета (BUG-471/CSSOM-4).

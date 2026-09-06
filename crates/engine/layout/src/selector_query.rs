@@ -17,7 +17,8 @@ use crate::ruby::{RubyAlign, RubyMerge, RubyPosition};
 use crate::style::{
     matches_complex, AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin,
-    BackgroundRepeat, BackgroundSize, BgSizeAxis, BorderStyle, BoxShadow, BoxSizing,
+    BackgroundRepeat, BackgroundSize, BgSizeAxis, BlockStepAlign, BlockStepInsert, BlockStepRound,
+    BorderStyle, BoxShadow, BoxSizing,
     ClearSide, Color, ColorScheme,
     ContainFlags, Content, ContentItem, ContentVisibility,
     CssColor, CssContinue,
@@ -479,6 +480,36 @@ fn px_str(v: f32) -> String {
     } else {
         format!("{}px", v)
     }
+}
+
+/// CSS Rhythmic Sizing L1 §3.1 (BUG-517) — computed-value serialization for
+/// the `block-step` shorthand: `none` when all four longhands are at their
+/// initial value, else the non-initial ones joined in `size insert align
+/// round` order (the grammar's own declaration order) with the initial ones
+/// elided. Confirmed against every `test_computed_value("block-step", …)`
+/// case in the vendored `block-step-computed.html`.
+fn block_step_shorthand_computed(style: &ComputedStyle) -> String {
+    let is_default = style.block_step_size.is_none()
+        && style.block_step_insert == BlockStepInsert::MarginBox
+        && style.block_step_align == BlockStepAlign::Auto
+        && style.block_step_round == BlockStepRound::Up;
+    if is_default {
+        return "none".to_string();
+    }
+    let mut parts = Vec::with_capacity(4);
+    if let Some(px) = style.block_step_size {
+        parts.push(px_str(px));
+    }
+    if style.block_step_insert != BlockStepInsert::MarginBox {
+        parts.push(style.block_step_insert.to_css().to_string());
+    }
+    if style.block_step_align != BlockStepAlign::Auto {
+        parts.push(style.block_step_align.to_css().to_string());
+    }
+    if style.block_step_round != BlockStepRound::Up {
+        parts.push(style.block_step_round.to_css().to_string());
+    }
+    parts.join(" ")
 }
 
 /// Serialises a [`Color`] as `"rgb(r, g, b)"` or `"rgba(r, g, b, a)"`.
@@ -1123,6 +1154,15 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         BoxSizing::BorderBox => "border-box",
     }.into());
 
+    // CSS Rhythmic Sizing L1 §3 (BUG-517) — block-step-* longhands plus the
+    // `block-step` shorthand, resolved to the same canonical order/`none`
+    // collapse `block_step_shorthand_computed` documents.
+    m.insert("block-step-size".into(), style.block_step_size.map_or("none".into(), px_str));
+    m.insert("block-step-insert".into(), style.block_step_insert.to_css().into());
+    m.insert("block-step-align".into(), style.block_step_align.to_css().into());
+    m.insert("block-step-round".into(), style.block_step_round.to_css().into());
+    m.insert("block-step".into(), block_step_shorthand_computed(style));
+
     m.insert("width".into(), style.width.as_ref().map_or("auto".into(), length_to_css));
     m.insert("height".into(), style.height.as_ref().map_or("auto".into(), length_to_css));
     m.insert("min-width".into(), style.min_width.as_ref().map_or("0px".into(), length_to_css));
@@ -1322,6 +1362,11 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextOverflow::Clip => "clip",
         TextOverflow::Ellipsis => "ellipsis",
     }.into());
+    // CSS Text Size Adjustment L1 §2 (BUG-513): both spellings read the same
+    // underlying field, same convention as `-webkit-line-clamp`/`line-clamp`
+    // above. `none` never round-trips — its computed value is `100%`.
+    m.insert("text-size-adjust".into(), style.text_size_adjust.to_css());
+    m.insert("-webkit-text-size-adjust".into(), style.text_size_adjust.to_css());
     // CSS Overflow L4 §13.4 / compat `-webkit-line-clamp` (BUG-505): both
     // names read the same underlying field — the engine implements only the
     // reduced `none | <integer>` grammar, not the full `line-clamp`
@@ -1670,6 +1715,23 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         OverscrollBehavior::Contain => "contain",
         OverscrollBehavior::None => "none",
     }.into());
+    // CSS Overscroll Behavior L1 §2 (BUG-516): flow-relative axes read back
+    // the already-resolved physical value on the axis they map to, same
+    // swap as `overflow-block`/`-inline` above.
+    fn overscroll_behavior_to_css(v: OverscrollBehavior) -> &'static str {
+        match v {
+            OverscrollBehavior::Auto => "auto",
+            OverscrollBehavior::Contain => "contain",
+            OverscrollBehavior::None => "none",
+        }
+    }
+    let (overscroll_behavior_block, overscroll_behavior_inline) = if vertical_wm {
+        (style.overscroll_behavior_x, style.overscroll_behavior_y)
+    } else {
+        (style.overscroll_behavior_y, style.overscroll_behavior_x)
+    };
+    m.insert("overscroll-behavior-block".into(), overscroll_behavior_to_css(overscroll_behavior_block).into());
+    m.insert("overscroll-behavior-inline".into(), overscroll_behavior_to_css(overscroll_behavior_inline).into());
 
     // ── Color adjustment (CSS Color Adjustment L1) ──────────────────
     m.insert("color-scheme".into(), match style.color_scheme {
@@ -2529,6 +2591,34 @@ mod tests {
         );
         assert_eq!(m.get("overscroll-behavior-x").map(String::as_str), Some("contain"));
         assert_eq!(m.get("overscroll-behavior-y").map(String::as_str), Some("none"));
+    }
+
+    // BUG-516: `overscroll-behavior-block`/`overscroll-behavior-inline` (CSS
+    // Overscroll Behavior L1 §2) map to `overscroll-behavior-y`/`-x` under
+    // `horizontal-tb` and swap to `-x`/`-y` under a vertical writing mode,
+    // same shape as `overflow-block`/`-inline` (BUG-505).
+    #[test]
+    fn computed_map_overscroll_behavior_logical_horizontal_tb() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { overscroll-behavior-block: contain; overscroll-behavior-inline: none; }",
+        );
+        assert_eq!(m.get("overscroll-behavior-x").map(String::as_str), Some("none"));
+        assert_eq!(m.get("overscroll-behavior-y").map(String::as_str), Some("contain"));
+        assert_eq!(m.get("overscroll-behavior-block").map(String::as_str), Some("contain"));
+        assert_eq!(m.get("overscroll-behavior-inline").map(String::as_str), Some("none"));
+    }
+
+    #[test]
+    fn computed_map_overscroll_behavior_logical_vertical_rl_swaps_axes() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { writing-mode: vertical-rl; overscroll-behavior-block: contain; overscroll-behavior-inline: none; }",
+        );
+        assert_eq!(m.get("overscroll-behavior-x").map(String::as_str), Some("contain"));
+        assert_eq!(m.get("overscroll-behavior-y").map(String::as_str), Some("none"));
+        assert_eq!(m.get("overscroll-behavior-block").map(String::as_str), Some("contain"));
+        assert_eq!(m.get("overscroll-behavior-inline").map(String::as_str), Some("none"));
     }
 
     #[test]

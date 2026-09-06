@@ -9,7 +9,7 @@
 //! SPLIT-ST13 из `crates/engine/layout/src/style.rs` (анкер, следовавший
 //! непосредственно за регионом ST-13's `style/adjust.rs`) без правок тела.
 
-use crate::style::{ComputedStyle, Length, LengthOrAuto, Overflow, WritingMode};
+use crate::style::{ComputedStyle, Length, LengthOrAuto, Overflow, OverscrollBehavior, WritingMode};
 
 /// Resolve CSS Logical Properties based on writing-mode.
 ///
@@ -177,6 +177,38 @@ pub(in crate::style) fn resolve_overflow_logical_properties(style: &mut Computed
     }
     if style.overflow_inline != Overflow::Visible && *inline_target == Overflow::Visible {
         *inline_target = style.overflow_inline;
+    }
+}
+
+/// CSS Overscroll Behavior L1 §2 (BUG-516) — resolve `overscroll-behavior-
+/// block`/`overscroll-behavior-inline` to the physical `overscroll_behavior_x`/
+/// `_y` pair. Same axis-swap shape as `resolve_overflow_logical_properties`
+/// above: in `horizontal-tb` the block axis is vertical (`-block` → `_y`),
+/// in every vertical writing mode the block axis is physically horizontal
+/// (`-block` → `_x`). Same "physical field still at its default" presence
+/// heuristic as the rest of this module.
+pub(in crate::style) fn resolve_overscroll_behavior_logical_properties(style: &mut ComputedStyle) {
+    let vertical_wm = matches!(
+        style.writing_mode,
+        WritingMode::VerticalRl
+            | WritingMode::VerticalLr
+            | WritingMode::SidewaysRl
+            | WritingMode::SidewaysLr
+    );
+    let (block_target, inline_target) = if vertical_wm {
+        (&mut style.overscroll_behavior_x, &mut style.overscroll_behavior_y)
+    } else {
+        (&mut style.overscroll_behavior_y, &mut style.overscroll_behavior_x)
+    };
+    if style.overscroll_behavior_block != OverscrollBehavior::Auto
+        && *block_target == OverscrollBehavior::Auto
+    {
+        *block_target = style.overscroll_behavior_block;
+    }
+    if style.overscroll_behavior_inline != OverscrollBehavior::Auto
+        && *inline_target == OverscrollBehavior::Auto
+    {
+        *inline_target = style.overscroll_behavior_inline;
     }
 }
 

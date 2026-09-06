@@ -277,6 +277,16 @@ pub(in crate::style) fn apply_decl_motion(
                 style.overscroll_behavior_y = v;
             }
         }
+        "overscroll-behavior-block" => {
+            if let Some(v) = parse_overscroll_behavior(val) {
+                style.overscroll_behavior_block = v;
+            }
+        }
+        "overscroll-behavior-inline" => {
+            if let Some(v) = parse_overscroll_behavior(val) {
+                style.overscroll_behavior_inline = v;
+            }
+        }
         "overscroll-behavior" => {
             // Shorthand: 1 значение — оба, 2 значения — x и y.
             let parts: Vec<&str> = val.split_whitespace().collect();

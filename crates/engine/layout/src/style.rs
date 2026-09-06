@@ -155,6 +155,9 @@ use logical::resolve_logical_properties;
 // above: private `use` here, reachable from `style::cascade` (a descendant module)
 // via `crate::style::resolve_overflow_logical_properties`.
 use logical::resolve_overflow_logical_properties;
+// CSS Overscroll Behavior L1 §2 (BUG-516) — same shape as
+// `resolve_overflow_logical_properties` above.
+use logical::resolve_overscroll_behavior_logical_properties;
 // Реэкспорт со старого пути: `resolve_logical_property` — публичный API крейта
 // (`pub mod style` в `lib.rs`), вызывателей внутри `style.rs` у неё нет, поэтому
 // без реэкспорта путь `lumen_layout::style::resolve_logical_property` пропал бы.
@@ -176,8 +179,9 @@ pub use calc::{CalcNode, MathFn, RoundStrategy};
 pub(crate) use calc::calc_node_to_css;
 pub use values::length::{
     canonical_specified_length, canonical_specified_line_width, canonical_specified_sizing_length,
-    canonical_specified_overflow_clip_margin, overflow_clip_margin_serialize, parse_length,
-    parse_overflow_clip_margin, Length, LengthOrAuto,
+    canonical_specified_block_step_size, canonical_specified_overflow_clip_margin,
+    overflow_clip_margin_serialize, parse_length, parse_overflow_clip_margin,
+    resolve_block_step_size, Length, LengthOrAuto,
 };
 // SPLIT-ST16. Типы значений — типографика/текст, цвет, бокс-модель, тайминг —
 // уехали в `style::values::{typography,color,box_model,timing}`. Все четыре
@@ -199,6 +203,9 @@ pub use values::color::{Color, ColorFloat, CssColor, SystemColor};
 // into an existing values:: group), since it's a standalone spec unrelated
 // to the color/box-model/typography groups above.
 pub use values::dynamic_range_limit::{DynamicRangeLimit, DynamicRangeLimitKeyword, DynamicRangeLimitMix};
+// BUG-513 — CSS Text Size Adjustment Module L1 `text-size-adjust`: own
+// module for the same reason as `dynamic_range_limit` above.
+pub use values::text_size_adjust::TextSizeAdjust;
 pub use values::box_model::{
     BorderCollapse, BorderStyle, BoxSizing, BreakValue, ClearSide, EmptyCells, FillRule,
     FloatSide, Isolation, MixBlendMode, OutlineColor, OutlineStyle, PaintOrderSlot, Position,
@@ -220,7 +227,8 @@ pub use values::timing::{
 // старому пути `lumen_layout::style::<Имя>`), поэтому реэкспорт обязателен даже
 // там, где вызывателя внутри `style.rs` уже нет (правило §2.1).
 pub use values::misc::{
-    Appearance, Content, ContentItem, FieldSizing, Hyphens, LineBreak, ListStylePosition,
+    Appearance, BlockStepAlign, BlockStepInsert, BlockStepRound, Content, ContentItem,
+    FieldSizing, Hyphens, LineBreak, ListStylePosition,
     ListStyleType, OverflowClipMarginBox, OverflowWrap, PointerEvents, Quotes, Resize,
     ScrollMarkerGroup, ScrollMarkerGroupMode, ScrollMarkerGroupPlacement, ScrollTargetGroup,
     ScrollbarGutter, ScrollbarWidth, TouchAction, WordBreak,

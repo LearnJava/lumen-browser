@@ -30,10 +30,12 @@ use crate::style::{
     complex_has_host, default_display, ensure_cascade_index, expand_attr_val,
     expand_custom_functions, expand_vars, forced_colors_active, matches_complex,
     matches_slotted_complex, node_in_scope, resolve_logical_properties, resolve_overflow_logical_properties,
-    resolve_system_colors_in_style, strip_ua_appearance_box_styling, ua_font_family,
+    resolve_overscroll_behavior_logical_properties, resolve_system_colors_in_style,
+    strip_ua_appearance_box_styling, ua_font_family,
     ua_font_size_factor, ua_font_style, ua_font_weight, ua_link_color, ua_vertical_align,
     ua_white_space, validate_against_syntax, with_front_cascade_index, AlignValue, Appearance,
-    BackfaceVisibility, BorderStyle, BoxSizing, BreakValue, ClearSide,
+    BackfaceVisibility, BlockStepAlign, BlockStepInsert, BlockStepRound,
+    BorderStyle, BoxSizing, BreakValue, ClearSide,
     ComputedStyle, ContainFlags, ContainerType, Content, ContentVisibility, CssColor, CssContinue,
     Display, FieldSizing, FlexBasis, FlexDirection, FlexWrap, FloatSide,
     FontPalette, FontSizeBasis, FontWeight, GridAutoFlow, GridLine, GridTrackSize, Isolation,
@@ -205,6 +207,7 @@ pub fn compute_style(
         effective_zoom: inherited.effective_zoom,
         line_height: inherited.line_height,
         line_height_is_relative: inherited.line_height_is_relative,
+        line_height_is_normal: inherited.line_height_is_normal,
         line_height_step: inherited.line_height_step,
         font_style: inherited.font_style,
         font_weight: inherited.font_weight,
@@ -239,6 +242,8 @@ pub fn compute_style(
         color_scheme: inherited.color_scheme,
         // CSS Color HDR L1 §2: dynamic-range-limit is inherited. BUG-508.
         dynamic_range_limit: inherited.dynamic_range_limit,
+        // CSS Text Size Adjustment L1 §2: text-size-adjust is inherited. BUG-513.
+        text_size_adjust: inherited.text_size_adjust,
         // CSS Color Adjustment L1 §4: forced-color-adjust IS inherited.
         forced_color_adjust: inherited.forced_color_adjust,
         // CSS Variables L1: все custom properties inherited.
@@ -272,6 +277,11 @@ pub fn compute_style(
         border_bottom_color: CssColor::CurrentColor,
         border_left_color: CssColor::CurrentColor,
         box_sizing: BoxSizing::ContentBox,
+        // CSS Rhythmic Sizing L1 §3 (BUG-517) — не наследуются.
+        block_step_size: None,
+        block_step_insert: BlockStepInsert::MarginBox,
+        block_step_align: BlockStepAlign::Auto,
+        block_step_round: BlockStepRound::Up,
         // CSS Positioned Layout L3 §3 / Compositing L1 — не наследуются.
         position: Position::Static,
         top: LengthOrAuto::Auto,
@@ -378,6 +388,8 @@ pub fn compute_style(
         scroll_padding_left: 0.0,
         overscroll_behavior_x: OverscrollBehavior::Auto,
         overscroll_behavior_y: OverscrollBehavior::Auto,
+        overscroll_behavior_block: OverscrollBehavior::Auto,
+        overscroll_behavior_inline: OverscrollBehavior::Auto,
         // CSS Table — border-collapse and border-spacing are inherited (CSS Tables L2 §17.6).
         border_collapse: inherited.border_collapse,
         empty_cells: inherited.empty_cells,
@@ -1345,6 +1357,11 @@ pub fn compute_style(
     // CSS Overflow L3 §2.1: if one axis is `visible` and the other is not,
     // the `visible` axis becomes `auto` (both axes must agree on visibility).
     (style.overflow_x, style.overflow_y) = coerce_overflow_axes(style.overflow_x, style.overflow_y);
+
+    // CSS Overscroll Behavior L1 §2 (BUG-516) — resolve `overscroll-behavior-
+    // block`/`-inline` to `overscroll_behavior_x`/`_y`, same writing-mode
+    // axis swap as `overflow-block`/`-inline` above.
+    resolve_overscroll_behavior_logical_properties(&mut style);
 
     // CSS Logical Properties L1 — resolve logical properties to physical.
     resolve_logical_properties(&mut style);

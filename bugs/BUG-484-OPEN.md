@@ -285,7 +285,8 @@ accepted verbatim), `css-forced-color-adjust/parsing/forced-color-adjust-invalid
 -1, green)` — env()'s *indexed* second-argument grammar not validated,
 same underlying line as the rest), `css-overscroll-behavior/parsing/overscroll-behavior-invalid.html`
 (15, all four of `overscroll-behavior`/`-x`/`-y` plus the newly-unrecognized
-`-block`/`-inline` — see [BUG-516](BUG-516-OPEN.md) — accept `"normal"`/`"0"`/
+`-block`/`-inline` — see [BUG-516](BUG-516-FIXED.md), fixed 2026-09-05, the
+parser recognizes them now but this file's own gap is unaffected — accept `"normal"`/`"0"`/
 space-repeated keyword lists that must be rejected). **Canonicalization**:
 `css-size-adjust/parsing/text-size-adjust-valid.html` (1, `calc(10% + 5%)`
 not simplified to `calc(15%)`), `css-overscroll-behavior/parsing/overscroll-behavior-valid.html`
@@ -304,7 +305,7 @@ each category's own `tests/wpt/metadata/css/<category>/` for all 9 files,
 
 9 files, ~55 subtests, both established shapes, no new ones — driven by two
 different underlying "property doesn't exist" bugs
-([BUG-517](BUG-517-OPEN.md) for `block-step*`, [BUG-518](BUG-518-OPEN.md)
+([BUG-517](BUG-517-FIXED.md) for `block-step*`, [BUG-518](BUG-518-OPEN.md)
 for `@mixin`) rather than a partial-validation gap this time: since the
 property/at-rule isn't recognized at all, the generic passthrough is the
 *only* code path reached. **Rejection**: `css-rhythm/parsing/block-step-

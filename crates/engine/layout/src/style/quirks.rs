@@ -49,6 +49,8 @@ pub(in crate::style) fn apply_quirks_table_reset(doc: &Document, node: NodeId, s
     }
     style.font_size = ROOT_FONT_SIZE;
     style.line_height = 1.2;
+    style.line_height_is_relative = true;
+    style.line_height_is_normal = true;
     style.font_family = default_font_family();
     style.font_style = FontStyle::Normal;
     style.font_variant_caps = FontVariantCaps::Normal;
@@ -74,6 +76,8 @@ pub(in crate::style) fn apply_quirks_line_height(doc: &Document, node: NodeId, s
             | "iframe" | "input" | "textarea" | "select" | "audio"
     ) {
         style.line_height = 1.0;
+        style.line_height_is_relative = true;
+        style.line_height_is_normal = false;
     }
 }
 /// CSS Quirks Mode §3.5 — viewport height as percentage basis for `<html>`.

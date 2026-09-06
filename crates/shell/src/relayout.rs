@@ -1088,6 +1088,7 @@ pub(crate) fn page_measurer(
             wf.ascent_override,
             wf.descent_override,
             wf.size_adjust,
+            wf.line_gap_override,
         );
     }
     measurer.set_system_faces(system_font_faces());

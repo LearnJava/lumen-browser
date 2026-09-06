@@ -13,6 +13,16 @@ impl crate::TextMeasurer for AspectMeasurer {
     fn x_height_px(&self, size: f32) -> f32 {
         size * self.0
     }
+
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
+    }
 }
 
 #[test]
@@ -96,6 +106,7 @@ fn apply_font_size_adjust_rewrites_box_and_segments() {
     let inline_box = super::super::LayoutBox {
         node: lumen_dom::NodeId::from_index(0),
         rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
+        used_line_height: inline_style.font_size * inline_style.line_height,
         style: std::sync::Arc::new(inline_style),
         kind: super::super::BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
         children: vec![],
@@ -113,6 +124,7 @@ fn apply_font_size_adjust_rewrites_box_and_segments() {
     let mut root = super::super::LayoutBox {
         node: lumen_dom::NodeId::from_index(0),
         rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
+        used_line_height: root_style.font_size * root_style.line_height,
         style: std::sync::Arc::new(root_style),
         kind: super::super::BoxKind::Block,
         children: vec![inline_box],
@@ -153,6 +165,7 @@ fn font_size_adjust_keeps_absolute_line_height_fixed() {
     let mut b = super::super::LayoutBox {
         node: lumen_dom::NodeId::from_index(0),
         rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
+        used_line_height: s.font_size * s.line_height,
         style: std::sync::Arc::new(s),
         kind: super::super::BoxKind::Block,
         children: vec![],
@@ -188,6 +201,7 @@ fn font_size_adjust_scales_relative_number_line_height() {
     let mut b = super::super::LayoutBox {
         node: lumen_dom::NodeId::from_index(0),
         rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
+        used_line_height: s.font_size * s.line_height,
         style: std::sync::Arc::new(s),
         kind: super::super::BoxKind::Block,
         children: vec![],

@@ -212,6 +212,7 @@ impl LoadedPage {
             layout_box: lumen_layout::LayoutBox {
                 node: NodeId::from_index(0),
                 rect: Rect::ZERO,
+                used_line_height: 16.0 * 1.2,
                 style: std::sync::Arc::new(lumen_layout::style::ComputedStyle::root()),
                 kind: lumen_layout::BoxKind::Block,
                 children: Vec::new(),
@@ -453,15 +454,18 @@ fn build_page_cascade(
             let ranges = rule.unicode_range.as_deref()
                 .map(lumen_font::parse_unicode_ranges)
                 .unwrap_or_default();
-            // CSS Fonts L4 §14 (FONTLOAD-11/12, BUG-467): ascent/descent-override, size-adjust.
+            // CSS Fonts L4 §14 (FONTLOAD-11/12/13, BUG-467): ascent/descent/line-gap-override, size-adjust.
             let ascent_override = rule.ascent_override.as_deref()
                 .and_then(lumen_font::parse_metric_override_percent);
             let descent_override = rule.descent_override.as_deref()
                 .and_then(lumen_font::parse_metric_override_percent);
             let size_adjust = rule.size_adjust.as_deref()
                 .and_then(lumen_font::parse_metric_override_percent);
+            let line_gap_override = rule.line_gap_override.as_deref()
+                .and_then(lumen_font::parse_metric_override_percent);
             measurer.register_family_with_overrides(
                 &rule.family, bytes, ranges, ascent_override, descent_override, size_adjust,
+                line_gap_override,
             );
         }
     }

@@ -340,6 +340,21 @@ pub(crate) const URL_PARSE_SHIM: &str = include_str!("shim/url_parse_shim.js");
 
 const WEB_API_SHIM_MID_B: &str = include_str!("shim/web_api_shim_mid_b.js");
 
+/// Geometry Interfaces Module (BUG-522/GAP-GEOM) — `DOMPointReadOnly`/
+/// `DOMPoint`, `DOMRectReadOnly`/`DOMRect`, `DOMRectList`,
+/// `DOMMatrixReadOnly`/`DOMMatrix`, `WebKitCSSMatrix`, `DOMQuad`. Must come
+/// **after** [`WEB_API_SHIM_MID_B`]: unlike `document`, `window` here is not
+/// the real V8 global object but a plain object literal (`var window = {…}`)
+/// built partway through that piece, so `window.DOMRect = DOMRect` above it
+/// would assign onto the hoisted-but-still-`undefined` `window` binding
+/// (`TypeError: Cannot set properties of undefined`) — exactly the mistake
+/// this const's first position made. `Element.getBoundingClientRect()`/
+/// `getClientRects()` in [`WEB_API_SHIM_MID`], earlier still, only reference
+/// these classes from inside function bodies, so they see them fine at call
+/// time regardless of this file's later position in the concatenation.
+#[cfg(feature = "v8-backend")]
+const GEOMETRY_SHIM: &str = include_str!("shim/geometry_shim.js");
+
 /// `URLSearchParams` + `URL` (WHATWG URL §5/§6.1) — `[Exposed=(Window,Worker)]`.
 ///
 /// Второй кусок, общий с воркером: сервис-воркеры разбирают запросы именно
@@ -435,7 +450,7 @@ pub(crate) const WORKER_LOCATION_NAVIGATOR_SHIM: &str = include_str!("shim/worke
 /// split is invisible to the shim's own code.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn web_api_shim() -> String {
-    format!("{WEB_API_SHIM_HEAD}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{URL_SHIM}{WEB_API_SHIM_MID_C}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
+    format!("{WEB_API_SHIM_HEAD}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{GEOMETRY_SHIM}{URL_SHIM}{WEB_API_SHIM_MID_C}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
 }
 
 /// The subset of the page shim that WHATWG also exposes in a

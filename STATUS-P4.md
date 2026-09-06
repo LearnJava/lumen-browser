@@ -2,7 +2,7 @@ CSS-SPECS.md:483
 CSS-SPECS.md:293
 CSS-SPECS.md:463
 CSS-SPECS.md:464
-CSS-SPECS.md:470
+CSS-SPECS.md:471
 CSS-SPECS.md:520
 CSS-SPECS.md:522
 CSS-SPECS.md:532
@@ -23,7 +23,7 @@ crates/engine/paint/src/display_list.rs:5087
 crates/engine/layout/src/box_tree.rs:758
 crates/engine/layout/src/lib.rs:1325
 CSS-SPECS.md:382
-CSS-SPECS.md:375
+CSS-SPECS.md:376
 CSS-SPECS.md:305
 CSS-SPECS.md:345
 CSS-SPECS.md:209

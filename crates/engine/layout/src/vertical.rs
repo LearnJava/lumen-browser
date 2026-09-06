@@ -350,12 +350,12 @@ pub(crate) fn lay_out_vertical_inline_run(
     );
 
     let total_advance: f32 = lines.iter().flat_map(|l| l.iter()).map(|f| f.width).sum();
-    let min_height = em * s.line_height;
+    let min_height = b.used_line_height;
     let total_vertical_extent = total_advance.max(min_height);
 
     b.rect.x = start_x;
     b.rect.y = start_y;
-    let col_width = em * s.line_height;
+    let col_width = b.used_line_height;
     b.rect.width = col_width;
     b.rect.height = total_vertical_extent;
 }

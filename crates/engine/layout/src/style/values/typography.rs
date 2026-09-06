@@ -950,9 +950,9 @@ pub enum TextUnderlinePosition {
     Right,
 }
 
-/// CSS Color Adjustment L1 §4 — `forced-color-adjust`. NOT inherited. Initial: `Auto`.
+/// CSS Color Adjustment L1 §4 — `forced-color-adjust`. Inherited. Initial: `Auto`.
 /// Позволяет автору отказаться от принудительной цветовой настройки UA (Forced Colors Mode).
-/// Phase 0: parse + store; применение при принудительных цветах — P2.
+/// Применяется в `style::adjust::apply_forced_colors_mode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ForcedColorAdjust {
     /// `auto` — UA может применять принудительные цвета.

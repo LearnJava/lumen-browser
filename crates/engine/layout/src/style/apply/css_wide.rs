@@ -61,6 +61,11 @@ pub(in crate::style) fn apply_css_wide_keyword(
             } else {
                 init.line_height_is_relative
             };
+            style.line_height_is_normal = if inh {
+                inherited.line_height_is_normal
+            } else {
+                init.line_height_is_normal
+            };
         }
         "line-height-step" => {
             style.line_height_step =
@@ -316,6 +321,11 @@ pub(in crate::style) fn apply_css_wide_keyword(
         "line-break" => {
             style.line_break = if inh { inherited.line_break } else { init.line_break };
         }
+        "text-size-adjust" | "-webkit-text-size-adjust" => {
+            // CSS Text Size Adjustment L1 §2: inherited. BUG-513.
+            style.text_size_adjust =
+                if inh { inherited.text_size_adjust } else { init.text_size_adjust };
+        }
 
         // ──────── Non-inherited properties ────────
         "resize" => {
@@ -511,6 +521,31 @@ pub(in crate::style) fn apply_css_wide_keyword(
         }
         "box-sizing" => {
             style.box_sizing = if inh_only_inherit { inherited.box_sizing } else { init.box_sizing };
+        }
+        // CSS Rhythmic Sizing L1 §3 (BUG-517) — none of the block-step-*
+        // longhands are inherited.
+        "block-step-size" => {
+            style.block_step_size =
+                if inh_only_inherit { inherited.block_step_size } else { init.block_step_size };
+        }
+        "block-step-insert" => {
+            style.block_step_insert =
+                if inh_only_inherit { inherited.block_step_insert } else { init.block_step_insert };
+        }
+        "block-step-align" => {
+            style.block_step_align =
+                if inh_only_inherit { inherited.block_step_align } else { init.block_step_align };
+        }
+        "block-step-round" => {
+            style.block_step_round =
+                if inh_only_inherit { inherited.block_step_round } else { init.block_step_round };
+        }
+        "block-step" => {
+            let src = if inh_only_inherit { inherited } else { &init };
+            style.block_step_size = src.block_step_size;
+            style.block_step_insert = src.block_step_insert;
+            style.block_step_align = src.block_step_align;
+            style.block_step_round = src.block_step_round;
         }
         "opacity" => {
             style.opacity = if inh_only_inherit { inherited.opacity } else { init.opacity };

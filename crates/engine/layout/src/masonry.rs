@@ -85,6 +85,7 @@ mod tests {
             origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(0),
             rect: Rect::new(0.0, 0.0, 100.0, height),
+            used_line_height: 16.0 * 1.2,
             style: std::sync::Arc::new(ComputedStyle::root()),
             kind: BoxKind::Block,
             children: vec![],

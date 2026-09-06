@@ -401,7 +401,17 @@ fn text_only_inline_block_shrinks_to_fit() {
         fn char_width(&self, _: char, _: f32) -> f32 {
             8.0
         }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     let html = r#"<div class="wrap"><span class="pill">abcd</span></div>"#;
     let doc = lumen_html_parser::parse(html);
     let sheet = lumen_css_parser::parse(
@@ -446,7 +456,17 @@ fn bug182_vertical_align_middle_uses_baseline_not_line_center() {
         fn char_width(&self, _: char, _: f32) -> f32 {
             8.0
         }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     let html = r#"<div class="row"><div class="ib top"></div><div class="ib mid"></div><div class="ib bot"></div></div>"#;
     let doc = lumen_html_parser::parse(html);
     let sheet = lumen_css_parser::parse(
@@ -485,6 +505,16 @@ struct Ifc8;
 impl super::super::super::TextMeasurer for Ifc8 {
     fn char_width(&self, _: char, _: f32) -> f32 {
         8.0
+    }
+
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
 }
 

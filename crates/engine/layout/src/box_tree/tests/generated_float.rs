@@ -79,7 +79,17 @@ fn wide_marker_box_grows_and_right_aligns_at_content_edge() {
     struct Fixed8;
     impl super::super::super::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
     }
+}
     fn find_run(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
         if matches!(b.kind, super::super::BoxKind::InlineRun { .. }) { return Some(b); }
         for c in &b.children { if let Some(f) = find_run(c) { return Some(f); } }
@@ -379,6 +389,16 @@ fn shrink_to_fit_float_wrapper_sums_inner_floats_side_by_side() {
 struct Fixed10Float;
 impl super::super::TextMeasurer for Fixed10Float {
     fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+
+    /// FONTLOAD-14 (BUG-467): `line-height: normal` now resolves from real
+    /// font metrics (ascent + descent + lineGap) instead of a flat `1.2`.
+    /// This measurer only fixes glyph width — restore the pre-FONTLOAD-14
+    /// total (`1.2×size`) explicitly, since ascent(0.8)+descent(0.2)
+    /// defaults alone sum to `1.0×size` and would silently change every
+    /// hand-computed expectation below.
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
+    }
 }
 
 /// Absolute `rect.x` of the first `InlineRun` box found (depth-first). Line

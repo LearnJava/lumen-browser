@@ -39,6 +39,7 @@ use crate::style::{
     TextDecorationStyle,
     TextOrientation,
     TextOverflow,
+    TextSizeAdjust,
     TextTransform,
     TextUnderlinePosition,
     TextWrapMode,
@@ -222,6 +223,7 @@ pub(in crate::style) fn apply_decl_text(
                 // line-height: initial `normal` ≈ 1.2 relative (как в root()).
                 style.line_height = 1.2;
                 style.line_height_is_relative = true;
+                style.line_height_is_normal = true;
                 if let Some(lh) = parts.line_height.as_deref()
                     && lh != "normal"
                 {
@@ -372,6 +374,12 @@ pub(in crate::style) fn apply_decl_text(
                 Some("ellipsis") => TextOverflow::Ellipsis,
                 _ => style.text_overflow,
             };
+        }
+        "text-size-adjust" | "-webkit-text-size-adjust" => {
+            // CSS Text Size Adjustment L1 §2: auto | none | <percentage [0,∞]>. BUG-513.
+            if let Some(v) = TextSizeAdjust::parse(val, em_basis, viewport, is_quirks) {
+                style.text_size_adjust = v;
+            }
         }
         "-webkit-line-clamp" | "line-clamp" => {
             // CSS Overflow L4 §13.4 / compat -webkit-line-clamp.

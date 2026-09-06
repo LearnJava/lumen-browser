@@ -338,7 +338,11 @@ pub(crate) fn emit_inline_run(
     }
     // CSS Rhythmic Sizing L1 §2 — line-height-step rounds each line box up to a
     // multiple of the step so paint stacks lines at the same rhythm layout used.
-    let raw_line_h = b.style.font_size * b.style.line_height;
+    // FONTLOAD-14 (BUG-467): `b.used_line_height` already carries the real
+    // font-metrics resolution for `line-height: normal` — paint has no
+    // measurer of its own, so it must read layout's resolved value rather
+    // than recompute the flat `font_size * line_height` approximation.
+    let raw_line_h = b.used_line_height;
     let line_h = if b.style.line_height_step > 0.0 {
         (raw_line_h / b.style.line_height_step).ceil() * b.style.line_height_step
     } else {

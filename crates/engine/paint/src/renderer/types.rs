@@ -775,6 +775,23 @@ pub(crate) struct LoadedFace {
     /// случайное покрытие cmap (см. `lumen_core::codepoint_in_face_ranges`
     /// doc-comment и BUG-434 в `subsystems/font.md`).
     pub(crate) unicode_ranges: Vec<(u32, u32)>,
+    /// `ascent-override` дескриптор (CSS Fonts L4 §14.1), скопирован из
+    /// `FaceRecord::ascent_override` при загрузке. `None` — `normal`/
+    /// отсутствует, используются реальные метрики face-а.
+    ///
+    /// FONTLOAD-17 (BUG-467): до этого поля дескриптор доезжал только до
+    /// layout-измерения (`lumen-paint`'s `FontFaceSlot`, тот же крейт, но
+    /// независимая от рендера структура) — реальная растеризация глифа
+    /// (`push_text_glyphs`) его не видела (`bugs/BUG-467-OPEN.md`, срез
+    /// FONTLOAD-16).
+    pub(crate) ascent_override: Option<f32>,
+    /// `descent-override` дескриптор, та же семантика, что у `ascent_override`.
+    pub(crate) descent_override: Option<f32>,
+    /// `size-adjust` дескриптор (CSS Fonts L4 §14.4) — доля, на которую
+    /// масштабируется `font-size` ПЕРЕД тем, как из него считаются ширины
+    /// глифов и ascent/descent этого face-а. `None` — дескриптор
+    /// отсутствует/невалиден, эквивалентно `100%`.
+    pub(crate) size_adjust: Option<f32>,
 }
 
 /// Owned-метрики face-а, независимые от лайфтайма `bytes`. Живут в

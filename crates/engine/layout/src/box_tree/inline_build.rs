@@ -255,10 +255,12 @@ pub(crate) fn anon_inline_run(
     segs: Vec<InlineSegment>,
     role: BoxRole,
 ) -> LayoutBox {
+    let style = anon_style(parent);
     LayoutBox {
         node,
         rect: Rect::ZERO,
-        style: Arc::new(anon_style(parent)),
+        used_line_height: style.font_size * style.line_height,
+        style: Arc::new(style),
         kind: BoxKind::InlineRun { segments: segs, lines: vec![], first_line_style: None },
         children: vec![],
         col_span: 1,
@@ -313,6 +315,7 @@ pub(crate) fn build_anon_text_item(
     Some(LayoutBox {
         node: id,
         rect: Rect::ZERO,
+        used_line_height: item_style.font_size * item_style.line_height,
         style: Arc::new(item_style),
         kind: BoxKind::Block,
         children: vec![run],
@@ -685,10 +688,12 @@ pub(crate) fn breaks_inline_row(b: &LayoutBox) -> bool {
 }
 
 pub(crate) fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<LayoutBox>) -> LayoutBox {
+    let style = anon_style(parent);
     LayoutBox {
         node,
         rect: Rect::ZERO,
-        style: Arc::new(anon_style(parent)),
+        used_line_height: style.font_size * style.line_height,
+        style: Arc::new(style),
         kind: BoxKind::InlineBlockRow,
         children: items,
         col_span: 1,
@@ -1097,6 +1102,7 @@ pub(crate) fn inject_pseudo(
             let b = LayoutBox {
                 node: parent_id,
                 rect: Rect::ZERO,
+                used_line_height: ps.font_size * ps.line_height,
                 style: Arc::new(ps),
                 kind: BoxKind::Block,
                 children: inner,
@@ -1356,6 +1362,7 @@ pub(crate) fn inject_marker(
     children.insert(0, LayoutBox {
         node:     parent_id,
         rect:     Rect::ZERO,
+        used_line_height: ms.font_size * ms.line_height,
         style:    Arc::new(ms),
         kind:     BoxKind::Marker {
             text,

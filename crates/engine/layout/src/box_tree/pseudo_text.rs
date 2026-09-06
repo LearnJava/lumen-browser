@@ -144,6 +144,7 @@ pub(crate) fn extract_first_letter_float(
         let inner = LayoutBox {
             node,
             rect: Rect::ZERO,
+            used_line_height: inner_style.font_size * inner_style.line_height,
             style: Arc::new(inner_style),
             kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
             children: vec![],
@@ -157,6 +158,7 @@ pub(crate) fn extract_first_letter_float(
         return Some(LayoutBox {
             node,
             rect: Rect::ZERO,
+            used_line_height: outer_style.font_size * outer_style.line_height,
             style: Arc::new(outer_style),
             kind: BoxKind::Block,
             children: vec![inner],
@@ -254,6 +256,7 @@ pub(crate) fn extract_initial_letter(
         // multiplier of `font_size`, so 1.0 → line box height == cap_font.
         inner_style.line_height = 1.0;
         inner_style.line_height_is_relative = true;
+        inner_style.line_height_is_normal = false;
         inner_style.float_side = FloatSide::None;
         inner_style.clear = ClearSide::None;
         inner_style.text_indent = Length::Px(0.0);
@@ -264,6 +267,7 @@ pub(crate) fn extract_initial_letter(
         let inner = LayoutBox {
             node,
             rect: Rect::ZERO,
+            used_line_height: inner_style.font_size * inner_style.line_height,
             style: Arc::new(inner_style),
             kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
             children: vec![],
@@ -286,6 +290,7 @@ pub(crate) fn extract_initial_letter(
         return Some(LayoutBox {
             node,
             rect: Rect::ZERO,
+            used_line_height: outer_style.font_size * outer_style.line_height,
             style: Arc::new(outer_style),
             kind: BoxKind::Block,
             children: vec![inner],
@@ -565,12 +570,19 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
             split_segments_at_first_line(segments, &lines[0], preserves);
         let line0 = lines[0].clone();
         let rest_lines: Vec<Vec<InlineFrag>> = lines[1..].to_vec();
+        // FONTLOAD-14 (BUG-467): no measurer here (post-layout, pure tree-shape
+        // pass) — `child.used_line_height` already carries the real-metrics
+        // resolution from the pre-layout whole-tree pass for the bulk of the
+        // box. `fls` (the `::first-line` override style) never goes through
+        // that pass, so its own height keeps the flat `font_size * line_height`
+        // approximation.
         let fl_h = fls.font_size * fls.line_height;
-        let base_h = child.style.font_size * child.style.line_height;
+        let base_h = child.used_line_height;
         let rect = child.rect;
         let box2 = LayoutBox {
             node: child.node,
             rect: Rect::new(rect.x, rect.y + fl_h, rect.width, rest_lines.len() as f32 * base_h),
+            used_line_height: base_h,
             style: child.style.clone(),
             kind: BoxKind::InlineRun {
                 segments: rest_segs,

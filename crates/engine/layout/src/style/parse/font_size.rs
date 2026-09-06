@@ -163,11 +163,20 @@ fn resolve_font_size(
 /// Используется longhand-ом `line-height` и `<line-height>`-компонентом
 /// `font`-shorthand.
 pub(in crate::style) fn apply_line_height_value(style: &mut ComputedStyle, val: &str, em_basis: f32, viewport: Size) {
-    if let Ok(v) = val.parse::<f32>() {
+    if val.trim().eq_ignore_ascii_case("normal") {
+        // FONTLOAD-14 (BUG-467): `normal` resolves to real font metrics at
+        // layout time (`box_tree::entry::resolve_used_line_height`); `1.2`
+        // here is only the fallback for measurer-less consumers (CSSOM
+        // `getComputedStyle`, the debug snapshot dump).
+        style.line_height = 1.2;
+        style.line_height_is_relative = true;
+        style.line_height_is_normal = true;
+    } else if let Ok(v) = val.parse::<f32>() {
         // Unitless `<number>` — relative: the line box scales with the
         // used font-size (incl. any `font-size-adjust` rescale).
         style.line_height = v;
         style.line_height_is_relative = true;
+        style.line_height_is_normal = false;
     } else if let Some(len) = parse_length(val) {
         // Every unit-bearing value computes to an absolute length
         // (CSS2 §10.8.1: `<length>`/`<percentage>`/`em`/`rem` line-height
@@ -175,6 +184,7 @@ pub(in crate::style) fn apply_line_height_value(style: &mut ComputedStyle, val: 
         // and must NOT rescale when `font-size-adjust` changes the used
         // font-size. Stored as a ratio purely for the layout hot path.
         style.line_height_is_relative = false;
+        style.line_height_is_normal = false;
         match &len {
             Length::Px(v) => style.line_height = v / style.font_size,
             Length::Em(v) => style.line_height = *v,
