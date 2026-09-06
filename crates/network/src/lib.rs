@@ -8912,6 +8912,37 @@ world\r\n\
     }
 
     #[test]
+    fn fetch_subresource_reports_css_initiator_type_for_font_destination() {
+        // BUG-520: `@font-face src` bodies used to be fetched through
+        // `RequestDestination::Image` (a shell copy-paste, not a network-layer
+        // bug), which reported the wrong Resource Timing `initiatorType`
+        // ("img" instead of the spec's "css") on top of the wrong Mixed
+        // Content class and ad-block resource type. No policy attached here —
+        // this test is only about the `initiatorType` mapping, already
+        // correct in `resource_timing_initiator` and exercised for `Image` by
+        // the sibling test above; the shell-side fix is wiring the right
+        // `RequestDestination` through, not this mapping itself.
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nwoff".to_vec()
+        });
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/font.woff2")).unwrap();
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new().with_sink(sink.clone());
+
+        assert_eq!(
+            client.fetch_subresource(&url, RequestDestination::Font).unwrap(),
+            b"woff"
+        );
+
+        let events = sink.events();
+        assert_eq!(events.len(), 3, "Started + Completed + ResourceTimed");
+        assert!(matches!(events[2], Event::ResourceTimed { initiator: "css", .. }));
+
+        server.join().unwrap();
+    }
+
+    #[test]
     fn fetch_subresource_strict_blocks_optionally_blockable_image() {
         // Strict-режим: image тоже блокируется. Хост — не trustworthy.
         let sink = Arc::new(CollectingSink::new());

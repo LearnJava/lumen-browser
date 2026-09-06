@@ -60,7 +60,7 @@ rather than by a native hook.
 - `registry.any.js`'s `resource` subtest: NOTRUN, whole test TIMEOUT.
   The category's own `fetch(self.location.href + "?" + Math.random())`
   never produces a `resource` entry — reconfirmation of
-  [BUG-520](BUG-520-OPEN.md) (Resource Timing hook exists but the
+  [BUG-520](BUG-520-FIXED.md) (Resource Timing hook exists but the
   network layer never calls it for real loads).
 - `registry.window.js`'s `paint`/`longtask` subtests: both NOTRUN, whole
   test TIMEOUT. `paint` entries are only delivered once, on the first

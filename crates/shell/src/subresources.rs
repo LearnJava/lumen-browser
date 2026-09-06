@@ -360,22 +360,51 @@ pub(crate) fn fetch_image_bytes(
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
+    fetch_subresource_bytes(raw_src, base, sink, cookie_jar, lumen_network::RequestDestination::Image, "img")
+}
+
+/// Same fetch as [`fetch_image_bytes`], tagged as an `@font-face url()` body
+/// (BUG-520) instead of an image: both `page_load.rs` and `frames.rs` used
+/// to route font bytes through `fetch_image_bytes`, which fed the request
+/// through `RequestDestination::Image`. That destination is wrong on three
+/// independent axes — Mixed Content classifies `Image` as `OptionallyBlockable`
+/// while `Font` is `Blockable` (W3C Mixed Content §5.3), Resource Timing's
+/// `initiatorType` came out `"img"` instead of the spec's `"css"`, and
+/// ad-block filter matching saw `ResourceType::Image` instead of `::Font`
+/// (`$image`/`$font` EasyList options no longer line up with what actually
+/// loaded) — despite the bytes themselves decoding fine either way.
+pub(crate) fn fetch_font_bytes(
+    raw_src: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    fetch_subresource_bytes(raw_src, base, sink, cookie_jar, lumen_network::RequestDestination::Font, "font")
+}
+
+fn fetch_subresource_bytes(
+    raw_src: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    destination: lumen_network::RequestDestination,
+    span_label: &str,
+) -> Result<Vec<u8>, Box<dyn Error>> {
     match base.resolve(raw_src) {
         ResolvedResource::File(path) => std::fs::read(&path).map_err(|e| {
             format!("file://{} {e}", path.display()).into()
         }),
         ResolvedResource::Url(url) => {
             use lumen_core::url::Url;
-            use lumen_network::RequestDestination;
 
-            // Images are loaded in no-cors mode: cross-origin allowed, but
+            // Images/fonts are loaded in no-cors mode: cross-origin allowed, but
             // mixed-content enforcement still applies for HTTPS pages.
             let lumen_url = Url::parse(&url)?;
             let client = base.http_client_for_subresource(sink.clone(), cookie_jar);
-            // PERF-1: one span per image fetch — back-to-back spans on a lane
+            // PERF-1: one span per fetch — back-to-back spans on a lane
             // reveal sequential UI-thread subresource loading.
-            let mut fetch_span = lumen_core::trace::span(format!("img {url}"), "net");
-            let bytes = client.fetch_subresource(&lumen_url, RequestDestination::Image)?;
+            let mut fetch_span = lumen_core::trace::span(format!("{span_label} {url}"), "net");
+            let bytes = client.fetch_subresource(&lumen_url, destination)?;
             fetch_span.set_bytes(bytes.len());
             Ok(bytes)
         }

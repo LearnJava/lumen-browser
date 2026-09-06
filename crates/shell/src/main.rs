@@ -210,7 +210,7 @@ use crate::chrome_ui::{restore_content_area, take_content_area};
 use crate::layout_walk::{collect_box_styles, find_video_source, promote_will_change_layers};
 use crate::window_metrics::{FullscreenPoll, content_layout_viewport, decide_fullscreen_poll};
 use crate::page_state::{PARKED_PAGES_MAX, PageSnapshot, ParkedPage};
-use crate::subresources::{decode_image, fetch_and_decode_images, fetch_image_bytes};
+use crate::subresources::{decode_image, fetch_and_decode_images, fetch_font_bytes, fetch_image_bytes};
 use crate::stylesheets::{
     StylesheetNodeEntry, build_stylesheet_node_registry, inline_css_imports, link_media_matches,
     load_linked_stylesheets, print_media_context, screen_media_context,
