@@ -77,10 +77,12 @@ fn probe_display_and_flow(
 
 /// Порождает ли элемент содержимое, которое можно уплощить в `InlineSegment`-ы.
 ///
-/// `<img>` и form controls исключены: это replaced-элементы, у них есть
-/// собственная высота, которой у сегмента нет — как сегмент такой элемент
-/// схлопывается в высоту строки ([BUG-728]). Они получают собственный бокс
-/// (`BoxKind::Image` / `BoxKind::FormControl`), как и всё блочно-уровневое.
+/// `<img>`, `<video>`/`<canvas>`/`<audio>`/`<iframe>` (IFC-3) и form controls
+/// исключены: это replaced-элементы, у них есть собственная высота, которой у
+/// сегмента нет — как сегмент такой элемент схлопывается в высоту строки
+/// ([BUG-728]). Они получают собственный бокс (`BoxKind::Image`/`Video`/
+/// `Canvas`/`Audio`/`Iframe` / `BoxKind::FormControl`), как и всё
+/// блочно-уровневое.
 ///
 /// `inline-flex` / `inline-grid` тоже исключены ([BUG-739]): по CSS Display L3
 /// §2.1 это **atomic inline-level** боксы — снаружи inline, внутри собственный
@@ -93,7 +95,10 @@ fn probe_display_and_flow(
 /// [`collect_inline_segments`] к этому месту уже имеет вычисленный
 /// `ComputedStyle` узла, а [`is_inline_content`] берёт `display` из кэша.
 fn produces_inline_segments(doc: &Document, id: NodeId, display: Display) -> bool {
-    if is_image_element(doc, id) || is_form_control_element(doc, id) {
+    if is_image_element(doc, id)
+        || is_inline_replaced_media_element(doc, id)
+        || is_form_control_element(doc, id)
+    {
         return false;
     }
     display == Display::Inline
@@ -110,7 +115,9 @@ fn produces_inline_segments_nested(doc: &Document, id: NodeId, display: Display)
     if display == Display::Contents {
         // На replaced-элементе `contents` вычисляется в `inline` (§3.1), то
         // есть бокс у него остаётся — и высота, ради которой всё это.
-        return !is_image_element(doc, id) && !is_form_control_element(doc, id);
+        return !is_image_element(doc, id)
+            && !is_inline_replaced_media_element(doc, id)
+            && !is_form_control_element(doc, id);
     }
     produces_inline_segments(doc, id, display)
 }
@@ -134,7 +141,10 @@ pub(crate) fn is_inline_content(
         // than whitespace-only text: it must not open an inline run / line box.
         NodeData::Text(s) => !s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)),
         NodeData::Element { .. } => {
-            if is_image_element(doc, id) || is_form_control_element(doc, id) {
+            if is_image_element(doc, id)
+                || is_inline_replaced_media_element(doc, id)
+                || is_form_control_element(doc, id)
+            {
                 return false;
             }
             produces_inline_segments(
@@ -170,12 +180,15 @@ pub(crate) fn is_inline_content(
 /// как replaced-элемент он неделим, поэтому inline-level он именно **atomic**
 /// (CSS Display L3 §2.1), а не источник сегментов ([`produces_inline_segments`]
 /// возвращает для него false). Поэтому у картинки принимается и `Inline`.
+/// IFC-3 распространяет тот же приём на `<video>`/`<canvas>`/`<audio>`/
+/// `<iframe>` — те же UA-дефолт `Inline` и та же неделимость.
 ///
-/// Плавающая или абсолютно позиционированная картинка сюда НЕ попадает: CSS 2.1
-/// §9.7 выводит такой бокс из inline-потока и делает блочным независимо от
-/// `display`, а обтекание умеет только блочная ветка `lay_out`. До IFC-2
+/// Плавающий или абсолютно позиционированный такой элемент сюда НЕ попадает:
+/// CSS 2.1 §9.7 выводит такой бокс из inline-потока и делает блочным независимо
+/// от `display`, а обтекание умеет только блочная ветка `lay_out`. До IFC-2
 /// `<img>` был блочным всегда, поэтому обтекание у него работало — сузить его
-/// молча значило бы разменять одну раскладку на другую. Тот же случай у
+/// молча значило бы разменять одну раскладку на другую; IFC-3 держит
+/// `<video>`/`<canvas>`/`<audio>`/`<iframe>` на том же пути. Тот же случай у
 /// плавающего `inline-block` разбирается по-старому (он и до IFC-2 собирался в
 /// ряд, теряя float) — это отдельный дефект, здесь не трогается.
 #[allow(clippy::too_many_arguments)]
@@ -191,7 +204,7 @@ pub(crate) fn is_atomic_inline_level(
     if !matches!(&doc.get(id).data, NodeData::Element { .. }) {
         return false;
     }
-    if is_image_element(doc, id) {
+    if is_image_element(doc, id) || is_inline_replaced_media_element(doc, id) {
         let (display, out_of_flow) =
             probe_display_and_flow(doc, sheet, id, inherited, viewport, dark_mode, counters);
         return !out_of_flow

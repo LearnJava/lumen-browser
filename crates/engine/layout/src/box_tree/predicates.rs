@@ -212,3 +212,15 @@ pub(crate) fn is_picture_element(doc: &Document, id: NodeId) -> bool {
         NodeData::Element { name, .. } if name.local == "picture"
     )
 }
+
+/// `<video>`/`<canvas>`/`<audio>`/`<iframe>` — replaced media/embedded-document
+/// элементы, которым IFC-3 даёт тот же inline-level статус, что IFC-2 дала
+/// `<img>` (UA-дефолт `display: inline` — [`default_display`]). Отдельная
+/// функция для мест, где `<img>` разбирается своей веткой (у неё уже была
+/// собственная float/out-of-flow обработка до IFC-3) и не должна задваиваться.
+pub(crate) fn is_inline_replaced_media_element(doc: &Document, id: NodeId) -> bool {
+    is_video_element(doc, id)
+        || is_canvas_element(doc, id)
+        || is_audio_element(doc, id)
+        || is_iframe_element(doc, id)
+}
