@@ -638,7 +638,7 @@
      "title": "Переход на V8 (rusty_v8) + Tier 2 Web APIs",
      "status": "done",
      "size": "XL",
-     "note": "Срезы S0–S12 — подзадачами ниже (истина в docs/tasks/ph3-v8-migration.md). Разблокирован (v0.5.0 вышел). Единственное лекарство для тяжёлых SPA: аудит 2026-07-02 — github.com не дорендерился за 280 с (ресурсы загружены к 6.6 с, затык в QuickJS-интерпретаторе без JIT). Рекомендация: делать ПОСЛЕ дешёвых RP-5…RP-9 (они закрывают бо́льшую часть «не как в Edge» и не зависят от JS-движка), затем V8 как флагман Phase 3. Опц. промежуточный митигейт — watchdog/бюджет исполнения JS, чтобы страницы падали graceful, а не висли. Бриф docs/tasks/ph3-v8-migration.md. Сюда же перенесён уровень 2 bfcache — JS-куча переживает заморозку через ValueSerializer (docs/tasks/ph3-bfcache.md, DoD Level 2)",
+     "note": "Строка не сверялась с кодом с момента завода (2026-07). Ревизия 2026-09-06 (разбор бэклога ROADMAP): срезы S0–S12b доведены до конца (`docs/tasks/ph3-v8-migration.md`, последний хвост — S12b-F4, удаление `rquickjs` из `crates/js/Cargo.toml`) — CLAUDE.md фиксирует итог как факт («V8 (`rusty_v8`) is the only JS engine. `rquickjs` is gone from the workspace»). Часть про «Tier 2 Web APIs» в заголовке была общим ярлыком на нехватку Web API вообще, а не конкретным DoD — с 2026-09-02 эта нехватка ведётся предметно через семью `GAP-*` (найдены ре-триажем WPT-RUN-5/6, ROADMAP.md:892-916), не через эту зонтичную строку. Дубликат отдельной задачи не требуется",
      "tasks": [
       {
        "id": "P3-v8-s0",
@@ -1580,8 +1580,8 @@
     {
      "id": "P3-subgrid",
      "title": "CSS Subgrid (grid-template-rows/columns: subgrid)",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): алгоритм subgrid.rs наследует треки родителя; дошить — CSS-проводка keyword subgrid в каскад (CSS-SPECS §42)"
+     "status": "done",
+     "note": "Строка была PARTIAL 2026-07-02, с тех пор не сверялась. Ревизия 2026-09-06 (разбор бэклога ROADMAP): `subgrid` — ✅ в CSS-SPECS.md (`SubgridContext`/`SUBGRID_COL_CTX`/`SUBGRID_ROW_CTX`, `box_tree.rs`, done 2026-06-03, CSS-SPECS.md #30/#42) — CSS-проводка keyword в каскад, которой не хватало на момент завода, давно сделана. Дубликат отдельной задачи не требуется"
     },
     {
      "id": "P3-anchorpos",
@@ -1604,8 +1604,8 @@
     {
      "id": "P3-textwrap",
      "title": "CSS text-wrap: balance / pretty",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): text-wrap-mode/style парсятся в ComputedStyle; дошить — алгоритм balance/pretty в line-break (сейчас поля не влияют на перенос)"
+     "status": "done",
+     "note": "Строка была PARTIAL 2026-07-02, с тех пор не сверялась. Ревизия 2026-09-06 (разбор бэклога ROADMAP): `text-wrap-style` — ✅ в CSS-SPECS.md, «balance/pretty in line-breaker (`balance_wrap`, `box_tree.rs:9359`)» — именно алгоритм, которого не хватало на момент завода, давно сделан. Дубликат отдельной задачи не требуется"
     },
     {
      "id": "P3-has",
@@ -1646,14 +1646,14 @@
     {
      "id": "P3-fragmentation",
      "title": "CSS Fragmentation (break-inside / widows / orphans)",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): break-before/after/inside + orphans/widows парсятся, применяются в pagination.rs (print); дошить — применение вне печати (multicol/regions)"
+     "status": "done",
+     "note": "Строка была PARTIAL 2026-07-02, с тех пор не сверялась. Ревизия 2026-09-06 (разбор бэклога ROADMAP): «CSS Fragmentation L3» — ✅ в CSS-SPECS.md (break-before/after/inside + orphans/widows, `pagination.rs`); распространение на multicol/regions, отмеченное как остаток при заводе, CSS-SPECS.md прямо относит к «paged media output out of scope» (та же строка) — расширять некуда по решению о границах проекта, не забытая работа. Дубликат отдельной задачи не требуется"
     },
     {
      "id": "P3-initialletter",
      "title": "CSS initial-letter (буквица drop-cap)",
      "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): Phase 0 drop-cap float (size×line-height, sink); дошить — точное cap-height/baseline выравнивание, raised-cap, RTL"
+     "note": "PARTIAL (сверка с кодом 2026-07-02): Phase 0 drop-cap float (size×line-height, sink); дошить — точное cap-height/baseline выравнивание, raised-cap, RTL. **Ревизия 2026-09-06:** это дубликат — тот же остаток уже отслеживается напрямую в `CSS-SPECS.md:590` (P4 владеет CSS-специфичными задачами через этот файл, не через ROADMAP.md) и уже стоит в очереди `STATUS-P4.md`. Эта строка не заводит отдельной задачи и не требует нового указателя — статус оставлен `planned`, чтобы не потерять историю, но исполнитель должен идти по `CSS-SPECS.md:590`"
     },
     {
      "id": "P3-resizeobs",
