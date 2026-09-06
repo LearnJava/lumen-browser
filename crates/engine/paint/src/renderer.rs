@@ -273,6 +273,7 @@ impl Renderer {
             Option<f32>,
             Option<f32>,
             Option<f32>,
+            Vec<([u8; 4], f32)>,
         );
         let mut jobs: Vec<PrefetchJob> = Vec::new();
         let mut seen_keys: std::collections::HashSet<u64> = std::collections::HashSet::new();
@@ -319,6 +320,7 @@ impl Renderer {
                         rec.ascent_override,
                         rec.descent_override,
                         rec.size_adjust,
+                        rec.variation_settings.clone(),
                     ));
                 }
                 break; // как в резолве: первый pick_face-хит завершает перебор
@@ -378,7 +380,7 @@ impl Renderer {
         });
 
         for (
-            (path, _, unicode_ranges, ascent_override, descent_override, size_adjust),
+            (path, _, unicode_ranges, ascent_override, descent_override, size_adjust, variation_settings),
             slot,
         ) in jobs.into_iter().zip(results)
         {
@@ -394,6 +396,7 @@ impl Renderer {
                 ascent_override,
                 descent_override,
                 size_adjust,
+                variation_settings,
             });
             self.face_id_by_path.insert(path, id);
         }
@@ -443,6 +446,7 @@ impl Renderer {
             ascent_override: rec.ascent_override,
             descent_override: rec.descent_override,
             size_adjust: rec.size_adjust,
+            variation_settings: rec.variation_settings.clone(),
         });
         self.face_id_by_path.insert(rec.path.clone(), id);
         Some(id)

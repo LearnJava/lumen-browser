@@ -152,6 +152,7 @@ pub(crate) fn read_index_cache(dirs: &[PathBuf]) -> Option<HashMap<String, Vec<F
             descent_override: None,
             size_adjust: None,
             line_gap_override: None,
+            variation_settings: Vec::new(),
         });
     }
 
@@ -244,6 +245,7 @@ mod tests {
                 descent_override: None,
                 size_adjust: None,
                 line_gap_override: None,
+                variation_settings: Vec::new(),
             }],
         );
         m

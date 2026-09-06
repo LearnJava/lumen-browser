@@ -1368,6 +1368,11 @@ impl Lumen {
                             .and_then(lumen_font::parse_metric_override_percent);
                         let line_gap_override = pf.line_gap_override_str.as_deref()
                             .and_then(lumen_font::parse_metric_override_percent);
+                        // FONTLOAD-20 (BUG-467): font-variation-settings дескриптор,
+                        // тот же приём, что четыре override-строки выше.
+                        let variation_settings = pf.variation_settings_str.as_deref()
+                            .map(lumen_font::parse_variation_settings)
+                            .unwrap_or_default();
                         let _ = proxy.send_event(LoadEvent::FontLoaded {
                             family: pf.family,
                             weight: pf.weight,
@@ -1377,6 +1382,7 @@ impl Lumen {
                             descent_override,
                             size_adjust,
                             line_gap_override,
+                            variation_settings,
                             bytes,
                         });
                     });
@@ -1692,6 +1698,10 @@ pub(crate) enum LoadEvent {
         /// `line-gap-override` дескриптор (CSS Fonts L4 §14.3, FONTLOAD-13),
         /// та же точка разбора, что `ascent_override`.
         line_gap_override: Option<f32>,
+        /// `font-variation-settings` дескриптор (CSS Fonts L4 §6.2,
+        /// FONTLOAD-20) — variable-font axis defaults для этого face-а,
+        /// разобранные в фоновом потоке fetch-а.
+        variation_settings: Vec<([u8; 4], f32)>,
         bytes: Vec<u8>,
     },
     /// Все байты получены — для финального полного pipeline.

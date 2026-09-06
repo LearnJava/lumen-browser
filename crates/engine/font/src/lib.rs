@@ -54,6 +54,7 @@ pub mod font_registry;
 pub mod system_fonts;
 pub mod variation;
 pub mod variation_coords;
+pub mod variation_settings;
 pub mod vvar;
 
 pub use avar::{Avar, AxisValueMap, SegmentMap};
@@ -91,5 +92,6 @@ pub use unicode_range::{UnicodeRange, parse_unicode_ranges, codepoint_in_ranges}
 pub use system_fonts::{SystemFontIndex, shared_system_index};
 pub use variation::apply_variations_to_simple_outline;
 pub use variation_coords::VariationCoords;
+pub use variation_settings::parse_variation_settings;
 pub use vvar::Vvar;
 pub use woff2::{decode_woff1, decode_woff2, is_woff1, is_woff2, maybe_decode_font};

@@ -160,6 +160,7 @@ mod tests {
             Some(0.3),
             Some(1.5),
             None,
+            Vec::new(),
         );
         let (bytes, record) = resolve_face(
             Some(&registry as &dyn FontProvider),
@@ -211,6 +212,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
         );
         registry.register_from_bytes(
             "MyFont",
@@ -222,6 +224,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
         );
         let candidates = resolve_face_candidates(
             Some(&registry as &dyn FontProvider),
@@ -252,6 +255,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
         );
         registry.register_from_bytes(
             "MyFont",
@@ -263,6 +267,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
         );
         let candidates = resolve_face_candidates(
             Some(&registry as &dyn FontProvider),
@@ -287,6 +292,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
         );
         let (bytes, record) = resolve_face(
             Some(&registry as &dyn FontProvider),

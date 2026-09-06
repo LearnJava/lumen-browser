@@ -1913,3 +1913,102 @@ sub-run когда-нибудь снова начнёт смешивать face-
 `graphic_tests/snapshots/cpu/` (BUG-1008, не в этом треке). Детали
 реализации и код — `crates/engine/paint/src/cpu_font_resolve.rs`,
 `crates/engine/paint/src/cpu_raster.rs`.
+
+## FONTLOAD-20 (P1, 2026-09-06, ветка `p1-fontload20-variation-settings-descriptor`) — `font-variation-settings` дескриптор `@font-face`
+
+**Что сделано.** Последний из кандидатов (D), в очереди с FONTLOAD-10/15:
+дескриптор `font-variation-settings` (CSS Fonts L4 §6.2) теперь разбирается
+и достигает растеризации переменных шрифтов, тем же путём, что четыре
+override-дескриптора FONTLOAD-11/12/13/20 (`ascent-override`,
+`descent-override`, `size-adjust`, `line-gap-override`).
+
+- Новый `lumen_font::parse_variation_settings`
+  (`crates/engine/font/src/variation_settings.rs`) — грамматика
+  `normal | [<string> <number>]#` → `Vec<([u8; 4], f32)>`. Живёт в
+  `lumen-font`, а не в `lumen-layout` (где уже есть парсер того же
+  синтаксиса для CSS-свойства): `lumen_core::FaceRecord`, единственный
+  потребитель дескриптора, лежит ниже `lumen-layout` по графу зависимостей
+  (`core → font → … → layout → paint`). Тот же приём терпимости к ошибкам,
+  что у `parse_unicode_ranges` (FONTLOAD-8/9) — невалидная запись
+  пропускается, а не валит весь список (декларативный `@font-face` не имеет
+  механизма исключений).
+- `lumen_core::FaceRecord`/`FontRegistry::register_from_bytes`
+  (`crates/engine/font/src/font_registry.rs`)/paint-side `LoadedFace`
+  (`crates/engine/paint/src/renderer/types.rs`) получили поле
+  `variation_settings: Vec<([u8; 4], f32)>`. Проводка через оба источника
+  `@font-face`, тем же приёмом, что уже применён к четырём overrides:
+  `local()` — `crates/shell/subresources.rs::load_font_faces` читает
+  `rule.variation_settings` (поле уже существовало в `FontFaceRule`/
+  `lumen_dom::FontFace` с FONTLOAD-7/8, просто не было протянуто дальше
+  `register_from_bytes`) напрямую; `url()` — `PendingWebFont::
+  variation_settings_str` → `LoadEvent::FontLoaded::variation_settings` →
+  `crates/shell/src/app/user_event.rs` парсит и передаёт в
+  `register_from_bytes` в фоновом потоке fetch-а (`page_load.rs`).
+  `LoadedWebFont` (используется только `MultiFontMeasurer`-ом для
+  layout-измерения — ascent/descent/size-adjust) намеренно НЕ получила это
+  поле: variation-settings не меняет метрики, которые измеряет layout,
+  только форму/ширину глифов на пути растеризации.
+- Растеризация (`crates/engine/paint/src/renderer/glyph_raster.rs::
+  push_text_glyphs`) мержит дефолты дескриптора с осями CSS-свойства
+  `font-variation-settings` элемента через новый `merge_variation_settings`:
+  свойство побеждает по каждой оси, которую называет; дескриптор — дефолт
+  для осей, которые свойство не называет вовсе. При отсутствии дескриптора
+  (типовой случай — большинство `@font-face` не несёт этот дескриптор)
+  функция возвращает список свойства без изменений — no-op, тот же
+  аддитивный паттерн, что у предыдущих override-срезов.
+- Скрипт-сконструированный `new FontFace(family, source, descriptors)`'s
+  `descriptors.variationSettings` по-прежнему не доезжает до
+  `register_from_bytes` — тот же JS-side разрыв, что FONTLOAD-17 уже
+  задокументировала для остальных четырёх overrides
+  (`take_pending_scripted_font_faces` несёt только `(family, weight, style,
+  bytes)`, дескрипторы вообще не проходят этот канал). `about_to_wait.rs`
+  передаёт `Vec::new()` для этого пути, доккомент расширен с FONTLOAD-17 gap
+  на FONTLOAD-20.
+
+**Тесты:** `variation_settings.rs` — 11 новых юнит-тестов парсера (одна ось,
+несколько осей, `normal`/пустая строка, одинарные/двойные кавычки,
+отрицательное значение, невалидная запись пропущена без потери остальных,
+некорректная длина tag, отсутствующее значение, пробелы). `glyph_raster.rs`
+— 6 новых тестов `merge_variation_settings` (нет дескриптора → свойство без
+изменений; нет свойства → дескриптор как дефолт; свойство переопределяет
+совпадающую ось; ось дескриптора, не названная свойством, всё равно
+применяется; ось свойства, не названная дескриптором, добавляется; оба
+пустых → пусто). `cargo test -p lumen-font` — 418/418 (без регрессий, +11),
+`cargo test -p lumen-paint --features backend-wgpu,cpu-render --lib` —
+1297/1297 (без регрессий, +6), `cargo test -p lumen-shell --bin lumen
+--features v8` — 1730/1730 (без регрессий). `cargo clippy -p lumen-core -p
+lumen-font -p lumen-paint --features backend-wgpu,cpu-render --all-targets
+-- -D warnings` и `cargo clippy -p lumen-shell --bin lumen --all-targets
+--features v8 -- -D warnings` чисты.
+
+**Гейт на пиксели:** срез трогает `push_text_glyphs` (растеризация
+variable-font осей), поэтому формально гейт — полный `run.py
+--continue-on-fail`, но живое подтверждение **не получено**: тот же класс
+отказа gdigrab/окружения, что уже фиксировала FONTLOAD-19 (0/156 PASSED,
+включая сам `00-calibration` — признак незахваченного окна, а не регрессии
+кода). Результат не закоммичен. Вместо этого — `python
+graphic_tests/dump_golden.py` (`LUMEN_PROFILE=dev-release`, независимый
+текстовый golden-набор): 4 несовпадения из 12 (`samples/page.html`,
+`graphic_tests/65-flex-align-content.html`, layout+display-list каждый) —
+байт-в-байт та же дельта высоты строки (`14.40` → `13.41`), что FONTLOAD-19
+уже атрибутировала [BUG-1008](BUG-1008-OPEN.md). Проверено напрямую для
+этого среза: `git stash -u` (откатывает все правки FONTLOAD-20 до чистого
+`main`), пересборка `lumen.exe`, повторный `dump_golden.py` — та же дельта
+4/12, байт-в-байт, на дереве без единой строчки этого среза; `git stash
+pop` восстановил правки. Подтверждает: дрейф предсуществующий, срез его не
+трогает и не усугубляет.
+
+**Не входит:** скрипт-сконструированный `FontFace.variationSettings`
+(JS-side разрыв выше, тот же класс, что FONTLOAD-17 оставила для остальных
+overrides); живой WPT A/B `font-variation-settings-descriptor-0{1..4}.html`
+(`tests/wpt/css/css-fonts/`) — заблокирован тем же окружением
+(`run_smoke.py`'s WSS падает на Python 3.14 `ssl.wrap_socket`, см.
+FONTLOAD-18), не этим срезом; femtovg-паритет; реактивность CSS-connected
+сета (BUG-471/CSSOM-4); регенерация протухших golden-наборов (BUG-1008,
+чужой долг). Этим срезом закрыт весь список кандидатов (D)/(A)/(B)/(C),
+открытый FONTLOAD-10 — из крупных нерешённых кусков FONTLOAD остаются
+только те, что блокированы вне периметра одного P1-среза: реактивность
+CSS-connected сета требует фундамента CSSOM-4, живой WPT-замер override/
+variation-категорий требует починки Python-окружения (P2/P5). Детали
+реализации и код — `crates/engine/font/src/variation_settings.rs`,
+`crates/engine/paint/src/renderer/glyph_raster.rs`.

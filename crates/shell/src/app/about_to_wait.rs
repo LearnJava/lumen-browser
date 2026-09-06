@@ -536,14 +536,14 @@ impl Lumen {
             self.drain_query_js(|j| j.take_pending_scripted_font_faces()).unwrap_or_default();
         if !scripted_fonts.is_empty() {
             for (family, weight, style, bytes) in scripted_fonts {
-                // FONTLOAD-17 gap (not this slice): `new FontFace(family, source,
+                // FONTLOAD-17/20 gap (not this slice): `new FontFace(family, source,
                 // descriptors)`'s `descriptors.{ascentOverride,descentOverride,
-                // sizeAdjust,lineGapOverride}` never reach here —
+                // sizeAdjust,lineGapOverride,variationSettings}` never reach here —
                 // `take_pending_scripted_font_faces` only carries
-                // `(family, weight, style, bytes)`. Scripted overrides pass `None`
-                // until that JS-side gap is closed.
+                // `(family, weight, style, bytes)`. Scripted overrides pass `None`/
+                // empty until that JS-side gap is closed.
                 self.page_font_registry.register_from_bytes(
-                    &family, weight, style, &[], bytes, None, None, None, None,
+                    &family, weight, style, &[], bytes, None, None, None, None, Vec::new(),
                 );
             }
             if let Some(r) = self.renderer.as_mut() {
