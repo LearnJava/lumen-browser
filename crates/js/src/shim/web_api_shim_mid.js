@@ -7952,7 +7952,7 @@ function _lumen_font_face_try_one_source(src, onOk, onFail) {
         onFail(new DOMException('Could not find local font', 'NetworkError'));
         return;
     }
-    // BUG-1011: `_lumenAsync` routes this through `fetch()`'s worker-thread
+    // BUG-1013: `_lumenAsync` routes this through `fetch()`'s worker-thread
     // bridge instead of its default synchronous transport. A bare `fetch(url)`
     // parks the JS thread until the font host answers, and this function runs
     // inside the load pipeline's `run-scripts` phase — so google.com's
