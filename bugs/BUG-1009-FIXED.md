@@ -1,6 +1,6 @@
 # BUG-1009 — regular (non-`:host`/`::slotted`) selectors in a shadow tree's own stylesheet never match its own descendants
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-06
 **Заведён:** 2026-09-06 (P3, побочно при работе над [BUG-518](BUG-518-OPEN.md), срез `mixin-shadow-dom.html`)
 **Компонент:** layout (`crates/engine/layout/src/style/cascade.rs::compute_style`, the `SHADOW_SHEETS`
 `own_shadow`/`host_shadow` block; `crates/engine/layout/src/box_tree/entry.rs::build_shadow_sheets`)
@@ -105,3 +105,82 @@ let sheet = lumen_css_parser::parse("");
 let root = lumen_layout::box_tree::layout(&doc, &sheet, Size::new(800.0, 600.0));
 // No box in `root` has color == Color { r: 255, g: 0, b: 0, a: 255 }.
 ```
+
+## Исправление
+
+Lighter than the design sketched above under "почему это не point-fixed
+здесь" — no per-shadow-tree `CascadeIndex`/rule-index cache was built, and
+`compute_style`'s `sheet: &Stylesheet` parameter still means one document-wide
+sheet, unchanged.
+
+Two pieces:
+
+- `Document::enclosing_shadow_host` (`crates/engine/dom/src/lib.rs`) — walks
+  `id`'s real DOM `parent` chain looking for a `ShadowRoot` node, returning
+  the host that owns it. A shadow root's own children have `parent` pointing
+  at the root itself (`attach_shadow`'s doc comment: "not a DOM child of
+  host"), so this correctly distinguishes a genuine shadow-interior element
+  from a slotted light-tree child (whose real parent is the host element, not
+  the root — case (b) already covers that one). Nested shadow trees resolve
+  to the *nearest* enclosing root: the walk stops at the first `ShadowRoot`
+  it meets, matching how `getRootNode()` (without `composed: true`) would
+  resolve for the same node.
+- New case (c) in `cascade.rs::compute_style`, added after the existing (a)
+  `own_shadow`/(b) `host_shadow` blocks: when `enclosing_shadow_host(node)` is
+  `Some(host)`, `SHADOW_SHEETS[host]`'s rules are matched against `node` with
+  plain `matches_complex` — the same call the top-level document-sheet loop
+  already uses. No extra filtering was needed to keep this from re-doing (a)
+  or (b)'s job: `:host` is a `PseudoClass` gated on the `SHADOW_HOST_SCOPE`
+  thread-local, which case (c) never sets to `node`'s index, so
+  `matches_pseudo_class` correctly returns `false` for it here; `::slotted()`
+  is a `PseudoElement`, and `matches_simple` unconditionally rejects every
+  `SimpleSelector::PseudoElement`, so a `::slotted(...)` rule can never match
+  through the plain path either. Both boundary forms are excluded by
+  mechanisms the cascade already had, not by new code.
+
+Global rule-index bookkeeping (`gidx`, used only for cascade source-order
+tie-breaking among equal-specificity declarations) for case (c) starts after
+cases (a) and (b)'s own ranges (`next_rule_idx + own_shadow.len +
+host_shadow.len`), so it does not collide with either.
+
+Matching is linear over `shadow.rules` (same as (a)/(b) already were) — no
+candidate pre-filtering via `CascadeIndex`, so a large interior stylesheet on
+a hot layout path is unindexed. This mirrors the existing (a)/(b) cost, not a
+new regression class, and was not in scope to fix here.
+
+**Not covered by this fix** (unrelated or separately gated, left for whoever
+next touches shadow-tree CSS):
+
+- The reverse leak — a *document*-level stylesheet's plain selector (e.g. a
+  page-level `#e1 { color: red; }`, not inside any shadow tree) can still
+  incorrectly match a shadow-interior element by id/class/type, since
+  `matches_complex`'s rightmost-compound check doesn't consult tree scope at
+  all for combinator-free selectors. Full encapsulation would need excluding
+  shadow-interior nodes from the passed-in `sheet` match at the top of
+  `compute_style`, which risks its own regressions and needs dedicated
+  verification — out of scope for closing this specific gap.
+- `mixin-cssom.tentative`/`mixin-invalidation.tentative` in
+  [BUG-518](BUG-518-OPEN.md) (CSSOM-gated, unrelated to this cascade gap).
+
+**Verification**: 3 new permanent unit tests in
+`crates/engine/layout/src/style/tests/shadow_dom_selectors.rs`
+(`regular_selector_in_own_shadow_sheet_applies_to_its_interior_element` —
+the exact repro above via `compute_style` directly;
+`interior_regular_selector_does_not_apply_to_slotted_light_child` — guards
+against case (c) leaking into case (b)'s territory;
+`nested_shadow_tree_uses_nearest_enclosing_scope_not_outer` — nested shadow
+roots resolve to the nearest one). `cargo test -p lumen-layout --lib`:
+3874/3874. `cargo test -p lumen-dom --lib`: 292/292 (new
+`enclosing_shadow_host` method, no existing test touched). `cargo clippy -p
+lumen-dom -p lumen-layout --all-targets -- -D warnings`: clean.
+`scripts/scoped-test.sh`: green except the two pre-existing unrelated
+failures already documented on [BUG-518](BUG-518-OPEN.md)'s slices
+(`cases::snapshot_cpu::cpu_snapshots_match_references` —
+[BUG-1008](BUG-1008-OPEN.md) CPU-snapshot drift; `native_binding_panic_does_not_abort_process`
+— [BUG-997](BUG-997-OPEN.md)). `python graphic_tests/dump_golden.py --build`:
+4/12 mismatches, all on `samples/page.html`/`65-flex-align-content.html`
+(line-height rect drift, the same pre-existing BUG-1008-class dump-golden
+drift BUG-518's slices already recorded) — neither touched page uses Shadow
+DOM, and the two pages that do (`72-host-slotted.html`,
+`1000000-final.html`'s shadow demo) only use `:host`/`::slotted`, so this
+change cannot have moved their pixels; both passed.
