@@ -447,11 +447,22 @@ use super::*;
 
     // ──────── <video> replaced element ────────
 
+    /// Рекурсивный поиск, как у [`first_image_child`]: с IFC-3 `<video>` —
+    /// atomic inline-level бокс внутри анонимного `InlineBlockRow`, а не
+    /// прямой ребёнок блока.
     fn first_video_child(b: &LayoutBox) -> &LayoutBox {
-        b.children
-            .iter()
-            .find(|c| matches!(c.kind, BoxKind::Video { .. }))
-            .expect("expected at least one video child")
+        fn walk(b: &LayoutBox) -> Option<&LayoutBox> {
+            for c in &b.children {
+                if matches!(c.kind, BoxKind::Video { .. }) {
+                    return Some(c);
+                }
+                if let Some(found) = walk(c) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        walk(b).expect("expected at least one video child")
     }
 
     #[test]
@@ -523,13 +534,42 @@ use super::*;
         assert!((vid.rect.width - 300.0).abs() < 0.1, "width={}", vid.rect.width);
     }
 
+    #[test]
+    fn video_shares_line_box_with_text() {
+        // IFC-3: `<video>` — UA-дефолт `display: inline`, как `<img>` (IFC-2).
+        // Одна строка вместо трёх: прогон «before», видео, прогон «after».
+        let root = lay(r#"<div>before<video src="clip.mp4"></video>after</div>"#, "");
+        let div = first_element_child(&root);
+        assert_eq!(div.children.len(), 1, "строка должна быть одна, а не {}", div.children.len());
+        let row = &div.children[0];
+        assert!(
+            matches!(row.kind, BoxKind::InlineBlockRow),
+            "видео с текстом обязано собраться в InlineBlockRow"
+        );
+        assert_eq!(row.children.len(), 3, "got {}", row.children.len());
+        assert!(matches!(row.children[0].kind, BoxKind::InlineRun { .. }));
+        assert!(matches!(row.children[1].kind, BoxKind::Video { .. }));
+        assert!(matches!(row.children[2].kind, BoxKind::InlineRun { .. }));
+    }
+
     // ──────── <iframe> placeholder layout ───────────────────────────────────
 
+    /// Рекурсивный поиск, как у [`first_image_child`]: с IFC-3 `<iframe>` —
+    /// atomic inline-level бокс внутри анонимного `InlineBlockRow`, а не
+    /// прямой ребёнок блока.
     fn first_iframe_child(b: &LayoutBox) -> &LayoutBox {
-        b.children
-            .iter()
-            .find(|c| matches!(c.kind, BoxKind::Iframe { .. }))
-            .expect("expected at least one Iframe box")
+        fn walk(b: &LayoutBox) -> Option<&LayoutBox> {
+            for c in &b.children {
+                if matches!(c.kind, BoxKind::Iframe { .. }) {
+                    return Some(c);
+                }
+                if let Some(found) = walk(c) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        walk(b).expect("expected at least one Iframe box")
     }
 
     #[test]
@@ -599,6 +639,24 @@ use super::*;
             }
             other => panic!("expected BoxKind::Iframe, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn iframe_shares_line_box_with_text() {
+        // IFC-3: `<iframe>` — UA-дефолт `display: inline`, как `<img>` (IFC-2).
+        // Одна строка вместо трёх: прогон «before», iframe, прогон «after».
+        let root = lay(r#"<div>before<iframe src="x.html"></iframe>after</div>"#, "");
+        let div = first_element_child(&root);
+        assert_eq!(div.children.len(), 1, "строка должна быть одна, а не {}", div.children.len());
+        let row = &div.children[0];
+        assert!(
+            matches!(row.kind, BoxKind::InlineBlockRow),
+            "iframe с текстом обязан собраться в InlineBlockRow"
+        );
+        assert_eq!(row.children.len(), 3, "got {}", row.children.len());
+        assert!(matches!(row.children[0].kind, BoxKind::InlineRun { .. }));
+        assert!(matches!(row.children[1].kind, BoxKind::Iframe { .. }));
+        assert!(matches!(row.children[2].kind, BoxKind::InlineRun { .. }));
     }
 
     #[test]

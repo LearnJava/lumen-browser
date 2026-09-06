@@ -43,6 +43,14 @@ pub(in crate::style) fn default_display(doc: &Document, node: NodeId) -> Display
         // it flows inside `InlineBlockRow` beside text and `inline-block`
         // siblings (IFC-2). Author `display:` overrides win through the cascade.
         "img" => Display::Inline,
+        // HTML rendering §15.3.1 — `<video>`/`<canvas>`/`<audio>`/`<iframe>` are
+        // the same class of inline-level replaced/embedded content as `<img>`,
+        // just with their own `BoxKind`. Before IFC-3 they were left on the
+        // `_ => Display::Block` fallback, which is why a rating badge, a small
+        // canvas icon or an embedded widget next to text always took its own
+        // line instead of flowing beside it. `is_atomic_inline_level` picks
+        // them up the same way it picks up `<img>` (IFC-3).
+        "video" | "canvas" | "audio" | "iframe" => Display::Inline,
         // CSS 2.1 table model — UA default display values per HTML spec.
         "table" => Display::Table,
         "caption" => Display::TableCaption,

@@ -1517,35 +1517,23 @@ fn lay_out_inner(
                         prev_block_mb = if is_block { child_mb.max(0.0) } else { 0.0 };
                     }
                     // CSS 2.1 §10.8 — inline-image line-box descent (the classic
-                    // "image bottom gap"). `<video>`/`<canvas>`/`<iframe>` are
-                    // inline-level replaced media that Lumen still lays out as
-                    // block-flow children (`default_display` maps them to Block),
-                    // so the sub-baseline space of their line box would be dropped
-                    // and every media-wrapping block would come out ~descent px too
-                    // short; in a grid that shortfall accumulates as an upward row
-                    // drift versus a browser (BUG-180, TEST-18). Add the strut
-                    // descent of *this block's* font after a baseline-aligned such
-                    // child. Restricted to the default `vertical-align: baseline`;
-                    // top/middle/bottom anchor the replaced box against the line box
-                    // differently and get no sub-baseline gap.
+                    // "image bottom gap"), historically compensated here for
+                    // `<video>`/`<canvas>`/`<iframe>` (BUG-180, TEST-18): before
+                    // IFC-3 they were inline-level replaced media that Lumen still
+                    // laid out as block-flow children (`default_display` mapped
+                    // them to Block), so the sub-baseline space of their line box
+                    // was dropped and every media-wrapping block came out
+                    // ~descent px too short.
                     //
-                    // `BoxKind::Image` is deliberately NOT in this list since IFC-2:
-                    // an `<img>` is inline-level for real now and gets its descent
-                    // from the `InlineBlockRow` strut. Reaching block flow at all
-                    // means the author blockified it (`display: block`, a float,
-                    // absolute positioning) — and a blockified box has no line box
-                    // and therefore no gap under it.
-                    let child_is_replaced_media = matches!(
-                        child.kind,
-                        BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Iframe { .. }
-                    );
-                    if child_is_replaced_media
-                        && matches!(child.style.vertical_align, VerticalAlign::Baseline)
-                    {
-                        child_y += measurer.map_or(0.0, |m| {
-                            m.descent_px_with_families(b.style.font_size, &b.style.font_family)
-                        });
-                    }
+                    // `BoxKind::Image` was deliberately NOT in this list since
+                    // IFC-2, and IFC-3 removes `Video`/`Canvas`/`Iframe` from it
+                    // the same way: `default_display` now maps all four to
+                    // `Inline`, so they get their descent from the
+                    // `InlineBlockRow` strut like `<img>` does. Reaching block
+                    // flow at all now means the author blockified the element
+                    // (`display: block`, a float, absolute positioning) — and a
+                    // blockified box has no line box and therefore no gap under
+                    // it, exactly as for a blockified `<img>`.
                 }
                 // CSS 2.1 §8.3.1: parent↔last-child bottom margin collapse. When this
                 // box collapses its bottom margin (auto height, no bottom padding/border,
