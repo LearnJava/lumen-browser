@@ -402,6 +402,7 @@ fn color_glyph_emits_one_quad_per_layer_with_palette_colors() {
         ascent_override: None,
         descent_override: None,
         size_adjust: None,
+        variation_settings: Vec::new(),
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
@@ -454,6 +455,7 @@ fn atlas_exhaustion_is_not_memoized_and_heals_after_reset() {
         ascent_override: None,
         descent_override: None,
         size_adjust: None,
+        variation_settings: Vec::new(),
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(64);
@@ -498,6 +500,7 @@ fn custom_palette_override_reaches_the_emitted_vertices() {
         ascent_override: None,
         descent_override: None,
         size_adjust: None,
+        variation_settings: Vec::new(),
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
@@ -554,6 +557,7 @@ fn text_run_cache_skips_color_glyph_runs() {
         ascent_override: None,
         descent_override: None,
         size_adjust: None,
+        variation_settings: Vec::new(),
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
@@ -603,6 +607,7 @@ fn text_run_cache_replays_identical_vertices() {
         ascent_override: None,
         descent_override: None,
         size_adjust: None,
+        variation_settings: Vec::new(),
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);

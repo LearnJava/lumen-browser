@@ -192,9 +192,16 @@ pub(crate) fn load_font_faces(
                         .and_then(lumen_font::parse_metric_override_percent);
                     let line_gap_override = rule.line_gap_override.as_deref()
                         .and_then(lumen_font::parse_metric_override_percent);
+                    // FONTLOAD-20 (BUG-467): font-variation-settings дескриптор —
+                    // те же местa разбора/проводки, что четыре override-дескриптора
+                    // выше, но список осей вместо одного `Option<f32>`.
+                    let variation_settings = rule.variation_settings.as_deref()
+                        .map(lumen_font::parse_variation_settings)
+                        .unwrap_or_default();
                     registry.register_from_bytes(
                         &rule.family, weight, style, &ranges, bytes,
                         ascent_override, descent_override, size_adjust, line_gap_override,
+                        variation_settings,
                     );
                     local_resolved = true;
                     break;
@@ -216,6 +223,7 @@ pub(crate) fn load_font_faces(
                 descent_override_str: rule.descent_override.clone(),
                 size_adjust_str: rule.size_adjust.clone(),
                 line_gap_override_str: rule.line_gap_override.clone(),
+                variation_settings_str: rule.variation_settings.clone(),
                 url: url_src.value.clone(),
             });
         }
@@ -484,6 +492,11 @@ pub(crate) struct PendingWebFont {
     /// Сырая строка `line-gap-override` дескриптора (CSS Fonts L4 §14.3,
     /// FONTLOAD-13), та же семантика, что у `ascent_override_str`.
     pub(crate) line_gap_override_str: Option<String>,
+    /// Сырая строка `font-variation-settings` дескриптора (CSS Fonts L4
+    /// §6.2, FONTLOAD-20) — распаршивается в фоновом потоке fetch-а через
+    /// `lumen_font::parse_variation_settings`, той же точкой, что и
+    /// `unicode_range_str`.
+    pub(crate) variation_settings_str: Option<String>,
     /// URL для fetch (@font-face `src: url(...)`).
     pub(crate) url: String,
 }

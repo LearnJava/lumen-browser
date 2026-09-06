@@ -792,6 +792,14 @@ pub(crate) struct LoadedFace {
     /// глифов и ascent/descent этого face-а. `None` — дескриптор
     /// отсутствует/невалиден, эквивалентно `100%`.
     pub(crate) size_adjust: Option<f32>,
+    /// `font-variation-settings` дескриптор `@font-face` (CSS Fonts L4 §6.2,
+    /// FONTLOAD-20), скопирован из `FaceRecord::variation_settings` при
+    /// загрузке — variable-font axis defaults для этого face-а. Пустой `Vec` —
+    /// дескриптор отсутствует/`normal`. `push_text_glyphs` мержит эти
+    /// значения с осями из CSS-свойства `font-variation-settings` (свойство
+    /// побеждает по каждой оси отдельно) перед нормализацией через `fvar`/
+    /// `avar` — см. `merge_variation_settings` в `glyph_raster.rs`.
+    pub(crate) variation_settings: Vec<([u8; 4], f32)>,
 }
 
 /// Owned-метрики face-а, независимые от лайфтайма `bytes`. Живут в

@@ -4066,6 +4066,7 @@ mod tests {
             None,
             Some(2.0),
             None,
+            Vec::new(),
         );
         let cmds = vec![DisplayCommand::DrawText {
             font_stretch: lumen_layout::FontStretch::NORMAL,
@@ -4183,6 +4184,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
         );
         registry.register_from_bytes(
             "SplitFont",
@@ -4194,6 +4196,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
         );
         let cmds = vec![DisplayCommand::DrawText {
             font_stretch: lumen_layout::FontStretch::NORMAL,

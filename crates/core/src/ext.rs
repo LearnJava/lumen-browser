@@ -484,6 +484,17 @@ pub struct FaceRecord {
     /// растеризации (та же ситуация, что у layout-стороны `line_gap_px` —
     /// FONTLOAD-13) — доезжает до записи для будущего консьюмера.
     pub line_gap_override: Option<f32>,
+    /// `font-variation-settings` дескриптор `@font-face` (CSS Fonts L4 §6.2,
+    /// FONTLOAD-20, BUG-467) — variable-font axis defaults для этого face-а,
+    /// как список `(tag, value)`. Пустой `Vec` — дескриптор отсутствует/
+    /// `normal`. Растеризация мержит эти значения с осями из CSS-свойства
+    /// `font-variation-settings` элемента (свойство побеждает по каждой оси
+    /// отдельно, дескриптор — дефолт для осей, которые свойство не называет)
+    /// перед нормализацией через `fvar`/`avar` — см.
+    /// `crates/engine/paint/src/renderer/glyph_raster.rs`. Хранится как
+    /// `([u8; 4], f32)`, а не типом `lumen-layout`'а: `lumen-core` не может
+    /// зависеть от `lumen-layout` (граф зависимостей `core → … → layout`).
+    pub variation_settings: Vec<([u8; 4], f32)>,
 }
 
 /// `true`, если кодпоинт `cp` попадает хотя бы в один диапазон `ranges`
@@ -544,6 +555,7 @@ pub trait FontProvider: Send + Sync {
                 descent_override: None,
                 size_adjust: None,
                 line_gap_override: None,
+                variation_settings: Vec::new(),
             })
             .collect()
     }
@@ -829,6 +841,7 @@ mod font_provider_tests {
             descent_override: None,
             size_adjust: None,
             line_gap_override: None,
+            variation_settings: Vec::new(),
         }
     }
 
@@ -849,6 +862,7 @@ mod font_provider_tests {
             descent_override: None,
             size_adjust: None,
             line_gap_override: None,
+            variation_settings: Vec::new(),
         }
     }
 

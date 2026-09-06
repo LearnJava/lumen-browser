@@ -653,10 +653,11 @@ pub(crate) fn push_text_glyphs(
         let coords: &[f32] = match norm_coords_cache.entry(face_id) {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
             std::collections::hash_map::Entry::Vacant(v) => {
-                let computed = if font_variation_axes.is_empty() {
+                let axes = merge_variation_settings(&face.variation_settings, font_variation_axes);
+                let computed = if axes.is_empty() {
                     Vec::new()
-                } else if let Some(face) = lazy.get(face_id) {
-                    normalize_variation_axes(face, font_variation_axes)
+                } else if let Some(parsed_face) = lazy.get(face_id) {
+                    normalize_variation_axes(parsed_face, &axes)
                 } else {
                     Vec::new()
                 };
@@ -871,6 +872,31 @@ fn pick_face_for_codepoint(
     (primary_face_id, 0)
 }
 
+/// Merges a face's `font-variation-settings` `@font-face` descriptor
+/// defaults (CSS Fonts L4 §6.2, FONTLOAD-20) with the element's
+/// `font-variation-settings` CSS property axes, per axis: the property wins
+/// where it names an axis, the descriptor's default applies where the
+/// property doesn't mention that axis at all. Property-only (no descriptor
+/// defaults) returns the property list unchanged — the common case, since
+/// most `@font-face` rules carry no `font-variation-settings` descriptor.
+fn merge_variation_settings(
+    descriptor_defaults: &[([u8; 4], f32)],
+    property_axes: &[([u8; 4], f32)],
+) -> Vec<([u8; 4], f32)> {
+    if descriptor_defaults.is_empty() {
+        return property_axes.to_vec();
+    }
+    let mut merged = descriptor_defaults.to_vec();
+    for &(tag, value) in property_axes {
+        if let Some(slot) = merged.iter_mut().find(|(t, _)| *t == tag) {
+            slot.1 = value;
+        } else {
+            merged.push((tag, value));
+        }
+    }
+    merged
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ensure_glyph(
     cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
@@ -996,6 +1022,7 @@ mod pick_face_for_codepoint_tests {
             ascent_override: None,
             descent_override: None,
             size_adjust: None,
+            variation_settings: Vec::new(),
         }
     }
 
@@ -1048,5 +1075,48 @@ mod pick_face_for_codepoint_tests {
         let (face_id, glyph_id) = pick_face_for_codepoint('!' as u32, 0, &faces);
         assert_eq!(face_id, 0);
         assert_eq!(glyph_id, 0);
+    }
+}
+
+#[cfg(test)]
+mod merge_variation_settings_tests {
+    use super::*;
+
+    #[test]
+    fn no_descriptor_defaults_returns_property_axes_unchanged() {
+        let merged = merge_variation_settings(&[], &[(*b"wght", 700.0)]);
+        assert_eq!(merged, vec![(*b"wght", 700.0)]);
+    }
+
+    #[test]
+    fn no_property_axes_uses_descriptor_defaults() {
+        let merged = merge_variation_settings(&[(*b"wght", 375.0)], &[]);
+        assert_eq!(merged, vec![(*b"wght", 375.0)]);
+    }
+
+    #[test]
+    fn property_overrides_matching_descriptor_axis() {
+        let merged = merge_variation_settings(&[(*b"wght", 375.0)], &[(*b"wght", 700.0)]);
+        assert_eq!(merged, vec![(*b"wght", 700.0)]);
+    }
+
+    #[test]
+    fn descriptor_axis_not_named_by_property_still_applies() {
+        let merged = merge_variation_settings(
+            &[(*b"wght", 375.0), (*b"slnt", -8.0)],
+            &[(*b"wght", 700.0)],
+        );
+        assert_eq!(merged, vec![(*b"wght", 700.0), (*b"slnt", -8.0)]);
+    }
+
+    #[test]
+    fn property_axis_not_named_by_descriptor_is_appended() {
+        let merged = merge_variation_settings(&[(*b"wght", 375.0)], &[(*b"slnt", -8.0)]);
+        assert_eq!(merged, vec![(*b"wght", 375.0), (*b"slnt", -8.0)]);
+    }
+
+    #[test]
+    fn both_empty_is_empty() {
+        assert!(merge_variation_settings(&[], &[]).is_empty());
     }
 }

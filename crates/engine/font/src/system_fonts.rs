@@ -216,6 +216,7 @@ fn read_face(path: &Path) -> Option<FaceRecord> {
         descent_override: None,
         size_adjust: None,
         line_gap_override: None,
+        variation_settings: Vec::new(),
     })
 }
 

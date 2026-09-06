@@ -87,7 +87,7 @@ impl Lumen {
             }
             LoadEvent::FontLoaded {
                 family, weight, style, unicode_range, ascent_override, descent_override,
-                size_adjust, line_gap_override, bytes,
+                size_adjust, line_gap_override, variation_settings, bytes,
             } => {
                 // PH3-19 FOUT swap: web-шрифт прибыл из фонового потока.
                 // Регистрируем в page_font_registry (FontProvider для renderer-а),
@@ -110,6 +110,7 @@ impl Lumen {
                     descent_override,
                     size_adjust,
                     line_gap_override,
+                    variation_settings,
                 );
                 // Update renderer's font provider so GPU glyph atlas picks up the new face.
                 if let Some(r) = self.renderer.as_mut() {
