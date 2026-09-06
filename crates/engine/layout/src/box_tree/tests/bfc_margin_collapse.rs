@@ -101,11 +101,7 @@ fn collapsed_margins_survive_a_very_deep_single_child_chain() {
     let bottom = collapsed_bottom_margin(&node, 800.0, VIEWPORT);
     assert!((top - 1.0).abs() < 0.01, "top={top}");
     assert!((bottom - 1.0).abs() < 0.01, "bottom={bottom}");
-    // `LayoutBox`'s compiler-derived `Drop` glue walks `children` recursively
-    // (one frame per nesting level, same shape as the pre-fix
-    // `collapsed_top_margin`/`collapsed_bottom_margin`) — a stack-overflow
-    // source of its own, unrelated to what this test checks, and LAYOUT-1's
-    // remaining scope (not this slice). `forget` sidesteps it so the test
-    // isolates the one thing it's here to prove.
-    std::mem::forget(node);
+    // LAYOUT-1 srez 2 made `LayoutBox`'s `Drop` iterative (`layout_box_drop.rs`),
+    // so the tree can now drop for real instead of needing `mem::forget` to
+    // dodge the (then still recursive) drop glue.
 }
