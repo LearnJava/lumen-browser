@@ -291,6 +291,17 @@ pub(crate) fn install_match_media(
             mq.matches(&ctx)
         }
     );
+    // Media Queries L4 §Serializing a media query list — `MediaQueryList.media`
+    // must report the canonical form (whitespace collapsed, invalid clauses
+    // replaced with `not all`), not an echo of the constructor argument
+    // (BUG-526). Re-parses the query; cheap (query strings are tiny and this
+    // only runs once per `matchMedia()` call / listener registration).
+    reg!(scope, ctx, store,
+        "_lumen_serialize_media_query",
+        |query: String| -> String {
+            lumen_css_parser::parse_media_query(&query).serialize()
+        }
+    );
     Ok(())
 }
 

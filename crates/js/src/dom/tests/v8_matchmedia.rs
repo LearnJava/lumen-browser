@@ -82,6 +82,38 @@ fn match_media_returns_object_with_media_property() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// ── BUG-526: `.media` reports the canonical serialization, not an echo ────
+
+#[test]
+fn match_media_media_property_serializes_whitespace() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.update_viewport_size(800.0, 600.0);
+    let r = rt.eval("matchMedia('   all   ').media").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("all".into()));
+}
+
+#[test]
+fn match_media_media_property_replaces_invalid_clause_with_not_all() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.update_viewport_size(800.0, 600.0);
+    let r = rt.eval("matchMedia(',').media").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("not all, not all".into()));
+    // Matching must stay consistent with the (unchanged) matching semantics:
+    // an all-invalid query never matches.
+    let r = rt.eval("matchMedia(',').matches").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(false));
+}
+
+#[test]
+fn match_media_media_property_canonicalizes_feature_spacing() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.update_viewport_size(800.0, 600.0);
+    let r = rt
+        .eval("matchMedia('( min-width:  500px )').media")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("(min-width: 500px)".into()));
+}
+
 #[test]
 fn match_media_add_remove_listener_noop_when_no_change() {
     let rt = v8_runtime_with_dom(make_doc());
