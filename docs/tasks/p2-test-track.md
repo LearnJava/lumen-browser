@@ -803,6 +803,37 @@ Baseline 207 → 210 категорий. Осталось непокрытых ~
 среза 4 (6 категорий), BUG-1006-класс (`performance-timeline`/`long-animation-frame`/
 `signed-exchange`) и новая находка `layout-instability` не тронуты.
 
+### TEST-3: срез 11 (2026-09-06) — 2 новые категории, `appmanifest` — ещё одна ресурсная пустышка
+
+Бинарь пересобран под текущий `main` (5:58, `dev-release` — SPLIT-PR2, BUG-518-срез-5
+и WPT-RUN-10 успели влиться после прошлой сборки). Кандидаты отобраны тем же методом,
+что и в срезе 10 (число реально исполняемых файлов, не файлов на диске вообще), плюс
+предиктор среза 9/10 (`grep -rl "RemoteContext\|window.open\|dispatcher\|test_driver\.\(Actions\|bless\)"`)
+— все три кандидата дали 0 совпадений.
+
+`appmanifest` (66 файлов) не дал ни одного id: `--update-expected` вернул `no tests
+selected` без единого TEST-START. Причина — та же, что у `media`/`images` из среза 10,
+но с другим механизмом: каталог не ресурсный, тесты в нём настоящие, но **все** —
+`*-manual.html` (например `display-member-media-feature-standalone-manual.html`),
+а `all_vendored_test_ids` намеренно фильтрует `-manual` целиком (`run_report.py:140` —
+«ручные тесты нужен человек, этот автоматизированный executor не может их вести»).
+Добавлен к «получить нечем» (14 категорий: 11 среза 4 + `media`/`images` среза 10 +
+`appmanifest` этого среза).
+
+Две категории закрыты, каждая подтверждена **двумя** последовательными `--check`
+подряд, 0 регрессий на каждой паре:
+- `loading` (53 файла, 7/53 harness OK, 5/7 сабтестов) — ~43 с на `--update-expected`,
+  самая быстрая категория среза;
+- `webcodecs` (70 файлов, 34/237 harness OK, 30/424 сабтестов) — ~1:37; большая часть
+  FAIL — `gl.colorMask is not a function`/`gl.texSubImage2D is not a function`:
+  интеграция `VideoFrame` с WebGL (`texImage2D`/`texSubImage2D` от видеокадра) не
+  реализована — ожидаемый пробел, не находка нового бага (WebCodecs всё ещё на
+  фазе 0, параллельная ветка `p2-webcodecs-phase0`).
+
+Baseline 210 → 212 категорий. Осталось непокрытых ~83 категории (69 реальных за
+вычетом 14 «получить нечем»); долг среза 4 (6 категорий), BUG-1006-класс и
+`layout-instability` не тронуты.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
