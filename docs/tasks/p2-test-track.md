@@ -991,6 +991,41 @@ Baseline 223 → 225 категорий (351 новых `.ini`: 189 `html/dom` +
 `editing` 216, `interaction` 192, `rendering` 150 (блокирован BUG-1011, не пробовать
 заново без диагностики). `docs/tasks/p2-wpt-runner-throughput.md` не трогался.
 
+### TEST-3: срезы 16–18 (2026-09-06) — `html/interaction`, `html/webappapis`, `html/editing`
+
+Продолжение дробления `html/*` тем же методом (предиктор
+`grep -rl "RemoteContext\|window\.open\|dispatcher\|test_driver\.\(Actions\|bless\)"`,
+самые чистые/дешёвые из оставшихся некрупных под-путей сначала). Полная нарративная
+запись каждого среза — в ячейке `WPT-RUN-7` `ROADMAP.md` (эта сессия не дублировала её
+сюда построчно; ниже — только выжимка и то, чего нет в ROADMAP.md).
+
+- **Срез 16**: `html/interaction` (192 id, 13 предиктор-хитов из 206 файлов), 0
+  регрессий на двух `--check`. Побочная находка [BUG-1012](../../bugs/BUG-1012-OPEN.md)
+  (геттер `tabIndex` берёт умолчание из `_lumen_is_focusable` вместо таблицы умолчаний
+  HTML LS §6.6.6). Baseline 225 → 226.
+- **Срез 17**: `html/webappapis` (353 id, 19 хитов из 481 файла), 0 регрессий на двух
+  `--check`. Первый `--update-expected` сорван параллельной сессией (P1, WPT-RUN-12,
+  `fuser -k` по занятым портам wptserve) — испорченный untracked-baseline снесён `git
+  clean -fd`, чистый повтор. Побочная находка
+  [BUG-1016](../../bugs/BUG-1016-OPEN.md) (`atob`/`btoa` бросают `TypeError` вместо
+  `DOMException InvalidCharacterError`, 308 упавших ассертов на одном файле — самый
+  плотный FAIL-кластер за весь TEST-3). Baseline 226 → 227.
+- **Срез 18**: `html/editing` (216 id, 43 хита из 1030 файлов) — прогон занял 1:53
+  (`--update-expected`) и по 1:52/2:17 на каждый `--check`, 0 регрессий, 184/216 harness
+  OK, 417/789 сабтестов, 96 `.ini`. **Новых багов не заведено** — оба FAIL-кластера
+  укладываются в уже открытые тикеты того же ручного аудита WPT-VENDOR-html-editing
+  (2026-08-04): весь `dnd/*` (крупнейшие `.ini` среза — `dnd/drop/029.html`/`030.html`,
+  273 строки каждый, все query-варианты `dropEffect`×`effectAllowed`) —
+  [BUG-596](../../bugs/BUG-596-OPEN.md)/[BUG-597](../../bugs/BUG-597-OPEN.md)/
+  [BUG-598](../../bugs/BUG-598-OPEN.md) (DragEvent/DataTransfer недореализованы);
+  `the-hidden-attribute/*` (включая `hidden-until-found-text-fragment.html`, TIMEOUT) —
+  [BUG-594](../../bugs/BUG-594-OPEN.md) (`hidden` не тристейт, `until-found`/
+  `beforematch` не реализованы). Baseline 227 → 228.
+
+Остаются крупные под-пути `html/*`: `canvas` 3308, `semantics` 2223, `browsers` 759
+(самый грязный), `rendering` 150 (блокирован BUG-1011, не пробовать заново без
+диагностики).
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
