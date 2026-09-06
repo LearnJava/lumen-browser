@@ -194,10 +194,11 @@ fn canvas_shares_line_box_with_text() {
     let sheet = lumen_css_parser::parse("");
     let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
     fn find_div(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
-        if matches!(b.kind, super::BoxKind::Block) && !b.children.is_empty() {
-            if b.children.iter().any(|c| matches!(c.kind, super::BoxKind::InlineBlockRow)) {
-                return Some(b);
-            }
+        if matches!(b.kind, super::BoxKind::Block)
+            && !b.children.is_empty()
+            && b.children.iter().any(|c| matches!(c.kind, super::BoxKind::InlineBlockRow))
+        {
+            return Some(b);
         }
         b.children.iter().find_map(find_div)
     }
@@ -222,10 +223,11 @@ fn audio_shares_line_box_with_text() {
     let sheet = lumen_css_parser::parse("");
     let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
     fn find_div(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
-        if matches!(b.kind, super::BoxKind::Block) && !b.children.is_empty() {
-            if b.children.iter().any(|c| matches!(c.kind, super::BoxKind::InlineBlockRow)) {
-                return Some(b);
-            }
+        if matches!(b.kind, super::BoxKind::Block)
+            && !b.children.is_empty()
+            && b.children.iter().any(|c| matches!(c.kind, super::BoxKind::InlineBlockRow))
+        {
+            return Some(b);
         }
         b.children.iter().find_map(find_div)
     }
