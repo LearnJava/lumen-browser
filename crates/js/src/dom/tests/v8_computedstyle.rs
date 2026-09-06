@@ -122,15 +122,57 @@ fn get_computed_style_camel_case_access() {
     assert_eq!(r, lumen_core::JsValue::String("14px".to_string()));
 }
 
+/// CSSOM-6 (BUG-490): a recognized pseudo-element argument answers from its
+/// own snapshot, distinct from the element's own style.
 #[test]
-fn get_computed_style_with_pseudo_element_ignored() {
+fn get_computed_style_pseudo_element_reads_pseudo_map() {
     let rt = v8_runtime_with_dom(make_doc());
     let nid = get_main_nid(&rt);
-    let styles = make_computed_styles_map(nid, &[("color", "red")]);
-    rt.update_computed_styles(styles);
-    // Pseudo-element arg is accepted but ignored (not yet supported)
+    rt.update_computed_styles(make_computed_styles_map(nid, &[("color", "red")]));
+    let mut before_props = std::collections::HashMap::new();
+    before_props.insert("color".to_string(), "blue".to_string());
+    let mut pseudo = std::collections::HashMap::new();
+    pseudo.insert((nid, "before".to_string()), before_props);
+    rt.update_pseudo_computed_styles(pseudo);
+    let own = rt
+        .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('color')")
+        .unwrap();
+    let before = rt
+        .eval("window.getComputedStyle(document.getElementById('main'), '::before').getPropertyValue('color')")
+        .unwrap();
+    // Single-colon form and no-colon-stripped case must normalize the same way.
+    let before_single_colon = rt
+        .eval("window.getComputedStyle(document.getElementById('main'), ':before').getPropertyValue('color')")
+        .unwrap();
+    assert_eq!(own, lumen_core::JsValue::String("red".to_string()));
+    assert_eq!(before, lumen_core::JsValue::String("blue".to_string()));
+    assert_eq!(before_single_colon, lumen_core::JsValue::String("blue".to_string()));
+}
+
+/// A recognized pseudo-element with no pushed pseudo snapshot answers "" —
+/// unlike the pre-CSSOM-6 behaviour, it must NOT fall back to the element's
+/// own style (that was the bug: the argument was silently ignored).
+#[test]
+fn get_computed_style_pseudo_element_without_data_is_empty() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let nid = get_main_nid(&rt);
+    rt.update_computed_styles(make_computed_styles_map(nid, &[("color", "red")]));
     let r = rt
         .eval("window.getComputedStyle(document.getElementById('main'), '::before').getPropertyValue('color')")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String(String::new()));
+}
+
+/// An unrecognized pseudo-element name (out of scope — see
+/// `_lumen_normalize_pseudo_elt`'s doc comment) still falls back to the
+/// element's own style, same as the pre-CSSOM-6 ignored-argument behaviour.
+#[test]
+fn get_computed_style_unrecognized_pseudo_falls_back_to_own_style() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let nid = get_main_nid(&rt);
+    rt.update_computed_styles(make_computed_styles_map(nid, &[("color", "red")]));
+    let r = rt
+        .eval("window.getComputedStyle(document.getElementById('main'), '::backdrop').getPropertyValue('color')")
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::String("red".to_string()));
 }

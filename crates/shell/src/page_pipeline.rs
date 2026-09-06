@@ -489,6 +489,10 @@ pub(crate) struct JsLayoutSnapshot {
     pub(crate) tree: Arc<LayoutBox>,
     /// `node index -> property -> serialized computed value`.
     pub(crate) styles: std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
+    /// CSSOM-6 (BUG-490): `(node index, pseudo name) -> property -> serialized
+    /// computed value` — backs `getComputedStyle(el, pseudoElt)`.
+    pub(crate) pseudo_styles:
+        std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
     /// `node index -> custom property -> value`.
     pub(crate) customs:
         std::collections::HashMap<u32, Arc<std::collections::HashMap<String, String>>>,
@@ -506,6 +510,7 @@ pub(crate) fn collect_js_layout_snapshot(
         rects: lumen_layout::collect_layout_rects(root, doc),
         tree: Arc::new(root.clone()),
         styles: lumen_layout::collect_computed_styles(root, doc, None),
+        pseudo_styles: lumen_layout::collect_pseudo_computed_styles(root),
         customs: lumen_layout::collect_custom_properties(root, viewport),
         viewport: (viewport.width, viewport.height),
     }
@@ -812,6 +817,7 @@ pub(crate) fn parse_and_layout(
             };
             js.update_layout_rects(snapshot.rects);
             js.update_computed_styles(snapshot.styles);
+            js.update_pseudo_computed_styles(snapshot.pseudo_styles);
             js.update_custom_properties(snapshot.customs);
             // CSSOM-1 срез 3: re-push whenever this block runs, even though
             // `cascade.stylesheet_nodes` only actually changed when

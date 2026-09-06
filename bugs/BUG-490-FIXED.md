@@ -1,8 +1,8 @@
 # BUG-490: `getComputedStyle(element, pseudoElt)` ignores the pseudo-element argument entirely
 
-**Статус:** OPEN (ДОРАБОТКА → CSSOM-5)
-**Тип:** доработка — функциональность (getComputedStyle для псевдоэлементов) отсутствует
-целиком, а не сломана точечно; см. ревизию P3 2026-09-02 ниже
+**Статус:** FIXED 2026-09-06 (P1, CSSOM-6)
+**Тип:** доработка — функциональность (getComputedStyle для псевдоэлементов) отсутствовала
+целиком, а не была сломана точечно; см. ревизию P3 2026-09-02 ниже
 **Дата:** 2026-08-02
 **Компонент:** js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, `window.getComputedStyle`
 at `dom.rs:12772-12802`, engine-agnostic, shared by both QuickJS and V8 per
@@ -117,5 +117,65 @@ Both conditions of the ДОРАБОТКА test (`docs/probe-method.md` §8) hold
 and finding 1 confirms there is genuinely nothing to wire for one of the four
 pseudo-kinds; (2) the fix needs a new algorithm plus a per-pseudo storage/read
 path threaded across the JS↔layout boundary, not a one-place patch. Filed as
-[ROADMAP.md CSSOM-5](../ROADMAP.md) (owner P1, CSSOM track, after CSSOM-4).
-Status flipped to `OPEN (ДОРАБОТКА → CSSOM-5)`; row moved out of `STATUS-P3.md`.
+ROADMAP.md CSSOM-6 (owner P1, CSSOM track, after CSSOM-4) — the task was
+first numbered CSSOM-5 in this note, renumbered to CSSOM-6 once CSSOM-5 was
+taken by the insertRule()/deleteRule() slice. Status flipped to
+`OPEN (ДОРАБОТКА → CSSOM-6)`; row moved out of `STATUS-P3.md`.
+
+## Fix — 2026-09-06 (P1, CSSOM-6)
+
+Both findings above turned out to be exactly the shape of the fix:
+
+1. **New parallel snapshot, not a `hit_test_tree` walk.** Added
+   `lumen_layout::collect_pseudo_computed_styles` (sibling of
+   `collect_computed_styles`, `crates/engine/layout/src/lib.rs`), keyed by
+   `(NodeId, pseudo name)` — reusing the plain `computed_styles` map was never
+   an option, since it is keyed by `NodeId` alone with "first box in tree
+   order wins", so an element and its own `::before` (same `node`, different
+   box) would collide. Threaded end to end: new
+   `V8JsRuntime::pseudo_computed_styles` snapshot, new natives
+   `_lumen_get_computed_style_pseudo(nid, kind, prop)` /
+   `..._entries(nid, kind)`, pushed from every site that already pushes
+   `computed_styles` (`relayout.rs`, `page_load.rs` ×2, `page_pipeline.rs`,
+   `frames.rs`, `hibernation.rs`, `scripts.rs`, `driver/session.rs`,
+   `style_flush.rs`'s same-tick flush).
+2. **The non-floated `::first-letter` box gap closed via segment tagging, not
+   a new box kind.** `content_to_inline_segments` (called by both
+   `inject_pseudo` for block-level `::before`/`::after` and
+   `push_pseudo_inline_segs` for the inline-formatting-context case) now
+   stamps every generated-content segment with `PseudoKind::Before`/`After`
+   (previously always `PseudoKind::None`) — the collector reads that tag when
+   no `BoxRole::Pseudo` box exists (the common "pseudo merged into a sibling
+   `InlineRun`" case, not just the non-floated `::first-letter` one this bug
+   named specifically).
+3. **Used-`display` algorithm implemented as designed**: `::first-line` →
+   always `inline`; `::first-letter` → `block` when `float_side != None` or
+   `position` is `Absolute`/`Fixed`, `inline` otherwise; `::before`/`::after`
+   report the cascaded `display` as-is. `display-math-on-pseudo-elements-001.html`
+   remains unfixed — it needs `display: math`/`block math` support
+   (`Display` enum has no such variant anywhere in the engine), an unrelated,
+   larger gap.
+4. **Found and fixed a latent bug while wiring this**: `extract_first_letter_float`/
+   `apply_first_letter_pseudo` store the *text node's* `NodeId` in
+   `origin.node`/`source_node` (needed for Selection/Range), not the block
+   element CSS actually attributes `::first-letter` to. The collector resolves
+   the correct owner via `container_owner`, the nearest ancestor box's own
+   `node`, threaded down through the recursion — caught by a test that
+   initially failed with the wrong `NodeId` in the result map.
+
+Scope explicitly narrowed (documented in the JS shim's `_lumen_normalize_pseudo_elt`
+doc comment): only `::before`/`::after`/`::first-line`/`::first-letter` are
+recognized; anything else (`::backdrop`, `::marker`, invalid syntax, missing
+argument) falls back to the element's own style, same as the pre-fix ignored-
+argument behaviour, rather than the full CSSOM conformance surface
+`getComputedStyle-pseudo.html` exercises (immutability, item-based
+blockification, nonexistent-pseudo resolution, unknown-but-valid pseudo
+identifiers) — a much larger, separate piece of work if ever needed.
+
+3 new tests in `lumen-layout` (`collect_pseudo_computed_styles_*`), 3 new
+tests in `lumen-js` (`v8_computedstyle.rs`, replacing the one that asserted
+the old ignored-argument behaviour). `cargo test -p lumen-layout` 3871/3871,
+`-p lumen-js --features v8-backend` green except two pre-existing unrelated
+failures ([BUG-1008](BUG-1008-OPEN.md) `snapshot_cpu`,
+[BUG-997](BUG-997-OPEN.md) `native_binding_panic_does_not_abort_process`).
+`cargo clippy --workspace --all-targets -- -D warnings` clean.

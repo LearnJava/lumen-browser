@@ -633,6 +633,7 @@ pub(crate) fn install_computed_styles(
     ctx: v8::Local<'_, v8::Context>,
     store: &mut Vec<OwnedNativeFn>,
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    pseudo_computed_styles: Arc<Mutex<PseudoComputedStyles>>,
     custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
     flush: FlushHandles,
 ) -> JsResult<()> {
@@ -652,6 +653,42 @@ pub(crate) fn install_computed_styles(
                 .and_then(|m| m.get(&prop))
                 .cloned()
                 .unwrap_or_default()
+        });
+    }
+    // CSSOM-6 (BUG-490): `getComputedStyle(el, pseudoElt)` — same lookup as
+    // `_lumen_get_computed_style` above, but keyed by `(nid, pseudo name)`.
+    // `kind` is the JS shim's already-normalized pseudo name ("before"/"after"/
+    // "first-line"/"first-letter"); anything else answers "" (matches the
+    // no-such-pseudo-element case, since `pseudo_computed_styles` never has
+    // that key either).
+    {
+        let pcs = Arc::clone(&pseudo_computed_styles);
+        let flush = flush.clone();
+        reg!(scope, ctx, store, "_lumen_get_computed_style_pseudo", move |nid: u32, kind: String, prop: String| -> String {
+            flush.maybe_flush();
+            pcs.lock()
+                .unwrap()
+                .get(&(nid, kind))
+                .and_then(|m| m.get(&prop))
+                .cloned()
+                .unwrap_or_default()
+        });
+    }
+    // Iteration source for the pseudo-element form's `length`/`item`/
+    // `Symbol.iterator` — same `[name, value]` JSON shape as
+    // `_lumen_get_computed_style_entries` below.
+    {
+        let pcs = Arc::clone(&pseudo_computed_styles);
+        let flush = flush.clone();
+        reg!(scope, ctx, store, "_lumen_get_computed_style_pseudo_entries", move |nid: u32, kind: String| -> String {
+            flush.maybe_flush();
+            let pairs: Vec<(String, String)> = pcs
+                .lock()
+                .unwrap()
+                .get(&(nid, kind))
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                .unwrap_or_default();
+            _style_entries_to_json(pairs)
         });
     }
     // Resolved value of the custom property `prop` (`--`-prefixed) on node

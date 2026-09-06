@@ -569,6 +569,7 @@ pub(crate) fn run_scripts_with_dom(
                     rt.update_layout_rects(snap.rects);
                     rt.update_hit_test_tree(snap.tree);
                     rt.update_computed_styles(snap.styles);
+                    rt.update_pseudo_computed_styles(snap.pseudo_styles);
                     rt.update_custom_properties(snap.customs);
                     rt.update_viewport_size(snap.viewport.0, snap.viewport.1);
                 }

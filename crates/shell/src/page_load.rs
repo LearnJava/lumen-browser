@@ -535,6 +535,7 @@ impl Lumen {
                     let rects = collect_layout_rects(lb_ref, &doc_guard);
                     let hit_test_tree = Arc::new(lb_ref.clone());
                     let styles = collect_computed_styles(lb_ref, &doc_guard, None);
+                    let pseudo_styles = collect_pseudo_computed_styles(lb_ref);
                     drop(doc_guard);
                     let customs = collect_custom_properties(lb_ref, viewport);
                     let (vw, vh) = (viewport.width, viewport.height);
@@ -542,6 +543,7 @@ impl Lumen {
                         js.update_layout_rects(rects);
                         js.update_hit_test_tree(hit_test_tree);
                         js.update_computed_styles(styles);
+                        js.update_pseudo_computed_styles(pseudo_styles);
                         js.update_custom_properties(customs);
                         js.update_viewport_size(vw, vh);
                     });
@@ -1189,6 +1191,7 @@ impl Lumen {
             let rects = collect_layout_rects(lb_ref, &doc_guard);
             let hit_test_tree = Arc::new(lb_ref.clone());
             let styles = collect_computed_styles(lb_ref, &doc_guard, None);
+            let pseudo_styles = collect_pseudo_computed_styles(lb_ref);
             drop(doc_guard);
             let customs = collect_custom_properties(lb_ref, viewport);
             let (vw, vh) = (viewport.width, viewport.height);
@@ -1200,6 +1203,7 @@ impl Lumen {
                 js.update_layout_rects(rects);
                 js.update_hit_test_tree(hit_test_tree);
                 js.update_computed_styles(styles);
+                js.update_pseudo_computed_styles(pseudo_styles);
                 js.update_custom_properties(customs);
                 js.update_viewport_size(vw, vh);
                 js.update_scroll_states(scroll_states);

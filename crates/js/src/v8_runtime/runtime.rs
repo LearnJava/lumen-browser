@@ -43,6 +43,10 @@ pub struct DomTouched {
 /// [`V8JsRuntime::update_custom_properties`].
 pub type CustomPropertySnapshot = HashMap<u32, Arc<HashMap<String, String>>>;
 
+/// CSSOM-6 (BUG-490): computed CSS styles per `(node, pseudo-element name)` —
+/// see [`V8JsRuntime::pseudo_computed_styles`].
+pub type PseudoComputedStyles = HashMap<(u32, String), HashMap<String, String>>;
+
 /// V8-backed JS runtime implementing [`JsRuntime`].
 ///
 /// The isolate lives on a dedicated thread; methods block until the dispatched
@@ -96,6 +100,13 @@ pub struct V8JsRuntime {
     pub(super) page_scroll_end_pending: Arc<Mutex<bool>>,
     /// Computed CSS styles per node, updated after each relayout by the shell.
     pub(super) computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    /// CSSOM-6 (BUG-490): computed CSS styles per `(node, pseudo-element name)`
+    /// (`"before"`/`"after"`/`"first-line"`/`"first-letter"`), updated alongside
+    /// [`Self::computed_styles`] — backs `getComputedStyle(el, pseudoElt)`'s
+    /// second argument, which used to be silently ignored. See
+    /// `lumen_layout::collect_pseudo_computed_styles` for the used-`display`
+    /// override this snapshot already carries.
+    pub(super) pseudo_computed_styles: Arc<Mutex<PseudoComputedStyles>>,
     /// Resolved CSS custom properties per node (keys carry their `--` prefix),
     /// updated after each relayout by the shell alongside [`Self::computed_styles`].
     /// Kept in a separate map behind an `Arc` because custom properties inherit:
@@ -288,6 +299,7 @@ impl V8JsRuntime {
             page_scroll_y: Arc::new(Mutex::new(0.0)),
             page_scroll_end_pending: Arc::new(Mutex::new(false)),
             computed_styles: Arc::new(Mutex::new(HashMap::new())),
+            pseudo_computed_styles: Arc::new(Mutex::new(HashMap::new())),
             custom_properties: Arc::new(Mutex::new(HashMap::new())),
             stylesheet_nodes: Arc::new(Mutex::new(Vec::new())),
             constructed_stylesheets: Arc::new(Mutex::new(Vec::new())),
@@ -715,6 +727,19 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::update_computed_styles`].
     pub fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
         *self.computed_styles.lock().unwrap_or_else(|e| e.into_inner()) = styles;
+    }
+
+    /// Push a fresh snapshot of computed CSS pseudo-element styles into the JS
+    /// runtime (CSSOM-6/BUG-490), keyed by `(node, pseudo name)`. Published
+    /// from the same places as [`Self::update_computed_styles`].
+    pub fn update_pseudo_computed_styles(
+        &self,
+        styles: PseudoComputedStyles,
+    ) {
+        *self
+            .pseudo_computed_styles
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = styles;
     }
 
     /// Push a fresh snapshot of resolved CSS custom properties into the JS

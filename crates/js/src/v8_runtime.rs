@@ -96,7 +96,7 @@ pub use overrides::{
     set_global_timezone_override, set_global_user_agent_override,
     timezone_override_script, user_agent_override_script,
 };
-pub use runtime::{CustomPropertySnapshot, DomTouched, V8JsRuntime};
+pub use runtime::{CustomPropertySnapshot, DomTouched, PseudoComputedStyles, V8JsRuntime};
 // Приватная привязка, чтобы `use super::*;` потомков (в т.ч. `install::net`)
 // продолжала видеть помощника под прежним именем.
 use overrides::{global_timezone_override, global_user_agent_override};
@@ -252,6 +252,7 @@ impl V8JsRuntime {
             let pending_page_scrolls = Arc::clone(&self.pending_page_scrolls);
             let page_scroll_y = Arc::clone(&self.page_scroll_y);
             let computed_styles = Arc::clone(&self.computed_styles);
+            let pseudo_computed_styles = Arc::clone(&self.pseudo_computed_styles);
             let custom_properties = Arc::clone(&self.custom_properties);
             let stylesheet_nodes = Arc::clone(&self.stylesheet_nodes);
             let constructed_stylesheets = Arc::clone(&self.constructed_stylesheets);
@@ -263,6 +264,7 @@ impl V8JsRuntime {
                 doc: Arc::clone(&doc),
                 layout_rects: Arc::clone(&layout_rects),
                 computed_styles: Arc::clone(&computed_styles),
+                pseudo_computed_styles: Arc::clone(&pseudo_computed_styles),
                 custom_properties: Arc::clone(&custom_properties),
                 viewport_size: Arc::clone(&viewport_size),
                 stylesheet: Arc::clone(&self.flush_stylesheet),
@@ -428,6 +430,7 @@ impl V8JsRuntime {
                 ctx,
                 store,
                 Arc::clone(&computed_styles),
+                Arc::clone(&pseudo_computed_styles),
                 Arc::clone(&custom_properties),
                 flush_handles.clone(),
             )?;

@@ -952,3 +952,69 @@ use super::*;
             "parent :active should match when child is active"
         );
     }
+
+    /// CSSOM-6 (BUG-490): `::before`/`::after` report their own resolved
+    /// style, keyed separately from the owning element —
+    /// `collect_computed_styles` cannot do this (it is keyed by `NodeId`
+    /// alone, so the element and its own `::before` would collide).
+    #[test]
+    fn collect_pseudo_computed_styles_before_after() {
+        let (doc, root) = lay_full_measured_with_doc(
+            "<html><body><div id=d style=\"color:red\"></div></body></html>",
+            "body{margin:0} #d::before{content:'x';color:blue;display:block} \
+             #d::after{content:'y';color:green;display:block}",
+        );
+        let d_nid = find_first_dom_node_by_selector(&doc, "#d").expect("div must exist").index() as u32;
+        let pseudo = collect_pseudo_computed_styles(&root);
+        let before = pseudo
+            .get(&(d_nid, "before".to_string()))
+            .expect("::before must have an entry");
+        assert_eq!(before.get("color").map(String::as_str), Some("rgb(0, 0, 255)"));
+        let after = pseudo
+            .get(&(d_nid, "after".to_string()))
+            .expect("::after must have an entry");
+        assert_eq!(after.get("color").map(String::as_str), Some("rgb(0, 128, 0)"));
+    }
+
+    /// CSS Pseudo-elements L4 §5.1 / CSS Display L3 §placement —
+    /// `::first-letter` reports used display `block` when floated and
+    /// `inline` otherwise, regardless of the author's own `display`
+    /// declaration (WPT `css/css-display/display-first-letter-001.html`).
+    #[test]
+    fn collect_pseudo_computed_styles_first_letter_used_display() {
+        let (doc, root) = lay_full_measured_with_doc(
+            "<html><body><p id=f>Float</p><p id=n>NoFloat</p></body></html>",
+            "body{margin:0} #f::first-letter{float:left;display:flex} #n::first-letter{display:flex}",
+        );
+        let f_nid = find_first_dom_node_by_selector(&doc, "#f").expect("#f must exist").index() as u32;
+        let n_nid = find_first_dom_node_by_selector(&doc, "#n").expect("#n must exist").index() as u32;
+        let pseudo = collect_pseudo_computed_styles(&root);
+        assert_eq!(
+            pseudo[&(f_nid, "first-letter".to_string())].get("display").map(String::as_str),
+            Some("block"),
+            "floated ::first-letter must report used display block, not the author's flex"
+        );
+        assert_eq!(
+            pseudo[&(n_nid, "first-letter".to_string())].get("display").map(String::as_str),
+            Some("inline"),
+            "non-floated ::first-letter must report used display inline, not the author's flex"
+        );
+    }
+
+    /// `::first-line` always reports used display `inline` (CSS
+    /// Pseudo-elements L4 §5.1) — it can never be floated or out-of-flow, so
+    /// the raw cascaded value must never leak through (WPT
+    /// `css/css-display/display-first-line-001.html`).
+    #[test]
+    fn collect_pseudo_computed_styles_first_line_always_inline() {
+        let (doc, root) = lay_full_measured_with_doc(
+            "<html><body><p id=p>Some wrapping text for the first line pseudo element test</p></body></html>",
+            "body{margin:0} #p{width:80px} #p::first-line{color:red}",
+        );
+        let p_nid = find_first_dom_node_by_selector(&doc, "#p").expect("#p must exist").index() as u32;
+        let pseudo = collect_pseudo_computed_styles(&root);
+        let fl = pseudo
+            .get(&(p_nid, "first-line".to_string()))
+            .expect("::first-line must have an entry");
+        assert_eq!(fl.get("display").map(String::as_str), Some("inline"));
+    }
