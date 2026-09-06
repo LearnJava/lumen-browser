@@ -1,6 +1,6 @@
 # BUG-525: `document.scrollingElement` is not implemented — always `undefined`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-06 (дрейф трекера)
 **Дата:** 2026-08-03
 **Компонент:** js (`crates/js/src/dom.rs` — `Document` shim)
 **Найден:** WPT-RUN-3 срез 24 (`ROADMAP.md`) — массовый прогон `css/css-scroll-anchoring`
@@ -45,3 +45,22 @@ Same gap, confirmed again independently in a different category:
 and `scroll-initial-target/scroll-initial-target-root.tentative.html` (2,
 `.scrollTop`) both do `const document_scroller = document.scrollingElement;`
 at top level. `.ini` under `tests/wpt/metadata/css/css-scroll-snap/`.
+
+## Ревизия P3 2026-09-06 — уже исправлено, дрейф трекера
+
+Этот баг никогда не чинился под своим номером. `document.scrollingElement`
+(CSSOM View §5.2) был реализован попутно фиксом
+[BUG-482](BUG-482-FIXED.md) (2026-09-02, `crates/js/src/shim/web_api_shim_mid.js:9390`)
+— тот же геттер: `documentElement` в no-quirks режиме, `body`/`null` в
+quirks по правилу «potentially scrollable» — но заявку с тех пор никто не
+сверял с BUGS.md.
+
+Подтверждено тремя постоянными регресс-тестами
+(`crates/js/src/dom/tests/v8_elem_geometry_scroll.rs`:
+`scrolling_element_is_document_element_in_no_quirks_mode`,
+`scrolling_element_defaults_to_body_in_quirks_mode`,
+`scrolling_element_is_null_in_quirks_mode_when_body_potentially_scrollable`),
+`cargo test -p lumen-js --features v8-backend --lib scrolling_element` —
+3/3 зелёных. Точечного P3-фикса не требуется — закрывается как дрейф
+трекера, тот же класс ревизии, что [BUG-512](BUG-512-FIXED.md)/
+[BUG-523](BUG-523-FIXED.md).
