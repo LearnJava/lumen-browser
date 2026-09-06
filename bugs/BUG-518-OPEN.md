@@ -432,3 +432,94 @@ Status remains `OPEN` — `mixin-shadow-dom.html` was blocked on
 2026-09-06 (unblocked, not re-verified by this slice), and the CSSOM-gated
 `mixin-cssom.tentative`/`mixin-invalidation.tentative` remain
 blocked on [BUG-471](BUG-471-OPEN.md) as already documented.
+
+## Срез P3 2026-09-06 (часть 5)
+
+[BUG-1009](BUG-1009-FIXED.md) landed after срез 4, unblocking `mixin-shadow-dom.html`'s
+plain-selector subtests. Re-verifying found the selector fix alone was not
+enough — a **second, independent gap** in `@apply`'s own mixin-name lookup,
+found and fixed here.
+
+**The gap**: `compute_style`'s (`crates/engine/layout/src/style/cascade.rs`)
+`MIXIN_APPLY_MARKER` handling always resolved a `@apply`'s mixin name against
+`sheet.mixin_rules` — the single document-level `Stylesheet` — regardless of
+which stylesheet the `@apply`-bearing declaration itself came from. BUG-1009
+gave a shadow-interior element's own regular selectors a *third* matching path
+(case (c), `interior_shadow`, matched against `SHADOW_SHEETS[host]`), but left
+every declaration matched through cases (a)/(b)/(c) pointing at the same
+`sheet.mixin_rules` for mixin lookups. A `@mixin` declared inside that SAME
+shadow tree's own `<style>` (`mixin-shadow-dom.html` #e2's `--m1`) lives in
+`SHADOW_SHEETS[host].mixin_rules`, which `sheet.mixin_rules` never contains —
+so `@apply --m1` inside the shadow tree silently found nothing and left `#e2`
+its pre-`@apply` `color: red`, failing the "Style in shadow DOM should have
+access to inside mixins" assertion (expected green).
+
+**Fix**: `matched` (the `Vec` of cascade-sorted candidate declarations)
+gained an 8th tuple field, `Option<&Stylesheet>` — `None` for anything
+matched from the document `sheet` (including @layer/@media/@supports/@scope/
+inline, which all read from `sheet` too), `Some(shadow)` for a declaration
+matched through case (a) `own_shadow`, (b) `host_shadow`, or (c)
+`interior_shadow`. Every one of the ~9 push sites got the new field (a new
+`type MatchedDecl<'a>` alias keeps the `Vec` declaration itself readable and
+satisfies `clippy::type_complexity`, which flagged the bare 8-tuple). At the
+`MIXIN_APPLY_MARKER` site, a `@apply` whose declaration carries `Some(shadow)`
+now resolves against `shadow.mixin_rules.iter().chain(sheet.mixin_rules.iter())`
+— the shadow's own mixins checked first (so a same-named shadow-local mixin
+wins over a same-named outer one, matching how a shadow tree's own plain
+declarations already shadow inherited ones), falling back to the document's
+own mixins afterward. That fallback is what keeps the *other* direction
+working: `mixin-shadow-dom.html` #e1 (`--exists-only-outside-shadow`, declared
+in the document's own `<style>`, `@apply`'d from inside the shadow tree) needs
+exactly this — its mixin was never in `SHADOW_SHEETS[host].mixin_rules` to
+begin with, so the lookup falls through to `sheet.mixin_rules`, unchanged from
+before this slice. `#e4` ("outside should NOT see inside mixin") is untouched
+by this fix by construction: its `@apply` is matched through the *document*
+`sheet` (no shadow origin), so `shadow_origin` is `None` and it keeps using
+plain `sheet.mixin_rules`, which never contained the shadow-only `--in-shadow`
+to begin with — isolation there was already correct, just never covered by a
+permanent test.
+
+**Verification**: 3 new permanent unit tests in
+`crates/engine/layout/src/style/tests/shadow_dom_selectors.rs` transcribing
+`mixin-shadow-dom.html`'s #e1/#e2/#e4 scenarios directly through
+`compute_style` (`apply_inside_shadow_sees_outside_mixin`,
+`apply_inside_shadow_sees_own_shadow_mixin`,
+`apply_outside_shadow_does_not_see_inside_mixin`) — confirmed the middle one
+(#e2, the actual gap) fails red (`(255, 0, 0)` instead of `(0, 128, 0)`)
+against the old lookup-always-`sheet.mixin_rules` code, by temporarily
+reverting just the `mixins` selection to `&sheet.mixin_rules` and rerunning;
+restored before commit. `cargo test -p lumen-layout --lib`: 3874/3874 (was
+3871 before this slice, +3, no other test's outcome changed). `cargo clippy -p
+lumen-layout -p lumen-css-parser --all-targets -- -D warnings`: clean (the
+type-complexity lint the new 8-tuple triggered is resolved by the `MatchedDecl`
+alias; the crate's 3 pre-existing `invariants.rs` dead-code errors under `-D
+warnings` are unchanged from a clean `main` checkout, confirmed by `git stash`
+A/B). `graphic_tests/dump_golden.py --build`: same 4/12 mismatches
+(`samples/page.html`, `65-flex-align-content.html`) as every prior slice on
+this track — confirmed identical on a clean `main` checkout via `git stash`
+A/B, the pre-existing [BUG-1008](BUG-1008-FIXED.md)-class line-height drift,
+unrelated (this change is gated on a declaration actually carrying the
+`MIXIN_APPLY_MARKER` from inside a shadow tree; neither golden page uses
+Shadow DOM mixins). `cargo test -p lumen-driver --test all` /`-p lumen-js --lib
+--features v8-backend` each show exactly one pre-existing failure
+(`cases::snapshot_cpu::cpu_snapshots_match_references` — BUG-1008;
+`native_binding_panic_does_not_abort_process` — BUG-997), matching every
+prior slice's documented baseline exactly; full `scripts/scoped-test.sh` was
+not run to completion (hangs on the unrelated `lumen-network` gate, BUG-805 —
+same recurring reason as every other slice on this track), touched crates
+verified standalone instead. `tests/wpt/metadata/css/css-mixins/mixins/
+mixin-shadow-dom.html.ini` updated — `expected: FAIL` removed from #e1/#e2/#e4
+(all three transcribed above pass through the real cascade now), kept only
+for "Style in shadow DOM should have access to mixins from adopted
+stylesheets" (#e3), which needs `shadowRoot.adoptedStyleSheets` to feed a
+shadow-scoped cascade at all — an unrelated, pre-existing, documented gap
+(`web_api_shim_mid.js`: "Lumen has no shadow-scoped cascade at all"). No live
+WPT run — same recurring reason as every slice on this track (no `.venv` in
+this slot).
+
+Status remains `OPEN` — `mixin-cross-stylesheet.html` was already closed
+(срез 4), `mixin-shadow-dom.html` is now fully closed except its
+adopted-stylesheets subtest (separate gap, not mixin-specific), and the
+CSSOM-gated `mixin-cssom.tentative`/`mixin-invalidation.tentative` remain
+blocked on [BUG-471](BUG-471-OPEN.md) as already documented — that CSSOM gap
+is the entire remainder of this bug's original 15-file/~45-subtest scope.
