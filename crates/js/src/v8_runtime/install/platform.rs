@@ -406,6 +406,17 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // Canonical `block-step-size` serialization for inline-`style`
+    // (CSS Rhythmic Sizing L1 §3.2, BUG-517) — same role as
+    // `_lumen_css_canonical_overflow_clip_margin` above, but the grammar is
+    // bare `none | <length [0,∞]>` (no box keyword).
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_block_step_size",
+        |value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_block_step_size(&value)
+        }
+    );
+
     // Canonical keyword-enum serialization for inline-`style` longhands whose
     // whole grammar is a fixed keyword list (CSSOM-2/BUG-484 срез 7 — `clear`,
     // `float`, `visibility`, `box-sizing`) — same role as the canonicalizers

@@ -305,7 +305,7 @@ each category's own `tests/wpt/metadata/css/<category>/` for all 9 files,
 
 9 files, ~55 subtests, both established shapes, no new ones — driven by two
 different underlying "property doesn't exist" bugs
-([BUG-517](BUG-517-OPEN.md) for `block-step*`, [BUG-518](BUG-518-OPEN.md)
+([BUG-517](BUG-517-FIXED.md) for `block-step*`, [BUG-518](BUG-518-OPEN.md)
 for `@mixin`) rather than a partial-validation gap this time: since the
 property/at-rule isn't recognized at all, the generic passthrough is the
 *only* code path reached. **Rejection**: `css-rhythm/parsing/block-step-

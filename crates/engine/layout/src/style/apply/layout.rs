@@ -12,6 +12,9 @@
 
 use crate::style::{
     AlignValue,
+    BlockStepAlign,
+    BlockStepInsert,
+    BlockStepRound,
     BorderCollapse,
     BorderStyle,
     BoxSizing,
@@ -47,6 +50,7 @@ use crate::style::{
     parse_overflow_clip_margin,
     parse_overflow_kw,
     parse_sizing_length,
+    resolve_block_step_size,
 };
 use crate::style::parse::box_sides::{
     parse_anchor_size_func,
@@ -1152,7 +1156,80 @@ pub(in crate::style) fn apply_decl_layout(
                 _ => style.box_sizing,
             };
         }
+        // CSS Rhythmic Sizing L1 §3 (BUG-517): `block-step-size`/`-insert`/
+        // `-align`/`-round` longhands plus the `block-step` shorthand.
+        // Phase 0: parse + store only, same scope as `line-height-step`
+        // (`style/apply/text.rs`) — no layout algorithm reads these fields
+        // yet, the module has no evergreen browser implementation to match
+        // against.
+        "block-step-size" => {
+            if let Some(px) = resolve_block_step_size(val, style.font_size, em_basis, viewport) {
+                style.block_step_size = px;
+            }
+        }
+        "block-step-insert" => {
+            if let Some(v) = BlockStepInsert::parse(val) {
+                style.block_step_insert = v;
+            }
+        }
+        "block-step-align" => {
+            if let Some(v) = BlockStepAlign::parse(val) {
+                style.block_step_align = v;
+            }
+        }
+        "block-step-round" => {
+            if let Some(v) = BlockStepRound::parse(val) {
+                style.block_step_round = v;
+            }
+        }
+        "block-step" => {
+            apply_block_step_shorthand(style, val, em_basis, viewport);
+        }
         _ => return false,
     }
     true
+}
+
+/// CSS Rhythmic Sizing L1 §3.1 (BUG-517): `block-step` shorthand — `[
+/// <'block-step-size'> || <'block-step-insert'> || <'block-step-align'> ||
+/// <'block-step-round'> ]`. The four longhand grammars share no token
+/// (`none`/`<length>` vs `margin-box`/`padding-box`/`content-box` vs
+/// `auto`/`center`/`start`/`end` vs `up`/`down`/`nearest`), so each
+/// whitespace-separated token unambiguously belongs to exactly one slot —
+/// a duplicate slot or an unrecognized token invalidates the whole
+/// declaration (CSS Cascade L4 §7: an invalid shorthand value sets nothing).
+fn apply_block_step_shorthand(style: &mut ComputedStyle, val: &str, em_basis: f32, viewport: Size) {
+    let tokens = split_box_tokens(val);
+    if tokens.is_empty() {
+        return;
+    }
+    let mut size: Option<Option<f32>> = None;
+    let mut insert: Option<BlockStepInsert> = None;
+    let mut align: Option<BlockStepAlign> = None;
+    let mut round: Option<BlockStepRound> = None;
+    for tok in &tokens {
+        if let Some(v) = BlockStepInsert::parse(tok) {
+            if insert.replace(v).is_some() {
+                return;
+            }
+        } else if let Some(v) = BlockStepAlign::parse(tok) {
+            if align.replace(v).is_some() {
+                return;
+            }
+        } else if let Some(v) = BlockStepRound::parse(tok) {
+            if round.replace(v).is_some() {
+                return;
+            }
+        } else if let Some(px) = resolve_block_step_size(tok, style.font_size, em_basis, viewport) {
+            if size.replace(px).is_some() {
+                return;
+            }
+        } else {
+            return;
+        }
+    }
+    style.block_step_size = size.unwrap_or(None);
+    style.block_step_insert = insert.unwrap_or_default();
+    style.block_step_align = align.unwrap_or_default();
+    style.block_step_round = round.unwrap_or_default();
 }

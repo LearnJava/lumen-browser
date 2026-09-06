@@ -34,7 +34,8 @@ use crate::style::{
     strip_ua_appearance_box_styling, ua_font_family,
     ua_font_size_factor, ua_font_style, ua_font_weight, ua_link_color, ua_vertical_align,
     ua_white_space, validate_against_syntax, with_front_cascade_index, AlignValue, Appearance,
-    BackfaceVisibility, BorderStyle, BoxSizing, BreakValue, ClearSide,
+    BackfaceVisibility, BlockStepAlign, BlockStepInsert, BlockStepRound,
+    BorderStyle, BoxSizing, BreakValue, ClearSide,
     ComputedStyle, ContainFlags, ContainerType, Content, ContentVisibility, CssColor, CssContinue,
     Display, FieldSizing, FlexBasis, FlexDirection, FlexWrap, FloatSide,
     FontPalette, FontSizeBasis, FontWeight, GridAutoFlow, GridLine, GridTrackSize, Isolation,
@@ -276,6 +277,11 @@ pub fn compute_style(
         border_bottom_color: CssColor::CurrentColor,
         border_left_color: CssColor::CurrentColor,
         box_sizing: BoxSizing::ContentBox,
+        // CSS Rhythmic Sizing L1 §3 (BUG-517) — не наследуются.
+        block_step_size: None,
+        block_step_insert: BlockStepInsert::MarginBox,
+        block_step_align: BlockStepAlign::Auto,
+        block_step_round: BlockStepRound::Up,
         // CSS Positioned Layout L3 §3 / Compositing L1 — не наследуются.
         position: Position::Static,
         top: LengthOrAuto::Auto,

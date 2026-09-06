@@ -583,3 +583,111 @@ impl Resize {
     }
 }
 
+/// CSS Rhythmic Sizing L1 §3.3 — `block-step-insert`. NOT inherited.
+/// Initial: `margin-box`. BUG-517.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BlockStepInsert {
+    /// `margin-box` — the step unit is inserted in the margin box.
+    #[default]
+    MarginBox,
+    /// `padding-box` — the step unit is inserted in the padding box.
+    PaddingBox,
+    /// `content-box` — the step unit is inserted in the content box.
+    ContentBox,
+}
+
+impl BlockStepInsert {
+    /// Parses a single keyword token; `None` for anything else (including
+    /// `border-box`, which this property's grammar does not accept).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "margin-box" => Some(Self::MarginBox),
+            "padding-box" => Some(Self::PaddingBox),
+            "content-box" => Some(Self::ContentBox),
+            _ => None,
+        }
+    }
+
+    /// Serializes back to its CSS keyword (specified value round-trip and
+    /// computed-value serialization share the same text for this property).
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::MarginBox => "margin-box",
+            Self::PaddingBox => "padding-box",
+            Self::ContentBox => "content-box",
+        }
+    }
+}
+
+/// CSS Rhythmic Sizing L1 §3.4 — `block-step-align`. NOT inherited.
+/// Initial: `auto`. BUG-517.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BlockStepAlign {
+    /// `auto` — UA decides which side absorbs the extra step space.
+    #[default]
+    Auto,
+    /// `center` — extra step space split evenly on both sides.
+    Center,
+    /// `start` — extra step space goes after the box (block-start edge fixed).
+    Start,
+    /// `end` — extra step space goes before the box (block-end edge fixed).
+    End,
+}
+
+impl BlockStepAlign {
+    /// Parses a single keyword token; `None` for anything else.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "auto" => Some(Self::Auto),
+            "center" => Some(Self::Center),
+            "start" => Some(Self::Start),
+            "end" => Some(Self::End),
+            _ => None,
+        }
+    }
+
+    /// Serializes back to its CSS keyword.
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Center => "center",
+            Self::Start => "start",
+            Self::End => "end",
+        }
+    }
+}
+
+/// CSS Rhythmic Sizing L1 §3.5 — `block-step-round`. NOT inherited.
+/// Initial: `up`. BUG-517.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BlockStepRound {
+    /// `up` — round the block size up to the next step multiple.
+    #[default]
+    Up,
+    /// `down` — round the block size down to the previous step multiple.
+    Down,
+    /// `nearest` — round to whichever step multiple is closest.
+    Nearest,
+}
+
+impl BlockStepRound {
+    /// Parses a single keyword token; `None` for anything else.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "up" => Some(Self::Up),
+            "down" => Some(Self::Down),
+            "nearest" => Some(Self::Nearest),
+            _ => None,
+        }
+    }
+
+    /// Serializes back to its CSS keyword.
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::Up => "up",
+            Self::Down => "down",
+            Self::Nearest => "nearest",
+        }
+    }
+}
+
