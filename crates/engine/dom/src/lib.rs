@@ -702,6 +702,35 @@ impl Document {
         self.shadow_roots.contains_key(&id)
     }
 
+    /// The host of the nearest shadow tree `id` lives inside, if any.
+    ///
+    /// Walks `id`'s DOM parent chain (its *actual* `Node::parent`, not the
+    /// composed/flat tree) looking for a `ShadowRoot` node. A shadow root's
+    /// children have `parent` pointing at the root itself (BUG-1009's
+    /// `attach_shadow` doc comment: "not a DOM child of host"), so an element
+    /// styled *inside* a shadow tree's own `<style>` is found this way, while
+    /// a slotted light-tree child (whose real parent is the host, not the
+    /// root) correctly falls through to `None` — that case is already
+    /// handled separately via `::slotted()`.
+    ///
+    /// Nested shadow trees resolve to the *nearest* enclosing root, matching
+    /// tree-scoping: an inner shadow tree's own stylesheet, not an outer
+    /// one's, applies to its own descendants.
+    pub fn enclosing_shadow_host(&self, id: NodeId) -> Option<NodeId> {
+        let mut cur = self.nodes[id.index()].parent;
+        while let Some(p) = cur {
+            if matches!(self.nodes[p.index()].data, NodeData::ShadowRoot { .. }) {
+                return self
+                    .shadow_roots
+                    .iter()
+                    .find(|&(_, &sr)| sr == p)
+                    .map(|(&host, _)| host);
+            }
+            cur = self.nodes[p.index()].parent;
+        }
+        None
+    }
+
     /// Whether `id` indexes this document's node arena.
     ///
     /// The arena never shrinks (`Node`s are detached, not freed), so a valid

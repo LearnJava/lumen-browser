@@ -411,14 +411,15 @@ probe reproducing the exact shape (`<template shadowrootmode="open"><style>
 entry point; no box anywhere in the resulting tree carries the red color.
 `@apply` inside such a rule can only be as visible as the rule itself, and
 the rule itself never reaches `#e1`/`#e2`/`#e3` — a mixin-specific fix here
-would be attacking a symptom. Filed as [BUG-1009](BUG-1009-OPEN.md)
-(layout-crate cascade gap, no connection to `@mixin`/`@apply`). The file's
-4th subtest (`#e4`, "style outside shadow DOM should NOT have access to
-inside mixins") is a light-DOM rule with a light-DOM `@apply` and does not
-depend on BUG-1009 either way — not separately verified this slice, deferred
-to whoever revisits this file once BUG-1009 is fixed (needs a real
-shadow-tree end-to-end harness to check without also needing the other three
-subtests to already be green).
+would be attacking a symptom. Filed as [BUG-1009](BUG-1009-FIXED.md)
+(layout-crate cascade gap, no connection to `@mixin`/`@apply`) — fixed
+2026-09-06, after this slice. The file's 4th subtest (`#e4`, "style outside
+shadow DOM should NOT have access to inside mixins") is a light-DOM rule with
+a light-DOM `@apply` and does not depend on BUG-1009 either way — not
+separately verified this slice, deferred to whoever revisits this file (needs
+a real shadow-tree end-to-end harness to check without also needing the other
+three subtests to already be green — now unblocked, but not re-verified
+here).
 
 **Verification**: `cargo test -p lumen-layout --lib`: 3869/3869 (+2 for the
 two new permanent tests; net +2 not +something-more because the two throwaway
@@ -426,7 +427,8 @@ probes used to investigate this were removed before commit).
 `cargo clippy -p lumen-layout --all-targets -- -D warnings`: clean. No parser
 or cascade code touched, so no new `dump_golden.py`/graphic-test surface.
 
-Status remains `OPEN` — `mixin-shadow-dom.html` is blocked on
-[BUG-1009](BUG-1009-OPEN.md) (not further actionable from this bug), and the
-CSSOM-gated `mixin-cssom.tentative`/`mixin-invalidation.tentative` remain
+Status remains `OPEN` — `mixin-shadow-dom.html` was blocked on
+[BUG-1009](BUG-1009-FIXED.md) (not further actionable from this bug), fixed
+2026-09-06 (unblocked, not re-verified by this slice), and the CSSOM-gated
+`mixin-cssom.tentative`/`mixin-invalidation.tentative` remain
 blocked on [BUG-471](BUG-471-OPEN.md) as already documented.

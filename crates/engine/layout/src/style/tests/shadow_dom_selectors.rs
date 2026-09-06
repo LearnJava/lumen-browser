@@ -134,6 +134,96 @@
             "document-scope ::slotted must be a no-op");
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // BUG-1009 — regular selectors inside a shadow tree's own stylesheet
+    // matching its own interior descendants (CSS Scoping L1 §6 core case,
+    // distinct from the `:host`/`::slotted` boundary cases above).
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Build a Document: `<div id="host">` shadow host whose open shadow root
+    /// contains one interior child `<div id="e1">` — a real DOM descendant of
+    /// the shadow root itself (BUG-1009's shape), not of the host. Returned
+    /// tuple: (doc, host_id, e1_id).
+    fn make_shadow_host_with_interior_child() -> (lumen_dom::Document, NodeId, NodeId) {
+        let (mut doc, host) = make_shadow_host();
+        let sr = doc.shadow_root_of(host).expect("shadow root");
+        let e1 = doc.create_element(lumen_dom::QualName::html("div"));
+        if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(e1).data {
+            attrs.push(lumen_dom::Attribute { name: lumen_dom::QualName::html("id"), value: "e1".into() });
+        }
+        doc.append_child(sr, e1);
+        (doc, host, e1)
+    }
+
+    /// Build two nested shadow hosts: `outer-host`'s shadow root directly
+    /// contains `inner-host`, which has its own nested shadow root containing
+    /// `<div id="inner-e">`. Returned tuple: (doc, outer_host, inner_host, inner_e).
+    fn make_nested_shadow_hosts() -> (lumen_dom::Document, NodeId, NodeId, NodeId) {
+        let (mut doc, outer_host) = make_shadow_host();
+        let sr_outer = doc.shadow_root_of(outer_host).expect("outer shadow root");
+        let inner_host = doc.create_element(lumen_dom::QualName::html("div"));
+        doc.append_child(sr_outer, inner_host);
+        let sr_inner = doc.attach_shadow(inner_host, ShadowRootMode::Open);
+        let inner_e = doc.create_element(lumen_dom::QualName::html("div"));
+        if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(inner_e).data {
+            attrs.push(lumen_dom::Attribute { name: lumen_dom::QualName::html("id"), value: "inner-e".into() });
+        }
+        doc.append_child(sr_inner, inner_e);
+        (doc, outer_host, inner_host, inner_e)
+    }
+
+    #[test]
+    fn regular_selector_in_own_shadow_sheet_applies_to_its_interior_element() {
+        // `#e1 { color: red; }` written inside a shadow tree's own `<style>`
+        // must match `#e1` living inside that same shadow tree — previously
+        // unmatched entirely because neither `:host` (case a) nor `::slotted()`
+        // (case b) cover a plain interior selector.
+        let (doc, host, e1) = make_shadow_host_with_interior_child();
+        install_shadow_sheet(host, "#e1 { color: red; }");
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, e1, &Stylesheet::default(), &root, VP, false);
+        clear_shadow_sheets();
+        let c = s.color;
+        assert_eq!((c.r, c.g, c.b), (255, 0, 0),
+            "regular selector in shadow tree's own stylesheet must match its own interior element");
+    }
+
+    #[test]
+    fn interior_regular_selector_does_not_apply_to_slotted_light_child() {
+        // CSS Scoping L1 §6.2: a shadow tree's own plain selectors must not
+        // reach slotted light-tree content — only `::slotted()` can. Guards
+        // the new interior-match case against over-matching into the
+        // `::slotted()` case's territory: a slotted child's real DOM parent
+        // is the host itself, not the shadow root, so it must not resolve to
+        // an enclosing shadow tree here.
+        let (doc, host, slotted) = make_shadow_host_with_slotted();
+        install_shadow_sheet(host, ".item { color: red; }");
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, slotted, &Stylesheet::default(), &root, VP, false);
+        clear_shadow_sheets();
+        assert_ne!((s.color.r, s.color.g, s.color.b), (255, 0, 0),
+            "shadow tree's own plain selector must not match a slotted light-tree child");
+    }
+
+    #[test]
+    fn nested_shadow_tree_uses_nearest_enclosing_scope_not_outer() {
+        // An element inside a nested inner shadow tree must be styled by that
+        // inner tree's own stylesheet, not by an enclosing outer shadow
+        // tree's stylesheet of the same specificity/selector — tree scoping
+        // resolves to the *nearest* shadow root, matching how `getRootNode()`
+        // (without `composed: true`) would resolve for the same node.
+        let (doc, outer_host, inner_host, inner_e) = make_nested_shadow_hosts();
+        let mut map: HashMap<NodeId, Stylesheet> = HashMap::new();
+        map.insert(outer_host, lumen_css_parser::parse("#inner-e { color: red; }"));
+        map.insert(inner_host, lumen_css_parser::parse("#inner-e { color: blue; }"));
+        set_shadow_sheets(map);
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, inner_e, &Stylesheet::default(), &root, VP, false);
+        clear_shadow_sheets();
+        assert_eq!((s.color.r, s.color.g, s.color.b), (0, 0, 255),
+            "nested shadow tree's own stylesheet (nearest scope) must win over an outer one");
+    }
+
     #[test]
     fn slotted_inner_selector_filters_correctly() {
         // `::slotted(.other)` must NOT apply to `<span class="item">` (wrong class).

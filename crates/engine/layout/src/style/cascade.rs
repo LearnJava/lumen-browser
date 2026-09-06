@@ -1020,6 +1020,46 @@ pub fn compute_style(
             }
         }
     }
+    // (c) `node` lives inside a shadow tree (its DOM parent chain reaches a
+    // `ShadowRoot` before reaching the document root) — that tree's own
+    // regular (non-`:host`/`::slotted`) selectors apply to it. This is CSS
+    // Scoping L1 §6's core case ("author a component's internal styles once,
+    // scoped to its own tree"), distinct from (a)/(b) above, which only cover
+    // the two *boundary*-crossing selector forms. Plain `matches_complex`
+    // naturally excludes `:host` (gated on `SHADOW_HOST_SCOPE`, never set to
+    // `node`'s index here) and `::slotted()` (a pseudo-element; `matches_simple`
+    // always rejects `SimpleSelector::PseudoElement`), so no extra filtering
+    // is needed to keep (a)/(b) semantics from being duplicated here.
+    let interior_shadow: Option<Stylesheet> = if any_shadow {
+        doc.enclosing_shadow_host(node)
+            .and_then(|host| SHADOW_SHEETS.with(|c| c.borrow().get(&host).cloned()))
+    } else {
+        None
+    };
+    if let Some(ref shadow) = interior_shadow {
+        let base = next_rule_idx
+            + own_shadow.as_ref().map_or(0, |s| s.rules.len())
+            + host_shadow.as_ref().map_or(0, |s| s.rules.len());
+        for (i, rule) in shadow.rules.iter().enumerate() {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if matches_complex(complex, doc, node) {
+                    let spec = complex.specificity();
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                let gidx = base + i;
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    let lp = layer_pri(decl.important, layer_n);
+                    matched.push((decl.important, false, lp, spec, gidx, decl_idx, decl));
+                }
+            }
+        }
+    }
 
     // Inline-style declarations подключаются с `is_inline = true` и
     // synthetic specificity = default (Cascade L4 §6.4.3 — реальная
