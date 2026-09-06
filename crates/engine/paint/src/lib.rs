@@ -56,6 +56,8 @@ pub mod webgpu_compute;
 pub mod webgl;
 
 #[cfg(feature = "cpu-render")]
+mod cpu_font_resolve;
+#[cfg(feature = "cpu-render")]
 pub mod cpu_raster;
 
 pub use atlas::{GlyphAtlas, GlyphEntry};

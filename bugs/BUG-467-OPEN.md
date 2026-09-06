@@ -1675,3 +1675,110 @@ baseline) — сохраняю формулировку «не раскопан�
 вообще, не только нет overrides); `.ini`-baseline (тот же долг WPT-RUN-7
 среза 4); (D) feature/variation-settings; femtovg-паритет для (A);
 реактивность CSS-connected сета (BUG-471/CSSOM-4).
+
+## FONTLOAD-18 (P1, 2026-09-06, ветка `p1-fontload18-cpu-raster-face-resolve`) — @font-face byte-резолв в `cpu_raster.rs`, единственном пути, который реально видит WPT reftest
+
+Закрыла ровно тот gap, что FONTLOAD-17 назвала «не входит» и объяснила как
+единственный реальный рычаг сдвинуть WPT pass-rate override-категории:
+`resolve_face_bytes` (`crates/engine/paint/src/cpu_raster.rs`) всегда рисовала
+bundled Inter (или системный face по имени под диагностическим
+`LUMEN_CPU_SYSTEM_FONTS`), минуя `FontRegistry` целиком — `tests/wpt/
+run_smoke.py`'s reftest использует именно этот детерминированный CPU-путь
+(`render_source_to_png` → `cpu_raster.rs`), не wgpu, поэтому никакой фикс
+FONTLOAD-9/16/17 (все — на wgpu-стороне) не мог сдвинуть эту категорию.
+
+**Реализация:**
+- Новый модуль `crates/engine/paint/src/cpu_font_resolve.rs` (перенесены
+  `BUNDLED_FONT`/`LUMEN_CPU_SYSTEM_FONTS`-флаг/старая `resolve_face_bytes`) с
+  `resolve_face(provider: Option<&dyn FontProvider>, font_family, weight,
+  style) -> (Vec<u8>, Option<FaceRecord>)`. Провайдер — та же
+  `Arc<lumen_font::FontRegistry>`, что wgpu-путь получает через
+  `set_font_provider`, построенная `page_pipeline.rs::load_font_faces` из
+  разобранных `@font-face`-правил страницы; она уже доходила до
+  `dump_mode.rs::render_source_to_png` (`parsed.font_registry`), просто
+  терялась на границе с `Renderer::render_to_image_cpu`.
+- **Безопасность для существующих golden'ов (сердце этого среза):**
+  `provider.pick_face(...)` матчит system+custom слитно (та же семантика, что
+  wgpu-сторона), поэтому обычный `font-family: Arial` без совпадающего
+  `@font-face` тоже вернул бы `FaceRecord` — но ТОЛЬКО системный. Принимается
+  результат, только если `provider.read_face_bytes(&record.path)` даёт
+  `Some(bytes)` — это истинно ровно для `@font-face`-зарегистрированных
+  in-memory face-ов (виртуальный путь в `bytes_store`), и `None` для системных
+  записей (реальный путь на диске, не в `bytes_store`). Системное
+  разрешение имён на CPU-пути остаётся ровно там же, где было — под
+  `LUMEN_CPU_SYSTEM_FONTS` — а не расширяется этим срезом. 5 юнит-тестов
+  `cpu_font_resolve::tests` доказывают оба направления (совпадение с
+  overrides, промах падает на bundled, а не на систему).
+- `CpuFace` получила `ascent_override`/`descent_override`/`size_adjust`
+  (`line_gap_override` — как и на wgpu-стороне, без потребителя, не
+  добавлено); `rasterize_text` копирует их из резолвленного `FaceRecord` и
+  считает `baseline_y`/`advance_scale`/размер растеризатора по той же
+  формуле, что `push_text_glyphs` (`renderer/glyph_raster.rs`) — на уровне
+  font units, байт-в-байт при отсутствующем override. **Отличие от wgpu**:
+  CPU-путь шейпит весь run ОДНИМ `bytes`-буфером (структурное ограничение,
+  существовавшее и до этого среза — «No cross-family fallback within one
+  run»), поэтому `size-adjust` применяется на весь run, а не поглифно
+  (per-codepoint unicode-range-каскад — см. «Не входит» ниже).
+- Проводка без слома существующих ~70 тестовых вызовов: `rasterize_cpu`
+  (сигнатура не изменилась) стала тонкой обёрткой над новым
+  `rasterize_cpu_with_fonts(..., font_provider: Option<&dyn FontProvider>)`;
+  аналогично `Renderer::render_to_image_cpu_with_fonts` рядом с нетронутым
+  `render_to_image_cpu` (`renderer/frame_entry.rs`). Единственный вызывающий
+  новую версию — `dump_mode.rs::render_source_to_png` (доказано: и `--screenshot`,
+  и IPC `Screenshot`, и `automation_server.rs`'s BiDi `Screenshot` — все трое
+  зовут именно эту функцию). `crates/driver/src/session.rs`
+  (`InProcessSession`, не WPT-путь — FONTLOAD-3) и
+  `crates/shell/src/lumen/automation.rs::render_current_page_to_png` (SDC-1b,
+  живая BiDi-автоматизация реального окна, другая поверхность) сознательно
+  не тронуты — не WPT-измеряемый путь этим срезом.
+
+**Гейт:** `cargo clippy -p lumen-paint --features backend-wgpu,cpu-render
+--all-targets -- -D warnings` и `cargo clippy -p lumen-shell --bin lumen
+--all-targets --features v8 -- -D warnings` чисты (дефолтный `dev`-профиль —
+`dev-release` глушит `debug_assertions` и ложно красит `lumen-layout`'s
+`invariants.rs`, тот же предсуществующий разрыв, что документирован
+FONTLOAD-12/13/14/15). `cargo test -p lumen-paint --features
+backend-wgpu,cpu-render --lib` — 78/78 в затронутых модулях (70
+предсуществующих `cpu_raster` без регрессий + 5 новых `cpu_font_resolve` + 3
+новых `cpu_raster` — байт-в-байт нейтральность непопавшего провайдера,
+`size-adjust: 2` реально расширяет чернила глифов). Срез двигает пиксели
+текста → полный `python graphic_tests/run.py --continue-on-fail` (не
+`--build`-профиль `release`, свежая пересборка подтверждена по mtime
+target/release/lumen.exe): **«Дельта vs предыдущий прогон (commit
+e11f78862): Изменений нет»** — 12/156 FAIL (02, 04, 18, 21, 55, 56, 80, 83,
+149, 150, 151, 155), 46 known-debtor, идентично FONTLOAD-17's baseline.
+Ожидаемо: детерминированный корпус не рендерится через `cpu_raster.rs` с
+живым провайдером на прогоне `run.py` (тот гоняет wgpu-путь через gdigrab, не
+CPU-скриншот), так что этот срез структурно не мог его тронуть — сам факт
+«Изменений нет» подтверждает это, не более.
+
+**Живой WPT A/B-замер CPU-пути (тех же 7 id, что FONTLOAD-16/17) НЕ
+получен в этом срезе** — `tests/wpt/run_smoke.py` падает на старте:
+`wptserve`'s WSS-сервер зовёт модульный `ssl.wrap_socket`, удалённый в
+Python 3.14 (текущий интерпретатор окружения) — `OSError: Servers failed to
+start: wss:18889`, до всякого запуска `lumen.exe`/навигации. FONTLOAD-16/17
+успешно гоняли этот же `run_smoke.py`-вызов несколько часов назад — похоже на
+апгрейд Python в окружении между срезами, а не на что-то, связанное с этим
+кодом (порт 18889 свободен на момент проверки — не конфликт с параллельной
+сессией). Затрагивает ЛЮБОЙ живой WPT-прогон через `run_smoke.py`/
+`run_report.py`, не специфично для FONTLOAD-18 — заведено отдельной заметкой
+для P2/P5 (окружение/тулинг), не решается в рамках этого среза. Корректность
+overrides на CPU-пути подтверждена вместо этого прямыми Rust-юнит-тестами
+(`cpu_raster::tests::draw_text_size_adjust_from_registered_face_widens_ink` и
+соседние) — те же формулы, что `push_text_glyphs` уже доказал на wgpu-стороне
+в FONTLOAD-17.
+
+**Не входит:** поглифный unicode-range-каскад на CPU-пути (структурно
+больше — потребовал бы переписать однофейсовый цикл `rasterize_text` в
+per-char `pick_face_for_codepoint`-подобный каскад, сравнимо по объёму с
+FONTLOAD-9 для wgpu); `line-gap-override` (по-прежнему без потребителя, как и
+на wgpu-стороне); `url()`-веб-шрифты, догруженные асинхронно ПОСЛЕ
+`render_source_to_png` (нет второго прохода — тот же нюанс, что и у живого
+пути без `FontLoaded`-relayout, здесь просто не проверялся); `crates/driver`/
+`crates/shell/lumen/automation.rs`'s отдельные CPU-скриншот-поверхности (не
+WPT-путь); живой WPT A/B-замер (см. выше — блокирован окружением, не кодом);
+`.ini`-baseline (тот же долг WPT-RUN-7 среза 4). Детали реализации и код —
+`crates/engine/paint/src/cpu_font_resolve.rs`,
+`crates/engine/paint/src/cpu_raster.rs`,
+`crates/engine/paint/src/renderer/frame_entry.rs`,
+`crates/shell/src/dump_mode.rs`.
