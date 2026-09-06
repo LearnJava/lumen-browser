@@ -36,6 +36,10 @@ use super::runtime::CustomPropertySnapshot;
 pub(crate) struct FlushHandles {
     pub(crate) doc: Arc<Mutex<lumen_dom::Document>>,
     pub(crate) layout_rects: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
+    /// BUG-1007: per-fragment client rects, refreshed alongside `layout_rects`
+    /// so a same-tick `getClientRects()` after a DOM/style mutation never
+    /// disagrees with `getBoundingClientRect()` over the same flush.
+    pub(crate) client_rects: Arc<Mutex<HashMap<u32, Vec<[f32; 4]>>>>,
     pub(crate) computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
     pub(crate) custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
     pub(crate) viewport_size: Arc<Mutex<[f32; 2]>>,
@@ -132,6 +136,10 @@ impl FlushHandles {
             .layout_rects
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = lumen_layout::collect_layout_rects(&layout_root, &doc_guard);
+        *self
+            .client_rects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = lumen_layout::collect_client_rects(&layout_root, &doc_guard);
         *self
             .computed_styles
             .lock()

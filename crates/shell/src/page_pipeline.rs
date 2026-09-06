@@ -484,6 +484,9 @@ fn build_page_cascade(
 pub(crate) struct JsLayoutSnapshot {
     /// `node index -> [x, y, w, h]` border boxes.
     pub(crate) rects: std::collections::HashMap<u32, [f32; 4]>,
+    /// `node index -> per-fragment rects` (BUG-1007), for `getClientRects()`/
+    /// `getBoxQuads()` — same tree `rects` was collected from.
+    pub(crate) client_rects: std::collections::HashMap<u32, Vec<[f32; 4]>>,
     /// `LayoutBox` tree for `document.elementFromPoint`/`elementsFromPoint`
     /// (BUG-464/BUG-477) — same tree `rects` was collected from.
     pub(crate) tree: Arc<LayoutBox>,
@@ -504,6 +507,7 @@ pub(crate) fn collect_js_layout_snapshot(
 ) -> JsLayoutSnapshot {
     JsLayoutSnapshot {
         rects: lumen_layout::collect_layout_rects(root, doc),
+        client_rects: lumen_layout::collect_client_rects(root, doc),
         tree: Arc::new(root.clone()),
         styles: lumen_layout::collect_computed_styles(root, doc, None),
         customs: lumen_layout::collect_custom_properties(root, viewport),
@@ -811,6 +815,7 @@ pub(crate) fn parse_and_layout(
                 )
             };
             js.update_layout_rects(snapshot.rects);
+            js.update_client_rects(snapshot.client_rects);
             js.update_computed_styles(snapshot.styles);
             js.update_custom_properties(snapshot.customs);
             // CSSOM-1 срез 3: re-push whenever this block runs, even though

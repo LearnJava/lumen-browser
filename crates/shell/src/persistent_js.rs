@@ -126,6 +126,14 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `getBoundingClientRect`, `ResizeObserver`, and `IntersectionObserver`.
     #[allow(dead_code)] // called only from #[cfg(feature = "v8")] blocks
     fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>);
+    /// Push a fresh snapshot of per-fragment client rects (BUG-1007).
+    ///
+    /// Called alongside [`Self::update_layout_rects`], same tree the shell
+    /// just built. The JS side uses this for `getClientRects()`/`getBoxQuads()` —
+    /// one rect per CSS fragment (visual line, for a multi-line plain inline
+    /// element) instead of [`Self::update_layout_rects`]'s single union rect.
+    #[allow(dead_code)] // called only from #[cfg(feature = "v8")] blocks
+    fn update_client_rects(&self, rects: HashMap<u32, Vec<[f32; 4]>>);
     /// Push a fresh `LayoutBox` tree snapshot for `document.elementFromPoint`/
     /// `elementsFromPoint` (BUG-464/BUG-477).
     ///
@@ -751,6 +759,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>) {
         self.rt.update_layout_rects(rects);
+    }
+    fn update_client_rects(&self, rects: HashMap<u32, Vec<[f32; 4]>>) {
+        self.rt.update_client_rects(rects);
     }
     fn update_hit_test_tree(&self, tree: Arc<lumen_layout::LayoutBox>) {
         self.rt.update_hit_test_tree(tree);

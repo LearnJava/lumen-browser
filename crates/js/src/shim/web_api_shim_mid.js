@@ -6664,19 +6664,26 @@ var _LUMEN_WRAPPER_MEMBERS = {
             if (!r) { return new DOMRect(0, 0, 0, 0); }
             return new DOMRect(r[0], r[1], r[2], r[3]);
         },
-        // BUG-478: single-rect fallback — one CSS box per element is spec-
-        // incomplete for a multi-fragment inline (a correct answer needs
-        // per-line fragment rects from layout's `InlineRun`/`frag[]`), but
-        // unblocks every "is not a function" failure this gap causes,
-        // including `resources/testdriver.js`'s very first call (WPT-RUN-12:
-        // every testdriver-driven action was unreachable before this).
+        // BUG-1007: one `DOMRect` per CSS fragment — a multi-line plain inline
+        // element (`<span>`, `<em>`, …) answers with one rect per visual line
+        // it spans, read from layout's `InlineRun`/`frag[]` via the native
+        // `_lumen_get_client_rects` (BUG-478 shipped the "is not a function"
+        // fix first, as a single-rect fallback; this is the per-fragment
+        // follow-up that fallback's own comment called out as separate work).
+        // An element with no layout box (display:none, not laid out yet)
+        // gets an empty list, same as a real browser.
         getClientRects: function() {
-            return new DOMRectList([this.getBoundingClientRect()]);
+            var nid = this.__nid__;
+            var rs = _lumen_get_client_rects(nid);
+            return new DOMRectList(rs.map(function(r) { return new DOMRect(r[0], r[1], r[2], r[3]); }));
         },
-        // CSSOM View §6 getBoxQuads() — same single-box fallback as
-        // getClientRects, structurally the same gap (BUG-478).
+        // CSSOM View §6 getBoxQuads() — same per-fragment source as
+        // getClientRects (BUG-1007), one DOMQuad per line instead of one
+        // DOMRect.
         getBoxQuads: function() {
-            return [DOMQuad.fromRect(this.getBoundingClientRect())];
+            var nid = this.__nid__;
+            var rs = _lumen_get_client_rects(nid);
+            return rs.map(function(r) { return DOMQuad.fromRect(new DOMRect(r[0], r[1], r[2], r[3])); });
         },
         // `src` used to live here as an own property on EVERY element (BUG-305).
         // It is now one row of the reflection table (BUG-383) installed on the

@@ -1849,7 +1849,8 @@ the time — read dates.
   run, not by `geometry_shim.js`'s own Node.js syntax/unit checks, which
   have no such `window`). `Element.prototype.getBoundingClientRect()`
   (`web_api_shim_mid.js`) now returns a real `DOMRect`; `getClientRects()`/
-  `getBoxQuads()` are new, with a single-rect fallback (`BUG-478`). Canvas
+  `getBoxQuads()` are new, one `DOMRect`/`DOMQuad` per CSS fragment
+  (`BUG-478`/`BUG-1007`). Canvas
   2D's `setTransform()` gained the `DOMMatrix2DInit` overload (shared
   `_dommatrix2d_validate_and_fixup` helper, throws on a legacy/`mIJ`-alias
   conflict) and a NaN/Infinity no-op guard on every transform method;
