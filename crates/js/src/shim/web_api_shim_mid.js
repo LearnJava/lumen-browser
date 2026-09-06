@@ -7952,7 +7952,17 @@ function _lumen_font_face_try_one_source(src, onOk, onFail) {
         onFail(new DOMException('Could not find local font', 'NetworkError'));
         return;
     }
-    fetch(src.value).then(function(resp) {
+    // BUG-1011: `_lumenAsync` routes this through `fetch()`'s worker-thread
+    // bridge instead of its default synchronous transport. A bare `fetch(url)`
+    // parks the JS thread until the font host answers, and this function runs
+    // inside the load pipeline's `run-scripts` phase — so google.com's
+    // `document.fonts.load('10pt Google Sans')` in `<head>` held layout, paint
+    // and the first frame for as long as fonts.gstatic.com took (139 s in the
+    // 2026-09-06 corpus run). Nothing here needs the bytes synchronously: the
+    // promise this feeds is what CSS Font Loading hands the page, and the faces
+    // that actually render are fetched separately by the shell's own background
+    // `@font-face` loader (`crates/shell/src/page_load.rs`).
+    fetch(src.value, { _lumenAsync: true }).then(function(resp) {
         if (!resp.ok) throw new DOMException('Failed to fetch font: ' + resp.status, 'NetworkError');
         return resp.arrayBuffer();
     }).then(function(buf) {
