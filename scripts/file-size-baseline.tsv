@@ -5,7 +5,7 @@
 # коммитом, что и рост, и с объяснением в теле коммита.
 
 9915	crates/network/src/lib.rs
-6952	crates/engine/paint/src/backends/femtovg_backend.rs
+6693	crates/engine/paint/src/backends/femtovg_backend.rs
 5984	crates/engine/paint/src/renderer.rs
 5466	crates/engine/dom/src/lib.rs
 5368	crates/engine/paint/src/cpu_raster.rs
@@ -18,15 +18,15 @@
 3435	crates/chrome/src/model.rs
 3213	crates/engine/layout/src/selector_query.rs
 3009	crates/shell/src/forms.rs
-2982	crates/driver/src/session.rs
+2983	crates/driver/src/session.rs
 2850	crates/js/src/offscreen_canvas.rs
 2762	crates/network/src/h3/conn_connect.rs
 2637	crates/js/src/subtle_crypto.rs
 2365	crates/js/src/video_bindings.rs
 2352	crates/engine/layout/src/tests/scroll_interaction_misc.rs
-2289	crates/shell/src/frames.rs
+2291	crates/shell/src/frames.rs
+2180	crates/engine/layout/src/lib.rs
 2133	crates/engine/paint/src/lib.rs
-2074	crates/engine/layout/src/lib.rs
 2067	crates/js/src/web_audio.rs
 2036	crates/shell/src/tests/bug341_census.rs
 2011	crates/js/src/dom/tests/v8_ws_sse.rs
