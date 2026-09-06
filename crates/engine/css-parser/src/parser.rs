@@ -239,6 +239,24 @@ pub enum CssomRuleRef<'a> {
     Media(&'a MediaRule),
 }
 
+/// Failure of [`Stylesheet::insert_rule`]/[`Stylesheet::delete_rule`] — the
+/// two DOMException names CSSOM §6.5 assigns each operation's step list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CssomRuleMutationError {
+    /// `index` is greater than [`Stylesheet::cssom_rules`]'s length
+    /// (`insertRule`) or not less than it (`deleteRule`).
+    IndexSize,
+    /// `insertRule`'s rule text does not parse to exactly one rule this
+    /// sheet's `cssom_rules()` can represent (a plain style rule or an
+    /// `@media` block) — e.g. it is a declaration, a rule of a kind
+    /// `top_level_order` does not track (`@font-face`, `@import`, …), more
+    /// than one rule, or unparseable text. Lumen does not model
+    /// `insertRule`'s further ordering constraints (`@import` must precede
+    /// every other rule) since those rule kinds are not CSSOM-representable
+    /// here to begin with.
+    Syntax,
+}
+
 impl Default for Stylesheet {
     /// An empty sheet — with its own revision, like any other sheet. Two
     /// `Stylesheet::default()` values are `==` but not the same sheet, and a
@@ -435,6 +453,72 @@ impl Stylesheet {
             }
         }
         out
+    }
+
+    /// `CSSStyleSheet.insertRule(rule, index)` (CSSOM §6.5). Parses `rule_text`
+    /// on its own; it must yield exactly one rule of a kind
+    /// [`Self::cssom_rules`] can represent (a style rule or an `@media`
+    /// block) and nothing else, or this returns
+    /// [`CssomRuleMutationError::Syntax`]. `index` may equal the current rule
+    /// count (append) but not exceed it, or this returns
+    /// [`CssomRuleMutationError::IndexSize`] — matching CSSOM's step order,
+    /// index is checked before the rule text.
+    ///
+    /// On success, returns `index` (CSSOM's "return the index at which
+    /// rule was inserted") and mints a new revision.
+    pub fn insert_rule(
+        &mut self,
+        rule_text: &str,
+        index: usize,
+    ) -> Result<usize, CssomRuleMutationError> {
+        if index > self.top_level_order.len() {
+            return Err(CssomRuleMutationError::IndexSize);
+        }
+        let mut parsed = parse(rule_text);
+        if parsed.top_level_order.len() != 1 {
+            return Err(CssomRuleMutationError::Syntax);
+        }
+        let kind = parsed.top_level_order[0];
+        let style_rule = parsed.rules.pop();
+        let media_rule = parsed.media_rules.pop();
+        parsed.top_level_order.clear();
+        parsed.rules.clear();
+        parsed.media_rules.clear();
+        // Nothing else came out of parsing this text — no stray
+        // `@font-face`/`@import`/`@property`/etc. alongside the one rule.
+        if parsed != Stylesheet::default() {
+            return Err(CssomRuleMutationError::Syntax);
+        }
+        let sub_index =
+            self.top_level_order[..index].iter().filter(|k| **k == kind).count();
+        match (kind, style_rule, media_rule) {
+            (TopLevelRuleKind::Style, Some(rule), _) => self.rules.insert(sub_index, rule),
+            (TopLevelRuleKind::Media, _, Some(rule)) => self.media_rules.insert(sub_index, rule),
+            _ => return Err(CssomRuleMutationError::Syntax),
+        }
+        self.top_level_order.insert(index, kind);
+        self.mark_mutated();
+        Ok(index)
+    }
+
+    /// `CSSStyleSheet.deleteRule(index)` (CSSOM §6.5).
+    pub fn delete_rule(&mut self, index: usize) -> Result<(), CssomRuleMutationError> {
+        let Some(&kind) = self.top_level_order.get(index) else {
+            return Err(CssomRuleMutationError::IndexSize);
+        };
+        let sub_index =
+            self.top_level_order[..index].iter().filter(|k| **k == kind).count();
+        self.top_level_order.remove(index);
+        match kind {
+            TopLevelRuleKind::Style => {
+                self.rules.remove(sub_index);
+            }
+            TopLevelRuleKind::Media => {
+                self.media_rules.remove(sub_index);
+            }
+        }
+        self.mark_mutated();
+        Ok(())
     }
 }
 

@@ -26,7 +26,7 @@ pub use parser::{
     MediaQueryClause, MediaRule, MixinParameter, MixinResultItem, MixinRule, MIXIN_APPLY_MARKER, NthSpec, PageRule, PropertyRule, PseudoClass, PseudoElementKind, RelativeSelector,
     Rule, ScopeRule,
     SimpleSelector, Specificity, StartingStyleRule, Stylesheet, StylesheetNodeEntry, StylesheetRevision,
-    SupportsCondition, SupportsRule, CssomRuleRef,
+    SupportsCondition, SupportsRule, CssomRuleRef, CssomRuleMutationError,
 };
 
 /// CSS properties recognised by Lumen's layout engine.
