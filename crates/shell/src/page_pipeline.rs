@@ -641,10 +641,14 @@ pub(crate) fn parse_and_layout(
     //
     // CSS Selectors L4 §9.6 `:target`: set current target from the URL fragment
     // so the matcher has the correct target_id before that first cascade.
+    // STTF-1: a `:~:text=...` scroll-to-text directive is not part of the
+    // element-id fragment — `text_fragment::parse_fragment` strips it so
+    // `:target` never tries to match a raw directive string against an `id`.
     let page_fragment = if let ResourceBase::Url(u) = base {
         lumen_core::url::Url::parse(u)
             .ok()
             .and_then(|u| u.fragment().map(str::to_owned))
+            .and_then(|f| text_fragment::parse_fragment(&f).element_id)
     } else {
         None
     };

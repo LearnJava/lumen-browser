@@ -325,13 +325,16 @@ impl Lumen {
                 format!("_lumen_navigate_or_fragment('{escaped}', false)"),
             );
         }
+        // STTF-1: strip a `:~:text=...` scroll-to-text directive before it
+        // reaches `:target`/`find_element_by_id` — neither should ever try
+        // to match the literal directive text against an `id`. The
+        // directive itself isn't acted on yet (search/reveal is a later
+        // slice, `bugs/BUG-972-OPEN.md`); this only prevents its presence
+        // from corrupting the ordinary id-fragment path.
+        let id_part = text_fragment::parse_fragment(&fragment).element_id;
         if let Some(src) = self.layout_source.as_mut() {
             let mut doc = src.document.lock().unwrap();
-            if fragment.is_empty() {
-                doc.set_target::<String>(None);
-            } else {
-                doc.set_target(Some(fragment.clone()));
-            }
+            doc.set_target(id_part.as_deref());
         }
         // Re-layout so :target cascade is applied.
         self.relayout();
@@ -339,10 +342,13 @@ impl Lumen {
             self.scroll_to(0.0);
             return;
         }
+        let Some(id_part) = id_part else {
+            return;
+        };
         let node_id = self
             .layout_source
             .as_ref()
-            .and_then(|src| links::find_element_by_id(&src.document.lock().unwrap(), &fragment));
+            .and_then(|src| links::find_element_by_id(&src.document.lock().unwrap(), &id_part));
         let target_rect = node_id.and_then(|nid| {
             self.layout_box.as_ref().and_then(|lb| forms::find_box_rect(lb, nid))
         });
