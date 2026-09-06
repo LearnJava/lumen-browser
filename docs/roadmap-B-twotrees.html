@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-06",
  "counts": {
-  "open": 379,
-  "fixed": 579,
+  "open": 378,
+  "fixed": 580,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -5624,9 +5624,9 @@
       {
        "id": "CSSOM-6",
        "title": "CSSOM-6: getComputedStyle(el, pseudoElt)",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "`getComputedStyle(el, pseudoElt)` игнорирует второй аргумент целиком (`crates/js/src/shim/web_api_shim_tail_b.js` — `window.getComputedStyle`, doc-комментарий прямо признаёт «not yet supported»): нет канала от JS ни к одному pseudo-box'у. Раскопка P3 2026-09-02: чинится не только проводкой — `computed_styles`/`hit_test_tree` уже несут `LayoutBox` с `origin.role == BoxRole::Pseudo(kind)` для `::before`/`::after`/`::first-line`, но у нефлоатящегося `::first-letter` (t3/t4 в `display-first-letter-001.html`) box'а нет вовсе — сегментный путь (`apply_first_letter_pseudo` правит только `InlineSegment::style`) box не создаёт. Хуже: сам читаемый `display` для `::first-letter`/`::first-line` — не «что вычислил layout», а отдельно специфицированное значение (CSS Display L3 §placement / CSS Pseudo-Elements): автору заданный `display` игнорируется целиком, используемое значение — `block`, если псевдоэлемент float/positioned, иначе `inline` (`::first-line` — всегда `inline`, float у него не бывает используемым); `::before`/`::after` в отличие от них — обычные элементы, их `display` (включая `math`/`block math`, `display-math-on-pseudo-elements-001.html`) вычисляется как есть. Нужен отдельный алгоритм «used display псевдоэлемента для чтения», не только вычитка существующего бокса — семейного размера, не точечная правка",
+       "note": "`getComputedStyle(el, pseudoElt)` игнорировал второй аргумент целиком (`crates/js/src/shim/web_api_shim_tail_b.js` — `window.getComputedStyle`). **ЗАКРЫТО 2026-09-06 (P1):** новый параллельный снапшот `lumen_layout::collect_pseudo_computed_styles` (сиблинг `collect_computed_styles`, ключ `(NodeId, имя псевдоэлемента)` — реюз общей карты был невозможен, \"первый бокс в tree order побеждает\" перепутал бы стиль элемента и его `::before`) обходит box-дерево и собирает `::before`/`::after`/`::first-line`/`::first-letter`; для нефлоатящегося `::first-letter` (сегментный путь, box'а нет) `content_to_inline_segments`/`inject_pseudo` теперь клеймят сгенерированные сегменты `PseudoKind::Before/After`, что и закрывает случай \"псевдоэлемент слит в соседний `InlineRun`, своего бокса нет\". Реализован used-display алгоритм (CSS Display L3 §placement): `::first-line` → всегда `inline`, `::first-letter` → `block` при float/absolute/fixed иначе `inline`, `::before`/`::after` — авторский `display` как есть. Нативный канал (`_lumen_get_computed_style_pseudo(nid, kind, prop)` + `..._entries`), JS-шим парсит `pseudoElt` (`::before`/`:before`/регистронезависимо) под 4 распознаваемых имени, нераспознанное — откат на стиль самого элемента (осознанно сужен скоуп: полная CSSOM-конформность `getComputedStyle-pseudo.html` — `::backdrop`/`::marker`/иммутабельность/item-based blockification — не покрыта, отдельный будущий срез при необходимости). Побочно найден и исправлен архитектурный баг: `extract_first_letter_float`/`apply_first_letter_pseudo` кладут в `origin.node`/`source_node` NodeId ТЕКСТОВОГО узла (для Selection/Range), не элемента, которому CSS атрибутирует `::first-letter`, — новый коллектор резолвит владельца через ближайший предок-бокс (`container_owner`), проброшенный по рекурсии. 3 новых теста в lumen-layout + 3 в lumen-js (v8_computedstyle), `cargo test -p lumen-layout` 3871/3871, `-p lumen-js --features v8-backend` зелёный кроме двух предсуществующих несвязанных провалов (BUG-1008 `snapshot_cpu`, BUG-997 `native_binding_panic_does_not_abort_process`), `cargo clippy --workspace --all-targets` чист. `dump_golden.py --build` — тот же предсуществующий 4/12 дрейф (BUG-1008-класс, `samples/page.html`/`65-flex-align-content.html`), не регрессия ветки",
        "bugs": [
         "BUG-490"
        ]
@@ -6315,7 +6315,7 @@
        "title": "SPLIT-PR2: femtovg_backend по командам",
        "status": "ready",
        "size": "M",
-       "note": "**Срез 1/4 закрыт** (`p1-split-pr2`): текстовый домен вынесен в `backends/femtovg_backend/text.rs` (420 строк, сиблинг-каталог рядом с файлом-модулем, тот же приём, что `parser/` рядом с `css-parser/src/parser.rs`) — `pick_family_face` + `TextRunStyle` + восемь методов `impl FemtovgBackend` (`load_font_by_path`/`resolve_font_chain`/`draw_text_run`/`measure_run_advance`/`draw_text_mixed`/`draw_text_styled`/`draw_varied_text`/`fill_glyph_path`). `lumen_to_fvg`/`rotate_cw_transform` остались в `femtovg_backend.rs` — общие для всех доменов. Три `pub(super)` для обратного потока видимости (родитель конструирует `TextRunStyle`/вызывает `draw_text_run`/`draw_text_mixed`/`load_font_by_path` из Command dispatch и `RenderBackend::set_font_provider`); поля `FemtovgBackend` остались module-private — видны из `text` вниз по дереву модулей без изменений. Тестов на перенесённые функции не было — счётчик `#[test]` не изменился (92 → 92). `femtovg_backend.rs` 7955 → 7546 строк (ещё >2000, остаётся в очереди). `cargo test -p lumen-paint` без изменений счётчика, `clippy -p lumen-paint --all-targets` чист по обоим затронутым файлам. `graphic_tests/run.py` не прогнан — харнесс Windows-only (`gdigrab`/`lumen.exe`), недоступен на Linux-машине этой сессии; правка чисто механическая (diff — только вырезка/вставка). **Срез 2–4/4 (следующие):** path/image/blend. Для paint обязателен snapshot-прогон перед мержем: текстовые `.snap` в `crates/engine/paint/tests/snapshots/` — второй набор эталонов рядом с PNG CPU-пути. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "**Срез 1/4 закрыт** (`p1-split-pr2`): текстовый домен вынесен в `backends/femtovg_backend/text.rs` (420 строк, сиблинг-каталог рядом с файлом-модулем, тот же приём, что `parser/` рядом с `css-parser/src/parser.rs`) — `pick_family_face` + `TextRunStyle` + восемь методов `impl FemtovgBackend` (`load_font_by_path`/`resolve_font_chain`/`draw_text_run`/`measure_run_advance`/`draw_text_mixed`/`draw_text_styled`/`draw_varied_text`/`fill_glyph_path`). `lumen_to_fvg`/`rotate_cw_transform` остались в `femtovg_backend.rs` — общие для всех доменов. Три `pub(super)` для обратного потока видимости (родитель конструирует `TextRunStyle`/вызывает `draw_text_run`/`draw_text_mixed`/`load_font_by_path` из Command dispatch и `RenderBackend::set_font_provider`); поля `FemtovgBackend` остались module-private — видны из `text` вниз по дереву модулей без изменений. Тестов на перенесённые функции не было — счётчик `#[test]` не изменился (92 → 92). `femtovg_backend.rs` 7955 → 7546 строк (ещё >2000, остаётся в очереди). `cargo test -p lumen-paint` без изменений счётчика, `clippy -p lumen-paint --all-targets` чист по обоим затронутым файлам. `graphic_tests/run.py` не прогнан — харнесс Windows-only (`gdigrab`/`lumen.exe`), недоступен на Linux-машине этой сессии; правка чисто механическая (diff — только вырезка/вставка). **Срез 2/4 закрыт**: path-домен вынесен в `backends/femtovg_backend/path.rs` (255 строк) — свободная функция `append_rounded_rect_outline` + пять методов `impl FemtovgBackend` (`draw_fill_rect`/`draw_fill_circle`/`draw_border_side`/`draw_fill_rounded_rect`/`draw_rounded_border_ring`). Четыре `pub(super)` — родитель вызывает их из Command dispatch (`render_command`) и из `draw_image_in_rect` (остаётся в `femtovg_backend.rs` до среза 3/4); `draw_fill_circle`/`append_rounded_rect_outline` остались module-private — используются только внутри `path.rs`. Попутно исправлен осиротевший doc-комментарий `load_font_by_path`, оставшийся в `femtovg_backend.rs` после среза 1/4 (перемещённая функция уехала без своего `///`, комментарий по ошибке остался болтаться перед `composite_filter_layer`) — вернул его на место в `text.rs`, чисто документационная правка без изменения поведения. Тестов на перенесённые функции не было — счётчик не изменился (`cargo test -p lumen-paint` 1043+29/1043+29). `femtovg_backend.rs` 7546 → 7295 строк (ещё >2000, остаётся в очереди). `cargo check -p lumen-paint --all-targets`/`-p lumen-shell` чистые; `clippy -p lumen-paint --all-targets` саму `lumen-paint` не проверяет — цепочка зависимостей падает раньше на `lumen-image`/`lumen-font` (`chunks_exact`-срабатывания, тот же дрейф тулчейна, что в срезе 1/4, идентично по main, вне диффа). `graphic_tests/run.py` не прогнан — харнесс Windows-only, недоступен на Linux-машине этой сессии; правка чисто механическая (diff — только вырезка/вставка, ноль изменений тела функций). **Срез 3–4/4 (следующие):** image/blend. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
       {
        "id": "SPLIT-DM1 ✅ DONE 2026-08-31",
@@ -7090,13 +7090,6 @@
    "status": "open",
    "title": "Инлайновый `element.style`-сеттер (`_lumen_make_style`) никогда не пропускает значение через реальный CSS-парсер — просто сохраняет сырую строку: невалидные зна…",
    "component": "js (`crates/js/src/dom.rs:4264-4302`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-490": {
-   "status": "open",
-   "title": "`getComputedStyle(el, pseudoElt)` полностью игнорирует второй аргумент (задокументировано в коде: «not yet supported (ignored)») — запрос стиля `::before`/`::af…",
-   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `window.getComputedStyle`)",
    "date": null,
    "debtor": false
   },
@@ -13607,6 +13600,13 @@
    "status": "fixed",
    "title": "Обычные (не `:host`/`::slotted`) селекторы в собственном `<style>` shadow-дерева никогда не матчатся против его собственных потомков: `compute_style` подключает…",
    "component": "layout (`crates/engine/layout/src/style/cascade.rs::compute_style`, `SHADOW_SHEETS`/`own_shadow`/`host_shadow`; `crates/engine/dom/src/lib.rs::enclosing_shadow_host`)",
+   "date": "2026-09-06",
+   "debtor": false
+  },
+  "BUG-490": {
+   "status": "fixed",
+   "title": "`getComputedStyle(el, pseudoElt)` полностью игнорировал второй аргумент. Переклассифицирован P3 2026-09-02 в ДОРАБОТКА → [CSSOM-6](ROADMAP.md) — задача закрыта,…",
+   "component": "js/layout (`crates/js/src/shim/web_api_shim_tail_b.js` — `window.getComputedStyle`; `crates/engine/layout/src/lib.rs` — `collect_pseudo_computed_styles`; `crates/js/src/v8_runtime/install/platform.rs` — `_lumen_get_computed_style_pseudo`)",
    "date": "2026-09-06",
    "debtor": false
   }
