@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-06",
  "counts": {
-  "open": 381,
-  "fixed": 577,
+  "open": 379,
+  "fixed": 579,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -6315,7 +6315,7 @@
        "title": "SPLIT-PR2: femtovg_backend по командам",
        "status": "ready",
        "size": "M",
-       "note": "`crates/engine/paint/src/backends/femtovg_backend.rs` (7 955 строк): разрез по командам — path, text, image, blend. Для paint обязателен snapshot-прогон перед мержем: текстовые `.snap` в `crates/engine/paint/tests/snapshots/` — второй набор эталонов рядом с PNG CPU-пути. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
+       "note": "**Срез 1/4 закрыт** (`p1-split-pr2`): текстовый домен вынесен в `backends/femtovg_backend/text.rs` (420 строк, сиблинг-каталог рядом с файлом-модулем, тот же приём, что `parser/` рядом с `css-parser/src/parser.rs`) — `pick_family_face` + `TextRunStyle` + восемь методов `impl FemtovgBackend` (`load_font_by_path`/`resolve_font_chain`/`draw_text_run`/`measure_run_advance`/`draw_text_mixed`/`draw_text_styled`/`draw_varied_text`/`fill_glyph_path`). `lumen_to_fvg`/`rotate_cw_transform` остались в `femtovg_backend.rs` — общие для всех доменов. Три `pub(super)` для обратного потока видимости (родитель конструирует `TextRunStyle`/вызывает `draw_text_run`/`draw_text_mixed`/`load_font_by_path` из Command dispatch и `RenderBackend::set_font_provider`); поля `FemtovgBackend` остались module-private — видны из `text` вниз по дереву модулей без изменений. Тестов на перенесённые функции не было — счётчик `#[test]` не изменился (92 → 92). `femtovg_backend.rs` 7955 → 7546 строк (ещё >2000, остаётся в очереди). `cargo test -p lumen-paint` без изменений счётчика, `clippy -p lumen-paint --all-targets` чист по обоим затронутым файлам. `graphic_tests/run.py` не прогнан — харнесс Windows-only (`gdigrab`/`lumen.exe`), недоступен на Linux-машине этой сессии; правка чисто механическая (diff — только вырезка/вставка). **Срез 2–4/4 (следующие):** path/image/blend. Для paint обязателен snapshot-прогон перед мержем: текстовые `.snap` в `crates/engine/paint/tests/snapshots/` — второй набор эталонов рядом с PNG CPU-пути. Детали — [docs/tasks/p1-monolith-split-queue.md](docs/tasks/p1-monolith-split-queue.md) §4"
       },
       {
        "id": "SPLIT-DM1 ✅ DONE 2026-08-31",
@@ -6647,10 +6647,11 @@
        "title": "GAP: Geometry Interfaces и Element.getClientRects",
        "status": "done",
        "size": "M",
-       "note": "ЗАКРЫТ 2026-09-05 (P1, ветка `p1-gap-geom-geometry-interfaces`): все шесть интерфейсов Geometry Interfaces Module — `DOMPointReadOnly`/`DOMPoint`, `DOMRectReadOnly`/`DOMRect`, `DOMRectList`, `DOMMatrixReadOnly`/`DOMMatrix` (полная 4×4 арифметика, парсер CSS `<transform-list>`, `DOMMatrixInit` validate-and-fixup), `DOMQuad`, `WebKitCSSMatrix` (алиас `DOMMatrix`) — реализованы в новом `crates/js/src/shim/geometry_shim.js`. `Element.prototype.getBoundingClientRect()` возвращает настоящий `DOMRect`; `getClientRects()`/`getBoxQuads()` заведены с однорректным фолбэком (per-fragment список через `InlineRun`/`frag[]` layout — отдельная работа, не блокирует testdriver). Попутно докручен Canvas 2D: `setTransform()` получил `DOMMatrix2DInit` validate-and-fixup + NaN/Infinity guard, добавлен `getTransform()` через JS-теневой CTM. Вне scope: `offscreen_canvas.rs` (воркерный контекст) не тронут; `rotateAxisAngle`/3D-парсинг не WPT-подтверждены (только юнит-тесты арифметики, нет сетевого доступа в сессии). Детали — [BUG-522](bugs/BUG-522-FIXED.md)/[BUG-478](bugs/BUG-478-FIXED.md).",
+       "note": "ЗАКРЫТ 2026-09-05 (P1, ветка `p1-gap-geom-geometry-interfaces`): все шесть интерфейсов Geometry Interfaces Module — `DOMPointReadOnly`/`DOMPoint`, `DOMRectReadOnly`/`DOMRect`, `DOMRectList`, `DOMMatrixReadOnly`/`DOMMatrix` (полная 4×4 арифметика, парсер CSS `<transform-list>`, `DOMMatrixInit` validate-and-fixup), `DOMQuad`, `WebKitCSSMatrix` (алиас `DOMMatrix`) — реализованы в новом `crates/js/src/shim/geometry_shim.js`. `Element.prototype.getBoundingClientRect()` возвращает настоящий `DOMRect`; `getClientRects()`/`getBoxQuads()` заведены с однорректным фолбэком (per-fragment список через `InlineRun`/`frag[]` layout — отдельная работа, не блокирует testdriver). Попутно докручен Canvas 2D: `setTransform()` получил `DOMMatrix2DInit` validate-and-fixup + NaN/Infinity guard, добавлен `getTransform()` через JS-теневой CTM. Вне scope: `offscreen_canvas.rs` (воркерный контекст) не тронут; `rotateAxisAngle`/3D-парсинг не WPT-подтверждены (только юнит-тесты арифметики, нет сетевого доступа в сессии). **Срез 2 (P1, 2026-09-05, ветка `p1-gapgeom2-per-fragment-rects`):** закрыла именно тот per-fragment остаток — `getClientRects()`/`getBoxQuads()` теперь отдают реальный список ректов (`lumen_layout::collect_client_rects`, новая параллельная `layout_rects` таблица `client_rects`, натив `_lumen_get_client_rects`), один `DOMRect`/`DOMQuad` на визуальную строку многострочного `<span>`/`<em>`/… вместо единственного объединяющего прямоугольника. Вне scope среза 2: `Range.getClientRects()` остаётся на однорректном фолбэке (нет API «текстовое смещение → рект»); `getBoxQuads()`'s `options.box`. Детали — [BUG-522](bugs/BUG-522-FIXED.md)/[BUG-478](bugs/BUG-478-FIXED.md)/[BUG-1007](bugs/BUG-1007-FIXED.md).",
        "bugs": [
         "BUG-522",
-        "BUG-478"
+        "BUG-478",
+        "BUG-1007"
        ]
       },
       {
@@ -9557,23 +9558,16 @@
    "debtor": false
   },
   "BUG-1007": {
-   "status": "open",
-   "title": "Canvas-background-propagation (CSS Backgrounds L3 §2.11.2: `<html>` без фона использует фон `<body>` для канвы) реализована деструктивной мутацией `body`'s собс…",
-   "component": "layout (`crates/engine/layout/src/box_tree/entry.rs::propagate_canvas_background`/`canvas_background_color`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`Element.prototype.getClientRects()`/`getBoxQuads()` (BUG-478) answer with a single union rect for a multi-fragment inline element instead of one `DOMRect` per…",
+   "component": "engine layout (`crates/engine/layout/src/lib.rs`), js (`crates/js/src/v8_runtime/*`, `crates/js/src/shim/web_api_shim_mid.js`), shell/driver plumbing (`crates/shell/src/*`, `crates/driver/src/session.rs`)",
+   "date": "2026-09-05",
    "debtor": false
   },
   "BUG-1008": {
    "status": "open",
    "title": "`cpu_snapshots_match_references` красный на `main` (`e11f78862`, без локальных изменений): 7 страниц расходятся — `55-text-rendering` (28713 байт), `32-list-mar…",
    "component": "test/snapshot (`crates/driver/tests/cases/snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1009": {
-   "status": "open",
-   "title": "Обычные (не `:host`/`::slotted`) селекторы в собственном `<style>` shadow-дерева никогда не матчатся против его собственных потомков: `compute_style` подключает…",
-   "component": "layout (`crates/engine/layout/src/style/cascade.rs::compute_style`, `SHADOW_SHEETS`/`own_shadow`/`host_shadow`; `crates/engine/layout/src/box_tree/entry.rs::build_shadow_sheets`)",
    "date": null,
    "debtor": false
   },
@@ -13608,6 +13602,13 @@
    "component": "css-parser/layout (`crates/engine/css-parser/src/lib.rs` — `SUPPORTED_PROPERTIES`; `style/values/misc.rs` — `BlockStepInsert`/`BlockStepAlign`/`BlockStepRound`; `style/values/length.rs` — `resolve_block_step_size`; `style/apply/layout.rs`, `style/apply/css_wide.rs`, `selector_query.rs`; JS-шим `web_api_shim_mid.js`)",
    "date": "2026-09-06",
    "debtor": false
+  },
+  "BUG-1009": {
+   "status": "fixed",
+   "title": "Обычные (не `:host`/`::slotted`) селекторы в собственном `<style>` shadow-дерева никогда не матчатся против его собственных потомков: `compute_style` подключает…",
+   "component": "layout (`crates/engine/layout/src/style/cascade.rs::compute_style`, `SHADOW_SHEETS`/`own_shadow`/`host_shadow`; `crates/engine/dom/src/lib.rs::enclosing_shadow_host`)",
+   "date": "2026-09-06",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14470,9 +14471,6 @@
    "BUG-738",
    "BUG-740"
   ],
-  "layout (`crates/engine/layout/src/box_tree/entry.rs::propagate_canvas_background`/`canvas_background_color`)": [
-   "BUG-1007"
-  ],
   "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs`)": [
    "BUG-466"
   ],
@@ -14506,7 +14504,7 @@
   "layout (`crates/engine/layout/src/style.rs`, `FONT_CH_EX` thread-local)": [
    "BUG-339"
   ],
-  "layout (`crates/engine/layout/src/style/cascade.rs::compute_style`, `SHADOW_SHEETS`/`own_shadow`/`host_shadow`; `crates/engine/layout/src/box_tree/entry.rs::build_shadow_sheets`)": [
+  "layout (`crates/engine/layout/src/style/cascade.rs::compute_style`, `SHADOW_SHEETS`/`own_shadow`/`host_shadow`; `crates/engine/dom/src/lib.rs::enclosing_shadow_host`)": [
    "BUG-1009"
   ],
   "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`": [
