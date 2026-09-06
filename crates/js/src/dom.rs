@@ -81,14 +81,42 @@ pub enum HistoryUrlUpdate {
 
 // ─── scripted font face ready for render ──────────────────────────────────────
 
-/// `(family, weight, style, decoded_sfnt_bytes)` for a script-constructed
-/// `FontFace` that became render-eligible (FONTLOAD-6, BUG-467): its bytes
-/// validated via `.load()` while it was a member of some `FontFaceSet`.
+/// Parsed CSS Fonts L4 metric-override/`font-variation-settings` descriptors
+/// from a script-constructed `FontFace`'s constructor dictionary
+/// (FONTLOAD-21, BUG-467) — the same five values FONTLOAD-11/12/13/20 already
+/// thread through for a CSS-connected `@font-face`, mirrored here so
+/// `register_from_bytes` sees identical overrides regardless of which path
+/// created the face. Grouped into one struct rather than growing
+/// [`ScriptedFontFaceEntry`] into a 9-tuple.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ScriptedFontFaceDescriptors {
+    /// `ascent-override`, CSS Fonts L4 §14.1 — `None` means "use the face's
+    /// own ascent".
+    pub ascent_override: Option<f32>,
+    /// `descent-override`, CSS Fonts L4 §14.2 — `None` means "use the face's
+    /// own descent".
+    pub descent_override: Option<f32>,
+    /// `line-gap-override`, CSS Fonts L4 §14.3 — `None` means "use the face's
+    /// own line gap".
+    pub line_gap_override: Option<f32>,
+    /// `size-adjust`, CSS Fonts L4 §14.4 — `None` means "no adjustment,
+    /// 100%".
+    pub size_adjust: Option<f32>,
+    /// `font-variation-settings`, CSS Fonts L4 §6.2/§7.4 — `(tag, value)`
+    /// pairs, empty when the descriptor is absent or `normal`.
+    pub variation_settings: Vec<([u8; 4], f32)>,
+}
+
+/// `(family, weight, style, decoded_sfnt_bytes, descriptors)` for a
+/// script-constructed `FontFace` that became render-eligible (FONTLOAD-6,
+/// BUG-467): its bytes validated via `.load()` while it was a member of some
+/// `FontFaceSet`.
 ///
 /// Queued in `pending_scripted_font_faces` during JS execution; drained by
 /// the shell in `about_to_wait` and registered into `page_font_registry`,
 /// same as a background CSS `@font-face` fetch via `LoadEvent::FontLoaded`.
-pub type ScriptedFontFaceEntry = (String, u16, lumen_core::FontStyle, Vec<u8>);
+pub type ScriptedFontFaceEntry =
+    (String, u16, lumen_core::FontStyle, Vec<u8>, ScriptedFontFaceDescriptors);
 
 // ─── Navigation API action tag ────────────────────────────────────────────────
 

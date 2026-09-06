@@ -306,7 +306,7 @@ fn js_bytes_expr(bytes: &[u8]) -> String {
 fn register_scripted_font_face_queues_valid_bytes() {
     let rt = v8_runtime_with_dom(make_doc());
     let script = format!(
-        "_lumen_register_scripted_font_face('MyAhem', '700', 'italic', {})",
+        "_lumen_register_scripted_font_face('MyAhem', '700', 'italic', {}, '{{}}')",
         js_bytes_expr(&ahem_font_bytes())
     );
     let result = rt.eval(&script).unwrap();
@@ -317,16 +317,85 @@ fn register_scripted_font_face_queues_valid_bytes() {
     assert_eq!(queued[0].1, 700);
     assert_eq!(queued[0].2, lumen_core::FontStyle::Italic);
     assert_eq!(queued[0].3, ahem_font_bytes());
+    // `size_adjust` alone defaults to `Some(1.0)`, not `None` — its grammar
+    // has no `normal` keyword (default value is literally `100%`), so a
+    // missing/malformed JSON field degrades to that string, not an absent
+    // descriptor. Numerically identical to `None` at every call site
+    // (`size_adjust.unwrap_or(1.0)`), just not `PartialEq`-equal to
+    // `ScriptedFontFaceDescriptors::default()`.
+    assert_eq!(
+        queued[0].4,
+        crate::dom::ScriptedFontFaceDescriptors { size_adjust: Some(1.0), ..Default::default() }
+    );
 }
 
 #[test]
 fn register_scripted_font_face_rejects_garbage_bytes() {
     let rt = v8_runtime_with_dom(make_doc());
     let result = rt
-        .eval("_lumen_register_scripted_font_face('Bogus', 'normal', 'normal', new Uint8Array([1,2,3,4]))")
+        .eval("_lumen_register_scripted_font_face('Bogus', 'normal', 'normal', new Uint8Array([1,2,3,4]), '{}')")
         .unwrap();
     assert_eq!(result, lumen_core::JsValue::Bool(false));
     assert!(rt.take_pending_scripted_font_faces().is_empty());
+}
+
+// FONTLOAD-21 (BUG-467): closes the gap FONTLOAD-17/20 left open — a
+// script-constructed `FontFace`'s metric-override/variation-settings
+// descriptors now reach the queue entry the shell drains into
+// `register_from_bytes`, not just `(family, weight, style, bytes)`.
+#[test]
+fn register_scripted_font_face_parses_descriptors_json() {
+    let rt = v8_runtime_with_dom(make_doc());
+    // Built via `JSON.stringify` in-script (not a hand-escaped Rust string
+    // literal) so the `"wght"`-quoted `variationSettings` value round-trips
+    // through JS's own escaping instead of a manually-nested one.
+    let script = format!(
+        r#"
+            var descriptorsJson = JSON.stringify({{
+                ascentOverride: '90%',
+                descentOverride: 'normal',
+                lineGapOverride: '10%',
+                sizeAdjust: '150%',
+                variationSettings: '"wght" 375',
+            }});
+            _lumen_register_scripted_font_face('MyAhem', '700', 'italic', {bytes}, descriptorsJson)
+        "#,
+        bytes = js_bytes_expr(&ahem_font_bytes())
+    );
+    let result = rt.eval(&script).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+    let queued = rt.take_pending_scripted_font_faces();
+    assert_eq!(queued.len(), 1);
+    let descriptors = &queued[0].4;
+    assert_eq!(descriptors.ascent_override, Some(0.9));
+    assert_eq!(descriptors.descent_override, None);
+    assert_eq!(descriptors.line_gap_override, Some(0.1));
+    assert_eq!(descriptors.size_adjust, Some(1.5));
+    assert_eq!(descriptors.variation_settings, vec![(*b"wght", 375.0)]);
+}
+
+#[test]
+fn script_constructed_font_face_registers_descriptors_from_constructor() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let script = format!(
+        r#"
+            var bytes = {bytes};
+            var f = new FontFace('ScriptAhemOverride', bytes.buffer, {{
+                ascentOverride: '80%',
+                variationSettings: '"wght" 500',
+            }});
+            document.fonts.add(f);
+            f.load();
+            f._status === 'loaded' && f._registeredForRender === true
+        "#,
+        bytes = js_bytes_expr(&ahem_font_bytes())
+    );
+    let result = rt.eval(&script).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+    let queued = rt.take_pending_scripted_font_faces();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].4.ascent_override, Some(0.8));
+    assert_eq!(queued[0].4.variation_settings, vec![(*b"wght", 500.0)]);
 }
 
 #[test]

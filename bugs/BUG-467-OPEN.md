@@ -2012,3 +2012,91 @@ CSS-connected сета требует фундамента CSSOM-4, живой W
 variation-категорий требует починки Python-окружения (P2/P5). Детали
 реализации и код — `crates/engine/font/src/variation_settings.rs`,
 `crates/engine/paint/src/renderer/glyph_raster.rs`.
+
+## FONTLOAD-21 (P1, 2026-09-06, ветка `p1-fontload21-scripted-descriptor-passthrough`) — script-constructed `FontFace`'s descriptors → рендеринг
+
+**Что сделано.** Единственный оставшийся НЕ заблокированный кандидат из
+списка «Не входит» FONTLOAD-17/20: `new FontFace(family, source,
+descriptors)`'s пять дескрипторов (`ascentOverride`/`descentOverride`/
+`lineGapOverride`/`sizeAdjust`/`variationSettings`) теперь достигают
+`register_from_bytes`, тем же путём, что уже применяется к CSS-connected
+`@font-face` (FONTLOAD-11/12/13/20) — раньше `take_pending_scripted_font_faces`
+нёс только `(family, weight, style, bytes)`, и все пять значений script-
+сконструированного лица молча отбрасывались (`about_to_wait.rs` передавала в
+`register_from_bytes` `None, None, None, None, Vec::new()` безусловно).
+
+- `crate::dom::ScriptedFontFaceDescriptors` (`crates/js/src/dom.rs`) — новая
+  структура с пятью уже РАЗОБРАННЫМИ значениями
+  (`Option<f32>` × 4 + `Vec<([u8; 4], f32)>`); `ScriptedFontFaceEntry`
+  расширен пятым элементом вместо раздувания в 9-элементный кортеж.
+- Натив `_lumen_register_scripted_font_face` (`dom_core.rs`) получил пятый
+  параметр `descriptors_json: String` — единственный практичный способ
+  протащить пять значений без превышения арности `reg!` (максимум 7, а
+  четыре слота уже заняты family/weight/style/bytes). Шим
+  (`_lumen_maybe_register_scripted_font_face`, `web_api_shim_mid.js`) строит
+  этот JSON через `JSON.stringify` из уже канонизированных строковых полей
+  `face._ascentOverride`/`._descentOverride`/`._lineGapOverride`/
+  `._sizeAdjust`/`._variationSettings` — те же, что `.load()` уже
+  провалидировала через `_lumen_font_face_validate_descriptors` (эта функция
+  и раньше гарантировала, что лицо не доходит до `_status === 'loaded'` с
+  синтаксически неверным дескриптором, так что натив может разбирать их без
+  собственной обработки ошибок).
+- Новая `parse_scripted_font_face_descriptors` (`dom_core.rs`) декодирует
+  JSON и переиспользует БЕЗ ИЗМЕНЕНИЙ `lumen_font::
+  parse_metric_override_percent`/`parse_variation_settings` — те же парсеры,
+  что CSS-connected путь уже применяет в `crates/shell/subresources.rs`.
+  Отсутствующее/битое поле деградирует в дефолт дескриптора (`"normal"` для
+  трёх overrides, `"100%"` для `sizeAdjust`), не в ошибку — тот же принцип
+  терпимости, что у остальных FONTLOAD-парсеров.
+- `about_to_wait.rs`'s drain-цикл передаёт все пять полей в
+  `register_from_bytes` вместо жёстко зашитых `None`/`Vec::new()`.
+
+**Асимметрия с CSS-connected путём (осознанная, не баг):** у
+`@font-face`-рула отсутствующий дескриптор — это `Option<String>::None`,
+которое `.and_then(parse_metric_override_percent)` замыкает в `None` без
+вызова парсера. У script-side `FontFace` дескриптор всегда материализован
+конструктором в дефолтное значение спеки (`this._sizeAdjust = ... : '100%'`)
+— отсутствующего состояния не существует, поэтому пустой JSON `{}`
+(защитный случай, на практике не встречается — шим всегда шлёт реальные
+строки) даёт для `size_adjust` результат `Some(1.0)`, а не `None`. Численно
+идентично на каждой точке потребления (`size_adjust.unwrap_or(1.0)`,
+`crates/engine/paint/src/{lib.rs,cpu_raster.rs,renderer/glyph_raster.rs}`),
+просто не `PartialEq`-равно `ScriptedFontFaceDescriptors::default()`.
+
+**Тесты:** обновлены два существующих прямых вызова натива (`
+register_scripted_font_face_queues_valid_bytes`/`_rejects_garbage_bytes`,
+`v8_fontface_shadow_custom.rs`) под новую пятиаргументную сигнатуру; два
+новых теста — `register_scripted_font_face_parses_descriptors_json` (натив
+напрямую, все пять полей, включая размер `variationSettings`) и
+`script_constructed_font_face_registers_descriptors_from_constructor`
+(сквозной — `new FontFace(..., {ascentOverride, variationSettings})` →
+`document.fonts.add` → `.load()` → очередь). `cargo test -p lumen-js
+--features v8-backend` — 3500/3501 (без регрессий среди затронутых; 1
+непричастный предсуществующий флейк BUG-997, воспроизведён и на чистом
+`main` тем же прогоном до этого среза). `cargo test -p lumen-shell --bin
+lumen --features v8` — 1730/1730 без регрессий. `cargo clippy -p lumen-js
+--features v8-backend --all-targets -- -D warnings` и `cargo clippy -p
+lumen-shell --bin lumen --all-targets --features v8 -- -D warnings` чисты.
+
+**Гейт на пиксели:** срез трогает `register_from_bytes`/`about_to_wait.rs`,
+но только на пути script-сконструированного `FontFace` — детерминированный
+корпус (`graphic_tests/`) такого пути не создаёт, и растеризация-то не
+менялась вовсе (только проводка значений, уже принимаемых
+`register_from_bytes`). `python graphic_tests/dump_golden.py --build` — 4/12
+несовпадений, байт-в-байт та же дельта высоты строки (`14.40` → `13.41`,
+BUG-1008), что и на предыдущих срезах; напрямую проверено `git stash -u` +
+повторный `dump_golden.py --build` на чистом `main` без единой строки этого
+среза — идентичные 4/12, тот же дифф. `run.py --continue-on-fail` не
+выполнялся (тот же класс окружения, не код).
+
+**Не входит:** живой WPT-замер (нет вендоренного теста на script-
+сконструированный `FontFace` с overrides — CSS Font Loading спека тестирует
+overrides только для `@font-face`); femtovg-паритет; реактивность
+CSS-connected сета (BUG-471/CSSOM-4). Этим срезом закрыт последний
+незаблокированный пункт из «Не входит» FONTLOAD-17/20 — оставшиеся два
+(реактивность CSS-connected сета, живой WPT-замер override/variation) по-
+прежнему блокированы вне периметра одного P1-среза (CSSOM-4 и P2/P5
+соответственно). Детали реализации и код — `crates/js/src/dom.rs`,
+`crates/js/src/v8_runtime/install/dom_core.rs`,
+`crates/js/src/shim/web_api_shim_mid.js`,
+`crates/shell/src/app/about_to_wait.rs`.

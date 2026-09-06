@@ -535,15 +535,25 @@ impl Lumen {
         let scripted_fonts =
             self.drain_query_js(|j| j.take_pending_scripted_font_faces()).unwrap_or_default();
         if !scripted_fonts.is_empty() {
-            for (family, weight, style, bytes) in scripted_fonts {
-                // FONTLOAD-17/20 gap (not this slice): `new FontFace(family, source,
-                // descriptors)`'s `descriptors.{ascentOverride,descentOverride,
-                // sizeAdjust,lineGapOverride,variationSettings}` never reach here —
-                // `take_pending_scripted_font_faces` only carries
-                // `(family, weight, style, bytes)`. Scripted overrides pass `None`/
-                // empty until that JS-side gap is closed.
+            for (family, weight, style, bytes, descriptors) in scripted_fonts {
+                // FONTLOAD-21: closes the FONTLOAD-17/20 gap — the shim now
+                // bundles `new FontFace(family, source, descriptors)`'s
+                // `ascentOverride`/`descentOverride`/`sizeAdjust`/
+                // `lineGapOverride`/`variationSettings` into this queue entry
+                // (parsed by `dom_core.rs::parse_scripted_font_face_descriptors`),
+                // so a script-constructed face now respects the same five
+                // descriptors a CSS-connected `@font-face` does.
                 self.page_font_registry.register_from_bytes(
-                    &family, weight, style, &[], bytes, None, None, None, None, Vec::new(),
+                    &family,
+                    weight,
+                    style,
+                    &[],
+                    bytes,
+                    descriptors.ascent_override,
+                    descriptors.descent_override,
+                    descriptors.size_adjust,
+                    descriptors.line_gap_override,
+                    descriptors.variation_settings,
                 );
             }
             if let Some(r) = self.renderer.as_mut() {

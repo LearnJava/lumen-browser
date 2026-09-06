@@ -193,16 +193,24 @@ pub(crate) fn install_document_fonts(
     // 'loaded' (BUG-467-OPEN.md, FONTLOAD-5's re-scoping note). The shim calls
     // this once a face is both validated and a member of a `FontFaceSet`
     // (`_lumen_maybe_register_scripted_font_face` in the JS shim); it queues
-    // decoded bytes for the shell to register on the next frame
-    // (`about_to_wait.rs`), same as a background CSS `@font-face` fetch does
-    // via `LoadEvent::FontLoaded` — this native never touches the registry
-    // itself, which is UI-thread-owned (ADR-016; BUG-976 is why not).
-    // CSS-connected faces are excluded by the shim (own registration path
-    // already exists), so this only ever sees genuinely script-constructed ones.
+    // decoded bytes (plus the FONTLOAD-21 descriptor bundle below) for the
+    // shell to register on the next frame (`about_to_wait.rs`), same as a
+    // background CSS `@font-face` fetch does via `LoadEvent::FontLoaded` —
+    // this native never touches the registry itself, which is UI-thread-owned
+    // (ADR-016; BUG-976 is why not). CSS-connected faces are excluded by the
+    // shim (own registration path already exists), so this only ever sees
+    // genuinely script-constructed ones.
+    //
+    // FONTLOAD-21: `descriptors_json` carries the five CSS Fonts L4 §14/§6.2
+    // descriptors (`ascentOverride`/`descentOverride`/`lineGapOverride`/
+    // `sizeAdjust`/`variationSettings`) the shim already validated at
+    // `.load()` time (`_lumen_font_face_validate_descriptors`). Bundled into
+    // one JSON string rather than five extra parameters — `reg!` tops out at
+    // arity 7, and family/weight/style/bytes already use four of those slots.
     let q = Arc::clone(&pending_scripted_font_faces);
     reg!(scope, ctx, store,
         "_lumen_register_scripted_font_face",
-        move |family: String, weight: String, style: String, bytes: Vec<u8>| -> bool {
+        move |family: String, weight: String, style: String, bytes: Vec<u8>, descriptors_json: String| -> bool {
             let decoded = lumen_font::maybe_decode_font(&bytes).ok().flatten();
             let data = decoded.unwrap_or(bytes);
             if lumen_font::Font::parse(&data).is_err() {
@@ -210,11 +218,35 @@ pub(crate) fn install_document_fonts(
             }
             let weight = parse_scripted_font_weight(&weight);
             let style = lumen_core::FontStyle::parse_keyword(&style).unwrap_or(lumen_core::FontStyle::Normal);
-            q.lock().unwrap_or_else(|e| e.into_inner()).push((family, weight, style, data));
+            let descriptors = parse_scripted_font_face_descriptors(&descriptors_json);
+            q.lock().unwrap_or_else(|e| e.into_inner()).push((family, weight, style, data, descriptors));
             true
         }
     );
     Ok(())
+}
+
+/// Decodes `_lumen_register_scripted_font_face`'s `descriptors_json` (built
+/// by the shim from `FontFace`'s already-canonicalized `_ascentOverride`/
+/// `_descentOverride`/`_lineGapOverride`/`_sizeAdjust`/`_variationSettings`
+/// string fields) into the parsed form `register_from_bytes` expects.
+/// Missing/malformed JSON or fields degrade to each descriptor's absent
+/// value (`normal`/`100%`) — same leniency `lumen_font::
+/// parse_metric_override_percent`/`parse_variation_settings` already apply on
+/// the CSS-connected path, since a script-side parse failure was already
+/// surfaced as a `.load()` rejection before this native is ever called.
+fn parse_scripted_font_face_descriptors(json: &str) -> crate::dom::ScriptedFontFaceDescriptors {
+    let v: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+    let field = |key: &str, default: &str| -> String {
+        v.get(key).and_then(|x| x.as_str()).unwrap_or(default).to_owned()
+    };
+    crate::dom::ScriptedFontFaceDescriptors {
+        ascent_override: lumen_font::parse_metric_override_percent(&field("ascentOverride", "normal")),
+        descent_override: lumen_font::parse_metric_override_percent(&field("descentOverride", "normal")),
+        line_gap_override: lumen_font::parse_metric_override_percent(&field("lineGapOverride", "normal")),
+        size_adjust: lumen_font::parse_metric_override_percent(&field("sizeAdjust", "100%")),
+        variation_settings: lumen_font::parse_variation_settings(&field("variationSettings", "normal")),
+    }
 }
 
 /// `<font-weight>` descriptor → a single `u16` for `FontRegistry`'s identity
