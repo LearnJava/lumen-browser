@@ -71,7 +71,7 @@ URL и суммарную длительность, `detail_json` всегда `
 * [BUG-400](BUG-400-FIXED.md) — `Performance` как интерфейс + `toJSON()`;
   заведён этим фиксом, там же объяснено, почему `timing`/`navigation`
   вынесены сюда.
-* [BUG-520](BUG-520-OPEN.md) — `_lumen_record_resource_timing` не
+* [BUG-520](BUG-520-FIXED.md) — `_lumen_record_resource_timing` не
   вызывается ни из одного реального пути загрузки: соседний случай
   «JS-сторона есть, данных нет», но по Resource Timing.
 * `CAPABILITIES.md` строка «Observers/Timing» — Navigation Timing уже 🟡
