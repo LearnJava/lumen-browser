@@ -452,3 +452,4 @@ mod flex_align_content;
 
 mod svg_transform_and_misc;
 mod bug341_differential;
+mod bfc_margin_collapse;
