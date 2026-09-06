@@ -85,6 +85,7 @@ impl FontRegistry {
     /// (family, weight, style) молча стирали предыдущие — реестр держал
     /// ровно один face вместо всех.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    #[allow(clippy::too_many_arguments)] // FONTLOAD-17: растёт вместе с числом override-дескрипторов CSS Fonts L4 §14, тот же прецедент, что `MultiFontMeasurer::register_family_with_overrides`
     pub fn register_from_bytes(
         &self,
         family: &str,
@@ -92,6 +93,10 @@ impl FontRegistry {
         style: FontStyle,
         unicode_range: &[UnicodeRange],
         bytes: Vec<u8>,
+        ascent_override: Option<f32>,
+        descent_override: Option<f32>,
+        size_adjust: Option<f32>,
+        line_gap_override: Option<f32>,
     ) {
         let style_str = match style {
             FontStyle::Normal => "normal",
@@ -123,6 +128,15 @@ impl FontRegistry {
             // диапазонам ОДИН файл шрифта именно чтобы поймать реализацию,
             // которая смотрит только на cmap).
             unicode_ranges: unicode_range.iter().map(|r| (r.start, r.end)).collect(),
+            // FONTLOAD-17 (BUG-467): те же четыре CSS Fonts L4 §14
+            // override-дескриптора, что FONTLOAD-11/12/13 подключили к
+            // layout-измерению (`FontFaceSlot`) — до этого среза сюда не
+            // доезжал ни один, поэтому глиф всегда растеризовался исходного
+            // размера (`bugs/BUG-467-OPEN.md`, срез FONTLOAD-16).
+            ascent_override,
+            descent_override,
+            size_adjust,
+            line_gap_override,
         };
 
         let key = family.to_ascii_lowercase();
@@ -257,7 +271,7 @@ mod tests {
     #[test]
     fn register_and_lookup() {
         let reg = FontRegistry::new();
-        reg.register_from_bytes("TestFont", 400, FontStyle::Normal, &[], make_minimal_ttf());
+        reg.register_from_bytes("TestFont", 400, FontStyle::Normal, &[], make_minimal_ttf(), None, None, None, None);
         assert_eq!(reg.custom_face_count(), 1);
 
         let faces = reg.lookup_faces("TestFont");
@@ -268,7 +282,7 @@ mod tests {
     fn read_face_bytes_returns_registered_bytes() {
         let reg = FontRegistry::new();
         let bytes = vec![1u8, 2, 3, 4];
-        reg.register_from_bytes("Foo", 700, FontStyle::Italic, &[], bytes.clone());
+        reg.register_from_bytes("Foo", 700, FontStyle::Italic, &[], bytes.clone(), None, None, None, None);
 
         let faces = reg.lookup_faces("Foo");
         let face = faces.iter().find(|f| f.weight == 700).unwrap();
@@ -281,7 +295,7 @@ mod tests {
         // указывают на одну аллокацию (буфер шрифта не копируется на каждый
         // вызов, счётчик ссылок разделяется с bytes_store и LoadedFace рендера).
         let reg = FontRegistry::new();
-        reg.register_from_bytes("Shared", 400, FontStyle::Normal, &[], vec![9, 8, 7, 6]);
+        reg.register_from_bytes("Shared", 400, FontStyle::Normal, &[], vec![9, 8, 7, 6], None, None, None, None);
         let faces = reg.lookup_faces("Shared");
         let path = faces.iter().find(|f| f.weight == 400).unwrap().path.clone();
 
@@ -299,8 +313,8 @@ mod tests {
     #[test]
     fn replace_existing_entry() {
         let reg = FontRegistry::new();
-        reg.register_from_bytes("Bar", 400, FontStyle::Normal, &[], vec![1, 2]);
-        reg.register_from_bytes("Bar", 400, FontStyle::Normal, &[], vec![3, 4]);
+        reg.register_from_bytes("Bar", 400, FontStyle::Normal, &[], vec![1, 2], None, None, None, None);
+        reg.register_from_bytes("Bar", 400, FontStyle::Normal, &[], vec![3, 4], None, None, None, None);
         // Вторая регистрация заменила первую.
         assert_eq!(reg.custom_face_count(), 1);
         let faces = reg.lookup_faces("Bar");
@@ -316,8 +330,8 @@ mod tests {
         let reg = FontRegistry::new();
         let latin = parse_unicode_ranges("U+0000-00FF");
         let cyrillic = parse_unicode_ranges("U+0400-04FF");
-        reg.register_from_bytes("Roboto", 400, FontStyle::Normal, &latin, vec![1, 2]);
-        reg.register_from_bytes("Roboto", 400, FontStyle::Normal, &cyrillic, vec![3, 4]);
+        reg.register_from_bytes("Roboto", 400, FontStyle::Normal, &latin, vec![1, 2], None, None, None, None);
+        reg.register_from_bytes("Roboto", 400, FontStyle::Normal, &cyrillic, vec![3, 4], None, None, None, None);
         assert_eq!(reg.custom_face_count(), 2, "both subsets must be kept, not just the last one");
 
         let faces = reg.lookup_faces("Roboto");
@@ -343,7 +357,7 @@ mod tests {
         // font name here would flakily pick the wrong record).
         let reg = FontRegistry::new();
         let latin = parse_unicode_ranges("U+0041-0044");
-        reg.register_from_bytes("LumenTestSubsetFamily", 400, FontStyle::Normal, &latin, vec![1, 2]);
+        reg.register_from_bytes("LumenTestSubsetFamily", 400, FontStyle::Normal, &latin, vec![1, 2], None, None, None, None);
 
         let faces = reg.lookup_faces("LumenTestSubsetFamily");
         let face = faces.iter().find(|f| f.weight == 400).unwrap();
@@ -353,7 +367,7 @@ mod tests {
     #[test]
     fn face_record_unicode_range_empty_when_descriptor_absent() {
         let reg = FontRegistry::new();
-        reg.register_from_bytes("NoRange", 400, FontStyle::Normal, &[], vec![1, 2]);
+        reg.register_from_bytes("NoRange", 400, FontStyle::Normal, &[], vec![1, 2], None, None, None, None);
 
         let faces = reg.lookup_faces("NoRange");
         let face = faces.iter().find(|f| f.weight == 400).unwrap();
@@ -366,8 +380,8 @@ mod tests {
         // must still replace-in-place, not accumulate duplicates.
         let reg = FontRegistry::new();
         let ranges = parse_unicode_ranges("U+0000-00FF");
-        reg.register_from_bytes("Bar", 400, FontStyle::Normal, &ranges, vec![1, 2]);
-        reg.register_from_bytes("Bar", 400, FontStyle::Normal, &ranges, vec![3, 4]);
+        reg.register_from_bytes("Bar", 400, FontStyle::Normal, &ranges, vec![1, 2], None, None, None, None);
+        reg.register_from_bytes("Bar", 400, FontStyle::Normal, &ranges, vec![3, 4], None, None, None, None);
         assert_eq!(reg.custom_face_count(), 1);
         let faces = reg.lookup_faces("Bar");
         assert_eq!(&*reg.read_face_bytes(&faces[0].path).unwrap(), &[3, 4][..]);
@@ -376,7 +390,7 @@ mod tests {
     #[test]
     fn lookup_is_case_insensitive() {
         let reg = FontRegistry::new();
-        reg.register_from_bytes("MyFont", 400, FontStyle::Normal, &[], make_minimal_ttf());
+        reg.register_from_bytes("MyFont", 400, FontStyle::Normal, &[], make_minimal_ttf(), None, None, None, None);
         assert!(!reg.lookup_faces("myfont").is_empty());
         assert!(!reg.lookup_faces("MYFONT").is_empty());
     }
@@ -384,7 +398,7 @@ mod tests {
     #[test]
     fn list_families_includes_custom() {
         let reg = FontRegistry::new();
-        reg.register_from_bytes("CustomSerif", 400, FontStyle::Normal, &[], make_minimal_ttf());
+        reg.register_from_bytes("CustomSerif", 400, FontStyle::Normal, &[], make_minimal_ttf(), None, None, None, None);
         let families = reg.list_families();
         assert!(families.iter().any(|f| f == "CustomSerif"));
     }

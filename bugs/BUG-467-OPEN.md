@@ -1581,3 +1581,97 @@ femtovg-паритет для (A); реактивность CSS-connected сет
 `graphic_tests` не запускался. WPT-измерение — `tests/wpt/run_smoke.py
 --binary <dev-release lumen.exe> --reftest-screenshot=fail
 /css/css-fonts/{ascent-descent-override,line-gap-override,metrics-override-normal-keyword,font-size-adjust-metrics-override,size-adjust-01,size-adjust-02,size-adjust-03}.html`.
+
+## FONTLOAD-17 (P1, 2026-09-06, ветка `p1-fontload17-override-facerecord-raster`) — проброс overrides в FaceRecord/glyph_raster.rs (wgpu) сделан и безопасен; WPT-числа не сдвинулись — найдена причина
+
+Сделан фикс, который FONTLOAD-16 оставила «не входит»: все четыре CSS Fonts L4
+§14 дескриптора (`ascent-override`/`descent-override`/`size-adjust`/
+`line-gap-override`) теперь доезжают из `FontFaceRule`/`FontFaceSlot` до
+`lumen_core::FaceRecord` (4 новых поля; `Eq` убран из derive — `f32` его не
+даёт) и далее в `lumen-paint`'s `LoadedFace`/`push_text_glyphs`
+(`crates/engine/paint/src/renderer/glyph_raster.rs`, **wgpu-бэкенд**):
+
+- `FontRegistry::register_from_bytes` расширен 4 параметрами
+  (`#[allow(clippy::too_many_arguments)]`, тот же прецедент, что
+  `MultiFontMeasurer::register_family_with_overrides`); три реальных
+  вызывающих места обновлены — `local()`-ветка `load_font_faces`
+  (`subresources.rs`, парсит те же `rule.*_override` строки, что
+  `page_pipeline.rs` уже парсит для layout-измерителя),
+  `LoadEvent::FontLoaded` (`user_event.rs`, значения уже были в событии из
+  FONTLOAD-11/12/13 — просто не доезжали дальше) и scripted-FontFace-ветка
+  (`about_to_wait.rs`, здесь честно `None` — `new FontFace(family, source,
+  descriptors)`'s `descriptors.*Override`/`sizeAdjust` не долетают вообще,
+  отдельный, незакрытый в этом срезе гэп).
+- `push_text_glyphs`: `size-adjust` премультиплицирует эффективный font-size
+  **на глиф**, а не на весь run — `pick_face_for_codepoint` внутри одного
+  run-а может резолвить разные символы в разные face-ы с разным size-adjust
+  (ровно кейс `size-adjust-01.html`: `large-font` покрывает только
+  `unicode-range: U+20,U+41-5A`, остальные символы run-а падают на
+  `sans-serif` без адъюста). Это меняет atlas size-bin/display-scale ПОГЛИФНО
+  — `TextRunStep::Glyph` получил собственное поле `display_scale` (раньше
+  кэш run-а держал один `display_scale` на весь план), иначе повторный
+  прогон из `TextRunCache` клал бы чужой масштаб.
+- `baseline_y`: `ascent-override`/`descent-override` primary-face подменяют
+  hhea `ascent`/`descent` (на уровне font units — тот же приём, что
+  `size_adjust`, сохраняет формулу байт-в-байт при отсутствии override) в
+  той самой `ascent/(ascent−descent)`-формуле, что раньше игнорировала
+  overrides целиком, хотя layout-сторона (`PrimaryFontMetrics` в
+  `crates/engine/paint/src/lib.rs`) их уже учитывала для line-box высоты —
+  ровно разрыв, который FONTLOAD-16 назвала (но не объяснила) для двух
+  малых диффов.
+- `line_gap_override` доезжает до `FaceRecord` (публичное поле, доступно
+  любому потребителю `FontProvider`), но НЕ до `LoadedFace`/растеризации —
+  там для него по-прежнему нет потребителя, та же ситуация, что у
+  layout-стороны `line_gap_px` (FONTLOAD-13: «доезжает до записи, не до
+  потребителя»).
+
+**Гейт:** `cargo clippy -p lumen-core -p lumen-font -p lumen-paint
+-p lumen-shell --all-targets -- -D warnings` — чисто (без `--profile
+dev-release`: тот профиль глушит `debug_assertions`, а часть
+`lumen-layout`'s `invariants.rs` живёт только под ними — не путать с
+регрессией, это никак не связано с этим срезом). `cargo test` по
+`lumen-core`/`lumen-font`/`lumen-paint --features backend-wgpu`/`lumen-shell`
+(font-related) — всё зелёное, включая
+`sticky_colr_font::text_run_cache_replays_identical_vertices` (главный риск
+от нового поля в `TextRunStep::Glyph`). **`graphic_tests/run.py
+--continue-on-fail`** (обязателен — срез двигает пиксели текста): дельта
+против предыдущего прогона — «Изменений нет», байт-в-байт то же самое, что
+доказывает нулевой регресс no-override-пути (ни один существующий golden не
+использует эти дескрипторы).
+
+**Повторный WPT A/B-замер теми же 7 id, что FONTLOAD-16 (после сборки
+`dev-release` с этим фиксом) дал ИДЕНТИЧНЫЕ диффы**: 540/4571/873/6950/20277
+px и оба те же PASS (`metrics-override-normal-keyword`, `size-adjust-02`) —
+байт-в-байт то же, что до среза. **Причина — не в этом фиксе, а в том, что
+`tests/wpt/run_smoke.py`'s reftest в принципе не может увидеть код
+`glyph_raster.rs`**: комментарий `executorlumen.py` (`RefTestImplementation`)
+прямо называет причину — живой wgpu-путь недетерминирован между Vulkan/DX12
+(разная антиалиасинг/блендинг на одной машине, BUG-405 срез 14), поэтому
+reftest использует `render_source_to_png` — детерминированный CPU-путь
+`cpu_raster.rs` (`lumen --ipc-server`, `_REQ_SCREENSHOT`). А `cpu_raster.rs`
+**вообще не резолвит @font-face** — его собственный doc-комментарий у
+`resolve_face_bytes` прямым текстом говорит: «real font matching
+(family/weight/style/fallback) is otherwise a GPU-renderer concern»; функция
+не принимает `FontProvider` и всегда рисует bundled Inter (либо системный
+face по имени под диагностическим `LUMEN_CPU_SYSTEM_FONTS`, тоже мимо
+`FontRegistry`). CPU-путь физически не может нести `size-adjust`/overrides —
+там нет даже базового @font-face byte-резолва, не то что unicode-range
+(FONTLOAD-9) или overrides (этот срез). FONTLOAD-16's «закрывает 3 из 5» было
+предсказанием по коду wgpu-пути, не подтверждённым замером через реально
+задействованный CPU-путь — тот же класс ошибки, что «`--screenshot` (CPU) и
+живое окно (wgpu) — независимые реализации» в CLAUDE.md Known gotchas, только
+на уровне ЦЕЛОГО font-resolution пайплайна, а не одной команды рисования.
+
+**Итог:** фикс этого среза реален, безопасен и нужен — единственный путь, где
+@font-face вообще рисуется настоящими байтами face-а (живое окно). Он не
+регрессирует ни один golden и не может ни улучшить, ни ухудшить WPT
+pass-rate этой категории, потому что WPT её не видит. **Не входит:**
+@font-face byte-резолв в `cpu_raster.rs` (unicode-range + все 4 override) —
+на порядок больше этого среза, единственный реальный путь сдвинуть WPT
+pass-rate `css/css-fonts` override-категории; причина двух малых диффов
+теперь объяснена НА УРОВНЕ WGPU-ПУТИ (ascent/descent-override не доезжали до
+baseline) — сохраняю формулировку «не раскопано» применительно к CPU-пути:
+там оба диффа объясняются гораздо более грубой причиной (нет @font-face
+вообще, не только нет overrides); `.ini`-baseline (тот же долг WPT-RUN-7
+среза 4); (D) feature/variation-settings; femtovg-паритет для (A);
+реактивность CSS-connected сета (BUG-471/CSSOM-4).

@@ -94,12 +94,22 @@ impl Lumen {
                 // добавляем в web_fonts (для relayout MultiFontMeasurer),
                 // запускаем relayout — следующий кадр использует уже загруженный шрифт.
                 eprintln!("FontLoaded: «{family}» weight={weight}");
+                // FONTLOAD-17 (BUG-467): overrides уже приезжают в этом событии
+                // (FONTLOAD-11/12/13 подключили их к `PendingWebFont`/
+                // `LoadedWebFont` для layout-измерения) — до этого среза дальше
+                // `register_from_bytes` они не доезжали, поэтому актуальная
+                // растеризация глифа их не видела (`bugs/BUG-467-OPEN.md`,
+                // срез FONTLOAD-16).
                 self.page_font_registry.register_from_bytes(
                     &family,
                     weight,
                     style,
                     &unicode_range,
                     bytes.clone(),
+                    ascent_override,
+                    descent_override,
+                    size_adjust,
+                    line_gap_override,
                 );
                 // Update renderer's font provider so GPU glyph atlas picks up the new face.
                 if let Some(r) = self.renderer.as_mut() {

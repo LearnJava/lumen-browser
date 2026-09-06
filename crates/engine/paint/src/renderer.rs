@@ -262,10 +262,18 @@ impl Renderer {
         };
         // Кандидаты: путь + байты из провайдера (@font-face virtual path)
         // либо None → fs::read в воркере + заявленный unicode-range записи
-        // (FONTLOAD-9) — иначе прогретый параллельно primary face потерял бы
-        // диапазон, который `load_face_by_record` (последовательный путь)
-        // проставил бы верно, но эта функция его опережает.
-        type PrefetchJob = (PathBuf, Option<Arc<[u8]>>, Vec<(u32, u32)>);
+        // (FONTLOAD-9) и override-дескрипторы (FONTLOAD-17) записи — иначе
+        // прогретый параллельно primary face потерял бы их, хотя
+        // `load_face_by_record` (последовательный путь) проставил бы верно,
+        // но эта функция его опережает.
+        type PrefetchJob = (
+            PathBuf,
+            Option<Arc<[u8]>>,
+            Vec<(u32, u32)>,
+            Option<f32>,
+            Option<f32>,
+            Option<f32>,
+        );
         let mut jobs: Vec<PrefetchJob> = Vec::new();
         let mut seen_keys: std::collections::HashSet<u64> = std::collections::HashSet::new();
         let mut scheduled: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
@@ -304,7 +312,14 @@ impl Renderer {
                 {
                     let mem = provider.read_face_bytes(&rec.path);
                     scheduled.insert(rec.path.clone());
-                    jobs.push((rec.path, mem, rec.unicode_ranges.clone()));
+                    jobs.push((
+                        rec.path,
+                        mem,
+                        rec.unicode_ranges.clone(),
+                        rec.ascent_override,
+                        rec.descent_override,
+                        rec.size_adjust,
+                    ));
                 }
                 break; // как в резолве: первый pick_face-хит завершает перебор
             }
@@ -329,7 +344,7 @@ impl Renderer {
                 s.spawn(|| {
                     loop {
                         let i = cursor.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some((path, mem, _)) = jobs.get(i) else {
+                        let Some((path, mem, ..)) = jobs.get(i) else {
                             break;
                         };
                         // `mem` (Arc из @font-face-реестра) клонируется как
@@ -362,13 +377,24 @@ impl Renderer {
             }
         });
 
-        for ((path, _, unicode_ranges), slot) in jobs.into_iter().zip(results) {
+        for (
+            (path, _, unicode_ranges, ascent_override, descent_override, size_adjust),
+            slot,
+        ) in jobs.into_iter().zip(results)
+        {
             let Ok(mut guard) = slot.lock() else { continue };
             let Some((bytes, metrics)) = guard.take() else {
                 continue; // битый шрифт: последовательный резолв повторит и залогирует
             };
             let id = self.faces.len();
-            self.faces.push(LoadedFace { bytes, metrics: Some(metrics), unicode_ranges });
+            self.faces.push(LoadedFace {
+                bytes,
+                metrics: Some(metrics),
+                unicode_ranges,
+                ascent_override,
+                descent_override,
+                size_adjust,
+            });
             self.face_id_by_path.insert(path, id);
         }
     }
@@ -414,6 +440,9 @@ impl Renderer {
             bytes,
             metrics: Some(metrics),
             unicode_ranges: rec.unicode_ranges.clone(),
+            ascent_override: rec.ascent_override,
+            descent_override: rec.descent_override,
+            size_adjust: rec.size_adjust,
         });
         self.face_id_by_path.insert(rec.path.clone(), id);
         Some(id)

@@ -209,9 +209,13 @@ fn read_face(path: &Path) -> Option<FaceRecord> {
         style,
         stretch,
         path: path.to_owned(),
-        // Системные шрифты не несут CSS `unicode-range` (это дескриптор
-        // @font-face) — без ограничений, FONTLOAD-9.
+        // Системные шрифты не несут CSS `unicode-range`/override-дескрипторы
+        // (это дескрипторы @font-face) — без ограничений, FONTLOAD-9/FONTLOAD-17.
         unicode_ranges: Vec::new(),
+        ascent_override: None,
+        descent_override: None,
+        size_adjust: None,
+        line_gap_override: None,
     })
 }
 
