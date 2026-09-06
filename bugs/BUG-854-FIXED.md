@@ -166,7 +166,7 @@ dev-release, Linux, коммит `c583a90b4`, `--seconds 5`, страница ж
 ### Остаток — не про `<frame>`
 
 Фрейм, вставленный **после** единственного прохода загрузки фреймов в
-`parse_and_layout`, не грузится — это [BUG-885](BUG-885-OPEN.md), и он ровно
+`parse_and_layout`, не грузится — это [BUG-885](BUG-885-FIXED.md), и он ровно
 такой же у `<iframe>`. Отсюда практическое следствие для WPT: 5 id
 `query-encoding/*?include=nested-browsing` останутся TIMEOUT, потому что
 `resolve-url.js` строит все элементы внутри `onload = function () {…}`, то есть

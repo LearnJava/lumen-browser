@@ -1,6 +1,6 @@
 # BUG-885 — фрейм, которым распоряжается скрипт, не грузится никогда: ни вставленный через `createElement`, ни парсерный, которому `src` присвоили из JS (парсерный с готовым `src` — грузится)
 
-**Статус:** OPEN (ДОРАБОТКА → [FRAME-8](../ROADMAP.md))
+**Статус:** FIXED 2026-09-06 (закрыт задачей [FRAME-8](../ROADMAP.md); ревизия P1 2026-09-06 — см. «Ревизия» в конце файла)
 **Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `FRAME-8` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 28 — живой замер, варианты `frame-parser`/`frame-late-src`)
 **Область:** shell (`crates/shell/src/main.rs:5464` — `load_frame_sub_documents` зовётся из `parse_and_layout`, т.е. один раз на разбор документа; вставка узла из JS этот путь не запускает)
@@ -108,3 +108,48 @@ HTML LS §4.8.5 «process the iframe attributes» запускается при 
 `nbc-iframe` пробы `verify_frame_load_media_gaps.py` проходят целиком), а
 `query-encoding/resources/resolve-url.js` относится — он открывается с
 `onload = function () {…}`, то есть строит все четыре элемента позже прохода.
+
+
+---
+
+## Ревизия P1, 2026-09-06 — воспроизвести не удалось, дефект закрыт
+
+Заявка помечена `ДОРАБОТКА → FRAME-8`, а FRAME-8 в `ROADMAP.md` стоит `done` —
+но никто не перепроверил саму заявку после влития задачи. Перепрогнан тот же
+инструмент, которым велось исходное измерение, тем же способом:
+
+```
+python tests/wpt/verify_window_history_jsurl_gaps.py     --binary <abs>/target/dev-release/lumen.exe     --variant frame-parser --variant frame-late-src --seconds 9
+```
+
+`frame-parser` (было: `frames=0`, сервер видел только `?from=parser`):
+
+```
+parser-frame cw=object doc=complete frames=1
+frame-parser-final frames=1 dyn-cw=object
+dynamic-frame-load
+[server saw: GET /vwjh-child.html?from=dynamic, GET /vwjh-child.html?from=parser]
+```
+
+`frame-late-src` (было: `frames=0 len=1`, `[server saw: nothing]`, ни одного
+`late-src-load-*`):
+
+```
+late-src-final frames=2 len=1
+late-src-load-bare
+late-src-load-blank
+[server saw: GET /vwjh-child.html?from=late-bare, GET /vwjh-child.html?from=late-blank]
+```
+
+Оба варианта проходят полностью, включая серверную половину — а она здесь и есть
+улика ([BUG-826](BUG-826-FIXED.md)): документ, которого нет в списке сервера,
+никто не запрашивал. Побочные наблюдения из исходного замера тоже сдвинулись:
+`doc=none` → `doc=complete`, `frames=0` → `frames=1`.
+
+**Что осталось и сюда НЕ относится:** `parent-is-self=true` внутри ребёнка
+(`window.parent === window`) по-прежнему воспроизводится — это фасад окна фрейма,
+он ведётся как [BUG-957](BUG-957-OPEN.md) и [BUG-979](BUG-979-OPEN.md).
+
+Попутно этой же ревизией найден и исправлен отдельный дефект соседней формы:
+`<iframe src="about:blank">` показывал синтетическую страницу «Не удалось
+загрузить фрейм» вместо пустого документа — [BUG-1018](BUG-1018-FIXED.md).

@@ -68,16 +68,28 @@ window.self.dpr=number:1
   предсуществующий [BUG-997](BUG-997-OPEN.md).
 - `cargo clippy -p lumen-js --features v8-backend --all-targets -- -D warnings` — чисто.
 
-## Попутные находки (этим багом НЕ закрыты)
+## Попутные находки — ИСПРАВЛЕНО 2026-09-06, две из трёх были артефактом метода
 
-Проба задела соседние дыры того же семейства — все на сборке с фиксом:
+Первая редакция этого раздела называла три соседние дыры. **Две из них не существуют:**
+они измерены headless-прогоном (`--trace-nav`), а headless-одноходовка не создаёт
+браузинговые контексты фреймов вовсе — это уже описанное свойство пути
+([docs/automation.md](../docs/automation.md) §Headless), а не поведение движка.
+Перемер в живом окне:
 
-- **`iframe.contentWindow` и `contentDocument` — `null` для `<iframe>` без `src`.**
-  По HTML такой фрейм грузит `about:blank` и обязан иметь и то, и другое.
-- **`about:` вообще не поддерживается как схема:** `iframe: загрузка 'about:blank' не
-  удалась: network error: unsupported scheme: about`.
-- **`window.frames[0]` — `undefined`** при двух `<iframe>` в документе (следствие
-  предыдущего пункта: фреймы не загрузились).
+```
+bare:  cw=object cd=object location.href=about:blank URL=about:blank
+blank: cw=object cd=object location.href=about:blank URL=about:blank
+real:  cw=object cd=object location.href=http://…/child.html
+window.length=3  frames.length=3
+```
 
-Все три относятся к дорожке FRAME и к вендоренному `css/cssom-view/devicePixelRatio-undisplayed-iframe.tentative.html`;
-заводить отдельно — решение владельца дорожки.
+- ~~`iframe.contentWindow`/`contentDocument` — `null` у `<iframe>` без `src`~~ — неверно,
+  в живом окне оба объекты.
+- ~~`window.frames[0]` — `undefined`~~ — неверно, `window.length === 3`.
+- **`about:blank` действительно обрабатывался неправильно**, но не так, как здесь было
+  написано: контекст создавался, а вот `<iframe src="about:blank">` получал
+  синтетическую страницу «Не удалось загрузить фрейм» вместо пустого документа.
+  Заведено и исправлено отдельно — [BUG-1018](BUG-1018-FIXED.md).
+
+**Урок метода:** headless-прогон — не источник утверждений о фреймах, окнах и всём,
+что живёт на событийном цикле. Проверять в живом окне прежде, чем записывать находку.
