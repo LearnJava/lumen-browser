@@ -686,6 +686,65 @@ use super::*;
         assert_eq!(s.rules.len(), 1);
     }
 
+    // ── BUG-519: unsupported nested at-rule / semicolon-in-parens must not
+    // corrupt parsing of a `@function`/`@mixin` body ───────────────────────
+
+    #[test]
+    fn function_body_keeps_result_after_unsupported_nested_at_rule() {
+        // `@supports`/`@media`/`@container` conditional group rules nested
+        // inside a `@function` body (not implemented — CSS-SPECS.md T3) have
+        // no dedicated grammar in `parse_declaration_block`, so the parser
+        // falls back to `recover_to_decl_boundary`. Before the fix, that
+        // recovery wasn't brace-depth-aware: it stopped at the nested
+        // block's own first `;` and then mistook the nested block's own `}`
+        // for the end of the whole `@function` body, silently dropping
+        // `result:` (and every top-level rule after it, in a real
+        // stylesheet).
+        let s = parse(
+            "@function --f() { \
+                 @supports (width: 100px) { --unused: 1; } \
+                 result: 5px; \
+             } \
+             div { color: red; }",
+        );
+        assert_eq!(s.function_rules.len(), 1);
+        let f = &s.function_rules[0];
+        assert_eq!(f.declarations.len(), 1, "the nested at-rule must be skipped, not kept, as a declaration");
+        assert_eq!(f.declarations[0].property, "result");
+        assert_eq!(f.declarations[0].value, "5px");
+        assert_eq!(s.rules.len(), 1, "the sibling rule after @function must still parse");
+    }
+
+    #[test]
+    fn function_body_recovers_after_deeply_nested_unsupported_at_rule() {
+        let s = parse(
+            "@function --f() { \
+                 @media (width > 0px) { @supports (color: red) { --x: 1; } } \
+                 result: PASS; \
+             }",
+        );
+        let f = &s.function_rules[0];
+        assert_eq!(f.declarations.len(), 1);
+        assert_eq!(f.declarations[0].property, "result");
+        assert_eq!(f.declarations[0].value, "PASS");
+    }
+
+    #[test]
+    fn declaration_value_semicolon_inside_parens_is_not_truncated() {
+        // CSS Values L5's `if()` uses `;` *inside* its own parens to
+        // separate branches — CSS Syntax L3 §5.4.4 only ends a value at a
+        // top-level `;`/`}`, so this must not be mistaken for the
+        // declaration's own terminator.
+        let s = parse(".box { --x: if(style(--y: 1px): PASS; else: FAIL;); width: 7px; }");
+        assert_eq!(s.rules.len(), 1);
+        let decls = &s.rules[0].declarations;
+        assert_eq!(decls.len(), 2, "the if() value must not split into two declarations");
+        assert_eq!(decls[0].property, "--x");
+        assert_eq!(decls[0].value, "if(style(--y: 1px): PASS; else: FAIL;)");
+        assert_eq!(decls[1].property, "width");
+        assert_eq!(decls[1].value, "7px");
+    }
+
     // ── @mixin / @apply / @contents tests (BUG-518) ─────────────────────────
 
     #[test]
