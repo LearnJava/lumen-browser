@@ -1640,6 +1640,50 @@ use super::*;
         assert_eq!(s.width, None);
     }
 
+    // ── BUG-519: unsupported nested at-rule inside `@function`/`@mixin` body
+    // must not corrupt parsing of the declarations after it ─────────────────
+
+    #[test]
+    fn css_function_body_recovers_after_unsupported_nested_at_rule() {
+        // `@supports`/`@media`/`@container` conditional group rules nested
+        // inside a `@function` body (CSS Functions and Mixins L1's
+        // "conditional rules", not implemented) have no dedicated grammar in
+        // `parse_declaration_block` — the parser must skip the whole nested
+        // `{ ... }` as one unit and keep parsing `result:` afterward, rather
+        // than losing track of brace depth and dropping it.
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@function --f() { \
+                 @supports (width: 100px) { --unused: 1; } \
+                 result: 5px; \
+             } \
+             .box { width: --f(); }",
+            &[0],
+        );
+        let w = s.width.expect("result: after the nested at-rule must still parse");
+        assert_eq!(w.resolve(16.0, None, Size::new(800.0, 600.0)), Some(5.0));
+    }
+
+    #[test]
+    fn css_value_with_semicolon_inside_parens_is_not_truncated() {
+        // CSS Syntax L3 §5.4.4: a declaration's value ends at a top-level
+        // `;`/`}` only — a matched `(...)` is one component value regardless
+        // of what it contains. CSS Values L5's `if()` uses `;` *inside* its
+        // own parens to separate branches, which must not end the value
+        // early (BUG-519). `--x` is deliberately unresolvable so the whole
+        // declaration is invalid either way; what this test actually checks
+        // is that `width` (which comes after) still parses at all — before
+        // the fix, the stray `else: FAIL;)` tail became a bogus second
+        // declaration that swallowed `width`'s own text.
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            ".box { --x: if(style(--y: 1px): PASS; else: FAIL;); width: 7px; }",
+            &[0],
+        );
+        let w = s.width.expect("width after an if()-valued declaration must still parse");
+        assert_eq!(w.resolve(16.0, None, Size::new(800.0, 600.0)), Some(7.0));
+    }
+
     // ── `@mixin`/`@apply`/`@contents` (BUG-518, cascade-time expansion) ─────
 
     #[test]
