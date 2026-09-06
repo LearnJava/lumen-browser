@@ -16,7 +16,7 @@ use crate::{DisplayCommand, CornerRadii};
 use crate::display_list::{ResolvedClipShape, bg_tile_geometry};
 use lumen_core::geom::Rect;
 use lumen_core::FontProvider;
-use crate::cpu_font_resolve::resolve_face;
+use crate::cpu_font_resolve::resolve_face_candidates;
 
 /// How a pushed off-screen layer is composited back onto the layer below when
 /// its group closes (`PopOpacity` / `PopTransform`).
@@ -2775,6 +2775,111 @@ fn build_face(bytes: &[u8]) -> Option<CpuFace<'_>> {
     })
 }
 
+/// One `@font-face` cascade candidate ready for itemizing/shaping (FONTLOAD-19):
+/// a parsed [`CpuFace`] plus its declared `unicode-range` (CSS Fonts L4 §5.1,
+/// empty = unrestricted) and a pre-parsed `cmap` for the per-codepoint
+/// coverage check in [`itemize_by_cascade`] — parsed once per `DrawText` run,
+/// not once per character.
+struct FaceCandidate<'a> {
+    /// Raw sfnt bytes — what [`lumen_font::TextShaper::shape`] needs (it
+    /// re-derives its own `rustybuzz::Face` from bytes, same as everywhere
+    /// else in this file).
+    bytes: &'a [u8],
+    face: CpuFace<'a>,
+    /// `(start, end)` inclusive codepoint ranges; empty = unrestricted (see
+    /// [`lumen_core::codepoint_in_face_ranges`]).
+    ranges: Vec<(u32, u32)>,
+    /// `None` when the candidate's `cmap` table itself fails to parse — such
+    /// a candidate never wins the cascade (mirrors `pick_face_for_codepoint`'s
+    /// `metrics.as_ref()?` requirement on the wgpu side).
+    cmap: Option<lumen_font::Cmap<'a>>,
+}
+
+impl<'a> FaceCandidate<'a> {
+    fn from_parts(bytes: &'a [u8], record: &Option<lumen_core::FaceRecord>) -> Option<Self> {
+        let mut face = build_face(bytes)?;
+        if let Some(r) = record {
+            face.ascent_override = r.ascent_override;
+            face.descent_override = r.descent_override;
+            face.size_adjust = r.size_adjust;
+        }
+        let ranges = record.as_ref().map(|r| r.unicode_ranges.clone()).unwrap_or_default();
+        let cmap = face.font.cmap().ok();
+        Some(Self { bytes, face, ranges, cmap })
+    }
+}
+
+/// Builds the ordered [`FaceCandidate`] cascade from
+/// [`resolve_face_candidates`]'s list — `None` if candidate 0 (the primary
+/// pick) itself fails to parse, matching the pre-FONTLOAD-19 hard failure on
+/// a corrupt/undecodable primary face. A sibling that fails to parse is
+/// dropped from the cascade instead of failing the whole draw — it just
+/// never wins [`itemize_by_cascade`].
+fn build_cascade(
+    candidates: &[(Vec<u8>, Option<lumen_core::FaceRecord>)],
+) -> Option<Vec<FaceCandidate<'_>>> {
+    let primary = FaceCandidate::from_parts(&candidates[0].0, &candidates[0].1)?;
+    let mut cascade = vec![primary];
+    for (bytes, record) in &candidates[1..] {
+        if let Some(candidate) = FaceCandidate::from_parts(bytes, record) {
+            cascade.push(candidate);
+        }
+    }
+    Some(cascade)
+}
+
+/// Splits `text` into maximal contiguous stretches assigned to one cascade
+/// candidate each, by codepoint coverage: the candidate's declared
+/// `unicode-range` must include the codepoint AND its own `cmap` must carry a
+/// real (non-`.notdef`) glyph for it. Mirrors the wgpu renderer's
+/// per-codepoint `pick_face_for_codepoint` (FONTLOAD-9/BUG-434), but resolved
+/// **before** shaping rather than per already-shaped glyph: CPU rendering
+/// runs a real `rustybuzz` shaping pass per contiguous run (unlike the wgpu
+/// path's own per-char cmap-only loop with no GSUB/GPOS), so a cascade
+/// boundary here is also a shaping boundary — a ligature cannot span two
+/// `@font-face` subsets, matching real browsers (a `unicode-range` split
+/// can't join a ligature across files either).
+///
+/// A codepoint no candidate declares falls back to candidate 0 (primary),
+/// same fallback `pick_face_for_codepoint` uses (draws `.notdef` from the
+/// primary face rather than silently picking an unrelated candidate).
+///
+/// **Fast path:** a single candidate (the overwhelming common case — no
+/// `unicode-range` subsetting on the page) returns the whole `text` as one
+/// run without inspecting a single codepoint, so a page with no BUG-434
+/// siblings pays zero itemization cost and stays byte-identical to the
+/// pre-FONTLOAD-19 single-shape path.
+fn itemize_by_cascade<'t>(text: &'t str, cascade: &[FaceCandidate]) -> Vec<(usize, &'t str)> {
+    if text.is_empty() || cascade.len() <= 1 {
+        return vec![(0, text)];
+    }
+    let mut runs = Vec::new();
+    let mut run_start = 0usize;
+    let mut run_candidate = usize::MAX;
+    for (byte_idx, ch) in text.char_indices() {
+        let cp = ch as u32;
+        let candidate = cascade
+            .iter()
+            .position(|c| {
+                lumen_core::codepoint_in_face_ranges(cp, &c.ranges)
+                    && c.cmap
+                        .as_ref()
+                        .and_then(|m| m.glyph_index(cp))
+                        .is_some_and(|g| g != 0)
+            })
+            .unwrap_or(0);
+        if run_candidate == usize::MAX {
+            run_candidate = candidate;
+        } else if candidate != run_candidate {
+            runs.push((run_candidate, &text[run_start..byte_idx]));
+            run_start = byte_idx;
+            run_candidate = candidate;
+        }
+    }
+    runs.push((run_candidate, &text[run_start..]));
+    runs
+}
+
 /// Ph3 writing-mode vertical, Срез 1 — render `text` rotated 90° clockwise
 /// (CSS Writing Modes L4 §4, `text-orientation: sideways`/`mixed`).
 ///
@@ -2840,24 +2945,19 @@ fn rasterize_text_rotated(
 }
 
 /// Measures the shaped horizontal advance of `text` without rendering —
-/// mirrors the tab/shape/advance loop in [`rasterize_text`]. Needed by
+/// mirrors the tab/itemize/shape/advance loop in [`rasterize_text`] (FONTLOAD-19:
+/// same cascade, so a unicode-range-subsetted segment advances by the same
+/// amount `rasterize_text` would draw it at). Needed by
 /// [`rasterize_text_mixed`] because a whitespace-only `Other` segment
 /// produces no ink (so [`rasterize_text`]'s returned bbox can't place it) but
 /// still has to advance the column by its real width.
 fn measure_run_advance(
-    face: &CpuFace,
-    bytes: &[u8],
+    cascade: &[FaceCandidate],
     text: &str,
     font_size: f32,
     tab_size: f32,
     font_features: &[([u8; 4], u32)],
 ) -> f32 {
-    // FONTLOAD-18 (CSS Fonts L4 §14.4): `size-adjust` premultiplies font-size
-    // before advances are computed — same formula `rasterize_text` applies,
-    // kept in sync so a whitespace-only segment advances by the same amount
-    // its sibling glyph-bearing segments do.
-    let adjusted_font_size = font_size * face.size_adjust.unwrap_or(1.0);
-    let advance_scale = adjusted_font_size / f32::from(face.units_per_em);
     let mut total = 0.0_f32;
     let mut first_segment = true;
     let segments: Vec<&str> = if tab_size > 0.0 { text.split('\t').collect() } else { vec![text] };
@@ -2869,15 +2969,26 @@ fn measure_run_advance(
         if segment.is_empty() {
             continue;
         }
-        let shaped = lumen_font::active_text_shaper().shape(
-            bytes,
-            segment,
-            lumen_core::ext::ShapeDirection::LeftToRight,
-            None,
-            font_features,
-            &[],
-        );
-        total += shaped.iter().map(|sg| sg.x_advance as f32 * advance_scale).sum::<f32>();
+        for (candidate_idx, sub_text) in itemize_by_cascade(segment, cascade) {
+            if sub_text.is_empty() {
+                continue;
+            }
+            let candidate = &cascade[candidate_idx];
+            // FONTLOAD-18 (CSS Fonts L4 §14.4): `size-adjust` premultiplies
+            // font-size before advances are computed — same formula
+            // `rasterize_text` applies per candidate.
+            let adjusted_font_size = font_size * candidate.face.size_adjust.unwrap_or(1.0);
+            let advance_scale = adjusted_font_size / f32::from(candidate.face.units_per_em);
+            let shaped = lumen_font::active_text_shaper().shape(
+                candidate.bytes,
+                sub_text,
+                lumen_core::ext::ShapeDirection::LeftToRight,
+                None,
+                font_features,
+                &[],
+            );
+            total += shaped.iter().map(|sg| sg.x_advance as f32 * advance_scale).sum::<f32>();
+        }
     }
     total
 }
@@ -2914,13 +3025,10 @@ fn rasterize_text_mixed(
     font_family: &[String],
     font_provider: Option<&dyn FontProvider>,
 ) -> Result<Option<DrawBounds>, Box<dyn std::error::Error>> {
-    let (bytes, face_record) = resolve_face(font_provider, font_family, font_weight, font_style);
-    let Some(mut face) = build_face(&bytes) else {
+    let candidates = resolve_face_candidates(font_provider, font_family, font_weight, font_style);
+    let Some(cascade) = build_cascade(&candidates) else {
         return Ok(None);
     };
-    if let Some(record) = &face_record {
-        face.size_adjust = record.size_adjust;
-    }
     let width = pixmap.width();
     let height = pixmap.height();
     let local_rect = Rect { x: 0.0, y: 0.0, width: rect.width, height: rect.height };
@@ -2949,8 +3057,7 @@ fn rasterize_text_mixed(
             }
             crate::display_list::MixedSegment::Other(s) => (s, false),
         };
-        let advance =
-            measure_run_advance(&face, &bytes, &seg_text, font_size, tab_size, font_features);
+        let advance = measure_run_advance(&cascade, &seg_text, font_size, tab_size, font_features);
         if upright {
             let dest_rect =
                 Rect { x: rect.x, y: rect.y + y_cursor, width: rect.width, height: rect.height };
@@ -3054,32 +3161,35 @@ fn rasterize_text(
         }
         _ => {}
     }
-    let (bytes, face_record) = resolve_face(font_provider, font_family, font_weight, font_style);
-    let Some(mut face) = build_face(&bytes) else {
+    // FONTLOAD-19 (CSS Fonts L4 §5.1 `unicode-range`, BUG-434): candidate 0
+    // is exactly the old single-face `resolve_face` pick; further candidates
+    // are its unicode-range siblings (subsets of the SAME declared family —
+    // see `resolve_face_candidates`), letting `itemize_by_cascade` route each
+    // sub-run of `text` to the subset that actually declares it, the same
+    // cascade the wgpu renderer already does per-codepoint (FONTLOAD-9).
+    let candidates = resolve_face_candidates(font_provider, font_family, font_weight, font_style);
+    let Some(cascade) = build_cascade(&candidates) else {
         return Ok(None);
     };
-    if let Some(record) = &face_record {
-        face.ascent_override = record.ascent_override;
-        face.descent_override = record.descent_override;
-        face.size_adjust = record.size_adjust;
-    }
+    let primary = &cascade[0];
     // CSS Fonts L4 §14 (FONTLOAD-18): mirrors `push_text_glyphs`
     // (`renderer/glyph_raster.rs`) — `ascent-override`/`descent-override`
     // replace the real hhea metrics at font-unit level (byte-identical when
-    // absent), and `size-adjust` premultiplies `font_size` before the ratio,
-    // advance scale and rasterizer size are derived from it.
-    let ascent_units = face
+    // absent). Baseline position is computed from the PRIMARY candidate only
+    // and stays fixed for the whole command — exactly like `push_text_glyphs`,
+    // which also never lets a per-glyph fallback face move the baseline.
+    let ascent_units = primary
+        .face
         .ascent_override
-        .map_or(face.ascent, |pct| pct * f32::from(face.units_per_em));
-    let descent_units = face
+        .map_or(primary.face.ascent, |pct| pct * f32::from(primary.face.units_per_em));
+    let descent_units = primary
+        .face
         .descent_override
-        .map_or(face.descent, |pct| -(pct * f32::from(face.units_per_em)));
+        .map_or(primary.face.descent, |pct| -(pct * f32::from(primary.face.units_per_em)));
     let denom = ascent_units - descent_units;
     let ascent_ratio = if denom != 0.0 { ascent_units / denom } else { 0.8 };
-    let adjusted_font_size = font_size * face.size_adjust.unwrap_or(1.0);
-    let baseline_y = rect.y + adjusted_font_size * ascent_ratio;
-    let advance_scale = adjusted_font_size / f32::from(face.units_per_em);
-    let rasterizer = lumen_font::Rasterizer::new(adjusted_font_size, face.units_per_em);
+    let primary_adjusted_font_size = font_size * primary.face.size_adjust.unwrap_or(1.0);
+    let baseline_y = rect.y + primary_adjusted_font_size * ascent_ratio;
     let bold_offset = (font_size / 24.0).clamp(0.5, 2.0);
     let synth_bold = font_weight >= 600;
     let synth_italic = !matches!(font_style, lumen_layout::FontStyle::Normal);
@@ -3119,69 +3229,88 @@ fn rasterize_text(
         if segment.is_empty() {
             continue;
         }
-        // Shape via `lumen_font::active_text_shaper()` (LIB-1/LIB-2/LIB-3):
-        // `rustybuzz`, the sole shaper since LIB-3 deleted the own GSUB/GPOS
-        // engine. No cross-family fallback within one run: a missing
-        // codepoint in `bytes` resolves to glyph 0 (.notdef) — matching the
-        // GPU renderer's `(primary, 0)` result when it too has no fallback
-        // configured. `bytes` itself is Inter by default, or the first
-        // `font_family` match against a registered `@font-face` face
-        // (FONTLOAD-18) or, failing that, the OS index under
-        // `LUMEN_CPU_SYSTEM_FONTS` (`crate::cpu_font_resolve::resolve_face`).
-        let shaped = lumen_font::active_text_shaper().shape(
-            &bytes,
-            segment,
-            lumen_core::ext::ShapeDirection::LeftToRight,
-            None,
-            font_features,
-            &[],
-        );
-        for sg in &shaped {
-            let pen_x = cursor_x + sg.x_offset as f32 * advance_scale;
-            let glyph_baseline = baseline_y - sg.y_offset as f32 * advance_scale;
-            if let Ok(Some(mut glyph)) = face.font.glyph_resolved(sg.glyph_id) {
-                if synth_italic {
-                    shear_glyph(&mut glyph);
-                }
-                if let Some(bitmap) = rasterizer.rasterize(&glyph) {
-                    // Unclipped page-px extent of this glyph bitmap (mirrors the
-                    // origin snap in `blit_glyph_coverage`).
-                    let gx0 = (pen_x + bitmap.left).round();
-                    let gy0 = (glyph_baseline - bitmap.top).round();
-                    let gb = (gx0, gy0, gx0 + bitmap.width as f32, gy0 + bitmap.height as f32);
-                    if blit_glyph_coverage(
-                        &mut mask,
-                        &bitmap,
-                        pen_x,
-                        glyph_baseline,
-                        clip,
-                        width,
-                        height,
-                    ) {
-                        any_coverage = true;
-                        mark_ink(gb, &mut ink);
+        // FONTLOAD-19: route each sub-run to the cascade candidate that
+        // actually declares it (see `itemize_by_cascade`) — a no-op split
+        // (one sub-run == the whole segment) when there's no unicode-range
+        // sibling, which is the common case.
+        for (candidate_idx, sub_text) in itemize_by_cascade(segment, &cascade) {
+            if sub_text.is_empty() {
+                continue;
+            }
+            let candidate = &cascade[candidate_idx];
+            // `size-adjust` (CSS Fonts L4 §14.4) premultiplies `font_size` for
+            // THIS candidate before advances/rasterizer size are derived from
+            // it — a fallback candidate can declare its own `size-adjust`
+            // independent of the primary's (same principle FONTLOAD-17
+            // already applies per-glyph on the wgpu side).
+            let adjusted_font_size = font_size * candidate.face.size_adjust.unwrap_or(1.0);
+            let advance_scale = adjusted_font_size / f32::from(candidate.face.units_per_em);
+            let rasterizer =
+                lumen_font::Rasterizer::new(adjusted_font_size, candidate.face.units_per_em);
+            // Shape via `lumen_font::active_text_shaper()` (LIB-1/LIB-2/LIB-3):
+            // `rustybuzz`, the sole shaper since LIB-3 deleted the own GSUB/GPOS
+            // engine. No cross-family fallback WITHIN one sub-run: a missing
+            // codepoint in `candidate.bytes` resolves to glyph 0 (.notdef) —
+            // matching the GPU renderer's `(primary, 0)` result when it too has
+            // no fallback configured. `candidate.bytes` is Inter by default, a
+            // registered `@font-face` face or one of its unicode-range siblings
+            // (FONTLOAD-18/19) or, failing that, the OS index under
+            // `LUMEN_CPU_SYSTEM_FONTS` (`crate::cpu_font_resolve::resolve_face_candidates`).
+            let shaped = lumen_font::active_text_shaper().shape(
+                candidate.bytes,
+                sub_text,
+                lumen_core::ext::ShapeDirection::LeftToRight,
+                None,
+                font_features,
+                &[],
+            );
+            for sg in &shaped {
+                let pen_x = cursor_x + sg.x_offset as f32 * advance_scale;
+                let glyph_baseline = baseline_y - sg.y_offset as f32 * advance_scale;
+                if let Ok(Some(mut glyph)) = candidate.face.font.glyph_resolved(sg.glyph_id) {
+                    if synth_italic {
+                        shear_glyph(&mut glyph);
                     }
-                    // Fake bold: second blit shifted right; the advance below
-                    // stays the same so line metrics are unchanged.
-                    if synth_bold
-                        && blit_glyph_coverage(
+                    if let Some(bitmap) = rasterizer.rasterize(&glyph) {
+                        // Unclipped page-px extent of this glyph bitmap (mirrors the
+                        // origin snap in `blit_glyph_coverage`).
+                        let gx0 = (pen_x + bitmap.left).round();
+                        let gy0 = (glyph_baseline - bitmap.top).round();
+                        let gb = (gx0, gy0, gx0 + bitmap.width as f32, gy0 + bitmap.height as f32);
+                        if blit_glyph_coverage(
                             &mut mask,
                             &bitmap,
-                            pen_x + bold_offset,
+                            pen_x,
                             glyph_baseline,
                             clip,
                             width,
                             height,
-                        )
-                    {
-                        any_coverage = true;
-                        // The bold blit re-snaps its origin; ±1px covers the
-                        // rounding drift of `bold_offset`.
-                        mark_ink((gb.0 - 1.0, gb.1, gb.2 + bold_offset + 1.0, gb.3), &mut ink);
+                        ) {
+                            any_coverage = true;
+                            mark_ink(gb, &mut ink);
+                        }
+                        // Fake bold: second blit shifted right; the advance below
+                        // stays the same so line metrics are unchanged.
+                        if synth_bold
+                            && blit_glyph_coverage(
+                                &mut mask,
+                                &bitmap,
+                                pen_x + bold_offset,
+                                glyph_baseline,
+                                clip,
+                                width,
+                                height,
+                            )
+                        {
+                            any_coverage = true;
+                            // The bold blit re-snaps its origin; ±1px covers the
+                            // rounding drift of `bold_offset`.
+                            mark_ink((gb.0 - 1.0, gb.1, gb.2 + bold_offset + 1.0, gb.3), &mut ink);
+                        }
                     }
                 }
+                cursor_x += sg.x_advance as f32 * advance_scale;
             }
-            cursor_x += sg.x_advance as f32 * advance_scale;
         }
     }
 
@@ -3976,6 +4105,128 @@ mod tests {
             count_ink(&adjusted) > count_ink(&unadjusted) * 2,
             "size-adjust: 2 must ink substantially more pixels than the default face",
         );
+    }
+
+    /// FONTLOAD-19 — mirrors the wgpu renderer's own BUG-434 unit test
+    /// (`pick_face_for_codepoint_tests::declared_range_wins_over_accidental_cmap_coverage`):
+    /// two candidates share ONE font file but declare disjoint `unicode-range`.
+    /// The declared range must win over the fact that the shared file's `cmap`
+    /// actually covers both ranges, and — unlike the wgpu per-char cascade —
+    /// the split must land on a UTF-8 char boundary usable for a real
+    /// `rustybuzz` shaping pass per sub-run.
+    #[test]
+    fn itemize_by_cascade_splits_on_declared_unicode_range() {
+        let bundled = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+        let candidate = |ranges: Vec<(u32, u32)>| {
+            let face = build_face(bundled).expect("bundled Inter must parse");
+            let cmap = face.font.cmap().ok();
+            FaceCandidate { bytes: bundled, face, ranges, cmap }
+        };
+        let cascade = vec![
+            candidate(vec![(0x41, 0x5A)]), // A-Z
+            candidate(vec![(0x61, 0x7A)]), // a-z
+        ];
+        let runs = itemize_by_cascade("AbC", &cascade);
+        assert_eq!(runs, vec![(0, "A"), (1, "b"), (0, "C")]);
+    }
+
+    /// A single candidate (the overwhelming common case — no `unicode-range`
+    /// subsetting) must return the whole text as one run without inspecting
+    /// a single codepoint — the byte-identical fast path this module's docs
+    /// promise.
+    #[test]
+    fn itemize_by_cascade_single_candidate_is_one_run() {
+        let bundled = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+        let face = build_face(bundled).expect("bundled Inter must parse");
+        let cmap = face.font.cmap().ok();
+        let cascade = vec![FaceCandidate { bytes: bundled, face, ranges: Vec::new(), cmap }];
+        let runs = itemize_by_cascade("Hello, world!", &cascade);
+        assert_eq!(runs, vec![(0, "Hello, world!")]);
+    }
+
+    /// A codepoint outside every candidate's declared range falls back to
+    /// candidate 0 (primary) — same fallback `pick_face_for_codepoint` uses
+    /// on the wgpu side (draws `.notdef` from the primary rather than
+    /// silently picking an unrelated candidate).
+    #[test]
+    fn itemize_by_cascade_falls_back_to_primary_outside_every_range() {
+        let bundled = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+        let candidate = |ranges: Vec<(u32, u32)>| {
+            let face = build_face(bundled).expect("bundled Inter must parse");
+            let cmap = face.font.cmap().ok();
+            FaceCandidate { bytes: bundled, face, ranges, cmap }
+        };
+        let cascade = vec![candidate(vec![(0x41, 0x5A)]), candidate(vec![(0x61, 0x7A)])];
+        let runs = itemize_by_cascade("!", &cascade);
+        assert_eq!(runs, vec![(0, "!")]);
+    }
+
+    /// Full-pipeline check that a `font-family` resolving to a BUG-434
+    /// unicode-range-subsetted pair still draws real ink through
+    /// [`rasterize_cpu_with_fonts`] end to end (no panic, no silently-empty
+    /// draw) — `itemize_by_cascade_splits_on_declared_unicode_range` already
+    /// proves the routing is correct; this proves the cascade actually
+    /// reaches rendering from `resolve_face_candidates` through to
+    /// `rasterize_text`'s glyph loop.
+    #[test]
+    fn draw_text_renders_through_unicode_range_sibling_cascade() {
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let bundled = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+        let registry = lumen_font::FontRegistry::new();
+        registry.register_from_bytes(
+            "SplitFont",
+            400,
+            lumen_core::FontStyle::Normal,
+            &[lumen_font::UnicodeRange { start: 0x41, end: 0x5A }], // A-Z
+            bundled.to_vec(),
+            None,
+            None,
+            None,
+            None,
+        );
+        registry.register_from_bytes(
+            "SplitFont",
+            400,
+            lumen_core::FontStyle::Normal,
+            &[lumen_font::UnicodeRange { start: 0x61, end: 0x7A }], // a-z
+            bundled.to_vec(),
+            None,
+            None,
+            None,
+            None,
+        );
+        let cmds = vec![DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
+            rect: rect(2.0, 2.0, 300.0, 80.0),
+            text: "AbC".to_string(),
+            font_size: 24.0,
+            color: black,
+            font_family: vec!["SplitFont".to_string()],
+            font_weight: lumen_layout::FontWeight::default(),
+            font_style: lumen_layout::FontStyle::default(),
+            font_variation_axes: Vec::new(),
+            font_features: Vec::new(),
+            font_palette: None,
+            tab_size: 0.0,
+            highlight_name: None,
+            text_orientation: None,
+        }];
+        let img = rasterize_cpu_with_fonts(
+            300, 80, &cmds, &[], 0.0, 0.0,
+            Some(&registry as &dyn FontProvider),
+        )
+        .expect("rasterize");
+        let mut has_ink = false;
+        'outer: for y in 0..80 {
+            for x in 0..300 {
+                let (r, g, b, _) = px(&img, x, y);
+                if r < 200 && g < 200 && b < 200 {
+                    has_ink = true;
+                    break 'outer;
+                }
+            }
+        }
+        assert!(has_ink, "cascade over unicode-range siblings must still draw real ink");
     }
 
     /// `PushOpacity { 0.5 }` around an opaque blue fill blends it 50/50 with the

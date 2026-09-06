@@ -1782,3 +1782,134 @@ WPT-путь); живой WPT A/B-замер (см. выше — блокиро�
 `crates/engine/paint/src/cpu_raster.rs`,
 `crates/engine/paint/src/renderer/frame_entry.rs`,
 `crates/shell/src/dump_mode.rs`.
+
+## FONTLOAD-19 (P1, 2026-09-06, ветка `p1-fontload19-cpu-unicode-range-cascade`) — поглифный `unicode-range`-каскад на CPU-пути
+
+Закрыла ровно gap, который FONTLOAD-18 назвала «не входит»: до этого среза
+`cpu_raster.rs::rasterize_text` резолвило РОВНО ОДИН face на весь `DrawText`
+(`resolve_face`), поэтому declarative `@font-face`-подсеты с непересекающимся
+`unicode-range` (классический паттерн — Google Fonts и подобные сервисы
+режут одно логическое семейство на несколько файлов по скрипту) на CPU-пути
+не работали вовсе: побеждал только тот подсет, который случайно выбрал
+`pick_face` (CSS Fonts L4 §5.2 weight/style-подбор ничего не знает про
+`unicode-range`), а символы вне его диапазона рисовались `.notdef` из ТОГО
+ЖЕ файла, даже если файл физически содержит нужный глиф (тот самый разрыв,
+что FONTLOAD-9 закрыла на wgpu-стороне: «объявленный диапазон обязан
+побеждать случайное покрытие cmap», BUG-434).
+
+**Находка при раскопке (важное отличие от FONTLOAD-9):** wgpu-путь
+(`push_text_glyphs`) вообще не шейпит через `rustybuzz` — это посимвольный
+цикл с прямым поиском по `cmap` и advance из `hmtx`, без кернинга/лигатур,
+поэтому там смена face-а на полпути строки не рвёт ничего структурного.
+CPU-путь, наоборот, шейпит целый сегмент ОДНИМ вызовом `rustybuzz` против
+байтов одного face-а (реальный GSUB/GPOS). Из этого следует, что каскад
+здесь обязан работать НЕ на уровне уже сформированных глифов, а ДО шейпинга:
+текст сначала разбивается («итемизируется») на подстроки по тому, какой
+кандидат покрывает кодпоинт, и только затем каждая подстрока шейпится
+`rustybuzz`-ом отдельно своим face-ом. Граница каскада становится и границей
+шейпинга — лигатура не может перекинуться через `@font-face`-подсет, что
+совпадает с поведением настоящих браузеров (`unicode-range`-разрез тоже не
+позволяет собрать лигатуру из двух файлов).
+
+**Реализация:**
+
+- `resolve_face_candidates` (`cpu_font_resolve.rs`) заменила единичный
+  `resolve_face` как основную точку резолва. Кандидат 0 — прежний
+  единственный выбор `pick_face`; дальше — его **BUG-434-сиблинги**: другие
+  `@font-face`-записи той же declared family с тем же `(weight, style,
+  stretch)` (`provider.lookup_faces(family)`, отфильтрованные ровно тем же
+  условием, что уже применяет `Renderer::resolve_face_id_uncached`
+  (`renderer.rs`) на wgpu-стороне — скопировано намеренно байт-в-байт, а не
+  переизобретено). `resolve_face` (старая единичная функция) удалена как
+  мёртвый код — оба её единственных вызывающих (`rasterize_text`,
+  `rasterize_text_mixed`) теперь берут кандидат 0 из каскада напрямую.
+- `FaceCandidate` (`cpu_raster.rs`) — распарсенный face + его declared
+  `unicode_ranges` + предпарсенный `cmap` (парсится один раз на `DrawText`,
+  не один раз на символ). `build_cascade` строит список: если кандидат 0
+  (primary) не парсится — весь draw проваливается как и раньше (сохранена
+  точная семантика pre-FONTLOAD-19 на этот угловой случай); битый сиблинг
+  просто выпадает из каскада, а не роняет весь draw.
+- `itemize_by_cascade` — тот же критерий, что `pick_face_for_codepoint`
+  (declared `unicode-range` ∩ реальный `cmap`, `.notdef` не считается
+  покрытием), но применяется ДО шейпинга и возвращает список
+  `(candidate_idx, &str)` — максимальные непрерывные подстроки одного
+  кандидата. Кодпоинт вне всех диапазонов падает на кандидата 0 (тот же
+  fallback, что у wgpu). **Быстрый путь**: один кандидат (подавляющее
+  большинство страниц — нет `unicode-range`-подсетов) возвращает весь текст
+  одним run-ом, не трогая ни одного кодпоинта — байт-в-байт то же поведение,
+  что до этого среза, нулевая цена для типичной страницы.
+- `rasterize_text`: `baseline_y` по-прежнему считается ТОЛЬКО от primary-
+  кандидата и не двигается каскадом (та же конвенция, что `push_text_glyphs`
+  уже применяет на wgpu-стороне — per-glyph fallback никогда не двигает
+  baseline). `advance_scale`/`rasterizer`/`adjusted_font_size`
+  (`size-adjust`/`ascent-override`/`descent-override`, FONTLOAD-17/18)
+  теперь считаются НА КАЖДЫЙ sub-run своего кандидата, а не один раз на
+  команду — сиблинг может нести собственный набор override-дескрипторов
+  независимо от primary.
+- `measure_run_advance` (используется `rasterize_text_mixed` для
+  вертикального `text-orientation: mixed`) переведена на тот же каскад и
+  `itemize_by_cascade`, иначе `y_cursor` разошёлся бы с тем, что реально
+  рисует `rasterize_text` для того же текста.
+
+**Тесты:** `cpu_font_resolve` — 2 новых (`siblings_with_disjoint_unicode_ranges_all_become_candidates`
+зеркалит WPT `font-face-unicode-range.html`-приём, один файл — два
+непересекающихся declared range; `sibling_with_different_weight_is_not_a_candidate`
+доказывает, что разный `weight` — это ДРУГОЙ face-подбор, а не подсет,
+и не должен течь в каскад). `cpu_raster` — 4 новых
+(`itemize_by_cascade_splits_on_declared_unicode_range` — тот же A-Z/a-z
+приём, что и wgpu-тест `declared_range_wins_over_accidental_cmap_coverage`;
+`itemize_by_cascade_single_candidate_is_one_run` — доказательство быстрого
+пути; `itemize_by_cascade_falls_back_to_primary_outside_every_range`;
+`draw_text_renders_through_unicode_range_sibling_cascade` — полный пайплайн
+через `rasterize_cpu_with_fonts`, проверяет что каскад реально доходит до
+рисования, а не только до itemize). `cargo test -p lumen-paint --features
+backend-wgpu,cpu-render --lib` — 1291/1291 (без регрессий, +6 новых),
+`cargo test -p lumen-shell --bin lumen --features v8` — 1730/1730 (без
+регрессий). `cargo clippy -p lumen-paint --features backend-wgpu,cpu-render
+--all-targets -- -D warnings` и `cargo clippy -p lumen-shell --bin lumen
+--all-targets --features v8 -- -D warnings` чисты.
+
+**Гейт на пиксели:** срез двигает текст только на путях, которых
+детерминированный корпус не декларирует (`unicode-range`-подсеты), поэтому
+ожидание — «Изменений нет» — но живое подтверждение `run.py
+--continue-on-fail` **не получено в этом срезе**: gdigrab-захват в этом
+окружении вернул 0/156 PASSED, включая сам `00-calibration` — признак
+захвата не того окна/пустого экрана, а не регрессии кода (калибровочный тест
+существует именно для отлова этого класса проблем). Результат не закоммичен
+(`graphic_tests/results/latest.json` откачен, битый JSON прогона удалён) —
+коммитить сломанный baseline испортил бы «Дельта vs предыдущий прогон» для
+всех последующих сессий. Вместо этого: `python graphic_tests/dump_golden.py`
+(`LUMEN_PROFILE=dev-release`, второй, текстовый golden-набор — CLAUDE.md
+«три golden-набора дрейфуют независимо») даёт 4 несовпадения из 12
+(`samples/page.html`, `graphic_tests/65-flex-align-content.html`), но это
+**предсуществующий дрейф, не мой**: несовпадения — чисто layout-геометрия
+(`14.40` → `13.41`, высота строки), а этот срез не касается ни
+`lumen-layout`, ни построения display list — только байты, которые
+`cpu_raster.rs` растеризует УЖЕ готовую команду `DrawText`.
+`graphic_tests/dump-golden/` последний раз перегенерирован коммитом
+`301dffa83` (2026-08-10, BUG-745) — за месяц ДО того, как FONTLOAD-15
+(`70da4860a`, 2026-09-05) реально поменяла формулу `line-height: normal`;
+`git merge-base --is-ancestor` подтверждает, что коммит golden-набора —
+предок FONTLOAD-15. Перекрёстная проверка: `cargo test -p lumen-driver
+--features v8 -- cases::snapshot_cpu` на этой ветке даёт РОВНО те же 7 файлов
+и РОВНО те же байтовые дельты (`55-text-rendering` 28713,
+`32-list-markers` 75381, `45-multiple-backgrounds` 32024,
+`51-scrollbar-rendering` 10092, `34-forms` 4734, `57-canvas-2d` 3600,
+`1000000-final` 2604), что уже задокументировано в [BUG-1008](BUG-1008-OPEN.md)
+как красное на `main` (`e11f78862` — родитель этой ветки) без каких-либо
+локальных изменений — тот же класс дрейфа («эталоны протухли от несвязанных
+P1/P3-мержей»), теперь подтверждённый и на ТРЕТЬЕМ golden-наборе
+(`graphic_tests/dump-golden/`), не только на CPU PNG-снапшотах
+`crates/driver`. Смешивать перегенерацию чужого протухшего golden-набора с
+этим срезом неверно (тот же принцип, что FONTLOAD-4 уже применяла к
+несвязанному WPT-RUN-7 долгу) — оставлено владельцу BUG-1008.
+
+**Не входит:** живой WPT/пиксельный A/B этого среза (см. выше — окружение, а
+не код); поглифный (не по подстрокам) `size-adjust`, если один шейпнутый
+sub-run когда-нибудь снова начнёт смешивать face-ы внутри себя (сейчас не
+может — граница каскада ВСЕГДА граница шейпинга); `line-gap-override`
+(по-прежнему без потребителя); femtovg-паритет; реактивность CSS-connected
+сета (BUG-471/CSSOM-4); регенерация протухших `graphic_tests/dump-golden/`/
+`graphic_tests/snapshots/cpu/` (BUG-1008, не в этом треке). Детали
+реализации и код — `crates/engine/paint/src/cpu_font_resolve.rs`,
+`crates/engine/paint/src/cpu_raster.rs`.
