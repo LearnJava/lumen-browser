@@ -613,6 +613,120 @@ fn font_face_size_adjust_default_and_rejects_normal_keyword() {
     assert_eq!(result, lumen_core::JsValue::String("ok".into()));
 }
 
+// BUG-1011: a `url()` source must not park the JS thread while the font host
+// answers. `FontFace.load()` used to call a bare `fetch()`, whose default
+// transport is synchronous, and it runs inside the load pipeline's `run-scripts`
+// phase — so one `document.fonts.load()` in a page `<head>` (google.com does
+// exactly this) held parsing, layout, paint and the first frame for the full
+// round-trip. Provider below sleeps [`SLOW_FETCH_MS`]; the assertion is that
+// `.load()` returns long before that, and settles later off the timer queue.
+const SLOW_FETCH_MS: u64 = 1500;
+
+/// Provider that stalls every request for [`SLOW_FETCH_MS`], then answers 200
+/// with real Ahem bytes, so the promise resolves rather than falling into the
+/// rejection path — this has to prove the whole async chain, not just that the
+/// caller regained control.
+struct SlowFetch {
+    /// Body every request answers with, once the stall is over.
+    body: Vec<u8>,
+}
+
+impl lumen_core::ext::JsFetchProvider for SlowFetch {
+    fn fetch_sync(
+        &self,
+        _url: &str,
+        _method: &str,
+    ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        std::thread::sleep(std::time::Duration::from_millis(SLOW_FETCH_MS));
+        Ok(lumen_core::ext::JsFetchResult {
+            status: 200,
+            status_text: "OK".into(),
+            headers: vec![],
+            body: self.body.clone(),
+        })
+    }
+
+    fn fetch_with_body_sync(
+        &self,
+        url: &str,
+        method: &str,
+        _content_type: &str,
+        _body: &[u8],
+    ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        self.fetch_sync(url, method)
+    }
+
+    fn fetch_cancellable(
+        &self,
+        url: &str,
+        method: &str,
+        _token: &lumen_core::ext::AbortToken,
+    ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        self.fetch_sync(url, method)
+    }
+
+    fn fetch_with_body_cancellable(
+        &self,
+        url: &str,
+        method: &str,
+        _content_type: &str,
+        _body: &[u8],
+        _token: &lumen_core::ext::AbortToken,
+    ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        self.fetch_sync(url, method)
+    }
+}
+
+/// [`v8_runtime_with_dom`] plus the stalling fetch provider above.
+fn v8_runtime_with_slow_fetch() -> V8JsRuntime {
+    let rt = V8JsRuntime::new().unwrap();
+    let p: Arc<dyn lumen_core::ext::JsFetchProvider> =
+        Arc::new(SlowFetch { body: ahem_font_bytes() });
+    rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false)
+        .unwrap();
+    rt
+}
+
+#[test]
+fn font_face_load_does_not_block_the_js_thread() {
+    let rt = v8_runtime_with_slow_fetch();
+    let started = std::time::Instant::now();
+    rt.eval(
+        r#"
+            var f = new FontFace('T', 'url(https://example.com/slow.woff2)');
+            globalThis.__st = 'pending';
+            f.load().then(function() { __st = 'resolved'; },
+                          function(e) { __st = e && e.name ? e.name : 'error'; });
+        "#,
+    )
+    .unwrap();
+    let blocked_for = started.elapsed();
+    assert!(
+        blocked_for < std::time::Duration::from_millis(SLOW_FETCH_MS / 2),
+        "FontFace.load() parked the JS thread for {blocked_for:?} — the fetch went down the \
+         synchronous transport again (BUG-1011)"
+    );
+    assert_eq!(rt.eval("__st").unwrap(), lumen_core::JsValue::String("pending".into()));
+
+    // …and the request really is in flight: pumping the timer queue settles it.
+    // The live window pumps exactly these two queues every frame
+    // (`crates/shell/src/app/about_to_wait.rs`); the headless one-shot modes
+    // pump neither, which is why this transport is opt-in per call site.
+    for _ in 0..600 {
+        let _ = rt.eval("_lumen_tick_timers();");
+        let _ = rt.eval("_lumen_drain_microtasks();");
+        if rt.eval("__st").unwrap() != lumen_core::JsValue::String("pending".into()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        rt.eval("__st").unwrap(),
+        lumen_core::JsValue::String("resolved".into()),
+        "the async font fetch never settled"
+    );
+}
+
 // ── Shadow DOM JS bindings ────────────────────────────────────────────────
 
 #[test]

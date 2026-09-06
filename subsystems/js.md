@@ -2283,3 +2283,16 @@ runtime or the shim. Read them before a JS/Web-API change.
   case). A probe waiting on `.onload` after (re)assigning a connected script's `.src` hangs; it is not
   testing whether the *new* URL fetches correctly, it is testing whether Lumen fetches it at all, which it
   currently does not, no matter how many times `.src` is set or what it was set to before.
+
+- **DOM shim: `fetch()` is SYNCHRONOUS unless the call site opts out** ([BUG-1011](../bugs/BUG-1011-FIXED.md),
+  2026-09-06). `_lumen_fetch` (`web_api_shim_mid_b.js`) picks its transport from the *caller's* init: a
+  live non-timeout `AbortSignal`, or the shim-internal `_lumenAsync: true`, routes to the worker-thread
+  bridge (`_lumen_fetch_async_*`); anything else parks the JS thread inside `_lumen_fetch_sync`, which has
+  no timeout of its own. That default is not a detail a new call site can ignore — scripts run inside the
+  load pipeline's `run-scripts` phase (`crates/shell/src/page_pipeline.rs`), i.e. *before* layout and
+  paint, so one blocking `fetch()` holds the first frame for the whole round trip. `FontFace.load()` did
+  exactly this and cost google.com 139 s of white screen. The flip side is why `_lumenAsync` is opt-in
+  rather than the default: the headless one-shot modes (`--screenshot`/`--trace-nav`/`--dump-*`) pump
+  neither timers nor microtasks, so a promise that settles off the poll loop never settles there at all.
+  Choose per call site: needs the bytes in hand within this script pass → sync; feeds a promise the page
+  awaits → `_lumenAsync`.
