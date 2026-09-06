@@ -10,7 +10,8 @@ use std::collections::HashMap;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
-    parse_inline_style, Declaration, PropertyRule, Specificity, Stylesheet, MIXIN_APPLY_MARKER,
+    parse_inline_style, Declaration, MixinRule, PropertyRule, Specificity, Stylesheet,
+    MIXIN_APPLY_MARKER,
 };
 use lumen_dom::{Document, DocumentMode, NodeData, NodeId};
 
@@ -754,7 +755,18 @@ pub fn compute_style(
     let layer_pri = |imp: bool, layer_idx: i32| -> i32 {
         if imp { -layer_idx } else { layer_idx }
     };
-    let mut matched: Vec<(bool, bool, i32, Specificity, usize, usize, &Declaration)> = Vec::new();
+    // (important, is_inline, layer_priority, specificity, rule_idx, decl_idx,
+    // declaration, shadow origin). The last field tracks which shadow-tree
+    // stylesheet (if any) a matched declaration physically came from — `None`
+    // for the document `sheet` (including @layer/@media/@supports/@scope/
+    // inline, all of which live in `sheet` too). Needed so `@apply` (below)
+    // can resolve `@mixin` names against the SAME stylesheet the `@apply` was
+    // written in, not always the document one — a shadow tree's own `<style>`
+    // has its own `mixin_rules`, invisible to `sheet.mixin_rules` (BUG-518
+    // mixin-shadow-dom follow-up).
+    type MatchedDecl<'a> =
+        (bool, bool, i32, Specificity, usize, usize, &'a Declaration, Option<&'a Stylesheet>);
+    let mut matched: Vec<MatchedDecl> = Vec::new();
 
 
     // Build or reuse a per-stylesheet rule index (thread-local, keyed by
@@ -785,7 +797,7 @@ pub fn compute_style(
         if let Some(spec) = best {
             for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                 let lp = layer_pri(decl.important, layer_n);
-                matched.push((decl.important, false, lp, spec, rule_idx, decl_idx, decl));
+                matched.push((decl.important, false, lp, spec, rule_idx, decl_idx, decl, None));
             }
         }
     }
@@ -824,7 +836,7 @@ pub fn compute_style(
                 let global_rule_idx = layer_rule_base + layer_rule_offset + rule_idx;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_idx);
-                    matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl));
+                    matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl, None));
                 }
             }
         }
@@ -871,7 +883,7 @@ pub fn compute_style(
                 let global_rule_idx = next_rule_idx + rule_idx;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl));
+                    matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl, None));
                 }
             }
         }
@@ -908,7 +920,7 @@ pub fn compute_style(
                 let global_rule_idx = next_rule_idx + rule_idx;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl));
+                    matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl, None));
                 }
             }
         }
@@ -939,7 +951,7 @@ pub fn compute_style(
             if let Some(spec) = best {
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, false, lp, spec, next_rule_idx, decl_idx, decl));
+                    matched.push((decl.important, false, lp, spec, next_rule_idx, decl_idx, decl, None));
                 }
             }
             next_rule_idx += 1;
@@ -992,7 +1004,7 @@ pub fn compute_style(
                 let gidx = next_rule_idx + i;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, false, lp, spec, gidx, decl_idx, decl));
+                    matched.push((decl.important, false, lp, spec, gidx, decl_idx, decl, Some(shadow)));
                 }
             }
         }
@@ -1015,7 +1027,7 @@ pub fn compute_style(
                 let gidx = base + i;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, false, lp, spec, gidx, decl_idx, decl));
+                    matched.push((decl.important, false, lp, spec, gidx, decl_idx, decl, Some(shadow)));
                 }
             }
         }
@@ -1055,7 +1067,7 @@ pub fn compute_style(
                 let gidx = base + i;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, false, lp, spec, gidx, decl_idx, decl));
+                    matched.push((decl.important, false, lp, spec, gidx, decl_idx, decl, Some(shadow)));
                 }
             }
         }
@@ -1075,9 +1087,10 @@ pub fn compute_style(
             next_rule_idx,
             decl_idx,
             decl,
+            None,
         ));
     }
-    matched.sort_by_key(|&(imp, inline, lp, spec, rule_idx, decl_idx, _)| {
+    matched.sort_by_key(|&(imp, inline, lp, spec, rule_idx, decl_idx, _, _)| {
         (imp, inline, lp, spec, rule_idx, decl_idx)
     });
     drop(prof_match);
@@ -1113,7 +1126,7 @@ pub fn compute_style(
     // every element of every real page, that nothing declares `revert-layer`/
     // `revert-rule`. One allocation-free scan first (measured: 1.4 ms per
     // chrome layout pass, ~7% of the cascade stage).
-    while matched.iter().any(|&(_, _, _, _, _, _, decl)| {
+    while matched.iter().any(|&(_, _, _, _, _, _, decl, _)| {
         let v = decl.value.trim();
         v.eq_ignore_ascii_case("revert-layer") || v.eq_ignore_ascii_case("revert-rule")
     }) {
@@ -1121,7 +1134,7 @@ pub fn compute_style(
         // Winner per property = last occurrence in the cascade-sorted vec.
         // (lp, important, rule_idx, is_revert_layer, is_revert_rule)
         let mut winners: HashMap<String, (i32, bool, usize, bool, bool)> = HashMap::new();
-        for &(imp, _inline, lp, _, rule_idx, _, decl) in &matched {
+        for &(imp, _inline, lp, _, rule_idx, _, decl, _) in &matched {
             let key = decl.property.to_ascii_lowercase();
             let v = decl.value.trim();
             let is_revert_layer = v.eq_ignore_ascii_case("revert-layer");
@@ -1141,7 +1154,7 @@ pub fn compute_style(
         if layer_targets.is_empty() && rule_targets.is_empty() {
             break;
         }
-        matched.retain(|&(imp, _inline, lp, _, rule_idx, _, decl)| {
+        matched.retain(|&(imp, _inline, lp, _, rule_idx, _, decl, _)| {
             let key = decl.property.to_ascii_lowercase();
             let hit_layer = layer_targets
                 .iter()
@@ -1173,10 +1186,10 @@ pub fn compute_style(
     // параметр только внутри ветки `kw == Revert`, которая в этом случае
     // гарантированно не сработает ни для одной декларации.
     let ua_baseline_font_size = style.font_size;
-    let needs_ua_baseline = matched.iter().any(|&(_, _, _, _, _, _, decl)| {
+    let needs_ua_baseline = matched.iter().any(|&(_, _, _, _, _, _, decl, _)| {
         decl.value.trim().eq_ignore_ascii_case("revert")
     }) || (
-        matched.iter().any(|&(_, _, _, _, _, _, decl)| decl.value.contains("var("))
+        matched.iter().any(|&(_, _, _, _, _, _, decl, _)| decl.value.contains("var("))
             && inherited.custom_props.values().any(|v| v.trim().eq_ignore_ascii_case("revert"))
     );
     let ua_baseline_storage: Option<ComputedStyle> = needs_ua_baseline.then(|| style.clone());
@@ -1203,7 +1216,7 @@ pub fn compute_style(
     // значение (родительское inherited или initial-value) остаётся.
     // value, содержащее `var(`, пропускается без валидации — резолв
     // происходит позже, и итоговая строка может быть валидной.
-    for (_, _, _, _, _, _, decl) in &matched {
+    for (_, _, _, _, _, _, decl, _) in &matched {
         if let Some(name) = decl.property.strip_prefix("--") {
             let key = format!("--{name}");
             if let Some(prop_rule) = registry.get(key.as_str())
@@ -1231,7 +1244,7 @@ pub fn compute_style(
     // before any other length is resolved, because it multiplies all of them.
     // `matched` is cascade-sorted, so the last parseable declaration wins.
     let mut own_zoom = 1.0f32;
-    for (_, _, _, _, _, _, decl) in &matched {
+    for (_, _, _, _, _, _, decl, _) in &matched {
         if decl.property.eq_ignore_ascii_case("zoom")
             && let Some(z) = parse_zoom(&decl.value)
         {
@@ -1246,7 +1259,7 @@ pub fn compute_style(
     // below. No declaration applies → the value is the inherited (or UA-hinted
     // `em`) one, i.e. parent-relative.
     let mut fs_basis = FontSizeBasis::ParentRelative;
-    for (_, _, _, _, _, _, decl) in &matched {
+    for (_, _, _, _, _, _, decl, _) in &matched {
         if let Some(basis) =
             apply_font_size(&mut style, decl, parent_fs, ua_baseline_font_size, viewport, is_quirks)
         {
@@ -1269,7 +1282,7 @@ pub fn compute_style(
     // цвета (Canvas, ButtonFace, …) резолвились против правильной темы
     // ещё в ходе main-pass (для поля `color: Color`; CssColor-поля
     // резолвятся отдельным post-pass в конце compute_style).
-    for (_, _, _, _, _, _, decl) in &matched {
+    for (_, _, _, _, _, _, decl, _) in &matched {
         if decl.property.eq_ignore_ascii_case("color-scheme") {
             apply_declaration(&mut style, decl, parent_fs, viewport, FontWeight::NORMAL, inherited, ua_baseline_ref, is_quirks, dark_mode);
         }
@@ -1294,7 +1307,7 @@ pub fn compute_style(
     // *before* the author cascade. Stripping after the cascade clobbered
     // author-specified border/background/padding (BUG-211).
     let mut appearance_none = false;
-    for (_, _, _, _, _, _, decl) in &matched {
+    for (_, _, _, _, _, _, decl, _) in &matched {
         match decl.property.as_str() {
             "appearance" | "-webkit-appearance" | "-moz-appearance" => {
                 appearance_none = decl.value.trim().eq_ignore_ascii_case("none");
@@ -1306,7 +1319,7 @@ pub fn compute_style(
         strip_ua_appearance_box_styling(doc, node, &mut style);
     }
 
-    for (_, _, _, _, _, _, decl) in &matched {
+    for (_, _, _, _, _, _, decl, shadow_origin) in &matched {
         // CSS Cascade L5 §6.4.6 / §revert-rule-keyword: a `revert-layer`/
         // `revert-rule` declaration that survived the pre-pass was overridden
         // by a higher layer/rule for the same property, so it has no effect —
@@ -1323,10 +1336,35 @@ pub fn compute_style(
         // misparse the marker's raw-text payload. Gated on `mixin_rules`
         // being non-empty, same reasoning as the `function_rules` gate below.
         if decl.property == MIXIN_APPLY_MARKER {
-            if !sheet.mixin_rules.is_empty()
+            // A `@apply` written inside a shadow tree's own `<style>` must see
+            // that tree's OWN `@mixin`s first — `SHADOW_SHEETS[host]` is a
+            // stylesheet the document-level `sheet.mixin_rules` never sees
+            // (BUG-518 mixin-shadow-dom follow-up, `mixin-shadow-dom.html`'s
+            // "Style in shadow DOM should have access to inside mixins").
+            // Falling back to the document's own mixins afterwards keeps the
+            // opposite direction working too (an outer mixin, invoked from
+            // inside a shadow tree, `mixin-shadow-dom.html`'s "...to outside
+            // non-adopted mixins") — `expand_apply_rule`'s name lookup takes
+            // the first match, so listing the shadow's own rules first gives
+            // them precedence over a same-named outer one, matching how a
+            // shadow tree's own declarations already shadow inherited ones.
+            let combined_mixins: Vec<MixinRule>;
+            let mixins: &[MixinRule] = match shadow_origin {
+                Some(shadow) if !shadow.mixin_rules.is_empty() => {
+                    combined_mixins = shadow
+                        .mixin_rules
+                        .iter()
+                        .chain(sheet.mixin_rules.iter())
+                        .cloned()
+                        .collect();
+                    &combined_mixins
+                }
+                _ => &sheet.mixin_rules,
+            };
+            if !mixins.is_empty()
                 && let Some(expanded) = expand_mixin_apply(
                     &decl.value,
-                    &sheet.mixin_rules,
+                    mixins,
                     &sheet.layer_order,
                     &sheet.function_rules,
                     &style.custom_props,
