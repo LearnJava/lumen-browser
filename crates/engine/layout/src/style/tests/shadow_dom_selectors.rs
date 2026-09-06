@@ -236,3 +236,71 @@
         assert_ne!((s.color.r, s.color.g, s.color.b), (255, 0, 0),
             "::slotted(.other) must not match span with class=item");
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // BUG-518 mixin-shadow-dom.html follow-up — `@apply` written inside a
+    // shadow tree's own `<style>` must resolve `@mixin` names against that
+    // tree's own `mixin_rules` (SHADOW_SHEETS[host]), not only the
+    // document-level `sheet` — the two are separate `Stylesheet`s (BUG-1009's
+    // fix gave a shadow-interior element access to its OWN tree's plain
+    // selectors; this closes the matching gap for that tree's OWN mixins).
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn apply_inside_shadow_sees_outside_mixin() {
+        // mixin-shadow-dom.html #e1: "Style in shadow DOM should have access
+        // to outside non-adopted mixins" — `@mixin` declared in the document's
+        // own <style>, `@apply`'d from a rule inside the shadow tree.
+        let (doc, host, e1) = make_shadow_host_with_interior_child();
+        install_shadow_sheet(host, "#e1 { color: red; @apply --exists-only-outside-shadow; }");
+        let sheet = lumen_css_parser::parse(
+            "@mixin --exists-only-outside-shadow() { @result { color: green; } }",
+        );
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, e1, &sheet, &root, VP, false);
+        clear_shadow_sheets();
+        assert_eq!((s.color.r, s.color.g, s.color.b), (0, 128, 0),
+            "@apply inside a shadow tree must see a mixin declared outside it");
+    }
+
+    #[test]
+    fn apply_inside_shadow_sees_own_shadow_mixin() {
+        // mixin-shadow-dom.html #e2: "Style in shadow DOM should have access
+        // to inside mixins" — both the `@apply`-bearing rule and the `@mixin`
+        // itself live in the SAME shadow tree's own stylesheet (two <style>
+        // elements inside one shadow root are concatenated into one
+        // Stylesheet by `build_shadow_sheets`, mirrored here in one `parse`).
+        let (doc, host, e1) = make_shadow_host_with_interior_child();
+        install_shadow_sheet(
+            host,
+            "#e1 { color: red; @apply --m1; } @mixin --m1() { @result { color: green; } }",
+        );
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, e1, &Stylesheet::default(), &root, VP, false);
+        clear_shadow_sheets();
+        assert_eq!((s.color.r, s.color.g, s.color.b), (0, 128, 0),
+            "@apply inside a shadow tree must see a mixin declared in that same tree");
+    }
+
+    #[test]
+    fn apply_outside_shadow_does_not_see_inside_mixin() {
+        // mixin-shadow-dom.html #e4: "Style outside shadow DOM should _not_
+        // have access to inside mixins" — `@mixin` declared only inside a
+        // shadow tree's own <style> must stay invisible to a light-DOM
+        // `@apply` naming it; the unresolved `@apply` is a no-op, so the
+        // element keeps its own directly-declared `color: green`.
+        let (mut doc, host) = make_shadow_host();
+        install_shadow_sheet(host, "@mixin --in-shadow() { @result { color: red; } }");
+        let sheet = lumen_css_parser::parse("#e4 { color: green; @apply --in-shadow; }");
+        let body = doc.body().expect("body");
+        let e4 = doc.create_element(lumen_dom::QualName::html("div"));
+        if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(e4).data {
+            attrs.push(lumen_dom::Attribute { name: lumen_dom::QualName::html("id"), value: "e4".into() });
+        }
+        doc.append_child(body, e4);
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, e4, &sheet, &root, VP, false);
+        clear_shadow_sheets();
+        assert_eq!((s.color.r, s.color.g, s.color.b), (0, 128, 0),
+            "@apply outside a shadow tree must not see a mixin declared only inside it");
+    }
