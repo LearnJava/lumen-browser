@@ -8405,6 +8405,13 @@ Object.defineProperties(FontFaceSet.prototype, {
 // the shell already registers those through its own `@font-face`
 // background-fetch pipeline (`LoadEvent::FontLoaded`), so this would just
 // duplicate that registration with a second, redundant path.
+//
+// FONTLOAD-21: also passes the five CSS Fonts L4 §14/§6.2 descriptors
+// (already canonicalized strings — `.load()` already validated them via
+// `_lumen_font_face_validate_descriptors`, or this face would never have
+// reached `_status === 'loaded'`) as one JSON string, closing the gap
+// FONTLOAD-17/20 left open (`descriptors.{ascentOverride,descentOverride,
+// sizeAdjust,lineGapOverride,variationSettings}` never reached the registry).
 function _lumen_maybe_register_scripted_font_face(face) {
     if (face._cssConnected || face._registeredForRender) return;
     if (face._status !== 'loaded' || !face._loadedBytes) return;
@@ -8412,7 +8419,14 @@ function _lumen_maybe_register_scripted_font_face(face) {
     if (!owners || owners.length === 0) return;
     face._registeredForRender = true;
     try {
-        _lumen_register_scripted_font_face(face._family, face._weight, face._style, face._loadedBytes);
+        var descriptorsJson = JSON.stringify({
+            ascentOverride: face._ascentOverride,
+            descentOverride: face._descentOverride,
+            lineGapOverride: face._lineGapOverride,
+            sizeAdjust: face._sizeAdjust,
+            variationSettings: face._variationSettings,
+        });
+        _lumen_register_scripted_font_face(face._family, face._weight, face._style, face._loadedBytes, descriptorsJson);
     } catch (e) {}
 }
 FontFaceSet.prototype.has = function(v) { return this._members.has(v); };

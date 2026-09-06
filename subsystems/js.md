@@ -1772,13 +1772,21 @@ the time — read dates.
   native, `_lumen_register_scripted_font_face` (`dom_core.rs`), which
   decodes/validates via the same `lumen_font::{maybe_decode_font, Font::parse}`
   pair `_lumen_font_validate_bytes` uses and pushes `(family, weight, style,
-  bytes)` onto `V8JsRuntime::pending_scripted_font_faces` — this native
-  cannot register into `FontRegistry` directly (UI-thread-owned, ADR-016;
-  BUG-976), so the shell drains the queue once per frame
+  bytes, descriptors)` onto `V8JsRuntime::pending_scripted_font_faces` — this
+  native cannot register into `FontRegistry` directly (UI-thread-owned,
+  ADR-016; BUG-976), so the shell drains the queue once per frame
   (`crates/shell/src/app/about_to_wait.rs`) and calls
   `page_font_registry.register_from_bytes` itself, same as a background CSS
   `@font-face` fetch does via `LoadEvent::FontLoaded`. `_cssConnected` faces
-  are explicitly excluded — they already have that path. **FONTLOAD-7**
+  are explicitly excluded — they already have that path. **FONTLOAD-21**
+  (2026-09-06) added the fifth field: the shim passes `ascentOverride`/
+  `descentOverride`/`lineGapOverride`/`sizeAdjust`/`variationSettings` as one
+  `JSON.stringify`-built string (a fifth native parameter would be fine —
+  `reg!` allows up to 7 — but bundling avoids five near-identical percent-
+  string params); `parse_scripted_font_face_descriptors` (`dom_core.rs`)
+  decodes it with the same `lumen_font::parse_metric_override_percent`/
+  `parse_variation_settings` the CSS-connected path already uses
+  (`crates/shell/subresources.rs`). **FONTLOAD-7**
   (2026-09-05) closed descriptor grammar validation for the constructor/
   getter/setter surface (not rendering — see below): `unicodeRange`/
   `featureSettings`/`variationSettings` now parse and canonicalize eagerly at
