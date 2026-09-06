@@ -55,7 +55,7 @@ activation behaviour, — и по завершении диспетчериза�
 Маркера в `timeout_audit.py` намеренно нет: остаточные id
 `html/semantics/forms/the-label-element/*` ждут либо `<iframe>`
 ([BUG-480](BUG-480-OPEN.md)), либо реального пользовательского клика через
-`test_driver` ([BUG-810](BUG-810-OPEN.md)), так что отдельного правила по
+`test_driver` ([BUG-810](BUG-810-FIXED.md)), так что отдельного правила по
 исходнику не выводится. Заводится по прямому замеру.
 
 Вне WPT это заметно почти на каждой странице: `<label><span>…</span></label>`,
