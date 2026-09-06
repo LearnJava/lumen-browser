@@ -54,6 +54,18 @@ impl<'a> Parser<'a> {
         decls
     }
 
+    /// Skips a malformed/unrecognized declaration up to the next `;` or `}`.
+    /// If the malformed text turns out to be a brace-delimited block instead
+    /// — e.g. `@supports (...) { result: PASS; }` inside a `@function`/
+    /// `@mixin` body, which `parse_declaration_block` has no dedicated
+    /// grammar for — skips that whole matched block via [`Self::skip_block`]
+    /// and stops right there instead of continuing to scan for a trailing
+    /// `;`: the declaration that legitimately follows the block must be left
+    /// for the caller's own loop to parse, not swallowed into this recovery
+    /// too (BUG-519 — a naive depth-0-`;`-or-`}` scan would eat exactly that
+    /// following declaration, since a `;` inside the block no longer stops
+    /// it once brace nesting is tracked, but the text after the block still
+    /// ends in its own `;`).
     pub(crate) fn recover_to_decl_boundary(&mut self) {
         while let Some(c) = self.peek() {
             match c {
@@ -62,6 +74,11 @@ impl<'a> Parser<'a> {
                     return;
                 }
                 '}' => return,
+                '{' => {
+                    self.consume();
+                    self.skip_block();
+                    return;
+                }
                 _ => {
                     self.consume();
                 }
@@ -86,12 +103,21 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// CSS Syntax L3 §5.4.4 "consume a declaration's value" treats `;`/`}`
+    /// as a terminator only at nesting depth 0 — a value is a sequence of
+    /// component values, and a matched `(...)`/`[...]` is itself one
+    /// component value regardless of what it contains. Without this, CSS
+    /// Values L5's `if(<condition>: <value>; else: <value>;)` (whose own
+    /// grammar uses `;` *inside* its parens to separate branches) gets
+    /// truncated at the first branch's `;`, leaving the rest of the `if()`
+    /// call to be misparsed as a bogus second declaration (BUG-519).
     pub(crate) fn parse_value_until_terminator(&mut self) -> String {
         let mut s = String::new();
         let mut in_string: Option<char> = None;
+        let mut depth: u32 = 0;
         while let Some(c) = self.peek() {
             match (in_string, c) {
-                (None, ';') | (None, '}') => break,
+                (None, ';') | (None, '}') if depth == 0 => break,
                 (Some(q), c) if c == q => {
                     self.consume();
                     s.push(c);
@@ -101,6 +127,16 @@ impl<'a> Parser<'a> {
                     self.consume();
                     s.push(c);
                     in_string = Some(c);
+                }
+                (None, '(') | (None, '[') => {
+                    depth += 1;
+                    self.consume();
+                    s.push(c);
+                }
+                (None, ')') | (None, ']') => {
+                    depth = depth.saturating_sub(1);
+                    self.consume();
+                    s.push(c);
                 }
                 _ => {
                     self.consume();

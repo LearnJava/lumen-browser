@@ -408,7 +408,7 @@ recompute cause — `HTMLStyleElement.sheet` still `null` right after
 `testcommon.js`'s `addStyle()` (`animation-002/003/004`). Confirms this
 bug's "no synchronous flush" gap is live on `--bidi-port`, not just the
 `InProcessSession` path this file's own repros use — see
-[BUG-977](BUG-977-OPEN.md)/CSSOM-7 for the shell-coverage half of this
+[BUG-977](BUG-977-FIXED.md)/CSSOM-7 for the shell-coverage half of this
 (it already tracks one narrow instance, `_lumen_request_scroll`'s
 `is_clip` check; this residual generalizes it to plain
 `getComputedStyle()`/`.sheet` with no scroll/clip involved at all).

@@ -136,7 +136,7 @@ stays `None` there and `maybe_flush` is a no-op". Every real wptrunner
 run launches Lumen via `--bidi-port` (`tools/wptrunner/wptrunner/
 browsers/lumen.py::make_command`) — the live/interactive path, not
 `InProcessSession` — so this gap is live on literally every WPT test
-Lumen runs, not just this file's 5. [BUG-977](BUG-977-OPEN.md)/CSSOM-7
+Lumen runs, not just this file's 5. [BUG-977](BUG-977-FIXED.md)/CSSOM-7
 already tracks one narrow instance of it (`_lumen_request_scroll`'s
 `is_clip` check); what this slice adds is that the *general* case —
 plain `getComputedStyle()` and `HTMLStyleElement.sheet` on a
