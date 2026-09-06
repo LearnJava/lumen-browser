@@ -1343,7 +1343,7 @@ impl Lumen {
                     let cookie_jar = self.active_cookie_jar();
                     let proxy = self.load_proxy.clone();
                     std::thread::spawn(move || {
-                        let raw = match fetch_image_bytes(&pf.url, &base, &sink, Some(cookie_jar)) {
+                        let raw = match fetch_font_bytes(&pf.url, &base, &sink, Some(cookie_jar)) {
                             Ok(b) => b,
                             Err(e) => {
                                 eprintln!("@font-face «{}»: не загружен {}: {e}", pf.family, pf.url);

@@ -653,7 +653,7 @@ fn load_frame_fonts(
     let web_fonts = pending
         .into_iter()
         .filter_map(|pf| {
-            let raw = fetch_image_bytes(&pf.url, base, sink, cookie_jar.clone()).ok()?;
+            let raw = fetch_font_bytes(&pf.url, base, sink, cookie_jar.clone()).ok()?;
             let bytes = match lumen_font::maybe_decode_font(&raw) {
                 Ok(Some(d)) => d,
                 Ok(None) => raw,
