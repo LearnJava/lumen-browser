@@ -2,7 +2,7 @@
 asynchronously by the shell — a synchronous read right after the write sees
 the stale (pre-write) value instead of the just-set position
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-06 (дрейф трекера)
 **Дата:** 2026-08-03
 **Компонент:** js/shell boundary (`crates/js/src/dom.rs:6196-6205` setters,
 `crates/js/src/v8_runtime.rs:3103-3108` `_lumen_request_scroll`, shell's
@@ -74,3 +74,33 @@ synchronous drain-and-republish of `pending_scrolls`→`scroll_states` for the
 specific `nid` inside the getter when a pending request for that node
 exists (same shape of fix pattern the eventual BUG-493 fix will need for
 `computed_styles`).
+
+## Ревизия P3 2026-09-06 — уже исправлено, дрейф трекера
+
+Этот баг никогда не чинился под своим номером — его ровно тот же механизм
+(`_lumen_request_scroll` кладёт запись только в `pending_scrolls`,
+`_lumen_get_scroll_state` читает только `scroll_states`, синхронное
+чтение сразу после записи видит устаревшее значение) был закрыт как
+побочный эффект расследования [BUG-504](BUG-504-OPEN.md) part 10 →
+[BUG-975](BUG-975-OPEN.md) (2026-09-04, `install_scroll_state` в
+`crates/js/src/v8_runtime/install/platform.rs::_lumen_request_scroll`):
+запрос теперь оптимистично пишется в тот же кэш `scroll_states`, который
+читает геттер (см. doc-комментарий у `_lumen_request_scroll`, явно
+цитирующий этот сценарий). Юнит-тест
+`crates/js/src/dom/tests/v8_bug975_scroll_request_sync.rs::direct_scroll_left_top_assignment_is_visible_to_synchronous_read`
+дословно воспроизводит запись+синхронное чтение `scrollLeft`/`scrollTop`
+и зелёный.
+
+Живой A/B не по коду, а по симптому: `--mcp-port`, страница с двумя
+независимыми `overflow:scroll`-контейнерами (тот же снаряд, что в §Механизм
+выше — `#s`/`#t`), `eval` одним вызовом `e.scrollTop = 200; return e.scrollTop`
+для обоих одновременно — вернул `{s_after_write: 200, t_after_write: 175}`,
+то есть точно запрошенные значения, а не устаревший `0`. Заведённый BUG-975
+не покрывает один узкий смежный случай — синхронное переключение
+`overflow` на `clip` в интерактивном (не headless) окне того же тика
+([BUG-977](BUG-977-OPEN.md), ДОРАБОТКА → CSSOM-7) — но это не тот сценарий,
+что описан здесь: репро этого бага не трогает `overflow` вовсе, только
+голую запись/чтение позиции скролла.
+
+Точечного P3-фикса не требуется — закрывается как дрейф трекера, тот же
+класс ревизии, что [BUG-512](BUG-512-FIXED.md).

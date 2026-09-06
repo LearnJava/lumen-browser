@@ -27,7 +27,7 @@ the `scrollTop` variant, 4 the `scrollBy` variant, 2 `scrollLeft`, plus one
 `Cannot read properties of undefined (reading 'scrollTop')`) — every test
 that targets the *document* (root) scroller rather than a nested
 `overflow: scroll` `<div>` is blocked by this alone, independent of
-[BUG-523](BUG-523-OPEN.md)/[BUG-524](BUG-524-OPEN.md).
+[BUG-523](BUG-523-FIXED.md)/[BUG-524](BUG-524-OPEN.md).
 
 ## Фикс (не сделан)
 
