@@ -371,3 +371,62 @@ subtests of `mixin-layers.html` should go green — its other blocker,
 is already fixed. Status remains `OPEN` — `mixin-cross-stylesheet`,
 `mixin-shadow-dom` and the CSSOM-gated `mixin-cssom.tentative`/
 `mixin-invalidation.tentative` are still open follow-ups.
+
+## Срез P3 2026-09-06 (часть 4)
+
+Investigated `mixin-cross-stylesheet.html` and `mixin-shadow-dom.html`, the
+next two named follow-ups. **No code change for the cross-stylesheet case —
+it already worked**, and the shadow-DOM case turned out to be blocked by a
+pre-existing, mixin-unrelated engine gap, filed separately.
+
+**`mixin-cross-stylesheet.html`**: the shell (`build_page_cascade`,
+`crates/shell/src/page_pipeline.rs`) concatenates every inline `<style>`
+element's text, in document order, into one string (`extract_style_blocks` +
+`inline_css_imports`, which also splices in `@import`ed text the same way)
+before a *single* `lumen_css_parser::parse` call — by the time `@mixin`/
+`@apply` see any of it, there is only one flat `Stylesheet` with one
+`mixin_rules` list, not "two stylesheets" to scope by. A forward reference
+across that boundary is exactly the same shape as a forward reference within
+one `<style>` block, which срез 1's cascade-time (not parse-time) resolution
+already supports by design ("to support forward references and
+cross-stylesheet definitions, same as `@function`" — срез 1's own note).
+`document.adoptedStyleSheets`/constructed stylesheets reach the same place
+through `Stylesheet::merge_from` (`crates/engine/css-parser/src/parser.rs`),
+which already extends `mixin_rules` along with every other field. Verified
+directly (not just read from code) with two new permanent unit tests in
+`crates/engine/layout/src/style/tests/values.rs`
+(`css_mixin_visible_across_concatenated_style_elements`,
+`css_mixin_visible_across_at_import`) transcribing `mixin-cross-stylesheet.html`
+and `mixin-from-import.html` respectively — both pass against today's code,
+unmodified. `CSS-SPECS.md` updated to record this as closed, not "deferred".
+
+**`mixin-shadow-dom.html`**: NOT fixed, and not attempted — three of its four
+subtests (`#e1`/`#e2`/`#e3`, all plain `id` selectors written inside a shadow
+root's own `<style>`, targeting elements inside that same shadow tree) hit a
+gap one layer below mixins entirely: Lumen's cascade never matches a regular
+(non-`:host`/`::slotted`) selector from a shadow tree's own stylesheet
+against that tree's own descendants at all — confirmed with a throwaway
+probe reproducing the exact shape (`<template shadowrootmode="open"><style>
+#e1{color:red}</style><div id="e1">`) through the real `box_tree::layout`
+entry point; no box anywhere in the resulting tree carries the red color.
+`@apply` inside such a rule can only be as visible as the rule itself, and
+the rule itself never reaches `#e1`/`#e2`/`#e3` — a mixin-specific fix here
+would be attacking a symptom. Filed as [BUG-1009](BUG-1009-OPEN.md)
+(layout-crate cascade gap, no connection to `@mixin`/`@apply`). The file's
+4th subtest (`#e4`, "style outside shadow DOM should NOT have access to
+inside mixins") is a light-DOM rule with a light-DOM `@apply` and does not
+depend on BUG-1009 either way — not separately verified this slice, deferred
+to whoever revisits this file once BUG-1009 is fixed (needs a real
+shadow-tree end-to-end harness to check without also needing the other three
+subtests to already be green).
+
+**Verification**: `cargo test -p lumen-layout --lib`: 3869/3869 (+2 for the
+two new permanent tests; net +2 not +something-more because the two throwaway
+probes used to investigate this were removed before commit).
+`cargo clippy -p lumen-layout --all-targets -- -D warnings`: clean. No parser
+or cascade code touched, so no new `dump_golden.py`/graphic-test surface.
+
+Status remains `OPEN` — `mixin-shadow-dom.html` is blocked on
+[BUG-1009](BUG-1009-OPEN.md) (not further actionable from this bug), and the
+CSSOM-gated `mixin-cssom.tentative`/`mixin-invalidation.tentative` remain
+blocked on [BUG-471](BUG-471-OPEN.md) as already documented.
