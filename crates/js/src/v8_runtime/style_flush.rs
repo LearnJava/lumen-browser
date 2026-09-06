@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::named_access::lock_document_bounded;
-use super::runtime::CustomPropertySnapshot;
+use super::runtime::{CustomPropertySnapshot, PseudoComputedStyles};
 
 /// Bundled embedder-pushed state a same-tick accessor native needs to force
 /// a synchronous flush — one `Clone` (every field is an `Arc`) instead of
@@ -41,6 +41,9 @@ pub(crate) struct FlushHandles {
     /// disagrees with `getBoundingClientRect()` over the same flush.
     pub(crate) client_rects: Arc<Mutex<HashMap<u32, Vec<[f32; 4]>>>>,
     pub(crate) computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    /// CSSOM-6 (BUG-490): sibling of `computed_styles` for pseudo-elements,
+    /// keyed by `(node, pseudo name)` — see `V8JsRuntime::pseudo_computed_styles`.
+    pub(crate) pseudo_computed_styles: Arc<Mutex<PseudoComputedStyles>>,
     pub(crate) custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
     pub(crate) viewport_size: Arc<Mutex<[f32; 2]>>,
     pub(crate) stylesheet: Arc<Mutex<Option<Arc<lumen_css_parser::Stylesheet>>>>,
@@ -145,6 +148,11 @@ impl FlushHandles {
             .lock()
             .unwrap_or_else(|e| e.into_inner()) =
             lumen_layout::collect_computed_styles(&layout_root, &doc_guard, Some(&counters));
+        *self
+            .pseudo_computed_styles
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) =
+            lumen_layout::collect_pseudo_computed_styles(&layout_root);
         *self
             .custom_properties
             .lock()

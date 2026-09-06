@@ -9,6 +9,12 @@
 
 use crate::*;
 
+/// CSSOM-6 (BUG-490): computed CSS styles per `(node, pseudo-element name)` —
+/// local alias (rather than depending on `lumen_js::PseudoComputedStyles`) to
+/// keep this trait engine-agnostic, matching [`Self::update_custom_properties`]'s
+/// own inline `HashMap` param.
+type PseudoComputedStyles = HashMap<(u32, String), HashMap<String, String>>;
+
 /// Shell-local abstraction over a persistent JS context that survives between
 /// renders. The JS DOM closures hold a reference to the same
 /// `Arc<Mutex<Document>>` as `LayoutSource::document`, so event-driven DOM
@@ -260,6 +266,16 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `window.getComputedStyle()` and CSS property reads.
     #[allow(dead_code)]
     fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>);
+    /// Push a fresh snapshot of computed CSS *pseudo-element* styles into the
+    /// JS runtime (CSSOM-6/BUG-490), keyed by `(node, pseudo name)` —
+    /// `"before"`/`"after"`/`"first-line"`/`"first-letter"`.
+    ///
+    /// Published from every place that publishes [`Self::update_computed_styles`]
+    /// — a page whose pseudo-element styles are never pushed sees
+    /// `getComputedStyle(el, pseudoElt)` fall back to answering "" for every
+    /// property, same as before this snapshot existed.
+    #[allow(dead_code)]
+    fn update_pseudo_computed_styles(&self, styles: PseudoComputedStyles);
     /// Push a fresh snapshot of resolved CSS custom properties into the JS
     /// runtime (BUG-732).
     ///
@@ -862,6 +878,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
         self.rt.update_computed_styles(styles);
+    }
+    fn update_pseudo_computed_styles(&self, styles: PseudoComputedStyles) {
+        self.rt.update_pseudo_computed_styles(styles);
     }
     fn update_custom_properties(&self, props: HashMap<u32, Arc<HashMap<String, String>>>) {
         self.rt.update_custom_properties(props);

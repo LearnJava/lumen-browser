@@ -1576,6 +1576,112 @@ fn collect_computed_styles_rec(
     }
 }
 
+/// Sibling of [`collect_computed_styles`] for CSS Pseudo-Elements L4 boxes and
+/// segments (`::before`, `::after`, `::first-line`, `::first-letter` —
+/// CSSOM-6/BUG-490). Keyed by `(owner NodeId index, pseudo name)`, using the
+/// same lowercase no-colon spelling `compute_pseudo_element_style` already
+/// takes ("before"/"after"/"first-line"/"first-letter"), so a JS shim that
+/// normalizes its `pseudoElt` argument the same way needs no translation table.
+///
+/// Reusing `collect_computed_styles`'s map is not an option: that map is keyed
+/// by `NodeId` alone, "first box in tree order wins", so an element and its own
+/// `::before` — same `node`, different box — would collide.
+///
+/// `display` is overridden to the CSS Pseudo-elements L4 / CSS Display L3
+/// §placement *used* value instead of the raw cascaded one: `::first-line`
+/// always reports `inline` (it can never be floated or out-of-flow), and
+/// `::first-letter` reports `block` when floated or absolutely/fixed
+/// positioned and `inline` otherwise — neither ever exposes the author's own
+/// `display`. `::before`/`::after` are ordinary boxes and report their
+/// cascaded `display` as-is.
+pub fn collect_pseudo_computed_styles(
+    root: &LayoutBox,
+) -> std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>> {
+    let mut out = std::collections::HashMap::new();
+    collect_pseudo_computed_styles_rec(root, root.node, &mut out);
+    out
+}
+
+fn pseudo_kind_name(kind: PseudoKind) -> Option<&'static str> {
+    match kind {
+        PseudoKind::Before => Some("before"),
+        PseudoKind::After => Some("after"),
+        PseudoKind::FirstLine => Some("first-line"),
+        PseudoKind::FirstLetter => Some("first-letter"),
+        PseudoKind::None | PseudoKind::Marker => None,
+    }
+}
+
+/// The *used* `display` CSS Pseudo-elements L4 mandates for `kind`, or `None`
+/// to keep the box's own cascaded value (`::before`/`::after`).
+fn pseudo_used_display(kind: PseudoKind, style: &ComputedStyle) -> Option<&'static str> {
+    match kind {
+        PseudoKind::FirstLine => Some("inline"),
+        PseudoKind::FirstLetter => {
+            let out_of_flow =
+                style.float_side != FloatSide::None || matches!(style.position, Position::Absolute | Position::Fixed);
+            Some(if out_of_flow { "block" } else { "inline" })
+        }
+        PseudoKind::None | PseudoKind::Before | PseudoKind::After | PseudoKind::Marker => None,
+    }
+}
+
+fn pseudo_style_map(style: &ComputedStyle, kind: PseudoKind) -> std::collections::HashMap<String, String> {
+    let mut map = computed_style_to_map(style);
+    if let Some(used_display) = pseudo_used_display(kind, style) {
+        map.insert("display".to_string(), used_display.to_string());
+    }
+    map
+}
+
+/// `container_owner` is the nearest ancestor box's own `node` — the box whose
+/// `children` list `b` lives in. Needed because `::first-letter`'s box/segment
+/// (`extract_first_letter_float`/`apply_first_letter_pseudo`) carries the
+/// *text node's* `NodeId` in `origin.node`/`source_node` (Selection/Range
+/// needs that identity), not the block element CSS attributes `::first-letter`
+/// to — that owner is whichever box directly contains it, i.e. `container_owner`.
+/// `::before`/`::after`/`::first-line` boxes already carry the correct owner
+/// in `origin.node`/`source_node` and ignore this parameter.
+fn collect_pseudo_computed_styles_rec(
+    b: &LayoutBox,
+    container_owner: lumen_dom::NodeId,
+    out: &mut std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
+) {
+    if let BoxRole::Pseudo(kind) = b.origin.role
+        && let Some(name) = pseudo_kind_name(kind)
+    {
+        let owner = if kind == PseudoKind::FirstLetter {
+            container_owner
+        } else {
+            b.origin.node.unwrap_or(b.node)
+        };
+        out.entry((owner.index() as u32, name.to_string()))
+            .or_insert_with(|| pseudo_style_map(&b.style, kind));
+    }
+    if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
+        for seg in segments {
+            // `NodeId(0)` is the "no DOM origin" sentinel `make_content_image_segment`
+            // uses for a pseudo-element whose sole content is `url(...)` — no owner
+            // to key on, so it is silently skipped (rare: image-only generated content).
+            if seg.source_node.index() == 0 {
+                continue;
+            }
+            if let Some(name) = pseudo_kind_name(seg.pseudo_kind) {
+                let owner = if seg.pseudo_kind == PseudoKind::FirstLetter {
+                    container_owner
+                } else {
+                    seg.source_node
+                };
+                out.entry((owner.index() as u32, name.to_string()))
+                    .or_insert_with(|| pseudo_style_map(&seg.style, seg.pseudo_kind));
+            }
+        }
+    }
+    for child in &b.children {
+        collect_pseudo_computed_styles_rec(child, b.node, out);
+    }
+}
+
 // ──────────────── collect_custom_properties ────────────────
 
 /// Walks the layout tree and returns a map of `NodeId index → resolved custom

@@ -765,7 +765,7 @@ fn layout_frame_document(
     measurer: &lumen_paint::MultiFontMeasurer,
     state: FrameNodeState,
 ) -> lumen_layout::LayoutBox {
-    let (frame_layout, rects, client_rects, styles) = {
+    let (frame_layout, rects, client_rects, styles, pseudo_styles) = {
         let d = doc.lock().unwrap();
         lumen_layout::set_interactive_state(state.hovered, state.focused, state.active);
         let (frame_layout, counters) =
@@ -774,13 +774,15 @@ fn layout_frame_document(
         let rects = lumen_layout::collect_layout_rects(&frame_layout, &d);
         let client_rects = lumen_layout::collect_client_rects(&frame_layout, &d);
         let styles = lumen_layout::collect_computed_styles(&frame_layout, &d, Some(&counters));
-        (frame_layout, rects, client_rects, styles)
+        let pseudo_styles = lumen_layout::collect_pseudo_computed_styles(&frame_layout);
+        (frame_layout, rects, client_rects, styles, pseudo_styles)
     };
     if let Some(js) = js {
         js.update_layout_rects(rects);
         js.update_client_rects(client_rects);
         js.update_hit_test_tree(Arc::new(frame_layout.clone()));
         js.update_computed_styles(styles);
+        js.update_pseudo_computed_styles(pseudo_styles);
         js.update_viewport_size(viewport.width, viewport.height);
     }
     frame_layout

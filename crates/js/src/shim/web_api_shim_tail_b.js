@@ -4,7 +4,6 @@ window.Range            = Range;
 
 // ── window.getComputedStyle(element[, pseudoElt]) ────────────────────────────
 // Returns a CSSStyleDeclaration-like object with resolved property values.
-// Pseudo-elements are not yet supported (ignored).
 // CSS Variables L1 §3 (BUG-732): a `--`-prefixed name is a custom property and
 // is answered from its own snapshot — the standard-property map never carried
 // them, so `getPropertyValue('--x')` used to return `''` on a page whose
@@ -14,8 +13,28 @@ function _lumen_computed_property(nid, name) {
     if (name.slice(0, 2) === '--') return _lumen_get_custom_property(nid, name) || '';
     return _lumen_get_computed_style(nid, name) || '';
 }
+// CSSOM-6 (BUG-490): normalizes the `pseudoElt` argument to one of the four
+// pseudo-elements Lumen tracks a resolved style for, dropping an optional
+// leading `:`/`::` and lower-casing (CSS idents are ASCII-case-insensitive
+// here). Anything else — `undefined`, `""`, an unrecognized name, or a form
+// requiring full CSS-syntax parsing (escapes, trailing garbage) — resolves to
+// `null`, which answers from the element's own style, same as before this
+// argument was wired up. Full CSSOM pseudo-element conformance (`::backdrop`,
+// `::marker`, immutability, item-based blockification, nonexistent-pseudo
+// resolution) is out of scope for this slice.
+function _lumen_normalize_pseudo_elt(pseudoElt) {
+    if (typeof pseudoElt !== 'string' || pseudoElt.length === 0) return null;
+    switch (pseudoElt.replace(/^::?/, '').toLowerCase()) {
+        case 'before': return 'before';
+        case 'after': return 'after';
+        case 'first-line': return 'first-line';
+        case 'first-letter': return 'first-letter';
+        default: return null;
+    }
+}
 window.getComputedStyle = function(element, pseudoElt) {
     var nid = element && element.__nid__ != null ? element.__nid__ : null;
+    var pseudo = _lumen_normalize_pseudo_elt(pseudoElt);
     // Cache: keyed by nid, invalidated on next call (live object semantics).
     // BUG-483 ч.2: `length`/`item(i)`/`Symbol.iterator` used to be hardcoded
     // (length always 0, item() always '', no iterator at all) instead of
@@ -26,14 +45,24 @@ window.getComputedStyle = function(element, pseudoElt) {
     // so this backs all three off it instead of duplicating a Rust binding.
     var entries = null;
     function resolveEntries() {
-        if (entries === null) entries = nid != null ? JSON.parse(_lumen_get_computed_style_entries(nid)) : [];
+        if (entries === null) {
+            entries = nid == null ? [] : JSON.parse(
+                pseudo ? _lumen_get_computed_style_pseudo_entries(nid, pseudo)
+                       : _lumen_get_computed_style_entries(nid)
+            );
+        }
         return entries;
+    }
+    function readProp(name) {
+        if (nid == null) return '';
+        if (pseudo) return _lumen_get_computed_style_pseudo(nid, pseudo, name) || '';
+        return _lumen_computed_property(nid, name);
     }
     var handler = {
         get: function(target, prop) {
             if (prop === 'getPropertyValue') {
                 return function(name) {
-                    return _lumen_computed_property(nid, String(name));
+                    return readProp(String(name));
                 };
             }
             if (prop === 'length') return resolveEntries().length;
@@ -60,7 +89,7 @@ window.getComputedStyle = function(element, pseudoElt) {
                 // property is spelled `--x` on the object too, and survives the
                 // conversion unchanged, so it routes through the same helper.
                 var kebab = prop.replace(/([A-Z])/g, function(m) { return '-' + m.toLowerCase(); });
-                if (nid != null) return _lumen_computed_property(nid, kebab);
+                if (nid != null) return readProp(kebab);
             }
             return undefined;
         },
@@ -77,7 +106,7 @@ window.getComputedStyle = function(element, pseudoElt) {
             }
             if (typeof prop === 'string' && !/^\d+$/.test(prop)) {
                 var kebab = prop.replace(/([A-Z])/g, function(m) { return '-' + m.toLowerCase(); });
-                if (nid != null) return _lumen_computed_property(nid, kebab) !== '';
+                if (nid != null) return readProp(kebab) !== '';
             }
             return false;
         }
@@ -89,7 +118,7 @@ window.getComputedStyle = function(element, pseudoElt) {
     // Fallback for environments without Proxy.
     return {
         getPropertyValue: function(name) {
-            return _lumen_computed_property(nid, String(name));
+            return readProp(String(name));
         }
     };
 };

@@ -1139,6 +1139,14 @@ fn content_to_inline_segments(
     let Content::Items(items) = &style.content else {
         return vec![];
     };
+    // CSSOM-6 (BUG-490): tags every generated-content segment with its
+    // pseudo-element so `collect_pseudo_computed_styles` can find it even
+    // when `inject_pseudo` merges it into a sibling `InlineRun` instead of
+    // giving it a `BoxRole::Pseudo` box of its own.
+    let kind = match slot {
+        QuoteSlot::Before => PseudoKind::Before,
+        QuoteSlot::After => PseudoKind::After,
+    };
     let snap = counters.counters(owner_id);
     let qdepths = counters.quote_depths(owner_id, slot);
     let mut qi = 0usize;
@@ -1153,7 +1161,7 @@ fn content_to_inline_segments(
         // segment (mirrors the inline-`<img>` path in `collect_inline_segments`).
         if let ContentItem::Url(url) = item {
             if !text.is_empty() {
-                out.push(make_content_text_segment(style, owner_id, std::mem::take(&mut text)));
+                out.push(make_content_text_segment(style, owner_id, std::mem::take(&mut text), kind));
             }
             if !url.is_empty() {
                 let em = style.font_size;
@@ -1165,7 +1173,7 @@ fn content_to_inline_segments(
                     .as_ref()
                     .and_then(|l| l.resolve(em, None, viewport))
                     .unwrap_or(em * 2.0);
-                out.push(make_content_image_segment(style, url.clone(), w));
+                out.push(make_content_image_segment(style, url.clone(), w, kind));
             }
             continue;
         }
@@ -1216,7 +1224,7 @@ fn content_to_inline_segments(
         }
     }
     if !text.is_empty() {
-        out.push(make_content_text_segment(style, owner_id, text));
+        out.push(make_content_text_segment(style, owner_id, text, kind));
     }
     out
 }
@@ -1227,6 +1235,7 @@ fn make_content_text_segment(
     style: &ComputedStyle,
     owner_id: NodeId,
     text: String,
+    pseudo_kind: PseudoKind,
 ) -> InlineSegment {
     InlineSegment {
         text,
@@ -1238,7 +1247,7 @@ fn make_content_text_segment(
         img_is_lazy: false,
         img_width: 0.0,
         forced_break: false,
-        pseudo_kind: PseudoKind::None,
+        pseudo_kind,
         source_node: owner_id,
         source_char_offset: 0,
         bidi_level: 0,
@@ -1254,6 +1263,7 @@ fn make_content_image_segment(
     style: &ComputedStyle,
     url: String,
     width: f32,
+    pseudo_kind: PseudoKind,
 ) -> InlineSegment {
     InlineSegment {
         text: String::new(),
@@ -1265,7 +1275,7 @@ fn make_content_image_segment(
         img_is_lazy: false,
         img_width: width,
         forced_break: false,
-        pseudo_kind: PseudoKind::None,
+        pseudo_kind,
         source_node: NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,

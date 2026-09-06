@@ -181,11 +181,14 @@ pub enum PseudoKind {
     /// Applied by `apply_first_letter_pseudo` via
     /// `compute_pseudo_element_style(node, "first-letter")`, which overrides `seg.style`.
     FirstLetter,
-    /// `::before` generated content (ADR-025 `BoxRole::Pseudo` tag only — not
-    /// produced by `collect_inline_segments`, which has no notion of `::before`
-    /// at the segment level).
+    /// `::before` generated content. Tags the `BoxRole::Pseudo` box when the
+    /// pseudo-element gets its own box, and every `InlineSegment` produced by
+    /// `content_to_inline_segments` when `inject_pseudo`/`push_pseudo_inline_segs`
+    /// instead merges it into a sibling `InlineRun` (CSSOM-6/BUG-490) — the
+    /// segment-level tag is what lets `collect_pseudo_computed_styles` find it
+    /// in that case.
     Before,
-    /// `::after` generated content (`BoxRole::Pseudo` tag only, see `Before`).
+    /// `::after` generated content (see `Before`).
     After,
     /// `::first-line` styled box (`BoxRole::Pseudo` tag only — applied by
     /// `split_first_line_boxes`, which works on whole boxes, not segments).
