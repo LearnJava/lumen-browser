@@ -1788,6 +1788,41 @@ use super::*;
         assert_eq!(s.width, Some(Length::Px(60.0)));
     }
 
+    #[test]
+    fn css_mixin_visible_across_concatenated_style_elements() {
+        // Transcribes `mixin-cross-stylesheet.html`: a `<style>` calling
+        // `@apply --m1` and a *second*, later `<style>` defining `@mixin --m1`.
+        // The shell (`build_page_cascade`) concatenates every inline `<style>`'s
+        // text, in document order, into one string before the single
+        // `lumen_css_parser::parse` call — so by the time this reaches the
+        // parser there are no separate "stylesheets" left to scope by, only
+        // one flat source with a forward reference, already supported since
+        // срез 1 (cascade-time lookup, not parse-time). No code change needed
+        // for this case — this test exists to pin the behaviour down.
+        let css = "div { color: red; @apply --m1; } \
+                   @mixin --m1() { @result { color: green; } }";
+        let s = cascade_at(
+            "<div><div class=\"cls\" id=\"target\">x</div></div>",
+            css,
+            &[0, 0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn css_mixin_visible_across_at_import() {
+        // Transcribes `mixin-from-import.html`: `@import` pulls in a sheet whose
+        // only content is `@mixin --m1`, then the importing sheet's own rule
+        // applies it. The shell resolves `@import` at the text level
+        // (`inline_css_imports`), splicing the imported file's raw CSS text
+        // *before* the importing sheet's own text — matching that here.
+        let imported = "@mixin --m1() { @result { color: green; } }";
+        let importer = "div { color: red; @apply --m1; }";
+        let css = format!("{imported} {importer}");
+        let s = cascade_at("<div id=\"target\"></div>", &css, &[0]);
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
     // ── `scrollbar-gutter` (BUG-505): `stable && both-edges?`, order-independent ──
 
     #[test]
