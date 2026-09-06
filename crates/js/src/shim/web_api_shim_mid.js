@@ -3359,6 +3359,11 @@ function _lumen_build_detached_document(proto, contentType) {
     Object.defineProperty(doc, 'nodeValue',     { get: function() { return null; },         enumerable: true });
     Object.defineProperty(doc, 'DOCUMENT_NODE', { get: function() { return 9; },            enumerable: true });
     Object.defineProperty(doc, 'ownerDocument', { get: function() { return null; },         enumerable: true });
+    // HTML §3.1.5: no browsing context, so `defaultView` is null — the other
+    // half of the live document's getter (BUG-1017). Spelled out here rather
+    // than inherited, because `proto` is `Document.prototype`, shared with the
+    // live document's interface chain.
+    Object.defineProperty(doc, 'defaultView',   { get: function() { return null; },         enumerable: true });
     Object.defineProperty(doc, 'childNodes',    { get: function() { return _children.slice(); }, enumerable: true });
     Object.defineProperty(doc, 'doctype', {
         get: function() {
@@ -9682,6 +9687,23 @@ var document = {
             }
         }
         return !evt.defaultPrevented;
+    },
+    // HTML §3.1.5 `Document.defaultView`: the WindowProxy of this document's
+    // browsing context. The live document always has one, so this is `window`
+    // — a document with no browsing context answers `null` instead, and that
+    // half already lives in `_lumen_build_detached_document`.
+    //
+    // BUG-1017: this getter was missing entirely on the live document, so the
+    // property read back as `undefined` rather than as the window. Sub-documents
+    // had it all along (`crates/js/src/frame_bridge.rs` defines it on the
+    // `contentDocument` facade), which is why the gap survived: only the
+    // top-level document was affected. `undefined` is worse than a wrong window
+    // here, because the idiom that reads it is
+    // `node.ownerDocument.defaultView.<something>` — google.com does exactly
+    // that for `devicePixelRatio` and the resulting TypeError aborted its whole
+    // module initialisation.
+    get defaultView() {
+        return typeof window !== 'undefined' ? window : globalThis;
     },
     get fonts() {
         return _lumen_wrapper_slot(this, '__fonts__', _lumen_make_font_face_set);
