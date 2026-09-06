@@ -51,6 +51,119 @@ pub struct FunctionParameter {
     pub default: Option<String>,
 }
 
+/// Marker `Declaration::property` value the parser pushes into a rule's
+/// (or `@result` block's) declaration list at the exact source position of
+/// an `@apply <name>(<args>) [{ <block> }];` statement (CSS Mixins L1),
+/// keeping `Rule`'s existing `Vec<Declaration>` shape rather than growing a
+/// second, position-correlated list. `@` can never start a real CSS
+/// property name, so this cannot collide with an author-declared one.
+/// `Declaration::value` holds the exact raw source text following `@apply`
+/// (name, optional `(args)`, optional `{block}`) — [`super::parse_apply_call`]
+/// re-parses it back into an [`ApplyRule`] at cascade time (layout crate),
+/// the same "raw text, re-parsed on demand" shape `--name(args)` calls
+/// already use inside a property value.
+pub const MIXIN_APPLY_MARKER: &str = "@apply";
+
+/// `@mixin <dashed-ident>(<params>) { <mixin-body> }` — CSS Functions and
+/// Mixins L1 §mixin-rule. Declares a reusable named set of declarations,
+/// invoked from a style rule body (or another mixin's `@result` block) via
+/// `@apply <name>(<args>)`.
+///
+/// Phase 0 (this slice): only **flat** declarations are supported inside
+/// `@result` — a nested style rule there (`&.foo { ... }`, as real mixins
+/// use to re-target `@apply`'s expansion at a different selector) is
+/// syntactically skipped, not expanded. That needs the same source-level
+/// selector-rewriting `@apply`'s call site already goes through for CSS
+/// Nesting (`expand_nesting`), which happens at *parse* time — mixin/apply
+/// resolution instead happens at *cascade* time (mirroring `@function`, and
+/// necessary for forward references / cross-stylesheet mixins), so the two
+/// don't compose without a larger architectural change. Left OPEN in
+/// `bugs/BUG-518-OPEN.md`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MixinRule {
+    /// Dashed-ident name, e.g. `--centered`. Matched against `@apply <name>`.
+    pub name: String,
+    /// Positional parameters in declared order.
+    pub parameters: Vec<MixinParameter>,
+    /// Local custom-property declarations at the top level of the mixin
+    /// body — both before and after `@result`; per CSS Mixins L1 all are
+    /// visible when evaluating `@result` regardless of source position
+    /// (confirmed against `mixin-locals.html`'s "Locals after `@result`
+    /// are seen" case). A non-custom-property declaration at this level
+    /// (e.g. a stray `font-size: 200px;`) belongs to no selector and is
+    /// parsed but discarded, same as source authors are told to expect
+    /// ("will be ignored" comment in the vendored `mixin-basic.html`).
+    pub locals: Vec<Declaration>,
+    /// Body of the mixin's own `@result { ... }` block, in source order.
+    /// `None` if the mixin has no `@result` (a no-op mixin — `@apply`
+    /// expands to zero declarations either way).
+    pub result: Option<Vec<MixinResultItem>>,
+}
+
+/// One parameter of an `@mixin` rule: `--name [type(<syntax>)]? [: <default>]?`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MixinParameter {
+    /// Dashed-ident parameter name, e.g. `--my-color`.
+    pub name: String,
+    /// Raw `type(<syntax>)` descriptor, if present. Stored but not
+    /// validated — Phase 0, same deferral as `@function`'s `returns`
+    /// (`var()` against a typed parameter does plain untyped substitution
+    /// here, not the registered-custom-property-style numeric resolution
+    /// the spec gives a `type()`-annotated one).
+    pub type_syntax: Option<String>,
+    /// Optional default value, substituted when `@apply` omits this
+    /// positional argument. Evaluated against the **call site's** scope,
+    /// not the mixin's own locals (CSS Mixins L1 — a default is written at
+    /// the mixin's definition site but is a stand-in for a caller-supplied
+    /// value, so it resolves like one).
+    pub default: Option<String>,
+}
+
+/// One item inside an `@mixin`'s `@result { ... }` block, in source order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MixinResultItem {
+    /// A plain declaration, substituted (`var()`/`--fn()`) against the
+    /// mixin's local scope (bound parameters + its own `--x:` locals) at
+    /// `@apply` time.
+    Decl(Declaration),
+    /// A nested `@apply` call (`apply-within-mixin.html`) — expands
+    /// recursively against the same local scope as the enclosing `@result`.
+    Apply(ApplyRule),
+    /// `@contents [{ <fallback declarations> }];` — placeholder replaced at
+    /// `@apply` time by the block the *caller's* `@apply ... { ... }`
+    /// supplied, or by `fallback` (evaluated against the mixin's own local
+    /// scope) when the caller gave no block.
+    Contents {
+        /// Flat declarations to use when the invoking `@apply` supplied no
+        /// `{ ... }` block of its own. Empty if `@contents` had none.
+        fallback: Vec<Declaration>,
+    },
+}
+
+/// `@apply <name>[(<args>)] [{ <block> }] [;]` — invokes a previously
+/// defined `@mixin`, splicing its `@result` declarations (recursively
+/// resolved against `args`) into the position `@apply` occupied. Appears
+/// either directly in a style rule's declaration block, or inside another
+/// mixin's own `@result` (nested mixin calls). `name` is not required to be
+/// a dashed-ident at parse time — an `@apply` of a name no `@mixin` ever
+/// registered under (dashed or not) simply resolves to nothing at cascade
+/// time, the same "unknown call" outcome as a made-up dashed one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyRule {
+    /// Mixin name to look up (last same-name `@mixin` registration wins).
+    pub name: String,
+    /// Raw positional argument expressions (unexpanded — `var()`/`--fn()`
+    /// substitution happens against the call site's scope at cascade time),
+    /// in source order. A bare `@apply --name;` (no parens at all) and an
+    /// explicit `@apply --name();` both parse to an empty `Vec` here.
+    pub args: Vec<String>,
+    /// `Some(decls)` when `@apply` supplies a `{ ... }` block (fills the
+    /// invoked mixin's `@contents` placeholder, if any); `None` when no
+    /// block was given at all (the mixin's own `@contents` fallback, if
+    /// any, applies instead).
+    pub block: Option<Vec<Declaration>>,
+}
+
 /// `@color-profile --name { src: url(...); rendering-intent: ...; }` — CSS
 /// Color L5 §4. Declares a named custom colour profile referenced from
 /// `color(--name c1 c2 c3)`. Phase 0: descriptors are parsed and stored;
@@ -354,6 +467,7 @@ pub(crate) enum AtRuleOutcome {
     Container(ContainerRule),
     ColorProfile(ColorProfileRule),
     Function(FunctionRule),
+    Mixin(MixinRule),
     None,
 }
 
@@ -475,6 +589,60 @@ pub(crate) fn split_top_level_commas(s: &str) -> Vec<&str> {
         out.push(&s[start..]);
     }
     out
+}
+
+/// Splits `s` at its first top-level `:` (outside `(...)`/strings) into
+/// `(before, Some(after))`, or `(s, None)` if there is none. Used for
+/// `@mixin` parameters (`--name type(<syntax>): <default>`) where a plain
+/// `str::split_once(':')` would wrongly match a `:` that could in principle
+/// appear inside a parenthesized `type(...)` descriptor.
+fn split_top_level_colon(s: &str) -> (&str, Option<&str>) {
+    let bytes = s.as_bytes();
+    let mut depth = 0usize;
+    let mut in_string: Option<u8> = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        if let Some(q) = in_string {
+            if b == q {
+                in_string = None;
+            }
+            continue;
+        }
+        match b {
+            b'"' | b'\'' => in_string = Some(b),
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            b':' if depth == 0 => return (&s[..i], Some(&s[i + 1..])),
+            _ => {}
+        }
+    }
+    (s, None)
+}
+
+/// Strips one layer of balanced `{...}` wrapping from an `@apply` argument
+/// (CSS Mixins L1 allows `{ <value> }` around an argument to protect a
+/// top-level comma it would otherwise contain — `@apply --m({green})`
+/// resolves the argument to `green`). Only strips when the braces are
+/// actually a matching outer pair (depth returns to exactly 0 at the last
+/// character), not e.g. `{a},{b}` that happened to survive as one segment.
+fn strip_brace_wrapping(s: &str) -> String {
+    if !s.starts_with('{') || !s.ends_with('}') || s.len() < 2 {
+        return s.to_string();
+    }
+    let inner = &s[1..s.len() - 1];
+    let mut depth = 0i32;
+    for c in inner.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth < 0 {
+                    return s.to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth == 0 { inner.trim().to_string() } else { s.to_string() }
 }
 
 /// Парсит `@supports`-условие из строки между `@supports` и `{`.
@@ -795,6 +963,11 @@ impl<'a> Parser<'a> {
                 .parse_function_rule()
                 .map_or(AtRuleOutcome::None, AtRuleOutcome::Function);
         }
+        if name.eq_ignore_ascii_case("mixin") {
+            return self
+                .parse_mixin_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::Mixin);
+        }
         // Прочее @-правило: откатимся к '@' и пропустим как раньше.
         self.pos = start;
         self.skip_at_rule();
@@ -1099,6 +1272,267 @@ impl<'a> Parser<'a> {
         self.consume(); // '{'
         let declarations = self.parse_declaration_block();
         Some(FunctionRule { name, parameters, returns, declarations })
+    }
+
+    /// Парсит `@mixin <name>(<params>) { <mixin-body> }` — CSS Functions and
+    /// Mixins L1. Same prelude grammar as `@function` (dashed-ident
+    /// immediately followed by `(`, no whitespace); `None` on a missing
+    /// `(` or missing/malformed body, matching `@function`'s "whole rule is
+    /// simply not registered" outcome for invalid syntax (confirmed against
+    /// `mixin-basic.html`'s `invalid-name`/`--missing-argument-list` cases).
+    pub(crate) fn parse_mixin_rule(&mut self) -> Option<MixinRule> {
+        self.skip_ws_and_comments();
+        let name = self.parse_ident()?;
+        if !name.starts_with("--") || self.peek() != Some('(') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume(); // '('
+        let params_str = self.read_balanced_parens()?;
+        let parameters: Vec<MixinParameter> = split_top_level_commas(&params_str)
+            .into_iter()
+            .filter_map(|raw| self.parse_mixin_parameter(raw))
+            .collect();
+
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume(); // '{'
+        let (locals, result) = self.parse_mixin_body();
+        Some(MixinRule { name, parameters, locals, result })
+    }
+
+    /// Parses one `@mixin` parameter: `--name`, `--name: <default>`,
+    /// `--name type(<syntax>)`, or `--name type(<syntax>): <default>`.
+    /// `raw` is one already-comma-split, not-yet-trimmed segment of the
+    /// parameter list. `None` for a non-dashed-ident name (`self` here is
+    /// only used to reuse no state — parameters are pure string parsing,
+    /// kept as a method for symmetry with the rest of this grammar).
+    fn parse_mixin_parameter(&self, raw: &str) -> Option<MixinParameter> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        // Split off an optional trailing `: <default>` first (top-level —
+        // a default value itself may contain `:` only inside balanced
+        // parens/strings, which `split_top_level_commas`-style scanning
+        // would need; a plain `split_once` is safe here because the
+        // `type(...)` descriptor that could otherwise contain `:` is
+        // parenthesized, and `:` cannot appear elsewhere in `--name`/`type`).
+        let (head, default) = split_top_level_colon(raw);
+        let head = head.trim();
+        let default = default.map(|d| d.trim().to_string());
+        let mut parts = head.splitn(2, |c: char| c.is_ascii_whitespace());
+        let name = parts.next().unwrap_or("").trim();
+        if !name.starts_with("--") {
+            return None;
+        }
+        let type_syntax = parts
+            .next()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .and_then(|s| {
+                let inner = s.strip_prefix("type(")?.strip_suffix(')')?;
+                Some(inner.trim().to_string())
+            });
+        Some(MixinParameter { name: name.to_string(), type_syntax, default })
+    }
+
+    /// Parses the inside of an `@mixin`'s body (cursor already past the
+    /// opening `{`, consumes the matching `}`): collects `--x:` locals
+    /// (both before and after `@result`) and the single `@result { ... }`
+    /// block, if present. Non-custom-property declarations at this level,
+    /// and any other `@`-rule or nested-selector token, are parsed/skipped
+    /// but otherwise discarded — see [`MixinRule`]'s doc comment.
+    fn parse_mixin_body(&mut self) -> (Vec<Declaration>, Option<Vec<MixinResultItem>>) {
+        let mut locals = Vec::new();
+        let mut result = None;
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some(';') => {
+                    self.consume();
+                }
+                Some('@') => {
+                    let at_start = self.pos;
+                    self.consume();
+                    let ident = self.parse_ident().unwrap_or_default();
+                    if ident.eq_ignore_ascii_case("result") {
+                        self.skip_ws_and_comments();
+                        if self.peek() == Some('{') {
+                            self.consume();
+                            result = Some(self.parse_mixin_result_body());
+                        } else {
+                            self.skip_until_block_end();
+                        }
+                    } else {
+                        self.pos = at_start;
+                        self.skip_at_rule();
+                    }
+                }
+                _ => match self.parse_declaration() {
+                    Some(d) => {
+                        if d.property.starts_with("--") {
+                            locals.push(d);
+                        }
+                    }
+                    None => self.recover_to_decl_boundary(),
+                },
+            }
+        }
+        (locals, result)
+    }
+
+    /// Parses the inside of a mixin's `@result { ... }` block (cursor
+    /// already past the opening `{`, consumes the matching `}`). Phase 0:
+    /// a token that would start a nested style rule (`&`, `.`, `#`, `[`,
+    /// `:`, `*`, a relative combinator) is skipped over as a whole
+    /// `selector { ... }` unit rather than expanded — see [`MixinRule`]'s
+    /// doc comment.
+    fn parse_mixin_result_body(&mut self) -> Vec<MixinResultItem> {
+        let mut items = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some(';') => {
+                    self.consume();
+                }
+                Some('&') | Some('.') | Some('#') | Some('[') | Some(':') | Some('*')
+                | Some('>') | Some('+') | Some('~') => {
+                    self.skip_nested_rule_unsupported();
+                }
+                Some('@') => {
+                    let at_start = self.pos;
+                    self.consume();
+                    let ident = self.parse_ident().unwrap_or_default();
+                    if ident.eq_ignore_ascii_case("contents") {
+                        items.push(MixinResultItem::Contents { fallback: self.parse_contents_fallback() });
+                    } else if ident.eq_ignore_ascii_case("apply") {
+                        if let Some(apply) = self.parse_apply_rule() {
+                            items.push(MixinResultItem::Apply(apply));
+                        }
+                    } else {
+                        self.pos = at_start;
+                        self.skip_at_rule();
+                    }
+                }
+                _ => match self.parse_declaration() {
+                    Some(d) => items.push(MixinResultItem::Decl(d)),
+                    None => self.recover_to_decl_boundary(),
+                },
+            }
+        }
+        items
+    }
+
+    /// Best-effort skip of a nested-style-rule token sequence
+    /// (`<selector-start> ... { ... }`) inside `@result` — Phase 0 does not
+    /// expand these (see [`MixinRule`]'s doc comment), but still needs to
+    /// consume the whole unit so the surrounding `parse_mixin_result_body`
+    /// loop doesn't misparse what follows as a declaration.
+    fn skip_nested_rule_unsupported(&mut self) {
+        while let Some(c) = self.peek() {
+            if c == '{' || c == '}' {
+                break;
+            }
+            self.consume();
+        }
+        if self.peek() == Some('{') {
+            self.consume();
+            self.skip_balanced_braces();
+        }
+    }
+
+    /// Consumes up to and including the `}` matching a `{` already consumed
+    /// by the caller, tracking nested `{...}` depth. Used by
+    /// [`Self::skip_nested_rule_unsupported`].
+    fn skip_balanced_braces(&mut self) {
+        let mut depth = 1u32;
+        while let Some(c) = self.consume() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Parses `@contents`'s optional `{ <fallback> }` (cursor right after
+    /// the `contents` ident) and its optional trailing `;` — CSS Mixins L1
+    /// allows both `@contents;` and a bare `@contents` immediately before
+    /// the enclosing block's own closing `}` (no semicolon needed there,
+    /// confirmed against `contents-rule.html`'s "Implicit semicolon"
+    /// case). Returns the fallback declarations (empty if none given).
+    fn parse_contents_fallback(&mut self) -> Vec<Declaration> {
+        self.skip_ws_and_comments();
+        let fallback = if self.peek() == Some('{') {
+            self.consume();
+            self.parse_declaration_block()
+        } else {
+            Vec::new()
+        };
+        self.skip_ws_and_comments();
+        if self.peek() == Some(';') {
+            self.consume();
+        }
+        fallback
+    }
+
+    /// Parses `@apply <name>[(<args>)] [{ <block> }] [;]` (cursor right
+    /// after the `apply` ident). `None` only when no ident follows `@apply`
+    /// at all (fully empty/malformed prelude) — an unresolvable mixin name
+    /// still parses fine and simply expands to nothing at cascade time
+    /// (see [`ApplyRule`]'s doc comment).
+    pub(crate) fn parse_apply_rule(&mut self) -> Option<ApplyRule> {
+        self.skip_ws_and_comments();
+        let Some(name) = self.parse_ident() else {
+            self.recover_to_decl_boundary();
+            return None;
+        };
+        self.skip_ws_and_comments();
+        let args = if self.peek() == Some('(') {
+            self.consume();
+            let Some(raw) = self.read_balanced_parens() else {
+                self.recover_to_decl_boundary();
+                return None;
+            };
+            split_top_level_commas(&raw)
+                .into_iter()
+                .map(|a| strip_brace_wrapping(a.trim()))
+                .filter(|a| !a.is_empty())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.skip_ws_and_comments();
+        let block = if self.peek() == Some('{') {
+            self.consume();
+            Some(self.parse_declaration_block())
+        } else {
+            None
+        };
+        self.skip_ws_and_comments();
+        if self.peek() == Some(';') {
+            self.consume();
+        }
+        Some(ApplyRule { name, args, block })
     }
 
     /// Читает содержимое между уже открытой `(` (позиция парсера сразу

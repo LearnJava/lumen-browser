@@ -67,7 +67,12 @@ impl Rule {
     /// declaration block — `"prop: value; prop2: value2 !important;"`, one
     /// space after the colon, one trailing space before `!important`.
     pub fn style_css_text(&self) -> String {
-        self.declarations.iter().map(Declaration::to_css_text).collect::<Vec<_>>().join(" ")
+        self.declarations
+            .iter()
+            .filter(|d| d.property != MIXIN_APPLY_MARKER)
+            .map(Declaration::to_css_text)
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 }
 
@@ -192,6 +197,14 @@ pub struct Stylesheet {
     /// layout (`expand_custom_functions`, style.rs). Conditional group rules
     /// inside the body (`@media`, `@container`) are not yet supported.
     pub function_rules: Vec<FunctionRule>,
+    /// CSS Functions and Mixins L1 — `@mixin --name(<params>) { ... }`.
+    /// Author-defined reusable declaration set, invoked as
+    /// `@apply --name(<args>)` from a style rule's body (or another
+    /// mixin's own `@result`). Evaluation happens in layout
+    /// (`expand_mixin_apply`, `style/substitute.rs`); a nested style rule
+    /// inside `@result` is parsed but not expanded — see [`MixinRule`]'s
+    /// doc comment.
+    pub mixin_rules: Vec<MixinRule>,
     /// Source order of top-level plain style rules and `@media` blocks, as
     /// tags only (`Style`/`Media`) — the Nth `Style` tag refers to `rules[N]`
     /// among style tags seen so far, same for `Media`/`media_rules`. Exists
@@ -248,6 +261,7 @@ impl Default for Stylesheet {
             font_palette_values: Vec::new(),
             color_profiles: Vec::new(),
             function_rules: Vec::new(),
+            mixin_rules: Vec::new(),
             top_level_order: Vec::new(),
         }
     }
@@ -281,6 +295,7 @@ impl Clone for Stylesheet {
             font_palette_values: self.font_palette_values.clone(),
             color_profiles: self.color_profiles.clone(),
             function_rules: self.function_rules.clone(),
+            mixin_rules: self.mixin_rules.clone(),
             top_level_order: self.top_level_order.clone(),
         }
     }
@@ -307,6 +322,7 @@ impl PartialEq for Stylesheet {
             && self.font_palette_values == other.font_palette_values
             && self.color_profiles == other.color_profiles
             && self.function_rules == other.function_rules
+            && self.mixin_rules == other.mixin_rules
             && self.top_level_order == other.top_level_order
     }
 }
@@ -355,6 +371,7 @@ impl Stylesheet {
             font_palette_values,
             color_profiles,
             function_rules,
+            mixin_rules,
             top_level_order,
         } = other;
         self.rules.extend(rules);
@@ -374,6 +391,7 @@ impl Stylesheet {
         self.font_palette_values.extend(font_palette_values);
         self.color_profiles.extend(color_profiles);
         self.function_rules.extend(function_rules);
+        self.mixin_rules.extend(mixin_rules);
         // Plain concatenation is correct here (no index rebasing needed):
         // `top_level_order` only ever stores tags, not indices, and
         // `rules`/`media_rules` are extended in this same call — the two
@@ -448,6 +466,17 @@ pub fn parse(input: &str) -> Stylesheet {
 /// со specificity (1,0,0,0) согласно CSS Cascade L4 §6.4.3.
 pub fn parse_inline_style(input: &str) -> Vec<Declaration> {
     Parser::new(input).parse_declaration_block()
+}
+
+/// Re-parses the raw text captured for a [`MIXIN_APPLY_MARKER`] declaration
+/// (or an `@apply` found inside a mixin's own `@result`) back into an
+/// [`ApplyRule`] — used by the layout crate's cascade-time mixin expansion,
+/// which cannot call the parser's internal `Parser::parse_apply_rule`
+/// directly. `input` is expected to already be positioned right after the
+/// `apply` ident (i.e. the exact slice `parse_declaration_block_with_nesting`
+/// stored), so this parses `[<name>][(<args>)] [{ <block> }] [;]`.
+pub fn parse_apply_call(input: &str) -> Option<ApplyRule> {
+    Parser::new(input).parse_apply_rule()
 }
 
 struct Parser<'a> {
@@ -536,6 +565,7 @@ impl<'a> Parser<'a> {
         let mut container_rules: Vec<ContainerRule> = Vec::new();
         let mut color_profiles: Vec<ColorProfileRule> = Vec::new();
         let mut function_rules: Vec<FunctionRule> = Vec::new();
+        let mut mixin_rules: Vec<MixinRule> = Vec::new();
         let mut top_level_order: Vec<TopLevelRuleKind> = Vec::new();
         let mut anon_counter: usize = 0;
         loop {
@@ -562,6 +592,7 @@ impl<'a> Parser<'a> {
                             }
                             AtRuleOutcome::ColorProfile(cp) => color_profiles.push(cp),
                             AtRuleOutcome::Function(f) => function_rules.push(f),
+                            AtRuleOutcome::Mixin(m) => mixin_rules.push(m),
                             AtRuleOutcome::LayerNames(names) => {
                                 for n in names {
                                     if !layer_order.iter().any(|e| e == &n) {
@@ -665,6 +696,7 @@ impl<'a> Parser<'a> {
             container_rules,
             color_profiles,
             function_rules,
+            mixin_rules,
             top_level_order,
         }
     }
@@ -740,10 +772,31 @@ impl<'a> Parser<'a> {
                     nested.extend(r);
                     at_rules.extend(a);
                 }
-                // CSS Nesting L1 §5: nested at-rule.
+                // CSS Nesting L1 §5: nested at-rule — except `@apply`
+                // (CSS Mixins L1), which is a declaration-position at-rule,
+                // not a nested conditional-group rule: pushed as a marker
+                // `Declaration` (see `MIXIN_APPLY_MARKER`'s doc comment) so
+                // it keeps its exact source position relative to sibling
+                // declarations for cascade ordering.
                 Some('@') => {
-                    let ats = self.parse_nested_at_rule(parent_sels);
-                    at_rules.extend(ats);
+                    let at_start = self.pos;
+                    self.consume(); // '@'
+                    let ident = self.parse_ident().unwrap_or_default();
+                    if ident.eq_ignore_ascii_case("apply") {
+                        let raw_start = self.pos;
+                        if self.parse_apply_rule().is_some() {
+                            let raw = self.input[raw_start..self.pos].to_string();
+                            decls.push(Declaration {
+                                property: MIXIN_APPLY_MARKER.to_string(),
+                                value: raw,
+                                important: false,
+                            });
+                        }
+                    } else {
+                        self.pos = at_start;
+                        let ats = self.parse_nested_at_rule(parent_sels);
+                        at_rules.extend(ats);
+                    }
                 }
                 _ => match self.parse_declaration() {
                     Some(d) => decls.push(d),

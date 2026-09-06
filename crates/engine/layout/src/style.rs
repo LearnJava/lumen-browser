@@ -272,7 +272,7 @@ use crate::scroll_timeline::ScrollAxis;
 // `expand_vars_and_env` — `pub(crate)`, её зовёт `lib.rs`; остальные видны только
 // внутри `style` и его потомков, поэтому и реэкспорт сужен до `crate::style`.
 pub(crate) use substitute::expand_vars_and_env;
-pub(in crate::style) use substitute::{expand_attr_val, expand_custom_functions, expand_vars};
+pub(in crate::style) use substitute::{expand_attr_val, expand_custom_functions, expand_mixin_apply, expand_vars};
 pub(in crate::style) use values::length::{parse_length_q, parse_sizing_length};
 use parse::font_size::{FontSizeBasis, apply_font_size};
 
