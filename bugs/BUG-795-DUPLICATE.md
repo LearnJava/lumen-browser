@@ -13,7 +13,7 @@
 143 id** (было 75 из 86 файлов), 79 `Test OK`, и `TypeError: Cannot set
 properties of undefined (setting 'mode')` не встречается в логе ни разу.
 Остаток к `<track>` почти не относится: 32 из 57 — весь `cors/*`, который ждёт
-`iframe.onload` у скриптового фрейма ([BUG-885](BUG-885-OPEN.md)), 9 — разметочный
+`iframe.onload` у скриптового фрейма ([BUG-885](BUG-885-FIXED.md)), 9 — разметочный
 `<track>` ([BUG-804](BUG-804-FIXED.md)), остальные — `src` после вставки и порядок
 переходов `readyState`.
 

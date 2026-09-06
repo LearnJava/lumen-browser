@@ -58,7 +58,7 @@ jsurl-nav      ticks=0   jsurl-anchor-clicked
 `xhr/open-url-javascript-window.htm`,
 `xhr/open-url-javascript-window-2.htm`.
 
-Последние два упираются в [BUG-885](BUG-885-OPEN.md) (фрейм создан скриптом)
+Последние два упираются в [BUG-885](BUG-885-FIXED.md) (фрейм создан скриптом)
 на шаг раньше — но и с загруженным фреймом `javascript:parent.request()`
 остался бы неисполненным.
 
@@ -67,5 +67,5 @@ jsurl-nav      ticks=0   jsurl-anchor-clicked
 HTML LS §7.4.5 «javascript: URL special case»: навигация на `javascript:`
 исполняет код в контексте *инициатора* и, если результат — строка,
 заменяет документ. Минимум для перечисленных id — исполнять код и не
-отправлять URL в сетевой слой. Порядок с [BUG-885](BUG-885-OPEN.md) любой:
+отправлять URL в сетевой слой. Порядок с [BUG-885](BUG-885-FIXED.md) любой:
 дефекты независимы.
