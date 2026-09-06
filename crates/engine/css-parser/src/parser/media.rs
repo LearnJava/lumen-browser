@@ -44,6 +44,10 @@ pub struct MediaQueryClause {
     /// внутри negated clause не дают `true`: clause с любым
     /// `Unsupported` оценивается как unknown и не матчит.
     pub negated: bool,
+    /// Истина для `only screen and (...)`. L3-совместимый no-op-модификатор
+    /// (не влияет на [`MediaQueryClause::matches`]) — хранится только ради
+    /// точной сериализации ([`MediaQueryClause::serialize`]).
+    pub only: bool,
     /// AND-list. Пустой — clause-error (например, `not` без feature),
     /// `matches()` отдаст `false`.
     pub conditions: Vec<MediaCondition>,
@@ -71,10 +75,12 @@ pub enum MediaFeature {
     Height(f32),
     MinHeight(f32),
     MaxHeight(f32),
-    // Aspect ratio: numerator/denominator stored as f32 ratio
-    AspectRatio(f32),
-    MinAspectRatio(f32),
-    MaxAspectRatio(f32),
+    // Aspect ratio: numerator/denominator kept separate (not pre-divided)
+    // так, чтобы serialize() мог отдать `1 / 3`, а не отгаданную из float
+    // дробь — см. Media Queries L4 aspect-ratio-serialization.html.
+    AspectRatio(f32, f32),
+    MinAspectRatio(f32, f32),
+    MaxAspectRatio(f32, f32),
     // Display
     Orientation(MediaOrientation),
     // User preferences (MQ L5, commonly used)
@@ -318,17 +324,20 @@ impl MediaFeature {
             Self::Height(px) => (ctx.height - px).abs() < 0.5,
             Self::MinHeight(px) => ctx.height >= *px,
             Self::MaxHeight(px) => ctx.height <= *px,
-            Self::AspectRatio(ratio) => {
+            Self::AspectRatio(n, d) => {
+                let ratio = n / d;
                 let actual = if ctx.height > 0.0 { ctx.width / ctx.height } else { f32::INFINITY };
                 (actual - ratio).abs() < 0.01
             }
-            Self::MinAspectRatio(ratio) => {
+            Self::MinAspectRatio(n, d) => {
+                let ratio = n / d;
                 let actual = if ctx.height > 0.0 { ctx.width / ctx.height } else { f32::INFINITY };
-                actual >= *ratio
+                actual >= ratio
             }
-            Self::MaxAspectRatio(ratio) => {
+            Self::MaxAspectRatio(n, d) => {
+                let ratio = n / d;
                 let actual = if ctx.height > 0.0 { ctx.width / ctx.height } else { 0.0 };
-                actual <= *ratio
+                actual <= ratio
             }
             Self::Orientation(o) => {
                 let actual = if ctx.width >= ctx.height {
@@ -354,6 +363,159 @@ impl MediaFeature {
             Self::Scripting(s) => ctx.scripting == *s,
             Self::InvertedColors(i) => ctx.inverted_colors == *i,
         }
+    }
+}
+
+impl MediaQuery {
+    /// Media Queries L4 §Serializing a media query list: пустой список —
+    /// пустая строка (`window.matchMedia('').media === ''`), иначе каждая
+    /// comma-separated clause сериализуется независимо и join'ится `", "`
+    /// (точное исходное разделение/пробелы не сохраняются — спека требует
+    /// канонической формы, не эха входа, отсюда и сам баг [BUG-526]).
+    pub fn serialize(&self) -> String {
+        self.clauses
+            .iter()
+            .map(MediaQueryClause::serialize)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+impl MediaQueryClause {
+    /// Клауза, которая не распозналась целиком (пустой `conditions`) или
+    /// содержит хотя бы один `Unsupported` (неизвестная фича, синтаксическая
+    /// ошибка внутри `()`, лишний `not`/`only`) сериализуется как литеральная
+    /// `not all` — Media Queries L4 требует заменить каждый невалидный член
+    /// списка этой строкой целиком, независимо от собственных `not`/`only`.
+    pub fn serialize(&self) -> String {
+        if self.conditions.is_empty()
+            || self
+                .conditions
+                .iter()
+                .any(|c| matches!(c, MediaCondition::Unsupported))
+        {
+            return "not all".to_string();
+        }
+        let body = self
+            .conditions
+            .iter()
+            .map(MediaCondition::serialize)
+            .collect::<Vec<_>>()
+            .join(" and ");
+        if self.negated {
+            format!("not {body}")
+        } else if self.only {
+            format!("only {body}")
+        } else {
+            body
+        }
+    }
+}
+
+impl MediaCondition {
+    fn serialize(&self) -> String {
+        match self {
+            Self::MediaType(t) => t.clone(),
+            Self::Feature(f) => format!("({})", f.serialize()),
+            // Клаузы с Unsupported перехватываются на уровне
+            // MediaQueryClause::serialize раньше, чем мы сюда доходим.
+            Self::Unsupported => "not all".to_string(),
+        }
+    }
+}
+
+impl MediaFeature {
+    fn serialize(&self) -> String {
+        match self {
+            Self::Width(px) => format!("width: {px}px"),
+            Self::MinWidth(px) => format!("min-width: {px}px"),
+            Self::MaxWidth(px) => format!("max-width: {px}px"),
+            Self::Height(px) => format!("height: {px}px"),
+            Self::MinHeight(px) => format!("min-height: {px}px"),
+            Self::MaxHeight(px) => format!("max-height: {px}px"),
+            Self::AspectRatio(n, d) => format!("aspect-ratio: {n} / {d}"),
+            Self::MinAspectRatio(n, d) => format!("min-aspect-ratio: {n} / {d}"),
+            Self::MaxAspectRatio(n, d) => format!("max-aspect-ratio: {n} / {d}"),
+            Self::Orientation(o) => format!(
+                "orientation: {}",
+                match o {
+                    MediaOrientation::Portrait => "portrait",
+                    MediaOrientation::Landscape => "landscape",
+                }
+            ),
+            Self::PrefersColorScheme(s) => format!(
+                "prefers-color-scheme: {}",
+                match s {
+                    ColorScheme::Light => "light",
+                    ColorScheme::Dark => "dark",
+                }
+            ),
+            Self::PrefersReducedMotion(reduce) => format!(
+                "prefers-reduced-motion: {}",
+                if *reduce { "reduce" } else { "no-preference" }
+            ),
+            Self::ForcedColors(active) => format!(
+                "forced-colors: {}",
+                if *active { "active" } else { "none" }
+            ),
+            Self::Hover(h) => format!("hover: {}", hover_str(*h)),
+            Self::AnyHover(h) => format!("any-hover: {}", hover_str(*h)),
+            Self::Pointer(p) => format!("pointer: {}", pointer_str(*p)),
+            Self::AnyPointer(p) => format!("any-pointer: {}", pointer_str(*p)),
+            Self::PrefersContrast(c) => format!(
+                "prefers-contrast: {}",
+                match c {
+                    MediaContrast::NoPreference => "no-preference",
+                    MediaContrast::More => "more",
+                    MediaContrast::Less => "less",
+                    MediaContrast::Custom => "custom",
+                }
+            ),
+            Self::PrefersReducedData(d) => format!(
+                "prefers-reduced-data: {}",
+                match d {
+                    MediaReducedData::NoPreference => "no-preference",
+                    MediaReducedData::Reduce => "reduce",
+                }
+            ),
+            Self::PrefersReducedTransparency(t) => format!(
+                "prefers-reduced-transparency: {}",
+                match t {
+                    MediaReducedTransparency::NoPreference => "no-preference",
+                    MediaReducedTransparency::Reduce => "reduce",
+                }
+            ),
+            Self::Scripting(s) => format!(
+                "scripting: {}",
+                match s {
+                    MediaScripting::None => "none",
+                    MediaScripting::InitialOnly => "initial-only",
+                    MediaScripting::Enabled => "enabled",
+                }
+            ),
+            Self::InvertedColors(i) => format!(
+                "inverted-colors: {}",
+                match i {
+                    MediaInvertedColors::None => "none",
+                    MediaInvertedColors::Inverted => "inverted",
+                }
+            ),
+        }
+    }
+}
+
+fn hover_str(h: MediaHover) -> &'static str {
+    match h {
+        MediaHover::None => "none",
+        MediaHover::Hover => "hover",
+    }
+}
+
+fn pointer_str(p: MediaPointer) -> &'static str {
+    match p {
+        MediaPointer::None => "none",
+        MediaPointer::Coarse => "coarse",
+        MediaPointer::Fine => "fine",
     }
 }
 
@@ -385,10 +547,12 @@ pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {
     // используется для скрытия от L3-without-media-queries браузеров —
     // для нас семантически no-op. `not` инвертирует clause.
     let mut negated = false;
+    let mut only = false;
     if let Some(rest) = strip_leading_keyword(input, "not") {
         negated = true;
         input = rest;
     } else if let Some(rest) = strip_leading_keyword(input, "only") {
+        only = true;
         input = rest;
     }
 
@@ -404,6 +568,7 @@ pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {
             } else {
                 return MediaQueryClause {
                     negated,
+                    only,
                     conditions: vec![MediaCondition::Unsupported],
                 };
             }
@@ -423,6 +588,7 @@ pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {
             if word.eq_ignore_ascii_case("not") || word.eq_ignore_ascii_case("only") {
                 return MediaQueryClause {
                     negated,
+                    only,
                     conditions: vec![MediaCondition::Unsupported],
                 };
             }
@@ -436,7 +602,7 @@ pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {
         conditions.push(MediaCondition::Unsupported);
     }
 
-    MediaQueryClause { negated, conditions }
+    MediaQueryClause { negated, only, conditions }
 }
 
 /// Если строка начинается с `keyword` (ASCII case-insensitive) и за ним
@@ -478,15 +644,18 @@ pub(crate) fn parse_media_length_px(val: &str) -> Option<f32> {
     }
 }
 
-/// Парсит значение aspect-ratio: `N/M` или просто `N`.
-pub(crate) fn parse_aspect_ratio(val: &str) -> Option<f32> {
+/// Парсит значение aspect-ratio: `N/M` или просто `N` (= `N/1`).
+/// Числитель/знаменатель сохраняются раздельно (не делятся сразу) —
+/// нужно для точной сериализации (`1/3` → `1 / 3`, не `0.33333334`).
+pub(crate) fn parse_aspect_ratio(val: &str) -> Option<(f32, f32)> {
     if let Some((n, d)) = val.split_once('/') {
         let n: f32 = n.trim().parse().ok()?;
         let d: f32 = d.trim().parse().ok()?;
         if d == 0.0 { return None; }
-        Some(n / d)
+        Some((n, d))
     } else {
-        val.trim().parse::<f32>().ok()
+        let n: f32 = val.trim().parse().ok()?;
+        Some((n, 1.0))
     }
 }
 
@@ -514,13 +683,13 @@ pub(crate) fn parse_media_feature(s: &str) -> MediaCondition {
             MediaCondition::Feature(feature)
         }
         "aspect-ratio" | "min-aspect-ratio" | "max-aspect-ratio" => {
-            let Some(ratio) = parse_aspect_ratio(val) else {
+            let Some((n, d)) = parse_aspect_ratio(val) else {
                 return MediaCondition::Unsupported;
             };
             let feature = match key.as_str() {
-                "aspect-ratio" => MediaFeature::AspectRatio(ratio),
-                "min-aspect-ratio" => MediaFeature::MinAspectRatio(ratio),
-                "max-aspect-ratio" => MediaFeature::MaxAspectRatio(ratio),
+                "aspect-ratio" => MediaFeature::AspectRatio(n, d),
+                "min-aspect-ratio" => MediaFeature::MinAspectRatio(n, d),
+                "max-aspect-ratio" => MediaFeature::MaxAspectRatio(n, d),
                 _ => unreachable!(),
             };
             MediaCondition::Feature(feature)

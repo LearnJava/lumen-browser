@@ -5388,8 +5388,12 @@ MediaQueryListEvent.prototype.constructor = MediaQueryListEvent;
 function MediaQueryList(media) {
     var vp = (typeof _lumen_get_viewport_size === 'function')
         ? _lumen_get_viewport_size() : [800, 600];
-    this.media       = String(media == null ? '' : media);
-    this.matches     = !!_lumen_match_media(this.media, vp[0], vp[1], false, false);
+    var raw = String(media == null ? '' : media);
+    // Media Queries L4 §Serializing a media query list — `.media` reports the
+    // canonical serialization (whitespace collapsed, invalid clauses folded
+    // into `not all`), not an echo of the constructor argument.
+    this.media       = _lumen_serialize_media_query(raw);
+    this.matches     = !!_lumen_match_media(raw, vp[0], vp[1], false, false);
     this.onchange    = null;
     this._listeners  = [];
 }

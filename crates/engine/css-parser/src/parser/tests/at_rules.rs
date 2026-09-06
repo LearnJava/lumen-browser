@@ -1332,6 +1332,81 @@ use super::*;
         assert!(!q.matches(&ctx));
     }
 
+    // ── BUG-526: Media Queries L4 §Serializing a media query list ──
+    // Транскрипция подтестов `match-media-parsing.html`/
+    // `aspect-ratio-serialization.html` (см. bugs/BUG-526-OPEN.md).
+
+    #[test]
+    fn media_query_serialize_empty() {
+        assert_eq!(parse_media_query("").serialize(), "");
+        assert_eq!(parse_media_query("  ").serialize(), "");
+    }
+
+    #[test]
+    fn media_query_serialize_trims_and_lowercases_media_type() {
+        assert_eq!(parse_media_query("all").serialize(), "all");
+        assert_eq!(parse_media_query(" all").serialize(), "all");
+        assert_eq!(parse_media_query("   all   ").serialize(), "all");
+        assert_eq!(parse_media_query(" foo ").serialize(), "foo");
+    }
+
+    #[test]
+    fn media_query_serialize_comma_list_normalizes_spacing() {
+        assert_eq!(parse_media_query("all,all").serialize(), "all, all");
+        assert_eq!(parse_media_query(" all , all ").serialize(), "all, all");
+    }
+
+    #[test]
+    fn media_query_serialize_empty_clauses_become_not_all() {
+        assert_eq!(parse_media_query(",").serialize(), "not all, not all");
+        assert_eq!(parse_media_query(" , ").serialize(), "not all, not all");
+        assert_eq!(
+            parse_media_query(",,").serialize(),
+            "not all, not all, not all"
+        );
+        assert_eq!(parse_media_query(" foo,").serialize(), "foo, not all");
+    }
+
+    #[test]
+    fn media_query_serialize_feature_round_trips_canonical_form() {
+        assert_eq!(
+            parse_media_query("(min-width: 500px)").serialize(),
+            "(min-width: 500px)"
+        );
+        assert_eq!(
+            parse_media_query("( min-width:  500px )").serialize(),
+            "(min-width: 500px)"
+        );
+    }
+
+    #[test]
+    fn media_query_serialize_and_list_joined_with_and() {
+        assert_eq!(
+            parse_media_query("screen and (min-width: 500px)").serialize(),
+            "screen and (min-width: 500px)"
+        );
+    }
+
+    #[test]
+    fn media_query_serialize_not_and_only_prefixes_preserved() {
+        assert_eq!(parse_media_query("not screen").serialize(), "not screen");
+        assert_eq!(parse_media_query("only screen").serialize(), "only screen");
+    }
+
+    #[test]
+    fn media_query_serialize_aspect_ratio_adds_spacing_around_slash() {
+        // aspect-ratio-serialization.html: `1/3` → `1 / 3` (числитель и
+        // знаменатель хранятся раздельно, не пересчитанной дробью).
+        assert_eq!(
+            parse_media_query("(aspect-ratio: 1/3)").serialize(),
+            "(aspect-ratio: 1 / 3)"
+        );
+        assert_eq!(
+            parse_media_query("(min-aspect-ratio: 16/9)").serialize(),
+            "(min-aspect-ratio: 16 / 9)"
+        );
+    }
+
     // ── MQ L5 §6.4: prefers-reduced-motion ──
 
     #[test]
