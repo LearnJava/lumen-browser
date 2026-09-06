@@ -1640,6 +1640,154 @@ use super::*;
         assert_eq!(s.width, None);
     }
 
+    // ── `@mixin`/`@apply`/`@contents` (BUG-518, cascade-time expansion) ─────
+
+    #[test]
+    fn css_mixin_basic_apply_result_declaration_resolves() {
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@mixin --pad(--n) { @result { margin-left: var(--n); } } \
+             .box { @apply --pad(5px); }",
+            &[0],
+        );
+        assert_eq!(s.margin_left, LengthOrAuto::Length(Length::Px(5.0)));
+    }
+
+    #[test]
+    fn css_mixin_positional_argument_resolves_through_calc() {
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@mixin --double(--x) { @result { width: calc(var(--x) * 2); } } \
+             .box { @apply --double(10px); }",
+            &[0],
+        );
+        let w = s.width.expect("width should be set");
+        assert_eq!(w.resolve(16.0, None, Size::new(800.0, 600.0)), Some(20.0));
+    }
+
+    #[test]
+    fn css_mixin_default_parameter_used_when_call_has_no_parens() {
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@mixin --pad(--n: 5px) { @result { margin-left: var(--n); } } \
+             .box { @apply --pad; }",
+            &[0],
+        );
+        assert_eq!(s.margin_left, LengthOrAuto::Length(Length::Px(5.0)));
+    }
+
+    #[test]
+    fn css_mixin_local_declaration_feeds_result() {
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@mixin --clamped(--min, --val, --max) { \
+                 --c: clamp(var(--min), var(--val), var(--max)); \
+                 @result { width: var(--c); } \
+             } \
+             .box { @apply --clamped(10px, 5px, 50px); }",
+            &[0],
+        );
+        let w = s.width.expect("width should be set");
+        assert_eq!(w.resolve(16.0, None, Size::new(800.0, 600.0)), Some(10.0));
+    }
+
+    #[test]
+    fn css_mixin_locals_do_not_see_caller_scope() {
+        // Mirrors `mixin-locals.html` "Parameters do not resolve against
+        // locals": a mixin parameter's DEFAULT resolves against the call
+        // site's scope, not a same-named local declared inside the mixin.
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@mixin --m(--w: var(--outer-w)) { \
+                 --outer-w: 999px; \
+                 @result { width: var(--w); } \
+             } \
+             .box { --outer-w: 7px; @apply --m; }",
+            &[0],
+        );
+        let w = s.width.expect("width should be set");
+        assert_eq!(w.resolve(16.0, None, Size::new(800.0, 600.0)), Some(7.0));
+    }
+
+    #[test]
+    fn css_mixin_unknown_name_is_a_noop() {
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            ".box { @apply --not-defined; }",
+            &[0],
+        );
+        assert_eq!(s.width, None);
+    }
+
+    #[test]
+    fn css_mixin_without_result_is_a_noop() {
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@mixin --empty() {} \
+             .box { width: 5px; @apply --empty; }",
+            &[0],
+        );
+        assert_eq!(s.width, Some(Length::Px(5.0)));
+    }
+
+    #[test]
+    fn css_mixin_nested_apply_inside_result() {
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@mixin --inner(--v) { @result { width: var(--v); } } \
+             @mixin --outer(--v) { @result { @apply --inner(var(--v)); } } \
+             .box { @apply --outer(30px); }",
+            &[0],
+        );
+        let w = s.width.expect("width should be set");
+        assert_eq!(w.resolve(16.0, None, Size::new(800.0, 600.0)), Some(30.0));
+    }
+
+    #[test]
+    fn css_mixin_redefinition_last_registration_wins() {
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@mixin --pick() { @result { width: 1px; } } \
+             @mixin --pick() { @result { width: 2px; } } \
+             .box { @apply --pick; }",
+            &[0],
+        );
+        assert_eq!(s.width, Some(Length::Px(2.0)));
+    }
+
+    #[test]
+    fn css_mixin_contents_uses_apply_block_when_given() {
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@mixin --wrap() { @result { @contents; } } \
+             .box { @apply --wrap { width: 40px; } }",
+            &[0],
+        );
+        assert_eq!(s.width, Some(Length::Px(40.0)));
+    }
+
+    #[test]
+    fn css_mixin_contents_uses_own_fallback_when_apply_has_no_block() {
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@mixin --wrap() { @result { @contents { width: 50px; } } } \
+             .box { @apply --wrap; }",
+            &[0],
+        );
+        assert_eq!(s.width, Some(Length::Px(50.0)));
+    }
+
+    #[test]
+    fn css_mixin_brace_wrapped_argument_is_stripped() {
+        let s = cascade_at(
+            "<div class=\"box\"></div>",
+            "@mixin --m(--v) { @result { width: var(--v); } } \
+             .box { @apply --m({60px}); }",
+            &[0],
+        );
+        assert_eq!(s.width, Some(Length::Px(60.0)));
+    }
+
     // ── `scrollbar-gutter` (BUG-505): `stable && both-edges?`, order-independent ──
 
     #[test]

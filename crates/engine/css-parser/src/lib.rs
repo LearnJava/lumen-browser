@@ -18,12 +18,12 @@ pub mod parser;
 
 pub use parser::{
     is_valid_selector_list,
-    parse, parse_inline_style, parse_selector_list, parse_media_query, parse_supports_condition, AttrOp, AttrSelector, ColorScheme,
+    parse, parse_apply_call, parse_inline_style, parse_selector_list, parse_media_query, parse_supports_condition, ApplyRule, AttrOp, AttrSelector, ColorScheme,
     ColorProfileRule, Combinator, CompoundSelector, ComplexSelector, ContainerRule, CounterStyleRule, Declaration,
     DirArg, FontFaceRule, FontFaceSource, FontFaceSourceKind, FontPaletteValuesRule, FunctionParameter, FunctionRule, ImportRule, Keyframe, KeyframesRule,
     LayerRule, MediaCondition, MediaContext, MediaContrast, MediaFeature, MediaHover, MediaInvertedColors, MediaOrientation, MediaPointer, MediaQuery,
     MediaReducedData, MediaReducedTransparency, MediaScripting,
-    MediaQueryClause, MediaRule, NthSpec, PageRule, PropertyRule, PseudoClass, PseudoElementKind, RelativeSelector,
+    MediaQueryClause, MediaRule, MixinParameter, MixinResultItem, MixinRule, MIXIN_APPLY_MARKER, NthSpec, PageRule, PropertyRule, PseudoClass, PseudoElementKind, RelativeSelector,
     Rule, ScopeRule,
     SimpleSelector, Specificity, StartingStyleRule, Stylesheet, StylesheetNodeEntry, StylesheetRevision,
     SupportsCondition, SupportsRule, CssomRuleRef,

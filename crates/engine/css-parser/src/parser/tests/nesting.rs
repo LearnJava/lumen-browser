@@ -685,3 +685,203 @@ use super::*;
         assert_eq!(s.function_rules[1].name, "--b");
         assert_eq!(s.rules.len(), 1);
     }
+
+    // ── @mixin / @apply / @contents tests (BUG-518) ─────────────────────────
+
+    #[test]
+    fn mixin_basic_single_param() {
+        let s = parse("@mixin --pad(--n) { @result { margin-left: var(--n); } }");
+        assert_eq!(s.mixin_rules.len(), 1);
+        let m = &s.mixin_rules[0];
+        assert_eq!(m.name, "--pad");
+        assert_eq!(m.parameters.len(), 1);
+        assert_eq!(m.parameters[0].name, "--n");
+        assert_eq!(m.parameters[0].default, None);
+        assert_eq!(m.parameters[0].type_syntax, None);
+        let result = m.result.as_ref().expect("mixin should have @result");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], MixinResultItem::Decl(Declaration {
+            property: "margin-left".to_string(),
+            value: "var(--n)".to_string(),
+            important: false,
+        }));
+    }
+
+    #[test]
+    fn mixin_multiple_params_with_default() {
+        let s = parse("@mixin --m(--a, --b: 10px) { @result { width: var(--a); } }");
+        let m = &s.mixin_rules[0];
+        assert_eq!(m.parameters.len(), 2);
+        assert_eq!(m.parameters[0].name, "--a");
+        assert_eq!(m.parameters[0].default, None);
+        assert_eq!(m.parameters[1].name, "--b");
+        assert_eq!(m.parameters[1].default.as_deref(), Some("10px"));
+    }
+
+    #[test]
+    fn mixin_zero_params() {
+        let s = parse("@mixin --center() { @result { display: flex; } }");
+        let m = &s.mixin_rules[0];
+        assert_eq!(m.name, "--center");
+        assert!(m.parameters.is_empty());
+    }
+
+    #[test]
+    fn mixin_type_syntax_stored_raw() {
+        let s = parse("@mixin --m(--len type(<length>): 1em) { @result { width: var(--len); } }");
+        let m = &s.mixin_rules[0];
+        assert_eq!(m.parameters[0].name, "--len");
+        assert_eq!(m.parameters[0].type_syntax.as_deref(), Some("<length>"));
+        assert_eq!(m.parameters[0].default.as_deref(), Some("1em"));
+    }
+
+    #[test]
+    fn mixin_locals_collected_before_and_after_result() {
+        // CSS Mixins L1 (`mixin-locals.html` "Locals after @result are
+        // seen"): a `--x:` local declared AFTER `@result` in source order
+        // is still visible when `@result` is evaluated — the parser must
+        // collect both.
+        let s = parse(
+            "@mixin --m() { \
+                 --before: red; \
+                 @result { color: var(--after); } \
+                 --after: green; \
+             }",
+        );
+        let m = &s.mixin_rules[0];
+        assert_eq!(m.locals.len(), 2);
+        assert_eq!(m.locals[0].property, "--before");
+        assert_eq!(m.locals[1].property, "--after");
+    }
+
+    #[test]
+    fn mixin_non_custom_declaration_at_top_level_is_discarded() {
+        let s = parse("@mixin --m() { font-size: 200px; @result { color: red; } }");
+        let m = &s.mixin_rules[0];
+        assert!(m.locals.is_empty());
+    }
+
+    #[test]
+    fn mixin_no_result_block_is_none() {
+        let s = parse("@mixin --empty() {}");
+        let m = &s.mixin_rules[0];
+        assert_eq!(m.result, None);
+    }
+
+    #[test]
+    fn mixin_name_without_double_dash_ignored() {
+        let s = parse("@mixin center() { @result { display: flex; } }");
+        assert!(s.mixin_rules.is_empty());
+    }
+
+    #[test]
+    fn mixin_missing_argument_list_ignored() {
+        // No `(...)` at all after the name — invalid per the same
+        // function-token grammar `@function` enforces (confirmed against
+        // the vendored `mixin-basic.html`'s `--missing-argument-list` case).
+        let s = parse("@mixin --m { @result { color: red; } }");
+        assert!(s.mixin_rules.is_empty());
+    }
+
+    #[test]
+    fn mixin_multiple_rules_last_registration_available_for_lookup() {
+        // CSS Mixins L1 (`mixin-basic.html`): a later `@mixin` of the same
+        // name is the one `@apply` should resolve to — the parser itself
+        // just needs to keep BOTH (cascade-time lookup picks the last).
+        let s = parse(
+            r#"@mixin --m() { @result { color: red; } } @mixin --m() { @result { color: green; } }"#,
+        );
+        assert_eq!(s.mixin_rules.len(), 2);
+        assert_eq!(s.mixin_rules[1].name, "--m");
+    }
+
+    #[test]
+    fn mixin_contents_with_fallback_parsed() {
+        let s = parse("@mixin --m() { @result { @contents { color: blue; } } }");
+        let m = &s.mixin_rules[0];
+        let result = m.result.as_ref().unwrap();
+        assert_eq!(result.len(), 1);
+        let MixinResultItem::Contents { fallback } = &result[0] else {
+            panic!("expected Contents item, got {:?}", result[0]);
+        };
+        assert_eq!(fallback.len(), 1);
+        assert_eq!(fallback[0].property, "color");
+        assert_eq!(fallback[0].value, "blue");
+    }
+
+    #[test]
+    fn mixin_contents_without_fallback_parsed() {
+        let s = parse("@mixin --m() { @result { @contents; color: green; } }");
+        let m = &s.mixin_rules[0];
+        let result = m.result.as_ref().unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], MixinResultItem::Contents { fallback: Vec::new() });
+        assert_eq!(result[1], MixinResultItem::Decl(Declaration {
+            property: "color".to_string(),
+            value: "green".to_string(),
+            important: false,
+        }));
+    }
+
+    #[test]
+    fn mixin_nested_apply_inside_result_parsed() {
+        let s = parse("@mixin --m(--v) { @result { @apply --inner(var(--v)); } }");
+        let m = &s.mixin_rules[0];
+        let result = m.result.as_ref().unwrap();
+        assert_eq!(result.len(), 1);
+        let MixinResultItem::Apply(apply) = &result[0] else {
+            panic!("expected Apply item, got {:?}", result[0]);
+        };
+        assert_eq!(apply.name, "--inner");
+        assert_eq!(apply.args, vec!["var(--v)".to_string()]);
+    }
+
+    #[test]
+    fn apply_marker_declaration_at_correct_source_position() {
+        // `@apply` inside a plain style rule must not be routed through
+        // `at_rules`/`parse_nested_at_rule` like `@media` — it stays a
+        // marker `Declaration` at its exact position among siblings, so
+        // cascade-time expansion preserves normal source-order precedence.
+        let s = parse(".box { color: red; @apply --m(1px); width: 2px; }");
+        assert_eq!(s.rules.len(), 1);
+        let decls = &s.rules[0].declarations;
+        assert_eq!(decls.len(), 3);
+        assert_eq!(decls[0].property, "color");
+        assert_eq!(decls[1].property, MIXIN_APPLY_MARKER);
+        let apply = parse_apply_call(&decls[1].value).expect("marker value should re-parse");
+        assert_eq!(apply.name, "--m");
+        assert_eq!(apply.args, vec!["1px".to_string()]);
+        assert_eq!(decls[2].property, "width");
+    }
+
+    #[test]
+    fn apply_call_parses_name_args_and_block() {
+        let apply = parse_apply_call("--m(1px, 2px) { color: green; }").unwrap();
+        assert_eq!(apply.name, "--m");
+        assert_eq!(apply.args, vec!["1px".to_string(), "2px".to_string()]);
+        let block = apply.block.unwrap();
+        assert_eq!(block.len(), 1);
+        assert_eq!(block[0].property, "color");
+        assert_eq!(block[0].value, "green");
+    }
+
+    #[test]
+    fn apply_call_bare_no_parens_has_empty_args_and_no_block() {
+        let apply = parse_apply_call("--m").unwrap();
+        assert_eq!(apply.name, "--m");
+        assert!(apply.args.is_empty());
+        assert_eq!(apply.block, None);
+    }
+
+    #[test]
+    fn apply_call_explicit_empty_parens_has_empty_args() {
+        let apply = parse_apply_call("--m()").unwrap();
+        assert_eq!(apply.name, "--m");
+        assert!(apply.args.is_empty());
+    }
+
+    #[test]
+    fn apply_call_brace_wrapped_argument_is_stripped() {
+        let apply = parse_apply_call("--m({green})").unwrap();
+        assert_eq!(apply.args, vec!["green".to_string()]);
+    }

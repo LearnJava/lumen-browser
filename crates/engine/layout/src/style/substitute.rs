@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use lumen_core::geom::Size;
-use lumen_css_parser::FunctionRule;
+use lumen_css_parser::{ApplyRule, Declaration, FunctionRule, MixinResultItem, MixinRule};
 use lumen_dom::{Document, NodeId};
 
 use crate::style::calc::parse_math_function_value;
@@ -336,6 +336,177 @@ fn find_custom_function_call(s: &str) -> Option<(usize, usize)> {
         }
     }
     None
+}
+
+/// Recursion guard for `@apply` mixin expansion (CSS Functions and Mixins
+/// L1) — same value as `FUNCTION_CALL_MAX_DEPTH`, since mixins recurse
+/// through the same kind of call chain (nested `@apply` inside `@result`,
+/// arguments that are themselves `--fn()`/`@apply`-fed expressions).
+const MIXIN_APPLY_MAX_DEPTH: u32 = 16;
+
+/// CSS Functions and Mixins L1: expands the raw text captured for one
+/// `@apply` marker declaration (`lumen_css_parser::MIXIN_APPLY_MARKER`)
+/// into the flat list of declarations it should splice in, resolved
+/// against `mixins` (the stylesheet's `@mixin` rules) and `custom` (the
+/// calling rule's resolved custom properties — the scope `@apply`'s own
+/// arguments and `{ ... }` block, if any, are evaluated against).
+///
+/// Returns `None` only if `raw` itself fails to re-parse (shouldn't happen
+/// for text the parser wrote) or recursion exceeds `MIXIN_APPLY_MAX_DEPTH`.
+/// An `@apply` whose name matches no registered `@mixin` is a no-op —
+/// `Some(vec![])`, not `None` — CSS Mixins L1 doesn't treat an unknown
+/// mixin call as invalidating (confirmed against `mixin-basic.html`'s
+/// `invalid-name` case).
+///
+/// Deferred (Phase 0, same class of gap as `expand_custom_functions`'s
+/// documented list): `type()`-annotated parameter validation/coercion, a
+/// nested style rule inside `@result` (`MixinRule`'s doc comment covers
+/// why that can't share this cascade-time expansion), `@apply`
+/// argument-count strictness when a required parameter has no default (an
+/// omitted argument is left unbound here, relying on `var()`'s own
+/// fallback inside `@result` — matches the common case but not every edge
+/// the spec draws around explicit `()`), `attr()` inside an `@result`
+/// declaration (unlike `var()`/`--fn()`, not expanded against the mixin's
+/// local scope here — the caller's own `cascade.rs` loop handles `attr()`
+/// before this function ever sees the marker declaration's *own* value,
+/// but declarations produced *by* the expansion don't get a second pass).
+#[allow(clippy::too_many_arguments)]
+pub(in crate::style) fn expand_mixin_apply(
+    raw: &str,
+    mixins: &[MixinRule],
+    functions: &[FunctionRule],
+    custom: &HashMap<String, String>,
+    depth: u32,
+    em_basis: f32,
+    viewport: Size,
+) -> Option<Vec<Declaration>> {
+    let apply = lumen_css_parser::parse_apply_call(raw)?;
+    expand_apply_rule(&apply, mixins, functions, custom, depth, em_basis, viewport)
+}
+
+/// Shared core of [`expand_mixin_apply`], taking an already-parsed
+/// [`ApplyRule`] — lets a nested `@apply` found directly inside another
+/// mixin's own `@result` (`MixinResultItem::Apply`) recurse in without a
+/// string round-trip.
+#[allow(clippy::too_many_arguments)]
+fn expand_apply_rule(
+    apply: &ApplyRule,
+    mixins: &[MixinRule],
+    functions: &[FunctionRule],
+    custom: &HashMap<String, String>,
+    depth: u32,
+    em_basis: f32,
+    viewport: Size,
+) -> Option<Vec<Declaration>> {
+    if depth > MIXIN_APPLY_MAX_DEPTH {
+        return None;
+    }
+    let mixin = mixins.iter().rev().find(|m| m.name == apply.name);
+    let Some(mixin) = mixin else {
+        return Some(Vec::new());
+    };
+    let Some(result) = &mixin.result else {
+        return Some(Vec::new());
+    };
+
+    // Bind positional arguments against the CALL SITE's scope (`custom`) —
+    // CSS Mixins L1 "mixin arguments are resolved at call site, not at
+    // use" (confirmed against `mixin-parameters.html`'s test of that exact
+    // name, and `mixin-locals.html`'s "Parameters do not resolve against
+    // locals"). An omitted argument with no declared default is left
+    // unbound rather than failing the whole call — `var()` inside
+    // `@result` supplies its own fallback (`mixin-parameters.html`
+    // "Fallback is used with no parameter and no default"). A bound
+    // argument that itself fails to expand (bad `var()`/`--fn()`) DOES
+    // invalidate the whole call, mirroring `expand_custom_functions`.
+    let mut local: HashMap<String, String> = HashMap::new();
+    for (i, param) in mixin.parameters.iter().enumerate() {
+        let raw_arg = match apply.args.get(i) {
+            Some(a) => a.clone(),
+            None => match &param.default {
+                Some(d) => d.clone(),
+                None => continue,
+            },
+        };
+        let expanded = expand_vars(&raw_arg, custom, depth + 1, em_basis, viewport)
+            .and_then(|v| expand_custom_functions(&v, functions, custom, depth + 1, em_basis, viewport))?;
+        local.insert(param.name.clone(), expanded);
+    }
+
+    // The mixin's own `--x:` locals (both before/after `@result` in
+    // source order — `mixin.locals` already carries them combined).
+    // Resolved against `local` itself (bound params + earlier locals), NOT
+    // against `custom` — a local does not see the caller's scope
+    // (`mixin-locals.html` "Locals resolve against each other" /
+    // "Locals resolve against parameters").
+    for decl in &mixin.locals {
+        let Some(local_name) = decl.property.strip_prefix("--") else { continue };
+        let v = expand_vars(&decl.value, &local, depth + 1, em_basis, viewport)
+            .and_then(|v| expand_custom_functions(&v, functions, &local, depth + 1, em_basis, viewport))?;
+        local.insert(format!("--{local_name}"), v);
+    }
+
+    Some(expand_mixin_result_items(result, apply, mixins, functions, &local, custom, depth, em_basis, viewport))
+}
+
+/// Expands one mixin's already-parsed `@result` items into a flat
+/// `Vec<Declaration>`, substituting `@contents` and recursing into nested
+/// `@apply` calls. `local` is the mixin's own scope (bound parameters +
+/// its `--x:` locals); `caller_scope` is the scope `apply`'s own
+/// `{ ... }` block should resolve `var()`/`--fn()` against — the scope of
+/// whoever *wrote* that block (the call site), not the mixin being
+/// expanded, whereas a `@contents` *fallback* is written inside the mixin
+/// itself and so resolves against `local`.
+///
+/// Each item is resolved independently: a `var()`/function failure inside
+/// one declaration drops only that declaration (matching ordinary CSS
+/// declaration-block semantics, and `cascade.rs`'s own per-declaration
+/// `continue` for the same failure elsewhere), not the rest of `@result`.
+#[allow(clippy::too_many_arguments)]
+fn expand_mixin_result_items(
+    items: &[MixinResultItem],
+    apply: &ApplyRule,
+    mixins: &[MixinRule],
+    functions: &[FunctionRule],
+    local: &HashMap<String, String>,
+    caller_scope: &HashMap<String, String>,
+    depth: u32,
+    em_basis: f32,
+    viewport: Size,
+) -> Vec<Declaration> {
+    let mut out = Vec::new();
+    for item in items {
+        match item {
+            MixinResultItem::Decl(d) => {
+                if let Some(v) = expand_vars(&d.value, local, depth + 1, em_basis, viewport)
+                    .and_then(|v| expand_custom_functions(&v, functions, local, depth + 1, em_basis, viewport))
+                {
+                    out.push(Declaration { property: d.property.clone(), value: v, important: d.important });
+                }
+            }
+            MixinResultItem::Apply(nested) => {
+                if let Some(expanded) =
+                    expand_apply_rule(nested, mixins, functions, local, depth + 1, em_basis, viewport)
+                {
+                    out.extend(expanded);
+                }
+            }
+            MixinResultItem::Contents { fallback } => {
+                let (block, scope): (&[Declaration], &HashMap<String, String>) = match &apply.block {
+                    Some(b) => (b.as_slice(), caller_scope),
+                    None => (fallback.as_slice(), local),
+                };
+                for d in block {
+                    if let Some(v) = expand_vars(&d.value, scope, depth + 1, em_basis, viewport)
+                        .and_then(|v| expand_custom_functions(&v, functions, scope, depth + 1, em_basis, viewport))
+                    {
+                        out.push(Declaration { property: d.property.clone(), value: v, important: d.important });
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Splits `--name(<here>)` call arguments on top-level commas (nested

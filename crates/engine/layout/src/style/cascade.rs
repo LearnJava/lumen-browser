@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
-    parse_inline_style, Declaration, PropertyRule, Specificity, Stylesheet,
+    parse_inline_style, Declaration, PropertyRule, Specificity, Stylesheet, MIXIN_APPLY_MARKER,
 };
 use lumen_dom::{Document, DocumentMode, NodeData, NodeId};
 
@@ -28,7 +28,7 @@ use crate::style::{
     apply_ua_heading_style, apply_ua_hr_style, apply_ua_inert, apply_ua_table_cell_padding,
     apply_ua_text_decoration, apply_webkit_scrollbar_pseudos, coerce_overflow_axes,
     complex_has_host, default_display, ensure_cascade_index, expand_attr_val,
-    expand_custom_functions, expand_vars, forced_colors_active, matches_complex,
+    expand_custom_functions, expand_mixin_apply, expand_vars, forced_colors_active, matches_complex,
     matches_slotted_complex, node_in_scope, resolve_logical_properties, resolve_overflow_logical_properties,
     resolve_overscroll_behavior_logical_properties, resolve_system_colors_in_style,
     strip_ua_appearance_box_styling, ua_font_family,
@@ -1273,6 +1273,34 @@ pub fn compute_style(
         // skip it instead of letting it fail property parsing.
         let dv = decl.value.trim();
         if dv.eq_ignore_ascii_case("revert-layer") || dv.eq_ignore_ascii_case("revert-rule") {
+            continue;
+        }
+        // CSS Functions and Mixins L1: `@apply` markers (`MIXIN_APPLY_MARKER`,
+        // pushed by the parser at the exact source position of the `@apply`
+        // statement) are not a real property/value pair — expand them into
+        // zero or more real declarations and apply each in place instead of
+        // falling into the attr()/var()/function pipeline below, which would
+        // misparse the marker's raw-text payload. Gated on `mixin_rules`
+        // being non-empty, same reasoning as the `function_rules` gate below.
+        if decl.property == MIXIN_APPLY_MARKER {
+            if !sheet.mixin_rules.is_empty()
+                && let Some(expanded) = expand_mixin_apply(
+                    &decl.value,
+                    &sheet.mixin_rules,
+                    &sheet.function_rules,
+                    &style.custom_props,
+                    0,
+                    em_basis,
+                    viewport,
+                )
+            {
+                for d in &expanded {
+                    apply_declaration(
+                        &mut style, d, em_basis, viewport, parent_weight, inherited,
+                        ua_baseline_ref, is_quirks, dark_mode,
+                    );
+                }
+            }
             continue;
         }
         // CSS Values L4 §7.7: expand attr() typed references before applying.
