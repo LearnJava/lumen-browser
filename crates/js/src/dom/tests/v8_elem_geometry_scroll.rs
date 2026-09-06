@@ -32,6 +32,64 @@ fn get_bounding_client_rect_method_on_element() {
     assert_eq!(bottom, lumen_core::JsValue::Number(110.0));
 }
 
+/// BUG-1007: `getClientRects()` must answer with one real `DOMRect` per
+/// fragment the native `_lumen_get_client_rects` reports — a multi-line plain
+/// inline element pushes more than one `[x, y, w, h]` entry (see
+/// `lumen_layout::collect_client_rects`), and the shim must turn each one
+/// into its own `DOMRect` in the returned `DOMRectList`, not just the first.
+#[test]
+fn get_client_rects_multi_rect_from_native() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let doc_arc = make_doc();
+    let nid = {
+        let doc = doc_arc.lock().unwrap();
+        super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+    };
+    rt.update_client_rects(
+        [(nid, vec![[0.0, 0.0, 50.0, 20.0], [0.0, 20.0, 30.0, 20.0]])]
+            .into_iter()
+            .collect(),
+    );
+    let len = rt.eval("document.body.getClientRects().length").unwrap();
+    assert_eq!(len, lumen_core::JsValue::Number(2.0));
+    let y1 = rt.eval("document.body.getClientRects()[1].y").unwrap();
+    assert_eq!(y1, lumen_core::JsValue::Number(20.0));
+    let is_rect = rt.eval("document.body.getClientRects()[0] instanceof DOMRect").unwrap();
+    assert_eq!(is_rect, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-1007: a node with no entry in the client-rects table (no layout box —
+/// `display:none`, not laid out yet) must answer with an empty `DOMRectList`,
+/// same convention a real browser uses, not `undefined`/a thrown error.
+#[test]
+fn get_client_rects_empty_when_no_entry() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let len = rt.eval("document.body.getClientRects().length").unwrap();
+    assert_eq!(len, lumen_core::JsValue::Number(0.0));
+}
+
+/// BUG-1007: `getBoxQuads()` (CSSOM View §6) shares the same per-fragment
+/// source as `getClientRects()` — one `DOMQuad` per fragment, `p1` the
+/// fragment's top-left corner.
+#[test]
+fn get_box_quads_mirrors_client_rects_count() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let doc_arc = make_doc();
+    let nid = {
+        let doc = doc_arc.lock().unwrap();
+        super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+    };
+    rt.update_client_rects(
+        [(nid, vec![[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]])]
+            .into_iter()
+            .collect(),
+    );
+    let len = rt.eval("document.body.getBoxQuads().length").unwrap();
+    assert_eq!(len, lumen_core::JsValue::Number(2.0));
+    let p1x = rt.eval("document.body.getBoxQuads()[1].p1.x").unwrap();
+    assert_eq!(p1x, lumen_core::JsValue::Number(5.0));
+}
+
 #[test]
 fn offset_width_height_on_element() {
     let rt = v8_runtime_with_dom(make_doc());

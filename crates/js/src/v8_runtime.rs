@@ -244,6 +244,7 @@ impl V8JsRuntime {
             let dom_touched = Arc::clone(&self.dom_touched);
             let raf_pending = Arc::clone(&self.raf_pending);
             let layout_rects = Arc::clone(&self.layout_rects);
+            let client_rects = Arc::clone(&self.client_rects);
             let hit_test_tree = Arc::clone(&self.hit_test_tree);
             let viewport_size = Arc::clone(&self.viewport_size);
             let lazy_img_requests = Arc::clone(&self.lazy_img_requests);
@@ -262,6 +263,7 @@ impl V8JsRuntime {
             let flush_handles = FlushHandles {
                 doc: Arc::clone(&doc),
                 layout_rects: Arc::clone(&layout_rects),
+                client_rects: Arc::clone(&client_rects),
                 computed_styles: Arc::clone(&computed_styles),
                 custom_properties: Arc::clone(&custom_properties),
                 viewport_size: Arc::clone(&viewport_size),
@@ -392,6 +394,7 @@ impl V8JsRuntime {
                 ctx,
                 store,
                 Arc::clone(&layout_rects),
+                Arc::clone(&client_rects),
                 Arc::clone(&viewport_size),
                 flush_handles.clone(),
             )?;

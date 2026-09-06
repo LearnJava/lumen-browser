@@ -533,6 +533,7 @@ impl Lumen {
                         },
                     );
                     let rects = collect_layout_rects(lb_ref, &doc_guard);
+                    let client_rects = collect_client_rects(lb_ref, &doc_guard);
                     let hit_test_tree = Arc::new(lb_ref.clone());
                     let styles = collect_computed_styles(lb_ref, &doc_guard, None);
                     drop(doc_guard);
@@ -540,6 +541,7 @@ impl Lumen {
                     let (vw, vh) = (viewport.width, viewport.height);
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                         js.update_layout_rects(rects);
+                        js.update_client_rects(client_rects);
                         js.update_hit_test_tree(hit_test_tree);
                         js.update_computed_styles(styles);
                         js.update_custom_properties(customs);
@@ -1187,6 +1189,7 @@ impl Lumen {
                 },
             );
             let rects = collect_layout_rects(lb_ref, &doc_guard);
+            let client_rects = collect_client_rects(lb_ref, &doc_guard);
             let hit_test_tree = Arc::new(lb_ref.clone());
             let styles = collect_computed_styles(lb_ref, &doc_guard, None);
             drop(doc_guard);
@@ -1198,6 +1201,7 @@ impl Lumen {
                 .collect();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 js.update_layout_rects(rects);
+                js.update_client_rects(client_rects);
                 js.update_hit_test_tree(hit_test_tree);
                 js.update_computed_styles(styles);
                 js.update_custom_properties(customs);
@@ -1437,7 +1441,13 @@ impl Lumen {
         let initial_lazy_reqs: Vec<(u32, String)> = if self.js_present {
             let owned_pairs: Vec<(u32, String)> =
                 page.lazy_pairs.iter().map(|(n, u)| (*n, u.clone())).collect();
-            type LazyImageGeom = (HashMap<u32, [f32; 4]>, Arc<lumen_layout::LayoutBox>, f32, f32);
+            type LazyImageGeom = (
+                HashMap<u32, [f32; 4]>,
+                HashMap<u32, Vec<[f32; 4]>>,
+                Arc<lumen_layout::LayoutBox>,
+                f32,
+                f32,
+            );
             let geom: Option<LazyImageGeom> = if !owned_pairs.is_empty() {
                 self.layout_box.as_ref().and_then(|lb_ref| {
                     self.layout_source
@@ -1453,6 +1463,7 @@ impl Lumen {
                             );
                             (
                                 collect_layout_rects(lb_ref, &doc_guard),
+                                collect_client_rects(lb_ref, &doc_guard),
                                 Arc::new(lb_ref.clone()),
                                 viewport.width,
                                 viewport.height,
@@ -1466,8 +1477,9 @@ impl Lumen {
                 let pairs: Vec<(u32, &str)> =
                     owned_pairs.iter().map(|(n, u)| (*n, u.as_str())).collect();
                 js.register_lazy_images(&pairs);
-                if let Some((rects, hit_test_tree, vw, vh)) = geom {
+                if let Some((rects, client_rects, hit_test_tree, vw, vh)) = geom {
                     js.update_layout_rects(rects);
+                    js.update_client_rects(client_rects);
                     js.update_hit_test_tree(hit_test_tree);
                     js.update_viewport_size(vw, vh);
                     js.deliver_layout_observers();

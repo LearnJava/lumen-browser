@@ -162,6 +162,7 @@ pub(crate) fn install_element_geometry(
     ctx: v8::Local<'_, v8::Context>,
     store: &mut Vec<OwnedNativeFn>,
     layout_rects: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
+    client_rects: Arc<Mutex<HashMap<u32, Vec<[f32; 4]>>>>,
     viewport_size: Arc<Mutex<[f32; 2]>>,
     flush: FlushHandles,
 ) -> JsResult<()> {
@@ -173,12 +174,41 @@ pub(crate) fn install_element_geometry(
     // up-to-date rect instead of a stale/absent snapshot.
     {
         let lr = Arc::clone(&layout_rects);
+        let flush_bcr = flush.clone();
         reg!(scope, ctx, store, "_lumen_get_bounding_rect", move |nid: u32| -> Option<Vec<f64>> {
-            flush.maybe_flush();
+            flush_bcr.maybe_flush();
             lr.lock()
                 .unwrap()
                 .get(&nid)
                 .map(|r| vec![f64::from(r[0]), f64::from(r[1]), f64::from(r[2]), f64::from(r[3])])
+        });
+    }
+
+    // BUG-1007: per-fragment rects backing `Element.prototype.getClientRects()`/
+    // `getBoxQuads()` — one `[x, y, width, height]` per CSS fragment (visual
+    // line, for a multi-line plain inline element) instead of the single
+    // union `_lumen_get_bounding_rect` above answers with. Returns `[]` for a
+    // node with no layout box, same convention `_lumen_elements_from_point`
+    // uses rather than `undefined`, since the JS caller always wraps the
+    // result in a `DOMRectList`/quad array regardless of length.
+    {
+        let cr = Arc::clone(&client_rects);
+        reg!(scope, ctx, store, "_lumen_get_client_rects", move |nid: u32| -> JsValue {
+            flush.maybe_flush();
+            let rects = cr.lock().unwrap();
+            let list = rects.get(&nid).map(Vec::as_slice).unwrap_or(&[]);
+            JsValue::Array(
+                list.iter()
+                    .map(|r| {
+                        JsValue::Array(vec![
+                            JsValue::Number(f64::from(r[0])),
+                            JsValue::Number(f64::from(r[1])),
+                            JsValue::Number(f64::from(r[2])),
+                            JsValue::Number(f64::from(r[3])),
+                        ])
+                    })
+                    .collect(),
+            )
         });
     }
 

@@ -176,6 +176,107 @@ use super::*;
         assert_eq!(style.get("display").map(String::as_str), Some("inline"));
     }
 
+    /// BUG-1007: `collect_client_rects` must answer with exactly one rect for a
+    /// node that owns a real `LayoutBox` — same as `collect_layout_rects`,
+    /// which this asserts against for parity (a single-fragment element must
+    /// not disagree between `getBoundingClientRect` and `getClientRects()[0]`).
+    #[test]
+    fn client_rects_single_rect_for_block_owning_own_box() {
+        let (doc, root) = lay_full_with_doc(
+            "<html><body><div id=a>x</div></body></html>",
+            "body{margin:0} #a{width:50px;height:20px}",
+        );
+        let a_nid = find_first_dom_node_by_selector(&doc, "#a")
+            .expect("div must be findable in the DOM")
+            .index() as u32;
+
+        let union_rects = collect_layout_rects(&root, &doc);
+        let client_rects = collect_client_rects(&root, &doc);
+
+        let list = client_rects.get(&a_nid).expect("block must have a rect entry");
+        assert_eq!(list.len(), 1, "a block owning its own box must get exactly one rect");
+        assert_eq!(list[0], union_rects[&a_nid], "must agree with getBoundingClientRect's rect");
+    }
+
+    /// BUG-1007: a plain inline element (`<span>`, `<em>`, …) that owns no
+    /// `LayoutBox` of its own (BUG-488) and wraps onto more than one visual
+    /// line must get one rect per line from `collect_client_rects` — unlike
+    /// `collect_layout_rects`, which deliberately unions them into a single
+    /// bounding rect for `getBoundingClientRect`.
+    #[test]
+    fn client_rects_multi_line_span_gets_one_rect_per_line() {
+        let (doc, root) = lay_full_measured_with_doc(
+            "<html><body><div style=\"width:96px\"><span id=s>aaaa bbbb cccc dddd</span></div></body></html>",
+            "body{margin:0}",
+        );
+        let span_nid = find_first_dom_node_by_selector(&doc, "#s")
+            .expect("span must be findable in the DOM")
+            .index() as u32;
+
+        let client_rects = collect_client_rects(&root, &doc);
+        let list = client_rects
+            .get(&span_nid)
+            .expect("wrapped inline element must have rect entries");
+        assert_eq!(
+            list.len(),
+            2,
+            "a span wrapping across two lines at this width must get two rects: {list:?}"
+        );
+        for r in list {
+            assert!(r[2] > 0.0, "each line rect must have a nonzero width: {r:?}");
+        }
+        assert!(
+            list[1][1] > list[0][1],
+            "the second line's rect must sit below the first: {list:?}"
+        );
+
+        // Union of the per-line rects must still agree with the single
+        // bounding rect `collect_layout_rects` (BUG-488) reports — same
+        // geometry, just kept apart per line instead of merged.
+        let union_rects = collect_layout_rects(&root, &doc);
+        let bounding = union_rects[&span_nid];
+        let (min_x, min_y, max_x, max_y) = list.iter().fold(
+            (f32::MAX, f32::MAX, f32::MIN, f32::MIN),
+            |(minx, miny, maxx, maxy), r| {
+                (minx.min(r[0]), miny.min(r[1]), maxx.max(r[0] + r[2]), maxy.max(r[1] + r[3]))
+            },
+        );
+        assert_eq!(
+            [min_x, min_y, max_x - min_x, max_y - min_y],
+            bounding,
+            "union of per-line rects must equal getBoundingClientRect's rect"
+        );
+    }
+
+    /// BUG-1007: an inline-block nested inside a text line still shows up as
+    /// an `InlineFrag` of its containing `InlineRun` (for line-height
+    /// purposes), but it also owns a real `LayoutBox` of its own — it must
+    /// not get an extra, approximate rect from the line on top of the one
+    /// rect its own box already provides.
+    #[test]
+    fn client_rects_does_not_duplicate_boxed_inline_block_nested_in_line() {
+        let (doc, root) = lay_full_measured_with_doc(
+            "<html><body><div style=\"width:200px\">a <span id=ib style=\"display:inline-block;width:20px;height:20px\"></span> b</div></body></html>",
+            "body{margin:0}",
+        );
+        let ib_nid = find_first_dom_node_by_selector(&doc, "#ib")
+            .expect("inline-block must be findable in the DOM")
+            .index() as u32;
+
+        let client_rects = collect_client_rects(&root, &doc);
+        let list = client_rects
+            .get(&ib_nid)
+            .expect("inline-block must have a rect entry");
+        assert_eq!(
+            list.len(),
+            1,
+            "a boxed inline-block must get exactly one rect, not one from its own box plus \
+             one from the line it sits on: {list:?}"
+        );
+        assert_eq!(list[0][2], 20.0, "must be the inline-block's own declared width");
+        assert_eq!(list[0][3], 20.0, "must be the inline-block's own declared height");
+    }
+
     /// BUG-489: a `display: contents` element owns no `LayoutBox` at all —
     /// `flatten_contents` removes it from the tree entirely and splices its
     /// children into its place, so unlike a plain inline element (BUG-488)

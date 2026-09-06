@@ -248,6 +248,7 @@ impl Lumen {
             && let Ok(doc_guard) = document_arc.lock()
         {
             let rects = collect_layout_rects(lb_ref, &doc_guard);
+            let client_rects = collect_client_rects(lb_ref, &doc_guard);
             let hit_test_tree = Arc::new(lb_ref.clone());
             let styles = collect_computed_styles(lb_ref, &doc_guard, None);
             drop(doc_guard);
@@ -255,6 +256,7 @@ impl Lumen {
             let (vw, vh) = (viewport.width, viewport.height);
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 js.update_layout_rects(rects);
+                js.update_client_rects(client_rects);
                 js.update_hit_test_tree(hit_test_tree);
                 js.update_computed_styles(styles);
                 js.update_custom_properties(customs);

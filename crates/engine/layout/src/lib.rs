@@ -1705,6 +1705,105 @@ fn collect_layout_rects_rec(
     }
 }
 
+// ──────────────── collect_client_rects ────────────────
+
+/// Nodes that own at least one real `LayoutBox` of their own — as opposed to a
+/// plain inline element (`<span>`, `<em>`, …) that BUG-488 flattens into the
+/// enclosing `InlineRun`'s fragments and never gives a box to. Used by
+/// [`collect_client_rects_rec`] to tell "this owner already has its one true
+/// rect from its own box" (an inline-block nested inside a line, still an
+/// `InlineFrag` for line-height purposes) apart from "this owner has no box
+/// and needs one rect per line it appears on".
+fn collect_boxed_node_ids(b: &LayoutBox, out: &mut std::collections::HashSet<u32>) {
+    out.insert(b.node.index() as u32);
+    for child in &b.children {
+        collect_boxed_node_ids(child, out);
+    }
+}
+
+/// Walks the layout tree and returns a map of `NodeId index → one rect per CSS
+/// fragment` (border-box, viewport-relative CSS px) — the per-fragment geometry
+/// `Element.prototype.getClientRects()`/`getBoxQuads()` need (BUG-1007) and
+/// [`collect_layout_rects`] deliberately does not give them: that function
+/// unions every fragment of a node into a single summarising rect (BUG-488),
+/// right for `getBoundingClientRect` but spec-wrong for `getClientRects`, which
+/// must answer one `DOMRect` per line a multi-line inline element spans (CSSOM
+/// View §6).
+///
+/// A node that owns a real `LayoutBox` (the common case — block, inline-block,
+/// replaced, …) always gets exactly one rect, same as [`collect_layout_rects`].
+/// A plain inline element that owns no box of its own (BUG-488) gets one rect
+/// per line it appears on, each the union of every `InlineFrag` reaching it on
+/// that line (bidi runs, a nested inline-block splitting it mid-line, …) via
+/// [`inline_element_ancestors`] — the same union [`collect_layout_rects_rec`]
+/// computes, just kept apart per line instead of merged across all of them.
+pub fn collect_client_rects(
+    root: &LayoutBox,
+    doc: &lumen_dom::Document,
+) -> std::collections::HashMap<u32, Vec<[f32; 4]>> {
+    let mut boxed = std::collections::HashSet::new();
+    collect_boxed_node_ids(root, &mut boxed);
+    let mut out = std::collections::HashMap::new();
+    collect_client_rects_rec(doc, root, &boxed, &mut out);
+    out
+}
+
+fn collect_client_rects_rec(
+    doc: &lumen_dom::Document,
+    b: &LayoutBox,
+    boxed: &std::collections::HashSet<u32>,
+    out: &mut std::collections::HashMap<u32, Vec<[f32; 4]>>,
+) {
+    // Same first-box-wins ordering as `collect_layout_rects_rec` (BUG-382): the
+    // recursion visits a node's own box before descending into its children.
+    let r = &b.rect;
+    out.entry(b.node.index() as u32)
+        .or_insert_with(|| vec![[r.x, r.y, r.width, r.height]]);
+    if let BoxKind::InlineRun { lines, .. } = &b.kind {
+        let line_h = b.style.font_size * b.style.line_height;
+        for (line_idx, line) in lines.iter().enumerate() {
+            let line_y = b.rect.y + line_idx as f32 * line_h;
+            // Frags on the SAME line belonging to the same owner (a bidi split,
+            // an inline element reopening around a nested box, …) merge into
+            // one rect — one rect per CSS *fragment*, and a fragment is a
+            // line, not a frag.
+            let mut per_owner_this_line: std::collections::HashMap<u32, [f32; 4]> =
+                std::collections::HashMap::new();
+            for frag in line {
+                let fx1 = b.rect.x + frag.x;
+                let fy1 = line_y;
+                let fx2 = fx1 + frag.width;
+                let fy2 = fy1 + line_h;
+                for anc in inline_element_ancestors(doc, frag.source_node, b.node) {
+                    per_owner_this_line
+                        .entry(anc.index() as u32)
+                        .and_modify(|cur| {
+                            let cx1 = cur[0].min(fx1);
+                            let cy1 = cur[1].min(fy1);
+                            let cx2 = (cur[0] + cur[2]).max(fx2);
+                            let cy2 = (cur[1] + cur[3]).max(fy2);
+                            *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
+                        })
+                        .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
+                }
+            }
+            for (owner, rect) in per_owner_this_line {
+                // An owner with a real box of its own (an inline-block nested
+                // in this line, still an `InlineFrag` here for line-height
+                // purposes) already has its one true rect from that box — do
+                // not also append this approximate line-derived rect on top
+                // of it.
+                if !boxed.contains(&owner) {
+                    out.entry(owner).or_default().push(rect);
+                }
+            }
+        }
+    }
+    for child in &b.children {
+        collect_client_rects_rec(doc, child, boxed, out);
+    }
+}
+
 /// Update the scroll position of a node in the layout tree.
 ///
 /// Walks the tree to find the box with `node`, clamps `(x, y)` to the valid

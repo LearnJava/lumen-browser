@@ -70,6 +70,12 @@ pub struct V8JsRuntime {
     /// Layout bounding rects updated after each relayout by the shell.
     /// Maps `NodeId` index (u32) → `[x, y, width, height]` in viewport-relative CSS px.
     pub(super) layout_rects: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
+    /// Per-fragment client rects (BUG-1007) backing `getClientRects()`/
+    /// `getBoxQuads()` — updated alongside [`Self::layout_rects`], same tree,
+    /// same coordinate frame, same cadence, but one `Vec` entry per CSS
+    /// fragment (visual line for a multi-line inline element) instead of
+    /// [`Self::layout_rects`]'s single union rect.
+    pub(super) client_rects: Arc<Mutex<HashMap<u32, Vec<[f32; 4]>>>>,
     /// `LayoutBox` tree snapshot for `document.elementFromPoint`/`elementsFromPoint`
     /// (CSSOM View §3, BUG-464/BUG-477), updated after each relayout by the shell
     /// alongside [`Self::layout_rects`] — same tree, same coordinate frame, same
@@ -279,6 +285,7 @@ impl V8JsRuntime {
             dom_touched: Arc::new(Mutex::new(DomTouched::default())),
             raf_pending: Arc::new(AtomicBool::new(false)),
             layout_rects: Arc::new(Mutex::new(HashMap::new())),
+            client_rects: Arc::new(Mutex::new(HashMap::new())),
             hit_test_tree: Arc::new(Mutex::new(None)),
             viewport_size: Arc::new(Mutex::new([0.0, 0.0])),
             lazy_img_requests: Arc::new(Mutex::new(Vec::new())),
@@ -556,6 +563,13 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::update_layout_rects`].
     pub fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>) {
         *self.layout_rects.lock().unwrap_or_else(|e| e.into_inner()) = rects;
+    }
+
+    /// Replace the per-fragment client-rect table (BUG-1007) backing
+    /// `getClientRects()`/`getBoxQuads()`. Called alongside
+    /// [`Self::update_layout_rects`] wherever the shell pushes fresh geometry.
+    pub fn update_client_rects(&self, rects: HashMap<u32, Vec<[f32; 4]>>) {
+        *self.client_rects.lock().unwrap_or_else(|e| e.into_inner()) = rects;
     }
 
     /// Replace the `LayoutBox` tree snapshot backing `elementFromPoint`/
