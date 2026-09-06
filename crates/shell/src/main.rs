@@ -120,6 +120,7 @@ mod input;
 mod links;
 mod lumen;
 mod momentum_anim;
+mod nav_timing;
 mod notification;
 mod omnibox;
 mod panel_layout;

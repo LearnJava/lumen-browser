@@ -229,6 +229,8 @@ impl Lumen {
                         cache_backend,
                         target,
                         raw.cache_control_no_store,
+                        raw.status,
+                        raw.redirected,
                     )
                     .map_err(|e| e.to_string());
                     // Если event loop уже закрыт — Box (вместе с JS-хэндлом)
@@ -253,11 +255,17 @@ impl Lumen {
                 match result {
                     Ok((page, new_layout_source, new_js_ctx)) => {
                         click_log::log_load_ok(&self.source.describe(), page.title.as_deref().unwrap_or(""));
+                        // BUG-640: captured before `page` moves into `apply_loaded_page` below —
+                        // `nav` is the only field this handler still needs afterward.
+                        let nav_meta = page.nav;
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
                         // Deliver W3C Navigation Timing L2 entry after streaming load completes.
                         // ADR-016 M2.2c-2d (20): same conversion as the reload path above —
                         // `self.js_present` gate + `route_task_js`, `nav_start` still taken
                         // unconditionally. Flag-off byte-identical; flag-on off-UI-thread.
+                        // `apply_loaded_page`'s own `route_task_js` (DOM-lifecycle marks) is
+                        // queued first, on the same FIFO engine-thread queue as this one, so
+                        // the marks it records are always visible by the time this closure runs.
                         #[cfg(feature = "v8")]
                         {
                             let nav_start = self.nav_start.take();
@@ -265,8 +273,9 @@ impl Lumen {
                                 (self.js_present, nav_start, self.source.url_str().map(str::to_owned))
                             {
                                 let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+                                let detail_json = nav_timing::detail_json(nav_meta, start);
                                 route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                                    j.deliver_nav_timing(&url, duration_ms);
+                                    j.deliver_nav_timing(&url, duration_ms, &detail_json);
                                 });
                             }
                         }

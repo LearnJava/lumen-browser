@@ -541,7 +541,7 @@ fn route_nav_timing_and_js_heap_without_handle_default_to_no_op() {
     let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let ran2 = Arc::clone(&ran);
     route_task_js(None, None, move |j| {
-        j.deliver_nav_timing("https://example.test/", 1.0);
+        j.deliver_nav_timing("https://example.test/", 1.0, "{}");
         ran2.store(true, std::sync::atomic::Ordering::SeqCst);
     });
     assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));

@@ -391,6 +391,10 @@ impl Lumen {
         }
         // Record navigation start for PerformanceNavigationTiming (Navigation Timing L2 §4.2).
         self.nav_start = Some(std::time::Instant::now());
+        // BUG-640: a DOM-milestone mark from the outgoing document must never
+        // leak into the incoming one's entry — same reasoning as
+        // `resource_timing::clear()` below.
+        nav_timing::clear();
         // A fresh navigation supersedes any prior settled error (BUG-308).
         self.load_failed = false;
         self.load_error_message = None;
@@ -628,8 +632,9 @@ impl Lumen {
                         (self.js_present, nav_start, self.source.url_str().map(str::to_owned))
                     {
                         let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+                        let detail_json = nav_timing::detail_json(page.nav, start);
                         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                            j.deliver_nav_timing(&url, duration_ms);
+                            j.deliver_nav_timing(&url, duration_ms, &detail_json);
                         });
                     }
                 }
@@ -715,6 +720,10 @@ impl Lumen {
             // sub-документов — фреймов на этом пути нет.
             frames: Vec::new(),
             frame_env: None,
+            // BUG-640: `lumen_driver::RenderedPage` carries no response
+            // status/redirect signal at all — this is the rare no-window
+            // GpuSession path (headless/tests), default to "unknown".
+            nav: crate::nav_timing::NavResponseMeta::default(),
         })
     }
 
@@ -1538,7 +1547,11 @@ impl Lumen {
         // умолчанию) — синхронный вызов по UI-хэндлу, байт-идентично прежнему.
         #[cfg(feature = "v8")]
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+            // BUG-640: `domComplete`/`loadEventStart` share the "before"
+            // instant, `loadEventEnd` is the "after" one.
+            crate::nav_timing::record_load_start();
             js.notify_window_loaded();
+            crate::nav_timing::record_load_end();
             js.fire_page_lifecycle("pageshow", pageshow_persisted);
         });
         #[cfg(not(feature = "v8"))]

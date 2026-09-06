@@ -37,6 +37,11 @@ pub(crate) fn render_bytes(
     cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
     target: lumen_core::ColorSpace,
     cache_control_no_store: bool,
+    // BUG-640: real facts about the top-level HTTP response, carried straight
+    // through into `LoadedPage::nav` for `PerformanceNavigationTiming` — see
+    // `nav_timing`'s doc comment for what these two can and can't express.
+    response_status: u16,
+    redirected: bool,
 ) -> Result<RenderedPage, Box<dyn Error>> {
     let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target, false)?;
     let display_list = paint_ordered(&parsed.layout);
@@ -71,6 +76,11 @@ pub(crate) fn render_bytes(
             page_tracks: parsed.page_tracks,
             frames: parsed.frames,
             frame_env: Some(parsed.frame_env),
+            nav: crate::nav_timing::NavResponseMeta {
+                status: response_status,
+                redirected,
+                decoded_body_size: bytes.len() as u64,
+            },
         },
         layout_source,
         parsed.js_ctx,
@@ -199,6 +209,11 @@ pub(crate) struct LoadedPage {
     /// `None` — путь, где фреймов нет вовсе (headless-рендер `lumen-driver`,
     /// пустая страница): загружать в живом окне будет нечего.
     pub(crate) frame_env: Option<frames::FrameLoadEnv>,
+    /// BUG-640: real facts about the top-level HTTP response, needed to build
+    /// the `PerformanceNavigationTiming` detail payload at the
+    /// `deliver_nav_timing` call site (both of which read `page.nav` before
+    /// the rest of this struct's fields are moved out).
+    pub(crate) nav: crate::nav_timing::NavResponseMeta,
 }
 
 impl LoadedPage {
@@ -228,6 +243,7 @@ impl LoadedPage {
             page_tracks: tracks::PageTracks::default(),
             frames: Vec::new(),
             frame_env: None,
+            nav: crate::nav_timing::NavResponseMeta::default(),
         }
     }
 }
@@ -857,7 +873,12 @@ pub(crate) fn parse_and_layout(
     // + DOMContentLoaded event. Fires before images/fonts are decoded.
     #[cfg(feature = "v8")]
     if let Some(js) = &js_ctx {
+        // BUG-640: bracket the real dispatch — `domInteractive`/
+        // `domContentLoadedEventStart` share the "before" instant,
+        // `domContentLoadedEventEnd` is the "after" one.
+        crate::nav_timing::record_dom_content_loaded_start();
         js.notify_dom_content_loaded();
+        crate::nav_timing::record_dom_content_loaded_end();
     }
 
     {

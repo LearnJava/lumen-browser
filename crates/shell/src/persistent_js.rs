@@ -248,8 +248,12 @@ pub(crate) trait PersistentJs: Send + Sync {
     ///
     /// Called after a page load completes. `url` is the navigation URL;
     /// `duration_ms` is total load time (Navigation Timing L2 §4.2 `duration`).
-    /// Calls `_lumen_deliver_perf_entry('navigation', url, 0.0, duration_ms, detail)`.
-    fn deliver_nav_timing(&self, url: &str, duration_ms: f64);
+    /// `detail_json` is [`crate::nav_timing::detail_json`]'s output — real
+    /// redirect/response/DOM-lifecycle fields, honestly stubbed where
+    /// `lumen-network` has no per-phase breakdown (BUG-640; see that
+    /// module's doc comment for exactly which). Calls
+    /// `_lumen_deliver_perf_entry('navigation', url, 0.0, duration_ms, detail_json)`.
+    fn deliver_nav_timing(&self, url: &str, duration_ms: f64, detail_json: &str);
     /// Hand a batch of engine-issued subresource loads to the page's Resource
     /// Timing buffer (BUG-839).
     ///
@@ -859,10 +863,14 @@ impl PersistentJs for V8PersistentJs {
             js_string_literal(name),
         ));
     }
-    fn deliver_nav_timing(&self, url: &str, duration_ms: f64) {
+    fn deliver_nav_timing(&self, url: &str, duration_ms: f64, detail_json: &str) {
+        // Same "JSON text as a JS string literal, not a bare expression"
+        // reasoning as `deliver_resource_timings` below — the shim runs
+        // `JSON.parse` on this argument.
         self.eval_js(&format!(
-            "_lumen_deliver_perf_entry('navigation', {}, 0.0, {duration_ms}, null)",
+            "_lumen_deliver_perf_entry('navigation', {}, 0.0, {duration_ms}, {})",
             js_string_literal(url),
+            js_string_literal(detail_json),
         ));
     }
     fn deliver_resource_timings(&self, rows_json: &str) {
