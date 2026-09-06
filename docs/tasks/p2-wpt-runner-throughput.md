@@ -2289,3 +2289,74 @@ Linux-половина закончила 479/479 шардов в 11:16 (19.0 ч
 Сверка половин на равной глубине: 101 категория, дельта **−0.039 п.п.**, то
 есть платформа цифру не двигает — и это же делает `websockets` аномалией, а не
 фоном.
+
+---
+
+## WPT-RUN-12 (2026-09-06): исполнители `action_sequence`/`send_keys`/`delete_all_cookies` — из ~30 неисполненных экшенов закрыты три самых частых
+
+Взято по [BUG-810](../../bugs/BUG-810-FIXED.md)'у собственному «Направлению
+починки» (пп. 1–3): `_handle_action` (`tools/wptrunner/wptrunner/executors/
+executorlumen.py`) получил ветки `action_sequence`, `send_keys`,
+`delete_all_cookies` — все три транспортом `input.performActions`/
+`storage.deleteCookies`, которые BiDi-сервер уже реализовал (SDC-2), то есть
+это трансляция payload'а, не новый движковый механизм. Ветка-заглушка
+(`else: raise ActionError`) теперь ещё и логирует (`self.logger.info`) —
+раньше отказ был виден только инструментированием функции вручную, этим
+BUG-810 и был найден.
+
+**Найден и исправлен попутный дефект, из-за которого `click` был сломан с
+самого начала.** `session.input.perform_actions(actions, context=…)` —
+позиционный вызов — падал `TypeError: perform_actions() takes 1 positional
+argument but 2 were given`: декоратор `@command` (`tools/webdriver/webdriver/
+bidi/modules/_module.py::command.__set_name__`) оборачивает метод в
+`async def inner(self, **kwargs)` — **только keyword-only**, ни одного
+позиционного слота кроме `self`. `_action_click` (единственный работающий
+вызов до этой задачи) вызывал `perform_actions(actions, context=…)`
+позиционно и падал бы точно так же при любом реальном клике — просто
+`_action_click` до сих пор ни разу не прогонялся живьём против настоящего
+теста (только описан как «уже реализован» по проекту транспорта). Найдено
+живьём: `run_smoke.py` на `/pointerevents/pointer-events-none-skip-scroll.html`
+проэволюционировал от `TypeError` (до фикса) до штатного вызова (после) —
+единственный live-прогон, который получилось довести до этой точки на этой
+машине, см. ниже. Фикс — все три вызова на keyword (`perform_actions(actions=actions, context=…)`).
+
+**Проверено юнит-уровнем, не полным `wptrunner`-прогоном.** Эта машина не
+годится для живого `run_smoke.py`/`run_report.py`: системный Python 3.14
+убрал `ssl.wrap_socket`, на котором держится вендоренный `pywebsocket3`
+(`wptserve` не поднимает `wss`), и с `--ssl-type=none` следующим падает `h2`
+(`start_http2_server: 'NoneType' object is not subscriptable`) — оба отказа
+входа в тест не касаются, это версии интерпретатора против вендоренного
+кода. Вместо этого три новых метода и путь `ActionError` проверены
+напрямую (реальные классы `webdriver.bidi.modules.input.Actions`/
+`KeyInputSource`, замоканы только `session.input`/`session.storage` и
+`_resolve_element_center`): `action_sequence` резолвит origin-элемент
+(`{selectors: […]}`) в абсолютную viewport-точку и складывает с исходным
+offset'ом, `send_keys` строит клик-затем-набор в одном `Actions()`, порядок
+источников (`pointer` раньше `key`) сохраняется, `delete_all_cookies` зовёт
+`storage.delete_cookies()` ровно один раз, отсутствующий элемент даёт чистый
+`ActionError`, не краш. Пришлось прогнать один раз до `TypeError` живьём,
+чтобы вообще найти этот дефект — статическим ревью его было не увидеть,
+сигнатура декоратора нигде не документирована как keyword-only явно.
+
+**Осознанно не тронуто, оба — на размер отдельной задачи, а не транслляции
+payload'а:** `set_permission` — `crates/bidi-server/src/protocol.rs` не
+реализует ни одного `permissions.*` BiDi-метода вовсе (перепроверено
+грепом), значит нужен новый серверный обработчик, а не только клиентский
+вызов; `get_computed_role`/`get_computed_label` — accessibility-дерево у
+движка **есть** (`crates/engine/a11y`, `AutomationCommand::A11yTree`,
+`query_a11y` в `lumen-driver`), но ничто не связывает узел этого дерева с
+DOM-элементом, который резолвят `params["selectors"]` — участок работы
+корреляция, не сам факт отсутствия дерева (моя более ранняя формулировка в
+докстринге `executorlumen.py` была неточной, поправлена по ходу).
+`bless` не заведён отдельной веткой: он не шлёт собственный экшен, а
+целиком строится через уже работающий `test_driver.click()`
+(`resources/testdriver.js:1176-1197`).
+
+**Побочный инцидент, не по коду.** Фиксированные порты `run_smoke.py`
+(18300/18301/18443/18444/18888/18889/19000) не привязаны к рабочему дереву —
+второй P2-сессии, гонявшей `run_report.py` на этой же машине параллельно, я
+`fuser -k`'ом по занятым портам оборвал прогон (`--update-expected` успел
+записать 311 состояний по оборванным соединениям в untracked-каталог,
+исправлено `git clean -fd` на её стороне, тест перезапущен). Правило на
+будущее — при конфликте портов ждать/ретраить, не убивать: см. диалог сессий
+2026-09-06.

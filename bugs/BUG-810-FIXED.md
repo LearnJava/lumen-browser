@@ -1,6 +1,6 @@
 # BUG-810 — исполнитель WPT реализует только два testdriver-экшена из тридцати: остальные отклоняются, а отказ невидим странице — тест виснет вместо провала
 
-**Статус:** OPEN (ДОРАБОТКА → [WPT-RUN-12](../ROADMAP.md))
+**Статус:** FIXED 2026-09-06 (P1) — задача [WPT-RUN-12](../ROADMAP.md) закрыта, остаток вынесен в [BUG-1014](BUG-1014-OPEN.md) (ДОРАБОТКА → WPT-RUN-13)
 **Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `WPT-RUN-12` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-21 (WPT-RUN-6, срез 17 — 193 id остатка снимка WPT-RUN-5, крупнейший механизм среза)
 **Область:** `tools/wptrunner/wptrunner/executors/executorlumen.py:310-334` (`_handle_action` — ветки только для `click` и `generate_test_report`), связанное: `crates/bidi-server/src/protocol.rs::input_perform_actions` (BiDi-сторона, `pointer`+`key` уже реализована)
@@ -115,3 +115,42 @@ TIMEOUT. Поэтому механизм в классификаторе оди�
 3. `timeout_audit.py --json` на свежем прогоне: механизм
    `testdriver-action-unimplemented` уменьшается, а не переезжает в
    `unclassified`.
+
+## Что сделано (P1, 2026-09-06, WPT-RUN-12)
+
+Реализованы три ветки `_handle_action` по «Направлению починки» пп. 1–3:
+`action_sequence` (резолвит `{selectors: […]}`-origin в абсолютную
+viewport-точку — `replay_input_actions` игнорирует `origin` и читает `x`/`y`
+как уже абсолютные — затем `session.input.perform_actions`), `send_keys`
+(клик-фокус + `key`-источник в одном вызове) и `delete_all_cookies`
+(`storage.deleteCookies`, уже реализованный BiDi-сервером независимо от этой
+заявки). Ветка-заглушка теперь логирует (`self.logger.info`) вместо тихого
+`ActionError` — механизм виден в логе прогона, не только инструментированием
+кода вручную.
+
+Попутно найден и исправлен независимый дефект: `session.input.perform_actions`
+вызывался позиционно (`perform_actions(actions, context=…)`), а декоратор
+`@command` (`tools/webdriver/webdriver/bidi/modules/_module.py`) принимает
+только keyword-параметры — вызов падал `TypeError` при любом реальном
+использовании. Это означает, что `click` (единственный, наряду с
+`generate_test_report`, ранее заявленный как «работает») на самом деле не был
+живьём проверен ни разу с момента появления — сам этот баг обнаружил его,
+запустив `run_smoke.py` до `TypeError`.
+
+Живой `wptrunner`-прогон до конца на этой машине не удался: системный Python
+3.14 убрал `ssl.wrap_socket`, необходимый вендоренному `pywebsocket3`
+(`wss`-сервер `wptserve` не поднимается), а с `--ssl-type=none` следом падает
+`h2`-сервер — обе поломки версии интерпретатора, не связаны с этой правкой.
+Проверено юнит-уровнем: реальные `webdriver.bidi.modules.input.Actions`/
+`KeyInputSource`, замоканы только транспорт (`session.input`/`session.storage`)
+и `_resolve_element_center` — все три ветки и путь `ActionError` дают
+ожидаемый payload/поведение. Полная сводка, включая точный причинно-следственный
+разбор `TypeError` и что сознательно не тронуто — [`docs/tasks/p2-wpt-runner-throughput.md`](../docs/tasks/p2-wpt-runner-throughput.md), раздел «WPT-RUN-12».
+
+`set_permission` и `get_computed_role`/`get_computed_label` не закрыты —
+оба размером с отдельную задачу, а не трансляцией payload'а (нет ни одного
+`permissions.*` BiDi-обработчика на сервере; accessibility-дерево есть, но
+без корреляции с DOM-элементом). Вынесены в [BUG-1014](BUG-1014-OPEN.md)
+(ДОРАБОТКА → WPT-RUN-13), а не переоткрыты под этим номером — точный вес
+`probe-method.md §8`: обе позиции отсутствуют целиком **и** размером с
+семейство/модель, а не с одну строку.
