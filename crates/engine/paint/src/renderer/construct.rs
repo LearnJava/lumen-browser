@@ -898,6 +898,9 @@ impl Renderer {
             metrics: build_face_metrics(&font_bytes),
             bytes: Arc::from(font_bytes),
             unicode_ranges: Vec::new(),
+            ascent_override: None,
+            descent_override: None,
+            size_adjust: None,
         }];
         let push_chrome_face = |faces: &mut Vec<LoadedFace>, bytes: &'static [u8]| {
             build_face_metrics(bytes).map(|metrics| {
@@ -906,6 +909,9 @@ impl Renderer {
                     metrics: Some(metrics),
                     bytes: Arc::from(bytes),
                     unicode_ranges: Vec::new(),
+                    ascent_override: None,
+                    descent_override: None,
+                    size_adjust: None,
                 });
                 id
             })

@@ -180,7 +180,22 @@ pub(crate) fn load_font_faces(
                         .as_deref()
                         .map(lumen_font::parse_unicode_ranges)
                         .unwrap_or_default();
-                    registry.register_from_bytes(&rule.family, weight, style, &ranges, bytes);
+                    // CSS Fonts L4 §14 (FONTLOAD-17, BUG-467): overrides применяются
+                    // к face-у независимо от того, откуда взяты байты (local()/url()) —
+                    // те же дескрипторы, что `load_font_faces` кладёт в `PendingWebFont`
+                    // ниже для url()-ветки.
+                    let ascent_override = rule.ascent_override.as_deref()
+                        .and_then(lumen_font::parse_metric_override_percent);
+                    let descent_override = rule.descent_override.as_deref()
+                        .and_then(lumen_font::parse_metric_override_percent);
+                    let size_adjust = rule.size_adjust.as_deref()
+                        .and_then(lumen_font::parse_metric_override_percent);
+                    let line_gap_override = rule.line_gap_override.as_deref()
+                        .and_then(lumen_font::parse_metric_override_percent);
+                    registry.register_from_bytes(
+                        &rule.family, weight, style, &ranges, bytes,
+                        ascent_override, descent_override, size_adjust, line_gap_override,
+                    );
                     local_resolved = true;
                     break;
                 }

@@ -426,7 +426,10 @@ impl FontStyle {
 /// Bold Italic / Light / ExtraBold / … / Condensed / Expanded / …).
 /// Этот struct — то, что matcher использует, чтобы выбрать face под
 /// `font-style` + `font-weight` + `font-stretch` из CSS.
-#[derive(Debug, Clone, PartialEq, Eq)]
+// FONTLOAD-17: `Eq` dropped — the new override fields are `Option<f32>`,
+// which doesn't implement it (same reason `lumen-paint`'s `FontFaceSlot`
+// carries the same fields without deriving `Eq`).
+#[derive(Debug, Clone, PartialEq)]
 pub struct FaceRecord {
     /// Family name, нормализованный к тому же регистру, в котором лежит
     /// в индексе. Может отличаться от того, что попросил CSS — индекс
@@ -461,6 +464,26 @@ pub struct FaceRecord {
     /// UnicodeRange`: `lumen-core` не может зависеть от `lumen-font`
     /// (граф зависимостей `core → font`, не наоборот).
     pub unicode_ranges: Vec<(u32, u32)>,
+    /// `ascent-override` дескриптор `@font-face` (CSS Fonts L4 §14.1,
+    /// FONTLOAD-17, BUG-467) — доля `font-size`, `None` — `normal`/
+    /// дескриптор отсутствует, используются реальные метрики face-а. До
+    /// этого поля дескриптор доезжал только до layout-измерения
+    /// (`lumen-paint`'s `FontFaceSlot`), а структура, которой реально
+    /// пользуется растеризация глифов, не несла ни одного override-поля —
+    /// см. `bugs/BUG-467-OPEN.md`, срез FONTLOAD-16.
+    pub ascent_override: Option<f32>,
+    /// `descent-override` дескриптор, та же семантика, что у `ascent_override`.
+    pub descent_override: Option<f32>,
+    /// `size-adjust` дескриптор (CSS Fonts L4 §14.4) — доля, на которую
+    /// масштабируется `font-size` ПЕРЕД тем, как из него считаются ширины
+    /// глифов и ascent/descent этого face-а. `None` — дескриптор
+    /// отсутствует/невалиден, эквивалентно `100%`.
+    pub size_adjust: Option<f32>,
+    /// `line-gap-override` дескриптор (CSS Fonts L4 §14.3), та же семантика,
+    /// что `ascent_override`/`descent_override`. Пока не имеет потребителя в
+    /// растеризации (та же ситуация, что у layout-стороны `line_gap_px` —
+    /// FONTLOAD-13) — доезжает до записи для будущего консьюмера.
+    pub line_gap_override: Option<f32>,
 }
 
 /// `true`, если кодпоинт `cp` попадает хотя бы в один диапазон `ranges`
@@ -517,6 +540,10 @@ pub trait FontProvider: Send + Sync {
                 stretch: 100,
                 path,
                 unicode_ranges: Vec::new(),
+                ascent_override: None,
+                descent_override: None,
+                size_adjust: None,
+                line_gap_override: None,
             })
             .collect()
     }
@@ -798,6 +825,10 @@ mod font_provider_tests {
             stretch: 100,
             path: PathBuf::from(format!("{family}-{weight}-{style:?}.ttf")),
             unicode_ranges: Vec::new(),
+            ascent_override: None,
+            descent_override: None,
+            size_adjust: None,
+            line_gap_override: None,
         }
     }
 
@@ -814,6 +845,10 @@ mod font_provider_tests {
             stretch,
             path: PathBuf::from(format!("{family}-{weight}-{style:?}-{stretch}.ttf")),
             unicode_ranges: Vec::new(),
+            ascent_override: None,
+            descent_override: None,
+            size_adjust: None,
+            line_gap_override: None,
         }
     }
 

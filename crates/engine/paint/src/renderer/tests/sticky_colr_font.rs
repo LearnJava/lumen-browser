@@ -399,6 +399,9 @@ fn color_glyph_emits_one_quad_per_layer_with_palette_colors() {
         bytes: Arc::from(bytes.as_slice()),
         metrics,
         unicode_ranges: Vec::new(),
+        ascent_override: None,
+        descent_override: None,
+        size_adjust: None,
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
@@ -448,6 +451,9 @@ fn atlas_exhaustion_is_not_memoized_and_heals_after_reset() {
         bytes: Arc::from(bytes.as_slice()),
         metrics,
         unicode_ranges: Vec::new(),
+        ascent_override: None,
+        descent_override: None,
+        size_adjust: None,
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(64);
@@ -489,6 +495,9 @@ fn custom_palette_override_reaches_the_emitted_vertices() {
         bytes: Arc::from(bytes.as_slice()),
         metrics,
         unicode_ranges: Vec::new(),
+        ascent_override: None,
+        descent_override: None,
+        size_adjust: None,
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
@@ -542,6 +551,9 @@ fn text_run_cache_skips_color_glyph_runs() {
         bytes: Arc::from(bytes.as_slice()),
         metrics,
         unicode_ranges: Vec::new(),
+        ascent_override: None,
+        descent_override: None,
+        size_adjust: None,
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);
@@ -588,6 +600,9 @@ fn text_run_cache_replays_identical_vertices() {
         bytes: Arc::from(bytes.as_slice()),
         metrics,
         unicode_ranges: Vec::new(),
+        ascent_override: None,
+        descent_override: None,
+        size_adjust: None,
     }];
     let mut lazy = LazyParsedFaces::new(&faces);
     let mut atlas = GlyphAtlas::new(ATLAS_DIM);

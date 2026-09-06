@@ -339,6 +339,13 @@ enum TextRunStep {
         /// Сдвиг пера, уже домноженный на `font_size / units_per_em` face-а,
         /// с которого взят глиф.
         advance: f32,
+        /// Масштаб битмапа глифа bin → display (FONTLOAD-17): у каждого
+        /// глифа СВОЙ, а не общий на весь run — `size-adjust` (CSS Fonts L4
+        /// §14.4) масштабирует эффективный font-size лишь у face-а, которому
+        /// принадлежит глиф, а `pick_face_for_codepoint` внутри одного run-а
+        /// может выбирать разные face-ы для разных символов (fallback на
+        /// несовпадающий unicode-range).
+        display_scale: f32,
     },
     /// Сдвинуть перо, ничего не кладя (табуляция или неотрисовавшийся глиф).
     Advance(f32),
@@ -508,22 +515,37 @@ pub(crate) fn push_text_glyphs(
     let log = crate::frame_log_level() >= 3;
     let _t_run = sub_timer(log, &TEXT_SUB.run);
     let t_pre = log.then(std::time::Instant::now);
-    // Multi-size atlas: подбираем bin под font_size, растеризируем глифы
-    // на этом bin. Display масштаб = font_size / size_bin — если font_size
-    // совпал с bin-ом (12/16/24/32/...) — масштаба нет, текст резкий.
-    let size_bin = size_bin_for(font_size);
-    let display_scale = font_size / size_bin as f32;
 
     // Baseline: ascent / (ascent − descent) primary face-а. Для Inter ≈ 0.80.
     // Используем primary для всех глифов в run-е — иначе при смешивании
     // face-ов символы прыгали бы по вертикали.
-    let primary = lazy.faces[primary_face_id]
+    let primary_face = &lazy.faces[primary_face_id];
+    let primary = primary_face
         .metrics
         .as_ref()
         .expect("primary face metrics must exist (checked by caller)");
-    let ascent_ratio = primary.ascent as f32
-        / (primary.ascent as f32 - primary.descent as f32);
-    let baseline_y = rect.y + font_size * ascent_ratio;
+    // CSS Fonts L4 §14 (FONTLOAD-17, BUG-467): ascent-override/
+    // descent-override заменяют реальные hhea-метрики face-а везде, где их
+    // читают — это правило распространяется и на позицию baseline внутри
+    // `rect`, не только на line-box высоту, которую уже считает
+    // override-aware layout-сторона (`PrimaryFontMetrics` в
+    // `crates/engine/paint/src/lib.rs`). Подстановка на уровне font units
+    // (а не готового px) сохраняет прежнюю формулу байт-в-байт, когда
+    // override отсутствует — единственный путь, где overrides реально влияли
+    // на диффы (`ascent-descent-override.html`, FONTLOAD-16) до этого среза
+    // не читал их вовсе.
+    let ascent_units = primary_face
+        .ascent_override
+        .map_or(primary.ascent as f32, |pct| pct * primary.units_per_em as f32);
+    let descent_units = primary_face
+        .descent_override
+        .map_or(primary.descent as f32, |pct| -(pct * primary.units_per_em as f32));
+    let ascent_ratio = ascent_units / (ascent_units - descent_units);
+    // `size-adjust` (CSS Fonts L4 §14.4) премультиплицирует font-size ДО
+    // вычисления override/реальных метрик — та же формула, что у glyph-сайза
+    // ниже, применённая к primary face-у для позиции baseline.
+    let primary_font_size = font_size * primary_face.size_adjust.unwrap_or(1.0);
+    let baseline_y = rect.y + primary_font_size * ascent_ratio;
 
     // Per-char cache на длительность одного DrawText: одни и те же символы
     // в строке («the the the») не нужно пробовать через все face-ы каждый раз.
@@ -569,9 +591,9 @@ pub(crate) fn push_text_glyphs(
         let mut cursor_x = rect.x;
         for step in plan.iter() {
             match step {
-                TextRunStep::Glyph { g, advance } => {
+                TextRunStep::Glyph { g, advance, display_scale } => {
                     let t_quad = log.then(std::time::Instant::now);
-                    push_glyph_quad(out, g, cursor_x, baseline_y, display_scale, color);
+                    push_glyph_quad(out, g, cursor_x, baseline_y, *display_scale, color);
                     cursor_x += advance;
                     if let Some(t0) = t_quad {
                         sub_add(&TEXT_SUB.quad, t0);
@@ -603,11 +625,27 @@ pub(crate) fn push_text_glyphs(
         let (face_id, glyph_id) = *char_face_cache
             .entry(ch)
             .or_insert_with(|| pick_face_for_codepoint(ch as u32, primary_face_id, lazy.faces));
-        let metrics = lazy.faces[face_id]
+        let face = &lazy.faces[face_id];
+        let metrics = face
             .metrics
             .as_ref()
             .expect("pick_face_for_codepoint вернул face_id с валидными metrics");
-        let advance_scale = font_size / metrics.units_per_em as f32;
+        // CSS Fonts L4 §14.4 (FONTLOAD-17, BUG-467): size-adjust премультиплицирует
+        // font-size для КОНКРЕТНОГО face-а, из которого берётся глиф — разные
+        // символы одного run-а могут резолвиться в разные face-ы через
+        // `pick_face_for_codepoint` (fallback по unicode-range), поэтому
+        // масштаб растеризации/дисплея считается на глиф, а не на run
+        // (в отличие от baseline, который намеренно общий на весь run — см.
+        // выше). Раньше size-adjust не доезжал до растеризации вовсе —
+        // глиф всегда рисовался исходного размера (`bugs/BUG-467-OPEN.md`,
+        // срез FONTLOAD-16).
+        let adjusted_font_size = font_size * face.size_adjust.unwrap_or(1.0);
+        let advance_scale = adjusted_font_size / metrics.units_per_em as f32;
+        // Multi-size atlas: подбираем bin под adjusted_font_size, растеризуем
+        // глиф на этом bin-е. Display-масштаб = adjusted_font_size / size_bin —
+        // если размер совпал с bin-ом (12/16/24/32/...), масштаба нет, текст резкий.
+        let glyph_size_bin = size_bin_for(adjusted_font_size);
+        let glyph_display_scale = adjusted_font_size / glyph_size_bin as f32;
         if let Some(t0) = t_pick {
             sub_add(&TEXT_SUB.pick, t0);
         }
@@ -646,9 +684,9 @@ pub(crate) fn push_text_glyphs(
                 })
                 .as_deref();
             for layer in layers {
-                let Some(g) =
-                    ensure_glyph(cached, atlas, lazy, face_id, layer.glyph_id, size_bin, coords)
-                else {
+                let Some(g) = ensure_glyph(
+                    cached, atlas, lazy, face_id, layer.glyph_id, glyph_size_bin, coords,
+                ) else {
                     continue;
                 };
                 let t_quad = log.then(std::time::Instant::now);
@@ -657,7 +695,7 @@ pub(crate) fn push_text_glyphs(
                     &g,
                     cursor_x,
                     baseline_y,
-                    display_scale,
+                    glyph_display_scale,
                     layer_color(palette, layer.palette_index, color),
                 );
                 if let Some(t0) = t_quad {
@@ -680,17 +718,17 @@ pub(crate) fn push_text_glyphs(
             lazy,
             face_id,
             glyph_id,
-            size_bin,
+            glyph_size_bin,
             coords,
         );
 
         if let Some(g) = cached_glyph {
             let t_quad = log.then(std::time::Instant::now);
             let advance = g.advance_native as f32 * advance_scale;
-            push_glyph_quad(out, &g, cursor_x, baseline_y, display_scale, color);
+            push_glyph_quad(out, &g, cursor_x, baseline_y, glyph_display_scale, color);
             cursor_x += advance;
             if let Some(plan) = plan.as_mut() {
-                plan.push(TextRunStep::Glyph { g, advance });
+                plan.push(TextRunStep::Glyph { g, advance, display_scale: glyph_display_scale });
             }
             if let Some(t0) = t_quad {
                 sub_add(&TEXT_SUB.quad, t0);
@@ -955,6 +993,9 @@ mod pick_face_for_codepoint_tests {
             bytes: Arc::from(INTER),
             metrics: build_face_metrics(INTER),
             unicode_ranges: ranges,
+            ascent_override: None,
+            descent_override: None,
+            size_adjust: None,
         }
     }
 
