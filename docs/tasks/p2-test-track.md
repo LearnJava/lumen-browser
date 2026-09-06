@@ -908,6 +908,49 @@ Baseline 214 → 216 категорий. Осталось непокрытых ~
 не тронутых); долг среза 4 (6 категорий), BUG-1006-класс и `layout-instability` не
 тронуты.
 
+### TEST-3: срез 14 (2026-09-06) — первый заход на дробление `html/*` по под-путям, 7 маленьких подкаталогов
+
+Продолжение находки среза 13: `tests/wpt/html/` — один физический каталог на 19
+именованных строк `WPT-VENDOR-html-*` в ROADMAP.md, `root=html` целиком даёт 8399 id
+(масштаб `css`/`content-security-policy`, не разъедаемый одним срезом). Вместо попытки
+сходу разложить по всем 19 именованным категориям (часть из них сама разбита на
+подкаталоги вроде `html-semantics-embedded-content`, соответствие имя↔физический путь
+не всегда 1:1 — например `html-misc`/`html-aam`/`html-longdesc`/`html-media-capture`/
+`html-ruby-extensions` не имеют одноимённого подкаталога верхнего уровня), этот срез
+берёт под-путями `tests/wpt/html/<sub>` напрямую, отобранными по числу id
+(`all_vendored_test_ids(root='html/<sub>', recursive=True)`) и предиктору
+(`grep -rl "RemoteContext\|window\.open\|dispatcher\|test_driver\.\(Actions\|bless\)"`):
+самые дешёвые и чистые (0 совпадений предиктора) — сначала.
+
+Три под-каталога (`iana`, `resources`, `tools`) оказались ресурсными пустышками (0 id:
+только `original-id.json`/`common.js`/README) — добавлены к «получить нечем» (17 → 20).
+Четыре кандидата с ненулевым предиктором (`anonymous-iframe` 19/21 файлов,
+`capability-delegation` 5/7, `document-isolation-policy` 20/24, `user-activation` 9/26)
+пропущены в этом срезе — риск зависаний выше обычного, не разбирались.
+
+Семь новых категорий закрыты, каждая подтверждена **двумя** последовательными `--check`
+подряд, 0 регрессий на каждой (бинарь собран из текущего `main`, дефолтный `--binary`
+скрипта целится в Windows-путь `target/release/lumen.exe` — на Linux нужен явный
+`--binary target/dev-release/lumen`):
+- `html/links` (6 id, 6/6 harness OK, 2/6 сабтестов) — ~11 с;
+- `html/obsolete` (14 id, 14/14 harness OK, 5/53 сабтестов, включает историческое
+  `<marquee>`) — ~11 с;
+- `html/the-xhtml-syntax` (13 id, **0/13 harness OK** — 12 ERROR + 1 TIMEOUT, стабильно
+  на обоих `--check`) — ~11–27 с. Полный провал каждого файла ожидаем и не новая
+  находка: категория целиком `.xhtml`/XML-документы, тот же класс, что и BUG-786
+  (нет XML-пути для `application/xhtml+xml`, всё уходит в HTML5-токенизатор) — здесь
+  впервые зафиксирован как воспроизводимый baseline, а не как отдельный замер;
+- `html/scripting` (2 id, 2/2 harness OK, 0/3 сабтестов) — ~10 с;
+- `html/select` (1 id, 1/1 harness OK, 3/5 сабтестов) — ~10 с;
+- `html/embedded-content` (1 id, 1/1 harness OK, 0/2 сабтестов) — ~10 с;
+- `html/meta` (1 id, 1/1 harness OK, 0/3 сабтестов) — ~10 с.
+
+Baseline 216 → 223 категории (38 новых `.ini`, включая эти 35 + оставшиеся из
+`the-xhtml-syntax`). Осталось непокрытых по `html/*`: крупные под-пути (`canvas` 3308 id,
+`semantics` 2223, `webappapis` 353, `browsers` 759, `editing` 216, `interaction` 192,
+`rendering` 150, `dom` 262, `syntax` 380) и четыре предиктор-тяжёлых кандидата выше —
+для следующей сессии. `docs/tasks/p2-wpt-runner-throughput.md` не трогался.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
