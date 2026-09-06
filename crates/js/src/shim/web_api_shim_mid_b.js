@@ -3945,7 +3945,7 @@ function _lumen_fetch(input) {
         //
         // `_lumenAsync` is the shim's own opt-in to that same worker path for
         // callers that have no signal to offer but must not park the JS thread
-        // (BUG-1011: `FontFace.load()` blocked the whole load pipeline for as long
+        // (BUG-1013: `FontFace.load()` blocked the whole load pipeline for as long
         // as the font host took to answer). It is deliberately keyed on an explicit
         // init flag rather than flipped on by default: every other `fetch()` caller
         // in the engine still relies on the response being in hand when the promise

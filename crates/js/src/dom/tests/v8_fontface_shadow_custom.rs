@@ -613,7 +613,7 @@ fn font_face_size_adjust_default_and_rejects_normal_keyword() {
     assert_eq!(result, lumen_core::JsValue::String("ok".into()));
 }
 
-// BUG-1011: a `url()` source must not park the JS thread while the font host
+// BUG-1013: a `url()` source must not park the JS thread while the font host
 // answers. `FontFace.load()` used to call a bare `fetch()`, whose default
 // transport is synchronous, and it runs inside the load pipeline's `run-scripts`
 // phase — so one `document.fonts.load()` in a page `<head>` (google.com does
@@ -704,7 +704,7 @@ fn font_face_load_does_not_block_the_js_thread() {
     assert!(
         blocked_for < std::time::Duration::from_millis(SLOW_FETCH_MS / 2),
         "FontFace.load() parked the JS thread for {blocked_for:?} — the fetch went down the \
-         synchronous transport again (BUG-1011)"
+         synchronous transport again (BUG-1013)"
     );
     assert_eq!(rt.eval("__st").unwrap(), lumen_core::JsValue::String("pending".into()));
 

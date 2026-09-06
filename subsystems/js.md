@@ -2284,7 +2284,7 @@ runtime or the shim. Read them before a JS/Web-API change.
   testing whether the *new* URL fetches correctly, it is testing whether Lumen fetches it at all, which it
   currently does not, no matter how many times `.src` is set or what it was set to before.
 
-- **DOM shim: `fetch()` is SYNCHRONOUS unless the call site opts out** ([BUG-1011](../bugs/BUG-1011-FIXED.md),
+- **DOM shim: `fetch()` is SYNCHRONOUS unless the call site opts out** ([BUG-1013](../bugs/BUG-1013-FIXED.md),
   2026-09-06). `_lumen_fetch` (`web_api_shim_mid_b.js`) picks its transport from the *caller's* init: a
   live non-timeout `AbortSignal`, or the shim-internal `_lumenAsync: true`, routes to the worker-thread
   bridge (`_lumen_fetch_async_*`); anything else parks the JS thread inside `_lumen_fetch_sync`, which has

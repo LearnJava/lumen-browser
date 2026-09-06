@@ -1,4 +1,4 @@
-# BUG-1011 — `FontFace.load()` блокировал JS-поток на весь сетевой round-trip шрифта
+# BUG-1013 — `FontFace.load()` блокировал JS-поток на весь сетевой round-trip шрифта
 
 **Статус:** FIXED 2026-09-06
 **Крейт:** js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_font_face_try_one_source`;
