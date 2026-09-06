@@ -68,84 +68,91 @@ pub fn serialize_layout_tree(root: &LayoutBox) -> String {
     out
 }
 
-fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
-    let indent = "  ".repeat(depth);
-    let kind = match &b.kind {
-        BoxKind::Block => "Block",
-        BoxKind::Table => "Table",
-        BoxKind::TableRowGroup => "TableRowGroup",
-        BoxKind::TableRow => "TableRow",
-        BoxKind::InlineRun { .. } => "InlineRun",
-        BoxKind::InlineBlockRow => "InlineBlockRow",
-        BoxKind::InlineSpace => "InlineSpace",
-        BoxKind::Image { .. } => "Image",
-        BoxKind::Video { .. } => "Video",
-        BoxKind::Canvas { .. } => "Canvas",
-        BoxKind::Audio { .. } => "Audio",
-        BoxKind::Iframe { .. } => "Iframe",
-        BoxKind::FormControl { .. } => "FormControl",
-        BoxKind::Skip => "Skip",
-        BoxKind::Marker { .. } => "Marker",
-        BoxKind::FlowRoot => "FlowRoot",
-        BoxKind::Contents => "Contents",
-        BoxKind::SvgRoot { .. } => "SvgRoot",
-        BoxKind::SvgShape { .. } => "SvgShape",
-        BoxKind::SvgText { .. } => "SvgText",
-    };
-    let _ = write!(
-        out,
-        "{indent}{kind} rect=({:.2}, {:.2}, {:.2}, {:.2})",
-        b.rect.x, b.rect.y, b.rect.width, b.rect.height
-    );
-    if let BoxKind::Image { src, alt, .. } = &b.kind {
-        let _ = write!(out, " src={src:?} alt={alt:?}");
-    }
-    if let BoxKind::Video { src, poster } = &b.kind {
-        let _ = write!(out, " src={src:?} poster={poster:?}");
-    }
-    if let BoxKind::Canvas { width, height } = &b.kind {
-        let _ = write!(out, " canvas={width}x{height}");
-    }
-    if let BoxKind::Audio { src, controls } = &b.kind {
-        let _ = write!(out, " src={src:?} controls={controls}");
-    }
-    if let BoxKind::Iframe { src, .. } = &b.kind {
-        let _ = write!(out, " src={src:?}");
-    }
-    if let BoxKind::SvgShape { shape, .. } = &b.kind {
-        use crate::box_tree::SvgShapeKind;
-        match shape {
-            SvgShapeKind::Rect { x, y, width, height, rx, ry } =>
-                { let _ = write!(out, " rect({x},{y},{width},{height}) rx={rx} ry={ry}"); }
-            SvgShapeKind::Circle { cx, cy, r } =>
-                { let _ = write!(out, " circle({cx},{cy}) r={r}"); }
-            SvgShapeKind::Ellipse { cx, cy, rx, ry } =>
-                { let _ = write!(out, " ellipse({cx},{cy}) rx={rx} ry={ry}"); }
-            SvgShapeKind::Line { x1, y1, x2, y2 } =>
-                { let _ = write!(out, " line({x1},{y1}→{x2},{y2})"); }
-            SvgShapeKind::Path { d } =>
-                { let _ = write!(out, " path d={d:?}"); }
+// LAYOUT-1 срез 3: явный стек вместо рекурсии — `--dump-layout` само по себе
+// было одним из источников `has overflowed its stack` на глубоко вложенных
+// деревьях (BUG-987), независимым от рекурсии в самом layout-проходе. Чистый
+// pre-order обход без пост-обработки после цикла по детям — LIFO-стек с
+// детьми в обратном порядке воспроизводит тот же порядок посещения, что и
+// рекурсивная версия (левый ребёнок и всё его поддерево — раньше правого).
+fn write_box(out: &mut String, root: &LayoutBox, base_depth: usize) {
+    let mut stack: Vec<(&LayoutBox, usize)> = vec![(root, base_depth)];
+    while let Some((b, depth)) = stack.pop() {
+        let indent = "  ".repeat(depth);
+        let kind = match &b.kind {
+            BoxKind::Block => "Block",
+            BoxKind::Table => "Table",
+            BoxKind::TableRowGroup => "TableRowGroup",
+            BoxKind::TableRow => "TableRow",
+            BoxKind::InlineRun { .. } => "InlineRun",
+            BoxKind::InlineBlockRow => "InlineBlockRow",
+            BoxKind::InlineSpace => "InlineSpace",
+            BoxKind::Image { .. } => "Image",
+            BoxKind::Video { .. } => "Video",
+            BoxKind::Canvas { .. } => "Canvas",
+            BoxKind::Audio { .. } => "Audio",
+            BoxKind::Iframe { .. } => "Iframe",
+            BoxKind::FormControl { .. } => "FormControl",
+            BoxKind::Skip => "Skip",
+            BoxKind::Marker { .. } => "Marker",
+            BoxKind::FlowRoot => "FlowRoot",
+            BoxKind::Contents => "Contents",
+            BoxKind::SvgRoot { .. } => "SvgRoot",
+            BoxKind::SvgShape { .. } => "SvgShape",
+            BoxKind::SvgText { .. } => "SvgText",
+        };
+        let _ = write!(
+            out,
+            "{indent}{kind} rect=({:.2}, {:.2}, {:.2}, {:.2})",
+            b.rect.x, b.rect.y, b.rect.width, b.rect.height
+        );
+        if let BoxKind::Image { src, alt, .. } = &b.kind {
+            let _ = write!(out, " src={src:?} alt={alt:?}");
         }
-    }
-    write_style_attrs(out, &b.style);
-    out.push('\n');
-
-    if let BoxKind::InlineRun { segments, lines, .. } = &b.kind {
-        let inner = "  ".repeat(depth + 1);
-        for (i, seg) in segments.iter().enumerate() {
-            write_segment(out, &inner, i, seg);
+        if let BoxKind::Video { src, poster } = &b.kind {
+            let _ = write!(out, " src={src:?} poster={poster:?}");
         }
-        for (li, line) in lines.iter().enumerate() {
-            let _ = writeln!(out, "{inner}line[{li}]:");
-            let frag_indent = "  ".repeat(depth + 2);
-            for (fi, frag) in line.iter().enumerate() {
-                write_frag(out, &frag_indent, fi, frag);
+        if let BoxKind::Canvas { width, height } = &b.kind {
+            let _ = write!(out, " canvas={width}x{height}");
+        }
+        if let BoxKind::Audio { src, controls } = &b.kind {
+            let _ = write!(out, " src={src:?} controls={controls}");
+        }
+        if let BoxKind::Iframe { src, .. } = &b.kind {
+            let _ = write!(out, " src={src:?}");
+        }
+        if let BoxKind::SvgShape { shape, .. } = &b.kind {
+            use crate::box_tree::SvgShapeKind;
+            match shape {
+                SvgShapeKind::Rect { x, y, width, height, rx, ry } =>
+                    { let _ = write!(out, " rect({x},{y},{width},{height}) rx={rx} ry={ry}"); }
+                SvgShapeKind::Circle { cx, cy, r } =>
+                    { let _ = write!(out, " circle({cx},{cy}) r={r}"); }
+                SvgShapeKind::Ellipse { cx, cy, rx, ry } =>
+                    { let _ = write!(out, " ellipse({cx},{cy}) rx={rx} ry={ry}"); }
+                SvgShapeKind::Line { x1, y1, x2, y2 } =>
+                    { let _ = write!(out, " line({x1},{y1}→{x2},{y2})"); }
+                SvgShapeKind::Path { d } =>
+                    { let _ = write!(out, " path d={d:?}"); }
             }
         }
-    }
+        write_style_attrs(out, &b.style);
+        out.push('\n');
 
-    for child in &b.children {
-        write_box(out, child, depth + 1);
+        if let BoxKind::InlineRun { segments, lines, .. } = &b.kind {
+            let inner = "  ".repeat(depth + 1);
+            for (i, seg) in segments.iter().enumerate() {
+                write_segment(out, &inner, i, seg);
+            }
+            for (li, line) in lines.iter().enumerate() {
+                let _ = writeln!(out, "{inner}line[{li}]:");
+                let frag_indent = "  ".repeat(depth + 2);
+                for (fi, frag) in line.iter().enumerate() {
+                    write_frag(out, &frag_indent, fi, frag);
+                }
+            }
+        }
+
+        stack.extend(b.children.iter().rev().map(|c| (c, depth + 1)));
     }
 }
 
