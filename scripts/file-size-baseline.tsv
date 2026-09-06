@@ -5,7 +5,7 @@
 # коммитом, что и рост, и с объяснением в теле коммита.
 
 9887	crates/network/src/lib.rs
-7955	crates/engine/paint/src/backends/femtovg_backend.rs
+7546	crates/engine/paint/src/backends/femtovg_backend.rs
 5951	crates/engine/paint/src/renderer.rs
 5437	crates/engine/dom/src/lib.rs
 5365	crates/engine/paint/src/cpu_raster.rs
