@@ -60,6 +60,9 @@ pub(super) struct TextRunStyle<'a> {
 }
 
 impl FemtovgBackend {
+    /// Loads font bytes for a given path and registers them in `canvas`, returning
+    /// the `FontId`. Returns `None` if bytes cannot be read or `add_font_mem` fails.
+    /// Results are cached in `loaded_fonts` to avoid re-loading the same file.
     pub(super) fn load_font_by_path(&mut self, path: &Path, provider: &Arc<dyn FontProvider>) -> Option<femtovg::FontId> {
         if let Some(&id) = self.loaded_fonts.get(path) {
             return Some(id);
