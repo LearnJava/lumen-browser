@@ -177,3 +177,122 @@ path.
 should go green; `mixin-basic.html` and the `&`-nesting-dependent half of
 `contents-rule.html` will not, per the scope note above. Status remains
 `OPEN` — next slice is the nested-rule-inside-`@result` architecture.
+
+## Срез P3 2026-09-06 (часть 2)
+
+Implemented the nested-rule-inside-`@result` architecture the previous
+slice deferred. The two mechanisms genuinely don't compose at the same
+timing (CSS Nesting's `&`-combination happens at *parse* time against an
+already-known enclosing selector; mixin/`@apply` resolution happens at
+*cascade* time to support forward references) — resolved by keeping
+`@apply`'s own flat-declaration splice exactly as it was (still per-element,
+cascade-time, in `layout/style/substitute.rs`) and adding a **third**
+timing, a stylesheet-level post-parse pass, purely for the nested-rule case.
+
+**Parser** (`crates/engine/css-parser/src/parser/mixins.rs` — new file;
+`at_rules.rs` was already at the 2000-line cap, so the whole `@mixin`/
+`@apply`/`@contents` section — types, parsing, this slice's new pass — was
+split out into its own module rather than grown further, SPLIT-CP1-style,
+no behaviour change to anything moved verbatim): `MixinResultItem` gained a
+`NestedRule { combinator: Option<Combinator>, selectors: Vec<ComplexSelector>,
+body: Vec<MixinResultItem> }` variant. `parse_mixin_result_body` now parses
+a nested-rule-start token (`&`, implicit-descendant `.`/`#`/`[`/`:`/`*`, or
+an explicit relative combinator `>`/`+`/`~`) into one, mirroring
+`parse_declaration_block_with_nesting`'s own grammar — but the selector is
+stored **relative and unexpanded**: a `@mixin` block isn't attached to any
+selector at definition time (unlike an ordinary nested style rule, which
+always has a concrete enclosing rule at parse time), so there is nothing to
+combine with yet. `body` recurses through the same grammar one level down
+(`contents-rule.html`'s `&.a { @contents {...} }` — a nested rule containing
+`@contents`, and in principle further nested rules).
+
+**Stylesheet-level materialization** (same file, `collect_mixin_nested_rules`
++ its recursive helper `collect_nested_rule`, called once from
+`lumen_css_parser::parse` after the whole sheet — including every `@mixin`,
+even a forward-referenced one — is known): for every `@apply` marker found
+in any top-level `Rule`, resolves the mixin and walks its `@result` for
+`NestedRule` items, combining each one's stored relative selector with the
+*calling* rule's own selector via the parser's existing `expand_nesting`
+(the exact function CSS Nesting itself uses for `&`), and pushes the result
+as a brand-new standalone top-level `Rule`. This new rule needs no special
+handling anywhere else: `RuleIndex`/`CascadeIndex`/`compute_style` already
+treat every entry of `sheet.rules` uniformly, so it gets matched against
+whichever element(s) its (possibly descendant/sibling-combined) selector
+actually targets, completely independent of the element `@apply` was
+written on. `layout/style/substitute.rs`'s `expand_mixin_result_items` (the
+flat per-element path) gained a matching `NestedRule { .. } => {}` arm —
+correct no-op, since this new pass is what actually handles it.
+
+**Why this needed no cross-crate plumbing**: unlike the flat-declaration
+path, a nested rule's own `Decl`/`@contents` values are copied *literally*,
+not resolved against the mixin's bound-parameter/locals scope
+(`expand_vars`/`expand_custom_functions`, which live in the layout crate
+and need `em_basis`/`viewport` for unit resolution) — they're left as
+ordinary, unresolved declaration text on the new standalone `Rule`, and the
+*ordinary* per-element cascade (already running on every rule in the sheet)
+resolves any `var()`/`attr()` they contain exactly as if an author had
+written that rule directly. This is exactly right when nothing inside them
+depends on the mixin's own scope (every vendored test — `mixin-basic.html`'s
+`.cls { color: green; }` and `contents-rule.html`'s `&.a`/`&.c { @contents
+{...} }` are all literal), and a documented approximation otherwise (a
+`var()` inside such a declaration will resolve against whatever element the
+*combined* selector ends up matching, not against the `@apply` call site's
+own scope — only observably different when the two select different
+elements, which no vendored test exercises). It also means the whole
+mechanism lives entirely in `lumen-css-parser`, with zero new `Stylesheet`
+fields and zero changes to `rule_index.rs`/`cascade_index.rs`/`cascade.rs`'s
+existing global rule-numbering/specificity machinery.
+
+**Scope limits, deliberate** (documented in `collect_mixin_nested_rules`'s
+and `MixinResultItem::NestedRule`'s doc comments): only the sheet's flat
+top-level `rules` are scanned — a call site inside `@media`/`@supports`/
+`@layer`/`@scope`/a shadow-tree sheet is out of scope (each keeps its own
+separate `Vec<Rule>`, unlike CSS Nesting's own expansion, which flattens
+directly into whichever block it found itself in); a nested `@apply` found
+inside a nested rule's own body is silently dropped (no vendored test needs
+it); `type(<syntax>)` validation, `attr()` inside `@result`, cross-stylesheet
+visibility, shadow-DOM, `@layer` interaction and CSSOM reflection remain the
+same pre-existing gaps the flat path already documented.
+
+**Revision-cache gate caveat**: `revision.rs`'s workspace-wide
+`every_stylesheet_mutation_in_the_workspace_announces_itself` test scans
+every file mentioning `Stylesheet` for an in-place `.rules.push/extend/...`
+not immediately followed by `mark_mutated()`, and only exempts `parser.rs`
+itself (the one sanctioned place `Stylesheet::merge_from` lives). This is
+why `collect_mixin_nested_rules` **returns** the extra rules instead of
+appending them itself — `pub fn parse` (in `parser.rs`, exempt) does the
+actual `sheet.rules.extend(...)`, before the sheet's revision is ever
+observed by anything, so the invariant the gate protects (a revision-keyed
+cache never seeing rules it wasn't built from) still holds.
+
+**Verification**: 10 new unit tests in `css-parser`'s
+`parser/tests/nesting.rs` — 4 covering the parser (relative selector +
+combinator detection for compound-join/implicit-descendant/bare-`&`, and a
+nested rule containing `@contents`), 6 covering the stylesheet-level
+materialization, transcribing `mixin-basic.html`'s and `contents-rule.html`'s
+m3/m4 scenarios structurally (asserting the produced `Rule`'s selector and
+declarations) rather than through a live DOM/cascade — no v8/JS harness
+needed since the transformation is pure `Stylesheet` → `Stylesheet`.
+`cargo test -p lumen-css-parser --lib`: 392/392. `cargo test -p lumen-layout
+--lib`: 3862/3862 (unchanged count — no new layout-side tests needed, the
+one new match arm is a no-op by construction). `cargo clippy -p
+lumen-css-parser -p lumen-layout --all-targets -- -D warnings`: clean.
+`scripts/scoped-test.sh` (base = `main`'s merge-base): green except two
+pre-existing, unrelated failures already tracked elsewhere —
+`cases::snapshot_cpu` (BUG-1008, the recurring CPU-snapshot golden drift)
+and `dom::tests::v8_perf_typedom_node::native_binding_panic_does_not_abort_
+process` (BUG-997, a stale/flaky native-binding test) — reconfirmed
+unrelated by running each crate's tests standalone. No live WPT run (same
+recurring reason as every slice on this track — no `.venv` in this slot).
+
+**Expected effect on the vendored category once re-triaged**:
+`mixin-basic.html` (the category's single demonstration file) and the
+`&`-nesting half of `contents-rule.html` (`m3`/`m4`, "Block in @apply
+overrides fallback" / "Fallback is used if @apply has no block") should now
+go green, on top of what срез 1 already fixed. Remaining known gap in this
+file: `contents-rule.html`'s non-`&` cases (`m1`/`m2`/`m6`/`m7`, bare
+`@contents` with no nested rule at all) were already covered by срез 1's
+flat path. Status remains `OPEN` — no vendored test in this category is
+known to need anything from the "deliberate scope limits" list above, but
+the category itself (`mixin-cross-stylesheet`, `mixin-shadow-dom`,
+`mixin-layers`, `mixin-cssom.tentative`) still needs those follow-ups.

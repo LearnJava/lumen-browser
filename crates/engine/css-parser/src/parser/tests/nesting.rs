@@ -885,3 +885,186 @@ use super::*;
         let apply = parse_apply_call("--m({green})").unwrap();
         assert_eq!(apply.args, vec!["green".to_string()]);
     }
+
+    // ── @result nested style rules (BUG-518 срез 2) ─────────────────────────
+
+    #[test]
+    fn mixin_result_nested_rule_parsed_with_relative_selector_and_body() {
+        let s = parse("@mixin --m() { @result { &.a { color: blue; } } }");
+        let m = &s.mixin_rules[0];
+        let result = m.result.as_ref().unwrap();
+        assert_eq!(result.len(), 1);
+        let MixinResultItem::NestedRule { combinator, selectors, body } = &result[0] else {
+            panic!("expected NestedRule item, got {:?}", result[0]);
+        };
+        // Compound join (`&.a`, no whitespace/combinator after `&`).
+        assert_eq!(*combinator, None);
+        assert_eq!(selectors.len(), 1);
+        assert_eq!(selectors[0].head.parts, vec![SimpleSelector::Class("a".into())]);
+        assert!(selectors[0].tail.is_empty());
+        assert_eq!(body.len(), 1);
+        assert_eq!(
+            body[0],
+            MixinResultItem::Decl(Declaration {
+                property: "color".to_string(),
+                value: "blue".to_string(),
+                important: false,
+            })
+        );
+    }
+
+    #[test]
+    fn mixin_result_implicit_descendant_nested_rule_combinator_is_descendant() {
+        // `.cls { ... }` with no leading `&` — CSS Nesting L1 §4 implicit
+        // descendant, same as inside an ordinary style rule.
+        let s = parse("@mixin --m() { @result { .cls { color: green; } } }");
+        let m = &s.mixin_rules[0];
+        let result = m.result.as_ref().unwrap();
+        let MixinResultItem::NestedRule { combinator, selectors, .. } = &result[0] else {
+            panic!("expected NestedRule item, got {:?}", result[0]);
+        };
+        assert_eq!(*combinator, Some(Combinator::Descendant));
+        assert_eq!(selectors[0].head.parts, vec![SimpleSelector::Class("cls".into())]);
+    }
+
+    #[test]
+    fn mixin_result_bare_amp_nested_rule_has_empty_selectors() {
+        let s = parse("@mixin --m() { @result { & { color: teal; } } }");
+        let m = &s.mixin_rules[0];
+        let result = m.result.as_ref().unwrap();
+        let MixinResultItem::NestedRule { selectors, .. } = &result[0] else {
+            panic!("expected NestedRule item, got {:?}", result[0]);
+        };
+        assert!(selectors.is_empty());
+    }
+
+    #[test]
+    fn mixin_result_nested_rule_can_contain_contents() {
+        // `contents-rule.html`'s `&.a { @contents { color: blue; } }` shape.
+        let s = parse("@mixin --m() { @result { &.a { @contents { color: blue; } } } }");
+        let m = &s.mixin_rules[0];
+        let result = m.result.as_ref().unwrap();
+        let MixinResultItem::NestedRule { body, .. } = &result[0] else {
+            panic!("expected NestedRule item, got {:?}", result[0]);
+        };
+        assert_eq!(body.len(), 1);
+        let MixinResultItem::Contents { fallback } = &body[0] else {
+            panic!("expected Contents item inside nested rule, got {:?}", body[0]);
+        };
+        assert_eq!(fallback[0].property, "color");
+        assert_eq!(fallback[0].value, "blue");
+    }
+
+    // ── @result nested style rules — stylesheet-level materialization ───────
+
+    #[test]
+    fn mixin_result_nested_rule_implicit_descendant_materializes_new_top_level_rule() {
+        // `mixin-basic.html`: `div { @apply --m1; }` where `--m1`'s
+        // `@result` is `.cls { color: green; }` (implicit descendant) must
+        // produce a SECOND top-level rule `div .cls { color: green; }` —
+        // the flat per-element `@apply` splice never sees a `NestedRule`
+        // item at all (`substitute.rs`'s `expand_mixin_result_items` skips
+        // it), only this stylesheet-level pass does.
+        let s = parse(
+            "@mixin --m1() { @result { .cls { color: green; } } } \
+             div { @apply --m1; }",
+        );
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.rules[0].selectors, vec![one(SimpleSelector::Type("div".into()))]);
+        assert_eq!(s.rules[0].declarations.len(), 1);
+        assert_eq!(s.rules[0].declarations[0].property, MIXIN_APPLY_MARKER);
+        let nested = &s.rules[1];
+        assert_eq!(
+            nested.selectors,
+            vec![two(
+                SimpleSelector::Type("div".into()),
+                Combinator::Descendant,
+                SimpleSelector::Class("cls".into())
+            )]
+        );
+        assert_eq!(nested.declarations.len(), 1);
+        assert_eq!(nested.declarations[0].property, "color");
+        assert_eq!(nested.declarations[0].value, "green");
+    }
+
+    #[test]
+    fn mixin_result_nested_rule_compound_join_uses_apply_block_over_fallback() {
+        // `contents-rule.html` "Block in @apply overrides fallback": `.b {
+        // @apply --m3 { color: green; } }` where `--m3`'s `@result` is
+        // `&.a { @contents { color: blue; } }` (compound join) must produce
+        // `.b.a { color: green; }` — the call site's own `@apply` block
+        // wins over the mixin's `@contents` fallback.
+        let s = parse(
+            "@mixin --m3() { @result { &.a { @contents { color: blue; } } } } \
+             .b { @apply --m3 { color: green; } }",
+        );
+        assert_eq!(s.rules.len(), 2);
+        let nested = &s.rules[1];
+        assert_eq!(
+            nested.selectors,
+            vec![ComplexSelector {
+                head: CompoundSelector {
+                    parts: vec![SimpleSelector::Class("b".into()), SimpleSelector::Class("a".into())],
+                },
+                tail: Vec::new(),
+            }]
+        );
+        assert_eq!(nested.declarations.len(), 1);
+        assert_eq!(nested.declarations[0].property, "color");
+        assert_eq!(nested.declarations[0].value, "green");
+    }
+
+    #[test]
+    fn mixin_result_nested_rule_uses_contents_fallback_when_apply_has_no_block() {
+        // `contents-rule.html` "Fallback is used if @apply has no block":
+        // `.d { @apply --m4; }` (no block at all) where `--m4`'s `@result`
+        // is `&.c { @contents { color: green; } }` must fall back to the
+        // mixin's own `@contents` block.
+        let s = parse(
+            "@mixin --m4() { @result { &.c { @contents { color: green; } } } } \
+             .d { @apply --m4; }",
+        );
+        assert_eq!(s.rules.len(), 2);
+        let nested = &s.rules[1];
+        assert_eq!(
+            nested.selectors,
+            vec![ComplexSelector {
+                head: CompoundSelector {
+                    parts: vec![SimpleSelector::Class("d".into()), SimpleSelector::Class("c".into())],
+                },
+                tail: Vec::new(),
+            }]
+        );
+        assert_eq!(nested.declarations[0].property, "color");
+        assert_eq!(nested.declarations[0].value, "green");
+    }
+
+    #[test]
+    fn mixin_result_bare_amp_nested_rule_reuses_call_site_selector() {
+        // Bare `& { ... }` inside `@result` has no selectors of its own —
+        // the materialized rule's selector must be exactly the call
+        // site's own, not an accidental empty/duplicated selector list.
+        let s = parse(
+            "@mixin --m() { @result { & { color: teal; } } } \
+             .e { @apply --m; }",
+        );
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.rules[1].selectors, vec![one(SimpleSelector::Class("e".into()))]);
+        assert_eq!(s.rules[1].declarations[0].property, "color");
+        assert_eq!(s.rules[1].declarations[0].value, "teal");
+    }
+
+    #[test]
+    fn mixin_result_nested_rule_unknown_mixin_produces_nothing_extra() {
+        let s = parse(".x { @apply --does-not-exist; }");
+        assert_eq!(s.rules.len(), 1);
+    }
+
+    #[test]
+    fn mixin_result_nested_rule_no_mixins_in_sheet_is_a_no_op() {
+        // `expand_mixin_nested_rules` bails out immediately when
+        // `mixin_rules` is empty — a page with no `@mixin` at all pays
+        // nothing extra.
+        let s = parse("div { color: red; }");
+        assert_eq!(s.rules.len(), 1);
+    }

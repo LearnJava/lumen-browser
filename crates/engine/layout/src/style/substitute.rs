@@ -504,6 +504,14 @@ fn expand_mixin_result_items(
                     }
                 }
             }
+            // A nested style rule's selector can target a different
+            // element than the one `@apply` was written on (a descendant,
+            // a sibling) — it cannot become part of *this* rule's own flat
+            // declaration list. `lumen_css_parser::parse` already
+            // materialized it into its own standalone top-level `Rule`
+            // (`mixins::expand_mixin_nested_rules`), which the ordinary
+            // cascade matches independently; nothing to do here.
+            MixinResultItem::NestedRule { .. } => {}
         }
     }
     out
