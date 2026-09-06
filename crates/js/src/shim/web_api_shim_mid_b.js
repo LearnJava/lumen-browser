@@ -3942,7 +3942,17 @@ function _lumen_fetch(input) {
         // setTimeout poll loop, so an AbortController.abort() fired *during* the
         // request flips the token and cancels the in-flight socket. Timeout signals
         // keep the synchronous-cancellable path below (already torn down natively).
-        var useAsync = fetchSignal && !fetchSignal.aborted && !(_timeoutMs > 0);
+        //
+        // `_lumenAsync` is the shim's own opt-in to that same worker path for
+        // callers that have no signal to offer but must not park the JS thread
+        // (BUG-1011: `FontFace.load()` blocked the whole load pipeline for as long
+        // as the font host took to answer). It is deliberately keyed on an explicit
+        // init flag rather than flipped on by default: every other `fetch()` caller
+        // in the engine still relies on the response being in hand when the promise
+        // is created, and the headless one-shot modes never pump timers at all, so
+        // an async promise there would simply never settle.
+        var useAsync = !(_timeoutMs > 0)
+            && (!!(fetchSignal && !fetchSignal.aborted) || !!(init && init._lumenAsync));
         if (useAsync) {
             return new Promise(function(resolve, reject) {
                 var handle = _lumen_fetch_async_start(url, method, contentType || '', bodyBytes || [], !!hasBody, authorHeaders);
@@ -3954,11 +3964,18 @@ function _lumen_fetch(input) {
                 function finish(fn) {
                     if (settled) return;
                     settled = true;
-                    try { fetchSignal.removeEventListener('abort', onAbort); } catch (e) {}
+                    // `_lumenAsync` callers reach this block with no signal at all,
+                    // so the listener pair below is conditional rather than relying
+                    // on a `catch` to swallow a TypeError on `undefined`.
+                    if (fetchSignal) {
+                        try { fetchSignal.removeEventListener('abort', onAbort); } catch (e) {}
+                    }
                     fn();
                 }
                 function onAbort() { _lumen_fetch_async_abort(handle); }
-                try { fetchSignal.addEventListener('abort', onAbort); } catch (e) {}
+                if (fetchSignal) {
+                    try { fetchSignal.addEventListener('abort', onAbort); } catch (e) {}
+                }
                 function poll() {
                     if (settled) return;
                     var st = _lumen_fetch_async_poll(handle);
@@ -3966,7 +3983,7 @@ function _lumen_fetch(input) {
                     if (st === 3) {
                         finish(function() {
                             _lumen_fetch_async_free(handle);
-                            reject(fetchSignal.reason !== undefined ? fetchSignal.reason : new DOMException('The operation was aborted', 'AbortError'));
+                            reject((fetchSignal && fetchSignal.reason !== undefined) ? fetchSignal.reason : new DOMException('The operation was aborted', 'AbortError'));
                         });
                         return;
                     }
