@@ -324,19 +324,20 @@ pub(crate) fn resolve_script_sources(
                 // exact same bytes via the same client (script order preserved).
                 // PERF-1: one span per external script fetch.
                 let mut fetch_span = lumen_core::trace::span(format!("script {url}"), "net");
-                let bytes = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
+                let resource = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
                     let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
                     client
                         .fetch_subresource(&sub_url, RequestDestination::Script)
+                        .map(|body| crate::prefetch::CachedResource { body, content_type: None })
                         .map_err(|e| e.to_string())
                 });
-                match bytes {
-                    Ok(bytes) => {
+                match resource {
+                    Ok(resource) => {
                         eprintln!("Загружен скрипт: {url}");
-                        fetch_span.set_bytes(bytes.len());
+                        fetch_span.set_bytes(resource.body.len());
                         Some(ResolvedScript {
                             node: *nid,
-                            source: String::from_utf8_lossy(&bytes[..]).into_owned(),
+                            source: String::from_utf8_lossy(&resource.body[..]).into_owned(),
                             // Абсолютный адрес самого скрипта — база
                             // относительных импортов внутри модуля.
                             url: Some(url.clone()),

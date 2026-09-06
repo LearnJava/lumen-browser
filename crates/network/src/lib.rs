@@ -3403,6 +3403,29 @@ impl HttpClient {
         url: &Url,
         destination: RequestDestination,
     ) -> Result<Vec<u8>> {
+        self.fetch_subresource_inner(url, destination)
+            .map(|(body, _content_type)| body)
+    }
+
+    /// Same fetch as [`Self::fetch_subresource`], plus the response's
+    /// `Content-Type` header value (BUG-509: the CSS "determine the fallback
+    /// encoding" algorithm needs the transport-layer `charset=` parameter,
+    /// which the plain byte-only path drops). Shares the same cache/
+    /// revalidation logic via [`Self::fetch_subresource_inner`] — no second
+    /// network round trip.
+    pub fn fetch_subresource_with_content_type(
+        &self,
+        url: &Url,
+        destination: RequestDestination,
+    ) -> Result<(Vec<u8>, Option<String>)> {
+        self.fetch_subresource_inner(url, destination)
+    }
+
+    fn fetch_subresource_inner(
+        &self,
+        url: &Url,
+        destination: RequestDestination,
+    ) -> Result<(Vec<u8>, Option<String>)> {
         let url_str = url.to_string();
         let accept_encoding = self.accept_encoding_header();
         // BUG-839: Resource Timing needs the two ends of the request. Wall
@@ -3427,7 +3450,8 @@ impl HttpClient {
                     None,
                     "cache",
                 );
-                return Ok(snap.body);
+                let content_type = header_value(&snap.headers, "content-type").map(str::to_owned);
+                return Ok((snap.body, content_type));
             }
             if !snap.conditional_headers.is_empty() {
                 // Stale entry with validators — conditional GET.
@@ -3474,7 +3498,9 @@ impl HttpClient {
                         Some(&resp.headers),
                         "cache",
                     );
-                    return Ok(snap.body);
+                    let content_type =
+                        header_value(&snap.headers, "content-type").map(str::to_owned);
+                    return Ok((snap.body, content_type));
                 }
                 cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
                 self.emit_resource_timing(
@@ -3487,7 +3513,8 @@ impl HttpClient {
                     Some(&resp.headers),
                     "",
                 );
-                return Ok(resp.body);
+                let content_type = header_value(&resp.headers, "content-type").map(str::to_owned);
+                return Ok((resp.body, content_type));
             }
         }
 
@@ -3535,7 +3562,8 @@ impl HttpClient {
             Some(&resp.headers),
             "",
         );
-        Ok(resp.body)
+        let content_type = header_value(&resp.headers, "content-type").map(str::to_owned);
+        Ok((resp.body, content_type))
     }
 
     /// Publish a [`Event::ResourceTimed`] for a completed subresource load

@@ -177,7 +177,7 @@ fn collect_link_hrefs_finds_stylesheet() {
     );
     let mut hrefs = Vec::new();
     collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
-    let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h)| h.as_str()).collect();
+    let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h, _)| h.as_str()).collect();
     assert_eq!(only_hrefs, vec!["style.css"]);
 }
 
@@ -339,6 +339,7 @@ fn inline_css_imports_prepends_imported_content() {
         text, &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
         &mut std::collections::HashSet::new(), 0,
+        lumen_encoding::Encoding::Utf8,
     );
     let b_pos = out.find("color: blue").expect("imported content present");
     let a_pos = out.find("color: red").expect("own content present");
@@ -358,6 +359,7 @@ fn inline_css_imports_result_ends_with_source_text() {
         let out = inline_css_imports(
             text, &base, &null_sink(), None, &ctx,
             &mut std::collections::HashSet::new(), 0,
+            lumen_encoding::Encoding::Utf8,
         );
         assert!(out.ends_with(text), "результат не оканчивается исходником: {out:?}");
     }
@@ -416,6 +418,7 @@ fn inline_css_imports_nested_order() {
         "@import url(b.css);\n.a{}", &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
         &mut std::collections::HashSet::new(), 0,
+        lumen_encoding::Encoding::Utf8,
     );
     let c = out.find(".c{}").unwrap();
     let b = out.find(".b{}").unwrap();
@@ -435,6 +438,7 @@ fn inline_css_imports_cycle_guard() {
         "@import url(b.css);\n.a{}", &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
         &mut std::collections::HashSet::new(), 0,
+        lumen_encoding::Encoding::Utf8,
     );
     // Каждый лист загружен максимум один раз (guard по `seen`).
     assert_eq!(out.matches(".b{}").count(), 1);
@@ -450,6 +454,7 @@ fn inline_css_imports_media_gate() {
         "@import url(p.css) print;\n.a{}", &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
         &mut std::collections::HashSet::new(), 0,
+        lumen_encoding::Encoding::Utf8,
     );
     assert!(!out.contains(".print-only{}"), "print-only @import must be skipped for screen");
     assert!(out.contains(".a{}"));
@@ -465,6 +470,7 @@ fn inline_css_imports_missing_file_is_skipped() {
         "@import url(nope.css);\n.a{}", &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
         &mut std::collections::HashSet::new(), 0,
+        lumen_encoding::Encoding::Utf8,
     );
     assert!(out.contains(".a{}"));
 }
@@ -478,6 +484,7 @@ fn inline_css_imports_no_import_passthrough() {
         text, &base, &null_sink(), None,
         &screen_media_context(Size::new(1024.0, 720.0), false),
         &mut std::collections::HashSet::new(), 0,
+        lumen_encoding::Encoding::Utf8,
     );
     assert_eq!(out, text);
 }
@@ -507,7 +514,7 @@ fn collect_link_hrefs_media_gate() {
     let mut hrefs = Vec::new();
     collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
     // print.css отсеян; huge.css отсеян (viewport 1024px < 5000px); остальные — да.
-    let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h)| h.as_str()).collect();
+    let only_hrefs: Vec<&str> = hrefs.iter().map(|(_, h, _)| h.as_str()).collect();
     assert_eq!(only_hrefs, vec!["screen.css", "all.css", "plain.css", "wide.css"]);
 }
 
@@ -581,6 +588,96 @@ fn stylesheet_node_registry_drops_unfetchable_link() {
 
     assert_eq!(entries.len(), 1, "the missing link contributes no entry");
     assert_eq!(entries[0].sheet.rules[0].selector_text(), "a");
+}
+
+// ──────────── BUG-509: CSS "determine the fallback encoding" wiring ───────
+
+/// `#\xC8{ visibility:hidden }` — byte 0xC8 decodes to `И` (U+0418) under
+/// windows-1251, the same fixture shape as the vendored
+/// `css/css-syntax/charset/support/no-decl.css`.
+const WIN1251_RULE_BYTES: &[u8] = b"#\xC8{ visibility:hidden }";
+
+/// An external stylesheet with no BOM/HTTP-charset/`@charset`/`<link
+/// charset>` falls back to the referring document's own encoding — the
+/// bottom tier of the algorithm, exercised end to end through
+/// `load_linked_stylesheets` (mirrors wpt `page-windows-1251-css-no-decl.html`).
+#[test]
+fn load_linked_stylesheets_falls_back_to_document_encoding() {
+    let dir = std::env::temp_dir().join("lumen_bug509_doc_encoding_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.css"), WIN1251_RULE_BYTES).unwrap();
+
+    let mut doc = lumen_html_parser::parse(
+        r#"<html><head><link rel="stylesheet" href="a.css"></head><body></body></html>"#,
+    );
+    doc.set_character_set("windows-1251".to_owned());
+    let base = ResourceBase::File(dir.join("page.html"));
+    let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
+
+    let (css, outcomes) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+
+    assert!(outcomes[0].1, "a.css must be fetched");
+    assert!(
+        css.contains('\u{418}'),
+        "byte 0xC8 must decode as windows-1251 (U+0418), got: {css:?}"
+    );
+}
+
+/// The legacy `<link charset=…>` attribute overrides a UTF-8 document
+/// default (mirrors wpt `page-windows-1251-charset-attribute-bogus.html`'s
+/// non-bogus sibling: the attribute tier actually firing).
+#[test]
+fn load_linked_stylesheets_uses_link_charset_attribute() {
+    let dir = std::env::temp_dir().join("lumen_bug509_link_charset_attr_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.css"), WIN1251_RULE_BYTES).unwrap();
+
+    // Document's own encoding defaults to UTF-8 — decoding under it would
+    // turn 0xC8 into U+FFFD, not U+0418, so a correct result here proves the
+    // `<link charset>` attribute tier actually fired ahead of that fallback.
+    let doc = lumen_html_parser::parse(
+        r#"<html><head><link rel="stylesheet" href="a.css" charset="windows-1251"></head><body></body></html>"#,
+    );
+    let base = ResourceBase::File(dir.join("page.html"));
+    let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
+
+    let (css, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+
+    assert!(
+        css.contains('\u{418}'),
+        "charset attribute must drive decoding, got: {css:?}"
+    );
+}
+
+/// A UTF-8 BOM on the stylesheet's own bytes wins over everything else,
+/// including a document that declares a different encoding (mirrors wpt
+/// `page-windows-1252-http-windows-1251-css-utf8-bom.html`).
+#[test]
+fn load_linked_stylesheets_bom_wins_over_document_encoding() {
+    let dir = std::env::temp_dir().join("lumen_bug509_bom_wins_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut bytes = vec![0xEFu8, 0xBB, 0xBF];
+    bytes.extend_from_slice("#\u{418}{ visibility:hidden }".as_bytes());
+    std::fs::write(dir.join("a.css"), &bytes).unwrap();
+
+    let mut doc = lumen_html_parser::parse(
+        r#"<html><head><link rel="stylesheet" href="a.css"></head><body></body></html>"#,
+    );
+    // If the BOM were ignored, this would drive a windows-1251 decode of
+    // UTF-8 bytes instead — garbage, not `И`.
+    doc.set_character_set("windows-1251".to_owned());
+    let base = ResourceBase::File(dir.join("page.html"));
+    let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
+
+    let (css, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+
+    assert!(
+        css.contains('\u{418}') && !css.contains('\u{FEFF}'),
+        "UTF-8 BOM must win and be stripped, got: {css:?}"
+    );
 }
 
 #[test]
