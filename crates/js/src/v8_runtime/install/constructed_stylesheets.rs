@@ -37,6 +37,17 @@
 //! `<style>` and its `adoptedStyleSheets` are in the same boat. `replaceSync`
 //! content for a shadow-root-adopted sheet still updates CSSOM (`.cssRules`)
 //! but never reaches paint. Follow-up, not this срез.
+//!
+//! **Срез 3 (BUG-897): `insertRule`/`deleteRule` on a constructed sheet.**
+//! [`lumen_css_parser::Stylesheet::insert_rule`]/`delete_rule` do the actual
+//! splice — the workspace's stylesheet-mutation gate confines every
+//! rule-list mutator to that crate's `parser.rs`, so this module only
+//! resolves `idx` to a registry entry and translates the `Result` into the
+//! sentinel convention already used elsewhere here (see
+//! `_lumen_set_adopted_stylesheets`'s comment). `document.styleSheets`'s
+//! read-only sheets (CSSOM-1) still lack both — that is a separate registry
+//! (`stylesheet_nodes`) this module does not touch, deferred like the rest of
+//! CSSOM-1/2.
 
 use super::reg;
 #[allow(unused_imports)]
@@ -247,6 +258,34 @@ pub(crate) fn install_constructed_stylesheets(
         let a = Arc::clone(&adopted);
         reg!(scope, ctx, store, "_lumen_get_adopted_stylesheets", move |scope_id: u32| -> Vec<u32> {
             a.lock().unwrap_or_else(|e| e.into_inner()).get(&scope_id).cloned().unwrap_or_default()
+        });
+    }
+    // `CSSStyleSheet.insertRule`/`.deleteRule` (CSSOM-5 срез 3, BUG-897).
+    // Sentinel returns (no exception path through `reg!`'s natives — see
+    // `_lumen_set_adopted_stylesheets` above for the same convention): the
+    // JS wrapper (`_lumen_make_constructed_style_sheet`) turns a negative
+    // result into the matching `DOMException`.
+    {
+        let s = Arc::clone(&sheets);
+        reg!(scope, ctx, store, "_lumen_constructed_insert_rule", move |idx: u32, rule_text: String, index: u32| -> i32 {
+            let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(entry) = guard.get_mut(idx as usize) else { return -1 };
+            match Arc::make_mut(&mut entry.sheet).insert_rule(&rule_text, index as usize) {
+                Ok(new_index) => new_index as i32,
+                Err(lumen_css_parser::CssomRuleMutationError::IndexSize) => -1,
+                Err(lumen_css_parser::CssomRuleMutationError::Syntax) => -2,
+            }
+        });
+    }
+    {
+        let s = Arc::clone(&sheets);
+        reg!(scope, ctx, store, "_lumen_constructed_delete_rule", move |idx: u32, index: u32| -> i32 {
+            let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(entry) = guard.get_mut(idx as usize) else { return -1 };
+            match Arc::make_mut(&mut entry.sheet).delete_rule(index as usize) {
+                Ok(()) => 0,
+                Err(_) => -1,
+            }
         });
     }
     Ok(())

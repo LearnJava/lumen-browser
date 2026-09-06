@@ -20,6 +20,20 @@ fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     rt
 }
 
+/// `e.name` of whatever `expr` throws — `Result::Err`'s `Debug` text carries
+/// only the message, not the `DOMException` name (see other suites'
+/// `throw_name` helpers, e.g. `v8_selector_syntax_error.rs`).
+fn throw_name(rt: &V8JsRuntime, expr: &str) -> String {
+    let script = format!(
+        "(function() {{ try {{ {expr}; return 'no-throw'; }} \
+                 catch (e) {{ return String(e && e.name); }} }})()"
+    );
+    match rt.eval(&script).unwrap() {
+        lumen_core::JsValue::String(s) => s,
+        other => panic!("expected string, got {other:?}"),
+    }
+}
+
 #[test]
 fn construct_without_new_throws() {
     let rt = v8_runtime_with_dom(make_doc());
@@ -226,4 +240,105 @@ fn document_adopted_stylesheet_skips_disabled_members() {
     )
     .unwrap();
     assert!(rt.document_adopted_stylesheet().is_none());
+}
+
+// ── CSSOM-5 срез 3: `insertRule`/`deleteRule` on a constructed sheet ──────
+
+#[test]
+fn insert_rule_defaults_index_to_zero_per_spec() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var s = new CSSStyleSheet(); s.replaceSync('a{}'); \
+             s.insertRule('b{}')",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(0.0));
+    let r = rt.eval("s.cssRules.length").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(2.0));
+    let r = rt.eval("s.cssRules[0].selectorText").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("b".to_string()));
+    let r = rt.eval("s.cssRules[1].selectorText").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("a".to_string()));
+}
+
+#[test]
+fn insert_rule_appends_when_given_the_current_length() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval("var s = new CSSStyleSheet(); s.replaceSync('a{}'); s.insertRule('b{}', 1)")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(1.0));
+    let r = rt.eval("s.cssRules[1].selectorText").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("b".to_string()));
+}
+
+#[test]
+fn insert_rule_at_index_shifts_existing_rules() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("var s = new CSSStyleSheet(); s.replaceSync('a{} c{}'); s.insertRule('b{}', 1)")
+        .unwrap();
+    let r = rt.eval("s.cssRules[0].selectorText").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("a".to_string()));
+    let r = rt.eval("s.cssRules[1].selectorText").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("b".to_string()));
+    let r = rt.eval("s.cssRules[2].selectorText").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("c".to_string()));
+}
+
+#[test]
+fn insert_rule_accepts_a_media_block() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("var s = new CSSStyleSheet(); s.insertRule('@media screen { p { color: red; } }')")
+        .unwrap();
+    let r = rt.eval("s.cssRules[0].type === CSSRule.MEDIA_RULE").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn insert_rule_throws_syntax_error_on_unparseable_text() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("var s = new CSSStyleSheet();").unwrap();
+    assert_eq!(throw_name(&rt, "s.insertRule('color: red;')"), "SyntaxError");
+    // The failed call must not have inserted anything.
+    let r = rt.eval("s.cssRules.length").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(0.0));
+}
+
+#[test]
+fn insert_rule_throws_index_size_error_out_of_range() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("var s = new CSSStyleSheet();").unwrap();
+    assert_eq!(throw_name(&rt, "s.insertRule('a{}', 5)"), "IndexSizeError");
+}
+
+#[test]
+fn delete_rule_removes_the_rule_at_index() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("var s = new CSSStyleSheet(); s.replaceSync('a{} b{} c{}'); s.deleteRule(1)")
+        .unwrap();
+    let r = rt.eval("s.cssRules.length").unwrap();
+    assert_eq!(r, lumen_core::JsValue::Number(2.0));
+    let r = rt.eval("s.cssRules[0].selectorText").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("a".to_string()));
+    let r = rt.eval("s.cssRules[1].selectorText").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("c".to_string()));
+}
+
+#[test]
+fn delete_rule_throws_index_size_error_out_of_range() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("var s = new CSSStyleSheet();").unwrap();
+    assert_eq!(throw_name(&rt, "s.deleteRule(0)"), "IndexSizeError");
+}
+
+#[test]
+fn insert_rule_on_adopted_sheet_updates_document_fingerprint() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("var s = new CSSStyleSheet(); document.adoptedStyleSheets = [s];")
+        .unwrap();
+    let before = rt.document_adopted_fingerprint();
+    rt.eval("s.insertRule('p{}')").unwrap();
+    let after = rt.document_adopted_fingerprint();
+    assert_ne!(before, after);
 }

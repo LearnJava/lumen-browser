@@ -65,6 +65,94 @@ fn cssom_rules_preserves_source_order_across_style_and_media() {
 }
 
 #[test]
+fn insert_rule_appends_at_end_by_default_index() {
+    let mut sheet = parse("a {}");
+    let before = sheet.revision();
+    let idx = sheet.insert_rule("b {}", 1).unwrap();
+    assert_eq!(idx, 1);
+    assert_ne!(before, sheet.revision());
+    assert_eq!(sheet.cssom_rules().len(), 2);
+    assert_eq!(sheet.rules[1].selector_text(), "b");
+}
+
+#[test]
+fn insert_rule_at_a_middle_index_shifts_later_rules() {
+    let mut sheet = parse("a {} c {}");
+    sheet.insert_rule("b {}", 1).unwrap();
+    let order: Vec<_> = sheet.rules.iter().map(Rule::selector_text).collect();
+    assert_eq!(order, ["a", "b", "c"]);
+}
+
+#[test]
+fn insert_rule_interleaves_media_and_style_correctly() {
+    let mut sheet = parse("a {} @media print { p {} }");
+    sheet.insert_rule("b {}", 1).unwrap();
+    assert_eq!(sheet.rules.iter().map(Rule::selector_text).collect::<Vec<_>>(), ["a", "b"]);
+    assert_eq!(sheet.media_rules.len(), 1);
+    let kinds: Vec<_> = sheet
+        .cssom_rules()
+        .iter()
+        .map(|r| match r {
+            CssomRuleRef::Style(_) => "style",
+            CssomRuleRef::Media(_) => "media",
+        })
+        .collect();
+    assert_eq!(kinds, ["style", "style", "media"]);
+}
+
+#[test]
+fn insert_rule_rejects_index_past_the_end() {
+    let mut sheet = parse("a {}");
+    assert_eq!(sheet.insert_rule("b {}", 2), Err(CssomRuleMutationError::IndexSize));
+}
+
+#[test]
+fn insert_rule_rejects_a_bare_declaration() {
+    let mut sheet = Stylesheet::default();
+    assert_eq!(sheet.insert_rule("color: red;", 0), Err(CssomRuleMutationError::Syntax));
+}
+
+#[test]
+fn insert_rule_rejects_more_than_one_rule() {
+    let mut sheet = Stylesheet::default();
+    assert_eq!(sheet.insert_rule("a {} b {}", 0), Err(CssomRuleMutationError::Syntax));
+}
+
+#[test]
+fn insert_rule_rejects_a_kind_cssom_rules_cannot_represent() {
+    let mut sheet = Stylesheet::default();
+    assert_eq!(
+        sheet.insert_rule("@font-face { font-family: X; src: url(a.woff); }", 0),
+        Err(CssomRuleMutationError::Syntax)
+    );
+}
+
+#[test]
+fn delete_rule_removes_the_rule_at_index() {
+    let mut sheet = parse("a {} b {} c {}");
+    let before = sheet.revision();
+    sheet.delete_rule(1).unwrap();
+    assert_ne!(before, sheet.revision());
+    assert_eq!(sheet.rules.iter().map(Rule::selector_text).collect::<Vec<_>>(), ["a", "c"]);
+}
+
+#[test]
+fn delete_rule_removes_a_media_block_without_disturbing_style_rules() {
+    let mut sheet = parse("a {} @media print { p {} } b {}");
+    sheet.delete_rule(1).unwrap();
+    assert!(sheet.media_rules.is_empty());
+    assert_eq!(sheet.rules.iter().map(Rule::selector_text).collect::<Vec<_>>(), ["a", "b"]);
+}
+
+#[test]
+fn delete_rule_rejects_index_at_or_past_the_length() {
+    let mut sheet = parse("a {}");
+    assert_eq!(sheet.delete_rule(1), Err(CssomRuleMutationError::IndexSize));
+    let mut empty = Stylesheet::default();
+    assert_eq!(empty.delete_rule(0), Err(CssomRuleMutationError::IndexSize));
+}
+
+#[test]
 fn mark_mutated_mints_a_new_revision() {
     let mut sheet = parse("p { color: red }");
     let before = sheet.revision();
