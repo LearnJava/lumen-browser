@@ -40,11 +40,13 @@
 mod at_rules;
 mod declarations;
 mod media;
+mod mixins;
 mod selectors;
 
 pub use at_rules::*;
 pub use declarations::*;
 pub use media::*;
+pub use mixins::*;
 pub use selectors::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,10 +202,12 @@ pub struct Stylesheet {
     /// CSS Functions and Mixins L1 — `@mixin --name(<params>) { ... }`.
     /// Author-defined reusable declaration set, invoked as
     /// `@apply --name(<args>)` from a style rule's body (or another
-    /// mixin's own `@result`). Evaluation happens in layout
+    /// mixin's own `@result`). Flat declarations are evaluated in layout
     /// (`expand_mixin_apply`, `style/substitute.rs`); a nested style rule
-    /// inside `@result` is parsed but not expanded — see [`MixinRule`]'s
-    /// doc comment.
+    /// inside `@result` is instead materialized into a standalone
+    /// top-level entry of this sheet's own `rules` by
+    /// [`mixins::collect_mixin_nested_rules`] right after parsing — see
+    /// [`MixinRule`]'s doc comment.
     pub mixin_rules: Vec<MixinRule>,
     /// Source order of top-level plain style rules and `@media` blocks, as
     /// tags only (`Style`/`Media`) — the Nth `Style` tag refers to `rules[N]`
@@ -457,7 +461,15 @@ pub struct StylesheetNodeEntry {
 }
 
 pub fn parse(input: &str) -> Stylesheet {
-    Parser::new(input).parse_stylesheet()
+    let mut sheet = Parser::new(input).parse_stylesheet();
+    // CSS Mixins L1: a nested style rule inside a mixin's `@result` can only
+    // be resolved once the whole sheet — every `@apply` call site and every
+    // (possibly forward-referenced) `@mixin` — is known. See
+    // `mixins::collect_mixin_nested_rules`'s doc comment for why the extra
+    // rules are appended here rather than by that function itself.
+    let extra = mixins::collect_mixin_nested_rules(&sheet);
+    sheet.rules.extend(extra);
+    sheet
 }
 
 /// Парсит содержимое HTML-атрибута `style="..."` — declaration-list без
