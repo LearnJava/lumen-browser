@@ -8327,10 +8327,23 @@ FontFaceSet.prototype.constructor = FontFaceSet;
 // size are not parsed out individually; matching in `FontFaceSet.load` is by
 // family name only, which is what every test in this slice's target set
 // exercises.
+//
+// BUG-1012: the size token must carry a real unit. `<font-size>` in the
+// shorthand is a `<length-percentage>` or a keyword — never a bare number —
+// whereas everything the grammar allows *before* it (style / variant / weight /
+// stretch) is either a keyword or exactly such a bare number. The old pattern
+// left the unit optional, so the `400` of `document.fonts.load('400 10pt Google
+// Sans')` was read as the size and the family came out as `10pt google sans`:
+// no member matched, the promise resolved with `[]`, and nothing was ever
+// loaded. That is the form google.com sends, and it is the common one.
+// Requiring the unit finds the real size without spelling out the four keyword
+// lists — a preceding keyword cannot look like a size, and a preceding number
+// no longer can either. The `/<line-height>` tail keeps its loose pattern:
+// a line-height legitimately *is* a bare number.
 function _lumen_parse_font_shorthand_families(fontStr) {
     var s = String(fontStr).trim();
     var sizeKeyword = /^(xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger)$/i;
-    var sizeToken = /^[\d.]+[a-z%]*(\/[\d.]+[a-z%]*)?$/i;
+    var sizeToken = /^[\d.]+(px|pt|pc|in|cm|mm|q|em|rem|ex|ch|cap|ic|lh|rlh|vw|vh|vi|vb|vmin|vmax|svw|svh|lvw|lvh|dvw|dvh|%)(\/[\d.]+[a-z%]*)?$/i;
     var tokens = s.split(/\s+/);
     var idx = -1;
     for (var i = 0; i < tokens.length; i++) {

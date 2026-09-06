@@ -727,6 +727,67 @@ fn font_face_load_does_not_block_the_js_thread() {
     );
 }
 
+// BUG-1012: `<font-size>` in the `font` shorthand is a length/percentage or a
+// keyword, never a bare number — but the shorthand reader used to accept a
+// unitless token as the size, so `'400 10pt Google Sans'` (the form google.com
+// sends, and the common one) yielded the family `10pt google sans`, matched no
+// member, and `document.fonts.load()` resolved with `[]` without loading
+// anything. Verified by probe before the fix: the same page requested the font
+// with `'10pt SlowFace'` and did not with `'400 10pt SlowFace'`.
+
+/// Runs the shim's shorthand reader and returns its family list as JSON.
+fn parse_shorthand(rt: &V8JsRuntime, font: &str) -> String {
+    let src = format!("JSON.stringify(_lumen_parse_font_shorthand_families({font:?}))");
+    match rt.eval(&src).unwrap() {
+        lumen_core::JsValue::String(s) => s,
+        other => panic!("unexpected value: {other:?}"),
+    }
+}
+
+#[test]
+fn font_shorthand_families_skip_weight_style_and_stretch() {
+    let rt = v8_runtime_with_dom(make_doc());
+    // The reported case: a numeric weight ahead of the size.
+    assert_eq!(parse_shorthand(&rt, "400 10pt Google Sans"), r#"["google sans"]"#);
+    // Every descriptor the grammar allows before the size, at once.
+    assert_eq!(
+        parse_shorthand(&rt, "italic small-caps 700 condensed 16px \"My Font\", serif"),
+        r#"["my font","serif"]"#
+    );
+    // A `/<line-height>` tail is still consumed with the size…
+    assert_eq!(parse_shorthand(&rt, "500 16px/1.4 Foo"), r#"["foo"]"#);
+    // …and a line-height is legitimately unitless, so it must not be mistaken
+    // for the size of a shorthand that has none.
+    assert_eq!(parse_shorthand(&rt, "300 x-large Bar"), r#"["bar"]"#);
+    // No family after the size — nothing to match against.
+    assert_eq!(parse_shorthand(&rt, "400 10pt"), "[]");
+    // No size at all is not a `font` shorthand.
+    assert_eq!(parse_shorthand(&rt, "Google Sans"), "[]");
+}
+
+#[test]
+fn document_fonts_load_matches_a_face_when_the_shorthand_carries_a_weight() {
+    let doc = make_doc();
+    add_css_font_face(&doc, "WebFont", lumen_dom::FontFaceStatus::Unloaded);
+    let rt = v8_runtime_with_dom(doc);
+    // `.load()` flips its face to 'loading' synchronously, before the fetch
+    // settles — so this reads "the set found the member", with no provider and
+    // no network involved. Before the fix the family parsed as '10pt webfont',
+    // nothing matched, and the status stayed 'unloaded'.
+    let result = rt
+        .eval(
+            r#"
+                var face = null;
+                document.fonts.forEach(function(f) { if (f.family === 'WebFont') face = f; });
+                var before = face.status;
+                document.fonts.load('400 10pt WebFont');
+                JSON.stringify([before, face.status])
+            "#,
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::String(r#"["unloaded","loading"]"#.into()));
+}
+
 // ── Shadow DOM JS bindings ────────────────────────────────────────────────
 
 #[test]
