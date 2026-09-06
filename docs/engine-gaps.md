@@ -27,7 +27,7 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 ## Navigation, frames and documents
 
 - **`window.open()` and `<a target=_blank>` replace the *calling* document** ([BUG-883](../bugs/BUG-883-OPEN.md)) — the opener's timers never fire again.
-- **A frame inserted after the shell's single sub-document pass** (from a `load` handler, a timer, rAF), or a `src` assigned to an already-inserted frame, produces no request at all ([BUG-885](../bugs/BUG-885-OPEN.md)); a frame built by a top-level inline script loads fine. Write frames into the markup with their final URL.
+- **A frame inserted after the shell's single sub-document pass** (from a `load` handler, a timer, rAF), or a `src` assigned to an already-inserted frame, produces no request at all ([BUG-885](../bugs/BUG-885-FIXED.md)); a frame built by a top-level inline script loads fine. Write frames into the markup with their final URL.
 - **`javascript:` URLs never execute** anywhere ([BUG-884](../bugs/BUG-884-OPEN.md)); `window.close()` is a no-op and `window.closed`/`name` are `undefined` ([BUG-887](../bugs/BUG-887-OPEN.md)); `document.open()`/`close()` do not exist ([BUG-888](../bugs/BUG-888-OPEN.md)); an entry made by `history.pushState(state, "")` (no URL argument) fires no `popstate` on traversal ([BUG-886](../bugs/BUG-886-OPEN.md)).
 - **An `.xhtml`/`.xht`/`.svg` page runs no scripts** — navigation has no XML path at all, so the file is HTML-parsed ([BUG-786](../bugs/BUG-786-OPEN.md)): a prefixed `<h:script src>` is never requested, a self-closing `<script src="…"/>` swallows the rest of the document, and `<![CDATA[` is a syntax error. Never CDATA-wrap a probe's script.
 
