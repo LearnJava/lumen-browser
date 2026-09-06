@@ -796,6 +796,50 @@ use super::*;
     }
 
     #[test]
+    fn mixin_top_level_has_no_layer() {
+        let s = parse("@mixin --m() { @result { color: red; } }");
+        assert_eq!(s.mixin_rules[0].layer, None);
+    }
+
+    #[test]
+    fn mixin_inside_named_layer_block_stamped_with_layer_name() {
+        // BUG-518 срез 3 (`mixin-layers.html`): a `@mixin` declared directly
+        // inside `@layer one { ... }` must carry that layer's name, so
+        // `@apply` name resolution can rank it against same-named mixins in
+        // other layers.
+        let s = parse("@layer one { @mixin --m() { @result { color: red; } } }");
+        assert_eq!(s.mixin_rules[0].layer, Some("one".to_string()));
+    }
+
+    #[test]
+    fn mixin_inside_anonymous_layer_block_stamped_with_synthesized_name() {
+        let s = parse("@layer { @mixin --m() { @result { color: red; } } }");
+        assert_eq!(s.mixin_rules[0].layer, Some("__anon_1__".to_string()));
+    }
+
+    #[test]
+    fn mixin_layer_priority_unlayered_beats_every_layer() {
+        // CSS Cascade L5 §6.4.5: unlayered has the highest priority.
+        let s = parse(
+            "@layer one, two; \
+             @mixin --m() { @result { color: red; } }",
+        );
+        assert_eq!(s.mixin_rules[0].layer_priority(&s.layer_order), 2);
+    }
+
+    #[test]
+    fn mixin_layer_priority_later_named_layer_beats_earlier() {
+        let s = parse(
+            "@layer one, two; \
+             @layer two { @mixin --a() { @result { color: red; } } } \
+             @layer one { @mixin --b() { @result { color: red; } } }",
+        );
+        let a = s.mixin_rules.iter().find(|m| m.name == "--a").unwrap();
+        let b = s.mixin_rules.iter().find(|m| m.name == "--b").unwrap();
+        assert!(a.layer_priority(&s.layer_order) > b.layer_priority(&s.layer_order));
+    }
+
+    #[test]
     fn mixin_contents_with_fallback_parsed() {
         let s = parse("@mixin --m() { @result { @contents { color: blue; } } }");
         let m = &s.mixin_rules[0];
@@ -1067,4 +1111,23 @@ use super::*;
         // nothing extra.
         let s = parse("div { color: red; }");
         assert_eq!(s.rules.len(), 1);
+    }
+
+    #[test]
+    fn mixin_result_nested_rule_resolves_stronger_layer_among_same_name() {
+        // BUG-518 срез 3: the stylesheet-level nested-rule materialization
+        // pass (`collect_mixin_nested_rules`) must apply the same
+        // layer-priority ranking as the flat per-element `@apply` path —
+        // layer `two` (declared later in `@layer one, two;`) wins over `one`
+        // even though `one`'s `--m` is declared later in source.
+        let s = parse(
+            "@layer one, two; \
+             @layer one { @mixin --m() { @result { &.a { color: red; } } } } \
+             @layer two { @mixin --m() { @result { &.a { color: green; } } } } \
+             div { @apply --m; }",
+        );
+        assert_eq!(s.rules.len(), 2);
+        let nested = &s.rules[1];
+        assert_eq!(nested.declarations[0].property, "color");
+        assert_eq!(nested.declarations[0].value, "green");
     }

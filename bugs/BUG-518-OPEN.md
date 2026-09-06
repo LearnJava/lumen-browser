@@ -296,3 +296,78 @@ flat path. Status remains `OPEN` — no vendored test in this category is
 known to need anything from the "deliberate scope limits" list above, but
 the category itself (`mixin-cross-stylesheet`, `mixin-shadow-dom`,
 `mixin-layers`, `mixin-cssom.tentative`) still needs those follow-ups.
+
+## Срез P3 2026-09-06 (часть 3)
+
+Implemented `@layer` interaction for `@mixin`/`@apply` name resolution
+(`mixin-layers.html`, one of the four follow-ups срез 2 left open).
+
+**`MixinRule::layer`** (`crates/engine/css-parser/src/parser/mixins.rs`): a
+new `Option<String>` field, `None` for a top-level `@mixin` and `Some(name)`
+for one declared directly inside `@layer name { ... }` (or the synthesized
+`__anon_N__` for an anonymous block) — stamped by the parser's
+`AtRuleOutcome::LayerBlock` handler in `parser.rs` once the enclosing
+layer's own name is resolved, mirroring how every ordinary declaration
+already carries its layer through `LayerRule`. `MixinRule::layer_priority`
+mirrors `cascade.rs`'s existing `layer_idx`/`layer_pri` convention for plain
+declarations (CSS Cascade L5 §6.4.5): unlayered beats every layer
+(`layer_order.len()`, i.e. one past the last valid index), a layer declared
+later in `sheet.layer_order` beats one declared earlier
+(`layer_order.iter().position()`), and a name absent from `layer_order`
+(shouldn't happen — a layer's name is always pushed to `layer_order` at the
+point it's first seen) falls back to `0` rather than panicking.
+
+**Parser plumbing** (`at_rules.rs`/`parser.rs`): `AtRuleOutcome::LayerBlock`
+gained a `mixin_rules: Vec<MixinRule>` field. The block-form `@layer`
+parser (`at_rules.rs`, previously a blanket `skip_at_rule()` for every
+nested at-rule) now special-cases `@mixin` — parses it via the normal
+`parse_at_rule` dispatch and collects it — while leaving every other nested
+at-rule kind unsupported exactly as before (unrelated pre-existing gap, not
+touched). Both of `parser.rs`'s `LayerBlock` match arms (top-level and
+inside a conditional group rule) stamp the resolved layer name onto each
+collected mixin and fold it into the sheet's flat `mixin_rules`, the same
+place a top-level `@mixin` lands — so every existing consumer
+(`collect_mixin_nested_rules`, `cascade.rs`'s expansion hook) sees it
+without change. `@layer` nested inside an ordinary style rule's own body
+(CSS Nesting, `parse_nested_group_body`) does not get this treatment — a
+`@mixin` there remains unsupported, no vendored test needs it.
+
+**Lookup call sites updated** (both already existed, both changed from
+`.rev().find()`/`.find()` name-only lookup to `layer_priority`-ranked,
+`i`-tiebroken lookup): `layout/style/substitute.rs`'s `expand_apply_rule`
+(flat per-element `@apply` splice, threaded an extra `layer_order: &[String]`
+parameter through its own recursion and `expand_mixin_result_items`) and
+`css-parser/parser/mixins.rs`'s `collect_mixin_nested_rules` (stylesheet-level
+nested-rule materialization, срез 2's mechanism). Both now do
+`mixins.iter().enumerate().filter(name match).max_by_key((layer_priority, i))`
+— layer priority is the primary key, source-order index only breaks a tie
+(same layer, or two unlayered mixins), matching `mixin-basic.html`'s
+"later redefinition wins" for the no-layers case while adding the
+layer-aware ranking `mixin-layers.html` needs on top.
+
+**Verification**: 6 new unit tests in `css-parser`'s `parser/tests/nesting.rs`
+(`.layer` stamping for top-level/named/anonymous, `layer_priority` unlayered-
+beats-everything and later-named-layer-beats-earlier, and one exercising the
+nested-rule path's layer ranking) plus 4 in `layout/style/tests/cascade.rs`
+transcribing `mixin-layers.html`'s four subtests verbatim (named layer,
+anonymous layer, stronger-layer-wins against reversed source order,
+stronger-layer-wins with source order matching layer order) using the same
+`cascade_at()` helper the file's existing plain-declaration `@layer` tests
+(`at_layer_*`) use. `cargo test -p lumen-css-parser --lib`: 398/398 (was
+392, +6). `cargo test -p lumen-layout --lib`: 3866/3866 (was 3862, +4).
+`cargo clippy -p lumen-css-parser -p lumen-layout --all-targets -- -D
+warnings`: clean.
+`graphic_tests/dump_golden.py --build`: 4/12 mismatches
+(`samples/page.html`, `65-flex-align-content.html`, both dump kinds) —
+identical file set and rects to срез 1's own verification, i.e. the
+pre-existing [BUG-1008](BUG-1008-OPEN.md)-class drift, unrelated (this
+change is gated on `mixin_rules` being non-empty, and neither golden page
+uses `@mixin`). No live WPT run — same recurring reason as every slice on
+this track (no `.venv` in this slot).
+
+**Expected effect on the vendored category once re-triaged**: all 4
+subtests of `mixin-layers.html` should go green — its other blocker,
+[BUG-384](BUG-384-FIXED.md) (bare-id named access for `e1`/`e2`/`e3`/`e4`),
+is already fixed. Status remains `OPEN` — `mixin-cross-stylesheet`,
+`mixin-shadow-dom` and the CSSOM-gated `mixin-cssom.tentative`/
+`mixin-invalidation.tentative` are still open follow-ups.

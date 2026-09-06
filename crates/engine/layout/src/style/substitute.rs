@@ -374,6 +374,7 @@ const MIXIN_APPLY_MAX_DEPTH: u32 = 16;
 pub(in crate::style) fn expand_mixin_apply(
     raw: &str,
     mixins: &[MixinRule],
+    layer_order: &[String],
     functions: &[FunctionRule],
     custom: &HashMap<String, String>,
     depth: u32,
@@ -381,7 +382,7 @@ pub(in crate::style) fn expand_mixin_apply(
     viewport: Size,
 ) -> Option<Vec<Declaration>> {
     let apply = lumen_css_parser::parse_apply_call(raw)?;
-    expand_apply_rule(&apply, mixins, functions, custom, depth, em_basis, viewport)
+    expand_apply_rule(&apply, mixins, layer_order, functions, custom, depth, em_basis, viewport)
 }
 
 /// Shared core of [`expand_mixin_apply`], taking an already-parsed
@@ -392,6 +393,7 @@ pub(in crate::style) fn expand_mixin_apply(
 fn expand_apply_rule(
     apply: &ApplyRule,
     mixins: &[MixinRule],
+    layer_order: &[String],
     functions: &[FunctionRule],
     custom: &HashMap<String, String>,
     depth: u32,
@@ -401,7 +403,18 @@ fn expand_apply_rule(
     if depth > MIXIN_APPLY_MAX_DEPTH {
         return None;
     }
-    let mixin = mixins.iter().rev().find(|m| m.name == apply.name);
+    // CSS Cascade L5 §6.4.5 layer ordering (BUG-518 срез 3,
+    // `mixin-layers.html`): among same-name `@mixin`s, the one with the
+    // highest `layer_priority` wins (unlayered beats every layer, a
+    // later-declared named layer beats an earlier one); ties — same layer
+    // or two unlayered mixins — fall back to registration order (`i`),
+    // matching `mixin-basic.html`'s "later redefinition wins".
+    let mixin = mixins
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.name == apply.name)
+        .max_by_key(|(i, m)| (m.layer_priority(layer_order), *i))
+        .map(|(_, m)| m);
     let Some(mixin) = mixin else {
         return Some(Vec::new());
     };
@@ -446,7 +459,9 @@ fn expand_apply_rule(
         local.insert(format!("--{local_name}"), v);
     }
 
-    Some(expand_mixin_result_items(result, apply, mixins, functions, &local, custom, depth, em_basis, viewport))
+    Some(expand_mixin_result_items(
+        result, apply, mixins, layer_order, functions, &local, custom, depth, em_basis, viewport,
+    ))
 }
 
 /// Expands one mixin's already-parsed `@result` items into a flat
@@ -467,6 +482,7 @@ fn expand_mixin_result_items(
     items: &[MixinResultItem],
     apply: &ApplyRule,
     mixins: &[MixinRule],
+    layer_order: &[String],
     functions: &[FunctionRule],
     local: &HashMap<String, String>,
     caller_scope: &HashMap<String, String>,
@@ -485,9 +501,9 @@ fn expand_mixin_result_items(
                 }
             }
             MixinResultItem::Apply(nested) => {
-                if let Some(expanded) =
-                    expand_apply_rule(nested, mixins, functions, local, depth + 1, em_basis, viewport)
-                {
+                if let Some(expanded) = expand_apply_rule(
+                    nested, mixins, layer_order, functions, local, depth + 1, em_basis, viewport,
+                ) {
                     out.extend(expanded);
                 }
             }

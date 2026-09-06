@@ -344,6 +344,14 @@ pub(crate) enum AtRuleOutcome {
     LayerBlock {
         name: Option<String>,
         rules: Vec<Rule>,
+        /// `@mixin` rules found directly inside this `@layer` block's body
+        /// (BUG-518 срез 3, `mixin-layers.html`) — the caller stamps each
+        /// with this layer's resolved name (`MixinRule::layer`) and folds it
+        /// into the stylesheet's flat `mixin_rules`, the same place a
+        /// top-level `@mixin` lands. Every other nested at-rule kind inside
+        /// `@layer` remains unsupported (pre-existing gap, unrelated to this
+        /// bug — see `parse_layer_at_rule`'s doc comment).
+        mixin_rules: Vec<MixinRule>,
     },
     Supports(SupportsRule),
     Keyframes(KeyframesRule),
@@ -850,6 +858,7 @@ impl<'a> Parser<'a> {
                     None
                 };
                 let mut rules = Vec::new();
+                let mut mixin_rules = Vec::new();
                 loop {
                     self.skip_ws_and_comments();
                     match self.peek() {
@@ -859,9 +868,20 @@ impl<'a> Parser<'a> {
                             break;
                         }
                         Some('@') => {
-                            // Nested @-правила внутри layer пока не
-                            // поддерживаем — skip.
-                            self.skip_at_rule();
+                            // Nested at-rules inside `@layer` are largely
+                            // unsupported still (pre-existing gap, out of
+                            // scope here) — but `@mixin` is special-cased
+                            // (BUG-518 срез 3, `mixin-layers.html`: a mixin
+                            // must be findable and layer-priority-ranked by
+                            // `@apply` even when declared inside `@layer`).
+                            // `parse_at_rule` fully consumes the rule either
+                            // way (recognized or not), so discarding every
+                            // other outcome here is exactly as
+                            // position-correct as the old blanket
+                            // `skip_at_rule()`.
+                            if let AtRuleOutcome::Mixin(m) = self.parse_at_rule() {
+                                mixin_rules.push(m);
+                            }
                         }
                         Some(_) => {
                             let before = self.pos;
@@ -874,7 +894,7 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
-                AtRuleOutcome::LayerBlock { name, rules }
+                AtRuleOutcome::LayerBlock { name, rules, mixin_rules }
             }
             _ => AtRuleOutcome::None,
         }

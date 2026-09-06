@@ -612,13 +612,17 @@ impl<'a> Parser<'a> {
                                     }
                                 }
                             }
-                            AtRuleOutcome::LayerBlock { name, rules: lr } => {
+                            AtRuleOutcome::LayerBlock { name, rules: lr, mixin_rules: lmr } => {
                                 let resolved_name = name.unwrap_or_else(|| {
                                     anon_counter += 1;
                                     format!("__anon_{anon_counter}__")
                                 });
                                 if !layer_order.iter().any(|e| e == &resolved_name) {
                                     layer_order.push(resolved_name.clone());
+                                }
+                                for mut m in lmr {
+                                    m.layer = Some(resolved_name.clone());
+                                    mixin_rules.push(m);
                                 }
                                 layers.push(LayerRule {
                                     name: resolved_name,
@@ -666,13 +670,17 @@ impl<'a> Parser<'a> {
                                         }
                                     }
                                 }
-                                AtRuleOutcome::LayerBlock { name, rules: lr } => {
+                                AtRuleOutcome::LayerBlock { name, rules: lr, mixin_rules: lmr } => {
                                     let resolved = name.unwrap_or_else(|| {
                                         anon_counter += 1;
                                         format!("__anon_{anon_counter}__")
                                     });
                                     if !layer_order.iter().any(|e| e == &resolved) {
                                         layer_order.push(resolved.clone());
+                                    }
+                                    for mut m in lmr {
+                                        m.layer = Some(resolved.clone());
+                                        mixin_rules.push(m);
                                     }
                                     layers.push(LayerRule { name: resolved, rules: lr });
                                 }
@@ -1045,8 +1053,17 @@ impl<'a> Parser<'a> {
             };
             self.consume(); // '{'
             let (rules, inner_at) = self.parse_nested_group_body(parent_sels);
-            let mut outcomes =
-                vec![AtRuleOutcome::LayerBlock { name: layer_name, rules }];
+            let mut outcomes = vec![AtRuleOutcome::LayerBlock {
+                name: layer_name,
+                rules,
+                // `@layer` nested inside an ordinary style rule's own body
+                // (CSS Nesting) goes through `parse_nested_group_body`, not
+                // `parse_layer_at_rule`'s block-form loop — this slice's
+                // `@mixin`-inside-`@layer` special case (BUG-518 срез 3)
+                // only covers the latter; a `@mixin` here remains
+                // unsupported, same as before this change.
+                mixin_rules: Vec::new(),
+            }];
             outcomes.extend(inner_at);
             return outcomes;
         }

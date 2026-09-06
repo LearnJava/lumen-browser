@@ -1287,6 +1287,7 @@ pub fn compute_style(
                 && let Some(expanded) = expand_mixin_apply(
                     &decl.value,
                     &sheet.mixin_rules,
+                    &sheet.layer_order,
                     &sheet.function_rules,
                     &style.custom_props,
                     0,
