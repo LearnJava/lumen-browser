@@ -139,6 +139,7 @@ mod spellcheck;
 mod startup_trace;
 mod storage_stores;
 pub mod surface;
+mod text_fragment;
 mod runtime;
 mod scripts;
 mod scroll;

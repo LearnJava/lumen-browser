@@ -641,10 +641,14 @@ pub(crate) fn parse_and_layout(
     //
     // CSS Selectors L4 §9.6 `:target`: set current target from the URL fragment
     // so the matcher has the correct target_id before that first cascade.
+    // STTF-1: a `:~:text=...` scroll-to-text directive is not part of the
+    // element-id fragment — `text_fragment::parse_fragment` strips it so
+    // `:target` never tries to match a raw directive string against an `id`.
     let page_fragment = if let ResourceBase::Url(u) = base {
         lumen_core::url::Url::parse(u)
             .ok()
             .and_then(|u| u.fragment().map(str::to_owned))
+            .and_then(|f| text_fragment::parse_fragment(&f).element_id)
     } else {
         None
     };
@@ -717,6 +721,13 @@ pub(crate) fn parse_and_layout(
             viewport,
         ))
     };
+    // CSSOM-7 (BUG-977): same gate as `parse_time_snapshot` — nothing to flush
+    // against if there is no script that could read it. `Stylesheet::clone()`
+    // is a real (hand-written, revision-minting) deep copy, not an `Arc`
+    // handle — paid once per navigation with scripts, not per relayout.
+    let parse_time_stylesheet = parse_time_snapshot
+        .is_some()
+        .then(|| Arc::new(cascade.sheet.clone()));
 
     let run_scripts_span = lumen_core::trace::span("run-scripts", "script");
     // BUG-480 срез 1: клоны провайдеров/хранилищ для sub-документов <iframe> —
@@ -766,6 +777,7 @@ pub(crate) fn parse_and_layout(
         false,
         parse_time_snapshot,
         cascade.stylesheet_nodes.clone(),
+        parse_time_stylesheet,
     );
     drop(run_scripts_span);
 
@@ -824,6 +836,14 @@ pub(crate) fn parse_and_layout(
             js.update_computed_styles(snapshot.styles);
             js.update_pseudo_computed_styles(snapshot.pseudo_styles);
             js.update_custom_properties(snapshot.customs);
+            // CSSOM-7 (BUG-977): re-push alongside the snapshot above so a
+            // `DOMContentLoaded` handler (about to fire right after this
+            // block) has an up-to-date flush target too — covers the sheet
+            // that was just rebuilt (`scripts_changed_css`) as well as the
+            // unchanged one (`dom_touched`/`adopted_changed` alone), same
+            // "cheap enough, simpler than gating separately" call as
+            // `update_stylesheet_nodes` below.
+            js.update_stylesheet(Arc::new(cascade.sheet.clone()));
             // CSSOM-1 срез 3: re-push whenever this block runs, even though
             // `cascade.stylesheet_nodes` only actually changed when
             // `scripts_changed_css` triggered the rebuild above — cheap

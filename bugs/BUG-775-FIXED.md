@@ -150,7 +150,7 @@ of undefined (setting 'mode')` на `track.track.mode` в логе больше 
 * **32 — `cors/*`**, все до единого: `cors/support/common.js` для заголовка
   «not same-origin» уходит в `setCrossDomainCookie`, который ждёт
   `iframe.onload` у скриптового `<iframe>`, а такой фрейм не фетчится вовсе —
-  [BUG-885](BUG-885-OPEN.md). До `<track>` эти тесты просто не доходят;
+  [BUG-885](BUG-885-FIXED.md). До `<track>` эти тесты просто не доходят;
 * **9 — `track-webvtt-*.html`** с **разметочным** `<track>` в теле `<video>`
   (те же 43 файла, что считал BUG-795: 34 из них ходят через
   `track-helpers.js::check_cues_from_track`, который трек **создаёт скриптом**,

@@ -3359,6 +3359,11 @@ function _lumen_build_detached_document(proto, contentType) {
     Object.defineProperty(doc, 'nodeValue',     { get: function() { return null; },         enumerable: true });
     Object.defineProperty(doc, 'DOCUMENT_NODE', { get: function() { return 9; },            enumerable: true });
     Object.defineProperty(doc, 'ownerDocument', { get: function() { return null; },         enumerable: true });
+    // HTML §3.1.5: no browsing context, so `defaultView` is null — the other
+    // half of the live document's getter (BUG-1017). Spelled out here rather
+    // than inherited, because `proto` is `Document.prototype`, shared with the
+    // live document's interface chain.
+    Object.defineProperty(doc, 'defaultView',   { get: function() { return null; },         enumerable: true });
     Object.defineProperty(doc, 'childNodes',    { get: function() { return _children.slice(); }, enumerable: true });
     Object.defineProperty(doc, 'doctype', {
         get: function() {
@@ -7952,7 +7957,17 @@ function _lumen_font_face_try_one_source(src, onOk, onFail) {
         onFail(new DOMException('Could not find local font', 'NetworkError'));
         return;
     }
-    fetch(src.value).then(function(resp) {
+    // BUG-1013: `_lumenAsync` routes this through `fetch()`'s worker-thread
+    // bridge instead of its default synchronous transport. A bare `fetch(url)`
+    // parks the JS thread until the font host answers, and this function runs
+    // inside the load pipeline's `run-scripts` phase — so google.com's
+    // `document.fonts.load('10pt Google Sans')` in `<head>` held layout, paint
+    // and the first frame for as long as fonts.gstatic.com took (139 s in the
+    // 2026-09-06 corpus run). Nothing here needs the bytes synchronously: the
+    // promise this feeds is what CSS Font Loading hands the page, and the faces
+    // that actually render are fetched separately by the shell's own background
+    // `@font-face` loader (`crates/shell/src/page_load.rs`).
+    fetch(src.value, { _lumenAsync: true }).then(function(resp) {
         if (!resp.ok) throw new DOMException('Failed to fetch font: ' + resp.status, 'NetworkError');
         return resp.arrayBuffer();
     }).then(function(buf) {
@@ -8317,10 +8332,23 @@ FontFaceSet.prototype.constructor = FontFaceSet;
 // size are not parsed out individually; matching in `FontFaceSet.load` is by
 // family name only, which is what every test in this slice's target set
 // exercises.
+//
+// BUG-1015: the size token must carry a real unit. `<font-size>` in the
+// shorthand is a `<length-percentage>` or a keyword — never a bare number —
+// whereas everything the grammar allows *before* it (style / variant / weight /
+// stretch) is either a keyword or exactly such a bare number. The old pattern
+// left the unit optional, so the `400` of `document.fonts.load('400 10pt Google
+// Sans')` was read as the size and the family came out as `10pt google sans`:
+// no member matched, the promise resolved with `[]`, and nothing was ever
+// loaded. That is the form google.com sends, and it is the common one.
+// Requiring the unit finds the real size without spelling out the four keyword
+// lists — a preceding keyword cannot look like a size, and a preceding number
+// no longer can either. The `/<line-height>` tail keeps its loose pattern:
+// a line-height legitimately *is* a bare number.
 function _lumen_parse_font_shorthand_families(fontStr) {
     var s = String(fontStr).trim();
     var sizeKeyword = /^(xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger)$/i;
-    var sizeToken = /^[\d.]+[a-z%]*(\/[\d.]+[a-z%]*)?$/i;
+    var sizeToken = /^[\d.]+(px|pt|pc|in|cm|mm|q|em|rem|ex|ch|cap|ic|lh|rlh|vw|vh|vi|vb|vmin|vmax|svw|svh|lvw|lvh|dvw|dvh|%)(\/[\d.]+[a-z%]*)?$/i;
     var tokens = s.split(/\s+/);
     var idx = -1;
     for (var i = 0; i < tokens.length; i++) {
@@ -9659,6 +9687,23 @@ var document = {
             }
         }
         return !evt.defaultPrevented;
+    },
+    // HTML §3.1.5 `Document.defaultView`: the WindowProxy of this document's
+    // browsing context. The live document always has one, so this is `window`
+    // — a document with no browsing context answers `null` instead, and that
+    // half already lives in `_lumen_build_detached_document`.
+    //
+    // BUG-1017: this getter was missing entirely on the live document, so the
+    // property read back as `undefined` rather than as the window. Sub-documents
+    // had it all along (`crates/js/src/frame_bridge.rs` defines it on the
+    // `contentDocument` facade), which is why the gap survived: only the
+    // top-level document was affected. `undefined` is worse than a wrong window
+    // here, because the idiom that reads it is
+    // `node.ownerDocument.defaultView.<something>` — google.com does exactly
+    // that for `devicePixelRatio` and the resulting TypeError aborted its whole
+    // module initialisation.
+    get defaultView() {
+        return typeof window !== 'undefined' ? window : globalThis;
     },
     get fonts() {
         return _lumen_wrapper_slot(this, '__fonts__', _lumen_make_font_face_set);

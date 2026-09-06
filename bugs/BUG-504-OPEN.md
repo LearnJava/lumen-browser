@@ -612,7 +612,7 @@ two must diverge for `hidden`/`clip`) threaded through `page_load.rs`'s
 initial seed, `relayout.rs`'s `update_scroll_containers()`, and
 `about_to_wait.rs`'s post-drain re-push — a real design task, not a
 point fix, and out of this slice's scope. **Also co-blocking the same file
-regardless:** the already-filed [BUG-523](BUG-523-OPEN.md) — `scrollTo`/
+regardless:** the already-filed [BUG-523](BUG-523-FIXED.md) — `scrollTo`/
 `scrollLeft=` are queue-based (`_lumen_request_scroll` → drained on the next
 `about_to_wait` tick), so a synchronous read immediately after a write sees
 the pre-write value even once the JS-state gap above is fixed; the live
@@ -853,5 +853,5 @@ other four (the `overflow: clip` ones) reveal a third, distinct root cause
 — `_lumen_request_scroll`'s clip-zero check reads `computed_styles`, which
 the interactive shell only refreshes asynchronously, so a same-turn
 `style.overflow = 'clip'` isn't visible to a same-turn scroll write/read.
-Filed as [BUG-977](bugs/BUG-977-OPEN.md). Remaining scope unchanged (1
+Filed as [BUG-977](BUG-977-FIXED.md). Remaining scope unchanged (1
 file), blocker moves from BUG-975 to BUG-977. Status stays `OPEN`.

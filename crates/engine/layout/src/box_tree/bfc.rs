@@ -83,33 +83,48 @@ fn first_collapsible_child(b: &LayoutBox) -> Option<&LayoutBox> {
 /// The top margin of an in-flow block collapses with the top margin of its
 /// first in-flow block-level child when nothing separates them: the box has no
 /// top border, no top padding, establishes no BFC, and the first in-flow child
-/// is itself a plain block with no clearance. The collapse recurses down the
+/// is itself a plain block with no clearance. The collapse walks down the
 /// chain of first children. `cb` is the containing-block width used to resolve
 /// percentage margins. Only the common non-negative case is folded (parity with
 /// sibling collapse); negative margins fall through as the box's own margin.
+///
+/// LAYOUT-1: this used to recurse one call frame per link in the first-child
+/// chain — on a page whose markup is a straight run of single-child `<div>`s
+/// (the exact shape BUG-987's fandom.com/OneTrust repro hit) that chain can be
+/// the full DOM depth, so it was an independent stack-overflow source from
+/// `lay_out_inner`'s own descent. Each step folds into the running max the
+/// same way the old `own.max(collapsed_top_margin(child, ..))` did — the loop
+/// computes the identical value in O(1) stack.
 pub(crate) fn collapsed_top_margin(b: &LayoutBox, cb: f32, viewport: Size) -> f32 {
-    let em = b.style.font_size;
-    let own = b.style.margin_top.resolve_or_zero(em, cb, viewport);
-    if !matches!(b.kind, BoxKind::Block) || establishes_bfc(b) {
-        return own;
-    }
-    let pt = b.style.padding_top.resolve_or_zero(em, cb, viewport);
-    if pt != 0.0 || b.style.border_top_width != 0.0 {
-        return own;
-    }
-    match first_collapsible_child(b) {
-        Some(child) => {
-            // Child's containing-block width = this box's content width.
-            let child_cb = (cb
-                - b.style.padding_left.resolve_or_zero(em, cb, viewport)
-                - b.style.padding_right.resolve_or_zero(em, cb, viewport)
-                - b.style.border_left_width
-                - b.style.border_right_width)
-                .max(0.0);
-            own.max(collapsed_top_margin(child, child_cb, viewport))
+    let mut node = b;
+    let mut cb = cb;
+    let mut best = f32::NEG_INFINITY;
+    loop {
+        let em = node.style.font_size;
+        let own = node.style.margin_top.resolve_or_zero(em, cb, viewport);
+        best = best.max(own);
+        if !matches!(node.kind, BoxKind::Block) || establishes_bfc(node) {
+            break;
         }
-        None => own,
+        let pt = node.style.padding_top.resolve_or_zero(em, cb, viewport);
+        if pt != 0.0 || node.style.border_top_width != 0.0 {
+            break;
+        }
+        match first_collapsible_child(node) {
+            Some(child) => {
+                // Child's containing-block width = this box's content width.
+                cb = (cb
+                    - node.style.padding_left.resolve_or_zero(em, cb, viewport)
+                    - node.style.padding_right.resolve_or_zero(em, cb, viewport)
+                    - node.style.border_left_width
+                    - node.style.border_right_width)
+                    .max(0.0);
+                node = child;
+            }
+            None => break,
+        }
     }
+    best
 }
 
 /// Returns the last in-flow `Block` child whose bottom margin collapses with the
@@ -143,38 +158,50 @@ pub(crate) fn last_collapsible_child(b: &LayoutBox) -> Option<&LayoutBox> {
 /// last in-flow block-level child when nothing separates them: the box has an
 /// `auto` height, no bottom border, no bottom padding, establishes no BFC, and the
 /// last in-flow child is itself a plain block with no clearance. The collapse
-/// recurses down the chain of last children. `cb` is the containing-block width
+/// walks down the chain of last children. `cb` is the containing-block width
 /// used to resolve percentage margins. Only the common non-negative case is folded
 /// (parity with `collapsed_top_margin`); negative margins fall through as the box's
 /// own margin.
+///
+/// LAYOUT-1: mirrors `collapsed_top_margin`'s conversion from per-link
+/// recursion to an O(1)-stack loop — see its doc comment for why the
+/// last-child chain is just as much a BUG-987 stack-overflow source as the
+/// first-child one.
 pub(crate) fn collapsed_bottom_margin(b: &LayoutBox, cb: f32, viewport: Size) -> f32 {
-    let em = b.style.font_size;
-    let own = b.style.margin_bottom.resolve_or_zero(em, cb, viewport);
-    if !matches!(b.kind, BoxKind::Block) || establishes_bfc(b) {
-        return own;
-    }
-    // A definite height blocks the last child's bottom margin from reaching the
-    // box's bottom edge, so the through-collapse does not happen.
-    if b.style.height.is_some() {
-        return own;
-    }
-    let pb = b.style.padding_bottom.resolve_or_zero(em, cb, viewport);
-    if pb != 0.0 || b.style.border_bottom_width != 0.0 {
-        return own;
-    }
-    match last_collapsible_child(b) {
-        Some(child) => {
-            // Child's containing-block width = this box's content width.
-            let child_cb = (cb
-                - b.style.padding_left.resolve_or_zero(em, cb, viewport)
-                - b.style.padding_right.resolve_or_zero(em, cb, viewport)
-                - b.style.border_left_width
-                - b.style.border_right_width)
-                .max(0.0);
-            own.max(collapsed_bottom_margin(child, child_cb, viewport))
+    let mut node = b;
+    let mut cb = cb;
+    let mut best = f32::NEG_INFINITY;
+    loop {
+        let em = node.style.font_size;
+        let own = node.style.margin_bottom.resolve_or_zero(em, cb, viewport);
+        best = best.max(own);
+        if !matches!(node.kind, BoxKind::Block) || establishes_bfc(node) {
+            break;
         }
-        None => own,
+        // A definite height blocks the last child's bottom margin from reaching
+        // the box's bottom edge, so the through-collapse does not happen.
+        if node.style.height.is_some() {
+            break;
+        }
+        let pb = node.style.padding_bottom.resolve_or_zero(em, cb, viewport);
+        if pb != 0.0 || node.style.border_bottom_width != 0.0 {
+            break;
+        }
+        match last_collapsible_child(node) {
+            Some(child) => {
+                // Child's containing-block width = this box's content width.
+                cb = (cb
+                    - node.style.padding_left.resolve_or_zero(em, cb, viewport)
+                    - node.style.padding_right.resolve_or_zero(em, cb, viewport)
+                    - node.style.border_left_width
+                    - node.style.border_right_width)
+                    .max(0.0);
+                node = child;
+            }
+            None => break,
+        }
     }
+    best
 }
 
 /// CSS Box Sizing L4 §5 — content block-size contribution under size containment.

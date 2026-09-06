@@ -1544,35 +1544,42 @@ pub fn collect_computed_styles(
 /// snapshot that is already rebuilt on the layout path.
 pub const INLINE_SEGMENT_PROPERTIES: [&str; 3] = ["visibility", "white-space", "text-transform"];
 
+// LAYOUT-1 срез 3: явный стек вместо рекурсии — этот обход исполняется на
+// каждом `getComputedStyle`, т.е. потенциально на каждый relayout, а не
+// только на первичном layout (BUG-987). Чистый pre-order без пост-обработки
+// после цикла по детям — LIFO-стек с детьми в обратном порядке сохраняет
+// тот же порядок посещения, что и рекурсия ("первый бокс в tree order
+// побеждает" остаётся верным).
 fn collect_computed_styles_rec(
     doc: &lumen_dom::Document,
-    b: &LayoutBox,
+    root: &LayoutBox,
     out: &mut std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
 ) {
-    // First box in tree order wins — see `collect_layout_rects_rec` for why
-    // several boxes can carry the same `NodeId`.
-    out.entry(b.node.index() as u32)
-        .or_insert_with(|| computed_style_to_map(&b.style));
-    if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
-        for seg in segments {
-            // `NodeId(0)` is the document root, which `InlineSegment::source_node`
-            // uses for generated content with no DOM origin.
-            if seg.source_node.index() == 0 {
-                continue;
-            }
-            out.entry(seg.source_node.index() as u32)
-                .or_insert_with(|| selector_query::inline_segment_style_map(&seg.style));
-            // BUG-488: publish the full property map for every plain inline
-            // element this segment is nested inside — see `collect_computed_styles`'s
-            // doc comment for the approximation this relies on.
-            for anc in inline_element_ancestors(doc, seg.source_node, b.node) {
-                out.entry(anc.index() as u32)
-                    .or_insert_with(|| computed_style_to_map(&seg.style));
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        // First box in tree order wins — see `collect_layout_rects_rec` for why
+        // several boxes can carry the same `NodeId`.
+        out.entry(b.node.index() as u32)
+            .or_insert_with(|| computed_style_to_map(&b.style));
+        if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
+            for seg in segments {
+                // `NodeId(0)` is the document root, which `InlineSegment::source_node`
+                // uses for generated content with no DOM origin.
+                if seg.source_node.index() == 0 {
+                    continue;
+                }
+                out.entry(seg.source_node.index() as u32)
+                    .or_insert_with(|| selector_query::inline_segment_style_map(&seg.style));
+                // BUG-488: publish the full property map for every plain inline
+                // element this segment is nested inside — see `collect_computed_styles`'s
+                // doc comment for the approximation this relies on.
+                for anc in inline_element_ancestors(doc, seg.source_node, b.node) {
+                    out.entry(anc.index() as u32)
+                        .or_insert_with(|| computed_style_to_map(&seg.style));
+                }
             }
         }
-    }
-    for child in &b.children {
-        collect_computed_styles_rec(doc, child, out);
+        stack.extend(b.children.iter().rev());
     }
 }
 
@@ -1795,50 +1802,55 @@ pub fn collect_layout_rects(
     out
 }
 
+// LAYOUT-1 срез 3: явный стек вместо рекурсии — `getBoundingClientRect`
+// пересчитывается на каждый relayout (BUG-987). Pre-order без пост-обработки
+// после цикла по детям, LIFO-стек с детьми в обратном порядке сохраняет
+// порядок посещения — "первый бокс в tree order побеждает" остаётся верным.
 fn collect_layout_rects_rec(
     doc: &lumen_dom::Document,
-    b: &LayoutBox,
+    root: &LayoutBox,
     out: &mut std::collections::HashMap<u32, [f32; 4]>,
 ) {
-    // A single `NodeId` can own more than one box: an element with inline content
-    // gets an anonymous block/line box for that content, and the box tree keeps the
-    // element's own `NodeId` on it. The recursion visits the principal box before
-    // its descendants, so `or_insert` keeps the element's own border box; plain
-    // `insert` used to hand JS the last (inner) box instead — `getBoundingClientRect`
-    // on `<div style="height:20px">x</div>` answered the 19.2px line box (BUG-382).
-    let r = &b.rect;
-    out.entry(b.node.index() as u32)
-        .or_insert([r.x, r.y, r.width, r.height]);
-    // BUG-488: plain inline elements (`<span>`, `<em>`, …) own no `LayoutBox` of
-    // their own — accumulate the union of every laid-out `InlineFrag` nested
-    // inside them, keyed by DOM ancestor via `inline_element_ancestors`. Line
-    // y-position uses the same `font_size * line_height` uniform-line-height
-    // model `selection.rs` uses to turn `lines[line_idx]` into a pixel rect.
-    if let BoxKind::InlineRun { lines, .. } = &b.kind {
-        let line_h = b.used_line_height;
-        for (line_idx, line) in lines.iter().enumerate() {
-            let line_y = b.rect.y + line_idx as f32 * line_h;
-            for frag in line {
-                let fx1 = b.rect.x + frag.x;
-                let fy1 = line_y;
-                let fx2 = fx1 + frag.width;
-                let fy2 = fy1 + line_h;
-                for anc in inline_element_ancestors(doc, frag.source_node, b.node) {
-                    out.entry(anc.index() as u32)
-                        .and_modify(|cur| {
-                            let cx1 = cur[0].min(fx1);
-                            let cy1 = cur[1].min(fy1);
-                            let cx2 = (cur[0] + cur[2]).max(fx2);
-                            let cy2 = (cur[1] + cur[3]).max(fy2);
-                            *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
-                        })
-                        .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        // A single `NodeId` can own more than one box: an element with inline content
+        // gets an anonymous block/line box for that content, and the box tree keeps the
+        // element's own `NodeId` on it. The traversal visits the principal box before
+        // its descendants, so `or_insert` keeps the element's own border box; plain
+        // `insert` used to hand JS the last (inner) box instead — `getBoundingClientRect`
+        // on `<div style="height:20px">x</div>` answered the 19.2px line box (BUG-382).
+        let r = &b.rect;
+        out.entry(b.node.index() as u32)
+            .or_insert([r.x, r.y, r.width, r.height]);
+        // BUG-488: plain inline elements (`<span>`, `<em>`, …) own no `LayoutBox` of
+        // their own — accumulate the union of every laid-out `InlineFrag` nested
+        // inside them, keyed by DOM ancestor via `inline_element_ancestors`. Line
+        // y-position uses the same `font_size * line_height` uniform-line-height
+        // model `selection.rs` uses to turn `lines[line_idx]` into a pixel rect.
+        if let BoxKind::InlineRun { lines, .. } = &b.kind {
+            let line_h = b.used_line_height;
+            for (line_idx, line) in lines.iter().enumerate() {
+                let line_y = b.rect.y + line_idx as f32 * line_h;
+                for frag in line {
+                    let fx1 = b.rect.x + frag.x;
+                    let fy1 = line_y;
+                    let fx2 = fx1 + frag.width;
+                    let fy2 = fy1 + line_h;
+                    for anc in inline_element_ancestors(doc, frag.source_node, b.node) {
+                        out.entry(anc.index() as u32)
+                            .and_modify(|cur| {
+                                let cx1 = cur[0].min(fx1);
+                                let cy1 = cur[1].min(fy1);
+                                let cx2 = (cur[0] + cur[2]).max(fx2);
+                                let cy2 = (cur[1] + cur[3]).max(fy2);
+                                *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
+                            })
+                            .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
+                    }
                 }
             }
         }
-    }
-    for child in &b.children {
-        collect_layout_rects_rec(doc, child, out);
+        stack.extend(b.children.iter().rev());
     }
 }
 
@@ -1851,10 +1863,12 @@ fn collect_layout_rects_rec(
 /// rect from its own box" (an inline-block nested inside a line, still an
 /// `InlineFrag` for line-height purposes) apart from "this owner has no box
 /// and needs one rect per line it appears on".
-fn collect_boxed_node_ids(b: &LayoutBox, out: &mut std::collections::HashSet<u32>) {
-    out.insert(b.node.index() as u32);
-    for child in &b.children {
-        collect_boxed_node_ids(child, out);
+// LAYOUT-1 срез 3: явный стек вместо рекурсии — см. `collect_layout_rects_rec`.
+fn collect_boxed_node_ids(root: &LayoutBox, out: &mut std::collections::HashSet<u32>) {
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        out.insert(b.node.index() as u32);
+        stack.extend(b.children.iter().rev());
     }
 }
 
@@ -1885,59 +1899,64 @@ pub fn collect_client_rects(
     out
 }
 
+// LAYOUT-1 срез 3: явный стек вместо рекурсии — `getClientRects`/`getBoxQuads`
+// пересчитываются на каждый relayout (BUG-987). Pre-order без пост-обработки
+// после цикла по детям, LIFO-стек с детьми в обратном порядке сохраняет
+// порядок посещения — "первый бокс в tree order побеждает" остаётся верным.
 fn collect_client_rects_rec(
     doc: &lumen_dom::Document,
-    b: &LayoutBox,
+    root: &LayoutBox,
     boxed: &std::collections::HashSet<u32>,
     out: &mut std::collections::HashMap<u32, Vec<[f32; 4]>>,
 ) {
-    // Same first-box-wins ordering as `collect_layout_rects_rec` (BUG-382): the
-    // recursion visits a node's own box before descending into its children.
-    let r = &b.rect;
-    out.entry(b.node.index() as u32)
-        .or_insert_with(|| vec![[r.x, r.y, r.width, r.height]]);
-    if let BoxKind::InlineRun { lines, .. } = &b.kind {
-        let line_h = b.style.font_size * b.style.line_height;
-        for (line_idx, line) in lines.iter().enumerate() {
-            let line_y = b.rect.y + line_idx as f32 * line_h;
-            // Frags on the SAME line belonging to the same owner (a bidi split,
-            // an inline element reopening around a nested box, …) merge into
-            // one rect — one rect per CSS *fragment*, and a fragment is a
-            // line, not a frag.
-            let mut per_owner_this_line: std::collections::HashMap<u32, [f32; 4]> =
-                std::collections::HashMap::new();
-            for frag in line {
-                let fx1 = b.rect.x + frag.x;
-                let fy1 = line_y;
-                let fx2 = fx1 + frag.width;
-                let fy2 = fy1 + line_h;
-                for anc in inline_element_ancestors(doc, frag.source_node, b.node) {
-                    per_owner_this_line
-                        .entry(anc.index() as u32)
-                        .and_modify(|cur| {
-                            let cx1 = cur[0].min(fx1);
-                            let cy1 = cur[1].min(fy1);
-                            let cx2 = (cur[0] + cur[2]).max(fx2);
-                            let cy2 = (cur[1] + cur[3]).max(fy2);
-                            *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
-                        })
-                        .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        // Same first-box-wins ordering as `collect_layout_rects_rec` (BUG-382): the
+        // traversal visits a node's own box before descending into its children.
+        let r = &b.rect;
+        out.entry(b.node.index() as u32)
+            .or_insert_with(|| vec![[r.x, r.y, r.width, r.height]]);
+        if let BoxKind::InlineRun { lines, .. } = &b.kind {
+            let line_h = b.style.font_size * b.style.line_height;
+            for (line_idx, line) in lines.iter().enumerate() {
+                let line_y = b.rect.y + line_idx as f32 * line_h;
+                // Frags on the SAME line belonging to the same owner (a bidi split,
+                // an inline element reopening around a nested box, …) merge into
+                // one rect — one rect per CSS *fragment*, and a fragment is a
+                // line, not a frag.
+                let mut per_owner_this_line: std::collections::HashMap<u32, [f32; 4]> =
+                    std::collections::HashMap::new();
+                for frag in line {
+                    let fx1 = b.rect.x + frag.x;
+                    let fy1 = line_y;
+                    let fx2 = fx1 + frag.width;
+                    let fy2 = fy1 + line_h;
+                    for anc in inline_element_ancestors(doc, frag.source_node, b.node) {
+                        per_owner_this_line
+                            .entry(anc.index() as u32)
+                            .and_modify(|cur| {
+                                let cx1 = cur[0].min(fx1);
+                                let cy1 = cur[1].min(fy1);
+                                let cx2 = (cur[0] + cur[2]).max(fx2);
+                                let cy2 = (cur[1] + cur[3]).max(fy2);
+                                *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
+                            })
+                            .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
+                    }
                 }
-            }
-            for (owner, rect) in per_owner_this_line {
-                // An owner with a real box of its own (an inline-block nested
-                // in this line, still an `InlineFrag` here for line-height
-                // purposes) already has its one true rect from that box — do
-                // not also append this approximate line-derived rect on top
-                // of it.
-                if !boxed.contains(&owner) {
-                    out.entry(owner).or_default().push(rect);
+                for (owner, rect) in per_owner_this_line {
+                    // An owner with a real box of its own (an inline-block nested
+                    // in this line, still an `InlineFrag` here for line-height
+                    // purposes) already has its one true rect from that box — do
+                    // not also append this approximate line-derived rect on top
+                    // of it.
+                    if !boxed.contains(&owner) {
+                        out.entry(owner).or_default().push(rect);
+                    }
                 }
             }
         }
-    }
-    for child in &b.children {
-        collect_client_rects_rec(doc, child, boxed, out);
+        stack.extend(b.children.iter().rev());
     }
 }
 
@@ -2178,3 +2197,7 @@ mod layout_generation_misc;
 #[cfg(test)]
 #[path = "tests/scroll_interaction_misc.rs"]
 mod scroll_interaction_misc;
+
+#[cfg(test)]
+#[path = "tests/deep_traversal_stress.rs"]
+mod deep_traversal_stress;

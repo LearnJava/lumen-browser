@@ -44,12 +44,23 @@ onto `window.__wptrunner_message_queue`, which only drains once
 `window.__wptrunner_testdriver_callback` is armed. `_run_testharness` arms it
 every poll iteration and checks both `RESULTS_GLOBAL` and the action slot in
 one `script.evaluate` round trip, so this stays a single poll loop instead of
-two. `click` (`input.performActions`, which the BiDi server does implement)
-and `generate_test_report` (a direct call into the page-visible
-`_lumen_deliver_report` JS global, no new BiDi surface needed) are actually
-executed; every other action fails cleanly (rejects the test's promise)
-rather than hanging forever — the DoD is "not silently SKIPped", not "every
-`test_driver.*` method works".
+two. `click`, `action_sequence` and `send_keys` (all three via
+`input.performActions`, BUG-810/WPT-RUN-12), `delete_all_cookies`
+(`storage.deleteCookies`) and `generate_test_report` (a direct call into the
+page-visible `_lumen_deliver_report` JS global, no new BiDi surface needed)
+are actually executed; every other action fails cleanly (rejects the test's
+promise, logged on the runner side too since BUG-810) rather than hanging
+forever — the DoD is "not silently SKIPped", not "every `test_driver.*`
+method works". Left unimplemented past this slice for want of a matching
+engine/BiDi surface rather than tooling effort: `set_permission` (no
+`permissions.setPermission` BiDi command exists server-side —
+`crates/bidi-server/src/protocol.rs` has no `permissions.*` handler at all,
+so this is new engine-adjacent surface, not payload translation) and
+`get_computed_role`/`get_computed_label` (an accessibility tree does exist —
+`crates/engine/a11y`, `AutomationCommand::A11yTree` — but nothing correlates
+one of its `AXNode`s back to the DOM element `params["selectors"]` resolves
+to; that correlation, not the tree itself, is the missing piece, and it's
+sized like its own task rather than a payload translation).
 """
 
 import asyncio
@@ -320,7 +331,21 @@ class LumenTestharnessExecutor(TestharnessExecutor):
                 result = await self._action_click(session, context, params)
             elif action == "generate_test_report":
                 result = await self._action_generate_test_report(session, context, params)
+            elif action == "action_sequence":
+                result = await self._action_action_sequence(session, context, params)
+            elif action == "send_keys":
+                result = await self._action_send_keys(session, context, params)
+            elif action == "delete_all_cookies":
+                result = await self._action_delete_all_cookies(session, context, params)
             else:
+                # BUG-810/WPT-RUN-12: the rejection itself already reaches the
+                # page fine (BUG-716 fixed unhandled-rejection visibility) —
+                # this log line is for the *runner* side, where the mechanism
+                # used to be invisible except by instrumenting this function
+                # by hand (that's how BUG-810 itself was found).
+                self.logger.info(
+                    f"testdriver action {action!r} not implemented by Lumen's "
+                    "minimal WPT executor")
                 raise ActionError(
                     f"action {action!r} not implemented by Lumen's minimal WPT executor")
             status, message = "success", json.dumps({"result": result})
@@ -351,7 +376,7 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         pointer.pointer_move(round(x), round(y), origin="viewport")
         pointer.pointer_down(0)
         pointer.pointer_up(0)
-        await session.input.perform_actions(actions, context=target_context)
+        await session.input.perform_actions(actions=actions, context=target_context)
         return None
 
     async def _action_generate_test_report(self, session, context, params):
@@ -370,6 +395,78 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         )
         await session.script.evaluate(
             expression=expression, target=ContextTarget(target_context), await_promise=False)
+        return None
+
+    async def _action_action_sequence(self, session, context, params):
+        """`test_driver_internal.action_sequence(actions, context)` — replay a
+        W3C Actions payload via `session.input.perform_actions` (BUG-810: the
+        transport already exists, `crates/bidi-server/src/protocol.rs::
+        replay_input_actions`; this action only needed the payload translated,
+        the same conclusion `_action_click` already acted on for a single
+        click).
+
+        One resolution step is required first: `replay_input_actions` reads a
+        `pointerMove`'s `x`/`y` as an already-absolute viewport point and
+        ignores `origin` outright (its own doc comment), whereas
+        `testdriver-extra.js::action_sequence` (`tools/wptrunner/wptrunner/
+        testdriver-extra.js:563-580`) replaces an element origin with
+        `{selectors: [...]}` rather than absolute coordinates — so an
+        element-relative move must be resolved to a point here, before the
+        transport, or it silently lands at the wrong place. `origin:
+        "pointer"` (relative to the previous position) is NOT resolved: the
+        Rust side has no notion of it either, an existing gap this action
+        doesn't attempt to close."""
+        target_context = params.get("context") or context
+        actions = params.get("actions") or []
+        for source in actions:
+            if source.get("type") != "pointer":
+                continue
+            for step in source.get("actions") or []:
+                if step.get("type") != "pointerMove":
+                    continue
+                origin = step.get("origin")
+                if isinstance(origin, dict) and "selectors" in origin:
+                    point = await self._resolve_element_center(
+                        session, target_context, origin["selectors"])
+                    if point is None:
+                        raise ActionError(
+                            f"element not found for selectors {origin['selectors']!r}")
+                    ex, ey = point
+                    step["x"] = round(ex + (step.get("x") or 0))
+                    step["y"] = round(ey + (step.get("y") or 0))
+                    step["origin"] = "viewport"
+        await session.input.perform_actions(actions=actions, context=target_context)
+        return None
+
+    async def _action_send_keys(self, session, context, params):
+        """`test_driver_internal.send_keys(element, keys)` — click the target
+        element to focus it (same point resolution `_action_click` uses),
+        then type `params["keys"]` via a `key` input source in the same
+        `perform_actions` call. `replay_input_actions` types a `key` source's
+        concatenated value at `last_point`, which the preceding pointer
+        source's click already set — same ordering `_action_click` relies on,
+        just with a `KeyInputSource` tacked onto the same `Actions()`."""
+        target_context = params.get("context") or context
+        point = await self._resolve_element_center(
+            session, target_context, params.get("selectors") or [])
+        if point is None:
+            raise ActionError(f"element not found for selectors {params.get('selectors')!r}")
+        x, y = point
+        actions = Actions()
+        pointer = actions.add_pointer()
+        pointer.pointer_move(round(x), round(y), origin="viewport")
+        pointer.pointer_down(0)
+        pointer.pointer_up(0)
+        actions.add_key().send_keys(params.get("keys") or "")
+        await session.input.perform_actions(actions=actions, context=target_context)
+        return None
+
+    async def _action_delete_all_cookies(self, session, context, params):
+        """`test_driver_internal.delete_all_cookies()` — `storage.deleteCookies`
+        with no filter (`crates/bidi-server/src/protocol.rs::
+        storage_delete_cookies`, already implemented for cookie-store tests
+        independently of this action)."""
+        await session.storage.delete_cookies()
         return None
 
     async def _resolve_element_center(self, session, context, selectors):

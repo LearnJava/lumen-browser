@@ -104,9 +104,9 @@ mod predicates;
 // axis is physically horizontal under a vertical writing mode, so those (not
 // the `_inline` pair) are the ones that apply there.
 pub(crate) use predicates::{
-    is_audio_element, is_canvas_element, is_iframe_element, is_image_element, is_picture_element,
-    is_video_element, scrollbar_gutter_block, scrollbar_gutter_block_start, scrollbar_gutter_inline,
-    scrollbar_gutter_inline_start,
+    is_audio_element, is_canvas_element, is_iframe_element, is_image_element,
+    is_inline_replaced_media_element, is_picture_element, is_video_element, scrollbar_gutter_block,
+    scrollbar_gutter_block_start, scrollbar_gutter_inline, scrollbar_gutter_inline_start,
 };
 
 // EE-3: when true, `lay_out` checks `b.dirty.is_clean()` and skips clean subtrees.

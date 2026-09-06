@@ -68,6 +68,31 @@ pub struct LayoutBox {
     pub origin: BoxOrigin,
 }
 
+impl Drop for LayoutBox {
+    /// LAYOUT-1 срез 2: the compiler-generated recursive drop glissade for
+    /// `children: Vec<LayoutBox>` (and nested `SvgMaskContent::content`)
+    /// walks the subtree depth-first on the native call stack, one frame
+    /// per level — found as an independent overflow source (same shape as
+    /// BUG-987) while probing LAYOUT-1 slice 1's 200000-level fixture.
+    /// Draining descendants into a heap-allocated work stack instead means
+    /// no single `drop` call recurses past its own direct children.
+    fn drop(&mut self) {
+        let mut pending: Vec<LayoutBox> = std::mem::take(&mut self.children);
+        if let BoxKind::SvgShape { svg_mask: Some(mask), .. } = &mut self.kind {
+            pending.append(&mut mask.content);
+        }
+        while let Some(mut b) = pending.pop() {
+            pending.append(&mut b.children);
+            if let BoxKind::SvgShape { svg_mask: Some(mask), .. } = &mut b.kind {
+                pending.append(&mut mask.content);
+            }
+            // `b`'s remaining fields drop normally here — `children` and
+            // `svg_mask.content` are already empty, so this recursion is
+            // exactly one level deep regardless of the original subtree depth.
+        }
+    }
+}
+
 /// Where a layout box came from — the identity of a box for all
 /// introspection purposes (ADR-025 §1). Replaces the `NodeId::from_index(0)`
 /// "no DOM origin" sentinel, which collided with the document root.

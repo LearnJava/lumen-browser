@@ -2029,7 +2029,8 @@ mod tests {
             scroll_y: 0.0,
             dirty: DirtyBits::MOVED_OUT,
         };
-        let mut fresh = LayoutBox { rect: Rect::new(9.0, 9.0, 9.0, 9.0), ..husk.clone() };
+        let mut fresh = husk.clone();
+        fresh.rect = Rect::new(9.0, 9.0, 9.0, 9.0);
         mark_subtree_dirty(&mut fresh);
 
         let reused = graft_geometry(&mut fresh, &husk);

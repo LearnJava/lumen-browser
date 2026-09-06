@@ -1,6 +1,7 @@
 # BUG-521: `text-decoration-fill`/`text-decoration-stroke`/`-webkit-text-stroke` not implemented at all
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md)
+**Тип:** never-implemented feature family, not a defect in existing code — tracked in `CSS-SPECS.md` going forward, not taken by P3's bug queue
 **Дата:** 2026-08-03
 **Компонент:** css-parser/layout (no trace anywhere:
 `grep -rn "text-decoration-fill\|text-decoration-stroke\|webkit-text-stroke"
@@ -53,3 +54,19 @@ Committed `.ini` under `tests/wpt/metadata/css/fill-stroke/` for
 `inheritance.html` and `webkit-text-stroke-computed.html` (both fully
 attributed to this bug, 4/4 and 3/3 subtests respectively),
 `expected: FAIL`.
+
+## Ревизия P3 2026-09-06
+
+Reclassified from bug to ДОРАБОТКА per `docs/probe-method.md` §8: the
+functionality is absent outright (confirmed above) *and* the missing half is
+a rendering algorithm, not a point patch. Lumen has two independent text
+render paths (`crates/engine/paint/src/cpu_raster.rs` and
+`crates/engine/paint/src/backends/femtovg_backend.rs`); neither has any glyph
+outline/stroke capability today — both fill the glyph shape only (`grep -rn
+"stroke" crates/engine/paint/src/cpu_raster.rs
+crates/engine/paint/src/backends/femtovg_backend.rs` matches nothing about
+text). Implementing `text-decoration-fill`/`text-decoration-stroke`/
+`-webkit-text-stroke` for real (not just parsed-and-ignored) means designing
+glyph-outline stroking in both backends independently — the same shape as
+`border-image`'s missing 9-slice paint algorithm (BUG-492). Moved to
+`CSS-SPECS.md`'s CSS Fill & Stroke row; removed from `STATUS-P3.md`.

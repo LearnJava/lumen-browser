@@ -325,13 +325,16 @@ impl Lumen {
                 format!("_lumen_navigate_or_fragment('{escaped}', false)"),
             );
         }
+        // STTF-1: strip a `:~:text=...` scroll-to-text directive before it
+        // reaches `:target`/`find_element_by_id` — neither should ever try
+        // to match the literal directive text against an `id`. The
+        // directive itself isn't acted on yet (search/reveal is a later
+        // slice, `bugs/BUG-972-OPEN.md`); this only prevents its presence
+        // from corrupting the ordinary id-fragment path.
+        let id_part = text_fragment::parse_fragment(&fragment).element_id;
         if let Some(src) = self.layout_source.as_mut() {
             let mut doc = src.document.lock().unwrap();
-            if fragment.is_empty() {
-                doc.set_target::<String>(None);
-            } else {
-                doc.set_target(Some(fragment.clone()));
-            }
+            doc.set_target(id_part.as_deref());
         }
         // Re-layout so :target cascade is applied.
         self.relayout();
@@ -339,10 +342,13 @@ impl Lumen {
             self.scroll_to(0.0);
             return;
         }
+        let Some(id_part) = id_part else {
+            return;
+        };
         let node_id = self
             .layout_source
             .as_ref()
-            .and_then(|src| links::find_element_by_id(&src.document.lock().unwrap(), &fragment));
+            .and_then(|src| links::find_element_by_id(&src.document.lock().unwrap(), &id_part));
         let target_rect = node_id.and_then(|nid| {
             self.layout_box.as_ref().and_then(|lb| forms::find_box_rect(lb, nid))
         });
@@ -520,10 +526,8 @@ impl Lumen {
                 #[cfg(feature = "v8")]
                 if self.js_present
                     && let Some(lb_ref) = self.layout_box.as_ref()
-                    && let Some(doc_guard) = self
-                        .layout_source
-                        .as_ref()
-                        .and_then(|ls| ls.document.lock().ok())
+                    && let Some(src) = self.layout_source.as_ref()
+                    && let Ok(doc_guard) = src.document.lock()
                 {
                     let viewport = self.renderer.as_ref().map_or_else(
                         || Size::new(1024.0, 720.0),
@@ -540,6 +544,11 @@ impl Lumen {
                     drop(doc_guard);
                     let customs = collect_custom_properties(lb_ref, viewport);
                     let (vw, vh) = (viewport.width, viewport.height);
+                    // CSSOM-7 (BUG-977): first stylesheet push for this
+                    // document — even a top-level `<script>` running at
+                    // initial parse time gets a same-tick flush target,
+                    // mirroring `update_stylesheet`'s own doc-comment.
+                    let stylesheet = Arc::clone(&src.stylesheet);
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                         js.update_layout_rects(rects);
                         js.update_client_rects(client_rects);
@@ -547,6 +556,7 @@ impl Lumen {
                         js.update_computed_styles(styles);
                         js.update_pseudo_computed_styles(pseudo_styles);
                         js.update_custom_properties(customs);
+                        js.update_stylesheet(stylesheet);
                         js.update_viewport_size(vw, vh);
                     });
                 }
@@ -1178,10 +1188,8 @@ impl Lumen {
         #[cfg(feature = "v8")]
         if self.js_present
             && let Some(lb_ref) = self.layout_box.as_ref()
-            && let Some(doc_guard) = self
-                .layout_source
-                .as_ref()
-                .and_then(|ls| ls.document.lock().ok())
+            && let Some(src) = self.layout_source.as_ref()
+            && let Ok(doc_guard) = src.document.lock()
         {
             let viewport = self.renderer.as_ref().map_or_else(
                 || Size::new(1024.0, 720.0),
@@ -1198,6 +1206,10 @@ impl Lumen {
             drop(doc_guard);
             let customs = collect_custom_properties(lb_ref, viewport);
             let (vw, vh) = (viewport.width, viewport.height);
+            // CSSOM-7 (BUG-977): same stylesheet push as the block above —
+            // this is the "LoadDone, deferred settle" producer, the other
+            // point where a fresh page's cascade first becomes flushable.
+            let stylesheet = Arc::clone(&src.stylesheet);
             let scroll_states: HashMap<u32, [f32; 4]> = collect_scroll_containers_for_js_state(lb_ref)
                 .iter()
                 .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
@@ -1209,6 +1221,7 @@ impl Lumen {
                 js.update_computed_styles(styles);
                 js.update_pseudo_computed_styles(pseudo_styles);
                 js.update_custom_properties(customs);
+                js.update_stylesheet(stylesheet);
                 js.update_viewport_size(vw, vh);
                 js.update_scroll_states(scroll_states);
             });
