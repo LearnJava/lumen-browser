@@ -535,6 +535,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `scroll-behavior` | 🟡 | auto/smooth parsed |
 | `overscroll-behavior*` | 🟡 | parsed; gesture boundary ⬜ |
 | `scroll-timeline` / `view-timeline` | ✅ | scroll-timeline-name/axis, view-timeline-name/axis shorthands+longhands; collect_named_* wired; P4 2026-06-10 |
+| `scroll-initial-target` | ⬜ | CSS Scroll Snap L2, не парсится вовсе — «прокрутить цель в видимость при загрузке страницы» не выполняется никогда. Найден P2 2026-09-01 (WPT-RUN-6 срез 31, `scroll-initial-target-shadow-dom.tentative.html`, [BUG-944](bugs/BUG-944-OPEN.md)) |
 
 ### [T3] Multi-column
 

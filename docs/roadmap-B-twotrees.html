@@ -76,11 +76,11 @@
  "generated": "2026-09-06",
  "counts": {
   "open": 379,
-  "fixed": 586,
+  "fixed": 587,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 965,
+ "total_bugs": 966,
  "phases": [
   {
    "id": "P0",
@@ -6871,6 +6871,26 @@
        "size": "L",
        "note": "Остаток дорожки THREAD после THREAD-1/THREAD-2: зависания главного потока, вызванные самим JS/layout, а не тем, что чинили предыдущие срезы (вынос растеризации на рендер-поток, разблокировка readback у движкового потока) — они не касаются случая, когда тормозит сам relayout/скрипт, синхронно исполняющийся на UI-потоке. THREAD-0 (2026-09-04) указал конкретные источники на корпусе `docs/perf/corpus-top100-foreign.txt`: **github.com** воспроизводимо виснет и headless — доминанта layout+paint 70% (64.3 из 90.8с) — раскладка сама по себе дорогая, offload present её не лечит; **duckduckgo/microsoft/baidu** не завершаются headless вообще за 240–400с при том, что все сетевые ресурсы получены за секунды — застревание похоже на никогда не возвращающийся run-scripts (JS), а не на layout, и нужен отдельный триаж зависания (детектор долгого таска / профилировщик V8), а не перф-тюнинг. Объём: (1) перемерить все 4 сайта текущим движком (THREAD-1/THREAD-2 и восемь багов того же прогона могли уже изменить картину — не чинить вслепую поверх устаревших чисел), (2) для github — профилировать сам layout-проход (какой алгоритм, сколько узлов, есть ли кандидат на инкрементальность/мемоизацию), (3) для duckduckgo/microsoft/baidu — найти конкретный зависающий JS-паттерн (вероятно ожидание события/промиса, которого движок никогда не порождает). Не задача «доделать потоки» — предыдущие два среза уже дали дефолтную многопоточную конфигурацию; здесь плата за неё исчерпана и остаётся профилирование/фикс конкретных сайтов."
       }
+     ]
+    },
+    {
+     "id": "TRUSTEDTYPES-1",
+     "title": "Trusted Types: enforcement на DOM sinks (модель есть, проверок нет)",
+     "status": "planned",
+     "size": "M",
+     "note": "Trusted Types объектная модель (`TrustedTypePolicyFactory`/`TrustedTypePolicy`/`createPolicy`, `crates/js/src/trusted_types.rs`) реализована целиком, но ни один DOM sink её не читает — enforcement отсутствует не единичным дефектом, а полностью: строковый обработчик `setTimeout`/`setInterval` (`_lumen_timer_string_handler`, `web_api_shim_mid_b.js`) исполняет строку напрямую вместо прохода через `defaultPolicy.createScript`, и это лишь один sink из тех, что перечисляет Trusted Types §4 (`innerHTML`/`outerHTML`, `Range.createContextualFragment`, `document.write`/`writeln`, `<script>.src`/`.textContent`, `eval`/`new Function` под CSP `require-trusted-types-for 'script'`, атрибуты-обработчики событий через `setAttribute` — ни один не проверен). Отдельно от [BUG-811](bugs/BUG-811-OPEN.md) (CSP как таковой не enforced). Объём: пройтись по списку sink'ов спеки и на каждом вставить проверку — `TrustedType`-объект передан как есть, иначе через `defaultPolicy` (если задана) или `TypeError`, аналогично тому, как GAP-CSPENF/GAP-POLICYREPORT формализуют enforcement для CSP/Permissions Policy. Найден P2 2026-09-01 (WPT-RUN-6 срез 31, `trusted-types/Window-setTimeout-setInterval.html`).",
+     "bugs": [
+      "BUG-946"
+     ]
+    },
+    {
+     "id": "LONGTASK-1",
+     "title": "Perf Timeline: модель измерения longtask/long-animation-frame",
+     "status": "planned",
+     "size": "M",
+     "note": "`longtask`/`long-animation-frame` объявлены НЕ поддерживаемыми открыто (`_PERF_SUPPORTED_ENTRY_TYPES`, `web_api_shim_tail.js`, собственный комментарий рядом) — ни одна `PerformanceEntry` такого типа никогда не производится, `PerformanceObserver.observe({entryTypes: ['longtask']})` тихо не подписывает ничего вместо ошибки, колбэк не срабатывает никогда. Не точечная правка — нужна модель измерения: засечь длительность каждой макротаски цикла событий (колбэк таймера/обработчика события/промиса) и каждого кадра рендера, сравнить с порогом (>50мс — Long Tasks API; per-frame render/style/layout/paint budget — Long Animation Frames API), сформировать `PerformanceLongTaskTiming`/`PerformanceLongAnimationFrameTiming` со скриптовой атрибуцией (culprit script/функция/контейнер). Пересекается с измерительным примитивом, который THREAD-0 уже собрал для профилирования корпуса (`docs/perf/metrics.md`, водопад по фазам) — переиспользовать его снятие таймингов вместо нового счётчика. Найден P2 2026-09-01 (WPT-RUN-6 срез 31, `supported-longtask-types.window.html`, `loaf-toJSON.html`).",
+     "bugs": [
+      "BUG-948"
      ]
     },
     {
@@ -13682,6 +13702,13 @@
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_parse_font_shorthand_families`)",
    "date": "2026-09-06",
    "debtor": false
+  },
+  "BUG-1017": {
+   "status": "fixed",
+   "title": "`Document.defaultView` (HTML §3.1.5) не был определён у живого документа — читался как `undefined`, поэтому идиома `node.ownerDocument.defaultView.<что-нибудь>`…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — объект `document`, `_lumen_build_detached_document`)",
+   "date": "2026-09-06",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14241,6 +14268,9 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js` — геттер `tabIndex`; `web_api_shim_tail_b.js` — `_lumen_is_focusable`/`_LUMEN_FOCUSABLE_TAGS`)": [
    "BUG-1012"
   ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js` — объект `document`, `_lumen_build_detached_document`)": [
+   "BUG-1017"
+  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — сеттеры `width`/`height` на `HTMLCanvasElement.prototype`, натив изменения размера), canvas (`crates/engine/canvas` — выделение backing store)": [
    "BUG-929"
   ],
@@ -14262,9 +14292,6 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js`, `web_api_shim_tail_mc.js`, `web_api_shim_head.js`)": [
    "BUG-479"
   ],
-  "js (`crates/js/src/shim/web_api_shim_tail.js` — `_PERF_SUPPORTED_ENTRY_TYPES`)": [
-   "BUG-948"
-  ],
   "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_lumen_is_focusable`, `HTMLElement.prototype.focus`)": [
    "BUG-951"
   ],
@@ -14277,9 +14304,6 @@
   ],
   "js (`crates/js/src/sw_worker.rs` — шим глобального скоупа service worker)": [
    "BUG-748"
-  ],
-  "js (`crates/js/src/trusted_types.rs`, `crates/js/src/shim/web_api_shim_mid_b.js` — `_lumen_timer_string_handler`)": [
-   "BUG-946"
   ],
   "js (`crates/js/src/v8_esm.rs:331` — `resolve` берёт базой `s.page_url`; `set_page_url` зовётся только из `install_dom`/`set_module_context`, `<base href>` в состояние ESM-слоя не попадает вовсе)": [
    "BUG-910"
