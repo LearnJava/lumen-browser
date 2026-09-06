@@ -1700,6 +1700,9 @@ pub(crate) fn spawn_frame(
         // hibernation already fall back to) — a frame's `document.styleSheets`
         // reads as empty until a future slice wires this up.
         Vec::new(),
+        // CSSOM-7 (BUG-977): mirrors the `None` `parse_time_layout` above —
+        // no layout to offer yet, so nothing to flush against either.
+        None,
     );
     // Навигация из скриптов ребёнка (location.href= и т.п.) вне среза 1:
     // отклоняем с логом, не заваливая страницу.

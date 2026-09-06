@@ -501,6 +501,14 @@ pub(crate) fn run_scripts_with_dom(
     // callers, which do not build this registry (mirrors their empty
     // `stylesheet_nodes` in `bfcache.rs`/`docking.rs`/`hibernation.rs`).
     stylesheet_nodes: Vec<lumen_css_parser::StylesheetNodeEntry>,
+    // CSSOM-7 (BUG-977): the cascade `parse_time_layout` above was collected
+    // against, pushed into the runtime before the first script line executes
+    // for the same reason — a same-tick `getComputedStyle`/scroll read a
+    // parse-time script performs (CSSOM-4/BUG-493's flush, `style_flush.rs`)
+    // otherwise has no `FlushHandles::stylesheet` to recompute against and
+    // silently no-ops. `None` alongside `parse_time_layout: None` for the
+    // frame/thaw callers.
+    parse_time_stylesheet: Option<Arc<lumen_css_parser::Stylesheet>>,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>) {
     // `scripts` / `module_scripts` are already resolved by the caller in
     // document order, including fetched external `<script src>` bodies (BUG-164).
@@ -573,6 +581,15 @@ pub(crate) fn run_scripts_with_dom(
                     rt.update_pseudo_computed_styles(snap.pseudo_styles);
                     rt.update_custom_properties(snap.customs);
                     rt.update_viewport_size(snap.viewport.0, snap.viewport.1);
+                }
+                // CSSOM-7 (BUG-977): same rationale as the snapshot above —
+                // without this, a fully synchronous parse-time script (no
+                // relayout has run yet) that mutates style and reads scroll/
+                // computed-style back in the same turn finds
+                // `FlushHandles::stylesheet` still `None` and the flush a
+                // permanent no-op.
+                if let Some(sheet) = parse_time_stylesheet {
+                    rt.update_stylesheet(sheet);
                 }
                 // BUG-839: hand over the subresource loads that already
                 // finished, before the page's first script runs. The document's

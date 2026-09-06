@@ -655,6 +655,13 @@ impl Lumen {
             }
         }
         self.prev_styles = new_styles;
+        // CSSOM-7 (BUG-977): grab the owned `Arc` now, while `src` (an
+        // immutable borrow of `self.layout_source`) is still alive — every
+        // `&mut self` method call below (`refresh_cv_state` etc.) would
+        // otherwise conflict with holding `src` until the JS-push closure
+        // near the end of this function.
+        #[cfg(feature = "v8")]
+        let stylesheet_for_flush = Arc::clone(&src.stylesheet);
         // BUG-341 S7: invalidate the restyle-cascade cache by default — every
         // producer routes through here, but only `try_relayout_raf_incremental`'s
         // restyle sub-path knows how to recompute a cache that actually matches
@@ -726,6 +733,13 @@ impl Lumen {
                 let (vw, vh) = (viewport.width, viewport.height);
                 let dark_mode = self.dark_mode;
                 let reduced_motion = self.a11y_store.reduced_motion();
+                // CSSOM-7 (BUG-977): push the live cascade alongside the rest
+                // of this snapshot, same `Arc` `apply_relayout_result` already
+                // laid out against (`relayout_page`/`compute_layout` above) —
+                // feeds `FlushHandles::stylesheet` on the JS thread so the
+                // same-tick flush (CSSOM-4/BUG-493) stops being a permanent
+                // no-op in the interactive shell.
+                let stylesheet = stylesheet_for_flush;
                 // Keep JS scroll-state cache in sync so scrollTop/scrollLeft reads
                 // immediately after relayout return the correct clamped values.
                 let scroll_states: HashMap<u32, [f32; 4]> = collect_scroll_containers_for_js_state(lb_ref)
@@ -739,6 +753,7 @@ impl Lumen {
                     js.update_computed_styles(styles);
                     js.update_pseudo_computed_styles(pseudo_styles);
                     js.update_custom_properties(customs);
+                    js.update_stylesheet(stylesheet);
                     js.update_viewport_size(vw, vh);
                     js.deliver_layout_observers();
                     // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new

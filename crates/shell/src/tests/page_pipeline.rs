@@ -1074,6 +1074,37 @@ fn parse_time_script_reads_computed_style_and_rect() {
     assert_eq!(probe_attr(&page, "data-r"), "300x120");
 }
 
+/// CSSOM-7 (BUG-977): a fully synchronous parse-time `<script>` — no relayout
+/// has run yet — that flips `overflow` to `clip` and immediately requests a
+/// scroll on the same node must see it zeroed, same as
+/// `verify_bug504_vertical_rl_clip.py`'s live-window repro. Before this fix
+/// `FlushHandles::stylesheet` had nothing pushed into it this early in the
+/// shell (only headless's `InProcessSession` called `update_stylesheet`), so
+/// `_lumen_request_scroll`'s `is_clip` check read a stale/absent
+/// `computed_styles` cache and let every one of these four requests through
+/// unclamped.
+#[cfg(feature = "v8")]
+#[test]
+fn parse_time_script_overflow_clip_zeroes_scroll_request() {
+    let page = parse_and_layout_for_test(
+        "<html><body><div id=s style='width:100px;height:100px;overflow:hidden'>\
+         <div id=c style='width:300px;height:300px'></div></div>\
+         <script>var s=document.getElementById('s');\
+         s.scrollTo(40,50);\
+         s.style.overflow='clip';\
+         s.scrollTo(60,70);\
+         document.documentElement.setAttribute('data-scrollto',s.scrollLeft+','+s.scrollTop);\
+         s.scrollBy(10,10);\
+         document.documentElement.setAttribute('data-scrollby',s.scrollLeft+','+s.scrollTop);\
+         s.scrollLeft=25;s.scrollTop=35;\
+         document.documentElement.setAttribute('data-direct',s.scrollLeft+','+s.scrollTop);\
+         </script></body></html>",
+    );
+    assert_eq!(probe_attr(&page, "data-scrollto"), "0,0");
+    assert_eq!(probe_attr(&page, "data-scrollby"), "0,0");
+    assert_eq!(probe_attr(&page, "data-direct"), "0,0");
+}
+
 /// A `DOMContentLoaded` handler sees geometry that includes what the scripts
 /// themselves changed — the snapshot is re-derived after they run, not reused
 /// from before them.

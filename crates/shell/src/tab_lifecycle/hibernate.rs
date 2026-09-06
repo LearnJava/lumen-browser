@@ -141,6 +141,8 @@ pub(crate) fn restore_js_context(
         // stylesheet registry either (same reason as `parse_time_layout`
         // above) — empty, same fallback as bfcache/docking.
         Vec::new(),
+        // CSSOM-7 (BUG-977): mirrors the `None` `parse_time_layout` above.
+        None,
     );
 
     // HTML LS §8.2.3: signal DOMContentLoaded so handlers attached during
