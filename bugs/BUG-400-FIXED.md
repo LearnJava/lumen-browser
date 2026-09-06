@@ -96,7 +96,7 @@ WebIDL, класс [BUG-366](BUG-366-FIXED.md): страница не должн
   `_lumen_deliver_perf_entry('navigation', url, 0.0, duration_ms, null)`
   (`crates/shell/src/main.rs::deliver_nav_timing`) — только URL и общая
   длительность; на том же безданном источнике уже висит
-  [BUG-640](BUG-640-OPEN.md) (современная L2-запись
+  [BUG-640](BUG-640-FIXED.md) (современная L2-запись
   `PerformanceNavigationTiming` — такой же голый стаб), поэтому BUG-767
   им и заблокирован. Подставить 21 ноль означало бы позеленить тест,
   оставив фичу сломанной, поэтому интерфейсы отсутствуют, а не
