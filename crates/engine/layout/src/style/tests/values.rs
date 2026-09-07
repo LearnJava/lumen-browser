@@ -1899,6 +1899,60 @@ use super::*;
         assert_eq!(ScrollbarGutter::parse(""), None);
     }
 
+    // ── `overflow-anchor` (BUG-524 срез 1, CSS Scroll Anchoring 1) ──
+
+    #[test]
+    fn overflow_anchor_parses_auto_and_none() {
+        assert_eq!(OverflowAnchor::parse("auto"), Some(OverflowAnchor::Auto));
+        assert_eq!(OverflowAnchor::parse("none"), Some(OverflowAnchor::None));
+        assert_eq!(OverflowAnchor::parse("AUTO"), Some(OverflowAnchor::Auto));
+    }
+
+    #[test]
+    fn overflow_anchor_rejects_invalid_values() {
+        assert_eq!(OverflowAnchor::parse("all"), None);
+        assert_eq!(OverflowAnchor::parse("auto none"), None);
+        assert_eq!(OverflowAnchor::parse(""), None);
+    }
+
+    #[test]
+    fn overflow_anchor_default_is_auto() {
+        assert_eq!(ComputedStyle::root().overflow_anchor, OverflowAnchor::Auto);
+    }
+
+    #[test]
+    fn overflow_anchor_applies_through_cascade() {
+        let s = cascade_at(
+            "<div id=\"target\"></div>",
+            "div { overflow-anchor: none; }",
+            &[0],
+        );
+        assert_eq!(s.overflow_anchor, OverflowAnchor::None);
+    }
+
+    #[test]
+    fn overflow_anchor_css_wide_keyword_inherit() {
+        // Non-inherited property: `inherit` on the child still copies the
+        // parent's specified value (per CSS-wide-keyword semantics, distinct
+        // from ordinary property inheritance).
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { overflow-anchor: none; } p { overflow-anchor: inherit; }",
+            &[0, 0],
+        );
+        assert_eq!(s.overflow_anchor, OverflowAnchor::None);
+    }
+
+    #[test]
+    fn overflow_anchor_css_wide_keyword_initial() {
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { overflow-anchor: none; } p { overflow-anchor: initial; }",
+            &[0, 0],
+        );
+        assert_eq!(s.overflow_anchor, OverflowAnchor::Auto);
+    }
+
     // ── `scroll-marker-group`/`scroll-target-group` (BUG-505 срез 6, CSS
     // Overflow L5) ──
 

@@ -1852,6 +1852,10 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     // auto` — fits this table directly, unlike `scroll-marker-group` below
     // (order-dependent two-token grammar, own canon function).
     'scroll-target-group': ['none', 'auto'],
+    // CSS Scroll Anchoring 1 §propdef-overflow-anchor (BUG-524 срез 1):
+    // `auto | none` — parsing/CSSOM only, the anchor-selection algorithm
+    // itself isn't implemented yet (see bugs/BUG-524-OPEN.md).
+    'overflow-anchor': ['auto', 'none'],
     'ruby-position': ['over', 'under', 'alternate'],
     'ruby-align':    ['start', 'center', 'space-between', 'space-around'],
     'ruby-merge':    ['separate', 'merge', 'auto'],

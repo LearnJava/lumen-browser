@@ -35,6 +35,7 @@ use crate::style::{
     ObjectPosition,
     OutlineColor,
     OutlineStyle,
+    OverflowAnchor,
     PointerEvents,
     PositionComponent,
     PrintColorAdjust,
@@ -709,6 +710,11 @@ pub(in crate::style) fn apply_decl_paint(
         "scrollbar-gutter" => {
             if let Some(v) = ScrollbarGutter::parse(val) {
                 style.scrollbar_gutter = v;
+            }
+        }
+        "overflow-anchor" => {
+            if let Some(v) = OverflowAnchor::parse(val) {
+                style.overflow_anchor = v;
             }
         }
         "opacity" => {

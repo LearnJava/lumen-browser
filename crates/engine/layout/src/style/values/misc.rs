@@ -152,6 +152,29 @@ impl ScrollbarGutter {
     }
 }
 
+/// CSS Scroll Anchoring 1 — `overflow-anchor`. Не наследуется, initial `auto`
+/// (BUG-524 срез 1 — только грамматика/CSSOM, сам алгоритм якорения
+/// (выбор anchor node на scroll-контейнере и компенсация scroll offset при
+/// relayout) не реализован — см. `bugs/BUG-524-OPEN.md`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OverflowAnchor {
+    /// `auto` (default) — элемент участвует в выборе anchor node.
+    #[default]
+    Auto,
+    /// `none` — элемент (и поддерево) исключён из выбора anchor node.
+    None,
+}
+
+impl OverflowAnchor {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
+}
+
 /// CSS Overflow L3 §overflow-clip-margin — the `<visual-box>` component of
 /// the property's `[<visual-box> || <length [0,∞]>]` grammar (BUG-505
 /// срез 4). Initial `padding-box`, same as `background-origin`'s box triplet
