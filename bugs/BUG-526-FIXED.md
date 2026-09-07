@@ -96,7 +96,7 @@ input (matching semantics unchanged), `.media` stores the serialized form.
   `word`-скан, не останавливающийся на `)` (`"color)"` парсится как
   буквальный media-type `"color)"` вместо ошибки) остаются FAIL —
   hand-rolled `parse_media_clause`/`parse_media_feature` не покрывает эти
-  три смежных случая CSS-синтаксиса, заведён [BUG-1020](BUG-1020-OPEN.md).
+  три смежных случая CSS-синтаксиса, заведён [BUG-1020](BUG-1020-FIXED.md).
 - `mq-escaped-serialization.html` не тронут (блокирован BUG-384, не про
   сериализацию медиа-запроса — тест читает `conditionText` `CSSMediaRule`,
   которого у `CSSMediaRule` вообще нет; сама заявка эту причину не видела).

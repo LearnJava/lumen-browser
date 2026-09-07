@@ -123,6 +123,13 @@ pub enum MediaFeature {
     /// цвета (например, режим «инверсия цветов» доступности) (Media Queries
     /// L5 §5.8).
     InvertedColors(MediaInvertedColors),
+    /// `(color)` — boolean-context форма (CSS Values L4 §Boolean Context):
+    /// «true, если фича поддерживается устройством и её значение не равно
+    /// нулю». У Lumen цветовая глубина фиксирована, поэтому она всегда
+    /// «поддерживается». Общий boolean-context механизм для остальных
+    /// range-фич (`width`/`resolution`/…) — отдельный, более широкий объём
+    /// BUG-527, не этой точечной правки (BUG-1020).
+    Color,
 }
 
 impl Eq for MediaFeature {}
@@ -414,6 +421,7 @@ impl MediaFeature {
             Self::PrefersReducedTransparency(t) => ctx.prefers_reduced_transparency == *t,
             Self::Scripting(s) => ctx.scripting == *s,
             Self::InvertedColors(i) => ctx.inverted_colors == *i,
+            Self::Color => true,
         }
     }
 }
@@ -555,6 +563,9 @@ impl MediaFeature {
                     MediaInvertedColors::Inverted => "inverted",
                 }
             ),
+            // Boolean context — no `: value` part, just the feature name
+            // (`(color)`, not `(color: true)`).
+            Self::Color => "color".to_string(),
         }
     }
 }
@@ -619,22 +630,27 @@ pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {
             // с появлением `calc(...)` внутри значения фичи (`resolution`,
             // BUG-1019) `input.find(')')` закрывал бы calc-скобку, а не
             // внешнюю фичевую, обрезая значение на середине.
-            if let Some(end) = find_matching_close_paren(input) {
-                let inner = &input[1..end];
-                conditions.push(parse_media_feature(inner.trim()));
-                input = &input[end + 1..];
-            } else {
-                return MediaQueryClause {
-                    negated,
-                    only,
-                    conditions: vec![MediaCondition::Unsupported],
-                };
-            }
+            //
+            // Отсутствующая закрывающая `)` — не ошибка (CSS Syntax L3
+            // "consume a component value": незакрытый блок молча
+            // домысливается закрытым в конце входа, BUG-1020) — остаток
+            // строки становится содержимым фичи, а не роняет clause целиком.
+            let (inner_end, next_start) = match find_matching_close_paren(input) {
+                Some(end) => (end, end + 1),
+                None => (input.len(), input.len()),
+            };
+            let inner = &input[1..inner_end];
+            conditions.push(parse_media_feature(inner.trim()));
+            input = &input[next_start..];
         } else {
+            // `)` в разделителях: одиночный `)` без парной `(` в этой же
+            // clause — синтаксическая ошибка (BUG-1020), а не буквальный
+            // media-type/лишний хвост у предыдущего слова.
             let end = input
-                .find(|c: char| c.is_whitespace() || c == '(' || c == ',')
+                .find(|c: char| c.is_whitespace() || c == '(' || c == ',' || c == ')')
                 .unwrap_or(input.len());
             let word = &input[..end];
+            let stray_close_paren = input[end..].starts_with(')');
             input = &input[end..];
             if word.eq_ignore_ascii_case("and") {
                 continue;
@@ -644,6 +660,13 @@ pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {
             // или внутри `(not (...))`-conditions, которые мы пока не
             // парсим). Считаем clause unknown, чтобы не сматчить случайно.
             if word.eq_ignore_ascii_case("not") || word.eq_ignore_ascii_case("only") {
+                return MediaQueryClause {
+                    negated,
+                    only,
+                    conditions: vec![MediaCondition::Unsupported],
+                };
+            }
+            if stray_close_paren {
                 return MediaQueryClause {
                     negated,
                     only,
@@ -850,9 +873,16 @@ fn parse_calc_operand(tok: &str) -> Option<f32> {
 }
 
 pub(crate) fn parse_media_feature(s: &str) -> MediaCondition {
-    // `feature: value` или просто `feature` (boolean feature, не поддерживаем).
+    // `feature: value` или просто `feature` — CSS Values L4's boolean
+    // context (BUG-1020). Только `color` реализован здесь: у Lumen нет
+    // самой range-фичи `color` (глубина цвета не варьируется), а общий
+    // механизм «boolean context для width/resolution/…» — отдельный, более
+    // широкий объём BUG-527.
     let Some((key, val)) = s.split_once(':') else {
-        return MediaCondition::Unsupported;
+        return match s.trim().to_ascii_lowercase().as_str() {
+            "color" => MediaCondition::Feature(MediaFeature::Color),
+            _ => MediaCondition::Unsupported,
+        };
     };
     let key = key.trim().to_ascii_lowercase();
     let val = val.trim();
