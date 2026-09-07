@@ -309,6 +309,13 @@ fn step_item(
                 post_item_place(frame, li, &pos, viewport);
                 StepOutcome::Advance
             }
+            // LAYOUT-2 срез 7: a column-flex item that is itself a multicol
+            // container — same shape as the grid/table arms above.
+            DispatchOutcome::NeedsMulticolLoop(child_init) => {
+                super::multicol_trampoline::run(&mut frame.b.children[pos.i], child_init, measurer, viewport, hp);
+                post_item_place(frame, li, &pos, viewport);
+                StepOutcome::Advance
+            }
         }
     } else {
         let item_s = frame.b.children[pos.i].style.clone();
@@ -355,6 +362,13 @@ fn step_item(
             // shape as the grid arm above.
             DispatchOutcome::NeedsTableLoop(child_init) => {
                 super::table_trampoline::run(&mut frame.b.children[pos.i], child_init, measurer, viewport, hp);
+                post_item_place(frame, li, &pos, viewport);
+                StepOutcome::Advance
+            }
+            // LAYOUT-2 срез 7: a row-flex item that is itself a multicol
+            // container — same shape as the grid/table arms above.
+            DispatchOutcome::NeedsMulticolLoop(child_init) => {
+                super::multicol_trampoline::run(&mut frame.b.children[pos.i], child_init, measurer, viewport, hp);
                 post_item_place(frame, li, &pos, viewport);
                 StepOutcome::Advance
             }

@@ -327,6 +327,12 @@ fn step_cell(
             StepOutcome::Advance
         }
         DispatchOutcome::NeedsTableLoop(ci) => StepOutcome::Descend(ci),
+        // LAYOUT-2 срез 7: a cell whose content is itself a multicol
+        // container — same shape as the flex/grid arms above.
+        DispatchOutcome::NeedsMulticolLoop(ci) => {
+            super::multicol_trampoline::run(cell_box, ci, measurer, viewport, hp);
+            StepOutcome::Advance
+        }
     }
 }
 
