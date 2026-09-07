@@ -7,6 +7,10 @@
 var _perf_origin_ms = typeof _lumen_now_ms === 'function' ? _lumen_now_ms() : 0;
 // Internal entry store: array of {entryType, name, startTime, duration}.
 var _perf_entries = [];
+// The most recent 'navigation' entry delivered by `_lumen_deliver_perf_entry`
+// (web_api_shim_tail.js) — `performance.timing`/`performance.navigation`
+// (BUG-767) derive from this same snapshot rather than a second channel.
+var _perf_last_navigation_entry = null;
 
 // ── Resource Timing L2 §4.4: the resource timing buffer ──────────────────────
 // The `resource` entry type is the only one with a bounded buffer, so these
@@ -216,15 +220,142 @@ Object.defineProperty(Performance.prototype, 'onresourcetimingbufferfull', {
     },
     enumerable: true, configurable: true,
 });
+// ── PerformanceTiming / PerformanceNavigation (legacy Navigation Timing L1) ──
+// BUG-767. Both interfaces are derived from the very snapshot the L2
+// `PerformanceNavigationTiming` entry already carries (`nav_timing.rs::detail_json`,
+// BUG-640, stashed into `_perf_last_navigation_entry` by `_lumen_deliver_perf_entry`
+// in web_api_shim_tail.js) — one conversion function, not a second collection
+// path, per ADR-026's warning about two independent sources for the same fact.
+
+// L2 attributes are `DOMHighResTimeStamp`s relative to `timeOrigin` (a
+// navigation entry's own `startTime` is always 0, so its milestone fields are
+// already elapsed-ms-since-`timeOrigin`); L1 attributes are Unix-epoch
+// milliseconds — add the origin back.
+function _perf_l2_to_l1(relMs) {
+    return Math.round(_perf_origin_ms + relMs);
+}
+
+// The full L1 attribute list, in spec order — shared between instance
+// construction and `toJSON()` so the two can never drift apart (a `for...in`
+// over the instance would also pick up `toJSON` itself, since a plain
+// prototype-method assignment is enumerable).
+var _perf_timing_field_names = [
+    'navigationStart', 'unloadEventStart', 'unloadEventEnd', 'redirectStart',
+    'redirectEnd', 'fetchStart', 'domainLookupStart', 'domainLookupEnd',
+    'connectStart', 'connectEnd', 'secureConnectionStart', 'requestStart',
+    'responseStart', 'responseEnd', 'domLoading', 'domInteractive',
+    'domContentLoadedEventStart', 'domContentLoadedEventEnd', 'domComplete',
+    'loadEventStart', 'loadEventEnd',
+];
+
+// Navigation Timing L1 §4.4 `interface PerformanceTiming`.
+function PerformanceTiming() { throw new TypeError('Illegal constructor'); }
+// §4.4 `[Default] object toJSON()`.
+PerformanceTiming.prototype.toJSON = function() {
+    var out = {};
+    for (var i = 0; i < _perf_timing_field_names.length; i++) {
+        var k = _perf_timing_field_names[i];
+        out[k] = this[k];
+    }
+    return out;
+};
+
+function _perf_make_timing() {
+    var nav = _perf_last_navigation_entry;
+    var origin = Math.round(_perf_origin_ms);
+    // Spec fallback for a milestone that hasn't happened yet is 0, same as
+    // every other not-yet-fired PerformanceTiming attribute in real browsers.
+    function ms(key) { return nav ? _perf_l2_to_l1(nav[key] || 0) : 0; }
+    var t = Object.create(PerformanceTiming.prototype);
+    var fields = {
+        navigationStart: origin,
+        unloadEventStart: ms('unloadEventStart'),
+        unloadEventEnd: ms('unloadEventEnd'),
+        redirectStart: ms('redirectStart'),
+        redirectEnd: ms('redirectEnd'),
+        fetchStart: ms('fetchStart'),
+        domainLookupStart: ms('domainLookupStart'),
+        domainLookupEnd: ms('domainLookupEnd'),
+        connectStart: ms('connectStart'),
+        connectEnd: ms('connectEnd'),
+        secureConnectionStart: ms('secureConnectionStart'),
+        requestStart: ms('requestStart'),
+        responseStart: ms('responseStart'),
+        responseEnd: ms('responseEnd'),
+        // `domLoading` was removed from Navigation Timing L2 (no L2 attribute
+        // answers it, so no key exists on `nav` for it either) — kept here
+        // only for L1 back-compat, honestly stubbed to `navigationStart`
+        // rather than a fabricated sub-phase timestamp.
+        domLoading: origin,
+        domInteractive: ms('domInteractive'),
+        domContentLoadedEventStart: ms('domContentLoadedEventStart'),
+        domContentLoadedEventEnd: ms('domContentLoadedEventEnd'),
+        domComplete: ms('domComplete'),
+        loadEventStart: ms('loadEventStart'),
+        loadEventEnd: ms('loadEventEnd'),
+    };
+    for (var i = 0; i < _perf_timing_field_names.length; i++) {
+        var k = _perf_timing_field_names[i];
+        Object.defineProperty(t, k, { value: fields[k], enumerable: true, configurable: true });
+    }
+    return t;
+}
+
+// Navigation Timing L1 §4.3 `interface PerformanceNavigation`.
+function PerformanceNavigation() { throw new TypeError('Illegal constructor'); }
+function _perf_nav_define_type_constants(target) {
+    Object.defineProperty(target, 'TYPE_NAVIGATE', { value: 0, enumerable: true });
+    Object.defineProperty(target, 'TYPE_RELOAD', { value: 1, enumerable: true });
+    Object.defineProperty(target, 'TYPE_BACK_FORWARD', { value: 2, enumerable: true });
+    Object.defineProperty(target, 'TYPE_RESERVED', { value: 255, enumerable: true });
+}
+_perf_nav_define_type_constants(PerformanceNavigation);
+_perf_nav_define_type_constants(PerformanceNavigation.prototype);
+PerformanceNavigation.prototype.toJSON = function() {
+    return { type: this.type, redirectCount: this.redirectCount };
+};
+
+// `nav_timing.rs`'s `type` is the L2 string (always `"navigate"` today — see
+// that module's doc comment on why reload/back-forward aren't distinguished
+// yet); map it to the legacy numeric constant rather than picking a value
+// independently.
+function _perf_nav_legacy_type(l2Type) {
+    if (l2Type === 'reload') return PerformanceNavigation.TYPE_RELOAD;
+    if (l2Type === 'back_forward') return PerformanceNavigation.TYPE_BACK_FORWARD;
+    return PerformanceNavigation.TYPE_NAVIGATE;
+}
+
+function _perf_make_navigation() {
+    var nav = _perf_last_navigation_entry;
+    var n = Object.create(PerformanceNavigation.prototype);
+    Object.defineProperty(n, 'type', {
+        value: nav ? _perf_nav_legacy_type(nav.type) : PerformanceNavigation.TYPE_NAVIGATE,
+        enumerable: true, configurable: true,
+    });
+    Object.defineProperty(n, 'redirectCount', {
+        value: nav ? (nav.redirectCount || 0) : 0,
+        enumerable: true, configurable: true,
+    });
+    return n;
+}
+
+// Legacy Navigation Timing L2 §5-6 partial attributes on `Performance`.
+Object.defineProperty(Performance.prototype, 'timing', {
+    get: function() { return _perf_make_timing(); },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(Performance.prototype, 'navigation', {
+    get: function() { return _perf_make_navigation(); },
+    enumerable: true, configurable: true,
+});
+
 // HR Time L3 §4 `[Default] object toJSON()`. The default toJSON operation
-// serialises the interface's *attributes*, not its operations, and Performance
-// declares exactly one attribute Lumen implements — timeOrigin. The legacy
-// Navigation Timing L2 partial adds `timing`/`navigation`, which browsers also
-// emit here; Lumen has neither interface (no per-milestone timing data exists
-// in the engine at all — the shell delivers a navigation entry as url +
-// total duration only), so they are absent rather than faked — BUG-767.
+// serialises the interface's *attributes*, and the legacy Navigation Timing
+// L2 partial above adds `timing`/`navigation` to that set (BUG-767) —
+// serialised through their own `toJSON()`, same as every nested WebIDL
+// dictionary/interface member would be.
 Performance.prototype.toJSON = function() {
-    return { timeOrigin: this.timeOrigin };
+    return { timeOrigin: this.timeOrigin, timing: this.timing.toJSON(), navigation: this.navigation.toJSON() };
 };
 
 // The one instance. Built with Object.create + an explicit EventTarget

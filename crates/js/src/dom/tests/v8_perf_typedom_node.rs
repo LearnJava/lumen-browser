@@ -439,6 +439,128 @@ fn nav_timing_buffered_replay() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+// ── BUG-767: legacy Navigation Timing L1 (performance.timing/.navigation) ──
+
+#[test]
+fn performance_timing_before_any_navigation_falls_back_to_zero() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        r#"
+                var t = performance.timing;
+                var origin = Math.round(performance.timeOrigin);
+                // navigationStart/domLoading are always known (they're just
+                // timeOrigin); every other milestone falls back to the spec's
+                // own "hasn't happened yet" value of 0.
+                t.navigationStart === origin && t.domLoading === origin &&
+                    t.fetchStart === 0 && t.loadEventEnd === 0
+                "#
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn performance_timing_derives_from_the_same_navigation_entry_as_l2() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        r#"
+                _lumen_deliver_perf_entry('navigation', 'https://lumen.test/t', 0.0, 120.0,
+                    JSON.stringify({
+                        domInteractive: 40, domContentLoadedEventStart: 40,
+                        domContentLoadedEventEnd: 45, domComplete: 100,
+                        loadEventStart: 100, loadEventEnd: 120,
+                        redirectCount: 0, type: 'navigate',
+                    }));
+                var t = performance.timing;
+                var origin = Math.round(performance.timeOrigin);
+                t.navigationStart === origin &&
+                    t.domInteractive === origin + 40 &&
+                    t.domContentLoadedEventStart === origin + 40 &&
+                    t.domContentLoadedEventEnd === origin + 45 &&
+                    t.domComplete === origin + 100 &&
+                    t.loadEventStart === origin + 100 &&
+                    t.loadEventEnd === origin + 120 &&
+                    t.loadEventEnd >= t.domComplete
+                "#
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn performance_timing_is_readonly_and_not_constructible() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        r#"
+                var threwOnNew = false;
+                try { new PerformanceTiming(); } catch (e) { threwOnNew = true; }
+                var before = performance.timing;
+                performance.timing = 'nope'; // no setter — silently ignored in sloppy mode
+                threwOnNew && performance.timing !== 'nope' &&
+                    performance.timing instanceof PerformanceTiming
+                "#
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn performance_timing_to_json_excludes_its_own_method() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        r#"
+                var keys = Object.keys(performance.timing.toJSON());
+                keys.indexOf('toJSON') === -1 && keys.indexOf('navigationStart') !== -1
+                "#
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn performance_navigation_type_and_redirect_count_come_from_the_navigation_entry() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        r#"
+                _lumen_deliver_perf_entry('navigation', 'https://lumen.test/r', 0.0, 10.0,
+                    JSON.stringify({type: 'reload', redirectCount: 1}));
+                performance.navigation.type === PerformanceNavigation.TYPE_RELOAD &&
+                    performance.navigation.redirectCount === 1 &&
+                    performance.navigation instanceof PerformanceNavigation
+                "#
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn performance_navigation_defaults_to_type_navigate_before_any_navigation() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        r#"
+                performance.navigation.type === PerformanceNavigation.TYPE_NAVIGATE &&
+                    performance.navigation.redirectCount === 0
+                "#
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn performance_to_json_includes_timing_and_navigation() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        r#"
+                _lumen_deliver_perf_entry('navigation', 'https://lumen.test/j', 0.0, 30.0,
+                    JSON.stringify({
+                        domInteractive: 10, domContentLoadedEventStart: 10,
+                        domContentLoadedEventEnd: 12, domComplete: 20,
+                        loadEventStart: 20, loadEventEnd: 30,
+                        redirectCount: 0, type: 'navigate',
+                    }));
+                var j = performance.toJSON();
+                var origin = Math.round(performance.timeOrigin);
+                typeof j.timing === 'object' && typeof j.navigation === 'object' &&
+                    j.timing.domComplete === origin + 20 && j.navigation.type === 0
+                "#
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 // ── CSS Typed OM L1 tests (A-3 feature) ────────────────────────────────────
 #[test]
 fn css_typed_om_css_style_value_exists() {

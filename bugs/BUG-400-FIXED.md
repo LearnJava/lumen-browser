@@ -85,7 +85,7 @@ WebIDL, класс [BUG-366](BUG-366-FIXED.md): страница не должн
 
 * **`performance.timing` / `performance.navigation`** (легаси-partial
   Navigation Timing L2) не добавлены — заведён
-  [BUG-767](BUG-767-OPEN.md). Названный заявкой
+  [BUG-767](BUG-767-FIXED.md). Названный заявкой
   `performance-tojson.html` проверяет не только `performance.toJSON`, но
   и `json.timing`/`json.navigation` с 21 миллисекундной вехой
   (`navigationStart`…`loadEventEnd`) и `type`/`redirectCount`, поэтому
@@ -137,7 +137,7 @@ WebIDL, класс [BUG-366](BUG-366-FIXED.md): страница не должн
 
 ## Связанные
 
-* [BUG-767](BUG-767-OPEN.md) — `performance.timing`/`performance.navigation`
+* [BUG-767](BUG-767-FIXED.md) — `performance.timing`/`performance.navigation`
   (Navigation Timing L1/L2 legacy) отсутствуют; заведён этим фиксом.
 * [BUG-401](BUG-401-FIXED.md) — `performance` отсутствует в Worker global
   scope целиком: тот же API, другой файл (`worker.rs`). Теперь у него

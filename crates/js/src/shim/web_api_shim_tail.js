@@ -309,6 +309,9 @@ function _lumen_deliver_perf_entry(entry_type, name, start_ms, duration_ms, deta
             }
         } catch(e) {}
     }
+    // `performance.timing`/`performance.navigation` (BUG-767) read this same
+    // entry rather than a second channel — see performance_shim.js.
+    if (entry.entryType === 'navigation') _perf_last_navigation_entry = entry;
     _perf_entries.push(entry);
     _perf_observer_notify([entry]);
 }

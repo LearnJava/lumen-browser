@@ -2516,7 +2516,10 @@ mod tests_v8 {
             // The operations live on the prototype, so the singleton has no own
             // enumerable properties and the WebIDL default toJSON stays honest.
             "Object.keys(performance).length === 0",
-            "JSON.stringify(performance) === JSON.stringify({timeOrigin: performance.timeOrigin})",
+            // toJSON() also carries `timing`/`navigation` (BUG-767) — the same
+            // prototype accessors the page gets, so a worker's toJSON output
+            // has to include them too, not just `timeOrigin`.
+            "JSON.stringify(performance) === JSON.stringify({timeOrigin: performance.timeOrigin, timing: performance.timing.toJSON(), navigation: performance.navigation.toJSON()})",
         ] {
             assert_eq!(
                 rt.eval(expr).unwrap(),

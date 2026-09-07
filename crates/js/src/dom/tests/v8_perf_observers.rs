@@ -109,14 +109,19 @@ fn performance_to_json_reports_time_origin() {
 
 /// The WebIDL default `toJSON()` serialises attributes only — the
 /// operations must not leak into it, which is exactly what moving them
-/// off the instance and onto the prototype buys.
+/// off the instance and onto the prototype buys. `timing`/`navigation`
+/// (BUG-767, the legacy Navigation Timing L1 partial) are attributes too,
+/// so they belong in this set alongside `timeOrigin`.
 #[test]
 fn performance_to_json_carries_attributes_only() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt
         .eval("Object.keys(performance.toJSON()).join(',')")
         .unwrap();
-    assert_eq!(r, lumen_core::JsValue::String("timeOrigin".to_string()));
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("timeOrigin,timing,navigation".to_string())
+    );
 }
 
 /// `readonly attribute DOMHighResTimeStamp timeOrigin` — plain
