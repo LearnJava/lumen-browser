@@ -457,3 +457,4 @@ mod bug341_differential;
 mod bfc_margin_collapse;
 mod layout_box_drop;
 mod block_flow_trampoline;
+mod flex_trampoline;

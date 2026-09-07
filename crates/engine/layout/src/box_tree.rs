@@ -66,7 +66,7 @@ pub use grid::resolve_auto_fill_fit_count;
 use grid::lay_out_grid;
 
 mod flex;
-use flex::{lay_out_flex, UsedSizeOverride};
+use flex::UsedSizeOverride;
 
 mod multicol_abspos;
 use multicol_abspos::{lay_out_abs_children, lay_out_multicol_children};
@@ -201,6 +201,7 @@ use shapes_floats::{inset_corner_inward, polygon_left_edge_at_y, polygon_right_e
 mod bfc;
 mod layout_dispatch;
 mod block_flow_trampoline;
+mod flex_trampoline;
 
 pub(crate) use bfc::lay_out_for_vertical;
 use bfc::{

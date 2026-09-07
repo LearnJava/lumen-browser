@@ -407,6 +407,11 @@ fn lay_out_inner_impl(
         DispatchOutcome::NeedsBlockFlowLoop(init) => {
             block_flow_trampoline::run(b, init, measurer, viewport, hp);
         }
+        // LAYOUT-2 срез 3: the flex dispatch arm's item-placement loop, same
+        // shape as the block-flow case above — see `flex_trampoline::run`.
+        DispatchOutcome::NeedsFlexLoop(init) => {
+            super::flex_trampoline::run(b, init, measurer, viewport, hp);
+        }
     }
 }
 
@@ -1107,53 +1112,18 @@ pub(super) fn dispatch_box(
                 } else {
                     None
                 };
-                let content_height = lay_out_flex(
+                // LAYOUT-2 срез 3: Steps 1–3/justify precompute run here
+                // (native — see `build_flex_init`'s doc comment for why), but
+                // the item-placement pass (and this container's own height +
+                // `flex_abs` children, formerly right here) is deferred to
+                // `flex_trampoline::run` so a chain of nested flex containers
+                // drives on an explicit heap stack instead of recursing.
+                let init = flex::build_flex_init(
                     &mut b.children, &s, content_x, content_y, content_width,
                     flex_explicit_cross, flex_explicit_main, measurer, viewport, children_pcb, hp,
+                    em, available_height, padding_top, padding_bottom, size_contained, is_positioned, pcb,
                 );
-                b.rect.height = if let Some(h_len) = &s.height
-                    && let Some(h) = resolve_block_size(h_len, em, available_height, viewport)
-                {
-                    match s.box_sizing {
-                        BoxSizing::ContentBox => {
-                            (h + padding_top + padding_bottom
-                                + s.border_top_width + s.border_bottom_width).max(0.0)
-                        }
-                        BoxSizing::BorderBox => h.max(
-                            padding_top + padding_bottom
-                                + s.border_top_width + s.border_bottom_width,
-                        ),
-                    }
-                } else if let Some((aw, ah)) = s.aspect_ratio
-                    && aw > 0.0 && ah > 0.0
-                {
-                    (b.rect.width * ah / aw).max(0.0)
-                } else {
-                    let ch = contained_content_height(size_contained, &s, em, viewport, content_height);
-                    ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
-                };
-                // CSS Flexbox L1 §4.1: absolutely-positioned children were excluded
-                // from flex layout above. Position them now against this container's
-                // content box (its padding edge when positioned), using the content
-                // origin as their static position.
-                let flex_abs: Vec<(usize, f32, f32)> = b.children.iter().enumerate()
-                    .filter(|(_, c)| matches!(c.style.position, Position::Absolute | Position::Fixed))
-                    .map(|(i, _)| (i, content_x, content_y))
-                    .collect();
-                if !flex_abs.is_empty() {
-                    let my_pcb = if is_positioned {
-                        Rect::new(
-                            b.rect.x + s.border_left_width,
-                            b.rect.y + s.border_top_width,
-                            (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
-                            (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
-                        )
-                    } else {
-                        pcb
-                    };
-                    lay_out_abs_children(b, &flex_abs, measurer, viewport, my_pcb, hp);
-                }
-                return DispatchOutcome::Done;
+                return DispatchOutcome::NeedsFlexLoop(init);
             }
             // Grid containers dispatch to lay_out_grid before block-flow.
             if matches!(s.display, Display::Grid | Display::InlineGrid) {

@@ -15,6 +15,13 @@ pub(super) enum DispatchOutcome {
     // bytes — large enough that leaving it inline would size every `Done` the
     // same, on the hot path every dispatch call returns through.
     NeedsBlockFlowLoop(Box<BlockFlowInit>),
+    // LAYOUT-2 срез 3: the flex dispatch arm's item-placement loop (final
+    // placement pass, CSS Flexbox L1 §9.5/§9.6) — reads each item's `.rect`
+    // back for cross-axis alignment (column) or leaves it for the separate
+    // cross-align sub-pass (row), so it is non-tail-recursive the same way the
+    // block-flow branch is. `super::flex_trampoline::run` drives it (and every
+    // further flex-container descendant it meets) on an explicit heap stack.
+    NeedsFlexLoop(Box<super::flex_trampoline::FlexInit>),
 }
 
 /// Loop-entry state for the plain block-flow branch, captured by `dispatch_box`
@@ -77,7 +84,7 @@ struct Frame {
 /// the real value is owned by a `Frame` elsewhere. The placeholder is never
 /// observed by any real layout logic — it is always overwritten by the true
 /// (fully laid out) value before `run` looks at that slot again.
-fn take_box(slot: &mut LayoutBox) -> LayoutBox {
+pub(super) fn take_box(slot: &mut LayoutBox) -> LayoutBox {
     let placeholder = LayoutBox {
         node: slot.node,
         rect: Rect::ZERO,
@@ -415,6 +422,19 @@ fn step_child(
             StepOutcome::Advance
         }
         DispatchOutcome::NeedsBlockFlowLoop(child_init) => StepOutcome::Descend(child_init),
+        // LAYOUT-2 срез 3: a block-flow normal-flow child that is itself a
+        // flex container. `StepOutcome::Descend` is typed for this loop's own
+        // `BlockFlowInit`, so composing a flex chain onto the SAME stack is
+        // out of scope here (a flex/block/flex chain still recurses one
+        // native frame per flex↔block transition) — `flex_trampoline::run`
+        // drives its own chain synchronously instead, exactly mirroring how
+        // `flex_trampoline::step_item` calls back into `run` above for a
+        // `NeedsBlockFlowLoop` child.
+        DispatchOutcome::NeedsFlexLoop(child_init) => {
+            super::flex_trampoline::run(child, child_init, measurer, viewport, hp);
+            post_child_bookkeeping(frame, i, viewport);
+            StepOutcome::Advance
+        }
     }
 }
 

@@ -91,13 +91,18 @@ fn column_item_avail_cross(
     used_cross + m_l + m_r
 }
 
-/// CSS Flexbox L1 §9 — multi-line flex layout.
+/// CSS Flexbox L1 §9 — multi-line flex layout, Steps 1–3/justify precompute.
 ///
-/// Алгоритм:
-/// 1. Для каждого flex-item вычисляем hypothetical main size из flex-basis.
-/// 2. Распределяем free space через flex-grow / flex-shrink.
-/// 3. Раскладываем items с учётом justify-content и align-items.
-/// 4. При flex-wrap: apply align-content across flex lines.
+/// Алгоритм (LAYOUT-2 срез 3 — item-placement пасс вынесен в
+/// [`super::flex_trampoline`], см. его doc comment):
+/// 1. Для каждого flex-item вычисляем hypothetical main size из flex-basis
+///    (Step 1 probe — рекурсия на нативном стеке, вне области среза, как
+///    float placement в `block_flow_trampoline`).
+/// 2. Разбиваем на flex lines (Step 2).
+/// 3. Распределяем free space через flex-grow / flex-shrink и вычисляем
+///    justify-content per line (Step 3–5 precompute) — ни то, ни другое не
+///    зависит от placement другой линии, поэтому считается для всех линий
+///    заранее, в естественном порядке, до входа в трамплин.
 ///
 /// `explicit_cross` — явная высота контейнера (content box) для row flex;
 /// используется в align-content для вычисления свободного пространства по cross axis.
@@ -106,11 +111,14 @@ fn column_item_avail_cross(
 /// (явная `height` или растяжение родителем). `None` = main размер неопределён,
 /// тогда контейнер сжимается по содержимому и flex-grow не действует.
 ///
-/// Возвращает `content_height` (вертикальный размер контентной зоны контейнера).
+/// Остальные параметры (`em`..`is_positioned`) — то, что `layout_dispatch.rs`
+/// раньше делало со значением, которое `lay_out_flex` возвращал (высота
+/// контейнера, `flex_abs`-дети) — теперь это Phase D трамплина
+/// (`flex_trampoline::finish_frame`), поэтому едет через `FlexInit`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn lay_out_flex(
+pub(crate) fn build_flex_init(
     children: &mut [LayoutBox],
-    s: &ComputedStyle,
+    s: &Arc<ComputedStyle>,
     content_x: f32,
     content_y: f32,
     content_width: f32,
@@ -118,9 +126,17 @@ pub(crate) fn lay_out_flex(
     explicit_main: Option<f32>,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
-    pcb: Rect,
+    children_pcb: Rect,
     hp: &dyn HyphenationProvider,
-) -> f32 {
+    em: f32,
+    available_height: Option<f32>,
+    padding_top: f32,
+    padding_bottom: f32,
+    size_contained: bool,
+    is_positioned: bool,
+    own_pcb: Rect,
+) -> Box<super::flex_trampoline::FlexInit> {
+    use super::flex_trampoline::FlexInit;
     let is_column = matches!(s.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse);
     let is_reverse = matches!(
         s.flex_direction,
@@ -144,8 +160,42 @@ pub(crate) fn lay_out_flex(
     // CSS Flexbox L1 §4 — stable sort by `order` (same-order items keep source order).
     item_idxs.sort_by_key(|&i| children[i].style.order);
 
+    // No items: skip straight to a zero-line `FlexInit` — `flex_trampoline::run`
+    // reaches `finish_frame` immediately with `content_height == 0.0`, matching
+    // the removed `return 0.0` early exit (see that function's doc comment for
+    // why constructing `lines = vec![[]]` here instead would NOT match: a
+    // single empty line is a real line to Phase A/B, not a no-op).
     if item_idxs.is_empty() {
-        return 0.0;
+        return Box::new(FlexInit {
+            item_idxs,
+            line_inits: Vec::new(),
+            ordered_line_idxs: Vec::new(),
+            is_column,
+            is_reverse,
+            is_wrap,
+            content_x,
+            content_y,
+            content_width,
+            explicit_cross,
+            item_gap: 0.0,
+            cross_gap: 0.0,
+            s: Arc::clone(s),
+            probe_cross: Vec::new(),
+            column_probe: Vec::new(),
+            probed_main: Vec::new(),
+            probe_ran: Vec::new(),
+            main_cursor: 0.0,
+            cross_cursor: 0.0,
+            line_cross_sizes: Vec::new(),
+            em,
+            available_height,
+            padding_top,
+            padding_bottom,
+            size_contained,
+            is_positioned,
+            children_pcb,
+            own_pcb,
+        });
     }
 
     // Container main size. For row it is always the definite content width. For
@@ -156,8 +206,10 @@ pub(crate) fn lay_out_flex(
     let main_definite = if is_column { explicit_main } else { Some(content_width) };
     let container_main = main_definite.unwrap_or(0.0);
 
-    // CSS Box Alignment §8: gap is fixed space between items, subtracted before flex-grow/shrink.
-    let em = s.font_size;
+    // CSS Box Alignment §8: gap is fixed space between items, subtracted before
+    // flex-grow/shrink. `em` is the function parameter (container font-size,
+    // same value `layout_dispatch.rs`'s own `let em = s.font_size;` computed
+    // from the same `s`) — not re-derived here to avoid a same-value shadow.
     // item_gap: gap between items along the main axis.
     // cross_gap: gap between flex lines along the cross axis (wrap only).
     let item_gap = if is_column {
@@ -306,7 +358,7 @@ pub(crate) fn lay_out_flex(
                 // `INDEFINITE_HEIGHT_CONSULTED` / `CV_AUTO_TOUCHED`.
                 let outer_cv = CV_AUTO_TOUCHED.with(|c| c.replace(false));
                 let outer_ih = INDEFINITE_HEIGHT_CONSULTED.with(|c| c.replace(false));
-                lay_out(&mut children[i], content_x, content_y, probe_width, None, measurer, viewport, pcb, hp, false);
+                lay_out(&mut children[i], content_x, content_y, probe_width, None, measurer, viewport, children_pcb, hp, false);
                 let cv_here = CV_AUTO_TOUCHED.with(|c| c.get());
                 let ih_here = INDEFINITE_HEIGHT_CONSULTED.with(|c| c.get());
                 CV_AUTO_TOUCHED.with(|c| c.set(outer_cv || cv_here));
@@ -331,7 +383,7 @@ pub(crate) fn lay_out_flex(
                     });
                 }
             } else {
-                lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb, hp, false);
+                lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, children_pcb, hp, false);
             }
         }
     }
@@ -433,59 +485,172 @@ pub(crate) fn lay_out_flex(
         vec![(0..item_idxs.len()).collect()]
     };
 
-    // Step 3–5: process each line (grow/shrink, justify, position, align).
-    // cross_cursor tracks the current cross-axis offset across lines.
-    let mut cross_cursor = 0.0_f32;
-
+    // Step 3–5 precompute: grow/shrink and justify-content, per line — see
+    // `build_line_inits`'s doc comment for why this is safe to do for every
+    // line up front, independent of visiting order.
     let n_lines = lines.len();
     let ordered_line_idxs: Vec<usize> = if is_wrap_reverse {
         (0..n_lines).rev().collect()
     } else {
         (0..n_lines).collect()
     };
-    // Track line cross-sizes for align-content.
-    let mut line_cross_sizes: Vec<f32> = Vec::with_capacity(n_lines);
+    let line_inits = build_line_inits(
+        &lines, &item_idxs, children, &all_hyp, s, container_main, main_definite,
+        item_gap, content_width, measurer, viewport, is_column, is_reverse,
+    );
 
+    Box::new(FlexInit {
+        item_idxs,
+        line_inits,
+        ordered_line_idxs,
+        is_column,
+        is_reverse,
+        is_wrap,
+        content_x,
+        content_y,
+        content_width,
+        explicit_cross,
+        item_gap,
+        cross_gap,
+        s: Arc::clone(s),
+        probe_cross,
+        column_probe,
+        probed_main,
+        probe_ran,
+        main_cursor: 0.0,
+        cross_cursor: 0.0,
+        line_cross_sizes: Vec::with_capacity(n_lines),
+        em,
+        available_height,
+        padding_top,
+        padding_bottom,
+        size_contained,
+        is_positioned,
+        children_pcb,
+        own_pcb,
+    })
+}
 
-    for li in &ordered_line_idxs {
-        let line_keys = &lines[*li]; // keys into item_idxs
-        let n = line_keys.len();
+/// CSS Flexbox L1 §9.7 (grow/shrink) + §9.5 (justify-content within a line) —
+/// precomputed for every line in `lines`, in NATURAL order, before
+/// `flex_trampoline::run` places a single item. Neither step reads another
+/// line's placement (only this line's own item styles and `all_hyp`), so
+/// there is no ordering hazard in computing all of them ahead of the
+/// (wrap-reverse-sensitive) visiting order `run` uses for the actual
+/// placement pass. Copied verbatim from the removed inline per-line loop
+/// head, split out of it at the point the removed loop went on to place
+/// items (now `flex_trampoline::step_item`).
+#[allow(clippy::too_many_arguments)]
+fn build_line_inits(
+    lines: &[Vec<usize>],
+    item_idxs: &[usize],
+    children: &[LayoutBox],
+    all_hyp: &[f32],
+    s: &ComputedStyle,
+    container_main: f32,
+    main_definite: Option<f32>,
+    item_gap: f32,
+    content_width: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    is_column: bool,
+    is_reverse: bool,
+) -> Vec<super::flex_trampoline::FlexLineInit> {
+    use super::flex_trampoline::FlexLineInit;
+    let cb = content_width;
 
-        // Per-line hyp mains (mutable for grow/shrink).
-        let mut hyp_mains: Vec<f32> = line_keys.iter().map(|&k| all_hyp[k]).collect();
+    lines
+        .iter()
+        .map(|line_keys| {
+            let n = line_keys.len();
+            let mut hyp_mains: Vec<f32> = line_keys.iter().map(|&k| all_hyp[k]).collect();
 
-        // Free space after gaps.
-        let line_gap_total = if n > 1 { item_gap * (n - 1) as f32 } else { 0.0 };
-        let total_hyp: f32 = hyp_mains.iter().sum();
-        let free_space = if main_definite.is_some() {
-            container_main - total_hyp - line_gap_total
-        } else {
-            0.0
-        };
+            // Free space after gaps.
+            let line_gap_total = if n > 1 { item_gap * (n - 1) as f32 } else { 0.0 };
+            let total_hyp: f32 = hyp_mains.iter().sum();
+            let free_space = if main_definite.is_some() {
+                container_main - total_hyp - line_gap_total
+            } else {
+                0.0
+            };
 
-        if free_space > 0.0 {
-            let total_grow: f32 = line_keys.iter().map(|&k| children[item_idxs[k]].style.flex_grow).sum();
-            if total_grow > 0.0 {
-                // CSS Flexbox §9.7 шаг 4 «fix min/max violations» — тот же цикл
-                // заморозки, что при сжатии ниже, только потолок здесь
-                // `max-width`/`max-height` элемента. Без него растущий элемент
-                // проезжал свой максимум: раскладка выдавала ему всю ширину
-                // строки, свободного места не оставалось (и `justify-content`,
-                // и auto-поля получали ноль), а видимая ширина всё равно
-                // упиралась в `max-width` при собственной раскладке элемента —
-                // отсюда «карточка во всю строку, но нарисована слева».
-                let grows: Vec<f32> =
-                    line_keys.iter().map(|&k| children[item_idxs[k]].style.flex_grow).collect();
-                let maxes: Vec<f32> = line_keys
+            if free_space > 0.0 {
+                let total_grow: f32 =
+                    line_keys.iter().map(|&k| children[item_idxs[k]].style.flex_grow).sum();
+                if total_grow > 0.0 {
+                    // CSS Flexbox §9.7 шаг 4 «fix min/max violations» — тот же цикл
+                    // заморозки, что при сжатии ниже, только потолок здесь
+                    // `max-width`/`max-height` элемента.
+                    let grows: Vec<f32> =
+                        line_keys.iter().map(|&k| children[item_idxs[k]].style.flex_grow).collect();
+                    let maxes: Vec<f32> = line_keys
+                        .iter()
+                        .map(|&k| {
+                            flex_item_max_main_outer(&children[item_idxs[k]], cb, viewport, is_column)
+                        })
+                        .collect();
+                    let base: Vec<f32> = hyp_mains.clone();
+                    let mut frozen: Vec<bool> = grows.iter().map(|&g| g <= 0.0).collect();
+                    // Каждый проход замораживает хотя бы один элемент, поэтому `n`
+                    // проходов заведомо хватает.
+                    for _ in 0..n {
+                        let unfrozen: Vec<usize> = (0..n).filter(|&j| !frozen[j]).collect();
+                        if unfrozen.is_empty() {
+                            break;
+                        }
+                        let frozen_sum: f32 =
+                            (0..n).filter(|&j| frozen[j]).map(|j| hyp_mains[j]).sum();
+                        let unfrozen_base: f32 = unfrozen.iter().map(|&j| base[j]).sum();
+                        let remaining = container_main - line_gap_total - frozen_sum - unfrozen_base;
+                        let total_weight: f32 = unfrozen.iter().map(|&j| grows[j]).sum();
+                        if remaining <= 0.0 || total_weight <= 0.0 {
+                            for &j in &unfrozen {
+                                hyp_mains[j] = base[j].min(maxes[j]);
+                            }
+                            break;
+                        }
+                        let mut violated = false;
+                        for &j in &unfrozen {
+                            let target = base[j] + remaining * (grows[j] / total_weight);
+                            let clamped = target.min(maxes[j]);
+                            hyp_mains[j] = clamped;
+                            if clamped < target - 0.01 {
+                                frozen[j] = true;
+                                violated = true;
+                            }
+                        }
+                        if !violated {
+                            break;
+                        }
+                    }
+                }
+            } else if free_space < 0.0 {
+                // CSS Flexbox L1 §9.7 step 4 — «fix min/max violations». See the
+                // removed code's comment (BUG-433) for why shrinking needs the
+                // same freeze-and-redistribute loop instead of a single pass.
+                let mins: Vec<f32> = line_keys
                     .iter()
                     .map(|&k| {
-                        flex_item_max_main_outer(&children[item_idxs[k]], cb, viewport, is_column)
+                        let item = &children[item_idxs[k]];
+                        if is_column {
+                            return 0.0;
+                        }
+                        let is = &item.style;
+                        let iem = is.font_size;
+                        let m_l = is.margin_left.resolve_or_zero(iem, cb, viewport);
+                        let m_r = is.margin_right.resolve_or_zero(iem, cb, viewport);
+                        flex_item_min_main_width(item, cb, measurer, viewport) + m_l + m_r
                     })
                     .collect();
+                let shrink: Vec<f32> =
+                    line_keys.iter().map(|&k| children[item_idxs[k]].style.flex_shrink).collect();
                 let base: Vec<f32> = hyp_mains.clone();
-                let mut frozen: Vec<bool> = grows.iter().map(|&g| g <= 0.0).collect();
-                // Каждый проход замораживает хотя бы один элемент, поэтому `n`
-                // проходов заведомо хватает.
+                let mut frozen: Vec<bool> = shrink.iter().map(|&f| f <= 0.0).collect();
+                for j in 0..n {
+                    if frozen[j] {
+                        hyp_mains[j] = base[j].max(mins[j]);
+                    }
+                }
                 for _ in 0..n {
                     let unfrozen: Vec<usize> = (0..n).filter(|&j| !frozen[j]).collect();
                     if unfrozen.is_empty() {
@@ -494,19 +659,19 @@ pub(crate) fn lay_out_flex(
                     let frozen_sum: f32 = (0..n).filter(|&j| frozen[j]).map(|j| hyp_mains[j]).sum();
                     let unfrozen_base: f32 = unfrozen.iter().map(|&j| base[j]).sum();
                     let remaining = container_main - line_gap_total - frozen_sum - unfrozen_base;
-                    let total_weight: f32 = unfrozen.iter().map(|&j| grows[j]).sum();
-                    if remaining <= 0.0 || total_weight <= 0.0 {
+                    let total_weight: f32 = unfrozen.iter().map(|&j| shrink[j] * base[j]).sum();
+                    if remaining >= 0.0 || total_weight <= 0.0 {
                         for &j in &unfrozen {
-                            hyp_mains[j] = base[j].min(maxes[j]);
+                            hyp_mains[j] = base[j].max(mins[j]);
                         }
                         break;
                     }
                     let mut violated = false;
                     for &j in &unfrozen {
-                        let target = base[j] + remaining * (grows[j] / total_weight);
-                        let clamped = target.min(maxes[j]);
+                        let target = base[j] + remaining * (shrink[j] * base[j] / total_weight);
+                        let clamped = target.max(mins[j]).max(0.0);
                         hyp_mains[j] = clamped;
-                        if clamped < target - 0.01 {
+                        if clamped > target + 0.01 {
                             frozen[j] = true;
                             violated = true;
                         }
@@ -516,589 +681,75 @@ pub(crate) fn lay_out_flex(
                     }
                 }
             }
-        } else if free_space < 0.0 {
-            // CSS Flexbox L1 §9.7 step 4 — «fix min/max violations». Shrinking is not
-            // a single proportional pass: every item has a main-axis minimum
-            // (§4.5 automatic minimum size for the initial `min-width: auto`), and an
-            // item that would be pushed below it is frozen at that minimum while the
-            // *remaining* deficit is redistributed over the still-flexible items. The
-            // loop is what makes a row of fixed-width items overflow its container
-            // instead of collapsing to an equal share of it (BUG-433).
-            //
-            // Only the row axis gets the floor: the column axis folds its content-size
-            // floor into the base size above (see the `is_column` arm of `all_hyp`).
-            let mins: Vec<f32> = line_keys
-                .iter()
-                .map(|&k| {
-                    let item = &children[item_idxs[k]];
+
+            // Justify-content within the line.
+            let resolved_main: f32 = hyp_mains.iter().sum();
+            let remaining = if main_definite.is_some() {
+                (container_main - resolved_main - line_gap_total).max(0.0)
+            } else {
+                0.0
+            };
+            // CSS Flexbox §8.1: `margin: auto` на ГЛАВНОЙ оси съедает всё
+            // положительное свободное место ДО того, как спрашивают
+            // `justify-content` — см. комментарий в удалённом коде (tbank.ru/login/).
+            let auto_main: Vec<(bool, bool)> = (0..n)
+                .map(|j| {
+                    let is = &children[item_idxs[line_keys[j]]].style;
                     if is_column {
-                        return 0.0;
+                        (
+                            matches!(is.margin_top, LengthOrAuto::Auto),
+                            matches!(is.margin_bottom, LengthOrAuto::Auto),
+                        )
+                    } else {
+                        (
+                            matches!(is.margin_left, LengthOrAuto::Auto),
+                            matches!(is.margin_right, LengthOrAuto::Auto),
+                        )
                     }
-                    let is = &item.style;
-                    let iem = is.font_size;
-                    let m_l = is.margin_left.resolve_or_zero(iem, cb, viewport);
-                    let m_r = is.margin_right.resolve_or_zero(iem, cb, viewport);
-                    // `mins` is compared against the *outer* (margin-box) sizes in
-                    // `hyp_mains`, so the margins ride along with the floor.
-                    flex_item_min_main_width(item, cb, measurer, viewport) + m_l + m_r
                 })
                 .collect();
-            let shrink: Vec<f32> = line_keys
-                .iter()
-                .map(|&k| children[item_idxs[k]].style.flex_shrink)
-                .collect();
-            let base: Vec<f32> = hyp_mains.clone();
-            // An item with `flex-shrink: 0` never shrinks — it starts out frozen at
-            // its base size (still clamped by its own minimum, per step 4).
-            let mut frozen: Vec<bool> = shrink.iter().map(|&f| f <= 0.0).collect();
-            for j in 0..n {
-                if frozen[j] {
-                    hyp_mains[j] = base[j].max(mins[j]);
-                }
-            }
-            // Each iteration freezes at least one item, so `n` passes always suffice.
-            for _ in 0..n {
-                let unfrozen: Vec<usize> = (0..n).filter(|&j| !frozen[j]).collect();
-                if unfrozen.is_empty() {
-                    break;
-                }
-                let frozen_sum: f32 = (0..n).filter(|&j| frozen[j]).map(|j| hyp_mains[j]).sum();
-                let unfrozen_base: f32 = unfrozen.iter().map(|&j| base[j]).sum();
-                let remaining = container_main - line_gap_total - frozen_sum - unfrozen_base;
-                let total_weight: f32 = unfrozen.iter().map(|&j| shrink[j] * base[j]).sum();
-                if remaining >= 0.0 || total_weight <= 0.0 {
-                    // Deficit already absorbed by the frozen items (or nothing left that
-                    // can absorb it) — the rest keep their base size.
-                    for &j in &unfrozen {
-                        hyp_mains[j] = base[j].max(mins[j]);
-                    }
-                    break;
-                }
-                let mut violated = false;
-                for &j in &unfrozen {
-                    let target = base[j] + remaining * (shrink[j] * base[j] / total_weight);
-                    let clamped = target.max(mins[j]).max(0.0);
-                    hyp_mains[j] = clamped;
-                    if clamped > target + 0.01 {
-                        frozen[j] = true;
-                        violated = true;
-                    }
-                }
-                if !violated {
-                    break;
-                }
-            }
-        }
-
-        // Justify-content within the line.
-        let resolved_main: f32 = hyp_mains.iter().sum();
-        let remaining = if main_definite.is_some() {
-            (container_main - resolved_main - line_gap_total).max(0.0)
-        } else {
-            0.0
-        };
-        // CSS Flexbox §8.1: `margin: auto` на ГЛАВНОЙ оси съедает всё
-        // положительное свободное место ДО того, как спрашивают
-        // `justify-content` — поэтому у элемента с `margin-left/right: auto`
-        // в строчном контейнере ничего не остаётся на распределение, и он
-        // встаёт по центру независимо от `justify-content`. Пока auto здесь
-        // резолвился в ноль, такой элемент прижимался к началу строки: живой
-        // пример — карточка формы входа `tbank.ru/login/` (`<main>` с
-        // `margin: auto` внутри `_PageWrapper` с `space-between`), которая
-        // стояла слева вместо центра.
-        let auto_main: Vec<(bool, bool)> = (0..n)
-            .map(|j| {
-                let is = &children[item_idxs[line_keys[j]]].style;
-                if is_column {
-                    (
-                        matches!(is.margin_top, LengthOrAuto::Auto),
-                        matches!(is.margin_bottom, LengthOrAuto::Auto),
-                    )
-                } else {
-                    (
-                        matches!(is.margin_left, LengthOrAuto::Auto),
-                        matches!(is.margin_right, LengthOrAuto::Auto),
-                    )
-                }
-            })
-            .collect();
-        let auto_main_count =
-            auto_main.iter().map(|(a, b)| usize::from(*a) + usize::from(*b)).sum::<usize>();
-        let auto_main_share = if auto_main_count > 0 && remaining > 0.0 {
-            remaining / auto_main_count as f32
-        } else {
-            0.0
-        };
-
-        let (jc_start, jc_gap) = if auto_main_share > 0.0 {
-            // Свободного места уже нет — распределять `justify-content` нечего.
-            (0.0, 0.0)
-        } else {
-            match s.justify_content {
-                AlignValue::End => (remaining, 0.0),
-                AlignValue::Center => (remaining / 2.0, 0.0),
-                AlignValue::SpaceBetween => {
-                    if n <= 1 { (0.0, 0.0) } else { (0.0, remaining / (n - 1) as f32) }
-                }
-                AlignValue::SpaceAround => {
-                    let per = remaining / n as f32;
-                    (per / 2.0, per)
-                }
-                AlignValue::SpaceEvenly => {
-                    let per = remaining / (n + 1) as f32;
-                    (per, per)
-                }
-                _ => (0.0, 0.0),
-            }
-        };
-
-        // Final layout: position items along main axis.
-        let ordered_keys: Vec<usize> = if is_reverse { (0..n).rev().collect() } else { (0..n).collect() };
-        let mut main_cursor = jc_start;
-
-        for &j in &ordered_keys {
-            let k = line_keys[j];
-            let i = item_idxs[k];
-            let outer_main = hyp_mains[j];
-            let item_s = children[i].style.clone();
-            let iem = item_s.font_size;
-            let m_l = item_s.margin_left.resolve_or_zero(iem, cb, viewport);
-            let m_r = item_s.margin_right.resolve_or_zero(iem, cb, viewport);
-            let m_t = item_s.margin_top.resolve_or_zero(iem, cb, viewport);
-            let m_b = item_s.margin_bottom.resolve_or_zero(iem, cb, viewport);
-            // Доля auto-полей главной оси: перед элементом — та, что лежит со
-            // стороны начала обхода (у reverse-направления это поле конца).
-            let (auto_before, auto_after) = if is_reverse {
-                (auto_main[j].1, auto_main[j].0)
+            let auto_main_count =
+                auto_main.iter().map(|(a, b)| usize::from(*a) + usize::from(*b)).sum::<usize>();
+            let auto_main_share = if auto_main_count > 0 && remaining > 0.0 {
+                remaining / auto_main_count as f32
             } else {
-                (auto_main[j].0, auto_main[j].1)
-            };
-            if auto_before {
-                main_cursor += auto_main_share;
-            }
-
-            if is_column {
-                let inner_main = (outer_main - m_t - m_b).max(0.0);
-                // The cross-axis space for the item's alignment arithmetic
-                // below. The width the item is *laid out* at is
-                // `probe_cross[k]`, resolved before Step 1 by
-                // `column_item_avail_cross` and already used by the probe —
-                // recomputing it here would risk the two disagreeing in the
-                // last bit and silently disabling the replay (BUG-341 S41).
-                let avail_cross = (content_width - m_l - m_r).max(0.0);
-                let auto_cross_l = matches!(item_s.margin_left, LengthOrAuto::Auto);
-                let auto_cross_r = matches!(item_s.margin_right, LengthOrAuto::Auto);
-                let cross_align = if matches!(item_s.align_self, AlignValue::Auto) {
-                    s.align_items
-                } else {
-                    item_s.align_self
-                };
-                let item_avail_cross = probe_cross[k];
-                // `inner_main` is the item's resolved *border-box* main size (it is
-                // derived from the preliminary border-box height and the flex
-                // grow/shrink result). Force border-box before re-layout so the value
-                // is used verbatim instead of having border+padding added on top of it
-                // for a content-box item (which double-counts the border). Mirrors the
-                // cross-axis stretch path below.
-                // BUG-802: the Step-1 probe above already laid this exact subtree
-                // out — at `content_y` instead of `content_y + main_cursor`, and
-                // with an indefinite height instead of the resolved `inner_main`.
-                // When that is *no* difference (the item neither grew nor shrank)
-                // and the probe was clean of the two position/height-sensitive
-                // markers, the final pass would recompute the identical subtree.
-                // Replay it and move it into place instead: this is what turns
-                // the ×2 per nesting level into ×1. Exact bit equality, not an
-                // epsilon — an approximate match would replay geometry that
-                // differs from what the second layout would have produced.
-                //
-                // BUG-341 S41: the third condition this used to carry — "and the
-                // item's cross size is the container's full content width" — is
-                // gone because it can no longer fail. The probe now runs at
-                // `probe_cross[k]`, the same width this pass lays the item out
-                // at, so an aligned or margined item is no longer a different
-                // call from its own probe. That condition was refusing 17 of the
-                // 21 residual double layouts on the chrome document, none of
-                // them for a real difference.
-                let replayable = column_probe[k].is_some_and(|probed| {
-                    probed.to_bits() == inner_main.to_bits()
-                });
-                // BUG-341 S41 — the census this slice exists to take: of the
-                // items that really ran a Step-1 probe, how many go on to a
-                // second full layout here, and which of the three refusal
-                // reasons sent them there. `double_cross` is now structurally
-                // unreachable — it compares the width the probe was actually
-                // handed against the one used here — and stays in the tally as
-                // the regression check for exactly that.
-                if let Some(probed_at) = probe_ran.get(k).copied().flatten() {
-                    let cross_differs = probed_at.to_bits() != item_avail_cross.to_bits();
-                    let probed = probed_main[k];
-                    note_flex_column(|c| {
-                        if replayable {
-                            c.replayed += 1;
-                            return;
-                        }
-                        c.double += 1;
-                        if column_probe[k].is_none() {
-                            c.double_dirty += 1;
-                        } else if cross_differs {
-                            c.double_cross += 1;
-                        } else {
-                            c.double_size += 1;
-                            if probed.is_some_and(|p| inner_main > p) {
-                                c.double_size_grew += 1;
-                            }
-                        }
-                    });
-                }
-                if replayable {
-                    // The shift is the difference between the two calls' *box*
-                    // origins, not the bare `main_cursor`: `lay_out_inner` lands
-                    // the box at `start_y + margin_top` (BUG-294), so subtracting
-                    // the probe's own origin from the final one reproduces its
-                    // arithmetic exactly instead of re-associating the sum. The
-                    // difference matters: adding `main_cursor` to an already
-                    // rounded `content_y + m_t` moved a box at y≈17000 by 0.01 px
-                    // against what the second layout would have produced
-                    // (`samples/heavy.html`, the one page of the whole
-                    // graphic-test corpus where an A/B of the dumps caught it).
-                    let dy = ((content_y + main_cursor) + m_t) - (content_y + m_t);
-                    shift_tree(&mut children[i], 0.0, dy);
-                } else {
-                    // BUG-294: pass the item's *margin-box* start (no margin pre-added).
-                    // `lay_out_inner` unconditionally adds the box's own `margin_left`/
-                    // `margin_top` to the `start_x`/`start_y` it receives, so pre-adding
-                    // `m_l`/`m_t` here double-counts the margin. Every other call site in
-                    // this file passes the bare margin-box origin and lets `lay_out_inner`
-                    // apply the margin once.
-                    lay_out_with_used_size(
-                        &mut children[i],
-                        content_x,
-                        content_y + main_cursor,
-                        item_avail_cross,
-                        Some(inner_main),
-                        measurer,
-                        viewport,
-                        pcb,
-                        hp,
-                        false,
-                        UsedSizeOverride {
-                            height: Some(inner_main),
-                            box_sizing: Some(BoxSizing::BorderBox),
-                            ..Default::default()
-                        },
-                    );
-                }
-                // Свободное место поперечной оси достаётся auto-полям, а если
-                // их нет — выравниванию (CSS Flexbox §8.1: auto старше
-                // `align-self`).
-                let free_cross = (avail_cross - children[i].rect.width).max(0.0);
-                let cross_shift = if auto_cross_l && auto_cross_r {
-                    free_cross / 2.0
-                } else if auto_cross_l {
-                    free_cross
-                } else if auto_cross_r {
-                    0.0
-                } else {
-                    match cross_align {
-                        AlignValue::Center => free_cross / 2.0,
-                        AlignValue::End => free_cross,
-                        _ => 0.0,
-                    }
-                };
-                if cross_shift != 0.0 {
-                    shift_tree(&mut children[i], cross_shift, 0.0);
-                }
-                main_cursor += outer_main + item_gap + jc_gap;
-                if auto_after {
-                    main_cursor += auto_main_share;
-                }
-            } else {
-                let inner_main = (outer_main - m_l - m_r).max(0.0);
-                // BUG-427: `inner_main` is a *border-box* main size — the flex base
-                // size comes from `max_content_outer_width`, which already includes
-                // the item's own padding+border. Handing it to a content-box item as
-                // its used `width` made the re-layout add that padding+border a
-                // second time: the item's rect came out `padding_x + border_x` too
-                // wide while the main-axis cursor kept advancing by the correct
-                // border-box size, so every pair of adjacent padded row items
-                // overlapped by exactly that amount (dzen.ru topic tabs, 24 px of
-                // padding → chips drawn on top of each other; items with an explicit
-                // `width` escaped it because their base size came from style).
-                // Converted here rather than by forcing `box_sizing: BorderBox` the
-                // way the column arm does — that switch also reinterprets the item's
-                // own `height`, which is a *cross*-axis size in this arm and must
-                // keep its declared box-sizing (TEST-30's `.box`: 120px + 3px border
-                // is 126 tall, not 120).
-                let used_main = {
-                    let is = &children[i].style;
-                    match is.box_sizing {
-                        BoxSizing::BorderBox => inner_main,
-                        BoxSizing::ContentBox => {
-                            let iem = is.font_size;
-                            let pl = is.padding_left.resolve_or_zero(iem, cb, viewport);
-                            let pr = is.padding_right.resolve_or_zero(iem, cb, viewport);
-                            (inner_main - pl - pr
-                                - is.border_left_width
-                                - is.border_right_width)
-                                .max(0.0)
-                        }
-                    }
-                };
-                // CSS Flexbox §9.8: percentage cross sizes (e.g. height:100%) resolve
-                // against the flex container's definite cross size.
-                // BUG-294: margin-box start — `lay_out_inner` adds `m_l`/`m_t` itself
-                // (see the column arm above), so pre-adding them here double-counts.
-                lay_out_with_used_size(
-                    &mut children[i],
-                    content_x + main_cursor,
-                    content_y + cross_cursor,
-                    inner_main,
-                    explicit_cross,
-                    measurer,
-                    viewport,
-                    pcb,
-                    hp,
-                    false,
-                    UsedSizeOverride {
-                        width: Some(used_main),
-                        ..Default::default()
-                    },
-                );
-                main_cursor += outer_main + item_gap + jc_gap;
-                if auto_after {
-                    main_cursor += auto_main_share;
-                }
-            }
-        }
-
-        // Align-items on cross axis for this line.
-        let line_cross: f32 = if is_column {
-            0.0 // column cross axis (width) not handled in wrap Phase 0
-        } else {
-            line_keys.iter().map(|&k| children[item_idxs[k]].rect.height).fold(0.0_f32, f32::max)
-        };
-        line_cross_sizes.push(line_cross);
-
-        if !is_column {
-            // CSS Flexbox §9.5: for a single-line (non-wrapping) flex container the line
-            // cross size equals the container's inner cross size (if definite). This lets
-            // align-items: center/end position items relative to the full container height
-            // rather than just the tallest item in the line.
-            let effective_cross = if !is_wrap {
-                explicit_cross.unwrap_or(line_cross)
-            } else {
-                line_cross
-            };
-            for &k in line_keys {
-                let i = item_idxs[k];
-                let item = &mut children[i];
-                let is = &item.style;
-                let iem = is.font_size;
-                let m_t = is.margin_top.resolve_or_zero(iem, cb, viewport);
-                let m_b = is.margin_bottom.resolve_or_zero(iem, cb, viewport);
-                let align = if matches!(is.align_self, AlignValue::Auto) { s.align_items } else { is.align_self };
-                // CSS Flexbox §8.1: auto-поле ПОПЕРЕЧНОЙ оси съедает свободное
-                // место раньше `align-self`/`align-items` (и отменяет stretch):
-                // два auto — по центру, одно — прижать к противоположному краю.
-                let auto_cross_start = matches!(is.margin_top, LengthOrAuto::Auto);
-                let auto_cross_end = matches!(is.margin_bottom, LengthOrAuto::Auto);
-                let outer_cross = item.rect.height + m_t + m_b;
-                if auto_cross_start || auto_cross_end {
-                    let free = (effective_cross - outer_cross).max(0.0);
-                    let shift = if auto_cross_start && auto_cross_end {
-                        free / 2.0
-                    } else if auto_cross_start {
-                        free
-                    } else {
-                        0.0
-                    };
-                    let new_y = content_y + cross_cursor + m_t + shift;
-                    shift_y_box(item, new_y - item.rect.y);
-                    continue;
-                }
-                // The item was laid out at the line's cross-start (`content_y +
-                // cross_cursor + m_t`). Cross alignment must move the *whole*
-                // subtree, not just `rect.y`: the item's descendants were already
-                // positioned in absolute coordinates during the main-axis pass, so
-                // shifting only `rect.y` leaves nested content (e.g. an anonymous
-                // text item's InlineRun) at the cross-start — BUG-194 (centered
-                // digit labels stuck at the box top). Same rationale as BUG-165.
-                match align {
-                    AlignValue::End => {
-                        let new_y = content_y + cross_cursor + effective_cross - outer_cross + m_t;
-                        shift_y_box(item, new_y - item.rect.y);
-                    }
-                    AlignValue::Center => {
-                        let new_y = content_y + cross_cursor + m_t + (effective_cross - outer_cross) / 2.0;
-                        shift_y_box(item, new_y - item.rect.y);
-                    }
-                    AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
-                        // CSS Flexbox §9.5: stretch applies only when the item's cross size
-                        // is auto (no explicit height). Items with explicit heights are not
-                        // grown beyond their declared size.
-                        let stretch_h = if is.height.is_none() {
-                            (effective_cross - m_t - m_b).max(0.0)
-                        } else {
-                            item.rect.height
-                        };
-                        // BUG-104: a stretched item with no explicit height gains a
-                        // definite block size it lacked during its own layout. If the
-                        // item is itself a column flex container, its `flex-grow`
-                        // children were collapsed to flex-basis against an indefinite
-                        // main size — they must be re-laid-out against the stretched
-                        // height so they fill it.
-                        //
-                        // BUG-209: gate the re-layout on a *definite* container cross
-                        // size. When `explicit_cross` is None the effective cross size
-                        // falls back to `line_cross` (the line's own tallest item), so
-                        // the "stretch" is a no-op against the item's current height.
-                        // Re-laying-out anyway writes a resolved px `style.height` back
-                        // onto the item (below), which permanently clobbers its
-                        // `height: auto` state. A later pass that *does* have a definite
-                        // cross size then sees `is.height.is_some()` and skips the real
-                        // stretch — collapsing nested flex cells to content height
-                        // (TEST-90: cell-items stuck at ~40px instead of filling the row).
-                        let relayout_column_flex = is.height.is_none()
-                            && explicit_cross.is_some()
-                            && stretch_h > 0.0
-                            && matches!(is.display, Display::Flex | Display::InlineFlex)
-                            && matches!(
-                                is.flex_direction,
-                                FlexDirection::Column | FlexDirection::ColumnReverse
-                            );
-                        if item.rect.height < stretch_h {
-                            item.rect.height = stretch_h;
-                        }
-                        item.rect.y = content_y + cross_cursor + m_t;
-                        if relayout_column_flex {
-                            // Force border-box + explicit height so the definite main
-                            // size is honoured regardless of the item's own box-sizing,
-                            // then re-lay-out in place (origin/width already resolved).
-                            let rx = item.rect.x;
-                            let ry = item.rect.y;
-                            let rw = item.rect.width;
-                            lay_out_with_used_size(
-                                item, rx, ry, rw, Some(stretch_h), measurer, viewport, pcb, hp, false,
-                                UsedSizeOverride {
-                                    height: Some(stretch_h),
-                                    box_sizing: Some(BoxSizing::BorderBox),
-                                    ..Default::default()
-                                },
-                            );
-                        }
-                    }
-                    _ => {
-                        item.rect.y = content_y + cross_cursor + m_t;
-                    }
-                }
-            }
-        }
-
-        cross_cursor += line_cross + cross_gap;
-    }
-
-    // Remove the trailing cross gap accumulated by the loop. Each processed line
-    // appends `line_cross + cross_gap` (5225), so after the loop there is always
-    // exactly one surplus `cross_gap` — including single-line containers, where the
-    // row-gap (from `gap`/`row-gap`) must NOT leak into the container's cross size
-    // (nothing to separate). Subtract whenever at least one line was laid out.
-    let mut total_cross = if n_lines > 0 {
-        (cross_cursor - cross_gap).max(0.0)
-    } else {
-        cross_cursor
-    };
-
-    // Apply align-content to distribute remaining space between flex lines (row wrap only).
-    // CSS Box Alignment L3: align-content applies to single-line wrapped containers too
-    // (Chrome/Edge 103+ behavior). Removed `n_lines > 1` guard to match browsers.
-    if !is_column && is_wrap {
-        let line_gap_total = cross_gap * (n_lines.saturating_sub(1)) as f32;
-        let used_cross: f32 = line_cross_sizes.iter().sum::<f32>() + line_gap_total;
-        let free_cross = explicit_cross.map_or(0.0, |h| (h - used_cross).max(0.0));
-
-        if free_cross > 0.0 {
-            let mut line_offsets: Vec<f32> = vec![0.0; n_lines];
-
-            // CSS Box Alignment L3 §5.4: `normal`/`auto` align-content behaves as
-            // `stretch` for flex containers. The default (`Auto`) therefore
-            // distributes free cross-space by growing each flex line.
-            let effective = match s.align_content {
-                AlignValue::Auto | AlignValue::Normal => AlignValue::Stretch,
-                other => other,
+                0.0
             };
 
-            match effective {
-                AlignValue::End => {
-                    line_offsets.fill(free_cross);
-                }
-                AlignValue::Center => {
-                    line_offsets.fill(free_cross / 2.0);
-                }
-                AlignValue::SpaceBetween if n_lines > 1 => {
-                    let gap_per = free_cross / (n_lines - 1) as f32;
-                    for (i, offset) in line_offsets.iter_mut().enumerate().skip(1) {
-                        *offset = gap_per * i as f32;
+            let (jc_start, jc_gap) = if auto_main_share > 0.0 {
+                // Свободного места уже нет — распределять `justify-content` нечего.
+                (0.0, 0.0)
+            } else {
+                match s.justify_content {
+                    AlignValue::End => (remaining, 0.0),
+                    AlignValue::Center => (remaining / 2.0, 0.0),
+                    AlignValue::SpaceBetween => {
+                        if n <= 1 { (0.0, 0.0) } else { (0.0, remaining / (n - 1) as f32) }
                     }
-                }
-                AlignValue::SpaceAround => {
-                    let per = free_cross / n_lines as f32;
-                    for (i, offset) in line_offsets.iter_mut().enumerate() {
-                        *offset = per / 2.0 + (per * i as f32);
+                    AlignValue::SpaceAround => {
+                        let per = remaining / n as f32;
+                        (per / 2.0, per)
                     }
-                }
-                AlignValue::SpaceEvenly => {
-                    let per = free_cross / (n_lines + 1) as f32;
-                    for (i, offset) in line_offsets.iter_mut().enumerate() {
-                        *offset = per * (i as f32 + 1.0);
+                    AlignValue::SpaceEvenly => {
+                        let per = remaining / (n + 1) as f32;
+                        (per, per)
                     }
+                    _ => (0.0, 0.0),
                 }
-                AlignValue::Stretch => {
-                    // CSS Flexbox §8.3: positive free space is split EQUALLY between
-                    // all flex lines, increasing each line's cross size. Items on a
-                    // later line shift toward the cross-end by the cumulative growth
-                    // of all preceding lines (each grown line pushes the next down).
-                    let per = free_cross / n_lines as f32;
-                    for (i, offset) in line_offsets.iter_mut().enumerate() {
-                        *offset = per * i as f32;
-                    }
-                    for size in line_cross_sizes.iter_mut() {
-                        *size += per;
-                    }
-                }
-                _ => {
-                }
+            };
+
+            let ordered_keys: Vec<usize> =
+                if is_reverse { (0..n).rev().collect() } else { (0..n).collect() };
+
+            FlexLineInit {
+                line_keys: line_keys.clone(),
+                ordered_keys,
+                hyp_mains,
+                auto_main,
+                jc_start,
+                jc_gap,
+                auto_main_share,
             }
-
-            for li in 0..n_lines {
-                let line_keys = &lines[li];
-                let offset = line_offsets[li];
-
-                if !is_column && offset > 0.0 {
-                    for &k in line_keys {
-                        let i = item_idxs[k];
-                        // Shift the whole item subtree, not just its own box: the
-                        // item's descendants were already positioned in absolute
-                        // coordinates during the flex layout pass, so an
-                        // align-content offset must move them in lockstep. Bumping
-                        // only `rect.y` would leave the item's content (and any
-                        // nested flex lines) behind by `offset` — BUG-165.
-                        shift_y_box(&mut children[i], offset);
-                    }
-                }
-            }
-
-            total_cross = line_cross_sizes.iter().sum::<f32>() + line_gap_total;
-        }
-    }
-
-    if is_column {
-        // Column: return main-axis height (main_cursor from last line).
-        // Re-compute from stored item positions.
-        item_idxs
-            .iter()
-            .map(|&i| children[i].rect.y + children[i].rect.height - content_y)
-            .fold(0.0_f32, f32::max)
-    } else {
-        total_cross
-    }
+        })
+        .collect()
 }
