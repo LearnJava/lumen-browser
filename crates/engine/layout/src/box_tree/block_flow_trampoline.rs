@@ -22,6 +22,13 @@ pub(super) enum DispatchOutcome {
     // block-flow branch is. `super::flex_trampoline::run` drives it (and every
     // further flex-container descendant it meets) on an explicit heap stack.
     NeedsFlexLoop(Box<super::flex_trampoline::FlexInit>),
+    // LAYOUT-2 срез 4: the grid dispatch arm's probe + final-placement passes
+    // (CSS Grid L1 §12.3/§11.2) — read each item's `.rect` back for row-height
+    // growth and cell alignment, so it is non-tail-recursive the same way the
+    // flex/block-flow branches are. `super::grid_trampoline::run` drives it
+    // (and every further grid-container descendant it meets, incl. subgrid)
+    // on an explicit heap stack.
+    NeedsGridLoop(Box<super::grid_trampoline::GridInit>),
 }
 
 /// Loop-entry state for the plain block-flow branch, captured by `dispatch_box`
@@ -439,6 +446,13 @@ fn step_child(
         // `NeedsBlockFlowLoop` child.
         DispatchOutcome::NeedsFlexLoop(child_init) => {
             super::flex_trampoline::run(child, child_init, measurer, viewport, hp);
+            post_child_bookkeeping(frame, i, viewport, bottom_cache);
+            StepOutcome::Advance
+        }
+        // LAYOUT-2 срез 4: a block-flow normal-flow child that is itself a
+        // grid container — same shape as the flex arm above.
+        DispatchOutcome::NeedsGridLoop(child_init) => {
+            super::grid_trampoline::run(child, child_init, measurer, viewport, hp);
             post_child_bookkeeping(frame, i, viewport, bottom_cache);
             StepOutcome::Advance
         }

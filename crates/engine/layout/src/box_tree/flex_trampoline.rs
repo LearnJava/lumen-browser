@@ -293,6 +293,15 @@ fn step_item(
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsFlexLoop(child_init) => StepOutcome::Descend(child_init),
+            // LAYOUT-2 срез 4: a column-flex item that is itself a grid
+            // container — same shape as the block-flow arm above (a
+            // different init type, so it runs synchronously via its own
+            // trampoline rather than descending onto this stack).
+            DispatchOutcome::NeedsGridLoop(child_init) => {
+                super::grid_trampoline::run(&mut frame.b.children[pos.i], child_init, measurer, viewport, hp);
+                post_item_place(frame, li, &pos, viewport);
+                StepOutcome::Advance
+            }
         }
     } else {
         let item_s = frame.b.children[pos.i].style.clone();
@@ -328,6 +337,13 @@ fn step_item(
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsFlexLoop(child_init) => StepOutcome::Descend(child_init),
+            // LAYOUT-2 срез 4: a row-flex item that is itself a grid
+            // container — same shape as the column arm above.
+            DispatchOutcome::NeedsGridLoop(child_init) => {
+                super::grid_trampoline::run(&mut frame.b.children[pos.i], child_init, measurer, viewport, hp);
+                post_item_place(frame, li, &pos, viewport);
+                StepOutcome::Advance
+            }
         }
     }
 }

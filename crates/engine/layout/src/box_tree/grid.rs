@@ -26,7 +26,7 @@ use super::*;
 ///
 /// `normal` / `stretch` always return `(0, 0)` — that pair is handled by the track
 /// sizing pass, which hands the free space to the auto-sized tracks instead.
-fn grid_content_distribution(align: AlignValue, free: f32, n: usize) -> (f32, f32) {
+pub(super) fn grid_content_distribution(align: AlignValue, free: f32, n: usize) -> (f32, f32) {
     if n == 0 {
         return (0.0, 0.0);
     }
@@ -66,7 +66,7 @@ fn grid_content_distribution(align: AlignValue, free: f32, n: usize) -> (f32, f3
 /// Deriving the span from offsets rather than summing sizes + `gap` keeps spanning
 /// items correct when `align-content` / `justify-content` injected extra spacing
 /// between tracks (`space-between` and friends).
-fn grid_track_span(offsets: &[f32], sizes: &[f32], t0: usize, t1: usize) -> f32 {
+pub(super) fn grid_track_span(offsets: &[f32], sizes: &[f32], t0: usize, t1: usize) -> f32 {
     let last = t1.max(t0 + 1) - 1;
     match (offsets.get(t0), offsets.get(last), sizes.get(last)) {
         (Some(&o0), Some(&o_last), Some(&s_last)) => (o_last + s_last - o0).max(0.0),
@@ -74,7 +74,7 @@ fn grid_track_span(offsets: &[f32], sizes: &[f32], t0: usize, t1: usize) -> f32 
     }
 }
 
-/// CSS Grid Layout Level 1 — grid container layout.
+/// CSS Grid Layout Level 1 — grid container layout, loop-entry construction.
 ///
 /// Implements a Phase-0 subset of the grid layout algorithm (CSS Grid L1 §12):
 ///
@@ -94,21 +94,35 @@ fn grid_track_span(offsets: &[f32], sizes: &[f32], t0: usize, t1: usize) -> f32 
 /// is derived from the content. Only a definite height leaves block-axis free space
 /// for `align-content` to distribute.
 ///
-/// Returns the total content height of the grid.
+/// LAYOUT-2 срез 4: Steps 1–3 below (placement resolution, column-track sizing)
+/// never call `lay_out` on a child — they run natively here, same as flex's
+/// Step 1–3 precompute in `build_flex_init`. Steps 4–5 (the per-item probe and
+/// final-placement passes, CSS Grid L1 §12.3/§11.2 — the two loops that call
+/// `lay_out`/`dispatch_box` on each item and then read its `.rect` back) are
+/// the non-tail-recursive part this slice targets; they are captured into the
+/// returned [`super::grid_trampoline::GridInit`] instead of running here, and
+/// `grid_trampoline::run` drives them (and every further grid-container
+/// descendant it meets, incl. subgrid) on an explicit heap stack. Returns
+/// `None` when there are no items — the caller uses the same zero-height
+/// epilogue `grid_trampoline::finish_container_height` uses for a populated
+/// container, so the empty case does not need its own copy of that logic.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn lay_out_grid(
-    children: &mut [LayoutBox],
-    s: &ComputedStyle,
+pub(crate) fn build_grid_init(
+    children: &[LayoutBox],
+    s: &Arc<ComputedStyle>,
     content_x: f32,
     content_y: f32,
     content_width: f32,
     definite_content_height: Option<f32>,
-    measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
-    hp: &dyn HyphenationProvider,
-) -> f32 {
-    let em = s.font_size;
+    em: f32,
+    available_height: Option<f32>,
+    padding_top: f32,
+    padding_bottom: f32,
+    size_contained: bool,
+) -> Option<Box<super::grid_trampoline::GridInit>> {
+    use super::grid_trampoline::GridInit;
 
     // CSS Grid L2 §9: If this grid was set up as a subgrid by its parent, read
     // the inherited track contexts that the parent set in the thread-locals.
@@ -129,7 +143,7 @@ pub(crate) fn lay_out_grid(
     item_idxs.sort_by_key(|&i| children[i].style.order);
 
     if item_idxs.is_empty() {
-        return 0.0;
+        return None;
     }
 
     // Gap between tracks.  When the axis is subgridded we use the parent's gap
@@ -474,9 +488,12 @@ pub(crate) fn lay_out_grid(
         (col_widths, col_offsets)
     };
 
-    // --- Step 4: Layout items to measure row heights ---
-    // If the row axis is subgridded, use inherited sizes; otherwise compute from style.
-    let mut row_heights: Vec<f32> = if let Some(ref ctx) = inherited_rows {
+    // Initial row sizes (CSS Grid L1 §12.3 track-sizing base, before auto-row
+    // content growth). If the row axis is subgridded, use inherited sizes;
+    // otherwise compute from style. LAYOUT-2 срез 4: this stays native — no
+    // `lay_out` call — grown auto/fr sizes are resolved by the trampoline's
+    // `grid_trampoline::finish_probe_pass` once every item's probe height is in.
+    let row_heights: Vec<f32> = if let Some(ref ctx) = inherited_rows {
         ctx.sizes.iter().take(n_rows as usize).cloned().collect()
     } else {
         (0..n_rows)
@@ -491,283 +508,55 @@ pub(crate) fn lay_out_grid(
             .collect()
     };
 
-    // Row offsets (computed from row_heights regardless of subgrid).
-    // For subgrid row axis the offsets are inherited below in final pass.
-
-    // BUG-341 S33: this probe pass and Step 5's final positioning pass below
-    // always call `lay_out` with the exact same `(width, height=None)` for a
-    // given non-subgrid item — `col_offsets`/`col_widths` are resolved once,
-    // above this loop, and nothing between here and Step 5 touches them again,
-    // so `cell_w` is bit-identical for both passes *by construction*, not just
-    // "happens to match" the way S30-S32's general `(node, width, height)`
-    // cache could only ever hope for. Stash each non-subgrid item's probe
-    // result and reuse it directly in Step 5 instead of laying the subtree out
-    // twice — the one real redundancy the S28-S32 general layout-result cache
-    // slices ever found a case for, captured here with zero overhead on every
-    // other box in the document (no thread-local `HashMap`, no per-call key,
-    // nothing paid on a miss that never repeats — see `CV_AUTO_TOUCHED`'s doc
-    // comment for why the general mechanism was removed instead of kept).
+    // BUG-341 S33: the probe pass (`grid_trampoline`'s Probe phase) and the
+    // final positioning pass (its Final phase) always call `lay_out` with the
+    // exact same `(width, height=None)` for a given non-subgrid item —
+    // `col_offsets`/`col_widths` are resolved once, right above, and nothing
+    // between here and the final pass touches them again, so `cell_w` is
+    // bit-identical for both passes *by construction*, not just "happens to
+    // match" the way S30-S32's general `(node, width, height)` cache could
+    // only ever hope for. `grid_trampoline` stashes each non-subgrid item's
+    // probe result and reuses it directly in the final pass instead of laying
+    // the subtree out twice — the one real redundancy the S28-S32 general
+    // layout-result cache slices ever found a case for, captured here with
+    // zero overhead on every other box in the document (no thread-local
+    // `HashMap`, no per-call key, nothing paid on a miss that never repeats —
+    // see `CV_AUTO_TOUCHED`'s doc comment for why the general mechanism was
+    // removed instead of kept).
     //
-    // Subgrid items are excluded: their own recursive `lay_out_grid` reads a
-    // thread-local track context (`SubgridContextGuard`, set in both arms
-    // below) that genuinely differs between this estimated-tracks probe and
-    // Step 5's resolved-tracks final pass.
-    let mut probe_reuse: Vec<Option<(f32, f32, LayoutBox)>> = vec![None; item_idxs.len()];
+    // Subgrid items are excluded: their own recursive grid layout reads a
+    // thread-local track context (`SubgridContextGuard`, set in both phases)
+    // that genuinely differs between this estimated-tracks probe and the
+    // final pass's resolved-tracks pass.
+    let probe_reuse: Vec<Option<(f32, f32, LayoutBox)>> = vec![None; item_idxs.len()];
 
-    // Layout each item in its cell to determine content height.
-    for (k, &i) in item_idxs.iter().enumerate() {
-        let (cs, ce, rs, re) = placements[k];
-        if cs == 0 || rs == 0 {
-            continue; // unplaced (should not happen after auto-placement)
-        }
-        let c0 = (cs - 1).min(n_cols - 1) as usize;
-        let c1 = (ce - 1).min(n_cols) as usize;
-        let cell_w: f32 = grid_track_span(&col_offsets, &col_widths, c0, c1);
-
-        // For subgrid children: set the thread-local context before laying out.
-        let child_col_subgrid = children[i].style.grid_template_columns.first()
-            == Some(&GridTrackSize::Subgrid);
-        let child_row_subgrid = children[i].style.grid_template_rows.first()
-            == Some(&GridTrackSize::Subgrid);
-
-        if child_col_subgrid || child_row_subgrid {
-            // Build subgrid context slices from our resolved track sizes.
-            let child_col_ctx = if child_col_subgrid && c1 > c0 {
-                Some(SubgridContext::from_parent_tracks(&col_widths[c0..c1], col_gap))
-            } else {
-                None
-            };
-            let child_row_ctx = if child_row_subgrid {
-                // Row heights not fully determined yet; pass current estimates.
-                let r0 = (rs - 1).min(n_rows - 1) as usize;
-                let re_eff = re.max(rs + 1);
-                let r1 = (re_eff - 1).min(n_rows) as usize;
-                if r1 > r0 {
-                    Some(SubgridContext::from_parent_tracks(&row_heights[r0..r1], row_gap))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            let _guard = SubgridContextGuard::set(child_col_ctx, child_row_ctx);
-            lay_out(&mut children[i], content_x + col_offsets.get(c0).copied().unwrap_or(0.0), 0.0, cell_w, None, measurer, viewport, pcb, hp, false);
-        } else {
-            // Layout at temporary position (y=0) to get intrinsic height.
-            let probe_x = content_x + col_offsets.get(c0).copied().unwrap_or(0.0);
-            let probe_y = 0.0;
-            let outer_cv_touched = CV_AUTO_TOUCHED.with(|c| c.replace(false));
-            lay_out(&mut children[i], probe_x, probe_y, cell_w, None, measurer, viewport, pcb, hp, false);
-            let touched_here = CV_AUTO_TOUCHED.with(|c| c.get());
-            CV_AUTO_TOUCHED.with(|c| c.set(outer_cv_touched || touched_here));
-            if !touched_here {
-                probe_reuse[k] = Some((probe_x, probe_y, children[i].clone()));
-            }
-        }
-
-        // Update auto row heights.
-        let r0 = (rs - 1) as usize;
-        if r0 < row_heights.len()
-            && inherited_rows.is_none()
-            && matches!(
-                grid_track(r0 as u32, eff_row_template, &s.grid_auto_rows),
-                GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent | GridTrackSize::Fr(_)
-            )
-        {
-            let item_h = children[i].rect.height;
-            if item_h > row_heights[r0] {
-                row_heights[r0] = item_h;
-            }
-        }
-    }
-
-    // Resolve fr row heights (skip when row axis is subgridded — sizes are fixed).
-    let total_row_gap = if n_rows > 1 { row_gap * (n_rows - 1) as f32 } else { 0.0 };
-    if inherited_rows.is_none() {
-        // CSS Grid L1 §11.7 — the free space available to flexible (`fr`) tracks is
-        // the container's content size minus the base sizes of the OTHER tracks
-        // only. `row_heights[r]` for an `fr` track was seeded from its content's
-        // probed intrinsic height above (the fallback used when the container's
-        // block size is indefinite) — that probed value is a floor for the final
-        // `.max()` below, not a "fixed" size to subtract here. Counting it against
-        // `definite_content_height` double-dips: a two-row `1fr 1fr` grid with
-        // ~29px-tall cell content and a 220px definite height wrongly landed each
-        // row at (220 - 29*2) / 2 ≈ 83px instead of 220 / 2 = 110px, leaving a
-        // ~58px unaccounted gap at the bottom (found via TEST-62 BUG-277 triage).
-        let fixed_row_total: f32 = (0..n_rows)
-            .map(|r| {
-                if grid_track(r, eff_row_template, &s.grid_auto_rows).fr().is_some() {
-                    0.0
-                } else {
-                    row_heights[r as usize]
-                }
-            })
-            .sum::<f32>()
-            + total_row_gap;
-        // If container has explicit height, distribute fr rows from it.
-        let free_row = definite_content_height.map(|h| (h - fixed_row_total).max(0.0)).unwrap_or(0.0);
-        let total_row_fr: f32 = (0..n_rows)
-            .map(|r| grid_track(r, eff_row_template, &s.grid_auto_rows).fr().unwrap_or(0.0))
-            .sum();
-        if total_row_fr > 0.0 && free_row > 0.0 {
-            let fr_h = free_row / total_row_fr;
-            for r in 0..n_rows {
-                if let Some(f) = grid_track(r, eff_row_template, &s.grid_auto_rows).fr() {
-                    row_heights[r as usize] = (f * fr_h).max(row_heights[r as usize]);
-                }
-            }
-        }
-
-        // CSS Grid L1 §12.3 — `align-content: normal` behaves as `stretch` for a grid
-        // container: the leftover block-axis space is shared equally between the
-        // `auto`-sized rows. Only an explicitly sized container has leftover space.
-        // Deferred: `minmax(_, auto)` rows do not participate — the track-sizing pass
-        // above resolves them from their min side, not as auto.
-        if matches!(s.align_content, AlignValue::Auto | AlignValue::Normal | AlignValue::Stretch) {
-            let auto_rows: Vec<u32> = (0..n_rows)
-                .filter(|&r| matches!(grid_track(r, eff_row_template, &s.grid_auto_rows), GridTrackSize::Auto))
-                .collect();
-            let used: f32 = row_heights.iter().sum::<f32>() + total_row_gap;
-            let free = definite_content_height.map(|h| h - used).unwrap_or(0.0);
-            if free > 0.0 && !auto_rows.is_empty() {
-                let per = free / auto_rows.len() as f32;
-                for r in auto_rows {
-                    row_heights[r as usize] += per;
-                }
-            }
-        }
-    }
-
-    // Row top offsets: if row axis is subgridded, use inherited offsets; else compute.
-    let (row_offsets, y_off) = if let Some(ref ctx) = inherited_rows {
-        let offsets: Vec<f32> = ctx.offsets.iter().take(n_rows as usize).cloned().collect();
-        let total = ctx.total_size();
-        (offsets, total)
-    } else {
-        // CSS Box Alignment L3 §5 — `align-content` distributes the block-axis free
-        // space left over by the tracks (only ever non-zero for a definite height).
-        let used_row_total: f32 = row_heights.iter().sum::<f32>() + total_row_gap;
-        let (ac_start, ac_extra) = grid_content_distribution(
-            s.align_content,
-            definite_content_height.map(|h| h - used_row_total).unwrap_or(0.0),
-            n_rows as usize,
-        );
-
-        let mut row_offsets: Vec<f32> = Vec::with_capacity(n_rows as usize);
-        let mut y_off = ac_start;
-        for r in 0..n_rows {
-            row_offsets.push(y_off);
-            y_off += row_heights[r as usize]
-                + if r < n_rows - 1 { row_gap + ac_extra } else { 0.0 };
-        }
-        (row_offsets, y_off)
-    };
-    let mut y_off = y_off;
-
-    // --- Step 5: Final positioning pass ---
-    for (k, &i) in item_idxs.iter().enumerate() {
-        let (cs, ce, rs, re) = placements[k];
-        if cs == 0 || rs == 0 {
-            // Unplaced — stack below grid content.
-            lay_out(&mut children[i], content_x, content_y + y_off, content_width, None, measurer, viewport, pcb, hp, false);
-            y_off += children[i].rect.height;
-            continue;
-        }
-        let c0 = (cs - 1).min(n_cols - 1) as usize;
-        let c1 = (ce - 1).min(n_cols) as usize;
-        let r0 = (rs - 1).min(n_rows - 1) as usize;
-        let r1 = (re - 1).min(n_rows) as usize;
-
-        let cell_x = content_x + col_offsets.get(c0).copied().unwrap_or(0.0);
-        let cell_y = content_y + row_offsets.get(r0).copied().unwrap_or(0.0);
-        let cell_w: f32 = grid_track_span(&col_offsets, &col_widths, c0, c1);
-        let cell_h: f32 = grid_track_span(&row_offsets, &row_heights, r0, r1);
-
-        // Re-layout with final cell width. For subgrid children, restore the context.
-        let child_col_subgrid = children[i].style.grid_template_columns.first()
-            == Some(&GridTrackSize::Subgrid);
-        let child_row_subgrid = children[i].style.grid_template_rows.first()
-            == Some(&GridTrackSize::Subgrid);
-        if child_col_subgrid || child_row_subgrid {
-            let final_col_ctx = if child_col_subgrid && c1 > c0 {
-                Some(SubgridContext::from_parent_tracks(&col_widths[c0..c1], col_gap))
-            } else {
-                None
-            };
-            let final_row_ctx = if child_row_subgrid && r1 > r0 {
-                Some(SubgridContext::from_parent_tracks(&row_heights[r0..r1], row_gap))
-            } else {
-                None
-            };
-            let _guard = SubgridContextGuard::set(final_col_ctx, final_row_ctx);
-            lay_out(&mut children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp, false);
-        } else if let Some((probe_x, probe_y, mut reused)) = probe_reuse[k].take() {
-            // BUG-341 S33: `cell_w` above was derived from the same
-            // `col_offsets`/`col_widths`/`(c0, c1)` as the probe pass's, so
-            // the subtree reused here already has the correct final size —
-            // only its position needs to catch up to the resolved row offset.
-            crate::incremental::translate_subtree(&mut reused, cell_x - probe_x, cell_y - probe_y);
-            children[i] = reused;
-        } else {
-            // No usable probe: an unplaced-at-probe-time item can't reach
-            // here (handled by the early-continue above), so this is a
-            // subtree whose probe touched `content-visibility: auto` and was
-            // refused for reuse (see `CV_AUTO_TOUCHED`'s doc comment).
-            lay_out(&mut children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp, false);
-        }
-
-        let item = &mut children[i];
-        let is = &item.style;
-        let iem = is.font_size;
-        let m_t = is.margin_top.resolve_or_zero(iem, content_width, viewport);
-        let m_b = is.margin_bottom.resolve_or_zero(iem, content_width, viewport);
-        let m_l = is.margin_left.resolve_or_zero(iem, content_width, viewport);
-        let m_r = is.margin_right.resolve_or_zero(iem, content_width, viewport);
-
-        // align-items (cross / block axis within cell).
-        let align = if matches!(is.align_self, AlignValue::Auto) { s.align_items } else { is.align_self };
-        let item_outer_h = item.rect.height + m_t + m_b;
-        match align {
-            AlignValue::End => {
-                item.rect.y = cell_y + cell_h - item.rect.height - m_b;
-            }
-            AlignValue::Center => {
-                item.rect.y = cell_y + (cell_h - item_outer_h) / 2.0 + m_t;
-            }
-            AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
-                // CSS Grid §11.2: `stretch` only grows items whose used block size is
-                // `auto`; an explicit `height` is preserved (the item is top-aligned in
-                // the cell, leaving free space below — like Edge).
-                if is.height.is_none() && item.rect.height < cell_h - m_t - m_b {
-                    item.rect.height = (cell_h - m_t - m_b).max(item.rect.height);
-                }
-                item.rect.y = cell_y + m_t;
-            }
-            _ => {
-                item.rect.y = cell_y + m_t;
-            }
-        }
-
-        // justify-items (inline axis within cell).
-        let justify = if matches!(is.justify_self, AlignValue::Auto) { s.justify_items } else { is.justify_self };
-        let item_outer_w = item.rect.width + m_l + m_r;
-        match justify {
-            AlignValue::End => {
-                item.rect.x = cell_x + cell_w - item.rect.width - m_r;
-            }
-            AlignValue::Center => {
-                item.rect.x = cell_x + (cell_w - item_outer_w) / 2.0 + m_l;
-            }
-            AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
-                item.rect.x = cell_x + m_l;
-            }
-            _ => {
-                item.rect.x = cell_x + m_l;
-            }
-        }
-    }
-
-    y_off
+    Some(Box::new(GridInit {
+        item_idxs,
+        placements,
+        n_cols,
+        n_rows,
+        col_widths,
+        col_offsets,
+        eff_row_template: eff_row_template.to_vec(),
+        inherited_rows,
+        row_heights,
+        row_offsets: Vec::new(),
+        y_off: 0.0,
+        content_x,
+        content_y,
+        content_width,
+        definite_content_height,
+        col_gap,
+        row_gap,
+        s: Arc::clone(s),
+        children_pcb: pcb,
+        em,
+        available_height,
+        padding_top,
+        padding_bottom,
+        size_contained,
+        probe_reuse,
+    }))
 }
 
 /// CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count.
@@ -830,7 +619,7 @@ pub fn resolve_auto_fill_fit_count(
 
 /// Return the track size for track index `idx` (0-based) from a template list,
 /// falling back to `auto_track` for implicit tracks beyond the template.
-fn grid_track<'a>(idx: u32, template: &'a [GridTrackSize], auto_track: &'a GridTrackSize) -> &'a GridTrackSize {
+pub(super) fn grid_track<'a>(idx: u32, template: &'a [GridTrackSize], auto_track: &'a GridTrackSize) -> &'a GridTrackSize {
     template.get(idx as usize).unwrap_or(auto_track)
 }
 

@@ -37,7 +37,7 @@ use crate::style::{
 use crate::counters::{precompute_counters, CounterMap, CounterStyleRegistry, QuoteSlot,
                       build_counter_style_registry, format_counter_with_registry,
                       build_list_marker_text};
-use crate::subgrid::{SubgridContext, SubgridContextGuard, SUBGRID_COL_CTX, SUBGRID_ROW_CTX};
+use crate::subgrid::{SubgridContext, SUBGRID_COL_CTX, SUBGRID_ROW_CTX};
 use crate::anchor::{collect_anchors, InsetAreaKeyword};
 use crate::field_sizing::field_sizing_content_intrinsic;
 use crate::style::FieldSizing;
@@ -63,7 +63,6 @@ use inline_wrap::{caps_synthesis, char_break_offset, try_hyp_break, SMALL_CAPS_S
 
 mod grid;
 pub use grid::resolve_auto_fill_fit_count;
-use grid::lay_out_grid;
 
 mod flex;
 use flex::UsedSizeOverride;
@@ -202,6 +201,7 @@ mod bfc;
 mod layout_dispatch;
 mod block_flow_trampoline;
 mod flex_trampoline;
+mod grid_trampoline;
 
 pub(crate) use bfc::lay_out_for_vertical;
 use bfc::{
