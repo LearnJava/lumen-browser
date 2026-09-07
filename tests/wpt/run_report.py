@@ -50,6 +50,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import expectations  # noqa: E402
+import port_guard  # noqa: E402
 import run_smoke  # noqa: E402
 import run_suite  # noqa: E402
 
@@ -559,6 +560,21 @@ def main() -> int:
         extra_args.append(f"--processes={args.processes}")
     if args.timeout_multiplier:
         extra_args.append(f"--timeout-multiplier={args.timeout_multiplier}")
+
+    # Kill any stale `lumen --bidi-port N` orphans left by a previous run that
+    # was interrupted with kill -9 (BUG-1029): wptrunner's mozprocess child
+    # survives when its parent is SIGKILL'd, and each orphan holds a V8 isolate
+    # (~1 GB RSS). On --check runs the orphans compete for ports and generate
+    # spurious TIMEOUT/ERROR results whose count grows with each successive
+    # invocation (BUG-1022). run_corpus.py already calls ensure_free before
+    # every shard; run_report.py was the gap.
+    try:
+        port_guard.ensure_free(own_pid=os.getpid())
+    except port_guard.PortsBusy as exc:
+        print(f"\nport guard: {exc}", file=sys.stderr)
+        print("another WPT run is active — wait for it to finish or stop it",
+              file=sys.stderr)
+        return 1
 
     try:
         rv = run_smoke.run(args.binary, test_ids, extra_args=extra_args)

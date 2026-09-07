@@ -138,7 +138,9 @@ def _process_table() -> dict:
             ["powershell", "-NoProfile", "-Command",
              "Get-CimInstance Win32_Process | "
              "ForEach-Object { \"$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.CommandLine)\" }"],
-            capture_output=True, text=True, check=False).stdout
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            check=False).stdout or ""
         separator = "\t"
     else:
         out = subprocess.run(["ps", "-eo", "pid=,ppid=,args="],
@@ -166,7 +168,9 @@ def _port_holders(ports) -> dict:
     wanted = {str(port) for port in ports}
     if os.name == "nt":
         out = subprocess.run(["netstat", "-ano", "-p", "TCP"],
-                             capture_output=True, text=True, check=False).stdout
+                             capture_output=True, text=True,
+                             encoding="oem", errors="replace",
+                             check=False).stdout or ""
         for line in out.splitlines():
             fields = line.split()
             if len(fields) < 5 or fields[3] != "LISTENING":
