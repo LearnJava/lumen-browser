@@ -78,6 +78,20 @@ fn first_collapsible_child(b: &LayoutBox) -> Option<&LayoutBox> {
     None
 }
 
+/// Per-`run()`-pass memo for [`collapsed_top_margin`]/[`collapsed_bottom_margin`]
+/// — see BUG-1026. Keyed by `(NodeId, BoxRole)`, not bare `NodeId`: one DOM
+/// node can back several distinct `LayoutBox`es (an element's principal box
+/// and an anonymous wrapper/pseudo-element box both carry the *same*
+/// `LayoutBox::node`, ADR-025 §1), so `BoxRole` disambiguates them the same
+/// way `LayoutInPlaceKey` does. The stored `f32` is the containing-block
+/// width (`cb`) the entry was computed with — a lookup only reuses the cached
+/// result when a fresh call passes that exact `cb` back, so a mismatch (e.g.
+/// a non-zero margin/scrollbar-gutter making the real per-level
+/// containing-block width diverge from this module's own padding/border-only
+/// narrowing) falls back to a full recompute instead of returning a wrong
+/// value.
+pub(crate) type MarginCollapseCache = std::collections::HashMap<(NodeId, BoxRole), (f32, f32)>;
+
 /// CSS 2.1 §8.3.1 — the *collapsed* top margin of a block-level box (px).
 ///
 /// The top margin of an in-flow block collapses with the top margin of its
@@ -95,27 +109,62 @@ fn first_collapsible_child(b: &LayoutBox) -> Option<&LayoutBox> {
 /// `lay_out_inner`'s own descent. Each step folds into the running max the
 /// same way the old `own.max(collapsed_top_margin(child, ..))` did — the loop
 /// computes the identical value in O(1) stack.
-pub(crate) fn collapsed_top_margin(b: &LayoutBox, cb: f32, viewport: Size) -> f32 {
+///
+/// BUG-1026: LAYOUT-1's loop still did O(remaining-chain-length) *work* per
+/// call, and `block_flow_trampoline.rs` calls this once per level of a
+/// block-flow descent — O(N²) total on an N-deep single-child chain. `cache`
+/// memoizes every node visited along a chain walk with the suffix-max value
+/// computed from that node down, so the (very common) case where a deeper
+/// call in the same chain asks for a `cb` this walk already resolved becomes
+/// an O(1) lookup instead of a fresh walk — see `MarginCollapseCache`'s doc
+/// comment for why the cache key includes `BoxRole` and why a `cb` mismatch
+/// safely falls back to recomputing rather than trusting a stale entry.
+pub(crate) fn collapsed_top_margin(
+    b: &LayoutBox,
+    cb: f32,
+    viewport: Size,
+    cache: &mut MarginCollapseCache,
+) -> f32 {
+    if let Some(&(cached_cb, cached_val)) = cache.get(&(b.node, b.origin.role))
+        && cached_cb == cb
+    {
+        return cached_val;
+    }
+
+    // Walk down the first-child chain exactly as the pre-BUG-1026 loop did,
+    // but collect each visited link instead of folding into a running max
+    // immediately — the fold needs to run from the *end* of the walk backward
+    // (a suffix max), so it can double as the per-node cache entry for
+    // whichever direct call reaches that node next.
+    let mut chain: Vec<((NodeId, BoxRole), f32, f32)> = Vec::new(); // (key, own_margin, cb_used)
     let mut node = b;
-    let mut cb = cb;
-    let mut best = f32::NEG_INFINITY;
+    let mut cur_cb = cb;
+    let mut tail = f32::NEG_INFINITY;
     loop {
+        let key = (node.node, node.origin.role);
+        if !std::ptr::eq(node, b)
+            && let Some(&(cached_cb, cached_val)) = cache.get(&key)
+            && cached_cb == cur_cb
+        {
+            tail = cached_val;
+            break;
+        }
         let em = node.style.font_size;
-        let own = node.style.margin_top.resolve_or_zero(em, cb, viewport);
-        best = best.max(own);
+        let own = node.style.margin_top.resolve_or_zero(em, cur_cb, viewport);
+        chain.push((key, own, cur_cb));
         if !matches!(node.kind, BoxKind::Block) || establishes_bfc(node) {
             break;
         }
-        let pt = node.style.padding_top.resolve_or_zero(em, cb, viewport);
+        let pt = node.style.padding_top.resolve_or_zero(em, cur_cb, viewport);
         if pt != 0.0 || node.style.border_top_width != 0.0 {
             break;
         }
         match first_collapsible_child(node) {
             Some(child) => {
                 // Child's containing-block width = this box's content width.
-                cb = (cb
-                    - node.style.padding_left.resolve_or_zero(em, cb, viewport)
-                    - node.style.padding_right.resolve_or_zero(em, cb, viewport)
+                cur_cb = (cur_cb
+                    - node.style.padding_left.resolve_or_zero(em, cur_cb, viewport)
+                    - node.style.padding_right.resolve_or_zero(em, cur_cb, viewport)
                     - node.style.border_left_width
                     - node.style.border_right_width)
                     .max(0.0);
@@ -124,7 +173,13 @@ pub(crate) fn collapsed_top_margin(b: &LayoutBox, cb: f32, viewport: Size) -> f3
             None => break,
         }
     }
-    best
+
+    let mut running = tail;
+    for (key, own, cb_used) in chain.into_iter().rev() {
+        running = running.max(own);
+        cache.insert(key, (cb_used, running));
+    }
+    running
 }
 
 /// Returns the last in-flow `Block` child whose bottom margin collapses with the
@@ -167,14 +222,37 @@ pub(crate) fn last_collapsible_child(b: &LayoutBox) -> Option<&LayoutBox> {
 /// recursion to an O(1)-stack loop — see its doc comment for why the
 /// last-child chain is just as much a BUG-987 stack-overflow source as the
 /// first-child one.
-pub(crate) fn collapsed_bottom_margin(b: &LayoutBox, cb: f32, viewport: Size) -> f32 {
+///
+/// BUG-1026: mirrors `collapsed_top_margin`'s `cache` memoization — see that
+/// function's doc comment and `MarginCollapseCache`'s for the full rationale.
+pub(crate) fn collapsed_bottom_margin(
+    b: &LayoutBox,
+    cb: f32,
+    viewport: Size,
+    cache: &mut MarginCollapseCache,
+) -> f32 {
+    if let Some(&(cached_cb, cached_val)) = cache.get(&(b.node, b.origin.role))
+        && cached_cb == cb
+    {
+        return cached_val;
+    }
+
+    let mut chain: Vec<((NodeId, BoxRole), f32, f32)> = Vec::new(); // (key, own_margin, cb_used)
     let mut node = b;
-    let mut cb = cb;
-    let mut best = f32::NEG_INFINITY;
+    let mut cur_cb = cb;
+    let mut tail = f32::NEG_INFINITY;
     loop {
+        let key = (node.node, node.origin.role);
+        if !std::ptr::eq(node, b)
+            && let Some(&(cached_cb, cached_val)) = cache.get(&key)
+            && cached_cb == cur_cb
+        {
+            tail = cached_val;
+            break;
+        }
         let em = node.style.font_size;
-        let own = node.style.margin_bottom.resolve_or_zero(em, cb, viewport);
-        best = best.max(own);
+        let own = node.style.margin_bottom.resolve_or_zero(em, cur_cb, viewport);
+        chain.push((key, own, cur_cb));
         if !matches!(node.kind, BoxKind::Block) || establishes_bfc(node) {
             break;
         }
@@ -183,16 +261,16 @@ pub(crate) fn collapsed_bottom_margin(b: &LayoutBox, cb: f32, viewport: Size) ->
         if node.style.height.is_some() {
             break;
         }
-        let pb = node.style.padding_bottom.resolve_or_zero(em, cb, viewport);
+        let pb = node.style.padding_bottom.resolve_or_zero(em, cur_cb, viewport);
         if pb != 0.0 || node.style.border_bottom_width != 0.0 {
             break;
         }
         match last_collapsible_child(node) {
             Some(child) => {
                 // Child's containing-block width = this box's content width.
-                cb = (cb
-                    - node.style.padding_left.resolve_or_zero(em, cb, viewport)
-                    - node.style.padding_right.resolve_or_zero(em, cb, viewport)
+                cur_cb = (cur_cb
+                    - node.style.padding_left.resolve_or_zero(em, cur_cb, viewport)
+                    - node.style.padding_right.resolve_or_zero(em, cur_cb, viewport)
                     - node.style.border_left_width
                     - node.style.border_right_width)
                     .max(0.0);
@@ -201,7 +279,13 @@ pub(crate) fn collapsed_bottom_margin(b: &LayoutBox, cb: f32, viewport: Size) ->
             None => break,
         }
     }
-    best
+
+    let mut running = tail;
+    for (key, own, cb_used) in chain.into_iter().rev() {
+        running = running.max(own);
+        cache.insert(key, (cb_used, running));
+    }
+    running
 }
 
 /// CSS Box Sizing L4 §5 — content block-size contribution under size containment.

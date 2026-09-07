@@ -1,6 +1,7 @@
 //! `document.styleSheets` / `<style>`/`<link>.sheet` / `CSSStyleSheet.cssRules`
-//! (CSSOM-1 срез 3, read-only) — natives over the per-node stylesheet
-//! registry `V8JsRuntime::stylesheet_nodes`. See
+//! (CSSOM-1 срез 3, read-only, plus `insertRule`/`deleteRule` — BUG-518 срез
+//! 7) — natives over the per-node stylesheet registry
+//! `V8JsRuntime::stylesheet_nodes`. See
 //! `docs/tasks/p1-cssom-1-stylesheets.md` for the architecture this sits on
 //! top of (why the registry lives in `crates/shell`/`lumen-css-parser`
 //! instead of `Document`) and for the JS-side wiring (`web_api_shim_mid.js`'s
@@ -140,6 +141,47 @@ pub(crate) fn install_stylesheets(
             match rules.get(rule_idx as usize)? {
                 CssomRuleRef::Media(r) => Some(style_rule_json(r.rules.get(child_idx as usize)?).to_string()),
                 CssomRuleRef::Style(_) | CssomRuleRef::Mixin(_) => None,
+            }
+        });
+    }
+    // `CSSStyleSheet.insertRule`/`.deleteRule` on an OWNED sheet (BUG-518
+    // срез 7 — the last gap `constructed_stylesheets.rs`'s own doc comment
+    // named: "`document.styleSheets`'s read-only sheets (CSSOM-1) still lack
+    // both"). Same sentinel-return convention as the constructed-sheet twin
+    // (`_lumen_constructed_insert_rule`/`_lumen_constructed_delete_rule`) —
+    // the JS wrapper turns a negative result into the matching
+    // `DOMException`. Mutates this entry's own `Arc<Stylesheet>` in place
+    // (`Arc::make_mut`, copy-on-write since `cssom_rules()` readers elsewhere
+    // hold a `&Stylesheet` only for the duration of one call, never a clone
+    // of the `Arc`) — **not** connected to the page cascade: `stylesheet_nodes`
+    // is rebuilt wholesale from each `<style>`/`<link>` node's own DOM text on
+    // every relayout (`crates/shell/src/stylesheets.rs::build_stylesheet_node_registry`),
+    // so an inserted/deleted rule here is visible to CSSOM reads until the
+    // next relayout silently discards it — same class of gap CSSOM-5 срез 1
+    // documented for constructed sheets before срез 2 wired
+    // `adoptedStyleSheets` into the cascade; no vendored test in this bug's
+    // scope needs the layout effect, only the correct `cssRules`/exception
+    // behaviour.
+    {
+        let s = Arc::clone(&stylesheet_nodes);
+        reg!(scope, ctx, store, "_lumen_stylesheet_insert_rule", move |idx: u32, rule_text: String, index: u32| -> i32 {
+            let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(entry) = guard.get_mut(idx as usize) else { return -1 };
+            match std::sync::Arc::make_mut(&mut entry.sheet).insert_rule(&rule_text, index as usize) {
+                Ok(new_index) => new_index as i32,
+                Err(lumen_css_parser::CssomRuleMutationError::IndexSize) => -1,
+                Err(lumen_css_parser::CssomRuleMutationError::Syntax) => -2,
+            }
+        });
+    }
+    {
+        let s = Arc::clone(&stylesheet_nodes);
+        reg!(scope, ctx, store, "_lumen_stylesheet_delete_rule", move |idx: u32, index: u32| -> i32 {
+            let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(entry) = guard.get_mut(idx as usize) else { return -1 };
+            match std::sync::Arc::make_mut(&mut entry.sheet).delete_rule(index as usize) {
+                Ok(()) => 0,
+                Err(_) => -1,
             }
         });
     }

@@ -8784,9 +8784,12 @@ Range.prototype.END_TO_START  = 2; Range.prototype.END_TO_END  = 3;
 // "class-object with state" pattern `_lumen_make_range` above uses, per
 // `docs/tasks/p1-cssom-1-stylesheets.md`. Rule/sheet identity is NOT
 // preserved across repeated reads (`sheet.cssRules[0] !== sheet.cssRules[0]`)
-// since nothing here is cached. `insertRule`/`deleteRule` remain unimplemented
-// for THIS read half (BUG-897/CSSOM-5 — deferred, same as CSSOM-1/2 left
-// them); a constructed sheet has both since CSSOM-5 срез 3, see below.
+// since nothing here is cached. `insertRule`/`deleteRule` on THIS read half
+// (BUG-518 срез 7) mutate the registry entry's own `Stylesheet` — visible to
+// further CSSOM reads, but NOT wired into the page cascade (that registry is
+// rebuilt wholesale from DOM text on every relayout, so the mutation is
+// discarded on the next one — see `stylesheets.rs`'s doc comment on the two
+// natives); a constructed sheet has had both since CSSOM-5 срез 3, see below.
 //
 // `new CSSStyleSheet()`/`.replaceSync()`/`.replace()`/`document.
 // adoptedStyleSheets`/`shadowRoot.adoptedStyleSheets` (CSSOM-5 срез 1,
@@ -9022,6 +9025,34 @@ function _lumen_make_css_style_sheet(sheetIdx) {
         cssRules: { get: cssRuleList, enumerable: true, configurable: true },
         rules:    { get: function() { return this.cssRules; }, enumerable: true, configurable: true },
     });
+    // `CSSStyleSheet.insertRule`/`.deleteRule` on an owned sheet (BUG-518
+    // срез 7) — the constructed-sheet twin below (`_lumen_make_constructed_style_sheet`)
+    // has the same two methods over a different registry; kept as separate
+    // copies rather than factored out since the two wrappers' `idx` spaces
+    // and native function names are already distinct per-registry pairs.
+    s.insertRule = function(ruleText, index) {
+        index = (index === undefined) ? 0 : (index >>> 0);
+        var result = _lumen_stylesheet_insert_rule(sheetIdx, String(ruleText), index);
+        if (result === -2) {
+            throw new DOMException(
+                "Failed to execute 'insertRule' on 'CSSStyleSheet': the supplied text is not a valid rule.",
+                'SyntaxError');
+        }
+        if (result < 0) {
+            throw new DOMException(
+                "Failed to execute 'insertRule' on 'CSSStyleSheet': the index provided is larger than the maximum index.",
+                'IndexSizeError');
+        }
+        return result;
+    };
+    s.deleteRule = function(index) {
+        index = index >>> 0;
+        if (_lumen_stylesheet_delete_rule(sheetIdx, index) < 0) {
+            throw new DOMException(
+                "Failed to execute 'deleteRule' on 'CSSStyleSheet': the index provided is larger than the maximum index.",
+                'IndexSizeError');
+        }
+    };
     return s;
 }
 

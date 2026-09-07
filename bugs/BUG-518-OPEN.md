@@ -635,3 +635,107 @@ Status remains `OPEN` — `mixin-cssom.tentative.html`'s 6th subtest and all
 of `mixin-invalidation.tentative.html` are the entire remainder, both
 gated on `insertRule` for an owned sheet (BUG-897/CSSOM-5) plus, for the
 invalidation file specifically, the CSSOM `.style`-mutation gap noted above.
+
+## Срез P3 2026-09-07 (срез 7, реклассификация)
+
+Re-checked the "blocked on BUG-897" note above against
+[ROADMAP.md](../ROADMAP.md)'s own CSSOM-5 record: that task closed
+2026-09-06 (срез 3), but its own scope note explicitly excludes exactly
+what this bug's remainder needs — `insertRule`/`deleteRule` were only ever
+added for a *constructed* `CSSStyleSheet` (`crates/js/src/v8_runtime/
+install/constructed_stylesheets.rs`, its own separate registry with no
+owning DOM node); `document.styleSheets`'s own read-only node-backed
+registry (`stylesheet_nodes`, CSSOM-1/2) still has no mutation path at all
+— confirmed directly (`grep -rn "insert_rule\|insertRule"
+crates/js/src/v8_runtime/install/stylesheets.rs` → zero hits, only a
+doc-comment). The other half of the remainder — a live `.style` setter on
+any CSSOM rule object (`CSSStyleRule`/the new `CSSMixinRule`/…) — has the
+same zero-hits shape (`grep -rn "\"style\"" crates/js/src/v8_runtime/
+install/stylesheets.rs` → one JSON-shape literal, no setter).
+
+Both gaps satisfy [docs/probe-method.md §8](../docs/probe-method.md)'s two
+reclassification conditions together: (1) the functionality is absent, not
+broken — zero grep hits, no member of the mutation surface exists for an
+owned sheet or for any rule's `.style`; (2) the size is a new registry plus
+a setter across a family of rule types, not a one-line point fix — the
+same shape as CSSOM-5 itself was before it earned its own task. Filed as
+[CSSOM-8](../ROADMAP.md) (`planned`, refs this bug + BUG-897). `BUGS.md`'s
+entry updated to `OPEN (ДОРАБОТКА → CSSOM-8)`. This does **not** touch the
+substance already fixed in срезы 1-6 above — `@mixin`/`@apply`/`@contents`/
+`@result` themselves are fully implemented and cascading correctly; only
+the CSSOM-mutation-shaped tail (1 subtest of `mixin-cssom.tentative.html`
++ all of `mixin-invalidation.tentative.html`) moves out of P3's point-bug
+queue and into CSSOM-8's backlog.
+
+## Срез P3 2026-09-07 (срез 8)
+
+Landed concurrently with (and committed just after) срез 7's reclassification
+above — a parallel P3 session's worktree already had `insertRule`/
+`deleteRule` for an owned sheet implemented and tested by the time срез 7's
+reclassification merged to `main`. Rather than discard working, tested code
+because the queue-management decision that filed CSSOM-8 preceded it by
+minutes, this slice lands it and **narrows CSSOM-8's remaining scope** to just
+the second half срез 7 named: a live per-declaration `.style` setter for
+CSSOM rule objects.
+
+Implemented `CSSStyleSheet.insertRule`/`.deleteRule` on an **owned**
+(`document.styleSheets`) sheet — closing `mixin-cssom.tentative.html`'s 6th
+subtest, the entire non-`.style`-setter half of what срез 7 filed under
+CSSOM-8. Until this slice only a *constructed* sheet had the two methods
+(CSSOM-5 срез 3).
+
+**No parser/cascade change needed**: `Stylesheet::insert_rule`/`delete_rule`
+(`crates/engine/css-parser/src/parser.rs`) are the same methods the
+constructed-sheet path already calls — already unit-tested at the parser
+level (`parser/tests/revision.rs`) and already correct for this slice's own
+needs, including the exact case the 6th subtest needs: `insert_rule`
+parsing `"@apply --m1();"` as standalone top-level text yields zero rules
+(`@apply` is declaration-position only, never a top-level at-rule), so
+`top_level_order.len() != 1` already turns into
+`CssomRuleMutationError::Syntax` with no special-casing.
+
+**JS bridge** (`crates/js/src/v8_runtime/install/stylesheets.rs`,
+`crates/js/src/shim/web_api_shim_mid.js`): two new natives,
+`_lumen_stylesheet_insert_rule`/`_lumen_stylesheet_delete_rule`, over the
+owned-sheet registry `stylesheet_nodes` — `Arc::make_mut(&mut entry.sheet)`
+(copy-on-write; a reader elsewhere holds `&Stylesheet` only for the
+duration of one call, never a clone of the `Arc`) then delegates to
+`Stylesheet::insert_rule`/`delete_rule`, same sentinel-return convention
+already used for the constructed-sheet twin. `_lumen_make_css_style_sheet`
+(the owned-sheet JS wrapper) gained `insertRule`/`deleteRule` methods —
+copies of the constructed-sheet wrapper's own methods (kept separate rather
+than factored out, since the two wrappers already address distinct `idx`
+spaces through distinct native function names).
+
+**Deliberately not wired into the page cascade**: `stylesheet_nodes` is
+rebuilt wholesale from each `<style>`/`<link>` node's own DOM text on every
+relayout (`crates/shell/src/stylesheets.rs::build_stylesheet_node_registry`),
+so an inserted/deleted rule is visible to further CSSOM reads only until the
+next relayout silently discards it — the same class of gap CSSOM-5 срез 1
+documented for constructed sheets before срез 2 wired `adoptedStyleSheets`
+into the cascade. No vendored test in this bug's scope needs the layout
+effect, only the correct `cssRules`/exception behaviour.
+
+**Verification**: 4 new end-to-end tests in
+`crates/js/tests/cases/bug518_mixin_cssom.rs` through the real V8 shim
+(`insert_rule_and_delete_rule_mutate_the_owned_sheet`,
+`insert_rule_at_top_level_apply_throws_syntax_error` — transcribes the 6th
+subtest verbatim, plus both `IndexSizeError` paths) — 11/11 in that file,
+`cargo test -p lumen-js --features v8-backend --test all`: 94/94. `cargo
+test -p lumen-css-parser --lib`: 426/426 (unchanged — `insert_rule`/
+`delete_rule` themselves were not touched). `cargo clippy -p lumen-js
+--features v8-backend -p lumen-css-parser --all-targets -- -D warnings`:
+clean. No parser, cascade or paint code touched — no `dump_golden.py`
+surface. No live WPT run (same recurring reason as every slice on this
+track — no `.venv` in this slot).
+`tests/wpt/metadata/css/css-mixins/mixins/mixin-cssom.tentative.html.ini`
+removed — all 6 subtests of the file now pass (matching the precedent of
+other bugs whose fix closed a WPT file entirely, e.g. BUG-512).
+
+Status remains `OPEN (ДОРАБОТКА → CSSOM-8)`, per срез 7's classification
+above — this slice does not undo that decision, it shrinks what CSSOM-8
+still owes: `mixin-invalidation.tentative.html` (the entire remaining scope
+of this bug) needs a live per-declaration `.style` setter for CSSOM rule
+objects, not `insertRule`/`deleteRule` — that half is done as of this slice.
+`ROADMAP.md`'s CSSOM-8 entry should be re-scoped to drop the
+`insertRule`/`deleteRule`-on-owned-sheet line item accordingly.

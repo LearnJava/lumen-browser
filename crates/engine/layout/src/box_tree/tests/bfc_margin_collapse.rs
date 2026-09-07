@@ -11,7 +11,7 @@ use lumen_core::geom::Size;
 use crate::style::{ComputedStyle, Length, LengthOrAuto};
 
 use super::super::{BoxKind, BoxOrigin, LayoutBox, Rect};
-use super::super::{collapsed_bottom_margin, collapsed_top_margin};
+use super::super::{collapsed_bottom_margin, collapsed_top_margin, MarginCollapseCache};
 
 const VIEWPORT: Size = Size { width: 800.0, height: 600.0 };
 
@@ -46,7 +46,7 @@ fn collapsed_top_margin_folds_the_whole_first_child_chain() {
     let child2 = block_with_margins(8.0, 0.0, vec![]);
     let child1 = block_with_margins(20.0, 0.0, vec![child2]);
     let root = block_with_margins(5.0, 0.0, vec![child1]);
-    let got = collapsed_top_margin(&root, 800.0, VIEWPORT);
+    let got = collapsed_top_margin(&root, 800.0, VIEWPORT, &mut MarginCollapseCache::default());
     assert!((got - 20.0).abs() < 0.01, "expected max(5,20,8)=20, got {got}");
 }
 
@@ -58,7 +58,7 @@ fn collapsed_top_margin_stops_at_a_child_with_top_padding() {
     let mut child1 = block_with_margins(20.0, 0.0, vec![child2]);
     std::sync::Arc::make_mut(&mut child1.style).padding_top = Length::Px(4.0);
     let root = block_with_margins(5.0, 0.0, vec![child1]);
-    let got = collapsed_top_margin(&root, 800.0, VIEWPORT);
+    let got = collapsed_top_margin(&root, 800.0, VIEWPORT, &mut MarginCollapseCache::default());
     assert!((got - 20.0).abs() < 0.01, "expected max(5,20)=20 (100 excluded), got {got}");
 }
 
@@ -67,7 +67,7 @@ fn collapsed_bottom_margin_folds_the_whole_last_child_chain() {
     let child2 = block_with_margins(0.0, 8.0, vec![]);
     let child1 = block_with_margins(0.0, 20.0, vec![child2]);
     let root = block_with_margins(0.0, 5.0, vec![child1]);
-    let got = collapsed_bottom_margin(&root, 800.0, VIEWPORT);
+    let got = collapsed_bottom_margin(&root, 800.0, VIEWPORT, &mut MarginCollapseCache::default());
     assert!((got - 20.0).abs() < 0.01, "expected max(5,20,8)=20, got {got}");
 }
 
@@ -79,7 +79,7 @@ fn collapsed_bottom_margin_stops_at_a_definite_height() {
     let mut child1 = block_with_margins(0.0, 20.0, vec![child2]);
     std::sync::Arc::make_mut(&mut child1.style).height = Some(Length::Px(10.0));
     let root = block_with_margins(0.0, 5.0, vec![child1]);
-    let got = collapsed_bottom_margin(&root, 800.0, VIEWPORT);
+    let got = collapsed_bottom_margin(&root, 800.0, VIEWPORT, &mut MarginCollapseCache::default());
     assert!((got - 20.0).abs() < 0.01, "expected max(5,20)=20 (100 excluded), got {got}");
 }
 
@@ -97,8 +97,8 @@ fn collapsed_margins_survive_a_very_deep_single_child_chain() {
     // Every level contributes the same 1px margin, so the folded result is
     // just 1px — the assertion that matters is that these calls return at
     // all instead of overflowing the stack.
-    let top = collapsed_top_margin(&node, 800.0, VIEWPORT);
-    let bottom = collapsed_bottom_margin(&node, 800.0, VIEWPORT);
+    let top = collapsed_top_margin(&node, 800.0, VIEWPORT, &mut MarginCollapseCache::default());
+    let bottom = collapsed_bottom_margin(&node, 800.0, VIEWPORT, &mut MarginCollapseCache::default());
     assert!((top - 1.0).abs() < 0.01, "top={top}");
     assert!((bottom - 1.0).abs() < 0.01, "bottom={bottom}");
     // LAYOUT-1 srez 2 made `LayoutBox`'s `Drop` iterative (`layout_box_drop.rs`),

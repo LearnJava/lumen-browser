@@ -82,37 +82,43 @@ fn push_bg_image_urls(image: &BackgroundImage, dpr: f32, out: &mut Vec<String>) 
     }
 }
 
-fn collect_bg_image_inner(b: &LayoutBox, dpr: f32, out: &mut Vec<String>) {
-    for layer in &b.style.background_layers {
-        push_bg_image_urls(&layer.image, dpr, out);
-    }
-    // CSS Lists L3 §2.3: a `list-style-image` marker also needs its URL fetched
-    // and registered, same as a background image.
-    if let BoxKind::Marker { image: Some(src), .. } = &b.kind
-        && !src.is_empty()
-        && !out.iter().any(|u| u == src)
-    {
-        out.push(src.clone());
-    }
-    // CSS Generated Content L3 §2.1: `content: url(...)` produces an inline-replaced
-    // image segment that the shell would otherwise never fetch — unlike `<img>`, it
-    // has no DOM element for `collect_image_requests` to walk. Such segments are
-    // tagged with `source_node == NodeId::from_index(0)` ("no DOM origin"), which
-    // distinguishes them from real inline `<img>` frags (already fetched, and
-    // possibly `loading="lazy"`). Piggy-back on the post-layout background pass.
-    if let BoxKind::InlineRun { segments, .. } = &b.kind {
-        for seg in segments {
-            if let Some(src) = &seg.img_src
-                && seg.source_node == NodeId::from_index(0)
-                && !src.is_empty()
-                && !out.iter().any(|u| u == src)
-            {
-                out.push(src.clone());
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion: nothing after the loop over `children` reads a value the walk
+/// produced, so this is the same safe mechanical class LAYOUT-1 already
+/// converted. Children pushed in reverse so the LIFO stack preserves
+/// document order (relied on by this module's own doc comment/tests).
+fn collect_bg_image_inner(root: &LayoutBox, dpr: f32, out: &mut Vec<String>) {
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        for layer in &b.style.background_layers {
+            push_bg_image_urls(&layer.image, dpr, out);
+        }
+        // CSS Lists L3 §2.3: a `list-style-image` marker also needs its URL fetched
+        // and registered, same as a background image.
+        if let BoxKind::Marker { image: Some(src), .. } = &b.kind
+            && !src.is_empty()
+            && !out.iter().any(|u| u == src)
+        {
+            out.push(src.clone());
+        }
+        // CSS Generated Content L3 §2.1: `content: url(...)` produces an inline-replaced
+        // image segment that the shell would otherwise never fetch — unlike `<img>`, it
+        // has no DOM element for `collect_image_requests` to walk. Such segments are
+        // tagged with `source_node == NodeId::from_index(0)` ("no DOM origin"), which
+        // distinguishes them from real inline `<img>` frags (already fetched, and
+        // possibly `loading="lazy"`). Piggy-back on the post-layout background pass.
+        if let BoxKind::InlineRun { segments, .. } = &b.kind {
+            for seg in segments {
+                if let Some(src) = &seg.img_src
+                    && seg.source_node == NodeId::from_index(0)
+                    && !src.is_empty()
+                    && !out.iter().any(|u| u == src)
+                {
+                    out.push(src.clone());
+                }
             }
         }
-    }
-    for child in &b.children {
-        collect_bg_image_inner(child, dpr, out);
+        stack.extend(b.children.iter().rev());
     }
 }
 

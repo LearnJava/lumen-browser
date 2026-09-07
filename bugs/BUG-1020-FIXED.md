@@ -1,6 +1,6 @@
 # BUG-1020: media query clause parser mishandles boolean-context features, unclosed parens and bare-word tokens containing `)`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-07 (P3)
 **Дата:** 2026-09-06
 **Компонент:** css-parser (`crates/engine/css-parser/src/parser/media.rs` —
 `parse_media_clause`, `parse_media_feature`)
@@ -89,5 +89,42 @@ tokenization must preserve that `false`, just for the right reason.
 
 ## .ini
 
-`tests/wpt/metadata/css/mediaqueries/match-media-parsing.html.ini` carries
-the 7 subtests above as `expected: FAIL`, attributed to this bug.
+`tests/wpt/metadata/css/mediaqueries/match-media-parsing.html.ini` carried
+the 7 subtests above as `expected: FAIL`, attributed to this bug — file
+deleted (2026-09-07 fix), the whole file now passes.
+
+## Срез P3 2026-09-07: fixed
+
+All three parser shortcuts fixed in `parse_media_clause`/`parse_media_feature`
+(`crates/engine/css-parser/src/parser/media.rs`):
+
+- Unclosed `(...)`: `find_matching_close_paren` returning `None` now falls
+  back to `(input.len(), input.len())` instead of failing the whole clause —
+  the remainder of the input becomes the feature's content, no closing `)`
+  left to skip.
+- Bare-word scan: `)` added to the delimiter set; a word immediately
+  followed by `)` (including the degenerate empty-word case, a lone stray
+  `)`) makes the whole clause `Unsupported` instead of swallowing the `)`
+  into a literal `MediaType`.
+- Boolean context: `parse_media_feature` now handles the no-`:` case by
+  matching the bare name against `"color"` → `MediaFeature::Color` (new
+  variant, `matches()` always `true` — Lumen's color depth is fixed,
+  `serialize()` emits the bare `"color"`, no `: value`). General
+  boolean-context support for range features (`width`/`resolution`/…) is
+  **not** in scope here — that is [BUG-527](BUG-527-OPEN.md)'s broader,
+  still-open item; a regression test
+  (`media_query_boolean_context_width_still_unsupported`) pins the boundary
+  so a future BUG-527 fix has to touch that test deliberately, not
+  accidentally widen this one.
+
+All 7 targeted subtests pass by construction (traced by hand against the
+table in §Симптом); the whole `match-media-parsing.html` file (25 subtests)
+was additionally transcribed line-by-line into 6 new unit tests
+(`crates/engine/css-parser/src/parser/tests/at_rules.rs`, prefixed
+`media_query_parsing_*`/`media_query_boolean_*`) — including the lines that
+already passed, so the fix can't be shown to silently regress them.
+`cargo test -p lumen-css-parser --lib`: 438/438 (+6). `cargo clippy
+-p lumen-css-parser --all-targets -- -D warnings`: чист. No other crate
+matches on `MediaFeature` variants (`grep -rn "MediaFeature::"` outside
+`css-parser`: zero), so the new `Color` variant needed no other call site
+updates. `.ini` deleted (whole file now passes).

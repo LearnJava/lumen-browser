@@ -881,14 +881,25 @@ fn has_active_filter(filters: &[FilterFn]) -> bool {
     !filters.is_empty()
 }
 
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion: the four `_parent` ids are threaded down like plain parameters
+/// (never read back from a deeper call — each node's own node-creation
+/// decision depends only on its own style and the incoming parent ids), so
+/// this is the same safe mechanical class LAYOUT-1 already converted. Each
+/// new node's id is `trees.*.nodes.len()` at push time, so document order is
+/// preserved by pushing children in reverse, matching the old left-to-right
+/// recursion's id assignment order.
 fn walk(
-    b: &LayoutBox,
+    root: &LayoutBox,
     transform_parent: PropertyTreeNodeId,
     scroll_parent: PropertyTreeNodeId,
     effect_parent: PropertyTreeNodeId,
     clip_parent: PropertyTreeNodeId,
     trees: &mut PropertyTrees,
 ) {
+    let mut stack: Vec<(&LayoutBox, PropertyTreeNodeId, PropertyTreeNodeId, PropertyTreeNodeId, PropertyTreeNodeId)> =
+        vec![(root, transform_parent, scroll_parent, effect_parent, clip_parent)];
+    while let Some((b, transform_parent, scroll_parent, effect_parent, clip_parent)) = stack.pop() {
     let style = &b.style;
     let mut t_parent = transform_parent;
     let mut s_parent = scroll_parent;
@@ -967,8 +978,9 @@ fn walk(
         }
     }
 
-    for child in &b.children {
-        walk(child, t_parent, s_parent, e_parent, c_parent, trees);
+    for child in b.children.iter().rev() {
+        stack.push((child, t_parent, s_parent, e_parent, c_parent));
+    }
     }
 }
 

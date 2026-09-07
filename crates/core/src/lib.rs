@@ -13,6 +13,7 @@ pub mod auth;
 pub mod capability;
 pub mod color;
 pub mod crash;
+pub mod deep_stack;
 pub mod error;
 pub mod event;
 pub mod ext;
@@ -40,6 +41,7 @@ pub use color::{ColorSpace, detect_color_space_from_icc};
 pub use icc::{DataColorSpace, IccProfile, ProfileClass, ToneCurve, XyzNumber};
 pub use pcs::{Lab, Xyz};
 pub use crash::{format_crash_dump, write_crash_dump, CrashRecorder};
+pub use deep_stack::{run_on_deep_stack, DEEP_TREE_STACK_BYTES};
 pub use error::{Error, Result};
 pub use event::{Event, FetchPriority, RequestStage, SubresourceKind, TabId};
 pub use ext::{

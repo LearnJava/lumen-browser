@@ -1513,6 +1513,70 @@ use super::*;
         assert_eq!(q.serialize(), "not all");
     }
 
+    // ── MQ L4: boolean-context features, unclosed parens, bare-word
+    // tokenization stopping at `)` (BUG-1020) ──
+    // Транскрипция `match-media-parsing.html` построчно (весь файл, не
+    // только 7 ранее падавших сабтестов — покрывает и уже проходившие
+    // случаи, чтобы фикс не мог их тихо сломать).
+
+    #[test]
+    fn media_query_parsing_empty_and_all() {
+        assert_eq!(parse_media_query("").serialize(), "");
+        assert_eq!(parse_media_query(" ").serialize(), "");
+        assert_eq!(parse_media_query("all").serialize(), "all");
+        assert_eq!(parse_media_query(" all").serialize(), "all");
+        assert_eq!(parse_media_query("   all   ").serialize(), "all");
+        assert_eq!(parse_media_query("all,all").serialize(), "all, all");
+        assert_eq!(parse_media_query(" all , all ").serialize(), "all, all");
+    }
+
+    #[test]
+    fn media_query_parsing_boolean_context_color_and_unclosed_parens() {
+        assert_eq!(parse_media_query("(color)").serialize(), "(color)");
+        assert_eq!(parse_media_query("(color").serialize(), "(color)");
+        assert_eq!(parse_media_query(" (color)").serialize(), "(color)");
+        assert_eq!(parse_media_query(" ( color  )  ").serialize(), "(color)");
+        assert_eq!(parse_media_query(" ( color   ").serialize(), "(color)");
+    }
+
+    #[test]
+    fn media_query_parsing_stray_close_paren_is_invalid() {
+        assert_eq!(parse_media_query("color)").serialize(), "not all");
+        assert_eq!(parse_media_query("  color)").serialize(), "not all");
+        assert_eq!(
+            parse_media_query("  color ), ( color").serialize(),
+            "not all, (color)"
+        );
+    }
+
+    #[test]
+    fn media_query_parsing_bare_words_and_empty_clauses() {
+        assert_eq!(parse_media_query(" foo ").serialize(), "foo");
+        assert_eq!(parse_media_query(",").serialize(), "not all, not all");
+        assert_eq!(parse_media_query(" , ").serialize(), "not all, not all");
+        assert_eq!(parse_media_query(",,").serialize(), "not all, not all, not all");
+        assert_eq!(
+            parse_media_query("  ,  ,  ").serialize(),
+            "not all, not all, not all"
+        );
+        assert_eq!(parse_media_query(" foo,").serialize(), "foo, not all");
+    }
+
+    #[test]
+    fn media_query_boolean_color_always_matches() {
+        let q = parse_media_query("(color)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+    }
+
+    // ── MQ L4: boolean context частично реализован (только `color`) —
+    // остальные range-фичи в boolean context остаются Unsupported, объём
+    // BUG-527. Регресс-тест на то, что скоуп фикса не расширился неявно.
+    #[test]
+    fn media_query_boolean_context_width_still_unsupported() {
+        let q = parse_media_query("(width)");
+        assert_eq!(q.serialize(), "not all");
+    }
+
     // ── MQ L5 §6.4: prefers-reduced-motion ──
 
     #[test]

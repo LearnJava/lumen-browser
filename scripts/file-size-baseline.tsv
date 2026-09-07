@@ -25,7 +25,7 @@
 2365	crates/js/src/video_bindings.rs
 2352	crates/engine/layout/src/tests/scroll_interaction_misc.rs
 2294	crates/shell/src/frames.rs
-2180	crates/engine/layout/src/lib.rs
+2275	crates/engine/layout/src/lib.rs
 2133	crates/engine/paint/src/lib.rs
 2067	crates/js/src/web_audio.rs
 2036	crates/shell/src/tests/bug341_census.rs
