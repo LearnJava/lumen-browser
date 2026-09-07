@@ -773,7 +773,13 @@ impl Lumen {
             screen_media_context(viewport, self.dark_mode)
         };
 
-        std::thread::spawn(move || {
+        // Имя обязательно (BUG-1027): при аварии рантайм печатает только его,
+        // а безымянные потоки дают бесполезное `thread '<unknown>'`. Стек
+        // штатный: поток читает сокет и гоняет preload-сканер, деревом не
+        // спускается — layout приходящих чанков делает UI-поток.
+        let spawned = std::thread::Builder::new()
+            .name("lumen-stream".to_owned())
+            .spawn(move || {
             // PH1-8: инкрементальный preload-сканер — обрабатывает каждый chunk.
             // Hint-ы отправляются ДО соответствующего HtmlChunk, чтобы fetch
             // начался параллельно с DOM-парсингом (spec §13.2.6.4.7).
@@ -861,6 +867,9 @@ impl Lumen {
 
             let _ = proxy.send_event(LoadEvent::LoadDone(raw, generation));
         });
+        if let Err(err) = spawned {
+            eprintln!("не удалось запустить поток стриминговой загрузки: {err}");
+        }
     }
 
     /// Обновить display list на основе снапшота частичного DOM.
