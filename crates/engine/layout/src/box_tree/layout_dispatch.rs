@@ -412,6 +412,11 @@ fn lay_out_inner_impl(
         DispatchOutcome::NeedsFlexLoop(init) => {
             super::flex_trampoline::run(b, init, measurer, viewport, hp);
         }
+        // LAYOUT-2 срез 4: the grid dispatch arm's probe + final-placement
+        // passes, same shape as the flex case above — see `grid_trampoline::run`.
+        DispatchOutcome::NeedsGridLoop(init) => {
+            super::grid_trampoline::run(b, init, measurer, viewport, hp);
+        }
     }
 }
 
@@ -1139,32 +1144,28 @@ pub(super) fn dispatch_box(
                             - s.border_top_width - s.border_bottom_width)
                             .max(0.0),
                     });
-                let content_height = lay_out_grid(
-                    &mut b.children, &s, content_x, content_y, content_width, grid_definite_height,
-                    measurer, viewport, children_pcb, hp,
-                );
-                b.rect.height = if let Some(h_len) = &s.height
-                    && let Some(h) = resolve_block_size(h_len, em, available_height, viewport)
-                {
-                    match s.box_sizing {
-                        BoxSizing::ContentBox => {
-                            (h + padding_top + padding_bottom
-                                + s.border_top_width + s.border_bottom_width).max(0.0)
-                        }
-                        BoxSizing::BorderBox => h.max(
-                            padding_top + padding_bottom
-                                + s.border_top_width + s.border_bottom_width,
-                        ),
+                // LAYOUT-2 срез 4: Steps 1–3 (native — see `build_grid_init`'s
+                // doc comment) run here, but the per-item probe and final-
+                // placement passes (and this container's own height, formerly
+                // right here) are deferred to `grid_trampoline::run` so a
+                // chain of nested grid containers drives on an explicit heap
+                // stack instead of recursing.
+                match grid::build_grid_init(
+                    &b.children, &s, content_x, content_y, content_width, grid_definite_height,
+                    viewport, children_pcb, em, available_height, padding_top, padding_bottom,
+                    size_contained,
+                ) {
+                    Some(init) => return DispatchOutcome::NeedsGridLoop(init),
+                    None => {
+                        // No items — same zero-height epilogue `grid_trampoline::
+                        // finish_frame` uses for a populated container.
+                        super::grid_trampoline::finish_container_height(
+                            b, &s, em, available_height, padding_top, padding_bottom,
+                            size_contained, viewport, 0.0,
+                        );
+                        return DispatchOutcome::Done;
                     }
-                } else if let Some((aw, ah)) = s.aspect_ratio
-                    && aw > 0.0 && ah > 0.0
-                {
-                    (b.rect.width * ah / aw).max(0.0)
-                } else {
-                    let ch = contained_content_height(size_contained, &s, em, viewport, content_height);
-                    ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
-                };
-                return DispatchOutcome::Done;
+                }
             }
             // Image не имеет flow-детей, поэтому child-цикл просто пуст —
             // объединяем с Block, чтобы общий код width/height/min-max/borders
