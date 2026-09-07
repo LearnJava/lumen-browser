@@ -1,4 +1,5 @@
 use super::*;
+use super::block_flow_trampoline::{self, DispatchOutcome};
 
 /// `pcb` — rect positioned containing block (ближайший предок с position != static),
 /// используется для layout абсолютно-позиционированных потомков.
@@ -262,6 +263,163 @@ fn lay_out_inner(
     start_x: f32,
     start_y: f32,
     available_width: f32,
+    available_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+    hp: &dyn HyphenationProvider,
+    in_block_flow: bool,
+    outer_floats: Option<&FloatContext>,
+    parent_justify_items: AlignValue,
+    used_size_override: Option<UsedSizeOverride>,
+) {
+    lay_out_inner_impl(
+        b, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
+        in_block_flow, outer_floats, parent_justify_items, used_size_override,
+    );
+}
+
+/// LAYOUT-2 срез 1: computes `b`'s used height from `content_height` (the block-
+/// flow/multicol/table content extent) — CSS 2.1 §10.6.3 explicit height,
+/// §10.6.7 aspect-ratio-derived, CSS Box Sizing L4 §5 size-containment fallback,
+/// CSS Basic UI L4 §4.4 field-sizing override, and the §10.4 min/max-height
+/// clamp. Shared by the plain block-flow branch (dispatched inline before
+/// LAYOUT-2, now via the explicit-stack driver in `block_flow_trampoline`) and
+/// the multicol branch (`lay_out_multicol_children`'s caller), which both need
+/// the exact same finishing sequence applied to two different `content_height`
+/// sources. Extracted verbatim — no behavior change from the pre-LAYOUT-2 inline
+/// version.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn finalize_block_height(
+    b: &mut LayoutBox,
+    s: &ComputedStyle,
+    em: f32,
+    available_height: Option<f32>,
+    viewport: Size,
+    padding_top: f32,
+    padding_bottom: f32,
+    size_contained: bool,
+    field_intrinsic: Option<(f32, f32)>,
+    content_height: f32,
+) {
+    // Явная высота (CSS height: Npx) перекрывает авто-высоту по содержимому.
+    // box-sizing работает симметрично width: content-box прибавляет
+    // padding+border, border-box оставляет h как итоговую высоту.
+    b.rect.height = if let Some(h_len) = &s.height {
+        if let Some(h) = resolve_block_size(h_len, em, available_height, viewport) {
+            let specified = match s.box_sizing {
+                BoxSizing::ContentBox => h
+                    + padding_top + padding_bottom
+                    + s.border_top_width + s.border_bottom_width,
+                BoxSizing::BorderBox => h.max(
+                    padding_top + padding_bottom
+                        + s.border_top_width + s.border_bottom_width,
+                ),
+            };
+            // CSS 2.1 §17.5.3: the `height` of a table cell is a minimum — the cell
+            // grows to fit content taller than the specified height (unlike a regular
+            // block, where overflow just spills). Without this the cell clamps to the
+            // specified border-box height and content overflows into the inter-row
+            // border-spacing gap, so row pitch is short by the overflow amount and the
+            // error accumulates down the table (BUG-177).
+            if s.display == Display::TableCell {
+                let content_box = content_height
+                    + padding_top + padding_bottom
+                    + s.border_top_width + s.border_bottom_width;
+                specified.max(content_box)
+            } else {
+                specified
+            }
+        } else {
+            content_height + padding_top + padding_bottom
+                + s.border_top_width + s.border_bottom_width
+        }
+    } else if let Some((aw, ah)) = s.aspect_ratio
+        && aw > 0.0 && ah > 0.0
+    {
+        // CSS Sizing L4 §6.1: height auto + aspect-ratio → derive from width.
+        // Phase 0: ratio applied in border-box space.
+        (b.rect.width * ah / aw).max(0.0)
+    } else {
+        // CSS Containment L3 §3.3 / CSS Box Sizing L4 §5: size containment
+        // suppresses children's contribution to auto height — the box uses
+        // contain-intrinsic-height (or 0 when `none`/unset) instead.
+        let ch = contained_content_height(size_contained, s, em, viewport, content_height);
+        ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
+    };
+    // CSS Basic UI L4 §4.4 — field-sizing: content height override.
+    // When s.height was not set by UA (field_intrinsic is Some), replace the
+    // zero content_height with the padding-box height from the measurement.
+    if let Some((_, ph)) = field_intrinsic
+        && s.height.is_none()
+    {
+        b.rect.height = ph + s.border_top_width + s.border_bottom_width;
+    }
+    // CSS 2.1 §10.4: clamp [min-height, max-height]. Симметрия с width: max
+    // сначала, потом min → «min побеждает max». Content оверфлоу-ит коробку
+    // если min режет ниже — это правильное поведение CSS.
+    let outer_vert = |v: f32| match s.box_sizing {
+        BoxSizing::ContentBox => v + padding_top + padding_bottom
+            + s.border_top_width + s.border_bottom_width,
+        BoxSizing::BorderBox => v,
+    };
+    if let Some(max_len) = &s.max_height
+        && let Some(max_h) = resolve_block_size(max_len, em, available_height, viewport)
+    {
+        b.rect.height = b.rect.height.min(outer_vert(max_h).max(0.0));
+    }
+    if let Some(min_len) = &s.min_height
+        && let Some(min_h) = resolve_block_size(min_len, em, available_height, viewport)
+    {
+        b.rect.height = b.rect.height.max(outer_vert(min_h.max(0.0)));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lay_out_inner_impl(
+    b: &mut LayoutBox,
+    start_x: f32,
+    start_y: f32,
+    available_width: f32,
+    available_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+    hp: &dyn HyphenationProvider,
+    in_block_flow: bool,
+    outer_floats: Option<&FloatContext>,
+    parent_justify_items: AlignValue,
+    used_size_override: Option<UsedSizeOverride>,
+) {
+    // LAYOUT-2 срез 1: `dispatch_box` is every dispatch arm this function used
+    // to run inline, minus the one non-tail-recursive case (the plain block-flow
+    // children loop, CSS 2.1 §9.5/§8.3.1 — float placement + margin collapsing
+    // read each child's `.rect` after laying it out, so it cannot be a simple
+    // pre-order walk). That case returns `NeedsBlockFlowLoop` instead of
+    // recursing, and `block_flow_trampoline::run` drives it — and every further
+    // plain-block descendant it meets — on an explicit heap stack instead of
+    // the native call stack (`<div>`×20000 no longer overflows it).
+    match dispatch_box(
+        b, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
+        in_block_flow, outer_floats, parent_justify_items, used_size_override,
+    ) {
+        DispatchOutcome::Done => {}
+        DispatchOutcome::NeedsBlockFlowLoop(init) => {
+            block_flow_trampoline::run(b, init, measurer, viewport, hp);
+        }
+    }
+}
+
+/// LAYOUT-2 срез 1: `pub(super)` so `block_flow_trampoline` can call it once per
+/// child at the explicit-stack driver's one recursion point, exactly where this
+/// function's own plain-block branch used to call `lay_out_inner` on each child
+/// natively. See [`DispatchOutcome`] for the two possible results.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn dispatch_box(
+    b: &mut LayoutBox,
+    start_x: f32,
+    start_y: f32,
+    available_width: f32,
     // CSS 2.1 §10.5: definite content height of the containing block, or None if auto.
     // None means percentage heights on children compute to 'auto'.
     available_height: Option<f32>,
@@ -273,7 +431,7 @@ fn lay_out_inner(
     outer_floats: Option<&FloatContext>,
     parent_justify_items: AlignValue,
     used_size_override: Option<UsedSizeOverride>,
-) {
+) -> DispatchOutcome {
     // DEVX-8a: `pcb` is the positioned containing block, threaded as a mandatory
     // parameter through every `lay_out`/`lay_out_inner` call — this is the choke
     // point proving "every box resolves a containing block" without a second
@@ -287,7 +445,7 @@ fn lay_out_inner(
     );
     if matches!(b.kind, BoxKind::Skip) {
         b.rect = Rect::new(start_x, start_y, 0.0, 0.0);
-        return;
+        return DispatchOutcome::Done;
     }
 
     // EE-3: incremental layout — skip clean subtrees entirely.
@@ -298,7 +456,7 @@ fn lay_out_inner(
     if INCREMENTAL_LAYOUT_MODE.with(|m| m.get()) && b.dirty.is_clean() {
         let _prof = lumen_core::profile::scope_detail("lo_translate");
         crate::incremental::translate_subtree(b, start_x - b.rect.x, start_y - b.rect.y);
-        return;
+        return DispatchOutcome::Done;
     }
 
     record_layout_key_occurrence(b.node, start_x, start_y, available_width, available_height, &b.style, used_size_override.as_ref());
@@ -361,7 +519,7 @@ fn lay_out_inner(
         // the flag cannot be maintained per resolution site here.
         INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
         lay_out_svg_root(b, start_x, start_y, available_width, available_height, viewport);
-        return;
+        return DispatchOutcome::Done;
     }
 
     // CSS Writing Modes L3 §3: vertical writing modes swap the block/inline axes.
@@ -388,7 +546,7 @@ fn lay_out_inner(
             pcb,
             hp,
         );
-        return;
+        return DispatchOutcome::Done;
     }
 
     // BUG-341 S12: an `Arc` bump, not a 3.2 KB deep copy, on the (overwhelming
@@ -746,7 +904,7 @@ fn lay_out_inner(
             pcb,
             hp,
         );
-        return;
+        return DispatchOutcome::Done;
     }
 
     // InlineRun обрабатывается до основного match.
@@ -897,12 +1055,17 @@ fn lay_out_inner(
             }
             _ => line_count as f32 * step_line_height(b.used_line_height, step),
         };
-        return;
+        return DispatchOutcome::Done;
     }
 
     // Абсолютно-позиционированные дети: (index, static_x, static_y).
-    // Заполняется внутри Block-flow и обрабатывается после match.
-    let mut abs_deferred: Vec<(usize, f32, f32)> = Vec::new();
+    // LAYOUT-2 срез 1: the plain block-flow branch (the one arm that used to
+    // push into this) now returns `NeedsBlockFlowLoop` and defers to its own
+    // copy inside `BlockFlowInit` — see the doc comment on the `else` branch
+    // below. This one stays empty for every dispatch arm that still runs
+    // inline (flex/grid resolve their own abs children directly; the rest
+    // never had abs-positioned children to defer in the first place).
+    let abs_deferred: Vec<(usize, f32, f32)> = Vec::new();
 
     match &mut b.kind {
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Audio { .. } | BoxKind::Iframe { .. } | BoxKind::FormControl { .. } => {
@@ -990,7 +1153,7 @@ fn lay_out_inner(
                     };
                     lay_out_abs_children(b, &flex_abs, measurer, viewport, my_pcb, hp);
                 }
-                return;
+                return DispatchOutcome::Done;
             }
             // Grid containers dispatch to lay_out_grid before block-flow.
             if matches!(s.display, Display::Grid | Display::InlineGrid) {
@@ -1031,7 +1194,7 @@ fn lay_out_inner(
                     let ch = contained_content_height(size_contained, &s, em, viewport, content_height);
                     ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
                 };
-                return;
+                return DispatchOutcome::Done;
             }
             // Image не имеет flow-детей, поэтому child-цикл просто пуст —
             // объединяем с Block, чтобы общий код width/height/min-max/borders
@@ -1072,17 +1235,11 @@ fn lay_out_inner(
                 // A non-BFC block laid out beside an enclosing context's floats
                 // inherits them so its line boxes are shortened (it does not own
                 // them). A BFC root starts fresh — it never overlaps outer floats.
-                let mut fc = match outer_floats {
+                let fc = match outer_floats {
                     Some(p) if !establishes_bfc(b) => FloatContext::inheriting(p),
                     _ => FloatContext::new(),
                 };
                 let container_right = content_x + content_width;
-
-                let mut child_y = content_y;
-                // CSS 2.1 §8.3.1: resolved bottom margin of the previous block-level child.
-                // Adjacent Block/FlowRoot siblings collapse their margins (gap = max, not sum).
-                // Inline runs, replaced elements, and floats break the collapsing chain.
-                let mut prev_block_mb: f32 = 0.0;
                 // CSS 2.1 §8.3.1: this block's top margin collapses with the top margin of
                 // its first in-flow block child when nothing separates them — no top border,
                 // no top padding, no BFC, and the box is itself a normal in-flow block (not a
@@ -1107,531 +1264,47 @@ fn lay_out_inner(
                     && padding_bottom == 0.0
                     && s.border_bottom_width == 0.0
                     && s.height.is_none();
-                // Tracks whether the first in-flow child has been positioned yet.
-                let mut seen_inflow_child = false;
-                // CSS Lists L3 §2.4: pending indent from an inside ::marker (em units).
-                // Consumed by the first normal-flow content child after the marker.
-                let mut inside_marker_w: f32 = 0.0;
-                for (i, child) in b.children.iter_mut().enumerate() {
-                    if matches!(child.style.position, Position::Absolute | Position::Fixed) {
-                        abs_deferred.push((i, content_x, child_y));
-                        continue;
-                    }
-                    // CSS Lists L3 §2.4 — position ::marker outside or inside principal block.
-                    if matches!(&child.kind, BoxKind::Marker { .. }) {
-                        let (position, em, marker_text) =
-                            if let BoxKind::Marker { position, text, .. } = &child.kind {
-                                (*position, child.style.font_size, text.clone())
-                            } else { unreachable!() };
-                        let line_h = child.used_line_height;
-                        // CSS Lists L3 §2.4 — the outside marker occupies the area to the
-                        // left of the principal box. The default box is `em * 1.5`; a text
-                        // marker (counter glyph or `::marker { content }`) wider than that —
-                        // e.g. a custom `@counter-style` with a long prefix/suffix like
-                        // "#1: " — must grow the box leftward so its string right-aligns at
-                        // the content edge instead of overflowing into the first word
-                        // ("#1:One" instead of "#1: One" — BUG-185).
-                        let default_w = em * 1.5;
-                        let text_w = if marker_text.is_empty() {
-                            0.0
-                        } else {
-                            measurer.map_or(0.0, |m| {
-                                let fams = &child.style.font_family;
-                                let ts = child.style.tab_size
-                                    * m.char_width_with_families(' ', em, fams);
-                                measure_text_w_families(
-                                    &marker_text, em, child.style.letter_spacing, ts, fams, m,
-                                )
-                            })
-                        };
-                        let marker_w = default_w.max(text_w); // CSS: list-style-type determines exact width
-                        match position {
-                            ListStylePosition::Outside => {
-                                // Out of flow: does not advance child_y.
-                                // Snap to integer CSS pixels — em*1.5 is often fractional (BUG-083).
-                                child.rect = Rect::new(
-                                    (content_x - marker_w).round(),
-                                    child_y.round(),
-                                    marker_w.round(),
-                                    line_h.round(),
-                                );
-                            }
-                            ListStylePosition::Inside => {
-                                // CSS Lists L3 §2.4: inside marker shares the first line with
-                                // content. Place at content_x; record indent for the next child.
-                                child.rect = Rect::new(
-                                    content_x.round(),
-                                    child_y.round(),
-                                    marker_w.round(),
-                                    line_h.round(),
-                                );
-                                inside_marker_w = marker_w.round();
-                                // Do NOT advance child_y — marker is inline with content.
-                            }
-                        }
-                        continue;
-                    }
-
-                    // CSS 2.1 §9.5.2: clear — advance child_y past relevant floats.
-                    // Clearance is inserted between the top margin and the top border, so the
-                    // final border edge ends up at max(natural-flow border, float bottom): the
-                    // top margin is *absorbed* by clearance, not stacked on top of the float
-                    // bottom. `clearance_pre` remembers the pre-clear flow position so the
-                    // start_y computation below can place the border at that maximum (fixes the
-                    // double-count where a cleared block dropped to float_bottom + margin_top).
-                    let clearance_pre = if !fc.is_empty() && child.style.clear != ClearSide::None {
-                        let pre = child_y;
-                        child_y = fc.clear_y(child_y, child.style.clear);
-                        Some(pre)
-                    } else {
-                        None
-                    };
-
-                    // CSS 2.1 §9.5.1: float box — placed out of normal flow.
-                    if child.style.float_side != FloatSide::None {
-                        let cem = child.style.font_size;
-                        // Shrink-to-fit width (CSS 2.1 §10.3.5): explicit CSS width wins;
-                        // otherwise preferred content width, falling back to max-content
-                        // measurement for text-only floats (e.g. the ::first-letter
-                        // drop-cap box, BB-2), clamped to available space. `probe_w` decides
-                        // the float's box at the *current* line; the outer width is then used
-                        // to test whether the float fits or must drop (rule 8 below).
-                        let probe_avail = {
-                            let l = fc.left_edge_at(child_y, content_x);
-                            let r = fc.right_edge_at(child_y, container_right);
-                            (r - l).max(0.0)
-                        };
-                        // CSS 2.1 §10.3.5 / §8.3: an explicit (incl. percentage) width and its
-                        // percentage margins/padding resolve against the float's containing
-                        // block — the same block the float would use if it weren't floated —
-                        // not against the (possibly float-narrowed) space at the current line.
-                        // Using the narrowed `probe_avail` here made `width:100%` collapse to
-                        // near-zero when squeezed next to prior floats, so it never dropped to
-                        // a new line under rule 8 below and poisoned every later `clear_y`
-                        // computation that depended on its true bottom edge (BUG-469).
-                        let probe_w = if child.style.width.is_some() {
-                            content_width
-                        } else {
-                            preferred_inline_block_width(child, measurer, viewport)
-                                .or_else(|| {
-                                    let w = max_content_outer_width(child, measurer, viewport);
-                                    (w > 0.0).then_some(w)
-                                })
-                                .map(|pw| pw.min(probe_avail))
-                                .unwrap_or(probe_avail)
-                        };
-                        lay_out(child, fc.left_edge_at(child_y, content_x), child_y, probe_w,
-                                children_available_height, measurer, viewport, children_pcb, hp, false);
-
-                        // CSS 2.1 §9.5.1 rule 8: if the float's outer margin box does not fit
-                        // in the space beside existing floats, drop it below them until it fits
-                        // (or no float remains to clear). This wraps a row of left floats onto a
-                        // new line in a narrow container instead of overflowing past the edge.
-                        let probe_ml = child.style.margin_left.resolve_or_zero(cem, probe_avail, viewport);
-                        let probe_mr = child.style.margin_right.resolve_or_zero(cem, probe_avail, viewport);
-                        let outer_w = probe_ml + child.rect.width + probe_mr;
-                        let mut float_y = child_y;
-                        while !fc.is_empty() {
-                            let l = fc.left_edge_at(float_y, content_x);
-                            let r = fc.right_edge_at(float_y, container_right);
-                            if outer_w <= (r - l).max(0.0) {
-                                break;
-                            }
-                            match fc.next_float_bottom(float_y) {
-                                Some(ny) => float_y = ny,
-                                None => break,
-                            }
-                        }
-                        let dropped = (float_y - child_y).abs() > f32::EPSILON;
-                        // Shadow child_y at the (possibly dropped) line for the placement below.
-                        let child_y = float_y;
-                        let avail_left  = fc.left_edge_at(child_y, content_x);
-                        let avail_right = fc.right_edge_at(child_y, container_right);
-                        let avail_w = (avail_right - avail_left).max(0.0);
-                        // Re-lay-out at the dropped line: an auto-width float may grow into the
-                        // wider line, and the box's origin changed.
-                        if dropped {
-                            // Same containing-block basis as the probe layout above — an
-                            // explicit width must not be re-resolved against the new line's
-                            // narrowed gap either.
-                            let w = if child.style.width.is_some() {
-                                content_width
-                            } else {
-                                preferred_inline_block_width(child, measurer, viewport)
-                                    .or_else(|| {
-                                        let w = max_content_outer_width(child, measurer, viewport);
-                                        (w > 0.0).then_some(w)
-                                    })
-                                    .map(|pw| pw.min(avail_w))
-                                    .unwrap_or(avail_w)
-                            };
-                            lay_out(child, avail_left, child_y, w,
-                                    children_available_height, measurer, viewport, children_pcb, hp, false);
-                        }
-
-                        let fml = child.style.margin_left.resolve_or_zero(cem, avail_w, viewport);
-                        let fmr = child.style.margin_right.resolve_or_zero(cem, avail_w, viewport);
-                        let fmt = child.style.margin_top.resolve_or_zero(cem, avail_w, viewport);
-                        let fmb = child.style.margin_bottom.resolve_or_zero(cem, avail_w, viewport);
-                        let fw  = child.rect.width;
-                        let fh  = child.rect.height;
-
-                        match child.style.float_side {
-                            FloatSide::Left => {
-                                let lx = fc.left_edge_at(child_y, content_x);
-                                child.rect.x = lx + fml;
-                                child.rect.y = child_y + fmt;
-                                let top_y  = child_y + fmt;
-                                let bot_y  = top_y + fh + fmb;
-                                let right_edge = lx + fml + fw + fmr;
-                                fc.add_left(bot_y, right_edge);
-                                // CSS Shapes L1 — wire shape-outside for left float.
-                                // Margin-box origin: (lx, child_y). Points are float-local.
-                                if let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside {
-                                    if let Some(r) = parse_circle_px(sv) {
-                                        let cx = child.rect.x + fw / 2.0;
-                                        let cy = top_y + fh / 2.0;
-                                        fc.shape_circles.push((top_y, bot_y, true, cx, cy, r));
-                                    } else if let Some(local_pts) = parse_shape_path_px(sv)
-                                        .or_else(|| parse_shape_polygon_px(sv))
-                                    {
-                                        let pts = local_pts.into_iter()
-                                            .map(|(px, py)| (px + lx, py + child_y))
-                                            .collect();
-                                        fc.shape_polygons.push(ShapePolygon {
-                                            top_y, bottom_y: bot_y, is_left: true, points: pts,
-                                        });
-                                    } else if let Some((rx, ry, ecx, ecy)) = parse_shape_ellipse_px(sv) {
-                                        fc.shape_ellipses.push(ShapeEllipse {
-                                            top_y, bottom_y: bot_y, is_left: true,
-                                            cx: ecx + lx, cy: ecy + child_y, rx, ry,
-                                        });
-                                    } else if let Some((it, ir, ib, il, irad)) = parse_shape_inset_px(sv) {
-                                        // Reference box = margin box: origin (lx, child_y),
-                                        // width fml+fw+fmr, bottom bot_y.
-                                        let shape_top = (child_y + it).min(bot_y);
-                                        let shape_bot = (bot_y - ib).max(shape_top);
-                                        fc.shape_insets.push(ShapeInset {
-                                            top_y: shape_top, bottom_y: shape_bot, is_left: true,
-                                            left_x: lx + il,
-                                            right_x: lx + fml + fw + fmr - ir,
-                                            radius: irad,
-                                        });
-                                    }
-                                }
-                            }
-                            FloatSide::Right => {
-                                let rx = fc.right_edge_at(child_y, container_right);
-                                child.rect.x = rx - fmr - fw;
-                                child.rect.y = child_y + fmt;
-                                let top_y  = child_y + fmt;
-                                let bot_y  = top_y + fh + fmb;
-                                let left_edge = rx - fmr - fw - fml;
-                                fc.add_right(bot_y, left_edge);
-                                // CSS Shapes L1 — wire shape-outside for right float.
-                                // Margin-box origin: (left_edge, child_y). Points are float-local.
-                                if let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside {
-                                    if let Some(r) = parse_circle_px(sv) {
-                                        let cx = child.rect.x + fw / 2.0;
-                                        let cy = top_y + fh / 2.0;
-                                        fc.shape_circles.push((top_y, bot_y, false, cx, cy, r));
-                                    } else if let Some(local_pts) = parse_shape_path_px(sv)
-                                        .or_else(|| parse_shape_polygon_px(sv))
-                                    {
-                                        let pts = local_pts.into_iter()
-                                            .map(|(px, py)| (px + left_edge, py + child_y))
-                                            .collect();
-                                        fc.shape_polygons.push(ShapePolygon {
-                                            top_y, bottom_y: bot_y, is_left: false, points: pts,
-                                        });
-                                    } else if let Some((rx_e, ry_e, ecx, ecy)) = parse_shape_ellipse_px(sv) {
-                                        fc.shape_ellipses.push(ShapeEllipse {
-                                            top_y, bottom_y: bot_y, is_left: false,
-                                            cx: ecx + left_edge, cy: ecy + child_y, rx: rx_e, ry: ry_e,
-                                        });
-                                    } else if let Some((it, ir, ib, il, irad)) = parse_shape_inset_px(sv) {
-                                        // Reference box = margin box: origin (left_edge, child_y),
-                                        // right edge rx, bottom bot_y.
-                                        let shape_top = (child_y + it).min(bot_y);
-                                        let shape_bot = (bot_y - ib).max(shape_top);
-                                        fc.shape_insets.push(ShapeInset {
-                                            top_y: shape_top, bottom_y: shape_bot, is_left: false,
-                                            left_x: left_edge + il,
-                                            right_x: rx - ir,
-                                            radius: irad,
-                                        });
-                                    }
-                                }
-                            }
-                            FloatSide::None => unreachable!(),
-                        }
-                        // Float does not advance child_y in normal flow.
-                        continue;
-                    }
-
-                    // Normal flow: narrow x/width for active floats.
-                    let flow_left  = fc.left_edge_at(child_y, content_x);
-                    let flow_right = fc.right_edge_at(child_y, container_right);
-                    // Apply inside-marker indent to the first normal-flow content child.
-                    let (mut eff_left, mut eff_w) = if inside_marker_w > 0.0 {
-                        let l = flow_left + inside_marker_w;
-                        inside_marker_w = 0.0;
-                        (l, (flow_right - l).max(0.0))
-                    } else {
-                        (flow_left, (flow_right - flow_left).max(0.0))
-                    };
-                    // CSS 2.1 §9.5: a block-level box in normal flow is NOT narrowed by
-                    // floats — its width and margins resolve against the full containing
-                    // block and only its line boxes are shortened.
-                    //
-                    // `outer_for_child` carries this block's float context down into an
-                    // in-flow non-BFC child so its (and its descendants') line boxes are
-                    // shortened by the active floats — instead of the box itself being
-                    // narrowed/clipped (the legacy approximation).
-                    let mut outer_for_child: Option<&FloatContext> = None;
-                    if (flow_left > content_x || flow_right < container_right)
-                        && child.style.width.is_none()
-                        && matches!(child.kind, BoxKind::Block)
-                        && !establishes_bfc(child)
-                    {
-                        if has_in_flow_content(child) {
-                            // Auto-width non-BFC block with content beside a float: keep the
-                            // full containing-block width and propagate the float context so
-                            // the child's line boxes recede past the float (CSS 2.1 §9.5).
-                            eff_left = content_x;
-                            eff_w = content_width;
-                            outer_for_child = Some(&fc);
-                        } else {
-                            // *Empty* auto-width block (no in-flow content to reflow): resolve
-                            // geometry against the full content width, then clip the result to
-                            // the non-float band. This keeps the visual identical when the box
-                            // would overlap a float (Lumen paints floats in source order, so the
-                            // clip stands in for float-over-block painting), while restoring a
-                            // margin'd box that fits in the gap between two floats — which the
-                            // naive narrowing collapsed to zero width.
-                            let cem = child.style.font_size;
-                            let ml = child.style.margin_left.resolve_or_zero(cem, content_width, viewport);
-                            let mr = child.style.margin_right.resolve_or_zero(cem, content_width, viewport);
-                            let bw = (content_width - ml - mr).max(0.0);
-                            let nat_x = content_x + ml;
-                            let vx = nat_x.max(flow_left);
-                            let vw = ((nat_x + bw).min(flow_right) - vx).max(0.0);
-                            // Reproduce the clipped border-box through lay_out's margin re-add:
-                            // it places x at eff_left + ml and width at eff_w − ml − mr.
-                            eff_left = vx - ml;
-                            eff_w = vw + ml + mr;
-                        }
-                    }
-
-                    // CSS 2.1 §8.3.1: collapse adjacent sibling block margins.
-                    // Block/FlowRoot/Table participate; other kinds break the chain. A `Table`
-                    // box is block-level and its (wrapper) margins collapse with adjacent
-                    // sibling margins like a normal block, even though it establishes a BFC for
-                    // its own contents (so `collapsed_top_margin`/`collapsed_bottom_margin`
-                    // return its own margin without folding into its rows — see those fns).
-                    // `own_mt` is the child's own resolved top margin (what lay_out re-adds
-                    // internally); `collapsed_mt` additionally folds the child's own first-child
-                    // chain (§8.3.1). The base formula offsets start_y by (collapsed_mt − own_mt)
-                    // so that lay_out's internal "+own_mt" lands the child at its collapsed flow
-                    // position child_y + max(prev_block_mb, collapsed_mt).
-                    let is_block = matches!(&child.kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Table);
-                    let is_first_inflow = !seen_inflow_child;
-                    let own_mt = child.style.margin_top
-                        .resolve_or_zero(child.style.font_size, eff_w, viewport);
-                    // CSS 2.1 §8.3.1: the margins of the root element's box do not collapse.
-                    // When this container is the document box (`NodeId` index 0), its first
-                    // in-flow block child IS the root element, so the parent↔first-child collapse
-                    // chain must terminate there: a descendant's escaping top margin must not
-                    // shift the root element (and the propagated canvas background it backs) off
-                    // the viewport origin. Laying it out with `in_block_flow == false` also stops
-                    // it from flush-collapsing its own first child, so that child's collapsed
-                    // margin stays inside the root box (BUG-153 — restores the 1px magenta frame
-                    // top edge that BUG-151's collapse-through regressed).
-                    let child_is_root_element =
-                        b.node.index() == 0 && is_first_inflow && is_block;
-                    let collapsed_mt = if child_is_root_element {
-                        own_mt
-                    } else {
-                        collapsed_top_margin(child, eff_w, viewport)
-                    };
-                    let start_y = if let Some(pre_clear_y) = clearance_pre {
-                        // CSS 2.1 §9.5.2: a cleared block's border edge sits at the larger of
-                        // its natural flow position (margin included) and the cleared float
-                        // bottom (`child_y`, advanced by clear_y above). Clearance fills any
-                        // gap; the margin is not added a second time on top of the float
-                        // bottom. `natural_border` is the pre-clearance border-top.
-                        let natural_border = pre_clear_y
-                            - prev_block_mb.min(collapsed_mt.max(0.0)) + collapsed_mt;
-                        natural_border.max(child_y) - own_mt
-                    } else if is_block {
-                        if is_first_inflow
-                            && b_collapses_top
-                            && matches!(child.kind, BoxKind::Block)
-                            && child.style.clear == ClearSide::None
-                        {
-                            // Parent↔first-child collapse: the margin escaped up into this box's
-                            // own (already-applied) top margin. Place the child flush at the
-                            // content top; lay_out re-adds own_mt, so pre-subtract it.
-                            content_y - own_mt
-                        } else {
-                            child_y - prev_block_mb.min(collapsed_mt.max(0.0)) + collapsed_mt - own_mt
-                        }
-                    } else {
-                        child_y
-                    };
-
-                    lay_out_inner(child, eff_left, start_y, eff_w,
-                            children_available_height, measurer, viewport, children_pcb, hp,
-                            !child_is_root_element, outer_for_child, s.justify_items, None);
-                    if matches!(child.kind, BoxKind::Skip) {
-                        // Zero-height; does not break the collapsing chain.
-                        continue;
-                    }
-                    seen_inflow_child = true;
-                    // CSS 2.1 §8.3.1: the child's effective bottom margin is its own
-                    // bottom margin folded with any bottom margin escaping from its
-                    // last-child chain (collapse-through), mirroring `collapsed_mt` on
-                    // the top edge. For non-block kinds this is just the own margin.
-                    let child_mb = collapsed_bottom_margin(child, content_width, viewport);
-                    // CSS 2.1 §8.3.1 (self-collapsing empty box): an empty, non-BFC
-                    // block with no in-flow content and a used height of 0 has its own
-                    // top and bottom margins adjoining — they merge into ONE value with
-                    // whatever already collapsed into this position (`prev_block_mb`/
-                    // `collapsed_mt`) instead of stacking as two separate gaps around a
-                    // box that occupies no vertical space.
-                    let self_collapses = is_block
-                        && !establishes_bfc(child)
-                        && child.style.clear == ClearSide::None
-                        && !has_in_flow_content(child)
-                        && child.rect.height.abs() < 0.01;
-                    if self_collapses {
-                        let old_gap = prev_block_mb.max(collapsed_mt);
-                        let merged = old_gap.max(child_mb);
-                        if merged > old_gap {
-                            child.rect.y += merged - old_gap;
-                        }
-                        child_y += merged;
-                        prev_block_mb = merged;
-                    } else {
-                        child_y = child.rect.y + child.rect.height + child_mb;
-                        prev_block_mb = if is_block { child_mb.max(0.0) } else { 0.0 };
-                    }
-                    // CSS 2.1 §10.8 — inline-image line-box descent (the classic
-                    // "image bottom gap"), historically compensated here for
-                    // `<video>`/`<canvas>`/`<iframe>` (BUG-180, TEST-18): before
-                    // IFC-3 they were inline-level replaced media that Lumen still
-                    // laid out as block-flow children (`default_display` mapped
-                    // them to Block), so the sub-baseline space of their line box
-                    // was dropped and every media-wrapping block came out
-                    // ~descent px too short.
-                    //
-                    // `BoxKind::Image` was deliberately NOT in this list since
-                    // IFC-2, and IFC-3 removes `Video`/`Canvas`/`Iframe` from it
-                    // the same way: `default_display` now maps all four to
-                    // `Inline`, so they get their descent from the
-                    // `InlineBlockRow` strut like `<img>` does. Reaching block
-                    // flow at all now means the author blockified the element
-                    // (`display: block`, a float, absolute positioning) — and a
-                    // blockified box has no line box and therefore no gap under
-                    // it, exactly as for a blockified `<img>`.
-                }
-                // CSS 2.1 §8.3.1: parent↔last-child bottom margin collapse. When this
-                // box collapses its bottom margin (auto height, no bottom padding/border,
-                // no BFC) and the last in-flow child is a collapsible block, that child's
-                // (collapsed) bottom margin escapes out of this box rather than enlarging
-                // its content height — it becomes part of this box's own bottom margin
-                // (reported to the parent loop via `collapsed_bottom_margin`). Only fold
-                // it out when no float extends past the last child's flow bottom.
-                let escaped_bottom = if b_collapses_bottom {
-                    last_collapsible_child(b)
-                        .map(|c| collapsed_bottom_margin(c, content_width, viewport))
-                        .unwrap_or(0.0)
-                } else {
-                    0.0
-                };
-                // CSS 2.1 §9.5: the container height must also enclose all floats.
-                let float_bottom = fc.left.iter().chain(fc.right.iter())
-                    .map(|(bot, _)| *bot)
-                    .fold(child_y, f32::max);
-                let base = (float_bottom - content_y).max(0.0);
-                if escaped_bottom > 0.0 && (float_bottom - child_y).abs() < 0.01 {
-                    (base - escaped_bottom).max(0.0)
-                } else {
-                    base
-                }
+                // LAYOUT-2 срез 1: the child loop (float/marker/clear placement,
+                // margin collapsing, the recursive descent) and the post-loop
+                // escaped-bottom/float-enclosure epilogue that used to run here
+                // inline now live in `block_flow_trampoline`, driven by an
+                // explicit heap stack instead of this function's native one —
+                // see `DispatchOutcome`'s doc comment. `content_height` is
+                // computed there, once the loop finishes; the return below skips
+                // the `finalize_block_height`/tail calls below this match, which
+                // `block_flow_trampoline::run` invokes itself once the frame (and
+                // every plain-block descendant it meets) is done.
+                return DispatchOutcome::NeedsBlockFlowLoop(Box::new(block_flow_trampoline::BlockFlowInit {
+                    fc,
+                    container_right,
+                    child_y: content_y,
+                    prev_block_mb: 0.0,
+                    b_collapses_top,
+                    b_collapses_bottom,
+                    seen_inflow_child: false,
+                    inside_marker_w: 0.0,
+                    abs_deferred: Vec::new(),
+                    s,
+                    em,
+                    cb: available_width,
+                    content_x,
+                    content_y,
+                    content_width,
+                    children_pcb,
+                    children_available_height,
+                    is_positioned,
+                    pcb,
+                    padding_top,
+                    padding_bottom,
+                    size_contained,
+                    field_intrinsic,
+                    available_height,
+                }));
             };
-            // Явная высота (CSS height: Npx) перекрывает auto-высоту по содержимому.
-            // box-sizing работает симметрично width: content-box прибавляет
-            // padding+border, border-box оставляет h как итоговую высоту.
-            b.rect.height = if let Some(h_len) = &s.height {
-                if let Some(h) = resolve_block_size(h_len, em, available_height, viewport) {
-                    let specified = match s.box_sizing {
-                        BoxSizing::ContentBox => h
-                            + padding_top + padding_bottom
-                            + s.border_top_width + s.border_bottom_width,
-                        BoxSizing::BorderBox => h.max(
-                            padding_top + padding_bottom
-                                + s.border_top_width + s.border_bottom_width,
-                        ),
-                    };
-                    // CSS 2.1 §17.5.3: the `height` of a table cell is a minimum — the cell
-                    // grows to fit content taller than the specified height (unlike a regular
-                    // block, where overflow just spills). Without this the cell clamps to the
-                    // specified border-box height and content overflows into the inter-row
-                    // border-spacing gap, so row pitch is short by the overflow amount and the
-                    // error accumulates down the table (BUG-177).
-                    if s.display == Display::TableCell {
-                        let content_box = content_height
-                            + padding_top + padding_bottom
-                            + s.border_top_width + s.border_bottom_width;
-                        specified.max(content_box)
-                    } else {
-                        specified
-                    }
-                } else {
-                    content_height + padding_top + padding_bottom
-                        + s.border_top_width + s.border_bottom_width
-                }
-            } else if let Some((aw, ah)) = s.aspect_ratio
-                && aw > 0.0 && ah > 0.0
-            {
-                // CSS Sizing L4 §6.1: height auto + aspect-ratio → derive from width.
-                // Phase 0: ratio applied in border-box space.
-                (b.rect.width * ah / aw).max(0.0)
-            } else {
-                // CSS Containment L3 §3.3 / CSS Box Sizing L4 §5: size containment
-                // suppresses children's contribution to auto height — the box uses
-                // contain-intrinsic-height (or 0 when `none`/unset) instead.
-                let ch = contained_content_height(size_contained, &s, em, viewport, content_height);
-                ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
-            };
-            // CSS Basic UI L4 §4.4 — field-sizing: content height override.
-            // When s.height was not set by UA (field_intrinsic is Some), replace the
-            // zero content_height with the padding-box height from the measurement.
-            if let Some((_, ph)) = field_intrinsic
-                && s.height.is_none()
-            {
-                b.rect.height = ph + s.border_top_width + s.border_bottom_width;
-            }
-            // CSS 2.1 §10.4: clamp [min-height, max-height]. Симметрия с
-            // width: max сначала, потом min → «min побеждает max». Content
-            // оверфлоу-ит коробку если min режет ниже — это правильное
-            // поведение CSS.
-            let outer_vert = |v: f32| match s.box_sizing {
-                BoxSizing::ContentBox => v + padding_top + padding_bottom
-                    + s.border_top_width + s.border_bottom_width,
-                BoxSizing::BorderBox => v,
-            };
-            if let Some(max_len) = &s.max_height
-                && let Some(max_h) = resolve_block_size(max_len, em, available_height, viewport)
-            {
-                b.rect.height = b.rect.height.min(outer_vert(max_h).max(0.0));
-            }
-            if let Some(min_len) = &s.min_height
-                && let Some(min_h) = resolve_block_size(min_len, em, available_height, viewport)
-            {
-                b.rect.height = b.rect.height.max(outer_vert(min_h.max(0.0)));
-            }
+            finalize_block_height(
+                b, &s, em, available_height, viewport,
+                padding_top, padding_bottom, size_contained, field_intrinsic, content_height,
+            );
         }
         BoxKind::InlineBlockRow => {
             // Двухфазный горизонтальный layout с переносом строк и
@@ -1920,6 +1593,31 @@ fn lay_out_inner(
         BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } | BoxKind::SvgText { .. } => unreachable!(),
     }
 
+    finish_after_match(b, &s, em, cb, is_positioned, pcb, &abs_deferred, measurer, viewport, hp);
+    DispatchOutcome::Done
+}
+
+/// LAYOUT-2 срез 1: the shared tail every `lay_out_inner_impl` dispatch arm
+/// falls through to once `b.rect` is final — CSS Positioned Layout L3 §4
+/// (absolutely/fixed-positioned children deferred by the block-flow branch,
+/// `abs_deferred`; always empty for arms that resolve their own abs children
+/// inline, e.g. flex/grid) and §9.4.3 (`position: relative` offset). Extracted
+/// verbatim so the explicit-stack block-flow driver (`block_flow_trampoline`)
+/// can call it once per finished frame, exactly like the non-block-flow arms
+/// that fall through to it today.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn finish_after_match(
+    b: &mut LayoutBox,
+    s: &ComputedStyle,
+    em: f32,
+    cb: f32,
+    is_positioned: bool,
+    pcb: Rect,
+    abs_deferred: &[(usize, f32, f32)],
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+) {
     // CSS Positioned Layout L3 §4 — абсолютное / фиксированное позиционирование.
     // Деферированные дети (abs_deferred) собраны в Block-ветке выше.
     // Обрабатываем после finalize b.rect.height, чтобы знать высоту containing block.
@@ -1935,7 +1633,7 @@ fn lay_out_inner(
         } else {
             pcb
         };
-        lay_out_abs_children(b, &abs_deferred, measurer, viewport, my_pcb, hp);
+        lay_out_abs_children(b, abs_deferred, measurer, viewport, my_pcb, hp);
     }
 
     // CSS Positioned Layout L3 §9.4.3 — position: relative — смещение после normal flow.
