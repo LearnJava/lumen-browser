@@ -5670,10 +5670,10 @@
       },
       {
        "id": "CSSOM-8",
-       "title": "CSSOM-8: insertRule/deleteRule на собственных листах + .style-сеттер CSSOM-правил",
+       "title": "CSSOM-8: .style-сеттер CSSOM-правил (insertRule/deleteRule на собственных листах уже сделаны)",
        "status": "planned",
        "size": "M",
-       "note": "Записывающая половина CSSOM для СОБСТВЕННЫХ (не constructed) листов: `insertRule`/`deleteRule` на `document.styleSheets[i]`/`<style>`.`sheet` не существуют вовсе (`grep -rn \"insert_rule\\|insertRule\" crates/js/src/v8_runtime/install/stylesheets.rs` — ноль совпадений; CSSOM-5/BUG-897 закрыла только КОНСТРУИРУЕМЫЕ листы, отдельный реестр `constructed_stylesheets.rs`, у собственного узлового реестра `stylesheet_nodes` мутации нет вообще), и живого сеттера `.style` нет ни у одного CSSOM Rule-объекта (`CSSStyleRule`/`CSSMixinRule`/... — только чтение `cssText`). Найдено P3 2026-09-07 как остаток [BUG-518](bugs/BUG-518-OPEN.md) (мьксины сами реализованы полностью, срезы 2026-09-06/07 — блокирован только 6-й сабтест `mixin-cssom.tentative.html` и весь `mixin-invalidation.tentative.html`); реклассифицировано по правилу docs/probe-method.md §8 — функциональности нет вовсе (условие 1) и объём — новый реестр мутации плюс сеттер для семейства Rule-типов, не точечная правка (условие 2).",
+       "note": "Записывающая половина CSSOM для СОБСТВЕННЫХ (не constructed) листов. Найдено P3 2026-09-07 как остаток [BUG-518](bugs/BUG-518-OPEN.md) (мьксины сами реализованы полностью, срезы 2026-09-06/07 — блокирован только 6-й сабтест `mixin-cssom.tentative.html` и весь `mixin-invalidation.tentative.html`); реклассифицировано по правилу docs/probe-method.md §8 — функциональности нет вовсе (условие 1) и объём — новый реестр мутации плюс сеттер для семейства Rule-типов, не точечная правка (условие 2). **Сужено срезом 8 (BUG-518, тот же день):** `insertRule`/`deleteRule` на `document.styleSheets[i]`/`<style>`.`sheet` реализованы (переиспользован `Stylesheet::insert_rule`/`delete_rule` — тот же, что у constructed-листа) — закрыло 6-й сабтест `mixin-cssom.tentative.html`, весь файл теперь PASS. Единственное, что осталось в этой задаче: живого сеттера `.style` по-прежнему нет ни у одного CSSOM Rule-объекта (`CSSStyleRule`/`CSSMixinRule`/... — только чтение `cssText`), нужен для `mixin-invalidation.tentative.html`.",
        "bugs": [
         "BUG-518",
         "BUG-897"
