@@ -302,6 +302,39 @@ fn set_console_utf8() {
     }
 }
 
+/// Запускает [`cli_args::run_cli`] на потоке с увеличенным стеком.
+///
+/// BUG-1027: резерв стека главного потока на Windows ставит линкер
+/// (`/STACK:` в `build.rs`), но на Unix размер главного стека берётся из
+/// `RLIMIT_STACK` (обычно 8 МиБ) и на этапе линковки не меняется. UI-поток
+/// при этом гоняет обходы, рекурсивные по глубине DOM (streaming-layout в
+/// `paint_partial_dom`, синхронный relayout, chrome, dump-режимы), а они
+/// тратят ~10.4 КБ стека на уровень — 8 МиБ кончаются на ~790 уровнях.
+/// Поэтому вся работа уезжает на собственный поток с
+/// [`lumen_core::DEEP_TREE_STACK_BYTES`]; event loop winit получает
+/// `with_any_thread(true)` (`window_mode.rs`), т.к. живёт теперь не на
+/// главном потоке процесса.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn run_cli_on_deep_stack() -> ExitCode {
+    match lumen_core::run_on_deep_stack("lumen-main", cli_args::run_cli) {
+        Ok(code) => code,
+        Err(err) => {
+            // ОС отказала в создании потока — работаем на штатном стеке:
+            // мелкие страницы отрисуются, глубокие упрутся в прежний предел.
+            eprintln!("не удалось создать главный поток с увеличенным стеком: {err}");
+            cli_args::run_cli()
+        }
+    }
+}
+
+/// Windows: резерв главного потока уже поднят линкером (`build.rs`), так
+/// что хоп не нужен. macOS исключён отдельно: там event loop обязан жить на
+/// главном потоке процесса, `with_any_thread` для него не существует.
+#[cfg(not(all(unix, not(target_os = "macos"))))]
+fn run_cli_on_deep_stack() -> ExitCode {
+    cli_args::run_cli()
+}
+
 fn main() -> ExitCode {
     #[cfg(target_os = "windows")]
     set_console_utf8();
@@ -310,7 +343,7 @@ fn main() -> ExitCode {
     // block whichever thread called `eprintln!` next — with the UI thread that
     // froze the whole window mid-run. No-op unless stderr really is a pipe.
     diag_stderr::install();
-    let code = run_cli();
+    let code = run_cli_on_deep_stack();
     // PERF-12: closes the startup accounting — see `startup_trace::log_exit`.
     // Before `diag_stderr::flush`, so the line survives the bounded wait below.
     startup_trace::log_exit();

@@ -280,6 +280,12 @@ impl V8JsRuntime {
         let (init_tx, init_rx) = std::sync::mpsc::channel::<Result<(), JsError>>();
         let js_thread = std::thread::Builder::new()
             .name("lumen-v8".to_string())
+            // BUG-1027: на этом потоке живут обходы, рекурсивные по глубине
+            // DOM — `dom_helpers::import_node` (innerHTML/insertAdjacentHTML
+            // импортируют разобранный фрагмент узел за узлом) и сериализаторы.
+            // На штатных 2 МиБ поток умирал вместе со всем процессом, снаружи
+            // это выглядело как обрыв BiDi-сокета посреди прогона WPT.
+            .stack_size(lumen_core::DEEP_TREE_STACK_BYTES)
             .spawn(move || v8_thread_main(cmd_rx, init_tx))
             .map_err(|e| JsError::Runtime(format!("spawn V8 thread: {e}")))?;
         match init_rx.recv() {
