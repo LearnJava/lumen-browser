@@ -122,7 +122,7 @@ impl Default for BoxOrigin {
 /// produce (ADR-025 §1). Paired with `BoxOrigin::node` as the identity of a
 /// box; `role` alone or `node` alone is never enough (an anonymous wrapper
 /// must never be reported as its parent element).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BoxRole {
     /// The principal box of an element.
     Element,
@@ -196,7 +196,7 @@ pub struct InlineSegment {
 /// Marks an inline segment as the target of a CSS structural pseudo-element.
 /// `apply_first_letter_pseudo` applies `::first-letter` styles from this marker
 /// without touching layout geometry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum PseudoKind {
     /// Regular content — no pseudo-element style override.
     #[default]

@@ -17,21 +17,23 @@ use crate::style::{ComputedStyle, Length};
 use super::super::{BoxKind, BoxOrigin, LayoutBox, Rect};
 
 const VIEWPORT: Size = Size { width: 800.0, height: 600.0 };
-// LAYOUT-2's acceptance criterion (ROADMAP.md) is `<div>×20000`, not the
-// 200_000 the sibling LAYOUT-1 traversal-only tests use (drop glissade,
-// serialize, collect_* — all O(1) work per node). This chain instead drives
-// real block-flow layout, and `collapsed_top_margin`/`collapsed_bottom_margin`
-// (`bfc.rs`) are only O(1) *stack* since LAYOUT-1 срез 1 — each call still
-// walks its whole remaining first/last-child chain, so calling either once
-// per level (as `step_child`/`post_child_bookkeeping`/`finish_frame` do) costs
-// O(depth) per level, O(depth²) total. At 200_000 that is ~2*10^10 loop
-// iterations — confirmed to not finish inside an hour; the pre-LAYOUT-1/2
-// native recursion never reached a depth close to this, so the quadratic cost
-// was never observable before. Not fixed here — filed as a follow-up (see
-// ROADMAP). 20_000 keeps the documented acceptance depth while finishing in
-// low single-digit seconds (~4*10^8 total iterations across the O(depth)
-// helpers).
-const DEPTH: usize = 20_000;
+// LAYOUT-2's acceptance criterion (ROADMAP.md) is `<div>×20000`. Before
+// BUG-1026, `DEPTH` was capped at 20_000 rather than the 200_000 the sibling
+// LAYOUT-1 traversal-only tests use (drop glissade, serialize, collect_* —
+// all O(1) work per node): `collapsed_top_margin`/`collapsed_bottom_margin`
+// (`bfc.rs`) were only O(1) *stack* since LAYOUT-1 срез 1, but each call
+// still walked its whole remaining first/last-child chain, and
+// `step_child`/`post_child_bookkeeping`/`finish_frame` call one of them once
+// per level — O(depth) per level, O(depth²) total. At 200_000 that was
+// ~2*10^10 loop iterations, confirmed to not finish inside an hour.
+// BUG-1026 gave both helpers a per-`run()`-pass memo (`MarginCollapseCache`)
+// so a chain this shape hits the cache at every level but the first, making
+// the whole descent O(depth) again — `DEPTH` now matches the sibling
+// LAYOUT-1 tests, and `deep_chain_with_margins_collapses_through_the_trampoline`
+// below asserts a wall-clock deadline that only an O(depth) descent can meet,
+// so a future regression back to O(depth²) fails loudly instead of just
+// getting slow.
+const DEPTH: usize = 200_000;
 const LEAF_HEIGHT: f32 = 10.0;
 
 /// Plain `Block`, zero margin/padding/border, `width`/`height: auto` — wraps
@@ -172,9 +174,21 @@ fn deep_chain_with_margins_collapses_through_the_trampoline() {
     let mut root = node;
     let null_hp = lumen_core::ext::NullHyphenationProvider;
     let init_pcb = Rect::new(0.0, 0.0, VIEWPORT.width, VIEWPORT.height);
+    // BUG-1026 regression guard: an O(depth²) margin-collapse walk at this
+    // DEPTH takes on the order of an hour (see `DEPTH`'s doc comment); an
+    // O(depth) one finishes in well under a second. 10s leaves generous
+    // headroom for slow CI hardware while still failing loudly, not just
+    // slowly, if the memoization regresses back to a per-level full walk.
+    let started = std::time::Instant::now();
     super::super::lay_out(
         &mut root, 0.0, 0.0, VIEWPORT.width, Some(VIEWPORT.height), None, VIEWPORT, init_pcb,
         &null_hp, true,
+    );
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "layout of a {DEPTH}-deep margin-collapse chain took {elapsed:?} — \
+         looks like the BUG-1026 O(depth\u{b2}) margin-collapse walk regressed"
     );
     assert_eq!(root.rect.y, 1.0, "y={}", root.rect.y);
     assert_eq!(root.rect.height, LEAF_HEIGHT, "height={}", root.rect.height);
