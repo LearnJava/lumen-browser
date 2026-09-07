@@ -103,6 +103,23 @@ pub(crate) fn document_noise_seed(origin: &str) -> u64 {
     h
 }
 
+/// Whether newly-created canvases should have fingerprint noise armed
+/// (BUG-1024/BUG-454-adjacent: `session_seed()` above mixes wall-clock time
+/// with the process ID, so it differs on every browser launch — correct for
+/// the anti-fingerprinting threat model, but it means `getImageData()` cannot
+/// be bit-exact across two separate runs of the same page. WPT canvas
+/// conformance (`html/canvas`, `canvas-tests.js`'s `_assertPixel`) requires
+/// exactly that, so `LUMEN_DISABLE_CANVAS_NOISE` (any value, checked once —
+/// canvas construction is not hot enough to need caching beyond that) turns
+/// noise off for the life of the process; unset in every normal browsing
+/// session, so this changes nothing there. `docs/automation.md` §Flags.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn canvas_noise_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("LUMEN_DISABLE_CANVAS_NOISE").is_none())
+}
+
 /// Allocate a new unique object ID for a gradient or pattern.
 /// `pub(crate)`: shared with [`crate::offscreen_canvas`] — see [`GRADIENTS`].
 #[cfg(feature = "v8-backend")]
@@ -542,7 +559,9 @@ pub(crate) fn install_canvas2d_bindings_v8(
                 if let Ok(mut map) = c.try_borrow_mut() {
                     map.entry(nid).or_insert_with(|| {
                         let mut ctx = Context2D::new(w, h);
-                        ctx.set_noise_generator(CanvasNoiseGenerator::new(noise_seed));
+                        if canvas_noise_enabled() {
+                            ctx.set_noise_generator(CanvasNoiseGenerator::new(noise_seed));
+                        }
                         ctx
                     });
                 }

@@ -50,6 +50,20 @@ sys.path[:0] = [
 import localpaths  # noqa: E402,F401  (repo_root bootstrap wptrunner expects)
 from wptrunner import wptcommandline, wptrunner  # noqa: E402
 
+# BUG-1024: the browser subprocess wptrunner spawns inherits this process's
+# environment, so setting this here (once, at import time — `run_report.py`
+# reuses `run()` below rather than re-execing) reaches every `lumen` instance
+# launched by either entry point. Canvas fingerprint noise (ADR-007 layer 4,
+# docs/plan/privacy.md §9.5, `crates/js/src/canvas2d.rs::session_seed()`) is
+# seeded from wall-clock time + PID — correct for the anti-fingerprinting
+# threat model, wrong for conformance: it perturbs every `getImageData()` by
+# up to ±1/channel, differently on every browser launch, so a WPT canvas test
+# that reads pixels back (`canvas-tests.js`'s `_assertPixel`, zero tolerance)
+# flakes between separate `--check` runs even though the render itself is
+# bit-exact (confirmed in isolation, `bugs/BUG-1024-FIXED.md` §Локализация).
+# `setdefault` so an explicit override in the calling shell still wins.
+os.environ.setdefault("LUMEN_DISABLE_CANVAS_NOISE", "1")
+
 
 def default_binary() -> str:
     profile = os.environ.get("LUMEN_PROFILE", "release")

@@ -137,6 +137,9 @@ pub fn create_offscreen_from_pixels(w: u32, h: u32, pixels: Vec<u8>) -> u32 {
 /// are outside this bug's threat model.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn arm_noise(canvas_id: u32, seed: u64) {
+    if !crate::canvas2d::canvas_noise_enabled() {
+        return;
+    }
     with_offscreen_canvas(canvas_id, |c| {
         c.set_noise_generator(lumen_canvas::CanvasNoiseGenerator::new(seed));
     });
@@ -265,9 +268,11 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
         "_lumen_offscreen_canvas_new",
         into_v8_fn2(move |w: u32, h: u32| -> String {
             let canvas = OffscreenCanvas::new(w, h);
-            with_offscreen_canvas(canvas.id, |c| {
-                c.set_noise_generator(CanvasNoiseGenerator::new(noise_seed));
-            });
+            if crate::canvas2d::canvas_noise_enabled() {
+                with_offscreen_canvas(canvas.id, |c| {
+                    c.set_noise_generator(CanvasNoiseGenerator::new(noise_seed));
+                });
+            }
             format!(
                 "{{\"__canvas_id__\":{},\"width\":{},\"height\":{}}}",
                 canvas.id, canvas.width, canvas.height
