@@ -1099,7 +1099,10 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="run every category in the manifest")
     parser.add_argument("--pilot", action="store_true", help=f"run the pilot selection ({len(PILOT_CATEGORIES)} categories)")
     parser.add_argument("--categories", default=None, help="comma-separated category list")
-    parser.add_argument("--processes", type=int, default=6, help="wptrunner --processes per shard (default: 6)")
+    parser.add_argument("--processes", type=int, default=4,
+                        help="wptrunner --processes per shard (default: 4; six concurrent "
+                             "`lumen` instances plus a shard's orphans pushed the 7.6 GB "
+                             "Linux box into OOM — see kill_tree)")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     parser.add_argument("--shard-timeout-base", type=int, default=600, help="fixed part of a shard's time budget, seconds (default: 600)")
     parser.add_argument("--shard-timeout-per-id", type=float, default=None,

@@ -312,7 +312,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/corpus_stats.py
 tests/wpt/.venv/Scripts/python.exe tests/wpt/run_corpus.py --binary "$BIN" --pilot
 # весь корпус, с чекпойнтами и возможностью продолжить
 tests/wpt/.venv/Scripts/python.exe tests/wpt/run_corpus.py --binary "$BIN" --all \
-    --processes 6 --run-json docs/wpt/runs/<дата>.json
+    --processes 4 --run-json docs/wpt/runs/<дата>.json
 ```
 
 Прогон переживает перезапуск: `--resume` пропускает шарды, уже давшие отчёт;
