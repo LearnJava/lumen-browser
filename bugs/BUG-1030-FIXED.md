@@ -1,6 +1,6 @@
 # BUG-1030: `native_binding_panic_does_not_abort_process` устарел после guard-ов BUG-986 — `cargo test -p lumen-js` красный на main
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-08 (P3)
 **Дата:** 2026-09-07
 **Компонент:** js (тест `crates/js/src/dom/tests/v8_perf_typedom_node.rs:848`
 `native_binding_panic_does_not_abort_process`)
@@ -47,3 +47,24 @@ assertion `left == right` failed
 
 Просто поменять ожидание на `""` — потерять регрессию BUG-418 целиком: тест
 станет тавтологией, проходящей и без `catch_unwind`.
+
+## Исправление 2026-09-08 (P3)
+
+`native_binding_panic_does_not_abort_process` переведён на другой вход:
+`_lumen_get_tag_name(4294967295)` вместо `_lumen_append_child(0,
+4294967295)`. `_lumen_get_tag_name` (`crates/js/src/v8_runtime/install/dom_core.rs`)
+всё ещё зовёт `doc.get(nid)` напрямую, без `contains_id`/`try_get` — в
+отличие от `_lumen_append_child`, которую BUG-986 обвязал bounds-check'ом,
+эта функция не получила такой защиты и по-прежнему паникует
+(`Document::get`/`foreign_id_panic`) внутри `extern "C"`-границы V8, которую
+ловит `catch_unwind` в `native_fn_trampoline` — регресс BUG-418 остался
+покрыт живым входом, а не тавтологией.
+
+Поведение BUG-986 (тихий пропуск чужого `NodeId`) закреплено отдельным
+новым тестом `native_binding_foreign_node_id_is_silently_skipped` — тот же
+вызов `_lumen_append_child(0, 4294967295)`, что раньше использовался в этом
+тесте, теперь проверяет, что `caught` остаётся `""`.
+
+**Тесты:** `cargo test -p lumen-js --lib --features v8-backend`: 3541/3541.
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D
+warnings` и `cargo clippy --workspace --all-targets -- -D warnings`: чисто.
