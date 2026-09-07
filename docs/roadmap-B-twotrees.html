@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-07",
  "counts": {
-  "open": 381,
-  "fixed": 594,
+  "open": 380,
+  "fixed": 595,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -7259,13 +7259,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1019": {
-   "status": "open",
-   "title": "`resolution`/`min-resolution`/`max-resolution` media feature не заведена вовсе — ни единиц (`x`/`dppx`/`dpi`/`dpcm`), ни `calc()`-арифметики. Общий модуль для `…",
-   "component": "css-parser (`crates/engine/css-parser/src/parser/media.rs` — `MediaFeature`, `parse_media_feature`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1020": {
    "status": "open",
    "title": "Hand-rolled медиа-парсер: нет boolean-context фич (`(color)` требует `:` и всегда `Unsupported`), нет auto-close незакрытой скобки (`\"(color\"` — целая клауза `U…",
@@ -13780,6 +13773,13 @@
    "status": "fixed",
    "title": "Ни один `[SecureContext]`-API не гейтился по `window.isSecureContext` — флаг после [BUG-399](bugs/BUG-399-FIXED.md) вычислялся верно, но не читался никем, повер…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid_b.js`, `web_api_shim_tail_b.js`, `web_api_shim_tail_mc.js`; `crates/js/src/generic_sensor.rs`, `geolocation.rs`, `wake_lock.rs`)",
+   "date": "2026-09-07",
+   "debtor": false
+  },
+  "BUG-1019": {
+   "status": "fixed",
+   "title": "`resolution`/`min-resolution`/`max-resolution` не заводились вовсе — ни единиц (`x`/`dppx`/`dpi`/`dpcm`), ни `calc()`-арифметики. Добавлены `MediaFeature::{Reso…",
+   "component": "css-parser (`crates/engine/css-parser/src/parser/media.rs` — `MediaFeature`, `parse_media_feature`)",
    "date": "2026-09-07",
    "debtor": false
   }
