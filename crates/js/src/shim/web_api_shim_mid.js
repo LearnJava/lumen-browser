@@ -8826,6 +8826,9 @@ globalThis.CSSStyleRule = CSSStyleRule;
 function CSSMediaRule() { throw new TypeError('Illegal constructor'); }
 Object.setPrototypeOf(CSSMediaRule.prototype, CSSRule.prototype);
 globalThis.CSSMediaRule = CSSMediaRule;
+function CSSMixinRule() { throw new TypeError('Illegal constructor'); }
+Object.setPrototypeOf(CSSMixinRule.prototype, CSSRule.prototype);
+globalThis.CSSMixinRule = CSSMixinRule;
 
 // Generic index-only live-list Proxy: `itemsFn()` returns the current array
 // of already-built member objects, `protoObj` decides which interface the
@@ -8904,18 +8907,40 @@ function _lumen_make_css_rule_list(itemsFn) {
 }
 
 // A style rule (`CSSStyleRule`), built from the JSON `_lumen_stylesheet_rule_json`/
-// `_lumen_stylesheet_media_child_json` return — `{selectorText, styleCssText}`.
-// `parentRule` is `null` for a top-level rule, the enclosing `CSSMediaRule`
-// wrapper for a rule nested inside `@media`.
+// `_lumen_stylesheet_media_child_json` return — `{selectorText, styleCssText,
+// cssText}`. `parentRule` is `null` for a top-level rule, the enclosing
+// `CSSMediaRule` wrapper for a rule nested inside `@media`. `cssText` is
+// read from the Rust-computed field rather than reassembled here (`data.
+// selectorText + ' { ' + data.styleCssText + ' }'`) since CSS Mixins L1's
+// `@apply` needs a different, multi-line serialization once present among
+// this rule's declarations — see `Rule::css_text` (css-parser).
 function _lumen_build_css_style_rule(data, sheetIdx, parentRule) {
     var r = Object.create(CSSStyleRule.prototype);
     Object.defineProperties(r, {
         type:         { get: function() { return CSSRule.STYLE_RULE; }, enumerable: true, configurable: true },
         selectorText: { get: function() { return data.selectorText; }, enumerable: true, configurable: true },
-        cssText:      { get: function() { return data.selectorText + ' { ' + data.styleCssText + ' }'; }, enumerable: true, configurable: true },
+        cssText:      { get: function() { return data.cssText; }, enumerable: true, configurable: true },
         style:        { get: function() { return _lumen_make_css_style_declaration_readonly(data.styleCssText); }, enumerable: true, configurable: true },
         parentStyleSheet: { get: function() { return _lumen_make_css_style_sheet(sheetIdx); }, enumerable: true, configurable: true },
         parentRule:   { get: function() { return parentRule; }, enumerable: true, configurable: true },
+    });
+    return r;
+}
+
+// A top-level `@mixin` rule (`CSSMixinRule` — CSS Mixins L1 §cssom), built
+// from `mixin_rule_json`'s `{name, cssText}`. Read-only: no `.cssRules`
+// navigation into `@result`'s own children (nothing in this slice's scope
+// needs it — see `mixin_rule_json`'s doc comment), and `type` follows every
+// other newer CSSOM rule kind's legacy-attribute convention of `0` (CSSOM
+// §6.5.1 — the numeric constants stop at rules old enough to have needed one).
+function _lumen_build_css_mixin_rule(data, sheetIdx, parentRule) {
+    var r = Object.create(CSSMixinRule.prototype);
+    Object.defineProperties(r, {
+        type:    { get: function() { return 0; }, enumerable: true, configurable: true },
+        name:    { get: function() { return data.name; }, enumerable: true, configurable: true },
+        cssText: { get: function() { return data.cssText; }, enumerable: true, configurable: true },
+        parentStyleSheet: { get: function() { return _lumen_make_css_style_sheet(sheetIdx); }, enumerable: true, configurable: true },
+        parentRule: { get: function() { return parentRule; }, enumerable: true, configurable: true },
     });
     return r;
 }
@@ -8936,6 +8961,7 @@ function _lumen_make_css_rule(sheetIdx, ruleIdx) {
     var raw = _lumen_stylesheet_rule_json(sheetIdx, ruleIdx);
     if (raw === null || raw === undefined) return null;
     var data = JSON.parse(raw);
+    if (data.kind === 'mixin') return _lumen_build_css_mixin_rule(data, sheetIdx, null);
     if (data.kind !== 'media') return _lumen_build_css_style_rule(data, sheetIdx, null);
     var mr = Object.create(CSSMediaRule.prototype);
     function childRules() {
@@ -9020,10 +9046,24 @@ function _lumen_build_constructed_css_style_rule(data, idx, parentRule) {
     Object.defineProperties(r, {
         type:         { get: function() { return CSSRule.STYLE_RULE; }, enumerable: true, configurable: true },
         selectorText: { get: function() { return data.selectorText; }, enumerable: true, configurable: true },
-        cssText:      { get: function() { return data.selectorText + ' { ' + data.styleCssText + ' }'; }, enumerable: true, configurable: true },
+        cssText:      { get: function() { return data.cssText; }, enumerable: true, configurable: true },
         style:        { get: function() { return _lumen_make_css_style_declaration_readonly(data.styleCssText); }, enumerable: true, configurable: true },
         parentStyleSheet: { get: function() { return _lumen_make_constructed_style_sheet(idx); }, enumerable: true, configurable: true },
         parentRule:   { get: function() { return parentRule; }, enumerable: true, configurable: true },
+    });
+    return r;
+}
+
+// Constructed-sheet twin of `_lumen_build_css_mixin_rule` — see that
+// function's doc comment.
+function _lumen_build_constructed_css_mixin_rule(data, idx, parentRule) {
+    var r = Object.create(CSSMixinRule.prototype);
+    Object.defineProperties(r, {
+        type:    { get: function() { return 0; }, enumerable: true, configurable: true },
+        name:    { get: function() { return data.name; }, enumerable: true, configurable: true },
+        cssText: { get: function() { return data.cssText; }, enumerable: true, configurable: true },
+        parentStyleSheet: { get: function() { return _lumen_make_constructed_style_sheet(idx); }, enumerable: true, configurable: true },
+        parentRule: { get: function() { return parentRule; }, enumerable: true, configurable: true },
     });
     return r;
 }
@@ -9038,6 +9078,7 @@ function _lumen_make_constructed_css_rule(idx, ruleIdx) {
     var raw = _lumen_constructed_rule_json(idx, ruleIdx);
     if (raw === null || raw === undefined) return null;
     var data = JSON.parse(raw);
+    if (data.kind === 'mixin') return _lumen_build_constructed_css_mixin_rule(data, idx, null);
     if (data.kind !== 'media') return _lumen_build_constructed_css_style_rule(data, idx, null);
     var mr = Object.create(CSSMediaRule.prototype);
     function childRules() {

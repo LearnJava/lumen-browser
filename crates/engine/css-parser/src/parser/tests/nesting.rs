@@ -1190,3 +1190,101 @@ use super::*;
         assert_eq!(nested.declarations[0].property, "color");
         assert_eq!(nested.declarations[0].value, "green");
     }
+
+    // ── CSS Mixins CSSOM serialization (BUG-518 срез 6) ──────────────────────
+    // Transcribes `mixin-cssom.tentative.html`'s five non-`insertRule`
+    // subtests (1-4, 6) verbatim against `Rule::css_text`/`MixinRule::
+    // css_text`. Subtest 5 (`@apply` illegal at top level — needs
+    // `CSSStyleSheet.insertRule` on an *owned* sheet, which today only
+    // exists on a constructed one, BUG-897/CSSOM-5) stays out of scope.
+
+    #[test]
+    fn mixin_css_text_serializes_result_with_nested_bare_amp_rule() {
+        // "serialization of @mixin"
+        let s = parse("@mixin --m1() { @result { color: green; & { --foo: bar; } } }");
+        assert_eq!(s.mixin_rules.len(), 1);
+        assert_eq!(
+            s.mixin_rules[0].css_text(),
+            "@mixin --m1() {\n  @result {\n  color: green;\n  & { --foo: bar; }\n}\n}",
+        );
+    }
+
+    #[test]
+    fn rule_css_text_serializes_bare_apply() {
+        // "serialization of rule with @apply"
+        let s = parse("#foo { @apply --m1; }");
+        assert_eq!(s.rules[0].css_text(), "#foo {\n  @apply --m1;\n}");
+    }
+
+    #[test]
+    fn mixin_css_text_serializes_result_with_contents_placeholder() {
+        // "serialization of @mixin with @contents" — no explicit `;` after
+        // `@contents`, exercising its implicit-semicolon-before-`}` grammar.
+        let s = parse("@mixin --m2() { @result { @contents } }");
+        assert_eq!(
+            s.mixin_rules[0].css_text(),
+            "@mixin --m2() {\n  @result {\n  @contents;\n}\n}",
+        );
+    }
+
+    #[test]
+    fn rule_css_text_serializes_apply_with_contents_argument() {
+        // "serialization of rule with @apply and contents argument"
+        let s = parse("#foo { color: red; @apply --m2 { color: green; } }");
+        assert_eq!(
+            s.rules[0].css_text(),
+            "#foo {\n  color: red;\n  @apply --m2 { color: green; }\n}",
+        );
+    }
+
+    #[test]
+    fn mixin_css_text_serializes_parameters_with_type_and_default() {
+        // "serialization of @mixin with parameters"
+        let s = parse(
+            "@mixin --m3(--arg type(<length>): 1em, --other-arg) { \
+             @result { margin-left: var(--arg); } }",
+        );
+        assert_eq!(
+            s.mixin_rules[0].css_text(),
+            "@mixin --m3(--arg <length>: 1em, --other-arg) {\n  @result {\n  margin-left: var(--arg);\n}\n}",
+        );
+    }
+
+    #[test]
+    fn cssom_rules_includes_top_level_mixin_but_not_layered_one() {
+        // A top-level `@mixin` gets its own `cssRules` entry; one declared
+        // inside `@layer` does not (an `@layer` block itself has no
+        // `cssRules` entry either — see `TopLevelRuleKind::Mixin`'s doc
+        // comment for why `mixin_rules`'s shared vec can't use a simple
+        // position count once a layered mixin sits between two tracked ones).
+        let s = parse(
+            "@mixin --a() {} @layer L { @mixin --b() {} } @mixin --c() {} p {}",
+        );
+        assert_eq!(s.mixin_rules.len(), 3);
+        let rules = s.cssom_rules();
+        assert_eq!(rules.len(), 3); // --a, --c, p — not --b.
+        let names: Vec<&str> = rules
+            .iter()
+            .filter_map(|r| match r {
+                CssomRuleRef::Mixin(m) => Some(m.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["--a", "--c"]);
+    }
+
+    #[test]
+    fn delete_rule_on_a_mixin_keeps_later_mixin_tags_correct() {
+        let mut s = parse("@mixin --a() {} @mixin --b() {} @mixin --c() {}");
+        assert_eq!(s.mixin_rules.len(), 3);
+        s.delete_rule(0).unwrap(); // removes --a
+        let names: Vec<&str> = s
+            .cssom_rules()
+            .iter()
+            .filter_map(|r| match r {
+                CssomRuleRef::Mixin(m) => Some(m.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["--b", "--c"]);
+    }
