@@ -261,6 +261,14 @@ fn step_probe_item(
                 post_probe_item(frame, i);
                 StepOutcome::Advance
             }
+            // LAYOUT-2 срез 7: a (subgrid) grid item that is itself a
+            // multicol container — same shape as the flex/block-flow/table
+            // arms above.
+            DispatchOutcome::NeedsMulticolLoop(ci) => {
+                super::multicol_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
+                post_probe_item(frame, i);
+                StepOutcome::Advance
+            }
         }
     } else {
         // BUG-341 S32/CV_AUTO_TOUCHED: the outer flag must bracket the whole
@@ -288,6 +296,11 @@ fn step_probe_item(
             DispatchOutcome::NeedsGridLoop(ci) => StepOutcome::Descend(ci),
             DispatchOutcome::NeedsTableLoop(ci) => {
                 super::table_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
+                post_probe_item(frame, i);
+                StepOutcome::Advance
+            }
+            DispatchOutcome::NeedsMulticolLoop(ci) => {
+                super::multicol_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
                 post_probe_item(frame, i);
                 StepOutcome::Advance
             }
@@ -468,6 +481,11 @@ fn step_final_item(
                 post_final_item(frame, i, viewport);
                 StepOutcome::Advance
             }
+            DispatchOutcome::NeedsMulticolLoop(ci) => {
+                super::multicol_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
+                post_final_item(frame, i, viewport);
+                StepOutcome::Advance
+            }
         };
     }
 
@@ -521,6 +539,11 @@ fn step_final_item(
                 post_final_item(frame, i, viewport);
                 StepOutcome::Advance
             }
+            DispatchOutcome::NeedsMulticolLoop(ci) => {
+                super::multicol_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
+                post_final_item(frame, i, viewport);
+                StepOutcome::Advance
+            }
         }
     } else if let Some((probe_x, probe_y, mut reused)) = frame.init.probe_reuse[k].take() {
         // BUG-341 S33: `cell_w` above was derived from the same
@@ -553,6 +576,11 @@ fn step_final_item(
             DispatchOutcome::NeedsGridLoop(ci) => StepOutcome::Descend(ci),
             DispatchOutcome::NeedsTableLoop(ci) => {
                 super::table_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
+                post_final_item(frame, i, viewport);
+                StepOutcome::Advance
+            }
+            DispatchOutcome::NeedsMulticolLoop(ci) => {
+                super::multicol_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
                 post_final_item(frame, i, viewport);
                 StepOutcome::Advance
             }

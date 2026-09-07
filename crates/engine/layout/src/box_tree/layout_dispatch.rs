@@ -422,6 +422,12 @@ fn lay_out_inner_impl(
         DispatchOutcome::NeedsTableLoop(init) => {
             super::table_trampoline::run(b, init, measurer, viewport, hp);
         }
+        // LAYOUT-2 срез 7: the multicol dispatch arm's per-segment placement
+        // pass, same shape as the flex/grid/table cases above — see
+        // `multicol_trampoline::run`.
+        DispatchOutcome::NeedsMulticolLoop(init) => {
+            super::multicol_trampoline::run(b, init, measurer, viewport, hp);
+        }
     }
 }
 
@@ -1197,15 +1203,30 @@ pub(super) fn dispatch_box(
             } else {
                 None
             };
-            let content_height = if (s.column_count.is_some() || s.column_width.is_some())
+            if (s.column_count.is_some() || s.column_width.is_some())
                 && !b.children.is_empty()
             {
-                lay_out_multicol_children(
-                    &mut b.children,
-                    content_x, content_y, content_width,
-                    &s, em, measurer, viewport, children_pcb, hp,
-                    children_available_height,
-                )
+                // LAYOUT-2 срез 7: `lay_out_multicol_children`'s per-segment
+                // dispatch (Measure pass on every segment, Place pass on
+                // atomic segments) is non-tail-recursive the same way the
+                // plain block-flow branch below is — a chain of nested
+                // multicol containers now runs on `multicol_trampoline`'s own
+                // explicit heap stack instead of the native one.
+                match super::multicol_abspos::build_multicol_init(
+                    &mut b.children, content_x, content_y, content_width, &s, em, viewport,
+                    children_pcb, children_available_height, pcb, cb, is_positioned,
+                    padding_top, padding_bottom, size_contained, field_intrinsic, available_height,
+                ) {
+                    Some(init) => return DispatchOutcome::NeedsMulticolLoop(init),
+                    None => {
+                        finalize_block_height(
+                            b, &s, em, available_height, viewport, padding_top, padding_bottom,
+                            size_contained, field_intrinsic, 0.0,
+                        );
+                        finish_after_match(b, &s, em, cb, is_positioned, pcb, &abs_deferred, measurer, viewport, hp);
+                        return DispatchOutcome::Done;
+                    }
+                }
             } else {
                 // CSS 2.1 §9.5 — float context for this block formatting context.
                 // A non-BFC block laid out beside an enclosing context's floats
@@ -1276,11 +1297,7 @@ pub(super) fn dispatch_box(
                     field_intrinsic,
                     available_height,
                 }));
-            };
-            finalize_block_height(
-                b, &s, em, available_height, viewport,
-                padding_top, padding_bottom, size_contained, field_intrinsic, content_height,
-            );
+            }
         }
         BoxKind::InlineBlockRow => {
             // Двухфазный горизонтальный layout с переносом строк и

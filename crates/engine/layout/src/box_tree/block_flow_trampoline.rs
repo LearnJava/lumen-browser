@@ -36,6 +36,14 @@ pub(super) enum DispatchOutcome {
     // `super::table_trampoline::run` drives it (and every further table
     // descendant a cell meets, e.g. `<td><table>…`) on an explicit heap stack.
     NeedsTableLoop(Box<super::table_trampoline::TableInit>),
+    // LAYOUT-2 срез 7: the multicol dispatch arm's per-segment placement pass
+    // (CSS Multicol §3.4) — unconditionally reads each item's `.rect` back
+    // (Measure pass, every segment) and, for atomic segments, dispatches
+    // again at the resolved column position and reads it a second time
+    // (Place pass) — non-tail-recursive the same way the other four branches
+    // are. `super::multicol_trampoline::run` drives it (and every further
+    // multicol-container descendant it meets) on an explicit heap stack.
+    NeedsMulticolLoop(Box<super::multicol_trampoline::MulticolInit>),
 }
 
 /// Loop-entry state for the plain block-flow branch, captured by `dispatch_box`
@@ -467,6 +475,13 @@ fn step_child(
         // table — same shape as the flex/grid arms above.
         DispatchOutcome::NeedsTableLoop(child_init) => {
             super::table_trampoline::run(child, child_init, measurer, viewport, hp);
+            post_child_bookkeeping(frame, i, viewport, bottom_cache);
+            StepOutcome::Advance
+        }
+        // LAYOUT-2 срез 7: a block-flow normal-flow child that is itself a
+        // multicol container — same shape as the flex/grid/table arms above.
+        DispatchOutcome::NeedsMulticolLoop(child_init) => {
+            super::multicol_trampoline::run(child, child_init, measurer, viewport, hp);
             post_child_bookkeeping(frame, i, viewport, bottom_cache);
             StepOutcome::Advance
         }
