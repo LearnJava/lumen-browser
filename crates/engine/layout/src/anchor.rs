@@ -256,18 +256,28 @@ pub fn collect_anchors(root: &LayoutBox) -> AnchorRegistry {
     registry
 }
 
-fn collect_anchors_rec(lb: &LayoutBox, registry: &mut AnchorRegistry, scope_root: Option<NodeId>) {
-    // Determine the scope root for this element's descendants.
-    let next_scope = match &lb.style.anchor_scope {
-        AnchorScope::All | AnchorScope::Named(_) => Some(lb.node),
-        AnchorScope::None => scope_root,
-    };
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion: `next_scope` is threaded down like a plain parameter (never
+/// read back from a deeper call), so this is the same safe mechanical class
+/// LAYOUT-1 already converted. Document order matters here — a duplicate
+/// anchor name overwrites the registry entry (`HashMap::insert` in
+/// `register_anchor_scoped`), so children are pushed in reverse to keep the
+/// LIFO stack's pop order identical to the old left-to-right recursion.
+fn collect_anchors_rec(root: &LayoutBox, registry: &mut AnchorRegistry, scope_root: Option<NodeId>) {
+    let mut stack: Vec<(&LayoutBox, Option<NodeId>)> = vec![(root, scope_root)];
+    while let Some((lb, scope_root)) = stack.pop() {
+        // Determine the scope root for this element's descendants.
+        let next_scope = match &lb.style.anchor_scope {
+            AnchorScope::All | AnchorScope::Named(_) => Some(lb.node),
+            AnchorScope::None => scope_root,
+        };
 
-    if let Some(name) = &lb.style.anchor_name {
-        register_anchor_scoped(registry, name.to_string(), lb.node, lb.rect, next_scope);
-    }
-    for child in &lb.children {
-        collect_anchors_rec(child, registry, next_scope);
+        if let Some(name) = &lb.style.anchor_name {
+            register_anchor_scoped(registry, name.to_string(), lb.node, lb.rect, next_scope);
+        }
+        for child in lb.children.iter().rev() {
+            stack.push((child, next_scope));
+        }
     }
 }
 

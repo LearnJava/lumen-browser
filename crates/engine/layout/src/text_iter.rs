@@ -40,39 +40,46 @@ pub fn collect_visible_text(root: &LayoutBox) -> Vec<TextFragment> {
     out
 }
 
-fn collect_text_rec(b: &LayoutBox, out: &mut Vec<TextFragment>) {
-    if matches!(b.kind, BoxKind::Skip) {
-        return;
-    }
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion: nothing after the loop over `children` reads a value the walk
+/// produced, so this is the same safe mechanical class LAYOUT-1 already
+/// converted. Document order (relied on by this module's own tests) is a
+/// pure left-to-right pre-order property — preserved here by pushing
+/// children in reverse so the LIFO stack pops them in source order.
+fn collect_text_rec(root: &LayoutBox, out: &mut Vec<TextFragment>) {
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        if matches!(b.kind, BoxKind::Skip) {
+            continue;
+        }
 
-    if let BoxKind::InlineRun { lines, .. } = &b.kind {
-        let line_h = b.used_line_height;
-        for (line_idx, line) in lines.iter().enumerate() {
-            let line_y = b.rect.y + line_idx as f32 * line_h;
-            for frag in line {
-                if frag.text.is_empty() || frag.img_src.is_some() {
-                    continue;
+        if let BoxKind::InlineRun { lines, .. } = &b.kind {
+            let line_h = b.used_line_height;
+            for (line_idx, line) in lines.iter().enumerate() {
+                let line_y = b.rect.y + line_idx as f32 * line_h;
+                for frag in line {
+                    if frag.text.is_empty() || frag.img_src.is_some() {
+                        continue;
+                    }
+                    if frag.style.visibility != Visibility::Visible {
+                        continue;
+                    }
+                    out.push(TextFragment {
+                        text: frag.text.clone(),
+                        rect: Rect {
+                            x: b.rect.x + frag.x,
+                            y: line_y,
+                            width: frag.width,
+                            height: line_h,
+                        },
+                        node: frag.source_node,
+                        char_offset: frag.source_char_offset,
+                    });
                 }
-                if frag.style.visibility != Visibility::Visible {
-                    continue;
-                }
-                out.push(TextFragment {
-                    text: frag.text.clone(),
-                    rect: Rect {
-                        x: b.rect.x + frag.x,
-                        y: line_y,
-                        width: frag.width,
-                        height: line_h,
-                    },
-                    node: frag.source_node,
-                    char_offset: frag.source_char_offset,
-                });
             }
         }
-    }
 
-    for child in &b.children {
-        collect_text_rec(child, out);
+        stack.extend(b.children.iter().rev());
     }
 }
 
