@@ -9,8 +9,8 @@
 //!
 //! `NESTING` is deliberately past both defaults that used to bite (2 MiB ≈ 190
 //! levels for a spawned thread, 8 MiB ≈ 790 for the Unix main thread) while
-//! staying clear of the O(N²) margin-collapsing cost tracked in BUG-1026 —
-//! this test guards the stack, not the clock.
+//! staying clear of the O(N²) margin-collapsing cost BUG-1026 removed on
+//! 2026-09-07 — this test guards the stack, not the clock.
 //!
 //! **Not covered here:** the live window. Its final pipeline runs on
 //! `lumen-pipeline` (`app/user_event.rs`) and needs a real event loop and a
