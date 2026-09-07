@@ -3,6 +3,21 @@ var _lumen_loc_parts = _lumen_parse_url(typeof _LUMEN_PAGE_URL !== 'undefined' ?
 var _lumen_loc_href  = _lumen_loc_parts.href;
 var _lumen_loc_hash  = _lumen_loc_parts.hash;
 
+// BUG-765: single source of truth for every `[SecureContext]`-gated surface
+// installed below and by the per-module shims that run after `WEB_API_SHIM`
+// (generic sensors, Screen Wake Lock, Geolocation's real-position path —
+// `window.isSecureContext`'s own getter, further down this file's sibling
+// `web_api_shim_tail_mc.js`, reads this same variable rather than
+// recomputing it). Safe to call before `_lumen_url_is_potentially_trustworthy`'s
+// textual definition below: it is a top-level `function` declaration, which
+// hoists across the whole concatenated shim (BUG-378's indirect-eval comment
+// on `WEB_API_SHIM`'s installation). A standalone module unit test that
+// skips `WEB_API_SHIM` entirely never sets this global, so every gate below
+// treats *only* an explicit `false` as insecure — `undefined` (no shim, no
+// computed flag) reads as "expose", matching those tests' pre-BUG-765
+// behaviour instead of silently hiding the surface they exist to check.
+var _lumen_secure_context = _lumen_url_is_potentially_trustworthy(_lumen_loc_parts);
+
 // ── Secure context (W3C Secure Contexts §3.1/§3.2) ──────────────────────────
 // BUG-399: `window.isSecureContext` used to be the literal `true`, so every
 // `[SecureContext]`-gated API would answer «safe» even on a plain http:// page.
@@ -594,7 +609,6 @@ var navigator = {
     userAgent: 'Lumen/0.5.0',
     language: 'en-US',
     onLine: false,
-    serviceWorker: _sw_container,
     // Beacon API (W3C Beacon §3.1): fire-and-forget POST to url.
     // data may be string | URLSearchParams | FormData | Blob | ArrayBuffer | null.
     sendBeacon: function(url, data) {
@@ -619,6 +633,14 @@ var navigator = {
     },
 };
 
+// BUG-765: `navigator.serviceWorker` is `[SecureContext]` (Service Workers
+// §2.9) — absent entirely on an insecure origin, not merely inert, per
+// `'X' in window/navigator === false` (see `_lumen_secure_context`'s doc
+// comment, this file's top, for the `undefined`-reads-as-secure convention).
+if (_lumen_secure_context !== false) {
+    navigator.serviceWorker = _sw_container;
+}
+
 // ── Clipboard API (W3C Clipboard API §4) ─────────────────────────────────────
 // navigator.clipboard.readText()  → Promise<string>
 // navigator.clipboard.writeText(text) → Promise<void>
@@ -628,6 +650,11 @@ var navigator = {
 // readText/writeText delegate to native bindings (_lumen_clipboard_read /
 // _lumen_clipboard_write) when the shell wires them.  Until then readText
 // returns '' and writeText silently succeeds.
+//
+// BUG-765: the `Clipboard` interface is `[SecureContext]` (Clipboard API
+// §4.1 partial `Navigator`) — absent entirely on an insecure origin, not
+// merely inert (see `_lumen_secure_context`'s doc comment, this file's top).
+if (_lumen_secure_context !== false) {
 navigator.clipboard = {
     readText: function() {
         return new Promise(function(resolve, reject) {
@@ -651,6 +678,7 @@ navigator.clipboard = {
     read:  function() { return Promise.resolve([]); },
     write: function() { return Promise.resolve(undefined); },
 };
+}
 
 // ── Permissions API (W3C Permissions §5) ─────────────────────────────────────
 // Lives in `crates/js/src/permissions.rs`, not here: BUG-386 replaced the 25

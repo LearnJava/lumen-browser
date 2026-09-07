@@ -196,7 +196,15 @@ const WAKE_LOCK_SHIM: &str = r#"(function() {
 
   // ── navigator.wakeLock ────────────────────────────────────────────────────
 
-  if (typeof navigator !== 'undefined') {
+  // BUG-765: `NavigatorWakeLock.wakeLock` is `[SecureContext]` (Screen Wake
+  // Lock §4) — absent entirely on an insecure origin, not merely inert. A
+  // standalone unit test that installs this shim without `WEB_API_SHIM`
+  // never declares `_lumen_secure_context` at all (not even as `undefined`),
+  // so it is read through `typeof` — the one safe way to probe a name that
+  // may not exist in scope — and treated as "expose" (see that variable's
+  // doc comment, `web_api_shim_mid_b.js`).
+  if (typeof navigator !== 'undefined' &&
+      (typeof _lumen_secure_context === 'undefined' || _lumen_secure_context !== false)) {
     Object.defineProperty(navigator, 'wakeLock', {
       configurable: true,
       enumerable:   true,

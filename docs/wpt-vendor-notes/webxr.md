@@ -53,7 +53,7 @@ The 2 non-`.https.` ids that did run:
     {...})` (`crates/js/src/webxr.rs:110-115`), with no `isSecureContext`
     branch, and `install_v8!(webxr::install_webxr_bindings_v8)`
     (`v8_runtime.rs:5167`) runs unconditionally too. Reconfirms the
-    already-open umbrella bug [BUG-765](../../bugs/BUG-765-OPEN.md) ("no
+    already-open umbrella bug [BUG-765](../../bugs/BUG-765-FIXED.md) ("no
     `[SecureContext]`-tagged API is gated by `window.isSecureContext`") —
     not a new number.
   - Async subtest (`Test webxr not available in secure context in insecure
@@ -83,7 +83,7 @@ TIMEOUT — это переподтверждение движкового [BUG-
 категории зависон. Два исполнившихся non-`.https.` теста: `historical.html`
 17/17 OK (тривиально — проверяет отсутствие устаревших WebVR-интерфейсов,
 которых никогда не было); `webxr_availability.http.sub.html` — harness
-TIMEOUT, 0/2 сабтестов, переподтверждает [BUG-765](../../bugs/BUG-765-OPEN.md)
+TIMEOUT, 0/2 сабтестов, переподтверждает [BUG-765](../../bugs/BUG-765-FIXED.md)
 (`navigator.xr` ставится безусловно, без гейта `isSecureContext`) и
 [BUG-480](../../bugs/BUG-480-OPEN.md) (кросс-origin `<iframe>` без browsing
 context, второй сабтест виснет). Новый BUG-NNN не заводился.

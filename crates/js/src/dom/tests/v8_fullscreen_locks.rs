@@ -28,6 +28,17 @@ fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     rt
 }
 
+/// Same, installed against an explicit page URL — the Screen Wake Lock tests
+/// need a secure one (BUG-765: `navigator.wakeLock` is `[SecureContext]`,
+/// and `v8_runtime_with_dom`'s empty URL is insecure).
+fn v8_runtime_with_url(url: &str) -> V8JsRuntime {
+    let rt = V8JsRuntime::new().unwrap();
+    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, false)
+        .unwrap();
+    rt
+}
+
 fn bool_eval(rt: &V8JsRuntime, script: &str) -> bool {
     rt.eval(script).unwrap() == lumen_core::JsValue::Bool(true)
 }
@@ -405,10 +416,14 @@ fn lock_name_is_stringified() {
 }
 
 // ── Screen Wake Lock stub ────────────────────────────────────────────────────
+//
+// BUG-765: `navigator.wakeLock` is `[SecureContext]`, so these three install
+// against a secure `https://` URL rather than `v8_runtime_with_dom`'s empty
+// (insecure) page URL, which would otherwise leave the property absent.
 
 #[test]
 fn wake_lock_request_resolves() {
-    let rt = v8_runtime_with_dom(make_doc());
+    let rt = v8_runtime_with_url("https://example.com/");
     rt.eval(r#"
                 var sentinel = null;
                 navigator.wakeLock.request('screen').then(function(s) { sentinel = s; });
@@ -420,7 +435,7 @@ fn wake_lock_request_resolves() {
 
 #[test]
 fn wake_lock_release_marks_released() {
-    let rt = v8_runtime_with_dom(make_doc());
+    let rt = v8_runtime_with_url("https://example.com/");
     rt.eval(r#"
                 var released = false;
                 navigator.wakeLock.request('screen').then(function(s) {
@@ -432,12 +447,18 @@ fn wake_lock_release_marks_released() {
 
 #[test]
 fn wake_lock_unsupported_type_rejects() {
-    let rt = v8_runtime_with_dom(make_doc());
+    let rt = v8_runtime_with_url("https://example.com/");
     rt.eval(r#"
                 var rej = false;
                 navigator.wakeLock.request('cpu').catch(function() { rej = true; });
             "#).unwrap();
     assert!(bool_eval(&rt, "rej"));
+}
+
+#[test]
+fn wake_lock_absent_on_insecure_origin() {
+    let rt = v8_runtime_with_url("http://example.com/");
+    assert!(bool_eval(&rt, "typeof navigator.wakeLock === 'undefined'"));
 }
 
 // ── Network Information stub ────────────────────────────────────────────────

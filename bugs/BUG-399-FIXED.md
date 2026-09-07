@@ -135,7 +135,7 @@ is_secure_context`, 5/5. Юнит-тесты бьют по `install_dom` нап�
 * Флаг теперь верен, но его никто не читает: гейта `[SecureContext]` в
   движке по-прежнему нет ни у одного API (`grep isSecureContext crates/` вне
   `dom.rs` — пусто), так что Web Crypto/Clipboard/сенсоры/Service Workers
-  доступны с `http://`-страницы как и раньше — [BUG-765](BUG-765-OPEN.md).
+  доступны с `http://`-страницы как и раньше — [BUG-765](BUG-765-FIXED.md).
   Именно этот разрыв делал ложноположительным `assert_false` в
   `Gyroscope_insecure_context.html`, с которого началась заявка: чтобы тест
   позеленел на не-loopback origin, нужен не только флаг, но и гейт.

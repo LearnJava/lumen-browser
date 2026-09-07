@@ -1385,9 +1385,19 @@ the time — read dates.
   `_lumen_location_update`), which would have flipped an https page to insecure. That string is a
   resolved same-origin URL now, so the snapshot rests on the spec rule alone rather than on working
   around a defect. The snapshot lives in a closure rather than a `_lumen_…` global, since
-  `seal_internal_globals_v8` leaves engine state writable. Nothing in the engine reads the flag yet
-  — `[SecureContext]` gating is [BUG-765](../bugs/BUG-765-OPEN.md), and `WorkerGlobalScope` has no
-  such property at all ([BUG-766](../bugs/BUG-766-OPEN.md)).
+  `seal_internal_globals_v8` leaves engine state writable. `WorkerGlobalScope` has no such property
+  at all ([BUG-766](../bugs/BUG-766-OPEN.md)).
+- **`[SecureContext]`-gated surfaces are absent, not throwing, on an insecure origin (BUG-765,
+  2026-09-07).** `_lumen_secure_context` (`web_api_shim_mid_b.js`, computed once from the same
+  `_lumen_url_is_potentially_trustworthy`, and reused by `isSecureContext`'s own getter rather than
+  recomputed) gates `navigator.serviceWorker`/`clipboard`/`wakeLock`, `window.crypto.subtle`/
+  `CryptoKey` (not the whole `Crypto` — `getRandomValues`/`randomUUID` aren't marked), and the whole
+  Generic Sensor family (one early `return` before any class is declared). `undefined` reads as
+  "secure" — a standalone module unit test that installs a shim without `WEB_API_SHIM` never sets
+  the variable, so it must not silently hide the surface the test exists to check. `navigator.geolocation`
+  is the exception: the interface itself isn't `[SecureContext]`, only the success path is — both entry
+  points always reject `PERMISSION_DENIED` on an insecure origin regardless of the configured fake
+  coordinates (`geolocation.rs`).
 
 - **`HTMLElement.innerText`/`outerText` — setters (BUG-413 slice 1, [P3] 2026-08-21).**
   Neither property existed at all — not on the wrapper, not on a prototype — so `el.innerText = s`

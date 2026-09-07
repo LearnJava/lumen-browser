@@ -187,16 +187,21 @@ fn message_channel_window_export() {
 }
 
 // ── navigator.clipboard tests ──────────────────────────────────────────────
+//
+// BUG-765: `navigator.clipboard` is `[SecureContext]`, so these four install
+// against a secure `https://` URL rather than the file's `v8_runtime_with_dom`
+// default (empty page URL — insecure, `is_secure_context_is_false_without_page_url`
+// below), which would otherwise leave the property absent entirely.
 
 #[test]
 fn navigator_clipboard_exists() {
-    let rt = v8_runtime_with_dom(make_doc());
+    let rt = v8_runtime_with_url("https://example.com/");
     assert!(bool_eval(&rt, "typeof navigator.clipboard === 'object' && navigator.clipboard !== null"));
 }
 
 #[test]
 fn navigator_clipboard_read_text_returns_promise() {
-    let rt = v8_runtime_with_dom(make_doc());
+    let rt = v8_runtime_with_url("https://example.com/");
     assert!(bool_eval(&rt,
         "typeof navigator.clipboard.readText === 'function' && \
                  typeof navigator.clipboard.readText().then === 'function'"));
@@ -204,7 +209,7 @@ fn navigator_clipboard_read_text_returns_promise() {
 
 #[test]
 fn navigator_clipboard_write_text_returns_promise() {
-    let rt = v8_runtime_with_dom(make_doc());
+    let rt = v8_runtime_with_url("https://example.com/");
     assert!(bool_eval(&rt,
         "typeof navigator.clipboard.writeText === 'function' && \
                  typeof navigator.clipboard.writeText('hi').then === 'function'"));
@@ -212,7 +217,7 @@ fn navigator_clipboard_write_text_returns_promise() {
 
 #[test]
 fn navigator_clipboard_stub_read_resolves_string() {
-    let rt = v8_runtime_with_dom(make_doc());
+    let rt = v8_runtime_with_url("https://example.com/");
     // Without native binding, readText resolves to empty string. Two-step
     // per the S12b-2 lesson (see message_port_post_delivers_via_onmessage).
     rt.eval(
@@ -221,6 +226,13 @@ fn navigator_clipboard_stub_read_resolves_string() {
     )
     .unwrap();
     assert!(bool_eval(&rt, "ok"));
+}
+
+// BUG-765: `navigator.clipboard` must be entirely absent on an insecure origin.
+#[test]
+fn navigator_clipboard_absent_on_insecure_origin() {
+    let rt = v8_runtime_with_url("http://example.com/");
+    assert!(bool_eval(&rt, "typeof navigator.clipboard === 'undefined'"));
 }
 
 // ── navigator.permissions tests ───────────────────────────────────────────
