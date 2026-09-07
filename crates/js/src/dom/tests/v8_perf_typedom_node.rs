@@ -845,30 +845,34 @@ fn dom_create_comment_throws_quota_exceeded_when_full() {
 }
 
 #[test]
-fn native_binding_panic_does_not_abort_process() {
-    // BUG-418: an invalid NodeId reaching `Document::get`/`get_mut` used to
-    // panic inside V8's `extern "C"` callback boundary, which Rust refuses
-    // to unwind through ("panic in a function that cannot unwind") and
-    // aborts the whole process. `native_fn_trampoline` now wraps native
-    // dispatch in `catch_unwind`, turning that into a catchable JS error —
-    // if this test runs at all (rather than aborting the test binary), the
-    // guard is in place; the assertion confirms the error surfaces to JS.
+fn native_binding_get_style_property_foreign_node_id_is_silently_skipped() {
+    // BUG-1031: `_lumen_get_style_property` (platform.rs) used to call
+    // `doc.get(nid)` directly with no `contains_id`/`try_get` guard — the
+    // BUG-1024 comment previously here flagged it as the next live panic
+    // input for the BUG-418 regression test below. It's now hardened the
+    // same way as `_lumen_get_tag_name` (BUG-1024): a foreign NodeId
+    // degrades to an empty string instead of panicking (mirrors
+    // `native_binding_foreign_node_id_is_silently_skipped` below for
+    // `_lumen_append_child`/BUG-986). `_lumen_set_style_property`/
+    // `_lumen_delete_style_property`/`_lumen_get_style_entries` got the same
+    // guard in the same slice — not independently regression-tested here,
+    // same rationale as BUG-986's sibling natives.
     //
-    // BUG-1024: `_lumen_get_tag_name` was hardened to bounds-checked
-    // `doc.try_get(nid)` (dom_core.rs) and no longer panics on a foreign id
-    // — `_lumen_get_style_property` (platform.rs) still calls `doc.get(nid)`
-    // directly (no `contains_id`/`try_get` guard), so it's still a live
-    // panic input.
+    // BUG-418's catch_unwind coverage moved to the next still-live panic
+    // input: `frame_bridge::tests::f_children_native_binding_panic_does_not_abort_process`
+    // (a cross-frame read native — `dom_core.rs`/`platform.rs` have no
+    // unguarded direct-from-JS `doc.get(nid)` left after this slice).
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt.eval(
         r#"
                 var caught = '';
-                try { _lumen_get_style_property(4294967295, 'color'); }
+                var v = 'x';
+                try { v = _lumen_get_style_property(4294967295, 'color'); }
                 catch (e) { caught = e.name; }
-                caught
+                caught + '|' + v
                 "#,
     ).unwrap();
-    assert_eq!(r, lumen_core::JsValue::String("Error".into()));
+    assert_eq!(r, lumen_core::JsValue::String("|".into()));
 }
 
 #[test]

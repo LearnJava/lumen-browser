@@ -840,6 +840,24 @@ fn shadow_root_append_child_works() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
+// BUG-1031: `_lumen_is_shadow_root`/`_lumen_is_document_fragment`/
+// `_lumen_get_shadow_root_host` called `doc.get(nid)` directly on a raw
+// JS-supplied id (no `contains_id`/`try_get` guard) — same panic-on-foreign-id
+// class as BUG-986/BUG-1024, just three more natives that had it. A stale/
+// foreign NodeId now degrades (`false`/`undefined` — this native's raw return,
+// unwrapped by the shim's Option→null convention on the public-facing API)
+// instead of panicking.
+#[test]
+fn shadow_natives_degrade_on_foreign_node_id_instead_of_panicking() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                _lumen_is_shadow_root(4294967295) === false &&
+                _lumen_is_document_fragment(4294967295) === false &&
+                _lumen_get_shadow_root_host(4294967295) === undefined
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
 // BUG-676: `ShadowRoot` used to be a bare `{}`-literal with no [[Prototype]],
 // so none of this resolved (`window.ShadowRoot` didn't exist, `instanceof`
 // threw instead of testing, `constructor.name` read `Object`).

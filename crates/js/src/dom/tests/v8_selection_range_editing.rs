@@ -625,3 +625,33 @@ fn contenteditable_input_event_fires() {
     )).unwrap();
     assert!(bool_eval(&rt, "_ce_fired"), "input event must fire after mutation");
 }
+
+// BUG-1031: `_lumen_set_selection` stored a raw JS-supplied NodeId with no
+// `contains_id` guard — a foreign id didn't corrupt anything by itself, but
+// anything later resolving `Selection::anchor`/`focus` (contenteditable
+// delete, caret reads) hit `Document::get` unguarded and panicked, same
+// class as BUG-986/BUG-1024. A foreign id is now rejected at the write site,
+// so the selection stays unset and a subsequent delete is a no-op instead of
+// a panic.
+#[test]
+fn set_selection_rejects_foreign_node_id_instead_of_corrupting_state() {
+    let (arc, div, text) = make_contenteditable_doc();
+    let div_idx = div.index();
+    let text_idx = text.index();
+    let rt = v8_runtime_with_dom(arc.clone());
+    rt.eval("_lumen_set_selection(4294967295, 0, 4294967295, 0);").unwrap();
+    // Must not have panicked (test still running), and must not have stuck a
+    // foreign id into `Document::selection` — the delete below has nothing
+    // to act on and leaves the text alone rather than panicking.
+    let result = rt.eval(&format!(
+        "_lumen_handle_contenteditable_key('deleteContentBackward',null,{})",
+        div_idx
+    )).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(false));
+    let doc = arc.lock().unwrap();
+    let content = match &doc.get(NodeId::from_index(text_idx)).data {
+        NodeData::Text(s) => s.clone(),
+        _ => panic!("not a text node"),
+    };
+    assert_eq!(content, "Hello");
+}

@@ -975,10 +975,13 @@ pub(crate) fn install_crypto_and_typed_om(
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_get_style_property", move |nid: u32, prop: String| -> String {
             if let Ok(doc) = d.lock() {
-                let node = doc.get(NodeId::from_index(nid as usize));
-                if let Some(style_attr) = node.get_attr("style") {
-                    let parsed = _parse_style_string(style_attr);
-                    return parsed.get(&_css_property_key(&prop)).cloned().unwrap_or_default();
+                // BUG-1031-class: stale/foreign NodeId — degrade instead of panicking
+                // (same guard as `_lumen_get_tag_name`, BUG-986/BUG-1024).
+                if let Some(node) = doc.try_get(NodeId::from_index(nid as usize)) {
+                    if let Some(style_attr) = node.get_attr("style") {
+                        let parsed = _parse_style_string(style_attr);
+                        return parsed.get(&_css_property_key(&prop)).cloned().unwrap_or_default();
+                    }
                 }
             }
             String::new()
@@ -989,6 +992,10 @@ pub(crate) fn install_crypto_and_typed_om(
         reg!(scope, ctx, store, "_lumen_set_style_property", move |nid: u32, prop: String, val: String| {
             if let Ok(mut doc) = d.lock() {
                 let node_id = NodeId::from_index(nid as usize);
+                // BUG-1031-class: stale/foreign NodeId — no-op instead of panicking.
+                if doc.try_get(node_id).is_none() {
+                    return;
+                }
                 let old_style = doc.get(node_id).get_attr("style").map(|s| s.to_string());
                 let mut parsed = if let Some(style) = old_style.as_deref() {
                     _parse_style_string(style)
@@ -1010,6 +1017,10 @@ pub(crate) fn install_crypto_and_typed_om(
         reg!(scope, ctx, store, "_lumen_delete_style_property", move |nid: u32, prop: String| {
             if let Ok(mut doc) = d.lock() {
                 let node_id = NodeId::from_index(nid as usize);
+                // BUG-1031-class: stale/foreign NodeId — no-op instead of panicking.
+                if doc.try_get(node_id).is_none() {
+                    return;
+                }
                 let old_style = doc.get(node_id).get_attr("style").map(|s| s.to_string());
                 let mut parsed = if let Some(style) = old_style.as_deref() {
                     _parse_style_string(style)
@@ -1047,9 +1058,11 @@ pub(crate) fn install_crypto_and_typed_om(
         reg!(scope, ctx, store, "_lumen_get_style_entries", move |nid: u32| -> String {
             let mut pairs: Vec<(String, String)> = Vec::new();
             if let Ok(doc) = d.lock() {
-                let node = doc.get(NodeId::from_index(nid as usize));
-                if let Some(style_attr) = node.get_attr("style") {
-                    pairs = _parse_style_string(style_attr).into_iter().collect();
+                // BUG-1031-class: stale/foreign NodeId — degrade instead of panicking.
+                if let Some(node) = doc.try_get(NodeId::from_index(nid as usize)) {
+                    if let Some(style_attr) = node.get_attr("style") {
+                        pairs = _parse_style_string(style_attr).into_iter().collect();
+                    }
                 }
             }
             _style_entries_to_json(pairs)
