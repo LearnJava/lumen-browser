@@ -33,7 +33,7 @@ venv — see tests/wpt/README.md):
 
     <venv>/python tests/wpt/run_report.py [--binary PATH] [--out PATH] [--all] [--root DIR] [--recursive]
         [--processes N] [--offset N] [--limit N] [--timeout-multiplier F]
-        [--update-expected | --check]
+        [--exclude-prefix ID_PREFIX ...] [--update-expected | --check]
 
 On Windows Git Bash also set `MSYS2_ARG_CONV_EXCL='/dom'` (see README) so the
 leading-slash test ids aren't mangled into Windows paths.
@@ -435,6 +435,24 @@ def main() -> int:
         "explicitly to shard a large --all run across cores (WPT-RUN-3).",
     )
     parser.add_argument(
+        "--exclude-prefix",
+        action="append",
+        default=[],
+        metavar="ID_PREFIX",
+        help="drop any selected test id starting with this prefix (repeatable). "
+        "For carving a known-bad subdirectory out of a --root before "
+        "--update-expected/--check — e.g. a directory whose tests are "
+        "individually-deterministic TIMEOUTs (unfixed GAP-LOADEV gaps, BUG-630/ "
+        "BUG-798) that make one wptrunner worker run 3x longer than its "
+        "siblings and destabilize unrelated tests queued right after it in the "
+        "same never-restarted process (BUG-1011 srez 23, html/rendering/"
+        "replaced-elements/svg-embedded-sizing/). Prefer over --offset/--limit "
+        "for this: offset/limit is a positional slice of the sorted id list and "
+        "silently drifts to the wrong files if the vendored corpus changes, "
+        "while a path prefix stays correct. The excluded ids are still counted "
+        "in the run's selection summary as dropped, not silently absent.",
+    )
+    parser.add_argument(
         "--offset",
         type=int,
         default=0,
@@ -493,6 +511,14 @@ def main() -> int:
     test_ids = (
         all_vendored_test_ids(args.root, args.recursive) if args.all else run_suite.curated_test_ids()
     )
+    if args.exclude_prefix:
+        before = len(test_ids)
+        test_ids = [i for i in test_ids if not any(i.startswith(p) for p in args.exclude_prefix)]
+        print(
+            f"note: --exclude-prefix dropped {before - len(test_ids)} id(s) "
+            f"({', '.join(args.exclude_prefix)})",
+            file=sys.stderr,
+        )
     total_selected = len(test_ids)
     if args.offset or args.limit is not None:
         end = None if args.limit is None else args.offset + args.limit

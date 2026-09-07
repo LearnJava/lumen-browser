@@ -1332,6 +1332,251 @@ use super::*;
         assert!(!q.matches(&ctx));
     }
 
+    // ── BUG-526: Media Queries L4 §Serializing a media query list ──
+    // Транскрипция подтестов `match-media-parsing.html`/
+    // `aspect-ratio-serialization.html` (см. bugs/BUG-526-OPEN.md).
+
+    #[test]
+    fn media_query_serialize_empty() {
+        assert_eq!(parse_media_query("").serialize(), "");
+        assert_eq!(parse_media_query("  ").serialize(), "");
+    }
+
+    #[test]
+    fn media_query_serialize_trims_and_lowercases_media_type() {
+        assert_eq!(parse_media_query("all").serialize(), "all");
+        assert_eq!(parse_media_query(" all").serialize(), "all");
+        assert_eq!(parse_media_query("   all   ").serialize(), "all");
+        assert_eq!(parse_media_query(" foo ").serialize(), "foo");
+    }
+
+    #[test]
+    fn media_query_serialize_comma_list_normalizes_spacing() {
+        assert_eq!(parse_media_query("all,all").serialize(), "all, all");
+        assert_eq!(parse_media_query(" all , all ").serialize(), "all, all");
+    }
+
+    #[test]
+    fn media_query_serialize_empty_clauses_become_not_all() {
+        assert_eq!(parse_media_query(",").serialize(), "not all, not all");
+        assert_eq!(parse_media_query(" , ").serialize(), "not all, not all");
+        assert_eq!(
+            parse_media_query(",,").serialize(),
+            "not all, not all, not all"
+        );
+        assert_eq!(parse_media_query(" foo,").serialize(), "foo, not all");
+    }
+
+    #[test]
+    fn media_query_serialize_feature_round_trips_canonical_form() {
+        assert_eq!(
+            parse_media_query("(min-width: 500px)").serialize(),
+            "(min-width: 500px)"
+        );
+        assert_eq!(
+            parse_media_query("( min-width:  500px )").serialize(),
+            "(min-width: 500px)"
+        );
+    }
+
+    #[test]
+    fn media_query_serialize_and_list_joined_with_and() {
+        assert_eq!(
+            parse_media_query("screen and (min-width: 500px)").serialize(),
+            "screen and (min-width: 500px)"
+        );
+    }
+
+    #[test]
+    fn media_query_serialize_not_and_only_prefixes_preserved() {
+        assert_eq!(parse_media_query("not screen").serialize(), "not screen");
+        assert_eq!(parse_media_query("only screen").serialize(), "only screen");
+    }
+
+    #[test]
+    fn media_query_serialize_aspect_ratio_adds_spacing_around_slash() {
+        // aspect-ratio-serialization.html: `1/3` → `1 / 3` (числитель и
+        // знаменатель хранятся раздельно, не пересчитанной дробью).
+        assert_eq!(
+            parse_media_query("(aspect-ratio: 1/3)").serialize(),
+            "(aspect-ratio: 1 / 3)"
+        );
+        assert_eq!(
+            parse_media_query("(min-aspect-ratio: 16/9)").serialize(),
+            "(min-aspect-ratio: 16 / 9)"
+        );
+    }
+
+    // ── MQ L4: resolution/min-resolution/max-resolution (BUG-1019) ──
+    // Транскрипция `match-media-parsing.html::test_resolution_parsing`
+    // построчно.
+
+    #[test]
+    fn media_query_resolution_units_round_trip() {
+        assert_eq!(
+            parse_media_query("(min-resolution: 1x)").serialize(),
+            "(min-resolution: 1dppx)"
+        );
+        assert_eq!(
+            parse_media_query("(resolution: 2x)").serialize(),
+            "(resolution: 2dppx)"
+        );
+        assert_eq!(
+            parse_media_query("(max-resolution: 7x)").serialize(),
+            "(max-resolution: 7dppx)"
+        );
+        assert_eq!(
+            parse_media_query("(resolution: 2dppx)").serialize(),
+            "(resolution: 2dppx)"
+        );
+    }
+
+    #[test]
+    fn media_query_resolution_dpi_dpcm_convert_to_dppx() {
+        // 600dpi / 96 = 6.25dppx
+        assert_eq!(
+            parse_media_query("(resolution: 600dpi)").serialize(),
+            "(resolution: 6.25dppx)"
+        );
+        // 77dpcm * 2.54 / 96 ≈ 2.0372918dppx
+        let q = parse_media_query("(resolution: 77dpcm)");
+        match &q.clauses[0].conditions[0] {
+            MediaCondition::Feature(MediaFeature::Resolution(v)) => {
+                assert!((v.dppx() - 2.037_291_8).abs() < 0.0001);
+            }
+            other => panic!("expected Resolution feature, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn media_query_resolution_calc_keeps_calc_wrapper_after_serializing() {
+        // calc() collapses to one number but the WPT-expected serialization
+        // still wraps it in `calc(...)` — a bare `(resolution: 3dppx)` is
+        // wrong even though the numeric value is identical.
+        assert_eq!(
+            parse_media_query("(min-resolution: calc(1x))").serialize(),
+            "(min-resolution: calc(1dppx))"
+        );
+        assert_eq!(
+            parse_media_query("(resolution: calc(2x))").serialize(),
+            "(resolution: calc(2dppx))"
+        );
+        assert_eq!(
+            parse_media_query("(max-resolution: calc(7x))").serialize(),
+            "(max-resolution: calc(7dppx))"
+        );
+    }
+
+    #[test]
+    fn media_query_resolution_calc_arithmetic() {
+        assert_eq!(
+            parse_media_query("(resolution: calc(1x + 2x))").serialize(),
+            "(resolution: calc(3dppx))"
+        );
+        assert_eq!(
+            parse_media_query("(resolution: calc(5x - 2x))").serialize(),
+            "(resolution: calc(3dppx))"
+        );
+        assert_eq!(
+            parse_media_query("(resolution: calc(1x * 3))").serialize(),
+            "(resolution: calc(3dppx))"
+        );
+        assert_eq!(
+            parse_media_query("(resolution: calc(6x / 2))").serialize(),
+            "(resolution: calc(3dppx))"
+        );
+    }
+
+    #[test]
+    fn media_query_resolution_matches_context() {
+        let q = parse_media_query("(min-resolution: 2dppx)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.resolution_dppx = 1.0;
+        assert!(!q.matches(&ctx));
+        ctx.resolution_dppx = 2.0;
+        assert!(q.matches(&ctx));
+        ctx.resolution_dppx = 3.0;
+        assert!(q.matches(&ctx));
+
+        let q = parse_media_query("(max-resolution: 2dppx)");
+        assert!(!q.matches(&ctx));
+        ctx.resolution_dppx = 1.5;
+        assert!(q.matches(&ctx));
+
+        let q = parse_media_query("(resolution: 1.5dppx)");
+        assert!(q.matches(&ctx));
+    }
+
+    #[test]
+    fn media_query_resolution_unknown_unit_is_unsupported() {
+        let q = parse_media_query("(resolution: 2foo)");
+        assert_eq!(q.serialize(), "not all");
+    }
+
+    // ── MQ L4: boolean-context features, unclosed parens, bare-word
+    // tokenization stopping at `)` (BUG-1020) ──
+    // Транскрипция `match-media-parsing.html` построчно (весь файл, не
+    // только 7 ранее падавших сабтестов — покрывает и уже проходившие
+    // случаи, чтобы фикс не мог их тихо сломать).
+
+    #[test]
+    fn media_query_parsing_empty_and_all() {
+        assert_eq!(parse_media_query("").serialize(), "");
+        assert_eq!(parse_media_query(" ").serialize(), "");
+        assert_eq!(parse_media_query("all").serialize(), "all");
+        assert_eq!(parse_media_query(" all").serialize(), "all");
+        assert_eq!(parse_media_query("   all   ").serialize(), "all");
+        assert_eq!(parse_media_query("all,all").serialize(), "all, all");
+        assert_eq!(parse_media_query(" all , all ").serialize(), "all, all");
+    }
+
+    #[test]
+    fn media_query_parsing_boolean_context_color_and_unclosed_parens() {
+        assert_eq!(parse_media_query("(color)").serialize(), "(color)");
+        assert_eq!(parse_media_query("(color").serialize(), "(color)");
+        assert_eq!(parse_media_query(" (color)").serialize(), "(color)");
+        assert_eq!(parse_media_query(" ( color  )  ").serialize(), "(color)");
+        assert_eq!(parse_media_query(" ( color   ").serialize(), "(color)");
+    }
+
+    #[test]
+    fn media_query_parsing_stray_close_paren_is_invalid() {
+        assert_eq!(parse_media_query("color)").serialize(), "not all");
+        assert_eq!(parse_media_query("  color)").serialize(), "not all");
+        assert_eq!(
+            parse_media_query("  color ), ( color").serialize(),
+            "not all, (color)"
+        );
+    }
+
+    #[test]
+    fn media_query_parsing_bare_words_and_empty_clauses() {
+        assert_eq!(parse_media_query(" foo ").serialize(), "foo");
+        assert_eq!(parse_media_query(",").serialize(), "not all, not all");
+        assert_eq!(parse_media_query(" , ").serialize(), "not all, not all");
+        assert_eq!(parse_media_query(",,").serialize(), "not all, not all, not all");
+        assert_eq!(
+            parse_media_query("  ,  ,  ").serialize(),
+            "not all, not all, not all"
+        );
+        assert_eq!(parse_media_query(" foo,").serialize(), "foo, not all");
+    }
+
+    #[test]
+    fn media_query_boolean_color_always_matches() {
+        let q = parse_media_query("(color)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+    }
+
+    // ── MQ L4: boolean context частично реализован (только `color`) —
+    // остальные range-фичи в boolean context остаются Unsupported, объём
+    // BUG-527. Регресс-тест на то, что скоуп фикса не расширился неявно.
+    #[test]
+    fn media_query_boolean_context_width_still_unsupported() {
+        let q = parse_media_query("(width)");
+        assert_eq!(q.serialize(), "not all");
+    }
+
     // ── MQ L5 §6.4: prefers-reduced-motion ──
 
     #[test]

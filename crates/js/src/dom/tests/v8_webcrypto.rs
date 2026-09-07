@@ -20,10 +20,16 @@ use super::*;
 use crate::v8_runtime::V8JsRuntime;
 
 /// V8 twin of [`super::runtime_with_dom`].
+///
+/// BUG-765: installed against a secure `https://` URL, not `""` — `.subtle`
+/// and `CryptoKey` are both `[SecureContext]`, and an empty page URL is
+/// insecure (`is_secure_context_is_false_without_page_url`,
+/// `v8_idle_message_clipboard.rs`), which would make every test below find
+/// `window.crypto.subtle` absent instead of exercising it.
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "https://example.com/", None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }
@@ -100,6 +106,26 @@ fn crypto_subtle_exists() {
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt
         .eval("typeof window.crypto.subtle === 'object' && typeof window.crypto.subtle.digest === 'function'")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-765: `SubtleCrypto`/`CryptoKey` are `[SecureContext]` — absent
+/// entirely on an insecure origin. `getRandomValues`/`randomUUID` are not
+/// gated (only `Crypto.subtle` and `CryptoKey` are marked in the IDL).
+#[test]
+fn crypto_subtle_absent_on_insecure_origin() {
+    let rt = V8JsRuntime::new().unwrap();
+    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(make_doc(), "http://example.com/", None, None, None, None, None, None, None, None, false)
+        .unwrap();
+    let r = rt
+        .eval(
+            "typeof window.crypto.subtle === 'undefined' && \
+             typeof window.CryptoKey === 'undefined' && \
+             typeof window.crypto.getRandomValues === 'function' && \
+             typeof window.crypto.randomUUID === 'function'",
+        )
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }

@@ -85,7 +85,7 @@ WebIDL, класс [BUG-366](BUG-366-FIXED.md): страница не должн
 
 * **`performance.timing` / `performance.navigation`** (легаси-partial
   Navigation Timing L2) не добавлены — заведён
-  [BUG-767](BUG-767-OPEN.md). Названный заявкой
+  [BUG-767](BUG-767-FIXED.md). Названный заявкой
   `performance-tojson.html` проверяет не только `performance.toJSON`, но
   и `json.timing`/`json.navigation` с 21 миллисекундной вехой
   (`navigationStart`…`loadEventEnd`) и `type`/`redirectCount`, поэтому
@@ -96,7 +96,7 @@ WebIDL, класс [BUG-366](BUG-366-FIXED.md): страница не должн
   `_lumen_deliver_perf_entry('navigation', url, 0.0, duration_ms, null)`
   (`crates/shell/src/main.rs::deliver_nav_timing`) — только URL и общая
   длительность; на том же безданном источнике уже висит
-  [BUG-640](BUG-640-OPEN.md) (современная L2-запись
+  [BUG-640](BUG-640-FIXED.md) (современная L2-запись
   `PerformanceNavigationTiming` — такой же голый стаб), поэтому BUG-767
   им и заблокирован. Подставить 21 ноль означало бы позеленить тест,
   оставив фичу сломанной, поэтому интерфейсы отсутствуют, а не
@@ -137,7 +137,7 @@ WebIDL, класс [BUG-366](BUG-366-FIXED.md): страница не должн
 
 ## Связанные
 
-* [BUG-767](BUG-767-OPEN.md) — `performance.timing`/`performance.navigation`
+* [BUG-767](BUG-767-FIXED.md) — `performance.timing`/`performance.navigation`
   (Navigation Timing L1/L2 legacy) отсутствуют; заведён этим фиксом.
 * [BUG-401](BUG-401-FIXED.md) — `performance` отсутствует в Worker global
   scope целиком: тот же API, другой файл (`worker.rs`). Теперь у него

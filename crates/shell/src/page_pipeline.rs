@@ -37,6 +37,11 @@ pub(crate) fn render_bytes(
     cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
     target: lumen_core::ColorSpace,
     cache_control_no_store: bool,
+    // BUG-640: real facts about the top-level HTTP response, carried straight
+    // through into `LoadedPage::nav` for `PerformanceNavigationTiming` — see
+    // `nav_timing`'s doc comment for what these two can and can't express.
+    response_status: u16,
+    redirected: bool,
 ) -> Result<RenderedPage, Box<dyn Error>> {
     let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target, false)?;
     let display_list = paint_ordered(&parsed.layout);
@@ -71,6 +76,11 @@ pub(crate) fn render_bytes(
             page_tracks: parsed.page_tracks,
             frames: parsed.frames,
             frame_env: Some(parsed.frame_env),
+            nav: crate::nav_timing::NavResponseMeta {
+                status: response_status,
+                redirected,
+                decoded_body_size: bytes.len() as u64,
+            },
         },
         layout_source,
         parsed.js_ctx,
@@ -199,6 +209,11 @@ pub(crate) struct LoadedPage {
     /// `None` — путь, где фреймов нет вовсе (headless-рендер `lumen-driver`,
     /// пустая страница): загружать в живом окне будет нечего.
     pub(crate) frame_env: Option<frames::FrameLoadEnv>,
+    /// BUG-640: real facts about the top-level HTTP response, needed to build
+    /// the `PerformanceNavigationTiming` detail payload at the
+    /// `deliver_nav_timing` call site (both of which read `page.nav` before
+    /// the rest of this struct's fields are moved out).
+    pub(crate) nav: crate::nav_timing::NavResponseMeta,
 }
 
 impl LoadedPage {
@@ -228,6 +243,7 @@ impl LoadedPage {
             page_tracks: tracks::PageTracks::default(),
             frames: Vec::new(),
             frame_env: None,
+            nav: crate::nav_timing::NavResponseMeta::default(),
         }
     }
 }
@@ -641,10 +657,14 @@ pub(crate) fn parse_and_layout(
     //
     // CSS Selectors L4 §9.6 `:target`: set current target from the URL fragment
     // so the matcher has the correct target_id before that first cascade.
+    // STTF-1: a `:~:text=...` scroll-to-text directive is not part of the
+    // element-id fragment — `text_fragment::parse_fragment` strips it so
+    // `:target` never tries to match a raw directive string against an `id`.
     let page_fragment = if let ResourceBase::Url(u) = base {
         lumen_core::url::Url::parse(u)
             .ok()
             .and_then(|u| u.fragment().map(str::to_owned))
+            .and_then(|f| text_fragment::parse_fragment(&f).element_id)
     } else {
         None
     };
@@ -717,6 +737,13 @@ pub(crate) fn parse_and_layout(
             viewport,
         ))
     };
+    // CSSOM-7 (BUG-977): same gate as `parse_time_snapshot` — nothing to flush
+    // against if there is no script that could read it. `Stylesheet::clone()`
+    // is a real (hand-written, revision-minting) deep copy, not an `Arc`
+    // handle — paid once per navigation with scripts, not per relayout.
+    let parse_time_stylesheet = parse_time_snapshot
+        .is_some()
+        .then(|| Arc::new(cascade.sheet.clone()));
 
     let run_scripts_span = lumen_core::trace::span("run-scripts", "script");
     // BUG-480 срез 1: клоны провайдеров/хранилищ для sub-документов <iframe> —
@@ -766,6 +793,7 @@ pub(crate) fn parse_and_layout(
         false,
         parse_time_snapshot,
         cascade.stylesheet_nodes.clone(),
+        parse_time_stylesheet,
     );
     drop(run_scripts_span);
 
@@ -824,6 +852,14 @@ pub(crate) fn parse_and_layout(
             js.update_computed_styles(snapshot.styles);
             js.update_pseudo_computed_styles(snapshot.pseudo_styles);
             js.update_custom_properties(snapshot.customs);
+            // CSSOM-7 (BUG-977): re-push alongside the snapshot above so a
+            // `DOMContentLoaded` handler (about to fire right after this
+            // block) has an up-to-date flush target too — covers the sheet
+            // that was just rebuilt (`scripts_changed_css`) as well as the
+            // unchanged one (`dom_touched`/`adopted_changed` alone), same
+            // "cheap enough, simpler than gating separately" call as
+            // `update_stylesheet_nodes` below.
+            js.update_stylesheet(Arc::new(cascade.sheet.clone()));
             // CSSOM-1 срез 3: re-push whenever this block runs, even though
             // `cascade.stylesheet_nodes` only actually changed when
             // `scripts_changed_css` triggered the rebuild above — cheap
@@ -837,7 +873,12 @@ pub(crate) fn parse_and_layout(
     // + DOMContentLoaded event. Fires before images/fonts are decoded.
     #[cfg(feature = "v8")]
     if let Some(js) = &js_ctx {
+        // BUG-640: bracket the real dispatch — `domInteractive`/
+        // `domContentLoadedEventStart` share the "before" instant,
+        // `domContentLoadedEventEnd` is the "after" one.
+        crate::nav_timing::record_dom_content_loaded_start();
         js.notify_dom_content_loaded();
+        crate::nav_timing::record_dom_content_loaded_end();
     }
 
     {

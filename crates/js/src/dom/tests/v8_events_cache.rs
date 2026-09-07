@@ -451,9 +451,14 @@ fn dispatchevent_creates_untrusted_event() {
 
 // ── navigator.serviceWorker ───────────────────────────────────────────────
 
+// BUG-765: `navigator.serviceWorker` is `[SecureContext]`, so these install
+// against a secure `https://` URL rather than the file's `v8_runtime_with_dom`
+// default (empty page URL — insecure), which would otherwise leave the
+// property absent entirely.
+
 #[test]
 fn navigator_has_service_worker() {
-    let rt = v8_runtime_with_dom(make_doc());
+    let rt = v8_runtime_with_url("https://example.com/");
     let result = rt
         .eval("typeof navigator.serviceWorker === 'object'")
         .unwrap();
@@ -461,8 +466,17 @@ fn navigator_has_service_worker() {
 }
 
 #[test]
+fn navigator_service_worker_absent_on_insecure_origin() {
+    let rt = v8_runtime_with_url("http://example.com/");
+    let result = rt
+        .eval("typeof navigator.serviceWorker === 'undefined'")
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
 fn sw_register_returns_promise() {
-    let rt = v8_runtime_with_dom(make_doc());
+    let rt = v8_runtime_with_url("https://example.com/");
     let result = rt
         .eval(
             r#"
@@ -516,7 +530,7 @@ fn sw_worker_has_state_installing() {
 
 #[test]
 fn sw_container_has_event_target() {
-    let rt = v8_runtime_with_dom(make_doc());
+    let rt = v8_runtime_with_url("https://example.com/");
     let result = rt
         .eval(
             r#"
@@ -557,7 +571,7 @@ fn sw_get_registrations_returns_array() {
 
 #[test]
 fn sw_ready_property_is_promise() {
-    let rt = v8_runtime_with_dom(make_doc());
+    let rt = v8_runtime_with_url("https://example.com/");
     let result = rt
         .eval("typeof navigator.serviceWorker.ready.then === 'function'")
         .unwrap();

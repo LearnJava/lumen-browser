@@ -33,7 +33,7 @@ defect:
   by `Object.defineProperty(navigator, 'usb', {...})`
   (`crates/js/src/webusb.rs:194-198`), with no `isSecureContext` branch.
   This reconfirms the already-open umbrella bug
-  [BUG-765](../../bugs/BUG-765-OPEN.md) ("no `[SecureContext]`-tagged API is
+  [BUG-765](../../bugs/BUG-765-FIXED.md) ("no `[SecureContext]`-tagged API is
   gated by `window.isSecureContext` — the surface is installed by
   unconditional assignment regardless of context") — not a new number, one
   more instance of a documented, already-tracked class.
@@ -59,7 +59,7 @@ No new `BUG-NNN` filed.
 30/32 — `.https.`-гэп TLS `UnknownIssuer` ([BUG-657](../../bugs/BUG-657-OPEN.md)),
 не находка категории. Два исполнившихся non-`.https.` теста дали два FAIL —
 оба не новые баги: `insecure-context.any.html` переподтверждает уже открытый
-[BUG-765](../../bugs/BUG-765-OPEN.md) (`navigator.usb` ставится безусловно, без
+[BUG-765](../../bugs/BUG-765-FIXED.md) (`navigator.usb` ставится безусловно, без
 гейта по `isSecureContext`); `usb-supported-by-permissions-policy.html`
 ожидаемо не находит `"usb"` в `features()` — WebUSB не имеет
 Permissions-Policy интеграции (Phase-0), это корректное поведение, а не

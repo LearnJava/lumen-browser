@@ -153,6 +153,16 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Called after every resize and on initial load.
     #[allow(dead_code)] // called only from #[cfg(feature = "v8")] blocks
     fn update_viewport_size(&self, width: f32, height: f32);
+    /// CSSOM-7 (BUG-977): push the page's current cascade for the
+    /// synchronous same-tick flush (CSSOM-4/BUG-493's `maybe_flush`), which
+    /// the interactive shell never fed before this — `FlushHandles::stylesheet`
+    /// stayed `None` there, silencing the `overflow: clip` scroll zeroing and
+    /// `getComputedStyle`/`sheet` reads a script performs in the same turn
+    /// it just mutated style. Call alongside [`Self::update_computed_styles`]
+    /// whenever the cascade is (re)built — the `Arc` clone is as cheap as
+    /// [`Self::update_viewport_size`]'s write, no relayout triggered here.
+    #[allow(dead_code)] // called only from #[cfg(feature = "v8")] blocks
+    fn update_stylesheet(&self, sheet: Arc<lumen_css_parser::Stylesheet>);
     /// Call `_lumen_deliver_resize_observers()` and
     /// `_lumen_deliver_intersection_observers()` in JS.
     ///
@@ -238,8 +248,12 @@ pub(crate) trait PersistentJs: Send + Sync {
     ///
     /// Called after a page load completes. `url` is the navigation URL;
     /// `duration_ms` is total load time (Navigation Timing L2 §4.2 `duration`).
-    /// Calls `_lumen_deliver_perf_entry('navigation', url, 0.0, duration_ms, detail)`.
-    fn deliver_nav_timing(&self, url: &str, duration_ms: f64);
+    /// `detail_json` is [`crate::nav_timing::detail_json`]'s output — real
+    /// redirect/response/DOM-lifecycle fields, honestly stubbed where
+    /// `lumen-network` has no per-phase breakdown (BUG-640; see that
+    /// module's doc comment for exactly which). Calls
+    /// `_lumen_deliver_perf_entry('navigation', url, 0.0, duration_ms, detail_json)`.
+    fn deliver_nav_timing(&self, url: &str, duration_ms: f64, detail_json: &str);
     /// Hand a batch of engine-issued subresource loads to the page's Resource
     /// Timing buffer (BUG-839).
     ///
@@ -785,6 +799,9 @@ impl PersistentJs for V8PersistentJs {
     fn update_viewport_size(&self, width: f32, height: f32) {
         self.rt.update_viewport_size(width, height);
     }
+    fn update_stylesheet(&self, sheet: Arc<lumen_css_parser::Stylesheet>) {
+        self.rt.update_stylesheet(sheet);
+    }
     fn deliver_layout_observers(&self) {
         self.eval_js("_lumen_deliver_resize_observers();_lumen_deliver_intersection_observers();_lumen_deliver_canvas_css_resize();");
     }
@@ -846,10 +863,14 @@ impl PersistentJs for V8PersistentJs {
             js_string_literal(name),
         ));
     }
-    fn deliver_nav_timing(&self, url: &str, duration_ms: f64) {
+    fn deliver_nav_timing(&self, url: &str, duration_ms: f64, detail_json: &str) {
+        // Same "JSON text as a JS string literal, not a bare expression"
+        // reasoning as `deliver_resource_timings` below — the shim runs
+        // `JSON.parse` on this argument.
         self.eval_js(&format!(
-            "_lumen_deliver_perf_entry('navigation', {}, 0.0, {duration_ms}, null)",
+            "_lumen_deliver_perf_entry('navigation', {}, 0.0, {duration_ms}, {})",
             js_string_literal(url),
+            js_string_literal(detail_json),
         ));
     }
     fn deliver_resource_timings(&self, rows_json: &str) {

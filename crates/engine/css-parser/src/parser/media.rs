@@ -44,6 +44,10 @@ pub struct MediaQueryClause {
     /// внутри negated clause не дают `true`: clause с любым
     /// `Unsupported` оценивается как unknown и не матчит.
     pub negated: bool,
+    /// Истина для `only screen and (...)`. L3-совместимый no-op-модификатор
+    /// (не влияет на [`MediaQueryClause::matches`]) — хранится только ради
+    /// точной сериализации ([`MediaQueryClause::serialize`]).
+    pub only: bool,
     /// AND-list. Пустой — clause-error (например, `not` без feature),
     /// `matches()` отдаст `false`.
     pub conditions: Vec<MediaCondition>,
@@ -71,12 +75,22 @@ pub enum MediaFeature {
     Height(f32),
     MinHeight(f32),
     MaxHeight(f32),
-    // Aspect ratio: numerator/denominator stored as f32 ratio
-    AspectRatio(f32),
-    MinAspectRatio(f32),
-    MaxAspectRatio(f32),
+    // Aspect ratio: numerator/denominator kept separate (not pre-divided)
+    // так, чтобы serialize() мог отдать `1 / 3`, а не отгаданную из float
+    // дробь — см. Media Queries L4 aspect-ratio-serialization.html.
+    AspectRatio(f32, f32),
+    MinAspectRatio(f32, f32),
+    MaxAspectRatio(f32, f32),
     // Display
     Orientation(MediaOrientation),
+    // Resolution (CSS Values L4 `<resolution>`, canonical unit `dppx`) —
+    // `x`/`dppx`/`dpi`/`dpcm` units plus a minimal `calc()` (BUG-1019).
+    /// `(resolution: <resolution>)` — exact device resolution match.
+    Resolution(ResolutionValue),
+    /// `(min-resolution: <resolution>)`.
+    MinResolution(ResolutionValue),
+    /// `(max-resolution: <resolution>)`.
+    MaxResolution(ResolutionValue),
     // User preferences (MQ L5, commonly used)
     PrefersColorScheme(ColorScheme),
     PrefersReducedMotion(bool),
@@ -109,9 +123,49 @@ pub enum MediaFeature {
     /// цвета (например, режим «инверсия цветов» доступности) (Media Queries
     /// L5 §5.8).
     InvertedColors(MediaInvertedColors),
+    /// `(color)` — boolean-context форма (CSS Values L4 §Boolean Context):
+    /// «true, если фича поддерживается устройством и её значение не равно
+    /// нулю». У Lumen цветовая глубина фиксирована, поэтому она всегда
+    /// «поддерживается». Общий boolean-context механизм для остальных
+    /// range-фич (`width`/`resolution`/…) — отдельный, более широкий объём
+    /// BUG-527, не этой точечной правки (BUG-1020).
+    Color,
 }
 
 impl Eq for MediaFeature {}
+
+/// A resolved `<resolution>` value (canonical unit `dppx`), plus whether the
+/// source used `calc(...)` — Media Queries L4's serialization keeps the
+/// `calc(...)` wrapper even once the expression collapses to one number
+/// (`match-media-parsing.html::test_resolution_parsing`: `(resolution:
+/// calc(1x))` serializes as `(resolution: calc(1dppx))`, not `(resolution:
+/// 1dppx)`), so a bare `f32` would lose that distinction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ResolutionValue {
+    /// Written directly, e.g. `2dppx`/`600dpi`.
+    Literal(f32),
+    /// Written as `calc(...)`; the `f32` is the already-simplified `dppx`
+    /// result.
+    Calc(f32),
+}
+
+impl Eq for ResolutionValue {}
+
+impl ResolutionValue {
+    /// The canonical `dppx` amount, regardless of source form.
+    pub(crate) fn dppx(self) -> f32 {
+        match self {
+            Self::Literal(v) | Self::Calc(v) => v,
+        }
+    }
+
+    fn serialize(self) -> String {
+        match self {
+            Self::Literal(v) => format!("{v}dppx"),
+            Self::Calc(v) => format!("calc({v}dppx)"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaOrientation {
@@ -211,6 +265,13 @@ pub struct MediaContext {
     pub media_type: String,
     pub width: f32,
     pub height: f32,
+    /// Device resolution in `dppx` (`resolution`/`min-resolution`/
+    /// `max-resolution`). No dynamic per-window scale-factor plumbing exists
+    /// yet anywhere in the engine — `window.devicePixelRatio` itself is a
+    /// hardcoded `1` (`crates/js/src/window_management.rs`) outside the
+    /// multi-window API — so `1.0` here matches that same desktop default
+    /// rather than adding a second, disagreeing source of truth (BUG-1019).
+    pub resolution_dppx: f32,
     pub prefers_dark: bool,
     /// Соответствует `prefers-reduced-motion: reduce`.
     pub prefers_reduced_motion: bool,
@@ -245,6 +306,7 @@ impl Default for MediaContext {
             media_type: "screen".into(),
             width: 0.0,
             height: 0.0,
+            resolution_dppx: 1.0,
             prefers_dark: false,
             prefers_reduced_motion: false,
             forced_colors: false,
@@ -318,17 +380,20 @@ impl MediaFeature {
             Self::Height(px) => (ctx.height - px).abs() < 0.5,
             Self::MinHeight(px) => ctx.height >= *px,
             Self::MaxHeight(px) => ctx.height <= *px,
-            Self::AspectRatio(ratio) => {
+            Self::AspectRatio(n, d) => {
+                let ratio = n / d;
                 let actual = if ctx.height > 0.0 { ctx.width / ctx.height } else { f32::INFINITY };
                 (actual - ratio).abs() < 0.01
             }
-            Self::MinAspectRatio(ratio) => {
+            Self::MinAspectRatio(n, d) => {
+                let ratio = n / d;
                 let actual = if ctx.height > 0.0 { ctx.width / ctx.height } else { f32::INFINITY };
-                actual >= *ratio
+                actual >= ratio
             }
-            Self::MaxAspectRatio(ratio) => {
+            Self::MaxAspectRatio(n, d) => {
+                let ratio = n / d;
                 let actual = if ctx.height > 0.0 { ctx.width / ctx.height } else { 0.0 };
-                actual <= *ratio
+                actual <= ratio
             }
             Self::Orientation(o) => {
                 let actual = if ctx.width >= ctx.height {
@@ -338,6 +403,9 @@ impl MediaFeature {
                 };
                 actual == *o
             }
+            Self::Resolution(v) => (ctx.resolution_dppx - v.dppx()).abs() < 0.001,
+            Self::MinResolution(v) => ctx.resolution_dppx >= v.dppx(),
+            Self::MaxResolution(v) => ctx.resolution_dppx <= v.dppx(),
             Self::PrefersColorScheme(scheme) => match scheme {
                 ColorScheme::Dark => ctx.prefers_dark,
                 ColorScheme::Light => !ctx.prefers_dark,
@@ -353,7 +421,167 @@ impl MediaFeature {
             Self::PrefersReducedTransparency(t) => ctx.prefers_reduced_transparency == *t,
             Self::Scripting(s) => ctx.scripting == *s,
             Self::InvertedColors(i) => ctx.inverted_colors == *i,
+            Self::Color => true,
         }
+    }
+}
+
+impl MediaQuery {
+    /// Media Queries L4 §Serializing a media query list: пустой список —
+    /// пустая строка (`window.matchMedia('').media === ''`), иначе каждая
+    /// comma-separated clause сериализуется независимо и join'ится `", "`
+    /// (точное исходное разделение/пробелы не сохраняются — спека требует
+    /// канонической формы, не эха входа, отсюда и сам баг [BUG-526]).
+    pub fn serialize(&self) -> String {
+        self.clauses
+            .iter()
+            .map(MediaQueryClause::serialize)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+impl MediaQueryClause {
+    /// Клауза, которая не распозналась целиком (пустой `conditions`) или
+    /// содержит хотя бы один `Unsupported` (неизвестная фича, синтаксическая
+    /// ошибка внутри `()`, лишний `not`/`only`) сериализуется как литеральная
+    /// `not all` — Media Queries L4 требует заменить каждый невалидный член
+    /// списка этой строкой целиком, независимо от собственных `not`/`only`.
+    pub fn serialize(&self) -> String {
+        if self.conditions.is_empty()
+            || self
+                .conditions
+                .iter()
+                .any(|c| matches!(c, MediaCondition::Unsupported))
+        {
+            return "not all".to_string();
+        }
+        let body = self
+            .conditions
+            .iter()
+            .map(MediaCondition::serialize)
+            .collect::<Vec<_>>()
+            .join(" and ");
+        if self.negated {
+            format!("not {body}")
+        } else if self.only {
+            format!("only {body}")
+        } else {
+            body
+        }
+    }
+}
+
+impl MediaCondition {
+    fn serialize(&self) -> String {
+        match self {
+            Self::MediaType(t) => t.clone(),
+            Self::Feature(f) => format!("({})", f.serialize()),
+            // Клаузы с Unsupported перехватываются на уровне
+            // MediaQueryClause::serialize раньше, чем мы сюда доходим.
+            Self::Unsupported => "not all".to_string(),
+        }
+    }
+}
+
+impl MediaFeature {
+    fn serialize(&self) -> String {
+        match self {
+            Self::Width(px) => format!("width: {px}px"),
+            Self::MinWidth(px) => format!("min-width: {px}px"),
+            Self::MaxWidth(px) => format!("max-width: {px}px"),
+            Self::Height(px) => format!("height: {px}px"),
+            Self::MinHeight(px) => format!("min-height: {px}px"),
+            Self::MaxHeight(px) => format!("max-height: {px}px"),
+            Self::AspectRatio(n, d) => format!("aspect-ratio: {n} / {d}"),
+            Self::MinAspectRatio(n, d) => format!("min-aspect-ratio: {n} / {d}"),
+            Self::MaxAspectRatio(n, d) => format!("max-aspect-ratio: {n} / {d}"),
+            Self::Orientation(o) => format!(
+                "orientation: {}",
+                match o {
+                    MediaOrientation::Portrait => "portrait",
+                    MediaOrientation::Landscape => "landscape",
+                }
+            ),
+            Self::Resolution(v) => format!("resolution: {}", v.serialize()),
+            Self::MinResolution(v) => format!("min-resolution: {}", v.serialize()),
+            Self::MaxResolution(v) => format!("max-resolution: {}", v.serialize()),
+            Self::PrefersColorScheme(s) => format!(
+                "prefers-color-scheme: {}",
+                match s {
+                    ColorScheme::Light => "light",
+                    ColorScheme::Dark => "dark",
+                }
+            ),
+            Self::PrefersReducedMotion(reduce) => format!(
+                "prefers-reduced-motion: {}",
+                if *reduce { "reduce" } else { "no-preference" }
+            ),
+            Self::ForcedColors(active) => format!(
+                "forced-colors: {}",
+                if *active { "active" } else { "none" }
+            ),
+            Self::Hover(h) => format!("hover: {}", hover_str(*h)),
+            Self::AnyHover(h) => format!("any-hover: {}", hover_str(*h)),
+            Self::Pointer(p) => format!("pointer: {}", pointer_str(*p)),
+            Self::AnyPointer(p) => format!("any-pointer: {}", pointer_str(*p)),
+            Self::PrefersContrast(c) => format!(
+                "prefers-contrast: {}",
+                match c {
+                    MediaContrast::NoPreference => "no-preference",
+                    MediaContrast::More => "more",
+                    MediaContrast::Less => "less",
+                    MediaContrast::Custom => "custom",
+                }
+            ),
+            Self::PrefersReducedData(d) => format!(
+                "prefers-reduced-data: {}",
+                match d {
+                    MediaReducedData::NoPreference => "no-preference",
+                    MediaReducedData::Reduce => "reduce",
+                }
+            ),
+            Self::PrefersReducedTransparency(t) => format!(
+                "prefers-reduced-transparency: {}",
+                match t {
+                    MediaReducedTransparency::NoPreference => "no-preference",
+                    MediaReducedTransparency::Reduce => "reduce",
+                }
+            ),
+            Self::Scripting(s) => format!(
+                "scripting: {}",
+                match s {
+                    MediaScripting::None => "none",
+                    MediaScripting::InitialOnly => "initial-only",
+                    MediaScripting::Enabled => "enabled",
+                }
+            ),
+            Self::InvertedColors(i) => format!(
+                "inverted-colors: {}",
+                match i {
+                    MediaInvertedColors::None => "none",
+                    MediaInvertedColors::Inverted => "inverted",
+                }
+            ),
+            // Boolean context — no `: value` part, just the feature name
+            // (`(color)`, not `(color: true)`).
+            Self::Color => "color".to_string(),
+        }
+    }
+}
+
+fn hover_str(h: MediaHover) -> &'static str {
+    match h {
+        MediaHover::None => "none",
+        MediaHover::Hover => "hover",
+    }
+}
+
+fn pointer_str(p: MediaPointer) -> &'static str {
+    match p {
+        MediaPointer::None => "none",
+        MediaPointer::Coarse => "coarse",
+        MediaPointer::Fine => "fine",
     }
 }
 
@@ -385,10 +613,12 @@ pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {
     // используется для скрытия от L3-without-media-queries браузеров —
     // для нас семантически no-op. `not` инвертирует clause.
     let mut negated = false;
+    let mut only = false;
     if let Some(rest) = strip_leading_keyword(input, "not") {
         negated = true;
         input = rest;
     } else if let Some(rest) = strip_leading_keyword(input, "only") {
+        only = true;
         input = rest;
     }
 
@@ -396,22 +626,31 @@ pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {
     while !input.is_empty() {
         input = input.trim_start();
         if input.starts_with('(') {
-            // Найти match `)`.
-            if let Some(end) = input.find(')') {
-                let inner = &input[1..end];
-                conditions.push(parse_media_feature(inner.trim()));
-                input = &input[end + 1..];
-            } else {
-                return MediaQueryClause {
-                    negated,
-                    conditions: vec![MediaCondition::Unsupported],
-                };
-            }
+            // Найти БАЛАНСИРОВАННУЮ закрывающую `)` — не первую попавшуюся:
+            // с появлением `calc(...)` внутри значения фичи (`resolution`,
+            // BUG-1019) `input.find(')')` закрывал бы calc-скобку, а не
+            // внешнюю фичевую, обрезая значение на середине.
+            //
+            // Отсутствующая закрывающая `)` — не ошибка (CSS Syntax L3
+            // "consume a component value": незакрытый блок молча
+            // домысливается закрытым в конце входа, BUG-1020) — остаток
+            // строки становится содержимым фичи, а не роняет clause целиком.
+            let (inner_end, next_start) = match find_matching_close_paren(input) {
+                Some(end) => (end, end + 1),
+                None => (input.len(), input.len()),
+            };
+            let inner = &input[1..inner_end];
+            conditions.push(parse_media_feature(inner.trim()));
+            input = &input[next_start..];
         } else {
+            // `)` в разделителях: одиночный `)` без парной `(` в этой же
+            // clause — синтаксическая ошибка (BUG-1020), а не буквальный
+            // media-type/лишний хвост у предыдущего слова.
             let end = input
-                .find(|c: char| c.is_whitespace() || c == '(' || c == ',')
+                .find(|c: char| c.is_whitespace() || c == '(' || c == ',' || c == ')')
                 .unwrap_or(input.len());
             let word = &input[..end];
+            let stray_close_paren = input[end..].starts_with(')');
             input = &input[end..];
             if word.eq_ignore_ascii_case("and") {
                 continue;
@@ -423,6 +662,14 @@ pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {
             if word.eq_ignore_ascii_case("not") || word.eq_ignore_ascii_case("only") {
                 return MediaQueryClause {
                     negated,
+                    only,
+                    conditions: vec![MediaCondition::Unsupported],
+                };
+            }
+            if stray_close_paren {
+                return MediaQueryClause {
+                    negated,
+                    only,
                     conditions: vec![MediaCondition::Unsupported],
                 };
             }
@@ -436,7 +683,28 @@ pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {
         conditions.push(MediaCondition::Unsupported);
     }
 
-    MediaQueryClause { negated, conditions }
+    MediaQueryClause { negated, only, conditions }
+}
+
+/// Индекс закрывающей `)`, парная открывающей в позиции `0` (`s` должна
+/// начинаться с `(`) — считает вложенность, а не берёт первую попавшуюся
+/// `)`, так что `(resolution: calc(1x))`'s внешняя скобка не обрезается на
+/// закрытии `calc(`'s собственной (BUG-1019).
+fn find_matching_close_paren(s: &str) -> Option<usize> {
+    let mut depth = 0i32;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Если строка начинается с `keyword` (ASCII case-insensitive) и за ним
@@ -478,22 +746,143 @@ pub(crate) fn parse_media_length_px(val: &str) -> Option<f32> {
     }
 }
 
-/// Парсит значение aspect-ratio: `N/M` или просто `N`.
-pub(crate) fn parse_aspect_ratio(val: &str) -> Option<f32> {
+/// Парсит значение aspect-ratio: `N/M` или просто `N` (= `N/1`).
+/// Числитель/знаменатель сохраняются раздельно (не делятся сразу) —
+/// нужно для точной сериализации (`1/3` → `1 / 3`, не `0.33333334`).
+pub(crate) fn parse_aspect_ratio(val: &str) -> Option<(f32, f32)> {
     if let Some((n, d)) = val.split_once('/') {
         let n: f32 = n.trim().parse().ok()?;
         let d: f32 = d.trim().parse().ok()?;
         if d == 0.0 { return None; }
-        Some(n / d)
+        Some((n, d))
     } else {
-        val.trim().parse::<f32>().ok()
+        let n: f32 = val.trim().parse().ok()?;
+        Some((n, 1.0))
     }
 }
 
+/// Парсит `<resolution>` в канонический `dppx`: `x`/`dppx` (1:1), `dpi`
+/// (÷96 — 96dpi = 1dppx), `dpcm` (×2.54/96 — 1dpcm = 2.54/96 dppx, поскольку
+/// 1px = 1/96in = 2.54/96cm). `dppx`/`dpcm` должны проверяться раньше
+/// голого `x` — оба тоже кончаются на `x`.
+pub(crate) fn parse_resolution_dppx(val: &str) -> Option<f32> {
+    let val = val.trim();
+    if let Some(n) = val.strip_suffix("dppx") {
+        n.trim().parse::<f32>().ok()
+    } else if let Some(n) = val.strip_suffix("dpcm") {
+        n.trim().parse::<f32>().ok().map(|v| v * 2.54 / 96.0)
+    } else if let Some(n) = val.strip_suffix("dpi") {
+        n.trim().parse::<f32>().ok().map(|v| v / 96.0)
+    } else if let Some(n) = val.strip_suffix('x') {
+        n.trim().parse::<f32>().ok()
+    } else {
+        None
+    }
+}
+
+/// Парсит значение `<resolution>` media-фичи — литерал (`2dppx`) или
+/// `calc(...)` (BUG-1019). Регистр `calc(`/юнитов не важен по спеке —
+/// сравнение по lower-case копии, сами числа регистр не имеют.
+pub(crate) fn parse_resolution_value(val: &str) -> Option<ResolutionValue> {
+    let lower = val.trim().to_ascii_lowercase();
+    if let Some(inner) = lower.strip_prefix("calc(") {
+        let inner = inner.strip_suffix(')')?;
+        return eval_resolution_calc(inner).map(ResolutionValue::Calc);
+    }
+    parse_resolution_dppx(&lower).map(ResolutionValue::Literal)
+}
+
+/// Вычисляет содержимое `calc(...)` для `<resolution>` — `+`/`-`/`*`/`/` с
+/// одноуровневыми операндами (`<resolution>` для `+`/`-`, `<resolution>` и
+/// голое число для `*`/`/`), без вложенных `calc()`/скобок — единственная
+/// форма, которую заводит Media Queries L4's `match-media-parsing.html`
+/// (`calc(1x + 2x)`, `calc(5x - 2x)`, `calc(1x * 3)`, `calc(6x / 2)`).
+fn eval_resolution_calc(expr: &str) -> Option<f32> {
+    let tokens = tokenize_calc(expr);
+    if tokens.is_empty() {
+        return None;
+    }
+    // Multiplicative terms first (лево-ассоциативно), затем сложение —
+    // терм по терму, знак перед термом храним отдельно от `*`/`/`
+    // внутри него.
+    let mut total = 0.0_f32;
+    let mut term_sign = 1.0_f32;
+    let mut idx = 0;
+    loop {
+        let mut value = parse_calc_operand(tokens.get(idx)?)?;
+        idx += 1;
+        while matches!(tokens.get(idx).map(String::as_str), Some("*") | Some("/")) {
+            let op = tokens[idx].clone();
+            idx += 1;
+            let rhs = parse_calc_operand(tokens.get(idx)?)?;
+            idx += 1;
+            if op == "*" {
+                value *= rhs;
+            } else {
+                if rhs == 0.0 {
+                    return None;
+                }
+                value /= rhs;
+            }
+        }
+        total += term_sign * value;
+        match tokens.get(idx).map(String::as_str) {
+            None => return Some(total),
+            Some("+") => {
+                term_sign = 1.0;
+                idx += 1;
+            }
+            Some("-") => {
+                term_sign = -1.0;
+                idx += 1;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Токенизирует `calc()`-содержимое: числа-с-юнитом (`1x`, `600dpi`, голое
+/// `3`) как один токен, `+`/`-`/`*`/`/` как отдельные однобуквенные токены.
+fn tokenize_calc(expr: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    for c in expr.chars() {
+        match c {
+            '+' | '-' | '*' | '/' => {
+                let trimmed = current.trim();
+                if !trimmed.is_empty() {
+                    tokens.push(trimmed.to_string());
+                }
+                current.clear();
+                tokens.push(c.to_string());
+            }
+            _ => current.push(c),
+        }
+    }
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        tokens.push(trimmed.to_string());
+    }
+    tokens
+}
+
+/// Операнд `calc()`: `<resolution>` (конвертируется в `dppx`) либо голое
+/// число (множитель/делитель у `*`/`/`).
+fn parse_calc_operand(tok: &str) -> Option<f32> {
+    parse_resolution_dppx(tok).or_else(|| tok.trim().parse::<f32>().ok())
+}
+
 pub(crate) fn parse_media_feature(s: &str) -> MediaCondition {
-    // `feature: value` или просто `feature` (boolean feature, не поддерживаем).
+    // `feature: value` или просто `feature` — CSS Values L4's boolean
+    // context (BUG-1020). Только `color` реализован здесь: у Lumen нет
+    // самой range-фичи `color` (глубина цвета не варьируется), а общий
+    // механизм «boolean context для width/resolution/…» — отдельный, более
+    // широкий объём BUG-527.
     let Some((key, val)) = s.split_once(':') else {
-        return MediaCondition::Unsupported;
+        return match s.trim().to_ascii_lowercase().as_str() {
+            "color" => MediaCondition::Feature(MediaFeature::Color),
+            _ => MediaCondition::Unsupported,
+        };
     };
     let key = key.trim().to_ascii_lowercase();
     let val = val.trim();
@@ -514,13 +903,25 @@ pub(crate) fn parse_media_feature(s: &str) -> MediaCondition {
             MediaCondition::Feature(feature)
         }
         "aspect-ratio" | "min-aspect-ratio" | "max-aspect-ratio" => {
-            let Some(ratio) = parse_aspect_ratio(val) else {
+            let Some((n, d)) = parse_aspect_ratio(val) else {
                 return MediaCondition::Unsupported;
             };
             let feature = match key.as_str() {
-                "aspect-ratio" => MediaFeature::AspectRatio(ratio),
-                "min-aspect-ratio" => MediaFeature::MinAspectRatio(ratio),
-                "max-aspect-ratio" => MediaFeature::MaxAspectRatio(ratio),
+                "aspect-ratio" => MediaFeature::AspectRatio(n, d),
+                "min-aspect-ratio" => MediaFeature::MinAspectRatio(n, d),
+                "max-aspect-ratio" => MediaFeature::MaxAspectRatio(n, d),
+                _ => unreachable!(),
+            };
+            MediaCondition::Feature(feature)
+        }
+        "resolution" | "min-resolution" | "max-resolution" => {
+            let Some(value) = parse_resolution_value(val) else {
+                return MediaCondition::Unsupported;
+            };
+            let feature = match key.as_str() {
+                "resolution" => MediaFeature::Resolution(value),
+                "min-resolution" => MediaFeature::MinResolution(value),
+                "max-resolution" => MediaFeature::MaxResolution(value),
                 _ => unreachable!(),
             };
             MediaCondition::Feature(feature)

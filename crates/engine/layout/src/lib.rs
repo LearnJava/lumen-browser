@@ -378,16 +378,25 @@ pub fn collect_clickable_elements(
     out
 }
 
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion: nothing after the loop over `children` reads a value the walk
+/// produced, so this is the same safe mechanical class LAYOUT-1 already
+/// converted. Children are pushed in reverse to keep the LIFO stack's pop
+/// order identical to the old left-to-right recursion (the inline-link
+/// merging logic below relies on visiting frags of one `InlineRun` in order,
+/// which is unaffected — it iterates `lines`/`line`, not `children`).
 fn collect_clickable_rec(
-    b: &LayoutBox,
+    root: &LayoutBox,
     doc: &lumen_dom::Document,
     out: &mut Vec<ClickableElement>,
 ) {
     use box_tree::{BoxKind, FormControlKind};
     use lumen_core::geom::Rect;
 
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
     if matches!(b.kind, BoxKind::Skip) {
-        return;
+        continue;
     }
 
     // The UA rule `[inert] { pointer-events: none; }` is applied by
@@ -395,7 +404,7 @@ fn collect_clickable_rec(
     // layout-level filter: inert elements are never included in the clickable
     // set regardless of an author `pointer-events` override.
     if inert::is_inert(doc, b.node) {
-        return;
+        continue;
     }
 
     // CSS Pointer Events L1: `pointer-events: none` on a block box excludes the box
@@ -520,8 +529,9 @@ fn collect_clickable_rec(
         _ => {}
     }
 
-    for child in &b.children {
-        collect_clickable_rec(child, doc, out);
+    for child in b.children.iter().rev() {
+        stack.push(child);
+    }
     }
 }
 
@@ -676,8 +686,15 @@ pub fn collect_sticky_boxes(root: &LayoutBox, viewport: lumen_core::geom::Size) 
     out
 }
 
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion: `next_cb` is threaded down like a plain parameter (never read
+/// back from a deeper call), so this is the same safe mechanical class
+/// LAYOUT-1 already converted. `seen`/`out` insertion order does not need to
+/// match document order (callers sort/index by node, not position), but
+/// children are still pushed in reverse to keep behavior visibly identical
+/// to the old left-to-right recursion.
 fn collect_sticky_rec(
-    b: &LayoutBox,
+    root: &LayoutBox,
     containing_rect: lumen_core::geom::Rect,
     viewport: lumen_core::geom::Size,
     seen: &mut std::collections::HashSet<lumen_dom::NodeId>,
@@ -686,34 +703,37 @@ fn collect_sticky_rec(
     use box_tree::BoxKind;
     use style::Position;
 
-    if matches!(b.kind, BoxKind::Skip) {
-        return;
-    }
+    let mut stack: Vec<(&LayoutBox, lumen_core::geom::Rect)> = vec![(root, containing_rect)];
+    while let Some((b, containing_rect)) = stack.pop() {
+        if matches!(b.kind, BoxKind::Skip) {
+            continue;
+        }
 
-    if matches!(b.style.position, Position::Sticky) && seen.insert(b.node) {
-        let em = b.style.font_size;
-        out.push(StickyBox {
-            node: b.node,
-            static_rect: b.rect,
-            // top/bottom percentages resolve against the containing block's height;
-            // left/right against its width (CSS Position L3 §9.4.1).
-            top: b.style.top.resolve(em, containing_rect.height, viewport),
-            bottom: b.style.bottom.resolve(em, containing_rect.height, viewport),
-            left: b.style.left.resolve(em, containing_rect.width, viewport),
-            right: b.style.right.resolve(em, containing_rect.width, viewport),
-            containing_rect,
-        });
-    }
+        if matches!(b.style.position, Position::Sticky) && seen.insert(b.node) {
+            let em = b.style.font_size;
+            out.push(StickyBox {
+                node: b.node,
+                static_rect: b.rect,
+                // top/bottom percentages resolve against the containing block's height;
+                // left/right against its width (CSS Position L3 §9.4.1).
+                top: b.style.top.resolve(em, containing_rect.height, viewport),
+                bottom: b.style.bottom.resolve(em, containing_rect.height, viewport),
+                left: b.style.left.resolve(em, containing_rect.width, viewport),
+                right: b.style.right.resolve(em, containing_rect.width, viewport),
+                containing_rect,
+            });
+        }
 
-    // Blocks and flow roots establish a new sticky-containment boundary.
-    let next_cb = if matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot) {
-        b.rect
-    } else {
-        containing_rect
-    };
+        // Blocks and flow roots establish a new sticky-containment boundary.
+        let next_cb = if matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot) {
+            b.rect
+        } else {
+            containing_rect
+        };
 
-    for child in &b.children {
-        collect_sticky_rec(child, next_cb, viewport, seen, out);
+        for child in b.children.iter().rev() {
+            stack.push((child, next_cb));
+        }
     }
 }
 
@@ -865,8 +885,19 @@ pub fn collect_snap_containers(root: &LayoutBox) -> Vec<SnapContainer> {
     out
 }
 
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion — same "ancestor stack" class as
+/// `container_anchor.rs::apply_anchor_positions_rec`: each popped frame
+/// carries `depth` (the length `container_stack` had when this node's
+/// *parent* pushed it), and `container_stack.truncate(depth)` restores
+/// exactly that state before the node is processed — reproducing the old
+/// "push before children, pop after children" discipline regardless of the
+/// LIFO stack's (sibling-reversed, but parent-before-child) visiting order.
+/// Children of a non-container node reuse the current depth (no push to
+/// undo); a container's children get `container_stack.len()` *after* its own
+/// push.
 fn collect_snap_rec(
-    b: &LayoutBox,
+    root: &LayoutBox,
     container_stack: &mut Vec<usize>,
     out: &mut Vec<SnapContainer>,
     seen_areas: &mut std::collections::HashSet<lumen_dom::NodeId>,
@@ -874,8 +905,12 @@ fn collect_snap_rec(
     use box_tree::BoxKind;
     use style::ScrollSnapAxis;
 
+    let mut stack: Vec<(&LayoutBox, usize)> = vec![(root, container_stack.len())];
+    while let Some((b, depth)) = stack.pop() {
+    container_stack.truncate(depth);
+
     if matches!(b.kind, BoxKind::Skip) {
-        return;
+        continue;
     }
 
     let is_container = b.style.scroll_snap_type.axis != ScrollSnapAxis::None;
@@ -893,11 +928,11 @@ fn collect_snap_rec(
             points: Vec::new(),
         });
         container_stack.push(idx);
-        for child in &b.children {
-            collect_snap_rec(child, container_stack, out, seen_areas);
+        let child_depth = container_stack.len();
+        for child in b.children.iter().rev() {
+            stack.push((child, child_depth));
         }
-        container_stack.pop();
-        return;
+        continue;
     }
 
     // Check if this element is a snap area for the nearest ancestor container.
@@ -935,8 +970,9 @@ fn collect_snap_rec(
         }
     }
 
-    for child in &b.children {
-        collect_snap_rec(child, container_stack, out, seen_areas);
+    for child in b.children.iter().rev() {
+        stack.push((child, depth));
+    }
     }
 }
 
@@ -1544,35 +1580,42 @@ pub fn collect_computed_styles(
 /// snapshot that is already rebuilt on the layout path.
 pub const INLINE_SEGMENT_PROPERTIES: [&str; 3] = ["visibility", "white-space", "text-transform"];
 
+// LAYOUT-1 срез 3: явный стек вместо рекурсии — этот обход исполняется на
+// каждом `getComputedStyle`, т.е. потенциально на каждый relayout, а не
+// только на первичном layout (BUG-987). Чистый pre-order без пост-обработки
+// после цикла по детям — LIFO-стек с детьми в обратном порядке сохраняет
+// тот же порядок посещения, что и рекурсия ("первый бокс в tree order
+// побеждает" остаётся верным).
 fn collect_computed_styles_rec(
     doc: &lumen_dom::Document,
-    b: &LayoutBox,
+    root: &LayoutBox,
     out: &mut std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
 ) {
-    // First box in tree order wins — see `collect_layout_rects_rec` for why
-    // several boxes can carry the same `NodeId`.
-    out.entry(b.node.index() as u32)
-        .or_insert_with(|| computed_style_to_map(&b.style));
-    if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
-        for seg in segments {
-            // `NodeId(0)` is the document root, which `InlineSegment::source_node`
-            // uses for generated content with no DOM origin.
-            if seg.source_node.index() == 0 {
-                continue;
-            }
-            out.entry(seg.source_node.index() as u32)
-                .or_insert_with(|| selector_query::inline_segment_style_map(&seg.style));
-            // BUG-488: publish the full property map for every plain inline
-            // element this segment is nested inside — see `collect_computed_styles`'s
-            // doc comment for the approximation this relies on.
-            for anc in inline_element_ancestors(doc, seg.source_node, b.node) {
-                out.entry(anc.index() as u32)
-                    .or_insert_with(|| computed_style_to_map(&seg.style));
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        // First box in tree order wins — see `collect_layout_rects_rec` for why
+        // several boxes can carry the same `NodeId`.
+        out.entry(b.node.index() as u32)
+            .or_insert_with(|| computed_style_to_map(&b.style));
+        if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
+            for seg in segments {
+                // `NodeId(0)` is the document root, which `InlineSegment::source_node`
+                // uses for generated content with no DOM origin.
+                if seg.source_node.index() == 0 {
+                    continue;
+                }
+                out.entry(seg.source_node.index() as u32)
+                    .or_insert_with(|| selector_query::inline_segment_style_map(&seg.style));
+                // BUG-488: publish the full property map for every plain inline
+                // element this segment is nested inside — see `collect_computed_styles`'s
+                // doc comment for the approximation this relies on.
+                for anc in inline_element_ancestors(doc, seg.source_node, b.node) {
+                    out.entry(anc.index() as u32)
+                        .or_insert_with(|| computed_style_to_map(&seg.style));
+                }
             }
         }
-    }
-    for child in &b.children {
-        collect_computed_styles_rec(doc, child, out);
+        stack.extend(b.children.iter().rev());
     }
 }
 
@@ -1642,43 +1685,54 @@ fn pseudo_style_map(style: &ComputedStyle, kind: PseudoKind) -> std::collections
 /// to — that owner is whichever box directly contains it, i.e. `container_owner`.
 /// `::before`/`::after`/`::first-line` boxes already carry the correct owner
 /// in `origin.node`/`source_node` and ignore this parameter.
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion: nothing after the loop over `children` reads a value the walk
+/// produced, so this is the same safe mechanical class LAYOUT-1 already
+/// converted. `container_owner` is threaded down like a plain parameter
+/// (each node passes its own `b.node` to its children, never reads it back),
+/// so a `(&LayoutBox, NodeId)` stack entry reproduces it exactly. `out` uses
+/// `or_insert_with` (first write wins), so document order only matters
+/// within that guarantee — preserved anyway by pushing children in reverse.
 fn collect_pseudo_computed_styles_rec(
-    b: &LayoutBox,
-    container_owner: lumen_dom::NodeId,
+    root: &LayoutBox,
+    root_owner: lumen_dom::NodeId,
     out: &mut std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
 ) {
-    if let BoxRole::Pseudo(kind) = b.origin.role
-        && let Some(name) = pseudo_kind_name(kind)
-    {
-        let owner = if kind == PseudoKind::FirstLetter {
-            container_owner
-        } else {
-            b.origin.node.unwrap_or(b.node)
-        };
-        out.entry((owner.index() as u32, name.to_string()))
-            .or_insert_with(|| pseudo_style_map(&b.style, kind));
-    }
-    if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
-        for seg in segments {
-            // `NodeId(0)` is the "no DOM origin" sentinel `make_content_image_segment`
-            // uses for a pseudo-element whose sole content is `url(...)` — no owner
-            // to key on, so it is silently skipped (rare: image-only generated content).
-            if seg.source_node.index() == 0 {
-                continue;
-            }
-            if let Some(name) = pseudo_kind_name(seg.pseudo_kind) {
-                let owner = if seg.pseudo_kind == PseudoKind::FirstLetter {
-                    container_owner
-                } else {
-                    seg.source_node
-                };
-                out.entry((owner.index() as u32, name.to_string()))
-                    .or_insert_with(|| pseudo_style_map(&seg.style, seg.pseudo_kind));
+    let mut stack: Vec<(&LayoutBox, lumen_dom::NodeId)> = vec![(root, root_owner)];
+    while let Some((b, container_owner)) = stack.pop() {
+        if let BoxRole::Pseudo(kind) = b.origin.role
+            && let Some(name) = pseudo_kind_name(kind)
+        {
+            let owner = if kind == PseudoKind::FirstLetter {
+                container_owner
+            } else {
+                b.origin.node.unwrap_or(b.node)
+            };
+            out.entry((owner.index() as u32, name.to_string()))
+                .or_insert_with(|| pseudo_style_map(&b.style, kind));
+        }
+        if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
+            for seg in segments {
+                // `NodeId(0)` is the "no DOM origin" sentinel `make_content_image_segment`
+                // uses for a pseudo-element whose sole content is `url(...)` — no owner
+                // to key on, so it is silently skipped (rare: image-only generated content).
+                if seg.source_node.index() == 0 {
+                    continue;
+                }
+                if let Some(name) = pseudo_kind_name(seg.pseudo_kind) {
+                    let owner = if seg.pseudo_kind == PseudoKind::FirstLetter {
+                        container_owner
+                    } else {
+                        seg.source_node
+                    };
+                    out.entry((owner.index() as u32, name.to_string()))
+                        .or_insert_with(|| pseudo_style_map(&seg.style, seg.pseudo_kind));
+                }
             }
         }
-    }
-    for child in &b.children {
-        collect_pseudo_computed_styles_rec(child, b.node, out);
+        for child in b.children.iter().rev() {
+            stack.push((child, b.node));
+        }
     }
 }
 
@@ -1726,8 +1780,14 @@ pub fn collect_custom_properties(
     out
 }
 
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion: nothing after the loop over `children` reads a value the walk
+/// produced, so this is the same safe mechanical class LAYOUT-1 already
+/// converted. "First box in tree order wins" (below) depends on left-to-right
+/// pre-order — preserved by pushing children in reverse so the LIFO stack
+/// pops them in source order.
 fn collect_custom_properties_rec(
-    b: &LayoutBox,
+    root: &LayoutBox,
     viewport: lumen_core::geom::Size,
     out: &mut std::collections::HashMap<
         u32,
@@ -1738,33 +1798,37 @@ fn collect_custom_properties_rec(
         std::sync::Arc<std::collections::HashMap<String, String>>,
     >,
 ) {
-    // First box in tree order wins — see `collect_layout_rects_rec` for why
-    // several boxes can carry the same `NodeId`.
-    if !b.style.custom_props.is_empty() {
-        let key = b.style.custom_props.as_ptr() as usize;
-        let map = match resolved.get(&key) {
-            Some(m) => std::sync::Arc::clone(m),
-            None => {
-                let raw = b.style.custom_props.shared();
-                let em_basis = b.style.font_size;
-                let m = std::sync::Arc::new(
-                    raw.iter()
-                        .map(|(name, value)| {
-                            let computed =
-                                crate::style::expand_vars_and_env(value, &raw, em_basis, viewport)
-                                    .unwrap_or_default();
-                            (name.clone(), computed.trim().to_string())
-                        })
-                        .collect::<std::collections::HashMap<String, String>>(),
-                );
-                resolved.insert(key, std::sync::Arc::clone(&m));
-                m
-            }
-        };
-        out.entry(b.node.index() as u32).or_insert(map);
-    }
-    for child in &b.children {
-        collect_custom_properties_rec(child, viewport, out, resolved);
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        // First box in tree order wins — see `collect_layout_rects_rec` for why
+        // several boxes can carry the same `NodeId`.
+        if !b.style.custom_props.is_empty() {
+            let key = b.style.custom_props.as_ptr() as usize;
+            let map = match resolved.get(&key) {
+                Some(m) => std::sync::Arc::clone(m),
+                None => {
+                    let raw = b.style.custom_props.shared();
+                    let em_basis = b.style.font_size;
+                    let m = std::sync::Arc::new(
+                        raw.iter()
+                            .map(|(name, value)| {
+                                let computed = crate::style::expand_vars_and_env(
+                                    value, &raw, em_basis, viewport,
+                                )
+                                .unwrap_or_default();
+                                (name.clone(), computed.trim().to_string())
+                            })
+                            .collect::<std::collections::HashMap<String, String>>(),
+                    );
+                    resolved.insert(key, std::sync::Arc::clone(&m));
+                    m
+                }
+            };
+            out.entry(b.node.index() as u32).or_insert(map);
+        }
+        for child in b.children.iter().rev() {
+            stack.push(child);
+        }
     }
 }
 
@@ -1795,50 +1859,55 @@ pub fn collect_layout_rects(
     out
 }
 
+// LAYOUT-1 срез 3: явный стек вместо рекурсии — `getBoundingClientRect`
+// пересчитывается на каждый relayout (BUG-987). Pre-order без пост-обработки
+// после цикла по детям, LIFO-стек с детьми в обратном порядке сохраняет
+// порядок посещения — "первый бокс в tree order побеждает" остаётся верным.
 fn collect_layout_rects_rec(
     doc: &lumen_dom::Document,
-    b: &LayoutBox,
+    root: &LayoutBox,
     out: &mut std::collections::HashMap<u32, [f32; 4]>,
 ) {
-    // A single `NodeId` can own more than one box: an element with inline content
-    // gets an anonymous block/line box for that content, and the box tree keeps the
-    // element's own `NodeId` on it. The recursion visits the principal box before
-    // its descendants, so `or_insert` keeps the element's own border box; plain
-    // `insert` used to hand JS the last (inner) box instead — `getBoundingClientRect`
-    // on `<div style="height:20px">x</div>` answered the 19.2px line box (BUG-382).
-    let r = &b.rect;
-    out.entry(b.node.index() as u32)
-        .or_insert([r.x, r.y, r.width, r.height]);
-    // BUG-488: plain inline elements (`<span>`, `<em>`, …) own no `LayoutBox` of
-    // their own — accumulate the union of every laid-out `InlineFrag` nested
-    // inside them, keyed by DOM ancestor via `inline_element_ancestors`. Line
-    // y-position uses the same `font_size * line_height` uniform-line-height
-    // model `selection.rs` uses to turn `lines[line_idx]` into a pixel rect.
-    if let BoxKind::InlineRun { lines, .. } = &b.kind {
-        let line_h = b.used_line_height;
-        for (line_idx, line) in lines.iter().enumerate() {
-            let line_y = b.rect.y + line_idx as f32 * line_h;
-            for frag in line {
-                let fx1 = b.rect.x + frag.x;
-                let fy1 = line_y;
-                let fx2 = fx1 + frag.width;
-                let fy2 = fy1 + line_h;
-                for anc in inline_element_ancestors(doc, frag.source_node, b.node) {
-                    out.entry(anc.index() as u32)
-                        .and_modify(|cur| {
-                            let cx1 = cur[0].min(fx1);
-                            let cy1 = cur[1].min(fy1);
-                            let cx2 = (cur[0] + cur[2]).max(fx2);
-                            let cy2 = (cur[1] + cur[3]).max(fy2);
-                            *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
-                        })
-                        .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        // A single `NodeId` can own more than one box: an element with inline content
+        // gets an anonymous block/line box for that content, and the box tree keeps the
+        // element's own `NodeId` on it. The traversal visits the principal box before
+        // its descendants, so `or_insert` keeps the element's own border box; plain
+        // `insert` used to hand JS the last (inner) box instead — `getBoundingClientRect`
+        // on `<div style="height:20px">x</div>` answered the 19.2px line box (BUG-382).
+        let r = &b.rect;
+        out.entry(b.node.index() as u32)
+            .or_insert([r.x, r.y, r.width, r.height]);
+        // BUG-488: plain inline elements (`<span>`, `<em>`, …) own no `LayoutBox` of
+        // their own — accumulate the union of every laid-out `InlineFrag` nested
+        // inside them, keyed by DOM ancestor via `inline_element_ancestors`. Line
+        // y-position uses the same `font_size * line_height` uniform-line-height
+        // model `selection.rs` uses to turn `lines[line_idx]` into a pixel rect.
+        if let BoxKind::InlineRun { lines, .. } = &b.kind {
+            let line_h = b.used_line_height;
+            for (line_idx, line) in lines.iter().enumerate() {
+                let line_y = b.rect.y + line_idx as f32 * line_h;
+                for frag in line {
+                    let fx1 = b.rect.x + frag.x;
+                    let fy1 = line_y;
+                    let fx2 = fx1 + frag.width;
+                    let fy2 = fy1 + line_h;
+                    for anc in inline_element_ancestors(doc, frag.source_node, b.node) {
+                        out.entry(anc.index() as u32)
+                            .and_modify(|cur| {
+                                let cx1 = cur[0].min(fx1);
+                                let cy1 = cur[1].min(fy1);
+                                let cx2 = (cur[0] + cur[2]).max(fx2);
+                                let cy2 = (cur[1] + cur[3]).max(fy2);
+                                *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
+                            })
+                            .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
+                    }
                 }
             }
         }
-    }
-    for child in &b.children {
-        collect_layout_rects_rec(doc, child, out);
+        stack.extend(b.children.iter().rev());
     }
 }
 
@@ -1851,10 +1920,12 @@ fn collect_layout_rects_rec(
 /// rect from its own box" (an inline-block nested inside a line, still an
 /// `InlineFrag` for line-height purposes) apart from "this owner has no box
 /// and needs one rect per line it appears on".
-fn collect_boxed_node_ids(b: &LayoutBox, out: &mut std::collections::HashSet<u32>) {
-    out.insert(b.node.index() as u32);
-    for child in &b.children {
-        collect_boxed_node_ids(child, out);
+// LAYOUT-1 срез 3: явный стек вместо рекурсии — см. `collect_layout_rects_rec`.
+fn collect_boxed_node_ids(root: &LayoutBox, out: &mut std::collections::HashSet<u32>) {
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        out.insert(b.node.index() as u32);
+        stack.extend(b.children.iter().rev());
     }
 }
 
@@ -1885,59 +1956,64 @@ pub fn collect_client_rects(
     out
 }
 
+// LAYOUT-1 срез 3: явный стек вместо рекурсии — `getClientRects`/`getBoxQuads`
+// пересчитываются на каждый relayout (BUG-987). Pre-order без пост-обработки
+// после цикла по детям, LIFO-стек с детьми в обратном порядке сохраняет
+// порядок посещения — "первый бокс в tree order побеждает" остаётся верным.
 fn collect_client_rects_rec(
     doc: &lumen_dom::Document,
-    b: &LayoutBox,
+    root: &LayoutBox,
     boxed: &std::collections::HashSet<u32>,
     out: &mut std::collections::HashMap<u32, Vec<[f32; 4]>>,
 ) {
-    // Same first-box-wins ordering as `collect_layout_rects_rec` (BUG-382): the
-    // recursion visits a node's own box before descending into its children.
-    let r = &b.rect;
-    out.entry(b.node.index() as u32)
-        .or_insert_with(|| vec![[r.x, r.y, r.width, r.height]]);
-    if let BoxKind::InlineRun { lines, .. } = &b.kind {
-        let line_h = b.style.font_size * b.style.line_height;
-        for (line_idx, line) in lines.iter().enumerate() {
-            let line_y = b.rect.y + line_idx as f32 * line_h;
-            // Frags on the SAME line belonging to the same owner (a bidi split,
-            // an inline element reopening around a nested box, …) merge into
-            // one rect — one rect per CSS *fragment*, and a fragment is a
-            // line, not a frag.
-            let mut per_owner_this_line: std::collections::HashMap<u32, [f32; 4]> =
-                std::collections::HashMap::new();
-            for frag in line {
-                let fx1 = b.rect.x + frag.x;
-                let fy1 = line_y;
-                let fx2 = fx1 + frag.width;
-                let fy2 = fy1 + line_h;
-                for anc in inline_element_ancestors(doc, frag.source_node, b.node) {
-                    per_owner_this_line
-                        .entry(anc.index() as u32)
-                        .and_modify(|cur| {
-                            let cx1 = cur[0].min(fx1);
-                            let cy1 = cur[1].min(fy1);
-                            let cx2 = (cur[0] + cur[2]).max(fx2);
-                            let cy2 = (cur[1] + cur[3]).max(fy2);
-                            *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
-                        })
-                        .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        // Same first-box-wins ordering as `collect_layout_rects_rec` (BUG-382): the
+        // traversal visits a node's own box before descending into its children.
+        let r = &b.rect;
+        out.entry(b.node.index() as u32)
+            .or_insert_with(|| vec![[r.x, r.y, r.width, r.height]]);
+        if let BoxKind::InlineRun { lines, .. } = &b.kind {
+            let line_h = b.style.font_size * b.style.line_height;
+            for (line_idx, line) in lines.iter().enumerate() {
+                let line_y = b.rect.y + line_idx as f32 * line_h;
+                // Frags on the SAME line belonging to the same owner (a bidi split,
+                // an inline element reopening around a nested box, …) merge into
+                // one rect — one rect per CSS *fragment*, and a fragment is a
+                // line, not a frag.
+                let mut per_owner_this_line: std::collections::HashMap<u32, [f32; 4]> =
+                    std::collections::HashMap::new();
+                for frag in line {
+                    let fx1 = b.rect.x + frag.x;
+                    let fy1 = line_y;
+                    let fx2 = fx1 + frag.width;
+                    let fy2 = fy1 + line_h;
+                    for anc in inline_element_ancestors(doc, frag.source_node, b.node) {
+                        per_owner_this_line
+                            .entry(anc.index() as u32)
+                            .and_modify(|cur| {
+                                let cx1 = cur[0].min(fx1);
+                                let cy1 = cur[1].min(fy1);
+                                let cx2 = (cur[0] + cur[2]).max(fx2);
+                                let cy2 = (cur[1] + cur[3]).max(fy2);
+                                *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
+                            })
+                            .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
+                    }
                 }
-            }
-            for (owner, rect) in per_owner_this_line {
-                // An owner with a real box of its own (an inline-block nested
-                // in this line, still an `InlineFrag` here for line-height
-                // purposes) already has its one true rect from that box — do
-                // not also append this approximate line-derived rect on top
-                // of it.
-                if !boxed.contains(&owner) {
-                    out.entry(owner).or_default().push(rect);
+                for (owner, rect) in per_owner_this_line {
+                    // An owner with a real box of its own (an inline-block nested
+                    // in this line, still an `InlineFrag` here for line-height
+                    // purposes) already has its one true rect from that box — do
+                    // not also append this approximate line-derived rect on top
+                    // of it.
+                    if !boxed.contains(&owner) {
+                        out.entry(owner).or_default().push(rect);
+                    }
                 }
             }
         }
-    }
-    for child in &b.children {
-        collect_client_rects_rec(doc, child, boxed, out);
+        stack.extend(b.children.iter().rev());
     }
 }
 
@@ -2022,16 +2098,24 @@ pub fn collect_view_transition_names(root: &LayoutBox) -> Vec<(lumen_dom::NodeId
     out
 }
 
-fn collect_vt_names_rec(b: &LayoutBox, out: &mut Vec<(lumen_dom::NodeId, Box<str>)>) {
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion: nothing after the loop over `children` reads a value the walk
+/// produced, so this is the same safe mechanical class LAYOUT-1 already
+/// converted. Document order (caller-documented) is preserved by pushing
+/// children in reverse so the LIFO stack pops them in source order.
+fn collect_vt_names_rec(root: &LayoutBox, out: &mut Vec<(lumen_dom::NodeId, Box<str>)>) {
     use box_tree::BoxKind;
-    if matches!(b.kind, BoxKind::Skip) {
-        return;
-    }
-    if let Some(ref name) = b.style.view_transition_name {
-        out.push((b.node, name.clone()));
-    }
-    for child in &b.children {
-        collect_vt_names_rec(child, out);
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        if matches!(b.kind, BoxKind::Skip) {
+            continue;
+        }
+        if let Some(ref name) = b.style.view_transition_name {
+            out.push((b.node, name.clone()));
+        }
+        for child in b.children.iter().rev() {
+            stack.push(child);
+        }
     }
 }
 
@@ -2061,19 +2145,26 @@ pub fn collect_view_transition_groups(
     out
 }
 
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion — same class as [`collect_vt_names_rec`] above. Children are
+/// pushed in reverse to keep the LIFO stack's pop order identical to the old
+/// left-to-right recursion (document order is caller-documented).
 fn collect_vt_groups_rec(
-    b: &LayoutBox,
+    root: &LayoutBox,
     out: &mut Vec<(lumen_dom::NodeId, Box<str>, lumen_core::geom::Rect)>,
 ) {
     use box_tree::BoxKind;
-    if matches!(b.kind, BoxKind::Skip) {
-        return;
-    }
-    if let Some(ref name) = b.style.view_transition_name {
-        out.push((b.node, name.clone(), b.rect));
-    }
-    for child in &b.children {
-        collect_vt_groups_rec(child, out);
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        if matches!(b.kind, BoxKind::Skip) {
+            continue;
+        }
+        if let Some(ref name) = b.style.view_transition_name {
+            out.push((b.node, name.clone(), b.rect));
+        }
+        for child in b.children.iter().rev() {
+            stack.push(child);
+        }
     }
 }
 
@@ -2178,3 +2269,7 @@ mod layout_generation_misc;
 #[cfg(test)]
 #[path = "tests/scroll_interaction_misc.rs"]
 mod scroll_interaction_misc;
+
+#[cfg(test)]
+#[path = "tests/deep_traversal_stress.rs"]
+mod deep_traversal_stress;

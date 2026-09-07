@@ -42,6 +42,17 @@ const GENERIC_SENSOR_SHIM: &str = r#"
   var EventBase = globalThis.Event;
   if (typeof EventTargetBase !== 'function' || typeof EventBase !== 'function') return;
 
+  // BUG-765: the whole Generic Sensor family is `[SecureContext]` (Generic
+  // Sensor §4) — `Sensor` and every concrete subclass must be entirely
+  // absent from an insecure origin's `window`, not merely present-but-
+  // throwing (`'Gyroscope' in window === false`, vendored
+  // `Gyroscope_insecure_context.html` et al.). A standalone unit test that
+  // installs this shim without `WEB_API_SHIM` never declares
+  // `_lumen_secure_context` at all, so it is read through `typeof` — the one
+  // safe way to probe a name that may not exist in scope — and treated as
+  // "expose" (see that variable's doc comment, `web_api_shim_mid_b.js`).
+  if (typeof _lumen_secure_context !== 'undefined' && _lumen_secure_context === false) return;
+
   // ── SensorErrorEvent (W3C Generic Sensor §11) ────────────────────────────
   //
   // `SensorErrorEventInit` declares `error` as a *required* dictionary member,

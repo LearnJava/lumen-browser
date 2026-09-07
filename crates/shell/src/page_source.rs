@@ -117,6 +117,8 @@ impl PageSource {
                 content_type: Some("text/html"),
                 cross_origin_isolated: false,
                 cache_control_no_store: false,
+                status: 0,
+                redirected: false,
             }),
             PageSource::File(path) => {
                 let bytes = std::fs::read(path)?;
@@ -126,6 +128,8 @@ impl PageSource {
                     content_type: None,
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
+                    status: 0,
+                    redirected: false,
                 })
             }
             PageSource::Url(url) => {
@@ -150,8 +154,12 @@ impl PageSource {
                 // PERF-1: HTTP request for the main document (nested inside the
                 // `fetch-document` span); its `size` arg is the response body.
                 let mut fetch_span = lumen_core::trace::span(format!("GET {url}"), "net");
-                let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url } =
+                let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status } =
                     client.fetch_page(&lumen_url)?;
+                // BUG-640: redirect signal — the only one obtainable without
+                // a `lumen-network` change (`fetch_with_redirect`'s hop
+                // countdown is never surfaced as a count).
+                let redirected = final_url != lumen_url;
                 fetch_span.set_bytes(bytes.len());
                 eprintln!("Получено {} байт", bytes.len());
                 let coop = resp_headers.iter()
@@ -172,6 +180,8 @@ impl PageSource {
                     content_type: Some("text/html"),
                     cross_origin_isolated,
                     cache_control_no_store: cache_control_no_store(&resp_headers),
+                    status,
+                    redirected,
                 })
             }
             PageSource::Snapshot { html, base_url } => {
@@ -182,6 +192,8 @@ impl PageSource {
                     content_type: Some("text/html"),
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
+                    status: 0,
+                    redirected: false,
                 })
             }
             PageSource::Static { html, url } => {
@@ -192,6 +204,8 @@ impl PageSource {
                     content_type: Some("text/html"),
                     cross_origin_isolated: false,
                     cache_control_no_store: false,
+                    status: 0,
+                    redirected: false,
                 })
             }
         }
@@ -234,8 +248,10 @@ impl PageSource {
             );
         }
         let client = crate::config::global().apply_http(builder);
-        let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url } =
+        let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status } =
             client.fetch_page_streaming(&lumen_url, on_chunk)?;
+        // BUG-640: see `load_bytes` for why this can't be an exact hop count.
+        let redirected = final_url != lumen_url;
         eprintln!("Получено {} байт (streaming)", bytes.len());
         let coop = resp_headers.iter()
             .find(|(k, _)| k.eq_ignore_ascii_case("cross-origin-opener-policy"))
@@ -254,6 +270,8 @@ impl PageSource {
             content_type: Some("text/html"),
             cross_origin_isolated,
             cache_control_no_store: cache_control_no_store(&resp_headers),
+            status,
+            redirected,
         })
     }
 
@@ -274,7 +292,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone(), None)?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, ss_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store, raw.status, raw.redirected)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -293,6 +311,14 @@ pub(crate) struct RawPage {
     /// the page from a full bfcache freeze (HTML LS §8.6) — the shell falls
     /// back to the existing HTML-snapshot bfcache path on navigate-away.
     pub(crate) cache_control_no_store: bool,
+    /// HTTP status of the response, or `0` for a non-network source
+    /// (`File`/`Snapshot`/`Static`/`AboutBlank`) or a fresh HTTP-cache hit.
+    /// Threaded from `lumen_network::PageResponse::status` for
+    /// `PerformanceNavigationTiming.responseStatus` (BUG-640).
+    pub(crate) status: u16,
+    /// Whether the final URL differs from the originally-requested one — see
+    /// `nav_timing`'s doc comment for why this can't be an exact hop count.
+    pub(crate) redirected: bool,
 }
 
 /// Whether `resp_headers` carry `Cache-Control: no-store`, per RFC 9111 §5.2.

@@ -216,8 +216,11 @@ window.MessagePort           = MessagePort;
 // `_lumen_…` global, so it survives `seal_internal_globals_v8` leaving engine
 // *state* writable; the property itself is the readonly accessor WebIDL
 // declares, so page script cannot answer for the engine by plain assignment.
+// BUG-765: reuses `_lumen_secure_context` (computed once, `web_api_shim_mid_b.js`)
+// instead of recomputing it — that same variable is what gates every
+// `[SecureContext]` surface installed after this file.
 (function() {
-    var secure = _lumen_url_is_potentially_trustworthy(_lumen_loc_parts);
+    var secure = _lumen_secure_context;
     Object.defineProperty(window, 'isSecureContext', {
         get: function() { return secure; },
         enumerable: true, configurable: true,

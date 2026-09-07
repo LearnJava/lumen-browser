@@ -548,6 +548,53 @@ fn document_body_not_null() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
+/// BUG-1017 (HTML §3.1.5): `document.defaultView` is the WindowProxy of the
+/// document's browsing context. It was missing on the live document — reading
+/// it gave `undefined`, so the near-universal idiom
+/// `node.ownerDocument.defaultView.<something>` threw a TypeError instead of
+/// reaching the window. Sub-documents had it all along
+/// (`crates/js/src/frame_bridge.rs`), which is why only the top level was hit.
+#[test]
+fn document_default_view_is_the_window() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            "'defaultView' in document && document.defaultView === window \
+                     && document.defaultView === globalThis",
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
+/// The idiom that made this worth fixing, spelled out: reached through an
+/// element rather than off `document` directly. `devicePixelRatio` is the
+/// property google.com reads this way (CSSOM View §4).
+#[test]
+fn owner_document_default_view_reaches_window_properties() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            "var el = document.createElement('div'); \
+             typeof el.ownerDocument.defaultView.devicePixelRatio",
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("number".into()));
+}
+
+/// …and a document with no browsing context answers `null`, not the window and
+/// not `undefined` (HTML §3.1.5).
+#[test]
+fn detached_document_default_view_is_null() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt
+        .eval(
+            "var d = document.implementation.createHTMLDocument('x'); \
+             d.defaultView === null && new Document().defaultView === null",
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
 /// BUG-703: `document.head` was absent from the live `document` (only
 /// `body`/`documentElement` existed), so webpack's chunk loader —
 /// `document.head.appendChild(script)` — threw on every bundled site.

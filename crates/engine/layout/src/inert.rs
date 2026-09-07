@@ -90,20 +90,26 @@ pub fn collect_inert_regions(root: &LayoutBox, doc: &Document) -> Vec<InertRegio
     out
 }
 
-fn collect_inert_rec(b: &LayoutBox, doc: &Document, already_inert: bool, out: &mut Vec<InertRegion>) {
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion: `already_inert` is threaded unchanged to every node (it never
+/// flips mid-walk — the "stop descending" rule below is what actually
+/// prevents double-counting), so nothing here depends on a deeper call's
+/// result — the same safe mechanical class LAYOUT-1 already converted.
+fn collect_inert_rec(root: &LayoutBox, doc: &Document, already_inert: bool, out: &mut Vec<InertRegion>) {
     use crate::box_tree::BoxKind;
-    if matches!(b.kind, BoxKind::Skip) {
-        return;
-    }
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        if matches!(b.kind, BoxKind::Skip) {
+            continue;
+        }
 
-    if !already_inert && doc.get(b.node).get_attr("inert").is_some() {
-        // This box is the root of a new inert subtree — record it and stop descending.
-        out.push(InertRegion { node_id: b.node, rect: b.rect });
-        return;
-    }
+        if !already_inert && doc.get(b.node).get_attr("inert").is_some() {
+            // This box is the root of a new inert subtree — record it and stop descending.
+            out.push(InertRegion { node_id: b.node, rect: b.rect });
+            continue;
+        }
 
-    for child in &b.children {
-        collect_inert_rec(child, doc, already_inert, out);
+        stack.extend(b.children.iter().rev());
     }
 }
 

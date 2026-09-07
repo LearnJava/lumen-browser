@@ -9,18 +9,36 @@
 //! or nothing at all for a freshly created node. See `bugs/BUG-493-OPEN.md`
 //! for the full symptom catalogue this closes.
 //!
-//! This slice covers [`super::V8JsRuntime::update_stylesheet`] callers only —
-//! `InProcessSession` (headless/WPT/driver path), pushed once per navigation
-//! right after CSS parsing. The interactive shell never calls
-//! `update_stylesheet`, so [`FlushHandles::stylesheet`] stays `None` there
-//! and [`FlushHandles::maybe_flush`] is a no-op — exactly its pre-CSSOM-4
-//! behaviour, zero regression risk for the live multithreaded pipeline
-//! (ADR-016): routing a flush through the engine thread from inside a native
-//! would risk a deadlock when the engine thread is itself mid-rAF-turn
-//! waiting on the JS thread, so this deliberately never touches the engine
-//! thread — extending coverage to the shell needs its own stylesheet-push
-//! call site plus a decision on dark-mode/forced-colors/web-fonts
-//! thread-locals, tracked as a follow-up slice, not attempted here.
+//! This slice originally covered [`super::V8JsRuntime::update_stylesheet`]
+//! callers in `InProcessSession` (headless/WPT/driver path) only — the
+//! interactive shell never called `update_stylesheet`, so
+//! [`FlushHandles::stylesheet`] stayed `None` there and
+//! [`FlushHandles::maybe_flush`] was a permanent no-op (see
+//! `bugs/BUG-977-OPEN.md`, closed by CSSOM-7). The shell now pushes its live
+//! cascade `Arc<lumen_css_parser::Stylesheet>` alongside the rest of this
+//! same snapshot, from every site that already pushes `computed_styles`/
+//! `layout_rects`: the two parse-time pushes in `crates/shell/src/page_pipeline.rs`
+//! (before the page's own scripts run, and again right after if they touched
+//! `<style>`/`<link>`/the DOM — the two windows a fully synchronous
+//! parse-time `<script>` can read style/scroll in, before any relayout ever
+//! happens) plus the steady-state pushes in `crates/shell/src/relayout.rs`'s
+//! `apply_relayout_result` and `crates/shell/src/page_load.rs`'s two
+//! post-load producers. Each is a plain `Arc::clone`/`Stylesheet::clone` +
+//! `Mutex` write, same shape as [`super::V8JsRuntime::update_viewport_size`],
+//! so none of them ever touch the engine thread: routing a flush through the
+//! engine thread from inside a native would risk a deadlock when the engine
+//! thread is itself mid-rAF-turn waiting on the JS thread (ADR-016), and
+//! `maybe_flush` below still deliberately never does that.
+//!
+//! Known remaining approximation, shared with the headless path: this flush
+//! recomputes layout without touching the `:hover`/`:focus`/`:active`,
+//! forced-colors or dark-mode thread-locals (`crates/engine/layout/src/style/env.rs`)
+//! that a real relayout sets on the engine thread right before laying out —
+//! on the JS thread those stay at their default (no interactive state, no
+//! forced colors, light mode), so a same-tick flush can disagree with the
+//! next full relayout for a script that reads computed style/geometry while
+//! also depending on one of those states. Not attempted here — see
+//! `bugs/BUG-977-OPEN.md`'s residual for the follow-up.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};

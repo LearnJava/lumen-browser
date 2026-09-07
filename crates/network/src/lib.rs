@@ -977,6 +977,11 @@ pub struct PageResponse {
     pub headers: Vec<(String, String)>,
     /// URL, с которого получен финальный ответ (после всех редиректов).
     pub final_url: Url,
+    /// HTTP-статус ответа, отдавшего `body`, либо `0`, когда его не было
+    /// (свежий HTTP-кэш-хит) — используется для `PerformanceNavigationTiming.
+    /// responseStatus` (BUG-640), та же конвенция, что у
+    /// `ResourceTimingRow::status` в шелле.
+    pub status: u16,
 }
 
 
@@ -3716,7 +3721,10 @@ impl HttpClient {
         if let Some(ref interceptor) = self.interceptor {
             let origin = build_origin(url);
             if let Some(body) = interceptor.intercept(url, &origin) {
-                return Ok(PageResponse { body, headers: Vec::new(), final_url: url.clone() });
+                // Synthetic response (e.g. Service Worker intercept) — no
+                // real HTTP round-trip, so no real status; `200` reflects
+                // that it's a successful substitute, not "unknown".
+                return Ok(PageResponse { body, headers: Vec::new(), final_url: url.clone(), status: 200 });
             }
         }
         let url_str = url.to_string();
@@ -3730,6 +3738,8 @@ impl HttpClient {
                     body: snap.body,
                     headers: Vec::new(),
                     final_url: url.clone(),
+                    // Fresh HTTP-cache hit — no network round-trip, no status.
+                    status: 0,
                 });
             }
             if !snap.conditional_headers.is_empty() {
@@ -3753,6 +3763,8 @@ impl HttpClient {
                         body: snap.body,
                         headers: Vec::new(),
                         final_url,
+                        // 304: a real network round-trip happened, this is its real status.
+                        status: resp.status,
                     });
                 }
                 cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -3760,6 +3772,7 @@ impl HttpClient {
                     body: resp.body,
                     headers: resp.headers,
                     final_url,
+                    status: resp.status,
                 });
             }
         }
@@ -3780,7 +3793,7 @@ impl HttpClient {
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
         }
-        Ok(PageResponse { body: resp.body, headers: resp.headers, final_url })
+        Ok(PageResponse { body: resp.body, headers: resp.headers, final_url, status: resp.status })
     }
 
     /// Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
@@ -3802,7 +3815,10 @@ impl HttpClient {
             let origin = build_origin(url);
             if let Some(body) = interceptor.intercept(url, &origin) {
                 on_chunk(&body, url);
-                return Ok(PageResponse { body, headers: Vec::new(), final_url: url.clone() });
+                // Synthetic response (e.g. Service Worker intercept) — no
+                // real HTTP round-trip, so no real status; `200` reflects
+                // that it's a successful substitute, not "unknown".
+                return Ok(PageResponse { body, headers: Vec::new(), final_url: url.clone(), status: 200 });
             }
         }
         let url_str = url.to_string();
@@ -3817,6 +3833,8 @@ impl HttpClient {
                     body: snap.body,
                     headers: Vec::new(),
                     final_url: url.clone(),
+                    // Fresh HTTP-cache hit — no network round-trip, no status.
+                    status: 0,
                 });
             }
             if !snap.conditional_headers.is_empty() {
@@ -3843,6 +3861,8 @@ impl HttpClient {
                         body: snap.body,
                         headers: Vec::new(),
                         final_url,
+                        // 304: a real network round-trip happened, this is its real status.
+                        status: resp.status,
                     });
                 }
                 cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -3850,6 +3870,7 @@ impl HttpClient {
                     body: resp.body,
                     headers: resp.headers,
                     final_url,
+                    status: resp.status,
                 });
             }
         }
@@ -3870,7 +3891,7 @@ impl HttpClient {
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
         }
-        Ok(PageResponse { body: resp.body, headers: resp.headers, final_url })
+        Ok(PageResponse { body: resp.body, headers: resp.headers, final_url, status: resp.status })
     }
 }
 
@@ -8907,6 +8928,37 @@ world\r\n\
         assert!(matches!(events[0], Event::RequestStarted { .. }));
         assert!(matches!(events[1], Event::RequestCompleted { status: 200, .. }));
         assert!(matches!(events[2], Event::ResourceTimed { initiator: "img", .. }));
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_subresource_reports_css_initiator_type_for_font_destination() {
+        // BUG-520: `@font-face src` bodies used to be fetched through
+        // `RequestDestination::Image` (a shell copy-paste, not a network-layer
+        // bug), which reported the wrong Resource Timing `initiatorType`
+        // ("img" instead of the spec's "css") on top of the wrong Mixed
+        // Content class and ad-block resource type. No policy attached here —
+        // this test is only about the `initiatorType` mapping, already
+        // correct in `resource_timing_initiator` and exercised for `Image` by
+        // the sibling test above; the shell-side fix is wiring the right
+        // `RequestDestination` through, not this mapping itself.
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nwoff".to_vec()
+        });
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/font.woff2")).unwrap();
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new().with_sink(sink.clone());
+
+        assert_eq!(
+            client.fetch_subresource(&url, RequestDestination::Font).unwrap(),
+            b"woff"
+        );
+
+        let events = sink.events();
+        assert_eq!(events.len(), 3, "Started + Completed + ResourceTimed");
+        assert!(matches!(events[2], Event::ResourceTimed { initiator: "css", .. }));
 
         server.join().unwrap();
     }

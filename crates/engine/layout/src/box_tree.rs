@@ -104,9 +104,9 @@ mod predicates;
 // axis is physically horizontal under a vertical writing mode, so those (not
 // the `_inline` pair) are the ones that apply there.
 pub(crate) use predicates::{
-    is_audio_element, is_canvas_element, is_iframe_element, is_image_element, is_picture_element,
-    is_video_element, scrollbar_gutter_block, scrollbar_gutter_block_start, scrollbar_gutter_inline,
-    scrollbar_gutter_inline_start,
+    is_audio_element, is_canvas_element, is_iframe_element, is_image_element,
+    is_inline_replaced_media_element, is_picture_element, is_video_element, scrollbar_gutter_block,
+    scrollbar_gutter_block_start, scrollbar_gutter_inline, scrollbar_gutter_inline_start,
 };
 
 // EE-3: when true, `lay_out` checks `b.dirty.is_clean()` and skips clean subtrees.
@@ -200,11 +200,12 @@ use shapes_floats::{inset_corner_inward, polygon_left_edge_at_y, polygon_right_e
 
 mod bfc;
 mod layout_dispatch;
+mod block_flow_trampoline;
 
 pub(crate) use bfc::lay_out_for_vertical;
 use bfc::{
     collapsed_bottom_margin, collapsed_top_margin, contained_content_height, establishes_bfc,
-    has_in_flow_content, last_collapsible_child,
+    has_in_flow_content, last_collapsible_child, MarginCollapseCache,
 };
 use layout_dispatch::{lay_out, lay_out_with_used_size};
 

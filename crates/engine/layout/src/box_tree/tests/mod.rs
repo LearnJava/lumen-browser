@@ -184,6 +184,62 @@ fn canvas_explicit_css_size_is_not_grown_by_the_border() {
     );
 }
 
+/// IFC-3: `<canvas>` — UA-дефолт `display: inline`, как `<img>` (IFC-2), так
+/// что рядом с текстом оно делит строку, а не разрывает абзац на три.
+#[test]
+fn canvas_shares_line_box_with_text() {
+    let doc = lumen_html_parser::parse(
+        r#"<div>before<canvas width="10" height="10"></canvas>after</div>"#,
+    );
+    let sheet = lumen_css_parser::parse("");
+    let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    fn find_div(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+        if matches!(b.kind, super::BoxKind::Block)
+            && !b.children.is_empty()
+            && b.children.iter().any(|c| matches!(c.kind, super::BoxKind::InlineBlockRow))
+        {
+            return Some(b);
+        }
+        b.children.iter().find_map(find_div)
+    }
+    let div = find_div(&root).expect("div with InlineBlockRow not found");
+    assert_eq!(div.children.len(), 1, "строка должна быть одна, а не {}", div.children.len());
+    let row = &div.children[0];
+    assert_eq!(row.children.len(), 3, "got {}", row.children.len());
+    assert!(matches!(row.children[0].kind, super::BoxKind::InlineRun { .. }));
+    assert!(matches!(row.children[1].kind, super::BoxKind::Canvas { .. }));
+    assert!(matches!(row.children[2].kind, super::BoxKind::InlineRun { .. }));
+}
+
+/// IFC-3: `<audio controls>` — тот же UA-дефолт `display: inline`, что и у
+/// `<canvas>`/`<video>`/`<iframe>`; без `controls` бокс 0×0 (HTML §4.8.10), но
+/// atomic inline-level статус тот же, поэтому проверяем на варианте с
+/// controls, где у бокса есть реальная высота.
+#[test]
+fn audio_shares_line_box_with_text() {
+    let doc = lumen_html_parser::parse(
+        r#"<div>before<audio src="clip.mp3" controls></audio>after</div>"#,
+    );
+    let sheet = lumen_css_parser::parse("");
+    let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    fn find_div(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+        if matches!(b.kind, super::BoxKind::Block)
+            && !b.children.is_empty()
+            && b.children.iter().any(|c| matches!(c.kind, super::BoxKind::InlineBlockRow))
+        {
+            return Some(b);
+        }
+        b.children.iter().find_map(find_div)
+    }
+    let div = find_div(&root).expect("div with InlineBlockRow not found");
+    assert_eq!(div.children.len(), 1, "строка должна быть одна, а не {}", div.children.len());
+    let row = &div.children[0];
+    assert_eq!(row.children.len(), 3, "got {}", row.children.len());
+    assert!(matches!(row.children[0].kind, super::BoxKind::InlineRun { .. }));
+    assert!(matches!(row.children[1].kind, super::BoxKind::Audio { .. }));
+    assert!(matches!(row.children[2].kind, super::BoxKind::InlineRun { .. }));
+}
+
 /// Строит один текстовый сегмент с заданным `font-variant-caps`.
 fn caps_seg(text: &str, caps: crate::style::FontVariantCaps) -> super::InlineSegment {
     let mut style = crate::style::ComputedStyle::root();
@@ -398,3 +454,6 @@ mod flex_align_content;
 
 mod svg_transform_and_misc;
 mod bug341_differential;
+mod bfc_margin_collapse;
+mod layout_box_drop;
+mod block_flow_trampoline;

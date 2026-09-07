@@ -302,18 +302,22 @@ pub fn find_first_dom_node_by_selector(doc: &Document, sel: &str) -> Option<lume
     find_dom_rec(doc, doc.root(), &selectors)
 }
 
+// LAYOUT-1 срез 3: явный стек вместо рекурсии по DOM — `querySelector`
+// пересчитывается на каждый вызов из JS, потенциально на глубоко вложенном
+// дереве (BUG-987). LIFO-стек с детьми в обратном порядке посещает узлы в
+// том же pre-order, что и рекурсия, так что "первый матч в document order"
+// не меняется; ранний `return` на первом совпадении сохранён как есть.
 fn find_dom_rec(
     doc: &Document,
     id: lumen_dom::NodeId,
     selectors: &[ComplexSelector],
 ) -> Option<lumen_dom::NodeId> {
-    if node_matches(id, doc, selectors) {
-        return Some(id);
-    }
-    for &child in &doc.get(id).children {
-        if let Some(found) = find_dom_rec(doc, child, selectors) {
-            return Some(found);
+    let mut stack = vec![id];
+    while let Some(id) = stack.pop() {
+        if node_matches(id, doc, selectors) {
+            return Some(id);
         }
+        stack.extend(doc.get(id).children.iter().rev().copied());
     }
     None
 }
@@ -411,18 +415,24 @@ pub fn query_all_within(doc: &Document, start: NodeId, sel: &str) -> Vec<NodeId>
     out
 }
 
+// LAYOUT-1 срез 3: явный стек вместо рекурсии по DOM — см. `find_dom_rec`.
+// `querySelectorAll` без `.clone()` для `children`: заимствование живёт только
+// на время `stack.extend`, следующая итерация заново берёт `doc.get(id)`, так
+// что конфликта заимствований, ради которого клонировали в `query_all_within`,
+// здесь нет.
 fn query_all_rec(
     doc: &Document,
     id: NodeId,
     selectors: &[ComplexSelector],
     out: &mut Vec<NodeId>,
 ) {
-    // matches_complex returns false for non-element nodes internally.
-    if node_matches(id, doc, selectors) {
-        out.push(id);
-    }
-    for &child in &doc.get(id).children.clone() {
-        query_all_rec(doc, child, selectors, out);
+    let mut stack = vec![id];
+    while let Some(id) = stack.pop() {
+        // matches_complex returns false for non-element nodes internally.
+        if node_matches(id, doc, selectors) {
+            out.push(id);
+        }
+        stack.extend(doc.get(id).children.iter().rev().copied());
     }
 }
 
@@ -2089,6 +2099,44 @@ mod tests {
 
         // Only the descendant `c` matches — not `a` itself, not sibling `b`.
         assert_eq!(query_all_scoped(&doc, a, "div"), vec![c]);
+    }
+
+    // LAYOUT-1 срез 3: regression guards for the iterative `find_dom_rec`/
+    // `query_all_rec` — a single-child DOM chain deep enough that the old
+    // recursive walk would have overflowed a normal thread stack (BUG-987),
+    // same shape as `box_tree::tests::layout_box_drop`. Built directly via
+    // `Document`'s arena API (not `lumen_html_parser::parse`), since parsing
+    // a matching HTML string would additionally exercise the parser's own
+    // recursion, outside this test's scope.
+    const DEEP_CHAIN_DEPTH: usize = 200_000;
+
+    #[test]
+    fn find_first_dom_node_by_selector_deep_chain_does_not_overflow_the_stack() {
+        let mut doc = lumen_dom::Document::new();
+        let mut parent = doc.root();
+        for _ in 0..DEEP_CHAIN_DEPTH {
+            let div = doc.create_element(lumen_dom::QualName::html("div"));
+            doc.append_child(parent, div);
+            parent = div;
+        }
+        let leaf = doc.create_element(lumen_dom::QualName::html("span"));
+        doc.append_child(parent, leaf);
+
+        assert_eq!(find_first_dom_node_by_selector(&doc, "span"), Some(leaf));
+        assert_eq!(find_first_dom_node_by_selector(&doc, "em"), None);
+    }
+
+    #[test]
+    fn query_all_deep_chain_does_not_overflow_the_stack() {
+        let mut doc = lumen_dom::Document::new();
+        let mut parent = doc.root();
+        for _ in 0..DEEP_CHAIN_DEPTH {
+            let div = doc.create_element(lumen_dom::QualName::html("div"));
+            doc.append_child(parent, div);
+            parent = div;
+        }
+
+        assert_eq!(query_all(&doc, "div").len(), DEEP_CHAIN_DEPTH);
     }
 
     #[test]

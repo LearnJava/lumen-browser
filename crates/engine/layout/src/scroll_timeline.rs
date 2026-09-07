@@ -273,16 +273,20 @@ pub fn collect_named_scroll_timelines(root: &LayoutBox) -> Vec<NamedScrollTimeli
     out
 }
 
-fn collect_named_scroll_timelines_rec(lb: &LayoutBox, out: &mut Vec<NamedScrollTimeline>) {
-    if let Some(ref name) = lb.style.scroll_timeline_name {
-        out.push(NamedScrollTimeline {
-            container: lb.node,
-            name: name.clone(),
-            axis: lb.style.scroll_timeline_axis,
-        });
-    }
-    for child in &lb.children {
-        collect_named_scroll_timelines_rec(child, out);
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion — same safe mechanical class LAYOUT-1 already converted.
+/// Children pushed in reverse so the LIFO stack preserves document order.
+fn collect_named_scroll_timelines_rec(root: &LayoutBox, out: &mut Vec<NamedScrollTimeline>) {
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(lb) = stack.pop() {
+        if let Some(ref name) = lb.style.scroll_timeline_name {
+            out.push(NamedScrollTimeline {
+                container: lb.node,
+                name: name.clone(),
+                axis: lb.style.scroll_timeline_axis,
+            });
+        }
+        stack.extend(lb.children.iter().rev());
     }
 }
 
@@ -298,16 +302,19 @@ pub fn collect_named_view_timelines(root: &LayoutBox) -> Vec<NamedViewTimeline> 
     out
 }
 
-fn collect_named_view_timelines_rec(lb: &LayoutBox, out: &mut Vec<NamedViewTimeline>) {
-    if let Some(ref name) = lb.style.view_timeline_name {
-        out.push(NamedViewTimeline {
-            subject: lb.node,
-            name: name.clone(),
-            axis: lb.style.view_timeline_axis,
-        });
-    }
-    for child in &lb.children {
-        collect_named_view_timelines_rec(child, out);
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2) — same conversion as
+/// [`collect_named_scroll_timelines_rec`] above.
+fn collect_named_view_timelines_rec(root: &LayoutBox, out: &mut Vec<NamedViewTimeline>) {
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(lb) = stack.pop() {
+        if let Some(ref name) = lb.style.view_timeline_name {
+            out.push(NamedViewTimeline {
+                subject: lb.node,
+                name: name.clone(),
+                axis: lb.style.view_timeline_axis,
+            });
+        }
+        stack.extend(lb.children.iter().rev());
     }
 }
 

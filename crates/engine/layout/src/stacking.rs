@@ -263,23 +263,32 @@ pub fn box_can_own_stacking_context(b: &LayoutBox) -> bool {
     matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::FormControl { .. })
 }
 
-/// Pre-order обход layout-дерева с накоплением stacking-контекстов.
-fn walk(b: &LayoutBox, parent_sc: StackingContextId, tree: &mut StackingTree) {
-    let current_sc =
-        if box_can_own_stacking_context(b) && creates_stacking_context(&b.style) {
-            let new_id = StackingContextId(tree.contexts.len() as u32);
-            tree.contexts.push(StackingContext {
-                id: new_id,
-                z_index: b.style.z_index,
-                children: Vec::new(),
-            });
-            tree.contexts[parent_sc.0 as usize].children.push(new_id);
-            new_id
-        } else {
-            parent_sc
-        };
-    for child in &b.children {
-        walk(child, current_sc, tree);
+/// Pre-order обход layout-дерева с накоплением stacking-контекстов —
+/// explicit heap-stack (LAYOUT-2 срез 2), not native recursion: nothing after
+/// the loop over `children` reads a value the walk produced, so this is the
+/// same safe mechanical class LAYOUT-1 already converted. Document order is
+/// load-bearing (the stable z-sort in `StackingTree::build` uses tree order
+/// as its tie-break), so children are pushed in reverse to keep the LIFO
+/// stack's pop order identical to the old left-to-right recursion.
+fn walk(root: &LayoutBox, root_sc: StackingContextId, tree: &mut StackingTree) {
+    let mut stack: Vec<(&LayoutBox, StackingContextId)> = vec![(root, root_sc)];
+    while let Some((b, parent_sc)) = stack.pop() {
+        let current_sc =
+            if box_can_own_stacking_context(b) && creates_stacking_context(&b.style) {
+                let new_id = StackingContextId(tree.contexts.len() as u32);
+                tree.contexts.push(StackingContext {
+                    id: new_id,
+                    z_index: b.style.z_index,
+                    children: Vec::new(),
+                });
+                tree.contexts[parent_sc.0 as usize].children.push(new_id);
+                new_id
+            } else {
+                parent_sc
+            };
+        for child in b.children.iter().rev() {
+            stack.push((child, current_sc));
+        }
     }
 }
 

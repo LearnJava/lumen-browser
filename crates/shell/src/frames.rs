@@ -127,6 +127,26 @@ pub(crate) fn fetch_iframe_source(
         eprintln!("iframe: {reason}, пропуск '{src}'");
         return Err(FetchError { reason, attempted_url: src.to_owned() });
     }
+    // HTML §7.6: `about:blank` не скачивается — фрейм немедленно получает
+    // пустой документ, ровно как фрейм вообще без `src` (ветка `None` в
+    // `spawn_frame` уже помечает такой под-документ адресом `about:blank`).
+    //
+    // BUG-1018: до этого строка проваливалась в сетевой резолвер, возвращалась
+    // как `unsupported scheme: about`, и фрейм показывал синтетическую страницу
+    // «Не удалось загрузить фрейм» с `load_failed = true` — видимая коробка с
+    // ошибкой там, где спека требует пустой документ. Форма записи не должна
+    // ничего менять: `<iframe>` и `<iframe src="about:blank">` — один и тот же
+    // под-документ.
+    //
+    // Хвост из query/fragment (`about:blank?x`, `about:blank#y`) — всё ещё
+    // about:blank-документ, а вот `about:config` и прочие about:-адреса
+    // по-прежнему отказывают, как и раньше.
+    if lowered == "about:blank"
+        || lowered.starts_with("about:blank?")
+        || lowered.starts_with("about:blank#")
+    {
+        return Ok(FrameSource::Inline(String::new()));
+    }
     match base.resolve(src) {
         ResolvedResource::File(path) => {
             let attempted_url = format!("file://{}", path.display());
@@ -653,7 +673,7 @@ fn load_frame_fonts(
     let web_fonts = pending
         .into_iter()
         .filter_map(|pf| {
-            let raw = fetch_image_bytes(&pf.url, base, sink, cookie_jar.clone()).ok()?;
+            let raw = fetch_font_bytes(&pf.url, base, sink, cookie_jar.clone()).ok()?;
             let bytes = match lumen_font::maybe_decode_font(&raw) {
                 Ok(Some(d)) => d,
                 Ok(None) => raw,
@@ -1700,6 +1720,9 @@ pub(crate) fn spawn_frame(
         // hibernation already fall back to) — a frame's `document.styleSheets`
         // reads as empty until a future slice wires this up.
         Vec::new(),
+        // CSSOM-7 (BUG-977): mirrors the `None` `parse_time_layout` above —
+        // no layout to offer yet, so nothing to flush against either.
+        None,
     );
     // Навигация из скриптов ребёнка (location.href= и т.п.) вне среза 1:
     // отклоняем с логом, не заваливая страницу.

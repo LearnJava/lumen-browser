@@ -3363,6 +3363,11 @@ function _lumen_build_detached_document(proto, contentType) {
     Object.defineProperty(doc, 'nodeValue',     { get: function() { return null; },         enumerable: true });
     Object.defineProperty(doc, 'DOCUMENT_NODE', { get: function() { return 9; },            enumerable: true });
     Object.defineProperty(doc, 'ownerDocument', { get: function() { return null; },         enumerable: true });
+    // HTML §3.1.5: no browsing context, so `defaultView` is null — the other
+    // half of the live document's getter (BUG-1017). Spelled out here rather
+    // than inherited, because `proto` is `Document.prototype`, shared with the
+    // live document's interface chain.
+    Object.defineProperty(doc, 'defaultView',   { get: function() { return null; },         enumerable: true });
     Object.defineProperty(doc, 'childNodes',    { get: function() { return _children.slice(); }, enumerable: true });
     Object.defineProperty(doc, 'doctype', {
         get: function() {
@@ -7956,7 +7961,17 @@ function _lumen_font_face_try_one_source(src, onOk, onFail) {
         onFail(new DOMException('Could not find local font', 'NetworkError'));
         return;
     }
-    fetch(src.value).then(function(resp) {
+    // BUG-1013: `_lumenAsync` routes this through `fetch()`'s worker-thread
+    // bridge instead of its default synchronous transport. A bare `fetch(url)`
+    // parks the JS thread until the font host answers, and this function runs
+    // inside the load pipeline's `run-scripts` phase — so google.com's
+    // `document.fonts.load('10pt Google Sans')` in `<head>` held layout, paint
+    // and the first frame for as long as fonts.gstatic.com took (139 s in the
+    // 2026-09-06 corpus run). Nothing here needs the bytes synchronously: the
+    // promise this feeds is what CSS Font Loading hands the page, and the faces
+    // that actually render are fetched separately by the shell's own background
+    // `@font-face` loader (`crates/shell/src/page_load.rs`).
+    fetch(src.value, { _lumenAsync: true }).then(function(resp) {
         if (!resp.ok) throw new DOMException('Failed to fetch font: ' + resp.status, 'NetworkError');
         return resp.arrayBuffer();
     }).then(function(buf) {
@@ -8321,10 +8336,23 @@ FontFaceSet.prototype.constructor = FontFaceSet;
 // size are not parsed out individually; matching in `FontFaceSet.load` is by
 // family name only, which is what every test in this slice's target set
 // exercises.
+//
+// BUG-1015: the size token must carry a real unit. `<font-size>` in the
+// shorthand is a `<length-percentage>` or a keyword — never a bare number —
+// whereas everything the grammar allows *before* it (style / variant / weight /
+// stretch) is either a keyword or exactly such a bare number. The old pattern
+// left the unit optional, so the `400` of `document.fonts.load('400 10pt Google
+// Sans')` was read as the size and the family came out as `10pt google sans`:
+// no member matched, the promise resolved with `[]`, and nothing was ever
+// loaded. That is the form google.com sends, and it is the common one.
+// Requiring the unit finds the real size without spelling out the four keyword
+// lists — a preceding keyword cannot look like a size, and a preceding number
+// no longer can either. The `/<line-height>` tail keeps its loose pattern:
+// a line-height legitimately *is* a bare number.
 function _lumen_parse_font_shorthand_families(fontStr) {
     var s = String(fontStr).trim();
     var sizeKeyword = /^(xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger)$/i;
-    var sizeToken = /^[\d.]+[a-z%]*(\/[\d.]+[a-z%]*)?$/i;
+    var sizeToken = /^[\d.]+(px|pt|pc|in|cm|mm|q|em|rem|ex|ch|cap|ic|lh|rlh|vw|vh|vi|vb|vmin|vmax|svw|svh|lvw|lvh|dvw|dvh|%)(\/[\d.]+[a-z%]*)?$/i;
     var tokens = s.split(/\s+/);
     var idx = -1;
     for (var i = 0; i < tokens.length; i++) {
@@ -8760,9 +8788,12 @@ Range.prototype.END_TO_START  = 2; Range.prototype.END_TO_END  = 3;
 // "class-object with state" pattern `_lumen_make_range` above uses, per
 // `docs/tasks/p1-cssom-1-stylesheets.md`. Rule/sheet identity is NOT
 // preserved across repeated reads (`sheet.cssRules[0] !== sheet.cssRules[0]`)
-// since nothing here is cached. `insertRule`/`deleteRule` remain unimplemented
-// for THIS read half (BUG-897/CSSOM-5 — deferred, same as CSSOM-1/2 left
-// them); a constructed sheet has both since CSSOM-5 срез 3, see below.
+// since nothing here is cached. `insertRule`/`deleteRule` on THIS read half
+// (BUG-518 срез 7) mutate the registry entry's own `Stylesheet` — visible to
+// further CSSOM reads, but NOT wired into the page cascade (that registry is
+// rebuilt wholesale from DOM text on every relayout, so the mutation is
+// discarded on the next one — see `stylesheets.rs`'s doc comment on the two
+// natives); a constructed sheet has had both since CSSOM-5 срез 3, see below.
 //
 // `new CSSStyleSheet()`/`.replaceSync()`/`.replace()`/`document.
 // adoptedStyleSheets`/`shadowRoot.adoptedStyleSheets` (CSSOM-5 срез 1,
@@ -8802,6 +8833,9 @@ globalThis.CSSStyleRule = CSSStyleRule;
 function CSSMediaRule() { throw new TypeError('Illegal constructor'); }
 Object.setPrototypeOf(CSSMediaRule.prototype, CSSRule.prototype);
 globalThis.CSSMediaRule = CSSMediaRule;
+function CSSMixinRule() { throw new TypeError('Illegal constructor'); }
+Object.setPrototypeOf(CSSMixinRule.prototype, CSSRule.prototype);
+globalThis.CSSMixinRule = CSSMixinRule;
 
 // Generic index-only live-list Proxy: `itemsFn()` returns the current array
 // of already-built member objects, `protoObj` decides which interface the
@@ -8880,18 +8914,40 @@ function _lumen_make_css_rule_list(itemsFn) {
 }
 
 // A style rule (`CSSStyleRule`), built from the JSON `_lumen_stylesheet_rule_json`/
-// `_lumen_stylesheet_media_child_json` return — `{selectorText, styleCssText}`.
-// `parentRule` is `null` for a top-level rule, the enclosing `CSSMediaRule`
-// wrapper for a rule nested inside `@media`.
+// `_lumen_stylesheet_media_child_json` return — `{selectorText, styleCssText,
+// cssText}`. `parentRule` is `null` for a top-level rule, the enclosing
+// `CSSMediaRule` wrapper for a rule nested inside `@media`. `cssText` is
+// read from the Rust-computed field rather than reassembled here (`data.
+// selectorText + ' { ' + data.styleCssText + ' }'`) since CSS Mixins L1's
+// `@apply` needs a different, multi-line serialization once present among
+// this rule's declarations — see `Rule::css_text` (css-parser).
 function _lumen_build_css_style_rule(data, sheetIdx, parentRule) {
     var r = Object.create(CSSStyleRule.prototype);
     Object.defineProperties(r, {
         type:         { get: function() { return CSSRule.STYLE_RULE; }, enumerable: true, configurable: true },
         selectorText: { get: function() { return data.selectorText; }, enumerable: true, configurable: true },
-        cssText:      { get: function() { return data.selectorText + ' { ' + data.styleCssText + ' }'; }, enumerable: true, configurable: true },
+        cssText:      { get: function() { return data.cssText; }, enumerable: true, configurable: true },
         style:        { get: function() { return _lumen_make_css_style_declaration_readonly(data.styleCssText); }, enumerable: true, configurable: true },
         parentStyleSheet: { get: function() { return _lumen_make_css_style_sheet(sheetIdx); }, enumerable: true, configurable: true },
         parentRule:   { get: function() { return parentRule; }, enumerable: true, configurable: true },
+    });
+    return r;
+}
+
+// A top-level `@mixin` rule (`CSSMixinRule` — CSS Mixins L1 §cssom), built
+// from `mixin_rule_json`'s `{name, cssText}`. Read-only: no `.cssRules`
+// navigation into `@result`'s own children (nothing in this slice's scope
+// needs it — see `mixin_rule_json`'s doc comment), and `type` follows every
+// other newer CSSOM rule kind's legacy-attribute convention of `0` (CSSOM
+// §6.5.1 — the numeric constants stop at rules old enough to have needed one).
+function _lumen_build_css_mixin_rule(data, sheetIdx, parentRule) {
+    var r = Object.create(CSSMixinRule.prototype);
+    Object.defineProperties(r, {
+        type:    { get: function() { return 0; }, enumerable: true, configurable: true },
+        name:    { get: function() { return data.name; }, enumerable: true, configurable: true },
+        cssText: { get: function() { return data.cssText; }, enumerable: true, configurable: true },
+        parentStyleSheet: { get: function() { return _lumen_make_css_style_sheet(sheetIdx); }, enumerable: true, configurable: true },
+        parentRule: { get: function() { return parentRule; }, enumerable: true, configurable: true },
     });
     return r;
 }
@@ -8912,6 +8968,7 @@ function _lumen_make_css_rule(sheetIdx, ruleIdx) {
     var raw = _lumen_stylesheet_rule_json(sheetIdx, ruleIdx);
     if (raw === null || raw === undefined) return null;
     var data = JSON.parse(raw);
+    if (data.kind === 'mixin') return _lumen_build_css_mixin_rule(data, sheetIdx, null);
     if (data.kind !== 'media') return _lumen_build_css_style_rule(data, sheetIdx, null);
     var mr = Object.create(CSSMediaRule.prototype);
     function childRules() {
@@ -8972,6 +9029,34 @@ function _lumen_make_css_style_sheet(sheetIdx) {
         cssRules: { get: cssRuleList, enumerable: true, configurable: true },
         rules:    { get: function() { return this.cssRules; }, enumerable: true, configurable: true },
     });
+    // `CSSStyleSheet.insertRule`/`.deleteRule` on an owned sheet (BUG-518
+    // срез 7) — the constructed-sheet twin below (`_lumen_make_constructed_style_sheet`)
+    // has the same two methods over a different registry; kept as separate
+    // copies rather than factored out since the two wrappers' `idx` spaces
+    // and native function names are already distinct per-registry pairs.
+    s.insertRule = function(ruleText, index) {
+        index = (index === undefined) ? 0 : (index >>> 0);
+        var result = _lumen_stylesheet_insert_rule(sheetIdx, String(ruleText), index);
+        if (result === -2) {
+            throw new DOMException(
+                "Failed to execute 'insertRule' on 'CSSStyleSheet': the supplied text is not a valid rule.",
+                'SyntaxError');
+        }
+        if (result < 0) {
+            throw new DOMException(
+                "Failed to execute 'insertRule' on 'CSSStyleSheet': the index provided is larger than the maximum index.",
+                'IndexSizeError');
+        }
+        return result;
+    };
+    s.deleteRule = function(index) {
+        index = index >>> 0;
+        if (_lumen_stylesheet_delete_rule(sheetIdx, index) < 0) {
+            throw new DOMException(
+                "Failed to execute 'deleteRule' on 'CSSStyleSheet': the index provided is larger than the maximum index.",
+                'IndexSizeError');
+        }
+    };
     return s;
 }
 
@@ -8996,10 +9081,24 @@ function _lumen_build_constructed_css_style_rule(data, idx, parentRule) {
     Object.defineProperties(r, {
         type:         { get: function() { return CSSRule.STYLE_RULE; }, enumerable: true, configurable: true },
         selectorText: { get: function() { return data.selectorText; }, enumerable: true, configurable: true },
-        cssText:      { get: function() { return data.selectorText + ' { ' + data.styleCssText + ' }'; }, enumerable: true, configurable: true },
+        cssText:      { get: function() { return data.cssText; }, enumerable: true, configurable: true },
         style:        { get: function() { return _lumen_make_css_style_declaration_readonly(data.styleCssText); }, enumerable: true, configurable: true },
         parentStyleSheet: { get: function() { return _lumen_make_constructed_style_sheet(idx); }, enumerable: true, configurable: true },
         parentRule:   { get: function() { return parentRule; }, enumerable: true, configurable: true },
+    });
+    return r;
+}
+
+// Constructed-sheet twin of `_lumen_build_css_mixin_rule` — see that
+// function's doc comment.
+function _lumen_build_constructed_css_mixin_rule(data, idx, parentRule) {
+    var r = Object.create(CSSMixinRule.prototype);
+    Object.defineProperties(r, {
+        type:    { get: function() { return 0; }, enumerable: true, configurable: true },
+        name:    { get: function() { return data.name; }, enumerable: true, configurable: true },
+        cssText: { get: function() { return data.cssText; }, enumerable: true, configurable: true },
+        parentStyleSheet: { get: function() { return _lumen_make_constructed_style_sheet(idx); }, enumerable: true, configurable: true },
+        parentRule: { get: function() { return parentRule; }, enumerable: true, configurable: true },
     });
     return r;
 }
@@ -9014,6 +9113,7 @@ function _lumen_make_constructed_css_rule(idx, ruleIdx) {
     var raw = _lumen_constructed_rule_json(idx, ruleIdx);
     if (raw === null || raw === undefined) return null;
     var data = JSON.parse(raw);
+    if (data.kind === 'mixin') return _lumen_build_constructed_css_mixin_rule(data, idx, null);
     if (data.kind !== 'media') return _lumen_build_constructed_css_style_rule(data, idx, null);
     var mr = Object.create(CSSMediaRule.prototype);
     function childRules() {
@@ -9663,6 +9763,23 @@ var document = {
             }
         }
         return !evt.defaultPrevented;
+    },
+    // HTML §3.1.5 `Document.defaultView`: the WindowProxy of this document's
+    // browsing context. The live document always has one, so this is `window`
+    // — a document with no browsing context answers `null` instead, and that
+    // half already lives in `_lumen_build_detached_document`.
+    //
+    // BUG-1017: this getter was missing entirely on the live document, so the
+    // property read back as `undefined` rather than as the window. Sub-documents
+    // had it all along (`crates/js/src/frame_bridge.rs` defines it on the
+    // `contentDocument` facade), which is why the gap survived: only the
+    // top-level document was affected. `undefined` is worse than a wrong window
+    // here, because the idiom that reads it is
+    // `node.ownerDocument.defaultView.<something>` — google.com does exactly
+    // that for `devicePixelRatio` and the resulting TypeError aborted its whole
+    // module initialisation.
+    get defaultView() {
+        return typeof window !== 'undefined' ? window : globalThis;
     },
     get fonts() {
         return _lumen_wrapper_slot(this, '__fonts__', _lumen_make_font_face_set);

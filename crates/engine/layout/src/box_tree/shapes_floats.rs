@@ -8,7 +8,12 @@
 
 use super::*;
 
-/// Рекурсивно смещает rect.y всего поддерева на dy (для vertical-align).
+/// Смещает rect.y всего поддерева на dy (для vertical-align) — explicit
+/// heap-stack pre-order walk (LAYOUT-2 срез 2), not native recursion: nothing
+/// after the loop over `children` reads a value the walk produced, so this is
+/// the same safe mechanical class LAYOUT-1 already converted
+/// (`collect_layout_rects_rec` and siblings) — found independently while
+/// tracing `lay_out_flex`'s cross-axis alignment call sites.
 ///
 /// BUG-424 (в): `svg_paint_matrix` (document-space CTM for rotated/skewed SVG
 /// shapes, `lay_out_svg_element_position`) bakes in the viewport origin at the
@@ -20,17 +25,19 @@ use super::*;
 /// two out of sync by exactly this shift. Translating the matrix in lockstep
 /// keeps both representations of the same box consistent.
 pub(crate) fn shift_y_box(b: &mut LayoutBox, dy: f32) {
-    b.rect.y += dy;
-    if let BoxKind::SvgShape { svg_paint_matrix, .. } = &mut b.kind {
-        svg_paint_matrix.matrix[5] += dy;
-    }
-    for child in &mut b.children {
-        shift_y_box(child, dy);
+    let mut stack: Vec<&mut LayoutBox> = vec![b];
+    while let Some(node) = stack.pop() {
+        node.rect.y += dy;
+        if let BoxKind::SvgShape { svg_paint_matrix, .. } = &mut node.kind {
+            svg_paint_matrix.matrix[5] += dy;
+        }
+        stack.extend(node.children.iter_mut());
     }
 }
 
-/// Рекурсивно смещает rect всего поддерева на (dx, dy).
-/// Используется при позиционировании абсолютных потомков.
+/// Смещает rect всего поддерева на (dx, dy) — explicit heap-stack pre-order
+/// walk, same conversion and rationale as [`shift_y_box`]. Используется при
+/// позиционировании абсолютных потомков.
 ///
 /// BUG-424 (в): keeps `svg_paint_matrix` in sync with `rect` — see
 /// `shift_y_box` for why this matters.
@@ -38,14 +45,15 @@ pub(crate) fn shift_tree(b: &mut LayoutBox, dx: f32, dy: f32) {
     if dx == 0.0 && dy == 0.0 {
         return;
     }
-    b.rect.x += dx;
-    b.rect.y += dy;
-    if let BoxKind::SvgShape { svg_paint_matrix, .. } = &mut b.kind {
-        svg_paint_matrix.matrix[4] += dx;
-        svg_paint_matrix.matrix[5] += dy;
-    }
-    for child in &mut b.children {
-        shift_tree(child, dx, dy);
+    let mut stack: Vec<&mut LayoutBox> = vec![b];
+    while let Some(node) = stack.pop() {
+        node.rect.x += dx;
+        node.rect.y += dy;
+        if let BoxKind::SvgShape { svg_paint_matrix, .. } = &mut node.kind {
+            svg_paint_matrix.matrix[4] += dx;
+            svg_paint_matrix.matrix[5] += dy;
+        }
+        stack.extend(node.children.iter_mut());
     }
 }
 

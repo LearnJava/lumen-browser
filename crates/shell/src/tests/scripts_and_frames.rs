@@ -1530,6 +1530,38 @@ fn fetch_iframe_source_reports_reason_and_url_for_unsupported_schemes() {
     assert_eq!(err.attempted_url, "data:text/html,x");
 }
 
+/// BUG-1018 (HTML §7.6): `about:blank` не скачивается — это пустой документ,
+/// а не отказ. До фикса строка проваливалась в сетевой резолвер, возвращалась
+/// как `unsupported scheme: about`, и фрейм показывал синтетическую страницу
+/// «Не удалось загрузить фрейм» вместо пустого под-документа. Живой замер:
+/// `<iframe src="about:blank">` имел `body.textContent` = «Не удалось
+/// загрузить фрейм about:blank …», тогда как соседний `<iframe>` без атрибута
+/// был пуст — то есть форма записи меняла результат.
+#[test]
+fn fetch_iframe_source_treats_about_blank_as_an_empty_document() {
+    let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    for src in ["about:blank", "ABOUT:BLANK", "about:blank?x=1", "about:blank#frag"] {
+        match fetch_iframe_source(src, &base, &sink, None) {
+            Ok(crate::frames::FrameSource::Inline(html)) => {
+                assert!(html.is_empty(), "{src}: документ пуст")
+            }
+            other => panic!("{src}: ожидался пустой Inline, получено {:?}", other.is_ok()),
+        }
+    }
+    // Пустой `src` уже вёл себя так же — формы должны совпасть.
+    assert!(matches!(
+        fetch_iframe_source("", &base, &sink, None),
+        Ok(crate::frames::FrameSource::Inline(ref h)) if h.is_empty()
+    ));
+    // Прочие `about:`-адреса по-прежнему отказывают: спека выделяет только
+    // `about:blank` (и `about:srcdoc`, у которого свой путь через атрибут).
+    assert!(
+        fetch_iframe_source("about:config", &base, &sink, None).is_err(),
+        "about:config грузиться не должен"
+    );
+}
+
 /// Файл, которого нет на диске, — та же форма отказа, что и у схем выше:
 /// `attempted_url` собран как `file://` того же пути, что видит пользователь
 /// в error-документе.

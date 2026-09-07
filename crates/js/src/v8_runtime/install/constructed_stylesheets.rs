@@ -45,14 +45,15 @@
 //! resolves `idx` to a registry entry and translates the `Result` into the
 //! sentinel convention already used elsewhere here (see
 //! `_lumen_set_adopted_stylesheets`'s comment). `document.styleSheets`'s
-//! read-only sheets (CSSOM-1) still lack both — that is a separate registry
-//! (`stylesheet_nodes`) this module does not touch, deferred like the rest of
-//! CSSOM-1/2.
+//! read-only sheets (CSSOM-1) have had the same two operations since BUG-518
+//! срез 7 (`stylesheets.rs`'s own `_lumen_stylesheet_insert_rule`/
+//! `_lumen_stylesheet_delete_rule`) — a separate registry this module does
+//! not touch.
 
 use super::reg;
 #[allow(unused_imports)]
 use super::super::*;
-use super::stylesheets::{media_rule_json, style_rule_json};
+use super::stylesheets::{media_rule_json, mixin_rule_json, style_rule_json};
 use lumen_css_parser::CssomRuleRef;
 
 /// One `new CSSStyleSheet()` instance (CSSOM §2.1). Indexed by position in
@@ -210,6 +211,7 @@ pub(crate) fn install_constructed_stylesheets(
             let json = match rules.get(rule_idx as usize)? {
                 CssomRuleRef::Style(r) => style_rule_json(r),
                 CssomRuleRef::Media(r) => media_rule_json(r),
+                CssomRuleRef::Mixin(r) => mixin_rule_json(r),
             };
             Some(json.to_string())
         });
@@ -234,7 +236,7 @@ pub(crate) fn install_constructed_stylesheets(
             let rules = entry.sheet.cssom_rules();
             match rules.get(rule_idx as usize)? {
                 CssomRuleRef::Media(r) => Some(style_rule_json(r.rules.get(child_idx as usize)?).to_string()),
-                CssomRuleRef::Style(_) => None,
+                CssomRuleRef::Style(_) | CssomRuleRef::Mixin(_) => None,
             }
         });
     }

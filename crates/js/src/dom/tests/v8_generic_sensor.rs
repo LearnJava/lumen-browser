@@ -9,10 +9,16 @@ use super::*;
 use crate::v8_runtime::V8JsRuntime;
 
 /// V8 twin of [`super::runtime_with_dom`].
+///
+/// BUG-765: installed against a secure `https://` URL, not `""` — the whole
+/// Generic Sensor family is `[SecureContext]`, and an empty page URL is
+/// insecure (`is_secure_context_is_false_without_page_url`,
+/// `v8_idle_message_clipboard.rs`), which would make every class below
+/// entirely absent instead of exercising it.
 fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-    rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "https://example.com/", None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }
@@ -83,6 +89,24 @@ fn sensor_listeners_support_event_target_options() {
                  s.removeEventListener('reading', cb); \
                  s.dispatchEvent(new Event('reading')); \
                  hits === 1"
+    ));
+}
+
+/// BUG-765: the whole Generic Sensor family is `[SecureContext]` — absent
+/// entirely on an insecure origin (vendored `Gyroscope_insecure_context.html`
+/// et al.: `assert_false(sensorName in window)`).
+#[test]
+fn sensors_absent_on_insecure_origin() {
+    let rt = V8JsRuntime::new().unwrap();
+    rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+    rt.install_dom(make_doc(), "http://example.com/", None, None, None, None, None, None, None, None, false)
+        .unwrap();
+    assert!(bool_eval(
+        &rt,
+        "!('Accelerometer' in window) && !('Gyroscope' in window) && \
+         !('Magnetometer' in window) && !('AmbientLightSensor' in window) && \
+         !('AbsoluteOrientationSensor' in window) && !('RelativeOrientationSensor' in window) && \
+         !('Sensor' in window)"
     ));
 }
 
