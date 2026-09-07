@@ -119,10 +119,15 @@ pub(super) fn run(
         pending_collapsed_mt: 0.0,
     };
     let mut stack: Vec<Frame> = Vec::new();
+    // BUG-1026: shared for the whole `run()` pass, not per-frame — a deep
+    // single-child chain is exactly one first-child chain spanning every
+    // frame this loop pushes, so the memo only pays off if levels share it.
+    let mut top_cache = MarginCollapseCache::default();
+    let mut bottom_cache = MarginCollapseCache::default();
 
     loop {
         if current.next_child_idx >= current.b.children.len() {
-            finish_frame(&mut current, measurer, viewport, hp);
+            finish_frame(&mut current, measurer, viewport, hp, &mut bottom_cache);
             match stack.pop() {
                 None => {
                     *b = current.b;
@@ -131,7 +136,7 @@ pub(super) fn run(
                 Some(mut parent) => {
                     let idx = parent.next_child_idx;
                     parent.b.children[idx] = current.b;
-                    post_child_bookkeeping(&mut parent, idx, viewport);
+                    post_child_bookkeeping(&mut parent, idx, viewport, &mut bottom_cache);
                     parent.next_child_idx += 1;
                     current = parent;
                 }
@@ -140,7 +145,7 @@ pub(super) fn run(
         }
 
         let i = current.next_child_idx;
-        match step_child(&mut current, i, measurer, viewport, hp) {
+        match step_child(&mut current, i, measurer, viewport, hp, &mut top_cache, &mut bottom_cache) {
             StepOutcome::Advance => {
                 current.next_child_idx += 1;
             }
@@ -185,6 +190,8 @@ fn step_child(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     hp: &dyn HyphenationProvider,
+    top_cache: &mut MarginCollapseCache,
+    bottom_cache: &mut MarginCollapseCache,
 ) -> StepOutcome {
     let content_x = frame.init.content_x;
     let content_width = frame.init.content_width;
@@ -370,7 +377,7 @@ fn step_child(
         let collapsed_mt = if child_is_root_element {
             own_mt
         } else {
-            collapsed_top_margin(child, eff_w, viewport)
+            collapsed_top_margin(child, eff_w, viewport, top_cache)
         };
         let start_y = if let Some(pre_clear_y) = clearance_pre {
             // CSS 2.1 §9.5.2: a cleared block's border edge sits at the larger of
@@ -411,7 +418,7 @@ fn step_child(
         children_pcb, hp, !child_is_root_element, outer_for_child, justify_items, None,
     ) {
         DispatchOutcome::Done => {
-            post_child_bookkeeping(frame, i, viewport);
+            post_child_bookkeeping(frame, i, viewport, bottom_cache);
             StepOutcome::Advance
         }
         DispatchOutcome::NeedsBlockFlowLoop(child_init) => StepOutcome::Descend(child_init),
@@ -633,6 +640,7 @@ fn finish_frame(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     hp: &dyn HyphenationProvider,
+    bottom_cache: &mut MarginCollapseCache,
 ) {
     // CSS 2.1 §8.3.1: parent↔last-child bottom margin collapse. When this box
     // collapses its bottom margin (auto height, no bottom padding/border, no
@@ -643,7 +651,7 @@ fn finish_frame(
     // it out when no float extends past the last child's flow bottom.
     let escaped_bottom = if frame.init.b_collapses_bottom {
         last_collapsible_child(&frame.b)
-            .map(|c| collapsed_bottom_margin(c, frame.init.content_width, viewport))
+            .map(|c| collapsed_bottom_margin(c, frame.init.content_width, viewport, bottom_cache))
             .unwrap_or(0.0)
     } else {
         0.0
@@ -677,7 +685,12 @@ fn finish_frame(
 /// child was dispatched (synchronously or via a resumed descent — either way
 /// this runs exactly once per child, same as the original `continue`-free
 /// tail of the loop body).
-fn post_child_bookkeeping(frame: &mut Frame, idx: usize, viewport: Size) {
+fn post_child_bookkeeping(
+    frame: &mut Frame,
+    idx: usize,
+    viewport: Size,
+    bottom_cache: &mut MarginCollapseCache,
+) {
     if matches!(frame.b.children[idx].kind, BoxKind::Skip) {
         // Zero-height; does not break the collapsing chain.
         return;
@@ -688,7 +701,8 @@ fn post_child_bookkeeping(frame: &mut Frame, idx: usize, viewport: Size) {
     // margin folded with any bottom margin escaping from its last-child chain
     // (collapse-through), mirroring `collapsed_mt` on the top edge. For
     // non-block kinds this is just the own margin.
-    let child_mb = collapsed_bottom_margin(&frame.b.children[idx], content_width, viewport);
+    let child_mb =
+        collapsed_bottom_margin(&frame.b.children[idx], content_width, viewport, bottom_cache);
     let is_block = frame.pending_is_block;
     let collapsed_mt = frame.pending_collapsed_mt;
     // CSS 2.1 §8.3.1 (self-collapsing empty box): an empty, non-BFC block with
