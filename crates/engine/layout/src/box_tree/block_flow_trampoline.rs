@@ -439,7 +439,7 @@ fn step_child(
         // `NeedsBlockFlowLoop` child.
         DispatchOutcome::NeedsFlexLoop(child_init) => {
             super::flex_trampoline::run(child, child_init, measurer, viewport, hp);
-            post_child_bookkeeping(frame, i, viewport);
+            post_child_bookkeeping(frame, i, viewport, bottom_cache);
             StepOutcome::Advance
         }
     }
