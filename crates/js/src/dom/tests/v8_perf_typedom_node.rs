@@ -852,7 +852,31 @@ fn native_binding_panic_does_not_abort_process() {
     // aborts the whole process. `native_fn_trampoline` now wraps native
     // dispatch in `catch_unwind`, turning that into a catchable JS error —
     // if this test runs at all (rather than aborting the test binary), the
-    // guard is in place; the assertions confirm the error surfaces to JS.
+    // guard is in place; the assertion confirms the error surfaces to JS.
+    //
+    // `_lumen_get_tag_name` still calls `doc.get(nid)` directly (no
+    // `contains_id`/`try_get` guard) — unlike `_lumen_append_child`, which
+    // BUG-986 hardened to silently skip a foreign id (see the sibling
+    // assertion below), so it's still a live panic input.
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        r#"
+                var caught = '';
+                try { _lumen_get_tag_name(4294967295); }
+                catch (e) { caught = e.name; }
+                caught
+                "#,
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("Error".into()));
+}
+
+#[test]
+fn native_binding_foreign_node_id_is_silently_skipped() {
+    // BUG-986: `_lumen_append_child` (and its siblings) now bounds-check
+    // both ids against the document's arena *before* touching it, so a
+    // stale/foreign `NodeId` degrades to a no-op instead of reaching
+    // `Document::get`'s panic (the input `native_binding_panic_does_not_-
+    // abort_process` above used before BUG-986 landed).
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt.eval(
         r#"
@@ -862,7 +886,7 @@ fn native_binding_panic_does_not_abort_process() {
                 caught
                 "#,
     ).unwrap();
-    assert_eq!(r, lumen_core::JsValue::String("Error".into()));
+    assert_eq!(r, lumen_core::JsValue::String("".into()));
 }
 
 // ── D-6: chrome.runtime stub tests ───────────────────────────────────────
