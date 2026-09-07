@@ -229,7 +229,7 @@ pub use values::timing::{
 pub use values::misc::{
     Appearance, BlockStepAlign, BlockStepInsert, BlockStepRound, Content, ContentItem,
     FieldSizing, Hyphens, LineBreak, ListStylePosition,
-    ListStyleType, OverflowClipMarginBox, OverflowWrap, PointerEvents, Quotes, Resize,
+    ListStyleType, OverflowAnchor, OverflowClipMarginBox, OverflowWrap, PointerEvents, Quotes, Resize,
     ScrollMarkerGroup, ScrollMarkerGroupMode, ScrollMarkerGroupPlacement, ScrollTargetGroup,
     ScrollbarGutter, ScrollbarWidth, TouchAction, WordBreak,
 };

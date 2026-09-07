@@ -26,7 +26,7 @@ use crate::style::{
     FontStyle, FontWeight,
     FontVariantCaps, FontVariantEmoji, ImageRendering, Isolation, IterationCount, Length,
     LengthOrAuto,
-    MixBlendMode, ObjectFit, ObjectPosition, Overflow, overflow_clip_margin_serialize,
+    MixBlendMode, ObjectFit, ObjectPosition, Overflow, OverflowAnchor, overflow_clip_margin_serialize,
     OutlineColor, OverscrollBehavior,
     OutlineStyle, PointerEvents, Position, PositionComponent, PrintColorAdjust, Quotes,
     ScrollbarGutter, ScrollbarWidth, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign,
@@ -1464,6 +1464,11 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         Some(v) => v.to_css(),
     });
     m.insert("scroll-target-group".into(), style.scroll_target_group.to_css().into());
+    // CSS Scroll Anchoring 1 — `overflow-anchor` (BUG-524 срез 1, parsing/CSSOM only).
+    m.insert("overflow-anchor".into(), match style.overflow_anchor {
+        OverflowAnchor::Auto => "auto",
+        OverflowAnchor::None => "none",
+    }.into());
     m.insert("z-index".into(), match style.z_index {
         None => "auto".into(),
         Some(n) => n.to_string(),
@@ -3111,6 +3116,18 @@ mod tests {
         // CSS Overflow L4 §3.3 double-bar grammar: token order doesn't matter.
         let m = div_computed_map("<div>x</div>", "div { scrollbar-gutter: both-edges stable; }");
         assert_eq!(m.get("scrollbar-gutter").map(String::as_str), Some("stable both-edges"));
+    }
+
+    #[test]
+    fn computed_map_overflow_anchor_defaults_to_auto() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("overflow-anchor").map(String::as_str), Some("auto"));
+    }
+
+    #[test]
+    fn computed_map_overflow_anchor_reports_none() {
+        let m = div_computed_map("<div>x</div>", "div { overflow-anchor: none; }");
+        assert_eq!(m.get("overflow-anchor").map(String::as_str), Some("none"));
     }
 
     #[test]

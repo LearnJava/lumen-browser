@@ -41,7 +41,7 @@ use crate::style::{
     Display, FieldSizing, FlexBasis, FlexDirection, FlexWrap, FloatSide,
     FontPalette, FontSizeBasis, FontWeight, GridAutoFlow, GridLine, GridTrackSize, Isolation,
     Length, LengthOrAuto, MasonryAutoFlow, MixBlendMode, ObjectFit, ObjectPosition, OffsetRotate,
-    OutlineColor, OutlineStyle, Overflow, OverscrollBehavior, PointerEvents, Position,
+    OutlineColor, OutlineStyle, Overflow, OverflowAnchor, OverscrollBehavior, PointerEvents, Position,
     PositionComponent, PrintColorAdjust, Resize, ScrollSnapAlign, ScrollSnapStop, ScrollSnapType,
     ScrollTargetGroup, ScrollbarGutter, ShapeOutside, TextAlignLast, TextOverflow, TouchAction, TransformStyle,
     UnicodeBidi, VerticalAlign, WebkitBoxOrient, WhiteSpace, SHADOW_HOST_SCOPE, SHADOW_SHEETS,
@@ -439,6 +439,8 @@ pub fn compute_style(
         scrollbar_width: inherited.scrollbar_width,
         scrollbar_color: inherited.scrollbar_color,
         scrollbar_gutter: ScrollbarGutter::Auto,
+        // CSS Scroll Anchoring 1 — `overflow-anchor` не наследуется.
+        overflow_anchor: OverflowAnchor::Auto,
         content: Content::Normal,
         // CSS Images L3 §5.5 — object-fit / object-position не наследуются.
         object_fit: ObjectFit::Fill,

@@ -46,3 +46,15 @@ suppress adjustment on the heuristics the spec defines (position-change,
 `overflow-anchor: none`, etc.), and apply the compensating scroll delta
 during relayout. Sizeable layout feature — likely its own multi-slice task
 once picked up, not a quick property-table addition.
+
+**Срез P3 2026-09-07 (часть 1):** grammar/CSSOM-only slice landed —
+`OverflowAnchor` (`auto`/`none`, `crates/engine/layout/src/style/values/misc.rs`),
+`ComputedStyle::overflow_anchor` (non-inherited, initial `auto`), parsing in
+`apply_decl_paint`, CSS-wide-keyword handling in `apply_css_wide_keyword`,
+computed-value serialization in `computed_style_to_map`, and the
+`setProperty` allow-list entry in `web_api_shim_mid.js`. No anchor-selection
+algorithm yet — `overflow-anchor` has zero effect on scroll behavior. This
+closes the two `= "all"`/`= "auto none"` parsing-rejection assertions
+mentioned in Симптом above; the rest of the module (anchor node selection,
+suppression heuristics, scroll-offset compensation on relayout) is still the
+whole remaining scope.

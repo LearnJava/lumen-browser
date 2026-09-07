@@ -43,7 +43,7 @@ use crate::style::{
     ForcedColorAdjust, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, Hyphens, ImageRendering,
     InterpolateSizeMode, Isolation, IterationCount, Length, LengthOrAuto, LineBreak,
     ListStylePosition, ListStyleType, MaskLayer, MasonryAutoFlow, MixBlendMode, ObjectFit,
-    ObjectPosition, OffsetRotate, OutlineColor, OutlineStyle, Overflow, OverflowClipMarginBox, OverflowWrap,
+    ObjectPosition, OffsetRotate, OutlineColor, OutlineStyle, Overflow, OverflowAnchor, OverflowClipMarginBox, OverflowWrap,
     OverscrollBehavior, PointerEvents, Position, PositionComponent, PrintColorAdjust, Quotes,
     Resize, ScrollMarkerGroup, ScrollTargetGroup, ScrollbarGutter, ScrollbarWidth, ScrollBehavior,
     ScrollSnapAlign, ScrollSnapStop, ScrollSnapType, ShapeOutside, StrokeLinecap, StrokeLinejoin,
@@ -672,6 +672,10 @@ pub struct ComputedStyle {
     pub scrollbar_color: Option<(Color, Color)>,
     /// CSS Overflow L3 — `scrollbar-gutter: auto | stable | stable both-edges`.
     pub scrollbar_gutter: ScrollbarGutter,
+    /// CSS Scroll Anchoring 1 — `overflow-anchor: auto | none`. Не
+    /// наследуется. Phase 0: только парсинг/CSSOM — сам алгоритм якорения
+    /// не реализован (BUG-524).
+    pub overflow_anchor: OverflowAnchor,
     /// CSS Content L3 §2.1 — `content`. Используется в pseudo-elements
     /// (`::before` / `::after`) и для counter()-разрешения. Phase 0:
     /// parsing + storage; реальные pseudo-elements в layout — отдельная
@@ -1236,6 +1240,7 @@ impl ComputedStyle {
             scrollbar_width: ScrollbarWidth::Auto,
             scrollbar_color: None,
             scrollbar_gutter: ScrollbarGutter::Auto,
+            overflow_anchor: OverflowAnchor::Auto,
             content: Content::Normal,
             object_fit: ObjectFit::Fill,
             object_position: ObjectPosition::default(),

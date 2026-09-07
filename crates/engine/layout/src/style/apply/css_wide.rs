@@ -631,6 +631,9 @@ pub(in crate::style) fn apply_css_wide_keyword(
         "scroll-target-group" => {
             style.scroll_target_group = if inh_only_inherit { inherited.scroll_target_group } else { init.scroll_target_group };
         }
+        "overflow-anchor" => {
+            style.overflow_anchor = if inh_only_inherit { inherited.overflow_anchor } else { init.overflow_anchor };
+        }
         "-webkit-line-clamp" | "line-clamp" => {
             style.line_clamp = if inh_only_inherit { inherited.line_clamp } else { init.line_clamp };
         }
