@@ -390,7 +390,11 @@ pub(crate) fn install_node_properties(
         reg!(scope, ctx, store, "_lumen_get_tag_name", move |node_id: u32| -> String {
             let doc = d.lock().unwrap();
             let nid = NodeId::from_index(node_id as usize);
-            match &doc.get(nid).data {
+            // BUG-986: stale/foreign NodeId — degrade instead of panicking.
+            let Some(node) = doc.try_get(nid) else {
+                return String::new();
+            };
+            match &node.data {
                 NodeData::Element { name, .. } => name.local.to_ascii_uppercase(),
                 NodeData::Text(_) => "#text".into(),
                 NodeData::Document => "#document".into(),
@@ -413,8 +417,9 @@ pub(crate) fn install_node_properties(
             move |node_id: u32| -> Option<String> {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
-                match &doc.get(nid).data {
-                    NodeData::Element { name, .. } => Some(name.local.clone()),
+                // BUG-986: stale/foreign NodeId — degrade instead of panicking.
+                match doc.try_get(nid).map(|n| &n.data) {
+                    Some(NodeData::Element { name, .. }) => Some(name.local.clone()),
                     _ => None,
                 }
             }
@@ -425,7 +430,7 @@ pub(crate) fn install_node_properties(
             move |node_id: u32| -> bool {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
-                matches!(doc.get(nid).data, NodeData::Text(_))
+                matches!(doc.try_get(nid).map(|n| &n.data), Some(NodeData::Text(_)))
             }
         );
         let d = Arc::clone(&doc);
@@ -434,7 +439,7 @@ pub(crate) fn install_node_properties(
             move |node_id: u32| -> bool {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
-                matches!(doc.get(nid).data, NodeData::Comment(_))
+                matches!(doc.try_get(nid).map(|n| &n.data), Some(NodeData::Comment(_)))
             }
         );
         // BUG-321: DocumentType support (mirrors the rquickjs registration in
@@ -445,18 +450,18 @@ pub(crate) fn install_node_properties(
             move |node_id: u32| -> bool {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
-                matches!(doc.get(nid).data, NodeData::Doctype { .. })
+                matches!(doc.try_get(nid).map(|n| &n.data), Some(NodeData::Doctype { .. }))
             }
         );
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_get_document_doctype", move || -> Option<u32> {
             let doc = d.lock().unwrap();
             let root = doc.root();
-            doc.get(root)
+            doc.try_get(root)?
                 .children
                 .iter()
                 .copied()
-                .find(|&c| matches!(doc.get(c).data, NodeData::Doctype { .. }))
+                .find(|&c| matches!(doc.try_get(c).map(|n| &n.data), Some(NodeData::Doctype { .. })))
                 .map(|n| n.index() as u32)
         });
         let d = Arc::clone(&doc);
@@ -465,12 +470,13 @@ pub(crate) fn install_node_properties(
             move |node_id: u32, which: String| -> Option<String> {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
-                match &doc.get(nid).data {
-                    NodeData::Doctype {
+                // BUG-986: stale/foreign NodeId — degrade instead of panicking.
+                match doc.try_get(nid).map(|n| &n.data) {
+                    Some(NodeData::Doctype {
                         name,
                         public_id,
                         system_id,
-                    } => Some(match which.as_str() {
+                    }) => Some(match which.as_str() {
                         "public" => public_id.clone(),
                         "system" => system_id.clone(),
                         _ => name.clone(),
@@ -485,8 +491,9 @@ pub(crate) fn install_node_properties(
             move |node_id: u32| -> Option<String> {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
-                match &doc.get(nid).data {
-                    NodeData::Element { name, .. } => {
+                // BUG-986: stale/foreign NodeId — degrade instead of panicking.
+                match doc.try_get(nid).map(|n| &n.data) {
+                    Some(NodeData::Element { name, .. }) => {
                         namespace_uri(name.namespace).map(|s| s.to_string())
                     }
                     _ => None,
@@ -499,7 +506,8 @@ pub(crate) fn install_node_properties(
             move |node_id: u32, name: String| -> Option<String> {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
-                doc.get(nid).get_attr(&name).map(|s| s.to_string())
+                // BUG-986: stale/foreign NodeId — degrade instead of panicking.
+                doc.try_get(nid)?.get_attr(&name).map(|s| s.to_string())
             }
         );
         let d = Arc::clone(&doc);
@@ -510,6 +518,10 @@ pub(crate) fn install_node_properties(
             move |node_id: u32, name: String, value: String| {
                 let mut doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
+                // BUG-986: stale/foreign NodeId — degrade instead of panicking.
+                if !doc.contains_id(nid) {
+                    return;
+                }
                 let old = doc.get(nid).get_attr(&name).map(|s| s.to_string());
                 set_attribute(&mut doc, nid, &name, &value);
                 // BUG-341 S7: only record when the value actually changed —
@@ -528,6 +540,10 @@ pub(crate) fn install_node_properties(
         reg!(scope, ctx, store, "_lumen_remove_attr", move |node_id: u32, name: String| {
             let mut doc = d.lock().unwrap();
             let nid = NodeId::from_index(node_id as usize);
+            // BUG-986: stale/foreign NodeId — degrade instead of panicking.
+            if !doc.contains_id(nid) {
+                return;
+            }
             let had = doc.get(nid).get_attr(&name).is_some();
             remove_attribute(&mut doc, nid, &name);
             if had {
@@ -629,8 +645,9 @@ pub(crate) fn install_node_properties(
             move |node_id: u32| -> Vec<String> {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
-                match &doc.get(nid).data {
-                    NodeData::Element { attrs, .. } => {
+                // BUG-986: stale/foreign NodeId — degrade instead of panicking.
+                match doc.try_get(nid).map(|n| &n.data) {
+                    Some(NodeData::Element { attrs, .. }) => {
                         attrs.iter().map(|a| a.name.local.to_string()).collect()
                     }
                     _ => Vec::new(),

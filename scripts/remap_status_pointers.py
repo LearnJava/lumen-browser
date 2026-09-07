@@ -57,7 +57,7 @@ POINTER = re.compile(r"^([\w.\-]+\.md):(\d+)$")
 
 def read_lines(path: Path) -> list[str]:
     """Строки рабочей копии, разрезанные ТОЛЬКО по '\\n'."""
-    return path.read_text(encoding="utf-8", newline="").split("\n")
+    return path.read_text(encoding="utf-8").split("\n")
 
 
 def read_lines_at(base: str, rel: str) -> list[str] | None:

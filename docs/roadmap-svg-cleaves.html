@@ -13844,8 +13844,8 @@
   },
   "BUG-1024": {
    "status": "fixed",
-   "title": "Два `--check` подряд на свежем `html/canvas`-baseline давали два разных, растущих набора регрессий (124 → 140), рассеянных по десятку несвязанных подкаталогов б…",
-   "component": "js (`crates/js/src/canvas2d.rs`, `crates/js/src/offscreen_canvas.rs`), тулинг (`tests/wpt/run_smoke.py`)",
+   "title": "Два `--check` подряд на свежем `html/canvas`-baseline давали два разных, растущих набора регрессий (124 → 140 → 168), рассеянных по десятку несвязанных подкатал…",
+   "component": "js (`crates/js/src/v8_runtime/install/dom_core.rs` — каскадный краш; `crates/js/src/canvas2d.rs`, `crates/js/src/offscreen_canvas.rs` — canvas-noise), тулинг (`tests/wpt/run_smoke.py`)",
    "date": "2026-09-08",
    "debtor": false
   }
@@ -14119,9 +14119,6 @@
   ],
   "js (`crates/js/src/canvas2d.rs` — натив сеттера цвета; `crates/js/src/shim/web_api_shim_mid.js` — `_lumen_c2d_paint_style`), canvas (`crates/engine/canvas/src/color.rs`)": [
    "BUG-930"
-  ],
-  "js (`crates/js/src/canvas2d.rs`, `crates/js/src/offscreen_canvas.rs`), тулинг (`tests/wpt/run_smoke.py`)": [
-   "BUG-1024"
   ],
   "js (`crates/js/src/close_watcher.rs`, `CLOSE_WATCHER_SHIM`)": [
    "BUG-340"
@@ -14482,6 +14479,9 @@
   ],
   "js (`crates/js/src/v8_runtime/dom_helpers.rs` — `import_node`, рядом `serialize_node`/`serialize_children`)": [
    "BUG-1028"
+  ],
+  "js (`crates/js/src/v8_runtime/install/dom_core.rs` — каскадный краш; `crates/js/src/canvas2d.rs`, `crates/js/src/offscreen_canvas.rs` — canvas-noise), тулинг (`tests/wpt/run_smoke.py`)": [
+   "BUG-1024"
   ],
   "js (`crates/js/src/v8_runtime/install/platform.rs::_lumen_css_supports_prop`)": [
    "BUG-502"
