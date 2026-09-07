@@ -200,6 +200,7 @@ use shapes_floats::{inset_corner_inward, polygon_left_edge_at_y, polygon_right_e
 
 mod bfc;
 mod layout_dispatch;
+mod block_flow_trampoline;
 
 pub(crate) use bfc::lay_out_for_vertical;
 use bfc::{
