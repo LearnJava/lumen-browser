@@ -19,6 +19,14 @@
 //! success callback, a non-callable non-null error callback, or a
 //! non-object `options` all throw `TypeError` synchronously.  `clearWatch`
 //! takes no callbacks and, per spec, never throws.
+//!
+//! BUG-765: fake coordinates are only ever handed to the success callback on
+//! a secure context (`window.isSecureContext`, computed once by
+//! `WEB_API_SHIM`) — an insecure origin always gets `PERMISSION_DENIED`
+//! regardless of the configured `FakeCoords`, matching the vendored
+//! `non-secure-contexts.http.html`. Unlike the Generic Sensor family or
+//! `navigator.clipboard`, the interface itself is *not* `[SecureContext]` —
+//! `navigator.geolocation` stays present, only the success path is gated.
 
 /// Fake geographic coordinates injected into the Geolocation API.
 ///
@@ -105,6 +113,20 @@ const GEO_SHIM: &str = r#"(function() {
     return new GeolocationPositionError(1, 'User denied Geolocation');
   }
 
+  // BUG-765: Geolocation is not itself `[SecureContext]` — real browsers keep
+  // `navigator.geolocation` present on an insecure origin — but per spec text
+  // (and the vendored `non-secure-contexts.http.html`) both entry points
+  // must still reject with `PERMISSION_DENIED`, asynchronously, regardless of
+  // any grant. A standalone unit test that installs this shim without
+  // `WEB_API_SHIM` never declares `_lumen_secure_context` at all, so it is
+  // read through `typeof` — the one safe way to probe a name that may not
+  // exist in scope — and treated as "secure" (see that variable's doc
+  // comment, `web_api_shim_mid_b.js`); real pages always get an explicit
+  // `true`/`false` from `WEB_API_SHIM`, so this only matters to those tests.
+  function _lumen_geo_is_secure() {
+    return typeof _lumen_secure_context === 'undefined' || _lumen_secure_context !== false;
+  }
+
   // WebIDL argument conversion for
   //   undefined getCurrentPosition(PositionCallback successCallback,
   //                                optional PositionErrorCallback? errorCallback = null,
@@ -138,7 +160,7 @@ const GEO_SHIM: &str = r#"(function() {
   var _geo = {
     getCurrentPosition: function(success, error) {
       _checkArgs('getCurrentPosition', arguments);
-      if (_coords) {
+      if (_coords && _lumen_geo_is_secure()) {
         var pos = makePosition(_coords);
         _defer(function() { success(pos); });
       } else {
@@ -150,7 +172,7 @@ const GEO_SHIM: &str = r#"(function() {
     watchPosition: function(success, error) {
       _checkArgs('watchPosition', arguments);
       var id = _nextId++;
-      if (_coords) {
+      if (_coords && _lumen_geo_is_secure()) {
         var fire = function() {
           if (!_watches.hasOwnProperty(id)) return;
           success(makePosition(_coords));

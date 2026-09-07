@@ -455,9 +455,17 @@ if (typeof _lumen_idb_load === 'function') {
         }
     };
 
-    window.CryptoKey = CryptoKey;
-    window.crypto = { getRandomValues: getRandomValues, randomUUID: randomUUID, subtle: subtle };
+    window.crypto = { getRandomValues: getRandomValues, randomUUID: randomUUID };
     window.Crypto = function Crypto() {};
+    // BUG-765: `SubtleCrypto` and `CryptoKey` are both `[SecureContext]`
+    // (WebCryptoAPI) — `crypto.getRandomValues`/`.randomUUID` are not, so
+    // only `.subtle` and the `CryptoKey` constructor are gated, not the
+    // whole `Crypto` interface. Absent entirely on an insecure origin, not
+    // merely inert (see `_lumen_secure_context`'s doc comment, `web_api_shim_mid_b.js`).
+    if (_lumen_secure_context !== false) {
+        window.crypto.subtle = subtle;
+        window.CryptoKey = CryptoKey;
+    }
 })();
 
 // ── structuredClone (HTML LS §2.7 — StructuredSerialize/Deserialize) ─────────
@@ -3783,14 +3791,22 @@ function _wa_doc_get_animations() {
     var i = this._listeners.indexOf(fn); if (i >= 0) this._listeners.splice(i, 1);
   };
 
-  navigator.wakeLock = {
-    request: function(type) {
-      if (type !== 'screen')
-        return Promise.reject(
-          new DOMException('Unsupported wake lock type: ' + String(type), 'NotSupportedError'));
-      return Promise.resolve(new WakeLockSentinel(String(type)));
-    },
-  };
+  // BUG-765: `wake_lock.rs`'s `install_wake_lock_bindings_v8` (Ph1, real OS
+  // integration) runs later in `install_dom` and redefines `navigator.wakeLock`
+  // unconditionally over this Phase-0 stub — except when it is gated off on an
+  // insecure origin, in which case this assignment must not leave the stub
+  // behind as a substitute (`[SecureContext]`, Screen Wake Lock §4). Gated the
+  // same way as that later module.
+  if (_lumen_secure_context !== false) {
+      navigator.wakeLock = {
+        request: function(type) {
+          if (type !== 'screen')
+            return Promise.reject(
+              new DOMException('Unsupported wake lock type: ' + String(type), 'NotSupportedError'));
+          return Promise.resolve(new WakeLockSentinel(String(type)));
+        },
+      };
+  }
   window.WakeLockSentinel = WakeLockSentinel;
 })();
 

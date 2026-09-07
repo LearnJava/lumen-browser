@@ -1,6 +1,6 @@
 # BUG-765 — ни один `[SecureContext]`-API не гейтится по `window.isSecureContext`: флаг вычислен, но не читается никем
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-07 (P3)
 **Компонент:** js (`crates/js/src/dom.rs` — `WEB_API_SHIM`: `window.crypto.subtle`
 (`dom.rs:12176`), `navigator.clipboard`, `navigator.serviceWorker`,
 `navigator.geolocation`; `crates/js/src/*.rs` — шимы сенсоров, wake lock и др.)
@@ -47,14 +47,53 @@
 * Fingerprint-вектор: набор доступных API не зависит от схемы страницы, что
   само по себе отличает Lumen от браузеров, на которые он мимикрирует.
 
-## Что нужно сделать
+## Исправление
 
-Ввести один общий предикат в шиме (значение того же замыкания, из которого
-отдаётся `window.isSecureContext`) и снимать им поверхности при установке — не
-бросать из методов, а не заводить свойство вовсе. Начать разумно с тех, у кого
-есть вендоренные WPT-тесты на insecure context: Generic Sensor family, Web
-Crypto, Clipboard, Service Workers. Не забыть, что `[SecureContext]` относится и
-к интерфейсным объектам (`window.Gyroscope`), и к точкам входа на `navigator`.
+Заведён один общий предикат — `_lumen_secure_context` (`web_api_shim_mid_b.js`,
+верхняя часть файла), вычисляемый один раз через уже существующий
+`_lumen_url_is_potentially_trustworthy` (BUG-399) и переиспользуемый и самим
+геттером `window.isSecureContext` (`web_api_shim_tail_mc.js`, раньше
+пересчитывал то же самое второй раз), и всеми гейтами ниже. Условие везде
+одно: `_lumen_secure_context !== false` — `undefined` (сборка без
+`WEB_API_SHIM`, юнит-тест шима в изоляции) читается как «секьюрно», иначе
+каждый файл `crates/js/src/*.rs`, ставящий свой шим отдельно от `dom.rs` в
+собственных тестах, увидел бы поверхность пропавшей не из-за контекста, а
+из-за отсутствия переменной.
+
+Снято по WebIDL, не по вызову — свойство/интерфейс не заводится вовсе,
+`'X' in window/navigator` даёт `false`, а не throw:
+
+* `navigator.serviceWorker`, `navigator.clipboard` — `web_api_shim_mid_b.js`;
+* `window.crypto.subtle`, `window.CryptoKey` (не весь `Crypto` — `getRandomValues`/
+  `randomUUID` не помечены `[SecureContext]`) — `web_api_shim_tail_b.js`;
+* `navigator.wakeLock` — оба места, где он заводится: Phase-0 стаб
+  (`web_api_shim_tail_b.js`) и настоящий модуль `wake_lock.rs`, который
+  переопределяет `navigator.wakeLock` позже в `install_dom`;
+* вся Generic Sensor family (`Sensor` и подклассы) — один ранний `return` в
+  начале `GENERIC_SENSOR_SHIM` (`generic_sensor.rs`), до объявления любого
+  класса.
+
+`navigator.geolocation` — особый случай: сам интерфейс не `[SecureContext]`
+(реальные браузеры держат его на любом origin), но по спеке и вендоренному
+`non-secure-contexts.http.html` оба входа (`getCurrentPosition`/
+`watchPosition`) обязаны асинхронно резолвить `PERMISSION_DENIED` на
+небезопасном origin вне зависимости от сконфигурированных `FakeCoords`
+(`geolocation.rs`).
+
+6 новых юнит-тестов (по одному на `absent_on_insecure_origin` в
+`v8_events_cache.rs`/`v8_fullscreen_locks.rs`/`v8_generic_sensor.rs`/
+`v8_idle_message_clipboard.rs`/`v8_webcrypto.rs`, плюс уже существовавший
+`is_secure_context_is_false_on_insecure_origin`), остальные тесты этих пяти
+файлов переведены на явный секьюрный/несекьюрный `https://`/`http://` URL
+вместо прежнего пустого (по BUG-399 — небезопасного) URL фикстуры, иначе они
+стали бы падать на пропавшем свойстве вместо проверки его поведения.
+`cargo test -p lumen-js --features v8-backend` — 3535/3536 зелёных (единственный
+провал, `native_binding_panic_does_not_abort_process`, воспроизводится и на
+немодифицированном дереве — не регрессия этого фикса). `cargo clippy -p
+lumen-js --all-targets --features v8-backend` чист; workspace-clippy целиком
+не прогнать на этой машине — локальный rustc/clippy 1.98.1 против пина 1.97.0
+красит несвязанные файлы (`chunks_exact` в `lumen-image`/`lumen-font`),
+подтверждено `git diff --stat`.
 
 ## Связанные
 
