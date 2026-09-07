@@ -1,0 +1,135 @@
+# Корпус 100 самых популярных ЗАРУБЕЖНЫХ сайтов для перф/health-аудита Lumen.
+#
+# Источник состава: топ-200 мировых сайтов по трафику —
+#   Semrush (март 2026, позиции 1–50 с проверенными счётчиками) +
+#   Similarweb (апрель–июль 2026) + сводка webseotrends.com (позиции 51–200),
+#   сверено с Wikipedia «List of most-visited websites» (Similarweb, июль 2026).
+# Срез на 2026-09.
+#
+# Из топа исключены (правила отбора):
+#   * российские сайты (.ru / РФ-аудитория): yandex, dzen, vk, mail.ru,
+#     wildberries, ozon — по требованию «только зарубежные»;
+#   * взрослые (pornhub, xvideos, xhamster, xnxx, stripchat, chaturbate,
+#     livejasmin, onlyfans);
+#   * гемблинг (bet.br);
+#   * региональные зеркала google./amazon./yahoo. и дубли одного владельца
+#     (bbc.co.uk дубль bbc.com и т.п.);
+#   * стриминги с geo-локом вне РФ (hulu, disneyplus, hbo/max, paramount+,
+#     peacock) — с РФ-адреса у них ожидаемый geo-редирект/отказ, шум для замера.
+#
+# Секции:
+#   1) основная — ожидаемо открываются с РФ-адреса; тяжёлые SPA могут
+#      TIMEOUT/тормозить — ЭТО сигнал движку, а не шум;
+#   2) сеть РФ блокирует (Роскомнадзор) — ожидаемый сбой ДО браузера,
+#      классифицировать корзиной «недоступен из РФ», НЕ как баг движка;
+#   3) известные/вероятные 403-антибот / SSO / CF-фронты — известное
+#      ограничение (TLS-фингерпринт rustls, документировано для
+#      stackoverflow/crates/ria), следить во времени, не как регрессию.
+# Итоговую классификацию каждого сайта даёт прогон (HTTP-статус + таймауты).
+# Формат: <slug> <url>, строки с # — комментарии (только целиком).
+#
+# ── 1. Основная секция (90 сайтов) ──────────────────────────────────────────
+google         https://www.google.com/
+youtube        https://www.youtube.com/
+chatgpt        https://chatgpt.com/
+reddit         https://www.reddit.com/
+wikipedia      https://www.wikipedia.org/
+whatsapp       https://www.whatsapp.com/
+yahoo          https://www.yahoo.com/
+amazon         https://www.amazon.com/
+tiktok         https://www.tiktok.com/
+duckduckgo     https://duckduckgo.com/
+bing           https://www.bing.com/
+yahoo-jp       https://www.yahoo.co.jp/
+netflix        https://www.netflix.com/
+weather        https://weather.com/
+naver          https://www.naver.com/
+temu           https://www.temu.com/
+pinterest      https://www.pinterest.com/
+live           https://www.live.com/
+bilibili       https://www.bilibili.com/
+microsoft      https://www.microsoft.com/
+baidu          https://www.baidu.com/
+canva          https://www.canva.com/
+twitch         https://www.twitch.tv/
+claude         https://claude.ai/
+fandom         https://www.fandom.com/
+samsung        https://www.samsung.com/
+globo          https://www.globo.com/
+github         https://github.com/
+nytimes        https://www.nytimes.com/
+ebay           https://www.ebay.com/
+zoom           https://zoom.us/
+spotify        https://www.spotify.com/
+walmart        https://www.walmart.com/
+aliexpress     https://www.aliexpress.com/
+imdb           https://www.imdb.com/
+quora          https://www.quora.com/
+apple          https://www.apple.com/
+bbc            https://www.bbc.com/
+cnn            https://edition.cnn.com/
+etsy           https://www.etsy.com/
+dropbox        https://www.dropbox.com/
+indeed         https://www.indeed.com/
+adobe          https://www.adobe.com/
+espn           https://www.espn.com/
+accuweather    https://www.accuweather.com/
+wikihow        https://www.wikihow.com/
+rakuten        https://www.rakuten.co.jp/
+tradingview    https://www.tradingview.com/
+foxnews        https://www.foxnews.com/
+dailymail      https://www.dailymail.co.uk/
+wordpress      https://wordpress.com/
+wsj            https://www.wsj.com/
+imgur          https://imgur.com/
+zillow         https://www.zillow.com/
+airbnb         https://www.airbnb.com/
+flipkart       https://www.flipkart.com/
+tumblr         https://www.tumblr.com/
+nih            https://www.nih.gov/
+webmd          https://www.webmd.com/
+usatoday       https://www.usatoday.com/
+nbcnews        https://www.nbcnews.com/
+washingtonpost https://www.washingtonpost.com/
+cnbc           https://www.cnbc.com/
+reuters        https://www.reuters.com/
+uol            https://www.uol.com.br/
+mercadolivre   https://www.mercadolivre.com.br/
+huggingface    https://huggingface.co/
+perplexity     https://www.perplexity.ai/
+character-ai   https://character.ai/
+cricbuzz       https://www.cricbuzz.com/
+duolingo       https://www.duolingo.com/
+coursera       https://www.coursera.org/
+udemy          https://www.udemy.com/
+khanacademy    https://www.khanacademy.org/
+uber           https://www.uber.com/
+doordash       https://www.doordash.com/
+costco         https://www.costco.com/
+target         https://www.target.com/
+bestbuy        https://www.bestbuy.com/
+medium         https://medium.com/
+soundcloud     https://soundcloud.com/
+mozilla        https://www.mozilla.org/
+w3schools      https://www.w3schools.com/
+paypal         https://www.paypal.com/
+coinbase       https://www.coinbase.com/
+snapchat       https://www.snapchat.com/
+archive        https://archive.org/
+theguardian    https://www.theguardian.com/
+indiatimes     https://www.indiatimes.com/
+ndtv           https://www.ndtv.com/
+#
+# ── 2. Сеть РФ блокирует (5 сайтов) ─────────────────────────────────────────
+facebook       https://www.facebook.com/
+instagram      https://www.instagram.com/
+xcom           https://x.com/
+linkedin       https://www.linkedin.com/
+discord        https://discord.com/
+#
+# ── 3. Известные/вероятные 403-антибот и SSO (5 сайтов) ────────────────────
+stackoverflow  https://stackoverflow.com/
+msft-login     https://login.microsoftonline.com/
+gemini         https://gemini.google.com/
+shopee         https://shopee.com/
+weibo          https://www.weibo.com/
