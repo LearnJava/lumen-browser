@@ -254,37 +254,59 @@ pub(super) fn escape_html_attr(s: &str) -> String {
 /// Serializes `id` itself — element open tag + attributes + children + close tag,
 /// or the escaped data for a text/comment node. Mirrors HTML LS §13.3 "serializing
 /// HTML fragments" run on a single node (used for `outerHTML`, BUG-351).
+///
+/// BUG-1028: explicit heap stack instead of native recursion — same safe
+/// mechanical class LAYOUT-1/2 converted, but two-phase (an element's close
+/// tag must be emitted only after all of its descendants), so each opened
+/// element pushes its own `Frame::Close` marker *before* its children, popped
+/// once every descendant has already been emitted (LIFO, children pushed in
+/// reverse to preserve document order).
 pub(super) fn serialize_node(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mut String) {
-    match &doc.get(id).data {
-        lumen_dom::NodeData::Text(s) => out.push_str(&escape_html_text(s)),
-        lumen_dom::NodeData::Comment(s) => {
-            out.push_str("<!--");
-            out.push_str(s);
-            out.push_str("-->");
-        }
-        lumen_dom::NodeData::Element { name, attrs } => {
-            let tag = name.local.to_ascii_lowercase();
-            out.push('<');
-            out.push_str(&tag);
-            for a in attrs {
-                out.push(' ');
-                out.push_str(&a.name.local);
-                out.push_str("=\"");
-                out.push_str(&escape_html_attr(&a.value));
-                out.push('"');
+    enum Frame {
+        Open(lumen_dom::NodeId),
+        Close(String),
+    }
+    let mut stack = vec![Frame::Open(id)];
+    while let Some(frame) = stack.pop() {
+        match frame {
+            Frame::Open(id) => match &doc.get(id).data {
+                lumen_dom::NodeData::Text(s) => out.push_str(&escape_html_text(s)),
+                lumen_dom::NodeData::Comment(s) => {
+                    out.push_str("<!--");
+                    out.push_str(s);
+                    out.push_str("-->");
+                }
+                lumen_dom::NodeData::Element { name, attrs } => {
+                    let tag = name.local.to_ascii_lowercase();
+                    out.push('<');
+                    out.push_str(&tag);
+                    for a in attrs {
+                        out.push(' ');
+                        out.push_str(&a.name.local);
+                        out.push_str("=\"");
+                        out.push_str(&escape_html_attr(&a.value));
+                        out.push('"');
+                    }
+                    out.push('>');
+                    if VOID_ELEMENTS.contains(&tag.as_str()) {
+                        continue;
+                    }
+                    stack.push(Frame::Close(tag));
+                    for &child in doc.get(id).children.iter().rev() {
+                        stack.push(Frame::Open(child));
+                    }
+                }
+                // Document/Doctype/ShadowRoot/DocumentFragment never appear as a
+                // regular DOM child reachable from `innerHTML`/`outerHTML` —
+                // nothing to emit.
+                _ => {}
+            },
+            Frame::Close(tag) => {
+                out.push_str("</");
+                out.push_str(&tag);
+                out.push('>');
             }
-            out.push('>');
-            if VOID_ELEMENTS.contains(&tag.as_str()) {
-                return;
-            }
-            serialize_children(doc, id, out);
-            out.push_str("</");
-            out.push_str(&tag);
-            out.push('>');
         }
-        // Document/Doctype/ShadowRoot/DocumentFragment never appear as a regular
-        // DOM child reachable from `innerHTML`/`outerHTML` — nothing to emit.
-        _ => {}
     }
 }
 
@@ -295,36 +317,71 @@ pub(super) fn serialize_children(doc: &lumen_dom::Document, id: lumen_dom::NodeI
     }
 }
 
-/// Recursively re-creates `src_id` (and its descendants) from the throwaway `src`
+/// Re-creates `src_id` (and its descendants) from the throwaway `src`
 /// `Document` produced by `lumen_html_parser::parse` into the live `dst` document,
 /// returning the new, still-detached node id. Node arenas are per-`Document`, so a
 /// `NodeId` from `src` cannot simply be reused in `dst` — every node must be
 /// recreated via `dst`'s own `create_*` calls.
+///
+/// BUG-1028: explicit heap stack instead of native recursion — one frame per
+/// level of the fragment being assigned used to be one `import_node` call on
+/// the native stack, unbounded by anything the caller controls (a
+/// `<script>`-built `innerHTML` fragment can nest arbitrarily deep). Pure
+/// pre-order with nothing read back from a child beyond its own new id (which
+/// goes straight into `append_child`) — the same safe mechanical class
+/// LAYOUT-1 converted. `clone_one` creates a node without attaching it;
+/// the stack carries `(src_id, dst_parent)` pairs, LIFO with children pushed
+/// in reverse to preserve document order.
 pub(super) fn import_node(
     dst: &mut lumen_dom::Document,
     src: &lumen_dom::Document,
     src_id: lumen_dom::NodeId,
 ) -> lumen_dom::NodeId {
-    let new_id = match &src.get(src_id).data {
-        lumen_dom::NodeData::Element { name, attrs } => {
-            let id = dst.create_element(name.clone());
-            if let lumen_dom::NodeData::Element { attrs: dst_attrs, .. } = &mut dst.get_mut(id).data {
-                *dst_attrs = attrs.clone();
+    // `(new_id, has_children_to_import)` — the fallback arm mirrors the old
+    // early `return` for a node type that cannot carry importable children
+    // (Doctype/Document/ShadowRoot/DocumentFragment): its own descendants,
+    // if any, must not be walked into the stack below.
+    fn clone_one(
+        dst: &mut lumen_dom::Document,
+        src: &lumen_dom::Document,
+        src_id: lumen_dom::NodeId,
+    ) -> (lumen_dom::NodeId, bool) {
+        match &src.get(src_id).data {
+            lumen_dom::NodeData::Element { name, attrs } => {
+                let id = dst.create_element(name.clone());
+                if let lumen_dom::NodeData::Element { attrs: dst_attrs, .. } = &mut dst.get_mut(id).data {
+                    *dst_attrs = attrs.clone();
+                }
+                (id, true)
             }
-            id
+            lumen_dom::NodeData::Text(s) => (dst.create_text(s.clone()), true),
+            lumen_dom::NodeData::Comment(s) => (dst.create_comment(s.clone()), true),
+            // Doctype/Document/ShadowRoot/DocumentFragment cannot occur among a
+            // parsed fragment's `<body>` children — fall back to an inert, unused
+            // fragment node rather than panicking on an unreachable shape.
+            _ => (dst.create_fragment(), false),
         }
-        lumen_dom::NodeData::Text(s) => dst.create_text(s.clone()),
-        lumen_dom::NodeData::Comment(s) => dst.create_comment(s.clone()),
-        // Doctype/Document/ShadowRoot/DocumentFragment cannot occur among a
-        // parsed fragment's `<body>` children — fall back to an inert, unused
-        // fragment node rather than panicking on an unreachable shape.
-        _ => return dst.create_fragment(),
-    };
-    for &child in &src.get(src_id).children.clone() {
-        let new_child = import_node(dst, src, child);
-        dst.append_child(new_id, new_child);
     }
-    new_id
+
+    let (root_new_id, root_has_children) = clone_one(dst, src, src_id);
+    let mut stack: Vec<(lumen_dom::NodeId, lumen_dom::NodeId)> = if root_has_children {
+        src.get(src_id)
+            .children
+            .iter()
+            .rev()
+            .map(|&child| (child, root_new_id))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    while let Some((id, new_parent)) = stack.pop() {
+        let (new_id, has_children) = clone_one(dst, src, id);
+        dst.append_child(new_parent, new_id);
+        if has_children {
+            stack.extend(src.get(id).children.iter().rev().map(|&child| (child, new_id)));
+        }
+    }
+    root_new_id
 }
 
 /// Parses `html` as an HTML fragment and imports the result into `doc`, returning
@@ -342,4 +399,88 @@ pub(super) fn parse_html_fragment(doc: &mut lumen_dom::Document, html: &str) -> 
         .into_iter()
         .map(|c| import_node(doc, &temp, c))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    // BUG-1028: `import_node`/`serialize_node` used to cost one native stack
+    // frame per level of DOM depth — the same safe mechanical class LAYOUT-1
+    // converted (`selector_query.rs::find_first_dom_node_by_selector_deep_chain_does_not_overflow_the_stack`),
+    // which uses 200_000 for its own chain. Deliberately smaller here: this
+    // module's chain construction goes through `Document::append_child`,
+    // whose `is_self_or_ancestor` cycle-check debug_assert walks every
+    // ancestor on each call, making chain-building O(depth²) under the
+    // `debug_assertions` a normal `cargo test` build carries. 20_000 is
+    // still 2x the
+    // ~10_000-level ceiling BUG-1028 itself measured live on the (much
+    // larger-framed) `lumen-v8` thread post-BUG-1027, comfortably beyond
+    // what a bare recursive Rust function could reach on any real thread
+    // stack — while keeping this pair of tests in the single-digit seconds
+    // instead of the ~15 minutes 200_000 measured at here. Built directly
+    // via `Document`'s arena API, not `lumen_html_parser::parse`, since
+    // parsing a matching HTML string would additionally exercise the
+    // parser's own recursion, outside this test's scope.
+    const DEEP_CHAIN_DEPTH: usize = 20_000;
+
+    #[test]
+    fn import_node_deep_chain_does_not_overflow_the_stack() {
+        let mut src = lumen_dom::Document::new();
+        let mut parent = src.root();
+        for _ in 0..DEEP_CHAIN_DEPTH {
+            let div = src.create_element(lumen_dom::QualName::html("div"));
+            src.append_child(parent, div);
+            parent = div;
+        }
+        let leaf = src.create_element(lumen_dom::QualName::html("span"));
+        src.append_child(parent, leaf);
+
+        let root_children = src.get(src.root()).children.clone();
+        assert_eq!(root_children.len(), 1);
+
+        let mut dst = lumen_dom::Document::new();
+        let new_root = import_node(&mut dst, &src, root_children[0]);
+
+        // Walk the imported chain iteratively (no native recursion in the
+        // test itself) to confirm every level made it across intact.
+        let mut cur = new_root;
+        let mut div_count = 0usize;
+        loop {
+            match &dst.get(cur).data {
+                lumen_dom::NodeData::Element { name, .. } if name.local == "div" => {
+                    div_count += 1;
+                }
+                lumen_dom::NodeData::Element { name, .. } if name.local == "span" => break,
+                other => panic!("unexpected node in imported chain: {other:?}"),
+            }
+            let children = dst.get(cur).children.clone();
+            assert_eq!(children.len(), 1, "expected a single-child chain");
+            cur = children[0];
+        }
+        assert_eq!(div_count, DEEP_CHAIN_DEPTH);
+    }
+
+    #[test]
+    fn serialize_node_deep_chain_does_not_overflow_the_stack() {
+        let mut doc = lumen_dom::Document::new();
+        let mut parent = doc.root();
+        for _ in 0..DEEP_CHAIN_DEPTH {
+            let div = doc.create_element(lumen_dom::QualName::html("div"));
+            doc.append_child(parent, div);
+            parent = div;
+        }
+        let root_children = doc.get(doc.root()).children.clone();
+        assert_eq!(root_children.len(), 1);
+
+        let mut out = String::new();
+        serialize_node(&doc, root_children[0], &mut out);
+
+        assert_eq!(out.matches("<div>").count(), DEEP_CHAIN_DEPTH);
+        assert_eq!(out.matches("</div>").count(), DEEP_CHAIN_DEPTH);
+    }
 }
