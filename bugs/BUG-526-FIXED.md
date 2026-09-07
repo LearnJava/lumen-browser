@@ -91,7 +91,7 @@ input (matching semantics unchanged), `.media` stores the serialized form.
   как `MediaFeature` вообще (ни единиц `dppx`/`dpi`/`dpcm`, ни арифметики
   `calc()`), отдельный и заметно больший пробел, не «доделка серилизации
   поверх уже готового AST», как предполагал исходный план фикса — заведён
-  [BUG-1019](BUG-1019-OPEN.md).
+  [BUG-1019](BUG-1019-FIXED.md).
 - 7 подтестов на boolean-context `(color)`/незакрытые скобки/дефолтный
   `word`-скан, не останавливающийся на `)` (`"color)"` парсится как
   буквальный media-type `"color)"` вместо ошибки) остаются FAIL —

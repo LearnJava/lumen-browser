@@ -1407,6 +1407,112 @@ use super::*;
         );
     }
 
+    // ── MQ L4: resolution/min-resolution/max-resolution (BUG-1019) ──
+    // Транскрипция `match-media-parsing.html::test_resolution_parsing`
+    // построчно.
+
+    #[test]
+    fn media_query_resolution_units_round_trip() {
+        assert_eq!(
+            parse_media_query("(min-resolution: 1x)").serialize(),
+            "(min-resolution: 1dppx)"
+        );
+        assert_eq!(
+            parse_media_query("(resolution: 2x)").serialize(),
+            "(resolution: 2dppx)"
+        );
+        assert_eq!(
+            parse_media_query("(max-resolution: 7x)").serialize(),
+            "(max-resolution: 7dppx)"
+        );
+        assert_eq!(
+            parse_media_query("(resolution: 2dppx)").serialize(),
+            "(resolution: 2dppx)"
+        );
+    }
+
+    #[test]
+    fn media_query_resolution_dpi_dpcm_convert_to_dppx() {
+        // 600dpi / 96 = 6.25dppx
+        assert_eq!(
+            parse_media_query("(resolution: 600dpi)").serialize(),
+            "(resolution: 6.25dppx)"
+        );
+        // 77dpcm * 2.54 / 96 ≈ 2.0372918dppx
+        let q = parse_media_query("(resolution: 77dpcm)");
+        match &q.clauses[0].conditions[0] {
+            MediaCondition::Feature(MediaFeature::Resolution(v)) => {
+                assert!((v.dppx() - 2.037_291_8).abs() < 0.0001);
+            }
+            other => panic!("expected Resolution feature, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn media_query_resolution_calc_keeps_calc_wrapper_after_serializing() {
+        // calc() collapses to one number but the WPT-expected serialization
+        // still wraps it in `calc(...)` — a bare `(resolution: 3dppx)` is
+        // wrong even though the numeric value is identical.
+        assert_eq!(
+            parse_media_query("(min-resolution: calc(1x))").serialize(),
+            "(min-resolution: calc(1dppx))"
+        );
+        assert_eq!(
+            parse_media_query("(resolution: calc(2x))").serialize(),
+            "(resolution: calc(2dppx))"
+        );
+        assert_eq!(
+            parse_media_query("(max-resolution: calc(7x))").serialize(),
+            "(max-resolution: calc(7dppx))"
+        );
+    }
+
+    #[test]
+    fn media_query_resolution_calc_arithmetic() {
+        assert_eq!(
+            parse_media_query("(resolution: calc(1x + 2x))").serialize(),
+            "(resolution: calc(3dppx))"
+        );
+        assert_eq!(
+            parse_media_query("(resolution: calc(5x - 2x))").serialize(),
+            "(resolution: calc(3dppx))"
+        );
+        assert_eq!(
+            parse_media_query("(resolution: calc(1x * 3))").serialize(),
+            "(resolution: calc(3dppx))"
+        );
+        assert_eq!(
+            parse_media_query("(resolution: calc(6x / 2))").serialize(),
+            "(resolution: calc(3dppx))"
+        );
+    }
+
+    #[test]
+    fn media_query_resolution_matches_context() {
+        let q = parse_media_query("(min-resolution: 2dppx)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.resolution_dppx = 1.0;
+        assert!(!q.matches(&ctx));
+        ctx.resolution_dppx = 2.0;
+        assert!(q.matches(&ctx));
+        ctx.resolution_dppx = 3.0;
+        assert!(q.matches(&ctx));
+
+        let q = parse_media_query("(max-resolution: 2dppx)");
+        assert!(!q.matches(&ctx));
+        ctx.resolution_dppx = 1.5;
+        assert!(q.matches(&ctx));
+
+        let q = parse_media_query("(resolution: 1.5dppx)");
+        assert!(q.matches(&ctx));
+    }
+
+    #[test]
+    fn media_query_resolution_unknown_unit_is_unsupported() {
+        let q = parse_media_query("(resolution: 2foo)");
+        assert_eq!(q.serialize(), "not all");
+    }
+
     // ── MQ L5 §6.4: prefers-reduced-motion ──
 
     #[test]

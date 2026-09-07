@@ -83,6 +83,14 @@ pub enum MediaFeature {
     MaxAspectRatio(f32, f32),
     // Display
     Orientation(MediaOrientation),
+    // Resolution (CSS Values L4 `<resolution>`, canonical unit `dppx`) —
+    // `x`/`dppx`/`dpi`/`dpcm` units plus a minimal `calc()` (BUG-1019).
+    /// `(resolution: <resolution>)` — exact device resolution match.
+    Resolution(ResolutionValue),
+    /// `(min-resolution: <resolution>)`.
+    MinResolution(ResolutionValue),
+    /// `(max-resolution: <resolution>)`.
+    MaxResolution(ResolutionValue),
     // User preferences (MQ L5, commonly used)
     PrefersColorScheme(ColorScheme),
     PrefersReducedMotion(bool),
@@ -118,6 +126,39 @@ pub enum MediaFeature {
 }
 
 impl Eq for MediaFeature {}
+
+/// A resolved `<resolution>` value (canonical unit `dppx`), plus whether the
+/// source used `calc(...)` — Media Queries L4's serialization keeps the
+/// `calc(...)` wrapper even once the expression collapses to one number
+/// (`match-media-parsing.html::test_resolution_parsing`: `(resolution:
+/// calc(1x))` serializes as `(resolution: calc(1dppx))`, not `(resolution:
+/// 1dppx)`), so a bare `f32` would lose that distinction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ResolutionValue {
+    /// Written directly, e.g. `2dppx`/`600dpi`.
+    Literal(f32),
+    /// Written as `calc(...)`; the `f32` is the already-simplified `dppx`
+    /// result.
+    Calc(f32),
+}
+
+impl Eq for ResolutionValue {}
+
+impl ResolutionValue {
+    /// The canonical `dppx` amount, regardless of source form.
+    pub(crate) fn dppx(self) -> f32 {
+        match self {
+            Self::Literal(v) | Self::Calc(v) => v,
+        }
+    }
+
+    fn serialize(self) -> String {
+        match self {
+            Self::Literal(v) => format!("{v}dppx"),
+            Self::Calc(v) => format!("calc({v}dppx)"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaOrientation {
@@ -217,6 +258,13 @@ pub struct MediaContext {
     pub media_type: String,
     pub width: f32,
     pub height: f32,
+    /// Device resolution in `dppx` (`resolution`/`min-resolution`/
+    /// `max-resolution`). No dynamic per-window scale-factor plumbing exists
+    /// yet anywhere in the engine — `window.devicePixelRatio` itself is a
+    /// hardcoded `1` (`crates/js/src/window_management.rs`) outside the
+    /// multi-window API — so `1.0` here matches that same desktop default
+    /// rather than adding a second, disagreeing source of truth (BUG-1019).
+    pub resolution_dppx: f32,
     pub prefers_dark: bool,
     /// Соответствует `prefers-reduced-motion: reduce`.
     pub prefers_reduced_motion: bool,
@@ -251,6 +299,7 @@ impl Default for MediaContext {
             media_type: "screen".into(),
             width: 0.0,
             height: 0.0,
+            resolution_dppx: 1.0,
             prefers_dark: false,
             prefers_reduced_motion: false,
             forced_colors: false,
@@ -347,6 +396,9 @@ impl MediaFeature {
                 };
                 actual == *o
             }
+            Self::Resolution(v) => (ctx.resolution_dppx - v.dppx()).abs() < 0.001,
+            Self::MinResolution(v) => ctx.resolution_dppx >= v.dppx(),
+            Self::MaxResolution(v) => ctx.resolution_dppx <= v.dppx(),
             Self::PrefersColorScheme(scheme) => match scheme {
                 ColorScheme::Dark => ctx.prefers_dark,
                 ColorScheme::Light => !ctx.prefers_dark,
@@ -443,6 +495,9 @@ impl MediaFeature {
                     MediaOrientation::Landscape => "landscape",
                 }
             ),
+            Self::Resolution(v) => format!("resolution: {}", v.serialize()),
+            Self::MinResolution(v) => format!("min-resolution: {}", v.serialize()),
+            Self::MaxResolution(v) => format!("max-resolution: {}", v.serialize()),
             Self::PrefersColorScheme(s) => format!(
                 "prefers-color-scheme: {}",
                 match s {
@@ -560,8 +615,11 @@ pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {
     while !input.is_empty() {
         input = input.trim_start();
         if input.starts_with('(') {
-            // Найти match `)`.
-            if let Some(end) = input.find(')') {
+            // Найти БАЛАНСИРОВАННУЮ закрывающую `)` — не первую попавшуюся:
+            // с появлением `calc(...)` внутри значения фичи (`resolution`,
+            // BUG-1019) `input.find(')')` закрывал бы calc-скобку, а не
+            // внешнюю фичевую, обрезая значение на середине.
+            if let Some(end) = find_matching_close_paren(input) {
                 let inner = &input[1..end];
                 conditions.push(parse_media_feature(inner.trim()));
                 input = &input[end + 1..];
@@ -603,6 +661,27 @@ pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {
     }
 
     MediaQueryClause { negated, only, conditions }
+}
+
+/// Индекс закрывающей `)`, парная открывающей в позиции `0` (`s` должна
+/// начинаться с `(`) — считает вложенность, а не берёт первую попавшуюся
+/// `)`, так что `(resolution: calc(1x))`'s внешняя скобка не обрезается на
+/// закрытии `calc(`'s собственной (BUG-1019).
+fn find_matching_close_paren(s: &str) -> Option<usize> {
+    let mut depth = 0i32;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Если строка начинается с `keyword` (ASCII case-insensitive) и за ним
@@ -659,6 +738,117 @@ pub(crate) fn parse_aspect_ratio(val: &str) -> Option<(f32, f32)> {
     }
 }
 
+/// Парсит `<resolution>` в канонический `dppx`: `x`/`dppx` (1:1), `dpi`
+/// (÷96 — 96dpi = 1dppx), `dpcm` (×2.54/96 — 1dpcm = 2.54/96 dppx, поскольку
+/// 1px = 1/96in = 2.54/96cm). `dppx`/`dpcm` должны проверяться раньше
+/// голого `x` — оба тоже кончаются на `x`.
+pub(crate) fn parse_resolution_dppx(val: &str) -> Option<f32> {
+    let val = val.trim();
+    if let Some(n) = val.strip_suffix("dppx") {
+        n.trim().parse::<f32>().ok()
+    } else if let Some(n) = val.strip_suffix("dpcm") {
+        n.trim().parse::<f32>().ok().map(|v| v * 2.54 / 96.0)
+    } else if let Some(n) = val.strip_suffix("dpi") {
+        n.trim().parse::<f32>().ok().map(|v| v / 96.0)
+    } else if let Some(n) = val.strip_suffix('x') {
+        n.trim().parse::<f32>().ok()
+    } else {
+        None
+    }
+}
+
+/// Парсит значение `<resolution>` media-фичи — литерал (`2dppx`) или
+/// `calc(...)` (BUG-1019). Регистр `calc(`/юнитов не важен по спеке —
+/// сравнение по lower-case копии, сами числа регистр не имеют.
+pub(crate) fn parse_resolution_value(val: &str) -> Option<ResolutionValue> {
+    let lower = val.trim().to_ascii_lowercase();
+    if let Some(inner) = lower.strip_prefix("calc(") {
+        let inner = inner.strip_suffix(')')?;
+        return eval_resolution_calc(inner).map(ResolutionValue::Calc);
+    }
+    parse_resolution_dppx(&lower).map(ResolutionValue::Literal)
+}
+
+/// Вычисляет содержимое `calc(...)` для `<resolution>` — `+`/`-`/`*`/`/` с
+/// одноуровневыми операндами (`<resolution>` для `+`/`-`, `<resolution>` и
+/// голое число для `*`/`/`), без вложенных `calc()`/скобок — единственная
+/// форма, которую заводит Media Queries L4's `match-media-parsing.html`
+/// (`calc(1x + 2x)`, `calc(5x - 2x)`, `calc(1x * 3)`, `calc(6x / 2)`).
+fn eval_resolution_calc(expr: &str) -> Option<f32> {
+    let tokens = tokenize_calc(expr);
+    if tokens.is_empty() {
+        return None;
+    }
+    // Multiplicative terms first (лево-ассоциативно), затем сложение —
+    // терм по терму, знак перед термом храним отдельно от `*`/`/`
+    // внутри него.
+    let mut total = 0.0_f32;
+    let mut term_sign = 1.0_f32;
+    let mut idx = 0;
+    loop {
+        let mut value = parse_calc_operand(tokens.get(idx)?)?;
+        idx += 1;
+        while matches!(tokens.get(idx).map(String::as_str), Some("*") | Some("/")) {
+            let op = tokens[idx].clone();
+            idx += 1;
+            let rhs = parse_calc_operand(tokens.get(idx)?)?;
+            idx += 1;
+            if op == "*" {
+                value *= rhs;
+            } else {
+                if rhs == 0.0 {
+                    return None;
+                }
+                value /= rhs;
+            }
+        }
+        total += term_sign * value;
+        match tokens.get(idx).map(String::as_str) {
+            None => return Some(total),
+            Some("+") => {
+                term_sign = 1.0;
+                idx += 1;
+            }
+            Some("-") => {
+                term_sign = -1.0;
+                idx += 1;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Токенизирует `calc()`-содержимое: числа-с-юнитом (`1x`, `600dpi`, голое
+/// `3`) как один токен, `+`/`-`/`*`/`/` как отдельные однобуквенные токены.
+fn tokenize_calc(expr: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    for c in expr.chars() {
+        match c {
+            '+' | '-' | '*' | '/' => {
+                let trimmed = current.trim();
+                if !trimmed.is_empty() {
+                    tokens.push(trimmed.to_string());
+                }
+                current.clear();
+                tokens.push(c.to_string());
+            }
+            _ => current.push(c),
+        }
+    }
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        tokens.push(trimmed.to_string());
+    }
+    tokens
+}
+
+/// Операнд `calc()`: `<resolution>` (конвертируется в `dppx`) либо голое
+/// число (множитель/делитель у `*`/`/`).
+fn parse_calc_operand(tok: &str) -> Option<f32> {
+    parse_resolution_dppx(tok).or_else(|| tok.trim().parse::<f32>().ok())
+}
+
 pub(crate) fn parse_media_feature(s: &str) -> MediaCondition {
     // `feature: value` или просто `feature` (boolean feature, не поддерживаем).
     let Some((key, val)) = s.split_once(':') else {
@@ -690,6 +880,18 @@ pub(crate) fn parse_media_feature(s: &str) -> MediaCondition {
                 "aspect-ratio" => MediaFeature::AspectRatio(n, d),
                 "min-aspect-ratio" => MediaFeature::MinAspectRatio(n, d),
                 "max-aspect-ratio" => MediaFeature::MaxAspectRatio(n, d),
+                _ => unreachable!(),
+            };
+            MediaCondition::Feature(feature)
+        }
+        "resolution" | "min-resolution" | "max-resolution" => {
+            let Some(value) = parse_resolution_value(val) else {
+                return MediaCondition::Unsupported;
+            };
+            let feature = match key.as_str() {
+                "resolution" => MediaFeature::Resolution(value),
+                "min-resolution" => MediaFeature::MinResolution(value),
+                "max-resolution" => MediaFeature::MaxResolution(value),
                 _ => unreachable!(),
             };
             MediaCondition::Feature(feature)

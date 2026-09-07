@@ -82,7 +82,7 @@ tokenization must preserve that `false`, just for the right reason.
 - Add boolean-context support to `parse_media_feature`: when `val` (from
   `s.split_once(':')`) is absent, treat `s` as a bare feature name; for
   every feature already representable as a range (`color`, `width`,
-  `resolution` once [BUG-1019](BUG-1019-OPEN.md) lands, …), boolean context
+  `resolution` since [BUG-1019](BUG-1019-FIXED.md) landed, …), boolean context
   means "supported and non-zero" — for `color` specifically (not yet a
   `MediaFeature` variant at all), that's just "supported", since Lumen's
   color depth is fixed.
