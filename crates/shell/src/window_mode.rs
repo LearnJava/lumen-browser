@@ -131,7 +131,25 @@ pub(crate) fn run_window_mode(
 
     // Streaming pipeline: окно создаётся немедленно, загрузка стартует
     // после `resumed` в background-потоке. До прихода данных рисуем пустую страницу.
-    let event_loop = match EventLoop::<LoadEvent>::with_user_event().build() {
+    let mut event_loop_builder = EventLoop::<LoadEvent>::with_user_event();
+    // BUG-1027: на Unix (кроме macOS) `main()` уводит всю работу на поток
+    // `lumen-main` со 128 МиБ стека — иначе рекурсивные по глубине DOM обходы
+    // UI-потока умирают на ~790 уровнях вложенности. winit по умолчанию
+    // отказывается строить event loop вне главного потока процесса; на
+    // Wayland/X11 это разрешается явным `with_any_thread`. Флаг выставляется
+    // обоим бэкендам: какой из них живой, решается в рантайме.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        winit::platform::wayland::EventLoopBuilderExtWayland::with_any_thread(
+            &mut event_loop_builder,
+            true,
+        );
+        winit::platform::x11::EventLoopBuilderExtX11::with_any_thread(
+            &mut event_loop_builder,
+            true,
+        );
+    }
+    let event_loop = match event_loop_builder.build() {
         Ok(el) => el,
         Err(err) => {
             eprintln!("Не удалось создать event loop: {err}");

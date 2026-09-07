@@ -207,7 +207,17 @@ impl Lumen {
                 let proxy = self.load_proxy.clone();
                 let mut preload_dispatched = std::mem::take(&mut self.preload_dispatched);
                 let target = self.target_color_space();
-                std::thread::spawn(move || {
+                // BUG-1027: поток гоняет весь финальный pipeline, включая
+                // сборку дерева боксов — рекурсию по глубине DOM ценой ~10.4 КБ
+                // стека на уровень. На штатных 2 МиБ `std::thread::spawn` он
+                // умирал (abort без паники и бэктрейса) на 200 вложенных
+                // `<div>`, т.е. на обычной странице. Имя обязательно: сообщение
+                // рантайма о переполнении печатает только его, и безымянный
+                // поток давал бесполезное `thread '<unknown>'`.
+                let spawned = std::thread::Builder::new()
+                    .name("lumen-pipeline".to_owned())
+                    .stack_size(lumen_core::DEEP_TREE_STACK_BYTES)
+                    .spawn(move || {
                     let result = render_bytes(
                         &raw.bytes,
                         raw.content_type,
@@ -240,6 +250,12 @@ impl Lumen {
                         generation,
                     ));
                 });
+                if let Err(err) = spawned {
+                    // ОС отказала в потоке: `RenderDone` не придёт никогда, и
+                    // страница останется на последнем streaming-кадре — молчать
+                    // об этом нельзя.
+                    eprintln!("не удалось запустить поток финального pipeline: {err}");
+                }
             }
             LoadEvent::RenderDone(outcome, generation) => {
                 // BUG-171 этап 2: устаревшую навигацию отбрасываем — её страница и
