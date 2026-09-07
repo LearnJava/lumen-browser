@@ -9,10 +9,9 @@
 //! of `V8JsRuntime::update_stylesheet_nodes` directly, which is exactly what
 //! the real page pipeline (`crates/shell/src/page_pipeline.rs`) calls.
 //!
-//! Only the five non-`insertRule` subtests are covered — the sixth (`@apply`
-//! illegal at top level) needs `CSSStyleSheet.insertRule` on an *owned*
-//! sheet, which does not exist yet (only a constructed sheet has it,
-//! BUG-897/CSSOM-5) — out of scope here, documented in `bugs/BUG-518-OPEN.md`.
+//! The sixth subtest (`@apply` illegal at top level) needed
+//! `CSSStyleSheet.insertRule`/`.deleteRule` on an *owned* sheet, added by
+//! BUG-518 срез 7 — see the tests at the bottom of this file.
 #![cfg(feature = "v8-backend")]
 
 use lumen_core::{JsRuntime, JsValue};
@@ -123,4 +122,67 @@ fn cssom_rules_includes_top_level_mixin_but_not_layered_one() {
     assert_eq!(rt.eval("document.styleSheets[0].cssRules.length").unwrap(), JsValue::Number(3.0));
     assert_eq!(eval_string(&rt, "document.styleSheets[0].cssRules[0].name"), "--a");
     assert_eq!(eval_string(&rt, "document.styleSheets[0].cssRules[1].name"), "--c");
+}
+
+// --- BUG-518 срез 7: `CSSStyleSheet.insertRule`/`.deleteRule` on an owned
+// (`document.styleSheets`) sheet — previously only a *constructed* sheet had
+// these (CSSOM-5 срез 3). `Stylesheet::insert_rule`/`delete_rule` themselves
+// are already covered at the parser level (`css-parser/parser/tests/
+// revision.rs`); these tests are the end-to-end check that the owned-sheet
+// registry's JS bridge (`_lumen_stylesheet_insert_rule`/
+// `_lumen_stylesheet_delete_rule`, `crates/js/src/v8_runtime/install/
+// stylesheets.rs`) actually reaches it.
+
+#[test]
+fn insert_rule_and_delete_rule_mutate_the_owned_sheet() {
+    let rt = rt_with_sheet("#a { color: red; }");
+    assert_eq!(rt.eval("document.styleSheets[0].insertRule('#b { color: green; }', 1)").unwrap(), JsValue::Number(1.0));
+    assert_eq!(rt.eval("document.styleSheets[0].cssRules.length").unwrap(), JsValue::Number(2.0));
+    assert_eq!(eval_string(&rt, "document.styleSheets[0].cssRules[1].selectorText"), "#b");
+
+    rt.eval("document.styleSheets[0].deleteRule(0)").unwrap();
+    assert_eq!(rt.eval("document.styleSheets[0].cssRules.length").unwrap(), JsValue::Number(1.0));
+    assert_eq!(eval_string(&rt, "document.styleSheets[0].cssRules[0].selectorText"), "#b");
+}
+
+#[test]
+fn insert_rule_at_top_level_apply_throws_syntax_error() {
+    // Transcribes `mixin-cssom.tentative.html`'s "@apply is not legal at top
+    // level" subtest verbatim: `@apply` is declaration-position only, so
+    // parsing it as a standalone top-level rule text yields zero rules, not
+    // one — `Stylesheet::insert_rule` already turns that into
+    // `CssomRuleMutationError::Syntax` with no special-casing needed here.
+    let rt = rt_with_sheet("");
+    rt.eval(
+        "globalThis.__err = null; \
+         try { document.styleSheets[0].insertRule('@apply --m1();'); } \
+         catch (e) { globalThis.__err = e.name; }",
+    )
+    .unwrap();
+    assert_eq!(eval_string(&rt, "globalThis.__err"), "SyntaxError");
+    assert_eq!(rt.eval("document.styleSheets[0].cssRules.length").unwrap(), JsValue::Number(0.0));
+}
+
+#[test]
+fn insert_rule_rejects_index_past_the_end_with_index_size_error() {
+    let rt = rt_with_sheet("#a {}");
+    rt.eval(
+        "globalThis.__err = null; \
+         try { document.styleSheets[0].insertRule('#b {}', 5); } \
+         catch (e) { globalThis.__err = e.name; }",
+    )
+    .unwrap();
+    assert_eq!(eval_string(&rt, "globalThis.__err"), "IndexSizeError");
+}
+
+#[test]
+fn delete_rule_rejects_index_at_the_length_with_index_size_error() {
+    let rt = rt_with_sheet("#a {}");
+    rt.eval(
+        "globalThis.__err = null; \
+         try { document.styleSheets[0].deleteRule(1); } \
+         catch (e) { globalThis.__err = e.name; }",
+    )
+    .unwrap();
+    assert_eq!(eval_string(&rt, "globalThis.__err"), "IndexSizeError");
 }
