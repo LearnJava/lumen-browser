@@ -523,3 +523,115 @@ adopted-stylesheets subtest (separate gap, not mixin-specific), and the
 CSSOM-gated `mixin-cssom.tentative`/`mixin-invalidation.tentative` remain
 blocked on [BUG-471](BUG-471-OPEN.md) as already documented — that CSSOM gap
 is the entire remainder of this bug's original 15-file/~45-subtest scope.
+
+## Срез P3 2026-09-07 (срез 6)
+
+Re-investigated the "blocked on BUG-471" note above: BUG-471's own record
+shows its read half (`document.styleSheets`/`.sheet`/`cssRules`/rule
+classes) closed 2026-09-03 — only the write half (`insertRule`/`deleteRule`/
+`new CSSStyleSheet()`) is still open, tracked separately as
+[BUG-897](BUG-897-OPEN.md)/CSSOM-5. `mixin-cssom.tentative.html`'s 6
+subtests split cleanly along that line: 5 are pure `cssText` reads, only
+the 6th (`@apply` illegal at top level) needs `insertRule` — and even that
+needs it on an **owned** sheet specifically, which doesn't exist yet (only
+a *constructed* sheet has `insertRule`/`deleteRule`, CSSOM-5 срез 3). So the
+5 read-only subtests were reachable without touching BUG-897 at all — closed
+this slice; the 6th, and all of `mixin-invalidation.tentative.html` (needs
+both `insertRule` on an owned sheet AND a live per-declaration `.style`
+setter that doesn't exist for *any* CSSOM rule kind today, a gap broader
+than BUG-897's own documented scope), stay open follow-ups.
+
+**What was missing**: `@mixin`/`@apply`/`@contents`/`@result` never reached
+`Stylesheet::cssom_rules()` at all — `CssomRuleRef` only had `Style`/`Media`
+variants, and `Rule::style_css_text` actively *filtered out* the `@apply`
+marker declaration so it couldn't leak into an ordinary rule's `cssText`
+(built for срез 1's "keep `@apply` invisible to unrelated code" goal, the
+opposite of what this slice needs).
+
+**Fix** (`crates/engine/css-parser/src/parser.rs`/`parser/mixins.rs`):
+`CssomRuleRef`/`TopLevelRuleKind` gained a `Mixin` variant — `TopLevelRuleKind::
+Mixin` carries its own index into `Stylesheet::mixin_rules` (not a position
+count like `Style`/`Media` use) because that vec also receives untagged
+pushes from `@layer`-nested `@mixin`s (invisible to `cssRules`, same as an
+`@layer` block itself), so a same-kind position count would silently pick
+the wrong mixin once a layered one sits between two top-level ones in source
+order — stamped once, at push time, in `parse`'s single top-level dispatch
+site. `delete_rule`'s forced `Mixin` arm removes from `mixin_rules` and
+renumbers every later `Mixin` tag's embedded index (removal shifts them all
+down one slot) — real correctness, not just the mechanical exhaustive-match
+arm the compiler forces; `insert_rule` needed no change at all (a reparsed
+`@mixin`/`@apply` snippet already fails its existing "no stray content
+beyond the one target rule kind" check, since `mixin_rules` isn't cleared
+before that comparison — confirmed by a passing test, not just reasoned
+about).
+
+New serialization methods — `MixinRule::css_text`, `MixinResultItem::
+css_text`, `ApplyRule::css_text`, `MixinParameter::css_text`, plus a shared
+`render_container` helper and `Rule::css_text` (parser.rs, supersedes the
+JS shim's own `selectorText + ' { ' + styleCssText + ' }'` string-building
+for an ordinary rule too, since it can no longer stay a single space-joined
+line once a rule's declarations carry `@apply`) — reproduce the exact
+one-child-per-line, two-space-indent, "only a child's own first line gets
+indented" format `mixin-cssom.tentative.html`'s `assert_equals` strings
+expect. That algorithm was decoded by hand-tracing every non-throwing
+subtest's expected string against candidate implementations before writing
+the recursive renderer, not guessed then patched to fit; `@mixin`/`@result`
+always render multi-line even when their own body would otherwise qualify
+as "flat" (a single plain declaration, `mixin-cssom.tentative.html` subtest
+6), while an ordinary style rule or a `NestedRule` (`& { ... }`) still
+collapse to one line when genuinely flat — that split, not "flat vs.
+not-flat" alone, is what the vendored strings actually encode.
+
+JS bridge (`crates/js/src/v8_runtime/install/stylesheets.rs`+
+`constructed_stylesheets.rs` — the latter only for the two exhaustive-match
+arms `CssomRuleRef` forces, no new write capability added there; `crates/js/
+src/shim/web_api_shim_mid.js`): new `mixin_rule_json`/`_lumen_build_css_mixin_rule`
+pair exposing a `CSSMixinRule` (`name`, `cssText`, `type` — `0`, following
+every other newer CSSOM rule's legacy-attribute convention) alongside the
+existing `CSSStyleRule`/`CSSMediaRule`; `_lumen_build_css_style_rule`'s
+`cssText` getter now reads a Rust-precomputed field instead of reassembling
+it in JS, since the new multi-line `@apply` format isn't a simple string
+join.
+
+**Verification**: 7 new css-parser unit tests
+(`parser/tests/nesting.rs`) transcribing the 5 non-`insertRule`
+`mixin-cssom.tentative.html` subtests' exact expected `cssText` strings
+character-for-character, plus `cssom_rules`/`delete_rule` correctness tests
+for the shared-vec/embedded-index scheme above — `cargo test -p
+lumen-css-parser --lib`: 426/426. Then, since this slice touches the JS
+bridge (unlike most of this track's prior slices, which stayed inside
+css-parser/layout and could lean on unit tests alone), a genuine end-to-end
+check through the real V8 shim: `crates/js/tests/cases/bug518_mixin_cssom.rs`
+(new), using `V8JsRuntime::install_dom` + `update_stylesheet_nodes` directly
+(bypassing `lumen_driver::InProcessSession`, whose test pipeline never calls
+`update_stylesheet_nodes` at all — `document.styleSheets` is unreachable
+through it today, confirmed by trying it first and getting `Cannot read
+properties of null (reading 'cssRules')`; a pre-existing gap in that test
+harness specifically, not in this feature, and not this slice's to fix) —
+7/7 passed, including the same 5 subtests plus 2 extra sanity checks
+(`instanceof CSSStyleRule` is `false`, `@layer`-scoped mixin excluded from
+`cssRules`). `cargo clippy -p lumen-css-parser --all-targets -- -D warnings`:
+clean. `cargo clippy -p lumen-js --features v8-backend --all-targets
+--no-deps -- -D warnings`: pre-existing `chunks_exact_to_as_chunks` errors in
+`worker.rs`/`canvas2d.rs`/`dom/tests/v8_core/selectors_canvas_window.rs` —
+confirmed present on a clean `main` checkout too (system `rustc` 1.98.0 vs.
+the pinned 1.97.0, the toolchain-mismatch class already on record — none of
+those three files are touched by this slice). No paint/display-list surface
+touched — no `dump_golden.py`/graphic-test drift possible.
+`tests/wpt/metadata/css/css-mixins/mixins/mixin-cssom.tentative.html.ini`
+updated — `expected: FAIL` removed from the 5 closed subtests, kept only for
+"@apply is not legal at top level".
+
+**Deliberately out of scope, disclosed rather than silently dropped**:
+`.cssRules` navigation into `@result`'s own nested children (no subtest in
+this slice's 5 needs it — reading a `@mixin`'s `cssText` whole is enough);
+`insertRule`/`deleteRule` on an *owned* sheet (BUG-897/CSSOM-5); a live
+per-declaration `.style` setter for any CSSOM rule kind (a gap
+`mixin-invalidation.tentative.html` exposed but is not itself a
+mixin-specific hole — worth its own bug once someone picks up CSSOM
+mutation-triggers-relayout as a track).
+
+Status remains `OPEN` — `mixin-cssom.tentative.html`'s 6th subtest and all
+of `mixin-invalidation.tentative.html` are the entire remainder, both
+gated on `insertRule` for an owned sheet (BUG-897/CSSOM-5) plus, for the
+invalidation file specifically, the CSSOM `.style`-mutation gap noted above.

@@ -76,6 +76,35 @@ impl Rule {
             .collect::<Vec<_>>()
             .join(" ")
     }
+
+    /// `CSSStyleRule.cssText` (CSSOM §6.5.2) — `selectorText { style_css_text }`
+    /// for an ordinary rule (unchanged single-line format), or, once this
+    /// rule's own declarations carry an [`MIXIN_APPLY_MARKER`] (CSS Mixins
+    /// L1's `@apply`), the same one-child-per-line multi-line format
+    /// [`render_container`] gives `@mixin`/`@result` — confirmed against
+    /// `mixin-cssom.tentative.html`'s "serialization of rule with @apply"/
+    /// "…and contents argument" subtests. A marker declaration is re-parsed
+    /// back into an [`ApplyRule`] ([`parse_apply_call`]) rather than echoing
+    /// its captured raw text verbatim, so stray source whitespace around
+    /// `@apply` never leaks into the serialization.
+    pub fn css_text(&self) -> String {
+        let has_apply = self.declarations.iter().any(|d| d.property == MIXIN_APPLY_MARKER);
+        if !has_apply {
+            return format!("{} {{ {} }}", self.selector_text(), self.style_css_text());
+        }
+        let children: Vec<String> = self
+            .declarations
+            .iter()
+            .map(|d| {
+                if d.property == MIXIN_APPLY_MARKER {
+                    parse_apply_call(&d.value).map(|a| a.css_text()).unwrap_or_default()
+                } else {
+                    d.to_css_text()
+                }
+            })
+            .collect();
+        render_container(&self.selector_text(), &children, false)
+    }
 }
 
 /// Process-unique identity of one `Stylesheet`'s **content**.
@@ -229,6 +258,18 @@ pub struct Stylesheet {
 pub enum TopLevelRuleKind {
     Style,
     Media,
+    /// A top-level (not `@layer`-nested) `@mixin` rule — carries its own
+    /// index into [`Stylesheet::mixin_rules`] directly, unlike `Style`/
+    /// `Media`'s "Nth tag of this kind → Nth entry of the matching vec"
+    /// counting scheme: `mixin_rules` also receives pushes from `@layer`
+    /// blocks (`AtRuleOutcome::LayerBlock`), which never get a tag of their
+    /// own (a `@layer` block itself has no `cssRules` entry, same as
+    /// `@media`'s doc comment already notes for other untracked at-rules),
+    /// so a same-kind position count would silently pick the wrong mixin
+    /// whenever a layered one sits between two top-level ones in source
+    /// order. Stamped once, at push time, in [`parse`]'s single top-level
+    /// dispatch site for `AtRuleOutcome::Mixin`.
+    Mixin(usize),
 }
 
 /// One top-level rule as `document.styleSheets[i].cssRules` sees it — see
@@ -237,6 +278,8 @@ pub enum TopLevelRuleKind {
 pub enum CssomRuleRef<'a> {
     Style(&'a Rule),
     Media(&'a MediaRule),
+    /// A top-level `@mixin` — CSS Mixins L1 §cssom (`mixin-cssom.tentative.html`).
+    Mixin(&'a MixinRule),
 }
 
 /// Failure of [`Stylesheet::insert_rule`]/[`Stylesheet::delete_rule`] — the
@@ -450,6 +493,14 @@ impl Stylesheet {
                     }
                     media_idx += 1;
                 }
+                // Own index, not a position count — see the variant's doc
+                // comment for why `mixin_rules` can't reuse the Style/Media
+                // scheme.
+                TopLevelRuleKind::Mixin(idx) => {
+                    if let Some(m) = self.mixin_rules.get(*idx) {
+                        out.push(CssomRuleRef::Mixin(m));
+                    }
+                }
             }
         }
         out
@@ -506,6 +557,10 @@ impl Stylesheet {
         let Some(&kind) = self.top_level_order.get(index) else {
             return Err(CssomRuleMutationError::IndexSize);
         };
+        // `Mixin`'s own embedded index makes this count wrong for it (see
+        // `TopLevelRuleKind::Mixin`'s doc comment — every tag's index is
+        // distinct, so `**k == kind` never matches a different mixin's tag);
+        // only the `Style`/`Media` arms below read it.
         let sub_index =
             self.top_level_order[..index].iter().filter(|k| **k == kind).count();
         self.top_level_order.remove(index);
@@ -515,6 +570,19 @@ impl Stylesheet {
             }
             TopLevelRuleKind::Media => {
                 self.media_rules.remove(sub_index);
+            }
+            TopLevelRuleKind::Mixin(midx) => {
+                self.mixin_rules.remove(midx);
+                // Removing shifts every later mixin down one slot — keep
+                // every other `Mixin` tag pointing at the same `MixinRule`
+                // it did before this deletion.
+                for k in self.top_level_order.iter_mut() {
+                    if let TopLevelRuleKind::Mixin(j) = k
+                        && *j > midx
+                    {
+                        *j -= 1;
+                    }
+                }
             }
         }
         self.mark_mutated();
@@ -688,7 +756,16 @@ impl<'a> Parser<'a> {
                             }
                             AtRuleOutcome::ColorProfile(cp) => color_profiles.push(cp),
                             AtRuleOutcome::Function(f) => function_rules.push(f),
-                            AtRuleOutcome::Mixin(m) => mixin_rules.push(m),
+                            AtRuleOutcome::Mixin(m) => {
+                                // Own `mixin_rules` index, stamped before the
+                                // push — `@layer`-nested `@mixin`s (below)
+                                // share this same vec but push with no tag
+                                // at all, so a position count can't be used
+                                // here (see `TopLevelRuleKind::Mixin`'s doc).
+                                top_level_order
+                                    .push(TopLevelRuleKind::Mixin(mixin_rules.len()));
+                                mixin_rules.push(m);
+                            }
                             AtRuleOutcome::LayerNames(names) => {
                                 for n in names {
                                     if !layer_order.iter().any(|e| e == &n) {

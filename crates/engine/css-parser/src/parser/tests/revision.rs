@@ -59,6 +59,7 @@ fn cssom_rules_preserves_source_order_across_style_and_media() {
         .map(|r| match r {
             CssomRuleRef::Style(_) => "style",
             CssomRuleRef::Media(_) => "media",
+            CssomRuleRef::Mixin(_) => "mixin",
         })
         .collect();
     assert_eq!(kinds, ["style", "media", "style"]);
@@ -95,6 +96,7 @@ fn insert_rule_interleaves_media_and_style_correctly() {
         .map(|r| match r {
             CssomRuleRef::Style(_) => "style",
             CssomRuleRef::Media(_) => "media",
+            CssomRuleRef::Mixin(_) => "mixin",
         })
         .collect();
     assert_eq!(kinds, ["style", "style", "media"]);

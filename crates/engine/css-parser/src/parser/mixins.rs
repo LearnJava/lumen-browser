@@ -86,6 +86,30 @@ impl MixinRule {
             Some(name) => layer_order.iter().position(|n| n == name).map_or(0, |i| i as i32),
         }
     }
+
+    /// `cssRules[i].cssText` for a top-level `@mixin` (CSS Mixins L1
+    /// §cssom) — `@mixin <name>(<params>) { @result { ... } }`, always in
+    /// [`render_container`]'s multi-line form (confirmed against
+    /// `mixin-cssom.tentative.html`'s serialization subtests — unlike an
+    /// ordinary style rule or a `NestedRule`, `@mixin`/`@result` never
+    /// collapse to one line even when their own body would otherwise
+    /// qualify as "flat"). `locals` (this mixin's own top-level `--x:`
+    /// declarations, both before and after `@result`) are not echoed: the
+    /// field carries no record of their original position relative to
+    /// `@result` (see its own doc comment), so reflecting them here would
+    /// have to guess an order no vendored test pins down.
+    pub fn css_text(&self) -> String {
+        let params = self.parameters.iter().map(MixinParameter::css_text).collect::<Vec<_>>().join(", ");
+        let prelude = format!("@mixin {}({params})", self.name);
+        match &self.result {
+            None => format!("{prelude} {{\n}}"),
+            Some(items) => {
+                let children: Vec<String> = items.iter().map(MixinResultItem::css_text).collect();
+                let result_text = render_container("@result", &children, false);
+                render_container(&prelude, std::slice::from_ref(&result_text), false)
+            }
+        }
+    }
 }
 
 /// One parameter of an `@mixin` rule: `--name [type(<syntax>)]? [: <default>]?`.
@@ -105,6 +129,27 @@ pub struct MixinParameter {
     /// the mixin's definition site but is a stand-in for a caller-supplied
     /// value, so it resolves like one).
     pub default: Option<String>,
+}
+
+impl MixinParameter {
+    /// One parameter's own slice of `@mixin`'s prelude `cssText` — `--name`,
+    /// `--name <syntax>`, `--name: <default>`, or `--name <syntax>: <default>`
+    /// (`type_syntax` is already unwrapped of its `type(...)` parens at parse
+    /// time, so this echoes it bare, matching `mixin-cssom.tentative.html`'s
+    /// "serialization of @mixin with parameters" — `type(<length>)` reflects
+    /// back as `<length>`, no `type(...)` wrapper).
+    pub fn css_text(&self) -> String {
+        let mut s = self.name.clone();
+        if let Some(ty) = &self.type_syntax {
+            s.push(' ');
+            s.push_str(ty);
+        }
+        if let Some(def) = &self.default {
+            s.push_str(": ");
+            s.push_str(def);
+        }
+        s
+    }
 }
 
 /// One item inside an `@mixin`'s `@result { ... }` block, in source order.
@@ -154,6 +199,99 @@ pub enum MixinResultItem {
     },
 }
 
+impl MixinResultItem {
+    /// One `@result`-item's own `cssText` — `render_container` (both
+    /// `@mixin`'s and a `NestedRule`'s own) joins several of these as its
+    /// per-line children. `Decl`/`Contents`'s fallback declarations reuse
+    /// [`Declaration::to_css_text`] verbatim (unsubstituted — CSSOM reflects
+    /// specified values, not `@apply`-resolved ones).
+    pub fn css_text(&self) -> String {
+        match self {
+            MixinResultItem::Decl(d) => d.to_css_text(),
+            MixinResultItem::Apply(a) => a.css_text(),
+            MixinResultItem::Contents { fallback } => {
+                if fallback.is_empty() {
+                    "@contents;".to_string()
+                } else {
+                    let body =
+                        fallback.iter().map(Declaration::to_css_text).collect::<Vec<_>>().join(" ");
+                    format!("@contents {{ {body} }}")
+                }
+            }
+            MixinResultItem::NestedRule { combinator, selectors, body } => {
+                let prelude = nested_rule_prelude(*combinator, selectors);
+                let flat = body.iter().all(|it| matches!(it, MixinResultItem::Decl(_)));
+                let children: Vec<String> = body.iter().map(MixinResultItem::css_text).collect();
+                render_container(&prelude, &children, flat)
+            }
+        }
+    }
+}
+
+/// Serializes a [`MixinResultItem::NestedRule`]'s relative selector back to
+/// explicit `&`-prefixed CSS text (`& .foo`, `& > .foo`, `&.foo`), even for
+/// a source that wrote the implicit-descendant form (`.foo { ... }`) with no
+/// `&` at all — matching how a real browser canonicalizes a relative
+/// selector's own reflection (CSS Nesting L1's serialize-a-relative-selector
+/// steps). No vendored test exercises anything but a bare `& { ... }`
+/// (`mixin-cssom.tentative.html`'s only `NestedRule` case), so the non-bare
+/// branches are this module's own best-effort extrapolation, not a
+/// spec-confirmed shape.
+fn nested_rule_prelude(combinator: Option<Combinator>, selectors: &[ComplexSelector]) -> String {
+    if selectors.is_empty() {
+        return "&".to_string();
+    }
+    let sel_text = sels_to_css_str(selectors);
+    match combinator {
+        None => format!("&{sel_text}"),
+        Some(Combinator::Descendant) => format!("& {sel_text}"),
+        Some(Combinator::Child) => format!("& > {sel_text}"),
+        Some(Combinator::NextSibling) => format!("& + {sel_text}"),
+        Some(Combinator::LaterSibling) => format!("& ~ {sel_text}"),
+    }
+}
+
+/// Renders `prelude { ... }` for CSS Mixins' CSSOM serialization (`cssText`
+/// — CSS Mixins L1 §cssom, `mixin-cssom.tentative.html`) and, via
+/// [`super::Rule::css_text`], for an ordinary style rule whose declarations
+/// carry an `@apply`. Two formats:
+/// - `flat`: every child already reads as one property-value line — the
+///   existing single-line `prelude { decl; decl; }` format ordinary
+///   declaration blocks already use.
+/// - otherwise: one child per line, each indented two spaces — but only a
+///   child's own *first* line gets that indent; the rest of a multi-line
+///   child (its own already-correctly-indented body and closing `}`) is
+///   spliced in verbatim. That asymmetry is what produces the vendored
+///   test's distinctive "un-nested" `}` stacking (`@mixin`'s own closing
+///   brace sits at column 0 right below `@result`'s, not indented under
+///   it) — confirmed by hand-tracing every non-throwing
+///   `mixin-cssom.tentative.html` `assert_equals` string against this
+///   exact algorithm before implementing it.
+pub(super) fn render_container(prelude: &str, children: &[String], flat: bool) -> String {
+    if children.is_empty() {
+        return format!("{prelude} {{\n}}");
+    }
+    if flat {
+        return format!("{prelude} {{ {} }}", children.join(" "));
+    }
+    let mut body = String::new();
+    for (i, child) in children.iter().enumerate() {
+        if i > 0 {
+            body.push('\n');
+        }
+        let mut lines = child.lines();
+        if let Some(first) = lines.next() {
+            body.push_str("  ");
+            body.push_str(first);
+        }
+        for rest in lines {
+            body.push('\n');
+            body.push_str(rest);
+        }
+    }
+    format!("{prelude} {{\n{body}\n}}")
+}
+
 /// `@apply <name>[(<args>)] [{ <block> }] [;]` — invokes a previously
 /// defined `@mixin`, splicing its `@result` declarations (recursively
 /// resolved against `args`) into the position `@apply` occupied. Appears
@@ -176,6 +314,31 @@ pub struct ApplyRule {
     /// block was given at all (the mixin's own `@contents` fallback, if
     /// any, applies instead).
     pub block: Option<Vec<Declaration>>,
+}
+
+impl ApplyRule {
+    /// `@apply <name>[(<args>)] [{ <block> }];` — CSSOM `cssText` for an
+    /// `@apply` marker declaration ([`super::Rule::css_text`]) or a nested
+    /// `@apply` inside a mixin's own `@result` ([`MixinResultItem::Apply`]).
+    /// A block replaces the trailing `;` (`@apply --m2 { color: green; }`
+    /// takes no semicolon of its own — confirmed against
+    /// `mixin-cssom.tentative.html`'s "…and contents argument" subtest).
+    pub fn css_text(&self) -> String {
+        let mut s = format!("@apply {}", self.name);
+        if !self.args.is_empty() {
+            s.push('(');
+            s.push_str(&self.args.join(", "));
+            s.push(')');
+        }
+        match &self.block {
+            Some(decls) => {
+                let body = decls.iter().map(Declaration::to_css_text).collect::<Vec<_>>().join(" ");
+                s.push_str(&format!(" {{ {body} }}"));
+            }
+            None => s.push(';'),
+        }
+        s
+    }
 }
 
 /// Splits `s` at its first top-level `:` (outside `(...)`/strings) into

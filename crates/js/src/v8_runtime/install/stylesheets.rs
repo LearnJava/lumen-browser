@@ -10,7 +10,7 @@
 use super::reg;
 #[allow(unused_imports)]
 use super::super::*;
-use lumen_css_parser::{CssomRuleRef, MediaRule, Rule};
+use lumen_css_parser::{CssomRuleRef, MediaRule, MixinRule, Rule};
 
 /// `CSSStyleRule.selectorText`/`style.cssText` as a JSON object — the shape
 /// `_lumen_make_css_rule` (JS) parses to build the wrapper.
@@ -23,6 +23,7 @@ pub(super) fn style_rule_json(r: &Rule) -> serde_json::Value {
         "kind": "style",
         "selectorText": r.selector_text(),
         "styleCssText": r.style_css_text(),
+        "cssText": r.css_text(),
     })
 }
 
@@ -35,6 +36,25 @@ pub(super) fn media_rule_json(r: &MediaRule) -> serde_json::Value {
     serde_json::json!({
         "kind": "media",
         "mediaText": r.query.raw.trim(),
+    })
+}
+
+/// A top-level `@mixin` rule (CSS Mixins L1 §cssom) as a JSON object —
+/// read-only, `name`/`cssText` only (no `.cssRules` navigation into
+/// `@result`'s own children — `mixin-cssom.tentative.html`'s non-`insertRule`
+/// subtests only ever read the whole rule's `cssText`, never descend into
+/// it). `cssText` wraps `MixinRule::css_text`, computed Rust-side rather
+/// than reassembled in JS, since its indentation rules (`render_container`)
+/// aren't expressible as a simple string join the way `style_rule_json`'s
+/// flat declaration list is.
+///
+/// `pub(super)`: see [`style_rule_json`]'s doc comment — shared with
+/// `constructed_stylesheets.rs`.
+pub(super) fn mixin_rule_json(r: &MixinRule) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "mixin",
+        "name": r.name,
+        "cssText": r.css_text(),
     })
 }
 
@@ -88,6 +108,7 @@ pub(crate) fn install_stylesheets(
             let json = match rules.get(rule_idx as usize)? {
                 CssomRuleRef::Style(r) => style_rule_json(r),
                 CssomRuleRef::Media(r) => media_rule_json(r),
+                CssomRuleRef::Mixin(r) => mixin_rule_json(r),
             };
             Some(json.to_string())
         });
@@ -118,7 +139,7 @@ pub(crate) fn install_stylesheets(
             let rules = entry.sheet.cssom_rules();
             match rules.get(rule_idx as usize)? {
                 CssomRuleRef::Media(r) => Some(style_rule_json(r.rules.get(child_idx as usize)?).to_string()),
-                CssomRuleRef::Style(_) => None,
+                CssomRuleRef::Style(_) | CssomRuleRef::Mixin(_) => None,
             }
         });
     }

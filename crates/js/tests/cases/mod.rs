@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 mod activation_target;
+mod bug518_mixin_cssom;
 mod indexed_db;
 mod link_activation;
 mod no_automation_markers;
