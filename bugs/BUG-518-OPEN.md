@@ -635,3 +635,34 @@ Status remains `OPEN` — `mixin-cssom.tentative.html`'s 6th subtest and all
 of `mixin-invalidation.tentative.html` are the entire remainder, both
 gated on `insertRule` for an owned sheet (BUG-897/CSSOM-5) plus, for the
 invalidation file specifically, the CSSOM `.style`-mutation gap noted above.
+
+## Срез P3 2026-09-07 (срез 7, реклассификация)
+
+Re-checked the "blocked on BUG-897" note above against
+[ROADMAP.md](../ROADMAP.md)'s own CSSOM-5 record: that task closed
+2026-09-06 (срез 3), but its own scope note explicitly excludes exactly
+what this bug's remainder needs — `insertRule`/`deleteRule` were only ever
+added for a *constructed* `CSSStyleSheet` (`crates/js/src/v8_runtime/
+install/constructed_stylesheets.rs`, its own separate registry with no
+owning DOM node); `document.styleSheets`'s own read-only node-backed
+registry (`stylesheet_nodes`, CSSOM-1/2) still has no mutation path at all
+— confirmed directly (`grep -rn "insert_rule\|insertRule"
+crates/js/src/v8_runtime/install/stylesheets.rs` → zero hits, only a
+doc-comment). The other half of the remainder — a live `.style` setter on
+any CSSOM rule object (`CSSStyleRule`/the new `CSSMixinRule`/…) — has the
+same zero-hits shape (`grep -rn "\"style\"" crates/js/src/v8_runtime/
+install/stylesheets.rs` → one JSON-shape literal, no setter).
+
+Both gaps satisfy [docs/probe-method.md §8](../docs/probe-method.md)'s two
+reclassification conditions together: (1) the functionality is absent, not
+broken — zero grep hits, no member of the mutation surface exists for an
+owned sheet or for any rule's `.style`; (2) the size is a new registry plus
+a setter across a family of rule types, not a one-line point fix — the
+same shape as CSSOM-5 itself was before it earned its own task. Filed as
+[CSSOM-8](../ROADMAP.md) (`planned`, refs this bug + BUG-897). `BUGS.md`'s
+entry updated to `OPEN (ДОРАБОТКА → CSSOM-8)`. This does **not** touch the
+substance already fixed in срезы 1-6 above — `@mixin`/`@apply`/`@contents`/
+`@result` themselves are fully implemented and cascading correctly; only
+the CSSOM-mutation-shaped tail (1 subtest of `mixin-cssom.tentative.html`
++ all of `mixin-invalidation.tentative.html`) moves out of P3's point-bug
+queue and into CSSOM-8's backlog.
