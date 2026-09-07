@@ -71,7 +71,7 @@ mod multicol_abspos;
 use multicol_abspos::{lay_out_abs_children, lay_out_multicol_children};
 
 mod table;
-use table::{lay_out_table, lay_out_table_row, table_intrinsic_content_width};
+use table::{lay_out_table_row, table_intrinsic_content_width};
 
 mod diagnostics;
 pub use diagnostics::{
@@ -202,6 +202,7 @@ mod layout_dispatch;
 mod block_flow_trampoline;
 mod flex_trampoline;
 mod grid_trampoline;
+mod table_trampoline;
 
 pub(crate) use bfc::lay_out_for_vertical;
 use bfc::{

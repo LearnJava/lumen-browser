@@ -459,3 +459,4 @@ mod layout_box_drop;
 mod block_flow_trampoline;
 mod flex_trampoline;
 mod grid_trampoline;
+mod table_trampoline;
