@@ -854,15 +854,16 @@ fn native_binding_panic_does_not_abort_process() {
     // if this test runs at all (rather than aborting the test binary), the
     // guard is in place; the assertion confirms the error surfaces to JS.
     //
-    // `_lumen_get_tag_name` still calls `doc.get(nid)` directly (no
-    // `contains_id`/`try_get` guard) — unlike `_lumen_append_child`, which
-    // BUG-986 hardened to silently skip a foreign id (see the sibling
-    // assertion below), so it's still a live panic input.
+    // BUG-1024: `_lumen_get_tag_name` was hardened to bounds-checked
+    // `doc.try_get(nid)` (dom_core.rs) and no longer panics on a foreign id
+    // — `_lumen_get_style_property` (platform.rs) still calls `doc.get(nid)`
+    // directly (no `contains_id`/`try_get` guard), so it's still a live
+    // panic input.
     let rt = v8_runtime_with_dom(make_doc());
     let r = rt.eval(
         r#"
                 var caught = '';
-                try { _lumen_get_tag_name(4294967295); }
+                try { _lumen_get_style_property(4294967295, 'color'); }
                 catch (e) { caught = e.name; }
                 caught
                 "#,

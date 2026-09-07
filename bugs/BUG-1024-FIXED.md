@@ -1,6 +1,6 @@
 # BUG-1024 — `html/canvas`: два `--check` подряд на свежем baseline дают два РАЗНЫХ, растущих набора регрессий
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-07 (P3)
 **Заведён:** 2026-09-07 (P2, WPT-RUN-7 срез 21 — `html/canvas`, продолжение среза 20)
 **Область:** не локализован. Регрессии рассыпаны по несвязанным подкаталогам
 (`element/manual`, `element/fill-and-stroke-styles`, `offscreen/fill-and-stroke-styles`,
@@ -85,3 +85,57 @@ tests/wpt/.venv/bin/python tests/wpt/run_report.py \
 Осталось крупных под-путей `html/*` без baseline: `semantics` 2223 (заблокирован BUG-1022),
 `browsers` 759 (самый грязный), `rendering` 150 (заблокирован BUG-1011). `html/canvas`
 (3308 id, крупнейший из проверенных) остаётся без baseline из-за этой находки.
+
+## Срез P3 2026-09-07: root cause найден и исправлен
+
+Живой прогон `--root html/canvas/offscreen/transformations --processes 1 --check
+--log-raw` (изоляция от контента полной категории, но тот же класс симптома) поймал
+реальный краш вместо флака. `--log-raw` показал последовательность:
+
+```
+thread 'lumen-v8' (22840) panicked at crates\js\src\v8_runtime\install\dom_core.rs:428:30:
+BUG-986: NodeId 16 вне арены документа (len 16) — устаревший/чужой идентификатор, ...
+thread 'lumen-v8' (22840) panicked at crates\js\src\v8_runtime\install\dom_core.rs:426:36:
+called `Result::unwrap()` on an `Err` value: PoisonError { .. }
+[повторяется 5 раз подряд, разные натив-вызовы]
+thread 'main' (54260) panicked at crates\shell\src\app\about_to_wait.rs:1483:46:
+called `Result::unwrap()` on an `Err` value: PoisonError { .. }
+```
+
+`_lumen_is_text_node` (`dom_core.rs:428`) вызывал паникующий `doc.get(nid)` вместо
+bounds-checked `doc.try_get(nid)` — обычный BUG-986-класс дефект (устаревший/чужой
+`NodeId`, переживший навигацию), который сам BUG-986 закрыл почти везде, но пропустил
+несколько нативов в `dom_core.rs`. Паника на `doc.get()` разворачивается сквозь
+`d.lock().unwrap()` захваченный `Arc<Mutex<Document>>`, `Mutex` остаётся poisoned, и
+каждый следующий `.lock().unwrap()` того же документа (с любого потока — `lumen-v8`,
+`main`) тоже паникует. Процесс не падает от одной паники (V8-граница ловит через
+`catch_unwind`, `[JS native panic]` в логе), но каскад продолжается до полного разрыва
+BiDi-сокета — снаружи выглядит как `os error 10054` посреди прогона. Разные тесты
+успевают пройти до того, как каскад начнётся, в разных прогонах — отсюда «плавающие»
+124→140 регрессии оригинальной находки: не флак тестов, а недетерминированный момент
+краша.
+
+**Фикс:** заменены все паникующие `doc.get(nid)`/`doc.get(root)`/`doc.get(c)` на
+безопасный `doc.try_get(nid)` (уже существовал, введён при исходном BUG-986) в 10
+нативах `crates/js/src/v8_runtime/install/dom_core.rs`: `_lumen_get_tag_name`,
+`_lumen_get_local_name`, `_lumen_is_text_node`, `_lumen_is_comment_node`,
+`_lumen_is_doctype`, `_lumen_get_document_doctype`, `_lumen_get_doctype_field`,
+`_lumen_get_namespace_uri`, `_lumen_get_attr`, `_lumen_set_attr`/`_lumen_remove_attr`
+(добавлен `contains_id` guard перед мутацией, т.к. они уже читают `.get_attr()` после
+записи).
+
+**Верификация:** `html/canvas/offscreen/transformations` (44 файла) под
+`--processes 1 --check` — до фикса паника/каскад на ~24-й секунде (7-8-й тест из 44),
+после фикса 44/44 harness OK за один непрерывный процесс (один и тот же PID на весь
+прогон), 0 регрессий. `cargo test -p lumen-js --lib --features v8-backend`: 3537
+passed, 1 failed (тот же [BUG-1030](BUG-1030-OPEN.md), подтверждено идентичным
+на чистом main — не регрессия этого фикса); `cargo test -p lumen-dom --lib`: 292/292.
+`cargo clippy --workspace --all-targets -- -D warnings`: чист.
+
+**Не закрывает:** остаток категории `html/canvas` (3308 id) всё ещё без baseline —
+этот срез устранил один конкретный краш-механизм на одной поддиректории, не прогнал
+полный `--update-expected`/`--check` на всей категории (машина была занята
+параллельными сессиями большую часть среза). Похожий паникующий `doc.get(nid)` может
+существовать и в других install-файлах (`constructed_stylesheets.rs`, `net.rs`,
+`platform.rs`, `stylesheets.rs`, `dom.rs`) — не проверено этим срезом, отдельная
+задача при следующей находке той же формы.
