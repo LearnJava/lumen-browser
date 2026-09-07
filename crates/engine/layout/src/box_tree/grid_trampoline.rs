@@ -254,6 +254,13 @@ fn step_probe_item(
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsGridLoop(ci) => StepOutcome::Descend(ci),
+            // LAYOUT-2 срез 6: a (subgrid) grid item that is itself a table —
+            // same shape as the flex/block-flow arms above.
+            DispatchOutcome::NeedsTableLoop(ci) => {
+                super::table_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
+                post_probe_item(frame, i);
+                StepOutcome::Advance
+            }
         }
     } else {
         // BUG-341 S32/CV_AUTO_TOUCHED: the outer flag must bracket the whole
@@ -279,6 +286,11 @@ fn step_probe_item(
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsGridLoop(ci) => StepOutcome::Descend(ci),
+            DispatchOutcome::NeedsTableLoop(ci) => {
+                super::table_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
+                post_probe_item(frame, i);
+                StepOutcome::Advance
+            }
         }
     }
 }
@@ -451,6 +463,11 @@ fn step_final_item(
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsGridLoop(ci) => StepOutcome::Descend(ci),
+            DispatchOutcome::NeedsTableLoop(ci) => {
+                super::table_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
+                post_final_item(frame, i, viewport);
+                StepOutcome::Advance
+            }
         };
     }
 
@@ -499,6 +516,11 @@ fn step_final_item(
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsGridLoop(ci) => StepOutcome::Descend(ci),
+            DispatchOutcome::NeedsTableLoop(ci) => {
+                super::table_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
+                post_final_item(frame, i, viewport);
+                StepOutcome::Advance
+            }
         }
     } else if let Some((probe_x, probe_y, mut reused)) = frame.init.probe_reuse[k].take() {
         // BUG-341 S33: `cell_w` above was derived from the same
@@ -529,6 +551,11 @@ fn step_final_item(
                 StepOutcome::Advance
             }
             DispatchOutcome::NeedsGridLoop(ci) => StepOutcome::Descend(ci),
+            DispatchOutcome::NeedsTableLoop(ci) => {
+                super::table_trampoline::run(&mut frame.b.children[i], ci, measurer, viewport, hp);
+                post_final_item(frame, i, viewport);
+                StepOutcome::Advance
+            }
         }
     }
 }
