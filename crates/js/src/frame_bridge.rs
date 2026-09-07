@@ -3159,6 +3159,33 @@ mod tests {
     }
 
     #[test]
+    fn f_children_native_binding_panic_does_not_abort_process() {
+        // BUG-418: an invalid NodeId reaching `Document::get`/`get_mut` used
+        // to panic inside V8's `extern "C"` callback boundary, which Rust
+        // refuses to unwind through, aborting the whole process.
+        // `native_fn_trampoline` now wraps native dispatch in `catch_unwind`
+        // (same trampoline `register_native` uses for `_lumen_f_*`, not just
+        // the `reg!`-registered natives) — this test proves the guard still
+        // holds for this registration path too.
+        //
+        // BUG-1031: every direct-from-JS `doc.get(nid)` in `dom_core.rs`/
+        // `platform.rs` has since been bounds-checked (BUG-986/BUG-1024/
+        // BUG-1030's chain), so the panic input moved here — `_lumen_f_children`
+        // is one of this file's cross-frame read natives, which `checked_node`'s
+        // doc comment above documents as deliberately still trusting the raw
+        // facade `nid` for reads (only writes reject a foreign index).
+        with_frame("<html><body></body></html>", true, |rt| {
+            assert!(eval_bool(
+                rt,
+                "var caught = ''; \
+                 try { _lumen_f_children(0, 4294967295); } \
+                 catch (e) { caught = e.name; } \
+                 caught === 'Error'"
+            ));
+        });
+    }
+
+    #[test]
     fn title_setter_creates_title_inside_head() {
         with_shared_frame("<html><head></head><body>x</body></html>", true, |rt, _| {
             assert!(eval_bool(

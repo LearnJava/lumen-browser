@@ -1038,7 +1038,8 @@ pub(crate) fn install_shadow_dom(
         reg!(scope, ctx, store, "_lumen_is_shadow_root", move |nid: u32| -> bool {
             let doc = d.lock().unwrap();
             let id = NodeId::from_index(nid as usize);
-            matches!(doc.get(id).data, NodeData::ShadowRoot { .. })
+            // BUG-1031-class: stale/foreign NodeId — degrade instead of panicking.
+            matches!(doc.try_get(id).map(|n| &n.data), Some(NodeData::ShadowRoot { .. }))
         });
     }
     // Returns true when `nid` is a DocumentFragment node.
@@ -1047,7 +1048,8 @@ pub(crate) fn install_shadow_dom(
         reg!(scope, ctx, store, "_lumen_is_document_fragment", move |nid: u32| -> bool {
             let doc = d.lock().unwrap();
             let id = NodeId::from_index(nid as usize);
-            matches!(doc.get(id).data, NodeData::DocumentFragment)
+            // BUG-1031-class: stale/foreign NodeId — degrade instead of panicking.
+            matches!(doc.try_get(id).map(|n| &n.data), Some(NodeData::DocumentFragment))
         });
     }
     // Allocate a new empty DocumentFragment and return its NodeId.
@@ -1124,6 +1126,10 @@ pub(crate) fn install_shadow_dom(
         reg!(scope, ctx, store, "_lumen_get_shadow_root_host", move |nid: u32| -> Option<u32> {
             let doc = d.lock().unwrap();
             let mut cur = NodeId::from_index(nid as usize);
+            // BUG-1031-class: stale/foreign NodeId — degrade instead of panicking.
+            // Only the entry id can be foreign; every later `cur` comes from
+            // `node.parent`, already inside this document's arena.
+            doc.try_get(cur)?;
             loop {
                 let node = doc.get(cur);
                 if matches!(node.data, NodeData::ShadowRoot { .. }) {
@@ -1178,13 +1184,24 @@ pub(crate) fn install_selection(
             "_lumen_set_selection",
             move |anchor_nid: u32, anchor_off: u32, focus_nid: u32, focus_off: u32| {
                 let mut doc = d.lock().unwrap();
+                let anchor_id = NodeId::from_index(anchor_nid as usize);
+                let focus_id = NodeId::from_index(focus_nid as usize);
+                // BUG-1031-class: a stale/foreign NodeId stored here panics
+                // later, whenever anything (contenteditable delete, caret
+                // read) resolves `Selection::anchor`/`focus` — reject it here
+                // instead of letting it reach `Document::get` unguarded.
+                if !doc.contains_id(anchor_id) || !doc.contains_id(focus_id) {
+                    log_foreign_node_id(&doc, "_lumen_set_selection anchor", anchor_nid);
+                    log_foreign_node_id(&doc, "_lumen_set_selection focus", focus_nid);
+                    return;
+                }
                 doc.set_selection(Selection {
                     anchor: Some(DomPosition {
-                        container: NodeId::from_index(anchor_nid as usize),
+                        container: anchor_id,
                         offset: anchor_off,
                     }),
                     focus: Some(DomPosition {
-                        container: NodeId::from_index(focus_nid as usize),
+                        container: focus_id,
                         offset: focus_off,
                     }),
                 });
