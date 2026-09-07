@@ -57,25 +57,29 @@ pub fn gate_image_requests(
     visible
 }
 
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion — same safe mechanical class LAYOUT-1 already converted. Result
+/// is an unordered `HashSet`, so no traversal-order concern.
 fn collect_visible(
-    node: &LayoutBox,
+    root: &LayoutBox,
     gate_x_min: f32,
     gate_x_max: f32,
     gate_y_min: f32,
     gate_y_max: f32,
     out: &mut HashSet<NodeId>,
 ) {
-    if matches!(node.kind, BoxKind::Image { .. }) {
-        let r = node.rect;
-        // AABB intersection: rect overlaps gate region on both axes.
-        let in_x = r.x < gate_x_max && r.right() > gate_x_min;
-        let in_y = r.y < gate_y_max && r.bottom() > gate_y_min;
-        if in_x && in_y {
-            out.insert(node.node);
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(node) = stack.pop() {
+        if matches!(node.kind, BoxKind::Image { .. }) {
+            let r = node.rect;
+            // AABB intersection: rect overlaps gate region on both axes.
+            let in_x = r.x < gate_x_max && r.right() > gate_x_min;
+            let in_y = r.y < gate_y_max && r.bottom() > gate_y_min;
+            if in_x && in_y {
+                out.insert(node.node);
+            }
         }
-    }
-    for child in &node.children {
-        collect_visible(child, gate_x_min, gate_x_max, gate_y_min, gate_y_max, out);
+        stack.extend(node.children.iter());
     }
 }
 

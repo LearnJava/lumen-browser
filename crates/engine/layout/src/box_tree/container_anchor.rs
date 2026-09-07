@@ -43,7 +43,18 @@ pub fn apply_container_styles(
 /// (nearest *positioned* containing block, used for abs/fixed descendants):
 /// for a statically-positioned `b` nested several levels under a positioned
 /// ancestor, `pcb` is that ancestor's rect, not `b`'s immediate parent.
-#[allow(clippy::too_many_arguments, clippy::only_used_in_recursion)]
+///
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion into itself: nothing after either branch's own closing loop
+/// reads a value the descent produced, so the "recurse to find nested
+/// containers" part of this function is the same safe mechanical class
+/// LAYOUT-1 already converted — found alongside `shift_tree`/`shift_y_box`
+/// while auditing container-query/anchor post-layout passes for the same
+/// gap. The `lay_out(child, ...)` calls inside the `is_container` branch are
+/// a different, already-tracked recursion class (layout dispatch) and stay
+/// untouched — each is a bounded per-child call, not this function calling
+/// itself.
+#[allow(clippy::too_many_arguments)]
 fn apply_container_inner(
     b: &mut LayoutBox,
     doc: &Document,
@@ -55,77 +66,80 @@ fn apply_container_inner(
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
 ) {
-    // Derive content dimensions from already-laid-out rect + style — needed
-    // both for container-query context (if `b` is a container) and as the
-    // `parent_h` basis passed down to `b`'s own children either way.
-    let em = b.style.font_size;
-    let bw = b.rect.width;
-    let pad_l = b.style.padding_left.resolve_or_zero(em, bw, viewport);
-    let pad_r = b.style.padding_right.resolve_or_zero(em, bw, viewport);
-    let pad_t = b.style.padding_top.resolve_or_zero(em, bw, viewport);
-    let pad_b = b.style.padding_bottom.resolve_or_zero(em, bw, viewport);
-    let content_w = (bw - pad_l - pad_r
-        - b.style.border_left_width - b.style.border_right_width).max(0.0);
-    let content_h_val = (b.rect.height - pad_t - pad_b
-        - b.style.border_top_width - b.style.border_bottom_width).max(0.0);
+    let mut stack: Vec<(&mut LayoutBox, Rect, f32)> = vec![(b, pcb, parent_h)];
+    while let Some((b, pcb, parent_h)) = stack.pop() {
+        // Derive content dimensions from already-laid-out rect + style — needed
+        // both for container-query context (if `b` is a container) and as the
+        // `parent_h` basis passed down to `b`'s own children either way.
+        let em = b.style.font_size;
+        let bw = b.rect.width;
+        let pad_l = b.style.padding_left.resolve_or_zero(em, bw, viewport);
+        let pad_r = b.style.padding_right.resolve_or_zero(em, bw, viewport);
+        let pad_t = b.style.padding_top.resolve_or_zero(em, bw, viewport);
+        let pad_b = b.style.padding_bottom.resolve_or_zero(em, bw, viewport);
+        let content_w = (bw - pad_l - pad_r
+            - b.style.border_left_width - b.style.border_right_width).max(0.0);
+        let content_h_val = (b.rect.height - pad_t - pad_b
+            - b.style.border_top_width - b.style.border_bottom_width).max(0.0);
 
-    let is_container = !matches!(b.style.container_type, ContainerType::Normal);
-    if is_container {
-        let content_h = if matches!(b.style.container_type, ContainerType::Size) {
-            Some(content_h_val)
-        } else {
-            None // inline-size: height not queryable
-        };
-        let ctx = ContainerContext {
-            width: content_w,
-            height: content_h,
-            names: b.style.container_name.clone(),
-            custom_props: b.style.custom_props.clone(),
-            style_props: crate::selector_query::computed_style_to_map(&b.style),
-            font_size: em,
-            viewport,
-            own_containing_block_height: parent_h,
-        };
-        // Re-apply container rules to all direct + indirect descendants.
-        for child in &mut b.children {
-            re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode);
-        }
-        // Re-lay out block-flow children with updated styles.
-        let content_x = b.rect.x + pad_l + b.style.border_left_width;
-        let content_y = b.rect.y + pad_t + b.style.border_top_width;
-        let avail_h: Option<f32> = content_h;
-        let child_pcb = if !matches!(b.style.position, Position::Static) {
-            Rect::new(b.rect.x, b.rect.y, b.rect.width, b.rect.height)
-        } else {
-            pcb
-        };
-        // Expose this container's dimensions to cq* unit resolution during re-layout.
-        set_cq_context(content_w, content_h);
-        let mut child_y = content_y;
-        for child in &mut b.children {
-            if matches!(child.style.position, Position::Absolute | Position::Fixed) {
-                // Re-lay out against new pcb but don't advance child_y.
+        let is_container = !matches!(b.style.container_type, ContainerType::Normal);
+        if is_container {
+            let content_h = if matches!(b.style.container_type, ContainerType::Size) {
+                Some(content_h_val)
+            } else {
+                None // inline-size: height not queryable
+            };
+            let ctx = ContainerContext {
+                width: content_w,
+                height: content_h,
+                names: b.style.container_name.clone(),
+                custom_props: b.style.custom_props.clone(),
+                style_props: crate::selector_query::computed_style_to_map(&b.style),
+                font_size: em,
+                viewport,
+                own_containing_block_height: parent_h,
+            };
+            // Re-apply container rules to all direct + indirect descendants.
+            for child in &mut b.children {
+                re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode);
+            }
+            // Re-lay out block-flow children with updated styles.
+            let content_x = b.rect.x + pad_l + b.style.border_left_width;
+            let content_y = b.rect.y + pad_t + b.style.border_top_width;
+            let avail_h: Option<f32> = content_h;
+            let child_pcb = if !matches!(b.style.position, Position::Static) {
+                Rect::new(b.rect.x, b.rect.y, b.rect.width, b.rect.height)
+            } else {
+                pcb
+            };
+            // Expose this container's dimensions to cq* unit resolution during re-layout.
+            set_cq_context(content_w, content_h);
+            let mut child_y = content_y;
+            for child in &mut b.children {
+                if matches!(child.style.position, Position::Absolute | Position::Fixed) {
+                    // Re-lay out against new pcb but don't advance child_y.
+                    lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb, hp, false);
+                    continue;
+                }
                 lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb, hp, false);
-                continue;
+                if matches!(child.kind, BoxKind::Skip) {
+                    continue;
+                }
+                let child_mb = child.style.margin_bottom
+                    .resolve_or_zero(child.style.font_size, content_w, viewport);
+                child_y = child.rect.y + child.rect.height + child_mb;
             }
-            lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb, hp, false);
-            if matches!(child.kind, BoxKind::Skip) {
-                continue;
+            clear_cq_context();
+            // After re-layout, push children to catch nested containers.
+            // Each nested container will set its own cq* context during its own re-layout.
+            for child in &mut b.children {
+                stack.push((child, child_pcb, content_h_val));
             }
-            let child_mb = child.style.margin_bottom
-                .resolve_or_zero(child.style.font_size, content_w, viewport);
-            child_y = child.rect.y + child.rect.height + child_mb;
-        }
-        clear_cq_context();
-        // After re-layout, recurse into children to catch nested containers.
-        // Each nested container will set its own cq* context during its own re-layout.
-        for child in &mut b.children {
-            apply_container_inner(child, doc, sheet, viewport, measurer, child_pcb, content_h_val, hp, dark_mode);
-        }
-    } else {
-        // Not a container — just recurse looking for container descendants.
-        for child in &mut b.children {
-            apply_container_inner(child, doc, sheet, viewport, measurer, pcb, content_h_val, hp, dark_mode);
+        } else {
+            // Not a container — just descend looking for container descendants.
+            for child in &mut b.children {
+                stack.push((child, pcb, content_h_val));
+            }
         }
     }
 }
@@ -148,6 +162,16 @@ pub(crate) fn apply_anchor_positions(root: &mut LayoutBox, viewport: Size) {
     apply_anchor_positions_rec(root, &registry, viewport, init_pcb, &mut Vec::new());
 }
 
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion — same class as `apply_container_inner` above. `ancestors`
+/// mirrors the push-before-children/pop-after-children discipline the old
+/// recursive call gave for free: each popped frame carries `depth` (its own
+/// distance from the walk's root), and `ancestors.truncate(depth)` restores
+/// exactly the path this node's *parent* saw before this node's own
+/// processing runs — reproducing "push after processing, pop after
+/// children" regardless of the LIFO stack's (sibling-reversed, but
+/// parent-before-child) visiting order, which is all `resolve_inset_area_scoped`/
+/// `resolve_inset_scoped`'s anchor-scope checks depend on.
 fn apply_anchor_positions_rec(
     lb: &mut LayoutBox,
     registry: &crate::anchor::AnchorRegistry,
@@ -155,6 +179,9 @@ fn apply_anchor_positions_rec(
     pcb: Rect,
     ancestors: &mut Vec<lumen_dom::NodeId>,
 ) {
+    let mut stack: Vec<(&mut LayoutBox, Rect, usize)> = vec![(lb, pcb, ancestors.len())];
+    while let Some((lb, pcb, depth)) = stack.pop() {
+    ancestors.truncate(depth);
     // CSS Anchor Positioning L1 §4 — correct `anchor-size()` width/height against the
     // final, global anchor registry. The local registry `lay_out_abs_children` used is
     // collected once before any deferred (abs/fixed) sibling in the same containing
@@ -301,15 +328,19 @@ fn apply_anchor_positions_rec(
     };
 
     ancestors.push(lb.node);
+    let child_depth = ancestors.len();
     for child in &mut lb.children {
-        apply_anchor_positions_rec(child, registry, viewport, my_pcb, ancestors);
+        stack.push((child, my_pcb, child_depth));
     }
-    ancestors.pop();
+    }
 }
 
-/// Recursively re-applies container rules to a subtree.
-/// Stops descending into elements that are themselves containers (they will
-/// be processed by `apply_container_inner` with their own context).
+/// Re-applies container rules to a subtree — explicit heap-stack pre-order
+/// walk (LAYOUT-2 срез 2), same class as the two functions above. Stops
+/// descending into elements that are themselves containers (they will be
+/// processed by `apply_container_inner` with their own context); that
+/// condition depends only on the popped node's own style, not on anything a
+/// deeper call would compute, so it does not change the safe classification.
 fn re_style_subtree(
     b: &mut LayoutBox,
     doc: &Document,
@@ -318,13 +349,14 @@ fn re_style_subtree(
     viewport: Size,
     dark_mode: bool,
 ) {
-    if !matches!(b.kind, BoxKind::Skip) {
-        apply_container_rules(Arc::make_mut(&mut b.style), doc, b.node, sheet, ctx, viewport, dark_mode);
-    }
-    // Don't propagate into nested containers — they'll build their own context.
-    if matches!(b.style.container_type, ContainerType::Normal) {
-        for child in &mut b.children {
-            re_style_subtree(child, doc, sheet, ctx, viewport, dark_mode);
+    let mut stack: Vec<&mut LayoutBox> = vec![b];
+    while let Some(b) = stack.pop() {
+        if !matches!(b.kind, BoxKind::Skip) {
+            apply_container_rules(Arc::make_mut(&mut b.style), doc, b.node, sheet, ctx, viewport, dark_mode);
+        }
+        // Don't propagate into nested containers — they'll build their own context.
+        if matches!(b.style.container_type, ContainerType::Normal) {
+            stack.extend(b.children.iter_mut());
         }
     }
 }

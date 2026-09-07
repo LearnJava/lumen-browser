@@ -116,25 +116,31 @@ pub fn collect_subgrid_items(root: &LayoutBox) -> Vec<SubgridItem> {
     items
 }
 
-fn collect_recursive(node: &LayoutBox, out: &mut Vec<SubgridItem>) {
+/// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
+/// recursion: nothing after the loop over `children` reads a value the walk
+/// produced, so this is the same safe mechanical class LAYOUT-1 already
+/// converted. Children pushed in reverse so the LIFO stack preserves the
+/// documented depth-first order.
+fn collect_recursive(root: &LayoutBox, out: &mut Vec<SubgridItem>) {
     use crate::GridTrackSize;
 
-    if matches!(node.kind, BoxKind::Skip) {
-        return;
-    }
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(node) = stack.pop() {
+        if matches!(node.kind, BoxKind::Skip) {
+            continue;
+        }
 
-    let sc = node.style.grid_template_columns.first() == Some(&GridTrackSize::Subgrid);
-    let sr = node.style.grid_template_rows.first() == Some(&GridTrackSize::Subgrid);
-    if sc || sr {
-        out.push(SubgridItem {
-            node_id: node.node.index() as u32,
-            subgrid_columns: sc,
-            subgrid_rows: sr,
-        });
-    }
+        let sc = node.style.grid_template_columns.first() == Some(&GridTrackSize::Subgrid);
+        let sr = node.style.grid_template_rows.first() == Some(&GridTrackSize::Subgrid);
+        if sc || sr {
+            out.push(SubgridItem {
+                node_id: node.node.index() as u32,
+                subgrid_columns: sc,
+                subgrid_rows: sr,
+            });
+        }
 
-    for child in &node.children {
-        collect_recursive(child, out);
+        stack.extend(node.children.iter().rev());
     }
 }
 
