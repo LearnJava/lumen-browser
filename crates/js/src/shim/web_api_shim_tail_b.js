@@ -1117,6 +1117,14 @@ _lumen_install_reflection(HTMLElement.prototype, [
     ['enterKeyHint',   'enterkeyhint',   'string'],
     ['inputMode',      'inputmode',      'string'],
     ['nonce',          'nonce',          'string'],
+    // WHATWG "heading level" draft (whatwg/html#11086, BUG-1023): the
+    // `:heading(n)` CSS pseudo-class reads these same content attributes
+    // directly off the DOM (lumen-layout matcher), not through this
+    // reflection — but a negative `headingOffset` set via the IDL property
+    // must clamp to 0 exactly like a negative content-attribute value does
+    // for `:heading`, hence `ulong` (not `long`).
+    ['headingOffset',  'headingoffset',  'ulong', 0],
+    ['headingReset',   'headingreset',   'bool'],
 ]);
 
 _lumen_install_reflection(HTMLAnchorElement.prototype, [

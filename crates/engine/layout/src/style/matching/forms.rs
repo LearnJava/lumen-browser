@@ -89,6 +89,7 @@ pub(in crate::style) fn matches_pseudo_class(p: &PseudoClass, doc: &Document, no
         PseudoClass::Default => matches_default(doc, node),
         PseudoClass::Lang(tags) => matches_lang(doc, node, tags),
         PseudoClass::Dir(arg) => matches_dir(doc, node, *arg),
+        PseudoClass::Heading(arg) => matches_heading(doc, node, *arg),
         PseudoClass::Link => matches_any_link(doc, node),
         // CSS Selectors L4 §6.2.3: `:visited` требует history-runtime
         // (`lumen-storage::History` + safe-history-API с privacy-ограничениями).
@@ -905,6 +906,79 @@ fn element_directionality(doc: &Document, node: NodeId) -> DirArg {
         cur = doc.get(n).parent;
     }
     DirArg::Ltr
+}
+
+/// `:heading` / `:heading(n)` (WHATWG «heading level» draft,
+/// [whatwg/html#11086](https://github.com/whatwg/html/pull/11086)). `arg =
+/// None` — bare `:heading`, matches any `<h1>`–`<h6>`; `Some(n)` matches only
+/// if the element's [`effective_heading_level`] equals `n`.
+fn matches_heading(doc: &Document, node: NodeId, arg: Option<i32>) -> bool {
+    let Some(level) = effective_heading_level(doc, node) else {
+        return false;
+    };
+    match arg {
+        None => true,
+        Some(n) => level == n,
+    }
+}
+
+/// Base heading level of an `h1`–`h6` tag name (1–6), `None` for anything
+/// else — `:heading`/`:heading(n)` only ever matches these six tags.
+fn base_heading_level(tag: &str) -> Option<i32> {
+    match tag {
+        "h1" => Some(1),
+        "h2" => Some(2),
+        "h3" => Some(3),
+        "h4" => Some(4),
+        "h5" => Some(5),
+        "h6" => Some(6),
+        _ => None,
+    }
+}
+
+/// Effective heading level per the WHATWG draft's algorithm: base level of
+/// the tag (`h1`=1 … `h6`=6) plus the sum of `headingoffset` content-attribute
+/// values along the ancestor-or-self chain, reset to 0 at the nearest
+/// `headingreset` ancestor-or-self — after which that same node's own
+/// `headingoffset` (if any) is still added on top, since «resetting applies
+/// after headingOffset» (confirmed by the WPT fixture's nested
+/// `headingoffset=2 headingreset` case: the reset zeroes the running sum,
+/// then its own `headingoffset` is added). Each individual `headingoffset`
+/// value is clamped to `>= 0` before being summed — a negative offset is
+/// ignored rather than subtracted (WPT: «Negative headingoffsets are clamped
+/// to 0»). A missing/unparsable `headingoffset` on a node contributes 0. The
+/// final level is clamped to `[1, 9]`.
+///
+/// Walks the DOM `parent` chain, which already gives slotted content its
+/// original (light-DOM) ancestor chain rather than the `<slot>`'s — exactly
+/// what the WPT fixture's shadow-DOM cases expect, with no special-casing
+/// needed here.
+fn effective_heading_level(doc: &Document, node: NodeId) -> Option<i32> {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return None;
+    };
+    let base = base_heading_level(name.local.as_str())?;
+
+    let mut chain = Vec::new();
+    let mut cur = Some(node);
+    while let Some(n) = cur {
+        chain.push(n);
+        cur = doc.get(n).parent;
+    }
+    chain.reverse(); // root first, `node` last
+
+    let mut acc: i32 = 0;
+    for n in chain {
+        let n_ref = doc.get(n);
+        if n_ref.get_attr("headingreset").is_some() {
+            acc = 0;
+        }
+        if let Some(v) = n_ref.get_attr("headingoffset") {
+            let offset: i32 = v.trim().parse().unwrap_or(0).max(0);
+            acc = acc.saturating_add(offset);
+        }
+    }
+    Some((base + acc).clamp(1, 9))
 }
 
 /// Проверка: у узла есть хоть один text-ребёнок с непустым содержимым

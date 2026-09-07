@@ -969,6 +969,60 @@ use super::*;
     }
 
     #[test]
+    fn pseudo_heading_bare() {
+        let s = parse(":heading { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Heading(None))
+        ));
+    }
+
+    #[test]
+    fn pseudo_heading_with_level_arg() {
+        let s = parse(":heading(3) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Heading(Some(3)))
+        ));
+    }
+
+    #[test]
+    fn pseudo_heading_invalid_arg_falls_back_to_unsupported() {
+        // `:heading(<integer>)` — не an+b формула; нечисловой аргумент
+        // невалиден, парсер откатывает в Unsupported (BUG-1023).
+        let s = parse(":heading(abc) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "heading"
+        ));
+    }
+
+    #[test]
+    fn pseudo_heading_empty_falls_back_to_unsupported() {
+        let s = parse(":heading() { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "heading"
+        ));
+    }
+
+    #[test]
+    fn pseudo_heading_to_css_str_roundtrip() {
+        assert_eq!(
+            parse(":heading { color: red; }").rules[0].selectors[0].to_css_str(),
+            ":heading"
+        );
+        assert_eq!(
+            parse(":heading(4) { color: red; }").rules[0].selectors[0].to_css_str(),
+            ":heading(4)"
+        );
+    }
+
+    #[test]
     fn pseudo_state_basic_ident() {
         let s = parse(":state(open) { color: red; }");
         let p = &s.rules[0].selectors[0].head.parts[0];

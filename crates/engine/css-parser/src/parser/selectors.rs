@@ -317,6 +317,20 @@ pub enum PseudoClass {
     /// если индикатор фокуса должен быть виден по эвристике UA (обычно
     /// при навигации клавиатурой, не мышью). В Phase 0 синоним `:focus`.
     FocusVisible,
+    /// `:heading` / `:heading(n)` (WHATWG «heading level» draft,
+    /// [whatwg/html#11086](https://github.com/whatwg/html/pull/11086)).
+    /// `:heading` (arg `None`) матчит любой `<h1>`–`<h6>`. `:heading(n)`
+    /// матчит только заголовок, чей *эффективный уровень* равен `n`:
+    /// базовый уровень тега (h1=1 … h6=6) плюс сумма `headingoffset`
+    /// content-атрибутов по цепочке предок-или-сам-элемент, обнуляемая на
+    /// ближайшем `headingreset` предке-или-себе (после чего собственный
+    /// `headingoffset` того же узла всё равно прибавляется — «resetting
+    /// applies after headingOffset»), где каждое отдельное значение
+    /// `headingoffset` сперва клампится в `>= 0` (отрицательный offset не
+    /// вычитает, а игнорируется), а итоговый уровень клампится в `[1, 9]`.
+    /// Невалидный/отсутствующий `headingoffset` на узле = 0. Матчер —
+    /// `lumen-layout` (`style/matching/forms.rs`), не здесь.
+    Heading(Option<i32>),
     /// Неизвестные или ещё-не-реализованные псевдо-классы. Всегда `false`.
     /// Хранится имя для отладки и корректного подсчёта specificity (0-1-0).
     Unsupported(String),
@@ -705,6 +719,8 @@ pub(crate) fn pc_to_css_str(pc: &PseudoClass) -> String {
         PseudoClass::Active => ":active".into(),
         PseudoClass::FocusWithin => ":focus-within".into(),
         PseudoClass::FocusVisible => ":focus-visible".into(),
+        PseudoClass::Heading(None) => ":heading".into(),
+        PseudoClass::Heading(Some(n)) => format!(":heading({n})"),
         PseudoClass::Unsupported(name) => format!(":{name}"),
     }
 }
@@ -1377,6 +1393,7 @@ impl<'a> Parser<'a> {
             "past" => PseudoClass::Past,
             "future" => PseudoClass::Future,
             "host" => PseudoClass::Host(None),
+            "heading" => PseudoClass::Heading(None),
             _ => PseudoClass::Unsupported(name),
         };
         Some(SimpleSelector::PseudoClass(pc))
@@ -1521,6 +1538,23 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 Some(PseudoClass::State(ident))
+            }
+            "heading" => {
+                // `:heading(<integer>)` — single plain <integer>, no an+b
+                // formula and no `of <selector-list>` clause (unlike
+                // `:nth-child`), so a raw-token collect + `str::parse` is
+                // enough; caller falls back to `Unsupported` on a bad token.
+                self.skip_ws_and_comments();
+                let mut raw = String::new();
+                while let Some(c) = self.peek() {
+                    if c == ')' {
+                        break;
+                    }
+                    raw.push(c);
+                    self.consume();
+                }
+                let n: i32 = raw.trim().parse().ok()?;
+                Some(PseudoClass::Heading(Some(n)))
             }
             _ => None,
         }

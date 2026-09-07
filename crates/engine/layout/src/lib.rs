@@ -2273,3 +2273,7 @@ mod scroll_interaction_misc;
 #[cfg(test)]
 #[path = "tests/deep_traversal_stress.rs"]
 mod deep_traversal_stress;
+
+#[cfg(test)]
+#[path = "tests/heading_level_pseudo.rs"]
+mod heading_level_pseudo;
