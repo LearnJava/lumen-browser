@@ -282,7 +282,12 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
       fireEvent(el, 'loadstart');
       fireEvent(el, 'progress');
 
-      _loadTimer = setInterval(function() {
+      // BUG-1033: factor the poll body into a named function so the first
+      // check runs immediately (setTimeout 0) instead of waiting a full
+      // POLL_MS tick.  This makes error detection for unsupported media
+      // effectively synchronous — the error flag is usually set by the
+      // time the microtask drains, well before the next POLL_MS tick.
+      function pollLoad() {
         if (__lumen_audio_has_error(_handle)) {
           clearInterval(_loadTimer); _loadTimer = null;
           fireOnce('error');
@@ -297,7 +302,9 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
           fireOnce('canplaythrough');
           if (_autoplay) el.play();
         }
-      }, POLL_MS);
+      }
+      _loadTimer = setInterval(pollLoad, POLL_MS);
+      setTimeout(pollLoad, 0);
     }
 
     // ── timeupdate loop ──────────────────────────────────────────────────────
@@ -495,6 +502,16 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
       if (!HAS_PROVIDER) {
         fireEvent(el, 'play'); fireEvent(el, 'playing');
         return Promise.resolve();
+      }
+
+      // BUG-1033: check error state BEFORE entering the poll loop — the
+      // background decoder may have already set the error flag by the time
+      // play() is called (e.g. unsupported media type detected during load()),
+      // and deferring the reject to a random POLL_MS tick makes the
+      // unhandledrejection timing non-deterministic.
+      if (__lumen_audio_has_error(_handle)) {
+        fireEvent(el, 'error');
+        return Promise.reject(new DOMException('Media load failed', 'NotSupportedError'));
       }
 
       var rs = __lumen_audio_ready_state(_handle);
@@ -923,5 +940,53 @@ pump(3);
 countEvents('loadedmetadata') === 1"#,
         );
         assert!(ok);
+    }
+
+    /// BUG-1033: `play()` when the provider already reported an error must
+    /// reject synchronously instead of entering the `setInterval` poll — the
+    /// poll-based path made the `unhandledrejection` timing non-deterministic.
+    #[test]
+    fn play_rejects_immediately_when_error_already_set() {
+        let rt = V8JsRuntime::new().unwrap();
+        with_pumpable_poll(&rt);
+        // We cannot observe `.catch()` in a single eval (microtask needs a
+        // V8 drain), so verify that `play()` returns a rejected promise by
+        // catching it with a second eval that checks the stored name.
+        rt.eval(
+            r#"var el = document.createElement('audio');
+el.src = 'http://example.test/bad.mp3';
+_hasError = true;
+var _rejName = null;
+el.play().catch(function(e) { _rejName = e.name; });"#,
+        )
+        .unwrap();
+        // A second eval drains the microtask queue accumulated by the first.
+        let val = rt.eval("_rejName").unwrap();
+        let name = match &val {
+            JsValue::String(s) => s.as_str(),
+            _ => "",
+        };
+        assert_eq!(
+            name, "NotSupportedError",
+            "play() should reject immediately when has_error is true, got {val:?}"
+        );
+    }
+
+    /// BUG-1033: `startLoad()` runs its first poll tick via `setTimeout(0)`,
+    /// so an error that is already set fires the `error` event on the first
+    /// timer drain instead of waiting a full `POLL_MS`.
+    #[test]
+    fn load_fires_error_on_first_tick_via_settimeout_zero() {
+        let rt = V8JsRuntime::new().unwrap();
+        with_pumpable_poll(&rt);
+        let ok = bool_eval(
+            &rt,
+            r#"var el = document.createElement('audio');
+_hasError = true;
+el.src = 'http://example.test/bad.mp3';
+pump(1);
+countEvents('error') === 1"#,
+        );
+        assert!(ok, "startLoad should fire 'error' on the very first pump tick");
     }
 }
