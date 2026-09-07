@@ -1,4 +1,4 @@
-# BUG-1021: `collapsed_top_margin`/`collapsed_bottom_margin` are O(1) stack but O(depth) time — O(depth²) total on a deep single-child chain
+# BUG-1026: `collapsed_top_margin`/`collapsed_bottom_margin` are O(1) stack but O(depth) time — O(depth²) total on a deep single-child chain
 
 **Статус:** OPEN
 **Дата:** 2026-09-07
