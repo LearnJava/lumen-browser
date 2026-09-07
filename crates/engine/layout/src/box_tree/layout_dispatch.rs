@@ -417,6 +417,11 @@ fn lay_out_inner_impl(
         DispatchOutcome::NeedsGridLoop(init) => {
             super::grid_trampoline::run(b, init, measurer, viewport, hp);
         }
+        // LAYOUT-2 срез 6: the table dispatch arm's per-cell placement pass,
+        // same shape as the flex/grid cases above — see `table_trampoline::run`.
+        DispatchOutcome::NeedsTableLoop(init) => {
+            super::table_trampoline::run(b, init, measurer, viewport, hp);
+        }
     }
 }
 
@@ -1503,7 +1508,7 @@ pub(super) fn dispatch_box(
             };
         }
         BoxKind::Table => {
-            // CSS 2.1 §17 / §17.5.2 — table container: compute global column widths, lay out rows.
+            // CSS 2.1 §17 / §17.5.2 — table container: compute global column widths.
             // When no explicit CSS width is given, tables use shrink-to-fit: the table box is
             // only as wide as its columns require (total column widths + border-spacing gaps).
             // This differs from block elements which fill the available inline size.
@@ -1515,26 +1520,17 @@ pub(super) fn dispatch_box(
                     content_width = intrinsic;
                 }
             }
-            let content_height = lay_out_table(
-                b, content_x, content_y, content_width, measurer, viewport, children_pcb, hp,
+            // LAYOUT-2 срез 6: column-width/collapse-geometry precompute (native —
+            // see `build_table_init`'s doc comment) runs here, but the per-row/
+            // per-cell placement pass (and this container's own height, formerly
+            // right here) is deferred to `table_trampoline::run` so a chain of
+            // nested tables (a `<td>` containing another `<table>`) drives on an
+            // explicit heap stack instead of recursing.
+            let init = table::build_table_init(
+                b, content_x, content_y, content_width, measurer, viewport, children_pcb,
+                em, available_height, padding_top, padding_bottom,
             );
-            if let Some(h_len) = &s.height
-                && let Some(h) = resolve_block_size(h_len, em, available_height, viewport)
-            {
-                b.rect.height = match s.box_sizing {
-                    BoxSizing::ContentBox => (h + padding_top + padding_bottom
-                        + s.border_top_width + s.border_bottom_width).max(0.0),
-                    BoxSizing::BorderBox => h.max(
-                        padding_top + padding_bottom
-                            + s.border_top_width + s.border_bottom_width,
-                    ),
-                };
-            } else if !matches!(s.border_collapse, BorderCollapse::Collapse) {
-                // Collapse mode sets b.rect.height directly in lay_out_table (the table border-box
-                // coincides with the outer cells' collapsed borders).
-                b.rect.height = content_height + padding_top + padding_bottom
-                    + s.border_top_width + s.border_bottom_width;
-            }
+            return DispatchOutcome::NeedsTableLoop(init);
         }
         BoxKind::TableRowGroup => {
             // CSS 2.1 §17 — row group standalone (outside a <table>): block-flow of rows.

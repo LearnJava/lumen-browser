@@ -29,6 +29,13 @@ pub(super) enum DispatchOutcome {
     // (and every further grid-container descendant it meets, incl. subgrid)
     // on an explicit heap stack.
     NeedsGridLoop(Box<super::grid_trampoline::GridInit>),
+    // LAYOUT-2 срез 6: the table dispatch arm's per-cell placement (CSS 2.1
+    // §17.5) — reads each cell's `.rect` back for row-height normalisation,
+    // rowspan bookkeeping and border-collapse offset, so it is non-tail-
+    // recursive the same way the other three branches are.
+    // `super::table_trampoline::run` drives it (and every further table
+    // descendant a cell meets, e.g. `<td><table>…`) on an explicit heap stack.
+    NeedsTableLoop(Box<super::table_trampoline::TableInit>),
 }
 
 /// Loop-entry state for the plain block-flow branch, captured by `dispatch_box`
@@ -453,6 +460,13 @@ fn step_child(
         // grid container — same shape as the flex arm above.
         DispatchOutcome::NeedsGridLoop(child_init) => {
             super::grid_trampoline::run(child, child_init, measurer, viewport, hp);
+            post_child_bookkeeping(frame, i, viewport, bottom_cache);
+            StepOutcome::Advance
+        }
+        // LAYOUT-2 срез 6: a block-flow normal-flow child that is itself a
+        // table — same shape as the flex/grid arms above.
+        DispatchOutcome::NeedsTableLoop(child_init) => {
+            super::table_trampoline::run(child, child_init, measurer, viewport, hp);
             post_child_bookkeeping(frame, i, viewport, bottom_cache);
             StepOutcome::Advance
         }

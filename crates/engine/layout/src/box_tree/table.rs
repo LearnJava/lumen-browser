@@ -265,25 +265,31 @@ fn collapse_max_cross_border(b: &LayoutBox) -> f32 {
     max_b
 }
 
-/// CSS 2.1 §17 — table layout with colspan/rowspan support.
-///
-/// Pass 1: compute column widths (span-aware), lay out rows top-to-bottom while tracking
-/// rowspan occupancy and collecting spanning cells.
-/// Pass 2: fix spanning cell heights — each rowspan cell's height is extended to cover
-/// the bottom edge of its last spanned row.
-///
-/// Returns content height.
+/// LAYOUT-2 срез 6: computes `TableInit` — column widths, collapsed-border
+/// geometry, and every row's column assignment (former `lay_out_table_row`
+/// Steps 1–2, `col_widths: Some` branch, plus its rowspan-occupancy
+/// registration) — entirely from static `col_span`/`row_span` metadata and
+/// `col_widths`, never from a laid-out cell `.rect`. This is why the whole
+/// pass, across every row of the table in DOM order (rowspan occupancy
+/// threaded the same way the removed `lay_out_table`'s single loop threaded
+/// it), can run natively here instead of being suspended on — unlike the
+/// per-cell placement pass itself, which `table_trampoline::run` drives.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn lay_out_table(
+pub(crate) fn build_table_init(
     b: &mut LayoutBox,
     content_x: f32,
     content_y: f32,
     content_width: f32,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
-    pcb: Rect,
-    hp: &dyn HyphenationProvider,
-) -> f32 {
+    children_pcb: Rect,
+    em: f32,
+    available_height: Option<f32>,
+    padding_top: f32,
+    padding_bottom: f32,
+) -> Box<super::table_trampoline::TableInit> {
+    use super::table_trampoline::{TableInit, TopEntry};
+
     // CSS Tables L2 §17.6: collapse mode zeroes out border-spacing.
     let collapse = matches!(b.style.border_collapse, BorderCollapse::Collapse);
     let (h_spacing, v_spacing) = match b.style.border_collapse {
@@ -315,163 +321,117 @@ pub(crate) fn lay_out_table(
     } else {
         (None, 0.0, 0.0)
     };
-    let collapse_col_x_ref = collapse_col_x.as_deref();
 
-    // First row starts after the top outer v_spacing slot; in collapse mode the first row's top
-    // border coincides with the table's top border (start at the table border-box top edge).
-    let mut cur_y = if collapse { b.rect.y } else { content_y + v_spacing };
     let mut rowspan_map: Vec<u32> = Vec::new();
-
-    // flat_row_rects[k] = (y, height) for the k-th row in DOM order (across all groups).
-    let mut flat_row_rects: Vec<(f32, f32)> = Vec::new();
-
-    // Spanning cells that need height post-fix:
-    // (group: Option<usize>, row_in_group: usize, child_idx: usize, start_flat: usize, span: u32)
-    let mut span_fixes: Vec<(Option<usize>, usize, usize, usize, u32)> = Vec::new();
-
+    let mut top_level: Vec<TopEntry> = Vec::with_capacity(b.children.len());
     let n = b.children.len();
     for i in 0..n {
         match b.children[i].kind {
             BoxKind::TableRow => {
-                let c_em = b.children[i].style.font_size;
-                let c_mt = b.children[i].style.margin_top.resolve_or_zero(c_em, content_width, viewport);
-                let row_y = cur_y + c_mt;
-                b.children[i].rect.x = content_x;
-                b.children[i].rect.y = row_y;
-                b.children[i].rect.width = content_width;
-                let flat_idx = flat_row_rects.len();
-                let row_h = lay_out_table_row(
-                    &mut b.children[i],
-                    content_x, row_y, content_width,
-                    Some(&col_widths),
-                    Some(&mut rowspan_map),
-                    h_spacing,
-                    collapse_col_x_ref,
-                    measurer, viewport, pcb, hp,
-                );
-                let row_style_h = {
-                    let s = &b.children[i].style;
-                    if let Some(h_len) = &s.height
-                        && let Some(h) = h_len.resolve(s.font_size, None, viewport)
-                    {
-                        let pt = s.padding_top.resolve_or_zero(s.font_size, content_width, viewport);
-                        let pb = s.padding_bottom.resolve_or_zero(s.font_size, content_width, viewport);
-                        match s.box_sizing {
-                            BoxSizing::ContentBox => (h + pt + pb + s.border_top_width + s.border_bottom_width).max(0.0),
-                            BoxSizing::BorderBox => h.max(pt + pb + s.border_top_width + s.border_bottom_width),
-                        }
-                    } else {
-                        let pt = b.children[i].style.padding_top.resolve_or_zero(b.children[i].style.font_size, content_width, viewport);
-                        let pb = b.children[i].style.padding_bottom.resolve_or_zero(b.children[i].style.font_size, content_width, viewport);
-                        row_h + pt + pb + b.children[i].style.border_top_width + b.children[i].style.border_bottom_width
-                    }
-                };
-                b.children[i].rect.height = row_style_h;
-                flat_row_rects.push((b.children[i].rect.y, row_style_h));
-                // Collect spanning cells for post-fix.
-                for (ci, child) in b.children[i].children.iter().enumerate() {
-                    if !matches!(child.kind, BoxKind::Skip) && child.row_span > 1 {
-                        span_fixes.push((None, i, ci, flat_idx, child.row_span));
-                    }
-                }
-                let c_mb = b.children[i].style.margin_bottom.resolve_or_zero(b.children[i].style.font_size, content_width, viewport);
-                // Add v_spacing gap after each row (outer bottom slot included); in collapse mode
-                // pull the next row up by the shared horizontal grid-line border instead.
-                // CSS: border-spacing
-                cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb + v_spacing - collapse_v_overlap;
+                let row = build_row_init(&b.children[i], &col_widths, &mut rowspan_map);
                 decrement_rowspan_map(&mut rowspan_map);
+                top_level.push(TopEntry::Row { child_idx: i, row });
             }
             BoxKind::TableRowGroup => {
-                let group_em = b.children[i].style.font_size;
-                let g_mt = b.children[i].style.margin_top.resolve_or_zero(group_em, content_width, viewport);
-                let group_y = cur_y + g_mt;
-                b.children[i].rect.x = content_x;
-                b.children[i].rect.y = group_y;
-                b.children[i].rect.width = content_width;
-                let mut row_y = group_y;
+                let mut rows = Vec::new();
                 let n_rows = b.children[i].children.len();
                 for r in 0..n_rows {
                     if !matches!(b.children[i].children[r].kind, BoxKind::TableRow) {
                         continue;
                     }
-                    let flat_idx = flat_row_rects.len();
-                    let r_em = b.children[i].children[r].style.font_size;
-                    let r_mt = b.children[i].children[r].style.margin_top.resolve_or_zero(r_em, content_width, viewport);
-                    b.children[i].children[r].rect.x = content_x;
-                    b.children[i].children[r].rect.y = row_y + r_mt;
-                    b.children[i].children[r].rect.width = content_width;
-                    let row_h = lay_out_table_row(
-                        &mut b.children[i].children[r],
-                        content_x, row_y + r_mt, content_width,
-                        Some(&col_widths),
-                        Some(&mut rowspan_map),
-                        h_spacing,
-                        collapse_col_x_ref,
-                        measurer, viewport, pcb, hp,
-                    );
-                    let r_pt = b.children[i].children[r].style.padding_top.resolve_or_zero(r_em, content_width, viewport);
-                    let r_pb = b.children[i].children[r].style.padding_bottom.resolve_or_zero(r_em, content_width, viewport);
-                    let r_bor = b.children[i].children[r].style.border_top_width + b.children[i].children[r].style.border_bottom_width;
-                    let row_style_h = row_h + r_pt + r_pb + r_bor;
-                    b.children[i].children[r].rect.height = row_style_h;
-                    flat_row_rects.push((b.children[i].children[r].rect.y, row_style_h));
-                    // Collect spanning cells for post-fix.
-                    for (ci, child) in b.children[i].children[r].children.iter().enumerate() {
-                        if !matches!(child.kind, BoxKind::Skip) && child.row_span > 1 {
-                            span_fixes.push((Some(i), r, ci, flat_idx, child.row_span));
-                        }
-                    }
-                    let r_mb = b.children[i].children[r].style.margin_bottom.resolve_or_zero(r_em, content_width, viewport);
-                    // CSS: border-spacing — collapse mode pulls rows together by the shared border.
-                    row_y = b.children[i].children[r].rect.y + b.children[i].children[r].rect.height + r_mb + v_spacing - collapse_v_overlap;
+                    let row = build_row_init(&b.children[i].children[r], &col_widths, &mut rowspan_map);
                     decrement_rowspan_map(&mut rowspan_map);
+                    rows.push((r, row));
                 }
-                let g_pt = b.children[i].style.padding_top.resolve_or_zero(group_em, content_width, viewport);
-                let g_pb = b.children[i].style.padding_bottom.resolve_or_zero(group_em, content_width, viewport);
-                let g_bor = b.children[i].style.border_top_width + b.children[i].style.border_bottom_width;
-                b.children[i].rect.height = (row_y - group_y) + g_pt + g_pb + g_bor;
-                let g_mb = b.children[i].style.margin_bottom.resolve_or_zero(group_em, content_width, viewport);
-                cur_y = b.children[i].rect.y + b.children[i].rect.height + g_mb;
+                top_level.push(TopEntry::Group { child_idx: i, rows });
             }
             _ => {}
         }
     }
 
-    // Pass 2: fix rowspan cell heights.
-    // Each spanning cell's height is extended to reach the bottom of its last spanned row.
-    for (group, row, child_idx, start_flat, span) in span_fixes {
-        let end_flat = (start_flat + span as usize).min(flat_row_rects.len());
-        if end_flat == 0 {
-            continue;
+    // First row starts after the top outer v_spacing slot; in collapse mode the first row's top
+    // border coincides with the table's top border (start at the table border-box top edge).
+    let cur_y = if collapse { b.rect.y } else { content_y + v_spacing };
+
+    Box::new(TableInit {
+        top_level,
+        col_widths,
+        collapse,
+        h_spacing,
+        v_spacing,
+        collapse_col_x,
+        collapse_v_overlap,
+        collapse_width,
+        n_cols,
+        content_x,
+        content_y,
+        content_width,
+        children_pcb,
+        cur_y,
+        flat_row_rects: Vec::new(),
+        span_fixes: Vec::new(),
+        s: Arc::clone(&b.style),
+        em,
+        available_height,
+        padding_top,
+        padding_bottom,
+    })
+}
+
+/// One row's Steps 1–2 (column assignment) plus rowspan-occupancy
+/// registration — copied from the removed `lay_out_table_row`'s
+/// `col_widths: Some` branch (lines that read `b.children`/`rowspan_map`
+/// only, none of a laid-out `.rect`) and its post-Step-3 registration block.
+/// `rowspan_map` threads across every row of the table in DOM order, exactly
+/// as the removed single loop threaded it — this function does not decrement
+/// it; the caller does, once per row, matching the removed code's placement.
+fn build_row_init(
+    row: &LayoutBox,
+    col_widths: &[f32],
+    rowspan_map: &mut Vec<u32>,
+) -> super::table_trampoline::RowInit {
+    use super::table_trampoline::RowInit;
+
+    let cell_idxs: Vec<usize> = row
+        .children
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip))
+        .map(|(i, _)| i)
+        .collect();
+
+    let mut col_pos = 0usize;
+    let mut cell_cols = Vec::with_capacity(cell_idxs.len());
+    for &i in &cell_idxs {
+        while col_pos < rowspan_map.len() && rowspan_map[col_pos] > 0 {
+            col_pos += 1;
         }
-        let (last_y, last_h) = flat_row_rects[end_flat - 1];
-        let target_bottom = last_y + last_h;
-        let cell = match group {
-            None => &mut b.children[row].children[child_idx],
-            Some(g) => &mut b.children[g].children[row].children[child_idx],
-        };
-        let new_h = (target_bottom - cell.rect.y).max(cell.rect.height);
-        cell.rect.height = new_h;
+        let span = row.children[i].col_span.max(1) as usize;
+        let w: f32 = (col_pos..col_pos + span).map(|c| col_widths.get(c).copied().unwrap_or(0.0)).sum();
+        cell_cols.push((col_pos, w));
+        col_pos += span;
     }
 
-    // CSS 2.1 §17.6.2 — collapsing model: the table border-box coincides with the outer cells'
-    // shared borders. Snap the table width to the overlapped grid and the height to the bottom
-    // edge of the last row (which already includes the collapsed top/bottom borders). The caller
-    // skips its own height computation in collapse mode, so set it here for every collapse table
-    // (an empty table with no rows collapses to a zero-height border-box).
-    if collapse {
-        if b.style.width.is_none() && n_cols > 0 {
-            b.rect.width = collapse_width;
-        }
-        if b.style.height.is_none() {
-            b.rect.height = flat_row_rects
-                .last()
-                .map(|&(last_y, last_h)| (last_y + last_h - b.rect.y).max(0.0))
-                .unwrap_or(0.0);
+    // Register rowspan occupancy. Value = row_span (not row_span-1) because the caller
+    // decrements after this row, leaving row_span-1 remaining rows occupied.
+    for (j, &i) in cell_idxs.iter().enumerate() {
+        if row.children[i].row_span > 1 {
+            let (col_start, _) = cell_cols[j];
+            let span = row.children[i].col_span.max(1) as usize;
+            let end_col = col_start + span;
+            if end_col > rowspan_map.len() {
+                rowspan_map.resize(end_col, 0);
+            }
+            let rs = row.children[i].row_span;
+            for v in rowspan_map.iter_mut().skip(col_start).take(span) {
+                if *v < rs {
+                    *v = rs;
+                }
+            }
         }
     }
 
-    (cur_y - content_y).max(0.0)
+    RowInit { cell_idxs, cell_cols }
 }
 
 /// Scans `row`'s cells and updates `col_explicit` with per-column explicit border-box
