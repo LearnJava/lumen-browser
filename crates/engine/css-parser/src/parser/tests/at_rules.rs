@@ -1221,6 +1221,29 @@ use super::*;
     }
 
     #[test]
+    fn media_query_bare_word_after_and_invalidates_clause() {
+        // BUG-528: a second bare (non-parenthesized) word joined by `and`
+        // is not a second media-type to test independently — it's a syntax
+        // error, so the whole clause must go Unsupported (unknown, never
+        // matches, `not` included) instead of silently ANDing in an
+        // always-false extra condition that `not` then flips to true.
+        let q = parse_media_query("not all and overflow-inline");
+        assert!(q.clauses[0].negated);
+        assert_eq!(q.clauses[0].conditions, vec![MediaCondition::Unsupported]);
+        assert!(!q.matches(&screen_ctx(500.0)));
+    }
+
+    #[test]
+    fn media_query_comma_list_all_unparseable_entries_never_matches() {
+        // Same shape as `matchmedia-utils.js`'s `query_should_be_unknown`
+        // helper: `${query}, not all and ${query}` for an unrecognized
+        // bare feature name. Neither comma-separated entry should match.
+        let q = parse_media_query("overflow-inline, not all and overflow-inline");
+        assert_eq!(q.clauses.len(), 2);
+        assert!(!q.matches(&screen_ctx(500.0)));
+    }
+
+    #[test]
     fn media_query_prefers_color_scheme_light_default() {
         let q = parse_media_query("(prefers-color-scheme: light)");
         assert!(q.matches(&screen_ctx(500.0)));
