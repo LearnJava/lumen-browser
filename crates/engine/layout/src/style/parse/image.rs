@@ -82,8 +82,9 @@ pub(in crate::style) fn parse_paint_function(s: &str) -> Option<String> {
     None
 }
 
-/// Parse one image value into a `BackgroundImage` (used by `parse_cross_fade`).
-fn parse_bg_image_value(s: &str) -> Option<BackgroundImage> {
+/// Parse one image value into a `BackgroundImage` (used by `parse_cross_fade`
+/// and, since BUG-531, by `syntax_string`'s `<image>` syntax-string matcher).
+pub(in crate::style) fn parse_bg_image_value(s: &str) -> Option<BackgroundImage> {
     let s = s.trim();
     if s.eq_ignore_ascii_case("none") {
         return Some(BackgroundImage::None);
