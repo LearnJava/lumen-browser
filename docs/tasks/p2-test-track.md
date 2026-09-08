@@ -1038,6 +1038,17 @@ harness OK, 35/82 сабтестов). Гипотеза `test_driver.Actions()` 
 (тест прошёл штатно в общем потоке) — похоже, зависание среза 10 было привязано к
 тогдашнему бинарю/окружению, не к самой категории. Baseline 234 → 235.
 
+### TEST-3: срез 31 (2026-09-08) — `scroll-animations` закрыт
+
+Полная нарративная запись — в ячейке `WPT-RUN-7` `ROADMAP.md` (та же практика, что
+срезы 16–18/29). Кратко: `scroll-animations` (280 файлов, 0 хитов предиктора
+`RemoteContext`/`window.open`/`dispatcher`/`test_driver.Actions`, 0
+`.https.`/`.sub.`) — самая чистая из свежего списка кандидатов вне `html/*`
+(`IndexedDB`, `WebCryptoAPI`, `web-animations`, `encoding` — тоже 0 хитов,
+следующие по размеру). `--update-expected` дошёл до конца штатно (4:12,
+199/205 harness OK, 418/2079 сабтестов, 201 новых `.ini`), два `--check`
+подряд дали 0 регрессий байт-в-байт. Baseline 236 → 237.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
