@@ -204,8 +204,8 @@ mod flex_trampoline;
 mod grid_trampoline;
 mod table_trampoline;
 mod multicol_trampoline;
+mod vertical_trampoline;
 
-pub(crate) use bfc::lay_out_for_vertical;
 use bfc::{
     collapsed_bottom_margin, collapsed_top_margin, contained_content_height, establishes_bfc,
     has_in_flow_content, last_collapsible_child, MarginCollapseCache,

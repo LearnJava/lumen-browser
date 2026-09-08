@@ -225,6 +225,12 @@ fn dispatch_child(
             StepOutcome::Advance
         }
         DispatchOutcome::NeedsMulticolLoop(ci) => StepOutcome::Descend(ci),
+        // LAYOUT-2 срез 8: same shape, for a child that is itself a vertical
+        // writing-mode container.
+        DispatchOutcome::NeedsVerticalLoop(ci) => {
+            super::vertical_trampoline::run(child, ci, measurer, viewport, hp);
+            StepOutcome::Advance
+        }
     }
 }
 

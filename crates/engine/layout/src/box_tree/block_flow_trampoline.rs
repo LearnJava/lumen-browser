@@ -44,6 +44,14 @@ pub(super) enum DispatchOutcome {
     // are. `super::multicol_trampoline::run` drives it (and every further
     // multicol-container descendant it meets) on an explicit heap stack.
     NeedsMulticolLoop(Box<super::multicol_trampoline::MulticolInit>),
+    // LAYOUT-2 срез 8: the vertical-writing-mode dispatch arm's per-child
+    // block-axis stacking loop (CSS Writing Modes L3 §3) — reads each
+    // child's `.rect` back to reposition it to its true physical x and to
+    // advance the block-axis cursor, so it is non-tail-recursive the same
+    // way the other five branches are. `super::vertical_trampoline::run`
+    // drives it (and every further vertical-writing-mode descendant it
+    // meets) on an explicit heap stack.
+    NeedsVerticalLoop(Box<crate::vertical::VerticalInit>),
 }
 
 /// Loop-entry state for the plain block-flow branch, captured by `dispatch_box`
@@ -482,6 +490,14 @@ fn step_child(
         // multicol container — same shape as the flex/grid/table arms above.
         DispatchOutcome::NeedsMulticolLoop(child_init) => {
             super::multicol_trampoline::run(child, child_init, measurer, viewport, hp);
+            post_child_bookkeeping(frame, i, viewport, bottom_cache);
+            StepOutcome::Advance
+        }
+        // LAYOUT-2 срез 8: a block-flow normal-flow child that is itself a
+        // vertical-writing-mode container — same shape as the flex/grid/
+        // table/multicol arms above.
+        DispatchOutcome::NeedsVerticalLoop(child_init) => {
+            super::vertical_trampoline::run(child, child_init, measurer, viewport, hp);
             post_child_bookkeeping(frame, i, viewport, bottom_cache);
             StepOutcome::Advance
         }

@@ -316,6 +316,14 @@ fn step_item(
                 post_item_place(frame, li, &pos, viewport);
                 StepOutcome::Advance
             }
+            // LAYOUT-2 срез 8: a column-flex item that is itself a vertical
+            // writing-mode container — same shape as the grid/table/multicol
+            // arms above.
+            DispatchOutcome::NeedsVerticalLoop(child_init) => {
+                super::vertical_trampoline::run(&mut frame.b.children[pos.i], child_init, measurer, viewport, hp);
+                post_item_place(frame, li, &pos, viewport);
+                StepOutcome::Advance
+            }
         }
     } else {
         let item_s = frame.b.children[pos.i].style.clone();
@@ -369,6 +377,14 @@ fn step_item(
             // container — same shape as the grid/table arms above.
             DispatchOutcome::NeedsMulticolLoop(child_init) => {
                 super::multicol_trampoline::run(&mut frame.b.children[pos.i], child_init, measurer, viewport, hp);
+                post_item_place(frame, li, &pos, viewport);
+                StepOutcome::Advance
+            }
+            // LAYOUT-2 срез 8: a row-flex item that is itself a vertical
+            // writing-mode container — same shape as the grid/table/multicol
+            // arms above.
+            DispatchOutcome::NeedsVerticalLoop(child_init) => {
+                super::vertical_trampoline::run(&mut frame.b.children[pos.i], child_init, measurer, viewport, hp);
                 post_item_place(frame, li, &pos, viewport);
                 StepOutcome::Advance
             }

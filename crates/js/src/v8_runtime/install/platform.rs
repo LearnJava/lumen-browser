@@ -977,11 +977,11 @@ pub(crate) fn install_crypto_and_typed_om(
             if let Ok(doc) = d.lock() {
                 // BUG-1031-class: stale/foreign NodeId — degrade instead of panicking
                 // (same guard as `_lumen_get_tag_name`, BUG-986/BUG-1024).
-                if let Some(node) = doc.try_get(NodeId::from_index(nid as usize)) {
-                    if let Some(style_attr) = node.get_attr("style") {
-                        let parsed = _parse_style_string(style_attr);
-                        return parsed.get(&_css_property_key(&prop)).cloned().unwrap_or_default();
-                    }
+                if let Some(node) = doc.try_get(NodeId::from_index(nid as usize))
+                    && let Some(style_attr) = node.get_attr("style")
+                {
+                    let parsed = _parse_style_string(style_attr);
+                    return parsed.get(&_css_property_key(&prop)).cloned().unwrap_or_default();
                 }
             }
             String::new()
@@ -1059,10 +1059,10 @@ pub(crate) fn install_crypto_and_typed_om(
             let mut pairs: Vec<(String, String)> = Vec::new();
             if let Ok(doc) = d.lock() {
                 // BUG-1031-class: stale/foreign NodeId — degrade instead of panicking.
-                if let Some(node) = doc.try_get(NodeId::from_index(nid as usize)) {
-                    if let Some(style_attr) = node.get_attr("style") {
-                        pairs = _parse_style_string(style_attr).into_iter().collect();
-                    }
+                if let Some(node) = doc.try_get(NodeId::from_index(nid as usize))
+                    && let Some(style_attr) = node.get_attr("style")
+                {
+                    pairs = _parse_style_string(style_attr).into_iter().collect();
                 }
             }
             _style_entries_to_json(pairs)

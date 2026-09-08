@@ -428,6 +428,12 @@ fn lay_out_inner_impl(
         DispatchOutcome::NeedsMulticolLoop(init) => {
             super::multicol_trampoline::run(b, init, measurer, viewport, hp);
         }
+        // LAYOUT-2 срез 8: the vertical-writing-mode dispatch arm's per-child
+        // stacking pass, same shape as the multicol case above — see
+        // `vertical_trampoline::run`.
+        DispatchOutcome::NeedsVerticalLoop(init) => {
+            super::vertical_trampoline::run(b, init, measurer, viewport, hp);
+        }
     }
 }
 
@@ -556,18 +562,16 @@ pub(super) fn dispatch_box(
         // BUG-802: `available_height` is consumed inside `crate::vertical`,
         // out of reach of `resolve_block_size`'s per-site bookkeeping.
         INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
-        crate::vertical::lay_out_vertical_block(
-            b,
-            start_x,
-            start_y,
-            available_width,
-            available_height,
-            measurer,
-            viewport,
-            pcb,
-            hp,
+        // LAYOUT-2 срез 8: `build_vertical_init` computes everything up front
+        // (own rect.x/y/height, sizing) but the per-child stacking loop
+        // (reads each child's `.rect` back for the block-axis cursor) is
+        // deferred to `vertical_trampoline::run` so a chain of nested
+        // vertical containers drives on an explicit heap stack instead of
+        // recursing.
+        let init = crate::vertical::build_vertical_init(
+            b, start_x, start_y, available_width, available_height, viewport, pcb,
         );
-        return DispatchOutcome::Done;
+        return DispatchOutcome::NeedsVerticalLoop(Box::new(init));
     }
 
     // BUG-341 S12: an `Arc` bump, not a 3.2 KB deep copy, on the (overwhelming

@@ -333,6 +333,13 @@ fn step_cell(
             super::multicol_trampoline::run(cell_box, ci, measurer, viewport, hp);
             StepOutcome::Advance
         }
+        // LAYOUT-2 срез 8: a cell whose content is itself a vertical
+        // writing-mode container — same shape as the flex/grid/multicol arms
+        // above.
+        DispatchOutcome::NeedsVerticalLoop(ci) => {
+            super::vertical_trampoline::run(cell_box, ci, measurer, viewport, hp);
+            StepOutcome::Advance
+        }
     }
 }
 

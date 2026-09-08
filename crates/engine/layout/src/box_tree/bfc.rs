@@ -1,25 +1,5 @@
 use super::*;
 
-/// Crate-internal shim so `vertical.rs` can recursively invoke the main
-/// `lay_out` for children inside a vertical writing-mode container.
-///
-/// Same parameters and semantics as the private `lay_out`. Exists only
-/// because Rust modules cannot reach a sibling module's private functions.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn lay_out_for_vertical(
-    b: &mut LayoutBox,
-    start_x: f32,
-    start_y: f32,
-    available_width: f32,
-    available_height: Option<f32>,
-    measurer: Option<&dyn TextMeasurer>,
-    viewport: Size,
-    pcb: Rect,
-    hp: &dyn HyphenationProvider,
-) {
-    lay_out(b, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp, false);
-}
-
 /// CSS 2.1 §9.4.1 — does this box establish a new Block Formatting Context?
 ///
 /// A BFC root does NOT collapse its margins with its in-flow children

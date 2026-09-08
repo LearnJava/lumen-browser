@@ -58,19 +58,40 @@ pub(crate) fn is_vertical(mode: WritingMode) -> bool {
     !matches!(mode, WritingMode::HorizontalTb)
 }
 
-/// Lay out a Block/FlowRoot box in vertical writing mode.
-///
-/// Called from `lay_out()` in `box_tree.rs` when the element's
-/// `style.writing_mode` is `VerticalRl`, `VerticalLr`, `SidewaysRl`, or `SidewaysLr`.
+/// Loop-entry state for a vertical writing-mode Block/FlowRoot container,
+/// captured by [`build_vertical_init`] before any child is processed — see
+/// `crate::box_tree::vertical_trampoline` for the explicit-stack driver.
+/// `cursor_block_consumed` mutates once per child inside that driver; the
+/// rest are read-only invariants for this box's whole loop.
+pub(crate) struct VerticalInit {
+    pub(crate) is_rtl: bool,
+    pub(crate) content_x_left: f32,
+    pub(crate) content_y: f32,
+    pub(crate) content_block_avail: f32,
+    pub(crate) content_inline: f32,
+    pub(crate) explicit_block_size: Option<f32>,
+    pub(crate) frame_horiz: f32,
+    pub(crate) pcb: Rect,
+    pub(crate) cursor_block_consumed: f32,
+}
+
+/// Precomputes the loop-entry state for laying out a Block/FlowRoot box in
+/// vertical writing mode — everything `dispatch_box` (`box_tree/
+/// layout_dispatch.rs`) used to compute inline before its vertical arm called
+/// straight through to the (removed) `lay_out_vertical_block`. Called when
+/// the element's `style.writing_mode` is `VerticalRl`, `VerticalLr`,
+/// `SidewaysRl`, or `SidewaysLr`.
 ///
 /// # Parameters
-/// - `b`: the box to lay out (modified in place).
+/// - `b`: the box to lay out (`rect.x`/`rect.y`/`rect.height` written in
+///   place here; `rect.width` is finalised later by the trampoline once the
+///   children's block-extent is known).
 /// - `start_x`, `start_y`: top-left corner of the containing block's content area.
 /// - `available_width`: physical width available; in vertical mode this is the
 ///   available *block-size* (room for children to stack horizontally).
 /// - `available_height`: physical height available; in vertical mode this is the
 ///   available *inline-size* (room for the inline axis = lines of text).
-/// - `measurer`, `viewport`, `pcb`, `hp`: forwarded to child layout.
+/// - `viewport`, `pcb`: forwarded to child layout via the returned init.
 ///
 /// # Axis mapping
 /// - `vertical-rl` / `sideways-rl`: block direction is right→left (x decreases).
@@ -82,18 +103,15 @@ pub(crate) fn is_vertical(mode: WritingMode) -> bool {
 /// - Margin collapsing along the block axis is not implemented.
 /// - Floats / `clear` are ignored inside vertical contexts.
 /// - `min-/max-width` / `min-/max-height` are not clamped in vertical mode.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn lay_out_vertical_block(
+pub(crate) fn build_vertical_init(
     b: &mut LayoutBox,
     start_x: f32,
     start_y: f32,
     available_width: f32,
     available_height: Option<f32>,
-    measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
-    hp: &dyn HyphenationProvider,
-) {
+) -> VerticalInit {
     let s = b.style.clone();
     let em = s.font_size;
 
@@ -186,74 +204,34 @@ pub(crate) fn lay_out_vertical_block(
     //   vertical-lr: cursor starts at the left edge of the content box and
     //                moves rightwards.
     let content_x_left = b.rect.x + border_left + padding_left;
-    let mut cursor_block_consumed: f32 = 0.0;
 
-    for child in &mut b.children {
-        if matches!(child.kind, BoxKind::Skip) {
-            child.rect = Rect::new(content_x_left, content_y, 0.0, 0.0);
-            continue;
-        }
-
-        // Tentative placement: lay the child out at the left content edge.
-        // The child's own logic (recursive vertical lay-out, or horizontal
-        // fallback for InlineRun) will write into child.rect.width / .height.
-        //
-        // The two "available_*" parameters retain their PHYSICAL meaning across
-        // writing modes (CSS Writing Modes L3 §5: containing-block dimensions
-        // are physical; only `width`/`height` semantics swap). So:
-        // - available_width  = remaining physical width  = remaining block-size
-        // - available_height = parent's content inline-size = physical height
-        //
-        // The recursive vertical layout then re-interprets these: it reads
-        // `available_height` (physical) as the inline-size basis for CSS
-        // `height`, and uses `available_width` for the block-axis cursor.
-        //
-        // Horizontal-fallback children (InlineRun, etc.) treat available_width
-        // as physical width — they get the remaining block extent, which
-        // produces sideways text inside the inline-axis strip. Acceptable
-        // Phase 0 behaviour.
-        let remaining_block = (content_block_avail - cursor_block_consumed).max(0.0);
-
-        crate::box_tree::lay_out_for_vertical(
-            child,
-            content_x_left,
-            content_y,
-            remaining_block,
-            Some(content_inline),
-            measurer,
-            viewport,
-            pcb,
-            hp,
-        );
-
-        // child.rect.width is the child's physical width = block-size consumed.
-        let child_block = child.rect.width.max(0.0);
-
-        // Reposition the child to the correct physical x along the block axis.
-        let placed_x = if is_rtl {
-            // vertical-rl: rightmost cursor minus consumed-so-far minus this child's width.
-            let right_edge = content_x_left + content_block_avail;
-            right_edge - cursor_block_consumed - child_block
-        } else {
-            content_x_left + cursor_block_consumed
-        };
-
-        // Shift child (and any nested geometry produced during its layout).
-        let dx = placed_x - child.rect.x;
-        if dx != 0.0 {
-            shift_subtree_x(child, dx);
-        }
-
-        cursor_block_consumed += child_block;
+    // Per-child placement (tentative left-edge dispatch, then reposition to
+    // the true block-axis physical x once the child's width is known) and the
+    // post-loop width finalisation both used to live here — moved to
+    // `crate::box_tree::vertical_trampoline` so a chain of nested vertical
+    // containers drives on an explicit heap stack instead of recursing (the
+    // per-child dispatch reads `.rect` back for the block-axis cursor, so it
+    // cannot be a simple pre-order walk — same class as the other five
+    // LAYOUT-2 dispatchers). The two "available_*" parameters threaded into
+    // that per-child dispatch retain their PHYSICAL meaning across writing
+    // modes (CSS Writing Modes L3 §5: containing-block dimensions are
+    // physical; only `width`/`height` semantics swap): `available_width` is
+    // remaining block-size, `available_height` is the parent's content
+    // inline-size. Horizontal-fallback children (InlineRun, etc.) treat
+    // `available_width` as physical width — they get the remaining block
+    // extent, which produces sideways text inside the inline-axis strip.
+    // Acceptable Phase 0 behaviour.
+    VerticalInit {
+        is_rtl,
+        content_x_left,
+        content_y,
+        content_block_avail,
+        content_inline,
+        explicit_block_size,
+        frame_horiz,
+        pcb,
+        cursor_block_consumed: 0.0,
     }
-
-    // Finalise physical width: explicit CSS width wins; otherwise grow to fit
-    // children plus padding+border.
-    b.rect.width = if let Some(bs) = explicit_block_size {
-        bs.max(frame_horiz)
-    } else {
-        cursor_block_consumed + frame_horiz
-    };
 }
 
 /// Resolve an axis-sizing CSS length (`width` or `height` in vertical mode).
@@ -283,21 +261,31 @@ fn resolve_axis_size(
 
 /// Translate every rect under `b` by `dx` along the x axis.
 ///
-/// Required because the child's recursive layout positions descendants
-/// relative to the tentative `content_x_left`; once the parent commits the
-/// child's true physical x (right→left for `vertical-rl`), the whole subtree
-/// must follow.
-fn shift_subtree_x(b: &mut LayoutBox, dx: f32) {
-    b.rect.x += dx;
-    if let BoxKind::InlineRun { lines, .. } = &mut b.kind {
-        for line in lines.iter_mut() {
-            for frag in line.iter_mut() {
-                frag.x += dx;
+/// Required because the child's layout positions descendants relative to the
+/// tentative `content_x_left`; once the parent commits the child's true
+/// physical x (right→left for `vertical-rl`), the whole subtree must follow.
+///
+/// LAYOUT-2 срез 8: `finish_child` (`box_tree::vertical_trampoline`) calls
+/// this once per placed child whenever its tentative and true x differ — for
+/// a `vertical-rl` chain (or any non-first sibling under `vertical-lr`) that
+/// is effectively every child — so the native-recursive pre-order walk this
+/// used to be defeated the trampoline's own point: an already-laid-out
+/// `DEPTH`-deep subtree still overflowed the stack right here, one call
+/// frame per descendant, regardless of how the dispatch loop above it was
+/// driven. Explicit heap-stack pre-order walk instead — same conversion and
+/// `Vec<&mut LayoutBox>` shape as `box_tree::shapes_floats::shift_tree`.
+pub(crate) fn shift_subtree_x(b: &mut LayoutBox, dx: f32) {
+    let mut stack: Vec<&mut LayoutBox> = vec![b];
+    while let Some(node) = stack.pop() {
+        node.rect.x += dx;
+        if let BoxKind::InlineRun { lines, .. } = &mut node.kind {
+            for line in lines.iter_mut() {
+                for frag in line.iter_mut() {
+                    frag.x += dx;
+                }
             }
         }
-    }
-    for c in &mut b.children {
-        shift_subtree_x(c, dx);
+        stack.extend(node.children.iter_mut());
     }
 }
 
