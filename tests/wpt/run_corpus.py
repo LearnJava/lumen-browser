@@ -1232,6 +1232,13 @@ def main() -> int:
                           f"checkpointed — rerun the same command with --resume",
                           file=sys.stderr, flush=True)
                     return 1
+                # `kill_tree` reaps a timed-out shard's own `lumen` orphans
+                # immediately; this is the fallback for the ones it can't
+                # reach — a *previous, external* SIGKILL of this very process
+                # (session teardown, another OOM kill) skips `kill_tree`
+                # entirely, since a caught-nothing SIGKILL runs no Python at
+                # all (BUG-1029).
+                port_guard.reap_lumen_orphans(own_pid=os.getpid())
             budget = shard_timeout(shard, args.shard_timeout_base, args.shard_timeout_per_id,
                                    args.processes)
             print(f"[{index}/{len(shards)}] {shard['name']}: {shard['ids']} ids (budget {budget}s) ...", end="", flush=True)
