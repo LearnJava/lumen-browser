@@ -44,3 +44,10 @@ not) — needs a regression test asserting `Begin`/`End` counts stay balanced fo
 kinds under `visibility:hidden`/zero-size + `position:fixed`/`sticky`, and a check of whether
 `fill_buckets`/`emit_box_self` (`box_layer.rs`, the ordered/anim-aware paint path) has the same
 shape independently.
+
+**Проверено LAYOUT-2 срезом 10 (fill_buckets):** `fill_buckets`/`emit_box_self` (`box_layer.rs`,
+ordered/anim-aware paint путь) не имеет этой формы — `emit_box_self` вообще не принимает
+`is_fixed`/`is_sticky` (это забота вызывающего `fill_buckets`, который эмитит layer-ops через
+отдельный `box_layer_ops`/`BoxLayerOps`, не завязанный на ранние `return` по видимости внутри
+`emit_box_self`), так что `Begin`/`End` там не может рассинхронизироваться тем же путём. Баг
+специфичен для легаси `walk`.

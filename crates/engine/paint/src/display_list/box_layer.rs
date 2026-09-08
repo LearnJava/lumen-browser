@@ -260,6 +260,72 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
     BoxLayerOps { pre, post, overflow_pre, overflow_post }
 }
 
+/// One pending unit of work in [`fill_buckets`]'s explicit stack.
+enum FillFrame<'a> {
+    /// Run entry processing for a box not yet visited.
+    Enter {
+        b: &'a LayoutBox,
+        current_sc: StackingContextId,
+        is_sc_root: bool,
+        inherited_clips: Vec<DisplayCommand>,
+    },
+    /// Dispatch the next not-yet-visited child of `b` (or, once `next_idx`
+    /// reaches the end, push `b`'s own [`FillFrame::Leave`]). Split out from
+    /// `Enter` so a child's `StackingContextId` is allocated — and its own
+    /// entire subtree is fully walked — before the *next sibling's* id is
+    /// allocated, exactly mirroring the old recursion's strict pre-order
+    /// numbering (`for child in &b.children { ...allocate...; fill_buckets(child, ...) }`
+    /// fully returns before the next loop iteration allocates again). A
+    /// naïve "compute every child's id up front, then push them all"
+    /// would number siblings before descendants and renumber every SC.
+    Continue(ContinueFrame<'a>),
+    /// Run the closing commands for a box whose whole subtree has already
+    /// been walked.
+    Leave(LeaveFill<'a>),
+}
+
+/// State threaded through repeated [`FillFrame::Continue`] visits for one
+/// box, one child at a time.
+struct ContinueFrame<'a> {
+    b: &'a LayoutBox,
+    current_sc: StackingContextId,
+    is_sc_root: bool,
+    next_idx: usize,
+    /// Clips to offer to non-fixed/non-sticky children (BUG-131/BUG-159).
+    /// Always empty when `is_sc_root` — the SC-root branch always recursed
+    /// with `&[]`.
+    child_clips: Vec<DisplayCommand>,
+    /// Closing-time state captured back when `b` itself was entered,
+    /// carried untouched through every `Continue` visit until the last
+    /// child is done and it moves into `b`'s own [`LeaveFill`].
+    leave_payload: LeavePayload,
+}
+
+/// Closing state captured at `Enter` time, replayed by [`leave_fill`] once
+/// `b`'s whole subtree is done.
+enum LeavePayload {
+    /// SC-root: nothing but the (conditional) cell-border repass, which
+    /// only needs `b` itself.
+    ScRoot,
+    /// Non-SC: `ops.overflow_post`/`ops.post` were computed at `Enter` time
+    /// but must be appended to `contents` only after every descendant —
+    /// including this box's own table cells — has already written its
+    /// content there.
+    NonSc {
+        overflow_post: Vec<DisplayCommand>,
+        post: Vec<DisplayCommand>,
+        split_span_start: Option<(usize, u32)>,
+    },
+}
+
+/// A [`FillFrame::Leave`] ready to run: `b`/`current_sc` plus whichever
+/// [`LeavePayload`] its `Enter` produced.
+struct LeaveFill<'a> {
+    b: &'a LayoutBox,
+    current_sc: StackingContextId,
+    payload: LeavePayload,
+}
+
 /// Walk-функция, идентичная по триггерам `StackingTree::build`: pre-order,
 /// SC-id присваивается монотонно при обнаружении SC-creating потомка.
 /// Boxes без SC-trigger остаются в `current_sc`.
@@ -279,6 +345,15 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
 /// данного SC (push в начало `pre`, pop после `post`/CloseLayer). Без этого
 /// трансформированный ребёнок (собственный SC) сбегает из `overflow:hidden`
 /// предка.
+///
+/// Heap-stack pre-order walk (LAYOUT-2, paint срез 9), not native recursion
+/// into itself. `fill_buckets`'s own post-children work never reads a value
+/// produced by descending into a child — [`LeavePayload`] is exactly the
+/// state each box computed *before* descending — so this is the same safe
+/// mechanical class `walk` (`walk.rs`) was converted to in this same срез,
+/// with one added wrinkle: [`ContinueFrame`] resumes children one at a time
+/// (not all pushed at once) so `next_sc_id` allocation stays strict pre-
+/// order — see [`FillFrame::Continue`]'s doc comment.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fill_buckets(
     b: &LayoutBox,
@@ -291,6 +366,42 @@ pub(crate) fn fill_buckets(
     inherited_clips: &[DisplayCommand],
     split: &mut SplitTracker,
     raw_spans: &mut Vec<RawSpan>,
+) {
+    let mut stack: Vec<FillFrame<'_>> = vec![FillFrame::Enter {
+        b,
+        current_sc,
+        is_sc_root,
+        inherited_clips: inherited_clips.to_vec(),
+    }];
+    while let Some(frame) = stack.pop() {
+        match frame {
+            FillFrame::Enter { b, current_sc, is_sc_root, inherited_clips } => {
+                enter_fill(
+                    b, current_sc, is_sc_root, &inherited_clips, anim, dpr, buckets, split,
+                    raw_spans, &mut stack,
+                );
+            }
+            FillFrame::Continue(cf) => continue_fill(cf, next_sc_id, &mut stack),
+            FillFrame::Leave(lf) => leave_fill(lf, buckets, split, raw_spans),
+        }
+    }
+}
+
+/// Entry processing for one box: everything `fill_buckets` used to do
+/// before recursing into children. Pushes a [`FillFrame::Continue`] that
+/// will dispatch children one at a time instead of recursing directly.
+#[allow(clippy::too_many_arguments)]
+fn enter_fill<'a>(
+    b: &'a LayoutBox,
+    current_sc: StackingContextId,
+    is_sc_root: bool,
+    inherited_clips: &[DisplayCommand],
+    anim: Option<&CompositorAnimFrame>,
+    dpr: f32,
+    buckets: &mut [ScBucket],
+    split: &mut SplitTracker,
+    raw_spans: &mut Vec<RawSpan>,
+    stack: &mut Vec<FillFrame<'a>>,
 ) {
     let ov = anim.and_then(|a| a.get(b.node));
     let ops = box_layer_ops(b, ov);
@@ -345,31 +456,15 @@ pub(crate) fn fill_buckets(
         // Этот SC становится новым clip-anchor: его собственный клип +
         // переустановленные inherited-клипы охватывают дочерние SC через
         // root_bg/post (PopClip в CloseLayer после всех детей). Цепочка
-        // сбрасывается.
-        for child in &b.children {
-            let child_creates_sc =
-                box_can_own_stacking_context(child) && creates_stacking_context(&child.style);
-            if child_creates_sc {
-                let id = StackingContextId(*next_sc_id);
-                *next_sc_id += 1;
-                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &[], split, raw_spans);
-            } else {
-                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &[], split, raw_spans);
-            }
-        }
-        // BUG-200: redraw collapsed cell borders on top of all cell backgrounds —
-        // see the non-SC branch below for the full rationale.
-        if collapse_border_repass_applies(b) {
-            let mut cells: Vec<&LayoutBox> = Vec::new();
-            collect_table_cells(b, &mut cells);
-            let bucket = &mut buckets[current_sc.0 as usize];
-            for cell in &cells {
-                let start = bucket.post.len();
-                emit_table_cell_border(cell, &mut bucket.post);
-                let end = bucket.post.len();
-                record_span(raw_spans, current_sc.0, BucketField::Post, start, end, cell.origin, 0);
-            }
-        }
+        // сбрасывается (child_clips = Vec::new(), see ContinueFrame doc).
+        stack.push(FillFrame::Continue(ContinueFrame {
+            b,
+            current_sc,
+            is_sc_root: true,
+            next_idx: 0,
+            child_clips: Vec::new(),
+            leave_payload: LeavePayload::ScRoot,
+        }));
     } else {
         // Non-SC box: inline Push/Pop в contents текущего SC. Это нужно для
         // `overflow:hidden` на обычном in-flow box-е (opacity/blend
@@ -415,66 +510,134 @@ pub(crate) fn fill_buckets(
             }
         }
 
-        for child in &b.children {
-            let child_creates_sc =
-                box_can_own_stacking_context(child) && creates_stacking_context(&child.style);
-            if child_creates_sc {
-                // BUG-159: `position:fixed` привязан к viewport, `sticky` имеет
-                // собственную scroll-aware машинерию — ни тот, ни другой не
-                // должны наследовать scroll-translate предка, иначе fixed-оверлей
-                // уезжал бы вместе со страницей. Rect-клипы они по-прежнему
-                // наследуют (поведение BUG-131 без изменений).
-                let child_layers: Vec<DisplayCommand> =
-                    if matches!(child.style.position, Position::Fixed | Position::Sticky) {
-                        child_clips
-                            .iter()
-                            .filter(|c| !matches!(c, DisplayCommand::PushScrollLayer { .. }))
-                            .cloned()
-                            .collect()
-                    } else {
-                        child_clips.clone()
-                    };
-                let id = StackingContextId(*next_sc_id);
-                *next_sc_id += 1;
-                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &child_layers, split, raw_spans);
-            } else {
-                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &child_clips, split, raw_spans);
-            }
-        }
+        stack.push(FillFrame::Continue(ContinueFrame {
+            b,
+            current_sc,
+            is_sc_root: false,
+            next_idx: 0,
+            child_clips,
+            leave_payload: LeavePayload::NonSc {
+                overflow_post: ops.overflow_post,
+                post: ops.post,
+                split_span_start,
+            },
+        }));
+    }
+}
 
-        let bucket = &mut buckets[current_sc.0 as usize];
-        // BUG-200: under `border-collapse: collapse` adjacent cells overlap by the
-        // shared grid-line width (layout pulls them together). Cells are emitted in
-        // DOM order, each filling its background then drawing its border. When a later
-        // cell has a thinner border than its earlier neighbour (e.g. a 1px `thin` cell
-        // after a 3px `thick` one), the later cell's background overpaints the part of
-        // the neighbour's collapsed border in the overlap region, leaving only the
-        // thinner cell's 1px line instead of the spec's max width (CSS 2.1 §17.6.2).
-        // Redraw every cell border once more, on top of all cell backgrounds, so the
-        // shared edges composite to the wider border. Borders sit inside the cells'
-        // padding, away from content, so the repass is visually a no-op except on the
-        // shared grid lines.
-        if collapse_border_repass_applies(b) {
-            let mut cells: Vec<&LayoutBox> = Vec::new();
-            collect_table_cells(b, &mut cells);
-            for cell in &cells {
-                let start = bucket.contents.len();
-                emit_table_cell_border(cell, &mut bucket.contents);
-                let end = bucket.contents.len();
-                record_span(raw_spans, current_sc.0, BucketField::Contents, start, end, cell.origin, 0);
+/// Dispatches `cf.b`'s child at `cf.next_idx`, or — once every child has
+/// been dispatched — pushes `cf.b`'s own [`FillFrame::Leave`]. Pushing the
+/// next `Continue` (for sibling `next_idx + 1`) *underneath* the child's own
+/// `Enter` means the child's entire subtree (including every id it and its
+/// descendants allocate) is fully popped before the next sibling's id is
+/// allocated — the same order the old recursion gave for free.
+fn continue_fill<'a>(cf: ContinueFrame<'a>, next_sc_id: &mut u32, stack: &mut Vec<FillFrame<'a>>) {
+    let ContinueFrame { b, current_sc, is_sc_root, next_idx, child_clips, leave_payload } = cf;
+    if next_idx >= b.children.len() {
+        stack.push(FillFrame::Leave(LeaveFill { b, current_sc, payload: leave_payload }));
+        return;
+    }
+    let child = &b.children[next_idx];
+    let child_creates_sc =
+        box_can_own_stacking_context(child) && creates_stacking_context(&child.style);
+    let (child_sc, child_is_sc_root, child_inherited) = if child_creates_sc {
+        let id = StackingContextId(*next_sc_id);
+        *next_sc_id += 1;
+        // BUG-159: `position:fixed` привязан к viewport, `sticky` имеет
+        // собственную scroll-aware машинерию — ни тот, ни другой не должны
+        // наследовать scroll-translate предка, иначе fixed-оверлей уезжал бы
+        // вместе со страницей. Rect-клипы они по-прежнему наследуют (BUG-131).
+        let inherited = if is_sc_root {
+            Vec::new()
+        } else if matches!(child.style.position, Position::Fixed | Position::Sticky) {
+            child_clips
+                .iter()
+                .filter(|c| !matches!(c, DisplayCommand::PushScrollLayer { .. }))
+                .cloned()
+                .collect()
+        } else {
+            child_clips.clone()
+        };
+        (id, true, inherited)
+    } else {
+        let inherited = if is_sc_root { Vec::new() } else { child_clips.clone() };
+        (current_sc, false, inherited)
+    };
+    stack.push(FillFrame::Continue(ContinueFrame {
+        b,
+        current_sc,
+        is_sc_root,
+        next_idx: next_idx + 1,
+        child_clips,
+        leave_payload,
+    }));
+    stack.push(FillFrame::Enter {
+        b: child,
+        current_sc: child_sc,
+        is_sc_root: child_is_sc_root,
+        inherited_clips: child_inherited,
+    });
+}
+
+/// Runs a [`LeaveFill`]'s closing commands — the BUG-200 cell-border repass
+/// for a table using the collapsing-borders model, plus (non-SC only) the
+/// `overflow_post`/`post` trailer and split-span bookkeeping that had to
+/// wait for every descendant (including this box's own table cells) to
+/// finish writing into `contents` first.
+fn leave_fill(lf: LeaveFill<'_>, buckets: &mut [ScBucket], split: &mut SplitTracker, raw_spans: &mut Vec<RawSpan>) {
+    let b = lf.b;
+    let current_sc = lf.current_sc;
+    match lf.payload {
+        LeavePayload::ScRoot => {
+            // BUG-200: redraw collapsed cell borders on top of all cell
+            // backgrounds — see the `NonSc` arm below for the full rationale.
+            if collapse_border_repass_applies(b) {
+                let mut cells: Vec<&LayoutBox> = Vec::new();
+                collect_table_cells(b, &mut cells);
+                let bucket = &mut buckets[current_sc.0 as usize];
+                for cell in &cells {
+                    let start = bucket.post.len();
+                    emit_table_cell_border(cell, &mut bucket.post);
+                    let end = bucket.post.len();
+                    record_span(raw_spans, current_sc.0, BucketField::Post, start, end, cell.origin, 0);
+                }
             }
         }
-        let trail_start = bucket.contents.len();
-        bucket.contents.extend(ops.overflow_post);
-        bucket.contents.extend(ops.post);
-        let trail_end = bucket.contents.len();
-        record_span(raw_spans, current_sc.0, BucketField::Contents, trail_start, trail_end, b.origin, 0);
-        if let Some((start, sc_before)) = split_span_start {
-            if split.sc_entries != sc_before {
-                split.invalid = true;
-            } else {
-                let end = buckets[current_sc.0 as usize].contents.len();
-                split.content_spans.push((current_sc.0, start, end));
+        LeavePayload::NonSc { overflow_post, post, split_span_start } => {
+            let bucket = &mut buckets[current_sc.0 as usize];
+            // BUG-200: under `border-collapse: collapse` adjacent cells overlap by the
+            // shared grid-line width (layout pulls them together). Cells are emitted in
+            // DOM order, each filling its background then drawing its border. When a later
+            // cell has a thinner border than its earlier neighbour (e.g. a 1px `thin` cell
+            // after a 3px `thick` one), the later cell's background overpaints the part of
+            // the neighbour's collapsed border in the overlap region, leaving only the
+            // thinner cell's 1px line instead of the spec's max width (CSS 2.1 §17.6.2).
+            // Redraw every cell border once more, on top of all cell backgrounds, so the
+            // shared edges composite to the wider border. Borders sit inside the cells'
+            // padding, away from content, so the repass is visually a no-op except on the
+            // shared grid lines.
+            if collapse_border_repass_applies(b) {
+                let mut cells: Vec<&LayoutBox> = Vec::new();
+                collect_table_cells(b, &mut cells);
+                for cell in &cells {
+                    let start = bucket.contents.len();
+                    emit_table_cell_border(cell, &mut bucket.contents);
+                    let end = bucket.contents.len();
+                    record_span(raw_spans, current_sc.0, BucketField::Contents, start, end, cell.origin, 0);
+                }
+            }
+            let trail_start = bucket.contents.len();
+            bucket.contents.extend(overflow_post);
+            bucket.contents.extend(post);
+            let trail_end = bucket.contents.len();
+            record_span(raw_spans, current_sc.0, BucketField::Contents, trail_start, trail_end, b.origin, 0);
+            if let Some((start, sc_before)) = split_span_start {
+                if split.sc_entries != sc_before {
+                    split.invalid = true;
+                } else {
+                    let end = buckets[current_sc.0 as usize].contents.len();
+                    split.content_spans.push((current_sc.0, start, end));
+                }
             }
         }
     }
