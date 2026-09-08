@@ -55,6 +55,15 @@ other developers' sessions (five worktree pool slots, `docs/git-workflow.md`):
   runner above it) is a leak by definition and is killed;
 * anything else (some unrelated program on 18300) is reported, never killed.
 
+BUG-1029: this same ancestry test also reaps orphaned `lumen --bidi-port N` /
+`lumen --ipc-server` browser processes — `wptrunner` puts each one in a group
+of its own (`run_corpus.py::kill_tree`'s comment), so a `kill -9` on a hung
+`wptrunner` (BUG-1006) leaves them running with nothing above them, each
+holding a V8 isolate + wgpu context (~1 GB RSS) until the machine OOMs. Unlike
+`wptserve`, the browser's own port is OS-assigned per launch, not one of
+`config.json`'s fixed ports, so orphans can't be found by port survey — the
+process table is searched by command line instead (`survey_lumen_orphans`).
+
 Usage:
 
     <venv>/python tests/wpt/port_guard.py --report     # who holds the ports
@@ -85,6 +94,11 @@ RUNNER_MARKERS = ("run_corpus.py", "run_smoke.py", "run_report.py", "run_suite.p
 #: the interpreter plus `multiprocessing.spawn`/`forkserver` bootstrap — the
 #: server module's name never appears in it.
 SERVER_MARKERS = ("multiprocessing", "wptserve", "serve.py")
+
+#: Command-line fragments that identify a `lumen` browser process launched by
+#: `browsers/lumen.py::make_command` — `--bidi-port <port>` for testharness
+#: runs, `--ipc-server` for reftests (TEST-4). BUG-1029.
+LUMEN_MARKERS = ("--bidi-port", "--ipc-server")
 
 #: How long to wait for a port to come back on its own before deciding it is
 #: held. A server that has just been asked to stop needs a moment; a leak does
@@ -223,8 +237,10 @@ def _ancestry(pid: int, table: dict) -> list:
     return chain
 
 
-def classify(pid: int, table: dict, own_pid: int = None) -> str:
-    """What kind of thing is holding a WPT port.
+def classify(pid: int, table: dict, own_pid: int = None,
+             child_markers=SERVER_MARKERS) -> str:
+    """What kind of thing is holding a WPT port (or, with `child_markers=
+    LUMEN_MARKERS`, whether a `lumen` browser process is an orphan — BUG-1029).
 
     * `stale` — a server of *our own* run: the previous shard's `wptserve` has
       not finished exiting yet. Reclaimable, and it has to be, because the
@@ -233,7 +249,7 @@ def classify(pid: int, table: dict, own_pid: int = None) -> str:
       Only ever true between shards — nothing else calls the guard.
     * `live` — a corpus run is still alive above it. Someone else is testing on
       this machine; taking its port would corrupt their results and ours.
-    * `orphan` — a `wptserve` server child with no runner above it. A leak.
+    * `orphan` — a `child_markers` process with no runner above it. A leak.
     * `foreign` — anything else on the port.
     * `gone` — it exited between the socket scan and the process scan.
     """
@@ -245,7 +261,7 @@ def classify(pid: int, table: dict, own_pid: int = None) -> str:
     if any(marker in cmd for _pid, cmd in chain for marker in RUNNER_MARKERS):
         return "live"
     own_cmd = chain[0][1]
-    if any(marker in own_cmd for marker in SERVER_MARKERS):
+    if any(marker in own_cmd for marker in child_markers):
         return "orphan"
     return "foreign"
 
@@ -350,6 +366,53 @@ def ensure_free(ports=None, settle: float = DEFAULT_SETTLE_SECONDS, reclaim_orph
     raise PortsBusy(f"WPT ports unavailable: {detail}. {hint}.")
 
 
+def survey_lumen_orphans(own_pid: int = None) -> list:
+    """`[(pid, kind, command_line)]` for every `lumen --bidi-port`/
+    `--ipc-server` process in the system process table (BUG-1029).
+
+    Unlike `survey()`, this does not start from a port scan — the browser's
+    BiDi/IPC port is OS-assigned per launch, not one of `config.json`'s fixed
+    ports, so there is nothing fixed to probe. The whole process table is
+    walked instead, which is the same cost `_process_table()` already pays
+    once per `survey()` call.
+    """
+    table = _process_table()
+    rows = []
+    for pid, (_ppid, cmd) in table.items():
+        if pid == own_pid or not any(marker in cmd for marker in LUMEN_MARKERS):
+            continue
+        rows.append((pid, classify(pid, table, own_pid, child_markers=LUMEN_MARKERS), cmd))
+    return rows
+
+
+def reap_lumen_orphans(own_pid: int = None, log=print) -> list:
+    """Kill every orphaned `lumen` browser process found by
+    `survey_lumen_orphans` (BUG-1029) and return the pids killed.
+
+    Meant to run once at the start of a run, alongside `ensure_free`: a
+    `kill -9` on a hung `wptrunner` (BUG-1006) leaves its `lumen` children
+    running with nothing above them, and each one holds a V8 isolate + wgpu
+    context (~1 GB RSS) until something reaps it or the machine OOMs.
+    """
+    killed = []
+    for pid, kind, cmd in survey_lumen_orphans(own_pid):
+        if kind not in RECLAIMABLE:
+            continue
+        log(f"lumen orphan: {kind} pid {pid} — {cmd[:110]}")
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                               capture_output=True, check=False)
+            else:
+                os.kill(pid, 9)
+            killed.append(pid)
+        except (OSError, ProcessLookupError) as exc:
+            log(f"lumen orphan: could not kill pid {pid}: {exc}")
+    if killed:
+        log(f"port guard: reaped {len(killed)} orphaned lumen process(es) — {killed}")
+    return killed
+
+
 def _free_port() -> int:
     """An ephemeral port nothing is listening on at this instant."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -426,6 +489,38 @@ def _selftest() -> int:
         if squatter.poll() is None:
             squatter.kill()
         squatter.wait()
+
+    # BUG-1029: a `lumen --bidi-port N` process with nothing above it must be
+    # found and reaped by command line alone — it holds no configured port, so
+    # none of the checks above exercise that path. A real `lumen` binary isn't
+    # needed: `survey_lumen_orphans`/`classify` only look at the command line.
+    orphan = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(600)", "--bidi-port", "0"],
+        start_new_session=(os.name != "nt"))
+    try:
+        deadline = time.time() + 10
+        rows = []
+        while time.time() < deadline:
+            rows = [r for r in survey_lumen_orphans() if r[0] == orphan.pid]
+            if rows:
+                break
+            time.sleep(0.1)
+        check("lumen orphan is found by command line", bool(rows), f"{rows}")
+        check("lumen orphan classified as orphan",
+              bool(rows) and rows[0][1] == "orphan",
+              rows[0][1] if rows else "no rows")
+        # A live runner above it must be spared, same rule as `wptserve`.
+        table = dict(_process_table())
+        table[orphan.pid] = (os.getpid(), table.get(orphan.pid, (0, ""))[1])
+        table[os.getpid()] = (1, "python tests/wpt/run_corpus.py --all")
+        check("lumen orphan under a live runner is spared",
+              classify(orphan.pid, table, child_markers=LUMEN_MARKERS) == "live")
+        killed = reap_lumen_orphans()
+        check("lumen orphan is reaped", orphan.pid in killed, f"{killed}")
+    finally:
+        if orphan.poll() is None:
+            orphan.kill()
+        orphan.wait()
 
     print(f"selftest: {'PASS' if not failures else 'FAIL (' + ', '.join(failures) + ')'}")
     return 1 if failures else 0

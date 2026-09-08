@@ -561,13 +561,12 @@ def main() -> int:
     if args.timeout_multiplier:
         extra_args.append(f"--timeout-multiplier={args.timeout_multiplier}")
 
-    # Kill any stale `lumen --bidi-port N` orphans left by a previous run that
-    # was interrupted with kill -9 (BUG-1029): wptrunner's mozprocess child
-    # survives when its parent is SIGKILL'd, and each orphan holds a V8 isolate
-    # (~1 GB RSS). On --check runs the orphans compete for ports and generate
-    # spurious TIMEOUT/ERROR results whose count grows with each successive
-    # invocation (BUG-1022). run_corpus.py already calls ensure_free before
-    # every shard; run_report.py was the gap.
+    # Reclaim the `wptserve` ports themselves: a previous run left behind by a
+    # `kill -9` (BUG-1006) keeps them, and a `--check` run against a squatter
+    # answers out of a server it does not control, generating spurious
+    # TIMEOUT/ERROR results whose count grows with each successive invocation
+    # (BUG-1022). run_corpus.py already calls ensure_free before every shard;
+    # run_report.py was the gap.
     try:
         port_guard.ensure_free(own_pid=os.getpid())
     except port_guard.PortsBusy as exc:
@@ -575,6 +574,12 @@ def main() -> int:
         print("another WPT run is active — wait for it to finish or stop it",
               file=sys.stderr)
         return 1
+    # Separately, reap any stale `lumen --bidi-port N`/`--ipc-server` orphans
+    # left by the same kind of interrupted run (BUG-1029): `ensure_free` above
+    # only covers `wptserve`'s fixed ports, not the browser's own OS-assigned
+    # one, so an orphaned browser doesn't show up there at all — it just sits
+    # holding a V8 isolate + wgpu context (~1 GB RSS) until the machine OOMs.
+    port_guard.reap_lumen_orphans(own_pid=os.getpid())
 
     try:
         rv = run_smoke.run(args.binary, test_ids, extra_args=extra_args)
