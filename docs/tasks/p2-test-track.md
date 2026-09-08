@@ -1140,6 +1140,37 @@ sibling.html.ini`, но не был описан как контракт скр�
 BUG-1041, ожидаемо). Baseline 239 → 240 (мерж среза 32 не добавил категорий,
 только уточнил ожидания внутри уже посчитанной `web-animations`).
 
+### TEST-3: срез 34 (2026-09-08) — `IndexedDB` не закрыт, `--check` дал два разных набора регрессий
+
+Кандидат отобран вручную по числу файлов среди оставшихся после предиктора среза 31
+(`IndexedDB` 245 файлов, 5 предиктор-хитов из 245 — низкий риск, `WebCryptoAPI`
+122/125 `.https.`-only отложен как более дорогой, `encoding` 341 файл отложен из-за
+известных ~3.6 ч на `legacy-mb-*`/`subsetTest is not defined`, см.
+[WPT-VENDOR-encoding](../../ROADMAP.md)). `--update-expected --recursive
+--processes 4` прошёл штатно за 30:20 (396/813 harness OK, 457/2712 сабтестов, 226
+новых `.ini`). Первый `--check` — **43 регрессии** (в основном новые `TIMEOUT` на
+файлах, которые в `--update-expected`-прогоне были `Test OK`, плюс полный блок
+`structured-clone.any.worker.html?21-40` — 18 подтестов PASS→FAIL, плюс 5 `MISSING
+(crash before test_start / early abort)` на `*.worker`/`*.sharedworker`/
+`*.serviceworker`-вариантах). Второй `--check` подряд (тот же бинарь, тот же
+`--processes 4`) — **135 регрессий**, другой и заметно больший набор (среди прочего
+`writer-starvation.any.serviceworker.html`/`.worker.html` тоже перешли в `MISSING`).
+Тот же диагностический вывод, что дал [BUG-1011](../../bugs/BUG-1011-OPEN.md) на
+`html/rendering`: расхождение между последовательными `--check` без изменения кода
+или baseline — недетерминированность самого прогона (вероятно перегрузка
+worker/serviceworker-контекстов под нагрузкой — большинство `MISSING`/новых `TIMEOUT`
+именно на `*.worker`/`*.sharedworker`/`*.serviceworker`-файлах), а не флип одной пары
+подтестов, как в срезе 33. В отличие от `html/rendering` конкретной причинной
+гипотезы (там — SVG-раскладка) здесь нет: `structured-clone.any.worker.html?21-40`
+и разброс `TIMEOUT`/`MISSING` не сведены к одному механизму, отдельный BUG-NNN не
+заведён — заводить его сейчас означало бы описывать failure mode по интуиции без
+пробы. Baseline **не изменился (240)**: `.ini`-каталог не закоммичен, откачен
+`git clean -fd tests/wpt/metadata/IndexedDB/` (untracked, без `git checkout --`).
+**Не пробовать `IndexedDB` заново без диагностики** — тем же методом, что
+`html/rendering`: свежая проба, что именно нестабильно в `*.worker`/
+`*.sharedworker`/`*.serviceworker`-исполнении под нагрузкой, до повторного
+`--update-expected`.
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
