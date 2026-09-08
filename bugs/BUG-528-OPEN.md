@@ -51,7 +51,7 @@ recognized at all — for a genuinely unknown bare feature name this makes
 every such probe report "known" instead of "unknown". 2 subtests this
 slice (`overflow-inline`, `overflow-block`); likely latent in any other
 category using the same `matchmedia-utils.js` helper once
-[BUG-527](BUG-527-OPEN.md)'s 9 missing features are exercised through it.
+[BUG-527](BUG-527-FIXED.md)'s 9 missing features are exercised through it.
 
 ## Фикс (не сделан)
 
