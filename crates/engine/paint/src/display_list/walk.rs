@@ -656,19 +656,237 @@ fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
     segments
 }
 
+/// LAYOUT-2 срез 9's explicit-stack driver replaces `walk`'s own four
+/// self-recursion sites (the two children-loops in the shared Block/
+/// FlowRoot/TableRow/TableRowGroup branch below, `InlineBlockRow`, and
+/// `SvgRoot`) — everything a frame needs to resume after its children finish
+/// (the "epilogue": which `Pop*`/`End*` commands to emit, and in what
+/// order). `Full` is boxed for the same reason `NeedsBlockFlowLoop` etc. are
+/// in `lumen-layout`'s trampolines — it is the rare, heavy variant (a dozen
+/// captured flags) next to the two zero-cost ones.
+enum Epilogue {
+    /// The shared Block/FlowRoot/Table/TableRow/TableRowGroup branch's
+    /// post-children teardown — gap decorations, overflow-clip pop, outline,
+    /// filter/backdrop-filter/clip-path/transform/opacity/blend-mode/mask
+    /// pops, all captured before `dispatch` handed off to `run`. Also used
+    /// synchronously (no frame involved) for the `Table` sub-case, which
+    /// doesn't recurse here at all — see `finish_block_epilogue`.
+    Full(Box<BlockEpilogue>),
+    /// `SvgRoot` — the single `PopClip` matching the viewport clip pushed
+    /// before its children.
+    SvgViewportClip,
+    /// `InlineBlockRow` — no setup, no teardown of its own.
+    None,
+}
+
+/// Every flag [`dispatch`] computed before recursing into `b`'s children
+/// (Block/FlowRoot/Table/TableRow/TableRowGroup branch) that
+/// [`finish_block_epilogue`] needs to close them in the right order — one
+/// field per `Push*`/no-op decision made on the way in, mirroring
+/// `lumen-layout`'s per-dispatcher `*Init` structs (`VerticalInit` etc.).
+struct BlockEpilogue {
+    self_visible: bool,
+    has_overflow_clip: bool,
+    use_scroll_layer: bool,
+    scroll_padding_box: Option<(f32, f32, f32, f32)>,
+    is_scroll_x: bool,
+    is_scroll_y: bool,
+    has_filter: bool,
+    has_backdrop: bool,
+    has_clip_path: bool,
+    has_transform: bool,
+    has_opacity: bool,
+    has_blend: bool,
+    mask_clip_is_some: bool,
+    mask_groups: usize,
+}
+
+/// One level of the explicit stack `run` maintains in place of the native
+/// call stack. Unlike `lumen-layout`'s trampolines, `walk` only ever reads
+/// `b` (never mutates it), so a frame can hold a plain borrow instead of
+/// needing the `take_box`/`mem::replace` ownership dance those need for a
+/// `&mut LayoutBox` tree.
+struct Frame<'a> {
+    b: &'a LayoutBox,
+    is_fixed: bool,
+    is_sticky: bool,
+    epilogue: Epilogue,
+    /// This frame's children in the order they must be walked — already
+    /// depth-sorted for a `preserve-3d` container, plain DOM order otherwise.
+    children: Vec<&'a LayoutBox>,
+    next_idx: usize,
+}
+
+/// What [`dispatch`] did with one box: either it (and everything below it)
+/// is already fully painted (leaf kinds, `Table`'s synchronous
+/// `emit_table_box` path, the opacity/backface culls, and the six replaced-
+/// element kinds' `!is_paint_visible` early returns — see that arm's doc
+/// comment for a pre-existing quirk this trampoline reproduces bit-for-bit),
+/// or it needs [`run`] to drive its children on the explicit stack instead.
+enum WalkOutcome<'a> {
+    Done,
+    NeedsLoop(Box<Frame<'a>>),
+}
+
+/// Drives `frame` (and every further non-leaf descendant `dispatch` hands
+/// back) on an explicit heap stack instead of the native call stack, so a
+/// deep chain of nested containers no longer grows the native stack one
+/// frame per level here (LAYOUT-2's acceptance criterion, applied to the
+/// `walk`/`fill_buckets` item of its ROADMAP entry). `dispatch`'s own
+/// recursive-descent points that call back into the public `walk` — `table
+/// .rs::emit_table_box` (row-group/row/cell-content) and `svg_text_
+/// decoration.rs::emit_svg_shape_masked` — get this protection for whatever
+/// nests below THAT boundary too, since they re-enter at `walk`, which
+/// always starts a fresh `run`; the boundary itself still costs its own
+/// handful of native frames per transition, same accepted shape as
+/// `lumen-layout`'s table trampoline calling into the block-flow trampoline
+/// for `<table>`-in-`<td>` (out of scope for this срез).
+fn run<'a>(frame: Box<Frame<'a>>, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHighlight>) {
+    let mut current = frame;
+    let mut stack: Vec<Box<Frame<'a>>> = Vec::new();
+    loop {
+        if current.next_idx >= current.children.len() {
+            finish_epilogue(&current, out);
+            match stack.pop() {
+                None => return,
+                Some(parent) => {
+                    current = parent;
+                    continue;
+                }
+            }
+        }
+        let child = current.children[current.next_idx];
+        current.next_idx += 1;
+        match dispatch(child, out, dpr, sel) {
+            WalkOutcome::Done => {}
+            WalkOutcome::NeedsLoop(child_frame) => {
+                stack.push(current);
+                current = child_frame;
+            }
+        }
+    }
+}
+
+/// Emits `frame`'s epilogue (once every child has been walked) and, matching
+/// `dispatch`'s own tail, closes `BeginFixedLayer`/`BeginStickyLayer` after
+/// it — same order the removed inline recursion produced: branch-specific
+/// teardown first (nested innermost), fixed/sticky layer markers last
+/// (outermost wrapping this whole box).
+fn finish_epilogue(frame: &Frame, out: &mut DisplayList) {
+    match &frame.epilogue {
+        Epilogue::Full(e) => finish_block_epilogue(frame.b, out, e),
+        Epilogue::SvgViewportClip => out.push(DisplayCommand::PopClip),
+        Epilogue::None => {}
+    }
+    if frame.is_fixed {
+        out.push(DisplayCommand::EndFixedLayer);
+    }
+    if frame.is_sticky {
+        out.push(DisplayCommand::EndStickyLayer);
+    }
+}
+
+/// The shared Block/FlowRoot/Table/TableRow/TableRowGroup branch's post-
+/// children teardown — copied verbatim from the removed inline `walk`'s tail
+/// end of that arm. Called by [`finish_epilogue`] for the deferred (3D-
+/// sorted / plain children loop) case, and directly, synchronously, by
+/// [`dispatch`]'s `Table` sub-case, which never recurses here at all
+/// (`emit_table_box` handles its own row/cell descent and calls back into
+/// public `walk` for cell content — see `run`'s doc comment).
+fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue) {
+    // CSS Gap Decorations L1 — emit gap rules for flex/grid containers.
+    if e.self_visible {
+        let gap_segs = collect_gap_segments(b);
+        if !gap_segs.is_empty() {
+            let s = &b.style;
+            let ctx = GapDecorationContext {
+                rule_width: s.gap_rule_width,
+                rule_style: s.gap_rule_style,
+                rule_color: s.gap_rule_color.resolve(s.color),
+            };
+            out.extend(emit_gap_rules(&b.children, &gap_segs, &ctx));
+        }
+    }
+    if e.has_overflow_clip {
+        if e.use_scroll_layer {
+            out.push(DisplayCommand::PopScrollLayer);
+            // Emit scrollbar track + thumb after the scroll layer so they
+            // render at a fixed position (not translated with scrolled content).
+            // BUG-220: shared with the ordered `box_layer_ops` path.
+            if let Some(padding_box) = e.scroll_padding_box {
+                emit_scrollbars(b, padding_box, e.is_scroll_x, e.is_scroll_y, out);
+            }
+        } else {
+            out.push(DisplayCommand::PopClip);
+        }
+    }
+    if e.self_visible {
+        // CSS Basic UI L4 §5: outline рисуется поверх контента box-а
+        // (включая children), снаружи bounding-box-а. Phase 0 без
+        // деления paint phases для outline — эмитим в конце box-walk-а.
+        emit_outline(b, out);
+    }
+    if e.has_filter {
+        out.push(DisplayCommand::PopFilter);
+    }
+    if e.has_backdrop {
+        out.push(DisplayCommand::PopBackdropFilter);
+    }
+    if e.has_clip_path {
+        out.push(DisplayCommand::PopClip);
+    }
+    if e.has_transform {
+        out.push(DisplayCommand::PopTransform);
+    }
+    if e.has_opacity {
+        out.push(DisplayCommand::PopOpacity);
+    }
+    if e.has_blend {
+        out.push(DisplayCommand::PopBlendMode);
+    }
+    if e.mask_clip_is_some {
+        out.push(DisplayCommand::PopClip);
+    }
+    for _ in 0..e.mask_groups {
+        out.push(DisplayCommand::PopMask);
+    }
+}
+
+/// Legacy (non-ordered) display-list builder's central per-box entry point —
+/// public API and behaviour unchanged. Delegates everything up to the point
+/// where `walk` used to recurse into `b`'s children to [`dispatch`]; [`run`]
+/// then drives that (and every further non-tail-recursive container it
+/// meets) on an explicit heap stack instead.
 pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHighlight>) {
+    if let WalkOutcome::NeedsLoop(frame) = dispatch(b, out, dpr, sel) {
+        run(frame, out, dpr, sel);
+    }
+}
+
+/// Either fully paints `b` (and, where applicable, its children) and returns
+/// `Done`, or captures everything the removed inline per-child loop needed
+/// and returns `NeedsLoop` for `run` to drive instead. Copied verbatim from
+/// the pre-LAYOUT-2-срез-9 `walk`, split only at the two children-loops
+/// (`establishes_3d_rendering_context`/plain, shared branch), `InlineBlockRow`,
+/// and `SvgRoot` — everywhere else falls through exactly as before.
+fn dispatch<'a>(
+    b: &'a LayoutBox,
+    out: &mut DisplayList,
+    dpr: f32,
+    sel: Option<&SelectionHighlight>,
+) -> WalkOutcome<'a> {
     // CSS Color L3 §3.2 — opacity:0 на box-е делает весь subtree после
     // composite полностью прозрачным. Phase 0 эмулирует это pure-pixel
     // skip-ом (отличие от visibility:hidden, где children могут
     // override через `:visible` — opacity-0 такого override не имеет).
     if !is_opacity_subtree_painted(b) {
-        return;
+        return WalkOutcome::Done;
     }
     // CSS Transforms L2 §5.1 — `backface-visibility: hidden` culls the box
     // (and its subtree) once its own 3D transform has rotated its face past
     // 90°, so it points away from the viewer.
     if is_backface_hidden(b) {
-        return;
+        return WalkOutcome::Done;
     }
     // CSS Positioning L3 §6.3 — position:sticky. Wraps the entire box in a
     // BeginStickyLayer/EndStickyLayer pair so the renderer can apply a
@@ -894,78 +1112,63 @@ pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&
             // context children paint back-to-front by transformed depth;
             // otherwise document order (flat compositing).
             // Special handling for Table: emit table-specific layout (cells, borders, etc).
+            //
+            // LAYOUT-2 срез 9: Table's own descent (`emit_table_box`) never
+            // recurses through `dispatch`/`run` itself — it calls back into
+            // public `walk` per row-group/cell-content (see `run`'s doc
+            // comment) — so it stays fully synchronous here, running the
+            // shared epilogue (`finish_block_epilogue`) inline instead of
+            // deferring it to a `Frame`. The 3D-sorted/plain cases ARE
+            // `dispatch`'s own non-tail recursion (each reads nothing back
+            // from a child afterwards, but returning here to walk the next
+            // sibling — and eventually to run the epilogue below — is
+            // exactly the shape LAYOUT-2's other six dispatchers convert),
+            // so they hand off to `run` instead.
+            let epilogue = Box::new(BlockEpilogue {
+                self_visible,
+                has_overflow_clip,
+                use_scroll_layer,
+                scroll_padding_box,
+                is_scroll_x,
+                is_scroll_y,
+                has_filter,
+                has_backdrop,
+                has_clip_path,
+                has_transform: transform.is_some(),
+                has_opacity,
+                has_blend,
+                mask_clip_is_some: mask_clip.is_some(),
+                mask_groups,
+            });
             if matches!(b.kind, BoxKind::Table) {
                 emit_table_box(b, out, dpr);
-            } else if establishes_3d_rendering_context(b) {
-                for i in depth_sorted_child_order(&b.children) {
-                    walk(&b.children[i], out, dpr, sel);
-                }
+                finish_block_epilogue(b, out, &epilogue);
             } else {
-                for child in &b.children {
-                    walk(child, out, dpr, sel);
-                }
-            }
-            // CSS Gap Decorations L1 — emit gap rules for flex/grid containers.
-            if self_visible {
-                let gap_segs = collect_gap_segments(b);
-                if !gap_segs.is_empty() {
-                    let s = &b.style;
-                    let ctx = GapDecorationContext {
-                        rule_width: s.gap_rule_width,
-                        rule_style: s.gap_rule_style,
-                        rule_color: s.gap_rule_color.resolve(s.color),
-                    };
-                    out.extend(emit_gap_rules(&b.children, &gap_segs, &ctx));
-                }
-            }
-            if has_overflow_clip {
-                if use_scroll_layer {
-                    out.push(DisplayCommand::PopScrollLayer);
-                    // Emit scrollbar track + thumb after the scroll layer so they
-                    // render at a fixed position (not translated with scrolled content).
-                    // BUG-220: shared with the ordered `box_layer_ops` path.
-                    if let Some(padding_box) = scroll_padding_box {
-                        emit_scrollbars(b, padding_box, is_scroll_x, is_scroll_y, out);
-                    }
+                let children: Vec<&LayoutBox> = if establishes_3d_rendering_context(b) {
+                    depth_sorted_child_order(&b.children).into_iter().map(|i| &b.children[i]).collect()
                 } else {
-                    out.push(DisplayCommand::PopClip);
-                }
-            }
-            if self_visible {
-                // CSS Basic UI L4 §5: outline рисуется поверх контента box-а
-                // (включая children), снаружи bounding-box-а. Phase 0 без
-                // деления paint phases для outline — эмитим в конце box-walk-а.
-                emit_outline(b, out);
-            }
-            if has_filter {
-                out.push(DisplayCommand::PopFilter);
-            }
-            if has_backdrop {
-                out.push(DisplayCommand::PopBackdropFilter);
-            }
-            if has_clip_path {
-                out.push(DisplayCommand::PopClip);
-            }
-            if transform.is_some() {
-                out.push(DisplayCommand::PopTransform);
-            }
-            if has_opacity {
-                out.push(DisplayCommand::PopOpacity);
-            }
-            if has_blend {
-                out.push(DisplayCommand::PopBlendMode);
-            }
-            if mask_clip.is_some() {
-                out.push(DisplayCommand::PopClip);
-            }
-            for _ in 0..mask_groups {
-                out.push(DisplayCommand::PopMask);
+                    b.children.iter().collect()
+                };
+                return WalkOutcome::NeedsLoop(Box::new(Frame {
+                    b, is_fixed, is_sticky,
+                    epilogue: Epilogue::Full(epilogue),
+                    children,
+                    next_idx: 0,
+                }));
             }
         }
         BoxKind::FormControl { kind } => {
             // Replaced element: background + border box (Phase 0, no content).
+            //
+            // LAYOUT-2 срез 9: this `return` (like the five other `!is_paint_
+            // visible`/zero-size early returns below, on Image/Video/Canvas/
+            // Audio/Iframe) skips the `is_fixed`/`is_sticky` closing at
+            // `dispatch`'s own tail — a pre-existing quirk (an invisible
+            // `position:fixed`/`sticky` replaced element leaves its `Begin*
+            // Layer` unmatched), reproduced bit-for-bit rather than fixed
+            // here (out of scope — filed as BUG-1037 for follow-up).
             if !is_paint_visible(b) {
-                return;
+                return WalkOutcome::Done;
             }
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
@@ -1010,9 +1213,12 @@ pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&
         BoxKind::InlineBlockRow => {
             // Анонимный контейнер: нет фона/бордера собственного.
             // Просто рекурсивно рисуем всех дочерних (BoxKind::Block).
-            for child in &b.children {
-                walk(child, out, dpr, sel);
-            }
+            return WalkOutcome::NeedsLoop(Box::new(Frame {
+                b, is_fixed, is_sticky,
+                epilogue: Epilogue::None,
+                children: b.children.iter().collect(),
+                next_idx: 0,
+            }));
         }
         BoxKind::InlineSpace => {}
         BoxKind::Marker { .. } => {
@@ -1024,7 +1230,7 @@ pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&
         BoxKind::Image { src, alt, is_lazy } => {
             // visibility:hidden на `<img>` пропускает всё (no children).
             if !is_paint_visible(b) {
-                return;
+                return WalkOutcome::Done;
             }
             // Painter's order для replaced element: фон → bg-image → border → <img>.
             // background/border у `<img>` валидны по CSS — например, для
@@ -1091,7 +1297,7 @@ pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&
         BoxKind::Video { src, poster } => {
             // visibility:hidden на `<video>` пропускает всё (no children).
             if !is_paint_visible(b) {
-                return;
+                return WalkOutcome::Done;
             }
             // Painter's order для replaced element: фон → bg-image → border → placeholder.
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
@@ -1161,7 +1367,7 @@ pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&
         BoxKind::Canvas { .. } => {
             // visibility:hidden on <canvas> skips everything (no children).
             if !is_paint_visible(b) {
-                return;
+                return WalkOutcome::Done;
             }
             // Painter's order for replaced element: background → bg-image → border → bitmap.
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
@@ -1214,7 +1420,7 @@ pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&
         }
         BoxKind::Audio { controls, .. } => {
             if !is_paint_visible(b) || !controls || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
-                return;
+                return WalkOutcome::Done;
             }
             // Phase 0: grey bar for audio controls UI.
             let grey = Color { r: 200, g: 200, b: 200, a: 255 };
@@ -1223,7 +1429,7 @@ pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&
         }
         BoxKind::Iframe { src, .. } => {
             if !is_paint_visible(b) || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
-                return;
+                return WalkOutcome::Done;
             }
             // Phase 0: grey placeholder — no sub-document navigation.
             // DrawImage with src as key: unregistered key → grey placeholder (same as Video).
@@ -1292,10 +1498,12 @@ pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&
                 (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
             );
             out.push(DisplayCommand::PushClipRect { rect: clip });
-            for child in &b.children {
-                walk(child, out, dpr, sel);
-            }
-            out.push(DisplayCommand::PopClip);
+            return WalkOutcome::NeedsLoop(Box::new(Frame {
+                b, is_fixed, is_sticky,
+                epilogue: Epilogue::SvgViewportClip,
+                children: b.children.iter().collect(),
+                next_idx: 0,
+            }));
         }
         BoxKind::SvgShape { shape, svg_mask, .. } => {
             // CSS: fill, stroke, stroke-width — P4 wires ComputedStyle svg_fill/svg_stroke fields.
@@ -1318,4 +1526,5 @@ pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&
     if is_sticky {
         out.push(DisplayCommand::EndStickyLayer);
     }
+    WalkOutcome::Done
 }
