@@ -69,7 +69,21 @@ pub struct RegisteredProperty {
 /// Uses a pure JS shim that stores properties in a global Map.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_css_properties_values_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::into_v8_fn3;
     use lumen_core::ext::JsRuntime as _;
+    // BUG-531: `CSS.registerProperty()` used to store `syntax`/`initialValue`
+    // verbatim with no grammar check at all — no `SyntaxError` was ever
+    // thrown for a malformed `syntax` descriptor or a mismatched
+    // `initialValue`. This native backs the shim's validation step;
+    // `has_initial_value` distinguishes "not given" (fine only for the
+    // universal `'*'` syntax) from an empty string (a real, checked value).
+    rt.register_native(
+        "_lumen_validate_registered_property",
+        into_v8_fn3(|syntax: String, has_initial_value: bool, initial_value: String| -> Option<String> {
+            let initial = has_initial_value.then_some(initial_value.as_str());
+            lumen_layout::style::validate_registered_property(&syntax, initial).err()
+        }),
+    )?;
     rt.eval(CSS_PROPERTIES_VALUES_SHIM)?;
     Ok(())
 }
@@ -106,10 +120,28 @@ const CSS_PROPERTIES_VALUES_SHIM: &str = r#"(function(global) {
       throw new SyntaxError(`CustomPropertyName: '${name}' must start with '--'`);
     }
 
-    // Extract optional fields with defaults.
-    const syntax = definition.syntax || '*';
+    // Extract optional fields with defaults. `syntax`/`initialValue` are
+    // DOMString descriptors: only an actually-*missing* member falls back to
+    // its default — an explicit `null`/array/etc. is stringified instead
+    // (`String(null)` === 'null', matching WebIDL's DOMString conversion),
+    // so `registerProperty({syntax: null, ...})` registers the literal
+    // one-character syntax "null", not the universal one.
+    const hasSyntax = definition.syntax !== undefined;
+    const syntax = hasSyntax ? String(definition.syntax) : '*';
     const inherits = definition.inherits !== false; // default: true
-    const initialValue = definition.initialValue || '';
+    const hasInitialValue = definition.initialValue !== undefined;
+    const initialValue = hasInitialValue ? String(definition.initialValue) : '';
+
+    // BUG-531: validate `syntax`/`initialValue` against the CSS Properties
+    // and Values API grammar before ever storing them — previously nothing
+    // here could throw, so a malformed `syntax` or a mismatched
+    // `initialValue` was silently accepted.
+    if (typeof _lumen_validate_registered_property === 'function') {
+      const err = _lumen_validate_registered_property(syntax, hasInitialValue, initialValue);
+      if (err !== null && err !== undefined) {
+        throw new DOMException(err, 'SyntaxError');
+      }
+    }
 
     // Check if already registered (override allowed per spec).
     if (global._lumen_registered_properties.has(name)) {

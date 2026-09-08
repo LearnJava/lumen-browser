@@ -55,3 +55,48 @@ correctness gap for any code branching on that reported syntax.
 `tests/wpt/metadata/css/css-properties-values-api/register-property-syntax-parsing.html.ini`
 — `expected: FAIL` on the ~117 `assert_invalid`-derived subtests (exact list needs a second
 pass through the file's ~120 `assert_invalid(...)` call sites, not enumerated here).
+
+## Срез P3 2026-09-08
+
+Реализована грамматика syntax-строки и сопоставление значения с ней в новом модуле
+`crate::style::syntax_string` (`crates/engine/layout/src/style/syntax_string.rs`,
+`lumen-layout`), с новым native-байндингом `_lumen_validate_registered_property`
+(`crates/js/src/css_properties_values_api.rs`), который `CSS.registerProperty()` в JS-шиме
+теперь зовёт перед сохранением дескриптора и по его ответу бросает
+`DOMException('SyntaxError')`.
+
+Покрыто (проверено юнит-тестами `syntax_string::tests` + `dom::tests::
+v8_css_storage_nav_misc::css_register_property_*`, и вручную протрассировано почти
+построчно по тексту `register-property-syntax-parsing.html`):
+- полная грамматика syntax-строки: `<type>` (15 типов), литералы (включая dashed-идент и
+  CSS `\XX`-escape через собственный `decode_ident_token`, зеркалящий CSS Syntax §4.3.7/4.3.9),
+  `|`-union, `+`/`#`-множители (включая запрет `<transform-list>+`/`<transform-list>#` и
+  двойных множителей), запрет CSS-wide keyword / `default` как имени компонента, запрет `*`
+  в комбинации с чем-либо ещё;
+- сопоставление значения: `<length>`/`<percentage>`/`<length-percentage>` (через существующий
+  `parse_length`+calc), `<color>`/`<image>` (плюс грубая, нерекурсивная поддержка
+  `light-dark(a, b)` — просто распознаёт форму с двумя аргументами), `<url>`,
+  `<integer>`/`<number>`, `<angle>`/`<time>`/`<resolution>` (с отклонением отрицательного
+  resolution — `-5.3dpcm` теперь invalid), `<transform-function>`/`<transform-list>`
+  строго all-or-nothing (не молча пропускает невалидную функцию, как
+  `parse_transform_list`), `<custom-ident>`/`<string>` (собственный string-token чекер:
+  bad-string на непойманный line break, незакрытая строка на EOF — валидна);
+- universal `*`: собственный сканер CSS Syntax §9.1 `<declaration-value>` (сбалансированность
+  скобок, bad-string, bad-url внутри `url(...)`, top-level `;`/`!`, запрет `var()`/`env()`);
+- CSS-wide keyword (`initial`/`inherit`/`unset`/`revert`/`revert-layer`) как значение — invalid
+  для любого syntax, включая universal (5 WPT-кейсов, которые сам тест называет "not clearly
+  backed by the spec, but a good idea");
+- computational independence инициального значения: `em`/`ex`/`ch`/`rem` — invalid именно как
+  `initialValue` (нет элемента, относительно которого их резолвить), но **не** для обычной
+  declaration на существующем элементе через `@property`/cascade
+  (`property_syntax::validate_against_syntax` эту проверку сознательно не делает — иначе
+  ломается уже проходящий тест `property_syntax_union_length_or_percentage`, где
+  `--w: 10rem;` обязан приниматься).
+
+**Не сделано / известный остаточный пробел:** typed `calc()` для `<number>`/`<integer>`/
+`<angle>`/`<time>`/`<resolution>` — существующий calc-движок (`style::calc`) типизирован
+только под `Length`, поэтому `calc(1 / 2)`, `calc(3.1415)`, `calc(50grad + 3.14159rad)`,
+`calc(2s - 9ms)` остаются invalid, хотя тест ожидает valid (5 строк). Реальный прогон через
+WPT-harness в этом срезе не переснят — фикс проверен только юнит-тестами и ручной трассировкой,
+точный итоговый счёт `assert_valid`/`assert_invalid` и `.ini` с оставшимся списком — следующий
+шаг для того, кто продолжит этот файл.

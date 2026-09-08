@@ -103,7 +103,11 @@ pub fn parse_transform_list(s: &str) -> Vec<TransformFn> {
     out
 }
 
-fn parse_transform_fn(name: &str, args: &str) -> Option<TransformFn> {
+/// BUG-531: also used by `syntax_string`'s `<transform-function>`/
+/// `<transform-list>` syntax-string matcher, which — unlike
+/// `parse_transform_list` above — needs the per-function `None` to reject
+/// the *whole* value rather than silently skip one function.
+pub(in crate::style) fn parse_transform_fn(name: &str, args: &str) -> Option<TransformFn> {
     let parts: Vec<&str> = args.split(',').map(str::trim).collect();
     match name {
         "translate" => {

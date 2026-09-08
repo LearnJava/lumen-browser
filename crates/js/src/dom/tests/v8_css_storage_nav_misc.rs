@@ -400,6 +400,50 @@ fn css_register_property_default_syntax() {
     assert!(bool_eval(&rt, "CSS.registerProperty({ name: '--default-syntax', inherits: true, initialValue: 'val' }); CSS._getRegisteredProperties()['--default-syntax'].syntax === '*'"));
 }
 
+// BUG-531: `syntax`/`initialValue` are now validated against the CSS
+// Properties and Values API grammar — a `DOMException` named `SyntaxError`
+// is thrown for a malformed descriptor or a mismatched initial value,
+// instead of always silently accepting whatever was passed in.
+
+#[test]
+fn css_register_property_rejects_malformed_syntax() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(
+        &rt,
+        "try { CSS.registerProperty({ name: '--bad-syntax', syntax: '<length', initialValue: '10px' }); false; } \
+         catch (e) { e instanceof DOMException && e.name === 'SyntaxError'; }"
+    ));
+}
+
+#[test]
+fn css_register_property_rejects_mismatched_initial_value() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(
+        &rt,
+        "try { CSS.registerProperty({ name: '--bad-initial', syntax: '<color>', initialValue: '10px' }); false; } \
+         catch (e) { e instanceof DOMException && e.name === 'SyntaxError'; }"
+    ));
+}
+
+#[test]
+fn css_register_property_rejects_missing_initial_value_for_typed_syntax() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(
+        &rt,
+        "try { CSS.registerProperty({ name: '--no-initial', syntax: '<length>' }); false; } \
+         catch (e) { e instanceof DOMException && e.name === 'SyntaxError'; }"
+    ));
+}
+
+#[test]
+fn css_register_property_accepts_multiplier_and_union_syntax() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(
+        &rt,
+        "CSS.registerProperty({ name: '--lengths', syntax: '<length>+ | <color>', inherits: false, initialValue: '1px 2px' }); true"
+    ));
+}
+
 // ── PerformanceObserver misc (paint/LCP/layout-shift delivery) ──────────
 
 #[test]
