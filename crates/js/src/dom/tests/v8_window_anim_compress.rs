@@ -621,6 +621,42 @@ fn element_animate_applies_opacity_style() {
     assert_eq!(r, lumen_core::JsValue::String("0".into()));
 }
 
+/// BUG-530: `pause()` followed by a `currentTime =` seek must repaint the
+/// interpolated style immediately — the RAF loop that normally drives
+/// `_applyAtP` is dead once `paused`, so nothing else will ever apply it.
+#[test]
+fn animation_pause_then_seek_reapplies_style() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var el = document.createElement('div'); \
+                 document.body.appendChild(el); \
+                 _wa_current_time = 0; \
+                 var a = el.animate([{marginLeft:'0px'},{marginLeft:'100px'}], {duration:1000}); \
+                 a.pause(); \
+                 a.currentTime = 250; \
+                 el.style.marginLeft"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("25px".into()));
+}
+
+/// `pause()` alone (no subsequent seek) must also paint the frame at the
+/// moment of pausing — the RAF that would otherwise have painted it is
+/// cancelled by `pause()` itself.
+#[test]
+fn animation_pause_reapplies_style_at_current_time() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var el = document.createElement('div'); \
+                 document.body.appendChild(el); \
+                 _wa_current_time = 0; \
+                 var a = el.animate([{marginLeft:'0px'},{marginLeft:'100px'}], {duration:1000}); \
+                 _wa_current_time = 500; \
+                 a.pause(); \
+                 el.style.marginLeft"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("50px".into()));
+}
+
 // ── CompressionStream / DecompressionStream (WHATWG Compression Streams) ──
 //
 // V8 twin note: the originals interleaved write/close/read().then()/assert
