@@ -3435,6 +3435,10 @@ Object.defineProperty(Animation.prototype, 'currentTime', {
             this._startTime = _wa_current_time - this._holdTime / this._pbRate;
             this._holdTime = null;
         }
+        // A seek must be visible immediately, not just at the next RAF tick —
+        // while `paused` (or `idle`/`finished`) nothing else will ever paint
+        // it. See BUG-530.
+        this._syncStyleAtCurrentTime();
     },
     configurable: true,
 });
@@ -3481,6 +3485,9 @@ Animation.prototype.pause = function() {
     this._startTime = null;
     this._state     = 'paused';
     this._cancelRaf();
+    // RAF is now dead, so the frame at the moment of pausing would otherwise
+    // never be painted. See BUG-530.
+    this._syncStyleAtCurrentTime();
 };
 
 Animation.prototype.cancel = function() {
@@ -3549,14 +3556,36 @@ Animation.prototype._tick = function(now) {
         this._onFinish();
         return;
     }
+    this._applyForIterProgress(p, eff);
+    this._scheduleRaf();
+};
+
+// Paint the frame for an already-computed `_wa_iter_progress` result — shared
+// between the RAF-driven `_tick` (running) and `_syncStyleAtCurrentTime`
+// (paused/idle/finished seeks, BUG-530). `-1` ("before delay start") only
+// paints when fill covers it; any other value is a progress in [0,1].
+Animation.prototype._applyForIterProgress = function(p, eff) {
     if (p === -1) {
-        // Before delay start — apply 'from' frame if fill=backwards|both
         var fillMode = (eff._timing && eff._timing.fill) || 'auto';
         if (fillMode === 'backwards' || fillMode === 'both') this._applyAtP(0);
     } else {
         this._applyAtP(p);
     }
-    this._scheduleRaf();
+};
+
+// Re-paint the current frame outside the RAF loop — used by `pause()` and the
+// `currentTime` setter, neither of which is followed by a `_tick` while the
+// animation stays out of `running` state. Without this, a seek made while
+// `paused` (the standard WPT pattern for deterministic sampling, see
+// BUG-530) silently has no visual effect.
+Animation.prototype._syncStyleAtCurrentTime = function() {
+    var eff = this.effect;
+    if (!eff) return;
+    var ct = this.currentTime;
+    if (ct === null) return;
+    var p = _wa_iter_progress(eff._timing, ct);
+    if (p === -2) { this._applyAtP(1); return; }
+    this._applyForIterProgress(p, eff);
 };
 
 Animation.prototype._applyAtP = function(p) {

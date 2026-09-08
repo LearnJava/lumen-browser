@@ -36,7 +36,7 @@ anim.addEventListener("finish", () => console.log("B"));     // TypeError
 так что тест не падает, а виснет. То же самое у `cancel` (`this.oncancel`) и у
 события `remove`, которого нет вовсе.
 
-Не дубль [BUG-530](BUG-530-OPEN.md) (там `pause()`+`currentTime` не
+Не дубль [BUG-530](BUG-530-FIXED.md) (там `pause()`+`currentTime` не
 переприменяют стиль) и не [BUG-463](BUG-463-FIXED.md) (там `animate` висит на
 инстансе, а не на прототипе) — это третий, независимый пробел того же шима.
 

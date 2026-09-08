@@ -1,6 +1,6 @@
 # BUG-530: `Animation.pause()` + `currentTime =` seek never re-applies interpolated styles
 
-**Статус:** OPEN
+**Статус:** FIXED (2026-09-08, P3)
 **Дата:** 2026-08-03
 **Компонент:** js (`crates/js/src/dom.rs:15412-15556` — WAAPI `Animation` shim)
 **Найден:** P2, WPT-RUN-3 срез 25 (`css/css-properties-values-api`) — живая проба
@@ -55,17 +55,48 @@ BUG-463 сейчас маскирует эту находку на десятк�
 (0/1 сабтест каждый, harness OK, не через `interpolation-testcommon.js` —
 собственный inline-паттерн `animate().pause(); .currentTime = ...`).
 
-## Фикс (не сделан)
+## Фикс (2026-09-08, P3)
 
-`currentTime`-сеттер и/или `pause()` должны вызывать `this._applyAtP(p)` с
-пересчитанным прогрессом сразу после обновления `_holdTime`/`_startTime`, а
-не полагаться на следующий RAF-тик (который во время `paused` никогда не
-случится).
+Подтверждена ровно гипотеза из раздела «Причина» — правки только в
+`crates/js/src/shim/web_api_shim_tail_b.js`, без изменений `_wa_iter_progress`
+или семантики `_applyAtP`.
+
+`Animation.prototype._tick` уже вычисляла прогресс `p` и решала, красить ли
+кадр (fill-режим для `p === -1`, иначе прямой `_applyAtP(p)`) — эта логика
+вынесена в общий хелпер `_applyForIterProgress(p, eff)`, который теперь
+разделяют `_tick` (RAF-driven, `running`) и новый
+`_syncStyleAtCurrentTime()` (вызывается вне RAF). `_syncStyleAtCurrentTime`
+читает `this.currentTime`, прогоняет его через тот же `_wa_iter_progress`,
+и дополнительно обрабатывает `-2` («после конца, без fill-forwards») —
+кейс, которого не было в `_tick` (RAF туда не доходит: `_onFinish`
+перехватывает раньше), но который встречается на прямом `currentTime =`
+сике за пределы длительности — как «показать последний кадр» (`_applyAtP(1)`).
+
+`_syncStyleAtCurrentTime()` вызывается из двух мест:
+- сеттер `currentTime` (dom.rs / `web_api_shim_tail_b.js`, после обновления
+  `_holdTime`/`_startTime`) — синхронно перекрашивает кадр на новую
+  позицию, независимо от состояния `running`/`paused`/`idle`;
+- `pause()`, сразу после `_cancelRaf()` — красит кадр на момент паузы,
+  который иначе никогда не будет нарисован (RAF, который иначе бы это
+  сделал, уже отменён этим же вызовом).
+
+Тесты (`crates/js/src/dom/tests/v8_window_anim_compress.rs`):
+`animation_pause_then_seek_reapplies_style` (сценарий бага — `pause()` +
+`currentTime = 250` на 1000мс `marginLeft`-анимации → `"25px"`),
+`animation_pause_reapplies_style_at_current_time` (голый `pause()` без
+последующего сика красит кадр на момент паузы).
+
+`cargo test -p lumen-js --lib --features v8-backend`
+(`dom::tests::v8_window_anim_compress`): 70/70. `cargo clippy -p lumen-js
+--all-targets -- -D warnings`: чисто на затронутых файлах — полный прогон
+красит несвязанные `lumen-image`/`lumen-font` (`chunks_exact_to_as_chunks`,
+системный rustc 1.98.x вместо пина 1.97.0 на этой машине, см. память
+`feedback_linux_toolchain_mismatch`).
 
 ## .ini
 
-Не добавлен — находка ещё не привязана к конкретным файлам через `.ini`
-(9 файлов `css/css-properties-values-api/animation/` в этом срезе; полный
-масштаб — все файлы, уже перечисленные в [BUG-463](BUG-463-FIXED.md), плюс
-любые будущие срезы, использующие `interpolation-testcommon.js` или
-собственный `pause()+currentTime`-паттерн).
+Не добавлен этим фиксом — находка была атрибутирована по симптому
+(`css/support/interpolation-testcommon.js`'s `pause()+currentTime`-паттерн),
+не по конкретным `.ini`-файлам; актуализация покрытия — по факту следующего
+прогона WPT на затронутых срезах (маскировалось [BUG-463](BUG-463-FIXED.md)
+до его фикса 2026-09-01, актуальный масштаб непроверен).
