@@ -111,7 +111,7 @@ All three parser shortcuts fixed in `parse_media_clause`/`parse_media_feature`
   variant, `matches()` always `true` — Lumen's color depth is fixed,
   `serialize()` emits the bare `"color"`, no `: value`). General
   boolean-context support for range features (`width`/`resolution`/…) is
-  **not** in scope here — that is [BUG-527](BUG-527-OPEN.md)'s broader,
+  **not** in scope here — that is [BUG-527](BUG-527-FIXED.md)'s broader,
   still-open item; a regression test
   (`media_query_boolean_context_width_still_unsupported`) pins the boundary
   so a future BUG-527 fix has to touch that test deliberately, not

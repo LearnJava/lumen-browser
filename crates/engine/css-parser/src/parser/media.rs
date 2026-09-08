@@ -126,10 +126,241 @@ pub enum MediaFeature {
     /// `(color)` — boolean-context форма (CSS Values L4 §Boolean Context):
     /// «true, если фича поддерживается устройством и её значение не равно
     /// нулю». У Lumen цветовая глубина фиксирована, поэтому она всегда
-    /// «поддерживается». Общий boolean-context механизм для остальных
-    /// range-фич (`width`/`resolution`/…) — отдельный, более широкий объём
-    /// BUG-527, не этой точечной правки (BUG-1020).
+    /// «поддерживается». Общий boolean-context механизм для range-фич
+    /// (`width`/`resolution`/…) — их собственная, более широкая grammar
+    /// (сравнение `<`/`<=`/`>`/`>=`), не затронут этой правкой (BUG-527
+    /// закрывает только discrete-фичи — см. `parse_media_feature`).
     Color,
+    /// `(display-mode: standalone | fullscreen | minimal-ui |
+    /// picture-in-picture | browser)` (Media Queries L5 §6.4). У Lumen нет
+    /// PWA-режима отображения — всегда `browser`.
+    DisplayMode(MediaDisplayMode),
+    /// `(display-state: normal | fullscreen | maximized | minimized)`
+    /// (tentative, additional-windowing-controls explainer).
+    DisplayState(MediaDisplayState),
+    /// `(resizable: true | false)` (tentative, additional-windowing-controls
+    /// explainer) — может ли пользователь менять размер окна вывода.
+    Resizable(bool),
+    /// `(dynamic-range: standard | high)` (Media Queries L5 §6.5).
+    DynamicRange(MediaDynamicRange),
+    /// `(video-dynamic-range: standard | high)` (Media Queries L5 §6.6).
+    VideoDynamicRange(MediaDynamicRange),
+    /// `(update: none | slow | fast)` (Media Queries L4 §6.1) — как часто
+    /// окружение способно отражать изменения после первичного рендера.
+    Update(MediaUpdate),
+    /// `(navigation-controls: none | back-button)` (tentative,
+    /// backbutton-mediaquery explainer).
+    NavigationControls(MediaNavigationControls),
+    /// `(overflow-inline: none | scroll)` (Media Queries L4 §6.2).
+    OverflowInline(MediaOverflowInline),
+    /// `(overflow-block: none | scroll | paged)` (Media Queries L4 §6.3).
+    OverflowBlock(MediaOverflowBlock),
+    /// Boolean-context form (bare `(feature)`, no `: value`) of a discrete
+    /// feature whose value form is one of the arms above. See
+    /// [`BooleanFeature`] — kept as its own small enum rather than one
+    /// variant per feature here, since its `matches()` re-derives the
+    /// answer from `MediaContext` directly instead of carrying a parsed
+    /// value literal.
+    BooleanContext(BooleanFeature),
+}
+
+/// Which already-implemented discrete feature a bare `(feature)` boolean
+/// context (CSS Values L4 §Boolean Context) refers to. Per Media Queries L4
+/// §4.1 the bare form evaluates true unless the feature's current value is
+/// its defined off/no-preference/normal keyword; a few features below have
+/// no such keyword at all (`orientation`, `prefers-color-scheme`,
+/// `display-mode`, `display-state`) and are unconditionally true once
+/// recognized. Range features (`width`/`resolution`/`aspect-ratio`/…) are
+/// out of scope — see the note on [`MediaFeature::Color`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BooleanFeature {
+    Scripting,
+    PrefersColorScheme,
+    ForcedColors,
+    InvertedColors,
+    PrefersReducedData,
+    PrefersContrast,
+    PrefersReducedMotion,
+    PrefersReducedTransparency,
+    Orientation,
+    Hover,
+    AnyHover,
+    Pointer,
+    AnyPointer,
+    DisplayMode,
+    DisplayState,
+    Resizable,
+    DynamicRange,
+    VideoDynamicRange,
+    Update,
+    NavigationControls,
+    OverflowInline,
+    OverflowBlock,
+}
+
+impl BooleanFeature {
+    fn matches(self, ctx: &MediaContext) -> bool {
+        match self {
+            Self::Scripting => ctx.scripting != MediaScripting::None,
+            Self::PrefersColorScheme | Self::Orientation | Self::DisplayMode | Self::DisplayState => true,
+            Self::ForcedColors => ctx.forced_colors,
+            Self::InvertedColors => ctx.inverted_colors == MediaInvertedColors::Inverted,
+            Self::PrefersReducedData => ctx.prefers_reduced_data == MediaReducedData::Reduce,
+            Self::PrefersContrast => ctx.prefers_contrast != MediaContrast::NoPreference,
+            Self::PrefersReducedMotion => ctx.prefers_reduced_motion,
+            Self::PrefersReducedTransparency => {
+                ctx.prefers_reduced_transparency == MediaReducedTransparency::Reduce
+            }
+            Self::Hover => ctx.hover != MediaHover::None,
+            Self::AnyHover => ctx.any_hover != MediaHover::None,
+            Self::Pointer => ctx.pointer != MediaPointer::None,
+            Self::AnyPointer => ctx.any_pointer != MediaPointer::None,
+            Self::Resizable => ctx.resizable,
+            // Per spec (confirmed by `dynamic-range.html`): the boolean form
+            // tests whether HDR is actually available, not merely whether
+            // the feature is recognized — `standard` is the "off" state
+            // here, same status as `none`/`no-preference` elsewhere.
+            Self::DynamicRange => ctx.dynamic_range == MediaDynamicRange::High,
+            Self::VideoDynamicRange => ctx.video_dynamic_range == MediaDynamicRange::High,
+            Self::Update => ctx.update != MediaUpdate::None,
+            Self::NavigationControls => ctx.navigation_controls != MediaNavigationControls::None,
+            Self::OverflowInline => ctx.overflow_inline != MediaOverflowInline::None,
+            Self::OverflowBlock => ctx.overflow_block != MediaOverflowBlock::None,
+        }
+    }
+
+    const fn feature_name(self) -> &'static str {
+        match self {
+            Self::Scripting => "scripting",
+            Self::PrefersColorScheme => "prefers-color-scheme",
+            Self::ForcedColors => "forced-colors",
+            Self::InvertedColors => "inverted-colors",
+            Self::PrefersReducedData => "prefers-reduced-data",
+            Self::PrefersContrast => "prefers-contrast",
+            Self::PrefersReducedMotion => "prefers-reduced-motion",
+            Self::PrefersReducedTransparency => "prefers-reduced-transparency",
+            Self::Orientation => "orientation",
+            Self::Hover => "hover",
+            Self::AnyHover => "any-hover",
+            Self::Pointer => "pointer",
+            Self::AnyPointer => "any-pointer",
+            Self::DisplayMode => "display-mode",
+            Self::DisplayState => "display-state",
+            Self::Resizable => "resizable",
+            Self::DynamicRange => "dynamic-range",
+            Self::VideoDynamicRange => "video-dynamic-range",
+            Self::Update => "update",
+            Self::NavigationControls => "navigation-controls",
+            Self::OverflowInline => "overflow-inline",
+            Self::OverflowBlock => "overflow-block",
+        }
+    }
+
+    /// Parses a bare feature name (already trimmed/lower-cased) into its
+    /// boolean-context representation. `None` for anything not in this
+    /// list — either an unimplemented feature or a range feature (`color`
+    /// is handled separately by the caller, `MediaFeature::Color`).
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "scripting" => Self::Scripting,
+            "prefers-color-scheme" => Self::PrefersColorScheme,
+            "forced-colors" => Self::ForcedColors,
+            "inverted-colors" => Self::InvertedColors,
+            "prefers-reduced-data" => Self::PrefersReducedData,
+            "prefers-contrast" => Self::PrefersContrast,
+            "prefers-reduced-motion" => Self::PrefersReducedMotion,
+            "prefers-reduced-transparency" => Self::PrefersReducedTransparency,
+            "orientation" => Self::Orientation,
+            "hover" => Self::Hover,
+            "any-hover" => Self::AnyHover,
+            "pointer" => Self::Pointer,
+            "any-pointer" => Self::AnyPointer,
+            "display-mode" => Self::DisplayMode,
+            "display-state" => Self::DisplayState,
+            "resizable" => Self::Resizable,
+            "dynamic-range" => Self::DynamicRange,
+            "video-dynamic-range" => Self::VideoDynamicRange,
+            "update" => Self::Update,
+            "navigation-controls" => Self::NavigationControls,
+            "overflow-inline" => Self::OverflowInline,
+            "overflow-block" => Self::OverflowBlock,
+            _ => return None,
+        })
+    }
+}
+
+/// Media Queries L5 §6.4 — `display-mode`: режим отображения top-level
+/// browsing context (обычное окно браузера / установленное PWA-окно / …).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaDisplayMode {
+    /// Обычная вкладка/окно браузера — desktop-дефолт Lumen (нет PWA-режима).
+    Browser,
+    Standalone,
+    MinimalUi,
+    Fullscreen,
+    PictureInPicture,
+}
+
+/// `display-state` (tentative) — состояние top-level окна вывода.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaDisplayState {
+    /// Обычное, не свёрнутое/развёрнутое/полноэкранное окно.
+    Normal,
+    Minimized,
+    Maximized,
+    Fullscreen,
+}
+
+/// Media Queries L5 §6.5/§6.6 — уровень динамического диапазона,
+/// поддерживаемый устройством вывода (`dynamic-range`) или видео-плоскостью
+/// (`video-dynamic-range`). Lumen не поддерживает HDR — всегда `Standard`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaDynamicRange {
+    Standard,
+    High,
+}
+
+/// Media Queries L4 §6.1 — `update`: как часто окружение способно отражать
+/// изменения контента после первичного рендера.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaUpdate {
+    /// Изменения не отражаются вовсе (статический снимок — печать/PDF).
+    None,
+    /// Изменения отражаются, но медленно/дорого (e-ink-подобные устройства).
+    Slow,
+    /// Изменения отражаются быстро — desktop-дефолт Lumen для непечатного
+    /// документа (per spec note: «update» практически всегда `fast` вне
+    /// печати).
+    Fast,
+}
+
+/// `navigation-controls` (tentative) — какие встроенные средства навигации
+/// «назад» доступны пользователю в UA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaNavigationControls {
+    None,
+    /// Есть кнопка «назад» — desktop-дефолт Lumen (вкладка с историей).
+    BackButton,
+}
+
+/// Media Queries L4 §6.2 — `overflow-inline`: как окружение обрабатывает
+/// содержимое, переполняющее viewport вдоль inline-оси.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaOverflowInline {
+    None,
+    /// Скроллится — desktop-дефолт Lumen для непечатного документа.
+    Scroll,
+}
+
+/// Media Queries L4 §6.3 — `overflow-block`: как окружение обрабатывает
+/// содержимое, переполняющее viewport вдоль block-оси.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaOverflowBlock {
+    None,
+    /// Скроллится — desktop-дефолт Lumen для непечатного документа.
+    Scroll,
+    /// Разбивается на страницы (печать/PDF).
+    Paged,
 }
 
 impl Eq for MediaFeature {}
@@ -297,6 +528,24 @@ pub struct MediaContext {
     pub scripting: MediaScripting,
     /// Инверсия цветов окружением (`inverted-colors` media feature).
     pub inverted_colors: MediaInvertedColors,
+    /// Режим отображения top-level browsing context (`display-mode`).
+    pub display_mode: MediaDisplayMode,
+    /// Состояние top-level окна вывода (`display-state`).
+    pub display_state: MediaDisplayState,
+    /// Может ли пользователь менять размер окна вывода (`resizable`).
+    pub resizable: bool,
+    /// Динамический диапазон устройства вывода (`dynamic-range`).
+    pub dynamic_range: MediaDynamicRange,
+    /// Динамический диапазон видео-плоскости (`video-dynamic-range`).
+    pub video_dynamic_range: MediaDynamicRange,
+    /// Частота отражения изменений после первичного рендера (`update`).
+    pub update: MediaUpdate,
+    /// Доступные средства навигации «назад» (`navigation-controls`).
+    pub navigation_controls: MediaNavigationControls,
+    /// Обработка переполнения вдоль inline-оси (`overflow-inline`).
+    pub overflow_inline: MediaOverflowInline,
+    /// Обработка переполнения вдоль block-оси (`overflow-block`).
+    pub overflow_block: MediaOverflowBlock,
 }
 
 impl Default for MediaContext {
@@ -323,6 +572,16 @@ impl Default for MediaContext {
             scripting: MediaScripting::Enabled,
             // Desktop-дефолт: ОС не инвертирует цвета.
             inverted_colors: MediaInvertedColors::None,
+            // Desktop-дефолты: обычная вкладка браузера, не PWA/e-ink/print.
+            display_mode: MediaDisplayMode::Browser,
+            display_state: MediaDisplayState::Normal,
+            resizable: true,
+            dynamic_range: MediaDynamicRange::Standard,
+            video_dynamic_range: MediaDynamicRange::Standard,
+            update: MediaUpdate::Fast,
+            navigation_controls: MediaNavigationControls::BackButton,
+            overflow_inline: MediaOverflowInline::Scroll,
+            overflow_block: MediaOverflowBlock::Scroll,
         }
     }
 }
@@ -422,6 +681,16 @@ impl MediaFeature {
             Self::Scripting(s) => ctx.scripting == *s,
             Self::InvertedColors(i) => ctx.inverted_colors == *i,
             Self::Color => true,
+            Self::DisplayMode(m) => ctx.display_mode == *m,
+            Self::DisplayState(s) => ctx.display_state == *s,
+            Self::Resizable(r) => ctx.resizable == *r,
+            Self::DynamicRange(d) => ctx.dynamic_range == *d,
+            Self::VideoDynamicRange(d) => ctx.video_dynamic_range == *d,
+            Self::Update(u) => ctx.update == *u,
+            Self::NavigationControls(n) => ctx.navigation_controls == *n,
+            Self::OverflowInline(o) => ctx.overflow_inline == *o,
+            Self::OverflowBlock(o) => ctx.overflow_block == *o,
+            Self::BooleanContext(b) => b.matches(ctx),
         }
     }
 }
@@ -566,7 +835,69 @@ impl MediaFeature {
             // Boolean context — no `: value` part, just the feature name
             // (`(color)`, not `(color: true)`).
             Self::Color => "color".to_string(),
+            Self::DisplayMode(m) => format!(
+                "display-mode: {}",
+                match m {
+                    MediaDisplayMode::Standalone => "standalone",
+                    MediaDisplayMode::Browser => "browser",
+                    MediaDisplayMode::MinimalUi => "minimal-ui",
+                    MediaDisplayMode::Fullscreen => "fullscreen",
+                    MediaDisplayMode::PictureInPicture => "picture-in-picture",
+                }
+            ),
+            Self::DisplayState(s) => format!(
+                "display-state: {}",
+                match s {
+                    MediaDisplayState::Normal => "normal",
+                    MediaDisplayState::Minimized => "minimized",
+                    MediaDisplayState::Maximized => "maximized",
+                    MediaDisplayState::Fullscreen => "fullscreen",
+                }
+            ),
+            Self::Resizable(r) => format!("resizable: {}", if *r { "true" } else { "false" }),
+            Self::DynamicRange(d) => format!("dynamic-range: {}", dynamic_range_str(*d)),
+            Self::VideoDynamicRange(d) => format!("video-dynamic-range: {}", dynamic_range_str(*d)),
+            Self::Update(u) => format!(
+                "update: {}",
+                match u {
+                    MediaUpdate::None => "none",
+                    MediaUpdate::Slow => "slow",
+                    MediaUpdate::Fast => "fast",
+                }
+            ),
+            Self::NavigationControls(n) => format!(
+                "navigation-controls: {}",
+                match n {
+                    MediaNavigationControls::None => "none",
+                    MediaNavigationControls::BackButton => "back-button",
+                }
+            ),
+            Self::OverflowInline(o) => format!(
+                "overflow-inline: {}",
+                match o {
+                    MediaOverflowInline::None => "none",
+                    MediaOverflowInline::Scroll => "scroll",
+                }
+            ),
+            Self::OverflowBlock(o) => format!(
+                "overflow-block: {}",
+                match o {
+                    MediaOverflowBlock::None => "none",
+                    MediaOverflowBlock::Scroll => "scroll",
+                    MediaOverflowBlock::Paged => "paged",
+                }
+            ),
+            // Boolean context — bare feature name, no `: value` (same shape
+            // as `Self::Color` above).
+            Self::BooleanContext(b) => b.feature_name().to_string(),
         }
+    }
+}
+
+fn dynamic_range_str(d: MediaDynamicRange) -> &'static str {
+    match d {
+        MediaDynamicRange::Standard => "standard",
+        MediaDynamicRange::High => "high",
     }
 }
 
@@ -874,14 +1205,19 @@ fn parse_calc_operand(tok: &str) -> Option<f32> {
 
 pub(crate) fn parse_media_feature(s: &str) -> MediaCondition {
     // `feature: value` или просто `feature` — CSS Values L4's boolean
-    // context (BUG-1020). Только `color` реализован здесь: у Lumen нет
-    // самой range-фичи `color` (глубина цвета не варьируется), а общий
-    // механизм «boolean context для width/resolution/…» — отдельный, более
-    // широкий объём BUG-527.
+    // context. `color` — особый случай без реальной range-фичи за ним
+    // (BUG-1020); каждая уже реализованная discrete-фича получает свою
+    // boolean-форму через `BooleanFeature` (BUG-527) — общий механизм для
+    // range-фич (`width`/`resolution`/…, требуют `<`/`<=`/`>`/`>=`-grammar)
+    // по-прежнему не затронут.
     let Some((key, val)) = s.split_once(':') else {
-        return match s.trim().to_ascii_lowercase().as_str() {
+        let bare = s.trim().to_ascii_lowercase();
+        return match bare.as_str() {
             "color" => MediaCondition::Feature(MediaFeature::Color),
-            _ => MediaCondition::Unsupported,
+            _ => match BooleanFeature::from_name(&bare) {
+                Some(b) => MediaCondition::Feature(MediaFeature::BooleanContext(b)),
+                None => MediaCondition::Unsupported,
+            },
         };
     };
     let key = key.trim().to_ascii_lowercase();
@@ -997,6 +1333,64 @@ pub(crate) fn parse_media_feature(s: &str) -> MediaCondition {
         "inverted-colors" => match val.to_ascii_lowercase().as_str() {
             "none" => MediaCondition::Feature(MediaFeature::InvertedColors(MediaInvertedColors::None)),
             "inverted" => MediaCondition::Feature(MediaFeature::InvertedColors(MediaInvertedColors::Inverted)),
+            _ => MediaCondition::Unsupported,
+        },
+        "display-mode" => match val.to_ascii_lowercase().as_str() {
+            "standalone" => MediaCondition::Feature(MediaFeature::DisplayMode(MediaDisplayMode::Standalone)),
+            "browser" => MediaCondition::Feature(MediaFeature::DisplayMode(MediaDisplayMode::Browser)),
+            "minimal-ui" => MediaCondition::Feature(MediaFeature::DisplayMode(MediaDisplayMode::MinimalUi)),
+            "fullscreen" => MediaCondition::Feature(MediaFeature::DisplayMode(MediaDisplayMode::Fullscreen)),
+            "picture-in-picture" => {
+                MediaCondition::Feature(MediaFeature::DisplayMode(MediaDisplayMode::PictureInPicture))
+            }
+            _ => MediaCondition::Unsupported,
+        },
+        "display-state" => match val.to_ascii_lowercase().as_str() {
+            "normal" => MediaCondition::Feature(MediaFeature::DisplayState(MediaDisplayState::Normal)),
+            "minimized" => MediaCondition::Feature(MediaFeature::DisplayState(MediaDisplayState::Minimized)),
+            "maximized" => MediaCondition::Feature(MediaFeature::DisplayState(MediaDisplayState::Maximized)),
+            "fullscreen" => MediaCondition::Feature(MediaFeature::DisplayState(MediaDisplayState::Fullscreen)),
+            _ => MediaCondition::Unsupported,
+        },
+        "resizable" => match val.to_ascii_lowercase().as_str() {
+            "true" => MediaCondition::Feature(MediaFeature::Resizable(true)),
+            "false" => MediaCondition::Feature(MediaFeature::Resizable(false)),
+            _ => MediaCondition::Unsupported,
+        },
+        "dynamic-range" | "video-dynamic-range" => {
+            let range = match val.to_ascii_lowercase().as_str() {
+                "standard" => MediaDynamicRange::Standard,
+                "high" => MediaDynamicRange::High,
+                _ => return MediaCondition::Unsupported,
+            };
+            MediaCondition::Feature(if key == "dynamic-range" {
+                MediaFeature::DynamicRange(range)
+            } else {
+                MediaFeature::VideoDynamicRange(range)
+            })
+        }
+        "update" => match val.to_ascii_lowercase().as_str() {
+            "none" => MediaCondition::Feature(MediaFeature::Update(MediaUpdate::None)),
+            "slow" => MediaCondition::Feature(MediaFeature::Update(MediaUpdate::Slow)),
+            "fast" => MediaCondition::Feature(MediaFeature::Update(MediaUpdate::Fast)),
+            _ => MediaCondition::Unsupported,
+        },
+        "navigation-controls" => match val.to_ascii_lowercase().as_str() {
+            "none" => MediaCondition::Feature(MediaFeature::NavigationControls(MediaNavigationControls::None)),
+            "back-button" => {
+                MediaCondition::Feature(MediaFeature::NavigationControls(MediaNavigationControls::BackButton))
+            }
+            _ => MediaCondition::Unsupported,
+        },
+        "overflow-inline" => match val.to_ascii_lowercase().as_str() {
+            "none" => MediaCondition::Feature(MediaFeature::OverflowInline(MediaOverflowInline::None)),
+            "scroll" => MediaCondition::Feature(MediaFeature::OverflowInline(MediaOverflowInline::Scroll)),
+            _ => MediaCondition::Unsupported,
+        },
+        "overflow-block" => match val.to_ascii_lowercase().as_str() {
+            "none" => MediaCondition::Feature(MediaFeature::OverflowBlock(MediaOverflowBlock::None)),
+            "scroll" => MediaCondition::Feature(MediaFeature::OverflowBlock(MediaOverflowBlock::Scroll)),
+            "paged" => MediaCondition::Feature(MediaFeature::OverflowBlock(MediaOverflowBlock::Paged)),
             _ => MediaCondition::Unsupported,
         },
         _ => MediaCondition::Unsupported,
