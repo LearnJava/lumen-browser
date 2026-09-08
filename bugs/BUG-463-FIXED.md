@@ -156,6 +156,6 @@ Verification: `cargo test -p lumen-js --features v8-backend element_animate`
 -D warnings` clean. Not re-run against a live WPT corpus in this slice —
 the `.ini` files referenced above still carry `expected: FAIL` and are a
 follow-up for whoever next touches WPT expectations for these categories.
-[BUG-530](BUG-530-OPEN.md) documents that most of the
+[BUG-530](BUG-530-FIXED.md) documents that most of the
 `*-interpolation.html`/`*-no-interpolation.html` files this bug named will
 still fail after this fix, just past this specific assertion.

@@ -1221,6 +1221,29 @@ use super::*;
     }
 
     #[test]
+    fn media_query_bare_word_after_and_invalidates_clause() {
+        // BUG-528: a second bare (non-parenthesized) word joined by `and`
+        // is not a second media-type to test independently — it's a syntax
+        // error, so the whole clause must go Unsupported (unknown, never
+        // matches, `not` included) instead of silently ANDing in an
+        // always-false extra condition that `not` then flips to true.
+        let q = parse_media_query("not all and overflow-inline");
+        assert!(q.clauses[0].negated);
+        assert_eq!(q.clauses[0].conditions, vec![MediaCondition::Unsupported]);
+        assert!(!q.matches(&screen_ctx(500.0)));
+    }
+
+    #[test]
+    fn media_query_comma_list_all_unparseable_entries_never_matches() {
+        // Same shape as `matchmedia-utils.js`'s `query_should_be_unknown`
+        // helper: `${query}, not all and ${query}` for an unrecognized
+        // bare feature name. Neither comma-separated entry should match.
+        let q = parse_media_query("overflow-inline, not all and overflow-inline");
+        assert_eq!(q.clauses.len(), 2);
+        assert!(!q.matches(&screen_ctx(500.0)));
+    }
+
+    #[test]
     fn media_query_prefers_color_scheme_light_default() {
         let q = parse_media_query("(prefers-color-scheme: light)");
         assert!(q.matches(&screen_ctx(500.0)));
@@ -1568,9 +1591,11 @@ use super::*;
         assert!(q.matches(&screen_ctx(1024.0)));
     }
 
-    // ── MQ L4: boolean context частично реализован (только `color`) —
-    // остальные range-фичи в boolean context остаются Unsupported, объём
-    // BUG-527. Регресс-тест на то, что скоуп фикса не расширился неявно.
+    // ── BUG-527: boolean context реализован для discrete-фич (`color`,
+    // `scripting`, `prefers-*`, `hover`/`pointer`, новые L4/L5-фичи ниже) —
+    // range-фичи (`width`/`height`/`resolution`/`aspect-ratio`) требуют
+    // отдельной `<`/`<=`/`>`/`>=`-grammar и остаются Unsupported. Регресс-тест
+    // на то, что скоуп фикса не расширился неявно на них.
     #[test]
     fn media_query_boolean_context_width_still_unsupported() {
         let q = parse_media_query("(width)");
@@ -1879,6 +1904,201 @@ use super::*;
         // Невалидное значение → Unsupported → никогда не матчит.
         let bad = parse_media_query("(inverted-colors: maybe)");
         assert!(!bad.matches(&ctx));
+    }
+
+    // ── BUG-527: display-mode / display-state / resizable /
+    // dynamic-range / video-dynamic-range / update / navigation-controls /
+    // overflow-inline / overflow-block — value form ──
+
+    #[test]
+    fn media_query_display_mode_value_form() {
+        let q = parse_media_query("(display-mode: browser)");
+        assert!(q.matches(&screen_ctx(1024.0))); // desktop-дефолт — browser
+        let standalone = parse_media_query("(display-mode: standalone)");
+        assert!(!standalone.matches(&screen_ctx(1024.0)));
+        assert_eq!(parse_media_query("(display-mode: bogus)").serialize(), "not all");
+    }
+
+    #[test]
+    fn media_query_display_state_value_form() {
+        let q = parse_media_query("(display-state: normal)");
+        assert!(q.matches(&screen_ctx(1024.0))); // desktop-дефолт — normal
+        let maximized = parse_media_query("(display-state: maximized)");
+        assert!(!maximized.matches(&screen_ctx(1024.0)));
+        assert_eq!(parse_media_query("(display-state: bogus)").serialize(), "not all");
+    }
+
+    #[test]
+    fn media_query_resizable_value_form() {
+        let t = parse_media_query("(resizable: true)");
+        assert!(t.matches(&screen_ctx(1024.0))); // desktop-дефолт — resizable
+        let f = parse_media_query("(resizable: false)");
+        assert!(!f.matches(&screen_ctx(1024.0)));
+        assert_eq!(parse_media_query("(resizable: 1)").serialize(), "not all");
+    }
+
+    #[test]
+    fn media_query_dynamic_range_value_form() {
+        let standard = parse_media_query("(dynamic-range: standard)");
+        assert!(standard.matches(&screen_ctx(1024.0))); // desktop-дефолт — standard, нет HDR
+        let high = parse_media_query("(dynamic-range: high)");
+        assert!(!high.matches(&screen_ctx(1024.0)));
+        let video_standard = parse_media_query("(video-dynamic-range: standard)");
+        assert!(video_standard.matches(&screen_ctx(1024.0)));
+        assert_eq!(parse_media_query("(dynamic-range: invalid)").serialize(), "not all");
+    }
+
+    #[test]
+    fn media_query_update_value_form() {
+        assert!(parse_media_query("(update: fast)").matches(&screen_ctx(1024.0))); // дефолт
+        assert!(!parse_media_query("(update: slow)").matches(&screen_ctx(1024.0)));
+        assert!(!parse_media_query("(update: none)").matches(&screen_ctx(1024.0)));
+    }
+
+    #[test]
+    fn media_query_navigation_controls_value_form() {
+        assert!(parse_media_query("(navigation-controls: back-button)").matches(&screen_ctx(1024.0)));
+        assert!(!parse_media_query("(navigation-controls: none)").matches(&screen_ctx(1024.0)));
+        // Пробел вместо одного значения — не грамматика этой фичи.
+        assert_eq!(
+            parse_media_query("(navigation-controls: none back-button)").serialize(),
+            "not all"
+        );
+    }
+
+    #[test]
+    fn media_query_overflow_inline_and_block_value_form() {
+        assert!(parse_media_query("(overflow-inline: scroll)").matches(&screen_ctx(1024.0)));
+        assert!(!parse_media_query("(overflow-inline: none)").matches(&screen_ctx(1024.0)));
+        assert!(parse_media_query("(overflow-block: scroll)").matches(&screen_ctx(1024.0)));
+        assert!(!parse_media_query("(overflow-block: none)").matches(&screen_ctx(1024.0)));
+        assert!(!parse_media_query("(overflow-block: paged)").matches(&screen_ctx(1024.0)));
+        assert_eq!(parse_media_query("(overflow-inline: 0)").serialize(), "not all");
+    }
+
+    // ── BUG-527: boolean context для уже реализованных discrete-фич ──
+
+    #[test]
+    fn media_query_boolean_context_scripting_enabled_default() {
+        // `(scripting)` должно быть known (не Unsupported) и матчить, раз
+        // desktop-дефолт — scripting: enabled.
+        assert_eq!(parse_media_query("(scripting)").serialize(), "(scripting)");
+        assert!(parse_media_query("(scripting)").matches(&screen_ctx(1024.0)));
+        let mut none = screen_ctx(1024.0);
+        none.scripting = MediaScripting::None;
+        assert!(!parse_media_query("(scripting)").matches(&none));
+    }
+
+    #[test]
+    fn media_query_boolean_context_prefers_color_scheme_always_true() {
+        // Нет "off"-состояния (light/dark оба содержательны) — всегда true,
+        // как orientation.
+        assert!(parse_media_query("(prefers-color-scheme)").matches(&screen_ctx(1024.0)));
+    }
+
+    #[test]
+    fn media_query_boolean_context_forced_colors_inverted_colors() {
+        let mut ctx = screen_ctx(1024.0);
+        assert!(!parse_media_query("(forced-colors)").matches(&ctx));
+        ctx.forced_colors = true;
+        assert!(parse_media_query("(forced-colors)").matches(&ctx));
+
+        let mut ctx = screen_ctx(1024.0);
+        assert!(!parse_media_query("(inverted-colors)").matches(&ctx));
+        ctx.inverted_colors = MediaInvertedColors::Inverted;
+        assert!(parse_media_query("(inverted-colors)").matches(&ctx));
+    }
+
+    #[test]
+    fn media_query_boolean_context_preference_features_false_by_default() {
+        // Все *no-preference*-дефолтные фичи → boolean false, пока
+        // пользователь явно не запросил предпочтение.
+        let ctx = screen_ctx(1024.0);
+        assert!(!parse_media_query("(prefers-reduced-data)").matches(&ctx));
+        assert!(!parse_media_query("(prefers-contrast)").matches(&ctx));
+        assert!(!parse_media_query("(prefers-reduced-motion)").matches(&ctx));
+        assert!(!parse_media_query("(prefers-reduced-transparency)").matches(&ctx));
+
+        let mut reduce = ctx.clone();
+        reduce.prefers_reduced_data = MediaReducedData::Reduce;
+        assert!(parse_media_query("(prefers-reduced-data)").matches(&reduce));
+
+        let mut contrast = ctx.clone();
+        contrast.prefers_contrast = MediaContrast::More;
+        assert!(parse_media_query("(prefers-contrast)").matches(&contrast));
+
+        let mut motion = ctx.clone();
+        motion.prefers_reduced_motion = true;
+        assert!(parse_media_query("(prefers-reduced-motion)").matches(&motion));
+
+        let mut transparency = ctx;
+        transparency.prefers_reduced_transparency = MediaReducedTransparency::Reduce;
+        assert!(parse_media_query("(prefers-reduced-transparency)").matches(&transparency));
+    }
+
+    #[test]
+    fn media_query_boolean_context_hover_and_pointer() {
+        let ctx = screen_ctx(1024.0); // hover/pointer desktop-дефолты — Hover/Fine
+        assert!(parse_media_query("(hover)").matches(&ctx));
+        assert!(parse_media_query("(any-hover)").matches(&ctx));
+        assert!(parse_media_query("(pointer)").matches(&ctx));
+        assert!(parse_media_query("(any-pointer)").matches(&ctx));
+
+        let mut touch = ctx;
+        touch.hover = MediaHover::None;
+        touch.any_hover = MediaHover::None;
+        touch.pointer = MediaPointer::None;
+        touch.any_pointer = MediaPointer::None;
+        assert!(!parse_media_query("(hover)").matches(&touch));
+        assert!(!parse_media_query("(any-hover)").matches(&touch));
+        assert!(!parse_media_query("(pointer)").matches(&touch));
+        assert!(!parse_media_query("(any-pointer)").matches(&touch));
+    }
+
+    #[test]
+    fn media_query_boolean_context_new_features() {
+        let ctx = screen_ctx(1024.0);
+        assert!(parse_media_query("(display-mode)").matches(&ctx));
+        assert!(parse_media_query("(display-state)").matches(&ctx));
+        assert!(parse_media_query("(resizable)").matches(&ctx));
+        assert!(parse_media_query("(update)").matches(&ctx));
+        assert!(parse_media_query("(navigation-controls)").matches(&ctx));
+        assert!(parse_media_query("(overflow-inline)").matches(&ctx));
+        assert!(parse_media_query("(overflow-block)").matches(&ctx));
+        // dynamic-range/video-dynamic-range — spec-мандатное исключение:
+        // boolean тестирует наличие HDR (`high`), не просто «фича известна».
+        // Lumen не поддерживает HDR → всегда false, хотя value-форма known.
+        assert!(!parse_media_query("(dynamic-range)").matches(&ctx));
+        assert!(!parse_media_query("(video-dynamic-range)").matches(&ctx));
+    }
+
+    #[test]
+    fn media_query_boolean_context_serializes_as_bare_name() {
+        for query in [
+            "(display-mode)",
+            "(display-state)",
+            "(resizable)",
+            "(dynamic-range)",
+            "(video-dynamic-range)",
+            "(update)",
+            "(navigation-controls)",
+            "(overflow-inline)",
+            "(overflow-block)",
+            "(forced-colors)",
+            "(inverted-colors)",
+            "(prefers-reduced-data)",
+            "(prefers-contrast)",
+            "(prefers-reduced-motion)",
+            "(prefers-reduced-transparency)",
+            "(hover)",
+            "(any-hover)",
+            "(pointer)",
+            "(any-pointer)",
+        ] {
+            let q = parse_media_query(query);
+            // Известна (не "not all") и сериализуется обратно as-is.
+            assert_eq!(q.serialize(), query, "query: {query}");
+        }
     }
 
     // ── Стиль: @media с новыми фичами применяется в каскаде ──

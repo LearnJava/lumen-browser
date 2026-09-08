@@ -1,46 +1,53 @@
-# BUG-1037: `graphic_tests/run.py::_load_previous()` сравнивает прогон сам с собой
+# BUG-1037 — невидимый `position:fixed`/`sticky` replaced-элемент оставляет `Begin*Layer` без пары
 
 **Статус:** OPEN
-**Найден:** P1, LAYOUT-2 паинт срез 9 (walk/fill_buckets трамплин), 2026-09-08
+**Заведён:** 2026-09-08 (P1), при работе над LAYOUT-2 срез 9 (явный стек для `display_list/walk.rs::walk`)
+**Область:** paint (`crates/engine/paint/src/display_list/walk.rs`)
 
 ## Симптом
 
-После `--continue-on-fail` прогона строка `Дельта vs предыдущий прогон (...): Изменений нет`
-печатается с timestamp/commit, СОВПАДАЮЩИМИ с только что сохранённым результатом текущего
-прогона — то есть сравнение идёт не с прошлым прогоном, а с самим собой, и «Изменений нет»
-верно тривиально, а не потому что рендер не изменился.
+`walk`'s `FormControl`/`Image`/`Video`/`Canvas`/`Audio`/`Iframe` arms each start with an early
+`return` when the element is invisible/zero-size (`!is_paint_visible(b)`, or additionally
+`b.rect.width <= 0.0 || b.rect.height <= 0.0` for `Audio`/`Iframe`). That `return` exits the whole
+`walk` function — but `BeginFixedLayer`/`BeginStickyLayer` (pushed earlier in the same call, based
+purely on `b.style.position`, before the `match` on `b.kind`) are only matched by the corresponding
+`EndFixedLayer`/`EndStickyLayer` at the very end of the function, textually *after* the `match`. An
+early return from inside one of these six arms skips that closing code entirely.
 
-## Причина
+Concretely: a `<canvas style="visibility:hidden; position:fixed">` (or any of the other five
+replaced-element kinds, combined with `position:fixed` or `position:sticky` and either
+`visibility:hidden` or, for `<audio>`/`<iframe>`, a zero-size box) pushes `BeginFixedLayer`
+(or `BeginStickyLayer`) into the display list with no matching `End*Layer` anywhere after it.
 
-`_load_previous()` (`graphic_tests/run.py`) берёт `files[1]` из
-`sorted([f for f in os.listdir(RESULTS_DIR) if f.endswith('.json') and f != 'latest.json'], reverse=True)`.
-Фильтр исключает `latest.json`, но не `baselines.json`. Лексикографически `'baselines.json'` >
-`'20260908-122932.json'` (`'b' > '2'`), поэтому `baselines.json` всегда встаёт на `files[0]`,
-сдвигая на одну позицию: `files[1]` — это только что сохранённый ТЕКУЩИЙ прогон (второй по
-имени после `baselines.json`), а настоящий предыдущий прогон уходит в `files[2]` и никогда не
-читается.
+## Почему это важно
 
-## Проверено
+`BeginFixedLayer`/`EndFixedLayer` and `BeginStickyLayer`/`EndStickyLayer` are partition metadata
+the compositor scroll-blit (ADR-016 M3.2.1c) and the sticky scroll-clamp offset logic read to
+find where a fixed/sticky layer's content starts and ends in the flat command stream. An unmatched
+`Begin*Layer` — depending on how the consumer scans for its matching `End*` — risks either
+silently absorbing every subsequent sibling's commands into the open (but logically empty) fixed/
+sticky partition, or a matching-bracket panic/`unwrap` if the consumer assumes balance. Not
+verified against a live repro yet (found by code inspection while converting `walk`'s per-child
+recursion to an explicit stack, LAYOUT-2 срез 9 — the conversion **reproduces this pre-existing
+quirk bit-for-bit** rather than incidentally fixing it, to keep that срез's A/B display-list-
+neutrality claim honest).
 
-Прямым сравнением `20260908-122932.json` (мой прогон, LAYOUT-2 срез 9, некоммичен) против
-`20260908-080659.json` (последний закоммиченный прогон, LAYOUT-2 срез 8) — тем же алгоритмом,
-что `print_diff_vs_previous`, — единственная PASS→FAIL регрессия: TEST-06 (0.42% → 96.70%),
-воспроизведена сама по себе НЕ была: изолированный `--only 06` сразу после прогона снова дал
-PASS (0.42%) — разовый сбой захвата окна (gdigrab поймал не то окно на долгом
-`--continue-on-fail` прогоне), не связан с кодом. Все остальные тесты — процент к проценту
-идентичны между двумя прогонами.
+## Where to look
 
-## Последствие
+`display_list/walk.rs`'s `dispatch` function (was inlined directly in `walk` before LAYOUT-2 срез
+9) — the six `if !is_paint_visible(b) { return ...; }` (`FormControl`) /
+`if !is_paint_visible(b) { return ...; }` (`Image`/`Video`/`Canvas`) /
+`if !is_paint_visible(b) || ... { return ...; }` (`Audio`/`Iframe`) early-return sites. Likely fix:
+close `is_fixed`/`is_sticky` before each of these six returns (or restructure so the common
+`is_fixed`/`is_sticky` wrapping is a single choke point every arm passes through, invisible or
+not) — needs a regression test asserting `Begin`/`End` counts stay balanced for each of the six
+kinds under `visibility:hidden`/zero-size + `position:fixed`/`sticky`, and a check of whether
+`fill_buckets`/`emit_box_self` (`box_layer.rs`, the ordered/anim-aware paint path) has the same
+shape independently.
 
-Каждый прошлый коммит, чья commit-body ссылается на автоматическую строку «дельта против
-прежнего прогона … Изменений нет» (например LAYOUT-2 срез 8, `cff8f410f`), с высокой
-вероятностью тоже сравнивал прогон сам с собой — вывод остаётся, скорее всего, верным (ручная
-построчная проверка в этой сессии это подтвердила для среза 9), но сам механизм не является
-доказательством с тех пор, как в `results/` появился `baselines.json` рядом с
-timestamp-файлами.
-
-## Фикс (не сделан в этом срезе — не относится к paint-трамплину)
-
-`files = sorted([f for f in os.listdir(RESULTS_DIR) if f.endswith('.json') and f not in ('latest.json', 'baselines.json')], reverse=True)`
-— один токен фильтра. Кто-то из P2/P5 (владелец graphic_tests-тулинга) должен взять как
-однострочный фикс + regression-тест на `_load_previous`.
+**Проверено LAYOUT-2 срезом 10 (fill_buckets):** `fill_buckets`/`emit_box_self` (`box_layer.rs`,
+ordered/anim-aware paint путь) не имеет этой формы — `emit_box_self` вообще не принимает
+`is_fixed`/`is_sticky` (это забота вызывающего `fill_buckets`, который эмитит layer-ops через
+отдельный `box_layer_ops`/`BoxLayerOps`, не завязанный на ранние `return` по видимости внутри
+`emit_box_self`), так что `Begin`/`End` там не может рассинхронизироваться тем же путём. Баг
+специфичен для легаси `walk`.
