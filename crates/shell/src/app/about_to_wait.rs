@@ -768,7 +768,13 @@ impl Lumen {
                     // scoped to the page just loaded instead of accumulating across
                     // an entire --live run.
                     self.devtools_console.clear();
-                    self.navigate_to(page_source_for_automation_url(&url));
+                    // BUG-1031: `navigate_to_forced`, not `navigate_to` — this is a
+                    // browser/automation-initiated navigation (WebDriver BiDi
+                    // `browsingContext.navigate`), which the outgoing page's own
+                    // `navigate` listeners must not be able to intercept/prevent.
+                    // Letting it through `navigate_to` let a leftover listener from
+                    // the previous test page wedge the browsing context forever.
+                    self.navigate_to_forced(page_source_for_automation_url(&url));
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::NewTab(url) => {
@@ -776,7 +782,9 @@ impl Lumen {
                     // active, so `ConsoleLog` stays scoped to the page being loaded.
                     self.devtools_console.clear();
                     self.open_new_tab();
-                    self.navigate_to(page_source_for_automation_url(&url));
+                    // BUG-1031: see `AutomationCommand::Navigate` above — the tab
+                    // starts blank, but stay consistent and non-interceptable here too.
+                    self.navigate_to_forced(page_source_for_automation_url(&url));
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::Click(target) => {

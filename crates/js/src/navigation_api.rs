@@ -42,12 +42,17 @@ class NavigationHistoryEntry {
   /// NavigateEvent: fired before navigation.
   class NavigateEvent extends Event {
     constructor(init = {}) {
-      super('navigate');
+      // HTML LS §7.8.1: `canIntercept` navigations are the only ones whose
+      // `navigate` event is cancelable — a browser/automation-initiated
+      // navigation (typed URL, WebDriver `browsingContext.navigate`) fires a
+      // non-cancelable event for observability only (BUG-1031).
+      super('navigate', { cancelable: !!init.canIntercept });
       this._navigationType = init.navigationType || 'push';
       this._userInitiated = init.userInitiated || false;
       this._hashChange = init.hashChange || false;
       this._signal = init.signal || new AbortSignal();
       this._destination = init.destination || null;
+      this._canIntercept = !!init.canIntercept;
       this._intercepted = false;
       this._handledPromise = Promise.resolve();
     }
@@ -72,7 +77,24 @@ class NavigationHistoryEntry {
       return this._destination;
     }
 
+    get canIntercept() {
+      return this._canIntercept;
+    }
+
     intercept(options = {}) {
+      // BUG-1031: without this guard, a page's `navigate` listener that
+      // unconditionally calls `intercept()` permanently wedges the browsing
+      // context the next time a browser/automation-initiated navigation
+      // (WebDriver `browsingContext.navigate`, typed URL, ...) fires this
+      // event on it — the real cross-document load never runs, yet the
+      // caller (e.g. BiDi) sees no error to react to.
+      if (!this._canIntercept) {
+        throw new DOMException(
+          "Failed to execute 'intercept' on 'NavigateEvent': intercept() may " +
+          'only be called on a cancelable navigate event.',
+          'InvalidStateError'
+        );
+      }
       this._intercepted = true;
       const handler = options.handler || (() => {});
       this._handledPromise = Promise.resolve().then(handler);
@@ -256,9 +278,16 @@ class NavigationHistoryEntry {
       navigationType: type,
       destination: destination,
       hashChange: hashChange,
+      canIntercept: canIntercept,
       signal: new AbortSignal()
     });
     window.navigation.dispatchEvent(event);
+    // BUG-1031: `canIntercept === false` navigations are dispatched purely
+    // for observability (listeners may still read `destination`/log it) —
+    // `intercept()` already throws above, and `preventDefault()` is a no-op
+    // because the event isn't cancelable, but read the outcome defensively
+    // too rather than trusting every call site got there first.
+    if (!canIntercept) return false;
     if (event._isIntercepted()) {
       window._lumen_navigation_report_intercept(true, false);
       return true;

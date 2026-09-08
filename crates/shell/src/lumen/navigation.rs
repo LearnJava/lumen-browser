@@ -13,7 +13,32 @@ impl Lumen {
     /// Сохранить текущую страницу в bfcache и стек навигации,
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
+    ///
+    /// In-page-initiated navigation (link click, `location.href`, `history.pushState`,
+    /// `navigation.navigate()`, ...) — the outgoing page's `navigate` listeners may
+    /// call `intercept()`/`preventDefault()`. Automation/WebDriver-initiated
+    /// navigation must go through [`Self::navigate_to_forced`] instead.
     pub(crate) fn navigate_to(&mut self, source: PageSource) {
+        self.navigate_to_inner(source, true);
+    }
+
+    /// Same as [`Self::navigate_to`], but for a navigation the *browser* initiated
+    /// on the page's behalf — WebDriver BiDi's `browsingContext.navigate`,
+    /// `AutomationCommand::NewTab`, ... — which per HTML LS §7.8.1 is not
+    /// interceptable/cancelable by page script.
+    ///
+    /// BUG-1031: without this, a page whose `navigate` listener unconditionally
+    /// calls `intercept()`/`preventDefault()` (exactly what the Navigation API's
+    /// own WPT suite does, e.g. `navigation-api-prevent-default.window.html`)
+    /// permanently wedges the browsing context — `navigate_to`'s real document
+    /// swap never runs for *any* later navigation dispatched against that stale
+    /// document, including one aimed at a completely different test page, yet
+    /// the automation caller (BiDi) observes no error and reports success.
+    pub(crate) fn navigate_to_forced(&mut self, source: PageSource) {
+        self.navigate_to_inner(source, false);
+    }
+
+    fn navigate_to_inner(&mut self, source: PageSource, can_intercept: bool) {
         // ADR-016 M2.2c-2d: nav dispatch (fire-and-forget) через `route_task_js` +
         // read-after-eval intercept-чтение через `route_query_js`. Под флагом
         // (`LUMEN_ENGINE_THREAD=1`) dispatch уходит off-UI-thread одним `task`, а
@@ -22,14 +47,16 @@ impl Lumen {
         {
             let url = source.url_str().unwrap_or("").to_string();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                j.eval_js(&format!("_lumen_dispatch_navigate('push', '{url}', true, false)"));
+                j.eval_js(&format!("_lumen_dispatch_navigate('push', '{url}', {can_intercept}, false)"));
             });
         }
-        if let Some(intercept) = route_query_js(
-            self.engine_thread.as_ref(),
-            self.js_ctx.as_ref(),
-            |j| j.take_nav_intercept_result(),
-        ) {
+        if can_intercept
+            && let Some(intercept) = route_query_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                |j| j.take_nav_intercept_result(),
+            )
+        {
             if let Some(&(true, false)) = intercept.last() {
                 self.pending_intercepted = Some(PendingIntercepted::Push {
                     url: source.url_str().unwrap_or("").to_string(),
