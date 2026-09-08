@@ -1004,6 +1004,21 @@ pub(crate) fn parse_media_clause(s: &str) -> MediaQueryClause {
                     conditions: vec![MediaCondition::Unsupported],
                 };
             }
+            // Per L4 §3.2 the `<media-type>` production may only be the
+            // clause's very first component — every subsequent `and`-joined
+            // term must be a parenthesized `<media-feature>`. A second bare
+            // word here (e.g. `not all and overflow-inline`, BUG-528) is a
+            // syntax error, not an independent extra media-type to test —
+            // treating it as one silently ANDs in an always-false condition,
+            // which under `not` flips the whole clause to match. Make the
+            // clause unknown instead, same as any other malformed input.
+            if !conditions.is_empty() {
+                return MediaQueryClause {
+                    negated,
+                    only,
+                    conditions: vec![MediaCondition::Unsupported],
+                };
+            }
             conditions.push(MediaCondition::MediaType(word.to_ascii_lowercase()));
         }
     }
