@@ -331,3 +331,7 @@ mod ordered_build_scroll;
 #[cfg(test)]
 #[path = "display_list/tests/form_controls_caret.rs"]
 mod form_controls_caret;
+
+#[cfg(test)]
+#[path = "display_list/tests/walk_fill_buckets_trampoline.rs"]
+mod walk_fill_buckets_trampoline;
