@@ -901,7 +901,7 @@ impl Lumen {
                     && let Some(entry) = self.archive.take(id as usize)
                 {
                     if !entry.url.is_empty() {
-                        self.navigate_to(PageSource::Url(entry.url));
+                        self.navigate_to(PageSource::url(entry.url));
                     }
                     self.archive.close();
                     self.relayout_chrome_host();
@@ -1020,7 +1020,7 @@ impl Lumen {
             ChromeAction::OpenHistoryEntry => {
                 if let Some(url) = self.chrome_data_attr(nid, "data-hist-url").filter(|u| !u.is_empty()) {
                     self.history_panel.visible = false;
-                    self.navigate_to(PageSource::Url(url));
+                    self.navigate_to(PageSource::url(url));
                     self.relayout_chrome_host();
                 }
             }
@@ -1068,7 +1068,7 @@ impl Lumen {
             ChromeAction::OpenBookmark => {
                 if let Some(url) = self.chrome_data_attr(nid, "data-bm-url").filter(|u| !u.is_empty()) {
                     self.bookmark_panel.visible = false;
-                    self.navigate_to(PageSource::Url(url));
+                    self.navigate_to(PageSource::url(url));
                     self.relayout_chrome_host();
                 }
             }

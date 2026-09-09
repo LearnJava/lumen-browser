@@ -59,7 +59,7 @@ fn resolve_js_nav_file_strips_windows_drive_slash() {
 #[test]
 fn resolve_js_nav_web_to_file_is_blocked() {
     // web→file: an http(s) page must not open a local file:// resource.
-    let opener = PageSource::Url("https://example.com/".to_owned());
+    let opener = PageSource::url("https://example.com/");
     let err = resolve_js_navigation("file:///etc/passwd", &opener)
         .expect_err("web→file must be blocked");
     assert!(err.contains("политикой безопасности"), "reason: {err}");
@@ -68,11 +68,11 @@ fn resolve_js_nav_web_to_file_is_blocked() {
 #[test]
 fn resolve_js_nav_http_url_untouched() {
     // Non-file URLs keep the existing PageSource::Url path regardless of opener.
-    let opener = PageSource::Url("https://example.com/".to_owned());
+    let opener = PageSource::url("https://example.com/");
     let src = resolve_js_navigation("https://example.org/next", &opener)
         .expect("http navigation stays on the network path");
     match src {
-        PageSource::Url(u) => assert_eq!(u, "https://example.org/next"),
+        PageSource::Url { url, .. } => assert_eq!(url, "https://example.org/next"),
         other => panic!("expected PageSource::Url, got {other:?}"),
     }
 }

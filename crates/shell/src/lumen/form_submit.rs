@@ -76,14 +76,27 @@ impl Lumen {
                         return;
                     }
                     // Form passed validation — encode using enctype (HTML LS §4.10.21.6).
-                    let body = if enctype == "multipart/form-data" {
+                    //
+                    // Кодируем сразу в байты и с настоящим `Content-Type`:
+                    // POST-ветка ниже отправляет именно их, а строковый `body`
+                    // (событие `FormSubmit`, query-string GET-формы) — уже
+                    // производная от них, как и было до E2E-1.
+                    let (content_type, body_bytes) = if enctype == "multipart/form-data" {
                         // Multipart: deterministic boundary for Phase 0.
                         let boundary = "----LumenFormBoundary0000000000000000";
-                        let (_ct, bytes) = forms::encode_form_fields_multipart(&fields, boundary);
-                        String::from_utf8_lossy(&bytes).into_owned()
+                        forms::encode_form_fields_multipart(&fields, boundary)
                     } else {
-                        forms::encode_form_fields(&fields)
+                        // Сюда же попадает `enctype="text/plain"`: собственного
+                        // кодировщика plain-text (HTML LS §4.10.21.8) в движке
+                        // нет, поля кодируются urlencoded — BUG-1042. Заголовок
+                        // объявляет то, что реально лежит в теле, а не enctype
+                        // формы: соврать про кодировку хуже, чем её не иметь.
+                        (
+                            "application/x-www-form-urlencoded".to_owned(),
+                            forms::encode_form_fields(&fields).into_bytes(),
+                        )
                     };
+                    let body = String::from_utf8_lossy(&body_bytes).into_owned();
                     use lumen_core::event::{Event, TabId};
                     self.event_sink.emit(&Event::FormSubmit {
                         tab_id: TabId(0),
@@ -126,8 +139,33 @@ impl Lumen {
                             self.navigate_to(PageSource::from_arg(Some(&resolved)));
                         }
                         _ => {
-                            // POST: emit event; real network send is P3 task.
-                            eprintln!("[forms] POST {} enctype={} body-len={}", action, enctype, body.len());
+                            // HTML LS §form-submission step 23, «submit as
+                            // entity body»: та же навигация, что и у GET, но
+                            // `action` запрашивается методом POST, а
+                            // закодированный набор полей едет телом запроса.
+                            //
+                            // E2E-1: до этого среза ветка печатала тело в
+                            // stderr и никуда не шла — вход на любой сайт с
+                            // POST-формой логина был невозможен.
+                            let resolved = self.source.resolve_href(&action);
+                            let mut nav = PageSource::from_arg(Some(&resolved));
+                            if let PageSource::Url { body: slot, .. } = &mut nav {
+                                *slot = Some(Box::new(lumen_network::NavigationBody::post(
+                                    content_type,
+                                    body_bytes,
+                                )));
+                            } else {
+                                // `action` резолвится не в http(s) — например
+                                // форма на локальной странице (`file://`).
+                                // Тела там отправлять некуда; переход по
+                                // адресу остаётся, чтобы поведение не стало
+                                // «клик молча ничего не делает».
+                                eprintln!(
+                                    "[forms] POST {resolved}: не сетевой адрес, тело ({} байт) не отправлено",
+                                    body.len()
+                                );
+                            }
+                            self.navigate_to(nav);
                         }
                     }
                 }

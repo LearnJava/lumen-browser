@@ -11,6 +11,7 @@ mod bfcache_salvage;
 mod bug341_census;
 mod chrome_incremental;
 mod cli;
+mod form_post_nav;
 mod page_pipeline;
 mod page_resources;
 mod scripts_and_frames;

@@ -686,8 +686,8 @@ impl Lumen {
             let navs = self.drain_query_js(|j| j.take_nav_updates()).unwrap_or_default();
             for (action_code, url, key, data) in navs {
                 match action_code {
-                    0 if !url.is_empty() => self.navigate_to(PageSource::Url(url)),
-                    1 if !url.is_empty() => self.navigate_replace(PageSource::Url(url)),
+                    0 if !url.is_empty() => self.navigate_to(PageSource::url(url)),
+                    1 if !url.is_empty() => self.navigate_replace(PageSource::url(url)),
                     2 => self.navigate_back(),
                     3 => self.navigate_forward(),
                     4 => self.navigate_to_key(&key),
@@ -725,7 +725,7 @@ impl Lumen {
                                     }
                                     if matches!(pending, PendingIntercepted::Push { .. }) {
                                         self.nav_back.push(NavEntry {
-                                            source: PageSource::Url(new_url.clone()),
+                                            source: PageSource::url(new_url.clone()),
                                             scroll_x: 0.0,
                                             scroll_y: 0.0,
                                             display_url: None,
@@ -1186,7 +1186,7 @@ impl Lumen {
                 // opener's scheme from `self.source` BEFORE `open_new_tab()`
                 // resets it, so the web→file security check sees the real opener.
                 let resolved = if url.is_empty() {
-                    Ok(PageSource::Url("about:blank".to_owned()))
+                    Ok(PageSource::url("about:blank"))
                 } else {
                     resolve_js_navigation(&url, &self.source)
                 };
