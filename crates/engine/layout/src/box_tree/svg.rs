@@ -174,6 +174,30 @@ pub enum SvgShapeKind {
     Path { d: String },
 }
 
+/// Inner horizontal/vertical padding the `<select>` widget reserves around its
+/// label and its dropdown arrow (paint-side constant, not CSS `padding`).
+///
+/// Lives here rather than in `lumen-paint` because layout needs the same number
+/// to derive the control's fit-content width (`form_control_fit_content_width`):
+/// two copies of it would let the measured box and the painted widget drift
+/// apart, which is exactly how BUG-926 made the label overflow its own control.
+pub const SELECT_WIDGET_PAD_PX: f32 = 4.0;
+
+/// Font size the `<select>` widget paints its label and arrow with: the CSS
+/// `font-size` clamped to the native widget's range. Layout mirrors paint here
+/// for the same reason as [`SELECT_WIDGET_PAD_PX`].
+#[must_use]
+pub fn select_widget_font_size(font_size_px: f32) -> f32 {
+    font_size_px.clamp(10.0, 14.0)
+}
+
+/// Width of the `<select>` dropdown-arrow column (separator + "▼" glyph),
+/// derived from the widget font size — see [`select_widget_font_size`].
+#[must_use]
+pub fn select_widget_arrow_width(font_size_px: f32) -> f32 {
+    select_widget_font_size(font_size_px) + SELECT_WIDGET_PAD_PX * 2.0
+}
+
 /// Вид form control — используется в `BoxKind::FormControl` для paint-специализаций
 /// (фокус-рамка, checkbox/radio indicator, placeholder, стрелка select и т.д.).
 #[derive(Debug, Clone, PartialEq)]

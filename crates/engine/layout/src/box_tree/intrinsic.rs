@@ -600,3 +600,73 @@ pub(crate) fn flex_item_min_main_width(
     }
     floor.max(0.0)
 }
+
+/// BUG-926 — max-content border-box width of a form control whose used width
+/// comes from the content it renders itself (`<button>`, `<select>`,
+/// `<selectlist>`). `None` = "this control has no content-derived width", i.e.
+/// keep the replaced-element path.
+///
+/// `BoxKind::FormControl` is sized as a replaced element (CSS 2.1 §10.3.2 —
+/// `width: auto` resolves to the intrinsic size, not to the containing block).
+/// A form control, however, has no decoded pixels to take that intrinsic size
+/// from, so the replaced branch yielded 0 and the shrink-to-fit `min` below it
+/// could only preserve that 0 — a `<button>` collapsed into a pair of borders.
+/// HTML rendering §15.5.1 sizes these controls from their rendered content:
+///
+/// * `<button>` renders child boxes, so its content width is the ordinary
+///   shrink-to-fit width of the subtree ([`preferred_inline_block_width`]).
+///   An empty button is still as wide as its own padding + border.
+/// * `<select>`/`<selectlist>` render `FormControlKind::Select::selected_text`
+///   plus the native dropdown arrow. Neither is a box — UA style gives
+///   `<option>` `display: none` — so the label is measured here, with the same
+///   font size and inner padding the widget paints with
+///   ([`select_widget_font_size`], [`SELECT_WIDGET_PAD_PX`]); `appearance: none`
+///   drops the arrow column in paint, so it is not reserved here either.
+///
+/// Every other `FormControlKind` keeps the old path: checkbox, radio, range,
+/// progress and meter have a real widget intrinsic size and no rendered label,
+/// and the text-entry controls receive an explicit UA `width` (or a
+/// `field-sizing: content` size) before this is ever consulted.
+pub(crate) fn form_control_fit_content_width(
+    b: &LayoutBox,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> Option<f32> {
+    let BoxKind::FormControl { kind } = &b.kind else {
+        return None;
+    };
+    let s = &b.style;
+    let em = s.font_size;
+    // % padding is unresolvable in an intrinsic context — same `0.0` basis as
+    // the rest of this module.
+    let frame = s.padding_left.resolve_or_zero(em, 0.0, viewport)
+        + s.padding_right.resolve_or_zero(em, 0.0, viewport)
+        + s.border_left_width
+        + s.border_right_width;
+    match kind {
+        FormControlKind::Button => {
+            Some(preferred_inline_block_width(b, measurer, viewport).unwrap_or(frame).max(frame))
+        }
+        FormControlKind::Select { selected_text } => {
+            let widget_fs = select_widget_font_size(em);
+            let label_w = measurer.map_or(0.0, |m| {
+                let tab = s.tab_size * m.char_width_with_families(' ', widget_fs, &s.font_family);
+                measure_text_w_families(
+                    selected_text,
+                    widget_fs,
+                    s.letter_spacing,
+                    tab,
+                    &s.font_family,
+                    m,
+                )
+            });
+            let arrow_w = if s.appearance == crate::style::Appearance::None {
+                0.0
+            } else {
+                select_widget_arrow_width(em)
+            };
+            Some(frame + SELECT_WIDGET_PAD_PX * 2.0 + label_w + arrow_w)
+        }
+        _ => None,
+    }
+}

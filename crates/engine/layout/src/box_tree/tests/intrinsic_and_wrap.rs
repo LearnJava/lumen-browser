@@ -1343,3 +1343,126 @@ fn word_break_break_all_breaks_at_current_position() {
     assert!(!line2_text.is_empty(), "line2 must not be empty");
 }
 
+
+// ── BUG-926: `<button>`/`<select>` without a CSS width collapsed to 0 ──────
+
+/// Fixed 8px-per-glyph measurer, so every width below is hand-computable.
+/// `line_gap_px` restores the pre-FONTLOAD-14 `1.2×size` total (same reason as
+/// `Fixed8` in `shapes_and_contain.rs`) — it does not affect widths, but keeps
+/// the box heights stable if this fixture ever asserts on them.
+struct Glyph8;
+impl super::super::super::TextMeasurer for Glyph8 {
+    fn char_width(&self, _: char, _: f32) -> f32 {
+        8.0
+    }
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
+    }
+}
+
+/// Border-box width of the `n`-th (0-based) `BoxKind::FormControl` in the tree,
+/// laid out in an 800×600 viewport with [`Glyph8`].
+fn form_control_width(html: &str, css: &str, n: usize) -> f32 {
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Glyph8);
+    fn collect<'a>(b: &'a super::super::LayoutBox, out: &mut Vec<&'a super::super::LayoutBox>) {
+        if matches!(b.kind, super::super::BoxKind::FormControl { .. }) {
+            out.push(b);
+        }
+        for c in &b.children {
+            collect(c, out);
+        }
+    }
+    let mut found = Vec::new();
+    collect(&root, &mut found);
+    found
+        .get(n)
+        .unwrap_or_else(|| panic!("FormControl #{n} not found ({} present)", found.len()))
+        .rect
+        .width
+}
+
+/// `<button>` with no CSS width takes the width of its label: 3 glyphs × 8px,
+/// plus the 1px UA borders. Before BUG-926 the replaced-element branch handed
+/// it intrinsic-0 and the shrink-to-fit `min` below could only keep that 0.
+#[test]
+fn bug926_button_without_width_fits_its_label() {
+    let w = form_control_width("<div><button>Btn</button></div>", "", 0);
+    assert!((w - 26.0).abs() < 0.5, "button width={w}, expected 26 (24 label + 2 border)");
+}
+
+/// Author `padding` widens the control instead of being the only thing left of
+/// it: the label keeps its own 24px and the padding adds on top.
+#[test]
+fn bug926_button_width_includes_author_padding() {
+    let w = form_control_width(
+        "<div><button>Btn</button></div>",
+        "button { padding: 4px 12px; }",
+        0,
+    );
+    assert!((w - 50.0).abs() < 0.5, "button width={w}, expected 50 (24 + 24 padding + 2 border)");
+}
+
+/// An explicit CSS width still wins — the fit-content path must not override it.
+#[test]
+fn bug926_button_explicit_width_still_wins() {
+    let w = form_control_width(
+        "<div><button>Btn</button></div>",
+        "button { width: 200px; box-sizing: border-box; }",
+        0,
+    );
+    assert!((w - 200.0).abs() < 0.5, "button width={w}, expected 200");
+}
+
+/// `fit-content` is `min(max-content, available)`: a label far wider than its
+/// container clamps to the container instead of overflowing it.
+#[test]
+fn bug926_button_clamps_to_available_width() {
+    let w = form_control_width(
+        "<div><button>abcdefghij</button></div>",
+        "div { width: 40px; }",
+        0,
+    );
+    assert!((w - 40.0).abs() < 0.5, "button width={w}, expected 40 (clamped to container)");
+}
+
+/// `<select>` renders no child box at all (`<option>` is UA `display: none`),
+/// so its width is the *measured* selected label plus the widget's own inner
+/// padding and dropdown-arrow column — the numbers paint draws with.
+/// 2 border + 8 inner pad + 24 label (3 glyphs at the clamped 14px widget font)
+/// + 22 arrow (14 + 2×4).
+#[test]
+fn bug926_select_without_width_fits_label_and_arrow() {
+    let w = form_control_width(
+        "<div><select><option>Opt</option></select></div>",
+        "",
+        0,
+    );
+    assert!((w - 56.0).abs() < 0.5, "select width={w}, expected 56");
+}
+
+/// `appearance: none` drops the native arrow in paint (BUG-225), so layout must
+/// not reserve its column either — and the UA border is stripped with it.
+#[test]
+fn bug926_select_appearance_none_drops_arrow_column() {
+    let w = form_control_width(
+        "<div><select><option>Opt</option></select></div>",
+        "select { appearance: none; }",
+        0,
+    );
+    assert!((w - 32.0).abs() < 0.5, "select width={w}, expected 32 (8 pad + 24 label)");
+}
+
+/// Controls with a genuine widget intrinsic size and no rendered label must stay
+/// on the old path: `<input type=checkbox>` keeps its 13×13 UA box, and a plain
+/// `<input>` keeps the 174px UA width — neither may be resized by the new
+/// content-derived branch. Both UA widths are content-box, so the border box is
+/// 2px wider.
+#[test]
+fn bug926_widget_controls_keep_their_ua_width() {
+    let cb = form_control_width(r#"<div><input type="checkbox"></div>"#, "", 0);
+    assert!((cb - 15.0).abs() < 0.5, "checkbox width={cb}, expected 15");
+    let text = form_control_width(r#"<div><input type="text"></div>"#, "", 0);
+    assert!((text - 176.0).abs() < 0.5, "text input width={text}, expected 176");
+}

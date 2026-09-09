@@ -690,6 +690,16 @@ pub(super) fn dispatch_box(
                 BoxSizing::BorderBox => h,
             };
             (h_bb * aw / ah).max(0.0)
+        } else if s.width.is_none()
+            && let Some(fit) = form_control_fit_content_width(b, measurer, viewport)
+        {
+            // BUG-926: a `<button>`/`<select>` is replaced for sizing but has no
+            // decoded pixels, so the intrinsic width above is 0 — and the
+            // shrink-to-fit `min` further down can only keep a 0. Their used
+            // width comes from the content they render themselves (HTML
+            // rendering §15.5.1); clamp it to the available inline size, which
+            // is what `fit-content` means (same rule as `Length::FitContent`).
+            fit.min((available_width - margin_left - margin_right).max(0.0))
         } else {
             0.0
         }

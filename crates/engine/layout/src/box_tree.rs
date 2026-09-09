@@ -126,7 +126,8 @@ mod svg;
 pub use svg::{
     FormControlKind, PreserveAspectRatio, SvgAlignX, SvgAlignY, SvgBaselineShift,
     SvgDominantBaseline, SvgMeetOrSlice, SvgShapeKind, SvgTextAnchor, SvgTransform, ViewBox,
-    collect_selectlist_label, is_open_details, is_selectlist,
+    collect_selectlist_label, is_open_details, is_selectlist, select_widget_arrow_width,
+    select_widget_font_size, SELECT_WIDGET_PAD_PX,
 };
 use svg::{
     build_svg_children, collect_select_label, collect_textarea_content, is_closed_popover,
@@ -183,7 +184,8 @@ pub use build::incremental_build_box;
 mod intrinsic;
 use intrinsic::{
     flex_auto_base_main_width, flex_item_max_main_outer, flex_item_min_main_width,
-    max_content_outer_width, min_content_outer_width, preferred_inline_block_width,
+    form_control_fit_content_width, max_content_outer_width, min_content_outer_width,
+    preferred_inline_block_width,
 };
 
 mod shapes_floats;
