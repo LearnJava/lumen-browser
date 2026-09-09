@@ -9445,6 +9445,15 @@ var document = {
     // `document.contains(node)` is the single most common form of the call.
     contains: function(other) { return _lumen_node_contains(this, other); },
     compareDocumentPosition: function(other) { return _lumen_node_compare_position(this, other); },
+    // BUG-599, same reason again: DOM §4.4 Node.getRootNode() exists on the node
+    // wrappers (`_LUMEN_WRAPPER_MEMBERS.getRootNode`) and on DocumentFragment,
+    // but not here. A document is the root of its own tree and is never inside a
+    // shadow tree, so the `composed` option cannot change the answer. Two callers
+    // made the gap a hard stop: the vendored wptrunner `testdriver-extra.js`
+    // selector builder (`current.getRootNode().host`), and react-dom, which calls
+    // this on the app container — under a Next.js App Router that container *is*
+    // `document`, so hydration died with `Minified React error #446`.
+    getRootNode: function() { return this; },
     // DOM §4.5: the document's DocumentType child (`<!doctype …>`), or null.
     get doctype() {
         var dnid = _lumen_u2n(_lumen_get_document_doctype());

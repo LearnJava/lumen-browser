@@ -107,7 +107,7 @@ WPT-RUN-5 (до фикса BUG-591/716) исключение никуда не �
   проходом: `Document.prototype.elementFromPoint` (8 обращений) — с тех пор
   реализован ([BUG-464](BUG-464-FIXED.md)/[BUG-477](BUG-477-DUPLICATE.md),
   2026-09-01), и `Node.prototype.getRootNode()` (6 обращений) —
-  [BUG-599](BUG-599-OPEN.md), остаётся багом: это один метод, а не семейство.
+  [BUG-599](BUG-599-FIXED.md), остаётся багом: это один метод, а не семейство.
 
 Суммарный масштаб после слияния: 12 сабтестов `cssom-view` + 7 `getBoxQuads` +
 76 `html/semantics` + 2 `css-sizing`, плюс 14 id `testdriver-click-preconditions`,

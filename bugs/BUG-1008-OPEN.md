@@ -51,6 +51,29 @@ touch any of the 7 affected pages or the rasterizer — unrelated, merged anyway
 the same policy as [BUG-805](BUG-805-OPEN.md) (gate broken independent of the branch
 under test, documented and proceeded).
 
+## Дополнение 2026-09-09 (P6, гейт BUG-599): дрейфует и ТЕКСТОВЫЙ набор эталонов
+
+Дрейфуют два из трёх независимых наборов, а не один. `LUMEN_PROFILE=dev-release
+python graphic_tests/dump_golden.py` на **чистом `main` (`5c46d1e00`)** даёт
+«4 несовпадения из 12»: `samples/page.html` и
+`graphic_tests/65-flex-align-content.html`, каждый и по `--dump-layout`, и по
+`--dump-display-list`. Дифф однородный — высота текстового бокса
+`14.40 → 13.41` в каждом `DrawText` (кое-где вместе со сдвигом `y` на `0.50`),
+то есть ровно та же «текстовая» подпись, что у 7 PNG выше.
+
+Почему это сужает поиск: текстовые дампы — это **геометрия**, а не
+растеризация. Они снимаются с layout/display-list до всякой отрисовки, так что
+общий дрейф двух наборов исключает версию «регрессия CPU-растеризатора» и
+указывает на метрики строки (line-height/ascent-descent) в layout. Тогда и
+`51-scrollbar-rendering`/`57-canvas-2d`, помеченные выше как «не очевидно
+текстовые», объясняются подписями внутри самих страниц, а не отдельной
+причиной.
+
+Практическое следствие для гейта: `dump_golden.py` на `main` сейчас **не
+нулевой**, поэтому «пустой дифф» как доказательство нейтральности ветки больше
+не работает — сравнивать нужно набор несовпадений ветки с набором на `main`
+(на ветке BUG-599 они совпали дословно, включая числа).
+
 ## Что нужно для закрытия
 
 Same recipe as BUG-297: diff each of the 7 pages' current CPU render against its
