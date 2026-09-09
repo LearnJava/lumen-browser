@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-09",
  "counts": {
-  "open": 385,
+  "open": 386,
   "fixed": 609,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 994,
+ "total_bugs": 995,
  "phases": [
   {
    "id": "P0",
@@ -6940,9 +6940,12 @@
       {
        "id": "E2E-2",
        "title": "Проба: TreeWalker и SHOW_COMMENT",
-       "status": "ready",
+       "status": "done",
        "size": "S",
-       "note": "Наблюдение живой пробы 2026-09-09: обход всего документа с `NodeFilter.SHOW_COMMENT` вернул 0 узлов. Это НЕ BUG-982: там узлы вообще не попадают в дерево при разборе фрагмента, здесь они в дереве, но не видны обходу. В BUGS.md про TreeWalker нет ни одной записи. Константы объявлены и маппятся (`crates/js/src/shim/web_api_shim_mid_b.js:5135` и 5146), так что дефект, если он есть, в другом месте. Сначала проба на минимальной странице, только потом классификация: подтвердится — заводить баг, не подтвердится — снять строку  Замер 2026-09-09 (P6, попутно с BUG-982): на поддереве, собранном через `innerHTML`, обход `SHOW_COMMENT` теперь находит все комментарии (2 из 2) — то есть нулевой результат живой пробы объяснялся как минимум частично тем, что комментариев в дереве не было вовсе; остаточное подозрение сужается до обхода на уровне документа, пробу это не отменяет"
+       "note": "Наблюдение живой пробы 2026-09-09: обход всего документа с `NodeFilter.SHOW_COMMENT` вернул 0 узлов. Это НЕ BUG-982: там узлы вообще не попадают в дерево при разборе фрагмента, здесь они в дереве, но не видны обходу. В BUGS.md про TreeWalker нет ни одной записи. Константы объявлены и маппятся (`crates/js/src/shim/web_api_shim_mid_b.js:5135` и 5146), так что дефект, если он есть, в другом месте. Сначала проба на минимальной странице, только потом классификация: подтвердится — заводить баг, не подтвердится — снять строку  Замер 2026-09-09 (P6, попутно с BUG-982): на поддереве, собранном через `innerHTML`, обход `SHOW_COMMENT` теперь находит все комментарии (2 из 2) — то есть нулевой результат живой пробы объяснялся как минимум частично тем, что комментариев в дереве не было вовсе; остаточное подозрение сужается до обхода на уровне документа, пробу это не отменяет  Закрыто P6 2026-09-09: проба на минимальной странице (четыре комментария, `--dump-layout` по http) подтвердила дефект и переформулировала его — дело не в `SHOW_COMMENT`, а в корне: `createTreeWalker(document, …)`/`createNodeIterator(document, …)` не находят НИ ОДНОГО узла при любом `whatToShow` (`document.COMMENT/ELEMENT/ALL = 0/0/0` против `documentElement.COMMENT = 3`, `body.COMMENT = 3`), потому что `_root_nid` читает `root.__nid__`, которого у литерала `document` нет; при этом `firstChild()`/`nextSibling()`/`lastChild()` на том же уокере отвечают верно из-за фолбэка `_cur_nid() \\|\\| 0`, так что молчаливый `nextNode()` читается как «в документе нет комментариев». Заведён [BUG-1046](bugs/BUG-1046-OPEN.md)",
+       "bugs": [
+        "BUG-1046"
+       ]
       },
       {
        "id": "E2E-3",
@@ -9704,6 +9707,13 @@
    "status": "open",
    "title": "`getRootNode()` не пересекает границу shadow-дерева: у `ShadowRoot` метода нет вовсе (`typeof sr.getRootNode === 'undefined'`), а узел ВНУТРИ теневого дерева по…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_LUMEN_WRAPPER_MEMBERS.getRootNode:7444`, `_lumen_make_shadow_root:2537`, `ShadowRoot.prototype:3197`) + нативный слой (`crates/js/src/v8_runtime/install/dom_core.rs::_lumen_get_shadow_root_host:1126`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1046": {
+   "status": "open",
+   "title": "`document.createTreeWalker(document, …)` и `createNodeIterator(document, …)` не находят НИ ОДНОГО узла при любом `whatToShow` — не только `SHOW_COMMENT`: замер…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid_b.js` — `_TreeWalker.prototype._root_nid:5181`, `nextNode:5321`, `previousNode:5304`, `firstChild:5225`, `_NodeIterator.prototype._ensure:5349`, `_nf_accepts:5143`)",
    "date": null,
    "debtor": false
   },
