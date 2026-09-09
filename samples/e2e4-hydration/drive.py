@@ -101,8 +101,18 @@ def main():
 
         # Фаза 2: интерактивность. React 18 вешает слушатели на корневой
         # контейнер, а не на кнопку, — нативный клик обязан всплыть до него.
+        # У ступени `doc.html` кнопки нет вовсе, поэтому отказ клика здесь не
+        # должен ронять прогон: измерение гидрации уже напечатано выше.
+        has_btn = 'true' in c.call(
+            'eval', {'code': "String(!!document.getElementById('btn'))"}).get('result', '')
+        if not has_btn:
+            print('=== click #btn: пропущено, на странице нет #btn ===')
+            return
         print('=== click #btn ===')
-        print(json.dumps(c.call('click', {'target': '#btn'}), ensure_ascii=False))
+        try:
+            print(json.dumps(c.call('click', {'target': '#btn'}), ensure_ascii=False))
+        except RuntimeError as e:
+            print(f'click не выполнен: {e}')
         time.sleep(1.5)
         print("btn.textContent -> "
               + json.dumps(c.call('eval', {'code': "document.getElementById('btn').textContent"})))
@@ -114,6 +124,25 @@ def main():
             print(json.dumps(res, ensure_ascii=False))
         print('=== console after click ===')
         print(text_of(c.read('resource://console'))[:4000])
+
+        # Фаза 3: отделить геометрию от системы событий React. MCP-клик идёт
+        # через hit-test, поэтому нулевая ширина кнопки (BUG-926) уводит его в
+        # родителя (BUG-1044) и ничего не говорит о делегировании React 18.
+        # `dispatchEvent` минует hit-test: если после него счётчик вырос —
+        # синтетические события React работают, и блокер только в геометрии.
+        print('=== dispatchEvent click on #btn (минуя hit-test) ===')
+        print(json.dumps(c.call('eval', {'code': (
+            "document.getElementById('btn').dispatchEvent("
+            "new MouseEvent('click', {bubbles: true, cancelable: true}))")}), ensure_ascii=False))
+        time.sleep(1.5)
+        print("btn.textContent -> "
+              + json.dumps(c.call('eval', {'code': "document.getElementById('btn').textContent"})))
+        res = c.call('eval', {'code': 'JSON.stringify(window.__PROBE)'})
+        try:
+            for item in json.loads(json.loads(res['result'])):
+                print(' -', item)
+        except Exception:
+            print(json.dumps(res, ensure_ascii=False))
     finally:
         proc.terminate()
         try:

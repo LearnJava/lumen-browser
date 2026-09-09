@@ -14,9 +14,14 @@
   function App() {
     var s = React.useState(0);
     var n = s[0], setN = s[1];
+    // onClick на самом контейнере отделяет «делегирование React мертво» от
+    // «клик не долетел до кнопки»: React 18 слушает на корне гидрации, а
+    // MCP-клик из-за нулевой ширины кнопки (BUG-926) попадает именно сюда
+    // (BUG-1044). Обработчик не сериализуется в SSR — разметка gen.js не
+    // меняется, гидрация остаётся точным совпадением.
     return e(
       'div',
-      { id: 'app' },
+      { id: 'app', onClick: function () { rep('REACT synthetic onClick on #app'); } },
       e('h1', null, 'hydration probe'),
       e(React.Suspense, { fallback: e('p', null, 'loading') }, e(Slow)),
       e('button', { id: 'btn', onClick: function () { setN(n + 1); } }, 'clicked ' + n),
