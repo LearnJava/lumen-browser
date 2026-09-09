@@ -11,4 +11,5 @@
 
 mod bug785_extra_ca;
 mod http_client_fingerprint_profile;
+mod nav_post_body;
 mod tls_integration;

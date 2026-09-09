@@ -373,7 +373,7 @@ impl Lumen {
                         if let Some(entry) = self.archive.take(id)
                             && !entry.url.is_empty()
                         {
-                            self.navigate_to(PageSource::Url(entry.url));
+                            self.navigate_to(PageSource::url(entry.url));
                         }
                         self.archive.close();
                         self.request_redraw();

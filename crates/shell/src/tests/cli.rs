@@ -7,11 +7,11 @@ use super::*;
 fn page_source_from_arg_url() {
     assert!(matches!(
         PageSource::from_arg(Some("https://example.com")),
-        PageSource::Url(ref u) if u == "https://example.com"
+        PageSource::Url { url: ref u, .. } if u == "https://example.com"
     ));
     assert!(matches!(
         PageSource::from_arg(Some("http://localhost:8080")),
-        PageSource::Url(_)
+        PageSource::Url { .. }
     ));
 }
 
@@ -33,7 +33,7 @@ fn page_source_from_arg_none_is_empty() {
 fn page_source_describe() {
     assert_eq!(PageSource::Empty.describe(), "(пустая вкладка)");
     assert_eq!(
-        PageSource::Url("https://x.test".to_owned()).describe(),
+        PageSource::url("https://x.test").describe(),
         "https://x.test",
     );
     assert_eq!(
@@ -132,7 +132,7 @@ fn parse_cli_single_url_is_window() {
     let cli = parse_cli(&args(&["https://example.com"])).expect("ok");
     assert!(matches!(
         cli,
-        CliMode::OpenWindow(PageSource::Url(ref u)) if u == "https://example.com"
+        CliMode::OpenWindow(PageSource::Url { url: ref u, .. }) if u == "https://example.com"
     ));
 }
 
@@ -154,7 +154,7 @@ fn parse_cli_dump_source_with_url() {
     assert!(matches!(
         cli,
         CliMode::Dump {
-            source: PageSource::Url(ref u),
+            source: PageSource::Url { url: ref u, .. },
             kind: DumpKind::Source,
         } if u == "https://example.com"
     ));

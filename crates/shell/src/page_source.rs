@@ -14,7 +14,18 @@ pub(crate) enum PageSource {
     /// Без аргументов — рисуем пустое окно. Reload no-op (грузить нечего).
     Empty,
     File(PathBuf),
-    Url(String),
+    /// Сетевая страница. `body` — тело навигации (E2E-1): `None` у обычного
+    /// перехода по ссылке/адресной строке, `Some` ровно у одной навигации —
+    /// той, которую сейчас порождает отправка формы методом POST
+    /// (`form_submit.rs`).
+    ///
+    /// Тело живёт **в источнике**, а не отдельным полем `Lumen`, потому что
+    /// поток загрузки получает именно клон `PageSource`: разъехаться адресу и
+    /// телу так просто негде. Обратная сторона — тело обязано быть
+    /// одноразовым: `reload()` стирает его сразу после того, как передал
+    /// источник загрузчику ([`PageSource::forget_nav_body`]), поэтому ни F5,
+    /// ни back/forward, ни восстановление сессии не повторяют POST.
+    Url { url: String, body: Option<Box<lumen_network::NavigationBody>> },
     /// `about:blank` — пустой документ без сетевого запроса (HTML spec §7.5).
     /// `url_str()` возвращает "about:blank" для адресной строки и истории.
     AboutBlank,
@@ -29,10 +40,41 @@ pub(crate) enum PageSource {
 }
 
 impl PageSource {
+    /// Обычная GET-навигация на `url` — источник без тела запроса.
+    ///
+    /// Единственный способ собрать `PageSource::Url` вне отправки формы:
+    /// оставляет `body` невыраженным в каждом из десятка call-site-ов, где
+    /// тела заведомо нет (адресная строка, история, вкладки, автоматизация).
+    pub(crate) fn url(url: impl Into<String>) -> Self {
+        PageSource::Url { url: url.into(), body: None }
+    }
+
+    /// Тело навигации, если этот источник — отправка формы методом POST.
+    pub(crate) fn nav_body(&self) -> Option<&lumen_network::NavigationBody> {
+        match self {
+            PageSource::Url { body, .. } => body.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Забыть тело навигации, оставив адрес.
+    ///
+    /// Вызывается ровно один раз — из `reload()`, сразу после того, как
+    /// источник ушёл загрузчику. С этого момента запись истории, снимок
+    /// сессии и любая последующая перезагрузка того же адреса — обычный GET:
+    /// повторная отправка формы не происходит нигде и никогда (HTML LS не
+    /// обязывает браузер её предлагать, а тихо ре-постить — худшее из
+    /// поведений: платёж или регистрация ушли бы дважды).
+    pub(crate) fn forget_nav_body(&mut self) {
+        if let PageSource::Url { body, .. } = self {
+            *body = None;
+        }
+    }
+
     pub(crate) fn from_arg(arg: Option<&str>) -> Self {
         match arg {
             Some(s) if s.starts_with("http://") || s.starts_with("https://") => {
-                PageSource::Url(s.to_owned())
+                PageSource::url(s)
             }
             Some("about:blank") => PageSource::AboutBlank,
             Some(s) if s == chrome_preview::URL => PageSource::Static {
@@ -48,7 +90,7 @@ impl PageSource {
         match self {
             PageSource::Empty => "(пустая вкладка)".to_owned(),
             PageSource::File(p) => p.display().to_string(),
-            PageSource::Url(u) => u.clone(),
+            PageSource::Url { url, .. } => url.clone(),
             PageSource::AboutBlank => "about:blank".to_owned(),
             PageSource::Snapshot { base_url, .. } => format!("[bfcache] {base_url}"),
             PageSource::Static { url, .. } => url.clone(),
@@ -59,7 +101,7 @@ impl PageSource {
     /// Returns `None` for file: and empty sources (no cross-origin storage needed).
     pub(crate) fn origin_str(&self) -> Option<String> {
         let url_s = match self {
-            PageSource::Url(u) => u.as_str(),
+            PageSource::Url { url, .. } => url.as_str(),
             PageSource::Snapshot { base_url, .. } => base_url.as_str(),
                 _ => return None,
         };
@@ -72,7 +114,7 @@ impl PageSource {
     /// URL-строка страницы для bfcache-ключа. `None` если нет URL (пустая вкладка, файл).
     pub(crate) fn url_str(&self) -> Option<&str> {
         match self {
-            PageSource::Url(u) => Some(u.as_str()),
+            PageSource::Url { url, .. } => Some(url.as_str()),
             PageSource::Snapshot { base_url, .. } => Some(base_url.as_str()),
             PageSource::AboutBlank => Some("about:blank"),
             PageSource::Static { url, .. } => Some(url.as_str()),
@@ -85,7 +127,7 @@ impl PageSource {
     pub(crate) fn resource_base(&self) -> Option<ResourceBase> {
         match self {
             PageSource::File(p) => Some(ResourceBase::File(p.clone())),
-            PageSource::Url(u) => Some(ResourceBase::Url(u.clone())),
+            PageSource::Url { url, .. } => Some(ResourceBase::Url(url.clone())),
             PageSource::Snapshot { base_url, .. } => Some(ResourceBase::Url(base_url.clone())),
             PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => None,
         }
@@ -132,7 +174,7 @@ impl PageSource {
                     redirected: false,
                 })
             }
-            PageSource::Url(url) => {
+            PageSource::Url { url, body } => {
                 use lumen_core::url::Url;
                 use lumen_network::{
                     BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient,
@@ -155,7 +197,7 @@ impl PageSource {
                 // `fetch-document` span); its `size` arg is the response body.
                 let mut fetch_span = lumen_core::trace::span(format!("GET {url}"), "net");
                 let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status } =
-                    client.fetch_page(&lumen_url)?;
+                    client.fetch_page(&lumen_url, body.as_deref())?;
                 // BUG-640: redirect signal — the only one obtainable without
                 // a `lumen-network` change (`fetch_with_redirect`'s hop
                 // countdown is never surfaced as a count).
@@ -227,7 +269,7 @@ impl PageSource {
         cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
         on_chunk: &mut dyn FnMut(&[u8], &lumen_core::url::Url),
     ) -> Result<RawPage, Box<dyn Error>> {
-        let PageSource::Url(url) = self else {
+        let PageSource::Url { url, body } = self else {
             return self.load_bytes(sink, cookie_jar);
         };
         use lumen_core::url::Url;
@@ -249,7 +291,7 @@ impl PageSource {
         }
         let client = crate::config::global().apply_http(builder);
         let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url, status } =
-            client.fetch_page_streaming(&lumen_url, on_chunk)?;
+            client.fetch_page_streaming(&lumen_url, on_chunk, body.as_deref())?;
         // BUG-640: see `load_bytes` for why this can't be an exact hop count.
         let redirected = final_url != lumen_url;
         eprintln!("Получено {} байт (streaming)", bytes.len());
@@ -345,7 +387,7 @@ pub(crate) fn cache_control_no_store(resp_headers: &[(String, String)]) -> bool 
 /// so `file:///home/x` (POSIX, where the slash IS the root) is untouched).
 pub(crate) fn page_source_for_automation_url(url: &str) -> PageSource {
     if url.starts_with("http://") || url.starts_with("https://") {
-        return PageSource::Url(url.to_owned());
+        return PageSource::url(url);
     }
     if url == "about:blank" {
         return PageSource::AboutBlank;
@@ -384,11 +426,11 @@ pub(crate) fn page_source_for_automation_url(url: &str) -> PageSource {
 /// (a local page opening another local page) and non-web openers are allowed.
 pub(crate) fn resolve_js_navigation(url: &str, opener: &PageSource) -> Result<PageSource, String> {
     if !url.starts_with("file://") {
-        return Ok(PageSource::Url(url.to_owned()));
+        return Ok(PageSource::url(url));
     }
     let opener_is_web = matches!(
         opener,
-        PageSource::Url(u) if u.starts_with("http://") || u.starts_with("https://")
+        PageSource::Url { url: u, .. } if u.starts_with("http://") || u.starts_with("https://")
     );
     if opener_is_web {
         return Err(format!(

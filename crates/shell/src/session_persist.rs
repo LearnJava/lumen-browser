@@ -55,7 +55,7 @@ pub(crate) fn source_url_string(src: &PageSource) -> Option<String> {
     match src {
         PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => None,
         PageSource::File(p) => Some(p.display().to_string()),
-        PageSource::Url(u) => Some(u.clone()),
+        PageSource::Url { url, .. } => Some(url.clone()),
         PageSource::Snapshot { base_url, .. } => Some(base_url.clone()),
     }
 }

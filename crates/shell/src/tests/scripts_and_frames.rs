@@ -1695,7 +1695,7 @@ fn tor_mode_empty_args() {
 #[test]
 fn resource_base_maps_url_and_file_sources() {
     assert!(matches!(
-        PageSource::Url("https://example.com/".to_owned()).resource_base(),
+        PageSource::url("https://example.com/").resource_base(),
         Some(ResourceBase::Url(_))
     ));
     assert!(matches!(

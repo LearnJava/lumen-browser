@@ -17,7 +17,7 @@ impl Lumen {
         let url = match &self.source {
             PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => return,
             PageSource::File(p) => p.display().to_string(),
-            PageSource::Url(u) => u.clone(),
+            PageSource::Url { url, .. } => url.clone(),
             PageSource::Snapshot { base_url, .. } => base_url.clone(),
         };
         let now = std::time::SystemTime::now()

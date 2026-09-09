@@ -64,6 +64,7 @@ mod hsts_preload;
 mod intercept;
 mod mixed_content;
 mod mock;
+mod nav_body;
 mod origin;
 mod pool;
 mod range;
@@ -76,6 +77,7 @@ pub mod webauthn;
 pub(crate) mod websocket;
 pub mod remote;
 pub use remote::RemoteNetworkTransport;
+pub use nav_body::NavigationBody;
 pub use auth::StaticCredentialProvider;
 pub use ctap2::{CompositeCredentialProvider, CtapRoamingTransport};
 pub use socks5::Socks5Proxy;
@@ -3717,20 +3719,36 @@ impl HttpClient {
     /// Для навигации это не проявляется — shell ходит сюда с выключенным
     /// `http_cache`, — но при включении кэша редирект-база потеряется; чинить
     /// придётся вместе с ключом кэша.
-    pub fn fetch_page(&self, url: &Url) -> Result<PageResponse> {
-        if let Some(ref interceptor) = self.interceptor {
+    ///
+    /// `body` — тело навигации ([`NavigationBody`]): `None` для обычного GET,
+    /// `Some` для отправки формы методом POST. Непустое тело выключает три
+    /// вещи, каждая из которых ключуется одним лишь URL и потому для POST
+    /// неверна: HTTP-кэш на чтение (ответ на POST — не тело этого адреса),
+    /// его же на запись и перехватчик (Service Worker получил бы синтетический
+    /// ответ, ничего не зная об отправленных полях).
+    pub fn fetch_page(&self, url: &Url, body: Option<&NavigationBody>) -> Result<PageResponse> {
+        let req_body = body.map(|b| RequestBody {
+            method: &b.method,
+            content_type: &b.content_type,
+            bytes: &b.bytes,
+        });
+        let req_body = req_body.as_ref();
+        if req_body.is_none()
+            && let Some(ref interceptor) = self.interceptor
+        {
             let origin = build_origin(url);
-            if let Some(body) = interceptor.intercept(url, &origin) {
+            if let Some(intercepted) = interceptor.intercept(url, &origin) {
                 // Synthetic response (e.g. Service Worker intercept) — no
                 // real HTTP round-trip, so no real status; `200` reflects
                 // that it's a successful substitute, not "unknown".
-                return Ok(PageResponse { body, headers: Vec::new(), final_url: url.clone(), status: 200 });
+                return Ok(PageResponse { body: intercepted, headers: Vec::new(), final_url: url.clone(), status: 200 });
             }
         }
         let url_str = url.to_string();
         let accept_encoding = self.accept_encoding_header();
         let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
-        if let Some(cache) = &self.http_cache
+        if req_body.is_none()
+            && let Some(cache) = &self.http_cache
             && let Some(snap) = cache.get(&url_str)
         {
             if snap.is_fresh {
@@ -3788,9 +3806,13 @@ impl HttpClient {
             self.h3_pool(),
             None, // PH1-2a: streaming sink — only fetch_page_streaming streams
             true, // BUG-292: top-level document navigation
-                None, // тело запроса: только POST/PUT/… с телом передают Some
+            req_body, // E2E-1: тело POST-навигации; None — обычный GET
         )?;
-        if let Some(cache) = &self.http_cache {
+        // E2E-1: ответ на POST не кэшируется под адресом запроса — иначе
+        // следующая GET-навигация на ту же форму получила бы её результат.
+        if req_body.is_none()
+            && let Some(cache) = &self.http_cache
+        {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
         }
         Ok(PageResponse { body: resp.body, headers: resp.headers, final_url, status: resp.status })
@@ -3806,25 +3828,38 @@ impl HttpClient {
     /// доставляются одним куском (или после полной загрузки), но итоговое тело
     /// всегда корректно. caller должен использовать именно возвращаемое тело
     /// как авторитетное, а `on_chunk` — только для промежуточной отрисовки.
+    ///
+    /// `body` — как у [`HttpClient::fetch_page`]: тело POST-навигации, которое
+    /// точно так же выключает кэш и перехватчик.
     pub fn fetch_page_streaming(
         &self,
         url: &Url,
         on_chunk: PageChunkSink<'_>,
+        body: Option<&NavigationBody>,
     ) -> Result<PageResponse> {
-        if let Some(ref interceptor) = self.interceptor {
+        let req_body = body.map(|b| RequestBody {
+            method: &b.method,
+            content_type: &b.content_type,
+            bytes: &b.bytes,
+        });
+        let req_body = req_body.as_ref();
+        if req_body.is_none()
+            && let Some(ref interceptor) = self.interceptor
+        {
             let origin = build_origin(url);
-            if let Some(body) = interceptor.intercept(url, &origin) {
-                on_chunk(&body, url);
+            if let Some(intercepted) = interceptor.intercept(url, &origin) {
+                on_chunk(&intercepted, url);
                 // Synthetic response (e.g. Service Worker intercept) — no
                 // real HTTP round-trip, so no real status; `200` reflects
                 // that it's a successful substitute, not "unknown".
-                return Ok(PageResponse { body, headers: Vec::new(), final_url: url.clone(), status: 200 });
+                return Ok(PageResponse { body: intercepted, headers: Vec::new(), final_url: url.clone(), status: 200 });
             }
         }
         let url_str = url.to_string();
         let accept_encoding = self.accept_encoding_header();
         let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
-        if let Some(cache) = &self.http_cache
+        if req_body.is_none()
+            && let Some(cache) = &self.http_cache
             && let Some(snap) = cache.get(&url_str)
         {
             if snap.is_fresh {
@@ -3886,9 +3921,12 @@ impl HttpClient {
             self.h3_pool(),
             Some(on_chunk),
             true, // BUG-292: top-level document navigation
-                None, // тело запроса: только POST/PUT/… с телом передают Some
+            req_body, // E2E-1: тело POST-навигации; None — обычный GET
         )?;
-        if let Some(cache) = &self.http_cache {
+        // E2E-1: см. `fetch_page` — ответ на POST под URL-ключ не кладём.
+        if req_body.is_none()
+            && let Some(cache) = &self.http_cache
+        {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
         }
         Ok(PageResponse { body: resp.body, headers: resp.headers, final_url, status: resp.status })
@@ -5675,7 +5713,7 @@ mod tests {
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
         let PageResponse { body, .. } = client
-            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c))
+            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None)
             .expect("streaming fetch");
         assert_eq!(streamed, b"hello world", "streamed chunks must reconstruct the body");
         assert_eq!(body, b"hello world", "returned body must be the full decoded body");
@@ -5693,7 +5731,7 @@ mod tests {
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
         let PageResponse { body, .. } = client
-            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c))
+            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None)
             .expect("streaming fetch");
         assert_eq!(streamed, b"hello world");
         assert_eq!(body, b"hello world");
@@ -5721,7 +5759,7 @@ mod tests {
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
         let PageResponse { body, .. } = client
-            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c))
+            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None)
             .expect("streaming fetch");
         // sink получает декодированные байты; возвращаемое тело тоже декодировано.
         assert_eq!(streamed, b"Hello, World!");
@@ -5740,7 +5778,7 @@ mod tests {
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
         let PageResponse { body, .. } = client
-            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c))
+            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c), None)
             .expect("streaming fetch");
         // Тело 302-редиректа (пустое) НЕ стримится — только финальный 200.
         assert_eq!(streamed, b"done");
@@ -5760,7 +5798,7 @@ mod tests {
         });
         let client = HttpClient::new();
         let url = Url::parse(&format!("http://127.0.0.1:{port}/login/")).unwrap();
-        let page = client.fetch_page(&url).expect("fetch");
+        let page = client.fetch_page(&url, None).expect("fetch");
         assert_eq!(page.body, b"hi");
         assert_eq!(page.final_url.as_str(), format!("http://127.0.0.1:{port}/auth/login/"));
         server.join().unwrap();
@@ -5781,7 +5819,7 @@ mod tests {
         // до-редиректного адреса.
         let mut chunk_urls: Vec<String> = Vec::new();
         let page = client
-            .fetch_page_streaming(&url, &mut |_, u| chunk_urls.push(u.to_string()))
+            .fetch_page_streaming(&url, &mut |_, u| chunk_urls.push(u.to_string()), None)
             .expect("streaming fetch");
         let expected = format!("http://127.0.0.1:{port}/b/c/");
         assert_eq!(page.final_url.as_str(), expected);
@@ -5803,7 +5841,7 @@ mod tests {
         });
         let client = HttpClient::new();
         let url = Url::parse(&format!("http://127.0.0.1:{port}/login/")).unwrap();
-        let page = client.fetch_page(&url).expect("fetch");
+        let page = client.fetch_page(&url, None).expect("fetch");
         assert_eq!(page.final_url.as_str(), url.as_str());
         server.join().unwrap();
     }
@@ -9961,7 +9999,7 @@ mod proxy_tests {
     fn fetch_page_data_url_returns_body_without_network() {
         let client = HttpClient::new();
         let url = Url::parse("data:text/html,%3Ch1%3Ehi%3C%2Fh1%3E").unwrap();
-        let page = client.fetch_page(&url).unwrap();
+        let page = client.fetch_page(&url, None).unwrap();
         assert_eq!(page.body, b"<h1>hi</h1>");
     }
 }

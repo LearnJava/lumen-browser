@@ -19,7 +19,7 @@ impl Lumen {
     pub(crate) fn fetch_and_register_lazy_images(&mut self, requests: Vec<(u32, String)>) {
         let base = match &self.source {
             PageSource::File(p) => ResourceBase::File(p.clone()),
-            PageSource::Url(u) => ResourceBase::Url(u.clone()),
+            PageSource::Url { url, .. } => ResourceBase::Url(url.clone()),
             PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
             PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => return,
         };
@@ -172,7 +172,7 @@ impl Lumen {
             // Resolve URL relative to current page source.
             let base = match &self.source {
                 PageSource::File(p) => ResourceBase::File(p.clone()),
-                PageSource::Url(u) => ResourceBase::Url(u.clone()),
+                PageSource::Url { url, .. } => ResourceBase::Url(url.clone()),
                 PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
                 PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => continue,
             };
@@ -429,6 +429,13 @@ impl Lumen {
             self.stream_builder = None;
             self.load_generation = self.load_generation.wrapping_add(1);
             self.start_streaming_load(self.load_generation);
+            // E2E-1: поток загрузки уже получил свой клон источника вместе с
+            // телом — значит POST отправлен ровно один раз. Стираем тело из
+            // `self.source` здесь, а не в отдельной ветке каждого места, где
+            // страницу можно перезагрузить: F5, Ctrl+R, палитра команд, back
+            // и forward, восстановление сессии и клонирование вкладки читают
+            // тот же `self.source`, и любое из них молча ре-постнуло бы форму.
+            self.source.forget_nav_body();
             return;
         }
 
@@ -470,6 +477,8 @@ impl Lumen {
             });
             self.source.load(self.event_sink.clone(), viewport, ls_store, ss_store, idb_backend, sw_backend, &*self.hyp_provider, self.cookie_banner_dismiss)
         };
+        // E2E-1: см. streaming-ветку выше — тело одноразовое, запрос уже ушёл.
+        self.source.forget_nav_body();
 
         match load_result {
             Ok((page, new_layout_source, new_js_ctx)) => {
@@ -659,12 +668,17 @@ impl Lumen {
     pub(crate) fn reload_via_gpu_session(&mut self) -> Option<LoadedPage> {
         use lumen_driver::{WinitSession, GpuSession};
 
+        // E2E-1: `WinitSession::navigate` умеет только GET — навигацию с телом
+        // отдаём резервному пути (`PageSource::load`), который тело отправит.
+        if self.source.nav_body().is_some() {
+            return None;
+        }
         // Преобразовать PageSource в URL для WinitSession
         let url = match &self.source {
             PageSource::File(path) => {
                 format!("file://{}", path.display())
             }
-            PageSource::Url(u) => u.clone(),
+            PageSource::Url { url, .. } => url.clone(),
             _ => return None, // Snapshot и Empty обработаны отдельно
         };
 
@@ -789,7 +803,7 @@ impl Lumen {
             // порции прилетают в `on_chunk` по мере чтения, не дожидаясь полной
             // загрузки. Для File/Snapshot/Static тело уже в памяти, поэтому его
             // достаточно нарезать на STREAM_CHUNK_BYTES (прежнее поведение).
-            let raw = if let PageSource::Url(url) = &source {
+            let raw = if let PageSource::Url { url, .. } = &source {
                 // BUG-757: база preload-хинтов — адрес, с которого РЕАЛЬНО
                 // течёт тело (его приносит сам chunk), а не запрошенный: после
                 // редиректа они разные, и относительный `src` уходил на
