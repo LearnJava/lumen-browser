@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>E2E-4 hydration probe</title>
+<script>
+window.__PROBE = [];
+window.__rep = function (s) { window.__PROBE.push(s); console.log('[probe] ' + s); };
+window.onerror = function (m, u, l, c, e) { window.__rep('onerror: ' + m); };
+</script>
+</head>
+<body>
+<div id="root"><div id="app"><h1>hydration probe</h1><!--$--><p id="slow">suspense payload</p><!--/$--><button id="btn">clicked 0</button></div></div>
+<script src="react.js"></script>
+<script src="react-dom.js"></script>
+<script src="client.js"></script>
+</body>
+</html>
