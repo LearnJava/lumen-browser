@@ -572,6 +572,14 @@ CompositionEvent.prototype.constructor = CompositionEvent;
 
 var _lumen_listeners = {};
 
+// Capture-phase listeners (`addEventListener(type, fn, true)` /
+// `{capture: true}`), same `nid:type` key shape. A second table rather than a
+// flag on the entries because every reader of `_lumen_listeners` — here, in
+// `web_api_shim_tail_b.js`, in the GC sweep — treats its values as plain arrays
+// of functions, and a shape change would have to land in all of them at once.
+// Purged for a dead nid alongside `_lumen_listeners` in `_lumen_gc_collect`.
+var _lumen_capture_listeners = {};
+
 // ── on<type> event handler IDL attributes (BUG-360) ──────────────────────────
 // Key: String(nid) + ':' + type (no 'on' prefix) → the current handler
 // function, or absent. Backed by a table (keyed by nid) rather than a plain
@@ -686,128 +694,187 @@ function _lumen_define_on_handler_prop(obj, attrName) {
     });
 }
 
-function _lumen_add_listener(nid, type, fn) {
-    if (typeof fn !== 'function') return;
-    var key = String(nid) + ':' + String(type);
-    if (!_lumen_listeners[key]) _lumen_listeners[key] = [];
-    _lumen_listeners[key].push(fn);
+// DOM §2.7 — the capture flag out of the third `addEventListener` argument,
+// which is either a boolean or an options dictionary.
+function _lumen_capture_flag(options) {
+    return !!(options === true || (options && options.capture));
 }
-function _lumen_rm_listener(nid, type, fn) {
+
+function _lumen_add_listener(nid, type, fn, options) {
+    if (typeof fn !== 'function') return;
+    var store = _lumen_capture_flag(options) ? _lumen_capture_listeners : _lumen_listeners;
     var key = String(nid) + ':' + String(type);
-    var arr = _lumen_listeners[key];
+    if (!store[key]) store[key] = [];
+    store[key].push(fn);
+}
+function _lumen_rm_listener(nid, type, fn, options) {
+    var store = _lumen_capture_flag(options) ? _lumen_capture_listeners : _lumen_listeners;
+    var key = String(nid) + ':' + String(type);
+    var arr = store[key];
     if (!arr) return;
     var idx = arr.indexOf(fn);
     if (idx >= 0) arr.splice(idx, 1);
-}
-function _lumen_dispatch(nid, event) {
-    var key = String(nid) + ':' + event.type;
-    var arr = _lumen_listeners[key];
-    if (arr && arr.length > 0) {
-        var copy = arr.slice(); // snapshot in case a handler mutates the list
-        for (var i = 0; i < copy.length; i++) {
-            try { copy[i].call(null, event); } catch(e) { _lumen_report_exception(e); }
-            if (event._stopImmediate) break;
-        }
-    }
-    // BUG-360: on<type> IDL attribute (el.onclick = fn / onclick="…") fires
-    // after explicit listeners, same ordering as EventTarget.prototype.dispatchEvent.
-    if (!event._stopImmediate) {
-        var onFn = _lumen_get_on_handler(nid, 'on' + event.type);
-        if (onFn) { try { onFn.call(_lumen_make_element(nid), event); } catch(e) { _lumen_report_exception(e); } }
-    }
-    return !event.defaultPrevented;
 }
 
 // Sentinel NID used by document.addEventListener to store document-level listeners.
 var _LUMEN_DOC_LISTENER_NID = -1;
 
-// Dispatch an event starting at `start_nid` and bubbling up to the document.
+// Sentinel NID marking the Window hop of an event path. Window keeps its own
+// per-type listener buckets (`_other_win_listeners` & friends, defined in
+// `web_api_shim_mid_b.js`) instead of a slot in `_lumen_listeners`, so this id
+// never indexes the tables above — it only says "last hop, ask window".
+var _LUMEN_WIN_LISTENER_NID = -2;
+
+// ── DOM §2.9 «dispatching events»: one path, three phases (BUG-873) ──────────
+// Before this there were two independent and both-incomplete walks: the script
+// one (`_lumen_dispatch`, a single node) and the native-input one
+// (`_lumen_dispatch_bubble`, ancestors plus `document`). Neither ran a capture
+// phase, neither reached `window`, and neither set `eventPhase`, so
+// `el.dispatchEvent(new Event(t, {bubbles: true}))` was heard by `el` alone —
+// which cuts every framework that delegates from a common root (React 18 hangs
+// its listeners on the hydration root) off from all programmatic input.
+
+// The object a path entry denotes: `document`, `window`, or the node wrapper.
+function _lumen_path_target(nid) {
+    if (nid === _LUMEN_WIN_LISTENER_NID) return (typeof window !== 'undefined') ? window : null;
+    if (nid === _LUMEN_DOC_LISTENER_NID) return document;
+    return _lumen_make_element(nid);
+}
+
+// The event path for a dispatch at `start_nid`: the target first, then each
+// ancestor, then the two non-node targets a *connected* tree ends in. The
+// document is appended as `_LUMEN_DOC_LISTENER_NID` rather than as its arena id
+// (`_lumen_root_nid`) because that is where `document.addEventListener` files
+// its listeners. A detached subtree gets neither tail entry — the spec's path
+// stops at its own root, and that is what keeps a `dispatchEvent` on a node the
+// page has already removed from reaching the page's delegated handlers.
+function _lumen_event_path(start_nid) {
+    if (start_nid === _LUMEN_WIN_LISTENER_NID) return [_LUMEN_WIN_LISTENER_NID];
+    if (start_nid === _LUMEN_DOC_LISTENER_NID || start_nid === _lumen_root_nid) {
+        return [_LUMEN_DOC_LISTENER_NID, _LUMEN_WIN_LISTENER_NID];
+    }
+    var path = [];
+    var cur = start_nid;
+    var connected = false;
+    // Bounded: a cycle in the arena's parent links would otherwise hang the tab.
+    for (var guard = 0; guard < 1024 && cur !== null && cur !== undefined; guard++) {
+        if (cur === _lumen_root_nid) { connected = true; break; }
+        path.push(cur);
+        var pid = _lumen_u2n(_lumen_get_parent(cur));
+        cur = (pid !== null && pid !== undefined) ? pid : null;
+    }
+    if (connected) {
+        path.push(_LUMEN_DOC_LISTENER_NID);
+        path.push(_LUMEN_WIN_LISTENER_NID);
+    }
+    return path;
+}
+
+// The window hop. Non-capture delivery goes through `window.dispatchEvent`
+// deliberately: that method is the only place that knows the per-type window
+// buckets — `load`, and `error` with its 5-argument OnErrorEventHandler
+// convention (BUG-591) — and duplicating them here would fork that behaviour.
+function _lumen_invoke_at_window(event, capture) {
+    if (typeof window === 'undefined' || !window) return;
+    event.currentTarget = window;
+    if (!capture) { window.dispatchEvent(event); return; }
+    var arr = _win_capture_listeners[event.type];
+    if (!arr) return;
+    var copy = arr.slice();
+    for (var i = 0; i < copy.length; i++) {
+        try { copy[i].call(window, event); } catch(e) { _lumen_report_exception(e); }
+        if (event._stopImmediate) return;
+    }
+}
+
+// Run the listeners of one path entry in one phase. `on<type>` handlers have no
+// capture flag, so they run only in the non-capture pass and, per BUG-360,
+// after the explicit listeners of that same entry. `stopPropagation` is NOT
+// consulted inside this function: the spec stops the path after the current
+// object finishes, not in the middle of its listener list.
+function _lumen_invoke_at(nid, event, capture) {
+    if (nid === _LUMEN_WIN_LISTENER_NID) { _lumen_invoke_at_window(event, capture); return; }
+    var isDoc = (nid === _LUMEN_DOC_LISTENER_NID);
+    var key = String(nid) + ':' + event.type;
+    var arr = capture ? _lumen_capture_listeners[key] : _lumen_listeners[key];
+    var onFn = null;
+    if (!capture) {
+        if (isDoc) {
+            var docFn = document['on' + event.type];
+            onFn = (typeof docFn === 'function') ? docFn : null;
+        } else {
+            onFn = _lumen_get_on_handler(nid, 'on' + event.type);
+        }
+    }
+    if (!arr && !onFn) return;
+    var obj = isDoc ? document : _lumen_make_element(nid);
+    event.currentTarget = obj;
+    if (arr) {
+        var copy = arr.slice(); // snapshot in case a handler mutates the list
+        for (var i = 0; i < copy.length; i++) {
+            try { copy[i].call(obj, event); } catch(e) { _lumen_report_exception(e); }
+            if (event._stopImmediate) return;
+        }
+    }
+    if (onFn) {
+        try { onFn.call(obj, event); } catch(e) { _lumen_report_exception(e); }
+    }
+}
+
+// The single dispatch. `target_nid` is an arena node id, or one of the two
+// sentinels when the target is `document`/`window` itself.
+function _lumen_propagate(target_nid, event) {
+    if (!event || event.type === undefined || event.type === null) return true;
+    var path = _lumen_event_path(target_nid);
+    if (path.length === 0) return !event.defaultPrevented;
+    event.target = _lumen_path_target(path[0]);
+    event._path = path; // backs composedPath() — see Event.prototype (BUG-577)
+    // Capture: root → the entry just above the target.
+    event.eventPhase = 1;
+    for (var i = path.length - 1; i >= 1; i--) {
+        if (event.cancelBubble) break;
+        _lumen_invoke_at(path[i], event, true);
+    }
+    // Target: DOM §2.9 does not consult the capture flag at the target itself,
+    // so both stores run here, capture-registered first.
+    if (!event.cancelBubble) {
+        event.eventPhase = 2;
+        _lumen_invoke_at(path[0], event, true);
+        if (!event._stopImmediate) _lumen_invoke_at(path[0], event, false);
+    }
+    // Bubble: target's parent → root, only for a bubbling event.
+    if (event.bubbles && !event.cancelBubble) {
+        event.eventPhase = 3;
+        for (var j = 1; j < path.length; j++) {
+            if (event.cancelBubble) break;
+            _lumen_invoke_at(path[j], event, false);
+        }
+    }
+    event.eventPhase = 0;
+    event.currentTarget = null;
+    event._path = null;
+    return !event.defaultPrevented;
+}
+
+// Dispatch `event` at node `nid`. Kept under its historical name because ~15
+// call sites across the shim and `video_bindings.rs` fire an already-built
+// event this way; since BUG-873 it runs the full path rather than that one node.
+function _lumen_dispatch(nid, event) {
+    return _lumen_propagate(nid, event);
+}
+
+// Dispatch a trusted event of `type` starting at `start_nid`.
 // Called from Rust on user input (click, keydown, etc.).
 // These events are marked as isTrusted=true because they come through the shell's native event loop.
 function _lumen_dispatch_bubble(start_nid, type) {
-    var evt = new Event(type, { bubbles: true, cancelable: true, isTrusted: true });
-    evt.target = _lumen_make_element(start_nid);
-    var cur = start_nid;
-    while (cur !== null && cur !== undefined) {
-        var key = String(cur) + ':' + String(type);
-        var arr = _lumen_listeners[key];
-        var onFn = _lumen_get_on_handler(cur, 'on' + type);
-        if (arr || onFn) {
-            var el = _lumen_make_element(cur);
-            if (arr) {
-                var copy = arr.slice();
-                for (var i = 0; i < copy.length; i++) {
-                    if (evt.cancelBubble) break;
-                    try { copy[i].call(el, evt); } catch(e) { _lumen_report_exception(e); }
-                    if (evt._stopImmediate) break;
-                }
-            }
-            // BUG-360: on<type> fires after explicit listeners at this target.
-            if (onFn && !evt.cancelBubble && !evt._stopImmediate) {
-                try { onFn.call(el, evt); } catch(e) { _lumen_report_exception(e); }
-            }
-        }
-        if (evt.cancelBubble) break;
-        var pid = _lumen_u2n(_lumen_get_parent(cur));
-        cur = (pid !== null && pid !== undefined) ? pid : null;
-    }
-    if (!evt.cancelBubble) {
-        var dkey = String(_LUMEN_DOC_LISTENER_NID) + ':' + String(type);
-        var darr = _lumen_listeners[dkey];
-        if (darr) {
-            var dcopy = darr.slice();
-            for (var i = 0; i < dcopy.length; i++) {
-                if (evt.cancelBubble) break;
-                try { dcopy[i].call(document, evt); } catch(e) { _lumen_report_exception(e); }
-                if (evt._stopImmediate) break;
-            }
-        }
-    }
-    return !evt.defaultPrevented;
+    return _lumen_propagate(start_nid, new Event(type, { bubbles: true, cancelable: true, isTrusted: true }));
 }
 
-// Bubble a pre-constructed event object (with target already set) through the DOM.
-// Used by _lumen_dispatch_mouse_event and _lumen_dispatch_key_event so they can
-// pass rich typed events instead of plain Event instances.
+// Dispatch a pre-constructed event object through the DOM. Used by
+// _lumen_dispatch_mouse_event and _lumen_dispatch_key_event so they can pass
+// rich typed events instead of plain Event instances.
 function _lumen_dispatch_rich(start_nid, event) {
-    event.target = _lumen_make_element(start_nid);
-    var cur = start_nid;
-    while (cur !== null && cur !== undefined) {
-        var key = String(cur) + ':' + event.type;
-        var arr = _lumen_listeners[key];
-        var onFn = _lumen_get_on_handler(cur, 'on' + event.type);
-        if (arr || onFn) {
-            var el = _lumen_make_element(cur);
-            if (arr) {
-                var copy = arr.slice();
-                for (var i = 0; i < copy.length; i++) {
-                    if (event.cancelBubble) break;
-                    try { copy[i].call(el, event); } catch(e) { _lumen_report_exception(e); }
-                    if (event._stopImmediate) break;
-                }
-            }
-            // BUG-360: on<type> fires after explicit listeners at this target.
-            if (onFn && !event.cancelBubble && !event._stopImmediate) {
-                try { onFn.call(el, event); } catch(e) { _lumen_report_exception(e); }
-            }
-        }
-        if (event.cancelBubble || !event.bubbles) break;
-        var pid = _lumen_u2n(_lumen_get_parent(cur));
-        cur = (pid !== null && pid !== undefined) ? pid : null;
-    }
-    if (!event.cancelBubble) {
-        var dkey = String(_LUMEN_DOC_LISTENER_NID) + ':' + event.type;
-        var darr = _lumen_listeners[dkey];
-        if (darr) {
-            var dcopy = darr.slice();
-            for (var i = 0; i < dcopy.length; i++) {
-                if (event.cancelBubble) break;
-                try { dcopy[i].call(document, event); } catch(e) { _lumen_report_exception(e); }
-                if (event._stopImmediate) break;
-            }
-        }
-    }
-    return !event.defaultPrevented;
+    return _lumen_propagate(start_nid, event);
 }
 
 // Called from shell with actual viewport coordinates and modifier state.
@@ -3264,8 +3331,8 @@ ShadowRoot.prototype.removeChild = function(c) {
     }
     return c;
 };
-ShadowRoot.prototype.addEventListener = function(type, fn) { _lumen_add_listener(this.__nid__, type, fn); };
-ShadowRoot.prototype.removeEventListener = function(type, fn) { _lumen_rm_listener(this.__nid__, type, fn); };
+ShadowRoot.prototype.addEventListener = function(type, fn, options) { _lumen_add_listener(this.__nid__, type, fn, options); };
+ShadowRoot.prototype.removeEventListener = function(type, fn, options) { _lumen_rm_listener(this.__nid__, type, fn, options); };
 ShadowRoot.prototype.dispatchEvent = function(evt) {
     if (!evt) return true;
     evt.target = this; evt.currentTarget = this;
@@ -6701,8 +6768,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
         matches: function(sel) { var nid = this.__nid__;
             return _lumen_node_matches_selector(nid, _lumen_sel(sel));
         },
-        addEventListener:    function(type, fn) { var nid = this.__nid__; _lumen_add_listener(nid, type, fn); },
-        removeEventListener: function(type, fn) { var nid = this.__nid__; _lumen_rm_listener(nid, type, fn); },
+        addEventListener:    function(type, fn, options) { var nid = this.__nid__; _lumen_add_listener(nid, type, fn, options); },
+        removeEventListener: function(type, fn, options) { var nid = this.__nid__; _lumen_rm_listener(nid, type, fn, options); },
         // HTML LS §6.10 activation behavior: a non-cancelled, script-dispatched
         // `click` runs the same activation the native `click()` method runs
         // (form submit, link navigation, checkbox toggle, …). Native clicks
@@ -6711,7 +6778,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // MouseEvent('click', ...))` (BUG-439).
         dispatchEvent:       function(evt) { var nid = this.__nid__;
             if (!evt) return true;
-            evt.target = this; evt.currentTarget = this;
+            // `target`/`currentTarget` are set by the dispatch itself (BUG-873);
+            // assigning them here would only be overwritten a line later.
             var notCancelled = _lumen_dispatch(nid, evt);
             if (notCancelled && evt.isTrusted === false && evt.type === 'click') {
                 // Same activation-target walk as `click()` (BUG-837): the
@@ -10029,21 +10097,16 @@ var document = {
             });
             return;
         }
-        _lumen_add_listener(_LUMEN_DOC_LISTENER_NID, type, fn);
+        _lumen_add_listener(_LUMEN_DOC_LISTENER_NID, type, fn, opts);
     },
-    removeEventListener: function(type, fn) { _lumen_rm_listener(_LUMEN_DOC_LISTENER_NID, type, fn); },
-    // dispatchEvent: fire all document-level listeners for the given event
+    removeEventListener: function(type, fn, opts) { _lumen_rm_listener(_LUMEN_DOC_LISTENER_NID, type, fn, opts); },
+    // dispatchEvent: the document is a path entry like any other, so this runs
+    // the document's own listeners and then, for a bubbling event, `window`
+    // (BUG-873 — before, an event dispatched here reached neither `window` nor
+    // even `document.on<type>`, and its `target` stayed null).
     dispatchEvent: function(evt) {
         if (!evt || !evt.type) return false;
-        var key = String(_LUMEN_DOC_LISTENER_NID) + ':' + String(evt.type);
-        var arr = _lumen_listeners[key];
-        if (arr) {
-            var copy = arr.slice();
-            for (var i = 0; i < copy.length; i++) {
-                try { copy[i].call(document, evt); } catch(e) { _lumen_report_exception(e); }
-            }
-        }
-        return !evt.defaultPrevented;
+        return _lumen_propagate(_LUMEN_DOC_LISTENER_NID, evt);
     },
     // HTML §3.1.5 `Document.defaultView`: the WindowProxy of this document's
     // browsing context. The live document always has one, so this is `window`

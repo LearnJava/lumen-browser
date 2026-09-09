@@ -121,7 +121,7 @@ recoverable-ошибок нет вовсе.
 * Событийная система React **работоспособна**: настоящий MCP-клик поднимается
   до корня гидрации, React строит синтетическое событие и зовёт обработчик
   (`REACT synthetic onClick on #app`).
-* `dispatchEvent` до корня **не поднимается** — [BUG-873](../../bugs/BUG-873-OPEN.md).
+* `dispatchEvent` до корня **не поднимается** — [BUG-873](../../bugs/BUG-873-FIXED.md).
   Вызывается только слушатель самой кнопки, `onClick` React не срабатывает,
   счётчик остаётся `clicked 0`. React 18 слушает на корне, поэтому дефект
   отрезает от React-приложения весь программный ввод.
@@ -160,7 +160,7 @@ btn.textContent → "clicked 1"                      ← было "clicked 0"
 **Что осталось.** Фаза 2 по-прежнему не проходит:
 `btn.dispatchEvent(new MouseEvent('click', {bubbles: true}))` вызывает только
 слушателя самой кнопки, до `#app` не всплывает, счётчик остаётся `clicked 1`.
-Это [BUG-873](../../bugs/BUG-873-OPEN.md) — он не зависел от геометрии и не
+Это [BUG-873](../../bugs/BUG-873-FIXED.md) — он не зависел от геометрии и не
 снялся. Практическое следствие ровно одно: программный (не через hit-test)
 ввод в React-приложение по-прежнему не доходит.
 
@@ -168,3 +168,43 @@ btn.textContent → "clicked 1"                      ← было "clicked 0"
 клик попадает в кнопку. Его собственный репро тоже перестал воспроизводиться
 (измерено отдельно, дописано в карточку); остаток бага — «честный отказ вместо
 `success` при промахе» — с формами больше нечем запустить.
+
+## Замер 2026-09-10 (P6, E2E-4 итерация 5): программный ввод дошёл до React
+
+Снят [BUG-873](../../bugs/BUG-873-FIXED.md): три независимых обхода события
+заменены одним путём по DOM LS §2.9 (разбор — в карточке бага). Тот же прогон,
+без параметров:
+
+```bash
+python -m http.server 8762 --bind 127.0.0.1 --directory samples/e2e4-hydration &
+python samples/e2e4-hydration/drive.py http://127.0.0.1:8762/index.html 20
+python samples/e2e4-hydration/drive.py http://127.0.0.1:8762/doc.html 20
+```
+
+Фаза 2 (`dispatchEvent` мимо hit-test) проходит:
+
+```
+=== dispatchEvent click on #btn (мимо hit-test) ===
+{"result": "true", "success": true}
+btn.textContent -> "clicked 2"                     ← было "clicked 1", то есть счётчик вырос
+[probe] native click on #btn target=btn/BUTTON phase=2
+[probe] native click bubbled to #app target=btn/BUTTON phase=3
+[probe] REACT synthetic onClick on #app
+[probe] native click bubbled to #root target=btn/BUTTON phase=3
+[probe] native click bubbled to document target=btn/BUTTON phase=3
+```
+
+Обрати внимание на `phase=` — до правки `e.eventPhase` был `undefined` на
+каждом хопе; теперь он же и служит проверкой, что событие прошло именно
+фазами, а не одним плоским обходом.
+
+Ступень `doc.html` (`hydrateRoot(document, …)`) перегнана тем же прогоном —
+регрессии нет: `__reactContainer$…` на `document`, `__reactFiber$…` на `h1`,
+`DONE`, `onRecoverableError` не вызван ни разу.
+
+**Стенд исчерпан.** Все три вопроса, ради которых он ставился, отвечены
+замером: гидрация доходит до конца на обоих корнях (итерация 3), настоящий
+ввод доходит до React (итерация 4), программный — тоже (эта). Что осталось по
+дорожке — внешний стенд Keycloak + Next.js 14, он вне репозитория, и
+[BUG-1044](../../bugs/BUG-1044-OPEN.md), которому здесь больше нечем
+воспроизвестись.

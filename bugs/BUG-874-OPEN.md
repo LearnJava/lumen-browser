@@ -69,3 +69,29 @@ hidl-load rs=complete
 `document.dispatchEvent` (после явных слушателей, как в `_lumen_dispatch`).
 `in`-проверка чинится тем же: аксессор, определённый через
 `Object.defineProperty`, отвечает `true` на `in` без дополнительных мер.
+
+## Замер 2026-09-10 (P6, попутно с [BUG-873](BUG-873-FIXED.md)): первая треть снята
+
+Общий обход события §2.9 сделал `document` записью пути наравне с элементом,
+и его шаг вызывает `document['on' + type]` после явных слушателей. Живая
+проба (`--dump-layout`, `dev-release`) на минимальной странице:
+
+```
+doc.onresize fired                        ← было: молчание
+'onresize' in document = false            ← до присваивания, без изменений
+'onerror' in window   = false             ← без изменений
+'onreadystatechange' in document = false  ← без изменений
+```
+
+То есть закрыт только пункт «присваивание проходит, обработчик не
+вызывается никогда» для `document.dispatchEvent`. **Осталось открытым:**
+
+* `in`-детект — аксессоры curated-набора на `document`/`window`/`navigation`
+  так и не объявлены, а именно этой идиомой WPT определяет поддержку;
+* движковая доставка `readystatechange`: она идёт своим путём, а не через
+  `document.dispatchEvent`, так что `document.onreadystatechange` всё ещё
+  молчит там, где `addEventListener` срабатывает дважды;
+* форвард `<body onresize>` → `window.onresize` (HTML LS §8.1.7.3).
+
+Раздел «что дальше» выше остаётся в силе целиком — вторая его фраза (позвать
+`_lumen_get_on_handler` из `document.dispatchEvent`) уже не нужна.

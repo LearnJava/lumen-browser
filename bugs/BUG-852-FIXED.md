@@ -132,7 +132,7 @@ CSS Contain L2 §4.1 и на чём стоит `first-observation.html`: пер�
 работала — `_lumen_is_on_attr_name` принимает любой `on*`), а спрашивает
 `'oncontentvisibilityautostatechange' in el` именно про него; имя добавлено в
 `_LUMEN_EVENT_HANDLER_ATTRS`. И у события не было `target`: `_lumen_dispatch`
-его не ставит ([BUG-873](BUG-873-OPEN.md)), а страница, слушающая несколько
+его не ставит ([BUG-873](BUG-873-FIXED.md)), а страница, слушающая несколько
 элементов одним слушателем, различить их больше нечем — заполняется так же,
 как в `_lumen_details_fire_toggle` ([BUG-851](BUG-851-FIXED.md)).
 

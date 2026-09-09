@@ -142,7 +142,7 @@ run_report.py --all --root html/browsers/browsing-the-web/scroll-to-fragid
 `004.html` теперь падает на `assert_equals(e.target, window)` — у события,
 доставленного окну, `target` пуст. Это не тайминг, а общее свойство
 диспетчеризации в шиме, уже заявленное в
-[BUG-873](BUG-873-OPEN.md) («у события на `document` `e.target === null`»);
+[BUG-873](BUG-873-FIXED.md) («у события на `document` `e.target === null`»);
 отдельного бага не завожу.
 
 Не трогалось и остаётся верным для пробы: фрагментная навигация из скрипта

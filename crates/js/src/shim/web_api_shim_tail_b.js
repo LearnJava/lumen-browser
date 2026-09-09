@@ -3900,6 +3900,7 @@ window.reportError = reportError;
 // have been detached from the document and have zero live JS references.
 // Purges JS-side per-node caches so dead nodes don't retain memory through maps:
 //   - _lumen_listeners        keyed by 'nid:eventtype'
+//   - _lumen_capture_listeners same key shape, capture-phase half (BUG-873)
 //   - _lumen_on_handlers      keyed by 'nid:type' (BUG-360 on<type> IDL attributes)
 //   - _input_values           keyed by nid
 //   - _lumen_element_wrappers keyed by nid (BUG-291 identity cache)
@@ -3912,6 +3913,13 @@ function _lumen_gc_collect(nids) {
         for (var key in _lumen_listeners) {
             if (key.length > plen && key.substring(0, plen) === prefix) {
                 delete _lumen_listeners[key];
+            }
+        }
+        // BUG-873 added a second store with the same key shape; a dead node must
+        // not keep its capture listeners alive after losing its bubble ones.
+        for (var ckey in _lumen_capture_listeners) {
+            if (ckey.length > plen && ckey.substring(0, plen) === prefix) {
+                delete _lumen_capture_listeners[ckey];
             }
         }
         for (var okey in _lumen_on_handlers) {

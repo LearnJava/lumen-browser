@@ -5486,6 +5486,22 @@ var _domcontentloaded_win_listeners = [];
 var _visibilitychange_listeners = [];
 var _error_listeners = [];
 var _other_win_listeners = {};
+// Window listeners registered with the capture flag. Kept apart from the
+// buckets above because those are all bubble/at-target buckets and are read by
+// `window.dispatchEvent`, whereas these run in the capture phase of a dispatch
+// aimed at a node *below* the window — the first hop of `_lumen_event_path`
+// walked backwards (BUG-873). Read from `_lumen_invoke_at_window`.
+// Prototype-less: unlike `_lumen_listeners` this one is keyed by a bare event
+// type, so a page listening for `constructor`/`toString` would otherwise read a
+// `Object.prototype` member back as if it were a listener array.
+var _win_capture_listeners = Object.create(null);
+// The types `window.addEventListener` files in a dedicated bucket above rather
+// than in `_other_win_listeners`. All of them are dispatched at the window
+// itself, so a capture registration for one must stay in its own bucket.
+var _LUMEN_WIN_TARGETED_EVENTS = {
+    popstate: 1, pageshow: 1, pagehide: 1, message: 1,
+    load: 1, DOMContentLoaded: 1, visibilitychange: 1, error: 1,
+};
 
 var window = {
     history: history,
@@ -5577,8 +5593,19 @@ var window = {
     _lumen_dispatch_rich:          _lumen_dispatch_rich,
     _lumen_set_ime_target: _lumen_set_ime_target,
     _lumen_fire_page_lifecycle: _lumen_fire_page_lifecycle,
-    addEventListener: function(type, fn) {
+    addEventListener: function(type, fn, options) {
         if (typeof fn !== 'function') return;
+        // A capture listener on the window sees an event on its way DOWN to a
+        // node, which is a different bucket from everything below (BUG-873).
+        // Only for the generic types: the specially-bucketed ones below are all
+        // dispatched AT the window (`load`, `popstate`, …), and DOM §2.9 ignores
+        // the capture flag at the target — so routing those away from their
+        // bucket would silence them instead of re-ordering them.
+        if (_lumen_capture_flag(options) && _LUMEN_WIN_TARGETED_EVENTS[type] !== 1) {
+            if (!_win_capture_listeners[type]) _win_capture_listeners[type] = [];
+            _win_capture_listeners[type].push(fn);
+            return;
+        }
         if (type === 'popstate') {
             _popstate_listeners.push(fn);
         } else if (type === 'pageshow') {
@@ -5613,9 +5640,10 @@ var window = {
             _other_win_listeners[type].push(fn);
         }
     },
-    removeEventListener: function(type, fn) {
+    removeEventListener: function(type, fn, options) {
         var arr;
-        if (type === 'popstate') arr = _popstate_listeners;
+        if (_lumen_capture_flag(options) && _LUMEN_WIN_TARGETED_EVENTS[type] !== 1) arr = _win_capture_listeners[type];
+        else if (type === 'popstate') arr = _popstate_listeners;
         else if (type === 'pageshow') arr = _pageshow_listeners;
         else if (type === 'pagehide') arr = _pagehide_listeners;
         else if (type === 'message') arr = _message_listeners;
