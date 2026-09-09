@@ -94,7 +94,7 @@ is not a function`, and 2 of the 21 top-level TIMEOUTs (`focus-01.html`,
 2026-09-09: react-dom вызывает `getRootNode()` на контейнере приложения, а
 контейнер у App Router — сам `document`, поэтому гидрация падает с
 `Minified React error #446`. С добавленным `document.getRootNode` ошибка
-уходит, и открывается следующий блокер — [BUG-982](BUG-982-OPEN.md)
+уходит, и открывается следующий блокер — [BUG-982](BUG-982-FIXED.md)
 (теряются comment-узлы, на которых React 18 держит границы Suspense).
 То есть починка этого бага сама по себе гидрацию не включает, но без неё
 дальше не пройти.

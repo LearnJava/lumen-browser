@@ -57,8 +57,8 @@
 {
  "generated": "2026-09-09",
  "counts": {
-  "open": 386,
-  "fixed": 608,
+  "open": 385,
+  "fixed": 609,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -6942,7 +6942,7 @@
        "title": "Проба: TreeWalker и SHOW_COMMENT",
        "status": "ready",
        "size": "S",
-       "note": "Наблюдение живой пробы 2026-09-09: обход всего документа с `NodeFilter.SHOW_COMMENT` вернул 0 узлов. Это НЕ BUG-982: там узлы вообще не попадают в дерево при разборе фрагмента, здесь они в дереве, но не видны обходу. В BUGS.md про TreeWalker нет ни одной записи. Константы объявлены и маппятся (`crates/js/src/shim/web_api_shim_mid_b.js:5135` и 5146), так что дефект, если он есть, в другом месте. Сначала проба на минимальной странице, только потом классификация: подтвердится — заводить баг, не подтвердится — снять строку"
+       "note": "Наблюдение живой пробы 2026-09-09: обход всего документа с `NodeFilter.SHOW_COMMENT` вернул 0 узлов. Это НЕ BUG-982: там узлы вообще не попадают в дерево при разборе фрагмента, здесь они в дереве, но не видны обходу. В BUGS.md про TreeWalker нет ни одной записи. Константы объявлены и маппятся (`crates/js/src/shim/web_api_shim_mid_b.js:5135` и 5146), так что дефект, если он есть, в другом месте. Сначала проба на минимальной странице, только потом классификация: подтвердится — заводить баг, не подтвердится — снять строку  Замер 2026-09-09 (P6, попутно с BUG-982): на поддереве, собранном через `innerHTML`, обход `SHOW_COMMENT` теперь находит все комментарии (2 из 2) — то есть нулевой результат живой пробы объяснялся как минимум частично тем, что комментариев в дереве не было вовсе; остаточное подозрение сужается до обхода на уровне документа, пробу это не отменяет"
       },
       {
        "id": "E2E-3",
@@ -6954,9 +6954,9 @@
       {
        "id": "E2E-4",
        "title": "Гидрация React 18 и Next.js",
-       "status": "planned",
+       "status": "ready",
        "size": "L",
-       "note": "После снятия BUG-599 (закрыт 2026-09-09 P6) и BUG-982 ожидается следующий блокер: живая проба 2026-09-09 прошла ровно два шага — `Minified React error #446` (снимается добавлением `document.getRootNode`, BUG-599), затем `TypeError: Cannot read properties of null (reading 'data')` на маркерах Suspense `<!--$-->` (снимается BUG-982). Дорожка итеративная — «починил, перезапустил, следующая ошибка», объём заранее не оценивается; каждый найденный дефект заводится отдельным багом. Зависит от BUG-982 (BUG-599 снят 2026-09-09)"
+       "note": "После снятия BUG-599 (закрыт 2026-09-09 P6) и BUG-982 ожидается следующий блокер: живая проба 2026-09-09 прошла ровно два шага — `Minified React error #446` (снимается добавлением `document.getRootNode`, BUG-599), затем `TypeError: Cannot read properties of null (reading 'data')` на маркерах Suspense `<!--$-->` (снимается BUG-982). Дорожка итеративная — «починил, перезапустил, следующая ошибка», объём заранее не оценивается; каждый найденный дефект заводится отдельным багом. Оба блокера сняты 2026-09-09 (P6): BUG-599 и BUG-982; следующий шаг — перезапустить живую пробу и посмотреть, на чём она остановится теперь"
       }
      ]
     }
@@ -9487,13 +9487,6 @@
    "status": "open",
    "title": "Read/dispatch-цикл BiDi-соединения отвечает `Pong` на входящий `Ping` только внутри `read_text_frame`, а не пока выполняется `dispatch()` — команда `browsingCon…",
    "component": "bidi-server (`crates/bidi-server/src/transport.rs::handle`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-982": {
-   "status": "open",
-   "title": "`innerHTML`/`outerHTML`-сеттеры и `insertAdjacentHTML` теряют **ведущий** прогон пробелов фрагмента: `d.innerHTML=' abc'` даёт `textContent==='abc'`, `d.innerHT…",
-   "component": "js (`crates/js/src/v8_runtime/dom_helpers.rs::parse_html_fragment`) / engine (`crates/engine/html-parser`)",
    "date": null,
    "debtor": false
   },
@@ -13953,6 +13946,13 @@
    "status": "fixed",
    "title": "`Node.prototype.getRootNode()` missing entirely -- breaks `get_selector_array` in the vendored `tools/wptrunner/wptrunner/testdriver-extra.js`, the selector-bui…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js:9422` — рукописный литерал `document`; на обёртках узлов метод уже есть, там же 7444)",
+   "date": "2026-09-09",
+   "debtor": false
+  },
+  "BUG-982": {
+   "status": "fixed",
+   "title": "`innerHTML`/`outerHTML`-сеттеры и `insertAdjacentHTML` теряют **ведущий** прогон пробелов фрагмента: `d.innerHTML=' abc'` даёт `textContent==='abc'`, `d.innerHT…",
+   "component": "js (`crates/js/src/v8_runtime/dom_helpers.rs::parse_html_fragment`) / engine (`crates/engine/html-parser`)",
    "date": "2026-09-09",
    "debtor": false
   }
