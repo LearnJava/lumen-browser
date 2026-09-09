@@ -16,9 +16,12 @@ function Slow() {
 
 function App() {
   const [n, setN] = React.useState(0);
+  // Парный `onClick` к client.js: обработчики не сериализуются, разметка от
+  // него не меняется — держим оба дерева одинаковыми, чтобы правка одного
+  // файла не выглядела рассинхроном с другим.
   return e(
     'div',
-    { id: 'app' },
+    { id: 'app', onClick: () => {} },
     e('h1', null, 'hydration probe'),
     e(React.Suspense, { fallback: e('p', null, 'loading') }, e(Slow)),
     e('button', { id: 'btn', onClick: () => setN(n + 1) }, 'clicked ' + n),
