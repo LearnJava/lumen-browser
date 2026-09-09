@@ -65,3 +65,36 @@ may have absorbed this as unexplained noise.
 In this session's slice alone: 21 subtests directly show `current.getRootNode
 is not a function`, and 2 of the 21 top-level TIMEOUTs (`focus-01.html`,
 `focus-02.html`) are consistent with the same failure manifesting as a hang.
+
+---
+
+## Уточнение 2026-09-09 (P6, дорожка E2E)
+
+**Формулировка «missing entirely» устарела — баг починен частично и не закрыт.**
+Проверка на актуальном `main`:
+
+- `_LUMEN_WRAPPER_MEMBERS.getRootNode` реализован —
+  `crates/js/src/shim/web_api_shim_mid.js:7444` (обходит родителей до корня,
+  отдаёт `document` для присоединённого узла);
+- у фрагментов свой `getRootNode` — там же, 2646, внутри
+  `_lumen_make_document_fragment`;
+- **дырка ровно одна:** рукописный литерал `document`
+  (`web_api_shim_mid.js:9422`) не наследует `Node.prototype`, и `getRootNode`
+  в него не скопирован.
+
+Это тот же класс, что [BUG-327](BUG-327-FIXED.md) (`hasChildNodes`) и
+[BUG-732](BUG-732-FIXED.md) (`compareDocumentPosition`): оба чинились
+копированием метода в этот же литерал, и комментарий рядом с ними прямо
+объясняет, почему `Node.prototype` сюда не достаёт. Остаток бага — одна
+строка плюс регрессионный тест.
+
+## Подтверждение на реальном приложении
+
+Живая проба против внешнего стенда (Keycloak + Next.js 14 App Router),
+2026-09-09: react-dom вызывает `getRootNode()` на контейнере приложения, а
+контейнер у App Router — сам `document`, поэтому гидрация падает с
+`Minified React error #446`. С добавленным `document.getRootNode` ошибка
+уходит, и открывается следующий блокер — [BUG-982](BUG-982-OPEN.md)
+(теряются comment-узлы, на которых React 18 держит границы Suspense).
+То есть починка этого бага сама по себе гидрацию не включает, но без неё
+дальше не пройти.

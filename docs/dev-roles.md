@@ -1,6 +1,7 @@
 # Developer roles and workflows
 
-Five parallel developers (5 Claude Code sessions, each in its own `git worktree`). Each owns a distinct domain.
+Six parallel developers (6 Claude Code sessions, each in its own `git worktree`). P1–P5 each own a
+distinct domain and pick their own next task; P6 is the user-driven urgent lane and owns no domain.
 
 Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `font` `encoding` `image` | `ipc` `network` `storage` `knowledge` `bench`
 
@@ -11,6 +12,7 @@ Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `fo
 | **P3** | **Bug fixes ONLY**: BUGS.md OPEN items, graphic test regressions. **Skip a row marked `OPEN (ДОРАБОТКА → <task>)`** — that record describes functionality that was never implemented, not a defect in implemented code, and is owned by the named `ROADMAP.md` task instead (2026-08-28; see BUGS.md's own legend for why the file is not renamed). | All crates (read-only except bug fixes) |
 | **P4** | **CSS properties ONLY**: parsing, ComputedStyle, cascade, end-to-end wiring | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) |
 | **P5** | **Code health ONLY**: audit, workspace-clippy, stub/branch/docs/dep sweeps, safe mechanical cleanup | All crates (read-only except trivial clippy fixes in own crate + branch/worktree cleanup) |
+| **P6** | **Urgent lane, user-driven** (added 2026-09-09): whatever the user assigns directly, plus field blockers that cannot wait for the owning role's queue. The only role whose queue is filled by decision rather than by domain, so `STATUS-P6.md` mixes sources (`ROADMAP.md:NN`, `BUGS.md:NN`, code `file:line`). Does **not** self-select work: an empty queue means idle — ask the user, never pull a task from another role's list. | All crates, but one item at a time and only the assigned one |
 
 ---
 
@@ -100,6 +102,33 @@ needs (see the exception under §Task tracking schema).
 
 ---
 
+## Urgent lane: P6 only
+
+**P6 exists so that an urgent item does not have to wait behind a domain queue.** It is the only
+role the user drives directly; every other role picks its own next task off its own list.
+
+- **How work enters `STATUS-P6.md`:** the user assigns it, or a field probe finds a blocker that
+  closes off a whole scenario. Nothing else. P6 never promotes a task from `ROADMAP.md`/`BUGS.md`
+  on its own initiative — that would silently take it away from the role that owns it.
+- **Mixed sources are deliberate.** P1/P2 read `ROADMAP.md`, P3 reads `BUGS.md`, P4 reads
+  `CSS-SPECS.md`; P6's lane is defined by urgency, not by domain, so its pointer lines legitimately
+  mix all three plus code `file:line`. This is the second exception to the one-source rule under
+  §Task tracking schema (the first is `STATUS-P5.md`'s format).
+- **Ownership hand-off is explicit, not implied.** When an item moves into P6's queue, its pointer
+  line is **deleted** from the previous role's `STATUS-PN.md` in the same commit. Two queues naming
+  one row is the parallel-session collision this repo has already paid for repeatedly.
+- **P6 overrides the role fences (`bugs → P3`, `CSS → P4`) only for the item it was handed** — and
+  not for anything adjacent to it. Found a second defect while working? File it the normal way
+  (`OPEN` row in `BUGS.md`) and keep going, exactly like P1/P2/P4.
+- **Branch prefix:** `p6-<topic>`, or `p6-bug-<id>` when the item is a `BUGS.md` row.
+  Pool slot: `p6-work`. Worktree mandatory, same as P1–P5.
+- **Not in `scripts/orchestrator.py`'s rotation, by design** — that script schedules the five
+  self-directed roles (its `["P1"…"P5"]` lists are hardcoded in ~14 places). P6 is launched from
+  `.claude-manager` (session `S6`) or by hand, because a lane fed by user decisions has nothing to
+  schedule when the user is not there.
+
+---
+
 ## Collaboration rules
 
 - **Crate ownership.** P1 stays out of `lumen-paint` without P2 agreement; P3 stays out of layout without P1 agreement. Reduces conflicts, doesn't block review.
@@ -125,10 +154,11 @@ ROADMAP.md (one line per task, status ≠ done)   ← master task list for P1/P2
    ├─ STATUS-PN.md: bare pointer lines `<source>:NN`, one per open task, priority top→bottom.
    │     <source> = the role's master list — ROADMAP.md (P1/P2) · BUGS.md (P3) · CSS-SPECS.md (P4);
    │     a code `file:line` (e.g. crates/.../ruby.rs:76) is allowed when the task is anchored in a
-   │     `// CSS:` / `// BUG-NNN` handoff rather than a list row.
+   │     `// CSS:` / `// BUG-NNN` handoff rather than a list row. STATUS-P6.md mixes all of them on
+   │     purpose — that lane is defined by urgency, not by domain (see §Urgent lane).
    │     NOTHING else — no headers, tables, descriptions, completed tasks, In progress/Recent.
    │     (history lives in git log; readiness in ROADMAP status / CAPABILITIES.md / BUGS.md)
-   │     ONE exception, and it is load-bearing: STATUS-P5.md (see below).
+   │     ONE format exception, and it is load-bearing: STATUS-P5.md (see below).
    │
    └─ docs/tasks/<id>.md   ← detailed brief, ONLY for an unimplemented task
 ```
