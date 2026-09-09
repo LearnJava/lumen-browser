@@ -21,8 +21,33 @@ pub fn ensure_v8_platform() {
     V8_INIT.call_once(|| {
         let platform = v8::new_default_platform(0, false).make_shared();
         v8::V8::initialize_platform(platform);
+        apply_v8_profile_flag();
         v8::V8::initialize();
     });
+}
+
+/// Turns on V8's own `--prof` sampler when `LUMEN_V8_PROFILE` is set (THREAD-3
+/// срез 4, BUG-1034). `rusty_v8` binds no `CpuProfiler::Start/StopProfiling` —
+/// only `CollectSample`/`UseDetailedSourcePositionsForProfiling` — so this flag
+/// pass-through is the only way to get V8-level (JIT-code-aware) sampling
+/// without forking the vendored `v8` crate; a native stack sampler (`cdb`,
+/// `docs/perf-method.md`) cannot decode JIT-compiled JS at all, only its own
+/// entry trampoline. Flags must be set before `v8::V8::initialize()` — setting
+/// them after is a documented no-op. The log path is fixed to `v8.log` in the
+/// process's current directory unless `LUMEN_V8_PROFILE` names a path itself;
+/// there is no `%pid`/timestamp templating here, so two overlapping runs from
+/// the same directory clobber each other's log — acceptable for a manual
+/// single-hang investigation, not for automation.
+fn apply_v8_profile_flag() {
+    let Ok(value) = std::env::var("LUMEN_V8_PROFILE") else {
+        return;
+    };
+    let logfile = if value.is_empty() || value == "1" {
+        "v8.log"
+    } else {
+        value.as_str()
+    };
+    v8::V8::set_flags_from_string(&format!("--prof --logfile={logfile}"));
 }
 
 // ── Window named properties (HTML LS §7.3.3) ──────────────────────────────────
