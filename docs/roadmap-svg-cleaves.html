@@ -57,12 +57,12 @@
 {
  "generated": "2026-09-09",
  "counts": {
-  "open": 383,
+  "open": 386,
   "fixed": 607,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 990,
+ "total_bugs": 993,
  "phases": [
   {
    "id": "P0",
@@ -6933,7 +6933,7 @@
       {
        "id": "E2E-1",
        "title": "Отправка POST-форм",
-       "status": "ready",
+       "status": "done",
        "size": "M",
        "note": "ДОРАБОТКА, не баг: функциональность никогда не была реализована. `crates/shell/src/lumen/form_submit.rs:129` собирает тело формы и печатает его в stderr вместо отправки (`// POST: emit event; real network send is P3 task`); GET-формы рядом работают через `navigate_to`. Следствие — вход на любой сайт с POST-формой логина невозможен. Сеть готова целиком, переделывать её не нужно: `RequestBody{method,content_type,bytes}` (`crates/network/src/lib.rs:536`), редиректы по Fetch §4.4 шаг 11 (`lib.rs:2625` — 307/308 сохраняют метод и тело, 303 всегда GET, 301/302 GET только для POST), `encode_form_fields_multipart` (`crates/engine/dom/src/forms.rs:951`), cookie jar уже проброшен в навигационный клиент (`crates/shell/src/page_source.rs:147`). Работа только в оболочке: (1) `PageSource::Url` не несёт метод и тело (`crates/shell/src/page_source.rs:17`, заденет ~10 мест match); (2) `HttpClient::fetch_page` жёстко передаёт `None` телом (`lib.rs:3760`); (3) ветка `_ =>` в `form_submit.rs`; (4) семантика истории — reload и back на результат POST не должны молча ре-постить, тело не должно попадать в session_persist и bfcache. Пункт 4 требует решения пользователя: показывать подтверждение или просто не повторять запрос"
       },
@@ -7687,7 +7687,7 @@
   "BUG-599": {
    "status": "open",
    "title": "`Node.prototype.getRootNode()` missing entirely -- breaks `get_selector_array` in the vendored `tools/wptrunner/wptrunner/testdriver-extra.js`, the selector-bui…",
-   "component": "js (`crates/js/src/dom.rs`, `Node.prototype` shared-method block -- no `getRootNode`)",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js:9422` — рукописный литерал `document`; на обёртках узлов метод уже есть, там же 7444)",
    "date": null,
    "debtor": false
   },
@@ -9690,6 +9690,27 @@
    "status": "open",
    "title": "`web-animations/timing-model/timelines/update-and-send-events.html`: 6 прогонов подряд дали 3 разных комбинации для пары подтестов «Fires cancel/finish event be…",
    "component": "не локализовано — диспетчеризация Web Animations `finish`/`cancel` относительно очереди `requestAnimationFrame`, вероятно `crates/js/src/shim/*.js`",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1042": {
+   "status": "open",
+   "title": "`enctype=\"text/plain\"` формы кодируется как `application/x-www-form-urlencoded`: `enctype_of_form` значение распознаёт и возвращает (`forms.rs:989`), но кодиров…",
+   "component": "shell (`crates/shell/src/lumen/form_submit.rs`, кодировка тела формы; `crates/shell/src/forms.rs` — нет кодировщика)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1043": {
+   "status": "open",
+   "title": "`python graphic_tests/dump_golden.py` красный на чистом `main`: 4 несовпадения из 12 (`samples/page.html` и `graphic_tests/65-flex-align-content.html`, оба дамп…",
+   "component": "graphic_tests эталоны (`graphic_tests/dump-golden/`) либо метрики строки (`crates/engine/font`/`layout`) — не локализовано",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1044": {
+   "status": "open",
+   "title": "MCP `click` с целью-селектором по `<button type=\"submit\">` без собственного блочного бокса отвечает `success: true`, но попадает в родительский `<form>`: `class…",
+   "component": "автоматизация живого окна (`resolve_automation_target` / hit-test, `crates/shell/src/app/about_to_wait.rs::AutomationCommand::Click`)",
    "date": null,
    "debtor": false
   },
@@ -14119,6 +14140,9 @@
   "graphic_tests tooling (`graphic_tests/run.py::_load_previous`)": [
    "BUG-1039"
   ],
+  "graphic_tests эталоны (`graphic_tests/dump-golden/`) либо метрики строки (`crates/engine/font`/`layout`) — не локализовано": [
+   "BUG-1043"
+  ],
   "html-parser": [
    "BUG-021"
   ],
@@ -15200,6 +15224,9 @@
   "shell (`crates/shell/src/lumen/click.rs`, ветка `FormClickAction::ToggleRadio` → `crates/shell/src/forms.rs::toggle_checkbox`)": [
    "BUG-927"
   ],
+  "shell (`crates/shell/src/lumen/form_submit.rs`, кодировка тела формы; `crates/shell/src/forms.rs` — нет кодировщика)": [
+   "BUG-1042"
+  ],
   "shell (`crates/shell/src/lumen/navigation.rs::navigate_to`/`navigate_to_forced`, `crates/shell/src/app/about_to_wait.rs`), js (`crates/js/src/navigation_api.rs`)": [
    "BUG-1031"
   ],
@@ -15351,6 +15378,9 @@
   ],
   "wptrunner-интеграция (`browsers/lumen.py` `env_options`)": [
    "BUG-301"
+  ],
+  "автоматизация живого окна (`resolve_automation_target` / hit-test, `crates/shell/src/app/about_to_wait.rs::AutomationCommand::Click`)": [
+   "BUG-1044"
   ],
   "не изолирован (layout / paint / js)": [
    "BUG-733"
