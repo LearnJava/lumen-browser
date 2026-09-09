@@ -623,11 +623,14 @@ pub(crate) fn meter_gauge_color(value: f32, _min: f32, _max: f32, low: f32, high
 fn emit_select_indicator(b: &LayoutBox, selected_text: &str, suppress_primitive: bool, out: &mut Vec<DisplayCommand>) {
     let s = &b.style;
     let fg = s.color;
-    let font_size = s.font_size.clamp(10.0, 14.0);
-    let pad = 4.0;
+    // Shared with layout: `form_control_fit_content_width` sizes the control
+    // from these very numbers (BUG-926), so a local copy here would let the
+    // measured box and the painted widget drift apart.
+    let font_size = lumen_layout::select_widget_font_size(s.font_size);
+    let pad = lumen_layout::SELECT_WIDGET_PAD_PX;
     // Arrow column width (enough for "▼" glyph). When the native arrow is
     // suppressed the label reclaims that column.
-    let arrow_w = font_size + pad * 2.0;
+    let arrow_w = lumen_layout::select_widget_arrow_width(s.font_size);
     let reserved = if suppress_primitive { 0.0 } else { arrow_w };
     let text_w = (b.rect.width - reserved - pad * 2.0).max(1.0);
 
