@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>document Node API</title></head>
+<body>
+<div id="x">text</div>
+<script>
+var members = ['appendChild','removeChild','insertBefore','replaceChild','contains','cloneNode',
+  'hasChildNodes','normalize','compareDocumentPosition','getRootNode','isEqualNode','isSameNode',
+  'addEventListener','removeEventListener','dispatchEvent','childNodes','firstChild','lastChild',
+  'parentNode','nodeType','nodeName','ownerDocument','textContent','__nid__'];
+members.forEach(function (m) {
+  console.log('[doc] ' + m + ' = ' + (typeof document[m]) + (typeof document[m] === 'object' ? ' (' + document[m] + ')' : ''));
+});
+console.log('[doc] documentElement.removeChild = ' + (typeof document.documentElement.removeChild));
+console.log('[doc] body.removeChild = ' + (typeof document.body.removeChild));
+console.log('[doc] Node in globalThis = ' + (typeof Node));
+console.log('[doc] document instanceof Node = ' + (typeof Node === 'function' ? (document instanceof Node) : 'n/a'));
+</script>
+</body>
+</html>
