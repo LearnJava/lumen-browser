@@ -257,6 +257,24 @@ fn on_handler_at_an_ancestor_fires_on_a_script_dispatch() {
 }
 
 #[test]
+fn document_level_on_handler_fires_like_a_listener() {
+    // Half of BUG-874: `document.on<type> = fn` used to stick as a property and
+    // never be called, because the document's dispatch read only its listener
+    // registry. It is a path entry like any other now. (The other halves of
+    // that bug — `'onX' in document`/`in window` answering false before any
+    // assignment, and engine-delivered `readystatechange` — are untouched.)
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(&format!(
+        "{NEST} \
+         document.onresize = mark('doc-onresize'); \
+         document.addEventListener('resize', mark('doc-listener')); \
+         document.dispatchEvent(new Event('resize'));"
+    ))
+    .unwrap();
+    assert_eq!(log_of(&rt), "doc-listener,doc-onresize");
+}
+
+#[test]
 fn composed_path_lists_the_whole_chain_and_is_empty_outside_dispatch() {
     // BUG-577: `composedPath()` did not exist at all. It is the same path this
     // dispatch already builds, which is why it lands here and not separately.

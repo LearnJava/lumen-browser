@@ -22,7 +22,7 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 
 ## Events and dispatch
 
-- **An event dispatched from script reaches only the node it was dispatched on** — no ancestor, no `document`, no `window`, in either phase; a native click reaches `document` but not `window`; `event.target` is unset and `eventPhase` is `undefined` ([BUG-873](../bugs/BUG-873-OPEN.md)). Also: `document.on<type> = fn` sticks as a property and is never invoked, and `'onX' in Y` answers `false` although assignment works ([BUG-874](../bugs/BUG-874-OPEN.md)). Listen with `addEventListener` on the target itself; never feature-detect with `'onX' in Y`.
+- **`'onX' in Y` answers `false` on `window`/`document`/`navigation`** although assigning `Y.onX = fn` sticks, and engine-delivered `readystatechange` never reaches `document.onreadystatechange` ([BUG-874](../bugs/BUG-874-OPEN.md)). Never feature-detect with `'onX' in Y`. Event propagation itself is no longer a gap — the full capture/target/bubble path with `window` as the last hop landed 2026-09-10 ([BUG-873](../bugs/BUG-873-FIXED.md)), and so did `composedPath()` ([BUG-577](../bugs/BUG-577-FIXED.md)); what a probe should still not expect is shadow-tree retargeting, which is unmodelled, so a path crossing a shadow boundary lists the real nodes.
 - **`window.postMessage` accepts only the legacy string `targetOrigin`** — `'*'`, the exact origin and `'/'` work; both dictionary forms, the one-argument form and a trailing slash drop the message silently ([BUG-717](../bugs/BUG-717-OPEN.md)). The cheapest way to sequence a probe page therefore needs the literal `'*'`.
 
 ## Navigation, frames and documents

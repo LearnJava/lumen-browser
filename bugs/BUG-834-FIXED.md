@@ -164,6 +164,6 @@ window`).
   [BUG-887](BUG-887-OPEN.md).
 - Отмена навигации по `beforeunload` (нужен диалог, см. выше).
 - `unload` не несёт «legacy target override flag» — `event.target` пуст,
-  как и у всех оконных событий ([BUG-873](BUG-873-OPEN.md)).
+  как и у всех оконных событий ([BUG-873](BUG-873-FIXED.md)).
 - WPT-наблюдаемость по-прежнему за [BUG-480](BUG-480-OPEN.md): все восемь
   остаточных id гоняют навигацию внутри `<iframe>`.

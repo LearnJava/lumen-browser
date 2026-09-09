@@ -2026,6 +2026,22 @@ the time — read dates.
 
 ## Invariants
 
+- **There is exactly ONE event dispatch, `_lumen_propagate`, and every entry point is a wrapper over it**
+  ([BUG-873](../bugs/BUG-873-FIXED.md), 2026-09-10). `_lumen_dispatch` (script), `_lumen_dispatch_bubble`
+  and `_lumen_dispatch_rich` (native input) all call it, so a fix to phases, ordering or `window` delivery
+  lands once. Three traps for anyone touching it. **The document's listeners live under the sentinel
+  `_LUMEN_DOC_LISTENER_NID = -1`, not under its arena id `_lumen_root_nid`** — `_lumen_event_path` swaps
+  the two when the walk reaches the root, and a path built by hand that forgets this finds an empty
+  registry. **`window` keeps its own per-type buckets** (`_other_win_listeners` & friends in
+  `web_api_shim_mid_b.js`), which is why the window hop delegates to `window.dispatchEvent` instead of
+  reading `_lumen_listeners` — `load` and the 5-argument `onerror` convention live only there. And
+  **capture listeners are a second table** (`_lumen_capture_listeners`, `_win_capture_listeners`) with the
+  same `nid:type` key shape: a new reader of `_lumen_listeners` sees only half the registrations, and
+  `_lumen_gc_collect` has to purge both. The one deliberate hold-out is `_lumen_dispatch_focus_event`
+  (`web_api_shim_tail_b.js`), which keeps its own walk because it reads `on<type>` off the wrapper property
+  rather than out of `_lumen_on_handlers` — the difference is real for names outside
+  `_LUMEN_EVENT_HANDLER_ATTRS` (`onfocusin`/`onfocusout`).
+
 - **The `lumen-v8` thread carries `lumen_core::DEEP_TREE_STACK_BYTES`, and it is load-bearing** ([BUG-1027](../bugs/BUG-1027-FIXED.md), 2026-09-07). `dom_helpers::import_node` recurses once per node of the fragment an `innerHTML`/`insertAdjacentHTML` assignment brings in (per-`Document` arenas mean a `NodeId` from the throwaway parse cannot be reused, so every node is recreated), and `serialize_node` recurses the same way on the way out. On the default 2 MiB the thread — and with it the whole process — died at a few hundred levels of nesting, with no panic and no backtrace: from outside a WPT run it looked like `[bidi] frame error: io: failed to fill whole buffer`. Dropping the `stack_size` from `V8JsRuntime::new` brings that back. The recursion is fixed as [BUG-1028](../bugs/BUG-1028-FIXED.md) — both functions now walk an explicit heap stack.
 
 - **DOM shim: the shim's text is in `crates/js/src/shim/*.js`, not in `dom.rs`** (SPLIT-JS3, 2026-08-28).
