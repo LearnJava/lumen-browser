@@ -221,3 +221,6 @@ mod v8_bug504_scroll_flush;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug975_scroll_request_sync;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug599_get_root_node;

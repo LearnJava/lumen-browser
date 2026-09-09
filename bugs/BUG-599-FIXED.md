@@ -1,6 +1,6 @@
 # BUG-599: `Node.prototype.getRootNode()` missing entirely — breaks `get_selector_array` in the vendored wptrunner testdriver shim, silently masking/hanging every `test_driver_internal.*` action
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-09
 **Компонент:** js (`crates/js/src/dom.rs`, `Node.prototype` shared-method block — same location as `hasChildNodes`, see [BUG-574](BUG-574-OPEN.md) which already predicted this exact sibling gap for `Node.prototype.contains()`)
 **Найден:** P2, WPT-VENDOR-html-interaction, 2026-08-04
 
@@ -98,3 +98,36 @@ is not a function`, and 2 of the 21 top-level TIMEOUTs (`focus-01.html`,
 (теряются comment-узлы, на которых React 18 держит границы Suspense).
 То есть починка этого бага сама по себе гидрацию не включает, но без неё
 дальше не пройти.
+
+---
+
+## Починка 2026-09-09 (P6, дорожка E2E)
+
+`getRootNode: function() { return this; }` добавлен в литерал `document`
+(`crates/js/src/shim/web_api_shim_mid.js`, рядом с `contains` и
+`compareDocumentPosition` — теми же двумя методами, что чинились так же по
+[BUG-327](BUG-327-FIXED.md)/[BUG-732](BUG-732-FIXED.md)). Документ — корень
+собственного дерева и никогда не лежит внутри теневого, поэтому опция
+`composed` ответ изменить не может.
+
+Дырка подтверждена статически до правки: `getRootNode` в шиме существовал
+только у литерала `DocumentFragment` (:2646) и в `_LUMEN_WRAPPER_MEMBERS`
+(:7444), а в литерал `document` ничто члены обёрток не копирует — то есть
+`typeof document.getRootNode` было `'undefined'`.
+
+Тесты: `crates/js/src/dom/tests/v8_bug599_get_root_node.rs`, 3 штуки —
+`document.getRootNode() === document` (в т.ч. с `{composed:true}` и
+`undefined` аргументом), совпадение корня присоединённого узла с `document` и
+с его же `ownerDocument` по **идентичности** (`testdriver-extra.js:144`
+сравнивает их через `==`), и отсоединённое поддерево, которое коренится на
+своей вершине, а не на документе — последний отличает настоящий обход от
+константы.
+
+**Что этой правкой НЕ закрыто и вынесено в
+[BUG-1045](BUG-1045-OPEN.md):** ветка «корень = shadow-дерево». Пробой на том
+же рантайме: `typeof sr.getRootNode === 'undefined'`, а узел внутри теневого
+дерева получает `Element`-обёртку с `host === undefined` вместо `ShadowRoot`,
+поэтому переход `current.getRootNode().host` (`testdriver-extra.js:163`)
+обрывается молча. Это не однострочник — `attach_shadow` кладёт shadow-корень
+без родителя, и отображения nid → host наружу нет. Туда же перенесён пункт,
+который [BUG-676](BUG-676-FIXED.md) сознательно отложил «в BUG-574/BUG-599».
