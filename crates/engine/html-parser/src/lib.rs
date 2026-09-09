@@ -30,4 +30,4 @@ pub use srcset::{
     parse_srcset, pick_best_for_density, pick_best_for_width,
 };
 pub use tokenizer::{Token, Tokenizer};
-pub use tree_builder::{IncrementalTreeBuilder, parse};
+pub use tree_builder::{IncrementalTreeBuilder, parse, parse_fragment};

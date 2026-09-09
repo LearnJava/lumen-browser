@@ -357,8 +357,9 @@ pub(super) fn import_node(
             lumen_dom::NodeData::Text(s) => (dst.create_text(s.clone()), true),
             lumen_dom::NodeData::Comment(s) => (dst.create_comment(s.clone()), true),
             // Doctype/Document/ShadowRoot/DocumentFragment cannot occur among a
-            // parsed fragment's `<body>` children — fall back to an inert, unused
-            // fragment node rather than panicking on an unreachable shape.
+            // parsed fragment's top-level children (`in body` ignores a DOCTYPE
+            // token) — fall back to an inert, unused fragment node rather than
+            // panicking on an unreachable shape.
             _ => (dst.create_fragment(), false),
         }
     }
@@ -385,14 +386,18 @@ pub(super) fn import_node(
 }
 
 /// Parses `html` as an HTML fragment and imports the result into `doc`, returning
-/// the new, still-detached top-level node ids (the parsed document's `<body>`'s
-/// direct children — `lumen_html_parser::parse` only exposes a full-document
-/// parser, HTML LS §13.4 fragment-context tree-construction adjustments are not
-/// implemented, matching the existing `Foreign content is not supported` gap noted
-/// in `tree_builder.rs`, BUG-685).
+/// the new, still-detached top-level node ids.
+///
+/// BUG-982: goes through `lumen_html_parser::parse_fragment` (HTML LS §13.4
+/// entry point), not the document parser plus «take `<body>`'s children». The
+/// document parser starts in `initial`, where §13.2.6.4.1–4 *must* drop a
+/// leading whitespace run and *must* put a leading comment on the `Document`
+/// itself — both then fell outside `<body>` and were silently lost, which is
+/// what broke React 18's `<!--$-->` Suspense markers. Everything else about the
+/// two paths is unchanged: `parse_fragment` still parses at body level, so the
+/// context element (a bare `<td>`, an SVG subtree) remains BUG-685's gap.
 pub(super) fn parse_html_fragment(doc: &mut lumen_dom::Document, html: &str) -> Vec<lumen_dom::NodeId> {
-    let temp = lumen_html_parser::parse(html);
-    let root = temp.body().unwrap_or_else(|| temp.root());
+    let (temp, root) = lumen_html_parser::parse_fragment(html);
     temp.get(root)
         .children
         .clone()
@@ -482,5 +487,35 @@ mod tests {
 
         assert_eq!(out.matches("<div>").count(), DEEP_CHAIN_DEPTH);
         assert_eq!(out.matches("</div>").count(), DEEP_CHAIN_DEPTH);
+    }
+
+    /// Верхний уровень результата `parse_html_fragment` в компактной записи —
+    /// проверяем не только форму дерева парсера, но и то, что перенос в живой
+    /// документ ничего не роняет по дороге.
+    fn imported(html: &str) -> Vec<String> {
+        let mut doc = lumen_dom::Document::new();
+        let ids = parse_html_fragment(&mut doc, html);
+        ids.into_iter()
+            .map(|id| match &doc.get(id).data {
+                lumen_dom::NodeData::Element { name, .. } => format!("<{}>", name.local),
+                lumen_dom::NodeData::Text(s) => format!("#text{s:?}"),
+                lumen_dom::NodeData::Comment(s) => format!("#comment{s:?}"),
+                other => format!("{other:?}"),
+            })
+            .collect()
+    }
+
+    // BUG-982: ведущий пробел и ведущий комментарий фрагмента доходят до
+    // живого документа. Раньше `parse_html_fragment` брал детей `<body>`
+    // документного разбора, а туда ни тот ни другой узел не попадал:
+    // whitespace-only токен в `initial` игнорируется, comment-токен уходит
+    // на сам `Document`. На втором держалась гидрация React 18 — его маркеры
+    // Suspense `<!--$-->` стоят в начале фрагмента.
+    #[test]
+    fn parse_html_fragment_keeps_leading_whitespace_and_comments() {
+        assert_eq!(imported(" abc"), ["#text\" abc\""]);
+        assert_eq!(imported(" "), ["#text\" \""]);
+        assert_eq!(imported("<!--$-->x"), ["#comment\"$\"", "#text\"x\""]);
+        assert_eq!(imported("<div>d</div>"), ["<div>"]);
     }
 }

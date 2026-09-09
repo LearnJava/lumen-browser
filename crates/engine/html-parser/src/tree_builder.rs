@@ -52,6 +52,30 @@ pub fn parse(input: &str) -> Document {
     builder.finish()
 }
 
+/// Парсит `input` как **фрагмент** (HTML LS §13.4 «Parsing HTML fragments»)
+/// и возвращает временный [`Document`] вместе с корневым `<html>`-узлом
+/// фрагмента: дети этого узла — результат разбора (шаг 14 алгоритма).
+///
+/// Отличается от [`parse`] точкой входа: не `initial`, а сразу `in body`
+/// поверх уже открытого синтетического `<html>` (шаги 4 и 6). Именно здесь
+/// проходит граница между документом и фрагментом — §13.2.6.4.1–4 обязаны
+/// *игнорировать* ведущий whitespace и уносить comment-токены в сам
+/// `Document` (мимо `<body>`), а фрагмент обязан сохранить и то и другое
+/// (BUG-982: `d.innerHTML=' abc'` терял пробел, `'<!--$-->x'` — комментарий).
+///
+/// Не реализовано из §13.4 — числится за `bugs/BUG-685-OPEN.md` вместе с
+/// foreign content: выбор insertion mode и состояния токенизатора по
+/// **реальному** контекстному элементу (шаги 3 и 6 — здесь контекст всегда
+/// «как `<body>`», что и нужно всем нынешним вызовам:
+/// `innerHTML`/`outerHTML`/`insertAdjacentHTML`), а также form pointer (шаг 7).
+pub fn parse_fragment(input: &str) -> (Document, NodeId) {
+    let (mut builder, root) = IncrementalTreeBuilder::new_fragment();
+    for token in Tokenizer::new(input) {
+        builder.apply_token(token);
+    }
+    (builder.finish(), root)
+}
+
 /// Все 23 insertion modes из §13.2.4.1. Foreign content (MathML, SVG) не
 /// поддерживается в Phase 0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,6 +184,13 @@ pub struct IncrementalTreeBuilder {
     /// Content is parsed into the shadow root instead of a `DocumentFragment`.
     /// On `</template>`, the template element itself is detached from the DOM.
     declarative_shadow_templates: HashSet<NodeId>,
+    /// Построен ли builder алгоритмом §13.4 fragment parsing
+    /// ([`new_fragment`][Self::new_fragment]). Меняет ровно два места, где
+    /// документный разбор обязан достроить каркас страницы, а фрагментный —
+    /// обязан этого не делать: «reset the insertion mode appropriately»
+    /// (§13.2.4.1 шаг 4, контекстный элемент вместо корня) и EOF-догон
+    /// html/head/body.
+    is_fragment: bool,
 }
 
 impl IncrementalTreeBuilder {
@@ -180,7 +211,28 @@ impl IncrementalTreeBuilder {
             template_mode_stack: Vec::new(),
             scripting_enabled: true,
             declarative_shadow_templates: HashSet::new(),
+            is_fragment: false,
         }
+    }
+
+    /// Builder для §13.4 fragment parsing: синтетический `<html>` уже создан и
+    /// открыт (шаг 4), insertion mode — сразу `in body` (шаг 6 для контекста
+    /// уровня `<body>`). Возвращает builder и id того самого `<html>`: его
+    /// дети и есть разобранный фрагмент (шаг 14).
+    ///
+    /// Стек open elements непустой намеренно — весь `in body` (scope-запросы,
+    /// adoption agency, `append_to_current_open`) написан в расчёте на корень
+    /// под ногами; пустой стек дал бы вставку в `#document` и молча иное
+    /// поведение у `</div>`, `<body>` и adoption agency.
+    fn new_fragment() -> (Self, NodeId) {
+        let mut builder = Self::new();
+        builder.is_fragment = true;
+        let html = builder.create_element_with_attrs("html", &[]);
+        let doc_root = builder.doc.root();
+        builder.doc.append_child(doc_root, html);
+        builder.open_elements.push(html);
+        builder.insertion_mode = InsertionMode::InBody;
+        (builder, html)
     }
 
     /// Скармливает chunk push-токенизатору и применяет полученные
@@ -753,6 +805,15 @@ impl IncrementalTreeBuilder {
                     }
                 }
             }
+            // §13.2.6.4.7 «in body» — start tag `head`: parse error, ignore.
+            // Document parsing reached this arm only for a *stray* second
+            // `<head>` and made a bogus element out of it; fragment parsing
+            // (BUG-982) reaches it for the very first one, where dropping the
+            // tag and keeping its content is what every browser does. The rest
+            // of the spec's ignore list (`caption`/`col`/`td`/`tr`/…) stays
+            // unimplemented on purpose — those already build elements here and
+            // in `innerHTML`, and changing that is not this fix.
+            Token::StartTag { ref name, .. } if name == "head" => {}
             Token::EndTag { ref name } if name == "body" => {
                 self.insertion_mode = InsertionMode::AfterBody;
             }
@@ -1833,6 +1894,14 @@ impl IncrementalTreeBuilder {
         if self.insertion_mode == InsertionMode::InTableText {
             self.flush_pending_table_text();
         }
+        // §13.4 fragment parsing has no page skeleton to complete: the root
+        // `<html>` is synthetic and `<head>`/`<body>` are not part of the
+        // fragment. Without this guard `'<table>…</table>'` ends in a mode that
+        // walks the chain below and appends a stray `<head>`/`<body>` pair to
+        // the fragment's children.
+        if self.is_fragment {
+            return;
+        }
         // Drive empty-doc transitions: Initial → BeforeHtml → BeforeHead
         // → InHead → AfterHead → InBody (via implicit creations).
         loop {
@@ -2125,9 +2194,18 @@ impl IncrementalTreeBuilder {
         for i in (0..self.open_elements.len()).rev() {
             let node = self.open_elements[i];
             // §13.2.4.1 step 3: `last` is true for the first node of the stack.
-            // (No fragment-parsing context element exists in this parser, so
-            // there is nothing to substitute for `node` in that case.)
             let last = i == 0;
+            // §13.2.4.1 step 4: in fragment parsing the last node is replaced by
+            // the *context element*. `new_fragment` fixes that context at body
+            // level (§13.4 step 6 with a real context element is BUG-685), so
+            // the answer is `in body` — and, crucially, not the `"html"` arm
+            // below: with `head_element == None` that arm returns BeforeHead,
+            // and the EOF walk would then materialise a `<head>`/`<body>` pair
+            // inside the fragment (visible on `'<table>…</table>'`).
+            if last && self.is_fragment {
+                self.insertion_mode = InsertionMode::InBody;
+                return;
+            }
             let local = self.element_local(node);
             let mode = match local {
                 "select" => {
