@@ -17,7 +17,7 @@
 #   bash scripts/worktree-pool.sh release <slot> [base]    # освободить слот
 #   bash scripts/worktree-pool.sh list                     # что сейчас в слотах
 #
-#   slot   — каталог в .claude/worktrees/: p1-work … p5-work, perf-base
+#   slot   — каталог в .claude/worktrees/: p1-work … p6-work, perf-base
 #   branch — ветка задачи (p<N>-<task>); существующая — переключаемся на неё,
 #            новая — создаётся от base
 #   base   — база для новой ветки, по умолчанию main

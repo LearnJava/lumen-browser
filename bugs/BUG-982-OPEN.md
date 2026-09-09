@@ -69,3 +69,44 @@ builds its DOM via `innerHTML` (all 316 pass when the same test markup is
 built via `createTextNode` instead — confirms the getter itself is not at
 fault). Affects any code path that goes through `parse_html_fragment`:
 `innerHTML` setter, `outerHTML` setter, `insertAdjacentHTML`.
+
+---
+
+## Расширение 2026-09-09 (P6, дорожка E2E): теряются не только пробелы
+
+Тот же механизм отбрасывает **comment-узлы**:
+
+```js
+d.innerHTML = '<!--$-->x';
+d.textContent   // 'x' — комментария в дереве нет
+```
+
+Комментарий в начале фрагмента — это comment-токен в режиме `initial` /
+`before html`, а HTML LS §13.2.6.4.1 предписывает вставлять его в **сам
+Document**, не в `<body>`. `parse_html_fragment` забирает только детей
+`temp.body()`, поэтому узел остаётся в выброшенном временном документе.
+Симптом другой, причина та же, что у ведущих пробелов: фрагмент разбирается
+документным парсером вместо §13.4.
+
+Важно, что сами comment-узлы реализованы и переносятся между документами —
+ломается именно эта выборка:
+
+- `NodeData::Comment` — `crates/engine/dom/src/lib.rs:222`;
+- парсер их создаёт — `crates/engine/html-parser/src/tree_builder.rs`
+  (6 мест вызова `create_comment`);
+- `import_node` их копирует — `crates/js/src/v8_runtime/dom_helpers.rs:358`.
+
+## Цена выше, чем измерено
+
+React 18 расставляет `<!--$-->` как маркеры границ Suspense и читает у них
+`.data`. Поэтому баг блокирует гидрацию любого приложения на Next.js App
+Router: живая проба против внешнего стенда (2026-09-09, после локального
+снятия [BUG-599](BUG-599-OPEN.md)) даёт
+`TypeError: Cannot read properties of null (reading 'data')`.
+До этого баг стоил 43 сабтеста про whitespace — теперь он ещё и второй из
+двух блокеров E2E-пригодности движка.
+
+**Узкая правка и полная — разные задачи.** Забрать узлы вне `<body>` дешевле
+и закрывает оба симптома; полноценный §13.4 fragment parsing algorithm —
+доработка, она числится за [BUG-685](BUG-685-OPEN.md)
+(`OPEN (ДОРАБОТКА → GAP-XMLDOC)`).

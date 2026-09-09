@@ -90,7 +90,7 @@ All except `lumen-task-start` may be invoked automatically from context.
 
 Full protocol, worktree pool, 7-step completion checklist — [`docs/git-workflow.md`](docs/git-workflow.md).
 
-- **Direct commits to `main` are forbidden.** All work happens in `p<N>-<task-name>` branches (P1–P5 prefix mandatory), merged with `--no-ff`.
+- **Direct commits to `main` are forbidden.** All work happens in `p<N>-<task-name>` branches (P1–P6 prefix mandatory), merged with `--no-ff`.
 - **Every session works in its own worktree** — your persistent pool slot: `cd "$(bash scripts/worktree-pool.sh p<N>-work p<N>-task-name | tail -1)"`. Build only `dev-release` inside a slot.
 - **Merge and push after EVERY commit** (user, 2026-08-19): gate → commit → `git merge --no-ff` into `main` → `git push origin main`. Nothing waits for the end of a task — unpushed work does not exist for the other sessions.
 - **Do not wait for CI before merging.** The local gate is the only pre-merge check; watch `main` afterwards and fix it if CI goes red.
