@@ -37,6 +37,9 @@
     // Заглушка-разведка (LOOKAHEAD=1): подставляет отсутствующие методы Node на
     // `document`, чтобы увидеть, ЧТО сломается следующим, а не чинить BUG-557.
     // Семантика заведомо неверная — это разведка, а не полифил.
+    // BUG-557 починен 2026-09-09: методы теперь есть, и подстановка ниже сама
+    // себя отключает (`typeof !== 'function'`). Оставлено как след итерации 1 —
+    // на починенном движке стенд гоняют БЕЗ `?lookahead`.
     if (String(location.search).indexOf('lookahead') >= 0) {
       ['removeChild', 'insertBefore', 'replaceChild'].forEach(function (m) {
         if (typeof document[m] !== 'function') {

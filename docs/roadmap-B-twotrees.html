@@ -75,8 +75,8 @@
 {
  "generated": "2026-09-09",
  "counts": {
-  "open": 386,
-  "fixed": 609,
+  "open": 385,
+  "fixed": 610,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -6977,9 +6977,8 @@
        "title": "Гидрация React 18 и Next.js",
        "status": "wait",
        "size": "L",
-       "note": "После снятия BUG-599 (закрыт 2026-09-09 P6) и BUG-982 ожидается следующий блокер: живая проба 2026-09-09 прошла ровно два шага — `Minified React error #446` (снимается добавлением `document.getRootNode`, BUG-599), затем `TypeError: Cannot read properties of null (reading 'data')` на маркерах Suspense `<!--$-->` (снимается BUG-982). Дорожка итеративная — «починил, перезапустил, следующая ошибка», объём заранее не оценивается; каждый найденный дефект заводится отдельным багом. Оба блокера сняты 2026-09-09 (P6): BUG-599 и BUG-982; следующий шаг — перезапустить живую пробу и посмотреть, на чём она остановится теперь  Итерация 1 закрыта P6 2026-09-09. Внешний стенд не поднят (Keycloak+Next.js живёт в чужом проекте, за границей записи), поэтому та же форма воспроизведена локальным стендом [`samples/e2e4-hydration`](samples/e2e4-hydration/README.md): настоящий React 18.3.1, SSR через `react-dom/server` с маркерами Suspense, живое окно через `--mcp-live-port`. Результат: гидрация в контейнер (`hydrateRoot(<div>, …)`) проходит целиком — фиберы навешиваются, `<!--$-->` разбираются штатно, то есть снятие BUG-599/BUG-982 действительно продвинуло цепочку. Следующий блокер — корень `document`: `hydrateRoot(document, …)`, форма каждой страницы Next.js 14 App Router, вешает вкладку (130 738 повторов `TypeError: t.removeChild is not a function` за 30 с, `document_ready` не наступает; воспроизведено трижды). Это [BUG-557](bugs/BUG-557-OPEN.md), заведённый 2026-08-04 как «1 файл / 1 сабтест» — перезамер и расширенный список отсутствующих членов `Node` дописаны в карточку. Интерактивность упирается отдельно в [BUG-926](bugs/BUG-926-OPEN.md) (`<button>` без CSS-ширины схлопывается в 0 → React-обработчик не получает клика) и [BUG-1044](bugs/BUG-1044-OPEN.md). Новых номеров итерация не потратила: все три дефекта уже были заведены. Итерация 2 — после починки BUG-557",
+       "note": "После снятия BUG-599 (закрыт 2026-09-09 P6) и BUG-982 ожидается следующий блокер: живая проба 2026-09-09 прошла ровно два шага — `Minified React error #446` (снимается добавлением `document.getRootNode`, BUG-599), затем `TypeError: Cannot read properties of null (reading 'data')` на маркерах Suspense `<!--$-->` (снимается BUG-982). Дорожка итеративная — «починил, перезапустил, следующая ошибка», объём заранее не оценивается; каждый найденный дефект заводится отдельным багом. Оба блокера сняты 2026-09-09 (P6): BUG-599 и BUG-982; следующий шаг — перезапустить живую пробу и посмотреть, на чём она остановится теперь  Итерация 1 закрыта P6 2026-09-09. Внешний стенд не поднят (Keycloak+Next.js живёт в чужом проекте, за границей записи), поэтому та же форма воспроизведена локальным стендом [`samples/e2e4-hydration`](samples/e2e4-hydration/README.md): настоящий React 18.3.1, SSR через `react-dom/server` с маркерами Suspense, живое окно через `--mcp-live-port`. Результат: гидрация в контейнер (`hydrateRoot(<div>, …)`) проходит целиком — фиберы навешиваются, `<!--$-->` разбираются штатно, то есть снятие BUG-599/BUG-982 действительно продвинуло цепочку. Следующий блокер — корень `document`: `hydrateRoot(document, …)`, форма каждой страницы Next.js 14 App Router, вешает вкладку (130 738 повторов `TypeError: t.removeChild is not a function` за 30 с, `document_ready` не наступает; воспроизведено трижды). Это [BUG-557](bugs/BUG-557-OPEN.md), заведённый 2026-08-04 как «1 файл / 1 сабтест» — перезамер и расширенный список отсутствующих членов `Node` дописаны в карточку. Интерактивность упирается отдельно в [BUG-926](bugs/BUG-926-OPEN.md) (`<button>` без CSS-ширины схлопывается в 0 → React-обработчик не получает клика) и [BUG-1044](bugs/BUG-1044-OPEN.md). Новых номеров итерация не потратила: все три дефекта уже были заведены. Итерация 2 — после починки BUG-557 Итерация 2 закрыта P6 2026-09-09: BUG-557 починен (живому `document` выдан интерфейс `Node` поверх узла-корня арены — `removeChild`/`insertBefore`/`replaceChild` с `NotFoundError`, `firstChild`/`lastChild`/`parentNode`/`textContent`/`isConnected`/`isSameNode`/`isEqualNode`/`normalize`/`cloneNode`; `instanceof Node` через `setPrototypeOf`; `documentElement.parentNode` — сам синглтон; попутно у обёртки doctype появились `nextSibling`/`previousSibling`, без которых обход `firstChild`→`nextSibling` обрывался на первом же ребёнке). Проба 21/21, разбор — [BUG-557](bugs/BUG-557-FIXED.md). **Стенд не перегнан:** бандлы React 18 UMD не вендорятся, доступный локально React — 19.2.7 без UMD, поэтому «гидрация в корень `document` доходит до конца» пока НЕ измерено — снят только механизм зависания. Итерация 3: положить рядом настоящий React 18, перегнать `samples/e2e4-hydration/doc.html` без `?lookahead` и посмотреть, на чём встанет (разведка итерации 1 поверх заведомо неверных заглушек обещала recoverable #418/#423 — это догадка, а не замер).",
        "bugs": [
-        "BUG-557",
         "BUG-926",
         "BUG-1044"
        ]
@@ -7469,13 +7468,6 @@
    "status": "open",
    "title": "`Node.nextSibling`/`previousSibling` (DOM §4.4) are missing entirely on the live element/text/comment wrapper -- only element-only `nextElementSibling`/`previou…",
    "component": "js (`crates/js/src/dom.rs` -- `_lumen_build_element`, `_obj`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-557": {
-   "status": "open",
-   "title": "Live global `document` has `appendChild` but no `removeChild`/`insertBefore`/`replaceChild` at all -- third independent hole in the document-object pair alongsi…",
-   "component": "js (`crates/js/src/dom.rs:7125` -- live global `document` literal)",
    "date": null,
    "debtor": false
   },
@@ -13988,6 +13980,13 @@
    "component": "js (`crates/js/src/v8_runtime/dom_helpers.rs::parse_html_fragment`) / engine (`crates/engine/html-parser`)",
    "date": "2026-09-09",
    "debtor": false
+  },
+  "BUG-557": {
+   "status": "fixed",
+   "title": "Live global `document` has `appendChild` but no `removeChild`/`insertBefore`/`replaceChild` at all -- third independent hole in the document-object pair alongsi…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` -- литерал `var document`, обёртка doctype, геттер `parentNode` обёрток узлов)",
+   "date": "2026-09-09",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -14549,6 +14548,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js:9390` — `get scrollingElement()`)": [
    "BUG-525"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js` -- литерал `var document`, обёртка doctype, геттер `parentNode` обёрток узлов)": [
+   "BUG-557"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_LUMEN_WRAPPER_MEMBERS.getRootNode:7444`, `_lumen_make_shadow_root:2537`, `ShadowRoot.prototype:3197`) + нативный слой (`crates/js/src/v8_runtime/install/dom_core.rs::_lumen_get_shadow_root_host:1126`)": [
    "BUG-1045"

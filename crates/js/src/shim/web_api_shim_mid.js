@@ -3306,8 +3306,70 @@ function _lumen_make_doctype(nid) {
     // DOM §4.4: DocumentType never has children — BUG-327's Node.prototype.hasChildNodes()
     // needs `.childNodes` to exist on every node kind, not just element/text/comment.
     Object.defineProperty(obj, 'childNodes',    { get: function() { return []; },             enumerable: true });
+    Object.defineProperty(obj, 'firstChild',    { get: function() { return null; },           enumerable: true });
+    Object.defineProperty(obj, 'lastChild',     { get: function() { return null; },           enumerable: true });
+    // DOM §4.4: null on a DocumentType, both of them.
+    Object.defineProperty(obj, 'textContent',   { get: function() { return null; },           enumerable: true });
+    Object.defineProperty(obj, 'nodeValue',     { get: function() { return null; },           enumerable: true });
+    // BUG-557: the sibling links were missing on this wrapper alone, and the
+    // doctype is the FIRST child of a standards-mode document — so
+    // `for (var n = document.firstChild; n; n = n.nextSibling)`, the walk a
+    // reconciler opens a document root with, read `undefined` on its first step
+    // and never reached `<html>`. Kind-aware (`_lumen_make_node`) so the walk
+    // keeps seeing a DocumentType where the tree has one.
+    Object.defineProperty(obj, 'nextSibling', {
+        get: function() {
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            if (pid === null) return null;
+            var sibs = _lumen_get_children(pid);
+            var idx = sibs.indexOf(nid);
+            return (idx >= 0 && idx + 1 < sibs.length) ? _lumen_make_node(sibs[idx + 1]) : null;
+        },
+        enumerable: true, configurable: true,
+    });
+    Object.defineProperty(obj, 'previousSibling', {
+        get: function() {
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            if (pid === null) return null;
+            var sibs = _lumen_get_children(pid);
+            var idx = sibs.indexOf(nid);
+            return (idx > 0) ? _lumen_make_node(sibs[idx - 1]) : null;
+        },
+        enumerable: true, configurable: true,
+    });
+    // DOM §4.4 Node.cloneNode() on a DocumentType copies the three fields; the
+    // copy is detached, which is the shape `_lumen_make_detached_doctype`
+    // already builds (BUG-324). `deep` is irrelevant — it has no children.
+    Object.defineProperty(obj, 'cloneNode', {
+        value: function() {
+            return _lumen_make_detached_doctype(
+                _field('name'), _field('public'), _field('system'), document);
+        },
+        enumerable: false, configurable: true,
+    });
+    // DOM §4.4 "equal node" for a DocumentType is exactly its three fields, so
+    // the same body serves the live wrapper and the detached one
+    // (`_lumen_make_detached_doctype`) — see `_lumen_doctype_equals`.
+    Object.defineProperty(obj, 'isSameNode', {
+        value: function(other) { return !!other && _lumen_tree_nid(other) === nid; },
+        enumerable: false, configurable: true,
+    });
+    Object.defineProperty(obj, 'isEqualNode', {
+        value: function(other) { return _lumen_doctype_equals(obj, other); },
+        enumerable: false, configurable: true,
+    });
     _lumen_element_wrappers[nid] = obj;
     return obj;
+}
+
+// DOM §4.4 "equal node", DocumentType branch: same name, publicId and systemId.
+// Shared by the live doctype wrapper and the detached one so a doctype and its
+// own `cloneNode()` compare equal across the two shapes (BUG-557).
+function _lumen_doctype_equals(self, other) {
+    if (!other || other.nodeType !== 10) { return false; }
+    return self.name === other.name
+        && self.publicId === other.publicId
+        && self.systemId === other.systemId;
 }
 
 // BUG-321: wrap a child nid by node kind so `document.childNodes` returns a
@@ -3339,6 +3401,17 @@ function _lumen_make_detached_doctype(name, publicId, systemId, ownerDoc) {
     Object.defineProperty(obj, 'childNodes',    { get: function() { return []; },   enumerable: true });
     Object.defineProperty(obj, 'ownerDocument', { get: function() { return _owner; }, enumerable: true });
     Object.defineProperty(obj, '__lumen_setOwner', { value: function(doc) { _owner = doc; }, enumerable: false });
+    // BUG-557: same three-field equality as the live doctype wrapper, so a
+    // document and its deep clone compare equal even though their doctype
+    // children are different shapes.
+    Object.defineProperty(obj, 'isSameNode', {
+        value: function(other) { return other === obj; }, enumerable: false, configurable: true });
+    Object.defineProperty(obj, 'isEqualNode', {
+        value: function(other) { return _lumen_doctype_equals(obj, other); },
+        enumerable: false, configurable: true });
+    Object.defineProperty(obj, 'cloneNode', {
+        value: function() { return _lumen_make_detached_doctype(name, publicId, systemId, _owner); },
+        enumerable: false, configurable: true });
     return obj;
 }
 
@@ -7346,7 +7419,15 @@ _lumen_canvas_define_dim('height', 1, 150);
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'parentElement', {
         get: function() { var nid = this.__nid__;
             var pid = _lumen_u2n(_lumen_get_parent(nid));
-            return pid !== null ? _lumen_make_element(pid) : null;
+            if (pid === null) return null;
+            // DOM §4.4: `parentElement` is the parent *if it is an element* —
+            // for the root element the parent is the document, so the answer is
+            // null (BUG-557). Until now it was a wrapper for the document root
+            // node, which reported `nodeType === 9` from an accessor named
+            // "element" and gave every `while (el) el = el.parentElement` walk
+            // one extra, meaningless iteration.
+            if (pid === _lumen_root_nid) return null;
+            return _lumen_make_element(pid);
         },
         enumerable: false, configurable: true,
     });
@@ -7356,7 +7437,15 @@ _lumen_canvas_define_dim('height', 1, 150);
     Object.defineProperty(_LUMEN_WRAPPER_MEMBERS, 'parentNode', {
         get: function() { var nid = this.__nid__;
             var pid = _lumen_u2n(_lumen_get_parent(nid));
-            return pid !== null ? _lumen_make_element(pid) : null;
+            if (pid === null) return null;
+            // BUG-557: the root element's parent is the document, and it has to
+            // be the `document` singleton itself, not a fresh wrapper for the
+            // same node id. A reconciler that hydrates into a document root
+            // (Next.js App Router) compares `child.parentNode === container`;
+            // with a wrapper on the left the check failed for every child of
+            // `<html>`'s parent and the whole root fell back to client render.
+            if (pid === _lumen_root_nid) return document;
+            return _lumen_make_element(pid);
         },
         enumerable: false, configurable: true,
     });
@@ -9419,6 +9508,49 @@ function Image(width, height) {
     return img;
 }
 
+// ── DOM §4.4 Node over the live document's own child list (BUG-557) ──────────
+// The live document root is a real arena node (`_lumen_root_nid` is
+// `lumen_dom::Document::root()`, `nodeType === 9`), so the document→child edges
+// are ordinary arena edges and mutate through the same natives the element
+// wrapper uses. That is why nothing here mirrors
+// `_lumen_build_detached_document`'s `_children` array: a *detached* document
+// has no arena backing for that edge and has to keep the list in JS (BUG-415),
+// the live one must not, or the two views of the same tree would drift.
+//
+// Index of `node` among the document's children, or -1. Wrapper identity is
+// useless for the comparison — an arena-backed wrapper is minted afresh on
+// every property access — so it goes through node ids, like
+// `_detached_child_index` does for the detached shape.
+function _lumen_doc_child_index(node) {
+    var nid = _lumen_tree_nid(node);
+    if (nid === null) { return -1; }
+    var kids = _lumen_get_children(_lumen_root_nid);
+    for (var i = 0; i < kids.length; i++) {
+        if (kids[i] === nid) { return i; }
+    }
+    return -1;
+}
+
+// Node id of an insertion argument, or a TypeError naming the caller. The
+// element wrapper's own `appendChild`/`insertBefore` silently return a
+// non-node instead (see `_LUMEN_WRAPPER_MEMBERS`), which is wrong but is not
+// this bug; here a throw is required, because `replaceChild` would otherwise
+// drop the old child on the floor when handed a garbage replacement.
+function _lumen_doc_insertion_nid(node, who) {
+    var nid = _lumen_tree_nid(node);
+    if (nid === null) {
+        throw new TypeError(who + ': the argument is not a Node');
+    }
+    if (nid === _lumen_root_nid) {
+        // DOM §4.2.3 pre-insert step 2: a node must not be inserted into
+        // itself. Without the guard the arena would gain a self-edge and every
+        // subsequent tree walk would spin forever.
+        throw new DOMException(
+            who + ': a document cannot be inserted into itself', 'HierarchyRequestError');
+    }
+    return nid;
+}
+
 var document = {
     // DOM LS §4.5: `Document.nodeType` is always `Node.DOCUMENT_NODE` (9). react-dom's
     // root-creation path (BUG-281) checks this before mounting.
@@ -9715,9 +9847,149 @@ var document = {
         }
         return _lumen_make_processing_instruction(t, d);
     },
-    appendChild:       function(c)   {
-        if (c && c.__nid__ !== undefined) _lumen_append_child(_lumen_root_nid, c.__nid__);
+    // ── DOM §4.4 Node mutation, over the document's own children (BUG-557) ──
+    // `ReactDOM.hydrateRoot(document, …)` — the form every Next.js 14 App
+    // Router page hydrates with — reconciles the document's *own* child list,
+    // so react-dom calls `removeChild`/`insertBefore` on `document` itself.
+    // Until now only `appendChild` lived here: React caught
+    // `t.removeChild is not a function`, retried the hydration, hit the same
+    // line again, and the tab hung — 130 738 repeats in 30 s on the
+    // `samples/e2e4-hydration` stand, with `document_ready` never firing.
+    // Custom-element callbacks are deliberately not fired around these: a
+    // document child is the root element, the doctype or a top-level comment,
+    // and `_lumen_ce_maybe_connected` only looks at the node itself, never at
+    // a subtree, so it would be a no-op on every reachable argument.
+    appendChild: function(c) {
+        var nid = _lumen_doc_insertion_nid(c, 'appendChild');
+        if (c.__isDocumentFragment__) {
+            // DOM §4.2.3: a fragment inserts its children, not itself, and the
+            // list is copied first because each insert mutates it.
+            var kids = _lumen_get_children(nid).slice();
+            for (var i = 0; i < kids.length; i++) {
+                _lumen_append_child(_lumen_root_nid, kids[i]);
+            }
+            return c;
+        }
+        _lumen_append_child(_lumen_root_nid, nid);
         return c;
+    },
+    insertBefore: function(node, ref) {
+        if (ref === null || ref === undefined) { return document.appendChild(node); }
+        if (_lumen_doc_child_index(ref) < 0) {
+            throw new DOMException(
+                'insertBefore: the reference node is not a child of this document',
+                'NotFoundError');
+        }
+        var nid = _lumen_doc_insertion_nid(node, 'insertBefore');
+        var rid = _lumen_tree_nid(ref);
+        if (node.__isDocumentFragment__) {
+            var kids = _lumen_get_children(nid).slice();
+            for (var i = 0; i < kids.length; i++) {
+                _lumen_insert_before(_lumen_root_nid, kids[i], rid);
+            }
+            return node;
+        }
+        _lumen_insert_before(_lumen_root_nid, nid, rid);
+        return node;
+    },
+    removeChild: function(node) {
+        if (_lumen_doc_child_index(node) < 0) {
+            throw new DOMException(
+                'removeChild: the node is not a child of this document', 'NotFoundError');
+        }
+        _lumen_remove_child(_lumen_root_nid, _lumen_tree_nid(node));
+        return node;
+    },
+    // DOM §4.4: returns the OLD child, and validates both arguments before it
+    // touches the tree — otherwise a bad replacement would still detach the old
+    // node, which is how a half-applied `replaceChild` corrupts a React tree.
+    replaceChild: function(newChild, oldChild) {
+        if (_lumen_doc_child_index(oldChild) < 0) {
+            throw new DOMException(
+                'replaceChild: the node to replace is not a child of this document',
+                'NotFoundError');
+        }
+        _lumen_doc_insertion_nid(newChild, 'replaceChild');
+        document.insertBefore(newChild, oldChild);
+        return document.removeChild(oldChild);
+    },
+    // ── DOM §4.4 Node tree accessors (BUG-557) ──────────────────────────────
+    // Absent until now, so `document.firstChild` read `undefined` and the
+    // `while (node) node = node.nextSibling` walk react-dom hydrates a
+    // document root with never started.
+    get firstChild() {
+        var kids = _lumen_get_children(_lumen_root_nid);
+        return kids.length > 0 ? _lumen_make_node(kids[0]) : null;
+    },
+    get lastChild() {
+        var kids = _lumen_get_children(_lumen_root_nid);
+        return kids.length > 0 ? _lumen_make_node(kids[kids.length - 1]) : null;
+    },
+    // A document is the root of its tree and never has a parent or a sibling;
+    // spelled out rather than left `undefined`, because `undefined` and `null`
+    // read the same in a truthiness test but not in the `=== null` guard a
+    // reconciler ends its parent walk on.
+    get parentNode()          { return null; },
+    get parentElement()       { return null; },
+    get nextSibling()         { return null; },
+    get previousSibling()     { return null; },
+    // DOM §4.4: `textContent` on a Document is null — NOT the concatenated
+    // text of the page, which is what `document.body.textContent` answers.
+    get textContent()         { return null; },
+    set textContent(v)        { /* per spec: setting it on a Document does nothing */ },
+    get nodeValue()           { return null; },
+    set nodeValue(v)          { /* per spec: no-op on a Document */ },
+    // DOM §4.4 Node.isConnected: a node is connected when its shadow-including
+    // root is a document — for the document itself that is trivially true.
+    get isConnected()         { return true; },
+    // DOM §4.4 Node.isSameNode / isEqualNode. Identity cannot be `===` against
+    // an arbitrary argument: every other view of the document root arrives as a
+    // freshly minted wrapper, so the comparison goes through node ids.
+    isSameNode: function(other) {
+        return !!other && _lumen_tree_nid(other) === _lumen_root_nid;
+    },
+    isEqualNode: function(other) {
+        if (!other) { return false; }
+        if (_lumen_tree_nid(other) === _lumen_root_nid) { return true; }
+        // DOM §4.4 "equal node" for a Document: no per-interface data to
+        // compare, so it is children pairwise. The common non-identical case is
+        // `document.isEqualNode(document.cloneNode(true))`, whose right-hand
+        // side is a detached document with no arena backing at all — comparing
+        // serialisations would answer `false` there for the wrong reason.
+        if (other.nodeType !== 9) { return false; }
+        var mine   = _lumen_get_children(_lumen_root_nid);
+        var theirs = other.childNodes;
+        if (!theirs || mine.length !== theirs.length) { return false; }
+        for (var i = 0; i < mine.length; i++) {
+            var a = _lumen_make_node(mine[i]);
+            if (!a || typeof a.isEqualNode !== 'function') { return false; }
+            if (!a.isEqualNode(theirs[i])) { return false; }
+        }
+        return true;
+    },
+    // DOM §4.4 Node.normalize() — merges adjacent Text children and drops empty
+    // ones over the whole subtree. The element wrapper's implementation only
+    // reads `this.__nid__`, so it is reused directly instead of copied: the
+    // live `document` is an object literal that never reaches
+    // `_LUMEN_WRAPPER_MEMBERS`, but it can still borrow a method from it.
+    normalize: function() {
+        _LUMEN_WRAPPER_MEMBERS.normalize.call({ __nid__: _lumen_root_nid });
+    },
+    // DOM §4.4 Node.cloneNode() — a document clones into a NEW document, never
+    // into a second view of this one; the copy has no browsing context, which
+    // is exactly the detached shape BUG-415 already builds.
+    cloneNode: function(deep) {
+        var copy = _lumen_build_detached_document(Document.prototype, document.contentType);
+        if (deep) {
+            var kids = _lumen_get_children(_lumen_root_nid);
+            for (var i = 0; i < kids.length; i++) {
+                var child = _lumen_make_node(kids[i]);
+                if (child && typeof child.cloneNode === 'function') {
+                    copy.appendChild(child.cloneNode(true));
+                }
+            }
+        }
+        return copy;
     },
     // Page Visibility API (HTML LS §15.1) — state vars declared after navigator
     get hidden()          { return _doc_hidden; },
@@ -9922,6 +10194,18 @@ var document = {
         return _lumen_elements_from_point(Number(x), Number(y)).map(_lumen_make_element);
     },
 };
+
+// BUG-557: `document instanceof Node` answered `false` while `Node` was a live
+// global — the literal above is built with `Object.prototype` as its
+// [[Prototype]], unlike every other node shape in the shim (BUG-322 wired those
+// up). Feature detection of the form `x instanceof Node` therefore classified
+// the document as a non-node and took whichever fallback branch the library
+// kept for plain objects. The wiring is inert for everything already defined:
+// `Document.prototype` carries only `constructor`, and the four members it
+// inherits from `Node.prototype` (`hasChildNodes`, `contains`,
+// `compareDocumentPosition`, `baseURI`) all exist as own properties above,
+// which shadow it.
+Object.setPrototypeOf(document, Document.prototype);
 
 var alert    = function(m) { _lumen_console_log('[alert] ' + String(m)); };
 var confirm  = function()  { return false; };
