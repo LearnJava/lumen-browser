@@ -147,12 +147,36 @@ function Event(type, init) {
     this.currentTarget    = null;
     this.timeStamp        = Date.now ? Date.now() : 0;
     this._stopImmediate   = false;
+    // DOM §2.2 — NONE while the event is not being dispatched; set to
+    // CAPTURING_PHASE/AT_TARGET/BUBBLING_PHASE by `_lumen_propagate` (BUG-873),
+    // which is also what fills `_path` for the duration of one dispatch.
+    this.eventPhase       = 0;
+    this._path            = null;
 }
 Event.prototype.preventDefault = function() {
     if (this.cancelable) this.defaultPrevented = true;
 };
 Event.prototype.stopPropagation = function() { this.cancelBubble = true; };
 Event.prototype.stopImmediatePropagation = function() { this._stopImmediate = true; this.cancelBubble = true; };
+// DOM §2.2 `composedPath()` — the objects the event is travelling through, in
+// target-first order (BUG-577). Empty outside a dispatch, which is what the
+// spec says for an event that is not in flight. Shadow-tree retargeting is not
+// modelled yet, so a path crossing a shadow boundary lists the real nodes.
+Event.prototype.composedPath = function() {
+    var p = this._path;
+    if (!p || typeof _lumen_path_target !== 'function') return [];
+    var out = [];
+    for (var i = 0; i < p.length; i++) {
+        var o = _lumen_path_target(p[i]);
+        if (o) out.push(o);
+    }
+    return out;
+};
+// DOM §2.2 the four `eventPhase` constants, on both the interface object and
+// its instances — `Event.AT_TARGET` and `e.AT_TARGET` are both live idioms.
+Event.NONE = 0; Event.CAPTURING_PHASE = 1; Event.AT_TARGET = 2; Event.BUBBLING_PHASE = 3;
+Event.prototype.NONE = 0; Event.prototype.CAPTURING_PHASE = 1;
+Event.prototype.AT_TARGET = 2; Event.prototype.BUBBLING_PHASE = 3;
 // DOM §2.2 legacy "initialize an event" — used by events minted through
 // `document.createEvent()`, which start out with an empty type and must be
 // filled in before dispatch. Reinitializes only the four legacy-settable

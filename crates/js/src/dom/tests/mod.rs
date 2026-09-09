@@ -134,6 +134,9 @@ mod v8_events_cache;
 mod v8_inline_event_handlers;
 
 #[cfg(feature = "v8-backend")]
+mod v8_event_propagation;
+
+#[cfg(feature = "v8-backend")]
 mod v8_ws_sse;
 
 #[cfg(feature = "v8-backend")]
