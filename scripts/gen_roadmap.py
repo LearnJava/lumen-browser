@@ -215,8 +215,13 @@ def _bug_table_lines():
     for path in (BUGS_MD, BUGS_FIXED_MD):
         if not path.exists():
             continue
-        for line in path.read_text(encoding="utf-8", newline="").split("\n"):
-            yield line
+        # `Path.read_text(newline=...)` only exists since Python 3.13 — this
+        # repo's scripts run under 3.12 too, so open() (which has always taken
+        # `newline`) is the portable way to keep the CLAUDE.md §Known gotchas
+        # "no universal-newline mode on BUGS.md" rule.
+        with path.open(encoding="utf-8", newline="") as f:
+            for line in f.read().split("\n"):
+                yield line
 
 
 def parse_bugs():
