@@ -1,19 +1,15 @@
 # BUG-539: `'<prop>' in getComputedStyle(el)` always returns `false` — Proxy has no `has` trap, likely the dominant cause of "doesn't seem to be supported in the computed style" across the whole WPT-RUN-3 corpus
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-11
 **Дата:** 2026-08-03
-**Компонент:** js (`crates/js/src/dom.rs:12772` — `window.getComputedStyle`)
+**Компонент:** js (`crates/js/src/shim/web_api_shim_tail_b.js:103-112` — `window.getComputedStyle`)
 **Найден:** WPT-RUN-3 срез 28 (`ROADMAP.md`) — массовый прогон `css/css-inline`
 
 ## Механизм
 
-`window.getComputedStyle` (`dom.rs:12772`) returns `new Proxy({}, handler)`
-where `handler` defines only a `get` trap (`dom.rs:12775-12793`). No `has`
-trap is defined. Per the JS spec, the `in` operator on a Proxy without a
-`has` trap falls back to `Reflect.has(target, prop)` on the **underlying
-target** — here an empty object literal `{}` — not through `get`. So
-`'anything' in getComputedStyle(el)` is `false` for every single property,
-including ones that `getPropertyValue`/bracket access resolve correctly.
+`window.getComputedStyle` returns `new Proxy({}, handler)` where `handler` defines only a `get` trap. No `has` trap was defined initially. Per the JS spec, the `in` operator on a Proxy without a `has` trap falls back to `Reflect.has(target, prop)` on the **underlying target** — here an empty object literal `{}` — not through `get`. So `'anything' in getComputedStyle(el)` was `false` for every single property, including ones that `getPropertyValue`/bracket access resolve correctly.
+
+**Исправление:** `has` trap был добавлен в `crates/js/src/shim/web_api_shim_tail_b.js:103-112`, который зеркалит логику `get` trap и проверяет, что свойство возвращает непустую строку через `readProp(kebab) !== ''`.
 
 Live probe (`--mcp-live-port`):
 
