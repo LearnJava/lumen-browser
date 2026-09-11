@@ -9,6 +9,78 @@ Append-only журнал свипов здоровья кодовой базы (
 
 ---
 
+## 2026-09-11 — `full` (clippy + stubs + branches + docs + deps)
+
+Ветка: `p5-health-2026-09-11`. Холодный слот (`target/` пуст) — свип занял
+~13 мин на сборку clippy (sccache 81.47% hit rate на этот прогон, узкое место —
+линковка + сборка v8 150.1.0, оба шага sccache не покрывает).
+
+### clippy — OK
+`cargo clippy --workspace --all-targets -- -D warnings`: 0 ошибок, 0
+предупреждений. Все `crates/*/Cargo.toml` и `crates/engine/*/Cargo.toml`
+несут `[lints] workspace = true` — ярус 0 не потёк.
+
+### stubs — 46 unreachable!()/todo!(), 103 `// CSS:`, 390 OPEN
+Все 46 срабатываний `unreachable!()` — exhaustive-match заглушки на местах,
+где вариант структурно недостижим (ожидаемый паттерн, не забытый хвост).
+Реальных `todo!()`/`unimplemented!()` в production-коде нет — единственное
+совпадение было текстом внутри doc-комментария
+(`crates/core/src/ext.rs:2847`), описывавшим `BrowserSession` как
+«Phase 0: trait + todo!() stubs. Real implementations come with 8A.2+ tasks.»
+— дрейф: трейт реализован в четырёх местах (`InProcessSession`,
+`WinitSession`, `LiveWindowSession`, `NullBrowserSession`), 8A.7 (SDC)
+закрыта. Комментарий исправлен.
+
+103 `// CSS:` хэндофа в `lumen-layout`/`lumen-paint` — большинство трекается
+через `CSS-SPECS.md` по имени свойства, а не через `STATUS-P4.md:file:line`
+(там сейчас только 4 file:line указателя). 1:1 сверка всех 103 — отдельная
+дорогая ревизия, не входит в этот прогон; если понадобится — заводить
+отдельным `dupes`-подобным таргетом.
+
+390 `OPEN` в `BUGS.md` — трек P3, без изменений.
+
+### branches — 10 убрано
+Влито и удалено 9 веток (не были ни в одном worktree): `merge-tmp-bug529`,
+`merge-tmp-bug975`, `merge-tmp-fontload10`, `merge-tmp-wpt7slice31`,
+`p1-layout1-blockflow-iterative`, `p1-layout2-flex-trampoline`,
+`p1-layout2-flex-trampoline2`, `p1-layout2-table-trampoline`,
+`p3-bug1026-margin-collapse-quadratic`. Плюс удалён смёрженный чистый
+worktree+ветка `claude/lumen-skill-state-architecture-4c5100` (осиротевший,
+HEAD совпадал с ancestor main). `p1-thread3-hangs-slice7` — тоже `--merged`,
+но занята активным worktree `p1-work` (upstream `: gone]`) — не трогали,
+это чужой слот.
+
+### docs — regenerated, 1 дрейф исправлен
+`gen_symbols.py`/`gen_roadmap.py` — оба без ошибки, дерево не обрезано
+(`docs/roadmap-B-twotrees.html`: 888 `"id":`). `docs/roadmap-*.html` были
+на день позади (сгенерены 2026-09-10, open 382/fixed 613) — перегенерены на
+текущий `ROADMAP.md`/`BUGS.md` (open 166/fixed 829, отражает мержи P1/P3/P6
+за последние сутки). `docs/plan/phases.md` маркеры (✅/🟡/⬜) сверены с
+`git log --oneline -20` — дрейфа не найдено.
+
+### deps — OK
+`cargo tree -d`: 25 групп дублирующихся версий (`bitflags` 1/2, `hashbrown`
+×3, `nom` 7/8, `thiserror` 1/2, `windows`/`windows-sys` ×2, и т.д.) — все
+транзитивные, в основном заданы апстримом (wgpu/winit/resvg тянут разные
+поколения), унификация не в руках P5. Выборочная сверка последних коммитов,
+добавлявших `[dependencies]` (LIB-6 `url`, LIB-4 `resvg`, LIB-2 `rustybuzz`)
+— во всех есть «Почему этот новый dependency» в теле коммита, политика
+соблюдается.
+
+### Сделано безопасно
+- 10 веток/worktree удалены (список выше).
+- `crates/core/src/ext.rs:2847` — исправлен дрейфующий doc-комментарий
+  (`BrowserSession` больше не «Phase 0 stub»).
+- `docs/roadmap-B-twotrees.html`, `docs/roadmap-svg-cleaves.html` —
+  перегенерены (`gen_roadmap.py`).
+
+### Заведено задач
+_(нет)_ — все находки этого прогона либо безопасно почищены сразу, либо
+информационные (дубли зависимостей, объём `// CSS:` хэндофов), без владельца
+для отдельной задачи.
+
+---
+
 ## 2026-09-03 — `docs` (чистка протухших брифов `docs/tasks/`)
 
 Ветка: `p5-tasks-cleanup`. Повод — пользователь спросил про 65 файлов в

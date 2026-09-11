@@ -73,10 +73,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-09-10",
+ "generated": "2026-09-11",
  "counts": {
-  "open": 382,
-  "fixed": 613,
+  "open": 166,
+  "fixed": 829,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -7171,10 +7171,10 @@
    "debtor": false
   },
   "BUG-933": {
-   "status": "open",
+   "status": "fixed",
    "title": "Остаток [BUG-932](bugs/BUG-932-FIXED.md): `ImageBitmap` (offscreen side) остался объектным литералом `{width, height, __canvas_id__, close}`, не классом — `bitm…",
    "component": "js (`crates/js/src/offscreen_canvas.rs` — `transferToImageBitmap`/`createImageBitmap`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-467": {
@@ -7262,10 +7262,10 @@
    "debtor": false
   },
   "BUG-506": {
-   "status": "open",
+   "status": "fixed",
    "title": "Внешний `<script src=\"../other-category/support/helper.js\">` (относительный путь через границу каталога) не выполняется до зависимого инлайн-кода под реальным w…",
    "component": "js (`crates/js/src/v8_runtime/style_flush.rs::FlushHandles::maybe_flush`, no-op на `--bidi-port`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-507": {
@@ -7353,10 +7353,10 @@
    "debtor": false
   },
   "BUG-531": {
-   "status": "open",
+   "status": "fixed",
    "title": "`CSS.registerProperty()` не валидирует `syntax`/`initialValue` вовсе — ни грамматику syntax-строки (data-type имена, `\\",
    "component": "js (`crates/js/src/css_properties_values_api.rs:95-137` — `CSS_PROPERTIES_VALUES_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-532": {
@@ -7367,17 +7367,17 @@
    "debtor": false
   },
   "BUG-533": {
-   "status": "open",
+   "status": "fixed",
    "title": "`StaticRange` constructor entirely missing on both engines (`Range` exists, `StaticRange` doesn't) — `new StaticRange(...)` throws `ReferenceError`. 30 files ac…",
    "component": "js (`crates/js/src/dom.rs` — `Range` global at `~6958`, no `StaticRange`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-534": {
-   "status": "open",
+   "status": "fixed",
    "title": "CSS Custom Highlight API is a Phase-0 ad-hoc shim, not the spec's Setlike/Maplike interfaces: `Highlight` has no `.size`/`.add`/`.delete`/`.has`/`.clear`/iterat…",
    "component": "js (`crates/js/src/highlight_api.rs` — `HIGHLIGHT_API_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-535": {
@@ -7409,10 +7409,10 @@
    "debtor": false
   },
   "BUG-539": {
-   "status": "open",
+   "status": "fixed",
    "title": "`'<prop>' in getComputedStyle(el)` is unconditionally `false` for every property, implemented or not — the returned `Proxy` has a `get` trap but no `has` trap,…",
-   "component": "js (`crates/js/src/dom.rs:12772` — `window.getComputedStyle`)",
-   "date": null,
+   "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js:103-112` — `window.getComputedStyle`)",
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-540": {
@@ -7423,24 +7423,24 @@
    "debtor": false
   },
   "BUG-543": {
-   "status": "open",
+   "status": "fixed",
    "title": "Custom element constructors never run — neither on upgrade of a pre-existing element (`_lumen_ce_upgrade_element` only sets a flag and calls `connectedCallback`…",
    "component": "js (`crates/js/src/dom.rs:7463` — `_lumen_ce_upgrade_element`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-544": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Element.prototype.animate`/`getAnimations` don't exist — both are wired as own-instance properties (`_obj.animate = function(...)`) instead of on the shared pr…",
    "component": "js (`crates/js/src/dom.rs:6602` — `_lumen_make_element` element factory)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-552": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.compatMode`/`characterSet`/`contentType`/`documentURI` are wired up ONLY inside the detached-document constructor (`createHTMLDocument()` etc.) -- the…",
    "component": "js (`crates/js/src/dom.rs:4780-4827` -- `_lumen_build_detached_document`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-553": {
@@ -7465,31 +7465,31 @@
    "debtor": false
   },
   "BUG-556": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Node.nextSibling`/`previousSibling` (DOM §4.4) are missing entirely on the live element/text/comment wrapper -- only element-only `nextElementSibling`/`previou…",
    "component": "js (`crates/js/src/dom.rs` -- `_lumen_build_element`, `_obj`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-558": {
-   "status": "open",
+   "status": "fixed",
    "title": "`MouseEvent.x`/`.y` (CSSOM View §5 aliases of `clientX`/`clientY`) missing entirely; `pageX`/`pageY` computed once at construction instead of live getters over…",
    "component": "js (`crates/js/src/dom.rs:3441-3460` -- `MouseEvent` constructor)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-559": {
-   "status": "open",
+   "status": "fixed",
    "title": "`window.screen.width`/`height`/etc. are silently writable (the `defineProperty writable:false` only locks the `globalThis.screen` binding, not `_screen`'s own p…",
    "component": "js (`crates/js/src/navigator_bindings.rs:213-225` -- `_screen` object literal)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-560": {
-   "status": "open",
+   "status": "fixed",
    "title": "`.focus()` only queues a focus request for the shell's \"next pump\" instead of applying it synchronously, so any same-task `getComputedStyle()`/`:focus-within` r…",
    "component": "js/shell (`crates/js/src/dom.rs:13474` `HTMLElement.prototype.focus`; `crates/shell/src/main.rs:3048` shell focus-queue drain)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-561": {
@@ -7507,10 +7507,10 @@
    "debtor": false
   },
   "BUG-563": {
-   "status": "open",
+   "status": "fixed",
    "title": "`element.style.<prop>` for `anchor()`/`anchor-size()`/`position-area` is a raw-text passthrough -- never calls the real parsers (`layout/src/style.rs::parse_anc…",
    "component": "js (`crates/js/src/dom.rs:4260-4298` `_lumen_make_style`; `dom.rs:4241-4255` `_lumen_parse_style`/`_lumen_serialize_style`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-566": {
@@ -7521,10 +7521,10 @@
    "debtor": false
   },
   "BUG-567": {
-   "status": "open",
+   "status": "fixed",
    "title": "`HTMLTitleElement.prototype.text` does not exist (contrast `document.title`, which has a real getter/setter) -- reading/writing `<title>.text` is `undefined`. A…",
    "component": "js (`crates/js/src/dom.rs` -- `HTMLTitleElement` registered as a tag-constructor name, `dom.rs:4614`/`4648`, with zero prototype members ever defined)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-568": {
@@ -7535,66 +7535,66 @@
    "debtor": false
   },
   "BUG-569": {
-   "status": "open",
+   "status": "fixed",
    "title": "`img.decode()` does not exist -- `TypeError: img.decode is not a function` on every `HTMLImageElement` instance; image pipeline decodes synchronously today with…",
    "component": "js (`crates/js/src/dom.rs` -- `HTMLImageElement` wrapper has no `decode` member)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-570": {
-   "status": "open",
+   "status": "fixed",
    "title": "`new VTTCue(...)`/`new TextTrackCue(...)`/`new TrackEvent(...)` all throw `ReferenceError: <Name> is not defined` -- cue *data* is real and wired end-to-end (pa…",
    "component": "js (`crates/js/src/dom.rs` -- `VTTCue`/`TextTrackCue`/`TrackEvent` never installed as globals; `crates/js/src/text_track_store.rs` implements the cue data model but only names the interfaces in doc comments)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-572": {
-   "status": "open",
+   "status": "fixed",
    "title": "`HTMLScriptElement.supports(type)` does not exist at all (`TypeError`). The classification logic already exists as `is_classic_script_type()` (`crates/shell/src…",
    "component": "js (`crates/js/src/dom.rs` -- `HTMLScriptElement` has no `supports` static, only prototype reflection)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-574": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Node.prototype.contains()` does not exist at all on any node kind -- surfaces as `elementDocument.contains is not a function` inside `resources/testdriver.js`'…",
    "component": "js (`crates/js/src/dom.rs` -- no `contains` on any node prototype)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-575": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Element.prototype.localName` does not exist at all. Surfaces in `form-submission-target/resources/reltester.js` (`submitter.localName !== \"form\"` always true)…",
    "component": "js (`crates/js/src/dom.rs` -- only `tagName`/`nodeName` reflected, no `localName`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-576": {
-   "status": "open",
+   "status": "fixed",
    "title": "`select.options.add()` missing (mirror `select.add()` at `dom.rs:14401` does work). 4 subtests/2 files. Найден P2, WPT-VENDOR-html-semantics-forms, 2026-08-04",
    "component": "js (`crates/js/src/dom.rs:14124-14128` `HTMLOptionsCollection.prototype`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-579": {
-   "status": "open",
+   "status": "fixed",
    "title": "`HTMLDialogElement.prototype.requestClose()` missing entirely -- `show`/`showModal`/`close`/`returnValue` exist, `requestClose` (fires cancelable `cancel` then…",
    "component": "js (`crates/js/src/dom.rs:5667-5702` `<dialog>` API block)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-581": {
-   "status": "open",
+   "status": "fixed",
    "title": "`HTMLTableElement`/`HTMLTableRowElement`/`HTMLTableSectionElement` have zero spec API (`rows`/`tBodies`/`tHead`/`tFoot`/`caption`, `createTBody`/`createCaption`…",
    "component": "js (`crates/js/src/dom.rs:4608-4625` -- table interfaces generated as bare non-constructible stubs, no table-specific members anywhere)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-582": {
-   "status": "open",
+   "status": "fixed",
    "title": "Invoker Commands API (`<button command=… commandfor=…>`, `CommandEvent`) not implemented at all -- the older, narrower `popovertarget`/`popovertargetaction` pai…",
    "component": "js (`crates/js/src/dom.rs` -- no `command`/`commandFor` reflection, no `CommandEvent`, no invoke-action dispatch anywhere)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-583": {
@@ -7605,115 +7605,115 @@
    "debtor": false
   },
   "BUG-584": {
-   "status": "open",
+   "status": "fixed",
    "title": "Interest Invokers API (`interestfor`, `InterestEvent` -- hover/focus analogue of BUG-582's `command`/`commandfor`) not implemented at all, entirely `.tentative.…",
    "component": "js (`crates/js/src/dom.rs` -- no `interestFor`/`InterestEvent` anywhere)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-585": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Origin` WebIDL global (`Origin.from()`, tuple/opaque origin) not implemented at all. 181 subtests, all `html/browsers/origin/api/` (self-contained category). K…",
    "component": "js (`crates/js/src/dom.rs` -- no `Origin` global constructor anywhere)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-586": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.domain` not implemented: getter is `undefined` instead of a string, setter never validates against the document's origin so cases required to throw `S…",
    "component": "js (`crates/js/src/dom.rs` -- no `\"domain\"` getter/setter on `document`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-587": {
-   "status": "open",
+   "status": "fixed",
    "title": "WindowProxy `[[DefineOwnProperty]]` doesn't enforce the \"unforgeable\" restriction on same-origin own properties `window`/`document`/`location`/`top` -- both com…",
    "component": "js/V8 host-object layer (WindowProxy own-property trap, no `[[DefineOwnProperty]]` unforgeable-property guard)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-588": {
-   "status": "open",
+   "status": "fixed",
    "title": "`window.frameElement` missing entirely -- always `undefined` instead of `null` even for the top-level window (no iframe involved), independent of the iframe-bro…",
    "component": "js (`crates/js/src/dom.rs`/`v8_runtime.rs` -- no `frameElement` anywhere)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-589": {
-   "status": "open",
+   "status": "fixed",
    "title": "`window` is not a proper WebIDL exotic object: no `Symbol.toStringTag` (`[object Object]` instead of `[object Window]`/`[object WindowProperties]`, same class a…",
    "component": "js/V8 host-object layer (`window` global + \"WindowProperties\" prototype; `Symbol.toStringTag` pattern from `dom.rs:11143-11165` not applied to `window`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-592": {
-   "status": "open",
+   "status": "fixed",
    "title": "`setHTMLUnsafe`/`getHTML` (WHATWG HTML LS §14.5) implemented only on `Element`, missing on `ShadowRoot` (separate hand-rolled object literal) and as `Document.p…",
    "component": "js (`dom.rs:1315-1366` `_lumen_make_shadow_root` -- no `setHTMLUnsafe`/`getHTML`; no `Document.parseHTMLUnsafe` static anywhere)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-593": {
-   "status": "open",
+   "status": "fixed",
    "title": "`structuredClone` cannot clone `Blob`/`File`/`ImageData`/`Error` -- throws `DataCloneError` instead of round-tripping. 19 subtests, `structured-clone.any.html`.…",
    "component": "js (`dom.rs:10176-10260` `structuredClone` -- own doc comment already says \"Not handled: Blob/File/ImageData/Error\", never filed until now)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-594": {
-   "status": "open",
+   "status": "fixed",
    "title": "`hidden` reflects as plain boolean instead of the `\"\"`/`\"hidden\"`/`\"until-found\"` tristate enum -- `hidden=\"until-found\"` mode (reveal algorithm, `beforematch`…",
    "component": "js (`dom.rs:10724-10735`, `hidden` reflection entry)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-595": {
-   "status": "open",
+   "status": "fixed",
    "title": "`autocorrect`/`writingSuggestions` global content attributes missing entirely -- `'writingSuggestions' in element` === `false` on every element. `autocorrect/*`…",
    "component": "js (`dom.rs:10724-10735`, global-attributes reflection table)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-596": {
-   "status": "open",
+   "status": "fixed",
    "title": "Legacy `initEvent`/`initUIEvent`/`initMouseEvent` missing entirely. Self-contained `dnd/synthetic/001.html`, 15/16 subtests fail. Найден P2, WPT-VENDOR-html-edi…",
    "component": "js (`Event`/`UIEvent`/`MouseEvent` prototypes -- no `init*Event` anywhere)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-597": {
-   "status": "open",
+   "status": "fixed",
    "title": "`DragEvent` constructor defaults `dataTransfer` to a synthesized object instead of `null` and doesn't validate its type; `draggable` ignores the `<a>`/`<img>` d…",
    "component": "js (`dom.rs:781-790` `DragEvent`; `dom.rs:2776-2782` `draggable`; `dom.rs:7639` `window`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-598": {
-   "status": "open",
+   "status": "fixed",
    "title": "`types` getter `.slice()`s a fresh array on every access instead of caching a `FrozenArray` until the data store changes -- `dt.types === dt.types` always `fals…",
    "component": "js (`dom.rs:737-739` `DataTransfer.prototype.types` getter)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-600": {
-   "status": "open",
+   "status": "fixed",
    "title": "HTML \"focus fixup rule\" not implemented -- when the focused element becomes non-focusable (disabled/hidden/detached/loses tabindex/contentEditable turned off),…",
    "component": "js/shell focus pipeline (`crates/js/src/dom.rs` focus install path)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-601": {
-   "status": "open",
+   "status": "fixed",
    "title": "`DOMTokenList` constructor not exposed on `window` -- `instanceof DOMTokenList` throws `ReferenceError` even though the underlying object (`classList`/`focusGro…",
    "component": "js (`crates/js/src/dom.rs`, `DOMTokenList (classList)` section ~line 1191)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-602": {
-   "status": "open",
+   "status": "fixed",
    "title": "Legacy `align` content attribute has no IDL reflection anywhere (`el.align` is `undefined` on any element -- `legend`/`table`/`img`/`hr`/etc.); only `getAttribu…",
    "component": "js (`crates/js/src/dom.rs` — IDL reflection table from BUG-383)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-604": {
@@ -7724,66 +7724,66 @@
    "debtor": false
   },
   "BUG-605": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<marquee>` has no dedicated interface -- `loop`/`scrollAmount`/`scrollDelay` IDL attributes all `undefined` instead of reflecting with spec defaults (`-1`/`6`/…",
    "component": "js (no `HTMLMarqueeElement` interface anywhere) + layout (no UA `overflow:hidden` rule for `marquee`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-606": {
-   "status": "open",
+   "status": "fixed",
    "title": "Legacy no-op/compat APIs missing entirely: `document.clear()`/`captureEvents()`/`releaseEvents()`, `window.captureEvents()`/`releaseEvents()` (must exist as no-…",
    "component": "js (`crates/js/src/dom.rs` -- six unrelated legacy symbols all absent)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-607": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.fgColor`/`linkColor`/`alinkColor`/`vlinkColor`/`bgColor` not implemented -- should reflect onto `<body>`'s `text`/`link`/`alink`/`vlink`/`bgcolor` att…",
    "component": "js (`crates/js/src/dom.rs` -- no reflection entries for any of the five)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-608": {
-   "status": "open",
+   "status": "fixed",
    "title": "`fetchPriority` IDL attribute missing on `<script>`/`<img>` (default should reflect `\"auto\"`, currently `undefined`); likely also missing on `<link>`/`<iframe>`…",
    "component": "js (`crates/js/src/dom.rs` -- IDL reflection table from BUG-383, no `fetchPriority` entry)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-609": {
-   "status": "open",
+   "status": "fixed",
    "title": "`select.options.length = N` setter correctly rejects out-of-range `N` but never implements the in-range growth path (appending empty `<option>`s up to `N`) -- `…",
    "component": "js (`crates/js/src/dom.rs` -- `HTMLOptionsCollection.prototype` `length` setter)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-610": {
-   "status": "open",
+   "status": "fixed",
    "title": "`MessageEvent.userActivation` attribute missing -- `MessageEventInit.userActivation` dict member silently ignored by the constructor, no getter on the prototype…",
    "component": "js (`crates/js/src/dom.rs` -- `MessageEvent`/`MessageEventInit` constructor path)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-611": {
-   "status": "open",
+   "status": "fixed",
    "title": "`HTMLLinkElement.relList` (live `DOMTokenList` with `.supports()`) not implemented -- `link.relList` is `undefined`, distinct from BUG-601 (missing global `DOMT…",
    "component": "js (`crates/js/src/dom.rs` -- `HTMLLinkElement.prototype`, no `relList` accessor)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-612": {
-   "status": "open",
+   "status": "fixed",
    "title": "legacy `longdesc` content attribute has no IDL reflection -- `img.longdesc` is `undefined` (only `getAttribute`/`hasAttribute` work). Same class as BUG-602 (`al…",
    "component": "js (`crates/js/src/dom.rs` -- IDL reflection table, `align`-class gap)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-613": {
-   "status": "open",
+   "status": "fixed",
    "title": "`input.capture` reflects the raw attribute value on an invalid keyword (`capture='invalid'` -> `\"invalid\"`) instead of the spec's limited-to-known-values defaul…",
    "component": "js (`crates/js/src/dom.rs` -- `HTMLInputElement.prototype` reflection table, `capture` wired as `'string'` instead of `'enum'`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-614": {
@@ -7794,38 +7794,38 @@
    "debtor": false
   },
   "BUG-615": {
-   "status": "open",
+   "status": "fixed",
    "title": "`IdleDetector` instances leak private state (`_userState`/`_screenState`/`_started`/`_threshold`/`_timer`) as own, enumerable, writable JS properties -- visible…",
    "component": "js (`crates/js/src/idle_detection.rs::IDLE_DETECTION_SHIM`, same `this._x` pattern in `bluetooth.rs`/`document_pip.rs`/`navigation_api.rs`/`serial.rs`/`webhid.rs`/`webusb.rs`/`webxr.rs`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-616": {
-   "status": "open",
+   "status": "fixed",
    "title": "`createImageBitmap(source)` rejects `TypeError: unsupported source type` for `HTMLCanvasElement` -- only `OffscreenCanvas`/`ImageData`/`HTMLImageElement`/`Blob`…",
    "component": "js (`crates/js/src/offscreen_canvas.rs`, `createImageBitmap` global)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-617": {
-   "status": "open",
+   "status": "fixed",
    "title": "Two compounding gaps: (1) `ImageBitmapRenderingContext` has no global constructor at all (`typeof window.ImageBitmapRenderingContext === \"undefined\"`) -- the `'…",
    "component": "js (`crates/js/src/dom.rs` `getContext` factory ~line 3083, `crates/js/src/offscreen_canvas.rs::getContext` ~line 454)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-618": {
-   "status": "open",
+   "status": "fixed",
    "title": "`HTMLElement.prototype.inert` getter always reads `false` on freshly-parsed `<div inert>` markup -- a stale Phase-0 stub in `inert.rs` (private `_inert` instanc…",
    "component": "js (`crates/js/src/inert.rs::install_inert_api_v8`, installed at `v8_runtime.rs:4307` after `WEB_API_SHIM`'s reflection entry `dom.rs:10729`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-619": {
-   "status": "open",
+   "status": "fixed",
    "title": "`inert` on a shadow host doesn't propagate to shadow-tree children that aren't slotted -- the ancestor-inert walk uses a plain light-DOM `_lumen_get_parent`, wh…",
    "component": "js (`crates/js/src/dom.rs::_lumen_is_focusable`, ancestor walk `dom.rs:10415-10419`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-620": {
@@ -7836,31 +7836,31 @@
    "debtor": false
   },
   "BUG-621": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<label>.focus()` doesn't delegate to `label.control` (the labeled form control) per HTML LS §6.6.3 -- `focus()` only checks `_lumen_is_focusable(nid)` on the l…",
    "component": "js (`crates/js/src/dom.rs::HTMLElement.prototype.focus`, `dom.rs:10510-10520`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-622": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.defaultView` is missing entirely (`'defaultView' in document === false`, not a broken getter) -- should return `window`. Confirmed live. 1 file direct…",
    "component": "js (`crates/js/src/dom.rs`, live `document` object literal ~line 6989)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-623": {
-   "status": "open",
+   "status": "fixed",
    "title": "`window.find()` (legacy, non-standard text-search API, supported by Firefox/Safari) missing entirely -- `typeof window.find === \"undefined\"`. Confirmed live. 2…",
    "component": "js (`crates/js/src/dom.rs`, `window` object)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-624": {
-   "status": "open",
+   "status": "fixed",
    "title": "`navigator` has no backing `Navigator` interface at all: `window.Navigator === undefined`, `Object.prototype.toString.call(navigator)` = `\"[object Object]\"`, al…",
    "component": "js (`crates/js/src/dom.rs:4999` -- `var navigator = {...}`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-625": {
@@ -7871,31 +7871,31 @@
    "debtor": false
   },
   "BUG-628": {
-   "status": "open",
+   "status": "fixed",
    "title": "`IntersectionObserver.prototype.takeRecords` missing entirely (`typeof o.takeRecords === \"undefined\"`), and `root`/`rootMargin`/`thresholds` have no getters at…",
    "component": "js (`crates/js/src/dom.rs:7174-7276` -- `IntersectionObserver` shim)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-626": {
-   "status": "open",
+   "status": "fixed",
    "title": "Constructor performs no argument validation (`threshold: [1.1]` should throw `RangeError`, `threshold: [\"foo\"]` should throw `TypeError`, `rootMargin: \"2em\"` sh…",
    "component": "js (`crates/js/src/dom.rs:7180-7193` -- `IntersectionObserver` constructor + `.observe`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-627": {
-   "status": "open",
+   "status": "fixed",
    "title": "`options.root` (explicit root element) and `options.scrollMargin` are accepted but never read anywhere in the delivery function -- every observer always interse…",
    "component": "js (`crates/js/src/dom.rs:7217-7276` -- `_lumen_deliver_intersection_observers`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-629": {
-   "status": "open",
+   "status": "fixed",
    "title": "`ReportingObserver`/`Report` are ES5 constructor functions with no `new.target` guard: called without `new`, `this` binds to `globalThis` and leaks internal fie…",
    "component": "js (`crates/js/src/reporting_api.rs` -- `REPORTING_API_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-630": {
@@ -7906,59 +7906,59 @@
    "debtor": false
   },
   "BUG-634": {
-   "status": "open",
+   "status": "fixed",
    "title": "`BlobEvent` constructor doesn't validate: called without an init dict, or with an init dict missing `data`, it doesn't throw `TypeError` as WebIDL requires for…",
    "component": "js (`crates/js/src/media_stream_recording.rs`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-636": {
-   "status": "open",
+   "status": "fixed",
    "title": "MediaSession API skips WebIDL validation/freezing across the board: `MediaMetadata` constructor doesn't throw `TypeError` for a non-object init; `chapterInfo` (…",
    "component": "js (`crates/js/src/media_session.rs`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-637": {
-   "status": "open",
+   "status": "fixed",
    "title": "Global `Window` interface object doesn't exist at all (`typeof Window === \"undefined\"`), unlike `Document`/`Element`, which are proper global constructors (`typ…",
    "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-638": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<audio>.src = <relative URL>` permanently deadlocks the JS engine/automation channel — the native `__lumen_audio_load` call never returns to JS, and every subs…",
    "component": "js (`crates/js/src/audio_element.rs` — src setter → `__lumen_audio_load`), shell (`crates/shell/src/platform/audio_player.rs::load`/`fetch_audio_bytes`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-639": {
-   "status": "open",
+   "status": "fixed",
    "title": "Navigation API shim is missing several spec-required pieces: `NavigationCurrentEntryChangeEvent` global doesn't exist (`currententrychange` fires a plain `Event…",
    "component": "js (`crates/js/src/navigation_api.rs::NAVIGATION_API_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-641": {
-   "status": "open",
+   "status": "fixed",
    "title": "`navigator.connection.downlinkMax` missing entirely (`undefined`) — the \"Phase 1 stub\" constructor sets `effectiveType`/`downlink`/`rtt`/`saveData`/`type` but n…",
    "component": "js (`crates/js/src/dom.rs:12828-12847` — `NetworkInformation` shim)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-642": {
-   "status": "open",
+   "status": "fixed",
    "title": "`new Notification()` never fires an `error` event when permission is not `\"granted\"` (denied/default, e.g. every non-secure-context construction) — the construc…",
    "component": "js (`crates/js/src/notifications_bindings.rs` — `NOTIFICATIONS_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-643": {
-   "status": "open",
+   "status": "fixed",
    "title": "The Phase 0 `deviceorientation`/`devicemotion` synthetic event only ever fires for the very first listener registered for a given type over the page's lifetime…",
    "component": "js (`crates/js/src/device_sensors.rs` — `DEVICE_SENSORS_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-644": {
@@ -7969,38 +7969,38 @@
    "debtor": false
   },
   "BUG-645": {
-   "status": "open",
+   "status": "fixed",
    "title": "`window.PerformancePaintTiming` interface object doesn't exist at all — every `paint-timing` WPT test starts with `assert_implements(window.PerformancePaintTimi…",
    "component": "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-646": {
-   "status": "open",
+   "status": "fixed",
    "title": "`new PaymentRequest(methodData, details)` performs zero input validation beyond `typeof === 'object'` — spec-mandated `TypeError`/`RangeError` throws (empty `me…",
    "component": "js (`crates/js/src/payment_request.rs`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-648": {
-   "status": "open",
+   "status": "fixed",
    "title": "`observe()` performs no call-signature validation at all (no `TypeError` on `observe({})`/non-array `entryTypes`, no `InvalidModificationError` on mixing single…",
    "component": "js (`crates/js/src/dom.rs:8258-8335` — `PerformanceObserver`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-649": {
-   "status": "open",
+   "status": "fixed",
    "title": "`navigator` is entirely undefined inside a Worker's global scope — `worker_global_shim` hand-installs `self`/`postMessage`/`onmessage`/`console`/`importScripts`…",
    "component": "js (`crates/js/src/worker.rs:227-352` — `worker_global_shim`; `worker.rs:719-752` — `install_worker_globals_v8`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-650": {
-   "status": "open",
+   "status": "fixed",
    "title": "`navigator.permissions.request()`/`requestAll()` (WICG Permissions Request API) are entirely absent — `navigator.permissions` is a plain object literal with onl…",
    "component": "js (`crates/js/src/dom.rs:5061-5090` — `navigator.permissions`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-651": {
@@ -8011,185 +8011,185 @@
    "debtor": false
   },
   "BUG-652": {
-   "status": "open",
+   "status": "fixed",
    "title": "`navigator.permissions.revoke()` (non-standard, Chromium-only reset API used by WPT's own permissions tests) is entirely absent — `navigator.permissions` is a p…",
    "component": "js (`crates/js/src/dom.rs:5077-5086` — `navigator.permissions`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-653": {
-   "status": "open",
+   "status": "fixed",
    "title": "`HTMLVideoElement.disablePictureInPicture` IDL getter reads a closure variable `_disabled` cached once at patch time instead of live-reflecting the `disablepict…",
    "component": "js (`crates/js/src/video_pip.rs:74-91` — `patchVideoPip`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-655": {
-   "status": "open",
+   "status": "fixed",
    "title": "`requestPointerLock()` не проверяет transient user activation (и никакое другое предусловие спеки) — блокировка выдаётся синхронно и безусловно даже без предшес…",
    "component": "js (`crates/js/src/pointer_lock.rs:42-46` — `request_pointer_lock`, `crates/js/src/v8_runtime.rs:3248-3250` — привязка)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-656": {
-   "status": "open",
+   "status": "fixed",
    "title": "`PresentationRequest` constructor performs no argument validation at all — no args, empty array, invalid URL (`https://@`), unsupported scheme (`unsupported://……",
    "component": "js (`crates/js/src/presentation_api.rs:102-106` — `PresentationRequest` constructor)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-657": {
-   "status": "open",
+   "status": "fixed",
    "title": "`ServiceWorkerRegistration` global class is never defined in the production V8 install — only as a local test stub inside each module's own unit tests — so ever…",
    "component": "js (`crates/js/src/dom.rs` — `_sw_make_registration`, ~line 4843) + all seven `ServiceWorkerRegistration.prototype`-attaching modules (`push_api.rs`, `background_sync.rs`, `periodic_sync.rs`, `background_fetch.rs`, `cookie_store.rs`, `content_index.rs`, `notifications_bindings.rs`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-658": {
-   "status": "open",
+   "status": "fixed",
    "title": "`offsetWidth`/`offsetHeight`/`getBoundingClientRect()` read back `0` (not a distinguishable sentinel like `getComputedStyle`'s `\"\"`) when called from an inline…",
    "component": "js (`crates/js/src/dom.rs:3196` — `offsetWidth`/`offsetHeight`/`getBoundingClientRect()`, backed by `_lumen_get_bounding_rect`), shell (`crates/shell/src/main.rs::apply_loaded_page` — same publish path as [BUG-555](bugs/BUG-555-OPEN.md))",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-660": {
-   "status": "open",
+   "status": "fixed",
    "title": "`requestIdleCallback`'s deadline argument is a plain object literal, not an `IdleDeadline` instance (`window.IdleDeadline` doesn't exist — class-string/cross-re…",
    "component": "js (`crates/js/src/dom.rs:8456`–`8480` — `requestIdleCallback`/`cancelIdleCallback`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-662": {
-   "status": "open",
+   "status": "fixed",
    "title": "`rt.eval()`'s completion-value conversion eagerly invokes every own-property getter of the script's last-statement object value merely to serialize a result nob…",
    "component": "js (`crates/js/src/v8_runtime.rs:5041`–`5068` — `from_v8_bounded`, object branch)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-663": {
-   "status": "open",
+   "status": "fixed",
    "title": "Sanitizer API implements a pre-redesign draft, not the current spec: `Document.parseHTML`/`parseHTMLUnsafe` don't exist at all; `Sanitizer`'s config-object meth…",
    "component": "js (`crates/js/src/sanitizer.rs` — `Sanitizer`/`Element.prototype.setHTML`; `crates/js/src/dom.rs:1315` — `_lumen_make_shadow_root`; `crates/js/src/dom.rs:3499` — `setHTMLUnsafe`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-664": {
-   "status": "open",
+   "status": "fixed",
    "title": "`navigator.connection` (`NetworkInformation`) doesn't inherit from `EventTarget` (`instanceof EventTarget` → `false`, no `dispatchEvent`, `Symbol.toStringTag` →…",
    "component": "js (`crates/js/src/dom.rs:12855`–`12874` — `NetworkInformation` shim)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-665": {
-   "status": "open",
+   "status": "fixed",
    "title": "`TaskSignal.any()` static composer doesn't exist at all (`TypeError: TaskSignal.any is not a function`, 10 of 21 unique failures); `TaskController.setPriority()…",
    "component": "js (`crates/js/src/scheduler.rs` — Scheduler API Phase 0 shim)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-666": {
-   "status": "open",
+   "status": "fixed",
    "title": "`navigator.mediaDevices.getDisplayMedia()` never validates its `constraints` argument (resolves for no-args/`{}`/`{video:false,audio:false}`, spec requires `Typ…",
    "component": "js (`crates/js/src/media_devices.rs:326`–`386` — `getDisplayMedia` shim)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-667": {
-   "status": "open",
+   "status": "fixed",
    "title": "`navigator.getScreenDetails()` never checks the `window-management` permission state (resolves unconditionally regardless of `navigator.permissions.query`, whic…",
    "component": "js (`crates/js/src/window_management.rs:112`–`136` — `getScreenDetails` shim)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-668": {
-   "status": "open",
+   "status": "fixed",
    "title": "`ScreenOrientation` doesn't inherit `EventTarget` (`instanceof EventTarget` → `false`, `dispatchEvent` entirely missing, own hand-rolled `_listeners`/`addEventL…",
    "component": "js (`crates/js/src/screen_orientation.rs` — Screen Orientation Phase 0 shim)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-669": {
-   "status": "open",
+   "status": "fixed",
    "title": "The `WakeLock` interface object is never exposed on `globalThis` at all — only `WakeLockSentinel` and `navigator.wakeLock` (the manager instance) are — so `'Wak…",
    "component": "js (`crates/js/src/wake_lock.rs` — Screen Wake Lock Level 1 Phase 1 shim)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-670": {
-   "status": "open",
+   "status": "fixed",
    "title": "`AnimationEffect.getComputedTiming()` is missing entirely — only `getTiming()` (the *specified* timing dict) exists on `KeyframeEffect.prototype`; `getComputedT…",
    "component": "js (`crates/js/src/dom.rs:12449-12452` — Web Animations `WEB_API_SHIM`, `KeyframeEffect.prototype`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-671": {
-   "status": "open",
+   "status": "fixed",
    "title": "`window.Selection` interface constructor is missing entirely — not a broken getter, the property doesn't exist (`'Selection' in window === false`). `window.getS…",
    "component": "js (`crates/js/src/dom.rs` — `Selection`/`getSelection()` shim)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-672": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Serial`/`SerialPort` are plain ES6 `class X extends EventTarget` with no `new.target`/constructor guard, so `new SerialPort()`/`new Serial()` both succeed even…",
    "component": "js (`crates/js/src/serial.rs` — `SERIAL_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-673": {
-   "status": "open",
+   "status": "fixed",
    "title": "`window.PerformanceResourceTiming`/`window.PerformanceNavigationTiming` interface objects don't exist at all — `PerformanceObserver.supportedEntryTypes` lists `…",
    "component": "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim, ~line 8409-8460)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-674": {
-   "status": "open",
+   "status": "fixed",
    "title": "The entire Service Worker registration table and Cache Storage are keyed by an unauthenticated JS-string \"origin\" argument with zero server-side binding to the…",
    "component": "js (`crates/js/src/dom.rs:4805` — `_sw_origin`; `crates/js/src/v8_runtime.rs:1900`-1940 `_lumen_sw_*`/`_lumen_cache_*` natives)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-675": {
-   "status": "open",
+   "status": "fixed",
    "title": "`navigator.serviceWorker.register()` performs zero validation of its script-URL argument — a cross-origin script URL (`https://evil.example/sw.js`) and a `javas…",
    "component": "js (`crates/js/src/dom.rs:4999`-5013 — `_sw_container.register`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-677": {
-   "status": "open",
+   "status": "fixed",
    "title": "`FaceDetector`/`BarcodeDetector`/`TextDetector` all deviate from their WebIDL interface shape the same way: constructor `.length` is 1 instead of the spec's 0 (…",
    "component": "js (`crates/js/src/shape_detection.rs:18-86` — `SHAPE_DETECTION_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-678": {
-   "status": "open",
+   "status": "fixed",
    "title": "Soft Navigation detection never fires — `PerformanceSoftNavigationEntry`/`_lumen_deliver_soft_nav` (the \"shell hook\" per its own doc comment) exist but nothing…",
    "component": "js (`crates/js/src/soft_navigation.rs` — `_lumen_deliver_soft_nav` has no caller anywhere in `crates/shell/`/`crates/driver/`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-680": {
-   "status": "open",
+   "status": "fixed",
    "title": "`SpeechSynthesisEvent`/`SpeechSynthesisErrorEvent` constructors don't exist on `window`/`globalThis` at all — `new SpeechSynthesisEvent(...)`/`new SpeechSynthes…",
    "component": "js (`crates/js/src/speech.rs` — `SPEECH_SHIM`, `_fire` at line 136, globals export at lines 273-289)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-681": {
-   "status": "open",
+   "status": "fixed",
    "title": "`StorageManager`/`StorageBucketManager`/`StorageBucket` are plain ES5 `function X() {}` constructors with no `new.target` guard, so `new StorageManager()`/`new…",
    "component": "js (`crates/js/src/storage_manager.rs` — `STORAGE_MANAGER_SHIM`; `crates/js/src/storage_buckets.rs` — `STORAGE_BUCKETS_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-682": {
-   "status": "open",
+   "status": "fixed",
    "title": "Storage Access API methods (`requestStorageAccess`/`hasStorageAccess`/`requestStorageAccessFor`/`hasUnpartitionedCookieAccess`) exist only on the live global `d…",
    "component": "js (`crates/js/src/dom.rs:4423-4433` — live `document` literal at `dom.rs:4182+`; `_lumen_build_detached_document`, `dom.rs:1795-1868`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-683": {
@@ -8200,10 +8200,10 @@
    "debtor": false
   },
   "BUG-684": {
-   "status": "open",
+   "status": "fixed",
    "title": "`ReadableStream`/`WritableStream`/`TransformStream` are plain ES5 `function X(...) { this._foo = ...; }` constructors with no `new.target` guard, so calling any…",
    "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, §\"WHATWG Streams\", ~line 5630)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-685": {
@@ -8221,38 +8221,38 @@
    "debtor": false
   },
   "BUG-687": {
-   "status": "open",
+   "status": "fixed",
    "title": "`performance.mark()`/`.measure()` build entries as plain object literals (`{ entryType: 'mark', name, startTime, duration }`); neither `PerformanceMark` nor `Pe…",
    "component": "js (`crates/js/src/dom.rs:8227` — `performance.mark()`; `crates/js/src/dom.rs:8247` — `performance.measure()`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-688": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Touch`/`TouchList`/`TouchEvent` global constructors don't exist at all (`ReferenceError`), and `GlobalEventHandlers` has no `ontouchstart`/`ontouchmove`/`ontou…",
    "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`; analogous constructors at `dom.rs:437` `UIEvent`, `dom.rs:445` `MouseEvent`, `dom.rs:536-554` `PointerEvent`, no equivalent for Touch)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-689": {
-   "status": "open",
+   "status": "fixed",
    "title": "The whole `Attr`/`NamedNodeMap` half of DOM §4.9 is missing: `Element.attributes` is `undefined` (not a `NamedNodeMap`), `document.createAttribute()`/`createAtt…",
    "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, `_lumen_build_element` `dom.rs:2607-2707`, `createElement`/`createElementNS` `dom.rs:4310-4341`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-690": {
-   "status": "open",
+   "status": "fixed",
    "title": "`NavigatorUAData` is a plain `function NavigatorUAData() {}` with no `new.target` guard and no `[Symbol.toStringTag]` — `new NavigatorUAData()` succeeds from pa…",
    "component": "js (`crates/js/src/ua_client_hints.rs` — `UA_CLIENT_HINTS_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-691": {
-   "status": "open",
+   "status": "fixed",
    "title": "Two independent, previously unfiled defects surfaced by `uievents/textInput/api.html` and `uievents/ui_event_pseudo_target.html`: (1) `window.TextEvent` (legacy…",
    "component": "js (`crates/js/src/dom.rs`, `WEB_API_SHIM` — event-class block starting `dom.rs:432`: `UIEvent`/`MouseEvent`/`KeyboardEvent`/`InputEvent`/`FocusEvent`/`WheelEvent`/`PointerEvent`/`AnimationEvent`/… has no `TextEvent` sibling and no `pseudoTarget` member on `UIEvent.prototype`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-692": {
@@ -8263,136 +8263,136 @@
    "debtor": false
   },
   "BUG-693": {
-   "status": "open",
+   "status": "fixed",
    "title": "The entire JS-visible URL parsing/serialization surface is a ~35-line ad-hoc string-splitter, not the WHATWG URL Standard state machine: no input sanitization (…",
    "component": "js (`crates/js/src/dom.rs:4633` — `_lumen_parse_url`; `dom.rs:8074` — `_url_resolve`; feeds `URL`/`location`/every `<a>`/`<area>` IDL accessor via `_lumen_reflect_url`/`_lumen_hyperlink_url_get`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-695": {
-   "status": "open",
+   "status": "fixed",
    "title": "`URLPattern` is a hand-rolled mini pattern-matcher (its own doc comment: \"Pure JavaScript implementation\"), not a port of the WHATWG URLPattern Standard algorit…",
    "component": "js (`crates/js/src/url_pattern.rs` — `install_url_pattern_api_v8`/`URL_PATTERN_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-696": {
-   "status": "open",
+   "status": "fixed",
    "title": "`performance.mark()`/`.measure()` perform zero argument validation. Per User Timing L3 §3.1, `mark()` must throw `SyntaxError` when `markName` matches a legacy…",
    "component": "js (`crates/js/src/dom.rs:8366-8392` — `performance.mark`/`performance.measure` in `WEB_API_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-697": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.permissionsPolicy.allowsFeature(name)` returns `true` for any unrecognized feature name (`'made-up-xyz'`), not just for real-but-unlisted ones — spec…",
    "component": "js (`crates/js/src/permissions_policy.rs:37-44` — `FeaturePolicy.prototype.allowsFeature`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-698": {
-   "status": "open",
+   "status": "fixed",
    "title": "`EyeDropper.open()` не проверяет transient user activation — спека WICG требует немедленный отказ `NotAllowedError`, если вызов не инициирован пользовательским…",
    "component": "js (`crates/js/src/eye_dropper.rs` — тело шима `open()`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-699": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Table`'s constructor coerces `descriptor.initial`/`descriptor.maximum` with `...",
    "component": "js (`crates/js/src/webassembly.rs:112-125` — `WebAssembly.Table` constructor)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-700": {
-   "status": "open",
+   "status": "fixed",
    "title": "The WASM element-segment decoder only implements flags 0/1/2 (func-index-list active/passive segments) — every other legal flag value (3-7, including the expr-e…",
    "component": "js (`crates/js/src/wasm/parser.rs:547-599` — `parse_element_section`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-704": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Animation.prototype.commitStyles`/`.persist` missing entirely (`grep` — zero hits) — second-largest failure cluster of the `web-animations` run after [BUG-670]…",
    "component": "js (`crates/js/src/dom.rs:12954-13070` — Web Animations `WEB_API_SHIM`, `Animation.prototype`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-705": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.scripts`/`.images`/`.forms`/`.links`/`.anchors`/`.embeds`/`.plugins` all `undefined` (`document.scripts.length` throws `TypeError`) — these are live,…",
    "component": "js (`crates/js/src/dom.rs` — `Document` object literal, none of these seven accessors exist)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-709": {
-   "status": "open",
+   "status": "fixed",
    "title": "WebAuthn `create()`/`get()` never validate `rp.id`/`rpId` against the calling document's origin (W3C WebAuthn L2 §5.1.3) — confirmed via a temporary local test…",
    "component": "js (`crates/js/src/credentials.rs` — `CREDENTIALS_SHIM`) + network (`crates/network/src/webauthn.rs` — `VirtualAuthenticator`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-710": {
-   "status": "open",
+   "status": "fixed",
    "title": "`VideoFrame`/`AudioData` constructors never read/store their `data` source argument (so `VideoFrame.codedWidth`/`codedHeight` stay `0` and `AudioData` has nothi…",
    "component": "js (`crates/js/src/web_codecs.rs` — `webcodecs_shim`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-711": {
-   "status": "open",
+   "status": "fixed",
    "title": "The WebGL context is a plain object literal with no reachable prototype — `WebGLRenderingContext`/`WebGL2RenderingContext` don't exist as globals anywhere in th…",
    "component": "js (`crates/js/src/webgl_canvas.rs` — `WEBGL_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-712": {
-   "status": "open",
+   "status": "fixed",
    "title": "`navigator.gpu` is a plain object literal with no `GPU` interface identity — `globalThis.GPU` doesn't exist anywhere in the shim, so `navigator.gpu instanceof G…",
    "component": "js (`crates/js/src/webgpu.rs` — `WEBGPU_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-713": {
-   "status": "open",
+   "status": "fixed",
    "title": "`HIDManager`/`HIDDevice` are plain `class X extends EventTarget` with no constructor guard — `new HIDManager()`/`new HIDDevice(1,2,'x')` both construct successf…",
    "component": "js (`crates/js/src/webhid.rs` — `WEBHID_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-714": {
-   "status": "open",
+   "status": "fixed",
    "title": "`DOMException` doesn't match the WebIDL \"legacy exception\" binding shape: `name`/`message`/`code` are own instance data properties instead of prototype accessor…",
    "component": "js (`crates/js/src/v8_runtime.rs:120-163` — `DOM_EXCEPTION_POLYFILL`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-717": {
-   "status": "open",
+   "status": "fixed",
    "title": "`window.postMessage` passes the message through by reference instead of structured-cloning it (`assert_not_equals(e.data[0], x)` fails — same object comes back)…",
    "component": "js (`crates/js/src/dom.rs:8206-8224` — `window.postMessage`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-718": {
-   "status": "open",
+   "status": "fixed",
    "title": "`postMessage()` clones the payload via `JSON.stringify` instead of structured clone: calling with zero arguments doesn't throw (`message` is a required WebIDL a…",
    "component": "js (`crates/js/src/broadcast_channel.rs:193-219` — `BroadcastChannel.prototype.postMessage`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-719": {
-   "status": "open",
+   "status": "fixed",
    "title": "`MIDIPort`/`MIDIInput`/`MIDIOutput`/`MIDIAccess` are plain `class X extends EventTarget` exported directly on `window` with no constructor guard — `new window.M…",
    "component": "js (`crates/js/src/web_midi.rs` — `WEB_MIDI_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-720": {
-   "status": "open",
+   "status": "fixed",
    "title": "`MIDIInputMap`/`MIDIOutputMap` (spec-mandated separate maplike globals) don't exist at all — `MIDIAccess.inputs`/`.outputs` are both built from one shared, non-…",
    "component": "js (`crates/js/src/web_midi.rs` — `WEB_MIDI_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-721": {
@@ -8403,17 +8403,17 @@
    "debtor": false
   },
   "BUG-723": {
-   "status": "open",
+   "status": "fixed",
    "title": "На странице по схеме `file://` всё, что шим грузит своим `fetch`, падает с `TypeError: fetch: network error`, и элемент получает `error` вместо `load`: воспроиз…",
    "component": "js (`crates/js/src/dom.rs` — `_url_resolve` + `fetch`), network (провайдер `JsFetchProvider`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-726": {
-   "status": "open",
+   "status": "fixed",
    "title": "`RTCPeerConnection.prototype.createDataChannel(label, options)` отбрасывает второй аргумент целиком — возвращаемый объект не отражает ни одного поля `RTCDataCha…",
    "component": "js (`crates/js/src/webrtc_stub.rs` — `WEBRTC_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-727": {
@@ -8445,10 +8445,10 @@
    "debtor": false
   },
   "BUG-744": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<style>`, созданный разбором `innerHTML` (`div.innerHTML = '<style>…'`, затем узел переносится в `<head>`), не работает как таблица стилей и не виден `document…",
    "component": "js (`crates/js/src/dom.rs` — фрагментный парсер `innerHTML`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-746": {
@@ -8459,17 +8459,17 @@
    "debtor": false
   },
   "BUG-747": {
-   "status": "open",
+   "status": "fixed",
    "title": "Все ~220 членов живой обёртки узла — собственные свойства инстанса, а не операции прототипа: `Object.getOwnPropertyNames(host).length` = 217 против 3 у `Element…",
    "component": "js (`crates/js/src/dom.rs` — объектный литерал в `_lumen_build_element`; почти пустые `Element.prototype`/`Node.prototype`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-748": {
-   "status": "open",
+   "status": "fixed",
    "title": "У скоупа service worker свой независимый мини-шим `Headers`/`Response`, оставшийся в дофиксовом виде ([BUG-369](bugs/BUG-369-FIXED.md)) и ещё беднее: хранилище…",
    "component": "js (`crates/js/src/sw_worker.rs` — шим глобального скоупа service worker)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-751": {
@@ -8487,17 +8487,17 @@
    "debtor": false
   },
   "BUG-753": {
-   "status": "open",
+   "status": "fixed",
    "title": "725 внутренних имён движка по-прежнему **читаются** с глобала по известному имени: `typeof window._lumen_get_attr === 'function'`, `Object.getOwnPropertyNames(w…",
    "component": "js (`crates/js/src/dom.rs::WEB_API_SHIM` — 246 top-level `var`/`function _lumen_…`; регистрация нативов из Rust — `crates/js/src/v8_compat.rs::register_v8_native`/`_scoped`, 468 имён; плюс top-level объявления ~120 модульных шимов `crates/js/src/*.rs`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-754": {
-   "status": "open",
+   "status": "fixed",
    "title": "Остаток [BUG-379](bugs/BUG-379-FIXED.md): модель анти-фингерпринта смешанная и требует явного решения. `navigator.webdriver` отсутствует полностью (`!('webdrive…",
    "component": "js (`crates/js/src/dom.rs` — литерал `navigator`; намеренное отсутствие задокументировано в `crates/js/src/surface_api.rs`), тесты, закрепляющие текущую модель: `crates/js/src/surface_api.rs::tests::webdriver_absent_in_navigator`, `crates/js/tests/cases/no_automation_markers.rs::webdriver_not_in_navigator`, `crates/driver/tests/cases/antidetect_surface_api.rs::navigator_webdriver_is_absent`",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-755": {
@@ -8508,17 +8508,17 @@
    "debtor": false
   },
   "BUG-758": {
-   "status": "open",
+   "status": "fixed",
    "title": "Движок не отслеживает transient user activation вовсе: `navigator.userActivation` — замороженный литерал `{ isActive: true, hasBeenActive: true }`, то есть на в…",
    "component": "js (`crates/js/src/dom.rs` — `navigator.userActivation`; потребители: `_lumen_fs_request_error` там же, `crates/js/src/filesystem_access.rs:2601`, `crates/js/src/local_font_access.rs:151`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-759": {
-   "status": "open",
+   "status": "fixed",
    "title": "Гейт `scripts/scoped-test.sh` падает с `exit 101` на `credentials::tests::create_without_provider_rejects_not_allowed`: `assertion left == right failed, left: \"…",
    "component": "js (`crates/js/src/credentials.rs:516-540` — `create_without_provider_rejects_not_allowed` / `create_and_get_through_installed_provider`, процесс-глобальный слот провайдера)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-760": {
@@ -8529,17 +8529,17 @@
    "debtor": false
   },
   "BUG-761": {
-   "status": "open",
+   "status": "fixed",
    "title": "`SensorErrorEvent` не наследуется от `Event` вопреки `interface SensorErrorEvent : Event` (W3C Generic Sensor §11): `SensorErrorEvent.prototype instanceof Event…",
    "component": "js (`crates/js/src/generic_sensor.rs` — `GENERIC_SENSOR_SHIM`, конструктор `SensorErrorEvent`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-762": {
-   "status": "open",
+   "status": "fixed",
    "title": "Словарь `PositionOptions` не читается шимом вовсе: строк `timeout`/`maximumAge`/`enableHighAccuracy` в модуле нет, поэтому `{timeout: 0}` даёт `PERMISSION_DENIE…",
    "component": "js (`crates/js/src/geolocation.rs` — `GEO_SHIM`, `getCurrentPosition`/`watchPosition`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-763": {
@@ -8557,17 +8557,17 @@
    "debtor": false
   },
   "BUG-766": {
-   "status": "open",
+   "status": "fixed",
    "title": "`isSecureContext` отсутствует в `WorkerGlobalScope` вовсе (`'isSecureContext' in self === false`), хотя HTML LS объявляет его в миксине `WindowOrWorkerGlobalSco…",
    "component": "js (`crates/js/src/worker.rs:227` — `worker_global_shim`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-768": {
-   "status": "open",
+   "status": "fixed",
    "title": "`--deterministic` не действует ни в одной worker-области: патч (сид-PRNG для `Math.random`, замороженный `Date.now`) — обычный `v8::Script`, выполняемый в конте…",
    "component": "js (`crates/js/src/v8_runtime.rs:4809-4843` — блок `if let Some(seed) = deterministic_seed`; области `crates/js/src/worker.rs::run_worker_thread_v8`, `shared_worker.rs`, `sw_worker.rs`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-769": {
@@ -8683,17 +8683,17 @@
    "debtor": false
   },
   "BUG-840": {
-   "status": "open",
+   "status": "fixed",
    "title": "Исключение из колбэка `PerformanceObserver` съедается пустым `catch`: ни `window.onerror`, ни строки в stderr (замер `--variant po-callback-throw`, 2026-08-22 —…",
    "component": "js (`crates/js/src/dom.rs:11539` — `_perf_deliver_to_observer`: `try { obs._cb(list, obs); } catch(e) {}`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-855": {
-   "status": "open",
+   "status": "fixed",
    "title": "MutationObserver не видит половину **скриптовых** мутаций: `removeAttribute`/`removeAttributeNS` не порождают записи (перехвачен только путь установки атрибута)…",
    "component": "js (`crates/js/src/dom.rs` — обвязка `_mo_notify`, `dom.rs:9965`; поля `nextSibling`/`previousSibling` записи, `dom.rs:10001`–`10002`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-856": {
@@ -8704,17 +8704,17 @@
    "debtor": false
   },
   "BUG-857": {
-   "status": "open",
+   "status": "fixed",
    "title": "Событие `selectionchange` не диспатчится нигде и никогда, `'onselectionchange' in input` — `false`, хотя соседнее `select` приходит, а `setSelectionRange`/`setR…",
    "component": "js (`crates/js/src/dom.rs` — `grep -rn selectionchange crates/` даёт ноль совпадений)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-858": {
-   "status": "open",
+   "status": "fixed",
    "title": "`navigator.sendBeacon` возвращает `true` и не отправляет ничего, если URL относительный (доказано записью запросов на стороне сервера пробы), а для тела `ArrayB…",
    "component": "js (`crates/js/src/dom.rs:7379`–`7397` — `navigator.sendBeacon`, нет ветки для `ArrayBuffer`/`ArrayBufferView`; `crates/js/src/v8_runtime.rs:3449` — URL не разрешается относительно документа)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-859": {
@@ -8725,52 +8725,52 @@
    "debtor": false
   },
   "BUG-861": {
-   "status": "open",
+   "status": "fixed",
    "title": "Перемотка завершённой анимации назад одним лишь `currentTime = 0` не возвращает её в работу: `playState` остаётся `finished`, `finished`-промис не заменяется, в…",
    "component": "js (`crates/js/src/dom.rs` — Web Animations shim, сеттер `currentTime` не выполняет «update the finished state», Web Animations §4.4.11)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-862": {
-   "status": "open",
+   "status": "fixed",
    "title": "`WebSocket.send()` бросает `TypeError: Cannot read properties of null (reading 'byteLength')` на `null`/`undefined`/числе/объекте/функции вместо приведения к `U…",
    "component": "js (`crates/js/src/dom.rs:9853`–`9881` — `_lumen_ws_bytelen` читает `data.byteLength` без проверки, `send` шлёт всё нестроковое как `new Uint8Array(data)`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-863": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.createCDATASection` отсутствует; вызов стоит в общем `setupRangeTests()` (`dom/common.js:60`), поэтому падает `setup` и 31 id `dom/ranges`+`dom/traver…",
    "component": "js (`crates/js/src/dom.rs` — у `document` есть `createTextNode`/`createComment`/`createProcessingInstruction`, `createCDATASection` нет ни в шиме, ни в arena-DOM)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-864": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Node.lookupNamespaceURI`/`lookupPrefix`/`isDefaultNamespace` отсутствуют целиком (DOM §4.4): 70 сабтестов `dom/nodes/Node-lookupNamespaceURI.html`, ни одного P…",
    "component": "js (`crates/js/src/dom.rs`, `WEB_API_SHIM` — ноль совпадений по всем трём именам во всём воркспейсе)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-865": {
-   "status": "open",
+   "status": "fixed",
    "title": "Опция `passive` не разбирается вовсе: `preventDefault()` в пассивном слушателе не игнорируется и нет дефолта `passive:true` для `wheel`/`touch*` на window/docum…",
    "component": "js (`crates/js/src/dom.rs:443`–`460` — `addEventListener` читает только `capture`/`once`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-866": {
-   "status": "open",
+   "status": "fixed",
    "title": "Идентичность `SharedWorker` держится только на имени: `self.name` в `SharedWorkerGlobalScope` — `undefined` (у dedicated-воркера имя задаётся, `worker.rs:345`),…",
    "component": "js (`crates/js/src/shared_worker.rs:382`–`386` — `key = nm ? 'name:'+nm : 'url:'+url`, `String(name)`; `SHARED_WORKER_GLOBAL_SHIM` не заводит `globalThis.name`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-867": {
-   "status": "open",
+   "status": "fixed",
    "title": "Событие `connect` у `SharedWorkerGlobalScope` не `MessageEvent` (конструктора нет в воркерной области) и не несёт `data === ''`; работает только `e.ports.length…",
    "component": "js (`crates/js/src/shared_worker.rs`, `SHARED_WORKER_GLOBAL_SHIM` — объект для `onconnect` собирается литералом с одним полем `ports`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-868": {
@@ -8795,10 +8795,10 @@
    "debtor": false
   },
   "BUG-871": {
-   "status": "open",
+   "status": "fixed",
    "title": "Исключение из слушателя `message` (порта, воркера, окна) не доходит ни до `window.onerror`, ни до `'error'`, ни до `worker.onerror`, ни на stderr — три пути дос…",
    "component": "js (`crates/js/src/dom.rs:11965`/`:11968` — `MessagePort.prototype._deliver` зовёт слушателей в голом `catch(e) {}`; `:10896` — то же у `window.onmessage`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-872": {
@@ -8830,10 +8830,10 @@
    "debtor": false
   },
   "BUG-877": {
-   "status": "open",
+   "status": "fixed",
    "title": "`host.shadowRoot !== host.shadowRoot`: каждое чтение отдаёт новую обёртку, и возвращённое `attachShadow` значение тоже не совпадает с ней. Слушатель, повешенный…",
    "component": "js (`crates/js/src/dom.rs:5190` — геттер `shadowRoot` каждый раз строит свежий `_lumen_make_shadow_root`; то же у `attachShadow`, `:4715`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-878": {
@@ -8844,31 +8844,31 @@
    "debtor": false
   },
   "BUG-879": {
-   "status": "open",
+   "status": "fixed",
    "title": "Относительное значение import map не резолвится против базового URL карты: `{\"m\": \"./x.js\"}` + `import('m')` даёт `Error: module './x.js' not found` и ни одного…",
    "component": "js (`crates/js/src/esm.rs:148-151` — ветка (4) `resolve_specifier_with` отдаёт значение карты наружу как есть, минуя резолвинг веток (3)/(3b))",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-880": {
-   "status": "open",
+   "status": "fixed",
    "title": "`createImageBitmap(canvas)` отклоняется `TypeError: unsupported source type`, хотя `<canvas>` — основной `ImageBitmapSource`; `window.ImageBitmap` — `undefined`…",
    "component": "js (`crates/js/src/dom.rs` — `createImageBitmap`, сообщение `unsupported source type`; глобального `ImageBitmap` нет)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-881": {
-   "status": "open",
+   "status": "fixed",
    "title": "Navigation API диспатчит `navigate`/`currententrychange` только из явного `navigation.navigate()`: при `location.href = \"#1\"` адрес меняется (`entries().length…",
    "component": "js (`crates/js/src/dom.rs` — объект `navigation`; путь фрагментной навигации о нём не знает)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-882": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<script>`, однажды подключённый с не-JS `type` (`importmap`), после перетипизации в `text/javascript`, задания тела и повторной вставки не исполняется — ни в с…",
    "component": "js (`crates/js/src/dom.rs:6530` — ветка не-JS `type`; флага «already started» в шиме нет, повторной подготовки при новом подключении тоже)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-883": {
@@ -8928,31 +8928,31 @@
    "debtor": false
   },
   "BUG-892": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.forms`/`scripts`/`links` — `undefined` (при живом `document.images`, заведённом BUG-732): `document.forms.length` бросает `reading 'length'`, `namedIt…",
    "component": "js (`crates/js/src/dom.rs:6125` — единственный геттер `get images()` в литерале `document`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-893": {
-   "status": "open",
+   "status": "fixed",
    "title": "valueAsDate\" crates/` — ноль совпадений)",
    "component": "js (`grep -rn \"valueAsNumber\\",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-894": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Element.insertBefore` не проверяет, что опорный узел — ребёнок этого узла: `NotFoundError` (DOM LS §4.2.3 «pre-insert», шаг 2) не бросается никогда, узел встав…",
    "component": "js (`crates/js/src/dom.rs:5066` — `insertBefore` элемента; у `document`, `dom.rs:2526`, та же проверка есть)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-895": {
-   "status": "open",
+   "status": "fixed",
    "title": "У теневого корня нет `ParentNode`-примеси: `shadowRoot.append(...)` — `is not a function` (у элемента и `DocumentFragment` работает); у `document` нет `append`/…",
    "component": "js (`crates/js/src/dom.rs:1577` — `_lumen_make_shadow_root` собирает объектный литерал без прототипа)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-896": {
@@ -8970,38 +8970,38 @@
    "debtor": false
   },
   "BUG-898": {
-   "status": "open",
+   "status": "fixed",
    "title": "Декодер WebAssembly материализует объявленное число локальных переменных без всякой границы: 32-байтный модуль с числом локальных `0xffffffff` стоит **6,95 с**…",
    "component": "js (`crates/js/src/wasm/parser.rs:653-661` — `parse_code_section`: `let n = r.u32()?` и следом `for _ in 0..n { locals.push(ty) }`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-899": {
-   "status": "open",
+   "status": "fixed",
    "title": "User Timing L3: словарная форма игнорируется — `mark(name, {detail})` теряет `detail` (при учтённом `startTime`), `measure(name, {start: 0, end: 10})` меряет от…",
    "component": "js (`crates/js/src/dom.rs:8366-8392` — `performance.mark`/`performance.measure` в `WEB_API_SHIM`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-900": {
-   "status": "open",
+   "status": "fixed",
    "title": "«muted errors» (HTML LS §8.1.3.6): исключение из cross-origin классического скрипта репортится странице целиком — настоящие `message`/`filename`/`lineno`/`colno…",
    "component": "js (`crates/js/src/dom.rs` — `_lumen_report_exception`; `crates/js/src/v8_runtime.rs` — `eval_and_report`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-901": {
-   "status": "open",
+   "status": "fixed",
    "title": "Одиночный (непарный) суррогат `U+D800`…`U+DFFF` — легальный code unit WebIDL `DOMString` — молча превращается в `U+FFFD` при пересечении границы JS↔натив, потом…",
    "component": "js (`crates/js/src/v8_runtime.rs` — `to_rust_string_lossy` на границе регистрации нативов, 12 мест)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-902": {
-   "status": "open",
+   "status": "fixed",
    "title": "Cue отдаёт странице только текст и тайминги. Три пробела: `VTTCue.getCueAsHTML()` не существует вовсе (`cue.getCueAsHTML is not a function` — **92 уникальных са…",
    "component": "js (`crates/js/src/video_bindings.rs` — `appendCues()` строит cue из пяти полей; `crates/js/src/text_track_store.rs::tracks_json` и натив `__lumen_vtt_parse` — оба сериализуют `VttCue` без `settings`; `crates/engine/dom/src/vtt.rs` — `VttCueSettings` разбирается и никуда не уезжает)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-903": {
@@ -9012,17 +9012,17 @@
    "debtor": false
   },
   "BUG-904": {
-   "status": "open",
+   "status": "fixed",
    "title": "URL, оканчивающийся на `?`, даёт `search === '?'` вместо `''`: разбор кладёт в `search` весь хвост вместе с вопросительным знаком, не отличая «запрос пустой» от…",
    "component": "js (`crates/js/src/dom.rs::_lumen_parse_url`, `URL_PARSE_SHIM` — ветка `qIdx >= 0`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-905": {
-   "status": "open",
+   "status": "fixed",
    "title": "Runtime-ошибка shared-воркера рассылается всем подключённым клиентам, тогда как HTML LS §10.2.6 пробрасывает ошибку на объект-владелец **только** для выделенног…",
    "component": "js (`crates/js/src/shared_worker.rs` — хвост `_lumen_sw_report_exception` и рассылка в `run_shared_worker_thread_v8`; `crates/js/src/v8_runtime.rs::eval_and_report_via` — не разделяет фазу компиляции и фазу исполнения)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-906": {
@@ -9033,31 +9033,31 @@
    "debtor": false
   },
   "BUG-907": {
-   "status": "open",
+   "status": "fixed",
    "title": "Preload не экономит ни одного запроса и стартует поздно. Тело, скачанное по `<link rel=preload>`, никуда не кладётся: последующий реальный запрос того же URL (`…",
    "component": "js (`crates/js/src/dom.rs::_lumen_link_hint_fetch` — тело только дренируется), shell (`dispatch_preload_hints` — сетевого запроса по-прежнему нет)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-908": {
-   "status": "open",
+   "status": "fixed",
    "title": "Пер-сессионного шума ±1e-7 в аудио больше нет: реализация жила в `audio_bindings.rs`, который был мёртв из-за порядка установки ([BUG-550](bugs/BUG-550-FIXED.md…",
    "component": "js (`crates/js/src/web_audio.rs` — `AudioBuffer.getChannelData`/`copyFromChannel`, `AnalyserNode.getFloat*Data`), ADR-007 Layer 4",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-909": {
-   "status": "open",
+   "status": "fixed",
    "title": "Страничный `setTimeout(fn, delay, …args)` теряет хвостовые аргументы: `setTimeout(function(a,b){...}, 0, 'x', 'y')` вызывает обработчик с `undefined, undefined`…",
    "component": "js (`crates/js/src/dom.rs` — `setTimeout`/`setInterval` кладут в очередь `{id, fn, deadline, interval, nesting}`, `_lumen_tick_timers` зовёт `ready[k].fn()` без аргументов)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-910": {
-   "status": "open",
+   "status": "fixed",
    "title": "Динамический `import()` резолвится относительно **URL документа**, а `<base href>` игнорируется в любой форме. Замер прогоном `run_report.py --all --recursive -…",
    "component": "js (`crates/js/src/v8_esm.rs:331` — `resolve` берёт базой `s.page_url`; `set_page_url` зовётся только из `install_dom`/`set_module_context`, `<base href>` в состояние ESM-слоя не попадает вовсе)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-911": {
@@ -9068,87 +9068,87 @@
    "debtor": false
   },
   "BUG-912": {
-   "status": "open",
+   "status": "fixed",
    "title": "У событий нет class string: `Object.prototype.toString.call(new Event('x'))` даёт `[object Object]` вместо `[object Event]`, при том что WebIDL §3.7.3 требует н…",
    "component": "js (`crates/js/src/dom.rs` — 26 конструкторов событий шима; `Symbol.toStringTag` есть ровно у одного, `ErrorEvent` на `:737`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-914": {
-   "status": "open",
+   "status": "fixed",
    "title": "IndexedDB: события `error`/`abort` не всплывают по пути `request → transaction → database` (§3.5.6). `db.onabort`/`db.onerror` не вызываются никогда (`IDBDataba…",
    "component": "js (`crates/js/src/dom.rs` — `_idb_dispatch_request` стреляет `error` только по самому `IDBRequest`; `_idb_fire_txn` — только по самой `IDBTransaction`; `IDBDatabase.onabort`/`onerror` объявлены в конструкторе и не зовутся ниоткуда)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-915": {
-   "status": "open",
+   "status": "fixed",
    "title": "IndexedDB бросает обычный `Error` вместо `DOMException`: `e.name` верный, но `e.code` — `undefined` вместо 11 и `e instanceof DOMException` — `false`, поэтому `…",
    "component": "js (`crates/js/src/dom.rs:14615` — `_idb_error(name, message)` строит `new Error(message)` и присваивает `name`; глобальный `DOMException` в движке есть, `DOM_EXCEPTION_POLYFILL` в `crates/js/src/v8_runtime.rs`, шим им не пользуется)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-916": {
-   "status": "open",
+   "status": "fixed",
    "title": "IndexedDB: запрос выполняется против схемы на момент ДОСТАВКИ, а не постановки в очередь — `deleteIndex`, написанный последней строкой скрипта, отменяет уникаль…",
    "component": "js (`crates/js/src/dom.rs` — отложенная модель: `_idb_make_request` кладёт замыкание, `_idb_dispatch_request` выполняет его при флаше, тогда как `IDBObjectStore.prototype.createIndex`/`deleteIndex` правят `store.indexes` синхронно)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-917": {
-   "status": "open",
+   "status": "fixed",
    "title": "IndexedDB: любой «грязный» флаш пересериализует ВЕСЬ снапшот баз происхождения и перезеркаливает ВСЮ схему, O(все базы × все хранилища × все индексы) — инкремен…",
    "component": "js (`crates/js/src/dom.rs` — `_idb_persist_if_dirty` в конце `_lumen_idb_flush`; `_idb_serialize` — `JSON.stringify` всего `_idb_databases`; `_idb_persist_schema` — обход всех баз/хранилищ/индексов с отдельным `_lumen_idb_schema_op` на строку)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-919": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<details open>` внутри документа от `DOMParser.parseFromString` (и поддерева из `innerHTML`) не порождает `toggle`: у шагов изменения атрибута два входа — обёр…",
    "component": "js (`crates/js/src/dom.rs` — `_lumen_details_open_scan()` зовётся только из `_lumen_apply_ready_state('interactive')`; обёртки над `_lumen_set_attr`/`_lumen_remove_attr` там же)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-920": {
-   "status": "open",
+   "status": "fixed",
    "title": "`iframe.src` отдаёт атрибут дословно (`/child.html`) вместо разрешённого URL, хотя IDL объявляет `[ReflectURL]`: корректная строка рефлексии стоит на прототипе,…",
    "component": "js (`crates/js/src/iframe_element.rs` — `patchIframeElement`/`reflectAttr` ставит собственные свойства на элемент) поверх `crates/js/src/dom.rs` (`_lumen_install_reflection(HTMLIFrameElement.prototype, [['src','src','url'], …])`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-921": {
-   "status": "open",
+   "status": "fixed",
    "title": "Имя вложенного browsing context не хранится в контексте: `window.name` ребёнка на каждое обращение перечитывает атрибут `name` узла-хоста, поэтому правка атрибу…",
    "component": "js (`crates/js/src/frame_bridge.rs` — геттер `window.name` ребёнка зовёт `_lumen_f_attr(p, host, 'name')` на КАЖДОЕ чтение)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-922": {
-   "status": "open",
+   "status": "fixed",
    "title": "Ни одной из тринадцати констант типов узла нет ни на интерфейсе `Node`, ни на самих узлах: `Node.ELEMENT_NODE`/`Node.TEXT_NODE`/`el.ELEMENT_NODE` — `undefined`,…",
    "component": "js (`crates/js/src/dom.rs` — конструктор `Node`; на `document` одна константа `DOCUMENT_NODE` объявлена точечно на `:2414`, общей таблицы DOM §4.4 нет нигде)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-923": {
-   "status": "open",
+   "status": "fixed",
    "title": "Два дефекта, попавшие в один тест. (1) `Audio`/`Image`/`Option` — обычные функции, возвращающие `createElement(…)`, а не legacy factory functions: вызов **без `…",
    "component": "js (`crates/js/src/audio_element.rs:585-593` — `globalThis.Audio`; `crates/js/src/dom.rs` — `Image`/`Option`, `_lumen_build_element`/`_lumen_element_prototype_for`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-924": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<audio src>` не резолвится относительно базы документа: на странице с `http://127.0.0.1:PORT/` абсолютный URL доходит до `loadeddata` за 54 мс, а `/sine440.mp3…",
    "component": "js (`crates/js/src/audio_element.rs:264-283` — `startLoad(url)` передаёт значение атрибута в `__lumen_audio_load` как есть)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-925": {
-   "status": "open",
+   "status": "fixed",
    "title": "Атрибута `loading` у медиа-элемента нет: `el.loading = 'lazy'` кладёт экспандо, `getAttribute('loading')` остаётся `null` (замер по четырём тегам — `audio`/`vid…",
    "component": "js (`crates/js/src/audio_element.rs` — `patchAudioElement`; `crates/js/src/video_bindings.rs` — то же у `<video>`; `crates/js/src/dom.rs:17149`/`:17239` — рефлексия `loading` у `<img>`/`<iframe>` объявлена `'string'` вместо `'enum'`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-927": {
@@ -9166,17 +9166,17 @@
    "debtor": false
   },
   "BUG-929": {
-   "status": "open",
+   "status": "fixed",
    "title": "**Страница убивает браузер тремя строками: `canvas.width = canvas.height = 2147483647`.** Значение внутри диапазона `unsigned long` и по HTML LS §4.12.4 валидно…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — сеттеры `width`/`height` на `HTMLCanvasElement.prototype`, натив изменения размера), canvas (`crates/engine/canvas` — выделение backing store)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-930": {
-   "status": "open",
+   "status": "fixed",
    "title": "Остаток [BUG-451](bugs/BUG-451-FIXED.md), две половины одной нехватки контекста. (1) **`ctx.fillStyle = 'currentColor'` игнорируется**: по HTML LS §4.12.5.1.3 k…",
    "component": "js (`crates/js/src/canvas2d.rs` — натив сеттера цвета; `crates/js/src/shim/web_api_shim_mid.js` — `_lumen_c2d_paint_style`), canvas (`crates/engine/canvas/src/color.rs`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-931": {
@@ -9208,10 +9208,10 @@
    "debtor": true
   },
   "BUG-937": {
-   "status": "open",
+   "status": "fixed",
    "title": "`postMessage(offscreenCanvas, [offscreenCanvas])` доезжает до воркера сырым сентинелом транспорта: воркер получает `{__lumen_sentinel__, w, h, p}` с конструктор…",
    "component": "js (`crates/js/src/worker.rs:1685-1693` — установка воркерного контекста; `:542-566` — `_deserializeTransfers`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-938": {
@@ -9229,10 +9229,10 @@
    "debtor": false
   },
   "BUG-940": {
-   "status": "open",
+   "status": "fixed",
    "title": "У `<audio>` нет `currentSrc`: `undefined` до присвоения `src`, после пустой строки и после настоящего URL, тогда как HTML LS §4.8.11 требует `DOMString` с начал…",
    "component": "js (`crates/js/src/audio_element.rs` — `patchAudioElement`; ср. `crates/js/src/video_bindings.rs:935/1069/1160`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-941": {
@@ -9243,10 +9243,10 @@
    "debtor": false
   },
   "BUG-943": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Element.currentCSSZoom` не существует нигде в рабочем дереве — `ResizeObserverEntry` не может отдать немасштабированный размер отдельно от масштабированного. Н…",
    "component": "js (шим), layout (`zoom`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-944": {
@@ -9257,10 +9257,10 @@
    "debtor": false
   },
   "BUG-945": {
-   "status": "open",
+   "status": "fixed",
    "title": "`pagereveal` не диспатчится ни из одного места (ноль совпадений по `crates/`) — страница, ждущая его после навигации, зависает на первом `await`. Найден P2 2026…",
    "component": "js (`crates/js/src/view_transitions.rs`, `crates/shell/src/persistent_js.rs`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-946": {
@@ -9271,10 +9271,10 @@
    "debtor": false
   },
   "BUG-947": {
-   "status": "open",
+   "status": "fixed",
    "title": "`new Notification()` под запрещённым разрешением молча ничего не делает («silent drop», собственный doc-комментарий строки 116) вместо диспатча `error` по HTML…",
    "component": "js (`crates/js/src/notifications_bindings.rs`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-948": {
@@ -9285,10 +9285,10 @@
    "debtor": false
   },
   "BUG-949": {
-   "status": "open",
+   "status": "fixed",
    "title": "`scrollY`/`pageYOffset` читают позицию ДО прокрутки вплоть до ~500мс после `scrollTo()` — запрос ставится в очередь и применяется только на следующем проходе ше…",
    "component": "js (`crates/js/src/v8_runtime/runtime.rs` — `pending_page_scrolls`/`page_scroll_y`; `install/platform.rs:349`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-950": {
@@ -9299,17 +9299,17 @@
    "debtor": false
   },
   "BUG-951": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<label>.focus()` без собственного `tabindex` — полный no-op: не фокусируется ни метка, ни связанный контрол (`for`/первый labelable-потомок), `_lumen_is_focusa…",
    "component": "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_lumen_is_focusable`, `HTMLElement.prototype.focus`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-952": {
-   "status": "open",
+   "status": "fixed",
    "title": "Исключение, брошенное внутри колбэка таймера, не попадает никуда: ни `script error:`/`[JS error]` в логе браузера (как для синхронных ошибок), ни `window.onerro…",
    "component": "js (V8-раннер — вызов колбэков `setTimeout`/`setInterval`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-953": {
@@ -9327,24 +9327,24 @@
    "debtor": false
   },
   "BUG-955": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<video src=\"\">` бросает `error`, но не `loadstart` (ранний `return` перед `queueEvent('loadstart')`); `<audio src=\"\">` не бросает вообще ничего (`if (!HAS_PROV…",
    "component": "js (`crates/js/src/video_bindings.rs::startFetch`, `crates/js/src/audio_element.rs::startLoad`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-956": {
-   "status": "open",
+   "status": "fixed",
    "title": "`execCommand('insertText', …)` тихо ничего не делает вне contenteditable-выделения — `.focus()` на `<input>`/`<textarea>`/`<div contenteditable>` не создаёт `do…",
    "component": "js (`crates/js/src/v8_runtime/install/dom_core.rs` — `_lumen_exec_command`, ветка `\"insertText\"`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-957": {
-   "status": "open",
+   "status": "fixed",
    "title": "`iframe.contentWindow`/`window.parent`/`.top`/`.frameElement` — фасад окна фрейма (`winFacade`) собран как голый `{}` без `addEventListener`/`removeEventListene…",
    "component": "js (`crates/js/src/frame_bridge.rs::winFacade`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-958": {
@@ -9355,10 +9355,10 @@
    "debtor": false
   },
   "BUG-959": {
-   "status": "open",
+   "status": "fixed",
    "title": "`requestAnimationFrame`/`cancelAnimationFrame` отсутствуют целиком на `DedicatedWorkerGlobalScope` (`grep requestAnimationFrame crates/js/src/worker.rs` — 0 сов…",
    "component": "js (`crates/js/src/worker.rs`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-960": {
@@ -9369,45 +9369,45 @@
    "debtor": false
   },
   "BUG-962": {
-   "status": "open",
+   "status": "fixed",
    "title": "Остаток [BUG-479](bugs/BUG-479-FIXED.md): `scrollIntoView`'s новая `block`/`inline`-математика выравнивает по голому border-box таргета — CSS `scroll-margin-*`…",
    "component": "js (`web_api_shim_mid.js::Element.scrollIntoView`, `_lumen_align_scroll`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-963": {
-   "status": "open",
+   "status": "fixed",
    "title": "Hyperlink auditing (`ping`-атрибут, HTML LS §4.6.9) не отправляет ни одного запроса по клику ни для HTML `<a>`/`<area>` (контент-атрибут отражён как IDL-строка,…",
    "component": "js (нет call-site — механизм отсутствует целиком)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-965": {
-   "status": "open",
+   "status": "fixed",
    "title": "Headless-драйвер (`--mcp-port`/`--mcp`, `InProcessSession`) никогда не зовёт `update_scroll_states` (`grep -rn \"update_scroll_states\" crates/driver/src/ crates/…",
    "component": "js (`crates/js/src/v8_runtime/install/platform.rs::_lumen_get_scroll_state`) / driver (`crates/driver/src/session.rs::relayout`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-966": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Selection.setBaseAndExtent(aN, aO, fN, fO)` forwards both node ids straight to the native binding with zero tree-scope check — no adjustment when `anchorNode`/…",
    "component": "js (`web_api_shim_mid.js::setBaseAndExtent` / `dom_core.rs::_lumen_set_selection`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-967": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<style>@import ...</style>` obtained via `<template>.content.cloneNode(true)` and appended into the live tree never fetches its `@import` and never fires `load…",
    "component": "js (`web_api_shim_mid.js` §4.14 \"update a style block\") / shell (`relayout.rs::refresh_dynamic_css`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-968": {
-   "status": "open",
+   "status": "fixed",
    "title": "Mутация `.src` на уже подготовленном (once-only \"already started\") `<script>` никогда повторно не запускает \"prepare a script\" — `_lumen_resource_pending` модел…",
    "component": "js (`web_api_shim_mid.js` — `_lumen_resource_pending`/`_lumen_resource_try_prepare`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-969": {
@@ -9418,10 +9418,10 @@
    "debtor": false
   },
   "BUG-970": {
-   "status": "open",
+   "status": "fixed",
    "title": "Кросс-фреймовый Element-фасад (`crates/js/src/frame_bridge.rs`) не определяет `.attributes` (`NamedNodeMap`) вовсе — чтение бросает `TypeError` при попытке взят…",
    "component": "js (`frame_bridge.rs::frameElem`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-972": {
@@ -9446,10 +9446,10 @@
    "debtor": false
   },
   "BUG-975": {
-   "status": "open",
+   "status": "fixed",
    "title": "Программная запись скролла (`scrollTo`/`scrollBy`/`scrollLeft=`/`scrollTop=`) не видна синхронному чтению в том же тике: `_lumen_request_scroll` только кладёт з…",
    "component": "js (`crates/js/src/v8_runtime/install/platform.rs::install_scroll_state`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-976": {
@@ -9460,24 +9460,24 @@
    "debtor": false
   },
   "BUG-978": {
-   "status": "open",
+   "status": "fixed",
    "title": "`eval()`, вернувший сконструированный `CSSStyleSheet` (с непустым `cssRules`) как completion value скрипта, валит изолят фатальным V8 OOM за ~60-100с: цикл `she…",
    "component": "js (`crates/js/src/v8_runtime/value.rs::from_v8_bounded`) / js-shim (`crates/js/src/shim/web_api_shim_mid.js` — обёртки `cssRules`/`parentStyleSheet` конструируемого листа без кэша)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-979": {
-   "status": "open",
+   "status": "fixed",
    "title": "`contentWindow`/именованный доступ к окну — фиксированный список из ~11 IDL-имён, а не живой мост к реальному глобальному объекту фрейма: любой global, который…",
    "component": "js (`crates/js/src/frame_bridge.rs::winFacade`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-980": {
-   "status": "open",
+   "status": "fixed",
    "title": "`send()` выполняет весь цикл запрос/ответ синхронно внутри самого вызова (комментарий в коде так и говорит: «Execute synchronously»): все переходы `readyState`…",
    "component": "js (`crates/js/src/xhr.rs::XMLHttpRequest.prototype.send`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-981": {
@@ -9502,17 +9502,17 @@
    "debtor": false
   },
   "BUG-997": {
-   "status": "open",
+   "status": "fixed",
    "title": "Регресс-тест BUG-418 детерминированно красный на `main` (воспроизведено в изоляции, `--features v8-backend`, без правок): триггер, которым он провоцировал паник…",
    "component": "js (`crates/js/src/dom/tests/v8_perf_typedom_node.rs:726` — `native_binding_panic_does_not_abort_process`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-998": {
-   "status": "open",
+   "status": "fixed",
    "title": "Кросс-документный `history.back()`/`forward()`, вызванный со стороны страницы (`eval`), не доводит `document_ready` (таймаут 5с и 40с — тот же исход), а следующ…",
    "component": "js (`crates/js/src/dom.rs` — `_lumen_history_go`/`_lumen_history_traverse`) / shell (`navigation.rs::navigate_by`, кросс-документный путь BUG-835)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-999": {
@@ -9523,10 +9523,10 @@
    "debtor": false
   },
   "BUG-1000": {
-   "status": "open",
+   "status": "fixed",
    "title": "`SharedWorker` не закрывается на уходе документа: соединение живёт в процесс-глобальном `HUB_V8`, никто не итерирует открытые порты страницы и не шлёт `_lumen_s…",
    "component": "js (`crates/js/src/shared_worker.rs` — `hub_v8`/`HUB_V8`, `close_shared_worker_port_v8`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-1001": {
@@ -9600,10 +9600,10 @@
    "debtor": false
   },
   "BUG-1012": {
-   "status": "open",
+   "status": "fixed",
    "title": "Геттер `tabIndex` при отсутствующем `tabindex`-атрибуте вычисляет умолчание как `_lumen_is_focusable(nid) ? 0 : -1` — переиспользует предикат «фокусируем ли эле…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — геттер `tabIndex`; `web_api_shim_tail_b.js` — `_lumen_is_focusable`/`_LUMEN_FOCUSABLE_TAGS`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-1014": {
@@ -9614,10 +9614,10 @@
    "debtor": false
   },
   "BUG-1016": {
-   "status": "open",
+   "status": "fixed",
    "title": "`atob`/`btoa` бросают обычный `TypeError` на невалидном входе вместо спекового `DOMException InvalidCharacterError` (HTML LS §8.3) — след миграции с `rquickjs`,…",
    "component": "js (`crates/js/src/worker.rs::atob_native_v8`/`btoa_native_v8`, зарегистрированы и для главного окна через `v8_runtime.rs:922`; дубль в `crates/js/src/sw_worker.rs`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-1033": {
@@ -9628,10 +9628,10 @@
    "debtor": false
   },
   "BUG-1034": {
-   "status": "open",
+   "status": "fixed",
    "title": "`run-scripts` входит в активный CPU-спин без возврата в event loop на duckduckgo.com/baidu.com/microsoft.com — не «зависший promise» (гипотеза THREAD-0), а рабо…",
    "component": "js (v8_runtime, конкретное место не локализовано — нужен V8 CPU-профайлер)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-1035": {
@@ -9698,17 +9698,17 @@
    "debtor": false
   },
   "BUG-1045": {
-   "status": "open",
+   "status": "fixed",
    "title": "`getRootNode()` не пересекает границу shadow-дерева: у `ShadowRoot` метода нет вовсе (`typeof sr.getRootNode === 'undefined'`), а узел ВНУТРИ теневого дерева по…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_LUMEN_WRAPPER_MEMBERS.getRootNode:7444`, `_lumen_make_shadow_root:2537`, `ShadowRoot.prototype:3197`) + нативный слой (`crates/js/src/v8_runtime/install/dom_core.rs::_lumen_get_shadow_root_host:1126`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-1046": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.createTreeWalker(document, …)` и `createNodeIterator(document, …)` не находят НИ ОДНОГО узла при любом `whatToShow` — не только `SHOW_COMMENT`: замер…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid_b.js` — `_TreeWalker.prototype._root_nid:5181`, `nextNode:5321`, `previousNode:5304`, `firstChild:5225`, `_NodeIterator.prototype._ensure:5349`, `_nf_accepts:5143`)",
-   "date": null,
+   "date": "2026-09-11",
    "debtor": false
   },
   "BUG-001": {
@@ -14298,9 +14298,6 @@
   "js (`crates/js/src/dom.rs:12548` — `IDBDatabase.prototype.transaction` не ставит транзакцию в очередь; `:12471` — `_idb_flush_txn`, единственный путь к `complete`; `:12434` — `abort()`)": [
    "BUG-841"
   ],
-  "js (`crates/js/src/dom.rs:12772` — `window.getComputedStyle`)": [
-   "BUG-539"
-  ],
   "js (`crates/js/src/dom.rs:12954-13070` — Web Animations `WEB_API_SHIM`, `Animation.prototype`)": [
    "BUG-704"
   ],
@@ -14593,6 +14590,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_mid_b.js`, `web_api_shim_tail_b.js`, `web_api_shim_tail_mc.js`; `crates/js/src/generic_sensor.rs`, `geolocation.rs`, `wake_lock.rs`)": [
    "BUG-765"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_tail_b.js:103-112` — `window.getComputedStyle`)": [
+   "BUG-539"
   ],
   "js (`crates/js/src/shim/web_api_shim_tail_b.js` — `_lumen_is_focusable`, `HTMLElement.prototype.focus`)": [
    "BUG-951"
