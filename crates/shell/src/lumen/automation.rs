@@ -47,28 +47,101 @@ impl Lumen {
         /// silently misfire every MCP/BiDi click/type once engine chrome is
         /// the default, since `page_offset()` is otherwise the single source
         /// of truth for this conversion (real mouse input already uses it).
-        pub(crate) fn resolve_automation_target(&self, target: &lumen_driver::Target) -> Option<(f32, f32)> {
+        pub(crate) fn resolve_automation_target(&self, target: &lumen_driver::Target) -> Option<ResolvedTarget> {
             use lumen_driver::Target;
             let (offset_x, offset_y) = self.page_offset();
             let page_to_viewport = |px: f32, py: f32| {
                 (px - self.scroll_x + offset_x, py - self.scroll_y + offset_y)
             };
             match target {
-                Target::Point { x, y } => Some((x + offset_x, y + offset_y)),
+                Target::Point { x, y } => Some(ResolvedTarget {
+                    x: x + offset_x,
+                    y: y + offset_y,
+                    node: None,
+                }),
                 Target::NodeId(id) => {
                     let lb = self.layout_box.as_ref()?;
                     let node = lumen_dom::NodeId::from_index(*id as usize);
                     let rect = forms::find_box_rect(lb, node)?;
-                    Some(page_to_viewport(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0))
+                    let (x, y) = page_to_viewport(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+                    Some(ResolvedTarget { x, y, node: Some(node) })
                 }
                 Target::Selector(selector) => {
                     let lb = self.layout_box.as_ref()?;
                     let doc = self.layout_source.as_ref()?.document.lock().ok()?;
-                    let rect = lumen_layout::selector_query::find_all_by_selector(lb, &doc, selector)
-                        .first()?
-                        .rect;
-                    Some(page_to_viewport(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0))
+                    let found = *lumen_layout::selector_query::find_all_by_selector(lb, &doc, selector)
+                        .first()?;
+                    let rect = found.rect;
+                    let (x, y) = page_to_viewport(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+                    Some(ResolvedTarget { x, y, node: Some(found.node) })
                 }
+            }
+        }
+
+        /// BUG-1044: does a synthetic click at the resolved point actually reach
+        /// the element the caller named? `Some(message)` = it does not, and the
+        /// automation channel must answer that message instead of `success`.
+        ///
+        /// Resolution puts the point at the centre of the target's *own* box, so
+        /// a mismatch means something else is painted over that centre (or the
+        /// target owns no box at that position at all) — a click delivered there
+        /// would be dispatched at a foreign element, do nothing the caller asked
+        /// for, and still report `Ack`. That "succeeds but does nothing"
+        /// signature is what BUG-436 and BUG-1044 were both filed for, and it is
+        /// unrecoverable for the caller: a script cannot distinguish it from a
+        /// page that ignored the click.
+        ///
+        /// `Target::Point` has no element to belong to, so it is never checked —
+        /// a raw coordinate means exactly "click here", whatever is there.
+        ///
+        /// The hit test is [`Self::pointer_target`] — the very one
+        /// `handle_click_at` runs — so this answers what *that* click will see,
+        /// not a second, independently-drifting notion of the same question.
+        pub(crate) fn automation_hit_mismatch(
+            &self,
+            resolved: &ResolvedTarget,
+        ) -> Option<String> {
+            let node = resolved.node?;
+            let hit = self.pointer_target(resolved.x, resolved.y).page;
+            match hit {
+                Some(hit) if hit_belongs_to_target(&hit, node) => None,
+                Some(hit) => Some(format!(
+                    "Element click intercepted: point ({:.0}, {:.0}) hits {} instead of the target element (node {})",
+                    resolved.x,
+                    resolved.y,
+                    self.automation_node_label(hit.source_node),
+                    node.index(),
+                )),
+                None => Some(format!(
+                    "Element click intercepted: point ({:.0}, {:.0}) hits no element at all, not the target (node {})",
+                    resolved.x,
+                    resolved.y,
+                    node.index(),
+                )),
+            }
+        }
+
+        /// `<tag id>`-style label of a page node for automation diagnostics;
+        /// falls back to the bare node index when the document is unavailable
+        /// or the node is not an element (a text node reports its parent tag,
+        /// which is what `source_node` usually is inside an inline run).
+        fn automation_node_label(&self, node: lumen_dom::NodeId) -> String {
+            let Some(source) = self.layout_source.as_ref() else { return format!("node {}", node.index()) };
+            let Ok(doc) = source.document.lock() else { return format!("node {}", node.index()) };
+            let named = match &doc.get(node).data {
+                NodeData::Element { .. } => Some(node),
+                _ => doc.get(node).parent,
+            };
+            match named.map(|n| (n, &doc.get(n).data)) {
+                Some((n, NodeData::Element { name, attrs })) => {
+                    let id = attrs
+                        .iter()
+                        .find(|a| a.name.local == "id")
+                        .map(|a| format!("#{}", a.value))
+                        .unwrap_or_default();
+                    format!("<{}>{id} (node {})", name.local, n.index())
+                }
+                _ => format!("node {}", node.index()),
             }
         }
 
@@ -302,6 +375,36 @@ impl Lumen {
     pub fn automation_handle(&self) -> AutomationHandle {
         AutomationHandle::new(self.automation_cmd_tx.clone())
     }
+}
+
+/// An automation `Target` resolved against the live layout tree: the OS-window
+/// CSS-pixel point a click should be delivered at, plus the page node that point
+/// was derived from. `node` is `None` for `Target::Point` — a raw coordinate
+/// names no element (BUG-1044).
+pub(crate) struct ResolvedTarget {
+    /// OS-window CSS x, in `handle_click_at`'s space.
+    pub(crate) x: f32,
+    /// OS-window CSS y, in `handle_click_at`'s space.
+    pub(crate) y: f32,
+    /// The element the caller named, when it named one.
+    pub(crate) node: Option<lumen_dom::NodeId>,
+}
+
+/// Is `hit` the automation target `node` itself, or something inside it
+/// (BUG-1044)?
+///
+/// `HitTestResult::path` is the hit's ancestor chain bottom-up (`path[0] ==
+/// hit.node`, last entry = layout root), so `target ∈ path` answers both halves
+/// at once: equal to the hit, or an ancestor of it — i.e. the hit is the target
+/// or its descendant. `source_node` is checked separately because an `InlineRun`
+/// reports the *element* owning the run as `node` and the text node that was
+/// actually under the point as `source_node`; the latter is not on the path, so
+/// a caller naming that text node by id would otherwise read as a miss.
+pub(crate) fn hit_belongs_to_target(
+    hit: &lumen_paint::HitTestResult,
+    target: lumen_dom::NodeId,
+) -> bool {
+    hit.source_node == target || hit.path.contains(&target)
 }
 
 /// Collect the concatenated text content of `id`'s subtree (SDC-2 `Query` support).

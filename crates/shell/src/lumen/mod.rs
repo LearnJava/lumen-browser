@@ -52,3 +52,8 @@ mod viewport;
 mod viewport_sync;
 
 pub(crate) use state::Lumen;
+/// BUG-1044: the automation hit check is a free function (no `Lumen` needed to
+/// decide it), so it is re-exported here for `crate::tests` the same way the
+/// struct above is — the fixtures for it are real layout trees, not a window.
+#[cfg(test)]
+pub(crate) use automation::hit_belongs_to_target;

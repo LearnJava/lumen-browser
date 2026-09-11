@@ -7,6 +7,7 @@
 
 use super::*;
 
+mod automation_hit;
 mod bfcache_salvage;
 mod bug341_census;
 mod chrome_incremental;
