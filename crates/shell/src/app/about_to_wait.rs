@@ -788,12 +788,27 @@ impl Lumen {
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::Click(target) => {
-                    let point = self.resolve_automation_target(&target);
-                    if let Some((x, y)) = point {
-                        self.handle_click_at(x, y);
-                        let _ = reply_tx.send(AutomationReply::Ack);
-                    } else {
-                        let _ = reply_tx.send(AutomationReply::Error("Element not found".to_string()));
+                    match self.resolve_automation_target(&target) {
+                        // BUG-1044: a resolved point is not yet a delivered
+                        // click — check that the hit test at that point really
+                        // reaches the named element (or its subtree) before
+                        // dispatching, and report the miss instead of `Ack`.
+                        // Answering `success` for a click that landed on the
+                        // parent `<form>` is the "succeeds but does nothing"
+                        // signature a caller cannot recover from.
+                        Some(resolved) => match self.automation_hit_mismatch(&resolved) {
+                            Some(err) => {
+                                let _ = reply_tx.send(AutomationReply::Error(err));
+                            }
+                            None => {
+                                self.handle_click_at(resolved.x, resolved.y);
+                                let _ = reply_tx.send(AutomationReply::Ack);
+                            }
+                        },
+                        None => {
+                            let _ = reply_tx
+                                .send(AutomationReply::Error("Element not found".to_string()));
+                        }
                     }
                 }
                 AutomationCommand::Type(target, text) => {
@@ -802,7 +817,16 @@ impl Lumen {
                     // an unresolvable target was half of BUG-436's "succeeds
                     // but does nothing" signature.
                     match self.resolve_automation_target(&target) {
-                        Some((x, y)) => {
+                        // BUG-1044: same hit check as `Click` — the focus this
+                        // click sets is what the characters below go into, so a
+                        // point that lands on a foreign element types into the
+                        // wrong field (or silently nowhere) while reporting the
+                        // caller's field as typed.
+                        Some(resolved) if let Some(err) = self.automation_hit_mismatch(&resolved) => {
+                            let _ = reply_tx.send(AutomationReply::Error(err));
+                        }
+                        Some(resolved) => {
+                            let (x, y) = (resolved.x, resolved.y);
                             self.handle_click_at(x, y);
                             // BUG-480 срез 22: клик мог адресовать typeable-поле
                             // ВНУТРИ фрейма (`self.focused_frame`) вместо поля

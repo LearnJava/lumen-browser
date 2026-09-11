@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>BUG-1044 — клик мимо цели</title>
+<style>
+  body { font: 16px sans-serif; margin: 0; }
+  #stack { position: relative; width: 400px; height: 120px; }
+  #under { width: 200px; height: 60px; }
+  /* Накрывает #under целиком: клик по центру #under физически попадает сюда. */
+  #over { position: absolute; left: 0; top: 0; width: 400px; height: 120px;
+          background: rgba(0,0,0,0.15); }
+</style>
+</head>
+<body>
+<p>Три цели: попадающая, перекрытая и без собственного бокса.</p>
+
+<button id="ok" onclick="mark('ok')">Кликабельная</button>
+
+<div id="stack">
+  <div id="under" onclick="mark('under')">Под накладкой</div>
+  <div id="over" onclick="mark('over')">Накладка</div>
+</div>
+
+<p>текст <span id="empty"></span> вокруг пустого инлайна</p>
+
+<script>
+  window.__HITS = [];
+  function mark(who) { window.__HITS.push(who); }
+  // Слушатель на всём документе: показывает, КУДА клик реально пришёл,
+  // даже если это не одна из трёх целей.
+  document.addEventListener('click', function (e) {
+    window.__HITS.push('target=' + (e.target && (e.target.id || e.target.nodeName)));
+  }, true);
+</script>
+</body>
+</html>
