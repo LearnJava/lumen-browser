@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>E2E-3 — hit-test инлайн-кнопки «показать пароль»</title>
+<style>
+  body { font: 16px sans-serif; margin: 0; padding: 8px; }
+  .row { margin: 0 0 18px 0; }
+  /* Ширина обёртки — 420px, ровно та, что наблюдалась у кнопки на живом стенде. */
+  .password-wrapper { position: relative; width: 420px; }
+  .password-wrapper input { box-sizing: border-box; width: 100%; height: 40px;
+                            padding: 0 44px 0 10px; font: inherit; }
+
+  /* A — канонический виджет: кнопка вынута из потока в правый край поля. */
+  #toggle-a { position: absolute; right: 8px; top: 8px; width: 28px; height: 24px;
+              border: 1px solid #888; background: #eee; font: inherit; padding: 0; }
+
+  /* B — та же кнопка, но в нормальном потоке (inline-block по умолчанию). */
+  #toggle-b { border: 1px solid #888; background: #eee; font: inherit; }
+
+  /* C — инлайн-<span> вместо <button>, тоже вынут из потока. */
+  #toggle-c { position: absolute; right: 8px; top: 8px; border: 1px solid #888;
+              background: #eee; }
+
+  /* E/F/G — разделяют, что именно ломает вынос из потока: смещение `right`,
+     присутствие `<input>` в обёртке, или абсолютное позиционирование вообще. */
+  #toggle-e { position: absolute; right: 8px; top: 8px; border: 1px solid #888;
+              background: #eee; }                      /* right, без input */
+  #toggle-f { position: absolute; left: 100px; top: 4px; border: 1px solid #888;
+              background: #eee; }                      /* left, с input */
+  #toggle-g { position: absolute; left: 100px; top: 4px; border: 1px solid #888;
+              background: #eee; }                      /* left, без input */
+
+  /* H/I — тот же абсолют, но у блочного элемента и у инлайна, которому
+     display:block выставлен явно: отделяет «абсолют сломан вообще» от
+     «инлайн-уровень не выносится из строчного контекста». */
+  #toggle-h { position: absolute; left: 100px; top: 4px; border: 1px solid #888;
+              background: #eee; }
+  #toggle-i { display: block; position: absolute; left: 100px; top: 4px;
+              border: 1px solid #888; background: #eee; }
+
+  /* J — проверяет число из полевого наблюдения: inline-кнопка с width:100%,
+     оставшаяся в потоке, должна получить ширину обёртки (420px). */
+  #toggle-j { position: absolute; right: 8px; top: 8px; width: 100%;
+              box-sizing: border-box; border: 1px solid #888; background: #eee; }
+</style>
+</head>
+<body>
+
+<p>Четыре варианта «показать пароль». Вопрос пробы: получает ли инлайн-переключатель
+   бокс шириной во всю обёртку (420px) и накрывает ли он поле ввода.</p>
+
+<div class="row">
+  <div class="password-wrapper" id="wrap-a">
+    <input type="password" id="pw-a" placeholder="A: absolute button">
+    <button type="button" id="toggle-a">A</button>
+  </div>
+</div>
+
+<div class="row">
+  <div class="password-wrapper" id="wrap-b">
+    <input type="password" id="pw-b" placeholder="B: inline-flow button">
+    <button type="button" id="toggle-b">B</button>
+  </div>
+</div>
+
+<div class="row">
+  <div class="password-wrapper" id="wrap-c">
+    <input type="password" id="pw-c" placeholder="C: absolute span">
+    <span id="toggle-c">C</span>
+  </div>
+</div>
+
+<div class="row">
+  <!-- D — контроль: поле без обёртки и без переключателя вообще. -->
+  <input type="password" id="pw-d" placeholder="D: голое поле" style="width: 420px; height: 40px; box-sizing: border-box;">
+</div>
+
+<div class="row">
+  <div class="password-wrapper" id="wrap-e">
+    E: <span id="toggle-e">E</span>
+  </div>
+</div>
+
+<div class="row">
+  <div class="password-wrapper" id="wrap-f">
+    <input type="password" id="pw-f" placeholder="F: absolute span, left">
+    <span id="toggle-f">F</span>
+  </div>
+</div>
+
+<div class="row">
+  <div class="password-wrapper" id="wrap-g">
+    G: <span id="toggle-g">G</span>
+  </div>
+</div>
+
+<div class="row">
+  <div class="password-wrapper" id="wrap-j">
+    <input type="password" id="pw-j" placeholder="J: inline button, width:100%">
+    <button type="button" id="toggle-j">J</button>
+  </div>
+</div>
+
+<div class="row">
+  <div class="password-wrapper" id="wrap-h">
+    H: <div id="toggle-h">H</div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="password-wrapper" id="wrap-i">
+    I: <span id="toggle-i">I</span>
+  </div>
+</div>
+
+<script>
+  // Журнал того, куда клик и фокус пришли на самом деле, а не куда целились.
+  window.__HITS = [];
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    window.__HITS.push('click=' + (t && (t.id || t.nodeName)));
+  }, true);
+  document.addEventListener('focusin', function (e) {
+    var t = e.target;
+    window.__HITS.push('focus=' + (t && (t.id || t.nodeName)));
+  }, true);
+</script>
+</body>
+</html>
