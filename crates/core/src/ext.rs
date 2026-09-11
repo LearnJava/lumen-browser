@@ -2841,10 +2841,8 @@ pub enum ClockMode {
 /// call the same trait. The trait surface is engine-native, not protocol-shaped.
 ///
 /// Trait is object-safe (`dyn BrowserSession`) for transport flexibility.
-/// Implementations are: `InProcessSession` (in-process Rust API in lumen-driver),
-/// MCP-server adapter, BiDi-server adapter.
-///
-/// Phase 0: trait + todo!() stubs. Real implementations come with 8A.2+ tasks.
+/// Implementations: `InProcessSession`, `WinitSession`, `LiveWindowSession`
+/// (all `lumen-driver`), `NullBrowserSession` (this file, no-op default).
 pub trait BrowserSession: Send {
     /// Navigate to a URL or file path.
     ///
