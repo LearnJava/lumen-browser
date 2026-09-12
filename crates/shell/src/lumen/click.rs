@@ -785,6 +785,31 @@ impl Lumen {
                         return;
                     }
                     let t = target_attr.trim();
+                    // GAP-NAVCTX срез 2 (BUG-883): `_blank` is reserved by the
+                    // spec and never names a live frame (HTML LS §7.3.2) — check
+                    // it before `find_frame_by_name`, same order `link_destination`
+                    // already uses for frame-originated links. Opens a real new
+                    // tab instead of silently replacing the calling document in
+                    // place, which was strictly worse than the already-partially
+                    // fixed `window.open()` path (no tab was created at all).
+                    if t.eq_ignore_ascii_case("_blank") {
+                        if links::is_navigable_href(&href) {
+                            let resolved = self.source.resolve_href(&href);
+                            if click_log::is_enabled() {
+                                let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                                    node_id: *nid, tag, id_attr: id, class_attr: cls,
+                                });
+                                click_log::log_click(&click_log::ClickInfo {
+                                    win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                                    hit: hit_ref,
+                                    outcome: click_log::ClickOutcome::LinkNavigate { href: &href, resolved: &resolved },
+                                });
+                            }
+                            self.open_new_tab();
+                            self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                        }
+                        return;
+                    }
                     let named_frame = (!t.is_empty() && !t.eq_ignore_ascii_case("_self"))
                         .then(|| self.find_frame_by_name(t))
                         .flatten();
