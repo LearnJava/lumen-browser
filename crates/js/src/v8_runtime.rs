@@ -827,6 +827,7 @@ impl V8JsRuntime {
         install_v8!(launch_handler::install_launch_handler_api_v8);
         install_v8!(local_font_access::install_local_font_access_api_v8);
         install_v8!(long_animation_frames::install_long_animation_frames_bindings_v8);
+        install_v8!(long_tasks::install_long_tasks_bindings_v8);
         install_v8!(media_capabilities::install_media_capabilities_bindings_v8);
         install_v8!(media_capture::install_media_capture_bindings_v8);
         install_v8!(media_devices::install_media_devices_bindings_v8);

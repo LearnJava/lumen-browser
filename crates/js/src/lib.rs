@@ -121,6 +121,7 @@ pub mod digital_credentials;
 pub mod window_management;
 pub mod local_font_access;
 pub mod long_animation_frames;
+pub mod long_tasks;
 pub mod launch_handler;
 pub mod inert;
 pub mod shared_storage;
