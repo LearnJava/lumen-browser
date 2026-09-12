@@ -327,11 +327,9 @@ impl Lumen {
         }
         // STTF-1: strip a `:~:text=...` scroll-to-text directive before it
         // reaches `:target`/`find_element_by_id` — neither should ever try
-        // to match the literal directive text against an `id`. The
-        // directive itself isn't acted on yet (search/reveal is a later
-        // slice, `bugs/BUG-972-OPEN.md`); this only prevents its presence
-        // from corrupting the ordinary id-fragment path.
-        let id_part = text_fragment::parse_fragment(&fragment).element_id;
+        // to match the literal directive text against an `id`.
+        let parsed_fragment = text_fragment::parse_fragment(&fragment);
+        let id_part = parsed_fragment.element_id;
         if let Some(src) = self.layout_source.as_mut() {
             let mut doc = src.document.lock().unwrap();
             doc.set_target(id_part.as_deref());
@@ -342,13 +340,11 @@ impl Lumen {
             self.scroll_to(0.0);
             return;
         }
-        let Some(id_part) = id_part else {
-            return;
-        };
-        let node_id = self
-            .layout_source
-            .as_ref()
-            .and_then(|src| links::find_element_by_id(&src.document.lock().unwrap(), &id_part));
+        let node_id = id_part.as_deref().and_then(|id| {
+            self.layout_source
+                .as_ref()
+                .and_then(|src| links::find_element_by_id(&src.document.lock().unwrap(), id))
+        });
         let target_rect = node_id.and_then(|nid| {
             self.layout_box.as_ref().and_then(|lb| forms::find_box_rect(lb, nid))
         });
@@ -361,7 +357,25 @@ impl Lumen {
         if let (Some(nid), Some(rect)) = (node_id, target_rect) {
             self.scroll_nested_ancestors_into_view(nid, rect);
         }
-        if let Some(y) = target_y {
+        // STTF-1 срез 2: no id matched (or none present) but the URL carries
+        // `:~:text=` directives — search the rendered text for the first one
+        // that resolves and scroll to it. Per the spec, the id-fragment
+        // target (if it resolved) takes priority over the text directive;
+        // nested-scrolling-ancestor support for a text match is not covered
+        // yet (only the page-level scroll below), unlike the id path above.
+        let text_match_y = if target_y.is_none() {
+            self.layout_box.as_ref().and_then(|lb| {
+                let frags = lumen_layout::collect_visible_text(lb);
+                parsed_fragment
+                    .directives
+                    .iter()
+                    .find_map(|d| text_fragment::find_directive_match(&frags, d))
+                    .map(|m| m.bounding_rect().y)
+            })
+        } else {
+            None
+        };
+        if let Some(y) = target_y.or(text_match_y) {
             // CSS Scroll Behavior L1 §3: respect scroll-behavior on the scrolling box.
             // The page viewport's scroll-behavior comes from the root (<html>) element.
             if self.page_scroll_behavior() == ScrollBehavior::Smooth {
