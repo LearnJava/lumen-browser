@@ -1646,20 +1646,44 @@ pub(crate) fn spawn_frame(
     // и через `document.createElement('iframe')` с сразу выставленным `src`
     // (`frame_dynamic_load.rs::run_new_frame_load`) — оба идут через
     // `dest: None`, исполняется ДО обычного пути `fetch_iframe_source`, а не
-    // отклоняется как неподдерживаемая схема. `dest: Some(..)` — навигация
-    // (клик/скрипт), и ПЕРЕПРИСВАИВАНИЕ `.src` уже вставленного элемента
-    // тоже уходит сюда через `frame_dynamic.rs::poll_dynamic_frames`'s
-    // `delta.changed` → `navigate_frame_to` → `run_frame_navigation`,
-    // который выполняется на фоновом потоке без доступа к `parent_js` —
-    // этим срезом не тронуто, см. bugs/BUG-884-OPEN.md срез 2.
+    // отклоняется как неподдерживаемая схема.
+    //
+    // GAP-NAVCTX срез 7 (BUG-884): `dest: Some((href, _))` — навигация
+    // (клик/скрипт), включая ПЕРЕПРИСВАИВАНИЕ `.src` уже вставленного элемента
+    // (`frame_dynamic.rs::poll_dynamic_frames`'s `delta.changed` →
+    // `navigate_frame_to` → `run_frame_navigation`). Срез 6 предполагал, что
+    // этот путь выполняется на фоновом потоке БЕЗ доступа к `parent_js` — это
+    // было неверно: `FrameNavPrep::parent_js` уже несёт `Arc<dyn PersistentJs>`
+    // через `std::thread::spawn` в `replace_frame_document`, и сама реализация
+    // (`V8JsRuntime::run`, `crates/js/src/v8_runtime/runtime.rs`) тоннелирует
+    // каждый вызов через `SyncSender` на выделенный JS-поток — она безопасна
+    // с ЛЮБОГО вызывающего потока по конструкции, а не только с UI-потока
+    // среза 6. Настоящая причина, по которой срез 6 это отложил, не
+    // подтвердилась чтением кода.
     let js_url_result = match dest {
         None if info.srcdoc.is_none() => info
             .src
             .as_deref()
             .and_then(javascript_url_code)
             .map(|code| eval_iframe_javascript_url(code, parent_js)),
-        _ => None,
+        Some((href, _)) => {
+            javascript_url_code(href).map(|code| eval_iframe_javascript_url(code, parent_js))
+        }
+        None => None,
     };
+    // GAP-NAVCTX срез 7 (BUG-884): не-строковое завершение `javascript:` при
+    // НАВИГАЦИИ (`dest.is_some()`, в отличие от первичной вставки) — по HTML
+    // LS §7.4.5 не навигация вовсе. Для первичной вставки «остаться на
+    // прежнем документе» и «остаться на пустом `about:blank`» — одно и то же
+    // (см. ветку `Some(None)` ниже), но здесь под старым документом уже есть
+    // реальное состояние (свой JS-контекст, возможно, свои вложенные фреймы),
+    // которое падение в тот же `Some(None)`-путь заменило бы на новый пустой
+    // документ. Пустой `Vec` — тот же сигнал «навигация отклонена», который
+    // `apply_frame_navigation` уже понимает для generation-гонки (см. его
+    // doc-comment); `navigate_frame_to` в ответ просто не трогает историю.
+    if dest.is_some() && matches!(js_url_result, Some(None)) {
+        return Vec::new();
+    }
     // Источник HTML + база ребёнка для его относительных URL.
     let fetched = match &js_url_result {
         // Строковое завершение — новый документ фрейма, тем же путём, что и
