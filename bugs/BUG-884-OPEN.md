@@ -129,3 +129,67 @@ completion без обращения к сети (скриншот подтве�
 подтверждён A/B на `main` тем же байт-в-байт списком несовпадений,
 предсуществующий дрейф (см. [BUG-1008](BUG-1008-OPEN.md)/BUG-517 хвост),
 не от этой правки.
+
+## Срез 2 (GAP-NAVCTX срез 6, 2026-09-12) — `<iframe src="javascript:…">`, первичная вставка
+
+Закрыта первая из двух половин, оставленных срезом 1 «не в этом срезе»:
+`spawn_frame` (`frames.rs`) теперь распознаёт `javascript:` в `src` разметки
+ДО вызова `fetch_iframe_source` (который по-прежнему отказывает такой схеме —
+его собственный юнит-тест не тронут) и исполняет код через новый
+`eval_iframe_javascript_url`, строковое завершение становится HTML фрейма
+(`FrameSource::Inline`, адрес — `about:blank`, той же логикой, что и обычный
+`about:blank`-фрейм — `javascript:` не заводит запись истории). Покрыты ОБА
+call-сайта, идущих через `dest: None` (`spawn_frame`'s собственный параметр):
+парсерная вставка (`load_frame_sub_documents`) и `document.createElement
+('iframe')` с сразу выставленным `src` (`frame_dynamic_load.rs::
+run_new_frame_load`, тот же `dest: None`) — оба используют один и тот же
+путь в `spawn_frame`.
+
+**Компромисс вместо архитектуры среза 1:** карточка предполагала, что нужен
+собственный JS-контекст РЕБЁНКА на пустом `about:blank` до получения
+источника. Реализовано и ОТБРОШЕНО в этом же срезе — второй живой V8-изолят
+на том же потоке (пробный контекст + основной чуть позже) вешает движок
+насмерть без единого паник-сообщения: страница переставала печатать тики
+`setInterval` сразу после `PROBE script-start`, тем же почерком, что уже
+описан в `frame_dynamic.rs::dispatch_pending_frame_loads` doc-comment для
+другого случая создания V8-изолята не в том месте. Вместо этого код
+исполняется в контексте РОДИТЕЛЯ (`parent_js`, который `spawn_frame` и так
+получает параметром) — тот же компромисс, каким `BUG-883` срез 2 уже
+пожертвовал для `window.open()`. Для фрейма глубины 0 разницы не видно
+(`window.parent === window` у верхней страницы), поэтому WPT-тест
+(`parent.javascriptUrlRan++`) её не ловит; для глубины ≥ 1 код читает `parent`
+РОДИТЕЛЯ, а не самого фрейма (на один уровень не то) — известный хвост.
+
+**Не в этом срезе (важнее предыдущего пункта):** переприсваивание `.src` уже
+ЗАГРУЖЕННОГО фрейма (`iframe.src = iframe.src + ';'` из
+`iframe_javascript_url_initial_insertion.html`, весь
+`iframe_javascript_url_not_about_blank.html`) идёт СОВСЕМ другим путём —
+`frame_dynamic.rs::poll_dynamic_frames` кладёt такую смену в `delta.changed`,
+а не `delta.new`, и это уходит в `navigate_frame_to` →
+`replace_frame_document` → `run_frame_navigation`, который САМ выполняется
+на фоновом потоке (`std::thread::spawn`, см. doc-comment
+`replace_frame_document`) — то самое «`fetch_iframe_source` вызывается вне
+UI-потока, нет доступа к `Arc<dyn PersistentJs>` родителя на этом шаге»,
+которое карточка среза 1 назвала причиной отложить ВЕСЬ `<iframe>`-путь. Это
+и есть настоящая архитектурная работа: нужен тот же приём, что топ-уровневый
+`Lumen::eval_javascript_url` уже использует для `location.href=` —
+`route_query_js` до потока, которому принадлежит JS-контекст, а не прямой
+вызов с фонового потока. Живой проб (`verify_window_history_jsurl_gaps.py
+--variant jsurl-iframe`) это подтверждает: `jsurl-iframe-ran 1` и
+`jsurl-iframe-load` печатаются (первичная вставка исполнилась), но
+`jsurl-iframe-final ran=1` вместо ожидаемого `ran=2` — переприсваивание `.src`
+код не повторило. Ни один WPT id из «Цены по WPT» этим срезом целиком не
+закрыт (`iframe_javascript_url_initial_insertion.html` — `single_test`,
+падает на второй половине).
+
+Живая проверка: `tests/wpt/verify_window_history_jsurl_gaps.py --variant
+jsurl-iframe --variant jsurl-nav --variant frame-parser --variant
+frame-navigate --variant frame-late-src` (dev-release, Windows) — `jsurl-iframe`
+показывает описанное выше улучшение, остальные четыре — без изменений
+относительно уже задокументированного поведения (регрессии нет).
+
+Гейт: `cargo clippy -p lumen-shell --all-targets -- -D warnings` чисто;
+`scoped-test.sh` — два красных, оба предсуществующие и не от этой правки:
+`cpu_snapshots_match_references` (тот же дрейф, что и срез 1) и
+`lumen-network::fetch_range_200_fallback_when_server_ignores_range` (внешний
+флейк, не задет диффом — правка не трогает `lumen-network`).
