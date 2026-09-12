@@ -239,6 +239,23 @@ impl Lumen {
         self.reload();
     }
 
+    /// Run a `javascript:` URL's code (HTML LS §7.4.5) against the current
+    /// top-level document's JS context — GAP-NAVCTX срез 1 (BUG-884).
+    ///
+    /// Returns the completion value only if it is a JS string primitive;
+    /// `None` (non-string completion, no JS context, or an eval error) means
+    /// the caller must not navigate at all — a `javascript:` URL whose code
+    /// does not evaluate to a string is a no-op navigation per spec, not a
+    /// blank page.
+    pub(crate) fn eval_javascript_url(&mut self, code: &str) -> Option<String> {
+        let code = code.to_owned();
+        route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+            j.eval_js_completion(&code)
+        })
+        .and_then(Result::ok)
+        .flatten()
+    }
+
     /// FRAME-4: consume one frame-only history step off the top of
     /// `nav_back` (`back = true`) or `nav_fwd` (`back = false`) — called only
     /// once the caller has confirmed the top entry carries `frame_target`.
