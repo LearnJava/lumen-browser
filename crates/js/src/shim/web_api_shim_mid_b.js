@@ -737,8 +737,19 @@ function _lumen_timer_handle(v) {
 // global scope, so `setTimeout('var x = 1')` creates a global the way every
 // other engine does, where a direct `eval(src)` call would evaluate the code
 // inside this closure and throw the assignment away with it.
-function _lumen_timer_string_handler(code) {
-    var src = String(code);
+//
+// TRUSTEDTYPES-1 срез 1: the non-function handler is a Trusted Types script
+// sink (HTML LS timer-initialisation steps, TT L2 §4.1) — under
+// `require-trusted-types-for 'script'` a plain string must pass through
+// `defaultPolicy.createScript` or the call throws, checked synchronously here
+// (i.e. at schedule time, when `setTimeout`/`setInterval` calls this
+// function), same as the spec's timer initialisation steps run synchronously.
+// Compilation itself stays lazy (BUG-831) — only the compliance check moves
+// earlier.
+function _lumen_timer_string_handler(code, sink) {
+    var src = (typeof _lumen_tt_get_compliant_script === 'function')
+        ? _lumen_tt_get_compliant_script(code, sink)
+        : String(code);
     return function () { (0, eval)(src); };
 }
 
@@ -784,7 +795,7 @@ function _lumen_tick_timers() {
 }
 
 function setTimeout(fn, delay) {
-    if (typeof fn !== 'function') fn = _lumen_timer_string_handler(fn);
+    if (typeof fn !== 'function') fn = _lumen_timer_string_handler(fn, 'Window setTimeout');
     var nesting = _lumen_timer_nesting + 1;
     var ms = _lumen_timer_delay(delay);
     ms = _lumen_clamp_timeout(ms, nesting);
@@ -803,7 +814,7 @@ function clearTimeout(id) {
 }
 
 function setInterval(fn, interval) {
-    if (typeof fn !== 'function') fn = _lumen_timer_string_handler(fn);
+    if (typeof fn !== 'function') fn = _lumen_timer_string_handler(fn, 'Window setInterval');
     var nesting = _lumen_timer_nesting + 1;
     var ms = _lumen_timer_delay(interval);
     var first = _lumen_clamp_timeout(ms, nesting);

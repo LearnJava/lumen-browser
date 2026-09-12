@@ -152,3 +152,40 @@ continue` парсера — это был явный первый блокер 
 `script-src` (`img-src`/`connect-src`/`style-src`/…); внешний
 `<script src>` против host/scheme/hash источников; `report-uri`/
 `report-to`; hash-источники.
+
+## Срез 3 (2026-09-12) — первый sink TRUSTEDTYPES-1: `setTimeout`/`setInterval`
+
+Реализовано (`crates/js/src/trusted_types.rs`,
+`crates/js/src/shim/web_api_shim_mid_b.js`, `crates/shell/src/scripts.rs`):
+`require-trusted-types-for 'script'`, распарсенный срезом 2, впервые
+потребляется. Шелл пушит флаг в рантайм один раз на навигацию (та же точка,
+что `parse_time_layout`/`csp_policy` для `script-src`); JS-сторона получила
+`_lumen_tt_get_compliant_script(input, sink)` (TT L2 §4.1.1, script-подмножество)
+— `TrustedScript`-значение разворачивается как есть, иначе, при включённом
+флаге, идёт через `defaultPolicy.createScript(value, 'TrustedScript', sink)`
+или бросает `TypeError` без default policy; без директивы — поведение не
+меняется (значение проходит как есть, Phase 0 для остальных страниц).
+`_lumen_timer_string_handler` зовёт её синхронно в момент вызова
+`setTimeout`/`setInterval` (спека требует проверку в timer-initialisation
+steps, то есть на постановке в очередь, не на срабатывании) — ленивая
+компиляция строки (BUG-831) не тронута, меняется только момент проверки.
+
+Подтверждено живым окном (`--screenshot`, `require-trusted-types-for
+'script'` через `<meta>`): строка/`null` без default policy бросает
+`TypeError`; после `createPolicy('default', …)` то же самое проходит через
+`createScript` с аргументами `(value, 'TrustedScript', 'Window
+setTimeout'/'Window setInterval')`; уже готовый `TrustedScript` не идёт
+через default policy повторно. Соответствует WPT
+`trusted-types/Window-setTimeout-setInterval.html` и
+`block-string-assignment-to-Window-setTimeout-setInterval.html` (оба
+объявляют директиву через `<meta>`). +4 unit-теста
+(`crates/js/src/dom/tests/v8_trusted_types.rs`).
+
+Ещё не покрыто (весь остальной список sink'ов TT L2 §4.4, не изменилось по
+объёму со сравнения в самой задаче TRUSTEDTYPES-1 в ROADMAP.md):
+`innerHTML`/`outerHTML`, `Range.createContextualFragment`,
+`document.write`/`writeln`, `<script>.src`/`.textContent`, `eval`/`new
+Function`, атрибуты-обработчики событий через `setAttribute`; воркеры
+(`DedicatedWorker`/`SharedWorker` эквиваленты `setTimeout`/`setInterval` —
+шим общий, но флаг сегодня выставляется только для документа, не для
+воркер-рантайма, так что sink-строка `'Window …'` там пока не годится).

@@ -623,6 +623,17 @@ pub(crate) fn run_scripts_with_dom(
                     let root = doc.root();
                     crate::csp_enforce::document_meta_csp_policy(&doc, root)
                 };
+                // TRUSTEDTYPES-1 срез 1: `require-trusted-types-for 'script'`
+                // must be visible to the shim's `setTimeout`/`setInterval`
+                // string-handler check before any page script schedules a
+                // timer — same one-shot push as the layout/stylesheet state
+                // above, and for the same reason (nothing here reacts to a
+                // policy a script installs later).
+                if let Some((policy, _)) = &csp_policy
+                    && policy.require_trusted_types_for_script
+                {
+                    let _ = rt.eval("_lumen_tt_set_require_script(true);");
+                }
                 // Classic scripts run first (HTML LS §8.1.3 execution order).
                 for ResolvedScript { node: nid, source: src, external_ok, .. } in &scripts {
                     // BUG-827: к этому моменту настоящий парсер уже вставил всё,
