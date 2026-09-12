@@ -1664,6 +1664,28 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
 
   function isAncestorBid(bid) { return bid === PARENT_BID || bid === TOP_BID; }
 
+  // GAP-NAVCTX срез 8: `fr.contentWindow.location.href = url` (и .assign/
+  // .replace) — навигация ЧЕРЕЗ фасад, не через `iframe.src=` родителя. Пишем
+  // прямо в атрибут `src` хоста: тот же `delta.changed`, который уже разбирает
+  // `frame_dynamic.rs::poll_dynamic_frames` (срез 6/7) — второй `frame-load` их
+  // силами, без нового пути навигации. Компромисс: URL резолвится относительно
+  // документа-ВЛАДЕЛЬЦА хоста (как обычный `src`), а не документа фасада —
+  // спека резолвит относительный URL против базы НАВИГИРУЮЩЕГО документа;
+  // расходится, только когда родитель и потомок лежат в разных базах.
+  // hostNid лежит в документе родителя ВСЕГДА (тег `<iframe>` не бывает
+  // внутри собственного под-документа); для обычного bid это документ
+  // ТЕКУЩЕГО контекста (доступен напрямую), для bid-предка — документ,
+  // за которым закреплён биндинг (доступен только через бридж-натив).
+  function navigateFrameHost(bid, hostNid, url) {
+    if (hostNid === null || hostNid === undefined) return;
+    if (isAncestorBid(bid)) {
+      _lumen_f_set_attr(bid, hostNid, 'src', url);
+    } else if (typeof _lumen_make_element === 'function') {
+      var el = _lumen_make_element(hostNid);
+      if (el) el.setAttribute('src', url);
+    }
+  }
+
   // Срез 5: аргумент-узел мутации — фасад ТОГО ЖЕ биндинга с числовым __nid__.
   function isBridgeNode(bid, n) {
     return n !== null && n !== undefined && typeof n === 'object'
@@ -1975,9 +1997,18 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     });
     Object.defineProperty(w, 'location', {
       get: function() {
-        var href = _lumen_f_url(bid);
-        return { href: href, toString: function() { return href; } };
+        var loc = {};
+        Object.defineProperty(loc, 'href', {
+          get: function() { return _lumen_f_url(bid); },
+          set: function(v) { navigateFrameHost(bid, hostNid, String(v)); },
+          configurable: true,
+        });
+        loc.toString = function() { return _lumen_f_url(bid); };
+        loc.assign = function(v) { navigateFrameHost(bid, hostNid, String(v)); };
+        loc.replace = function(v) { navigateFrameHost(bid, hostNid, String(v)); };
+        return loc;
       },
+      set: function(v) { navigateFrameHost(bid, hostNid, String(v)); },
       configurable: true,
     });
     w.close = function() {};
@@ -2567,6 +2598,73 @@ mod tests {
                 assert!(eval_bool(rt, "window.name === 'hostframe'"));
             },
         );
+    }
+
+    /// GAP-NAVCTX срез 8: `contentWindow.location.href = url` (здесь —
+    /// `window.parent.location` из ребёнка, тот же фасад, что и
+    /// `fr.contentWindow` из родителя) больше не молча теряется на
+    /// одноразовом литерале — пишет `src` хоста в дереве родителя тем же
+    /// нативом (`_lumen_f_set_attr`), каким уже пишет `iframe.src=` (срез
+    /// 6/7), так что `poll_dynamic_frames` подхватывает её на следующем
+    /// тике без отдельного пути навигации.
+    ///
+    /// Реестр строится вручную (не через `with_child_context`), чтобы
+    /// получить `Arc` документа родителя и слить каждую мутацию через
+    /// [`take_frame_dom_dirty`] сразу же — иначе висящий флаг в глобальном
+    /// `HashSet` (ключ — адрес `Arc`, срез 25) переживает эту функцию и
+    /// после освобождения памяти может ложно сработать на чужом документе,
+    /// которому аллокатор отдаст тот же адрес (гонка с параллельными
+    /// тестами, ровно то, от чего `bridge_mutation_marks_frame_dirty_and_drains_once`
+    /// дренирует свой флаг перед возвратом).
+    #[test]
+    fn parent_facade_location_setter_writes_host_src_attribute() {
+        let rt = V8JsRuntime::new().unwrap();
+        let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        rt.eval("var window = globalThis;").unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        let parent_doc = Arc::new(Mutex::new(lumen_html_parser::parse(
+            "<html><body><iframe id='host' name='hostframe'></iframe></body></html>",
+        )));
+        registry.lock().unwrap().parent = Some(FrameDocBinding {
+            host_nid: 4,
+            doc: Arc::clone(&parent_doc),
+            url: "https://parent.example/".to_owned(),
+            name: Some("hostframe".to_owned()),
+            accessible: true,
+        });
+        rt.eval(
+            "typeof _lumen_frame_install_hierarchy === 'function' && _lumen_frame_install_hierarchy()",
+        )
+        .unwrap();
+        let key = Arc::as_ptr(&parent_doc) as usize;
+
+        assert!(eval_bool(
+            &rt,
+            "window.parent.location.href = 'https://parent.example/via-href.html'; \
+             window.frameElement.getAttribute('src') === 'https://parent.example/via-href.html'"
+        ));
+        assert!(take_frame_dom_dirty(key));
+
+        assert!(eval_bool(
+            &rt,
+            "window.parent.location.assign('https://parent.example/via-assign.html'); \
+             window.frameElement.getAttribute('src') === 'https://parent.example/via-assign.html'"
+        ));
+        assert!(take_frame_dom_dirty(key));
+
+        assert!(eval_bool(
+            &rt,
+            "window.parent.location.replace('https://parent.example/via-replace.html'); \
+             window.frameElement.getAttribute('src') === 'https://parent.example/via-replace.html'"
+        ));
+        assert!(take_frame_dom_dirty(key));
+
+        assert!(eval_bool(
+            &rt,
+            "window.parent.location = 'https://parent.example/via-assign-whole.html'; \
+             window.frameElement.getAttribute('src') === 'https://parent.example/via-assign-whole.html'"
+        ));
+        assert!(take_frame_dom_dirty(key));
     }
 
     #[test]
