@@ -1668,21 +1668,33 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
   // .replace) — навигация ЧЕРЕЗ фасад, не через `iframe.src=` родителя. Пишем
   // прямо в атрибут `src` хоста: тот же `delta.changed`, который уже разбирает
   // `frame_dynamic.rs::poll_dynamic_frames` (срез 6/7) — второй `frame-load` их
-  // силами, без нового пути навигации. Компромисс: URL резолвится относительно
-  // документа-ВЛАДЕЛЬЦА хоста (как обычный `src`), а не документа фасада —
-  // спека резолвит относительный URL против базы НАВИГИРУЮЩЕГО документа;
-  // расходится, только когда родитель и потомок лежат в разных базах.
-  // hostNid лежит в документе родителя ВСЕГДА (тег `<iframe>` не бывает
-  // внутри собственного под-документа); для обычного bid это документ
-  // ТЕКУЩЕГО контекста (доступен напрямую), для bid-предка — документ,
-  // за которым закреплён биндинг (доступен только через бридж-натив).
+  // силами, без нового пути навигации. hostNid лежит в документе родителя
+  // ВСЕГДА (тег `<iframe>` не бывает внутри собственного под-документа); для
+  // обычного bid это документ ТЕКУЩЕГО контекста (доступен напрямую), для
+  // bid-предка — документ, за которым закреплён биндинг (доступен только
+  // через бридж-натив).
+  //
+  // GAP-NAVCTX срез 9: срез 8 писал `url` дословно в `src` хоста, и хост
+  // резолвил его относительно СВОЕЙ базы (документа-ВЛАДЕЛЬЦА, как обычный
+  // `src=`) — расходится со спекой, которая резолвит навигацию против базы
+  // НАВИГИРУЮЩЕГО (читающего фасад) документа. Этот скрипт целиком выполняется
+  // в JS-реалме читателя (`winFacade`/`navigateFrameHost` — функции того же
+  // замыкания, что и весь шим документа), поэтому `_lumen_document_base_url()`
+  // здесь — база именно читателя. Резолвим `url` против неё ДО записи в `src`
+  // хоста: получив уже абсолютный URL, хост его не переразрешает, и правило
+  // "база хоста" из среза 8 больше ни на что не влияет.
   function navigateFrameHost(bid, hostNid, url) {
     if (hostNid === null || hostNid === undefined) return;
+    var resolved = String(url);
+    if (typeof _url_resolve === 'function' && typeof _lumen_document_base_url === 'function') {
+      var r = _url_resolve(resolved, _lumen_document_base_url());
+      if (r) resolved = r;
+    }
     if (isAncestorBid(bid)) {
-      _lumen_f_set_attr(bid, hostNid, 'src', url);
+      _lumen_f_set_attr(bid, hostNid, 'src', resolved);
     } else if (typeof _lumen_make_element === 'function') {
       var el = _lumen_make_element(hostNid);
-      if (el) el.setAttribute('src', url);
+      if (el) el.setAttribute('src', resolved);
     }
   }
 
@@ -2663,6 +2675,51 @@ mod tests {
             &rt,
             "window.parent.location = 'https://parent.example/via-assign-whole.html'; \
              window.frameElement.getAttribute('src') === 'https://parent.example/via-assign-whole.html'"
+        ));
+        assert!(take_frame_dom_dirty(key));
+    }
+
+    /// GAP-NAVCTX срез 9: срез 8 писал URL дословно в `src` хоста, и относительный
+    /// URL резолвился против базы документа-ВЛАДЕЛЬЦА хоста (`parent.example`) —
+    /// расходится со спекой (навигация резолвится против базы НАВИГИРУЮЩЕГО,
+    /// т.е. читающего фасад, документа). Стаб `_lumen_document_base_url`
+    /// изображает базу читателя, заведомо отличную от базы хоста, чтобы отличить
+    /// "резолвим против читателя" (правильно) от "резолвим против хоста" (срез 8).
+    #[test]
+    fn parent_facade_location_setter_resolves_relative_url_against_reader_base() {
+        let rt = V8JsRuntime::new().unwrap();
+        let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        rt.eval("var window = globalThis;").unwrap();
+        install_frame_bridge_v8(&rt, Arc::clone(&registry)).unwrap();
+        let parent_doc = Arc::new(Mutex::new(lumen_html_parser::parse(
+            "<html><body><iframe id='host' name='hostframe'></iframe></body></html>",
+        )));
+        registry.lock().unwrap().parent = Some(FrameDocBinding {
+            host_nid: 4,
+            doc: Arc::clone(&parent_doc),
+            url: "https://parent.example/".to_owned(),
+            name: Some("hostframe".to_owned()),
+            accessible: true,
+        });
+        rt.eval(
+            "typeof _lumen_frame_install_hierarchy === 'function' && _lumen_frame_install_hierarchy()",
+        )
+        .unwrap();
+        let key = Arc::as_ptr(&parent_doc) as usize;
+
+        rt.eval(
+            "globalThis._lumen_document_base_url = function() { return 'https://reader.example/sub/'; }; \
+             globalThis._url_resolve = function(rel, base) { \
+                 if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rel)) return rel; \
+                 return base + rel; \
+             };",
+        )
+        .unwrap();
+
+        assert!(eval_bool(
+            &rt,
+            "window.parent.location.href = 'relative.html'; \
+             window.frameElement.getAttribute('src') === 'https://reader.example/sub/relative.html'"
         ));
         assert!(take_frame_dom_dirty(key));
     }
