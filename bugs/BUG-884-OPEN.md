@@ -193,3 +193,64 @@ frame-navigate --variant frame-late-src` (dev-release, Windows) — `jsurl-ifram
 `cpu_snapshots_match_references` (тот же дрейф, что и срез 1) и
 `lumen-network::fetch_range_200_fallback_when_server_ignores_range` (внешний
 флейк, не задет диффом — правка не трогает `lumen-network`).
+
+## Срез 3 (GAP-NAVCTX срез 7, 2026-09-12/13, `p1-gap-navctx-srez7`) — переприсваивание `.src` уже загруженного фрейма
+
+Закрыт хвост, который срез 2 назвал «настоящей архитектурной работой»: доводы
+были неверными, не подтвердились чтением кода. `run_frame_navigation`
+(`frames.rs`, background thread) уже несёт `FrameNavPrep::parent_js` —
+`Arc<dyn PersistentJs>` клонируется в `prepare_frame_navigation` ДО спавна
+потока и передаётся в `spawn_frame` тем же параметром, что и для первичной
+вставки (срез 6 сам его туда прокинул, просто не воспользовался для
+`dest: Some(..)`). А сама реализация (`V8JsRuntime::run`,
+`crates/js/src/v8_runtime/runtime.rs:1094`) тоннелирует ЛЮБОЙ вызов через
+`SyncSender<V8Command>` на выделенный JS-поток — она рассчитана на вызов с
+произвольного потока по конструкции (тот же приём, каким ADR-014 держит
+QuickJS-совместимость), а не только с UI-потока. Правка — расширение матча в
+`spawn_frame`: `dest: Some((href, _))` теперь тоже проверяется на
+`javascript:`-схему ДО `fetch_iframe_source`, тем же `eval_iframe_javascript_url`
+(контекст РОДИТЕЛЯ — тот же компромисс среза 6, не расширен и не сужен).
+
+**Не-строковое завершение при навигации — отдельная ветка, не общая со
+срезом 6.** Для первичной вставки «не навигация» и «остаться на пустом
+`about:blank`» совпадают (фрейм и так на пустом документе). Для навигации
+`.src` уже ЗАГРУЖЕННОГО фрейма — нет: свалить туда же значило бы стереть
+живой документ ребёнка (свой JS-контекст, возможно, вложенные фреймы) пустым
+`about:blank`, хотя спека (HTML LS §7.4.5) явно требует не навигировать
+вовсе. `spawn_frame` теперь возвращает пустой `Vec` в этом случае — тот же
+сигнал «навигация отклонена», который `apply_frame_navigation` уже понимает
+для generation-гонки (см. его doc-comment); история не трогается.
+
+**Живая проверка** (`verify_window_history_jsurl_gaps.py --variant
+jsurl-iframe`, dev-release, Windows, `--mcp-live-port`): `jsurl-iframe-final
+ran=2` — код при `fr.src = fr.src + ';'` теперь исполняется второй раз
+(`jsurl-iframe-ran 2` печатается), что и требовал ожидаемый маркер
+(`iframe_javascript_url_initial_insertion.html` строит ассерт именно на этом
+счётчике). До правки — A/B на срезе 6 (`git stash`) — тот же вариант
+показывал `jsurl-iframe-final ran=1`, подтверждая, что улучшение от этой
+правки, а не от чего-то ещё в дереве. Соседние варианты (`jsurl-nav`,
+`frame-parser`, `frame-navigate`, `frame-late-src`) — без изменений
+относительно уже задокументированного поведения; `frame-navigate` теряет
+второй `frame-load` (навигация ДОЧЕРНЕГО документа через
+`fr.contentWindow.location.href=`, не через `.src` родителя) — подтверждено
+A/B тем же `git stash`, идентичный вывод уже на срезе 6, известный
+самостоятельный хвост, не в этой карточке.
+
+**Не в этом срезе:** сама навигация фрейма через ЕГО СОБСТВЕННЫЙ
+`location.href=`/клик (не через `.src` родителя) — отдельный путь
+(`frame-navigate` выше); для глубины ≥ 1 `javascript:` во `<iframe src>`
+по-прежнему читает `parent` РОДИТЕЛЯ, а не ребёнка (хвост среза 6, не тронут).
+
+Гейт: `cargo build -p lumen-shell --profile dev-release` чисто;
+`cargo clippy -p lumen-shell --all-targets -- -D warnings` и
+`cargo clippy --workspace --all-targets -- -D warnings` — оба чисто;
+`cargo test --bin lumen scripts_and_frames` (84/84) зелёный. `scoped-test.sh`
+не запустился до конца — известная поломка гейта (BUG-805, `lumen-network`
+виснет), не от этой правки: отдельный `cargo test -p lumen-network --lib`
+(2207/2207 за 4.01 с) прошёл в рамках гейта до BUG-805 тем же приёмом, что и
+срез 5. Полный WPT-прогон категории (`run_report.py --all --root
+html/semantics/embedded-content/the-iframe-element`) не запускался до конца:
+`--help` самого скрипта прямо предупреждает, что `--all` по невыверенным
+категориям (iframes — в их числе) — режим обзора, не гейт; живого проба
+(`verify_window_history_jsurl_gaps.py`, byte-точно предсказывающего этот же
+счётчик) достаточно для минимума карточки.
