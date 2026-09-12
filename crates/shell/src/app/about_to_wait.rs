@@ -1232,16 +1232,24 @@ impl Lumen {
                 let new_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
                 lumen_js::window_messaging::resolve_token(token, new_tab_id);
                 match resolved {
-                    Ok(source) => self.navigate_to(source),
+                    Ok(source) => {
+                        // GAP-NAVCTX срез 5 (BUG-797): armed here, right
+                        // before the call whose `run_scripts_with_dom` will
+                        // consume it — closes the ordering gap the eval below
+                        // used to leave open for a synchronous top-of-page
+                        // `opener.postMessage()` (see
+                        // `window_messaging::arm_pending_opener`).
+                        lumen_js::window_messaging::arm_pending_opener(new_tab_id, opener_tab_id);
+                        self.navigate_to(source);
+                    }
                     Err(reason) => eprintln!("window.open заблокирован: {reason}"),
                 }
-                // Installs `window.opener` (real `postMessage` back to
-                // `opener_tab_id`) and delivers anything already queued for
-                // this tab (e.g. the opener posted before yielding). Known
-                // ordering gap: a synchronous top-of-page script in the
-                // popup that posts to `opener` before this call lands still
-                // sees the shim's inert default — see `_lumen_install_opener`
-                // in the shim for the full caveat.
+                // Fallback install (idempotent — same values) for a popup
+                // document with no scripts at all, which never reaches
+                // `run_scripts_with_dom`'s runtime creation and so never
+                // consumes the armed pair above; also delivers anything
+                // already queued for this tab (e.g. the opener posted before
+                // yielding).
                 route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                     j.eval_js(&format!("_lumen_install_opener({new_tab_id}, {opener_tab_id});"));
                     j.eval_js(&format!("_lumen_window_pump_messages({new_tab_id});"));

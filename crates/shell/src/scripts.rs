@@ -510,6 +510,10 @@ pub(crate) fn run_scripts_with_dom(
     // frame/thaw callers.
     parse_time_stylesheet: Option<Arc<lumen_css_parser::Stylesheet>>,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>) {
+    // GAP-NAVCTX срез 5 (BUG-797): taken unconditionally, before either early
+    // return below — see `window_messaging::take_pending_opener`'s doc
+    // comment for why an unclaimed pair must not survive past this call.
+    let armed_opener = lumen_js::window_messaging::take_pending_opener();
     // `scripts` / `module_scripts` are already resolved by the caller in
     // document order, including fetched external `<script src>` bodies (BUG-164).
     // Import map must be captured before `doc` moves into the Arc and applied
@@ -633,6 +637,19 @@ pub(crate) fn run_scripts_with_dom(
                     && policy.require_trusted_types_for_script
                 {
                     let _ = rt.eval("_lumen_tt_set_require_script(true);");
+                }
+                // GAP-NAVCTX срез 5 (BUG-797): install `window.opener` before
+                // the first script line runs — same one-shot-push shape as
+                // the CSP/TrustedTypes push above, closing the gap where a
+                // synchronous top-of-page `opener.postMessage()` used to see
+                // the shim's inert default (the shell's post-`navigate_to`
+                // `_lumen_install_opener` call, still in place, now only
+                // matters for a popup with no scripts, which never reaches
+                // this point).
+                if let Some((own_tab_id, opener_tab_id)) = armed_opener {
+                    let _ = rt.eval(&format!(
+                        "_lumen_install_opener({own_tab_id}, {opener_tab_id});"
+                    ));
                 }
                 // Classic scripts run first (HTML LS §8.1.3 execution order).
                 for ResolvedScript { node: nid, source: src, external_ok, .. } in &scripts {
