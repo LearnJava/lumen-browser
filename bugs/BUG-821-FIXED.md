@@ -145,7 +145,7 @@ CSSOM-View §14 «run the scroll steps»: единственное место, �
 `window.scrollX` остаётся жёстким нулём, поэтому горизонтальное движение
 страницы событие не даёт. И событие приходит на `window` и `document` через
 `_lumen_fire_window_scroll_event` — то есть `document.onscroll = fn` его не
-увидит, это [BUG-874](BUG-874-OPEN.md).
+увидит, это [BUG-874](BUG-874-FIXED.md).
 
 **Тесты** (`crates/js/src/dom.rs`, модуль `v8_dragdrop_scroll_pointer`):
 `set_page_scroll_y_reports_only_real_movement` (кадр без движения не обязан

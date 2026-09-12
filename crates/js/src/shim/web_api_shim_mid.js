@@ -10256,7 +10256,27 @@ var document = {
     elementsFromPoint: function(x, y) {
         return _lumen_elements_from_point(Number(x), Number(y)).map(_lumen_make_element);
     },
+    // HTML LS §8.1.7.2.2 (DocumentAndElementEventHandlers) is already covered by
+    // the curated list looped in below; these two are Document-only, not part of
+    // any element mixin.
+    onreadystatechange: null,
+    onvisibilitychange: null,
 };
+
+// BUG-874 (second half): `Document includes GlobalEventHandlers` (HTML LS
+// §8.1.7.1), so every `on<type>` the curated element list already knows about
+// must also read `true` from `'onX' in document` — the assignment/dispatch
+// half was fixed by BUG-873's unified `document['on' + type]` read in
+// `_lumen_invoke_at`, but a plain bracket read answers `false` for a property
+// that was never declared, which is exactly the idiom WPT uses to detect
+// support. A handler this loop would clobber (`onfullscreenchange` and its
+// three GlobalEventHandlers-list siblings) is already declared above with the
+// same `null` value, so `hasOwnProperty` guards against overwriting a more
+// specific comment, not against a behavioural difference.
+for (var _dohi = 0; _dohi < _LUMEN_EVENT_HANDLER_ATTRS.length; _dohi++) {
+    var _dohAttr = _LUMEN_EVENT_HANDLER_ATTRS[_dohi];
+    if (!Object.prototype.hasOwnProperty.call(document, _dohAttr)) document[_dohAttr] = null;
+}
 
 // BUG-557: `document instanceof Node` answered `false` while `Node` was a live
 // global — the literal above is built with `Object.prototype` as its

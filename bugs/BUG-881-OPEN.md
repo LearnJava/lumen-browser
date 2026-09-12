@@ -18,7 +18,7 @@
 `'onnavigatesuccess'`, `'onnavigateerror'`, `'oncurrententrychange'` — все
 `false`; присваивание `navigation.onnavigate = fn` «прилипает» как обычное
 поле объекта и никем не читается (та же форма, что
-[BUG-874](BUG-874-OPEN.md) у `document`).
+[BUG-874](BUG-874-FIXED.md) у `document`).
 
 Замеренные мелочи того же объекта: `e.canIntercept`, `e.navigationType`,
 `e.hashChange` и `e.from` у `NavigationCurrentEntryChangeEvent` —

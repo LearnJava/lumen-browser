@@ -260,9 +260,9 @@ fn on_handler_at_an_ancestor_fires_on_a_script_dispatch() {
 fn document_level_on_handler_fires_like_a_listener() {
     // Half of BUG-874: `document.on<type> = fn` used to stick as a property and
     // never be called, because the document's dispatch read only its listener
-    // registry. It is a path entry like any other now. (The other halves of
-    // that bug — `'onX' in document`/`in window` answering false before any
-    // assignment, and engine-delivered `readystatechange` — are untouched.)
+    // registry. It is a path entry like any other now. (The other half of that
+    // bug — `'onX' in document`/`in window` answering false before any
+    // assignment — is covered separately below.)
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval(&format!(
         "{NEST} \
@@ -337,4 +337,61 @@ fn gc_collect_clears_capture_listeners_too() {
     ))
     .unwrap();
     assert_eq!(log_of(&rt), "");
+}
+
+#[test]
+fn on_handler_attrs_answer_true_to_in_on_document_and_window() {
+    // BUG-874's remaining half: `document.dispatchEvent`/`window.dispatchEvent`
+    // already called an `on<type>` handler once assigned (BUG-873 unified the
+    // dispatch path), but neither object had ever declared the property, so
+    // the `'onX' in Y` idiom WPT uses to feature-detect support answered
+    // `false` even before any assignment.
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "[ \
+                'onresize' in document, 'onerror' in document, \
+                'onclick' in document, 'onreadystatechange' in document, \
+                'onvisibilitychange' in document, \
+                'onresize' in window, 'onerror' in window, 'onclick' in window, \
+             ].join(',')",
+        )
+        .unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("true,true,true,true,true,true,true,true".into())
+    );
+}
+
+#[test]
+fn document_on_handler_declaration_does_not_disturb_dispatch() {
+    // The `hasOwnProperty` guard in the declaration loop must not shadow a
+    // handler that already has bespoke dispatch semantics elsewhere (e.g.
+    // `onfullscreenchange`, declared earlier in the same object literal).
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(&format!(
+        "{NEST} \
+         document.onresize = mark('doc-onresize'); \
+         document.dispatchEvent(new Event('resize'));"
+    ))
+    .unwrap();
+    assert_eq!(log_of(&rt), "doc-onresize");
+}
+
+#[test]
+fn engine_delivered_readystatechange_reaches_document_on_handler() {
+    // The other remaining half named in BUG-874 — already fixed as a side
+    // effect of BUG-873 (the engine calls `document.dispatchEvent`, which now
+    // reads `document.onreadystatechange` like any other on-handler), but
+    // undocumented and unguarded by a test until now.
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var seen = null; \
+             document.onreadystatechange = function() { seen = document.readyState; }; \
+             _lumen_apply_ready_state('interactive'); \
+             seen;",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("interactive".into()));
 }
