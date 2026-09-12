@@ -254,3 +254,55 @@ html/semantics/embedded-content/the-iframe-element`) не запускался �
 категориям (iframes — в их числе) — режим обзора, не гейт; живого проба
 (`verify_window_history_jsurl_gaps.py`, byte-точно предсказывающего этот же
 счётчик) достаточно для минимума карточки.
+
+## Срез 4 (GAP-NAVCTX срез 8, 2026-09-13, `p1-gap-navctx-srez8`) — `location.href=` фрейма через `contentWindow`, минуя `.src` родителя
+
+Закрыт последний нетронутый хвост варианта `frame-navigate`: не `javascript:`,
+а обычная навигация вида `fr.contentWindow.location.href = "relative.html"`
+(частый паттерн, которым один документ переключает URL СОСЕДНЕГО фрейма, не
+трогая его собственный атрибут `src`). До правки `w.location` фасада
+(`winFacade(bid)`, `crates/js/src/frame_bridge.rs`) был геттером, отдававшим
+одноразовый объектный литерал `{href, toString}` — запись `.href = url` молча
+падала на этом выброшенном объекте, ничего не долетая ни до какой навигации,
+и второй `frame-load` не наступал никогда.
+
+**Правка** — геттер `location` теперь строит объект с настоящим
+акцессором на `href` (плюс `assign`/`replace`, плюс сеттер на сам `location`
+для формы `w.location = url`), и все четыре формы записи форвардятся в новый
+хелпер `navigateFrameHost(bid, hostNid, url)`. Хелпер переиспользует тот же
+натив записи атрибута, каким уже пишет `iframe.src=` (`_lumen_f_set_attr` для
+bid-предка, `_lumen_make_element(hostNid).setAttribute('src', …)` для обычного
+bid) — навигация приходит как `delta.changed` в `frame_dynamic.rs::poll_dynamic_frames`
+на следующем тике, тем же путём, что уже прошли срезы 6/7, без отдельного
+пути навигации и без нового натива навигации.
+
+**Компромисс:** относительный URL резолвится против БАЗЫ ДОКУМЕНТА-ВЛАДЕЛЬЦА
+хоста (как у обычного `src=`), а не против базы документа, из которого читают
+`contentWindow.location` — спека резолвит навигацию против базы навигирующего
+документа. Расходится только когда родитель и потомок лежат в разных базах;
+не проверено этим срезом (в живом пробе оба документа лежат в одной
+директории, поэтому база совпадает у обоих).
+
+**Юнит-тест** (`frame_bridge.rs::parent_facade_location_setter_writes_host_src_attribute`,
+без прод-обвязки poll_dynamic_frames) — все четыре формы (`.href=`,
+`.assign()`, `.replace()`, `location=`) кладут `src` хоста в дереве родителя.
+**Живая проверка** (`verify_window_history_jsurl_gaps.py --variant
+frame-navigate`, dev-release, Windows, `--mcp-live-port`): было
+`frame-nav-final loads=1` и один `GET` на сервере пробы; стало
+`frame-load #1`+`frame-load #2` и оба `GET` (`?from=first`, `?from=second`).
+A/B тем же `git stash` подтвердил, что улучшение — от этой правки, а не от
+чего-то ещё в дереве.
+
+Гейт: `cargo build -p lumen-shell --profile dev-release` чисто;
+`cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings`,
+`cargo clippy -p lumen-shell --all-targets -- -D warnings` и
+`cargo clippy --workspace --all-targets -- -D warnings` — все чисто;
+`cargo test -p lumen-js --features v8-backend frame_bridge` (51/51) и
+`cargo test --bin lumen scripts_and_frames` (84/84) зелёные.
+
+**Не в этом срезе:** для глубины ≥ 1 `javascript:` во `<iframe src>`
+по-прежнему читает `parent` РОДИТЕЛЯ, а не ребёнка (хвост среза 6); базовый
+URL навигации через `contentWindow.location` резолвится против документа
+хоста, а не документа-читателя (компромисс выше). Оба хвоста GAP-NAVCTX
+(BUG-883 таймеры опенера в фоне, BUG-797 заглушка `opener: null` для обычной
+навигации) не тронуты.
