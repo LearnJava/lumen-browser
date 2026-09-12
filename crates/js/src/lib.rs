@@ -18,6 +18,7 @@ pub mod gamepad;
 pub mod highlight_api;
 pub mod iframe_element;
 pub mod broadcast_channel;
+pub mod window_messaging;
 pub mod canvas2d;
 pub mod close_watcher;
 pub mod compression;

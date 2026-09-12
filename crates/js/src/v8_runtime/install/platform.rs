@@ -594,11 +594,16 @@ pub(crate) fn install_window_open(
     // Queues a popup window request. Shell drains via `take_window_open_requests()`.
     // `features` is the raw feature string ("width=800,height=600,..."); we parse
     // `width=` and `height=` here so the shell receives typed values.
+    //
+    // GAP-NAVCTX срез 4 (BUG-797): mints a `window_messaging` token and returns
+    // it to JS so the `WindowProxy` stub `window.open()` hands back can queue
+    // `.postMessage()` calls before the shell has created the real tab — see
+    // `crate::window_messaging` module docs for the full addressing scheme.
     {
         let wor = Arc::clone(&window_open_requests);
-        reg!(scope, ctx, store, 
+        reg!(scope, ctx, store,
             "_lumen_window_open",
-            move |url: String, target: String, features: String| {
+            move |url: String, target: String, features: String| -> u32 {
                 let mut width: u32 = 800;
                 let mut height: u32 = 600;
                 for part in features.split(',') {
@@ -609,7 +614,39 @@ pub(crate) fn install_window_open(
                         height = v.trim().parse().unwrap_or(600);
                     }
                 }
-                wor.lock().unwrap().push(PopupRequest { url, target, width, height });
+                let token = crate::window_messaging::alloc_token();
+                wor.lock().unwrap().push(PopupRequest { url, target, width, height, token });
+                token
+            }
+        );
+    }
+    // ── window.open()/window.opener postMessage (GAP-NAVCTX срез 4, BUG-797) ────
+    // Both natives only queue into the process-global hub — actual delivery
+    // (an `eval_js` call on the addressed tab's, possibly parked, runtime) is
+    // the shell's job each `about_to_wait` tick, since a native here has no
+    // way to reach another tab's `PersistentJs` handle. See
+    // `crate::window_messaging` module docs.
+    {
+        reg!(scope, ctx, store,
+            "_lumen_window_postmessage_to_token",
+            move |token: u32, json: String, origin: String| {
+                crate::window_messaging::post_to_token(token, json, origin);
+            }
+        );
+        reg!(scope, ctx, store,
+            "_lumen_window_postmessage_to_opener",
+            move |target_tab_id: u32, from_tab_id: u32, json: String, origin: String| {
+                crate::window_messaging::post_to_opener(target_tab_id, from_tab_id, json, origin);
+            }
+        );
+        // Pull side: shell already knows which tab id this call is reaching
+        // (the active one, or a parked one it is calling into directly), so
+        // it passes it as a plain numeric literal in the `eval_js` source —
+        // see `_lumen_window_pump_messages` in the shim.
+        reg!(scope, ctx, store,
+            "_lumen_window_take_messages",
+            move |tab_id: u32| -> String {
+                crate::window_messaging::drain_json(tab_id)
             }
         );
     }

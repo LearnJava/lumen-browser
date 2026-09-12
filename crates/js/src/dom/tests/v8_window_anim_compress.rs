@@ -368,6 +368,114 @@ fn window_open_take_clears_queue() {
     assert_eq!(second.len(), 0);
 }
 
+// ─── GAP-NAVCTX срез 4 (BUG-797): window.open()/window.opener postMessage ──
+
+#[test]
+fn window_open_mints_a_nonzero_token() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("window.open('https://a.com')").unwrap();
+    let reqs = rt.take_window_open_requests();
+    assert_ne!(reqs[0].token, 0);
+}
+
+#[test]
+fn window_open_two_calls_mint_distinct_tokens() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("window.open('https://a.com'); window.open('https://b.com')").unwrap();
+    let reqs = rt.take_window_open_requests();
+    assert_ne!(reqs[0].token, reqs[1].token);
+}
+
+#[test]
+fn opener_postmessage_before_resolution_reaches_the_hub_by_token() {
+    // The opener can call `.postMessage()` on the stub before the shell has
+    // even drained `window_open_requests` — the message must queue under the
+    // token, not silently vanish (this is what `window_messaging::post_to_token`
+    // /`resolve_token` are for).
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("var w = window.open('https://a.com'); w.postMessage('hi');").unwrap();
+    let reqs = rt.take_window_open_requests();
+    let token = reqs[0].token;
+    crate::window_messaging::resolve_token(token, 424_242);
+    let drained = crate::window_messaging::drain(424_242);
+    assert_eq!(drained.len(), 1);
+    assert!(drained[0].0, "message from opener must be flagged fromOpener");
+    assert_eq!(drained[0].2, "\"hi\"");
+}
+
+#[test]
+fn window_open_postmessage_rejects_uncloneable_value() {
+    // Matches `BroadcastChannel.postMessage`'s existing JSON-round-trip
+    // contract: `JSON.stringify` throwing (a circular reference, unlike a
+    // bare function/`undefined`, which it silently drops) is what becomes
+    // `DataCloneError` here.
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "var w = window.open('https://a.com'); \
+             var circular = {}; circular.self = circular; \
+             var threw = false; \
+             try { w.postMessage(circular); } catch (e) { threw = e instanceof DOMException && e.name === 'DataCloneError'; } \
+             threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn install_opener_replaces_null_default_with_a_working_handle() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(bool_eval(&rt, "window.opener === null"));
+    rt.eval("_lumen_install_opener(555, 111);").unwrap();
+    assert!(bool_eval(
+        &rt,
+        "window.opener !== null && typeof window.opener.postMessage === 'function'"
+    ));
+}
+
+#[test]
+fn opener_postmessage_reaches_the_hub_addressed_to_the_opener_tab() {
+    let rt = v8_runtime_with_dom(make_doc());
+    // The opener's own registry answers "which of my popups is this" by
+    // token, not by tab id — `resolve_token` is what the shell would have
+    // already done for tab 555 by the time this popup's script runs.
+    let token = crate::window_messaging::alloc_token();
+    crate::window_messaging::resolve_token(token, 555);
+    rt.eval("_lumen_install_opener(555, 111); window.opener.postMessage('pong');").unwrap();
+    let drained = crate::window_messaging::drain(111);
+    assert_eq!(drained.len(), 1);
+    assert!(!drained[0].0, "message from a popup must not be flagged fromOpener");
+    assert_eq!(drained[0].2, "\"pong\"");
+}
+
+#[test]
+fn opener_postmessage_without_a_resolved_token_is_silently_dropped() {
+    // `_lumen_install_opener(555, 111)` names tab 555 as its own id, but
+    // nothing ever called `resolve_token` to give 555 a token — the opener's
+    // registry has no way to answer "which of my popups is this", so the
+    // message must not crash, just go nowhere.
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("_lumen_install_opener(999_777, 111); window.opener.postMessage('lost');").unwrap();
+    assert!(crate::window_messaging::drain(111).is_empty());
+}
+
+#[test]
+fn window_pump_messages_dispatches_a_message_event_from_the_opener() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "_lumen_install_opener(646464, 131313); \
+         var received = null; \
+         window.addEventListener('message', function(e) { received = e.data; });",
+    )
+    .unwrap();
+    let token = crate::window_messaging::alloc_token();
+    crate::window_messaging::resolve_token(token, 646464);
+    crate::window_messaging::post_to_token(token, "\"hello popup\"".to_string(), "https://opener.example".to_string());
+    rt.eval("_lumen_window_pump_messages(646464);").unwrap();
+    let r = rt.eval("received").unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("hello popup".into()));
+}
+
 // BUG-359: `window.open("relative.html")` must resolve against the
 // opener's document URL before being queued — previously the raw
 // string reached the shell/network layer and failed with

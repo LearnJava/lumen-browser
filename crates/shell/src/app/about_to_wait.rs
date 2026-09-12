@@ -1204,7 +1204,7 @@ impl Lumen {
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         {
             let popups = self.drain_query_js(|j| j.take_window_open_requests()).unwrap_or_default();
-            for (url, _target, _width, _height) in popups {
+            for (url, _target, _width, _height, token) in popups {
                 // GAP-NAVCTX срез 1 (BUG-884): `open("javascript:...")` must run
                 // the code (in the OPENER's context, per HTML LS §7.4.5) rather
                 // than reach the network layer, which today rejects `javascript:`
@@ -1225,10 +1225,51 @@ impl Lumen {
                 } else {
                     resolve_js_navigation(&url, &self.source)
                 };
+                // GAP-NAVCTX срез 4 (BUG-797): opener's tab id, read BEFORE
+                // `open_new_tab()` moves `self.tab_strip.active` to the popup.
+                let opener_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
                 self.open_new_tab();
+                let new_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
+                lumen_js::window_messaging::resolve_token(token, new_tab_id);
                 match resolved {
                     Ok(source) => self.navigate_to(source),
                     Err(reason) => eprintln!("window.open заблокирован: {reason}"),
+                }
+                // Installs `window.opener` (real `postMessage` back to
+                // `opener_tab_id`) and delivers anything already queued for
+                // this tab (e.g. the opener posted before yielding). Known
+                // ordering gap: a synchronous top-of-page script in the
+                // popup that posts to `opener` before this call lands still
+                // sees the shim's inert default — see `_lumen_install_opener`
+                // in the shim for the full caveat.
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                    j.eval_js(&format!("_lumen_install_opener({new_tab_id}, {opener_tab_id});"));
+                    j.eval_js(&format!("_lumen_window_pump_messages({new_tab_id});"));
+                });
+            }
+        }
+
+        // GAP-NAVCTX срез 4 (BUG-797): deliver window.opener/postMessage
+        // envelopes queued since the last tick against every tab's OWN
+        // runtime — the active one via `route_task_js` (may route to the
+        // engine thread under the flag), every parked one directly, the same
+        // way `switch_tab` already reaches into a backgrounded tab's
+        // `PageSnapshot::js_ctx` to run a GC pass. A backgrounded tab's
+        // timers stay frozen (BUG-883's still-open gap, not this one's), but
+        // a postMessage still has to land so a popup can hand a result back
+        // to an opener neither side is ever brought to the foreground for.
+        {
+            let active_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                j.eval_js(&format!(
+                    "if(typeof _lumen_window_pump_messages==='function')_lumen_window_pump_messages({active_id});"
+                ));
+            });
+            for (&tab_id, snap) in self.bg_tabs.iter() {
+                if let Some(js) = snap.js_ctx.as_ref() {
+                    js.eval_js(&format!(
+                        "if(typeof _lumen_window_pump_messages==='function')_lumen_window_pump_messages({tab_id});"
+                    ));
                 }
             }
         }

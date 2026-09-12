@@ -231,9 +231,25 @@ window.crossOriginIsolated   = !!_LUMEN_CROSS_ORIGIN_ISOLATED;
 
 // ── window.open() (HTML LS §8.7.1) ─────────────────────────────────────────
 // Opens a new browsing context (implemented as a new tab in Lumen).
-// Returns a stub WindowProxy with location/close — actual cross-window state
-// sharing is not implemented (window.opener is always null).
+// Returns a stub WindowProxy with location/close/postMessage.
+//
+// GAP-NAVCTX срез 4 (BUG-797): `postMessage` used to be a permanent no-op —
+// `window.opener` on the popup side was always `null` too — because nothing
+// addressed the popup's tab before the shell had even created it. The token
+// `_lumen_window_open` now returns fixes that: it is a stable handle the
+// shell resolves to the popup's real tab id on its next tick
+// (`window_messaging::resolve_token`, Rust), so a `.postMessage()` call made
+// before that resolution still queues correctly. `_lumen_win_stubs` keeps
+// this object reachable by token so a reply delivered from the popup can set
+// `MessageEvent.source` back to this exact object (see
+// `_lumen_window_pump_messages` below and `_lumen_install_opener`).
 window.opener = null;
+var _lumen_win_stubs = {};
+// Set by `_lumen_install_opener` below when this tab is a popup; -1 (no
+// opener) otherwise. Declared here so a page that queries them before ever
+// being installed as a popup sees a defined default, not a ReferenceError.
+var _lumen_own_tab_id = -1;
+var _lumen_opener_tab_id = -1;
 window.open = function(url, target, features) {
   url     = (url     == null) ? '' : String(url);
   target  = (target  == null) ? '_blank' : String(target);
@@ -241,11 +257,9 @@ window.open = function(url, target, features) {
   if (url !== '') {
     try { url = new URL(url, _lumen_loc_href).href; } catch (e) {}
   }
-  _lumen_window_open(url, target, features);
-  // Return a minimal stub so callers can call .close() / read .location.href
-  // without throwing. Real cross-window messaging is not yet supported.
+  var token = _lumen_window_open(url, target, features);
   var href = url || 'about:blank';
-  return {
+  var stub = {
     closed: false,
     opener: null,
     name: target,
@@ -256,8 +270,66 @@ window.open = function(url, target, features) {
     close: function() { this.closed = true; },
     focus: function() {},
     blur: function() {},
-    postMessage: function() {}
+    postMessage: function(message) {
+      var json;
+      try {
+        json = JSON.stringify(message === undefined ? null : message);
+        if (json === undefined) json = 'null';
+      } catch (e) {
+        throw new DOMException("Failed to execute 'postMessage' on 'Window': value could not be cloned.", "DataCloneError");
+      }
+      _lumen_window_postmessage_to_token(token, json, location.origin);
+    }
   };
+  _lumen_win_stubs[token] = stub;
+  return stub;
+};
+
+// Installs the real `window.opener` handle on a popup tab, called once by
+// the shell (`about_to_wait`, right after creating this tab from a
+// `window.open()`/`<a target=_blank>` request) with this tab's own id and
+// its opener's id. See `crate::window_messaging` (Rust) for the addressing
+// scheme this feeds. KNOWN GAP (GAP-NAVCTX срез 4, BUG-797): this call lands
+// after `Lumen::navigate_to` has already returned, so a synchronous
+// top-of-page script that calls `opener.postMessage()` before yielding once
+// still sees the `null` default below — deferred/`onload`-driven posts (the
+// common case) are unaffected.
+globalThis._lumen_install_opener = function(ownTabId, openerTabId) {
+  _lumen_own_tab_id = ownTabId;
+  _lumen_opener_tab_id = openerTabId;
+  window.opener = {
+    closed: false,
+    postMessage: function(message) {
+      var json;
+      try {
+        json = JSON.stringify(message === undefined ? null : message);
+        if (json === undefined) json = 'null';
+      } catch (e) {
+        throw new DOMException("Failed to execute 'postMessage' on 'Window': value could not be cloned.", "DataCloneError");
+      }
+      _lumen_window_postmessage_to_opener(openerTabId, ownTabId, json, location.origin);
+    }
+  };
+};
+
+// Delivers messages the shell drained from `window_messaging`'s hub for this
+// tab (`tabId`, a plain number the shell already knows — see the module docs
+// for why this is a shell-driven pull rather than a self-pumping tick the
+// way `_lumen_frame_pump_messages` is). Reuses `_lumen_deliver_frame_message`
+// for the actual `MessageEvent` construction/dispatch (onmessage, then
+// `addEventListener('message', …)`), same as the cross-frame bridge.
+globalThis._lumen_window_pump_messages = function(tabId) {
+  if (typeof _lumen_window_take_messages !== 'function') return;
+  var raw = _lumen_window_take_messages(tabId);
+  if (!raw) return;
+  var msgs;
+  try { msgs = JSON.parse(raw); } catch (e) { return; }
+  if (typeof _lumen_deliver_frame_message !== 'function') return;
+  for (var i = 0; i < msgs.length; i++) {
+    var m = msgs[i];
+    var source = m.fromOpener ? (window.opener || null) : (_lumen_win_stubs[m.token] || null);
+    _lumen_deliver_frame_message(m.data, m.origin, source);
+  }
 };
 // ── window.close()/closed/name (HTML LS §7.2.2, §7.4.5-§7.4.6) ─────────────
 // `name` is a plain Window attribute defaulting to the empty string (BUG-887);
