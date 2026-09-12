@@ -140,6 +140,62 @@ ioa-checked
 парсерного `<img src="/images/green.png">`, то есть до самой карты импортов
 дело не доходит.
 
+## Срез 1 (GAP-LOADEV, 2026-09-12, `p1-gap-loadev-srez1`)
+
+Закрыты все три пункта «Что нужно» выше — для двух из трёх путей загрузки
+(`<img>`, не помеченный `loading="lazy"`, и `<img loading="lazy">`,
+загружаемый по приближению к вьюпорту):
+
+* `complete`/`naturalWidth`/`naturalHeight` — три новых геттера на
+  `HTMLImageElement.prototype` (`crates/js/src/shim/web_api_shim_tail_b.js`,
+  рядом с существующим `_lumen_install_reflection`-блоком того же
+  интерфейса), backed by новая JS-side карта `_lumen_img_state` (nid →
+  `{complete, naturalWidth, naturalHeight}`, `web_api_shim_mid.js`, тот же
+  lifetime, что `_lumen_on_handlers`/`_lumen_listeners`, чистится в
+  `_lumen_gc_collect`). Чисто JS — не нужен новый нативный `reg!`-биндинг,
+  потому что decoded-image state рождается в shell-крейте, а js-крейт его не
+  видит; состояние доезжает тем же `eval_js`, каким шелл уже шлёт `scroll`.
+* `onload`/`onerror` IDL-атрибуты — проверкой оказалось, что они уже работают
+  для ЛЮБОГО элемента (общий `_LUMEN_EVENT_HANDLER_ATTRS`-список,
+  `web_api_shim_mid.js`) — карточка 2026-08-23 фиксировала их отсутствие ДО
+  того, как этот генерик появился (не датировано отдельным BUG-NNN, похоже
+  слился вместе с GAP-EVENTPATH/BUG-360-класс работой). Ничего не добавлено.
+* Диспатч `load`/`error` — два новых метода `PersistentJs::fire_image_load`/
+  `fire_image_error` (`crates/shell/src/persistent_js.rs`, `eval_js`-обёртка
+  над новыми JS-функциями `_lumen_fire_image_load`/`_lumen_fire_image_error`,
+  модель — уже существующая пара `fire_element_scroll`/`fire_element_scrollend`),
+  подключены в двух местах:
+  - **Eager-пайплайн** (`crates/shell/src/page_pipeline.rs`, блок, который уже
+    строит `url_to_img` для `register_img_bitmaps`): для каждого нелени­вого
+    `ImageRequest` — `fire_image_load(nid, w, h)`, если URL нашёлся в
+    декодированных, иначе `fire_image_error(nid)` (третьего исхода у
+    `fetch_and_decode_images` нет — «нет в `url_to_img`» и есть
+    `ImgOutcome::Skip`).
+  - **Lazy-путь** (`crates/shell/src/page_load.rs::fetch_and_register_lazy_images`):
+    `fire_image_load`/`fire_image_error` на каждой из шести ветвей
+    (успех/неудача × статика/1-кадровый GIF/анимированный GIF), через
+    `route_task_js` (ADR-016 M2.2c паттерн, тот же, что уже используют
+    `scrolling.rs`'s `fire_element_scroll` вызовы).
+
+**Живая проверка** (`tests/wpt/verify_callback_import_preload_gaps.py
+--variant img-onload-attr`, dev-release): парсерный `<img>` теперь печатает
+`ioa-parser-listener-fired`+`ioa-parser-attr-fired` (было: ни одного маркера
+загрузки) и `complete=false` до загрузки (было `complete=undefined`).
+`cargo test -p lumen-js --features v8-backend` — 3602 passed, 0 failed
+(+4 новых теста, `dom::tests::v8_bug630_image_load_events`); `cargo clippy
+-p lumen-shell --all-targets --features v8 -- -D warnings` и `-p lumen-js
+--all-targets --features v8-backend -- -D warnings` чисты.
+
+**Не в этом срезе (найден и заведён отдельно, не регрессия):**
+[BUG-1048](BUG-1048-OPEN.md) — третий путь загрузки, BUG-730's
+"streaming/dynamic" (скрипт создаёт/меняет `<img>` уже ПОСЛЕ первичной
+загрузки, самый частый случай на клиентски отрисованных страницах) реально
+фетчит и декодирует байты, но не диспатчит `load`/`error` вовсе — обнаружено
+тем же живым замером (`ioa-script-attr-fired` не печатается, хотя сервер
+видит запрос `?script-made`). Неприкреплённый `new Image()` (репрод из
+«Перезамер, срез 28» ниже) — ещё более узкая грань той же причины, деталь
+в BUG-1048.
+
 ## Перезамер (WPT-RUN-6, срез 28, 2026-08-23)
 
 `verify_window_history_jsurl_gaps.py --variant canvas-misc`: `<img>`,

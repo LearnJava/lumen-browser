@@ -590,6 +590,14 @@ var _lumen_capture_listeners = {};
 // same lifetime as the rest of that node's per-nid JS-side state.
 var _lumen_on_handlers = {};
 
+// BUG-630: decoded-image state for `<img>` (`HTMLImageElement.complete`/
+// `naturalWidth`/`naturalHeight`, HTML LS §4.8.3). Key: nid (number) →
+// `{complete, naturalWidth, naturalHeight}`. Written only by
+// `_lumen_fire_image_load`/`_lumen_fire_image_error` once the shell's decode
+// pipeline settles; absent entry reads as the pre-load defaults. Cleared for
+// a dead nid alongside `_lumen_listeners` in `_lumen_gc_collect`.
+var _lumen_img_state = {};
+
 // HTML LS §8.1.7.2.1 'the event handler content attribute' algorithm,
 // simplified: compile the attribute's text as a function body. An unparsable
 // body yields no handler rather than throwing.

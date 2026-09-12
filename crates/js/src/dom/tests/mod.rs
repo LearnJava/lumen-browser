@@ -227,3 +227,6 @@ mod v8_bug975_scroll_request_sync;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug599_get_root_node;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug630_image_load_events;

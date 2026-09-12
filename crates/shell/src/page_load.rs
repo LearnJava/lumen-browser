@@ -28,6 +28,13 @@ impl Lumen {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("Lazy: пропуск {url}: {e}");
+                    // BUG-630 (GAP-LOADEV срез 1): the eager pipeline fires
+                    // `error` for a decode/fetch failure (`page_pipeline.rs`);
+                    // this deferred path must do the same or a script awaiting
+                    // `img.onerror` on a lazy image hangs forever.
+                    route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                        j.fire_image_error(nid);
+                    });
                     continue;
                 }
             };
@@ -41,6 +48,9 @@ impl Lumen {
                             Ok(img) => img,
                             Err(e) => {
                                 eprintln!("Lazy: не декодируется GIF {url}: {e}");
+                                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                                    j.fire_image_error(nid);
+                                });
                                 continue;
                             }
                         };
@@ -53,6 +63,7 @@ impl Lumen {
                             "Lazy GIF-анимация: {} ({}×{}, {} кадров)",
                             url, gif.width, gif.height, gif.frame_count()
                         );
+                        let (w, h) = (first.width, first.height);
                         if let Some(r) = self.renderer.as_mut() {
                             // BUG-272 срез 17: insert into the CPU cache first, then
                             // register the returned Arc handle — raw_images shares the
@@ -66,29 +77,47 @@ impl Lumen {
                         }
                         self.gif_last_frame.remove(&url);
                         self.animated_gifs.insert(url, gif);
+                        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                            j.fire_image_load(nid, w, h);
+                        });
                         continue;
                     }
                     Ok(gif) => {
-                        if let Ok(img) = gif.frame_image(0) {
-                            if let Some(src) = self.layout_source.as_ref() {
-                                let mut doc = src.document.lock().unwrap();
-                                let node_id = NodeId::from_index(nid as usize);
-                                apply_intrinsic_size(&mut doc, node_id, img.width, img.height);
-                            }
-                            eprintln!("Lazy загружена (GIF, 1 кадр): {url} ({}×{})", img.width, img.height);
-                            if let Some(r) = self.renderer.as_mut() {
-                                let handle = self.image_cache.insert(lumen_image::ImageKey::new(&url), img);
-                                if let Err(e) = r.register_image(url.clone(), handle) {
-                                    eprintln!("Lazy: не зарегистрирована {url}: {e}");
+                        match gif.frame_image(0) {
+                            Ok(img) => {
+                                if let Some(src) = self.layout_source.as_ref() {
+                                    let mut doc = src.document.lock().unwrap();
+                                    let node_id = NodeId::from_index(nid as usize);
+                                    apply_intrinsic_size(&mut doc, node_id, img.width, img.height);
                                 }
-                            } else {
-                                self.pending_images.push((url, Arc::new(img)));
+                                eprintln!("Lazy загружена (GIF, 1 кадр): {url} ({}×{})", img.width, img.height);
+                                let (w, h) = (img.width, img.height);
+                                if let Some(r) = self.renderer.as_mut() {
+                                    let handle = self.image_cache.insert(lumen_image::ImageKey::new(&url), img);
+                                    if let Err(e) = r.register_image(url.clone(), handle) {
+                                        eprintln!("Lazy: не зарегистрирована {url}: {e}");
+                                    }
+                                } else {
+                                    self.pending_images.push((url, Arc::new(img)));
+                                }
+                                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                                    j.fire_image_load(nid, w, h);
+                                });
+                            }
+                            Err(e) => {
+                                eprintln!("Lazy: не декодируется GIF {url}: {e}");
+                                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                                    j.fire_image_error(nid);
+                                });
                             }
                         }
                         continue;
                     }
                     Err(e) => {
                         eprintln!("Lazy: не декодируется GIF {url}: {e}");
+                        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                            j.fire_image_error(nid);
+                        });
                         continue;
                     }
                 }
@@ -98,6 +127,9 @@ impl Lumen {
                 Ok(i) => i,
                 Err(e) => {
                     eprintln!("Lazy: не декодируется {url}: {e}");
+                    route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                        j.fire_image_error(nid);
+                    });
                     continue;
                 }
             };
@@ -108,6 +140,7 @@ impl Lumen {
                 let node_id = NodeId::from_index(nid as usize);
                 apply_intrinsic_size(&mut doc, node_id, image.width, image.height);
             }
+            let (w, h) = (image.width, image.height);
             if let Some(r) = self.renderer.as_mut() {
                 let handle = self.image_cache.insert(lumen_image::ImageKey::new(&url), image);
                 if let Err(e) = r.register_image(url.clone(), handle) {
@@ -116,6 +149,9 @@ impl Lumen {
             } else {
                 self.pending_images.push((url, Arc::new(image)));
             }
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                j.fire_image_load(nid, w, h);
+            });
         }
     }
 

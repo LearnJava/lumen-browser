@@ -75,12 +75,12 @@
 {
  "generated": "2026-09-12",
  "counts": {
-  "open": 165,
+  "open": 166,
   "fixed": 831,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 996,
+ "total_bugs": 997,
  "phases": [
   {
    "id": "P0",
@@ -6609,13 +6609,14 @@
       {
        "id": "GAP-LOADEV",
        "title": "GAP: модель загрузки сабресурсов и её события",
-       "status": "planned",
+       "status": "active",
        "size": "L",
-       "note": "События загрузки сабресурсов не диспатчит ни один тег, и это три независимых куска кода. `<img>` не шлёт ни `load`, ни `error` ни на одном пути вставки при видимо декодирующейся картинке, а `complete`/`naturalWidth`/`naturalHeight`/`onload`/`onerror` отсутствуют во всей цепочке прототипов `HTMLImageElement` — члены IDL просто не заводились (BUG-630). `<object data>` и `<embed src>` не грузят содержимое вовсе: ни резолва URL, ни запроса, ни события (BUG-798). `<script src>`, добавленный в теневой корень, не порождает запроса — доказано записью на стороне сервера пробы, лог браузера здесь не улика (BUG-878). Нужна общая модель «ресурс элемента: резолв, запрос, исход, событие», иначе четвёртый тег повторит то же.",
+       "note": "События загрузки сабресурсов не диспатчит ни один тег, и это три независимых куска кода. `<img>` не шлёт ни `load`, ни `error` ни на одном пути вставки при видимо декодирующейся картинке, а `complete`/`naturalWidth`/`naturalHeight`/`onload`/`onerror` отсутствуют во всей цепочке прототипов `HTMLImageElement` — члены IDL просто не заводились (BUG-630). `<object data>` и `<embed src>` не грузят содержимое вовсе: ни резолва URL, ни запроса, ни события (BUG-798). `<script src>`, добавленный в теневой корень, не порождает запроса — доказано записью на стороне сервера пробы, лог браузера здесь не улика (BUG-878). Нужна общая модель «ресурс элемента: резолв, запрос, исход, событие», иначе четвёртый тег повторит то же. **Срез 1 (2026-09-12, `p1-gap-loadev-srez1`):** BUG-630 закрыт для eager- и lazy-путей загрузки `<img>` — `complete`/`naturalWidth`/`naturalHeight` и диспатч `load`/`error` работают (`onload`/`onerror` IDL-атрибуты оказались уже реализованы генериком до этого среза); третий путь (BUG-730 «streaming/dynamic» — скрипт создаёт/меняет `<img>` после первичной загрузки) фетчит байты, но не диспатчит события — заведён отдельно как [BUG-1048](bugs/BUG-1048-OPEN.md). BUG-798/BUG-878 не начаты.",
        "bugs": [
         "BUG-630",
         "BUG-798",
-        "BUG-878"
+        "BUG-878",
+        "BUG-1048"
        ]
       },
       {
@@ -9702,6 +9703,13 @@
    "title": "`document.createTreeWalker(document, …)` и `createNodeIterator(document, …)` не находят НИ ОДНОГО узла при любом `whatToShow` — не только `SHOW_COMMENT`: замер…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid_b.js` — `_TreeWalker.prototype._root_nid:5181`, `nextNode:5321`, `previousNode:5304`, `firstChild:5225`, `_NodeIterator.prototype._ensure:5349`, `_nf_accepts:5143`)",
    "date": "2026-09-11",
+   "debtor": false
+  },
+  "BUG-1048": {
+   "status": "open",
+   "title": "Скриптом созданный/переприсвоенный `<img>` (BUG-730 «streaming/dynamic» путь — уже существует и реально фетчит+декодирует байты) не диспатчит `load`/`error` и н…",
+   "component": "shell (`crates/shell/src/app/user_event.rs:51-87` — `LoadEvent::ImageDecoded`, `crates/shell/src/page_load.rs:1015-1140` — `spawn_dynamic_image_loads`/`apply_stream_intrinsic_sizes`/`spawn_image_requests`)",
+   "date": null,
    "debtor": false
   },
   "BUG-001": {

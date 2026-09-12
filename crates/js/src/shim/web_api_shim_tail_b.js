@@ -1331,6 +1331,24 @@ _lumen_install_reflection(HTMLImageElement.prototype, [
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
 ]);
 
+// BUG-630: decoded-image state (HTML LS §4.8.3) — not content-attribute
+// reflection, backed by `_lumen_img_state` (nid -> {complete, naturalWidth,
+// naturalHeight}), populated by `_lumen_fire_image_load`/`_lumen_fire_image_error`
+// once the shell's decode pipeline settles. A node with no entry yet (decode
+// still in flight, or never started) reads as the pre-load defaults.
+['complete', 'naturalWidth', 'naturalHeight'].forEach(function(prop) {
+    Object.defineProperty(HTMLImageElement.prototype, prop, {
+        get: function() {
+            var n = _lumen_reflect_nid(this);
+            var st = (n === -1) ? undefined : _lumen_img_state[n];
+            if (!st) return prop === 'complete' ? false : 0;
+            return st[prop];
+        },
+        enumerable: true,
+        configurable: true,
+    });
+});
+
 // BUG-450: `width`/`height` are not a global attribute pair — until the canvas
 // members moved onto `HTMLCanvasElement.prototype` they were served to EVERY
 // element by the shared wrapper table, which is why `document.createElement('div')
@@ -3902,6 +3920,7 @@ window.reportError = reportError;
 //   - _lumen_listeners        keyed by 'nid:eventtype'
 //   - _lumen_capture_listeners same key shape, capture-phase half (BUG-873)
 //   - _lumen_on_handlers      keyed by 'nid:type' (BUG-360 on<type> IDL attributes)
+//   - _lumen_img_state        keyed by nid (BUG-630 decoded-image state)
 //   - _input_values           keyed by nid
 //   - _lumen_element_wrappers keyed by nid (BUG-291 identity cache)
 // The arena itself is append-only in Phase 1; physical compaction is Phase 3.
@@ -3928,6 +3947,7 @@ function _lumen_gc_collect(nids) {
             }
         }
         delete _input_values[nid];
+        delete _lumen_img_state[nid];
         // BUG-441: the control's runtime value lives document-side; a dead node
         // must not keep its slot in that map either.
         _lumen_clear_dirty_value(nid);
@@ -4035,6 +4055,26 @@ function _lumen_fire_window_scrollend_event() {
     var ev = new Event('scrollend', { bubbles: false, cancelable: false });
     if (typeof window !== 'undefined') { window.dispatchEvent(ev); }
     if (typeof document !== 'undefined') { document.dispatchEvent(ev); }
+}
+
+// BUG-630 (GAP-LOADEV срез 1): the shell calls these once its own decode
+// pipeline (eager or lazy) settles for the `<img>` at `nid` — this is the only
+// place `_lumen_img_state` is written. Per HTML LS §4.8.4.3, a failed decode
+// still flips `complete` to `true` (the load attempt is over, not still in
+// flight) with `naturalWidth`/`naturalHeight` at their zero default. Both
+// events are non-bubbling, non-cancelable, plain `Event` (§4.8.4.3/§8.1.5.3),
+// same shape as `scroll`/`scrollend` above.
+function _lumen_fire_image_load(nid, width, height) {
+    _lumen_img_state[nid] = { complete: true, naturalWidth: width, naturalHeight: height };
+    var el = _lumen_make_element(nid);
+    if (!el) return;
+    el.dispatchEvent(new Event('load', { bubbles: false, cancelable: false }));
+}
+function _lumen_fire_image_error(nid) {
+    _lumen_img_state[nid] = { complete: true, naturalWidth: 0, naturalHeight: 0 };
+    var el = _lumen_make_element(nid);
+    if (!el) return;
+    el.dispatchEvent(new Event('error', { bubbles: false, cancelable: false }));
 }
 
 // FRAME-1: fired on a sub-document's window when its viewport (the host
