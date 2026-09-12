@@ -1,9 +1,11 @@
 # BUG-1034: run-scripts входит в активный CPU-спин без возврата в event loop на реальных сайтах (duckduckgo, baidu, microsoft) — автоматизационный канал полностью не отвечает
 
-**Статус:** OPEN
-**Компонент:** js (v8_runtime — срезы 5/6 локализовали зависание до конкретного скрипта на трёх сайтах:
-duckduckgo и baidu — на инлайновой идиоме `globalThis`-полифилла (один класс); microsoft — на другом,
-jQuery-коде вокруг `#cli_shellHeaderSearchInput` (второй класс), см. «Срез 5»/«Срез 6»)
+**Статус:** FIXED 2026-09-12 (срез 8)
+**Компонент:** js (v8_runtime — корень найден срезом 8: `eval_and_report_via` гнала completion
+value верхнеуровневого скрипта через неограниченный по ширине `from_v8`, что для объектного
+значения вроде самого `window` — комбинаторный обход всего живого DOM. Фикс: объектный/массивный
+completion value top-level скрипта больше не обходится вовсе, поскольку ни один вызыватель его не
+читает)
 **Найден:** P1, THREAD-3 срез 1, 2026-09-08, живой `--bidi-port`/`--maximized` + headless `--trace-nav`
 
 ## Симптом
@@ -474,3 +476,77 @@ GC-пауза, спровоцированная накопленными алл�
 (б) если это GC — прогнать live-зависание с `LUMEN_MEM_REPORT=1` или V8-флагом `--trace-gc` через
 `v8::V8::set_flags_from_string` (тот же механизм, что `LUMEN_V8_PROFILE`, `named_access.rs::
 apply_v8_profile_flag`) и посмотреть, идёт ли GC-цикл непрерывно вместо однократного.
+
+## Срез 8 (THREAD-3, 2026-09-12, `p1-thread3-hangs-slice8`): корень найден и исправлен — все три сайта
+
+**Метод:** пункты (а) и (б) среза 7 сделаны буквально. (а) временные (не закоммичены на время
+диагностики) раздельные `eprintln!`-тайминги вокруг `compile_cached!` и `compiled.run(tc)` внутри
+`eval_and_report_via` (`crates/js/src/v8_runtime/eval.rs`), плюс печать в цикле `scripts.rs:615`
+до/после `_lumen_pop_current_script()` и `fire_parser_script_event`. (б) постоянный флаг
+`LUMEN_V8_TRACE_GC=1` (`--trace-gc` через `v8::V8::set_flags_from_string`, тот же механизм, что
+`LUMEN_V8_PROFILE` — добавлен в `named_access.rs::apply_v8_trace_gc_flag` как переиспользуемый
+диагностический инструмент, не temp-патч). Живой headless `--trace-nav`, `LUMEN_NO_ADBLOCK=1`,
+duckduckgo.com.
+
+**Результат — гипотезы (а)/(б) обе бьют в одну точку.** Лог показал: `compile done`/`run done` для
+37-байтового скрипта `self.globalThis=self.globalThis||self` печатаются штатно, `run done` — за
+4.2 микросекунды. Печать `pop_current_script start` (следующая строка кода после `match
+rt.eval_and_report(src)`) **не появляется вовсе** — зависание находится строго ВНУТРИ
+`eval_and_report_via`, между печатью `run done` (сразу после `compiled.run(tc)`) и возвратом из
+функции. Единственный код между ними — конвертация результата `from_v8(tc, val)`. Одновременно
+`--trace-gc` показал: сразу после этой точки начинается **непрерывная** серия `Scavenge`/
+`Incremental Mark-Compact` с монотонно растущей кучей (40 МБ → 240+ МБ за 24 с наблюдения, без
+единой паузы) — не разовая коллекция, а сборщик мусора, не успевающий за темпом аллокаций.
+
+**Корень.** `self.globalThis = self.globalThis || self` — присваивание, значение которого по спеке
+(`GetValue` правой части) равно **самому глобальному объекту** (`self`/`window`, поскольку
+`self.globalThis` к этому моменту уже стоит, шим проставляет `window.globalThis = globalThis`
+заранее). Это значение — completion value классического top-level скрипта — возвращается из
+`compiled.run(tc)` и передаётся в `from_v8(tc, val)`
+(`crates/js/src/v8_runtime/value.rs::from_v8_bounded`). Тот ограничен по ГЛУБИНЕ пути
+(`FROM_V8_MAX_DEPTH=64`, антициклическая проверка `ancestors` — это то, что нашёл нативный
+сэмплер среза 3 как `from_v8_bounded`), но **не ограничен по ширине и не мемоизирует уже
+сконвертированные поддеревья**: один и тот же объект, достижимый по многим РАЗНЫМ путям
+(`window.document`, `window.document.defaultView.document`, у каждого DOM-узла `.ownerDocument`,
+`.parentNode`, `.style` с ~300 именованными CSS-свойствами, и т.д.), обходится заново на каждом
+пути. Для настоящей страницы с реальным DOM это комбинаторный взрыв — рекурсивный обход `window`
+целиком вглубь до 64 уровней, каждый уровень штампует новые `Vec<(String, JsValue)>` — то есть
+именно тот непрерывный аллокационный шторм, который показал `--trace-gc`.
+
+**Кто на самом деле читает этот `Ok(JsValue)`.** Ни один реальный вызыватель `eval_and_report`/
+`eval_and_report_via` не использует completion value: `scripts.rs:644` — `Ok(_) => {}`,
+`shared_worker.rs:775` и `worker.rs:1772` — `.map(|_| ())`. Единственная причина, по которой метод
+вообще возвращал значение, а не всегда `Undefined`, — юнит-тест
+`eval_and_report_matches_eval_on_success` (`v8_runtime/tests/mod.rs`), пиннящий поведение
+«идентично `eval()` на успехе» для примитивов.
+
+**Фикс** (`crates/js/src/v8_runtime/eval.rs::eval_and_report_via`): completion value, если это
+`Object`/`Array`, конвертируется не через полный `from_v8`, а сразу в `JsValue::Undefined` — без
+единого обхода. Примитивы (числа/строки/булевы/`null`/`undefined`) по-прежнему идут через
+`from_v8` как раньше, так что `eval_and_report_matches_eval_on_success` (значение `1 + 2`) не
+меняет поведения и остаётся зелёным. Плюс постоянный диагностический флаг `LUMEN_V8_TRACE_GC`
+(см. выше) — переиспользуем при следующем похожем расследовании.
+
+**Проверено живьём, все три сайта из корпуса «HUNG», headless `--trace-nav`, `LUMEN_NO_ADBLOCK=1`:**
+`duckduckgo.com` — раньше не завершался за 30+ с, теперь полная загрузка (включая картинки/GIF) за
+секунды, `exit=0`. `baidu.com` — то же, `exit=0`, вся страница дорисована. `microsoft.com` — то же,
+`exit=0` (сам класс зависания у microsoft — не идиома `globalThis`, а jQuery-код вокруг
+`#cli_shellHeaderSearchInput`, срез 6, — но его completion value тоже объект/jQuery-обёртка над
+DOM-коллекцией, тот же механизм). **github.com** этим срезом не переизмерялся — его случай (срез 1)
+уже подтверждён как НЕ регрессия и НЕ зависание, а действительно дорогой layout-проход; не входит в
+класс, который чинит этот срез, и не является кандидатом на эту же причину (у github не было
+описанного симптома «зависает и не отвечает», только «долго, но конечно»).
+
+**Гейт:** `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` и
+`cargo clippy -p lumen-shell --all-targets -- -D warnings` чисто; `cargo test -p lumen-js --features
+v8-backend`: 3572 прошло (включая `eval_and_report_matches_eval_on_success`); `cargo test -p
+lumen-shell --bin lumen`: 1760 прошло. `scripts/scoped-test.sh`: единственный красный —
+`cases::snapshot_cpu::cpu_snapshots_match_references` (7 файлов с расхождением) — проверено A/B
+через `git stash`/`stash pop` на этой же ветке: тот же красный на чистом `main` без правки этого
+среза, чужой уже существующий дрейф CPU-эталонов, не регрессия отсюда.
+
+**Закрывает задачу для класса «run-scripts спин + мёртвый автоматизационный канал»** на всех трёх
+сайтах, для которых он был заведён. Github's отдельный пункт (профилирование самого layout-прохода
+на предмет инкрементальности/мемоизации, THREAD-3 объём (2)) не про зависание — вынесен отдельной
+задачей THREAD-4 в ROADMAP.md, т.к. качественно другая работа (оптимизация конечного, а не
+незавершающегося пути).

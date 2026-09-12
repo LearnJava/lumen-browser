@@ -421,6 +421,27 @@ impl V8JsRuntime {
                     return Err(v8_err(tc, exc));
                 }
                 match result {
+                    // THREAD-3 slice 8 (BUG-1034): a top-level classic script's
+                    // completion value is the value of its last expression
+                    // statement, which for an idiom like
+                    // `self.globalThis = self.globalThis || self` is the
+                    // global object itself. Every real caller of this method
+                    // discards the `Ok` payload (`scripts.rs`'s `Ok(_) => {}`,
+                    // both worker call sites' `.map(|_| ())`) — the *only*
+                    // reason it is not always `JsValue::Undefined` is that
+                    // `eval_and_report_matches_eval_on_success` pins it to
+                    // round-trip primitives identically to plain `eval()`.
+                    // `from_v8` has no total-size bound, only a per-path depth
+                    // cap (`FROM_V8_MAX_DEPTH`) — walking `window`/`document`
+                    // this way revisits the same shared DOM subgraphs through
+                    // every distinct path to them, and on a real page that is
+                    // combinatorially large, which is what produced this
+                    // hang's continuous GC/allocation storm (confirmed live
+                    // on duckduckgo.com: `compiled.run` itself returns in
+                    // microseconds, the hang is entirely in this conversion).
+                    // An object/array completion is discarded by every
+                    // consumer anyway, so it is not walked at all here.
+                    Some(val) if val.is_object() || val.is_array() => Ok(JsValue::Undefined),
                     Some(val) => from_v8(tc, val),
                     None => Err(JsError::Runtime("script returned no value".into())),
                 }
