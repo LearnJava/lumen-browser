@@ -1,6 +1,6 @@
 # BUG-874 — `on<type>`-свойства уровня документа никогда не вызываются, а `in`-проверка на `window`/`document`/`navigation` отвечает `false`
 
-**Статус:** OPEN (ДОРАБОТКА → [GAP-EVENTPATH](../ROADMAP.md))
+**Статус:** FIXED 2026-09-12 (ДОРАБОТКА → [GAP-EVENTPATH](../ROADMAP.md), задача закрыта)
 **Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-EVENTPATH` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 27 — живой замер, варианты `handler-idl`/`cbx-report`/`navigation-onprops`)
 **Область:** `crates/js/src/dom.rs:6249` — `document.dispatchEvent` обходит только `_lumen_listeners` документа и не заглядывает в `_lumen_on_handlers`; `crates/js/src/dom.rs:13795` — движковая доставка `readystatechange` идёт тем же `document.dispatchEvent`; таблица `_LUMEN_EVENT_HANDLER_ATTRS` (`:1010`) обслуживает только обёртки элементов
@@ -95,3 +95,53 @@ doc.onresize fired                        ← было: молчание
 
 Раздел «что дальше» выше остаётся в силе целиком — вторая его фраза (позвать
 `_lumen_get_on_handler` из `document.dispatchEvent`) уже не нужна.
+
+## Починено 2026-09-12 (P1, GAP-EVENTPATH): `in`-детект добавлен, readystatechange оказался уже рабочим
+
+Заявленных «осталось открытым» пункта было три, реально сломан — один.
+Живая проба (`cargo test -p lumen-js --features v8-backend`, временный тест
+в `crates/js/src/dom/tests/v8_event_propagation.rs`) перед правкой:
+
+```
+rsc-fired:interactive                 ← сработал! `_lumen_apply_ready_state`
+                                         зовёт `document.dispatchEvent(rsEv)`,
+                                         а тот с 2026-09-10 (BUG-873) уже читает
+                                         document['on'+type] на фазе target —
+                                         пункт «движковая доставка мимо
+                                         document.dispatchEvent» устарел, замер
+                                         2026-09-10 выше его не перепроверил
+onresize-in-document:false            ← реально сломано
+onerror-in-window:false               ← реально сломано
+```
+
+Правка — только «что дальше» пункт про `in`: `document`/`window` строятся как
+объектные литералы (не проходят через `_lumen_define_on_handler_prop`,
+который рассчитан на элементы с `__nid__`), поэтому им никогда не хватало
+самого объявления свойства. Раз оба объекта уже читают `on<type>` простым
+скобочным доступом (`document['on'+event.type]` в `_lumen_invoke_at`,
+`window['on'+evt.type]` в generic-ветке `window.dispatchEvent`), обычного
+`obj[attrName] = null` на каждое имя из уже существующего curated-списка
+`_LUMEN_EVENT_HANDLER_ATTRS` достаточно — доставка не тронута, только
+объявление. `document.onreadystatechange`/`document.onvisibilitychange`
+добавлены отдельно (Document-only, не входят в GlobalEventHandlers).
+`hasOwnProperty`-охрана в обоих циклах (`web_api_shim_mid.js` для `document`,
+`web_api_shim_mid_b.js` для `window`) не даёт затереть уже объявленные
+свойства с особой семантикой (`onfullscreenchange`, `onload`, `onscroll`, …).
+
+Форвард `<body onresize>` → `window.onresize` (HTML LS §8.1.7.3) в скоуп не
+взят: это отдельный, более рискованный кусок (риск двойной доставки
+resize/scroll/focus/blur через путь `window`, см. комментарий у
+`_LUMEN_BODY_FORWARDED_TO_WINDOW` в `web_api_shim_mid.js`), не входит в
+измеренную цену WPT этого бага (оба id — `event-handler-onresize.html`,
+`document-readyState.html` — про `document`/`window`, не про `<body>`), и уже
+был помечен как известное узкое отклонение до этого бага. `navigation`-часть
+(`'onnavigate' in navigation` и три соседних) не тронута — сам объект
+`navigation` в шиме отсутствует полностью, это форма [BUG-881](BUG-881-OPEN.md),
+а не этого бага.
+
+`cargo test -p lumen-js --features v8-backend`: 3585/3585 зелёных (3 новых
+теста в `v8_event_propagation.rs`), `cargo clippy -p lumen-js --all-targets
+--features v8-backend -- -D warnings` чист. `scripts/scoped-test.sh`: один
+красный (`lumen-driver::cases::snapshot_cpu::cpu_snapshots_match_references`,
+7 картинок) — подтверждено A/B на `main` тем же прогоном, тот же байт-в-байт
+список несовпадений — предсуществующий дрейф, не регрессия этой правки.

@@ -5749,6 +5749,20 @@ var window = {
     },
 };
 
+// BUG-874 (second half): `Window includes GlobalEventHandlers` (HTML LS
+// §8.1.7.1) — same gap as `document` above, on the same curated list. The
+// generic branch of `window.dispatchEvent` (see the `onFn = window['on' +
+// evt.type]` read a little above) already needs no dispatch-side change for a
+// new entry here, per its own comment; only the bare `'onX' in window` idiom
+// was missing a declared property to answer `true`. `hasOwnProperty` skips
+// the handlers already declared on the literal above with bespoke dispatch
+// (`onload`, `onscroll`, …) — same `null` value, so nothing behavioural
+// changes for them.
+for (var _wohi = 0; _wohi < _LUMEN_EVENT_HANDLER_ATTRS.length; _wohi++) {
+    var _wohAttr = _LUMEN_EVENT_HANDLER_ATTRS[_wohi];
+    if (!Object.prototype.hasOwnProperty.call(window, _wohAttr)) window[_wohAttr] = null;
+}
+
 // BUG-480 срез 4: доставка кросс-фреймового message в ЭТО окно из бриджа
 // фреймов (frame_bridge::_lumen_frame_pump_messages). Данные уже разобраны,
 // source — фасад окна отправителя или null. Тот же порядок, что у локального

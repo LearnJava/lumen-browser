@@ -159,7 +159,7 @@ non-cancelable.
   ([BUG-821](BUG-821-FIXED.md)), так что горизонтальное движение страницы не
   даёт ни `scroll`, ни `scrollend`.
 * **`document.onscrollend = fn`** не вызывается — это общий
-  [BUG-874](BUG-874-OPEN.md) (`document.dispatchEvent` читает только реестр
+  [BUG-874](BUG-874-FIXED.md) (`document.dispatchEvent` читает только реестр
   слушателей); на `window` обе формы работают.
 * Путь `scroll_container_into_view` (обход предков BUG-338) меняет позицию
   контейнера, не диспатчя **ни** `scroll`, ни `scrollend` — предсуществующая
