@@ -161,6 +161,11 @@ pub struct PopupRequest {
     pub width: u32,
     /// Requested popup height in CSS px (from `height=` feature, default 600).
     pub height: u32,
+    /// GAP-NAVCTX срез 4 (BUG-797): the token `window.open()`'s `WindowProxy`
+    /// stub was minted with (`crate::window_messaging::alloc_token`) — the
+    /// shell resolves it to the popup's real tab id once created, so a
+    /// `postMessage` the opener queued before that point still finds it.
+    pub token: u32,
 }
 
 /// A print request emitted by `window.print()` (W-2 Phase 1).

@@ -426,11 +426,15 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn gc_collect(&self, dead_nids: &[u32]);
     /// Drain popup window requests queued by JS `window.open(...)`.
     ///
-    /// Returns `(url, target, width_px, height_px)` tuples. Shell opens a new
-    /// tab navigated to `url` for each entry. Returns an empty vec between
-    /// `window.open()` calls.
+    /// Returns `(url, target, width_px, height_px, token)` tuples. Shell opens
+    /// a new tab navigated to `url` for each entry. `token` (GAP-NAVCTX срез
+    /// 4, BUG-797) is the `window_messaging` handle the opener's returned
+    /// `WindowProxy` stub was minted with — the shell resolves it to the new
+    /// tab's real id (`lumen_js::window_messaging::resolve_token`) so a
+    /// `postMessage` the opener already queued still finds it. Returns an
+    /// empty vec between `window.open()` calls.
     #[allow(dead_code)]
-    fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32)>;
+    fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32, u32)>;
     /// Drain `console.log/warn/error` messages buffered in the JS runtime.
     ///
     /// Each entry is `(level, text)` where level is 0=log, 1=warn, 2=error.
@@ -1040,11 +1044,11 @@ impl PersistentJs for V8PersistentJs {
             "if(typeof _lumen_gc_collect==='function')_lumen_gc_collect([{arr}]);"
         ));
     }
-    fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32)> {
+    fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32, u32)> {
         self.rt
             .take_window_open_requests()
             .into_iter()
-            .map(|r| (r.url, r.target, r.width, r.height))
+            .map(|r| (r.url, r.target, r.width, r.height, r.token))
             .collect()
     }
     fn take_console_messages(&self) -> Vec<(u8, String)> {

@@ -202,6 +202,11 @@ impl Lumen {
         let closing_id = self.tab_strip.tabs[idx].id;
         // Remove from lifecycle manager.
         self.lifecycle_mgr.close_tab(closing_id as u64);
+        // GAP-NAVCTX срез 4 (BUG-797): drop this tab's window.open()/opener
+        // token mapping and any still-queued messages — otherwise a session
+        // with many popups leaks one hub entry per `window.open()` call for
+        // as long as the process runs.
+        lumen_js::window_messaging::forget_tab(closing_id as u32);
         if idx == self.tab_strip.active {
             // Closing the active tab: save nothing (it will be dropped),
             // restore the tab that will become active after removal.
