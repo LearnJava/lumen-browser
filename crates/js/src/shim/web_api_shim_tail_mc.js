@@ -259,7 +259,32 @@ window.open = function(url, target, features) {
     postMessage: function() {}
   };
 };
-window.close = function() {};
+// ── window.close()/closed/name (HTML LS §7.2.2, §7.4.5-§7.4.6) ─────────────
+// `name` is a plain Window attribute defaulting to the empty string (BUG-887);
+// assignment already worked before this fix (it read back whatever was last
+// set), the defect was purely the missing default.
+window.name = '';
+// `closed` is spec-readonly, but a getter-only accessor on the global object
+// (`window` becomes `globalThis`, see comment above `isSecureContext`) breaks
+// any top-level `var closed = ...;` in later script: PutValue on an accessor
+// with no setter is a silent no-op, so the variable can never change again.
+// Real WPT pages hit that as a spec-correct footgun; our own test fixtures
+// use `closed` as an ordinary local-ish name and are not testing
+// unforgeability, so — like `opener`/`name` above — this stays a plain
+// assignable property rather than a strict accessor.
+window.closed = false;
+// close() runs the same prompt-to-unload + unload steps a real navigation
+// triggers from the shell (`_lumen_fire_beforeunload`/`_lumen_unload_document`,
+// see `persistent_js.rs`), then flips `closed`. It does not ask the shell to
+// tear down the tab — this engine has one JS context per page, and script
+// keeps running after `close()` returns (BUG-887's minimum fix; actually
+// discarding the browsing context is out of scope here).
+window.close = function() {
+    if (window.closed) return;
+    _lumen_fire_beforeunload();
+    _lumen_unload_document(false);
+    window.closed = true;
+};
 
 // ── Lazy image loading (HTML LS §2.6.6.9) ──────────────────────────────────
 // Maps nid (u32 as string key) → url for images deferred by loading="lazy".
