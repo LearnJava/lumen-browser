@@ -7,12 +7,18 @@ var _perf_observers = [];
 // Single source of truth for supportedEntryTypes AND observe()'s admission
 // check (BUG-354): only types an entry constructor actually produces belong
 // here, so the two cannot drift apart again. 'element'/'event'/'first-input'/
-// 'longtask'/'soft-navigation' are intentionally excluded — no PerformanceEntry
-// of those types is ever produced on the live document (soft-navigation has a
+// 'soft-navigation' are intentionally excluded — no PerformanceEntry of those
+// types is ever produced on the live document (soft-navigation has a
 // PerformanceSoftNavigationEntry class but nothing calls its delivery hook
-// outside unit tests).
+// outside unit tests). 'taskattribution' (LONGTASK-1) is excluded on purpose
+// too — spec-visible only via `PerformanceLongTaskTiming.attribution`, never
+// independently observable (`longtask-timing/supported-longtask-types.window.js`).
+// 'longtask'/'long-animation-frame' (LONGTASK-1): the shell times every
+// `eval_js` dispatch and every relayout frame past the 50ms threshold —
+// `crates/shell/src/persistent_js.rs`/`relayout.rs`.
 var _PERF_SUPPORTED_ENTRY_TYPES = ['largest-contentful-paint', 'layout-shift',
-    'mark', 'measure', 'navigation', 'paint', 'resource'];
+    'long-animation-frame', 'longtask', 'mark', 'measure', 'navigation',
+    'paint', 'resource'];
 
 function PerformanceObserver(callback) {
     if (typeof callback !== 'function') throw new TypeError('PerformanceObserver: callback must be a function');

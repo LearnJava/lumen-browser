@@ -121,6 +121,12 @@ impl Lumen {
         // nothing. Recorded after `apply_relayout_result` so the state it reports
         // (display list / styled nodes) is the freshly-applied one.
         let engine_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
+        // LONGTASK-1: always-on frame timer for the Long Animation Frames API
+        // — unlike `engine_t0` above, not gated by `LUMEN_FRAME_LOG` (that
+        // flag only controls the debug stats/eprintln below), since a page's
+        // `PerformanceObserver` must see slow frames in ordinary live
+        // browsing, not only when profiling is turned on.
+        let frame_start = std::time::Instant::now();
         let Some(src) = self.layout_source.as_ref() else { return };
         // Set interactive hover/focus/active state for this layout pass so that
         // :hover / :focus / :active / :focus-within CSS rules evaluate correctly.
@@ -148,6 +154,12 @@ impl Lumen {
                 self.display_list.len(),
                 self.prev_styles.len(),
             );
+        }
+        let frame_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
+        if frame_ms >= crate::persistent_js::LONGTASK_THRESHOLD_MS
+            && let Some(js) = self.js_ctx.as_ref()
+        {
+            js.deliver_long_animation_frame(frame_ms);
         }
     }
 

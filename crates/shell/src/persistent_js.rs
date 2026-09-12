@@ -15,6 +15,11 @@ use crate::*;
 /// own inline `HashMap` param.
 type PseudoComputedStyles = HashMap<(u32, String), HashMap<String, String>>;
 
+/// LONGTASK-1 (W3C Long Tasks API §3.1): a UI-thread task running at least
+/// this long qualifies as a `longtask`/contributes to a `long-animation-frame`
+/// `PerformanceEntry`. Matches every shipping implementation's threshold.
+pub(crate) const LONGTASK_THRESHOLD_MS: f64 = 50.0;
+
 /// Shell-local abstraction over a persistent JS context that survives between
 /// renders. The JS DOM closures hold a reference to the same
 /// `Arc<Mutex<Document>>` as `LayoutSource::document`, so event-driven DOM
@@ -190,6 +195,22 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Must be called after `deliver_layout_observers` (fresh rects in JS).
     #[allow(dead_code)]
     fn deliver_lazy_images(&self);
+    /// LONGTASK-1: report a slow relayout frame (>= 50ms) through the Long
+    /// Animation Frames API's `_lumen_deliver_long_animation_frame` binding
+    /// (`crates/js/src/long_animation_frames.rs`, installed but previously
+    /// never called — Phase 1 of that module's doc comment).
+    ///
+    /// `duration_ms` is the whole UI-thread `relayout` span (style + layout +
+    /// display-list build + JS-observer delivery, `relayout.rs`'s
+    /// `frame_start`). The engine has no render/style/layout sub-phase
+    /// breakdown outside `--trace-nav` (`lumen_core::trace::span`, off in a
+    /// normal run), so `renderStart`/`styleAndLayoutStart` collapse to the
+    /// frame's own start rather than carrying a real breakdown — an accepted
+    /// approximation, same spirit as this module's other synchronous
+    /// `deliver_*` calls. Default no-op: only `V8PersistentJs` has a runtime
+    /// to deliver into.
+    #[allow(dead_code)]
+    fn deliver_long_animation_frame(&self, _duration_ms: f64) {}
     /// Drain lazy image load requests queued by JS since the last call.
     ///
     /// Returns `(node_id, url)` pairs for images that entered the lazy-load margin.
@@ -709,10 +730,32 @@ pub(crate) fn popstate_eval_source(state_json: &str, url: &str) -> String {
 impl PersistentJs for V8PersistentJs {
     fn eval_js(&self, script: &str) {
         use lumen_core::ext::JsRuntime as _;
-        if let Err(e) = self.rt.eval(script)
+        // LONGTASK-1: every `eval_js` dispatch is exactly one HTML-spec task
+        // (timer/rAF/event-listener/classic-script callback — this is the
+        // shell's single chokepoint for all of them, see `PersistentJs`'s doc
+        // comment), so timing it here gives Long Tasks API coverage across
+        // every task source with one measurement site instead of one per
+        // callback. `Instant::now()`/`.elapsed()` mirrors the always-on
+        // pattern already used for frame timing (`relayout.rs`'s `frame_start`)
+        // rather than the `--trace-nav`-only `lumen_core::trace::span`, since
+        // longtask must fire during ordinary live browsing, not just profiling.
+        let started = std::time::Instant::now();
+        let result = self.rt.eval(script);
+        if let Err(e) = &result
             && !matches!(e, lumen_core::JsError::NotImplemented)
         {
             eprintln!("JS event error: {e}");
+        }
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        if elapsed_ms >= LONGTASK_THRESHOLD_MS {
+            // Delivered through `self.rt.eval` directly, not `self.eval_js`,
+            // so this call is never itself measured — it is always cheap
+            // (one small literal script), and re-entering the wrapper above
+            // would double the (identical) elapsed-time check for no reason.
+            let deliver = format!(
+                "_lumen_deliver_longtask_entry(performance.now() - {elapsed_ms}, {elapsed_ms})"
+            );
+            let _ = self.rt.eval(&deliver);
         }
     }
     fn eval_js_value(&self, script: &str) -> Result<String, String> {
@@ -752,6 +795,19 @@ impl PersistentJs for V8PersistentJs {
     }
     fn tick_timers(&self) {
         self.eval_js("_lumen_tick_timers()");
+    }
+    fn deliver_long_animation_frame(&self, duration_ms: f64) {
+        // `renderStart`/`styleAndLayoutStart` collapse to the frame's own
+        // start — see the trait doc comment on the missing sub-phase
+        // breakdown. `_s` names the shared expression so it's computed once
+        // in JS rather than reading `performance.now()` twice (rendering and
+        // style/layout are approximated as starting at the same instant, but
+        // a second read a few microseconds apart would make that look like a
+        // real, if tiny, measured gap).
+        self.eval_js(&format!(
+            "(function(){{var _s=performance.now()-{duration_ms};\
+             _lumen_deliver_long_animation_frame(_s,{duration_ms},_s,_s,0,-1,null);}})()"
+        ));
     }
     fn take_timer_wakeup(&self) -> Option<f64> {
         self.rt.take_timer_wakeup()
