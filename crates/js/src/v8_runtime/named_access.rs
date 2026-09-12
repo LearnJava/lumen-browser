@@ -39,15 +39,26 @@ pub fn ensure_v8_platform() {
 /// the same directory clobber each other's log — acceptable for a manual
 /// single-hang investigation, not for automation.
 fn apply_v8_profile_flag() {
-    let Ok(value) = std::env::var("LUMEN_V8_PROFILE") else {
-        return;
-    };
-    let logfile = if value.is_empty() || value == "1" {
-        "v8.log"
-    } else {
-        value.as_str()
-    };
-    v8::V8::set_flags_from_string(&format!("--prof --logfile={logfile}"));
+    if let Ok(value) = std::env::var("LUMEN_V8_PROFILE") {
+        let logfile = if value.is_empty() || value == "1" {
+            "v8.log"
+        } else {
+            value.as_str()
+        };
+        v8::V8::set_flags_from_string(&format!("--prof --logfile={logfile}"));
+    }
+    apply_v8_trace_gc_flag();
+}
+
+/// Turns on V8's `--trace-gc` when `LUMEN_V8_TRACE_GC` is set (THREAD-3
+/// slice 8, BUG-1034) — same env-flag-before-`initialize()` mechanism as
+/// [`apply_v8_profile_flag`], used to rule the GC in or out as the cause of a
+/// script-execution hang: a continuous GC cycle prints repeatedly here where
+/// a one-off collection prints once and stops.
+fn apply_v8_trace_gc_flag() {
+    if std::env::var("LUMEN_V8_TRACE_GC").is_ok() {
+        v8::V8::set_flags_from_string("--trace-gc");
+    }
 }
 
 // ── Window named properties (HTML LS §7.3.3) ──────────────────────────────────
