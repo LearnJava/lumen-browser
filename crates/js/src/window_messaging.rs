@@ -37,14 +37,14 @@
 //! id and the shell converts it to a token via [`token_for_tab`] when it
 //! builds the delivery script.
 //!
-//! **Known remaining gap.** The follow-up `eval_js` that plants
-//! `_lumen_own_tab_id`/`_lumen_opener_tab_id` on the popup runs after
-//! `Lumen::navigate_to` returns from creating it. A synchronous top-of-page
-//! script that calls `window.opener.postMessage(...)` before yielding once
-//! races this — such a call currently sees `_lumen_opener_tab_id` still
-//! unset and silently drops. Deferred/`onload`-driven posts (the common case
-//! and everything the srez's live probe exercises) are unaffected. Closing
-//! this needs the id threaded through `install_dom` itself, out of scope here.
+//! **The ordering gap, closed (GAP-NAVCTX срез 5, BUG-797).** [`arm_pending_opener`]/
+//! [`take_pending_opener`] let the shell install `window.opener` from inside
+//! `run_scripts_with_dom` (`scripts.rs`), before the popup's first top-level
+//! script line runs, instead of via a follow-up `eval_js` after
+//! `Lumen::navigate_to` already returned — so a synchronous top-of-page
+//! `window.opener.postMessage(...)` now sees the real handle. The follow-up
+//! `eval_js` call stays as a fallback for a popup document with no scripts
+//! at all, which never reaches `run_scripts_with_dom`'s runtime creation.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -91,6 +91,15 @@ struct Hub {
     /// *from* the popup can be delivered to the opener addressed by the same
     /// token the opener's stub closed over.
     tab_to_token: HashMap<u32, u32>,
+    /// GAP-NAVCTX срез 5 (BUG-797): `(own_tab_id, opener_tab_id)` for the
+    /// popup the shell is about to run `run_scripts_with_dom` on, armed by
+    /// [`arm_pending_opener`] and consumed by [`take_pending_opener`]. A
+    /// single slot, not a map keyed by tab id — the shell drives navigation
+    /// synchronously on one thread, arms this immediately before the
+    /// `navigate_to` call that will reach the popup's own
+    /// `run_scripts_with_dom`, and nothing else can interleave a different
+    /// tab's load in between.
+    pending_opener: Option<(u32, u32)>,
 }
 
 static HUB: OnceLock<Mutex<Hub>> = OnceLock::new();
@@ -222,6 +231,38 @@ pub fn drain_json(tab_id: u32) -> String {
     serde_json::to_string(&items).unwrap_or_default()
 }
 
+/// Arm the single-slot pending-opener flag for the popup `own_tab_id`, whose
+/// `run_scripts_with_dom` call is about to run synchronously with
+/// `opener_tab_id` as its `window.opener`.
+///
+/// GAP-NAVCTX срез 5 (BUG-797): called by the shell right before
+/// `navigate_to` for a freshly created popup, so `run_scripts_with_dom` can
+/// install `window.opener` before the popup's own top-level scripts run —
+/// closing the ordering gap where a synchronous top-of-page
+/// `opener.postMessage()` used to see the shim's inert default (the
+/// `_lumen_install_opener` call the shell also makes after `navigate_to`
+/// returns lands too late for that case, though it remains the fallback for
+/// a popup whose document has no scripts at all, which skips
+/// `run_scripts_with_dom`'s runtime creation entirely).
+#[allow(clippy::unwrap_used)] // унаследовано, docs/lint-policy.md §10
+pub fn arm_pending_opener(own_tab_id: u32, opener_tab_id: u32) {
+    let mut h = hub().lock().unwrap();
+    h.pending_opener = Some((own_tab_id, opener_tab_id));
+}
+
+/// Take (and clear) the armed pending-opener pair, if any.
+///
+/// Called unconditionally at the top of every `run_scripts_with_dom`
+/// invocation — clearing the slot even when that particular call turns out
+/// not to be the popup's (or the popup has no scripts and returns before
+/// using the value) prevents a stale pair from leaking into a later,
+/// unrelated tab's load.
+#[allow(clippy::unwrap_used)] // унаследовано, docs/lint-policy.md §10
+pub fn take_pending_opener() -> Option<(u32, u32)> {
+    let mut h = hub().lock().unwrap();
+    h.pending_opener.take()
+}
+
 /// Drop every mapping/queue that names `tab_id` — called when a tab closes so
 /// the hub does not grow across a whole session's worth of popups.
 #[allow(clippy::unwrap_used)] // унаследовано, docs/lint-policy.md §10
@@ -280,6 +321,20 @@ mod tests {
         // meaningfully and is dropped rather than crashing.
         post_to_opener(900_005, 900_006, "\"lost\"".to_string(), "https://popup.example".to_string());
         assert!(drain(900_005).is_empty());
+    }
+
+    // Single test, not split across parallel `#[test]` fns: `pending_opener`
+    // is a process-global single slot (unlike the tab/token-keyed state the
+    // other tests exercise), so two tests arming it concurrently could
+    // observe each other's value.
+    #[test]
+    fn pending_opener_is_armed_once_and_cleared_on_take() {
+        assert_eq!(take_pending_opener(), None, "slot must start empty");
+        arm_pending_opener(900_100, 900_101);
+        assert_eq!(take_pending_opener(), Some((900_100, 900_101)));
+        // Taking again must not resurrect the pair — the whole point is a
+        // one-shot handoff so a later, unrelated load never picks it up.
+        assert_eq!(take_pending_opener(), None);
     }
 
     #[test]

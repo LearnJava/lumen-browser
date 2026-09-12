@@ -285,15 +285,16 @@ window.open = function(url, target, features) {
   return stub;
 };
 
-// Installs the real `window.opener` handle on a popup tab, called once by
-// the shell (`about_to_wait`, right after creating this tab from a
-// `window.open()`/`<a target=_blank>` request) with this tab's own id and
-// its opener's id. See `crate::window_messaging` (Rust) for the addressing
-// scheme this feeds. KNOWN GAP (GAP-NAVCTX срез 4, BUG-797): this call lands
-// after `Lumen::navigate_to` has already returned, so a synchronous
-// top-of-page script that calls `opener.postMessage()` before yielding once
-// still sees the `null` default below — deferred/`onload`-driven posts (the
-// common case) are unaffected.
+// Installs the real `window.opener` handle on a popup tab. `run_scripts_with_dom`
+// (Rust, `scripts.rs`) now calls this itself, before the popup's first
+// top-level script line, whenever the shell armed a pending opener pair for
+// this load (GAP-NAVCTX срез 5, BUG-797) — so a synchronous top-of-page
+// `opener.postMessage()` sees the real handle. The shell (`about_to_wait`)
+// also still calls this once more after `Lumen::navigate_to` returns, with
+// the same two ids — a no-op re-assignment in the common case, and the only
+// path that runs at all for a popup document with no scripts (which never
+// reaches `run_scripts_with_dom`'s runtime creation). See
+// `crate::window_messaging` (Rust) for the tab-id addressing scheme this feeds.
 globalThis._lumen_install_opener = function(ownTabId, openerTabId) {
   _lumen_own_tab_id = ownTabId;
   _lumen_opener_tab_id = openerTabId;

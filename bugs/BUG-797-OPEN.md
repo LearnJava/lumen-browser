@@ -148,3 +148,52 @@ JS-глобали `_lumen_own_tab_id`/`_lumen_opener_tab_id` плюс сам о�
 `RemoteContext`/`dispatcher.js`-тесты (см. «Масштаб» выше) не проверялись
 живым пробом в рамках этого среза — WPT-прогон, если он покажет их всё ещё
 TIMEOUT/FAIL по другой причине, заводится отдельно.
+
+## Срез 5 (GAP-NAVCTX, 2026-09-12, `p1-gap-navctx-srez5`) — синхронный `opener.postMessage()` больше не видит `null`
+
+Закрыт «известный остаточный хвост» среза 4 — но НЕ той правкой, которую
+карточка предполагала. Threading id вкладки через `install_dom` (~109 мест
+вызова, включая тестовые) остался неисследованным: вместо этого точка
+установки `window.opener` подтянута из шелла (`about_to_wait`, после
+`navigate_to`) в `run_scripts_with_dom` (`crates/shell/src/scripts.rs`) —
+тот же файл, что уже делает несколько «one-shot push перед первой строкой
+скрипта» (BUG-443 layout snapshot, CSSOM-7 stylesheet, TRUSTEDTYPES-1 CSP),
+теперь и для opener.
+
+**Механизм.** Новый однослотовый флаг в `window_messaging.rs`
+(`arm_pending_opener`/`take_pending_opener`, `Option<(u32, u32)>`, НЕ карта
+по id — шелл ведёт навигацию синхронно на одном потоке, так что между
+`arm` перед `navigate_to` и `take` в самом первом `run_scripts_with_dom`
+этой загрузки ничего чужого вклиниться не может). `about_to_wait.rs`
+вооружает флаг непосредственно перед `self.navigate_to(source)` для
+попапа; `run_scripts_with_dom` берёт его БЕЗУСЛОВНО в самом начале function
+body (до обоих ранних `return` — иначе документ без скриптов, который
+никогда не доходит до создания рантайма, оставил бы флаг висеть до
+следующей, уже посторонней, загрузки) и, если пара есть, вызывает
+`_lumen_install_opener(ownTabId, openerTabId)` сразу после CSP/TrustedTypes
+push, перед циклом classic-`<script>`. Старый пост-факто вызов в
+`about_to_wait.rs` (после `navigate_to` вернулся) оставлен как фолбэк —
+идемпотентен (те же два id) и остаётся единственным путём для попап-документа
+совсем без скриптов, который не создаёт рантайм вообще.
+
+**Живая проверка** (MCP `--mcp-live-port`, `LUMEN_NO_ENGINE_THREAD=1`,
+реальное окно, два `file://`-документа): попап с `<script>` на самом верху,
+исполняющим `document.title = window.opener ? 'sync-has-opener' :
+'sync-no-opener'` синхронно до первой отдачи управления, получил
+`sync-has-opener` — до этого среза (по механизму, описанному в срезе 4)
+результатом было бы `sync-no-opener`.
+
+Гейт: `cargo build -p lumen-js -p lumen-shell --profile dev-release` чисто;
+`cargo clippy -p lumen-js --features v8-backend --all-targets -- -D
+warnings` и `cargo clippy -p lumen-shell --all-targets -- -D warnings` —
+оба чисто; `cargo test -p lumen-js --features v8-backend window_messaging`
+(6/6, включая новый `pending_opener_is_armed_once_and_cleared_on_take`) и
+`cargo test --bin lumen scripts_and_frames` (84/84) — оба зелёные.
+`scripts/scoped-test.sh` не запускался до конца — известная поломка
+гейта ([BUG-805](BUG-805-OPEN.md), `lumen-network`), не от этой правки:
+отдельный прогон `cargo test -p lumen-network --lib` в рамках гейта до
+BUG-805 не дошёл (2207/2207 прошли за 4.37 с), полный скрипт просто не
+успел завершиться за разумное время до конца работы над срезом.
+
+Не тронуто: BUG-883 (таймеры опенера в фоне) и заглушка `opener: null` по
+умолчанию для обычной навигации (не через `window.open()`) — как и раньше.
