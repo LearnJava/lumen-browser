@@ -64,3 +64,48 @@ HTML LS §7.2.2: `closed` — readonly-геттер, `name` — строковы
 unload» и затем «unload». Минимум, снимающий id: определить `closed`/`name`
 как свойства окна и провести `close()` через тот же путь выгрузки, что уже
 диспатчит `pagehide` при навигации.
+
+## Срез 3 (GAP-NAVCTX, 2026-09-12, `p1-gap-navctx-srez3`)
+
+Сделан ровно минимум из раздела выше, без архитектурной части (реального
+закрытия вкладки/browsing context — этот движок держит один JS-контекст на
+страницу, и после `close()` скрипт продолжает исполняться):
+
+* `window.name` — теперь `''` по умолчанию (`crates/js/src/shim/web_api_shim_tail_mc.js`,
+  рядом с `window.open`/`window.close`); присваивание и раньше «прилипало»,
+  дефект был только в отсутствующем дефолте.
+* `window.closed` — сперва сделан readonly-геттером (`Object.defineProperty`,
+  тот же паттерн, что `isSecureContext` в этом же файле), но это ломало
+  `lumen-js`'s собственный тестовый набор: `PutValue` на аксессоре без
+  сеттера — тихий no-op (не строгий режим), а два юнит-теста
+  (`v8_details_dialog_popover::details_name_exclusivity_closes_other`,
+  `v8_whatwg_streams::writable_stream_close_resolves`) заводят на верхнем
+  уровне скрипта `var closed = …` как обычное локальное имя — после того как
+  `window` становится `globalThis`, это тот же самый глобальный `closed`, и
+  присваивание перестаёт долетать. Оставлено обычным присваиваемым
+  свойством (`window.closed = false`/`= true`), как `opener`/`name` рядом —
+  не строгая unforgeability по спеке, но WPT-id этого бага её не проверяет.
+* `window.close()` — идемпотентно (не срабатывает повторно) зовёт
+  `_lumen_fire_beforeunload()` затем `_lumen_unload_document(false)` — те же
+  две функции, что шлёт из Rust `persistent_js.rs` при обычной навигации
+  (BUG-834), — и выставляет `window.closed = true`.
+
+Живой замер `verify_window_history_jsurl_gaps.py --variant win-close`
+(dev-release): `before-close closed=false hasclose=function` →
+`beforeunload, pagehide, unload` → `close-returned closed=true` →
+`after-close closed=true` (было: `closed=undefined` до и после вызова, ни
+одно из трёх событий не печаталось). Попутно `win-open-detail` подтверждает
+дефолт `name=""` на объекте-заглушке `open()` не тронут (он уже был
+самостоятельным путём) — регрессии нет ни в одном из 24 вариантов пробы.
+`cargo test -p lumen-js --features v8-backend` — 3585 passed, 0 failed
+(первая попытка с readonly-геттером дала 2 failed — та самая коллизия,
+починено до коммита).
+
+Не входило: `prompt-and-unload-script-closeable.html` (единственный id этого
+бага в остатке WPT-RUN-6/28) по-прежнему не снят — тест открывает себя как
+top-level страницу, а не как контекст, открытый скриптом, и вторым барьером
+там стоит [BUG-883](BUG-883-OPEN.md) (таймеры опенера всё ещё не тикают в
+фоне); `closed` для тестов `RemoteContext` по-прежнему упирается в
+[BUG-797](BUG-797-OPEN.md) (нет канала `postMessage` к настоящему опенеру).
+Фактическое закрытие вкладки/browsing context из скрипта — отдельная
+архитектурная работа, не в этом срезе.
