@@ -608,6 +608,20 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn fire_element_scrollend(&self, nid: u32);
 
+    /// Fire a non-bubbling `load` Event on the `<img>` identified by `nid` and
+    /// record its decoded pixel size (HTML LS §4.8.3 `naturalWidth`/
+    /// `naturalHeight`, §4.8.4.3 timing). Called once the shell's decode
+    /// pipeline (eager or lazy) has a usable `Image` for that node.
+    #[allow(dead_code)]
+    fn fire_image_load(&self, nid: u32, natural_width: u32, natural_height: u32);
+
+    /// Fire a non-bubbling `error` Event on the `<img>` identified by `nid`
+    /// (HTML LS §4.8.4.3). Called once the shell's decode pipeline gives up on
+    /// that node's `src` (fetch or decode failure). Per spec, `complete`
+    /// becomes `true` here too — the load attempt is over, not still pending.
+    #[allow(dead_code)]
+    fn fire_image_error(&self, nid: u32);
+
     /// Whether the viewport owes a `scrollend` on this rendering update
     /// (BUG-822). Delegates to the runtime, which holds the debt per document —
     /// see `V8JsRuntime::page_scrollend_due` for the `moved`/`settled` contract.
@@ -1144,6 +1158,16 @@ impl PersistentJs for V8PersistentJs {
     fn fire_element_scrollend(&self, nid: u32) {
         self.eval_js(&format!(
             "if(typeof _lumen_fire_scrollend_on_element==='function')_lumen_fire_scrollend_on_element({nid});"
+        ));
+    }
+    fn fire_image_load(&self, nid: u32, natural_width: u32, natural_height: u32) {
+        self.eval_js(&format!(
+            "if(typeof _lumen_fire_image_load==='function')_lumen_fire_image_load({nid},{natural_width},{natural_height});"
+        ));
+    }
+    fn fire_image_error(&self, nid: u32) {
+        self.eval_js(&format!(
+            "if(typeof _lumen_fire_image_error==='function')_lumen_fire_image_error({nid});"
         ));
     }
     fn page_scrollend_due(&self, moved: bool, settled: bool) -> bool {

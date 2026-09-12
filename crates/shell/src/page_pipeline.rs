@@ -952,6 +952,23 @@ pub(crate) fn parse_and_layout(
         if !bitmaps.is_empty() {
             js.register_img_bitmaps(bitmaps);
         }
+        // BUG-630 (GAP-LOADEV срез 1): a request that isn't `loading="lazy"`
+        // (those are deferred to `fetch_and_register_lazy_images` and fire
+        // their own events there) and made it out of `fetch_and_decode_images`
+        // either found its URL decoded in `images` (success — same join
+        // `url_to_img` above already does) or was silently dropped as
+        // `ImgOutcome::Skip` (fetch/decode failure) — there is no third
+        // outcome, so "not in `url_to_img`" is exactly the failure case.
+        for req in &img_reqs {
+            if req.is_lazy {
+                continue;
+            }
+            let nid = req.node_id.index() as u32;
+            match url_to_img.get(req.url.as_str()) {
+                Some(img) => js.fire_image_load(nid, img.width, img.height),
+                None => js.fire_image_error(nid),
+            }
+        }
     }
 
     // BUG-443: the cascade was collected before the scripts ran (and rebuilt
