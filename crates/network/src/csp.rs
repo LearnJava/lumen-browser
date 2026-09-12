@@ -103,6 +103,23 @@ pub enum CspDirective {
     Sandbox,
 }
 
+/// Parsed value of the `trusted-types` directive (Trusted Types L2 §4.2).
+///
+/// Grammar: `trusted-types <policy-name>* ['allow-duplicates']? | 'none'` —
+/// unlike fetch directives this is not a source list, so it is not modelled
+/// as a [`CspDirective`]/[`CspSource`] pair.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TrustedTypesDirective {
+    /// `true` for the bare `'none'` keyword — no policy may be created at all,
+    /// including `"default"`.
+    pub disallow_all: bool,
+    /// Explicitly allowed policy names, in source order (empty when
+    /// `disallow_all` is set or the directive listed only keywords).
+    pub allowed_policy_names: Vec<String>,
+    /// `'allow-duplicates'` keyword — permits re-registering an existing name.
+    pub allow_duplicates: bool,
+}
+
 /// A parsed Content Security Policy.
 ///
 /// Produced by [`parse_csp_header`].  Contains all directives from a single
@@ -121,6 +138,12 @@ pub struct CspPolicy {
     pub block_all_mixed_content: bool,
     /// Whether this policy is report-only (from the `-Report-Only` variant).
     pub report_only: bool,
+    /// `true` when `require-trusted-types-for 'script'` is present — the only
+    /// sink group Trusted Types L2 defines; other tokens in the directive are
+    /// ignored per CSP3 §2.3 unrecognised-token handling.
+    pub require_trusted_types_for_script: bool,
+    /// Parsed `trusted-types` directive, if present.
+    pub trusted_types: Option<TrustedTypesDirective>,
 }
 
 impl CspPolicy {
@@ -131,6 +154,8 @@ impl CspPolicy {
             && self.report_to.is_none()
             && !self.upgrade_insecure_requests
             && !self.block_all_mixed_content
+            && !self.require_trusted_types_for_script
+            && self.trusted_types.is_none()
     }
 
     /// Returns the effective source list for `directive`, falling back to
@@ -198,6 +223,22 @@ fn parse_into(policy: &mut CspPolicy, header: &str) {
                 if let Some(group) = tokens.next() {
                     policy.report_to = Some(group.to_string());
                 }
+            }
+            "require-trusted-types-for" => {
+                if tokens.any(|t| t.eq_ignore_ascii_case("'script'")) {
+                    policy.require_trusted_types_for_script = true;
+                }
+            }
+            "trusted-types" => {
+                let mut directive = TrustedTypesDirective::default();
+                for token in tokens {
+                    match token {
+                        "'none'" => directive.disallow_all = true,
+                        "'allow-duplicates'" => directive.allow_duplicates = true,
+                        name => directive.allowed_policy_names.push(name.to_string()),
+                    }
+                }
+                policy.trusted_types = Some(directive);
             }
             dir_name => {
                 let dir = match dir_name {
@@ -359,6 +400,39 @@ mod tests {
     fn parse_report_to() {
         let p = parse_csp_header("default-src 'self'; report-to csp-endpoint");
         assert_eq!(p.report_to, Some("csp-endpoint".to_string()));
+    }
+
+    #[test]
+    fn parse_require_trusted_types_for_script() {
+        let p = parse_csp_header("require-trusted-types-for 'script'");
+        assert!(p.require_trusted_types_for_script);
+    }
+
+    #[test]
+    fn require_trusted_types_for_ignores_unknown_sink_group() {
+        // Spec defines only 'script' — an unrecognised token must not set the flag.
+        let p = parse_csp_header("require-trusted-types-for 'style'");
+        assert!(!p.require_trusted_types_for_script);
+    }
+
+    #[test]
+    fn parse_trusted_types_none() {
+        let p = parse_csp_header("trusted-types 'none'");
+        let tt = p.trusted_types.unwrap();
+        assert!(tt.disallow_all);
+        assert!(tt.allowed_policy_names.is_empty());
+    }
+
+    #[test]
+    fn parse_trusted_types_allowed_names() {
+        let p = parse_csp_header("trusted-types default my-policy 'allow-duplicates'");
+        let tt = p.trusted_types.unwrap();
+        assert!(!tt.disallow_all);
+        assert!(tt.allow_duplicates);
+        assert_eq!(
+            tt.allowed_policy_names,
+            vec!["default".to_string(), "my-policy".to_string()]
+        );
     }
 
     #[test]

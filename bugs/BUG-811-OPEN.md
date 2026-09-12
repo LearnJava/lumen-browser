@@ -129,3 +129,26 @@ csp-meta-spv` из «направления починки» **не** годит
 `tests/wpt/verify_csp_url_worker_gaps.py` тоже долг: часть его CSP-вариантов
 писана исходя из мира без enforcement и рассыпется под срезом 1, чинить
 вместе со следующим срезом, а не отдельно.
+
+## Срез 2 (2026-09-12) — парсинг `trusted-types`/`require-trusted-types-for`
+
+Реализовано (`crates/network/src/csp.rs`): `CspPolicy` получила
+`require_trusted_types_for_script: bool` и `trusted_types:
+Option<TrustedTypesDirective>` (новая структура — `disallow_all`/
+`allowed_policy_names`/`allow_duplicates`). Обе директивы падали в `_ =>
+continue` парсера — это был явный первый блокер TRUSTEDTYPES-1
+(ROADMAP.md), который сам указывает на это как на минимальный шаг для
+разблокировки. Грамматика директив не source-list (`'script'`,
+`'none'`/`'allow-duplicates'`/имена политик), поэтому они не легли в
+`CspDirective`/`CspSource`, а стали отдельными полями `CspPolicy` — тем же
+стилем, что уже есть у `report_uri`/`report_to`. Только парсинг: этот
+крейт не решает, что с этими значениями делать — потребление (проверка
+`createPolicy`/default-policy sink-путей) остаётся за TRUSTEDTYPES-1,
+статус которого этим срезом разблокирован (`blocked` → `planned`,
+см. ROADMAP.md). +6 unit-тестов в `csp.rs`.
+
+Ещё не покрыто (не изменилось со среза 1): заголовок ответа
+`Content-Security-Policy` (только `<meta>`); все директивы кроме
+`script-src` (`img-src`/`connect-src`/`style-src`/…); внешний
+`<script src>` против host/scheme/hash источников; `report-uri`/
+`report-to`; hash-источники.

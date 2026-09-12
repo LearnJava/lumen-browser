@@ -48,3 +48,15 @@ to a TrustedScript»), иначе — оставить прежнее повед
 (innerHTML, `<script src>`, `eval` напрямую) — отдельные точки того же
 шаблона, грепать по каждой, не чинить один раз и считать закрытым (см.
 гочу CLAUDE.md про пофичные шимы вне `WEB_API_SHIM*`).
+
+## Разблокировано (2026-09-12, GAP-CSPENF срез 2)
+
+Ревизия 2026-09-01 (см. ROADMAP.md TRUSTEDTYPES-1) установила, что
+default-policy-путь по спеке применяется только под CSP-директивами
+`trusted-types`/`require-trusted-types-for`, а те не распознавались даже
+парсером CSP — реальный блокер был не в этом баге, а в
+[BUG-811](BUG-811-OPEN.md). Срезом 2 GAP-CSPENF `crates/network/src/csp.rs`
+теперь парсит обе директивы (`CspPolicy::trusted_types`/
+`require_trusted_types_for_script`) — задача становится доделываемой: чтение
+директив есть, остаётся подключить его к `_lumen_timer_string_handler` и
+остальным sink'ам по направлению починки выше.
