@@ -273,3 +273,66 @@ fn is_script_url_true_for_trusted_script_url() {
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
+
+// TRUSTEDTYPES-1 срез 1: `_lumen_tt_get_compliant_script`, the script-sink
+// half of TT L2 §4.1.1 that the shell's `_lumen_tt_set_require_script` flips
+// on for `require-trusted-types-for 'script'` (`crates/shell/src/scripts.rs`).
+
+#[test]
+fn tt_get_compliant_script_passthrough_without_require_flag() {
+    let rt = v8_runtime_with_dom(make_doc());
+    // Flag unset (no CSP directive): a plain string passes through verbatim,
+    // matching pre-TRUSTEDTYPES-1 behaviour for pages that never opt in.
+    let r = rt
+        .eval("_lumen_tt_get_compliant_script('x=1', 'test-sink') === 'x=1'")
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_get_compliant_script_throws_without_default_policy() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var threw = false; \
+                     try { _lumen_tt_get_compliant_script('x=1', 'test-sink'); } \
+                     catch (e) { threw = e instanceof TypeError; } \
+                     threw",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_get_compliant_script_routes_through_default_policy() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var seenType, seenSink; \
+                     trustedTypes.createPolicy('default', { createScript: function (s, t, sink) { \
+                         seenType = t; seenSink = sink; return s + ':ok'; \
+                     }}); \
+                     _lumen_tt_get_compliant_script('x=1', 'test-sink') === 'x=1:ok' && \
+                         seenType === 'TrustedScript' && seenSink === 'test-sink'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
+fn tt_get_compliant_script_unwraps_trusted_script() {
+    let rt = v8_runtime_with_dom(make_doc());
+    // A TrustedScript value already satisfies the sink; the default policy
+    // (absent here) must not be consulted.
+    let r = rt
+        .eval(
+            "_lumen_tt_set_require_script(true); \
+                     var p = trustedTypes.createPolicy('p', { createScript: s => s }); \
+                     var ts = p.createScript('x=1'); \
+                     _lumen_tt_get_compliant_script(ts, 'test-sink') === 'x=1'",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}

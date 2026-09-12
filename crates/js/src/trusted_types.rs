@@ -8,8 +8,12 @@
 //! (`TrustedHTML`/`TrustedScript`/`TrustedScriptURL`) carry an internal brand (WeakMap)
 //! and are not constructible from page script ("Illegal constructor").
 //!
-//! Phase 0: no sink enforcement — DOM sinks (innerHTML etc.) keep accepting plain
-//! strings; trusted values stringify transparently when assigned.
+//! Phase 0: most DOM sinks (innerHTML etc.) still accept plain strings and
+//! trusted values stringify transparently when assigned. TRUSTEDTYPES-1 срез 1
+//! adds the first enforced sink — `setTimeout`/`setInterval` string handlers
+//! under `require-trusted-types-for 'script'` — via
+//! `_lumen_tt_get_compliant_script`; the rest of the sink list (§4.4) is still
+//! unenforced.
 
 #[cfg(feature = "v8-backend")]
 pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
@@ -74,6 +78,29 @@ pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
   var defaultPolicy = null;
   var EMPTY_HTML = new TrustedHTML(SECRET, '');
   var EMPTY_SCRIPT = new TrustedScript(SECRET, '');
+
+  // TRUSTEDTYPES-1 срез 1: `require-trusted-types-for 'script'` (CSP3/TT L2
+  // §4.1), set by the shell from the document's `<meta>` CSP once per
+  // navigation — see `crates/shell/src/scripts.rs`.
+  var REQUIRE_TT_FOR_SCRIPT = false;
+  globalThis._lumen_tt_set_require_script = function (v) { REQUIRE_TT_FOR_SCRIPT = !!v; };
+
+  // TT L2 §4.1.1 "Get Trusted Type compliant string", script subset: a
+  // `TrustedScript` unwraps as-is; otherwise, under `require-trusted-types-for
+  // 'script'`, a plain value must pass through `defaultPolicy.createScript`
+  // (args: value, type name, sink name — matches the policy callback contract
+  // used by `createPolicy`) or the sink throws. Without the CSP directive the
+  // value is used verbatim (TT Phase 0 behaviour, unchanged for pages that
+  // never opt in).
+  globalThis._lumen_tt_get_compliant_script = function (input, sink) {
+    if (input instanceof TrustedScript && VALUES.has(input)) return VALUES.get(input);
+    var stringified = String(input);
+    if (!REQUIRE_TT_FOR_SCRIPT) return stringified;
+    if (defaultPolicy) {
+      return String(defaultPolicy.createScript(stringified, 'TrustedScript', sink));
+    }
+    throw new TypeError(sink + " requires a Trusted Script value, no default policy is set.");
+  };
 
   // TrustedTypePolicyFactory (the window.trustedTypes singleton).
   var factory = {
