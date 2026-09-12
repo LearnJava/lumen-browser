@@ -186,6 +186,32 @@ pub(crate) fn fetch_iframe_source(
     }
 }
 
+/// Исполнить `javascript:` `src` фрейма (GAP-NAVCTX срез 6, BUG-884) в
+/// контексте РОДИТЕЛЯ (`parent_js`), а не ребёнка.
+///
+/// HTML LS §7.4.5 хочет Realm навигируемого объекта (ребёнка), но у ребёнка
+/// на этот момент ещё нет JS-контекста, и строить его загодя — отдельный
+/// V8-изолят на том же потоке ДО того, как известен финальный HTML —
+/// зависает движок насмерть (испробовано и отброшено в этом же срезе: два
+/// живых изолята на одном потоке друг друга блокируют где-то в рантайме
+/// V8/rusty_v8, страница не печатает ни одного `setInterval`-тика после
+/// `script-start`). Тот же компромисс, каким BUG-883 срез 2 уже пожертвовал
+/// для `window.open()` («код исполняется в контексте ОПЕНЕРА, верно по
+/// спеке» — там это было верно и по спеке; здесь это упрощение):
+/// `parent.javascriptUrlRan++` из `iframe_javascript_url_initial_insertion`
+/// читает `parent` РОДИТЕЛЯ, а не ребёнка — для фрейма глубины 0 это то же
+/// самое окно (`window.parent === window` на верхней странице), поэтому
+/// тест не различает два пути; для глубины ≥ 1 это уже на один уровень не
+/// то (читает деда, а не родителя) — известный хвост, не в этом срезе.
+///
+/// Возвращает `Some(html)`, если завершение — строка (становится
+/// финальным HTML фрейма, как обычный `FrameSource::Inline`); `None` —
+/// не-строковое завершение (typical: `void`/`undefined`) не заменяет
+/// документ по спеке, но код уже отработал свои побочные эффекты.
+fn eval_iframe_javascript_url(code: &str, parent_js: Option<&Arc<dyn PersistentJs>>) -> Option<String> {
+    parent_js?.eval_js_completion(code).ok().flatten()
+}
+
 /// Экранирует символы, опасные в HTML-тексте (то же правило, что
 /// `newtab.rs::escape_html` — своя копия по тому же соглашению модуля).
 fn html_escape(s: &str) -> String {
@@ -1615,14 +1641,45 @@ pub(crate) fn spawn_frame(
     let sink = &env.sink;
     let cookie_jar = env.cookie_jar.clone();
     let mut handles = Vec::new();
-    // Источник HTML + база ребёнка для его относительных URL.
-    let fetched = match dest {
-        Some((href, nav_base)) => Some(fetch_iframe_source(href, nav_base, sink, cookie_jar.clone())),
-        None if info.srcdoc.is_some() => None,
-        None => info
+    // GAP-NAVCTX срез 6 (BUG-884): `javascript:` в `src` разметки при
+    // первичной вставке host-элемента — парсерной (`load_frame_sub_documents`)
+    // и через `document.createElement('iframe')` с сразу выставленным `src`
+    // (`frame_dynamic_load.rs::run_new_frame_load`) — оба идут через
+    // `dest: None`, исполняется ДО обычного пути `fetch_iframe_source`, а не
+    // отклоняется как неподдерживаемая схема. `dest: Some(..)` — навигация
+    // (клик/скрипт), и ПЕРЕПРИСВАИВАНИЕ `.src` уже вставленного элемента
+    // тоже уходит сюда через `frame_dynamic.rs::poll_dynamic_frames`'s
+    // `delta.changed` → `navigate_frame_to` → `run_frame_navigation`,
+    // который выполняется на фоновом потоке без доступа к `parent_js` —
+    // этим срезом не тронуто, см. bugs/BUG-884-OPEN.md срез 2.
+    let js_url_result = match dest {
+        None if info.srcdoc.is_none() => info
             .src
             .as_deref()
-            .map(|src| fetch_iframe_source(src, base, sink, cookie_jar.clone())),
+            .and_then(javascript_url_code)
+            .map(|code| eval_iframe_javascript_url(code, parent_js)),
+        _ => None,
+    };
+    // Источник HTML + база ребёнка для его относительных URL.
+    let fetched = match &js_url_result {
+        // Строковое завершение — новый документ фрейма, тем же путём, что и
+        // любой другой инлайн-источник (`about:blank`-адрес: `javascript:`
+        // не создаёт запись истории, HTML LS §7.4.5).
+        Some(Some(html)) => Some(Ok(FrameSource::Inline(html.clone()))),
+        // Не-строковое завершение — по спеке НЕ навигация: фрейм остаётся на
+        // прежнем документе (для первичной вставки — на пустом `about:blank`,
+        // как если бы `src` не было вовсе), код уже отработал побочные эффекты.
+        Some(None) => None,
+        None => match dest {
+            Some((href, nav_base)) => {
+                Some(fetch_iframe_source(href, nav_base, sink, cookie_jar.clone()))
+            }
+            None if info.srcdoc.is_some() => None,
+            None => info
+                .src
+                .as_deref()
+                .map(|src| fetch_iframe_source(src, base, sink, cookie_jar.clone())),
+        },
     };
     // FRAME-4 срез 2: источник, который получить не удалось, больше не
     // обрывает загрузку фрейма — вместо неё под-документом становится
