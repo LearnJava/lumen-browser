@@ -28,8 +28,11 @@ pub(crate) enum LinkTarget {
     /// Страница: `_top`, а для фрейма глубины 0 и `_parent` — его родитель и
     /// есть верхнее окно.
     Page,
-    /// Новое окно (`_blank` или имя, которое здесь некому носить). Этот движок
-    /// вспомогательных browsing context не создаёт вовсе ([BUG-883]).
+    /// Новое окно (`_blank` или имя, которое здесь некому носить). Открывается
+    /// как настоящая новая вкладка (GAP-NAVCTX срез 2, [BUG-883]) — опенер при
+    /// этом уходит в фон тем же путём, что и обычное переключение вкладки
+    /// (`Lumen::open_new_tab`); его таймеры при этом всё ещё не тикают, пока
+    /// не появится параллельная накачка нескольких `js_ctx` (не в этом срезе).
     NewWindow,
 }
 
@@ -59,9 +62,15 @@ impl Lumen {
         let Some((href, target_attr)) = found else { return false };
         match self.link_destination(idx, &target_attr) {
             LinkTarget::NewWindow => {
-                eprintln!(
-                    "iframe: ссылка '{href}' с target='{target_attr}' — вспомогательные окна не поддержаны (BUG-883)"
-                );
+                // GAP-NAVCTX срез 2 (BUG-883): open a real tab instead of the
+                // former no-op stub. Resolved against the CHILD's base — the
+                // link lives in the frame's sub-document, same rule the `Page`
+                // arm below already applies for `_top`.
+                if links::is_navigable_href(&href) {
+                    let resolved = nav_base.resolve_str(&href);
+                    self.open_new_tab();
+                    self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                }
                 true
             }
             LinkTarget::Page => {
@@ -79,12 +88,12 @@ impl Lumen {
 
     /// Разобрать `target` ссылки ребёнка.
     ///
-    /// `_blank` — окно, которое движок не создаёт ([BUG-883]), без исключений:
-    /// спека резервирует это имя, так что живой фрейм с таким `name` (если он
-    /// вообще возможен) им не адресуется. Любое другое непустое имя сперва
-    /// ищется среди живых фреймов (срез 24, [`Self::find_frame_by_name`]) — и
-    /// только когда совпадения нет, движок честно отказывается СОЗДАТЬ новый
-    /// browsing context, а не притворяется, что умеет часть.
+    /// `_blank` — всегда новое окно ([BUG-883]), без исключений: спека
+    /// резервирует это имя, так что живой фрейм с таким `name` (если он вообще
+    /// возможен) им не адресуется. Любое другое непустое имя сперва ищется
+    /// среди живых фреймов (срез 24, [`Self::find_frame_by_name`]) — и только
+    /// когда совпадения нет, движок открывает новую вкладку, как и для
+    /// `_blank` (GAP-NAVCTX срез 2).
     pub(crate) fn link_destination(&self, idx: usize, target: &str) -> LinkTarget {
         let t = target.trim();
         if t.is_empty() || t.eq_ignore_ascii_case("_self") {

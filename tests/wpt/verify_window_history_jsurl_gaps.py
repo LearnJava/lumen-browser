@@ -628,6 +628,29 @@ setTimeout(function () { console.log("PROBE late-timer beat=" + beat); }, 6000);
 </script>
 """, "beats continue past `opening`; post-open-timer and late-timer fire"),
 
+    # GAP-NAVCTX срез 2 (BUG-883): a `visibilitychange` LISTENER, unlike the
+    # heartbeat's own `setTimeout` chain, does not depend on the opener's timer
+    # queue resuming — the shell fires it via a synchronous `eval_js` call
+    # (`Lumen::open_new_tab` -> `pause_event_loop`) at the moment the opener is
+    # parked, regardless of whether its timers ever tick again. `win-open-freeze`
+    # above cannot see this half of the fix: its only probe is the heartbeat
+    # timer, which stays frozen (that part of BUG-883 remains open — see
+    # bugs/BUG-883-OPEN.md).
+    "win-open-visibility": ("""
+<script>
+document.addEventListener("visibilitychange", function () {
+  console.log("PROBE vis-changed vis=" + document.visibilityState +
+              " hidden=" + document.hidden);
+});
+setTimeout(function () {
+  console.log("PROBE opening");
+  open("vwjh-child.html?from=visibility");
+  console.log("PROBE opened vis=" + document.visibilityState +
+              " hidden=" + document.hidden);
+}, 500);
+</script>
+""", "vis-changed vis=hidden hidden=true, printed synchronously around `opening`/`opened`"),
+
     # `location_reload.html` pings five times from a reloading subframe; the
     # generic half — what a reload does to *this* document — is measured with
     # `localStorage` as the counter, because `sessionStorage` is empty on every

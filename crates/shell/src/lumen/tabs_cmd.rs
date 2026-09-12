@@ -130,6 +130,17 @@ impl Lumen {
         let old_id = self.tab_strip.tabs[old_active].id;
         // Mark old tab as recently backgrounded so it gets a badge if it ages to T2.
         self.tab_strip.set_tab_state(old_active, TabState::BackgroundRecent);
+        // BUG-883: the opener goes to background exactly like a user-driven tab
+        // switch (`switch_tab`) — fire visibilitychange(hidden=true) BEFORE
+        // parking its JS handle, or `document.visibilityState`/`visibilitychange`
+        // never update on the caller of `window.open()`/`target="_blank"`. This
+        // does not resume the opener's timers once parked (the engine pumps
+        // exactly one live `js_ctx` per shell process, `page_snapshot.rs` — a
+        // separate, larger architectural gap tracked outside this slice), but
+        // it removes the silent "never notified" half of the symptom.
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.pause_event_loop();
+        });
         let snap = self.save_page_snapshot();
         self.bg_tabs.insert(old_id, snap);
         self.tab_strip.active = new_idx;
