@@ -611,6 +611,18 @@ pub(crate) fn run_scripts_with_dom(
                         js_string_literal(&json)
                     ));
                 }
+                // GAP-CSPENF срез 1: политика документа из `<meta
+                // http-equiv="Content-Security-Policy">`, собранная один раз
+                // до исполнения — она не меняется тем, что скрипты уже
+                // сделали (спека применяет ту политику, что видна к моменту
+                // разбора; `<meta>`, вставленные скриптом после этой точки,
+                // здесь не учитываются намеренно — тот же выбор, что и у
+                // `parse_time_layout` выше).
+                let csp_policy = {
+                    let doc = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
+                    let root = doc.root();
+                    crate::csp_enforce::document_meta_csp_policy(&doc, root)
+                };
                 // Classic scripts run first (HTML LS §8.1.3 execution order).
                 for ResolvedScript { node: nid, source: src, external_ok, .. } in &scripts {
                     // BUG-827: к этому моменту настоящий парсер уже вставил всё,
@@ -624,6 +636,22 @@ pub(crate) fn run_scripts_with_dom(
                     if *external_ok == Some(false) {
                         fire_parser_script_event(&rt, *nid, *external_ok);
                         continue;
+                    }
+                    // GAP-CSPENF срез 1: `script-src` против инлайна — только
+                    // инлайновые классические скрипты (`external_ok ==
+                    // None`), внешние `<script src>` не покрыты этим срезом.
+                    if external_ok.is_none()
+                        && let Some((policy, original_policy)) = &csp_policy
+                    {
+                        let nonce = {
+                            let doc = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
+                            doc.get(*nid).get_attr("nonce").map(str::to_owned)
+                        };
+                        if crate::csp_enforce::inline_script_blocked(policy, nonce.as_deref()) {
+                            crate::csp_enforce::fire_script_src_violation(&rt, original_policy);
+                            fire_parser_script_event(&rt, *nid, *external_ok);
+                            continue;
+                        }
                     }
                     // BUG-486: `document.currentScript` must name the element
                     // being executed for the whole body and nothing else, so the
@@ -665,6 +693,22 @@ pub(crate) fn run_scripts_with_dom(
                     if item.external_ok == Some(false) {
                         fire_parser_script_event(&rt, item.node, item.external_ok);
                         continue;
+                    }
+                    // GAP-CSPENF срез 1: та же проверка, что у классических
+                    // скриптов, — инлайновый модуль исполняется JS-текстом
+                    // ровно так же, как инлайновый классический.
+                    if item.external_ok.is_none()
+                        && let Some((policy, original_policy)) = &csp_policy
+                    {
+                        let nonce = {
+                            let doc = doc_arc.lock().unwrap_or_else(|e| e.into_inner());
+                            doc.get(item.node).get_attr("nonce").map(str::to_owned)
+                        };
+                        if crate::csp_enforce::inline_script_blocked(policy, nonce.as_deref()) {
+                            crate::csp_enforce::fire_script_src_violation(&rt, original_policy);
+                            fire_parser_script_event(&rt, item.node, item.external_ok);
+                            continue;
+                        }
                     }
                     let src = &item.source;
                     // Внешний модуль исполняется под СВОИМ адресом: от него

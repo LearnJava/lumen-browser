@@ -101,3 +101,31 @@ async_test(t => {
 3. WPT: `run_report.py --all --root content-security-policy --recursive` —
    105 TIMEOUT уходят; часть тестов станет FAIL, и это ожидаемый
    промежуточный результат.
+
+## Срез 1 (2026-09-12) — `script-src` из `<meta>` + диспетчеризация
+
+Реализовано (`crates/shell/src/csp_enforce.rs`, детали —
+[`subsystems/shell.md`](../subsystems/shell.md)): `script-src`/`default-src`
+из `<meta http-equiv="Content-Security-Policy">` блокирует инлайновые
+классические и модульные скрипты без совпавшего `'unsafe-inline'`/
+`'nonce-…'` и впервые зовёт `_lumen_dispatch_csp_violation` — событие
+`securitypolicyviolation` теперь реально диспатчится.
+
+`--variant csp-meta-script` подтверждён: `inline-script-ran` больше не
+печатается (печатается вообще ничего — инлайн заблокирован целиком, включая
+скрипт-«тикер» самого харнесса, что корректно по спеке). `--variant
+csp-meta-spv` из «направления починки» **не** годится как есть: его
+слушатель `securitypolicyviolation` сам инлайновый и без nonce, поэтому
+теперь тоже блокируется — обновлённый nonce-based проб (script-src
+'nonce-…', второй безnonce-скрипт) подтверждает и блокировку, и доставку
+события с `violatedDirective=script-src`/`blockedURI=inline`.
+
+Ещё не покрыто (следующие срезы, по значимости): заголовок
+`Content-Security-Policy` ответа (только `<meta>` разбирается — `RawPage`
+без CSP-поля); все директивы кроме `script-src`
+(`img-src`/`connect-src`/`style-src`/`style-src`/…); внешний `<script src>`
+против host/scheme/hash источников; `report-uri`/`report-to`; hash-источники
+(`'sha256-…'` и т.п. — только `'unsafe-inline'`/`'nonce-…'`).
+`tests/wpt/verify_csp_url_worker_gaps.py` тоже долг: часть его CSP-вариантов
+писана исходя из мира без enforcement и рассыпется под срезом 1, чинить
+вместе со следующим срезом, а не отдельно.
