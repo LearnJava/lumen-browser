@@ -40,6 +40,14 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Evaluate `script` and return its result as a JSON string (SDC-1b
     /// `AutomationCommand::Eval` — unlike `eval_js`, the value is not discarded).
     fn eval_js_value(&self, script: &str) -> Result<String, String>;
+    /// Evaluate `script` and report the completion value only if it is a JS
+    /// *string* primitive — `None` for anything else (`undefined`, an object,
+    /// a number...). GAP-NAVCTX (BUG-884): HTML LS §7.4.5 `javascript:` URL
+    /// navigation replaces the document with the completion value only when
+    /// it is a string; `eval_js_value`'s JSON round-trip can't make that
+    /// distinction (`to_json_string()` maps both a real string and, say,
+    /// `undefined`/`null` through quoting/`"null"`, losing the type).
+    fn eval_js_completion(&self, script: &str) -> Result<Option<String>, String>;
     /// Consume any navigation request placed by JS during the last `eval_js`.
     fn take_navigate_request(&self) -> Option<JsNavigateRequest>;
     /// Drain `NavigateEvent` intercept results queued since the last call.
@@ -763,6 +771,16 @@ impl PersistentJs for V8PersistentJs {
         self.rt
             .eval(script)
             .map(|v| v.to_json_string())
+            .map_err(|e| e.to_string())
+    }
+    fn eval_js_completion(&self, script: &str) -> Result<Option<String>, String> {
+        use lumen_core::ext::JsRuntime as _;
+        self.rt
+            .eval(script)
+            .map(|v| match v {
+                lumen_core::ext::JsValue::String(s) => Some(s),
+                _ => None,
+            })
             .map_err(|e| e.to_string())
     }
     fn take_navigate_request(&self) -> Option<JsNavigateRequest> {

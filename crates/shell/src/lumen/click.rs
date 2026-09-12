@@ -771,6 +771,19 @@ impl Lumen {
                     })
                 });
                 if let Some((href, target_attr)) = link {
+                    // GAP-NAVCTX срез 1 (BUG-884): `<a href="javascript:...">`
+                    // runs the code in the clicking document, ignoring `target`
+                    // — popup/named-frame targeting for a `javascript:` anchor
+                    // is out of scope for this slice (matches the un-fixed
+                    // `window.open` opener freeze, BUG-883: routing the result
+                    // into another browsing context isn't load-bearing yet).
+                    if let Some(code) = javascript_url_code(&href) {
+                        if let Some(html) = self.eval_javascript_url(code) {
+                            let current = self.current_display_url().to_owned();
+                            self.navigate_replace(PageSource::Static { html, url: current });
+                        }
+                        return;
+                    }
                     let t = target_attr.trim();
                     let named_frame = (!t.is_empty() && !t.eq_ignore_ascii_case("_self"))
                         .then(|| self.find_frame_by_name(t))

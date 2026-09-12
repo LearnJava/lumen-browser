@@ -1205,11 +1205,22 @@ impl Lumen {
         {
             let popups = self.drain_query_js(|j| j.take_window_open_requests()).unwrap_or_default();
             for (url, _target, _width, _height) in popups {
+                // GAP-NAVCTX срез 1 (BUG-884): `open("javascript:...")` must run
+                // the code (in the OPENER's context, per HTML LS §7.4.5) rather
+                // than reach the network layer, which today rejects `javascript:`
+                // as an unsupported scheme. Evaluated BEFORE `open_new_tab()`
+                // switches `self.js_ctx` away from the opener.
+                let popup_code = javascript_url_code(&url).map(|code| self.eval_javascript_url(code));
                 // BUG-293: resolve `file://` popups to a `PageSource::File` (load
                 // from disk) rather than the http-only network path. Read the
                 // opener's scheme from `self.source` BEFORE `open_new_tab()`
                 // resets it, so the web→file security check sees the real opener.
-                let resolved = if url.is_empty() {
+                let resolved = if let Some(completion) = popup_code {
+                    Ok(match completion {
+                        Some(html) => PageSource::Static { html, url: "about:blank".to_owned() },
+                        None => PageSource::AboutBlank,
+                    })
+                } else if url.is_empty() {
                     Ok(PageSource::url("about:blank"))
                 } else {
                     resolve_js_navigation(&url, &self.source)
@@ -1562,17 +1573,36 @@ impl Lumen {
             match nav {
                 JsNavigateRequest::Push(url) => {
                     click_log::log_js_nav("pushState/location.href", &url);
-                    // BUG-293: same file://-resolution + web→file guard as popups.
-                    match resolve_js_navigation(&url, &self.source) {
-                        Ok(source) => self.navigate_to(source),
-                        Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
+                    // GAP-NAVCTX срез 1 (BUG-884): HTML LS §7.4.5 — a
+                    // `javascript:` URL never reaches the network/history
+                    // machinery below; it always replaces in place (no new
+                    // session-history entry), regardless of whether it was
+                    // assigned via `location.href=` (push) or `.replace()`.
+                    if let Some(code) = javascript_url_code(&url) {
+                        if let Some(html) = self.eval_javascript_url(code) {
+                            let current = self.current_display_url().to_owned();
+                            self.navigate_replace(PageSource::Static { html, url: current });
+                        }
+                    } else {
+                        // BUG-293: same file://-resolution + web→file guard as popups.
+                        match resolve_js_navigation(&url, &self.source) {
+                            Ok(source) => self.navigate_to(source),
+                            Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
+                        }
                     }
                 }
                 JsNavigateRequest::Replace(url) => {
                     click_log::log_js_nav("replaceState/location.replace", &url);
-                    match resolve_js_navigation(&url, &self.source) {
-                        Ok(source) => self.navigate_replace(source),
-                        Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
+                    if let Some(code) = javascript_url_code(&url) {
+                        if let Some(html) = self.eval_javascript_url(code) {
+                            let current = self.current_display_url().to_owned();
+                            self.navigate_replace(PageSource::Static { html, url: current });
+                        }
+                    } else {
+                        match resolve_js_navigation(&url, &self.source) {
+                            Ok(source) => self.navigate_replace(source),
+                            Err(reason) => eprintln!("Навигация заблокирована: {reason}"),
+                        }
                     }
                 }
                 JsNavigateRequest::Reload => {

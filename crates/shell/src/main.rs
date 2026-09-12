@@ -77,7 +77,10 @@ use dump_mode::{
 };
 use layout_metrics::{count_layout_boxes, count_rendered_units};
 use nav_history::{JsNavigateRequest, NavEntry, PendingIntercepted};
-use page_source::{PageSource, RawPage, page_source_for_automation_url, resolve_js_navigation};
+use page_source::{
+    PageSource, RawPage, javascript_url_code, page_source_for_automation_url,
+    resolve_js_navigation,
+};
 use subresources::{
     LoadedWebFont, PendingWebFont, fetch_and_decode_background_images, fetch_vtt_text,
     load_font_faces, rule_to_font_face,

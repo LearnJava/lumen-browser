@@ -39,6 +39,18 @@ pub(crate) enum PageSource {
     Static { html: String, url: String },
 }
 
+/// If `url` is a `javascript:` URL (HTML LS §7.4.5), return the source code
+/// after the scheme — the scheme match is ASCII case-insensitive (RFC 3986
+/// §3.1). GAP-NAVCTX срез 1 (BUG-884): no percent-decoding of the code —
+/// unlike a `data:` URL body, a `javascript:` URL's source rarely carries
+/// `%XX` escapes in practice, and skipping it keeps this a plain substring
+/// operation; revisit if a WPT id needs it.
+pub(crate) fn javascript_url_code(url: &str) -> Option<&str> {
+    const PREFIX: &str = "javascript:";
+    let head = url.get(..PREFIX.len())?;
+    head.eq_ignore_ascii_case(PREFIX).then(|| &url[PREFIX.len()..])
+}
+
 impl PageSource {
     /// Обычная GET-навигация на `url` — источник без тела запроса.
     ///
@@ -438,4 +450,24 @@ pub(crate) fn resolve_js_navigation(url: &str, opener: &PageSource) -> Result<Pa
         ));
     }
     Ok(page_source_for_automation_url(url))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn javascript_url_code_extracts_source() {
+        assert_eq!(javascript_url_code("javascript:alert(1)"), Some("alert(1)"));
+        assert_eq!(javascript_url_code("JavaScript:void(0)"), Some("void(0)"));
+        assert_eq!(javascript_url_code("javascript:"), Some(""));
+    }
+
+    #[test]
+    fn javascript_url_code_rejects_other_schemes() {
+        assert_eq!(javascript_url_code("https://example.com"), None);
+        assert_eq!(javascript_url_code("data:text/html,x"), None);
+        assert_eq!(javascript_url_code("java"), None);
+        assert_eq!(javascript_url_code(""), None);
+    }
 }

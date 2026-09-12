@@ -69,3 +69,63 @@ HTML LS §7.4.5 «javascript: URL special case»: навигация на `javas
 заменяет документ. Минимум для перечисленных id — исполнять код и не
 отправлять URL в сетевой слой. Порядок с [BUG-885](BUG-885-FIXED.md) любой:
 дефекты независимы.
+
+## Срез 1 (GAP-NAVCTX, 2026-09-12) — `location.href`/`.replace()`/`open()`/клик по `<a>`
+
+Закрыты три из четырёх мест: `location.href=`/`location.assign`/`location.replace`
+(`JsNavigateRequest::Push`/`Replace`, `about_to_wait.rs`), `window.open(...)`
+(тот же файл, `take_window_open_requests`-цикл) и клик по `<a href="javascript:…">`
+(`lumen/click.rs`, до проверки `target`/`is_navigable_href`). Новый общий путь:
+`page_source::javascript_url_code(url)` вырезает код после схемы (регистронезависимо,
+без percent-decode — редкая необходимость для `javascript:`, ревизия при первом
+WPT-id, которому это будет нужно), `Lumen::eval_javascript_url` (`navigation.rs`)
+гоняет его в ТЕКУЩЕМ JS-контексте через новый `PersistentJs::eval_js_completion`
+(отличает JS-строку от прочего — старый `eval_js_value` терял это различие через
+JSON-круговорот), и если результат — строка, документ заменяется
+`PageSource::Static { html, url }` (URL исходного документа сохраняется) через
+`navigate_replace` — само `javascript:` не создаёт новую запись истории, поэтому
+`Push` (location.href=) и `Replace` (`.replace()`) сходятся на одном вызове.
+Не-строковый результат (`undefined`, объект…) — молчаливый no-op, ничего не
+заменяется, ничего не грузится.
+
+**Упрощения этого среза** (не регрессии, осознанные границы):
+- `PageSource::Static` не несёт origin/resource_base — замена document по
+  `javascript:` не сохраняет исходный origin для последующих same-origin проверок
+  и не резолвит относительные подресурсы к прежнему base URL. Для минимальных id
+  (строковый литерал вместо документа) это не задевается.
+- Клик по `<a href="javascript:…" target="_blank">` игнорирует `target` — код
+  исполняется и подставляется в ТЕКУЩИЙ документ, а не в новый контекст;
+  маршрутизация в другой browsing context не имеет смысла, пока опенер всё ещё
+  гибнет при `window.open()` ([BUG-883](BUG-883-OPEN.md)).
+- Тот же гейт (`is_navigable_href`) в остальных пяти местах, где он
+  переиспользуется (клик внутри фрейма, hint-mode, форма `GET`,
+  `winit_session.rs`), не тронут — там `javascript:`-ссылка по-прежнему тихо
+  игнорируется, как раньше.
+- `window.open("javascript:...")`: код исполняется в контексте ОПЕНЕРА (верно
+  по спеке), результат подставляется в открытую вкладку как `PageSource::Static`
+  с `url: "about:blank"` — но сама вкладка становится активной (BUG-883
+  по-прежнему не чинен в этом срезе), так что опенер всё ещё замирает сразу
+  после.
+
+**Не в этом срезе:** `<iframe src="javascript:…">` (парсерная и через
+переприсваивание `.src`) — `fetch_iframe_source` (`frames.rs`) вызывается вне
+UI-потока с текущей архитектурой (нет доступа к `Arc<dyn PersistentJs>`
+родителя на этом шаге), а исполнение в контексте РЕБЁНКА требует, чтобы у
+фрейма уже был установлен JS-контекст на пустом `about:blank` документе до
+получения источника — separate slice. Оставшиеся два WPT id из «Цены по WPT»
+(`xhr/open-url-javascript-window*`) тоже не закрыты этим срезом — оба упираются
+в iframe-путь.
+
+Живая проверка (MCP `--mcp-live-port`, `LUMEN_NO_ENGINE_THREAD=1`, реальное
+окно): `location.href = 'javascript:"loc-replaced"'` и клик по
+`<a href="javascript:'anchor-replaced'">` оба заменили документ строкой
+completion без обращения к сети (скриншот подтверждён визуально); `window.open`
+не проверен живьём в этом срезе (требует переключения вкладки через MCP,
+оставлено — код идентичен уже проверенному пути).
+
+Гейт: `cargo test --bin lumen javascript_url_code` (2 новых теста),
+`cargo clippy -p lumen-shell --all-targets -- -D warnings` чисто;
+`scoped-test.sh` — единственный красный (`cpu_snapshots_match_references`)
+подтверждён A/B на `main` тем же байт-в-байт списком несовпадений,
+предсуществующий дрейф (см. [BUG-1008](BUG-1008-OPEN.md)/BUG-517 хвост),
+не от этой правки.
