@@ -1,11 +1,14 @@
-//! SVG foreign-content rules per HTML Living Standard §13.2.6.5 — reduced to
-//! the shape [`crate::tree_builder`] needs (GAP-XMLDOC срез 3, BUG-685): SVG
-//! only. Not implemented, and out of scope for this slice: MathML, the
-//! HTML/MathML "integration point" exceptions (`<foreignObject>`/`<desc>`/
-//! `<title>` do **not** switch children back to the HTML namespace),
-//! foreign-attribute namespacing (`xlink:href` stays a plain attribute
-//! instead of gaining `Namespace::XLink`). See `bugs/BUG-685-OPEN.md` for
-//! the measured remainder.
+//! SVG and MathML foreign-content rules per HTML Living Standard §13.2.6.5
+//! — reduced to the shape [`crate::tree_builder`] needs. SVG namespacing
+//! (GAP-XMLDOC срез 3, BUG-685) and MathML namespacing (GAP-XMLDOC срез 6,
+//! same bug) are both covered; the §13.2.6.5 "any other start tag" breakout
+//! list is shared between the two namespaces per spec. Not implemented, and
+//! out of scope for this slice: the HTML/MathML and HTML/SVG "integration
+//! point" exceptions (`<annotation-xml>`/`<mi>`/`<mo>`/`<mn>`/`<ms>`/
+//! `<mtext>`/`<foreignObject>`/`<desc>`/`<title>` do **not** switch children
+//! back to the HTML namespace), foreign-attribute namespacing (`xlink:href`
+//! stays a plain attribute instead of gaining `Namespace::XLink`). See
+//! `bugs/BUG-685-OPEN.md` for the measured remainder.
 //!
 //! This module only supplies the static lookup tables and the "does this
 //! start tag break out of foreign content" decision — the tree builder
@@ -56,6 +59,16 @@ pub(crate) fn adjust_svg_tag_name(lower: &str) -> &str {
         "lineargradient" => "linearGradient",
         "radialgradient" => "radialGradient",
         "textpath" => "textPath",
+        other => other,
+    }
+}
+
+/// "Adjust MathML attribute names" (§13.2.6.5, "insert a foreign element")
+/// — MathML has exactly one case-sensitive attribute, unlike SVG's dozens;
+/// every other name is already correct lower-case.
+pub(crate) fn adjust_mathml_attribute_name(lower: &str) -> &str {
+    match lower {
+        "definitionurl" => "definitionURL",
         other => other,
     }
 }
@@ -129,11 +142,12 @@ pub(crate) fn adjust_svg_attribute_name(lower: &str) -> &str {
 }
 
 /// §13.2.6.5 "any other start tag" breakout list: these HTML tag names pop
-/// back out of foreign content instead of becoming a foreign (SVG) element,
-/// even while the current node is SVG. `font` only breaks out when it
-/// carries a `color`, `face`, or `size` attribute — the spec's carve-out for
-/// legacy markup that nests a `<font>` inside inline SVG expecting HTML
-/// semantics.
+/// back out of foreign content instead of becoming a foreign (SVG or
+/// MathML) element, even while the current node is foreign — the spec
+/// shares this exact list between both namespaces. `font` only breaks out
+/// when it carries a `color`, `face`, or `size` attribute — the spec's
+/// carve-out for legacy markup that nests a `<font>` inside inline SVG/
+/// MathML expecting HTML semantics.
 pub(crate) fn breaks_out_of_foreign_content(lower_name: &str, attrs: &[(String, String)]) -> bool {
     match lower_name {
         "b" | "big" | "blockquote" | "body" | "br" | "center" | "code" | "dd" | "div" | "dl"
@@ -185,6 +199,13 @@ mod tests {
         assert_eq!(adjust_svg_tag_name("rect"), "rect");
         assert_eq!(adjust_svg_tag_name("svg"), "svg");
         assert_eq!(adjust_svg_tag_name("path"), "path");
+    }
+
+    #[test]
+    fn adjusts_mathml_definitionurl() {
+        assert_eq!(adjust_mathml_attribute_name("definitionurl"), "definitionURL");
+        assert_eq!(adjust_mathml_attribute_name("id"), "id");
+        assert_eq!(adjust_mathml_attribute_name("encoding"), "encoding");
     }
 
     #[test]
