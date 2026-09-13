@@ -615,7 +615,7 @@
   what the shell does ten lines later (it used to re-query `bfcache_eligible()`
   there). Not done: `reload()` runs no unload sequence — it is called from inside
   these same paths, so dispatching there would double-fire — and `window.close()`
-  is [BUG-887](../bugs/BUG-887-OPEN.md).
+  is [BUG-887](../bugs/BUG-887-FIXED.md).
 - **Done (bfcache eligibility filters — WS/SSE/unload, Ph3 `P3-bfcache` level 1, 2026-07-13):**
   `bfcache_eligible()` (previously always `true`) now queries
   `PersistentJs::has_bfcache_freeze_blocker()` through `route_query_js`,

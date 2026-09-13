@@ -1,0 +1,9 @@
+# WPT manifest tooling (`tools/manifest/vcs.py`) only reads a `.gitignore`
+# living directly inside the test root it is passed (`tests/wpt`), not the
+# repo-root one — so `/tests/wpt/.heavy.lock` being ignored there does not
+# keep the manifest walker from treating it as a test source file. On
+# Windows that file can be held under a mandatory OS lock for the whole
+# `run_report.py` run (`heavy_lock.py`), and the walker's own attempt to
+# read it for hashing then fails with `PermissionError`, aborting every run.
+.heavy.lock
+.heavy.lock.owner
