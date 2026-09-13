@@ -697,6 +697,28 @@ fn overflow_clip_margin_computed_length(length: &Length, font_size: f32) -> (Str
     (length_to_css(length), is_zero)
 }
 
+/// Un-zooms a [`Length`] for `getComputedStyle()` reporting (CSS Viewport L1
+/// §5, `#zoom-om`): `cascade.rs::apply_zoom_to_lengths` bakes `effective_zoom`
+/// into already-resolved `Length::Px` box-model lengths, so the raw
+/// `ComputedStyle` no longer holds the "as if zoom weren't applied" computed
+/// value the CSSOM getter must return. Other units pass through unchanged —
+/// `apply_zoom_to_lengths` never scaled them either (they resolve later
+/// against an already-zoomed basis).
+fn unzoom_length_to_css(l: &Length, z: f32) -> String {
+    match l {
+        Length::Px(v) => px_str(*v / z),
+        _ => length_to_css(l),
+    }
+}
+
+/// [`unzoom_length_to_css`] for the `<length> | auto` fields (margin/inset).
+fn unzoom_length_or_auto_to_css(l: &LengthOrAuto, z: f32) -> String {
+    match l {
+        LengthOrAuto::Auto => "auto".into(),
+        LengthOrAuto::Length(len) => unzoom_length_to_css(len, z),
+    }
+}
+
 /// Serialises a [`LengthOrAuto`] — `Auto` becomes `"auto"`.
 fn length_or_auto_to_css(l: &LengthOrAuto) -> String {
     match l {
@@ -1151,6 +1173,12 @@ fn webkit_box_computed_display(style: &ComputedStyle) -> &'static str {
 /// Covers ~55 most-queried properties. Less-used properties are omitted.
 pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     let mut m: HashMap<String, String> = HashMap::with_capacity(64);
+    // CSS Viewport L1 §5 `#zoom-om` — properties `cascade.rs::apply_zoom_to_lengths`
+    // scaled by `effective_zoom` are un-zoomed again below before serialization.
+    // `width`/`height`/inset/min-*/max-* are deliberately excluded: those report
+    // the *used* value (already zoom-scaled on the real UA too), not the computed
+    // one.
+    let z = style.effective_zoom;
 
     // ── Display / layout mode ─────────────────────────────────────
     m.insert("display".into(), webkit_box_computed_display(style).into());
@@ -1191,20 +1219,20 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("min-height".into(), style.min_height.as_ref().map_or("0px".into(), length_to_css));
     m.insert("max-height".into(), style.max_height.as_ref().map_or("none".into(), length_to_css));
 
-    m.insert("margin-top".into(), length_or_auto_to_css(&style.margin_top));
-    m.insert("margin-right".into(), length_or_auto_to_css(&style.margin_right));
-    m.insert("margin-bottom".into(), length_or_auto_to_css(&style.margin_bottom));
-    m.insert("margin-left".into(), length_or_auto_to_css(&style.margin_left));
+    m.insert("margin-top".into(), unzoom_length_or_auto_to_css(&style.margin_top, z));
+    m.insert("margin-right".into(), unzoom_length_or_auto_to_css(&style.margin_right, z));
+    m.insert("margin-bottom".into(), unzoom_length_or_auto_to_css(&style.margin_bottom, z));
+    m.insert("margin-left".into(), unzoom_length_or_auto_to_css(&style.margin_left, z));
 
-    m.insert("padding-top".into(), length_to_css(&style.padding_top));
-    m.insert("padding-right".into(), length_to_css(&style.padding_right));
-    m.insert("padding-bottom".into(), length_to_css(&style.padding_bottom));
-    m.insert("padding-left".into(), length_to_css(&style.padding_left));
+    m.insert("padding-top".into(), unzoom_length_to_css(&style.padding_top, z));
+    m.insert("padding-right".into(), unzoom_length_to_css(&style.padding_right, z));
+    m.insert("padding-bottom".into(), unzoom_length_to_css(&style.padding_bottom, z));
+    m.insert("padding-left".into(), unzoom_length_to_css(&style.padding_left, z));
 
-    m.insert("border-top-width".into(), px_str(style.border_top_width));
-    m.insert("border-right-width".into(), px_str(style.border_right_width));
-    m.insert("border-bottom-width".into(), px_str(style.border_bottom_width));
-    m.insert("border-left-width".into(), px_str(style.border_left_width));
+    m.insert("border-top-width".into(), px_str(style.border_top_width / z));
+    m.insert("border-right-width".into(), px_str(style.border_right_width / z));
+    m.insert("border-bottom-width".into(), px_str(style.border_bottom_width / z));
+    m.insert("border-left-width".into(), px_str(style.border_left_width / z));
 
     m.insert("border-top-style".into(), border_style_to_css(style.border_top_style).into());
     m.insert("border-right-style".into(), border_style_to_css(style.border_right_style).into());
@@ -1292,7 +1320,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     });
 
     // ── Typography ────────────────────────────────────────────────
-    m.insert("font-size".into(), px_str(style.font_size));
+    m.insert("font-size".into(), px_str(style.font_size / z));
     m.insert("font-weight".into(), style.font_weight.0.to_string());
     m.insert("font-style".into(), match style.font_style {
         FontStyle::Normal => "normal",

@@ -1,6 +1,6 @@
 # BUG-532: CSS `zoom` property is not implemented at all
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-09-13 (P3)
 **Дата:** 2026-08-03
 **Компонент:** css-parser / layout (`crates/engine/css-parser/src/*.rs`, `crates/engine/layout/src/style.rs`)
 **Найден:** P2, WPT-RUN-3 срез 25 (`css/css-viewport`) — массовый прогон, 22 testharness id,
@@ -70,15 +70,48 @@ computed-значения ширины бордеров/аутлайнов по 
    (`CSS.supports()`/`@supports`). `zoom-valid.html`: 9/16 → **16/16**, `.ini`
    удалён (нёс только `FAIL` на теперь проходящие сабтесты).
 
-2. **Открыто, не тронуто этим срезом — getComputedStyle() не "un-zoom"-ит
-   значения (CSS Viewport L1 §5, `#zoom-om`).** `computed-initial.html`
-   (`assert_equals: expected "16px" but got "160px"` под `zoom: 10` — сам
-   реальный WPT-прогон `run_smoke.py`, не гипотеза) и `margin.html` (reftest,
-   тоже FAIL, не изолирован) показывают, что `getComputedStyle()` отдаёт
-   **зумленное** used-value вместо "как будто zoom не применялся" —
-   спека требует обратного масштабирования (`selector_query.rs::computed_style_to_map`
-   ничего не делает с `effective_zoom`). Это отдельный, более крупный кусок работы
-   (алгоритм un-zoom для каждого свойства-длины в `getComputedStyle`, а не только
-   для `font-size`) — не входит в объём этого среза, `zoom-interpolation.html`
-   (202 сабтеста) и оставшиеся `zoom/*.html`/семь TIMEOUT-файлов из §Влияние
-   тоже не перепроверены. `BUG-532` остаётся `OPEN`, сужен до этого пункта.
+2. **`getComputedStyle()` не "un-zoom"-ил значения (CSS Viewport L1 §5,
+   `#zoom-om`) — ЗАКРЫТО этим срезом (часть 2, 2026-09-13).**
+   `selector_query.rs::computed_style_to_map` делит на `style.effective_zoom`
+   ровно те `Length::Px`-поля, что `cascade.rs::apply_zoom_to_lengths`
+   зумит на входе — `margin`/`padding`/border-width/`font-size` (новые
+   `unzoom_length_to_css`/`unzoom_length_or_auto_to_css`); `width`/`height`/
+   `inset`/`min-*`/`max-*` намеренно не тронуты — те возвращают used value
+   (зумленное) и на реальных браузерах, `computed-initial.html` явно
+   исключает их из проверки равенства по этой причине.
+
+   Живой прогон `run_smoke.py` (dev-release, 2026-09-13) на всей группе
+   TIMEOUT/FAIL-файлов из §.ini: `computed-initial.html` 9/16 → **126/126**
+   (`.ini` удалён), `computedStyle-zoom.html` 1/6 → **6/6** (кроме одного
+   дублирующегося имени сабтеста — `.ini` сужен на 1 строку),
+   `zoom-interpolation.html` 0/202 → **200/202** (`.ini` сужен на 200
+   строк; 2 сабтеста реально не проверены из-за отдельного краша
+   WPT-исполнителя на `:hover`-actions, не связано с un-zoom),
+   `computed-border-width-keywords.html`/`computed-column-rule-width-keywords.html`/
+   `computed-outline-width-keywords.html`/`font-size-keyword-system-font.html`/
+   `scroll-top-test-with-zoom.html`/`widget.html`/
+   `word-spacing-inherited-computed.html` — все **целиком PASS**, `.ini`
+   удалены. `length-implicit-and-explicit-inheritance.html` 0/5 →
+   **3/5** (`width`/`height` inherit остаются FAIL — не length-полей,
+   вне области un-zoom). `text-indent-computed.html` 0/10 → **6/10**
+   (`rem`/`inherit`-варианты остаются FAIL — `text-indent` не входит в
+   `apply_zoom_to_lengths`, следующий кандидат для расширения).
+
+   Живая проверка также вскрыла **три отдельных, не связанных с un-zoom
+   дефекта**, вынесенные в собственные карточки, а не смешанные сюда
+   (`docs/probe-method.md` §8): [BUG-1050](BUG-1050-OPEN.md)
+   (`getComputedStyle()` пропускает несколько шортхендов/свойств и
+   неверно сериализует `box-shadow`/`text-shadow`/`filter` —
+   `svg-computed-style.html` 22/88), [BUG-1051](BUG-1051-OPEN.md)
+   (`lh`/`ex`/`cap`/`ch`/`vh`/`vw` не совпадают со своей root-relative
+   парой под `zoom` — `font-relative-units.html` 1/6,
+   `relative-units.html` 1/6), [BUG-1052](BUG-1052-OPEN.md)
+   (`zoom: calc(sign(...))` отклоняется парсером целиком —
+   `zoom-with-sign-function.html` 0/2). Их `.ini` не тронуты этим
+   срезом (`svg-computed-style.html.ini` переписан под текущий фактический
+   результат — 66 FAIL — но карточка дефекта отдельная).
+
+   `BUG-532` закрыт — оба открытых пункта карточки решены; `zoom-valid.html`
+   в части 1, `getComputedStyle()`-un-zoom в части 2. Остаточные частные
+   пробелы (text-indent rem/inherit, `:hover`-actions краш) не блокируют
+   закрытие — не входят в исходный симптом карточки.
