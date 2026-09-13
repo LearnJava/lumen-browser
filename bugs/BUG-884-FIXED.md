@@ -1,6 +1,6 @@
 # BUG-884 — `javascript:`-URL не исполняется нигде: ни в `<iframe src>`, ни по клику, ни через `location.href`, ни в `open()` — уходит в сеть как «unsupported scheme»
 
-**Статус:** OPEN (ДОРАБОТКА → [GAP-NAVCTX](../ROADMAP.md))
+**Статус:** FIXED 2026-09-13 (GAP-NAVCTX срез 17)
 **Тип:** нереализованная функциональность, не дефект реализованного кода — ведётся как задача `GAP-NAVCTX` в [ROADMAP.md](../ROADMAP.md), P3 как баг не берёт. Переклассифицировано 2026-09-02 ре-триажем пула WPT-RUN-5/6: срезы заводили багом всё подряд, потому что правила заведения ([docs/probe-method.md §8](../docs/probe-method.md)) тогда ещё не было. Файл сохраняет номер и путь — на него ссылаются CLAUDE.md, STATUS-файлы и python-тулинг, а запись наблюдений остаётся полезной там, где лежит.
 **Заведён:** 2026-08-23 (WPT-RUN-6, срез 28 — живой замер, варианты `jsurl-iframe`/`jsurl-nav`)
 **Область:** shell (`crates/shell/src/main.rs` — `resolve_js_navigation`, `load_frame_sub_documents`: `javascript:`/`data:` «отклоняются с логом»), js (`crates/js/src/dom.rs` — `_lumen_navigate_or_fragment`, `window.open`)
@@ -355,3 +355,78 @@ frame-navigate`, dev-release) — регрессии нет: оба `frame-load`
 **Не в этом срезе:** для глубины ≥ 1 `javascript:` во `<iframe src>`
 по-прежнему читает `parent` родителя, а не ребёнка (хвост среза 6); оба
 хвоста GAP-NAVCTX (BUG-883, BUG-797) не тронуты.
+
+## Срез 6 (GAP-NAVCTX срез 17, 2026-09-13, `p1-gap-navctx-srez17`) — закрытие
+
+Закрыт последний хвост, оставленный срезом 6: `<iframe src="javascript:…">`
+на глубине ≥ 1 (вложенный внутрь другого настоящего фрейма, а не прямо в
+top-level странице).
+
+**Диагноз.** `eval_iframe_javascript_url` (`frames.rs`) исполняет код
+javascript:-src не в контексте РЕБЁНКА (у него ещё нет своего), а в реальном
+контексте `parent_js` — контексте фрейма, ЧЕРЕЗ КОТОРЫЙ спавнится ребёнок.
+На глубине 0 `parent_js` — сам top-level документ, и `window.parent` там по
+умолчанию `window` (себя же) — совпадает с тем, что нужно, поэтому срез 6 не
+поймал проблему. На глубине ≥ 1 `parent_js` — РЕАЛЬНЫЙ дочерний документ B
+(например, `srcdoc`-фрейм), и его `window.parent` — не сам B, а СВОЙ
+родитель A (`installHierarchyAccessors` в `frame_bridge.rs` ставит на
+`window.parent` акцессор, возвращающий `winFacade` настоящего родителя
+контекста). Значит код javascript:-src ребёнка C (чей реальный родитель —
+B) при обращении к `parent` внутри себя видел A — дед, а не родителя;
+подтверждено живьём (см. ниже) характерным `TypeError`, потому что
+`winFacade` — облегчённый межконтекстный фасад, прокидывающий стандартные
+члены `Window` (навигация, `postMessage`…), но не произвольные пользовательские
+глобалы и не `console`.
+
+**Правка** (`eval_iframe_javascript_url`, `frames.rs`) — перед кодом
+подставляется `let parent = window;\n`: `let` внутри одного вызова `eval()`
+создаёт биндинг лексического окружения ЭТОГО вызова, который в цепочке
+областей видимости стоит ВЫШЕ акцессора `window.parent` на глобальном
+объекте — код видит `parent` как `window` исполняющего контекста (реальный
+B, самого себя), т.е. именно то, чем реально является родитель C. Акцессор
+не трогается и не переживает этот единственный `eval`; на глубине 0
+поведение не меняется (`window` top-level страницы и так совпадало с тем,
+что раньше давал `window.parent`).
+
+**Живая проверка** — новый вариант `jsurl-iframe-nested`
+(`tests/wpt/verify_window_history_jsurl_gaps.py`): top-level страница с
+`window.jsUrlRan=0`, внутри — настоящий `srcdoc`-фрейм `mid` (свой
+`window.jsUrlRan=0`), внутри НЕГО — `javascript:`-грандchild `fr`, чей код —
+`parent.jsUrlRan++; parent.console.log(...)` в `try`/`catch`. A/B через
+`git stash` (одна и та же сборка кода пробы, дифф `frames.rs` попеременно
+в рабочем дереве и в stash):
+
+* **до правки** — `parent` внутри кода `fr` резолвится в `winFacade` top-level
+  страницы (деда): `parent.jsUrlRan++` тихо садится на невидимое собственное
+  свойство фасада (ни `mid.jsUrlRan`, ни top-level `jsUrlRan` не меняются —
+  оба остаются `0`), а `parent.console.log(...)` бросает `TypeError: Cannot
+  read properties of undefined (reading 'log')` (фасад не проксирует
+  `console`) — маркер `jsurl-iframe-nested-err TypeError: …`, маркер
+  `jsurl-iframe-nested-ran` не печатается вовсе.
+* **после правки** — `parent` внутри кода `fr` — реальный `window` фрейма
+  `mid`, `parent.jsUrlRan++` инкрементирует настоящую переменную `mid`,
+  `parent.console.log(...)` не бросает — маркер `jsurl-iframe-nested-ran 1`
+  печатается чисто, без `-err`; top-level `jsUrlRan` остаётся `0`
+  (`jsurl-iframe-nested-top ran=0` — счётчик деда не тронут).
+
+Побочно подтверждён отдельный, не относящийся к этому дефекту факт (не
+исправлен, задокументирован в комментарии варианта пробы): `mid`'s
+собственный `load` диспатчится РАНЬШЕ, чем его собственное дерево вложенных
+фреймов (`fr`) успевает заспавниться (`spawn_frame`'s
+`notify_window_loaded()` идёт до рекурсивного вызова
+`load_frame_sub_documents`) — поэтому маркер `jsurl-iframe-nested-mid`
+всегда читает `mid.jsUrlRan` слишком рано (`ran=0`) независимо от этой
+правки; это тайминг вложенной загрузки, а не адресация `parent`.
+
+Регрессии нет: `jsurl-iframe` (глубина 0) — без изменений
+(`jsurl-iframe-ran 1, jsurl-iframe-load, final ran=2`); `jsurl-nav`,
+`frame-navigate` — без изменений относительно уже задокументированного
+поведения.
+
+Гейт: `cargo clippy -p lumen-shell --all-targets -- -D warnings` чисто.
+
+**GAP-NAVCTX закрыта полностью** — BUG-884 был последней открытой причиной
+(BUG-883/BUG-797/BUG-887 закрыты срезами 15/16). Все четыре исходных
+симптома карточки (`<iframe src="javascript:…">`, переприсваивание `.src`,
+клик по `<a href="javascript:…">`, `location.href = "javascript:…"`,
+`open("javascript:…")`) исполняют код, а не уходят в сеть.

@@ -248,6 +248,42 @@ window.addEventListener("load", function () {
 </script>
 """, "jsurl-iframe-ran 1, jsurl-iframe-load, final ran=2"),
 
+    # GAP-NAVCTX срез 17: `jsurl-iframe` above only exercises depth 0 (a
+    # `javascript:` iframe directly under the top page), where `window.parent
+    # === window` at the top hides the srez-6 compromise (the code runs in
+    # the PARENT's real realm, not the child's — see frames.rs doc-comment on
+    # `eval_iframe_javascript_url`). This variant nests one level deeper: a
+    # real `srcdoc` middle frame (`mid`) with its own JS realm hosts the
+    # `javascript:` grandchild (`fr`), so `fr`'s real parent is `mid`, not the
+    # top page. Before the srez-17 fix, `parent` inside the grandchild's code
+    # read `mid`'s own `window.parent` — a cross-document FACADE of the top
+    # page (one level too high), which proxies navigation members but not
+    # `console`, so `parent.console.log(...)` threw `TypeError: Cannot read
+    # properties of undefined (reading 'log')` (caught by the `try`/`catch`
+    # below — `jsurl-iframe-nested-err`) after the preceding `parent.
+    # jsUrlRan++` had already landed on the facade's own (unobservable, throw-
+    # away) property, touching neither `mid`'s nor the top page's real
+    # counter. After the fix, `parent` inside the grandchild's code is `mid`'s
+    # own real `window` (no facade, no throw) and increments `mid`'s real
+    # counter. `mid`'s own `onload` fires before its own nested-frame subtree
+    # (`fr`) is spawned (`spawn_frame`'s `notify_window_loaded()` precedes its
+    # recursive `load_frame_sub_documents` call) — a separate, pre-existing
+    # ordering quirk, not this bug — so `jsurl-iframe-nested-mid` always
+    # reads `mid`'s counter too early (`ran=0`) and `parent`'s cross-facade
+    # `topran` (`undefined`) regardless of the fix; what the fix changes is
+    # only whether the grandchild's own `javascript:` code throws.
+    "jsurl-iframe-nested": ("""
+<script>window.jsUrlRan = 0;</script>
+<iframe id=mid srcdoc="<script>window.jsUrlRan=0;</script><iframe id='fr' src='javascript:(function(){try{parent.jsUrlRan++;parent.console.log(`PROBE jsurl-iframe-nested-ran ` + parent.jsUrlRan);}catch(e){console.log(`PROBE jsurl-iframe-nested-err ` + e);}})()'></iframe><script>window.addEventListener('load',function(){console.log(`PROBE jsurl-iframe-nested-mid ran=` + window.jsUrlRan + ` topran=` + parent.jsUrlRan);});</script>"></iframe>
+<script>
+window.addEventListener("load", function () {
+  setTimeout(function () {
+    console.log("PROBE jsurl-iframe-nested-top ran=" + window.jsUrlRan);
+  }, 600);
+});
+</script>
+""", "jsurl-iframe-nested-ran 1 (no -err), jsurl-iframe-nested-mid ran=0 topran=undefined, jsurl-iframe-nested-top ran=0"),
+
     # The other three places a `javascript:` URL appears in the residual:
     # `location.href =` (CSP's `to-javascript-url-frame-src.html` navigates a
     # frame that way), an `<a href="javascript:">` click, and `open()`.
