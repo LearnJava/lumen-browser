@@ -453,3 +453,127 @@ clippy -p lumen-html-parser --all-targets -- -D warnings` — чисто.
 `1000000-final`), и разового флака `lumen-js --lib` под нагрузкой полного
 прогона — прогнан отдельно (`cargo test -p lumen-js --lib --features
 v8-backend`) сразу после, 3612/3612 зелёные.
+
+## GAP-XMLDOC срез 7 (2026-09-14): прототип-цепочка для parser-built MathML-элементов
+
+Закрывает для MathML ровно то, что срез 4 закрыл для SVG: `<math>`-разметка
+(и `document.createElementNS('http://www.w3.org/1998/Math/MathML', ...)`)
+теперь даёт типизированный прототип вместо голого `Element.prototype`.
+Отличие от SVG — по объёму, не по механизму: MathML Core §2.2 определяет
+РОВНО ОДИН интерфейс, `MathMLElement`, для всех элементов неймспейса; нет ни
+таблицы тег→конструктор (`SVG_TAG_MAP`), ни отдельного `getBBox`-подобного
+API для этого интерфейса — сам класс существовал бы пустым, если бы не был
+нужен как якорь для `instanceof` и как цель `_lumen_element_prototype_for`.
+
+- Новый модуль `crates/js/src/mathml.rs` (по образцу `svg.rs`, но на два
+  порядка меньше) — `class MathMLElement extends Element {}`, без
+  `focus`/`blur`-заглушки (SVGElement её несёт, но MathML-элементы не
+  фокусируемы по спеке) и без per-tag map. `window.MathMLElement` +
+  `window.MATHML_NAMESPACE` — тем же путём, что SVG вешает `SVG_NAMESPACE`.
+  Подключён в `install_v8!`-батч `v8_runtime.rs` сразу после
+  `svg::install_svg_bindings_v8`.
+- `_lumen_element_prototype_for` (`web_api_shim_mid.js`) — новая ветка для
+  MathML-неймспейса перед общим HTML-путём: `MathMLElement.prototype`, если
+  шим установлен, иначе `Element.prototype` (тот же безопасный fallback, что
+  и у SVG-ветки). В отличие от SVG-ветки, локальное имя не читается —
+  незачем, интерфейс один на всех.
+- `_lumen_create_element_ns` (`v8_runtime/install/dom_core.rs`) — namespace-
+  селектор получил ветку `"http://www.w3.org/1998/Math/MathML" =>
+  Namespace::MathMl` рядом с существовавшей SVG-веткой; раньше
+  `createElementNS` на этом namespace URI молча откатывался в `Namespace::Html`
+  (тот же класс проблемы, что и общий пробел BUG-830 для произвольных
+  namespace URI — тут закрыт только этот один известный случай, не общий
+  регистр).
+
+**Сознательно не сделано** (следующий срез, если/когда возьмут): HTML/MathML
+integration points (`<annotation-xml>` с `encoding="text/html"`,
+`<mi>`/`<mo>`/`<mn>`/`<ms>`/`<mtext>` как MathML text integration points) —
+тот же вырез, что срез 6 оставил открытым для namespace assignment, теперь
+открыт и для прототипов: всё под этими точками остаётся с MathML-прототипом,
+хотя по спеке должно переключаться на HTML-прототип цепочки.
+Никакого нового JS DOM API у `MathMLElement` не появилось — MathML Core не
+даёт этому интерфейсу собственных методов сверх базового `Element`.
+
+Тесты: три новых юнит-теста в `crates/js/src/mathml.rs`
+(`mathml_element_class_exists`, `mathml_element_extends_element`,
+`mathml_namespace_constant_is_set`) плюс два интеграционных в
+`crates/js/src/dom/tests/v8_core/mod.rs`
+(`parser_built_mathml_gets_typed_prototype`,
+`create_element_ns_mathml_gets_typed_prototype`) — зеркалят пару SVG-тестов
+среза 4. `cargo test -p lumen-js --lib --features v8-backend` — 3616/3617
+зелёные (один разовый флак `worker_blob_url_script`, тот же паттерн, что и
+у среза 6 — зелёный при изолированном прогоне). `cargo clippy -p lumen-js
+--all-targets --features v8-backend -- -D warnings` — чисто.
+
+## GAP-XMLDOC срез 8 (2026-09-14): HTML/SVG/MathML integration points
+
+Закрывает остаток, который срезы 3 и 6 сознательно оставили открытым:
+HTML LS §13.2.6.5 «integration point» — markup, вложенная в
+`<foreignObject>`/`<desc>`/`<title>` (SVG) или в MathML `<annotation-xml
+encoding="text/html">`/`<mi>`/`<mo>`/`<mn>`/`<ms>`/`<mtext>`, — настоящий
+HTML-контент, вложенный в дерево прямо под этими узлами, а не «отброшенный
+наверх» через breakout-список, и не остающийся в foreign-неймспейсе.
+
+Механизм — обобщение уже существующего пути, не новый код-путь:
+
+- `foreign_content::is_svg_html_integration_point`/
+  `is_mathml_text_integration_point` — новые таблицы (по образцу
+  `breaks_out_of_foreign_content`).
+- `tree_builder::start_tag_namespace(name)` — новый метод, вычисляющий
+  неймспейс для СОЗДАВАЕМОГО start-тега с учётом текущего узла: обычный
+  `current_namespace()`, кроме двух перевесов из §13.2.6.5 — (1) текущий
+  узел является integration point → новый элемент по умолчанию HTML,
+  а не наследует foreign-неймспейс родителя (`is_integration_point_host`,
+  учитывает исключение `mglyph`/`malignmark` для MathML text integration
+  points через параметр `name`); (2) `<svg>` прямо под `annotation-xml`
+  всегда становится SVG-элементом независимо от `encoding` (спека
+  «insert a foreign element», шаг с particular exception).
+  `has_html_encoding` проверяет атрибут `encoding` узла `annotation-xml`
+  на `text/html`/`application/xhtml+xml` (регистронезависимо).
+- `apply_token` — маршрутизация start-тега в `dispatch_foreign_content`
+  теперь смотрит на `start_tag_namespace(name)`, а не на сырой
+  `current_namespace()`; end-тег маршрутизируется как раньше (у спеки нет
+  integration-point исключения для закрывающих тегов — общий
+  by-name-поиск по стеку в `dispatch_foreign_content` уже корректен для
+  этого случая).
+- `resolve_element_name` — та же замена `current_namespace()` на
+  `start_tag_namespace(name)`; когда `apply_token` уже решил, что тег
+  обрабатывается «как HTML», элемент создаётся с `Namespace::Html`, даже
+  если родитель в стеке остаётся SVG/MathML — соответствует тому, что в
+  дереве под integration point лежат настоящие HTML-элементы, а не
+  «прикидывающиеся» foreign.
+
+**Не задето integration-point'ами**: end-теги (не нужно — см. выше),
+foreign-attribute namespacing (не входило и раньше). **Обнаруженный,
+но не устранённый смежный пробел**: токенизатор решает RAWTEXT/RCDATA по
+голому имени тега без учёта неймспейса (тот же корень, что и обходной путь
+`html:`/`h:` для `<script>`/`<title>` в срезе 5) — SVG `<title>`,
+содержащий markup, поэтому мис-токенизируется точно как обычный HTML
+`<title>` не на своём месте (весь `<b>...</b>` читается как буквальный
+текст). Отдельный тест (`svg_desc_is_html_integration_point`) сознательно
+проверяет только `<desc>`, не `<title>`, и документирует находку —
+починка требует, чтобы токенизатор знал про namespace-состояние дерева,
+что структурно больше, чем точечный срез.
+
+Тесты (`crates/engine/html-parser/src/tree_builder.rs`):
+`svg_breakout_tag_returns_to_html_namespace` (переписан на `<g>` вместо
+`<foreignObject>`, чтобы отличать обычный breakout от integration point,
+плюс проверка позиции в дереве через `Node::parent`),
+`svg_foreign_object_is_html_integration_point`,
+`svg_desc_is_html_integration_point`,
+`svg_reenters_foreign_namespace_from_inside_integration_point`,
+`mathml_breakout_tag_returns_to_html_namespace` (аналогично переписан на
+`<mrow>`), `mathml_text_integration_point_nests_html_children`,
+`mathml_text_integration_point_mglyph_stays_mathml`,
+`mathml_annotation_xml_html_encoding_is_integration_point`,
+`mathml_annotation_xml_without_html_encoding_is_not_integration_point`,
+`svg_always_becomes_svg_under_annotation_xml_regardless_of_encoding`; плюс
+`svg_integration_points_detected`/`mathml_text_integration_points_detected`
+в `foreign_content.rs`. `cargo test -p lumen-html-parser` — 453/453 юнит +
+9/9 интеграционных зелёные. `cargo clippy -p lumen-html-parser
+--all-targets -- -D warnings` — чисто. `scripts/scoped-test.sh` (все
+обратные зависимости, 17 крейтов) — зелёный, кроме того же чужого дрейфа
+CPU-эталонов (`lumen-driver::cases::snapshot_cpu`,
+`55-text-rendering`/`57-canvas-2d`/`32-list-markers`/`34-forms`/
+`45-multiple-backgrounds`/`51-scrollbar-rendering`/`1000000-final`),
+подтверждённого идентичным на чистом `main` без этого среза.

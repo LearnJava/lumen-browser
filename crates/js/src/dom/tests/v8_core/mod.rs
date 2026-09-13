@@ -180,6 +180,43 @@ fn svg_shim_installs_and_exposes_svg_element() {
     assert_eq!(ok, lumen_core::JsValue::Bool(true));
 }
 
+// GAP-XMLDOC срез 7 (BUG-685): a `<math>` subtree parsed from markup must get
+// the `MathMLElement` prototype `_lumen_element_prototype_for` now hands out
+// for the MathML namespace (`mathml.rs`) — mirrors srez 4's SVG test above,
+// but MathML Core has only one interface for every element, no per-tag map.
+#[test]
+fn parser_built_mathml_gets_typed_prototype() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let ok = rt
+        .eval(
+            "document.getElementById('main').innerHTML = '<math><mi>x</mi></math>';\
+                     var math = document.querySelector('math');\
+                     var mi = document.querySelector('mi');\
+                     math instanceof MathMLElement && mi instanceof MathMLElement \
+                       && math.namespaceURI === 'http://www.w3.org/1998/Math/MathML'",
+        )
+        .unwrap();
+    assert_eq!(ok, lumen_core::JsValue::Bool(true));
+}
+
+// GAP-XMLDOC срез 7 (BUG-685): `document.createElementNS` on the MathML
+// namespace must resolve to the same typed prototype a parser-built element
+// gets — both paths go through `_lumen_build_element`'s
+// `_lumen_element_prototype_for`, so there is no separate decorator to test
+// (unlike SVG, which still keeps its own `createElementNS` override for the
+// per-tag typed classes MathML does not have).
+#[test]
+fn create_element_ns_mathml_gets_typed_prototype() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let ok = rt
+        .eval(
+            "var mo = document.createElementNS('http://www.w3.org/1998/Math/MathML', 'mo');\
+                     mo instanceof MathMLElement",
+        )
+        .unwrap();
+    assert_eq!(ok, lumen_core::JsValue::Bool(true));
+}
+
 // BUG-233: `self` must be defined as a global aliasing `window`
 // (WindowOrWorkerGlobalScope). Webpack runtimes reference bare `self`;
 // without this they throw `ReferenceError: self is not defined`.

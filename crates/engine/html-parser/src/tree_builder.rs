@@ -352,9 +352,20 @@ impl IncrementalTreeBuilder {
                 _ => {}
             }
         }
-        if is_foreign_namespace(self.current_namespace())
-            && matches!(token, Token::StartTag { .. } | Token::EndTag { .. })
-        {
+        // GAP-XMLDOC срез 8 (BUG-685): a start tag routes through the
+        // integration-point-aware `start_tag_namespace` (the current node
+        // may be an SVG/MathML "integration point" that wants this tag
+        // processed as HTML content, not foreign) — an end tag stays on the
+        // raw, un-overridden `current_namespace`, since HTML LS §13.2.6.5
+        // has no integration-point exception for end tags: closing a tag
+        // while inside an integration point still runs the generic
+        // by-name stack search in `dispatch_foreign_content`.
+        let route_foreign = match &token {
+            Token::StartTag { name, .. } => is_foreign_namespace(self.start_tag_namespace(name)),
+            Token::EndTag { .. } => is_foreign_namespace(self.current_namespace()),
+            _ => false,
+        };
+        if route_foreign {
             self.dispatch_foreign_content(token, had_html_prefix);
             return;
         }
@@ -2153,12 +2164,13 @@ impl IncrementalTreeBuilder {
     }
 
     /// Namespace-aware qualified name for a newly created element — HTML by
-    /// default, SVG/MathML while [`current_namespace`][Self::current_namespace]
-    /// is already that namespace or the tag being opened is `<svg>`/`<math>`
-    /// itself (HTML LS §13.2.6.5 "insert a foreign element", GAP-XMLDOC
-    /// срезы 3 и 6, BUG-685).
+    /// default, SVG/MathML while [`start_tag_namespace`][Self::start_tag_namespace]
+    /// says so (already that namespace, the tag being opened is `<svg>`/
+    /// `<math>` itself, or neither and an integration point overrides back
+    /// to HTML) (HTML LS §13.2.6.5 "insert a foreign element", GAP-XMLDOC
+    /// срезы 3, 6 и 8, BUG-685).
     fn resolve_element_name(&self, name: &str) -> QualName {
-        match self.current_namespace() {
+        match self.start_tag_namespace(name) {
             Namespace::Svg => QualName {
                 namespace: Namespace::Svg,
                 local: foreign_content::adjust_svg_tag_name(name).to_string(),
@@ -2186,6 +2198,72 @@ impl IncrementalTreeBuilder {
             .last()
             .map(|&id| self.node_namespace(id))
             .unwrap_or(Namespace::Html)
+    }
+
+    /// Namespace a start tag named `name` should be processed under, given
+    /// the current open-elements stack — [`current_namespace`]
+    /// [Self::current_namespace], except for two HTML LS §13.2.6.5
+    /// "integration point" overrides measured for GAP-XMLDOC срез 8
+    /// (BUG-685):
+    ///
+    /// * the current node is an SVG/MathML "integration point"
+    ///   (`is_integration_point_host`) — new elements default to HTML
+    ///   instead of inheriting the foreign namespace, since markup nested
+    ///   there (`<foreignObject><p>...`, `<annotation-xml
+    ///   encoding="text/html"><div>...`, `<mtext><b>...`) is genuine HTML
+    ///   content per spec, not merely SVG/MathML that happens to render
+    ///   like it;
+    /// * `<svg>` as a direct child of MathML `annotation-xml` always
+    ///   becomes an SVG element regardless of `encoding` — the one
+    ///   exception that goes the other way.
+    fn start_tag_namespace(&self, name: &str) -> Namespace {
+        let Some(&top) = self.open_elements.last() else {
+            return Namespace::Html;
+        };
+        let top_ns = self.node_namespace(top);
+        if top_ns == Namespace::MathMl && self.element_local(top) == "annotation-xml" && name == "svg" {
+            return Namespace::Svg;
+        }
+        if self.is_integration_point_host(top, top_ns, name) {
+            return Namespace::Html;
+        }
+        top_ns
+    }
+
+    /// Whether `node` (namespace `ns`, already looked up by the caller) is
+    /// an HTML LS §13.2.6.5 integration point for a start tag named `name`
+    /// — see [`start_tag_namespace`][Self::start_tag_namespace]. `name`
+    /// only matters for the MathML text integration points, whose
+    /// `mglyph`/`malignmark` children are the one exception that stays
+    /// MathML.
+    fn is_integration_point_host(&self, node: NodeId, ns: Namespace, name: &str) -> bool {
+        let local = self.element_local(node);
+        match ns {
+            Namespace::Svg => foreign_content::is_svg_html_integration_point(local),
+            Namespace::MathMl => {
+                (local == "annotation-xml" && self.has_html_encoding(node))
+                    || (foreign_content::is_mathml_text_integration_point(local)
+                        && !matches!(name, "mglyph" | "malignmark"))
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `node` (a MathML `annotation-xml` element) carries an
+    /// `encoding` attribute of `text/html` or `application/xhtml+xml`
+    /// (case-insensitive per HTML LS §13.2.6.5) — the condition that makes
+    /// it an HTML integration point.
+    fn has_html_encoding(&self, node: NodeId) -> bool {
+        match &self.doc.get(node).data {
+            NodeData::Element { attrs, .. } => attrs.iter().any(|a| {
+                a.name.local.eq_ignore_ascii_case("encoding")
+                    && matches!(
+                        a.value.to_ascii_lowercase().as_str(),
+                        "text/html" | "application/xhtml+xml"
+                    )
+            }),
+            _ => false,
+        }
     }
 
     /// Namespace stored on `id`'s `QualName` — `Html` if `id` isn't an
@@ -4557,8 +4635,9 @@ mod tests {
     #[test]
     fn svg_breakout_tag_returns_to_html_namespace() {
         // <div> is on the §13.2.6.5 breakout list — it must land back in
-        // Namespace::Html even while nested inside <svg>.
-        let doc = parse("<svg><foreignObject><div>text</div></foreignObject></svg>");
+        // Namespace::Html even while nested inside plain <svg> markup
+        // (no integration point involved: <g> is an ordinary SVG element).
+        let doc = parse("<svg><g><div>text</div></g></svg>");
         let div = doc
             .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "div"))
             .expect("div element");
@@ -4566,6 +4645,66 @@ mod tests {
             unreachable!()
         };
         assert_eq!(name.namespace, Namespace::Html, "breakout div: {doc}");
+        let body = doc.body().expect("body");
+        assert_eq!(
+            div.parent,
+            Some(body),
+            "breakout must pop <g>/<svg> off the stack, landing div as a body child: {doc}"
+        );
+    }
+
+    #[test]
+    fn svg_foreign_object_is_html_integration_point() {
+        // GAP-XMLDOC срез 8, BUG-685: `<foreignObject>` is an HTML LS
+        // §13.2.6.5 integration point — markup nested inside it is genuine
+        // HTML content, kept nested (not popped back out like the ordinary
+        // breakout list does for plain SVG elements).
+        let doc = parse("<svg><foreignObject><div>text</div></foreignObject></svg>");
+        let foreign_object = doc
+            .find_first_element(
+                |n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "foreignObject"),
+            )
+            .expect("foreignObject element");
+        let div = foreign_object.children.first().copied().expect("div child");
+        let NodeData::Element { name, .. } = &doc.get(div).data else {
+            panic!("div must be an element: {doc}");
+        };
+        assert_eq!(name.namespace, Namespace::Html, "div under foreignObject: {doc}");
+    }
+
+    #[test]
+    fn svg_desc_is_html_integration_point() {
+        // Only <desc> here, not <title>: the tokenizer decides RAWTEXT/RCDATA
+        // by bare tag name, with no namespace awareness (same root cause as
+        // GAP-XMLDOC срез 5's `html:title`/`h:title` carve-out) — a plain
+        // `<title>` start tag always switches to RCDATA, HTML or SVG, so an
+        // SVG `<title>` containing markup mis-tokenizes exactly like a
+        // misplaced HTML one does. Out of scope here: fixing it needs the
+        // tokenizer to consult tree-construction namespace state, which is a
+        // bigger structural change than this slice's point fix.
+        let doc = parse("<svg><desc><span>d</span></desc></svg>");
+        let span = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "span"))
+            .expect("span element");
+        let NodeData::Element { name, .. } = &span.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::Html, "span under desc: {doc}");
+    }
+
+    #[test]
+    fn svg_reenters_foreign_namespace_from_inside_integration_point() {
+        // A nested <svg>/<math> inside an integration point's HTML content
+        // must switch back to its own foreign namespace — integration
+        // points don't disable re-entry, only default new elements to HTML.
+        let doc = parse("<svg><foreignObject><math><mi>x</mi></math></foreignObject></svg>");
+        let math = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "math"))
+            .expect("math element");
+        let NodeData::Element { name, .. } = &math.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::MathMl, "nested math: {doc}");
     }
 
     #[test]
@@ -4620,8 +4759,10 @@ mod tests {
     #[test]
     fn mathml_breakout_tag_returns_to_html_namespace() {
         // <div> is on the shared §13.2.6.5 breakout list — must land back in
-        // Namespace::Html even while nested inside <math>.
-        let doc = parse("<math><mtext><div>text</div></mtext></math>");
+        // Namespace::Html even while nested inside plain <math> markup
+        // (no integration point involved: <mrow> is an ordinary MathML
+        // element).
+        let doc = parse("<math><mrow><div>text</div></mrow></math>");
         let div = doc
             .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "div"))
             .expect("div element");
@@ -4629,6 +4770,88 @@ mod tests {
             unreachable!()
         };
         assert_eq!(name.namespace, Namespace::Html, "breakout div: {doc}");
+        let body = doc.body().expect("body");
+        assert_eq!(
+            div.parent,
+            Some(body),
+            "breakout must pop <mrow>/<math> off the stack, landing div as a body child: {doc}"
+        );
+    }
+
+    #[test]
+    fn mathml_text_integration_point_nests_html_children() {
+        // GAP-XMLDOC срез 8, BUG-685: MathML text integration points
+        // (`mi`/`mo`/`mn`/`ms`/`mtext`) keep HTML content nested instead of
+        // popping back out like the ordinary breakout list — same
+        // "integration point" concept as SVG's foreignObject/desc/title.
+        let doc = parse("<math><mtext><div>text</div></mtext></math>");
+        let mtext = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "mtext"))
+            .expect("mtext element");
+        let div = mtext.children.first().copied().expect("div child");
+        let NodeData::Element { name, .. } = &doc.get(div).data else {
+            panic!("div must be an element: {doc}");
+        };
+        assert_eq!(name.namespace, Namespace::Html, "div under mtext: {doc}");
+    }
+
+    #[test]
+    fn mathml_text_integration_point_mglyph_stays_mathml() {
+        // The one exception in the MathML text integration point rule:
+        // `mglyph`/`malignmark` children stay MathML, not HTML, even
+        // directly inside `mi`/`mo`/`mn`/`ms`/`mtext`.
+        let doc = parse("<math><mtext><mglyph/></mtext></math>");
+        let mglyph = doc
+            .find_first_element(
+                |n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "mglyph"),
+            )
+            .expect("mglyph element");
+        let NodeData::Element { name, .. } = &mglyph.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::MathMl, "mglyph under mtext: {doc}");
+    }
+
+    #[test]
+    fn mathml_annotation_xml_html_encoding_is_integration_point() {
+        let doc = parse(r#"<math><annotation-xml encoding="text/html"><div>x</div></annotation-xml></math>"#);
+        let anno = doc
+            .find_first_element(
+                |n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "annotation-xml"),
+            )
+            .expect("annotation-xml element");
+        let div = anno.children.first().copied().expect("div child");
+        let NodeData::Element { name, .. } = &doc.get(div).data else {
+            panic!("div must be an element: {doc}");
+        };
+        assert_eq!(name.namespace, Namespace::Html, "div under annotation-xml: {doc}");
+    }
+
+    #[test]
+    fn mathml_annotation_xml_without_html_encoding_is_not_integration_point() {
+        let doc = parse(r#"<math><annotation-xml encoding="application/mathml+xml"><mrow/></annotation-xml></math>"#);
+        let mrow = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "mrow"))
+            .expect("mrow element");
+        let NodeData::Element { name, .. } = &mrow.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::MathMl, "mrow under non-html annotation-xml: {doc}");
+    }
+
+    #[test]
+    fn svg_always_becomes_svg_under_annotation_xml_regardless_of_encoding() {
+        // §13.2.6.5 "insert a foreign element" exception: <svg> as a direct
+        // child of annotation-xml is always SVG, even without an
+        // HTML-flavoured encoding.
+        let doc = parse(r#"<math><annotation-xml encoding="application/mathml+xml"><svg><rect/></svg></annotation-xml></math>"#);
+        let svg = doc
+            .find_first_element(|n| matches!(&n.data, NodeData::Element { name, .. } if name.local == "svg"))
+            .expect("svg element");
+        let NodeData::Element { name, .. } = &svg.data else {
+            unreachable!()
+        };
+        assert_eq!(name.namespace, Namespace::Svg, "svg under annotation-xml: {doc}");
     }
 
     #[test]

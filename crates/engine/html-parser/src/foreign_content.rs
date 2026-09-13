@@ -1,14 +1,15 @@
 //! SVG and MathML foreign-content rules per HTML Living Standard §13.2.6.5
 //! — reduced to the shape [`crate::tree_builder`] needs. SVG namespacing
-//! (GAP-XMLDOC срез 3, BUG-685) and MathML namespacing (GAP-XMLDOC срез 6,
-//! same bug) are both covered; the §13.2.6.5 "any other start tag" breakout
-//! list is shared between the two namespaces per spec. Not implemented, and
-//! out of scope for this slice: the HTML/MathML and HTML/SVG "integration
-//! point" exceptions (`<annotation-xml>`/`<mi>`/`<mo>`/`<mn>`/`<ms>`/
-//! `<mtext>`/`<foreignObject>`/`<desc>`/`<title>` do **not** switch children
-//! back to the HTML namespace), foreign-attribute namespacing (`xlink:href`
-//! stays a plain attribute instead of gaining `Namespace::XLink`). See
-//! `bugs/BUG-685-OPEN.md` for the measured remainder.
+//! (GAP-XMLDOC срез 3, BUG-685), MathML namespacing (GAP-XMLDOC срез 6,
+//! same bug) and the HTML/SVG/MathML "integration point" exceptions
+//! (GAP-XMLDOC срез 8, same bug — `<foreignObject>`/`<desc>`/`<title>`,
+//! MathML `<annotation-xml>` with an HTML-flavoured `encoding`, and the
+//! MathML text integration points `<mi>`/`<mo>`/`<mn>`/`<ms>`/`<mtext>`) are
+//! all covered; the §13.2.6.5 "any other start tag" breakout list is shared
+//! between the two namespaces per spec. Not implemented, and out of scope:
+//! foreign-attribute namespacing (`xlink:href` stays a plain attribute
+//! instead of gaining `Namespace::XLink`). See `bugs/BUG-685-OPEN.md` for
+//! the measured remainder.
 //!
 //! This module only supplies the static lookup tables and the "does this
 //! start tag break out of foreign content" decision — the tree builder
@@ -162,6 +163,27 @@ pub(crate) fn breaks_out_of_foreign_content(lower_name: &str, attrs: &[(String, 
     }
 }
 
+/// HTML LS §13.2.6.5 "HTML integration point" — SVG side: `<foreignObject>`,
+/// `<desc>`, `<title>`. A start tag or character token encountered while the
+/// current node is one of these is processed as if it were HTML content
+/// (new elements get the HTML namespace) instead of the ordinary
+/// foreign-content rules — the MathML side of the same concept
+/// (`annotation-xml` with an HTML-flavoured `encoding`) needs the element's
+/// attributes, so it lives on `IncrementalTreeBuilder` directly rather than
+/// here (GAP-XMLDOC срез 8, BUG-685).
+pub(crate) fn is_svg_html_integration_point(local: &str) -> bool {
+    matches!(local, "foreignObject" | "desc" | "title")
+}
+
+/// HTML LS §13.2.6.5 "MathML text integration point": `<mi>`, `<mo>`,
+/// `<mn>`, `<ms>`, `<mtext>`. A start tag whose name is neither `mglyph` nor
+/// `malignmark`, or a character token, is processed as HTML content while
+/// the current node is one of these — same effect as an HTML integration
+/// point, but the exception list differs (GAP-XMLDOC срез 8, BUG-685).
+pub(crate) fn is_mathml_text_integration_point(local: &str) -> bool {
+    matches!(local, "mi" | "mo" | "mn" | "ms" | "mtext")
+}
+
 /// Strips a namespace prefix bound to XHTML in the vendored WPT corpus
 /// (`xmlns:h="…/1999/xhtml"`, `xmlns:html="…/1999/xhtml"` — both forms
 /// occur, `h:` is by far the more common one) and returns the local name
@@ -242,6 +264,26 @@ mod tests {
             "font",
             &[("id".to_string(), "x".to_string())]
         ));
+    }
+
+    #[test]
+    fn svg_integration_points_detected() {
+        assert!(is_svg_html_integration_point("foreignObject"));
+        assert!(is_svg_html_integration_point("desc"));
+        assert!(is_svg_html_integration_point("title"));
+        assert!(!is_svg_html_integration_point("rect"));
+        assert!(!is_svg_html_integration_point("g"));
+    }
+
+    #[test]
+    fn mathml_text_integration_points_detected() {
+        assert!(is_mathml_text_integration_point("mi"));
+        assert!(is_mathml_text_integration_point("mo"));
+        assert!(is_mathml_text_integration_point("mn"));
+        assert!(is_mathml_text_integration_point("ms"));
+        assert!(is_mathml_text_integration_point("mtext"));
+        assert!(!is_mathml_text_integration_point("math"));
+        assert!(!is_mathml_text_integration_point("annotation-xml"));
     }
 
     #[test]

@@ -881,6 +881,7 @@ impl V8JsRuntime {
         }
         install_v8!(surface_api::install_surface_api_protection_v8);
         install_v8!(svg::install_svg_bindings_v8);
+        install_v8!(mathml::install_mathml_bindings_v8);
         install_v8!(tc39_proposals::install_tc39_proposals_v8);
         install_v8!(temporal_api::install_temporal_api_v8);
         install_v8!(topics_api::install_topics_api_v8);
