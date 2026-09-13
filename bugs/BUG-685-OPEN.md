@@ -264,3 +264,47 @@ lumen-html-parser` — 424/424; `scripts/scoped-test.sh` (все обратны�
 без этого среза (`55-text-rendering`/`57-canvas-2d`/`32-list-markers`/
 `34-forms`/`45-multiple-backgrounds`/`51-scrollbar-rendering`/
 `1000000-final` — те же расхождения в байтах что с патчем, что без).
+
+## GAP-XMLDOC срез 4 (2026-09-13): прототип-цепочка parser-built SVG-элементов
+
+Закрывает ровно тот остаток, который срез 3 назвал явно: «прототип-цепочка.
+Once namespace is correct, `_lumen_element_prototype_for`
+… отдаёт голый `Element.prototype`». `<rect>`, разобранный из разметки, имел
+правильный `namespaceURI`/`tagName` (срез 3), но оставался `instanceof
+Element`, не `instanceof SVGRectElement` — `getBBox()` и весь остальной SVG
+DOM были недоступны.
+
+Правка чисто в JS-шиме, без Rust:
+
+- `svg.rs`: поиск конструктора по SVG-тегу вынесен из тела патча
+  `document.createElementNS` в переиспользуемую `window._lumen_svg_ctor_for_local`
+  (по-прежнему `SVG_TAG_MAP[local] || SVG_TAG_MAP[local.toLowerCase()] ||
+  SVGElement`), `createElementNS` теперь тоже её вызывает — поведение не
+  изменилось, только источник единый.
+- `web_api_shim_mid.js::_lumen_element_prototype_for` (общий путь построения
+  элемента, `_lumen_build_element`) получил ветку для namespace
+  `http://www.w3.org/2000/svg`: берёт case-preserving локальное имя через уже
+  существующий `_lumen_get_local_name` (не `_lumen_get_tag_name`, тот
+  безусловно аплкейсит) и отдаёт `_lumen_svg_ctor_for_local(local).prototype`.
+  Если SVG-шим не установлен в рантайме — фоллбэк на `Element.prototype`, как
+  и раньше.
+
+Теперь `<rect>`/`<circle>`/`<svg>` и т.д., разобранные из разметки (парсером
+документа или через `innerHTML`, один и тот же `IncrementalTreeBuilder`),
+получают тот же типизированный прототип, что и `createElementNS`-путь:
+`instanceof SVGRectElement` истинно, `getBBox`/`getCTM`/остальной SVG DOM
+доступны.
+
+**Сознательно не сделано:** отражение анимируемых атрибутов
+(`rect.width`/`svg.viewBox`/`g.transform` всё ещё дают `undefined` —
+[GAP-SVGDOM](../ROADMAP.md) отдельной задачей, теперь разблокирована ровно
+этим срезом) и MathML (тот же паттерн, но `MathMLElement`-иерархии в
+кодовой базе ещё нет).
+
+Тесты: новый `crates/js/src/dom/tests/v8_core/mod.rs::parser_built_svg_gets_typed_prototype`
+(`innerHTML='<svg><rect/><circle/></svg>'` → `instanceof SVGSVGElement` /
+`SVGRectElement` / `SVGCircleElement`, `getBBox` доступен). `cargo test -p
+lumen-js --features v8-backend` — 3612/3612 (юнит) + 116/116 (интеграционные)
+зелёные, включая все существующие `svg::tests_v8::*` и
+`create_element_ns_builds_native_svg_tree`. `cargo clippy -p lumen-js
+--all-targets --features v8-backend -- -D warnings` — чисто.

@@ -143,6 +143,31 @@ fn repeated_node_access_returns_identical_wrapper() {
     assert_eq!(ok, lumen_core::JsValue::Bool(true));
 }
 
+// GAP-XMLDOC срез 4 (BUG-685): an `<svg>`/`<rect>` parsed from markup (via
+// `innerHTML`, same foreign-content path `<script>`-inserted markup and the
+// document parser take) must get the SAME typed `SVG*Element` prototype a
+// `createElementNS`-built element gets — not just the correct `namespaceURI`
+// that srez 3 already restored. Before this fix `_lumen_element_prototype_for`
+// only special-cased the HTML namespace, so a parser-built `<rect>` landed on
+// bare `Element.prototype` and `getBBox`/`instanceof SVGRectElement` failed.
+#[test]
+fn parser_built_svg_gets_typed_prototype() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let ok = rt
+        .eval(
+            "document.getElementById('main').innerHTML = '<svg><rect/><circle/></svg>';\
+                     var svg = document.querySelector('svg');\
+                     var rect = document.querySelector('rect');\
+                     var circle = document.querySelector('circle');\
+                     svg instanceof SVGSVGElement && rect instanceof SVGRectElement \
+                       && circle instanceof SVGCircleElement \
+                       && rect.namespaceURI === 'http://www.w3.org/2000/svg' \
+                       && typeof rect.getBBox === 'function'",
+        )
+        .unwrap();
+    assert_eq!(ok, lumen_core::JsValue::Bool(true));
+}
+
 // BUG-243: installing the SVG shim must not abort. It previously threw at
 // `class SVGElement extends Element` because no global `Element` class exists,
 // which killed the whole shim (and silently disabled SVG typed interfaces).

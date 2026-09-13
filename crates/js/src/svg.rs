@@ -898,6 +898,14 @@ const SVG_SHIM: &str = r#"
     'metadata':         SVGMetadataElement,
   };
 
+  // GAP-XMLDOC срез 4: lookup shared with `_lumen_element_prototype_for`
+  // (web_api_shim_mid.js) below, so a parser-created `<rect>` gets the same
+  // typed prototype as one from `createElementNS('rect')` — both fall back to
+  // the bare `SVGElement` for a tag `SVG_TAG_MAP` does not know.
+  window._lumen_svg_ctor_for_local = function(local) {
+    return SVG_TAG_MAP[local] || SVG_TAG_MAP[local.toLowerCase()] || SVGElement;
+  };
+
   // Decorate document.createElementNS: keep the AUTHORITATIVE native implementation
   // (crates/js/src/dom.rs) — it returns a real arena node carrying __nid__ so that
   // appendChild attaches it and layout/paint render it (BUG-243). For the SVG
@@ -912,7 +920,7 @@ const SVG_SHIM: &str = r#"
     document.createElementNS = function(ns, qualifiedName) {
       if (ns === SVG_NS) {
         const local = (qualifiedName || '').replace(/^[^:]+:/, '');
-        const Ctor = SVG_TAG_MAP[qualifiedName] || SVG_TAG_MAP[local] || SVG_TAG_MAP[local.toLowerCase()] || SVGElement;
+        const Ctor = SVG_TAG_MAP[qualifiedName] || _lumen_svg_ctor_for_local(local);
         const el = _origCreateElementNS(ns, qualifiedName);
         try {
           if (typeof _lumen_retarget_wrapper === 'function') {
