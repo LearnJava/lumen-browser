@@ -210,6 +210,35 @@ impl fmt::Display for ShadowRootMode {
     }
 }
 
+/// Shape of the UA (user-agent) shadow tree a tag must be given on creation
+/// (BUG-604, HTML LS §4.8.11).
+///
+/// `<select>`/`<details>` (HTML LS §4.10.11/§4.11.1) also spec a UA shadow
+/// tree, but theirs contains a `<slot>` that light-tree children render
+/// through — giving them one for real needs `display: contents` to make the
+/// `<slot>` box itself disappear from the box tree (today `Display::Contents`
+/// is parsed/stored but laid out as `Block`, so a real `<slot>` would insert
+/// a spurious visible wrapper box around every `<select>`/`<details>`'s
+/// content on every page, a layout regression far outside this bug's blast
+/// radius). Deferred, reclassified into `GAP-UASHADOWSLOT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UaShadowKind {
+    /// `<video>`/`<audio>` — shadow root has no `<slot>` at all, so light-tree
+    /// children never appear in the flat tree.
+    NoSlot,
+}
+
+/// Which UA shadow tree, if any, `name` must be given on creation.
+fn ua_shadow_kind(name: &QualName) -> Option<UaShadowKind> {
+    if name.namespace != Namespace::Html {
+        return None;
+    }
+    match name.local.as_str() {
+        "video" | "audio" => Some(UaShadowKind::NoSlot),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NodeData {
     Document,
@@ -946,10 +975,15 @@ impl Document {
     /// Create an element unconditionally. Used by the HTML parser — does **not** enforce
     /// [`MAX_DOM_NODES`]. JS-driven mutations should use [`try_create_element`][Self::try_create_element].
     pub fn create_element(&mut self, name: QualName) -> NodeId {
-        self.alloc(NodeData::Element {
+        let ua_shadow = ua_shadow_kind(&name);
+        let id = self.alloc(NodeData::Element {
             name,
             attrs: Vec::new(),
-        })
+        });
+        if let Some(kind) = ua_shadow {
+            self.attach_ua_shadow_root(id, kind);
+        }
+        id
     }
 
     /// Create an element, returning `Err(`[`NodeLimitExceeded`]`)` if the arena already
@@ -961,10 +995,28 @@ impl Document {
         if self.nodes.len() >= MAX_DOM_NODES {
             return Err(NodeLimitExceeded);
         }
-        Ok(self.alloc(NodeData::Element {
+        let ua_shadow = ua_shadow_kind(&name);
+        let id = self.alloc(NodeData::Element {
             name,
             attrs: Vec::new(),
-        }))
+        });
+        if let Some(kind) = ua_shadow {
+            self.attach_ua_shadow_root(id, kind);
+        }
+        Ok(id)
+    }
+
+    /// Attach the UA (user-agent) shadow tree HTML LS §4.8.11 requires every
+    /// `<video>`/`<audio>` instance to ship with, regardless of how the
+    /// element was created (parser or `createElement`).
+    ///
+    /// The shadow root has no `<slot>` at all: [`compute_slot_assignments`]
+    /// already drops any light-tree child that matches no `<slot>`, so an
+    /// empty shadow tree is sufficient to give `<video>`/`<audio>` children
+    /// the spec-required "never part of the flat tree" behavior for free.
+    fn attach_ua_shadow_root(&mut self, host: NodeId, kind: UaShadowKind) {
+        let UaShadowKind::NoSlot = kind;
+        self.attach_shadow(host, ShadowRootMode::Closed);
     }
 
     /// Create a text node unconditionally. Used by the HTML parser — does **not**
@@ -2651,6 +2703,54 @@ mod tests {
         let flat = build_flat_tree(&doc);
         // No assignment → no override → slot keeps its DOM children (fallback).
         assert_eq!(flat.children_of(&doc, slot), &[fallback]);
+    }
+
+    #[test]
+    fn video_gets_ua_shadow_root_with_no_slot() {
+        let mut doc = Document::new();
+        let video = doc.create_element(QualName::html("video"));
+        assert!(doc.is_shadow_host(video));
+        let sr = doc.shadow_root_of(video).expect("video is a shadow host");
+        assert!(doc.get(sr).children.is_empty());
+    }
+
+    #[test]
+    fn audio_gets_ua_shadow_root_with_no_slot() {
+        let mut doc = Document::new();
+        let audio = doc.create_element(QualName::html("audio"));
+        assert!(doc.is_shadow_host(audio));
+    }
+
+    #[test]
+    fn video_ua_shadow_root_survives_try_create_element() {
+        let mut doc = Document::new();
+        let video = doc.try_create_element(QualName::html("video")).expect("under limit");
+        assert!(doc.is_shadow_host(video));
+    }
+
+    #[test]
+    fn ordinary_elements_are_not_shadow_hosts() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        let select = doc.create_element(QualName::html("select"));
+        let details = doc.create_element(QualName::html("details"));
+        assert!(!doc.is_shadow_host(div));
+        assert!(!doc.is_shadow_host(select));
+        assert!(!doc.is_shadow_host(details));
+    }
+
+    #[test]
+    fn video_light_dom_children_excluded_from_flat_tree() {
+        // HTML LS §4.8.11: a light-tree child of <video> is never part of the
+        // flat tree, because the UA shadow tree has no <slot> at all.
+        let mut doc = Document::new();
+        let video = doc.create_element(QualName::html("video"));
+        doc.append_child(doc.root(), video);
+        let child = doc.create_element(QualName::html("span"));
+        doc.append_child(video, child);
+
+        let flat = build_flat_tree(&doc);
+        assert!(flat.children_of(&doc, video).is_empty());
     }
 
     #[test]
